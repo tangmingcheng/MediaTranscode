@@ -17,7 +17,6 @@ endif()
 
 add_executable(${TARGET_NAME}
     mian.cpp
-    MediaTranscode.h
 )
 
 target_compile_features(${TARGET_NAME} PRIVATE cxx_std_20)
