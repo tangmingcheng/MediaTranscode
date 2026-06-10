@@ -67,3 +67,53 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.VC.db
+*.VC.VC.opendb
+*.ncb
+*.opensdf
+*.sdf
+*.ipch
+*.pch
+*.userosscache
+*.tlog
+*.lastbuildstate
+*.ilk
+*.meta
+*.obj
+*.iobj
+*.pch
+*.pdb
+*.ipdb
+*.idb
+*.class
+*.log
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+*.cmake
+*.dir/
+Testing/
+CTestTestfile.cmake
+*_autogen/
+
+
+# Backup / temp files
+*~
+*.swp
+*.swo
+*.DS_Store
+*.bak
+*.orig
+
+
+# GitHub specific
+.idea/
