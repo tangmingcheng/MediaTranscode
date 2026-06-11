@@ -1,5 +1,6 @@
 #include "media_transcode/FFmpegTranscoder.h"
 #include "internal/FFmpegUtils.h"
+#include "internal/FFmpegTimelineNormalizer.h"
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -179,7 +180,8 @@ namespace media {
         int64_t encodedVideoPacketCount = 0;
         int64_t encodedAudioPacketCount = 0;
 
-        int64_t timelineStartUs = AV_NOPTS_VALUE;
+        ffmpeg::TimelineNormalizer timeline;
+
         int64_t lastSubmittedVideoPts = AV_NOPTS_VALUE;
         int64_t lastWrittenVideoDts = AV_NOPTS_VALUE;
         int64_t lastWrittenAudioDts = AV_NOPTS_VALUE;
@@ -234,66 +236,6 @@ namespace media {
             info.raw = raw;
 
             callback(info);
-            };
-
-        auto toUs = [](int64_t timestamp, AVRational timeBase) -> int64_t {
-            if (timestamp == AV_NOPTS_VALUE) {
-                return AV_NOPTS_VALUE;
-            }
-
-            return av_rescale_q(timestamp, timeBase, AVRational{ 1, AV_TIME_BASE });
-            };
-
-        auto fromUs = [](int64_t timestampUs, AVRational timeBase) -> int64_t {
-            if (timestampUs == AV_NOPTS_VALUE) {
-                return AV_NOPTS_VALUE;
-            }
-
-            return av_rescale_q(timestampUs, AVRational{ 1, AV_TIME_BASE }, timeBase);
-            };
-
-        auto initTimelineStart = [&](int64_t timestampUs) {
-            if (timestampUs == AV_NOPTS_VALUE) {
-                return;
-            }
-
-            if (timelineStartUs == AV_NOPTS_VALUE) {
-                timelineStartUs = timestampUs;
-            }
-            };
-
-        auto normalizeUs = [&](int64_t timestampUs) -> int64_t {
-            if (timestampUs == AV_NOPTS_VALUE) {
-                return AV_NOPTS_VALUE;
-            }
-
-            initTimelineStart(timestampUs);
-
-            if (timelineStartUs == AV_NOPTS_VALUE) {
-                return AV_NOPTS_VALUE;
-            }
-
-            const int64_t normalized = timestampUs - timelineStartUs;
-
-            /*
-             * 输出 MP4 不建议保留负时间戳。
-             * 这里不是强制同步，而是统一将媒体起点归零。
-             */
-            return std::max<int64_t>(0, normalized);
-            };
-
-        auto initTimelineStartFromFormat = [&]() {
-            if (inputFmtCtx && inputFmtCtx->start_time != AV_NOPTS_VALUE) {
-                initTimelineStart(inputFmtCtx->start_time);
-            }
-
-            if (inputVideoStream && inputVideoStream->start_time != AV_NOPTS_VALUE) {
-                initTimelineStart(toUs(inputVideoStream->start_time, inputVideoStream->time_base));
-            }
-
-            if (inputAudioStream && inputAudioStream->start_time != AV_NOPTS_VALUE) {
-                initTimelineStart(toUs(inputAudioStream->start_time, inputAudioStream->time_base));
-            }
             };
 
         auto fail = [&](const std::string& error) {
@@ -407,7 +349,7 @@ namespace media {
             }
         }
 
-        initTimelineStartFromFormat();
+        timeline.initStartFromFormat(inputFmtCtx, inputVideoStream, inputAudioStream);
 
         /*
          * 3. 打开视频解码器
@@ -1043,7 +985,7 @@ namespace media {
                     lastWrittenVideoOutTimeMs =
                         std::max<int64_t>(
                             lastWrittenVideoOutTimeMs,
-                            toUs(progressTs, outputVideoStream->time_base) / 1000
+                            ffmpeg::TimelineNormalizer::toUs(progressTs, outputVideoStream->time_base) / 1000
                         );
                 }
 
@@ -1142,8 +1084,8 @@ namespace media {
                 return false;
             }
 
-            const int64_t inputVideoUs = toUs(inputVideoTs, inputVideoStream->time_base);
-            const int64_t normalizedVideoUs = normalizeUs(inputVideoUs);
+            const int64_t inputVideoUs = ffmpeg::TimelineNormalizer::toUs(inputVideoTs, inputVideoStream->time_base);
+            const int64_t normalizedVideoUs = timeline.normalizeUs(inputVideoUs);
 
             if (normalizedVideoUs == AV_NOPTS_VALUE) {
                 fail("failed to normalize input video timestamp");
@@ -1155,7 +1097,7 @@ namespace media {
              * 所以送入 filter graph 前，将帧时间戳归一化到 0 起点，
              * 但仍保持在输入视频流 time_base 下。
              */
-            decodedFrame->pts = fromUs(normalizedVideoUs, inputVideoStream->time_base);
+            decodedFrame->pts = ffmpeg::TimelineNormalizer::fromUs(normalizedVideoUs, inputVideoStream->time_base);
 
             if (decodedFrame->pts == AV_NOPTS_VALUE) {
                 fail("decoded video frame pts is invalid after normalization");
@@ -1212,27 +1154,27 @@ namespace media {
             const AVRational outputTimeBase = outputAudioStream->time_base;
 
             if (packet->pts != AV_NOPTS_VALUE) {
-                const int64_t ptsUs = toUs(packet->pts, inputTimeBase);
-                const int64_t normalizedPtsUs = normalizeUs(ptsUs);
+                const int64_t ptsUs = ffmpeg::TimelineNormalizer::toUs(packet->pts, inputTimeBase);
+                const int64_t normalizedPtsUs = timeline.normalizeUs(ptsUs);
 
                 if (normalizedPtsUs == AV_NOPTS_VALUE) {
                     fail("failed to normalize audio packet pts");
                     return false;
                 }
 
-                packet->pts = fromUs(normalizedPtsUs, outputTimeBase);
+                packet->pts = ffmpeg::TimelineNormalizer::fromUs(normalizedPtsUs, outputTimeBase);
             }
 
             if (packet->dts != AV_NOPTS_VALUE) {
-                const int64_t dtsUs = toUs(packet->dts, inputTimeBase);
-                const int64_t normalizedDtsUs = normalizeUs(dtsUs);
+                const int64_t dtsUs = ffmpeg::TimelineNormalizer::toUs(packet->dts, inputTimeBase);
+                const int64_t normalizedDtsUs = timeline.normalizeUs(dtsUs);
 
                 if (normalizedDtsUs == AV_NOPTS_VALUE) {
                     fail("failed to normalize audio packet dts");
                     return false;
                 }
 
-                packet->dts = fromUs(normalizedDtsUs, outputTimeBase);
+                packet->dts = ffmpeg::TimelineNormalizer::fromUs(normalizedDtsUs, outputTimeBase);
             }
 
             if (packet->duration > 0) {
@@ -1263,7 +1205,7 @@ namespace media {
             lastWrittenAudioOutTimeMs =
                 std::max<int64_t>(
                     lastWrittenAudioOutTimeMs,
-                    toUs(timestamp, outputAudioStream->time_base) / 1000
+                    ffmpeg::TimelineNormalizer::toUs(timestamp, outputAudioStream->time_base) / 1000
                 );
             };
 
@@ -1353,15 +1295,15 @@ namespace media {
                 return true;
             }
 
-            const int64_t inputAudioUs = toUs(inputAudioTs, inputAudioStream->time_base);
-            const int64_t normalizedAudioUs = normalizeUs(inputAudioUs);
+            const int64_t inputAudioUs = ffmpeg::TimelineNormalizer::toUs(inputAudioTs, inputAudioStream->time_base);
+            const int64_t normalizedAudioUs = timeline.normalizeUs(inputAudioUs);
 
             if (normalizedAudioUs == AV_NOPTS_VALUE) {
                 fail("failed to normalize input audio timestamp");
                 return false;
             }
 
-            nextAudioPts = fromUs(normalizedAudioUs, audioEncoderCtx->time_base);
+            nextAudioPts = ffmpeg::TimelineNormalizer::fromUs(normalizedAudioUs, audioEncoderCtx->time_base);
 
             if (nextAudioPts == AV_NOPTS_VALUE || nextAudioPts < 0) {
                 nextAudioPts = 0;
