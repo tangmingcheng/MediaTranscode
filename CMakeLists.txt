@@ -21,6 +21,8 @@ endif()
 # --------------------------
 add_library(${TARGET_CORE} STATIC
     src/FFmpegTranscoder.cpp
+    src/internal/FFmpegTimelineNormalizer.cpp
+    src/internal/FFmpegTimelineNormalizer.h
     src/internal/FFmpegUtils.cpp
     src/internal/FFmpegUtils.h
     include/media_transcode/FFmpegTranscoder.h
