@@ -7,13 +7,16 @@
 #include <limits>
 #include <sstream>
 #include <utility>
+#include <vector>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
+#include <libavcodec/version_major.h>
 #include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
 #include <libavutil/error.h>
 #include <libavutil/imgutils.h>
+#include <libavutil/mathematics.h>
 #include <libavutil/opt.h>
 #include <libswscale/swscale.h>
 }
@@ -109,16 +112,119 @@ namespace media {
 
         AVPixelFormat chooseEncoderPixelFormat(const AVCodec* encoder)
         {
-            if (!encoder || !encoder->pix_fmts) {
+            if (!encoder) {
                 return AV_PIX_FMT_YUV420P;
             }
 
+            const std::string encoderName = encoder->name ? encoder->name : "";
+
             /*
-             * 优先选编码器声明的第一个格式。
-             * h264_mf / h264_rkmpp 可能优先 NV12；
-             * libx264 通常支持 yuv420p。
+             * 不同编码器优先选择不同像素格式：
+             *
+             * - libx264 / libx265：优先 yuv420p，兼容性最好。
+             * - h264_mf / hevc_mf：Windows MediaFoundation 通常更适合 NV12。
+             * - h264_rkmpp / hevc_rkmpp：RKMPP 通常也优先 NV12。
              */
+            std::vector<AVPixelFormat> preferredFormats;
+
+            if (encoderName == "h264_mf" ||
+                encoderName == "hevc_mf" ||
+                encoderName == "h264_rkmpp" ||
+                encoderName == "hevc_rkmpp") {
+                preferredFormats = {
+                    AV_PIX_FMT_NV12,
+                    AV_PIX_FMT_YUV420P
+                };
+            }
+            else {
+                preferredFormats = {
+                    AV_PIX_FMT_YUV420P,
+                    AV_PIX_FMT_NV12
+                };
+            }
+
+#if LIBAVCODEC_VERSION_MAJOR >= 61
+
+            const void* configs = nullptr;
+            int configCount = 0;
+
+            const int ret = avcodec_get_supported_config(
+                nullptr,
+                encoder,
+                AV_CODEC_CONFIG_PIX_FORMAT,
+                0,
+                &configs,
+                &configCount
+            );
+
+            if (ret < 0) {
+                return preferredFormats.front();
+            }
+
+            /*
+             * FFmpeg 文档说明：
+             * out_configs 为 NULL 表示该 codec 支持所有可能值。
+             */
+            if (!configs) {
+                return preferredFormats.front();
+            }
+
+            const auto* supportedFormats =
+                static_cast<const AVPixelFormat*>(configs);
+
+            auto isSupported = [&](AVPixelFormat fmt) -> bool {
+                for (int i = 0; i < configCount; ++i) {
+                    if (supportedFormats[i] == fmt) {
+                        return true;
+                    }
+                }
+
+                return false;
+                };
+
+            for (AVPixelFormat preferred : preferredFormats) {
+                if (isSupported(preferred)) {
+                    return preferred;
+                }
+            }
+
+            if (configCount > 0 && supportedFormats[0] != AV_PIX_FMT_NONE) {
+                return supportedFormats[0];
+            }
+
+            return AV_PIX_FMT_YUV420P;
+
+#else
+
+            /*
+             * 兼容旧 FFmpeg。
+             * 旧版本没有 avcodec_get_supported_config，只能使用 pix_fmts。
+             */
+            if (!encoder->pix_fmts) {
+                return preferredFormats.front();
+            }
+
+            auto isSupported = [&](AVPixelFormat fmt) -> bool {
+                for (const AVPixelFormat* p = encoder->pix_fmts;
+                    *p != AV_PIX_FMT_NONE;
+                    ++p) {
+                    if (*p == fmt) {
+                        return true;
+                    }
+                }
+
+                return false;
+                };
+
+            for (AVPixelFormat preferred : preferredFormats) {
+                if (isSupported(preferred)) {
+                    return preferred;
+                }
+            }
+
             return encoder->pix_fmts[0];
+
+#endif
         }
 
         bool isHardwareEncoderName(const char* name)
@@ -316,11 +422,12 @@ namespace media {
         AVStream* outputVideoStream = nullptr;
         AVStream* outputAudioStream = nullptr;
 
-        int64_t videoFrameIndex = 0;
         int64_t encodedVideoPacketCount = 0;
 
-        int64_t lastVideoDts = AV_NOPTS_VALUE;
-        int64_t lastAudioDts = AV_NOPTS_VALUE;
+        int64_t timelineStartUs = AV_NOPTS_VALUE;
+        int64_t lastSubmittedVideoPts = AV_NOPTS_VALUE;
+        int64_t lastWrittenVideoDts = AV_NOPTS_VALUE;
+        int64_t lastWrittenAudioDts = AV_NOPTS_VALUE;
 
         const auto startTime = std::chrono::steady_clock::now();
 
@@ -358,6 +465,66 @@ namespace media {
             info.raw = raw;
 
             callback(info);
+            };
+
+        auto toUs = [](int64_t timestamp, AVRational timeBase) -> int64_t {
+            if (timestamp == AV_NOPTS_VALUE) {
+                return AV_NOPTS_VALUE;
+            }
+
+            return av_rescale_q(timestamp, timeBase, AVRational{ 1, AV_TIME_BASE });
+            };
+
+        auto fromUs = [](int64_t timestampUs, AVRational timeBase) -> int64_t {
+            if (timestampUs == AV_NOPTS_VALUE) {
+                return AV_NOPTS_VALUE;
+            }
+
+            return av_rescale_q(timestampUs, AVRational{ 1, AV_TIME_BASE }, timeBase);
+            };
+
+        auto initTimelineStart = [&](int64_t timestampUs) {
+            if (timestampUs == AV_NOPTS_VALUE) {
+                return;
+            }
+
+            if (timelineStartUs == AV_NOPTS_VALUE) {
+                timelineStartUs = timestampUs;
+            }
+            };
+
+        auto normalizeUs = [&](int64_t timestampUs) -> int64_t {
+            if (timestampUs == AV_NOPTS_VALUE) {
+                return AV_NOPTS_VALUE;
+            }
+
+            initTimelineStart(timestampUs);
+
+            if (timelineStartUs == AV_NOPTS_VALUE) {
+                return AV_NOPTS_VALUE;
+            }
+
+            const int64_t normalized = timestampUs - timelineStartUs;
+
+            /*
+             * 输出 MP4 不建议保留负时间戳。
+             * 这里不是强制同步，而是统一将媒体起点归零。
+             */
+            return std::max<int64_t>(0, normalized);
+            };
+
+        auto initTimelineStartFromFormat = [&]() {
+            if (inputFmtCtx && inputFmtCtx->start_time != AV_NOPTS_VALUE) {
+                initTimelineStart(inputFmtCtx->start_time);
+            }
+
+            if (inputVideoStream && inputVideoStream->start_time != AV_NOPTS_VALUE) {
+                initTimelineStart(toUs(inputVideoStream->start_time, inputVideoStream->time_base));
+            }
+
+            if (inputAudioStream && inputAudioStream->start_time != AV_NOPTS_VALUE) {
+                initTimelineStart(toUs(inputAudioStream->start_time, inputAudioStream->time_base));
+            }
             };
 
         auto fail = [&](const std::string& error) {
@@ -448,6 +615,8 @@ namespace media {
             }
         }
 
+        initTimelineStartFromFormat();
+
         /*
          * 3. 打开视频解码器
          */
@@ -536,7 +705,23 @@ namespace media {
 
             encoderCtx->width = outputWidth;
             encoderCtx->height = outputHeight;
-            encoderCtx->time_base = AVRational{ 1, outputFps };
+
+            /*
+             * V2 时间戳策略：
+             *
+             * 第一版使用 1/fps + frameIndex++，这是人为生成时间轴。
+             * 第二版改为优先沿用输入视频流 time_base。
+             *
+             * 这样 decodedFrame 的真实时间戳可以直接 rescale 到编码器时间轴，
+             * 不会因为输出 fps 四舍五入导致视频时长变化。
+             */
+            AVRational encoderTimeBase = inputVideoStream->time_base;
+
+            if (encoderTimeBase.num <= 0 || encoderTimeBase.den <= 0) {
+                encoderTimeBase = AVRational{ 1, outputFps };
+            }
+
+            encoderCtx->time_base = encoderTimeBase;
             encoderCtx->framerate = AVRational{ outputFps, 1 };
             encoderCtx->pix_fmt = chooseEncoderPixelFormat(encoder);
 
@@ -714,31 +899,35 @@ namespace media {
                     outputVideoStream->time_base
                 );
 
-                /*
-                 * 单调递增保护：
-                 * 理论上 frame->pts 连续递增后不该再重复；
-                 * 但 h264_mf / 某些硬编码器偶尔仍可能产生重复 dts。
-                 * 这里兜底保证 MP4 muxer 不再报 non-monotonically increasing dts。
-                 */
                 if (encodedPacket->dts != AV_NOPTS_VALUE) {
-                    if (lastVideoDts != AV_NOPTS_VALUE &&
-                        encodedPacket->dts <= lastVideoDts) {
-                        const int64_t delta = lastVideoDts + 1 - encodedPacket->dts;
+                    if (lastWrittenVideoDts != AV_NOPTS_VALUE &&
+                        encodedPacket->dts <= lastWrittenVideoDts) {
+                        std::ostringstream oss;
+                        oss << "encoded video packet dts is not strictly increasing: current="
+                            << encodedPacket->dts
+                            << ", last="
+                            << lastWrittenVideoDts;
 
-                        encodedPacket->dts += delta;
-
-                        if (encodedPacket->pts != AV_NOPTS_VALUE) {
-                            encodedPacket->pts += delta;
-                        }
+                        av_packet_free(&encodedPacket);
+                        fail(oss.str());
+                        return false;
                     }
 
-                    lastVideoDts = encodedPacket->dts;
+                    lastWrittenVideoDts = encodedPacket->dts;
                 }
 
                 if (encodedPacket->pts != AV_NOPTS_VALUE &&
                     encodedPacket->dts != AV_NOPTS_VALUE &&
                     encodedPacket->pts < encodedPacket->dts) {
-                    encodedPacket->pts = encodedPacket->dts;
+                    std::ostringstream oss;
+                    oss << "encoded video packet pts is smaller than dts: pts="
+                        << encodedPacket->pts
+                        << ", dts="
+                        << encodedPacket->dts;
+
+                    av_packet_free(&encodedPacket);
+                    fail(oss.str());
+                    return false;
                 }
 
                 if (encodedPacket->duration <= 0) {
@@ -764,6 +953,22 @@ namespace media {
             return true;
             };
 
+        auto getDecodedVideoTimestamp = [&]() -> int64_t {
+            if (decodedFrame->best_effort_timestamp != AV_NOPTS_VALUE) {
+                return decodedFrame->best_effort_timestamp;
+            }
+
+            if (decodedFrame->pts != AV_NOPTS_VALUE) {
+                return decodedFrame->pts;
+            }
+
+            if (decodedFrame->pkt_dts != AV_NOPTS_VALUE) {
+                return decodedFrame->pkt_dts;
+            }
+
+            return AV_NOPTS_VALUE;
+            };
+
         auto processDecodedFrame = [&]() -> bool {
             ret = av_frame_make_writable(convertedFrame);
             if (ret < 0) {
@@ -781,12 +986,46 @@ namespace media {
                 convertedFrame->linesize
             );
 
+            const int64_t inputVideoTs = getDecodedVideoTimestamp();
+
+            if (inputVideoTs == AV_NOPTS_VALUE) {
+                fail("input video frame has no valid timestamp; refuse to synthesize PTS in normalized transcoder");
+                return false;
+            }
+
+            const int64_t inputVideoUs = toUs(inputVideoTs, inputVideoStream->time_base);
+            const int64_t normalizedVideoUs = normalizeUs(inputVideoUs);
+
+            if (normalizedVideoUs == AV_NOPTS_VALUE) {
+                fail("failed to normalize input video timestamp");
+                return false;
+            }
+
+            convertedFrame->pts = fromUs(normalizedVideoUs, encoderCtx->time_base);
+
             /*
-             * 关键点：
-             * 不使用 decodedFrame->pts。
-             * 统一生成连续递增 pts，彻底避开输入时间戳异常、重复、乱序的问题。
+             * 第二版原则：
+             * 输入时间戳规范时，输出自然单调；
+             * 输入时间戳不规范时，直接报错，不再通过 frameIndex++ 或 delta 修正伪同步。
              */
-            convertedFrame->pts = videoFrameIndex++;
+            if (convertedFrame->pts == AV_NOPTS_VALUE) {
+                fail("converted video frame pts is invalid after rescale");
+                return false;
+            }
+
+            if (lastSubmittedVideoPts != AV_NOPTS_VALUE &&
+                convertedFrame->pts <= lastSubmittedVideoPts) {
+                std::ostringstream oss;
+                oss << "input video timestamp is not strictly increasing after normalization: current="
+                    << convertedFrame->pts
+                    << ", last="
+                    << lastSubmittedVideoPts;
+
+                fail(oss.str());
+                return false;
+            }
+
+            lastSubmittedVideoPts = convertedFrame->pts;
 
             return writeEncodedVideoPackets(convertedFrame);
             };
@@ -818,6 +1057,49 @@ namespace media {
             }
             };
 
+        auto normalizeAudioPacketTimestamp = [&](AVPacket* packet) -> bool {
+            if (!packet || !inputAudioStream || !outputAudioStream) {
+                return true;
+            }
+
+            const AVRational inputTimeBase = inputAudioStream->time_base;
+            const AVRational outputTimeBase = outputAudioStream->time_base;
+
+            if (packet->pts != AV_NOPTS_VALUE) {
+                const int64_t ptsUs = toUs(packet->pts, inputTimeBase);
+                const int64_t normalizedPtsUs = normalizeUs(ptsUs);
+
+                if (normalizedPtsUs == AV_NOPTS_VALUE) {
+                    fail("failed to normalize audio packet pts");
+                    return false;
+                }
+
+                packet->pts = fromUs(normalizedPtsUs, outputTimeBase);
+            }
+
+            if (packet->dts != AV_NOPTS_VALUE) {
+                const int64_t dtsUs = toUs(packet->dts, inputTimeBase);
+                const int64_t normalizedDtsUs = normalizeUs(dtsUs);
+
+                if (normalizedDtsUs == AV_NOPTS_VALUE) {
+                    fail("failed to normalize audio packet dts");
+                    return false;
+                }
+
+                packet->dts = fromUs(normalizedDtsUs, outputTimeBase);
+            }
+
+            if (packet->duration > 0) {
+                packet->duration = av_rescale_q(
+                    packet->duration,
+                    inputTimeBase,
+                    outputTimeBase
+                );
+            }
+
+            return true;
+            };
+
         auto writeAudioPacketCopy = [&](AVPacket* packet) -> bool {
             if (!outputAudioStream || !inputAudioStream) {
                 return true;
@@ -825,30 +1107,37 @@ namespace media {
 
             packet->stream_index = outputAudioStream->index;
 
-            av_packet_rescale_ts(
-                packet,
-                inputAudioStream->time_base,
-                outputAudioStream->time_base
-            );
+            if (!normalizeAudioPacketTimestamp(packet)) {
+                return false;
+            }
 
             if (packet->dts != AV_NOPTS_VALUE) {
-                if (lastAudioDts != AV_NOPTS_VALUE && packet->dts <= lastAudioDts) {
-                    const int64_t delta = lastAudioDts + 1 - packet->dts;
+                if (lastWrittenAudioDts != AV_NOPTS_VALUE &&
+                    packet->dts <= lastWrittenAudioDts) {
+                    std::ostringstream oss;
+                    oss << "audio packet dts is not strictly increasing: current="
+                        << packet->dts
+                        << ", last="
+                        << lastWrittenAudioDts;
 
-                    packet->dts += delta;
-
-                    if (packet->pts != AV_NOPTS_VALUE) {
-                        packet->pts += delta;
-                    }
+                    fail(oss.str());
+                    return false;
                 }
 
-                lastAudioDts = packet->dts;
+                lastWrittenAudioDts = packet->dts;
             }
 
             if (packet->pts != AV_NOPTS_VALUE &&
                 packet->dts != AV_NOPTS_VALUE &&
                 packet->pts < packet->dts) {
-                packet->pts = packet->dts;
+                std::ostringstream oss;
+                oss << "audio packet pts is smaller than dts: pts="
+                    << packet->pts
+                    << ", dts="
+                    << packet->dts;
+
+                fail(oss.str());
+                return false;
             }
 
             ret = av_interleaved_write_frame(outputFmtCtx, packet);
