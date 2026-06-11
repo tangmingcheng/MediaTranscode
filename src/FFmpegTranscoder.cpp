@@ -12,12 +12,16 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavcodec/version_major.h>
+#include <libavfilter/avfilter.h>
+#include <libavfilter/buffersink.h>
+#include <libavfilter/buffersrc.h>
 #include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
 #include <libavutil/error.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/mathematics.h>
 #include <libavutil/opt.h>
+#include <libavutil/pixdesc.h>
 #include <libswscale/swscale.h>
 }
 
@@ -407,11 +411,13 @@ namespace media {
         AVCodecContext* decoderCtx = nullptr;
         AVCodecContext* encoderCtx = nullptr;
 
-        SwsContext* swsCtx = nullptr;
+        AVFilterGraph* videoFilterGraph = nullptr;
+        AVFilterContext* videoBufferSrcCtx = nullptr;
+        AVFilterContext* videoBufferSinkCtx = nullptr;
 
         AVPacket* inputPacket = nullptr;
         AVFrame* decodedFrame = nullptr;
-        AVFrame* convertedFrame = nullptr;
+        AVFrame* filteredFrame = nullptr;
 
         int videoStreamIndex = -1;
         int audioStreamIndex = -1;
@@ -428,6 +434,13 @@ namespace media {
         int64_t lastSubmittedVideoPts = AV_NOPTS_VALUE;
         int64_t lastWrittenVideoDts = AV_NOPTS_VALUE;
         int64_t lastWrittenAudioDts = AV_NOPTS_VALUE;
+
+        int outputFps = 0;
+        int outputWidth = 0;
+        int outputHeight = 0;
+        bool enableConstantFps = false;
+
+        AVRational filterInputFrameRate{ 0, 1 };
 
         const auto startTime = std::chrono::steady_clock::now();
 
@@ -532,8 +545,8 @@ namespace media {
             };
 
         auto cleanup = [&]() {
-            if (convertedFrame) {
-                av_frame_free(&convertedFrame);
+            if (filteredFrame) {
+                av_frame_free(&filteredFrame);
             }
 
             if (decodedFrame) {
@@ -544,9 +557,11 @@ namespace media {
                 av_packet_free(&inputPacket);
             }
 
-            if (swsCtx) {
-                sws_freeContext(swsCtx);
-                swsCtx = nullptr;
+            if (videoFilterGraph) {
+                avfilter_graph_free(&videoFilterGraph);
+                videoFilterGraph = nullptr;
+                videoBufferSrcCtx = nullptr;
+                videoBufferSinkCtx = nullptr;
             }
 
             if (decoderCtx) {
@@ -571,7 +586,7 @@ namespace media {
             }
 
             m_running.store(false);
-            };
+        };
 
         emitProgress("initialized");
 
@@ -689,10 +704,11 @@ namespace media {
                 return;
             }
 
-            const int outputFps = chooseOutputFps(m_config, inputVideoStream);
+            outputFps = chooseOutputFps(m_config, inputVideoStream);
+            enableConstantFps = m_config.fps > 0;
 
-            int outputWidth = m_config.width > 0 ? m_config.width : decoderCtx->width;
-            int outputHeight = m_config.height > 0 ? m_config.height : decoderCtx->height;
+            outputWidth = m_config.width > 0 ? m_config.width : decoderCtx->width;
+            outputHeight = m_config.height > 0 ? m_config.height : decoderCtx->height;
 
             outputWidth = normalizeEvenSize(outputWidth);
             outputHeight = normalizeEvenSize(outputHeight);
@@ -706,19 +722,24 @@ namespace media {
             encoderCtx->width = outputWidth;
             encoderCtx->height = outputHeight;
 
-            /*
-             * V2 时间戳策略：
-             *
-             * 第一版使用 1/fps + frameIndex++，这是人为生成时间轴。
-             * 第二版改为优先沿用输入视频流 time_base。
-             *
-             * 这样 decodedFrame 的真实时间戳可以直接 rescale 到编码器时间轴，
-             * 不会因为输出 fps 四舍五入导致视频时长变化。
-             */
-            AVRational encoderTimeBase = inputVideoStream->time_base;
+  
+             /*
+               * fps 语义：
+               *
+               * m_config.fps > 0:
+               *     真正做固定帧率转换，编码器时间基使用 1/fps。
+               *
+               * m_config.fps <= 0:
+               *     保留输入时间轴，编码器时间基优先沿用输入视频流 time_base。
+               */
+            AVRational encoderTimeBase = AVRational{ 1, outputFps };
 
-            if (encoderTimeBase.num <= 0 || encoderTimeBase.den <= 0) {
-                encoderTimeBase = AVRational{ 1, outputFps };
+            if (!enableConstantFps) {
+                encoderTimeBase = inputVideoStream->time_base;
+
+                if (encoderTimeBase.num <= 0 || encoderTimeBase.den <= 0) {
+                    encoderTimeBase = AVRational{ 1, outputFps };
+                }
             }
 
             encoderCtx->time_base = encoderTimeBase;
@@ -815,40 +836,176 @@ namespace media {
          */
         inputPacket = av_packet_alloc();
         decodedFrame = av_frame_alloc();
-        convertedFrame = av_frame_alloc();
+        filteredFrame = av_frame_alloc();
 
-        if (!inputPacket || !decodedFrame || !convertedFrame) {
+        if (!inputPacket || !decodedFrame || !filteredFrame) {
             fail("av_packet_alloc / av_frame_alloc failed");
             cleanup();
             return;
         }
 
-        convertedFrame->format = encoderCtx->pix_fmt;
-        convertedFrame->width = encoderCtx->width;
-        convertedFrame->height = encoderCtx->height;
+        auto chooseInputFrameRate = [&]() -> AVRational {
+            if (inputVideoStream->avg_frame_rate.num > 0 &&
+                inputVideoStream->avg_frame_rate.den > 0) {
+                return inputVideoStream->avg_frame_rate;
+            }
 
-        ret = av_frame_get_buffer(convertedFrame, 32);
-        if (ret < 0) {
-            fail("av_frame_get_buffer convertedFrame failed: " + ffErrorString(ret));
-            cleanup();
-            return;
-        }
+            if (inputVideoStream->r_frame_rate.num > 0 &&
+                inputVideoStream->r_frame_rate.den > 0) {
+                return inputVideoStream->r_frame_rate;
+            }
 
-        swsCtx = sws_getContext(
-            decoderCtx->width,
-            decoderCtx->height,
-            decoderCtx->pix_fmt,
-            encoderCtx->width,
-            encoderCtx->height,
-            encoderCtx->pix_fmt,
-            SWS_BILINEAR,
-            nullptr,
-            nullptr,
-            nullptr
-        );
+            return AVRational{ outputFps, 1 };
+            };
 
-        if (!swsCtx) {
-            fail("sws_getContext failed");
+        auto buildVideoFilterDescription = [&]() -> std::string {
+            const char* pixFmtName = av_get_pix_fmt_name(encoderCtx->pix_fmt);
+            if (!pixFmtName) {
+                return {};
+            }
+
+            std::ostringstream desc;
+
+            /*
+             * 规范视频处理链：
+             *
+             * 1. scale 负责尺寸转换。
+             * 2. fps 只在 config.fps > 0 时启用，负责真正丢帧/补帧。
+             * 3. format 负责输出编码器需要的像素格式。
+             */
+            desc << "scale="
+                << encoderCtx->width
+                << ":"
+                << encoderCtx->height
+                << ":flags=bicubic";
+
+            if (enableConstantFps) {
+                desc << ",fps=fps=" << outputFps << ":round=near";
+            }
+
+            desc << ",format=pix_fmts=" << pixFmtName;
+
+            return desc.str();
+            };
+
+        auto initVideoFilterGraph = [&]() -> bool {
+            const AVFilter* bufferSrc = avfilter_get_by_name("buffer");
+            const AVFilter* bufferSink = avfilter_get_by_name("buffersink");
+
+            if (!bufferSrc || !bufferSink) {
+                fail("avfilter_get_by_name buffer/buffersink failed");
+                return false;
+            }
+
+            videoFilterGraph = avfilter_graph_alloc();
+            if (!videoFilterGraph) {
+                fail("avfilter_graph_alloc failed");
+                return false;
+            }
+
+            filterInputFrameRate = chooseInputFrameRate();
+
+            const AVRational pixelAspect =
+                decoderCtx->sample_aspect_ratio.num > 0 && decoderCtx->sample_aspect_ratio.den > 0
+                ? decoderCtx->sample_aspect_ratio
+                : AVRational{ 1, 1 };
+
+            char args[512] = {};
+            std::snprintf(
+                args,
+                sizeof(args),
+                "video_size=%dx%d:pix_fmt=%d:time_base=%d/%d:pixel_aspect=%d/%d:frame_rate=%d/%d",
+                decoderCtx->width,
+                decoderCtx->height,
+                decoderCtx->pix_fmt,
+                inputVideoStream->time_base.num,
+                inputVideoStream->time_base.den,
+                pixelAspect.num,
+                pixelAspect.den,
+                filterInputFrameRate.num,
+                filterInputFrameRate.den
+            );
+
+            ret = avfilter_graph_create_filter(
+                &videoBufferSrcCtx,
+                bufferSrc,
+                "in",
+                args,
+                nullptr,
+                videoFilterGraph
+            );
+
+            if (ret < 0) {
+                fail("avfilter_graph_create_filter buffer failed: " + ffErrorString(ret));
+                return false;
+            }
+
+            ret = avfilter_graph_create_filter(
+                &videoBufferSinkCtx,
+                bufferSink,
+                "out",
+                nullptr,
+                nullptr,
+                videoFilterGraph
+            );
+
+            if (ret < 0) {
+                fail("avfilter_graph_create_filter buffersink failed: " + ffErrorString(ret));
+                return false;
+            }
+
+            const std::string filterDesc = buildVideoFilterDescription();
+            if (filterDesc.empty()) {
+                fail("buildVideoFilterDescription failed: invalid encoder pixel format");
+                return false;
+            }
+
+            AVFilterInOut* outputs = avfilter_inout_alloc();
+            AVFilterInOut* inputs = avfilter_inout_alloc();
+
+            if (!outputs || !inputs) {
+                avfilter_inout_free(&outputs);
+                avfilter_inout_free(&inputs);
+                fail("avfilter_inout_alloc failed");
+                return false;
+            }
+
+            outputs->name = av_strdup("in");
+            outputs->filter_ctx = videoBufferSrcCtx;
+            outputs->pad_idx = 0;
+            outputs->next = nullptr;
+
+            inputs->name = av_strdup("out");
+            inputs->filter_ctx = videoBufferSinkCtx;
+            inputs->pad_idx = 0;
+            inputs->next = nullptr;
+
+            ret = avfilter_graph_parse_ptr(
+                videoFilterGraph,
+                filterDesc.c_str(),
+                &inputs,
+                &outputs,
+                nullptr
+            );
+
+            avfilter_inout_free(&inputs);
+            avfilter_inout_free(&outputs);
+
+            if (ret < 0) {
+                fail("avfilter_graph_parse_ptr failed [" + filterDesc + "]: " + ffErrorString(ret));
+                return false;
+            }
+
+            ret = avfilter_graph_config(videoFilterGraph, nullptr);
+            if (ret < 0) {
+                fail("avfilter_graph_config failed [" + filterDesc + "]: " + ffErrorString(ret));
+                return false;
+            }
+
+            return true;
+            };
+
+        if (!initVideoFilterGraph()) {
             cleanup();
             return;
         }
@@ -953,6 +1110,58 @@ namespace media {
             return true;
             };
 
+        auto drainVideoFilterGraph = [&]() -> bool {
+            while (true) {
+                ret = av_buffersink_get_frame(videoBufferSinkCtx, filteredFrame);
+
+                if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+                    return true;
+                }
+
+                if (ret < 0) {
+                    fail("av_buffersink_get_frame failed: " + ffErrorString(ret));
+                    return false;
+                }
+
+                const AVRational filterTimeBase = av_buffersink_get_time_base(videoBufferSinkCtx);
+
+                if (filteredFrame->pts == AV_NOPTS_VALUE) {
+                    av_frame_unref(filteredFrame);
+                    fail("filtered video frame has invalid pts");
+                    return false;
+                }
+
+                filteredFrame->pts = av_rescale_q(
+                    filteredFrame->pts,
+                    filterTimeBase,
+                    encoderCtx->time_base
+                );
+
+                if (lastSubmittedVideoPts != AV_NOPTS_VALUE &&
+                    filteredFrame->pts <= lastSubmittedVideoPts) {
+                    std::ostringstream oss;
+                    oss << "filtered video timestamp is not strictly increasing: current="
+                        << filteredFrame->pts
+                        << ", last="
+                        << lastSubmittedVideoPts;
+
+                    av_frame_unref(filteredFrame);
+                    fail(oss.str());
+                    return false;
+                }
+
+                lastSubmittedVideoPts = filteredFrame->pts;
+
+                const bool ok = writeEncodedVideoPackets(filteredFrame);
+
+                av_frame_unref(filteredFrame);
+
+                if (!ok) {
+                    return false;
+                }
+            }
+            };
+
         auto getDecodedVideoTimestamp = [&]() -> int64_t {
             if (decodedFrame->best_effort_timestamp != AV_NOPTS_VALUE) {
                 return decodedFrame->best_effort_timestamp;
@@ -970,22 +1179,6 @@ namespace media {
             };
 
         auto processDecodedFrame = [&]() -> bool {
-            ret = av_frame_make_writable(convertedFrame);
-            if (ret < 0) {
-                fail("av_frame_make_writable failed: " + ffErrorString(ret));
-                return false;
-            }
-
-            sws_scale(
-                swsCtx,
-                decodedFrame->data,
-                decodedFrame->linesize,
-                0,
-                decoderCtx->height,
-                convertedFrame->data,
-                convertedFrame->linesize
-            );
-
             const int64_t inputVideoTs = getDecodedVideoTimestamp();
 
             if (inputVideoTs == AV_NOPTS_VALUE) {
@@ -1001,33 +1194,30 @@ namespace media {
                 return false;
             }
 
-            convertedFrame->pts = fromUs(normalizedVideoUs, encoderCtx->time_base);
-
             /*
-             * 第二版原则：
-             * 输入时间戳规范时，输出自然单调；
-             * 输入时间戳不规范时，直接报错，不再通过 frameIndex++ 或 delta 修正伪同步。
+             * buffer source 的 time_base 是 inputVideoStream->time_base。
+             * 所以送入 filter graph 前，将帧时间戳归一化到 0 起点，
+             * 但仍保持在输入视频流 time_base 下。
              */
-            if (convertedFrame->pts == AV_NOPTS_VALUE) {
-                fail("converted video frame pts is invalid after rescale");
+            decodedFrame->pts = fromUs(normalizedVideoUs, inputVideoStream->time_base);
+
+            if (decodedFrame->pts == AV_NOPTS_VALUE) {
+                fail("decoded video frame pts is invalid after normalization");
                 return false;
             }
 
-            if (lastSubmittedVideoPts != AV_NOPTS_VALUE &&
-                convertedFrame->pts <= lastSubmittedVideoPts) {
-                std::ostringstream oss;
-                oss << "input video timestamp is not strictly increasing after normalization: current="
-                    << convertedFrame->pts
-                    << ", last="
-                    << lastSubmittedVideoPts;
+            ret = av_buffersrc_add_frame_flags(
+                videoBufferSrcCtx,
+                decodedFrame,
+                AV_BUFFERSRC_FLAG_KEEP_REF
+            );
 
-                fail(oss.str());
+            if (ret < 0) {
+                fail("av_buffersrc_add_frame_flags video failed: " + ffErrorString(ret));
                 return false;
             }
 
-            lastSubmittedVideoPts = convertedFrame->pts;
-
-            return writeEncodedVideoPackets(convertedFrame);
+            return drainVideoFilterGraph();
             };
 
         auto drainDecoder = [&]() -> bool {
@@ -1212,6 +1402,23 @@ namespace media {
             }
 
             if (!drainDecoder()) {
+                cleanup();
+                return;
+            }
+        }
+
+        /*
+         * 10.5 flush video filter graph
+         */
+        if (!m_stopRequested.load()) {
+            ret = av_buffersrc_add_frame_flags(videoBufferSrcCtx, nullptr, 0);
+            if (ret < 0) {
+                fail("av_buffersrc_add_frame_flags video EOF failed: " + ffErrorString(ret));
+                cleanup();
+                return;
+            }
+
+            if (!drainVideoFilterGraph()) {
                 cleanup();
                 return;
             }

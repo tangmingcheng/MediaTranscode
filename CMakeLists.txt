@@ -82,6 +82,7 @@ if(WIN32)
     )
 
     target_link_libraries(thirdparty_ffmpeg INTERFACE
+        avfilter
         avcodec
         avformat
         avutil
@@ -93,6 +94,7 @@ elseif(USE_LOCAL_FFMPEG AND CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
     find_package(PkgConfig REQUIRED)
 
     pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
+        libavfilter
         libavcodec
         libavformat
         libavutil
