@@ -22,17 +22,17 @@ namespace media {
         void stop() override;
 
         /*
-         * µÚÒ»°æ URL / ÎÄ¼ş×ªÂëÆ÷Ôİ²»Ö§³ÖÍâ²¿ AVFrame ÍÆÈë¡£
-         * ÊµÊ±Á÷ÓÅÏÈÍ¨¹ı inputUrl£¬ÀıÈç rtsp://¡¢rtmp://¡¢udp://¡£
+         * ç¬¬ä¸€ç‰ˆ URL / æ–‡ä»¶è½¬ç å™¨æš‚ä¸æ”¯æŒå¤–éƒ¨ AVFrame æ¨å…¥ã€‚
+         * å®æ—¶æµä¼˜å…ˆé€šè¿‡ inputUrlï¼Œä¾‹å¦‚ rtsp://ã€rtmp://ã€udp://ã€‚
          */
         bool pushFrame(void* frame) override;
 
         void setProgressCallback(ProgressCallback cb) override;
 
         /*
-         * CLI / ºó¶Ë·şÎñ³£ÓÃ½Ó¿Ú¡£
-         * start() Ö»¸ºÔğÆô¶¯ºóÌ¨Ïß³Ì£»
-         * wait() ÓÃÓÚµÈ´ı×ÔÈ»×ªÂë½áÊø¡£
+         * CLI / åç«¯æœåŠ¡å¸¸ç”¨æ¥å£ã€‚
+         * start() åªè´Ÿè´£å¯åŠ¨åå°çº¿ç¨‹ï¼›
+         * wait() ç”¨äºç­‰å¾…è‡ªç„¶è½¬ç ç»“æŸã€‚
          */
         bool wait();
         bool isRunning() const;

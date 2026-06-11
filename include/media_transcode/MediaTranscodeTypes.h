@@ -5,7 +5,7 @@
 
 namespace media {
 
-    // 视频编码类型
+    // 瑙嗛缂栫爜绫诲瀷
     enum class VideoCodec {
         Copy,
         H264_RKMPP,
@@ -14,14 +14,14 @@ namespace media {
         H265_LIBX265
     };
 
-    // 音频模式
+    // 闊抽妯″紡
     enum class AudioMode {
         None,
         CopySelected,
         EncodeSelected
     };
 
-    // 进度信息
+    // 杩涘害淇℃伅
     struct ProgressInfo {
         int64_t frame = 0;
         int64_t outTimeMs = 0;
@@ -31,7 +31,7 @@ namespace media {
 
     using ProgressCallback = std::function<void(const ProgressInfo&)>;
 
-    // 单路转码配置
+    // 鍗曡矾杞爜閰嶇疆
     struct TranscodeConfig {
         std::string inputUrl;
         std::string outputUrl;

@@ -71,7 +71,7 @@ namespace media {
             }
 
             /*
-             * H.264/H.265 + yuv420p/nv12 Í¨³£ÒªÇó¿í¸ßÎªÅ¼Êı¡£
+             * H.264/H.265 + yuv420p/nv12 é€šå¸¸è¦æ±‚å®½é«˜ä¸ºå¶æ•°ã€‚
              */
             return value % 2 == 0 ? value : value - 1;
         }
@@ -114,9 +114,9 @@ namespace media {
             }
 
             /*
-             * ÓÅÏÈÑ¡±àÂëÆ÷ÉùÃ÷µÄµÚÒ»¸ö¸ñÊ½¡£
-             * h264_mf / h264_rkmpp ¿ÉÄÜÓÅÏÈ NV12£»
-             * libx264 Í¨³£Ö§³Ö yuv420p¡£
+             * ä¼˜å…ˆé€‰ç¼–ç å™¨å£°æ˜çš„ç¬¬ä¸€ä¸ªæ ¼å¼ã€‚
+             * h264_mf / h264_rkmpp å¯èƒ½ä¼˜å…ˆ NV12ï¼›
+             * libx264 é€šå¸¸æ”¯æŒ yuv420pã€‚
              */
             return encoder->pix_fmts[0];
         }
@@ -145,8 +145,8 @@ namespace media {
             const std::string name = encoder->name ? encoder->name : "";
 
             /*
-             * µÚÒ»°æ½ûÓÃ B Ö¡£¬¼õÉÙ DTS/PTS ÂÒĞò¸´ÔÓ¶È¡£
-             * ¶Ô MP4 ·â×°ºÍÊµÊ±×ªÂë¸üÎÈ¶¨¡£
+             * ç¬¬ä¸€ç‰ˆç¦ç”¨ B å¸§ï¼Œå‡å°‘ DTS/PTS ä¹±åºå¤æ‚åº¦ã€‚
+             * å¯¹ MP4 å°è£…å’Œå®æ—¶è½¬ç æ›´ç¨³å®šã€‚
              */
             encoderCtx->max_b_frames = 0;
 
@@ -226,7 +226,7 @@ namespace media {
         }
 
         /*
-         * ·ÀÖ¹Í¬Ò»¸ö¶ÔÏó¶ş´Î start Ê±£¬Ö®Ç°Ïß³ÌËäÈ»½áÊøµ«»¹Ã»ÓĞ join¡£
+         * é˜²æ­¢åŒä¸€ä¸ªå¯¹è±¡äºŒæ¬¡ start æ—¶ï¼Œä¹‹å‰çº¿ç¨‹è™½ç„¶ç»“æŸä½†è¿˜æ²¡æœ‰ joinã€‚
          */
         if (m_transcodeThread.joinable()) {
             m_transcodeThread.join();
@@ -411,7 +411,7 @@ namespace media {
         int ret = 0;
 
         /*
-         * 1. ´ò¿ªÊäÈë
+         * 1. æ‰“å¼€è¾“å…¥
          */
         ret = avformat_open_input(&inputFmtCtx, m_config.inputUrl.c_str(), nullptr, nullptr);
         if (ret < 0) {
@@ -428,7 +428,7 @@ namespace media {
         }
 
         /*
-         * 2. ²éÕÒÊÓÆµÁ÷ / ÒôÆµÁ÷
+         * 2. æŸ¥æ‰¾è§†é¢‘æµ / éŸ³é¢‘æµ
          */
         ret = av_find_best_stream(inputFmtCtx, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
         if (ret < 0) {
@@ -449,7 +449,7 @@ namespace media {
         }
 
         /*
-         * 3. ´ò¿ªÊÓÆµ½âÂëÆ÷
+         * 3. æ‰“å¼€è§†é¢‘è§£ç å™¨
          */
         {
             const AVCodec* decoder = avcodec_find_decoder(inputVideoStream->codecpar->codec_id);
@@ -482,7 +482,7 @@ namespace media {
         }
 
         /*
-         * 4. ´´½¨Êä³öÉÏÏÂÎÄ
+         * 4. åˆ›å»ºè¾“å‡ºä¸Šä¸‹æ–‡
          */
         ret = avformat_alloc_output_context2(&outputFmtCtx, nullptr, nullptr, m_config.outputUrl.c_str());
         if (ret < 0 || !outputFmtCtx) {
@@ -492,7 +492,7 @@ namespace media {
         }
 
         /*
-         * 5. ´´½¨²¢´ò¿ªÊÓÆµ±àÂëÆ÷
+         * 5. åˆ›å»ºå¹¶æ‰“å¼€è§†é¢‘ç¼–ç å™¨
          */
         {
             const char* encoderName = preferredEncoderName(m_config.videoCodec);
@@ -551,8 +551,8 @@ namespace media {
             setEncoderOptions(encoderCtx, encoder);
 
             /*
-             * Ò»Ğ©Ó²±àÂëÆ÷¶Ô time_base / framerate ±È½ÏÃô¸Ğ¡£
-             * ÕâÀïÍ³Ò»ÓÃ 1/fps£¬ºóÃæ frame->pts µİÔö¡£
+             * ä¸€äº›ç¡¬ç¼–ç å™¨å¯¹ time_base / framerate æ¯”è¾ƒæ•æ„Ÿã€‚
+             * è¿™é‡Œç»Ÿä¸€ç”¨ 1/fpsï¼Œåé¢ frame->pts é€’å¢ã€‚
              */
             ret = avcodec_open2(encoderCtx, encoder, nullptr);
             if (ret < 0) {
@@ -583,9 +583,9 @@ namespace media {
         }
 
         /*
-         * 6. ÒôÆµµÚÒ»°æ²ÉÓÃ copy¡£
-         *    ×¢Òâ£ºÈç¹ûÊäÈëÒôÆµ±àÂë²»±»Êä³öÈİÆ÷Ö§³Ö£¬Ğ´ header »òĞ´ packet ¿ÉÄÜÊ§°Ü¡£
-         *    ÏÂÒ»°æ¿ÉÒÔ¼Ó AAC ÖØ±àÂë¡£
+         * 6. éŸ³é¢‘ç¬¬ä¸€ç‰ˆé‡‡ç”¨ copyã€‚
+         *    æ³¨æ„ï¼šå¦‚æœè¾“å…¥éŸ³é¢‘ç¼–ç ä¸è¢«è¾“å‡ºå®¹å™¨æ”¯æŒï¼Œå†™ header æˆ–å†™ packet å¯èƒ½å¤±è´¥ã€‚
+         *    ä¸‹ä¸€ç‰ˆå¯ä»¥åŠ  AAC é‡ç¼–ç ã€‚
          */
         if (inputAudioStream && m_config.audioMode != AudioMode::None) {
             outputAudioStream = avformat_new_stream(outputFmtCtx, nullptr);
@@ -607,7 +607,7 @@ namespace media {
         }
 
         /*
-         * 7. ´ò¿ªÊä³öÎÄ¼ş²¢Ğ´ header
+         * 7. æ‰“å¼€è¾“å‡ºæ–‡ä»¶å¹¶å†™ header
          */
         if (!(outputFmtCtx->oformat->flags & AVFMT_NOFILE)) {
             ret = avio_open(&outputFmtCtx->pb, m_config.outputUrl.c_str(), AVIO_FLAG_WRITE);
@@ -626,7 +626,7 @@ namespace media {
         }
 
         /*
-         * 8. ·ÖÅä packet / frame
+         * 8. åˆ†é… packet / frame
          */
         inputPacket = av_packet_alloc();
         decodedFrame = av_frame_alloc();
@@ -704,9 +704,9 @@ namespace media {
                 }
 
                 /*
-                 * ¹Ø¼üµã£º
-                 * ±àÂëÆ÷ packet µÄÊ±¼ä»ùÊÇ encoderCtx->time_base£»
-                 * Ğ´ muxer Ç°±ØĞë×ª»»³É outputVideoStream->time_base¡£
+                 * å…³é”®ç‚¹ï¼š
+                 * ç¼–ç å™¨ packet çš„æ—¶é—´åŸºæ˜¯ encoderCtx->time_baseï¼›
+                 * å†™ muxer å‰å¿…é¡»è½¬æ¢æˆ outputVideoStream->time_baseã€‚
                  */
                 av_packet_rescale_ts(
                     encodedPacket,
@@ -715,10 +715,10 @@ namespace media {
                 );
 
                 /*
-                 * µ¥µ÷µİÔö±£»¤£º
-                 * ÀíÂÛÉÏ frame->pts Á¬ĞøµİÔöºó²»¸ÃÔÙÖØ¸´£»
-                 * µ« h264_mf / Ä³Ğ©Ó²±àÂëÆ÷Å¼¶ûÈÔ¿ÉÄÜ²úÉúÖØ¸´ dts¡£
-                 * ÕâÀï¶µµ×±£Ö¤ MP4 muxer ²»ÔÙ±¨ non-monotonically increasing dts¡£
+                 * å•è°ƒé€’å¢ä¿æŠ¤ï¼š
+                 * ç†è®ºä¸Š frame->pts è¿ç»­é€’å¢åä¸è¯¥å†é‡å¤ï¼›
+                 * ä½† h264_mf / æŸäº›ç¡¬ç¼–ç å™¨å¶å°”ä»å¯èƒ½äº§ç”Ÿé‡å¤ dtsã€‚
+                 * è¿™é‡Œå…œåº•ä¿è¯ MP4 muxer ä¸å†æŠ¥ non-monotonically increasing dtsã€‚
                  */
                 if (encodedPacket->dts != AV_NOPTS_VALUE) {
                     if (lastVideoDts != AV_NOPTS_VALUE &&
@@ -782,9 +782,9 @@ namespace media {
             );
 
             /*
-             * ¹Ø¼üµã£º
-             * ²»Ê¹ÓÃ decodedFrame->pts¡£
-             * Í³Ò»Éú³ÉÁ¬ĞøµİÔö pts£¬³¹µ×±Ü¿ªÊäÈëÊ±¼ä´ÁÒì³£¡¢ÖØ¸´¡¢ÂÒĞòµÄÎÊÌâ¡£
+             * å…³é”®ç‚¹ï¼š
+             * ä¸ä½¿ç”¨ decodedFrame->ptsã€‚
+             * ç»Ÿä¸€ç”Ÿæˆè¿ç»­é€’å¢ ptsï¼Œå½»åº•é¿å¼€è¾“å…¥æ—¶é—´æˆ³å¼‚å¸¸ã€é‡å¤ã€ä¹±åºçš„é—®é¢˜ã€‚
              */
             convertedFrame->pts = videoFrameIndex++;
 
@@ -861,7 +861,7 @@ namespace media {
             };
 
         /*
-         * 9. Ö÷×ªÂëÑ­»·
+         * 9. ä¸»è½¬ç å¾ªç¯
          */
         while (!m_stopRequested.load()) {
             ret = av_read_frame(inputFmtCtx, inputPacket);
@@ -901,8 +901,8 @@ namespace media {
                 }
 
                 /*
-                 * av_interleaved_write_frame ³É¹¦ºó packet ÄÚÈİÒÑ¾­±» muxer ½Ó¹Ü»òÏûºÄ¡£
-                 * ÕâÀïÈÔÈ» unref ÊÇ°²È«µÄ¡£
+                 * av_interleaved_write_frame æˆåŠŸå packet å†…å®¹å·²ç»è¢« muxer æ¥ç®¡æˆ–æ¶ˆè€—ã€‚
+                 * è¿™é‡Œä»ç„¶ unref æ˜¯å®‰å…¨çš„ã€‚
                  */
                 av_packet_unref(inputPacket);
             }
@@ -939,7 +939,7 @@ namespace media {
         }
 
         /*
-         * 12. Ğ´ trailer
+         * 12. å†™ trailer
          */
         ret = av_write_trailer(outputFmtCtx);
         if (ret < 0) {
