@@ -10,8 +10,8 @@ set(THIRD_PARTY_DIR "${CMAKE_SOURCE_DIR}/3rds")
 if(POLICY CMP0141)
     cmake_policy(SET CMP0141 NEW)
     set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT
-        "$<IF:$<AND:$<C_COMPILER_ID:MSVC>,$<CXX_COMPILER_ID:MSVC>>,\
-$<$<CONFIG:Debug,RelWithDebInfo>:EditAndContinue>,\
+        "$<IF:$<AND:$<C_COMPILER_ID:MSVC>,$<CXX_COMPILER_ID:MSVC>>,
+$<$<CONFIG:Debug,RelWithDebInfo>:EditAndContinue>,
 $<$<CONFIG:Debug,RelWithDebInfo>:ProgramDatabase>>"
     )
 endif()
@@ -21,6 +21,8 @@ endif()
 # --------------------------
 add_library(${TARGET_CORE} STATIC
     src/FFmpegTranscoder.cpp
+    src/internal/FFmpegUtils.cpp
+    src/internal/FFmpegUtils.h
     include/media_transcode/FFmpegTranscoder.h
     include/media_transcode/ITranscoder.h
     include/media_transcode/MediaTranscodeTypes.h
@@ -29,6 +31,7 @@ add_library(${TARGET_CORE} STATIC
 
 target_include_directories(${TARGET_CORE} 
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 # --------------------------
