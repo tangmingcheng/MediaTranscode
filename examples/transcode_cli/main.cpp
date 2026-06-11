@@ -53,12 +53,13 @@ int main(int argc, char* argv[]) {
     config.height = 720;
     config.fps = 25;
     config.videoCodec = media::VideoCodec::H264_LIBX264;
-    config.audioMode = media::AudioMode::CopySelected;
+    config.audioMode = media::AudioMode::EncodeSelected;
+    config.audioBitrateKbps = 128;
     config.videoBitrateKbps = 3000;
 
     media::FFmpegTranscoder transcoder;
     transcoder.setProgressCallback([](const media::ProgressInfo& info) {
-		spdlog::info("Progress: frame={}, outTimeMs={}, speed={}x", info.frame, info.outTimeMs, info.speed);
+        spdlog::info("Progress: frame={}, outTimeMs={}, speed={}x", info.frame, info.outTimeMs, info.speed);
         });
 
     if (!transcoder.initialize(config)) {
