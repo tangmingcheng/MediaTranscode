@@ -1,18 +1,15 @@
 #include "media_transcode/FFmpegTranscoder.h"
-
+#include "internal/FFmpegUtils.h"
 #include <algorithm>
 #include <chrono>
-#include <cmath>
 #include <cstdio>
 #include <cstdint>
 #include <limits>
-#include <sstream>
 #include <utility>
 #include <vector>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
-#include <libavcodec/version_major.h>
 #include <libavfilter/avfilter.h>
 #include <libavfilter/buffersink.h>
 #include <libavfilter/buffersrc.h>
@@ -20,544 +17,14 @@ extern "C" {
 #include <libavutil/audio_fifo.h>
 #include <libavutil/avutil.h>
 #include <libavutil/channel_layout.h>
-#include <libavutil/error.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/mathematics.h>
-#include <libavutil/opt.h>
-#include <libavutil/pixdesc.h>
-#include <libavutil/samplefmt.h>
 #include <libavutil/version.h>
 #include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
 }
 
 namespace media {
-
-    namespace {
-
-        std::string ffErrorString(int err)
-        {
-            char buffer[AV_ERROR_MAX_STRING_SIZE] = {};
-            av_strerror(err, buffer, sizeof(buffer));
-
-            std::ostringstream oss;
-            oss << buffer << " (" << err << ")";
-            return oss.str();
-        }
-
-        const char* preferredEncoderName(VideoCodec codec)
-        {
-            switch (codec) {
-            case VideoCodec::H264_RKMPP:
-                return "h264_rkmpp";
-            case VideoCodec::H265_RKMPP:
-                return "hevc_rkmpp";
-            case VideoCodec::H264_LIBX264:
-                return "libx264";
-            case VideoCodec::H265_LIBX265:
-                return "libx265";
-            case VideoCodec::Copy:
-            default:
-                return nullptr;
-            }
-        }
-
-        AVCodecID fallbackCodecId(VideoCodec codec)
-        {
-            switch (codec) {
-            case VideoCodec::H264_RKMPP:
-            case VideoCodec::H264_LIBX264:
-                return AV_CODEC_ID_H264;
-            case VideoCodec::H265_RKMPP:
-            case VideoCodec::H265_LIBX265:
-                return AV_CODEC_ID_HEVC;
-            case VideoCodec::Copy:
-            default:
-                return AV_CODEC_ID_NONE;
-            }
-        }
-
-        int normalizeEvenSize(int value)
-        {
-            if (value <= 0) {
-                return value;
-            }
-
-            /*
-             * H.264/H.265 + yuv420p/nv12 通常要求宽高为偶数。
-             */
-            return value % 2 == 0 ? value : value - 1;
-        }
-
-        int chooseOutputFps(const TranscodeConfig& config, const AVStream* inputVideoStream)
-        {
-            if (config.fps > 0) {
-                return config.fps;
-            }
-
-            if (inputVideoStream) {
-                AVRational rate = inputVideoStream->avg_frame_rate;
-
-                if (rate.num > 0 && rate.den > 0) {
-                    const double fps = av_q2d(rate);
-
-                    if (fps > 1.0 && fps < 240.0) {
-                        return static_cast<int>(std::round(fps));
-                    }
-                }
-
-                rate = inputVideoStream->r_frame_rate;
-
-                if (rate.num > 0 && rate.den > 0) {
-                    const double fps = av_q2d(rate);
-
-                    if (fps > 1.0 && fps < 240.0) {
-                        return static_cast<int>(std::round(fps));
-                    }
-                }
-            }
-
-            return 25;
-        }
-
-        AVPixelFormat chooseEncoderPixelFormat(const AVCodec* encoder)
-        {
-            if (!encoder) {
-                return AV_PIX_FMT_YUV420P;
-            }
-
-            const std::string encoderName = encoder->name ? encoder->name : "";
-
-            /*
-             * 不同编码器优先选择不同像素格式：
-             *
-             * - libx264 / libx265：优先 yuv420p，兼容性最好。
-             * - h264_mf / hevc_mf：Windows MediaFoundation 通常更适合 NV12。
-             * - h264_rkmpp / hevc_rkmpp：RKMPP 通常也优先 NV12。
-             */
-            std::vector<AVPixelFormat> preferredFormats;
-
-            if (encoderName == "h264_mf" ||
-                encoderName == "hevc_mf" ||
-                encoderName == "h264_rkmpp" ||
-                encoderName == "hevc_rkmpp") {
-                preferredFormats = {
-                    AV_PIX_FMT_NV12,
-                    AV_PIX_FMT_YUV420P
-                };
-            }
-            else {
-                preferredFormats = {
-                    AV_PIX_FMT_YUV420P,
-                    AV_PIX_FMT_NV12
-                };
-            }
-
-#if LIBAVCODEC_VERSION_MAJOR >= 61
-
-            const void* configs = nullptr;
-            int configCount = 0;
-
-            const int ret = avcodec_get_supported_config(
-                nullptr,
-                encoder,
-                AV_CODEC_CONFIG_PIX_FORMAT,
-                0,
-                &configs,
-                &configCount
-            );
-
-            if (ret < 0) {
-                return preferredFormats.front();
-            }
-
-            /*
-             * FFmpeg 文档说明：
-             * out_configs 为 NULL 表示该 codec 支持所有可能值。
-             */
-            if (!configs) {
-                return preferredFormats.front();
-            }
-
-            const auto* supportedFormats =
-                static_cast<const AVPixelFormat*>(configs);
-
-            auto isSupported = [&](AVPixelFormat fmt) -> bool {
-                for (int i = 0; i < configCount; ++i) {
-                    if (supportedFormats[i] == fmt) {
-                        return true;
-                    }
-                }
-
-                return false;
-                };
-
-            for (AVPixelFormat preferred : preferredFormats) {
-                if (isSupported(preferred)) {
-                    return preferred;
-                }
-            }
-
-            if (configCount > 0 && supportedFormats[0] != AV_PIX_FMT_NONE) {
-                return supportedFormats[0];
-            }
-
-            return AV_PIX_FMT_YUV420P;
-
-#else
-
-            /*
-             * 兼容旧 FFmpeg。
-             * 旧版本没有 avcodec_get_supported_config，只能使用 pix_fmts。
-             */
-            if (!encoder->pix_fmts) {
-                return preferredFormats.front();
-            }
-
-            auto isSupported = [&](AVPixelFormat fmt) -> bool {
-                for (const AVPixelFormat* p = encoder->pix_fmts;
-                    *p != AV_PIX_FMT_NONE;
-                    ++p) {
-                    if (*p == fmt) {
-                        return true;
-                    }
-                }
-
-                return false;
-                };
-
-            for (AVPixelFormat preferred : preferredFormats) {
-                if (isSupported(preferred)) {
-                    return preferred;
-                }
-            }
-
-            return encoder->pix_fmts[0];
-
-#endif
-        }
-
-        AVSampleFormat chooseAudioSampleFormat(const AVCodec* encoder)
-        {
-            if (!encoder) {
-                return AV_SAMPLE_FMT_FLTP;
-            }
-
-            const std::vector<AVSampleFormat> preferredFormats = {
-                AV_SAMPLE_FMT_FLTP,
-                AV_SAMPLE_FMT_S16P,
-                AV_SAMPLE_FMT_S16
-            };
-
-#if LIBAVCODEC_VERSION_MAJOR >= 61
-
-            const void* configs = nullptr;
-            int configCount = 0;
-
-            const int ret = avcodec_get_supported_config(
-                nullptr,
-                encoder,
-                AV_CODEC_CONFIG_SAMPLE_FORMAT,
-                0,
-                &configs,
-                &configCount
-            );
-
-            if (ret < 0 || !configs) {
-                return preferredFormats.front();
-            }
-
-            const auto* supportedFormats =
-                static_cast<const AVSampleFormat*>(configs);
-
-            auto isSupported = [&](AVSampleFormat fmt) -> bool {
-                for (int i = 0; i < configCount; ++i) {
-                    if (supportedFormats[i] == fmt) {
-                        return true;
-                    }
-                }
-
-                return false;
-                };
-
-            for (AVSampleFormat preferred : preferredFormats) {
-                if (isSupported(preferred)) {
-                    return preferred;
-                }
-            }
-
-            if (configCount > 0 && supportedFormats[0] != AV_SAMPLE_FMT_NONE) {
-                return supportedFormats[0];
-            }
-
-            return AV_SAMPLE_FMT_FLTP;
-
-#else
-
-            if (!encoder->sample_fmts) {
-                return preferredFormats.front();
-            }
-
-            auto isSupported = [&](AVSampleFormat fmt) -> bool {
-                for (const AVSampleFormat* p = encoder->sample_fmts;
-                    *p != AV_SAMPLE_FMT_NONE;
-                    ++p) {
-                    if (*p == fmt) {
-                        return true;
-                    }
-                }
-
-                return false;
-                };
-
-            for (AVSampleFormat preferred : preferredFormats) {
-                if (isSupported(preferred)) {
-                    return preferred;
-                }
-            }
-
-            return encoder->sample_fmts[0];
-
-#endif
-        }
-
-        int chooseAudioSampleRate(const AVCodec* encoder, int preferredRate)
-        {
-            const int normalizedPreferredRate = preferredRate > 0 ? preferredRate : 48000;
-
-#if LIBAVCODEC_VERSION_MAJOR >= 61
-
-            const void* configs = nullptr;
-            int configCount = 0;
-
-            const int ret = avcodec_get_supported_config(
-                nullptr,
-                encoder,
-                AV_CODEC_CONFIG_SAMPLE_RATE,
-                0,
-                &configs,
-                &configCount
-            );
-
-            if (ret < 0 || !configs || configCount <= 0) {
-                return normalizedPreferredRate;
-            }
-
-            const auto* supportedRates = static_cast<const int*>(configs);
-
-            for (int i = 0; i < configCount; ++i) {
-                if (supportedRates[i] == normalizedPreferredRate) {
-                    return normalizedPreferredRate;
-                }
-            }
-
-            for (int preferred : { 48000, 44100, 32000 }) {
-                for (int i = 0; i < configCount; ++i) {
-                    if (supportedRates[i] == preferred) {
-                        return preferred;
-                    }
-                }
-            }
-
-            return supportedRates[0] > 0 ? supportedRates[0] : normalizedPreferredRate;
-
-#else
-
-            if (!encoder || !encoder->supported_samplerates) {
-                return normalizedPreferredRate;
-            }
-
-            for (const int* p = encoder->supported_samplerates; *p > 0; ++p) {
-                if (*p == normalizedPreferredRate) {
-                    return normalizedPreferredRate;
-                }
-            }
-
-            for (int preferred : { 48000, 44100, 32000 }) {
-                for (const int* p = encoder->supported_samplerates; *p > 0; ++p) {
-                    if (*p == preferred) {
-                        return preferred;
-                    }
-                }
-            }
-
-            return encoder->supported_samplerates[0] > 0
-                ? encoder->supported_samplerates[0]
-                : normalizedPreferredRate;
-
-#endif
-        }
-
-        int audioChannelCount(const AVCodecContext* ctx)
-        {
-            if (!ctx) {
-                return 0;
-            }
-
-#if LIBAVUTIL_VERSION_MAJOR >= 57
-            return ctx->ch_layout.nb_channels;
-#else
-            if (ctx->channels > 0) {
-                return ctx->channels;
-            }
-
-            if (ctx->channel_layout != 0) {
-                return av_get_channel_layout_nb_channels(ctx->channel_layout);
-            }
-
-            return 0;
-#endif
-        }
-
-        bool ensureAudioDecoderChannelLayout(AVCodecContext* ctx)
-        {
-            if (!ctx) {
-                return false;
-            }
-
-#if LIBAVUTIL_VERSION_MAJOR >= 57
-            if (ctx->ch_layout.nb_channels <= 0) {
-                av_channel_layout_default(&ctx->ch_layout, 2);
-            }
-
-            return ctx->ch_layout.nb_channels > 0;
-#else
-            if (ctx->channel_layout == 0 && ctx->channels > 0) {
-                ctx->channel_layout = av_get_default_channel_layout(ctx->channels);
-            }
-
-            if (ctx->channels <= 0 && ctx->channel_layout != 0) {
-                ctx->channels = av_get_channel_layout_nb_channels(ctx->channel_layout);
-            }
-
-            if (ctx->channels <= 0) {
-                ctx->channels = 2;
-                ctx->channel_layout = av_get_default_channel_layout(ctx->channels);
-            }
-
-            return ctx->channel_layout != 0 && ctx->channels > 0;
-#endif
-        }
-
-        bool copyAudioChannelLayoutToEncoder(AVCodecContext* encoderCtx,
-            const AVCodecContext* decoderCtx)
-        {
-            if (!encoderCtx || !decoderCtx) {
-                return false;
-            }
-
-#if LIBAVUTIL_VERSION_MAJOR >= 57
-            if (decoderCtx->ch_layout.nb_channels > 0) {
-                return av_channel_layout_copy(
-                    &encoderCtx->ch_layout,
-                    &decoderCtx->ch_layout
-                ) >= 0;
-            }
-
-            av_channel_layout_default(&encoderCtx->ch_layout, 2);
-            return encoderCtx->ch_layout.nb_channels > 0;
-#else
-            encoderCtx->channels = decoderCtx->channels > 0
-                ? decoderCtx->channels
-                : 2;
-
-            encoderCtx->channel_layout = decoderCtx->channel_layout != 0
-                ? decoderCtx->channel_layout
-                : av_get_default_channel_layout(encoderCtx->channels);
-
-            return encoderCtx->channels > 0 && encoderCtx->channel_layout != 0;
-#endif
-        }
-
-        bool setFrameAudioLayoutFromCodecContext(AVFrame* frame,
-            const AVCodecContext* codecCtx)
-        {
-            if (!frame || !codecCtx) {
-                return false;
-            }
-
-#if LIBAVUTIL_VERSION_MAJOR >= 57
-            return av_channel_layout_copy(&frame->ch_layout, &codecCtx->ch_layout) >= 0;
-#else
-            frame->channel_layout = codecCtx->channel_layout;
-            frame->channels = codecCtx->channels;
-            return frame->channel_layout != 0 && frame->channels > 0;
-#endif
-        }
-
-#if LIBAVUTIL_VERSION_MAJOR < 57
-        int64_t oldAudioChannelLayout(const AVCodecContext* ctx)
-        {
-            if (!ctx) {
-                return 0;
-            }
-
-            if (ctx->channel_layout != 0) {
-                return static_cast<int64_t>(ctx->channel_layout);
-            }
-
-            if (ctx->channels > 0) {
-                return av_get_default_channel_layout(ctx->channels);
-            }
-
-            return av_get_default_channel_layout(2);
-        }
-#endif
-
-        bool isHardwareEncoderName(const char* name)
-        {
-            if (!name) {
-                return false;
-            }
-
-            const std::string encoderName(name);
-
-            return encoderName.find("_rkmpp") != std::string::npos ||
-                encoderName.find("_mf") != std::string::npos ||
-                encoderName.find("_qsv") != std::string::npos ||
-                encoderName.find("_nvenc") != std::string::npos ||
-                encoderName.find("_amf") != std::string::npos;
-        }
-
-        void setEncoderOptions(AVCodecContext* encoderCtx, const AVCodec* encoder)
-        {
-            if (!encoderCtx || !encoder) {
-                return;
-            }
-
-            const std::string name = encoder->name ? encoder->name : "";
-
-            /*
-             * 第一版禁用 B 帧，减少 DTS/PTS 乱序复杂度。
-             * 对 MP4 封装和实时转码更稳定。
-             */
-            encoderCtx->max_b_frames = 0;
-
-            if (name == "libx264") {
-                av_opt_set(encoderCtx->priv_data, "preset", "veryfast", 0);
-                av_opt_set(encoderCtx->priv_data, "tune", "zerolatency", 0);
-            }
-            else if (name == "libx265") {
-                av_opt_set(encoderCtx->priv_data, "preset", "veryfast", 0);
-                av_opt_set(encoderCtx->priv_data, "tune", "zerolatency", 0);
-            }
-        }
-
-        bool checkRet(int ret, std::string* error, const std::string& prefix)
-        {
-            if (ret >= 0) {
-                return true;
-            }
-
-            if (error) {
-                *error = prefix + ": " + ffErrorString(ret);
-            }
-
-            return false;
-        }
-
-    } // namespace
-
     FFmpegTranscoder::FFmpegTranscoder()
     {
         avformat_network_init();
@@ -905,14 +372,14 @@ namespace media {
          */
         ret = avformat_open_input(&inputFmtCtx, m_config.inputUrl.c_str(), nullptr, nullptr);
         if (ret < 0) {
-            fail("avformat_open_input failed: " + ffErrorString(ret));
+            fail("avformat_open_input failed: " + ffmpeg::errorString(ret));
             cleanup();
             return;
         }
 
         ret = avformat_find_stream_info(inputFmtCtx, nullptr);
         if (ret < 0) {
-            fail("avformat_find_stream_info failed: " + ffErrorString(ret));
+            fail("avformat_find_stream_info failed: " + ffmpeg::errorString(ret));
             cleanup();
             return;
         }
@@ -922,7 +389,7 @@ namespace media {
          */
         ret = av_find_best_stream(inputFmtCtx, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
         if (ret < 0) {
-            fail("av_find_best_stream video failed: " + ffErrorString(ret));
+            fail("av_find_best_stream video failed: " + ffmpeg::errorString(ret));
             cleanup();
             return;
         }
@@ -960,14 +427,14 @@ namespace media {
 
             ret = avcodec_parameters_to_context(decoderCtx, inputVideoStream->codecpar);
             if (ret < 0) {
-                fail("avcodec_parameters_to_context decoder failed: " + ffErrorString(ret));
+                fail("avcodec_parameters_to_context decoder failed: " + ffmpeg::errorString(ret));
                 cleanup();
                 return;
             }
 
             ret = avcodec_open2(decoderCtx, decoder, nullptr);
             if (ret < 0) {
-                fail("avcodec_open2 decoder failed: " + ffErrorString(ret));
+                fail("avcodec_open2 decoder failed: " + ffmpeg::errorString(ret));
                 cleanup();
                 return;
             }
@@ -978,7 +445,7 @@ namespace media {
          */
         ret = avformat_alloc_output_context2(&outputFmtCtx, nullptr, nullptr, m_config.outputUrl.c_str());
         if (ret < 0 || !outputFmtCtx) {
-            fail("avformat_alloc_output_context2 failed: " + ffErrorString(ret));
+            fail("avformat_alloc_output_context2 failed: " + ffmpeg::errorString(ret));
             cleanup();
             return;
         }
@@ -987,7 +454,7 @@ namespace media {
          * 5. 创建并打开视频编码器
          */
         {
-            const char* encoderName = preferredEncoderName(m_config.videoCodec);
+            const char* encoderName = ffmpeg::preferredVideoEncoderName(m_config.videoCodec);
             const AVCodec* encoder = nullptr;
 
             if (encoderName) {
@@ -995,7 +462,7 @@ namespace media {
             }
 
             if (!encoder) {
-                const AVCodecID codecId = fallbackCodecId(m_config.videoCodec);
+                const AVCodecID codecId = ffmpeg::fallbackVideoCodecId(m_config.videoCodec);
                 encoder = avcodec_find_encoder(codecId);
             }
 
@@ -1012,14 +479,14 @@ namespace media {
                 return;
             }
 
-            outputFps = chooseOutputFps(m_config, inputVideoStream);
+            outputFps = ffmpeg::chooseOutputFps(m_config, inputVideoStream);
             enableConstantFps = m_config.fps > 0;
 
             outputWidth = m_config.width > 0 ? m_config.width : decoderCtx->width;
             outputHeight = m_config.height > 0 ? m_config.height : decoderCtx->height;
 
-            outputWidth = normalizeEvenSize(outputWidth);
-            outputHeight = normalizeEvenSize(outputHeight);
+            outputWidth = ffmpeg::normalizeEvenSize(outputWidth);
+            outputHeight = ffmpeg::normalizeEvenSize(outputHeight);
 
             if (outputWidth <= 0 || outputHeight <= 0) {
                 fail("invalid output size");
@@ -1051,7 +518,7 @@ namespace media {
 
             encoderCtx->time_base = encoderTimeBase;
             encoderCtx->framerate = AVRational{ outputFps, 1 };
-            encoderCtx->pix_fmt = chooseEncoderPixelFormat(encoder);
+            encoderCtx->pix_fmt = ffmpeg::chooseVideoEncoderPixelFormat(encoder);
 
             encoderCtx->bit_rate = static_cast<int64_t>(std::max(1, m_config.videoBitrateKbps)) * 1000;
             encoderCtx->gop_size = std::max(10, outputFps * 2);
@@ -1061,13 +528,13 @@ namespace media {
                 encoderCtx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
             }
 
-            setEncoderOptions(encoderCtx, encoder);
+            ffmpeg::setVideoEncoderOptions(encoderCtx, encoder);
 
             ret = avcodec_open2(encoderCtx, encoder, nullptr);
             if (ret < 0) {
                 fail(std::string("avcodec_open2 encoder failed [") +
                     (encoder->name ? encoder->name : "unknown") + "]: " +
-                    ffErrorString(ret));
+                    ffmpeg::errorString(ret));
                 cleanup();
                 return;
             }
@@ -1083,7 +550,7 @@ namespace media {
 
             ret = avcodec_parameters_from_context(outputVideoStream->codecpar, encoderCtx);
             if (ret < 0) {
-                fail("avcodec_parameters_from_context video failed: " + ffErrorString(ret));
+                fail("avcodec_parameters_from_context video failed: " + ffmpeg::errorString(ret));
                 cleanup();
                 return;
             }
@@ -1108,7 +575,7 @@ namespace media {
 
             ret = avcodec_parameters_copy(outputAudioStream->codecpar, inputAudioStream->codecpar);
             if (ret < 0) {
-                fail("avcodec_parameters_copy audio failed: " + ffErrorString(ret));
+                fail("avcodec_parameters_copy audio failed: " + ffmpeg::errorString(ret));
                 cleanup();
                 return;
             }
@@ -1135,7 +602,7 @@ namespace media {
 
             ret = avcodec_parameters_to_context(audioDecoderCtx, inputAudioStream->codecpar);
             if (ret < 0) {
-                fail("avcodec_parameters_to_context audio decoder failed: " + ffErrorString(ret));
+                fail("avcodec_parameters_to_context audio decoder failed: " + ffmpeg::errorString(ret));
                 cleanup();
                 return;
             }
@@ -1144,12 +611,12 @@ namespace media {
 
             ret = avcodec_open2(audioDecoderCtx, audioDecoder, nullptr);
             if (ret < 0) {
-                fail("avcodec_open2 audio decoder failed: " + ffErrorString(ret));
+                fail("avcodec_open2 audio decoder failed: " + ffmpeg::errorString(ret));
                 cleanup();
                 return;
             }
 
-            if (!ensureAudioDecoderChannelLayout(audioDecoderCtx)) {
+            if (!ffmpeg::ensureAudioDecoderChannelLayout(audioDecoderCtx)) {
                 fail("invalid input audio channel layout");
                 cleanup();
                 return;
@@ -1173,15 +640,15 @@ namespace media {
                 return;
             }
 
-            if (!copyAudioChannelLayoutToEncoder(audioEncoderCtx, audioDecoderCtx)) {
+            if (!ffmpeg::copyAudioChannelLayoutToEncoder(audioEncoderCtx, audioDecoderCtx)) {
                 fail("copy audio channel layout to encoder failed");
                 cleanup();
                 return;
             }
 
             audioEncoderCtx->sample_rate =
-                chooseAudioSampleRate(audioEncoder, audioDecoderCtx->sample_rate);
-            audioEncoderCtx->sample_fmt = chooseAudioSampleFormat(audioEncoder);
+                ffmpeg::chooseAudioSampleRate(audioEncoder, audioDecoderCtx->sample_rate);
+            audioEncoderCtx->sample_fmt = ffmpeg::chooseAudioSampleFormat(audioEncoder);
             audioEncoderCtx->time_base = AVRational{ 1, audioEncoderCtx->sample_rate };
             audioEncoderCtx->bit_rate =
                 static_cast<int64_t>(std::max(32, m_config.audioBitrateKbps)) * 1000;
@@ -1194,7 +661,7 @@ namespace media {
             if (ret < 0) {
                 fail(std::string("avcodec_open2 audio encoder failed [") +
                     (audioEncoder->name ? audioEncoder->name : "unknown") + "]: " +
-                    ffErrorString(ret));
+                    ffmpeg::errorString(ret));
                 cleanup();
                 return;
             }
@@ -1210,7 +677,7 @@ namespace media {
 
             ret = avcodec_parameters_from_context(outputAudioStream->codecpar, audioEncoderCtx);
             if (ret < 0) {
-                fail("avcodec_parameters_from_context audio failed: " + ffErrorString(ret));
+                fail("avcodec_parameters_from_context audio failed: " + ffmpeg::errorString(ret));
                 cleanup();
                 return;
             }
@@ -1231,17 +698,17 @@ namespace media {
             );
 
             if (ret < 0 || !swrCtx) {
-                fail("swr_alloc_set_opts2 failed: " + ffErrorString(ret));
+                fail("swr_alloc_set_opts2 failed: " + ffmpeg::errorString(ret));
                 cleanup();
                 return;
             }
 #else
             swrCtx = swr_alloc_set_opts(
                 nullptr,
-                oldAudioChannelLayout(audioEncoderCtx),
+                ffmpeg::oldAudioChannelLayout(audioEncoderCtx),
                 audioEncoderCtx->sample_fmt,
                 audioEncoderCtx->sample_rate,
-                oldAudioChannelLayout(audioDecoderCtx),
+                ffmpeg::oldAudioChannelLayout(audioDecoderCtx),
                 audioDecoderCtx->sample_fmt,
                 audioDecoderCtx->sample_rate,
                 0,
@@ -1257,12 +724,12 @@ namespace media {
 
             ret = swr_init(swrCtx);
             if (ret < 0) {
-                fail("swr_init failed: " + ffErrorString(ret));
+                fail("swr_init failed: " + ffmpeg::errorString(ret));
                 cleanup();
                 return;
             }
 
-            const int outputChannels = audioChannelCount(audioEncoderCtx);
+            const int outputChannels = ffmpeg::audioChannelCount(audioEncoderCtx);
             if (outputChannels <= 0) {
                 fail("invalid output audio channel count");
                 cleanup();
@@ -1288,7 +755,7 @@ namespace media {
         if (!(outputFmtCtx->oformat->flags & AVFMT_NOFILE)) {
             ret = avio_open(&outputFmtCtx->pb, m_config.outputUrl.c_str(), AVIO_FLAG_WRITE);
             if (ret < 0) {
-                fail("avio_open output failed: " + ffErrorString(ret));
+                fail("avio_open output failed: " + ffmpeg::errorString(ret));
                 cleanup();
                 return;
             }
@@ -1296,7 +763,7 @@ namespace media {
 
         ret = avformat_write_header(outputFmtCtx, nullptr);
         if (ret < 0) {
-            fail("avformat_write_header failed: " + ffErrorString(ret));
+            fail("avformat_write_header failed: " + ffmpeg::errorString(ret));
             cleanup();
             return;
         }
@@ -1411,7 +878,7 @@ namespace media {
             );
 
             if (ret < 0) {
-                fail("avfilter_graph_create_filter buffer failed: " + ffErrorString(ret));
+                fail("avfilter_graph_create_filter buffer failed: " + ffmpeg::errorString(ret));
                 return false;
             }
 
@@ -1425,7 +892,7 @@ namespace media {
             );
 
             if (ret < 0) {
-                fail("avfilter_graph_create_filter buffersink failed: " + ffErrorString(ret));
+                fail("avfilter_graph_create_filter buffersink failed: " + ffmpeg::errorString(ret));
                 return false;
             }
 
@@ -1467,13 +934,13 @@ namespace media {
             avfilter_inout_free(&outputs);
 
             if (ret < 0) {
-                fail("avfilter_graph_parse_ptr failed [" + filterDesc + "]: " + ffErrorString(ret));
+                fail("avfilter_graph_parse_ptr failed [" + filterDesc + "]: " + ffmpeg::errorString(ret));
                 return false;
             }
 
             ret = avfilter_graph_config(videoFilterGraph, nullptr);
             if (ret < 0) {
-                fail("avfilter_graph_config failed [" + filterDesc + "]: " + ffErrorString(ret));
+                fail("avfilter_graph_config failed [" + filterDesc + "]: " + ffmpeg::errorString(ret));
                 return false;
             }
 
@@ -1488,7 +955,7 @@ namespace media {
         auto writeEncodedVideoPackets = [&](AVFrame* frame) -> bool {
             int sendRet = avcodec_send_frame(encoderCtx, frame);
             if (sendRet < 0) {
-                fail("avcodec_send_frame encoder failed: " + ffErrorString(sendRet));
+                fail("avcodec_send_frame encoder failed: " + ffmpeg::errorString(sendRet));
                 return false;
             }
 
@@ -1508,7 +975,7 @@ namespace media {
 
                 if (receiveRet < 0) {
                     const std::string error = "avcodec_receive_packet encoder failed: " +
-                        ffErrorString(receiveRet);
+                        ffmpeg::errorString(receiveRet);
                     av_packet_free(&encodedPacket);
                     fail(error);
                     return false;
@@ -1583,7 +1050,7 @@ namespace media {
                 av_packet_free(&encodedPacket);
 
                 if (ret < 0) {
-                    fail("av_interleaved_write_frame video failed: " + ffErrorString(ret));
+                    fail("av_interleaved_write_frame video failed: " + ffmpeg::errorString(ret));
                     return false;
                 }
 
@@ -1606,7 +1073,7 @@ namespace media {
                 }
 
                 if (ret < 0) {
-                    fail("av_buffersink_get_frame failed: " + ffErrorString(ret));
+                    fail("av_buffersink_get_frame failed: " + ffmpeg::errorString(ret));
                     return false;
                 }
 
@@ -1700,7 +1167,7 @@ namespace media {
             );
 
             if (ret < 0) {
-                fail("av_buffersrc_add_frame_flags video failed: " + ffErrorString(ret));
+                fail("av_buffersrc_add_frame_flags video failed: " + ffmpeg::errorString(ret));
                 return false;
             }
 
@@ -1716,7 +1183,7 @@ namespace media {
                 }
 
                 if (ret < 0) {
-                    fail("avcodec_receive_frame decoder failed: " + ffErrorString(ret));
+                    fail("avcodec_receive_frame decoder failed: " + ffmpeg::errorString(ret));
                     return false;
                 }
 
@@ -1842,7 +1309,7 @@ namespace media {
 
             ret = av_interleaved_write_frame(outputFmtCtx, packet);
             if (ret < 0) {
-                fail("av_interleaved_write_frame audio failed: " + ffErrorString(ret));
+                fail("av_interleaved_write_frame audio failed: " + ffmpeg::errorString(ret));
                 return false;
             }
 
@@ -1908,7 +1375,7 @@ namespace media {
 
             int sendRet = avcodec_send_frame(audioEncoderCtx, frame);
             if (sendRet < 0) {
-                fail("avcodec_send_frame audio encoder failed: " + ffErrorString(sendRet));
+                fail("avcodec_send_frame audio encoder failed: " + ffmpeg::errorString(sendRet));
                 return false;
             }
 
@@ -1928,7 +1395,7 @@ namespace media {
 
                 if (receiveRet < 0) {
                     const std::string error = "avcodec_receive_packet audio encoder failed: " +
-                        ffErrorString(receiveRet);
+                        ffmpeg::errorString(receiveRet);
                     av_packet_free(&encodedPacket);
                     fail(error);
                     return false;
@@ -1979,7 +1446,7 @@ namespace media {
                 av_packet_free(&encodedPacket);
 
                 if (ret < 0) {
-                    fail("av_interleaved_write_frame encoded audio failed: " + ffErrorString(ret));
+                    fail("av_interleaved_write_frame encoded audio failed: " + ffmpeg::errorString(ret));
                     return false;
                 }
 
@@ -2016,7 +1483,7 @@ namespace media {
                 audioFrame->sample_rate = audioEncoderCtx->sample_rate;
                 audioFrame->pts = nextAudioPts == AV_NOPTS_VALUE ? 0 : nextAudioPts;
 
-                if (!setFrameAudioLayoutFromCodecContext(audioFrame, audioEncoderCtx)) {
+                if (!ffmpeg::setFrameAudioLayoutFromCodecContext(audioFrame, audioEncoderCtx)) {
                     av_frame_free(&audioFrame);
                     fail("set encoded audio frame channel layout failed");
                     return false;
@@ -2025,7 +1492,7 @@ namespace media {
                 ret = av_frame_get_buffer(audioFrame, 0);
                 if (ret < 0) {
                     av_frame_free(&audioFrame);
-                    fail("av_frame_get_buffer encoded audio frame failed: " + ffErrorString(ret));
+                    fail("av_frame_get_buffer encoded audio frame failed: " + ffmpeg::errorString(ret));
                     return false;
                 }
 
@@ -2086,7 +1553,7 @@ namespace media {
             convertedFrame->format = audioEncoderCtx->sample_fmt;
             convertedFrame->sample_rate = audioEncoderCtx->sample_rate;
 
-            if (!setFrameAudioLayoutFromCodecContext(convertedFrame, audioEncoderCtx)) {
+            if (!ffmpeg::setFrameAudioLayoutFromCodecContext(convertedFrame, audioEncoderCtx)) {
                 av_frame_free(&convertedFrame);
                 fail("set converted audio frame channel layout failed");
                 return false;
@@ -2095,7 +1562,7 @@ namespace media {
             ret = av_frame_get_buffer(convertedFrame, 0);
             if (ret < 0) {
                 av_frame_free(&convertedFrame);
-                fail("av_frame_get_buffer converted audio frame failed: " + ffErrorString(ret));
+                fail("av_frame_get_buffer converted audio frame failed: " + ffmpeg::errorString(ret));
                 return false;
             }
 
@@ -2112,7 +1579,7 @@ namespace media {
 
             if (convertedSamples < 0) {
                 av_frame_free(&convertedFrame);
-                fail("swr_convert failed: " + ffErrorString(convertedSamples));
+                fail("swr_convert failed: " + ffmpeg::errorString(convertedSamples));
                 return false;
             }
 
@@ -2126,7 +1593,7 @@ namespace media {
 
                 if (ret < 0) {
                     av_frame_free(&convertedFrame);
-                    fail("av_audio_fifo_realloc failed: " + ffErrorString(ret));
+                    fail("av_audio_fifo_realloc failed: " + ffmpeg::errorString(ret));
                     return false;
                 }
 
@@ -2161,7 +1628,7 @@ namespace media {
                 }
 
                 if (ret < 0) {
-                    fail("avcodec_receive_frame audio decoder failed: " + ffErrorString(ret));
+                    fail("avcodec_receive_frame audio decoder failed: " + ffmpeg::errorString(ret));
                     return false;
                 }
 
@@ -2186,7 +1653,7 @@ namespace media {
 
             ret = avcodec_send_packet(audioDecoderCtx, packet);
             if (ret < 0) {
-                fail("avcodec_send_packet audio decoder failed: " + ffErrorString(ret));
+                fail("avcodec_send_packet audio decoder failed: " + ffmpeg::errorString(ret));
                 return false;
             }
 
@@ -2204,7 +1671,7 @@ namespace media {
             }
 
             if (ret < 0) {
-                fail("av_read_frame failed: " + ffErrorString(ret));
+                fail("av_read_frame failed: " + ffmpeg::errorString(ret));
                 cleanup();
                 return;
             }
@@ -2214,7 +1681,7 @@ namespace media {
                 av_packet_unref(inputPacket);
 
                 if (ret < 0) {
-                    fail("avcodec_send_packet decoder failed: " + ffErrorString(ret));
+                    fail("avcodec_send_packet decoder failed: " + ffmpeg::errorString(ret));
                     cleanup();
                     return;
                 }
@@ -2261,7 +1728,7 @@ namespace media {
         if (!m_stopRequested.load()) {
             ret = avcodec_send_packet(decoderCtx, nullptr);
             if (ret < 0) {
-                fail("avcodec_send_packet decoder flush failed: " + ffErrorString(ret));
+                fail("avcodec_send_packet decoder flush failed: " + ffmpeg::errorString(ret));
                 cleanup();
                 return;
             }
@@ -2278,7 +1745,7 @@ namespace media {
         if (!m_stopRequested.load() && audioDecoderCtx && audioEncoderCtx) {
             ret = avcodec_send_packet(audioDecoderCtx, nullptr);
             if (ret < 0) {
-                fail("avcodec_send_packet audio decoder flush failed: " + ffErrorString(ret));
+                fail("avcodec_send_packet audio decoder flush failed: " + ffmpeg::errorString(ret));
                 cleanup();
                 return;
             }
@@ -2319,7 +1786,7 @@ namespace media {
                 convertedFrame->format = audioEncoderCtx->sample_fmt;
                 convertedFrame->sample_rate = audioEncoderCtx->sample_rate;
 
-                if (!setFrameAudioLayoutFromCodecContext(convertedFrame, audioEncoderCtx)) {
+                if (!ffmpeg::setFrameAudioLayoutFromCodecContext(convertedFrame, audioEncoderCtx)) {
                     av_frame_free(&convertedFrame);
                     fail("set swr flush audio frame channel layout failed");
                     cleanup();
@@ -2329,7 +1796,7 @@ namespace media {
                 ret = av_frame_get_buffer(convertedFrame, 0);
                 if (ret < 0) {
                     av_frame_free(&convertedFrame);
-                    fail("av_frame_get_buffer swr flush audio frame failed: " + ffErrorString(ret));
+                    fail("av_frame_get_buffer swr flush audio frame failed: " + ffmpeg::errorString(ret));
                     cleanup();
                     return;
                 }
@@ -2344,7 +1811,7 @@ namespace media {
 
                 if (convertedSamples < 0) {
                     av_frame_free(&convertedFrame);
-                    fail("swr_convert flush failed: " + ffErrorString(convertedSamples));
+                    fail("swr_convert flush failed: " + ffmpeg::errorString(convertedSamples));
                     cleanup();
                     return;
                 }
@@ -2363,7 +1830,7 @@ namespace media {
 
                 if (ret < 0) {
                     av_frame_free(&convertedFrame);
-                    fail("av_audio_fifo_realloc swr flush failed: " + ffErrorString(ret));
+                    fail("av_audio_fifo_realloc swr flush failed: " + ffmpeg::errorString(ret));
                     cleanup();
                     return;
                 }
@@ -2400,7 +1867,7 @@ namespace media {
         if (!m_stopRequested.load()) {
             ret = av_buffersrc_add_frame_flags(videoBufferSrcCtx, nullptr, 0);
             if (ret < 0) {
-                fail("av_buffersrc_add_frame_flags video EOF failed: " + ffErrorString(ret));
+                fail("av_buffersrc_add_frame_flags video EOF failed: " + ffmpeg::errorString(ret));
                 cleanup();
                 return;
             }
@@ -2426,7 +1893,7 @@ namespace media {
          */
         ret = av_write_trailer(outputFmtCtx);
         if (ret < 0) {
-            fail("av_write_trailer failed: " + ffErrorString(ret));
+            fail("av_write_trailer failed: " + ffmpeg::errorString(ret));
             cleanup();
             return;
         }
