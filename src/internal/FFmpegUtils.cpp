@@ -13,6 +13,24 @@ extern "C" {
 }
 
 namespace media::ffmpeg {
+namespace {
+
+    const char* firstAvailableEncoderName(const char* const* names)
+    {
+        if (!names) {
+            return nullptr;
+        }
+
+        for (const char* const* p = names; *p; ++p) {
+            if (avcodec_find_encoder_by_name(*p)) {
+                return *p;
+            }
+        }
+
+        return nullptr;
+    }
+
+} // namespace
 
     std::string errorString(int err)
     {
@@ -26,19 +44,66 @@ namespace media::ffmpeg {
 
     const char* preferredVideoEncoderName(VideoCodec codec)
     {
+        static const char* const h264Encoders[] = {
+            "libx264",
+            "h264_mf",
+            "h264_nvenc",
+            "h264_qsv",
+            "h264_amf",
+            "h264_rkmpp",
+            "h264_videotoolbox",
+            nullptr
+        };
+
+        static const char* const h265Encoders[] = {
+            "libx265",
+            "hevc_mf",
+            "hevc_nvenc",
+            "hevc_qsv",
+            "hevc_amf",
+            "hevc_rkmpp",
+            "hevc_videotoolbox",
+            nullptr
+        };
+
+        static const char* const mpeg4Encoders[] = {
+            "mpeg4",
+            nullptr
+        };
+
+        static const char* const vp8Encoders[] = {
+            "libvpx",
+            nullptr
+        };
+
+        static const char* const vp9Encoders[] = {
+            "libvpx-vp9",
+            nullptr
+        };
+
+        static const char* const av1Encoders[] = {
+            "libaom-av1",
+            "libsvtav1",
+            "librav1e",
+            "av1_nvenc",
+            "av1_qsv",
+            "av1_amf",
+            nullptr
+        };
+
         switch (codec) {
         case VideoCodec::H264:
-            return "libx264";
+            return firstAvailableEncoderName(h264Encoders);
         case VideoCodec::H265:
-            return "libx265";
+            return firstAvailableEncoderName(h265Encoders);
         case VideoCodec::MPEG4:
-            return "mpeg4";
+            return firstAvailableEncoderName(mpeg4Encoders);
         case VideoCodec::VP8:
-            return "libvpx";
+            return firstAvailableEncoderName(vp8Encoders);
         case VideoCodec::VP9:
-            return "libvpx-vp9";
+            return firstAvailableEncoderName(vp9Encoders);
         case VideoCodec::AV1:
-            return "libaom-av1";
+            return firstAvailableEncoderName(av1Encoders);
         case VideoCodec::Copy:
         default:
             return nullptr;
@@ -48,19 +113,13 @@ namespace media::ffmpeg {
     AVCodecID fallbackVideoCodecId(VideoCodec codec)
     {
         switch (codec) {
-        case VideoCodec::H264:
-            return AV_CODEC_ID_H264;
-        case VideoCodec::H265:
-            return AV_CODEC_ID_HEVC;
-        case VideoCodec::MPEG4:
-            return AV_CODEC_ID_MPEG4;
-        case VideoCodec::VP8:
-            return AV_CODEC_ID_VP8;
-        case VideoCodec::VP9:
-            return AV_CODEC_ID_VP9;
-        case VideoCodec::AV1:
-            return AV_CODEC_ID_AV1;
         case VideoCodec::Copy:
+        case VideoCodec::H264:
+        case VideoCodec::H265:
+        case VideoCodec::MPEG4:
+        case VideoCodec::VP8:
+        case VideoCodec::VP9:
+        case VideoCodec::AV1:
         default:
             return AV_CODEC_ID_NONE;
         }
