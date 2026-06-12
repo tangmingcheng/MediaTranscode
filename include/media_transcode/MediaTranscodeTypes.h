@@ -5,23 +5,15 @@
 
 namespace media {
 
-    // 视频编码类型
+    // 视频编码格式。使用者只指定目标格式，不指定具体编码器实现。
     enum class VideoCodec {
         Copy,
-
-        // 目标编码格式，由 FFmpeg 自动选择当前环境中可用的编码器
         H264,
         H265,
         MPEG4,
         VP8,
         VP9,
-        AV1,
-
-        // 指定编码器后端，保留旧接口兼容
-        H264_RKMPP,
-        H265_RKMPP,
-        H264_LIBX264,
-        H265_LIBX265
+        AV1
     };
 
     // 音频处理模式
@@ -57,7 +49,7 @@ namespace media {
         int height = 0;
         int fps = 0;
 
-        VideoCodec videoCodec = VideoCodec::H264_RKMPP;
+        VideoCodec videoCodec = VideoCodec::H264;
         AudioMode audioMode = AudioMode::EncodeSelected;
         AudioCodec audioCodec = AudioCodec::AAC;
 
