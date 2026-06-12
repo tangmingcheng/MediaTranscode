@@ -266,6 +266,10 @@ bool FFmpegAudioPipeline::initializeEncode(std::string* error)
     m_encoderCtx->time_base = AVRational{ 1, m_encoderCtx->sample_rate };
     m_encoderCtx->bit_rate = static_cast<int64_t>(std::max(32, m_audioBitrateKbps)) * 1000;
 
+    if (encoder->capabilities & AV_CODEC_CAP_EXPERIMENTAL) {
+        m_encoderCtx->strict_std_compliance = FF_COMPLIANCE_EXPERIMENTAL;
+    }
+
     if (m_outputFmtCtx->oformat->flags & AVFMT_GLOBALHEADER) {
         m_encoderCtx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
     }
