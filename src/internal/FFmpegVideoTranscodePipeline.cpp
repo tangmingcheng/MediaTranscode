@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <sstream>
-#include <utility>
 
 extern "C" {
 #include <libavutil/avutil.h>
@@ -17,53 +16,6 @@ namespace media::ffmpeg {
 FFmpegVideoTranscodePipeline::~FFmpegVideoTranscodePipeline()
 {
     reset();
-}
-
-FFmpegVideoTranscodePipeline::FFmpegVideoTranscodePipeline(FFmpegVideoTranscodePipeline&& other) noexcept
-{
-    *this = std::move(other);
-}
-
-FFmpegVideoTranscodePipeline& FFmpegVideoTranscodePipeline::operator=(FFmpegVideoTranscodePipeline&& other) noexcept
-{
-    if (this == &other) {
-        return *this;
-    }
-
-    reset();
-
-    m_config = other.m_config;
-    m_inputVideoStream = other.m_inputVideoStream;
-    m_outputFmtCtx = other.m_outputFmtCtx;
-    m_outputVideoStream = other.m_outputVideoStream;
-    m_timeline = other.m_timeline;
-    m_decoderCtx = other.m_decoderCtx;
-    m_encoderCtx = other.m_encoderCtx;
-    m_filterGraph = std::move(other.m_filterGraph);
-    m_packetWriter = std::move(other.m_packetWriter);
-    m_decodedFrame = other.m_decodedFrame;
-    m_filteredFrame = other.m_filteredFrame;
-    m_lastSubmittedPts = other.m_lastSubmittedPts;
-    m_packetCount = other.m_packetCount;
-    m_lastWrittenOutTimeMs = other.m_lastWrittenOutTimeMs;
-    m_outputFps = other.m_outputFps;
-    m_enableConstantFps = other.m_enableConstantFps;
-
-    other.m_inputVideoStream = nullptr;
-    other.m_outputFmtCtx = nullptr;
-    other.m_outputVideoStream = nullptr;
-    other.m_timeline = nullptr;
-    other.m_decoderCtx = nullptr;
-    other.m_encoderCtx = nullptr;
-    other.m_decodedFrame = nullptr;
-    other.m_filteredFrame = nullptr;
-    other.m_lastSubmittedPts = AV_NOPTS_VALUE;
-    other.m_packetCount = 0;
-    other.m_lastWrittenOutTimeMs = 0;
-    other.m_outputFps = 0;
-    other.m_enableConstantFps = false;
-
-    return *this;
 }
 
 void FFmpegVideoTranscodePipeline::reset()
