@@ -21,6 +21,9 @@ namespace media::ffmpeg {
     const char* preferredVideoEncoderName(VideoCodec codec);
     AVCodecID fallbackVideoCodecId(VideoCodec codec);
 
+    const char* preferredAudioEncoderName(AudioCodec codec);
+    AVCodecID fallbackAudioCodecId(AudioCodec codec);
+
     int normalizeEvenSize(int value);
     int chooseOutputFps(const TranscodeConfig& config, const AVStream* inputVideoStream);
 
