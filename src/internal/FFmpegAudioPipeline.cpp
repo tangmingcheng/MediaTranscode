@@ -17,32 +17,6 @@ extern "C" {
 }
 
 namespace media::ffmpeg {
-namespace {
-
-int defaultAudioFrameSize(AudioCodec codec, int sampleRate)
-{
-    switch (codec) {
-    case AudioCodec::AAC:
-        return 1024;
-    case AudioCodec::MP3:
-        return 1152;
-    case AudioCodec::OPUS:
-        return std::max(1, (sampleRate > 0 ? sampleRate : 48000) / 50); // 20 ms
-    default:
-        return 1024;
-    }
-}
-
-int effectiveAudioFrameSize(const AVCodecContext* encoderCtx, AudioCodec codec)
-{
-    if (encoderCtx && encoderCtx->frame_size > 0) {
-        return encoderCtx->frame_size;
-    }
-
-    return defaultAudioFrameSize(codec, encoderCtx ? encoderCtx->sample_rate : 0);
-}
-
-} // namespace
 
 FFmpegAudioPipeline::FFmpegAudioPipeline()
     : m_fifo(new FFmpegAudioFifo())
@@ -324,9 +298,6 @@ bool FFmpegAudioPipeline::initializeEncode(std::string* error)
     }
 
     m_outputAudioStream->codecpar->codec_tag = 0;
-    if (m_outputAudioStream->codecpar->frame_size <= 0) {
-        m_outputAudioStream->codecpar->frame_size = effectiveAudioFrameSize(m_encoderCtx, m_codec);
-    }
 
     m_decodedFrame = av_frame_alloc();
     if (!m_decodedFrame) {
@@ -409,7 +380,7 @@ bool FFmpegAudioPipeline::initializeResamplerAndFifo(std::string* error)
     return m_fifo->initialize(
         m_encoderCtx->sample_fmt,
         outputChannels,
-        effectiveAudioFrameSize(m_encoderCtx, m_codec),
+        m_encoderCtx->frame_size > 0 ? m_encoderCtx->frame_size : 1024,
         error
     );
 }
@@ -735,7 +706,7 @@ bool FFmpegAudioPipeline::encodeFifo(
         return true;
     }
 
-    const int frameSize = effectiveAudioFrameSize(m_encoderCtx, m_codec);
+    const int frameSize = m_encoderCtx->frame_size > 0 ? m_encoderCtx->frame_size : 1024;
 
     while (m_fifo->size() >= frameSize || (flushAll && m_fifo->size() > 0)) {
         const int availableSamples = m_fifo->size();
