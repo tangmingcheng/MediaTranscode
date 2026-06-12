@@ -113,22 +113,6 @@ namespace {
             return media::VideoCodec::AV1;
         }
 
-        if (normalized == "libx264" || normalized == "h264_libx264") {
-            return media::VideoCodec::H264_LIBX264;
-        }
-
-        if (normalized == "libx265" || normalized == "h265_libx265" || normalized == "hevc_libx265") {
-            return media::VideoCodec::H265_LIBX265;
-        }
-
-        if (normalized == "h264_rkmpp") {
-            return media::VideoCodec::H264_RKMPP;
-        }
-
-        if (normalized == "h265_rkmpp" || normalized == "hevc_rkmpp") {
-            return media::VideoCodec::H265_RKMPP;
-        }
-
         throw std::runtime_error("unsupported video codec: " + value);
     }
 
@@ -195,14 +179,6 @@ namespace {
             return "vp9";
         case media::VideoCodec::AV1:
             return "av1";
-        case media::VideoCodec::H264_RKMPP:
-            return "h264_rkmpp";
-        case media::VideoCodec::H265_RKMPP:
-            return "h265_rkmpp";
-        case media::VideoCodec::H264_LIBX264:
-            return "h264_libx264";
-        case media::VideoCodec::H265_LIBX265:
-            return "h265_libx265";
         case media::VideoCodec::Copy:
         default:
             return "copy";
@@ -318,7 +294,6 @@ namespace {
             << "      --size <WxH>                Output size, for example 1280x720\n"
             << "      --fps <value>               Output fps, 0 means preserve input timeline\n"
             << "      --video-codec <value>       copy | h264 | h265 | mpeg4 | vp8 | vp9 | av1\n"
-            << "                                  or h264_libx264 | h265_libx265 | h264_rkmpp | h265_rkmpp\n"
             << "      --video-bitrate <kbps>      Video bitrate in kbps\n"
             << "      --audio-mode <value>        none | copy | encode\n"
             << "      --audio-codec <value>       aac | opus | mp3, only used when audio-mode is encode\n"
@@ -341,7 +316,7 @@ namespace {
         options.config.width = 1280;
         options.config.height = 720;
         options.config.fps = 25;
-        options.config.videoCodec = media::VideoCodec::H264_LIBX264;
+        options.config.videoCodec = media::VideoCodec::H264;
         options.config.audioMode = media::AudioMode::EncodeSelected;
         options.config.audioCodec = media::AudioCodec::AAC;
         options.config.audioBitrateKbps = 128;
