@@ -124,7 +124,7 @@ bool FFmpegAudioFifo::ensureAdditionalCapacity(int additionalSamples, std::strin
     return true;
 }
 
-bool FFmpegAudioFifo::writeFrame(const AVFrame* frame, std::string* error)
+bool FFmpegAudioFifo::writeFrame(AVFrame* frame, std::string* error)
 {
     if (!m_fifo) {
         if (error) {
