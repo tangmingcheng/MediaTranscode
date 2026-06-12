@@ -27,6 +27,7 @@ public:
          * inputAudioStream, outputFmtCtx and timeline are borrowed from FFmpegTranscoder.
          */
         AudioMode mode = AudioMode::None;
+        AudioCodec codec = AudioCodec::AAC;
         AVStream* inputAudioStream = nullptr;
         AVFormatContext* outputFmtCtx = nullptr;
         TimelineNormalizer* timeline = nullptr;
@@ -91,6 +92,7 @@ private:
 
 private:
     AudioMode m_mode = AudioMode::None;
+    AudioCodec m_codec = AudioCodec::AAC;
 
     AVStream* m_inputAudioStream = nullptr;
     AVFormatContext* m_outputFmtCtx = nullptr;
