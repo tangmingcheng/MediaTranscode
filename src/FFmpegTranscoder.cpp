@@ -3,6 +3,7 @@
 #include "internal/FFmpegTimelineNormalizer.h"
 #include "internal/FFmpegVideoFilterGraph.h"
 #include "internal/FFmpegVideoPipeline.h"
+#include "internal/FFmpegAudioFifo.h"
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -16,7 +17,6 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
-#include <libavutil/audio_fifo.h>
 #include <libavutil/avutil.h>
 #include <libavutil/channel_layout.h>
 #include <libavutil/imgutils.h>
@@ -156,7 +156,7 @@ namespace media {
         AVCodecContext* audioDecoderCtx = nullptr;
         AVCodecContext* audioEncoderCtx = nullptr;
         SwrContext* swrCtx = nullptr;
-        AVAudioFifo* audioFifo = nullptr;
+        ffmpeg::FFmpegAudioFifo audioFifo;
 
         ffmpeg::VideoFilterGraph videoFilterGraph;
         ffmpeg::FFmpegVideoPipeline videoPipeline;
@@ -238,10 +238,7 @@ namespace media {
             };
 
         auto cleanup = [&]() {
-            if (audioFifo) {
-                av_audio_fifo_free(audioFifo);
-                audioFifo = nullptr;
-            }
+            audioFifo.reset();
 
             if (swrCtx) {
                 swr_free(&swrCtx);
@@ -671,16 +668,18 @@ namespace media {
                 return;
             }
 
-            audioFifo = av_audio_fifo_alloc(
-                audioEncoderCtx->sample_fmt,
-                outputChannels,
-                audioEncoderCtx->frame_size > 0 ? audioEncoderCtx->frame_size : 1024
-            );
-
-            if (!audioFifo) {
-                fail("av_audio_fifo_alloc failed");
-                cleanup();
-                return;
+            {
+                std::string audioFifoError;
+                if (!audioFifo.initialize(
+                    audioEncoderCtx->sample_fmt,
+                    outputChannels,
+                    audioEncoderCtx->frame_size > 0 ? audioEncoderCtx->frame_size : 1024,
+                    &audioFifoError
+                )) {
+                    fail(audioFifoError);
+                    cleanup();
+                    return;
+                }
             }
         }
 
@@ -1171,7 +1170,7 @@ namespace media {
             };
 
         auto encodeAudioFifo = [&](bool flushAll) -> bool {
-            if (!audioFifo || !audioEncoderCtx) {
+            if (!audioFifo.isInitialized() || !audioEncoderCtx) {
                 return true;
             }
 
@@ -1179,9 +1178,9 @@ namespace media {
                 ? audioEncoderCtx->frame_size
                 : 1024;
 
-            while (av_audio_fifo_size(audioFifo) >= frameSize ||
-                (flushAll && av_audio_fifo_size(audioFifo) > 0)) {
-                const int availableSamples = av_audio_fifo_size(audioFifo);
+            while (audioFifo.size() >= frameSize ||
+                (flushAll && audioFifo.size() > 0)) {
+                const int availableSamples = audioFifo.size();
                 const int samplesToRead = flushAll
                     ? std::min(frameSize, availableSamples)
                     : frameSize;
@@ -1210,16 +1209,13 @@ namespace media {
                     return false;
                 }
 
-                const int readSamples = av_audio_fifo_read(
-                    audioFifo,
-                    reinterpret_cast<void**>(audioFrame->extended_data),
-                    samplesToRead
-                );
-
-                if (readSamples < samplesToRead) {
-                    av_frame_free(&audioFrame);
-                    fail("av_audio_fifo_read failed");
-                    return false;
+                {
+                    std::string audioFifoError;
+                    if (!audioFifo.readToFrame(audioFrame, samplesToRead, &audioFifoError)) {
+                        av_frame_free(&audioFrame);
+                        fail(audioFifoError);
+                        return false;
+                    }
                 }
 
                 const bool ok = writeEncodedAudioPackets(audioFrame);
@@ -1234,10 +1230,10 @@ namespace media {
             }
 
             return true;
-            };
+        };
 
         auto pushDecodedAudioFrameToFifo = [&]() -> bool {
-            if (!decodedAudioFrame || !swrCtx || !audioFifo || !audioEncoderCtx || !audioDecoderCtx) {
+            if (!decodedAudioFrame || !swrCtx || !audioFifo.isInitialized() || !audioEncoderCtx || !audioDecoderCtx) {
                 return true;
             }
 
@@ -1300,26 +1296,10 @@ namespace media {
             convertedFrame->nb_samples = convertedSamples;
 
             if (convertedSamples > 0) {
-                ret = av_audio_fifo_realloc(
-                    audioFifo,
-                    av_audio_fifo_size(audioFifo) + convertedSamples
-                );
-
-                if (ret < 0) {
+                std::string audioFifoError;
+                if (!audioFifo.writeFrame(convertedFrame, &audioFifoError)) {
                     av_frame_free(&convertedFrame);
-                    fail("av_audio_fifo_realloc failed: " + ffmpeg::errorString(ret));
-                    return false;
-                }
-
-                const int writtenSamples = av_audio_fifo_write(
-                    audioFifo,
-                    reinterpret_cast<void**>(convertedFrame->extended_data),
-                    convertedSamples
-                );
-
-                if (writtenSamples < convertedSamples) {
-                    av_frame_free(&convertedFrame);
-                    fail("av_audio_fifo_write failed");
+                    fail(audioFifoError);
                     return false;
                 }
             }
@@ -1537,31 +1517,17 @@ namespace media {
                     break;
                 }
 
-                ret = av_audio_fifo_realloc(
-                    audioFifo,
-                    av_audio_fifo_size(audioFifo) + convertedSamples
-                );
-
-                if (ret < 0) {
-                    av_frame_free(&convertedFrame);
-                    fail("av_audio_fifo_realloc swr flush failed: " + ffmpeg::errorString(ret));
-                    cleanup();
-                    return;
+                {
+                    std::string audioFifoError;
+                    if (!audioFifo.writeFrame(convertedFrame, &audioFifoError)) {
+                        av_frame_free(&convertedFrame);
+                        fail(audioFifoError);
+                        cleanup();
+                        return;
+                    }
                 }
-
-                const int writtenSamples = av_audio_fifo_write(
-                    audioFifo,
-                    reinterpret_cast<void**>(convertedFrame->extended_data),
-                    convertedSamples
-                );
 
                 av_frame_free(&convertedFrame);
-
-                if (writtenSamples < convertedSamples) {
-                    fail("av_audio_fifo_write swr flush failed");
-                    cleanup();
-                    return;
-                }
             }
 
             if (!encodeAudioFifo(true)) {
