@@ -1,6 +1,8 @@
 #pragma once
 
 #include "media_transcode/MediaTranscodeTypes.h"
+#include "internal/FFmpegVideoFilterGraph.h"
+#include "internal/FFmpegVideoPipeline.h"
 
 #include <cstdint>
 #include <functional>
@@ -84,6 +86,9 @@ private:
 
     AVCodecContext* m_decoderCtx = nullptr;
     AVCodecContext* m_encoderCtx = nullptr;
+
+    VideoFilterGraph m_filterGraph;
+    FFmpegVideoPipeline m_packetWriter;
 
     AVFrame* m_decodedFrame = nullptr;
     AVFrame* m_filteredFrame = nullptr;
