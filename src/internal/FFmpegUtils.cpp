@@ -39,14 +39,6 @@ namespace media::ffmpeg {
             return "libvpx-vp9";
         case VideoCodec::AV1:
             return "libaom-av1";
-        case VideoCodec::H264_RKMPP:
-            return "h264_rkmpp";
-        case VideoCodec::H265_RKMPP:
-            return "hevc_rkmpp";
-        case VideoCodec::H264_LIBX264:
-            return "libx264";
-        case VideoCodec::H265_LIBX265:
-            return "libx265";
         case VideoCodec::Copy:
         default:
             return nullptr;
@@ -57,12 +49,8 @@ namespace media::ffmpeg {
     {
         switch (codec) {
         case VideoCodec::H264:
-        case VideoCodec::H264_RKMPP:
-        case VideoCodec::H264_LIBX264:
             return AV_CODEC_ID_H264;
         case VideoCodec::H265:
-        case VideoCodec::H265_RKMPP:
-        case VideoCodec::H265_LIBX265:
             return AV_CODEC_ID_HEVC;
         case VideoCodec::MPEG4:
             return AV_CODEC_ID_MPEG4;
@@ -242,14 +230,7 @@ namespace media::ffmpeg {
         }
 
 #if LIBAVUTIL_VERSION_MAJOR >= 57
-        if (ctx->ch_layout.nb_channels > 0) {
-            return true;
-        }
-
-        if (ctx->channels > 0) {
-            av_channel_layout_default(&ctx->ch_layout, ctx->channels);
-            return ctx->ch_layout.nb_channels > 0;
-        }
+        return ctx->ch_layout.nb_channels > 0;
 #else
         if (ctx->channel_layout != 0) {
             return true;
@@ -259,9 +240,9 @@ namespace media::ffmpeg {
             ctx->channel_layout = av_get_default_channel_layout(ctx->channels);
             return ctx->channel_layout != 0;
         }
-#endif
 
         return false;
+#endif
     }
 
     bool copyAudioChannelLayoutToEncoder(AVCodecContext* encoderCtx,
