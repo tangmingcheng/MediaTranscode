@@ -34,9 +34,8 @@ public:
 
     FFmpegVideoTranscodePipeline(const FFmpegVideoTranscodePipeline&) = delete;
     FFmpegVideoTranscodePipeline& operator=(const FFmpegVideoTranscodePipeline&) = delete;
-
-    FFmpegVideoTranscodePipeline(FFmpegVideoTranscodePipeline&& other) noexcept;
-    FFmpegVideoTranscodePipeline& operator=(FFmpegVideoTranscodePipeline&& other) noexcept;
+    FFmpegVideoTranscodePipeline(FFmpegVideoTranscodePipeline&&) = delete;
+    FFmpegVideoTranscodePipeline& operator=(FFmpegVideoTranscodePipeline&&) = delete;
 
     void reset();
 
