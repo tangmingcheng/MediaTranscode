@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -18,6 +19,7 @@ namespace media::ffmpeg {
 
     std::string errorString(int err);
 
+    std::vector<const char*> videoEncoderCandidateNames(VideoCodec codec);
     const char* preferredVideoEncoderName(VideoCodec codec);
     AVCodecID fallbackVideoCodecId(VideoCodec codec);
 
