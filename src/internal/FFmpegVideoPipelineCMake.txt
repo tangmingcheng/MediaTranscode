@@ -1,0 +1,6 @@
+# --------------------------
+# FFmpegVideoPipeline 已经在 CMakeLists.txt 中添加
+# 只需要在 add_library(${TARGET_CORE} ...) 中增加:
+#   src/internal/FFmpegVideoPipeline.cpp
+#   src/internal/FFmpegVideoPipeline.h
+# --------------------------
