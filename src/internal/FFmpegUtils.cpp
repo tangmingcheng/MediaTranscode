@@ -15,21 +15,19 @@ extern "C" {
 namespace media::ffmpeg {
 namespace {
 
-    std::vector<const char*> availableEncoderNames(const char* const* names)
+    const char* firstAvailableEncoderName(const char* const* names)
     {
-        std::vector<const char*> result;
-
         if (!names) {
-            return result;
+            return nullptr;
         }
 
         for (const char* const* p = names; *p; ++p) {
             if (avcodec_find_encoder_by_name(*p)) {
-                result.push_back(*p);
+                return *p;
             }
         }
 
-        return result;
+        return nullptr;
     }
 
 #if LIBAVCODEC_VERSION_MAJOR >= 61
@@ -142,26 +140,28 @@ namespace {
         return oss.str();
     }
 
-    std::vector<const char*> videoEncoderCandidateNames(VideoCodec codec)
+    const char* preferredVideoEncoderName(VideoCodec codec)
     {
         static const char* const h264Encoders[] = {
+            "libx264",
+            "h264_mf",
             "h264_nvenc",
             "h264_qsv",
             "h264_amf",
             "h264_rkmpp",
             "h264_videotoolbox",
-            "h264_mf",
-            "libx264",
             nullptr
         };
 
         static const char* const h265Encoders[] = {
+            "libx265",
+            // hevc_mf may open successfully but often cannot provide HEVC codec private data
+            // before avformat_write_header() in this generic software-frame pipeline.
             "hevc_nvenc",
             "hevc_qsv",
             "hevc_amf",
             "hevc_rkmpp",
             "hevc_videotoolbox",
-            "libx265",
             nullptr
         };
 
@@ -181,38 +181,32 @@ namespace {
         };
 
         static const char* const av1Encoders[] = {
+            "libaom-av1",
+            "libsvtav1",
+            "librav1e",
             "av1_nvenc",
             "av1_qsv",
             "av1_amf",
-            "libsvtav1",
-            "libaom-av1",
-            "librav1e",
             nullptr
         };
 
         switch (codec) {
         case VideoCodec::H264:
-            return availableEncoderNames(h264Encoders);
+            return firstAvailableEncoderName(h264Encoders);
         case VideoCodec::H265:
-            return availableEncoderNames(h265Encoders);
+            return firstAvailableEncoderName(h265Encoders);
         case VideoCodec::MPEG4:
-            return availableEncoderNames(mpeg4Encoders);
+            return firstAvailableEncoderName(mpeg4Encoders);
         case VideoCodec::VP8:
-            return availableEncoderNames(vp8Encoders);
+            return firstAvailableEncoderName(vp8Encoders);
         case VideoCodec::VP9:
-            return availableEncoderNames(vp9Encoders);
+            return firstAvailableEncoderName(vp9Encoders);
         case VideoCodec::AV1:
-            return availableEncoderNames(av1Encoders);
+            return firstAvailableEncoderName(av1Encoders);
         case VideoCodec::Copy:
         default:
-            return {};
+            return nullptr;
         }
-    }
-
-    const char* preferredVideoEncoderName(VideoCodec codec)
-    {
-        const std::vector<const char*> candidates = videoEncoderCandidateNames(codec);
-        return candidates.empty() ? nullptr : candidates.front();
     }
 
     AVCodecID fallbackVideoCodecId(VideoCodec codec)
