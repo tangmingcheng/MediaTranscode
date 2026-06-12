@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <sstream>
+#include <vector>
 
 extern "C" {
 #include <libavutil/avutil.h>
@@ -134,29 +135,10 @@ bool FFmpegVideoTranscodePipeline::openDecoder(std::string* error)
 
 bool FFmpegVideoTranscodePipeline::openEncoderAndCreateOutputStream(std::string* error)
 {
-    const char* encoderName = preferredVideoEncoderName(m_config.videoCodec);
-    const AVCodec* encoder = nullptr;
-
-    if (encoderName) {
-        encoder = avcodec_find_encoder_by_name(encoderName);
-    }
-
-    if (!encoder) {
-        const AVCodecID codecId = fallbackVideoCodecId(m_config.videoCodec);
-        encoder = avcodec_find_encoder(codecId);
-    }
-
-    if (!encoder) {
+    const std::vector<const char*> encoderNames = videoEncoderCandidateNames(m_config.videoCodec);
+    if (encoderNames.empty()) {
         if (error) {
             *error = "avcodec_find_encoder failed: no suitable video encoder";
-        }
-        return false;
-    }
-
-    m_encoderCtx = avcodec_alloc_context3(encoder);
-    if (!m_encoderCtx) {
-        if (error) {
-            *error = "avcodec_alloc_context3 encoder failed";
         }
         return false;
     }
@@ -177,9 +159,6 @@ bool FFmpegVideoTranscodePipeline::openEncoderAndCreateOutputStream(std::string*
         return false;
     }
 
-    m_encoderCtx->width = outputWidth;
-    m_encoderCtx->height = outputHeight;
-
     AVRational encoderTimeBase = AVRational{ 1, m_outputFps };
     if (!m_enableConstantFps) {
         encoderTimeBase = m_inputVideoStream->time_base;
@@ -188,24 +167,57 @@ bool FFmpegVideoTranscodePipeline::openEncoderAndCreateOutputStream(std::string*
         }
     }
 
-    m_encoderCtx->time_base = encoderTimeBase;
-    m_encoderCtx->framerate = AVRational{ m_outputFps, 1 };
-    m_encoderCtx->pix_fmt = chooseVideoEncoderPixelFormat(encoder);
-    m_encoderCtx->bit_rate = static_cast<int64_t>(std::max(1, m_config.videoBitrateKbps)) * 1000;
-    m_encoderCtx->gop_size = std::max(10, m_outputFps * 2);
-    m_encoderCtx->max_b_frames = 0;
+    std::ostringstream failures;
+    int failureCount = 0;
 
-    if (m_outputFmtCtx->oformat->flags & AVFMT_GLOBALHEADER) {
-        m_encoderCtx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+    for (const char* encoderName : encoderNames) {
+        const AVCodec* encoder = avcodec_find_encoder_by_name(encoderName);
+        if (!encoder) {
+            continue;
+        }
+
+        AVCodecContext* candidateCtx = avcodec_alloc_context3(encoder);
+        if (!candidateCtx) {
+            ++failureCount;
+            failures << "[" << encoderName << ": avcodec_alloc_context3 failed] ";
+            continue;
+        }
+
+        candidateCtx->width = outputWidth;
+        candidateCtx->height = outputHeight;
+        candidateCtx->time_base = encoderTimeBase;
+        candidateCtx->framerate = AVRational{ m_outputFps, 1 };
+        candidateCtx->pix_fmt = chooseVideoEncoderPixelFormat(encoder);
+        candidateCtx->bit_rate = static_cast<int64_t>(std::max(1, m_config.videoBitrateKbps)) * 1000;
+        candidateCtx->gop_size = std::max(10, m_outputFps * 2);
+        candidateCtx->max_b_frames = 0;
+
+        if (m_outputFmtCtx->oformat->flags & AVFMT_GLOBALHEADER) {
+            candidateCtx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+        }
+
+        setVideoEncoderOptions(candidateCtx, encoder);
+
+        const int ret = avcodec_open2(candidateCtx, encoder, nullptr);
+        if (ret < 0) {
+            ++failureCount;
+            failures << "[" << encoderName << ": " << errorString(ret) << "] ";
+            avcodec_free_context(&candidateCtx);
+            continue;
+        }
+
+        m_encoderCtx = candidateCtx;
+        break;
     }
 
-    setVideoEncoderOptions(m_encoderCtx, encoder);
-
-    int ret = avcodec_open2(m_encoderCtx, encoder, nullptr);
-    if (ret < 0) {
+    if (!m_encoderCtx) {
         if (error) {
-            *error = std::string("avcodec_open2 encoder failed [") +
-                (encoder->name ? encoder->name : "unknown") + "]: " + errorString(ret);
+            std::ostringstream oss;
+            oss << "avcodec_open2 encoder failed: no video encoder candidate could be opened";
+            if (failureCount > 0) {
+                oss << "; candidates=" << failures.str();
+            }
+            *error = oss.str();
         }
         return false;
     }
@@ -220,7 +232,7 @@ bool FFmpegVideoTranscodePipeline::openEncoderAndCreateOutputStream(std::string*
 
     m_outputVideoStream->time_base = m_encoderCtx->time_base;
 
-    ret = avcodec_parameters_from_context(m_outputVideoStream->codecpar, m_encoderCtx);
+    const int ret = avcodec_parameters_from_context(m_outputVideoStream->codecpar, m_encoderCtx);
     if (ret < 0) {
         if (error) {
             *error = "avcodec_parameters_from_context video failed: " + errorString(ret);
