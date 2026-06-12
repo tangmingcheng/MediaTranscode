@@ -1,6 +1,7 @@
 #include "media_transcode/FFmpegTranscoder.h"
 #include "internal/FFmpegUtils.h"
 #include "internal/FFmpegTimelineNormalizer.h"
+#include "internal/FFmpegVideoFilterGraph.h"
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -13,9 +14,6 @@
 
 extern "C" {
 #include <libavcodec/avcodec.h>
-#include <libavfilter/avfilter.h>
-#include <libavfilter/buffersink.h>
-#include <libavfilter/buffersrc.h>
 #include <libavformat/avformat.h>
 #include <libavutil/audio_fifo.h>
 #include <libavutil/avutil.h>
@@ -159,9 +157,7 @@ namespace media {
         SwrContext* swrCtx = nullptr;
         AVAudioFifo* audioFifo = nullptr;
 
-        AVFilterGraph* videoFilterGraph = nullptr;
-        AVFilterContext* videoBufferSrcCtx = nullptr;
-        AVFilterContext* videoBufferSinkCtx = nullptr;
+        ffmpeg::VideoFilterGraph videoFilterGraph;
 
         AVPacket* inputPacket = nullptr;
         AVFrame* decodedFrame = nullptr;
@@ -194,8 +190,6 @@ namespace media {
         int outputWidth = 0;
         int outputHeight = 0;
         bool enableConstantFps = false;
-
-        AVRational filterInputFrameRate{ 0, 1 };
 
         const auto startTime = std::chrono::steady_clock::now();
 
@@ -268,12 +262,7 @@ namespace media {
                 av_packet_free(&inputPacket);
             }
 
-            if (videoFilterGraph) {
-                avfilter_graph_free(&videoFilterGraph);
-                videoFilterGraph = nullptr;
-                videoBufferSrcCtx = nullptr;
-                videoBufferSinkCtx = nullptr;
-            }
+            videoFilterGraph.reset();
 
             if (audioDecoderCtx) {
                 avcodec_free_context(&audioDecoderCtx);
@@ -730,170 +719,20 @@ namespace media {
             return;
         }
 
-        auto chooseInputFrameRate = [&]() -> AVRational {
-            if (inputVideoStream->avg_frame_rate.num > 0 &&
-                inputVideoStream->avg_frame_rate.den > 0) {
-                return inputVideoStream->avg_frame_rate;
+        {
+            ffmpeg::VideoFilterGraph::Config videoFilterConfig;
+            videoFilterConfig.decoderCtx = decoderCtx;
+            videoFilterConfig.encoderCtx = encoderCtx;
+            videoFilterConfig.inputStream = inputVideoStream;
+            videoFilterConfig.outputFps = outputFps;
+            videoFilterConfig.enableConstantFps = enableConstantFps;
+
+            std::string videoFilterError;
+            if (!videoFilterGraph.initialize(videoFilterConfig, &videoFilterError)) {
+                fail(videoFilterError);
+                cleanup();
+                return;
             }
-
-            if (inputVideoStream->r_frame_rate.num > 0 &&
-                inputVideoStream->r_frame_rate.den > 0) {
-                return inputVideoStream->r_frame_rate;
-            }
-
-            return AVRational{ outputFps, 1 };
-            };
-
-        auto buildVideoFilterDescription = [&]() -> std::string {
-            const char* pixFmtName = av_get_pix_fmt_name(encoderCtx->pix_fmt);
-            if (!pixFmtName) {
-                return {};
-            }
-
-            std::ostringstream desc;
-
-            /*
-             * 规范视频处理链：
-             *
-             * 1. scale 负责尺寸转换。
-             * 2. fps 只在 config.fps > 0 时启用，负责真正丢帧/补帧。
-             * 3. format 负责输出编码器需要的像素格式。
-             */
-            desc << "scale="
-                << encoderCtx->width
-                << ":"
-                << encoderCtx->height
-                << ":flags=bicubic";
-
-            if (enableConstantFps) {
-                desc << ",fps=fps=" << outputFps << ":round=near";
-            }
-
-            desc << ",format=pix_fmts=" << pixFmtName;
-
-            return desc.str();
-            };
-
-        auto initVideoFilterGraph = [&]() -> bool {
-            const AVFilter* bufferSrc = avfilter_get_by_name("buffer");
-            const AVFilter* bufferSink = avfilter_get_by_name("buffersink");
-
-            if (!bufferSrc || !bufferSink) {
-                fail("avfilter_get_by_name buffer/buffersink failed");
-                return false;
-            }
-
-            videoFilterGraph = avfilter_graph_alloc();
-            if (!videoFilterGraph) {
-                fail("avfilter_graph_alloc failed");
-                return false;
-            }
-
-            filterInputFrameRate = chooseInputFrameRate();
-
-            const AVRational pixelAspect =
-                decoderCtx->sample_aspect_ratio.num > 0 && decoderCtx->sample_aspect_ratio.den > 0
-                ? decoderCtx->sample_aspect_ratio
-                : AVRational{ 1, 1 };
-
-            char args[512] = {};
-            std::snprintf(
-                args,
-                sizeof(args),
-                "video_size=%dx%d:pix_fmt=%d:time_base=%d/%d:pixel_aspect=%d/%d:frame_rate=%d/%d",
-                decoderCtx->width,
-                decoderCtx->height,
-                decoderCtx->pix_fmt,
-                inputVideoStream->time_base.num,
-                inputVideoStream->time_base.den,
-                pixelAspect.num,
-                pixelAspect.den,
-                filterInputFrameRate.num,
-                filterInputFrameRate.den
-            );
-
-            ret = avfilter_graph_create_filter(
-                &videoBufferSrcCtx,
-                bufferSrc,
-                "in",
-                args,
-                nullptr,
-                videoFilterGraph
-            );
-
-            if (ret < 0) {
-                fail("avfilter_graph_create_filter buffer failed: " + ffmpeg::errorString(ret));
-                return false;
-            }
-
-            ret = avfilter_graph_create_filter(
-                &videoBufferSinkCtx,
-                bufferSink,
-                "out",
-                nullptr,
-                nullptr,
-                videoFilterGraph
-            );
-
-            if (ret < 0) {
-                fail("avfilter_graph_create_filter buffersink failed: " + ffmpeg::errorString(ret));
-                return false;
-            }
-
-            const std::string filterDesc = buildVideoFilterDescription();
-            if (filterDesc.empty()) {
-                fail("buildVideoFilterDescription failed: invalid encoder pixel format");
-                return false;
-            }
-
-            AVFilterInOut* outputs = avfilter_inout_alloc();
-            AVFilterInOut* inputs = avfilter_inout_alloc();
-
-            if (!outputs || !inputs) {
-                avfilter_inout_free(&outputs);
-                avfilter_inout_free(&inputs);
-                fail("avfilter_inout_alloc failed");
-                return false;
-            }
-
-            outputs->name = av_strdup("in");
-            outputs->filter_ctx = videoBufferSrcCtx;
-            outputs->pad_idx = 0;
-            outputs->next = nullptr;
-
-            inputs->name = av_strdup("out");
-            inputs->filter_ctx = videoBufferSinkCtx;
-            inputs->pad_idx = 0;
-            inputs->next = nullptr;
-
-            ret = avfilter_graph_parse_ptr(
-                videoFilterGraph,
-                filterDesc.c_str(),
-                &inputs,
-                &outputs,
-                nullptr
-            );
-
-            avfilter_inout_free(&inputs);
-            avfilter_inout_free(&outputs);
-
-            if (ret < 0) {
-                fail("avfilter_graph_parse_ptr failed [" + filterDesc + "]: " + ffmpeg::errorString(ret));
-                return false;
-            }
-
-            ret = avfilter_graph_config(videoFilterGraph, nullptr);
-            if (ret < 0) {
-                fail("avfilter_graph_config failed [" + filterDesc + "]: " + ffmpeg::errorString(ret));
-                return false;
-            }
-
-            return true;
-            };
-
-        if (!initVideoFilterGraph()) {
-            cleanup();
-            return;
         }
 
         auto writeEncodedVideoPackets = [&](AVFrame* frame) -> bool {
@@ -1010,18 +849,19 @@ namespace media {
 
         auto drainVideoFilterGraph = [&]() -> bool {
             while (true) {
-                ret = av_buffersink_get_frame(videoBufferSinkCtx, filteredFrame);
+                std::string videoFilterError;
+                const int receiveRet = videoFilterGraph.receiveFrame(filteredFrame, &videoFilterError);
 
-                if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+                if (receiveRet == 0) {
                     return true;
                 }
 
-                if (ret < 0) {
-                    fail("av_buffersink_get_frame failed: " + ffmpeg::errorString(ret));
+                if (receiveRet < 0) {
+                    fail(videoFilterError);
                     return false;
                 }
 
-                const AVRational filterTimeBase = av_buffersink_get_time_base(videoBufferSinkCtx);
+                const AVRational filterTimeBase = videoFilterGraph.sinkTimeBase();
 
                 if (filteredFrame->pts == AV_NOPTS_VALUE) {
                     av_frame_unref(filteredFrame);
@@ -1104,19 +944,16 @@ namespace media {
                 return false;
             }
 
-            ret = av_buffersrc_add_frame_flags(
-                videoBufferSrcCtx,
-                decodedFrame,
-                AV_BUFFERSRC_FLAG_KEEP_REF
-            );
-
-            if (ret < 0) {
-                fail("av_buffersrc_add_frame_flags video failed: " + ffmpeg::errorString(ret));
-                return false;
+            {
+                std::string videoFilterError;
+                if (!videoFilterGraph.sendFrame(decodedFrame, &videoFilterError)) {
+                    fail(videoFilterError);
+                    return false;
+                }
             }
 
             return drainVideoFilterGraph();
-            };
+        };
 
         auto drainDecoder = [&]() -> bool {
             while (true) {
@@ -1809,11 +1646,13 @@ namespace media {
          * 10.5 flush video filter graph
          */
         if (!m_stopRequested.load()) {
-            ret = av_buffersrc_add_frame_flags(videoBufferSrcCtx, nullptr, 0);
-            if (ret < 0) {
-                fail("av_buffersrc_add_frame_flags video EOF failed: " + ffmpeg::errorString(ret));
-                cleanup();
-                return;
+            {
+                std::string videoFilterError;
+                if (!videoFilterGraph.flush(&videoFilterError)) {
+                    fail(videoFilterError);
+                    cleanup();
+                    return;
+                }
             }
 
             if (!drainVideoFilterGraph()) {
