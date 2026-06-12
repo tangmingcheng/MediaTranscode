@@ -25,6 +25,8 @@ add_library(${TARGET_CORE} STATIC
     src/internal/FFmpegTimelineNormalizer.h
     src/internal/FFmpegUtils.cpp
     src/internal/FFmpegUtils.h
+    src/internal/FFmpegVideoFilterGraph.cpp
+    src/internal/FFmpegVideoFilterGraph.h
     include/media_transcode/FFmpegTranscoder.h
     include/media_transcode/ITranscoder.h
     include/media_transcode/MediaTranscodeTypes.h
