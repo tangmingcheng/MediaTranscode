@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <memory>
 #include <string>
 #include <utility>
 
@@ -17,6 +18,69 @@ extern "C" {
 }
 
 namespace media {
+namespace {
+
+    struct InputFormatContextDeleter {
+        void operator()(AVFormatContext* ctx) const
+        {
+            if (!ctx) {
+                return;
+            }
+
+            AVFormatContext* tmp = ctx;
+            avformat_close_input(&tmp);
+        }
+    };
+
+    struct OutputFormatContextDeleter {
+        void operator()(AVFormatContext* ctx) const
+        {
+            if (!ctx) {
+                return;
+            }
+
+            if (!(ctx->oformat->flags & AVFMT_NOFILE) && ctx->pb) {
+                avio_closep(&ctx->pb);
+            }
+
+            avformat_free_context(ctx);
+        }
+    };
+
+    struct PacketDeleter {
+        void operator()(AVPacket* packet) const
+        {
+            if (packet) {
+                av_packet_free(&packet);
+            }
+        }
+    };
+
+    class RunningStateGuard {
+    public:
+        explicit RunningStateGuard(std::atomic_bool& running)
+            : m_running(running)
+        {
+        }
+
+        ~RunningStateGuard()
+        {
+            m_running.store(false);
+        }
+
+        RunningStateGuard(const RunningStateGuard&) = delete;
+        RunningStateGuard& operator=(const RunningStateGuard&) = delete;
+
+    private:
+        std::atomic_bool& m_running;
+    };
+
+    using InputFormatContextPtr = std::unique_ptr<AVFormatContext, InputFormatContextDeleter>;
+    using OutputFormatContextPtr = std::unique_ptr<AVFormatContext, OutputFormatContextDeleter>;
+    using PacketPtr = std::unique_ptr<AVPacket, PacketDeleter>;
+
+} // namespace
+
     FFmpegTranscoder::FFmpegTranscoder()
     {
         avformat_network_init();
@@ -137,9 +201,11 @@ namespace media {
 
     void FFmpegTranscoder::transcodeThread()
     {
-        AVFormatContext* inputFmtCtx = nullptr;
-        AVFormatContext* outputFmtCtx = nullptr;
-        AVPacket* inputPacket = nullptr;
+        RunningStateGuard runningGuard(m_running);
+
+        InputFormatContextPtr inputFmtCtx;
+        OutputFormatContextPtr outputFmtCtx;
+        PacketPtr inputPacket;
 
         int videoStreamIndex = -1;
         int audioStreamIndex = -1;
@@ -197,50 +263,25 @@ namespace media {
             setLastError(error);
         };
 
-        auto cleanup = [&]() {
-            audioPipeline.reset();
-            videoPipeline.reset();
-
-            if (inputPacket) {
-                av_packet_free(&inputPacket);
-            }
-
-            if (inputFmtCtx) {
-                avformat_close_input(&inputFmtCtx);
-            }
-
-            if (outputFmtCtx) {
-                if (!(outputFmtCtx->oformat->flags & AVFMT_NOFILE) && outputFmtCtx->pb) {
-                    avio_closep(&outputFmtCtx->pb);
-                }
-
-                avformat_free_context(outputFmtCtx);
-                outputFmtCtx = nullptr;
-            }
-
-            m_running.store(false);
-        };
-
         emitProgress("initialized");
 
-        int ret = avformat_open_input(&inputFmtCtx, m_config.inputUrl.c_str(), nullptr, nullptr);
+        AVFormatContext* rawInputFmtCtx = nullptr;
+        int ret = avformat_open_input(&rawInputFmtCtx, m_config.inputUrl.c_str(), nullptr, nullptr);
         if (ret < 0) {
             fail("avformat_open_input failed: " + ffmpeg::errorString(ret));
-            cleanup();
             return;
         }
+        inputFmtCtx.reset(rawInputFmtCtx);
 
-        ret = avformat_find_stream_info(inputFmtCtx, nullptr);
+        ret = avformat_find_stream_info(inputFmtCtx.get(), nullptr);
         if (ret < 0) {
             fail("avformat_find_stream_info failed: " + ffmpeg::errorString(ret));
-            cleanup();
             return;
         }
 
-        ret = av_find_best_stream(inputFmtCtx, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+        ret = av_find_best_stream(inputFmtCtx.get(), AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
         if (ret < 0) {
             fail("av_find_best_stream video failed: " + ffmpeg::errorString(ret));
-            cleanup();
             return;
         }
 
@@ -248,33 +289,34 @@ namespace media {
         inputVideoStream = inputFmtCtx->streams[videoStreamIndex];
 
         if (m_config.audioMode != AudioMode::None) {
-            ret = av_find_best_stream(inputFmtCtx, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
+            ret = av_find_best_stream(inputFmtCtx.get(), AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
             if (ret >= 0) {
                 audioStreamIndex = ret;
                 inputAudioStream = inputFmtCtx->streams[audioStreamIndex];
             }
         }
 
-        timeline.initStartFromFormat(inputFmtCtx, inputVideoStream, inputAudioStream);
+        timeline.initStartFromFormat(inputFmtCtx.get(), inputVideoStream, inputAudioStream);
 
-        ret = avformat_alloc_output_context2(&outputFmtCtx, nullptr, nullptr, m_config.outputUrl.c_str());
-        if (ret < 0 || !outputFmtCtx) {
-            fail("avformat_alloc_output_context2 failed: " + ffmpeg::errorString(ret));
-            cleanup();
+        AVFormatContext* rawOutputFmtCtx = nullptr;
+        ret = avformat_alloc_output_context2(&rawOutputFmtCtx, nullptr, nullptr, m_config.outputUrl.c_str());
+        if (ret < 0 || !rawOutputFmtCtx) {
+            fail("avformat_alloc_output_context2 failed: " +
+                (ret < 0 ? ffmpeg::errorString(ret) : std::string("no output context allocated")));
             return;
         }
+        outputFmtCtx.reset(rawOutputFmtCtx);
 
         {
             ffmpeg::FFmpegVideoTranscodePipeline::Config videoConfig;
             videoConfig.transcodeConfig = &m_config;
             videoConfig.inputVideoStream = inputVideoStream;
-            videoConfig.outputFmtCtx = outputFmtCtx;
+            videoConfig.outputFmtCtx = outputFmtCtx.get();
             videoConfig.timeline = &timeline;
 
             std::string videoError;
             if (!videoPipeline.initialize(videoConfig, &videoError)) {
                 fail(videoError);
-                cleanup();
                 return;
             }
         }
@@ -283,14 +325,13 @@ namespace media {
             ffmpeg::FFmpegAudioPipeline::Config audioConfig;
             audioConfig.mode = m_config.audioMode;
             audioConfig.inputAudioStream = inputAudioStream;
-            audioConfig.outputFmtCtx = outputFmtCtx;
+            audioConfig.outputFmtCtx = outputFmtCtx.get();
             audioConfig.timeline = &timeline;
             audioConfig.audioBitrateKbps = m_config.audioBitrateKbps;
 
             std::string audioError;
             if (!audioPipeline.initialize(audioConfig, &audioError)) {
                 fail(audioError);
-                cleanup();
                 return;
             }
         }
@@ -299,22 +340,19 @@ namespace media {
             ret = avio_open(&outputFmtCtx->pb, m_config.outputUrl.c_str(), AVIO_FLAG_WRITE);
             if (ret < 0) {
                 fail("avio_open output failed: " + ffmpeg::errorString(ret));
-                cleanup();
                 return;
             }
         }
 
-        ret = avformat_write_header(outputFmtCtx, nullptr);
+        ret = avformat_write_header(outputFmtCtx.get(), nullptr);
         if (ret < 0) {
             fail("avformat_write_header failed: " + ffmpeg::errorString(ret));
-            cleanup();
             return;
         }
 
-        inputPacket = av_packet_alloc();
+        inputPacket.reset(av_packet_alloc());
         if (!inputPacket) {
             fail("av_packet_alloc input packet failed");
-            cleanup();
             return;
         }
 
@@ -339,7 +377,7 @@ namespace media {
         };
 
         while (!m_stopRequested.load()) {
-            ret = av_read_frame(inputFmtCtx, inputPacket);
+            ret = av_read_frame(inputFmtCtx.get(), inputPacket.get());
 
             if (ret == AVERROR_EOF) {
                 break;
@@ -347,23 +385,21 @@ namespace media {
 
             if (ret < 0) {
                 fail("av_read_frame failed: " + ffmpeg::errorString(ret));
-                cleanup();
                 return;
             }
 
             if (inputPacket->stream_index == videoStreamIndex) {
                 std::string videoError;
                 const bool ok = videoPipeline.processPacket(
-                    inputPacket,
+                    inputPacket.get(),
                     &videoError,
                     onVideoPacketWritten
                 );
 
-                av_packet_unref(inputPacket);
+                av_packet_unref(inputPacket.get());
 
                 if (!ok) {
                     fail(videoError);
-                    cleanup();
                     return;
                 }
             }
@@ -371,21 +407,20 @@ namespace media {
                 audioPipeline.outputStream()) {
                 std::string audioError;
                 const bool ok = audioPipeline.processPacket(
-                    inputPacket,
+                    inputPacket.get(),
                     &audioError,
                     onAudioPacketWritten
                 );
 
-                av_packet_unref(inputPacket);
+                av_packet_unref(inputPacket.get());
 
                 if (!ok) {
                     fail(audioError);
-                    cleanup();
                     return;
                 }
             }
             else {
-                av_packet_unref(inputPacket);
+                av_packet_unref(inputPacket.get());
             }
         }
 
@@ -393,7 +428,6 @@ namespace media {
             std::string videoError;
             if (!videoPipeline.flushDecoder(&videoError, onVideoPacketWritten)) {
                 fail(videoError);
-                cleanup();
                 return;
             }
         }
@@ -402,7 +436,6 @@ namespace media {
             std::string audioError;
             if (!audioPipeline.flush(&audioError, onAudioPacketWritten)) {
                 fail(audioError);
-                cleanup();
                 return;
             }
         }
@@ -411,20 +444,17 @@ namespace media {
             std::string videoError;
             if (!videoPipeline.flushFilterAndEncoder(&videoError, onVideoPacketWritten)) {
                 fail(videoError);
-                cleanup();
                 return;
             }
         }
 
-        ret = av_write_trailer(outputFmtCtx);
+        ret = av_write_trailer(outputFmtCtx.get());
         if (ret < 0) {
             fail("av_write_trailer failed: " + ffmpeg::errorString(ret));
-            cleanup();
             return;
         }
 
         emitProgress(m_stopRequested.load() ? "stopped" : "finished");
-        cleanup();
     }
 
     void FFmpegTranscoder::setLastError(const std::string& error)
