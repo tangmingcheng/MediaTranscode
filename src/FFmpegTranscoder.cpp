@@ -2,6 +2,7 @@
 #include "internal/FFmpegUtils.h"
 #include "internal/FFmpegTimelineNormalizer.h"
 #include "internal/FFmpegVideoFilterGraph.h"
+#include "internal/FFmpegVideoPipeline.h"
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -158,6 +159,7 @@ namespace media {
         AVAudioFifo* audioFifo = nullptr;
 
         ffmpeg::VideoFilterGraph videoFilterGraph;
+        ffmpeg::FFmpegVideoPipeline videoPipeline;
 
         AVPacket* inputPacket = nullptr;
         AVFrame* decodedFrame = nullptr;
@@ -179,7 +181,6 @@ namespace media {
         ffmpeg::TimelineNormalizer timeline;
 
         int64_t lastSubmittedVideoPts = AV_NOPTS_VALUE;
-        int64_t lastWrittenVideoDts = AV_NOPTS_VALUE;
         int64_t lastWrittenAudioDts = AV_NOPTS_VALUE;
         int64_t lastWrittenVideoOutTimeMs = 0;
         int64_t lastWrittenAudioOutTimeMs = 0;
@@ -263,6 +264,7 @@ namespace media {
             }
 
             videoFilterGraph.reset();
+            videoPipeline.reset();
 
             if (audioDecoderCtx) {
                 avcodec_free_context(&audioDecoderCtx);
@@ -735,117 +737,48 @@ namespace media {
             }
         }
 
+        {
+            ffmpeg::FFmpegVideoPipeline::Config videoPipelineConfig;
+            videoPipelineConfig.encoderCtx = encoderCtx;
+            videoPipelineConfig.outputFmtCtx = outputFmtCtx;
+            videoPipelineConfig.outputVideoStream = outputVideoStream;
+
+            std::string videoPipelineError;
+            if (!videoPipeline.initialize(videoPipelineConfig, &videoPipelineError)) {
+                fail(videoPipelineError);
+                cleanup();
+                return;
+            }
+        }
+
         auto writeEncodedVideoPackets = [&](AVFrame* frame) -> bool {
-            int sendRet = avcodec_send_frame(encoderCtx, frame);
-            if (sendRet < 0) {
-                fail("avcodec_send_frame encoder failed: " + ffmpeg::errorString(sendRet));
+            std::string videoPipelineError;
+
+            if (!videoPipeline.sendFrame(frame, &videoPipelineError)) {
+                fail(videoPipelineError);
                 return false;
             }
 
-            while (true) {
-                AVPacket* encodedPacket = av_packet_alloc();
-                if (!encodedPacket) {
-                    fail("av_packet_alloc encodedPacket failed");
-                    return false;
-                }
+            const int writtenPackets = videoPipeline.receiveAndWritePackets(
+                &videoPipelineError,
+                [&](int64_t packetCount, int64_t outTimeMs) {
+                    encodedVideoPacketCount = packetCount;
+                    lastWrittenVideoOutTimeMs = outTimeMs;
 
-                int receiveRet = avcodec_receive_packet(encoderCtx, encodedPacket);
-
-                if (receiveRet == AVERROR(EAGAIN) || receiveRet == AVERROR_EOF) {
-                    av_packet_free(&encodedPacket);
-                    break;
-                }
-
-                if (receiveRet < 0) {
-                    const std::string error = "avcodec_receive_packet encoder failed: " +
-                        ffmpeg::errorString(receiveRet);
-                    av_packet_free(&encodedPacket);
-                    fail(error);
-                    return false;
-                }
-
-                encodedPacket->stream_index = outputVideoStream->index;
-
-                if (encodedPacket->duration <= 0) {
-                    encodedPacket->duration = 1;
-                }
-
-                /*
-                 * 关键点：
-                 * 编码器 packet 的时间基是 encoderCtx->time_base；
-                 * 写 muxer 前必须转换成 outputVideoStream->time_base。
-                 */
-                av_packet_rescale_ts(
-                    encodedPacket,
-                    encoderCtx->time_base,
-                    outputVideoStream->time_base
-                );
-
-                if (encodedPacket->dts != AV_NOPTS_VALUE) {
-                    if (lastWrittenVideoDts != AV_NOPTS_VALUE &&
-                        encodedPacket->dts <= lastWrittenVideoDts) {
-                        std::ostringstream oss;
-                        oss << "encoded video packet dts is not strictly increasing: current="
-                            << encodedPacket->dts
-                            << ", last="
-                            << lastWrittenVideoDts;
-
-                        av_packet_free(&encodedPacket);
-                        fail(oss.str());
-                        return false;
+                    if (encodedVideoPacketCount == 1 ||
+                        encodedVideoPacketCount % 25 == 0) {
+                        emitProgress("transcoding");
                     }
-
-                    lastWrittenVideoDts = encodedPacket->dts;
                 }
+            );
 
-                if (encodedPacket->pts != AV_NOPTS_VALUE &&
-                    encodedPacket->dts != AV_NOPTS_VALUE &&
-                    encodedPacket->pts < encodedPacket->dts) {
-                    std::ostringstream oss;
-                    oss << "encoded video packet pts is smaller than dts: pts="
-                        << encodedPacket->pts
-                        << ", dts="
-                        << encodedPacket->dts;
-
-                    av_packet_free(&encodedPacket);
-                    fail(oss.str());
-                    return false;
-                }
-
-                if (encodedPacket->duration <= 0) {
-                    encodedPacket->duration = 1;
-                }
-
-                const int64_t progressTs = encodedPacket->pts != AV_NOPTS_VALUE
-                    ? encodedPacket->pts
-                    : encodedPacket->dts;
-
-                if (progressTs != AV_NOPTS_VALUE) {
-                    lastWrittenVideoOutTimeMs =
-                        std::max<int64_t>(
-                            lastWrittenVideoOutTimeMs,
-                            ffmpeg::TimelineNormalizer::toUs(progressTs, outputVideoStream->time_base) / 1000
-                        );
-                }
-
-                ret = av_interleaved_write_frame(outputFmtCtx, encodedPacket);
-
-                av_packet_free(&encodedPacket);
-
-                if (ret < 0) {
-                    fail("av_interleaved_write_frame video failed: " + ffmpeg::errorString(ret));
-                    return false;
-                }
-
-                ++encodedVideoPacketCount;
-
-                if (encodedVideoPacketCount == 1 || encodedVideoPacketCount % 25 == 0) {
-                    emitProgress("transcoding");
-                }
+            if (writtenPackets < 0) {
+                fail(videoPipelineError);
+                return false;
             }
 
             return true;
-            };
+        };
 
         auto drainVideoFilterGraph = [&]() -> bool {
             while (true) {
