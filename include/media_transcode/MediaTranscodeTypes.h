@@ -14,11 +14,18 @@ namespace media {
         H265_LIBX265
     };
 
-    // 音频模式
+    // 音频处理模式
     enum class AudioMode {
         None,
         CopySelected,
         EncodeSelected
+    };
+
+    // 音频编码类型，仅在 AudioMode::EncodeSelected 时生效
+    enum class AudioCodec {
+        AAC,
+        OPUS,
+        MP3
     };
 
     // 进度信息
@@ -42,6 +49,8 @@ namespace media {
 
         VideoCodec videoCodec = VideoCodec::H264_RKMPP;
         AudioMode audioMode = AudioMode::EncodeSelected;
+        AudioCodec audioCodec = AudioCodec::AAC;
+
         int audioBitrateKbps = 128;
         int videoBitrateKbps = 3000;
     };
