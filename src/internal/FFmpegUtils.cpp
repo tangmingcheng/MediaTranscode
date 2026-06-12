@@ -57,7 +57,8 @@ namespace {
 
         static const char* const h265Encoders[] = {
             "libx265",
-            "hevc_mf",
+            // hevc_mf may open successfully but often cannot provide HEVC codec private data
+            // before avformat_write_header() in this generic software-frame pipeline.
             "hevc_nvenc",
             "hevc_qsv",
             "hevc_amf",
