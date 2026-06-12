@@ -145,12 +145,12 @@ namespace {
     std::vector<const char*> videoEncoderCandidateNames(VideoCodec codec)
     {
         static const char* const h264Encoders[] = {
-            "h264_mf",
             "h264_nvenc",
             "h264_qsv",
             "h264_amf",
             "h264_rkmpp",
             "h264_videotoolbox",
+            "h264_mf",
             "libx264",
             nullptr
         };
