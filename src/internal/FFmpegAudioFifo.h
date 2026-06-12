@@ -33,7 +33,7 @@ public:
     int space() const;
 
     bool ensureAdditionalCapacity(int additionalSamples, std::string* error);
-    bool writeFrame(const AVFrame* frame, std::string* error);
+    bool writeFrame(AVFrame* frame, std::string* error);
     bool readToFrame(AVFrame* frame, int samples, std::string* error);
 
     AVAudioFifo* raw() const;
