@@ -246,10 +246,6 @@ namespace media::ffmpeg {
             return true;
         }
 
-        if (ctx->codecpar && ctx->codecpar->ch_layout.nb_channels > 0) {
-            return av_channel_layout_copy(&ctx->ch_layout, &ctx->codecpar->ch_layout) >= 0;
-        }
-
         if (ctx->channels > 0) {
             av_channel_layout_default(&ctx->ch_layout, ctx->channels);
             return ctx->ch_layout.nb_channels > 0;
