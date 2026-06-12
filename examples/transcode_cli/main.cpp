@@ -104,6 +104,35 @@ namespace {
         throw std::runtime_error("unsupported video codec: " + value);
     }
 
+    media::AudioCodec parseAudioCodec(const std::string& value)
+    {
+        const std::string normalized = toLower(value);
+
+        if (normalized == "aac") {
+            return media::AudioCodec::AAC;
+        }
+
+        if (normalized == "opus" || normalized == "libopus") {
+            return media::AudioCodec::OPUS;
+        }
+
+        if (normalized == "mp3" || normalized == "libmp3lame") {
+            return media::AudioCodec::MP3;
+        }
+
+        throw std::runtime_error("unsupported audio codec: " + value);
+    }
+
+    bool isAudioCodecValue(const std::string& value)
+    {
+        const std::string normalized = toLower(value);
+        return normalized == "aac" ||
+            normalized == "opus" ||
+            normalized == "libopus" ||
+            normalized == "mp3" ||
+            normalized == "libmp3lame";
+    }
+
     media::AudioMode parseAudioMode(const std::string& value)
     {
         const std::string normalized = toLower(value);
@@ -116,7 +145,7 @@ namespace {
             return media::AudioMode::CopySelected;
         }
 
-        if (normalized == "encode" || normalized == "aac" || normalized == "encode_selected") {
+        if (normalized == "encode" || normalized == "encode_selected" || isAudioCodecValue(normalized)) {
             return media::AudioMode::EncodeSelected;
         }
 
@@ -140,6 +169,20 @@ namespace {
         }
     }
 
+    std::string audioCodecToString(media::AudioCodec codec)
+    {
+        switch (codec) {
+        case media::AudioCodec::AAC:
+            return "aac";
+        case media::AudioCodec::OPUS:
+            return "opus";
+        case media::AudioCodec::MP3:
+            return "mp3";
+        default:
+            return "unknown";
+        }
+    }
+
     std::string audioModeToString(media::AudioMode mode)
     {
         switch (mode) {
@@ -148,7 +191,7 @@ namespace {
         case media::AudioMode::CopySelected:
             return "copy";
         case media::AudioMode::EncodeSelected:
-            return "aac";
+            return "encode";
         default:
             return "unknown";
         }
@@ -236,12 +279,14 @@ namespace {
             << "      --fps <value>               Output fps, 0 means preserve input timeline\n"
             << "      --video-codec <value>       h264_libx264 | h265_libx265 | h264_rkmpp | h265_rkmpp\n"
             << "      --video-bitrate <kbps>      Video bitrate in kbps\n"
-            << "      --audio-mode <value>        none | copy | aac\n"
-            << "      --audio-bitrate <kbps>      AAC audio bitrate in kbps\n"
+            << "      --audio-mode <value>        none | copy | encode\n"
+            << "      --audio-codec <value>       aac | opus | mp3, only used when audio-mode is encode\n"
+            << "      --audio-bitrate <kbps>      Audio bitrate in kbps\n"
             << "      --no-audio                  Same as --audio-mode none\n"
             << "  -h, --help                      Show this help\n\n"
             << "Examples:\n"
-            << "  " << executable << " -i input.mp4 -o output.mp4 --size 1280x720 --fps 25 --video-bitrate 3000 --audio-mode aac --audio-bitrate 128\n"
+            << "  " << executable << " -i input.mp4 -o output.mp4 --size 1280x720 --fps 25 --video-bitrate 3000 --audio-mode encode --audio-codec aac --audio-bitrate 128\n"
+            << "  " << executable << " -i input.mp4 -o output.webm --video-codec h265_libx265 --audio-mode encode --audio-codec opus\n"
             << "  " << executable << " input.mp4 output.mp4\n";
     }
 
@@ -256,6 +301,7 @@ namespace {
         options.config.fps = 25;
         options.config.videoCodec = media::VideoCodec::H264_LIBX264;
         options.config.audioMode = media::AudioMode::EncodeSelected;
+        options.config.audioCodec = media::AudioCodec::AAC;
         options.config.audioBitrateKbps = 128;
         options.config.videoBitrateKbps = 3000;
 
@@ -309,7 +355,17 @@ namespace {
                 options.config.videoBitrateKbps = parsePositiveInt(requireValue(arg), arg);
             }
             else if (arg == "--audio-mode") {
-                options.config.audioMode = parseAudioMode(requireValue(arg));
+                const std::string value = requireValue(arg);
+                options.config.audioMode = parseAudioMode(value);
+                if (isAudioCodecValue(value)) {
+                    options.config.audioCodec = parseAudioCodec(value);
+                }
+            }
+            else if (arg == "--audio-codec") {
+                options.config.audioCodec = parseAudioCodec(requireValue(arg));
+                if (options.config.audioMode == media::AudioMode::None) {
+                    options.config.audioMode = media::AudioMode::EncodeSelected;
+                }
             }
             else if (arg == "--audio-bitrate") {
                 options.config.audioBitrateKbps = parsePositiveInt(requireValue(arg), arg);
@@ -355,7 +411,7 @@ namespace {
             return false;
         }
 
-        spdlog::info("========== {} ==========" , title);
+        spdlog::info("========== {} ==========", title);
         spdlog::info("file: {}", url);
         spdlog::info(
             "format={}, duration={}, bitrate={}",
@@ -448,6 +504,7 @@ namespace {
         spdlog::info("videoCodec={}", videoCodecToString(config.videoCodec));
         spdlog::info("videoBitrate={} kbps", config.videoBitrateKbps);
         spdlog::info("audioMode={}", audioModeToString(config.audioMode));
+        spdlog::info("audioCodec={}", audioCodecToString(config.audioCodec));
         spdlog::info("audioBitrate={} kbps", config.audioBitrateKbps);
     }
 
