@@ -307,8 +307,10 @@ bool FFmpegAudioPipeline::initializeEncode(std::string* error)
 
 bool FFmpegAudioPipeline::initializeResamplerAndFifo(std::string* error)
 {
+    int ret = 0;
+
 #if LIBAVUTIL_VERSION_MAJOR >= 57
-    int ret = swr_alloc_set_opts2(
+    ret = swr_alloc_set_opts2(
         &m_swrCtx,
         &m_encoderCtx->ch_layout,
         m_encoderCtx->sample_fmt,
@@ -740,7 +742,7 @@ bool FFmpegAudioPipeline::encodeFifo(
             return false;
         }
 
-        const bool ok = sendFrame(audioFrame, error) && receiveAndWritePackets(error, onPacketWritten);
+        const bool ok = sendFrame(audioFrame, error) && receiveAndWritePackets(error, onPacketWritten) >= 0;
         m_nextAudioPts = audioFrame->pts + audioFrame->nb_samples;
         av_frame_free(&audioFrame);
 
@@ -868,7 +870,7 @@ bool FFmpegAudioPipeline::flush(
         return false;
     }
 
-    return sendFrame(nullptr, error) && receiveAndWritePackets(error, onPacketWritten);
+    return sendFrame(nullptr, error) && receiveAndWritePackets(error, onPacketWritten) >= 0;
 }
 
 bool FFmpegAudioPipeline::sendFrame(AVFrame* frame, std::string* error)
