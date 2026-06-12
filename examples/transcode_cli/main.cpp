@@ -85,11 +85,39 @@ namespace {
     {
         const std::string normalized = toLower(value);
 
-        if (normalized == "h264" || normalized == "libx264" || normalized == "h264_libx264") {
+        if (normalized == "copy") {
+            return media::VideoCodec::Copy;
+        }
+
+        if (normalized == "h264" || normalized == "avc") {
+            return media::VideoCodec::H264;
+        }
+
+        if (normalized == "h265" || normalized == "hevc") {
+            return media::VideoCodec::H265;
+        }
+
+        if (normalized == "mpeg4" || normalized == "mp4v") {
+            return media::VideoCodec::MPEG4;
+        }
+
+        if (normalized == "vp8") {
+            return media::VideoCodec::VP8;
+        }
+
+        if (normalized == "vp9") {
+            return media::VideoCodec::VP9;
+        }
+
+        if (normalized == "av1") {
+            return media::VideoCodec::AV1;
+        }
+
+        if (normalized == "libx264" || normalized == "h264_libx264") {
             return media::VideoCodec::H264_LIBX264;
         }
 
-        if (normalized == "h265" || normalized == "hevc" || normalized == "libx265" || normalized == "h265_libx265") {
+        if (normalized == "libx265" || normalized == "h265_libx265" || normalized == "hevc_libx265") {
             return media::VideoCodec::H265_LIBX265;
         }
 
@@ -155,6 +183,18 @@ namespace {
     std::string videoCodecToString(media::VideoCodec codec)
     {
         switch (codec) {
+        case media::VideoCodec::H264:
+            return "h264";
+        case media::VideoCodec::H265:
+            return "h265";
+        case media::VideoCodec::MPEG4:
+            return "mpeg4";
+        case media::VideoCodec::VP8:
+            return "vp8";
+        case media::VideoCodec::VP9:
+            return "vp9";
+        case media::VideoCodec::AV1:
+            return "av1";
         case media::VideoCodec::H264_RKMPP:
             return "h264_rkmpp";
         case media::VideoCodec::H265_RKMPP:
@@ -277,7 +317,8 @@ namespace {
             << "      --height <value>            Output height, 0 means input height\n"
             << "      --size <WxH>                Output size, for example 1280x720\n"
             << "      --fps <value>               Output fps, 0 means preserve input timeline\n"
-            << "      --video-codec <value>       h264_libx264 | h265_libx265 | h264_rkmpp | h265_rkmpp\n"
+            << "      --video-codec <value>       copy | h264 | h265 | mpeg4 | vp8 | vp9 | av1\n"
+            << "                                  or h264_libx264 | h265_libx265 | h264_rkmpp | h265_rkmpp\n"
             << "      --video-bitrate <kbps>      Video bitrate in kbps\n"
             << "      --audio-mode <value>        none | copy | encode\n"
             << "      --audio-codec <value>       aac | opus | mp3, only used when audio-mode is encode\n"
@@ -285,8 +326,9 @@ namespace {
             << "      --no-audio                  Same as --audio-mode none\n"
             << "  -h, --help                      Show this help\n\n"
             << "Examples:\n"
-            << "  " << executable << " -i input.mp4 -o output.mp4 --size 1280x720 --fps 25 --video-bitrate 3000 --audio-mode encode --audio-codec aac --audio-bitrate 128\n"
-            << "  " << executable << " -i input.mp4 -o output.webm --video-codec h265_libx265 --audio-mode encode --audio-codec opus\n"
+            << "  " << executable << " -i input.mp4 -o output.mp4 --video-codec h264 --size 1280x720 --fps 25 --video-bitrate 3000 --audio-mode encode --audio-codec aac --audio-bitrate 128\n"
+            << "  " << executable << " -i input.mp4 -o output.mkv --video-codec h265 --audio-mode encode --audio-codec opus\n"
+            << "  " << executable << " -i input.mp4 -o output.webm --video-codec vp9 --audio-mode encode --audio-codec opus\n"
             << "  " << executable << " input.mp4 output.mp4\n";
     }
 
@@ -411,7 +453,7 @@ namespace {
             return false;
         }
 
-        spdlog::info("========== {} ==========", title);
+        spdlog::info("========== {} =========", title);
         spdlog::info("file: {}", url);
         spdlog::info(
             "format={}, duration={}, bitrate={}",
