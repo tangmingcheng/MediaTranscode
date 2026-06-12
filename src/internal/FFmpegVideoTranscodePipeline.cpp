@@ -2,8 +2,6 @@
 
 #include "internal/FFmpegTimelineNormalizer.h"
 #include "internal/FFmpegUtils.h"
-#include "internal/FFmpegVideoFilterGraph.h"
-#include "internal/FFmpegVideoPipeline.h"
 
 #include <algorithm>
 #include <sstream>
@@ -15,13 +13,6 @@ extern "C" {
 }
 
 namespace media::ffmpeg {
-
-namespace {
-    struct VideoPipelineResources {
-        VideoFilterGraph filterGraph;
-        FFmpegVideoPipeline packetWriter;
-    };
-}
 
 FFmpegVideoTranscodePipeline::~FFmpegVideoTranscodePipeline()
 {
@@ -48,6 +39,8 @@ FFmpegVideoTranscodePipeline& FFmpegVideoTranscodePipeline::operator=(FFmpegVide
     m_timeline = other.m_timeline;
     m_decoderCtx = other.m_decoderCtx;
     m_encoderCtx = other.m_encoderCtx;
+    m_filterGraph = std::move(other.m_filterGraph);
+    m_packetWriter = std::move(other.m_packetWriter);
     m_decodedFrame = other.m_decodedFrame;
     m_filteredFrame = other.m_filteredFrame;
     m_lastSubmittedPts = other.m_lastSubmittedPts;
@@ -75,11 +68,8 @@ FFmpegVideoTranscodePipeline& FFmpegVideoTranscodePipeline::operator=(FFmpegVide
 
 void FFmpegVideoTranscodePipeline::reset()
 {
-    /*
-     * VideoFilterGraph / FFmpegVideoPipeline are currently stored as static-local owned
-     * resources through helper accessors below. Keep reset order explicit to avoid using
-     * codec/output contexts after they are released.
-     */
+    m_filterGraph.reset();
+    m_packetWriter.reset();
 
     if (m_filteredFrame) {
         av_frame_free(&m_filteredFrame);
@@ -292,13 +282,6 @@ bool FFmpegVideoTranscodePipeline::openEncoderAndCreateOutputStream(std::string*
 
 bool FFmpegVideoTranscodePipeline::initializeFilterGraph(std::string* error)
 {
-    /*
-     * TODO: 下一次可以把 VideoFilterGraph 作为成员直接放入 .h。
-     * 这里为了保持头文件轻量，使用函数内静态会有并发风险，不适合多实例并行。
-     */
-    static VideoFilterGraph filterGraph;
-    filterGraph.reset();
-
     VideoFilterGraph::Config config;
     config.decoderCtx = m_decoderCtx;
     config.encoderCtx = m_encoderCtx;
@@ -306,20 +289,17 @@ bool FFmpegVideoTranscodePipeline::initializeFilterGraph(std::string* error)
     config.outputFps = m_outputFps;
     config.enableConstantFps = m_enableConstantFps;
 
-    return filterGraph.initialize(config, error);
+    return m_filterGraph.initialize(config, error);
 }
 
 bool FFmpegVideoTranscodePipeline::initializePacketWriter(std::string* error)
 {
-    static FFmpegVideoPipeline packetWriter;
-    packetWriter.reset();
-
     FFmpegVideoPipeline::Config config;
     config.encoderCtx = m_encoderCtx;
     config.outputFmtCtx = m_outputFmtCtx;
     config.outputVideoStream = m_outputVideoStream;
 
-    return packetWriter.initialize(config, error);
+    return m_packetWriter.initialize(config, error);
 }
 
 bool FFmpegVideoTranscodePipeline::allocateFrames(std::string* error)
@@ -383,9 +363,7 @@ bool FFmpegVideoTranscodePipeline::flushFilterAndEncoder(
     std::string* error,
     const PacketWrittenCallback& onPacketWritten)
 {
-    static VideoFilterGraph filterGraph;
-
-    if (!filterGraph.flush(error)) {
+    if (!m_filterGraph.flush(error)) {
         return false;
     }
 
@@ -453,8 +431,7 @@ bool FFmpegVideoTranscodePipeline::processDecodedFrame(
         return false;
     }
 
-    static VideoFilterGraph filterGraph;
-    if (!filterGraph.sendFrame(m_decodedFrame, error)) {
+    if (!m_filterGraph.sendFrame(m_decodedFrame, error)) {
         return false;
     }
 
@@ -465,10 +442,8 @@ bool FFmpegVideoTranscodePipeline::drainFilterGraph(
     std::string* error,
     const PacketWrittenCallback& onPacketWritten)
 {
-    static VideoFilterGraph filterGraph;
-
     while (true) {
-        const int receiveRet = filterGraph.receiveFrame(m_filteredFrame, error);
+        const int receiveRet = m_filterGraph.receiveFrame(m_filteredFrame, error);
 
         if (receiveRet == 0) {
             return true;
@@ -478,7 +453,7 @@ bool FFmpegVideoTranscodePipeline::drainFilterGraph(
             return false;
         }
 
-        const AVRational filterTimeBase = filterGraph.sinkTimeBase();
+        const AVRational filterTimeBase = m_filterGraph.sinkTimeBase();
 
         if (m_filteredFrame->pts == AV_NOPTS_VALUE) {
             av_frame_unref(m_filteredFrame);
@@ -525,13 +500,11 @@ bool FFmpegVideoTranscodePipeline::writeEncodedPackets(
     std::string* error,
     const PacketWrittenCallback& onPacketWritten)
 {
-    static FFmpegVideoPipeline packetWriter;
-
-    if (!packetWriter.sendFrame(frame, error)) {
+    if (!m_packetWriter.sendFrame(frame, error)) {
         return false;
     }
 
-    const int writtenPackets = packetWriter.receiveAndWritePackets(
+    const int writtenPackets = m_packetWriter.receiveAndWritePackets(
         error,
         [&](int64_t packetCount, int64_t outTimeMs) {
             m_packetCount = packetCount;
