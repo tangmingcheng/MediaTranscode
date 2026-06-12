@@ -45,6 +45,7 @@ FFmpegAudioPipeline& FFmpegAudioPipeline::operator=(FFmpegAudioPipeline&& other)
     delete m_fifo;
 
     m_mode = other.m_mode;
+    m_codec = other.m_codec;
     m_inputAudioStream = other.m_inputAudioStream;
     m_outputFmtCtx = other.m_outputFmtCtx;
     m_outputAudioStream = other.m_outputAudioStream;
@@ -61,6 +62,7 @@ FFmpegAudioPipeline& FFmpegAudioPipeline::operator=(FFmpegAudioPipeline&& other)
     m_audioBitrateKbps = other.m_audioBitrateKbps;
 
     other.m_mode = AudioMode::None;
+    other.m_codec = AudioCodec::AAC;
     other.m_inputAudioStream = nullptr;
     other.m_outputFmtCtx = nullptr;
     other.m_outputAudioStream = nullptr;
@@ -102,6 +104,7 @@ void FFmpegAudioPipeline::reset()
     }
 
     m_mode = AudioMode::None;
+    m_codec = AudioCodec::AAC;
     m_inputAudioStream = nullptr;
     m_outputFmtCtx = nullptr;
     m_outputAudioStream = nullptr;
@@ -119,6 +122,7 @@ bool FFmpegAudioPipeline::initialize(const Config& config, std::string* error)
     reset();
 
     m_mode = config.mode;
+    m_codec = config.codec;
     m_inputAudioStream = config.inputAudioStream;
     m_outputFmtCtx = config.outputFmtCtx;
     m_timeline = config.timeline;
@@ -229,14 +233,15 @@ bool FFmpegAudioPipeline::initializeEncode(std::string* error)
         return false;
     }
 
-    const AVCodec* encoder = avcodec_find_encoder_by_name("aac");
+    const char* encoderName = preferredAudioEncoderName(m_codec);
+    const AVCodec* encoder = encoderName ? avcodec_find_encoder_by_name(encoderName) : nullptr;
     if (!encoder) {
-        encoder = avcodec_find_encoder(AV_CODEC_ID_AAC);
+        encoder = avcodec_find_encoder(fallbackAudioCodecId(m_codec));
     }
 
     if (!encoder) {
         if (error) {
-            *error = "avcodec_find_encoder audio failed: AAC encoder not found";
+            *error = "avcodec_find_encoder audio failed: requested audio encoder not found";
         }
         return false;
     }
