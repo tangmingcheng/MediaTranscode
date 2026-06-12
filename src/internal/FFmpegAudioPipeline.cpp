@@ -347,7 +347,7 @@ bool FFmpegAudioPipeline::initializeResamplerAndFifo(std::string* error)
     }
 #endif
 
-    const int ret = swr_init(m_swrCtx);
+    ret = swr_init(m_swrCtx);
     if (ret < 0) {
         if (error) {
             *error = "swr_init failed: " + errorString(ret);
