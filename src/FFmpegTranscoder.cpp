@@ -324,6 +324,7 @@ namespace {
         if (inputAudioStream && m_config.audioMode != AudioMode::None) {
             ffmpeg::FFmpegAudioPipeline::Config audioConfig;
             audioConfig.mode = m_config.audioMode;
+            audioConfig.codec = m_config.audioCodec;
             audioConfig.inputAudioStream = inputAudioStream;
             audioConfig.outputFmtCtx = outputFmtCtx.get();
             audioConfig.timeline = &timeline;
