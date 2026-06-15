@@ -159,6 +159,26 @@ namespace {
         return av_hwdevice_find_type_by_name(name);
     }
 
+    HardwareDeviceType HardwareDeviceContext::fromAVDeviceType(AVHWDeviceType type)
+    {
+        switch (type) {
+        case AV_HWDEVICE_TYPE_D3D11VA:
+            return HardwareDeviceType::D3D11VA;
+        case AV_HWDEVICE_TYPE_CUDA:
+            return HardwareDeviceType::CUDA;
+        case AV_HWDEVICE_TYPE_QSV:
+            return HardwareDeviceType::QSV;
+        case AV_HWDEVICE_TYPE_VAAPI:
+            return HardwareDeviceType::VAAPI;
+        case AV_HWDEVICE_TYPE_DRM:
+            return HardwareDeviceType::DRM;
+        case AV_HWDEVICE_TYPE_VIDEOTOOLBOX:
+            return HardwareDeviceType::VideoToolbox;
+        default:
+            return HardwareDeviceType::None;
+        }
+    }
+
     const char* HardwareDeviceContext::toAVDeviceName(HardwareDeviceType type)
     {
         switch (type) {
