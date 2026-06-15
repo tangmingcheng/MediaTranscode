@@ -1,6 +1,8 @@
 #pragma once
 
 #include "media_transcode/MediaTranscodeTypes.h"
+#include "internal/FFmpegHardwareContext.h"
+#include "internal/FFmpegHardwareFrames.h"
 #include "internal/FFmpegVideoFilterGraph.h"
 #include "internal/FFmpegVideoPipeline.h"
 
@@ -59,6 +61,7 @@ public:
 private:
     bool openDecoder(std::string* error);
     bool openEncoderAndCreateOutputStream(std::string* error);
+    bool initializeHardwareDeviceForEncoder(const AVCodec* encoder, std::string* error);
     bool initializeFilterGraph(std::string* error);
     bool initializePacketWriter(std::string* error);
     bool allocateFrames(std::string* error);
@@ -85,6 +88,10 @@ private:
 
     AVCodecContext* m_decoderCtx = nullptr;
     AVCodecContext* m_encoderCtx = nullptr;
+
+    HardwareDeviceContext m_hardwareDeviceContext;
+    HardwareFramesContext m_hardwareFramesContext;
+    bool m_hardwareDeviceAttachedToEncoder = false;
 
     VideoFilterGraph m_filterGraph;
     FFmpegVideoPipeline m_packetWriter;
