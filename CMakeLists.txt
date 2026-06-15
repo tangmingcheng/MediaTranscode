@@ -35,6 +35,7 @@ add_library(${TARGET_CORE} STATIC
     src/internal/FFmpegHardwareEncoderSelector.h
     src/internal/FFmpegHardwareFrames.cpp
     src/internal/FFmpegHardwareFrames.h
+    src/internal/FFmpegHardwareTypes.h
     src/internal/FFmpegHardwareVideoFilterGraph.cpp
     src/internal/FFmpegHardwareVideoFilterGraph.h
     src/internal/FFmpegPipelinePlanner.cpp
