@@ -3,6 +3,8 @@
 #include "internal/FFmpegTimelineNormalizer.h"
 #include "internal/FFmpegUtils.h"
 
+#include "spdlog/spdlog.h"
+
 #include <algorithm>
 #include <sstream>
 
@@ -41,6 +43,12 @@ AVPixelFormat expectedSoftwareFormatAfterHardwareDownload(HardwareDeviceType dev
     default:
         return decoderSoftwareFormat;
     }
+}
+
+const char* pixelFormatName(AVPixelFormat format)
+{
+    const char* name = av_get_pix_fmt_name(format);
+    return name ? name : "none";
 }
 
 } // namespace
@@ -88,6 +96,8 @@ void FFmpegVideoTranscodePipeline::reset()
     m_lastWrittenOutTimeMs = 0;
     m_outputFps = 0;
     m_enableConstantFps = false;
+    m_hardwarePlan = HardwarePipelinePlan{};
+    m_hasHardwarePlan = false;
     m_hardwareBackend = HardwareBackendProfile{};
     m_hardwareEncoderSelection = HardwareEncoderSelection{};
     m_hardwareDecoderConfig = HardwareDecoderSupport::Config{};
@@ -134,6 +144,14 @@ bool FFmpegVideoTranscodePipeline::initialize(const Config& config, std::string*
     m_inputVideoStream = config.inputVideoStream;
     m_outputFmtCtx = config.outputFmtCtx;
     m_timeline = config.timeline;
+
+    if (config.hardwarePlan && config.hardwarePlan->valid && config.hardwarePlan->zeroCopy) {
+        m_hardwarePlan = *config.hardwarePlan;
+        m_hasHardwarePlan = true;
+        m_hardwareBackend = m_hardwarePlan.backend;
+        m_hardwareDecoderConfig = m_hardwarePlan.decoderConfig;
+        m_hardwareEncoderSelection = m_hardwarePlan.encoderSelection;
+    }
 
     return openDecoder(error) &&
         openEncoderAndCreateOutputStream(error) &&
@@ -186,23 +204,13 @@ bool FFmpegVideoTranscodePipeline::openDecoder(std::string* error)
 bool FFmpegVideoTranscodePipeline::initializeHardwareDeviceForDecoder(const AVCodec* decoder,
                                                                       std::string* error)
 {
-    if (m_config.hardware.videoFramePipeline != VideoFramePipeline::Hardware) {
+    if (!m_hasHardwarePlan) {
         return true;
     }
 
-    m_hardwareDecoderConfig = HardwareDecoderSupport::findConfig(
-        decoder,
-        m_config.hardware.deviceType
-    );
-
     if (!m_hardwareDecoderConfig.valid) {
-        if (m_config.hardware.allowSoftwareFallback) {
-            m_hardwareDecoderConfig = HardwareDecoderSupport::Config{};
-            return true;
-        }
-
         if (error) {
-            *error = "hardware decoder initialization failed: decoder has no matching hardware config";
+            *error = "hardware decoder initialization failed: planner returned invalid decoder config";
         }
         return false;
     }
@@ -213,12 +221,6 @@ bool FFmpegVideoTranscodePipeline::initializeHardwareDeviceForDecoder(const AVCo
             decoder,
             nullptr,
             &hardwareError)) {
-        if (m_config.hardware.allowSoftwareFallback) {
-            m_hardwareDecoderConfig = HardwareDecoderSupport::Config{};
-            m_hardwareDeviceContext.reset();
-            return true;
-        }
-
         if (error) {
             *error = hardwareError;
         }
@@ -227,11 +229,6 @@ bool FFmpegVideoTranscodePipeline::initializeHardwareDeviceForDecoder(const AVCo
 
     AVBufferRef* deviceRef = m_hardwareDeviceContext.ref();
     if (!deviceRef) {
-        if (m_config.hardware.allowSoftwareFallback) {
-            m_hardwareDecoderConfig = HardwareDecoderSupport::Config{};
-            return true;
-        }
-
         if (error) {
             *error = "hardware decoder initialization failed: unable to reference device context";
         }
@@ -250,24 +247,20 @@ bool FFmpegVideoTranscodePipeline::initializeHardwareDeviceForDecoder(const AVCo
 bool FFmpegVideoTranscodePipeline::openEncoderAndCreateOutputStream(std::string* error)
 {
     const bool wantsHardwarePipeline =
-        m_config.hardware.videoFramePipeline == VideoFramePipeline::Hardware &&
+        m_hasHardwarePlan &&
         m_decoderUsesHardwareFrames &&
         m_hardwareDeviceContext.isInitialized();
 
     const AVCodec* encoder = nullptr;
 
     if (wantsHardwarePipeline) {
-        m_hardwareBackend = HardwareBackendRegistry::profileFor(
-            m_hardwareDeviceContext.resolvedDeviceType()
-        );
-
-        m_hardwareEncoderSelection = HardwareEncoderSelector::select(
-            m_config.videoCodec,
-            m_hardwareBackend,
-            true
-        );
-
         encoder = m_hardwareEncoderSelection.encoder;
+        if (!encoder) {
+            if (error) {
+                *error = "zero-copy hardware pipeline unavailable: planner returned no encoder";
+            }
+            return false;
+        }
     }
 
     if (!encoder) {
@@ -348,17 +341,15 @@ bool FFmpegVideoTranscodePipeline::openEncoderAndCreateOutputStream(std::string*
         m_hardwareDeviceAttachedToDecoder &&
         m_hardwareDeviceAttachedToEncoder;
 
-    if (wantsHardwarePipeline &&
-        !m_zeroCopyPipeline &&
-        !m_config.hardware.allowSoftwareFallback) {
+    if (wantsHardwarePipeline && !m_zeroCopyPipeline) {
         if (error) {
             std::ostringstream oss;
-            oss << "zero-copy hardware pipeline unavailable: encoder="
+            oss << "zero-copy hardware pipeline unavailable during execution: encoder="
                 << (encoder->name ? encoder->name : "unknown")
                 << ", backend="
                 << (m_hardwareBackend.name ? m_hardwareBackend.name : "unknown")
                 << ", selected_pix_fmt="
-                << m_encoderCtx->pix_fmt;
+                << pixelFormatName(m_encoderCtx->pix_fmt);
             *error = oss.str();
         }
         return false;
@@ -400,7 +391,7 @@ bool FFmpegVideoTranscodePipeline::openEncoderAndCreateOutputStream(std::string*
 bool FFmpegVideoTranscodePipeline::initializeHardwareDeviceForEncoder(const AVCodec* encoder,
                                                                       std::string* error)
 {
-    if (m_config.hardware.videoFramePipeline != VideoFramePipeline::Hardware) {
+    if (!m_hasHardwarePlan) {
         return true;
     }
 
@@ -409,7 +400,10 @@ bool FFmpegVideoTranscodePipeline::initializeHardwareDeviceForEncoder(const AVCo
         m_hardwareEncoderSelection.hardwareEncoder;
 
     if (!selectedHardwareEncoder) {
-        return true;
+        if (error) {
+            *error = "zero-copy hardware pipeline unavailable: selected encoder is not a hardware encoder";
+        }
+        return false;
     }
 
     if (!m_hardwareDeviceContext.isInitialized()) {
@@ -419,11 +413,6 @@ bool FFmpegVideoTranscodePipeline::initializeHardwareDeviceForEncoder(const AVCo
                 nullptr,
                 encoder,
                 &hardwareError)) {
-            if (m_config.hardware.allowSoftwareFallback) {
-                m_zeroCopyPipeline = false;
-                return true;
-            }
-
             if (error) {
                 *error = hardwareError;
             }
@@ -433,11 +422,6 @@ bool FFmpegVideoTranscodePipeline::initializeHardwareDeviceForEncoder(const AVCo
 
     AVBufferRef* deviceRef = m_hardwareDeviceContext.ref();
     if (!deviceRef) {
-        if (m_config.hardware.allowSoftwareFallback) {
-            m_zeroCopyPipeline = false;
-            return true;
-        }
-
         if (error) {
             *error = "hardware device initialization failed: unable to reference device context";
         }
@@ -659,6 +643,13 @@ bool FFmpegVideoTranscodePipeline::processDecodedFrame(
         return processHardwareFrameZeroCopy(error, onPacketWritten);
     }
 
+    if (m_zeroCopyPipeline && !isExpectedHardwareFrame) {
+        if (error) {
+            *error = "zero-copy pipeline expected hardware frame but decoder returned software frame";
+        }
+        return false;
+    }
+
     AVFrame* frameForFilter = m_decodedFrame;
 
     if (isExpectedHardwareFrame) {
@@ -723,12 +714,25 @@ bool FFmpegVideoTranscodePipeline::transferHardwareFrameToSoftware(AVFrame* hard
                                                                    AVFrame* softwareFrame,
                                                                    std::string* error) const
 {
+    if (m_zeroCopyPipeline) {
+        if (error) {
+            *error = "zero-copy pipeline violation: attempted hardware-to-software transfer";
+        }
+        return false;
+    }
+
     if (!hardwareFrame || !softwareFrame) {
         if (error) {
             *error = "hardware frame transfer failed: frame is null";
         }
         return false;
     }
+
+    spdlog::warn(
+        "[ZC][CPU_TRANSFER] av_hwframe_transfer_data called: hw_fmt={}, sw_fmt={}",
+        pixelFormatName(static_cast<AVPixelFormat>(hardwareFrame->format)),
+        pixelFormatName(m_decoderCtx ? m_decoderCtx->sw_pix_fmt : AV_PIX_FMT_NONE)
+    );
 
     av_frame_unref(softwareFrame);
 
@@ -837,20 +841,18 @@ bool FFmpegVideoTranscodePipeline::drainHardwareFilterGraph(
 
         if (m_lastSubmittedPts != AV_NOPTS_VALUE &&
             m_filteredFrame->pts <= m_lastSubmittedPts) {
-            std::ostringstream oss;
-            oss << "hardware filtered video timestamp is not strictly increasing: current="
-                << m_filteredFrame->pts
-                << ", last="
-                << m_lastSubmittedPts;
-
             av_frame_unref(m_filteredFrame);
-            if (error) {
-                *error = oss.str();
-            }
-            return false;
+            continue;
         }
 
         m_lastSubmittedPts = m_filteredFrame->pts;
+
+        spdlog::debug(
+            "[ZC][ENCODE] filtered_fmt={}, hw_frames_ctx={}, encoder_pix_fmt={}",
+            pixelFormatName(static_cast<AVPixelFormat>(m_filteredFrame->format)),
+            m_filteredFrame->hw_frames_ctx != nullptr,
+            pixelFormatName(m_encoderCtx ? m_encoderCtx->pix_fmt : AV_PIX_FMT_NONE)
+        );
 
         const bool ok = writeEncodedPackets(m_filteredFrame, error, onPacketWritten);
         av_frame_unref(m_filteredFrame);
