@@ -140,7 +140,7 @@ namespace {
             "[PLAN] request: videoCodec={}, preferZeroCopy=true, allowZeroCopyFallback={}, requestedDevice={}",
             videoCodecName(config.videoCodec),
             plan.allowFallback,
-            hardwareDeviceName(config.hardware.deviceType)
+            hardwareDeviceName(HardwareDeviceType::Auto)
         );
 
         if (!decoder) {
@@ -150,7 +150,7 @@ namespace {
             return plan;
         }
 
-        const std::vector<HardwareDeviceType> priority = backendPriority(config.hardware.deviceType);
+        const std::vector<HardwareDeviceType> priority = backendPriority(HardwareDeviceType::Auto);
 
         for (HardwareDeviceType deviceType : priority) {
             HardwarePipelinePlanAttempt attempt;
@@ -176,10 +176,9 @@ namespace {
                 continue;
             }
 
-            attempt.encoderSelection = HardwareEncoderSelector::select(
+            attempt.encoderSelection = HardwareEncoderSelector::selectZeroCopyEncoder(
                 config.videoCodec,
-                attempt.backend,
-                true
+                attempt.backend
             );
 
             attempt.encoderAccepted = attempt.encoderSelection.zeroCopy;
