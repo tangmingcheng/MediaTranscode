@@ -1,6 +1,6 @@
 #pragma once
 
-#include "media_transcode/MediaTranscodeTypes.h"
+#include "internal/FFmpegHardwareTypes.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
