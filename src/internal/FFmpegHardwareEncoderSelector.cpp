@@ -182,6 +182,19 @@ namespace {
         return preferred.empty() ? AV_PIX_FMT_NONE : preferred.front();
     }
 
+    bool isD3D11MediaFoundationEncoder(const char* encoderName,
+                                       const HardwareBackendProfile& backend)
+    {
+        if (!encoderName ||
+            backend.deviceType != HardwareDeviceType::D3D11VA ||
+            backend.hardwarePixelFormat != AV_PIX_FMT_D3D11) {
+            return false;
+        }
+
+        const std::string name = encoderName;
+        return name == "h264_mf" || name == "hevc_mf" || name == "av1_mf";
+    }
+
 } // namespace
 
     HardwareEncoderSelection HardwareEncoderSelector::select(VideoCodec codec,
@@ -201,10 +214,14 @@ namespace {
             return selection;
         }
 
+        const bool acceptsBackendHardwareFrames =
+            encoderSupportsPixelFormat(encoder, backend.hardwarePixelFormat) ||
+            isD3D11MediaFoundationEncoder(encoderName, backend);
+
         const bool canZeroCopy = preferZeroCopy &&
             backend.supportsZeroCopyFilter &&
             backend.hardwarePixelFormat != AV_PIX_FMT_NONE &&
-            encoderSupportsPixelFormat(encoder, backend.hardwarePixelFormat);
+            acceptsBackendHardwareFrames;
 
         selection.encoder = encoder;
         selection.encoderName = encoderName;
