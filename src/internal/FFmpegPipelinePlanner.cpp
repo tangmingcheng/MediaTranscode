@@ -208,10 +208,9 @@ namespace {
                 : attempt.encoderSelection.diagnostic;
 
             if (plan.allowFallback && !mixedGpuFallbackAttempt.has_value()) {
-                HardwareEncoderSelection mixedSelection = HardwareEncoderSelector::select(
+                HardwareEncoderSelection mixedSelection = HardwareEncoderSelector::selectMixedGpuEncoder(
                     config.videoCodec,
-                    attempt.backend,
-                    false
+                    attempt.backend
                 );
 
                 if (mixedSelection.encoder && mixedSelection.hardwareEncoder) {
