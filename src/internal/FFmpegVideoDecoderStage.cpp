@@ -2,6 +2,10 @@
 
 #include "internal/FFmpegUtils.h"
 
+extern "C" {
+#include <libavutil/error.h>
+}
+
 namespace media::ffmpeg {
 
 FFmpegVideoDecoderStage::~FFmpegVideoDecoderStage()
