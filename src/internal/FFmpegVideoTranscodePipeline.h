@@ -2,12 +2,11 @@
 
 #include "media_transcode/MediaTranscodeTypes.h"
 #include "internal/FFmpegHardwareBackend.h"
-#include "internal/FFmpegHardwareContext.h"
-#include "internal/FFmpegHardwareDecoder.h"
 #include "internal/FFmpegHardwareEncoderSelector.h"
 #include "internal/FFmpegHardwareFrames.h"
 #include "internal/FFmpegHardwareVideoFilterGraph.h"
 #include "internal/FFmpegPipelinePlanner.h"
+#include "internal/FFmpegVideoDecoderStage.h"
 #include "internal/FFmpegVideoFilterGraph.h"
 #include "internal/FFmpegVideoPipeline.h"
 
@@ -68,7 +67,6 @@ public:
 
 private:
     bool openDecoder(std::string* error);
-    bool initializeHardwareDeviceForDecoder(const AVCodec* decoder, std::string* error);
     bool openEncoderAndCreateOutputStream(std::string* error);
     bool initializeHardwareDeviceForEncoder(const AVCodec* encoder, std::string* error);
     bool initializeFilterGraph(std::string* error);
@@ -97,11 +95,8 @@ private:
                              std::string* error,
                              const PacketWrittenCallback& onPacketWritten);
 
-    int64_t decodedFrameTimestamp() const;
+    static int64_t decodedFrameTimestamp(const AVFrame* frame);
     bool normalizeFramePts(AVFrame* frame, std::string* error) const;
-
-    static AVPixelFormat selectDecoderPixelFormat(AVCodecContext* ctx,
-                                                   const AVPixelFormat* formats);
 
 private:
     TranscodeConfig m_config;
@@ -111,19 +106,15 @@ private:
     AVStream* m_outputVideoStream = nullptr;
     TimelineNormalizer* m_timeline = nullptr;
 
-    AVCodecContext* m_decoderCtx = nullptr;
+    FFmpegVideoDecoderStage m_decoderStage;
     AVCodecContext* m_encoderCtx = nullptr;
 
     HardwarePipelinePlan m_hardwarePlan;
     bool m_hasHardwarePlan = false;
-    HardwareDeviceContext m_hardwareDeviceContext;
     HardwareFramesContext m_hardwareFramesContext;
     HardwareBackendProfile m_hardwareBackend;
     HardwareEncoderSelection m_hardwareEncoderSelection;
-    HardwareDecoderSupport::Config m_hardwareDecoderConfig;
-    bool m_hardwareDeviceAttachedToDecoder = false;
     bool m_hardwareDeviceAttachedToEncoder = false;
-    bool m_decoderUsesHardwareFrames = false;
     bool m_zeroCopyPipeline = false;
     bool m_hardwareFilterGraphInitialized = false;
 
