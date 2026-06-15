@@ -109,6 +109,11 @@ namespace media::ffmpeg {
             ? config.decoderCtx->sample_aspect_ratio
             : AVRational{ 1, 1 };
 
+        const AVPixelFormat inputPixelFormat =
+            config.inputPixelFormat != AV_PIX_FMT_NONE
+            ? config.inputPixelFormat
+            : config.decoderCtx->pix_fmt;
+
         char args[512] = {};
         std::snprintf(
             args,
@@ -116,7 +121,7 @@ namespace media::ffmpeg {
             "video_size=%dx%d:pix_fmt=%d:time_base=%d/%d:pixel_aspect=%d/%d:frame_rate=%d/%d",
             config.decoderCtx->width,
             config.decoderCtx->height,
-            config.decoderCtx->pix_fmt,
+            inputPixelFormat,
             config.inputStream->time_base.num,
             config.inputStream->time_base.den,
             pixelAspect.num,
