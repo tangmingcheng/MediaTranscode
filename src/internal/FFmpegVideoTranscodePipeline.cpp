@@ -22,6 +22,8 @@ void FFmpegVideoTranscodePipeline::reset()
 {
     m_filterGraph.reset();
     m_packetWriter.reset();
+    m_hardwareFramesContext.reset();
+    m_hardwareDeviceContext.reset();
 
     if (m_filteredFrame) {
         av_frame_free(&m_filteredFrame);
@@ -49,6 +51,7 @@ void FFmpegVideoTranscodePipeline::reset()
     m_lastWrittenOutTimeMs = 0;
     m_outputFps = 0;
     m_enableConstantFps = false;
+    m_hardwareDeviceAttachedToEncoder = false;
 }
 
 bool FFmpegVideoTranscodePipeline::initialize(const Config& config, std::string* error)
@@ -199,6 +202,10 @@ bool FFmpegVideoTranscodePipeline::openEncoderAndCreateOutputStream(std::string*
         m_encoderCtx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
     }
 
+    if (!initializeHardwareDeviceForEncoder(encoder, error)) {
+        return false;
+    }
+
     setVideoEncoderOptions(m_encoderCtx, encoder);
 
     int ret = avcodec_open2(m_encoderCtx, encoder, nullptr);
@@ -229,6 +236,52 @@ bool FFmpegVideoTranscodePipeline::openEncoderAndCreateOutputStream(std::string*
     }
 
     m_outputVideoStream->codecpar->codec_tag = 0;
+    return true;
+}
+
+bool FFmpegVideoTranscodePipeline::initializeHardwareDeviceForEncoder(const AVCodec* encoder,
+                                                                      std::string* error)
+{
+    if (m_config.hardware.videoFramePipeline != VideoFramePipeline::Hardware) {
+        return true;
+    }
+
+    std::string hardwareError;
+    if (!m_hardwareDeviceContext.initialize(
+            m_config.hardware.deviceType,
+            nullptr,
+            encoder,
+            &hardwareError)) {
+        if (m_config.hardware.allowSoftwareFallback) {
+            m_hardwareDeviceContext.reset();
+            return true;
+        }
+
+        if (error) {
+            *error = hardwareError;
+        }
+        return false;
+    }
+
+    AVBufferRef* deviceRef = m_hardwareDeviceContext.ref();
+    if (!deviceRef) {
+        if (m_config.hardware.allowSoftwareFallback) {
+            m_hardwareDeviceContext.reset();
+            return true;
+        }
+
+        if (error) {
+            *error = "hardware device initialization failed: unable to reference device context";
+        }
+        return false;
+    }
+
+    if (m_encoderCtx->hw_device_ctx) {
+        av_buffer_unref(&m_encoderCtx->hw_device_ctx);
+    }
+
+    m_encoderCtx->hw_device_ctx = deviceRef;
+    m_hardwareDeviceAttachedToEncoder = true;
     return true;
 }
 
