@@ -31,34 +31,11 @@ namespace media {
         MP3
     };
 
-    // 内部执行管线类型。应用层不直接选择，后端 planner 自动决定。
-    enum class VideoFramePipeline {
-        Cpu,
-        Hardware
-    };
-
-    // FFmpeg 硬件设备类型抽象。该枚举属于后端 planner 内部能力表达，应用层不需要指定。
-    enum class HardwareDeviceType {
-        None,
-        Auto,
-        D3D11VA,
-        CUDA,
-        QSV,
-        VAAPI,
-        DRM,
-        VideoToolbox
-    };
-
     struct HardwarePipelineConfig {
         // 后端默认总是优先规划零拷贝路径。
         // true：零拷贝不可用时允许退回普通 CPU frame 转码路径。
         // false：零拷贝不可用则初始化失败，用于压测严格零拷贝能力。
         bool allowZeroCopyFallback = true;
-
-        // 以下字段仅作为 planner / pipeline 内部执行状态保留，不应暴露给 CLI 或业务层配置。
-        VideoFramePipeline videoFramePipeline = VideoFramePipeline::Cpu;
-        HardwareDeviceType deviceType = HardwareDeviceType::Auto;
-        bool allowSoftwareFallback = true;
     };
 
     // 进度信息
