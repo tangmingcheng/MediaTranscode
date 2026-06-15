@@ -2,6 +2,14 @@
 
 namespace media::ffmpeg {
 
+    // Internal execution mode selected by FFmpegPipelinePlanner.
+    // Public callers do not choose this directly.
+    enum class VideoExecutionMode {
+        Cpu,
+        ZeroCopy,
+        MixedGpu
+    };
+
     // Internal execution pipeline type. Public callers do not choose this directly;
     // FFmpegPipelinePlanner decides the runtime path.
     enum class VideoFramePipeline {
