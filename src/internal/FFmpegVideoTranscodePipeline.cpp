@@ -68,7 +68,7 @@ void FFmpegVideoTranscodePipeline::reset()
     m_filterGraph.reset();
     m_packetWriter.reset();
     m_hardwareFramesContext.reset();
-    m_hardwareDeviceContext.reset();
+    m_decoderStage.reset();
 
     if (m_softwareTransferFrame) {
         av_frame_free(&m_softwareTransferFrame);
@@ -80,10 +80,6 @@ void FFmpegVideoTranscodePipeline::reset()
 
     if (m_decodedFrame) {
         av_frame_free(&m_decodedFrame);
-    }
-
-    if (m_decoderCtx) {
-        avcodec_free_context(&m_decoderCtx);
     }
 
     if (m_encoderCtx) {
@@ -104,10 +100,7 @@ void FFmpegVideoTranscodePipeline::reset()
     m_hasHardwarePlan = false;
     m_hardwareBackend = HardwareBackendProfile{};
     m_hardwareEncoderSelection = HardwareEncoderSelection{};
-    m_hardwareDecoderConfig = HardwareDecoderSupport::Config{};
-    m_hardwareDeviceAttachedToDecoder = false;
     m_hardwareDeviceAttachedToEncoder = false;
-    m_decoderUsesHardwareFrames = false;
     m_zeroCopyPipeline = false;
     m_hardwareFilterGraphInitialized = false;
 }
@@ -155,7 +148,6 @@ bool FFmpegVideoTranscodePipeline::initialize(const Config& config, std::string*
         m_hardwarePlan = *config.hardwarePlan;
         m_hasHardwarePlan = true;
         m_hardwareBackend = m_hardwarePlan.backend;
-        m_hardwareDecoderConfig = m_hardwarePlan.decoderConfig;
         m_hardwareEncoderSelection = m_hardwarePlan.encoderSelection;
     }
 
@@ -168,94 +160,26 @@ bool FFmpegVideoTranscodePipeline::initialize(const Config& config, std::string*
 
 bool FFmpegVideoTranscodePipeline::openDecoder(std::string* error)
 {
-    const AVCodec* decoder = avcodec_find_decoder(m_inputVideoStream->codecpar->codec_id);
-    if (!decoder) {
-        if (error) {
-            *error = "avcodec_find_decoder failed: unsupported input video codec";
-        }
-        return false;
-    }
-
-    m_decoderCtx = avcodec_alloc_context3(decoder);
-    if (!m_decoderCtx) {
-        if (error) {
-            *error = "avcodec_alloc_context3 decoder failed";
-        }
-        return false;
-    }
-
-    int ret = avcodec_parameters_to_context(m_decoderCtx, m_inputVideoStream->codecpar);
-    if (ret < 0) {
-        if (error) {
-            *error = "avcodec_parameters_to_context decoder failed: " + errorString(ret);
-        }
-        return false;
-    }
-
-    if (!initializeHardwareDeviceForDecoder(decoder, error)) {
-        return false;
-    }
-
-    ret = avcodec_open2(m_decoderCtx, decoder, nullptr);
-    if (ret < 0) {
-        if (error) {
-            *error = "avcodec_open2 decoder failed: " + errorString(ret);
-        }
-        return false;
-    }
-
-    return true;
-}
-
-bool FFmpegVideoTranscodePipeline::initializeHardwareDeviceForDecoder(const AVCodec* decoder,
-                                                                      std::string* error)
-{
-    if (!m_hasHardwarePlan) {
-        return true;
-    }
-
-    if (!m_hardwareDecoderConfig.valid) {
-        if (error) {
-            *error = "hardware decoder initialization failed: planner returned invalid decoder config";
-        }
-        return false;
-    }
-
-    std::string hardwareError;
-    if (!m_hardwareDeviceContext.initialize(
-            m_hardwareDecoderConfig.deviceType,
-            decoder,
-            nullptr,
-            &hardwareError)) {
-        if (error) {
-            *error = hardwareError;
-        }
-        return false;
-    }
-
-    AVBufferRef* deviceRef = m_hardwareDeviceContext.ref();
-    if (!deviceRef) {
-        if (error) {
-            *error = "hardware decoder initialization failed: unable to reference device context";
-        }
-        return false;
-    }
-
-    m_decoderCtx->hw_device_ctx = deviceRef;
-    m_decoderCtx->opaque = this;
-    m_decoderCtx->get_format = &FFmpegVideoTranscodePipeline::selectDecoderPixelFormat;
-
-    m_hardwareDeviceAttachedToDecoder = true;
-    m_decoderUsesHardwareFrames = true;
-    return true;
+    FFmpegVideoDecoderStage::Config config;
+    config.inputStream = m_inputVideoStream;
+    config.hardwarePlan = m_hasHardwarePlan ? &m_hardwarePlan : nullptr;
+    return m_decoderStage.initialize(config, error);
 }
 
 bool FFmpegVideoTranscodePipeline::openEncoderAndCreateOutputStream(std::string* error)
 {
+    AVCodecContext* decoderCtx = m_decoderStage.context();
+    if (!decoderCtx) {
+        if (error) {
+            *error = "open encoder failed: decoder stage is not initialized";
+        }
+        return false;
+    }
+
     const bool wantsHardwarePipeline =
         m_hasHardwarePlan &&
-        m_decoderUsesHardwareFrames &&
-        m_hardwareDeviceContext.isInitialized();
+        m_decoderStage.usesHardwareFrames() &&
+        m_decoderStage.hardwareDeviceContext().isInitialized();
 
     const AVCodec* encoder = nullptr;
 
@@ -299,8 +223,8 @@ bool FFmpegVideoTranscodePipeline::openEncoderAndCreateOutputStream(std::string*
     m_outputFps = chooseOutputFps(m_config, m_inputVideoStream);
     m_enableConstantFps = m_config.fps > 0;
 
-    int outputWidth = m_config.width > 0 ? m_config.width : m_decoderCtx->width;
-    int outputHeight = m_config.height > 0 ? m_config.height : m_decoderCtx->height;
+    int outputWidth = m_config.width > 0 ? m_config.width : decoderCtx->width;
+    int outputHeight = m_config.height > 0 ? m_config.height : decoderCtx->height;
 
     outputWidth = normalizeEvenSize(outputWidth);
     outputHeight = normalizeEvenSize(outputHeight);
@@ -343,8 +267,8 @@ bool FFmpegVideoTranscodePipeline::openEncoderAndCreateOutputStream(std::string*
 
     m_zeroCopyPipeline = m_hardwareEncoderSelection.encoder == encoder &&
         m_hardwareEncoderSelection.zeroCopy &&
-        m_decoderUsesHardwareFrames &&
-        m_hardwareDeviceAttachedToDecoder &&
+        m_decoderStage.usesHardwareFrames() &&
+        m_decoderStage.hardwareDeviceAttached() &&
         m_hardwareDeviceAttachedToEncoder;
 
     if (wantsHardwarePipeline &&
@@ -376,7 +300,7 @@ bool FFmpegVideoTranscodePipeline::openEncoderAndCreateOutputStream(std::string*
         m_hardwarePlan.executionMode == VideoExecutionMode::MixedGpu) {
         spdlog::warn(
             "[PLAN] active mixed GPU path: hardware decode={}, hardware encode={}, encoder={}, encoder_pix_fmt={}",
-            m_hardwareDeviceAttachedToDecoder,
+            m_decoderStage.hardwareDeviceAttached(),
             m_hardwareDeviceAttachedToEncoder,
             encoder->name ? encoder->name : "unknown",
             pixelFormatName(m_encoderCtx->pix_fmt)
@@ -434,21 +358,14 @@ bool FFmpegVideoTranscodePipeline::initializeHardwareDeviceForEncoder(const AVCo
         return false;
     }
 
-    if (!m_hardwareDeviceContext.isInitialized()) {
-        std::string hardwareError;
-        if (!m_hardwareDeviceContext.initialize(
-                m_hardwareEncoderSelection.backend.deviceType,
-                nullptr,
-                encoder,
-                &hardwareError)) {
-            if (error) {
-                *error = hardwareError;
-            }
-            return false;
+    if (!m_decoderStage.hardwareDeviceContext().isInitialized()) {
+        if (error) {
+            *error = "hardware device initialization failed: decoder stage has no hardware device";
         }
+        return false;
     }
 
-    AVBufferRef* deviceRef = m_hardwareDeviceContext.ref();
+    AVBufferRef* deviceRef = m_decoderStage.hardwareDeviceContext().ref();
     if (!deviceRef) {
         if (error) {
             *error = "hardware device initialization failed: unable to reference device context";
@@ -477,16 +394,17 @@ bool FFmpegVideoTranscodePipeline::initializeFilterGraph(std::string* error)
 bool FFmpegVideoTranscodePipeline::initializeSoftwareFilterGraph(std::string* error)
 {
     VideoFilterGraph::Config config;
-    config.decoderCtx = m_decoderCtx;
+    config.decoderCtx = m_decoderStage.context();
     config.encoderCtx = m_encoderCtx;
     config.inputStream = m_inputVideoStream;
     config.outputFps = m_outputFps;
     config.enableConstantFps = m_enableConstantFps;
 
-    if (m_decoderUsesHardwareFrames) {
+    if (m_decoderStage.usesHardwareFrames()) {
+        AVCodecContext* decoderCtx = m_decoderStage.context();
         config.inputPixelFormat = expectedSoftwareFormatAfterHardwareDownload(
-            m_hardwareDeviceContext.resolvedDeviceType(),
-            m_decoderCtx ? m_decoderCtx->sw_pix_fmt : AV_PIX_FMT_NONE
+            m_decoderStage.hardwareDeviceContext().resolvedDeviceType(),
+            decoderCtx ? decoderCtx->sw_pix_fmt : AV_PIX_FMT_NONE
         );
     }
 
@@ -565,18 +483,7 @@ bool FFmpegVideoTranscodePipeline::processPacket(
     std::string* error,
     const PacketWrittenCallback& onPacketWritten)
 {
-    if (!m_decoderCtx) {
-        if (error) {
-            *error = "FFmpegVideoTranscodePipeline processPacket failed: decoder is not initialized";
-        }
-        return false;
-    }
-
-    const int ret = avcodec_send_packet(m_decoderCtx, packet);
-    if (ret < 0) {
-        if (error) {
-            *error = "avcodec_send_packet decoder failed: " + errorString(ret);
-        }
+    if (!m_decoderStage.sendPacket(packet, error)) {
         return false;
     }
 
@@ -587,15 +494,11 @@ bool FFmpegVideoTranscodePipeline::flushDecoder(
     std::string* error,
     const PacketWrittenCallback& onPacketWritten)
 {
-    if (!m_decoderCtx) {
+    if (!m_decoderStage.isInitialized()) {
         return true;
     }
 
-    const int ret = avcodec_send_packet(m_decoderCtx, nullptr);
-    if (ret < 0) {
-        if (error) {
-            *error = "avcodec_send_packet decoder flush failed: " + errorString(ret);
-        }
+    if (!m_decoderStage.sendFlush(error)) {
         return false;
     }
 
@@ -636,16 +539,12 @@ bool FFmpegVideoTranscodePipeline::drainDecoder(
     const PacketWrittenCallback& onPacketWritten)
 {
     while (true) {
-        const int ret = avcodec_receive_frame(m_decoderCtx, m_decodedFrame);
-
-        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+        const int receiveRet = m_decoderStage.receiveFrame(m_decodedFrame, error);
+        if (receiveRet == 0) {
             return true;
         }
 
-        if (ret < 0) {
-            if (error) {
-                *error = "avcodec_receive_frame decoder failed: " + errorString(ret);
-            }
+        if (receiveRet < 0) {
             return false;
         }
 
@@ -662,10 +561,12 @@ bool FFmpegVideoTranscodePipeline::processDecodedFrame(
     std::string* error,
     const PacketWrittenCallback& onPacketWritten)
 {
+    const HardwareDecoderSupport::Config& hardwareDecoderConfig =
+        m_decoderStage.hardwareDecoderConfig();
     const bool isExpectedHardwareFrame =
-        m_decoderUsesHardwareFrames &&
-        m_hardwareDecoderConfig.valid &&
-        m_decodedFrame->format == m_hardwareDecoderConfig.hardwarePixelFormat;
+        m_decoderStage.usesHardwareFrames() &&
+        hardwareDecoderConfig.valid &&
+        m_decodedFrame->format == hardwareDecoderConfig.hardwarePixelFormat;
 
     if (m_zeroCopyPipeline && isExpectedHardwareFrame) {
         return processHardwareFrameZeroCopy(error, onPacketWritten);
@@ -758,10 +659,11 @@ bool FFmpegVideoTranscodePipeline::transferHardwareFrameToSoftware(AVFrame* hard
 
     bool expected = false;
     if (g_hardwareTransferLogged.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
+        AVCodecContext* decoderCtx = m_decoderStage.context();
         spdlog::warn(
             "[ZC][CPU_TRANSFER] hardware-to-software transfer enabled: hw_fmt={}, sw_fmt={}",
             pixelFormatName(static_cast<AVPixelFormat>(hardwareFrame->format)),
-            pixelFormatName(m_decoderCtx ? m_decoderCtx->sw_pix_fmt : AV_PIX_FMT_NONE)
+            pixelFormatName(decoderCtx ? decoderCtx->sw_pix_fmt : AV_PIX_FMT_NONE)
         );
     }
 
@@ -918,22 +820,22 @@ bool FFmpegVideoTranscodePipeline::writeEncodedPackets(
     return writtenPackets >= 0;
 }
 
-int64_t FFmpegVideoTranscodePipeline::decodedFrameTimestamp() const
+int64_t FFmpegVideoTranscodePipeline::decodedFrameTimestamp(const AVFrame* frame)
 {
-    if (!m_decodedFrame) {
+    if (!frame) {
         return AV_NOPTS_VALUE;
     }
 
-    if (m_decodedFrame->best_effort_timestamp != AV_NOPTS_VALUE) {
-        return m_decodedFrame->best_effort_timestamp;
+    if (frame->best_effort_timestamp != AV_NOPTS_VALUE) {
+        return frame->best_effort_timestamp;
     }
 
-    if (m_decodedFrame->pts != AV_NOPTS_VALUE) {
-        return m_decodedFrame->pts;
+    if (frame->pts != AV_NOPTS_VALUE) {
+        return frame->pts;
     }
 
-    if (m_decodedFrame->pkt_dts != AV_NOPTS_VALUE) {
-        return m_decodedFrame->pkt_dts;
+    if (frame->pkt_dts != AV_NOPTS_VALUE) {
+        return frame->pkt_dts;
     }
 
     return AV_NOPTS_VALUE;
@@ -948,7 +850,7 @@ bool FFmpegVideoTranscodePipeline::normalizeFramePts(AVFrame* frame, std::string
         return false;
     }
 
-    const int64_t inputVideoTs = decodedFrameTimestamp();
+    const int64_t inputVideoTs = decodedFrameTimestamp(frame);
     if (inputVideoTs == AV_NOPTS_VALUE) {
         if (error) {
             *error = "input video frame has no valid timestamp; refuse to synthesize PTS in normalized transcoder";
@@ -977,26 +879,9 @@ bool FFmpegVideoTranscodePipeline::normalizeFramePts(AVFrame* frame, std::string
     return true;
 }
 
-AVPixelFormat FFmpegVideoTranscodePipeline::selectDecoderPixelFormat(
-    AVCodecContext* ctx,
-    const AVPixelFormat* formats)
-{
-    auto* self = ctx ? static_cast<FFmpegVideoTranscodePipeline*>(ctx->opaque) : nullptr;
-
-    if (self && self->m_hardwareDecoderConfig.valid) {
-        for (const AVPixelFormat* p = formats; p && *p != AV_PIX_FMT_NONE; ++p) {
-            if (*p == self->m_hardwareDecoderConfig.hardwarePixelFormat) {
-                return *p;
-            }
-        }
-    }
-
-    return formats ? formats[0] : AV_PIX_FMT_NONE;
-}
-
 bool FFmpegVideoTranscodePipeline::isInitialized() const
 {
-    return m_decoderCtx && m_encoderCtx && m_outputVideoStream;
+    return m_decoderStage.isInitialized() && m_encoderCtx && m_outputVideoStream;
 }
 
 AVStream* FFmpegVideoTranscodePipeline::outputStream() const
