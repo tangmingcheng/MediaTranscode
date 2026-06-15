@@ -6,6 +6,8 @@
 #include "internal/FFmpegUtils.h"
 #include "internal/FFmpegVideoTranscodePipeline.h"
 
+#include "spdlog/spdlog.h"
+
 #include <algorithm>
 #include <chrono>
 #include <memory>
@@ -309,28 +311,33 @@ namespace {
         outputFmtCtx.reset(rawOutputFmtCtx);
 
         TranscodeConfig effectiveVideoConfig = m_config;
-        if (effectiveVideoConfig.hardware.requireZeroCopy) {
-            const AVCodec* decoder = avcodec_find_decoder(inputVideoStream->codecpar->codec_id);
-            const ffmpeg::HardwarePipelinePlan plan = ffmpeg::FFmpegPipelinePlanner::planHardwarePipeline(
-                effectiveVideoConfig,
-                decoder
-            );
+        const AVCodec* decoder = avcodec_find_decoder(inputVideoStream->codecpar->codec_id);
+        const ffmpeg::HardwarePipelinePlan plan = ffmpeg::FFmpegPipelinePlanner::planHardwarePipeline(
+            effectiveVideoConfig,
+            decoder
+        );
 
-            if (!plan.valid || !plan.zeroCopy) {
+        if (plan.valid && plan.zeroCopy) {
+            effectiveVideoConfig.hardware.videoFramePipeline = VideoFramePipeline::Hardware;
+            effectiveVideoConfig.hardware.deviceType = plan.backend.deviceType;
+            effectiveVideoConfig.hardware.allowSoftwareFallback = false;
+            spdlog::info("[PLAN] execution mode: zero-copy hardware pipeline");
+        }
+        else {
+            if (!effectiveVideoConfig.hardware.allowZeroCopyFallback) {
                 fail(plan.diagnostic.empty()
-                    ? std::string("zero-copy pipeline planning failed")
+                    ? std::string("zero-copy pipeline planning failed and fallback is disabled")
                     : plan.diagnostic);
                 return;
             }
 
-            effectiveVideoConfig.hardware.videoFramePipeline = VideoFramePipeline::Hardware;
-            effectiveVideoConfig.hardware.deviceType = plan.backend.deviceType;
-            effectiveVideoConfig.hardware.allowSoftwareFallback = false;
-        }
-        else {
             effectiveVideoConfig.hardware.videoFramePipeline = VideoFramePipeline::Cpu;
             effectiveVideoConfig.hardware.deviceType = HardwareDeviceType::Auto;
             effectiveVideoConfig.hardware.allowSoftwareFallback = true;
+            spdlog::warn(
+                "[PLAN] execution mode: CPU frame pipeline fallback after zero-copy planning failed: {}",
+                plan.diagnostic
+            );
         }
 
         {
