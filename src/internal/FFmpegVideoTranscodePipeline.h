@@ -7,6 +7,7 @@
 #include "internal/FFmpegHardwareEncoderSelector.h"
 #include "internal/FFmpegHardwareFrames.h"
 #include "internal/FFmpegHardwareVideoFilterGraph.h"
+#include "internal/FFmpegPipelinePlanner.h"
 #include "internal/FFmpegVideoFilterGraph.h"
 #include "internal/FFmpegVideoPipeline.h"
 
@@ -31,6 +32,7 @@ public:
 
     struct Config {
         const TranscodeConfig* transcodeConfig = nullptr;
+        const HardwarePipelinePlan* hardwarePlan = nullptr;
         AVStream* inputVideoStream = nullptr;
         AVFormatContext* outputFmtCtx = nullptr;
         TimelineNormalizer* timeline = nullptr;
@@ -111,6 +113,8 @@ private:
     AVCodecContext* m_decoderCtx = nullptr;
     AVCodecContext* m_encoderCtx = nullptr;
 
+    HardwarePipelinePlan m_hardwarePlan;
+    bool m_hasHardwarePlan = false;
     HardwareDeviceContext m_hardwareDeviceContext;
     HardwareFramesContext m_hardwareFramesContext;
     HardwareBackendProfile m_hardwareBackend;
