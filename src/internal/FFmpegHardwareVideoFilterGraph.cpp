@@ -1,5 +1,6 @@
 #include "internal/FFmpegHardwareVideoFilterGraph.h"
 
+#include "internal/FFmpegHardwareBackend.h"
 #include "internal/FFmpegUtils.h"
 
 #include <cstdio>
@@ -97,16 +98,7 @@ namespace {
 
     const char* HardwareVideoFilterGraphBuilder::scaleFilterName(HardwareDeviceType deviceType)
     {
-        switch (deviceType) {
-        case HardwareDeviceType::CUDA:
-            return "scale_cuda";
-        case HardwareDeviceType::QSV:
-            return "scale_qsv";
-        case HardwareDeviceType::VAAPI:
-            return "scale_vaapi";
-        default:
-            return nullptr;
-        }
+        return HardwareBackendRegistry::scaleFilterName(deviceType);
     }
 
     const char* HardwareVideoFilterGraphBuilder::softwarePixelFormatName(AVPixelFormat format)
