@@ -19,6 +19,16 @@ namespace {
         return name && *name ? name : "none";
     }
 
+    std::string avHardwareDeviceName(AVHWDeviceType type)
+    {
+        const char* name = av_hwdevice_get_type_name(type);
+        if (name && *name) {
+            return name;
+        }
+
+        return "none";
+    }
+
     std::string pixelFormatName(AVPixelFormat format)
     {
         const char* name = av_get_pix_fmt_name(format);
@@ -63,7 +73,7 @@ namespace {
         spdlog::info(
             "[PLAN]   decoder: hw_pix_fmt={}, av_device_type={}",
             pixelFormatName(attempt.decoderConfig.hardwarePixelFormat),
-            attempt.decoderConfig.avDeviceType
+            avHardwareDeviceName(attempt.decoderConfig.avDeviceType)
         );
 
         for (const HardwareEncoderCandidate& candidate : attempt.encoderSelection.candidates) {
