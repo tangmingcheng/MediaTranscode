@@ -4,6 +4,7 @@
 
 #include "spdlog/spdlog.h"
 
+#include <optional>
 #include <sstream>
 
 extern "C" {
@@ -151,6 +152,7 @@ namespace {
         }
 
         const std::vector<HardwareDeviceType> priority = backendPriority(HardwareDeviceType::Auto);
+        std::optional<HardwarePipelinePlanAttempt> mixedGpuFallbackAttempt;
 
         for (HardwareDeviceType deviceType : priority) {
             HardwarePipelinePlanAttempt attempt;
@@ -190,6 +192,7 @@ namespace {
 
                 plan.valid = true;
                 plan.zeroCopy = true;
+                plan.executionMode = VideoExecutionMode::ZeroCopy;
                 plan.backend = attempt.backend;
                 plan.decoderConfig = attempt.decoderConfig;
                 plan.encoderSelection = attempt.encoderSelection;
@@ -204,12 +207,46 @@ namespace {
                 ? "no zero-copy encoder supports backend hardware frames"
                 : attempt.encoderSelection.diagnostic;
 
+            if (plan.allowFallback && !mixedGpuFallbackAttempt.has_value()) {
+                HardwareEncoderSelection mixedSelection = HardwareEncoderSelector::select(
+                    config.videoCodec,
+                    attempt.backend,
+                    false
+                );
+
+                if (mixedSelection.encoder && mixedSelection.hardwareEncoder) {
+                    HardwarePipelinePlanAttempt mixedAttempt = attempt;
+                    mixedAttempt.encoderSelection = std::move(mixedSelection);
+                    mixedAttempt.encoderAccepted = true;
+                    mixedAttempt.reason = "mixed GPU fallback accepted: hardware decode + software filter + hardware encode";
+                    mixedGpuFallbackAttempt = std::move(mixedAttempt);
+                }
+            }
+
             plan.attempts.emplace_back(attempt);
             logAttempt(plan.attempts.back());
         }
 
+        if (plan.allowFallback && mixedGpuFallbackAttempt.has_value()) {
+            const HardwarePipelinePlanAttempt& selected = *mixedGpuFallbackAttempt;
+            plan.valid = true;
+            plan.zeroCopy = false;
+            plan.executionMode = VideoExecutionMode::MixedGpu;
+            plan.backend = selected.backend;
+            plan.decoderConfig = selected.decoderConfig;
+            plan.encoderSelection = selected.encoderSelection;
+
+            plan.diagnostic = "selected mixed GPU fallback backend=" + hardwareDeviceName(plan.backend.deviceType) +
+                ", decoder_hw_pix_fmt=" + pixelFormatName(plan.decoderConfig.hardwarePixelFormat) +
+                ", encoder=" + plan.encoderSelection.encoderName +
+                ", encoder_input_pix_fmt=" + pixelFormatName(plan.encoderSelection.pixelFormat);
+            spdlog::warn("[PLAN] zero-copy unavailable; selected: {}", plan.diagnostic);
+            return plan;
+        }
+
         plan.valid = false;
         plan.zeroCopy = false;
+        plan.executionMode = VideoExecutionMode::Cpu;
 
         std::ostringstream oss;
         oss << "zero-copy hardware pipeline unavailable for codec="
@@ -227,7 +264,7 @@ namespace {
 
         plan.diagnostic = oss.str();
         if (plan.allowFallback) {
-            spdlog::warn("[PLAN] failed but fallback is allowed: {}", plan.diagnostic);
+            spdlog::warn("[PLAN] failed but CPU fallback is allowed: {}", plan.diagnostic);
         }
         else {
             spdlog::error("[PLAN] failed and fallback is disabled: {}", plan.diagnostic);
