@@ -317,9 +317,13 @@ namespace {
         );
 
         const ffmpeg::HardwarePipelinePlan* executionPlan = nullptr;
-        if (plan.valid && plan.zeroCopy) {
+        if (plan.valid && plan.executionMode == ffmpeg::VideoExecutionMode::ZeroCopy) {
             executionPlan = &plan;
             spdlog::info("[PLAN] execution mode: zero-copy hardware pipeline");
+        }
+        else if (plan.valid && plan.executionMode == ffmpeg::VideoExecutionMode::MixedGpu) {
+            executionPlan = &plan;
+            spdlog::warn("[PLAN] execution mode: mixed GPU fallback pipeline: {}", plan.diagnostic);
         }
         else {
             if (!m_config.hardware.allowZeroCopyFallback) {
@@ -330,7 +334,7 @@ namespace {
             }
 
             spdlog::warn(
-                "[PLAN] execution mode: CPU frame pipeline fallback after zero-copy planning failed: {}",
+                "[PLAN] execution mode: CPU frame pipeline fallback after GPU planning failed: {}",
                 plan.diagnostic
             );
         }
