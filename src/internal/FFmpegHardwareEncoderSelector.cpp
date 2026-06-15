@@ -22,9 +22,11 @@ namespace {
         case HardwareDeviceType::D3D11VA:
             switch (codec) {
             case VideoCodec::H264:
-                return { "h264_mf", nullptr, nullptr, nullptr, nullptr };
+                return { "h264_nvenc", "h264_amf", "h264_mf", nullptr, nullptr };
             case VideoCodec::H265:
-                return { "hevc_mf", nullptr, nullptr, nullptr, nullptr };
+                return { "hevc_nvenc", "hevc_amf", "hevc_mf", nullptr, nullptr };
+            case VideoCodec::AV1:
+                return { "av1_nvenc", "av1_amf", "av1_mf", nullptr, nullptr };
             default:
                 return { nullptr, nullptr, nullptr, nullptr, nullptr };
             }
@@ -182,17 +184,21 @@ namespace {
         return preferred.empty() ? AV_PIX_FMT_NONE : preferred.front();
     }
 
-    bool isD3D11MediaFoundationEncoder(const char* encoderName,
-                                       const HardwareBackendProfile& backend)
+    HardwareEncoderSelection makeSelection(const AVCodec* encoder,
+                                           const char* encoderName,
+                                           const HardwareBackendProfile& backend,
+                                           bool zeroCopy)
     {
-        if (!encoderName ||
-            backend.deviceType != HardwareDeviceType::D3D11VA ||
-            backend.hardwarePixelFormat != AV_PIX_FMT_D3D11) {
-            return false;
-        }
-
-        const std::string name = encoderName;
-        return name == "h264_mf" || name == "hevc_mf" || name == "av1_mf";
+        HardwareEncoderSelection selection;
+        selection.backend = backend;
+        selection.encoder = encoder;
+        selection.encoderName = encoderName ? encoderName : "";
+        selection.hardwareEncoder = isHardwareEncoderName(encoderName);
+        selection.zeroCopy = zeroCopy;
+        selection.pixelFormat = zeroCopy
+            ? backend.hardwarePixelFormat
+            : HardwareEncoderSelector::chooseFallbackSoftwarePixelFormat(encoder, backend.deviceType);
+        return selection;
     }
 
 } // namespace
@@ -201,36 +207,42 @@ namespace {
                                                              const HardwareBackendProfile& backend,
                                                              bool preferZeroCopy)
     {
+        const EncoderNameList names = encoderCandidates(codec, backend.deviceType);
+
+        const AVCodec* firstAvailable = nullptr;
+        const char* firstAvailableName = nullptr;
+
+        for (const char* encoderName : names) {
+            if (!encoderName) {
+                continue;
+            }
+
+            const AVCodec* encoder = avcodec_find_encoder_by_name(encoderName);
+            if (!encoder) {
+                continue;
+            }
+
+            if (!firstAvailable) {
+                firstAvailable = encoder;
+                firstAvailableName = encoderName;
+            }
+
+            const bool canUseBackendHardwareFrames =
+                backend.supportsZeroCopyFilter &&
+                backend.hardwarePixelFormat != AV_PIX_FMT_NONE &&
+                encoderSupportsPixelFormat(encoder, backend.hardwarePixelFormat);
+
+            if (preferZeroCopy && canUseBackendHardwareFrames) {
+                return makeSelection(encoder, encoderName, backend, true);
+            }
+        }
+
+        if (firstAvailable) {
+            return makeSelection(firstAvailable, firstAvailableName, backend, false);
+        }
+
         HardwareEncoderSelection selection;
         selection.backend = backend;
-
-        const char* encoderName = firstAvailableEncoder(codec, backend.deviceType);
-        if (!encoderName) {
-            return selection;
-        }
-
-        const AVCodec* encoder = avcodec_find_encoder_by_name(encoderName);
-        if (!encoder) {
-            return selection;
-        }
-
-        const bool acceptsBackendHardwareFrames =
-            encoderSupportsPixelFormat(encoder, backend.hardwarePixelFormat) ||
-            isD3D11MediaFoundationEncoder(encoderName, backend);
-
-        const bool canZeroCopy = preferZeroCopy &&
-            backend.supportsZeroCopyFilter &&
-            backend.hardwarePixelFormat != AV_PIX_FMT_NONE &&
-            acceptsBackendHardwareFrames;
-
-        selection.encoder = encoder;
-        selection.encoderName = encoderName;
-        selection.hardwareEncoder = isHardwareEncoderName(encoderName);
-        selection.zeroCopy = canZeroCopy;
-        selection.pixelFormat = canZeroCopy
-            ? backend.hardwarePixelFormat
-            : chooseFallbackSoftwarePixelFormat(encoder, backend.deviceType);
-
         return selection;
     }
 
