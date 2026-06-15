@@ -2,6 +2,7 @@
 
 #include "media_transcode/MediaTranscodeTypes.h"
 #include "internal/FFmpegHardwareContext.h"
+#include "internal/FFmpegHardwareDecoder.h"
 #include "internal/FFmpegHardwareFrames.h"
 #include "internal/FFmpegVideoFilterGraph.h"
 #include "internal/FFmpegVideoPipeline.h"
@@ -13,6 +14,7 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libavutil/pixfmt.h>
 #include <libavutil/rational.h>
 }
 
@@ -60,6 +62,7 @@ public:
 
 private:
     bool openDecoder(std::string* error);
+    bool initializeHardwareDeviceForDecoder(const AVCodec* decoder, std::string* error);
     bool openEncoderAndCreateOutputStream(std::string* error);
     bool initializeHardwareDeviceForEncoder(const AVCodec* encoder, std::string* error);
     bool initializeFilterGraph(std::string* error);
@@ -70,6 +73,9 @@ private:
                       const PacketWrittenCallback& onPacketWritten);
     bool processDecodedFrame(std::string* error,
                              const PacketWrittenCallback& onPacketWritten);
+    bool transferHardwareFrameToSoftware(AVFrame* hardwareFrame,
+                                         AVFrame* softwareFrame,
+                                         std::string* error) const;
     bool drainFilterGraph(std::string* error,
                           const PacketWrittenCallback& onPacketWritten);
     bool writeEncodedPackets(AVFrame* frame,
@@ -77,6 +83,9 @@ private:
                              const PacketWrittenCallback& onPacketWritten);
 
     int64_t decodedFrameTimestamp() const;
+
+    static AVPixelFormat selectDecoderPixelFormat(AVCodecContext* ctx,
+                                                   const AVPixelFormat* formats);
 
 private:
     TranscodeConfig m_config;
@@ -91,13 +100,17 @@ private:
 
     HardwareDeviceContext m_hardwareDeviceContext;
     HardwareFramesContext m_hardwareFramesContext;
+    HardwareDecoderSupport::Config m_hardwareDecoderConfig;
+    bool m_hardwareDeviceAttachedToDecoder = false;
     bool m_hardwareDeviceAttachedToEncoder = false;
+    bool m_decoderUsesHardwareFrames = false;
 
     VideoFilterGraph m_filterGraph;
     FFmpegVideoPipeline m_packetWriter;
 
     AVFrame* m_decodedFrame = nullptr;
     AVFrame* m_filteredFrame = nullptr;
+    AVFrame* m_softwareTransferFrame = nullptr;
 
     int64_t m_lastSubmittedPts = AV_NOPTS_VALUE;
     int64_t m_packetCount = 0;
