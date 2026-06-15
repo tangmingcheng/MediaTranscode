@@ -38,6 +38,9 @@ namespace media::ffmpeg {
         static HardwareEncoderSelection selectZeroCopyEncoder(VideoCodec codec,
                                                               const HardwareBackendProfile& backend);
 
+        static HardwareEncoderSelection selectMixedGpuEncoder(VideoCodec codec,
+                                                              const HardwareBackendProfile& backend);
+
         static HardwareEncoderSelection select(VideoCodec codec,
                                                const HardwareBackendProfile& backend,
                                                bool preferZeroCopy);
