@@ -25,7 +25,6 @@ extern "C" {
 #include <libavutil/pixdesc.h>
 #include <libavutil/rational.h>
 #include <libavutil/samplefmt.h>
-#include <libavutil/version.h>
 }
 
 namespace {
@@ -49,7 +48,7 @@ namespace {
     {
         std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
             return static_cast<char>(std::tolower(ch));
-            });
+        });
 
         return value;
     }
@@ -135,89 +134,6 @@ namespace {
         throw std::runtime_error("unsupported audio codec: " + value);
     }
 
-    bool isAudioCodecValue(const std::string& value)
-    {
-        const std::string normalized = toLower(value);
-        return normalized == "aac" ||
-            normalized == "opus" ||
-            normalized == "libopus" ||
-            normalized == "mp3" ||
-            normalized == "libmp3lame";
-    }
-
-    media::AudioMode parseAudioMode(const std::string& value)
-    {
-        const std::string normalized = toLower(value);
-
-        if (normalized == "none" || normalized == "disable" || normalized == "disabled" || normalized == "no") {
-            return media::AudioMode::None;
-        }
-
-        if (normalized == "copy" || normalized == "copy_selected") {
-            return media::AudioMode::CopySelected;
-        }
-
-        if (normalized == "encode" || normalized == "encode_selected" || isAudioCodecValue(normalized)) {
-            return media::AudioMode::EncodeSelected;
-        }
-
-        throw std::runtime_error("unsupported audio mode: " + value);
-    }
-
-    media::VideoFramePipeline parseVideoFramePipeline(const std::string& value)
-    {
-        const std::string normalized = toLower(value);
-
-        if (normalized == "cpu" || normalized == "software" || normalized == "sw") {
-            return media::VideoFramePipeline::Cpu;
-        }
-
-        if (normalized == "hardware" || normalized == "hw" || normalized == "gpu") {
-            return media::VideoFramePipeline::Hardware;
-        }
-
-        throw std::runtime_error("unsupported hw pipeline: " + value);
-    }
-
-    media::HardwareDeviceType parseHardwareDeviceType(const std::string& value)
-    {
-        const std::string normalized = toLower(value);
-
-        if (normalized == "none" || normalized == "off" || normalized == "disable" || normalized == "disabled") {
-            return media::HardwareDeviceType::None;
-        }
-
-        if (normalized == "auto") {
-            return media::HardwareDeviceType::Auto;
-        }
-
-        if (normalized == "d3d11" || normalized == "d3d11va") {
-            return media::HardwareDeviceType::D3D11VA;
-        }
-
-        if (normalized == "cuda" || normalized == "nvdec" || normalized == "nvidia") {
-            return media::HardwareDeviceType::CUDA;
-        }
-
-        if (normalized == "qsv" || normalized == "intel") {
-            return media::HardwareDeviceType::QSV;
-        }
-
-        if (normalized == "vaapi") {
-            return media::HardwareDeviceType::VAAPI;
-        }
-
-        if (normalized == "drm" || normalized == "drm_prime" || normalized == "drm-prime" || normalized == "rkmpp" || normalized == "rk3588") {
-            return media::HardwareDeviceType::DRM;
-        }
-
-        if (normalized == "videotoolbox" || normalized == "vt") {
-            return media::HardwareDeviceType::VideoToolbox;
-        }
-
-        throw std::runtime_error("unsupported hw device: " + value);
-    }
-
     std::string videoCodecToString(media::VideoCodec codec)
     {
         switch (codec) {
@@ -264,40 +180,6 @@ namespace {
             return "encode";
         default:
             return "unknown";
-        }
-    }
-
-    std::string videoFramePipelineToString(media::VideoFramePipeline pipeline)
-    {
-        switch (pipeline) {
-        case media::VideoFramePipeline::Hardware:
-            return "hardware";
-        case media::VideoFramePipeline::Cpu:
-        default:
-            return "cpu";
-        }
-    }
-
-    std::string hardwareDeviceToString(media::HardwareDeviceType deviceType)
-    {
-        switch (deviceType) {
-        case media::HardwareDeviceType::Auto:
-            return "auto";
-        case media::HardwareDeviceType::D3D11VA:
-            return "d3d11va";
-        case media::HardwareDeviceType::CUDA:
-            return "cuda";
-        case media::HardwareDeviceType::QSV:
-            return "qsv";
-        case media::HardwareDeviceType::VAAPI:
-            return "vaapi";
-        case media::HardwareDeviceType::DRM:
-            return "drm";
-        case media::HardwareDeviceType::VideoToolbox:
-            return "videotoolbox";
-        case media::HardwareDeviceType::None:
-        default:
-            return "none";
         }
     }
 
@@ -374,30 +256,25 @@ namespace {
         std::cout
             << "Usage:\n"
             << "  " << executable << " [options]\n\n"
-            << "Options:\n"
+            << "Required options:\n"
             << "  -i, --input <path/url>          Input media path or URL\n"
-            << "  -o, --output <path/url>         Output media path or URL\n"
+            << "  -o, --output <path/url>         Output media path or URL\n\n"
+            << "Video output options:\n"
             << "      --width <value>             Output width, 0 means input width\n"
             << "      --height <value>            Output height, 0 means input height\n"
             << "      --size <WxH>                Output size, for example 1280x720\n"
             << "      --fps <value>               Output fps, 0 means preserve input timeline\n"
-            << "      --video-codec <value>       copy | h264 | h265 | mpeg4 | vp8 | vp9 | av1\n"
+            << "      --video-codec <value>       h264 | h265 | mpeg4 | vp8 | vp9 | av1\n"
             << "      --video-bitrate <kbps>      Video bitrate in kbps\n"
-            << "      --audio-mode <value>        none | copy | encode\n"
-            << "      --audio-codec <value>       aac | opus | mp3, only used when audio-mode is encode\n"
+            << "      --zero-copy                 Require hardware decode/filter/encode zero-copy path\n\n"
+            << "Audio output options:\n"
+            << "      --audio-codec <value>       aac | opus | mp3\n"
             << "      --audio-bitrate <kbps>      Audio bitrate in kbps\n"
-            << "      --no-audio                  Same as --audio-mode none\n"
-            << "      --hw-pipeline <value>       cpu | hardware\n"
-            << "      --hw-device <value>         none | auto | d3d11va | cuda | qsv | vaapi | drm | videotoolbox\n"
-            << "      --no-hw-fallback            Fail if hardware path is unavailable\n"
-            << "      --allow-hw-fallback         Allow fallback to CPU path when hardware path is unavailable\n"
+            << "      --no-audio                  Disable audio output\n"
             << "  -h, --help                      Show this help\n\n"
             << "Examples:\n"
-            << "  " << executable << " -i input.mp4 -o output.mp4 --video-codec h264 --size 1280x720 --fps 25 --video-bitrate 3000 --audio-mode encode --audio-codec aac --audio-bitrate 128\n"
-            << "  " << executable << " -i input.mp4 -o output_d3d11.mp4 --video-codec h264 --size 1280x720 --hw-pipeline hardware --hw-device d3d11va --no-hw-fallback\n"
-            << "  " << executable << " -i input.mp4 -o output.mkv --video-codec h265 --audio-mode encode --audio-codec opus\n"
-            << "  " << executable << " -i input.mp4 -o output.webm --video-codec vp9 --audio-mode encode --audio-codec opus\n"
-            << "  " << executable << " input.mp4 output.mp4\n";
+            << "  " << executable << " -i input.mp4 -o output.mp4 --video-codec h264 --size 1280x720 --fps 25 --video-bitrate 3000 --audio-codec aac --audio-bitrate 128\n"
+            << "  " << executable << " -i input.mp4 -o output_zc.mp4 --video-codec h264 --size 1280x720 --fps 25 --video-bitrate 3000 --zero-copy\n";
     }
 
     CliOptions parseOptions(int argc, char* argv[])
@@ -414,6 +291,7 @@ namespace {
         options.config.audioCodec = media::AudioCodec::AAC;
         options.config.audioBitrateKbps = 128;
         options.config.videoBitrateKbps = 3000;
+        options.config.hardware.requireZeroCopy = false;
 
         int positionalIndex = 0;
 
@@ -426,7 +304,7 @@ namespace {
                 }
 
                 return argv[++i];
-                };
+            };
 
             if (arg == "-h" || arg == "--help") {
                 options.showHelp = true;
@@ -464,13 +342,6 @@ namespace {
             else if (arg == "--video-bitrate") {
                 options.config.videoBitrateKbps = parsePositiveInt(requireValue(arg), arg);
             }
-            else if (arg == "--audio-mode") {
-                const std::string value = requireValue(arg);
-                options.config.audioMode = parseAudioMode(value);
-                if (isAudioCodecValue(value)) {
-                    options.config.audioCodec = parseAudioCodec(value);
-                }
-            }
             else if (arg == "--audio-codec") {
                 options.config.audioCodec = parseAudioCodec(requireValue(arg));
                 if (options.config.audioMode == media::AudioMode::None) {
@@ -483,17 +354,8 @@ namespace {
             else if (arg == "--no-audio") {
                 options.config.audioMode = media::AudioMode::None;
             }
-            else if (arg == "--hw-pipeline") {
-                options.config.hardware.videoFramePipeline = parseVideoFramePipeline(requireValue(arg));
-            }
-            else if (arg == "--hw-device") {
-                options.config.hardware.deviceType = parseHardwareDeviceType(requireValue(arg));
-            }
-            else if (arg == "--no-hw-fallback") {
-                options.config.hardware.allowSoftwareFallback = false;
-            }
-            else if (arg == "--allow-hw-fallback") {
-                options.config.hardware.allowSoftwareFallback = true;
+            else if (arg == "--zero-copy") {
+                options.config.hardware.requireZeroCopy = true;
             }
             else if (!arg.empty() && arg[0] == '-') {
                 throw std::runtime_error("unknown option: " + arg);
@@ -511,10 +373,6 @@ namespace {
 
                 ++positionalIndex;
             }
-        }
-
-        if (options.config.hardware.deviceType == media::HardwareDeviceType::None) {
-            options.config.hardware.videoFramePipeline = media::VideoFramePipeline::Cpu;
         }
 
         return options;
@@ -603,17 +461,6 @@ namespace {
                     formatDuration(streamDurationUs)
                 );
             }
-            else {
-                spdlog::info(
-                    "stream #{}: type={}, codec={}, time_base={}, bitrate={}, duration={}",
-                    i,
-                    mediaType ? mediaType : "unknown",
-                    codecName(codecParameters->codec_id),
-                    formatRational(stream->time_base),
-                    formatBitrate(codecParameters->bit_rate),
-                    formatDuration(streamDurationUs)
-                );
-            }
         }
 
         avformat_close_input(&formatContext);
@@ -632,12 +479,7 @@ namespace {
         spdlog::info("audioMode={}", audioModeToString(config.audioMode));
         spdlog::info("audioCodec={}", audioCodecToString(config.audioCodec));
         spdlog::info("audioBitrate={} kbps", config.audioBitrateKbps);
-        spdlog::info(
-            "hardwarePipeline={}, hardwareDevice={}, allowHardwareFallback={}",
-            videoFramePipelineToString(config.hardware.videoFramePipeline),
-            hardwareDeviceToString(config.hardware.deviceType),
-            config.hardware.allowSoftwareFallback
-        );
+        spdlog::info("zeroCopyRequired={}", config.hardware.requireZeroCopy);
     }
 
     void initLogger()
@@ -714,7 +556,7 @@ int main(int argc, char* argv[])
             info.speed,
             info.raw
         );
-        });
+    });
 
     if (!transcoder.initialize(options.config)) {
         spdlog::error("Transcoder initialize failed: {}", transcoder.lastError());
