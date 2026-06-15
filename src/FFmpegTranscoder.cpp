@@ -1,6 +1,7 @@
 #include "media_transcode/FFmpegTranscoder.h"
 
 #include "internal/FFmpegAudioPipeline.h"
+#include "internal/FFmpegPipelinePlanner.h"
 #include "internal/FFmpegTimelineNormalizer.h"
 #include "internal/FFmpegUtils.h"
 #include "internal/FFmpegVideoTranscodePipeline.h"
@@ -307,9 +308,34 @@ namespace {
         }
         outputFmtCtx.reset(rawOutputFmtCtx);
 
+        TranscodeConfig effectiveVideoConfig = m_config;
+        if (effectiveVideoConfig.hardware.requireZeroCopy) {
+            const AVCodec* decoder = avcodec_find_decoder(inputVideoStream->codecpar->codec_id);
+            const ffmpeg::HardwarePipelinePlan plan = ffmpeg::FFmpegPipelinePlanner::planHardwarePipeline(
+                effectiveVideoConfig,
+                decoder
+            );
+
+            if (!plan.valid || !plan.zeroCopy) {
+                fail(plan.diagnostic.empty()
+                    ? std::string("zero-copy pipeline planning failed")
+                    : plan.diagnostic);
+                return;
+            }
+
+            effectiveVideoConfig.hardware.videoFramePipeline = VideoFramePipeline::Hardware;
+            effectiveVideoConfig.hardware.deviceType = plan.backend.deviceType;
+            effectiveVideoConfig.hardware.allowSoftwareFallback = false;
+        }
+        else {
+            effectiveVideoConfig.hardware.videoFramePipeline = VideoFramePipeline::Cpu;
+            effectiveVideoConfig.hardware.deviceType = HardwareDeviceType::Auto;
+            effectiveVideoConfig.hardware.allowSoftwareFallback = true;
+        }
+
         {
             ffmpeg::FFmpegVideoTranscodePipeline::Config videoConfig;
-            videoConfig.transcodeConfig = &m_config;
+            videoConfig.transcodeConfig = &effectiveVideoConfig;
             videoConfig.inputVideoStream = inputVideoStream;
             videoConfig.outputFmtCtx = outputFmtCtx.get();
             videoConfig.timeline = &timeline;
