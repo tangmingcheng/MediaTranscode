@@ -155,8 +155,6 @@ namespace {
 
         static const char* const h265Encoders[] = {
             "libx265",
-            // hevc_mf may open successfully but often cannot provide HEVC codec private data
-            // before avformat_write_header() in this generic software-frame pipeline.
             "hevc_nvenc",
             "hevc_qsv",
             "hevc_amf",
@@ -573,6 +571,10 @@ namespace {
         else if (encoderName == "libaom-av1") {
             av_opt_set(encoderCtx->priv_data, "cpu-used", "6", 0);
             av_opt_set(encoderCtx->priv_data, "row-mt", "1", 0);
+        }
+        else if (encoderName == "h264_mf" || encoderName == "hevc_mf" || encoderName == "av1_mf") {
+            av_opt_set(encoderCtx->priv_data, "hw_encoding", "1", 0);
+            av_opt_set(encoderCtx->priv_data, "rate_control", "cbr", 0);
         }
     }
 
