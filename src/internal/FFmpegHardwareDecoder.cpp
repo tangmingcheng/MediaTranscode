@@ -2,6 +2,8 @@
 
 #include "internal/FFmpegHardwareContext.h"
 
+#include <array>
+
 namespace media::ffmpeg {
 namespace {
 
@@ -15,13 +17,15 @@ namespace {
         return candidate == HardwareDeviceContext::toAVDeviceType(requestedDeviceType);
     }
 
-} // namespace
-
-    HardwareDecoderSupport::Config HardwareDecoderSupport::findConfig(
-        const AVCodec* decoder,
-        HardwareDeviceType requestedDeviceType)
+    HardwareDeviceType mapDeviceType(AVHWDeviceType candidate)
     {
-        Config result;
+        return HardwareDeviceContext::fromAVDeviceType(candidate);
+    }
+
+    HardwareDecoderSupport::Config findConfigByDeviceType(const AVCodec* decoder,
+                                                          HardwareDeviceType requestedDeviceType)
+    {
+        HardwareDecoderSupport::Config result;
 
         if (!decoder || requestedDeviceType == HardwareDeviceType::None) {
             return result;
@@ -41,8 +45,7 @@ namespace {
                 continue;
             }
 
-            const HardwareDeviceType mappedDeviceType =
-                HardwareDeviceContext::fromAVDeviceType(config->device_type);
+            const HardwareDeviceType mappedDeviceType = mapDeviceType(config->device_type);
             if (mappedDeviceType == HardwareDeviceType::None) {
                 continue;
             }
@@ -55,6 +58,63 @@ namespace {
         }
 
         return result;
+    }
+
+    const std::array<HardwareDeviceType, 6>& autoDevicePriority()
+    {
+#if defined(_WIN32)
+        static const std::array<HardwareDeviceType, 6> kPriority = {
+            HardwareDeviceType::CUDA,
+            HardwareDeviceType::D3D11VA,
+            HardwareDeviceType::QSV,
+            HardwareDeviceType::VAAPI,
+            HardwareDeviceType::DRM,
+            HardwareDeviceType::VideoToolbox
+        };
+#elif defined(__APPLE__)
+        static const std::array<HardwareDeviceType, 6> kPriority = {
+            HardwareDeviceType::VideoToolbox,
+            HardwareDeviceType::CUDA,
+            HardwareDeviceType::VAAPI,
+            HardwareDeviceType::QSV,
+            HardwareDeviceType::DRM,
+            HardwareDeviceType::D3D11VA
+        };
+#else
+        static const std::array<HardwareDeviceType, 6> kPriority = {
+            HardwareDeviceType::CUDA,
+            HardwareDeviceType::VAAPI,
+            HardwareDeviceType::QSV,
+            HardwareDeviceType::DRM,
+            HardwareDeviceType::D3D11VA,
+            HardwareDeviceType::VideoToolbox
+        };
+#endif
+        return kPriority;
+    }
+
+} // namespace
+
+    HardwareDecoderSupport::Config HardwareDecoderSupport::findConfig(
+        const AVCodec* decoder,
+        HardwareDeviceType requestedDeviceType)
+    {
+        if (requestedDeviceType != HardwareDeviceType::Auto) {
+            return findConfigByDeviceType(decoder, requestedDeviceType);
+        }
+
+        for (HardwareDeviceType candidateDeviceType : autoDevicePriority()) {
+            HardwareDecoderSupport::Config config = findConfigByDeviceType(
+                decoder,
+                candidateDeviceType
+            );
+
+            if (config.valid) {
+                return config;
+            }
+        }
+
+        return HardwareDecoderSupport::Config{};
     }
 
     bool HardwareDecoderSupport::hasHardwareConfig(const AVCodec* decoder,
