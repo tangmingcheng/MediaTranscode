@@ -53,7 +53,7 @@ const char* pixelFormatName(AVPixelFormat format)
     return name ? name : "none";
 }
 
-std::atomic<int64_t> g_hardwareTransferLogCounter{ 0 };
+std::atomic_bool g_hardwareTransferLogged{ false };
 
 } // namespace
 
@@ -756,23 +756,10 @@ bool FFmpegVideoTranscodePipeline::transferHardwareFrameToSoftware(AVFrame* hard
         return false;
     }
 
-    const int64_t transferIndex = g_hardwareTransferLogCounter.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (transferIndex == 1) {
+    bool expected = false;
+    if (g_hardwareTransferLogged.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
         spdlog::warn(
-            "[ZC][CPU_TRANSFER] hardware-to-software transfer enabled: hw_fmt={}, sw_fmt={}; per-frame logs are debug-only",
-            pixelFormatName(static_cast<AVPixelFormat>(hardwareFrame->format)),
-            pixelFormatName(m_decoderCtx ? m_decoderCtx->sw_pix_fmt : AV_PIX_FMT_NONE)
-        );
-    }
-    else if (transferIndex % 100 == 0) {
-        spdlog::info(
-            "[ZC][CPU_TRANSFER] transferred {} hardware frames so far",
-            transferIndex
-        );
-    }
-    else {
-        spdlog::debug(
-            "[ZC][CPU_TRANSFER] av_hwframe_transfer_data called: hw_fmt={}, sw_fmt={}",
+            "[ZC][CPU_TRANSFER] hardware-to-software transfer enabled: hw_fmt={}, sw_fmt={}",
             pixelFormatName(static_cast<AVPixelFormat>(hardwareFrame->format)),
             pixelFormatName(m_decoderCtx ? m_decoderCtx->sw_pix_fmt : AV_PIX_FMT_NONE)
         );
