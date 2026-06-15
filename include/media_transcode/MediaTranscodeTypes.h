@@ -31,7 +31,7 @@ namespace media {
         MP3
     };
 
-    // 内部执行管线类型。应用层通常只设置 HardwarePipelineConfig::requireZeroCopy。
+    // 内部执行管线类型。应用层不直接选择，后端 planner 自动决定。
     enum class VideoFramePipeline {
         Cpu,
         Hardware
@@ -50,10 +50,10 @@ namespace media {
     };
 
     struct HardwarePipelineConfig {
-        // 使用方唯一需要表达的硬件意图：是否要求硬解码 + 硬件滤镜 + 硬件编码零拷贝闭环。
-        // true：后端 planner 必须找到严格零拷贝方案，否则初始化失败。
-        // false：使用普通 CPU frame 转码路径。
-        bool requireZeroCopy = false;
+        // 后端默认总是优先规划零拷贝路径。
+        // true：零拷贝不可用时允许退回普通 CPU frame 转码路径。
+        // false：零拷贝不可用则初始化失败，用于压测严格零拷贝能力。
+        bool allowZeroCopyFallback = true;
 
         // 以下字段仅作为 planner / pipeline 内部执行状态保留，不应暴露给 CLI 或业务层配置。
         VideoFramePipeline videoFramePipeline = VideoFramePipeline::Cpu;
