@@ -10,10 +10,27 @@ extern "C" {
 #include <libavfilter/buffersink.h>
 #include <libavfilter/buffersrc.h>
 #include <libavutil/avstring.h>
+#include <libavutil/mem.h>
 #include <libavutil/pixdesc.h>
 }
 
 namespace media::ffmpeg {
+namespace {
+
+    void freeBufferSrcParameters(AVBufferSrcParameters** params)
+    {
+        if (!params || !*params) {
+            return;
+        }
+
+        if ((*params)->hw_frames_ctx) {
+            av_buffer_unref(&(*params)->hw_frames_ctx);
+        }
+
+        av_freep(params);
+    }
+
+} // namespace
 
     std::string HardwareVideoFilterGraphBuilder::buildDescription(const Config& config,
                                                                   std::string* error)
@@ -245,7 +262,7 @@ namespace media::ffmpeg {
         srcParams->hw_frames_ctx = av_buffer_ref(config.inputHardwareFramesContext);
 
         if (!srcParams->hw_frames_ctx) {
-            av_buffersrc_parameters_free(&srcParams);
+            freeBufferSrcParameters(&srcParams);
             if (error) {
                 *error = "av_buffer_ref input hardware frames context failed";
             }
@@ -254,7 +271,7 @@ namespace media::ffmpeg {
         }
 
         ret = av_buffersrc_parameters_set(m_bufferSrcCtx, srcParams);
-        av_buffersrc_parameters_free(&srcParams);
+        freeBufferSrcParameters(&srcParams);
 
         if (ret < 0) {
             if (error) {
