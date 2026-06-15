@@ -51,6 +51,7 @@ namespace media::ffmpeg {
         AVBufferRef* raw() const;
 
         static AVHWDeviceType toAVDeviceType(HardwareDeviceType type);
+        static HardwareDeviceType fromAVDeviceType(AVHWDeviceType type);
         static const char* toAVDeviceName(HardwareDeviceType type);
         static HardwareDeviceType inferDeviceType(const AVCodec* decoder,
                                                   const AVCodec* encoder);
