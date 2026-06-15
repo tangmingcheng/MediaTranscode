@@ -4,6 +4,7 @@
 #include "media_transcode/MediaTranscodeTypes.h"
 
 #include <string>
+#include <vector>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -12,6 +13,15 @@ extern "C" {
 
 namespace media::ffmpeg {
 
+    struct HardwareEncoderCandidate {
+        std::string encoderName;
+        bool available = false;
+        bool hardwareEncoder = false;
+        bool supportsBackendHardwareFrames = false;
+        std::string pixelFormats;
+        std::string rejectionReason;
+    };
+
     struct HardwareEncoderSelection {
         const AVCodec* encoder = nullptr;
         std::string encoderName;
@@ -19,6 +29,8 @@ namespace media::ffmpeg {
         bool zeroCopy = false;
         bool hardwareEncoder = false;
         HardwareBackendProfile backend;
+        std::vector<HardwareEncoderCandidate> candidates;
+        std::string diagnostic;
     };
 
     class HardwareEncoderSelector {
