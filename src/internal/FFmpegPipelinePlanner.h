@@ -28,6 +28,7 @@ namespace media::ffmpeg {
         bool valid = false;
         bool zeroCopy = false;
         bool allowFallback = true;
+        VideoExecutionMode executionMode = VideoExecutionMode::Cpu;
         HardwareBackendProfile backend;
         HardwareDecoderSupport::Config decoderConfig;
         HardwareEncoderSelection encoderSelection;
