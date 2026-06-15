@@ -7,6 +7,7 @@ extern "C" {
 #include <libavfilter/avfilter.h>
 #include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
+#include <libavutil/pixfmt.h>
 #include <libavutil/rational.h>
 }
 
@@ -18,6 +19,7 @@ namespace media::ffmpeg {
             const AVCodecContext* decoderCtx = nullptr;
             const AVCodecContext* encoderCtx = nullptr;
             const AVStream* inputStream = nullptr;
+            AVPixelFormat inputPixelFormat = AV_PIX_FMT_NONE;
             int outputFps = 25;
             bool enableConstantFps = false;
         };
