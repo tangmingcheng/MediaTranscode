@@ -3,10 +3,12 @@
 #include "internal/FFmpegUtils.h"
 
 #include <array>
+#include <sstream>
 #include <vector>
 
 extern "C" {
 #include <libavcodec/version_major.h>
+#include <libavutil/pixdesc.h>
 }
 
 namespace media::ffmpeg {
@@ -152,6 +154,52 @@ namespace {
         return false;
     }
 
+    std::string pixelFormatName(AVPixelFormat format)
+    {
+        const char* name = av_get_pix_fmt_name(format);
+        return name ? name : "unknown";
+    }
+
+    std::string pixelFormatListText(const AVCodec* encoder)
+    {
+        if (!encoder) {
+            return "none";
+        }
+
+        std::ostringstream oss;
+        bool first = true;
+
+#if LIBAVCODEC_VERSION_MAJOR >= 61
+        int formatCount = 0;
+        const AVPixelFormat* formats = supportedPixelFormats(encoder, &formatCount);
+        if (!formats || formatCount <= 0) {
+            return "unknown";
+        }
+
+        for (int i = 0; i < formatCount; ++i) {
+            if (!first) {
+                oss << ",";
+            }
+            first = false;
+            oss << pixelFormatName(formats[i]);
+        }
+#else
+        if (!encoder->pix_fmts) {
+            return "unknown";
+        }
+
+        for (const AVPixelFormat* p = encoder->pix_fmts; *p != AV_PIX_FMT_NONE; ++p) {
+            if (!first) {
+                oss << ",";
+            }
+            first = false;
+            oss << pixelFormatName(*p);
+        }
+#endif
+
+        return oss.str();
+    }
+
     AVPixelFormat firstSupportedPreferredFormat(const AVCodec* encoder,
                                                 const std::vector<AVPixelFormat>& preferred)
     {
@@ -187,7 +235,9 @@ namespace {
     HardwareEncoderSelection makeSelection(const AVCodec* encoder,
                                            const char* encoderName,
                                            const HardwareBackendProfile& backend,
-                                           bool zeroCopy)
+                                           bool zeroCopy,
+                                           std::vector<HardwareEncoderCandidate> candidates,
+                                           std::string diagnostic)
     {
         HardwareEncoderSelection selection;
         selection.backend = backend;
@@ -198,6 +248,8 @@ namespace {
         selection.pixelFormat = zeroCopy
             ? backend.hardwarePixelFormat
             : HardwareEncoderSelector::chooseFallbackSoftwarePixelFormat(encoder, backend.deviceType);
+        selection.candidates = std::move(candidates);
+        selection.diagnostic = std::move(diagnostic);
         return selection;
     }
 
@@ -211,14 +263,24 @@ namespace {
 
         const AVCodec* firstAvailable = nullptr;
         const char* firstAvailableName = nullptr;
+        std::vector<HardwareEncoderCandidate> candidates;
 
         for (const char* encoderName : names) {
             if (!encoderName) {
                 continue;
             }
 
+            HardwareEncoderCandidate candidate;
+            candidate.encoderName = encoderName;
+
             const AVCodec* encoder = avcodec_find_encoder_by_name(encoderName);
             if (!encoder) {
+                candidate.available = false;
+                candidate.hardwareEncoder = isHardwareEncoderName(encoderName);
+                candidate.supportsBackendHardwareFrames = false;
+                candidate.pixelFormats = "none";
+                candidate.rejectionReason = "encoder is not available in current FFmpeg build";
+                candidates.emplace_back(std::move(candidate));
                 continue;
             }
 
@@ -232,17 +294,50 @@ namespace {
                 backend.hardwarePixelFormat != AV_PIX_FMT_NONE &&
                 encoderSupportsPixelFormat(encoder, backend.hardwarePixelFormat);
 
-            if (preferZeroCopy && canUseBackendHardwareFrames) {
-                return makeSelection(encoder, encoderName, backend, true);
+            candidate.available = true;
+            candidate.hardwareEncoder = isHardwareEncoderName(encoderName);
+            candidate.supportsBackendHardwareFrames = canUseBackendHardwareFrames;
+            candidate.pixelFormats = pixelFormatListText(encoder);
+
+            if (canUseBackendHardwareFrames) {
+                candidate.rejectionReason = "accepted: encoder supports backend hardware pixel format " +
+                    pixelFormatName(backend.hardwarePixelFormat);
+                candidates.emplace_back(std::move(candidate));
+                if (preferZeroCopy) {
+                    return makeSelection(
+                        encoder,
+                        encoderName,
+                        backend,
+                        true,
+                        std::move(candidates),
+                        "selected zero-copy encoder " + std::string(encoderName)
+                    );
+                }
+                continue;
             }
+
+            candidate.rejectionReason = "encoder does not support backend hardware pixel format " +
+                pixelFormatName(backend.hardwarePixelFormat);
+            candidates.emplace_back(std::move(candidate));
         }
 
         if (firstAvailable) {
-            return makeSelection(firstAvailable, firstAvailableName, backend, false);
+            return makeSelection(
+                firstAvailable,
+                firstAvailableName,
+                backend,
+                false,
+                std::move(candidates),
+                "no zero-copy encoder accepted backend hardware frames; selected first available fallback encoder " +
+                    std::string(firstAvailableName)
+            );
         }
 
         HardwareEncoderSelection selection;
         selection.backend = backend;
+        selection.candidates = std::move(candidates);
+        selection.diagnostic = "no encoder candidates are available for backend " +
+            std::string(backend.name ? backend.name : "unknown");
         return selection;
     }
 
