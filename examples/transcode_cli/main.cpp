@@ -266,7 +266,7 @@ namespace {
             << "      --fps <value>               Output fps, 0 means preserve input timeline\n"
             << "      --video-codec <value>       h264 | h265 | mpeg4 | vp8 | vp9 | av1\n"
             << "      --video-bitrate <kbps>      Video bitrate in kbps\n"
-            << "      --zero-copy                 Require hardware decode/filter/encode zero-copy path\n\n"
+            << "      --no-zero-copy-fallback     Fail if automatic zero-copy planning is unavailable\n\n"
             << "Audio output options:\n"
             << "      --audio-codec <value>       aac | opus | mp3\n"
             << "      --audio-bitrate <kbps>      Audio bitrate in kbps\n"
@@ -274,7 +274,7 @@ namespace {
             << "  -h, --help                      Show this help\n\n"
             << "Examples:\n"
             << "  " << executable << " -i input.mp4 -o output.mp4 --video-codec h264 --size 1280x720 --fps 25 --video-bitrate 3000 --audio-codec aac --audio-bitrate 128\n"
-            << "  " << executable << " -i input.mp4 -o output_zc.mp4 --video-codec h264 --size 1280x720 --fps 25 --video-bitrate 3000 --zero-copy\n";
+            << "  " << executable << " -i input.mp4 -o output_strict.mp4 --video-codec h264 --size 1280x720 --fps 25 --video-bitrate 3000 --no-zero-copy-fallback\n";
     }
 
     CliOptions parseOptions(int argc, char* argv[])
@@ -291,7 +291,7 @@ namespace {
         options.config.audioCodec = media::AudioCodec::AAC;
         options.config.audioBitrateKbps = 128;
         options.config.videoBitrateKbps = 3000;
-        options.config.hardware.requireZeroCopy = false;
+        options.config.hardware.allowZeroCopyFallback = true;
 
         int positionalIndex = 0;
 
@@ -354,8 +354,11 @@ namespace {
             else if (arg == "--no-audio") {
                 options.config.audioMode = media::AudioMode::None;
             }
-            else if (arg == "--zero-copy") {
-                options.config.hardware.requireZeroCopy = true;
+            else if (arg == "--no-zero-copy-fallback") {
+                options.config.hardware.allowZeroCopyFallback = false;
+            }
+            else if (arg == "--allow-zero-copy-fallback") {
+                options.config.hardware.allowZeroCopyFallback = true;
             }
             else if (!arg.empty() && arg[0] == '-') {
                 throw std::runtime_error("unknown option: " + arg);
@@ -479,7 +482,8 @@ namespace {
         spdlog::info("audioMode={}", audioModeToString(config.audioMode));
         spdlog::info("audioCodec={}", audioCodecToString(config.audioCodec));
         spdlog::info("audioBitrate={} kbps", config.audioBitrateKbps);
-        spdlog::info("zeroCopyRequired={}", config.hardware.requireZeroCopy);
+        spdlog::info("zeroCopyPreferred=true");
+        spdlog::info("zeroCopyFallbackAllowed={}", config.hardware.allowZeroCopyFallback);
     }
 
     void initLogger()
