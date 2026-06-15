@@ -12,6 +12,7 @@ extern "C" {
 #include <libavutil/avutil.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/mathematics.h>
+#include <libavutil/pixdesc.h>
 }
 
 namespace media::ffmpeg {
@@ -145,7 +146,9 @@ bool FFmpegVideoTranscodePipeline::initialize(const Config& config, std::string*
     m_outputFmtCtx = config.outputFmtCtx;
     m_timeline = config.timeline;
 
-    if (config.hardwarePlan && config.hardwarePlan->valid && config.hardwarePlan->zeroCopy) {
+    if (config.hardwarePlan &&
+        config.hardwarePlan->valid &&
+        config.hardwarePlan->executionMode != VideoExecutionMode::Cpu) {
         m_hardwarePlan = *config.hardwarePlan;
         m_hasHardwarePlan = true;
         m_hardwareBackend = m_hardwarePlan.backend;
@@ -257,7 +260,7 @@ bool FFmpegVideoTranscodePipeline::openEncoderAndCreateOutputStream(std::string*
         encoder = m_hardwareEncoderSelection.encoder;
         if (!encoder) {
             if (error) {
-                *error = "zero-copy hardware pipeline unavailable: planner returned no encoder";
+                *error = "hardware video pipeline unavailable: planner returned no encoder";
             }
             return false;
         }
@@ -341,7 +344,9 @@ bool FFmpegVideoTranscodePipeline::openEncoderAndCreateOutputStream(std::string*
         m_hardwareDeviceAttachedToDecoder &&
         m_hardwareDeviceAttachedToEncoder;
 
-    if (wantsHardwarePipeline && !m_zeroCopyPipeline) {
+    if (wantsHardwarePipeline &&
+        m_hardwarePlan.executionMode == VideoExecutionMode::ZeroCopy &&
+        !m_zeroCopyPipeline) {
         if (error) {
             std::ostringstream oss;
             oss << "zero-copy hardware pipeline unavailable during execution: encoder="
@@ -353,6 +358,26 @@ bool FFmpegVideoTranscodePipeline::openEncoderAndCreateOutputStream(std::string*
             *error = oss.str();
         }
         return false;
+    }
+
+    if (wantsHardwarePipeline &&
+        m_hardwarePlan.executionMode == VideoExecutionMode::MixedGpu &&
+        m_zeroCopyPipeline) {
+        if (error) {
+            *error = "mixed GPU fallback unexpectedly entered zero-copy execution";
+        }
+        return false;
+    }
+
+    if (wantsHardwarePipeline &&
+        m_hardwarePlan.executionMode == VideoExecutionMode::MixedGpu) {
+        spdlog::warn(
+            "[PLAN] active mixed GPU path: hardware decode={}, hardware encode={}, encoder={}, encoder_pix_fmt={}",
+            m_hardwareDeviceAttachedToDecoder,
+            m_hardwareDeviceAttachedToEncoder,
+            encoder->name ? encoder->name : "unknown",
+            pixelFormatName(m_encoderCtx->pix_fmt)
+        );
     }
 
     setVideoEncoderOptions(m_encoderCtx, encoder);
@@ -401,7 +426,7 @@ bool FFmpegVideoTranscodePipeline::initializeHardwareDeviceForEncoder(const AVCo
 
     if (!selectedHardwareEncoder) {
         if (error) {
-            *error = "zero-copy hardware pipeline unavailable: selected encoder is not a hardware encoder";
+            *error = "hardware video pipeline unavailable: selected encoder is not a hardware encoder";
         }
         return false;
     }
