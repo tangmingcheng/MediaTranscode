@@ -25,10 +25,14 @@ add_library(${TARGET_CORE} STATIC
     src/internal/FFmpegAudioFifo.h
     src/internal/FFmpegAudioPipeline.cpp
     src/internal/FFmpegAudioPipeline.h
+    src/internal/FFmpegHardwareBackend.cpp
+    src/internal/FFmpegHardwareBackend.h
     src/internal/FFmpegHardwareContext.cpp
     src/internal/FFmpegHardwareContext.h
     src/internal/FFmpegHardwareDecoder.cpp
     src/internal/FFmpegHardwareDecoder.h
+    src/internal/FFmpegHardwareEncoderSelector.cpp
+    src/internal/FFmpegHardwareEncoderSelector.h
     src/internal/FFmpegHardwareFrames.cpp
     src/internal/FFmpegHardwareFrames.h
     src/internal/FFmpegHardwareVideoFilterGraph.cpp
