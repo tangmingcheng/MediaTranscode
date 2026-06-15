@@ -255,6 +255,23 @@ namespace {
 
 } // namespace
 
+    HardwareEncoderSelection HardwareEncoderSelector::selectZeroCopyEncoder(
+        VideoCodec codec,
+        const HardwareBackendProfile& backend)
+    {
+        HardwareEncoderSelection selection = select(codec, backend, true);
+        if (selection.zeroCopy) {
+            return selection;
+        }
+
+        selection.encoder = nullptr;
+        selection.encoderName.clear();
+        selection.pixelFormat = AV_PIX_FMT_NONE;
+        selection.hardwareEncoder = false;
+        selection.diagnostic = "no zero-copy encoder accepted backend hardware frames";
+        return selection;
+    }
+
     HardwareEncoderSelection HardwareEncoderSelector::select(VideoCodec codec,
                                                              const HardwareBackendProfile& backend,
                                                              bool preferZeroCopy)
@@ -328,7 +345,7 @@ namespace {
                 backend,
                 false,
                 std::move(candidates),
-                "no zero-copy encoder accepted backend hardware frames; selected first available fallback encoder " +
+                "no zero-copy encoder accepted backend hardware frames; fallback encoder available " +
                     std::string(firstAvailableName)
             );
         }
