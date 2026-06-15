@@ -30,16 +30,13 @@ namespace media {
         MP3
     };
 
-    // 视频帧管线类型。
-    // Cpu：保持现有软件帧管线。
-    // Hardware：后续真正的硬件帧路径入口：硬件解码帧 -> 硬件滤镜 -> 硬件编码帧。
+    // 内部执行管线类型。应用层通常只设置 HardwarePipelineConfig::requireZeroCopy。
     enum class VideoFramePipeline {
         Cpu,
         Hardware
     };
 
-    // FFmpeg 硬件设备类型抽象。
-    // 这里不绑定具体编码器顺序，避免把平台策略散落到 FFmpegUtils.cpp。
+    // FFmpeg 硬件设备类型抽象。该枚举属于后端 planner 内部能力表达，应用层不需要指定。
     enum class HardwareDeviceType {
         None,
         Auto,
@@ -52,11 +49,14 @@ namespace media {
     };
 
     struct HardwarePipelineConfig {
+        // 使用方唯一需要表达的硬件意图：是否要求硬解码 + 硬件滤镜 + 硬件编码零拷贝闭环。
+        // true：后端 planner 必须找到严格零拷贝方案，否则初始化失败。
+        // false：使用普通 CPU frame 转码路径。
+        bool requireZeroCopy = false;
+
+        // 以下字段仅作为 planner / pipeline 内部执行状态保留，不应暴露给 CLI 或业务层配置。
         VideoFramePipeline videoFramePipeline = VideoFramePipeline::Cpu;
         HardwareDeviceType deviceType = HardwareDeviceType::Auto;
-
-        // true：硬件路径未完全可用时允许回退到现有 CPU frame 管线。
-        // false：硬件路径初始化失败则直接报错，便于压测硬件路径。
         bool allowSoftwareFallback = true;
     };
 
