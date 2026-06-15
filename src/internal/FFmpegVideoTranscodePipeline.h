@@ -1,9 +1,12 @@
 #pragma once
 
 #include "media_transcode/MediaTranscodeTypes.h"
+#include "internal/FFmpegHardwareBackend.h"
 #include "internal/FFmpegHardwareContext.h"
 #include "internal/FFmpegHardwareDecoder.h"
+#include "internal/FFmpegHardwareEncoderSelector.h"
 #include "internal/FFmpegHardwareFrames.h"
+#include "internal/FFmpegHardwareVideoFilterGraph.h"
 #include "internal/FFmpegVideoFilterGraph.h"
 #include "internal/FFmpegVideoPipeline.h"
 
@@ -66,6 +69,8 @@ private:
     bool openEncoderAndCreateOutputStream(std::string* error);
     bool initializeHardwareDeviceForEncoder(const AVCodec* encoder, std::string* error);
     bool initializeFilterGraph(std::string* error);
+    bool initializeSoftwareFilterGraph(std::string* error);
+    bool initializeHardwareFilterGraphFromFrame(const AVFrame* frame, std::string* error);
     bool initializePacketWriter(std::string* error);
     bool allocateFrames(std::string* error);
 
@@ -73,16 +78,24 @@ private:
                       const PacketWrittenCallback& onPacketWritten);
     bool processDecodedFrame(std::string* error,
                              const PacketWrittenCallback& onPacketWritten);
+    bool processHardwareFrameZeroCopy(std::string* error,
+                                      const PacketWrittenCallback& onPacketWritten);
+    bool processFrameThroughSoftwareFilter(AVFrame* frame,
+                                           std::string* error,
+                                           const PacketWrittenCallback& onPacketWritten);
     bool transferHardwareFrameToSoftware(AVFrame* hardwareFrame,
                                          AVFrame* softwareFrame,
                                          std::string* error) const;
     bool drainFilterGraph(std::string* error,
                           const PacketWrittenCallback& onPacketWritten);
+    bool drainHardwareFilterGraph(std::string* error,
+                                  const PacketWrittenCallback& onPacketWritten);
     bool writeEncodedPackets(AVFrame* frame,
                              std::string* error,
                              const PacketWrittenCallback& onPacketWritten);
 
     int64_t decodedFrameTimestamp() const;
+    bool normalizeFramePts(AVFrame* frame, std::string* error) const;
 
     static AVPixelFormat selectDecoderPixelFormat(AVCodecContext* ctx,
                                                    const AVPixelFormat* formats);
@@ -100,12 +113,17 @@ private:
 
     HardwareDeviceContext m_hardwareDeviceContext;
     HardwareFramesContext m_hardwareFramesContext;
+    HardwareBackendProfile m_hardwareBackend;
+    HardwareEncoderSelection m_hardwareEncoderSelection;
     HardwareDecoderSupport::Config m_hardwareDecoderConfig;
     bool m_hardwareDeviceAttachedToDecoder = false;
     bool m_hardwareDeviceAttachedToEncoder = false;
     bool m_decoderUsesHardwareFrames = false;
+    bool m_zeroCopyPipeline = false;
+    bool m_hardwareFilterGraphInitialized = false;
 
     VideoFilterGraph m_filterGraph;
+    HardwareVideoFilterGraph m_hardwareFilterGraph;
     FFmpegVideoPipeline m_packetWriter;
 
     AVFrame* m_decodedFrame = nullptr;
