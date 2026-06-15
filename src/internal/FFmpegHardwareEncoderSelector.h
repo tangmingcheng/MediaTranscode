@@ -35,6 +35,9 @@ namespace media::ffmpeg {
 
     class HardwareEncoderSelector {
     public:
+        static HardwareEncoderSelection selectZeroCopyEncoder(VideoCodec codec,
+                                                              const HardwareBackendProfile& backend);
+
         static HardwareEncoderSelection select(VideoCodec codec,
                                                const HardwareBackendProfile& backend,
                                                bool preferZeroCopy);
