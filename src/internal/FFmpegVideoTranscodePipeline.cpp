@@ -8,6 +8,7 @@
 
 extern "C" {
 #include <libavutil/avutil.h>
+#include <libavutil/hwcontext.h>
 #include <libavutil/mathematics.h>
 }
 
@@ -24,6 +25,10 @@ void FFmpegVideoTranscodePipeline::reset()
     m_packetWriter.reset();
     m_hardwareFramesContext.reset();
     m_hardwareDeviceContext.reset();
+
+    if (m_softwareTransferFrame) {
+        av_frame_free(&m_softwareTransferFrame);
+    }
 
     if (m_filteredFrame) {
         av_frame_free(&m_filteredFrame);
@@ -51,7 +56,10 @@ void FFmpegVideoTranscodePipeline::reset()
     m_lastWrittenOutTimeMs = 0;
     m_outputFps = 0;
     m_enableConstantFps = false;
+    m_hardwareDecoderConfig = HardwareDecoderSupport::Config{};
+    m_hardwareDeviceAttachedToDecoder = false;
     m_hardwareDeviceAttachedToEncoder = false;
+    m_decoderUsesHardwareFrames = false;
 }
 
 bool FFmpegVideoTranscodePipeline::initialize(const Config& config, std::string* error)
@@ -124,6 +132,10 @@ bool FFmpegVideoTranscodePipeline::openDecoder(std::string* error)
         return false;
     }
 
+    if (!initializeHardwareDeviceForDecoder(decoder, error)) {
+        return false;
+    }
+
     ret = avcodec_open2(m_decoderCtx, decoder, nullptr);
     if (ret < 0) {
         if (error) {
@@ -132,6 +144,71 @@ bool FFmpegVideoTranscodePipeline::openDecoder(std::string* error)
         return false;
     }
 
+    return true;
+}
+
+bool FFmpegVideoTranscodePipeline::initializeHardwareDeviceForDecoder(const AVCodec* decoder,
+                                                                      std::string* error)
+{
+    if (m_config.hardware.videoFramePipeline != VideoFramePipeline::Hardware) {
+        return true;
+    }
+
+    m_hardwareDecoderConfig = HardwareDecoderSupport::findConfig(
+        decoder,
+        m_config.hardware.deviceType
+    );
+
+    if (!m_hardwareDecoderConfig.valid) {
+        if (m_config.hardware.allowSoftwareFallback) {
+            m_hardwareDecoderConfig = HardwareDecoderSupport::Config{};
+            return true;
+        }
+
+        if (error) {
+            *error = "hardware decoder initialization failed: decoder has no matching hardware config";
+        }
+        return false;
+    }
+
+    std::string hardwareError;
+    if (!m_hardwareDeviceContext.initialize(
+            m_hardwareDecoderConfig.deviceType,
+            decoder,
+            nullptr,
+            &hardwareError)) {
+        if (m_config.hardware.allowSoftwareFallback) {
+            m_hardwareDecoderConfig = HardwareDecoderSupport::Config{};
+            m_hardwareDeviceContext.reset();
+            return true;
+        }
+
+        if (error) {
+            *error = hardwareError;
+        }
+        return false;
+    }
+
+    AVBufferRef* deviceRef = m_hardwareDeviceContext.ref();
+    if (!deviceRef) {
+        if (m_config.hardware.allowSoftwareFallback) {
+            m_hardwareDecoderConfig = HardwareDecoderSupport::Config{};
+            m_hardwareDeviceContext.reset();
+            return true;
+        }
+
+        if (error) {
+            *error = "hardware decoder initialization failed: unable to reference device context";
+        }
+        return false;
+    }
+
+    m_decoderCtx->hw_device_ctx = deviceRef;
+    m_decoderCtx->opaque = this;
+    m_decoderCtx->get_format = &FFmpegVideoTranscodePipeline::selectDecoderPixelFormat;
+
+    m_hardwareDeviceAttachedToDecoder = true;
+    m_decoderUsesHardwareFrames = true;
     return true;
 }
 
@@ -246,21 +323,23 @@ bool FFmpegVideoTranscodePipeline::initializeHardwareDeviceForEncoder(const AVCo
         return true;
     }
 
-    std::string hardwareError;
-    if (!m_hardwareDeviceContext.initialize(
-            m_config.hardware.deviceType,
-            nullptr,
-            encoder,
-            &hardwareError)) {
-        if (m_config.hardware.allowSoftwareFallback) {
-            m_hardwareDeviceContext.reset();
-            return true;
-        }
+    if (!m_hardwareDeviceContext.isInitialized()) {
+        std::string hardwareError;
+        if (!m_hardwareDeviceContext.initialize(
+                m_config.hardware.deviceType,
+                nullptr,
+                encoder,
+                &hardwareError)) {
+            if (m_config.hardware.allowSoftwareFallback) {
+                m_hardwareDeviceContext.reset();
+                return true;
+            }
 
-        if (error) {
-            *error = hardwareError;
+            if (error) {
+                *error = hardwareError;
+            }
+            return false;
         }
-        return false;
     }
 
     AVBufferRef* deviceRef = m_hardwareDeviceContext.ref();
@@ -294,6 +373,10 @@ bool FFmpegVideoTranscodePipeline::initializeFilterGraph(std::string* error)
     config.outputFps = m_outputFps;
     config.enableConstantFps = m_enableConstantFps;
 
+    if (m_decoderUsesHardwareFrames && m_decoderCtx->sw_pix_fmt != AV_PIX_FMT_NONE) {
+        config.inputPixelFormat = m_decoderCtx->sw_pix_fmt;
+    }
+
     return m_filterGraph.initialize(config, error);
 }
 
@@ -311,8 +394,9 @@ bool FFmpegVideoTranscodePipeline::allocateFrames(std::string* error)
 {
     m_decodedFrame = av_frame_alloc();
     m_filteredFrame = av_frame_alloc();
+    m_softwareTransferFrame = av_frame_alloc();
 
-    if (!m_decodedFrame || !m_filteredFrame) {
+    if (!m_decodedFrame || !m_filteredFrame || !m_softwareTransferFrame) {
         if (error) {
             *error = "av_frame_alloc video frame failed";
         }
@@ -410,8 +494,24 @@ bool FFmpegVideoTranscodePipeline::processDecodedFrame(
     std::string* error,
     const PacketWrittenCallback& onPacketWritten)
 {
+    AVFrame* frameForFilter = m_decodedFrame;
+
+    if (m_decoderUsesHardwareFrames &&
+        m_hardwareDecoderConfig.valid &&
+        m_decodedFrame->format == m_hardwareDecoderConfig.hardwarePixelFormat) {
+        if (!transferHardwareFrameToSoftware(m_decodedFrame, m_softwareTransferFrame, error)) {
+            return false;
+        }
+
+        frameForFilter = m_softwareTransferFrame;
+    }
+
     const int64_t inputVideoTs = decodedFrameTimestamp();
     if (inputVideoTs == AV_NOPTS_VALUE) {
+        if (frameForFilter == m_softwareTransferFrame) {
+            av_frame_unref(m_softwareTransferFrame);
+        }
+
         if (error) {
             *error = "input video frame has no valid timestamp; refuse to synthesize PTS in normalized transcoder";
         }
@@ -422,25 +522,66 @@ bool FFmpegVideoTranscodePipeline::processDecodedFrame(
     const int64_t normalizedVideoUs = m_timeline->normalizeUs(inputVideoUs);
 
     if (normalizedVideoUs == AV_NOPTS_VALUE) {
+        if (frameForFilter == m_softwareTransferFrame) {
+            av_frame_unref(m_softwareTransferFrame);
+        }
+
         if (error) {
             *error = "failed to normalize input video timestamp";
         }
         return false;
     }
 
-    m_decodedFrame->pts = TimelineNormalizer::fromUs(normalizedVideoUs, m_inputVideoStream->time_base);
-    if (m_decodedFrame->pts == AV_NOPTS_VALUE) {
+    frameForFilter->pts = TimelineNormalizer::fromUs(normalizedVideoUs, m_inputVideoStream->time_base);
+    if (frameForFilter->pts == AV_NOPTS_VALUE) {
+        if (frameForFilter == m_softwareTransferFrame) {
+            av_frame_unref(m_softwareTransferFrame);
+        }
+
         if (error) {
             *error = "decoded video frame pts is invalid after normalization";
         }
         return false;
     }
 
-    if (!m_filterGraph.sendFrame(m_decodedFrame, error)) {
+    const bool sent = m_filterGraph.sendFrame(frameForFilter, error);
+    if (frameForFilter == m_softwareTransferFrame) {
+        av_frame_unref(m_softwareTransferFrame);
+    }
+
+    if (!sent) {
         return false;
     }
 
     return drainFilterGraph(error, onPacketWritten);
+}
+
+bool FFmpegVideoTranscodePipeline::transferHardwareFrameToSoftware(AVFrame* hardwareFrame,
+                                                                   AVFrame* softwareFrame,
+                                                                   std::string* error) const
+{
+    if (!hardwareFrame || !softwareFrame) {
+        if (error) {
+            *error = "hardware frame transfer failed: frame is null";
+        }
+        return false;
+    }
+
+    av_frame_unref(softwareFrame);
+
+    const int ret = av_hwframe_transfer_data(softwareFrame, hardwareFrame, 0);
+    if (ret < 0) {
+        if (error) {
+            *error = "av_hwframe_transfer_data decoder frame failed: " + errorString(ret);
+        }
+        return false;
+    }
+
+    softwareFrame->pts = hardwareFrame->pts;
+    softwareFrame->pkt_dts = hardwareFrame->pkt_dts;
+    softwareFrame->sample_aspect_ratio = hardwareFrame->sample_aspect_ratio;
+
+    return true;
 }
 
 bool FFmpegVideoTranscodePipeline::drainFilterGraph(
@@ -543,6 +684,23 @@ int64_t FFmpegVideoTranscodePipeline::decodedFrameTimestamp() const
     }
 
     return AV_NOPTS_VALUE;
+}
+
+AVPixelFormat FFmpegVideoTranscodePipeline::selectDecoderPixelFormat(
+    AVCodecContext* ctx,
+    const AVPixelFormat* formats)
+{
+    auto* self = ctx ? static_cast<FFmpegVideoTranscodePipeline*>(ctx->opaque) : nullptr;
+
+    if (self && self->m_hardwareDecoderConfig.valid) {
+        for (const AVPixelFormat* p = formats; p && *p != AV_PIX_FMT_NONE; ++p) {
+            if (*p == self->m_hardwareDecoderConfig.hardwarePixelFormat) {
+                return *p;
+            }
+        }
+    }
+
+    return formats ? formats[0] : AV_PIX_FMT_NONE;
 }
 
 bool FFmpegVideoTranscodePipeline::isInitialized() const
