@@ -134,24 +134,14 @@ namespace {
         const AVCodec* decoder)
     {
         HardwarePipelinePlan plan;
-        plan.requested = config.hardware.requireZeroCopy ||
-            config.hardware.videoFramePipeline == VideoFramePipeline::Hardware;
-        plan.requireZeroCopy = config.hardware.requireZeroCopy;
+        plan.allowFallback = config.hardware.allowZeroCopyFallback;
 
         spdlog::info(
-            "[PLAN] request: videoCodec={}, requireZeroCopy={}, requestedDevice={}",
+            "[PLAN] request: videoCodec={}, preferZeroCopy=true, allowZeroCopyFallback={}, requestedDevice={}",
             videoCodecName(config.videoCodec),
-            plan.requireZeroCopy,
+            plan.allowFallback,
             hardwareDeviceName(config.hardware.deviceType)
         );
-
-        if (!plan.requested) {
-            plan.valid = false;
-            plan.zeroCopy = false;
-            plan.diagnostic = "hardware pipeline was not requested";
-            spdlog::info("[PLAN] skipped: {}", plan.diagnostic);
-            return plan;
-        }
 
         if (!decoder) {
             plan.valid = false;
@@ -237,7 +227,12 @@ namespace {
         }
 
         plan.diagnostic = oss.str();
-        spdlog::error("[PLAN] failed: {}", plan.diagnostic);
+        if (plan.allowFallback) {
+            spdlog::warn("[PLAN] failed but fallback is allowed: {}", plan.diagnostic);
+        }
+        else {
+            spdlog::error("[PLAN] failed and fallback is disabled: {}", plan.diagnostic);
+        }
         return plan;
     }
 
