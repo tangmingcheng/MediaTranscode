@@ -25,10 +25,9 @@ namespace media::ffmpeg {
     };
 
     struct HardwarePipelinePlan {
-        bool requested = false;
         bool valid = false;
         bool zeroCopy = false;
-        bool requireZeroCopy = false;
+        bool allowFallback = true;
         HardwareBackendProfile backend;
         HardwareDecoderSupport::Config decoderConfig;
         HardwareEncoderSelection encoderSelection;
