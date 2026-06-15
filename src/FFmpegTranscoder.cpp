@@ -310,30 +310,25 @@ namespace {
         }
         outputFmtCtx.reset(rawOutputFmtCtx);
 
-        TranscodeConfig effectiveVideoConfig = m_config;
         const AVCodec* decoder = avcodec_find_decoder(inputVideoStream->codecpar->codec_id);
         const ffmpeg::HardwarePipelinePlan plan = ffmpeg::FFmpegPipelinePlanner::planHardwarePipeline(
-            effectiveVideoConfig,
+            m_config,
             decoder
         );
 
+        const ffmpeg::HardwarePipelinePlan* executionPlan = nullptr;
         if (plan.valid && plan.zeroCopy) {
-            effectiveVideoConfig.hardware.videoFramePipeline = VideoFramePipeline::Hardware;
-            effectiveVideoConfig.hardware.deviceType = plan.backend.deviceType;
-            effectiveVideoConfig.hardware.allowSoftwareFallback = false;
+            executionPlan = &plan;
             spdlog::info("[PLAN] execution mode: zero-copy hardware pipeline");
         }
         else {
-            if (!effectiveVideoConfig.hardware.allowZeroCopyFallback) {
+            if (!m_config.hardware.allowZeroCopyFallback) {
                 fail(plan.diagnostic.empty()
                     ? std::string("zero-copy pipeline planning failed and fallback is disabled")
                     : plan.diagnostic);
                 return;
             }
 
-            effectiveVideoConfig.hardware.videoFramePipeline = VideoFramePipeline::Cpu;
-            effectiveVideoConfig.hardware.deviceType = HardwareDeviceType::Auto;
-            effectiveVideoConfig.hardware.allowSoftwareFallback = true;
             spdlog::warn(
                 "[PLAN] execution mode: CPU frame pipeline fallback after zero-copy planning failed: {}",
                 plan.diagnostic
@@ -342,7 +337,8 @@ namespace {
 
         {
             ffmpeg::FFmpegVideoTranscodePipeline::Config videoConfig;
-            videoConfig.transcodeConfig = &effectiveVideoConfig;
+            videoConfig.transcodeConfig = &m_config;
+            videoConfig.hardwarePlan = executionPlan;
             videoConfig.inputVideoStream = inputVideoStream;
             videoConfig.outputFmtCtx = outputFmtCtx.get();
             videoConfig.timeline = &timeline;
