@@ -13,6 +13,37 @@ extern "C" {
 }
 
 namespace media::ffmpeg {
+namespace {
+
+AVPixelFormat expectedSoftwareFormatAfterHardwareDownload(HardwareDeviceType deviceType,
+                                                         AVPixelFormat decoderSoftwareFormat)
+{
+    switch (deviceType) {
+    case HardwareDeviceType::D3D11VA:
+    case HardwareDeviceType::CUDA:
+    case HardwareDeviceType::QSV:
+    case HardwareDeviceType::VAAPI:
+    case HardwareDeviceType::DRM:
+        if (decoderSoftwareFormat == AV_PIX_FMT_NONE ||
+            decoderSoftwareFormat == AV_PIX_FMT_YUV420P) {
+            return AV_PIX_FMT_NV12;
+        }
+        return decoderSoftwareFormat;
+
+    case HardwareDeviceType::VideoToolbox:
+        if (decoderSoftwareFormat == AV_PIX_FMT_NONE) {
+            return AV_PIX_FMT_NV12;
+        }
+        return decoderSoftwareFormat;
+
+    case HardwareDeviceType::Auto:
+    case HardwareDeviceType::None:
+    default:
+        return decoderSoftwareFormat;
+    }
+}
+
+} // namespace
 
 FFmpegVideoTranscodePipeline::~FFmpegVideoTranscodePipeline()
 {
@@ -317,6 +348,22 @@ bool FFmpegVideoTranscodePipeline::openEncoderAndCreateOutputStream(std::string*
         m_hardwareDeviceAttachedToDecoder &&
         m_hardwareDeviceAttachedToEncoder;
 
+    if (wantsHardwarePipeline &&
+        !m_zeroCopyPipeline &&
+        !m_config.hardware.allowSoftwareFallback) {
+        if (error) {
+            std::ostringstream oss;
+            oss << "zero-copy hardware pipeline unavailable: encoder="
+                << (encoder->name ? encoder->name : "unknown")
+                << ", backend="
+                << (m_hardwareBackend.name ? m_hardwareBackend.name : "unknown")
+                << ", selected_pix_fmt="
+                << m_encoderCtx->pix_fmt;
+            *error = oss.str();
+        }
+        return false;
+    }
+
     setVideoEncoderOptions(m_encoderCtx, encoder);
 
     int ret = avcodec_open2(m_encoderCtx, encoder, nullptr);
@@ -424,8 +471,11 @@ bool FFmpegVideoTranscodePipeline::initializeSoftwareFilterGraph(std::string* er
     config.outputFps = m_outputFps;
     config.enableConstantFps = m_enableConstantFps;
 
-    if (m_decoderUsesHardwareFrames && m_decoderCtx->sw_pix_fmt != AV_PIX_FMT_NONE) {
-        config.inputPixelFormat = m_decoderCtx->sw_pix_fmt;
+    if (m_decoderUsesHardwareFrames) {
+        config.inputPixelFormat = expectedSoftwareFormatAfterHardwareDownload(
+            m_hardwareDeviceContext.resolvedDeviceType(),
+            m_decoderCtx ? m_decoderCtx->sw_pix_fmt : AV_PIX_FMT_NONE
+        );
     }
 
     return m_filterGraph.initialize(config, error);
