@@ -154,6 +154,22 @@ namespace {
         return false;
     }
 
+    bool isSoftwareFramePixelFormat(AVPixelFormat format)
+    {
+        switch (format) {
+        case AV_PIX_FMT_NONE:
+        case AV_PIX_FMT_D3D11:
+        case AV_PIX_FMT_CUDA:
+        case AV_PIX_FMT_QSV:
+        case AV_PIX_FMT_VAAPI:
+        case AV_PIX_FMT_DRM_PRIME:
+        case AV_PIX_FMT_VIDEOTOOLBOX:
+            return false;
+        default:
+            return true;
+        }
+    }
+
     std::string pixelFormatName(AVPixelFormat format)
     {
         const char* name = av_get_pix_fmt_name(format);
@@ -269,6 +285,83 @@ namespace {
         selection.pixelFormat = AV_PIX_FMT_NONE;
         selection.hardwareEncoder = false;
         selection.diagnostic = "no zero-copy encoder accepted backend hardware frames";
+        return selection;
+    }
+
+    HardwareEncoderSelection HardwareEncoderSelector::selectMixedGpuEncoder(
+        VideoCodec codec,
+        const HardwareBackendProfile& backend)
+    {
+        const EncoderNameList names = encoderCandidates(codec, backend.deviceType);
+        std::vector<HardwareEncoderCandidate> candidates;
+
+        for (const char* encoderName : names) {
+            if (!encoderName) {
+                continue;
+            }
+
+            HardwareEncoderCandidate candidate;
+            candidate.encoderName = encoderName;
+
+            const AVCodec* encoder = avcodec_find_encoder_by_name(encoderName);
+            if (!encoder) {
+                candidate.available = false;
+                candidate.hardwareEncoder = isHardwareEncoderName(encoderName);
+                candidate.supportsBackendHardwareFrames = false;
+                candidate.pixelFormats = "none";
+                candidate.rejectionReason = "encoder is not available in current FFmpeg build";
+                candidates.emplace_back(std::move(candidate));
+                continue;
+            }
+
+            const bool hardwareEncoder = isHardwareEncoderName(encoderName);
+            const AVPixelFormat softwareInputFormat = chooseFallbackSoftwarePixelFormat(
+                encoder,
+                backend.deviceType
+            );
+            const bool supportsSoftwareInput = isSoftwareFramePixelFormat(softwareInputFormat);
+            const bool canUseBackendHardwareFrames =
+                backend.supportsZeroCopyFilter &&
+                backend.hardwarePixelFormat != AV_PIX_FMT_NONE &&
+                encoderSupportsPixelFormat(encoder, backend.hardwarePixelFormat);
+
+            candidate.available = true;
+            candidate.hardwareEncoder = hardwareEncoder;
+            candidate.supportsBackendHardwareFrames = canUseBackendHardwareFrames;
+            candidate.pixelFormats = pixelFormatListText(encoder);
+
+            if (hardwareEncoder && supportsSoftwareInput) {
+                candidate.rejectionReason = "accepted mixed GPU fallback: hardware encoder accepts software pixel format " +
+                    pixelFormatName(softwareInputFormat);
+                candidates.emplace_back(std::move(candidate));
+
+                HardwareEncoderSelection selection = makeSelection(
+                    encoder,
+                    encoderName,
+                    backend,
+                    false,
+                    std::move(candidates),
+                    "selected mixed GPU encoder " + std::string(encoderName)
+                );
+                selection.pixelFormat = softwareInputFormat;
+                return selection;
+            }
+
+            if (!hardwareEncoder) {
+                candidate.rejectionReason = "encoder is not classified as hardware encoder";
+            }
+            else {
+                candidate.rejectionReason = "hardware encoder does not accept software-frame fallback pixel format";
+            }
+
+            candidates.emplace_back(std::move(candidate));
+        }
+
+        HardwareEncoderSelection selection;
+        selection.backend = backend;
+        selection.candidates = std::move(candidates);
+        selection.diagnostic = "no mixed GPU encoder accepts software-frame fallback input for backend " +
+            std::string(backend.name ? backend.name : "unknown");
         return selection;
     }
 
