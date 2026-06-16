@@ -2,6 +2,8 @@
 
 #include "internal/FFmpegHardwareTypes.h"
 
+#include <vector>
+
 extern "C" {
 #include <libavutil/pixfmt.h>
 }
@@ -34,6 +36,8 @@ namespace media::ffmpeg {
         static const char* scaleFilterName(HardwareDeviceType deviceType);
         static bool supportsZeroCopyFilter(HardwareDeviceType deviceType);
         static bool supportsDirectHardwareFrameEncode(HardwareDeviceType deviceType);
+
+        static std::vector<HardwareDeviceType> backendPriority(HardwareDeviceType requestedDeviceType);
     };
 
 } // namespace media::ffmpeg
