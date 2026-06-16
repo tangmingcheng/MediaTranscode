@@ -19,9 +19,12 @@ namespace media::ffmpeg {
         bool supportsZeroCopyFilter = false;
 
         // True when the backend can pass decoder hardware frames directly to the
-        // selected encoder without an intermediate hardware filter graph. RKMPP is
-        // the main example: DRM_PRIME decoder frames can be consumed by rkmpp encoders.
+        // selected encoder without an intermediate hardware filter graph.
         bool supportsDirectHardwareFrameEncode = false;
+
+        // Optional software layout carried by direct hardware frames. For example,
+        // RKMPP consumes DRM_PRIME frames whose underlying MPP frame layout is NV12.
+        AVPixelFormat directHardwareFrameSoftwareFormat = AV_PIX_FMT_NONE;
     };
 
     class HardwareBackendRegistry {
