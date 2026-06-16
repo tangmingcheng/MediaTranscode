@@ -2,11 +2,10 @@
 
 #include "media_transcode/MediaTranscodeTypes.h"
 #include "internal/FFmpegHardwareBackend.h"
-#include "internal/FFmpegHardwareEncoderSelector.h"
-#include "internal/FFmpegHardwareFrames.h"
 #include "internal/FFmpegHardwareVideoFilterGraph.h"
 #include "internal/FFmpegPipelinePlanner.h"
 #include "internal/FFmpegVideoDecoderStage.h"
+#include "internal/FFmpegVideoEncoderStage.h"
 #include "internal/FFmpegVideoFilterGraph.h"
 #include "internal/FFmpegVideoPipeline.h"
 
@@ -67,8 +66,7 @@ public:
 
 private:
     bool openDecoder(std::string* error);
-    bool openEncoderAndCreateOutputStream(std::string* error);
-    bool initializeHardwareDeviceForEncoder(const AVCodec* encoder, std::string* error);
+    bool openEncoder(std::string* error);
     bool initializeFilterGraph(std::string* error);
     bool initializeSoftwareFilterGraph(std::string* error);
     bool initializeHardwareFilterGraphFromFrame(const AVFrame* frame, std::string* error);
@@ -95,6 +93,8 @@ private:
                              std::string* error,
                              const PacketWrittenCallback& onPacketWritten);
 
+    AVCodecContext* encoderContext() const;
+
     static int64_t decodedFrameTimestamp(const AVFrame* frame);
     bool normalizeFramePts(AVFrame* frame, std::string* error) const;
 
@@ -107,14 +107,11 @@ private:
     TimelineNormalizer* m_timeline = nullptr;
 
     FFmpegVideoDecoderStage m_decoderStage;
-    AVCodecContext* m_encoderCtx = nullptr;
+    FFmpegVideoEncoderStage m_encoderStage;
 
     HardwarePipelinePlan m_hardwarePlan;
     bool m_hasHardwarePlan = false;
-    HardwareFramesContext m_hardwareFramesContext;
     HardwareBackendProfile m_hardwareBackend;
-    HardwareEncoderSelection m_hardwareEncoderSelection;
-    bool m_hardwareDeviceAttachedToEncoder = false;
     bool m_zeroCopyPipeline = false;
     bool m_hardwareFilterGraphInitialized = false;
 
