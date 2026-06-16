@@ -5,6 +5,7 @@
 #include "spdlog/spdlog.h"
 
 #include <algorithm>
+#include <cmath>
 #include <sstream>
 
 extern "C" {
@@ -21,6 +22,43 @@ const char* pixelFormatName(AVPixelFormat format)
     return name ? name : "none";
 }
 
+bool isValidRatio(AVRational ratio)
+{
+    return ratio.num > 0 && ratio.den > 0;
+}
+
+int chooseOutputFpsFromMetadata(const TranscodeConfig& config,
+                                const FFmpegVideoInputMetadata& inputMetadata)
+{
+    if (config.fps > 0) {
+        return config.fps;
+    }
+
+    if (isValidRatio(inputMetadata.frameRate)) {
+        const double fps = av_q2d(inputMetadata.frameRate);
+        if (fps > 1.0 && fps < 240.0) {
+            return static_cast<int>(std::round(fps));
+        }
+    }
+
+    return 25;
+}
+
+AVRational chooseEncoderTimeBase(const FFmpegVideoInputMetadata& inputMetadata,
+                                 int outputFps,
+                                 bool enableConstantFps)
+{
+    if (enableConstantFps) {
+        return AVRational{ 1, outputFps };
+    }
+
+    if (isValidRatio(inputMetadata.timeBase)) {
+        return inputMetadata.timeBase;
+    }
+
+    return AVRational{ 1, outputFps };
+}
+
 } // namespace
 
 FFmpegVideoEncoderStage::~FFmpegVideoEncoderStage()
@@ -35,10 +73,8 @@ void FFmpegVideoEncoderStage::reset()
     }
 
     m_config = TranscodeConfig{};
-    m_inputVideoStream = nullptr;
+    m_inputMetadata = FFmpegVideoInputMetadata{};
     m_outputFmtCtx = nullptr;
-    m_inputWidth = 0;
-    m_inputHeight = 0;
     m_outputVideoStream = nullptr;
 
     m_hardwareDeviceContext = nullptr;
@@ -67,9 +103,9 @@ bool FFmpegVideoEncoderStage::initialize(const Config& config, std::string* erro
         return false;
     }
 
-    if (!config.inputVideoStream) {
+    if (!config.inputMetadata.hasValidSize()) {
         if (error) {
-            *error = "FFmpegVideoEncoderStage initialize failed: inputVideoStream is null";
+            *error = "FFmpegVideoEncoderStage initialize failed: input metadata has invalid video size";
         }
         return false;
     }
@@ -89,10 +125,8 @@ bool FFmpegVideoEncoderStage::initialize(const Config& config, std::string* erro
     }
 
     m_config = *config.transcodeConfig;
-    m_inputVideoStream = config.inputVideoStream;
+    m_inputMetadata = config.inputMetadata;
     m_outputFmtCtx = config.outputFmtCtx;
-    m_inputWidth = config.inputWidth;
-    m_inputHeight = config.inputHeight;
     m_hardwareDeviceContext = config.hardwareDeviceContext;
     m_decoderUsesHardwareFrames = config.decoderUsesHardwareFrames;
     m_decoderHardwareDeviceAttached = config.decoderHardwareDeviceAttached;
@@ -159,7 +193,7 @@ bool FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream(std::string* erro
         return false;
     }
 
-    m_outputFps = chooseOutputFps(m_config, m_inputVideoStream);
+    m_outputFps = chooseOutputFpsFromMetadata(m_config, m_inputMetadata);
     m_enableConstantFps = m_config.fps > 0;
 
     if (m_outputFps <= 0) {
@@ -169,8 +203,8 @@ bool FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream(std::string* erro
         return false;
     }
 
-    int outputWidth = m_config.width > 0 ? m_config.width : m_inputWidth;
-    int outputHeight = m_config.height > 0 ? m_config.height : m_inputHeight;
+    int outputWidth = m_config.width > 0 ? m_config.width : m_inputMetadata.width;
+    int outputHeight = m_config.height > 0 ? m_config.height : m_inputMetadata.height;
 
     outputWidth = normalizeEvenSize(outputWidth);
     outputHeight = normalizeEvenSize(outputHeight);
@@ -183,9 +217,9 @@ bool FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream(std::string* erro
                 << "x"
                 << m_config.height
                 << ", input="
-                << m_inputWidth
+                << m_inputMetadata.width
                 << "x"
-                << m_inputHeight;
+                << m_inputMetadata.height;
             *error = oss.str();
         }
         return false;
@@ -194,15 +228,11 @@ bool FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream(std::string* erro
     m_encoderCtx->width = outputWidth;
     m_encoderCtx->height = outputHeight;
 
-    AVRational encoderTimeBase = AVRational{ 1, m_outputFps };
-    if (!m_enableConstantFps) {
-        encoderTimeBase = m_inputVideoStream->time_base;
-        if (encoderTimeBase.num <= 0 || encoderTimeBase.den <= 0) {
-            encoderTimeBase = AVRational{ 1, m_outputFps };
-        }
-    }
-
-    m_encoderCtx->time_base = encoderTimeBase;
+    m_encoderCtx->time_base = chooseEncoderTimeBase(
+        m_inputMetadata,
+        m_outputFps,
+        m_enableConstantFps
+    );
     m_encoderCtx->framerate = AVRational{ m_outputFps, 1 };
     m_encoderCtx->pix_fmt = selectedPlannedHardwareEncoder &&
         m_hardwareEncoderSelection.pixelFormat != AV_PIX_FMT_NONE
