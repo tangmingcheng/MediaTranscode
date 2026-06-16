@@ -18,7 +18,7 @@ namespace media::ffmpeg {
     };
 
     // Internal FFmpeg hardware device abstraction. Public callers should not select
-    // a concrete backend such as D3D11VA, CUDA, VAAPI, or QSV.
+    // a concrete backend such as D3D11VA, CUDA, VAAPI, QSV, or RKMPP.
     enum class HardwareDeviceType {
         None,
         Auto,
@@ -27,6 +27,7 @@ namespace media::ffmpeg {
         QSV,
         VAAPI,
         DRM,
+        RKMPP,
         VideoToolbox
     };
 
