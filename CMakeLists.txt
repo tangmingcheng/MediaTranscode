@@ -52,8 +52,8 @@ add_library(${TARGET_CORE} STATIC
     src/internal/FFmpegVideoFilterGraph.h
     src/internal/FFmpegVideoFilterStage.cpp
     src/internal/FFmpegVideoFilterStage.h
-    src/internal/FFmpegVideoPipeline.cpp
-    src/internal/FFmpegVideoPipeline.h
+    src/internal/FFmpegVideoPacketWriterStage.cpp
+    src/internal/FFmpegVideoPacketWriterStage.h
     src/internal/FFmpegVideoTranscodePipeline.cpp
     src/internal/FFmpegVideoTranscodePipeline.h
     include/media_transcode/FFmpegTranscoder.h
