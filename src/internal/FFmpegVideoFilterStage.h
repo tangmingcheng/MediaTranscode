@@ -5,12 +5,14 @@
 #include "internal/FFmpegVideoFilterGraph.h"
 
 #include <cstdint>
+#include <deque>
 #include <string>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
+#include <libavutil/frame.h>
 #include <libavutil/pixfmt.h>
 }
 
@@ -36,7 +38,7 @@ public:
     FFmpegVideoFilterStage(const FFmpegVideoFilterStage&) = delete;
     FFmpegVideoFilterStage& operator=(const FFmpegVideoFilterStage&) = delete;
     FFmpegVideoFilterStage(FFmpegVideoFilterStage&&) = delete;
-    FFmpegVideoFilterStage& operator=(FFmpegVideoFilterStage&&) = delete;
+    FFmpegVideoFilterStage& operator=(const FFmpegVideoFilterStage&&) = delete;
 
     void reset();
 
@@ -57,6 +59,11 @@ public:
 private:
     bool initializeSoftwareFilterGraph(std::string* error);
     bool initializeHardwareFilterGraphFromFrame(const AVFrame* frame, std::string* error);
+
+    bool queueBypassedHardwareFrame(AVFrame* frame, std::string* error);
+    int receiveBypassedHardwareFrame(AVFrame* frame, std::string* error);
+    void clearBypassedHardwareFrames();
+
     int receiveSoftwareFrame(AVFrame* frame, std::string* error);
     int receiveHardwareFrame(AVFrame* frame, std::string* error);
     bool rescaleAndValidateFramePts(AVFrame* frame,
@@ -73,12 +80,14 @@ private:
     bool m_enableConstantFps = false;
 
     bool m_zeroCopyPipeline = false;
+    bool m_bypassHardwareFilterGraph = false;
     bool m_softwareFilterGraphInitialized = false;
     bool m_hardwareFilterGraphInitialized = false;
 
     HardwareBackendProfile m_hardwareBackend;
     VideoFilterGraph m_filterGraph;
     HardwareVideoFilterGraph m_hardwareFilterGraph;
+    std::deque<AVFrame*> m_bypassedHardwareFrames;
 
     int64_t m_lastSubmittedPts = AV_NOPTS_VALUE;
 };
