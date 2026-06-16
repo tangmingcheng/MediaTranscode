@@ -16,9 +16,14 @@ extern "C" {
 namespace media::ffmpeg {
 namespace {
 
+bool isValidRatio(AVRational ratio)
+{
+    return ratio.num > 0 && ratio.den > 0;
+}
+
 AVRational sanitizeSampleAspectRatio(AVRational ratio)
 {
-    if (ratio.num <= 0 || ratio.den <= 0) {
+    if (!isValidRatio(ratio)) {
         return AVRational{ 1, 1 };
     }
     return ratio;
@@ -80,9 +85,9 @@ AVRational sanitizeSampleAspectRatio(AVRational ratio)
             return false;
         }
 
-        if (!config.inputStream) {
+        if (!isValidRatio(config.inputTimeBase)) {
             if (error) {
-                *error = "VideoFilterGraph initialize failed: inputStream is null";
+                *error = "VideoFilterGraph initialize failed: input time base is invalid";
             }
             return false;
         }
@@ -114,7 +119,7 @@ AVRational sanitizeSampleAspectRatio(AVRational ratio)
             return false;
         }
 
-        m_inputFrameRate = chooseInputFrameRate(config.inputStream, config.outputFps);
+        m_inputFrameRate = chooseInputFrameRate(config.inputFrameRate, config.outputFps);
         const AVRational pixelAspect = sanitizeSampleAspectRatio(config.inputSampleAspectRatio);
 
         char args[512] = {};
@@ -125,8 +130,8 @@ AVRational sanitizeSampleAspectRatio(AVRational ratio)
             config.inputWidth,
             config.inputHeight,
             config.inputPixelFormat,
-            config.inputStream->time_base.num,
-            config.inputStream->time_base.den,
+            config.inputTimeBase.num,
+            config.inputTimeBase.den,
             pixelAspect.num,
             pixelAspect.den,
             m_inputFrameRate.num,
@@ -338,27 +343,14 @@ AVRational sanitizeSampleAspectRatio(AVRational ratio)
         return m_inputFrameRate;
     }
 
-    AVRational VideoFilterGraph::chooseInputFrameRate(const AVStream* inputStream,
+    AVRational VideoFilterGraph::chooseInputFrameRate(AVRational inputFrameRate,
                                                       int outputFps)
     {
-        if (inputStream) {
-            AVRational rate = inputStream->avg_frame_rate;
+        if (isValidRatio(inputFrameRate)) {
+            const double fps = av_q2d(inputFrameRate);
 
-            if (rate.num > 0 && rate.den > 0) {
-                const double fps = av_q2d(rate);
-
-                if (fps > 1.0 && fps < 240.0) {
-                    return rate;
-                }
-            }
-
-            rate = inputStream->r_frame_rate;
-            if (rate.num > 0 && rate.den > 0) {
-                const double fps = av_q2d(rate);
-
-                if (fps > 1.0 && fps < 240.0) {
-                    return rate;
-                }
+            if (fps > 1.0 && fps < 240.0) {
+                return inputFrameRate;
             }
         }
 
