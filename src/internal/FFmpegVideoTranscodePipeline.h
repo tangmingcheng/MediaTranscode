@@ -108,9 +108,6 @@ private:
     AVFrame* m_decodedFrame = nullptr;
     AVFrame* m_filteredFrame = nullptr;
     AVFrame* m_softwareTransferFrame = nullptr;
-
-    int64_t m_packetCount = 0;
-    int64_t m_lastWrittenOutTimeMs = 0;
 };
 
 } // namespace media::ffmpeg
