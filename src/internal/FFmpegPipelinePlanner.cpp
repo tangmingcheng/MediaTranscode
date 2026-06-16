@@ -208,43 +208,44 @@ namespace {
                 continue;
             }
 
-            if (backendCanUseDirectZeroCopyWithoutFilter(attempt.backend) &&
-                zeroCopyWouldRequireVideoFilter(config)) {
+            const bool directZeroCopyBlockedByFilter =
+                backendCanUseDirectZeroCopyWithoutFilter(attempt.backend) &&
+                zeroCopyWouldRequireVideoFilter(config);
+
+            if (directZeroCopyBlockedByFilter) {
                 attempt.reason = "direct zero-copy backend requires pass-through size/fps; scale or fps filter was requested";
-                plan.attempts.emplace_back(attempt);
-                logAttempt(plan.attempts.back());
-                continue;
             }
+            else {
+                attempt.encoderSelection = HardwareEncoderSelector::selectZeroCopyEncoder(
+                    config.videoCodec,
+                    attempt.backend
+                );
 
-            attempt.encoderSelection = HardwareEncoderSelector::selectZeroCopyEncoder(
-                config.videoCodec,
-                attempt.backend
-            );
+                attempt.encoderAccepted = attempt.encoderSelection.zeroCopy;
+                if (attempt.encoderAccepted) {
+                    attempt.reason = "accepted zero-copy path: decoder and encoder share hardware pixel format " +
+                        pixelFormatName(attempt.backend.hardwarePixelFormat);
+                    plan.attempts.emplace_back(attempt);
+                    logAttempt(plan.attempts.back());
 
-            attempt.encoderAccepted = attempt.encoderSelection.zeroCopy;
-            if (attempt.encoderAccepted) {
-                attempt.reason = "accepted zero-copy path: decoder and encoder share hardware pixel format " +
-                    pixelFormatName(attempt.backend.hardwarePixelFormat);
-                plan.attempts.emplace_back(attempt);
-                logAttempt(plan.attempts.back());
+                    plan.valid = true;
+                    plan.zeroCopy = true;
+                    plan.executionMode = VideoExecutionMode::ZeroCopy;
+                    plan.backend = attempt.backend;
+                    plan.decoderConfig = attempt.decoderConfig;
+                    plan.encoderSelection = attempt.encoderSelection;
+                    plan.diagnostic = "selected zero-copy backend=" + hardwareDeviceName(plan.backend.deviceType) +
+                        ", decoder=" + plan.decoderConfig.decoderName +
+                        ", encoder=" + plan.encoderSelection.encoderName +
+                        ", hw_pix_fmt=" + pixelFormatName(plan.backend.hardwarePixelFormat);
+                    spdlog::info("[PLAN] selected: {}", plan.diagnostic);
+                    return plan;
+                }
 
-                plan.valid = true;
-                plan.zeroCopy = true;
-                plan.executionMode = VideoExecutionMode::ZeroCopy;
-                plan.backend = attempt.backend;
-                plan.decoderConfig = attempt.decoderConfig;
-                plan.encoderSelection = attempt.encoderSelection;
-                plan.diagnostic = "selected zero-copy backend=" + hardwareDeviceName(plan.backend.deviceType) +
-                    ", decoder=" + plan.decoderConfig.decoderName +
-                    ", encoder=" + plan.encoderSelection.encoderName +
-                    ", hw_pix_fmt=" + pixelFormatName(plan.backend.hardwarePixelFormat);
-                spdlog::info("[PLAN] selected: {}", plan.diagnostic);
-                return plan;
+                attempt.reason = attempt.encoderSelection.diagnostic.empty()
+                    ? "no zero-copy encoder supports backend hardware frames"
+                    : attempt.encoderSelection.diagnostic;
             }
-
-            attempt.reason = attempt.encoderSelection.diagnostic.empty()
-                ? "no zero-copy encoder supports backend hardware frames"
-                : attempt.encoderSelection.diagnostic;
 
             if (plan.allowFallback && !mixedGpuFallbackAttempt.has_value()) {
                 HardwareEncoderSelection mixedSelection = HardwareEncoderSelector::selectMixedGpuEncoder(
