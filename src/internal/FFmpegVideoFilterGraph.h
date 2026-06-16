@@ -19,9 +19,12 @@ namespace media::ffmpeg {
             const AVCodecContext* decoderCtx = nullptr;
             const AVCodecContext* encoderCtx = nullptr;
             const AVStream* inputStream = nullptr;
+
             AVPixelFormat inputPixelFormat = AV_PIX_FMT_NONE;
             int inputWidth = 0;
             int inputHeight = 0;
+            AVRational inputSampleAspectRatio{ 1, 1 };
+
             int outputFps = 25;
             bool enableConstantFps = false;
         };
