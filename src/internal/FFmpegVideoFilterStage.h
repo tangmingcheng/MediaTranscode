@@ -90,6 +90,8 @@ private:
     std::deque<AVFrame*> m_bypassedHardwareFrames;
 
     int64_t m_lastSubmittedPts = AV_NOPTS_VALUE;
+    int64_t m_bypassedHardwareFrameLogCount = 0;
+    int64_t m_filteredHardwareFrameLogCount = 0;
 };
 
 } // namespace media::ffmpeg
