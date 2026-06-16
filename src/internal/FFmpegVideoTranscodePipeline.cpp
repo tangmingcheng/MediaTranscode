@@ -16,6 +16,11 @@ AVRational validOrDefaultSampleAspectRatio(AVRational ratio)
     return AVRational{ 1, 1 };
 }
 
+int validOrFallbackDimension(int primary, int fallback)
+{
+    return primary > 0 ? primary : fallback;
+}
+
 } // namespace
 
 FFmpegVideoTranscodePipeline::~FFmpegVideoTranscodePipeline()
@@ -118,19 +123,28 @@ bool FFmpegVideoTranscodePipeline::openDecoder(std::string* error)
 
 bool FFmpegVideoTranscodePipeline::openEncoder(std::string* error)
 {
-    if (!m_decoderStage.context()) {
+    AVCodecContext* decoderCtx = m_decoderStage.context();
+    if (!decoderCtx) {
         if (error) {
             *error = "open encoder failed: decoder stage is not initialized";
         }
         return false;
     }
 
+    const int streamWidth = m_inputVideoStream && m_inputVideoStream->codecpar
+        ? m_inputVideoStream->codecpar->width
+        : 0;
+    const int streamHeight = m_inputVideoStream && m_inputVideoStream->codecpar
+        ? m_inputVideoStream->codecpar->height
+        : 0;
+
     FFmpegVideoEncoderStage::Config config;
     config.transcodeConfig = &m_config;
     config.hardwarePlan = m_hasHardwarePlan ? &m_hardwarePlan : nullptr;
-    config.decoderCtx = m_decoderStage.context();
     config.inputVideoStream = m_inputVideoStream;
     config.outputFmtCtx = m_outputFmtCtx;
+    config.inputWidth = validOrFallbackDimension(decoderCtx->width, streamWidth);
+    config.inputHeight = validOrFallbackDimension(decoderCtx->height, streamHeight);
     config.hardwareDeviceContext = &m_decoderStage.hardwareDeviceContext();
     config.decoderUsesHardwareFrames = m_decoderStage.usesHardwareFrames();
     config.decoderHardwareDeviceAttached = m_decoderStage.hardwareDeviceAttached();
