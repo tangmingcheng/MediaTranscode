@@ -15,35 +15,6 @@ extern "C" {
 namespace media::ffmpeg {
 namespace {
 
-AVPixelFormat expectedSoftwareFormatAfterHardwareDownload(HardwareDeviceType deviceType,
-                                                         AVPixelFormat decoderSoftwareFormat)
-{
-    switch (deviceType) {
-    case HardwareDeviceType::D3D11VA:
-    case HardwareDeviceType::CUDA:
-    case HardwareDeviceType::QSV:
-    case HardwareDeviceType::VAAPI:
-    case HardwareDeviceType::DRM:
-    case HardwareDeviceType::RKMPP:
-        if (decoderSoftwareFormat == AV_PIX_FMT_NONE ||
-            decoderSoftwareFormat == AV_PIX_FMT_YUV420P) {
-            return AV_PIX_FMT_NV12;
-        }
-        return decoderSoftwareFormat;
-
-    case HardwareDeviceType::VideoToolbox:
-        if (decoderSoftwareFormat == AV_PIX_FMT_NONE) {
-            return AV_PIX_FMT_NV12;
-        }
-        return decoderSoftwareFormat;
-
-    case HardwareDeviceType::Auto:
-    case HardwareDeviceType::None:
-    default:
-        return decoderSoftwareFormat;
-    }
-}
-
 const char* pixelFormatName(AVPixelFormat format)
 {
     const char* name = av_get_pix_fmt_name(format);
@@ -53,6 +24,24 @@ const char* pixelFormatName(AVPixelFormat format)
 bool shouldLogZeroCopyFrame(int64_t frameCount)
 {
     return frameCount <= 3 || frameCount % 120 == 0;
+}
+
+AVRational chooseInputSampleAspectRatio(const AVFrame* frame,
+                                        const AVCodecContext* decoderCtx)
+{
+    if (frame &&
+        frame->sample_aspect_ratio.num > 0 &&
+        frame->sample_aspect_ratio.den > 0) {
+        return frame->sample_aspect_ratio;
+    }
+
+    if (decoderCtx &&
+        decoderCtx->sample_aspect_ratio.num > 0 &&
+        decoderCtx->sample_aspect_ratio.den > 0) {
+        return decoderCtx->sample_aspect_ratio;
+    }
+
+    return AVRational{ 1, 1 };
 }
 
 } // namespace
@@ -139,26 +128,38 @@ bool FFmpegVideoFilterStage::initializeSoftwareFilterGraph(
     const AVFrame* firstFrame,
     std::string* error)
 {
+    if (!firstFrame) {
+        if (error) {
+            *error = "initialize software filter graph failed: first frame is null";
+        }
+        return false;
+    }
+
+    const AVPixelFormat inputFormat = static_cast<AVPixelFormat>(firstFrame->format);
+    if (inputFormat == AV_PIX_FMT_NONE || firstFrame->width <= 0 || firstFrame->height <= 0) {
+        if (error) {
+            std::ostringstream oss;
+            oss << "initialize software filter graph failed: invalid first frame metadata, fmt="
+                << pixelFormatName(inputFormat)
+                << ", size="
+                << firstFrame->width
+                << "x"
+                << firstFrame->height;
+            *error = oss.str();
+        }
+        return false;
+    }
+
     VideoFilterGraph::Config config;
     config.decoderCtx = m_decoderCtx;
     config.encoderCtx = m_encoderCtx;
     config.inputStream = m_inputVideoStream;
+    config.inputPixelFormat = inputFormat;
+    config.inputWidth = firstFrame->width;
+    config.inputHeight = firstFrame->height;
+    config.inputSampleAspectRatio = chooseInputSampleAspectRatio(firstFrame, m_decoderCtx);
     config.outputFps = m_outputFps;
     config.enableConstantFps = m_enableConstantFps;
-
-    if (firstFrame) {
-        config.inputPixelFormat = static_cast<AVPixelFormat>(firstFrame->format);
-        config.inputWidth = firstFrame->width;
-        config.inputHeight = firstFrame->height;
-    }
-    else if (m_hardwareBackend.deviceType != HardwareDeviceType::None &&
-        m_hardwareBackend.deviceType != HardwareDeviceType::Auto &&
-        m_hardwareBackend.hardwarePixelFormat != AV_PIX_FMT_NONE) {
-        config.inputPixelFormat = expectedSoftwareFormatAfterHardwareDownload(
-            m_hardwareBackend.deviceType,
-            m_decoderCtx ? m_decoderCtx->sw_pix_fmt : AV_PIX_FMT_NONE
-        );
-    }
 
     if (!m_filterGraph.initialize(config, error)) {
         return false;
@@ -167,12 +168,12 @@ bool FFmpegVideoFilterStage::initializeSoftwareFilterGraph(
     m_softwareFilterGraphInitialized = true;
 
     spdlog::info(
-        "[FILTER] software graph initialized: input_fmt={}, input_size={}x{}, encoder_pix_fmt={}, encoder_size={}x{}",
-        pixelFormatName(config.inputPixelFormat != AV_PIX_FMT_NONE
-            ? config.inputPixelFormat
-            : (m_decoderCtx ? m_decoderCtx->pix_fmt : AV_PIX_FMT_NONE)),
-        config.inputWidth > 0 ? config.inputWidth : (m_decoderCtx ? m_decoderCtx->width : 0),
-        config.inputHeight > 0 ? config.inputHeight : (m_decoderCtx ? m_decoderCtx->height : 0),
+        "[FILTER] software graph initialized from first frame: input_fmt={}, input_size={}x{}, sar={}/{}, encoder_pix_fmt={}, encoder_size={}x{}",
+        pixelFormatName(config.inputPixelFormat),
+        config.inputWidth,
+        config.inputHeight,
+        config.inputSampleAspectRatio.num,
+        config.inputSampleAspectRatio.den,
         pixelFormatName(m_encoderCtx ? m_encoderCtx->pix_fmt : AV_PIX_FMT_NONE),
         m_encoderCtx ? m_encoderCtx->width : 0,
         m_encoderCtx ? m_encoderCtx->height : 0
