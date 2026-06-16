@@ -7,6 +7,7 @@
 #include "internal/FFmpegVideoFilterStage.h"
 #include "internal/FFmpegVideoFrameRoutingStrategy.h"
 #include "internal/FFmpegVideoHardwareTransferStage.h"
+#include "internal/FFmpegVideoInputMetadata.h"
 #include "internal/FFmpegVideoPacketWriterStage.h"
 #include "internal/FFmpegVideoTimestampStage.h"
 
@@ -66,6 +67,7 @@ public:
 private:
     bool initializeTimestampStage(TimelineNormalizer* timeline, std::string* error);
     bool openDecoder(std::string* error);
+    bool collectVideoInputMetadata(std::string* error);
     bool openEncoder(std::string* error);
     bool initializeFrameRoutingStrategy(std::string* error);
     bool initializeHardwareTransferStage(std::string* error);
@@ -95,6 +97,7 @@ private:
 
     AVStream* m_inputVideoStream = nullptr;
     AVFormatContext* m_outputFmtCtx = nullptr;
+    FFmpegVideoInputMetadata m_inputMetadata;
 
     FFmpegVideoTimestampStage m_timestampStage;
     FFmpegVideoDecoderStage m_decoderStage;
