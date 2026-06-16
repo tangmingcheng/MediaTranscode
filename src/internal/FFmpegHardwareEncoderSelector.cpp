@@ -67,7 +67,7 @@ namespace {
                 return { nullptr, nullptr, nullptr, nullptr, nullptr };
             }
 
-        case HardwareDeviceType::DRM:
+        case HardwareDeviceType::RKMPP:
             switch (codec) {
             case VideoCodec::H264:
                 return { "h264_rkmpp", nullptr, nullptr, nullptr, nullptr };
@@ -76,6 +76,9 @@ namespace {
             default:
                 return { nullptr, nullptr, nullptr, nullptr, nullptr };
             }
+
+        case HardwareDeviceType::DRM:
+            return { nullptr, nullptr, nullptr, nullptr, nullptr };
 
         case HardwareDeviceType::VideoToolbox:
             switch (codec) {
@@ -269,6 +272,18 @@ namespace {
         return selection;
     }
 
+    bool backendCanFeedEncoderHardwareFrames(const HardwareBackendProfile& backend,
+                                             const AVCodec* encoder)
+    {
+        const bool hasZeroCopyTransport =
+            backend.supportsZeroCopyFilter ||
+            backend.supportsDirectHardwareFrameEncode;
+
+        return hasZeroCopyTransport &&
+            backend.hardwarePixelFormat != AV_PIX_FMT_NONE &&
+            HardwareEncoderSelector::encoderSupportsPixelFormat(encoder, backend.hardwarePixelFormat);
+    }
+
 } // namespace
 
     HardwareEncoderSelection HardwareEncoderSelector::selectZeroCopyEncoder(
@@ -320,10 +335,7 @@ namespace {
                 backend.deviceType
             );
             const bool supportsSoftwareInput = isSoftwareFramePixelFormat(softwareInputFormat);
-            const bool canUseBackendHardwareFrames =
-                backend.supportsZeroCopyFilter &&
-                backend.hardwarePixelFormat != AV_PIX_FMT_NONE &&
-                encoderSupportsPixelFormat(encoder, backend.hardwarePixelFormat);
+            const bool canUseBackendHardwareFrames = backendCanFeedEncoderHardwareFrames(backend, encoder);
 
             candidate.available = true;
             candidate.hardwareEncoder = hardwareEncoder;
@@ -399,10 +411,7 @@ namespace {
                 firstAvailableName = encoderName;
             }
 
-            const bool canUseBackendHardwareFrames =
-                backend.supportsZeroCopyFilter &&
-                backend.hardwarePixelFormat != AV_PIX_FMT_NONE &&
-                encoderSupportsPixelFormat(encoder, backend.hardwarePixelFormat);
+            const bool canUseBackendHardwareFrames = backendCanFeedEncoderHardwareFrames(backend, encoder);
 
             candidate.available = true;
             candidate.hardwareEncoder = isHardwareEncoderName(encoderName);
@@ -484,6 +493,7 @@ namespace {
         switch (deviceType) {
         case HardwareDeviceType::D3D11VA:
         case HardwareDeviceType::DRM:
+        case HardwareDeviceType::RKMPP:
         case HardwareDeviceType::VideoToolbox:
             preferred = { AV_PIX_FMT_NV12, AV_PIX_FMT_YUV420P };
             break;
