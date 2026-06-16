@@ -206,12 +206,9 @@ bool FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream(std::string* erro
         : chooseVideoEncoderPixelFormat(encoder);
 
     if (directHardwareFrameEncoder &&
-        m_encoderCtx->pix_fmt == AV_PIX_FMT_DRM_PRIME &&
+        m_hardwareBackend.directHardwareFrameSoftwareFormat != AV_PIX_FMT_NONE &&
         m_encoderCtx->sw_pix_fmt == AV_PIX_FMT_NONE) {
-        // RKMPP direct zero-copy opens with pix_fmt=DRM_PRIME, but the encoder
-        // still needs the underlying DRM frame software layout. Rockchip MPP
-        // expects DRM_PRIME frames backed by NV12 hardware frames.
-        m_encoderCtx->sw_pix_fmt = AV_PIX_FMT_NV12;
+        m_encoderCtx->sw_pix_fmt = m_hardwareBackend.directHardwareFrameSoftwareFormat;
     }
 
     m_encoderCtx->bit_rate = static_cast<int64_t>(std::max(1, m_config.videoBitrateKbps)) * 1000;
