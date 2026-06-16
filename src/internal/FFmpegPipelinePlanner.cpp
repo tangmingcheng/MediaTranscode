@@ -112,52 +112,7 @@ namespace {
     std::vector<HardwareDeviceType> FFmpegPipelinePlanner::backendPriority(
         HardwareDeviceType requestedDeviceType)
     {
-        if (requestedDeviceType != HardwareDeviceType::Auto &&
-            requestedDeviceType != HardwareDeviceType::None) {
-            return { requestedDeviceType };
-        }
-
-#if defined(_WIN32)
-        return {
-            HardwareDeviceType::CUDA,
-            HardwareDeviceType::QSV,
-            HardwareDeviceType::D3D11VA,
-            HardwareDeviceType::VAAPI,
-            HardwareDeviceType::RKMPP,
-            HardwareDeviceType::DRM,
-            HardwareDeviceType::VideoToolbox
-        };
-#elif defined(__APPLE__)
-        return {
-            HardwareDeviceType::VideoToolbox,
-            HardwareDeviceType::CUDA,
-            HardwareDeviceType::VAAPI,
-            HardwareDeviceType::QSV,
-            HardwareDeviceType::RKMPP,
-            HardwareDeviceType::DRM,
-            HardwareDeviceType::D3D11VA
-        };
-#elif defined(__aarch64__) || defined(__arm64__)
-        return {
-            HardwareDeviceType::RKMPP,
-            HardwareDeviceType::VAAPI,
-            HardwareDeviceType::DRM,
-            HardwareDeviceType::CUDA,
-            HardwareDeviceType::QSV,
-            HardwareDeviceType::D3D11VA,
-            HardwareDeviceType::VideoToolbox
-        };
-#else
-        return {
-            HardwareDeviceType::CUDA,
-            HardwareDeviceType::VAAPI,
-            HardwareDeviceType::QSV,
-            HardwareDeviceType::RKMPP,
-            HardwareDeviceType::DRM,
-            HardwareDeviceType::D3D11VA,
-            HardwareDeviceType::VideoToolbox
-        };
-#endif
+        return HardwareBackendRegistry::backendPriority(requestedDeviceType);
     }
 
     HardwarePipelinePlan FFmpegPipelinePlanner::planHardwarePipeline(
