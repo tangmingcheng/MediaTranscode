@@ -114,13 +114,28 @@ namespace media::ffmpeg {
             ? config.inputPixelFormat
             : config.decoderCtx->pix_fmt;
 
+        const int inputWidth = config.inputWidth > 0
+            ? config.inputWidth
+            : config.decoderCtx->width;
+        const int inputHeight = config.inputHeight > 0
+            ? config.inputHeight
+            : config.decoderCtx->height;
+
+        if (inputPixelFormat == AV_PIX_FMT_NONE || inputWidth <= 0 || inputHeight <= 0) {
+            if (error) {
+                *error = "VideoFilterGraph initialize failed: invalid input frame format or size";
+            }
+            reset();
+            return false;
+        }
+
         char args[512] = {};
         std::snprintf(
             args,
             sizeof(args),
             "video_size=%dx%d:pix_fmt=%d:time_base=%d/%d:pixel_aspect=%d/%d:frame_rate=%d/%d",
-            config.decoderCtx->width,
-            config.decoderCtx->height,
+            inputWidth,
+            inputHeight,
             inputPixelFormat,
             config.inputStream->time_base.num,
             config.inputStream->time_base.den,
@@ -261,7 +276,7 @@ namespace media::ffmpeg {
 
         if (ret < 0) {
             if (error) {
-                *error = "av_buffersrc_add_frame_flags failed: " + errorString(ret);
+                *error = "av_buffersrc_add_frame_flags video failed: " + errorString(ret);
             }
             return false;
         }
@@ -272,10 +287,7 @@ namespace media::ffmpeg {
     bool VideoFilterGraph::flush(std::string* error)
     {
         if (!m_bufferSrcCtx) {
-            if (error) {
-                *error = "VideoFilterGraph flush failed: graph is not initialized";
-            }
-            return false;
+            return true;
         }
 
         const int ret = av_buffersrc_add_frame_flags(
@@ -286,7 +298,7 @@ namespace media::ffmpeg {
 
         if (ret < 0) {
             if (error) {
-                *error = "av_buffersrc_add_frame_flags flush failed: " + errorString(ret);
+                *error = "av_buffersrc_add_frame_flags video flush failed: " + errorString(ret);
             }
             return false;
         }
@@ -303,13 +315,6 @@ namespace media::ffmpeg {
             return -1;
         }
 
-        if (!frame) {
-            if (error) {
-                *error = "VideoFilterGraph receiveFrame failed: frame is null";
-            }
-            return -1;
-        }
-
         const int ret = av_buffersink_get_frame(m_bufferSinkCtx, frame);
 
         if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
@@ -318,7 +323,7 @@ namespace media::ffmpeg {
 
         if (ret < 0) {
             if (error) {
-                *error = "av_buffersink_get_frame failed: " + errorString(ret);
+                *error = "av_buffersink_get_frame video failed: " + errorString(ret);
             }
             return -1;
         }
@@ -345,21 +350,35 @@ namespace media::ffmpeg {
         return m_inputFrameRate;
     }
 
-    AVRational VideoFilterGraph::chooseInputFrameRate(const AVStream* inputStream, int outputFps)
+    AVRational VideoFilterGraph::chooseInputFrameRate(const AVStream* inputStream,
+                                                      int outputFps)
     {
         if (inputStream) {
-            if (inputStream->avg_frame_rate.num > 0 &&
-                inputStream->avg_frame_rate.den > 0) {
-                return inputStream->avg_frame_rate;
+            AVRational rate = inputStream->avg_frame_rate;
+
+            if (rate.num > 0 && rate.den > 0) {
+                const double fps = av_q2d(rate);
+
+                if (fps > 1.0 && fps < 240.0) {
+                    return rate;
+                }
             }
 
-            if (inputStream->r_frame_rate.num > 0 &&
-                inputStream->r_frame_rate.den > 0) {
-                return inputStream->r_frame_rate;
+            rate = inputStream->r_frame_rate;
+            if (rate.num > 0 && rate.den > 0) {
+                const double fps = av_q2d(rate);
+
+                if (fps > 1.0 && fps < 240.0) {
+                    return rate;
+                }
             }
         }
 
-        return AVRational{ outputFps > 0 ? outputFps : 25, 1 };
+        if (outputFps > 0) {
+            return AVRational{ outputFps, 1 };
+        }
+
+        return AVRational{ 25, 1 };
     }
 
     std::string VideoFilterGraph::buildDescription(const AVCodecContext* encoderCtx,
@@ -376,19 +395,30 @@ namespace media::ffmpeg {
         }
 
         std::ostringstream desc;
+        bool hasFilter = false;
 
-        desc << "scale="
-            << encoderCtx->width
-            << ":"
-            << encoderCtx->height
-            << ":flags=bicubic";
-
-        if (enableConstantFps) {
-            desc << ",fps=fps=" << (outputFps > 0 ? outputFps : 25) << ":round=near";
+        if (encoderCtx->width > 0 && encoderCtx->height > 0) {
+            desc << "scale="
+                 << encoderCtx->width
+                 << ":"
+                 << encoderCtx->height
+                 << ":flags=bicubic";
+            hasFilter = true;
         }
 
-        desc << ",format=pix_fmts=" << pixFmtName;
+        if (enableConstantFps && outputFps > 0) {
+            if (hasFilter) {
+                desc << ",";
+            }
+            desc << "fps=fps=" << outputFps;
+            hasFilter = true;
+        }
 
+        if (hasFilter) {
+            desc << ",";
+        }
+
+        desc << "format=pix_fmts=" << pixFmtName;
         return desc.str();
     }
 
