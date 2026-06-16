@@ -5,6 +5,18 @@ extern "C" {
 }
 
 namespace media::ffmpeg {
+namespace {
+
+AVRational validOrDefaultSampleAspectRatio(AVRational ratio)
+{
+    if (ratio.num > 0 && ratio.den > 0) {
+        return ratio;
+    }
+
+    return AVRational{ 1, 1 };
+}
+
+} // namespace
 
 FFmpegVideoTranscodePipeline::~FFmpegVideoTranscodePipeline()
 {
@@ -156,10 +168,14 @@ bool FFmpegVideoTranscodePipeline::initializeFilterStage(std::string* error)
         return false;
     }
 
+    AVCodecContext* decoderCtx = m_decoderStage.context();
+
     FFmpegVideoFilterStage::Config config;
-    config.decoderCtx = m_decoderStage.context();
     config.encoderCtx = encoderCtx;
     config.inputVideoStream = m_inputVideoStream;
+    config.inputFallbackSampleAspectRatio = decoderCtx
+        ? validOrDefaultSampleAspectRatio(decoderCtx->sample_aspect_ratio)
+        : AVRational{ 1, 1 };
     config.outputFps = m_encoderStage.outputFps();
     config.enableConstantFps = m_encoderStage.enableConstantFps();
     config.zeroCopyPipeline = m_encoderStage.zeroCopyPipeline();
