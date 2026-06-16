@@ -8,17 +8,36 @@
 namespace media::ffmpeg {
 namespace {
 
-    bool matchesRequestedDevice(AVHWDeviceType candidate,
+    bool isRkmppDevice(HardwareDeviceType requestedDeviceType)
+    {
+        return requestedDeviceType == HardwareDeviceType::RKMPP;
+    }
+
+    bool matchesRequestedDevice(const AVCodecHWConfig* config,
                                 HardwareDeviceType requestedDeviceType)
     {
+        if (!config) {
+            return false;
+        }
+
+        if (isRkmppDevice(requestedDeviceType)) {
+            return config->pix_fmt == AV_PIX_FMT_DRM_PRIME &&
+                ((config->methods & AV_CODEC_HW_CONFIG_METHOD_INTERNAL) ||
+                 (config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX));
+        }
+
+        if (!(config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX)) {
+            return false;
+        }
+
         if (requestedDeviceType == HardwareDeviceType::Auto) {
             return true;
         }
 
-        return candidate == HardwareDeviceContext::toAVDeviceType(requestedDeviceType);
+        return config->device_type == HardwareDeviceContext::toAVDeviceType(requestedDeviceType);
     }
 
-    HardwareDeviceType mapDeviceType(AVHWDeviceType candidate,
+    HardwareDeviceType mapDeviceType(const AVCodecHWConfig* config,
                                      HardwareDeviceType requestedDeviceType)
     {
         if (requestedDeviceType != HardwareDeviceType::Auto &&
@@ -26,7 +45,32 @@ namespace {
             return requestedDeviceType;
         }
 
-        return HardwareDeviceContext::fromAVDeviceType(candidate);
+        return config ? HardwareDeviceContext::fromAVDeviceType(config->device_type) : HardwareDeviceType::None;
+    }
+
+    AVHWDeviceType mapAVDeviceType(const AVCodecHWConfig* config,
+                                   HardwareDeviceType requestedDeviceType)
+    {
+        if (isRkmppDevice(requestedDeviceType)) {
+            return AV_HWDEVICE_TYPE_DRM;
+        }
+
+        return config ? config->device_type : AV_HWDEVICE_TYPE_NONE;
+    }
+
+    bool requiresHardwareDeviceContext(const AVCodecHWConfig* config,
+                                       HardwareDeviceType requestedDeviceType)
+    {
+        if (!config) {
+            return false;
+        }
+
+        if (isRkmppDevice(requestedDeviceType) &&
+            (config->methods & AV_CODEC_HW_CONFIG_METHOD_INTERNAL)) {
+            return false;
+        }
+
+        return (config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) != 0;
     }
 
     const char* rkmppDecoderName(AVCodecID codecId)
@@ -80,16 +124,12 @@ namespace {
                 break;
             }
 
-            if (!(config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX)) {
-                continue;
-            }
-
-            if (!matchesRequestedDevice(config->device_type, requestedDeviceType)) {
+            if (!matchesRequestedDevice(config, requestedDeviceType)) {
                 continue;
             }
 
             const HardwareDeviceType mappedDeviceType = mapDeviceType(
-                config->device_type,
+                config,
                 requestedDeviceType
             );
 
@@ -99,10 +139,14 @@ namespace {
 
             result.valid = true;
             result.deviceType = mappedDeviceType;
-            result.avDeviceType = config->device_type;
+            result.avDeviceType = mapAVDeviceType(config, requestedDeviceType);
             result.hardwarePixelFormat = config->pix_fmt;
             result.decoder = selectedDecoder;
             result.decoderName = selectedDecoder->name ? selectedDecoder->name : "";
+            result.requiresHardwareDeviceContext = requiresHardwareDeviceContext(
+                config,
+                requestedDeviceType
+            );
             return result;
         }
 
