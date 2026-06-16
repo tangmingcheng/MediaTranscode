@@ -21,9 +21,9 @@ namespace media::ffmpeg {
 class FFmpegVideoFilterStage {
 public:
     struct Config {
-        AVCodecContext* decoderCtx = nullptr;
         AVCodecContext* encoderCtx = nullptr;
         AVStream* inputVideoStream = nullptr;
+        AVRational inputFallbackSampleAspectRatio{ 1, 1 };
 
         int outputFps = 0;
         bool enableConstantFps = false;
@@ -73,9 +73,9 @@ private:
                                     std::string* error);
 
 private:
-    AVCodecContext* m_decoderCtx = nullptr;
     AVCodecContext* m_encoderCtx = nullptr;
     AVStream* m_inputVideoStream = nullptr;
+    AVRational m_inputFallbackSampleAspectRatio{ 1, 1 };
 
     int m_outputFps = 0;
     bool m_enableConstantFps = false;
