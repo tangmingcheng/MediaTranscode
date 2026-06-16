@@ -3,6 +3,14 @@
 #include "internal/FFmpegTimelineNormalizer.h"
 
 namespace media::ffmpeg {
+namespace {
+
+bool isValidTimeBase(AVRational timeBase)
+{
+    return timeBase.num > 0 && timeBase.den > 0;
+}
+
+} // namespace
 
 FFmpegVideoTimestampStage::~FFmpegVideoTimestampStage()
 {
@@ -11,7 +19,7 @@ FFmpegVideoTimestampStage::~FFmpegVideoTimestampStage()
 
 void FFmpegVideoTimestampStage::reset()
 {
-    m_inputVideoStream = nullptr;
+    m_inputTimeBase = AVRational{ 0, 1 };
     m_timeline = nullptr;
 }
 
@@ -19,9 +27,9 @@ bool FFmpegVideoTimestampStage::initialize(const Config& config, std::string* er
 {
     reset();
 
-    if (!config.inputVideoStream) {
+    if (!isValidTimeBase(config.inputMetadata.timeBase)) {
         if (error) {
-            *error = "FFmpegVideoTimestampStage initialize failed: inputVideoStream is null";
+            *error = "FFmpegVideoTimestampStage initialize failed: input time base is invalid";
         }
         return false;
     }
@@ -33,7 +41,7 @@ bool FFmpegVideoTimestampStage::initialize(const Config& config, std::string* er
         return false;
     }
 
-    m_inputVideoStream = config.inputVideoStream;
+    m_inputTimeBase = config.inputMetadata.timeBase;
     m_timeline = config.timeline;
 
     return true;
@@ -48,7 +56,7 @@ bool FFmpegVideoTimestampStage::normalizeFramePts(AVFrame* frame, std::string* e
         return false;
     }
 
-    if (!m_inputVideoStream || !m_timeline) {
+    if (!isValidTimeBase(m_inputTimeBase) || !m_timeline) {
         if (error) {
             *error = "normalize video frame pts failed: timestamp stage is not initialized";
         }
@@ -63,7 +71,7 @@ bool FFmpegVideoTimestampStage::normalizeFramePts(AVFrame* frame, std::string* e
         return false;
     }
 
-    const int64_t inputVideoUs = TimelineNormalizer::toUs(inputVideoTs, m_inputVideoStream->time_base);
+    const int64_t inputVideoUs = TimelineNormalizer::toUs(inputVideoTs, m_inputTimeBase);
     const int64_t normalizedVideoUs = m_timeline->normalizeUs(inputVideoUs);
 
     if (normalizedVideoUs == AV_NOPTS_VALUE) {
@@ -73,7 +81,7 @@ bool FFmpegVideoTimestampStage::normalizeFramePts(AVFrame* frame, std::string* e
         return false;
     }
 
-    frame->pts = TimelineNormalizer::fromUs(normalizedVideoUs, m_inputVideoStream->time_base);
+    frame->pts = TimelineNormalizer::fromUs(normalizedVideoUs, m_inputTimeBase);
     if (frame->pts == AV_NOPTS_VALUE) {
         if (error) {
             *error = "decoded video frame pts is invalid after normalization";
@@ -86,7 +94,7 @@ bool FFmpegVideoTimestampStage::normalizeFramePts(AVFrame* frame, std::string* e
 
 bool FFmpegVideoTimestampStage::isInitialized() const
 {
-    return m_inputVideoStream && m_timeline;
+    return isValidTimeBase(m_inputTimeBase) && m_timeline;
 }
 
 int64_t FFmpegVideoTimestampStage::decodedFrameTimestamp(const AVFrame* frame)
