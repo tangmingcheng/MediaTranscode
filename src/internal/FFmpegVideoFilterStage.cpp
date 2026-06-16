@@ -75,6 +75,7 @@ void FFmpegVideoFilterStage::reset()
     m_outputFps = 0;
     m_enableConstantFps = false;
 
+    m_initialized = false;
     m_zeroCopyPipeline = false;
     m_bypassHardwareFilterGraph = false;
     m_softwareFilterGraphInitialized = false;
@@ -122,20 +123,21 @@ bool FFmpegVideoFilterStage::initialize(const Config& config, std::string* error
         m_hardwareBackend.supportsDirectHardwareFrameEncode &&
         !m_hardwareBackend.supportsZeroCopyFilter;
 
-    if (m_zeroCopyPipeline) {
-        if (m_bypassHardwareFilterGraph) {
-            spdlog::info(
-                "[ZC][FILTER] bypass hardware filter graph for backend={}",
-                m_hardwareBackend.name ? m_hardwareBackend.name : "unknown"
-            );
-        }
-        return true;
+    m_initialized = true;
+
+    if (m_zeroCopyPipeline && m_bypassHardwareFilterGraph) {
+        spdlog::info(
+            "[ZC][FILTER] bypass hardware filter graph for backend={}",
+            m_hardwareBackend.name ? m_hardwareBackend.name : "unknown"
+        );
     }
 
-    return initializeSoftwareFilterGraph(error);
+    return true;
 }
 
-bool FFmpegVideoFilterStage::initializeSoftwareFilterGraph(std::string* error)
+bool FFmpegVideoFilterStage::initializeSoftwareFilterGraph(
+    const AVFrame* firstFrame,
+    std::string* error)
 {
     VideoFilterGraph::Config config;
     config.decoderCtx = m_decoderCtx;
@@ -144,10 +146,17 @@ bool FFmpegVideoFilterStage::initializeSoftwareFilterGraph(std::string* error)
     config.outputFps = m_outputFps;
     config.enableConstantFps = m_enableConstantFps;
 
-    if (m_decoderCtx && m_decoderCtx->hw_device_ctx) {
+    if (firstFrame) {
+        config.inputPixelFormat = static_cast<AVPixelFormat>(firstFrame->format);
+        config.inputWidth = firstFrame->width;
+        config.inputHeight = firstFrame->height;
+    }
+    else if (m_hardwareBackend.deviceType != HardwareDeviceType::None &&
+        m_hardwareBackend.deviceType != HardwareDeviceType::Auto &&
+        m_hardwareBackend.hardwarePixelFormat != AV_PIX_FMT_NONE) {
         config.inputPixelFormat = expectedSoftwareFormatAfterHardwareDownload(
             m_hardwareBackend.deviceType,
-            m_decoderCtx->sw_pix_fmt
+            m_decoderCtx ? m_decoderCtx->sw_pix_fmt : AV_PIX_FMT_NONE
         );
     }
 
@@ -156,6 +165,19 @@ bool FFmpegVideoFilterStage::initializeSoftwareFilterGraph(std::string* error)
     }
 
     m_softwareFilterGraphInitialized = true;
+
+    spdlog::info(
+        "[FILTER] software graph initialized: input_fmt={}, input_size={}x{}, encoder_pix_fmt={}, encoder_size={}x{}",
+        pixelFormatName(config.inputPixelFormat != AV_PIX_FMT_NONE
+            ? config.inputPixelFormat
+            : (m_decoderCtx ? m_decoderCtx->pix_fmt : AV_PIX_FMT_NONE)),
+        config.inputWidth > 0 ? config.inputWidth : (m_decoderCtx ? m_decoderCtx->width : 0),
+        config.inputHeight > 0 ? config.inputHeight : (m_decoderCtx ? m_decoderCtx->height : 0),
+        pixelFormatName(m_encoderCtx ? m_encoderCtx->pix_fmt : AV_PIX_FMT_NONE),
+        m_encoderCtx ? m_encoderCtx->width : 0,
+        m_encoderCtx ? m_encoderCtx->height : 0
+    );
+
     return true;
 }
 
@@ -202,6 +224,13 @@ bool FFmpegVideoFilterStage::initializeHardwareFilterGraphFromFrame(
 
 bool FFmpegVideoFilterStage::sendSoftwareFrame(AVFrame* frame, std::string* error)
 {
+    if (!m_initialized) {
+        if (error) {
+            *error = "FFmpegVideoFilterStage sendSoftwareFrame failed: stage is not initialized";
+        }
+        return false;
+    }
+
     if (m_zeroCopyPipeline) {
         if (error) {
             *error = "software filter path is unavailable in zero-copy pipeline";
@@ -209,11 +238,17 @@ bool FFmpegVideoFilterStage::sendSoftwareFrame(AVFrame* frame, std::string* erro
         return false;
     }
 
-    if (!m_softwareFilterGraphInitialized) {
+    if (!frame) {
         if (error) {
-            *error = "software filter graph is not initialized";
+            *error = "software filter frame is null";
         }
         return false;
+    }
+
+    if (!m_softwareFilterGraphInitialized) {
+        if (!initializeSoftwareFilterGraph(frame, error)) {
+            return false;
+        }
     }
 
     return m_filterGraph.sendFrame(frame, error);
@@ -221,6 +256,13 @@ bool FFmpegVideoFilterStage::sendSoftwareFrame(AVFrame* frame, std::string* erro
 
 bool FFmpegVideoFilterStage::sendHardwareFrame(AVFrame* frame, std::string* error)
 {
+    if (!m_initialized) {
+        if (error) {
+            *error = "FFmpegVideoFilterStage sendHardwareFrame failed: stage is not initialized";
+        }
+        return false;
+    }
+
     if (!m_zeroCopyPipeline) {
         if (error) {
             *error = "hardware filter path is unavailable in software pipeline";
@@ -243,6 +285,10 @@ bool FFmpegVideoFilterStage::sendHardwareFrame(AVFrame* frame, std::string* erro
 
 bool FFmpegVideoFilterStage::flush(std::string* error)
 {
+    if (!m_initialized) {
+        return true;
+    }
+
     if (m_zeroCopyPipeline) {
         if (m_bypassHardwareFilterGraph) {
             return true;
@@ -264,6 +310,13 @@ bool FFmpegVideoFilterStage::flush(std::string* error)
 
 int FFmpegVideoFilterStage::receiveFrame(AVFrame* frame, std::string* error)
 {
+    if (!m_initialized) {
+        if (error) {
+            *error = "FFmpegVideoFilterStage receiveFrame failed: stage is not initialized";
+        }
+        return -1;
+    }
+
     if (m_zeroCopyPipeline) {
         if (m_bypassHardwareFilterGraph) {
             return receiveBypassedHardwareFrame(frame, error);
@@ -509,7 +562,7 @@ bool FFmpegVideoFilterStage::rescaleAndValidateFramePts(AVFrame* frame,
 
 bool FFmpegVideoFilterStage::isInitialized() const
 {
-    return m_zeroCopyPipeline || m_softwareFilterGraphInitialized;
+    return m_initialized;
 }
 
 bool FFmpegVideoFilterStage::zeroCopyPipeline() const
