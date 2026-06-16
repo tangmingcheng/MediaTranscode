@@ -1,8 +1,8 @@
 #include "internal/FFmpegHardwareDecoder.h"
 
+#include "internal/FFmpegHardwareBackend.h"
 #include "internal/FFmpegHardwareContext.h"
 
-#include <array>
 #include <string>
 
 namespace media::ffmpeg {
@@ -153,52 +153,6 @@ namespace {
         return result;
     }
 
-    const std::array<HardwareDeviceType, 7>& autoDevicePriority()
-    {
-#if defined(_WIN32)
-        static const std::array<HardwareDeviceType, 7> kPriority = {
-            HardwareDeviceType::CUDA,
-            HardwareDeviceType::D3D11VA,
-            HardwareDeviceType::QSV,
-            HardwareDeviceType::VAAPI,
-            HardwareDeviceType::RKMPP,
-            HardwareDeviceType::DRM,
-            HardwareDeviceType::VideoToolbox
-        };
-#elif defined(__APPLE__)
-        static const std::array<HardwareDeviceType, 7> kPriority = {
-            HardwareDeviceType::VideoToolbox,
-            HardwareDeviceType::CUDA,
-            HardwareDeviceType::VAAPI,
-            HardwareDeviceType::QSV,
-            HardwareDeviceType::RKMPP,
-            HardwareDeviceType::DRM,
-            HardwareDeviceType::D3D11VA
-        };
-#elif defined(__aarch64__) || defined(__arm64__)
-        static const std::array<HardwareDeviceType, 7> kPriority = {
-            HardwareDeviceType::RKMPP,
-            HardwareDeviceType::VAAPI,
-            HardwareDeviceType::DRM,
-            HardwareDeviceType::CUDA,
-            HardwareDeviceType::QSV,
-            HardwareDeviceType::D3D11VA,
-            HardwareDeviceType::VideoToolbox
-        };
-#else
-        static const std::array<HardwareDeviceType, 7> kPriority = {
-            HardwareDeviceType::CUDA,
-            HardwareDeviceType::VAAPI,
-            HardwareDeviceType::QSV,
-            HardwareDeviceType::RKMPP,
-            HardwareDeviceType::DRM,
-            HardwareDeviceType::D3D11VA,
-            HardwareDeviceType::VideoToolbox
-        };
-#endif
-        return kPriority;
-    }
-
 } // namespace
 
     HardwareDecoderSupport::Config HardwareDecoderSupport::findConfig(
@@ -209,7 +163,8 @@ namespace {
             return findConfigByDeviceType(decoder, requestedDeviceType);
         }
 
-        for (HardwareDeviceType candidateDeviceType : autoDevicePriority()) {
+        for (HardwareDeviceType candidateDeviceType :
+             HardwareBackendRegistry::backendPriority(HardwareDeviceType::Auto)) {
             HardwareDecoderSupport::Config config = findConfigByDeviceType(
                 decoder,
                 candidateDeviceType
