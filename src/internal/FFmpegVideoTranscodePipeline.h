@@ -7,6 +7,7 @@
 #include "internal/FFmpegVideoEncoderStage.h"
 #include "internal/FFmpegVideoFilterStage.h"
 #include "internal/FFmpegVideoPacketWriterStage.h"
+#include "internal/FFmpegVideoTimestampStage.h"
 
 #include <cstdint>
 #include <functional>
@@ -64,6 +65,7 @@ public:
     int64_t estimatedOutTimeMs() const;
 
 private:
+    bool initializeTimestampStage(TimelineNormalizer* timeline, std::string* error);
     bool openDecoder(std::string* error);
     bool openEncoder(std::string* error);
     bool initializeFilterStage(std::string* error);
@@ -90,17 +92,14 @@ private:
 
     AVCodecContext* encoderContext() const;
 
-    static int64_t decodedFrameTimestamp(const AVFrame* frame);
-    bool normalizeFramePts(AVFrame* frame, std::string* error) const;
-
 private:
     TranscodeConfig m_config;
 
     AVStream* m_inputVideoStream = nullptr;
     AVFormatContext* m_outputFmtCtx = nullptr;
     AVStream* m_outputVideoStream = nullptr;
-    TimelineNormalizer* m_timeline = nullptr;
 
+    FFmpegVideoTimestampStage m_timestampStage;
     FFmpegVideoDecoderStage m_decoderStage;
     FFmpegVideoEncoderStage m_encoderStage;
     FFmpegVideoFilterStage m_filterStage;
