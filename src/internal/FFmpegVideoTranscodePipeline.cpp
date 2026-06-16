@@ -77,9 +77,9 @@ bool FFmpegVideoTranscodePipeline::initialize(const Config& config, std::string*
         m_hasHardwarePlan = true;
     }
 
-    return initializeTimestampStage(config.timeline, error) &&
-        openDecoder(error) &&
+    return openDecoder(error) &&
         collectVideoInputMetadata(error) &&
+        initializeTimestampStage(config.timeline, error) &&
         openEncoder(error) &&
         initializeFrameRoutingStrategy(error) &&
         initializeHardwareTransferStage(error) &&
@@ -93,7 +93,7 @@ bool FFmpegVideoTranscodePipeline::initializeTimestampStage(
     std::string* error)
 {
     FFmpegVideoTimestampStage::Config config;
-    config.inputVideoStream = m_inputVideoStream;
+    config.inputMetadata = m_inputMetadata;
     config.timeline = timeline;
     return m_timestampStage.initialize(config, error);
 }
