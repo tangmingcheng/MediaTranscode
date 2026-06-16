@@ -35,8 +35,6 @@ void FFmpegVideoTranscodePipeline::reset()
     m_config = TranscodeConfig{};
     m_inputVideoStream = nullptr;
     m_outputFmtCtx = nullptr;
-    m_packetCount = 0;
-    m_lastWrittenOutTimeMs = 0;
     m_hardwarePlan = HardwarePipelinePlan{};
     m_hasHardwarePlan = false;
 }
@@ -359,19 +357,7 @@ bool FFmpegVideoTranscodePipeline::writeEncodedPackets(
         return false;
     }
 
-    const int writtenPackets = m_packetWriter.receiveAndWritePackets(
-        error,
-        [&](int64_t packetCount, int64_t outTimeMs) {
-            m_packetCount = packetCount;
-            m_lastWrittenOutTimeMs = outTimeMs;
-
-            if (onPacketWritten) {
-                onPacketWritten(packetCount, outTimeMs);
-            }
-        }
-    );
-
-    return writtenPackets >= 0;
+    return m_packetWriter.receiveAndWritePackets(error, onPacketWritten) >= 0;
 }
 
 AVCodecContext* FFmpegVideoTranscodePipeline::encoderContext() const
@@ -395,24 +381,24 @@ AVStream* FFmpegVideoTranscodePipeline::outputStream() const
 
 int64_t FFmpegVideoTranscodePipeline::packetCount() const
 {
-    return m_packetCount;
+    return m_packetWriter.packetCount();
 }
 
 int64_t FFmpegVideoTranscodePipeline::lastWrittenOutTimeMs() const
 {
-    return m_lastWrittenOutTimeMs;
+    return m_packetWriter.lastWrittenOutTimeMs();
 }
 
 int64_t FFmpegVideoTranscodePipeline::estimatedOutTimeMs() const
 {
-    if (m_lastWrittenOutTimeMs > 0) {
-        return m_lastWrittenOutTimeMs;
+    if (m_packetWriter.lastWrittenOutTimeMs() > 0) {
+        return m_packetWriter.lastWrittenOutTimeMs();
     }
 
     AVCodecContext* encoderCtx = encoderContext();
     if (encoderCtx && encoderCtx->framerate.num > 0) {
         return static_cast<int64_t>(
-            m_packetCount * 1000.0 *
+            m_packetWriter.packetCount() * 1000.0 *
             encoderCtx->framerate.den /
             encoderCtx->framerate.num
         );
