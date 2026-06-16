@@ -21,6 +21,11 @@ const char* pixelFormatName(AVPixelFormat format)
     return name ? name : "none";
 }
 
+bool isValidRatio(AVRational ratio)
+{
+    return ratio.num > 0 && ratio.den > 0;
+}
+
 bool shouldLogZeroCopyFrame(int64_t frameCount)
 {
     return frameCount <= 3 || frameCount % 120 == 0;
@@ -61,8 +66,7 @@ void FFmpegVideoFilterStage::reset()
     m_filterGraph.reset();
 
     m_encoderCtx = nullptr;
-    m_inputVideoStream = nullptr;
-    m_inputFallbackSampleAspectRatio = AVRational{ 1, 1 };
+    m_inputMetadata = FFmpegVideoInputMetadata{};
 
     m_outputFps = 0;
     m_enableConstantFps = false;
@@ -90,17 +94,24 @@ bool FFmpegVideoFilterStage::initialize(const Config& config, std::string* error
         return false;
     }
 
-    if (!config.inputVideoStream) {
+    if (!config.inputMetadata.hasValidSize()) {
         if (error) {
-            *error = "FFmpegVideoFilterStage initialize failed: inputVideoStream is null";
+            *error = "FFmpegVideoFilterStage initialize failed: input metadata has invalid video size";
+        }
+        return false;
+    }
+
+    if (!isValidRatio(config.inputMetadata.timeBase)) {
+        if (error) {
+            *error = "FFmpegVideoFilterStage initialize failed: input metadata time base is invalid";
         }
         return false;
     }
 
     m_encoderCtx = config.encoderCtx;
-    m_inputVideoStream = config.inputVideoStream;
-    m_inputFallbackSampleAspectRatio = sanitizeSampleAspectRatio(
-        config.inputFallbackSampleAspectRatio
+    m_inputMetadata = config.inputMetadata;
+    m_inputMetadata.sampleAspectRatio = sanitizeSampleAspectRatio(
+        m_inputMetadata.sampleAspectRatio
     );
     m_outputFps = config.outputFps;
     m_enableConstantFps = config.enableConstantFps;
@@ -150,14 +161,15 @@ bool FFmpegVideoFilterStage::initializeSoftwareFilterGraph(
 
     VideoFilterGraph::Config config;
     config.encoderCtx = m_encoderCtx;
-    config.inputStream = m_inputVideoStream;
     config.inputPixelFormat = inputFormat;
     config.inputWidth = firstFrame->width;
     config.inputHeight = firstFrame->height;
     config.inputSampleAspectRatio = chooseInputSampleAspectRatio(
         firstFrame,
-        m_inputFallbackSampleAspectRatio
+        m_inputMetadata.sampleAspectRatio
     );
+    config.inputTimeBase = m_inputMetadata.timeBase;
+    config.inputFrameRate = m_inputMetadata.frameRate;
     config.outputFps = m_outputFps;
     config.enableConstantFps = m_enableConstantFps;
 
@@ -201,7 +213,6 @@ bool FFmpegVideoFilterStage::initializeHardwareFilterGraphFromFrame(
     }
 
     HardwareVideoFilterGraph::Config config;
-    config.inputStream = m_inputVideoStream;
     config.inputHardwareFramesContext = frame->hw_frames_ctx;
     config.deviceType = m_hardwareBackend.deviceType;
     config.inputHardwarePixelFormat = static_cast<AVPixelFormat>(frame->format);
@@ -210,6 +221,8 @@ bool FFmpegVideoFilterStage::initializeHardwareFilterGraphFromFrame(
     config.inputHeight = frame->height;
     config.outputWidth = m_encoderCtx ? m_encoderCtx->width : frame->width;
     config.outputHeight = m_encoderCtx ? m_encoderCtx->height : frame->height;
+    config.inputTimeBase = m_inputMetadata.timeBase;
+    config.inputFrameRate = m_inputMetadata.frameRate;
     config.enableScale = config.outputWidth > 0 &&
         config.outputHeight > 0 &&
         (config.outputWidth != config.inputWidth || config.outputHeight != config.inputHeight);
@@ -367,9 +380,9 @@ int FFmpegVideoFilterStage::receiveBypassedHardwareFrame(AVFrame* frame, std::st
         return -1;
     }
 
-    if (!m_inputVideoStream) {
+    if (!isValidRatio(m_inputMetadata.timeBase)) {
         if (error) {
-            *error = "receive bypassed hardware frame failed: input stream is null";
+            *error = "receive bypassed hardware frame failed: input time base is invalid";
         }
         return -1;
     }
@@ -384,7 +397,7 @@ int FFmpegVideoFilterStage::receiveBypassedHardwareFrame(AVFrame* frame, std::st
 
         const bool ok = rescaleAndValidateFramePts(
             frame,
-            m_inputVideoStream->time_base,
+            m_inputMetadata.timeBase,
             true,
             error
         );
