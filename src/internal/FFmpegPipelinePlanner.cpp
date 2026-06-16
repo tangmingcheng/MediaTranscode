@@ -16,6 +16,11 @@ namespace {
 
     std::string hardwareDeviceName(HardwareDeviceType type)
     {
+        const HardwareBackendProfile profile = HardwareBackendRegistry::profileFor(type);
+        if (profile.name && *profile.name) {
+            return profile.name;
+        }
+
         const char* name = HardwareDeviceContext::toAVDeviceName(type);
         return name && *name ? name : "none";
     }
@@ -57,6 +62,17 @@ namespace {
         }
     }
 
+    bool zeroCopyWouldRequireVideoFilter(const TranscodeConfig& config)
+    {
+        return config.width > 0 || config.height > 0 || config.fps > 0;
+    }
+
+    bool backendCanUseDirectZeroCopyWithoutFilter(const HardwareBackendProfile& backend)
+    {
+        return backend.supportsDirectHardwareFrameEncode &&
+            !backend.supportsZeroCopyFilter;
+    }
+
     void logAttempt(const HardwarePipelinePlanAttempt& attempt)
     {
         spdlog::info(
@@ -72,7 +88,8 @@ namespace {
         }
 
         spdlog::info(
-            "[PLAN]   decoder: hw_pix_fmt={}, av_device_type={}",
+            "[PLAN]   decoder: name={}, hw_pix_fmt={}, av_device_type={}",
+            attempt.decoderConfig.decoderName.empty() ? "unknown" : attempt.decoderConfig.decoderName,
             pixelFormatName(attempt.decoderConfig.hardwarePixelFormat),
             avHardwareDeviceName(attempt.decoderConfig.avDeviceType)
         );
@@ -106,6 +123,7 @@ namespace {
             HardwareDeviceType::QSV,
             HardwareDeviceType::D3D11VA,
             HardwareDeviceType::VAAPI,
+            HardwareDeviceType::RKMPP,
             HardwareDeviceType::DRM,
             HardwareDeviceType::VideoToolbox
         };
@@ -115,14 +133,26 @@ namespace {
             HardwareDeviceType::CUDA,
             HardwareDeviceType::VAAPI,
             HardwareDeviceType::QSV,
+            HardwareDeviceType::RKMPP,
             HardwareDeviceType::DRM,
             HardwareDeviceType::D3D11VA
+        };
+#elif defined(__aarch64__) || defined(__arm64__)
+        return {
+            HardwareDeviceType::RKMPP,
+            HardwareDeviceType::VAAPI,
+            HardwareDeviceType::DRM,
+            HardwareDeviceType::CUDA,
+            HardwareDeviceType::QSV,
+            HardwareDeviceType::D3D11VA,
+            HardwareDeviceType::VideoToolbox
         };
 #else
         return {
             HardwareDeviceType::CUDA,
             HardwareDeviceType::VAAPI,
             HardwareDeviceType::QSV,
+            HardwareDeviceType::RKMPP,
             HardwareDeviceType::DRM,
             HardwareDeviceType::D3D11VA,
             HardwareDeviceType::VideoToolbox
@@ -178,6 +208,14 @@ namespace {
                 continue;
             }
 
+            if (backendCanUseDirectZeroCopyWithoutFilter(attempt.backend) &&
+                zeroCopyWouldRequireVideoFilter(config)) {
+                attempt.reason = "direct zero-copy backend requires pass-through size/fps; scale or fps filter was requested";
+                plan.attempts.emplace_back(attempt);
+                logAttempt(plan.attempts.back());
+                continue;
+            }
+
             attempt.encoderSelection = HardwareEncoderSelector::selectZeroCopyEncoder(
                 config.videoCodec,
                 attempt.backend
@@ -197,6 +235,7 @@ namespace {
                 plan.decoderConfig = attempt.decoderConfig;
                 plan.encoderSelection = attempt.encoderSelection;
                 plan.diagnostic = "selected zero-copy backend=" + hardwareDeviceName(plan.backend.deviceType) +
+                    ", decoder=" + plan.decoderConfig.decoderName +
                     ", encoder=" + plan.encoderSelection.encoderName +
                     ", hw_pix_fmt=" + pixelFormatName(plan.backend.hardwarePixelFormat);
                 spdlog::info("[PLAN] selected: {}", plan.diagnostic);
@@ -236,6 +275,7 @@ namespace {
             plan.encoderSelection = selected.encoderSelection;
 
             plan.diagnostic = "selected mixed GPU fallback backend=" + hardwareDeviceName(plan.backend.deviceType) +
+                ", decoder=" + plan.decoderConfig.decoderName +
                 ", decoder_hw_pix_fmt=" + pixelFormatName(plan.decoderConfig.hardwarePixelFormat) +
                 ", encoder=" + plan.encoderSelection.encoderName +
                 ", encoder_input_pix_fmt=" + pixelFormatName(plan.encoderSelection.pixelFormat);
