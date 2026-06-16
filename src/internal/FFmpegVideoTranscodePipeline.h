@@ -2,11 +2,10 @@
 
 #include "media_transcode/MediaTranscodeTypes.h"
 #include "internal/FFmpegHardwareBackend.h"
-#include "internal/FFmpegHardwareVideoFilterGraph.h"
 #include "internal/FFmpegPipelinePlanner.h"
 #include "internal/FFmpegVideoDecoderStage.h"
 #include "internal/FFmpegVideoEncoderStage.h"
-#include "internal/FFmpegVideoFilterGraph.h"
+#include "internal/FFmpegVideoFilterStage.h"
 #include "internal/FFmpegVideoPipeline.h"
 
 #include <cstdint>
@@ -67,9 +66,7 @@ public:
 private:
     bool openDecoder(std::string* error);
     bool openEncoder(std::string* error);
-    bool initializeFilterGraph(std::string* error);
-    bool initializeSoftwareFilterGraph(std::string* error);
-    bool initializeHardwareFilterGraphFromFrame(const AVFrame* frame, std::string* error);
+    bool initializeFilterStage(std::string* error);
     bool initializePacketWriter(std::string* error);
     bool allocateFrames(std::string* error);
 
@@ -85,10 +82,8 @@ private:
     bool transferHardwareFrameToSoftware(AVFrame* hardwareFrame,
                                          AVFrame* softwareFrame,
                                          std::string* error) const;
-    bool drainFilterGraph(std::string* error,
+    bool drainFilterStage(std::string* error,
                           const PacketWrittenCallback& onPacketWritten);
-    bool drainHardwareFilterGraph(std::string* error,
-                                  const PacketWrittenCallback& onPacketWritten);
     bool writeEncodedPackets(AVFrame* frame,
                              std::string* error,
                              const PacketWrittenCallback& onPacketWritten);
@@ -108,22 +103,19 @@ private:
 
     FFmpegVideoDecoderStage m_decoderStage;
     FFmpegVideoEncoderStage m_encoderStage;
+    FFmpegVideoFilterStage m_filterStage;
 
     HardwarePipelinePlan m_hardwarePlan;
     bool m_hasHardwarePlan = false;
     HardwareBackendProfile m_hardwareBackend;
     bool m_zeroCopyPipeline = false;
-    bool m_hardwareFilterGraphInitialized = false;
 
-    VideoFilterGraph m_filterGraph;
-    HardwareVideoFilterGraph m_hardwareFilterGraph;
     FFmpegVideoPipeline m_packetWriter;
 
     AVFrame* m_decodedFrame = nullptr;
     AVFrame* m_filteredFrame = nullptr;
     AVFrame* m_softwareTransferFrame = nullptr;
 
-    int64_t m_lastSubmittedPts = AV_NOPTS_VALUE;
     int64_t m_packetCount = 0;
     int64_t m_lastWrittenOutTimeMs = 0;
 
