@@ -16,6 +16,7 @@ void FFmpegVideoTranscodePipeline::reset()
     m_filterStage.reset();
     m_packetWriter.reset();
     m_hardwareTransferStage.reset();
+    m_frameRoutingStrategy.reset();
     m_encoderStage.reset();
     m_decoderStage.reset();
     m_timestampStage.reset();
@@ -78,6 +79,7 @@ bool FFmpegVideoTranscodePipeline::initialize(const Config& config, std::string*
     return initializeTimestampStage(config.timeline, error) &&
         openDecoder(error) &&
         openEncoder(error) &&
+        initializeFrameRoutingStrategy(error) &&
         initializeHardwareTransferStage(error) &&
         initializeFilterStage(error) &&
         initializePacketWriter(error) &&
@@ -122,6 +124,19 @@ bool FFmpegVideoTranscodePipeline::openEncoder(std::string* error)
     config.decoderHardwareDeviceAttached = m_decoderStage.hardwareDeviceAttached();
 
     return m_encoderStage.initialize(config, error);
+}
+
+bool FFmpegVideoTranscodePipeline::initializeFrameRoutingStrategy(std::string* error)
+{
+    FFmpegVideoFrameRoutingStrategy::Config config;
+    config.executionMode = m_hasHardwarePlan
+        ? m_hardwarePlan.executionMode
+        : VideoExecutionMode::Cpu;
+    config.zeroCopyPipeline = m_encoderStage.zeroCopyPipeline();
+    config.decoderUsesHardwareFrames = m_decoderStage.usesHardwareFrames();
+    config.hardwareDecoderConfig = m_decoderStage.hardwareDecoderConfig();
+
+    return m_frameRoutingStrategy.initialize(config, error);
 }
 
 bool FFmpegVideoTranscodePipeline::initializeHardwareTransferStage(std::string* error)
@@ -248,48 +263,46 @@ bool FFmpegVideoTranscodePipeline::processDecodedFrame(
     std::string* error,
     const PacketWrittenCallback& onPacketWritten)
 {
-    const HardwareDecoderSupport::Config& hardwareDecoderConfig =
-        m_decoderStage.hardwareDecoderConfig();
-    const bool isExpectedHardwareFrame =
-        m_decoderStage.usesHardwareFrames() &&
-        hardwareDecoderConfig.valid &&
-        m_decodedFrame->format == hardwareDecoderConfig.hardwarePixelFormat;
+    const FFmpegVideoFrameRoutingStrategy::Decision decision =
+        m_frameRoutingStrategy.decide(m_decodedFrame);
 
-    if (m_encoderStage.zeroCopyPipeline() && isExpectedHardwareFrame) {
+    switch (decision.route) {
+    case FFmpegVideoFrameRoutingStrategy::Route::HardwareZeroCopy:
         return processHardwareFrameZeroCopy(error, onPacketWritten);
-    }
 
-    if (m_encoderStage.zeroCopyPipeline() && !isExpectedHardwareFrame) {
-        if (error) {
-            *error = "zero-copy pipeline expected hardware frame but decoder returned software frame";
-        }
-        return false;
-    }
-
-    AVFrame* frameForFilter = m_decodedFrame;
-
-    if (isExpectedHardwareFrame) {
+    case FFmpegVideoFrameRoutingStrategy::Route::HardwareTransferThenSoftwareFilter:
         if (!m_hardwareTransferStage.transferToSoftware(
                 m_decodedFrame,
                 m_softwareTransferFrame,
                 error)) {
             return false;
         }
+        {
+            const bool ok = processFrameThroughSoftwareFilter(
+                m_softwareTransferFrame,
+                error,
+                onPacketWritten
+            );
+            av_frame_unref(m_softwareTransferFrame);
+            return ok;
+        }
 
-        frameForFilter = m_softwareTransferFrame;
+    case FFmpegVideoFrameRoutingStrategy::Route::SoftwareFilter:
+        return processFrameThroughSoftwareFilter(
+            m_decodedFrame,
+            error,
+            onPacketWritten
+        );
+
+    case FFmpegVideoFrameRoutingStrategy::Route::Invalid:
+    default:
+        if (error) {
+            *error = decision.error.empty()
+                ? "frame routing strategy returned invalid route"
+                : decision.error;
+        }
+        return false;
     }
-
-    const bool ok = processFrameThroughSoftwareFilter(
-        frameForFilter,
-        error,
-        onPacketWritten
-    );
-
-    if (frameForFilter == m_softwareTransferFrame) {
-        av_frame_unref(m_softwareTransferFrame);
-    }
-
-    return ok;
 }
 
 bool FFmpegVideoTranscodePipeline::processHardwareFrameZeroCopy(
@@ -369,6 +382,7 @@ bool FFmpegVideoTranscodePipeline::isInitialized() const
     return m_timestampStage.isInitialized() &&
         m_decoderStage.isInitialized() &&
         m_encoderStage.isInitialized() &&
+        m_frameRoutingStrategy.isInitialized() &&
         m_hardwareTransferStage.isInitialized() &&
         m_filterStage.isInitialized();
 }
