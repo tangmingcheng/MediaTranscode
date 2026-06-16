@@ -14,6 +14,17 @@ extern "C" {
 }
 
 namespace media::ffmpeg {
+namespace {
+
+AVRational sanitizeSampleAspectRatio(AVRational ratio)
+{
+    if (ratio.num <= 0 || ratio.den <= 0) {
+        return AVRational{ 1, 1 };
+    }
+    return ratio;
+}
+
+} // namespace
 
     VideoFilterGraph::~VideoFilterGraph()
     {
@@ -62,13 +73,6 @@ namespace media::ffmpeg {
     {
         reset();
 
-        if (!config.decoderCtx) {
-            if (error) {
-                *error = "VideoFilterGraph initialize failed: decoderCtx is null";
-            }
-            return false;
-        }
-
         if (!config.encoderCtx) {
             if (error) {
                 *error = "VideoFilterGraph initialize failed: encoderCtx is null";
@@ -79,6 +83,15 @@ namespace media::ffmpeg {
         if (!config.inputStream) {
             if (error) {
                 *error = "VideoFilterGraph initialize failed: inputStream is null";
+            }
+            return false;
+        }
+
+        if (config.inputPixelFormat == AV_PIX_FMT_NONE ||
+            config.inputWidth <= 0 ||
+            config.inputHeight <= 0) {
+            if (error) {
+                *error = "VideoFilterGraph initialize failed: explicit input frame format or size is invalid";
             }
             return false;
         }
@@ -102,41 +115,16 @@ namespace media::ffmpeg {
         }
 
         m_inputFrameRate = chooseInputFrameRate(config.inputStream, config.outputFps);
-
-        const AVRational pixelAspect =
-            config.decoderCtx->sample_aspect_ratio.num > 0 &&
-            config.decoderCtx->sample_aspect_ratio.den > 0
-            ? config.decoderCtx->sample_aspect_ratio
-            : AVRational{ 1, 1 };
-
-        const AVPixelFormat inputPixelFormat =
-            config.inputPixelFormat != AV_PIX_FMT_NONE
-            ? config.inputPixelFormat
-            : config.decoderCtx->pix_fmt;
-
-        const int inputWidth = config.inputWidth > 0
-            ? config.inputWidth
-            : config.decoderCtx->width;
-        const int inputHeight = config.inputHeight > 0
-            ? config.inputHeight
-            : config.decoderCtx->height;
-
-        if (inputPixelFormat == AV_PIX_FMT_NONE || inputWidth <= 0 || inputHeight <= 0) {
-            if (error) {
-                *error = "VideoFilterGraph initialize failed: invalid input frame format or size";
-            }
-            reset();
-            return false;
-        }
+        const AVRational pixelAspect = sanitizeSampleAspectRatio(config.inputSampleAspectRatio);
 
         char args[512] = {};
         std::snprintf(
             args,
             sizeof(args),
             "video_size=%dx%d:pix_fmt=%d:time_base=%d/%d:pixel_aspect=%d/%d:frame_rate=%d/%d",
-            inputWidth,
-            inputHeight,
-            inputPixelFormat,
+            config.inputWidth,
+            config.inputHeight,
+            config.inputPixelFormat,
             config.inputStream->time_base.num,
             config.inputStream->time_base.den,
             pixelAspect.num,
