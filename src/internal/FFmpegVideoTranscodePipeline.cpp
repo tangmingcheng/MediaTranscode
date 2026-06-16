@@ -127,7 +127,6 @@ bool FFmpegVideoTranscodePipeline::openEncoder(std::string* error)
 bool FFmpegVideoTranscodePipeline::initializeHardwareTransferStage(std::string* error)
 {
     FFmpegVideoHardwareTransferStage::Config config;
-    config.decoderCtx = m_decoderStage.context();
     config.zeroCopyPipeline = m_encoderStage.zeroCopyPipeline();
     return m_hardwareTransferStage.initialize(config, error);
 }
