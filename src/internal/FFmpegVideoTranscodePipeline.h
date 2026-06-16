@@ -1,7 +1,6 @@
 #pragma once
 
 #include "media_transcode/MediaTranscodeTypes.h"
-#include "internal/FFmpegHardwareBackend.h"
 #include "internal/FFmpegPipelinePlanner.h"
 #include "internal/FFmpegVideoDecoderStage.h"
 #include "internal/FFmpegVideoEncoderStage.h"
@@ -17,9 +16,7 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
-#include <libavutil/pixdesc.h>
-#include <libavutil/pixfmt.h>
-#include <libavutil/rational.h>
+#include <libavutil/frame.h>
 }
 
 namespace media::ffmpeg {
@@ -96,7 +93,6 @@ private:
 
     AVStream* m_inputVideoStream = nullptr;
     AVFormatContext* m_outputFmtCtx = nullptr;
-    AVStream* m_outputVideoStream = nullptr;
 
     FFmpegVideoTimestampStage m_timestampStage;
     FFmpegVideoDecoderStage m_decoderStage;
@@ -106,8 +102,6 @@ private:
 
     HardwarePipelinePlan m_hardwarePlan;
     bool m_hasHardwarePlan = false;
-    HardwareBackendProfile m_hardwareBackend;
-    bool m_zeroCopyPipeline = false;
 
     FFmpegVideoPacketWriterStage m_packetWriter;
 
@@ -117,9 +111,6 @@ private:
 
     int64_t m_packetCount = 0;
     int64_t m_lastWrittenOutTimeMs = 0;
-
-    int m_outputFps = 0;
-    bool m_enableConstantFps = false;
 };
 
 } // namespace media::ffmpeg
