@@ -1,73 +1,94 @@
 #pragma once
 
+#include "media_transcode/MediaTranscodeTypes.h"
+#include "internal/FFmpegHardwareBackend.h"
 #include "internal/FFmpegHardwareContext.h"
 #include "internal/FFmpegHardwareEncoderSelector.h"
 #include "internal/FFmpegPipelinePlanner.h"
-#include "media_transcode/MediaTranscodeTypes.h"
 
 #include <string>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libavutil/pixfmt.h>
 }
 
 namespace media::ffmpeg {
 
-    class FFmpegVideoEncoderStage {
-    public:
-        struct Config {
-            const TranscodeConfig* transcodeConfig = nullptr;
-            const HardwarePipelinePlan* hardwarePlan = nullptr;
-            AVCodecContext* decoderCtx = nullptr;
-            AVStream* inputVideoStream = nullptr;
-            AVFormatContext* outputFmtCtx = nullptr;
-            const HardwareDeviceContext* sharedHardwareDevice = nullptr;
-            bool decoderUsesHardwareFrames = false;
-            bool decoderHardwareDeviceAttached = false;
-        };
+class FFmpegVideoEncoderStage {
+public:
+    struct Config {
+        const TranscodeConfig* transcodeConfig = nullptr;
+        const HardwarePipelinePlan* hardwarePlan = nullptr;
 
-        FFmpegVideoEncoderStage() = default;
-        ~FFmpegVideoEncoderStage();
+        AVCodecContext* decoderCtx = nullptr;
+        AVStream* inputVideoStream = nullptr;
+        AVFormatContext* outputFmtCtx = nullptr;
 
-        FFmpegVideoEncoderStage(const FFmpegVideoEncoderStage&) = delete;
-        FFmpegVideoEncoderStage& operator=(const FFmpegVideoEncoderStage&) = delete;
-        FFmpegVideoEncoderStage(FFmpegVideoEncoderStage&&) = delete;
-        FFmpegVideoEncoderStage& operator=(FFmpegVideoEncoderStage&&) = delete;
-
-        void reset();
-
-        bool initialize(const Config& config, std::string* error);
-
-        bool isInitialized() const;
-        AVCodecContext* context() const;
-        AVStream* outputStream() const;
-
-        int outputFps() const;
-        bool enableConstantFps() const;
-        bool hardwareDeviceAttached() const;
-        bool zeroCopyPipeline() const;
-
-    private:
-        bool initializeHardwareDeviceForEncoder(const AVCodec* encoder,
-                                                const HardwareDeviceContext* sharedHardwareDevice,
-                                                std::string* error);
-
-    private:
-        TranscodeConfig m_config;
-        HardwarePipelinePlan m_hardwarePlan;
-        HardwareEncoderSelection m_hardwareEncoderSelection;
-        bool m_hasHardwarePlan = false;
-
-        AVCodecContext* m_encoderCtx = nullptr;
-        AVStream* m_inputVideoStream = nullptr;
-        AVFormatContext* m_outputFmtCtx = nullptr;
-        AVStream* m_outputVideoStream = nullptr;
-
-        int m_outputFps = 0;
-        bool m_enableConstantFps = false;
-        bool m_hardwareDeviceAttached = false;
-        bool m_zeroCopyPipeline = false;
+        /*
+         * FFmpegVideoEncoderStage does not own this hardware device context.
+         * The decoder stage owns the device; the encoder only keeps an FFmpeg
+         * reference copied from it when hardware encoding is selected.
+         */
+        const HardwareDeviceContext* hardwareDeviceContext = nullptr;
+        bool decoderUsesHardwareFrames = false;
+        bool decoderHardwareDeviceAttached = false;
     };
+
+    FFmpegVideoEncoderStage() = default;
+    ~FFmpegVideoEncoderStage();
+
+    FFmpegVideoEncoderStage(const FFmpegVideoEncoderStage&) = delete;
+    FFmpegVideoEncoderStage& operator=(const FFmpegVideoEncoderStage&) = delete;
+    FFmpegVideoEncoderStage(FFmpegVideoEncoderStage&&) = delete;
+    FFmpegVideoEncoderStage& operator=(FFmpegVideoEncoderStage&&) = delete;
+
+    void reset();
+
+    bool initialize(const Config& config, std::string* error);
+
+    bool isInitialized() const;
+    AVCodecContext* context() const;
+    AVStream* outputStream() const;
+
+    int outputFps() const;
+    bool enableConstantFps() const;
+
+    bool hasHardwarePlan() const;
+    bool hardwareDeviceAttached() const;
+    bool zeroCopyPipeline() const;
+
+    const HardwareBackendProfile& hardwareBackend() const;
+    const HardwareEncoderSelection& hardwareEncoderSelection() const;
+
+private:
+    bool openEncoderAndCreateOutputStream(std::string* error);
+    bool initializeHardwareDeviceForEncoder(const AVCodec* encoder, std::string* error);
+
+private:
+    TranscodeConfig m_config;
+
+    AVCodecContext* m_decoderCtx = nullptr;
+    AVStream* m_inputVideoStream = nullptr;
+    AVFormatContext* m_outputFmtCtx = nullptr;
+
+    AVCodecContext* m_encoderCtx = nullptr;
+    AVStream* m_outputVideoStream = nullptr;
+
+    const HardwareDeviceContext* m_hardwareDeviceContext = nullptr;
+    HardwarePipelinePlan m_hardwarePlan;
+    HardwareBackendProfile m_hardwareBackend;
+    HardwareEncoderSelection m_hardwareEncoderSelection;
+
+    bool m_hasHardwarePlan = false;
+    bool m_decoderUsesHardwareFrames = false;
+    bool m_decoderHardwareDeviceAttached = false;
+    bool m_hardwareDeviceAttachedToEncoder = false;
+    bool m_zeroCopyPipeline = false;
+
+    int m_outputFps = 0;
+    bool m_enableConstantFps = false;
+};
 
 } // namespace media::ffmpeg
