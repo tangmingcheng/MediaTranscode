@@ -151,6 +151,11 @@ bool FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream(std::string* erro
         return false;
     }
 
+    const bool selectedPlannedHardwareEncoder = m_hardwareEncoderSelection.encoder == encoder;
+    const bool directHardwareFrameEncoder =
+        selectedPlannedHardwareEncoder &&
+        m_hardwareBackend.supportsDirectHardwareFrameEncode;
+
     m_encoderCtx = avcodec_alloc_context3(encoder);
     if (!m_encoderCtx) {
         if (error) {
@@ -195,10 +200,20 @@ bool FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream(std::string* erro
 
     m_encoderCtx->time_base = encoderTimeBase;
     m_encoderCtx->framerate = AVRational{ m_outputFps, 1 };
-    m_encoderCtx->pix_fmt = m_hardwareEncoderSelection.encoder == encoder &&
+    m_encoderCtx->pix_fmt = selectedPlannedHardwareEncoder &&
         m_hardwareEncoderSelection.pixelFormat != AV_PIX_FMT_NONE
         ? m_hardwareEncoderSelection.pixelFormat
         : chooseVideoEncoderPixelFormat(encoder);
+
+    if (directHardwareFrameEncoder &&
+        m_encoderCtx->pix_fmt == AV_PIX_FMT_DRM_PRIME &&
+        m_encoderCtx->sw_pix_fmt == AV_PIX_FMT_NONE) {
+        // RKMPP direct zero-copy opens with pix_fmt=DRM_PRIME, but the encoder
+        // still needs the underlying DRM frame software layout. Rockchip MPP
+        // expects DRM_PRIME frames backed by NV12 hardware frames.
+        m_encoderCtx->sw_pix_fmt = AV_PIX_FMT_NV12;
+    }
+
     m_encoderCtx->bit_rate = static_cast<int64_t>(std::max(1, m_config.videoBitrateKbps)) * 1000;
     m_encoderCtx->gop_size = std::max(10, m_outputFps * 2);
     m_encoderCtx->max_b_frames = 0;
@@ -211,17 +226,13 @@ bool FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream(std::string* erro
         return false;
     }
 
-    const bool directHardwareFrameEncoder =
-        m_hardwareEncoderSelection.encoder == encoder &&
-        m_hardwareBackend.supportsDirectHardwareFrameEncode;
-
     const bool encoderHardwareReady = directHardwareFrameEncoder ||
         m_hardwareDeviceAttachedToEncoder;
 
     const bool decoderHardwareReady = directHardwareFrameEncoder ||
         m_decoderHardwareDeviceAttached;
 
-    m_zeroCopyPipeline = m_hardwareEncoderSelection.encoder == encoder &&
+    m_zeroCopyPipeline = selectedPlannedHardwareEncoder &&
         m_hardwareEncoderSelection.zeroCopy &&
         m_decoderUsesHardwareFrames &&
         decoderHardwareReady &&
@@ -264,6 +275,18 @@ bool FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream(std::string* erro
     }
 
     setVideoEncoderOptions(m_encoderCtx, encoder);
+
+    spdlog::info(
+        "[ZC][ENCODER] open encoder={}, backend={}, pix_fmt={}, sw_pix_fmt={}, size={}x{}, fps={}/{}",
+        encoder->name ? encoder->name : "unknown",
+        m_hardwareBackend.name ? m_hardwareBackend.name : "none",
+        pixelFormatName(m_encoderCtx->pix_fmt),
+        pixelFormatName(m_encoderCtx->sw_pix_fmt),
+        m_encoderCtx->width,
+        m_encoderCtx->height,
+        m_encoderCtx->framerate.num,
+        m_encoderCtx->framerate.den
+    );
 
     int ret = avcodec_open2(m_encoderCtx, encoder, nullptr);
     if (ret < 0) {
