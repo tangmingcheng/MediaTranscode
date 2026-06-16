@@ -26,8 +26,17 @@ bool shouldLogZeroCopyFrame(int64_t frameCount)
     return frameCount <= 3 || frameCount % 120 == 0;
 }
 
+AVRational sanitizeSampleAspectRatio(AVRational ratio)
+{
+    if (ratio.num > 0 && ratio.den > 0) {
+        return ratio;
+    }
+
+    return AVRational{ 1, 1 };
+}
+
 AVRational chooseInputSampleAspectRatio(const AVFrame* frame,
-                                        const AVCodecContext* decoderCtx)
+                                        AVRational fallbackSampleAspectRatio)
 {
     if (frame &&
         frame->sample_aspect_ratio.num > 0 &&
@@ -35,13 +44,7 @@ AVRational chooseInputSampleAspectRatio(const AVFrame* frame,
         return frame->sample_aspect_ratio;
     }
 
-    if (decoderCtx &&
-        decoderCtx->sample_aspect_ratio.num > 0 &&
-        decoderCtx->sample_aspect_ratio.den > 0) {
-        return decoderCtx->sample_aspect_ratio;
-    }
-
-    return AVRational{ 1, 1 };
+    return sanitizeSampleAspectRatio(fallbackSampleAspectRatio);
 }
 
 } // namespace
@@ -57,9 +60,9 @@ void FFmpegVideoFilterStage::reset()
     m_hardwareFilterGraph.reset();
     m_filterGraph.reset();
 
-    m_decoderCtx = nullptr;
     m_encoderCtx = nullptr;
     m_inputVideoStream = nullptr;
+    m_inputFallbackSampleAspectRatio = AVRational{ 1, 1 };
 
     m_outputFps = 0;
     m_enableConstantFps = false;
@@ -80,13 +83,6 @@ bool FFmpegVideoFilterStage::initialize(const Config& config, std::string* error
 {
     reset();
 
-    if (!config.decoderCtx) {
-        if (error) {
-            *error = "FFmpegVideoFilterStage initialize failed: decoderCtx is null";
-        }
-        return false;
-    }
-
     if (!config.encoderCtx) {
         if (error) {
             *error = "FFmpegVideoFilterStage initialize failed: encoderCtx is null";
@@ -101,9 +97,11 @@ bool FFmpegVideoFilterStage::initialize(const Config& config, std::string* error
         return false;
     }
 
-    m_decoderCtx = config.decoderCtx;
     m_encoderCtx = config.encoderCtx;
     m_inputVideoStream = config.inputVideoStream;
+    m_inputFallbackSampleAspectRatio = sanitizeSampleAspectRatio(
+        config.inputFallbackSampleAspectRatio
+    );
     m_outputFps = config.outputFps;
     m_enableConstantFps = config.enableConstantFps;
     m_zeroCopyPipeline = config.zeroCopyPipeline;
@@ -156,7 +154,10 @@ bool FFmpegVideoFilterStage::initializeSoftwareFilterGraph(
     config.inputPixelFormat = inputFormat;
     config.inputWidth = firstFrame->width;
     config.inputHeight = firstFrame->height;
-    config.inputSampleAspectRatio = chooseInputSampleAspectRatio(firstFrame, m_decoderCtx);
+    config.inputSampleAspectRatio = chooseInputSampleAspectRatio(
+        firstFrame,
+        m_inputFallbackSampleAspectRatio
+    );
     config.outputFps = m_outputFps;
     config.enableConstantFps = m_enableConstantFps;
 
