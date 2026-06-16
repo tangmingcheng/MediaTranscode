@@ -5,6 +5,7 @@
 #include "internal/FFmpegVideoDecoderStage.h"
 #include "internal/FFmpegVideoEncoderStage.h"
 #include "internal/FFmpegVideoFilterStage.h"
+#include "internal/FFmpegVideoFrameRoutingStrategy.h"
 #include "internal/FFmpegVideoHardwareTransferStage.h"
 #include "internal/FFmpegVideoPacketWriterStage.h"
 #include "internal/FFmpegVideoTimestampStage.h"
@@ -66,6 +67,7 @@ private:
     bool initializeTimestampStage(TimelineNormalizer* timeline, std::string* error);
     bool openDecoder(std::string* error);
     bool openEncoder(std::string* error);
+    bool initializeFrameRoutingStrategy(std::string* error);
     bool initializeHardwareTransferStage(std::string* error);
     bool initializeFilterStage(std::string* error);
     bool initializePacketWriter(std::string* error);
@@ -97,6 +99,7 @@ private:
     FFmpegVideoTimestampStage m_timestampStage;
     FFmpegVideoDecoderStage m_decoderStage;
     FFmpegVideoEncoderStage m_encoderStage;
+    FFmpegVideoFrameRoutingStrategy m_frameRoutingStrategy;
     FFmpegVideoHardwareTransferStage m_hardwareTransferStage;
     FFmpegVideoFilterStage m_filterStage;
 
