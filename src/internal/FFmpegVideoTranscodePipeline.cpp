@@ -6,7 +6,6 @@
 #include "spdlog/spdlog.h"
 
 #include <atomic>
-#include <sstream>
 
 extern "C" {
 #include <libavutil/avutil.h>
@@ -17,34 +16,6 @@ extern "C" {
 
 namespace media::ffmpeg {
 namespace {
-
-AVPixelFormat expectedSoftwareFormatAfterHardwareDownload(HardwareDeviceType deviceType,
-                                                         AVPixelFormat decoderSoftwareFormat)
-{
-    switch (deviceType) {
-    case HardwareDeviceType::D3D11VA:
-    case HardwareDeviceType::CUDA:
-    case HardwareDeviceType::QSV:
-    case HardwareDeviceType::VAAPI:
-    case HardwareDeviceType::DRM:
-        if (decoderSoftwareFormat == AV_PIX_FMT_NONE ||
-            decoderSoftwareFormat == AV_PIX_FMT_YUV420P) {
-            return AV_PIX_FMT_NV12;
-        }
-        return decoderSoftwareFormat;
-
-    case HardwareDeviceType::VideoToolbox:
-        if (decoderSoftwareFormat == AV_PIX_FMT_NONE) {
-            return AV_PIX_FMT_NV12;
-        }
-        return decoderSoftwareFormat;
-
-    case HardwareDeviceType::Auto:
-    case HardwareDeviceType::None:
-    default:
-        return decoderSoftwareFormat;
-    }
-}
 
 const char* pixelFormatName(AVPixelFormat format)
 {
@@ -63,8 +34,7 @@ FFmpegVideoTranscodePipeline::~FFmpegVideoTranscodePipeline()
 
 void FFmpegVideoTranscodePipeline::reset()
 {
-    m_hardwareFilterGraph.reset();
-    m_filterGraph.reset();
+    m_filterStage.reset();
     m_packetWriter.reset();
     m_encoderStage.reset();
     m_decoderStage.reset();
@@ -86,7 +56,6 @@ void FFmpegVideoTranscodePipeline::reset()
     m_outputFmtCtx = nullptr;
     m_outputVideoStream = nullptr;
     m_timeline = nullptr;
-    m_lastSubmittedPts = AV_NOPTS_VALUE;
     m_packetCount = 0;
     m_lastWrittenOutTimeMs = 0;
     m_outputFps = 0;
@@ -95,7 +64,6 @@ void FFmpegVideoTranscodePipeline::reset()
     m_hasHardwarePlan = false;
     m_hardwareBackend = HardwareBackendProfile{};
     m_zeroCopyPipeline = false;
-    m_hardwareFilterGraphInitialized = false;
 }
 
 bool FFmpegVideoTranscodePipeline::initialize(const Config& config, std::string* error)
@@ -144,7 +112,7 @@ bool FFmpegVideoTranscodePipeline::initialize(const Config& config, std::string*
 
     return openDecoder(error) &&
         openEncoder(error) &&
-        initializeFilterGraph(error) &&
+        initializeFilterStage(error) &&
         initializePacketWriter(error) &&
         allocateFrames(error);
 }
@@ -189,90 +157,26 @@ bool FFmpegVideoTranscodePipeline::openEncoder(std::string* error)
     return true;
 }
 
-bool FFmpegVideoTranscodePipeline::initializeFilterGraph(std::string* error)
-{
-    if (m_zeroCopyPipeline) {
-        return true;
-    }
-
-    return initializeSoftwareFilterGraph(error);
-}
-
-bool FFmpegVideoTranscodePipeline::initializeSoftwareFilterGraph(std::string* error)
+bool FFmpegVideoTranscodePipeline::initializeFilterStage(std::string* error)
 {
     AVCodecContext* encoderCtx = encoderContext();
     if (!encoderCtx) {
         if (error) {
-            *error = "initialize software filter graph failed: encoder stage is not initialized";
+            *error = "initialize filter stage failed: encoder stage is not initialized";
         }
         return false;
     }
 
-    VideoFilterGraph::Config config;
+    FFmpegVideoFilterStage::Config config;
     config.decoderCtx = m_decoderStage.context();
     config.encoderCtx = encoderCtx;
-    config.inputStream = m_inputVideoStream;
+    config.inputVideoStream = m_inputVideoStream;
     config.outputFps = m_outputFps;
     config.enableConstantFps = m_enableConstantFps;
+    config.zeroCopyPipeline = m_zeroCopyPipeline;
+    config.hardwareBackend = m_hardwareBackend;
 
-    if (m_decoderStage.usesHardwareFrames()) {
-        AVCodecContext* decoderCtx = m_decoderStage.context();
-        config.inputPixelFormat = expectedSoftwareFormatAfterHardwareDownload(
-            m_decoderStage.hardwareDeviceContext().resolvedDeviceType(),
-            decoderCtx ? decoderCtx->sw_pix_fmt : AV_PIX_FMT_NONE
-        );
-    }
-
-    return m_filterGraph.initialize(config, error);
-}
-
-bool FFmpegVideoTranscodePipeline::initializeHardwareFilterGraphFromFrame(
-    const AVFrame* frame,
-    std::string* error)
-{
-    if (!frame) {
-        if (error) {
-            *error = "initialize hardware filter graph failed: frame is null";
-        }
-        return false;
-    }
-
-    if (!frame->hw_frames_ctx) {
-        if (error) {
-            *error = "initialize hardware filter graph failed: frame has no hw_frames_ctx";
-        }
-        return false;
-    }
-
-    AVCodecContext* encoderCtx = encoderContext();
-    if (!encoderCtx) {
-        if (error) {
-            *error = "initialize hardware filter graph failed: encoder stage is not initialized";
-        }
-        return false;
-    }
-
-    HardwareVideoFilterGraph::Config config;
-    config.inputStream = m_inputVideoStream;
-    config.inputHardwareFramesContext = frame->hw_frames_ctx;
-    config.deviceType = m_hardwareBackend.deviceType;
-    config.inputHardwarePixelFormat = static_cast<AVPixelFormat>(frame->format);
-    config.softwarePixelFormat = encoderCtx->pix_fmt;
-    config.inputWidth = frame->width;
-    config.inputHeight = frame->height;
-    config.outputWidth = encoderCtx->width;
-    config.outputHeight = encoderCtx->height;
-    config.enableScale = config.outputWidth > 0 &&
-        config.outputHeight > 0 &&
-        (config.outputWidth != config.inputWidth || config.outputHeight != config.inputHeight);
-    config.keepFramesOnDevice = true;
-
-    if (!m_hardwareFilterGraph.initialize(config, error)) {
-        return false;
-    }
-
-    m_hardwareFilterGraphInitialized = true;
-    return true;
+    return m_filterStage.initialize(config, error);
 }
 
 bool FFmpegVideoTranscodePipeline::initializePacketWriter(std::string* error)
@@ -332,25 +236,11 @@ bool FFmpegVideoTranscodePipeline::flushFilterAndEncoder(
     std::string* error,
     const PacketWrittenCallback& onPacketWritten)
 {
-    if (m_zeroCopyPipeline) {
-        if (m_hardwareFilterGraphInitialized) {
-            if (!m_hardwareFilterGraph.flush(error)) {
-                return false;
-            }
-
-            if (!drainHardwareFilterGraph(error, onPacketWritten)) {
-                return false;
-            }
-        }
-
-        return writeEncodedPackets(nullptr, error, onPacketWritten);
-    }
-
-    if (!m_filterGraph.flush(error)) {
+    if (!m_filterStage.flush(error)) {
         return false;
     }
 
-    if (!drainFilterGraph(error, onPacketWritten)) {
+    if (!drainFilterStage(error, onPacketWritten)) {
         return false;
     }
 
@@ -433,17 +323,11 @@ bool FFmpegVideoTranscodePipeline::processHardwareFrameZeroCopy(
         return false;
     }
 
-    if (!m_hardwareFilterGraphInitialized) {
-        if (!initializeHardwareFilterGraphFromFrame(m_decodedFrame, error)) {
-            return false;
-        }
-    }
-
-    if (!m_hardwareFilterGraph.sendFrame(m_decodedFrame, error)) {
+    if (!m_filterStage.sendHardwareFrame(m_decodedFrame, error)) {
         return false;
     }
 
-    return drainHardwareFilterGraph(error, onPacketWritten);
+    return drainFilterStage(error, onPacketWritten);
 }
 
 bool FFmpegVideoTranscodePipeline::processFrameThroughSoftwareFilter(
@@ -455,11 +339,11 @@ bool FFmpegVideoTranscodePipeline::processFrameThroughSoftwareFilter(
         return false;
     }
 
-    if (!m_filterGraph.sendFrame(frame, error)) {
+    if (!m_filterStage.sendSoftwareFrame(frame, error)) {
         return false;
     }
 
-    return drainFilterGraph(error, onPacketWritten);
+    return drainFilterStage(error, onPacketWritten);
 }
 
 bool FFmpegVideoTranscodePipeline::transferHardwareFrameToSoftware(AVFrame* hardwareFrame,
@@ -507,20 +391,12 @@ bool FFmpegVideoTranscodePipeline::transferHardwareFrameToSoftware(AVFrame* hard
     return true;
 }
 
-bool FFmpegVideoTranscodePipeline::drainFilterGraph(
+bool FFmpegVideoTranscodePipeline::drainFilterStage(
     std::string* error,
     const PacketWrittenCallback& onPacketWritten)
 {
-    AVCodecContext* encoderCtx = encoderContext();
-    if (!encoderCtx) {
-        if (error) {
-            *error = "drain software filter graph failed: encoder stage is not initialized";
-        }
-        return false;
-    }
-
     while (true) {
-        const int receiveRet = m_filterGraph.receiveFrame(m_filteredFrame, error);
+        const int receiveRet = m_filterStage.receiveFrame(m_filteredFrame, error);
 
         if (receiveRet == 0) {
             return true;
@@ -529,102 +405,6 @@ bool FFmpegVideoTranscodePipeline::drainFilterGraph(
         if (receiveRet < 0) {
             return false;
         }
-
-        const AVRational filterTimeBase = m_filterGraph.sinkTimeBase();
-
-        if (m_filteredFrame->pts == AV_NOPTS_VALUE) {
-            av_frame_unref(m_filteredFrame);
-            if (error) {
-                *error = "filtered video frame has invalid pts";
-            }
-            return false;
-        }
-
-        m_filteredFrame->pts = av_rescale_q(
-            m_filteredFrame->pts,
-            filterTimeBase,
-            encoderCtx->time_base
-        );
-
-        if (m_lastSubmittedPts != AV_NOPTS_VALUE &&
-            m_filteredFrame->pts <= m_lastSubmittedPts) {
-            std::ostringstream oss;
-            oss << "filtered video timestamp is not strictly increasing: current="
-                << m_filteredFrame->pts
-                << ", last="
-                << m_lastSubmittedPts;
-
-            av_frame_unref(m_filteredFrame);
-            if (error) {
-                *error = oss.str();
-            }
-            return false;
-        }
-
-        m_lastSubmittedPts = m_filteredFrame->pts;
-
-        const bool ok = writeEncodedPackets(m_filteredFrame, error, onPacketWritten);
-        av_frame_unref(m_filteredFrame);
-
-        if (!ok) {
-            return false;
-        }
-    }
-}
-
-bool FFmpegVideoTranscodePipeline::drainHardwareFilterGraph(
-    std::string* error,
-    const PacketWrittenCallback& onPacketWritten)
-{
-    AVCodecContext* encoderCtx = encoderContext();
-    if (!encoderCtx) {
-        if (error) {
-            *error = "drain hardware filter graph failed: encoder stage is not initialized";
-        }
-        return false;
-    }
-
-    while (true) {
-        const int receiveRet = m_hardwareFilterGraph.receiveFrame(m_filteredFrame, error);
-
-        if (receiveRet == 0) {
-            return true;
-        }
-
-        if (receiveRet < 0) {
-            return false;
-        }
-
-        const AVRational filterTimeBase = m_hardwareFilterGraph.sinkTimeBase();
-
-        if (m_filteredFrame->pts == AV_NOPTS_VALUE) {
-            av_frame_unref(m_filteredFrame);
-            if (error) {
-                *error = "hardware filtered video frame has invalid pts";
-            }
-            return false;
-        }
-
-        m_filteredFrame->pts = av_rescale_q(
-            m_filteredFrame->pts,
-            filterTimeBase,
-            encoderCtx->time_base
-        );
-
-        if (m_lastSubmittedPts != AV_NOPTS_VALUE &&
-            m_filteredFrame->pts <= m_lastSubmittedPts) {
-            av_frame_unref(m_filteredFrame);
-            continue;
-        }
-
-        m_lastSubmittedPts = m_filteredFrame->pts;
-
-        spdlog::debug(
-            "[ZC][ENCODE] filtered_fmt={}, hw_frames_ctx={}, encoder_pix_fmt={}",
-            pixelFormatName(static_cast<AVPixelFormat>(m_filteredFrame->format)),
-            m_filteredFrame->hw_frames_ctx != nullptr,
-            pixelFormatName(encoderCtx->pix_fmt)
-        );
 
         const bool ok = writeEncodedPackets(m_filteredFrame, error, onPacketWritten);
         av_frame_unref(m_filteredFrame);
@@ -725,7 +505,9 @@ bool FFmpegVideoTranscodePipeline::normalizeFramePts(AVFrame* frame, std::string
 
 bool FFmpegVideoTranscodePipeline::isInitialized() const
 {
-    return m_decoderStage.isInitialized() && m_encoderStage.isInitialized();
+    return m_decoderStage.isInitialized() &&
+        m_encoderStage.isInitialized() &&
+        m_filterStage.isInitialized();
 }
 
 AVStream* FFmpegVideoTranscodePipeline::outputStream() const
