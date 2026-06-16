@@ -48,16 +48,16 @@ AVRational chooseTimeBase(const AVCodecContext* decoderCtx, const AVStream* inpu
 
 AVRational chooseFrameRate(const AVCodecContext* decoderCtx, const AVStream* inputStream)
 {
-    if (decoderCtx && isValidRatio(decoderCtx->framerate)) {
-        return decoderCtx->framerate;
-    }
-
     if (inputStream && isValidRatio(inputStream->avg_frame_rate)) {
         return inputStream->avg_frame_rate;
     }
 
     if (inputStream && isValidRatio(inputStream->r_frame_rate)) {
         return inputStream->r_frame_rate;
+    }
+
+    if (decoderCtx && isValidRatio(decoderCtx->framerate)) {
+        return decoderCtx->framerate;
     }
 
     return AVRational{ 0, 1 };
