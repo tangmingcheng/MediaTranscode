@@ -6,6 +6,7 @@
 #include "internal/FFmpegVideoDecoderStage.h"
 #include "internal/FFmpegVideoEncoderStage.h"
 #include "internal/FFmpegVideoFilterStage.h"
+#include "internal/FFmpegVideoHardwareTransferStage.h"
 #include "internal/FFmpegVideoPacketWriterStage.h"
 #include "internal/FFmpegVideoTimestampStage.h"
 
@@ -68,6 +69,7 @@ private:
     bool initializeTimestampStage(TimelineNormalizer* timeline, std::string* error);
     bool openDecoder(std::string* error);
     bool openEncoder(std::string* error);
+    bool initializeHardwareTransferStage(std::string* error);
     bool initializeFilterStage(std::string* error);
     bool initializePacketWriter(std::string* error);
     bool allocateFrames(std::string* error);
@@ -81,9 +83,6 @@ private:
     bool processFrameThroughSoftwareFilter(AVFrame* frame,
                                            std::string* error,
                                            const PacketWrittenCallback& onPacketWritten);
-    bool transferHardwareFrameToSoftware(AVFrame* hardwareFrame,
-                                         AVFrame* softwareFrame,
-                                         std::string* error) const;
     bool drainFilterStage(std::string* error,
                           const PacketWrittenCallback& onPacketWritten);
     bool writeEncodedPackets(AVFrame* frame,
@@ -102,6 +101,7 @@ private:
     FFmpegVideoTimestampStage m_timestampStage;
     FFmpegVideoDecoderStage m_decoderStage;
     FFmpegVideoEncoderStage m_encoderStage;
+    FFmpegVideoHardwareTransferStage m_hardwareTransferStage;
     FFmpegVideoFilterStage m_filterStage;
 
     HardwarePipelinePlan m_hardwarePlan;
