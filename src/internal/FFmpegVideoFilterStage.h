@@ -38,7 +38,7 @@ public:
     FFmpegVideoFilterStage(const FFmpegVideoFilterStage&) = delete;
     FFmpegVideoFilterStage& operator=(const FFmpegVideoFilterStage&) = delete;
     FFmpegVideoFilterStage(FFmpegVideoFilterStage&&) = delete;
-    FFmpegVideoFilterStage& operator=(const FFmpegVideoFilterStage&&) = delete;
+    FFmpegVideoFilterStage& operator=(FFmpegVideoFilterStage&&) = delete;
 
     void reset();
 
