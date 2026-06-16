@@ -1,7 +1,6 @@
 #include "internal/FFmpegVideoTranscodePipeline.h"
 
 extern "C" {
-#include <libavutil/avutil.h>
 #include <libavutil/frame.h>
 }
 
@@ -36,15 +35,10 @@ void FFmpegVideoTranscodePipeline::reset()
     m_config = TranscodeConfig{};
     m_inputVideoStream = nullptr;
     m_outputFmtCtx = nullptr;
-    m_outputVideoStream = nullptr;
     m_packetCount = 0;
     m_lastWrittenOutTimeMs = 0;
-    m_outputFps = 0;
-    m_enableConstantFps = false;
     m_hardwarePlan = HardwarePipelinePlan{};
     m_hasHardwarePlan = false;
-    m_hardwareBackend = HardwareBackendProfile{};
-    m_zeroCopyPipeline = false;
 }
 
 bool FFmpegVideoTranscodePipeline::initialize(const Config& config, std::string* error)
@@ -129,24 +123,14 @@ bool FFmpegVideoTranscodePipeline::openEncoder(std::string* error)
     config.decoderUsesHardwareFrames = m_decoderStage.usesHardwareFrames();
     config.decoderHardwareDeviceAttached = m_decoderStage.hardwareDeviceAttached();
 
-    if (!m_encoderStage.initialize(config, error)) {
-        return false;
-    }
-
-    m_outputVideoStream = m_encoderStage.outputStream();
-    m_outputFps = m_encoderStage.outputFps();
-    m_enableConstantFps = m_encoderStage.enableConstantFps();
-    m_hardwareBackend = m_encoderStage.hardwareBackend();
-    m_zeroCopyPipeline = m_encoderStage.zeroCopyPipeline();
-
-    return true;
+    return m_encoderStage.initialize(config, error);
 }
 
 bool FFmpegVideoTranscodePipeline::initializeHardwareTransferStage(std::string* error)
 {
     FFmpegVideoHardwareTransferStage::Config config;
     config.decoderCtx = m_decoderStage.context();
-    config.zeroCopyPipeline = m_zeroCopyPipeline;
+    config.zeroCopyPipeline = m_encoderStage.zeroCopyPipeline();
     return m_hardwareTransferStage.initialize(config, error);
 }
 
@@ -164,10 +148,10 @@ bool FFmpegVideoTranscodePipeline::initializeFilterStage(std::string* error)
     config.decoderCtx = m_decoderStage.context();
     config.encoderCtx = encoderCtx;
     config.inputVideoStream = m_inputVideoStream;
-    config.outputFps = m_outputFps;
-    config.enableConstantFps = m_enableConstantFps;
-    config.zeroCopyPipeline = m_zeroCopyPipeline;
-    config.hardwareBackend = m_hardwareBackend;
+    config.outputFps = m_encoderStage.outputFps();
+    config.enableConstantFps = m_encoderStage.enableConstantFps();
+    config.zeroCopyPipeline = m_encoderStage.zeroCopyPipeline();
+    config.hardwareBackend = m_encoderStage.hardwareBackend();
 
     return m_filterStage.initialize(config, error);
 }
@@ -177,7 +161,7 @@ bool FFmpegVideoTranscodePipeline::initializePacketWriter(std::string* error)
     FFmpegVideoPacketWriterStage::Config config;
     config.encoderCtx = encoderContext();
     config.outputFmtCtx = m_outputFmtCtx;
-    config.outputVideoStream = m_outputVideoStream;
+    config.outputVideoStream = m_encoderStage.outputStream();
 
     return m_packetWriter.initialize(config, error);
 }
@@ -274,11 +258,11 @@ bool FFmpegVideoTranscodePipeline::processDecodedFrame(
         hardwareDecoderConfig.valid &&
         m_decodedFrame->format == hardwareDecoderConfig.hardwarePixelFormat;
 
-    if (m_zeroCopyPipeline && isExpectedHardwareFrame) {
+    if (m_encoderStage.zeroCopyPipeline() && isExpectedHardwareFrame) {
         return processHardwareFrameZeroCopy(error, onPacketWritten);
     }
 
-    if (m_zeroCopyPipeline && !isExpectedHardwareFrame) {
+    if (m_encoderStage.zeroCopyPipeline() && !isExpectedHardwareFrame) {
         if (error) {
             *error = "zero-copy pipeline expected hardware frame but decoder returned software frame";
         }
