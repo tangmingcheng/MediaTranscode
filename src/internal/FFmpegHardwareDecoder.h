@@ -2,6 +2,8 @@
 
 #include "internal/FFmpegHardwareTypes.h"
 
+#include <string>
+
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/hwcontext.h>
@@ -24,6 +26,8 @@ namespace media::ffmpeg {
             HardwareDeviceType deviceType = HardwareDeviceType::None;
             AVHWDeviceType avDeviceType = AV_HWDEVICE_TYPE_NONE;
             AVPixelFormat hardwarePixelFormat = AV_PIX_FMT_NONE;
+            const AVCodec* decoder = nullptr;
+            std::string decoderName;
         };
 
         static Config findConfig(const AVCodec* decoder,
