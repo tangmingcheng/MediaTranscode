@@ -1,29 +1,11 @@
 #include "internal/FFmpegVideoTranscodePipeline.h"
 
-#include "internal/FFmpegUtils.h"
-
-#include "spdlog/spdlog.h"
-
-#include <atomic>
-
 extern "C" {
 #include <libavutil/avutil.h>
-#include <libavutil/hwcontext.h>
-#include <libavutil/pixdesc.h>
+#include <libavutil/frame.h>
 }
 
 namespace media::ffmpeg {
-namespace {
-
-const char* pixelFormatName(AVPixelFormat format)
-{
-    const char* name = av_get_pix_fmt_name(format);
-    return name ? name : "none";
-}
-
-std::atomic_bool g_hardwareTransferLogged{ false };
-
-} // namespace
 
 FFmpegVideoTranscodePipeline::~FFmpegVideoTranscodePipeline()
 {
@@ -34,6 +16,7 @@ void FFmpegVideoTranscodePipeline::reset()
 {
     m_filterStage.reset();
     m_packetWriter.reset();
+    m_hardwareTransferStage.reset();
     m_encoderStage.reset();
     m_decoderStage.reset();
     m_timestampStage.reset();
@@ -103,6 +86,7 @@ bool FFmpegVideoTranscodePipeline::initialize(const Config& config, std::string*
     return initializeTimestampStage(config.timeline, error) &&
         openDecoder(error) &&
         openEncoder(error) &&
+        initializeHardwareTransferStage(error) &&
         initializeFilterStage(error) &&
         initializePacketWriter(error) &&
         allocateFrames(error);
@@ -156,6 +140,14 @@ bool FFmpegVideoTranscodePipeline::openEncoder(std::string* error)
     m_zeroCopyPipeline = m_encoderStage.zeroCopyPipeline();
 
     return true;
+}
+
+bool FFmpegVideoTranscodePipeline::initializeHardwareTransferStage(std::string* error)
+{
+    FFmpegVideoHardwareTransferStage::Config config;
+    config.decoderCtx = m_decoderStage.context();
+    config.zeroCopyPipeline = m_zeroCopyPipeline;
+    return m_hardwareTransferStage.initialize(config, error);
 }
 
 bool FFmpegVideoTranscodePipeline::initializeFilterStage(std::string* error)
@@ -296,7 +288,10 @@ bool FFmpegVideoTranscodePipeline::processDecodedFrame(
     AVFrame* frameForFilter = m_decodedFrame;
 
     if (isExpectedHardwareFrame) {
-        if (!transferHardwareFrameToSoftware(m_decodedFrame, m_softwareTransferFrame, error)) {
+        if (!m_hardwareTransferStage.transferToSoftware(
+                m_decodedFrame,
+                m_softwareTransferFrame,
+                error)) {
             return false;
         }
 
@@ -345,51 +340,6 @@ bool FFmpegVideoTranscodePipeline::processFrameThroughSoftwareFilter(
     }
 
     return drainFilterStage(error, onPacketWritten);
-}
-
-bool FFmpegVideoTranscodePipeline::transferHardwareFrameToSoftware(AVFrame* hardwareFrame,
-                                                                   AVFrame* softwareFrame,
-                                                                   std::string* error) const
-{
-    if (m_zeroCopyPipeline) {
-        if (error) {
-            *error = "zero-copy pipeline violation: attempted hardware-to-software transfer";
-        }
-        return false;
-    }
-
-    if (!hardwareFrame || !softwareFrame) {
-        if (error) {
-            *error = "hardware frame transfer failed: frame is null";
-        }
-        return false;
-    }
-
-    bool expected = false;
-    if (g_hardwareTransferLogged.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
-        AVCodecContext* decoderCtx = m_decoderStage.context();
-        spdlog::warn(
-            "[ZC][CPU_TRANSFER] hardware-to-software transfer enabled: hw_fmt={}, sw_fmt={}",
-            pixelFormatName(static_cast<AVPixelFormat>(hardwareFrame->format)),
-            pixelFormatName(decoderCtx ? decoderCtx->sw_pix_fmt : AV_PIX_FMT_NONE)
-        );
-    }
-
-    av_frame_unref(softwareFrame);
-
-    const int ret = av_hwframe_transfer_data(softwareFrame, hardwareFrame, 0);
-    if (ret < 0) {
-        if (error) {
-            *error = "av_hwframe_transfer_data decoder frame failed: " + errorString(ret);
-        }
-        return false;
-    }
-
-    softwareFrame->pts = hardwareFrame->pts;
-    softwareFrame->pkt_dts = hardwareFrame->pkt_dts;
-    softwareFrame->sample_aspect_ratio = hardwareFrame->sample_aspect_ratio;
-
-    return true;
 }
 
 bool FFmpegVideoTranscodePipeline::drainFilterStage(
@@ -450,6 +400,7 @@ bool FFmpegVideoTranscodePipeline::isInitialized() const
     return m_timestampStage.isInitialized() &&
         m_decoderStage.isInitialized() &&
         m_encoderStage.isInitialized() &&
+        m_hardwareTransferStage.isInitialized() &&
         m_filterStage.isInitialized();
 }
 
