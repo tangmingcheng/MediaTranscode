@@ -35,9 +35,10 @@ void FFmpegVideoEncoderStage::reset()
     }
 
     m_config = TranscodeConfig{};
-    m_decoderCtx = nullptr;
     m_inputVideoStream = nullptr;
     m_outputFmtCtx = nullptr;
+    m_inputWidth = 0;
+    m_inputHeight = 0;
     m_outputVideoStream = nullptr;
 
     m_hardwareDeviceContext = nullptr;
@@ -66,13 +67,6 @@ bool FFmpegVideoEncoderStage::initialize(const Config& config, std::string* erro
         return false;
     }
 
-    if (!config.decoderCtx) {
-        if (error) {
-            *error = "FFmpegVideoEncoderStage initialize failed: decoderCtx is null";
-        }
-        return false;
-    }
-
     if (!config.inputVideoStream) {
         if (error) {
             *error = "FFmpegVideoEncoderStage initialize failed: inputVideoStream is null";
@@ -95,9 +89,10 @@ bool FFmpegVideoEncoderStage::initialize(const Config& config, std::string* erro
     }
 
     m_config = *config.transcodeConfig;
-    m_decoderCtx = config.decoderCtx;
     m_inputVideoStream = config.inputVideoStream;
     m_outputFmtCtx = config.outputFmtCtx;
+    m_inputWidth = config.inputWidth;
+    m_inputHeight = config.inputHeight;
     m_hardwareDeviceContext = config.hardwareDeviceContext;
     m_decoderUsesHardwareFrames = config.decoderUsesHardwareFrames;
     m_decoderHardwareDeviceAttached = config.decoderHardwareDeviceAttached;
@@ -174,15 +169,24 @@ bool FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream(std::string* erro
         return false;
     }
 
-    int outputWidth = m_config.width > 0 ? m_config.width : m_decoderCtx->width;
-    int outputHeight = m_config.height > 0 ? m_config.height : m_decoderCtx->height;
+    int outputWidth = m_config.width > 0 ? m_config.width : m_inputWidth;
+    int outputHeight = m_config.height > 0 ? m_config.height : m_inputHeight;
 
     outputWidth = normalizeEvenSize(outputWidth);
     outputHeight = normalizeEvenSize(outputHeight);
 
     if (outputWidth <= 0 || outputHeight <= 0) {
         if (error) {
-            *error = "invalid output video size";
+            std::ostringstream oss;
+            oss << "invalid output video size: requested="
+                << m_config.width
+                << "x"
+                << m_config.height
+                << ", input="
+                << m_inputWidth
+                << "x"
+                << m_inputHeight;
+            *error = oss.str();
         }
         return false;
     }
