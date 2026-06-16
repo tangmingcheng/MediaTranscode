@@ -259,37 +259,6 @@ namespace {
         return value % 2 == 0 ? value : value - 1;
     }
 
-    int chooseOutputFps(const TranscodeConfig& config, const AVStream* inputVideoStream)
-    {
-        if (config.fps > 0) {
-            return config.fps;
-        }
-
-        if (inputVideoStream) {
-            AVRational rate = inputVideoStream->avg_frame_rate;
-
-            if (rate.num > 0 && rate.den > 0) {
-                const double fps = av_q2d(rate);
-
-                if (fps > 1.0 && fps < 240.0) {
-                    return static_cast<int>(std::round(fps));
-                }
-            }
-
-            rate = inputVideoStream->r_frame_rate;
-
-            if (rate.num > 0 && rate.den > 0) {
-                const double fps = av_q2d(rate);
-
-                if (fps > 1.0 && fps < 240.0) {
-                    return static_cast<int>(std::round(fps));
-                }
-            }
-        }
-
-        return 25;
-    }
-
     AVPixelFormat chooseVideoEncoderPixelFormat(const AVCodec* encoder)
     {
         if (!encoder) {
