@@ -20,7 +20,8 @@ namespace {
                 AV_PIX_FMT_D3D11,
                 "scale_d3d11",
                 true,
-                false
+                false,
+                AV_PIX_FMT_NONE
             };
 
         case HardwareDeviceType::CUDA:
@@ -30,7 +31,8 @@ namespace {
                 AV_PIX_FMT_CUDA,
                 "scale_cuda",
                 true,
-                false
+                false,
+                AV_PIX_FMT_NONE
             };
 
         case HardwareDeviceType::QSV:
@@ -40,7 +42,8 @@ namespace {
                 AV_PIX_FMT_QSV,
                 "scale_qsv",
                 true,
-                false
+                false,
+                AV_PIX_FMT_NONE
             };
 
         case HardwareDeviceType::VAAPI:
@@ -50,7 +53,8 @@ namespace {
                 AV_PIX_FMT_VAAPI,
                 "scale_vaapi",
                 true,
-                false
+                false,
+                AV_PIX_FMT_NONE
             };
 
         case HardwareDeviceType::DRM:
@@ -60,7 +64,8 @@ namespace {
                 AV_PIX_FMT_DRM_PRIME,
                 nullptr,
                 false,
-                false
+                false,
+                AV_PIX_FMT_NONE
             };
 
         case HardwareDeviceType::RKMPP:
@@ -70,7 +75,8 @@ namespace {
                 AV_PIX_FMT_DRM_PRIME,
                 nullptr,
                 false,
-                true
+                true,
+                AV_PIX_FMT_NV12
             };
 
         case HardwareDeviceType::VideoToolbox:
@@ -80,7 +86,8 @@ namespace {
                 AV_PIX_FMT_VIDEOTOOLBOX,
                 nullptr,
                 false,
-                false
+                false,
+                AV_PIX_FMT_NONE
             };
 
         case HardwareDeviceType::Auto:
