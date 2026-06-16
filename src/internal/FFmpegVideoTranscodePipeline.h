@@ -6,7 +6,7 @@
 #include "internal/FFmpegVideoDecoderStage.h"
 #include "internal/FFmpegVideoEncoderStage.h"
 #include "internal/FFmpegVideoFilterStage.h"
-#include "internal/FFmpegVideoPipeline.h"
+#include "internal/FFmpegVideoPacketWriterStage.h"
 
 #include <cstdint>
 #include <functional>
@@ -110,7 +110,7 @@ private:
     HardwareBackendProfile m_hardwareBackend;
     bool m_zeroCopyPipeline = false;
 
-    FFmpegVideoPipeline m_packetWriter;
+    FFmpegVideoPacketWriterStage m_packetWriter;
 
     AVFrame* m_decodedFrame = nullptr;
     AVFrame* m_filteredFrame = nullptr;
