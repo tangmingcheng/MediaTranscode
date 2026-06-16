@@ -16,7 +16,6 @@ namespace media::ffmpeg {
     class VideoFilterGraph {
     public:
         struct Config {
-            const AVCodecContext* decoderCtx = nullptr;
             const AVCodecContext* encoderCtx = nullptr;
             const AVStream* inputStream = nullptr;
 
