@@ -22,9 +22,10 @@ public:
         const TranscodeConfig* transcodeConfig = nullptr;
         const HardwarePipelinePlan* hardwarePlan = nullptr;
 
-        AVCodecContext* decoderCtx = nullptr;
         AVStream* inputVideoStream = nullptr;
         AVFormatContext* outputFmtCtx = nullptr;
+        int inputWidth = 0;
+        int inputHeight = 0;
 
         /*
          * FFmpegVideoEncoderStage does not own this hardware device context.
@@ -69,9 +70,10 @@ private:
 private:
     TranscodeConfig m_config;
 
-    AVCodecContext* m_decoderCtx = nullptr;
     AVStream* m_inputVideoStream = nullptr;
     AVFormatContext* m_outputFmtCtx = nullptr;
+    int m_inputWidth = 0;
+    int m_inputHeight = 0;
 
     AVCodecContext* m_encoderCtx = nullptr;
     AVStream* m_outputVideoStream = nullptr;
