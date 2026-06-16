@@ -5,7 +5,6 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavfilter/avfilter.h>
-#include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
 #include <libavutil/pixfmt.h>
 #include <libavutil/rational.h>
@@ -17,12 +16,13 @@ namespace media::ffmpeg {
     public:
         struct Config {
             const AVCodecContext* encoderCtx = nullptr;
-            const AVStream* inputStream = nullptr;
 
             AVPixelFormat inputPixelFormat = AV_PIX_FMT_NONE;
             int inputWidth = 0;
             int inputHeight = 0;
             AVRational inputSampleAspectRatio{ 1, 1 };
+            AVRational inputTimeBase{ 0, 1 };
+            AVRational inputFrameRate{ 0, 1 };
 
             int outputFps = 25;
             bool enableConstantFps = false;
@@ -56,7 +56,7 @@ namespace media::ffmpeg {
         AVRational inputFrameRate() const;
 
     private:
-        static AVRational chooseInputFrameRate(const AVStream* inputStream, int outputFps);
+        static AVRational chooseInputFrameRate(AVRational inputFrameRate, int outputFps);
         static std::string buildDescription(const AVCodecContext* encoderCtx,
                                             int outputFps,
                                             bool enableConstantFps);
