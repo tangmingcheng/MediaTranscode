@@ -50,6 +50,11 @@ const char* pixelFormatName(AVPixelFormat format)
     return name ? name : "none";
 }
 
+bool shouldLogZeroCopyFrame(int64_t frameCount)
+{
+    return frameCount <= 3 || frameCount % 120 == 0;
+}
+
 } // namespace
 
 FFmpegVideoFilterStage::~FFmpegVideoFilterStage()
@@ -77,6 +82,8 @@ void FFmpegVideoFilterStage::reset()
 
     m_hardwareBackend = HardwareBackendProfile{};
     m_lastSubmittedPts = AV_NOPTS_VALUE;
+    m_bypassedHardwareFrameLogCount = 0;
+    m_filteredHardwareFrameLogCount = 0;
 }
 
 bool FFmpegVideoFilterStage::initialize(const Config& config, std::string* error)
@@ -329,12 +336,16 @@ int FFmpegVideoFilterStage::receiveBypassedHardwareFrame(AVFrame* frame, std::st
         );
 
         if (ok) {
-            spdlog::debug(
-                "[ZC][ENCODE] bypassed_fmt={}, hw_frames_ctx={}, encoder_pix_fmt={}",
-                pixelFormatName(static_cast<AVPixelFormat>(frame->format)),
-                frame->hw_frames_ctx != nullptr,
-                pixelFormatName(m_encoderCtx ? m_encoderCtx->pix_fmt : AV_PIX_FMT_NONE)
-            );
+            ++m_bypassedHardwareFrameLogCount;
+            if (shouldLogZeroCopyFrame(m_bypassedHardwareFrameLogCount)) {
+                spdlog::debug(
+                    "[ZC][ENCODE] bypassed_frame={} fmt={}, hw_frames_ctx={}, encoder_pix_fmt={}",
+                    m_bypassedHardwareFrameLogCount,
+                    pixelFormatName(static_cast<AVPixelFormat>(frame->format)),
+                    frame->hw_frames_ctx != nullptr,
+                    pixelFormatName(m_encoderCtx ? m_encoderCtx->pix_fmt : AV_PIX_FMT_NONE)
+                );
+            }
             return 1;
         }
 
@@ -413,12 +424,16 @@ int FFmpegVideoFilterStage::receiveHardwareFrame(AVFrame* frame, std::string* er
         );
 
         if (ok) {
-            spdlog::debug(
-                "[ZC][ENCODE] filtered_fmt={}, hw_frames_ctx={}, encoder_pix_fmt={}",
-                pixelFormatName(static_cast<AVPixelFormat>(frame->format)),
-                frame->hw_frames_ctx != nullptr,
-                pixelFormatName(m_encoderCtx ? m_encoderCtx->pix_fmt : AV_PIX_FMT_NONE)
-            );
+            ++m_filteredHardwareFrameLogCount;
+            if (shouldLogZeroCopyFrame(m_filteredHardwareFrameLogCount)) {
+                spdlog::debug(
+                    "[ZC][ENCODE] filtered_frame={} fmt={}, hw_frames_ctx={}, encoder_pix_fmt={}",
+                    m_filteredHardwareFrameLogCount,
+                    pixelFormatName(static_cast<AVPixelFormat>(frame->format)),
+                    frame->hw_frames_ctx != nullptr,
+                    pixelFormatName(m_encoderCtx ? m_encoderCtx->pix_fmt : AV_PIX_FMT_NONE)
+                );
+            }
             return 1;
         }
 
