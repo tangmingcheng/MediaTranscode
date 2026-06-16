@@ -57,7 +57,8 @@ public:
     bool hardwareFilterGraphInitialized() const;
 
 private:
-    bool initializeSoftwareFilterGraph(std::string* error);
+    bool initializeSoftwareFilterGraph(const AVFrame* firstFrame,
+                                       std::string* error);
     bool initializeHardwareFilterGraphFromFrame(const AVFrame* frame, std::string* error);
 
     bool queueBypassedHardwareFrame(AVFrame* frame, std::string* error);
@@ -79,6 +80,7 @@ private:
     int m_outputFps = 0;
     bool m_enableConstantFps = false;
 
+    bool m_initialized = false;
     bool m_zeroCopyPipeline = false;
     bool m_bypassHardwareFilterGraph = false;
     bool m_softwareFilterGraphInitialized = false;
