@@ -24,6 +24,7 @@ AVPixelFormat expectedSoftwareFormatAfterHardwareDownload(HardwareDeviceType dev
     case HardwareDeviceType::QSV:
     case HardwareDeviceType::VAAPI:
     case HardwareDeviceType::DRM:
+    case HardwareDeviceType::RKMPP:
         if (decoderSoftwareFormat == AV_PIX_FMT_NONE ||
             decoderSoftwareFormat == AV_PIX_FMT_YUV420P) {
             return AV_PIX_FMT_NV12;
@@ -58,6 +59,7 @@ FFmpegVideoFilterStage::~FFmpegVideoFilterStage()
 
 void FFmpegVideoFilterStage::reset()
 {
+    clearBypassedHardwareFrames();
     m_hardwareFilterGraph.reset();
     m_filterGraph.reset();
 
@@ -69,6 +71,7 @@ void FFmpegVideoFilterStage::reset()
     m_enableConstantFps = false;
 
     m_zeroCopyPipeline = false;
+    m_bypassHardwareFilterGraph = false;
     m_softwareFilterGraphInitialized = false;
     m_hardwareFilterGraphInitialized = false;
 
@@ -108,8 +111,17 @@ bool FFmpegVideoFilterStage::initialize(const Config& config, std::string* error
     m_enableConstantFps = config.enableConstantFps;
     m_zeroCopyPipeline = config.zeroCopyPipeline;
     m_hardwareBackend = config.hardwareBackend;
+    m_bypassHardwareFilterGraph = m_zeroCopyPipeline &&
+        m_hardwareBackend.supportsDirectHardwareFrameEncode &&
+        !m_hardwareBackend.supportsZeroCopyFilter;
 
     if (m_zeroCopyPipeline) {
+        if (m_bypassHardwareFilterGraph) {
+            spdlog::info(
+                "[ZC][FILTER] bypass hardware filter graph for backend={}",
+                m_hardwareBackend.name ? m_hardwareBackend.name : "unknown"
+            );
+        }
         return true;
     }
 
@@ -209,6 +221,10 @@ bool FFmpegVideoFilterStage::sendHardwareFrame(AVFrame* frame, std::string* erro
         return false;
     }
 
+    if (m_bypassHardwareFilterGraph) {
+        return queueBypassedHardwareFrame(frame, error);
+    }
+
     if (!m_hardwareFilterGraphInitialized) {
         if (!initializeHardwareFilterGraphFromFrame(frame, error)) {
             return false;
@@ -221,6 +237,10 @@ bool FFmpegVideoFilterStage::sendHardwareFrame(AVFrame* frame, std::string* erro
 bool FFmpegVideoFilterStage::flush(std::string* error)
 {
     if (m_zeroCopyPipeline) {
+        if (m_bypassHardwareFilterGraph) {
+            return true;
+        }
+
         if (!m_hardwareFilterGraphInitialized) {
             return true;
         }
@@ -238,10 +258,104 @@ bool FFmpegVideoFilterStage::flush(std::string* error)
 int FFmpegVideoFilterStage::receiveFrame(AVFrame* frame, std::string* error)
 {
     if (m_zeroCopyPipeline) {
+        if (m_bypassHardwareFilterGraph) {
+            return receiveBypassedHardwareFrame(frame, error);
+        }
         return receiveHardwareFrame(frame, error);
     }
 
     return receiveSoftwareFrame(frame, error);
+}
+
+bool FFmpegVideoFilterStage::queueBypassedHardwareFrame(AVFrame* frame, std::string* error)
+{
+    if (!frame) {
+        if (error) {
+            *error = "bypass hardware filter failed: frame is null";
+        }
+        return false;
+    }
+
+    AVFrame* queued = av_frame_alloc();
+    if (!queued) {
+        if (error) {
+            *error = "av_frame_alloc bypass hardware frame failed";
+        }
+        return false;
+    }
+
+    const int ret = av_frame_ref(queued, frame);
+    if (ret < 0) {
+        av_frame_free(&queued);
+        if (error) {
+            *error = "av_frame_ref bypass hardware frame failed: " + errorString(ret);
+        }
+        return false;
+    }
+
+    m_bypassedHardwareFrames.push_back(queued);
+    return true;
+}
+
+int FFmpegVideoFilterStage::receiveBypassedHardwareFrame(AVFrame* frame, std::string* error)
+{
+    if (!frame) {
+        if (error) {
+            *error = "receive bypassed hardware frame failed: frame is null";
+        }
+        return -1;
+    }
+
+    if (!m_inputVideoStream) {
+        if (error) {
+            *error = "receive bypassed hardware frame failed: input stream is null";
+        }
+        return -1;
+    }
+
+    while (!m_bypassedHardwareFrames.empty()) {
+        AVFrame* queued = m_bypassedHardwareFrames.front();
+        m_bypassedHardwareFrames.pop_front();
+
+        av_frame_unref(frame);
+        av_frame_move_ref(frame, queued);
+        av_frame_free(&queued);
+
+        const bool ok = rescaleAndValidateFramePts(
+            frame,
+            m_inputVideoStream->time_base,
+            true,
+            error
+        );
+
+        if (ok) {
+            spdlog::debug(
+                "[ZC][ENCODE] bypassed_fmt={}, hw_frames_ctx={}, encoder_pix_fmt={}",
+                pixelFormatName(static_cast<AVPixelFormat>(frame->format)),
+                frame->hw_frames_ctx != nullptr,
+                pixelFormatName(m_encoderCtx ? m_encoderCtx->pix_fmt : AV_PIX_FMT_NONE)
+            );
+            return 1;
+        }
+
+        if (!error || error->empty()) {
+            av_frame_unref(frame);
+            continue;
+        }
+
+        return -1;
+    }
+
+    return 0;
+}
+
+void FFmpegVideoFilterStage::clearBypassedHardwareFrames()
+{
+    while (!m_bypassedHardwareFrames.empty()) {
+        AVFrame* frame = m_bypassedHardwareFrames.front();
+        m_bypassedHardwareFrames.pop_front();
+        av_frame_free(&frame);
+    }
 }
 
 int FFmpegVideoFilterStage::receiveSoftwareFrame(AVFrame* frame, std::string* error)
