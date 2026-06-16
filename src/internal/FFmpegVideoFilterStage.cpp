@@ -151,7 +151,6 @@ bool FFmpegVideoFilterStage::initializeSoftwareFilterGraph(
     }
 
     VideoFilterGraph::Config config;
-    config.decoderCtx = m_decoderCtx;
     config.encoderCtx = m_encoderCtx;
     config.inputStream = m_inputVideoStream;
     config.inputPixelFormat = inputFormat;
