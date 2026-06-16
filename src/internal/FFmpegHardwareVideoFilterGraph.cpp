@@ -18,6 +18,11 @@ extern "C" {
 namespace media::ffmpeg {
 namespace {
 
+    bool isValidRatio(AVRational ratio)
+    {
+        return ratio.num > 0 && ratio.den > 0;
+    }
+
     void freeBufferSrcParameters(AVBufferSrcParameters** params)
     {
         if (!params || !*params) {
@@ -157,9 +162,9 @@ namespace {
     {
         reset();
 
-        if (!config.inputStream) {
+        if (!isValidRatio(config.inputTimeBase)) {
             if (error) {
-                *error = "HardwareVideoFilterGraph initialize failed: inputStream is null";
+                *error = "HardwareVideoFilterGraph initialize failed: input time base is invalid";
             }
             return false;
         }
@@ -203,7 +208,7 @@ namespace {
             return false;
         }
 
-        m_inputFrameRate = chooseInputFrameRate(config.inputStream);
+        m_inputFrameRate = chooseInputFrameRate(config.inputFrameRate);
 
         char args[512] = {};
         std::snprintf(
@@ -213,8 +218,8 @@ namespace {
             config.inputWidth,
             config.inputHeight,
             config.inputHardwarePixelFormat,
-            config.inputStream->time_base.num,
-            config.inputStream->time_base.den,
+            config.inputTimeBase.num,
+            config.inputTimeBase.den,
             m_inputFrameRate.num,
             m_inputFrameRate.den
         );
@@ -246,7 +251,7 @@ namespace {
         }
 
         srcParams->format = config.inputHardwarePixelFormat;
-        srcParams->time_base = config.inputStream->time_base;
+        srcParams->time_base = config.inputTimeBase;
         srcParams->width = config.inputWidth;
         srcParams->height = config.inputHeight;
         srcParams->sample_aspect_ratio = AVRational{ 1, 1 };
@@ -397,7 +402,7 @@ namespace {
 
         if (ret < 0) {
             if (error) {
-                *error = "av_buffersrc_add_frame_flags hardware failed: " + errorString(ret);
+                *error = "av_buffersrc_add_frame_flags hardware video failed: " + errorString(ret);
             }
             return false;
         }
@@ -408,10 +413,7 @@ namespace {
     bool HardwareVideoFilterGraph::flush(std::string* error)
     {
         if (!m_bufferSrcCtx) {
-            if (error) {
-                *error = "HardwareVideoFilterGraph flush failed: graph is not initialized";
-            }
-            return false;
+            return true;
         }
 
         const int ret = av_buffersrc_add_frame_flags(
@@ -422,7 +424,7 @@ namespace {
 
         if (ret < 0) {
             if (error) {
-                *error = "av_buffersrc_add_frame_flags hardware flush failed: " + errorString(ret);
+                *error = "av_buffersrc_add_frame_flags hardware video flush failed: " + errorString(ret);
             }
             return false;
         }
@@ -439,13 +441,6 @@ namespace {
             return -1;
         }
 
-        if (!frame) {
-            if (error) {
-                *error = "HardwareVideoFilterGraph receiveFrame failed: frame is null";
-            }
-            return -1;
-        }
-
         const int ret = av_buffersink_get_frame(m_bufferSinkCtx, frame);
 
         if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
@@ -454,7 +449,7 @@ namespace {
 
         if (ret < 0) {
             if (error) {
-                *error = "av_buffersink_get_frame hardware failed: " + errorString(ret);
+                *error = "av_buffersink_get_frame hardware video failed: " + errorString(ret);
             }
             return -1;
         }
@@ -481,17 +476,13 @@ namespace {
         return m_inputFrameRate;
     }
 
-    AVRational HardwareVideoFilterGraph::chooseInputFrameRate(const AVStream* inputStream)
+    AVRational HardwareVideoFilterGraph::chooseInputFrameRate(AVRational inputFrameRate)
     {
-        if (inputStream) {
-            if (inputStream->avg_frame_rate.num > 0 &&
-                inputStream->avg_frame_rate.den > 0) {
-                return inputStream->avg_frame_rate;
-            }
+        if (isValidRatio(inputFrameRate)) {
+            const double fps = av_q2d(inputFrameRate);
 
-            if (inputStream->r_frame_rate.num > 0 &&
-                inputStream->r_frame_rate.den > 0) {
-                return inputStream->r_frame_rate;
+            if (fps > 1.0 && fps < 240.0) {
+                return inputFrameRate;
             }
         }
 
