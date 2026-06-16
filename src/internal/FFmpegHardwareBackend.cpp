@@ -19,7 +19,8 @@ namespace {
                 "d3d11va",
                 AV_PIX_FMT_D3D11,
                 "scale_d3d11",
-                true
+                true,
+                false
             };
 
         case HardwareDeviceType::CUDA:
@@ -28,7 +29,8 @@ namespace {
                 "cuda",
                 AV_PIX_FMT_CUDA,
                 "scale_cuda",
-                true
+                true,
+                false
             };
 
         case HardwareDeviceType::QSV:
@@ -37,7 +39,8 @@ namespace {
                 "qsv",
                 AV_PIX_FMT_QSV,
                 "scale_qsv",
-                true
+                true,
+                false
             };
 
         case HardwareDeviceType::VAAPI:
@@ -46,7 +49,8 @@ namespace {
                 "vaapi",
                 AV_PIX_FMT_VAAPI,
                 "scale_vaapi",
-                true
+                true,
+                false
             };
 
         case HardwareDeviceType::DRM:
@@ -55,7 +59,18 @@ namespace {
                 "drm",
                 AV_PIX_FMT_DRM_PRIME,
                 nullptr,
+                false,
                 false
+            };
+
+        case HardwareDeviceType::RKMPP:
+            return HardwareBackendProfile{
+                HardwareDeviceType::RKMPP,
+                "rkmpp",
+                AV_PIX_FMT_DRM_PRIME,
+                nullptr,
+                false,
+                true
             };
 
         case HardwareDeviceType::VideoToolbox:
@@ -64,6 +79,7 @@ namespace {
                 "videotoolbox",
                 AV_PIX_FMT_VIDEOTOOLBOX,
                 nullptr,
+                false,
                 false
             };
 
@@ -87,6 +103,11 @@ namespace {
     bool HardwareBackendRegistry::supportsZeroCopyFilter(HardwareDeviceType deviceType)
     {
         return profileFor(deviceType).supportsZeroCopyFilter;
+    }
+
+    bool HardwareBackendRegistry::supportsDirectHardwareFrameEncode(HardwareDeviceType deviceType)
+    {
+        return profileFor(deviceType).supportsDirectHardwareFrameEncode;
     }
 
 } // namespace media::ffmpeg
