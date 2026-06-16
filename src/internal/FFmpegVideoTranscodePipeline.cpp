@@ -136,10 +136,8 @@ bool FFmpegVideoTranscodePipeline::openEncoder(std::string* error)
     FFmpegVideoEncoderStage::Config config;
     config.transcodeConfig = &m_config;
     config.hardwarePlan = m_hasHardwarePlan ? &m_hardwarePlan : nullptr;
-    config.inputVideoStream = m_inputVideoStream;
+    config.inputMetadata = m_inputMetadata;
     config.outputFmtCtx = m_outputFmtCtx;
-    config.inputWidth = m_inputMetadata.width;
-    config.inputHeight = m_inputMetadata.height;
     config.hardwareDeviceContext = &m_decoderStage.hardwareDeviceContext();
     config.decoderUsesHardwareFrames = m_decoderStage.usesHardwareFrames();
     config.decoderHardwareDeviceAttached = m_decoderStage.hardwareDeviceAttached();
