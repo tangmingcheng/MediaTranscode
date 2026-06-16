@@ -56,6 +56,8 @@ add_library(${TARGET_CORE} STATIC
     src/internal/FFmpegVideoFrameRoutingStrategy.h
     src/internal/FFmpegVideoHardwareTransferStage.cpp
     src/internal/FFmpegVideoHardwareTransferStage.h
+    src/internal/FFmpegVideoInputMetadata.cpp
+    src/internal/FFmpegVideoInputMetadata.h
     src/internal/FFmpegVideoPacketWriterStage.cpp
     src/internal/FFmpegVideoPacketWriterStage.h
     src/internal/FFmpegVideoTimestampStage.cpp
