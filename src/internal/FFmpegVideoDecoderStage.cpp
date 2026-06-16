@@ -106,6 +106,14 @@ bool FFmpegVideoDecoderStage::initializeHardwareDevice(const AVCodec* decoder,
         return false;
     }
 
+    if (!m_hardwareDecoderConfig.requiresHardwareDeviceContext) {
+        m_decoderCtx->opaque = this;
+        m_decoderCtx->get_format = &FFmpegVideoDecoderStage::selectDecoderPixelFormat;
+        m_hardwareDeviceAttached = false;
+        m_usesHardwareFrames = true;
+        return true;
+    }
+
     std::string hardwareError;
     if (!m_hardwareDeviceContext.initialize(
             m_hardwareDecoderConfig.deviceType,
