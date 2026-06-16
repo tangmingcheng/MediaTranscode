@@ -4,8 +4,6 @@
 
 #include "spdlog/spdlog.h"
 
-#include <atomic>
-
 extern "C" {
 #include <libavutil/avutil.h>
 #include <libavutil/hwcontext.h>
@@ -21,7 +19,10 @@ const char* pixelFormatName(AVPixelFormat format)
     return name ? name : "none";
 }
 
-std::atomic_bool g_hardwareTransferLogged{ false };
+bool shouldLogHardwareTransfer(int64_t frameCount)
+{
+    return frameCount <= 3 || frameCount % 120 == 0;
+}
 
 } // namespace
 
@@ -32,23 +33,15 @@ FFmpegVideoHardwareTransferStage::~FFmpegVideoHardwareTransferStage()
 
 void FFmpegVideoHardwareTransferStage::reset()
 {
-    m_decoderCtx = nullptr;
     m_zeroCopyPipeline = false;
     m_initialized = false;
+    m_transferLogCount = 0;
 }
 
 bool FFmpegVideoHardwareTransferStage::initialize(const Config& config, std::string* error)
 {
     reset();
 
-    if (!config.decoderCtx) {
-        if (error) {
-            *error = "FFmpegVideoHardwareTransferStage initialize failed: decoderCtx is null";
-        }
-        return false;
-    }
-
-    m_decoderCtx = config.decoderCtx;
     m_zeroCopyPipeline = config.zeroCopyPipeline;
     m_initialized = true;
 
@@ -81,15 +74,6 @@ bool FFmpegVideoHardwareTransferStage::transferToSoftware(
         return false;
     }
 
-    bool expected = false;
-    if (g_hardwareTransferLogged.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
-        spdlog::warn(
-            "[ZC][CPU_TRANSFER] hardware-to-software transfer enabled: hw_fmt={}, sw_fmt={}",
-            pixelFormatName(static_cast<AVPixelFormat>(hardwareFrame->format)),
-            pixelFormatName(m_decoderCtx ? m_decoderCtx->sw_pix_fmt : AV_PIX_FMT_NONE)
-        );
-    }
-
     av_frame_unref(softwareFrame);
 
     const int ret = av_hwframe_transfer_data(softwareFrame, hardwareFrame, 0);
@@ -103,6 +87,18 @@ bool FFmpegVideoHardwareTransferStage::transferToSoftware(
     softwareFrame->pts = hardwareFrame->pts;
     softwareFrame->pkt_dts = hardwareFrame->pkt_dts;
     softwareFrame->sample_aspect_ratio = hardwareFrame->sample_aspect_ratio;
+
+    ++m_transferLogCount;
+    if (shouldLogHardwareTransfer(m_transferLogCount)) {
+        spdlog::warn(
+            "[ZC][CPU_TRANSFER] frame={} hw_fmt={}, sw_fmt={}, sw_size={}x{}",
+            m_transferLogCount,
+            pixelFormatName(static_cast<AVPixelFormat>(hardwareFrame->format)),
+            pixelFormatName(static_cast<AVPixelFormat>(softwareFrame->format)),
+            softwareFrame->width,
+            softwareFrame->height
+        );
+    }
 
     return true;
 }
