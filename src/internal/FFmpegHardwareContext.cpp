@@ -191,6 +191,7 @@ namespace {
         case HardwareDeviceType::VAAPI:
             return "vaapi";
         case HardwareDeviceType::DRM:
+        case HardwareDeviceType::RKMPP:
             return "drm";
         case HardwareDeviceType::VideoToolbox:
             return "videotoolbox";
@@ -205,6 +206,10 @@ namespace {
                                                               const AVCodec* encoder)
     {
         const AVCodec* preferredCodec = encoder ? encoder : decoder;
+
+        if (codecNameContains(preferredCodec, "rkmpp")) {
+            return HardwareDeviceType::RKMPP;
+        }
 
         if (codecNameContains(preferredCodec, "nvenc") ||
             codecNameContains(preferredCodec, "cuvid") ||
@@ -227,10 +232,6 @@ namespace {
         if (codecNameContains(preferredCodec, "d3d11va") ||
             codecNameContains(preferredCodec, "_mf")) {
             return HardwareDeviceType::D3D11VA;
-        }
-
-        if (codecNameContains(preferredCodec, "rkmpp")) {
-            return HardwareDeviceType::DRM;
         }
 
         return HardwareDeviceType::None;
