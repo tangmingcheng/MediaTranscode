@@ -48,7 +48,10 @@ bool FFmpegVideoDecoderStage::initialize(const Config& config, std::string* erro
         m_hardwareDecoderConfig = config.hardwarePlan->decoderConfig;
     }
 
-    const AVCodec* decoder = avcodec_find_decoder(m_inputStream->codecpar->codec_id);
+    const AVCodec* decoder = m_hasHardwarePlan && m_hardwareDecoderConfig.decoder
+        ? m_hardwareDecoderConfig.decoder
+        : avcodec_find_decoder(m_inputStream->codecpar->codec_id);
+
     if (!decoder) {
         if (error) {
             *error = "avcodec_find_decoder failed: unsupported input video codec";
@@ -79,7 +82,9 @@ bool FFmpegVideoDecoderStage::initialize(const Config& config, std::string* erro
     ret = avcodec_open2(m_decoderCtx, decoder, nullptr);
     if (ret < 0) {
         if (error) {
-            *error = "avcodec_open2 decoder failed: " + errorString(ret);
+            *error = "avcodec_open2 decoder failed [" +
+                std::string(decoder->name ? decoder->name : "unknown") +
+                "]: " + errorString(ret);
         }
         return false;
     }
