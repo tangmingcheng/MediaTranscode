@@ -6,7 +6,6 @@
 
 extern "C" {
 #include <libavfilter/avfilter.h>
-#include <libavformat/avformat.h>
 #include <libavutil/buffer.h>
 #include <libavutil/pixfmt.h>
 #include <libavutil/rational.h>
@@ -51,7 +50,6 @@ namespace media::ffmpeg {
     class HardwareVideoFilterGraph {
     public:
         struct Config {
-            const AVStream* inputStream = nullptr;
             AVBufferRef* inputHardwareFramesContext = nullptr;
             HardwareDeviceType deviceType = HardwareDeviceType::None;
             AVPixelFormat inputHardwarePixelFormat = AV_PIX_FMT_NONE;
@@ -60,6 +58,8 @@ namespace media::ffmpeg {
             int inputHeight = 0;
             int outputWidth = 0;
             int outputHeight = 0;
+            AVRational inputTimeBase{ 0, 1 };
+            AVRational inputFrameRate{ 0, 1 };
             bool enableScale = false;
             bool keepFramesOnDevice = true;
         };
@@ -92,7 +92,7 @@ namespace media::ffmpeg {
         AVRational inputFrameRate() const;
 
     private:
-        static AVRational chooseInputFrameRate(const AVStream* inputStream);
+        static AVRational chooseInputFrameRate(AVRational inputFrameRate);
 
         AVFilterGraph* m_graph = nullptr;
         AVFilterContext* m_bufferSrcCtx = nullptr;
