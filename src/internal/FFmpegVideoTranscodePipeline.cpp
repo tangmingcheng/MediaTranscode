@@ -181,7 +181,7 @@ bool FFmpegVideoTranscodePipeline::initializeFilterStage(std::string* error)
 
 bool FFmpegVideoTranscodePipeline::initializePacketWriter(std::string* error)
 {
-    FFmpegVideoPipeline::Config config;
+    FFmpegVideoPacketWriterStage::Config config;
     config.encoderCtx = encoderContext();
     config.outputFmtCtx = m_outputFmtCtx;
     config.outputVideoStream = m_outputVideoStream;
