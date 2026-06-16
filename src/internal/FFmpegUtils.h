@@ -7,7 +7,6 @@
 
 extern "C" {
 #include <libavcodec/avcodec.h>
-#include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
 #include <libavutil/channel_layout.h>
 #include <libavutil/samplefmt.h>
@@ -25,7 +24,6 @@ namespace media::ffmpeg {
     AVCodecID fallbackAudioCodecId(AudioCodec codec);
 
     int normalizeEvenSize(int value);
-    int chooseOutputFps(const TranscodeConfig& config, const AVStream* inputVideoStream);
 
     AVPixelFormat chooseVideoEncoderPixelFormat(const AVCodec* encoder);
     AVSampleFormat chooseAudioSampleFormat(const AVCodec* encoder);
