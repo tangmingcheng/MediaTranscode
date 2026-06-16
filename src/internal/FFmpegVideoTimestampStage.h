@@ -1,12 +1,14 @@
 #pragma once
 
+#include "internal/FFmpegVideoInputMetadata.h"
+
 #include <cstdint>
 #include <string>
 
 extern "C" {
-#include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
 #include <libavutil/frame.h>
+#include <libavutil/rational.h>
 }
 
 namespace media::ffmpeg {
@@ -16,7 +18,7 @@ class TimelineNormalizer;
 class FFmpegVideoTimestampStage {
 public:
     struct Config {
-        AVStream* inputVideoStream = nullptr;
+        FFmpegVideoInputMetadata inputMetadata;
         TimelineNormalizer* timeline = nullptr;
     };
 
@@ -38,7 +40,7 @@ public:
     static int64_t decodedFrameTimestamp(const AVFrame* frame);
 
 private:
-    AVStream* m_inputVideoStream = nullptr;
+    AVRational m_inputTimeBase{ 0, 1 };
     TimelineNormalizer* m_timeline = nullptr;
 };
 
