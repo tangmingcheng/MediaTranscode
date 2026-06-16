@@ -118,9 +118,7 @@ bool FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream(std::string* erro
 {
     const bool wantsHardwarePipeline =
         m_hasHardwarePlan &&
-        m_decoderUsesHardwareFrames &&
-        m_hardwareDeviceContext &&
-        m_hardwareDeviceContext->isInitialized();
+        m_decoderUsesHardwareFrames;
 
     const AVCodec* encoder = nullptr;
 
@@ -213,11 +211,21 @@ bool FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream(std::string* erro
         return false;
     }
 
+    const bool directHardwareFrameEncoder =
+        m_hardwareEncoderSelection.encoder == encoder &&
+        m_hardwareBackend.supportsDirectHardwareFrameEncode;
+
+    const bool encoderHardwareReady = directHardwareFrameEncoder ||
+        m_hardwareDeviceAttachedToEncoder;
+
+    const bool decoderHardwareReady = directHardwareFrameEncoder ||
+        m_decoderHardwareDeviceAttached;
+
     m_zeroCopyPipeline = m_hardwareEncoderSelection.encoder == encoder &&
         m_hardwareEncoderSelection.zeroCopy &&
         m_decoderUsesHardwareFrames &&
-        m_decoderHardwareDeviceAttached &&
-        m_hardwareDeviceAttachedToEncoder;
+        decoderHardwareReady &&
+        encoderHardwareReady;
 
     if (wantsHardwarePipeline &&
         m_hardwarePlan.executionMode == VideoExecutionMode::ZeroCopy &&
@@ -304,6 +312,11 @@ bool FFmpegVideoEncoderStage::initializeHardwareDeviceForEncoder(const AVCodec* 
             *error = "hardware video pipeline unavailable: selected encoder is not a hardware encoder";
         }
         return false;
+    }
+
+    if (m_hardwareBackend.supportsDirectHardwareFrameEncode &&
+        !m_hardwareBackend.supportsZeroCopyFilter) {
+        return true;
     }
 
     if (!m_hardwareDeviceContext || !m_hardwareDeviceContext->isInitialized()) {
