@@ -1,9 +1,9 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 extern "C" {
-#include <libavcodec/avcodec.h>
 #include <libavutil/frame.h>
 }
 
@@ -12,7 +12,6 @@ namespace media::ffmpeg {
 class FFmpegVideoHardwareTransferStage {
 public:
     struct Config {
-        AVCodecContext* decoderCtx = nullptr;
         bool zeroCopyPipeline = false;
     };
 
@@ -34,9 +33,9 @@ public:
     bool isInitialized() const;
 
 private:
-    AVCodecContext* m_decoderCtx = nullptr;
     bool m_zeroCopyPipeline = false;
     bool m_initialized = false;
+    mutable int64_t m_transferLogCount = 0;
 };
 
 } // namespace media::ffmpeg
