@@ -5,6 +5,7 @@
 #include "internal/FFmpegHardwareContext.h"
 #include "internal/FFmpegHardwareEncoderSelector.h"
 #include "internal/FFmpegPipelinePlanner.h"
+#include "internal/FFmpegVideoInputMetadata.h"
 
 #include <string>
 
@@ -22,10 +23,8 @@ public:
         const TranscodeConfig* transcodeConfig = nullptr;
         const HardwarePipelinePlan* hardwarePlan = nullptr;
 
-        AVStream* inputVideoStream = nullptr;
+        FFmpegVideoInputMetadata inputMetadata;
         AVFormatContext* outputFmtCtx = nullptr;
-        int inputWidth = 0;
-        int inputHeight = 0;
 
         /*
          * FFmpegVideoEncoderStage does not own this hardware device context.
@@ -70,10 +69,8 @@ private:
 private:
     TranscodeConfig m_config;
 
-    AVStream* m_inputVideoStream = nullptr;
+    FFmpegVideoInputMetadata m_inputMetadata;
     AVFormatContext* m_outputFmtCtx = nullptr;
-    int m_inputWidth = 0;
-    int m_inputHeight = 0;
 
     AVCodecContext* m_encoderCtx = nullptr;
     AVStream* m_outputVideoStream = nullptr;
