@@ -177,8 +177,7 @@ bool FFmpegVideoTranscodePipeline::initializeFilterStage(std::string* error)
 
     FFmpegVideoFilterStage::Config config;
     config.encoderCtx = encoderCtx;
-    config.inputVideoStream = m_inputVideoStream;
-    config.inputFallbackSampleAspectRatio = m_inputMetadata.sampleAspectRatio;
+    config.inputMetadata = m_inputMetadata;
     config.outputFps = m_encoderStage.outputFps();
     config.enableConstantFps = m_encoderStage.enableConstantFps();
     config.zeroCopyPipeline = m_encoderStage.zeroCopyPipeline();
