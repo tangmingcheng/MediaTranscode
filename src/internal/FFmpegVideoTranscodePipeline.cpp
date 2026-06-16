@@ -1,6 +1,5 @@
 #include "internal/FFmpegVideoTranscodePipeline.h"
 
-#include "internal/FFmpegTimelineNormalizer.h"
 #include "internal/FFmpegUtils.h"
 
 #include "spdlog/spdlog.h"
@@ -10,7 +9,6 @@
 extern "C" {
 #include <libavutil/avutil.h>
 #include <libavutil/hwcontext.h>
-#include <libavutil/mathematics.h>
 #include <libavutil/pixdesc.h>
 }
 
@@ -38,6 +36,7 @@ void FFmpegVideoTranscodePipeline::reset()
     m_packetWriter.reset();
     m_encoderStage.reset();
     m_decoderStage.reset();
+    m_timestampStage.reset();
 
     if (m_softwareTransferFrame) {
         av_frame_free(&m_softwareTransferFrame);
@@ -55,7 +54,6 @@ void FFmpegVideoTranscodePipeline::reset()
     m_inputVideoStream = nullptr;
     m_outputFmtCtx = nullptr;
     m_outputVideoStream = nullptr;
-    m_timeline = nullptr;
     m_packetCount = 0;
     m_lastWrittenOutTimeMs = 0;
     m_outputFps = 0;
@@ -91,17 +89,9 @@ bool FFmpegVideoTranscodePipeline::initialize(const Config& config, std::string*
         return false;
     }
 
-    if (!config.timeline) {
-        if (error) {
-            *error = "FFmpegVideoTranscodePipeline initialize failed: timeline is null";
-        }
-        return false;
-    }
-
     m_config = *config.transcodeConfig;
     m_inputVideoStream = config.inputVideoStream;
     m_outputFmtCtx = config.outputFmtCtx;
-    m_timeline = config.timeline;
 
     if (config.hardwarePlan &&
         config.hardwarePlan->valid &&
@@ -110,11 +100,22 @@ bool FFmpegVideoTranscodePipeline::initialize(const Config& config, std::string*
         m_hasHardwarePlan = true;
     }
 
-    return openDecoder(error) &&
+    return initializeTimestampStage(config.timeline, error) &&
+        openDecoder(error) &&
         openEncoder(error) &&
         initializeFilterStage(error) &&
         initializePacketWriter(error) &&
         allocateFrames(error);
+}
+
+bool FFmpegVideoTranscodePipeline::initializeTimestampStage(
+    TimelineNormalizer* timeline,
+    std::string* error)
+{
+    FFmpegVideoTimestampStage::Config config;
+    config.inputVideoStream = m_inputVideoStream;
+    config.timeline = timeline;
+    return m_timestampStage.initialize(config, error);
 }
 
 bool FFmpegVideoTranscodePipeline::openDecoder(std::string* error)
@@ -319,7 +320,7 @@ bool FFmpegVideoTranscodePipeline::processHardwareFrameZeroCopy(
     std::string* error,
     const PacketWrittenCallback& onPacketWritten)
 {
-    if (!normalizeFramePts(m_decodedFrame, error)) {
+    if (!m_timestampStage.normalizeFramePts(m_decodedFrame, error)) {
         return false;
     }
 
@@ -335,7 +336,7 @@ bool FFmpegVideoTranscodePipeline::processFrameThroughSoftwareFilter(
     std::string* error,
     const PacketWrittenCallback& onPacketWritten)
 {
-    if (!normalizeFramePts(frame, error)) {
+    if (!m_timestampStage.normalizeFramePts(frame, error)) {
         return false;
     }
 
@@ -444,68 +445,10 @@ AVCodecContext* FFmpegVideoTranscodePipeline::encoderContext() const
     return m_encoderStage.context();
 }
 
-int64_t FFmpegVideoTranscodePipeline::decodedFrameTimestamp(const AVFrame* frame)
-{
-    if (!frame) {
-        return AV_NOPTS_VALUE;
-    }
-
-    if (frame->best_effort_timestamp != AV_NOPTS_VALUE) {
-        return frame->best_effort_timestamp;
-    }
-
-    if (frame->pts != AV_NOPTS_VALUE) {
-        return frame->pts;
-    }
-
-    if (frame->pkt_dts != AV_NOPTS_VALUE) {
-        return frame->pkt_dts;
-    }
-
-    return AV_NOPTS_VALUE;
-}
-
-bool FFmpegVideoTranscodePipeline::normalizeFramePts(AVFrame* frame, std::string* error) const
-{
-    if (!frame) {
-        if (error) {
-            *error = "normalize video frame pts failed: frame is null";
-        }
-        return false;
-    }
-
-    const int64_t inputVideoTs = decodedFrameTimestamp(frame);
-    if (inputVideoTs == AV_NOPTS_VALUE) {
-        if (error) {
-            *error = "input video frame has no valid timestamp; refuse to synthesize PTS in normalized transcoder";
-        }
-        return false;
-    }
-
-    const int64_t inputVideoUs = TimelineNormalizer::toUs(inputVideoTs, m_inputVideoStream->time_base);
-    const int64_t normalizedVideoUs = m_timeline->normalizeUs(inputVideoUs);
-
-    if (normalizedVideoUs == AV_NOPTS_VALUE) {
-        if (error) {
-            *error = "failed to normalize input video timestamp";
-        }
-        return false;
-    }
-
-    frame->pts = TimelineNormalizer::fromUs(normalizedVideoUs, m_inputVideoStream->time_base);
-    if (frame->pts == AV_NOPTS_VALUE) {
-        if (error) {
-            *error = "decoded video frame pts is invalid after normalization";
-        }
-        return false;
-    }
-
-    return true;
-}
-
 bool FFmpegVideoTranscodePipeline::isInitialized() const
 {
-    return m_decoderStage.isInitialized() &&
+    return m_timestampStage.isInitialized() &&
+        m_decoderStage.isInitialized() &&
         m_encoderStage.isInitialized() &&
         m_filterStage.isInitialized();
 }
