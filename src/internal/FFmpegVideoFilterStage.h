@@ -3,6 +3,7 @@
 #include "internal/FFmpegHardwareBackend.h"
 #include "internal/FFmpegHardwareVideoFilterGraph.h"
 #include "internal/FFmpegVideoFilterGraph.h"
+#include "internal/FFmpegVideoInputMetadata.h"
 
 #include <cstdint>
 #include <deque>
@@ -10,7 +11,6 @@
 
 extern "C" {
 #include <libavcodec/avcodec.h>
-#include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
 #include <libavutil/frame.h>
 #include <libavutil/pixfmt.h>
@@ -22,8 +22,7 @@ class FFmpegVideoFilterStage {
 public:
     struct Config {
         AVCodecContext* encoderCtx = nullptr;
-        AVStream* inputVideoStream = nullptr;
-        AVRational inputFallbackSampleAspectRatio{ 1, 1 };
+        FFmpegVideoInputMetadata inputMetadata;
 
         int outputFps = 0;
         bool enableConstantFps = false;
@@ -74,8 +73,7 @@ private:
 
 private:
     AVCodecContext* m_encoderCtx = nullptr;
-    AVStream* m_inputVideoStream = nullptr;
-    AVRational m_inputFallbackSampleAspectRatio{ 1, 1 };
+    FFmpegVideoInputMetadata m_inputMetadata;
 
     int m_outputFps = 0;
     bool m_enableConstantFps = false;
