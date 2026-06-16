@@ -5,23 +5,6 @@ extern "C" {
 }
 
 namespace media::ffmpeg {
-namespace {
-
-AVRational validOrDefaultSampleAspectRatio(AVRational ratio)
-{
-    if (ratio.num > 0 && ratio.den > 0) {
-        return ratio;
-    }
-
-    return AVRational{ 1, 1 };
-}
-
-int validOrFallbackDimension(int primary, int fallback)
-{
-    return primary > 0 ? primary : fallback;
-}
-
-} // namespace
 
 FFmpegVideoTranscodePipeline::~FFmpegVideoTranscodePipeline()
 {
@@ -53,6 +36,7 @@ void FFmpegVideoTranscodePipeline::reset()
     m_config = TranscodeConfig{};
     m_inputVideoStream = nullptr;
     m_outputFmtCtx = nullptr;
+    m_inputMetadata = FFmpegVideoInputMetadata{};
     m_hardwarePlan = HardwarePipelinePlan{};
     m_hasHardwarePlan = false;
 }
@@ -95,6 +79,7 @@ bool FFmpegVideoTranscodePipeline::initialize(const Config& config, std::string*
 
     return initializeTimestampStage(config.timeline, error) &&
         openDecoder(error) &&
+        collectVideoInputMetadata(error) &&
         openEncoder(error) &&
         initializeFrameRoutingStrategy(error) &&
         initializeHardwareTransferStage(error) &&
@@ -121,30 +106,40 @@ bool FFmpegVideoTranscodePipeline::openDecoder(std::string* error)
     return m_decoderStage.initialize(config, error);
 }
 
-bool FFmpegVideoTranscodePipeline::openEncoder(std::string* error)
+bool FFmpegVideoTranscodePipeline::collectVideoInputMetadata(std::string* error)
 {
     AVCodecContext* decoderCtx = m_decoderStage.context();
     if (!decoderCtx) {
         if (error) {
-            *error = "open encoder failed: decoder stage is not initialized";
+            *error = "collect video input metadata failed: decoder stage is not initialized";
         }
         return false;
     }
 
-    const int streamWidth = m_inputVideoStream && m_inputVideoStream->codecpar
-        ? m_inputVideoStream->codecpar->width
-        : 0;
-    const int streamHeight = m_inputVideoStream && m_inputVideoStream->codecpar
-        ? m_inputVideoStream->codecpar->height
-        : 0;
+    m_inputMetadata = FFmpegVideoInputMetadata::fromDecoderContextAndStream(
+        decoderCtx,
+        m_inputVideoStream
+    );
 
+    if (!m_inputMetadata.hasValidSize()) {
+        if (error) {
+            *error = "collect video input metadata failed: invalid input video size";
+        }
+        return false;
+    }
+
+    return true;
+}
+
+bool FFmpegVideoTranscodePipeline::openEncoder(std::string* error)
+{
     FFmpegVideoEncoderStage::Config config;
     config.transcodeConfig = &m_config;
     config.hardwarePlan = m_hasHardwarePlan ? &m_hardwarePlan : nullptr;
     config.inputVideoStream = m_inputVideoStream;
     config.outputFmtCtx = m_outputFmtCtx;
-    config.inputWidth = validOrFallbackDimension(decoderCtx->width, streamWidth);
-    config.inputHeight = validOrFallbackDimension(decoderCtx->height, streamHeight);
+    config.inputWidth = m_inputMetadata.width;
+    config.inputHeight = m_inputMetadata.height;
     config.hardwareDeviceContext = &m_decoderStage.hardwareDeviceContext();
     config.decoderUsesHardwareFrames = m_decoderStage.usesHardwareFrames();
     config.decoderHardwareDeviceAttached = m_decoderStage.hardwareDeviceAttached();
@@ -182,14 +177,10 @@ bool FFmpegVideoTranscodePipeline::initializeFilterStage(std::string* error)
         return false;
     }
 
-    AVCodecContext* decoderCtx = m_decoderStage.context();
-
     FFmpegVideoFilterStage::Config config;
     config.encoderCtx = encoderCtx;
     config.inputVideoStream = m_inputVideoStream;
-    config.inputFallbackSampleAspectRatio = decoderCtx
-        ? validOrDefaultSampleAspectRatio(decoderCtx->sample_aspect_ratio)
-        : AVRational{ 1, 1 };
+    config.inputFallbackSampleAspectRatio = m_inputMetadata.sampleAspectRatio;
     config.outputFps = m_encoderStage.outputFps();
     config.enableConstantFps = m_encoderStage.enableConstantFps();
     config.zeroCopyPipeline = m_encoderStage.zeroCopyPipeline();
