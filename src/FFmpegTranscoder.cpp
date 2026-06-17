@@ -2,6 +2,7 @@
 
 #include "internal/FFmpegAudioPipeline.h"
 #include "internal/FFmpegPipelinePlanner.h"
+#include "internal/FFmpegRAII.h"
 #include "internal/FFmpegTimelineNormalizer.h"
 #include "internal/FFmpegUtils.h"
 #include "internal/FFmpegVideoTranscodePipeline.h"
@@ -50,15 +51,6 @@ namespace {
         }
     };
 
-    struct PacketDeleter {
-        void operator()(AVPacket* packet) const
-        {
-            if (packet) {
-                av_packet_free(&packet);
-            }
-        }
-    };
-
     class RunningStateGuard {
     public:
         explicit RunningStateGuard(std::atomic_bool& running)
@@ -80,7 +72,6 @@ namespace {
 
     using InputFormatContextPtr = std::unique_ptr<AVFormatContext, InputFormatContextDeleter>;
     using OutputFormatContextPtr = std::unique_ptr<AVFormatContext, OutputFormatContextDeleter>;
-    using PacketPtr = std::unique_ptr<AVPacket, PacketDeleter>;
 
 } // namespace
 
@@ -208,7 +199,7 @@ namespace {
 
         InputFormatContextPtr inputFmtCtx;
         OutputFormatContextPtr outputFmtCtx;
-        PacketPtr inputPacket;
+        ffmpeg::PacketPtr inputPacket;
 
         int videoStreamIndex = -1;
         int audioStreamIndex = -1;
@@ -264,6 +255,10 @@ namespace {
 
         auto fail = [&](const std::string& error) {
             setLastError(error);
+        };
+
+        auto failStatus = [&](const Status& status) {
+            setLastError(status.error().message);
         };
 
         emitProgress("initialized");
@@ -347,9 +342,9 @@ namespace {
             videoConfig.outputFmtCtx = outputFmtCtx.get();
             videoConfig.timeline = &timeline;
 
-            std::string videoError;
-            if (!videoPipeline.initialize(videoConfig, &videoError)) {
-                fail(videoError);
+            Status videoStatus = videoPipeline.initialize(videoConfig);
+            if (!videoStatus) {
+                failStatus(videoStatus);
                 return;
             }
         }
@@ -384,7 +379,7 @@ namespace {
             return;
         }
 
-        inputPacket.reset(av_packet_alloc());
+        inputPacket = ffmpeg::makePacket();
         if (!inputPacket) {
             fail("av_packet_alloc input packet failed");
             return;
@@ -423,17 +418,15 @@ namespace {
             }
 
             if (inputPacket->stream_index == videoStreamIndex) {
-                std::string videoError;
-                const bool ok = videoPipeline.processPacket(
+                const Status videoStatus = videoPipeline.processPacket(
                     inputPacket.get(),
-                    &videoError,
                     onVideoPacketWritten
                 );
 
                 av_packet_unref(inputPacket.get());
 
-                if (!ok) {
-                    fail(videoError);
+                if (!videoStatus) {
+                    failStatus(videoStatus);
                     return;
                 }
             }
@@ -459,9 +452,9 @@ namespace {
         }
 
         if (!m_stopRequested.load()) {
-            std::string videoError;
-            if (!videoPipeline.flushDecoder(&videoError, onVideoPacketWritten)) {
-                fail(videoError);
+            Status videoStatus = videoPipeline.flushDecoder(onVideoPacketWritten);
+            if (!videoStatus) {
+                failStatus(videoStatus);
                 return;
             }
         }
@@ -475,9 +468,9 @@ namespace {
         }
 
         if (!m_stopRequested.load()) {
-            std::string videoError;
-            if (!videoPipeline.flushFilterAndEncoder(&videoError, onVideoPacketWritten)) {
-                fail(videoError);
+            Status videoStatus = videoPipeline.flushFilterAndEncoder(onVideoPacketWritten);
+            if (!videoStatus) {
+                failStatus(videoStatus);
                 return;
             }
         }
