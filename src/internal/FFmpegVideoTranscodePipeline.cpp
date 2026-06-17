@@ -14,6 +14,7 @@ FFmpegVideoTranscodePipeline::~FFmpegVideoTranscodePipeline()
 void FFmpegVideoTranscodePipeline::reset()
 {
     m_filterStage.reset();
+    m_frameRateStage.reset();
     m_packetWriter.reset();
     m_hardwareTransferStage.reset();
     m_frameRoutingStrategy.reset();
@@ -23,6 +24,7 @@ void FFmpegVideoTranscodePipeline::reset()
 
     m_softwareTransferFrame.reset();
     m_filteredFrame.reset();
+    m_frameRateFrame.reset();
     m_decodedFrame.reset();
 
     m_config = TranscodeConfig{};
@@ -89,6 +91,11 @@ Status FFmpegVideoTranscodePipeline::initialize(const Config& config)
     }
 
     status = initializeHardwareTransferStage();
+    if (!status) {
+        return status;
+    }
+
+    status = initializeFrameRateStage();
     if (!status) {
         return status;
     }
@@ -183,6 +190,16 @@ Status FFmpegVideoTranscodePipeline::initializeHardwareTransferStage()
     return makeLegacyStatus(m_hardwareTransferStage.initialize(config, &error), error);
 }
 
+Status FFmpegVideoTranscodePipeline::initializeFrameRateStage()
+{
+    FFmpegVideoFrameRateStage::Config config;
+    config.inputTimeBase = m_inputMetadata.timeBase;
+    config.targetFps = m_config.fps;
+
+    std::string error;
+    return makeLegacyStatus(m_frameRateStage.initialize(config, &error), error);
+}
+
 Status FFmpegVideoTranscodePipeline::initializeFilterStage()
 {
     AVCodecContext* encoderCtx = encoderContext();
@@ -195,7 +212,7 @@ Status FFmpegVideoTranscodePipeline::initializeFilterStage()
     config.encoderCtx = encoderCtx;
     config.inputMetadata = m_inputMetadata;
     config.outputFps = m_encoderStage.outputFps();
-    config.enableConstantFps = m_encoderStage.enableConstantFps();
+    config.enableConstantFps = false;
     config.zeroCopyPipeline = m_encoderStage.zeroCopyPipeline();
     config.hardwareBackend = m_encoderStage.hardwareBackend();
 
@@ -216,11 +233,13 @@ Status FFmpegVideoTranscodePipeline::initializePacketWriter()
 Status FFmpegVideoTranscodePipeline::allocateFrames()
 {
     m_decodedFrame = makeFrame();
+    m_frameRateFrame = makeFrame();
     m_filteredFrame = makeFrame();
     m_softwareTransferFrame = makeFrame();
 
-    if (!m_decodedFrame || !m_filteredFrame || !m_softwareTransferFrame) {
+    if (!m_decodedFrame || !m_frameRateFrame || !m_filteredFrame || !m_softwareTransferFrame) {
         m_decodedFrame.reset();
+        m_frameRateFrame.reset();
         m_filteredFrame.reset();
         m_softwareTransferFrame.reset();
         return Status::failure(makeAllocationError(
@@ -261,11 +280,21 @@ Status FFmpegVideoTranscodePipeline::flushFilterAndEncoder(
     const PacketWrittenCallback& onPacketWritten)
 {
     std::string error;
+    if (!m_frameRateStage.flush(&error)) {
+        return Status::failure(makeLegacyError(error));
+    }
+
+    Status status = drainFrameRateStage(m_encoderStage.zeroCopyPipeline(), onPacketWritten);
+    if (!status) {
+        return status;
+    }
+
+    error.clear();
     if (!m_filterStage.flush(&error)) {
         return Status::failure(makeLegacyError(error));
     }
 
-    Status status = drainFilterStage(onPacketWritten);
+    status = drainFilterStage(onPacketWritten);
     if (!status) {
         return status;
     }
@@ -347,11 +376,11 @@ Status FFmpegVideoTranscodePipeline::processHardwareFrameZeroCopy(
     }
 
     error.clear();
-    if (!m_filterStage.sendHardwareFrame(m_decodedFrame.get(), &error)) {
+    if (!m_frameRateStage.sendFrame(m_decodedFrame.get(), &error)) {
         return Status::failure(makeLegacyError(error));
     }
 
-    return drainFilterStage(onPacketWritten);
+    return drainFrameRateStage(true, onPacketWritten);
 }
 
 Status FFmpegVideoTranscodePipeline::processFrameThroughSoftwareFilter(
@@ -364,7 +393,53 @@ Status FFmpegVideoTranscodePipeline::processFrameThroughSoftwareFilter(
     }
 
     error.clear();
-    if (!m_filterStage.sendSoftwareFrame(frame, &error)) {
+    if (!m_frameRateStage.sendFrame(frame, &error)) {
+        return Status::failure(makeLegacyError(error));
+    }
+
+    return drainFrameRateStage(false, onPacketWritten);
+}
+
+Status FFmpegVideoTranscodePipeline::drainFrameRateStage(
+    bool hardwareFrame,
+    const PacketWrittenCallback& onPacketWritten)
+{
+    while (true) {
+        std::string error;
+        const int receiveRet = m_frameRateStage.receiveFrame(m_frameRateFrame.get(), &error);
+
+        if (receiveRet == 0) {
+            return Status::success();
+        }
+
+        if (receiveRet < 0) {
+            return Status::failure(makeLegacyError(error));
+        }
+
+        const Status status = sendFrameRateOutputToFilter(
+            m_frameRateFrame.get(),
+            hardwareFrame,
+            onPacketWritten
+        );
+        av_frame_unref(m_frameRateFrame.get());
+
+        if (!status) {
+            return status;
+        }
+    }
+}
+
+Status FFmpegVideoTranscodePipeline::sendFrameRateOutputToFilter(
+    AVFrame* frame,
+    bool hardwareFrame,
+    const PacketWrittenCallback& onPacketWritten)
+{
+    std::string error;
+    const bool ok = hardwareFrame
+        ? m_filterStage.sendHardwareFrame(frame, &error)
+        : m_filterStage.sendSoftwareFrame(frame, &error);
+
+    if (!ok) {
         return Status::failure(makeLegacyError(error));
     }
 
@@ -424,6 +499,7 @@ bool FFmpegVideoTranscodePipeline::isInitialized() const
         m_encoderStage.isInitialized() &&
         m_frameRoutingStrategy.isInitialized() &&
         m_hardwareTransferStage.isInitialized() &&
+        m_frameRateStage.isInitialized() &&
         m_filterStage.isInitialized();
 }
 
