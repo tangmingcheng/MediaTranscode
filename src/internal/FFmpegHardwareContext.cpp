@@ -94,8 +94,9 @@ namespace {
             nullptr,
             0
         );
+        BufferRefPtr createdDeviceCtx(rawDeviceCtx);
 
-        if (ret < 0 || !rawDeviceCtx) {
+        if (ret < 0 || !createdDeviceCtx) {
             if (error) {
                 *error = "av_hwdevice_ctx_create failed [" +
                     std::string(toAVDeviceName(m_resolvedDeviceType)) +
@@ -105,7 +106,7 @@ namespace {
             return false;
         }
 
-        m_deviceCtx.reset(rawDeviceCtx);
+        m_deviceCtx = std::move(createdDeviceCtx);
 
         const char* deviceName = av_hwdevice_get_type_name(m_avDeviceType);
         m_resolvedDeviceName = deviceName ? deviceName : toAVDeviceName(m_resolvedDeviceType);
