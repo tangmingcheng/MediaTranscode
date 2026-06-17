@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/FFmpegHardwareContext.h"
+#include "internal/FFmpegRAII.h"
 
 #include <string>
 
@@ -46,13 +47,13 @@ namespace media::ffmpeg {
         int height() const;
 
         /*
-         * Caller owns the returned reference and must av_buffer_unref() it.
+         * Returns an owning reference to the underlying AVBufferRef.
          */
-        AVBufferRef* ref() const;
+        BufferRefPtr ref() const;
         AVBufferRef* raw() const;
 
     private:
-        AVBufferRef* m_framesCtx = nullptr;
+        BufferRefPtr m_framesCtx;
         AVPixelFormat m_hardwareFormat = AV_PIX_FMT_NONE;
         AVPixelFormat m_softwareFormat = AV_PIX_FMT_NONE;
         int m_width = 0;
