@@ -1,7 +1,9 @@
 #pragma once
 
 #include "media_transcode/MediaTranscodeTypes.h"
+#include "media_transcode/Result.h"
 #include "internal/FFmpegPipelinePlanner.h"
+#include "internal/FFmpegRAII.h"
 #include "internal/FFmpegVideoDecoderStage.h"
 #include "internal/FFmpegVideoEncoderStage.h"
 #include "internal/FFmpegVideoFilterStage.h"
@@ -13,7 +15,6 @@
 
 #include <cstdint>
 #include <functional>
-#include <string>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -47,15 +48,12 @@ public:
 
     void reset();
 
-    bool initialize(const Config& config, std::string* error);
-    bool processPacket(AVPacket* packet,
-                       std::string* error,
-                       const PacketWrittenCallback& onPacketWritten = {});
+    Status initialize(const Config& config);
+    Status processPacket(AVPacket* packet,
+                         const PacketWrittenCallback& onPacketWritten = {});
 
-    bool flushDecoder(std::string* error,
-                      const PacketWrittenCallback& onPacketWritten = {});
-    bool flushFilterAndEncoder(std::string* error,
-                               const PacketWrittenCallback& onPacketWritten = {});
+    Status flushDecoder(const PacketWrittenCallback& onPacketWritten = {});
+    Status flushFilterAndEncoder(const PacketWrittenCallback& onPacketWritten = {});
 
     bool isInitialized() const;
     AVStream* outputStream() const;
@@ -65,30 +63,24 @@ public:
     int64_t estimatedOutTimeMs() const;
 
 private:
-    bool initializeTimestampStage(TimelineNormalizer* timeline, std::string* error);
-    bool openDecoder(std::string* error);
-    bool collectVideoInputMetadata(std::string* error);
-    bool openEncoder(std::string* error);
-    bool initializeFrameRoutingStrategy(std::string* error);
-    bool initializeHardwareTransferStage(std::string* error);
-    bool initializeFilterStage(std::string* error);
-    bool initializePacketWriter(std::string* error);
-    bool allocateFrames(std::string* error);
+    Status initializeTimestampStage(TimelineNormalizer* timeline);
+    Status openDecoder();
+    Status collectVideoInputMetadata();
+    Status openEncoder();
+    Status initializeFrameRoutingStrategy();
+    Status initializeHardwareTransferStage();
+    Status initializeFilterStage();
+    Status initializePacketWriter();
+    Status allocateFrames();
 
-    bool drainDecoder(std::string* error,
-                      const PacketWrittenCallback& onPacketWritten);
-    bool processDecodedFrame(std::string* error,
-                             const PacketWrittenCallback& onPacketWritten);
-    bool processHardwareFrameZeroCopy(std::string* error,
-                                      const PacketWrittenCallback& onPacketWritten);
-    bool processFrameThroughSoftwareFilter(AVFrame* frame,
-                                           std::string* error,
-                                           const PacketWrittenCallback& onPacketWritten);
-    bool drainFilterStage(std::string* error,
-                          const PacketWrittenCallback& onPacketWritten);
-    bool writeEncodedPackets(AVFrame* frame,
-                             std::string* error,
-                             const PacketWrittenCallback& onPacketWritten);
+    Status drainDecoder(const PacketWrittenCallback& onPacketWritten);
+    Status processDecodedFrame(const PacketWrittenCallback& onPacketWritten);
+    Status processHardwareFrameZeroCopy(const PacketWrittenCallback& onPacketWritten);
+    Status processFrameThroughSoftwareFilter(AVFrame* frame,
+                                             const PacketWrittenCallback& onPacketWritten);
+    Status drainFilterStage(const PacketWrittenCallback& onPacketWritten);
+    Status writeEncodedPackets(AVFrame* frame,
+                               const PacketWrittenCallback& onPacketWritten);
 
     AVCodecContext* encoderContext() const;
 
@@ -111,9 +103,9 @@ private:
 
     FFmpegVideoPacketWriterStage m_packetWriter;
 
-    AVFrame* m_decodedFrame = nullptr;
-    AVFrame* m_filteredFrame = nullptr;
-    AVFrame* m_softwareTransferFrame = nullptr;
+    FramePtr m_decodedFrame;
+    FramePtr m_filteredFrame;
+    FramePtr m_softwareTransferFrame;
 };
 
 } // namespace media::ffmpeg
