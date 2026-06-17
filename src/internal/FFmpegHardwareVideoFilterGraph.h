@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/FFmpegHardwareTypes.h"
+#include "internal/FFmpegRAII.h"
 
 #include <string>
 
@@ -94,7 +95,7 @@ namespace media::ffmpeg {
     private:
         static AVRational chooseInputFrameRate(AVRational inputFrameRate);
 
-        AVFilterGraph* m_graph = nullptr;
+        FilterGraphPtr m_graph;
         AVFilterContext* m_bufferSrcCtx = nullptr;
         AVFilterContext* m_bufferSinkCtx = nullptr;
         AVRational m_inputFrameRate{ 0, 1 };
