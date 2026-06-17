@@ -79,6 +79,15 @@ struct FilterGraphDeleter {
     }
 };
 
+struct FilterInOutDeleter {
+    void operator()(AVFilterInOut* inout) const noexcept
+    {
+        if (inout) {
+            avfilter_inout_free(&inout);
+        }
+    }
+};
+
 struct SwrContextDeleter {
     void operator()(SwrContext* ctx) const noexcept
     {
@@ -127,6 +136,7 @@ using CodecContextPtr = std::unique_ptr<AVCodecContext, CodecContextDeleter>;
 using InputFormatContextPtr = std::unique_ptr<AVFormatContext, InputFormatContextDeleter>;
 using OutputFormatContextPtr = std::unique_ptr<AVFormatContext, OutputFormatContextDeleter>;
 using FilterGraphPtr = std::unique_ptr<AVFilterGraph, FilterGraphDeleter>;
+using FilterInOutPtr = std::unique_ptr<AVFilterInOut, FilterInOutDeleter>;
 using SwrContextPtr = std::unique_ptr<SwrContext, SwrContextDeleter>;
 using BufferRefPtr = std::unique_ptr<AVBufferRef, BufferRefDeleter>;
 using AudioFifoPtr = std::unique_ptr<AVAudioFifo, AudioFifoDeleter>;
@@ -150,6 +160,11 @@ inline CodecContextPtr makeCodecContext(const AVCodec* codec)
 inline FilterGraphPtr makeFilterGraph()
 {
     return FilterGraphPtr(avfilter_graph_alloc());
+}
+
+inline FilterInOutPtr makeFilterInOut()
+{
+    return FilterInOutPtr(avfilter_inout_alloc());
 }
 
 inline AudioFifoPtr makeAudioFifo(AVSampleFormat sampleFormat, int channels, int initialSamples)
