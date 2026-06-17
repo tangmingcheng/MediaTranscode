@@ -24,11 +24,10 @@ FFmpegAudioFifo& FFmpegAudioFifo::operator=(FFmpegAudioFifo&& other) noexcept
 
     reset();
 
-    m_fifo = other.m_fifo;
+    m_fifo = std::move(other.m_fifo);
     m_sampleFormat = other.m_sampleFormat;
     m_channels = other.m_channels;
 
-    other.m_fifo = nullptr;
     other.m_sampleFormat = AV_SAMPLE_FMT_NONE;
     other.m_channels = 0;
 
@@ -37,11 +36,7 @@ FFmpegAudioFifo& FFmpegAudioFifo::operator=(FFmpegAudioFifo&& other) noexcept
 
 void FFmpegAudioFifo::reset()
 {
-    if (m_fifo) {
-        av_audio_fifo_free(m_fifo);
-    }
-
-    m_fifo = nullptr;
+    m_fifo.reset();
     m_sampleFormat = AV_SAMPLE_FMT_NONE;
     m_channels = 0;
 }
@@ -71,7 +66,7 @@ bool FFmpegAudioFifo::initialize(AVSampleFormat sampleFormat,
         initialSamples = 1024;
     }
 
-    m_fifo = av_audio_fifo_alloc(sampleFormat, channels, initialSamples);
+    m_fifo = makeAudioFifo(sampleFormat, channels, initialSamples);
     if (!m_fifo) {
         if (error) {
             *error = "av_audio_fifo_alloc failed";
@@ -91,12 +86,12 @@ bool FFmpegAudioFifo::isInitialized() const
 
 int FFmpegAudioFifo::size() const
 {
-    return m_fifo ? av_audio_fifo_size(m_fifo) : 0;
+    return m_fifo ? av_audio_fifo_size(m_fifo.get()) : 0;
 }
 
 int FFmpegAudioFifo::space() const
 {
-    return m_fifo ? av_audio_fifo_space(m_fifo) : 0;
+    return m_fifo ? av_audio_fifo_space(m_fifo.get()) : 0;
 }
 
 bool FFmpegAudioFifo::ensureAdditionalCapacity(int additionalSamples, std::string* error)
@@ -112,8 +107,8 @@ bool FFmpegAudioFifo::ensureAdditionalCapacity(int additionalSamples, std::strin
         return true;
     }
 
-    const int targetSize = av_audio_fifo_size(m_fifo) + additionalSamples;
-    const int ret = av_audio_fifo_realloc(m_fifo, targetSize);
+    const int targetSize = av_audio_fifo_size(m_fifo.get()) + additionalSamples;
+    const int ret = av_audio_fifo_realloc(m_fifo.get(), targetSize);
     if (ret < 0) {
         if (error) {
             *error = "av_audio_fifo_realloc failed: " + errorString(ret);
@@ -142,7 +137,7 @@ bool FFmpegAudioFifo::writeFrame(AVFrame* frame, std::string* error)
     }
 
     const int writtenSamples = av_audio_fifo_write(
-        m_fifo,
+        m_fifo.get(),
         reinterpret_cast<void**>(frame->extended_data),
         frame->nb_samples
     );
@@ -177,7 +172,7 @@ bool FFmpegAudioFifo::readToFrame(AVFrame* frame, int samples, std::string* erro
         return true;
     }
 
-    if (av_audio_fifo_size(m_fifo) < samples) {
+    if (av_audio_fifo_size(m_fifo.get()) < samples) {
         if (error) {
             *error = "FFmpegAudioFifo readToFrame failed: insufficient samples";
         }
@@ -185,7 +180,7 @@ bool FFmpegAudioFifo::readToFrame(AVFrame* frame, int samples, std::string* erro
     }
 
     const int readSamples = av_audio_fifo_read(
-        m_fifo,
+        m_fifo.get(),
         reinterpret_cast<void**>(frame->extended_data),
         samples
     );
@@ -202,7 +197,7 @@ bool FFmpegAudioFifo::readToFrame(AVFrame* frame, int samples, std::string* erro
 
 AVAudioFifo* FFmpegAudioFifo::raw() const
 {
-    return m_fifo;
+    return m_fifo.get();
 }
 
 } // namespace media::ffmpeg
