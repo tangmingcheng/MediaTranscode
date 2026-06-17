@@ -1,8 +1,8 @@
 #include "internal/FFmpegVideoTranscodePipeline.h"
 
-extern "C" {
-#include <libavutil/frame.h>
-}
+#include "internal/FFmpegError.h"
+
+#include <string>
 
 namespace media::ffmpeg {
 
@@ -21,17 +21,9 @@ void FFmpegVideoTranscodePipeline::reset()
     m_decoderStage.reset();
     m_timestampStage.reset();
 
-    if (m_softwareTransferFrame) {
-        av_frame_free(&m_softwareTransferFrame);
-    }
-
-    if (m_filteredFrame) {
-        av_frame_free(&m_filteredFrame);
-    }
-
-    if (m_decodedFrame) {
-        av_frame_free(&m_decodedFrame);
-    }
+    m_softwareTransferFrame.reset();
+    m_filteredFrame.reset();
+    m_decodedFrame.reset();
 
     m_config = TranscodeConfig{};
     m_inputVideoStream = nullptr;
@@ -41,29 +33,23 @@ void FFmpegVideoTranscodePipeline::reset()
     m_hasHardwarePlan = false;
 }
 
-bool FFmpegVideoTranscodePipeline::initialize(const Config& config, std::string* error)
+Status FFmpegVideoTranscodePipeline::initialize(const Config& config)
 {
     reset();
 
     if (!config.transcodeConfig) {
-        if (error) {
-            *error = "FFmpegVideoTranscodePipeline initialize failed: transcodeConfig is null";
-        }
-        return false;
+        return Status::failure(ErrorInfo::invalidArgument(
+            "FFmpegVideoTranscodePipeline initialize failed: transcodeConfig is null"));
     }
 
     if (!config.inputVideoStream) {
-        if (error) {
-            *error = "FFmpegVideoTranscodePipeline initialize failed: inputVideoStream is null";
-        }
-        return false;
+        return Status::failure(ErrorInfo::invalidArgument(
+            "FFmpegVideoTranscodePipeline initialize failed: inputVideoStream is null"));
     }
 
     if (!config.outputFmtCtx) {
-        if (error) {
-            *error = "FFmpegVideoTranscodePipeline initialize failed: outputFmtCtx is null";
-        }
-        return false;
+        return Status::failure(ErrorInfo::invalidArgument(
+            "FFmpegVideoTranscodePipeline initialize failed: outputFmtCtx is null"));
     }
 
     m_config = *config.transcodeConfig;
@@ -77,43 +63,74 @@ bool FFmpegVideoTranscodePipeline::initialize(const Config& config, std::string*
         m_hasHardwarePlan = true;
     }
 
-    return openDecoder(error) &&
-        collectVideoInputMetadata(error) &&
-        initializeTimestampStage(config.timeline, error) &&
-        openEncoder(error) &&
-        initializeFrameRoutingStrategy(error) &&
-        initializeHardwareTransferStage(error) &&
-        initializeFilterStage(error) &&
-        initializePacketWriter(error) &&
-        allocateFrames(error);
+    Status status = openDecoder();
+    if (!status) {
+        return status;
+    }
+
+    status = collectVideoInputMetadata();
+    if (!status) {
+        return status;
+    }
+
+    status = initializeTimestampStage(config.timeline);
+    if (!status) {
+        return status;
+    }
+
+    status = openEncoder();
+    if (!status) {
+        return status;
+    }
+
+    status = initializeFrameRoutingStrategy();
+    if (!status) {
+        return status;
+    }
+
+    status = initializeHardwareTransferStage();
+    if (!status) {
+        return status;
+    }
+
+    status = initializeFilterStage();
+    if (!status) {
+        return status;
+    }
+
+    status = initializePacketWriter();
+    if (!status) {
+        return status;
+    }
+
+    return allocateFrames();
 }
 
-bool FFmpegVideoTranscodePipeline::initializeTimestampStage(
-    TimelineNormalizer* timeline,
-    std::string* error)
+Status FFmpegVideoTranscodePipeline::initializeTimestampStage(
+    TimelineNormalizer* timeline)
 {
     FFmpegVideoTimestampStage::Config config;
     config.inputMetadata = m_inputMetadata;
     config.timeline = timeline;
-    return m_timestampStage.initialize(config, error);
+
+    std::string error;
+    return makeLegacyStatus(m_timestampStage.initialize(config, &error), error);
 }
 
-bool FFmpegVideoTranscodePipeline::openDecoder(std::string* error)
+Status FFmpegVideoTranscodePipeline::openDecoder()
 {
     FFmpegVideoDecoderStage::Config config;
     config.inputStream = m_inputVideoStream;
     config.hardwarePlan = m_hasHardwarePlan ? &m_hardwarePlan : nullptr;
-    return m_decoderStage.initialize(config, error);
+    return m_decoderStage.initialize(config);
 }
 
-bool FFmpegVideoTranscodePipeline::collectVideoInputMetadata(std::string* error)
+Status FFmpegVideoTranscodePipeline::collectVideoInputMetadata()
 {
     AVCodecContext* decoderCtx = m_decoderStage.context();
     if (!decoderCtx) {
-        if (error) {
-            *error = "collect video input metadata failed: decoder stage is not initialized";
-        }
-        return false;
+        return Status::failure(ErrorInfo::notInitialized(
+            "collect video input metadata failed: decoder stage is not initialized"));
     }
 
     m_inputMetadata = FFmpegVideoInputMetadata::fromDecoderContextAndStream(
@@ -122,16 +139,14 @@ bool FFmpegVideoTranscodePipeline::collectVideoInputMetadata(std::string* error)
     );
 
     if (!m_inputMetadata.hasValidSize()) {
-        if (error) {
-            *error = "collect video input metadata failed: invalid input video size";
-        }
-        return false;
+        return Status::failure(ErrorInfo::invalidArgument(
+            "collect video input metadata failed: invalid input video size"));
     }
 
-    return true;
+    return Status::success();
 }
 
-bool FFmpegVideoTranscodePipeline::openEncoder(std::string* error)
+Status FFmpegVideoTranscodePipeline::openEncoder()
 {
     FFmpegVideoEncoderStage::Config config;
     config.transcodeConfig = &m_config;
@@ -142,10 +157,10 @@ bool FFmpegVideoTranscodePipeline::openEncoder(std::string* error)
     config.decoderUsesHardwareFrames = m_decoderStage.usesHardwareFrames();
     config.decoderHardwareDeviceAttached = m_decoderStage.hardwareDeviceAttached();
 
-    return m_encoderStage.initialize(config, error);
+    return m_encoderStage.initialize(config);
 }
 
-bool FFmpegVideoTranscodePipeline::initializeFrameRoutingStrategy(std::string* error)
+Status FFmpegVideoTranscodePipeline::initializeFrameRoutingStrategy()
 {
     FFmpegVideoFrameRoutingStrategy::Config config;
     config.executionMode = m_hasHardwarePlan
@@ -155,24 +170,25 @@ bool FFmpegVideoTranscodePipeline::initializeFrameRoutingStrategy(std::string* e
     config.decoderUsesHardwareFrames = m_decoderStage.usesHardwareFrames();
     config.hardwareDecoderConfig = m_decoderStage.hardwareDecoderConfig();
 
-    return m_frameRoutingStrategy.initialize(config, error);
+    std::string error;
+    return makeLegacyStatus(m_frameRoutingStrategy.initialize(config, &error), error);
 }
 
-bool FFmpegVideoTranscodePipeline::initializeHardwareTransferStage(std::string* error)
+Status FFmpegVideoTranscodePipeline::initializeHardwareTransferStage()
 {
     FFmpegVideoHardwareTransferStage::Config config;
     config.zeroCopyPipeline = m_encoderStage.zeroCopyPipeline();
-    return m_hardwareTransferStage.initialize(config, error);
+
+    std::string error;
+    return makeLegacyStatus(m_hardwareTransferStage.initialize(config, &error), error);
 }
 
-bool FFmpegVideoTranscodePipeline::initializeFilterStage(std::string* error)
+Status FFmpegVideoTranscodePipeline::initializeFilterStage()
 {
     AVCodecContext* encoderCtx = encoderContext();
     if (!encoderCtx) {
-        if (error) {
-            *error = "initialize filter stage failed: encoder stage is not initialized";
-        }
-        return false;
+        return Status::failure(ErrorInfo::notInitialized(
+            "initialize filter stage failed: encoder stage is not initialized"));
     }
 
     FFmpegVideoFilterStage::Config config;
@@ -183,211 +199,217 @@ bool FFmpegVideoTranscodePipeline::initializeFilterStage(std::string* error)
     config.zeroCopyPipeline = m_encoderStage.zeroCopyPipeline();
     config.hardwareBackend = m_encoderStage.hardwareBackend();
 
-    return m_filterStage.initialize(config, error);
+    std::string error;
+    return makeLegacyStatus(m_filterStage.initialize(config, &error), error);
 }
 
-bool FFmpegVideoTranscodePipeline::initializePacketWriter(std::string* error)
+Status FFmpegVideoTranscodePipeline::initializePacketWriter()
 {
     FFmpegVideoPacketWriterStage::Config config;
     config.encoderCtx = encoderContext();
     config.outputFmtCtx = m_outputFmtCtx;
     config.outputVideoStream = m_encoderStage.outputStream();
 
-    return m_packetWriter.initialize(config, error);
+    return m_packetWriter.initialize(config);
 }
 
-bool FFmpegVideoTranscodePipeline::allocateFrames(std::string* error)
+Status FFmpegVideoTranscodePipeline::allocateFrames()
 {
-    m_decodedFrame = av_frame_alloc();
-    m_filteredFrame = av_frame_alloc();
-    m_softwareTransferFrame = av_frame_alloc();
+    m_decodedFrame = makeFrame();
+    m_filteredFrame = makeFrame();
+    m_softwareTransferFrame = makeFrame();
 
     if (!m_decodedFrame || !m_filteredFrame || !m_softwareTransferFrame) {
-        if (error) {
-            *error = "av_frame_alloc video frame failed";
-        }
-        return false;
+        m_decodedFrame.reset();
+        m_filteredFrame.reset();
+        m_softwareTransferFrame.reset();
+        return Status::failure(makeAllocationError(
+            "av_frame_alloc video frame failed"));
     }
 
-    return true;
+    return Status::success();
 }
 
-bool FFmpegVideoTranscodePipeline::processPacket(
+Status FFmpegVideoTranscodePipeline::processPacket(
     AVPacket* packet,
-    std::string* error,
     const PacketWrittenCallback& onPacketWritten)
 {
-    if (!m_decoderStage.sendPacket(packet, error)) {
-        return false;
+    Status status = m_decoderStage.sendPacket(packet);
+    if (!status) {
+        return status;
     }
 
-    return drainDecoder(error, onPacketWritten);
+    return drainDecoder(onPacketWritten);
 }
 
-bool FFmpegVideoTranscodePipeline::flushDecoder(
-    std::string* error,
+Status FFmpegVideoTranscodePipeline::flushDecoder(
     const PacketWrittenCallback& onPacketWritten)
 {
     if (!m_decoderStage.isInitialized()) {
-        return true;
+        return Status::success();
     }
 
-    if (!m_decoderStage.sendFlush(error)) {
-        return false;
+    Status status = m_decoderStage.sendFlush();
+    if (!status) {
+        return status;
     }
 
-    return drainDecoder(error, onPacketWritten);
+    return drainDecoder(onPacketWritten);
 }
 
-bool FFmpegVideoTranscodePipeline::flushFilterAndEncoder(
-    std::string* error,
+Status FFmpegVideoTranscodePipeline::flushFilterAndEncoder(
     const PacketWrittenCallback& onPacketWritten)
 {
-    if (!m_filterStage.flush(error)) {
-        return false;
+    std::string error;
+    if (!m_filterStage.flush(&error)) {
+        return Status::failure(makeLegacyError(error));
     }
 
-    if (!drainFilterStage(error, onPacketWritten)) {
-        return false;
+    Status status = drainFilterStage(onPacketWritten);
+    if (!status) {
+        return status;
     }
 
-    return writeEncodedPackets(nullptr, error, onPacketWritten);
+    return writeEncodedPackets(nullptr, onPacketWritten);
 }
 
-bool FFmpegVideoTranscodePipeline::drainDecoder(
-    std::string* error,
+Status FFmpegVideoTranscodePipeline::drainDecoder(
     const PacketWrittenCallback& onPacketWritten)
 {
     while (true) {
-        const int receiveRet = m_decoderStage.receiveFrame(m_decodedFrame, error);
-        if (receiveRet == 0) {
-            return true;
+        auto receiveResult = m_decoderStage.receiveFrame(m_decodedFrame.get());
+        if (!receiveResult) {
+            return Status::failure(receiveResult.error());
         }
 
-        if (receiveRet < 0) {
-            return false;
+        if (receiveResult.value() == FFmpegVideoDecoderStage::ReceiveFrameState::NeedMoreInput) {
+            return Status::success();
         }
 
-        const bool ok = processDecodedFrame(error, onPacketWritten);
-        av_frame_unref(m_decodedFrame);
+        const Status status = processDecodedFrame(onPacketWritten);
+        av_frame_unref(m_decodedFrame.get());
 
-        if (!ok) {
-            return false;
+        if (!status) {
+            return status;
         }
     }
 }
 
-bool FFmpegVideoTranscodePipeline::processDecodedFrame(
-    std::string* error,
+Status FFmpegVideoTranscodePipeline::processDecodedFrame(
     const PacketWrittenCallback& onPacketWritten)
 {
     const FFmpegVideoFrameRoutingStrategy::Decision decision =
-        m_frameRoutingStrategy.decide(m_decodedFrame);
+        m_frameRoutingStrategy.decide(m_decodedFrame.get());
 
     switch (decision.route) {
     case FFmpegVideoFrameRoutingStrategy::Route::HardwareZeroCopy:
-        return processHardwareFrameZeroCopy(error, onPacketWritten);
+        return processHardwareFrameZeroCopy(onPacketWritten);
 
     case FFmpegVideoFrameRoutingStrategy::Route::HardwareTransferThenSoftwareFilter:
+    {
+        std::string error;
         if (!m_hardwareTransferStage.transferToSoftware(
-                m_decodedFrame,
-                m_softwareTransferFrame,
-                error)) {
-            return false;
+                m_decodedFrame.get(),
+                m_softwareTransferFrame.get(),
+                &error)) {
+            return Status::failure(makeLegacyError(error));
         }
-        {
-            const bool ok = processFrameThroughSoftwareFilter(
-                m_softwareTransferFrame,
-                error,
-                onPacketWritten
-            );
-            av_frame_unref(m_softwareTransferFrame);
-            return ok;
-        }
+
+        const Status status = processFrameThroughSoftwareFilter(
+            m_softwareTransferFrame.get(),
+            onPacketWritten
+        );
+        av_frame_unref(m_softwareTransferFrame.get());
+        return status;
+    }
 
     case FFmpegVideoFrameRoutingStrategy::Route::SoftwareFilter:
         return processFrameThroughSoftwareFilter(
-            m_decodedFrame,
-            error,
+            m_decodedFrame.get(),
             onPacketWritten
         );
 
     case FFmpegVideoFrameRoutingStrategy::Route::Invalid:
     default:
-        if (error) {
-            *error = decision.error.empty()
+        return Status::failure(makeLegacyError(
+            decision.error.empty()
                 ? "frame routing strategy returned invalid route"
-                : decision.error;
-        }
-        return false;
+                : decision.error));
     }
 }
 
-bool FFmpegVideoTranscodePipeline::processHardwareFrameZeroCopy(
-    std::string* error,
+Status FFmpegVideoTranscodePipeline::processHardwareFrameZeroCopy(
     const PacketWrittenCallback& onPacketWritten)
 {
-    if (!m_timestampStage.normalizeFramePts(m_decodedFrame, error)) {
-        return false;
+    std::string error;
+    if (!m_timestampStage.normalizeFramePts(m_decodedFrame.get(), &error)) {
+        return Status::failure(makeLegacyError(error));
     }
 
-    if (!m_filterStage.sendHardwareFrame(m_decodedFrame, error)) {
-        return false;
+    error.clear();
+    if (!m_filterStage.sendHardwareFrame(m_decodedFrame.get(), &error)) {
+        return Status::failure(makeLegacyError(error));
     }
 
-    return drainFilterStage(error, onPacketWritten);
+    return drainFilterStage(onPacketWritten);
 }
 
-bool FFmpegVideoTranscodePipeline::processFrameThroughSoftwareFilter(
+Status FFmpegVideoTranscodePipeline::processFrameThroughSoftwareFilter(
     AVFrame* frame,
-    std::string* error,
     const PacketWrittenCallback& onPacketWritten)
 {
-    if (!m_timestampStage.normalizeFramePts(frame, error)) {
-        return false;
+    std::string error;
+    if (!m_timestampStage.normalizeFramePts(frame, &error)) {
+        return Status::failure(makeLegacyError(error));
     }
 
-    if (!m_filterStage.sendSoftwareFrame(frame, error)) {
-        return false;
+    error.clear();
+    if (!m_filterStage.sendSoftwareFrame(frame, &error)) {
+        return Status::failure(makeLegacyError(error));
     }
 
-    return drainFilterStage(error, onPacketWritten);
+    return drainFilterStage(onPacketWritten);
 }
 
-bool FFmpegVideoTranscodePipeline::drainFilterStage(
-    std::string* error,
+Status FFmpegVideoTranscodePipeline::drainFilterStage(
     const PacketWrittenCallback& onPacketWritten)
 {
     while (true) {
-        const int receiveRet = m_filterStage.receiveFrame(m_filteredFrame, error);
+        std::string error;
+        const int receiveRet = m_filterStage.receiveFrame(m_filteredFrame.get(), &error);
 
         if (receiveRet == 0) {
-            return true;
+            return Status::success();
         }
 
         if (receiveRet < 0) {
-            return false;
+            return Status::failure(makeLegacyError(error));
         }
 
-        const bool ok = writeEncodedPackets(m_filteredFrame, error, onPacketWritten);
-        av_frame_unref(m_filteredFrame);
+        const Status status = writeEncodedPackets(m_filteredFrame.get(), onPacketWritten);
+        av_frame_unref(m_filteredFrame.get());
 
-        if (!ok) {
-            return false;
+        if (!status) {
+            return status;
         }
     }
 }
 
-bool FFmpegVideoTranscodePipeline::writeEncodedPackets(
+Status FFmpegVideoTranscodePipeline::writeEncodedPackets(
     AVFrame* frame,
-    std::string* error,
     const PacketWrittenCallback& onPacketWritten)
 {
-    if (!m_packetWriter.sendFrame(frame, error)) {
-        return false;
+    Status sendStatus = m_packetWriter.sendFrame(frame);
+    if (!sendStatus) {
+        return sendStatus;
     }
 
-    return m_packetWriter.receiveAndWritePackets(error, onPacketWritten) >= 0;
+    auto receiveResult = m_packetWriter.receiveAndWritePackets(onPacketWritten);
+    if (!receiveResult) {
+        return Status::failure(receiveResult.error());
+    }
+
+    return Status::success();
 }
 
 AVCodecContext* FFmpegVideoTranscodePipeline::encoderContext() const
