@@ -25,13 +25,12 @@ namespace media::ffmpeg {
 
         reset();
 
-        m_framesCtx = other.m_framesCtx;
+        m_framesCtx = std::move(other.m_framesCtx);
         m_hardwareFormat = other.m_hardwareFormat;
         m_softwareFormat = other.m_softwareFormat;
         m_width = other.m_width;
         m_height = other.m_height;
 
-        other.m_framesCtx = nullptr;
         other.m_hardwareFormat = AV_PIX_FMT_NONE;
         other.m_softwareFormat = AV_PIX_FMT_NONE;
         other.m_width = 0;
@@ -42,10 +41,7 @@ namespace media::ffmpeg {
 
     void HardwareFramesContext::reset()
     {
-        if (m_framesCtx) {
-            av_buffer_unref(&m_framesCtx);
-        }
-
+        m_framesCtx.reset();
         m_hardwareFormat = AV_PIX_FMT_NONE;
         m_softwareFormat = AV_PIX_FMT_NONE;
         m_width = 0;
@@ -83,7 +79,7 @@ namespace media::ffmpeg {
             return false;
         }
 
-        m_framesCtx = av_hwframe_ctx_alloc(deviceContext.raw());
+        m_framesCtx.reset(av_hwframe_ctx_alloc(deviceContext.raw()));
         if (!m_framesCtx) {
             if (error) {
                 *error = "av_hwframe_ctx_alloc failed";
@@ -98,7 +94,7 @@ namespace media::ffmpeg {
         frames->height = height;
         frames->initial_pool_size = std::max(0, initialPoolSize);
 
-        const int ret = av_hwframe_ctx_init(m_framesCtx);
+        const int ret = av_hwframe_ctx_init(m_framesCtx.get());
         if (ret < 0) {
             if (error) {
                 *error = "av_hwframe_ctx_init failed: " + errorString(ret);
@@ -140,14 +136,14 @@ namespace media::ffmpeg {
         return m_height;
     }
 
-    AVBufferRef* HardwareFramesContext::ref() const
+    BufferRefPtr HardwareFramesContext::ref() const
     {
-        return m_framesCtx ? av_buffer_ref(m_framesCtx) : nullptr;
+        return makeBufferRef(m_framesCtx.get());
     }
 
     AVBufferRef* HardwareFramesContext::raw() const
     {
-        return m_framesCtx;
+        return m_framesCtx.get();
     }
 
 } // namespace media::ffmpeg
