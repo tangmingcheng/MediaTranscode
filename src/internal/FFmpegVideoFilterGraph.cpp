@@ -49,12 +49,11 @@ AVRational sanitizeSampleAspectRatio(AVRational ratio)
 
         reset();
 
-        m_graph = other.m_graph;
+        m_graph = std::move(other.m_graph);
         m_bufferSrcCtx = other.m_bufferSrcCtx;
         m_bufferSinkCtx = other.m_bufferSinkCtx;
         m_inputFrameRate = other.m_inputFrameRate;
 
-        other.m_graph = nullptr;
         other.m_bufferSrcCtx = nullptr;
         other.m_bufferSinkCtx = nullptr;
         other.m_inputFrameRate = AVRational{ 0, 1 };
@@ -64,11 +63,7 @@ AVRational sanitizeSampleAspectRatio(AVRational ratio)
 
     void VideoFilterGraph::reset()
     {
-        if (m_graph) {
-            avfilter_graph_free(&m_graph);
-        }
-
-        m_graph = nullptr;
+        m_graph.reset();
         m_bufferSrcCtx = nullptr;
         m_bufferSinkCtx = nullptr;
         m_inputFrameRate = AVRational{ 0, 1 };
@@ -111,7 +106,7 @@ AVRational sanitizeSampleAspectRatio(AVRational ratio)
             return false;
         }
 
-        m_graph = avfilter_graph_alloc();
+        m_graph = makeFilterGraph();
         if (!m_graph) {
             if (error) {
                 *error = "avfilter_graph_alloc failed";
@@ -144,7 +139,7 @@ AVRational sanitizeSampleAspectRatio(AVRational ratio)
             "in",
             args,
             nullptr,
-            m_graph
+            m_graph.get()
         );
 
         if (ret < 0) {
@@ -161,7 +156,7 @@ AVRational sanitizeSampleAspectRatio(AVRational ratio)
             "out",
             nullptr,
             nullptr,
-            m_graph
+            m_graph.get()
         );
 
         if (ret < 0) {
@@ -222,7 +217,7 @@ AVRational sanitizeSampleAspectRatio(AVRational ratio)
         }
 
         ret = avfilter_graph_parse_ptr(
-            m_graph,
+            m_graph.get(),
             filterDesc.c_str(),
             &inputs,
             &outputs,
@@ -240,7 +235,7 @@ AVRational sanitizeSampleAspectRatio(AVRational ratio)
             return false;
         }
 
-        ret = avfilter_graph_config(m_graph, nullptr);
+        ret = avfilter_graph_config(m_graph.get(), nullptr);
         if (ret < 0) {
             if (error) {
                 *error = "avfilter_graph_config failed [" + filterDesc + "]: " + errorString(ret);
