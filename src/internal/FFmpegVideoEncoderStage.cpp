@@ -1,5 +1,6 @@
 #include "internal/FFmpegVideoEncoderStage.h"
 
+#include "internal/FFmpegError.h"
 #include "internal/FFmpegUtils.h"
 
 #include "spdlog/spdlog.h"
@@ -68,9 +69,7 @@ FFmpegVideoEncoderStage::~FFmpegVideoEncoderStage()
 
 void FFmpegVideoEncoderStage::reset()
 {
-    if (m_encoderCtx) {
-        avcodec_free_context(&m_encoderCtx);
-    }
+    m_encoderCtx.reset();
 
     m_config = TranscodeConfig{};
     m_inputMetadata = FFmpegVideoInputMetadata{};
@@ -92,36 +91,28 @@ void FFmpegVideoEncoderStage::reset()
     m_enableConstantFps = false;
 }
 
-bool FFmpegVideoEncoderStage::initialize(const Config& config, std::string* error)
+Status FFmpegVideoEncoderStage::initialize(const Config& config)
 {
     reset();
 
     if (!config.transcodeConfig) {
-        if (error) {
-            *error = "FFmpegVideoEncoderStage initialize failed: transcodeConfig is null";
-        }
-        return false;
+        return Status::failure(ErrorInfo::invalidArgument(
+            "FFmpegVideoEncoderStage initialize failed: transcodeConfig is null"));
     }
 
     if (!config.inputMetadata.hasValidSize()) {
-        if (error) {
-            *error = "FFmpegVideoEncoderStage initialize failed: input metadata has invalid video size";
-        }
-        return false;
+        return Status::failure(ErrorInfo::invalidArgument(
+            "FFmpegVideoEncoderStage initialize failed: input metadata has invalid video size"));
     }
 
     if (!config.outputFmtCtx) {
-        if (error) {
-            *error = "FFmpegVideoEncoderStage initialize failed: outputFmtCtx is null";
-        }
-        return false;
+        return Status::failure(ErrorInfo::invalidArgument(
+            "FFmpegVideoEncoderStage initialize failed: outputFmtCtx is null"));
     }
 
     if (!config.outputFmtCtx->oformat) {
-        if (error) {
-            *error = "FFmpegVideoEncoderStage initialize failed: output format is null";
-        }
-        return false;
+        return Status::failure(ErrorInfo::invalidArgument(
+            "FFmpegVideoEncoderStage initialize failed: output format is null"));
     }
 
     m_config = *config.transcodeConfig;
@@ -140,10 +131,10 @@ bool FFmpegVideoEncoderStage::initialize(const Config& config, std::string* erro
         m_hasHardwarePlan = true;
     }
 
-    return openEncoderAndCreateOutputStream(error);
+    return openEncoderAndCreateOutputStream();
 }
 
-bool FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream(std::string* error)
+Status FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream()
 {
     const bool wantsHardwarePipeline =
         m_hasHardwarePlan &&
@@ -154,10 +145,9 @@ bool FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream(std::string* erro
     if (wantsHardwarePipeline) {
         encoder = m_hardwareEncoderSelection.encoder;
         if (!encoder) {
-            if (error) {
-                *error = "hardware video pipeline unavailable: planner returned no encoder";
-            }
-            return false;
+            return Status::failure(makeError(
+                ErrorCode::HardwareUnavailable,
+                "hardware video pipeline unavailable: planner returned no encoder"));
         }
     }
 
@@ -174,10 +164,8 @@ bool FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream(std::string* erro
     }
 
     if (!encoder) {
-        if (error) {
-            *error = "avcodec_find_encoder failed: no suitable video encoder";
-        }
-        return false;
+        return Status::failure(ErrorInfo::unsupported(
+            "avcodec_find_encoder failed: no suitable video encoder"));
     }
 
     const bool selectedPlannedHardwareEncoder = m_hardwareEncoderSelection.encoder == encoder;
@@ -185,22 +173,17 @@ bool FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream(std::string* erro
         selectedPlannedHardwareEncoder &&
         m_hardwareBackend.supportsDirectHardwareFrameEncode;
 
-    m_encoderCtx = avcodec_alloc_context3(encoder);
+    m_encoderCtx = makeCodecContext(encoder);
     if (!m_encoderCtx) {
-        if (error) {
-            *error = "avcodec_alloc_context3 encoder failed";
-        }
-        return false;
+        return Status::failure(makeAllocationError(
+            "avcodec_alloc_context3 encoder failed"));
     }
 
     m_outputFps = chooseOutputFpsFromMetadata(m_config, m_inputMetadata);
     m_enableConstantFps = m_config.fps > 0;
 
     if (m_outputFps <= 0) {
-        if (error) {
-            *error = "invalid output video fps";
-        }
-        return false;
+        return Status::failure(ErrorInfo::invalidArgument("invalid output video fps"));
     }
 
     int outputWidth = m_config.width > 0 ? m_config.width : m_inputMetadata.width;
@@ -210,19 +193,16 @@ bool FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream(std::string* erro
     outputHeight = normalizeEvenSize(outputHeight);
 
     if (outputWidth <= 0 || outputHeight <= 0) {
-        if (error) {
-            std::ostringstream oss;
-            oss << "invalid output video size: requested="
-                << m_config.width
-                << "x"
-                << m_config.height
-                << ", input="
-                << m_inputMetadata.width
-                << "x"
-                << m_inputMetadata.height;
-            *error = oss.str();
-        }
-        return false;
+        std::ostringstream oss;
+        oss << "invalid output video size: requested="
+            << m_config.width
+            << "x"
+            << m_config.height
+            << ", input="
+            << m_inputMetadata.width
+            << "x"
+            << m_inputMetadata.height;
+        return Status::failure(ErrorInfo::invalidArgument(oss.str()));
     }
 
     m_encoderCtx->width = outputWidth;
@@ -253,8 +233,9 @@ bool FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream(std::string* erro
         m_encoderCtx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
     }
 
-    if (!initializeHardwareDeviceForEncoder(encoder, error)) {
-        return false;
+    Status hardwareStatus = initializeHardwareDeviceForEncoder(encoder);
+    if (!hardwareStatus) {
+        return hardwareStatus;
     }
 
     const bool encoderHardwareReady = directHardwareFrameEncoder ||
@@ -272,26 +253,22 @@ bool FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream(std::string* erro
     if (wantsHardwarePipeline &&
         m_hardwarePlan.executionMode == VideoExecutionMode::ZeroCopy &&
         !m_zeroCopyPipeline) {
-        if (error) {
-            std::ostringstream oss;
-            oss << "zero-copy hardware pipeline unavailable during execution: encoder="
-                << (encoder->name ? encoder->name : "unknown")
-                << ", backend="
-                << (m_hardwareBackend.name ? m_hardwareBackend.name : "unknown")
-                << ", selected_pix_fmt="
-                << pixelFormatName(m_encoderCtx->pix_fmt);
-            *error = oss.str();
-        }
-        return false;
+        std::ostringstream oss;
+        oss << "zero-copy hardware pipeline unavailable during execution: encoder="
+            << (encoder->name ? encoder->name : "unknown")
+            << ", backend="
+            << (m_hardwareBackend.name ? m_hardwareBackend.name : "unknown")
+            << ", selected_pix_fmt="
+            << pixelFormatName(m_encoderCtx->pix_fmt);
+        return Status::failure(makeError(ErrorCode::HardwareUnavailable, oss.str()));
     }
 
     if (wantsHardwarePipeline &&
         m_hardwarePlan.executionMode == VideoExecutionMode::MixedGpu &&
         m_zeroCopyPipeline) {
-        if (error) {
-            *error = "mixed GPU fallback unexpectedly entered zero-copy execution";
-        }
-        return false;
+        return Status::failure(makeError(
+            ErrorCode::HardwareUnavailable,
+            "mixed GPU fallback unexpectedly entered zero-copy execution"));
     }
 
     if (wantsHardwarePipeline &&
@@ -305,7 +282,7 @@ bool FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream(std::string* erro
         );
     }
 
-    setVideoEncoderOptions(m_encoderCtx, encoder);
+    setVideoEncoderOptions(m_encoderCtx.get(), encoder);
 
     spdlog::info(
         "[ZC][ENCODER] open encoder={}, backend={}, pix_fmt={}, sw_pix_fmt={}, size={}x{}, fps={}/{}",
@@ -319,42 +296,35 @@ bool FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream(std::string* erro
         m_encoderCtx->framerate.den
     );
 
-    int ret = avcodec_open2(m_encoderCtx, encoder, nullptr);
+    int ret = avcodec_open2(m_encoderCtx.get(), encoder, nullptr);
     if (ret < 0) {
-        if (error) {
-            *error = std::string("avcodec_open2 encoder failed [") +
-                (encoder->name ? encoder->name : "unknown") + "]: " + errorString(ret);
-        }
-        return false;
+        return Status::failure(makeFFmpegError(
+            std::string("avcodec_open2 encoder failed [") +
+                (encoder->name ? encoder->name : "unknown") + "]",
+            ret));
     }
 
     m_outputVideoStream = avformat_new_stream(m_outputFmtCtx, nullptr);
     if (!m_outputVideoStream) {
-        if (error) {
-            *error = "avformat_new_stream video failed";
-        }
-        return false;
+        return Status::failure(makeAllocationError("avformat_new_stream video failed"));
     }
 
     m_outputVideoStream->time_base = m_encoderCtx->time_base;
 
-    ret = avcodec_parameters_from_context(m_outputVideoStream->codecpar, m_encoderCtx);
+    ret = avcodec_parameters_from_context(m_outputVideoStream->codecpar, m_encoderCtx.get());
     if (ret < 0) {
-        if (error) {
-            *error = "avcodec_parameters_from_context video failed: " + errorString(ret);
-        }
-        return false;
+        return Status::failure(makeFFmpegError(
+            "avcodec_parameters_from_context video failed", ret));
     }
 
     m_outputVideoStream->codecpar->codec_tag = 0;
-    return true;
+    return Status::success();
 }
 
-bool FFmpegVideoEncoderStage::initializeHardwareDeviceForEncoder(const AVCodec* encoder,
-                                                                 std::string* error)
+Status FFmpegVideoEncoderStage::initializeHardwareDeviceForEncoder(const AVCodec* encoder)
 {
     if (!m_hasHardwarePlan) {
-        return true;
+        return Status::success();
     }
 
     const bool selectedHardwareEncoder =
@@ -362,30 +332,27 @@ bool FFmpegVideoEncoderStage::initializeHardwareDeviceForEncoder(const AVCodec* 
         m_hardwareEncoderSelection.hardwareEncoder;
 
     if (!selectedHardwareEncoder) {
-        if (error) {
-            *error = "hardware video pipeline unavailable: selected encoder is not a hardware encoder";
-        }
-        return false;
+        return Status::failure(makeError(
+            ErrorCode::HardwareUnavailable,
+            "hardware video pipeline unavailable: selected encoder is not a hardware encoder"));
     }
 
     if (m_hardwareBackend.supportsDirectHardwareFrameEncode &&
         !m_hardwareBackend.supportsZeroCopyFilter) {
-        return true;
+        return Status::success();
     }
 
     if (!m_hardwareDeviceContext || !m_hardwareDeviceContext->isInitialized()) {
-        if (error) {
-            *error = "hardware device initialization failed: decoder stage has no hardware device";
-        }
-        return false;
+        return Status::failure(makeError(
+            ErrorCode::HardwareUnavailable,
+            "hardware device initialization failed: decoder stage has no hardware device"));
     }
 
     AVBufferRef* deviceRef = m_hardwareDeviceContext->ref();
     if (!deviceRef) {
-        if (error) {
-            *error = "hardware device initialization failed: unable to reference device context";
-        }
-        return false;
+        return Status::failure(makeError(
+            ErrorCode::HardwareUnavailable,
+            "hardware device initialization failed: unable to reference device context"));
     }
 
     if (m_encoderCtx->hw_device_ctx) {
@@ -394,7 +361,7 @@ bool FFmpegVideoEncoderStage::initializeHardwareDeviceForEncoder(const AVCodec* 
 
     m_encoderCtx->hw_device_ctx = deviceRef;
     m_hardwareDeviceAttachedToEncoder = true;
-    return true;
+    return Status::success();
 }
 
 bool FFmpegVideoEncoderStage::isInitialized() const
@@ -404,7 +371,7 @@ bool FFmpegVideoEncoderStage::isInitialized() const
 
 AVCodecContext* FFmpegVideoEncoderStage::context() const
 {
-    return m_encoderCtx;
+    return m_encoderCtx.get();
 }
 
 AVStream* FFmpegVideoEncoderStage::outputStream() const
