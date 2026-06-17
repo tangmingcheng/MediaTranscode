@@ -181,13 +181,10 @@ AVRational sanitizeSampleAspectRatio(AVRational ratio)
             return false;
         }
 
-        AVFilterInOut* outputs = avfilter_inout_alloc();
-        AVFilterInOut* inputs = avfilter_inout_alloc();
+        FilterInOutPtr outputs = makeFilterInOut();
+        FilterInOutPtr inputs = makeFilterInOut();
 
         if (!outputs || !inputs) {
-            avfilter_inout_free(&outputs);
-            avfilter_inout_free(&inputs);
-
             if (error) {
                 *error = "avfilter_inout_alloc failed";
             }
@@ -206,9 +203,6 @@ AVRational sanitizeSampleAspectRatio(AVRational ratio)
         inputs->next = nullptr;
 
         if (!outputs->name || !inputs->name) {
-            avfilter_inout_free(&outputs);
-            avfilter_inout_free(&inputs);
-
             if (error) {
                 *error = "av_strdup filter endpoint name failed";
             }
@@ -216,16 +210,17 @@ AVRational sanitizeSampleAspectRatio(AVRational ratio)
             return false;
         }
 
+        AVFilterInOut* inputsRaw = inputs.release();
+        AVFilterInOut* outputsRaw = outputs.release();
         ret = avfilter_graph_parse_ptr(
             m_graph.get(),
             filterDesc.c_str(),
-            &inputs,
-            &outputs,
+            &inputsRaw,
+            &outputsRaw,
             nullptr
         );
-
-        avfilter_inout_free(&inputs);
-        avfilter_inout_free(&outputs);
+        inputs.reset(inputsRaw);
+        outputs.reset(outputsRaw);
 
         if (ret < 0) {
             if (error) {
