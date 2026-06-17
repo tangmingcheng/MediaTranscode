@@ -5,6 +5,7 @@
 #include "spdlog/spdlog.h"
 
 #include <sstream>
+#include <utility>
 
 extern "C" {
 #include <libavutil/avutil.h>
@@ -350,7 +351,7 @@ bool FFmpegVideoFilterStage::queueBypassedHardwareFrame(AVFrame* frame, std::str
         return false;
     }
 
-    AVFrame* queued = av_frame_alloc();
+    FramePtr queued = makeFrame();
     if (!queued) {
         if (error) {
             *error = "av_frame_alloc bypass hardware frame failed";
@@ -358,16 +359,15 @@ bool FFmpegVideoFilterStage::queueBypassedHardwareFrame(AVFrame* frame, std::str
         return false;
     }
 
-    const int ret = av_frame_ref(queued, frame);
+    const int ret = av_frame_ref(queued.get(), frame);
     if (ret < 0) {
-        av_frame_free(&queued);
         if (error) {
             *error = "av_frame_ref bypass hardware frame failed: " + errorString(ret);
         }
         return false;
     }
 
-    m_bypassedHardwareFrames.push_back(queued);
+    m_bypassedHardwareFrames.push_back(std::move(queued));
     return true;
 }
 
@@ -388,12 +388,11 @@ int FFmpegVideoFilterStage::receiveBypassedHardwareFrame(AVFrame* frame, std::st
     }
 
     while (!m_bypassedHardwareFrames.empty()) {
-        AVFrame* queued = m_bypassedHardwareFrames.front();
+        FramePtr queued = std::move(m_bypassedHardwareFrames.front());
         m_bypassedHardwareFrames.pop_front();
 
         av_frame_unref(frame);
-        av_frame_move_ref(frame, queued);
-        av_frame_free(&queued);
+        av_frame_move_ref(frame, queued.get());
 
         const bool ok = rescaleAndValidateFramePts(
             frame,
@@ -429,11 +428,7 @@ int FFmpegVideoFilterStage::receiveBypassedHardwareFrame(AVFrame* frame, std::st
 
 void FFmpegVideoFilterStage::clearBypassedHardwareFrames()
 {
-    while (!m_bypassedHardwareFrames.empty()) {
-        AVFrame* frame = m_bypassedHardwareFrames.front();
-        m_bypassedHardwareFrames.pop_front();
-        av_frame_free(&frame);
-    }
+    m_bypassedHardwareFrames.clear();
 }
 
 int FFmpegVideoFilterStage::receiveSoftwareFrame(AVFrame* frame, std::string* error)
