@@ -36,13 +36,12 @@ namespace {
 
         reset();
 
-        m_deviceCtx = other.m_deviceCtx;
+        m_deviceCtx = std::move(other.m_deviceCtx);
         m_avDeviceType = other.m_avDeviceType;
         m_requestedDeviceType = other.m_requestedDeviceType;
         m_resolvedDeviceType = other.m_resolvedDeviceType;
         m_resolvedDeviceName = std::move(other.m_resolvedDeviceName);
 
-        other.m_deviceCtx = nullptr;
         other.m_avDeviceType = AV_HWDEVICE_TYPE_NONE;
         other.m_requestedDeviceType = HardwareDeviceType::None;
         other.m_resolvedDeviceType = HardwareDeviceType::None;
@@ -53,10 +52,7 @@ namespace {
 
     void HardwareDeviceContext::reset()
     {
-        if (m_deviceCtx) {
-            av_buffer_unref(&m_deviceCtx);
-        }
-
+        m_deviceCtx.reset();
         m_avDeviceType = AV_HWDEVICE_TYPE_NONE;
         m_requestedDeviceType = HardwareDeviceType::None;
         m_resolvedDeviceType = HardwareDeviceType::None;
@@ -90,23 +86,26 @@ namespace {
             return false;
         }
 
+        AVBufferRef* rawDeviceCtx = nullptr;
         const int ret = av_hwdevice_ctx_create(
-            &m_deviceCtx,
+            &rawDeviceCtx,
             m_avDeviceType,
             nullptr,
             nullptr,
             0
         );
 
-        if (ret < 0) {
+        if (ret < 0 || !rawDeviceCtx) {
             if (error) {
                 *error = "av_hwdevice_ctx_create failed [" +
                     std::string(toAVDeviceName(m_resolvedDeviceType)) +
-                    "]: " + errorString(ret);
+                    "]: " + (ret < 0 ? errorString(ret) : std::string("no device context allocated"));
             }
             reset();
             return false;
         }
+
+        m_deviceCtx.reset(rawDeviceCtx);
 
         const char* deviceName = av_hwdevice_get_type_name(m_avDeviceType);
         m_resolvedDeviceName = deviceName ? deviceName : toAVDeviceName(m_resolvedDeviceType);
@@ -139,14 +138,14 @@ namespace {
         return m_resolvedDeviceName;
     }
 
-    AVBufferRef* HardwareDeviceContext::ref() const
+    BufferRefPtr HardwareDeviceContext::ref() const
     {
-        return m_deviceCtx ? av_buffer_ref(m_deviceCtx) : nullptr;
+        return makeBufferRef(m_deviceCtx.get());
     }
 
     AVBufferRef* HardwareDeviceContext::raw() const
     {
-        return m_deviceCtx;
+        return m_deviceCtx.get();
     }
 
     AVHWDeviceType HardwareDeviceContext::toAVDeviceType(HardwareDeviceType type)
