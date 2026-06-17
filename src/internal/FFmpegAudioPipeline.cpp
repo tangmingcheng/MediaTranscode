@@ -1,6 +1,7 @@
 #include "internal/FFmpegAudioPipeline.h"
 
 #include "internal/FFmpegAudioFifo.h"
+#include "internal/FFmpegError.h"
 #include "internal/FFmpegTimelineNormalizer.h"
 #include "internal/FFmpegUtils.h"
 
@@ -17,6 +18,14 @@ extern "C" {
 }
 
 namespace media::ffmpeg {
+namespace {
+
+Status makeTimestampError(const std::string& message)
+{
+    return Status::failure(ErrorInfo::internalError(message));
+}
+
+} // namespace
 
 FFmpegAudioPipeline::FFmpegAudioPipeline()
     : m_fifo(std::make_unique<FFmpegAudioFifo>())
@@ -99,7 +108,7 @@ void FFmpegAudioPipeline::reset()
     m_audioBitrateKbps = 128;
 }
 
-bool FFmpegAudioPipeline::initialize(const Config& config, std::string* error)
+Status FFmpegAudioPipeline::initialize(const Config& config)
 {
     reset();
 
@@ -111,108 +120,84 @@ bool FFmpegAudioPipeline::initialize(const Config& config, std::string* error)
     m_audioBitrateKbps = config.audioBitrateKbps;
 
     if (m_mode == AudioMode::None) {
-        return true;
+        return Status::success();
     }
 
     if (!m_inputAudioStream) {
-        if (error) {
-            *error = "FFmpegAudioPipeline initialize failed: inputAudioStream is null";
-        }
-        return false;
+        return Status::failure(ErrorInfo::invalidArgument(
+            "FFmpegAudioPipeline initialize failed: inputAudioStream is null"));
     }
 
     if (!m_outputFmtCtx) {
-        if (error) {
-            *error = "FFmpegAudioPipeline initialize failed: outputFmtCtx is null";
-        }
-        return false;
+        return Status::failure(ErrorInfo::invalidArgument(
+            "FFmpegAudioPipeline initialize failed: outputFmtCtx is null"));
     }
 
     if (!m_timeline) {
-        if (error) {
-            *error = "FFmpegAudioPipeline initialize failed: timeline is null";
-        }
-        return false;
+        return Status::failure(ErrorInfo::invalidArgument(
+            "FFmpegAudioPipeline initialize failed: timeline is null"));
     }
 
     if (m_mode == AudioMode::CopySelected) {
-        return initializeCopy(error);
+        return initializeCopy();
     }
 
     if (m_mode == AudioMode::EncodeSelected) {
-        return initializeEncode(error);
+        return initializeEncode();
     }
 
-    if (error) {
-        *error = "FFmpegAudioPipeline initialize failed: unknown audio mode";
-    }
-    return false;
+    return Status::failure(ErrorInfo::invalidArgument(
+        "FFmpegAudioPipeline initialize failed: unknown audio mode"));
 }
 
-bool FFmpegAudioPipeline::initializeCopy(std::string* error)
+Status FFmpegAudioPipeline::initializeCopy()
 {
     m_outputAudioStream = avformat_new_stream(m_outputFmtCtx, nullptr);
     if (!m_outputAudioStream) {
-        if (error) {
-            *error = "avformat_new_stream audio failed";
-        }
-        return false;
+        return Status::failure(makeAllocationError("avformat_new_stream audio failed"));
     }
 
     const int ret = avcodec_parameters_copy(m_outputAudioStream->codecpar, m_inputAudioStream->codecpar);
     if (ret < 0) {
-        if (error) {
-            *error = "avcodec_parameters_copy audio failed: " + errorString(ret);
-        }
-        return false;
+        return Status::failure(makeFFmpegError("avcodec_parameters_copy audio failed", ret));
     }
 
     m_outputAudioStream->codecpar->codec_tag = 0;
     m_outputAudioStream->time_base = m_inputAudioStream->time_base;
-    return true;
+    return Status::success();
 }
 
-bool FFmpegAudioPipeline::initializeEncode(std::string* error)
+Status FFmpegAudioPipeline::initializeEncode()
 {
     const AVCodec* decoder = avcodec_find_decoder(m_inputAudioStream->codecpar->codec_id);
     if (!decoder) {
-        if (error) {
-            *error = "avcodec_find_decoder audio failed: unsupported input audio codec";
-        }
-        return false;
+        return Status::failure(ErrorInfo::unsupported(
+            "avcodec_find_decoder audio failed: unsupported input audio codec"));
     }
 
     m_decoderCtx = makeCodecContext(decoder);
     if (!m_decoderCtx) {
-        if (error) {
-            *error = "avcodec_alloc_context3 audio decoder failed";
-        }
-        return false;
+        return Status::failure(makeAllocationError(
+            "avcodec_alloc_context3 audio decoder failed"));
     }
 
     int ret = avcodec_parameters_to_context(m_decoderCtx.get(), m_inputAudioStream->codecpar);
     if (ret < 0) {
-        if (error) {
-            *error = "avcodec_parameters_to_context audio decoder failed: " + errorString(ret);
-        }
-        return false;
+        return Status::failure(makeFFmpegError(
+            "avcodec_parameters_to_context audio decoder failed", ret));
     }
 
     m_decoderCtx->pkt_timebase = m_inputAudioStream->time_base;
 
     ret = avcodec_open2(m_decoderCtx.get(), decoder, nullptr);
     if (ret < 0) {
-        if (error) {
-            *error = "avcodec_open2 audio decoder failed: " + errorString(ret);
-        }
-        return false;
+        return Status::failure(makeFFmpegError(
+            "avcodec_open2 audio decoder failed", ret));
     }
 
     if (!ensureAudioDecoderChannelLayout(m_decoderCtx.get())) {
-        if (error) {
-            *error = "invalid input audio channel layout";
-        }
-        return false;
+        return Status::failure(ErrorInfo::invalidArgument(
+            "invalid input audio channel layout"));
     }
 
     const char* encoderName = preferredAudioEncoderName(m_codec);
@@ -222,25 +207,19 @@ bool FFmpegAudioPipeline::initializeEncode(std::string* error)
     }
 
     if (!encoder) {
-        if (error) {
-            *error = "avcodec_find_encoder audio failed: requested audio encoder not found";
-        }
-        return false;
+        return Status::failure(ErrorInfo::unsupported(
+            "avcodec_find_encoder audio failed: requested audio encoder not found"));
     }
 
     m_encoderCtx = makeCodecContext(encoder);
     if (!m_encoderCtx) {
-        if (error) {
-            *error = "avcodec_alloc_context3 audio encoder failed";
-        }
-        return false;
+        return Status::failure(makeAllocationError(
+            "avcodec_alloc_context3 audio encoder failed"));
     }
 
     if (!copyAudioChannelLayoutToEncoder(m_encoderCtx.get(), m_decoderCtx.get())) {
-        if (error) {
-            *error = "copy audio channel layout to encoder failed";
-        }
-        return false;
+        return Status::failure(ErrorInfo::internalError(
+            "copy audio channel layout to encoder failed"));
     }
 
     m_encoderCtx->sample_rate = chooseAudioSampleRate(encoder, m_decoderCtx->sample_rate);
@@ -258,45 +237,38 @@ bool FFmpegAudioPipeline::initializeEncode(std::string* error)
 
     ret = avcodec_open2(m_encoderCtx.get(), encoder, nullptr);
     if (ret < 0) {
-        if (error) {
-            *error = std::string("avcodec_open2 audio encoder failed [") +
-                (encoder->name ? encoder->name : "unknown") + "]: " + errorString(ret);
-        }
-        return false;
+        return Status::failure(makeFFmpegError(
+            std::string("avcodec_open2 audio encoder failed [") +
+                (encoder->name ? encoder->name : "unknown") + "]",
+            ret));
     }
 
     m_outputAudioStream = avformat_new_stream(m_outputFmtCtx, nullptr);
     if (!m_outputAudioStream) {
-        if (error) {
-            *error = "avformat_new_stream encoded audio failed";
-        }
-        return false;
+        return Status::failure(makeAllocationError(
+            "avformat_new_stream encoded audio failed"));
     }
 
     m_outputAudioStream->time_base = m_encoderCtx->time_base;
 
     ret = avcodec_parameters_from_context(m_outputAudioStream->codecpar, m_encoderCtx.get());
     if (ret < 0) {
-        if (error) {
-            *error = "avcodec_parameters_from_context audio failed: " + errorString(ret);
-        }
-        return false;
+        return Status::failure(makeFFmpegError(
+            "avcodec_parameters_from_context audio failed", ret));
     }
 
     m_outputAudioStream->codecpar->codec_tag = 0;
 
     m_decodedFrame = makeFrame();
     if (!m_decodedFrame) {
-        if (error) {
-            *error = "av_frame_alloc decoded audio frame failed";
-        }
-        return false;
+        return Status::failure(makeAllocationError(
+            "av_frame_alloc decoded audio frame failed"));
     }
 
-    return initializeResamplerAndFifo(error);
+    return initializeResamplerAndFifo();
 }
 
-bool FFmpegAudioPipeline::initializeResamplerAndFifo(std::string* error)
+Status FFmpegAudioPipeline::initializeResamplerAndFifo()
 {
     int ret = 0;
 
@@ -314,12 +286,15 @@ bool FFmpegAudioPipeline::initializeResamplerAndFifo(std::string* error)
         nullptr
     );
 
-    if (ret < 0 || !rawSwrCtx) {
-        if (error) {
-            *error = "swr_alloc_set_opts2 failed: " + errorString(ret);
-        }
-        return false;
+    if (ret < 0) {
+        return Status::failure(makeFFmpegError("swr_alloc_set_opts2 failed", ret));
     }
+
+    if (!rawSwrCtx) {
+        return Status::failure(makeAllocationError(
+            "swr_alloc_set_opts2 failed: no swr context allocated"));
+    }
+
     m_swrCtx.reset(rawSwrCtx);
 #else
     m_swrCtx.reset(swr_alloc_set_opts(
@@ -335,87 +310,75 @@ bool FFmpegAudioPipeline::initializeResamplerAndFifo(std::string* error)
     ));
 
     if (!m_swrCtx) {
-        if (error) {
-            *error = "swr_alloc_set_opts failed";
-        }
-        return false;
+        return Status::failure(makeAllocationError("swr_alloc_set_opts failed"));
     }
 #endif
 
     ret = swr_init(m_swrCtx.get());
     if (ret < 0) {
-        if (error) {
-            *error = "swr_init failed: " + errorString(ret);
-        }
-        return false;
+        return Status::failure(makeFFmpegError("swr_init failed", ret));
     }
 
     const int outputChannels = audioChannelCount(m_encoderCtx.get());
     if (outputChannels <= 0) {
-        if (error) {
-            *error = "invalid output audio channel count";
-        }
-        return false;
+        return Status::failure(ErrorInfo::invalidArgument(
+            "invalid output audio channel count"));
     }
 
     if (!m_fifo) {
-        if (error) {
-            *error = "audio fifo is null";
-        }
-        return false;
+        return Status::failure(ErrorInfo::internalError("audio fifo is null"));
     }
 
-    return m_fifo->initialize(
-        m_encoderCtx->sample_fmt,
-        outputChannels,
-        m_encoderCtx->frame_size > 0 ? m_encoderCtx->frame_size : 1024,
-        error
+    std::string fifoError;
+    return makeLegacyStatus(
+        m_fifo->initialize(
+            m_encoderCtx->sample_fmt,
+            outputChannels,
+            m_encoderCtx->frame_size > 0 ? m_encoderCtx->frame_size : 1024,
+            &fifoError
+        ),
+        fifoError
     );
 }
 
-bool FFmpegAudioPipeline::processPacket(
+Status FFmpegAudioPipeline::processPacket(
     AVPacket* packet,
-    std::string* error,
     const PacketWrittenCallback& onPacketWritten)
 {
     if (m_mode == AudioMode::None) {
-        return true;
+        return Status::success();
     }
 
     if (!packet) {
-        if (error) {
-            *error = "FFmpegAudioPipeline processPacket failed: packet is null";
-        }
-        return false;
+        return Status::failure(ErrorInfo::invalidArgument(
+            "FFmpegAudioPipeline processPacket failed: packet is null"));
     }
 
     if (m_mode == AudioMode::CopySelected) {
-        return writeCopyPacket(packet, error, onPacketWritten);
+        return writeCopyPacket(packet, onPacketWritten);
     }
 
     if (m_mode == AudioMode::EncodeSelected) {
-        return sendPacketToDecoder(packet, error, onPacketWritten);
+        return sendPacketToDecoder(packet, onPacketWritten);
     }
 
-    if (error) {
-        *error = "FFmpegAudioPipeline processPacket failed: unknown audio mode";
-    }
-    return false;
+    return Status::failure(ErrorInfo::invalidArgument(
+        "FFmpegAudioPipeline processPacket failed: unknown audio mode"));
 }
 
-bool FFmpegAudioPipeline::writeCopyPacket(
+Status FFmpegAudioPipeline::writeCopyPacket(
     AVPacket* packet,
-    std::string* error,
     const PacketWrittenCallback& onPacketWritten)
 {
     if (!m_outputAudioStream || !m_inputAudioStream || !m_outputFmtCtx) {
-        return true;
+        return Status::success();
     }
 
     packet->stream_index = m_outputAudioStream->index;
 
-    if (!normalizeCopyPacketTimestamp(packet, error)) {
-        return false;
+    Status timestampStatus = normalizeCopyPacketTimestamp(packet);
+    if (!timestampStatus) {
+        return timestampStatus;
     }
 
     if (packet->dts != AV_NOPTS_VALUE) {
@@ -423,10 +386,7 @@ bool FFmpegAudioPipeline::writeCopyPacket(
             std::ostringstream oss;
             oss << "audio packet dts is not strictly increasing: current="
                 << packet->dts << ", last=" << m_lastWrittenDts;
-            if (error) {
-                *error = oss.str();
-            }
-            return false;
+            return makeTimestampError(oss.str());
         }
 
         m_lastWrittenDts = packet->dts;
@@ -438,20 +398,15 @@ bool FFmpegAudioPipeline::writeCopyPacket(
         std::ostringstream oss;
         oss << "audio packet pts is smaller than dts: pts="
             << packet->pts << ", dts=" << packet->dts;
-        if (error) {
-            *error = oss.str();
-        }
-        return false;
+        return makeTimestampError(oss.str());
     }
 
     updateProgressFromPacket(packet);
 
     const int ret = av_interleaved_write_frame(m_outputFmtCtx, packet);
     if (ret < 0) {
-        if (error) {
-            *error = "av_interleaved_write_frame audio failed: " + errorString(ret);
-        }
-        return false;
+        return Status::failure(makeFFmpegError(
+            "av_interleaved_write_frame audio failed", ret));
     }
 
     ++m_packetCount;
@@ -460,13 +415,13 @@ bool FFmpegAudioPipeline::writeCopyPacket(
         onPacketWritten(m_packetCount, m_lastWrittenOutTimeMs);
     }
 
-    return true;
+    return Status::success();
 }
 
-bool FFmpegAudioPipeline::normalizeCopyPacketTimestamp(AVPacket* packet, std::string* error) const
+Status FFmpegAudioPipeline::normalizeCopyPacketTimestamp(AVPacket* packet) const
 {
     if (!packet || !m_inputAudioStream || !m_outputAudioStream || !m_timeline) {
-        return true;
+        return Status::success();
     }
 
     const AVRational inputTimeBase = m_inputAudioStream->time_base;
@@ -477,10 +432,7 @@ bool FFmpegAudioPipeline::normalizeCopyPacketTimestamp(AVPacket* packet, std::st
         const int64_t normalizedPtsUs = m_timeline->normalizeUs(ptsUs);
 
         if (normalizedPtsUs == AV_NOPTS_VALUE) {
-            if (error) {
-                *error = "failed to normalize audio packet pts";
-            }
-            return false;
+            return makeTimestampError("failed to normalize audio packet pts");
         }
 
         packet->pts = TimelineNormalizer::fromUs(normalizedPtsUs, outputTimeBase);
@@ -491,10 +443,7 @@ bool FFmpegAudioPipeline::normalizeCopyPacketTimestamp(AVPacket* packet, std::st
         const int64_t normalizedDtsUs = m_timeline->normalizeUs(dtsUs);
 
         if (normalizedDtsUs == AV_NOPTS_VALUE) {
-            if (error) {
-                *error = "failed to normalize audio packet dts";
-            }
-            return false;
+            return makeTimestampError("failed to normalize audio packet dts");
         }
 
         packet->dts = TimelineNormalizer::fromUs(normalizedDtsUs, outputTimeBase);
@@ -504,70 +453,64 @@ bool FFmpegAudioPipeline::normalizeCopyPacketTimestamp(AVPacket* packet, std::st
         packet->duration = av_rescale_q(packet->duration, inputTimeBase, outputTimeBase);
     }
 
-    return true;
+    return Status::success();
 }
 
-bool FFmpegAudioPipeline::sendPacketToDecoder(
+Status FFmpegAudioPipeline::sendPacketToDecoder(
     AVPacket* packet,
-    std::string* error,
     const PacketWrittenCallback& onPacketWritten)
 {
     if (!m_decoderCtx) {
-        return true;
+        return Status::success();
     }
 
     const int ret = avcodec_send_packet(m_decoderCtx.get(), packet);
     if (ret < 0) {
-        if (error) {
-            *error = "avcodec_send_packet audio decoder failed: " + errorString(ret);
-        }
-        return false;
+        return Status::failure(makeFFmpegError(
+            "avcodec_send_packet audio decoder failed", ret));
     }
 
-    return drainDecoder(error, onPacketWritten);
+    return drainDecoder(onPacketWritten);
 }
 
-bool FFmpegAudioPipeline::drainDecoder(
-    std::string* error,
+Status FFmpegAudioPipeline::drainDecoder(
     const PacketWrittenCallback& onPacketWritten)
 {
     if (!m_decoderCtx || !m_decodedFrame) {
-        return true;
+        return Status::success();
     }
 
     while (true) {
         const int ret = avcodec_receive_frame(m_decoderCtx.get(), m_decodedFrame.get());
 
         if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
-            return true;
+            return Status::success();
         }
 
         if (ret < 0) {
-            if (error) {
-                *error = "avcodec_receive_frame audio decoder failed: " + errorString(ret);
-            }
-            return false;
+            return Status::failure(makeFFmpegError(
+                "avcodec_receive_frame audio decoder failed", ret));
         }
 
-        const bool ok = pushDecodedFrameToFifo(error, onPacketWritten);
+        Status status = pushDecodedFrameToFifo(onPacketWritten);
         av_frame_unref(m_decodedFrame.get());
 
-        if (!ok) {
-            return false;
+        if (!status) {
+            return status;
         }
     }
 }
 
-bool FFmpegAudioPipeline::pushDecodedFrameToFifo(
-    std::string* error,
+Status FFmpegAudioPipeline::pushDecodedFrameToFifo(
     const PacketWrittenCallback& onPacketWritten)
 {
     if (!m_decodedFrame || !m_swrCtx || !m_fifo || !m_fifo->isInitialized() || !m_encoderCtx || !m_decoderCtx) {
-        return true;
+        return Status::success();
     }
 
-    if (!ensureInitialAudioPts(error)) {
-        return false;
+    Status ptsStatus = ensureInitialAudioPts();
+    if (!ptsStatus) {
+        return ptsStatus;
     }
 
     const int64_t delay = swr_get_delay(m_swrCtx.get(), m_decoderCtx->sample_rate);
@@ -579,15 +522,13 @@ bool FFmpegAudioPipeline::pushDecodedFrameToFifo(
     ));
 
     if (dstNbSamples <= 0) {
-        return true;
+        return Status::success();
     }
 
     FramePtr convertedFrame = makeFrame();
     if (!convertedFrame) {
-        if (error) {
-            *error = "av_frame_alloc converted audio frame failed";
-        }
-        return false;
+        return Status::failure(makeAllocationError(
+            "av_frame_alloc converted audio frame failed"));
     }
 
     convertedFrame->nb_samples = dstNbSamples;
@@ -595,18 +536,14 @@ bool FFmpegAudioPipeline::pushDecodedFrameToFifo(
     convertedFrame->sample_rate = m_encoderCtx->sample_rate;
 
     if (!setFrameAudioLayoutFromCodecContext(convertedFrame.get(), m_encoderCtx.get())) {
-        if (error) {
-            *error = "set converted audio frame channel layout failed";
-        }
-        return false;
+        return Status::failure(ErrorInfo::internalError(
+            "set converted audio frame channel layout failed"));
     }
 
     int ret = av_frame_get_buffer(convertedFrame.get(), 0);
     if (ret < 0) {
-        if (error) {
-            *error = "av_frame_get_buffer converted audio frame failed: " + errorString(ret);
-        }
-        return false;
+        return Status::failure(makeFFmpegError(
+            "av_frame_get_buffer converted audio frame failed", ret));
     }
 
     const int convertedSamples = swr_convert(
@@ -618,29 +555,33 @@ bool FFmpegAudioPipeline::pushDecodedFrameToFifo(
     );
 
     if (convertedSamples < 0) {
-        if (error) {
-            *error = "swr_convert failed: " + errorString(convertedSamples);
-        }
-        return false;
+        return Status::failure(makeFFmpegError("swr_convert failed", convertedSamples));
     }
 
     convertedFrame->nb_samples = convertedSamples;
 
-    if (convertedSamples > 0 && !m_fifo->writeFrame(convertedFrame.get(), error)) {
-        return false;
+    if (convertedSamples > 0) {
+        std::string fifoError;
+        Status fifoStatus = makeLegacyStatus(
+            m_fifo->writeFrame(convertedFrame.get(), &fifoError),
+            fifoError
+        );
+        if (!fifoStatus) {
+            return fifoStatus;
+        }
     }
 
-    return encodeFifo(false, error, onPacketWritten);
+    return encodeFifo(false, onPacketWritten);
 }
 
-bool FFmpegAudioPipeline::ensureInitialAudioPts(std::string* error)
+Status FFmpegAudioPipeline::ensureInitialAudioPts()
 {
     if (!m_encoderCtx) {
-        return true;
+        return Status::success();
     }
 
     if (m_nextAudioPts != AV_NOPTS_VALUE) {
-        return true;
+        return Status::success();
     }
 
     int64_t inputAudioTs = AV_NOPTS_VALUE;
@@ -658,17 +599,14 @@ bool FFmpegAudioPipeline::ensureInitialAudioPts(std::string* error)
 
     if (inputAudioTs == AV_NOPTS_VALUE) {
         m_nextAudioPts = 0;
-        return true;
+        return Status::success();
     }
 
     const int64_t inputAudioUs = TimelineNormalizer::toUs(inputAudioTs, m_inputAudioStream->time_base);
     const int64_t normalizedAudioUs = m_timeline ? m_timeline->normalizeUs(inputAudioUs) : AV_NOPTS_VALUE;
 
     if (normalizedAudioUs == AV_NOPTS_VALUE) {
-        if (error) {
-            *error = "failed to normalize input audio timestamp";
-        }
-        return false;
+        return makeTimestampError("failed to normalize input audio timestamp");
     }
 
     m_nextAudioPts = TimelineNormalizer::fromUs(normalizedAudioUs, m_encoderCtx->time_base);
@@ -676,16 +614,15 @@ bool FFmpegAudioPipeline::ensureInitialAudioPts(std::string* error)
         m_nextAudioPts = 0;
     }
 
-    return true;
+    return Status::success();
 }
 
-bool FFmpegAudioPipeline::encodeFifo(
+Status FFmpegAudioPipeline::encodeFifo(
     bool flushAll,
-    std::string* error,
     const PacketWrittenCallback& onPacketWritten)
 {
     if (!m_fifo || !m_fifo->isInitialized() || !m_encoderCtx) {
-        return true;
+        return Status::success();
     }
 
     const int frameSize = m_encoderCtx->frame_size > 0 ? m_encoderCtx->frame_size : 1024;
@@ -696,10 +633,8 @@ bool FFmpegAudioPipeline::encodeFifo(
 
         FramePtr audioFrame = makeFrame();
         if (!audioFrame) {
-            if (error) {
-                *error = "av_frame_alloc encoded audio frame failed";
-            }
-            return false;
+            return Status::failure(makeAllocationError(
+                "av_frame_alloc encoded audio frame failed"));
         }
 
         audioFrame->nb_samples = samplesToRead;
@@ -708,39 +643,45 @@ bool FFmpegAudioPipeline::encodeFifo(
         audioFrame->pts = m_nextAudioPts == AV_NOPTS_VALUE ? 0 : m_nextAudioPts;
 
         if (!setFrameAudioLayoutFromCodecContext(audioFrame.get(), m_encoderCtx.get())) {
-            if (error) {
-                *error = "set encoded audio frame channel layout failed";
-            }
-            return false;
+            return Status::failure(ErrorInfo::internalError(
+                "set encoded audio frame channel layout failed"));
         }
 
         int ret = av_frame_get_buffer(audioFrame.get(), 0);
         if (ret < 0) {
-            if (error) {
-                *error = "av_frame_get_buffer encoded audio frame failed: " + errorString(ret);
-            }
-            return false;
+            return Status::failure(makeFFmpegError(
+                "av_frame_get_buffer encoded audio frame failed", ret));
         }
 
-        if (!m_fifo->readToFrame(audioFrame.get(), samplesToRead, error)) {
-            return false;
+        std::string fifoError;
+        Status fifoStatus = makeLegacyStatus(
+            m_fifo->readToFrame(audioFrame.get(), samplesToRead, &fifoError),
+            fifoError
+        );
+        if (!fifoStatus) {
+            return fifoStatus;
         }
 
-        const bool ok = sendFrame(audioFrame.get(), error) && receiveAndWritePackets(error, onPacketWritten) >= 0;
+        Status sendStatus = sendFrame(audioFrame.get());
+        if (!sendStatus) {
+            return sendStatus;
+        }
+
+        Result<int> packetsResult = receiveAndWritePackets(onPacketWritten);
+        if (!packetsResult) {
+            return Status::failure(packetsResult.error());
+        }
+
         m_nextAudioPts = audioFrame->pts + audioFrame->nb_samples;
-
-        if (!ok) {
-            return false;
-        }
     }
 
-    return true;
+    return Status::success();
 }
 
-bool FFmpegAudioPipeline::flushResampler(std::string* error)
+Status FFmpegAudioPipeline::flushResampler()
 {
     if (!m_swrCtx || !m_decoderCtx || !m_encoderCtx || !m_fifo) {
-        return true;
+        return Status::success();
     }
 
     while (true) {
@@ -762,10 +703,8 @@ bool FFmpegAudioPipeline::flushResampler(std::string* error)
 
         FramePtr convertedFrame = makeFrame();
         if (!convertedFrame) {
-            if (error) {
-                *error = "av_frame_alloc swr flush audio frame failed";
-            }
-            return false;
+            return Status::failure(makeAllocationError(
+                "av_frame_alloc swr flush audio frame failed"));
         }
 
         convertedFrame->nb_samples = dstNbSamples;
@@ -773,18 +712,14 @@ bool FFmpegAudioPipeline::flushResampler(std::string* error)
         convertedFrame->sample_rate = m_encoderCtx->sample_rate;
 
         if (!setFrameAudioLayoutFromCodecContext(convertedFrame.get(), m_encoderCtx.get())) {
-            if (error) {
-                *error = "set swr flush audio frame channel layout failed";
-            }
-            return false;
+            return Status::failure(ErrorInfo::internalError(
+                "set swr flush audio frame channel layout failed"));
         }
 
         int ret = av_frame_get_buffer(convertedFrame.get(), 0);
         if (ret < 0) {
-            if (error) {
-                *error = "av_frame_get_buffer swr flush audio frame failed: " + errorString(ret);
-            }
-            return false;
+            return Status::failure(makeFFmpegError(
+                "av_frame_get_buffer swr flush audio frame failed", ret));
         }
 
         const int convertedSamples = swr_convert(
@@ -796,10 +731,8 @@ bool FFmpegAudioPipeline::flushResampler(std::string* error)
         );
 
         if (convertedSamples < 0) {
-            if (error) {
-                *error = "swr_convert flush failed: " + errorString(convertedSamples);
-            }
-            return false;
+            return Status::failure(makeFFmpegError(
+                "swr_convert flush failed", convertedSamples));
         }
 
         convertedFrame->nb_samples = convertedSamples;
@@ -808,76 +741,84 @@ bool FFmpegAudioPipeline::flushResampler(std::string* error)
             break;
         }
 
-        if (!m_fifo->writeFrame(convertedFrame.get(), error)) {
-            return false;
+        std::string fifoError;
+        Status fifoStatus = makeLegacyStatus(
+            m_fifo->writeFrame(convertedFrame.get(), &fifoError),
+            fifoError
+        );
+        if (!fifoStatus) {
+            return fifoStatus;
         }
     }
 
-    return true;
+    return Status::success();
 }
 
-bool FFmpegAudioPipeline::flush(
-    std::string* error,
+Status FFmpegAudioPipeline::flush(
     const PacketWrittenCallback& onPacketWritten)
 {
     if (m_mode != AudioMode::EncodeSelected) {
-        return true;
+        return Status::success();
     }
 
     if (m_decoderCtx) {
         const int ret = avcodec_send_packet(m_decoderCtx.get(), nullptr);
         if (ret < 0) {
-            if (error) {
-                *error = "avcodec_send_packet audio decoder flush failed: " + errorString(ret);
-            }
-            return false;
+            return Status::failure(makeFFmpegError(
+                "avcodec_send_packet audio decoder flush failed", ret));
         }
 
-        if (!drainDecoder(error, onPacketWritten)) {
-            return false;
+        Status drainStatus = drainDecoder(onPacketWritten);
+        if (!drainStatus) {
+            return drainStatus;
         }
     }
 
-    if (!flushResampler(error)) {
-        return false;
+    Status resamplerStatus = flushResampler();
+    if (!resamplerStatus) {
+        return resamplerStatus;
     }
 
-    if (!encodeFifo(true, error, onPacketWritten)) {
-        return false;
+    Status fifoStatus = encodeFifo(true, onPacketWritten);
+    if (!fifoStatus) {
+        return fifoStatus;
     }
 
-    return sendFrame(nullptr, error) && receiveAndWritePackets(error, onPacketWritten) >= 0;
+    Status sendStatus = sendFrame(nullptr);
+    if (!sendStatus) {
+        return sendStatus;
+    }
+
+    Result<int> packetsResult = receiveAndWritePackets(onPacketWritten);
+    if (!packetsResult) {
+        return Status::failure(packetsResult.error());
+    }
+
+    return Status::success();
 }
 
-bool FFmpegAudioPipeline::sendFrame(AVFrame* frame, std::string* error)
+Status FFmpegAudioPipeline::sendFrame(AVFrame* frame)
 {
     if (!m_encoderCtx) {
-        if (error) {
-            *error = "FFmpegAudioPipeline sendFrame failed: encoderCtx is null";
-        }
-        return false;
+        return Status::failure(ErrorInfo::notInitialized(
+            "FFmpegAudioPipeline sendFrame failed: encoderCtx is null"));
     }
 
     const int ret = avcodec_send_frame(m_encoderCtx.get(), frame);
     if (ret < 0) {
-        if (error) {
-            *error = "avcodec_send_frame audio encoder failed: " + errorString(ret);
-        }
-        return false;
+        return Status::failure(makeFFmpegError(
+            "avcodec_send_frame audio encoder failed", ret));
     }
 
-    return true;
+    return Status::success();
 }
 
-int FFmpegAudioPipeline::receiveAndWritePackets(
-    std::string* error,
+Result<int> FFmpegAudioPipeline::receiveAndWritePackets(
     const PacketWrittenCallback& onPacketWritten)
 {
     if (!m_encoderCtx || !m_outputFmtCtx || !m_outputAudioStream) {
-        if (error) {
-            *error = "FFmpegAudioPipeline receiveAndWritePackets failed: pipeline is not initialized";
-        }
-        return -1;
+        return Result<int>::failure(ErrorInfo::notInitialized(
+            "FFmpegAudioPipeline receiveAndWritePackets failed: pipeline is not initialized"));
     }
 
     int packetsWritten = 0;
@@ -885,10 +826,8 @@ int FFmpegAudioPipeline::receiveAndWritePackets(
     while (true) {
         PacketPtr packet = makePacket();
         if (!packet) {
-            if (error) {
-                *error = "av_packet_alloc audio packet failed";
-            }
-            return -1;
+            return Result<int>::failure(makeAllocationError(
+                "av_packet_alloc audio packet failed"));
         }
 
         const int receiveRet = avcodec_receive_packet(m_encoderCtx.get(), packet.get());
@@ -898,10 +837,8 @@ int FFmpegAudioPipeline::receiveAndWritePackets(
         }
 
         if (receiveRet < 0) {
-            if (error) {
-                *error = "avcodec_receive_packet audio encoder failed: " + errorString(receiveRet);
-            }
-            return -1;
+            return Result<int>::failure(makeFFmpegError(
+                "avcodec_receive_packet audio encoder failed", receiveRet));
         }
 
         packet->stream_index = m_outputAudioStream->index;
@@ -914,10 +851,7 @@ int FFmpegAudioPipeline::receiveAndWritePackets(
                 oss << "encoded audio packet dts is not strictly increasing: current="
                     << packet->dts << ", last=" << m_lastWrittenDts;
 
-                if (error) {
-                    *error = oss.str();
-                }
-                return -1;
+                return Result<int>::failure(makeTimestampError(oss.str()).error());
             }
 
             m_lastWrittenDts = packet->dts;
@@ -930,20 +864,15 @@ int FFmpegAudioPipeline::receiveAndWritePackets(
             oss << "encoded audio packet pts is smaller than dts: pts="
                 << packet->pts << ", dts=" << packet->dts;
 
-            if (error) {
-                *error = oss.str();
-            }
-            return -1;
+            return Result<int>::failure(makeTimestampError(oss.str()).error());
         }
 
         updateProgressFromPacket(packet.get());
 
         const int writeRet = av_interleaved_write_frame(m_outputFmtCtx, packet.get());
         if (writeRet < 0) {
-            if (error) {
-                *error = "av_interleaved_write_frame encoded audio failed: " + errorString(writeRet);
-            }
-            return -1;
+            return Result<int>::failure(makeFFmpegError(
+                "av_interleaved_write_frame encoded audio failed", writeRet));
         }
 
         ++m_packetCount;
@@ -954,7 +883,7 @@ int FFmpegAudioPipeline::receiveAndWritePackets(
         }
     }
 
-    return packetsWritten;
+    return Result<int>::success(packetsWritten);
 }
 
 bool FFmpegAudioPipeline::updateProgressFromPacket(const AVPacket* packet)
