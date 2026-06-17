@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/FFmpegHardwareTypes.h"
+#include "internal/FFmpegRAII.h"
 
 #include <string>
 
@@ -45,9 +46,9 @@ namespace media::ffmpeg {
         const std::string& resolvedDeviceName() const;
 
         /*
-         * Caller owns the returned reference and must av_buffer_unref() it.
+         * Returns an owning reference to the underlying AVBufferRef.
          */
-        AVBufferRef* ref() const;
+        BufferRefPtr ref() const;
         AVBufferRef* raw() const;
 
         static AVHWDeviceType toAVDeviceType(HardwareDeviceType type);
@@ -58,7 +59,7 @@ namespace media::ffmpeg {
         static bool isExplicitHardwareDevice(HardwareDeviceType type);
 
     private:
-        AVBufferRef* m_deviceCtx = nullptr;
+        BufferRefPtr m_deviceCtx;
         AVHWDeviceType m_avDeviceType = AV_HWDEVICE_TYPE_NONE;
         HardwareDeviceType m_requestedDeviceType = HardwareDeviceType::None;
         HardwareDeviceType m_resolvedDeviceType = HardwareDeviceType::None;
