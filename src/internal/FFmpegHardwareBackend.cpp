@@ -21,6 +21,8 @@ namespace {
                 "scale_d3d11",
                 true,
                 false,
+                false,
+                true,
                 AV_PIX_FMT_NONE
             };
 
@@ -32,6 +34,8 @@ namespace {
                 "scale_cuda",
                 true,
                 false,
+                false,
+                true,
                 AV_PIX_FMT_NONE
             };
 
@@ -43,6 +47,8 @@ namespace {
                 "scale_qsv",
                 true,
                 false,
+                false,
+                true,
                 AV_PIX_FMT_NONE
             };
 
@@ -54,6 +60,8 @@ namespace {
                 "scale_vaapi",
                 true,
                 false,
+                false,
+                true,
                 AV_PIX_FMT_NONE
             };
 
@@ -65,6 +73,8 @@ namespace {
                 nullptr,
                 false,
                 false,
+                false,
+                false,
                 AV_PIX_FMT_NONE
             };
 
@@ -73,9 +83,11 @@ namespace {
                 HardwareDeviceType::RKMPP,
                 "rkmpp",
                 AV_PIX_FMT_DRM_PRIME,
-                nullptr,
+                "scale_rkrga",
+                true,
                 false,
                 true,
+                false,
                 AV_PIX_FMT_NV12
             };
 
@@ -85,6 +97,8 @@ namespace {
                 "videotoolbox",
                 AV_PIX_FMT_VIDEOTOOLBOX,
                 nullptr,
+                false,
+                false,
                 false,
                 false,
                 AV_PIX_FMT_NONE
