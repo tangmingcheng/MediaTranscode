@@ -1,6 +1,7 @@
 #pragma once
 
 #include "media_transcode/MediaTranscodeTypes.h"
+#include "internal/FFmpegRAII.h"
 
 #include <cstdint>
 #include <functional>
@@ -99,11 +100,11 @@ private:
     AVStream* m_outputAudioStream = nullptr;
     TimelineNormalizer* m_timeline = nullptr;
 
-    AVCodecContext* m_decoderCtx = nullptr;
-    AVCodecContext* m_encoderCtx = nullptr;
+    CodecContextPtr m_decoderCtx;
+    CodecContextPtr m_encoderCtx;
     SwrContext* m_swrCtx = nullptr;
     FFmpegAudioFifo* m_fifo = nullptr;
-    AVFrame* m_decodedFrame = nullptr;
+    FramePtr m_decodedFrame;
 
     int64_t m_packetCount = 0;
     int64_t m_lastWrittenDts = AV_NOPTS_VALUE;
