@@ -1,5 +1,7 @@
 #include "internal/FFmpegVideoPacketWriterStage.h"
 
+#include "internal/FFmpegError.h"
+#include "internal/FFmpegRAII.h"
 #include "internal/FFmpegUtils.h"
 
 #include <algorithm>
@@ -62,93 +64,74 @@ void FFmpegVideoPacketWriterStage::reset()
     m_lastWrittenOutTimeMs = 0;
 }
 
-bool FFmpegVideoPacketWriterStage::initialize(const Config& config, std::string* error)
+Status FFmpegVideoPacketWriterStage::initialize(const Config& config)
 {
     reset();
 
     if (!config.encoderCtx) {
-        if (error) {
-            *error = "FFmpegVideoPacketWriterStage initialize failed: encoderCtx is null";
-        }
-        return false;
+        return Status::failure(ErrorInfo::invalidArgument(
+            "FFmpegVideoPacketWriterStage initialize failed: encoderCtx is null"));
     }
 
     if (!config.outputFmtCtx) {
-        if (error) {
-            *error = "FFmpegVideoPacketWriterStage initialize failed: outputFmtCtx is null";
-        }
-        return false;
+        return Status::failure(ErrorInfo::invalidArgument(
+            "FFmpegVideoPacketWriterStage initialize failed: outputFmtCtx is null"));
     }
 
     if (!config.outputVideoStream) {
-        if (error) {
-            *error = "FFmpegVideoPacketWriterStage initialize failed: outputVideoStream is null";
-        }
-        return false;
+        return Status::failure(ErrorInfo::invalidArgument(
+            "FFmpegVideoPacketWriterStage initialize failed: outputVideoStream is null"));
     }
 
     m_encoderCtx = config.encoderCtx;
     m_outputFmtCtx = config.outputFmtCtx;
     m_outputVideoStream = config.outputVideoStream;
 
-    return true;
+    return Status::success();
 }
 
-bool FFmpegVideoPacketWriterStage::sendFrame(AVFrame* frame, std::string* error)
+Status FFmpegVideoPacketWriterStage::sendFrame(AVFrame* frame)
 {
     if (!m_encoderCtx) {
-        if (error) {
-            *error = "FFmpegVideoPacketWriterStage sendFrame failed: encoderCtx is null";
-        }
-        return false;
+        return Status::failure(ErrorInfo::notInitialized(
+            "FFmpegVideoPacketWriterStage sendFrame failed: encoderCtx is null"));
     }
 
     const int ret = avcodec_send_frame(m_encoderCtx, frame);
     if (ret < 0) {
-        if (error) {
-            *error = "avcodec_send_frame encoder failed: " + errorString(ret);
-        }
-        return false;
+        return Status::failure(makeFFmpegError(
+            "avcodec_send_frame encoder failed", ret));
     }
 
-    return true;
+    return Status::success();
 }
 
-int FFmpegVideoPacketWriterStage::receiveAndWritePackets(
-    std::string* error,
+Result<int> FFmpegVideoPacketWriterStage::receiveAndWritePackets(
     const PacketWrittenCallback& onPacketWritten)
 {
     if (!m_encoderCtx || !m_outputFmtCtx || !m_outputVideoStream) {
-        if (error) {
-            *error = "FFmpegVideoPacketWriterStage receiveAndWritePackets failed: stage is not initialized";
-        }
-        return -1;
+        return Result<int>::failure(ErrorInfo::notInitialized(
+            "FFmpegVideoPacketWriterStage receiveAndWritePackets failed: stage is not initialized"));
     }
 
     int packetsWritten = 0;
 
     while (true) {
-        AVPacket* packet = av_packet_alloc();
+        PacketPtr packet = makePacket();
         if (!packet) {
-            if (error) {
-                *error = "av_packet_alloc video packet failed";
-            }
-            return -1;
+            return Result<int>::failure(makeAllocationError(
+                "av_packet_alloc video packet failed"));
         }
 
-        const int receiveRet = avcodec_receive_packet(m_encoderCtx, packet);
+        const int receiveRet = avcodec_receive_packet(m_encoderCtx, packet.get());
 
         if (receiveRet == AVERROR(EAGAIN) || receiveRet == AVERROR_EOF) {
-            av_packet_free(&packet);
             break;
         }
 
         if (receiveRet < 0) {
-            if (error) {
-                *error = "avcodec_receive_packet encoder failed: " + errorString(receiveRet);
-            }
-            av_packet_free(&packet);
-            return -1;
+            return Result<int>::failure(makeFFmpegError(
+                "avcodec_receive_packet encoder failed", receiveRet));
         }
 
         packet->stream_index = m_outputVideoStream->index;
@@ -158,7 +141,7 @@ int FFmpegVideoPacketWriterStage::receiveAndWritePackets(
         }
 
         av_packet_rescale_ts(
-            packet,
+            packet.get(),
             m_encoderCtx->time_base,
             m_outputVideoStream->time_base
         );
@@ -172,11 +155,7 @@ int FFmpegVideoPacketWriterStage::receiveAndWritePackets(
                     << ", last="
                     << m_lastWrittenDts;
 
-                if (error) {
-                    *error = oss.str();
-                }
-                av_packet_free(&packet);
-                return -1;
+                return Result<int>::failure(ErrorInfo::internalError(oss.str()));
             }
 
             m_lastWrittenDts = packet->dts;
@@ -191,11 +170,7 @@ int FFmpegVideoPacketWriterStage::receiveAndWritePackets(
                 << ", dts="
                 << packet->dts;
 
-            if (error) {
-                *error = oss.str();
-            }
-            av_packet_free(&packet);
-            return -1;
+            return Result<int>::failure(ErrorInfo::internalError(oss.str()));
         }
 
         if (packet->duration <= 0) {
@@ -219,16 +194,18 @@ int FFmpegVideoPacketWriterStage::receiveAndWritePackets(
             );
         }
 
-        const int writeRet = av_interleaved_write_frame(m_outputFmtCtx, packet);
-
-        av_packet_free(&packet);
-
+        const int writeRet = av_interleaved_write_frame(m_outputFmtCtx, packet.get());
         if (writeRet < 0) {
-            if (error) {
-                *error = "av_interleaved_write_frame video failed: " + errorString(writeRet);
-            }
-            return -1;
+            return Result<int>::failure(makeFFmpegError(
+                "av_interleaved_write_frame video failed", writeRet));
         }
+
+        /*
+         * av_interleaved_write_frame() takes ownership of packet references on
+         * success. Releasing here prevents the RAII deleter from unref/freeing
+         * an already-consumed packet.
+         */
+        packet.release();
 
         ++m_packetCount;
         ++packetsWritten;
@@ -238,7 +215,7 @@ int FFmpegVideoPacketWriterStage::receiveAndWritePackets(
         }
     }
 
-    return packetsWritten;
+    return Result<int>::success(packetsWritten);
 }
 
 bool FFmpegVideoPacketWriterStage::isInitialized() const
