@@ -219,4 +219,21 @@ const HardwareDeviceContext& FFmpegVideoDecoderStage::hardwareDeviceContext() co
     return m_hardwareDeviceContext;
 }
 
+AVPixelFormat FFmpegVideoDecoderStage::selectDecoderPixelFormat(
+    AVCodecContext* ctx,
+    const AVPixelFormat* formats)
+{
+    auto* self = ctx ? static_cast<FFmpegVideoDecoderStage*>(ctx->opaque) : nullptr;
+
+    if (self && self->m_hardwareDecoderConfig.valid) {
+        for (const AVPixelFormat* p = formats; p && *p != AV_PIX_FMT_NONE; ++p) {
+            if (*p == self->m_hardwareDecoderConfig.hardwarePixelFormat) {
+                return *p;
+            }
+        }
+    }
+
+    return formats ? formats[0] : AV_PIX_FMT_NONE;
+}
+
 } // namespace media::ffmpeg
