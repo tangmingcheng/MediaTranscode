@@ -1,6 +1,7 @@
 #pragma once
 
 #include "media_transcode/MediaTranscodeTypes.h"
+#include "media_transcode/Result.h"
 #include "internal/FFmpegRAII.h"
 
 #include <cstdint>
@@ -47,19 +48,16 @@ public:
 
     void reset();
 
-    bool initialize(const Config& config, std::string* error);
-    bool processPacket(AVPacket* packet,
-                       std::string* error,
-                       const PacketWrittenCallback& onPacketWritten = {});
-    bool flush(std::string* error,
-               const PacketWrittenCallback& onPacketWritten = {});
+    Status initialize(const Config& config);
+    Status processPacket(AVPacket* packet,
+                         const PacketWrittenCallback& onPacketWritten = {});
+    Status flush(const PacketWrittenCallback& onPacketWritten = {});
 
     /*
      * 保留底层音频编码写包接口，方便后续实时帧输入复用。
      */
-    bool sendFrame(AVFrame* frame, std::string* error);
-    int receiveAndWritePackets(std::string* error,
-                               const PacketWrittenCallback& onPacketWritten = {});
+    Status sendFrame(AVFrame* frame);
+    Result<int> receiveAndWritePackets(const PacketWrittenCallback& onPacketWritten = {});
 
     bool isInitialized() const;
     AudioMode mode() const;
@@ -69,27 +67,22 @@ public:
     int64_t lastWrittenOutTimeMs() const;
 
 private:
-    bool initializeCopy(std::string* error);
-    bool initializeEncode(std::string* error);
-    bool initializeResamplerAndFifo(std::string* error);
+    Status initializeCopy();
+    Status initializeEncode();
+    Status initializeResamplerAndFifo();
 
-    bool writeCopyPacket(AVPacket* packet,
-                         std::string* error,
-                         const PacketWrittenCallback& onPacketWritten);
-    bool normalizeCopyPacketTimestamp(AVPacket* packet, std::string* error) const;
+    Status writeCopyPacket(AVPacket* packet,
+                           const PacketWrittenCallback& onPacketWritten);
+    Status normalizeCopyPacketTimestamp(AVPacket* packet) const;
 
-    bool sendPacketToDecoder(AVPacket* packet,
-                             std::string* error,
-                             const PacketWrittenCallback& onPacketWritten);
-    bool drainDecoder(std::string* error,
+    Status sendPacketToDecoder(AVPacket* packet,
+                               const PacketWrittenCallback& onPacketWritten);
+    Status drainDecoder(const PacketWrittenCallback& onPacketWritten);
+    Status pushDecodedFrameToFifo(const PacketWrittenCallback& onPacketWritten);
+    Status ensureInitialAudioPts();
+    Status encodeFifo(bool flushAll,
                       const PacketWrittenCallback& onPacketWritten);
-    bool pushDecodedFrameToFifo(std::string* error,
-                                const PacketWrittenCallback& onPacketWritten);
-    bool ensureInitialAudioPts(std::string* error);
-    bool encodeFifo(bool flushAll,
-                    std::string* error,
-                    const PacketWrittenCallback& onPacketWritten);
-    bool flushResampler(std::string* error);
+    Status flushResampler();
     bool updateProgressFromPacket(const AVPacket* packet);
 
 private:
