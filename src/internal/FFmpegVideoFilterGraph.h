@@ -1,5 +1,7 @@
 #pragma once
 
+#include "internal/FFmpegRAII.h"
+
 #include <string>
 
 extern "C" {
@@ -61,7 +63,7 @@ namespace media::ffmpeg {
                                             int outputFps,
                                             bool enableConstantFps);
 
-        AVFilterGraph* m_graph = nullptr;
+        FilterGraphPtr m_graph;
         AVFilterContext* m_bufferSrcCtx = nullptr;
         AVFilterContext* m_bufferSinkCtx = nullptr;
         AVRational m_inputFrameRate{ 0, 1 };
