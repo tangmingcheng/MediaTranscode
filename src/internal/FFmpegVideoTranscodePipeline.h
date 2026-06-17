@@ -7,6 +7,7 @@
 #include "internal/FFmpegVideoDecoderStage.h"
 #include "internal/FFmpegVideoEncoderStage.h"
 #include "internal/FFmpegVideoFilterStage.h"
+#include "internal/FFmpegVideoFrameRateStage.h"
 #include "internal/FFmpegVideoFrameRoutingStrategy.h"
 #include "internal/FFmpegVideoHardwareTransferStage.h"
 #include "internal/FFmpegVideoInputMetadata.h"
@@ -69,6 +70,7 @@ private:
     Status openEncoder();
     Status initializeFrameRoutingStrategy();
     Status initializeHardwareTransferStage();
+    Status initializeFrameRateStage();
     Status initializeFilterStage();
     Status initializePacketWriter();
     Status allocateFrames();
@@ -78,6 +80,11 @@ private:
     Status processHardwareFrameZeroCopy(const PacketWrittenCallback& onPacketWritten);
     Status processFrameThroughSoftwareFilter(AVFrame* frame,
                                              const PacketWrittenCallback& onPacketWritten);
+    Status drainFrameRateStage(bool hardwareFrame,
+                               const PacketWrittenCallback& onPacketWritten);
+    Status sendFrameRateOutputToFilter(AVFrame* frame,
+                                       bool hardwareFrame,
+                                       const PacketWrittenCallback& onPacketWritten);
     Status drainFilterStage(const PacketWrittenCallback& onPacketWritten);
     Status writeEncodedPackets(AVFrame* frame,
                                const PacketWrittenCallback& onPacketWritten);
@@ -96,6 +103,7 @@ private:
     FFmpegVideoEncoderStage m_encoderStage;
     FFmpegVideoFrameRoutingStrategy m_frameRoutingStrategy;
     FFmpegVideoHardwareTransferStage m_hardwareTransferStage;
+    FFmpegVideoFrameRateStage m_frameRateStage;
     FFmpegVideoFilterStage m_filterStage;
 
     HardwarePipelinePlan m_hardwarePlan;
@@ -104,6 +112,7 @@ private:
     FFmpegVideoPacketWriterStage m_packetWriter;
 
     FramePtr m_decodedFrame;
+    FramePtr m_frameRateFrame;
     FramePtr m_filteredFrame;
     FramePtr m_softwareTransferFrame;
 };
