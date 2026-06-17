@@ -285,7 +285,7 @@ namespace {
         options.config.outputUrl = "output.mp4";
         options.config.width = 1280;
         options.config.height = 720;
-        options.config.fps = 25;
+        options.config.fps = 0;
         options.config.videoCodec = media::VideoCodec::H264;
         options.config.audioMode = media::AudioMode::EncodeSelected;
         options.config.audioCodec = media::AudioCodec::AAC;
