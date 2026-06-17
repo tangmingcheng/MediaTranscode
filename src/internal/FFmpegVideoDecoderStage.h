@@ -3,8 +3,8 @@
 #include "internal/FFmpegHardwareContext.h"
 #include "internal/FFmpegHardwareDecoder.h"
 #include "internal/FFmpegPipelinePlanner.h"
-
-#include <string>
+#include "internal/FFmpegRAII.h"
+#include "media_transcode/Result.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -16,6 +16,11 @@ namespace media::ffmpeg {
 
     class FFmpegVideoDecoderStage {
     public:
+        enum class ReceiveFrameState {
+            Frame,
+            NeedMoreInput
+        };
+
         struct Config {
             AVStream* inputStream = nullptr;
             const HardwarePipelinePlan* hardwarePlan = nullptr;
@@ -31,13 +36,11 @@ namespace media::ffmpeg {
 
         void reset();
 
-        bool initialize(const Config& config, std::string* error);
-        bool sendPacket(AVPacket* packet, std::string* error);
-        bool sendFlush(std::string* error);
+        Status initialize(const Config& config);
+        Status sendPacket(AVPacket* packet);
+        Status sendFlush();
 
-        // Returns 1 when a frame is received, 0 when the decoder needs more input or reached EOF,
-        // and -1 on error.
-        int receiveFrame(AVFrame* frame, std::string* error);
+        Result<ReceiveFrameState> receiveFrame(AVFrame* frame);
 
         bool isInitialized() const;
         AVCodecContext* context() const;
@@ -49,14 +52,14 @@ namespace media::ffmpeg {
         const HardwareDeviceContext& hardwareDeviceContext() const;
 
     private:
-        bool initializeHardwareDevice(const AVCodec* decoder, std::string* error);
+        Status initializeHardwareDevice(const AVCodec* decoder);
 
         static AVPixelFormat selectDecoderPixelFormat(AVCodecContext* ctx,
                                                       const AVPixelFormat* formats);
 
     private:
         AVStream* m_inputStream = nullptr;
-        AVCodecContext* m_decoderCtx = nullptr;
+        CodecContextPtr m_decoderCtx;
 
         HardwareDeviceContext m_hardwareDeviceContext;
         HardwareDecoderSupport::Config m_hardwareDecoderConfig;
