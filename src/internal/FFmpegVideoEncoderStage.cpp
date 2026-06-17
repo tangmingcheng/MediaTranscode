@@ -348,7 +348,7 @@ Status FFmpegVideoEncoderStage::initializeHardwareDeviceForEncoder(const AVCodec
             "hardware device initialization failed: decoder stage has no hardware device"));
     }
 
-    AVBufferRef* deviceRef = m_hardwareDeviceContext->ref();
+    BufferRefPtr deviceRef = m_hardwareDeviceContext->ref();
     if (!deviceRef) {
         return Status::failure(makeError(
             ErrorCode::HardwareUnavailable,
@@ -359,7 +359,7 @@ Status FFmpegVideoEncoderStage::initializeHardwareDeviceForEncoder(const AVCodec
         av_buffer_unref(&m_encoderCtx->hw_device_ctx);
     }
 
-    m_encoderCtx->hw_device_ctx = deviceRef;
+    m_encoderCtx->hw_device_ctx = deviceRef.release();
     m_hardwareDeviceAttachedToEncoder = true;
     return Status::success();
 }
