@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 
 extern "C" {
@@ -102,8 +103,8 @@ private:
 
     CodecContextPtr m_decoderCtx;
     CodecContextPtr m_encoderCtx;
-    SwrContext* m_swrCtx = nullptr;
-    FFmpegAudioFifo* m_fifo = nullptr;
+    SwrContextPtr m_swrCtx;
+    std::unique_ptr<FFmpegAudioFifo> m_fifo;
     FramePtr m_decodedFrame;
 
     int64_t m_packetCount = 0;
