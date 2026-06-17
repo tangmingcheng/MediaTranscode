@@ -200,13 +200,6 @@ Result<int> FFmpegVideoPacketWriterStage::receiveAndWritePackets(
                 "av_interleaved_write_frame video failed", writeRet));
         }
 
-        /*
-         * av_interleaved_write_frame() takes ownership of packet references on
-         * success. Releasing here prevents the RAII deleter from unref/freeing
-         * an already-consumed packet.
-         */
-        packet.release();
-
         ++m_packetCount;
         ++packetsWritten;
 
