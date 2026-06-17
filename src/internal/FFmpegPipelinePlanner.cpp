@@ -62,15 +62,37 @@ namespace {
         }
     }
 
-    bool zeroCopyWouldRequireVideoFilter(const TranscodeConfig& config)
+    bool zeroCopyWouldRequireSpatialFilter(const TranscodeConfig& config)
     {
-        return config.width > 0 || config.height > 0 || config.fps > 0;
+        return config.width > 0 || config.height > 0;
     }
 
-    bool backendCanUseDirectZeroCopyWithoutFilter(const HardwareBackendProfile& backend)
+    bool zeroCopyWouldRequireFrameRateFilter(const TranscodeConfig& config)
     {
-        return backend.supportsDirectHardwareFrameEncode &&
-            !backend.supportsZeroCopyFilter;
+        return config.fps > 0;
+    }
+
+    std::string zeroCopyFilterBlockReason(const HardwareBackendProfile& backend,
+                                          const TranscodeConfig& config)
+    {
+        const bool requiresSpatialFilter = zeroCopyWouldRequireSpatialFilter(config);
+        const bool requiresFrameRateFilter = zeroCopyWouldRequireFrameRateFilter(config);
+
+        if (requiresSpatialFilter) {
+            if (!backend.supportsZeroCopyFilter) {
+                return "zero-copy backend does not provide an on-device spatial filter";
+            }
+
+            if (!backend.scaleFilterName || !*backend.scaleFilterName) {
+                return "zero-copy backend does not provide a scale filter name";
+            }
+        }
+
+        if (requiresFrameRateFilter && !backend.supportsZeroCopyFrameRateFilter) {
+            return "zero-copy backend does not provide an on-device constant-fps filter";
+        }
+
+        return {};
     }
 
     void logAttempt(const HardwarePipelinePlanAttempt& attempt)
@@ -163,12 +185,13 @@ namespace {
                 continue;
             }
 
-            const bool directZeroCopyBlockedByFilter =
-                backendCanUseDirectZeroCopyWithoutFilter(attempt.backend) &&
-                zeroCopyWouldRequireVideoFilter(config);
+            const std::string filterBlockReason = zeroCopyFilterBlockReason(
+                attempt.backend,
+                config
+            );
 
-            if (directZeroCopyBlockedByFilter) {
-                attempt.reason = "direct zero-copy backend requires pass-through size/fps; scale or fps filter was requested";
+            if (!filterBlockReason.empty()) {
+                attempt.reason = filterBlockReason;
             }
             else {
                 attempt.encoderSelection = HardwareEncoderSelector::selectZeroCopyEncoder(
