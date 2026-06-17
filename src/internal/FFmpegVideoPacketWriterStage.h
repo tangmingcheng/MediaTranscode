@@ -1,8 +1,9 @@
 #pragma once
 
+#include "media_transcode/Result.h"
+
 #include <cstdint>
 #include <functional>
-#include <string>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -36,10 +37,9 @@ public:
 
     void reset();
 
-    bool initialize(const Config& config, std::string* error);
-    bool sendFrame(AVFrame* frame, std::string* error);
-    int receiveAndWritePackets(std::string* error,
-                               const PacketWrittenCallback& onPacketWritten = {});
+    Status initialize(const Config& config);
+    Status sendFrame(AVFrame* frame);
+    Result<int> receiveAndWritePackets(const PacketWrittenCallback& onPacketWritten = {});
 
     bool isInitialized() const;
 
