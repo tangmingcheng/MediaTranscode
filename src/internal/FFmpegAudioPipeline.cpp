@@ -285,17 +285,18 @@ Status FFmpegAudioPipeline::initializeResamplerAndFifo()
         0,
         nullptr
     );
+    SwrContextPtr createdSwrCtx(rawSwrCtx);
 
     if (ret < 0) {
         return Status::failure(makeFFmpegError("swr_alloc_set_opts2 failed", ret));
     }
 
-    if (!rawSwrCtx) {
+    if (!createdSwrCtx) {
         return Status::failure(makeAllocationError(
             "swr_alloc_set_opts2 failed: no swr context allocated"));
     }
 
-    m_swrCtx.reset(rawSwrCtx);
+    m_swrCtx = std::move(createdSwrCtx);
 #else
     m_swrCtx.reset(swr_alloc_set_opts(
         nullptr,
