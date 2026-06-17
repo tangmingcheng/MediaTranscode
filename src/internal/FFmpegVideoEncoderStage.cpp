@@ -337,8 +337,7 @@ Status FFmpegVideoEncoderStage::initializeHardwareDeviceForEncoder(const AVCodec
             "hardware video pipeline unavailable: selected encoder is not a hardware encoder"));
     }
 
-    if (m_hardwareBackend.supportsDirectHardwareFrameEncode &&
-        !m_hardwareBackend.supportsZeroCopyFilter) {
+    if (!m_hardwareBackend.encoderRequiresHardwareDeviceContext) {
         return Status::success();
     }
 
