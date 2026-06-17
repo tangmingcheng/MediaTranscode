@@ -328,9 +328,9 @@ namespace {
             audioConfig.timeline = &timeline;
             audioConfig.audioBitrateKbps = m_config.audioBitrateKbps;
 
-            std::string audioError;
-            if (!audioPipeline.initialize(audioConfig, &audioError)) {
-                fail(audioError);
+            Status audioStatus = audioPipeline.initialize(audioConfig);
+            if (!audioStatus) {
+                failStatus(audioStatus);
                 return;
             }
         }
@@ -402,17 +402,15 @@ namespace {
             }
             else if (inputPacket->stream_index == audioStreamIndex &&
                 audioPipeline.outputStream()) {
-                std::string audioError;
-                const bool ok = audioPipeline.processPacket(
+                const Status audioStatus = audioPipeline.processPacket(
                     inputPacket.get(),
-                    &audioError,
                     onAudioPacketWritten
                 );
 
                 av_packet_unref(inputPacket.get());
 
-                if (!ok) {
-                    fail(audioError);
+                if (!audioStatus) {
+                    failStatus(audioStatus);
                     return;
                 }
             }
@@ -430,9 +428,9 @@ namespace {
         }
 
         if (!m_stopRequested.load()) {
-            std::string audioError;
-            if (!audioPipeline.flush(&audioError, onAudioPacketWritten)) {
-                fail(audioError);
+            Status audioStatus = audioPipeline.flush(onAudioPacketWritten);
+            if (!audioStatus) {
+                failStatus(audioStatus);
                 return;
             }
         }
