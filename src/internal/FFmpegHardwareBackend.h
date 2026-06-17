@@ -15,17 +15,10 @@ namespace media::ffmpeg {
         const char* name = "none";
         AVPixelFormat hardwarePixelFormat = AV_PIX_FMT_NONE;
         const char* scaleFilterName = nullptr;
-
-        // True when the backend has an FFmpeg hardware filter path that can keep
-        // frames on device, for example scale_cuda/scale_vaapi/scale_qsv.
         bool supportsZeroCopyFilter = false;
-
-        // True when the backend can pass decoder hardware frames directly to the
-        // selected encoder without an intermediate hardware filter graph.
+        bool supportsZeroCopyFrameRateFilter = false;
         bool supportsDirectHardwareFrameEncode = false;
-
-        // Optional software layout carried by direct hardware frames. For example,
-        // RKMPP consumes DRM_PRIME frames whose underlying MPP frame layout is NV12.
+        bool encoderRequiresHardwareDeviceContext = true;
         AVPixelFormat directHardwareFrameSoftwareFormat = AV_PIX_FMT_NONE;
     };
 
