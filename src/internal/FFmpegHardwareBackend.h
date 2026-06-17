@@ -16,7 +16,7 @@ namespace media::ffmpeg {
         AVPixelFormat hardwarePixelFormat = AV_PIX_FMT_NONE;
         const char* scaleFilterName = nullptr;
         bool supportsZeroCopyFilter = false;
-        bool supportsZeroCopyFrameRateFilter = false;
+        bool supportsZeroCopyFrameRateFilter = true;
         bool supportsDirectHardwareFrameEncode = false;
         bool encoderRequiresHardwareDeviceContext = true;
         AVPixelFormat directHardwareFrameSoftwareFormat = AV_PIX_FMT_NONE;
