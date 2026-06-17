@@ -11,7 +11,6 @@ extern "C" {
 #include <libavfilter/buffersink.h>
 #include <libavfilter/buffersrc.h>
 #include <libavutil/avstring.h>
-#include <libavutil/mem.h>
 #include <libavutil/pixdesc.h>
 }
 
@@ -21,19 +20,6 @@ namespace {
     bool isValidRatio(AVRational ratio)
     {
         return ratio.num > 0 && ratio.den > 0;
-    }
-
-    void freeBufferSrcParameters(AVBufferSrcParameters** params)
-    {
-        if (!params || !*params) {
-            return;
-        }
-
-        if ((*params)->hw_frames_ctx) {
-            av_buffer_unref(&(*params)->hw_frames_ctx);
-        }
-
-        av_freep(params);
     }
 
 } // namespace
@@ -133,12 +119,11 @@ namespace {
 
         reset();
 
-        m_graph = other.m_graph;
+        m_graph = std::move(other.m_graph);
         m_bufferSrcCtx = other.m_bufferSrcCtx;
         m_bufferSinkCtx = other.m_bufferSinkCtx;
         m_inputFrameRate = other.m_inputFrameRate;
 
-        other.m_graph = nullptr;
         other.m_bufferSrcCtx = nullptr;
         other.m_bufferSinkCtx = nullptr;
         other.m_inputFrameRate = AVRational{ 0, 1 };
@@ -148,11 +133,7 @@ namespace {
 
     void HardwareVideoFilterGraph::reset()
     {
-        if (m_graph) {
-            avfilter_graph_free(&m_graph);
-        }
-
-        m_graph = nullptr;
+        m_graph.reset();
         m_bufferSrcCtx = nullptr;
         m_bufferSinkCtx = nullptr;
         m_inputFrameRate = AVRational{ 0, 1 };
@@ -200,7 +181,7 @@ namespace {
             return false;
         }
 
-        m_graph = avfilter_graph_alloc();
+        m_graph = makeFilterGraph();
         if (!m_graph) {
             if (error) {
                 *error = "avfilter_graph_alloc failed";
@@ -230,7 +211,7 @@ namespace {
             "in",
             args,
             nullptr,
-            m_graph
+            m_graph.get()
         );
 
         if (ret < 0) {
@@ -241,7 +222,7 @@ namespace {
             return false;
         }
 
-        AVBufferSrcParameters* srcParams = av_buffersrc_parameters_alloc();
+        BufferSrcParametersPtr srcParams = makeBufferSrcParameters();
         if (!srcParams) {
             if (error) {
                 *error = "av_buffersrc_parameters_alloc failed";
@@ -257,9 +238,7 @@ namespace {
         srcParams->sample_aspect_ratio = AVRational{ 1, 1 };
         srcParams->frame_rate = m_inputFrameRate;
         srcParams->hw_frames_ctx = av_buffer_ref(config.inputHardwareFramesContext);
-
         if (!srcParams->hw_frames_ctx) {
-            freeBufferSrcParameters(&srcParams);
             if (error) {
                 *error = "av_buffer_ref input hardware frames context failed";
             }
@@ -267,8 +246,7 @@ namespace {
             return false;
         }
 
-        ret = av_buffersrc_parameters_set(m_bufferSrcCtx, srcParams);
-        freeBufferSrcParameters(&srcParams);
+        ret = av_buffersrc_parameters_set(m_bufferSrcCtx, srcParams.get());
 
         if (ret < 0) {
             if (error) {
@@ -284,7 +262,7 @@ namespace {
             "out",
             nullptr,
             nullptr,
-            m_graph
+            m_graph.get()
         );
 
         if (ret < 0) {
@@ -355,7 +333,7 @@ namespace {
         }
 
         ret = avfilter_graph_parse_ptr(
-            m_graph,
+            m_graph.get(),
             filterDesc.c_str(),
             &inputs,
             &outputs,
@@ -373,7 +351,7 @@ namespace {
             return false;
         }
 
-        ret = avfilter_graph_config(m_graph, nullptr);
+        ret = avfilter_graph_config(m_graph.get(), nullptr);
         if (ret < 0) {
             if (error) {
                 *error = "avfilter_graph_config hardware failed [" + filterDesc + "]: " + errorString(ret);
