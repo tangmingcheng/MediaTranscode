@@ -20,7 +20,7 @@ namespace {
                 AV_PIX_FMT_D3D11,
                 "scale_d3d11",
                 true,
-                false,
+                true,
                 false,
                 true,
                 AV_PIX_FMT_NONE
@@ -33,7 +33,7 @@ namespace {
                 AV_PIX_FMT_CUDA,
                 "scale_cuda",
                 true,
-                false,
+                true,
                 false,
                 true,
                 AV_PIX_FMT_NONE
@@ -46,7 +46,7 @@ namespace {
                 AV_PIX_FMT_QSV,
                 "scale_qsv",
                 true,
-                false,
+                true,
                 false,
                 true,
                 AV_PIX_FMT_NONE
@@ -59,7 +59,7 @@ namespace {
                 AV_PIX_FMT_VAAPI,
                 "scale_vaapi",
                 true,
-                false,
+                true,
                 false,
                 true,
                 AV_PIX_FMT_NONE
@@ -72,7 +72,7 @@ namespace {
                 AV_PIX_FMT_DRM_PRIME,
                 nullptr,
                 false,
-                false,
+                true,
                 false,
                 false,
                 AV_PIX_FMT_NONE
@@ -85,7 +85,7 @@ namespace {
                 AV_PIX_FMT_DRM_PRIME,
                 "scale_rkrga",
                 true,
-                false,
+                true,
                 true,
                 false,
                 AV_PIX_FMT_NV12
@@ -98,7 +98,7 @@ namespace {
                 AV_PIX_FMT_VIDEOTOOLBOX,
                 nullptr,
                 false,
-                false,
+                true,
                 false,
                 false,
                 AV_PIX_FMT_NONE
