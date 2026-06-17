@@ -1,5 +1,7 @@
 #pragma once
 
+#include "internal/FFmpegRAII.h"
+
 #include <string>
 
 extern "C" {
@@ -39,7 +41,7 @@ public:
     AVAudioFifo* raw() const;
 
 private:
-    AVAudioFifo* m_fifo = nullptr;
+    AudioFifoPtr m_fifo;
     AVSampleFormat m_sampleFormat = AV_SAMPLE_FMT_NONE;
     int m_channels = 0;
 };
