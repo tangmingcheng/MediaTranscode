@@ -24,33 +24,6 @@ extern "C" {
 namespace media {
 namespace {
 
-    struct InputFormatContextDeleter {
-        void operator()(AVFormatContext* ctx) const
-        {
-            if (!ctx) {
-                return;
-            }
-
-            AVFormatContext* tmp = ctx;
-            avformat_close_input(&tmp);
-        }
-    };
-
-    struct OutputFormatContextDeleter {
-        void operator()(AVFormatContext* ctx) const
-        {
-            if (!ctx) {
-                return;
-            }
-
-            if (!(ctx->oformat->flags & AVFMT_NOFILE) && ctx->pb) {
-                avio_closep(&ctx->pb);
-            }
-
-            avformat_free_context(ctx);
-        }
-    };
-
     class RunningStateGuard {
     public:
         explicit RunningStateGuard(std::atomic_bool& running)
@@ -69,9 +42,6 @@ namespace {
     private:
         std::atomic_bool& m_running;
     };
-
-    using InputFormatContextPtr = std::unique_ptr<AVFormatContext, InputFormatContextDeleter>;
-    using OutputFormatContextPtr = std::unique_ptr<AVFormatContext, OutputFormatContextDeleter>;
 
 } // namespace
 
@@ -197,8 +167,8 @@ namespace {
     {
         RunningStateGuard runningGuard(m_running);
 
-        InputFormatContextPtr inputFmtCtx;
-        OutputFormatContextPtr outputFmtCtx;
+        ffmpeg::InputFormatContextPtr inputFmtCtx;
+        ffmpeg::OutputFormatContextPtr outputFmtCtx;
         ffmpeg::PacketPtr inputPacket;
 
         int videoStreamIndex = -1;
