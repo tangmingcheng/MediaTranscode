@@ -5,6 +5,7 @@
 #include "internal/FFmpegUtils.h"
 
 #include <algorithm>
+#include <memory>
 #include <sstream>
 #include <utility>
 
@@ -18,15 +19,13 @@ extern "C" {
 namespace media::ffmpeg {
 
 FFmpegAudioPipeline::FFmpegAudioPipeline()
-    : m_fifo(new FFmpegAudioFifo())
+    : m_fifo(std::make_unique<FFmpegAudioFifo>())
 {
 }
 
 FFmpegAudioPipeline::~FFmpegAudioPipeline()
 {
     reset();
-    delete m_fifo;
-    m_fifo = nullptr;
 }
 
 FFmpegAudioPipeline::FFmpegAudioPipeline(FFmpegAudioPipeline&& other) noexcept
@@ -41,7 +40,6 @@ FFmpegAudioPipeline& FFmpegAudioPipeline::operator=(FFmpegAudioPipeline&& other)
     }
 
     reset();
-    delete m_fifo;
 
     m_mode = other.m_mode;
     m_codec = other.m_codec;
@@ -51,8 +49,8 @@ FFmpegAudioPipeline& FFmpegAudioPipeline::operator=(FFmpegAudioPipeline&& other)
     m_timeline = other.m_timeline;
     m_decoderCtx = std::move(other.m_decoderCtx);
     m_encoderCtx = std::move(other.m_encoderCtx);
-    m_swrCtx = other.m_swrCtx;
-    m_fifo = other.m_fifo;
+    m_swrCtx = std::move(other.m_swrCtx);
+    m_fifo = std::move(other.m_fifo);
     m_decodedFrame = std::move(other.m_decodedFrame);
     m_packetCount = other.m_packetCount;
     m_lastWrittenDts = other.m_lastWrittenDts;
@@ -66,8 +64,7 @@ FFmpegAudioPipeline& FFmpegAudioPipeline::operator=(FFmpegAudioPipeline&& other)
     other.m_outputFmtCtx = nullptr;
     other.m_outputAudioStream = nullptr;
     other.m_timeline = nullptr;
-    other.m_swrCtx = nullptr;
-    other.m_fifo = new FFmpegAudioFifo();
+    other.m_fifo = std::make_unique<FFmpegAudioFifo>();
     other.m_packetCount = 0;
     other.m_lastWrittenDts = AV_NOPTS_VALUE;
     other.m_lastWrittenOutTimeMs = 0;
@@ -84,11 +81,7 @@ void FFmpegAudioPipeline::reset()
     }
 
     m_decodedFrame.reset();
-
-    if (m_swrCtx) {
-        swr_free(&m_swrCtx);
-    }
-
+    m_swrCtx.reset();
     m_decoderCtx.reset();
     m_encoderCtx.reset();
 
@@ -308,8 +301,9 @@ bool FFmpegAudioPipeline::initializeResamplerAndFifo(std::string* error)
     int ret = 0;
 
 #if LIBAVUTIL_VERSION_MAJOR >= 57
+    SwrContext* rawSwrCtx = nullptr;
     ret = swr_alloc_set_opts2(
-        &m_swrCtx,
+        &rawSwrCtx,
         &m_encoderCtx->ch_layout,
         m_encoderCtx->sample_fmt,
         m_encoderCtx->sample_rate,
@@ -320,14 +314,15 @@ bool FFmpegAudioPipeline::initializeResamplerAndFifo(std::string* error)
         nullptr
     );
 
-    if (ret < 0 || !m_swrCtx) {
+    if (ret < 0 || !rawSwrCtx) {
         if (error) {
             *error = "swr_alloc_set_opts2 failed: " + errorString(ret);
         }
         return false;
     }
+    m_swrCtx.reset(rawSwrCtx);
 #else
-    m_swrCtx = swr_alloc_set_opts(
+    m_swrCtx.reset(swr_alloc_set_opts(
         nullptr,
         oldAudioChannelLayout(m_encoderCtx.get()),
         m_encoderCtx->sample_fmt,
@@ -337,7 +332,7 @@ bool FFmpegAudioPipeline::initializeResamplerAndFifo(std::string* error)
         m_decoderCtx->sample_rate,
         0,
         nullptr
-    );
+    ));
 
     if (!m_swrCtx) {
         if (error) {
@@ -347,7 +342,7 @@ bool FFmpegAudioPipeline::initializeResamplerAndFifo(std::string* error)
     }
 #endif
 
-    ret = swr_init(m_swrCtx);
+    ret = swr_init(m_swrCtx.get());
     if (ret < 0) {
         if (error) {
             *error = "swr_init failed: " + errorString(ret);
@@ -575,7 +570,7 @@ bool FFmpegAudioPipeline::pushDecodedFrameToFifo(
         return false;
     }
 
-    const int64_t delay = swr_get_delay(m_swrCtx, m_decoderCtx->sample_rate);
+    const int64_t delay = swr_get_delay(m_swrCtx.get(), m_decoderCtx->sample_rate);
     const int dstNbSamples = static_cast<int>(av_rescale_rnd(
         delay + m_decodedFrame->nb_samples,
         m_encoderCtx->sample_rate,
@@ -615,7 +610,7 @@ bool FFmpegAudioPipeline::pushDecodedFrameToFifo(
     }
 
     const int convertedSamples = swr_convert(
-        m_swrCtx,
+        m_swrCtx.get(),
         convertedFrame->extended_data,
         dstNbSamples,
         const_cast<const uint8_t**>(m_decodedFrame->extended_data),
@@ -749,7 +744,7 @@ bool FFmpegAudioPipeline::flushResampler(std::string* error)
     }
 
     while (true) {
-        const int64_t delay = swr_get_delay(m_swrCtx, m_decoderCtx->sample_rate);
+        const int64_t delay = swr_get_delay(m_swrCtx.get(), m_decoderCtx->sample_rate);
         if (delay <= 0) {
             break;
         }
@@ -793,7 +788,7 @@ bool FFmpegAudioPipeline::flushResampler(std::string* error)
         }
 
         const int convertedSamples = swr_convert(
-            m_swrCtx,
+            m_swrCtx.get(),
             convertedFrame->extended_data,
             dstNbSamples,
             nullptr,
