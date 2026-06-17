@@ -67,29 +67,19 @@ namespace {
         return config.width > 0 || config.height > 0;
     }
 
-    bool zeroCopyWouldRequireFrameRateFilter(const TranscodeConfig& config)
-    {
-        return config.fps > 0;
-    }
-
     std::string zeroCopyFilterBlockReason(const HardwareBackendProfile& backend,
                                           const TranscodeConfig& config)
     {
-        const bool requiresSpatialFilter = zeroCopyWouldRequireSpatialFilter(config);
-        const bool requiresFrameRateFilter = zeroCopyWouldRequireFrameRateFilter(config);
-
-        if (requiresSpatialFilter) {
-            if (!backend.supportsZeroCopyFilter) {
-                return "zero-copy backend does not provide an on-device spatial filter";
-            }
-
-            if (!backend.scaleFilterName || !*backend.scaleFilterName) {
-                return "zero-copy backend does not provide a scale filter name";
-            }
+        if (!zeroCopyWouldRequireSpatialFilter(config)) {
+            return {};
         }
 
-        if (requiresFrameRateFilter && !backend.supportsZeroCopyFrameRateFilter) {
-            return "zero-copy backend does not provide an on-device constant-fps filter";
+        if (!backend.supportsZeroCopyFilter) {
+            return "zero-copy backend does not provide an on-device spatial filter";
+        }
+
+        if (!backend.scaleFilterName || !*backend.scaleFilterName) {
+            return "zero-copy backend does not provide a scale filter name";
         }
 
         return {};
