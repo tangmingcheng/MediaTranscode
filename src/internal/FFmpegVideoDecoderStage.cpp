@@ -1,5 +1,6 @@
 #include "internal/FFmpegVideoDecoderStage.h"
 
+#include "internal/FFmpegError.h"
 #include "internal/FFmpegUtils.h"
 
 extern "C" {
@@ -16,10 +17,7 @@ FFmpegVideoDecoderStage::~FFmpegVideoDecoderStage()
 void FFmpegVideoDecoderStage::reset()
 {
     m_hardwareDeviceContext.reset();
-
-    if (m_decoderCtx) {
-        avcodec_free_context(&m_decoderCtx);
-    }
+    m_decoderCtx.reset();
 
     m_inputStream = nullptr;
     m_hardwareDecoderConfig = HardwareDecoderSupport::Config{};
@@ -28,15 +26,13 @@ void FFmpegVideoDecoderStage::reset()
     m_usesHardwareFrames = false;
 }
 
-bool FFmpegVideoDecoderStage::initialize(const Config& config, std::string* error)
+Status FFmpegVideoDecoderStage::initialize(const Config& config)
 {
     reset();
 
     if (!config.inputStream) {
-        if (error) {
-            *error = "FFmpegVideoDecoderStage initialize failed: inputStream is null";
-        }
-        return false;
+        return Status::failure(ErrorInfo::invalidArgument(
+            "FFmpegVideoDecoderStage initialize failed: inputStream is null"));
     }
 
     m_inputStream = config.inputStream;
@@ -53,57 +49,48 @@ bool FFmpegVideoDecoderStage::initialize(const Config& config, std::string* erro
         : avcodec_find_decoder(m_inputStream->codecpar->codec_id);
 
     if (!decoder) {
-        if (error) {
-            *error = "avcodec_find_decoder failed: unsupported input video codec";
-        }
-        return false;
+        return Status::failure(ErrorInfo::unsupported(
+            "avcodec_find_decoder failed: unsupported input video codec"));
     }
 
-    m_decoderCtx = avcodec_alloc_context3(decoder);
+    m_decoderCtx = makeCodecContext(decoder);
     if (!m_decoderCtx) {
-        if (error) {
-            *error = "avcodec_alloc_context3 decoder failed";
-        }
-        return false;
+        return Status::failure(makeAllocationError(
+            "avcodec_alloc_context3 decoder failed"));
     }
 
-    int ret = avcodec_parameters_to_context(m_decoderCtx, m_inputStream->codecpar);
+    int ret = avcodec_parameters_to_context(m_decoderCtx.get(), m_inputStream->codecpar);
     if (ret < 0) {
-        if (error) {
-            *error = "avcodec_parameters_to_context decoder failed: " + errorString(ret);
-        }
-        return false;
+        return Status::failure(makeFFmpegError(
+            "avcodec_parameters_to_context decoder failed", ret));
     }
 
-    if (!initializeHardwareDevice(decoder, error)) {
-        return false;
+    Status hardwareStatus = initializeHardwareDevice(decoder);
+    if (!hardwareStatus) {
+        return hardwareStatus;
     }
 
-    ret = avcodec_open2(m_decoderCtx, decoder, nullptr);
+    ret = avcodec_open2(m_decoderCtx.get(), decoder, nullptr);
     if (ret < 0) {
-        if (error) {
-            *error = "avcodec_open2 decoder failed [" +
-                std::string(decoder->name ? decoder->name : "unknown") +
-                "]: " + errorString(ret);
-        }
-        return false;
+        return Status::failure(makeFFmpegError(
+            "avcodec_open2 decoder failed [" +
+                std::string(decoder->name ? decoder->name : "unknown") + "]",
+            ret));
     }
 
-    return true;
+    return Status::success();
 }
 
-bool FFmpegVideoDecoderStage::initializeHardwareDevice(const AVCodec* decoder,
-                                                       std::string* error)
+Status FFmpegVideoDecoderStage::initializeHardwareDevice(const AVCodec* decoder)
 {
     if (!m_hasHardwarePlan) {
-        return true;
+        return Status::success();
     }
 
     if (!m_hardwareDecoderConfig.valid) {
-        if (error) {
-            *error = "hardware decoder initialization failed: planner returned invalid decoder config";
-        }
-        return false;
+        return Status::failure(makeError(
+            ErrorCode::HardwareUnavailable,
+            "hardware decoder initialization failed: planner returned invalid decoder config"));
     }
 
     if (!m_hardwareDecoderConfig.requiresHardwareDeviceContext) {
@@ -111,7 +98,7 @@ bool FFmpegVideoDecoderStage::initializeHardwareDevice(const AVCodec* decoder,
         m_decoderCtx->get_format = &FFmpegVideoDecoderStage::selectDecoderPixelFormat;
         m_hardwareDeviceAttached = false;
         m_usesHardwareFrames = true;
-        return true;
+        return Status::success();
     }
 
     std::string hardwareError;
@@ -120,18 +107,16 @@ bool FFmpegVideoDecoderStage::initializeHardwareDevice(const AVCodec* decoder,
             decoder,
             nullptr,
             &hardwareError)) {
-        if (error) {
-            *error = hardwareError;
-        }
-        return false;
+        return Status::failure(makeLegacyError(
+            hardwareError,
+            ErrorCode::HardwareUnavailable));
     }
 
     AVBufferRef* deviceRef = m_hardwareDeviceContext.ref();
     if (!deviceRef) {
-        if (error) {
-            *error = "hardware decoder initialization failed: unable to reference device context";
-        }
-        return false;
+        return Status::failure(makeError(
+            ErrorCode::HardwareUnavailable,
+            "hardware decoder initialization failed: unable to reference device context"));
     }
 
     m_decoderCtx->hw_device_ctx = deviceRef;
@@ -140,75 +125,63 @@ bool FFmpegVideoDecoderStage::initializeHardwareDevice(const AVCodec* decoder,
 
     m_hardwareDeviceAttached = true;
     m_usesHardwareFrames = true;
-    return true;
+    return Status::success();
 }
 
-bool FFmpegVideoDecoderStage::sendPacket(AVPacket* packet, std::string* error)
+Status FFmpegVideoDecoderStage::sendPacket(AVPacket* packet)
 {
     if (!m_decoderCtx) {
-        if (error) {
-            *error = "FFmpegVideoDecoderStage sendPacket failed: decoder is not initialized";
-        }
-        return false;
+        return Status::failure(ErrorInfo::notInitialized(
+            "FFmpegVideoDecoderStage sendPacket failed: decoder is not initialized"));
     }
 
-    const int ret = avcodec_send_packet(m_decoderCtx, packet);
+    const int ret = avcodec_send_packet(m_decoderCtx.get(), packet);
     if (ret < 0) {
-        if (error) {
-            *error = "avcodec_send_packet decoder failed: " + errorString(ret);
-        }
-        return false;
+        return Status::failure(makeFFmpegError(
+            "avcodec_send_packet decoder failed", ret));
     }
 
-    return true;
+    return Status::success();
 }
 
-bool FFmpegVideoDecoderStage::sendFlush(std::string* error)
+Status FFmpegVideoDecoderStage::sendFlush()
 {
     if (!m_decoderCtx) {
-        return true;
+        return Status::success();
     }
 
-    const int ret = avcodec_send_packet(m_decoderCtx, nullptr);
+    const int ret = avcodec_send_packet(m_decoderCtx.get(), nullptr);
     if (ret < 0) {
-        if (error) {
-            *error = "avcodec_send_packet decoder flush failed: " + errorString(ret);
-        }
-        return false;
+        return Status::failure(makeFFmpegError(
+            "avcodec_send_packet decoder flush failed", ret));
     }
 
-    return true;
+    return Status::success();
 }
 
-int FFmpegVideoDecoderStage::receiveFrame(AVFrame* frame, std::string* error)
+Result<FFmpegVideoDecoderStage::ReceiveFrameState> FFmpegVideoDecoderStage::receiveFrame(AVFrame* frame)
 {
     if (!m_decoderCtx) {
-        if (error) {
-            *error = "FFmpegVideoDecoderStage receiveFrame failed: decoder is not initialized";
-        }
-        return -1;
+        return Result<ReceiveFrameState>::failure(ErrorInfo::notInitialized(
+            "FFmpegVideoDecoderStage receiveFrame failed: decoder is not initialized"));
     }
 
     if (!frame) {
-        if (error) {
-            *error = "FFmpegVideoDecoderStage receiveFrame failed: frame is null";
-        }
-        return -1;
+        return Result<ReceiveFrameState>::failure(ErrorInfo::invalidArgument(
+            "FFmpegVideoDecoderStage receiveFrame failed: frame is null"));
     }
 
-    const int ret = avcodec_receive_frame(m_decoderCtx, frame);
+    const int ret = avcodec_receive_frame(m_decoderCtx.get(), frame);
     if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
-        return 0;
+        return Result<ReceiveFrameState>::success(ReceiveFrameState::NeedMoreInput);
     }
 
     if (ret < 0) {
-        if (error) {
-            *error = "avcodec_receive_frame decoder failed: " + errorString(ret);
-        }
-        return -1;
+        return Result<ReceiveFrameState>::failure(makeFFmpegError(
+            "avcodec_receive_frame decoder failed", ret));
     }
 
-    return 1;
+    return Result<ReceiveFrameState>::success(ReceiveFrameState::Frame);
 }
 
 bool FFmpegVideoDecoderStage::isInitialized() const
@@ -218,7 +191,7 @@ bool FFmpegVideoDecoderStage::isInitialized() const
 
 AVCodecContext* FFmpegVideoDecoderStage::context() const
 {
-    return m_decoderCtx;
+    return m_decoderCtx.get();
 }
 
 bool FFmpegVideoDecoderStage::hasHardwarePlan() const
