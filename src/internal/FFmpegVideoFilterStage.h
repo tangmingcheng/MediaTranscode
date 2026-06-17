@@ -2,6 +2,7 @@
 
 #include "internal/FFmpegHardwareBackend.h"
 #include "internal/FFmpegHardwareVideoFilterGraph.h"
+#include "internal/FFmpegRAII.h"
 #include "internal/FFmpegVideoFilterGraph.h"
 #include "internal/FFmpegVideoInputMetadata.h"
 
@@ -87,7 +88,7 @@ private:
     HardwareBackendProfile m_hardwareBackend;
     VideoFilterGraph m_filterGraph;
     HardwareVideoFilterGraph m_hardwareFilterGraph;
-    std::deque<AVFrame*> m_bypassedHardwareFrames;
+    std::deque<FramePtr> m_bypassedHardwareFrames;
 
     int64_t m_lastSubmittedPts = AV_NOPTS_VALUE;
     int64_t m_bypassedHardwareFrameLogCount = 0;
