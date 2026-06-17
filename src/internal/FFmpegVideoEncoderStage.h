@@ -1,13 +1,13 @@
 #pragma once
 
 #include "media_transcode/MediaTranscodeTypes.h"
+#include "media_transcode/Result.h"
 #include "internal/FFmpegHardwareBackend.h"
 #include "internal/FFmpegHardwareContext.h"
 #include "internal/FFmpegHardwareEncoderSelector.h"
 #include "internal/FFmpegPipelinePlanner.h"
+#include "internal/FFmpegRAII.h"
 #include "internal/FFmpegVideoInputMetadata.h"
-
-#include <string>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -46,7 +46,7 @@ public:
 
     void reset();
 
-    bool initialize(const Config& config, std::string* error);
+    Status initialize(const Config& config);
 
     bool isInitialized() const;
     AVCodecContext* context() const;
@@ -63,8 +63,8 @@ public:
     const HardwareEncoderSelection& hardwareEncoderSelection() const;
 
 private:
-    bool openEncoderAndCreateOutputStream(std::string* error);
-    bool initializeHardwareDeviceForEncoder(const AVCodec* encoder, std::string* error);
+    Status openEncoderAndCreateOutputStream();
+    Status initializeHardwareDeviceForEncoder(const AVCodec* encoder);
 
 private:
     TranscodeConfig m_config;
@@ -72,7 +72,7 @@ private:
     FFmpegVideoInputMetadata m_inputMetadata;
     AVFormatContext* m_outputFmtCtx = nullptr;
 
-    AVCodecContext* m_encoderCtx = nullptr;
+    CodecContextPtr m_encoderCtx;
     AVStream* m_outputVideoStream = nullptr;
 
     const HardwareDeviceContext* m_hardwareDeviceContext = nullptr;
