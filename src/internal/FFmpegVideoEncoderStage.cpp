@@ -70,6 +70,7 @@ FFmpegVideoEncoderStage::~FFmpegVideoEncoderStage()
 void FFmpegVideoEncoderStage::reset()
 {
     m_encoderCtx.reset();
+    m_encoderHardwareFramesContext.reset();
 
     m_config = TranscodeConfig{};
     m_inputMetadata = FFmpegVideoInputMetadata{};
@@ -85,6 +86,7 @@ void FFmpegVideoEncoderStage::reset()
     m_decoderUsesHardwareFrames = false;
     m_decoderHardwareDeviceAttached = false;
     m_hardwareDeviceAttachedToEncoder = false;
+    m_hardwareFramesContextAttachedToEncoder = false;
     m_zeroCopyPipeline = false;
 
     m_outputFps = 0;
@@ -219,6 +221,12 @@ Status FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream()
         ? m_hardwareEncoderSelection.pixelFormat
         : chooseVideoEncoderPixelFormat(encoder);
 
+    if (selectedPlannedHardwareEncoder &&
+        m_hardwareEncoderSelection.zeroCopy &&
+        m_hardwareBackend.preferredHardwareFrameSoftwareFormat != AV_PIX_FMT_NONE) {
+        m_encoderCtx->sw_pix_fmt = m_hardwareBackend.preferredHardwareFrameSoftwareFormat;
+    }
+
     if (directHardwareFrameEncoder &&
         m_hardwareBackend.directHardwareFrameSoftwareFormat != AV_PIX_FMT_NONE &&
         m_encoderCtx->sw_pix_fmt == AV_PIX_FMT_NONE) {
@@ -238,8 +246,14 @@ Status FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream()
         return hardwareStatus;
     }
 
+    hardwareStatus = initializeHardwareFramesContextForEncoder();
+    if (!hardwareStatus) {
+        return hardwareStatus;
+    }
+
     const bool encoderHardwareReady = directHardwareFrameEncoder ||
-        m_hardwareDeviceAttachedToEncoder;
+        m_hardwareDeviceAttachedToEncoder ||
+        m_hardwareFramesContextAttachedToEncoder;
 
     const bool decoderHardwareReady = directHardwareFrameEncoder ||
         m_decoderHardwareDeviceAttached;
@@ -285,11 +299,13 @@ Status FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream()
     setVideoEncoderOptions(m_encoderCtx.get(), encoder);
 
     spdlog::info(
-        "[ZC][ENCODER] open encoder={}, backend={}, pix_fmt={}, sw_pix_fmt={}, size={}x{}, fps={}/{}",
+        "[ZC][ENCODER] open encoder={}, backend={}, pix_fmt={}, sw_pix_fmt={}, hw_device_ctx={}, hw_frames_ctx={}, size={}x{}, fps={}/{}",
         encoder->name ? encoder->name : "unknown",
         m_hardwareBackend.name ? m_hardwareBackend.name : "none",
         pixelFormatName(m_encoderCtx->pix_fmt),
         pixelFormatName(m_encoderCtx->sw_pix_fmt),
+        m_encoderCtx->hw_device_ctx != nullptr,
+        m_encoderCtx->hw_frames_ctx != nullptr,
         m_encoderCtx->width,
         m_encoderCtx->height,
         m_encoderCtx->framerate.num,
@@ -360,6 +376,60 @@ Status FFmpegVideoEncoderStage::initializeHardwareDeviceForEncoder(const AVCodec
 
     m_encoderCtx->hw_device_ctx = deviceRef.release();
     m_hardwareDeviceAttachedToEncoder = true;
+    return Status::success();
+}
+
+Status FFmpegVideoEncoderStage::initializeHardwareFramesContextForEncoder()
+{
+    if (!m_hasHardwarePlan ||
+        !m_hardwareEncoderSelection.zeroCopy ||
+        !m_encoderCtx) {
+        return Status::success();
+    }
+
+    if (m_hardwareBackend.preferredHardwareFrameSoftwareFormat == AV_PIX_FMT_NONE) {
+        return Status::success();
+    }
+
+    if (m_hardwareBackend.hardwarePixelFormat == AV_PIX_FMT_NONE) {
+        return Status::failure(makeError(
+            ErrorCode::HardwareUnavailable,
+            "hardware frames initialization failed: backend has invalid hardware pixel format"));
+    }
+
+    if (!m_hardwareDeviceContext || !m_hardwareDeviceContext->isInitialized()) {
+        return Status::failure(makeError(
+            ErrorCode::HardwareUnavailable,
+            "hardware frames initialization failed: decoder stage has no hardware device"));
+    }
+
+    std::string hardwareFramesError;
+    if (!m_encoderHardwareFramesContext.initialize(
+            *m_hardwareDeviceContext,
+            m_hardwareBackend.hardwarePixelFormat,
+            m_hardwareBackend.preferredHardwareFrameSoftwareFormat,
+            m_encoderCtx->width,
+            m_encoderCtx->height,
+            std::max(16, m_outputFps * 4),
+            &hardwareFramesError)) {
+        return Status::failure(makeLegacyError(
+            hardwareFramesError,
+            ErrorCode::HardwareUnavailable));
+    }
+
+    BufferRefPtr framesRef = m_encoderHardwareFramesContext.ref();
+    if (!framesRef) {
+        return Status::failure(makeError(
+            ErrorCode::HardwareUnavailable,
+            "hardware frames initialization failed: unable to reference encoder frames context"));
+    }
+
+    if (m_encoderCtx->hw_frames_ctx) {
+        av_buffer_unref(&m_encoderCtx->hw_frames_ctx);
+    }
+
+    m_encoderCtx->hw_frames_ctx = framesRef.release();
+    m_hardwareFramesContextAttachedToEncoder = true;
     return Status::success();
 }
 
