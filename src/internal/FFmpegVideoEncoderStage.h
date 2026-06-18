@@ -5,6 +5,7 @@
 #include "internal/FFmpegHardwareBackend.h"
 #include "internal/FFmpegHardwareContext.h"
 #include "internal/FFmpegHardwareEncoderSelector.h"
+#include "internal/FFmpegHardwareFrames.h"
 #include "internal/FFmpegPipelinePlanner.h"
 #include "internal/FFmpegRAII.h"
 #include "internal/FFmpegVideoInputMetadata.h"
@@ -28,8 +29,8 @@ public:
 
         /*
          * FFmpegVideoEncoderStage does not own this hardware device context.
-         * The decoder stage owns the device; the encoder only keeps an FFmpeg
-         * reference copied from it when hardware encoding is selected.
+         * The decoder stage owns the device; the encoder only keeps FFmpeg
+         * references copied from it when hardware encoding is selected.
          */
         const HardwareDeviceContext* hardwareDeviceContext = nullptr;
         bool decoderUsesHardwareFrames = false;
@@ -65,6 +66,7 @@ public:
 private:
     Status openEncoderAndCreateOutputStream();
     Status initializeHardwareDeviceForEncoder(const AVCodec* encoder);
+    Status initializeHardwareFramesContextForEncoder();
 
 private:
     TranscodeConfig m_config;
@@ -76,6 +78,7 @@ private:
     AVStream* m_outputVideoStream = nullptr;
 
     const HardwareDeviceContext* m_hardwareDeviceContext = nullptr;
+    HardwareFramesContext m_encoderHardwareFramesContext;
     HardwarePipelinePlan m_hardwarePlan;
     HardwareBackendProfile m_hardwareBackend;
     HardwareEncoderSelection m_hardwareEncoderSelection;
@@ -84,6 +87,7 @@ private:
     bool m_decoderUsesHardwareFrames = false;
     bool m_decoderHardwareDeviceAttached = false;
     bool m_hardwareDeviceAttachedToEncoder = false;
+    bool m_hardwareFramesContextAttachedToEncoder = false;
     bool m_zeroCopyPipeline = false;
 
     int m_outputFps = 0;
