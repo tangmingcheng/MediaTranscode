@@ -21,10 +21,19 @@ endif()
 # --------------------------
 add_library(${TARGET_CORE} STATIC
     src/FFmpegTranscoder.cpp
+    src/internal/FFmpegAudioCopyPipeline.cpp
+    src/internal/FFmpegAudioCopyPipeline.h
+    src/internal/FFmpegAudioEncodePipeline.cpp
+    src/internal/FFmpegAudioEncodePipeline.h
     src/internal/FFmpegAudioFifo.cpp
     src/internal/FFmpegAudioFifo.h
+    src/internal/FFmpegAudioPacketWriter.cpp
+    src/internal/FFmpegAudioPacketWriter.h
     src/internal/FFmpegAudioPipeline.cpp
     src/internal/FFmpegAudioPipeline.h
+    src/internal/FFmpegAudioPipelineStrategy.cpp
+    src/internal/FFmpegAudioPipelineStrategy.h
+    src/internal/FFmpegAudioPipelineTypes.h
     src/internal/FFmpegError.h
     src/internal/FFmpegHardwareBackend.cpp
     src/internal/FFmpegHardwareBackend.h
