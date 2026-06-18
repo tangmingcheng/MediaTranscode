@@ -9,6 +9,7 @@
 
 extern "C" {
 #include <libavutil/avutil.h>
+#include <libavutil/hwcontext.h>
 #include <libavutil/mathematics.h>
 #include <libavutil/pixdesc.h>
 }
@@ -51,6 +52,45 @@ AVRational chooseInputSampleAspectRatio(const AVFrame* frame,
     }
 
     return sanitizeSampleAspectRatio(fallbackSampleAspectRatio);
+}
+
+bool isHardwarePixelFormat(AVPixelFormat format)
+{
+    switch (format) {
+    case AV_PIX_FMT_D3D11:
+    case AV_PIX_FMT_CUDA:
+    case AV_PIX_FMT_QSV:
+    case AV_PIX_FMT_VAAPI:
+    case AV_PIX_FMT_DRM_PRIME:
+    case AV_PIX_FMT_VIDEOTOOLBOX:
+        return true;
+    default:
+        return false;
+    }
+}
+
+AVPixelFormat hardwareFrameSoftwareFormat(const AVFrame* frame)
+{
+    if (!frame || !frame->hw_frames_ctx || !frame->hw_frames_ctx->data) {
+        return AV_PIX_FMT_NONE;
+    }
+
+    const auto* framesContext = reinterpret_cast<const AVHWFramesContext*>(frame->hw_frames_ctx->data);
+    return framesContext ? framesContext->sw_format : AV_PIX_FMT_NONE;
+}
+
+AVPixelFormat encoderHardwareSoftwareFormat(const AVCodecContext* encoderCtx,
+                                            const AVFrame* frame)
+{
+    if (encoderCtx && encoderCtx->sw_pix_fmt != AV_PIX_FMT_NONE) {
+        return encoderCtx->sw_pix_fmt;
+    }
+
+    if (encoderCtx && !isHardwarePixelFormat(encoderCtx->pix_fmt)) {
+        return encoderCtx->pix_fmt;
+    }
+
+    return hardwareFrameSoftwareFormat(frame);
 }
 
 } // namespace
@@ -213,11 +253,15 @@ bool FFmpegVideoFilterStage::initializeHardwareFilterGraphFromFrame(
         return false;
     }
 
+    const AVPixelFormat inputSoftwareFormat = hardwareFrameSoftwareFormat(frame);
+    const AVPixelFormat outputSoftwareFormat = encoderHardwareSoftwareFormat(m_encoderCtx, frame);
+
     HardwareVideoFilterGraph::Config config;
     config.inputHardwareFramesContext = frame->hw_frames_ctx;
     config.deviceType = m_hardwareBackend.deviceType;
     config.inputHardwarePixelFormat = static_cast<AVPixelFormat>(frame->format);
-    config.softwarePixelFormat = m_encoderCtx ? m_encoderCtx->pix_fmt : AV_PIX_FMT_NONE;
+    config.inputSoftwarePixelFormat = inputSoftwareFormat;
+    config.softwarePixelFormat = outputSoftwareFormat;
     config.inputWidth = frame->width;
     config.inputHeight = frame->height;
     config.outputWidth = m_encoderCtx ? m_encoderCtx->width : frame->width;
@@ -227,6 +271,9 @@ bool FFmpegVideoFilterStage::initializeHardwareFilterGraphFromFrame(
     config.enableScale = config.outputWidth > 0 &&
         config.outputHeight > 0 &&
         (config.outputWidth != config.inputWidth || config.outputHeight != config.inputHeight);
+    config.enableFormatConversion = inputSoftwareFormat != AV_PIX_FMT_NONE &&
+        outputSoftwareFormat != AV_PIX_FMT_NONE &&
+        inputSoftwareFormat != outputSoftwareFormat;
     config.keepFramesOnDevice = true;
 
     if (!m_hardwareFilterGraph.initialize(config, error)) {
@@ -234,6 +281,21 @@ bool FFmpegVideoFilterStage::initializeHardwareFilterGraphFromFrame(
     }
 
     m_hardwareFilterGraphInitialized = true;
+
+    spdlog::info(
+        "[ZC][FILTER] hardware graph initialized: backend={}, hw_fmt={}, input_sw_fmt={}, output_sw_fmt={}, scale={}, format_convert={}, input_size={}x{}, output_size={}x{}",
+        m_hardwareBackend.name ? m_hardwareBackend.name : "unknown",
+        pixelFormatName(config.inputHardwarePixelFormat),
+        pixelFormatName(config.inputSoftwarePixelFormat),
+        pixelFormatName(config.softwarePixelFormat),
+        config.enableScale,
+        config.enableFormatConversion,
+        config.inputWidth,
+        config.inputHeight,
+        config.outputWidth,
+        config.outputHeight
+    );
+
     return true;
 }
 
@@ -489,11 +551,12 @@ int FFmpegVideoFilterStage::receiveHardwareFrame(AVFrame* frame, std::string* er
             ++m_filteredHardwareFrameLogCount;
             if (shouldLogZeroCopyFrame(m_filteredHardwareFrameLogCount)) {
                 spdlog::debug(
-                    "[ZC][ENCODE] filtered_frame={} fmt={}, hw_frames_ctx={}, encoder_pix_fmt={}",
+                    "[ZC][ENCODE] filtered_frame={} fmt={}, hw_frames_ctx={}, encoder_pix_fmt={}, encoder_sw_pix_fmt={}",
                     m_filteredHardwareFrameLogCount,
                     pixelFormatName(static_cast<AVPixelFormat>(frame->format)),
                     frame->hw_frames_ctx != nullptr,
-                    pixelFormatName(m_encoderCtx ? m_encoderCtx->pix_fmt : AV_PIX_FMT_NONE)
+                    pixelFormatName(m_encoderCtx ? m_encoderCtx->pix_fmt : AV_PIX_FMT_NONE),
+                    pixelFormatName(m_encoderCtx ? m_encoderCtx->sw_pix_fmt : AV_PIX_FMT_NONE)
                 );
             }
             return 1;
