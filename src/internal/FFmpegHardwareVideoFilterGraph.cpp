@@ -22,6 +22,11 @@ namespace {
         return ratio.num > 0 && ratio.den > 0;
     }
 
+    bool shouldUseScaleFilter(const HardwareVideoFilterGraphBuilder::Config& config)
+    {
+        return config.enableScale || config.enableFormatConversion;
+    }
+
 } // namespace
 
     std::string HardwareVideoFilterGraphBuilder::buildDescription(const Config& config,
@@ -38,7 +43,7 @@ namespace {
         std::ostringstream desc;
         bool hasFilter = false;
 
-        if (config.enableScale) {
+        if (shouldUseScaleFilter(config)) {
             if (!supportsHardwareScale(config.deviceType)) {
                 if (error) {
                     *error = "hardware filter graph build failed: device does not have a mapped scale filter";
@@ -58,6 +63,14 @@ namespace {
                  << config.outputWidth
                  << ":"
                  << config.outputHeight;
+
+            if (config.deviceType == HardwareDeviceType::CUDA) {
+                const char* formatName = softwarePixelFormatName(config.softwareFormat);
+                if (formatName && *formatName) {
+                    desc << ":format=" << formatName;
+                }
+            }
+
             hasFilter = true;
         }
 
@@ -279,6 +292,7 @@ namespace {
         builderConfig.outputHeight = config.outputHeight;
         builderConfig.softwareFormat = config.softwarePixelFormat;
         builderConfig.enableScale = config.enableScale;
+        builderConfig.enableFormatConversion = config.enableFormatConversion;
         builderConfig.keepFramesOnDevice = config.keepFramesOnDevice;
 
         std::string builderError;
