@@ -20,6 +20,11 @@ namespace media::ffmpeg {
         bool supportsDirectHardwareFrameEncode = false;
         bool encoderRequiresHardwareDeviceContext = true;
         AVPixelFormat directHardwareFrameSoftwareFormat = AV_PIX_FMT_NONE;
+
+        // Preferred software layout inside hardware surfaces when a hardware
+        // encoder consumes AV_PIX_FMT_* hardware frames. For NVIDIA CUDA/NVENC
+        // this is normally NV12 for H.264/HEVC 8-bit zero-copy paths.
+        AVPixelFormat preferredHardwareFrameSoftwareFormat = AV_PIX_FMT_NONE;
     };
 
     class HardwareBackendRegistry {
