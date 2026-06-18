@@ -18,12 +18,13 @@ namespace {
                 HardwareDeviceType::D3D11VA,
                 "d3d11va",
                 AV_PIX_FMT_D3D11,
-                "scale_d3d11",
-                true,
+                nullptr,
+                false,
                 true,
                 false,
                 true,
-                AV_PIX_FMT_NONE
+                AV_PIX_FMT_NONE,
+                AV_PIX_FMT_NV12
             };
 
         case HardwareDeviceType::CUDA:
@@ -36,7 +37,8 @@ namespace {
                 true,
                 false,
                 true,
-                AV_PIX_FMT_NONE
+                AV_PIX_FMT_NONE,
+                AV_PIX_FMT_NV12
             };
 
         case HardwareDeviceType::QSV:
@@ -49,7 +51,8 @@ namespace {
                 true,
                 false,
                 true,
-                AV_PIX_FMT_NONE
+                AV_PIX_FMT_NONE,
+                AV_PIX_FMT_NV12
             };
 
         case HardwareDeviceType::VAAPI:
@@ -62,7 +65,8 @@ namespace {
                 true,
                 false,
                 true,
-                AV_PIX_FMT_NONE
+                AV_PIX_FMT_NONE,
+                AV_PIX_FMT_NV12
             };
 
         case HardwareDeviceType::DRM:
@@ -88,6 +92,7 @@ namespace {
                 true,
                 true,
                 false,
+                AV_PIX_FMT_NV12,
                 AV_PIX_FMT_NV12
             };
 
