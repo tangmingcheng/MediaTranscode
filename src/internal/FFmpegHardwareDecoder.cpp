@@ -18,6 +18,30 @@ namespace {
         return requestedDeviceType == HardwareDeviceType::CUDA;
     }
 
+    bool codecNameEndsWith(const AVCodec* codec, const char* suffix)
+    {
+        if (!codec || !codec->name || !suffix) {
+            return false;
+        }
+
+        const std::string name = codec->name;
+        const std::string expectedSuffix = suffix;
+        if (name.size() < expectedSuffix.size()) {
+            return false;
+        }
+
+        return name.compare(
+            name.size() - expectedSuffix.size(),
+            expectedSuffix.size(),
+            expectedSuffix
+        ) == 0;
+    }
+
+    bool isCudaDecoder(const AVCodec* decoder)
+    {
+        return codecNameEndsWith(decoder, "_cuvid");
+    }
+
     bool matchesRequestedDevice(const AVCodecHWConfig* config,
                                 HardwareDeviceType requestedDeviceType)
     {
@@ -142,6 +166,28 @@ namespace {
         return defaultDecoder;
     }
 
+    HardwareDecoderSupport::Config makeCudaCuvidConfig(const AVCodec* decoder)
+    {
+        HardwareDecoderSupport::Config result;
+        if (!isCudaDecoder(decoder)) {
+            return result;
+        }
+
+        result.valid = true;
+        result.deviceType = HardwareDeviceType::CUDA;
+        result.avDeviceType = AV_HWDEVICE_TYPE_CUDA;
+        result.hardwarePixelFormat = AV_PIX_FMT_CUDA;
+        result.decoder = decoder;
+        result.decoderName = decoder && decoder->name ? decoder->name : "";
+
+        // CUVID decoders in some FFmpeg builds do not expose a normal
+        // AVCodecHWConfig list, but they still decode to CUDA frames. We attach
+        // the same CUDA device context used by NVENC, so the decoder, CUDA
+        // filters and encoder stay in one GPU device graph.
+        result.requiresHardwareDeviceContext = true;
+        return result;
+    }
+
     HardwareDecoderSupport::Config findConfigByDeviceType(const AVCodec* decoder,
                                                           HardwareDeviceType requestedDeviceType)
     {
@@ -186,6 +232,10 @@ namespace {
                 requestedDeviceType
             );
             return result;
+        }
+
+        if (isCudaDevice(requestedDeviceType)) {
+            return makeCudaCuvidConfig(selectedDecoder);
         }
 
         return result;
