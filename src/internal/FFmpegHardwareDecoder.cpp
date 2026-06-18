@@ -13,6 +13,11 @@ namespace {
         return requestedDeviceType == HardwareDeviceType::RKMPP;
     }
 
+    bool isCudaDevice(HardwareDeviceType requestedDeviceType)
+    {
+        return requestedDeviceType == HardwareDeviceType::CUDA;
+    }
+
     bool matchesRequestedDevice(const AVCodecHWConfig* config,
                                 HardwareDeviceType requestedDeviceType)
     {
@@ -89,6 +94,30 @@ namespace {
         }
     }
 
+    const char* cudaDecoderName(AVCodecID codecId)
+    {
+        switch (codecId) {
+        case AV_CODEC_ID_H264:
+            return "h264_cuvid";
+        case AV_CODEC_ID_HEVC:
+            return "hevc_cuvid";
+        case AV_CODEC_ID_AV1:
+            return "av1_cuvid";
+        case AV_CODEC_ID_VP8:
+            return "vp8_cuvid";
+        case AV_CODEC_ID_VP9:
+            return "vp9_cuvid";
+        case AV_CODEC_ID_MPEG2VIDEO:
+            return "mpeg2_cuvid";
+        case AV_CODEC_ID_MPEG4:
+            return "mpeg4_cuvid";
+        case AV_CODEC_ID_MJPEG:
+            return "mjpeg_cuvid";
+        default:
+            return nullptr;
+        }
+    }
+
     const AVCodec* decoderForDevice(const AVCodec* defaultDecoder,
                                     HardwareDeviceType requestedDeviceType)
     {
@@ -99,6 +128,15 @@ namespace {
         if (requestedDeviceType == HardwareDeviceType::RKMPP) {
             const char* name = rkmppDecoderName(defaultDecoder->id);
             return name ? avcodec_find_decoder_by_name(name) : nullptr;
+        }
+
+        if (isCudaDevice(requestedDeviceType)) {
+            const char* name = cudaDecoderName(defaultDecoder->id);
+            if (name) {
+                if (const AVCodec* cudaDecoder = avcodec_find_decoder_by_name(name)) {
+                    return cudaDecoder;
+                }
+            }
         }
 
         return defaultDecoder;
