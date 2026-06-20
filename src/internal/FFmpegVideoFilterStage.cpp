@@ -255,9 +255,14 @@ bool FFmpegVideoFilterStage::initializeHardwareFilterGraphFromFrame(
 
     const AVPixelFormat inputSoftwareFormat = hardwareFrameSoftwareFormat(frame);
     const AVPixelFormat outputSoftwareFormat = encoderHardwareSoftwareFormat(m_encoderCtx, frame);
+    const VideoColorMetadata colorMetadata = VideoColorMetadata::fromFrame(
+        frame,
+        m_inputMetadata.sampleAspectRatio
+    );
 
     HardwareVideoFilterGraph::Config config;
     config.inputHardwareFramesContext = frame->hw_frames_ctx;
+    config.backend = m_hardwareBackend;
     config.deviceType = m_hardwareBackend.deviceType;
     config.inputHardwarePixelFormat = static_cast<AVPixelFormat>(frame->format);
     config.inputSoftwarePixelFormat = inputSoftwareFormat;
@@ -268,6 +273,9 @@ bool FFmpegVideoFilterStage::initializeHardwareFilterGraphFromFrame(
     config.outputHeight = m_encoderCtx ? m_encoderCtx->height : frame->height;
     config.inputTimeBase = m_inputMetadata.timeBase;
     config.inputFrameRate = m_inputMetadata.frameRate;
+    config.colorMetadata = colorMetadata;
+    config.outputFps = m_outputFps;
+    config.enableConstantFps = m_enableConstantFps;
     config.enableScale = config.outputWidth > 0 &&
         config.outputHeight > 0 &&
         (config.outputWidth != config.inputWidth || config.outputHeight != config.inputHeight);
@@ -283,7 +291,7 @@ bool FFmpegVideoFilterStage::initializeHardwareFilterGraphFromFrame(
     m_hardwareFilterGraphInitialized = true;
 
     spdlog::info(
-        "[ZC][FILTER] hardware graph initialized: backend={}, hw_fmt={}, input_sw_fmt={}, output_sw_fmt={}, scale={}, format_convert={}, input_size={}x{}, output_size={}x{}",
+        "[ZC][FILTER] hardware graph initialized: backend={}, hw_fmt={}, input_sw_fmt={}, output_sw_fmt={}, scale={}, format_convert={}, input_size={}x{}, output_size={}x{}, color_metadata={}",
         m_hardwareBackend.name ? m_hardwareBackend.name : "unknown",
         pixelFormatName(config.inputHardwarePixelFormat),
         pixelFormatName(config.inputSoftwarePixelFormat),
@@ -293,7 +301,8 @@ bool FFmpegVideoFilterStage::initializeHardwareFilterGraphFromFrame(
         config.inputWidth,
         config.inputHeight,
         config.outputWidth,
-        config.outputHeight
+        config.outputHeight,
+        VideoColorMetadataUtils::describe(colorMetadata)
     );
 
     return true;
