@@ -1,15 +1,14 @@
-prefix=${pcfiledir}/../..
+prefix=/local64
 exec_prefix=${prefix}
-libdir=${prefix}/lib
-includedir=${prefix}/include
+libdir=/local64/lib
+includedir=/local64/include
 
 Name: libavfilter
 Description: FFmpeg audio/video filtering library
-Version: 10.4.100
+Version: 11.17.100
 Requires: 
-Requires.private: libswscale >= 8.3.100, libavformat >= 61.7.100, libavcodec >= 61.19.101, libswresample >= 5.3.100, libavutil >= 59.39.100
+Requires.private: libswscale >= 9.8.100, libavformat >= 62.19.101, libavcodec >= 62.36.101, libswresample >= 6.4.100, libavutil >= 60.33.101
 Conflicts:
-Libs: "-L${libdir}" -lavfilter
-Libs.private: 
-Cflags: "-I${includedir}"
-
+Libs: -L${libdir}  -lavfilter 
+Libs.private: -lstdc++ -pthread -lm -latomic -LD:/mabs/msys64/ucrt64/lib -lz -LD:/mabs/local64/lib -lbs2b -lm -LD:/mabs/local64/lib -lrubberband -lstdc++ -lstdc++ -LD:/mabs/local64/lib -lmysofa -lz -lm -lflite_cmu_time_awb -lflite_cmu_us_awb -lflite_cmu_us_kal -lflite_cmu_us_kal16 -lflite_cmu_us_rms -lflite_cmu_us_slt -lflite_usenglish -lflite_cmulex -lflite -LD:/mabs/local64/lib -lharfbuzz -lm -lfreetype -LD:/mabs/local64/lib -lfribidi -LD:/mabs/local64/lib -lplacebo -lm -lshlwapi -lversion -lshaderc_combined -lspirv-cross -lvulkan -lcfgmgr32 -LD:/mabs/msys64/ucrt64/lib -llcms2 -llcms2_fast_float -lm -pthread -LD:/mabs/local64/lib -lvmaf -pthread -lm -LD:/mabs/local64/lib -ltesseract -lbcrypt -lcharset -lz -llzma -lzstd -lm -lws2_32 -lgdi32 -lcrypt32 -lpthread -fopenmp -lgomp -lleptonica -lz -LD:/mabs/local64/lib -lpng16 -lm -lz -ljpeg -LD:/mabs/local64/lib -lm -ldeflate -LD:/mabs/local64/lib -lwebpmux -lwebp -lsharpyuv -LD:/mabs/msys64/ucrt64/lib -larchive -lbcrypt -lcharset -lws2_32 -lcrypt32 -lbz2 -lb2 -llz4 -lexpat -lm -lpcre2-posix -lpcre2-8 -lssl -lcrypto -lws2_32 -lgdi32 -lcrypt32 -liconv -ltiff -lm -ldeflate -ljpeg -llzma -lzstd -lz -lglslang -lMachineIndependent -lGenericCodeGen -lSPIRV -lSPIRV-Tools-opt -lSPIRV-Tools -lstdc++ -lm -pthread -LD:/mabs/local64/lib -lass -lgdi32 -lfontconfig -lintl -liconv -lm -LD:/mabs/msys64/ucrt64/lib -lexpat -lharfbuzz -lm -lfribidi -lfreetype -LD:/mabs/local64/lib -lvidstab -lm -fopenmp -LD:/mabs/msys64/ucrt64/lib -lzmq -lstdc++ -liphlpapi -lpthread -lws2_32 -lsodium -lpthread -pthread -LD:/mabs/local64/lib -lzimg -lstdc++ -lOpenCL -LD:/mabs/local64/lib -lfontconfig -lintl -liconv -lm -lfreetype -LD:/mabs/msys64/ucrt64/lib -lexpat -lm -LD:/mabs/local64/lib -lfreetype -ldl -LD:/mabs/local64/lib/pkgconfig/../ -lvpl -lole32 -lgdi32 -luuid
+Cflags: -I${includedir}

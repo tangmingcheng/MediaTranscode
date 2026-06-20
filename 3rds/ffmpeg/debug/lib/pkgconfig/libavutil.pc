@@ -1,15 +1,14 @@
-prefix=${pcfiledir}/../..
+prefix=/local64
 exec_prefix=${prefix}
-libdir=${prefix}/lib
-includedir=${prefix}/../include
+libdir=/local64/lib
+includedir=/local64/include
 
 Name: libavutil
 Description: FFmpeg utility library
-Version: 59.39.100
+Version: 60.33.101
 Requires: 
 Requires.private: 
 Conflicts:
-Libs: "-L${libdir}" -lavutil
-Libs.private: -luser32 -lbcrypt
-Cflags: "-I${includedir}"
-
+Libs: -L${libdir}  -lavutil 
+Libs.private: -lm -LD:/mabs/msys64/ucrt64/lib -lz -LD:/mabs/local64/lib/pkgconfig/../ -lvpl -lole32 -lgdi32 -luuid -lOpenCL -LD:/mabs/msys64/ucrt64/lib -lssl -lcrypto -lws2_32 -lgdi32 -lcrypt32 -luser32 -lbcrypt -latomic -pthread -ldl
+Cflags: -I${includedir}

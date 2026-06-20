@@ -1,15 +1,14 @@
-prefix=${pcfiledir}/../..
+prefix=/local64
 exec_prefix=${prefix}
-libdir=${prefix}/lib
-includedir=${prefix}/../include
+libdir=/local64/lib
+includedir=/local64/include
 
 Name: libswscale
 Description: FFmpeg image rescaling library
-Version: 8.3.100
+Version: 9.8.100
 Requires: 
-Requires.private: libavutil >= 59.39.100
+Requires.private: libavutil >= 60.33.101
 Conflicts:
-Libs: "-L${libdir}" -lswscale
-Libs.private: 
-Cflags: "-I${includedir}"
-
+Libs: -L${libdir}  -lswscale 
+Libs.private: -lm -latomic -lglslang -lMachineIndependent -lGenericCodeGen -lSPIRV -lSPIRV-Tools-opt -lSPIRV-Tools -lstdc++ -lm -pthread
+Cflags: -I${includedir}

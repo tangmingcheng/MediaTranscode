@@ -1,15 +1,14 @@
-prefix=${pcfiledir}/../..
+prefix=/local64
 exec_prefix=${prefix}
-libdir=${prefix}/lib
-includedir=${prefix}/../include
+libdir=/local64/lib
+includedir=/local64/include
 
 Name: libavdevice
 Description: FFmpeg device handling library
-Version: 61.3.100
+Version: 62.4.100
 Requires: 
-Requires.private: libavfilter >= 10.4.100, libswscale >= 8.3.100, libavformat >= 61.7.100, libavcodec >= 61.19.101, libswresample >= 5.3.100, libavutil >= 59.39.100
+Requires.private: libavfilter >= 11.17.100, libswscale >= 9.8.100, libavformat >= 62.19.101, libavcodec >= 62.36.101, libswresample >= 6.4.100, libavutil >= 60.33.101
 Conflicts:
-Libs: "-L${libdir}" -lavdevice
-Libs.private: -lpsapi -lole32 -lstrmiids -luuid -loleaut32 -lshlwapi -lgdi32 -lvfw32
-Cflags: "-I${includedir}"
-
+Libs: -L${libdir}  -lavdevice 
+Libs.private: -lstdc++ -lole32 -luuid -loleaut32 -lpsapi -lole32 -lstrmiids -luuid -loleaut32 -lshlwapi -lgdi32 -lstdc++ -lole32 -luuid -loleaut32 -lm -latomic -LD:/mabs/local64/lib -lzvbi -lpthread -lm -lws2_32 -liconv -lpng -lz -LD:/mabs/local64/lib -lopenal -Wl,--as-needed,--no-copy-dt-needed-entries -latomic -ldl -lavrt -lwinmm -lm -luuid -lole32 -lvfw32 -LD:/mabs/msys64/ucrt64/lib -lcdio_paranoia -lcdio_cdda -lcdio -lm -lwinmm -L/ucrt64/lib -liconv -LD:/mabs/msys64/ucrt64/lib -lcaca -lz -ldl
+Cflags: -I${includedir}

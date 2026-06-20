@@ -1,15 +1,14 @@
-prefix=${pcfiledir}/../..
+prefix=/local64
 exec_prefix=${prefix}
-libdir=${prefix}/lib
-includedir=${prefix}/../include
+libdir=/local64/lib
+includedir=/local64/include
 
 Name: libavformat
 Description: FFmpeg container format library
-Version: 61.7.100
+Version: 62.19.101
 Requires: 
-Requires.private: libavcodec >= 61.19.101, libswresample >= 5.3.100, libavutil >= 59.39.100
+Requires.private: libavcodec >= 62.36.101, libswresample >= 6.4.100, libavutil >= 60.33.101
 Conflicts:
-Libs: "-L${libdir}" -lavformat
-Libs.private: -lsecur32 -lws2_32
-Cflags: "-I${includedir}"
-
+Libs: -L${libdir}  -lavformat 
+Libs.private: -lm -latomic -LD:/mabs/local64/lib -lxml2 -liconv -lm -lbcrypt -lbz2 -LD:/mabs/local64/lib -lgme D:/mabs/msys64/ucrt64/lib/libstdc++.a -lgcc -lpthread -lgcc -LD:/mabs/msys64/ucrt64/lib -lz -LD:/mabs/msys64/ucrt64/lib -lmodplug -lstdc++ -lm -LD:/mabs/local64/lib -lopenmpt -lole32 -lrpcrt4 -lrpcrt4 -lstdc++ -LD:/mabs/msys64/ucrt64/lib -lchromaprint -LD:/mabs/local64/lib -lbluray -lssp -lxml2 -liconv -lm -lbcrypt -LD:/mabs/msys64/ucrt64/lib -lz -LD:/mabs/msys64/ucrt64/lib -lssl -lcrypto -lws2_32 -lgdi32 -lcrypt32 -LD:/mabs/local64/lib -lrist -lws2_32 -liphlpapi -lbcrypt -pthread -LD:/mabs/msys64/ucrt64/lib -lcjson -lm -llz4 -LD:/mabs/local64/lib -lrtmp -lgmp -lws2_32 -lwinmm -lgdi32 -lgnutls -lws2_32 -lws2_32 -lgmp -latomic -ladvapi32 -lcrypt32 -lncrypt -lbcrypt -lcrypt32 -LD:/mabs/msys64/ucrt64/lib -ltasn1 -lz -lbrotlienc -lbrotlidec -lbrotlicommon -lzstd -lhogweed -lgmp -lnettle -LD:/mabs/local64/lib -lsrt -lwsock32 -lws2_32 D:/mabs/msys64/ucrt64/lib/libstdc++.a -lmingw32 -lgcc -lmingwex -lkernel32 -lpthread -ladvapi32 -lshell32 -luser32 -lkernel32 -lmingw32 -lgcc -lmingwex -lkernel32 -LD:/mabs/msys64/ucrt64/lib -lssl -lcrypto -lws2_32 -lgdi32 -lcrypt32 -LD:/mabs/msys64/ucrt64/lib -lzmq -lstdc++ -liphlpapi -lpthread -lws2_32 -lsodium -lpthread -pthread -lws2_32 -ldl
+Cflags: -I${includedir}

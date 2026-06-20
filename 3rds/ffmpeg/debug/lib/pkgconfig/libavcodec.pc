@@ -1,15 +1,14 @@
-prefix=${pcfiledir}/../..
+prefix=/local64
 exec_prefix=${prefix}
-libdir=${prefix}/lib
-includedir=${prefix}/../include
+libdir=/local64/lib
+includedir=/local64/include
 
 Name: libavcodec
 Description: FFmpeg codec library
-Version: 61.19.101
+Version: 62.36.101
 Requires: 
-Requires.private: libswresample >= 5.3.100, libavutil >= 59.39.100
+Requires.private: libswresample >= 6.4.100, libavutil >= 60.33.101
 Conflicts:
-Libs: "-L${libdir}" -lavcodec
-Libs.private: -lmfuuid -lole32 -lstrmiids -lole32 -luser32
-Cflags: "-I${includedir}"
-
+Libs: -L${libdir}  -lavcodec  -lAudioToolboxWrapper -lshlwapi -lshell32
+Libs.private: -LD:/mabs/local64/lib -lvpx -lm -lm -lpthread -LD:/mabs/local64/lib -lvpx -lm -lm -lpthread -LD:/mabs/local64/lib -lvpx -lm -lm -lpthread -LD:/mabs/local64/lib -lvpx -lm -lm -lpthread -LD:/mabs/local64/lib -lwebpmux -lwebp -lsharpyuv -pthread -lm -latomic -llzma -LD:/mabs/local64/lib -laribb24 -lm -lpng16 -lm -LD:/mabs/msys64/ucrt64/lib -lz -LD:/mabs/local64/lib -ldav1d -LD:/mabs/local64/lib -ldavs2 -LD:/mabs/msys64/ucrt64/lib -lopencore-amrwb -LD:/mabs/local64/lib -luavs3d -lm -lpthread -LD:/mabs/local64/lib -lvvdec D:/mabs/msys64/ucrt64/lib/libstdc++.a -lmingw32 -lgcc -lmingwex -lkernel32 -lpthread -ladvapi32 -lshell32 -luser32 -lkernel32 -lmingw32 -lgcc -lmingwex -lkernel32 -LD:/mabs/local64/lib -lzvbi -lpthread -lm -lws2_32 -liconv -lpng -lz -lsnappy -lstdc++ -LD:/mabs/local64/lib -laom -lcodec2 -LD:/mabs/local64/lib -lfdk-aac -lgsm -lilbc -pthread -LD:/mabs/local64/lib -ljxl -lm -lstdc++ -lhwy -LD:/mabs/msys64/ucrt64/lib -lbrotlienc -lbrotlidec -lbrotlicommon -ljxl_cms -lm -lstdc++ -llcms2 -llcms2_fast_float -lm -pthread -LD:/mabs/local64/lib -ljxl_threads -lm -LD:/mabs/local64/lib -llc3 -lm -lmp3lame -lm -LD:/mabs/msys64/ucrt64/lib -lopencore-amrnb -LD:/mabs/msys64/ucrt64/lib -lopenjp2 -LD:/mabs/local64/lib -lopus -LD:/mabs/local64/lib -lrav1e -lkernel32 -lntdll -luserenv -lws2_32 -ldbghelp -Wl,--allow-multiple-definition -LD:/mabs/local64/lib -lm -lshine -LD:/mabs/local64/lib -lspeex -LD:/mabs/local64/lib -lSvtAv1Enc -LD:/mabs/local64/lib -lSvtJpegxs -LD:/mabs/msys64/ucrt64/lib -ltheoraenc -ltheoradec -LD:/mabs/local64/lib -logg -ltwolame -LD:/mabs/local64/lib -lvo-amrwbenc -LD:/mabs/local64/lib -lvorbis -lm -logg -LD:/mabs/local64/lib -lvorbisenc -lvorbis -lm -logg -LD:/mabs/local64/lib -lSvtVp9Enc -LD:/mabs/local64/lib -lvvenc D:/mabs/msys64/ucrt64/lib/libstdc++.a -lmingw32 -lgcc -lmingwex -lkernel32 -lpthread -ladvapi32 -lshell32 -luser32 -lkernel32 -lmingw32 -lgcc -lmingwex -lkernel32 -LD:/mabs/local64/lib -lwebp -lsharpyuv -LD:/mabs/local64/lib -lx264 -LD:/mabs/local64/lib -lx265 -lxavs -pthread -lm -LD:/mabs/local64/lib -lxavs2 -lxvidcore -LD:/mabs/local64/lib -lSvtHevcEnc -LD:/mabs/msys64/ucrt64/lib -lopenh264 -pthread -lm -LD:/mabs/local64/lib -lkvazaar -lpthread -lole32 -luser32 -LD:/mabs/msys64/ucrt64/lib -lz -ldl -LD:/mabs/local64/lib/pkgconfig/../ -lvpl -lole32 -lgdi32 -luuid
+Cflags: -I${includedir}
