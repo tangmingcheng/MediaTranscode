@@ -3,8 +3,8 @@
 #include "internal/FFmpegHardwareBackend.h"
 #include "internal/FFmpegUtils.h"
 
-#include <cstdio>
-#include <sstream>
+#include "spdlog/spdlog.h"
+
 #include <utility>
 
 extern "C" {
@@ -22,9 +22,10 @@ namespace {
         return ratio.num > 0 && ratio.den > 0;
     }
 
-    bool shouldUseScaleFilter(const HardwareVideoFilterGraphBuilder::Config& config)
+    bool hasResolvedBackend(const HardwareBackendProfile& backend)
     {
-        return config.enableScale || config.enableFormatConversion;
+        return backend.deviceType != HardwareDeviceType::None &&
+            backend.deviceType != HardwareDeviceType::Auto;
     }
 
 } // namespace
@@ -32,72 +33,32 @@ namespace {
     std::string HardwareVideoFilterGraphBuilder::buildDescription(const Config& config,
                                                                   std::string* error)
     {
-        if (config.deviceType == HardwareDeviceType::None ||
-            config.deviceType == HardwareDeviceType::Auto) {
-            if (error) {
-                *error = "hardware filter graph build failed: invalid hardware device type";
-            }
-            return {};
-        }
+        HardwareVideoFilterRequest request;
+        request.backend = hasResolvedBackend(config.backend)
+            ? config.backend
+            : HardwareBackendRegistry::profileFor(config.deviceType);
+        request.outputWidth = config.outputWidth;
+        request.outputHeight = config.outputHeight;
+        request.softwareFormat = config.softwareFormat;
+        request.outputFps = config.outputFps;
+        request.enableConstantFps = config.enableConstantFps;
+        request.enableScale = config.enableScale;
+        request.enableFormatConversion = config.enableFormatConversion;
+        request.keepFramesOnDevice = config.keepFramesOnDevice;
 
-        std::ostringstream desc;
-        bool hasFilter = false;
+        const HardwareVideoFilterPlan plan = HardwareVideoFilterPipelinePlanner::build(
+            request,
+            error
+        );
 
-        if (shouldUseScaleFilter(config)) {
-            if (!supportsHardwareScale(config.deviceType)) {
-                if (error) {
-                    *error = "hardware filter graph build failed: device does not have a mapped scale filter";
-                }
-                return {};
-            }
-
-            if (config.outputWidth <= 0 || config.outputHeight <= 0) {
-                if (error) {
-                    *error = "hardware filter graph build failed: invalid output size";
-                }
-                return {};
-            }
-
-            desc << scaleFilterName(config.deviceType)
-                 << "="
-                 << config.outputWidth
-                 << ":"
-                 << config.outputHeight;
-
-            if (config.deviceType == HardwareDeviceType::CUDA) {
-                const char* formatName = softwarePixelFormatName(config.softwareFormat);
-                if (formatName && *formatName) {
-                    desc << ":format=" << formatName;
-                }
-            }
-
-            hasFilter = true;
-        }
-
-        if (!config.keepFramesOnDevice) {
-            if (hasFilter) {
-                desc << ",";
-            }
-
-            desc << "hwdownload";
-            hasFilter = true;
-
-            const char* formatName = softwarePixelFormatName(config.softwareFormat);
-            if (formatName) {
-                desc << ",format=pix_fmts=" << formatName;
-            }
-        }
-
-        if (!hasFilter) {
-            return "null";
-        }
-
-        return desc.str();
+        return plan.description;
     }
 
     bool HardwareVideoFilterGraphBuilder::supportsHardwareScale(HardwareDeviceType deviceType)
     {
-        return scaleFilterName(deviceType) != nullptr;
+        return HardwareVideoFilterPipelinePlanner::supportsHardwareScale(
+            HardwareBackendRegistry::profileFor(deviceType)
+        );
     }
 
     const char* HardwareVideoFilterGraphBuilder::scaleFilterName(HardwareDeviceType deviceType)
@@ -107,11 +68,7 @@ namespace {
 
     const char* HardwareVideoFilterGraphBuilder::softwarePixelFormatName(AVPixelFormat format)
     {
-        if (format == AV_PIX_FMT_NONE) {
-            return nullptr;
-        }
-
-        return av_get_pix_fmt_name(format);
+        return HardwareVideoFilterPipelinePlanner::softwarePixelFormatName(format);
     }
 
     HardwareVideoFilterGraph::~HardwareVideoFilterGraph()
@@ -181,6 +138,38 @@ namespace {
             if (error) {
                 *error = "HardwareVideoFilterGraph initialize failed: invalid input size";
             }
+            return false;
+        }
+
+        const HardwareBackendProfile backend = resolveBackend(
+            config.backend,
+            config.deviceType
+        );
+
+        HardwareVideoFilterRequest filterRequest;
+        filterRequest.backend = backend;
+        filterRequest.outputWidth = config.outputWidth;
+        filterRequest.outputHeight = config.outputHeight;
+        filterRequest.softwareFormat = config.softwarePixelFormat;
+        filterRequest.outputFps = config.outputFps;
+        filterRequest.enableConstantFps = config.enableConstantFps;
+        filterRequest.enableScale = config.enableScale;
+        filterRequest.enableFormatConversion = config.enableFormatConversion;
+        filterRequest.keepFramesOnDevice = config.keepFramesOnDevice;
+
+        std::string planError;
+        const HardwareVideoFilterPlan filterPlan = HardwareVideoFilterPipelinePlanner::build(
+            filterRequest,
+            &planError
+        );
+
+        if (filterPlan.description.empty()) {
+            if (error) {
+                *error = planError.empty()
+                    ? "build hardware video filter plan failed"
+                    : planError;
+            }
+            reset();
             return false;
         }
 
@@ -279,31 +268,6 @@ namespace {
             return false;
         }
 
-        HardwareVideoFilterGraphBuilder::Config builderConfig;
-        builderConfig.deviceType = config.deviceType;
-        builderConfig.outputWidth = config.outputWidth;
-        builderConfig.outputHeight = config.outputHeight;
-        builderConfig.softwareFormat = config.softwarePixelFormat;
-        builderConfig.enableScale = config.enableScale;
-        builderConfig.enableFormatConversion = config.enableFormatConversion;
-        builderConfig.keepFramesOnDevice = config.keepFramesOnDevice;
-
-        std::string builderError;
-        const std::string filterDesc = HardwareVideoFilterGraphBuilder::buildDescription(
-            builderConfig,
-            &builderError
-        );
-
-        if (filterDesc.empty()) {
-            if (error) {
-                *error = builderError.empty()
-                    ? "build hardware video filter description failed"
-                    : builderError;
-            }
-            reset();
-            return false;
-        }
-
         FilterInOutPtr outputs = makeFilterInOut();
         FilterInOutPtr inputs = makeFilterInOut();
 
@@ -337,7 +301,7 @@ namespace {
         AVFilterInOut* outputsRaw = outputs.release();
         ret = avfilter_graph_parse_ptr(
             m_graph.get(),
-            filterDesc.c_str(),
+            filterPlan.description.c_str(),
             &inputsRaw,
             &outputsRaw,
             nullptr
@@ -347,7 +311,8 @@ namespace {
 
         if (ret < 0) {
             if (error) {
-                *error = "avfilter_graph_parse_ptr hardware failed [" + filterDesc + "]: " + errorString(ret);
+                *error = "avfilter_graph_parse_ptr hardware failed [" +
+                    filterPlan.description + "]: " + errorString(ret);
             }
             reset();
             return false;
@@ -356,11 +321,23 @@ namespace {
         ret = avfilter_graph_config(m_graph.get(), nullptr);
         if (ret < 0) {
             if (error) {
-                *error = "avfilter_graph_config hardware failed [" + filterDesc + "]: " + errorString(ret);
+                *error = "avfilter_graph_config hardware failed [" +
+                    filterPlan.description + "]: " + errorString(ret);
             }
             reset();
             return false;
         }
+
+        spdlog::info(
+            "[ZC][FILTER] hardware plan backend={}, desc={}, keep_on_device={}, fps={}, scale={}, hwdownload={}, format={}",
+            backend.name ? backend.name : "unknown",
+            filterPlan.description,
+            filterPlan.keepsFramesOnDevice,
+            filterPlan.hasFrameRateFilter,
+            filterPlan.hasHardwareScale,
+            filterPlan.downloadsToSoftware,
+            filterPlan.hasSoftwareFormat
+        );
 
         return true;
     }
@@ -467,6 +444,17 @@ namespace {
         }
 
         return AVRational{ 25, 1 };
+    }
+
+    HardwareBackendProfile HardwareVideoFilterGraph::resolveBackend(
+        const HardwareBackendProfile& backend,
+        HardwareDeviceType fallbackDeviceType)
+    {
+        if (hasResolvedBackend(backend)) {
+            return backend;
+        }
+
+        return HardwareBackendRegistry::profileFor(fallbackDeviceType);
     }
 
 } // namespace media::ffmpeg
