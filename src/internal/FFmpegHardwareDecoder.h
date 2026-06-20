@@ -28,6 +28,7 @@ namespace media::ffmpeg {
             AVPixelFormat hardwarePixelFormat = AV_PIX_FMT_NONE;
             const AVCodec* decoder = nullptr;
             std::string decoderName;
+            std::string unavailableReason;
 
             // Some FFmpeg decoders, such as rkmpp, expose internal hardware frames
             // and create their own DRM device/frames context. They do not require
