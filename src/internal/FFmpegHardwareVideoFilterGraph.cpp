@@ -1,5 +1,6 @@
 #include "internal/FFmpegHardwareVideoFilterGraph.h"
 
+#include "internal/FFmpegBufferSourceMetadataApplier.h"
 #include "internal/FFmpegHardwareBackend.h"
 #include "internal/FFmpegUtils.h"
 
@@ -93,10 +94,12 @@ namespace {
         m_bufferSrcCtx = other.m_bufferSrcCtx;
         m_bufferSinkCtx = other.m_bufferSinkCtx;
         m_inputFrameRate = other.m_inputFrameRate;
+        m_colorMetadata = other.m_colorMetadata;
 
         other.m_bufferSrcCtx = nullptr;
         other.m_bufferSinkCtx = nullptr;
         other.m_inputFrameRate = AVRational{ 0, 1 };
+        other.m_colorMetadata = VideoColorMetadata{};
 
         return *this;
     }
@@ -107,6 +110,7 @@ namespace {
         m_bufferSrcCtx = nullptr;
         m_bufferSinkCtx = nullptr;
         m_inputFrameRate = AVRational{ 0, 1 };
+        m_colorMetadata = VideoColorMetadata{};
     }
 
     bool HardwareVideoFilterGraph::initialize(const Config& config, std::string* error)
@@ -192,6 +196,10 @@ namespace {
         }
 
         m_inputFrameRate = chooseInputFrameRate(config.inputFrameRate);
+        m_colorMetadata = config.colorMetadata;
+        m_colorMetadata.sampleAspectRatio = VideoColorMetadataUtils::sanitizeSampleAspectRatio(
+            m_colorMetadata.sampleAspectRatio
+        );
 
         AVFilterContext* bufferSrcCtx = avfilter_graph_alloc_filter(
             m_graph.get(),
@@ -220,7 +228,7 @@ namespace {
         srcParams->time_base = config.inputTimeBase;
         srcParams->width = config.inputWidth;
         srcParams->height = config.inputHeight;
-        srcParams->sample_aspect_ratio = AVRational{ 1, 1 };
+        srcParams->sample_aspect_ratio = m_colorMetadata.sampleAspectRatio;
         srcParams->frame_rate = m_inputFrameRate;
         srcParams->hw_frames_ctx = av_buffer_ref(config.inputHardwareFramesContext);
         if (!srcParams->hw_frames_ctx) {
@@ -239,6 +247,9 @@ namespace {
             reset();
             return false;
         }
+
+        const BufferSourceMetadataApplyReport metadataApplyReport =
+            BufferSourceMetadataApplier::apply(bufferSrcCtx, m_colorMetadata);
 
         ret = avfilter_init_str(bufferSrcCtx, nullptr);
         if (ret < 0) {
@@ -329,14 +340,16 @@ namespace {
         }
 
         spdlog::info(
-            "[ZC][FILTER] hardware plan backend={}, desc={}, keep_on_device={}, fps={}, scale={}, hwdownload={}, format={}",
+            "[ZC][FILTER] hardware plan backend={}, desc={}, keep_on_device={}, fps={}, scale={}, hwdownload={}, format={}, color_metadata={}, color_options_applied={}",
             backend.name ? backend.name : "unknown",
             filterPlan.description,
             filterPlan.keepsFramesOnDevice,
             filterPlan.hasFrameRateFilter,
             filterPlan.hasHardwareScale,
             filterPlan.downloadsToSoftware,
-            filterPlan.hasSoftwareFormat
+            filterPlan.hasSoftwareFormat,
+            VideoColorMetadataUtils::describe(m_colorMetadata),
+            metadataApplyReport.anyApplied()
         );
 
         return true;
@@ -411,6 +424,7 @@ namespace {
             return -1;
         }
 
+        VideoColorMetadataUtils::applyMissingToFrame(frame, m_colorMetadata);
         return 1;
     }
 
