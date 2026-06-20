@@ -1,6 +1,6 @@
 #pragma once
 
-#include "internal/FFmpegHardwareTypes.h"
+#include "internal/FFmpegHardwareVideoFilterPipeline.h"
 #include "internal/FFmpegRAII.h"
 
 #include <string>
@@ -17,10 +17,13 @@ namespace media::ffmpeg {
     class HardwareVideoFilterGraphBuilder {
     public:
         struct Config {
+            HardwareBackendProfile backend;
             HardwareDeviceType deviceType = HardwareDeviceType::None;
             int outputWidth = 0;
             int outputHeight = 0;
             AVPixelFormat softwareFormat = AV_PIX_FMT_NONE;
+            int outputFps = 0;
+            bool enableConstantFps = false;
             bool enableScale = false;
             bool enableFormatConversion = false;
             bool keepFramesOnDevice = true;
@@ -38,6 +41,7 @@ namespace media::ffmpeg {
     public:
         struct Config {
             AVBufferRef* inputHardwareFramesContext = nullptr;
+            HardwareBackendProfile backend;
             HardwareDeviceType deviceType = HardwareDeviceType::None;
             AVPixelFormat inputHardwarePixelFormat = AV_PIX_FMT_NONE;
             AVPixelFormat inputSoftwarePixelFormat = AV_PIX_FMT_NONE;
@@ -48,6 +52,8 @@ namespace media::ffmpeg {
             int outputHeight = 0;
             AVRational inputTimeBase{ 0, 1 };
             AVRational inputFrameRate{ 0, 1 };
+            int outputFps = 0;
+            bool enableConstantFps = false;
             bool enableScale = false;
             bool enableFormatConversion = false;
             bool keepFramesOnDevice = true;
@@ -76,6 +82,8 @@ namespace media::ffmpeg {
 
     private:
         static AVRational chooseInputFrameRate(AVRational inputFrameRate);
+        static HardwareBackendProfile resolveBackend(const HardwareBackendProfile& backend,
+                                                     HardwareDeviceType fallbackDeviceType);
 
         FilterGraphPtr m_graph;
         AVFilterContext* m_bufferSrcCtx = nullptr;
