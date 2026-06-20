@@ -158,7 +158,9 @@ namespace {
 
             if (!attempt.decoderConfig.valid) {
                 attempt.decoderAccepted = false;
-                attempt.reason = "decoder does not support backend hardware frames";
+                attempt.reason = attempt.decoderConfig.unavailableReason.empty()
+                    ? "decoder does not support backend hardware frames"
+                    : attempt.decoderConfig.unavailableReason;
                 plan.attempts.emplace_back(attempt);
                 logAttempt(plan.attempts.back());
                 continue;
