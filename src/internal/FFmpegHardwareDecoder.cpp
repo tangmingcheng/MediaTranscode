@@ -42,6 +42,11 @@ namespace {
         return codecNameEndsWith(decoder, "_cuvid");
     }
 
+    std::string codecName(const AVCodec* codec)
+    {
+        return codec && codec->name ? codec->name : "unknown";
+    }
+
     bool matchesRequestedDevice(const AVCodecHWConfig* config,
                                 HardwareDeviceType requestedDeviceType)
     {
@@ -170,6 +175,7 @@ namespace {
     {
         HardwareDecoderSupport::Config result;
         if (!isCudaDecoder(decoder)) {
+            result.unavailableReason = "CUDA/NVDEC decoder is not available in current FFmpeg build";
             return result;
         }
 
@@ -178,12 +184,8 @@ namespace {
         result.avDeviceType = AV_HWDEVICE_TYPE_CUDA;
         result.hardwarePixelFormat = AV_PIX_FMT_CUDA;
         result.decoder = decoder;
-        result.decoderName = decoder && decoder->name ? decoder->name : "";
+        result.decoderName = codecName(decoder);
 
-        // CUVID decoders in some FFmpeg builds do not expose a normal
-        // AVCodecHWConfig list, but they still decode to CUDA frames. We attach
-        // the same CUDA device context used by NVENC, so the decoder, CUDA
-        // filters and encoder stay in one GPU device graph.
         result.requiresHardwareDeviceContext = true;
         return result;
     }
@@ -194,11 +196,19 @@ namespace {
         HardwareDecoderSupport::Config result;
 
         if (!decoder || requestedDeviceType == HardwareDeviceType::None) {
+            result.unavailableReason = "decoder is null or hardware device is none";
             return result;
         }
 
+        const char* expectedCudaDecoderName = isCudaDevice(requestedDeviceType)
+            ? cudaDecoderName(decoder->id)
+            : nullptr;
+
         const AVCodec* selectedDecoder = decoderForDevice(decoder, requestedDeviceType);
         if (!selectedDecoder) {
+            result.unavailableReason = expectedCudaDecoderName
+                ? "required CUDA/NVDEC decoder is missing: " + std::string(expectedCudaDecoderName)
+                : "hardware decoder is not available for input codec";
             return result;
         }
 
@@ -226,7 +236,7 @@ namespace {
             result.avDeviceType = mapAVDeviceType(config, requestedDeviceType);
             result.hardwarePixelFormat = config->pix_fmt;
             result.decoder = selectedDecoder;
-            result.decoderName = selectedDecoder->name ? selectedDecoder->name : "";
+            result.decoderName = codecName(selectedDecoder);
             result.requiresHardwareDeviceContext = requiresHardwareDeviceContext(
                 config,
                 requestedDeviceType
@@ -235,9 +245,16 @@ namespace {
         }
 
         if (isCudaDevice(requestedDeviceType)) {
-            return makeCudaCuvidConfig(selectedDecoder);
+            HardwareDecoderSupport::Config cudaConfig = makeCudaCuvidConfig(selectedDecoder);
+            if (!cudaConfig.valid && expectedCudaDecoderName) {
+                cudaConfig.unavailableReason = "required CUDA/NVDEC decoder is missing or unusable: " +
+                    std::string(expectedCudaDecoderName) + ", selected decoder=" + codecName(selectedDecoder);
+            }
+            return cudaConfig;
         }
 
+        result.unavailableReason = "decoder " + codecName(selectedDecoder) +
+            " does not expose requested hardware frames";
         return result;
     }
 
@@ -251,6 +268,7 @@ namespace {
             return findConfigByDeviceType(decoder, requestedDeviceType);
         }
 
+        HardwareDecoderSupport::Config lastInvalidConfig;
         for (HardwareDeviceType candidateDeviceType :
              HardwareBackendRegistry::backendPriority(HardwareDeviceType::Auto)) {
             HardwareDecoderSupport::Config config = findConfigByDeviceType(
@@ -261,9 +279,11 @@ namespace {
             if (config.valid) {
                 return config;
             }
+
+            lastInvalidConfig = std::move(config);
         }
 
-        return HardwareDecoderSupport::Config{};
+        return lastInvalidConfig;
     }
 
     bool HardwareDecoderSupport::hasHardwareConfig(const AVCodec* decoder,
