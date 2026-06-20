@@ -48,6 +48,8 @@ add_library(${TARGET_CORE} STATIC
     src/internal/FFmpegHardwareTypes.h
     src/internal/FFmpegHardwareVideoFilterGraph.cpp
     src/internal/FFmpegHardwareVideoFilterGraph.h
+    src/internal/FFmpegHardwareVideoFilterPipeline.cpp
+    src/internal/FFmpegHardwareVideoFilterPipeline.h
     src/internal/FFmpegPipelinePlanner.cpp
     src/internal/FFmpegPipelinePlanner.h
     src/internal/FFmpegRAII.h
