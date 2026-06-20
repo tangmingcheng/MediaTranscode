@@ -2,6 +2,7 @@
 
 #include "internal/FFmpegHardwareVideoFilterPipeline.h"
 #include "internal/FFmpegRAII.h"
+#include "internal/FFmpegVideoColorMetadata.h"
 
 #include <string>
 
@@ -52,6 +53,7 @@ namespace media::ffmpeg {
             int outputHeight = 0;
             AVRational inputTimeBase{ 0, 1 };
             AVRational inputFrameRate{ 0, 1 };
+            VideoColorMetadata colorMetadata;
             int outputFps = 0;
             bool enableConstantFps = false;
             bool enableScale = false;
@@ -89,6 +91,7 @@ namespace media::ffmpeg {
         AVFilterContext* m_bufferSrcCtx = nullptr;
         AVFilterContext* m_bufferSinkCtx = nullptr;
         AVRational m_inputFrameRate{ 0, 1 };
+        VideoColorMetadata m_colorMetadata;
     };
 
 } // namespace media::ffmpeg
