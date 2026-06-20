@@ -204,32 +204,15 @@ namespace {
 
         m_inputFrameRate = chooseInputFrameRate(config.inputFrameRate);
 
-        char args[512] = {};
-        std::snprintf(
-            args,
-            sizeof(args),
-            "video_size=%dx%d:pix_fmt=%d:time_base=%d/%d:pixel_aspect=1/1:frame_rate=%d/%d",
-            config.inputWidth,
-            config.inputHeight,
-            config.inputHardwarePixelFormat,
-            config.inputTimeBase.num,
-            config.inputTimeBase.den,
-            m_inputFrameRate.num,
-            m_inputFrameRate.den
-        );
-
-        int ret = avfilter_graph_create_filter(
-            &m_bufferSrcCtx,
+        AVFilterContext* bufferSrcCtx = avfilter_graph_alloc_filter(
+            m_graph.get(),
             bufferSrc,
-            "in",
-            args,
-            nullptr,
-            m_graph.get()
+            "in"
         );
 
-        if (ret < 0) {
+        if (!bufferSrcCtx) {
             if (error) {
-                *error = "avfilter_graph_create_filter hardware buffer failed: " + errorString(ret);
+                *error = "avfilter_graph_alloc_filter hardware buffer failed";
             }
             reset();
             return false;
@@ -259,8 +242,7 @@ namespace {
             return false;
         }
 
-        ret = av_buffersrc_parameters_set(m_bufferSrcCtx, srcParams.get());
-
+        int ret = av_buffersrc_parameters_set(bufferSrcCtx, srcParams.get());
         if (ret < 0) {
             if (error) {
                 *error = "av_buffersrc_parameters_set hardware buffer failed: " + errorString(ret);
@@ -268,6 +250,17 @@ namespace {
             reset();
             return false;
         }
+
+        ret = avfilter_init_str(bufferSrcCtx, nullptr);
+        if (ret < 0) {
+            if (error) {
+                *error = "avfilter_init_str hardware buffer failed: " + errorString(ret);
+            }
+            reset();
+            return false;
+        }
+
+        m_bufferSrcCtx = bufferSrcCtx;
 
         ret = avfilter_graph_create_filter(
             &m_bufferSinkCtx,
