@@ -34,6 +34,8 @@ add_library(${TARGET_CORE} STATIC
     src/internal/FFmpegAudioPipelineStrategy.cpp
     src/internal/FFmpegAudioPipelineStrategy.h
     src/internal/FFmpegAudioPipelineTypes.h
+    src/internal/FFmpegBufferSourceMetadataApplier.cpp
+    src/internal/FFmpegBufferSourceMetadataApplier.h
     src/internal/FFmpegError.h
     src/internal/FFmpegHardwareBackend.cpp
     src/internal/FFmpegHardwareBackend.h
@@ -57,6 +59,8 @@ add_library(${TARGET_CORE} STATIC
     src/internal/FFmpegTimelineNormalizer.h
     src/internal/FFmpegUtils.cpp
     src/internal/FFmpegUtils.h
+    src/internal/FFmpegVideoColorMetadata.cpp
+    src/internal/FFmpegVideoColorMetadata.h
     src/internal/FFmpegVideoDecoderStage.cpp
     src/internal/FFmpegVideoDecoderStage.h
     src/internal/FFmpegVideoEncoderStage.cpp
