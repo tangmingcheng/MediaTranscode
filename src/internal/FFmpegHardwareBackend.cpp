@@ -38,7 +38,8 @@ namespace {
                 false,
                 true,
                 AV_PIX_FMT_NONE,
-                AV_PIX_FMT_NV12
+                AV_PIX_FMT_NV12,
+                true
             };
 
         case HardwareDeviceType::QSV:
@@ -52,7 +53,8 @@ namespace {
                 false,
                 true,
                 AV_PIX_FMT_NONE,
-                AV_PIX_FMT_NV12
+                AV_PIX_FMT_NV12,
+                true
             };
 
         case HardwareDeviceType::VAAPI:
@@ -66,7 +68,8 @@ namespace {
                 false,
                 true,
                 AV_PIX_FMT_NONE,
-                AV_PIX_FMT_NV12
+                AV_PIX_FMT_NV12,
+                true
             };
 
         case HardwareDeviceType::DRM:
