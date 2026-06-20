@@ -25,6 +25,12 @@ namespace media::ffmpeg {
         // encoder consumes AV_PIX_FMT_* hardware frames. For NVIDIA CUDA/NVENC
         // this is normally NV12 for H.264/HEVC 8-bit zero-copy paths.
         AVPixelFormat preferredHardwareFrameSoftwareFormat = AV_PIX_FMT_NONE;
+
+        // Hardware scale filters do not all expose the same option surface. Keep
+        // the syntax detail in the backend profile so the generic planner does
+        // not need backend-specific if/else branches for common format output.
+        bool scaleFilterSupportsFormatOption = false;
+        const char* scaleFilterFormatOptionName = "format";
     };
 
     class HardwareBackendRegistry {
