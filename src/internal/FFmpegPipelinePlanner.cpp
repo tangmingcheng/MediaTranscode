@@ -1,6 +1,7 @@
 #include "internal/FFmpegPipelinePlanner.h"
 
 #include "internal/FFmpegHardwareContext.h"
+#include "internal/FFmpegVideoEncoderSelector.h"
 
 #include "spdlog/spdlog.h"
 
@@ -13,6 +14,11 @@ extern "C" {
 
 namespace media::ffmpeg {
 namespace {
+
+    constexpr int kScoreZeroCopyHardware = 3000;
+    constexpr int kScoreHardwareDecodeFilterEncode = 2500;
+    constexpr int kScoreHardwareDecodeHardwareEncode = 2000;
+    constexpr int kScoreHardwareDecodeOnly = 1000;
 
     std::string hardwareDeviceName(HardwareDeviceType type)
     {
@@ -39,6 +45,19 @@ namespace {
     {
         const char* name = av_get_pix_fmt_name(format);
         return name ? name : "none";
+    }
+
+    std::string executionModeName(VideoExecutionMode mode)
+    {
+        switch (mode) {
+        case VideoExecutionMode::ZeroCopy:
+            return "zero-copy";
+        case VideoExecutionMode::MixedGpu:
+            return "mixed-gpu";
+        case VideoExecutionMode::Cpu:
+        default:
+            return "cpu";
+        }
     }
 
     std::string videoCodecName(VideoCodec codec)
@@ -85,11 +104,62 @@ namespace {
         return {};
     }
 
+    bool betterAttempt(const HardwarePipelinePlanAttempt& lhs,
+                       const HardwarePipelinePlanAttempt& rhs)
+    {
+        if (lhs.score != rhs.score) {
+            return lhs.score > rhs.score;
+        }
+
+        return static_cast<int>(lhs.requestedDeviceType) < static_cast<int>(rhs.requestedDeviceType);
+    }
+
+    HardwareEncoderSelection makeGenericEncoderSelection(
+        const VideoEncoderSelection& genericSelection,
+        const HardwareBackendProfile& backend)
+    {
+        HardwareEncoderSelection selection;
+        selection.encoder = genericSelection.encoder;
+        selection.encoderName = genericSelection.encoderName;
+        selection.pixelFormat = genericSelection.pixelFormat;
+        selection.zeroCopy = false;
+        selection.hardwareEncoder = selection.encoder
+            ? isHardwareEncoderName(selection.encoder->name)
+            : false;
+        selection.backend = backend;
+        selection.diagnostic = genericSelection.diagnostic;
+        return selection;
+    }
+
+    void applySelectedAttemptToPlan(const HardwarePipelinePlanAttempt& attempt,
+                                    HardwarePipelinePlan& plan)
+    {
+        plan.valid = true;
+        plan.zeroCopy = attempt.executionMode == VideoExecutionMode::ZeroCopy;
+        plan.executionMode = attempt.executionMode;
+        plan.backend = attempt.backend;
+        plan.decoderConfig = attempt.decoderConfig;
+        plan.encoderSelection = attempt.encoderSelection;
+
+        std::ostringstream oss;
+        oss << "selected " << executionModeName(attempt.executionMode)
+            << " backend=" << hardwareDeviceName(plan.backend.deviceType)
+            << ", score=" << attempt.score
+            << ", decoder=" << plan.decoderConfig.decoderName
+            << ", decoder_hw_pix_fmt=" << pixelFormatName(plan.decoderConfig.hardwarePixelFormat)
+            << ", encoder=" << plan.encoderSelection.encoderName
+            << ", encoder_input_pix_fmt=" << pixelFormatName(plan.encoderSelection.pixelFormat)
+            << ", reason=" << attempt.reason;
+        plan.diagnostic = oss.str();
+    }
+
     void logAttempt(const HardwarePipelinePlanAttempt& attempt)
     {
         spdlog::info(
-            "[PLAN] backend={} decoderAccepted={} encoderAccepted={} reason={}",
+            "[PLAN] backend={} mode={} score={} decoderAccepted={} encoderAccepted={} reason={}",
             hardwareDeviceName(attempt.requestedDeviceType),
+            executionModeName(attempt.executionMode),
+            attempt.score,
             attempt.decoderAccepted,
             attempt.encoderAccepted,
             attempt.reason
@@ -135,11 +205,20 @@ namespace {
         plan.allowFallback = config.hardware.allowZeroCopyFallback;
 
         spdlog::info(
-            "[PLAN] request: videoCodec={}, preferZeroCopy=true, allowZeroCopyFallback={}, requestedDevice={}",
+            "[PLAN] request: videoCodec={}, hardwareEnabled={}, preferLowestCpu=true, strictZeroCopy={}, requestedDevice={}",
             videoCodecName(config.videoCodec),
-            plan.allowFallback,
+            config.hardware.enabled,
+            !plan.allowFallback,
             hardwareDeviceName(HardwareDeviceType::Auto)
         );
+
+        if (!config.hardware.enabled) {
+            plan.valid = false;
+            plan.executionMode = VideoExecutionMode::Cpu;
+            plan.diagnostic = "hardware pipeline disabled by config";
+            spdlog::warn("[PLAN] {}", plan.diagnostic);
+            return plan;
+        }
 
         if (!decoder) {
             plan.valid = false;
@@ -149,108 +228,145 @@ namespace {
         }
 
         const std::vector<HardwareDeviceType> priority = backendPriority(HardwareDeviceType::Auto);
-        std::optional<HardwarePipelinePlanAttempt> mixedGpuFallbackAttempt;
+        std::optional<HardwarePipelinePlanAttempt> bestAttempt;
 
         for (HardwareDeviceType deviceType : priority) {
-            HardwarePipelinePlanAttempt attempt;
-            attempt.requestedDeviceType = deviceType;
-            attempt.decoderConfig = HardwareDecoderSupport::findConfig(decoder, deviceType);
+            HardwarePipelinePlanAttempt baseAttempt;
+            baseAttempt.requestedDeviceType = deviceType;
+            baseAttempt.decoderConfig = HardwareDecoderSupport::findConfig(decoder, deviceType);
 
-            if (!attempt.decoderConfig.valid) {
-                attempt.decoderAccepted = false;
-                attempt.reason = attempt.decoderConfig.unavailableReason.empty()
+            if (!baseAttempt.decoderConfig.valid) {
+                baseAttempt.decoderAccepted = false;
+                baseAttempt.reason = baseAttempt.decoderConfig.unavailableReason.empty()
                     ? "decoder does not support backend hardware frames"
-                    : attempt.decoderConfig.unavailableReason;
-                plan.attempts.emplace_back(attempt);
+                    : baseAttempt.decoderConfig.unavailableReason;
+                plan.attempts.emplace_back(baseAttempt);
                 logAttempt(plan.attempts.back());
                 continue;
             }
 
-            attempt.decoderAccepted = true;
-            attempt.backend = HardwareBackendRegistry::profileFor(attempt.decoderConfig.deviceType);
+            baseAttempt.decoderAccepted = true;
+            baseAttempt.backend = HardwareBackendRegistry::profileFor(baseAttempt.decoderConfig.deviceType);
 
-            if (attempt.backend.deviceType == HardwareDeviceType::None ||
-                attempt.backend.hardwarePixelFormat == AV_PIX_FMT_NONE) {
-                attempt.reason = "backend profile is not available";
-                plan.attempts.emplace_back(attempt);
+            if (baseAttempt.backend.deviceType == HardwareDeviceType::None ||
+                baseAttempt.backend.hardwarePixelFormat == AV_PIX_FMT_NONE) {
+                baseAttempt.reason = "backend profile is not available";
+                plan.attempts.emplace_back(baseAttempt);
                 logAttempt(plan.attempts.back());
                 continue;
             }
 
             const std::string filterBlockReason = zeroCopyFilterBlockReason(
-                attempt.backend,
+                baseAttempt.backend,
                 config
             );
 
-            if (!filterBlockReason.empty()) {
-                attempt.reason = filterBlockReason;
+            if (filterBlockReason.empty()) {
+                HardwarePipelinePlanAttempt zeroCopyAttempt = baseAttempt;
+                zeroCopyAttempt.executionMode = VideoExecutionMode::ZeroCopy;
+                zeroCopyAttempt.encoderSelection = HardwareEncoderSelector::selectZeroCopyEncoder(
+                    config.videoCodec,
+                    zeroCopyAttempt.backend
+                );
+                zeroCopyAttempt.encoderAccepted = zeroCopyAttempt.encoderSelection.zeroCopy;
+
+                if (zeroCopyAttempt.encoderAccepted) {
+                    zeroCopyAttempt.score = kScoreZeroCopyHardware;
+                    if (zeroCopyAttempt.backend.supportsZeroCopyFilter) {
+                        zeroCopyAttempt.score = kScoreHardwareDecodeFilterEncode;
+                    }
+
+                    zeroCopyAttempt.reason = "accepted full hardware path: hardware decode + "
+                        + std::string(zeroCopyAttempt.backend.supportsZeroCopyFilter
+                            ? "hardware filter + "
+                            : "direct hardware frame + ")
+                        + "hardware encode";
+                }
+                else {
+                    zeroCopyAttempt.reason = zeroCopyAttempt.encoderSelection.diagnostic.empty()
+                        ? "no zero-copy encoder supports backend hardware frames"
+                        : zeroCopyAttempt.encoderSelection.diagnostic;
+                }
+
+                plan.attempts.emplace_back(zeroCopyAttempt);
+                logAttempt(plan.attempts.back());
+
+                if (zeroCopyAttempt.encoderAccepted &&
+                    (!bestAttempt.has_value() || betterAttempt(zeroCopyAttempt, *bestAttempt))) {
+                    bestAttempt = zeroCopyAttempt;
+                }
             }
             else {
-                attempt.encoderSelection = HardwareEncoderSelector::selectZeroCopyEncoder(
-                    config.videoCodec,
-                    attempt.backend
-                );
-
-                attempt.encoderAccepted = attempt.encoderSelection.zeroCopy;
-                if (attempt.encoderAccepted) {
-                    attempt.reason = "accepted zero-copy path: decoder and encoder share hardware pixel format " +
-                        pixelFormatName(attempt.backend.hardwarePixelFormat);
-                    plan.attempts.emplace_back(attempt);
-                    logAttempt(plan.attempts.back());
-
-                    plan.valid = true;
-                    plan.zeroCopy = true;
-                    plan.executionMode = VideoExecutionMode::ZeroCopy;
-                    plan.backend = attempt.backend;
-                    plan.decoderConfig = attempt.decoderConfig;
-                    plan.encoderSelection = attempt.encoderSelection;
-                    plan.diagnostic = "selected zero-copy backend=" + hardwareDeviceName(plan.backend.deviceType) +
-                        ", decoder=" + plan.decoderConfig.decoderName +
-                        ", encoder=" + plan.encoderSelection.encoderName +
-                        ", hw_pix_fmt=" + pixelFormatName(plan.backend.hardwarePixelFormat);
-                    spdlog::info("[PLAN] selected: {}", plan.diagnostic);
-                    return plan;
-                }
-
-                attempt.reason = attempt.encoderSelection.diagnostic.empty()
-                    ? "no zero-copy encoder supports backend hardware frames"
-                    : attempt.encoderSelection.diagnostic;
+                HardwarePipelinePlanAttempt blockedAttempt = baseAttempt;
+                blockedAttempt.executionMode = VideoExecutionMode::ZeroCopy;
+                blockedAttempt.reason = filterBlockReason;
+                plan.attempts.emplace_back(blockedAttempt);
+                logAttempt(plan.attempts.back());
             }
 
-            if (plan.allowFallback && !mixedGpuFallbackAttempt.has_value()) {
-                HardwareEncoderSelection mixedSelection = HardwareEncoderSelector::selectMixedGpuEncoder(
-                    config.videoCodec,
-                    attempt.backend
-                );
-
-                if (mixedSelection.encoder && mixedSelection.hardwareEncoder) {
-                    HardwarePipelinePlanAttempt mixedAttempt = attempt;
-                    mixedAttempt.encoderSelection = std::move(mixedSelection);
-                    mixedAttempt.encoderAccepted = true;
-                    mixedAttempt.reason = "mixed GPU fallback accepted: hardware decode + software filter + hardware encode";
-                    mixedGpuFallbackAttempt = std::move(mixedAttempt);
-                }
+            if (!plan.allowFallback) {
+                continue;
             }
 
-            plan.attempts.emplace_back(attempt);
+            HardwarePipelinePlanAttempt mixedEncodeAttempt = baseAttempt;
+            mixedEncodeAttempt.executionMode = VideoExecutionMode::MixedGpu;
+            mixedEncodeAttempt.encoderSelection = HardwareEncoderSelector::selectMixedGpuEncoder(
+                config.videoCodec,
+                mixedEncodeAttempt.backend
+            );
+            mixedEncodeAttempt.encoderAccepted = mixedEncodeAttempt.encoderSelection.encoder &&
+                mixedEncodeAttempt.encoderSelection.hardwareEncoder;
+
+            if (mixedEncodeAttempt.encoderAccepted) {
+                mixedEncodeAttempt.score = kScoreHardwareDecodeHardwareEncode;
+                mixedEncodeAttempt.reason = "accepted mixed hardware path: hardware decode + software filter + hardware encode";
+
+                if (!bestAttempt.has_value() || betterAttempt(mixedEncodeAttempt, *bestAttempt)) {
+                    bestAttempt = mixedEncodeAttempt;
+                }
+            }
+            else {
+                mixedEncodeAttempt.reason = mixedEncodeAttempt.encoderSelection.diagnostic.empty()
+                    ? "no hardware encoder accepts software-frame fallback input"
+                    : mixedEncodeAttempt.encoderSelection.diagnostic;
+            }
+
+            plan.attempts.emplace_back(mixedEncodeAttempt);
+            logAttempt(plan.attempts.back());
+
+            const VideoEncoderSelection genericEncoder = VideoEncoderSelector::select(config.videoCodec);
+            HardwarePipelinePlanAttempt hardwareDecodeAttempt = baseAttempt;
+            hardwareDecodeAttempt.executionMode = VideoExecutionMode::MixedGpu;
+            hardwareDecodeAttempt.encoderSelection = makeGenericEncoderSelection(
+                genericEncoder,
+                hardwareDecodeAttempt.backend
+            );
+            hardwareDecodeAttempt.encoderAccepted = hardwareDecodeAttempt.encoderSelection.encoder != nullptr;
+
+            if (hardwareDecodeAttempt.encoderAccepted) {
+                hardwareDecodeAttempt.score = kScoreHardwareDecodeOnly;
+                hardwareDecodeAttempt.reason = "accepted hardware decode path: hardware decode + software filter + generic encode";
+
+                if (!bestAttempt.has_value() || betterAttempt(hardwareDecodeAttempt, *bestAttempt)) {
+                    bestAttempt = hardwareDecodeAttempt;
+                }
+            }
+            else {
+                hardwareDecodeAttempt.reason = "hardware decode path rejected: " + genericEncoder.diagnostic;
+            }
+
+            plan.attempts.emplace_back(hardwareDecodeAttempt);
             logAttempt(plan.attempts.back());
         }
 
-        if (plan.allowFallback && mixedGpuFallbackAttempt.has_value()) {
-            const HardwarePipelinePlanAttempt& selected = *mixedGpuFallbackAttempt;
-            plan.valid = true;
-            plan.zeroCopy = false;
-            plan.executionMode = VideoExecutionMode::MixedGpu;
-            plan.backend = selected.backend;
-            plan.decoderConfig = selected.decoderConfig;
-            plan.encoderSelection = selected.encoderSelection;
-
-            plan.diagnostic = "selected mixed GPU fallback backend=" + hardwareDeviceName(plan.backend.deviceType) +
-                ", decoder=" + plan.decoderConfig.decoderName +
-                ", decoder_hw_pix_fmt=" + pixelFormatName(plan.decoderConfig.hardwarePixelFormat) +
-                ", encoder=" + plan.encoderSelection.encoderName +
-                ", encoder_input_pix_fmt=" + pixelFormatName(plan.encoderSelection.pixelFormat);
-            spdlog::warn("[PLAN] zero-copy unavailable; selected: {}", plan.diagnostic);
+        if (bestAttempt.has_value()) {
+            applySelectedAttemptToPlan(*bestAttempt, plan);
+            if (plan.executionMode == VideoExecutionMode::ZeroCopy) {
+                spdlog::info("[PLAN] selected: {}", plan.diagnostic);
+            }
+            else {
+                spdlog::warn("[PLAN] selected lower-score hardware path: {}", plan.diagnostic);
+            }
             return plan;
         }
 
@@ -259,7 +375,7 @@ namespace {
         plan.executionMode = VideoExecutionMode::Cpu;
 
         std::ostringstream oss;
-        oss << "zero-copy hardware pipeline unavailable for codec="
+        oss << "hardware pipeline unavailable for codec="
             << videoCodecName(config.videoCodec)
             << "; tested backends=";
 
@@ -269,7 +385,10 @@ namespace {
                 oss << " | ";
             }
             first = false;
-            oss << hardwareDeviceName(attempt.requestedDeviceType) << ": " << attempt.reason;
+            oss << hardwareDeviceName(attempt.requestedDeviceType)
+                << ": mode=" << executionModeName(attempt.executionMode)
+                << ", score=" << attempt.score
+                << ", reason=" << attempt.reason;
         }
 
         plan.diagnostic = oss.str();
@@ -277,7 +396,7 @@ namespace {
             spdlog::warn("[PLAN] failed but CPU fallback is allowed: {}", plan.diagnostic);
         }
         else {
-            spdlog::error("[PLAN] failed and fallback is disabled: {}", plan.diagnostic);
+            spdlog::error("[PLAN] failed and zero-copy fallback is disabled: {}", plan.diagnostic);
         }
         return plan;
     }
