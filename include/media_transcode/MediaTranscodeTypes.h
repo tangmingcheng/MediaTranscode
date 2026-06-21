@@ -128,6 +128,9 @@ namespace media {
     // 视频编码基础控制项。
     // 所有字段均为可选：0、Auto 或空字符串表示使用模块默认值。
     struct VideoEncodeOptions {
+        // 兼容旧调用层：Bitrate Control Planner 接管前，CLI/执行层仍读取这些字段。
+        VideoRateControlMode rateControl = VideoRateControlMode::Auto;
+
         VideoEncodeSpeedPreset speedPreset = VideoEncodeSpeedPreset::Auto;
 
         // 关键帧间隔，单位：帧。0 表示自动，默认约 2 秒 GOP。
@@ -135,6 +138,10 @@ namespace media {
 
         // B 帧数量。当前默认仍为 0，保持低延迟行为。
         int maxBFrames = 0;
+
+        // 兼容旧调用层：后续会由 VideoBitrateControlOptions/Plan 替代。
+        int maxBitrateKbps = 0;
+        int bufferSizeKbps = 0;
 
         // 编码器私有参数。面向内部适配/专家模式，普通调用方应优先使用 speedPreset。
         std::string preset;
@@ -187,6 +194,10 @@ namespace media {
         int fps = 0;
 
         VideoCodec videoCodec = VideoCodec::H264;
+
+        // 兼容旧调用层：Bitrate Control Planner 接管前仍作为目标码率入口。
+        int videoBitrateKbps = 3000;
+
         VideoBitrateControlOptions videoBitrate;
         VideoBitrateControlPolicy bitratePolicy;
         VideoEncodeOptions videoEncode;
