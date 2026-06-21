@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <sstream>
+#include <string>
 
 extern "C" {
 #include <libavutil/avstring.h>
@@ -102,6 +103,54 @@ namespace {
         return false;
     }
 
+    bool encoderNameContains(const AVCodec* encoder, const char* token)
+    {
+        return encoder && encoder->name && std::string(encoder->name).find(token) != std::string::npos;
+    }
+
+    bool encoderNameEquals(const AVCodec* encoder, const char* name)
+    {
+        return encoder && encoder->name && std::string(encoder->name) == name;
+    }
+
+    std::string nativePresetForSpeed(const AVCodec* encoder,
+                                     VideoEncodeSpeedPreset speedPreset)
+    {
+        if (speedPreset == VideoEncodeSpeedPreset::Auto || !encoder || !encoder->name) {
+            return {};
+        }
+
+        if (encoderNameContains(encoder, "_nvenc")) {
+            switch (speedPreset) {
+            case VideoEncodeSpeedPreset::Fast:
+                return "p1";
+            case VideoEncodeSpeedPreset::Balanced:
+                return "p4";
+            case VideoEncodeSpeedPreset::Quality:
+                return "p7";
+            case VideoEncodeSpeedPreset::Auto:
+            default:
+                return {};
+            }
+        }
+
+        if (encoderNameEquals(encoder, "libx264") || encoderNameEquals(encoder, "libx265")) {
+            switch (speedPreset) {
+            case VideoEncodeSpeedPreset::Fast:
+                return "fast";
+            case VideoEncodeSpeedPreset::Balanced:
+                return "medium";
+            case VideoEncodeSpeedPreset::Quality:
+                return "slow";
+            case VideoEncodeSpeedPreset::Auto:
+            default:
+                return {};
+            }
+        }
+
+        return {};
+    }
+
     const char* rateControlModeName(VideoRateControlMode mode)
     {
         switch (mode) {
@@ -144,13 +193,18 @@ namespace {
     }
 
     void applyOptionalStringOptions(AVCodecContext* encoderContext,
+                                    const AVCodec* encoder,
                                     const VideoEncodeOptions& options,
                                     VideoEncodeOptionsApplyReport& report)
     {
+        const std::string resolvedPreset = !options.preset.empty()
+            ? options.preset
+            : nativePresetForSpeed(encoder, options.speedPreset);
+
         report.presetApplied = setStringOptionIfSupported(
             encoderContext,
             "preset",
-            options.preset,
+            resolvedPreset,
             report
         );
 
@@ -256,7 +310,7 @@ namespace {
 
     VideoEncodeOptionsApplyReport VideoEncodeOptionsApplier::apply(
         AVCodecContext* encoderContext,
-        const AVCodec* /*encoder*/,
+        const AVCodec* encoder,
         const TranscodeConfig& config,
         int outputFps)
     {
@@ -275,7 +329,7 @@ namespace {
         report.maxBFrames = encoderContext->max_b_frames;
 
         applyRateControlMode(encoderContext, options.rateControl, report);
-        applyOptionalStringOptions(encoderContext, options, report);
+        applyOptionalStringOptions(encoderContext, encoder, options, report);
 
         // Some encoders expose VBV/peak bitrate only as private options. Probe
         // and set them opportunistically while keeping AVCodecContext fields as
