@@ -61,8 +61,11 @@ namespace media {
     };
 
     struct HardwarePipelineConfig {
-        // 后端默认总是优先规划零拷贝路径。
-        // true：零拷贝不可用时允许退回普通 CPU frame 转码路径。
+        // true：默认自动选择 CPU 占用最低的硬件参与路径。
+        // false：显式禁用硬件，强制纯 CPU 解码/滤镜/编码路径。
+        bool enabled = true;
+
+        // true：全硬件零拷贝不可用时，允许退到次优硬件混合路径或 CPU 路径。
         // false：零拷贝不可用则初始化失败，用于压测严格零拷贝能力。
         bool allowZeroCopyFallback = true;
     };
