@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <sstream>
+#include <string>
 
 extern "C" {
 #include <libavcodec/version_major.h>
@@ -128,7 +129,90 @@ namespace {
         return encoder && ((encoder->capabilities & AV_CODEC_CAP_SLICE_THREADS) != 0);
     }
 
-    int scoreEncoder(const AVCodec* encoder, bool preferHardwareEncoder)
+    bool encoderNameEquals(const AVCodec* encoder, const char* expected)
+    {
+        return encoder && encoder->name && std::string(encoder->name) == expected;
+    }
+
+    int softwareEncoderPriority(VideoCodec codec, const AVCodec* encoder)
+    {
+        if (!encoder || encoderIsHardware(encoder)) {
+            return 0;
+        }
+
+        switch (codec) {
+        case VideoCodec::H264:
+            if (encoderNameEquals(encoder, "libx264")) {
+                return 1000;
+            }
+            if (encoderNameEquals(encoder, "libopenh264")) {
+                return 700;
+            }
+            if (encoderNameEquals(encoder, "h264")) {
+                return 500;
+            }
+            return 0;
+
+        case VideoCodec::H265:
+            if (encoderNameEquals(encoder, "libx265")) {
+                return 1000;
+            }
+            if (encoderNameEquals(encoder, "hevc")) {
+                return 500;
+            }
+            if (encoderNameEquals(encoder, "libkvazaar")) {
+                return 100;
+            }
+            return 0;
+
+        case VideoCodec::MPEG4:
+            if (encoderNameEquals(encoder, "mpeg4")) {
+                return 1000;
+            }
+            return 0;
+
+        case VideoCodec::VP8:
+            if (encoderNameEquals(encoder, "libvpx")) {
+                return 1000;
+            }
+            if (encoderNameEquals(encoder, "vp8")) {
+                return 500;
+            }
+            return 0;
+
+        case VideoCodec::VP9:
+            if (encoderNameEquals(encoder, "libvpx-vp9")) {
+                return 1000;
+            }
+            if (encoderNameEquals(encoder, "vp9")) {
+                return 500;
+            }
+            return 0;
+
+        case VideoCodec::AV1:
+            if (encoderNameEquals(encoder, "libsvtav1")) {
+                return 1000;
+            }
+            if (encoderNameEquals(encoder, "libaom-av1")) {
+                return 900;
+            }
+            if (encoderNameEquals(encoder, "librav1e")) {
+                return 700;
+            }
+            if (encoderNameEquals(encoder, "av1")) {
+                return 500;
+            }
+            return 0;
+
+        case VideoCodec::Copy:
+        default:
+            return 0;
+        }
+    }
+
+    int scoreEncoder(const AVCodec* encoder,
+                     VideoCodec codec,
+                     bool preferHardwareEncoder)
     {
         if (!encoder) {
             return -100000;
@@ -143,6 +227,8 @@ namespace {
         else {
             score += hardware ? 100 : 600;
         }
+
+        score += softwareEncoderPriority(codec, encoder);
 
         if (!encoderIsExperimental(encoder)) {
             score += 100;
@@ -167,6 +253,7 @@ namespace {
     }
 
     std::string describeReason(const AVCodec* encoder,
+                               VideoCodec codec,
                                int score,
                                AVPixelFormat pixelFormat,
                                bool preferHardwareEncoder,
@@ -177,6 +264,7 @@ namespace {
             << ", prefer_hardware=" << preferHardwareEncoder
             << ", allow_hardware=" << allowHardwareEncoder
             << ", hardware=" << encoderIsHardware(encoder)
+            << ", software_priority=" << softwareEncoderPriority(codec, encoder)
             << ", experimental=" << encoderIsExperimental(encoder)
             << ", frame_threads=" << encoderSupportsFrameThreads(encoder)
             << ", slice_threads=" << encoderSupportsSliceThreads(encoder)
@@ -259,9 +347,10 @@ namespace {
                 continue;
             }
 
-            candidate.score = scoreEncoder(encoder, preferHardwareEncoder);
+            candidate.score = scoreEncoder(encoder, codec, preferHardwareEncoder);
             candidate.reason = describeReason(
                 encoder,
+                codec,
                 candidate.score,
                 candidate.selectedPixelFormat,
                 preferHardwareEncoder,
