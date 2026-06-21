@@ -41,6 +41,5 @@ namespace media::ffmpeg {
 #endif
 
     bool isHardwareEncoderName(const char* name);
-    void setVideoEncoderOptions(AVCodecContext* encoderCtx, const AVCodec* encoder);
 
 } // namespace media::ffmpeg
