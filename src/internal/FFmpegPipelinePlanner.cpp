@@ -1,6 +1,7 @@
 #include "internal/FFmpegPipelinePlanner.h"
 
 #include "internal/FFmpegHardwareContext.h"
+#include "internal/FFmpegUtils.h"
 #include "internal/FFmpegVideoEncoderSelector.h"
 
 #include "spdlog/spdlog.h"
