@@ -157,9 +157,12 @@ Status FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream()
     }
 
     if (!encoder) {
+        const bool preferHardwareEncoder = m_config.hardware.enabled;
+        const bool allowHardwareEncoder = m_config.hardware.enabled;
         const VideoEncoderSelection encoderSelection = VideoEncoderSelector::select(
             m_config.videoCodec,
-            m_config.hardware.enabled
+            preferHardwareEncoder,
+            allowHardwareEncoder
         );
         encoder = encoderSelection.encoder;
         selectedGenericPixelFormat = encoderSelection.pixelFormat;
@@ -170,9 +173,10 @@ Status FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream()
         }
 
         spdlog::info(
-            "[ENCODER][SELECT] codec={}, preferHardware={}, encoder={}, pix_fmt={}, candidates={}, diagnostic={}",
+            "[ENCODER][SELECT] codec={}, preferHardware={}, allowHardware={}, encoder={}, pix_fmt={}, candidates={}, diagnostic={}",
             static_cast<int>(m_config.videoCodec),
-            m_config.hardware.enabled,
+            preferHardwareEncoder,
+            allowHardwareEncoder,
             encoderSelection.encoderName,
             pixelFormatName(encoderSelection.pixelFormat),
             encoderSelection.candidates.size(),
