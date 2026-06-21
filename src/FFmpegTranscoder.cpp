@@ -276,22 +276,31 @@ namespace {
         outputFmtCtx.reset(rawOutputFmtCtx);
 
         const AVCodec* decoder = avcodec_find_decoder(inputVideoStream->codecpar->codec_id);
-        const ffmpeg::HardwarePipelinePlan plan = ffmpeg::FFmpegPipelinePlanner::planHardwarePipeline(
-            m_config,
-            decoder
-        );
+        ffmpeg::HardwarePipelinePlan plan;
+
+        if (m_config.hardware.enabled) {
+            plan = ffmpeg::FFmpegPipelinePlanner::planHardwarePipeline(
+                m_config,
+                decoder
+            );
+        }
+        else {
+            plan.executionMode = ffmpeg::VideoExecutionMode::Cpu;
+            plan.diagnostic = "hardware disabled by config; using CPU pipeline";
+            spdlog::warn("[PLAN] {}", plan.diagnostic);
+        }
 
         const ffmpeg::HardwarePipelinePlan* executionPlan = nullptr;
         if (plan.valid && plan.executionMode == ffmpeg::VideoExecutionMode::ZeroCopy) {
             executionPlan = &plan;
-            spdlog::info("[PLAN] execution mode: zero-copy hardware pipeline");
+            spdlog::info("[PLAN] execution mode: zero-copy hardware pipeline: {}", plan.diagnostic);
         }
         else if (plan.valid && plan.executionMode == ffmpeg::VideoExecutionMode::MixedGpu) {
             executionPlan = &plan;
-            spdlog::warn("[PLAN] execution mode: mixed GPU fallback pipeline: {}", plan.diagnostic);
+            spdlog::warn("[PLAN] execution mode: mixed hardware pipeline: {}", plan.diagnostic);
         }
         else {
-            if (!m_config.hardware.allowZeroCopyFallback) {
+            if (m_config.hardware.enabled && !m_config.hardware.allowZeroCopyFallback) {
                 fail(plan.diagnostic.empty()
                     ? std::string("zero-copy pipeline planning failed and fallback is disabled")
                     : plan.diagnostic);
@@ -299,7 +308,7 @@ namespace {
             }
 
             spdlog::warn(
-                "[PLAN] execution mode: CPU frame pipeline fallback after GPU planning failed: {}",
+                "[PLAN] execution mode: CPU frame pipeline fallback: {}",
                 plan.diagnostic
             );
         }
