@@ -34,7 +34,8 @@ namespace media::ffmpeg {
 
     class VideoEncoderSelector {
     public:
-        static VideoEncoderSelection select(VideoCodec codec);
+        static VideoEncoderSelection select(VideoCodec codec,
+                                            bool preferHardwareEncoder = false);
         static AVCodecID codecIdFor(VideoCodec codec);
     };
 
