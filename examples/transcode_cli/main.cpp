@@ -306,8 +306,10 @@ namespace {
             << "      --preset <value>            Encoder preset if supported\n"
             << "      --tune <value>              Encoder tune if supported\n"
             << "      --profile <value>           Encoder profile if supported\n"
-            << "      --level <value>             Encoder level if supported\n"
-            << "      --no-zero-copy-fallback     Fail if automatic zero-copy planning is unavailable\n\n"
+            << "      --level <value>             Encoder level if supported\n\n"
+            << "Hardware options:\n"
+            << "      --enable-hardware           Enable automatic lowest-CPU hardware planning (default)\n"
+            << "      --disable-hardware          Force pure CPU decode/filter/encode path\n\n"
             << "Audio output options:\n"
             << "      --audio-codec <value>       aac | opus | mp3\n"
             << "      --audio-bitrate <kbps>      Audio bitrate in kbps\n"
@@ -315,7 +317,7 @@ namespace {
             << "  -h, --help                      Show this help\n\n"
             << "Examples:\n"
             << "  " << executable << " -i input.mp4 -o output.mp4 --video-codec h264 --size 1280x720 --fps 25 --video-bitrate 3000 --audio-codec aac --audio-bitrate 128\n"
-            << "  " << executable << " -i input.mp4 -o output_strict.mp4 --video-codec h265 --size 1280x720 --fps 25 --video-bitrate 3000 --rc cbr --gop 50 --preset p4 --no-zero-copy-fallback\n";
+            << "  " << executable << " -i input.mp4 -o output_cpu.mp4 --disable-hardware --video-codec h265 --size 1280x720 --fps 25 --video-bitrate 3000 --rc cbr --gop 50\n";
     }
 
     CliOptions parseOptions(int argc, char* argv[])
@@ -332,7 +334,7 @@ namespace {
         options.config.audioCodec = media::AudioCodec::AAC;
         options.config.audioBitrateKbps = 128;
         options.config.videoBitrateKbps = 3000;
-        options.config.hardware.allowZeroCopyFallback = true;
+        options.config.hardware.enabled = true;
 
         int positionalIndex = 0;
 
@@ -410,6 +412,12 @@ namespace {
             else if (arg == "--level") {
                 options.config.videoEncode.level = requireValue(arg);
             }
+            else if (arg == "--enable-hardware") {
+                options.config.hardware.enabled = true;
+            }
+            else if (arg == "--disable-hardware") {
+                options.config.hardware.enabled = false;
+            }
             else if (arg == "--audio-codec") {
                 options.config.audioCodec = parseAudioCodec(requireValue(arg));
                 if (options.config.audioMode == media::AudioMode::None) {
@@ -421,12 +429,6 @@ namespace {
             }
             else if (arg == "--no-audio") {
                 options.config.audioMode = media::AudioMode::None;
-            }
-            else if (arg == "--no-zero-copy-fallback") {
-                options.config.hardware.allowZeroCopyFallback = false;
-            }
-            else if (arg == "--allow-zero-copy-fallback") {
-                options.config.hardware.allowZeroCopyFallback = true;
             }
             else if (!arg.empty() && arg[0] == '-') {
                 throw std::runtime_error("unknown option: " + arg);
@@ -559,8 +561,11 @@ namespace {
         spdlog::info("audioMode={}", audioModeToString(config.audioMode));
         spdlog::info("audioCodec={}", audioCodecToString(config.audioCodec));
         spdlog::info("audioBitrate={} kbps", config.audioBitrateKbps);
-        spdlog::info("zeroCopyPreferred=true");
-        spdlog::info("zeroCopyFallbackAllowed={}", config.hardware.allowZeroCopyFallback);
+        spdlog::info("hardwareEnabled={}", config.hardware.enabled);
+        spdlog::info(
+            "hardwarePolicy={}",
+            config.hardware.enabled ? "automatic-lowest-cpu" : "disabled-force-cpu"
+        );
     }
 
     void initLogger()
