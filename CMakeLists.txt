@@ -61,6 +61,8 @@ add_library(${TARGET_CORE} STATIC
     src/internal/FFmpegUtils.h
     src/internal/FFmpegVideoBitrateControlPlanner.cpp
     src/internal/FFmpegVideoBitrateControlPlanner.h
+    src/internal/FFmpegVideoBitrateOptionAdapter.cpp
+    src/internal/FFmpegVideoBitrateOptionAdapter.h
     src/internal/FFmpegVideoColorMetadata.cpp
     src/internal/FFmpegVideoColorMetadata.h
     src/internal/FFmpegVideoDecoderStage.cpp
