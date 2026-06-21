@@ -21,6 +21,8 @@ namespace media::ffmpeg {
         HardwareEncoderSelection encoderSelection;
         bool decoderAccepted = false;
         bool encoderAccepted = false;
+        int score = 0;
+        VideoExecutionMode executionMode = VideoExecutionMode::Cpu;
         std::string reason;
     };
 
