@@ -21,7 +21,9 @@ namespace media {
     enum class VideoRateControlMode {
         Auto,
         CBR,
-        VBR
+        VBR,
+        CRF,
+        CappedVBR
     };
 
     // 对外暴露的通用编码速度/质量档位。
@@ -81,6 +83,10 @@ namespace media {
         int minimumTargetKbps = 0;
         int maximumTargetKbps = 0;
 
+        int defaultQuality = 0;
+        int minimumQuality = 0;
+        int maximumQuality = 0;
+
         double referenceFps = 0.0;
         double minimumFpsFactor = 0.0;
         double maximumFpsFactor = 0.0;
@@ -102,6 +108,9 @@ namespace media {
         VideoBitrateIntent intent = VideoBitrateIntent::Auto;
         VideoContentHint contentHint = VideoContentHint::Auto;
 
+        // 通用质量值。0 表示自动；数值含义由适配层映射到 crf/cq 等编码器私有参数。
+        int quality = 0;
+
         int targetKbps = 0;
         int minKbps = 0;
         int maxKbps = 0;
@@ -112,11 +121,13 @@ namespace media {
     struct VideoBitratePlan {
         VideoRateControlMode rateControl = VideoRateControlMode::Auto;
 
+        int quality = 0;
         int targetKbps = 0;
         int minKbps = 0;
         int maxKbps = 0;
         int bufferSizeKbits = 0;
 
+        bool userQualityApplied = false;
         bool userTargetApplied = false;
         bool userMinApplied = false;
         bool userMaxApplied = false;
