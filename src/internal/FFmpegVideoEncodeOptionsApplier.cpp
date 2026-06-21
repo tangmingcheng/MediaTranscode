@@ -1,5 +1,7 @@
 #include "internal/FFmpegVideoEncodeOptionsApplier.h"
 
+#include "internal/FFmpegVideoBitrateControlPlanner.h"
+
 #include <algorithm>
 #include <sstream>
 #include <string>
@@ -230,29 +232,27 @@ namespace {
         );
     }
 
-    void applyCommonRateControlFields(AVCodecContext* encoderContext,
-                                      const TranscodeConfig& config,
-                                      VideoEncodeOptionsApplyReport& report)
+    void applyBitrateControlPlan(AVCodecContext* encoderContext,
+                                 const VideoBitratePlan& plan,
+                                 VideoEncodeOptionsApplyReport& report)
     {
-        const VideoEncodeOptions& options = config.videoEncode;
+        if (plan.targetKbps > 0) {
+            encoderContext->bit_rate = kbpsToBps(plan.targetKbps);
+            report.bitRate = encoderContext->bit_rate;
+        }
 
-        encoderContext->bit_rate = kbpsToBps(config.videoBitrateKbps);
-        report.bitRate = encoderContext->bit_rate;
-
-        const int maxBitrateKbps = options.maxBitrateKbps > 0
-            ? options.maxBitrateKbps
-            : 0;
-        if (maxBitrateKbps > 0) {
-            encoderContext->rc_max_rate = kbpsToBps(maxBitrateKbps);
+        if (plan.maxKbps > 0) {
+            encoderContext->rc_max_rate = kbpsToBps(plan.maxKbps);
             report.maxBitRate = encoderContext->rc_max_rate;
         }
 
-        const int bufferSizeKbps = options.bufferSizeKbps > 0
-            ? options.bufferSizeKbps
-            : 0;
-        if (bufferSizeKbps > 0) {
-            encoderContext->rc_buffer_size = static_cast<int>(kbpsToBps(bufferSizeKbps));
+        if (plan.bufferSizeKbits > 0) {
+            encoderContext->rc_buffer_size = static_cast<int>(kbpsToBps(plan.bufferSizeKbits));
             report.bufferSize = encoderContext->rc_buffer_size;
+        }
+
+        for (const std::string& diagnostic : plan.diagnostics) {
+            report.appliedOptions.emplace_back("bitrate_plan=" + diagnostic);
         }
     }
 
@@ -321,14 +321,20 @@ namespace {
 
         const VideoEncodeOptions& options = config.videoEncode;
 
-        applyCommonRateControlFields(encoderContext, config, report);
+        const VideoBitratePlan bitratePlan = VideoBitrateControlPlanner::plan(
+            config,
+            encoderContext->width,
+            encoderContext->height,
+            outputFps
+        );
+        applyBitrateControlPlan(encoderContext, bitratePlan, report);
 
         encoderContext->gop_size = chooseGopSize(options, outputFps);
         encoderContext->max_b_frames = chooseMaxBFrames(options);
         report.gopSize = encoderContext->gop_size;
         report.maxBFrames = encoderContext->max_b_frames;
 
-        applyRateControlMode(encoderContext, options.rateControl, report);
+        applyRateControlMode(encoderContext, bitratePlan.rateControl, report);
         applyOptionalStringOptions(encoderContext, encoder, options, report);
 
         // Some encoders expose VBV/peak bitrate only as private options. Probe
