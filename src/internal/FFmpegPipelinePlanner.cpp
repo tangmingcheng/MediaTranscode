@@ -15,8 +15,8 @@ extern "C" {
 namespace media::ffmpeg {
 namespace {
 
-    constexpr int kScoreZeroCopyHardware = 3000;
-    constexpr int kScoreHardwareDecodeFilterEncode = 2500;
+    constexpr int kScoreHardwareDecodeFilterEncode = 3000;
+    constexpr int kScoreHardwareDecodeDirectEncode = 2800;
     constexpr int kScoreHardwareDecodeHardwareEncode = 2000;
     constexpr int kScoreHardwareDecodeOnly = 1000;
 
@@ -271,10 +271,9 @@ namespace {
                 zeroCopyAttempt.encoderAccepted = zeroCopyAttempt.encoderSelection.zeroCopy;
 
                 if (zeroCopyAttempt.encoderAccepted) {
-                    zeroCopyAttempt.score = kScoreZeroCopyHardware;
-                    if (zeroCopyAttempt.backend.supportsZeroCopyFilter) {
-                        zeroCopyAttempt.score = kScoreHardwareDecodeFilterEncode;
-                    }
+                    zeroCopyAttempt.score = zeroCopyAttempt.backend.supportsZeroCopyFilter
+                        ? kScoreHardwareDecodeFilterEncode
+                        : kScoreHardwareDecodeDirectEncode;
 
                     zeroCopyAttempt.reason = "accepted full hardware path: hardware decode + "
                         + std::string(zeroCopyAttempt.backend.supportsZeroCopyFilter
