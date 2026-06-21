@@ -176,7 +176,8 @@ Status FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream()
         );
     }
 
-    const bool selectedPlannedHardwareEncoder = m_hardwareEncoderSelection.encoder == encoder;
+    const bool selectedPlannedHardwareEncoder = m_hardwareEncoderSelection.encoder == encoder &&
+        m_hardwareEncoderSelection.hardwareEncoder;
     const bool directHardwareFrameEncoder =
         selectedPlannedHardwareEncoder &&
         m_hardwareBackend.supportsDirectHardwareFrameEncode;
@@ -225,9 +226,11 @@ Status FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream()
     m_encoderCtx->pix_fmt = selectedPlannedHardwareEncoder &&
         m_hardwareEncoderSelection.pixelFormat != AV_PIX_FMT_NONE
         ? m_hardwareEncoderSelection.pixelFormat
-        : selectedGenericPixelFormat != AV_PIX_FMT_NONE
-            ? selectedGenericPixelFormat
-            : chooseVideoEncoderPixelFormat(encoder);
+        : m_hardwareEncoderSelection.pixelFormat != AV_PIX_FMT_NONE
+            ? m_hardwareEncoderSelection.pixelFormat
+            : selectedGenericPixelFormat != AV_PIX_FMT_NONE
+                ? selectedGenericPixelFormat
+                : chooseVideoEncoderPixelFormat(encoder);
 
     if (selectedPlannedHardwareEncoder &&
         m_hardwareEncoderSelection.zeroCopy &&
@@ -292,9 +295,9 @@ Status FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream()
     if (wantsHardwarePipeline &&
         m_hardwarePlan.executionMode == VideoExecutionMode::MixedGpu) {
         spdlog::warn(
-            "[PLAN] active mixed GPU path: hardware decode={}, hardware encode={}, encoder={}, encoder_pix_fmt={}",
+            "[PLAN] active mixed hardware path: hardware decode={}, hardware encode={}, encoder={}, encoder_pix_fmt={}",
             m_decoderHardwareDeviceAttached,
-            m_hardwareDeviceAttachedToEncoder,
+            selectedPlannedHardwareEncoder,
             encoder->name ? encoder->name : "unknown",
             pixelFormatName(m_encoderCtx->pix_fmt)
         );
@@ -364,6 +367,10 @@ Status FFmpegVideoEncoderStage::initializeHardwareDeviceForEncoder(const AVCodec
         m_hardwareEncoderSelection.hardwareEncoder;
 
     if (!selectedHardwareEncoder) {
+        if (m_hardwarePlan.executionMode == VideoExecutionMode::MixedGpu) {
+            return Status::success();
+        }
+
         return Status::failure(makeError(
             ErrorCode::HardwareUnavailable,
             "hardware video pipeline unavailable: selected encoder is not a hardware encoder"));
