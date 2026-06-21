@@ -17,9 +17,6 @@ namespace media::ffmpeg {
 
     std::string errorString(int err);
 
-    const char* preferredVideoEncoderName(VideoCodec codec);
-    AVCodecID fallbackVideoCodecId(VideoCodec codec);
-
     const char* preferredAudioEncoderName(AudioCodec codec);
     AVCodecID fallbackAudioCodecId(AudioCodec codec);
 
