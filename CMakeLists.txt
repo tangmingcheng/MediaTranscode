@@ -59,6 +59,8 @@ add_library(${TARGET_CORE} STATIC
     src/internal/FFmpegTimelineNormalizer.h
     src/internal/FFmpegUtils.cpp
     src/internal/FFmpegUtils.h
+    src/internal/FFmpegVideoBitrateControlPlanner.cpp
+    src/internal/FFmpegVideoBitrateControlPlanner.h
     src/internal/FFmpegVideoColorMetadata.cpp
     src/internal/FFmpegVideoColorMetadata.h
     src/internal/FFmpegVideoDecoderStage.cpp
