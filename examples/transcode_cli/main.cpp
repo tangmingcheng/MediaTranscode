@@ -115,6 +115,25 @@ namespace {
         throw std::runtime_error("unsupported video codec: " + value);
     }
 
+    media::VideoRateControlMode parseVideoRateControlMode(const std::string& value)
+    {
+        const std::string normalized = toLower(value);
+
+        if (normalized == "auto") {
+            return media::VideoRateControlMode::Auto;
+        }
+
+        if (normalized == "cbr") {
+            return media::VideoRateControlMode::CBR;
+        }
+
+        if (normalized == "vbr") {
+            return media::VideoRateControlMode::VBR;
+        }
+
+        throw std::runtime_error("unsupported video rate control mode: " + value);
+    }
+
     media::AudioCodec parseAudioCodec(const std::string& value)
     {
         const std::string normalized = toLower(value);
@@ -152,6 +171,19 @@ namespace {
         case media::VideoCodec::Copy:
         default:
             return "copy";
+        }
+    }
+
+    std::string videoRateControlToString(media::VideoRateControlMode mode)
+    {
+        switch (mode) {
+        case media::VideoRateControlMode::CBR:
+            return "cbr";
+        case media::VideoRateControlMode::VBR:
+            return "vbr";
+        case media::VideoRateControlMode::Auto:
+        default:
+            return "auto";
         }
     }
 
@@ -266,6 +298,15 @@ namespace {
             << "      --fps <value>               Output fps, 0 means preserve input timeline\n"
             << "      --video-codec <value>       h264 | h265 | mpeg4 | vp8 | vp9 | av1\n"
             << "      --video-bitrate <kbps>      Video bitrate in kbps\n"
+            << "      --rc <value>                auto | cbr | vbr\n"
+            << "      --gop <frames>              GOP size in frames, 0 means auto\n"
+            << "      --bframes <count>           Max B frames, default 0\n"
+            << "      --max-video-bitrate <kbps>  Peak video bitrate for capped VBR/CBR\n"
+            << "      --buffer-size <kbps>        Encoder VBV buffer size\n"
+            << "      --preset <value>            Encoder preset if supported\n"
+            << "      --tune <value>              Encoder tune if supported\n"
+            << "      --profile <value>           Encoder profile if supported\n"
+            << "      --level <value>             Encoder level if supported\n"
             << "      --no-zero-copy-fallback     Fail if automatic zero-copy planning is unavailable\n\n"
             << "Audio output options:\n"
             << "      --audio-codec <value>       aac | opus | mp3\n"
@@ -274,7 +315,7 @@ namespace {
             << "  -h, --help                      Show this help\n\n"
             << "Examples:\n"
             << "  " << executable << " -i input.mp4 -o output.mp4 --video-codec h264 --size 1280x720 --fps 25 --video-bitrate 3000 --audio-codec aac --audio-bitrate 128\n"
-            << "  " << executable << " -i input.mp4 -o output_strict.mp4 --video-codec h264 --size 1280x720 --fps 25 --video-bitrate 3000 --no-zero-copy-fallback\n";
+            << "  " << executable << " -i input.mp4 -o output_strict.mp4 --video-codec h265 --size 1280x720 --fps 25 --video-bitrate 3000 --rc cbr --gop 50 --preset p4 --no-zero-copy-fallback\n";
     }
 
     CliOptions parseOptions(int argc, char* argv[])
@@ -341,6 +382,33 @@ namespace {
             }
             else if (arg == "--video-bitrate") {
                 options.config.videoBitrateKbps = parsePositiveInt(requireValue(arg), arg);
+            }
+            else if (arg == "--rc" || arg == "--rate-control") {
+                options.config.videoEncode.rateControl = parseVideoRateControlMode(requireValue(arg));
+            }
+            else if (arg == "--gop" || arg == "--gop-size") {
+                options.config.videoEncode.gopSize = parseNonNegativeInt(requireValue(arg), arg);
+            }
+            else if (arg == "--bframes" || arg == "--max-bframes") {
+                options.config.videoEncode.maxBFrames = parseNonNegativeInt(requireValue(arg), arg);
+            }
+            else if (arg == "--max-video-bitrate") {
+                options.config.videoEncode.maxBitrateKbps = parsePositiveInt(requireValue(arg), arg);
+            }
+            else if (arg == "--buffer-size" || arg == "--bufsize") {
+                options.config.videoEncode.bufferSizeKbps = parsePositiveInt(requireValue(arg), arg);
+            }
+            else if (arg == "--preset") {
+                options.config.videoEncode.preset = requireValue(arg);
+            }
+            else if (arg == "--tune") {
+                options.config.videoEncode.tune = requireValue(arg);
+            }
+            else if (arg == "--profile") {
+                options.config.videoEncode.profile = requireValue(arg);
+            }
+            else if (arg == "--level") {
+                options.config.videoEncode.level = requireValue(arg);
             }
             else if (arg == "--audio-codec") {
                 options.config.audioCodec = parseAudioCodec(requireValue(arg));
@@ -479,6 +547,15 @@ namespace {
         spdlog::info("fps={}", config.fps);
         spdlog::info("videoCodec={}", videoCodecToString(config.videoCodec));
         spdlog::info("videoBitrate={} kbps", config.videoBitrateKbps);
+        spdlog::info("videoRateControl={}", videoRateControlToString(config.videoEncode.rateControl));
+        spdlog::info("videoGop={}", config.videoEncode.gopSize);
+        spdlog::info("videoBFrames={}", config.videoEncode.maxBFrames);
+        spdlog::info("videoMaxBitrate={} kbps", config.videoEncode.maxBitrateKbps);
+        spdlog::info("videoBufferSize={} kbps", config.videoEncode.bufferSizeKbps);
+        spdlog::info("videoPreset={}", config.videoEncode.preset.empty() ? "auto" : config.videoEncode.preset);
+        spdlog::info("videoTune={}", config.videoEncode.tune.empty() ? "auto" : config.videoEncode.tune);
+        spdlog::info("videoProfile={}", config.videoEncode.profile.empty() ? "auto" : config.videoEncode.profile);
+        spdlog::info("videoLevel={}", config.videoEncode.level.empty() ? "auto" : config.videoEncode.level);
         spdlog::info("audioMode={}", audioModeToString(config.audioMode));
         spdlog::info("audioCodec={}", audioCodecToString(config.audioCodec));
         spdlog::info("audioBitrate={} kbps", config.audioBitrateKbps);
