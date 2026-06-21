@@ -32,9 +32,9 @@ bool FFmpegVideoFrameRoutingStrategy::initialize(const Config& config, std::stri
 {
     reset();
 
-    if (config.zeroCopyPipeline && config.executionMode != VideoExecutionMode::ZeroCopy) {
+    if (config.zeroCopyPipeline && config.executionMode != VideoExecutionMode::HardwareZeroCopy) {
         if (error) {
-            *error = "frame routing strategy initialize failed: zero-copy pipeline requires ZeroCopy execution mode";
+            *error = "frame routing strategy initialize failed: zero-copy pipeline requires HardwareZeroCopy execution mode";
         }
         return false;
     }
