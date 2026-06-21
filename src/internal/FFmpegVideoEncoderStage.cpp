@@ -2,6 +2,7 @@
 
 #include "internal/FFmpegError.h"
 #include "internal/FFmpegUtils.h"
+#include "internal/FFmpegVideoEncoderSelector.h"
 #include "internal/FFmpegVideoEncodeOptionsApplier.h"
 
 #include "spdlog/spdlog.h"
@@ -144,6 +145,7 @@ Status FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream()
         m_decoderUsesHardwareFrames;
 
     const AVCodec* encoder = nullptr;
+    AVPixelFormat selectedGenericPixelFormat = AV_PIX_FMT_NONE;
 
     if (wantsHardwarePipeline) {
         encoder = m_hardwareEncoderSelection.encoder;
@@ -155,20 +157,23 @@ Status FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream()
     }
 
     if (!encoder) {
-        const char* encoderName = preferredVideoEncoderName(m_config.videoCodec);
-        if (encoderName) {
-            encoder = avcodec_find_encoder_by_name(encoderName);
+        const VideoEncoderSelection encoderSelection = VideoEncoderSelector::select(m_config.videoCodec);
+        encoder = encoderSelection.encoder;
+        selectedGenericPixelFormat = encoderSelection.pixelFormat;
+
+        if (!encoder) {
+            return Status::failure(ErrorInfo::unsupported(
+                "adaptive video encoder selection failed: " + encoderSelection.diagnostic));
         }
-    }
 
-    if (!encoder) {
-        const AVCodecID codecId = fallbackVideoCodecId(m_config.videoCodec);
-        encoder = avcodec_find_encoder(codecId);
-    }
-
-    if (!encoder) {
-        return Status::failure(ErrorInfo::unsupported(
-            "avcodec_find_encoder failed: no suitable video encoder"));
+        spdlog::info(
+            "[ENCODER][SELECT] codec={}, encoder={}, pix_fmt={}, candidates={}, diagnostic={}",
+            static_cast<int>(m_config.videoCodec),
+            encoderSelection.encoderName,
+            pixelFormatName(encoderSelection.pixelFormat),
+            encoderSelection.candidates.size(),
+            encoderSelection.diagnostic
+        );
     }
 
     const bool selectedPlannedHardwareEncoder = m_hardwareEncoderSelection.encoder == encoder;
@@ -220,7 +225,9 @@ Status FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream()
     m_encoderCtx->pix_fmt = selectedPlannedHardwareEncoder &&
         m_hardwareEncoderSelection.pixelFormat != AV_PIX_FMT_NONE
         ? m_hardwareEncoderSelection.pixelFormat
-        : chooseVideoEncoderPixelFormat(encoder);
+        : selectedGenericPixelFormat != AV_PIX_FMT_NONE
+            ? selectedGenericPixelFormat
+            : chooseVideoEncoderPixelFormat(encoder);
 
     if (selectedPlannedHardwareEncoder &&
         m_hardwareEncoderSelection.zeroCopy &&
