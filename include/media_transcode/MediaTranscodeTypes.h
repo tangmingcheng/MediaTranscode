@@ -17,7 +17,7 @@ namespace media {
         AV1
     };
 
-    // 视频码控模式。Auto 表示由具体编码器适配层选择最安全的默认策略。
+    // 视频码控模式。Auto 表示由码率规划层根据业务策略解析。
     enum class VideoRateControlMode {
         Auto,
         CBR,
@@ -34,10 +34,100 @@ namespace media {
         Quality
     };
 
+    // 业务侧码率意图，不直接等同编码器参数。
+    enum class VideoBitrateIntent {
+        Auto,
+        BandwidthFirst,
+        Balanced,
+        QualityFirst
+    };
+
+    // 内容类型提示，用于 policy 侧决定码率放大/收缩策略。
+    enum class VideoContentHint {
+        Auto,
+        Camera,
+        Screen,
+        Animation,
+        Film,
+        Sports
+    };
+
+    struct VideoBitrateLadderRule {
+        int maxPixels = 0;
+        int targetKbps = 0;
+    };
+
+    struct VideoCodecBitrateFactor {
+        VideoCodec codec = VideoCodec::H264;
+        double factor = 1.0;
+    };
+
+    struct VideoBitrateIntentFactor {
+        VideoBitrateIntent intent = VideoBitrateIntent::Balanced;
+        double factor = 1.0;
+    };
+
+    struct VideoContentBitrateFactor {
+        VideoContentHint content = VideoContentHint::Auto;
+        double factor = 1.0;
+    };
+
+    // 码率规划策略。
+    // 核心算法只消费这里的规则，不内置分辨率码率梯度等业务经验值。
+    struct VideoBitrateControlPolicy {
+        VideoRateControlMode defaultRateControl = VideoRateControlMode::Auto;
+
+        int fallbackTargetKbps = 0;
+        int minimumTargetKbps = 0;
+        int maximumTargetKbps = 0;
+
+        double referenceFps = 0.0;
+        double minimumFpsFactor = 0.0;
+        double maximumFpsFactor = 0.0;
+
+        double cbrPeakMultiplier = 0.0;
+        double vbrPeakMultiplier = 0.0;
+        double cbrBufferSeconds = 0.0;
+        double vbrBufferSeconds = 0.0;
+
+        std::vector<VideoBitrateLadderRule> ladderRules;
+        std::vector<VideoCodecBitrateFactor> codecFactors;
+        std::vector<VideoBitrateIntentFactor> intentFactors;
+        std::vector<VideoContentBitrateFactor> contentFactors;
+    };
+
+    // 码率规划输入。0/Auto 表示该项由 policy 决定。
+    struct VideoBitrateControlOptions {
+        VideoRateControlMode rateControl = VideoRateControlMode::Auto;
+        VideoBitrateIntent intent = VideoBitrateIntent::Auto;
+        VideoContentHint contentHint = VideoContentHint::Auto;
+
+        int targetKbps = 0;
+        int minKbps = 0;
+        int maxKbps = 0;
+        int bufferSizeKbits = 0;
+    };
+
+    // 码率规划结果。FFmpeg 执行层只允许消费该结果，不直接读取用户输入字段。
+    struct VideoBitratePlan {
+        VideoRateControlMode rateControl = VideoRateControlMode::Auto;
+
+        int targetKbps = 0;
+        int minKbps = 0;
+        int maxKbps = 0;
+        int bufferSizeKbits = 0;
+
+        bool userTargetApplied = false;
+        bool userMinApplied = false;
+        bool userMaxApplied = false;
+        bool userBufferApplied = false;
+
+        std::vector<std::string> diagnostics;
+    };
+
     // 视频编码基础控制项。
     // 所有字段均为可选：0、Auto 或空字符串表示使用模块默认值。
     struct VideoEncodeOptions {
-        VideoRateControlMode rateControl = VideoRateControlMode::Auto;
         VideoEncodeSpeedPreset speedPreset = VideoEncodeSpeedPreset::Auto;
 
         // 关键帧间隔，单位：帧。0 表示自动，默认约 2 秒 GOP。
@@ -45,10 +135,6 @@ namespace media {
 
         // B 帧数量。当前默认仍为 0，保持低延迟行为。
         int maxBFrames = 0;
-
-        // VBR/CBR 辅助参数。0 表示不显式设置。
-        int maxBitrateKbps = 0;
-        int bufferSizeKbps = 0;
 
         // 编码器私有参数。面向内部适配/专家模式，普通调用方应优先使用 speedPreset。
         std::string preset;
@@ -101,13 +187,14 @@ namespace media {
         int fps = 0;
 
         VideoCodec videoCodec = VideoCodec::H264;
+        VideoBitrateControlOptions videoBitrate;
+        VideoBitrateControlPolicy bitratePolicy;
         VideoEncodeOptions videoEncode;
 
         AudioMode audioMode = AudioMode::EncodeSelected;
         AudioCodec audioCodec = AudioCodec::AAC;
 
         int audioBitrateKbps = 128;
-        int videoBitrateKbps = 3000;
 
         HardwarePipelineConfig hardware;
     };
