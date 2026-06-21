@@ -169,11 +169,13 @@ namespace {
     std::string describeReason(const AVCodec* encoder,
                                int score,
                                AVPixelFormat pixelFormat,
-                               bool preferHardwareEncoder)
+                               bool preferHardwareEncoder,
+                               bool allowHardwareEncoder)
     {
         std::ostringstream oss;
         oss << "score=" << score
             << ", prefer_hardware=" << preferHardwareEncoder
+            << ", allow_hardware=" << allowHardwareEncoder
             << ", hardware=" << encoderIsHardware(encoder)
             << ", experimental=" << encoderIsExperimental(encoder)
             << ", frame_threads=" << encoderSupportsFrameThreads(encoder)
@@ -216,7 +218,8 @@ namespace {
     }
 
     VideoEncoderSelection VideoEncoderSelector::select(VideoCodec codec,
-                                                       bool preferHardwareEncoder)
+                                                       bool preferHardwareEncoder,
+                                                       bool allowHardwareEncoder)
     {
         VideoEncoderSelection selection;
         const AVCodecID targetCodecId = codecIdFor(codec);
@@ -248,12 +251,21 @@ namespace {
             candidate.experimental = encoderIsExperimental(encoder);
             candidate.selectedPixelFormat = chooseVideoEncoderPixelFormat(encoder);
             candidate.pixelFormats = pixelFormatListText(encoder);
+
+            if (candidate.hardwareEncoder && !allowHardwareEncoder) {
+                candidate.score = -100000;
+                candidate.reason = "rejected: hardware encoder is disabled by policy";
+                selection.candidates.emplace_back(candidate);
+                continue;
+            }
+
             candidate.score = scoreEncoder(encoder, preferHardwareEncoder);
             candidate.reason = describeReason(
                 encoder,
                 candidate.score,
                 candidate.selectedPixelFormat,
-                preferHardwareEncoder
+                preferHardwareEncoder,
+                allowHardwareEncoder
             );
 
             selection.candidates.emplace_back(candidate);
@@ -271,7 +283,9 @@ namespace {
         );
 
         if (!bestEncoder) {
-            selection.diagnostic = "video encoder selection failed: no encoder available for requested codec";
+            selection.diagnostic = allowHardwareEncoder
+                ? "video encoder selection failed: no encoder available for requested codec"
+                : "video encoder selection failed: no software encoder available for requested codec while hardware is disabled";
             return selection;
         }
 
