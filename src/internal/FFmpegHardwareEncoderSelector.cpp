@@ -303,7 +303,7 @@ namespace {
         return selection;
     }
 
-    HardwareEncoderSelection HardwareEncoderSelector::selectMixedGpuEncoder(
+    HardwareEncoderSelection HardwareEncoderSelector::selectHardwareEncoderForSoftwareFrames(
         VideoCodec codec,
         const HardwareBackendProfile& backend)
     {
@@ -343,7 +343,7 @@ namespace {
             candidate.pixelFormats = pixelFormatListText(encoder);
 
             if (hardwareEncoder && supportsSoftwareInput) {
-                candidate.rejectionReason = "accepted mixed GPU fallback: hardware encoder accepts software pixel format " +
+                candidate.rejectionReason = "accepted: hardware encoder accepts software-frame pixel format " +
                     pixelFormatName(softwareInputFormat);
                 candidates.emplace_back(std::move(candidate));
 
@@ -353,7 +353,7 @@ namespace {
                     backend,
                     false,
                     std::move(candidates),
-                    "selected mixed GPU encoder " + std::string(encoderName)
+                    "selected software-frame hardware encoder " + std::string(encoderName)
                 );
                 selection.pixelFormat = softwareInputFormat;
                 return selection;
@@ -363,7 +363,7 @@ namespace {
                 candidate.rejectionReason = "encoder is not classified as hardware encoder";
             }
             else {
-                candidate.rejectionReason = "hardware encoder does not accept software-frame fallback pixel format";
+                candidate.rejectionReason = "hardware encoder does not accept software-frame pixel format";
             }
 
             candidates.emplace_back(std::move(candidate));
@@ -372,7 +372,7 @@ namespace {
         HardwareEncoderSelection selection;
         selection.backend = backend;
         selection.candidates = std::move(candidates);
-        selection.diagnostic = "no mixed GPU encoder accepts software-frame fallback input for backend " +
+        selection.diagnostic = "no hardware encoder accepts software-frame input for backend " +
             std::string(backend.name ? backend.name : "unknown");
         return selection;
     }
