@@ -63,6 +63,8 @@ add_library(${TARGET_CORE} STATIC
     src/internal/FFmpegVideoColorMetadata.h
     src/internal/FFmpegVideoDecoderStage.cpp
     src/internal/FFmpegVideoDecoderStage.h
+    src/internal/FFmpegVideoEncodeOptionsApplier.cpp
+    src/internal/FFmpegVideoEncodeOptionsApplier.h
     src/internal/FFmpegVideoEncoderStage.cpp
     src/internal/FFmpegVideoEncoderStage.h
     src/internal/FFmpegVideoFilterGraph.cpp
