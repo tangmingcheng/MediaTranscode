@@ -312,7 +312,7 @@ namespace {
 
             HardwarePipelinePlanAttempt hardwareEncodeAttempt = baseAttempt;
             hardwareEncodeAttempt.executionMode = VideoExecutionMode::HardwareDecodeSoftwareFilterHardwareEncode;
-            hardwareEncodeAttempt.encoderSelection = HardwareEncoderSelector::selectMixedGpuEncoder(
+            hardwareEncodeAttempt.encoderSelection = HardwareEncoderSelector::selectHardwareEncoderForSoftwareFrames(
                 config.videoCodec,
                 hardwareEncodeAttempt.backend
             );
