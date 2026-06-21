@@ -39,10 +39,6 @@ namespace {
             return config.videoBitrate.rateControl;
         }
 
-        if (config.videoEncode.rateControl != VideoRateControlMode::Auto) {
-            return config.videoEncode.rateControl;
-        }
-
         return config.bitratePolicy.defaultRateControl;
     }
 
@@ -164,11 +160,6 @@ namespace {
             return config.videoBitrate.targetKbps;
         }
 
-        if (config.videoBitrateKbps > 0) {
-            userTargetApplied = true;
-            return config.videoBitrateKbps;
-        }
-
         int targetKbps = chooseTargetFromLadder(
             config.bitratePolicy,
             outputWidth,
@@ -210,11 +201,6 @@ namespace {
             return config.videoBitrate.maxKbps;
         }
 
-        if (config.videoEncode.maxBitrateKbps > 0) {
-            plan.userMaxApplied = true;
-            return config.videoEncode.maxBitrateKbps;
-        }
-
         return 0;
     }
 
@@ -223,11 +209,6 @@ namespace {
         if (config.videoBitrate.bufferSizeKbits > 0) {
             plan.userBufferApplied = true;
             return config.videoBitrate.bufferSizeKbits;
-        }
-
-        if (config.videoEncode.bufferSizeKbps > 0) {
-            plan.userBufferApplied = true;
-            return config.videoEncode.bufferSizeKbps;
         }
 
         return 0;
