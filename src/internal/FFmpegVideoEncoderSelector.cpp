@@ -160,9 +160,6 @@ namespace {
             if (encoderNameEquals(encoder, "hevc")) {
                 return 500;
             }
-            if (encoderNameEquals(encoder, "libkvazaar")) {
-                return 100;
-            }
             return 0;
 
         case VideoCodec::MPEG4:
@@ -207,6 +204,23 @@ namespace {
         case VideoCodec::Copy:
         default:
             return 0;
+        }
+    }
+
+    bool allowedByCpuEncoderPolicy(VideoCodec codec, const AVCodec* encoder)
+    {
+        if (!encoder || encoderIsHardware(encoder)) {
+            return false;
+        }
+
+        switch (codec) {
+        case VideoCodec::H265:
+            // libkvazaar can produce streams that some Windows HEVC decoders render incorrectly.
+            // CPU HEVC transcode should use the de-facto standard software encoder only.
+            return encoderNameEquals(encoder, "libx265") || encoderNameEquals(encoder, "hevc");
+
+        default:
+            return softwareEncoderPriority(codec, encoder) > 0;
         }
     }
 
@@ -347,6 +361,13 @@ namespace {
                 continue;
             }
 
+            if (!allowHardwareEncoder && !allowedByCpuEncoderPolicy(codec, encoder)) {
+                candidate.score = -90000;
+                candidate.reason = "rejected: encoder is not approved for CPU transcode policy";
+                selection.candidates.emplace_back(candidate);
+                continue;
+            }
+
             candidate.score = scoreEncoder(encoder, codec, preferHardwareEncoder);
             candidate.reason = describeReason(
                 encoder,
@@ -374,7 +395,7 @@ namespace {
         if (!bestEncoder) {
             selection.diagnostic = allowHardwareEncoder
                 ? "video encoder selection failed: no encoder available for requested codec"
-                : "video encoder selection failed: no software encoder available for requested codec while hardware is disabled";
+                : "video encoder selection failed: no approved software encoder available for requested codec while hardware is disabled";
             return selection;
         }
 
