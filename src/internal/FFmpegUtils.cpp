@@ -8,7 +8,6 @@
 extern "C" {
 #include <libavcodec/version_major.h>
 #include <libavutil/error.h>
-#include <libavutil/opt.h>
 #include <libavutil/pixdesc.h>
 }
 
@@ -515,36 +514,6 @@ namespace {
             encoderName.find("_nvenc") != std::string::npos ||
             encoderName.find("_vaapi") != std::string::npos ||
             encoderName.find("_amf") != std::string::npos;
-    }
-
-    void setVideoEncoderOptions(AVCodecContext* encoderCtx, const AVCodec* encoder)
-    {
-        if (!encoderCtx || !encoder) {
-            return;
-        }
-
-        const std::string encoderName = encoder->name ? encoder->name : "";
-
-        if (encoderName == "libx264") {
-            av_opt_set(encoderCtx->priv_data, "preset", "veryfast", 0);
-            av_opt_set(encoderCtx->priv_data, "tune", "zerolatency", 0);
-        }
-        else if (encoderName == "libx265") {
-            av_opt_set(encoderCtx->priv_data, "preset", "veryfast", 0);
-            av_opt_set(encoderCtx->priv_data, "tune", "zerolatency", 0);
-        }
-        else if (encoderName == "libvpx" || encoderName == "libvpx-vp9") {
-            av_opt_set(encoderCtx->priv_data, "deadline", "realtime", 0);
-            av_opt_set(encoderCtx->priv_data, "cpu-used", "4", 0);
-        }
-        else if (encoderName == "libaom-av1") {
-            av_opt_set(encoderCtx->priv_data, "cpu-used", "6", 0);
-            av_opt_set(encoderCtx->priv_data, "row-mt", "1", 0);
-        }
-        else if (encoderName == "h264_mf" || encoderName == "hevc_mf" || encoderName == "av1_mf") {
-            av_opt_set(encoderCtx->priv_data, "hw_encoding", "1", 0);
-            av_opt_set(encoderCtx->priv_data, "rate_control", "cbr", 0);
-        }
     }
 
 } // namespace media::ffmpeg
