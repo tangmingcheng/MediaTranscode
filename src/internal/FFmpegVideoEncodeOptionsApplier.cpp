@@ -1,6 +1,7 @@
 #include "internal/FFmpegVideoEncodeOptionsApplier.h"
 
 #include "internal/FFmpegVideoBitrateControlPlanner.h"
+#include "internal/FFmpegVideoBitrateOptionAdapter.h"
 
 #include <algorithm>
 #include <sstream>
@@ -14,11 +15,6 @@ extern "C" {
 
 namespace media::ffmpeg {
 namespace {
-
-    int64_t kbpsToBps(int kbps)
-    {
-        return static_cast<int64_t>(std::max(1, kbps)) * 1000;
-    }
 
     int chooseGopSize(const VideoEncodeOptions& options, int outputFps)
     {
@@ -153,47 +149,6 @@ namespace {
         return {};
     }
 
-    const char* rateControlModeName(VideoRateControlMode mode)
-    {
-        switch (mode) {
-        case VideoRateControlMode::CBR:
-            return "cbr";
-        case VideoRateControlMode::VBR:
-            return "vbr";
-        case VideoRateControlMode::Auto:
-        default:
-            return nullptr;
-        }
-    }
-
-    bool applyRateControlMode(AVCodecContext* encoderContext,
-                              VideoRateControlMode mode,
-                              VideoEncodeOptionsApplyReport& report)
-    {
-        const char* modeName = rateControlModeName(mode);
-        if (!modeName) {
-            return false;
-        }
-
-        // FFmpeg encoders use different option names for rate control. Try the
-        // common names, but only after probing option availability.
-        static const char* const optionNames[] = {
-            "rc",
-            "rate_control",
-            "rc_mode",
-            nullptr
-        };
-
-        for (const char* const* p = optionNames; *p; ++p) {
-            if (setStringOptionIfSupported(encoderContext, *p, modeName, report)) {
-                report.rateControlApplied = true;
-                return true;
-            }
-        }
-
-        return false;
-    }
-
     void applyOptionalStringOptions(AVCodecContext* encoderContext,
                                     const AVCodec* encoder,
                                     const VideoEncodeOptions& options,
@@ -232,27 +187,46 @@ namespace {
         );
     }
 
-    void applyBitrateControlPlan(AVCodecContext* encoderContext,
-                                 const VideoBitratePlan& plan,
-                                 VideoEncodeOptionsApplyReport& report)
+    void applyBitrateOptionPlan(AVCodecContext* encoderContext,
+                                const VideoBitrateOptionPlan& optionPlan,
+                                VideoEncodeOptionsApplyReport& report)
     {
-        if (plan.targetKbps > 0) {
-            encoderContext->bit_rate = kbpsToBps(plan.targetKbps);
+        if (optionPlan.bitRate > 0) {
+            encoderContext->bit_rate = optionPlan.bitRate;
             report.bitRate = encoderContext->bit_rate;
         }
 
-        if (plan.maxKbps > 0) {
-            encoderContext->rc_max_rate = kbpsToBps(plan.maxKbps);
+        if (optionPlan.maxBitRate > 0) {
+            encoderContext->rc_max_rate = optionPlan.maxBitRate;
             report.maxBitRate = encoderContext->rc_max_rate;
         }
 
-        if (plan.bufferSizeKbits > 0) {
-            encoderContext->rc_buffer_size = static_cast<int>(kbpsToBps(plan.bufferSizeKbits));
+        if (optionPlan.bufferSize > 0) {
+            encoderContext->rc_buffer_size = static_cast<int>(optionPlan.bufferSize);
             report.bufferSize = encoderContext->rc_buffer_size;
         }
 
-        for (const std::string& diagnostic : plan.diagnostics) {
-            report.appliedOptions.emplace_back("bitrate_plan=" + diagnostic);
+        for (const VideoBitrateOption& option : optionPlan.privateOptions) {
+            if (option.type == VideoBitrateOption::Type::String) {
+                setStringOptionIfSupported(
+                    encoderContext,
+                    option.name.c_str(),
+                    option.stringValue,
+                    report
+                );
+            }
+            else {
+                setIntegerOptionIfSupported(
+                    encoderContext,
+                    option.name.c_str(),
+                    option.integerValue,
+                    report
+                );
+            }
+        }
+
+        for (const std::string& diagnostic : optionPlan.diagnostics) {
+            report.appliedOptions.emplace_back("bitrate_adapter=" + diagnostic);
         }
     }
 
@@ -327,26 +301,22 @@ namespace {
             encoderContext->height,
             outputFps
         );
-        applyBitrateControlPlan(encoderContext, bitratePlan, report);
+        for (const std::string& diagnostic : bitratePlan.diagnostics) {
+            report.appliedOptions.emplace_back("bitrate_plan=" + diagnostic);
+        }
+
+        const VideoBitrateOptionPlan optionPlan = VideoBitrateOptionAdapter::adapt(
+            encoder,
+            bitratePlan
+        );
+        applyBitrateOptionPlan(encoderContext, optionPlan, report);
 
         encoderContext->gop_size = chooseGopSize(options, outputFps);
         encoderContext->max_b_frames = chooseMaxBFrames(options);
         report.gopSize = encoderContext->gop_size;
         report.maxBFrames = encoderContext->max_b_frames;
 
-        applyRateControlMode(encoderContext, bitratePlan.rateControl, report);
         applyOptionalStringOptions(encoderContext, encoder, options, report);
-
-        // Some encoders expose VBV/peak bitrate only as private options. Probe
-        // and set them opportunistically while keeping AVCodecContext fields as
-        // the portable source of truth.
-        if (report.maxBitRate > 0) {
-            setIntegerOptionIfSupported(encoderContext, "maxrate", report.maxBitRate, report);
-        }
-
-        if (report.bufferSize > 0) {
-            setIntegerOptionIfSupported(encoderContext, "bufsize", report.bufferSize, report);
-        }
 
         return report;
     }
