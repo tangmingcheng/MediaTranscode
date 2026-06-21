@@ -17,6 +17,35 @@ namespace media {
         AV1
     };
 
+    // 视频码控模式。Auto 表示由具体编码器适配层选择最安全的默认策略。
+    enum class VideoRateControlMode {
+        Auto,
+        CBR,
+        VBR
+    };
+
+    // 视频编码基础控制项。
+    // 所有字段均为可选：0 或空字符串表示使用模块默认值。
+    struct VideoEncodeOptions {
+        VideoRateControlMode rateControl = VideoRateControlMode::Auto;
+
+        // 关键帧间隔，单位：帧。0 表示自动，默认约 2 秒 GOP。
+        int gopSize = 0;
+
+        // B 帧数量。当前默认仍为 0，保持低延迟行为。
+        int maxBFrames = 0;
+
+        // VBR/CBR 辅助参数。0 表示不显式设置。
+        int maxBitrateKbps = 0;
+        int bufferSizeKbps = 0;
+
+        // 编码器私有参数的通用抽象。不同编码器支持程度不同。
+        std::string preset;
+        std::string tune;
+        std::string profile;
+        std::string level;
+    };
+
     // 音频处理模式
     enum class AudioMode {
         None,
@@ -58,6 +87,8 @@ namespace media {
         int fps = 0;
 
         VideoCodec videoCodec = VideoCodec::H264;
+        VideoEncodeOptions videoEncode;
+
         AudioMode audioMode = AudioMode::EncodeSelected;
         AudioCodec audioCodec = AudioCodec::AAC;
 
