@@ -131,6 +131,14 @@ namespace {
             return media::VideoRateControlMode::VBR;
         }
 
+        if (normalized == "crf" || normalized == "cq") {
+            return media::VideoRateControlMode::CRF;
+        }
+
+        if (normalized == "capped-vbr" || normalized == "capped_vbr" || normalized == "cvbr") {
+            return media::VideoRateControlMode::CappedVBR;
+        }
+
         throw std::runtime_error("unsupported video rate control mode: " + value);
     }
 
@@ -204,6 +212,10 @@ namespace {
             return "cbr";
         case media::VideoRateControlMode::VBR:
             return "vbr";
+        case media::VideoRateControlMode::CRF:
+            return "crf";
+        case media::VideoRateControlMode::CappedVBR:
+            return "capped-vbr";
         case media::VideoRateControlMode::Auto:
         default:
             return "auto";
@@ -336,7 +348,8 @@ namespace {
             << "      --fps <value>               Output fps, 0 means preserve input timeline\n"
             << "      --video-codec <value>       h264 | h265 | mpeg4 | vp8 | vp9 | av1\n"
             << "      --video-bitrate <kbps>      Target video bitrate in kbps\n"
-            << "      --rc <value>                auto | cbr | vbr\n"
+            << "      --rc <value>                auto | cbr | vbr | crf | capped-vbr\n"
+            << "      --quality <value>           Generic quality value for crf/cq modes\n"
             << "      --speed <value>             auto | fast | balanced | quality\n"
             << "      --gop <frames>              GOP size in frames, 0 means auto\n"
             << "      --bframes <count>           Max B frames, default 0\n"
@@ -355,7 +368,8 @@ namespace {
             << "  -h, --help                      Show this help\n\n"
             << "Examples:\n"
             << "  " << executable << " -i input.mp4 -o output.mp4 --video-codec h264 --size 1280x720 --fps 25 --video-bitrate 3000 --speed balanced --audio-codec aac --audio-bitrate 128\n"
-            << "  " << executable << " -i input.mp4 -o output_cpu.mp4 --disable-hardware --video-codec h265 --size 1280x720 --fps 25 --video-bitrate 3000 --rc cbr --speed balanced --gop 50\n";
+            << "  " << executable << " -i input.mp4 -o output_cpu.mp4 --disable-hardware --video-codec h265 --size 1280x720 --fps 25 --rc crf --quality 23 --speed balanced\n"
+            << "  " << executable << " -i input.mp4 -o output_cvbr.mp4 --video-codec h265 --size 1280x720 --fps 25 --rc capped-vbr --quality 23 --video-bitrate 3000 --max-video-bitrate 5000 --buffer-size 10000\n";
     }
 
     CliOptions parseOptions(int argc, char* argv[])
@@ -425,6 +439,9 @@ namespace {
             }
             else if (arg == "--rc" || arg == "--rate-control") {
                 options.config.videoBitrate.rateControl = parseVideoRateControlMode(requireValue(arg));
+            }
+            else if (arg == "--quality") {
+                options.config.videoBitrate.quality = parsePositiveInt(requireValue(arg), arg);
             }
             else if (arg == "--speed") {
                 options.config.videoEncode.speedPreset = parseVideoEncodeSpeedPreset(requireValue(arg));
@@ -592,6 +609,7 @@ namespace {
         spdlog::info("videoCodec={}", videoCodecToString(config.videoCodec));
         spdlog::info("videoBitrateTarget={} kbps", config.videoBitrate.targetKbps);
         spdlog::info("videoRateControl={}", videoRateControlToString(config.videoBitrate.rateControl));
+        spdlog::info("videoQuality={}", config.videoBitrate.quality);
         spdlog::info("videoSpeed={}", videoSpeedPresetToString(config.videoEncode.speedPreset));
         spdlog::info("videoGop={}", config.videoEncode.gopSize);
         spdlog::info("videoBFrames={}", config.videoEncode.maxBFrames);
