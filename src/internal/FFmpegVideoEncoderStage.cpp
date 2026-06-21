@@ -2,6 +2,7 @@
 
 #include "internal/FFmpegError.h"
 #include "internal/FFmpegUtils.h"
+#include "internal/FFmpegVideoEncodeOptionsApplier.h"
 
 #include "spdlog/spdlog.h"
 
@@ -233,10 +234,6 @@ Status FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream()
         m_encoderCtx->sw_pix_fmt = m_hardwareBackend.directHardwareFrameSoftwareFormat;
     }
 
-    m_encoderCtx->bit_rate = static_cast<int64_t>(std::max(1, m_config.videoBitrateKbps)) * 1000;
-    m_encoderCtx->gop_size = std::max(10, m_outputFps * 2);
-    m_encoderCtx->max_b_frames = 0;
-
     if (m_outputFmtCtx->oformat->flags & AVFMT_GLOBALHEADER) {
         m_encoderCtx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
     }
@@ -296,7 +293,19 @@ Status FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream()
         );
     }
 
-    setVideoEncoderOptions(m_encoderCtx.get(), encoder);
+    const VideoEncodeOptionsApplyReport encodeOptionsReport =
+        VideoEncodeOptionsApplier::apply(
+            m_encoderCtx.get(),
+            encoder,
+            m_config,
+            m_outputFps
+        );
+
+    spdlog::info(
+        "[ENCODER][OPTIONS] encoder={}, {}",
+        encoder->name ? encoder->name : "unknown",
+        encodeOptionsReport.describe()
+    );
 
     spdlog::info(
         "[ZC][ENCODER] open encoder={}, backend={}, pix_fmt={}, sw_pix_fmt={}, hw_device_ctx={}, hw_frames_ctx={}, size={}x{}, fps={}/{}",
