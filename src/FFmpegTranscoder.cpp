@@ -43,6 +43,21 @@ namespace {
         std::atomic_bool& m_running;
     };
 
+    const char* executionModeName(ffmpeg::VideoExecutionMode mode)
+    {
+        switch (mode) {
+        case ffmpeg::VideoExecutionMode::HardwareZeroCopy:
+            return "hardware-zero-copy";
+        case ffmpeg::VideoExecutionMode::HardwareDecodeSoftwareFilterHardwareEncode:
+            return "hardware-decode-software-filter-hardware-encode";
+        case ffmpeg::VideoExecutionMode::HardwareDecodeSoftwareFilterGenericEncode:
+            return "hardware-decode-software-filter-generic-encode";
+        case ffmpeg::VideoExecutionMode::Cpu:
+        default:
+            return "cpu";
+        }
+    }
+
 } // namespace
 
     FFmpegTranscoder::FFmpegTranscoder()
@@ -291,13 +306,22 @@ namespace {
         }
 
         const ffmpeg::HardwarePipelinePlan* executionPlan = nullptr;
-        if (plan.valid && plan.executionMode == ffmpeg::VideoExecutionMode::ZeroCopy) {
+        if (plan.valid && plan.executionMode != ffmpeg::VideoExecutionMode::Cpu) {
             executionPlan = &plan;
-            spdlog::info("[PLAN] execution mode: zero-copy hardware pipeline: {}", plan.diagnostic);
-        }
-        else if (plan.valid && plan.executionMode == ffmpeg::VideoExecutionMode::MixedGpu) {
-            executionPlan = &plan;
-            spdlog::warn("[PLAN] execution mode: mixed hardware pipeline: {}", plan.diagnostic);
+            if (plan.executionMode == ffmpeg::VideoExecutionMode::HardwareZeroCopy) {
+                spdlog::info(
+                    "[PLAN] execution mode: {}: {}",
+                    executionModeName(plan.executionMode),
+                    plan.diagnostic
+                );
+            }
+            else {
+                spdlog::warn(
+                    "[PLAN] execution mode: {}: {}",
+                    executionModeName(plan.executionMode),
+                    plan.diagnostic
+                );
+            }
         }
         else {
             if (m_config.hardware.enabled && !m_config.hardware.allowZeroCopyFallback) {
@@ -308,7 +332,7 @@ namespace {
             }
 
             spdlog::warn(
-                "[PLAN] execution mode: CPU frame pipeline fallback: {}",
+                "[PLAN] execution mode: cpu-frame-pipeline fallback: {}",
                 plan.diagnostic
             );
         }
