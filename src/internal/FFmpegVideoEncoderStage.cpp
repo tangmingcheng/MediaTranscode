@@ -276,7 +276,7 @@ Status FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream()
         encoderHardwareReady;
 
     if (wantsHardwarePipeline &&
-        m_hardwarePlan.executionMode == VideoExecutionMode::ZeroCopy &&
+        m_hardwarePlan.executionMode == VideoExecutionMode::HardwareZeroCopy &&
         !m_zeroCopyPipeline) {
         std::ostringstream oss;
         oss << "zero-copy hardware pipeline unavailable during execution: encoder="
@@ -289,17 +289,18 @@ Status FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream()
     }
 
     if (wantsHardwarePipeline &&
-        m_hardwarePlan.executionMode == VideoExecutionMode::MixedGpu &&
+        m_hardwarePlan.executionMode != VideoExecutionMode::HardwareZeroCopy &&
         m_zeroCopyPipeline) {
         return Status::failure(makeError(
             ErrorCode::HardwareUnavailable,
-            "mixed GPU fallback unexpectedly entered zero-copy execution"));
+            "staged hardware execution unexpectedly entered zero-copy pipeline"));
     }
 
     if (wantsHardwarePipeline &&
-        m_hardwarePlan.executionMode == VideoExecutionMode::MixedGpu) {
+        m_hardwarePlan.executionMode != VideoExecutionMode::HardwareZeroCopy) {
         spdlog::warn(
-            "[PLAN] active mixed hardware path: hardware decode={}, hardware encode={}, encoder={}, encoder_pix_fmt={}",
+            "[PLAN] active staged hardware path: mode={}, hardware_decode={}, hardware_encode={}, encoder={}, encoder_pix_fmt={}",
+            static_cast<int>(m_hardwarePlan.executionMode),
             m_decoderHardwareDeviceAttached,
             selectedPlannedHardwareEncoder,
             encoder->name ? encoder->name : "unknown",
@@ -371,7 +372,7 @@ Status FFmpegVideoEncoderStage::initializeHardwareDeviceForEncoder(const AVCodec
         m_hardwareEncoderSelection.hardwareEncoder;
 
     if (!selectedHardwareEncoder) {
-        if (m_hardwarePlan.executionMode == VideoExecutionMode::MixedGpu) {
+        if (m_hardwarePlan.executionMode != VideoExecutionMode::HardwareZeroCopy) {
             return Status::success();
         }
 
