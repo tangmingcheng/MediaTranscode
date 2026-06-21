@@ -24,10 +24,21 @@ namespace media {
         VBR
     };
 
+    // 对外暴露的通用编码速度/质量档位。
+    // 具体编码器参数由 FFmpeg 编码器适配层根据最终选择到的编码器转换，
+    // 例如 NVENC 转为 p1/p4/p7，libx264/libx265 转为 fast/medium/slow。
+    enum class VideoEncodeSpeedPreset {
+        Auto,
+        Fast,
+        Balanced,
+        Quality
+    };
+
     // 视频编码基础控制项。
-    // 所有字段均为可选：0 或空字符串表示使用模块默认值。
+    // 所有字段均为可选：0、Auto 或空字符串表示使用模块默认值。
     struct VideoEncodeOptions {
         VideoRateControlMode rateControl = VideoRateControlMode::Auto;
+        VideoEncodeSpeedPreset speedPreset = VideoEncodeSpeedPreset::Auto;
 
         // 关键帧间隔，单位：帧。0 表示自动，默认约 2 秒 GOP。
         int gopSize = 0;
@@ -39,7 +50,7 @@ namespace media {
         int maxBitrateKbps = 0;
         int bufferSizeKbps = 0;
 
-        // 编码器私有参数的通用抽象。不同编码器支持程度不同。
+        // 编码器私有参数。面向内部适配/专家模式，普通调用方应优先使用 speedPreset。
         std::string preset;
         std::string tune;
         std::string profile;
