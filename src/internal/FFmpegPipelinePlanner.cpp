@@ -51,10 +51,12 @@ namespace {
     std::string executionModeName(VideoExecutionMode mode)
     {
         switch (mode) {
-        case VideoExecutionMode::ZeroCopy:
-            return "zero-copy";
-        case VideoExecutionMode::MixedGpu:
-            return "mixed-gpu";
+        case VideoExecutionMode::HardwareZeroCopy:
+            return "hardware-zero-copy";
+        case VideoExecutionMode::HardwareDecodeSoftwareFilterHardwareEncode:
+            return "hardware-decode-software-filter-hardware-encode";
+        case VideoExecutionMode::HardwareDecodeSoftwareFilterGenericEncode:
+            return "hardware-decode-software-filter-generic-encode";
         case VideoExecutionMode::Cpu:
         default:
             return "cpu";
@@ -136,7 +138,7 @@ namespace {
                                     HardwarePipelinePlan& plan)
     {
         plan.valid = true;
-        plan.zeroCopy = attempt.executionMode == VideoExecutionMode::ZeroCopy;
+        plan.zeroCopy = attempt.executionMode == VideoExecutionMode::HardwareZeroCopy;
         plan.executionMode = attempt.executionMode;
         plan.backend = attempt.backend;
         plan.decoderConfig = attempt.decoderConfig;
@@ -264,7 +266,7 @@ namespace {
 
             if (filterBlockReason.empty()) {
                 HardwarePipelinePlanAttempt zeroCopyAttempt = baseAttempt;
-                zeroCopyAttempt.executionMode = VideoExecutionMode::ZeroCopy;
+                zeroCopyAttempt.executionMode = VideoExecutionMode::HardwareZeroCopy;
                 zeroCopyAttempt.encoderSelection = HardwareEncoderSelector::selectZeroCopyEncoder(
                     config.videoCodec,
                     zeroCopyAttempt.backend
@@ -298,7 +300,7 @@ namespace {
             }
             else {
                 HardwarePipelinePlanAttempt blockedAttempt = baseAttempt;
-                blockedAttempt.executionMode = VideoExecutionMode::ZeroCopy;
+                blockedAttempt.executionMode = VideoExecutionMode::HardwareZeroCopy;
                 blockedAttempt.reason = filterBlockReason;
                 plan.attempts.emplace_back(blockedAttempt);
                 logAttempt(plan.attempts.back());
@@ -308,60 +310,60 @@ namespace {
                 continue;
             }
 
-            HardwarePipelinePlanAttempt mixedEncodeAttempt = baseAttempt;
-            mixedEncodeAttempt.executionMode = VideoExecutionMode::MixedGpu;
-            mixedEncodeAttempt.encoderSelection = HardwareEncoderSelector::selectMixedGpuEncoder(
+            HardwarePipelinePlanAttempt hardwareEncodeAttempt = baseAttempt;
+            hardwareEncodeAttempt.executionMode = VideoExecutionMode::HardwareDecodeSoftwareFilterHardwareEncode;
+            hardwareEncodeAttempt.encoderSelection = HardwareEncoderSelector::selectMixedGpuEncoder(
                 config.videoCodec,
-                mixedEncodeAttempt.backend
+                hardwareEncodeAttempt.backend
             );
-            mixedEncodeAttempt.encoderAccepted = mixedEncodeAttempt.encoderSelection.encoder &&
-                mixedEncodeAttempt.encoderSelection.hardwareEncoder;
+            hardwareEncodeAttempt.encoderAccepted = hardwareEncodeAttempt.encoderSelection.encoder &&
+                hardwareEncodeAttempt.encoderSelection.hardwareEncoder;
 
-            if (mixedEncodeAttempt.encoderAccepted) {
-                mixedEncodeAttempt.score = kScoreHardwareDecodeHardwareEncode;
-                mixedEncodeAttempt.reason = "accepted mixed hardware path: hardware decode + software filter + hardware encode";
+            if (hardwareEncodeAttempt.encoderAccepted) {
+                hardwareEncodeAttempt.score = kScoreHardwareDecodeHardwareEncode;
+                hardwareEncodeAttempt.reason = "accepted staged hardware path: hardware decode + software filter + hardware encode";
 
-                if (!bestAttempt.has_value() || betterAttempt(mixedEncodeAttempt, *bestAttempt)) {
-                    bestAttempt = mixedEncodeAttempt;
+                if (!bestAttempt.has_value() || betterAttempt(hardwareEncodeAttempt, *bestAttempt)) {
+                    bestAttempt = hardwareEncodeAttempt;
                 }
             }
             else {
-                mixedEncodeAttempt.reason = mixedEncodeAttempt.encoderSelection.diagnostic.empty()
+                hardwareEncodeAttempt.reason = hardwareEncodeAttempt.encoderSelection.diagnostic.empty()
                     ? "no hardware encoder accepts software-frame fallback input"
-                    : mixedEncodeAttempt.encoderSelection.diagnostic;
+                    : hardwareEncodeAttempt.encoderSelection.diagnostic;
             }
 
-            plan.attempts.emplace_back(mixedEncodeAttempt);
+            plan.attempts.emplace_back(hardwareEncodeAttempt);
             logAttempt(plan.attempts.back());
 
             const VideoEncoderSelection genericEncoder = VideoEncoderSelector::select(config.videoCodec);
-            HardwarePipelinePlanAttempt hardwareDecodeAttempt = baseAttempt;
-            hardwareDecodeAttempt.executionMode = VideoExecutionMode::MixedGpu;
-            hardwareDecodeAttempt.encoderSelection = makeGenericEncoderSelection(
+            HardwarePipelinePlanAttempt genericEncodeAttempt = baseAttempt;
+            genericEncodeAttempt.executionMode = VideoExecutionMode::HardwareDecodeSoftwareFilterGenericEncode;
+            genericEncodeAttempt.encoderSelection = makeGenericEncoderSelection(
                 genericEncoder,
-                hardwareDecodeAttempt.backend
+                genericEncodeAttempt.backend
             );
-            hardwareDecodeAttempt.encoderAccepted = hardwareDecodeAttempt.encoderSelection.encoder != nullptr;
+            genericEncodeAttempt.encoderAccepted = genericEncodeAttempt.encoderSelection.encoder != nullptr;
 
-            if (hardwareDecodeAttempt.encoderAccepted) {
-                hardwareDecodeAttempt.score = kScoreHardwareDecodeOnly;
-                hardwareDecodeAttempt.reason = "accepted hardware decode path: hardware decode + software filter + generic encode";
+            if (genericEncodeAttempt.encoderAccepted) {
+                genericEncodeAttempt.score = kScoreHardwareDecodeOnly;
+                genericEncodeAttempt.reason = "accepted hardware decode path: hardware decode + software filter + generic encode";
 
-                if (!bestAttempt.has_value() || betterAttempt(hardwareDecodeAttempt, *bestAttempt)) {
-                    bestAttempt = hardwareDecodeAttempt;
+                if (!bestAttempt.has_value() || betterAttempt(genericEncodeAttempt, *bestAttempt)) {
+                    bestAttempt = genericEncodeAttempt;
                 }
             }
             else {
-                hardwareDecodeAttempt.reason = "hardware decode path rejected: " + genericEncoder.diagnostic;
+                genericEncodeAttempt.reason = "hardware decode path rejected: " + genericEncoder.diagnostic;
             }
 
-            plan.attempts.emplace_back(hardwareDecodeAttempt);
+            plan.attempts.emplace_back(genericEncodeAttempt);
             logAttempt(plan.attempts.back());
         }
 
         if (bestAttempt.has_value()) {
             applySelectedAttemptToPlan(*bestAttempt, plan);
-            if (plan.executionMode == VideoExecutionMode::ZeroCopy) {
+            if (plan.executionMode == VideoExecutionMode::HardwareZeroCopy) {
                 spdlog::info("[PLAN] selected: {}", plan.diagnostic);
             }
             else {
