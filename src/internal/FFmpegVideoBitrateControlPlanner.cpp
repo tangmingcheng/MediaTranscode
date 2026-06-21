@@ -147,6 +147,36 @@ namespace {
         return result;
     }
 
+    int clampQualityByPolicy(VideoBitratePlan& plan,
+                             const VideoBitrateControlPolicy& policy,
+                             int quality)
+    {
+        int result = quality;
+
+        if (result <= 0 && policy.defaultQuality > 0) {
+            result = policy.defaultQuality;
+            addDiagnostic(plan, "quality selected from policy default");
+        }
+
+        if (policy.minimumQuality > 0 && result > 0 && result < policy.minimumQuality) {
+            std::ostringstream oss;
+            oss << "quality raised by policy minimum: "
+                << result << " -> " << policy.minimumQuality;
+            addDiagnostic(plan, oss.str());
+            result = policy.minimumQuality;
+        }
+
+        if (policy.maximumQuality > 0 && result > policy.maximumQuality) {
+            std::ostringstream oss;
+            oss << "quality limited by policy maximum: "
+                << result << " -> " << policy.maximumQuality;
+            addDiagnostic(plan, oss.str());
+            result = policy.maximumQuality;
+        }
+
+        return result;
+    }
+
     int targetFromInputs(const TranscodeConfig& config,
                          int outputWidth,
                          int outputHeight,
@@ -214,6 +244,16 @@ namespace {
         return 0;
     }
 
+    void resolveQuality(const TranscodeConfig& config, VideoBitratePlan& plan)
+    {
+        if (config.videoBitrate.quality > 0) {
+            plan.quality = config.videoBitrate.quality;
+            plan.userQualityApplied = true;
+        }
+
+        plan.quality = positiveOrZero(clampQualityByPolicy(plan, config.bitratePolicy, plan.quality));
+    }
+
     void completeCbrPlan(const TranscodeConfig& config, VideoBitratePlan& plan)
     {
         if (plan.maxKbps <= 0 && plan.targetKbps > 0) {
@@ -244,6 +284,30 @@ namespace {
             plan.bufferSizeKbits = roundToInt(plan.targetKbps * config.bitratePolicy.vbrBufferSeconds);
             addDiagnostic(plan, "VBR buffer size derived from policy buffer seconds");
         }
+    }
+
+    void completeCrfPlan(VideoBitratePlan& plan)
+    {
+        if (plan.quality <= 0) {
+            plan.quality = 23;
+            addDiagnostic(plan, "CRF quality defaulted to 23");
+        }
+
+        // Pure CRF is quality-driven. Do not force target bitrate.
+        plan.targetKbps = 0;
+        plan.minKbps = 0;
+        plan.maxKbps = 0;
+        plan.bufferSizeKbits = 0;
+    }
+
+    void completeCappedVbrPlan(const TranscodeConfig& config, VideoBitratePlan& plan)
+    {
+        if (plan.quality <= 0) {
+            plan.quality = 23;
+            addDiagnostic(plan, "capped VBR quality defaulted to 23");
+        }
+
+        completeVbrPlan(config, plan);
     }
 
 } // namespace
@@ -279,6 +343,8 @@ namespace {
         plan.maxKbps = positiveOrZero(resolveMaxKbps(config, plan));
         plan.bufferSizeKbits = positiveOrZero(resolveBufferKbits(config, plan));
 
+        resolveQuality(config, plan);
+
         switch (plan.rateControl) {
         case VideoRateControlMode::CBR:
             completeCbrPlan(config, plan);
@@ -286,6 +352,14 @@ namespace {
 
         case VideoRateControlMode::VBR:
             completeVbrPlan(config, plan);
+            break;
+
+        case VideoRateControlMode::CRF:
+            completeCrfPlan(plan);
+            break;
+
+        case VideoRateControlMode::CappedVBR:
+            completeCappedVbrPlan(config, plan);
             break;
 
         case VideoRateControlMode::Auto:
