@@ -6,8 +6,18 @@ namespace media::ffmpeg {
     // Public callers do not choose this directly.
     enum class VideoExecutionMode {
         Cpu,
-        ZeroCopy,
-        MixedGpu
+
+        // Hardware decode -> hardware filter/direct hardware frame -> hardware encode.
+        // This is the lowest-CPU path and must not require hwdownload.
+        HardwareZeroCopy,
+
+        // Hardware decode -> hwdownload -> software filter -> hardware encode.
+        HardwareDecodeSoftwareFilterHardwareEncode,
+
+        // Hardware decode -> hwdownload -> software filter -> generic encoder.
+        // The generic encoder is usually software, but may still be hardware when it is
+        // the only available encoder for the requested codec.
+        HardwareDecodeSoftwareFilterGenericEncode
     };
 
     // Internal execution pipeline type. Public callers do not choose this directly;
