@@ -128,21 +128,20 @@ namespace {
         return encoder && ((encoder->capabilities & AV_CODEC_CAP_SLICE_THREADS) != 0);
     }
 
-    int scoreEncoder(const AVCodec* encoder)
+    int scoreEncoder(const AVCodec* encoder, bool preferHardwareEncoder)
     {
         if (!encoder) {
             return -100000;
         }
 
+        const bool hardware = encoderIsHardware(encoder);
         int score = 0;
 
-        if (!encoderIsHardware(encoder)) {
-            // Generic CPU path should prefer software encoders. Hardware encoders
-            // are selected by HardwareEncoderSelector after a hardware plan exists.
-            score += 500;
+        if (preferHardwareEncoder) {
+            score += hardware ? 600 : 100;
         }
         else {
-            score += 100;
+            score += hardware ? 100 : 600;
         }
 
         if (!encoderIsExperimental(encoder)) {
@@ -167,10 +166,14 @@ namespace {
         return score;
     }
 
-    std::string describeReason(const AVCodec* encoder, int score, AVPixelFormat pixelFormat)
+    std::string describeReason(const AVCodec* encoder,
+                               int score,
+                               AVPixelFormat pixelFormat,
+                               bool preferHardwareEncoder)
     {
         std::ostringstream oss;
         oss << "score=" << score
+            << ", prefer_hardware=" << preferHardwareEncoder
             << ", hardware=" << encoderIsHardware(encoder)
             << ", experimental=" << encoderIsExperimental(encoder)
             << ", frame_threads=" << encoderSupportsFrameThreads(encoder)
@@ -212,7 +215,8 @@ namespace {
         }
     }
 
-    VideoEncoderSelection VideoEncoderSelector::select(VideoCodec codec)
+    VideoEncoderSelection VideoEncoderSelector::select(VideoCodec codec,
+                                                       bool preferHardwareEncoder)
     {
         VideoEncoderSelection selection;
         const AVCodecID targetCodecId = codecIdFor(codec);
@@ -244,11 +248,12 @@ namespace {
             candidate.experimental = encoderIsExperimental(encoder);
             candidate.selectedPixelFormat = chooseVideoEncoderPixelFormat(encoder);
             candidate.pixelFormats = pixelFormatListText(encoder);
-            candidate.score = scoreEncoder(encoder);
+            candidate.score = scoreEncoder(encoder, preferHardwareEncoder);
             candidate.reason = describeReason(
                 encoder,
                 candidate.score,
-                candidate.selectedPixelFormat
+                candidate.selectedPixelFormat,
+                preferHardwareEncoder
             );
 
             selection.candidates.emplace_back(candidate);
