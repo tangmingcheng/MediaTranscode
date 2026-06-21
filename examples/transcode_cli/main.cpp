@@ -134,6 +134,29 @@ namespace {
         throw std::runtime_error("unsupported video rate control mode: " + value);
     }
 
+    media::VideoEncodeSpeedPreset parseVideoEncodeSpeedPreset(const std::string& value)
+    {
+        const std::string normalized = toLower(value);
+
+        if (normalized == "auto") {
+            return media::VideoEncodeSpeedPreset::Auto;
+        }
+
+        if (normalized == "fast" || normalized == "speed") {
+            return media::VideoEncodeSpeedPreset::Fast;
+        }
+
+        if (normalized == "balanced" || normalized == "balance" || normalized == "medium") {
+            return media::VideoEncodeSpeedPreset::Balanced;
+        }
+
+        if (normalized == "quality" || normalized == "high-quality") {
+            return media::VideoEncodeSpeedPreset::Quality;
+        }
+
+        throw std::runtime_error("unsupported video speed preset: " + value);
+    }
+
     media::AudioCodec parseAudioCodec(const std::string& value)
     {
         const std::string normalized = toLower(value);
@@ -182,6 +205,21 @@ namespace {
         case media::VideoRateControlMode::VBR:
             return "vbr";
         case media::VideoRateControlMode::Auto:
+        default:
+            return "auto";
+        }
+    }
+
+    std::string videoSpeedPresetToString(media::VideoEncodeSpeedPreset preset)
+    {
+        switch (preset) {
+        case media::VideoEncodeSpeedPreset::Fast:
+            return "fast";
+        case media::VideoEncodeSpeedPreset::Balanced:
+            return "balanced";
+        case media::VideoEncodeSpeedPreset::Quality:
+            return "quality";
+        case media::VideoEncodeSpeedPreset::Auto:
         default:
             return "auto";
         }
@@ -299,11 +337,11 @@ namespace {
             << "      --video-codec <value>       h264 | h265 | mpeg4 | vp8 | vp9 | av1\n"
             << "      --video-bitrate <kbps>      Video bitrate in kbps\n"
             << "      --rc <value>                auto | cbr | vbr\n"
+            << "      --speed <value>             auto | fast | balanced | quality\n"
             << "      --gop <frames>              GOP size in frames, 0 means auto\n"
             << "      --bframes <count>           Max B frames, default 0\n"
             << "      --max-video-bitrate <kbps>  Peak video bitrate for capped VBR/CBR\n"
             << "      --buffer-size <kbps>        Encoder VBV buffer size\n"
-            << "      --preset <value>            Encoder preset if supported\n"
             << "      --tune <value>              Encoder tune if supported\n"
             << "      --profile <value>           Encoder profile if supported\n"
             << "      --level <value>             Encoder level if supported\n\n"
@@ -316,8 +354,8 @@ namespace {
             << "      --no-audio                  Disable audio output\n"
             << "  -h, --help                      Show this help\n\n"
             << "Examples:\n"
-            << "  " << executable << " -i input.mp4 -o output.mp4 --video-codec h264 --size 1280x720 --fps 25 --video-bitrate 3000 --audio-codec aac --audio-bitrate 128\n"
-            << "  " << executable << " -i input.mp4 -o output_cpu.mp4 --disable-hardware --video-codec h265 --size 1280x720 --fps 25 --video-bitrate 3000 --rc cbr --gop 50\n";
+            << "  " << executable << " -i input.mp4 -o output.mp4 --video-codec h264 --size 1280x720 --fps 25 --video-bitrate 3000 --speed balanced --audio-codec aac --audio-bitrate 128\n"
+            << "  " << executable << " -i input.mp4 -o output_cpu.mp4 --disable-hardware --video-codec h265 --size 1280x720 --fps 25 --video-bitrate 3000 --rc cbr --speed balanced --gop 50\n";
     }
 
     CliOptions parseOptions(int argc, char* argv[])
@@ -388,6 +426,9 @@ namespace {
             else if (arg == "--rc" || arg == "--rate-control") {
                 options.config.videoEncode.rateControl = parseVideoRateControlMode(requireValue(arg));
             }
+            else if (arg == "--speed") {
+                options.config.videoEncode.speedPreset = parseVideoEncodeSpeedPreset(requireValue(arg));
+            }
             else if (arg == "--gop" || arg == "--gop-size") {
                 options.config.videoEncode.gopSize = parseNonNegativeInt(requireValue(arg), arg);
             }
@@ -401,6 +442,7 @@ namespace {
                 options.config.videoEncode.bufferSizeKbps = parsePositiveInt(requireValue(arg), arg);
             }
             else if (arg == "--preset") {
+                // Expert/native encoder option. Public integrations should prefer --speed.
                 options.config.videoEncode.preset = requireValue(arg);
             }
             else if (arg == "--tune") {
@@ -550,11 +592,12 @@ namespace {
         spdlog::info("videoCodec={}", videoCodecToString(config.videoCodec));
         spdlog::info("videoBitrate={} kbps", config.videoBitrateKbps);
         spdlog::info("videoRateControl={}", videoRateControlToString(config.videoEncode.rateControl));
+        spdlog::info("videoSpeed={}", videoSpeedPresetToString(config.videoEncode.speedPreset));
         spdlog::info("videoGop={}", config.videoEncode.gopSize);
         spdlog::info("videoBFrames={}", config.videoEncode.maxBFrames);
         spdlog::info("videoMaxBitrate={} kbps", config.videoEncode.maxBitrateKbps);
         spdlog::info("videoBufferSize={} kbps", config.videoEncode.bufferSizeKbps);
-        spdlog::info("videoPreset={}", config.videoEncode.preset.empty() ? "auto" : config.videoEncode.preset);
+        spdlog::info("videoNativePreset={}", config.videoEncode.preset.empty() ? "auto" : config.videoEncode.preset);
         spdlog::info("videoTune={}", config.videoEncode.tune.empty() ? "auto" : config.videoEncode.tune);
         spdlog::info("videoProfile={}", config.videoEncode.profile.empty() ? "auto" : config.videoEncode.profile);
         spdlog::info("videoLevel={}", config.videoEncode.level.empty() ? "auto" : config.videoEncode.level);
