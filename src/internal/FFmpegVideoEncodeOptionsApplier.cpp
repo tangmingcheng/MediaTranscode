@@ -111,6 +111,11 @@ namespace {
         return encoder && encoder->name && std::string(encoder->name) == name;
     }
 
+    bool isRateControlPrivateOption(const std::string& name)
+    {
+        return name == "rc" || name == "rate_control" || name == "rc_mode" || name == "nal-hrd";
+    }
+
     std::string nativePresetForSpeed(const AVCodec* encoder,
                                      VideoEncodeSpeedPreset speedPreset)
     {
@@ -212,8 +217,9 @@ namespace {
         }
 
         for (const VideoBitrateOption& option : optionPlan.privateOptions) {
+            bool applied = false;
             if (option.type == VideoBitrateOption::Type::String) {
-                setStringOptionIfSupported(
+                applied = setStringOptionIfSupported(
                     encoderContext,
                     option.name.c_str(),
                     option.stringValue,
@@ -221,12 +227,16 @@ namespace {
                 );
             }
             else {
-                setIntegerOptionIfSupported(
+                applied = setIntegerOptionIfSupported(
                     encoderContext,
                     option.name.c_str(),
                     option.integerValue,
                     report
                 );
+            }
+
+            if (applied && isRateControlPrivateOption(option.name)) {
+                report.rateControlApplied = true;
             }
         }
 
