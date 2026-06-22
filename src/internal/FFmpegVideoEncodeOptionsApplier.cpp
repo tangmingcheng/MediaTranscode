@@ -8,8 +8,6 @@
 #include <string>
 
 extern "C" {
-#include <libavutil/avstring.h>
-#include <libavutil/error.h>
 #include <libavutil/opt.h>
 }
 
@@ -129,6 +127,8 @@ namespace {
             return "faster";
         case VideoEncodeSpeedPreset::Fast:
             return "fast";
+        case VideoEncodeSpeedPreset::Medium:
+            return "medium";
         case VideoEncodeSpeedPreset::Slow:
             return "slow";
         case VideoEncodeSpeedPreset::Slower:
@@ -136,10 +136,8 @@ namespace {
         case VideoEncodeSpeedPreset::Veryslow:
             return "veryslow";
         case VideoEncodeSpeedPreset::Placebo:
-            return "placebo";
-        case VideoEncodeSpeedPreset::Medium:
         default:
-            return "medium";
+            return "placebo";
         }
     }
 
@@ -233,22 +231,23 @@ namespace {
         }
 
         if (optionPlan.minBitRate > 0) {
-            encoderContext->rc_min_rate = optionPlan.minBitRate;
+            encoderContext->rc_min_rate = static_cast<int>(optionPlan.minBitRate);
             report.minBitRate = optionPlan.minBitRate;
         }
 
         if (optionPlan.maxBitRate > 0) {
-            encoderContext->rc_max_rate = optionPlan.maxBitRate;
+            encoderContext->rc_max_rate = static_cast<int>(optionPlan.maxBitRate);
             report.maxBitRate = optionPlan.maxBitRate;
         }
 
         if (optionPlan.bufferSize > 0) {
-            encoderContext->rc_buffer_size = optionPlan.bufferSize;
+            encoderContext->rc_buffer_size = static_cast<int>(optionPlan.bufferSize);
             report.bufferSize = optionPlan.bufferSize;
         }
 
         for (const VideoBitrateOption& option : optionPlan.privateOptions) {
             bool applied = false;
+
             switch (option.type) {
             case VideoBitrateOption::Type::String:
                 applied = setStringOptionIfSupported(
@@ -273,12 +272,6 @@ namespace {
                 report.rateControlApplied = true;
             }
         }
-
-        report.diagnostics.insert(
-            report.diagnostics.end(),
-            optionPlan.diagnostics.begin(),
-            optionPlan.diagnostics.end()
-        );
     }
 
     std::string joinList(const std::vector<std::string>& values)
@@ -300,16 +293,15 @@ namespace {
 
 } // namespace
 
-    void VideoEncodeOptionsApplier::apply(AVCodecContext* encoderContext,
-                                          const AVCodec* encoder,
-                                          const TranscodeConfig& config,
-                                          int outputWidth,
-                                          int outputHeight,
-                                          int outputFps,
-                                          VideoEncodeOptionsApplyReport& report)
+    VideoEncodeOptionsApplyReport VideoEncodeOptionsApplier::apply(AVCodecContext* encoderContext,
+                                                                    const AVCodec* encoder,
+                                                                    const TranscodeConfig& config,
+                                                                    int outputFps)
     {
+        VideoEncodeOptionsApplyReport report;
+
         if (!encoderContext) {
-            return;
+            return report;
         }
 
         encoderContext->gop_size = chooseGopSize(config.videoEncode, outputFps);
@@ -320,11 +312,10 @@ namespace {
 
         const VideoBitratePlan bitratePlan = VideoBitrateControlPlanner::plan(
             config,
-            outputWidth,
-            outputHeight,
+            config.width,
+            config.height,
             outputFps
         );
-        report.bitratePlan = bitratePlan;
 
         const VideoBitrateOptionPlan optionPlan = VideoBitrateOptionAdapter::adapt(
             encoder,
@@ -333,25 +324,27 @@ namespace {
 
         applyBitrateOptions(encoderContext, optionPlan, report);
         applyOptionalStringOptions(encoderContext, encoder, config.videoEncode, report);
+
+        return report;
     }
 
-    std::string VideoEncodeOptionsApplier::describe(const VideoEncodeOptionsApplyReport& report)
+    std::string VideoEncodeOptionsApplyReport::describe() const
     {
         std::ostringstream oss;
-        oss << "gop=" << report.gopSize
-            << ", bframes=" << report.maxBFrames
-            << ", bitrate=" << report.bitRate
-            << ", min_bitrate=" << report.minBitRate
-            << ", max_bitrate=" << report.maxBitRate
-            << ", buffer=" << report.bufferSize
-            << ", preset=" << (report.presetApplied ? "applied" : "default")
-            << ", tune=" << (report.tuneApplied ? "applied" : "default")
-            << ", profile=" << (report.profileApplied ? "applied" : "default")
-            << ", level=" << (report.levelApplied ? "applied" : "default")
-            << ", rc_option=" << (report.rateControlApplied ? "applied" : "default")
-            << ", unsupported=[" << joinList(report.unsupportedOptions) << "]"
-            << ", failed=[" << joinList(report.failedOptions) << "]"
-            << ", diagnostics=[" << joinList(report.diagnostics) << "]";
+        oss << "gop=" << gopSize
+            << ", bframes=" << maxBFrames
+            << ", bitrate=" << bitRate
+            << ", min_bitrate=" << minBitRate
+            << ", max_bitrate=" << maxBitRate
+            << ", buffer=" << bufferSize
+            << ", preset=" << (presetApplied ? "applied" : "default")
+            << ", tune=" << (tuneApplied ? "applied" : "default")
+            << ", profile=" << (profileApplied ? "applied" : "default")
+            << ", level=" << (levelApplied ? "applied" : "default")
+            << ", rc_option=" << (rateControlApplied ? "applied" : "default")
+            << ", applied=[" << joinList(appliedOptions) << "]"
+            << ", unsupported=[" << joinList(unsupportedOptions) << "]"
+            << ", failed=[" << joinList(failedOptions) << "]";
 
         return oss.str();
     }
