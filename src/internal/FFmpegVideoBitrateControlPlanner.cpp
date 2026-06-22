@@ -33,6 +33,28 @@ namespace {
         }
     }
 
+    bool supportsQuality(VideoRateControlMode mode)
+    {
+        return mode == VideoRateControlMode::CRF || mode == VideoRateControlMode::CappedVBR;
+    }
+
+    const char* rateControlName(VideoRateControlMode mode)
+    {
+        switch (mode) {
+        case VideoRateControlMode::CBR:
+            return "cbr";
+        case VideoRateControlMode::VBR:
+            return "vbr";
+        case VideoRateControlMode::CRF:
+            return "crf";
+        case VideoRateControlMode::CappedVBR:
+            return "capped-vbr";
+        case VideoRateControlMode::Auto:
+        default:
+            return "auto";
+        }
+    }
+
     VideoRateControlMode resolveRateControl(const TranscodeConfig& config)
     {
         if (config.videoBitrate.rateControl != VideoRateControlMode::Auto) {
@@ -246,6 +268,17 @@ namespace {
 
     void resolveQuality(const TranscodeConfig& config, VideoBitratePlan& plan)
     {
+        if (!supportsQuality(plan.rateControl)) {
+            if (config.videoBitrate.quality > 0) {
+                std::ostringstream oss;
+                oss << "quality ignored by rate control mode: " << rateControlName(plan.rateControl);
+                addDiagnostic(plan, oss.str());
+            }
+            plan.quality = 0;
+            plan.userQualityApplied = false;
+            return;
+        }
+
         if (config.videoBitrate.quality > 0) {
             plan.quality = config.videoBitrate.quality;
             plan.userQualityApplied = true;
