@@ -61,6 +61,8 @@ add_library(${TARGET_CORE} STATIC
     src/internal/FFmpegRAII.h
     src/internal/FFmpegTimelineNormalizer.cpp
     src/internal/FFmpegTimelineNormalizer.h
+    src/internal/FFmpegTranscodeLoopDiagnostics.cpp
+    src/internal/FFmpegTranscodeLoopDiagnostics.h
     src/internal/FFmpegUtils.cpp
     src/internal/FFmpegUtils.h
     src/internal/FFmpegVideoBitrateControlPlanner.cpp
