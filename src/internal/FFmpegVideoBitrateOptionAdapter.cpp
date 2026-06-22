@@ -1,19 +1,12 @@
 #include "internal/FFmpegVideoBitrateOptionAdapter.h"
 
+#include "internal/FFmpegEncoderCapabilityMatrix.h"
+
 #include <string>
+#include <vector>
 
 namespace media::ffmpeg {
 namespace {
-
-    bool encoderNameContains(const AVCodec* encoder, const char* token)
-    {
-        return encoder && encoder->name && std::string(encoder->name).find(token) != std::string::npos;
-    }
-
-    bool encoderNameEquals(const AVCodec* encoder, const char* name)
-    {
-        return encoder && encoder->name && std::string(encoder->name) == name;
-    }
 
     VideoBitrateOption stringOption(const std::string& name, const std::string& value)
     {
@@ -38,24 +31,55 @@ namespace {
         return static_cast<int64_t>(kbps) * 1000;
     }
 
-    bool isX26xEncoder(const AVCodec* encoder)
-    {
-        return encoderNameEquals(encoder, "libx264") || encoderNameEquals(encoder, "libx265");
-    }
-
-    bool isNvencEncoder(const AVCodec* encoder)
-    {
-        return encoderNameContains(encoder, "_nvenc");
-    }
-
     bool isQualityDrivenMode(VideoRateControlMode mode)
     {
         return mode == VideoRateControlMode::CRF || mode == VideoRateControlMode::CappedVBR;
     }
 
-    void addPrivateVbvOptions(const VideoBitrateOptionPlan& output,
+    void addDiagnostic(VideoBitrateOptionPlan& output, const std::string& text)
+    {
+        if (!text.empty()) {
+            output.diagnostics.emplace_back(text);
+        }
+    }
+
+    void applyCommonBitrateFields(const VideoBitratePlan& plan,
+                                  const FFmpegEncoderCapabilities& capabilities,
+                                  VideoBitrateOptionPlan& output)
+    {
+        if (plan.targetKbps > 0 && capabilities.supportsBitRateField) {
+            output.bitRate = kbpsToBps(plan.targetKbps);
+        }
+
+        if (plan.minKbps > 0 && capabilities.supportsMinRateField) {
+            output.minBitRate = kbpsToBps(plan.minKbps);
+        }
+
+        if (plan.maxKbps > 0 && capabilities.supportsMaxRateField) {
+            output.maxBitRate = kbpsToBps(plan.maxKbps);
+        }
+
+        if (plan.bufferSizeKbits > 0 && capabilities.supportsBufferSizeField) {
+            output.bufferSize = kbpsToBps(plan.bufferSizeKbits);
+        }
+    }
+
+    void clearBitrateFields(VideoBitrateOptionPlan& output)
+    {
+        output.bitRate = 0;
+        output.minBitRate = 0;
+        output.maxBitRate = 0;
+        output.bufferSize = 0;
+    }
+
+    void addPrivateVbvOptions(const FFmpegEncoderCapabilities& capabilities,
+                              const VideoBitrateOptionPlan& output,
                               std::vector<VideoBitrateOption>& options)
     {
+        if (!capabilities.supportsPrivateVbvOptions) {
+            return;
+        }
+
         if (output.minBitRate > 0) {
             options.emplace_back(integerOption("minrate", output.minBitRate));
         }
@@ -69,133 +93,60 @@ namespace {
         }
     }
 
-    void applyCommonBitrateFields(const VideoBitratePlan& plan, VideoBitrateOptionPlan& output)
+    void addRateControlOption(const FFmpegEncoderCapabilities& capabilities,
+                              const VideoBitratePlan& plan,
+                              VideoBitrateOptionPlan& output)
     {
-        if (plan.targetKbps > 0) {
-            output.bitRate = kbpsToBps(plan.targetKbps);
+        if (plan.rateControl == VideoRateControlMode::Auto) {
+            return;
         }
 
-        if (plan.minKbps > 0) {
-            output.minBitRate = kbpsToBps(plan.minKbps);
+        if (!FFmpegEncoderCapabilityMatrix::supportsRateControl(capabilities, plan.rateControl)) {
+            addDiagnostic(
+                output,
+                "rate control unsupported by encoder family: " +
+                    capabilities.familyName + "/" +
+                    FFmpegEncoderCapabilityMatrix::rateControlName(plan.rateControl)
+            );
+            return;
         }
 
-        if (plan.maxKbps > 0) {
-            output.maxBitRate = kbpsToBps(plan.maxKbps);
-        }
-
-        if (plan.bufferSizeKbits > 0) {
-            output.bufferSize = kbpsToBps(plan.bufferSizeKbits);
-        }
-    }
-
-    void clearBitrateFields(VideoBitrateOptionPlan& output)
-    {
-        output.bitRate = 0;
-        output.minBitRate = 0;
-        output.maxBitRate = 0;
-        output.bufferSize = 0;
-    }
-
-    void adaptX26x(const VideoBitratePlan& plan, VideoBitrateOptionPlan& output)
-    {
-        switch (plan.rateControl) {
-        case VideoRateControlMode::CBR:
+        if (plan.rateControl == VideoRateControlMode::CBR && capabilities.supportsNalHrdCbr) {
             output.privateOptions.emplace_back(stringOption("nal-hrd", "cbr"));
-            break;
+            return;
+        }
 
-        case VideoRateControlMode::VBR:
-            break;
+        if (capabilities.rateControlOptionName.empty()) {
+            return;
+        }
 
-        case VideoRateControlMode::CRF:
-            if (plan.quality > 0) {
-                output.privateOptions.emplace_back(integerOption("crf", plan.quality));
-            }
-            clearBitrateFields(output);
-            break;
-
-        case VideoRateControlMode::CappedVBR:
-            if (plan.quality > 0) {
-                output.privateOptions.emplace_back(integerOption("crf", plan.quality));
-            }
-            break;
-
-        case VideoRateControlMode::Auto:
-        default:
-            break;
+        const std::string value = FFmpegEncoderCapabilityMatrix::rateControlValue(
+            capabilities,
+            plan.rateControl
+        );
+        if (!value.empty()) {
+            output.privateOptions.emplace_back(stringOption(capabilities.rateControlOptionName, value));
         }
     }
 
-    void adaptNvenc(const VideoBitratePlan& plan, VideoBitrateOptionPlan& output)
+    void addQualityOption(const FFmpegEncoderCapabilities& capabilities,
+                          const VideoBitratePlan& plan,
+                          VideoBitrateOptionPlan& output)
     {
-        switch (plan.rateControl) {
-        case VideoRateControlMode::CBR:
-            output.privateOptions.emplace_back(stringOption("rc", "cbr"));
-            break;
-
-        case VideoRateControlMode::VBR:
-            output.privateOptions.emplace_back(stringOption("rc", "vbr"));
-            break;
-
-        case VideoRateControlMode::CRF:
-            output.privateOptions.emplace_back(stringOption("rc", "vbr"));
-            if (plan.quality > 0) {
-                output.privateOptions.emplace_back(integerOption("cq", plan.quality));
-            }
-            clearBitrateFields(output);
-            break;
-
-        case VideoRateControlMode::CappedVBR:
-            output.privateOptions.emplace_back(stringOption("rc", "vbr"));
-            if (plan.quality > 0) {
-                output.privateOptions.emplace_back(integerOption("cq", plan.quality));
-            }
-            break;
-
-        case VideoRateControlMode::Auto:
-        default:
-            break;
+        if (!isQualityDrivenMode(plan.rateControl) || plan.quality <= 0) {
+            return;
         }
-    }
 
-    void adaptGeneric(const VideoBitratePlan& plan, VideoBitrateOptionPlan& output)
-    {
-        switch (plan.rateControl) {
-        case VideoRateControlMode::CBR:
-            output.privateOptions.emplace_back(stringOption("rc", "cbr"));
-            break;
-
-        case VideoRateControlMode::VBR:
-        case VideoRateControlMode::CappedVBR:
-            output.privateOptions.emplace_back(stringOption("rc", "vbr"));
-            break;
-
-        case VideoRateControlMode::CRF:
-            if (plan.quality > 0) {
-                output.privateOptions.emplace_back(integerOption("crf", plan.quality));
-            }
-            clearBitrateFields(output);
-            break;
-
-        case VideoRateControlMode::Auto:
-        default:
-            break;
+        if (capabilities.qualityOptionName.empty()) {
+            addDiagnostic(output, "quality option unavailable for encoder family: " + capabilities.familyName);
+            return;
         }
-    }
 
-    const char* rateControlModeName(VideoRateControlMode mode)
-    {
-        switch (mode) {
-        case VideoRateControlMode::CBR:
-            return "cbr";
-        case VideoRateControlMode::VBR:
-            return "vbr";
-        case VideoRateControlMode::CRF:
-            return "crf";
-        case VideoRateControlMode::CappedVBR:
-            return "capped-vbr";
-        case VideoRateControlMode::Auto:
-        default:
-            return "auto";
+        if (capabilities.qualityOptionInteger) {
+            output.privateOptions.emplace_back(integerOption(capabilities.qualityOptionName, plan.quality));
+        }
+        else {
+            output.privateOptions.emplace_back(stringOption(capabilities.qualityOptionName, std::to_string(plan.quality)));
         }
     }
 
@@ -205,24 +156,22 @@ namespace {
                                                             const VideoBitratePlan& plan)
     {
         VideoBitrateOptionPlan output;
-        applyCommonBitrateFields(plan, output);
+        const FFmpegEncoderCapabilities capabilities = FFmpegEncoderCapabilityMatrix::query(encoder);
 
-        if (isX26xEncoder(encoder)) {
-            adaptX26x(plan, output);
-            output.diagnostics.emplace_back("adapter=x26x");
-        }
-        else if (isNvencEncoder(encoder)) {
-            adaptNvenc(plan, output);
-            output.diagnostics.emplace_back("adapter=nvenc");
-        }
-        else {
-            adaptGeneric(plan, output);
-            output.diagnostics.emplace_back("adapter=generic");
+        applyCommonBitrateFields(plan, capabilities, output);
+
+        addRateControlOption(capabilities, plan, output);
+        addQualityOption(capabilities, plan, output);
+
+        if (plan.rateControl == VideoRateControlMode::CRF) {
+            clearBitrateFields(output);
         }
 
-        addPrivateVbvOptions(output, output.privateOptions);
+        addPrivateVbvOptions(capabilities, output, output.privateOptions);
 
-        output.diagnostics.emplace_back(std::string("rc=") + rateControlModeName(plan.rateControl));
+        output.diagnostics.emplace_back("adapter=" + capabilities.familyName);
+        output.diagnostics.emplace_back("encoder=" + capabilities.encoderName);
+        output.diagnostics.emplace_back("rc=" + FFmpegEncoderCapabilityMatrix::rateControlName(plan.rateControl));
         if (plan.quality > 0 && isQualityDrivenMode(plan.rateControl)) {
             output.diagnostics.emplace_back("quality=" + std::to_string(plan.quality));
         }
