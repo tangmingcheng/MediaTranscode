@@ -26,6 +26,19 @@ namespace media {
         CappedVBR
     };
 
+    // 通用码率约束模型。
+    // Strict：尽量稳定在目标码率，适合 CBR/低波动场景。
+    // Flexible：允许围绕目标码率波动，适合普通 VBR。
+    // Quality：纯质量驱动，不强制目标码率，适合 CRF/CQ。
+    // HybridQuality：质量优先，同时带峰值/缓冲约束，适合 capped VBR。
+    enum class VideoBitrateConstraintMode {
+        Auto,
+        Strict,
+        Flexible,
+        Quality,
+        HybridQuality
+    };
+
     // 对外暴露的通用编码速度/质量档位。
     // 具体编码器参数由 FFmpeg 编码器适配层根据最终选择到的编码器转换，
     // 例如 NVENC 转为 p1/p4/p7，libx264/libx265 转为 fast/medium/slow。
@@ -78,6 +91,7 @@ namespace media {
     // 核心算法只消费这里的规则，不内置分辨率码率梯度等业务经验值。
     struct VideoBitrateControlPolicy {
         VideoRateControlMode defaultRateControl = VideoRateControlMode::Auto;
+        VideoBitrateConstraintMode defaultConstraintMode = VideoBitrateConstraintMode::Auto;
 
         int fallbackTargetKbps = 0;
         int minimumTargetKbps = 0;
@@ -96,6 +110,11 @@ namespace media {
         double cbrBufferSeconds = 0.0;
         double vbrBufferSeconds = 0.0;
 
+        // 可选的最小码率推导比例。0 表示不自动推导。
+        // Strict 模式若未设置，默认按 target 推导 min/max。
+        double strictMinToTargetRatio = 0.0;
+        double flexibleMinToTargetRatio = 0.0;
+
         std::vector<VideoBitrateLadderRule> ladderRules;
         std::vector<VideoCodecBitrateFactor> codecFactors;
         std::vector<VideoBitrateIntentFactor> intentFactors;
@@ -105,6 +124,7 @@ namespace media {
     // 码率规划输入。0/Auto 表示该项由 policy 决定。
     struct VideoBitrateControlOptions {
         VideoRateControlMode rateControl = VideoRateControlMode::Auto;
+        VideoBitrateConstraintMode constraintMode = VideoBitrateConstraintMode::Auto;
         VideoBitrateIntent intent = VideoBitrateIntent::Auto;
         VideoContentHint contentHint = VideoContentHint::Auto;
 
@@ -120,6 +140,7 @@ namespace media {
     // 码率规划结果。FFmpeg 执行层只允许消费该结果，不直接读取用户输入字段。
     struct VideoBitratePlan {
         VideoRateControlMode rateControl = VideoRateControlMode::Auto;
+        VideoBitrateConstraintMode constraintMode = VideoBitrateConstraintMode::Auto;
 
         int quality = 0;
         int targetKbps = 0;
