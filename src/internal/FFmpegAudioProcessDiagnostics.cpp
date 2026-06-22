@@ -13,19 +13,7 @@ namespace {
         return value < 0 ? 0 : value;
     }
 
-    std::string formatAccumulator(const char* name,
-                                  const FFmpegAudioProcessDiagnostics::Snapshot& windowStart,
-                                  const FFmpegAudioProcessDiagnostics::Snapshot& now,
-                                  const FFmpegAudioProcessDiagnostics::Snapshot& /*unused*/)
-    {
-        (void)name;
-        (void)windowStart;
-        (void)now;
-        return {};
-    }
-
     std::string accumulatorFields(const char* name,
-                                  const FFmpegAudioProcessDiagnostics::Step /*step*/,
                                   int64_t count,
                                   int64_t wallMs,
                                   int64_t processCpuMs,
@@ -142,7 +130,6 @@ namespace {
             oss << ", "
                 << accumulatorFields(
                     stepName(step),
-                    step,
                     accumulator.count,
                     accumulator.wallMs,
                     accumulator.processCpuMs,
@@ -176,6 +163,8 @@ namespace {
             return "flush_resampler_convert";
         case Step::FrameAlloc:
             return "frame_alloc";
+        case Step::PacketAlloc:
+            return "packet_alloc";
         case Step::Count:
         default:
             return "unknown";
