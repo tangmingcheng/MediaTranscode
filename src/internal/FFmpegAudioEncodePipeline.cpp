@@ -43,6 +43,13 @@ FFmpegAudioEncodePipeline::~FFmpegAudioEncodePipeline()
 
 void FFmpegAudioEncodePipeline::reset()
 {
+    m_processDiagnostics.flush(
+        m_packetWriter.packetCount(),
+        m_fifo && m_fifo->isInitialized() ? m_fifo->size() : 0,
+        "reset"
+    );
+    m_processDiagnostics.reset();
+
     if (m_fifo) {
         m_fifo->reset();
     }
@@ -104,7 +111,9 @@ Status FFmpegAudioEncodePipeline::initialize(const FFmpegAudioPipelineConfig& co
         return streamStatus;
     }
 
+    auto allocStart = m_processDiagnostics.mark();
     m_decodedFrame = makeFrame();
+    m_processDiagnostics.record(FFmpegAudioProcessDiagnostics::Step::FrameAlloc, allocStart);
     if (!m_decodedFrame) {
         return Status::failure(makeAllocationError(
             "av_frame_alloc decoded audio frame failed"));
@@ -310,7 +319,12 @@ Status FFmpegAudioEncodePipeline::processPacket(
             "FFmpegAudioEncodePipeline processPacket failed: packet is null"));
     }
 
-    return sendPacketToDecoder(packet, onPacketWritten);
+    Status status = sendPacketToDecoder(packet, onPacketWritten);
+    m_processDiagnostics.maybeLog(
+        m_packetWriter.packetCount(),
+        m_fifo && m_fifo->isInitialized() ? m_fifo->size() : 0
+    );
+    return status;
 }
 
 Status FFmpegAudioEncodePipeline::sendPacketToDecoder(
@@ -322,7 +336,9 @@ Status FFmpegAudioEncodePipeline::sendPacketToDecoder(
             "FFmpegAudioEncodePipeline sendPacketToDecoder failed: decoderCtx is null"));
     }
 
+    auto step = m_processDiagnostics.mark();
     const int ret = avcodec_send_packet(m_decoderCtx.get(), packet);
+    m_processDiagnostics.record(FFmpegAudioProcessDiagnostics::Step::DecoderSendPacket, step);
     if (ret < 0) {
         return Status::failure(makeFFmpegError(
             "avcodec_send_packet audio decoder failed", ret));
@@ -339,7 +355,9 @@ Status FFmpegAudioEncodePipeline::drainDecoder(
     }
 
     while (true) {
+        auto step = m_processDiagnostics.mark();
         const int ret = avcodec_receive_frame(m_decoderCtx.get(), m_decodedFrame.get());
+        m_processDiagnostics.record(FFmpegAudioProcessDiagnostics::Step::DecoderReceiveFrame, step);
 
         if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
             return Status::success();
@@ -388,27 +406,33 @@ Status FFmpegAudioEncodePipeline::pushDecodedFrameToFifo(
         return Status::success();
     }
 
+    auto step = m_processDiagnostics.mark();
     FramePtr convertedFrame = makeFrame();
-    if (!convertedFrame) {
+    if (convertedFrame) {
+        convertedFrame->nb_samples = dstNbSamples;
+        convertedFrame->format = m_encoderCtx->sample_fmt;
+        convertedFrame->sample_rate = m_encoderCtx->sample_rate;
+
+        if (!setFrameAudioLayoutFromCodecContext(convertedFrame.get(), m_encoderCtx.get())) {
+            m_processDiagnostics.record(FFmpegAudioProcessDiagnostics::Step::FrameAlloc, step);
+            return Status::failure(ErrorInfo::internalError(
+                "set converted audio frame channel layout failed"));
+        }
+
+        const int ret = av_frame_get_buffer(convertedFrame.get(), 0);
+        m_processDiagnostics.record(FFmpegAudioProcessDiagnostics::Step::FrameAlloc, step);
+        if (ret < 0) {
+            return Status::failure(makeFFmpegError(
+                "av_frame_get_buffer converted audio frame failed", ret));
+        }
+    }
+    else {
+        m_processDiagnostics.record(FFmpegAudioProcessDiagnostics::Step::FrameAlloc, step);
         return Status::failure(makeAllocationError(
             "av_frame_alloc converted audio frame failed"));
     }
 
-    convertedFrame->nb_samples = dstNbSamples;
-    convertedFrame->format = m_encoderCtx->sample_fmt;
-    convertedFrame->sample_rate = m_encoderCtx->sample_rate;
-
-    if (!setFrameAudioLayoutFromCodecContext(convertedFrame.get(), m_encoderCtx.get())) {
-        return Status::failure(ErrorInfo::internalError(
-            "set converted audio frame channel layout failed"));
-    }
-
-    int ret = av_frame_get_buffer(convertedFrame.get(), 0);
-    if (ret < 0) {
-        return Status::failure(makeFFmpegError(
-            "av_frame_get_buffer converted audio frame failed", ret));
-    }
-
+    step = m_processDiagnostics.mark();
     const int convertedSamples = swr_convert(
         m_swrCtx.get(),
         convertedFrame->extended_data,
@@ -416,6 +440,7 @@ Status FFmpegAudioEncodePipeline::pushDecodedFrameToFifo(
         const_cast<const uint8_t**>(m_decodedFrame->extended_data),
         m_decodedFrame->nb_samples
     );
+    m_processDiagnostics.record(FFmpegAudioProcessDiagnostics::Step::ResampleConvert, step);
 
     if (convertedSamples < 0) {
         return Status::failure(makeFFmpegError("swr_convert failed", convertedSamples));
@@ -425,10 +450,12 @@ Status FFmpegAudioEncodePipeline::pushDecodedFrameToFifo(
 
     if (convertedSamples > 0) {
         std::string fifoError;
+        step = m_processDiagnostics.mark();
         Status fifoStatus = makeLegacyStatus(
             m_fifo->writeFrame(convertedFrame.get(), &fifoError),
             fifoError
         );
+        m_processDiagnostics.record(FFmpegAudioProcessDiagnostics::Step::FifoWrite, step);
         if (!fifoStatus) {
             return fifoStatus;
         }
@@ -499,33 +526,40 @@ Status FFmpegAudioEncodePipeline::encodeFifo(
         const int availableSamples = m_fifo->size();
         const int samplesToRead = flushAll ? std::min(frameSize, availableSamples) : frameSize;
 
+        auto step = m_processDiagnostics.mark();
         FramePtr audioFrame = makeFrame();
-        if (!audioFrame) {
+        if (audioFrame) {
+            audioFrame->nb_samples = samplesToRead;
+            audioFrame->format = m_encoderCtx->sample_fmt;
+            audioFrame->sample_rate = m_encoderCtx->sample_rate;
+            audioFrame->pts = m_nextAudioPts == AV_NOPTS_VALUE ? 0 : m_nextAudioPts;
+
+            if (!setFrameAudioLayoutFromCodecContext(audioFrame.get(), m_encoderCtx.get())) {
+                m_processDiagnostics.record(FFmpegAudioProcessDiagnostics::Step::FrameAlloc, step);
+                return Status::failure(ErrorInfo::internalError(
+                    "set encoded audio frame channel layout failed"));
+            }
+
+            const int ret = av_frame_get_buffer(audioFrame.get(), 0);
+            m_processDiagnostics.record(FFmpegAudioProcessDiagnostics::Step::FrameAlloc, step);
+            if (ret < 0) {
+                return Status::failure(makeFFmpegError(
+                    "av_frame_get_buffer encoded audio frame failed", ret));
+            }
+        }
+        else {
+            m_processDiagnostics.record(FFmpegAudioProcessDiagnostics::Step::FrameAlloc, step);
             return Status::failure(makeAllocationError(
                 "av_frame_alloc encoded audio frame failed"));
         }
 
-        audioFrame->nb_samples = samplesToRead;
-        audioFrame->format = m_encoderCtx->sample_fmt;
-        audioFrame->sample_rate = m_encoderCtx->sample_rate;
-        audioFrame->pts = m_nextAudioPts == AV_NOPTS_VALUE ? 0 : m_nextAudioPts;
-
-        if (!setFrameAudioLayoutFromCodecContext(audioFrame.get(), m_encoderCtx.get())) {
-            return Status::failure(ErrorInfo::internalError(
-                "set encoded audio frame channel layout failed"));
-        }
-
-        int ret = av_frame_get_buffer(audioFrame.get(), 0);
-        if (ret < 0) {
-            return Status::failure(makeFFmpegError(
-                "av_frame_get_buffer encoded audio frame failed", ret));
-        }
-
         std::string fifoError;
+        step = m_processDiagnostics.mark();
         Status fifoStatus = makeLegacyStatus(
             m_fifo->readToFrame(audioFrame.get(), samplesToRead, &fifoError),
             fifoError
         );
+        m_processDiagnostics.record(FFmpegAudioProcessDiagnostics::Step::FifoRead, step);
         if (!fifoStatus) {
             return fifoStatus;
         }
@@ -569,27 +603,33 @@ Status FFmpegAudioEncodePipeline::flushResampler()
             break;
         }
 
+        auto step = m_processDiagnostics.mark();
         FramePtr convertedFrame = makeFrame();
-        if (!convertedFrame) {
+        if (convertedFrame) {
+            convertedFrame->nb_samples = dstNbSamples;
+            convertedFrame->format = m_encoderCtx->sample_fmt;
+            convertedFrame->sample_rate = m_encoderCtx->sample_rate;
+
+            if (!setFrameAudioLayoutFromCodecContext(convertedFrame.get(), m_encoderCtx.get())) {
+                m_processDiagnostics.record(FFmpegAudioProcessDiagnostics::Step::FrameAlloc, step);
+                return Status::failure(ErrorInfo::internalError(
+                    "set swr flush audio frame channel layout failed"));
+            }
+
+            const int ret = av_frame_get_buffer(convertedFrame.get(), 0);
+            m_processDiagnostics.record(FFmpegAudioProcessDiagnostics::Step::FrameAlloc, step);
+            if (ret < 0) {
+                return Status::failure(makeFFmpegError(
+                    "av_frame_get_buffer swr flush audio frame failed", ret));
+            }
+        }
+        else {
+            m_processDiagnostics.record(FFmpegAudioProcessDiagnostics::Step::FrameAlloc, step);
             return Status::failure(makeAllocationError(
                 "av_frame_alloc swr flush audio frame failed"));
         }
 
-        convertedFrame->nb_samples = dstNbSamples;
-        convertedFrame->format = m_encoderCtx->sample_fmt;
-        convertedFrame->sample_rate = m_encoderCtx->sample_rate;
-
-        if (!setFrameAudioLayoutFromCodecContext(convertedFrame.get(), m_encoderCtx.get())) {
-            return Status::failure(ErrorInfo::internalError(
-                "set swr flush audio frame channel layout failed"));
-        }
-
-        int ret = av_frame_get_buffer(convertedFrame.get(), 0);
-        if (ret < 0) {
-            return Status::failure(makeFFmpegError(
-                "av_frame_get_buffer swr flush audio frame failed", ret));
-        }
-
+        step = m_processDiagnostics.mark();
         const int convertedSamples = swr_convert(
             m_swrCtx.get(),
             convertedFrame->extended_data,
@@ -597,6 +637,7 @@ Status FFmpegAudioEncodePipeline::flushResampler()
             nullptr,
             0
         );
+        m_processDiagnostics.record(FFmpegAudioProcessDiagnostics::Step::FlushResamplerConvert, step);
 
         if (convertedSamples < 0) {
             return Status::failure(makeFFmpegError(
@@ -610,10 +651,12 @@ Status FFmpegAudioEncodePipeline::flushResampler()
         }
 
         std::string fifoError;
+        step = m_processDiagnostics.mark();
         Status fifoStatus = makeLegacyStatus(
             m_fifo->writeFrame(convertedFrame.get(), &fifoError),
             fifoError
         );
+        m_processDiagnostics.record(FFmpegAudioProcessDiagnostics::Step::FifoWrite, step);
         if (!fifoStatus) {
             return fifoStatus;
         }
@@ -626,7 +669,9 @@ Status FFmpegAudioEncodePipeline::flush(
     const FFmpegAudioPacketWrittenCallback& onPacketWritten)
 {
     if (m_decoderCtx) {
+        auto step = m_processDiagnostics.mark();
         const int ret = avcodec_send_packet(m_decoderCtx.get(), nullptr);
+        m_processDiagnostics.record(FFmpegAudioProcessDiagnostics::Step::DecoderSendPacket, step);
         if (ret < 0) {
             return Status::failure(makeFFmpegError(
                 "avcodec_send_packet audio decoder flush failed", ret));
@@ -658,6 +703,12 @@ Status FFmpegAudioEncodePipeline::flush(
         return Status::failure(packetsResult.error());
     }
 
+    m_processDiagnostics.maybeLog(
+        m_packetWriter.packetCount(),
+        m_fifo && m_fifo->isInitialized() ? m_fifo->size() : 0,
+        "flush"
+    );
+
     return Status::success();
 }
 
@@ -668,7 +719,9 @@ Status FFmpegAudioEncodePipeline::sendFrame(AVFrame* frame)
             "FFmpegAudioEncodePipeline sendFrame failed: encoderCtx is null"));
     }
 
+    auto step = m_processDiagnostics.mark();
     const int ret = avcodec_send_frame(m_encoderCtx.get(), frame);
+    m_processDiagnostics.record(FFmpegAudioProcessDiagnostics::Step::EncoderSendFrame, step);
     if (ret < 0) {
         return Status::failure(makeFFmpegError(
             "avcodec_send_frame audio encoder failed", ret));
@@ -688,13 +741,17 @@ Result<int> FFmpegAudioEncodePipeline::receiveAndWritePackets(
     int packetsWritten = 0;
 
     while (true) {
+        auto step = m_processDiagnostics.mark();
         PacketPtr packet = makePacket();
+        m_processDiagnostics.record(FFmpegAudioProcessDiagnostics::Step::PacketAlloc, step);
         if (!packet) {
             return Result<int>::failure(makeAllocationError(
                 "av_packet_alloc audio packet failed"));
         }
 
+        step = m_processDiagnostics.mark();
         const int receiveRet = avcodec_receive_packet(m_encoderCtx.get(), packet.get());
+        m_processDiagnostics.record(FFmpegAudioProcessDiagnostics::Step::EncoderReceivePacket, step);
 
         if (receiveRet == AVERROR(EAGAIN) || receiveRet == AVERROR_EOF) {
             break;
@@ -707,7 +764,9 @@ Result<int> FFmpegAudioEncodePipeline::receiveAndWritePackets(
 
         av_packet_rescale_ts(packet.get(), m_encoderCtx->time_base, m_outputAudioStream->time_base);
 
+        step = m_processDiagnostics.mark();
         const Status writeStatus = m_packetWriter.write(packet.get(), onPacketWritten);
+        m_processDiagnostics.record(FFmpegAudioProcessDiagnostics::Step::PacketWrite, step);
         if (!writeStatus) {
             return Result<int>::failure(writeStatus.error());
         }
