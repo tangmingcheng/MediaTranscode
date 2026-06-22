@@ -26,6 +26,7 @@ namespace media::ffmpeg {
 
     struct VideoBitrateOptionPlan {
         int64_t bitRate = 0;
+        int64_t minBitRate = 0;
         int64_t maxBitRate = 0;
         int64_t bufferSize = 0;
         std::vector<VideoBitrateOption> privateOptions;
