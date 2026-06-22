@@ -2,6 +2,7 @@
 
 #include "internal/FFmpegAudioPacketWriter.h"
 #include "internal/FFmpegAudioPipelineStrategy.h"
+#include "internal/FFmpegAudioProcessDiagnostics.h"
 #include "internal/FFmpegRAII.h"
 
 #include <memory>
@@ -64,6 +65,7 @@ private:
     FramePtr m_decodedFrame;
 
     FFmpegAudioPacketWriter m_packetWriter;
+    FFmpegAudioProcessDiagnostics m_processDiagnostics;
 
     int64_t m_nextAudioPts = -9223372036854775807LL - 1LL;
     int m_audioBitrateKbps = 128;
