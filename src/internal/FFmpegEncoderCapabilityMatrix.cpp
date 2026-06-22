@@ -68,9 +68,6 @@ namespace {
 
     std::string rkmppPresetName(VideoEncodeSpeedPreset preset)
     {
-        // RKMPP's FFmpeg wrapper is not as standardized as x264/x265/NVENC.
-        // Keep a coarse speed/quality intent mapping and let av_opt_find() decide
-        // whether the selected build exposes a matching "preset" private option.
         switch (preset) {
         case VideoEncodeSpeedPreset::Ultrafast:
         case VideoEncodeSpeedPreset::Superfast:
@@ -95,6 +92,9 @@ namespace {
         capabilities.encoderName = encoder && encoder->name ? encoder->name : "unknown";
         capabilities.family = FFmpegEncoderFamily::Generic;
         capabilities.familyName = FFmpegEncoderCapabilityMatrix::familyName(capabilities.family);
+        capabilities.supportsCrf = true;
+        capabilities.rateControlOptionName = "rc";
+        capabilities.qualityOptionName = "crf";
         return capabilities;
     }
 
@@ -121,7 +121,7 @@ namespace {
         capabilities.hardware = true;
         capabilities.supportsCbr = true;
         capabilities.supportsVbr = true;
-        capabilities.supportsCrf = false;
+        capabilities.supportsCrf = true;
         capabilities.supportsCappedVbr = true;
         capabilities.rateControlOptionName = "rc";
         capabilities.qualityOptionName = "cq";
@@ -135,7 +135,7 @@ namespace {
         capabilities.hardware = true;
         capabilities.supportsCbr = true;
         capabilities.supportsVbr = true;
-        capabilities.supportsCrf = false;
+        capabilities.supportsCrf = true;
         capabilities.supportsCappedVbr = true;
         capabilities.rateControlOptionName = "rc_mode";
         capabilities.qualityOptionName = "qp_init";
@@ -160,7 +160,7 @@ namespace {
         capabilities.family = FFmpegEncoderFamily::QSV;
         capabilities.familyName = FFmpegEncoderCapabilityMatrix::familyName(capabilities.family);
         capabilities.hardware = true;
-        capabilities.supportsCrf = false;
+        capabilities.supportsCrf = true;
         capabilities.supportsCappedVbr = true;
         capabilities.rateControlOptionName.clear();
         capabilities.qualityOptionName = "global_quality";
@@ -172,7 +172,7 @@ namespace {
         capabilities.family = FFmpegEncoderFamily::VAAPI;
         capabilities.familyName = FFmpegEncoderCapabilityMatrix::familyName(capabilities.family);
         capabilities.hardware = true;
-        capabilities.supportsCrf = false;
+        capabilities.supportsCrf = true;
         capabilities.supportsCappedVbr = true;
         capabilities.rateControlOptionName = "rc_mode";
         capabilities.qualityOptionName = "qp";
@@ -184,7 +184,7 @@ namespace {
         capabilities.family = FFmpegEncoderFamily::AMF;
         capabilities.familyName = FFmpegEncoderCapabilityMatrix::familyName(capabilities.family);
         capabilities.hardware = true;
-        capabilities.supportsCrf = false;
+        capabilities.supportsCrf = true;
         capabilities.supportsCappedVbr = true;
         capabilities.rateControlOptionName = "rc";
         capabilities.qualityOptionName = "qp_i";
