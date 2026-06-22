@@ -54,6 +54,8 @@ add_library(${TARGET_CORE} STATIC
     src/internal/FFmpegHardwareVideoFilterGraph.h
     src/internal/FFmpegHardwareVideoFilterPipeline.cpp
     src/internal/FFmpegHardwareVideoFilterPipeline.h
+    src/internal/FFmpegPhaseDiagnostics.cpp
+    src/internal/FFmpegPhaseDiagnostics.h
     src/internal/FFmpegPipelinePlanner.cpp
     src/internal/FFmpegPipelinePlanner.h
     src/internal/FFmpegRAII.h
