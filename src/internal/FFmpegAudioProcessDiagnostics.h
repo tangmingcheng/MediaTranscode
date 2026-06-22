@@ -22,6 +22,7 @@ namespace media::ffmpeg {
             PacketWrite,
             FlushResamplerConvert,
             FrameAlloc,
+            PacketAlloc,
             Count
         };
 
