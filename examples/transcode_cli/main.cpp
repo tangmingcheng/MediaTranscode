@@ -146,20 +146,44 @@ namespace {
     {
         const std::string normalized = toLower(value);
 
-        if (normalized == "auto") {
-            return media::VideoEncodeSpeedPreset::Auto;
+        if (normalized == "ultrafast") {
+            return media::VideoEncodeSpeedPreset::Ultrafast;
         }
 
-        if (normalized == "fast" || normalized == "speed") {
+        if (normalized == "superfast") {
+            return media::VideoEncodeSpeedPreset::Superfast;
+        }
+
+        if (normalized == "veryfast") {
+            return media::VideoEncodeSpeedPreset::Veryfast;
+        }
+
+        if (normalized == "faster") {
+            return media::VideoEncodeSpeedPreset::Faster;
+        }
+
+        if (normalized == "fast") {
             return media::VideoEncodeSpeedPreset::Fast;
         }
 
-        if (normalized == "balanced" || normalized == "balance" || normalized == "medium") {
-            return media::VideoEncodeSpeedPreset::Balanced;
+        if (normalized == "medium") {
+            return media::VideoEncodeSpeedPreset::Medium;
         }
 
-        if (normalized == "quality" || normalized == "high-quality") {
-            return media::VideoEncodeSpeedPreset::Quality;
+        if (normalized == "slow") {
+            return media::VideoEncodeSpeedPreset::Slow;
+        }
+
+        if (normalized == "slower") {
+            return media::VideoEncodeSpeedPreset::Slower;
+        }
+
+        if (normalized == "veryslow" || normalized == "very-slow") {
+            return media::VideoEncodeSpeedPreset::Veryslow;
+        }
+
+        if (normalized == "placebo") {
+            return media::VideoEncodeSpeedPreset::Placebo;
         }
 
         throw std::runtime_error("unsupported video speed preset: " + value);
@@ -225,15 +249,27 @@ namespace {
     std::string videoSpeedPresetToString(media::VideoEncodeSpeedPreset preset)
     {
         switch (preset) {
+        case media::VideoEncodeSpeedPreset::Ultrafast:
+            return "ultrafast";
+        case media::VideoEncodeSpeedPreset::Superfast:
+            return "superfast";
+        case media::VideoEncodeSpeedPreset::Veryfast:
+            return "veryfast";
+        case media::VideoEncodeSpeedPreset::Faster:
+            return "faster";
         case media::VideoEncodeSpeedPreset::Fast:
             return "fast";
-        case media::VideoEncodeSpeedPreset::Balanced:
-            return "balanced";
-        case media::VideoEncodeSpeedPreset::Quality:
-            return "quality";
-        case media::VideoEncodeSpeedPreset::Auto:
+        case media::VideoEncodeSpeedPreset::Slow:
+            return "slow";
+        case media::VideoEncodeSpeedPreset::Slower:
+            return "slower";
+        case media::VideoEncodeSpeedPreset::Veryslow:
+            return "veryslow";
+        case media::VideoEncodeSpeedPreset::Placebo:
+            return "placebo";
+        case media::VideoEncodeSpeedPreset::Medium:
         default:
-            return "auto";
+            return "medium";
         }
     }
 
@@ -353,7 +389,7 @@ namespace {
             << "      --buffer-size <kbits>       Encoder VBV buffer size\n"
             << "      --rc <value>                auto | cbr | vbr | crf | capped-vbr\n"
             << "      --quality <value>           Generic quality value for crf/cq modes\n"
-            << "      --speed <value>             auto | fast | balanced | quality\n"
+            << "      --speed <value>             ultrafast | superfast | veryfast | faster | fast | medium | slow | slower | veryslow | placebo\n"
             << "      --gop <frames>              GOP size in frames, 0 means auto\n"
             << "      --bframes <count>           Max B frames, default 0\n"
             << "      --tune <value>              Encoder tune if supported\n"
@@ -368,9 +404,9 @@ namespace {
             << "      --no-audio                  Disable audio output\n"
             << "  -h, --help                      Show this help\n\n"
             << "Examples:\n"
-            << "  " << executable << " -i input.mp4 -o output.mp4 --video-codec h264 --size 1280x720 --fps 25 --video-bitrate 3000 --speed balanced --audio-codec aac --audio-bitrate 128\n"
-            << "  " << executable << " -i input.mp4 -o output_cpu.mp4 --disable-hardware --video-codec h265 --size 1280x720 --fps 25 --rc crf --quality 23 --speed balanced\n"
-            << "  " << executable << " -i input.mp4 -o output_cvbr.mp4 --video-codec h265 --size 1280x720 --fps 25 --rc capped-vbr --quality 23 --video-bitrate 3000 --max-video-bitrate 5000 --buffer-size 10000\n";
+            << "  " << executable << " -i input.mp4 -o output.mp4 --video-codec h264 --size 1280x720 --fps 25 --video-bitrate 3000 --speed medium --audio-codec aac --audio-bitrate 128\n"
+            << "  " << executable << " -i input.mp4 -o output_cpu.mp4 --disable-hardware --video-codec h265 --size 1280x720 --fps 25 --rc crf --quality 23 --speed slow\n"
+            << "  " << executable << " -i input.mp4 -o output_cvbr.mp4 --video-codec h265 --size 1280x720 --fps 25 --rc capped-vbr --quality 23 --video-bitrate 3000 --max-video-bitrate 5000 --buffer-size 10000 --speed medium\n";
     }
 
     CliOptions parseOptions(int argc, char* argv[])
@@ -463,7 +499,7 @@ namespace {
                 options.config.videoEncode.maxBFrames = parseNonNegativeInt(requireValue(arg), arg);
             }
             else if (arg == "--preset") {
-                // Expert/native encoder option. Public integrations should prefer --speed.
+                // Expert/native encoder option. Non-empty value takes precedence over --speed.
                 options.config.videoEncode.preset = requireValue(arg);
             }
             else if (arg == "--tune") {
