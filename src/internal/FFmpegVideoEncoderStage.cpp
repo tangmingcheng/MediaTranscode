@@ -327,13 +327,14 @@ Status FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream()
     );
 
     spdlog::info(
-        "[ZC][ENCODER] open encoder={}, backend={}, pix_fmt={}, sw_pix_fmt={}, hw_device_ctx={}, hw_frames_ctx={}, size={}x{}, fps={}/{}",
+        "[ZC][ENCODER] open encoder={}, backend={}, pix_fmt={}, sw_pix_fmt={}, hw_device_ctx={}, hw_frames_ctx={}, direct_hw_frame_encode={}, size={}x{}, fps={}/{}",
         encoder->name ? encoder->name : "unknown",
         m_hardwareBackend.name ? m_hardwareBackend.name : "none",
         pixelFormatName(m_encoderCtx->pix_fmt),
         pixelFormatName(m_encoderCtx->sw_pix_fmt),
         m_encoderCtx->hw_device_ctx != nullptr,
         m_encoderCtx->hw_frames_ctx != nullptr,
+        directHardwareFrameEncoder,
         m_encoderCtx->width,
         m_encoderCtx->height,
         m_encoderCtx->framerate.num,
@@ -416,6 +417,14 @@ Status FFmpegVideoEncoderStage::initializeHardwareFramesContextForEncoder()
     if (!m_hasHardwarePlan ||
         !m_hardwareEncoderSelection.zeroCopy ||
         !m_encoderCtx) {
+        return Status::success();
+    }
+
+    if (m_hardwareBackend.supportsDirectHardwareFrameEncode) {
+        spdlog::info(
+            "[ZC][ENCODER] backend={} uses direct hardware frame encode; skip encoder hw_frames_ctx allocation",
+            m_hardwareBackend.name ? m_hardwareBackend.name : "unknown"
+        );
         return Status::success();
     }
 
