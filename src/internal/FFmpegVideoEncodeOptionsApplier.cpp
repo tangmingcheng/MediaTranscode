@@ -116,39 +116,70 @@ namespace {
         return name == "rc" || name == "rate_control" || name == "rc_mode" || name == "nal-hrd";
     }
 
+    std::string x26xPresetName(VideoEncodeSpeedPreset speedPreset)
+    {
+        switch (speedPreset) {
+        case VideoEncodeSpeedPreset::Ultrafast:
+            return "ultrafast";
+        case VideoEncodeSpeedPreset::Superfast:
+            return "superfast";
+        case VideoEncodeSpeedPreset::Veryfast:
+            return "veryfast";
+        case VideoEncodeSpeedPreset::Faster:
+            return "faster";
+        case VideoEncodeSpeedPreset::Fast:
+            return "fast";
+        case VideoEncodeSpeedPreset::Slow:
+            return "slow";
+        case VideoEncodeSpeedPreset::Slower:
+            return "slower";
+        case VideoEncodeSpeedPreset::Veryslow:
+            return "veryslow";
+        case VideoEncodeSpeedPreset::Placebo:
+            return "placebo";
+        case VideoEncodeSpeedPreset::Medium:
+        default:
+            return "medium";
+        }
+    }
+
+    std::string nvencPresetName(VideoEncodeSpeedPreset speedPreset)
+    {
+        switch (speedPreset) {
+        case VideoEncodeSpeedPreset::Ultrafast:
+        case VideoEncodeSpeedPreset::Superfast:
+            return "p1";
+        case VideoEncodeSpeedPreset::Veryfast:
+            return "p2";
+        case VideoEncodeSpeedPreset::Faster:
+        case VideoEncodeSpeedPreset::Fast:
+            return "p3";
+        case VideoEncodeSpeedPreset::Medium:
+            return "p4";
+        case VideoEncodeSpeedPreset::Slow:
+            return "p5";
+        case VideoEncodeSpeedPreset::Slower:
+            return "p6";
+        case VideoEncodeSpeedPreset::Veryslow:
+        case VideoEncodeSpeedPreset::Placebo:
+        default:
+            return "p7";
+        }
+    }
+
     std::string nativePresetForSpeed(const AVCodec* encoder,
                                      VideoEncodeSpeedPreset speedPreset)
     {
-        if (speedPreset == VideoEncodeSpeedPreset::Auto || !encoder || !encoder->name) {
+        if (!encoder || !encoder->name) {
             return {};
         }
 
         if (encoderNameContains(encoder, "_nvenc")) {
-            switch (speedPreset) {
-            case VideoEncodeSpeedPreset::Fast:
-                return "p1";
-            case VideoEncodeSpeedPreset::Balanced:
-                return "p4";
-            case VideoEncodeSpeedPreset::Quality:
-                return "p7";
-            case VideoEncodeSpeedPreset::Auto:
-            default:
-                return {};
-            }
+            return nvencPresetName(speedPreset);
         }
 
         if (encoderNameEquals(encoder, "libx264") || encoderNameEquals(encoder, "libx265")) {
-            switch (speedPreset) {
-            case VideoEncodeSpeedPreset::Fast:
-                return "fast";
-            case VideoEncodeSpeedPreset::Balanced:
-                return "medium";
-            case VideoEncodeSpeedPreset::Quality:
-                return "slow";
-            case VideoEncodeSpeedPreset::Auto:
-            default:
-                return {};
-            }
+            return x26xPresetName(speedPreset);
         }
 
         return {};
@@ -192,47 +223,50 @@ namespace {
         );
     }
 
-    void applyBitrateOptionPlan(AVCodecContext* encoderContext,
-                                const VideoBitrateOptionPlan& optionPlan,
-                                VideoEncodeOptionsApplyReport& report)
+    void applyBitrateOptions(AVCodecContext* encoderContext,
+                             const VideoBitrateOptionPlan& optionPlan,
+                             VideoEncodeOptionsApplyReport& report)
     {
         if (optionPlan.bitRate > 0) {
             encoderContext->bit_rate = optionPlan.bitRate;
-            report.bitRate = encoderContext->bit_rate;
+            report.bitRate = optionPlan.bitRate;
         }
 
         if (optionPlan.minBitRate > 0) {
             encoderContext->rc_min_rate = optionPlan.minBitRate;
-            report.minBitRate = encoderContext->rc_min_rate;
+            report.minBitRate = optionPlan.minBitRate;
         }
 
         if (optionPlan.maxBitRate > 0) {
             encoderContext->rc_max_rate = optionPlan.maxBitRate;
-            report.maxBitRate = encoderContext->rc_max_rate;
+            report.maxBitRate = optionPlan.maxBitRate;
         }
 
         if (optionPlan.bufferSize > 0) {
-            encoderContext->rc_buffer_size = static_cast<int>(optionPlan.bufferSize);
-            report.bufferSize = encoderContext->rc_buffer_size;
+            encoderContext->rc_buffer_size = optionPlan.bufferSize;
+            report.bufferSize = optionPlan.bufferSize;
         }
 
         for (const VideoBitrateOption& option : optionPlan.privateOptions) {
             bool applied = false;
-            if (option.type == VideoBitrateOption::Type::String) {
+            switch (option.type) {
+            case VideoBitrateOption::Type::String:
                 applied = setStringOptionIfSupported(
                     encoderContext,
                     option.name.c_str(),
                     option.stringValue,
                     report
                 );
-            }
-            else {
+                break;
+
+            case VideoBitrateOption::Type::Integer:
                 applied = setIntegerOptionIfSupported(
                     encoderContext,
                     option.name.c_str(),
                     option.integerValue,
                     report
                 );
+                break;
             }
 
             if (applied && isRateControlPrivateOption(option.name)) {
@@ -240,101 +274,86 @@ namespace {
             }
         }
 
-        for (const std::string& diagnostic : optionPlan.diagnostics) {
-            report.appliedOptions.emplace_back("bitrate_adapter=" + diagnostic);
-        }
+        report.diagnostics.insert(
+            report.diagnostics.end(),
+            optionPlan.diagnostics.begin(),
+            optionPlan.diagnostics.end()
+        );
     }
 
-} // namespace
-
-    std::string VideoEncodeOptionsApplyReport::describe() const
+    std::string joinList(const std::vector<std::string>& values)
     {
+        if (values.empty()) {
+            return "none";
+        }
+
         std::ostringstream oss;
-        oss << "bitrate=" << bitRate
-            << ", min_bitrate=" << minBitRate
-            << ", max_bitrate=" << maxBitRate
-            << ", buffer_size=" << bufferSize
-            << ", gop=" << gopSize
-            << ", bframes=" << maxBFrames
-            << ", rc_option=" << rateControlApplied
-            << ", preset=" << presetApplied
-            << ", tune=" << tuneApplied
-            << ", profile=" << profileApplied
-            << ", level=" << levelApplied;
-
-        if (!appliedOptions.empty()) {
-            oss << ", applied_options=[";
-            for (std::size_t i = 0; i < appliedOptions.size(); ++i) {
-                if (i > 0) {
-                    oss << ";";
-                }
-                oss << appliedOptions[i];
+        for (std::size_t i = 0; i < values.size(); ++i) {
+            if (i > 0) {
+                oss << ",";
             }
-            oss << "]";
-        }
-
-        if (!unsupportedOptions.empty()) {
-            oss << ", unsupported_options=[";
-            for (std::size_t i = 0; i < unsupportedOptions.size(); ++i) {
-                if (i > 0) {
-                    oss << ";";
-                }
-                oss << unsupportedOptions[i];
-            }
-            oss << "]";
-        }
-
-        if (!failedOptions.empty()) {
-            oss << ", failed_options=[";
-            for (std::size_t i = 0; i < failedOptions.size(); ++i) {
-                if (i > 0) {
-                    oss << ";";
-                }
-                oss << failedOptions[i];
-            }
-            oss << "]";
+            oss << values[i];
         }
 
         return oss.str();
     }
 
-    VideoEncodeOptionsApplyReport VideoEncodeOptionsApplier::apply(
-        AVCodecContext* encoderContext,
-        const AVCodec* encoder,
-        const TranscodeConfig& config,
-        int outputFps)
+} // namespace
+
+    void VideoEncodeOptionsApplier::apply(AVCodecContext* encoderContext,
+                                          const AVCodec* encoder,
+                                          const TranscodeConfig& config,
+                                          int outputWidth,
+                                          int outputHeight,
+                                          int outputFps,
+                                          VideoEncodeOptionsApplyReport& report)
     {
-        VideoEncodeOptionsApplyReport report;
         if (!encoderContext) {
-            return report;
+            return;
         }
 
-        const VideoEncodeOptions& options = config.videoEncode;
+        encoderContext->gop_size = chooseGopSize(config.videoEncode, outputFps);
+        encoderContext->max_b_frames = chooseMaxBFrames(config.videoEncode);
+
+        report.gopSize = encoderContext->gop_size;
+        report.maxBFrames = encoderContext->max_b_frames;
 
         const VideoBitratePlan bitratePlan = VideoBitrateControlPlanner::plan(
             config,
-            encoderContext->width,
-            encoderContext->height,
+            outputWidth,
+            outputHeight,
             outputFps
         );
-        for (const std::string& diagnostic : bitratePlan.diagnostics) {
-            report.appliedOptions.emplace_back("bitrate_plan=" + diagnostic);
-        }
+        report.bitratePlan = bitratePlan;
 
         const VideoBitrateOptionPlan optionPlan = VideoBitrateOptionAdapter::adapt(
             encoder,
             bitratePlan
         );
-        applyBitrateOptionPlan(encoderContext, optionPlan, report);
 
-        encoderContext->gop_size = chooseGopSize(options, outputFps);
-        encoderContext->max_b_frames = chooseMaxBFrames(options);
-        report.gopSize = encoderContext->gop_size;
-        report.maxBFrames = encoderContext->max_b_frames;
+        applyBitrateOptions(encoderContext, optionPlan, report);
+        applyOptionalStringOptions(encoderContext, encoder, config.videoEncode, report);
+    }
 
-        applyOptionalStringOptions(encoderContext, encoder, options, report);
+    std::string VideoEncodeOptionsApplier::describe(const VideoEncodeOptionsApplyReport& report)
+    {
+        std::ostringstream oss;
+        oss << "gop=" << report.gopSize
+            << ", bframes=" << report.maxBFrames
+            << ", bitrate=" << report.bitRate
+            << ", min_bitrate=" << report.minBitRate
+            << ", max_bitrate=" << report.maxBitRate
+            << ", buffer=" << report.bufferSize
+            << ", preset=" << (report.presetApplied ? "applied" : "default")
+            << ", tune=" << (report.tuneApplied ? "applied" : "default")
+            << ", profile=" << (report.profileApplied ? "applied" : "default")
+            << ", level=" << (report.levelApplied ? "applied" : "default")
+            << ", rc_option=" << (report.rateControlApplied ? "applied" : "default")
+            << ", unsupported=[" << joinList(report.unsupportedOptions) << "]"
+            << ", failed=[" << joinList(report.failedOptions) << "]"
+            << ", diagnostics=[" << joinList(report.diagnostics) << "]";
 
-        return report;
+        return oss.str();
     }
 
 } // namespace media::ffmpeg
