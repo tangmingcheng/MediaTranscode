@@ -1,58 +1,12 @@
 #include "internal/FFmpegVideoTranscodePipeline.h"
 
 #include "internal/FFmpegError.h"
+#include "internal/FFmpegVideoFlushDiagnostics.h"
 
-#include "spdlog/spdlog.h"
-
-#include <chrono>
 #include <cstdint>
 #include <string>
 
 namespace media::ffmpeg {
-namespace {
-
-using SteadyClock = std::chrono::steady_clock;
-
-int64_t elapsedMs(SteadyClock::time_point start)
-{
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-        SteadyClock::now() - start
-    ).count();
-}
-
-const char* executionModeName(VideoExecutionMode mode)
-{
-    switch (mode) {
-    case VideoExecutionMode::Cpu:
-        return "cpu";
-    case VideoExecutionMode::HardwareZeroCopy:
-        return "hardware-zero-copy";
-    case VideoExecutionMode::HardwareDecodeSoftwareFilterHardwareEncode:
-        return "hardware-decode-software-filter-hardware-encode";
-    case VideoExecutionMode::HardwareDecodeSoftwareFilterGenericEncode:
-        return "hardware-decode-software-filter-generic-encode";
-    default:
-        return "unknown";
-    }
-}
-
-VideoExecutionMode activeExecutionMode(bool hasHardwarePlan,
-                                       const HardwarePipelinePlan& plan)
-{
-    return hasHardwarePlan ? plan.executionMode : VideoExecutionMode::Cpu;
-}
-
-const char* activeBackendName(bool hasHardwarePlan,
-                              const HardwarePipelinePlan& plan)
-{
-    if (!hasHardwarePlan || !plan.backend.name) {
-        return "none";
-    }
-
-    return plan.backend.name;
-}
-
-} // namespace
 
 FFmpegVideoTranscodePipeline::~FFmpegVideoTranscodePipeline()
 {
@@ -316,47 +270,31 @@ Status FFmpegVideoTranscodePipeline::flushDecoder(
         return Status::success();
     }
 
-    const VideoExecutionMode executionMode = activeExecutionMode(m_hasHardwarePlan, m_hardwarePlan);
     const int64_t packetsBefore = m_packetWriter.packetCount();
-    const auto totalStart = SteadyClock::now();
-
-    spdlog::info(
-        "[FLUSH][VIDEO][DECODER] begin mode={}, backend={}, zero_copy={}, packets_before={}",
-        executionModeName(executionMode),
-        activeBackendName(m_hasHardwarePlan, m_hardwarePlan),
-        m_encoderStage.zeroCopyPipeline(),
-        packetsBefore
+    FFmpegVideoFlushDiagnostics::Session diagnostics(
+        FFmpegVideoFlushDiagnostics::makeContext(
+            "DECODER",
+            m_hasHardwarePlan,
+            m_hardwarePlan,
+            m_encoderStage.zeroCopyPipeline(),
+            packetsBefore
+        )
     );
 
-    auto stepStart = SteadyClock::now();
+    auto step = diagnostics.mark();
     Status status = m_decoderStage.sendFlush();
-    spdlog::info(
-        "[FLUSH][VIDEO][DECODER] send_flush cost={}ms",
-        elapsedMs(stepStart)
-    );
     if (!status) {
-        spdlog::warn(
-            "[FLUSH][VIDEO][DECODER] send_flush failed after {}ms",
-            elapsedMs(totalStart)
-        );
+        diagnostics.logFailure("send_flush", step);
+        diagnostics.finish(m_packetWriter.packetCount(), false);
         return status;
     }
+    diagnostics.logStep("send_flush", step);
 
-    stepStart = SteadyClock::now();
+    step = diagnostics.mark();
     status = drainDecoder(onPacketWritten);
     const int64_t packetsAfter = m_packetWriter.packetCount();
-    spdlog::info(
-        "[FLUSH][VIDEO][DECODER] drain cost={}ms, packets_written={}, packets_total={}",
-        elapsedMs(stepStart),
-        packetsAfter - packetsBefore,
-        packetsAfter
-    );
-
-    spdlog::info(
-        "[FLUSH][VIDEO][DECODER] end cost={}ms, status={}",
-        elapsedMs(totalStart),
-        status ? "ok" : "failed"
-    );
+    diagnostics.logStepPackets("drain", step, packetsAfter - packetsBefore);
+    diagnostics.finish(packetsAfter, status.isOk());
 
     return status;
 }
@@ -364,95 +302,71 @@ Status FFmpegVideoTranscodePipeline::flushDecoder(
 Status FFmpegVideoTranscodePipeline::flushFilterAndEncoder(
     const PacketWrittenCallback& onPacketWritten)
 {
-    const VideoExecutionMode executionMode = activeExecutionMode(m_hasHardwarePlan, m_hardwarePlan);
     const int64_t packetsBeforeAll = m_packetWriter.packetCount();
-    const auto totalStart = SteadyClock::now();
-
-    spdlog::info(
-        "[FLUSH][VIDEO][FILTER_ENCODER] begin mode={}, backend={}, zero_copy={}, packets_before={}",
-        executionModeName(executionMode),
-        activeBackendName(m_hasHardwarePlan, m_hardwarePlan),
-        m_encoderStage.zeroCopyPipeline(),
-        packetsBeforeAll
+    FFmpegVideoFlushDiagnostics::Session diagnostics(
+        FFmpegVideoFlushDiagnostics::makeContext(
+            "FILTER_ENCODER",
+            m_hasHardwarePlan,
+            m_hardwarePlan,
+            m_encoderStage.zeroCopyPipeline(),
+            packetsBeforeAll
+        )
     );
 
     std::string error;
 
-    auto stepStart = SteadyClock::now();
+    auto step = diagnostics.mark();
     if (!m_frameRateStage.flush(&error)) {
-        spdlog::warn(
-            "[FLUSH][VIDEO][FILTER_ENCODER] frame_rate_flush failed cost={}ms",
-            elapsedMs(stepStart)
-        );
+        diagnostics.logFailure("frame_rate_flush", step);
+        diagnostics.finish(m_packetWriter.packetCount(), false);
         return Status::failure(makeLegacyError(error));
     }
-    spdlog::info(
-        "[FLUSH][VIDEO][FILTER_ENCODER] frame_rate_flush cost={}ms",
-        elapsedMs(stepStart)
-    );
+    diagnostics.logStep("frame_rate_flush", step);
 
     int64_t packetsBeforeStep = m_packetWriter.packetCount();
-    stepStart = SteadyClock::now();
+    step = diagnostics.mark();
     Status status = drainFrameRateStage(m_encoderStage.zeroCopyPipeline(), onPacketWritten);
-    spdlog::info(
-        "[FLUSH][VIDEO][FILTER_ENCODER] frame_rate_drain cost={}ms, packets_written={}",
-        elapsedMs(stepStart),
+    diagnostics.logStepPackets(
+        "frame_rate_drain",
+        step,
         m_packetWriter.packetCount() - packetsBeforeStep
     );
     if (!status) {
-        spdlog::warn(
-            "[FLUSH][VIDEO][FILTER_ENCODER] frame_rate_drain failed after {}ms",
-            elapsedMs(totalStart)
-        );
+        diagnostics.finish(m_packetWriter.packetCount(), false);
         return status;
     }
 
     error.clear();
-    stepStart = SteadyClock::now();
+    step = diagnostics.mark();
     if (!m_filterStage.flush(&error)) {
-        spdlog::warn(
-            "[FLUSH][VIDEO][FILTER_ENCODER] filter_flush failed cost={}ms",
-            elapsedMs(stepStart)
-        );
+        diagnostics.logFailure("filter_flush", step);
+        diagnostics.finish(m_packetWriter.packetCount(), false);
         return Status::failure(makeLegacyError(error));
     }
-    spdlog::info(
-        "[FLUSH][VIDEO][FILTER_ENCODER] filter_flush cost={}ms",
-        elapsedMs(stepStart)
-    );
+    diagnostics.logStep("filter_flush", step);
 
     packetsBeforeStep = m_packetWriter.packetCount();
-    stepStart = SteadyClock::now();
+    step = diagnostics.mark();
     status = drainFilterStage(onPacketWritten);
-    spdlog::info(
-        "[FLUSH][VIDEO][FILTER_ENCODER] filter_drain cost={}ms, packets_written={}",
-        elapsedMs(stepStart),
+    diagnostics.logStepPackets(
+        "filter_drain",
+        step,
         m_packetWriter.packetCount() - packetsBeforeStep
     );
     if (!status) {
-        spdlog::warn(
-            "[FLUSH][VIDEO][FILTER_ENCODER] filter_drain failed after {}ms",
-            elapsedMs(totalStart)
-        );
+        diagnostics.finish(m_packetWriter.packetCount(), false);
         return status;
     }
 
     packetsBeforeStep = m_packetWriter.packetCount();
-    stepStart = SteadyClock::now();
+    step = diagnostics.mark();
     status = writeEncodedPackets(nullptr, onPacketWritten);
-    spdlog::info(
-        "[FLUSH][VIDEO][FILTER_ENCODER] encoder_flush cost={}ms, packets_written={}",
-        elapsedMs(stepStart),
+    diagnostics.logStepPackets(
+        "encoder_flush",
+        step,
         m_packetWriter.packetCount() - packetsBeforeStep
     );
-
-    spdlog::info(
-        "[FLUSH][VIDEO][FILTER_ENCODER] end cost={}ms, packets_written={}, packets_total={}, status={}",
-        elapsedMs(totalStart),
-        m_packetWriter.packetCount() - packetsBeforeAll,
-        m_packetWriter.packetCount(),
-        status ? "ok" : "failed"
-    );
+    diagnostics.finish(m_packetWriter.packetCount(), status.isOk());
 
     return status;
 }
