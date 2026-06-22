@@ -53,10 +53,30 @@ namespace {
         return mode == VideoRateControlMode::CRF || mode == VideoRateControlMode::CappedVBR;
     }
 
+    void addPrivateVbvOptions(const VideoBitrateOptionPlan& output,
+                              std::vector<VideoBitrateOption>& options)
+    {
+        if (output.minBitRate > 0) {
+            options.emplace_back(integerOption("minrate", output.minBitRate));
+        }
+
+        if (output.maxBitRate > 0) {
+            options.emplace_back(integerOption("maxrate", output.maxBitRate));
+        }
+
+        if (output.bufferSize > 0) {
+            options.emplace_back(integerOption("bufsize", output.bufferSize));
+        }
+    }
+
     void applyCommonBitrateFields(const VideoBitratePlan& plan, VideoBitrateOptionPlan& output)
     {
         if (plan.targetKbps > 0) {
             output.bitRate = kbpsToBps(plan.targetKbps);
+        }
+
+        if (plan.minKbps > 0) {
+            output.minBitRate = kbpsToBps(plan.minKbps);
         }
 
         if (plan.maxKbps > 0) {
@@ -66,6 +86,14 @@ namespace {
         if (plan.bufferSizeKbits > 0) {
             output.bufferSize = kbpsToBps(plan.bufferSizeKbits);
         }
+    }
+
+    void clearBitrateFields(VideoBitrateOptionPlan& output)
+    {
+        output.bitRate = 0;
+        output.minBitRate = 0;
+        output.maxBitRate = 0;
+        output.bufferSize = 0;
     }
 
     void adaptX26x(const VideoBitratePlan& plan, VideoBitrateOptionPlan& output)
@@ -82,9 +110,7 @@ namespace {
             if (plan.quality > 0) {
                 output.privateOptions.emplace_back(integerOption("crf", plan.quality));
             }
-            output.bitRate = 0;
-            output.maxBitRate = 0;
-            output.bufferSize = 0;
+            clearBitrateFields(output);
             break;
 
         case VideoRateControlMode::CappedVBR:
@@ -115,9 +141,7 @@ namespace {
             if (plan.quality > 0) {
                 output.privateOptions.emplace_back(integerOption("cq", plan.quality));
             }
-            output.bitRate = 0;
-            output.maxBitRate = 0;
-            output.bufferSize = 0;
+            clearBitrateFields(output);
             break;
 
         case VideoRateControlMode::CappedVBR:
@@ -149,9 +173,7 @@ namespace {
             if (plan.quality > 0) {
                 output.privateOptions.emplace_back(integerOption("crf", plan.quality));
             }
-            output.bitRate = 0;
-            output.maxBitRate = 0;
-            output.bufferSize = 0;
+            clearBitrateFields(output);
             break;
 
         case VideoRateControlMode::Auto:
@@ -172,6 +194,23 @@ namespace {
         case VideoRateControlMode::CappedVBR:
             return "capped-vbr";
         case VideoRateControlMode::Auto:
+        default:
+            return "auto";
+        }
+    }
+
+    const char* constraintModeName(VideoBitrateConstraintMode mode)
+    {
+        switch (mode) {
+        case VideoBitrateConstraintMode::Strict:
+            return "strict";
+        case VideoBitrateConstraintMode::Flexible:
+            return "flexible";
+        case VideoBitrateConstraintMode::Quality:
+            return "quality";
+        case VideoBitrateConstraintMode::HybridQuality:
+            return "hybrid-quality";
+        case VideoBitrateConstraintMode::Auto:
         default:
             return "auto";
         }
@@ -198,9 +237,15 @@ namespace {
             output.diagnostics.emplace_back("adapter=generic");
         }
 
+        addPrivateVbvOptions(output, output.privateOptions);
+
         output.diagnostics.emplace_back(std::string("rc=") + rateControlModeName(plan.rateControl));
+        output.diagnostics.emplace_back(std::string("constraint=") + constraintModeName(plan.constraintMode));
         if (plan.quality > 0 && isQualityDrivenMode(plan.rateControl)) {
             output.diagnostics.emplace_back("quality=" + std::to_string(plan.quality));
+        }
+        if (output.minBitRate > 0) {
+            output.diagnostics.emplace_back("minrate=" + std::to_string(output.minBitRate));
         }
 
         return output;
