@@ -13,6 +13,7 @@ namespace media::ffmpeg {
 
     struct VideoEncodeOptionsApplyReport {
         int64_t bitRate = 0;
+        int64_t minBitRate = 0;
         int64_t maxBitRate = 0;
         int64_t bufferSize = 0;
         int gopSize = 0;
