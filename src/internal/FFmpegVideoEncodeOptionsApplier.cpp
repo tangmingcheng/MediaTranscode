@@ -1,5 +1,6 @@
 #include "internal/FFmpegVideoEncodeOptionsApplier.h"
 
+#include "internal/FFmpegEncoderCapabilityMatrix.h"
 #include "internal/FFmpegVideoBitrateControlPlanner.h"
 #include "internal/FFmpegVideoBitrateOptionAdapter.h"
 
@@ -52,6 +53,10 @@ namespace {
             return false;
         }
 
+        if (!optionName || !*optionName) {
+            return false;
+        }
+
         if (!hasOption(target, optionName)) {
             report.unsupportedOptions.emplace_back(optionName);
             return false;
@@ -99,103 +104,25 @@ namespace {
         return false;
     }
 
-    bool encoderNameContains(const AVCodec* encoder, const char* token)
-    {
-        return encoder && encoder->name && std::string(encoder->name).find(token) != std::string::npos;
-    }
-
-    bool encoderNameEquals(const AVCodec* encoder, const char* name)
-    {
-        return encoder && encoder->name && std::string(encoder->name) == name;
-    }
-
-    bool isRateControlPrivateOption(const std::string& name)
-    {
-        return name == "rc" || name == "rate_control" || name == "rc_mode" || name == "nal-hrd";
-    }
-
-    std::string x26xPresetName(VideoEncodeSpeedPreset speedPreset)
-    {
-        switch (speedPreset) {
-        case VideoEncodeSpeedPreset::Ultrafast:
-            return "ultrafast";
-        case VideoEncodeSpeedPreset::Superfast:
-            return "superfast";
-        case VideoEncodeSpeedPreset::Veryfast:
-            return "veryfast";
-        case VideoEncodeSpeedPreset::Faster:
-            return "faster";
-        case VideoEncodeSpeedPreset::Fast:
-            return "fast";
-        case VideoEncodeSpeedPreset::Medium:
-            return "medium";
-        case VideoEncodeSpeedPreset::Slow:
-            return "slow";
-        case VideoEncodeSpeedPreset::Slower:
-            return "slower";
-        case VideoEncodeSpeedPreset::Veryslow:
-            return "veryslow";
-        case VideoEncodeSpeedPreset::Placebo:
-        default:
-            return "placebo";
-        }
-    }
-
-    std::string nvencPresetName(VideoEncodeSpeedPreset speedPreset)
-    {
-        switch (speedPreset) {
-        case VideoEncodeSpeedPreset::Ultrafast:
-        case VideoEncodeSpeedPreset::Superfast:
-            return "p1";
-        case VideoEncodeSpeedPreset::Veryfast:
-            return "p2";
-        case VideoEncodeSpeedPreset::Faster:
-        case VideoEncodeSpeedPreset::Fast:
-            return "p3";
-        case VideoEncodeSpeedPreset::Medium:
-            return "p4";
-        case VideoEncodeSpeedPreset::Slow:
-            return "p5";
-        case VideoEncodeSpeedPreset::Slower:
-            return "p6";
-        case VideoEncodeSpeedPreset::Veryslow:
-        case VideoEncodeSpeedPreset::Placebo:
-        default:
-            return "p7";
-        }
-    }
-
-    std::string nativePresetForSpeed(const AVCodec* encoder,
-                                     VideoEncodeSpeedPreset speedPreset)
-    {
-        if (!encoder || !encoder->name) {
-            return {};
-        }
-
-        if (encoderNameContains(encoder, "_nvenc")) {
-            return nvencPresetName(speedPreset);
-        }
-
-        if (encoderNameEquals(encoder, "libx264") || encoderNameEquals(encoder, "libx265")) {
-            return x26xPresetName(speedPreset);
-        }
-
-        return {};
-    }
-
     void applyOptionalStringOptions(AVCodecContext* encoderContext,
                                     const AVCodec* encoder,
                                     const VideoEncodeOptions& options,
                                     VideoEncodeOptionsApplyReport& report)
     {
-        const std::string resolvedPreset = !options.preset.empty()
+        const FFmpegEncoderCapabilities capabilities = FFmpegEncoderCapabilityMatrix::query(encoder);
+
+        const std::string resolvedPresetValue = !options.preset.empty()
             ? options.preset
-            : nativePresetForSpeed(encoder, options.speedPreset);
+            : FFmpegEncoderCapabilityMatrix::presetValue(capabilities, options.speedPreset);
+
+        const std::string resolvedPresetOption = !capabilities.presetOptionName.empty()
+            ? capabilities.presetOptionName
+            : (!options.preset.empty() ? "preset" : "");
 
         report.presetApplied = setStringOptionIfSupported(
             encoderContext,
-            "preset",
-            resolvedPreset,
+            resolvedPresetOption.c_str(),
+            resolvedPresetValue,
             report
         );
 
@@ -268,7 +195,7 @@ namespace {
                 break;
             }
 
-            if (applied && isRateControlPrivateOption(option.name)) {
+            if (applied && FFmpegEncoderCapabilityMatrix::isRateControlPrivateOption(option.name)) {
                 report.rateControlApplied = true;
             }
         }
