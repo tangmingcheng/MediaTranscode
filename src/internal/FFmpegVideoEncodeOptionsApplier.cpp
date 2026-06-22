@@ -196,6 +196,11 @@ namespace {
             report.bitRate = encoderContext->bit_rate;
         }
 
+        if (optionPlan.minBitRate > 0) {
+            encoderContext->rc_min_rate = optionPlan.minBitRate;
+            report.minBitRate = encoderContext->rc_min_rate;
+        }
+
         if (optionPlan.maxBitRate > 0) {
             encoderContext->rc_max_rate = optionPlan.maxBitRate;
             report.maxBitRate = encoderContext->rc_max_rate;
@@ -236,6 +241,7 @@ namespace {
     {
         std::ostringstream oss;
         oss << "bitrate=" << bitRate
+            << ", min_bitrate=" << minBitRate
             << ", max_bitrate=" << maxBitRate
             << ", buffer_size=" << bufferSize
             << ", gop=" << gopSize
