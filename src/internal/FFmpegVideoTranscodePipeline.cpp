@@ -294,7 +294,7 @@ Status FFmpegVideoTranscodePipeline::flushDecoder(
     status = drainDecoder(onPacketWritten);
     const int64_t packetsAfter = m_packetWriter.packetCount();
     diagnostics.logStepPackets("drain", step, packetsAfter - packetsBefore);
-    diagnostics.finish(packetsAfter, status.isOk());
+    diagnostics.finish(packetsAfter, status.ok());
 
     return status;
 }
@@ -366,7 +366,7 @@ Status FFmpegVideoTranscodePipeline::flushFilterAndEncoder(
         step,
         m_packetWriter.packetCount() - packetsBeforeStep
     );
-    diagnostics.finish(m_packetWriter.packetCount(), status.isOk());
+    diagnostics.finish(m_packetWriter.packetCount(), status.ok());
 
     return status;
 }
