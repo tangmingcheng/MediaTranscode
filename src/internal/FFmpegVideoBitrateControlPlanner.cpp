@@ -51,23 +51,6 @@ namespace {
         }
     }
 
-    const char* constraintModeName(VideoBitrateConstraintMode mode)
-    {
-        switch (mode) {
-        case VideoBitrateConstraintMode::Strict:
-            return "strict";
-        case VideoBitrateConstraintMode::Flexible:
-            return "flexible";
-        case VideoBitrateConstraintMode::Quality:
-            return "quality";
-        case VideoBitrateConstraintMode::HybridQuality:
-            return "hybrid-quality";
-        case VideoBitrateConstraintMode::Auto:
-        default:
-            return "auto";
-        }
-    }
-
     bool supportsQuality(VideoRateControlMode mode)
     {
         return mode == VideoRateControlMode::CRF || mode == VideoRateControlMode::CappedVBR;
@@ -102,11 +85,9 @@ namespace {
         }
 
         if (config.videoBitrate.quality > 0) {
-            if (hasUserBitrateConstraint(config)) {
-                return VideoRateControlMode::CappedVBR;
-            }
-
-            return VideoRateControlMode::CRF;
+            return hasUserBitrateConstraint(config)
+                ? VideoRateControlMode::CappedVBR
+                : VideoRateControlMode::CRF;
         }
 
         if (plan.targetKbps > 0) {
@@ -118,37 +99,6 @@ namespace {
         }
 
         return VideoRateControlMode::Auto;
-    }
-
-    VideoBitrateConstraintMode constraintForRateControl(VideoRateControlMode mode)
-    {
-        switch (mode) {
-        case VideoRateControlMode::CBR:
-            return VideoBitrateConstraintMode::Strict;
-        case VideoRateControlMode::VBR:
-            return VideoBitrateConstraintMode::Flexible;
-        case VideoRateControlMode::CRF:
-            return VideoBitrateConstraintMode::Quality;
-        case VideoRateControlMode::CappedVBR:
-            return VideoBitrateConstraintMode::HybridQuality;
-        case VideoRateControlMode::Auto:
-        default:
-            return VideoBitrateConstraintMode::Auto;
-        }
-    }
-
-    VideoBitrateConstraintMode resolveConstraintMode(const TranscodeConfig& config,
-                                                     VideoRateControlMode rateControl)
-    {
-        if (config.videoBitrate.constraintMode != VideoBitrateConstraintMode::Auto) {
-            return config.videoBitrate.constraintMode;
-        }
-
-        if (config.bitratePolicy.defaultConstraintMode != VideoBitrateConstraintMode::Auto) {
-            return config.bitratePolicy.defaultConstraintMode;
-        }
-
-        return constraintForRateControl(rateControl);
     }
 
     int chooseTargetFromLadder(const VideoBitrateControlPolicy& policy,
@@ -444,59 +394,59 @@ namespace {
         }
     }
 
-    void completeStrictPlan(const TranscodeConfig& config, VideoBitratePlan& plan)
+    void completeCbrPlan(const TranscodeConfig& config, VideoBitratePlan& plan)
     {
         if (plan.maxKbps <= 0 && plan.targetKbps > 0) {
             if (config.bitratePolicy.cbrPeakMultiplier > 0.0) {
                 plan.maxKbps = roundToInt(plan.targetKbps * config.bitratePolicy.cbrPeakMultiplier);
-                addDiagnostic(plan, "strict max bitrate derived from policy peak multiplier");
+                addDiagnostic(plan, "CBR max bitrate derived from policy peak multiplier");
             }
             else {
                 plan.maxKbps = plan.targetKbps;
-                addDiagnostic(plan, "strict max bitrate matched to target bitrate");
+                addDiagnostic(plan, "CBR max bitrate matched to target bitrate");
             }
         }
 
         if (plan.minKbps <= 0 && plan.targetKbps > 0) {
-            if (config.bitratePolicy.strictMinToTargetRatio > 0.0) {
-                deriveMinFromRatio(plan, config.bitratePolicy.strictMinToTargetRatio, "strict");
+            if (config.bitratePolicy.cbrMinToTargetRatio > 0.0) {
+                deriveMinFromRatio(plan, config.bitratePolicy.cbrMinToTargetRatio, "CBR");
             }
             else {
                 plan.minKbps = plan.targetKbps;
-                addDiagnostic(plan, "strict min bitrate matched to target bitrate");
+                addDiagnostic(plan, "CBR min bitrate matched to target bitrate");
             }
         }
 
         if (plan.bufferSizeKbits <= 0 && plan.targetKbps > 0 && config.bitratePolicy.cbrBufferSeconds > 0.0) {
             plan.bufferSizeKbits = roundToInt(plan.targetKbps * config.bitratePolicy.cbrBufferSeconds);
-            addDiagnostic(plan, "strict buffer size derived from policy buffer seconds");
+            addDiagnostic(plan, "CBR buffer size derived from policy buffer seconds");
         }
     }
 
-    void completeFlexiblePlan(const TranscodeConfig& config, VideoBitratePlan& plan)
+    void completeVbrPlan(const TranscodeConfig& config, VideoBitratePlan& plan)
     {
         if (plan.maxKbps <= 0 && plan.targetKbps > 0 && config.bitratePolicy.vbrPeakMultiplier > 0.0) {
             plan.maxKbps = roundToInt(plan.targetKbps * config.bitratePolicy.vbrPeakMultiplier);
-            addDiagnostic(plan, "flexible max bitrate derived from policy peak multiplier");
+            addDiagnostic(plan, "VBR max bitrate derived from policy peak multiplier");
         }
 
-        deriveMinFromRatio(plan, config.bitratePolicy.flexibleMinToTargetRatio, "flexible");
+        deriveMinFromRatio(plan, config.bitratePolicy.vbrMinToTargetRatio, "VBR");
 
         if (plan.bufferSizeKbits <= 0 && plan.targetKbps > 0 && config.bitratePolicy.vbrBufferSeconds > 0.0) {
             plan.bufferSizeKbits = roundToInt(plan.targetKbps * config.bitratePolicy.vbrBufferSeconds);
-            addDiagnostic(plan, "flexible buffer size derived from policy buffer seconds");
+            addDiagnostic(plan, "VBR buffer size derived from policy buffer seconds");
         }
     }
 
-    void completeQualityPlan(VideoBitratePlan& plan)
+    void completeCrfPlan(VideoBitratePlan& plan)
     {
         if (plan.quality <= 0) {
             plan.quality = 23;
-            addDiagnostic(plan, "quality mode defaulted quality to 23");
+            addDiagnostic(plan, "CRF quality defaulted to 23");
         }
 
         if (plan.userTargetApplied || plan.userMinApplied || plan.userMaxApplied || plan.userBufferApplied) {
-            addDiagnostic(plan, "bitrate constraints ignored by pure quality mode");
+            addDiagnostic(plan, "bitrate constraints ignored by CRF mode");
         }
 
         plan.targetKbps = 0;
@@ -505,41 +455,41 @@ namespace {
         plan.bufferSizeKbits = 0;
     }
 
-    void completeHybridQualityPlan(const TranscodeConfig& config, VideoBitratePlan& plan)
+    void completeCappedVbrPlan(const TranscodeConfig& config, VideoBitratePlan& plan)
     {
         if (plan.quality <= 0) {
             plan.quality = 23;
-            addDiagnostic(plan, "hybrid quality mode defaulted quality to 23");
+            addDiagnostic(plan, "capped VBR quality defaulted to 23");
         }
 
-        completeFlexiblePlan(config, plan);
+        completeVbrPlan(config, plan);
 
         if (plan.maxKbps <= 0 && plan.targetKbps > 0) {
             plan.maxKbps = plan.targetKbps;
-            addDiagnostic(plan, "hybrid quality max bitrate defaulted to target bitrate");
+            addDiagnostic(plan, "capped VBR max bitrate defaulted to target bitrate");
         }
     }
 
-    void completeByConstraintMode(const TranscodeConfig& config, VideoBitratePlan& plan)
+    void completeByRateControl(const TranscodeConfig& config, VideoBitratePlan& plan)
     {
-        switch (plan.constraintMode) {
-        case VideoBitrateConstraintMode::Strict:
-            completeStrictPlan(config, plan);
+        switch (plan.rateControl) {
+        case VideoRateControlMode::CBR:
+            completeCbrPlan(config, plan);
             break;
 
-        case VideoBitrateConstraintMode::Flexible:
-            completeFlexiblePlan(config, plan);
+        case VideoRateControlMode::VBR:
+            completeVbrPlan(config, plan);
             break;
 
-        case VideoBitrateConstraintMode::Quality:
-            completeQualityPlan(plan);
+        case VideoRateControlMode::CRF:
+            completeCrfPlan(plan);
             break;
 
-        case VideoBitrateConstraintMode::HybridQuality:
-            completeHybridQualityPlan(config, plan);
+        case VideoRateControlMode::CappedVBR:
+            completeCappedVbrPlan(config, plan);
             break;
 
-        case VideoBitrateConstraintMode::Auto:
+        case VideoRateControlMode::Auto:
         default:
             break;
         }
@@ -577,17 +527,14 @@ namespace {
         plan.bufferSizeKbits = positiveOrZero(resolveBufferKbits(config, plan));
 
         plan.rateControl = autoSelectRateControl(config, plan);
-        plan.constraintMode = resolveConstraintMode(config, plan.rateControl);
-
         {
             std::ostringstream oss;
-            oss << "policy engine selected rc=" << rateControlName(plan.rateControl)
-                << ", constraint=" << constraintModeName(plan.constraintMode);
+            oss << "policy engine selected rc=" << rateControlName(plan.rateControl);
             addDiagnostic(plan, oss.str());
         }
 
         resolveQuality(config, plan);
-        completeByConstraintMode(config, plan);
+        completeByRateControl(config, plan);
         enforceOrderedConstraints(plan);
 
         return plan;
