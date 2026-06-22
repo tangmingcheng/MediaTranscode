@@ -1,6 +1,7 @@
 #include "media_transcode/FFmpegTranscoder.h"
 
 #include "internal/FFmpegAudioPipeline.h"
+#include "internal/FFmpegPhaseDiagnostics.h"
 #include "internal/FFmpegPipelinePlanner.h"
 #include "internal/FFmpegRAII.h"
 #include "internal/FFmpegTimelineNormalizer.h"
@@ -55,6 +56,20 @@ namespace {
         case ffmpeg::VideoExecutionMode::Cpu:
         default:
             return "cpu";
+        }
+    }
+
+    const char* audioModeName(AudioMode mode)
+    {
+        switch (mode) {
+        case AudioMode::None:
+            return "none";
+        case AudioMode::CopySelected:
+            return "copy-selected";
+        case AudioMode::EncodeSelected:
+            return "encode-selected";
+        default:
+            return "unknown";
         }
     }
 
@@ -200,8 +215,17 @@ namespace {
         int64_t encodedAudioPacketCount = 0;
         int64_t lastWrittenVideoOutTimeMs = 0;
         int64_t lastWrittenAudioOutTimeMs = 0;
+        int64_t progressCallbackCount = 0;
 
         const auto startTime = std::chrono::steady_clock::now();
+
+        auto currentFinalizeCounters = [&]() {
+            return ffmpeg::FFmpegPhaseDiagnostics::Counters{
+                encodedVideoPacketCount,
+                encodedAudioPacketCount,
+                progressCallbackCount
+            };
+        };
 
         auto emitProgress = [&](const std::string& raw) {
             ProgressCallback callback;
@@ -235,6 +259,7 @@ namespace {
             }
 
             info.raw = raw;
+            ++progressCallbackCount;
             callback(info);
         };
 
@@ -452,37 +477,126 @@ namespace {
             }
         }
 
+        const ffmpeg::FFmpegPhaseDiagnostics::Counters finalizeCountersBefore = currentFinalizeCounters();
+        ffmpeg::FFmpegPhaseDiagnostics::Session finalizeDiagnostics("TRANSCODE_FINALIZE");
+
+        auto phaseStart = finalizeDiagnostics.mark();
+        auto countersBeforeStep = currentFinalizeCounters();
         if (!m_stopRequested.load()) {
             Status videoStatus = videoPipeline.flushDecoder(onVideoPacketWritten);
+            auto countersAfterStep = currentFinalizeCounters();
             if (!videoStatus) {
+                finalizeDiagnostics.logFailure("video_flush_decoder", phaseStart, countersBeforeStep, countersAfterStep);
+                finalizeDiagnostics.finish(false, finalizeCountersBefore, countersAfterStep);
                 failStatus(videoStatus);
                 return;
             }
+            finalizeDiagnostics.logStep("video_flush_decoder", phaseStart, countersBeforeStep, countersAfterStep);
+        }
+        else {
+            finalizeDiagnostics.logStep("video_flush_decoder_skipped", phaseStart, countersBeforeStep, currentFinalizeCounters(), "reason=stop_requested");
         }
 
-        if (!m_stopRequested.load()) {
+        phaseStart = finalizeDiagnostics.mark();
+        countersBeforeStep = currentFinalizeCounters();
+        if (!m_stopRequested.load() && audioPipeline.outputStream()) {
             Status audioStatus = audioPipeline.flush(onAudioPacketWritten);
+            auto countersAfterStep = currentFinalizeCounters();
             if (!audioStatus) {
+                finalizeDiagnostics.logFailure(
+                    "audio_flush",
+                    phaseStart,
+                    countersBeforeStep,
+                    countersAfterStep,
+                    std::string("audio_mode=") + audioModeName(m_config.audioMode)
+                );
+                finalizeDiagnostics.finish(false, finalizeCountersBefore, countersAfterStep);
                 failStatus(audioStatus);
                 return;
             }
+            finalizeDiagnostics.logStep(
+                "audio_flush",
+                phaseStart,
+                countersBeforeStep,
+                countersAfterStep,
+                std::string("audio_mode=") + audioModeName(m_config.audioMode)
+            );
+        }
+        else {
+            std::string reason = m_stopRequested.load()
+                ? "reason=stop_requested"
+                : audioPipeline.outputStream()
+                    ? "reason=unknown"
+                    : "reason=no_audio_output_stream";
+            finalizeDiagnostics.logStep(
+                "audio_flush_skipped",
+                phaseStart,
+                countersBeforeStep,
+                currentFinalizeCounters(),
+                reason + ", audio_mode=" + audioModeName(m_config.audioMode)
+            );
         }
 
+        phaseStart = finalizeDiagnostics.mark();
+        countersBeforeStep = currentFinalizeCounters();
         if (!m_stopRequested.load()) {
             Status videoStatus = videoPipeline.flushFilterAndEncoder(onVideoPacketWritten);
+            auto countersAfterStep = currentFinalizeCounters();
             if (!videoStatus) {
+                finalizeDiagnostics.logFailure("video_flush_filter_encoder", phaseStart, countersBeforeStep, countersAfterStep);
+                finalizeDiagnostics.finish(false, finalizeCountersBefore, countersAfterStep);
                 failStatus(videoStatus);
                 return;
             }
+            finalizeDiagnostics.logStep("video_flush_filter_encoder", phaseStart, countersBeforeStep, countersAfterStep);
+        }
+        else {
+            finalizeDiagnostics.logStep("video_flush_filter_encoder_skipped", phaseStart, countersBeforeStep, currentFinalizeCounters(), "reason=stop_requested");
         }
 
+        phaseStart = finalizeDiagnostics.mark();
+        countersBeforeStep = currentFinalizeCounters();
         ret = av_write_trailer(outputFmtCtx.get());
+        auto countersAfterStep = currentFinalizeCounters();
         if (ret < 0) {
+            finalizeDiagnostics.logFailure("write_trailer", phaseStart, countersBeforeStep, countersAfterStep);
+            finalizeDiagnostics.finish(false, finalizeCountersBefore, countersAfterStep);
             fail("av_write_trailer failed: " + ffmpeg::errorString(ret));
             return;
         }
+        finalizeDiagnostics.logStep("write_trailer", phaseStart, countersBeforeStep, countersAfterStep);
 
+        phaseStart = finalizeDiagnostics.mark();
+        countersBeforeStep = currentFinalizeCounters();
         emitProgress(m_stopRequested.load() ? "stopped" : "finished");
+        finalizeDiagnostics.logStep("emit_final_progress", phaseStart, countersBeforeStep, currentFinalizeCounters());
+
+        phaseStart = finalizeDiagnostics.mark();
+        countersBeforeStep = currentFinalizeCounters();
+        audioPipeline.reset();
+        finalizeDiagnostics.logStep("cleanup_audio_pipeline", phaseStart, countersBeforeStep, currentFinalizeCounters());
+
+        phaseStart = finalizeDiagnostics.mark();
+        countersBeforeStep = currentFinalizeCounters();
+        videoPipeline.reset();
+        finalizeDiagnostics.logStep("cleanup_video_pipeline", phaseStart, countersBeforeStep, currentFinalizeCounters());
+
+        phaseStart = finalizeDiagnostics.mark();
+        countersBeforeStep = currentFinalizeCounters();
+        inputPacket.reset();
+        finalizeDiagnostics.logStep("cleanup_input_packet", phaseStart, countersBeforeStep, currentFinalizeCounters());
+
+        phaseStart = finalizeDiagnostics.mark();
+        countersBeforeStep = currentFinalizeCounters();
+        outputFmtCtx.reset();
+        finalizeDiagnostics.logStep("cleanup_output_format", phaseStart, countersBeforeStep, currentFinalizeCounters());
+
+        phaseStart = finalizeDiagnostics.mark();
+        countersBeforeStep = currentFinalizeCounters();
+        inputFmtCtx.reset();
+        finalizeDiagnostics.logStep("cleanup_input_format", phaseStart, countersBeforeStep, currentFinalizeCounters());
+
+        finalizeDiagnostics.finish(true, finalizeCountersBefore, currentFinalizeCounters());
     }
 
     void FFmpegTranscoder::setLastError(const std::string& error)
