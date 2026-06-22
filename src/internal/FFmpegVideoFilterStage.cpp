@@ -93,6 +93,59 @@ AVPixelFormat encoderHardwareSoftwareFormat(const AVCodecContext* encoderCtx,
     return hardwareFrameSoftwareFormat(frame);
 }
 
+bool isDrmPrimeFrameWithoutFramesContext(const AVFrame* frame)
+{
+    return frame &&
+        static_cast<AVPixelFormat>(frame->format) == AV_PIX_FMT_DRM_PRIME &&
+        frame->hw_frames_ctx == nullptr;
+}
+
+bool outputSizeMatchesEncoder(const AVCodecContext* encoderCtx, const AVFrame* frame)
+{
+    if (!encoderCtx || !frame) {
+        return false;
+    }
+
+    return encoderCtx->width == frame->width &&
+        encoderCtx->height == frame->height;
+}
+
+bool frameCanBypassHardwareFilterGraph(const AVCodecContext* encoderCtx,
+                                       const HardwareBackendProfile& backend,
+                                       const AVFrame* frame)
+{
+    if (!encoderCtx || !frame) {
+        return false;
+    }
+
+    if (!backend.supportsDirectHardwareFrameEncode) {
+        return false;
+    }
+
+    const AVPixelFormat frameFormat = static_cast<AVPixelFormat>(frame->format);
+    if (frameFormat == AV_PIX_FMT_NONE || encoderCtx->pix_fmt == AV_PIX_FMT_NONE) {
+        return false;
+    }
+
+    if (frameFormat != encoderCtx->pix_fmt) {
+        return false;
+    }
+
+    return outputSizeMatchesEncoder(encoderCtx, frame);
+}
+
+std::string describeHardwareTransformRequirement(const AVCodecContext* encoderCtx,
+                                                 const AVFrame* frame)
+{
+    std::ostringstream oss;
+    oss << "input_fmt=" << pixelFormatName(frame ? static_cast<AVPixelFormat>(frame->format) : AV_PIX_FMT_NONE)
+        << ", input_size=" << (frame ? frame->width : 0) << "x" << (frame ? frame->height : 0)
+        << ", encoder_fmt=" << pixelFormatName(encoderCtx ? encoderCtx->pix_fmt : AV_PIX_FMT_NONE)
+        << ", encoder_size=" << (encoderCtx ? encoderCtx->width : 0) << "x" << (encoderCtx ? encoderCtx->height : 0)
+        << ", encoder_sw_pix_fmt=" << pixelFormatName(encoderCtx ? encoderCtx->sw_pix_fmt : AV_PIX_FMT_NONE);
+    return oss.str();
+}
+
 } // namespace
 
 FFmpegVideoFilterStage::~FFmpegVideoFilterStage()
@@ -247,8 +300,28 @@ bool FFmpegVideoFilterStage::initializeHardwareFilterGraphFromFrame(
     }
 
     if (!frame->hw_frames_ctx) {
+        if (isDrmPrimeFrameWithoutFramesContext(frame) &&
+            frameCanBypassHardwareFilterGraph(m_encoderCtx, m_hardwareBackend, frame)) {
+            m_bypassHardwareFilterGraph = true;
+            spdlog::info(
+                "[ZC][FILTER] runtime bypass hardware filter graph for backend={} because DRM_PRIME frame has no hw_frames_ctx and direct encode is compatible: {}",
+                m_hardwareBackend.name ? m_hardwareBackend.name : "unknown",
+                describeHardwareTransformRequirement(m_encoderCtx, frame)
+            );
+            return true;
+        }
+
         if (error) {
-            *error = "initialize hardware filter graph failed: frame has no hw_frames_ctx";
+            std::ostringstream oss;
+            oss << "initialize hardware filter graph failed: frame has no hw_frames_ctx";
+            if (isDrmPrimeFrameWithoutFramesContext(frame)) {
+                oss << "; DRM_PRIME frame cannot use hardware filter graph without hw_frames_ctx";
+                if (m_hardwareBackend.supportsDirectHardwareFrameEncode) {
+                    oss << "; direct bypass is unavailable because transform is required or encoder format does not match";
+                }
+                oss << "; " << describeHardwareTransformRequirement(m_encoderCtx, frame);
+            }
+            *error = oss.str();
         }
         return false;
     }
@@ -363,6 +436,10 @@ bool FFmpegVideoFilterStage::sendHardwareFrame(AVFrame* frame, std::string* erro
     if (!m_hardwareFilterGraphInitialized) {
         if (!initializeHardwareFilterGraphFromFrame(frame, error)) {
             return false;
+        }
+
+        if (m_bypassHardwareFilterGraph) {
+            return queueBypassedHardwareFrame(frame, error);
         }
     }
 
