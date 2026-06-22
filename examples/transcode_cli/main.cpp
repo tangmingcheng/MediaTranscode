@@ -142,33 +142,6 @@ namespace {
         throw std::runtime_error("unsupported video rate control mode: " + value);
     }
 
-    media::VideoBitrateConstraintMode parseVideoBitrateConstraintMode(const std::string& value)
-    {
-        const std::string normalized = toLower(value);
-
-        if (normalized == "auto") {
-            return media::VideoBitrateConstraintMode::Auto;
-        }
-
-        if (normalized == "strict") {
-            return media::VideoBitrateConstraintMode::Strict;
-        }
-
-        if (normalized == "flexible" || normalized == "vbr") {
-            return media::VideoBitrateConstraintMode::Flexible;
-        }
-
-        if (normalized == "quality" || normalized == "crf") {
-            return media::VideoBitrateConstraintMode::Quality;
-        }
-
-        if (normalized == "hybrid-quality" || normalized == "hybrid_quality" || normalized == "capped-vbr" || normalized == "cvbr") {
-            return media::VideoBitrateConstraintMode::HybridQuality;
-        }
-
-        throw std::runtime_error("unsupported video bitrate constraint mode: " + value);
-    }
-
     media::VideoEncodeSpeedPreset parseVideoEncodeSpeedPreset(const std::string& value)
     {
         const std::string normalized = toLower(value);
@@ -244,23 +217,6 @@ namespace {
         case media::VideoRateControlMode::CappedVBR:
             return "capped-vbr";
         case media::VideoRateControlMode::Auto:
-        default:
-            return "auto";
-        }
-    }
-
-    std::string videoConstraintModeToString(media::VideoBitrateConstraintMode mode)
-    {
-        switch (mode) {
-        case media::VideoBitrateConstraintMode::Strict:
-            return "strict";
-        case media::VideoBitrateConstraintMode::Flexible:
-            return "flexible";
-        case media::VideoBitrateConstraintMode::Quality:
-            return "quality";
-        case media::VideoBitrateConstraintMode::HybridQuality:
-            return "hybrid-quality";
-        case media::VideoBitrateConstraintMode::Auto:
         default:
             return "auto";
         }
@@ -396,7 +352,6 @@ namespace {
             << "      --max-video-bitrate <kbps>  Peak video bitrate constraint\n"
             << "      --buffer-size <kbits>       Encoder VBV buffer size\n"
             << "      --rc <value>                auto | cbr | vbr | crf | capped-vbr\n"
-            << "      --bitrate-constraint <v>    auto | strict | flexible | quality | hybrid-quality\n"
             << "      --quality <value>           Generic quality value for crf/cq modes\n"
             << "      --speed <value>             auto | fast | balanced | quality\n"
             << "      --gop <frames>              GOP size in frames, 0 means auto\n"
@@ -494,9 +449,6 @@ namespace {
             }
             else if (arg == "--rc" || arg == "--rate-control") {
                 options.config.videoBitrate.rateControl = parseVideoRateControlMode(requireValue(arg));
-            }
-            else if (arg == "--bitrate-constraint" || arg == "--constraint") {
-                options.config.videoBitrate.constraintMode = parseVideoBitrateConstraintMode(requireValue(arg));
             }
             else if (arg == "--quality") {
                 options.config.videoBitrate.quality = parsePositiveInt(requireValue(arg), arg);
@@ -664,7 +616,6 @@ namespace {
         spdlog::info("videoBitrateMax={} kbps", config.videoBitrate.maxKbps);
         spdlog::info("videoBufferSize={} kbits", config.videoBitrate.bufferSizeKbits);
         spdlog::info("videoRateControl={}", videoRateControlToString(config.videoBitrate.rateControl));
-        spdlog::info("videoConstraint={}", videoConstraintModeToString(config.videoBitrate.constraintMode));
         spdlog::info("videoQuality={}", config.videoBitrate.quality);
         spdlog::info("videoSpeed={}", videoSpeedPresetToString(config.videoEncode.speedPreset));
         spdlog::info("videoGop={}", config.videoEncode.gopSize);
