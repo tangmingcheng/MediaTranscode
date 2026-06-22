@@ -5,6 +5,7 @@
 #include "internal/FFmpegPipelinePlanner.h"
 #include "internal/FFmpegRAII.h"
 #include "internal/FFmpegTimelineNormalizer.h"
+#include "internal/FFmpegTranscodeLoopDiagnostics.h"
 #include "internal/FFmpegUtils.h"
 #include "internal/FFmpegVideoTranscodePipeline.h"
 
@@ -210,6 +211,7 @@ namespace {
         ffmpeg::TimelineNormalizer timeline;
         ffmpeg::FFmpegVideoTranscodePipeline videoPipeline;
         ffmpeg::FFmpegAudioPipeline audioPipeline;
+        ffmpeg::FFmpegTranscodeLoopDiagnostics loopDiagnostics(1000);
 
         int64_t encodedVideoPacketCount = 0;
         int64_t encodedAudioPacketCount = 0;
@@ -224,6 +226,15 @@ namespace {
                 encodedVideoPacketCount,
                 encodedAudioPacketCount,
                 progressCallbackCount
+            };
+        };
+
+        auto currentLoopCounters = [&]() {
+            return ffmpeg::FFmpegTranscodeLoopDiagnostics::OutputCounters{
+                encodedVideoPacketCount,
+                encodedAudioPacketCount,
+                progressCallbackCount,
+                std::max(lastWrittenVideoOutTimeMs, lastWrittenAudioOutTimeMs)
             };
         };
 
@@ -433,7 +444,10 @@ namespace {
             }
         };
 
+        loopDiagnostics.maybeLog(currentLoopCounters());
+
         while (!m_stopRequested.load()) {
+            auto readStart = loopDiagnostics.mark();
             ret = av_read_frame(inputFmtCtx.get(), inputPacket.get());
 
             if (ret == AVERROR_EOF) {
@@ -441,41 +455,78 @@ namespace {
             }
 
             if (ret < 0) {
+                loopDiagnostics.flush(currentLoopCounters());
                 fail("av_read_frame failed: " + ffmpeg::errorString(ret));
                 return;
             }
 
             if (inputPacket->stream_index == videoStreamIndex) {
+                loopDiagnostics.recordReadPacket(
+                    ffmpeg::FFmpegTranscodeLoopDiagnostics::StreamKind::Video,
+                    readStart
+                );
+
+                auto processStart = loopDiagnostics.mark();
                 const Status videoStatus = videoPipeline.processPacket(
                     inputPacket.get(),
                     onVideoPacketWritten
+                );
+                loopDiagnostics.recordProcessPacket(
+                    ffmpeg::FFmpegTranscodeLoopDiagnostics::StreamKind::Video,
+                    processStart
                 );
 
                 av_packet_unref(inputPacket.get());
 
                 if (!videoStatus) {
+                    loopDiagnostics.flush(currentLoopCounters());
                     failStatus(videoStatus);
                     return;
                 }
             }
             else if (inputPacket->stream_index == audioStreamIndex &&
                 audioPipeline.outputStream()) {
+                loopDiagnostics.recordReadPacket(
+                    ffmpeg::FFmpegTranscodeLoopDiagnostics::StreamKind::Audio,
+                    readStart
+                );
+
+                auto processStart = loopDiagnostics.mark();
                 const Status audioStatus = audioPipeline.processPacket(
                     inputPacket.get(),
                     onAudioPacketWritten
+                );
+                loopDiagnostics.recordProcessPacket(
+                    ffmpeg::FFmpegTranscodeLoopDiagnostics::StreamKind::Audio,
+                    processStart
                 );
 
                 av_packet_unref(inputPacket.get());
 
                 if (!audioStatus) {
+                    loopDiagnostics.flush(currentLoopCounters());
                     failStatus(audioStatus);
                     return;
                 }
             }
             else {
+                loopDiagnostics.recordReadPacket(
+                    ffmpeg::FFmpegTranscodeLoopDiagnostics::StreamKind::Other,
+                    readStart
+                );
+
+                auto processStart = loopDiagnostics.mark();
                 av_packet_unref(inputPacket.get());
+                loopDiagnostics.recordProcessPacket(
+                    ffmpeg::FFmpegTranscodeLoopDiagnostics::StreamKind::Other,
+                    processStart
+                );
             }
+
+            loopDiagnostics.maybeLog(currentLoopCounters());
         }
+
+        loopDiagnostics.flush(currentLoopCounters());
 
         const ffmpeg::FFmpegPhaseDiagnostics::Counters finalizeCountersBefore = currentFinalizeCounters();
         ffmpeg::FFmpegPhaseDiagnostics::Session finalizeDiagnostics("TRANSCODE_FINALIZE");
