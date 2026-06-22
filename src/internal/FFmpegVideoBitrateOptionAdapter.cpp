@@ -199,23 +199,6 @@ namespace {
         }
     }
 
-    const char* constraintModeName(VideoBitrateConstraintMode mode)
-    {
-        switch (mode) {
-        case VideoBitrateConstraintMode::Strict:
-            return "strict";
-        case VideoBitrateConstraintMode::Flexible:
-            return "flexible";
-        case VideoBitrateConstraintMode::Quality:
-            return "quality";
-        case VideoBitrateConstraintMode::HybridQuality:
-            return "hybrid-quality";
-        case VideoBitrateConstraintMode::Auto:
-        default:
-            return "auto";
-        }
-    }
-
 } // namespace
 
     VideoBitrateOptionPlan VideoBitrateOptionAdapter::adapt(const AVCodec* encoder,
@@ -240,7 +223,6 @@ namespace {
         addPrivateVbvOptions(output, output.privateOptions);
 
         output.diagnostics.emplace_back(std::string("rc=") + rateControlModeName(plan.rateControl));
-        output.diagnostics.emplace_back(std::string("constraint=") + constraintModeName(plan.constraintMode));
         if (plan.quality > 0 && isQualityDrivenMode(plan.rateControl)) {
             output.diagnostics.emplace_back("quality=" + std::to_string(plan.quality));
         }
