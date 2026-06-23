@@ -167,14 +167,15 @@ namespace media {
     // 音频处理模式
     enum class AudioMode {
         None,
-        // 自动选择最低 CPU 且语义等价的路径。输入音频与目标音频编码一致且封装兼容时 copy，否则 encode。
+        // 自动比较目标音频编码参数与输入音频编码参数；没有变化且封装兼容时 copy，否则 encode。
         Auto,
         CopySelected,
         EncodeSelected
     };
 
-    // 音频编码类型，仅在 AudioMode::Auto 或 AudioMode::EncodeSelected 时作为目标音频编码生效
+    // 音频编码类型。Auto 表示保持输入音频编码；只有需要重编码时才由 planner 决定最终编码器。
     enum class AudioCodec {
+        Auto,
         AAC,
         OPUS,
         MP3
@@ -215,9 +216,10 @@ namespace media {
         VideoEncodeOptions videoEncode;
 
         AudioMode audioMode = AudioMode::Auto;
-        AudioCodec audioCodec = AudioCodec::AAC;
+        AudioCodec audioCodec = AudioCodec::Auto;
 
-        int audioBitrateKbps = 128;
+        // 0 表示保持输入音频码率；大于 0 表示显式目标码率，需要与输入码率比较后决定是否重编码。
+        int audioBitrateKbps = 0;
 
         HardwarePipelineConfig hardware;
     };
