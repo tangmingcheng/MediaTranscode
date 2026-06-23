@@ -29,13 +29,13 @@ public:
 
     /*
      * 保留底层音频编码写包接口，方便后续实时帧输入复用。
-     * 只有 EncodeSelected 策略支持这两个接口。
+     * 只有 Encode 策略支持这两个接口。
      */
     Status sendFrame(AVFrame* frame);
     Result<int> receiveAndWritePackets(const PacketWrittenCallback& onPacketWritten = {});
 
     bool isInitialized() const;
-    AudioMode mode() const;
+    FFmpegAudioPipelineMode mode() const;
     AVStream* outputStream() const;
 
     int64_t packetCount() const;
