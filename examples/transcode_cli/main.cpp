@@ -34,22 +34,11 @@ namespace {
         bool showHelp = false;
     };
 
-    std::string ffErrorString(int err)
-    {
-        char buffer[AV_ERROR_MAX_STRING_SIZE] = {};
-        av_strerror(err, buffer, sizeof(buffer));
-
-        std::ostringstream oss;
-        oss << buffer << " (" << err << ")";
-        return oss.str();
-    }
-
     std::string toLower(std::string value)
     {
         std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
             return static_cast<char>(std::tolower(ch));
         });
-
         return value;
     }
 
@@ -58,11 +47,9 @@ namespace {
         try {
             std::size_t parsed = 0;
             const int result = std::stoi(value, &parsed);
-
             if (parsed != value.size() || result < 0) {
                 throw std::invalid_argument("invalid integer");
             }
-
             return result;
         }
         catch (const std::exception&) {
@@ -76,229 +63,104 @@ namespace {
         if (result <= 0) {
             throw std::runtime_error("invalid value for " + name + ": " + value);
         }
-
         return result;
     }
 
     media::VideoCodec parseVideoCodec(const std::string& value)
     {
         const std::string normalized = toLower(value);
-
-        if (normalized == "copy") {
-            return media::VideoCodec::Copy;
-        }
-
-        if (normalized == "h264" || normalized == "avc") {
-            return media::VideoCodec::H264;
-        }
-
-        if (normalized == "h265" || normalized == "hevc") {
-            return media::VideoCodec::H265;
-        }
-
-        if (normalized == "mpeg4" || normalized == "mp4v") {
-            return media::VideoCodec::MPEG4;
-        }
-
-        if (normalized == "vp8") {
-            return media::VideoCodec::VP8;
-        }
-
-        if (normalized == "vp9") {
-            return media::VideoCodec::VP9;
-        }
-
-        if (normalized == "av1") {
-            return media::VideoCodec::AV1;
-        }
-
+        if (normalized == "h264" || normalized == "avc") return media::VideoCodec::H264;
+        if (normalized == "h265" || normalized == "hevc") return media::VideoCodec::H265;
+        if (normalized == "mpeg4" || normalized == "mp4v") return media::VideoCodec::MPEG4;
+        if (normalized == "vp8") return media::VideoCodec::VP8;
+        if (normalized == "vp9") return media::VideoCodec::VP9;
+        if (normalized == "av1") return media::VideoCodec::AV1;
         throw std::runtime_error("unsupported video codec: " + value);
     }
 
     media::VideoRateControlMode parseVideoRateControlMode(const std::string& value)
     {
         const std::string normalized = toLower(value);
-
-        if (normalized == "auto") {
-            return media::VideoRateControlMode::Auto;
-        }
-
-        if (normalized == "cbr") {
-            return media::VideoRateControlMode::CBR;
-        }
-
-        if (normalized == "vbr") {
-            return media::VideoRateControlMode::VBR;
-        }
-
-        if (normalized == "crf" || normalized == "cq") {
-            return media::VideoRateControlMode::CRF;
-        }
-
+        if (normalized == "auto") return media::VideoRateControlMode::Auto;
+        if (normalized == "cbr") return media::VideoRateControlMode::CBR;
+        if (normalized == "vbr") return media::VideoRateControlMode::VBR;
+        if (normalized == "crf" || normalized == "cq") return media::VideoRateControlMode::CRF;
         if (normalized == "capped-vbr" || normalized == "capped_vbr" || normalized == "cvbr") {
             return media::VideoRateControlMode::CappedVBR;
         }
-
         throw std::runtime_error("unsupported video rate control mode: " + value);
     }
 
     media::VideoEncodeSpeedPreset parseVideoEncodeSpeedPreset(const std::string& value)
     {
         const std::string normalized = toLower(value);
-
-        if (normalized == "ultrafast") {
-            return media::VideoEncodeSpeedPreset::Ultrafast;
-        }
-
-        if (normalized == "superfast") {
-            return media::VideoEncodeSpeedPreset::Superfast;
-        }
-
-        if (normalized == "veryfast") {
-            return media::VideoEncodeSpeedPreset::Veryfast;
-        }
-
-        if (normalized == "faster") {
-            return media::VideoEncodeSpeedPreset::Faster;
-        }
-
-        if (normalized == "fast") {
-            return media::VideoEncodeSpeedPreset::Fast;
-        }
-
-        if (normalized == "medium") {
-            return media::VideoEncodeSpeedPreset::Medium;
-        }
-
-        if (normalized == "slow") {
-            return media::VideoEncodeSpeedPreset::Slow;
-        }
-
-        if (normalized == "slower") {
-            return media::VideoEncodeSpeedPreset::Slower;
-        }
-
-        if (normalized == "veryslow" || normalized == "very-slow") {
-            return media::VideoEncodeSpeedPreset::Veryslow;
-        }
-
-        if (normalized == "placebo") {
-            return media::VideoEncodeSpeedPreset::Placebo;
-        }
-
+        if (normalized == "ultrafast") return media::VideoEncodeSpeedPreset::Ultrafast;
+        if (normalized == "superfast") return media::VideoEncodeSpeedPreset::Superfast;
+        if (normalized == "veryfast") return media::VideoEncodeSpeedPreset::Veryfast;
+        if (normalized == "faster") return media::VideoEncodeSpeedPreset::Faster;
+        if (normalized == "fast") return media::VideoEncodeSpeedPreset::Fast;
+        if (normalized == "medium") return media::VideoEncodeSpeedPreset::Medium;
+        if (normalized == "slow") return media::VideoEncodeSpeedPreset::Slow;
+        if (normalized == "slower") return media::VideoEncodeSpeedPreset::Slower;
+        if (normalized == "veryslow" || normalized == "very-slow") return media::VideoEncodeSpeedPreset::Veryslow;
+        if (normalized == "placebo") return media::VideoEncodeSpeedPreset::Placebo;
         throw std::runtime_error("unsupported video speed preset: " + value);
     }
 
     media::AudioCodec parseAudioCodec(const std::string& value)
     {
         const std::string normalized = toLower(value);
-
-        if (normalized == "aac") {
-            return media::AudioCodec::AAC;
-        }
-
-        if (normalized == "opus" || normalized == "libopus") {
-            return media::AudioCodec::OPUS;
-        }
-
-        if (normalized == "mp3" || normalized == "libmp3lame") {
-            return media::AudioCodec::MP3;
-        }
-
+        if (normalized == "auto" || normalized == "copy") return media::AudioCodec::Auto;
+        if (normalized == "aac") return media::AudioCodec::AAC;
+        if (normalized == "opus" || normalized == "libopus") return media::AudioCodec::OPUS;
+        if (normalized == "mp3" || normalized == "libmp3lame") return media::AudioCodec::MP3;
         throw std::runtime_error("unsupported audio codec: " + value);
     }
 
     std::string videoCodecToString(media::VideoCodec codec)
     {
         switch (codec) {
-        case media::VideoCodec::H264:
-            return "h264";
-        case media::VideoCodec::H265:
-            return "h265";
-        case media::VideoCodec::MPEG4:
-            return "mpeg4";
-        case media::VideoCodec::VP8:
-            return "vp8";
-        case media::VideoCodec::VP9:
-            return "vp9";
-        case media::VideoCodec::AV1:
-            return "av1";
+        case media::VideoCodec::H264: return "h264";
+        case media::VideoCodec::H265: return "h265";
+        case media::VideoCodec::MPEG4: return "mpeg4";
+        case media::VideoCodec::VP8: return "vp8";
+        case media::VideoCodec::VP9: return "vp9";
+        case media::VideoCodec::AV1: return "av1";
         case media::VideoCodec::Copy:
-        default:
-            return "copy";
-        }
-    }
-
-    std::string videoRateControlToString(media::VideoRateControlMode mode)
-    {
-        switch (mode) {
-        case media::VideoRateControlMode::CBR:
-            return "cbr";
-        case media::VideoRateControlMode::VBR:
-            return "vbr";
-        case media::VideoRateControlMode::CRF:
-            return "crf";
-        case media::VideoRateControlMode::CappedVBR:
-            return "capped-vbr";
-        case media::VideoRateControlMode::Auto:
-        default:
-            return "auto";
-        }
-    }
-
-    std::string videoSpeedPresetToString(media::VideoEncodeSpeedPreset preset)
-    {
-        switch (preset) {
-        case media::VideoEncodeSpeedPreset::Ultrafast:
-            return "ultrafast";
-        case media::VideoEncodeSpeedPreset::Superfast:
-            return "superfast";
-        case media::VideoEncodeSpeedPreset::Veryfast:
-            return "veryfast";
-        case media::VideoEncodeSpeedPreset::Faster:
-            return "faster";
-        case media::VideoEncodeSpeedPreset::Fast:
-            return "fast";
-        case media::VideoEncodeSpeedPreset::Slow:
-            return "slow";
-        case media::VideoEncodeSpeedPreset::Slower:
-            return "slower";
-        case media::VideoEncodeSpeedPreset::Veryslow:
-            return "veryslow";
-        case media::VideoEncodeSpeedPreset::Placebo:
-            return "placebo";
-        case media::VideoEncodeSpeedPreset::Medium:
-        default:
-            return "medium";
+        default: return "copy";
         }
     }
 
     std::string audioCodecToString(media::AudioCodec codec)
     {
         switch (codec) {
-        case media::AudioCodec::AAC:
-            return "aac";
-        case media::AudioCodec::OPUS:
-            return "opus";
-        case media::AudioCodec::MP3:
-            return "mp3";
-        default:
-            return "unknown";
+        case media::AudioCodec::Auto: return "auto";
+        case media::AudioCodec::AAC: return "aac";
+        case media::AudioCodec::OPUS: return "opus";
+        case media::AudioCodec::MP3: return "mp3";
+        default: return "unknown";
         }
     }
 
-    std::string audioModeToString(media::AudioMode mode)
+    std::string videoRateControlToString(media::VideoRateControlMode mode)
     {
         switch (mode) {
-        case media::AudioMode::None:
-            return "none";
-        case media::AudioMode::CopySelected:
-            return "copy";
-        case media::AudioMode::EncodeSelected:
-            return "encode";
-        default:
-            return "unknown";
+        case media::VideoRateControlMode::CBR: return "cbr";
+        case media::VideoRateControlMode::VBR: return "vbr";
+        case media::VideoRateControlMode::CRF: return "crf";
+        case media::VideoRateControlMode::CappedVBR: return "capped-vbr";
+        case media::VideoRateControlMode::Auto:
+        default: return "auto";
         }
+    }
+
+    std::string ffErrorString(int err)
+    {
+        char buffer[AV_ERROR_MAX_STRING_SIZE] = {};
+        av_strerror(err, buffer, sizeof(buffer));
+        std::ostringstream oss;
+        oss << buffer << " (" << err << ")";
+        return oss.str();
     }
 
     std::string formatDuration(int64_t durationUs)
@@ -318,7 +180,6 @@ namespace {
             << std::setw(2) << std::setfill('0') << minutes << ":"
             << std::fixed << std::setprecision(3)
             << std::setw(6) << std::setfill('0') << seconds;
-
         return oss.str();
     }
 
@@ -327,21 +188,8 @@ namespace {
         if (bitRate <= 0) {
             return "unknown";
         }
-
         std::ostringstream oss;
         oss << std::fixed << std::setprecision(0) << bitRate / 1000.0 << " kbps";
-        return oss.str();
-    }
-
-    std::string formatRational(AVRational value)
-    {
-        if (value.num <= 0 || value.den <= 0) {
-            return "unknown";
-        }
-
-        std::ostringstream oss;
-        oss << value.num << "/" << value.den
-            << " (" << std::fixed << std::setprecision(3) << av_q2d(value) << ")";
         return oss.str();
     }
 
@@ -351,7 +199,6 @@ namespace {
         if (descriptor && descriptor->name) {
             return descriptor->name;
         }
-
         const char* name = avcodec_get_name(codecId);
         return name ? name : "unknown";
     }
@@ -361,7 +208,6 @@ namespace {
         if (!codecParameters) {
             return 0;
         }
-
 #if LIBAVUTIL_VERSION_MAJOR >= 57
         return codecParameters->ch_layout.nb_channels;
 #else
@@ -399,14 +245,10 @@ namespace {
             << "      --enable-hardware           Enable automatic lowest-CPU hardware planning (default)\n"
             << "      --disable-hardware          Force pure CPU decode/filter/encode path\n\n"
             << "Audio output options:\n"
-            << "      --audio-codec <value>       aac | opus | mp3\n"
-            << "      --audio-bitrate <kbps>      Audio bitrate in kbps\n"
+            << "      --audio-codec <value>       auto | aac | opus | mp3, default auto\n"
+            << "      --audio-bitrate <kbps>      0 keeps input bitrate, >0 requests target bitrate\n"
             << "      --no-audio                  Disable audio output\n"
-            << "  -h, --help                      Show this help\n\n"
-            << "Examples:\n"
-            << "  " << executable << " -i input.mp4 -o output.mp4 --video-codec h264 --size 1280x720 --fps 25 --video-bitrate 3000 --speed medium --audio-codec aac --audio-bitrate 128\n"
-            << "  " << executable << " -i input.mp4 -o output_cpu.mp4 --disable-hardware --video-codec h265 --size 1280x720 --fps 25 --rc crf --quality 23 --speed slow\n"
-            << "  " << executable << " -i input.mp4 -o output_cvbr.mp4 --video-codec h265 --size 1280x720 --fps 25 --rc capped-vbr --quality 23 --video-bitrate 3000 --max-video-bitrate 5000 --buffer-size 10000 --speed medium\n";
+            << "  -h, --help                      Show this help\n\n";
     }
 
     CliOptions parseOptions(int argc, char* argv[])
@@ -419,9 +261,9 @@ namespace {
         options.config.height = 720;
         options.config.fps = 0;
         options.config.videoCodec = media::VideoCodec::H264;
-        options.config.audioMode = media::AudioMode::EncodeSelected;
-        options.config.audioCodec = media::AudioCodec::AAC;
-        options.config.audioBitrateKbps = 128;
+        options.config.audioEnabled = true;
+        options.config.audioCodec = media::AudioCodec::Auto;
+        options.config.audioBitrateKbps = 0;
         options.config.videoBitrate.targetKbps = 3000;
         options.config.hardware.enabled = true;
 
@@ -434,7 +276,6 @@ namespace {
                 if (i + 1 >= argc) {
                     throw std::runtime_error("missing value for " + optionName);
                 }
-
                 return argv[++i];
             };
 
@@ -457,11 +298,9 @@ namespace {
             else if (arg == "--size") {
                 const std::string value = requireValue(arg);
                 const std::size_t pos = value.find('x');
-
                 if (pos == std::string::npos) {
                     throw std::runtime_error("invalid value for --size: " + value);
                 }
-
                 options.config.width = parseNonNegativeInt(value.substr(0, pos), "--size width");
                 options.config.height = parseNonNegativeInt(value.substr(pos + 1), "--size height");
             }
@@ -499,7 +338,6 @@ namespace {
                 options.config.videoEncode.maxBFrames = parseNonNegativeInt(requireValue(arg), arg);
             }
             else if (arg == "--preset") {
-                // Expert/native encoder option. Non-empty value takes precedence over --speed.
                 options.config.videoEncode.preset = requireValue(arg);
             }
             else if (arg == "--tune") {
@@ -518,16 +356,15 @@ namespace {
                 options.config.hardware.enabled = false;
             }
             else if (arg == "--audio-codec") {
+                options.config.audioEnabled = true;
                 options.config.audioCodec = parseAudioCodec(requireValue(arg));
-                if (options.config.audioMode == media::AudioMode::None) {
-                    options.config.audioMode = media::AudioMode::EncodeSelected;
-                }
             }
             else if (arg == "--audio-bitrate") {
-                options.config.audioBitrateKbps = parsePositiveInt(requireValue(arg), arg);
+                options.config.audioEnabled = true;
+                options.config.audioBitrateKbps = parseNonNegativeInt(requireValue(arg), arg);
             }
             else if (arg == "--no-audio") {
-                options.config.audioMode = media::AudioMode::None;
+                options.config.audioEnabled = false;
             }
             else if (!arg.empty() && arg[0] == '-') {
                 throw std::runtime_error("unknown option: " + arg);
@@ -542,7 +379,6 @@ namespace {
                 else {
                     throw std::runtime_error("too many positional arguments: " + arg);
                 }
-
                 ++positionalIndex;
             }
         }
@@ -553,7 +389,6 @@ namespace {
     bool printMediaInfo(const std::string& url, const std::string& title)
     {
         AVFormatContext* formatContext = nullptr;
-
         int ret = avformat_open_input(&formatContext, url.c_str(), nullptr, nullptr);
         if (ret < 0) {
             spdlog::error("{}: avformat_open_input failed: {}", title, ffErrorString(ret));
@@ -568,9 +403,9 @@ namespace {
         }
 
         spdlog::info("========== {} =========", title);
-        spdlog::info("file: {}", url);
         spdlog::info(
-            "format={}, duration={}, bitrate={}",
+            "file={}, format={}, duration={}, bitrate={}",
+            url,
             formatContext->iformat && formatContext->iformat->name ? formatContext->iformat->name : "unknown",
             formatDuration(formatContext->duration),
             formatBitrate(formatContext->bit_rate)
@@ -585,52 +420,34 @@ namespace {
             const AVCodecParameters* codecParameters = stream->codecpar;
             const char* mediaType = av_get_media_type_string(codecParameters->codec_type);
 
-            int64_t streamDurationUs = AV_NOPTS_VALUE;
-            if (stream->duration != AV_NOPTS_VALUE) {
-                streamDurationUs = av_rescale_q(
-                    stream->duration,
-                    stream->time_base,
-                    AV_TIME_BASE_Q
-                );
-            }
-
             if (codecParameters->codec_type == AVMEDIA_TYPE_VIDEO) {
                 const char* pixelFormatName = codecParameters->format >= 0
                     ? av_get_pix_fmt_name(static_cast<AVPixelFormat>(codecParameters->format))
                     : nullptr;
-
-                const AVRational guessedFrameRate = av_guess_frame_rate(formatContext, stream, nullptr);
-
                 spdlog::info(
-                    "stream #{}: type={}, codec={}, {}x{}, pix_fmt={}, fps={}, time_base={}, bitrate={}, duration={}",
+                    "stream #{}: type={}, codec={}, {}x{}, pix_fmt={}, bitrate={}",
                     i,
                     mediaType ? mediaType : "video",
                     codecName(codecParameters->codec_id),
                     codecParameters->width,
                     codecParameters->height,
                     pixelFormatName ? pixelFormatName : "unknown",
-                    formatRational(guessedFrameRate),
-                    formatRational(stream->time_base),
-                    formatBitrate(codecParameters->bit_rate),
-                    formatDuration(streamDurationUs)
+                    formatBitrate(codecParameters->bit_rate)
                 );
             }
             else if (codecParameters->codec_type == AVMEDIA_TYPE_AUDIO) {
                 const char* sampleFormatName = codecParameters->format >= 0
                     ? av_get_sample_fmt_name(static_cast<AVSampleFormat>(codecParameters->format))
                     : nullptr;
-
                 spdlog::info(
-                    "stream #{}: type={}, codec={}, sample_rate={} Hz, channels={}, sample_fmt={}, time_base={}, bitrate={}, duration={}",
+                    "stream #{}: type={}, codec={}, sample_rate={} Hz, channels={}, sample_fmt={}, bitrate={}",
                     i,
                     mediaType ? mediaType : "audio",
                     codecName(codecParameters->codec_id),
                     codecParameters->sample_rate,
                     audioChannels(codecParameters),
                     sampleFormatName ? sampleFormatName : "unknown",
-                    formatRational(stream->time_base),
-                    formatBitrate(codecParameters->bit_rate),
-                    formatDuration(streamDurationUs)
+                    formatBitrate(codecParameters->bit_rate)
                 );
             }
         }
@@ -653,37 +470,22 @@ namespace {
         spdlog::info("videoBufferSize={} kbits", config.videoBitrate.bufferSizeKbits);
         spdlog::info("videoRateControl={}", videoRateControlToString(config.videoBitrate.rateControl));
         spdlog::info("videoQuality={}", config.videoBitrate.quality);
-        spdlog::info("videoSpeed={}", videoSpeedPresetToString(config.videoEncode.speedPreset));
-        spdlog::info("videoGop={}", config.videoEncode.gopSize);
-        spdlog::info("videoBFrames={}", config.videoEncode.maxBFrames);
-        spdlog::info("videoNativePreset={}", config.videoEncode.preset.empty() ? "auto" : config.videoEncode.preset);
-        spdlog::info("videoTune={}", config.videoEncode.tune.empty() ? "auto" : config.videoEncode.tune);
-        spdlog::info("videoProfile={}", config.videoEncode.profile.empty() ? "auto" : config.videoEncode.profile);
-        spdlog::info("videoLevel={}", config.videoEncode.level.empty() ? "auto" : config.videoEncode.level);
-        spdlog::info("audioMode={}", audioModeToString(config.audioMode));
-        spdlog::info("audioCodec={}", audioCodecToString(config.audioCodec));
-        spdlog::info("audioBitrate={} kbps", config.audioBitrateKbps);
+        spdlog::info("audioEnabled={}", config.audioEnabled);
+        spdlog::info("audioCodecTarget={}", audioCodecToString(config.audioCodec));
+        spdlog::info("audioBitrateTarget={} kbps", config.audioBitrateKbps);
         spdlog::info("hardwareEnabled={}", config.hardware.enabled);
-        spdlog::info(
-            "hardwarePolicy={}",
-            config.hardware.enabled ? "automatic-lowest-cpu" : "disabled-force-cpu"
-        );
     }
 
     void initLogger()
     {
         std::filesystem::create_directories("logs");
-
         spdlog::init_thread_pool(8192, 1);
 
         std::vector<spdlog::sink_ptr> sinks;
-
         auto consoleSink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
         consoleSink->set_level(spdlog::level::debug);
-
         auto rotatingFileSink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>("logs/app.log", 10 * 1024 * 1024, 5);
         rotatingFileSink->set_level(spdlog::level::debug);
-
         sinks.emplace_back(consoleSink);
         sinks.emplace_back(rotatingFileSink);
 
@@ -694,10 +496,8 @@ namespace {
             spdlog::thread_pool(),
             spdlog::async_overflow_policy::block
         );
-
         logger->set_level(spdlog::level::debug);
         logger->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] [thread %t] %v");
-
         spdlog::set_default_logger(logger);
         spdlog::flush_on(spdlog::level::info);
         spdlog::flush_every(std::chrono::seconds(3));
@@ -711,7 +511,6 @@ int main(int argc, char* argv[])
     avformat_network_init();
 
     CliOptions options;
-
     try {
         options = parseOptions(argc, argv);
     }
