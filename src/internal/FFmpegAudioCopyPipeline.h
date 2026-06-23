@@ -21,7 +21,7 @@ public:
     Status flush(const FFmpegAudioPacketWrittenCallback& onPacketWritten) override;
 
     bool isInitialized() const override;
-    AudioMode mode() const override;
+    FFmpegAudioPipelineMode mode() const override;
     AVStream* outputStream() const override;
     FFmpegAudioPacketProgress progress() const override;
 
