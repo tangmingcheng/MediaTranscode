@@ -1,5 +1,7 @@
 #include "internal/FFmpegAudioStrategyPlanner.h"
 
+#include <algorithm>
+#include <cstdlib>
 #include <sstream>
 
 extern "C" {
@@ -8,6 +10,27 @@ extern "C" {
 }
 
 namespace media::ffmpeg {
+namespace {
+
+    int64_t inputBitRate(const AVStream* stream)
+    {
+        if (!stream || !stream->codecpar) {
+            return 0;
+        }
+
+        return stream->codecpar->bit_rate > 0 ? stream->codecpar->bit_rate : 0;
+    }
+
+    int64_t bitRateTolerance(int64_t reference)
+    {
+        if (reference <= 0) {
+            return 0;
+        }
+
+        return std::max<int64_t>(1000, reference / 100); // 1% or 1kbps, whichever is larger.
+    }
+
+} // namespace
 
     FFmpegAudioStrategyPlanner::Plan FFmpegAudioStrategyPlanner::plan(
         const TranscodeConfig& config,
@@ -28,20 +51,25 @@ namespace media::ffmpeg {
             return result;
         }
 
+        const TargetParameters target = resolveTargetParameters(config, inputAudioStream);
+        result.codec = target.encodeCodec;
+
         if (config.audioMode == AudioMode::CopySelected) {
             result.mode = AudioMode::CopySelected;
+            result.smartCopy = true;
             result.diagnostic = "audio copy explicitly selected";
             return result;
         }
 
         if (config.audioMode == AudioMode::EncodeSelected) {
             result.mode = AudioMode::EncodeSelected;
+            result.smartCopy = false;
             result.diagnostic = "audio encode explicitly selected";
             return result;
         }
 
         std::string reason;
-        if (canSmartCopy(config, inputAudioStream, outputFmtCtx, &reason)) {
+        if (canSmartCopy(config, inputAudioStream, outputFmtCtx, target, &reason)) {
             result.mode = AudioMode::CopySelected;
             result.smartCopy = true;
             result.diagnostic = "smart copy selected: " + reason;
@@ -73,6 +101,8 @@ namespace media::ffmpeg {
     const char* FFmpegAudioStrategyPlanner::audioCodecName(AudioCodec codec)
     {
         switch (codec) {
+        case AudioCodec::Auto:
+            return "auto";
         case AudioCodec::AAC:
             return "aac";
         case AudioCodec::OPUS:
@@ -84,6 +114,72 @@ namespace media::ffmpeg {
         }
     }
 
+    FFmpegAudioStrategyPlanner::TargetParameters
+    FFmpegAudioStrategyPlanner::resolveTargetParameters(
+        const TranscodeConfig& config,
+        const AVStream* inputAudioStream)
+    {
+        TargetParameters target;
+
+        const AVCodecID inputCodecId = inputAudioStream && inputAudioStream->codecpar
+            ? inputAudioStream->codecpar->codec_id
+            : AV_CODEC_ID_NONE;
+
+        if (config.audioCodec == AudioCodec::Auto) {
+            target.codecId = inputCodecId;
+        }
+        else {
+            target.codecId = targetCodecId(config.audioCodec);
+        }
+
+        target.encodeCodec = fallbackEncodeCodec(config, inputAudioStream);
+
+        if (config.audioBitrateKbps > 0) {
+            target.bitRateSpecified = true;
+            target.bitRate = static_cast<int64_t>(config.audioBitrateKbps) * 1000;
+        }
+        else {
+            target.bitRateSpecified = false;
+            target.bitRate = inputBitRate(inputAudioStream);
+        }
+
+        return target;
+    }
+
+    AudioCodec FFmpegAudioStrategyPlanner::audioCodecFromCodecId(AVCodecID codecId)
+    {
+        switch (codecId) {
+        case AV_CODEC_ID_AAC:
+            return AudioCodec::AAC;
+        case AV_CODEC_ID_OPUS:
+            return AudioCodec::OPUS;
+        case AV_CODEC_ID_MP3:
+            return AudioCodec::MP3;
+        default:
+            return AudioCodec::Auto;
+        }
+    }
+
+    AudioCodec FFmpegAudioStrategyPlanner::fallbackEncodeCodec(
+        const TranscodeConfig& config,
+        const AVStream* inputAudioStream)
+    {
+        if (config.audioCodec != AudioCodec::Auto) {
+            return config.audioCodec;
+        }
+
+        const AVCodecID inputCodecId = inputAudioStream && inputAudioStream->codecpar
+            ? inputAudioStream->codecpar->codec_id
+            : AV_CODEC_ID_NONE;
+
+        const AudioCodec matchingInputCodec = audioCodecFromCodecId(inputCodecId);
+        if (matchingInputCodec != AudioCodec::Auto) {
+            return matchingInputCodec;
+        }
+
+        return AudioCodec::AAC;
+    }
+
     AVCodecID FFmpegAudioStrategyPlanner::targetCodecId(AudioCodec codec)
     {
         switch (codec) {
@@ -93,6 +189,7 @@ namespace media::ffmpeg {
             return AV_CODEC_ID_OPUS;
         case AudioCodec::MP3:
             return AV_CODEC_ID_MP3;
+        case AudioCodec::Auto:
         default:
             return AV_CODEC_ID_NONE;
         }
@@ -102,6 +199,45 @@ namespace media::ffmpeg {
     {
         const char* name = avcodec_get_name(codecId);
         return name ? name : "unknown";
+    }
+
+    bool FFmpegAudioStrategyPlanner::bitRateMatches(
+        const AVStream* inputAudioStream,
+        const TargetParameters& target,
+        std::string* reason)
+    {
+        auto setReason = [&](const std::string& value) {
+            if (reason) {
+                *reason = value;
+            }
+        };
+
+        if (!target.bitRateSpecified) {
+            setReason("target bitrate is auto, keeping input bitrate");
+            return true;
+        }
+
+        const int64_t inputRate = inputBitRate(inputAudioStream);
+        if (inputRate <= 0) {
+            setReason("target bitrate is specified but input bitrate is unknown");
+            return false;
+        }
+
+        const int64_t diff = std::llabs(target.bitRate - inputRate);
+        const int64_t tolerance = bitRateTolerance(inputRate);
+        if (diff <= tolerance) {
+            std::ostringstream oss;
+            oss << "target bitrate " << target.bitRate
+                << " is effectively equal to input bitrate " << inputRate;
+            setReason(oss.str());
+            return true;
+        }
+
+        std::ostringstream oss;
+        oss << "target bitrate " << target.bitRate
+            << " differs from input bitrate " << inputRate;
+        setReason(oss.str());
+        return false;
     }
 
     bool FFmpegAudioStrategyPlanner::outputContainerSupportsCodec(
@@ -152,9 +288,10 @@ namespace media::ffmpeg {
     }
 
     bool FFmpegAudioStrategyPlanner::canSmartCopy(
-        const TranscodeConfig& config,
+        const TranscodeConfig& /*config*/,
         const AVStream* inputAudioStream,
         const AVFormatContext* outputFmtCtx,
+        const TargetParameters& target,
         std::string* reason)
     {
         auto setReason = [&](const std::string& value) {
@@ -169,18 +306,23 @@ namespace media::ffmpeg {
         }
 
         const AVCodecID inputCodecId = inputAudioStream->codecpar->codec_id;
-        const AVCodecID requestedCodecId = targetCodecId(config.audioCodec);
 
-        if (requestedCodecId == AV_CODEC_ID_NONE) {
-            setReason("requested audio codec is unsupported by planner");
+        if (target.codecId == AV_CODEC_ID_NONE) {
+            setReason("target audio codec is unknown");
             return false;
         }
 
-        if (inputCodecId != requestedCodecId) {
+        if (inputCodecId != target.codecId) {
             std::ostringstream oss;
-            oss << "input codec " << codecName(inputCodecId)
-                << " does not match requested codec " << codecName(requestedCodecId);
+            oss << "target codec " << codecName(target.codecId)
+                << " differs from input codec " << codecName(inputCodecId);
             setReason(oss.str());
+            return false;
+        }
+
+        std::string bitrateReason;
+        if (!bitRateMatches(inputAudioStream, target, &bitrateReason)) {
+            setReason(bitrateReason);
             return false;
         }
 
@@ -205,9 +347,9 @@ namespace media::ffmpeg {
         }
 
         std::ostringstream oss;
-        oss << "input codec " << codecName(inputCodecId)
-            << " matches requested codec " << codecName(requestedCodecId)
-            << " and output container supports copy";
+        oss << "target audio parameters match input: codec=" << codecName(inputCodecId)
+            << ", " << bitrateReason
+            << ", output container supports copy";
         setReason(oss.str());
         return true;
     }
