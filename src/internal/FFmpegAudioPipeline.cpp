@@ -6,8 +6,22 @@
 
 namespace media::ffmpeg {
 
+const char* audioPipelineModeName(FFmpegAudioPipelineMode mode)
+{
+    switch (mode) {
+    case FFmpegAudioPipelineMode::None:
+        return "none";
+    case FFmpegAudioPipelineMode::Copy:
+        return "copy";
+    case FFmpegAudioPipelineMode::Encode:
+        return "encode";
+    default:
+        return "unknown";
+    }
+}
+
 struct FFmpegAudioPipeline::Impl {
-    AudioMode mode = AudioMode::None;
+    FFmpegAudioPipelineMode mode = FFmpegAudioPipelineMode::None;
     std::unique_ptr<IFFmpegAudioPipelineStrategy> strategy;
 
     FFmpegAudioPacketProgress progress() const
@@ -39,15 +53,15 @@ void FFmpegAudioPipeline::reset()
     }
 
     m_impl->strategy.reset();
-    m_impl->mode = AudioMode::None;
+    m_impl->mode = FFmpegAudioPipelineMode::None;
 }
 
 Status FFmpegAudioPipeline::initialize(const Config& config)
 {
     reset();
 
-    if (config.mode == AudioMode::None) {
-        m_impl->mode = AudioMode::None;
+    if (config.mode == FFmpegAudioPipelineMode::None) {
+        m_impl->mode = FFmpegAudioPipelineMode::None;
         return Status::success();
     }
 
@@ -67,20 +81,20 @@ Status FFmpegAudioPipeline::initialize(const Config& config)
     }
 
     switch (config.mode) {
-    case AudioMode::CopySelected:
+    case FFmpegAudioPipelineMode::Copy:
         m_impl->strategy = std::make_unique<FFmpegAudioCopyPipeline>();
         break;
 
-    case AudioMode::EncodeSelected:
+    case FFmpegAudioPipelineMode::Encode:
         m_impl->strategy = std::make_unique<FFmpegAudioEncodePipeline>();
         break;
 
-    case AudioMode::None:
+    case FFmpegAudioPipelineMode::None:
         break;
 
     default:
         return Status::failure(ErrorInfo::invalidArgument(
-            "FFmpegAudioPipeline initialize failed: unknown audio mode"));
+            "FFmpegAudioPipeline initialize failed: unknown audio pipeline mode"));
     }
 
     if (!m_impl->strategy) {
@@ -102,7 +116,7 @@ Status FFmpegAudioPipeline::processPacket(
     AVPacket* packet,
     const PacketWrittenCallback& onPacketWritten)
 {
-    if (!m_impl || m_impl->mode == AudioMode::None) {
+    if (!m_impl || m_impl->mode == FFmpegAudioPipelineMode::None) {
         return Status::success();
     }
 
@@ -116,7 +130,7 @@ Status FFmpegAudioPipeline::processPacket(
 
 Status FFmpegAudioPipeline::flush(const PacketWrittenCallback& onPacketWritten)
 {
-    if (!m_impl || m_impl->mode == AudioMode::None) {
+    if (!m_impl || m_impl->mode == FFmpegAudioPipelineMode::None) {
         return Status::success();
     }
 
@@ -155,13 +169,13 @@ bool FFmpegAudioPipeline::isInitialized() const
         return false;
     }
 
-    return m_impl->mode == AudioMode::None ||
+    return m_impl->mode == FFmpegAudioPipelineMode::None ||
         (m_impl->strategy && m_impl->strategy->isInitialized());
 }
 
-AudioMode FFmpegAudioPipeline::mode() const
+FFmpegAudioPipelineMode FFmpegAudioPipeline::mode() const
 {
-    return m_impl ? m_impl->mode : AudioMode::None;
+    return m_impl ? m_impl->mode : FFmpegAudioPipelineMode::None;
 }
 
 AVStream* FFmpegAudioPipeline::outputStream() const
