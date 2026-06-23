@@ -325,10 +325,12 @@ namespace {
             outputFmtCtx.get()
         );
         spdlog::info(
-            "[AUDIO][PLAN] requested={}, selected={}, codec={}, smart_copy={}, {}",
+            "[AUDIO][PLAN] requested_mode={}, selected_mode={}, requested_codec={}, selected_codec={}, target_bitrate_kbps={}, smart_copy={}, {}",
             ffmpeg::FFmpegAudioStrategyPlanner::audioModeName(m_config.audioMode),
             ffmpeg::FFmpegAudioStrategyPlanner::audioModeName(audioStrategyPlan.mode),
             ffmpeg::FFmpegAudioStrategyPlanner::audioCodecName(m_config.audioCodec),
+            ffmpeg::FFmpegAudioStrategyPlanner::audioCodecName(audioStrategyPlan.codec),
+            audioStrategyPlan.audioBitrateKbps,
             audioStrategyPlan.smartCopy,
             audioStrategyPlan.diagnostic
         );
@@ -398,11 +400,11 @@ namespace {
         if (inputAudioStream && audioStrategyPlan.mode != AudioMode::None) {
             ffmpeg::FFmpegAudioPipeline::Config audioConfig;
             audioConfig.mode = audioStrategyPlan.mode;
-            audioConfig.codec = m_config.audioCodec;
+            audioConfig.codec = audioStrategyPlan.codec;
             audioConfig.inputAudioStream = inputAudioStream;
             audioConfig.outputFmtCtx = outputFmtCtx.get();
             audioConfig.timeline = &timeline;
-            audioConfig.audioBitrateKbps = m_config.audioBitrateKbps;
+            audioConfig.audioBitrateKbps = audioStrategyPlan.audioBitrateKbps;
 
             Status audioStatus = audioPipeline.initialize(audioConfig);
             if (!audioStatus) {
