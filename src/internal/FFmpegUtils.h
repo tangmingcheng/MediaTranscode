@@ -8,9 +8,8 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/avutil.h>
-#include <libavutil/channel_layout.h>
+#include <libavutil/pixfmt.h>
 #include <libavutil/samplefmt.h>
-#include <libavutil/version.h>
 }
 
 namespace media::ffmpeg {
@@ -19,24 +18,5 @@ namespace media::ffmpeg {
 
     const char* preferredAudioEncoderName(AudioCodec codec);
     AVCodecID fallbackAudioCodecId(AudioCodec codec);
-
-    int normalizeEvenSize(int value);
-
-    AVPixelFormat chooseVideoEncoderPixelFormat(const AVCodec* encoder);
-    AVSampleFormat chooseAudioSampleFormat(const AVCodec* encoder);
-    int chooseAudioSampleRate(const AVCodec* encoder, int preferredRate);
-
-    int audioChannelCount(const AVCodecContext* ctx);
-    bool ensureAudioDecoderChannelLayout(AVCodecContext* ctx);
-    bool copyAudioChannelLayoutToEncoder(AVCodecContext* encoderCtx,
-                                         const AVCodecContext* decoderCtx);
-    bool setFrameAudioLayoutFromCodecContext(AVFrame* frame,
-                                             const AVCodecContext* codecCtx);
-
-#if LIBAVUTIL_VERSION_MAJOR < 57
-    int64_t oldAudioChannelLayout(const AVCodecContext* ctx);
-#endif
-
-    bool isHardwareEncoderName(const char* name);
 
 } // namespace media::ffmpeg
