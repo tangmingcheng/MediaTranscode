@@ -111,18 +111,10 @@ namespace {
     {
         const FFmpegEncoderCapabilities capabilities = FFmpegEncoderCapabilityMatrix::query(encoder);
 
-        const std::string resolvedPresetValue = !options.preset.empty()
-            ? options.preset
-            : FFmpegEncoderCapabilityMatrix::presetValue(capabilities, options.speedPreset);
-
-        const std::string resolvedPresetOption = !capabilities.presetOptionName.empty()
-            ? capabilities.presetOptionName
-            : (!options.preset.empty() ? "preset" : "");
-
         report.presetApplied = setStringOptionIfSupported(
             encoderContext,
-            resolvedPresetOption.c_str(),
-            resolvedPresetValue,
+            capabilities.presetOptionName.c_str(),
+            FFmpegEncoderCapabilityMatrix::presetValue(capabilities, options.speedPreset),
             report
         );
 
