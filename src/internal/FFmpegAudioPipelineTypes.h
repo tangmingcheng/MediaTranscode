@@ -20,12 +20,18 @@ class TimelineNormalizer;
 using FFmpegAudioPacketWrittenCallback =
     std::function<void(int64_t packetCount, int64_t outTimeMs)>;
 
+enum class FFmpegAudioPipelineMode {
+    None,
+    Copy,
+    Encode
+};
+
 struct FFmpegAudioPipelineConfig {
     /*
      * inputAudioStream, outputFmtCtx and timeline are borrowed from FFmpegTranscoder.
      * Concrete pipeline strategies own their decoder / encoder / resampler / fifo resources.
      */
-    AudioMode mode = AudioMode::None;
+    FFmpegAudioPipelineMode mode = FFmpegAudioPipelineMode::None;
     AudioCodec codec = AudioCodec::AAC;
     AVStream* inputAudioStream = nullptr;
     AVFormatContext* outputFmtCtx = nullptr;
@@ -37,5 +43,7 @@ struct FFmpegAudioPacketProgress {
     int64_t packetCount = 0;
     int64_t lastWrittenOutTimeMs = 0;
 };
+
+const char* audioPipelineModeName(FFmpegAudioPipelineMode mode);
 
 } // namespace media::ffmpeg
