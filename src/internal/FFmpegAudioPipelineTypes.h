@@ -23,8 +23,14 @@ using FFmpegAudioPacketWrittenCallback =
 enum class FFmpegAudioPipelineMode {
     None,
     Copy,
-    Encode
+    Encode,
+
+    // Internal compatibility aliases only. Do not use for public API.
+    CopySelected = Copy,
+    EncodeSelected = Encode
 };
+
+using AudioMode = FFmpegAudioPipelineMode;
 
 struct FFmpegAudioPipelineConfig {
     /*
