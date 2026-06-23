@@ -1,6 +1,7 @@
 #include "media_transcode/FFmpegTranscoder.h"
 
 #include "internal/FFmpegAudioPipeline.h"
+#include "internal/FFmpegAudioStrategyPlanner.h"
 #include "internal/FFmpegPhaseDiagnostics.h"
 #include "internal/FFmpegPipelinePlanner.h"
 #include "internal/FFmpegRAII.h"
@@ -62,16 +63,7 @@ namespace {
 
     const char* audioModeName(AudioMode mode)
     {
-        switch (mode) {
-        case AudioMode::None:
-            return "none";
-        case AudioMode::CopySelected:
-            return "copy-selected";
-        case AudioMode::EncodeSelected:
-            return "encode-selected";
-        default:
-            return "unknown";
-        }
+        return ffmpeg::FFmpegAudioStrategyPlanner::audioModeName(mode);
     }
 
 } // namespace
@@ -212,6 +204,7 @@ namespace {
         ffmpeg::FFmpegVideoTranscodePipeline videoPipeline;
         ffmpeg::FFmpegAudioPipeline audioPipeline;
         ffmpeg::FFmpegTranscodeLoopDiagnostics loopDiagnostics(1000);
+        ffmpeg::FFmpegAudioStrategyPlanner::Plan audioStrategyPlan;
 
         int64_t encodedVideoPacketCount = 0;
         int64_t encodedAudioPacketCount = 0;
@@ -326,6 +319,20 @@ namespace {
         }
         outputFmtCtx.reset(rawOutputFmtCtx);
 
+        audioStrategyPlan = ffmpeg::FFmpegAudioStrategyPlanner::plan(
+            m_config,
+            inputAudioStream,
+            outputFmtCtx.get()
+        );
+        spdlog::info(
+            "[AUDIO][PLAN] requested={}, selected={}, codec={}, smart_copy={}, {}",
+            ffmpeg::FFmpegAudioStrategyPlanner::audioModeName(m_config.audioMode),
+            ffmpeg::FFmpegAudioStrategyPlanner::audioModeName(audioStrategyPlan.mode),
+            ffmpeg::FFmpegAudioStrategyPlanner::audioCodecName(m_config.audioCodec),
+            audioStrategyPlan.smartCopy,
+            audioStrategyPlan.diagnostic
+        );
+
         const AVCodec* decoder = avcodec_find_decoder(inputVideoStream->codecpar->codec_id);
         ffmpeg::HardwarePipelinePlan plan;
 
@@ -388,9 +395,9 @@ namespace {
             }
         }
 
-        if (inputAudioStream && m_config.audioMode != AudioMode::None) {
+        if (inputAudioStream && audioStrategyPlan.mode != AudioMode::None) {
             ffmpeg::FFmpegAudioPipeline::Config audioConfig;
-            audioConfig.mode = m_config.audioMode;
+            audioConfig.mode = audioStrategyPlan.mode;
             audioConfig.codec = m_config.audioCodec;
             audioConfig.inputAudioStream = inputAudioStream;
             audioConfig.outputFmtCtx = outputFmtCtx.get();
@@ -559,7 +566,7 @@ namespace {
                     phaseStart,
                     countersBeforeStep,
                     countersAfterStep,
-                    std::string("audio_mode=") + audioModeName(m_config.audioMode)
+                    std::string("audio_mode=") + audioModeName(audioStrategyPlan.mode)
                 );
                 finalizeDiagnostics.finish(false, finalizeCountersBefore, countersAfterStep);
                 failStatus(audioStatus);
@@ -570,7 +577,7 @@ namespace {
                 phaseStart,
                 countersBeforeStep,
                 countersAfterStep,
-                std::string("audio_mode=") + audioModeName(m_config.audioMode)
+                std::string("audio_mode=") + audioModeName(audioStrategyPlan.mode)
             );
         }
         else {
@@ -584,7 +591,7 @@ namespace {
                 phaseStart,
                 countersBeforeStep,
                 currentFinalizeCounters(),
-                reason + ", audio_mode=" + audioModeName(m_config.audioMode)
+                reason + ", audio_mode=" + audioModeName(audioStrategyPlan.mode)
             );
         }
 
