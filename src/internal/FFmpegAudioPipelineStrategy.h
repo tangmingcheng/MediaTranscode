@@ -20,7 +20,7 @@ public:
         const FFmpegAudioPacketWrittenCallback& onPacketWritten);
 
     virtual bool isInitialized() const = 0;
-    virtual AudioMode mode() const = 0;
+    virtual FFmpegAudioPipelineMode mode() const = 0;
     virtual AVStream* outputStream() const = 0;
     virtual FFmpegAudioPacketProgress progress() const = 0;
 };
