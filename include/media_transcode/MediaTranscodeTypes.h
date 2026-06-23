@@ -157,8 +157,7 @@ namespace media {
         // B 帧数量。当前默认仍为 0，保持低延迟行为。
         int maxBFrames = 0;
 
-        // 编码器私有参数。面向内部适配/专家模式；非空时优先于 speedPreset。
-        std::string preset;
+        // 编码器可选字符串参数。执行层仅在编码器支持时应用。
         std::string tune;
         std::string profile;
         std::string level;
