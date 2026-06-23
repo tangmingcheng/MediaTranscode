@@ -167,11 +167,13 @@ namespace media {
     // 音频处理模式
     enum class AudioMode {
         None,
+        // 自动选择最低 CPU 且语义等价的路径。输入音频与目标音频编码一致且封装兼容时 copy，否则 encode。
+        Auto,
         CopySelected,
         EncodeSelected
     };
 
-    // 音频编码类型，仅在 AudioMode::EncodeSelected 时生效
+    // 音频编码类型，仅在 AudioMode::Auto 或 AudioMode::EncodeSelected 时作为目标音频编码生效
     enum class AudioCodec {
         AAC,
         OPUS,
@@ -212,7 +214,7 @@ namespace media {
         VideoBitrateControlPolicy bitratePolicy;
         VideoEncodeOptions videoEncode;
 
-        AudioMode audioMode = AudioMode::EncodeSelected;
+        AudioMode audioMode = AudioMode::Auto;
         AudioCodec audioCodec = AudioCodec::AAC;
 
         int audioBitrateKbps = 128;
