@@ -133,6 +133,7 @@ namespace {
             return "libopus";
         case AudioCodec::MP3:
             return "libmp3lame";
+        case AudioCodec::Auto:
         default:
             return nullptr;
         }
@@ -147,6 +148,7 @@ namespace {
             return AV_CODEC_ID_OPUS;
         case AudioCodec::MP3:
             return AV_CODEC_ID_MP3;
+        case AudioCodec::Auto:
         default:
             return AV_CODEC_ID_NONE;
         }
@@ -257,166 +259,34 @@ namespace {
         if (!sampleRates || rateCount <= 0) {
             return preferredRate > 0 ? preferredRate : 44100;
         }
-
-        for (int i = 0; i < rateCount; ++i) {
-            if (sampleRates[i] == preferredRate) {
-                return preferredRate;
-            }
-        }
-
-        int bestRate = sampleRates[0];
-        int bestDiff = std::abs(bestRate - preferredRate);
-
-        for (int i = 0; i < rateCount; ++i) {
-            const int diff = std::abs(sampleRates[i] - preferredRate);
-            if (diff < bestDiff) {
-                bestDiff = diff;
-                bestRate = sampleRates[i];
-            }
-        }
 #else
-        if (!encoder->supported_samplerates) {
+        const int* sampleRates = encoder->supported_samplerates;
+        if (!sampleRates) {
             return preferredRate > 0 ? preferredRate : 44100;
         }
+#endif
 
-        for (const int* p = encoder->supported_samplerates; *p; ++p) {
-            if (*p == preferredRate) {
-                return preferredRate;
+        if (preferredRate > 0) {
+#if LIBAVCODEC_VERSION_MAJOR >= 61
+            for (int i = 0; i < rateCount; ++i) {
+                if (sampleRates[i] == preferredRate) {
+                    return preferredRate;
+                }
             }
-        }
-
-        int bestRate = encoder->supported_samplerates[0];
-        int bestDiff = std::abs(bestRate - preferredRate);
-
-        for (const int* p = encoder->supported_samplerates; *p; ++p) {
-            const int diff = std::abs(*p - preferredRate);
-            if (diff < bestDiff) {
-                bestDiff = diff;
-                bestRate = *p;
+#else
+            for (const int* p = sampleRates; *p; ++p) {
+                if (*p == preferredRate) {
+                    return preferredRate;
+                }
             }
-        }
 #endif
-
-        return bestRate > 0 ? bestRate : 44100;
-    }
-
-    int audioChannelCount(const AVCodecContext* ctx)
-    {
-        if (!ctx) {
-            return 0;
         }
 
-#if LIBAVUTIL_VERSION_MAJOR >= 57
-        return ctx->ch_layout.nb_channels;
+#if LIBAVCODEC_VERSION_MAJOR >= 61
+        return sampleRates[0];
 #else
-        return ctx->channels;
+        return sampleRates[0] > 0 ? sampleRates[0] : 44100;
 #endif
-    }
-
-    bool ensureAudioDecoderChannelLayout(AVCodecContext* ctx)
-    {
-        if (!ctx) {
-            return false;
-        }
-
-#if LIBAVUTIL_VERSION_MAJOR >= 57
-        return ctx->ch_layout.nb_channels > 0;
-#else
-        if (ctx->channel_layout != 0) {
-            return true;
-        }
-
-        if (ctx->channels > 0) {
-            ctx->channel_layout = av_get_default_channel_layout(ctx->channels);
-            return ctx->channel_layout != 0;
-        }
-
-        return false;
-#endif
-    }
-
-    bool copyAudioChannelLayoutToEncoder(AVCodecContext* encoderCtx,
-                                         const AVCodecContext* decoderCtx)
-    {
-        if (!encoderCtx || !decoderCtx) {
-            return false;
-        }
-
-#if LIBAVUTIL_VERSION_MAJOR >= 57
-        if (decoderCtx->ch_layout.nb_channels <= 0) {
-            return false;
-        }
-
-        av_channel_layout_uninit(&encoderCtx->ch_layout);
-        return av_channel_layout_copy(&encoderCtx->ch_layout, &decoderCtx->ch_layout) >= 0;
-#else
-        if (decoderCtx->channel_layout == 0 || decoderCtx->channels <= 0) {
-            return false;
-        }
-
-        encoderCtx->channel_layout = decoderCtx->channel_layout;
-        encoderCtx->channels = decoderCtx->channels;
-        return true;
-#endif
-    }
-
-    bool setFrameAudioLayoutFromCodecContext(AVFrame* frame,
-                                             const AVCodecContext* codecCtx)
-    {
-        if (!frame || !codecCtx) {
-            return false;
-        }
-
-#if LIBAVUTIL_VERSION_MAJOR >= 57
-        if (codecCtx->ch_layout.nb_channels <= 0) {
-            return false;
-        }
-
-        av_channel_layout_uninit(&frame->ch_layout);
-        return av_channel_layout_copy(&frame->ch_layout, &codecCtx->ch_layout) >= 0;
-#else
-        if (codecCtx->channel_layout == 0 || codecCtx->channels <= 0) {
-            return false;
-        }
-
-        frame->channel_layout = codecCtx->channel_layout;
-        frame->channels = codecCtx->channels;
-        return true;
-#endif
-    }
-
-#if LIBAVUTIL_VERSION_MAJOR < 57
-    int64_t oldAudioChannelLayout(const AVCodecContext* ctx)
-    {
-        if (!ctx) {
-            return 0;
-        }
-
-        if (ctx->channel_layout != 0) {
-            return static_cast<int64_t>(ctx->channel_layout);
-        }
-
-        if (ctx->channels > 0) {
-            return av_get_default_channel_layout(ctx->channels);
-        }
-
-        return 0;
-    }
-#endif
-
-    bool isHardwareEncoderName(const char* name)
-    {
-        if (!name) {
-            return false;
-        }
-
-        const std::string encoderName(name);
-        return encoderName.find("_rkmpp") != std::string::npos ||
-            encoderName.find("_mf") != std::string::npos ||
-            encoderName.find("_qsv") != std::string::npos ||
-            encoderName.find("_nvenc") != std::string::npos ||
-            encoderName.find("_vaapi") != std::string::npos ||
-            encoderName.find("_amf") != std::string::npos;
     }
 
 } // namespace media::ffmpeg
