@@ -36,6 +36,8 @@ add_library(${TARGET_CORE} STATIC
     src/internal/FFmpegAudioPipelineTypes.h
     src/internal/FFmpegAudioProcessDiagnostics.cpp
     src/internal/FFmpegAudioProcessDiagnostics.h
+    src/internal/FFmpegAudioStrategyPlanner.cpp
+    src/internal/FFmpegAudioStrategyPlanner.h
     src/internal/FFmpegBufferSourceMetadataApplier.cpp
     src/internal/FFmpegBufferSourceMetadataApplier.h
     src/internal/FFmpegEncoderCapabilityMatrix.cpp
