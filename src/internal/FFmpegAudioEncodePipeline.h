@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/FFmpegAudioAdapter.h"
 #include "internal/FFmpegAudioPacketWriter.h"
 #include "internal/FFmpegAudioPipelineStrategy.h"
 #include "internal/FFmpegAudioProcessDiagnostics.h"
