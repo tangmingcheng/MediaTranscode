@@ -1,6 +1,7 @@
 #pragma once
 
 #include "media_transcode/MediaTranscodeTypes.h"
+#include "internal/FFmpegAudioPipelineTypes.h"
 
 #include <string>
 
@@ -14,7 +15,7 @@ namespace media::ffmpeg {
     class FFmpegAudioStrategyPlanner {
     public:
         struct Plan {
-            AudioMode mode = AudioMode::None;
+            FFmpegAudioPipelineMode mode = FFmpegAudioPipelineMode::None;
             AudioCodec codec = AudioCodec::AAC;
             int audioBitrateKbps = 128;
             bool smartCopy = false;
@@ -25,7 +26,6 @@ namespace media::ffmpeg {
                          const AVStream* inputAudioStream,
                          const AVFormatContext* outputFmtCtx);
 
-        static const char* audioModeName(AudioMode mode);
         static const char* audioCodecName(AudioCodec codec);
 
     private:
