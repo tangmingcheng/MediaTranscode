@@ -16,6 +16,7 @@ namespace media::ffmpeg {
         struct Plan {
             AudioMode mode = AudioMode::None;
             AudioCodec codec = AudioCodec::AAC;
+            int audioBitrateKbps = 128;
             bool smartCopy = false;
             std::string diagnostic;
         };
@@ -37,6 +38,7 @@ namespace media::ffmpeg {
 
         static TargetParameters resolveTargetParameters(const TranscodeConfig& config,
                                                         const AVStream* inputAudioStream);
+        static int plannedBitrateKbps(const TargetParameters& target);
         static AudioCodec audioCodecFromCodecId(AVCodecID codecId);
         static AudioCodec fallbackEncodeCodec(const TranscodeConfig& config,
                                               const AVStream* inputAudioStream);
