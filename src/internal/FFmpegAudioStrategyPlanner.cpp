@@ -39,14 +39,14 @@ namespace {
     {
         Plan result;
 
-        if (config.audioMode == AudioMode::None) {
-            result.mode = AudioMode::None;
+        if (!config.audioEnabled) {
+            result.mode = FFmpegAudioPipelineMode::None;
             result.diagnostic = "audio disabled by config";
             return result;
         }
 
         if (!inputAudioStream) {
-            result.mode = AudioMode::None;
+            result.mode = FFmpegAudioPipelineMode::None;
             result.diagnostic = "no input audio stream";
             return result;
         }
@@ -55,48 +55,18 @@ namespace {
         result.codec = target.encodeCodec;
         result.audioBitrateKbps = plannedBitrateKbps(target);
 
-        if (config.audioMode == AudioMode::CopySelected) {
-            result.mode = AudioMode::CopySelected;
-            result.smartCopy = true;
-            result.diagnostic = "audio copy explicitly selected";
-            return result;
-        }
-
-        if (config.audioMode == AudioMode::EncodeSelected) {
-            result.mode = AudioMode::EncodeSelected;
-            result.smartCopy = false;
-            result.diagnostic = "audio encode explicitly selected";
-            return result;
-        }
-
         std::string reason;
         if (canSmartCopy(config, inputAudioStream, outputFmtCtx, target, &reason)) {
-            result.mode = AudioMode::CopySelected;
+            result.mode = FFmpegAudioPipelineMode::Copy;
             result.smartCopy = true;
             result.diagnostic = "smart copy selected: " + reason;
             return result;
         }
 
-        result.mode = AudioMode::EncodeSelected;
+        result.mode = FFmpegAudioPipelineMode::Encode;
         result.smartCopy = false;
         result.diagnostic = "smart copy unavailable: " + reason + "; using audio encode";
         return result;
-    }
-
-    const char* FFmpegAudioStrategyPlanner::audioModeName(AudioMode mode)
-    {
-        switch (mode) {
-        case AudioMode::None:
-            return "none";
-        case AudioMode::Auto:
-            return "auto";
-        case AudioMode::CopySelected:
-            return "copy-selected";
-        case AudioMode::EncodeSelected:
-            return "encode-selected";
-        default:
-            return "unknown";
-        }
     }
 
     const char* FFmpegAudioStrategyPlanner::audioCodecName(AudioCodec codec)
