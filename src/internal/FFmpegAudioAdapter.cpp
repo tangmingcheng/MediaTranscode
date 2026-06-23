@@ -76,36 +76,6 @@ namespace {
 
 } // namespace
 
-    const char* preferredAudioEncoderName(AudioCodec codec)
-    {
-        switch (codec) {
-        case AudioCodec::AAC:
-            return "aac";
-        case AudioCodec::OPUS:
-            return "libopus";
-        case AudioCodec::MP3:
-            return "libmp3lame";
-        case AudioCodec::Auto:
-        default:
-            return nullptr;
-        }
-    }
-
-    AVCodecID fallbackAudioCodecId(AudioCodec codec)
-    {
-        switch (codec) {
-        case AudioCodec::AAC:
-            return AV_CODEC_ID_AAC;
-        case AudioCodec::OPUS:
-            return AV_CODEC_ID_OPUS;
-        case AudioCodec::MP3:
-            return AV_CODEC_ID_MP3;
-        case AudioCodec::Auto:
-        default:
-            return AV_CODEC_ID_NONE;
-        }
-    }
-
     AVSampleFormat chooseAudioSampleFormat(const AVCodec* encoder)
     {
         if (!encoder) {
