@@ -79,12 +79,19 @@ private:
     AVStream* m_outputVideoStream = nullptr;
 
     const HardwareDeviceContext* m_hardwareDeviceContext = nullptr;
+    HardwareFramesContext m_encoderHardwareFramesContext;
+    HardwarePipelinePlan m_hardwarePlan;
+    HardwareBackendProfile m_hardwareBackend;
+    HardwareEncoderSelection m_hardwareEncoderSelection;
+
+    bool m_hasHardwarePlan = false;
     bool m_decoderUsesHardwareFrames = false;
     bool m_decoderHardwareDeviceAttached = false;
+    bool m_hardwareDeviceAttachedToEncoder = false;
+    bool m_hardwareFramesContextAttachedToEncoder = false;
+    bool m_zeroCopyPipeline = false;
 
-    AVBufferRefPtr m_encoderHardwareFramesContext;
-
-    int m_outputFps = 25;
+    int m_outputFps = 0;
     bool m_enableConstantFps = false;
 };
 
