@@ -164,16 +164,7 @@ namespace media {
         std::string level;
     };
 
-    // 音频处理模式
-    enum class AudioMode {
-        None,
-        // 自动比较目标音频编码参数与输入音频编码参数；没有变化且封装兼容时 copy，否则 encode。
-        Auto,
-        CopySelected,
-        EncodeSelected
-    };
-
-    // 音频编码类型。Auto 表示保持输入音频编码；只有需要重编码时才由 planner 决定最终编码器。
+    // 音频编码类型。Auto 表示保持输入音频编码；只有目标参数变化时才重编码。
     enum class AudioCodec {
         Auto,
         AAC,
@@ -215,7 +206,8 @@ namespace media {
         VideoBitrateControlPolicy bitratePolicy;
         VideoEncodeOptions videoEncode;
 
-        AudioMode audioMode = AudioMode::Auto;
+        // false 表示输出不包含音频；true 表示按目标音频参数自动决定 copy 或 encode。
+        bool audioEnabled = true;
         AudioCodec audioCodec = AudioCodec::Auto;
 
         // 0 表示保持输入音频码率；大于 0 表示显式目标码率，需要与输入码率比较后决定是否重编码。
