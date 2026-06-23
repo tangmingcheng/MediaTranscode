@@ -53,6 +53,7 @@ namespace {
 
         const TargetParameters target = resolveTargetParameters(config, inputAudioStream);
         result.codec = target.encodeCodec;
+        result.audioBitrateKbps = plannedBitrateKbps(target);
 
         if (config.audioMode == AudioMode::CopySelected) {
             result.mode = AudioMode::CopySelected;
@@ -144,6 +145,15 @@ namespace {
         }
 
         return target;
+    }
+
+    int FFmpegAudioStrategyPlanner::plannedBitrateKbps(const TargetParameters& target)
+    {
+        if (target.bitRate > 0) {
+            return static_cast<int>(std::max<int64_t>(32, target.bitRate / 1000));
+        }
+
+        return 128;
     }
 
     AudioCodec FFmpegAudioStrategyPlanner::audioCodecFromCodecId(AVCodecID codecId)
