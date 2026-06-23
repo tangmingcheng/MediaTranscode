@@ -1,5 +1,7 @@
 #pragma once
 
+#include "internal/FFmpegCapability.h"
+#include "internal/FFmpegVideoAdapter.h"
 #include "media_transcode/MediaTranscodeTypes.h"
 
 #include <string>
