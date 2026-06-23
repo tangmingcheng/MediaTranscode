@@ -21,6 +21,7 @@ endif()
 # --------------------------
 add_library(${TARGET_CORE} STATIC
     src/FFmpegTranscoder.cpp
+    src/internal/FFmpegAudioAdapter.cpp
     src/internal/FFmpegAudioCopyPipeline.cpp
     src/internal/FFmpegAudioCopyPipeline.h
     src/internal/FFmpegAudioEncodePipeline.cpp
@@ -40,6 +41,7 @@ add_library(${TARGET_CORE} STATIC
     src/internal/FFmpegAudioStrategyPlanner.h
     src/internal/FFmpegBufferSourceMetadataApplier.cpp
     src/internal/FFmpegBufferSourceMetadataApplier.h
+    src/internal/FFmpegCapability.cpp
     src/internal/FFmpegEncoderCapabilityMatrix.cpp
     src/internal/FFmpegEncoderCapabilityMatrix.h
     src/internal/FFmpegError.h
@@ -69,6 +71,7 @@ add_library(${TARGET_CORE} STATIC
     src/internal/FFmpegTranscodeLoopDiagnostics.h
     src/internal/FFmpegUtils.cpp
     src/internal/FFmpegUtils.h
+    src/internal/FFmpegVideoAdapter.cpp
     src/internal/FFmpegVideoBitrateControlPlanner.cpp
     src/internal/FFmpegVideoBitrateControlPlanner.h
     src/internal/FFmpegVideoBitrateOptionAdapter.cpp
@@ -189,10 +192,22 @@ elseif(USE_LOCAL_FFMPEG AND CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
     target_link_libraries(thirdparty_ffmpeg INTERFACE
         PkgConfig::FFMPEG
     )
+
+else()
+    find_package(PkgConfig REQUIRED)
+
+    pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
+        libavfilter
+        libavcodec
+        libavformat
+        libavutil
+        libswscale
+        libswresample
+    )
+
+    target_link_libraries(thirdparty_ffmpeg INTERFACE
+        PkgConfig::FFMPEG
+    )
 endif()
 
-# --------------------------
-# 链接第三方库
-# --------------------------
-target_link_libraries(${TARGET_CORE} PRIVATE thirdparty_ffmpeg)
-target_link_libraries(${TARGET_CLI} PRIVATE thirdparty_ffmpeg)
+target_link_libraries(${TARGET_CORE} PUBLIC thirdparty_ffmpeg)
