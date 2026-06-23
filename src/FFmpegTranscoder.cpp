@@ -61,11 +61,6 @@ namespace {
         }
     }
 
-    const char* audioModeName(AudioMode mode)
-    {
-        return ffmpeg::FFmpegAudioStrategyPlanner::audioModeName(mode);
-    }
-
 } // namespace
 
     FFmpegTranscoder::FFmpegTranscoder()
@@ -300,7 +295,7 @@ namespace {
         videoStreamIndex = ret;
         inputVideoStream = inputFmtCtx->streams[videoStreamIndex];
 
-        if (m_config.audioMode != AudioMode::None) {
+        if (m_config.audioEnabled) {
             ret = av_find_best_stream(inputFmtCtx.get(), AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
             if (ret >= 0) {
                 audioStreamIndex = ret;
@@ -325,9 +320,9 @@ namespace {
             outputFmtCtx.get()
         );
         spdlog::info(
-            "[AUDIO][PLAN] requested_mode={}, selected_mode={}, requested_codec={}, selected_codec={}, target_bitrate_kbps={}, smart_copy={}, {}",
-            ffmpeg::FFmpegAudioStrategyPlanner::audioModeName(m_config.audioMode),
-            ffmpeg::FFmpegAudioStrategyPlanner::audioModeName(audioStrategyPlan.mode),
+            "[AUDIO][PLAN] enabled={}, selected_mode={}, requested_codec={}, selected_codec={}, target_bitrate_kbps={}, smart_copy={}, {}",
+            m_config.audioEnabled,
+            ffmpeg::audioPipelineModeName(audioStrategyPlan.mode),
             ffmpeg::FFmpegAudioStrategyPlanner::audioCodecName(m_config.audioCodec),
             ffmpeg::FFmpegAudioStrategyPlanner::audioCodecName(audioStrategyPlan.codec),
             audioStrategyPlan.audioBitrateKbps,
@@ -397,7 +392,7 @@ namespace {
             }
         }
 
-        if (inputAudioStream && audioStrategyPlan.mode != AudioMode::None) {
+        if (inputAudioStream && audioStrategyPlan.mode != ffmpeg::FFmpegAudioPipelineMode::None) {
             ffmpeg::FFmpegAudioPipeline::Config audioConfig;
             audioConfig.mode = audioStrategyPlan.mode;
             audioConfig.codec = audioStrategyPlan.codec;
@@ -568,7 +563,7 @@ namespace {
                     phaseStart,
                     countersBeforeStep,
                     countersAfterStep,
-                    std::string("audio_mode=") + audioModeName(audioStrategyPlan.mode)
+                    std::string("audio_pipeline_mode=") + ffmpeg::audioPipelineModeName(audioStrategyPlan.mode)
                 );
                 finalizeDiagnostics.finish(false, finalizeCountersBefore, countersAfterStep);
                 failStatus(audioStatus);
@@ -579,7 +574,7 @@ namespace {
                 phaseStart,
                 countersBeforeStep,
                 countersAfterStep,
-                std::string("audio_mode=") + audioModeName(audioStrategyPlan.mode)
+                std::string("audio_pipeline_mode=") + ffmpeg::audioPipelineModeName(audioStrategyPlan.mode)
             );
         }
         else {
@@ -593,7 +588,7 @@ namespace {
                 phaseStart,
                 countersBeforeStep,
                 currentFinalizeCounters(),
-                reason + ", audio_mode=" + audioModeName(audioStrategyPlan.mode)
+                reason + ", audio_pipeline_mode=" + ffmpeg::audioPipelineModeName(audioStrategyPlan.mode)
             );
         }
 
