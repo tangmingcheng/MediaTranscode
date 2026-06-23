@@ -22,6 +22,7 @@ endif()
 add_library(${TARGET_CORE} STATIC
     src/FFmpegTranscoder.cpp
     src/internal/FFmpegAudioAdapter.cpp
+    src/internal/FFmpegAudioAdapter.h
     src/internal/FFmpegAudioCopyPipeline.cpp
     src/internal/FFmpegAudioCopyPipeline.h
     src/internal/FFmpegAudioEncodePipeline.cpp
@@ -42,6 +43,7 @@ add_library(${TARGET_CORE} STATIC
     src/internal/FFmpegBufferSourceMetadataApplier.cpp
     src/internal/FFmpegBufferSourceMetadataApplier.h
     src/internal/FFmpegCapability.cpp
+    src/internal/FFmpegCapability.h
     src/internal/FFmpegEncoderCapabilityMatrix.cpp
     src/internal/FFmpegEncoderCapabilityMatrix.h
     src/internal/FFmpegError.h
@@ -72,6 +74,7 @@ add_library(${TARGET_CORE} STATIC
     src/internal/FFmpegUtils.cpp
     src/internal/FFmpegUtils.h
     src/internal/FFmpegVideoAdapter.cpp
+    src/internal/FFmpegVideoAdapter.h
     src/internal/FFmpegVideoBitrateControlPlanner.cpp
     src/internal/FFmpegVideoBitrateControlPlanner.h
     src/internal/FFmpegVideoBitrateOptionAdapter.cpp
