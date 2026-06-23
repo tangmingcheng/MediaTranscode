@@ -114,9 +114,9 @@ bool FFmpegAudioCopyPipeline::isInitialized() const
     return m_inputAudioStream && m_outputAudioStream && m_packetWriter.isInitialized();
 }
 
-AudioMode FFmpegAudioCopyPipeline::mode() const
+FFmpegAudioPipelineMode FFmpegAudioCopyPipeline::mode() const
 {
-    return AudioMode::CopySelected;
+    return FFmpegAudioPipelineMode::Copy;
 }
 
 AVStream* FFmpegAudioCopyPipeline::outputStream() const
