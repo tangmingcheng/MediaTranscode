@@ -1,16 +1,19 @@
 #pragma once
 
-#include "media_transcode/FFmpegTranscoder.h"
+#include "media_transcode/MediaTranscodeTypes.h"
 
+#include <atomic>
+#include <mutex>
 #include <string>
+#include <thread>
 
 namespace media {
 
 /**
  * @brief Internal capability-specific engine for local video file transcoding.
  *
- * The old FFmpegTranscoder remains a private delegate. This class is the
- * implementation boundary used by the public local-video transcode API.
+ * This class owns the FFmpeg worker thread and wires the local-file capability
+ * to the reusable video/audio pipeline stages.
  */
 class FFmpegLocalFileTranscodeEngine {
 public:
@@ -29,7 +32,21 @@ public:
     void setProgressCallback(ProgressCallback cb);
 
 private:
-    FFmpegTranscoder m_delegate;
+    void transcodeThread();
+    void setLastError(const std::string& error);
+    void clearLastError();
+
+private:
+    TranscodeConfig m_config;
+
+    std::thread m_transcodeThread;
+    std::atomic_bool m_running{ false };
+    std::atomic_bool m_stopRequested{ false };
+
+    mutable std::mutex m_mutex;
+    std::string m_lastError;
+
+    ProgressCallback m_progressCallback;
 };
 
 } // namespace media
