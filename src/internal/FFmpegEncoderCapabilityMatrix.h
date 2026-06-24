@@ -1,6 +1,6 @@
 #pragma once
 
-#include "media_transcode/MediaTranscodeTypes.h"
+#include "internal/TranscodeTypes.h"
 
 #include <string>
 
@@ -61,7 +61,7 @@ namespace media::ffmpeg {
                                             VideoRateControlMode mode);
 
         static std::string presetValue(const FFmpegEncoderCapabilities& capabilities,
-                                       VideoEncodeSpeedPreset preset);
+                                       VideoSpeedPreset preset);
 
         static std::string familyName(FFmpegEncoderFamily family);
         static std::string rateControlName(VideoRateControlMode mode);
