@@ -95,6 +95,11 @@ ErrorInfo validateConfig(const LocalVideoTranscodeConfig& config)
     return ErrorInfo::success();
 }
 
+ErrorInfo invalidJobError()
+{
+    return ErrorInfo::notInitialized("local video transcode job is empty");
+}
+
 ErrorInfo engineError(const FFmpegLocalFileTranscodeEngine& engine,
                       ErrorCode code,
                       const std::string& fallback)
@@ -107,130 +112,48 @@ ErrorInfo engineError(const FFmpegLocalFileTranscodeEngine& engine,
 
 } // namespace
 
-struct LocalVideoTranscodeTask::Impl {
+struct LocalVideoTranscodeJob {
+    ~LocalVideoTranscodeJob()
+    {
+        engine.stop();
+    }
+
     mutable std::mutex mutex;
     FFmpegLocalFileTranscodeEngine engine;
     LocalVideoTranscodeReport report;
 };
 
-LocalVideoTranscodeTask::LocalVideoTranscodeTask(std::shared_ptr<Impl> impl)
-    : m_impl(std::move(impl))
-{
-}
-
-LocalVideoTranscodeTask::~LocalVideoTranscodeTask() = default;
-
-LocalVideoTranscodeTask::LocalVideoTranscodeTask(LocalVideoTranscodeTask&&) noexcept = default;
-
-LocalVideoTranscodeTask& LocalVideoTranscodeTask::operator=(LocalVideoTranscodeTask&&) noexcept = default;
-
-void LocalVideoTranscodeTask::stop()
-{
-    if (!m_impl) {
-        return;
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(m_impl->mutex);
-        m_impl->report.stopped = true;
-    }
-
-    m_impl->engine.stop();
-}
-
-Result<LocalVideoTranscodeReport> LocalVideoTranscodeTask::wait()
-{
-    if (!m_impl) {
-        return Result<LocalVideoTranscodeReport>::failure(
-            ErrorInfo::notInitialized("local video transcode task is empty")
-        );
-    }
-
-    if (!m_impl->engine.wait()) {
-        return Result<LocalVideoTranscodeReport>::failure(
-            engineError(m_impl->engine, ErrorCode::InternalError, "local video transcode wait failed")
-        );
-    }
-
-    const std::string lastError = m_impl->engine.lastError();
-    if (!lastError.empty()) {
-        return Result<LocalVideoTranscodeReport>::failure(
-            ErrorInfo::ffmpegFailure(lastError)
-        );
-    }
-
-    std::lock_guard<std::mutex> lock(m_impl->mutex);
-    if (m_impl->report.lastProgress.stage == "finished") {
-        m_impl->report.completed = true;
-        m_impl->report.stopped = false;
-    }
-    else if (m_impl->report.lastProgress.stage == "stopped") {
-        m_impl->report.completed = false;
-        m_impl->report.stopped = true;
-    }
-    return Result<LocalVideoTranscodeReport>::success(m_impl->report);
-}
-
-bool LocalVideoTranscodeTask::isRunning() const
-{
-    return m_impl && m_impl->engine.isRunning();
-}
-
-ErrorInfo LocalVideoTranscodeTask::lastError() const
-{
-    if (!m_impl) {
-        return ErrorInfo::notInitialized("local video transcode task is empty");
-    }
-
-    const std::string lastError = m_impl->engine.lastError();
-    if (lastError.empty()) {
-        return ErrorInfo::success();
-    }
-
-    return ErrorInfo::ffmpegFailure(lastError);
-}
-
-LocalVideoTranscodeProgress LocalVideoTranscodeTask::lastProgress() const
-{
-    if (!m_impl) {
-        return {};
-    }
-
-    std::lock_guard<std::mutex> lock(m_impl->mutex);
-    return m_impl->report.lastProgress;
-}
-
-Result<std::shared_ptr<LocalVideoTranscodeTask>> startLocalVideoTranscodeAsync(
+Result<LocalVideoTranscodeJobHandle> startLocalVideoTranscodeAsync(
     const LocalVideoTranscodeConfig& config,
     LocalVideoTranscodeProgressCallback progressCallback)
 {
     const ErrorInfo validation = validateConfig(config);
     if (!validation.ok()) {
-        return Result<std::shared_ptr<LocalVideoTranscodeTask>>::failure(validation);
+        return Result<LocalVideoTranscodeJobHandle>::failure(validation);
     }
 
-    auto impl = std::make_shared<LocalVideoTranscodeTask::Impl>();
-    impl->report.config = config;
+    auto job = std::make_shared<LocalVideoTranscodeJob>();
+    job->report.config = config;
 
-    std::weak_ptr<LocalVideoTranscodeTask::Impl> weakImpl = impl;
-    impl->engine.setProgressCallback(
-        [weakImpl, progressCallback = std::move(progressCallback)](const ProgressInfo& info) {
-            auto impl = weakImpl.lock();
-            if (!impl) {
+    std::weak_ptr<LocalVideoTranscodeJob> weakJob = job;
+    job->engine.setProgressCallback(
+        [weakJob, progressCallback = std::move(progressCallback)](const ProgressInfo& info) {
+            auto job = weakJob.lock();
+            if (!job) {
                 return;
             }
 
             const LocalVideoTranscodeProgress progress = toPublicProgress(info);
             {
-                std::lock_guard<std::mutex> lock(impl->mutex);
-                impl->report.lastProgress = progress;
+                std::lock_guard<std::mutex> lock(job->mutex);
+                job->report.lastProgress = progress;
                 if (progress.stage == "finished") {
-                    impl->report.completed = true;
-                    impl->report.stopped = false;
+                    job->report.completed = true;
+                    job->report.stopped = false;
                 }
                 else if (progress.stage == "stopped") {
-                    impl->report.completed = false;
-                    impl->report.stopped = true;
+                    job->report.completed = false;
+                    job->report.stopped = true;
                 }
             }
 
@@ -240,33 +163,106 @@ Result<std::shared_ptr<LocalVideoTranscodeTask>> startLocalVideoTranscodeAsync(
         }
     );
 
-    if (!impl->engine.initialize(toInternalConfig(config))) {
-        return Result<std::shared_ptr<LocalVideoTranscodeTask>>::failure(
-            engineError(impl->engine, ErrorCode::InvalidArgument, "local video transcode initialize failed")
+    if (!job->engine.initialize(toInternalConfig(config))) {
+        return Result<LocalVideoTranscodeJobHandle>::failure(
+            engineError(job->engine, ErrorCode::InvalidArgument, "local video transcode initialize failed")
         );
     }
 
-    if (!impl->engine.start()) {
-        return Result<std::shared_ptr<LocalVideoTranscodeTask>>::failure(
-            engineError(impl->engine, ErrorCode::InternalError, "local video transcode start failed")
+    if (!job->engine.start()) {
+        return Result<LocalVideoTranscodeJobHandle>::failure(
+            engineError(job->engine, ErrorCode::InternalError, "local video transcode start failed")
         );
     }
 
-    return Result<std::shared_ptr<LocalVideoTranscodeTask>>::success(
-        std::shared_ptr<LocalVideoTranscodeTask>(new LocalVideoTranscodeTask(std::move(impl)))
-    );
+    return Result<LocalVideoTranscodeJobHandle>::success(std::move(job));
 }
 
 Result<LocalVideoTranscodeReport> startLocalVideoTranscodeSync(
     const LocalVideoTranscodeConfig& config,
     LocalVideoTranscodeProgressCallback progressCallback)
 {
-    auto taskResult = startLocalVideoTranscodeAsync(config, std::move(progressCallback));
-    if (!taskResult) {
-        return Result<LocalVideoTranscodeReport>::failure(taskResult.error());
+    auto jobResult = startLocalVideoTranscodeAsync(config, std::move(progressCallback));
+    if (!jobResult) {
+        return Result<LocalVideoTranscodeReport>::failure(jobResult.error());
     }
 
-    return taskResult.value()->wait();
+    return waitLocalVideoTranscode(jobResult.value());
+}
+
+Result<void> stopLocalVideoTranscode(const LocalVideoTranscodeJobHandle& job)
+{
+    if (!job) {
+        return Result<void>::failure(invalidJobError());
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(job->mutex);
+        job->report.stopped = true;
+    }
+
+    job->engine.stop();
+    return Result<void>::success();
+}
+
+Result<LocalVideoTranscodeReport> waitLocalVideoTranscode(const LocalVideoTranscodeJobHandle& job)
+{
+    if (!job) {
+        return Result<LocalVideoTranscodeReport>::failure(invalidJobError());
+    }
+
+    if (!job->engine.wait()) {
+        return Result<LocalVideoTranscodeReport>::failure(
+            engineError(job->engine, ErrorCode::InternalError, "local video transcode wait failed")
+        );
+    }
+
+    const std::string lastError = job->engine.lastError();
+    if (!lastError.empty()) {
+        return Result<LocalVideoTranscodeReport>::failure(
+            ErrorInfo::ffmpegFailure(lastError)
+        );
+    }
+
+    std::lock_guard<std::mutex> lock(job->mutex);
+    if (job->report.lastProgress.stage == "finished") {
+        job->report.completed = true;
+        job->report.stopped = false;
+    }
+    else if (job->report.lastProgress.stage == "stopped") {
+        job->report.completed = false;
+        job->report.stopped = true;
+    }
+    return Result<LocalVideoTranscodeReport>::success(job->report);
+}
+
+bool isLocalVideoTranscodeRunning(const LocalVideoTranscodeJobHandle& job)
+{
+    return job && job->engine.isRunning();
+}
+
+ErrorInfo getLocalVideoTranscodeLastError(const LocalVideoTranscodeJobHandle& job)
+{
+    if (!job) {
+        return invalidJobError();
+    }
+
+    const std::string lastError = job->engine.lastError();
+    if (lastError.empty()) {
+        return ErrorInfo::success();
+    }
+
+    return ErrorInfo::ffmpegFailure(lastError);
+}
+
+LocalVideoTranscodeProgress getLocalVideoTranscodeLastProgress(const LocalVideoTranscodeJobHandle& job)
+{
+    if (!job) {
+        return {};
+    }
+
+    std::lock_guard<std::mutex> lock(job->mutex);
+    return job->report.lastProgress;
 }
 
 } // namespace media
