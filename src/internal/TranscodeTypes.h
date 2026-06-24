@@ -9,23 +9,6 @@
 
 namespace media {
 
-// Internal codec still has Copy because some lower-level selector utilities can
-// represent unsupported/pass-through states. Public local-video transcode config
-// intentionally exposes only real output codecs through OutputVideoCodec.
-enum class VideoCodec {
-    Copy,
-    H264,
-    H265,
-    MPEG4,
-    VP8,
-    VP9,
-    AV1
-};
-
-using VideoRateControlMode = VideoRcMode;
-using VideoEncodeSpeedPreset = VideoSpeedPreset;
-using AudioCodec = OutputAudioCodec;
-
 enum class VideoBitrateIntent {
     Auto,
     BandwidthFirst,
@@ -122,7 +105,7 @@ struct VideoBitratePlan {
 };
 
 struct VideoEncodeOptions {
-    VideoEncodeSpeedPreset speedPreset = VideoEncodeSpeedPreset::Medium;
+    VideoSpeedPreset speedPreset = VideoSpeedPreset::Medium;
     int gopSize = 0;
     int maxBFrames = 0;
     std::string tune;
