@@ -24,6 +24,11 @@ endif()
 add_library(${TARGET_CORE} STATIC
     src/MediaTranscode.cpp
     src/FFmpegTranscoder.cpp
+    src/local/FFmpegLocalFileTranscodeEngine.cpp
+    src/local/FFmpegLocalFileTranscodeEngine.h
+    src/media_transcode/FFmpegTranscoder.h
+    src/media_transcode/ITranscoder.h
+    src/media_transcode/MediaTranscodeTypes.h
     src/internal/FFmpegAudioAdapter.cpp
     src/internal/FFmpegAudioAdapter.h
     src/internal/FFmpegAudioCopyPipeline.cpp
@@ -113,9 +118,6 @@ add_library(${TARGET_CORE} STATIC
     src/internal/FFmpegVideoTranscodePipeline.cpp
     src/internal/FFmpegVideoTranscodePipeline.h
     include/media_transcode/MediaTranscode.h
-    include/media_transcode/FFmpegTranscoder.h
-    include/media_transcode/ITranscoder.h
-    include/media_transcode/MediaTranscodeTypes.h
     include/media_transcode/Result.h
 )
 
