@@ -22,6 +22,7 @@ endif()
 # 核心库
 # --------------------------
 add_library(${TARGET_CORE} STATIC
+    src/MediaTranscode.cpp
     src/FFmpegTranscoder.cpp
     src/internal/FFmpegAudioAdapter.cpp
     src/internal/FFmpegAudioAdapter.h
@@ -112,12 +113,10 @@ add_library(${TARGET_CORE} STATIC
     src/internal/FFmpegVideoTranscodePipeline.cpp
     src/internal/FFmpegVideoTranscodePipeline.h
     include/media_transcode/MediaTranscode.h
-    include/media_transcode/TranscodeSession.h
     include/media_transcode/FFmpegTranscoder.h
     include/media_transcode/ITranscoder.h
     include/media_transcode/MediaTranscodeTypes.h
     include/media_transcode/Result.h
-    include/media_transcode/FrameQueue.h
 )
 
 add_library(MediaTranscode::core ALIAS ${TARGET_CORE})
