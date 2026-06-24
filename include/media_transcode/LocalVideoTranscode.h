@@ -116,51 +116,25 @@ struct LocalVideoTranscodeReport {
     bool stopped = false;
 };
 
-class LocalVideoTranscodeTask final {
-public:
-    ~LocalVideoTranscodeTask();
+/**
+ * @brief Opaque local video transcode job handle.
+ *
+ * The complete job definition is private to the implementation. Callers own the
+ * returned handle and operate on it through the local video transcode functions
+ * below. This keeps the public API close to an FFmpeg-style opaque handle model.
+ */
+struct LocalVideoTranscodeJob;
 
-    LocalVideoTranscodeTask(const LocalVideoTranscodeTask&) = delete;
-    LocalVideoTranscodeTask& operator=(const LocalVideoTranscodeTask&) = delete;
-
-    LocalVideoTranscodeTask(LocalVideoTranscodeTask&&) noexcept;
-    LocalVideoTranscodeTask& operator=(LocalVideoTranscodeTask&&) noexcept;
-
-    /**
-     * @brief Request the local transcode job to stop and wait for the worker thread to exit.
-     */
-    void stop();
-
-    /**
-     * @brief Wait until the job finishes or fails and return the final report.
-     */
-    [[nodiscard]] Result<LocalVideoTranscodeReport> wait();
-
-    [[nodiscard]] bool isRunning() const;
-    [[nodiscard]] ErrorInfo lastError() const;
-    [[nodiscard]] LocalVideoTranscodeProgress lastProgress() const;
-
-private:
-    struct Impl;
-
-    explicit LocalVideoTranscodeTask(std::shared_ptr<Impl> impl);
-
-private:
-    std::shared_ptr<Impl> m_impl;
-
-    friend Result<std::shared_ptr<LocalVideoTranscodeTask>> startLocalVideoTranscodeAsync(
-        const LocalVideoTranscodeConfig& config,
-        LocalVideoTranscodeProgressCallback progressCallback
-    );
-};
+using LocalVideoTranscodeJobHandle = std::shared_ptr<LocalVideoTranscodeJob>;
 
 /**
  * @brief Start local video transcoding asynchronously.
  *
- * The returned task owns the running job. Call wait() to join and obtain the
- * final report, or stop() to request early termination.
+ * The returned job owns the running work. Call waitLocalVideoTranscode() to join
+ * and obtain the final report, or stopLocalVideoTranscode() to request early
+ * termination.
  */
-[[nodiscard]] Result<std::shared_ptr<LocalVideoTranscodeTask>> startLocalVideoTranscodeAsync(
+[[nodiscard]] Result<LocalVideoTranscodeJobHandle> startLocalVideoTranscodeAsync(
     const LocalVideoTranscodeConfig& config,
     LocalVideoTranscodeProgressCallback progressCallback = {}
 );
@@ -171,6 +145,41 @@ private:
 [[nodiscard]] Result<LocalVideoTranscodeReport> startLocalVideoTranscodeSync(
     const LocalVideoTranscodeConfig& config,
     LocalVideoTranscodeProgressCallback progressCallback = {}
+);
+
+/**
+ * @brief Request a running local video transcode job to stop.
+ */
+[[nodiscard]] Result<void> stopLocalVideoTranscode(
+    const LocalVideoTranscodeJobHandle& job
+);
+
+/**
+ * @brief Wait until a local video transcode job finishes or fails.
+ */
+[[nodiscard]] Result<LocalVideoTranscodeReport> waitLocalVideoTranscode(
+    const LocalVideoTranscodeJobHandle& job
+);
+
+/**
+ * @brief Return whether the local video transcode job is currently running.
+ */
+[[nodiscard]] bool isLocalVideoTranscodeRunning(
+    const LocalVideoTranscodeJobHandle& job
+);
+
+/**
+ * @brief Return the last known error for the local video transcode job.
+ */
+[[nodiscard]] ErrorInfo getLocalVideoTranscodeLastError(
+    const LocalVideoTranscodeJobHandle& job
+);
+
+/**
+ * @brief Return the last known progress for the local video transcode job.
+ */
+[[nodiscard]] LocalVideoTranscodeProgress getLocalVideoTranscodeLastProgress(
+    const LocalVideoTranscodeJobHandle& job
 );
 
 } // namespace media
