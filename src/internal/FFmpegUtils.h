@@ -1,6 +1,6 @@
 #pragma once
 
-#include "media_transcode/MediaTranscodeTypes.h"
+#include "internal/TranscodeTypes.h"
 
 #include <cstdint>
 #include <string>
