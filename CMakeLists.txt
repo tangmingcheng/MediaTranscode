@@ -7,6 +7,16 @@ set(TARGET_CORE "media_transcode_core")
 set(THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/3rds")
 
 option(MEDIA_TRANSCODE_BUILD_CLI "Build the media_transcode_cli example program" ON)
+option(MEDIA_TRANSCODE_BUILD_EXAMPLES "Build small public API examples" ON)
+option(MEDIA_TRANSCODE_BUILD_TESTS "Build MediaTranscode tests" ON)
+option(MEDIA_TRANSCODE_ENABLE_INTEGRATION_TESTS "Build and register integration tests" ON)
+option(MEDIA_TRANSCODE_ENABLE_HARDWARE_TESTS "Enable hardware-dependent tests" OFF)
+
+set(MEDIA_TRANSCODE_TEST_SAMPLES_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/samples"
+    CACHE PATH
+    "Directory containing media samples used by integration/regression tests"
+)
 
 # MSVC Debug Info
 if(POLICY CMP0141)
@@ -130,33 +140,10 @@ target_include_directories(${TARGET_CORE}
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-# --------------------------
-# CLI 示例程序
-# --------------------------
-if(MEDIA_TRANSCODE_BUILD_CLI)
-    add_executable(${TARGET_CLI}
-        examples/transcode_cli/main.cpp
-    )
-
-    target_link_libraries(${TARGET_CLI}
-        PRIVATE ${TARGET_CORE}
-    )
-endif()
-
-# --------------------------
-# 编译选项
-# --------------------------
 target_compile_features(${TARGET_CORE} PUBLIC cxx_std_20)
-
-if(TARGET ${TARGET_CLI})
-    target_compile_features(${TARGET_CLI} PRIVATE cxx_std_20)
-endif()
 
 if(MSVC)
     target_compile_options(${TARGET_CORE} PRIVATE /utf-8)
-    if(TARGET ${TARGET_CLI})
-        target_compile_options(${TARGET_CLI} PRIVATE /utf-8)
-    endif()
 endif()
 
 # --------------------------
@@ -168,9 +155,6 @@ target_include_directories(thirdparty_spdlog INTERFACE
 )
 
 target_link_libraries(${TARGET_CORE} PRIVATE thirdparty_spdlog)
-if(TARGET ${TARGET_CLI})
-    target_link_libraries(${TARGET_CLI} PRIVATE thirdparty_spdlog)
-endif()
 
 # --------------------------
 # FFmpeg
@@ -232,3 +216,72 @@ else()
 endif()
 
 target_link_libraries(${TARGET_CORE} PUBLIC thirdparty_ffmpeg)
+
+function(media_transcode_configure_app target_name)
+    target_link_libraries(${target_name} PRIVATE MediaTranscode::core)
+    target_compile_features(${target_name} PRIVATE cxx_std_20)
+    if(MSVC)
+        target_compile_options(${target_name} PRIVATE /utf-8)
+    endif()
+endfunction()
+
+# --------------------------
+# CLI 示例程序
+# --------------------------
+if(MEDIA_TRANSCODE_BUILD_CLI)
+    add_executable(${TARGET_CLI}
+        examples/transcode_cli/main.cpp
+    )
+    media_transcode_configure_app(${TARGET_CLI})
+    target_link_libraries(${TARGET_CLI} PRIVATE thirdparty_spdlog)
+endif()
+
+# --------------------------
+# Public API examples
+# --------------------------
+if(MEDIA_TRANSCODE_BUILD_EXAMPLES)
+    add_executable(media_transcode_example_local_sync
+        examples/api/local_transcode_sync.cpp
+    )
+    media_transcode_configure_app(media_transcode_example_local_sync)
+
+    add_executable(media_transcode_example_local_async
+        examples/api/local_transcode_async.cpp
+    )
+    media_transcode_configure_app(media_transcode_example_local_async)
+
+    add_executable(media_transcode_example_local_cancel
+        examples/api/local_transcode_cancel.cpp
+    )
+    media_transcode_configure_app(media_transcode_example_local_cancel)
+
+    add_executable(media_transcode_example_local_error_handling
+        examples/api/local_transcode_error_handling.cpp
+    )
+    media_transcode_configure_app(media_transcode_example_local_error_handling)
+endif()
+
+# --------------------------
+# Tests
+# --------------------------
+if(MEDIA_TRANSCODE_BUILD_TESTS)
+    enable_testing()
+
+    add_executable(media_transcode_unit_tests
+        tests/unit/test_local_transcode_api.cpp
+    )
+    media_transcode_configure_app(media_transcode_unit_tests)
+    add_test(NAME media_transcode_unit_tests COMMAND media_transcode_unit_tests)
+
+    if(MEDIA_TRANSCODE_ENABLE_INTEGRATION_TESTS)
+        add_executable(media_transcode_integration_tests
+            tests/integration/test_local_transcode_integration.cpp
+        )
+        media_transcode_configure_app(media_transcode_integration_tests)
+        add_test(
+            NAME media_transcode_integration_tests
+            COMMAND media_transcode_integration_tests "${MEDIA_TRANSCODE_TEST_SAMPLES_DIR}"
+        )
+        set_tests_properties(media_transcode_integration_tests PROPERTIES SKIP_RETURN_CODE 77)
+    endif()
+endif()
