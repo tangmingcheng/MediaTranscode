@@ -56,27 +56,27 @@ std::string requireValue(int argc, char* argv[], int& index, const std::string& 
     return argv[++index];
 }
 
-media::OutputVideoCodec parseVideoCodec(const std::string& value)
+media::VideoCodec parseVideoCodec(const std::string& value)
 {
     const std::string normalized = toLower(value);
-    if (normalized == "h264" || normalized == "avc") return media::OutputVideoCodec::H264;
-    if (normalized == "h265" || normalized == "hevc") return media::OutputVideoCodec::H265;
-    if (normalized == "mpeg4" || normalized == "mp4v") return media::OutputVideoCodec::MPEG4;
-    if (normalized == "vp8") return media::OutputVideoCodec::VP8;
-    if (normalized == "vp9") return media::OutputVideoCodec::VP9;
-    if (normalized == "av1") return media::OutputVideoCodec::AV1;
+    if (normalized == "h264" || normalized == "avc") return media::VideoCodec::H264;
+    if (normalized == "h265" || normalized == "hevc") return media::VideoCodec::H265;
+    if (normalized == "mpeg4" || normalized == "mp4v") return media::VideoCodec::MPEG4;
+    if (normalized == "vp8") return media::VideoCodec::VP8;
+    if (normalized == "vp9") return media::VideoCodec::VP9;
+    if (normalized == "av1") return media::VideoCodec::AV1;
     throw std::runtime_error("unsupported video codec: " + value);
 }
 
-media::VideoRcMode parseRateControl(const std::string& value)
+media::VideoRateControlMode parseRateControl(const std::string& value)
 {
     const std::string normalized = toLower(value);
-    if (normalized == "auto") return media::VideoRcMode::Auto;
-    if (normalized == "cbr") return media::VideoRcMode::CBR;
-    if (normalized == "vbr") return media::VideoRcMode::VBR;
-    if (normalized == "crf" || normalized == "cq") return media::VideoRcMode::CRF;
+    if (normalized == "auto") return media::VideoRateControlMode::Auto;
+    if (normalized == "cbr") return media::VideoRateControlMode::CBR;
+    if (normalized == "vbr") return media::VideoRateControlMode::VBR;
+    if (normalized == "crf" || normalized == "cq") return media::VideoRateControlMode::CRF;
     if (normalized == "capped-vbr" || normalized == "capped_vbr" || normalized == "cvbr") {
-        return media::VideoRcMode::CappedVBR;
+        return media::VideoRateControlMode::CappedVBR;
     }
     throw std::runtime_error("unsupported video rate control mode: " + value);
 }
@@ -97,13 +97,13 @@ media::VideoSpeedPreset parseSpeedPreset(const std::string& value)
     throw std::runtime_error("unsupported video speed preset: " + value);
 }
 
-media::OutputAudioCodec parseAudioCodec(const std::string& value)
+media::AudioCodec parseAudioCodec(const std::string& value)
 {
     const std::string normalized = toLower(value);
-    if (normalized == "auto" || normalized == "copy") return media::OutputAudioCodec::Auto;
-    if (normalized == "aac") return media::OutputAudioCodec::AAC;
-    if (normalized == "opus" || normalized == "libopus") return media::OutputAudioCodec::OPUS;
-    if (normalized == "mp3" || normalized == "libmp3lame") return media::OutputAudioCodec::MP3;
+    if (normalized == "auto" || normalized == "copy") return media::AudioCodec::Auto;
+    if (normalized == "aac") return media::AudioCodec::AAC;
+    if (normalized == "opus" || normalized == "libopus") return media::AudioCodec::OPUS;
+    if (normalized == "mp3" || normalized == "libmp3lame") return media::AudioCodec::MP3;
     throw std::runtime_error("unsupported audio codec: " + value);
 }
 
