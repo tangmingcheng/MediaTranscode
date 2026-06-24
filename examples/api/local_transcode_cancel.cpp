@@ -1,5 +1,6 @@
 #include "media_transcode/LocalVideoTranscode.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <iostream>
