@@ -115,6 +115,8 @@ add_library(${TARGET_CORE} STATIC
     src/internal/FFmpegVideoTranscodePipeline.cpp
     src/internal/FFmpegVideoTranscodePipeline.h
     include/media_transcode/MediaTranscode.h
+    include/media_transcode/MediaTypes.h
+    include/media_transcode/LocalVideoTranscode.h
     include/media_transcode/Result.h
 )
 
