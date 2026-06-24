@@ -1,7 +1,7 @@
 #include "media_transcode/MediaTranscode.h"
 
+#include "internal/TranscodeTypes.h"
 #include "local/FFmpegLocalFileTranscodeEngine.h"
-#include "media_transcode/MediaTranscodeTypes.h"
 
 #include <algorithm>
 #include <memory>
@@ -11,85 +11,6 @@
 
 namespace media {
 namespace {
-
-VideoCodec toInternalVideoCodec(OutputVideoCodec codec)
-{
-    switch (codec) {
-    case OutputVideoCodec::H264:
-        return VideoCodec::H264;
-    case OutputVideoCodec::H265:
-        return VideoCodec::H265;
-    case OutputVideoCodec::MPEG4:
-        return VideoCodec::MPEG4;
-    case OutputVideoCodec::VP8:
-        return VideoCodec::VP8;
-    case OutputVideoCodec::VP9:
-        return VideoCodec::VP9;
-    case OutputVideoCodec::AV1:
-        return VideoCodec::AV1;
-    default:
-        return VideoCodec::H264;
-    }
-}
-
-VideoRateControlMode toInternalRcMode(VideoRcMode mode)
-{
-    switch (mode) {
-    case VideoRcMode::CBR:
-        return VideoRateControlMode::CBR;
-    case VideoRcMode::VBR:
-        return VideoRateControlMode::VBR;
-    case VideoRcMode::CRF:
-        return VideoRateControlMode::CRF;
-    case VideoRcMode::CappedVBR:
-        return VideoRateControlMode::CappedVBR;
-    case VideoRcMode::Auto:
-    default:
-        return VideoRateControlMode::Auto;
-    }
-}
-
-VideoEncodeSpeedPreset toInternalSpeed(VideoSpeedPreset speed)
-{
-    switch (speed) {
-    case VideoSpeedPreset::Ultrafast:
-        return VideoEncodeSpeedPreset::Ultrafast;
-    case VideoSpeedPreset::Superfast:
-        return VideoEncodeSpeedPreset::Superfast;
-    case VideoSpeedPreset::Veryfast:
-        return VideoEncodeSpeedPreset::Veryfast;
-    case VideoSpeedPreset::Faster:
-        return VideoEncodeSpeedPreset::Faster;
-    case VideoSpeedPreset::Fast:
-        return VideoEncodeSpeedPreset::Fast;
-    case VideoSpeedPreset::Slow:
-        return VideoEncodeSpeedPreset::Slow;
-    case VideoSpeedPreset::Slower:
-        return VideoEncodeSpeedPreset::Slower;
-    case VideoSpeedPreset::Veryslow:
-        return VideoEncodeSpeedPreset::Veryslow;
-    case VideoSpeedPreset::Placebo:
-        return VideoEncodeSpeedPreset::Placebo;
-    case VideoSpeedPreset::Medium:
-    default:
-        return VideoEncodeSpeedPreset::Medium;
-    }
-}
-
-AudioCodec toInternalAudioCodec(OutputAudioCodec codec)
-{
-    switch (codec) {
-    case OutputAudioCodec::AAC:
-        return AudioCodec::AAC;
-    case OutputAudioCodec::OPUS:
-        return AudioCodec::OPUS;
-    case OutputAudioCodec::MP3:
-        return AudioCodec::MP3;
-    case OutputAudioCodec::Auto:
-    default:
-        return AudioCodec::Auto;
-    }
-}
 
 LocalVideoTranscodeProgress toPublicProgress(const ProgressInfo& info)
 {
@@ -110,15 +31,15 @@ TranscodeConfig toInternalConfig(const LocalVideoTranscodeConfig& config)
     internal.height = config.height;
     internal.fps = config.fps;
 
-    internal.videoCodec = toInternalVideoCodec(config.videoCodec);
-    internal.videoBitrate.rateControl = toInternalRcMode(config.rcMode);
+    internal.videoCodec = config.videoCodec;
+    internal.videoBitrate.rateControl = config.rcMode;
     internal.videoBitrate.targetKbps = config.videoBitrateKbps;
     internal.videoBitrate.minKbps = config.minVideoBitrateKbps;
     internal.videoBitrate.maxKbps = config.maxVideoBitrateKbps;
     internal.videoBitrate.bufferSizeKbits = config.videoBufferSizeKbits;
     internal.videoBitrate.quality = config.quality;
 
-    internal.videoEncode.speedPreset = toInternalSpeed(config.speed);
+    internal.videoEncode.speedPreset = config.speed;
     internal.videoEncode.gopSize = config.gopSize;
     internal.videoEncode.maxBFrames = config.maxBFrames;
     internal.videoEncode.tune = config.tune;
@@ -129,7 +50,7 @@ TranscodeConfig toInternalConfig(const LocalVideoTranscodeConfig& config)
     internal.hardware.allowZeroCopyFallback = true;
 
     internal.audioEnabled = !config.noAudio;
-    internal.audioCodec = toInternalAudioCodec(config.audioCodec);
+    internal.audioCodec = config.audioCodec;
     internal.audioBitrateKbps = config.audioBitrateKbps;
 
     return internal;
@@ -143,6 +64,10 @@ ErrorInfo validateConfig(const LocalVideoTranscodeConfig& config)
 
     if (config.outputPath.empty()) {
         return ErrorInfo::invalidArgument("outputPath is empty");
+    }
+
+    if (config.videoCodec == VideoCodec::Copy) {
+        return ErrorInfo::invalidArgument("VideoCodec::Copy is not supported by local video transcode");
     }
 
     if ((config.width < 0) || (config.height < 0) || (config.fps < 0)) {
