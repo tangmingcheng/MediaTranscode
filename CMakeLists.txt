@@ -6,6 +6,8 @@ set(TARGET_CLI "media_transcode_cli")
 set(TARGET_CORE "media_transcode_core")
 set(THIRD_PARTY_DIR "${CMAKE_SOURCE_DIR}/3rds")
 
+option(MEDIA_TRANSCODE_BUILD_CLI "Build the media_transcode_cli example program" ON)
+
 # MSVC Debug Info
 if(POLICY CMP0141)
     cmake_policy(SET CMP0141 NEW)
@@ -109,6 +111,8 @@ add_library(${TARGET_CORE} STATIC
     src/internal/FFmpegVideoTimestampStage.h
     src/internal/FFmpegVideoTranscodePipeline.cpp
     src/internal/FFmpegVideoTranscodePipeline.h
+    include/media_transcode/MediaTranscode.h
+    include/media_transcode/TranscodeSession.h
     include/media_transcode/FFmpegTranscoder.h
     include/media_transcode/ITranscoder.h
     include/media_transcode/MediaTranscodeTypes.h
@@ -116,31 +120,43 @@ add_library(${TARGET_CORE} STATIC
     include/media_transcode/FrameQueue.h
 )
 
-target_include_directories(${TARGET_CORE} 
-    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
-    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
+add_library(MediaTranscode::core ALIAS ${TARGET_CORE})
+
+target_include_directories(${TARGET_CORE}
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 # --------------------------
 # CLI 示例程序
 # --------------------------
-add_executable(${TARGET_CLI} 
-    examples/transcode_cli/main.cpp
-)
+if(MEDIA_TRANSCODE_BUILD_CLI)
+    add_executable(${TARGET_CLI}
+        examples/transcode_cli/main.cpp
+    )
 
-target_link_libraries(${TARGET_CLI}
-    PRIVATE ${TARGET_CORE}
-)
+    target_link_libraries(${TARGET_CLI}
+        PRIVATE ${TARGET_CORE}
+    )
+endif()
 
 # --------------------------
 # 编译选项
 # --------------------------
 target_compile_features(${TARGET_CORE} PUBLIC cxx_std_20)
-target_compile_features(${TARGET_CLI} PRIVATE cxx_std_20)
+
+if(TARGET ${TARGET_CLI})
+    target_compile_features(${TARGET_CLI} PRIVATE cxx_std_20)
+endif()
 
 if(MSVC)
     target_compile_options(${TARGET_CORE} PRIVATE /utf-8)
-    target_compile_options(${TARGET_CLI} PRIVATE /utf-8)
+    if(TARGET ${TARGET_CLI})
+        target_compile_options(${TARGET_CLI} PRIVATE /utf-8)
+    endif()
 endif()
 
 # --------------------------
@@ -152,7 +168,9 @@ target_include_directories(thirdparty_spdlog INTERFACE
 )
 
 target_link_libraries(${TARGET_CORE} PRIVATE thirdparty_spdlog)
-target_link_libraries(${TARGET_CLI} PRIVATE thirdparty_spdlog)
+if(TARGET ${TARGET_CLI})
+    target_link_libraries(${TARGET_CLI} PRIVATE thirdparty_spdlog)
+endif()
 
 # --------------------------
 # FFmpeg
