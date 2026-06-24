@@ -15,72 +15,72 @@ namespace {
         return encoder && encoder->name && std::string(encoder->name).find(token) != std::string::npos;
     }
 
-    std::string x26xPresetName(VideoEncodeSpeedPreset preset)
+    std::string x26xPresetName(VideoSpeedPreset preset)
     {
         switch (preset) {
-        case VideoEncodeSpeedPreset::Ultrafast:
+        case VideoSpeedPreset::Ultrafast:
             return "ultrafast";
-        case VideoEncodeSpeedPreset::Superfast:
+        case VideoSpeedPreset::Superfast:
             return "superfast";
-        case VideoEncodeSpeedPreset::Veryfast:
+        case VideoSpeedPreset::Veryfast:
             return "veryfast";
-        case VideoEncodeSpeedPreset::Faster:
+        case VideoSpeedPreset::Faster:
             return "faster";
-        case VideoEncodeSpeedPreset::Fast:
+        case VideoSpeedPreset::Fast:
             return "fast";
-        case VideoEncodeSpeedPreset::Slow:
+        case VideoSpeedPreset::Slow:
             return "slow";
-        case VideoEncodeSpeedPreset::Slower:
+        case VideoSpeedPreset::Slower:
             return "slower";
-        case VideoEncodeSpeedPreset::Veryslow:
+        case VideoSpeedPreset::Veryslow:
             return "veryslow";
-        case VideoEncodeSpeedPreset::Placebo:
+        case VideoSpeedPreset::Placebo:
             return "placebo";
-        case VideoEncodeSpeedPreset::Medium:
+        case VideoSpeedPreset::Medium:
         default:
             return "medium";
         }
     }
 
-    std::string nvencPresetName(VideoEncodeSpeedPreset preset)
+    std::string nvencPresetName(VideoSpeedPreset preset)
     {
         switch (preset) {
-        case VideoEncodeSpeedPreset::Ultrafast:
-        case VideoEncodeSpeedPreset::Superfast:
+        case VideoSpeedPreset::Ultrafast:
+        case VideoSpeedPreset::Superfast:
             return "p1";
-        case VideoEncodeSpeedPreset::Veryfast:
+        case VideoSpeedPreset::Veryfast:
             return "p2";
-        case VideoEncodeSpeedPreset::Faster:
-        case VideoEncodeSpeedPreset::Fast:
+        case VideoSpeedPreset::Faster:
+        case VideoSpeedPreset::Fast:
             return "p3";
-        case VideoEncodeSpeedPreset::Medium:
+        case VideoSpeedPreset::Medium:
             return "p4";
-        case VideoEncodeSpeedPreset::Slow:
+        case VideoSpeedPreset::Slow:
             return "p5";
-        case VideoEncodeSpeedPreset::Slower:
+        case VideoSpeedPreset::Slower:
             return "p6";
-        case VideoEncodeSpeedPreset::Veryslow:
-        case VideoEncodeSpeedPreset::Placebo:
+        case VideoSpeedPreset::Veryslow:
+        case VideoSpeedPreset::Placebo:
         default:
             return "p7";
         }
     }
 
-    std::string rkmppPresetName(VideoEncodeSpeedPreset preset)
+    std::string rkmppPresetName(VideoSpeedPreset preset)
     {
         switch (preset) {
-        case VideoEncodeSpeedPreset::Ultrafast:
-        case VideoEncodeSpeedPreset::Superfast:
-        case VideoEncodeSpeedPreset::Veryfast:
-        case VideoEncodeSpeedPreset::Faster:
-        case VideoEncodeSpeedPreset::Fast:
+        case VideoSpeedPreset::Ultrafast:
+        case VideoSpeedPreset::Superfast:
+        case VideoSpeedPreset::Veryfast:
+        case VideoSpeedPreset::Faster:
+        case VideoSpeedPreset::Fast:
             return "fast";
-        case VideoEncodeSpeedPreset::Slow:
-        case VideoEncodeSpeedPreset::Slower:
-        case VideoEncodeSpeedPreset::Veryslow:
-        case VideoEncodeSpeedPreset::Placebo:
+        case VideoSpeedPreset::Slow:
+        case VideoSpeedPreset::Slower:
+        case VideoSpeedPreset::Veryslow:
+        case VideoSpeedPreset::Placebo:
             return "quality";
-        case VideoEncodeSpeedPreset::Medium:
+        case VideoSpeedPreset::Medium:
         default:
             return "medium";
         }
@@ -329,7 +329,7 @@ namespace {
     }
 
     std::string FFmpegEncoderCapabilityMatrix::presetValue(const FFmpegEncoderCapabilities& capabilities,
-                                                           VideoEncodeSpeedPreset preset)
+                                                           VideoSpeedPreset preset)
     {
         switch (capabilities.family) {
         case FFmpegEncoderFamily::X264:
@@ -347,18 +347,18 @@ namespace {
 
         case FFmpegEncoderFamily::AMF:
             switch (preset) {
-            case VideoEncodeSpeedPreset::Ultrafast:
-            case VideoEncodeSpeedPreset::Superfast:
-            case VideoEncodeSpeedPreset::Veryfast:
-            case VideoEncodeSpeedPreset::Faster:
-            case VideoEncodeSpeedPreset::Fast:
+            case VideoSpeedPreset::Ultrafast:
+            case VideoSpeedPreset::Superfast:
+            case VideoSpeedPreset::Veryfast:
+            case VideoSpeedPreset::Faster:
+            case VideoSpeedPreset::Fast:
                 return "speed";
-            case VideoEncodeSpeedPreset::Slow:
-            case VideoEncodeSpeedPreset::Slower:
-            case VideoEncodeSpeedPreset::Veryslow:
-            case VideoEncodeSpeedPreset::Placebo:
+            case VideoSpeedPreset::Slow:
+            case VideoSpeedPreset::Slower:
+            case VideoSpeedPreset::Veryslow:
+            case VideoSpeedPreset::Placebo:
                 return "quality";
-            case VideoEncodeSpeedPreset::Medium:
+            case VideoSpeedPreset::Medium:
             default:
                 return "balanced";
             }
