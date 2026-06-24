@@ -4,9 +4,10 @@
  * @file MediaTranscode.h
  * @brief Public capability-oriented API for using MediaTranscode as a C++ library.
  *
- * This header intentionally exposes only stable library capabilities. FFmpeg
- * classes, queues, pipeline stages, hardware planners and legacy transcoder
- * interfaces are implementation details.
+ * This header intentionally exposes stable library capabilities and shared enum
+ * values used by both public API code and internal FFmpeg-backed execution code.
+ * Internal execution structs, FFmpeg classes, queues, pipeline stages and hardware
+ * planners remain implementation details.
  */
 
 #include "media_transcode/Result.h"
@@ -19,12 +20,15 @@
 namespace media {
 
 /**
- * @brief Output video codec requested by the caller.
+ * @brief Video codec identifier shared by public API and internal implementation.
  *
- * The library selects the concrete FFmpeg encoder internally according to
- * platform capabilities and hardware settings.
+ * The library maps this logical codec value to a concrete FFmpeg encoder at
+ * runtime according to platform capabilities and hardware settings. Copy is a
+ * generic pass-through value for future capabilities; local video transcoding
+ * currently rejects it because this capability always produces encoded output.
  */
-enum class OutputVideoCodec {
+enum class VideoCodec {
+    Copy,
     H264,
     H265,
     MPEG4,
@@ -34,13 +38,13 @@ enum class OutputVideoCodec {
 };
 
 /**
- * @brief Video rate-control mode.
+ * @brief Video rate-control mode shared by public API and internal implementation.
  *
  * Auto lets the library choose a suitable mode from the supplied bitrate and
  * quality values. CBR/VBR/CRF/CappedVBR are mapped to encoder-specific options
  * when the selected encoder supports them.
  */
-enum class VideoRcMode {
+enum class VideoRateControlMode {
     Auto,
     CBR,
     VBR,
@@ -69,12 +73,12 @@ enum class VideoSpeedPreset {
 };
 
 /**
- * @brief Output audio codec.
+ * @brief Audio codec identifier shared by public API and internal implementation.
  *
  * Auto keeps/copies the input audio when possible and only re-encodes when the
  * output container or explicit audio bitrate requires it.
  */
-enum class OutputAudioCodec {
+enum class AudioCodec {
     Auto,
     AAC,
     OPUS,
@@ -120,8 +124,8 @@ struct LocalVideoTranscodeConfig {
     /** Output frames per second. 0 keeps the input frame rate. */
     int fps = 0;
 
-    /** Requested output video codec. */
-    OutputVideoCodec videoCodec = OutputVideoCodec::H264;
+    /** Requested output video codec. VideoCodec::Copy is not supported by this capability. */
+    VideoCodec videoCodec = VideoCodec::H264;
 
     /** Target video bitrate in kbps. 0 lets the library decide. */
     int videoBitrateKbps = 0;
@@ -136,7 +140,7 @@ struct LocalVideoTranscodeConfig {
     int videoBufferSizeKbits = 0;
 
     /** Video rate-control mode. */
-    VideoRcMode rcMode = VideoRcMode::Auto;
+    VideoRateControlMode rcMode = VideoRateControlMode::Auto;
 
     /** Generic quality value. 0 means automatic; mapping depends on encoder. */
     int quality = 0;
@@ -163,7 +167,7 @@ struct LocalVideoTranscodeConfig {
     bool disableHardware = false;
 
     /** Requested output audio codec. */
-    OutputAudioCodec audioCodec = OutputAudioCodec::Auto;
+    AudioCodec audioCodec = AudioCodec::Auto;
 
     /** Target audio bitrate in kbps. 0 keeps/copies input bitrate when possible. */
     int audioBitrateKbps = 0;
