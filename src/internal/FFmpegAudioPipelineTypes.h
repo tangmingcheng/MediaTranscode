@@ -1,6 +1,6 @@
 #pragma once
 
-#include "media_transcode/MediaTranscodeTypes.h"
+#include "internal/TranscodeTypes.h"
 #include "media_transcode/Result.h"
 
 #include <cstdint>
@@ -34,8 +34,9 @@ using AudioMode = FFmpegAudioPipelineMode;
 
 struct FFmpegAudioPipelineConfig {
     /*
-     * inputAudioStream, outputFmtCtx and timeline are borrowed from FFmpegTranscoder.
-     * Concrete pipeline strategies own their decoder / encoder / resampler / fifo resources.
+     * inputAudioStream, outputFmtCtx and timeline are borrowed from the local
+     * file transcode engine. Concrete pipeline strategies own their decoder /
+     * encoder / resampler / fifo resources.
      */
     FFmpegAudioPipelineMode mode = FFmpegAudioPipelineMode::None;
     AudioCodec codec = AudioCodec::AAC;
