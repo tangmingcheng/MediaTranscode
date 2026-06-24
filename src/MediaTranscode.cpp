@@ -1,4 +1,4 @@
-#include "media_transcode/MediaTranscode.h"
+#include "media_transcode/LocalVideoTranscode.h"
 
 #include "internal/TranscodeTypes.h"
 #include "local/FFmpegLocalFileTranscodeEngine.h"
