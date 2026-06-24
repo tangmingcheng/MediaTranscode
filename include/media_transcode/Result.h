@@ -6,6 +6,13 @@
 
 namespace media {
 
+/**
+ * @brief Stable error category returned by the public MediaTranscode API.
+ *
+ * The value is intentionally independent from FFmpeg's negative error codes.
+ * When the failure comes from FFmpeg, nativeCode may still contain the original
+ * FFmpeg return value so callers can log or map it if needed.
+ */
 enum class ErrorCode {
     None = 0,
     InvalidArgument,
@@ -18,6 +25,31 @@ enum class ErrorCode {
     InternalError
 };
 
+/**
+ * @brief Convert an ErrorCode to a stable, non-localized string.
+ */
+inline const char* errorCodeName(ErrorCode code) noexcept
+{
+    switch (code) {
+    case ErrorCode::None: return "None";
+    case ErrorCode::InvalidArgument: return "InvalidArgument";
+    case ErrorCode::NotInitialized: return "NotInitialized";
+    case ErrorCode::AllocationFailed: return "AllocationFailed";
+    case ErrorCode::Unsupported: return "Unsupported";
+    case ErrorCode::FFmpegFailure: return "FFmpegFailure";
+    case ErrorCode::IoFailure: return "IoFailure";
+    case ErrorCode::HardwareUnavailable: return "HardwareUnavailable";
+    case ErrorCode::InternalError: return "InternalError";
+    default: return "Unknown";
+    }
+}
+
+/**
+ * @brief Error payload used by Status and Result<T>.
+ *
+ * message is intended for logs and diagnostics. It is not localized and should
+ * not be parsed by business code. Business code should branch on code.
+ */
 struct ErrorInfo {
     ErrorCode code = ErrorCode::None;
     int nativeCode = 0;
@@ -31,6 +63,19 @@ struct ErrorInfo {
     explicit operator bool() const noexcept
     {
         return !ok();
+    }
+
+    std::string describe() const
+    {
+        if (ok()) {
+            return "ok";
+        }
+
+        std::string text = std::string(errorCodeName(code)) + ": " + message;
+        if (nativeCode != 0) {
+            text += " (native=" + std::to_string(nativeCode) + ")";
+        }
+        return text;
     }
 
     static ErrorInfo success()
@@ -65,12 +110,33 @@ struct ErrorInfo {
         return make(ErrorCode::Unsupported, std::move(message));
     }
 
+    static ErrorInfo ffmpegFailure(std::string message, int nativeCode = 0)
+    {
+        return make(ErrorCode::FFmpegFailure, std::move(message), nativeCode);
+    }
+
+    static ErrorInfo ioFailure(std::string message, int nativeCode = 0)
+    {
+        return make(ErrorCode::IoFailure, std::move(message), nativeCode);
+    }
+
+    static ErrorInfo hardwareUnavailable(std::string message)
+    {
+        return make(ErrorCode::HardwareUnavailable, std::move(message));
+    }
+
     static ErrorInfo internalError(std::string message)
     {
         return make(ErrorCode::InternalError, std::move(message));
     }
 };
 
+/**
+ * @brief Lightweight expected-like return type.
+ *
+ * Result<T> owns either a T value or an ErrorInfo. It does not throw exceptions.
+ * Always check ok() or use the explicit bool operator before calling value().
+ */
 template <typename T>
 class Result {
 public:
@@ -117,6 +183,11 @@ public:
         return m_error;
     }
 
+    T valueOr(T fallback) const
+    {
+        return m_value ? *m_value : std::move(fallback);
+    }
+
 private:
     explicit Result(T value)
         : m_value(std::move(value))
@@ -134,6 +205,9 @@ private:
     ErrorInfo m_error;
 };
 
+/**
+ * @brief Result specialization for operations that only need success/failure.
+ */
 template <>
 class Result<void> {
 public:
