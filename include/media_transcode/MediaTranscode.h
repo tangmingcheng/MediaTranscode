@@ -2,18 +2,18 @@
 
 /**
  * @file MediaTranscode.h
- * @brief Public API for using MediaTranscode as a C++ library.
+ * @brief Public capability-oriented API for using MediaTranscode as a C++ library.
  *
- * This header is intentionally small: it exposes only stable public types and
- * the current local-file transcode entry point. FFmpeg classes, pipeline stages,
- * queues and hardware planners are implementation details and should not be
- * included by third-party applications.
+ * This header intentionally exposes only stable library capabilities. FFmpeg
+ * classes, queues, pipeline stages, hardware planners and legacy transcoder
+ * interfaces are implementation details.
  */
 
 #include "media_transcode/Result.h"
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 
 namespace media {
@@ -82,30 +82,34 @@ enum class OutputAudioCodec {
 };
 
 /**
- * @brief Progress emitted during local file transcoding.
+ * @brief Progress emitted during local video transcoding.
  */
-struct TranscodeProgress {
+struct LocalVideoTranscodeProgress {
     int64_t frame = 0;
     int64_t outTimeMs = 0;
     double speed = 0.0;
     std::string stage;
 };
 
-using TranscodeProgressCallback = std::function<void(const TranscodeProgress&)>;
+using LocalVideoTranscodeProgressCallback =
+    std::function<void(const LocalVideoTranscodeProgress&)>;
 
 /**
- * @brief Unified local-file transcode parameters.
+ * @brief Unified configuration for local video file transcoding.
  *
- * All fields are plain data so third-party callers can construct, serialize or
- * modify the configuration without learning a builder API. A value of 0 means
- * "use input/default" for size, fps, bitrate, quality and GOP-related fields.
+ * All transcode parameters are configured here. The public API intentionally
+ * avoids exposing separate setter methods so callers can construct, serialize,
+ * validate or persist one plain configuration object.
+ *
+ * A value of 0 means "use input/default" for size, fps, bitrate, quality and
+ * GOP-related fields.
  */
-struct LocalTranscodeConfig {
-    /** Input media path or URL accepted by FFmpeg. */
-    std::string inputUrl;
+struct LocalVideoTranscodeConfig {
+    /** Local input video file path. Network inputs are not part of this API. */
+    std::string inputPath;
 
-    /** Output media path or URL accepted by FFmpeg. */
-    std::string outputUrl;
+    /** Local output video file path. */
+    std::string outputPath;
 
     /** Output width. 0 keeps the input width. */
     int width = 0;
@@ -169,23 +173,70 @@ struct LocalTranscodeConfig {
 };
 
 /**
- * @brief Final result summary for a local transcode job.
+ * @brief Final result summary for a local video transcode job.
  */
-struct LocalTranscodeReport {
-    LocalTranscodeConfig config;
-    TranscodeProgress lastProgress;
+struct LocalVideoTranscodeReport {
+    LocalVideoTranscodeConfig config;
+    LocalVideoTranscodeProgress lastProgress;
+    bool completed = false;
+    bool stopped = false;
+};
+
+class LocalVideoTranscodeTask final {
+public:
+    ~LocalVideoTranscodeTask();
+
+    LocalVideoTranscodeTask(const LocalVideoTranscodeTask&) = delete;
+    LocalVideoTranscodeTask& operator=(const LocalVideoTranscodeTask&) = delete;
+
+    LocalVideoTranscodeTask(LocalVideoTranscodeTask&&) noexcept;
+    LocalVideoTranscodeTask& operator=(LocalVideoTranscodeTask&&) noexcept;
+
+    /**
+     * @brief Request the local transcode job to stop and wait for the worker thread to exit.
+     */
+    void stop();
+
+    /**
+     * @brief Wait until the job finishes or fails and return the final report.
+     */
+    [[nodiscard]] Result<LocalVideoTranscodeReport> wait();
+
+    [[nodiscard]] bool isRunning() const;
+    [[nodiscard]] ErrorInfo lastError() const;
+    [[nodiscard]] LocalVideoTranscodeProgress lastProgress() const;
+
+private:
+    struct Impl;
+
+    explicit LocalVideoTranscodeTask(std::shared_ptr<Impl> impl);
+
+private:
+    std::shared_ptr<Impl> m_impl;
+
+    friend Result<std::shared_ptr<LocalVideoTranscodeTask>> startLocalVideoTranscodeAsync(
+        const LocalVideoTranscodeConfig& config,
+        LocalVideoTranscodeProgressCallback progressCallback
+    );
 };
 
 /**
- * @brief Transcode one local file or FFmpeg-readable URL synchronously.
+ * @brief Start local video transcoding asynchronously.
  *
- * This is currently the only supported public operation. The function returns
- * after the job finishes or fails. For progress updates, pass a callback; pass
- * an empty callback when progress is not needed.
+ * The returned task owns the running job. Call wait() to join and obtain the
+ * final report, or stop() to request early termination.
  */
-[[nodiscard]] Result<LocalTranscodeReport> transcodeLocalFile(
-    const LocalTranscodeConfig& config,
-    TranscodeProgressCallback progressCallback = {}
+[[nodiscard]] Result<std::shared_ptr<LocalVideoTranscodeTask>> startLocalVideoTranscodeAsync(
+    const LocalVideoTranscodeConfig& config,
+    LocalVideoTranscodeProgressCallback progressCallback = {}
+);
+
+/**
+ * @brief Start local video transcoding synchronously and return when the job ends.
+ */
+[[nodiscard]] Result<LocalVideoTranscodeReport> startLocalVideoTranscodeSync(
+    const LocalVideoTranscodeConfig& config,
+    LocalVideoTranscodeProgressCallback progressCallback = {}
 );
 
 } // namespace media
