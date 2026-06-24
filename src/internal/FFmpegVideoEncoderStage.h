@@ -1,6 +1,6 @@
 #pragma once
 
-#include "media_transcode/MediaTranscodeTypes.h"
+#include "internal/TranscodeTypes.h"
 #include "media_transcode/Result.h"
 #include "internal/FFmpegHardwareBackend.h"
 #include "internal/FFmpegHardwareContext.h"
