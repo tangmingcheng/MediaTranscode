@@ -3,7 +3,7 @@
 #include "internal/FFmpegCapability.h"
 #include "internal/FFmpegHardwareBackend.h"
 #include "internal/FFmpegVideoAdapter.h"
-#include "media_transcode/MediaTranscodeTypes.h"
+#include "internal/TranscodeTypes.h"
 
 #include <string>
 #include <vector>
