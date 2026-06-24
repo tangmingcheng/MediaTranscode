@@ -4,7 +4,7 @@ project(MediaTranscode LANGUAGES CXX)
 
 set(TARGET_CLI "media_transcode_cli")
 set(TARGET_CORE "media_transcode_core")
-set(THIRD_PARTY_DIR "${CMAKE_SOURCE_DIR}/3rds")
+set(THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/3rds")
 
 option(MEDIA_TRANSCODE_BUILD_CLI "Build the media_transcode_cli example program" ON)
 
