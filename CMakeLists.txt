@@ -23,11 +23,8 @@ endif()
 # --------------------------
 add_library(${TARGET_CORE} STATIC
     src/MediaTranscode.cpp
-    src/FFmpegTranscoder.cpp
     src/local/FFmpegLocalFileTranscodeEngine.cpp
     src/local/FFmpegLocalFileTranscodeEngine.h
-    src/media_transcode/FFmpegTranscoder.h
-    src/media_transcode/ITranscoder.h
     src/media_transcode/MediaTranscodeTypes.h
     src/internal/FFmpegAudioAdapter.cpp
     src/internal/FFmpegAudioAdapter.h
