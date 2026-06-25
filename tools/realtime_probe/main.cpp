@@ -44,18 +44,27 @@ void printUsage(const char* exe)
     std::cout
         << "Usage:\n"
         << "  " << exe << " --input <url-or-path> [options]\n\n"
-        << "Options:\n"
-        << "  -i, --input <url-or-path>      RTSP/RTP/UDP URL or local media path\n"
-        << "      --duration <seconds>       Read duration before requestStop, default 10\n"
-        << "      --loop <count>             Repeat start/stop cycles, default 1\n"
-        << "      --open-timeout-ms <value>  Open/find-stream timeout, default 5000\n"
-        << "      --read-timeout-ms <value>  av_read_frame timeout, default 5000\n"
-        << "      --input-format <name>      Optional FFmpeg input format hint\n"
-        << "      --accept-eof               Treat EOF as success for local-file probing\n"
-        << "      --no-low-latency           Disable low-latency input options\n"
-        << "      --verbose                  Enable debug logs\n"
-        << "  -h, --help                     Show this help\n\n"
-        << "This is an internal P1 tool. It validates realtime input -> decode -> encode counters.\n";
+        << "Input options:\n"
+        << "  -i, --input <url-or-path>       RTSP/RTP/UDP URL or local media path\n"
+        << "      --duration <seconds>        Read duration before requestStop, default 10\n"
+        << "      --loop <count>              Repeat start/stop cycles, default 1\n"
+        << "      --open-timeout-ms <value>   Open/find-stream timeout, default 5000\n"
+        << "      --read-timeout-ms <value>   av_read_frame timeout, default 5000\n"
+        << "      --input-format <name>       Optional FFmpeg input format hint\n"
+        << "      --accept-eof                Treat EOF as success for local-file probing\n"
+        << "      --no-low-latency            Disable low-latency input options\n\n"
+        << "RTP output options:\n"
+        << "      --rtp-host <host>           Destination host, default 127.0.0.1\n"
+        << "      --rtp-port <port>           Destination RTP port, default 5004\n"
+        << "      --rtcp-port <port>          Destination RTCP port, default 0\n"
+        << "      --local-rtp-port <port>     Local RTP port, default 0\n"
+        << "      --local-rtcp-port <port>    Local RTCP port, default 0\n"
+        << "      --packet-size <bytes>       RTP pkt_size, default 1200\n"
+        << "      --sdp <path>                Write SDP file for ffplay/VLC\n\n"
+        << "Other options:\n"
+        << "      --verbose                   Enable debug logs\n"
+        << "  -h, --help                      Show this help\n\n"
+        << "This is an internal P1 tool. It validates realtime input -> decode -> encode -> RTP muxer counters.\n";
 }
 
 Options parseOptions(int argc, char* argv[])
@@ -110,6 +119,34 @@ Options parseOptions(int argc, char* argv[])
             options.config.lowLatency = false;
             continue;
         }
+        if (arg == "--rtp-host") {
+            options.config.rtpOutput.host = requireValue(argc, argv, i, arg);
+            continue;
+        }
+        if (arg == "--rtp-port") {
+            options.config.rtpOutput.rtpPort = parseInt(requireValue(argc, argv, i, arg), arg, 1);
+            continue;
+        }
+        if (arg == "--rtcp-port") {
+            options.config.rtpOutput.rtcpPort = parseInt(requireValue(argc, argv, i, arg), arg, 0);
+            continue;
+        }
+        if (arg == "--local-rtp-port") {
+            options.config.rtpOutput.localRtpPort = parseInt(requireValue(argc, argv, i, arg), arg, 0);
+            continue;
+        }
+        if (arg == "--local-rtcp-port") {
+            options.config.rtpOutput.localRtcpPort = parseInt(requireValue(argc, argv, i, arg), arg, 0);
+            continue;
+        }
+        if (arg == "--packet-size") {
+            options.config.rtpOutput.packetSize = parseInt(requireValue(argc, argv, i, arg), arg, 1);
+            continue;
+        }
+        if (arg == "--sdp") {
+            options.config.rtpOutput.sdpOutputPath = requireValue(argc, argv, i, arg);
+            continue;
+        }
         if (arg == "--verbose") {
             options.verbose = true;
             continue;
@@ -150,12 +187,16 @@ bool validateCounters(const media::RealtimeCoreStats& stats)
         spdlog::error("probe failed: no video packets were encoded");
         return false;
     }
+    if (stats.writtenRtpPacketCount <= 0) {
+        spdlog::error("probe failed: no encoded video packets were written to RTP muxer");
+        return false;
+    }
     return true;
 }
 
 bool runProbeOnce(const Options& options, int index)
 {
-    spdlog::info("P1 realtime probe iteration {}/{}", index, options.loopCount);
+    spdlog::info("P1 realtime RTP probe iteration {}/{}", index, options.loopCount);
 
     media::FFmpegRealtimeStreamTranscodeEngine engine;
     engine.setProgressCallback([](const media::ProgressInfo& info) {
@@ -219,10 +260,15 @@ int main(int argc, char* argv[])
         }
 
         spdlog::set_level(options.verbose ? spdlog::level::debug : spdlog::level::info);
-        spdlog::info("input={}, duration={}s, loop={}, lowLatency={}",
+        spdlog::info("input={}, duration={}s, loop={}, rtp={}:{}, sdp={}, lowLatency={}",
                      options.config.inputUrl,
                      options.durationSeconds,
                      options.loopCount,
+                     options.config.rtpOutput.host,
+                     options.config.rtpOutput.rtpPort,
+                     options.config.rtpOutput.sdpOutputPath.empty()
+                        ? "disabled"
+                        : options.config.rtpOutput.sdpOutputPath,
                      options.config.lowLatency ? "true" : "false");
 
         bool ok = true;
@@ -231,11 +277,11 @@ int main(int argc, char* argv[])
         }
 
         if (!ok) {
-            spdlog::error("P1 realtime probe failed");
+            spdlog::error("P1 realtime RTP probe failed");
             return 1;
         }
 
-        spdlog::info("P1 realtime probe succeeded");
+        spdlog::info("P1 realtime RTP probe succeeded");
         return 0;
     }
     catch (const std::exception& e) {
