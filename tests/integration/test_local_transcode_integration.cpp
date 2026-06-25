@@ -1,6 +1,7 @@
 #include "media_transcode/LocalVideoTranscode.h"
 
 #include "common/MediaProbe.h"
+#include "common/TestAssert.h"
 
 #include <chrono>
 #include <filesystem>
@@ -12,25 +13,9 @@ namespace fs = std::filesystem;
 
 namespace {
 
+using media_transcode::test::TestContext;
+
 constexpr int kSkipTest = 77;
-
-struct TestContext {
-    int failures = 0;
-
-    void expect(bool condition, const char* expression, const char* file, int line)
-    {
-        if (condition) {
-            return;
-        }
-
-        ++failures;
-        std::cerr << file << ':' << line << ": expectation failed: " << expression << '\n';
-    }
-};
-
-#define EXPECT_TRUE(ctx, expr) (ctx).expect(static_cast<bool>(expr), #expr, __FILE__, __LINE__)
-#define EXPECT_FALSE(ctx, expr) (ctx).expect(!static_cast<bool>(expr), "!(" #expr ")", __FILE__, __LINE__)
-#define EXPECT_EQ(ctx, lhs, rhs) (ctx).expect(((lhs) == (rhs)), #lhs " == " #rhs, __FILE__, __LINE__)
 
 fs::path uniqueOutputPath(const std::string& name)
 {
@@ -87,6 +72,8 @@ void expectOutputMatchesConfig(TestContext& ctx,
     EXPECT_FALSE(ctx, probe.hasAudio);
     EXPECT_EQ(ctx, probe.audioStreamCount, 0);
     EXPECT_TRUE(ctx, probe.durationSeconds > 0.0);
+    EXPECT_TRUE(ctx, probe.videoAverageFps > 0.0);
+    EXPECT_TRUE(ctx, probe.videoFrameCount > 0);
 }
 
 void testSyncTranscode(TestContext& ctx, const fs::path& input)
