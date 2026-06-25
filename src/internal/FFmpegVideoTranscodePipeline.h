@@ -59,6 +59,7 @@ public:
     bool isInitialized() const;
     AVStream* outputStream() const;
 
+    int64_t decodedFrameCount() const;
     int64_t packetCount() const;
     int64_t lastWrittenOutTimeMs() const;
     int64_t estimatedOutTimeMs() const;
@@ -110,6 +111,7 @@ private:
     bool m_hasHardwarePlan = false;
 
     FFmpegVideoPacketWriterStage m_packetWriter;
+    int64_t m_decodedFrameCount = 0;
 
     FramePtr m_decodedFrame;
     FramePtr m_frameRateFrame;
