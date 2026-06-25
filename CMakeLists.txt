@@ -287,9 +287,13 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
         add_test(NAME media_transcode_missing_input_tests COMMAND media_transcode_missing_input_tests)
 
         add_executable(media_transcode_integration_tests
+            tests/common/MediaProbe.cpp
             tests/integration/test_local_transcode_integration.cpp
         )
         media_transcode_configure_app(media_transcode_integration_tests)
+        target_include_directories(media_transcode_integration_tests PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests"
+        )
         add_test(
             NAME media_transcode_integration_tests
             COMMAND media_transcode_integration_tests "${MEDIA_TRANSCODE_TEST_SAMPLES_DIR}"
