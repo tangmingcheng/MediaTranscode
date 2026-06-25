@@ -35,6 +35,7 @@ void FFmpegVideoTranscodePipeline::reset()
     m_inputMetadata = FFmpegVideoInputMetadata{};
     m_hardwarePlan = HardwarePipelinePlan{};
     m_hasHardwarePlan = false;
+    m_decodedFrameCount = 0;
 }
 
 Status FFmpegVideoTranscodePipeline::initialize(const Config& config)
@@ -384,6 +385,7 @@ Status FFmpegVideoTranscodePipeline::drainDecoder(
             return Status::success();
         }
 
+        ++m_decodedFrameCount;
         const Status status = processDecodedFrame(onPacketWritten);
         av_frame_unref(m_decodedFrame.get());
 
@@ -575,6 +577,11 @@ bool FFmpegVideoTranscodePipeline::isInitialized() const
 AVStream* FFmpegVideoTranscodePipeline::outputStream() const
 {
     return m_encoderStage.outputStream();
+}
+
+int64_t FFmpegVideoTranscodePipeline::decodedFrameCount() const
+{
+    return m_decodedFrameCount;
 }
 
 int64_t FFmpegVideoTranscodePipeline::packetCount() const
