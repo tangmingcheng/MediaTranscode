@@ -1,9 +1,15 @@
 #include "realtime/FFmpegRealtimeVideoPipelineRuntime.h"
 
+#include "internal/FFmpegPipelinePlanner.h"
+#include "internal/FFmpegTimelineNormalizer.h"
+#include "internal/FFmpegVideoTranscodePipeline.h"
+#include "internal/output/FFmpegRtpMuxer.h"
+
 #include "spdlog/spdlog.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
 }
 
 namespace media {
@@ -63,12 +69,71 @@ ffmpeg::FFmpegRtpOutputConfig makeRtpOutputConfig(const RealtimeRtpOutputConfig&
 
 } // namespace
 
+struct FFmpegRealtimeVideoPipelineRuntime::Impl {
+    Status initialize(const Config& config);
+    Status processPacket(AVPacket* packet);
+    Status finish(bool flush);
+    void reset();
+    RealtimeCoreStats stats() const;
+
+    Status planPipeline();
+    Status initializeMuxerAndPipeline();
+
+    RealtimeCoreConfig realtimeConfig;
+    TranscodeConfig pipelineConfig;
+
+    AVFormatContext* inputFormatContext = nullptr;
+    AVStream* inputVideoStream = nullptr;
+
+    ffmpeg::TimelineNormalizer timeline;
+    ffmpeg::HardwarePipelinePlan hardwarePlan;
+    const ffmpeg::HardwarePipelinePlan* executionPlan = nullptr;
+    ffmpeg::FFmpegRtpMuxer rtpMuxer;
+    ffmpeg::FFmpegVideoTranscodePipeline videoPipeline;
+
+    RealtimeCoreStats runtimeStats;
+    bool initialized = false;
+    bool finished = false;
+};
+
+FFmpegRealtimeVideoPipelineRuntime::FFmpegRealtimeVideoPipelineRuntime()
+    : m_impl(std::make_unique<Impl>())
+{
+}
+
 FFmpegRealtimeVideoPipelineRuntime::~FFmpegRealtimeVideoPipelineRuntime()
 {
     reset();
 }
 
 Status FFmpegRealtimeVideoPipelineRuntime::initialize(const Config& config)
+{
+    return m_impl->initialize(config);
+}
+
+Status FFmpegRealtimeVideoPipelineRuntime::processPacket(AVPacket* packet)
+{
+    return m_impl->processPacket(packet);
+}
+
+Status FFmpegRealtimeVideoPipelineRuntime::finish(bool flush)
+{
+    return m_impl->finish(flush);
+}
+
+void FFmpegRealtimeVideoPipelineRuntime::reset()
+{
+    if (m_impl) {
+        m_impl->reset();
+    }
+}
+
+RealtimeCoreStats FFmpegRealtimeVideoPipelineRuntime::stats() const
+{
+    return m_impl ? m_impl->stats() : RealtimeCoreStats{};
+}
+
+Status FFmpegRealtimeVideoPipelineRuntime::Impl::initialize(const Config& config)
 {
     reset();
 
@@ -87,14 +152,14 @@ Status FFmpegRealtimeVideoPipelineRuntime::initialize(const Config& config)
             "realtime video runtime initialize failed: inputVideoStream is null"));
     }
 
-    m_realtimeConfig = *config.realtimeConfig;
-    m_pipelineConfig = makeVideoPipelineConfig(m_realtimeConfig);
-    m_inputFormatContext = config.inputFormatContext;
-    m_inputVideoStream = config.inputVideoStream;
+    realtimeConfig = *config.realtimeConfig;
+    pipelineConfig = makeVideoPipelineConfig(realtimeConfig);
+    inputFormatContext = config.inputFormatContext;
+    inputVideoStream = config.inputVideoStream;
 
-    m_timeline.initStartFromFormat(
-        m_inputFormatContext,
-        m_inputVideoStream,
+    timeline.initStartFromFormat(
+        inputFormatContext,
+        inputVideoStream,
         nullptr
     );
 
@@ -110,96 +175,96 @@ Status FFmpegRealtimeVideoPipelineRuntime::initialize(const Config& config)
         return status;
     }
 
-    m_initialized = true;
+    initialized = true;
     return Status::success();
 }
 
-Status FFmpegRealtimeVideoPipelineRuntime::planPipeline()
+Status FFmpegRealtimeVideoPipelineRuntime::Impl::planPipeline()
 {
-    m_executionPlan = nullptr;
+    executionPlan = nullptr;
 
-    const AVCodec* decoder = avcodec_find_decoder(m_inputVideoStream->codecpar->codec_id);
+    const AVCodec* decoder = avcodec_find_decoder(inputVideoStream->codecpar->codec_id);
 
-    if (m_pipelineConfig.hardware.enabled) {
-        m_hardwarePlan = ffmpeg::FFmpegPipelinePlanner::planHardwarePipeline(
-            m_pipelineConfig,
+    if (pipelineConfig.hardware.enabled) {
+        hardwarePlan = ffmpeg::FFmpegPipelinePlanner::planHardwarePipeline(
+            pipelineConfig,
             decoder
         );
 
-        if (m_hardwarePlan.valid &&
-            m_hardwarePlan.executionMode != ffmpeg::VideoExecutionMode::Cpu) {
-            m_executionPlan = &m_hardwarePlan;
+        if (hardwarePlan.valid &&
+            hardwarePlan.executionMode != ffmpeg::VideoExecutionMode::Cpu) {
+            executionPlan = &hardwarePlan;
             spdlog::info(
                 "[REALTIME][PLAN] execution mode: {}: {}",
-                executionModeName(m_hardwarePlan.executionMode),
-                m_hardwarePlan.diagnostic
+                executionModeName(hardwarePlan.executionMode),
+                hardwarePlan.diagnostic
             );
             return Status::success();
         }
 
-        if (!m_pipelineConfig.hardware.allowZeroCopyFallback) {
+        if (!pipelineConfig.hardware.allowZeroCopyFallback) {
             return Status::failure(ErrorInfo::hardwareUnavailable(
-                m_hardwarePlan.diagnostic.empty()
+                hardwarePlan.diagnostic.empty()
                     ? "realtime hardware pipeline planning failed and fallback is disabled"
-                    : m_hardwarePlan.diagnostic));
+                    : hardwarePlan.diagnostic));
         }
 
         spdlog::warn(
             "[REALTIME][PLAN] execution mode: cpu fallback: {}",
-            m_hardwarePlan.diagnostic.empty() ? "no hardware plan" : m_hardwarePlan.diagnostic
+            hardwarePlan.diagnostic.empty() ? "no hardware plan" : hardwarePlan.diagnostic
         );
         return Status::success();
     }
 
-    m_hardwarePlan.executionMode = ffmpeg::VideoExecutionMode::Cpu;
-    m_hardwarePlan.diagnostic = "hardware disabled by realtime config; using CPU pipeline";
-    spdlog::warn("[REALTIME][PLAN] {}", m_hardwarePlan.diagnostic);
+    hardwarePlan.executionMode = ffmpeg::VideoExecutionMode::Cpu;
+    hardwarePlan.diagnostic = "hardware disabled by realtime config; using CPU pipeline";
+    spdlog::warn("[REALTIME][PLAN] {}", hardwarePlan.diagnostic);
     return Status::success();
 }
 
-Status FFmpegRealtimeVideoPipelineRuntime::initializeMuxerAndPipeline()
+Status FFmpegRealtimeVideoPipelineRuntime::Impl::initializeMuxerAndPipeline()
 {
-    Status status = m_rtpMuxer.open(makeRtpOutputConfig(m_realtimeConfig.rtpOutput));
+    Status status = rtpMuxer.open(makeRtpOutputConfig(realtimeConfig.rtpOutput));
     if (!status) {
         return status;
     }
 
     ffmpeg::FFmpegVideoTranscodePipeline::Config videoConfig;
-    videoConfig.transcodeConfig = &m_pipelineConfig;
-    videoConfig.hardwarePlan = m_executionPlan;
-    videoConfig.inputVideoStream = m_inputVideoStream;
-    videoConfig.outputFmtCtx = m_rtpMuxer.context();
-    videoConfig.timeline = &m_timeline;
+    videoConfig.transcodeConfig = &pipelineConfig;
+    videoConfig.hardwarePlan = executionPlan;
+    videoConfig.inputVideoStream = inputVideoStream;
+    videoConfig.outputFmtCtx = rtpMuxer.context();
+    videoConfig.timeline = &timeline;
 
-    status = m_videoPipeline.initialize(videoConfig);
+    status = videoPipeline.initialize(videoConfig);
     if (!status) {
         return status;
     }
 
-    status = m_rtpMuxer.writeHeader();
+    status = rtpMuxer.writeHeader();
     if (!status) {
         return status;
     }
 
-    status = m_rtpMuxer.writeSdp();
+    status = rtpMuxer.writeSdp();
     if (!status) {
         return status;
     }
 
     spdlog::info(
         "[REALTIME][RTP] muxer ready: url={}, sdp={}",
-        m_rtpMuxer.url(),
-        m_realtimeConfig.rtpOutput.sdpOutputPath.empty()
+        rtpMuxer.url(),
+        realtimeConfig.rtpOutput.sdpOutputPath.empty()
             ? "disabled"
-            : m_realtimeConfig.rtpOutput.sdpOutputPath
+            : realtimeConfig.rtpOutput.sdpOutputPath
     );
 
     return Status::success();
 }
 
-Status FFmpegRealtimeVideoPipelineRuntime::processPacket(AVPacket* packet)
+Status FFmpegRealtimeVideoPipelineRuntime::Impl::processPacket(AVPacket* packet)
 {
-    if (!m_initialized) {
+    if (!initialized) {
         return Status::failure(ErrorInfo::notInitialized(
             "realtime video runtime processPacket failed: runtime is not initialized"));
     }
@@ -210,77 +275,77 @@ Status FFmpegRealtimeVideoPipelineRuntime::processPacket(AVPacket* packet)
     }
 
     auto onPacketWritten = [&](int64_t packetCount, int64_t outTimeMs) {
-        m_stats.decodedVideoFrameCount = m_videoPipeline.decodedFrameCount();
-        m_stats.encodedVideoPacketCount = packetCount;
-        m_stats.writtenRtpPacketCount = packetCount;
-        m_stats.lastOutputTimeMs = outTimeMs;
+        runtimeStats.decodedVideoFrameCount = videoPipeline.decodedFrameCount();
+        runtimeStats.encodedVideoPacketCount = packetCount;
+        runtimeStats.writtenRtpPacketCount = packetCount;
+        runtimeStats.lastOutputTimeMs = outTimeMs;
     };
 
-    const Status status = m_videoPipeline.processPacket(packet, onPacketWritten);
+    const Status status = videoPipeline.processPacket(packet, onPacketWritten);
 
-    m_stats.decodedVideoFrameCount = m_videoPipeline.decodedFrameCount();
-    m_stats.encodedVideoPacketCount = m_videoPipeline.packetCount();
-    m_stats.writtenRtpPacketCount = m_videoPipeline.packetCount();
-    m_stats.lastOutputTimeMs = m_videoPipeline.lastWrittenOutTimeMs();
+    runtimeStats.decodedVideoFrameCount = videoPipeline.decodedFrameCount();
+    runtimeStats.encodedVideoPacketCount = videoPipeline.packetCount();
+    runtimeStats.writtenRtpPacketCount = videoPipeline.packetCount();
+    runtimeStats.lastOutputTimeMs = videoPipeline.lastWrittenOutTimeMs();
 
     return status;
 }
 
-Status FFmpegRealtimeVideoPipelineRuntime::finish(bool flush)
+Status FFmpegRealtimeVideoPipelineRuntime::Impl::finish(bool flush)
 {
-    if (!m_initialized || m_finished) {
+    if (!initialized || finished) {
         return Status::success();
     }
 
     auto onPacketWritten = [&](int64_t packetCount, int64_t outTimeMs) {
-        m_stats.decodedVideoFrameCount = m_videoPipeline.decodedFrameCount();
-        m_stats.encodedVideoPacketCount = packetCount;
-        m_stats.writtenRtpPacketCount = packetCount;
-        m_stats.lastOutputTimeMs = outTimeMs;
+        runtimeStats.decodedVideoFrameCount = videoPipeline.decodedFrameCount();
+        runtimeStats.encodedVideoPacketCount = packetCount;
+        runtimeStats.writtenRtpPacketCount = packetCount;
+        runtimeStats.lastOutputTimeMs = outTimeMs;
     };
 
     if (flush) {
-        Status status = m_videoPipeline.flushDecoder(onPacketWritten);
+        Status status = videoPipeline.flushDecoder(onPacketWritten);
         if (!status) {
             return status;
         }
 
-        status = m_videoPipeline.flushFilterAndEncoder(onPacketWritten);
+        status = videoPipeline.flushFilterAndEncoder(onPacketWritten);
         if (!status) {
             return status;
         }
     }
 
-    m_stats.decodedVideoFrameCount = m_videoPipeline.decodedFrameCount();
-    m_stats.encodedVideoPacketCount = m_videoPipeline.packetCount();
-    m_stats.writtenRtpPacketCount = m_videoPipeline.packetCount();
-    m_stats.lastOutputTimeMs = m_videoPipeline.lastWrittenOutTimeMs();
+    runtimeStats.decodedVideoFrameCount = videoPipeline.decodedFrameCount();
+    runtimeStats.encodedVideoPacketCount = videoPipeline.packetCount();
+    runtimeStats.writtenRtpPacketCount = videoPipeline.packetCount();
+    runtimeStats.lastOutputTimeMs = videoPipeline.lastWrittenOutTimeMs();
 
-    Status trailerStatus = m_rtpMuxer.writeTrailer();
-    m_finished = true;
+    Status trailerStatus = rtpMuxer.writeTrailer();
+    finished = true;
     return trailerStatus;
 }
 
-void FFmpegRealtimeVideoPipelineRuntime::reset()
+void FFmpegRealtimeVideoPipelineRuntime::Impl::reset()
 {
-    m_videoPipeline.reset();
-    m_rtpMuxer.reset();
-    m_timeline.reset();
+    videoPipeline.reset();
+    rtpMuxer.reset();
+    timeline.reset();
 
-    m_realtimeConfig = RealtimeCoreConfig{};
-    m_pipelineConfig = TranscodeConfig{};
-    m_inputFormatContext = nullptr;
-    m_inputVideoStream = nullptr;
-    m_hardwarePlan = ffmpeg::HardwarePipelinePlan{};
-    m_executionPlan = nullptr;
-    m_stats = RealtimeCoreStats{};
-    m_initialized = false;
-    m_finished = false;
+    realtimeConfig = RealtimeCoreConfig{};
+    pipelineConfig = TranscodeConfig{};
+    inputFormatContext = nullptr;
+    inputVideoStream = nullptr;
+    hardwarePlan = ffmpeg::HardwarePipelinePlan{};
+    executionPlan = nullptr;
+    runtimeStats = RealtimeCoreStats{};
+    initialized = false;
+    finished = false;
 }
 
-RealtimeCoreStats FFmpegRealtimeVideoPipelineRuntime::stats() const
+RealtimeCoreStats FFmpegRealtimeVideoPipelineRuntime::Impl::stats() const
 {
-    return m_stats;
+    return runtimeStats;
 }
 
 } // namespace media
