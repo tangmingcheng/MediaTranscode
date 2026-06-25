@@ -9,6 +9,7 @@ set(THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/3rds")
 option(MEDIA_TRANSCODE_BUILD_CLI "Build the media_transcode_cli example program" ON)
 option(MEDIA_TRANSCODE_BUILD_EXAMPLES "Build small public API examples" ON)
 option(MEDIA_TRANSCODE_BUILD_TESTS "Build MediaTranscode tests" ON)
+option(MEDIA_TRANSCODE_BUILD_P1_TOOLS "Build internal P1 realtime debug tools" ON)
 option(MEDIA_TRANSCODE_ENABLE_INTEGRATION_TESTS "Build and register integration tests" ON)
 option(MEDIA_TRANSCODE_ENABLE_HARDWARE_TESTS "Enable hardware-dependent tests" OFF)
 
@@ -272,6 +273,20 @@ if(MEDIA_TRANSCODE_BUILD_EXAMPLES)
         examples/api/local_transcode_error_handling.cpp
     )
     media_transcode_configure_app(media_transcode_example_local_error_handling)
+endif()
+
+# --------------------------
+# Internal P1 debug tools
+# --------------------------
+if(MEDIA_TRANSCODE_BUILD_P1_TOOLS)
+    add_executable(media_transcode_p1_realtime_probe
+        tools/realtime_probe/main.cpp
+    )
+    media_transcode_configure_app(media_transcode_p1_realtime_probe)
+    target_include_directories(media_transcode_p1_realtime_probe PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    )
+    target_link_libraries(media_transcode_p1_realtime_probe PRIVATE thirdparty_spdlog)
 endif()
 
 # --------------------------
