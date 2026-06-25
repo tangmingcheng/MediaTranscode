@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 namespace media_transcode::test {
@@ -14,6 +15,8 @@ struct MediaProbeInfo {
     std::string videoCodecName;
     std::string audioCodecName;
     double durationSeconds = 0.0;
+    double videoAverageFps = 0.0;
+    std::int64_t videoFrameCount = 0;
 };
 
 bool probeMediaFile(const std::string& path,
