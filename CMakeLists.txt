@@ -38,6 +38,10 @@ add_library(${TARGET_CORE} STATIC
     src/realtime/FFmpegRealtimeStreamTranscodeEngine.cpp
     src/realtime/FFmpegRealtimeStreamTranscodeEngine.h
     src/internal/TranscodeTypes.h
+    src/internal/input/FFmpegRealtimeInputSource.cpp
+    src/internal/input/FFmpegRealtimeInputSource.h
+    src/internal/input/FFmpegRealtimeInterruptController.cpp
+    src/internal/input/FFmpegRealtimeInterruptController.h
     src/internal/FFmpegAudioAdapter.cpp
     src/internal/FFmpegAudioAdapter.h
     src/internal/FFmpegAudioCopyPipeline.cpp
