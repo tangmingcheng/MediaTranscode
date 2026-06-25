@@ -5,11 +5,16 @@
 
 #include <atomic>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
 
 namespace media {
+
+namespace ffmpeg {
+class FFmpegRealtimeInputSource;
+}
 
 /**
  * @brief Internal runtime state for the P1 realtime stream transcode core.
@@ -148,6 +153,7 @@ private:
     ErrorInfo m_lastError;
     RealtimeStreamState m_state = RealtimeStreamState::Idle;
     ProgressCallback m_progressCallback;
+    std::unique_ptr<ffmpeg::FFmpegRealtimeInputSource> m_inputSource;
 
     std::thread m_workerThread;
     std::atomic_bool m_running{ false };
