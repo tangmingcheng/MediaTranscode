@@ -55,7 +55,7 @@ void printUsage(const char* exe)
         << "      --no-low-latency           Disable low-latency input options\n"
         << "      --verbose                  Enable debug logs\n"
         << "  -h, --help                     Show this help\n\n"
-        << "This is an internal P1 tool. It validates realtime input open/find/read/stop only.\n";
+        << "This is an internal P1 tool. It validates realtime input -> decode -> encode counters.\n";
 }
 
 Options parseOptions(int argc, char* argv[])
@@ -136,13 +136,30 @@ bool isAcceptedEof(const media::ErrorInfo& error, bool acceptEof)
            error.message.find("end of stream") != std::string::npos;
 }
 
+bool validateCounters(const media::RealtimeCoreStats& stats)
+{
+    if (stats.inputVideoPacketCount <= 0) {
+        spdlog::error("probe failed: no video packets were read");
+        return false;
+    }
+    if (stats.decodedVideoFrameCount <= 0) {
+        spdlog::error("probe failed: no video frames were decoded");
+        return false;
+    }
+    if (stats.encodedVideoPacketCount <= 0) {
+        spdlog::error("probe failed: no video packets were encoded");
+        return false;
+    }
+    return true;
+}
+
 bool runProbeOnce(const Options& options, int index)
 {
     spdlog::info("P1 realtime probe iteration {}/{}", index, options.loopCount);
 
     media::FFmpegRealtimeStreamTranscodeEngine engine;
     engine.setProgressCallback([](const media::ProgressInfo& info) {
-        spdlog::info("progress: stage={}, inputVideoPackets={}, lastInputTimeMs={}",
+        spdlog::info("progress: stage={}, frame={}, timeMs={}",
                      info.raw,
                      info.frame,
                      info.outTimeMs);
@@ -178,17 +195,13 @@ bool runProbeOnce(const Options& options, int index)
     if (!waitStatus) {
         if (isAcceptedEof(waitStatus.error(), options.acceptEof)) {
             spdlog::warn("EOF accepted: {}", waitStatus.error().describe());
-            return stats.inputVideoPacketCount > 0;
+            return validateCounters(stats);
         }
         spdlog::error("wait failed: {}", waitStatus.error().describe());
         return false;
     }
 
-    if (stats.inputVideoPacketCount <= 0) {
-        spdlog::error("probe failed: no video packets were read");
-        return false;
-    }
-    return true;
+    return validateCounters(stats);
 }
 
 } // namespace
