@@ -1,11 +1,8 @@
 #include "realtime/FFmpegRealtimeStreamTranscodeEngine.h"
 
-#include "internal/FFmpegPipelinePlanner.h"
 #include "internal/FFmpegRAII.h"
-#include "internal/FFmpegTimelineNormalizer.h"
-#include "internal/FFmpegVideoTranscodePipeline.h"
 #include "internal/input/FFmpegRealtimeInputSource.h"
-#include "internal/output/FFmpegNullMuxer.h"
+#include "realtime/FFmpegRealtimeVideoPipelineRuntime.h"
 
 #include "spdlog/spdlog.h"
 
@@ -17,7 +14,6 @@
 
 extern "C" {
 #include <libavcodec/avcodec.h>
-#include <libavcodec/packet.h>
 #include <libavformat/avformat.h>
 }
 
@@ -60,21 +56,6 @@ const char* stateName(RealtimeStreamState state)
     }
 }
 
-const char* executionModeName(ffmpeg::VideoExecutionMode mode)
-{
-    switch (mode) {
-    case ffmpeg::VideoExecutionMode::HardwareZeroCopy:
-        return "hardware-zero-copy";
-    case ffmpeg::VideoExecutionMode::HardwareDecodeSoftwareFilterHardwareEncode:
-        return "hardware-decode-software-filter-hardware-encode";
-    case ffmpeg::VideoExecutionMode::HardwareDecodeSoftwareFilterGenericEncode:
-        return "hardware-decode-software-filter-generic-encode";
-    case ffmpeg::VideoExecutionMode::Cpu:
-    default:
-        return "cpu";
-    }
-}
-
 class RunningStateGuard {
 public:
     explicit RunningStateGuard(std::atomic_bool& running)
@@ -106,29 +87,6 @@ ffmpeg::FFmpegRealtimeInputSource::Config makeInputSourceConfig(
     inputConfig.probeSizeBytes = config.probeSizeBytes;
     inputConfig.lowLatency = config.lowLatency;
     return inputConfig;
-}
-
-TranscodeConfig makeVideoPipelineConfig(const RealtimeCoreConfig& config)
-{
-    TranscodeConfig transcodeConfig;
-    transcodeConfig.inputUrl = config.inputUrl;
-    transcodeConfig.outputUrl = "p1-realtime-null";
-    transcodeConfig.width = config.width;
-    transcodeConfig.height = config.height;
-    transcodeConfig.fps = config.fps;
-    transcodeConfig.videoCodec = config.videoCodec;
-    transcodeConfig.videoBitrate.rateControl = config.rcMode;
-    transcodeConfig.videoBitrate.targetKbps = config.videoBitrateKbps;
-    transcodeConfig.videoEncode.speedPreset = config.speed;
-    transcodeConfig.videoEncode.gopSize = config.gopSize;
-    transcodeConfig.videoEncode.maxBFrames = config.maxBFrames;
-    transcodeConfig.videoEncode.tune = config.tune;
-    transcodeConfig.videoEncode.profile = config.profile;
-    transcodeConfig.videoEncode.level = config.level;
-    transcodeConfig.audioEnabled = false;
-    transcodeConfig.hardware.enabled = !config.disableHardware;
-    transcodeConfig.hardware.allowZeroCopyFallback = config.allowHardwareFallback;
-    return transcodeConfig;
 }
 
 } // namespace
@@ -389,6 +347,14 @@ Status FFmpegRealtimeStreamTranscodeEngine::runLoop()
         }
     };
 
+    auto mergeVideoStats = [&](const RealtimeCoreStats& videoStats) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_stats.decodedVideoFrameCount = videoStats.decodedVideoFrameCount;
+        m_stats.encodedVideoPacketCount = videoStats.encodedVideoPacketCount;
+        m_stats.writtenRtpPacketCount = videoStats.writtenRtpPacketCount;
+        m_stats.lastOutputTimeMs = videoStats.lastOutputTimeMs;
+    };
+
     ffmpeg::FFmpegRealtimeInputSource* inputSource = nullptr;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -421,80 +387,20 @@ Status FFmpegRealtimeStreamTranscodeEngine::runLoop()
     }
     emitProgress("stream-info-ready");
 
-    ffmpeg::TimelineNormalizer timeline;
-    timeline.initStartFromFormat(
-        inputSource->formatContext(),
-        inputSource->videoStream(),
-        nullptr
-    );
-
-    ffmpeg::FFmpegNullMuxer nullMuxer;
-    status = nullMuxer.open();
-    if (!status) {
-        cleanupInputSource();
-        return status;
-    }
-
-    const TranscodeConfig pipelineConfig = makeVideoPipelineConfig(config);
-    const AVCodec* decoder = avcodec_find_decoder(inputSource->videoStream()->codecpar->codec_id);
-    ffmpeg::HardwarePipelinePlan plan;
-    const ffmpeg::HardwarePipelinePlan* executionPlan = nullptr;
-
-    if (pipelineConfig.hardware.enabled) {
-        plan = ffmpeg::FFmpegPipelinePlanner::planHardwarePipeline(
-            pipelineConfig,
-            decoder
-        );
-        if (plan.valid && plan.executionMode != ffmpeg::VideoExecutionMode::Cpu) {
-            executionPlan = &plan;
-            spdlog::info(
-                "[REALTIME][PLAN] execution mode: {}: {}",
-                executionModeName(plan.executionMode),
-                plan.diagnostic
-            );
-        }
-        else {
-            if (!pipelineConfig.hardware.allowZeroCopyFallback) {
-                cleanupInputSource();
-                return Status::failure(ErrorInfo::hardwareUnavailable(
-                    plan.diagnostic.empty()
-                        ? "realtime hardware pipeline planning failed and fallback is disabled"
-                        : plan.diagnostic));
-            }
-            spdlog::warn(
-                "[REALTIME][PLAN] execution mode: cpu fallback: {}",
-                plan.diagnostic.empty() ? "no hardware plan" : plan.diagnostic
-            );
-        }
-    }
-    else {
-        plan.executionMode = ffmpeg::VideoExecutionMode::Cpu;
-        plan.diagnostic = "hardware disabled by realtime config; using CPU pipeline";
-        spdlog::warn("[REALTIME][PLAN] {}", plan.diagnostic);
-    }
-
-    ffmpeg::FFmpegVideoTranscodePipeline videoPipeline;
+    FFmpegRealtimeVideoPipelineRuntime videoRuntime;
     {
-        ffmpeg::FFmpegVideoTranscodePipeline::Config videoConfig;
-        videoConfig.transcodeConfig = &pipelineConfig;
-        videoConfig.hardwarePlan = executionPlan;
+        FFmpegRealtimeVideoPipelineRuntime::Config videoConfig;
+        videoConfig.realtimeConfig = &config;
+        videoConfig.inputFormatContext = inputSource->formatContext();
         videoConfig.inputVideoStream = inputSource->videoStream();
-        videoConfig.outputFmtCtx = nullMuxer.context();
-        videoConfig.timeline = &timeline;
 
-        status = videoPipeline.initialize(videoConfig);
+        status = videoRuntime.initialize(videoConfig);
         if (!status) {
             cleanupInputSource();
             return status;
         }
     }
-
-    status = nullMuxer.writeHeader();
-    if (!status) {
-        cleanupInputSource();
-        return status;
-    }
-    emitProgress("video-pipeline-ready");
+    emitProgress("video-rtp-ready");
 
     ffmpeg::PacketPtr inputPacket = ffmpeg::makePacket();
     if (!inputPacket) {
@@ -502,42 +408,6 @@ Status FFmpegRealtimeStreamTranscodeEngine::runLoop()
         return Status::failure(ErrorInfo::allocationFailed(
             "realtime run loop failed: av_packet_alloc input packet failed"));
     }
-
-    auto updateVideoPipelineStats = [&](int64_t packetCount, int64_t outTimeMs) {
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            m_stats.decodedVideoFrameCount = videoPipeline.decodedFrameCount();
-            m_stats.encodedVideoPacketCount = packetCount;
-            m_stats.lastOutputTimeMs = outTimeMs;
-        }
-
-        if (packetCount == 1 || packetCount % 25 == 0) {
-            emitProgress("encoding");
-        }
-    };
-
-    auto finalizePipeline = [&](bool flush) -> Status {
-        if (flush) {
-            Status flushStatus = videoPipeline.flushDecoder(updateVideoPipelineStats);
-            if (!flushStatus) {
-                return flushStatus;
-            }
-
-            flushStatus = videoPipeline.flushFilterAndEncoder(updateVideoPipelineStats);
-            if (!flushStatus) {
-                return flushStatus;
-            }
-        }
-
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            m_stats.decodedVideoFrameCount = videoPipeline.decodedFrameCount();
-            m_stats.encodedVideoPacketCount = videoPipeline.packetCount();
-            m_stats.lastOutputTimeMs = videoPipeline.lastWrittenOutTimeMs();
-        }
-
-        return nullMuxer.writeTrailer();
-    };
 
     while (!m_stopRequested.load()) {
         auto readResult = inputSource->readPacket(inputPacket.get());
@@ -564,25 +434,21 @@ Status FFmpegRealtimeStreamTranscodeEngine::runLoop()
             }
 
             if (videoPacket) {
-                const Status processStatus = videoPipeline.processPacket(
-                    inputPacket.get(),
-                    updateVideoPipelineStats
-                );
+                const Status processStatus = videoRuntime.processPacket(inputPacket.get());
                 av_packet_unref(inputPacket.get());
-
-                {
-                    std::lock_guard<std::mutex> lock(m_mutex);
-                    m_stats.decodedVideoFrameCount = videoPipeline.decodedFrameCount();
-                    m_stats.encodedVideoPacketCount = videoPipeline.packetCount();
-                    m_stats.lastOutputTimeMs = videoPipeline.lastWrittenOutTimeMs();
-                }
+                mergeVideoStats(videoRuntime.stats());
 
                 if (!processStatus) {
                     cleanupInputSource();
                     return processStatus;
                 }
 
-                if (videoPacketCount == 1 || videoPacketCount % 100 == 0) {
+                const RealtimeCoreStats videoStats = videoRuntime.stats();
+                if (videoStats.encodedVideoPacketCount == 1 ||
+                    videoStats.encodedVideoPacketCount % 25 == 0) {
+                    emitProgress("rtp-output");
+                }
+                else if (videoPacketCount == 1 || videoPacketCount % 100 == 0) {
                     emitProgress("input-video-packet");
                 }
             }
@@ -598,10 +464,11 @@ Status FFmpegRealtimeStreamTranscodeEngine::runLoop()
             av_packet_unref(inputPacket.get());
             break;
         case ffmpeg::RealtimeInputReadState::EndOfStream: {
-            const Status finalizeStatus = finalizePipeline(true);
+            const Status finishStatus = videoRuntime.finish(true);
+            mergeVideoStats(videoRuntime.stats());
             cleanupInputSource();
-            if (!finalizeStatus) {
-                return finalizeStatus;
+            if (!finishStatus) {
+                return finishStatus;
             }
             return Status::failure(ErrorInfo::ioFailure(
                 "realtime input reached end of stream"));
@@ -609,10 +476,11 @@ Status FFmpegRealtimeStreamTranscodeEngine::runLoop()
         case ffmpeg::RealtimeInputReadState::Interrupted:
             av_packet_unref(inputPacket.get());
             if (m_stopRequested.load()) {
-                const Status finalizeStatus = finalizePipeline(false);
+                const Status finishStatus = videoRuntime.finish(false);
+                mergeVideoStats(videoRuntime.stats());
                 cleanupInputSource();
-                if (!finalizeStatus) {
-                    return finalizeStatus;
+                if (!finishStatus) {
+                    return finishStatus;
                 }
                 setState(RealtimeStreamState::Stopped);
                 emitProgress("stopped");
@@ -624,7 +492,8 @@ Status FFmpegRealtimeStreamTranscodeEngine::runLoop()
         }
     }
 
-    status = finalizePipeline(false);
+    status = videoRuntime.finish(false);
+    mergeVideoStats(videoRuntime.stats());
     cleanupInputSource();
     if (!status) {
         return status;
@@ -696,9 +565,11 @@ void FFmpegRealtimeStreamTranscodeEngine::emitProgress(const std::string& stage)
     }
 
     ProgressInfo info;
-    info.frame = stats.encodedVideoPacketCount > 0
-        ? stats.encodedVideoPacketCount
-        : stats.inputVideoPacketCount;
+    info.frame = stats.writtenRtpPacketCount > 0
+        ? stats.writtenRtpPacketCount
+        : stats.encodedVideoPacketCount > 0
+            ? stats.encodedVideoPacketCount
+            : stats.inputVideoPacketCount;
     info.outTimeMs = std::max(stats.lastOutputTimeMs, stats.lastInputTimeMs);
     info.speed = 0.0;
     info.raw = stage;
