@@ -30,11 +30,6 @@ public:
         return &m_dict;
     }
 
-    AVDictionary* get() const
-    {
-        return m_dict;
-    }
-
 private:
     AVDictionary* m_dict = nullptr;
 };
@@ -81,7 +76,7 @@ Status FFmpegRealtimeInputSource::open(const Config& config)
     rawContext->interrupt_callback.callback = &FFmpegRealtimeInterruptController::callback;
     rawContext->interrupt_callback.opaque = &m_interruptController;
 
-    const AVInputFormat* inputFormat = nullptr;
+    decltype(av_find_input_format("")) inputFormat = nullptr;
     if (!m_config.inputFormatHint.empty()) {
         inputFormat = av_find_input_format(m_config.inputFormatHint.c_str());
         if (!inputFormat) {
