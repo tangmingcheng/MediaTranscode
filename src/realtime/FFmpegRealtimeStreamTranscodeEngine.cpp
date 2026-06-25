@@ -3,6 +3,7 @@
 #include "spdlog/spdlog.h"
 
 #include <algorithm>
+#include <exception>
 #include <utility>
 
 extern "C" {
@@ -44,10 +45,8 @@ const char* stateName(RealtimeStreamState state)
 
 class RunningStateGuard {
 public:
-    RunningStateGuard(std::atomic_bool& running,
-                      FFmpegRealtimeStreamTranscodeEngine& engine)
+    explicit RunningStateGuard(std::atomic_bool& running)
         : m_running(running)
-        , m_engine(engine)
     {
     }
 
@@ -61,7 +60,6 @@ public:
 
 private:
     std::atomic_bool& m_running;
-    FFmpegRealtimeStreamTranscodeEngine& m_engine;
 };
 
 } // namespace
@@ -173,7 +171,7 @@ Status FFmpegRealtimeStreamTranscodeEngine::run()
     m_stopRequested.store(false);
     m_running.store(true);
 
-    RunningStateGuard runningGuard(m_running, *this);
+    RunningStateGuard runningGuard(m_running);
     const Status status = runLoop();
     if (!status) {
         setLastError(status.error());
