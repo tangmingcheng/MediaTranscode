@@ -25,6 +25,13 @@ struct TestContext {
 #define EXPECT_TRUE(ctx, expr) (ctx).expect(static_cast<bool>(expr), #expr, __FILE__, __LINE__)
 #define EXPECT_FALSE(ctx, expr) (ctx).expect(!static_cast<bool>(expr), "!(" #expr ")", __FILE__, __LINE__)
 
+void expectFailure(TestContext& ctx, const media::ErrorInfo& error)
+{
+    EXPECT_TRUE(ctx, !error.ok());
+    EXPECT_TRUE(ctx, !error.message.empty());
+    std::cout << "missing input error: " << error.describe() << '\n';
+}
+
 } // namespace
 
 int main()
@@ -44,13 +51,20 @@ int main()
     config.disableHardware = true;
 
     TestContext ctx;
-    const auto result = media::startLocalVideoTranscodeAsync(config);
+    const auto startResult = media::startLocalVideoTranscodeAsync(config);
 
-    EXPECT_FALSE(ctx, result);
-    if (!result) {
-        EXPECT_TRUE(ctx, !result.error().ok());
-        EXPECT_TRUE(ctx, !result.error().message.empty());
-        std::cout << "missing input error: " << result.error().describe() << '\n';
+    if (!startResult) {
+        expectFailure(ctx, startResult.error());
+    }
+    else {
+        const auto waitResult = media::waitLocalVideoTranscode(startResult.value());
+        EXPECT_FALSE(ctx, waitResult);
+        if (!waitResult) {
+            expectFailure(ctx, waitResult.error());
+        }
+        else {
+            (void)media::stopLocalVideoTranscode(startResult.value());
+        }
     }
 
     fs::remove(output, ec);
