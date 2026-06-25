@@ -38,6 +38,8 @@ add_library(${TARGET_CORE} STATIC
     src/local/FFmpegLocalFileTranscodeEngine.h
     src/realtime/FFmpegRealtimeStreamTranscodeEngine.cpp
     src/realtime/FFmpegRealtimeStreamTranscodeEngine.h
+    src/realtime/FFmpegRealtimeVideoPipelineRuntime.cpp
+    src/realtime/FFmpegRealtimeVideoPipelineRuntime.h
     src/internal/TranscodeTypes.h
     src/internal/input/FFmpegRealtimeInputSource.cpp
     src/internal/input/FFmpegRealtimeInputSource.h
@@ -45,6 +47,12 @@ add_library(${TARGET_CORE} STATIC
     src/internal/input/FFmpegRealtimeInterruptController.h
     src/internal/output/FFmpegNullMuxer.cpp
     src/internal/output/FFmpegNullMuxer.h
+    src/internal/output/FFmpegRtpMuxer.cpp
+    src/internal/output/FFmpegRtpMuxer.h
+    src/internal/output/FFmpegRtpUrlBuilder.cpp
+    src/internal/output/FFmpegRtpUrlBuilder.h
+    src/internal/output/FFmpegSdpWriter.cpp
+    src/internal/output/FFmpegSdpWriter.h
     src/internal/FFmpegAudioAdapter.cpp
     src/internal/FFmpegAudioAdapter.h
     src/internal/FFmpegAudioCopyPipeline.cpp
