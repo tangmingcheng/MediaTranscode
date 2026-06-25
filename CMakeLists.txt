@@ -267,6 +267,12 @@ endif()
 if(MEDIA_TRANSCODE_BUILD_TESTS)
     enable_testing()
 
+    add_executable(media_transcode_public_header_tests
+        tests/compile/test_public_headers.cpp
+    )
+    media_transcode_configure_app(media_transcode_public_header_tests)
+    add_test(NAME media_transcode_public_header_tests COMMAND media_transcode_public_header_tests)
+
     add_executable(media_transcode_unit_tests
         tests/unit/test_local_transcode_api.cpp
     )
@@ -274,6 +280,12 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
     add_test(NAME media_transcode_unit_tests COMMAND media_transcode_unit_tests)
 
     if(MEDIA_TRANSCODE_ENABLE_INTEGRATION_TESTS)
+        add_executable(media_transcode_missing_input_tests
+            tests/integration/test_local_transcode_missing_input.cpp
+        )
+        media_transcode_configure_app(media_transcode_missing_input_tests)
+        add_test(NAME media_transcode_missing_input_tests COMMAND media_transcode_missing_input_tests)
+
         add_executable(media_transcode_integration_tests
             tests/integration/test_local_transcode_integration.cpp
         )
