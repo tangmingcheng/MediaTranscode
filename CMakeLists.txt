@@ -43,6 +43,8 @@ add_library(${TARGET_CORE} STATIC
     src/internal/input/FFmpegRealtimeInputSource.h
     src/internal/input/FFmpegRealtimeInterruptController.cpp
     src/internal/input/FFmpegRealtimeInterruptController.h
+    src/internal/output/FFmpegNullMuxer.cpp
+    src/internal/output/FFmpegNullMuxer.h
     src/internal/FFmpegAudioAdapter.cpp
     src/internal/FFmpegAudioAdapter.h
     src/internal/FFmpegAudioCopyPipeline.cpp
