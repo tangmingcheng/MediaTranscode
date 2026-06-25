@@ -1,12 +1,18 @@
 #include "realtime/FFmpegRealtimeStreamTranscodeEngine.h"
 
+#include "internal/FFmpegRAII.h"
+#include "internal/input/FFmpegRealtimeInputSource.h"
+
 #include "spdlog/spdlog.h"
 
 #include <algorithm>
+#include <chrono>
 #include <exception>
+#include <memory>
 #include <utility>
 
 extern "C" {
+#include <libavcodec/packet.h>
 #include <libavformat/avformat.h>
 }
 
@@ -21,6 +27,12 @@ bool validPort(int port)
 bool validOptionalPort(int port)
 {
     return port == 0 || validPort(port);
+}
+
+int64_t steadyNowMs()
+{
+    const auto now = std::chrono::steady_clock::now().time_since_epoch();
+    return std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
 }
 
 const char* stateName(RealtimeStreamState state)
@@ -61,6 +73,20 @@ public:
 private:
     std::atomic_bool& m_running;
 };
+
+ffmpeg::FFmpegRealtimeInputSource::Config makeInputSourceConfig(
+    const RealtimeCoreConfig& config)
+{
+    ffmpeg::FFmpegRealtimeInputSource::Config inputConfig;
+    inputConfig.inputUrl = config.inputUrl;
+    inputConfig.inputFormatHint = config.inputFormatHint;
+    inputConfig.openTimeoutMs = config.openTimeoutMs;
+    inputConfig.readTimeoutMs = config.readTimeoutMs;
+    inputConfig.analyzeDurationUs = config.analyzeDurationUs;
+    inputConfig.probeSizeBytes = config.probeSizeBytes;
+    inputConfig.lowLatency = config.lowLatency;
+    return inputConfig;
+}
 
 } // namespace
 
@@ -184,6 +210,13 @@ void FFmpegRealtimeStreamTranscodeEngine::requestStop()
 {
     m_stopRequested.store(true);
 
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_inputSource) {
+            m_inputSource->requestInterrupt();
+        }
+    }
+
     if (m_running.load()) {
         setState(RealtimeStreamState::StopRequested);
         emitProgress("stop-requested");
@@ -298,22 +331,119 @@ Status FFmpegRealtimeStreamTranscodeEngine::runLoop()
 
     spdlog::info("[REALTIME][CORE] run loop entered");
 
+    RealtimeCoreConfig config;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        config = m_config;
+        m_inputSource = std::make_unique<ffmpeg::FFmpegRealtimeInputSource>();
+    }
+
+    auto cleanupInputSource = [&]() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_inputSource) {
+            m_inputSource->close();
+            m_inputSource.reset();
+        }
+    };
+
+    ffmpeg::FFmpegRealtimeInputSource* inputSource = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        inputSource = m_inputSource.get();
+    }
+
+    if (!inputSource) {
+        return Status::failure(ErrorInfo::internalError(
+            "realtime run loop failed: input source is null"));
+    }
+
     if (m_stopRequested.load()) {
+        cleanupInputSource();
         setState(RealtimeStreamState::Stopped);
         emitProgress("stopped");
         return Status::success();
     }
 
-    /*
-     * P1-Core-1 intentionally stops here. The next steps should connect the
-     * realtime input source, existing video transcode pipeline, and RTP muxer.
-     */
-    const auto error = ErrorInfo::unsupported(
-        "P1-Core-1 skeleton is ready; realtime input source is not implemented yet");
+    Status status = inputSource->open(makeInputSourceConfig(config));
+    if (!status) {
+        cleanupInputSource();
+        return status;
+    }
+    emitProgress("input-opened");
 
-    spdlog::warn("[REALTIME][CORE] {}", error.message);
-    emitProgress("skeleton-ready");
-    return Status::failure(error);
+    status = inputSource->findStreamInfo();
+    if (!status) {
+        cleanupInputSource();
+        return status;
+    }
+    emitProgress("stream-info-ready");
+
+    ffmpeg::PacketPtr inputPacket = ffmpeg::makePacket();
+    if (!inputPacket) {
+        cleanupInputSource();
+        return Status::failure(ErrorInfo::allocationFailed(
+            "realtime run loop failed: av_packet_alloc input packet failed"));
+    }
+
+    while (!m_stopRequested.load()) {
+        auto readResult = inputSource->readPacket(inputPacket.get());
+        if (!readResult) {
+            cleanupInputSource();
+            return Status::failure(readResult.error());
+        }
+
+        switch (readResult.value()) {
+        case ffmpeg::RealtimeInputReadState::Packet: {
+            const bool videoPacket = inputSource->isVideoPacket(inputPacket.get());
+            const bool audioPacket = inputSource->isAudioPacket(inputPacket.get());
+            int64_t videoPacketCount = 0;
+            int64_t inputPacketCount = 0;
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                ++m_stats.inputPacketCount;
+                inputPacketCount = m_stats.inputPacketCount;
+                m_stats.lastInputTimeMs = steadyNowMs();
+                if (videoPacket) {
+                    ++m_stats.inputVideoPacketCount;
+                    videoPacketCount = m_stats.inputVideoPacketCount;
+                }
+            }
+
+            if (videoPacket && (videoPacketCount == 1 || videoPacketCount % 100 == 0)) {
+                emitProgress("input-video-packet");
+            }
+            else if (!videoPacket && !audioPacket && (inputPacketCount == 1 || inputPacketCount % 200 == 0)) {
+                emitProgress("input-packet");
+            }
+
+            av_packet_unref(inputPacket.get());
+            break;
+        }
+        case ffmpeg::RealtimeInputReadState::TryAgain:
+            av_packet_unref(inputPacket.get());
+            break;
+        case ffmpeg::RealtimeInputReadState::EndOfStream:
+            cleanupInputSource();
+            return Status::failure(ErrorInfo::ioFailure(
+                "realtime input reached end of stream"));
+        case ffmpeg::RealtimeInputReadState::Interrupted:
+            av_packet_unref(inputPacket.get());
+            if (m_stopRequested.load()) {
+                cleanupInputSource();
+                setState(RealtimeStreamState::Stopped);
+                emitProgress("stopped");
+                return Status::success();
+            }
+            cleanupInputSource();
+            return Status::failure(ErrorInfo::ioFailure(
+                "realtime input read interrupted or timed out"));
+        }
+    }
+
+    cleanupInputSource();
+    setState(RealtimeStreamState::Stopped);
+    emitProgress("stopped");
+    return Status::success();
 }
 
 void FFmpegRealtimeStreamTranscodeEngine::workerThread()
@@ -377,7 +507,7 @@ void FFmpegRealtimeStreamTranscodeEngine::emitProgress(const std::string& stage)
     }
 
     ProgressInfo info;
-    info.frame = stats.encodedVideoPacketCount;
+    info.frame = stats.inputVideoPacketCount;
     info.outTimeMs = std::max(stats.lastOutputTimeMs, stats.lastInputTimeMs);
     info.speed = 0.0;
     info.raw = stage;
