@@ -1,5 +1,7 @@
 #include "media_transcode/LocalVideoTranscode.h"
 
+#include "common/MediaProbe.h"
+
 #include <chrono>
 #include <filesystem>
 #include <iostream>
@@ -28,6 +30,7 @@ struct TestContext {
 
 #define EXPECT_TRUE(ctx, expr) (ctx).expect(static_cast<bool>(expr), #expr, __FILE__, __LINE__)
 #define EXPECT_FALSE(ctx, expr) (ctx).expect(!static_cast<bool>(expr), "!(" #expr ")", __FILE__, __LINE__)
+#define EXPECT_EQ(ctx, lhs, rhs) (ctx).expect(((lhs) == (rhs)), #lhs " == " #rhs, __FILE__, __LINE__)
 
 fs::path uniqueOutputPath(const std::string& name)
 {
@@ -61,6 +64,31 @@ void removeIfExists(const fs::path& path)
     fs::remove(path, ec);
 }
 
+void expectOutputMatchesConfig(TestContext& ctx,
+                               const fs::path& output,
+                               const media::LocalVideoTranscodeConfig& config)
+{
+    EXPECT_TRUE(ctx, hasNonEmptyFile(output));
+
+    media_transcode::test::MediaProbeInfo probe;
+    std::string probeError;
+    const bool probed = media_transcode::test::probeMediaFile(output.string(), probe, probeError);
+    EXPECT_TRUE(ctx, probed);
+    if (!probed) {
+        std::cerr << "probe failed for " << output.string() << ": " << probeError << '\n';
+        return;
+    }
+
+    EXPECT_TRUE(ctx, probe.hasVideo);
+    EXPECT_EQ(ctx, probe.videoStreamCount, 1);
+    EXPECT_EQ(ctx, probe.videoCodecName, std::string("h264"));
+    EXPECT_EQ(ctx, probe.videoWidth, config.width);
+    EXPECT_EQ(ctx, probe.videoHeight, config.height);
+    EXPECT_FALSE(ctx, probe.hasAudio);
+    EXPECT_EQ(ctx, probe.audioStreamCount, 0);
+    EXPECT_TRUE(ctx, probe.durationSeconds > 0.0);
+}
+
 void testSyncTranscode(TestContext& ctx, const fs::path& input)
 {
     const fs::path output = uniqueOutputPath("sync");
@@ -71,7 +99,7 @@ void testSyncTranscode(TestContext& ctx, const fs::path& input)
     if (result) {
         EXPECT_TRUE(ctx, result.value().completed);
         EXPECT_FALSE(ctx, result.value().stopped);
-        EXPECT_TRUE(ctx, hasNonEmptyFile(output));
+        expectOutputMatchesConfig(ctx, output, config);
     }
     else {
         std::cerr << "sync transcode failed: " << result.error().describe() << '\n';
@@ -98,7 +126,7 @@ void testAsyncTranscode(TestContext& ctx, const fs::path& input)
     if (reportResult) {
         EXPECT_TRUE(ctx, reportResult.value().completed);
         EXPECT_FALSE(ctx, reportResult.value().stopped);
-        EXPECT_TRUE(ctx, hasNonEmptyFile(output));
+        expectOutputMatchesConfig(ctx, output, config);
     }
     else {
         std::cerr << "async wait failed: " << reportResult.error().describe() << '\n';
@@ -107,15 +135,15 @@ void testAsyncTranscode(TestContext& ctx, const fs::path& input)
     removeIfExists(output);
 }
 
-void testCancelTranscode(TestContext& ctx, const fs::path& input)
+void testCancelTranscodeSmoke(TestContext& ctx, const fs::path& input)
 {
-    const fs::path output = uniqueOutputPath("cancel");
+    const fs::path output = uniqueOutputPath("cancel_smoke");
     auto config = baseConfig(input, output);
 
     auto jobResult = media::startLocalVideoTranscodeAsync(config);
     EXPECT_TRUE(ctx, jobResult);
     if (!jobResult) {
-        std::cerr << "cancel start failed: " << jobResult.error().describe() << '\n';
+        std::cerr << "cancel smoke start failed: " << jobResult.error().describe() << '\n';
         removeIfExists(output);
         return;
     }
@@ -125,7 +153,7 @@ void testCancelTranscode(TestContext& ctx, const fs::path& input)
     const auto stopResult = media::stopLocalVideoTranscode(jobResult.value());
     EXPECT_TRUE(ctx, stopResult);
     if (!stopResult) {
-        std::cerr << "cancel stop failed: " << stopResult.error().describe() << '\n';
+        std::cerr << "cancel smoke stop failed: " << stopResult.error().describe() << '\n';
     }
 
     const auto reportResult = media::waitLocalVideoTranscode(jobResult.value());
@@ -134,7 +162,43 @@ void testCancelTranscode(TestContext& ctx, const fs::path& input)
         EXPECT_TRUE(ctx, reportResult.value().stopped || reportResult.value().completed);
     }
     else {
-        std::cerr << "cancel wait failed: " << reportResult.error().describe() << '\n';
+        std::cerr << "cancel smoke wait failed: " << reportResult.error().describe() << '\n';
+    }
+
+    removeIfExists(output);
+}
+
+void testStrictCancelTranscode(TestContext& ctx, const fs::path& input)
+{
+    if (!fs::exists(input)) {
+        std::cout << "SKIP subtest: strict cancel sample not found: " << input.string() << '\n';
+        return;
+    }
+
+    const fs::path output = uniqueOutputPath("cancel_strict");
+    auto config = baseConfig(input, output);
+
+    auto jobResult = media::startLocalVideoTranscodeAsync(config);
+    EXPECT_TRUE(ctx, jobResult);
+    if (!jobResult) {
+        std::cerr << "strict cancel start failed: " << jobResult.error().describe() << '\n';
+        removeIfExists(output);
+        return;
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    const auto stopResult = media::stopLocalVideoTranscode(jobResult.value());
+    EXPECT_TRUE(ctx, stopResult);
+
+    const auto reportResult = media::waitLocalVideoTranscode(jobResult.value());
+    EXPECT_TRUE(ctx, reportResult);
+    if (reportResult) {
+        EXPECT_TRUE(ctx, reportResult.value().stopped);
+        EXPECT_FALSE(ctx, reportResult.value().completed);
+    }
+    else {
+        std::cerr << "strict cancel wait failed: " << reportResult.error().describe() << '\n';
     }
 
     removeIfExists(output);
@@ -146,6 +210,7 @@ int main(int argc, char* argv[])
 {
     const fs::path sampleDir = argc > 1 ? fs::path(argv[1]) : fs::path("tests/samples");
     const fs::path input = sampleDir / "sample_h264_aac_320x240.mp4";
+    const fs::path strictCancelInput = sampleDir / "sample_h264_aac_320x240_10s.mp4";
 
     if (!fs::exists(input)) {
         std::cout << "SKIP: sample file not found: " << input.string() << '\n';
@@ -155,7 +220,8 @@ int main(int argc, char* argv[])
     TestContext ctx;
     testSyncTranscode(ctx, input);
     testAsyncTranscode(ctx, input);
-    testCancelTranscode(ctx, input);
+    testCancelTranscodeSmoke(ctx, input);
+    testStrictCancelTranscode(ctx, strictCancelInput);
 
     if (ctx.failures != 0) {
         std::cerr << ctx.failures << " integration test expectation(s) failed\n";
