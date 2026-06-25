@@ -4,6 +4,7 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
+#include <libavutil/rational.h>
 }
 
 namespace media_transcode::test {
@@ -23,6 +24,38 @@ std::string ffmpegErrorText(int errorCode)
     char buffer[AV_ERROR_MAX_STRING_SIZE] = {};
     av_strerror(errorCode, buffer, sizeof(buffer));
     return buffer;
+}
+
+double rationalToDouble(AVRational value)
+{
+    if (value.num <= 0 || value.den <= 0) {
+        return 0.0;
+    }
+
+    return av_q2d(value);
+}
+
+void updateVideoFrameCountFromPackets(AVFormatContext* formatContext,
+                                      int videoStreamIndex,
+                                      MediaProbeInfo& info)
+{
+    if (!formatContext || videoStreamIndex < 0 || info.videoFrameCount > 0) {
+        return;
+    }
+
+    AVPacket* packet = av_packet_alloc();
+    if (!packet) {
+        return;
+    }
+
+    while (av_read_frame(formatContext, packet) >= 0) {
+        if (packet->stream_index == videoStreamIndex) {
+            ++info.videoFrameCount;
+        }
+        av_packet_unref(packet);
+    }
+
+    av_packet_free(&packet);
 }
 
 } // namespace
@@ -50,6 +83,7 @@ bool probeMediaFile(const std::string& path,
 
     updateDuration(formatContext, info);
 
+    int firstVideoStreamIndex = -1;
     for (unsigned int i = 0; i < formatContext->nb_streams; ++i) {
         const AVStream* stream = formatContext->streams[i];
         if (!stream || !stream->codecpar) {
@@ -61,9 +95,17 @@ bool probeMediaFile(const std::string& path,
             ++info.videoStreamCount;
             if (!info.hasVideo) {
                 info.hasVideo = true;
+                firstVideoStreamIndex = static_cast<int>(i);
                 info.videoWidth = params->width;
                 info.videoHeight = params->height;
                 info.videoCodecName = avcodec_get_name(params->codec_id);
+                info.videoAverageFps = rationalToDouble(stream->avg_frame_rate);
+                if (info.videoAverageFps <= 0.0) {
+                    info.videoAverageFps = rationalToDouble(stream->r_frame_rate);
+                }
+                if (stream->nb_frames > 0) {
+                    info.videoFrameCount = stream->nb_frames;
+                }
             }
         }
         else if (params->codec_type == AVMEDIA_TYPE_AUDIO) {
@@ -74,6 +116,8 @@ bool probeMediaFile(const std::string& path,
             }
         }
     }
+
+    updateVideoFrameCountFromPackets(formatContext, firstVideoStreamIndex, info);
 
     avformat_close_input(&formatContext);
     return true;
