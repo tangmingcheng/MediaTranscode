@@ -35,6 +35,8 @@ add_library(${TARGET_CORE} STATIC
     src/MediaTranscode.cpp
     src/local/FFmpegLocalFileTranscodeEngine.cpp
     src/local/FFmpegLocalFileTranscodeEngine.h
+    src/realtime/FFmpegRealtimeStreamTranscodeEngine.cpp
+    src/realtime/FFmpegRealtimeStreamTranscodeEngine.h
     src/internal/TranscodeTypes.h
     src/internal/FFmpegAudioAdapter.cpp
     src/internal/FFmpegAudioAdapter.h
