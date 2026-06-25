@@ -209,8 +209,8 @@ void testStrictCancelTranscode(TestContext& ctx, const fs::path& input)
 int main(int argc, char* argv[])
 {
     const fs::path sampleDir = argc > 1 ? fs::path(argv[1]) : fs::path("tests/samples");
-    const fs::path input = sampleDir / "sample_h264_aac_320x240.mp4";
-    const fs::path strictCancelInput = sampleDir / "sample_h264_aac_320x240_10s.mp4";
+    const fs::path input = sampleDir / "sample_h264_aac_2560x1440.mp4";
+    const fs::path strictCancelInput = sampleDir / "sample_h264_aac_320x240_25s.mp4";
 
     if (!fs::exists(input)) {
         std::cout << "SKIP: sample file not found: " << input.string() << '\n';
