@@ -8,7 +8,7 @@
 #include "internal/FFmpegTimelineNormalizer.h"
 #include "internal/FFmpegTranscodeLoopDiagnostics.h"
 #include "internal/FFmpegUtils.h"
-#include "internal/FFmpegVideoTranscodePipeline.h"
+#include "internal/core/video/FFmpegVideoProcessingPipeline.h"
 
 #include "spdlog/spdlog.h"
 
@@ -189,7 +189,7 @@ void FFmpegLocalFileTranscodeEngine::transcodeThread()
     AVStream* inputAudioStream = nullptr;
 
     ffmpeg::TimelineNormalizer timeline;
-    ffmpeg::FFmpegVideoTranscodePipeline videoPipeline;
+    ffmpeg::FFmpegVideoProcessingPipeline videoPipeline;
     ffmpeg::FFmpegAudioPipeline audioPipeline;
     ffmpeg::FFmpegTranscodeLoopDiagnostics loopDiagnostics(1000);
     ffmpeg::FFmpegAudioStrategyPlanner::Plan audioStrategyPlan;
@@ -371,7 +371,7 @@ void FFmpegLocalFileTranscodeEngine::transcodeThread()
     }
 
     {
-        ffmpeg::FFmpegVideoTranscodePipeline::Config videoConfig;
+        ffmpeg::FFmpegVideoProcessingPipeline::Config videoConfig;
         videoConfig.transcodeConfig = &m_config;
         videoConfig.hardwarePlan = executionPlan;
         videoConfig.inputVideoStream = inputVideoStream;
