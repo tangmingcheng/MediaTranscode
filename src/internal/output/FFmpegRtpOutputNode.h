@@ -4,6 +4,8 @@
 #include "internal/output/FFmpegRtpMuxer.h"
 #include "internal/output/PacketOutputNode.h"
 
+#include <string>
+
 extern "C" {
 #include <libavformat/avformat.h>
 }
