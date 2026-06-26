@@ -47,6 +47,7 @@ add_library(${TARGET_CORE} STATIC
     src/internal/output/FFmpegMuxerOutputNode.h
     src/internal/output/FFmpegRtpMuxer.cpp
     src/internal/output/FFmpegRtpMuxer.h
+    src/internal/output/FFmpegRtpOutputNode.h
     src/internal/output/FFmpegRtpUrlBuilder.cpp
     src/internal/output/FFmpegRtpUrlBuilder.h
     src/internal/output/FFmpegSdpWriter.cpp
