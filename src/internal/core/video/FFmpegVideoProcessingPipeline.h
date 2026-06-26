@@ -12,9 +12,8 @@
 #include "internal/FFmpegVideoTimestampStage.h"
 #include "internal/TranscodeTypes.h"
 #include "internal/core/video/FFmpegVideoEncodedPacketDrainStage.h"
-#include "internal/output/FFmpegMuxerOutputNode.h"
-#include "internal/output/PacketOutputGraphController.h"
 #include "internal/output/PacketOutputNode.h"
+#include "internal/output/VideoOutputStreamProvider.h"
 #include "media_transcode/Result.h"
 
 #include <cstdint>
@@ -22,7 +21,6 @@
 
 extern "C" {
 #include <libavcodec/avcodec.h>
-#include <libavformat/avformat.h>
 #include <libavutil/frame.h>
 }
 
@@ -38,8 +36,8 @@ public:
         const TranscodeConfig* transcodeConfig = nullptr;
         const HardwarePipelinePlan* hardwarePlan = nullptr;
         AVStream* inputVideoStream = nullptr;
-        AVFormatContext* outputFmtCtx = nullptr;
         TimelineNormalizer* timeline = nullptr;
+        VideoOutputStreamProvider* outputStreamProvider = nullptr;
         PacketOutputNode* outputNode = nullptr;
     };
 
@@ -100,7 +98,6 @@ private:
     TranscodeConfig m_config;
 
     AVStream* m_inputVideoStream = nullptr;
-    AVFormatContext* m_outputFmtCtx = nullptr;
     FFmpegVideoInputMetadata m_inputMetadata;
 
     FFmpegVideoTimestampStage m_timestampStage;
@@ -114,9 +111,8 @@ private:
     HardwarePipelinePlan m_hardwarePlan;
     bool m_hasHardwarePlan = false;
 
+    VideoOutputStreamProvider* m_outputStreamProvider = nullptr;
     PacketOutputNode* m_outputNode = nullptr;
-    PacketOutputGraphController m_defaultOutputController;
-    FFmpegMuxerOutputNode m_defaultMuxerOutputNode;
     FFmpegVideoEncodedPacketDrainStage m_packetDrainStage;
     int64_t m_decodedFrameCount = 0;
 
