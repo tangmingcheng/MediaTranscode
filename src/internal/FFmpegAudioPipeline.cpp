@@ -70,9 +70,14 @@ Status FFmpegAudioPipeline::initialize(const Config& config)
             "FFmpegAudioPipeline initialize failed: inputAudioStream is null"));
     }
 
-    if (!config.outputFmtCtx) {
+    if (!config.outputStreamProvider) {
         return Status::failure(ErrorInfo::invalidArgument(
-            "FFmpegAudioPipeline initialize failed: outputFmtCtx is null"));
+            "FFmpegAudioPipeline initialize failed: outputStreamProvider is null"));
+    }
+
+    if (!config.outputNode) {
+        return Status::failure(ErrorInfo::invalidArgument(
+            "FFmpegAudioPipeline initialize failed: outputNode is null"));
     }
 
     if (!config.timeline) {
