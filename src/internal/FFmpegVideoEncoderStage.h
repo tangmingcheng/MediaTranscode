@@ -10,7 +10,7 @@
 #include "internal/FFmpegRAII.h"
 #include "internal/FFmpegVideoAdapter.h"
 #include "internal/FFmpegVideoInputMetadata.h"
-#include "internal/output/VideoOutputStreamProvider.h"
+#include "internal/output/capabilities/video/VideoOutputStreamProvider.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -79,21 +79,12 @@ private:
     CodecContextPtr m_encoderCtx;
     AVStream* m_outputVideoStream = nullptr;
 
-    const HardwareDeviceContext* m_hardwareDeviceContext = nullptr;
-    HardwareFramesContext m_encoderHardwareFramesContext;
     HardwarePipelinePlan m_hardwarePlan;
-    HardwareBackendProfile m_hardwareBackend;
-    HardwareEncoderSelection m_hardwareEncoderSelection;
-
     bool m_hasHardwarePlan = false;
+
+    const HardwareDeviceContext* m_hardwareDeviceContext = nullptr;
     bool m_decoderUsesHardwareFrames = false;
     bool m_decoderHardwareDeviceAttached = false;
-    bool m_hardwareDeviceAttachedToEncoder = false;
-    bool m_hardwareFramesContextAttachedToEncoder = false;
-    bool m_zeroCopyPipeline = false;
-
-    int m_outputFps = 0;
-    bool m_enableConstantFps = false;
 };
 
 } // namespace media::ffmpeg
