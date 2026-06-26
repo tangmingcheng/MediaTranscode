@@ -2,7 +2,7 @@
 
 #include "internal/FFmpegError.h"
 #include "internal/FFmpegTimelineNormalizer.h"
-#include "internal/output/AudioOutputStreamProvider.h"
+#include "internal/output/capabilities/audio/AudioOutputStreamProvider.h"
 
 #include <sstream>
 #include <utility>
@@ -83,22 +83,34 @@ Status FFmpegAudioCopyPipeline::processPacket(
     AVPacket* packet,
     const FFmpegAudioPacketWrittenCallback& onPacketWritten)
 {
-    if (!packet) {
-        return Status::failure(ErrorInfo::invalidArgument(
-            "FFmpegAudioCopyPipeline processPacket failed: packet is null"));
-    }
-
     if (!isInitialized()) {
         return Status::failure(ErrorInfo::notInitialized(
             "FFmpegAudioCopyPipeline processPacket failed: pipeline is not initialized"));
     }
 
-    Status timestampStatus = normalizePacketTimestamp(packet);
-    if (!timestampStatus) {
-        return timestampStatus;
+    if (!packet) {
+        return Status::failure(ErrorInfo::invalidArgument(
+            "FFmpegAudioCopyPipeline processPacket failed: packet is null"));
     }
 
-    return m_packetWriter.write(packet, onPacketWritten);
+    PacketPtr clonedPacket = makePacket();
+    if (!clonedPacket) {
+        return Status::failure(makeAllocationError(
+            "FFmpegAudioCopyPipeline failed to allocate packet"));
+    }
+
+    const int refRet = av_packet_ref(clonedPacket.get(), packet);
+    if (refRet < 0) {
+        return Status::failure(makeFFmpegError(
+            "FFmpegAudioCopyPipeline av_packet_ref failed", refRet));
+    }
+
+    const Status normalizeStatus = normalizePacketTimestamp(clonedPacket.get());
+    if (!normalizeStatus) {
+        return normalizeStatus;
+    }
+
+    return m_packetWriter.write(clonedPacket.get(), onPacketWritten);
 }
 
 Status FFmpegAudioCopyPipeline::flush(
@@ -114,6 +126,7 @@ bool FFmpegAudioCopyPipeline::isInitialized() const
         m_outputStreamProvider &&
         m_outputNode &&
         m_outputAudioStream &&
+        m_timeline &&
         m_packetWriter.isInitialized();
 }
 
@@ -137,39 +150,17 @@ FFmpegAudioPacketProgress FFmpegAudioCopyPipeline::progress() const
 
 Status FFmpegAudioCopyPipeline::normalizePacketTimestamp(AVPacket* packet) const
 {
-    if (!packet || !m_inputAudioStream || !m_outputAudioStream || !m_timeline) {
-        return Status::success();
+    if (!packet) {
+        return Status::failure(ErrorInfo::invalidArgument(
+            "FFmpegAudioCopyPipeline normalizePacketTimestamp failed: packet is null"));
     }
 
-    const AVRational inputTimeBase = m_inputAudioStream->time_base;
-    const AVRational outputTimeBase = m_outputAudioStream->time_base;
-
-    if (packet->pts != AV_NOPTS_VALUE) {
-        const int64_t ptsUs = TimelineNormalizer::toUs(packet->pts, inputTimeBase);
-        const int64_t normalizedPtsUs = m_timeline->normalizeUs(ptsUs);
-
-        if (normalizedPtsUs == AV_NOPTS_VALUE) {
-            return makeTimestampError("failed to normalize audio packet pts");
-        }
-
-        packet->pts = TimelineNormalizer::fromUs(normalizedPtsUs, outputTimeBase);
+    if (!m_timeline || !m_inputAudioStream || !m_outputAudioStream) {
+        return Status::failure(ErrorInfo::notInitialized(
+            "FFmpegAudioCopyPipeline normalizePacketTimestamp failed: pipeline is not initialized"));
     }
 
-    if (packet->dts != AV_NOPTS_VALUE) {
-        const int64_t dtsUs = TimelineNormalizer::toUs(packet->dts, inputTimeBase);
-        const int64_t normalizedDtsUs = m_timeline->normalizeUs(dtsUs);
-
-        if (normalizedDtsUs == AV_NOPTS_VALUE) {
-            return makeTimestampError("failed to normalize audio packet dts");
-        }
-
-        packet->dts = TimelineNormalizer::fromUs(normalizedDtsUs, outputTimeBase);
-    }
-
-    if (packet->duration > 0) {
-        packet->duration = av_rescale_q(packet->duration, inputTimeBase, outputTimeBase);
-    }
-
+    m_timeline->normalizePacket(packet, m_inputAudioStream, m_outputAudioStream);
     return Status::success();
 }
 
