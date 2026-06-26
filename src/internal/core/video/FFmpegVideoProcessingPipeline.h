@@ -9,11 +9,12 @@
 #include "internal/FFmpegVideoFrameRoutingStrategy.h"
 #include "internal/FFmpegVideoHardwareTransferStage.h"
 #include "internal/FFmpegVideoInputMetadata.h"
-#include "internal/FFmpegVideoPacketWriterStage.h"
 #include "internal/FFmpegVideoTimestampStage.h"
 #include "internal/TranscodeTypes.h"
-#include "internal/output/EncodedPacketSink.h"
-#include "internal/output/FFmpegMuxerPacketSink.h"
+#include "internal/core/video/FFmpegVideoEncodedPacketDrainStage.h"
+#include "internal/output/FFmpegMuxerOutputNode.h"
+#include "internal/output/PacketOutputGraph.h"
+#include "internal/output/PacketOutputNode.h"
 #include "media_transcode/Result.h"
 
 #include <cstdint>
@@ -39,7 +40,7 @@ public:
         AVStream* inputVideoStream = nullptr;
         AVFormatContext* outputFmtCtx = nullptr;
         TimelineNormalizer* timeline = nullptr;
-        EncodedPacketSink* packetSink = nullptr;
+        PacketOutputNode* outputNode = nullptr;
     };
 
     FFmpegVideoProcessingPipeline() = default;
@@ -76,7 +77,7 @@ private:
     Status initializeHardwareTransferStage();
     Status initializeFrameRateStage();
     Status initializeFilterStage();
-    Status initializePacketWriter();
+    Status initializePacketDrainStage();
     Status allocateFrames();
 
     Status drainDecoder(const PacketWrittenCallback& onPacketWritten);
@@ -90,7 +91,7 @@ private:
                                        bool hardwareFrame,
                                        const PacketWrittenCallback& onPacketWritten);
     Status drainFilterStage(const PacketWrittenCallback& onPacketWritten);
-    Status writeEncodedPackets(AVFrame* frame,
+    Status drainEncodedPackets(AVFrame* frame,
                                const PacketWrittenCallback& onPacketWritten);
 
     AVCodecContext* encoderContext() const;
@@ -113,9 +114,10 @@ private:
     HardwarePipelinePlan m_hardwarePlan;
     bool m_hasHardwarePlan = false;
 
-    EncodedPacketSink* m_packetSink = nullptr;
-    FFmpegMuxerPacketSink m_defaultPacketSink;
-    FFmpegVideoPacketWriterStage m_packetWriter;
+    PacketOutputNode* m_outputNode = nullptr;
+    PacketOutputGraph m_defaultOutputGraph;
+    FFmpegMuxerOutputNode m_defaultMuxerOutputNode;
+    FFmpegVideoEncodedPacketDrainStage m_packetDrainStage;
     int64_t m_decodedFrameCount = 0;
 
     FramePtr m_decodedFrame;
