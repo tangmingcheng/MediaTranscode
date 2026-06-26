@@ -2,14 +2,17 @@
 
 #include "internal/FFmpegError.h"
 #include "internal/output/PacketOutputNode.h"
+#include "internal/output/VideoOutputStreamProvider.h"
 
 extern "C" {
+#include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 }
 
 namespace media::ffmpeg {
 
-class FFmpegMuxerOutputNode final : public PacketOutputNode {
+class FFmpegMuxerOutputNode final : public PacketOutputNode,
+                                    public VideoOutputStreamProvider {
 public:
     struct Config {
         AVFormatContext* outputFmtCtx = nullptr;
@@ -35,8 +38,50 @@ public:
                 "FFmpegMuxerOutputNode initialize failed: outputFmtCtx is null"));
         }
 
+        if (!config.outputFmtCtx->oformat) {
+            return Status::failure(ErrorInfo::invalidArgument(
+                "FFmpegMuxerOutputNode initialize failed: output format is null"));
+        }
+
         m_outputFmtCtx = config.outputFmtCtx;
         return Status::success();
+    }
+
+    bool requiresGlobalHeader() const override
+    {
+        return m_outputFmtCtx &&
+            m_outputFmtCtx->oformat &&
+            (m_outputFmtCtx->oformat->flags & AVFMT_GLOBALHEADER);
+    }
+
+    Result<AVStream*> createVideoStream(AVCodecContext* encoderCtx) override
+    {
+        if (!m_outputFmtCtx) {
+            return Result<AVStream*>::failure(ErrorInfo::notInitialized(
+                "FFmpegMuxerOutputNode createVideoStream failed: not initialized"));
+        }
+
+        if (!encoderCtx) {
+            return Result<AVStream*>::failure(ErrorInfo::invalidArgument(
+                "FFmpegMuxerOutputNode createVideoStream failed: encoderCtx is null"));
+        }
+
+        AVStream* stream = avformat_new_stream(m_outputFmtCtx, nullptr);
+        if (!stream) {
+            return Result<AVStream*>::failure(makeAllocationError(
+                "avformat_new_stream video failed"));
+        }
+
+        stream->time_base = encoderCtx->time_base;
+
+        const int ret = avcodec_parameters_from_context(stream->codecpar, encoderCtx);
+        if (ret < 0) {
+            return Result<AVStream*>::failure(makeFFmpegError(
+                "avcodec_parameters_from_context video failed", ret));
+        }
+
+        stream->codecpar->codec_tag = 0;
+        return Result<AVStream*>::success(stream);
     }
 
     Status pushPacket(AVPacket* packet) override
