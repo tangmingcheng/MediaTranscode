@@ -9,6 +9,8 @@
 #include "internal/FFmpegTranscodeLoopDiagnostics.h"
 #include "internal/FFmpegUtils.h"
 #include "internal/core/video/FFmpegVideoProcessingPipeline.h"
+#include "internal/output/FFmpegMuxerOutputNode.h"
+#include "internal/output/PacketOutputGraphController.h"
 
 #include "spdlog/spdlog.h"
 
@@ -189,6 +191,8 @@ void FFmpegLocalFileTranscodeEngine::transcodeThread()
     AVStream* inputAudioStream = nullptr;
 
     ffmpeg::TimelineNormalizer timeline;
+    ffmpeg::PacketOutputGraphController outputGraphController;
+    ffmpeg::FFmpegMuxerOutputNode fileOutputNode;
     ffmpeg::FFmpegVideoProcessingPipeline videoPipeline;
     ffmpeg::FFmpegAudioPipeline audioPipeline;
     ffmpeg::FFmpegTranscodeLoopDiagnostics loopDiagnostics(1000);
@@ -307,6 +311,21 @@ void FFmpegLocalFileTranscodeEngine::transcodeThread()
     }
     outputFmtCtx.reset(rawOutputFmtCtx);
 
+    ffmpeg::FFmpegMuxerOutputNode::Config fileOutputConfig;
+    fileOutputConfig.outputFmtCtx = outputFmtCtx.get();
+
+    Status fileOutputStatus = fileOutputNode.initialize(fileOutputConfig);
+    if (!fileOutputStatus) {
+        failStatus(fileOutputStatus);
+        return;
+    }
+
+    Status attachOutputStatus = outputGraphController.attachExternalNode(&fileOutputNode);
+    if (!attachOutputStatus) {
+        failStatus(attachOutputStatus);
+        return;
+    }
+
     audioStrategyPlan = ffmpeg::FFmpegAudioStrategyPlanner::plan(
         m_config,
         inputAudioStream,
@@ -375,7 +394,8 @@ void FFmpegLocalFileTranscodeEngine::transcodeThread()
         videoConfig.transcodeConfig = &m_config;
         videoConfig.hardwarePlan = executionPlan;
         videoConfig.inputVideoStream = inputVideoStream;
-        videoConfig.outputFmtCtx = outputFmtCtx.get();
+        videoConfig.outputStreamProvider = &fileOutputNode;
+        videoConfig.outputNode = outputGraphController.rootNode();
         videoConfig.timeline = &timeline;
 
         Status videoStatus = videoPipeline.initialize(videoConfig);
@@ -628,6 +648,12 @@ void FFmpegLocalFileTranscodeEngine::transcodeThread()
     countersBeforeStep = currentFinalizeCounters();
     videoPipeline.reset();
     finalizeDiagnostics.logStep("cleanup_video_pipeline", phaseStart, countersBeforeStep, currentFinalizeCounters());
+
+    phaseStart = finalizeDiagnostics.mark();
+    countersBeforeStep = currentFinalizeCounters();
+    outputGraphController.reset();
+    fileOutputNode.reset();
+    finalizeDiagnostics.logStep("cleanup_video_output_graph", phaseStart, countersBeforeStep, currentFinalizeCounters());
 
     phaseStart = finalizeDiagnostics.mark();
     countersBeforeStep = currentFinalizeCounters();
