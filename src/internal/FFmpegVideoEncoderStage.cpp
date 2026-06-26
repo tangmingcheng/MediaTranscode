@@ -432,12 +432,14 @@ Status FFmpegVideoEncoderStage::initializeHardwareFramesContextForEncoder()
     }
 
     std::string hardwareFramesError;
+    constexpr int kEncoderHardwareFramesInitialPoolSize = 32;
     if (!m_encoderHardwareFramesContext.initialize(
             *m_hardwareDeviceContext,
             m_hardwareBackend.hardwarePixelFormat,
             m_hardwareBackend.preferredHardwareFrameSoftwareFormat,
             m_encoderCtx->width,
             m_encoderCtx->height,
+            kEncoderHardwareFramesInitialPoolSize,
             &hardwareFramesError)) {
         return Status::failure(makeError(ErrorCode::HardwareUnavailable, hardwareFramesError));
     }
