@@ -12,8 +12,8 @@
 #include "internal/FFmpegVideoTimestampStage.h"
 #include "internal/TranscodeTypes.h"
 #include "internal/core/video/FFmpegVideoEncodedPacketDrainStage.h"
-#include "internal/output/PacketOutputNode.h"
-#include "internal/output/VideoOutputStreamProvider.h"
+#include "internal/graph/packet/PacketOutputNode.h"
+#include "internal/output/capabilities/video/VideoOutputStreamProvider.h"
 #include "media_transcode/Result.h"
 
 #include <cstdint>
@@ -118,9 +118,6 @@ private:
     int64_t m_decodedFrameCount = 0;
 
     FramePtr m_decodedFrame;
-    FramePtr m_frameRateFrame;
-    FramePtr m_filteredFrame;
-    FramePtr m_softwareTransferFrame;
 };
 
 } // namespace media::ffmpeg
