@@ -76,7 +76,7 @@ void FFmpegVideoEncoderStage::reset()
 
     m_config = TranscodeConfig{};
     m_inputMetadata = FFmpegVideoInputMetadata{};
-    m_outputFmtCtx = nullptr;
+    m_outputStreamProvider = nullptr;
     m_outputVideoStream = nullptr;
 
     m_hardwareDeviceContext = nullptr;
@@ -109,19 +109,14 @@ Status FFmpegVideoEncoderStage::initialize(const Config& config)
             "FFmpegVideoEncoderStage initialize failed: input metadata has invalid video size"));
     }
 
-    if (!config.outputFmtCtx) {
+    if (!config.outputStreamProvider) {
         return Status::failure(ErrorInfo::invalidArgument(
-            "FFmpegVideoEncoderStage initialize failed: outputFmtCtx is null"));
-    }
-
-    if (!config.outputFmtCtx->oformat) {
-        return Status::failure(ErrorInfo::invalidArgument(
-            "FFmpegVideoEncoderStage initialize failed: output format is null"));
+            "FFmpegVideoEncoderStage initialize failed: outputStreamProvider is null"));
     }
 
     m_config = *config.transcodeConfig;
     m_inputMetadata = config.inputMetadata;
-    m_outputFmtCtx = config.outputFmtCtx;
+    m_outputStreamProvider = config.outputStreamProvider;
     m_hardwareDeviceContext = config.hardwareDeviceContext;
     m_decoderUsesHardwareFrames = config.decoderUsesHardwareFrames;
     m_decoderHardwareDeviceAttached = config.decoderHardwareDeviceAttached;
@@ -252,7 +247,7 @@ Status FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream()
         m_encoderCtx->sw_pix_fmt = m_hardwareBackend.directHardwareFrameSoftwareFormat;
     }
 
-    if (m_outputFmtCtx->oformat->flags & AVFMT_GLOBALHEADER) {
+    if (m_outputStreamProvider->requiresGlobalHeader()) {
         m_encoderCtx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
     }
 
@@ -349,20 +344,12 @@ Status FFmpegVideoEncoderStage::openEncoderAndCreateOutputStream()
             ret));
     }
 
-    m_outputVideoStream = avformat_new_stream(m_outputFmtCtx, nullptr);
-    if (!m_outputVideoStream) {
-        return Status::failure(makeAllocationError("avformat_new_stream video failed"));
+    auto streamResult = m_outputStreamProvider->createVideoStream(m_encoderCtx.get());
+    if (!streamResult) {
+        return Status::failure(streamResult.error());
     }
 
-    m_outputVideoStream->time_base = m_encoderCtx->time_base;
-
-    ret = avcodec_parameters_from_context(m_outputVideoStream->codecpar, m_encoderCtx.get());
-    if (ret < 0) {
-        return Status::failure(makeFFmpegError(
-            "avcodec_parameters_from_context video failed", ret));
-    }
-
-    m_outputVideoStream->codecpar->codec_tag = 0;
+    m_outputVideoStream = streamResult.value();
     return Status::success();
 }
 
@@ -451,18 +438,15 @@ Status FFmpegVideoEncoderStage::initializeHardwareFramesContextForEncoder()
             m_hardwareBackend.preferredHardwareFrameSoftwareFormat,
             m_encoderCtx->width,
             m_encoderCtx->height,
-            std::max(16, m_outputFps * 4),
             &hardwareFramesError)) {
-        return Status::failure(makeLegacyError(
-            hardwareFramesError,
-            ErrorCode::HardwareUnavailable));
+        return Status::failure(makeError(ErrorCode::HardwareUnavailable, hardwareFramesError));
     }
 
     BufferRefPtr framesRef = m_encoderHardwareFramesContext.ref();
     if (!framesRef) {
         return Status::failure(makeError(
             ErrorCode::HardwareUnavailable,
-            "hardware frames initialization failed: unable to reference encoder frames context"));
+            "hardware frames initialization failed: unable to reference frames context"));
     }
 
     if (m_encoderCtx->hw_frames_ctx) {
