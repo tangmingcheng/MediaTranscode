@@ -271,7 +271,7 @@ Status FFmpegRealtimeVideoPipelineRuntime::Impl::processPacket(AVPacket* packet)
     auto onPacketWritten = [&](int64_t packetCount, int64_t outTimeMs) {
         runtimeStats.decodedVideoFrameCount = videoPipeline.decodedFrameCount();
         runtimeStats.encodedVideoPacketCount = packetCount;
-        runtimeStats.writtenRtpPacketCount = packetCount;
+        runtimeStats.muxedVideoPacketCount = packetCount;
         runtimeStats.lastOutputTimeMs = outTimeMs;
     };
 
@@ -279,7 +279,7 @@ Status FFmpegRealtimeVideoPipelineRuntime::Impl::processPacket(AVPacket* packet)
 
     runtimeStats.decodedVideoFrameCount = videoPipeline.decodedFrameCount();
     runtimeStats.encodedVideoPacketCount = videoPipeline.packetCount();
-    runtimeStats.writtenRtpPacketCount = videoPipeline.packetCount();
+    runtimeStats.muxedVideoPacketCount = videoPipeline.packetCount();
     runtimeStats.lastOutputTimeMs = videoPipeline.lastWrittenOutTimeMs();
 
     return status;
@@ -294,7 +294,7 @@ Status FFmpegRealtimeVideoPipelineRuntime::Impl::finish(bool flush)
     auto onPacketWritten = [&](int64_t packetCount, int64_t outTimeMs) {
         runtimeStats.decodedVideoFrameCount = videoPipeline.decodedFrameCount();
         runtimeStats.encodedVideoPacketCount = packetCount;
-        runtimeStats.writtenRtpPacketCount = packetCount;
+        runtimeStats.muxedVideoPacketCount = packetCount;
         runtimeStats.lastOutputTimeMs = outTimeMs;
     };
 
@@ -312,7 +312,7 @@ Status FFmpegRealtimeVideoPipelineRuntime::Impl::finish(bool flush)
 
     runtimeStats.decodedVideoFrameCount = videoPipeline.decodedFrameCount();
     runtimeStats.encodedVideoPacketCount = videoPipeline.packetCount();
-    runtimeStats.writtenRtpPacketCount = videoPipeline.packetCount();
+    runtimeStats.muxedVideoPacketCount = videoPipeline.packetCount();
     runtimeStats.lastOutputTimeMs = videoPipeline.lastWrittenOutTimeMs();
 
     Status trailerStatus = rtpMuxer.writeTrailer();
