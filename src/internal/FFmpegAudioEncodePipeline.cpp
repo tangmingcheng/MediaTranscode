@@ -4,6 +4,7 @@
 #include "internal/FFmpegError.h"
 #include "internal/FFmpegTimelineNormalizer.h"
 #include "internal/FFmpegUtils.h"
+#include "internal/output/AudioOutputStreamProvider.h"
 
 #include <algorithm>
 #include <memory>
@@ -61,7 +62,8 @@ void FFmpegAudioEncodePipeline::reset()
 
     m_codec = AudioCodec::AAC;
     m_inputAudioStream = nullptr;
-    m_outputFmtCtx = nullptr;
+    m_outputStreamProvider = nullptr;
+    m_outputNode = nullptr;
     m_outputAudioStream = nullptr;
     m_timeline = nullptr;
 
@@ -80,9 +82,14 @@ Status FFmpegAudioEncodePipeline::initialize(const FFmpegAudioPipelineConfig& co
             "FFmpegAudioEncodePipeline initialize failed: inputAudioStream is null"));
     }
 
-    if (!config.outputFmtCtx) {
+    if (!config.outputStreamProvider) {
         return Status::failure(ErrorInfo::invalidArgument(
-            "FFmpegAudioEncodePipeline initialize failed: outputFmtCtx is null"));
+            "FFmpegAudioEncodePipeline initialize failed: outputStreamProvider is null"));
+    }
+
+    if (!config.outputNode) {
+        return Status::failure(ErrorInfo::invalidArgument(
+            "FFmpegAudioEncodePipeline initialize failed: outputNode is null"));
     }
 
     if (!config.timeline) {
@@ -92,7 +99,8 @@ Status FFmpegAudioEncodePipeline::initialize(const FFmpegAudioPipelineConfig& co
 
     m_codec = config.codec;
     m_inputAudioStream = config.inputAudioStream;
-    m_outputFmtCtx = config.outputFmtCtx;
+    m_outputStreamProvider = config.outputStreamProvider;
+    m_outputNode = config.outputNode;
     m_timeline = config.timeline;
     m_audioBitrateKbps = config.audioBitrateKbps;
 
@@ -191,7 +199,7 @@ Status FFmpegAudioEncodePipeline::initializeEncoder()
         m_encoderCtx->strict_std_compliance = FF_COMPLIANCE_EXPERIMENTAL;
     }
 
-    if (m_outputFmtCtx->oformat->flags & AVFMT_GLOBALHEADER) {
+    if (m_outputStreamProvider->requiresGlobalHeader()) {
         m_encoderCtx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
     }
 
@@ -208,30 +216,18 @@ Status FFmpegAudioEncodePipeline::initializeEncoder()
 
 Status FFmpegAudioEncodePipeline::initializeOutputStream()
 {
-    m_outputAudioStream = avformat_new_stream(m_outputFmtCtx, nullptr);
-    if (!m_outputAudioStream) {
-        return Status::failure(makeAllocationError(
-            "avformat_new_stream encoded audio failed"));
+    auto streamResult = m_outputStreamProvider->createEncodedAudioStream(m_encoderCtx.get());
+    if (!streamResult) {
+        return Status::failure(streamResult.error());
     }
 
-    m_outputAudioStream->time_base = m_encoderCtx->time_base;
-
-    const int ret = avcodec_parameters_from_context(
-        m_outputAudioStream->codecpar,
-        m_encoderCtx.get()
-    );
-    if (ret < 0) {
-        return Status::failure(makeFFmpegError(
-            "avcodec_parameters_from_context audio failed", ret));
-    }
-
-    m_outputAudioStream->codecpar->codec_tag = 0;
+    m_outputAudioStream = streamResult.value();
 
     FFmpegAudioPacketWriter::Config writerConfig;
-    writerConfig.outputFmtCtx = m_outputFmtCtx;
+    writerConfig.outputNode = m_outputNode;
     writerConfig.outputStream = m_outputAudioStream;
     writerConfig.timestampErrorPrefix = "encoded audio packet";
-    writerConfig.writeErrorMessage = "av_interleaved_write_frame encoded audio failed";
+    writerConfig.writeErrorMessage = "encoded audio packet write failed";
 
     return m_packetWriter.initialize(std::move(writerConfig));
 }
@@ -779,7 +775,12 @@ Result<int> FFmpegAudioEncodePipeline::receiveAndWritePackets(
 
 bool FFmpegAudioEncodePipeline::isInitialized() const
 {
-    return m_decoderCtx && m_encoderCtx && m_outputAudioStream && m_packetWriter.isInitialized();
+    return m_decoderCtx &&
+        m_encoderCtx &&
+        m_outputStreamProvider &&
+        m_outputNode &&
+        m_outputAudioStream &&
+        m_packetWriter.isInitialized();
 }
 
 AudioMode FFmpegAudioEncodePipeline::mode() const
