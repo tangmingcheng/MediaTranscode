@@ -18,9 +18,6 @@ class FFmpegRealtimeInputSource;
 
 /**
  * @brief Internal runtime state for the P1 realtime stream transcode core.
- *
- * This type intentionally lives under src/realtime and is not part of the public
- * library API. It can evolve while the realtime pipeline is being validated.
  */
 enum class RealtimeStreamState {
     Idle,
@@ -32,7 +29,7 @@ enum class RealtimeStreamState {
 };
 
 /**
- * @brief RTP output options used by the realtime core skeleton.
+ * @brief RTP output options used by the realtime core.
  */
 struct RealtimeRtpOutputConfig {
     std::string host;
@@ -80,6 +77,7 @@ struct RealtimeCoreConfig {
     VideoEncodeOptions videoEncode;
     HardwarePipelineConfig hardware;
 
+    /** Reserved for a later realtime audio phase. P1 realtime output is video-only. */
     bool audioEnabled = false;
 
     int openTimeoutMs = 5000;
@@ -98,17 +96,14 @@ struct RealtimeCoreStats {
     int64_t inputVideoPacketCount = 0;
     int64_t decodedVideoFrameCount = 0;
     int64_t encodedVideoPacketCount = 0;
-    int64_t writtenRtpPacketCount = 0;
+    /** Encoded AVPackets accepted by the RTP muxer. */
+    int64_t muxedVideoPacketCount = 0;
     int64_t lastInputTimeMs = 0;
     int64_t lastOutputTimeMs = 0;
 };
 
 /**
- * @brief Internal engine skeleton for P1 single-stream realtime RTP transcoding.
- *
- * P1-Core-1 only establishes ownership, lifecycle, validation, state reporting
- * and extension seams. The realtime input source, video pipeline binding and
- * RTP muxer will be connected in the following P1-Core steps.
+ * @brief Internal engine for P1 single-stream realtime video-to-RTP transcoding.
  */
 class FFmpegRealtimeStreamTranscodeEngine {
 public:
