@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/FFmpegError.h"
+#include "internal/output/AudioOutputStreamProvider.h"
 #include "internal/output/PacketOutputNode.h"
 #include "internal/output/VideoOutputStreamProvider.h"
 
@@ -12,7 +13,8 @@ extern "C" {
 namespace media::ffmpeg {
 
 class FFmpegMuxerOutputNode final : public PacketOutputNode,
-                                    public VideoOutputStreamProvider {
+                                    public VideoOutputStreamProvider,
+                                    public AudioOutputStreamProvider {
 public:
     struct Config {
         AVFormatContext* outputFmtCtx = nullptr;
@@ -84,6 +86,65 @@ public:
         return Result<AVStream*>::success(stream);
     }
 
+    Result<AVStream*> createAudioCopyStream(AVStream* inputAudioStream) override
+    {
+        if (!m_outputFmtCtx) {
+            return Result<AVStream*>::failure(ErrorInfo::notInitialized(
+                "FFmpegMuxerOutputNode createAudioCopyStream failed: not initialized"));
+        }
+
+        if (!inputAudioStream) {
+            return Result<AVStream*>::failure(ErrorInfo::invalidArgument(
+                "FFmpegMuxerOutputNode createAudioCopyStream failed: inputAudioStream is null"));
+        }
+
+        AVStream* stream = avformat_new_stream(m_outputFmtCtx, nullptr);
+        if (!stream) {
+            return Result<AVStream*>::failure(makeAllocationError(
+                "avformat_new_stream audio failed"));
+        }
+
+        const int ret = avcodec_parameters_copy(stream->codecpar, inputAudioStream->codecpar);
+        if (ret < 0) {
+            return Result<AVStream*>::failure(makeFFmpegError(
+                "avcodec_parameters_copy audio failed", ret));
+        }
+
+        stream->codecpar->codec_tag = 0;
+        stream->time_base = inputAudioStream->time_base;
+        return Result<AVStream*>::success(stream);
+    }
+
+    Result<AVStream*> createEncodedAudioStream(AVCodecContext* encoderCtx) override
+    {
+        if (!m_outputFmtCtx) {
+            return Result<AVStream*>::failure(ErrorInfo::notInitialized(
+                "FFmpegMuxerOutputNode createEncodedAudioStream failed: not initialized"));
+        }
+
+        if (!encoderCtx) {
+            return Result<AVStream*>::failure(ErrorInfo::invalidArgument(
+                "FFmpegMuxerOutputNode createEncodedAudioStream failed: encoderCtx is null"));
+        }
+
+        AVStream* stream = avformat_new_stream(m_outputFmtCtx, nullptr);
+        if (!stream) {
+            return Result<AVStream*>::failure(makeAllocationError(
+                "avformat_new_stream encoded audio failed"));
+        }
+
+        stream->time_base = encoderCtx->time_base;
+
+        const int ret = avcodec_parameters_from_context(stream->codecpar, encoderCtx);
+        if (ret < 0) {
+            return Result<AVStream*>::failure(makeFFmpegError(
+                "avcodec_parameters_from_context audio failed", ret));
+        }
+
+        stream->codecpar->codec_tag = 0;
+        return Result<AVStream*>::success(stream);
+    }
+
     Status pushPacket(AVPacket* packet) override
     {
         if (!m_outputFmtCtx) {
@@ -98,7 +159,7 @@ public:
 
         const int ret = av_interleaved_write_frame(m_outputFmtCtx, packet);
         if (ret < 0) {
-            return Status::failure(makeFFmpegError("video packet write failed", ret));
+            return Status::failure(makeFFmpegError("packet write failed", ret));
         }
 
         return Status::success();
