@@ -42,25 +42,25 @@ add_library(${TARGET_CORE} STATIC
     src/internal/core/video/FFmpegVideoEncodedPacketDrainStage.h
     src/internal/core/video/FFmpegVideoProcessingPipeline.cpp
     src/internal/core/video/FFmpegVideoProcessingPipeline.h
+    src/internal/graph/packet/PacketOutputGraph.h
+    src/internal/graph/packet/PacketOutputGraphController.h
+    src/internal/graph/packet/PacketOutputNode.h
     src/internal/input/FFmpegRealtimeInputSource.cpp
     src/internal/input/FFmpegRealtimeInputSource.h
     src/internal/input/FFmpegRealtimeInterruptController.cpp
     src/internal/input/FFmpegRealtimeInterruptController.h
-    src/internal/output/AudioOutputStreamProvider.h
-    src/internal/output/FFmpegFileOutputSession.cpp
-    src/internal/output/FFmpegFileOutputSession.h
-    src/internal/output/FFmpegMuxerOutputNode.h
-    src/internal/output/FFmpegRtpMuxer.cpp
-    src/internal/output/FFmpegRtpMuxer.h
-    src/internal/output/FFmpegRtpOutputNode.h
-    src/internal/output/FFmpegRtpUrlBuilder.cpp
-    src/internal/output/FFmpegRtpUrlBuilder.h
-    src/internal/output/FFmpegSdpWriter.cpp
-    src/internal/output/FFmpegSdpWriter.h
-    src/internal/output/PacketOutputGraph.h
-    src/internal/output/PacketOutputGraphController.h
-    src/internal/output/PacketOutputNode.h
-    src/internal/output/VideoOutputStreamProvider.h
+    src/internal/output/builders/rtp/FFmpegRtpUrlBuilder.cpp
+    src/internal/output/builders/rtp/FFmpegRtpUrlBuilder.h
+    src/internal/output/capabilities/audio/AudioOutputStreamProvider.h
+    src/internal/output/capabilities/video/VideoOutputStreamProvider.h
+    src/internal/output/muxers/rtp/FFmpegRtpMuxer.cpp
+    src/internal/output/muxers/rtp/FFmpegRtpMuxer.h
+    src/internal/output/nodes/file/FFmpegFileOutputNode.h
+    src/internal/output/nodes/rtp/FFmpegRtpOutputNode.h
+    src/internal/output/sessions/file/FFmpegFileOutputSession.cpp
+    src/internal/output/sessions/file/FFmpegFileOutputSession.h
+    src/internal/output/writers/sdp/FFmpegSdpWriter.cpp
+    src/internal/output/writers/sdp/FFmpegSdpWriter.h
     src/internal/FFmpegAudioAdapter.cpp
     src/internal/FFmpegAudioAdapter.h
     src/internal/FFmpegAudioCopyPipeline.cpp
@@ -117,7 +117,6 @@ add_library(${TARGET_CORE} STATIC
     src/internal/FFmpegVideoAdapter.h
     src/internal/FFmpegVideoBitrateControlPlanner.cpp
     src/internal/FFmpegVideoBitrateControlPlanner.h
-    src/internal/FFmpegVideoBitrateOptionAdapter.cpp
     src/internal/FFmpegVideoBitrateOptionAdapter.h
     src/internal/FFmpegVideoColorMetadata.cpp
     src/internal/FFmpegVideoColorMetadata.h
