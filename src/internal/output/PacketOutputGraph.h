@@ -1,11 +1,11 @@
 #pragma once
 
-#include "internal/output/PacketOutputNode.h"
 #include "internal/FFmpegError.h"
 #include "internal/FFmpegRAII.h"
+#include "internal/output/PacketOutputNode.h"
 
+#include <cstddef>
 #include <vector>
-#include <algorithm>
 
 extern "C" {
 #include <libavcodec/packet.h>
@@ -22,11 +22,14 @@ public:
 
     void addNode(PacketOutputNode* node)
     {
-        if (!node) return;
+        if (!node) {
+            return;
+        }
+
         m_nodes.push_back(node);
     }
 
-    size_t nodeCount() const
+    std::size_t nodeCount() const
     {
         return m_nodes.size();
     }
@@ -43,8 +46,10 @@ public:
                 "PacketOutputGraph pushPacket failed: no output nodes"));
         }
 
-        for (auto node : m_nodes) {
-            if (!node) continue;
+        for (auto* node : m_nodes) {
+            if (!node) {
+                continue;
+            }
 
             PacketPtr clone = makePacket();
             if (!clone) {
@@ -58,9 +63,9 @@ public:
                     "PacketOutputGraph av_packet_ref failed", ret));
             }
 
-            Status st = node->pushPacket(clone.get());
-            if (!st) {
-                return st;
+            Status status = node->pushPacket(clone.get());
+            if (!status) {
+                return status;
             }
         }
 
