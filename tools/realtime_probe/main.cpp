@@ -3,7 +3,9 @@
 #include "spdlog/sinks/stdout_color_sinks.h"
 #include "spdlog/spdlog.h"
 
+#include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <cstdlib>
 #include <iostream>
 #include <stdexcept>
@@ -20,6 +22,14 @@ struct Options {
     bool verbose = false;
     bool help = false;
 };
+
+std::string toLower(std::string value)
+{
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    return value;
+}
 
 std::string requireValue(int argc, char* argv[], int& index, const std::string& name)
 {
@@ -39,6 +49,47 @@ int parseInt(const std::string& value, const std::string& name, int minValue)
     return static_cast<int>(parsed);
 }
 
+media::VideoCodec parseVideoCodec(const std::string& value)
+{
+    const std::string normalized = toLower(value);
+    if (normalized == "h264" || normalized == "avc") return media::VideoCodec::H264;
+    if (normalized == "h265" || normalized == "hevc") return media::VideoCodec::H265;
+    if (normalized == "mpeg4" || normalized == "mp4v") return media::VideoCodec::MPEG4;
+    if (normalized == "vp8") return media::VideoCodec::VP8;
+    if (normalized == "vp9") return media::VideoCodec::VP9;
+    if (normalized == "av1") return media::VideoCodec::AV1;
+    throw std::runtime_error("unsupported video codec: " + value);
+}
+
+media::VideoRateControlMode parseRateControl(const std::string& value)
+{
+    const std::string normalized = toLower(value);
+    if (normalized == "auto") return media::VideoRateControlMode::Auto;
+    if (normalized == "cbr") return media::VideoRateControlMode::CBR;
+    if (normalized == "vbr") return media::VideoRateControlMode::VBR;
+    if (normalized == "crf" || normalized == "cq") return media::VideoRateControlMode::CRF;
+    if (normalized == "capped-vbr" || normalized == "capped_vbr" || normalized == "cvbr") {
+        return media::VideoRateControlMode::CappedVBR;
+    }
+    throw std::runtime_error("unsupported video rate control mode: " + value);
+}
+
+media::VideoSpeedPreset parseSpeedPreset(const std::string& value)
+{
+    const std::string normalized = toLower(value);
+    if (normalized == "ultrafast") return media::VideoSpeedPreset::Ultrafast;
+    if (normalized == "superfast") return media::VideoSpeedPreset::Superfast;
+    if (normalized == "veryfast") return media::VideoSpeedPreset::Veryfast;
+    if (normalized == "faster") return media::VideoSpeedPreset::Faster;
+    if (normalized == "fast") return media::VideoSpeedPreset::Fast;
+    if (normalized == "medium") return media::VideoSpeedPreset::Medium;
+    if (normalized == "slow") return media::VideoSpeedPreset::Slow;
+    if (normalized == "slower") return media::VideoSpeedPreset::Slower;
+    if (normalized == "veryslow" || normalized == "very-slow") return media::VideoSpeedPreset::Veryslow;
+    if (normalized == "placebo") return media::VideoSpeedPreset::Placebo;
+    throw std::runtime_error("unsupported video speed preset: " + value);
+}
+
 void printUsage(const char* exe)
 {
     std::cout
@@ -53,6 +104,28 @@ void printUsage(const char* exe)
         << "      --input-format <name>       Optional FFmpeg input format hint\n"
         << "      --accept-eof                Treat EOF as success for local-file probing\n"
         << "      --no-low-latency            Disable low-latency input options\n\n"
+        << "Video transcode options:\n"
+        << "      --width <value>             Output width, 0 means input width\n"
+        << "      --height <value>            Output height, 0 means input height\n"
+        << "      --size <WxH>                Output size, for example 1280x720\n"
+        << "      --fps <value>               Output fps, 0 means preserve input timeline\n"
+        << "      --video-codec <value>       h264 | h265 | mpeg4 | vp8 | vp9 | av1\n"
+        << "      --bitrate <kbps>            Target video bitrate in kbps\n"
+        << "      --video-bitrate <kbps>      Alias of --bitrate\n"
+        << "      --min-bitrate <kbps>        Minimum video bitrate constraint\n"
+        << "      --max-bitrate <kbps>        Peak video bitrate constraint\n"
+        << "      --buffer-size <kbits>       Encoder VBV buffer size\n"
+        << "      --rc <value>                auto | cbr | vbr | crf | capped-vbr\n"
+        << "      --quality <value>           Generic quality value for crf/cq modes\n"
+        << "      --preset <value>            ultrafast | superfast | veryfast | faster | fast | medium | slow | slower | veryslow | placebo\n"
+        << "      --speed <value>             Alias of --preset\n"
+        << "      --gop <frames>              GOP size in frames, 0 means auto\n"
+        << "      --max-bframes <count>       Max B frames, default 0\n"
+        << "      --tune <value>              Encoder tune if supported\n"
+        << "      --profile <value>           Encoder profile if supported\n"
+        << "      --level <value>             Encoder level if supported\n"
+        << "      --enable-hw                 Enable automatic hardware planning\n"
+        << "      --disable-hw                Force pure CPU decode/filter/encode path\n\n"
         << "RTP output options:\n"
         << "      --rtp-host <host>           Destination host, default 127.0.0.1\n"
         << "      --rtp-port <port>           Destination RTP port, default 5004\n"
@@ -78,8 +151,10 @@ Options parseOptions(int argc, char* argv[])
     options.config.analyzeDurationUs = 500000;
     options.config.probeSizeBytes = 512 * 1024;
     options.config.lowLatency = true;
-    options.config.videoBitrateKbps = 2000;
-    options.config.maxBFrames = 0;
+    options.config.videoBitrate.targetKbps = 2000;
+    options.config.videoBitrate.rateControl = media::VideoRateControlMode::CBR;
+    options.config.videoEncode.speedPreset = media::VideoSpeedPreset::Veryfast;
+    options.config.videoEncode.maxBFrames = 0;
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -117,6 +192,96 @@ Options parseOptions(int argc, char* argv[])
         }
         if (arg == "--no-low-latency") {
             options.config.lowLatency = false;
+            continue;
+        }
+        if (arg == "--width") {
+            options.config.width = parseInt(requireValue(argc, argv, i, arg), arg, 0);
+            continue;
+        }
+        if (arg == "--height") {
+            options.config.height = parseInt(requireValue(argc, argv, i, arg), arg, 0);
+            continue;
+        }
+        if (arg == "--fps") {
+            options.config.fps = parseInt(requireValue(argc, argv, i, arg), arg, 0);
+            continue;
+        }
+        if (arg == "--size") {
+            const std::string value = requireValue(argc, argv, i, arg);
+            const std::size_t pos = value.find('x');
+            if (pos == std::string::npos) {
+                throw std::runtime_error("invalid value for --size: " + value);
+            }
+            options.config.width = parseInt(value.substr(0, pos), "--size width", 0);
+            options.config.height = parseInt(value.substr(pos + 1), "--size height", 0);
+            continue;
+        }
+        if (arg == "--video-codec") {
+            options.config.videoCodec = parseVideoCodec(requireValue(argc, argv, i, arg));
+            continue;
+        }
+        if (arg == "--bitrate" || arg == "--video-bitrate") {
+            options.config.videoBitrate.targetKbps = parseInt(requireValue(argc, argv, i, arg), arg, 0);
+            continue;
+        }
+        if (arg == "--min-bitrate" || arg == "--min-video-bitrate") {
+            options.config.videoBitrate.minKbps = parseInt(requireValue(argc, argv, i, arg), arg, 0);
+            continue;
+        }
+        if (arg == "--max-bitrate" || arg == "--max-video-bitrate") {
+            options.config.videoBitrate.maxKbps = parseInt(requireValue(argc, argv, i, arg), arg, 0);
+            continue;
+        }
+        if (arg == "--buffer-size" || arg == "--bufsize") {
+            options.config.videoBitrate.bufferSizeKbits = parseInt(requireValue(argc, argv, i, arg), arg, 0);
+            continue;
+        }
+        if (arg == "--rc" || arg == "--rate-control") {
+            options.config.videoBitrate.rateControl = parseRateControl(requireValue(argc, argv, i, arg));
+            continue;
+        }
+        if (arg == "--quality") {
+            options.config.videoBitrate.quality = parseInt(requireValue(argc, argv, i, arg), arg, 0);
+            continue;
+        }
+        if (arg == "--preset" || arg == "--speed") {
+            options.config.videoEncode.speedPreset = parseSpeedPreset(requireValue(argc, argv, i, arg));
+            continue;
+        }
+        if (arg == "--gop" || arg == "--gop-size") {
+            options.config.videoEncode.gopSize = parseInt(requireValue(argc, argv, i, arg), arg, 0);
+            continue;
+        }
+        if (arg == "--max-bframes" || arg == "--bframes") {
+            options.config.videoEncode.maxBFrames = parseInt(requireValue(argc, argv, i, arg), arg, 0);
+            continue;
+        }
+        if (arg == "--tune") {
+            options.config.videoEncode.tune = requireValue(argc, argv, i, arg);
+            continue;
+        }
+        if (arg == "--profile") {
+            options.config.videoEncode.profile = requireValue(argc, argv, i, arg);
+            continue;
+        }
+        if (arg == "--level") {
+            options.config.videoEncode.level = requireValue(argc, argv, i, arg);
+            continue;
+        }
+        if (arg == "--enable-hw" || arg == "--enable-hardware") {
+            options.config.hardware.enabled = true;
+            continue;
+        }
+        if (arg == "--disable-hw" || arg == "--disable-hardware") {
+            options.config.hardware.enabled = false;
+            continue;
+        }
+        if (arg == "--no-hw-fallback") {
+            options.config.hardware.allowZeroCopyFallback = false;
+            continue;
+        }
+        if (arg == "--allow-hw-fallback") {
+            options.config.hardware.allowZeroCopyFallback = true;
             continue;
         }
         if (arg == "--rtp-host") {
@@ -260,16 +425,24 @@ int main(int argc, char* argv[])
         }
 
         spdlog::set_level(options.verbose ? spdlog::level::debug : spdlog::level::info);
-        spdlog::info("input={}, duration={}s, loop={}, rtp={}:{}, sdp={}, lowLatency={}",
-                     options.config.inputUrl,
-                     options.durationSeconds,
-                     options.loopCount,
-                     options.config.rtpOutput.host,
-                     options.config.rtpOutput.rtpPort,
-                     options.config.rtpOutput.sdpOutputPath.empty()
-                        ? "disabled"
-                        : options.config.rtpOutput.sdpOutputPath,
-                     options.config.lowLatency ? "true" : "false");
+        spdlog::info(
+            "input={}, duration={}s, loop={}, size={}x{}, fps={}, bitrate={}kbps, rc={}, rtp={}:{}, sdp={}, lowLatency={}, hw={}",
+            options.config.inputUrl,
+            options.durationSeconds,
+            options.loopCount,
+            options.config.width,
+            options.config.height,
+            options.config.fps,
+            options.config.videoBitrate.targetKbps,
+            static_cast<int>(options.config.videoBitrate.rateControl),
+            options.config.rtpOutput.host,
+            options.config.rtpOutput.rtpPort,
+            options.config.rtpOutput.sdpOutputPath.empty()
+                ? "disabled"
+                : options.config.rtpOutput.sdpOutputPath,
+            options.config.lowLatency ? "true" : "false",
+            options.config.hardware.enabled ? "enabled" : "disabled"
+        );
 
         bool ok = true;
         for (int i = 1; i <= options.loopCount; ++i) {
