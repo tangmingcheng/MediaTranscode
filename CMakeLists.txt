@@ -19,7 +19,6 @@ set(MEDIA_TRANSCODE_TEST_SAMPLES_DIR
     "Directory containing media samples used by integration/regression tests"
 )
 
-# MSVC Debug Info
 if(POLICY CMP0141)
     cmake_policy(SET CMP0141 NEW)
     set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT
@@ -29,9 +28,6 @@ $<$<CONFIG:Debug,RelWithDebInfo>:ProgramDatabase>>"
     )
 endif()
 
-# --------------------------
-# 核心库
-# --------------------------
 add_library(${TARGET_CORE} STATIC
     src/MediaTranscode.cpp
     src/local/FFmpegLocalFileTranscodeEngine.cpp
@@ -141,7 +137,6 @@ add_library(${TARGET_CORE} STATIC
     src/internal/FFmpegVideoPacketWriterStage.h
     src/internal/FFmpegVideoTimestampStage.cpp
     src/internal/FFmpegVideoTimestampStage.h
-    src/internal/FFmpegVideoTranscodePipeline.h
     include/media_transcode/MediaTranscode.h
     include/media_transcode/MediaTypes.h
     include/media_transcode/LocalVideoTranscode.h
@@ -164,9 +159,6 @@ if(MSVC)
     target_compile_options(${TARGET_CORE} PRIVATE /utf-8)
 endif()
 
-# --------------------------
-# spdlog
-# --------------------------
 add_library(thirdparty_spdlog INTERFACE)
 target_include_directories(thirdparty_spdlog INTERFACE
     "${THIRD_PARTY_DIR}/include"
@@ -174,9 +166,6 @@ target_include_directories(thirdparty_spdlog INTERFACE
 
 target_link_libraries(${TARGET_CORE} PRIVATE thirdparty_spdlog)
 
-# --------------------------
-# FFmpeg
-# --------------------------
 add_library(thirdparty_ffmpeg INTERFACE)
 
 if(WIN32)
@@ -199,7 +188,6 @@ if(WIN32)
         swscale
         swresample
     )
-
 elseif(USE_LOCAL_FFMPEG AND CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
     find_package(PkgConfig REQUIRED)
 
@@ -215,7 +203,6 @@ elseif(USE_LOCAL_FFMPEG AND CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
     target_link_libraries(thirdparty_ffmpeg INTERFACE
         PkgConfig::FFMPEG
     )
-
 else()
     find_package(PkgConfig REQUIRED)
 
@@ -250,9 +237,6 @@ function(media_transcode_configure_test target_name)
     )
 endfunction()
 
-# --------------------------
-# Internal validation/debug tools
-# --------------------------
 if(MEDIA_TRANSCODE_BUILD_TOOLS)
     add_executable(${TARGET_LOCAL_TRANSCODE_PROBE}
         tools/local_transcode_probe/main.cpp
@@ -261,9 +245,6 @@ if(MEDIA_TRANSCODE_BUILD_TOOLS)
     target_link_libraries(${TARGET_LOCAL_TRANSCODE_PROBE} PRIVATE thirdparty_spdlog)
 endif()
 
-# --------------------------
-# Public API examples
-# --------------------------
 if(MEDIA_TRANSCODE_BUILD_EXAMPLES)
     add_executable(media_transcode_example_local_sync
         examples/api/local_transcode_sync.cpp
@@ -286,9 +267,6 @@ if(MEDIA_TRANSCODE_BUILD_EXAMPLES)
     media_transcode_configure_app(media_transcode_example_local_error_handling)
 endif()
 
-# --------------------------
-# Internal P1 debug tools
-# --------------------------
 if(MEDIA_TRANSCODE_BUILD_P1_TOOLS)
     add_executable(media_transcode_p1_realtime_probe
         tools/realtime_probe/main.cpp
@@ -300,9 +278,6 @@ if(MEDIA_TRANSCODE_BUILD_P1_TOOLS)
     target_link_libraries(media_transcode_p1_realtime_probe PRIVATE thirdparty_spdlog)
 endif()
 
-# --------------------------
-# Tests
-# --------------------------
 if(MEDIA_TRANSCODE_BUILD_TESTS)
     enable_testing()
 
