@@ -10,6 +10,7 @@
 #include "internal/FFmpegRAII.h"
 #include "internal/FFmpegVideoAdapter.h"
 #include "internal/FFmpegVideoInputMetadata.h"
+#include "internal/output/VideoOutputStreamProvider.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -26,7 +27,7 @@ public:
         const HardwarePipelinePlan* hardwarePlan = nullptr;
 
         FFmpegVideoInputMetadata inputMetadata;
-        AVFormatContext* outputFmtCtx = nullptr;
+        VideoOutputStreamProvider* outputStreamProvider = nullptr;
 
         /*
          * FFmpegVideoEncoderStage does not own this hardware device context.
@@ -73,7 +74,7 @@ private:
     TranscodeConfig m_config;
 
     FFmpegVideoInputMetadata m_inputMetadata;
-    AVFormatContext* m_outputFmtCtx = nullptr;
+    VideoOutputStreamProvider* m_outputStreamProvider = nullptr;
 
     CodecContextPtr m_encoderCtx;
     AVStream* m_outputVideoStream = nullptr;
