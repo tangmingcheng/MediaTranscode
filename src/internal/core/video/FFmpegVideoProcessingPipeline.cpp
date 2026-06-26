@@ -18,7 +18,7 @@ void FFmpegVideoProcessingPipeline::reset()
     m_filterStage.reset();
     m_frameRateStage.reset();
     m_packetDrainStage.reset();
-    m_defaultOutputGraph.clear();
+    m_defaultOutputController.reset();
     m_defaultMuxerOutputNode.reset();
     m_hardwareTransferStage.reset();
     m_frameRoutingStrategy.reset();
@@ -238,9 +238,12 @@ Status FFmpegVideoProcessingPipeline::initializePacketDrainStage()
             return muxerStatus;
         }
 
-        m_defaultOutputGraph.clear();
-        m_defaultOutputGraph.addNode(&m_defaultMuxerOutputNode);
-        m_outputNode = &m_defaultOutputGraph;
+        Status attachStatus = m_defaultOutputController.attachExternalNode(&m_defaultMuxerOutputNode);
+        if (!attachStatus) {
+            return attachStatus;
+        }
+
+        m_outputNode = m_defaultOutputController.rootNode();
     }
 
     FFmpegVideoEncodedPacketDrainStage::Config config;
