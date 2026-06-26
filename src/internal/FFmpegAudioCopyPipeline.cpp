@@ -2,6 +2,7 @@
 
 #include "internal/FFmpegError.h"
 #include "internal/FFmpegTimelineNormalizer.h"
+#include "internal/output/AudioOutputStreamProvider.h"
 
 #include <sstream>
 #include <utility>
@@ -26,7 +27,8 @@ Status makeTimestampError(const std::string& message)
 void FFmpegAudioCopyPipeline::reset()
 {
     m_inputAudioStream = nullptr;
-    m_outputFmtCtx = nullptr;
+    m_outputStreamProvider = nullptr;
+    m_outputNode = nullptr;
     m_outputAudioStream = nullptr;
     m_timeline = nullptr;
     m_packetWriter.reset();
@@ -41,9 +43,14 @@ Status FFmpegAudioCopyPipeline::initialize(const FFmpegAudioPipelineConfig& conf
             "FFmpegAudioCopyPipeline initialize failed: inputAudioStream is null"));
     }
 
-    if (!config.outputFmtCtx) {
+    if (!config.outputStreamProvider) {
         return Status::failure(ErrorInfo::invalidArgument(
-            "FFmpegAudioCopyPipeline initialize failed: outputFmtCtx is null"));
+            "FFmpegAudioCopyPipeline initialize failed: outputStreamProvider is null"));
+    }
+
+    if (!config.outputNode) {
+        return Status::failure(ErrorInfo::invalidArgument(
+            "FFmpegAudioCopyPipeline initialize failed: outputNode is null"));
     }
 
     if (!config.timeline) {
@@ -52,30 +59,22 @@ Status FFmpegAudioCopyPipeline::initialize(const FFmpegAudioPipelineConfig& conf
     }
 
     m_inputAudioStream = config.inputAudioStream;
-    m_outputFmtCtx = config.outputFmtCtx;
+    m_outputStreamProvider = config.outputStreamProvider;
+    m_outputNode = config.outputNode;
     m_timeline = config.timeline;
 
-    m_outputAudioStream = avformat_new_stream(m_outputFmtCtx, nullptr);
-    if (!m_outputAudioStream) {
-        return Status::failure(makeAllocationError("avformat_new_stream audio failed"));
+    auto streamResult = m_outputStreamProvider->createAudioCopyStream(m_inputAudioStream);
+    if (!streamResult) {
+        return Status::failure(streamResult.error());
     }
 
-    const int ret = avcodec_parameters_copy(
-        m_outputAudioStream->codecpar,
-        m_inputAudioStream->codecpar
-    );
-    if (ret < 0) {
-        return Status::failure(makeFFmpegError("avcodec_parameters_copy audio failed", ret));
-    }
-
-    m_outputAudioStream->codecpar->codec_tag = 0;
-    m_outputAudioStream->time_base = m_inputAudioStream->time_base;
+    m_outputAudioStream = streamResult.value();
 
     FFmpegAudioPacketWriter::Config writerConfig;
-    writerConfig.outputFmtCtx = m_outputFmtCtx;
+    writerConfig.outputNode = m_outputNode;
     writerConfig.outputStream = m_outputAudioStream;
     writerConfig.timestampErrorPrefix = "audio packet";
-    writerConfig.writeErrorMessage = "av_interleaved_write_frame audio failed";
+    writerConfig.writeErrorMessage = "audio packet write failed";
 
     return m_packetWriter.initialize(std::move(writerConfig));
 }
@@ -111,7 +110,11 @@ Status FFmpegAudioCopyPipeline::flush(
 
 bool FFmpegAudioCopyPipeline::isInitialized() const
 {
-    return m_inputAudioStream && m_outputAudioStream && m_packetWriter.isInitialized();
+    return m_inputAudioStream &&
+        m_outputStreamProvider &&
+        m_outputNode &&
+        m_outputAudioStream &&
+        m_packetWriter.isInitialized();
 }
 
 FFmpegAudioPipelineMode FFmpegAudioCopyPipeline::mode() const
