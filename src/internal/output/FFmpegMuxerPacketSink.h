@@ -1,7 +1,7 @@
 #pragma once
 
 #include "internal/FFmpegError.h"
-#include "internal/output/IEncodedPacketSink.h"
+#include "internal/output/EncodedPacketSink.h"
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -9,7 +9,7 @@ extern "C" {
 
 namespace media::ffmpeg {
 
-class FFmpegMuxerPacketSink final : public IEncodedPacketSink {
+class FFmpegMuxerPacketSink final : public EncodedPacketSink {
 public:
     struct Config {
         AVFormatContext* outputFmtCtx = nullptr;
