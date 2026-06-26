@@ -12,6 +12,8 @@
 #include "internal/FFmpegVideoTimestampStage.h"
 #include "internal/TranscodeTypes.h"
 #include "internal/core/video/FFmpegVideoEncodedPacketDrainStage.h"
+#include "internal/output/FFmpegMuxerOutputNode.h"
+#include "internal/output/PacketOutputGraphController.h"
 #include "internal/output/PacketOutputNode.h"
 #include "internal/output/VideoOutputStreamProvider.h"
 #include "media_transcode/Result.h"
@@ -21,6 +23,7 @@
 
 extern "C" {
 #include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
 #include <libavutil/frame.h>
 }
 
@@ -37,8 +40,15 @@ public:
         const HardwarePipelinePlan* hardwarePlan = nullptr;
         AVStream* inputVideoStream = nullptr;
         TimelineNormalizer* timeline = nullptr;
+
         VideoOutputStreamProvider* outputStreamProvider = nullptr;
         PacketOutputNode* outputNode = nullptr;
+
+        /*
+         * Transitional fallback for existing local-file callers. New callers
+         * should pass outputStreamProvider + outputNode explicitly.
+         */
+        AVFormatContext* outputFmtCtx = nullptr;
     };
 
     FFmpegVideoProcessingPipeline() = default;
@@ -111,8 +121,11 @@ private:
     HardwarePipelinePlan m_hardwarePlan;
     bool m_hasHardwarePlan = false;
 
+    AVFormatContext* m_legacyOutputFmtCtx = nullptr;
     VideoOutputStreamProvider* m_outputStreamProvider = nullptr;
     PacketOutputNode* m_outputNode = nullptr;
+    PacketOutputGraphController m_legacyOutputController;
+    FFmpegMuxerOutputNode m_legacyMuxerOutputNode;
     FFmpegVideoEncodedPacketDrainStage m_packetDrainStage;
     int64_t m_decodedFrameCount = 0;
 
