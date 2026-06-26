@@ -2,7 +2,7 @@
 
 #include "internal/FFmpegPipelinePlanner.h"
 #include "internal/FFmpegTimelineNormalizer.h"
-#include "internal/FFmpegVideoTranscodePipeline.h"
+#include "internal/core/video/FFmpegVideoProcessingPipeline.h"
 #include "internal/output/FFmpegRtpMuxer.h"
 
 #include "spdlog/spdlog.h"
@@ -83,7 +83,7 @@ struct FFmpegRealtimeVideoPipelineRuntime::Impl {
     ffmpeg::HardwarePipelinePlan hardwarePlan;
     const ffmpeg::HardwarePipelinePlan* executionPlan = nullptr;
     ffmpeg::FFmpegRtpMuxer rtpMuxer;
-    ffmpeg::FFmpegVideoTranscodePipeline videoPipeline;
+    ffmpeg::FFmpegVideoProcessingPipeline videoPipeline;
 
     RealtimeCoreStats runtimeStats;
     bool initialized = false;
@@ -223,7 +223,7 @@ Status FFmpegRealtimeVideoPipelineRuntime::Impl::initializeMuxerAndPipeline()
         return status;
     }
 
-    ffmpeg::FFmpegVideoTranscodePipeline::Config videoConfig;
+    ffmpeg::FFmpegVideoProcessingPipeline::Config videoConfig;
     videoConfig.transcodeConfig = &pipelineConfig;
     videoConfig.hardwarePlan = executionPlan;
     videoConfig.inputVideoStream = inputVideoStream;
