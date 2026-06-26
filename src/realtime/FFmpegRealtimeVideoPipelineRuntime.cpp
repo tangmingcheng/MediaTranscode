@@ -3,7 +3,8 @@
 #include "internal/FFmpegPipelinePlanner.h"
 #include "internal/FFmpegTimelineNormalizer.h"
 #include "internal/core/video/FFmpegVideoProcessingPipeline.h"
-#include "internal/output/FFmpegRtpMuxer.h"
+#include "internal/output/FFmpegRtpOutputNode.h"
+#include "internal/output/PacketOutputGraphController.h"
 
 #include "spdlog/spdlog.h"
 
@@ -71,7 +72,7 @@ struct FFmpegRealtimeVideoPipelineRuntime::Impl {
     RealtimeCoreStats stats() const;
 
     Status planPipeline();
-    Status initializeMuxerAndPipeline();
+    Status initializeOutputGraphAndPipeline();
 
     RealtimeCoreConfig realtimeConfig;
     TranscodeConfig pipelineConfig;
@@ -82,7 +83,8 @@ struct FFmpegRealtimeVideoPipelineRuntime::Impl {
     ffmpeg::TimelineNormalizer timeline;
     ffmpeg::HardwarePipelinePlan hardwarePlan;
     const ffmpeg::HardwarePipelinePlan* executionPlan = nullptr;
-    ffmpeg::FFmpegRtpMuxer rtpMuxer;
+    ffmpeg::PacketOutputGraphController outputGraphController;
+    ffmpeg::FFmpegRtpOutputNode rtpOutputNode;
     ffmpeg::FFmpegVideoProcessingPipeline videoPipeline;
 
     RealtimeCoreStats runtimeStats;
@@ -163,7 +165,7 @@ Status FFmpegRealtimeVideoPipelineRuntime::Impl::initialize(const Config& config
         return status;
     }
 
-    status = initializeMuxerAndPipeline();
+    status = initializeOutputGraphAndPipeline();
     if (!status) {
         reset();
         return status;
@@ -216,9 +218,14 @@ Status FFmpegRealtimeVideoPipelineRuntime::Impl::planPipeline()
     return Status::success();
 }
 
-Status FFmpegRealtimeVideoPipelineRuntime::Impl::initializeMuxerAndPipeline()
+Status FFmpegRealtimeVideoPipelineRuntime::Impl::initializeOutputGraphAndPipeline()
 {
-    Status status = rtpMuxer.open(makeRtpOutputConfig(realtimeConfig.rtpOutput));
+    Status status = rtpOutputNode.open(makeRtpOutputConfig(realtimeConfig.rtpOutput));
+    if (!status) {
+        return status;
+    }
+
+    status = outputGraphController.attachExternalNode(&rtpOutputNode);
     if (!status) {
         return status;
     }
@@ -227,7 +234,8 @@ Status FFmpegRealtimeVideoPipelineRuntime::Impl::initializeMuxerAndPipeline()
     videoConfig.transcodeConfig = &pipelineConfig;
     videoConfig.hardwarePlan = executionPlan;
     videoConfig.inputVideoStream = inputVideoStream;
-    videoConfig.outputFmtCtx = rtpMuxer.context();
+    videoConfig.outputFmtCtx = rtpOutputNode.context();
+    videoConfig.outputNode = outputGraphController.rootNode();
     videoConfig.timeline = &timeline;
 
     status = videoPipeline.initialize(videoConfig);
@@ -235,22 +243,23 @@ Status FFmpegRealtimeVideoPipelineRuntime::Impl::initializeMuxerAndPipeline()
         return status;
     }
 
-    status = rtpMuxer.writeHeader();
+    status = rtpOutputNode.writeHeader();
     if (!status) {
         return status;
     }
 
-    status = rtpMuxer.writeSdp();
+    status = rtpOutputNode.writeSdp();
     if (!status) {
         return status;
     }
 
     spdlog::info(
-        "[REALTIME][RTP] muxer ready: url={}, sdp={}",
-        rtpMuxer.url(),
+        "[REALTIME][RTP] output node ready: url={}, sdp={}, output_nodes={}",
+        rtpOutputNode.url(),
         realtimeConfig.rtpOutput.sdpOutputPath.empty()
             ? "disabled"
-            : realtimeConfig.rtpOutput.sdpOutputPath
+            : realtimeConfig.rtpOutput.sdpOutputPath,
+        outputGraphController.nodeCount()
     );
 
     return Status::success();
@@ -315,7 +324,7 @@ Status FFmpegRealtimeVideoPipelineRuntime::Impl::finish(bool flush)
     runtimeStats.muxedVideoPacketCount = videoPipeline.packetCount();
     runtimeStats.lastOutputTimeMs = videoPipeline.lastWrittenOutTimeMs();
 
-    Status trailerStatus = rtpMuxer.writeTrailer();
+    Status trailerStatus = rtpOutputNode.writeTrailer();
     finished = true;
     return trailerStatus;
 }
@@ -323,7 +332,8 @@ Status FFmpegRealtimeVideoPipelineRuntime::Impl::finish(bool flush)
 void FFmpegRealtimeVideoPipelineRuntime::Impl::reset()
 {
     videoPipeline.reset();
-    rtpMuxer.reset();
+    outputGraphController.reset();
+    rtpOutputNode.reset();
     timeline.reset();
 
     realtimeConfig = RealtimeCoreConfig{};
