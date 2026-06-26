@@ -3,16 +3,19 @@
 #include "internal/FFmpegError.h"
 #include "internal/output/FFmpegRtpMuxer.h"
 #include "internal/output/PacketOutputNode.h"
+#include "internal/output/VideoOutputStreamProvider.h"
 
 #include <string>
 
 extern "C" {
+#include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 }
 
 namespace media::ffmpeg {
 
-class FFmpegRtpOutputNode final : public PacketOutputNode {
+class FFmpegRtpOutputNode final : public PacketOutputNode,
+                                  public VideoOutputStreamProvider {
 public:
     FFmpegRtpOutputNode() = default;
     ~FFmpegRtpOutputNode() override = default;
@@ -66,6 +69,45 @@ public:
     bool headerWritten() const
     {
         return m_muxer.headerWritten();
+    }
+
+    bool requiresGlobalHeader() const override
+    {
+        AVFormatContext* fmtCtx = m_muxer.context();
+        return fmtCtx &&
+            fmtCtx->oformat &&
+            (fmtCtx->oformat->flags & AVFMT_GLOBALHEADER);
+    }
+
+    Result<AVStream*> createVideoStream(AVCodecContext* encoderCtx) override
+    {
+        AVFormatContext* fmtCtx = m_muxer.context();
+        if (!fmtCtx) {
+            return Result<AVStream*>::failure(ErrorInfo::notInitialized(
+                "FFmpegRtpOutputNode createVideoStream failed: muxer is not open"));
+        }
+
+        if (!encoderCtx) {
+            return Result<AVStream*>::failure(ErrorInfo::invalidArgument(
+                "FFmpegRtpOutputNode createVideoStream failed: encoderCtx is null"));
+        }
+
+        AVStream* stream = avformat_new_stream(fmtCtx, nullptr);
+        if (!stream) {
+            return Result<AVStream*>::failure(makeAllocationError(
+                "avformat_new_stream RTP video failed"));
+        }
+
+        stream->time_base = encoderCtx->time_base;
+
+        const int ret = avcodec_parameters_from_context(stream->codecpar, encoderCtx);
+        if (ret < 0) {
+            return Result<AVStream*>::failure(makeFFmpegError(
+                "avcodec_parameters_from_context RTP video failed", ret));
+        }
+
+        stream->codecpar->codec_tag = 0;
+        return Result<AVStream*>::success(stream);
     }
 
     Status pushPacket(AVPacket* packet) override
