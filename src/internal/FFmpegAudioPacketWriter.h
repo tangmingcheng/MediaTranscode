@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/FFmpegAudioPipelineTypes.h"
+#include "internal/output/PacketOutputNode.h"
 
 #include <cstdint>
 #include <string>
@@ -10,10 +11,10 @@ namespace media::ffmpeg {
 class FFmpegAudioPacketWriter {
 public:
     struct Config {
-        AVFormatContext* outputFmtCtx = nullptr;
+        PacketOutputNode* outputNode = nullptr;
         AVStream* outputStream = nullptr;
         std::string timestampErrorPrefix = "audio packet";
-        std::string writeErrorMessage = "av_interleaved_write_frame audio failed";
+        std::string writeErrorMessage = "audio packet write failed";
     };
 
     FFmpegAudioPacketWriter() = default;
@@ -33,11 +34,11 @@ private:
     void updateProgressFromPacket(const AVPacket* packet);
 
 private:
-    AVFormatContext* m_outputFmtCtx = nullptr;
+    PacketOutputNode* m_outputNode = nullptr;
     AVStream* m_outputStream = nullptr;
 
     std::string m_timestampErrorPrefix = "audio packet";
-    std::string m_writeErrorMessage = "av_interleaved_write_frame audio failed";
+    std::string m_writeErrorMessage = "audio packet write failed";
 
     int64_t m_packetCount = 0;
     int64_t m_lastWrittenDts = -9223372036854775807LL - 1LL;
