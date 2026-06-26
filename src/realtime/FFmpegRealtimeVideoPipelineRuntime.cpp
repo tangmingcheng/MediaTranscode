@@ -3,8 +3,8 @@
 #include "internal/FFmpegPipelinePlanner.h"
 #include "internal/FFmpegTimelineNormalizer.h"
 #include "internal/core/video/FFmpegVideoProcessingPipeline.h"
-#include "internal/output/FFmpegRtpOutputNode.h"
-#include "internal/output/PacketOutputGraphController.h"
+#include "internal/graph/packet/PacketOutputGraphController.h"
+#include "internal/output/nodes/rtp/FFmpegRtpOutputNode.h"
 
 #include "spdlog/spdlog.h"
 
