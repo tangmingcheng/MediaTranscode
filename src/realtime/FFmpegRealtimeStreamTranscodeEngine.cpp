@@ -129,15 +129,16 @@ Status FFmpegRealtimeStreamTranscodeEngine::initialize(const RealtimeCoreConfig&
     m_stopRequested.store(false);
 
     spdlog::info(
-        "[REALTIME][CORE] initialized: input={}, rtp={}:{}, size={}x{}, fps={}, bitrate_kbps={}, hw={}, audio={}",
+        "[REALTIME][CORE] initialized: input={}, rtp={}:{}, size={}x{}, fps={}, bitrate_kbps={}, rc={}, hw={}, audio={}",
         config.inputUrl,
         config.rtpOutput.host,
         config.rtpOutput.rtpPort,
         config.width,
         config.height,
         config.fps,
-        config.videoBitrateKbps,
-        config.disableHardware ? "disabled" : "enabled",
+        config.videoBitrate.targetKbps,
+        static_cast<int>(config.videoBitrate.rateControl),
+        config.hardware.enabled ? "enabled" : "disabled",
         config.audioEnabled ? "enabled" : "disabled"
     );
 
@@ -311,9 +312,25 @@ Status FFmpegRealtimeStreamTranscodeEngine::validateConfig(const RealtimeCoreCon
             "realtime core config is invalid: VideoCodec::Copy is not supported in P1 realtime transcode"));
     }
 
-    if (config.videoBitrateKbps < 0 || config.gopSize < 0 || config.maxBFrames < 0) {
+    if (config.videoBitrate.quality < 0 ||
+        config.videoBitrate.targetKbps < 0 ||
+        config.videoBitrate.minKbps < 0 ||
+        config.videoBitrate.maxKbps < 0 ||
+        config.videoBitrate.bufferSizeKbits < 0) {
         return Status::failure(ErrorInfo::invalidArgument(
-            "realtime core config is invalid: bitrate, gopSize and maxBFrames must be greater than or equal to 0"));
+            "realtime core config is invalid: video bitrate values must be greater than or equal to 0"));
+    }
+
+    if (config.videoBitrate.minKbps > 0 &&
+        config.videoBitrate.maxKbps > 0 &&
+        config.videoBitrate.minKbps > config.videoBitrate.maxKbps) {
+        return Status::failure(ErrorInfo::invalidArgument(
+            "realtime core config is invalid: min video bitrate must be less than or equal to max video bitrate"));
+    }
+
+    if (config.videoEncode.gopSize < 0 || config.videoEncode.maxBFrames < 0) {
+        return Status::failure(ErrorInfo::invalidArgument(
+            "realtime core config is invalid: gopSize and maxBFrames must be greater than or equal to 0"));
     }
 
     if (config.openTimeoutMs < 0 || config.readTimeoutMs < 0 ||
