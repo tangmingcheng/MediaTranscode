@@ -30,7 +30,8 @@ private:
 
 private:
     AVStream* m_inputAudioStream = nullptr;
-    AVFormatContext* m_outputFmtCtx = nullptr;
+    AudioOutputStreamProvider* m_outputStreamProvider = nullptr;
+    PacketOutputNode* m_outputNode = nullptr;
     AVStream* m_outputAudioStream = nullptr;
     TimelineNormalizer* m_timeline = nullptr;
 
