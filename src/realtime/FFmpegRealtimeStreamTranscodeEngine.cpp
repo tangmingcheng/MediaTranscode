@@ -129,7 +129,7 @@ Status FFmpegRealtimeStreamTranscodeEngine::initialize(const RealtimeCoreConfig&
     m_stopRequested.store(false);
 
     spdlog::info(
-        "[REALTIME][CORE] initialized: input={}, rtp={}:{}, size={}x{}, fps={}, bitrate_kbps={}, rc={}, hw={}, audio={}",
+        "[REALTIME][CORE] initialized: input={}, rtp={}:{}, size={}x{}, fps={}, bitrate_kbps={}, rc={}, hw={}",
         config.inputUrl,
         config.rtpOutput.host,
         config.rtpOutput.rtpPort,
@@ -138,8 +138,7 @@ Status FFmpegRealtimeStreamTranscodeEngine::initialize(const RealtimeCoreConfig&
         config.fps,
         config.videoBitrate.targetKbps,
         static_cast<int>(config.videoBitrate.rateControl),
-        config.hardware.enabled ? "enabled" : "disabled",
-        config.audioEnabled ? "enabled" : "disabled"
+        config.hardware.enabled ? "enabled" : "disabled"
     );
 
     emitProgress("initialized");
@@ -280,6 +279,11 @@ Status FFmpegRealtimeStreamTranscodeEngine::validateConfig(const RealtimeCoreCon
             "realtime core config is invalid: inputUrl is empty"));
     }
 
+    if (config.audioEnabled) {
+        return Status::failure(ErrorInfo::unsupported(
+            "realtime core config is invalid: audio output is not supported in P1 realtime transcode"));
+    }
+
     if (config.rtpOutput.host.empty()) {
         return Status::failure(ErrorInfo::invalidArgument(
             "realtime core config is invalid: RTP output host is empty"));
@@ -368,7 +372,7 @@ Status FFmpegRealtimeStreamTranscodeEngine::runLoop()
         std::lock_guard<std::mutex> lock(m_mutex);
         m_stats.decodedVideoFrameCount = videoStats.decodedVideoFrameCount;
         m_stats.encodedVideoPacketCount = videoStats.encodedVideoPacketCount;
-        m_stats.writtenRtpPacketCount = videoStats.writtenRtpPacketCount;
+        m_stats.muxedVideoPacketCount = videoStats.muxedVideoPacketCount;
         m_stats.lastOutputTimeMs = videoStats.lastOutputTimeMs;
     };
 
@@ -461,8 +465,8 @@ Status FFmpegRealtimeStreamTranscodeEngine::runLoop()
                 }
 
                 const RealtimeCoreStats videoStats = videoRuntime.stats();
-                if (videoStats.encodedVideoPacketCount == 1 ||
-                    videoStats.encodedVideoPacketCount % 25 == 0) {
+                if (videoStats.muxedVideoPacketCount == 1 ||
+                    videoStats.muxedVideoPacketCount % 25 == 0) {
                     emitProgress("rtp-output");
                 }
                 else if (videoPacketCount == 1 || videoPacketCount % 100 == 0) {
@@ -533,7 +537,7 @@ void FFmpegRealtimeStreamTranscodeEngine::workerThread()
         return;
     }
 
-    if (m_stopRequested.load()) {
+    if (m_stopRequested.load() && state() != RealtimeStreamState::Stopped) {
         setState(RealtimeStreamState::Stopped);
         emitProgress("stopped");
     }
@@ -582,11 +586,7 @@ void FFmpegRealtimeStreamTranscodeEngine::emitProgress(const std::string& stage)
     }
 
     ProgressInfo info;
-    info.frame = stats.writtenRtpPacketCount > 0
-        ? stats.writtenRtpPacketCount
-        : stats.encodedVideoPacketCount > 0
-            ? stats.encodedVideoPacketCount
-            : stats.inputVideoPacketCount;
+    info.frame = stats.decodedVideoFrameCount;
     info.outTimeMs = std::max(stats.lastOutputTimeMs, stats.lastInputTimeMs);
     info.speed = 0.0;
     info.raw = stage;
