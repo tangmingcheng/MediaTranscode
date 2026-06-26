@@ -124,8 +124,7 @@ void printUsage(const char* exe)
         << "      --tune <value>              Encoder tune if supported\n"
         << "      --profile <value>           Encoder profile if supported\n"
         << "      --level <value>             Encoder level if supported\n"
-        << "      --enable-hw                 Enable automatic hardware planning\n"
-        << "      --disable-hw                Force pure CPU decode/filter/encode path\n\n"
+        << "      --disable-hardware          Force pure CPU decode/filter/encode path\n\n"
         << "RTP output options:\n"
         << "      --rtp-host <host>           Destination host, default 127.0.0.1\n"
         << "      --rtp-port <port>           Destination RTP port, default 5004\n"
@@ -268,20 +267,8 @@ Options parseOptions(int argc, char* argv[])
             options.config.videoEncode.level = requireValue(argc, argv, i, arg);
             continue;
         }
-        if (arg == "--enable-hw" || arg == "--enable-hardware") {
-            options.config.hardware.enabled = true;
-            continue;
-        }
-        if (arg == "--disable-hw" || arg == "--disable-hardware") {
+        if (arg == "--disable-hardware") {
             options.config.hardware.enabled = false;
-            continue;
-        }
-        if (arg == "--no-hw-fallback") {
-            options.config.hardware.allowZeroCopyFallback = false;
-            continue;
-        }
-        if (arg == "--allow-hw-fallback") {
-            options.config.hardware.allowZeroCopyFallback = true;
             continue;
         }
         if (arg == "--rtp-host") {
