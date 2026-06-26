@@ -50,8 +50,21 @@ struct RealtimeRtpOutputConfig {
  * This is deliberately separate from LocalVideoTranscodeConfig. Realtime stream
  * behavior has different lifetime, timeout and output semantics from local file
  * transcoding, so this object should not be exposed as stable public API yet.
+ *
+ * Video encoding options intentionally reuse the same internal structures as the
+ * local-file pipeline so realtime and local transcoding do not diverge while P1
+ * evolves.
  */
 struct RealtimeCoreConfig {
+    RealtimeCoreConfig()
+    {
+        videoBitrate.rateControl = VideoRateControlMode::CBR;
+        videoEncode.speedPreset = VideoSpeedPreset::Veryfast;
+        videoEncode.maxBFrames = 0;
+        hardware.enabled = true;
+        hardware.allowZeroCopyFallback = true;
+    }
+
     std::string inputUrl;
     std::string inputFormatHint;
 
@@ -62,17 +75,11 @@ struct RealtimeCoreConfig {
     int fps = 0;
 
     VideoCodec videoCodec = VideoCodec::H264;
-    int videoBitrateKbps = 0;
-    VideoRateControlMode rcMode = VideoRateControlMode::CBR;
-    VideoSpeedPreset speed = VideoSpeedPreset::Veryfast;
-    int gopSize = 0;
-    int maxBFrames = 0;
-    std::string tune;
-    std::string profile;
-    std::string level;
+    VideoBitrateControlOptions videoBitrate;
+    VideoBitrateControlPolicy bitratePolicy;
+    VideoEncodeOptions videoEncode;
+    HardwarePipelineConfig hardware;
 
-    bool disableHardware = false;
-    bool allowHardwareFallback = true;
     bool audioEnabled = false;
 
     int openTimeoutMs = 5000;
