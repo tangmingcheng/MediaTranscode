@@ -234,7 +234,7 @@ Status FFmpegRealtimeVideoPipelineRuntime::Impl::initializeOutputGraphAndPipelin
     videoConfig.transcodeConfig = &pipelineConfig;
     videoConfig.hardwarePlan = executionPlan;
     videoConfig.inputVideoStream = inputVideoStream;
-    videoConfig.outputFmtCtx = rtpOutputNode.context();
+    videoConfig.outputStreamProvider = &rtpOutputNode;
     videoConfig.outputNode = outputGraphController.rootNode();
     videoConfig.timeline = &timeline;
 
