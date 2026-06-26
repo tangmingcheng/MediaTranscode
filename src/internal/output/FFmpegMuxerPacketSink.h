@@ -1,7 +1,7 @@
 #pragma once
 
 #include "internal/FFmpegError.h"
-#include "internal/output/EncodedPacketSink.h"
+#include "internal/output/PacketOutputNode.h"
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -9,17 +9,14 @@ extern "C" {
 
 namespace media::ffmpeg {
 
-class FFmpegMuxerPacketSink final : public EncodedPacketSink {
+class FFmpegMuxerOutputNode final : public PacketOutputNode {
 public:
     struct Config {
         AVFormatContext* outputFmtCtx = nullptr;
     };
 
-    FFmpegMuxerPacketSink() = default;
-    ~FFmpegMuxerPacketSink() override = default;
-
-    FFmpegMuxerPacketSink(const FFmpegMuxerPacketSink&) = delete;
-    FFmpegMuxerPacketSink& operator=(const FFmpegMuxerPacketSink&) = delete;
+    FFmpegMuxerOutputNode() = default;
+    ~FFmpegMuxerOutputNode() override = default;
 
     void reset()
     {
@@ -31,34 +28,31 @@ public:
         reset();
         if (!config.outputFmtCtx) {
             return Status::failure(ErrorInfo::invalidArgument(
-                "FFmpegMuxerPacketSink initialize failed: outputFmtCtx is null"));
+                "FFmpegMuxerOutputNode initialize failed: outputFmtCtx is null"));
         }
         m_outputFmtCtx = config.outputFmtCtx;
         return Status::success();
     }
 
-    Status writePacket(AVPacket* packet) override
+    Status pushPacket(AVPacket* packet) override
     {
         if (!m_outputFmtCtx) {
             return Status::failure(ErrorInfo::notInitialized(
-                "FFmpegMuxerPacketSink writePacket failed: not initialized"));
+                "FFmpegMuxerOutputNode pushPacket failed: not initialized"));
         }
+
         if (!packet) {
             return Status::failure(ErrorInfo::invalidArgument(
-                "FFmpegMuxerPacketSink writePacket failed: packet is null"));
+                "FFmpegMuxerOutputNode pushPacket failed: packet is null"));
         }
 
-        const auto writeFrame = &av_interleaved_write_frame;
-        const int ret = writeFrame(m_outputFmtCtx, packet);
+        const int ret = av_interleaved_write_frame(m_outputFmtCtx, packet);
         if (ret < 0) {
-            return Status::failure(makeFFmpegError("video packet write failed", ret));
+            return Status::failure(makeFFmpegError(
+                "video packet write failed", ret));
         }
-        return Status::success();
-    }
 
-    bool isInitialized() const
-    {
-        return m_outputFmtCtx != nullptr;
+        return Status::success();
     }
 
 private:
