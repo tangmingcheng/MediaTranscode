@@ -7,7 +7,6 @@
 #include <functional>
 
 extern "C" {
-typedef struct AVFormatContext AVFormatContext;
 typedef struct AVFrame AVFrame;
 typedef struct AVPacket AVPacket;
 typedef struct AVStream AVStream;
@@ -15,6 +14,8 @@ typedef struct AVStream AVStream;
 
 namespace media::ffmpeg {
 
+class AudioOutputStreamProvider;
+class PacketOutputNode;
 class TimelineNormalizer;
 
 using FFmpegAudioPacketWrittenCallback =
@@ -34,14 +35,15 @@ using AudioMode = FFmpegAudioPipelineMode;
 
 struct FFmpegAudioPipelineConfig {
     /*
-     * inputAudioStream, outputFmtCtx and timeline are borrowed from the local
-     * file transcode engine. Concrete pipeline strategies own their decoder /
-     * encoder / resampler / fifo resources.
+     * inputAudioStream and timeline are borrowed from the local file transcode
+     * engine. outputStreamProvider creates the muxer-specific audio stream;
+     * outputNode receives normalized/encoded packets through the output graph.
      */
     FFmpegAudioPipelineMode mode = FFmpegAudioPipelineMode::None;
     AudioCodec codec = AudioCodec::AAC;
     AVStream* inputAudioStream = nullptr;
-    AVFormatContext* outputFmtCtx = nullptr;
+    AudioOutputStreamProvider* outputStreamProvider = nullptr;
+    PacketOutputNode* outputNode = nullptr;
     TimelineNormalizer* timeline = nullptr;
     int audioBitrateKbps = 128;
 };
