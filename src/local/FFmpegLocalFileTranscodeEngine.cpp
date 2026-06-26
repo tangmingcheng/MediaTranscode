@@ -410,7 +410,8 @@ void FFmpegLocalFileTranscodeEngine::transcodeThread()
         audioConfig.mode = audioStrategyPlan.mode;
         audioConfig.codec = audioStrategyPlan.codec;
         audioConfig.inputAudioStream = inputAudioStream;
-        audioConfig.outputFmtCtx = outputFmtCtx.get();
+        audioConfig.outputStreamProvider = &fileOutputNode;
+        audioConfig.outputNode = outputGraphController.rootNode();
         audioConfig.timeline = &timeline;
         audioConfig.audioBitrateKbps = audioStrategyPlan.audioBitrateKbps;
 
@@ -653,7 +654,7 @@ void FFmpegLocalFileTranscodeEngine::transcodeThread()
     countersBeforeStep = currentFinalizeCounters();
     outputGraphController.reset();
     fileOutputNode.reset();
-    finalizeDiagnostics.logStep("cleanup_video_output_graph", phaseStart, countersBeforeStep, currentFinalizeCounters());
+    finalizeDiagnostics.logStep("cleanup_output_graph", phaseStart, countersBeforeStep, currentFinalizeCounters());
 
     phaseStart = finalizeDiagnostics.mark();
     countersBeforeStep = currentFinalizeCounters();
