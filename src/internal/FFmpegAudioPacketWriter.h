@@ -1,7 +1,7 @@
 #pragma once
 
 #include "internal/FFmpegAudioPipelineTypes.h"
-#include "internal/output/PacketOutputNode.h"
+#include "internal/graph/packet/PacketOutputNode.h"
 
 #include <cstdint>
 #include <string>
