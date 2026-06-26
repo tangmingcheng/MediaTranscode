@@ -83,10 +83,11 @@ Status FFmpegAudioPacketWriter::write(
     const Status writeStatus = m_outputNode->pushPacket(packet);
     if (!writeStatus) {
         const ErrorInfo& error = writeStatus.error();
-        return Status::failure(ErrorInfo{
+        return Status::failure(ErrorInfo::make(
             error.code,
-            m_writeErrorMessage + ": " + error.message
-        });
+            m_writeErrorMessage + ": " + error.message,
+            error.nativeCode
+        ));
     }
 
     ++m_packetCount;
