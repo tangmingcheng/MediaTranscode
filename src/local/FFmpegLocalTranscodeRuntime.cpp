@@ -10,7 +10,7 @@
 #include "internal/FFmpegTranscodeLoopDiagnostics.h"
 #include "internal/FFmpegUtils.h"
 #include "internal/core/video/FFmpegVideoProcessingPipeline.h"
-#include "internal/output/FFmpegFileOutputSession.h"
+#include "internal/output/sessions/file/FFmpegFileOutputSession.h"
 
 #include "spdlog/spdlog.h"
 
