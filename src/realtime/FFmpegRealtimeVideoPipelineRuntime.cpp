@@ -40,17 +40,11 @@ TranscodeConfig makeVideoPipelineConfig(const RealtimeCoreConfig& config)
     transcodeConfig.height = config.height;
     transcodeConfig.fps = config.fps;
     transcodeConfig.videoCodec = config.videoCodec;
-    transcodeConfig.videoBitrate.rateControl = config.rcMode;
-    transcodeConfig.videoBitrate.targetKbps = config.videoBitrateKbps;
-    transcodeConfig.videoEncode.speedPreset = config.speed;
-    transcodeConfig.videoEncode.gopSize = config.gopSize;
-    transcodeConfig.videoEncode.maxBFrames = config.maxBFrames;
-    transcodeConfig.videoEncode.tune = config.tune;
-    transcodeConfig.videoEncode.profile = config.profile;
-    transcodeConfig.videoEncode.level = config.level;
+    transcodeConfig.videoBitrate = config.videoBitrate;
+    transcodeConfig.bitratePolicy = config.bitratePolicy;
+    transcodeConfig.videoEncode = config.videoEncode;
+    transcodeConfig.hardware = config.hardware;
     transcodeConfig.audioEnabled = false;
-    transcodeConfig.hardware.enabled = !config.disableHardware;
-    transcodeConfig.hardware.allowZeroCopyFallback = config.allowHardwareFallback;
     return transcodeConfig;
 }
 
