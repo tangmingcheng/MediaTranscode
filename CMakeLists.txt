@@ -41,10 +41,14 @@ add_library(${TARGET_CORE} STATIC
     src/realtime/FFmpegRealtimeVideoPipelineRuntime.cpp
     src/realtime/FFmpegRealtimeVideoPipelineRuntime.h
     src/internal/TranscodeTypes.h
+    src/internal/core/video/FFmpegVideoProcessingPipeline.cpp
+    src/internal/core/video/FFmpegVideoProcessingPipeline.h
     src/internal/input/FFmpegRealtimeInputSource.cpp
     src/internal/input/FFmpegRealtimeInputSource.h
     src/internal/input/FFmpegRealtimeInterruptController.cpp
     src/internal/input/FFmpegRealtimeInterruptController.h
+    src/internal/output/EncodedPacketSink.h
+    src/internal/output/FFmpegMuxerPacketSink.h
     src/internal/output/FFmpegRtpMuxer.cpp
     src/internal/output/FFmpegRtpMuxer.h
     src/internal/output/FFmpegRtpUrlBuilder.cpp
@@ -137,7 +141,6 @@ add_library(${TARGET_CORE} STATIC
     src/internal/FFmpegVideoPacketWriterStage.h
     src/internal/FFmpegVideoTimestampStage.cpp
     src/internal/FFmpegVideoTimestampStage.h
-    src/internal/FFmpegVideoTranscodePipeline.cpp
     src/internal/FFmpegVideoTranscodePipeline.h
     include/media_transcode/MediaTranscode.h
     include/media_transcode/MediaTypes.h
