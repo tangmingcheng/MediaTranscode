@@ -55,6 +55,7 @@ add_library(${TARGET_CORE} STATIC
     src/internal/output/PacketOutputGraph.h
     src/internal/output/PacketOutputGraphController.h
     src/internal/output/PacketOutputNode.h
+    src/internal/output/VideoOutputStreamProvider.h
     src/internal/FFmpegAudioAdapter.cpp
     src/internal/FFmpegAudioAdapter.h
     src/internal/FFmpegAudioCopyPipeline.cpp
