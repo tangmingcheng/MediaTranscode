@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/output/EncodedPacketSink.h"
 #include "media_transcode/Result.h"
 
 #include <cstdint>
@@ -18,12 +19,13 @@ public:
 
     struct Config {
         /*
-         * FFmpegVideoPacketWriterStage does not own these contexts.
-         * EncoderStage owns encoderCtx and muxer setup owns outputFmtCtx/output stream.
+         * FFmpegVideoPacketWriterStage does not own these objects.
+         * EncoderStage owns encoderCtx and creates outputVideoStream.
+         * Output ownership is represented by packetSink.
          */
         AVCodecContext* encoderCtx = nullptr;
-        AVFormatContext* outputFmtCtx = nullptr;
         AVStream* outputVideoStream = nullptr;
+        EncodedPacketSink* packetSink = nullptr;
     };
 
     FFmpegVideoPacketWriterStage() = default;
@@ -48,8 +50,8 @@ public:
 
 private:
     AVCodecContext* m_encoderCtx = nullptr;
-    AVFormatContext* m_outputFmtCtx = nullptr;
     AVStream* m_outputVideoStream = nullptr;
+    EncodedPacketSink* m_packetSink = nullptr;
 
     int64_t m_packetCount = 0;
     int64_t m_lastWrittenDts = AV_NOPTS_VALUE;
