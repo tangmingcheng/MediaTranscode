@@ -18,8 +18,6 @@ void FFmpegVideoProcessingPipeline::reset()
     m_filterStage.reset();
     m_frameRateStage.reset();
     m_packetDrainStage.reset();
-    m_defaultOutputController.reset();
-    m_defaultMuxerOutputNode.reset();
     m_hardwareTransferStage.reset();
     m_frameRoutingStrategy.reset();
     m_encoderStage.reset();
@@ -33,7 +31,7 @@ void FFmpegVideoProcessingPipeline::reset()
 
     m_config = TranscodeConfig{};
     m_inputVideoStream = nullptr;
-    m_outputFmtCtx = nullptr;
+    m_outputStreamProvider = nullptr;
     m_outputNode = nullptr;
     m_inputMetadata = FFmpegVideoInputMetadata{};
     m_hardwarePlan = HardwarePipelinePlan{};
@@ -55,14 +53,19 @@ Status FFmpegVideoProcessingPipeline::initialize(const Config& config)
             "FFmpegVideoProcessingPipeline initialize failed: inputVideoStream is null"));
     }
 
-    if (!config.outputFmtCtx) {
+    if (!config.outputStreamProvider) {
         return Status::failure(ErrorInfo::invalidArgument(
-            "FFmpegVideoProcessingPipeline initialize failed: outputFmtCtx is null"));
+            "FFmpegVideoProcessingPipeline initialize failed: outputStreamProvider is null"));
+    }
+
+    if (!config.outputNode) {
+        return Status::failure(ErrorInfo::invalidArgument(
+            "FFmpegVideoProcessingPipeline initialize failed: outputNode is null"));
     }
 
     m_config = *config.transcodeConfig;
     m_inputVideoStream = config.inputVideoStream;
-    m_outputFmtCtx = config.outputFmtCtx;
+    m_outputStreamProvider = config.outputStreamProvider;
     m_outputNode = config.outputNode;
 
     if (config.hardwarePlan &&
@@ -166,7 +169,7 @@ Status FFmpegVideoProcessingPipeline::openEncoder()
     config.transcodeConfig = &m_config;
     config.hardwarePlan = m_hasHardwarePlan ? &m_hardwarePlan : nullptr;
     config.inputMetadata = m_inputMetadata;
-    config.outputFmtCtx = m_outputFmtCtx;
+    config.outputStreamProvider = m_outputStreamProvider;
     config.hardwareDeviceContext = &m_decoderStage.hardwareDeviceContext();
     config.decoderUsesHardwareFrames = m_decoderStage.usesHardwareFrames();
     config.decoderHardwareDeviceAttached = m_decoderStage.hardwareDeviceAttached();
@@ -229,23 +232,6 @@ Status FFmpegVideoProcessingPipeline::initializeFilterStage()
 
 Status FFmpegVideoProcessingPipeline::initializePacketDrainStage()
 {
-    if (!m_outputNode) {
-        FFmpegMuxerOutputNode::Config muxerConfig;
-        muxerConfig.outputFmtCtx = m_outputFmtCtx;
-
-        Status muxerStatus = m_defaultMuxerOutputNode.initialize(muxerConfig);
-        if (!muxerStatus) {
-            return muxerStatus;
-        }
-
-        Status attachStatus = m_defaultOutputController.attachExternalNode(&m_defaultMuxerOutputNode);
-        if (!attachStatus) {
-            return attachStatus;
-        }
-
-        m_outputNode = m_defaultOutputController.rootNode();
-    }
-
     FFmpegVideoEncodedPacketDrainStage::Config config;
     config.encoderCtx = encoderContext();
     config.outputVideoStream = m_encoderStage.outputStream();
