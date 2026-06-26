@@ -18,8 +18,6 @@ void FFmpegVideoProcessingPipeline::reset()
     m_filterStage.reset();
     m_frameRateStage.reset();
     m_packetDrainStage.reset();
-    m_legacyOutputController.reset();
-    m_legacyMuxerOutputNode.reset();
     m_hardwareTransferStage.reset();
     m_frameRoutingStrategy.reset();
     m_encoderStage.reset();
@@ -33,7 +31,6 @@ void FFmpegVideoProcessingPipeline::reset()
 
     m_config = TranscodeConfig{};
     m_inputVideoStream = nullptr;
-    m_legacyOutputFmtCtx = nullptr;
     m_outputStreamProvider = nullptr;
     m_outputNode = nullptr;
     m_inputMetadata = FFmpegVideoInputMetadata{};
@@ -56,39 +53,20 @@ Status FFmpegVideoProcessingPipeline::initialize(const Config& config)
             "FFmpegVideoProcessingPipeline initialize failed: inputVideoStream is null"));
     }
 
+    if (!config.outputStreamProvider) {
+        return Status::failure(ErrorInfo::invalidArgument(
+            "FFmpegVideoProcessingPipeline initialize failed: outputStreamProvider is null"));
+    }
+
+    if (!config.outputNode) {
+        return Status::failure(ErrorInfo::invalidArgument(
+            "FFmpegVideoProcessingPipeline initialize failed: outputNode is null"));
+    }
+
     m_config = *config.transcodeConfig;
     m_inputVideoStream = config.inputVideoStream;
-    m_legacyOutputFmtCtx = config.outputFmtCtx;
     m_outputStreamProvider = config.outputStreamProvider;
     m_outputNode = config.outputNode;
-
-    if (!m_outputStreamProvider || !m_outputNode) {
-        if (!m_legacyOutputFmtCtx) {
-            return Status::failure(ErrorInfo::invalidArgument(
-                "FFmpegVideoProcessingPipeline initialize failed: outputStreamProvider/outputNode are required"));
-        }
-
-        FFmpegMuxerOutputNode::Config muxerConfig;
-        muxerConfig.outputFmtCtx = m_legacyOutputFmtCtx;
-
-        Status muxerStatus = m_legacyMuxerOutputNode.initialize(muxerConfig);
-        if (!muxerStatus) {
-            return muxerStatus;
-        }
-
-        Status attachStatus = m_legacyOutputController.attachExternalNode(&m_legacyMuxerOutputNode);
-        if (!attachStatus) {
-            return attachStatus;
-        }
-
-        if (!m_outputStreamProvider) {
-            m_outputStreamProvider = &m_legacyMuxerOutputNode;
-        }
-
-        if (!m_outputNode) {
-            m_outputNode = m_legacyOutputController.rootNode();
-        }
-    }
 
     if (config.hardwarePlan &&
         config.hardwarePlan->valid &&
