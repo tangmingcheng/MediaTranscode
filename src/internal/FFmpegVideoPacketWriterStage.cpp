@@ -37,15 +37,15 @@ FFmpegVideoPacketWriterStage& FFmpegVideoPacketWriterStage::operator=(
     reset();
 
     m_encoderCtx = other.m_encoderCtx;
-    m_outputFmtCtx = other.m_outputFmtCtx;
     m_outputVideoStream = other.m_outputVideoStream;
+    m_packetSink = other.m_packetSink;
     m_packetCount = other.m_packetCount;
     m_lastWrittenDts = other.m_lastWrittenDts;
     m_lastWrittenOutTimeMs = other.m_lastWrittenOutTimeMs;
 
     other.m_encoderCtx = nullptr;
-    other.m_outputFmtCtx = nullptr;
     other.m_outputVideoStream = nullptr;
+    other.m_packetSink = nullptr;
     other.m_packetCount = 0;
     other.m_lastWrittenDts = AV_NOPTS_VALUE;
     other.m_lastWrittenOutTimeMs = 0;
@@ -56,8 +56,8 @@ FFmpegVideoPacketWriterStage& FFmpegVideoPacketWriterStage::operator=(
 void FFmpegVideoPacketWriterStage::reset()
 {
     m_encoderCtx = nullptr;
-    m_outputFmtCtx = nullptr;
     m_outputVideoStream = nullptr;
+    m_packetSink = nullptr;
 
     m_packetCount = 0;
     m_lastWrittenDts = AV_NOPTS_VALUE;
@@ -73,19 +73,19 @@ Status FFmpegVideoPacketWriterStage::initialize(const Config& config)
             "FFmpegVideoPacketWriterStage initialize failed: encoderCtx is null"));
     }
 
-    if (!config.outputFmtCtx) {
-        return Status::failure(ErrorInfo::invalidArgument(
-            "FFmpegVideoPacketWriterStage initialize failed: outputFmtCtx is null"));
-    }
-
     if (!config.outputVideoStream) {
         return Status::failure(ErrorInfo::invalidArgument(
             "FFmpegVideoPacketWriterStage initialize failed: outputVideoStream is null"));
     }
 
+    if (!config.packetSink) {
+        return Status::failure(ErrorInfo::invalidArgument(
+            "FFmpegVideoPacketWriterStage initialize failed: packetSink is null"));
+    }
+
     m_encoderCtx = config.encoderCtx;
-    m_outputFmtCtx = config.outputFmtCtx;
     m_outputVideoStream = config.outputVideoStream;
+    m_packetSink = config.packetSink;
 
     return Status::success();
 }
@@ -109,7 +109,7 @@ Status FFmpegVideoPacketWriterStage::sendFrame(AVFrame* frame)
 Result<int> FFmpegVideoPacketWriterStage::receiveAndWritePackets(
     const PacketWrittenCallback& onPacketWritten)
 {
-    if (!m_encoderCtx || !m_outputFmtCtx || !m_outputVideoStream) {
+    if (!m_encoderCtx || !m_outputVideoStream || !m_packetSink) {
         return Result<int>::failure(ErrorInfo::notInitialized(
             "FFmpegVideoPacketWriterStage receiveAndWritePackets failed: stage is not initialized"));
     }
@@ -194,10 +194,9 @@ Result<int> FFmpegVideoPacketWriterStage::receiveAndWritePackets(
             );
         }
 
-        const int writeRet = av_interleaved_write_frame(m_outputFmtCtx, packet.get());
-        if (writeRet < 0) {
-            return Result<int>::failure(makeFFmpegError(
-                "av_interleaved_write_frame video failed", writeRet));
+        const Status writeStatus = m_packetSink->writePacket(packet.get());
+        if (!writeStatus) {
+            return Result<int>::failure(writeStatus.error());
         }
 
         ++m_packetCount;
@@ -213,7 +212,7 @@ Result<int> FFmpegVideoPacketWriterStage::receiveAndWritePackets(
 
 bool FFmpegVideoPacketWriterStage::isInitialized() const
 {
-    return m_encoderCtx && m_outputFmtCtx && m_outputVideoStream;
+    return m_encoderCtx && m_outputVideoStream && m_packetSink;
 }
 
 int64_t FFmpegVideoPacketWriterStage::packetCount() const
