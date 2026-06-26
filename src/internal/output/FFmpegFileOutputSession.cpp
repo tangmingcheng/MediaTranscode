@@ -40,12 +40,15 @@ Status FFmpegFileOutputSession::initialize(Config config)
         nullptr,
         config.outputUrl.c_str()
     );
-    if (ret < 0 || !rawOutputFmtCtx) {
+    if (ret < 0) {
         return Status::failure(makeFFmpegError(
-            ret < 0
-                ? "avformat_alloc_output_context2 failed"
-                : "avformat_alloc_output_context2 failed: no output context allocated",
+            "avformat_alloc_output_context2 failed",
             ret));
+    }
+
+    if (!rawOutputFmtCtx) {
+        return Status::failure(ErrorInfo::internalError(
+            "avformat_alloc_output_context2 failed: no output context allocated"));
     }
 
     m_outputUrl = std::move(config.outputUrl);
