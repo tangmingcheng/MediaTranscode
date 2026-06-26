@@ -9,8 +9,7 @@
 #include "internal/FFmpegTranscodeLoopDiagnostics.h"
 #include "internal/FFmpegUtils.h"
 #include "internal/core/video/FFmpegVideoProcessingPipeline.h"
-#include "internal/output/FFmpegMuxerOutputNode.h"
-#include "internal/output/PacketOutputGraphController.h"
+#include "internal/output/FFmpegFileOutputSession.h"
 
 #include "spdlog/spdlog.h"
 
@@ -181,7 +180,6 @@ void FFmpegLocalFileTranscodeEngine::transcodeThread()
     RunningStateGuard runningGuard(m_running);
 
     ffmpeg::InputFormatContextPtr inputFmtCtx;
-    ffmpeg::OutputFormatContextPtr outputFmtCtx;
     ffmpeg::PacketPtr inputPacket;
 
     int videoStreamIndex = -1;
@@ -191,8 +189,7 @@ void FFmpegLocalFileTranscodeEngine::transcodeThread()
     AVStream* inputAudioStream = nullptr;
 
     ffmpeg::TimelineNormalizer timeline;
-    ffmpeg::PacketOutputGraphController outputGraphController;
-    ffmpeg::FFmpegMuxerOutputNode fileOutputNode;
+    ffmpeg::FFmpegFileOutputSession outputSession;
     ffmpeg::FFmpegVideoProcessingPipeline videoPipeline;
     ffmpeg::FFmpegAudioPipeline audioPipeline;
     ffmpeg::FFmpegTranscodeLoopDiagnostics loopDiagnostics(1000);
@@ -302,34 +299,19 @@ void FFmpegLocalFileTranscodeEngine::transcodeThread()
 
     timeline.initStartFromFormat(inputFmtCtx.get(), inputVideoStream, inputAudioStream);
 
-    AVFormatContext* rawOutputFmtCtx = nullptr;
-    ret = avformat_alloc_output_context2(&rawOutputFmtCtx, nullptr, nullptr, m_config.outputUrl.c_str());
-    if (ret < 0 || !rawOutputFmtCtx) {
-        fail("avformat_alloc_output_context2 failed: " +
-            (ret < 0 ? ffmpeg::errorString(ret) : std::string("no output context allocated")));
-        return;
-    }
-    outputFmtCtx.reset(rawOutputFmtCtx);
+    ffmpeg::FFmpegFileOutputSession::Config outputConfig;
+    outputConfig.outputUrl = m_config.outputUrl;
 
-    ffmpeg::FFmpegMuxerOutputNode::Config fileOutputConfig;
-    fileOutputConfig.outputFmtCtx = outputFmtCtx.get();
-
-    Status fileOutputStatus = fileOutputNode.initialize(fileOutputConfig);
-    if (!fileOutputStatus) {
-        failStatus(fileOutputStatus);
-        return;
-    }
-
-    Status attachOutputStatus = outputGraphController.attachExternalNode(&fileOutputNode);
-    if (!attachOutputStatus) {
-        failStatus(attachOutputStatus);
+    Status outputStatus = outputSession.initialize(std::move(outputConfig));
+    if (!outputStatus) {
+        failStatus(outputStatus);
         return;
     }
 
     audioStrategyPlan = ffmpeg::FFmpegAudioStrategyPlanner::plan(
         m_config,
         inputAudioStream,
-        outputFmtCtx.get()
+        outputSession.context()
     );
     spdlog::info(
         "[AUDIO][PLAN] enabled={}, selected_mode={}, requested_codec={}, selected_codec={}, target_bitrate_kbps={}, smart_copy={}, {}",
@@ -394,8 +376,8 @@ void FFmpegLocalFileTranscodeEngine::transcodeThread()
         videoConfig.transcodeConfig = &m_config;
         videoConfig.hardwarePlan = executionPlan;
         videoConfig.inputVideoStream = inputVideoStream;
-        videoConfig.outputStreamProvider = &fileOutputNode;
-        videoConfig.outputNode = outputGraphController.rootNode();
+        videoConfig.outputStreamProvider = outputSession.videoStreamProvider();
+        videoConfig.outputNode = outputSession.outputNode();
         videoConfig.timeline = &timeline;
 
         Status videoStatus = videoPipeline.initialize(videoConfig);
@@ -410,8 +392,8 @@ void FFmpegLocalFileTranscodeEngine::transcodeThread()
         audioConfig.mode = audioStrategyPlan.mode;
         audioConfig.codec = audioStrategyPlan.codec;
         audioConfig.inputAudioStream = inputAudioStream;
-        audioConfig.outputStreamProvider = &fileOutputNode;
-        audioConfig.outputNode = outputGraphController.rootNode();
+        audioConfig.outputStreamProvider = outputSession.audioStreamProvider();
+        audioConfig.outputNode = outputSession.outputNode();
         audioConfig.timeline = &timeline;
         audioConfig.audioBitrateKbps = audioStrategyPlan.audioBitrateKbps;
 
@@ -422,17 +404,15 @@ void FFmpegLocalFileTranscodeEngine::transcodeThread()
         }
     }
 
-    if (!(outputFmtCtx->oformat->flags & AVFMT_NOFILE)) {
-        ret = avio_open(&outputFmtCtx->pb, m_config.outputUrl.c_str(), AVIO_FLAG_WRITE);
-        if (ret < 0) {
-            fail("avio_open output failed: " + ffmpeg::errorString(ret));
-            return;
-        }
+    outputStatus = outputSession.openIo();
+    if (!outputStatus) {
+        failStatus(outputStatus);
+        return;
     }
 
-    ret = avformat_write_header(outputFmtCtx.get(), nullptr);
-    if (ret < 0) {
-        fail("avformat_write_header failed: " + ffmpeg::errorString(ret));
+    outputStatus = outputSession.writeHeader();
+    if (!outputStatus) {
+        failStatus(outputStatus);
         return;
     }
 
@@ -625,12 +605,12 @@ void FFmpegLocalFileTranscodeEngine::transcodeThread()
 
     phaseStart = finalizeDiagnostics.mark();
     countersBeforeStep = currentFinalizeCounters();
-    ret = av_write_trailer(outputFmtCtx.get());
+    outputStatus = outputSession.writeTrailer();
     auto countersAfterStep = currentFinalizeCounters();
-    if (ret < 0) {
+    if (!outputStatus) {
         finalizeDiagnostics.logFailure("write_trailer", phaseStart, countersBeforeStep, countersAfterStep);
         finalizeDiagnostics.finish(false, finalizeCountersBefore, countersAfterStep);
-        fail("av_write_trailer failed: " + ffmpeg::errorString(ret));
+        failStatus(outputStatus);
         return;
     }
     finalizeDiagnostics.logStep("write_trailer", phaseStart, countersBeforeStep, countersAfterStep);
@@ -652,19 +632,13 @@ void FFmpegLocalFileTranscodeEngine::transcodeThread()
 
     phaseStart = finalizeDiagnostics.mark();
     countersBeforeStep = currentFinalizeCounters();
-    outputGraphController.reset();
-    fileOutputNode.reset();
-    finalizeDiagnostics.logStep("cleanup_output_graph", phaseStart, countersBeforeStep, currentFinalizeCounters());
+    outputSession.reset();
+    finalizeDiagnostics.logStep("cleanup_output_session", phaseStart, countersBeforeStep, currentFinalizeCounters());
 
     phaseStart = finalizeDiagnostics.mark();
     countersBeforeStep = currentFinalizeCounters();
     inputPacket.reset();
     finalizeDiagnostics.logStep("cleanup_input_packet", phaseStart, countersBeforeStep, currentFinalizeCounters());
-
-    phaseStart = finalizeDiagnostics.mark();
-    countersBeforeStep = currentFinalizeCounters();
-    outputFmtCtx.reset();
-    finalizeDiagnostics.logStep("cleanup_output_format", phaseStart, countersBeforeStep, currentFinalizeCounters());
 
     phaseStart = finalizeDiagnostics.mark();
     countersBeforeStep = currentFinalizeCounters();
