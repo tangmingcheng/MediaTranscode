@@ -339,8 +339,8 @@ bool validateCounters(const media::RealtimeCoreStats& stats)
         spdlog::error("probe failed: no video packets were encoded");
         return false;
     }
-    if (stats.writtenRtpPacketCount <= 0) {
-        spdlog::error("probe failed: no encoded video packets were written to RTP muxer");
+    if (stats.muxedVideoPacketCount <= 0) {
+        spdlog::error("probe failed: no encoded video packets were accepted by RTP muxer");
         return false;
     }
     return true;
@@ -352,7 +352,7 @@ bool runProbeOnce(const Options& options, int index)
 
     media::FFmpegRealtimeStreamTranscodeEngine engine;
     engine.setProgressCallback([](const media::ProgressInfo& info) {
-        spdlog::info("progress: stage={}, frame={}, timeMs={}",
+        spdlog::info("progress: stage={}, decodedFrame={}, timeMs={}",
                      info.raw,
                      info.frame,
                      info.outTimeMs);
@@ -378,12 +378,12 @@ bool runProbeOnce(const Options& options, int index)
     const media::Status waitStatus = engine.wait();
     const media::RealtimeCoreStats stats = engine.stats();
 
-    spdlog::info("stats: inputPackets={}, inputVideoPackets={}, decodedFrames={}, encodedPackets={}, rtpPackets={}",
+    spdlog::info("stats: inputPackets={}, inputVideoPackets={}, decodedFrames={}, encodedPackets={}, muxedPackets={}",
                  stats.inputPacketCount,
                  stats.inputVideoPacketCount,
                  stats.decodedVideoFrameCount,
                  stats.encodedVideoPacketCount,
-                 stats.writtenRtpPacketCount);
+                 stats.muxedVideoPacketCount);
 
     if (!waitStatus) {
         if (isAcceptedEof(waitStatus.error(), options.acceptEof)) {
