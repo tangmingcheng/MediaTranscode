@@ -52,6 +52,7 @@ add_library(${TARGET_CORE} STATIC
     src/internal/output/FFmpegSdpWriter.cpp
     src/internal/output/FFmpegSdpWriter.h
     src/internal/output/PacketOutputGraph.h
+    src/internal/output/PacketOutputGraphController.h
     src/internal/output/PacketOutputNode.h
     src/internal/FFmpegAudioAdapter.cpp
     src/internal/FFmpegAudioAdapter.h
