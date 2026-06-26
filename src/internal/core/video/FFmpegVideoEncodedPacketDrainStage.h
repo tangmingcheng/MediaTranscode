@@ -2,7 +2,7 @@
 
 #include "internal/FFmpegError.h"
 #include "internal/FFmpegRAII.h"
-#include "internal/output/PacketOutputNode.h"
+#include "internal/graph/packet/PacketOutputNode.h"
 #include "media_transcode/Result.h"
 
 #include <algorithm>
@@ -100,94 +100,39 @@ public:
             PacketPtr packet = makePacket();
             if (!packet) {
                 return Result<int>::failure(makeAllocationError(
-                    "av_packet_alloc video packet failed"));
+                    "FFmpegVideoEncodedPacketDrainStage failed to allocate packet"));
             }
 
-            const int receiveRet = avcodec_receive_packet(m_encoderCtx, packet.get());
-
-            if (receiveRet == AVERROR(EAGAIN) || receiveRet == AVERROR_EOF) {
-                break;
+            const int ret = avcodec_receive_packet(m_encoderCtx, packet.get());
+            if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+                return Result<int>::success(packetsPushed);
             }
 
-            if (receiveRet < 0) {
+            if (ret < 0) {
                 return Result<int>::failure(makeFFmpegError(
-                    "avcodec_receive_packet encoder failed", receiveRet));
+                    "avcodec_receive_packet encoder failed", ret));
             }
 
+            av_packet_rescale_ts(packet.get(), m_encoderCtx->time_base, m_outputVideoStream->time_base);
             packet->stream_index = m_outputVideoStream->index;
 
-            if (packet->duration <= 0) {
-                packet->duration = 1;
+            const Status timestampStatus = validateTimestamp(packet.get());
+            if (!timestampStatus) {
+                return Result<int>::failure(timestampStatus.error());
             }
 
-            av_packet_rescale_ts(
-                packet.get(),
-                m_encoderCtx->time_base,
-                m_outputVideoStream->time_base
-            );
+            updateProgressFromPacket(packet.get());
 
-            if (packet->dts != AV_NOPTS_VALUE) {
-                if (m_lastWrittenDts != AV_NOPTS_VALUE &&
-                    packet->dts <= m_lastWrittenDts) {
-                    std::ostringstream oss;
-                    oss << "encoded video packet dts is not strictly increasing: current="
-                        << packet->dts
-                        << ", last="
-                        << m_lastWrittenDts;
-
-                    return Result<int>::failure(ErrorInfo::internalError(oss.str()));
-                }
-
-                m_lastWrittenDts = packet->dts;
+            const Status writeStatus = m_outputNode->pushPacket(packet.get());
+            if (!writeStatus) {
+                return Result<int>::failure(writeStatus.error());
             }
 
-            if (packet->pts != AV_NOPTS_VALUE &&
-                packet->dts != AV_NOPTS_VALUE &&
-                packet->pts < packet->dts) {
-                std::ostringstream oss;
-                oss << "encoded video packet pts is smaller than dts: pts="
-                    << packet->pts
-                    << ", dts="
-                    << packet->dts;
-
-                return Result<int>::failure(ErrorInfo::internalError(oss.str()));
-            }
-
-            if (packet->duration <= 0) {
-                packet->duration = 1;
-            }
-
-            const int64_t progressTs = packet->pts != AV_NOPTS_VALUE
-                ? packet->pts
-                : packet->dts;
-
-            if (progressTs != AV_NOPTS_VALUE) {
-                const int64_t outTimeMs = av_rescale_q(
-                    progressTs,
-                    m_outputVideoStream->time_base,
-                    AVRational{ 1, 1000 }
-                );
-
-                m_lastWrittenOutTimeMs = std::max<int64_t>(
-                    m_lastWrittenOutTimeMs,
-                    outTimeMs
-                );
-            }
-
-            const Status pushStatus = m_outputNode->pushPacket(packet.get());
-            if (!pushStatus) {
-                return Result<int>::failure(pushStatus.error());
-            }
-
-            ++m_packetCount;
             ++packetsPushed;
-
             if (onPacketWritten) {
                 onPacketWritten(m_packetCount, m_lastWrittenOutTimeMs);
             }
         }
-
-        return Result<int>::success(packetsPushed);
     }
 
     bool isInitialized() const
@@ -203,6 +148,50 @@ public:
     int64_t lastWrittenOutTimeMs() const
     {
         return m_lastWrittenOutTimeMs;
+    }
+
+private:
+    Status validateTimestamp(const AVPacket* packet)
+    {
+        if (!packet) {
+            return Status::failure(ErrorInfo::invalidArgument(
+                "FFmpegVideoEncodedPacketDrainStage validateTimestamp failed: packet is null"));
+        }
+
+        if (packet->dts != AV_NOPTS_VALUE &&
+            m_lastWrittenDts != AV_NOPTS_VALUE &&
+            packet->dts < m_lastWrittenDts) {
+            std::ostringstream oss;
+            oss << "video packet timestamp moved backwards: current_dts="
+                << packet->dts
+                << ", last_dts="
+                << m_lastWrittenDts;
+            return Status::failure(ErrorInfo::internalError(oss.str()));
+        }
+
+        return Status::success();
+    }
+
+    void updateProgressFromPacket(const AVPacket* packet)
+    {
+        if (!packet) {
+            return;
+        }
+
+        ++m_packetCount;
+
+        if (packet->dts != AV_NOPTS_VALUE) {
+            m_lastWrittenDts = packet->dts;
+        }
+
+        const int64_t timestamp = packet->pts != AV_NOPTS_VALUE ? packet->pts : packet->dts;
+        if (timestamp != AV_NOPTS_VALUE) {
+            m_lastWrittenOutTimeMs = av_rescale_q(
+                timestamp,
+                m_outputVideoStream->time_base,
+                AVRational{ 1, 1000 }
+            );
+        }
     }
 
 private:
