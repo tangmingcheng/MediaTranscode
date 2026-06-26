@@ -17,8 +17,9 @@ void FFmpegVideoProcessingPipeline::reset()
 {
     m_filterStage.reset();
     m_frameRateStage.reset();
-    m_packetWriter.reset();
-    m_defaultPacketSink.reset();
+    m_packetDrainStage.reset();
+    m_defaultOutputGraph.clear();
+    m_defaultMuxerOutputNode.reset();
     m_hardwareTransferStage.reset();
     m_frameRoutingStrategy.reset();
     m_encoderStage.reset();
@@ -33,7 +34,7 @@ void FFmpegVideoProcessingPipeline::reset()
     m_config = TranscodeConfig{};
     m_inputVideoStream = nullptr;
     m_outputFmtCtx = nullptr;
-    m_packetSink = nullptr;
+    m_outputNode = nullptr;
     m_inputMetadata = FFmpegVideoInputMetadata{};
     m_hardwarePlan = HardwarePipelinePlan{};
     m_hasHardwarePlan = false;
@@ -62,7 +63,7 @@ Status FFmpegVideoProcessingPipeline::initialize(const Config& config)
     m_config = *config.transcodeConfig;
     m_inputVideoStream = config.inputVideoStream;
     m_outputFmtCtx = config.outputFmtCtx;
-    m_packetSink = config.packetSink;
+    m_outputNode = config.outputNode;
 
     if (config.hardwarePlan &&
         config.hardwarePlan->valid &&
@@ -111,7 +112,7 @@ Status FFmpegVideoProcessingPipeline::initialize(const Config& config)
         return status;
     }
 
-    status = initializePacketWriter();
+    status = initializePacketDrainStage();
     if (!status) {
         return status;
     }
@@ -226,24 +227,28 @@ Status FFmpegVideoProcessingPipeline::initializeFilterStage()
     return makeLegacyStatus(m_filterStage.initialize(config, &error), error);
 }
 
-Status FFmpegVideoProcessingPipeline::initializePacketWriter()
+Status FFmpegVideoProcessingPipeline::initializePacketDrainStage()
 {
-    if (!m_packetSink) {
-        FFmpegMuxerPacketSink::Config sinkConfig;
-        sinkConfig.outputFmtCtx = m_outputFmtCtx;
-        Status sinkStatus = m_defaultPacketSink.initialize(sinkConfig);
-        if (!sinkStatus) {
-            return sinkStatus;
+    if (!m_outputNode) {
+        FFmpegMuxerOutputNode::Config muxerConfig;
+        muxerConfig.outputFmtCtx = m_outputFmtCtx;
+
+        Status muxerStatus = m_defaultMuxerOutputNode.initialize(muxerConfig);
+        if (!muxerStatus) {
+            return muxerStatus;
         }
-        m_packetSink = &m_defaultPacketSink;
+
+        m_defaultOutputGraph.clear();
+        m_defaultOutputGraph.addNode(&m_defaultMuxerOutputNode);
+        m_outputNode = &m_defaultOutputGraph;
     }
 
-    FFmpegVideoPacketWriterStage::Config config;
+    FFmpegVideoEncodedPacketDrainStage::Config config;
     config.encoderCtx = encoderContext();
     config.outputVideoStream = m_encoderStage.outputStream();
-    config.packetSink = m_packetSink;
+    config.outputNode = m_outputNode;
 
-    return m_packetWriter.initialize(config);
+    return m_packetDrainStage.initialize(config);
 }
 
 Status FFmpegVideoProcessingPipeline::allocateFrames()
@@ -284,7 +289,7 @@ Status FFmpegVideoProcessingPipeline::flushDecoder(
         return Status::success();
     }
 
-    const int64_t packetsBefore = m_packetWriter.packetCount();
+    const int64_t packetsBefore = m_packetDrainStage.packetCount();
     FFmpegVideoFlushDiagnostics::Session diagnostics(
         FFmpegVideoFlushDiagnostics::makeContext(
             "DECODER",
@@ -299,14 +304,14 @@ Status FFmpegVideoProcessingPipeline::flushDecoder(
     Status status = m_decoderStage.sendFlush();
     if (!status) {
         diagnostics.logFailure("send_flush", step);
-        diagnostics.finish(m_packetWriter.packetCount(), false);
+        diagnostics.finish(m_packetDrainStage.packetCount(), false);
         return status;
     }
     diagnostics.logStep("send_flush", step);
 
     step = diagnostics.mark();
     status = drainDecoder(onPacketWritten);
-    const int64_t packetsAfter = m_packetWriter.packetCount();
+    const int64_t packetsAfter = m_packetDrainStage.packetCount();
     diagnostics.logStepPackets("drain", step, packetsAfter - packetsBefore);
     diagnostics.finish(packetsAfter, status.ok());
 
@@ -316,7 +321,7 @@ Status FFmpegVideoProcessingPipeline::flushDecoder(
 Status FFmpegVideoProcessingPipeline::flushFilterAndEncoder(
     const PacketWrittenCallback& onPacketWritten)
 {
-    const int64_t packetsBeforeAll = m_packetWriter.packetCount();
+    const int64_t packetsBeforeAll = m_packetDrainStage.packetCount();
     FFmpegVideoFlushDiagnostics::Session diagnostics(
         FFmpegVideoFlushDiagnostics::makeContext(
             "FILTER_ENCODER",
@@ -332,21 +337,21 @@ Status FFmpegVideoProcessingPipeline::flushFilterAndEncoder(
     auto step = diagnostics.mark();
     if (!m_frameRateStage.flush(&error)) {
         diagnostics.logFailure("frame_rate_flush", step);
-        diagnostics.finish(m_packetWriter.packetCount(), false);
+        diagnostics.finish(m_packetDrainStage.packetCount(), false);
         return Status::failure(makeLegacyError(error));
     }
     diagnostics.logStep("frame_rate_flush", step);
 
-    int64_t packetsBeforeStep = m_packetWriter.packetCount();
+    int64_t packetsBeforeStep = m_packetDrainStage.packetCount();
     step = diagnostics.mark();
     Status status = drainFrameRateStage(m_encoderStage.zeroCopyPipeline(), onPacketWritten);
     diagnostics.logStepPackets(
         "frame_rate_drain",
         step,
-        m_packetWriter.packetCount() - packetsBeforeStep
+        m_packetDrainStage.packetCount() - packetsBeforeStep
     );
     if (!status) {
-        diagnostics.finish(m_packetWriter.packetCount(), false);
+        diagnostics.finish(m_packetDrainStage.packetCount(), false);
         return status;
     }
 
@@ -354,33 +359,33 @@ Status FFmpegVideoProcessingPipeline::flushFilterAndEncoder(
     step = diagnostics.mark();
     if (!m_filterStage.flush(&error)) {
         diagnostics.logFailure("filter_flush", step);
-        diagnostics.finish(m_packetWriter.packetCount(), false);
+        diagnostics.finish(m_packetDrainStage.packetCount(), false);
         return Status::failure(makeLegacyError(error));
     }
     diagnostics.logStep("filter_flush", step);
 
-    packetsBeforeStep = m_packetWriter.packetCount();
+    packetsBeforeStep = m_packetDrainStage.packetCount();
     step = diagnostics.mark();
     status = drainFilterStage(onPacketWritten);
     diagnostics.logStepPackets(
         "filter_drain",
         step,
-        m_packetWriter.packetCount() - packetsBeforeStep
+        m_packetDrainStage.packetCount() - packetsBeforeStep
     );
     if (!status) {
-        diagnostics.finish(m_packetWriter.packetCount(), false);
+        diagnostics.finish(m_packetDrainStage.packetCount(), false);
         return status;
     }
 
-    packetsBeforeStep = m_packetWriter.packetCount();
+    packetsBeforeStep = m_packetDrainStage.packetCount();
     step = diagnostics.mark();
-    status = writeEncodedPackets(nullptr, onPacketWritten);
+    status = drainEncodedPackets(nullptr, onPacketWritten);
     diagnostics.logStepPackets(
         "encoder_flush",
         step,
-        m_packetWriter.packetCount() - packetsBeforeStep
+        m_packetDrainStage.packetCount() - packetsBeforeStep
     );
-    diagnostics.finish(m_packetWriter.packetCount(), status.ok());
+    diagnostics.finish(m_packetDrainStage.packetCount(), status.ok());
 
     return status;
 }
@@ -545,7 +550,7 @@ Status FFmpegVideoProcessingPipeline::drainFilterStage(
             return Status::failure(makeLegacyError(error));
         }
 
-        const Status status = writeEncodedPackets(m_filteredFrame.get(), onPacketWritten);
+        const Status status = drainEncodedPackets(m_filteredFrame.get(), onPacketWritten);
         av_frame_unref(m_filteredFrame.get());
 
         if (!status) {
@@ -554,16 +559,16 @@ Status FFmpegVideoProcessingPipeline::drainFilterStage(
     }
 }
 
-Status FFmpegVideoProcessingPipeline::writeEncodedPackets(
+Status FFmpegVideoProcessingPipeline::drainEncodedPackets(
     AVFrame* frame,
     const PacketWrittenCallback& onPacketWritten)
 {
-    Status sendStatus = m_packetWriter.sendFrame(frame);
+    Status sendStatus = m_packetDrainStage.sendFrame(frame);
     if (!sendStatus) {
         return sendStatus;
     }
 
-    auto receiveResult = m_packetWriter.receiveAndWritePackets(onPacketWritten);
+    auto receiveResult = m_packetDrainStage.receiveAndPushPackets(onPacketWritten);
     if (!receiveResult) {
         return Status::failure(receiveResult.error());
     }
@@ -585,7 +590,7 @@ bool FFmpegVideoProcessingPipeline::isInitialized() const
         m_hardwareTransferStage.isInitialized() &&
         m_frameRateStage.isInitialized() &&
         m_filterStage.isInitialized() &&
-        m_packetWriter.isInitialized();
+        m_packetDrainStage.isInitialized();
 }
 
 AVStream* FFmpegVideoProcessingPipeline::outputStream() const
@@ -600,24 +605,24 @@ int64_t FFmpegVideoProcessingPipeline::decodedFrameCount() const
 
 int64_t FFmpegVideoProcessingPipeline::packetCount() const
 {
-    return m_packetWriter.packetCount();
+    return m_packetDrainStage.packetCount();
 }
 
 int64_t FFmpegVideoProcessingPipeline::lastWrittenOutTimeMs() const
 {
-    return m_packetWriter.lastWrittenOutTimeMs();
+    return m_packetDrainStage.lastWrittenOutTimeMs();
 }
 
 int64_t FFmpegVideoProcessingPipeline::estimatedOutTimeMs() const
 {
-    if (m_packetWriter.lastWrittenOutTimeMs() > 0) {
-        return m_packetWriter.lastWrittenOutTimeMs();
+    if (m_packetDrainStage.lastWrittenOutTimeMs() > 0) {
+        return m_packetDrainStage.lastWrittenOutTimeMs();
     }
 
     AVCodecContext* encoderCtx = encoderContext();
     if (encoderCtx && encoderCtx->framerate.num > 0) {
         return static_cast<int64_t>(
-            m_packetWriter.packetCount() * 1000.0 *
+            m_packetDrainStage.packetCount() * 1000.0 *
             encoderCtx->framerate.den /
             encoderCtx->framerate.num
         );
