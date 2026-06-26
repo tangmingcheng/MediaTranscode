@@ -13,7 +13,7 @@
 #include "internal/TranscodeTypes.h"
 #include "internal/core/video/FFmpegVideoEncodedPacketDrainStage.h"
 #include "internal/output/FFmpegMuxerOutputNode.h"
-#include "internal/output/PacketOutputGraph.h"
+#include "internal/output/PacketOutputGraphController.h"
 #include "internal/output/PacketOutputNode.h"
 #include "media_transcode/Result.h"
 
@@ -115,7 +115,7 @@ private:
     bool m_hasHardwarePlan = false;
 
     PacketOutputNode* m_outputNode = nullptr;
-    PacketOutputGraph m_defaultOutputGraph;
+    PacketOutputGraphController m_defaultOutputController;
     FFmpegMuxerOutputNode m_defaultMuxerOutputNode;
     FFmpegVideoEncodedPacketDrainStage m_packetDrainStage;
     int64_t m_decodedFrameCount = 0;
