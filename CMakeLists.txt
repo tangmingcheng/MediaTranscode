@@ -37,20 +37,22 @@ add_library(${TARGET_CORE} STATIC
     src/realtime/FFmpegRealtimeVideoPipelineRuntime.cpp
     src/realtime/FFmpegRealtimeVideoPipelineRuntime.h
     src/internal/TranscodeTypes.h
+    src/internal/core/video/FFmpegVideoEncodedPacketDrainStage.h
     src/internal/core/video/FFmpegVideoProcessingPipeline.cpp
     src/internal/core/video/FFmpegVideoProcessingPipeline.h
     src/internal/input/FFmpegRealtimeInputSource.cpp
     src/internal/input/FFmpegRealtimeInputSource.h
     src/internal/input/FFmpegRealtimeInterruptController.cpp
     src/internal/input/FFmpegRealtimeInterruptController.h
-    src/internal/output/EncodedPacketSink.h
-    src/internal/output/FFmpegMuxerPacketSink.h
+    src/internal/output/FFmpegMuxerOutputNode.h
     src/internal/output/FFmpegRtpMuxer.cpp
     src/internal/output/FFmpegRtpMuxer.h
     src/internal/output/FFmpegRtpUrlBuilder.cpp
     src/internal/output/FFmpegRtpUrlBuilder.h
     src/internal/output/FFmpegSdpWriter.cpp
     src/internal/output/FFmpegSdpWriter.h
+    src/internal/output/PacketOutputGraph.h
+    src/internal/output/PacketOutputNode.h
     src/internal/FFmpegAudioAdapter.cpp
     src/internal/FFmpegAudioAdapter.h
     src/internal/FFmpegAudioCopyPipeline.cpp
@@ -133,8 +135,6 @@ add_library(${TARGET_CORE} STATIC
     src/internal/FFmpegVideoHardwareTransferStage.h
     src/internal/FFmpegVideoInputMetadata.cpp
     src/internal/FFmpegVideoInputMetadata.h
-    src/internal/FFmpegVideoPacketWriterStage.cpp
-    src/internal/FFmpegVideoPacketWriterStage.h
     src/internal/FFmpegVideoTimestampStage.cpp
     src/internal/FFmpegVideoTimestampStage.h
     include/media_transcode/MediaTranscode.h
