@@ -24,11 +24,11 @@ Status makeTimestampError(const std::string& message)
 
 void FFmpegAudioPacketWriter::reset()
 {
-    m_outputFmtCtx = nullptr;
+    m_outputNode = nullptr;
     m_outputStream = nullptr;
 
     m_timestampErrorPrefix = "audio packet";
-    m_writeErrorMessage = "av_interleaved_write_frame audio failed";
+    m_writeErrorMessage = "audio packet write failed";
 
     m_packetCount = 0;
     m_lastWrittenDts = AV_NOPTS_VALUE;
@@ -39,9 +39,9 @@ Status FFmpegAudioPacketWriter::initialize(Config config)
 {
     reset();
 
-    if (!config.outputFmtCtx) {
+    if (!config.outputNode) {
         return Status::failure(ErrorInfo::invalidArgument(
-            "FFmpegAudioPacketWriter initialize failed: outputFmtCtx is null"));
+            "FFmpegAudioPacketWriter initialize failed: outputNode is null"));
     }
 
     if (!config.outputStream) {
@@ -49,7 +49,7 @@ Status FFmpegAudioPacketWriter::initialize(Config config)
             "FFmpegAudioPacketWriter initialize failed: outputStream is null"));
     }
 
-    m_outputFmtCtx = config.outputFmtCtx;
+    m_outputNode = config.outputNode;
     m_outputStream = config.outputStream;
     m_timestampErrorPrefix = std::move(config.timestampErrorPrefix);
     m_writeErrorMessage = std::move(config.writeErrorMessage);
@@ -66,7 +66,7 @@ Status FFmpegAudioPacketWriter::write(
             "FFmpegAudioPacketWriter write failed: packet is null"));
     }
 
-    if (!m_outputFmtCtx || !m_outputStream) {
+    if (!m_outputNode || !m_outputStream) {
         return Status::failure(ErrorInfo::notInitialized(
             "FFmpegAudioPacketWriter write failed: writer is not initialized"));
     }
@@ -80,9 +80,13 @@ Status FFmpegAudioPacketWriter::write(
 
     updateProgressFromPacket(packet);
 
-    const int ret = av_interleaved_write_frame(m_outputFmtCtx, packet);
-    if (ret < 0) {
-        return Status::failure(makeFFmpegError(m_writeErrorMessage, ret));
+    const Status writeStatus = m_outputNode->pushPacket(packet);
+    if (!writeStatus) {
+        const ErrorInfo& error = writeStatus.error();
+        return Status::failure(ErrorInfo{
+            error.code,
+            m_writeErrorMessage + ": " + error.message
+        });
     }
 
     ++m_packetCount;
@@ -96,7 +100,7 @@ Status FFmpegAudioPacketWriter::write(
 
 bool FFmpegAudioPacketWriter::isInitialized() const
 {
-    return m_outputFmtCtx && m_outputStream;
+    return m_outputNode && m_outputStream;
 }
 
 int64_t FFmpegAudioPacketWriter::packetCount() const
