@@ -2,14 +2,14 @@ cmake_minimum_required(VERSION 3.21.1)
 
 project(MediaTranscode LANGUAGES CXX)
 
-set(TARGET_CLI "media_transcode_cli")
 set(TARGET_CORE "media_transcode_core")
+set(TARGET_LOCAL_TRANSCODE_PROBE "media_transcode_local_transcode_probe")
 set(THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/3rds")
 
-option(MEDIA_TRANSCODE_BUILD_CLI "Build the media_transcode_cli example program" ON)
 option(MEDIA_TRANSCODE_BUILD_EXAMPLES "Build small public API examples" ON)
-option(MEDIA_TRANSCODE_BUILD_TESTS "Build MediaTranscode tests" ON)
+option(MEDIA_TRANSCODE_BUILD_TOOLS "Build internal validation/debug tools" ON)
 option(MEDIA_TRANSCODE_BUILD_P1_TOOLS "Build internal P1 realtime debug tools" ON)
+option(MEDIA_TRANSCODE_BUILD_TESTS "Build MediaTranscode tests" ON)
 option(MEDIA_TRANSCODE_ENABLE_INTEGRATION_TESTS "Build and register integration tests" ON)
 option(MEDIA_TRANSCODE_ENABLE_HARDWARE_TESTS "Enable hardware-dependent tests" OFF)
 
@@ -250,14 +250,14 @@ function(media_transcode_configure_test target_name)
 endfunction()
 
 # --------------------------
-# CLI 示例程序
+# Internal validation/debug tools
 # --------------------------
-if(MEDIA_TRANSCODE_BUILD_CLI)
-    add_executable(${TARGET_CLI}
-        examples/transcode_cli/main.cpp
+if(MEDIA_TRANSCODE_BUILD_TOOLS)
+    add_executable(${TARGET_LOCAL_TRANSCODE_PROBE}
+        tools/local_transcode_probe/main.cpp
     )
-    media_transcode_configure_app(${TARGET_CLI})
-    target_link_libraries(${TARGET_CLI} PRIVATE thirdparty_spdlog)
+    media_transcode_configure_app(${TARGET_LOCAL_TRANSCODE_PROBE})
+    target_link_libraries(${TARGET_LOCAL_TRANSCODE_PROBE} PRIVATE thirdparty_spdlog)
 endif()
 
 # --------------------------
