@@ -4,7 +4,7 @@
 #include "internal/FFmpegError.h"
 #include "internal/FFmpegTimelineNormalizer.h"
 #include "internal/FFmpegUtils.h"
-#include "internal/output/AudioOutputStreamProvider.h"
+#include "internal/output/capabilities/audio/AudioOutputStreamProvider.h"
 
 #include <algorithm>
 #include <memory>
