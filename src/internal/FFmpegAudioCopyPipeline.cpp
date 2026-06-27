@@ -161,7 +161,36 @@ Status FFmpegAudioCopyPipeline::normalizePacketTimestamp(AVPacket* packet) const
             "FFmpegAudioCopyPipeline normalizePacketTimestamp failed: pipeline is not initialized"));
     }
 
-    m_timeline->normalizePacket(packet, m_inputAudioStream, m_outputAudioStream);
+    auto normalizeTimestamp = [&](int64_t timestamp) -> int64_t {
+        if (timestamp == AV_NOPTS_VALUE) {
+            return AV_NOPTS_VALUE;
+        }
+
+        const int64_t inputUs = TimelineNormalizer::toUs(
+            timestamp,
+            m_inputAudioStream->time_base
+        );
+        const int64_t normalizedUs = m_timeline->normalizeUs(inputUs);
+        return TimelineNormalizer::fromUs(
+            normalizedUs,
+            m_outputAudioStream->time_base
+        );
+    };
+
+    packet->pts = normalizeTimestamp(packet->pts);
+    packet->dts = normalizeTimestamp(packet->dts);
+
+    if (packet->duration > 0) {
+        packet->duration = av_rescale_q(
+            packet->duration,
+            m_inputAudioStream->time_base,
+            m_outputAudioStream->time_base
+        );
+    }
+
+    packet->stream_index = m_outputAudioStream->index;
+    packet->pos = -1;
+
     return Status::success();
 }
 
