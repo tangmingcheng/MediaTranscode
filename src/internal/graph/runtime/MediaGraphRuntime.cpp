@@ -8,7 +8,8 @@ namespace media::ffmpeg::graph {
 
 ::media::Status MediaGraphRuntime::compile(MediaGraph graph)
 {
-    if (m_state == MediaGraphRuntimeState::Running) {
+    if (m_state == MediaGraphRuntimeState::Running ||
+        m_state == MediaGraphRuntimeState::ThreadedRunning) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("MediaGraphRuntime compile failed: runtime is running"));
     }
@@ -31,6 +32,17 @@ namespace media::ffmpeg::graph {
     return m_scheduler.registerNode(std::move(node));
 }
 
+void MediaGraphRuntime::setThreadingPolicy(MediaThreadingPolicy policy) noexcept
+{
+    m_threadingPolicy = policy;
+    m_threadedExecutor.setPolicy(policy);
+}
+
+const MediaThreadingPolicy& MediaGraphRuntime::threadingPolicy() const noexcept
+{
+    return m_threadingPolicy;
+}
+
 ::media::Status MediaGraphRuntime::start()
 {
     if (!m_context.compiled()) {
@@ -44,6 +56,28 @@ namespace media::ffmpeg::graph {
     }
 
     m_state = MediaGraphRuntimeState::Running;
+    return ::media::Status::success();
+}
+
+::media::Status MediaGraphRuntime::startThreaded()
+{
+    if (!m_context.compiled()) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::notInitialized("MediaGraphRuntime startThreaded failed: graph is not compiled"));
+    }
+
+    if (m_state == MediaGraphRuntimeState::Running) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("MediaGraphRuntime startThreaded failed: single-thread runtime is running"));
+    }
+
+    m_threadedExecutor.setPolicy(m_threadingPolicy);
+    auto status = m_threadedExecutor.start(m_context, m_scheduler);
+    if (!status) {
+        return status;
+    }
+
+    m_state = MediaGraphRuntimeState::ThreadedRunning;
     return ::media::Status::success();
 }
 
@@ -74,7 +108,13 @@ namespace media::ffmpeg::graph {
         return ::media::Status::success();
     }
 
-    auto schedulerStatus = m_scheduler.stop(m_context);
+    ::media::Status schedulerStatus = ::media::Status::success();
+    if (m_state == MediaGraphRuntimeState::ThreadedRunning) {
+        schedulerStatus = m_threadedExecutor.stop(m_context, m_scheduler);
+    } else {
+        schedulerStatus = m_scheduler.stop(m_context);
+    }
+
     auto closeStatus = MediaGraphLifecycle::closeChannels(m_context);
 
     if (!schedulerStatus) {
@@ -91,17 +131,23 @@ namespace media::ffmpeg::graph {
 
 void MediaGraphRuntime::abort() noexcept
 {
-    m_scheduler.abort(m_context);
+    if (m_state == MediaGraphRuntimeState::ThreadedRunning) {
+        m_threadedExecutor.abort(m_context, m_scheduler);
+    } else {
+        m_scheduler.abort(m_context);
+    }
     MediaGraphLifecycle::abortChannels(m_context);
     m_state = MediaGraphRuntimeState::Aborted;
 }
 
 void MediaGraphRuntime::reset()
 {
-    if (m_state == MediaGraphRuntimeState::Running) {
+    if (m_state == MediaGraphRuntimeState::Running ||
+        m_state == MediaGraphRuntimeState::ThreadedRunning) {
         abort();
     }
 
+    m_threadedExecutor.clear();
     m_scheduler.clear();
     m_context.reset();
     m_graph.clear();
@@ -120,7 +166,13 @@ bool MediaGraphRuntime::compiled() const noexcept
 
 bool MediaGraphRuntime::running() const noexcept
 {
-    return m_state == MediaGraphRuntimeState::Running;
+    return m_state == MediaGraphRuntimeState::Running ||
+           m_state == MediaGraphRuntimeState::ThreadedRunning;
+}
+
+bool MediaGraphRuntime::threadedRunning() const noexcept
+{
+    return m_state == MediaGraphRuntimeState::ThreadedRunning;
 }
 
 MediaGraphExecutionContext& MediaGraphRuntime::context() noexcept
@@ -141,6 +193,16 @@ MediaGraphScheduler& MediaGraphRuntime::scheduler() noexcept
 const MediaGraphScheduler& MediaGraphRuntime::scheduler() const noexcept
 {
     return m_scheduler;
+}
+
+MediaGraphThreadedExecutor& MediaGraphRuntime::threadedExecutor() noexcept
+{
+    return m_threadedExecutor;
+}
+
+const MediaGraphThreadedExecutor& MediaGraphRuntime::threadedExecutor() const noexcept
+{
+    return m_threadedExecutor;
 }
 
 const MediaGraph* MediaGraphRuntime::graph() const noexcept

@@ -1,8 +1,10 @@
 #pragma once
 
 #include "internal/graph/core/MediaGraph.h"
+#include "internal/graph/model/MediaThreadingPolicy.h"
 #include "internal/graph/runtime/MediaGraphExecutionContext.h"
 #include "internal/graph/runtime/MediaGraphScheduler.h"
+#include "internal/graph/runtime/MediaGraphThreadedExecutor.h"
 #include "internal/graph/runtime/MediaRuntimeNode.h"
 #include "media_transcode/Result.h"
 
@@ -14,6 +16,7 @@ enum class MediaGraphRuntimeState {
     Empty,
     Compiled,
     Running,
+    ThreadedRunning,
     Stopped,
     Aborted
 };
@@ -28,7 +31,11 @@ public:
     ::media::Status compile(MediaGraph graph);
     ::media::Status registerRuntimeNode(std::unique_ptr<MediaRuntimeNode> node);
 
+    void setThreadingPolicy(MediaThreadingPolicy policy) noexcept;
+    const MediaThreadingPolicy& threadingPolicy() const noexcept;
+
     ::media::Status start();
+    ::media::Status startThreaded();
     ::media::Status processOnce();
     ::media::Status flush();
     ::media::Status stop();
@@ -38,6 +45,7 @@ public:
     MediaGraphRuntimeState state() const noexcept;
     bool compiled() const noexcept;
     bool running() const noexcept;
+    bool threadedRunning() const noexcept;
 
     MediaGraphExecutionContext& context() noexcept;
     const MediaGraphExecutionContext& context() const noexcept;
@@ -45,12 +53,17 @@ public:
     MediaGraphScheduler& scheduler() noexcept;
     const MediaGraphScheduler& scheduler() const noexcept;
 
+    MediaGraphThreadedExecutor& threadedExecutor() noexcept;
+    const MediaGraphThreadedExecutor& threadedExecutor() const noexcept;
+
     const MediaGraph* graph() const noexcept;
 
 private:
     MediaGraph m_graph;
     MediaGraphExecutionContext m_context;
     MediaGraphScheduler m_scheduler;
+    MediaGraphThreadedExecutor m_threadedExecutor;
+    MediaThreadingPolicy m_threadingPolicy;
     MediaGraphRuntimeState m_state = MediaGraphRuntimeState::Empty;
 };
 

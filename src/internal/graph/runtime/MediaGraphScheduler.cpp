@@ -33,6 +33,34 @@ const MediaRuntimeNode* MediaGraphScheduler::findNode(MediaNodeId nodeId) const
     return it == m_nodes.end() ? nullptr : it->second.get();
 }
 
+std::vector<MediaRuntimeNode*> MediaGraphScheduler::orderedRuntimeNodes(const MediaGraphExecutionContext& context)
+{
+    std::vector<MediaRuntimeNode*> result;
+    result.reserve(context.executionOrder().size());
+
+    for (MediaNodeId nodeId : context.executionOrder()) {
+        if (MediaRuntimeNode* node = findNode(nodeId)) {
+            result.push_back(node);
+        }
+    }
+
+    return result;
+}
+
+std::vector<const MediaRuntimeNode*> MediaGraphScheduler::orderedRuntimeNodes(const MediaGraphExecutionContext& context) const
+{
+    std::vector<const MediaRuntimeNode*> result;
+    result.reserve(context.executionOrder().size());
+
+    for (MediaNodeId nodeId : context.executionOrder()) {
+        if (const MediaRuntimeNode* node = findNode(nodeId)) {
+            result.push_back(node);
+        }
+    }
+
+    return result;
+}
+
 ::media::Status MediaGraphScheduler::configure(MediaGraphExecutionContext& context)
 {
     if (!context.compiled()) {
@@ -40,7 +68,7 @@ const MediaRuntimeNode* MediaGraphScheduler::findNode(MediaNodeId nodeId) const
             ::media::ErrorInfo::notInitialized("MediaGraphScheduler configure failed: context is not compiled"));
     }
 
-    for (MediaRuntimeNode* node : orderedNodes(context)) {
+    for (MediaRuntimeNode* node : orderedRuntimeNodes(context)) {
         auto status = node->configure(context);
         if (!status) {
             return status;
@@ -65,7 +93,7 @@ const MediaRuntimeNode* MediaGraphScheduler::findNode(MediaNodeId nodeId) const
         }
     }
 
-    for (MediaRuntimeNode* node : orderedNodes(context)) {
+    for (MediaRuntimeNode* node : orderedRuntimeNodes(context)) {
         auto status = node->start(context);
         if (!status) {
             return status;
@@ -83,7 +111,7 @@ const MediaRuntimeNode* MediaGraphScheduler::findNode(MediaNodeId nodeId) const
             ::media::ErrorInfo::notInitialized("MediaGraphScheduler processOnce failed: scheduler is not running"));
     }
 
-    for (MediaRuntimeNode* node : orderedNodes(context)) {
+    for (MediaRuntimeNode* node : orderedRuntimeNodes(context)) {
         auto status = node->process(context);
         if (!status) {
             return status;
@@ -95,7 +123,7 @@ const MediaRuntimeNode* MediaGraphScheduler::findNode(MediaNodeId nodeId) const
 
 ::media::Status MediaGraphScheduler::flush(MediaGraphExecutionContext& context)
 {
-    auto ordered = orderedNodes(context);
+    auto ordered = orderedRuntimeNodes(context);
     for (auto it = ordered.rbegin(); it != ordered.rend(); ++it) {
         auto status = (*it)->flush(context);
         if (!status) {
@@ -115,7 +143,7 @@ const MediaRuntimeNode* MediaGraphScheduler::findNode(MediaNodeId nodeId) const
 
     m_state = MediaGraphSchedulerState::Stopping;
 
-    auto ordered = orderedNodes(context);
+    auto ordered = orderedRuntimeNodes(context);
     for (auto it = ordered.rbegin(); it != ordered.rend(); ++it) {
         auto status = (*it)->stop(context);
         if (!status) {
@@ -129,7 +157,7 @@ const MediaRuntimeNode* MediaGraphScheduler::findNode(MediaNodeId nodeId) const
 
 void MediaGraphScheduler::abort(MediaGraphExecutionContext& context) noexcept
 {
-    auto ordered = orderedNodes(context);
+    auto ordered = orderedRuntimeNodes(context);
     for (auto it = ordered.rbegin(); it != ordered.rend(); ++it) {
         (*it)->abort(context);
     }
@@ -151,20 +179,6 @@ MediaGraphSchedulerState MediaGraphScheduler::state() const noexcept
 bool MediaGraphScheduler::running() const noexcept
 {
     return m_state == MediaGraphSchedulerState::Running;
-}
-
-std::vector<MediaRuntimeNode*> MediaGraphScheduler::orderedNodes(const MediaGraphExecutionContext& context)
-{
-    std::vector<MediaRuntimeNode*> result;
-    result.reserve(context.executionOrder().size());
-
-    for (MediaNodeId nodeId : context.executionOrder()) {
-        if (MediaRuntimeNode* node = findNode(nodeId)) {
-            result.push_back(node);
-        }
-    }
-
-    return result;
 }
 
 } // namespace media::ffmpeg::graph

@@ -30,6 +30,9 @@ public:
     MediaRuntimeNode* findNode(MediaNodeId nodeId);
     const MediaRuntimeNode* findNode(MediaNodeId nodeId) const;
 
+    std::vector<MediaRuntimeNode*> orderedRuntimeNodes(const MediaGraphExecutionContext& context);
+    std::vector<const MediaRuntimeNode*> orderedRuntimeNodes(const MediaGraphExecutionContext& context) const;
+
     ::media::Status configure(MediaGraphExecutionContext& context);
     ::media::Status start(MediaGraphExecutionContext& context);
     ::media::Status processOnce(MediaGraphExecutionContext& context);
@@ -40,9 +43,6 @@ public:
 
     MediaGraphSchedulerState state() const noexcept;
     bool running() const noexcept;
-
-private:
-    std::vector<MediaRuntimeNode*> orderedNodes(const MediaGraphExecutionContext& context);
 
 private:
     std::unordered_map<uint32_t, std::unique_ptr<MediaRuntimeNode>> m_nodes;
