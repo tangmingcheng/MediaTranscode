@@ -118,6 +118,9 @@ private:
     int64_t m_decodedFrameCount = 0;
 
     FramePtr m_decodedFrame;
+    FramePtr m_softwareTransferFrame;
+    FramePtr m_frameRateFrame;
+    FramePtr m_filteredFrame;
 };
 
 } // namespace media::ffmpeg
