@@ -49,6 +49,23 @@ const char* toString(MediaNodeKind kind)
     }
 }
 
+const char* toString(MediaStreamKind kind)
+{
+    switch (kind) {
+    case MediaStreamKind::Video: return "Video";
+    case MediaStreamKind::Audio: return "Audio";
+    case MediaStreamKind::Subtitle: return "Subtitle";
+    case MediaStreamKind::Data: return "Data";
+    case MediaStreamKind::Attachment: return "Attachment";
+    case MediaStreamKind::Control: return "Control";
+    case MediaStreamKind::Metadata: return "Metadata";
+    case MediaStreamKind::Any: return "Any";
+    case MediaStreamKind::Unknown:
+    default:
+        return "Unknown";
+    }
+}
+
 const char* toString(MediaEdgeKind kind)
 {
     switch (kind) {
@@ -63,6 +80,54 @@ const char* toString(MediaEdgeKind kind)
     case MediaEdgeKind::Control: return "Control";
     case MediaEdgeKind::Event: return "Event";
     case MediaEdgeKind::Unknown:
+    default:
+        return "Unknown";
+    }
+}
+
+const char* toString(MediaPayloadKind kind)
+{
+    switch (kind) {
+    case MediaPayloadKind::FormatContext: return "FormatContext";
+    case MediaPayloadKind::StreamDescriptor: return "StreamDescriptor";
+    case MediaPayloadKind::CodecContext: return "CodecContext";
+    case MediaPayloadKind::CodecParameters: return "CodecParameters";
+    case MediaPayloadKind::Packet: return "Packet";
+    case MediaPayloadKind::Frame: return "Frame";
+    case MediaPayloadKind::TimeDescriptor: return "TimeDescriptor";
+    case MediaPayloadKind::HardwareDescriptor: return "HardwareDescriptor";
+    case MediaPayloadKind::AudioLayoutDescriptor: return "AudioLayoutDescriptor";
+    case MediaPayloadKind::VideoFormatDescriptor: return "VideoFormatDescriptor";
+    case MediaPayloadKind::ControlSignal: return "ControlSignal";
+    case MediaPayloadKind::GraphEvent: return "GraphEvent";
+    case MediaPayloadKind::DiagnosticRecord: return "DiagnosticRecord";
+    case MediaPayloadKind::Unknown:
+    default:
+        return "Unknown";
+    }
+}
+
+const char* toString(MediaQueueMode mode)
+{
+    switch (mode) {
+    case MediaQueueMode::Direct: return "Direct";
+    case MediaQueueMode::Blocking: return "Blocking";
+    case MediaQueueMode::SpscRing: return "SpscRing";
+    case MediaQueueMode::MpscRing: return "MpscRing";
+    case MediaQueueMode::Unknown:
+    default:
+        return "Unknown";
+    }
+}
+
+const char* toString(MediaQueueOverflowPolicy policy)
+{
+    switch (policy) {
+    case MediaQueueOverflowPolicy::BlockProducer: return "BlockProducer";
+    case MediaQueueOverflowPolicy::DropNewest: return "DropNewest";
+    case MediaQueueOverflowPolicy::DropOldest: return "DropOldest";
+    case MediaQueueOverflowPolicy::DropNonKeyFrame: return "DropNonKeyFrame";
+    case MediaQueueOverflowPolicy::Abort: return "Abort";
     default:
         return "Unknown";
     }
@@ -116,7 +181,15 @@ std::string edgeLabel(const MediaGraph& graph, const MediaEdge& edge)
         label += toPort->name;
     }
     label += "\\n";
+    label += toString(edge.streamKind);
+    label += " / ";
     label += toString(edge.edgeKind);
+    label += " / ";
+    label += toString(edge.payloadKind);
+    label += "\\nqueue=";
+    label += toString(edge.policy.queuePolicy.mode);
+    label += " cap=";
+    label += std::to_string(edge.policy.queuePolicy.capacity);
 
     return dotEscape(label);
 }
@@ -135,11 +208,19 @@ std::string MediaGraphDump::toText(const MediaGraph& graph)
             << " (" << node.name << ")\n";
 
         for (const auto& port : node.inputPorts) {
-            oss << "  in : " << port.name << "\n";
+            oss << "  in : " << port.name
+                << " [" << toString(port.streamKind)
+                << ", " << toString(port.edgeKind)
+                << ", " << toString(port.payloadKind)
+                << "]\n";
         }
 
         for (const auto& port : node.outputPorts) {
-            oss << "  out: " << port.name << "\n";
+            oss << "  out: " << port.name
+                << " [" << toString(port.streamKind)
+                << ", " << toString(port.edgeKind)
+                << ", " << toString(port.payloadKind)
+                << "]\n";
         }
 
         oss << "\n";
@@ -156,7 +237,13 @@ std::string MediaGraphDump::toText(const MediaGraph& graph)
             << " -> "
             << edge.to.nodeId.value << ":"
             << (toPort ? toPort->name : "<missing>")
-            << " (" << toString(edge.edgeKind) << ")\n";
+            << " [stream=" << toString(edge.streamKind)
+            << ", edge=" << toString(edge.edgeKind)
+            << ", payload=" << toString(edge.payloadKind)
+            << ", queue=" << toString(edge.policy.queuePolicy.mode)
+            << ", capacity=" << edge.policy.queuePolicy.capacity
+            << ", overflow=" << toString(edge.policy.queuePolicy.overflowPolicy)
+            << "]\n";
     }
 
     return oss.str();

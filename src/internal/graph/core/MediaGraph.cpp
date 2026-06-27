@@ -71,11 +71,61 @@ MediaPortId MediaGraph::addOutputPort(MediaNodeId nodeId,
     );
 }
 
+bool MediaGraph::setPortFormatDescriptor(MediaPortId portId, MediaFormatDescriptor descriptor)
+{
+    MediaPort* port = findPort(portId);
+    if (!port) {
+        return false;
+    }
+
+    port->format = std::move(descriptor);
+    return true;
+}
+
+bool MediaGraph::setPortTimeDescriptor(MediaPortId portId, MediaTimeDescriptor descriptor)
+{
+    MediaPort* port = findPort(portId);
+    if (!port) {
+        return false;
+    }
+
+    port->time = descriptor;
+    return true;
+}
+
+bool MediaGraph::setPortHardwareDescriptor(MediaPortId portId, MediaHardwareDescriptor descriptor)
+{
+    MediaPort* port = findPort(portId);
+    if (!port) {
+        return false;
+    }
+
+    port->hardware = std::move(descriptor);
+    return true;
+}
+
 MediaEdgeId MediaGraph::connect(MediaNodeId fromNodeId,
                                 const std::string& fromPortName,
                                 MediaNodeId toNodeId,
                                 const std::string& toPortName,
                                 std::string edgeName,
+                                bool required)
+{
+    return connect(fromNodeId,
+                   fromPortName,
+                   toNodeId,
+                   toPortName,
+                   std::move(edgeName),
+                   MediaEdgePolicy{},
+                   required);
+}
+
+MediaEdgeId MediaGraph::connect(MediaNodeId fromNodeId,
+                                const std::string& fromPortName,
+                                MediaNodeId toNodeId,
+                                const std::string& toPortName,
+                                std::string edgeName,
+                                MediaEdgePolicy edgePolicy,
                                 bool required)
 {
     const MediaPort* from = findOutputPort(fromNodeId, fromPortName);
@@ -93,10 +143,25 @@ MediaEdgeId MediaGraph::connect(MediaNodeId fromNodeId,
     edge.streamKind = chooseStreamKind(*from, *to);
     edge.edgeKind = chooseEdgeKind(*from, *to);
     edge.payloadKind = choosePayloadKind(*from, *to);
+    edge.format = chooseFormatDescriptor(*from, *to);
+    edge.time = chooseTimeDescriptor(*from, *to);
+    edge.hardware = chooseHardwareDescriptor(*from, *to);
+    edge.policy = std::move(edgePolicy);
     edge.required = required;
 
     m_edges.push_back(std::move(edge));
     return m_edges.back().id;
+}
+
+bool MediaGraph::setEdgePolicy(MediaEdgeId edgeId, MediaEdgePolicy policy)
+{
+    MediaEdge* edge = findEdge(edgeId);
+    if (!edge) {
+        return false;
+    }
+
+    edge->policy = std::move(policy);
+    return true;
 }
 
 const std::vector<MediaNode>& MediaGraph::nodes() const
@@ -133,6 +198,36 @@ const MediaNode* MediaGraph::findNode(MediaNodeId id) const
     for (const MediaNode& node : m_nodes) {
         if (node.id == id) {
             return &node;
+        }
+    }
+
+    return nullptr;
+}
+
+MediaEdge* MediaGraph::findEdge(MediaEdgeId id)
+{
+    if (!id) {
+        return nullptr;
+    }
+
+    for (MediaEdge& edge : m_edges) {
+        if (edge.id == id) {
+            return &edge;
+        }
+    }
+
+    return nullptr;
+}
+
+const MediaEdge* MediaGraph::findEdge(MediaEdgeId id) const
+{
+    if (!id) {
+        return nullptr;
+    }
+
+    for (const MediaEdge& edge : m_edges) {
+        if (edge.id == id) {
+            return &edge;
         }
     }
 
@@ -290,6 +385,7 @@ MediaPortId MediaGraph::addPort(MediaNodeId nodeId,
     port.streamKind = streamKind;
     port.edgeKind = edgeKind;
     port.payloadKind = payloadKind;
+    port.format.streamKind = streamKind;
     port.required = required;
     port.multiple = multiple;
 
@@ -328,6 +424,33 @@ MediaPayloadKind MediaGraph::choosePayloadKind(const MediaPort& from, const Medi
     }
 
     return to.payloadKind;
+}
+
+MediaFormatDescriptor MediaGraph::chooseFormatDescriptor(const MediaPort& from, const MediaPort& to)
+{
+    if (from.hasFormatDescriptor()) {
+        return from.format;
+    }
+
+    return to.format;
+}
+
+MediaTimeDescriptor MediaGraph::chooseTimeDescriptor(const MediaPort& from, const MediaPort& to)
+{
+    if (from.hasTimeDescriptor()) {
+        return from.time;
+    }
+
+    return to.time;
+}
+
+MediaHardwareDescriptor MediaGraph::chooseHardwareDescriptor(const MediaPort& from, const MediaPort& to)
+{
+    if (from.hasHardwareDescriptor()) {
+        return from.hardware;
+    }
+
+    return to.hardware;
 }
 
 } // namespace media::ffmpeg::graph

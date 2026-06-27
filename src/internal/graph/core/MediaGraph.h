@@ -4,9 +4,12 @@
 #include "internal/graph/core/MediaNode.h"
 #include "internal/graph/core/MediaPort.h"
 #include "internal/graph/model/MediaEdgeKind.h"
+#include "internal/graph/model/MediaFormatDescriptor.h"
+#include "internal/graph/model/MediaHardwareDescriptor.h"
 #include "internal/graph/model/MediaNodeKind.h"
 #include "internal/graph/model/MediaPayloadKind.h"
 #include "internal/graph/model/MediaStreamKind.h"
+#include "internal/graph/model/MediaTimeDescriptor.h"
 
 #include <string>
 #include <vector>
@@ -39,6 +42,10 @@ public:
                               bool required = true,
                               bool multiple = false);
 
+    bool setPortFormatDescriptor(MediaPortId portId, MediaFormatDescriptor descriptor);
+    bool setPortTimeDescriptor(MediaPortId portId, MediaTimeDescriptor descriptor);
+    bool setPortHardwareDescriptor(MediaPortId portId, MediaHardwareDescriptor descriptor);
+
     MediaEdgeId connect(MediaNodeId fromNodeId,
                         const std::string& fromPortName,
                         MediaNodeId toNodeId,
@@ -46,11 +53,24 @@ public:
                         std::string edgeName = {},
                         bool required = true);
 
+    MediaEdgeId connect(MediaNodeId fromNodeId,
+                        const std::string& fromPortName,
+                        MediaNodeId toNodeId,
+                        const std::string& toPortName,
+                        std::string edgeName,
+                        MediaEdgePolicy edgePolicy,
+                        bool required = true);
+
+    bool setEdgePolicy(MediaEdgeId edgeId, MediaEdgePolicy policy);
+
     const std::vector<MediaNode>& nodes() const;
     const std::vector<MediaEdge>& edges() const;
 
     MediaNode* findNode(MediaNodeId id);
     const MediaNode* findNode(MediaNodeId id) const;
+
+    MediaEdge* findEdge(MediaEdgeId id);
+    const MediaEdge* findEdge(MediaEdgeId id) const;
 
     MediaPort* findPort(MediaPortId id);
     const MediaPort* findPort(MediaPortId id) const;
@@ -78,6 +98,9 @@ private:
     static MediaEdgeKind chooseEdgeKind(const MediaPort& from, const MediaPort& to);
     static MediaStreamKind chooseStreamKind(const MediaPort& from, const MediaPort& to);
     static MediaPayloadKind choosePayloadKind(const MediaPort& from, const MediaPort& to);
+    static MediaFormatDescriptor chooseFormatDescriptor(const MediaPort& from, const MediaPort& to);
+    static MediaTimeDescriptor chooseTimeDescriptor(const MediaPort& from, const MediaPort& to);
+    static MediaHardwareDescriptor chooseHardwareDescriptor(const MediaPort& from, const MediaPort& to);
 
 private:
     std::vector<MediaNode> m_nodes;

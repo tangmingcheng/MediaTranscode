@@ -2,8 +2,11 @@
 
 #include "internal/graph/core/MediaNodeId.h"
 #include "internal/graph/model/MediaEdgeKind.h"
+#include "internal/graph/model/MediaFormatDescriptor.h"
+#include "internal/graph/model/MediaHardwareDescriptor.h"
 #include "internal/graph/model/MediaPayloadKind.h"
 #include "internal/graph/model/MediaStreamKind.h"
+#include "internal/graph/model/MediaTimeDescriptor.h"
 
 #include <string>
 
@@ -26,20 +29,49 @@ struct MediaPort {
     MediaEdgeKind edgeKind = MediaEdgeKind::Unknown;
     MediaPayloadKind payloadKind = MediaPayloadKind::Unknown;
 
+    MediaFormatDescriptor format;
+    MediaTimeDescriptor time;
+    MediaHardwareDescriptor hardware;
+
     bool required = true;
     bool multiple = false;
 
-    bool isInput() const
+    bool isInput() const noexcept
     {
         return direction == MediaPortDirection::Input;
     }
 
-    bool isOutput() const
+    bool isOutput() const noexcept
     {
         return direction == MediaPortDirection::Output;
     }
 
-    bool accepts(const MediaPort& upstream) const
+    bool hasFormatDescriptor() const noexcept
+    {
+        return format.streamKind != MediaStreamKind::Unknown ||
+               format.hasStreamIndex() ||
+               format.video.hasKnownSize() ||
+               format.audio.hasKnownLayout() ||
+               !format.codec.codecName.empty();
+    }
+
+    bool hasTimeDescriptor() const noexcept
+    {
+        return time.hasKnownTimeBase() ||
+               time.hasKnownFrameRate() ||
+               time.startTime != invalidMediaTimeValue ||
+               time.duration > 0;
+    }
+
+    bool hasHardwareDescriptor() const noexcept
+    {
+        return hardware.deviceKind != MediaHardwareDeviceKind::Unknown ||
+               hardware.frameKind != MediaHardwareFrameKind::Unknown ||
+               !hardware.deviceName.empty() ||
+               !hardware.pixelFormat.empty();
+    }
+
+    bool accepts(const MediaPort& upstream) const noexcept
     {
         if (!isInput() || !upstream.isOutput()) {
             return false;

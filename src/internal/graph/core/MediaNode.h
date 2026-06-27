@@ -21,7 +21,7 @@ struct MediaNode {
 
     bool required = true;
 
-    const MediaPort* findInputPort(const std::string& portName) const
+    const MediaPort* findInputPort(const std::string& portName) const noexcept
     {
         for (const MediaPort& port : inputPorts) {
             if (port.name == portName) {
@@ -32,7 +32,7 @@ struct MediaNode {
         return nullptr;
     }
 
-    const MediaPort* findOutputPort(const std::string& portName) const
+    const MediaPort* findOutputPort(const std::string& portName) const noexcept
     {
         for (const MediaPort& port : outputPorts) {
             if (port.name == portName) {
@@ -43,7 +43,7 @@ struct MediaNode {
         return nullptr;
     }
 
-    bool isValid() const
+    bool isValid() const noexcept
     {
         return id.isValid() && kind != MediaNodeKind::Unknown && !name.empty();
     }

@@ -2,6 +2,7 @@
 
 #include "internal/graph/core/MediaEdge.h"
 #include "internal/graph/core/MediaGraph.h"
+#include "internal/graph/core/MediaGraphError.h"
 #include "internal/graph/core/MediaNodeId.h"
 
 #include <cstddef>
@@ -18,6 +19,7 @@ enum class MediaGraphValidationSeverity {
 
 struct MediaGraphValidationIssue {
     MediaGraphValidationSeverity severity = MediaGraphValidationSeverity::Info;
+    MediaGraphErrorCode code = MediaGraphErrorCode::None;
     std::string message;
 
     MediaNodeId nodeId = MediaNodeId::invalid();
