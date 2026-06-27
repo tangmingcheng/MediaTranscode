@@ -255,3 +255,44 @@ if(MEDIA_TRANSCODE_BUILD_EXAMPLES)
     )
     media_transcode_configure_app(media_transcode_example_local_sync)
 endif()
+
+if(MEDIA_TRANSCODE_BUILD_TESTS)
+    enable_testing()
+
+    add_executable(media_transcode_unit_tests
+        tests/unit/test_local_transcode_api.cpp
+        tests/common/TestAssert.h
+    )
+    media_transcode_configure_test(media_transcode_unit_tests)
+    add_test(
+        NAME media_transcode_unit_tests
+        COMMAND $<TARGET_FILE:media_transcode_unit_tests>
+    )
+
+    add_executable(media_transcode_missing_input_tests
+        tests/integration/test_local_transcode_missing_input.cpp
+        tests/common/TestAssert.h
+    )
+    media_transcode_configure_test(media_transcode_missing_input_tests)
+    add_test(
+        NAME media_transcode_missing_input_tests
+        COMMAND $<TARGET_FILE:media_transcode_missing_input_tests>
+    )
+
+    if(MEDIA_TRANSCODE_ENABLE_INTEGRATION_TESTS)
+        add_executable(media_transcode_local_transcode_integration_tests
+            tests/integration/test_local_transcode_integration.cpp
+            tests/common/MediaProbe.cpp
+            tests/common/MediaProbe.h
+            tests/common/TestAssert.h
+        )
+        media_transcode_configure_test(media_transcode_local_transcode_integration_tests)
+        add_test(
+            NAME media_transcode_local_transcode_integration_tests
+            COMMAND $<TARGET_FILE:media_transcode_local_transcode_integration_tests> "${MEDIA_TRANSCODE_TEST_SAMPLES_DIR}"
+        )
+        set_tests_properties(media_transcode_local_transcode_integration_tests PROPERTIES
+            SKIP_RETURN_CODE 77
+        )
+    endif()
+endif()
