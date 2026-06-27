@@ -80,11 +80,21 @@ private:
     AVStream* m_outputVideoStream = nullptr;
 
     HardwarePipelinePlan m_hardwarePlan;
+    HardwareBackendProfile m_hardwareBackend;
+    HardwareEncoderSelection m_hardwareEncoderSelection;
+    HardwareFramesContext m_encoderHardwareFramesContext;
+
     bool m_hasHardwarePlan = false;
 
     const HardwareDeviceContext* m_hardwareDeviceContext = nullptr;
     bool m_decoderUsesHardwareFrames = false;
     bool m_decoderHardwareDeviceAttached = false;
+    bool m_hardwareDeviceAttachedToEncoder = false;
+    bool m_hardwareFramesContextAttachedToEncoder = false;
+    bool m_zeroCopyPipeline = false;
+
+    int m_outputFps = 0;
+    bool m_enableConstantFps = false;
 };
 
 } // namespace media::ffmpeg
