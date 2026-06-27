@@ -1,8 +1,8 @@
 #pragma once
 
 #include "internal/FFmpegRAII.h"
-#include "internal/graph/packet/PacketOutputGraphController.h"
-#include "internal/graph/packet/PacketOutputNode.h"
+#include "internal/graph/nodes/output/packet/PacketOutputGraphController.h"
+#include "internal/graph/nodes/output/packet/PacketOutputNode.h"
 #include "internal/output/capabilities/audio/AudioOutputStreamProvider.h"
 #include "internal/output/capabilities/video/VideoOutputStreamProvider.h"
 #include "internal/output/nodes/file/FFmpegFileOutputNode.h"
