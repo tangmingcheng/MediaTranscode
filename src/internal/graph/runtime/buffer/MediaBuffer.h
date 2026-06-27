@@ -13,6 +13,9 @@ namespace media::ffmpeg::graph {
 
 enum class MediaBufferType {
     Unknown,
+    FormatContext,
+    CodecContext,
+    CodecParameters,
     Packet,
     Frame,
     HardwareFrame,
