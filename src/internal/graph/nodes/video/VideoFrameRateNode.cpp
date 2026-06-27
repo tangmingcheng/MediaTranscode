@@ -2,6 +2,19 @@
 
 namespace media::ffmpeg::graph {
 
-MEDIA_FFMPEG_GRAPH_DEFINE_NODE(VideoFrameRateNode, MediaNodeKind::VideoFrameRate)
+VideoFrameRateNode::VideoFrameRateNode(MediaNodeId nodeId)
+    : FFmpegNodeRuntime(nodeId, staticKind(), "VideoFrameRateNode")
+{
+}
+
+MediaNodeKind VideoFrameRateNode::staticKind() noexcept
+{
+    return MediaNodeKind::VideoFrameRate;
+}
+
+::media::Status VideoFrameRateNode::onProcess(MediaGraphExecutionContext& context)
+{
+    return forwardFirstInputToAllOutputs(context);
+}
 
 } // namespace media::ffmpeg::graph

@@ -2,6 +2,19 @@
 
 namespace media::ffmpeg::graph {
 
-MEDIA_FFMPEG_GRAPH_DEFINE_NODE(AudioStrategyNode, MediaNodeKind::AudioStrategy)
+AudioStrategyNode::AudioStrategyNode(MediaNodeId nodeId)
+    : FFmpegNodeRuntime(nodeId, staticKind(), "AudioStrategyNode")
+{
+}
+
+MediaNodeKind AudioStrategyNode::staticKind() noexcept
+{
+    return MediaNodeKind::AudioStrategy;
+}
+
+::media::Status AudioStrategyNode::onProcess(MediaGraphExecutionContext& context)
+{
+    return forwardFirstInputToAllOutputs(context);
+}
 
 } // namespace media::ffmpeg::graph

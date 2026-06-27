@@ -1,11 +1,13 @@
 #pragma once
 
 #include "internal/FFmpegRAII.h"
+#include "internal/graph/runtime/buffer/FFmpegCodecContextBuffer.h"
 #include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
 #include "internal/graph/runtime/buffer/FFmpegFrameBuffer.h"
 #include "internal/graph/runtime/buffer/FFmpegPacketBuffer.h"
 #include "internal/graph/runtime/buffer/HardwareFrameBuffer.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
+#include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "media_transcode/Result.h"
 
 extern "C" {
@@ -18,9 +20,15 @@ namespace media::ffmpeg::graph {
 
 class FFmpegBufferFactory final {
 public:
+    static ::media::Result<MediaBufferRef> makeEof(MediaStreamKind streamKind = MediaStreamKind::Control);
+    static ::media::Result<MediaBufferRef> makeFlush(MediaStreamKind streamKind = MediaStreamKind::Control);
+
     static ::media::Result<MediaBufferRef> wrapInputFormatContext(::media::ffmpeg::InputFormatContextPtr context);
     static ::media::Result<MediaBufferRef> wrapOutputFormatContext(::media::ffmpeg::OutputFormatContextPtr context);
     static ::media::Result<MediaBufferRef> borrowFormatContext(AVFormatContext* context);
+
+    static ::media::Result<MediaBufferRef> wrapCodecContext(::media::ffmpeg::CodecContextPtr context);
+    static ::media::Result<MediaBufferRef> borrowCodecContext(AVCodecContext* context);
 
     static ::media::Result<MediaBufferRef> wrapPacket(::media::ffmpeg::PacketPtr packet,
                                                        MediaStreamKind streamKind = MediaStreamKind::Unknown);

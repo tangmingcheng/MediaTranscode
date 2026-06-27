@@ -2,6 +2,19 @@
 
 namespace media::ffmpeg::graph {
 
-MEDIA_FFMPEG_GRAPH_DEFINE_NODE(AudioPacketNormalizeNode, MediaNodeKind::AudioPacketNormalize)
+AudioPacketNormalizeNode::AudioPacketNormalizeNode(MediaNodeId nodeId)
+    : FFmpegNodeRuntime(nodeId, staticKind(), "AudioPacketNormalizeNode")
+{
+}
+
+MediaNodeKind AudioPacketNormalizeNode::staticKind() noexcept
+{
+    return MediaNodeKind::AudioPacketNormalize;
+}
+
+::media::Status AudioPacketNormalizeNode::onProcess(MediaGraphExecutionContext& context)
+{
+    return forwardFirstInputToAllOutputs(context);
+}
 
 } // namespace media::ffmpeg::graph

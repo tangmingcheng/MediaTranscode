@@ -1,9 +1,19 @@
 #pragma once
 
-#include "internal/graph/nodes/MediaNodeRuntime.h"
+#include "internal/graph/nodes/FFmpegCodecNodeRuntime.h"
 
 namespace media::ffmpeg::graph {
 
-MEDIA_FFMPEG_GRAPH_DECLARE_NODE(VideoDecodeNode)
+class VideoDecodeNode final : public FFmpegCodecNodeRuntime {
+public:
+    explicit VideoDecodeNode(MediaNodeId nodeId);
+    static MediaNodeKind staticKind() noexcept;
+
+protected:
+    ::media::Status onProcess(MediaGraphExecutionContext& context) override;
+
+private:
+    ::media::Status receiveFrames(MediaGraphExecutionContext& context);
+};
 
 } // namespace media::ffmpeg::graph

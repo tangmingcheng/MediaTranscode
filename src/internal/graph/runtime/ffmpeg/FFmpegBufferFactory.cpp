@@ -7,6 +7,20 @@
 
 namespace media::ffmpeg::graph {
 
+::media::Result<MediaBufferRef> FFmpegBufferFactory::makeEof(MediaStreamKind streamKind)
+{
+    auto buffer = makeMediaBufferRef<MediaControlBuffer>(MediaControlBufferKind::Eof);
+    buffer->setStreamKind(streamKind);
+    return ::media::Result<MediaBufferRef>::success(std::move(buffer));
+}
+
+::media::Result<MediaBufferRef> FFmpegBufferFactory::makeFlush(MediaStreamKind streamKind)
+{
+    auto buffer = makeMediaBufferRef<MediaControlBuffer>(MediaControlBufferKind::Flush);
+    buffer->setStreamKind(streamKind);
+    return ::media::Result<MediaBufferRef>::success(std::move(buffer));
+}
+
 ::media::Result<MediaBufferRef> FFmpegBufferFactory::wrapInputFormatContext(::media::ffmpeg::InputFormatContextPtr context)
 {
     if (!context) {
@@ -40,6 +54,28 @@ namespace media::ffmpeg::graph {
         makeMediaBufferRef<FFmpegFormatContextBuffer>(context));
 }
 
+::media::Result<MediaBufferRef> FFmpegBufferFactory::wrapCodecContext(::media::ffmpeg::CodecContextPtr context)
+{
+    if (!context) {
+        return ::media::Result<MediaBufferRef>::failure(
+            ::media::ErrorInfo::invalidArgument("wrapCodecContext failed: context is null"));
+    }
+
+    return ::media::Result<MediaBufferRef>::success(
+        makeMediaBufferRef<FFmpegCodecContextBuffer>(std::move(context)));
+}
+
+::media::Result<MediaBufferRef> FFmpegBufferFactory::borrowCodecContext(AVCodecContext* context)
+{
+    if (!context) {
+        return ::media::Result<MediaBufferRef>::failure(
+            ::media::ErrorInfo::invalidArgument("borrowCodecContext failed: context is null"));
+    }
+
+    return ::media::Result<MediaBufferRef>::success(
+        makeMediaBufferRef<FFmpegCodecContextBuffer>(context));
+}
+
 ::media::Result<MediaBufferRef> FFmpegBufferFactory::wrapPacket(::media::ffmpeg::PacketPtr packet,
                                                                  MediaStreamKind streamKind)
 {
@@ -52,8 +88,7 @@ namespace media::ffmpeg::graph {
     buffer->setStreamKind(streamKind);
     buffer->setPayloadKind(MediaPayloadKind::Packet);
     if (const auto* packetBuffer = dynamic_cast<const FFmpegPacketBuffer*>(buffer.get())) {
-        const AVPacket* avPacket = packetBuffer->packet();
-        if (avPacket) {
+        if (const AVPacket* avPacket = packetBuffer->packet()) {
             buffer->setTimestamps(avPacket->pts, avPacket->dts, avPacket->duration);
         }
     }

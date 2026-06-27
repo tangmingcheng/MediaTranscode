@@ -2,6 +2,19 @@
 
 namespace media::ffmpeg::graph {
 
-MEDIA_FFMPEG_GRAPH_DEFINE_NODE(VideoTimestampNode, MediaNodeKind::VideoTimestamp)
+VideoTimestampNode::VideoTimestampNode(MediaNodeId nodeId)
+    : FFmpegNodeRuntime(nodeId, staticKind(), "VideoTimestampNode")
+{
+}
+
+MediaNodeKind VideoTimestampNode::staticKind() noexcept
+{
+    return MediaNodeKind::VideoTimestamp;
+}
+
+::media::Status VideoTimestampNode::onProcess(MediaGraphExecutionContext& context)
+{
+    return forwardFirstInputToAllOutputs(context);
+}
 
 } // namespace media::ffmpeg::graph

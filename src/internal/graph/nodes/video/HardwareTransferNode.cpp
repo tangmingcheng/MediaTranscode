@@ -2,6 +2,19 @@
 
 namespace media::ffmpeg::graph {
 
-MEDIA_FFMPEG_GRAPH_DEFINE_NODE(HardwareTransferNode, MediaNodeKind::HardwareTransfer)
+HardwareTransferNode::HardwareTransferNode(MediaNodeId nodeId)
+    : FFmpegNodeRuntime(nodeId, staticKind(), "HardwareTransferNode")
+{
+}
+
+MediaNodeKind HardwareTransferNode::staticKind() noexcept
+{
+    return MediaNodeKind::HardwareTransfer;
+}
+
+::media::Status HardwareTransferNode::onProcess(MediaGraphExecutionContext& context)
+{
+    return forwardFirstInputToAllOutputs(context);
+}
 
 } // namespace media::ffmpeg::graph

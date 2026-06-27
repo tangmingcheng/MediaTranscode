@@ -2,6 +2,19 @@
 
 namespace media::ffmpeg::graph {
 
-MEDIA_FFMPEG_GRAPH_DEFINE_NODE(AudioResampleNode, MediaNodeKind::AudioResample)
+AudioResampleNode::AudioResampleNode(MediaNodeId nodeId)
+    : FFmpegNodeRuntime(nodeId, staticKind(), "AudioResampleNode")
+{
+}
+
+MediaNodeKind AudioResampleNode::staticKind() noexcept
+{
+    return MediaNodeKind::AudioResample;
+}
+
+::media::Status AudioResampleNode::onProcess(MediaGraphExecutionContext& context)
+{
+    return forwardFirstInputToAllOutputs(context);
+}
 
 } // namespace media::ffmpeg::graph

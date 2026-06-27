@@ -2,6 +2,19 @@
 
 namespace media::ffmpeg::graph {
 
-MEDIA_FFMPEG_GRAPH_DEFINE_NODE(AudioPacketDrainNode, MediaNodeKind::AudioPacketDrain)
+AudioPacketDrainNode::AudioPacketDrainNode(MediaNodeId nodeId)
+    : FFmpegNodeRuntime(nodeId, staticKind(), "AudioPacketDrainNode")
+{
+}
+
+MediaNodeKind AudioPacketDrainNode::staticKind() noexcept
+{
+    return MediaNodeKind::AudioPacketDrain;
+}
+
+::media::Status AudioPacketDrainNode::onProcess(MediaGraphExecutionContext& context)
+{
+    return forwardFirstInputToAllOutputs(context);
+}
 
 } // namespace media::ffmpeg::graph

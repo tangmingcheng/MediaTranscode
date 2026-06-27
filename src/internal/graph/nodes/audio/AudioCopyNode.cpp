@@ -2,6 +2,19 @@
 
 namespace media::ffmpeg::graph {
 
-MEDIA_FFMPEG_GRAPH_DEFINE_NODE(AudioCopyNode, MediaNodeKind::AudioCopy)
+AudioCopyNode::AudioCopyNode(MediaNodeId nodeId)
+    : FFmpegNodeRuntime(nodeId, staticKind(), "AudioCopyNode")
+{
+}
+
+MediaNodeKind AudioCopyNode::staticKind() noexcept
+{
+    return MediaNodeKind::AudioCopy;
+}
+
+::media::Status AudioCopyNode::onProcess(MediaGraphExecutionContext& context)
+{
+    return forwardFirstInputToAllOutputs(context);
+}
 
 } // namespace media::ffmpeg::graph

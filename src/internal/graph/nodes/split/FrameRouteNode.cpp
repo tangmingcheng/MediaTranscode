@@ -2,6 +2,19 @@
 
 namespace media::ffmpeg::graph {
 
-MEDIA_FFMPEG_GRAPH_DEFINE_NODE(FrameRouteNode, MediaNodeKind::FrameRoute)
+FrameRouteNode::FrameRouteNode(MediaNodeId nodeId)
+    : FFmpegNodeRuntime(nodeId, staticKind(), "FrameRouteNode")
+{
+}
+
+MediaNodeKind FrameRouteNode::staticKind() noexcept
+{
+    return MediaNodeKind::FrameRoute;
+}
+
+::media::Status FrameRouteNode::onProcess(MediaGraphExecutionContext& context)
+{
+    return forwardFirstInputToAllOutputs(context);
+}
 
 } // namespace media::ffmpeg::graph
