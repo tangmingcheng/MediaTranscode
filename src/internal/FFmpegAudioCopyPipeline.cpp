@@ -1,6 +1,7 @@
 #include "internal/FFmpegAudioCopyPipeline.h"
 
 #include "internal/FFmpegError.h"
+#include "internal/FFmpegRAII.h"
 #include "internal/FFmpegTimelineNormalizer.h"
 #include "internal/output/capabilities/audio/AudioOutputStreamProvider.h"
 
