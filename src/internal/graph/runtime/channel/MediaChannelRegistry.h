@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <memory>
 #include <unordered_map>
+#include <vector>
 
 namespace media::ffmpeg::graph {
 
@@ -21,11 +22,15 @@ public:
     MediaChannel* findByEdge(MediaEdgeId edgeId);
     const MediaChannel* findByEdge(MediaEdgeId edgeId) const;
 
+    std::vector<MediaChannel*> channels();
+    std::vector<const MediaChannel*> channels() const;
+
     bool remove(MediaChannelId id);
     bool removeByEdge(MediaEdgeId edgeId);
     void clear();
 
     std::size_t size() const noexcept;
+    bool empty() const noexcept;
 
 private:
     MediaChannelId nextId();

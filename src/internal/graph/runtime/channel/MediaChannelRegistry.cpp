@@ -56,6 +56,30 @@ const MediaChannel* MediaChannelRegistry::findByEdge(MediaEdgeId edgeId) const
     return find(MediaChannelId::fromValue(it->second));
 }
 
+std::vector<MediaChannel*> MediaChannelRegistry::channels()
+{
+    std::vector<MediaChannel*> result;
+    result.reserve(m_channels.size());
+
+    for (auto& item : m_channels) {
+        result.push_back(item.second.get());
+    }
+
+    return result;
+}
+
+std::vector<const MediaChannel*> MediaChannelRegistry::channels() const
+{
+    std::vector<const MediaChannel*> result;
+    result.reserve(m_channels.size());
+
+    for (const auto& item : m_channels) {
+        result.push_back(item.second.get());
+    }
+
+    return result;
+}
+
 bool MediaChannelRegistry::remove(MediaChannelId id)
 {
     auto it = m_channels.find(id.value);
@@ -88,6 +112,11 @@ void MediaChannelRegistry::clear()
 std::size_t MediaChannelRegistry::size() const noexcept
 {
     return m_channels.size();
+}
+
+bool MediaChannelRegistry::empty() const noexcept
+{
+    return m_channels.empty();
 }
 
 MediaChannelId MediaChannelRegistry::nextId()
