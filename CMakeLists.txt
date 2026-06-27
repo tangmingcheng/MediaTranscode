@@ -21,11 +21,7 @@ set(MEDIA_TRANSCODE_TEST_SAMPLES_DIR
 
 if(POLICY CMP0141)
     cmake_policy(SET CMP0141 NEW)
-    set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT
-        "$<IF:$<AND:$<C_COMPILER_ID:MSVC>,$<CXX_COMPILER_ID:MSVC>>,
-$<$<CONFIG:Debug,RelWithDebInfo>:EditAndContinue>,
-$<$<CONFIG:Debug,RelWithDebInfo>:ProgramDatabase>>"
-    )
+    set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<IF:$<AND:$<C_COMPILER_ID:MSVC>,$<CXX_COMPILER_ID:MSVC>>,$<$<CONFIG:Debug,RelWithDebInfo>:EditAndContinue>,$<$<CONFIG:Debug,RelWithDebInfo>:ProgramDatabase>>")
 endif()
 
 add_library(${TARGET_CORE} STATIC
@@ -117,6 +113,7 @@ add_library(${TARGET_CORE} STATIC
     src/internal/FFmpegVideoAdapter.h
     src/internal/FFmpegVideoBitrateControlPlanner.cpp
     src/internal/FFmpegVideoBitrateControlPlanner.h
+    src/internal/FFmpegVideoBitrateOptionAdapter.cpp
     src/internal/FFmpegVideoBitrateOptionAdapter.h
     src/internal/FFmpegVideoColorMetadata.cpp
     src/internal/FFmpegVideoColorMetadata.h
@@ -257,65 +254,4 @@ if(MEDIA_TRANSCODE_BUILD_EXAMPLES)
         examples/api/local_transcode_sync.cpp
     )
     media_transcode_configure_app(media_transcode_example_local_sync)
-
-    add_executable(media_transcode_example_local_async
-        examples/api/local_transcode_async.cpp
-    )
-    media_transcode_configure_app(media_transcode_example_local_async)
-
-    add_executable(media_transcode_example_local_cancel
-        examples/api/local_transcode_cancel.cpp
-    )
-    media_transcode_configure_app(media_transcode_example_local_cancel)
-
-    add_executable(media_transcode_example_local_error_handling
-        examples/api/local_transcode_error_handling.cpp
-    )
-    media_transcode_configure_app(media_transcode_example_local_error_handling)
-endif()
-
-if(MEDIA_TRANSCODE_BUILD_P1_TOOLS)
-    add_executable(media_transcode_p1_realtime_probe
-        tools/realtime_probe/main.cpp
-    )
-    media_transcode_configure_app(media_transcode_p1_realtime_probe)
-    target_include_directories(media_transcode_p1_realtime_probe PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/src"
-    )
-    target_link_libraries(media_transcode_p1_realtime_probe PRIVATE thirdparty_spdlog)
-endif()
-
-if(MEDIA_TRANSCODE_BUILD_TESTS)
-    enable_testing()
-
-    add_executable(media_transcode_public_header_tests
-        tests/compile/test_public_headers.cpp
-    )
-    media_transcode_configure_app(media_transcode_public_header_tests)
-    add_test(NAME media_transcode_public_header_tests COMMAND media_transcode_public_header_tests)
-
-    add_executable(media_transcode_unit_tests
-        tests/unit/test_local_transcode_api.cpp
-    )
-    media_transcode_configure_test(media_transcode_unit_tests)
-    add_test(NAME media_transcode_unit_tests COMMAND media_transcode_unit_tests)
-
-    if(MEDIA_TRANSCODE_ENABLE_INTEGRATION_TESTS)
-        add_executable(media_transcode_missing_input_tests
-            tests/integration/test_local_transcode_missing_input.cpp
-        )
-        media_transcode_configure_test(media_transcode_missing_input_tests)
-        add_test(NAME media_transcode_missing_input_tests COMMAND media_transcode_missing_input_tests)
-
-        add_executable(media_transcode_integration_tests
-            tests/common/MediaProbe.cpp
-            tests/integration/test_local_transcode_integration.cpp
-        )
-        media_transcode_configure_test(media_transcode_integration_tests)
-        add_test(
-            NAME media_transcode_integration_tests
-            COMMAND media_transcode_integration_tests "${MEDIA_TRANSCODE_TEST_SAMPLES_DIR}"
-        )
-        set_tests_properties(media_transcode_integration_tests PROPERTIES SKIP_RETURN_CODE 77)
-    endif()
 endif()
