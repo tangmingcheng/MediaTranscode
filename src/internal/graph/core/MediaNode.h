@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/core/MediaNodeId.h"
+#include "internal/graph/core/MediaNodeOptions.h"
 #include "internal/graph/core/MediaPort.h"
 #include "internal/graph/model/MediaNodeKind.h"
 
@@ -15,6 +16,7 @@ struct MediaNode {
 
     std::string name;
     std::string diagnosticName;
+    MediaNodeOptions options;
 
     std::vector<MediaPort> inputPorts;
     std::vector<MediaPort> outputPorts;

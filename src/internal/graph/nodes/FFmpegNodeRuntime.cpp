@@ -1,5 +1,6 @@
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 
+#include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 
 #include <utility>
@@ -9,6 +10,25 @@ namespace media::ffmpeg::graph {
 FFmpegNodeRuntime::FFmpegNodeRuntime(MediaNodeId nodeId, MediaNodeKind kind, std::string name)
     : MediaNodeRuntime(nodeId, kind, std::move(name))
 {
+}
+
+const MediaNodeOptions* FFmpegNodeRuntime::nodeOptions(MediaGraphExecutionContext& context) const noexcept
+{
+    const MediaGraph* graph = context.graph();
+    if (!graph) {
+        return nullptr;
+    }
+
+    const MediaNode* node = graph->findNode(nodeId());
+    return node ? &node->options : nullptr;
+}
+
+std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
+                                           const std::string& key,
+                                           std::string fallback) const
+{
+    const MediaNodeOptions* options = nodeOptions(context);
+    return options ? options->value(key, std::move(fallback)) : std::move(fallback);
 }
 
 ::media::Result<MediaBufferRef> FFmpegNodeRuntime::popInput(MediaGraphExecutionContext& context,

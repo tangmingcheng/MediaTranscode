@@ -2,6 +2,7 @@
 
 #include "internal/graph/core/MediaEdge.h"
 #include "internal/graph/core/MediaNode.h"
+#include "internal/graph/core/MediaNodeOptions.h"
 #include "internal/graph/core/MediaPort.h"
 #include "internal/graph/model/MediaEdgeKind.h"
 #include "internal/graph/model/MediaFormatDescriptor.h"
@@ -25,6 +26,9 @@ public:
     MediaNodeId addNode(MediaNodeKind kind,
                         std::string name,
                         std::string diagnosticName = {});
+
+    bool setNodeOption(MediaNodeId nodeId, std::string key, std::string value);
+    bool setNodeOptions(MediaNodeId nodeId, MediaNodeOptions options);
 
     MediaPortId addInputPort(MediaNodeId nodeId,
                              std::string name,

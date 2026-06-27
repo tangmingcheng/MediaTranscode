@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/graph/core/MediaNodeOptions.h"
 #include "internal/graph/nodes/MediaNodeRuntime.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 #include "internal/graph/runtime/channel/MediaChannel.h"
@@ -16,6 +17,11 @@ public:
     ~FFmpegNodeRuntime() override = default;
 
 protected:
+    const MediaNodeOptions* nodeOptions(MediaGraphExecutionContext& context) const noexcept;
+    std::string nodeOption(MediaGraphExecutionContext& context,
+                           const std::string& key,
+                           std::string fallback = {}) const;
+
     ::media::Result<MediaBufferRef> popInput(MediaGraphExecutionContext& context,
                                              const std::string& portName);
     ::media::Result<MediaBufferRef> tryPopFirstInput(MediaGraphExecutionContext& context);

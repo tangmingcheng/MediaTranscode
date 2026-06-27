@@ -31,6 +31,28 @@ MediaNodeId MediaGraph::addNode(MediaNodeKind kind,
     return m_nodes.back().id;
 }
 
+bool MediaGraph::setNodeOption(MediaNodeId nodeId, std::string key, std::string value)
+{
+    MediaNode* node = findNode(nodeId);
+    if (!node || key.empty()) {
+        return false;
+    }
+
+    node->options.set(std::move(key), std::move(value));
+    return true;
+}
+
+bool MediaGraph::setNodeOptions(MediaNodeId nodeId, MediaNodeOptions options)
+{
+    MediaNode* node = findNode(nodeId);
+    if (!node) {
+        return false;
+    }
+
+    node->options = std::move(options);
+    return true;
+}
+
 MediaPortId MediaGraph::addInputPort(MediaNodeId nodeId,
                                      std::string name,
                                      MediaStreamKind streamKind,
