@@ -1,7 +1,7 @@
 #pragma once
 
 #include "internal/FFmpegError.h"
-#include "internal/graph/packet/PacketOutputNode.h"
+#include "internal/graph/nodes/output/packet/PacketOutputNode.h"
 #include "internal/output/capabilities/audio/AudioOutputStreamProvider.h"
 #include "internal/output/capabilities/video/VideoOutputStreamProvider.h"
 

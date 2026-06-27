@@ -33,7 +33,7 @@ media::LocalVideoTranscodeConfig baseConfig(const fs::path& input, const fs::pat
     config.width = 160;
     config.height = 120;
     config.noAudio = true;
-    config.disableHardware = true; // Default integration tests must not require GPU/hardware codecs.
+    config.disableHardware = false; // Default integration tests must not require GPU/hardware codecs.
     return config;
 }
 

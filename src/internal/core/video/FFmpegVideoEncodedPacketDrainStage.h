@@ -2,7 +2,7 @@
 
 #include "internal/FFmpegError.h"
 #include "internal/FFmpegRAII.h"
-#include "internal/graph/packet/PacketOutputNode.h"
+#include "internal/graph/nodes/output/packet/PacketOutputNode.h"
 #include "media_transcode/Result.h"
 
 #include <algorithm>

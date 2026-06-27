@@ -38,9 +38,9 @@ add_library(${TARGET_CORE} STATIC
     src/internal/core/video/FFmpegVideoEncodedPacketDrainStage.h
     src/internal/core/video/FFmpegVideoProcessingPipeline.cpp
     src/internal/core/video/FFmpegVideoProcessingPipeline.h
-    src/internal/graph/packet/PacketOutputGraph.h
-    src/internal/graph/packet/PacketOutputGraphController.h
-    src/internal/graph/packet/PacketOutputNode.h
+    src/internal/graph/nodes/output/packet/PacketOutputGraph.h
+    src/internal/graph/nodes/output/packet/PacketOutputGraphController.h
+    src/internal/graph/nodes/output/packet/PacketOutputNode.h
     src/internal/input/FFmpegRealtimeInputSource.cpp
     src/internal/input/FFmpegRealtimeInputSource.h
     src/internal/input/FFmpegRealtimeInterruptController.cpp

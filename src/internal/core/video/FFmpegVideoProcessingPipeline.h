@@ -12,7 +12,7 @@
 #include "internal/FFmpegVideoTimestampStage.h"
 #include "internal/TranscodeTypes.h"
 #include "internal/core/video/FFmpegVideoEncodedPacketDrainStage.h"
-#include "internal/graph/packet/PacketOutputNode.h"
+#include "internal/graph/nodes/output/packet/PacketOutputNode.h"
 #include "internal/output/capabilities/video/VideoOutputStreamProvider.h"
 #include "media_transcode/Result.h"
 
