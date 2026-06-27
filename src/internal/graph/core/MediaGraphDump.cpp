@@ -4,26 +4,124 @@
 
 namespace media::ffmpeg::graph {
 
-static const char* toString(MediaNodeKind k)
+namespace {
+
+const char* toString(MediaNodeKind kind)
 {
-    switch (k) {
+    switch (kind) {
     case MediaNodeKind::FileInput: return "FileInput";
     case MediaNodeKind::RealtimeInput: return "RealtimeInput";
+    case MediaNodeKind::RealtimePacketSource: return "RealtimePacketSource";
     case MediaNodeKind::Demux: return "Demux";
     case MediaNodeKind::StreamSplit: return "StreamSplit";
+    case MediaNodeKind::PacketFanout: return "PacketFanout";
+    case MediaNodeKind::FrameRoute: return "FrameRoute";
     case MediaNodeKind::VideoDecode: return "VideoDecode";
-    case MediaNodeKind::AudioDecode: return "AudioDecode";
+    case MediaNodeKind::VideoTimestamp: return "VideoTimestamp";
+    case MediaNodeKind::HardwareTransfer: return "HardwareTransfer";
+    case MediaNodeKind::VideoFrameRate: return "VideoFrameRate";
+    case MediaNodeKind::VideoFilter: return "VideoFilter";
     case MediaNodeKind::VideoEncode: return "VideoEncode";
+    case MediaNodeKind::VideoPacketDrain: return "VideoPacketDrain";
+    case MediaNodeKind::AudioStrategy: return "AudioStrategy";
+    case MediaNodeKind::AudioCopy: return "AudioCopy";
+    case MediaNodeKind::AudioDecode: return "AudioDecode";
+    case MediaNodeKind::AudioResample: return "AudioResample";
     case MediaNodeKind::AudioEncode: return "AudioEncode";
-    case MediaNodeKind::FileOutput: return "FileOutput";
-    case MediaNodeKind::RtpOutput: return "RtpOutput";
+    case MediaNodeKind::AudioPacketNormalize: return "AudioPacketNormalize";
+    case MediaNodeKind::AudioPacketDrain: return "AudioPacketDrain";
+    case MediaNodeKind::PacketMerge: return "PacketMerge";
     case MediaNodeKind::FileMux: return "FileMux";
     case MediaNodeKind::RtpMux: return "RtpMux";
-    case MediaNodeKind::VideoFilter: return "VideoFilter";
-    case MediaNodeKind::FrameRoute: return "FrameRoute";
-    default: return "Unknown";
+    case MediaNodeKind::FileOutput: return "FileOutput";
+    case MediaNodeKind::RtpOutput: return "RtpOutput";
+    case MediaNodeKind::SdpWriter: return "SdpWriter";
+    case MediaNodeKind::EofBarrier: return "EofBarrier";
+    case MediaNodeKind::Flush: return "Flush";
+    case MediaNodeKind::Finalize: return "Finalize";
+    case MediaNodeKind::ControlSignal: return "ControlSignal";
+    case MediaNodeKind::MetadataProbe: return "MetadataProbe";
+    case MediaNodeKind::DebugDump: return "DebugDump";
+    case MediaNodeKind::TraceProbe: return "TraceProbe";
+    case MediaNodeKind::Unknown:
+    default:
+        return "Unknown";
     }
 }
+
+const char* toString(MediaEdgeKind kind)
+{
+    switch (kind) {
+    case MediaEdgeKind::InputPacket: return "InputPacket";
+    case MediaEdgeKind::RawFrame: return "RawFrame";
+    case MediaEdgeKind::HardwareFrame: return "HardwareFrame";
+    case MediaEdgeKind::SoftwareFrame: return "SoftwareFrame";
+    case MediaEdgeKind::EncodedPacket: return "EncodedPacket";
+    case MediaEdgeKind::CopiedPacket: return "CopiedPacket";
+    case MediaEdgeKind::MuxedPacket: return "MuxedPacket";
+    case MediaEdgeKind::Metadata: return "Metadata";
+    case MediaEdgeKind::Control: return "Control";
+    case MediaEdgeKind::Event: return "Event";
+    case MediaEdgeKind::Unknown:
+    default:
+        return "Unknown";
+    }
+}
+
+std::string dotEscape(const std::string& text)
+{
+    std::string output;
+    output.reserve(text.size());
+
+    for (const char ch : text) {
+        switch (ch) {
+        case '\\':
+            output += "\\\\";
+            break;
+        case '"':
+            output += "\\\"";
+            break;
+        case '\n':
+            output += "\\n";
+            break;
+        default:
+            output += ch;
+            break;
+        }
+    }
+
+    return output;
+}
+
+std::string nodeLabel(const MediaNode& node)
+{
+    std::string label = std::string(toString(node.kind)) + "\\n" + node.name;
+    if (!node.diagnosticName.empty()) {
+        label += "\\n" + node.diagnosticName;
+    }
+    return dotEscape(label);
+}
+
+std::string edgeLabel(const MediaGraph& graph, const MediaEdge& edge)
+{
+    const MediaPort* fromPort = graph.findPort(edge.from.portId);
+    const MediaPort* toPort = graph.findPort(edge.to.portId);
+
+    std::string label;
+    if (fromPort) {
+        label += fromPort->name;
+    }
+    label += " -> ";
+    if (toPort) {
+        label += toPort->name;
+    }
+    label += "\\n";
+    label += toString(edge.edgeKind);
+
+    return dotEscape(label);
+}
+
+} // namespace
 
 std::string MediaGraphDump::toText(const MediaGraph& graph)
 {
@@ -36,23 +134,29 @@ std::string MediaGraphDump::toText(const MediaGraph& graph)
         oss << "[Node " << node.id.value << "] " << toString(node.kind)
             << " (" << node.name << ")\n";
 
-        for (const auto& p : node.outputPorts) {
-            oss << "  out: " << p.name << " ->\n";
+        for (const auto& port : node.inputPorts) {
+            oss << "  in : " << port.name << "\n";
         }
 
-        for (const auto& p : node.inputPorts) {
-            oss << "  in: " << p.name << "\n";
+        for (const auto& port : node.outputPorts) {
+            oss << "  out: " << port.name << "\n";
         }
 
         oss << "\n";
     }
 
-    for (const auto& e : graph.edges()) {
-        oss << "Edge " << e.id.value << ": "
-            << e.from.nodeId.value << ":" << e.from.portId.value
+    oss << "Edges:\n";
+    for (const auto& edge : graph.edges()) {
+        const MediaPort* fromPort = graph.findPort(edge.from.portId);
+        const MediaPort* toPort = graph.findPort(edge.to.portId);
+
+        oss << "  [Edge " << edge.id.value << "] "
+            << edge.from.nodeId.value << ":"
+            << (fromPort ? fromPort->name : "<missing>")
             << " -> "
-            << e.to.nodeId.value << ":" << e.to.portId.value
-            << "\n";
+            << edge.to.nodeId.value << ":"
+            << (toPort ? toPort->name : "<missing>")
+            << " (" << toString(edge.edgeKind) << ")\n";
     }
 
     return oss.str();
@@ -63,22 +167,23 @@ std::string MediaGraphDump::toGraphvizDot(const MediaGraph& graph,
 {
     std::ostringstream oss;
 
-    oss << "digraph " << graphName << " {\n";
-    oss << "rankdir=LR;\n";
-    oss << "node [shape=box];\n\n";
+    oss << "digraph " << dotEscape(graphName) << " {\n";
+    oss << "  rankdir=LR;\n";
+    oss << "  graph [fontname=\"Consolas\"];\n";
+    oss << "  node [shape=box, fontname=\"Consolas\"];\n";
+    oss << "  edge [fontname=\"Consolas\"];\n\n";
 
     for (const auto& node : graph.nodes()) {
-        oss << "n" << node.id.value
-            << " [label=\"" << toString(node.kind)
-            << "\\n" << node.name << "\"];
-\n";
+        oss << "  n" << node.id.value
+            << " [label=\"" << nodeLabel(node) << "\"];\n";
     }
 
-    for (const auto& e : graph.edges()) {
-        oss << "n" << e.from.nodeId.value
-            << " -> "
-            << "n" << e.to.nodeId.value
-            << ";\n";
+    oss << "\n";
+
+    for (const auto& edge : graph.edges()) {
+        oss << "  n" << edge.from.nodeId.value
+            << " -> n" << edge.to.nodeId.value
+            << " [label=\"" << edgeLabel(graph, edge) << "\"];\n";
     }
 
     oss << "}\n";
