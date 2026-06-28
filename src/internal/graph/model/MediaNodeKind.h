@@ -53,6 +53,7 @@ enum class MediaNodeKind {
     ControlSignal,
 
     /* Metadata / diagnostics */
+    CodecResolver,
     MetadataProbe,
     DebugDump,
     TraceProbe
