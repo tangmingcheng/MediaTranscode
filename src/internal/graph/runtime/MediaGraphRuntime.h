@@ -25,7 +25,7 @@ enum class MediaGraphRuntimeState {
 };
 
 struct MediaGraphRunLoopOptions {
-    std::size_t maxIterations = 1024;
+    std::size_t maxIterations = 0;
     std::size_t idleThreshold = 16;
     bool stopOnIdle = true;
 };
