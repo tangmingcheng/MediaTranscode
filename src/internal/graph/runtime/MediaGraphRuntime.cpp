@@ -8,7 +8,7 @@
 namespace media::ffmpeg::graph {
 namespace {
 
-constexpr std::size_t kIdleThreshold = 16;
+constexpr std::size_t kCompletionIdleThreshold = 16;
 
 struct ChannelActivitySnapshot {
     std::uint64_t pushed = 0;
@@ -49,7 +49,7 @@ bool sameChannelActivity(const ChannelActivitySnapshot& lhs,
 }
 
 void copySnapshotToResult(const ChannelActivitySnapshot& snapshot,
-                          MediaGraphRunLoopResult& result) noexcept
+                          MediaGraphRunResult& result) noexcept
 {
     result.totalPushed = snapshot.pushed;
     result.totalPopped = snapshot.popped;
@@ -179,21 +179,21 @@ const MediaThreadingPolicy& MediaGraphRuntime::threadingPolicy() const noexcept
     return m_scheduler.processOnce(m_context);
 }
 
-::media::Result<MediaGraphRunLoopResult> MediaGraphRuntime::runUntilIdle()
+::media::Result<MediaGraphRunResult> MediaGraphRuntime::run()
 {
     if (m_state != MediaGraphRuntimeState::Running) {
-        return ::media::Result<MediaGraphRunLoopResult>::failure(
-            ::media::ErrorInfo::notInitialized("MediaGraphRuntime runUntilIdle failed: runtime is not running"));
+        return ::media::Result<MediaGraphRunResult>::failure(
+            ::media::ErrorInfo::notInitialized("MediaGraphRuntime run failed: runtime is not running"));
     }
 
-    MediaGraphRunLoopResult result;
+    MediaGraphRunResult result;
     ChannelActivitySnapshot previous = captureChannelActivity(m_context);
     copySnapshotToResult(previous, result);
 
     for (;;) {
         auto status = processOnce();
         if (!status) {
-            return ::media::Result<MediaGraphRunLoopResult>::failure(status.error());
+            return ::media::Result<MediaGraphRunResult>::failure(status.error());
         }
 
         ++result.iterations;
@@ -204,9 +204,9 @@ const MediaThreadingPolicy& MediaGraphRuntime::threadingPolicy() const noexcept
         const bool noActivity = sameChannelActivity(previous, current) && current.queued == 0;
         if (noActivity) {
             ++result.idleIterations;
-            if (result.idleIterations >= kIdleThreshold) {
-                result.stoppedBecauseIdle = true;
-                return ::media::Result<MediaGraphRunLoopResult>::success(result);
+            if (result.idleIterations >= kCompletionIdleThreshold) {
+                result.completed = true;
+                return ::media::Result<MediaGraphRunResult>::success(result);
             }
         } else {
             result.idleIterations = 0;
