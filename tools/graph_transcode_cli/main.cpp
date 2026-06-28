@@ -79,6 +79,7 @@ LocalFileTranscodeOptions parseOptions(int argc, char** argv)
     options.audioBitrateKbps = intArg(argc, argv, "--audio-bitrate", options.audioBitrateKbps);
     options.audioSampleRate = intArg(argc, argv, "--sample-rate", options.audioSampleRate);
     options.audioChannels = intArg(argc, argv, "--channels", options.audioChannels);
+    options.diagnosticLogEnabled = true;
     return options;
 }
 
@@ -124,13 +125,13 @@ int main(int argc, char** argv)
         return failStatus("start", startStatus);
     }
 
-    auto runResult = runtime.runUntilIdle();
+    auto runResult = runtime.run();
     auto stopStatus = runtime.stop();
     if (!stopStatus) {
         return failStatus("stop", stopStatus);
     }
     if (!runResult) {
-        return failResult("runUntilIdle", runResult);
+        return failResult("run", runResult);
     }
 
     const auto& result = runResult.value();
@@ -139,7 +140,7 @@ int main(int argc, char** argv)
               << " total_pushed=" << result.totalPushed
               << " total_popped=" << result.totalPopped
               << " queued_buffers=" << result.queuedBuffers
-              << " stopped_idle=" << (result.stoppedBecauseIdle ? "true" : "false")
+              << " completed=" << (result.completed ? "true" : "false")
               << '\n';
     return 0;
 }
