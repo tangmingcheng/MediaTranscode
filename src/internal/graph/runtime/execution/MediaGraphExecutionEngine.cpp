@@ -1,11 +1,12 @@
 #include "internal/graph/runtime/execution/MediaGraphExecutionEngine.h"
+#include "internal/graph/runtime/MediaGraphRuntime.h"
 
 #include <utility>
 
 namespace media::ffmpeg::graph {
 
 ::media::Status MediaGraphExecutionEngine::prepare(MediaGraph graph,
-                                                    MediaGraphExecutionOptions options)
+                                                   MediaGraphExecutionOptions options)
 {
     if (m_state == MediaGraphExecutionEngineState::Running) {
         return ::media::Status::failure(
@@ -65,26 +66,20 @@ namespace media::ffmpeg::graph {
             ::media::ErrorInfo::notInitialized("MediaGraphExecutionEngine processOnce failed: engine is not running"));
     }
 
-    auto status = m_runtime.processOnce();
-    if (!status) {
-        m_state = MediaGraphExecutionEngineState::Failed;
-        return status;
-    }
-
-    return ::media::Status::success();
+    return m_runtime.processOnce();
 }
 
-::media::Result<MediaGraphExecutionResult> MediaGraphExecutionEngine::runUntilIdle()
+::media::Result<MediaGraphExecutionResult> MediaGraphExecutionEngine::run()
 {
     if (m_state != MediaGraphExecutionEngineState::Prepared &&
         m_state != MediaGraphExecutionEngineState::Running) {
         return ::media::Result<MediaGraphExecutionResult>::failure(
-            ::media::ErrorInfo::notInitialized("MediaGraphExecutionEngine runUntilIdle failed: engine is not prepared"));
+            ::media::ErrorInfo::notInitialized("MediaGraphExecutionEngine run failed: engine is not prepared"));
     }
 
     if (m_options.mode == MediaGraphExecutionMode::Manual) {
         return ::media::Result<MediaGraphExecutionResult>::failure(
-            ::media::ErrorInfo::invalidArgument("MediaGraphExecutionEngine runUntilIdle failed: manual mode requires explicit start/processOnce/stop"));
+            ::media::ErrorInfo::invalidArgument("MediaGraphExecutionEngine run failed: manual mode requires explicit control"));
     }
 
     MediaGraphExecutionResult result;
@@ -103,20 +98,17 @@ namespace media::ffmpeg::graph {
         return ::media::Result<MediaGraphExecutionResult>::success(std::move(result));
     }
 
-    MediaGraphRunLoopConfig config = m_options.runLoopConfig;
-    config.startIfNeeded = true;
-    config.stopOnCompletion = m_options.stopOnRunLoopCompletion;
-
-    auto runLoop = MediaGraphRunLoop::runUntilIdle(m_runtime, config);
-    if (!runLoop) {
+    auto runResult = m_runtime.run();
+    if (!runResult) {
         m_state = MediaGraphExecutionEngineState::Failed;
-        return ::media::Result<MediaGraphExecutionResult>::failure(runLoop.error());
+        return ::media::Result<MediaGraphExecutionResult>::failure(runResult.error());
     }
 
-    result.runLoop = runLoop.value();
+    result.run = runResult.value();
     result.started = true;
-    result.stopped = config.stopOnCompletion;
+    result.stopped = m_options.stopOnCompletion;
     result.report = report();
+
     m_state = MediaGraphExecutionEngineState::Completed;
     return ::media::Result<MediaGraphExecutionResult>::success(std::move(result));
 }
@@ -184,7 +176,7 @@ const MediaGraphExecutionOptions& MediaGraphExecutionEngine::options() const noe
         return ::media::Result<MediaGraphExecutionResult>::failure(prepareStatus.error());
     }
 
-    return engine.runUntilIdle();
+    return engine.run();
 }
 
 } // namespace media::ffmpeg::graph
