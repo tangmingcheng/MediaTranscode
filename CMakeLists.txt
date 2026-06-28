@@ -11,6 +11,7 @@ set(TARGET_GRAPH_ENCODE_PROBE "media_transcode_graph_encode_probe")
 set(TARGET_GRAPH_AUTORUN_PROBE "media_transcode_graph_autorun_probe")
 set(TARGET_GRAPH_RUNLOOP_PROBE "media_transcode_graph_runloop_probe")
 set(TARGET_GRAPH_PLANNER_PROBE "media_transcode_graph_planner_probe")
+set(TARGET_GRAPH_TRANSCODE_CLI "media_transcode_graph_transcode_cli")
 set(THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/3rds")
 
 option(MEDIA_TRANSCODE_BUILD_GRAPH_TOOLS "Build graph DAG validation/debug tools" ON)
@@ -206,6 +207,11 @@ if(MEDIA_TRANSCODE_BUILD_GRAPH_TOOLS)
         tools/graph_planner_probe/main.cpp
     )
     media_transcode_configure_app(${TARGET_GRAPH_PLANNER_PROBE})
+
+    add_executable(${TARGET_GRAPH_TRANSCODE_CLI}
+        tools/graph_transcode_cli/main.cpp
+    )
+    media_transcode_configure_app(${TARGET_GRAPH_TRANSCODE_CLI})
 endif()
 
 if(MEDIA_TRANSCODE_BUILD_TESTS)
