@@ -1,7 +1,9 @@
 #include "internal/graph/runtime/optimizer/MediaGraphOptimizer.h"
 
+#include "internal/graph/runtime/optimizer/passes/MediaGraphIrLoweringPass.h"
 #include "internal/graph/runtime/optimizer/passes/MediaNodeFusionPass.h"
 #include "internal/graph/runtime/optimizer/passes/MediaRedundantTransferEliminationPass.h"
+#include "internal/graph/runtime/optimizer/passes/MediaSimdSchedulingPass.h"
 
 #include <utility>
 
@@ -10,8 +12,10 @@ namespace media::ffmpeg::graph {
 MediaGraphOptimizer::MediaGraphOptimizer()
 {
     addPass(std::make_unique<MediaGraphNoopOptimizationPass>());
+    addPass(std::make_unique<MediaGraphIrLoweringPass>());
     addPass(std::make_unique<MediaNodeFusionPass>());
     addPass(std::make_unique<MediaRedundantTransferEliminationPass>());
+    addPass(std::make_unique<MediaSimdSchedulingPass>());
 }
 
 void MediaGraphOptimizer::addPass(std::unique_ptr<MediaGraphOptimizationPass> pass)
