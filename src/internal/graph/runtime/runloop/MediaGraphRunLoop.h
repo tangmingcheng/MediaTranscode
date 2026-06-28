@@ -14,12 +14,6 @@ struct MediaGraphRunLoopConfig {
     bool stopOnCompletion = false;
 };
 
-struct MediaGraphRunLoopResult {
-    std::size_t iterations = 0;
-    std::size_t idleIterations = 0;
-    bool stoppedBecauseIdle = false;
-};
-
 class MediaGraphRunLoop final {
 public:
     static ::media::Result<MediaGraphRunLoopResult> runUntilIdle(
