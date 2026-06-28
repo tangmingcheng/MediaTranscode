@@ -2,6 +2,7 @@
 
 #include "internal/graph/runtime/queue/MediaBlockingQueue.h"
 #include "internal/graph/runtime/queue/MediaSpscQueue.h"
+#include "internal/graph/runtime/queue/MediaSpscRingQueue.h"
 
 namespace media::ffmpeg::graph {
 
@@ -172,7 +173,7 @@ std::unique_ptr<MediaQueue> MediaChannel::createQueue(const MediaQueuePolicy& po
 {
     switch (policy.mode) {
     case MediaQueueMode::SpscRing:
-        return std::make_unique<MediaSpscQueue>(policy);
+        return std::make_unique<MediaSpscRingQueue>(policy);
 
     case MediaQueueMode::Direct:
     case MediaQueueMode::Blocking:
