@@ -1,4 +1,4 @@
-#include "internal/graph/planning/MediaPipelinePlanner.h"
+#include "internal/graph/planner/MediaPipelinePlanner.h"
 #include "internal/graph/runtime/MediaGraphRuntime.h"
 
 #include <algorithm>
@@ -38,7 +38,8 @@ std::string stageText(const MediaPipelineStagePlan& stage)
         name = stage.componentName;
     }
     return name + "@" + mediaHardwareDeviceKindName(stage.deviceKind) +
-           (stage.available ? ":available" : ":unavailable");
+           (stage.available ? ":available" : ":unavailable") +
+           "(" + stage.availabilityReason + ")";
 }
 
 } // namespace
