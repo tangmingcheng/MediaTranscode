@@ -6,8 +6,10 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 extern "C" {
