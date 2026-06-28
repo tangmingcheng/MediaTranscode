@@ -1,6 +1,7 @@
 #include "internal/graph/planning/MediaPipelinePlanner.h"
 #include "internal/graph/runtime/MediaGraphRuntime.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <string>

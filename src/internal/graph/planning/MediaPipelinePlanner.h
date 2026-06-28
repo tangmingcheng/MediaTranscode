@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/FFmpegRAII.h"
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/core/MediaNodeId.h"
 #include "internal/graph/model/MediaHardwareDescriptor.h"
