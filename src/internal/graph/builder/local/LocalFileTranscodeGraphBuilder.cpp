@@ -130,7 +130,7 @@ MediaEdgePolicy blockingQueuePolicy(std::size_t capacity)
     graph.addInputPort(mux,
                        "packet",
                        MediaStreamKind::Any,
-                       MediaEdgeKind::EncodedPacket,
+                       MediaEdgeKind::Unknown,
                        MediaPayloadKind::Packet,
                        true,
                        true);
@@ -155,6 +155,14 @@ MediaEdgePolicy blockingQueuePolicy(std::size_t capacity)
                   blockingQueuePolicy(options.metadataQueueCapacity));
 
     if (options.includeVideo) {
+        const MediaNodeId videoDecodeCodecSource = graph.addNode(
+            MediaNodeKind::DebugDump,
+            "local.video.decode.codec.source",
+            "Local video decoder codec source");
+        const MediaNodeId videoEncodeCodecSource = graph.addNode(
+            MediaNodeKind::DebugDump,
+            "local.video.encode.codec.source",
+            "Local video encoder codec source");
         const MediaNodeId videoDecode = graph.addNode(
             MediaNodeKind::VideoDecode,
             "local.video.decode",
@@ -164,6 +172,37 @@ MediaEdgePolicy blockingQueuePolicy(std::size_t capacity)
             "local.video.encode",
             "Local video encode");
 
+        graph.setNodeOption(videoEncode, "codec", options.videoCodec);
+        graph.setNodeOption(videoEncode, "encoder", options.videoEncoder);
+        graph.setNodeOption(videoEncode, "rc", options.rateControlMode);
+        graph.setNodeOption(videoEncode, "preset", options.speedPreset);
+        graph.setNodeOption(videoEncode, "profile", options.profile);
+        graph.setNodeOption(videoEncode, "tune", options.tune);
+        graph.setNodeOption(videoEncode, "level", options.level);
+        graph.setNodeOption(videoEncode, "width", std::to_string(options.width));
+        graph.setNodeOption(videoEncode, "height", std::to_string(options.height));
+        graph.setNodeOption(videoEncode, "fps_num", std::to_string(options.fpsNum));
+        graph.setNodeOption(videoEncode, "fps_den", std::to_string(options.fpsDen));
+        graph.setNodeOption(videoEncode, "bitrate_kbps", std::to_string(options.videoBitrateKbps));
+        graph.setNodeOption(videoEncode, "crf", std::to_string(options.crf));
+        graph.setNodeOption(videoEncode, "quality", std::to_string(options.quality));
+        graph.setNodeOption(videoEncode, "gop", std::to_string(options.gop));
+        graph.setNodeOption(videoEncode, "bframes", std::to_string(options.maxBFrames));
+
+        graph.addOutputPort(videoDecodeCodecSource,
+                            "codec",
+                            MediaStreamKind::Video,
+                            MediaEdgeKind::Metadata,
+                            MediaPayloadKind::CodecContext,
+                            true,
+                            false);
+        graph.addInputPort(videoDecode,
+                           "codec",
+                           MediaStreamKind::Video,
+                           MediaEdgeKind::Metadata,
+                           MediaPayloadKind::CodecContext,
+                           true,
+                           false);
         graph.addOutputPort(split,
                             "video",
                             MediaStreamKind::Video,
@@ -185,6 +224,21 @@ MediaEdgePolicy blockingQueuePolicy(std::size_t capacity)
                             MediaPayloadKind::Frame,
                             true,
                             true);
+
+        graph.addOutputPort(videoEncodeCodecSource,
+                            "codec",
+                            MediaStreamKind::Video,
+                            MediaEdgeKind::Metadata,
+                            MediaPayloadKind::CodecContext,
+                            true,
+                            false);
+        graph.addInputPort(videoEncode,
+                           "codec",
+                           MediaStreamKind::Video,
+                           MediaEdgeKind::Metadata,
+                           MediaPayloadKind::CodecContext,
+                           true,
+                           false);
         graph.addInputPort(videoEncode,
                            "frame",
                            MediaStreamKind::Video,
@@ -200,12 +254,24 @@ MediaEdgePolicy blockingQueuePolicy(std::size_t capacity)
                             true,
                             true);
 
+        graph.connect(videoDecodeCodecSource,
+                      "codec",
+                      videoDecode,
+                      "codec",
+                      "local.video.decode.codec.source -> local.video.decode.codec",
+                      blockingQueuePolicy(options.metadataQueueCapacity));
         graph.connect(split,
                       "video",
                       videoDecode,
                       "packet",
                       "local.stream.split.video -> local.video.decode.packet",
                       blockingQueuePolicy(options.packetQueueCapacity));
+        graph.connect(videoEncodeCodecSource,
+                      "codec",
+                      videoEncode,
+                      "codec",
+                      "local.video.encode.codec.source -> local.video.encode.codec",
+                      blockingQueuePolicy(options.metadataQueueCapacity));
         graph.connect(videoDecode,
                       "frame",
                       videoEncode,
