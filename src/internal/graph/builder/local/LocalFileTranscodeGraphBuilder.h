@@ -19,6 +19,7 @@ struct LocalFileTranscodeOptions {
     bool useHardwareTransfer = false;
     bool includeMux = true;
     bool includeLifecycle = false;
+    bool diagnosticLogEnabled = true;
 
     std::string videoCodec = "h264";
     std::string videoEncoder;
