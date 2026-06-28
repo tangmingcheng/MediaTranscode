@@ -6,7 +6,6 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavfilter/avfilter.h>
 #include <libavformat/avformat.h>
-#include <libavutil/buffer.h>
 #include <libavutil/error.h>
 #include <libavutil/hwcontext.h>
 }
@@ -102,26 +101,6 @@ bool rkmppRuntimeAvailable()
            encoderExists("h264_rkmpp") || encoderExists("hevc_rkmpp");
 }
 
-bool hardwareDeviceCreatable(const std::string& hwaccelName, std::string& reason)
-{
-    const AVHWDeviceType type = av_hwdevice_find_type_by_name(hwaccelName.c_str());
-    if (type == AV_HWDEVICE_TYPE_NONE) {
-        reason = "hw device type not compiled: " + hwaccelName;
-        return false;
-    }
-
-    AVBufferRef* raw = nullptr;
-    const int ret = av_hwdevice_ctx_create(&raw, type, nullptr, nullptr, 0);
-    if (ret < 0) {
-        reason = "hw device create failed: " + hwaccelName + ": " + ffmpegErrorString(ret);
-        return false;
-    }
-
-    av_buffer_unref(&raw);
-    reason = "hw device available";
-    return true;
-}
-
 HardwareCapability probeHardwareCapability(MediaHardwareDeviceKind kind,
                                            const std::string& hwaccelName)
 {
@@ -135,7 +114,7 @@ HardwareCapability probeHardwareCapability(MediaHardwareDeviceKind kind,
 
     if (kind == MediaHardwareDeviceKind::RKMPP) {
         capability.available = rkmppRuntimeAvailable();
-        capability.reason = capability.available ? "rkmpp codec available" : "rkmpp codec not found";
+        capability.reason = capability.available ? "rkmpp codec found" : "rkmpp codec not found";
         return capability;
     }
 
@@ -145,7 +124,11 @@ HardwareCapability probeHardwareCapability(MediaHardwareDeviceKind kind,
         return capability;
     }
 
-    capability.available = hardwareDeviceCreatable(hwaccelName, capability.reason);
+    const AVHWDeviceType type = av_hwdevice_find_type_by_name(hwaccelName.c_str());
+    capability.available = type != AV_HWDEVICE_TYPE_NONE;
+    capability.reason = capability.available
+                            ? "hw device type found; runtime device not created"
+                            : "hw device type not compiled: " + hwaccelName;
     return capability;
 }
 
@@ -213,7 +196,7 @@ MediaPipelineStagePlan makeCodecStage(MediaPipelineStageRole role,
                              : encoderExists(stage.ffmpegName);
     stage.available = codecOk;
     stage.availabilityReason = codecOk
-                                   ? "codec available"
+                                   ? "codec found"
                                    : std::string(role == MediaPipelineStageRole::Decoder ? "decoder not found: " : "encoder not found: ") + stage.ffmpegName;
     return stage;
 }
@@ -239,7 +222,7 @@ MediaPipelineStagePlan makeFilterStage(std::string componentName,
 
     const bool filterOk = filterExists(stage.filterName);
     stage.available = filterOk;
-    stage.availabilityReason = filterOk ? "filter available" : "filter not found: " + stage.filterName;
+    stage.availabilityReason = filterOk ? "filter found" : "filter not found: " + stage.filterName;
     return stage;
 }
 

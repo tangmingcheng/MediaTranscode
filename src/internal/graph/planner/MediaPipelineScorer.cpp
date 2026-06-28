@@ -11,8 +11,7 @@ namespace media::ffmpeg::graph {
 
 namespace {
 
-constexpr int kUnavailableBaseScore = -100000;
-constexpr int kUnavailableStagePenalty = 1000;
+constexpr int kUnavailableScore = 0;
 constexpr int kFullHardwareZeroCopyStageScore = 1000;
 constexpr int kFullHardwareSameDeviceStageScore = 900;
 constexpr int kFullHardwareTransferStageScore = 800;
@@ -87,7 +86,7 @@ std::string stageDisplayName(const MediaPipelineStagePlan& stage)
 std::string unavailableReason(const MediaPipelineChainPlan& chain)
 {
     std::ostringstream out;
-    out << "unavailable chain";
+    out << "unavailable chain; score=0";
 
     auto appendStage = [&](const MediaPipelineStagePlan& stage) {
         if (stage.available) {
@@ -129,14 +128,10 @@ MediaPipelineChainPlan MediaPipelineScorer::scoreChain(MediaPipelineChainPlan ch
     chain.available = chain.decoder.available && chain.filter.available && chain.encoder.available;
 
     if (!chain.available) {
-        int missing = 0;
-        missing += chain.decoder.available ? 0 : 1;
-        missing += chain.filter.available ? 0 : 1;
-        missing += chain.encoder.available ? 0 : 1;
         chain.allHardware = false;
         chain.sameHardwareDevice = false;
         chain.zeroCopy = false;
-        chain.score = kUnavailableBaseScore - missing * kUnavailableStagePenalty;
+        chain.score = kUnavailableScore;
         chain.reason = unavailableReason(chain);
         return chain;
     }
