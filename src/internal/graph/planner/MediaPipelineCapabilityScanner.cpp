@@ -14,11 +14,19 @@ extern "C" {
 #include <algorithm>
 #include <cctype>
 #include <string>
+#include <unordered_map>
 #include <utility>
 
 namespace media::ffmpeg::graph {
 
 namespace {
+
+struct HardwareCapability {
+    bool available = false;
+    std::string reason;
+};
+
+using HardwareCapabilityCache = std::unordered_map<std::string, HardwareCapability>;
 
 std::string lowerCopy(std::string value)
 {
@@ -114,30 +122,68 @@ bool hardwareDeviceCreatable(const std::string& hwaccelName, std::string& reason
     return true;
 }
 
-bool hardwareRuntimeAvailable(MediaHardwareDeviceKind kind,
-                              const std::string& hwaccelName,
-                              std::string& reason)
+HardwareCapability probeHardwareCapability(MediaHardwareDeviceKind kind,
+                                           const std::string& hwaccelName)
 {
+    HardwareCapability capability;
+
     if (kind == MediaHardwareDeviceKind::None) {
-        reason = "software path";
-        return true;
+        capability.available = true;
+        capability.reason = "software path";
+        return capability;
     }
 
     if (kind == MediaHardwareDeviceKind::RKMPP) {
-        if (rkmppRuntimeAvailable()) {
-            reason = "rkmpp codec available";
-            return true;
-        }
-        reason = "rkmpp codec not found";
-        return false;
+        capability.available = rkmppRuntimeAvailable();
+        capability.reason = capability.available ? "rkmpp codec available" : "rkmpp codec not found";
+        return capability;
     }
 
     if (hwaccelName.empty()) {
-        reason = "missing hwaccel name";
-        return false;
+        capability.available = false;
+        capability.reason = "missing hwaccel name";
+        return capability;
     }
 
-    return hardwareDeviceCreatable(hwaccelName, reason);
+    capability.available = hardwareDeviceCreatable(hwaccelName, capability.reason);
+    return capability;
+}
+
+std::string hardwareCapabilityKey(MediaHardwareDeviceKind kind,
+                                  const std::string& hwaccelName)
+{
+    return std::string(mediaHardwareDeviceKindName(kind)) + ":" + hwaccelName;
+}
+
+const HardwareCapability& cachedHardwareCapability(HardwareCapabilityCache& cache,
+                                                   MediaHardwareDeviceKind kind,
+                                                   const std::string& hwaccelName)
+{
+    const std::string key = hardwareCapabilityKey(kind, hwaccelName);
+    auto iter = cache.find(key);
+    if (iter != cache.end()) {
+        return iter->second;
+    }
+
+    auto inserted = cache.emplace(key, probeHardwareCapability(kind, hwaccelName));
+    return inserted.first->second;
+}
+
+void applyHardwareCapability(MediaPipelineStagePlan& stage,
+                             HardwareCapabilityCache& cache)
+{
+    if (!stage.available) {
+        return;
+    }
+
+    if (!stage.hardware) {
+        stage.availabilityReason = "available";
+        return;
+    }
+
+    const HardwareCapability& capability = cachedHardwareCapability(cache, stage.deviceKind, stage.hwaccelName);
+    stage.available = capability.available;
+    stage.availabilityReason = capability.reason;
 }
 
 MediaPipelineStagePlan makeCodecStage(MediaPipelineStageRole role,
@@ -165,19 +211,10 @@ MediaPipelineStagePlan makeCodecStage(MediaPipelineStageRole role,
     const bool codecOk = role == MediaPipelineStageRole::Decoder
                              ? decoderExists(stage.ffmpegName)
                              : encoderExists(stage.ffmpegName);
-
-    std::string hardwareReason;
-    const bool hardwareOk = !hardware || hardwareRuntimeAvailable(deviceKind, stage.hwaccelName, hardwareReason);
-    stage.available = codecOk && hardwareOk;
-
-    if (!codecOk) {
-        stage.availabilityReason = std::string(role == MediaPipelineStageRole::Decoder ? "decoder not found: " : "encoder not found: ") + stage.ffmpegName;
-    } else if (!hardwareOk) {
-        stage.availabilityReason = hardwareReason;
-    } else {
-        stage.availabilityReason = hardware ? hardwareReason : "available";
-    }
-
+    stage.available = codecOk;
+    stage.availabilityReason = codecOk
+                                   ? "codec available"
+                                   : std::string(role == MediaPipelineStageRole::Decoder ? "decoder not found: " : "encoder not found: ") + stage.ffmpegName;
     return stage;
 }
 
@@ -201,31 +238,30 @@ MediaPipelineStagePlan makeFilterStage(std::string componentName,
     stage.score = priority;
 
     const bool filterOk = filterExists(stage.filterName);
-    std::string hardwareReason;
-    const bool hardwareOk = !hardware || hardwareRuntimeAvailable(deviceKind, stage.hwaccelName, hardwareReason);
-    stage.available = filterOk && hardwareOk;
-
-    if (!filterOk) {
-        stage.availabilityReason = "filter not found: " + stage.filterName;
-    } else if (!hardwareOk) {
-        stage.availabilityReason = hardwareReason;
-    } else {
-        stage.availabilityReason = hardware ? hardwareReason : "available";
-    }
-
+    stage.available = filterOk;
+    stage.availabilityReason = filterOk ? "filter available" : "filter not found: " + stage.filterName;
     return stage;
 }
 
 MediaPipelineChainPlan makeRawChain(std::string label,
                                     MediaPipelineStagePlan decoder,
                                     MediaPipelineStagePlan filter,
-                                    MediaPipelineStagePlan encoder)
+                                    MediaPipelineStagePlan encoder,
+                                    HardwareCapabilityCache& hardwareCache)
 {
     MediaPipelineChainPlan chain;
     chain.label = std::move(label);
     chain.decoder = std::move(decoder);
     chain.filter = std::move(filter);
     chain.encoder = std::move(encoder);
+
+    if (!chain.decoder.available || !chain.filter.available || !chain.encoder.available) {
+        return chain;
+    }
+
+    applyHardwareCapability(chain.decoder, hardwareCache);
+    applyHardwareCapability(chain.filter, hardwareCache);
+    applyHardwareCapability(chain.encoder, hardwareCache);
     return chain;
 }
 
@@ -271,13 +307,14 @@ std::vector<MediaPipelineChainPlan> MediaPipelineCapabilityScanner::enumerateVid
 {
     const std::string inputCodec = canonicalCodecName(inputCodecName);
     const std::string outputCodec = canonicalCodecName(outputCodecName);
+    HardwareCapabilityCache hardwareCache;
     std::vector<MediaPipelineChainPlan> chains;
 
     auto add = [&](std::string label,
                    MediaPipelineStagePlan decoder,
                    MediaPipelineStagePlan filter,
                    MediaPipelineStagePlan encoder) {
-        chains.push_back(makeRawChain(std::move(label), std::move(decoder), std::move(filter), std::move(encoder)));
+        chains.push_back(makeRawChain(std::move(label), std::move(decoder), std::move(filter), std::move(encoder), hardwareCache));
     };
 
     add("cuda-nvenc",
@@ -292,12 +329,12 @@ std::vector<MediaPipelineChainPlan> MediaPipelineCapabilityScanner::enumerateVid
 
     add("qsv",
         makeCodecStage(MediaPipelineStageRole::Decoder, "qsv decoder", inputCodec,
-                       codecSpecificName(inputCodec, "_qsv"), "qsv", MediaHardwareDeviceKind::D3D11VA,
+                       codecSpecificName(inputCodec, "_qsv"), "qsv", MediaHardwareDeviceKind::QSV,
                        true, true, 90),
         makeFilterStage("qsv passthrough filter", "passthrough_qsv", "qsv",
-                        MediaHardwareDeviceKind::D3D11VA, true, true, 88),
+                        MediaHardwareDeviceKind::QSV, true, true, 88),
         makeCodecStage(MediaPipelineStageRole::Encoder, "qsv encoder", outputCodec,
-                       codecSpecificName(outputCodec, "_qsv"), "qsv", MediaHardwareDeviceKind::D3D11VA,
+                       codecSpecificName(outputCodec, "_qsv"), "qsv", MediaHardwareDeviceKind::QSV,
                        true, true, 90));
 
     add("d3d11va-mediafoundation",

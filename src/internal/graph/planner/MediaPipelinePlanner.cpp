@@ -50,6 +50,8 @@ const char* mediaHardwareDeviceKindName(MediaHardwareDeviceKind kind) noexcept
         return "software";
     case MediaHardwareDeviceKind::D3D11VA:
         return "d3d11va";
+    case MediaHardwareDeviceKind::QSV:
+        return "qsv";
     case MediaHardwareDeviceKind::CUDA:
         return "cuda";
     case MediaHardwareDeviceKind::VAAPI:

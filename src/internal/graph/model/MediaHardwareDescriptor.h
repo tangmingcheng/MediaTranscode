@@ -8,6 +8,7 @@ enum class MediaHardwareDeviceKind {
     Unknown,
     None,
     D3D11VA,
+    QSV,
     CUDA,
     VAAPI,
     DRMPrime,
