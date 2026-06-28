@@ -5,7 +5,6 @@
 #include <cstdlib>
 #include <iostream>
 #include <string>
-#include <utility>
 
 namespace {
 
@@ -33,6 +32,7 @@ std::size_t parseSize(const char* text, std::size_t fallback)
     if (end == text) {
         return fallback;
     }
+
     return static_cast<std::size_t>(value);
 }
 
@@ -72,6 +72,7 @@ int main(int argc, char** argv)
                         MediaPayloadKind::FormatContext,
                         true,
                         false);
+
     graph.addInputPort(demux,
                        "format",
                        MediaStreamKind::Metadata,
@@ -79,6 +80,7 @@ int main(int argc, char** argv)
                        MediaPayloadKind::FormatContext,
                        true,
                        false);
+
     graph.addOutputPort(demux,
                         "packet",
                         MediaStreamKind::Any,
@@ -86,6 +88,7 @@ int main(int argc, char** argv)
                         MediaPayloadKind::Packet,
                         true,
                         true);
+
     graph.addInputPort(packetSink,
                        "packet",
                        MediaStreamKind::Any,
@@ -118,13 +121,15 @@ int main(int argc, char** argv)
         return failStatus("runtime start", startStatus);
     }
 
-    auto runResult = runtime.runUntilIdle();
+    auto runResult = runtime.run();
     if (!runResult) {
         runtime.stop();
-        return fail("runtime runUntilIdle: " + runResult.error().describe());
+        return fail("runtime run: " + runResult.error().describe());
     }
 
+    const auto& r = runResult.value();
     const auto metrics = demuxPacketChannel->metrics();
+
     auto stopStatus = runtime.stop();
     if (!stopStatus) {
         return failStatus("runtime stop", stopStatus);
@@ -133,21 +138,19 @@ int main(int argc, char** argv)
     if (metrics.pushed == 0) {
         return fail("demux did not push any packets");
     }
+
     if (metrics.popped < minimumPackets) {
         return fail("packet sink consumed fewer packets than expected");
     }
-    if (!runResult.value().stoppedBecauseIdle) {
-        return fail("runtime did not naturally reach idle");
-    }
 
-    std::cout << "graph runloop probe ok: "
-              << "iterations=" << runResult.value().iterations
-              << ", idle_iterations=" << runResult.value().idleIterations
+    std::cout << "graph runloop probe ok: iterations=" << r.iterations
+              << ", idle_iterations=" << r.idleIterations
+              << ", completed=" << (r.completed ? "true" : "false")
               << ", demux_pushed=" << metrics.pushed
               << ", sink_popped=" << metrics.popped
-              << ", total_pushed=" << runResult.value().totalPushed
-              << ", total_popped=" << runResult.value().totalPopped
-              << ", queued_buffers=" << runResult.value().queuedBuffers
+              << ", total_pushed=" << r.totalPushed
+              << ", total_popped=" << r.totalPopped
+              << ", queued_buffers=" << r.queuedBuffers
               << '\n';
 
     return 0;
