@@ -1,5 +1,7 @@
 #include "internal/graph/runtime/queue/MediaBlockingQueue.h"
 
+#include "internal/graph/runtime/buffer/MediaBuffer.h"
+
 namespace media::ffmpeg::graph {
 
 MediaBlockingQueue::MediaBlockingQueue(MediaQueuePolicy policy)

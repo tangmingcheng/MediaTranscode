@@ -1,7 +1,8 @@
 #pragma once
 
 #include "internal/graph/preset/MediaPipelinePreset.h"
-#include "internal/graph/runtime/MediaGraphRunLoop.h"
+#include "internal/graph/runtime/diagnostics/MediaGraphRuntimeReport.h"
+#include "internal/graph/runtime/runloop/MediaGraphRunLoop.h"
 #include "internal/graph/runtime/streaming/MediaStreamingSession.h"
 #include "media_transcode/Result.h"
 

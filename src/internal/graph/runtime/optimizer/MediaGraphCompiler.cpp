@@ -28,7 +28,7 @@ namespace media::ffmpeg::graph {
     MediaGraphExecutionPlan plan;
     plan.graph = std::move(optimized.value().graph);
     plan.policy = policy;
-    plan.optimizationReport = std::move(optimized.value().optimizationReport);
+    plan.optimizationReport = std::move(optimized.value().report);
     return ::media::Result<MediaGraphExecutionPlan>::success(std::move(plan));
 }
 

@@ -2,7 +2,7 @@
 
 #include "internal/graph/preset/MediaPipelinePreset.h"
 #include "internal/graph/runtime/MediaGraphRuntime.h"
-#include "internal/graph/runtime/MediaGraphRuntimeReport.h"
+#include "internal/graph/runtime/diagnostics/MediaGraphRuntimeReport.h"
 #include "internal/graph/runtime/qos/MediaQosController.h"
 #include "media_transcode/Result.h"
 
