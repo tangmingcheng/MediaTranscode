@@ -9,7 +9,7 @@ namespace media::ffmpeg::graph {
 
 enum class MediaPipelinePresetKind {
     LocalFileRemux,
-    LocalFileTranscode,
+    LocalFileTranscodeSkeleton,
     RealtimeRtpSkeleton
 };
 
@@ -28,7 +28,7 @@ public:
 
 private:
     static ::media::Result<MediaGraph> createLocalFileRemux(const MediaPipelinePresetOptions& options);
-    static ::media::Result<MediaGraph> createLocalFileTranscode(const MediaPipelinePresetOptions& options);
+    static ::media::Result<MediaGraph> createLocalFileTranscodeSkeleton(const MediaPipelinePresetOptions& options);
     static ::media::Result<MediaGraph> createRealtimeRtpSkeleton(const MediaPipelinePresetOptions& options);
 };
 
