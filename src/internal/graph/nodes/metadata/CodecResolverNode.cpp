@@ -326,3 +326,5 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
     return ::media::Status::failure(
         ::media::ErrorInfo::unsupported("CodecResolverNode failed to create video encoder: " + lastError));
 }
+
+} // namespace media::ffmpeg::graph
