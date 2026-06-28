@@ -186,12 +186,11 @@ const MediaThreadingPolicy& MediaGraphRuntime::threadingPolicy() const noexcept
             ::media::ErrorInfo::notInitialized("MediaGraphRuntime runUntil failed: runtime is not running"));
     }
 
-    if (options.maxIterations == 0) {
-        options.maxIterations = 1;
-    }
     if (options.idleThreshold == 0) {
         options.idleThreshold = 1;
     }
+
+    const bool bounded = options.maxIterations > 0;
 
     MediaGraphRunLoopResult result;
     ChannelActivitySnapshot previous = captureChannelActivity(m_context);
@@ -202,7 +201,7 @@ const MediaThreadingPolicy& MediaGraphRuntime::threadingPolicy() const noexcept
         return ::media::Result<MediaGraphRunLoopResult>::success(result);
     }
 
-    while (result.iterations < options.maxIterations) {
+    while (!bounded || result.iterations < options.maxIterations) {
         auto status = processOnce();
         if (!status) {
             return ::media::Result<MediaGraphRunLoopResult>::failure(status.error());
