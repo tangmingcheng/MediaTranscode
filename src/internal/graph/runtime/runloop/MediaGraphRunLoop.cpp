@@ -2,66 +2,35 @@
 
 namespace media::ffmpeg::graph {
 
-::media::Result<MediaGraphRunLoopResult> MediaGraphRunLoop::runUntilIdle(
-    MediaGraphRuntime& runtime,
-    MediaGraphRunLoopConfig config)
+::media::Result<MediaGraphRunResult> MediaGraphRunLoop::run(MediaGraphRuntime& runtime,
+                                                            bool startIfNeeded,
+                                                            bool stopOnCompletion)
 {
     if (!runtime.compiled()) {
-        return ::media::Result<MediaGraphRunLoopResult>::failure(
+        return ::media::Result<MediaGraphRunResult>::failure(
             ::media::ErrorInfo::notInitialized("MediaGraphRunLoop failed: runtime is not compiled"));
     }
 
-    if (config.startIfNeeded && !runtime.running()) {
+    if (startIfNeeded && !runtime.running()) {
         auto status = runtime.start();
         if (!status) {
-            return ::media::Result<MediaGraphRunLoopResult>::failure(status.error());
+            return ::media::Result<MediaGraphRunResult>::failure(status.error());
         }
     }
 
-    MediaGraphRunLoopResult result;
-
-    while (result.iterations < config.maxIterations) {
-        const std::size_t before = queuedBufferCount(runtime);
-
-        auto status = runtime.processOnce();
-        if (!status) {
-            return ::media::Result<MediaGraphRunLoopResult>::failure(status.error());
-        }
-
-        const std::size_t after = queuedBufferCount(runtime);
-        ++result.iterations;
-
-        if (before == 0 && after == 0) {
-            ++result.idleIterations;
-            if (result.idleIterations >= config.maxIdleIterations) {
-                result.stoppedBecauseIdle = true;
-                break;
-            }
-        } else {
-            result.idleIterations = 0;
-        }
+    auto result = runtime.run();
+    if (!result) {
+        return result;
     }
 
-    if (config.stopOnCompletion) {
+    if (stopOnCompletion) {
         auto stopStatus = runtime.stop();
         if (!stopStatus) {
-            return ::media::Result<MediaGraphRunLoopResult>::failure(stopStatus.error());
+            return ::media::Result<MediaGraphRunResult>::failure(stopStatus.error());
         }
     }
 
-    return ::media::Result<MediaGraphRunLoopResult>::success(result);
-}
-
-std::size_t MediaGraphRunLoop::queuedBufferCount(const MediaGraphRuntime& runtime)
-{
-    std::size_t count = 0;
-    for (const MediaChannel* channel : runtime.context().channels().channels()) {
-        if (channel) {
-            count += channel->size();
-        }
-    }
-
-    return count;
+    return result;
 }
 
 } // namespace media::ffmpeg::graph
