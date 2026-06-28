@@ -8,6 +8,7 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 
 extern "C" {
+#include <libavformat/avformat.h>
 #include <libavutil/error.h>
 }
 

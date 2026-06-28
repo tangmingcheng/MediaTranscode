@@ -3,6 +3,8 @@
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 
+struct AVFormatContext;
+
 namespace media::ffmpeg::graph {
 
 class DemuxNode final : public FFmpegNodeRuntime {
