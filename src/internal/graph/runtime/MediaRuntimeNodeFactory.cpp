@@ -7,6 +7,9 @@
 #include "internal/graph/nodes/audio/AudioPacketNormalizeNode.h"
 #include "internal/graph/nodes/audio/AudioResampleNode.h"
 #include "internal/graph/nodes/audio/AudioStrategyNode.h"
+#include "internal/graph/nodes/control/ControlSignalNode.h"
+#include "internal/graph/nodes/debug/DebugDumpNode.h"
+#include "internal/graph/nodes/debug/TraceProbeNode.h"
 #include "internal/graph/nodes/demux/DemuxNode.h"
 #include "internal/graph/nodes/demux/StreamSplitNode.h"
 #include "internal/graph/nodes/input/FileInputNode.h"
@@ -14,12 +17,14 @@
 #include "internal/graph/nodes/lifecycle/EofBarrierNode.h"
 #include "internal/graph/nodes/lifecycle/FinalizeNode.h"
 #include "internal/graph/nodes/lifecycle/FlushNode.h"
+#include "internal/graph/nodes/merge/PacketMergeNode.h"
+#include "internal/graph/nodes/metadata/MetadataProbeNode.h"
 #include "internal/graph/nodes/mux/FileMuxNode.h"
 #include "internal/graph/nodes/mux/RtpMuxNode.h"
 #include "internal/graph/nodes/output/FileOutputNode.h"
 #include "internal/graph/nodes/output/RtpOutputNode.h"
 #include "internal/graph/nodes/output/SdpWriterNode.h"
-#include "internal/graph/nodes/split/FrameRouteNode.h"
+#include "internal/graph/nodes/route/FrameRouteNode.h"
 #include "internal/graph/nodes/split/PacketFanoutNode.h"
 #include "internal/graph/nodes/video/HardwareTransferNode.h"
 #include "internal/graph/nodes/video/VideoDecodeNode.h"
@@ -74,6 +79,8 @@ namespace media::ffmpeg::graph {
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<AudioPacketNormalizeNode>(node.id));
     case MediaNodeKind::AudioPacketDrain:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<AudioPacketDrainNode>(node.id));
+    case MediaNodeKind::PacketMerge:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<PacketMergeNode>(node.id));
     case MediaNodeKind::FileMux:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<FileMuxNode>(node.id));
     case MediaNodeKind::RtpMux:
@@ -90,6 +97,14 @@ namespace media::ffmpeg::graph {
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<FlushNode>(node.id));
     case MediaNodeKind::Finalize:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<FinalizeNode>(node.id));
+    case MediaNodeKind::ControlSignal:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<ControlSignalNode>(node.id));
+    case MediaNodeKind::MetadataProbe:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<MetadataProbeNode>(node.id));
+    case MediaNodeKind::DebugDump:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<DebugDumpNode>(node.id));
+    case MediaNodeKind::TraceProbe:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<TraceProbeNode>(node.id));
     default:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
             ::media::ErrorInfo::unsupported("MediaRuntimeNodeFactory unsupported node kind"));
@@ -119,6 +134,7 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::AudioEncode:
     case MediaNodeKind::AudioPacketNormalize:
     case MediaNodeKind::AudioPacketDrain:
+    case MediaNodeKind::PacketMerge:
     case MediaNodeKind::FileMux:
     case MediaNodeKind::RtpMux:
     case MediaNodeKind::FileOutput:
@@ -127,6 +143,10 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::EofBarrier:
     case MediaNodeKind::Flush:
     case MediaNodeKind::Finalize:
+    case MediaNodeKind::ControlSignal:
+    case MediaNodeKind::MetadataProbe:
+    case MediaNodeKind::DebugDump:
+    case MediaNodeKind::TraceProbe:
         return true;
     default:
         return false;
