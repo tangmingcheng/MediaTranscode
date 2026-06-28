@@ -79,7 +79,7 @@ bool testBlockingQueue()
     return require(metrics.pushed == 3, "blocking pushed metric mismatch") &&
            require(metrics.popped == 3, "blocking popped metric mismatch") &&
            require(metrics.dropped == 0, "blocking dropped metric mismatch") &&
-           require(queue.empty(), "blocking queue not empty");
+           require(queue.size() == 0, "blocking queue not empty");
 }
 
 bool testSpscRingQueue()
@@ -116,7 +116,7 @@ bool testSpscRingQueue()
     return require(metrics.pushed == 3, "spsc pushed metric mismatch") &&
            require(metrics.popped == 3, "spsc popped metric mismatch") &&
            require(metrics.dropped == 0, "spsc dropped metric mismatch") &&
-           require(queue.empty(), "spsc queue not empty");
+           require(queue.size() == 0, "spsc queue not empty");
 }
 
 bool testDropNonKeyOverflow()
@@ -160,7 +160,7 @@ bool testDropNonKeyOverflow()
 
     return require(first && first->isKeyFrame(), "overflow first buffer is not key frame") &&
            require(second && second->isKeyFrame(), "overflow second buffer is not key frame") &&
-           require(queue.empty(), "overflow queue not empty");
+           require(queue.size() == 0, "overflow queue not empty");
 }
 
 } // namespace
