@@ -247,8 +247,12 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
     AVCodecParameters* params = stream->codecpar;
     const MediaNodeOptions* options = nodeOptions(context);
 
-    const int targetWidth = parseIntOption(options, "width", params->width);
-    const int targetHeight = parseIntOption(options, "height", params->height);
+    const int rawWidth = parseIntOption(options, "width", params->width);
+    const int rawHeight = parseIntOption(options, "height", params->height);
+
+    const int targetWidth = rawWidth > 0 ? rawWidth : params->width;
+    const int targetHeight = rawHeight > 0 ? rawHeight : params->height;
+
     const int bitrateKbps = parseIntOption(options, "bitrate_kbps", 0);
     const int64_t bitRate = bitrateKbps > 0 ? static_cast<int64_t>(bitrateKbps) * 1000 : 4'000'000;
     const int gop = parseIntOption(options, "gop", 0);
@@ -307,7 +311,7 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
 
         const int openRet = avcodec_open2(encoderContext.get(), encoder, nullptr);
         if (openRet < 0) {
-            lastError = std::string(encoder->name ? encoder->name : "unknown") + ": " + FFmpegGraphError::fromCode(openRet, "avcodec_open2(video encoder)").describe();
+            lastError = std::string(encoder->name ? encoder->name : "unknown") + ": encoder open failed";
             continue;
         }
 
@@ -322,5 +326,3 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
     return ::media::Status::failure(
         ::media::ErrorInfo::unsupported("CodecResolverNode failed to create video encoder: " + lastError));
 }
-
-} // namespace media::ffmpeg::graph
