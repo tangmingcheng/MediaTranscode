@@ -137,6 +137,7 @@ int main(int argc, char** argv)
     MediaGraph graph;
     const MediaNodeId fileInput = graph.addNode(MediaNodeKind::FileInput, "file-input");
     const MediaNodeId demux = graph.addNode(MediaNodeKind::Demux, "demux");
+    const MediaNodeId demuxPacketSink = graph.addNode(MediaNodeKind::DebugDump, "demux-packet-sink");
     const MediaNodeId codecSource = graph.addNode(MediaNodeKind::DebugDump, "video-codec-source");
     const MediaNodeId packetSource = graph.addNode(MediaNodeKind::DebugDump, "video-packet-source");
     const MediaNodeId videoDecode = graph.addNode(MediaNodeKind::VideoDecode, "video-decode");
@@ -165,6 +166,13 @@ int main(int argc, char** argv)
                         MediaPayloadKind::Packet,
                         true,
                         true);
+    graph.addInputPort(demuxPacketSink,
+                       "packet",
+                       MediaStreamKind::Any,
+                       MediaEdgeKind::InputPacket,
+                       MediaPayloadKind::Packet,
+                       true,
+                       true);
 
     graph.addOutputPort(codecSource,
                         "codec",
@@ -212,6 +220,7 @@ int main(int argc, char** argv)
                        true);
 
     graph.connect(fileInput, "format", demux, "format", "file-input-to-demux", queuePolicy(1));
+    graph.connect(demux, "packet", demuxPacketSink, "packet", "demux-to-packet-sink", queuePolicy(128));
     graph.connect(codecSource, "codec", videoDecode, "codec", "codec-to-video-decode", queuePolicy(1));
     graph.connect(packetSource, "packet", videoDecode, "packet", "packet-to-video-decode", queuePolicy(128));
     graph.connect(videoDecode, "frame", frameSink, "frame", "video-decode-to-frame-sink", queuePolicy(128));
