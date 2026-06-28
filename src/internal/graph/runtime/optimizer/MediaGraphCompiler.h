@@ -2,7 +2,7 @@
 
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/model/MediaGraphOptimizationPolicy.h"
-#include "internal/graph/runtime/MediaGraphExecutionContext.h"
+#include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 #include "internal/graph/runtime/optimizer/MediaGraphOptimizationReport.h"
 #include "media_transcode/Result.h"
 

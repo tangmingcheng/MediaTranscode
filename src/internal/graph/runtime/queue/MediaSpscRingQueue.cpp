@@ -1,5 +1,7 @@
 #include "internal/graph/runtime/queue/MediaSpscRingQueue.h"
 
+#include "internal/graph/runtime/buffer/MediaBuffer.h"
+
 #include <thread>
 #include <utility>
 

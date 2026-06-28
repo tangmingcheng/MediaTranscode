@@ -1,6 +1,6 @@
 #pragma once
 
-#include "internal/graph/runtime/MediaGraphRuntimeReport.h"
+#include "internal/graph/runtime/diagnostics/MediaGraphRuntimeReport.h"
 #include "internal/graph/runtime/qos/MediaQosController.h"
 #include "internal/graph/runtime/streaming/MediaStreamingMetrics.h"
 

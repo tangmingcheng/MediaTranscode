@@ -1,7 +1,7 @@
 #pragma once
 
-#include "internal/graph/runtime/MediaBackpressureController.h"
-#include "internal/graph/runtime/MediaGraphRuntimeReport.h"
+#include "internal/graph/runtime/backpressure/MediaBackpressureController.h"
+#include "internal/graph/runtime/diagnostics/MediaGraphRuntimeReport.h"
 #include "internal/graph/runtime/streaming/MediaAdaptiveBitrateController.h"
 
 namespace media::ffmpeg::graph {
