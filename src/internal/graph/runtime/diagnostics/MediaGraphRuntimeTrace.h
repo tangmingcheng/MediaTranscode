@@ -1,9 +1,13 @@
 #pragma once
 
 #include "internal/graph/runtime/MediaGraphRuntime.h"
-#include <string>
-#include <vector>
+
+#include <cstddef>
+#include <cstdint>
 #include <sstream>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace media::ffmpeg::graph {
 
@@ -11,9 +15,10 @@ struct MediaGraphChannelTrace {
     std::string label;
     std::size_t queued = 0;
     std::size_t capacity = 0;
-    uint64_t pushed = 0;
-    uint64_t popped = 0;
-    uint64_t dropped = 0;
+    std::uint64_t pushed = 0;
+    std::uint64_t popped = 0;
+    std::uint64_t dropped = 0;
+    std::uint64_t blockedPushes = 0;
     bool backpressure = false;
 };
 
@@ -35,83 +40,87 @@ struct MediaGraphRuntimeTrace {
         std::ostringstream oss;
         oss << "[graph][trace] nodes=" << nodes.size()
             << " channels=" << channels.size()
-            << " totalQueued=" << totalQueued << "\n";
+            << " totalQueued=" << totalQueued << '\n';
 
-        for (const auto& c : channels) {
-            oss << "[channel] " << c.label
-                << " q=" << c.queued << "/" << c.capacity
-                << " pushed=" << c.pushed
-                << " popped=" << c.popped
-                << " dropped=" << c.dropped
-                << " bp=" << (c.backpressure ? 1 : 0)
-                << "\n";
+        for (const auto& channel : channels) {
+            oss << "[graph][runtime.channel] " << channel.label
+                << " qsize=" << channel.queued << '/' << channel.capacity
+                << " pushed=" << channel.pushed
+                << " popped=" << channel.popped
+                << " dropped=" << channel.dropped
+                << " blocked=" << channel.blockedPushes
+                << " backpressure=" << (channel.backpressure ? "true" : "false")
+                << '\n';
         }
 
-        for (const auto& n : nodes) {
-            oss << "[node] " << n.name
-                << " inQ=" << n.inputQueued
-                << " outQ=" << n.outputQueued
-                << " stalled=" << (n.stalled ? 1 : 0)
-                << " reason=" << n.stallReason
-                << "\n";
+        for (const auto& node : nodes) {
+            oss << "[graph][runtime.node] " << node.name
+                << " input_qsize=" << node.inputQueued
+                << " output_qsize=" << node.outputQueued
+                << " stalled=" << (node.stalled ? "true" : "false")
+                << " reason=" << node.stallReason
+                << '\n';
         }
 
         return oss.str();
     }
 };
 
-class MediaGraphRuntimeTracer {
+class MediaGraphRuntimeTracer final {
 public:
     static MediaGraphRuntimeTrace capture(const MediaGraphRuntime& runtime)
     {
         MediaGraphRuntimeTrace trace;
 
-        const auto& ctx = runtime.context();
-        const auto* graph = ctx.graph();
+        const MediaGraphExecutionContext& context = runtime.context();
+        const MediaGraph* graph = context.graph();
         if (!graph) {
             return trace;
         }
 
-        for (const auto& e : graph->edges()) {
-            const MediaChannel* ch = ctx.channels().findOutputChannel(e.from.nodeId, e.from.portId ? "" : "");
+        for (const MediaEdge& edge : graph->edges()) {
+            const MediaChannel* channel = context.channels().findByEdge(edge.id);
 
-            MediaGraphChannelTrace ct;
-            ct.label = e.name;
-            ct.queued = ch ? ch->size() : 0;
-            ct.capacity = ch ? ch->capacity() : 0;
-            ct.pushed = ch ? ch->metrics().pushed : 0;
-            ct.popped = ch ? ch->metrics().popped : 0;
-            ct.dropped = ch ? ch->metrics().queue.dropped : 0;
-            ct.backpressure = (ct.capacity > 0 && ct.queued >= ct.capacity);
+            MediaGraphChannelTrace channelTrace;
+            channelTrace.label = edge.name.empty()
+                ? "edge#" + std::to_string(edge.id.value)
+                : edge.name;
 
-            trace.totalQueued += ct.queued;
-            trace.channels.push_back(std::move(ct));
+            if (channel) {
+                const auto& metrics = channel->metrics();
+                channelTrace.queued = channel->size();
+                channelTrace.capacity = channel->capacity();
+                channelTrace.pushed = metrics.pushed;
+                channelTrace.popped = metrics.popped;
+                channelTrace.dropped = metrics.queue.dropped;
+                channelTrace.blockedPushes = metrics.queue.blockedPushes;
+                channelTrace.backpressure = channelTrace.capacity > 0 &&
+                    channelTrace.queued >= channelTrace.capacity;
+            }
+
+            trace.totalQueued += channelTrace.queued;
+            trace.channels.push_back(std::move(channelTrace));
         }
 
-        for (const auto& node : graph->nodes()) {
-            MediaGraphNodeTrace nt;
-            nt.name = node.name;
+        for (const MediaNode& node : graph->nodes()) {
+            MediaGraphNodeTrace nodeTrace;
+            nodeTrace.name = node.diagnosticName.empty() ? node.name : node.diagnosticName;
 
-            std::size_t inQ = 0;
-            std::size_t outQ = 0;
-
-            for (const auto& p : node.inputPorts) {
-                if (auto* ch = ctx.findInputChannel(node.id, p.name)) {
-                    inQ += ch->size();
+            for (const MediaChannel* channel : context.inputChannels(node.id)) {
+                if (channel) {
+                    nodeTrace.inputQueued += channel->size();
                 }
             }
-            for (const auto& p : node.outputPorts) {
-                if (auto* ch = ctx.findOutputChannel(node.id, p.name)) {
-                    outQ += ch->size();
+            for (const MediaChannel* channel : context.outputChannels(node.id)) {
+                if (channel) {
+                    nodeTrace.outputQueued += channel->size();
                 }
             }
 
-            nt.inputQueued = inQ;
-            nt.outputQueued = outQ;
-            nt.stalled = (outQ > 0 && inQ == 0);
-            nt.stallReason = nt.stalled ? "output_pressure_or_idle" : "running";
+            nodeTrace.stalled = nodeTrace.outputQueued > 0 && nodeTrace.inputQueued == 0;
+            nodeTrace.stallReason = nodeTrace.stalled ? "output_pressure_or_idle" : "running";
 
-            trace.nodes.push_back(std::move(nt));
+            trace.nodes.push_back(std::move(nodeTrace));
         }
 
         return trace;
