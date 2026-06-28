@@ -3,13 +3,11 @@ cmake_minimum_required(VERSION 3.21.1)
 project(MediaTranscode LANGUAGES CXX)
 
 set(TARGET_CORE "media_transcode_core")
-set(TARGET_GRAPH_DAG_PROBE "media_transcode_graph_dag_probe")
 set(TARGET_GRAPH_QUEUE_PROBE "media_transcode_graph_queue_probe")
 set(TARGET_GRAPH_FILE_INPUT_PROBE "media_transcode_graph_file_input_probe")
 set(TARGET_GRAPH_DECODE_PROBE "media_transcode_graph_decode_probe")
 set(TARGET_GRAPH_ENCODE_PROBE "media_transcode_graph_encode_probe")
 set(TARGET_GRAPH_AUTORUN_PROBE "media_transcode_graph_autorun_probe")
-set(TARGET_GRAPH_RUNLOOP_PROBE "media_transcode_graph_runloop_probe")
 set(TARGET_GRAPH_PLANNER_PROBE "media_transcode_graph_planner_probe")
 set(TARGET_GRAPH_TRANSCODE_CLI "media_transcode_graph_transcode_cli")
 set(THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/3rds")
@@ -168,11 +166,6 @@ function(media_transcode_configure_test target_name)
 endfunction()
 
 if(MEDIA_TRANSCODE_BUILD_GRAPH_TOOLS)
-    add_executable(${TARGET_GRAPH_DAG_PROBE}
-        tools/graph_dag_probe/main.cpp
-    )
-    media_transcode_configure_app(${TARGET_GRAPH_DAG_PROBE})
-
     add_executable(${TARGET_GRAPH_QUEUE_PROBE}
         tools/graph_queue_probe/main.cpp
     )
@@ -197,11 +190,6 @@ if(MEDIA_TRANSCODE_BUILD_GRAPH_TOOLS)
         tools/graph_autorun_probe/main.cpp
     )
     media_transcode_configure_app(${TARGET_GRAPH_AUTORUN_PROBE})
-
-    add_executable(${TARGET_GRAPH_RUNLOOP_PROBE}
-        tools/graph_runloop_probe/main.cpp
-    )
-    media_transcode_configure_app(${TARGET_GRAPH_RUNLOOP_PROBE})
 
     add_executable(${TARGET_GRAPH_PLANNER_PROBE}
         tools/graph_planner_probe/main.cpp
