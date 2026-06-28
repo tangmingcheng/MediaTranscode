@@ -7,6 +7,59 @@
 
 namespace media::ffmpeg::graph {
 
+namespace {
+
+struct ChannelActivitySnapshot {
+    std::uint64_t pushed = 0;
+    std::uint64_t popped = 0;
+    std::uint64_t closed = 0;
+    std::uint64_t aborted = 0;
+    std::uint64_t cleared = 0;
+    std::size_t queued = 0;
+};
+
+ChannelActivitySnapshot captureChannelActivity(const MediaGraphExecutionContext& context)
+{
+    ChannelActivitySnapshot snapshot;
+    for (const MediaChannel* channel : context.channels().channels()) {
+        if (!channel) {
+            continue;
+        }
+
+        const auto& metrics = channel->metrics();
+        snapshot.pushed += metrics.pushed;
+        snapshot.popped += metrics.popped;
+        snapshot.closed += metrics.closed;
+        snapshot.aborted += metrics.aborted;
+        snapshot.cleared += metrics.cleared;
+        snapshot.queued += channel->size();
+    }
+    return snapshot;
+}
+
+bool sameChannelActivity(const ChannelActivitySnapshot& lhs,
+                         const ChannelActivitySnapshot& rhs) noexcept
+{
+    return lhs.pushed == rhs.pushed &&
+           lhs.popped == rhs.popped &&
+           lhs.closed == rhs.closed &&
+           lhs.aborted == rhs.aborted &&
+           lhs.cleared == rhs.cleared;
+}
+
+void copySnapshotToResult(const ChannelActivitySnapshot& snapshot,
+                          MediaGraphRunLoopResult& result) noexcept
+{
+    result.totalPushed = snapshot.pushed;
+    result.totalPopped = snapshot.popped;
+    result.totalClosed = snapshot.closed;
+    result.totalAborted = snapshot.aborted;
+    result.totalCleared = snapshot.cleared;
+    result.queuedBuffers = snapshot.queued;
+}
+
+} // namespace
+
 ::media::Status MediaGraphRuntime::compile(MediaGraph graph)
 {
     if (m_state == MediaGraphRuntimeState::Running ||
@@ -123,6 +176,54 @@ const MediaThreadingPolicy& MediaGraphRuntime::threadingPolicy() const noexcept
     }
 
     return m_scheduler.processOnce(m_context);
+}
+
+::media::Result<MediaGraphRunLoopResult> MediaGraphRuntime::runUntilIdle(MediaGraphRunLoopOptions options)
+{
+    if (m_state != MediaGraphRuntimeState::Running) {
+        return ::media::Result<MediaGraphRunLoopResult>::failure(
+            ::media::ErrorInfo::notInitialized("MediaGraphRuntime runUntilIdle failed: runtime is not running"));
+    }
+
+    if (options.maxIterations == 0) {
+        options.maxIterations = 1;
+    }
+    if (options.idleThreshold == 0) {
+        options.idleThreshold = 1;
+    }
+
+    MediaGraphRunLoopResult result;
+    ChannelActivitySnapshot previous = captureChannelActivity(m_context);
+    copySnapshotToResult(previous, result);
+
+    while (result.iterations < options.maxIterations) {
+        auto status = processOnce();
+        if (!status) {
+            return ::media::Result<MediaGraphRunLoopResult>::failure(status.error());
+        }
+
+        ++result.iterations;
+
+        const ChannelActivitySnapshot current = captureChannelActivity(m_context);
+        copySnapshotToResult(current, result);
+
+        const bool noActivity = sameChannelActivity(previous, current) && current.queued == 0;
+        if (noActivity) {
+            ++result.idleIterations;
+        } else {
+            result.idleIterations = 0;
+        }
+
+        previous = current;
+
+        if (options.stopOnIdle && result.idleIterations >= options.idleThreshold) {
+            result.stoppedBecauseIdle = true;
+            return ::media::Result<MediaGraphRunLoopResult>::success(result);
+        }
+    }
+
+    result.stoppedBecauseMaxIterations = true;
+    return ::media::Result<MediaGraphRunLoopResult>::success(result);
 }
 
 ::media::Status MediaGraphRuntime::flush()

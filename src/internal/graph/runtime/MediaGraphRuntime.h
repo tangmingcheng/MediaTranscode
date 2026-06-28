@@ -8,6 +8,8 @@
 #include "internal/graph/runtime/MediaRuntimeNode.h"
 #include "media_transcode/Result.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 
 namespace media::ffmpeg::graph {
@@ -19,6 +21,25 @@ enum class MediaGraphRuntimeState {
     ThreadedRunning,
     Stopped,
     Aborted
+};
+
+struct MediaGraphRunLoopOptions {
+    std::size_t maxIterations = 1024;
+    std::size_t idleThreshold = 16;
+    bool stopOnIdle = true;
+};
+
+struct MediaGraphRunLoopResult {
+    std::size_t iterations = 0;
+    std::size_t idleIterations = 0;
+    std::uint64_t totalPushed = 0;
+    std::uint64_t totalPopped = 0;
+    std::uint64_t totalClosed = 0;
+    std::uint64_t totalAborted = 0;
+    std::uint64_t totalCleared = 0;
+    std::size_t queuedBuffers = 0;
+    bool stoppedBecauseIdle = false;
+    bool stoppedBecauseMaxIterations = false;
 };
 
 class MediaGraphRuntime final {
@@ -38,6 +59,7 @@ public:
     ::media::Status start();
     ::media::Status startThreaded();
     ::media::Status processOnce();
+    ::media::Result<MediaGraphRunLoopResult> runUntilIdle(MediaGraphRunLoopOptions options = {});
     ::media::Status flush();
     ::media::Status stop();
     void abort() noexcept;
