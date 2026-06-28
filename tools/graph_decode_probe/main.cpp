@@ -38,6 +38,16 @@ int failStatus(const std::string& action, const ::media::Status& status)
     return fail(action + ": " + status.error().describe());
 }
 
+std::size_t parsePositiveSize(const char* text, std::size_t fallback)
+{
+    if (!text) {
+        return fallback;
+    }
+
+    const long value = std::strtol(text, nullptr, 10);
+    return value > 0 ? static_cast<std::size_t>(value) : fallback;
+}
+
 MediaEdgePolicy queuePolicy(std::size_t capacity = 64)
 {
     MediaEdgePolicy policy;
@@ -53,6 +63,58 @@ struct VideoDecoderSetup {
     ::media::ffmpeg::CodecContextPtr codecContext;
     int videoStreamIndex = invalidMediaStreamIndex;
 };
+
+struct DecodeStats {
+    std::size_t demuxIterations = 0;
+    std::size_t demuxPackets = 0;
+    std::size_t videoPackets = 0;
+    std::size_t skippedPackets = 0;
+    std::size_t decodedFrames = 0;
+    std::size_t controlBuffers = 0;
+    bool eofSeen = false;
+    bool firstFrameSet = false;
+    MediaTimeValue firstFramePts = 0;
+    MediaTimeValue lastFramePts = 0;
+    int firstWidth = 0;
+    int firstHeight = 0;
+    std::string firstPixelFormat = "unknown";
+};
+
+void collectFrames(MediaChannel& frameChannel, DecodeStats& stats)
+{
+    MediaBufferRef frameBuffer;
+    while (frameChannel.tryPop(frameBuffer)) {
+        if (!frameBuffer) {
+            continue;
+        }
+
+        if (frameBuffer->isEof() || frameBuffer->isFlush()) {
+            ++stats.controlBuffers;
+            continue;
+        }
+
+        if (frameBuffer->payloadKind() != MediaPayloadKind::Frame) {
+            continue;
+        }
+
+        ++stats.decodedFrames;
+        stats.lastFramePts = frameBuffer->pts();
+
+        if (!stats.firstFrameSet) {
+            stats.firstFramePts = frameBuffer->pts();
+            stats.firstFrameSet = true;
+
+            const auto* ffmpegFrame = dynamic_cast<const FFmpegFrameBuffer*>(frameBuffer.get());
+            const AVFrame* frame = ffmpegFrame ? ffmpegFrame->frame() : nullptr;
+            if (frame) {
+                stats.firstWidth = frame->width;
+                stats.firstHeight = frame->height;
+                const char* formatName = av_get_pix_fmt_name(static_cast<AVPixelFormat>(frame->format));
+                stats.firstPixelFormat = formatName ? formatName : "unknown";
+            }
+        }
+    }
+}
 
 ::media::Result<VideoDecoderSetup> createVideoDecoder(const std::string& inputPath)
 {
@@ -114,17 +176,18 @@ struct VideoDecoderSetup {
 int main(int argc, char** argv)
 {
     if (argc < 2) {
-        std::cerr << "usage: media_transcode_graph_decode_probe.exe <input-media-file> [max-video-packets]\n";
+        std::cerr << "usage: media_transcode_graph_decode_probe.exe <input-media-file> [target-frames] [max-demux-packets]\n";
         return 2;
     }
 
     const std::string inputPath = argv[1];
-    int maxVideoPackets = 64;
-    if (argc >= 3) {
-        maxVideoPackets = std::atoi(argv[2]);
-        if (maxVideoPackets <= 0) {
-            maxVideoPackets = 64;
-        }
+    const std::size_t targetFrames = argc >= 3 ? parsePositiveSize(argv[2], 100) : 100;
+    std::size_t maxDemuxPackets = targetFrames * 16 + 256;
+    if (maxDemuxPackets < 512) {
+        maxDemuxPackets = 512;
+    }
+    if (argc >= 4) {
+        maxDemuxPackets = parsePositiveSize(argv[3], maxDemuxPackets);
     }
 
     auto decoderSetup = createVideoDecoder(inputPath);
@@ -286,41 +349,51 @@ int main(int argc, char** argv)
         return failStatus("file input process", fileStatus);
     }
 
-    std::size_t demuxPackets = 0;
-    std::size_t videoPackets = 0;
-    std::size_t skippedPackets = 0;
-    std::size_t decodedFrames = 0;
-    bool firstFrameSet = false;
-    MediaTimeValue firstFramePts = 0;
-    int firstWidth = 0;
-    int firstHeight = 0;
-    std::string firstPixelFormat = "unknown";
+    DecodeStats stats;
 
-    for (int i = 0; i < maxVideoPackets && decodedFrames == 0; ++i) {
+    while (stats.decodedFrames < targetFrames &&
+           stats.demuxIterations < maxDemuxPackets &&
+           !stats.eofSeen) {
         auto demuxStatus = demuxRuntime->process(runtime.context());
         if (!demuxStatus) {
             return failStatus("demux process", demuxStatus);
         }
+        ++stats.demuxIterations;
 
         MediaBufferRef packetBuffer;
         while (demuxPacketChannel->tryPop(packetBuffer)) {
-            if (!packetBuffer || packetBuffer->isEof()) {
+            if (!packetBuffer) {
                 continue;
             }
+
+            if (packetBuffer->isEof()) {
+                stats.eofSeen = true;
+                auto eofPushStatus = decodePacketChannel->push(packetBuffer);
+                if (!eofPushStatus) {
+                    return failStatus("push decoder eof", eofPushStatus);
+                }
+                auto drainStatus = decodeRuntime->process(runtime.context());
+                if (!drainStatus) {
+                    return failStatus("drain video decoder", drainStatus);
+                }
+                collectFrames(*frameChannel, stats);
+                break;
+            }
+
             if (packetBuffer->payloadKind() != MediaPayloadKind::Packet) {
                 continue;
             }
 
-            ++demuxPackets;
+            ++stats.demuxPackets;
 
             const auto* ffmpegPacket = dynamic_cast<const FFmpegPacketBuffer*>(packetBuffer.get());
             const AVPacket* packet = ffmpegPacket ? ffmpegPacket->packet() : nullptr;
             if (!packet || packet->stream_index != videoStreamIndex) {
-                ++skippedPackets;
+                ++stats.skippedPackets;
                 continue;
             }
 
-            ++videoPackets;
+            ++stats.videoPackets;
             auto packetPushStatus = decodePacketChannel->push(packetBuffer);
             if (!packetPushStatus) {
                 return failStatus("push video packet", packetPushStatus);
@@ -331,48 +404,41 @@ int main(int argc, char** argv)
                 return failStatus("video decode process", decodeStatus);
             }
 
-            MediaBufferRef frameBuffer;
-            while (frameChannel->tryPop(frameBuffer)) {
-                if (!frameBuffer || frameBuffer->payloadKind() != MediaPayloadKind::Frame) {
-                    continue;
-                }
-
-                ++decodedFrames;
-                if (!firstFrameSet) {
-                    firstFramePts = frameBuffer->pts();
-                    firstFrameSet = true;
-
-                    const auto* ffmpegFrame = dynamic_cast<const FFmpegFrameBuffer*>(frameBuffer.get());
-                    const AVFrame* frame = ffmpegFrame ? ffmpegFrame->frame() : nullptr;
-                    if (frame) {
-                        firstWidth = frame->width;
-                        firstHeight = frame->height;
-                        const char* formatName = av_get_pix_fmt_name(static_cast<AVPixelFormat>(frame->format));
-                        firstPixelFormat = formatName ? formatName : "unknown";
-                    }
-                }
+            collectFrames(*frameChannel, stats);
+            if (stats.decodedFrames >= targetFrames) {
+                break;
             }
         }
     }
 
-    if (videoPackets == 0) {
+    if (stats.videoPackets == 0) {
         return fail("no video packets reached decoder");
     }
-    if (decodedFrames == 0) {
+    if (stats.decodedFrames == 0) {
         return fail("no decoded frames were produced");
     }
+    if (stats.decodedFrames < targetFrames && !stats.eofSeen) {
+        return fail("target frames not reached before max demux packet limit; increase max-demux-packets");
+    }
 
+    const bool targetReached = stats.decodedFrames >= targetFrames;
     std::cout << "graph decode probe ok: "
-              << "demux_packets=" << demuxPackets
-              << ", video_packets=" << videoPackets
-              << ", skipped_packets=" << skippedPackets
-              << ", decoded_frames=" << decodedFrames
-              << ", first_frame_pts=" << (firstFrameSet ? std::to_string(firstFramePts) : std::string("n/a"))
-              << ", width=" << firstWidth
-              << ", height=" << firstHeight
-              << ", format=" << firstPixelFormat
+              << "demux_iterations=" << stats.demuxIterations
+              << ", demux_packets=" << stats.demuxPackets
+              << ", video_packets=" << stats.videoPackets
+              << ", skipped_packets=" << stats.skippedPackets
+              << ", decoded_frames=" << stats.decodedFrames
+              << ", target_frames=" << targetFrames
+              << ", target_reached=" << (targetReached ? "true" : "false")
+              << ", eof=" << (stats.eofSeen ? "true" : "false")
+              << ", control_buffers=" << stats.controlBuffers
+              << ", first_frame_pts=" << (stats.firstFrameSet ? std::to_string(stats.firstFramePts) : std::string("n/a"))
+              << ", last_frame_pts=" << (stats.firstFrameSet ? std::to_string(stats.lastFramePts) : std::string("n/a"))
+              << ", width=" << stats.firstWidth
+              << ", height=" << stats.firstHeight
+              << ", format=" << stats.firstPixelFormat
               << ", video_stream_index=" << videoStreamIndex
-              << ", max_video_packets=" << maxVideoPackets
+              << ", max_demux_packets=" << maxDemuxPackets
               << '\n';
 
     return 0;
