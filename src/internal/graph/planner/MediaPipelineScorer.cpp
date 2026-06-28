@@ -1,5 +1,7 @@
 #include "internal/graph/planner/MediaPipelineScorer.h"
 
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
+
 #include <algorithm>
 #include <cctype>
 #include <sstream>
@@ -83,6 +85,12 @@ std::string stageDisplayName(const MediaPipelineStagePlan& stage)
     return stage.componentName;
 }
 
+bool hardwareUnavailable(const MediaPipelineStagePlan& stage)
+{
+    return stage.hardware && !stage.available &&
+           stage.availabilityReason.find("hardware backend not found") != std::string::npos;
+}
+
 std::string unavailableReason(const MediaPipelineChainPlan& chain)
 {
     std::ostringstream out;
@@ -92,6 +100,12 @@ std::string unavailableReason(const MediaPipelineChainPlan& chain)
         if (stage.available) {
             return;
         }
+
+        if (hardwareUnavailable(stage)) {
+            out << "; hardware=" << mediaHardwareDeviceKindName(stage.deviceKind) << " unavailable";
+            return;
+        }
+
         out << "; " << mediaPipelineStageRoleName(stage.role)
             << "=" << stageDisplayName(stage)
             << " unavailable: " << stage.availabilityReason;
@@ -118,6 +132,28 @@ std::string availableReason(const MediaPipelineChainPlan& chain)
         return "mixed hardware/software chain";
     }
     return "software fallback chain; score=300+300+300";
+}
+
+void logCandidate(const MediaPipelinePlannerOptions& options,
+                  const MediaPipelineChainPlan& chain)
+{
+    std::ostringstream out;
+    out << "candidate=" << chain.label
+        << " score=" << chain.score
+        << " status=" << (chain.available ? "available" : "unavailable");
+
+    if (chain.available) {
+        out << " decoder=" << stageDisplayName(chain.decoder)
+            << " filter=" << stageDisplayName(chain.filter)
+            << " encoder=" << stageDisplayName(chain.encoder)
+            << " zero_copy=" << (chain.zeroCopy ? "true" : "false");
+    } else {
+        out << " reason=\"" << chain.reason << "\"";
+    }
+
+    mediaGraphDiagnosticLog(options.diagnosticLogEnabled,
+                            MediaGraphDiagnosticPhase::PlannerScore,
+                            out.str());
 }
 
 } // namespace
@@ -190,6 +226,10 @@ std::vector<MediaPipelineChainPlan> MediaPipelineScorer::scoreAndSortChains(
 
         return lhs.label < rhs.label;
     });
+
+    for (const MediaPipelineChainPlan& chain : chains) {
+        logCandidate(options, chain);
+    }
 
     return chains;
 }

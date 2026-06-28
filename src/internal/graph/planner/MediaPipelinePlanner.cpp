@@ -1,11 +1,13 @@
 #include "internal/graph/planner/MediaPipelinePlanner.h"
 
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/planner/MediaPipelineCapabilityScanner.h"
 #include "internal/graph/planner/MediaPipelineGraphBuilder.h"
 #include "internal/graph/planner/MediaPipelineScorer.h"
 
 #include <algorithm>
 #include <cctype>
+#include <sstream>
 #include <utility>
 
 namespace media::ffmpeg::graph {
@@ -24,6 +26,36 @@ std::string canonicalCodecName(std::string codec)
         return "hevc";
     }
     return codec;
+}
+
+std::string stageDisplayName(const MediaPipelineStagePlan& stage)
+{
+    if (!stage.ffmpegName.empty()) {
+        return stage.ffmpegName;
+    }
+    if (!stage.filterName.empty()) {
+        return stage.filterName;
+    }
+    return stage.componentName;
+}
+
+void logSelectedPlan(const MediaPipelinePlannerOptions& options,
+                     const MediaPipelinePlan& plan)
+{
+    const MediaPipelineChainPlan& selected = plan.selected;
+
+    std::ostringstream out;
+    out << "selected_chain=" << selected.label
+        << " score=" << selected.score
+        << " decoder=" << stageDisplayName(selected.decoder)
+        << " filter=" << stageDisplayName(selected.filter)
+        << " encoder=" << stageDisplayName(selected.encoder)
+        << " backend=" << mediaHardwareDeviceKindName(selected.decoder.deviceKind)
+        << " zero_copy=" << (selected.zeroCopy ? "true" : "false");
+
+    mediaGraphDiagnosticLog(options.diagnosticLogEnabled,
+                            MediaGraphDiagnosticPhase::PlannerSelect,
+                            out.str());
 }
 
 } // namespace
@@ -102,6 +134,17 @@ const char* mediaHardwareFrameKindName(MediaHardwareFrameKind kind) noexcept
     plan.outputPath = std::move(options.outputPath);
     plan.inputCodecName = canonicalCodecName(inputCodec.value());
     plan.outputCodecName = canonicalCodecName(options.outputCodecName.empty() ? plan.inputCodecName : options.outputCodecName);
+    plan.diagnosticLogEnabled = options.diagnosticLogEnabled;
+
+    {
+        std::ostringstream out;
+        out << "input=" << plan.inputPath
+            << " input_codec=" << plan.inputCodecName
+            << " output_codec=" << plan.outputCodecName;
+        mediaGraphDiagnosticLog(options.diagnosticLogEnabled,
+                                MediaGraphDiagnosticPhase::PlannerInput,
+                                out.str());
+    }
 
     auto candidates = MediaPipelineCapabilityScanner::enumerateVideoTranscodeCandidates(
         plan.inputCodecName,
@@ -124,6 +167,7 @@ const char* mediaHardwareFrameKindName(MediaHardwareFrameKind kind) noexcept
     }
 
     plan.selected = *selected;
+    logSelectedPlan(options, plan);
     return ::media::Result<MediaPipelinePlan>::success(std::move(plan));
 }
 

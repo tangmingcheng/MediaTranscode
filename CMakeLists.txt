@@ -29,6 +29,11 @@ if(POLICY CMP0141)
     set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<IF:$<AND:$<C_COMPILER_ID:MSVC>,$<CXX_COMPILER_ID:MSVC>>,$<$<CONFIG:Debug,RelWithDebInfo>:EditAndContinue>,$<$<CONFIG:Debug,RelWithDebInfo>:ProgramDatabase>>")
 endif()
 
+set(MEDIA_TRANSCODE_GRAPH_DIAGNOSTICS_SOURCES
+    src/internal/graph/diagnostics/MediaGraphDiagnostics.cpp
+    src/internal/graph/diagnostics/MediaGraphDiagnostics.h
+)
+
 set(MEDIA_TRANSCODE_GRAPH_PLANNER_SOURCES
     src/internal/graph/planner/MediaPipelineCapabilityScanner.cpp
     src/internal/graph/planner/MediaPipelineCapabilityScanner.h
@@ -44,7 +49,9 @@ file(GLOB_RECURSE MEDIA_TRANSCODE_GRAPH_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/internal/graph/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/internal/graph/*.h"
 )
+list(FILTER MEDIA_TRANSCODE_GRAPH_SOURCES EXCLUDE REGEX ".*/src/internal/graph/diagnostics/MediaGraphDiagnostics\\.(cpp|h)$")
 list(FILTER MEDIA_TRANSCODE_GRAPH_SOURCES EXCLUDE REGEX ".*/src/internal/graph/planner/MediaPipeline.*\\.(cpp|h)$")
+list(APPEND MEDIA_TRANSCODE_GRAPH_SOURCES ${MEDIA_TRANSCODE_GRAPH_DIAGNOSTICS_SOURCES})
 list(APPEND MEDIA_TRANSCODE_GRAPH_SOURCES ${MEDIA_TRANSCODE_GRAPH_PLANNER_SOURCES})
 list(REMOVE_DUPLICATES MEDIA_TRANSCODE_GRAPH_SOURCES)
 list(SORT MEDIA_TRANSCODE_GRAPH_SOURCES)

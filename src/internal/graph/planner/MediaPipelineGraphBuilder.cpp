@@ -1,5 +1,8 @@
 #include "internal/graph/planner/MediaPipelineGraphBuilder.h"
 
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
+
+#include <sstream>
 #include <string>
 #include <utility>
 
@@ -10,6 +13,17 @@ namespace {
 bool setOption(MediaGraph& graph, MediaNodeId nodeId, const std::string& key, const std::string& value)
 {
     return graph.setNodeOption(nodeId, key, value);
+}
+
+std::string stageDisplayName(const MediaPipelineStagePlan& stage)
+{
+    if (!stage.ffmpegName.empty()) {
+        return stage.ffmpegName;
+    }
+    if (!stage.filterName.empty()) {
+        return stage.filterName;
+    }
+    return stage.componentName;
 }
 
 ::media::Status applyStageOptions(MediaGraph& graph,
@@ -57,6 +71,22 @@ MediaEdgePolicy queuePolicy(std::size_t capacity = 256)
     policy.queuePolicy.capacity = capacity;
     policy.queuePolicy.overflowPolicy = MediaQueueOverflowPolicy::BlockProducer;
     return policy;
+}
+
+void logBuiltGraph(const MediaPipelineGraphBuildResult& result,
+                   const MediaGraph& graph)
+{
+    std::ostringstream out;
+    out << "nodes=" << graph.nodeCount()
+        << " edges=" << graph.edgeCount()
+        << " chain=" << result.plan.selected.label
+        << " decoder=" << stageDisplayName(result.plan.selected.decoder)
+        << " filter=" << stageDisplayName(result.plan.selected.filter)
+        << " encoder=" << stageDisplayName(result.plan.selected.encoder);
+
+    mediaGraphDiagnosticLog(result.plan.diagnosticLogEnabled,
+                            MediaGraphDiagnosticPhase::GraphBuild,
+                            out.str());
 }
 
 } // namespace
@@ -152,6 +182,7 @@ MediaEdgePolicy queuePolicy(std::size_t capacity = 256)
         return ::media::Result<MediaPipelineGraphBuildResult>::failure(applyStatus.error());
     }
 
+    logBuiltGraph(result, graph);
     result.graph = std::move(graph);
     return ::media::Result<MediaPipelineGraphBuildResult>::success(std::move(result));
 }

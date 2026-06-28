@@ -52,6 +52,7 @@ struct MediaPipelinePlannerOptions {
     bool preferGpu = true;
     bool allowSoftwareFallback = true;
     bool requireRuntimeAvailability = true;
+    bool diagnosticLogEnabled = false;
 };
 
 struct MediaPipelinePlan {
@@ -59,6 +60,7 @@ struct MediaPipelinePlan {
     std::string outputPath;
     std::string inputCodecName;
     std::string outputCodecName;
+    bool diagnosticLogEnabled = false;
     MediaPipelineChainPlan selected;
     std::vector<MediaPipelineChainPlan> candidates;
 };
