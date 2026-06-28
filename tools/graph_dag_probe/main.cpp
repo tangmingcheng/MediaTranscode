@@ -41,9 +41,8 @@ int main()
                   policy);
 
     MediaGraphExecutionOptions options;
-    options.runLoopConfig.maxIterations = 4;
-    options.runLoopConfig.maxIdleIterations = 1;
-    options.stopOnRunLoopCompletion = true;
+    options.mode = MediaGraphExecutionMode::SingleThreaded;
+    options.stopOnCompletion = true;
 
     auto result = MediaGraphExecutionEngine::execute(std::move(graph), options);
     if (!result) {
@@ -51,10 +50,10 @@ int main()
         return 1;
     }
 
-    const auto& runLoop = result.value().runLoop;
-    std::cout << "graph dag probe ok: iterations=" << runLoop.iterations
-              << ", idle=" << runLoop.idleIterations
-              << ", stoppedBecauseIdle=" << (runLoop.stoppedBecauseIdle ? "true" : "false")
+    const auto& run = result.value().run;
+    std::cout << "graph dag probe ok: iterations=" << run.iterations
+              << ", idle_iterations=" << run.idleIterations
+              << ", completed=" << (run.completed ? "true" : "false")
               << '\n';
     return 0;
 }
