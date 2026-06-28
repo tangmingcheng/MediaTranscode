@@ -18,6 +18,7 @@
 #include "internal/graph/nodes/lifecycle/FinalizeNode.h"
 #include "internal/graph/nodes/lifecycle/FlushNode.h"
 #include "internal/graph/nodes/merge/PacketMergeNode.h"
+#include "internal/graph/nodes/metadata/CodecResolverNode.h"
 #include "internal/graph/nodes/metadata/MetadataProbeNode.h"
 #include "internal/graph/nodes/mux/FileMuxNode.h"
 #include "internal/graph/nodes/mux/RtpMuxNode.h"
@@ -99,6 +100,8 @@ namespace media::ffmpeg::graph {
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<FinalizeNode>(node.id));
     case MediaNodeKind::ControlSignal:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<ControlSignalNode>(node.id));
+    case MediaNodeKind::CodecResolver:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<CodecResolverNode>(node.id));
     case MediaNodeKind::MetadataProbe:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<MetadataProbeNode>(node.id));
     case MediaNodeKind::DebugDump:
@@ -144,6 +147,7 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::Flush:
     case MediaNodeKind::Finalize:
     case MediaNodeKind::ControlSignal:
+    case MediaNodeKind::CodecResolver:
     case MediaNodeKind::MetadataProbe:
     case MediaNodeKind::DebugDump:
     case MediaNodeKind::TraceProbe:
