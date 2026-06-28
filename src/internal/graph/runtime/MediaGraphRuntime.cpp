@@ -178,11 +178,12 @@ const MediaThreadingPolicy& MediaGraphRuntime::threadingPolicy() const noexcept
     return m_scheduler.processOnce(m_context);
 }
 
-::media::Result<MediaGraphRunLoopResult> MediaGraphRuntime::runUntilIdle(MediaGraphRunLoopOptions options)
+::media::Result<MediaGraphRunLoopResult> MediaGraphRuntime::runUntil(MediaGraphRunLoopOptions options,
+                                                                      MediaGraphRunLoopStopPredicate stopPredicate)
 {
     if (m_state != MediaGraphRuntimeState::Running) {
         return ::media::Result<MediaGraphRunLoopResult>::failure(
-            ::media::ErrorInfo::notInitialized("MediaGraphRuntime runUntilIdle failed: runtime is not running"));
+            ::media::ErrorInfo::notInitialized("MediaGraphRuntime runUntil failed: runtime is not running"));
     }
 
     if (options.maxIterations == 0) {
@@ -195,6 +196,11 @@ const MediaThreadingPolicy& MediaGraphRuntime::threadingPolicy() const noexcept
     MediaGraphRunLoopResult result;
     ChannelActivitySnapshot previous = captureChannelActivity(m_context);
     copySnapshotToResult(previous, result);
+
+    if (stopPredicate && stopPredicate(result)) {
+        result.stoppedBecausePredicate = true;
+        return ::media::Result<MediaGraphRunLoopResult>::success(result);
+    }
 
     while (result.iterations < options.maxIterations) {
         auto status = processOnce();
@@ -216,6 +222,11 @@ const MediaThreadingPolicy& MediaGraphRuntime::threadingPolicy() const noexcept
 
         previous = current;
 
+        if (stopPredicate && stopPredicate(result)) {
+            result.stoppedBecausePredicate = true;
+            return ::media::Result<MediaGraphRunLoopResult>::success(result);
+        }
+
         if (options.stopOnIdle && result.idleIterations >= options.idleThreshold) {
             result.stoppedBecauseIdle = true;
             return ::media::Result<MediaGraphRunLoopResult>::success(result);
@@ -224,6 +235,11 @@ const MediaThreadingPolicy& MediaGraphRuntime::threadingPolicy() const noexcept
 
     result.stoppedBecauseMaxIterations = true;
     return ::media::Result<MediaGraphRunLoopResult>::success(result);
+}
+
+::media::Result<MediaGraphRunLoopResult> MediaGraphRuntime::runUntilIdle(MediaGraphRunLoopOptions options)
+{
+    return runUntil(options, {});
 }
 
 ::media::Status MediaGraphRuntime::flush()

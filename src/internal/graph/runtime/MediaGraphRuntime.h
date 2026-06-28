@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 
 namespace media::ffmpeg::graph {
@@ -38,9 +39,12 @@ struct MediaGraphRunLoopResult {
     std::uint64_t totalAborted = 0;
     std::uint64_t totalCleared = 0;
     std::size_t queuedBuffers = 0;
+    bool stoppedBecausePredicate = false;
     bool stoppedBecauseIdle = false;
     bool stoppedBecauseMaxIterations = false;
 };
+
+using MediaGraphRunLoopStopPredicate = std::function<bool(const MediaGraphRunLoopResult&)>;
 
 class MediaGraphRuntime final {
 public:
@@ -59,6 +63,8 @@ public:
     ::media::Status start();
     ::media::Status startThreaded();
     ::media::Status processOnce();
+    ::media::Result<MediaGraphRunLoopResult> runUntil(MediaGraphRunLoopOptions options = {},
+                                                      MediaGraphRunLoopStopPredicate stopPredicate = {});
     ::media::Result<MediaGraphRunLoopResult> runUntilIdle(MediaGraphRunLoopOptions options = {});
     ::media::Status flush();
     ::media::Status stop();

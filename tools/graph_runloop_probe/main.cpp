@@ -5,10 +5,16 @@
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <utility>
 
 namespace {
 
 using namespace media::ffmpeg::graph;
+
+enum class RunLoopProbeMode {
+    Target,
+    Idle
+};
 
 int fail(const std::string& message)
 {
@@ -21,14 +27,34 @@ int failStatus(const std::string& action, const ::media::Status& status)
     return fail(action + ": " + status.error().describe());
 }
 
-std::size_t parsePositiveSize(const char* text, std::size_t fallback)
+std::size_t parseSize(const char* text, std::size_t fallback)
 {
     if (!text) {
         return fallback;
     }
 
-    const long value = std::strtol(text, nullptr, 10);
-    return value > 0 ? static_cast<std::size_t>(value) : fallback;
+    char* end = nullptr;
+    const unsigned long value = std::strtoul(text, &end, 10);
+    if (end == text) {
+        return fallback;
+    }
+    return static_cast<std::size_t>(value);
+}
+
+RunLoopProbeMode parseMode(const std::string& text, RunLoopProbeMode fallback)
+{
+    if (text == "target") {
+        return RunLoopProbeMode::Target;
+    }
+    if (text == "idle") {
+        return RunLoopProbeMode::Idle;
+    }
+    return fallback;
+}
+
+const char* modeName(RunLoopProbeMode mode) noexcept
+{
+    return mode == RunLoopProbeMode::Target ? "target" : "idle";
 }
 
 MediaEdgePolicy queuePolicy(std::size_t capacity = 1024)
@@ -46,15 +72,28 @@ MediaEdgePolicy queuePolicy(std::size_t capacity = 1024)
 int main(int argc, char** argv)
 {
     if (argc < 2) {
-        std::cerr << "usage: media_transcode_graph_runloop_probe.exe <input-media-file> [target-packets] [max-iterations]\n";
+        std::cerr << "usage: media_transcode_graph_runloop_probe.exe <input-media-file> [target-packets] [target|idle] [max-iterations]\n";
         return 2;
     }
 
     const std::string inputPath = argv[1];
-    const std::size_t targetPackets = argc >= 3 ? parsePositiveSize(argv[2], 100) : 100;
-    std::size_t maxIterations = targetPackets;
-    if (argc >= 4) {
-        maxIterations = parsePositiveSize(argv[3], maxIterations);
+    const std::size_t targetPackets = argc >= 3 ? parseSize(argv[2], 100) : 100;
+    const RunLoopProbeMode defaultMode = targetPackets == 0 ? RunLoopProbeMode::Idle : RunLoopProbeMode::Target;
+    const RunLoopProbeMode mode = argc >= 4 ? parseMode(argv[3], defaultMode) : defaultMode;
+
+    std::size_t maxIterations = mode == RunLoopProbeMode::Target ? targetPackets * 8 + 256 : 100000;
+    if (maxIterations < 512) {
+        maxIterations = 512;
+    }
+    if (argc >= 5) {
+        maxIterations = parseSize(argv[4], maxIterations);
+        if (maxIterations == 0) {
+            maxIterations = 1;
+        }
+    }
+
+    if (mode == RunLoopProbeMode::Target && targetPackets == 0) {
+        return fail("target mode requires target-packets > 0");
     }
 
     MediaGraph graph;
@@ -93,8 +132,9 @@ int main(int argc, char** argv)
                        true,
                        true);
 
+    const std::size_t packetQueueCapacity = targetPackets > 0 ? targetPackets + 16 : 1024;
     graph.connect(fileInput, "format", demux, "format", "file-input-to-demux", queuePolicy(1));
-    graph.connect(demux, "packet", packetSink, "packet", "demux-to-packet-sink", queuePolicy(targetPackets + 16));
+    graph.connect(demux, "packet", packetSink, "packet", "demux-to-packet-sink", queuePolicy(packetQueueCapacity));
 
     MediaGraphRuntime runtime;
     auto compileStatus = runtime.compile(std::move(graph));
@@ -122,9 +162,16 @@ int main(int argc, char** argv)
     options.idleThreshold = 32;
     options.stopOnIdle = true;
 
-    auto runResult = runtime.runUntilIdle(options);
+    MediaGraphRunLoopStopPredicate stopPredicate;
+    if (mode == RunLoopProbeMode::Target) {
+        stopPredicate = [demuxPacketChannel, targetPackets](const MediaGraphRunLoopResult&) {
+            return demuxPacketChannel->metrics().popped >= targetPackets;
+        };
+    }
+
+    auto runResult = runtime.runUntil(options, std::move(stopPredicate));
     if (!runResult) {
-        return fail("runtime runUntilIdle: " + runResult.error().describe());
+        return fail("runtime runUntil: " + runResult.error().describe());
     }
 
     const auto& metrics = demuxPacketChannel->metrics();
@@ -139,18 +186,23 @@ int main(int argc, char** argv)
     if (metrics.popped == 0) {
         return fail("runloop packet sink did not consume any packets");
     }
-    if (metrics.popped < targetPackets) {
+    if (mode == RunLoopProbeMode::Target && metrics.popped < targetPackets) {
         return fail("target packets not reached before run loop stopped; increase max-iterations or use a longer input");
+    }
+    if (mode == RunLoopProbeMode::Idle && !runResult.value().stoppedBecauseIdle) {
+        return fail("idle mode stopped before graph became idle; increase max-iterations");
     }
 
     std::cout << "graph runloop probe ok: "
-              << "iterations=" << runResult.value().iterations
+              << "mode=" << modeName(mode)
+              << ", iterations=" << runResult.value().iterations
               << ", target_packets=" << targetPackets
               << ", demux_pushed=" << metrics.pushed
               << ", sink_popped=" << metrics.popped
               << ", total_pushed=" << runResult.value().totalPushed
               << ", total_popped=" << runResult.value().totalPopped
               << ", queued_buffers=" << runResult.value().queuedBuffers
+              << ", stopped_because_predicate=" << (runResult.value().stoppedBecausePredicate ? "true" : "false")
               << ", stopped_because_idle=" << (runResult.value().stoppedBecauseIdle ? "true" : "false")
               << ", stopped_because_max_iterations=" << (runResult.value().stoppedBecauseMaxIterations ? "true" : "false")
               << ", idle_iterations=" << runResult.value().idleIterations
