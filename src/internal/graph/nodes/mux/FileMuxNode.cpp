@@ -1,10 +1,28 @@
 #include "internal/graph/nodes/mux/FileMuxNode.h"
 
+#include "internal/graph/runtime/buffer/FFmpegCodecContextBuffer.h"
 #include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegPacketView.h"
 
 namespace media::ffmpeg::graph {
+namespace {
+
+int registeredStreamIndexFor(MediaStreamKind streamKind,
+                             int videoStreamIndex,
+                             int audioStreamIndex) noexcept
+{
+    switch (streamKind) {
+    case MediaStreamKind::Video:
+        return videoStreamIndex;
+    case MediaStreamKind::Audio:
+        return audioStreamIndex;
+    default:
+        return invalidMediaStreamIndex;
+    }
+}
+
+} // namespace
 
 FileMuxNode::FileMuxNode(MediaNodeId nodeId)
     : FFmpegNodeRuntime(nodeId, staticKind(), "FileMuxNode")
@@ -26,7 +44,12 @@ MediaNodeKind FileMuxNode::staticKind() noexcept
     MediaBufferRef buffer = input.value();
 
     if (tryBindOutputContext(buffer)) {
-        return ::media::Status::success();
+        return registerPendingCodecContexts();
+    }
+
+    auto codecStatus = tryBindCodecContext(buffer);
+    if (!codecStatus) {
+        return codecStatus;
     }
 
     if (buffer->isEof() || buffer->isFlush()) {
@@ -78,12 +101,98 @@ bool FileMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
     m_outputContext = contextBuffer->context();
     m_headerWritten = false;
     m_trailerWritten = false;
+    m_videoStreamIndex = invalidMediaStreamIndex;
+    m_audioStreamIndex = invalidMediaStreamIndex;
     return true;
+}
+
+::media::Status FileMuxNode::tryBindCodecContext(const MediaBufferRef& buffer)
+{
+    auto* codecBuffer = dynamic_cast<FFmpegCodecContextBuffer*>(buffer.get());
+    if (!codecBuffer || !codecBuffer->context()) {
+        return ::media::Status::success();
+    }
+
+    if (m_headerWritten) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("FileMuxNode received codec context after header was written"));
+    }
+
+    if (!m_outputContext) {
+        m_pendingCodecContexts.push_back(buffer);
+        return ::media::Status::success();
+    }
+
+    return registerStreamFromCodecContext(buffer);
+}
+
+::media::Status FileMuxNode::registerPendingCodecContexts()
+{
+    if (!m_outputContext || m_pendingCodecContexts.empty()) {
+        return ::media::Status::success();
+    }
+
+    auto pending = std::move(m_pendingCodecContexts);
+    m_pendingCodecContexts.clear();
+    for (const auto& buffer : pending) {
+        auto status = registerStreamFromCodecContext(buffer);
+        if (!status) {
+            return status;
+        }
+    }
+
+    return ::media::Status::success();
+}
+
+::media::Status FileMuxNode::registerStreamFromCodecContext(const MediaBufferRef& buffer)
+{
+    if (!m_outputContext) {
+        m_pendingCodecContexts.push_back(buffer);
+        return ::media::Status::success();
+    }
+
+    auto* codecBuffer = dynamic_cast<FFmpegCodecContextBuffer*>(buffer.get());
+    AVCodecContext* codecContext = codecBuffer ? codecBuffer->context() : nullptr;
+    if (!codecContext) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("FileMuxNode expected FFmpegCodecContextBuffer"));
+    }
+
+    const MediaStreamKind streamKind = buffer->streamKind();
+    if (registeredStreamIndexFor(streamKind, m_videoStreamIndex, m_audioStreamIndex) != invalidMediaStreamIndex) {
+        return ::media::Status::success();
+    }
+
+    AVStream* stream = avformat_new_stream(m_outputContext, nullptr);
+    if (!stream) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::allocationFailed("FileMuxNode failed: avformat_new_stream returned null"));
+    }
+
+    const int copyRet = avcodec_parameters_from_context(stream->codecpar, codecContext);
+    if (copyRet < 0) {
+        return FFmpegGraphError::statusFromCode(copyRet, "avcodec_parameters_from_context");
+    }
+
+    stream->time_base = codecContext->time_base;
+    if (streamKind == MediaStreamKind::Video) {
+        stream->avg_frame_rate = codecContext->framerate;
+        stream->r_frame_rate = codecContext->framerate;
+        m_videoStreamIndex = stream->index;
+    } else if (streamKind == MediaStreamKind::Audio) {
+        m_audioStreamIndex = stream->index;
+    }
+
+    return ::media::Status::success();
 }
 
 ::media::Status FileMuxNode::writeHeaderIfNeeded()
 {
     if (!m_outputContext || m_headerWritten) {
+        return ::media::Status::success();
+    }
+
+    if (m_outputContext->nb_streams == 0) {
         return ::media::Status::success();
     }
 
@@ -102,15 +211,28 @@ bool FileMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
         return ::media::Status::success();
     }
 
+    AVPacket* packet = FFmpegPacketView::writablePacket(buffer);
+    if (!packet) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("FileMuxNode expected packet buffer"));
+    }
+
+    const int targetStreamIndex = registeredStreamIndexFor(buffer->streamKind(),
+                                                           m_videoStreamIndex,
+                                                           m_audioStreamIndex);
+    if (targetStreamIndex == invalidMediaStreamIndex) {
+        return ::media::Status::success();
+    }
+
+    packet->stream_index = targetStreamIndex;
+
     auto headerStatus = writeHeaderIfNeeded();
     if (!headerStatus) {
         return headerStatus;
     }
 
-    AVPacket* packet = FFmpegPacketView::writablePacket(buffer);
-    if (!packet) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("FileMuxNode expected packet buffer"));
+    if (!m_headerWritten) {
+        return ::media::Status::success();
     }
 
     const int ret = av_interleaved_write_frame(m_outputContext, packet);
