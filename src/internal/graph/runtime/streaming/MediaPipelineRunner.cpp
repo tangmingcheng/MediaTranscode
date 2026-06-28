@@ -2,10 +2,9 @@
 
 namespace media::ffmpeg::graph {
 
-::media::Result<MediaPipelineRunResult> MediaPipelineRunner::runPresetUntilIdle(
+::media::Result<MediaPipelineRunResult> MediaPipelineRunner::runPreset(
     MediaPipelinePresetKind presetKind,
-    const MediaPipelinePresetOptions& options,
-    MediaGraphRunLoopConfig runLoopConfig)
+    const MediaPipelinePresetOptions& options)
 {
     MediaStreamingSession session;
     auto prepareStatus = session.prepare(presetKind, options);
@@ -13,14 +12,26 @@ namespace media::ffmpeg::graph {
         return ::media::Result<MediaPipelineRunResult>::failure(prepareStatus.error());
     }
 
-    auto run = MediaGraphRunLoop::runUntilIdle(session.runtime(), runLoopConfig);
-    if (!run) {
+    auto startStatus = session.start(false);
+    if (!startStatus) {
         session.abort();
-        return ::media::Result<MediaPipelineRunResult>::failure(run.error());
+        return ::media::Result<MediaPipelineRunResult>::failure(startStatus.error());
+    }
+
+    auto runResult = session.runtime().run();
+    if (!runResult) {
+        session.abort();
+        return ::media::Result<MediaPipelineRunResult>::failure(runResult.error());
+    }
+
+    auto stopStatus = session.stop();
+    if (!stopStatus) {
+        session.abort();
+        return ::media::Result<MediaPipelineRunResult>::failure(stopStatus.error());
     }
 
     MediaPipelineRunResult result;
-    result.runLoop = run.value();
+    result.run = runResult.value();
     result.report = session.report();
     return ::media::Result<MediaPipelineRunResult>::success(result);
 }
