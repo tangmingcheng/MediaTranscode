@@ -25,7 +25,6 @@ enum class MediaGraphRuntimeState {
 };
 
 struct MediaGraphRunLoopOptions {
-    std::size_t maxIterations = 0;
     std::size_t idleThreshold = 16;
     bool stopOnIdle = true;
 };
@@ -41,7 +40,6 @@ struct MediaGraphRunLoopResult {
     std::size_t queuedBuffers = 0;
     bool stoppedBecausePredicate = false;
     bool stoppedBecauseIdle = false;
-    bool stoppedBecauseMaxIterations = false;
 };
 
 using MediaGraphRunLoopStopPredicate = std::function<bool(const MediaGraphRunLoopResult&)>;
