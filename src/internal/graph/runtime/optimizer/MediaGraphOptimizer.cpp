@@ -1,6 +1,7 @@
 #include "internal/graph/runtime/optimizer/MediaGraphOptimizer.h"
 
 #include "internal/graph/runtime/optimizer/passes/MediaGraphIrLoweringPass.h"
+#include "internal/graph/runtime/optimizer/passes/MediaHardwarePipelineFusionPass.h"
 #include "internal/graph/runtime/optimizer/passes/MediaNodeFusionPass.h"
 #include "internal/graph/runtime/optimizer/passes/MediaRedundantTransferEliminationPass.h"
 #include "internal/graph/runtime/optimizer/passes/MediaSimdSchedulingPass.h"
@@ -15,6 +16,7 @@ MediaGraphOptimizer::MediaGraphOptimizer()
     addPass(std::make_unique<MediaGraphIrLoweringPass>());
     addPass(std::make_unique<MediaNodeFusionPass>());
     addPass(std::make_unique<MediaRedundantTransferEliminationPass>());
+    addPass(std::make_unique<MediaHardwarePipelineFusionPass>());
     addPass(std::make_unique<MediaSimdSchedulingPass>());
 }
 
