@@ -1,5 +1,9 @@
 #include "internal/graph/builder/local/LocalFileTranscodeGraphBuilder.h"
 
+#include "internal/graph/planner/MediaPipelinePlanner.h"
+
+#include <algorithm>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -39,6 +43,43 @@ void applyVideoOptions(MediaGraph& graph, MediaNodeId nodeId, const LocalFileTra
     graph.setNodeOption(nodeId, "bframes", std::to_string(options.maxBFrames));
 }
 
+void preferSoftwarePlan(MediaPipelinePlan& plan)
+{
+    auto software = std::find_if(plan.candidates.begin(), plan.candidates.end(), [](const MediaPipelineChainPlan& chain) {
+        return chain.available && chain.label == "software";
+    });
+    if (software == plan.candidates.end()) {
+        software = std::find_if(plan.candidates.begin(), plan.candidates.end(), [](const MediaPipelineChainPlan& chain) {
+            return chain.available && chain.label == "software-native-codec";
+        });
+    }
+    if (software != plan.candidates.end()) {
+        plan.selected = *software;
+    }
+}
+
+::media::Result<MediaPipelinePlan> buildVideoPlan(const LocalFileTranscodeOptions& options)
+{
+    MediaPipelinePlannerOptions plannerOptions;
+    plannerOptions.outputPath = options.outputUrl;
+    plannerOptions.outputCodecName = options.videoCodec.empty() ? "h264" : options.videoCodec;
+    plannerOptions.allowSoftwareFallback = true;
+    plannerOptions.requireRuntimeAvailability = true;
+    plannerOptions.preferGpu = options.useHardwareTransfer && !options.disableHardware;
+    plannerOptions.preferredHardware = plannerOptions.preferGpu ? "auto" : "software";
+
+    auto plan = MediaPipelinePlanner::planVideoTranscodeFile(options.inputUrl, plannerOptions);
+    if (!plan) {
+        return plan;
+    }
+
+    if (!plannerOptions.preferGpu) {
+        preferSoftwarePlan(plan.value());
+    }
+
+    return plan;
+}
+
 } // namespace
 
 ::media::Status LocalFileTranscodeGraphBuilder::validate(const LocalFileTranscodeOptions& options)
@@ -74,6 +115,15 @@ void applyVideoOptions(MediaGraph& graph, MediaNodeId nodeId, const LocalFileTra
     auto validation = validate(options);
     if (!validation) {
         return ::media::Result<MediaGraph>::failure(validation.error());
+    }
+
+    std::optional<MediaPipelinePlan> videoPlan;
+    if (options.includeVideo) {
+        auto plan = buildVideoPlan(options);
+        if (!plan) {
+            return ::media::Result<MediaGraph>::failure(plan.error());
+        }
+        videoPlan = std::move(plan).value();
     }
 
     MediaGraph graph;
@@ -149,6 +199,13 @@ void applyVideoOptions(MediaGraph& graph, MediaNodeId nodeId, const LocalFileTra
                        true,
                        false);
     graph.addInputPort(mux,
+                       "codec",
+                       MediaStreamKind::Video,
+                       MediaEdgeKind::Metadata,
+                       MediaPayloadKind::CodecContext,
+                       true,
+                       true);
+    graph.addInputPort(mux,
                        "packet",
                        MediaStreamKind::Any,
                        MediaEdgeKind::Unknown,
@@ -184,13 +241,40 @@ void applyVideoOptions(MediaGraph& graph, MediaNodeId nodeId, const LocalFileTra
             MediaNodeKind::VideoDecode,
             "local.video.decode",
             "Local video decode");
+        const MediaNodeId videoFilter = graph.addNode(
+            MediaNodeKind::VideoFilter,
+            "local.video.filter",
+            "Local software video filter");
         const MediaNodeId videoEncode = graph.addNode(
             MediaNodeKind::VideoEncode,
             "local.video.encode",
             "Local video encode");
 
         applyVideoOptions(graph, codecResolver, options);
+        applyVideoOptions(graph, videoFilter, options);
         applyVideoOptions(graph, videoEncode, options);
+        graph.setNodeOption(videoFilter, "pix_fmt", "yuv420p");
+
+        if (videoPlan) {
+            auto applyPlanStatus = MediaPipelinePlanner::applyVideoPlanToGraph(
+                graph,
+                videoDecode,
+                videoFilter,
+                videoEncode,
+                *videoPlan);
+            if (!applyPlanStatus) {
+                return ::media::Result<MediaGraph>::failure(applyPlanStatus.error());
+            }
+
+            graph.setNodeOption(codecResolver, "decoder", videoPlan->selected.decoder.ffmpegName);
+            graph.setNodeOption(codecResolver, "encoder", videoPlan->selected.encoder.ffmpegName);
+            graph.setNodeOption(codecResolver, "video_codec", videoPlan->outputCodecName);
+        }
+
+        if (!options.videoEncoder.empty()) {
+            graph.setNodeOption(codecResolver, "encoder", options.videoEncoder);
+            graph.setNodeOption(videoEncode, "encoder", options.videoEncoder);
+        }
 
         graph.addInputPort(codecResolver,
                            "format",
@@ -208,6 +292,13 @@ void applyVideoOptions(MediaGraph& graph, MediaNodeId nodeId, const LocalFileTra
                             false);
         graph.addOutputPort(codecResolver,
                             "encoder",
+                            MediaStreamKind::Video,
+                            MediaEdgeKind::Metadata,
+                            MediaPayloadKind::CodecContext,
+                            true,
+                            false);
+        graph.addOutputPort(codecResolver,
+                            "mux_video",
                             MediaStreamKind::Video,
                             MediaEdgeKind::Metadata,
                             MediaPayloadKind::CodecContext,
@@ -236,6 +327,21 @@ void applyVideoOptions(MediaGraph& graph, MediaNodeId nodeId, const LocalFileTra
                            true,
                            true);
         graph.addOutputPort(videoDecode,
+                            "frame",
+                            MediaStreamKind::Video,
+                            MediaEdgeKind::RawFrame,
+                            MediaPayloadKind::Frame,
+                            true,
+                            true);
+
+        graph.addInputPort(videoFilter,
+                           "frame",
+                           MediaStreamKind::Video,
+                           MediaEdgeKind::RawFrame,
+                           MediaPayloadKind::Frame,
+                           true,
+                           true);
+        graph.addOutputPort(videoFilter,
                             "frame",
                             MediaStreamKind::Video,
                             MediaEdgeKind::RawFrame,
@@ -283,6 +389,12 @@ void applyVideoOptions(MediaGraph& graph, MediaNodeId nodeId, const LocalFileTra
                       "codec",
                       "local.codec.resolver.encoder -> local.video.encode.codec",
                       blockingQueuePolicy(options.metadataQueueCapacity));
+        graph.connect(codecResolver,
+                      "mux_video",
+                      mux,
+                      "codec",
+                      "local.codec.resolver.mux_video -> local.file.mux.codec",
+                      blockingQueuePolicy(options.metadataQueueCapacity));
         graph.connect(split,
                       "video",
                       videoDecode,
@@ -291,9 +403,15 @@ void applyVideoOptions(MediaGraph& graph, MediaNodeId nodeId, const LocalFileTra
                       blockingQueuePolicy(options.packetQueueCapacity));
         graph.connect(videoDecode,
                       "frame",
+                      videoFilter,
+                      "frame",
+                      "local.video.decode.frame -> local.video.filter.frame",
+                      blockingQueuePolicy(options.frameQueueCapacity));
+        graph.connect(videoFilter,
+                      "frame",
                       videoEncode,
                       "frame",
-                      "local.video.decode.frame -> local.video.encode.frame",
+                      "local.video.filter.frame -> local.video.encode.frame",
                       blockingQueuePolicy(options.frameQueueCapacity));
         graph.connect(videoEncode,
                       "packet",
