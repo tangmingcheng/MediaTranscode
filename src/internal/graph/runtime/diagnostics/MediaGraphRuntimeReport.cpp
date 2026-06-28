@@ -1,4 +1,4 @@
-#include "internal/graph/runtime/MediaGraphRuntimeReport.h"
+#include "internal/graph/runtime/diagnostics/MediaGraphRuntimeReport.h"
 
 namespace media::ffmpeg::graph {
 

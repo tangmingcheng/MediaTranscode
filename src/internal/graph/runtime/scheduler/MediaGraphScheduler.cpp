@@ -1,4 +1,4 @@
-#include "internal/graph/runtime/MediaGraphScheduler.h"
+#include "internal/graph/runtime/scheduler/MediaGraphScheduler.h"
 
 #include <algorithm>
 

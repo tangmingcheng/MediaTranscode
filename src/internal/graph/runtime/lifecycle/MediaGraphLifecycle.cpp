@@ -1,4 +1,4 @@
-#include "internal/graph/runtime/MediaGraphLifecycle.h"
+#include "internal/graph/runtime/lifecycle/MediaGraphLifecycle.h"
 
 namespace media::ffmpeg::graph {
 

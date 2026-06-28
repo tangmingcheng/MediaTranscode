@@ -1,8 +1,8 @@
 #pragma once
 
-#include "internal/graph/runtime/MediaBackpressureController.h"
+#include "internal/graph/runtime/backpressure/MediaBackpressureController.h"
 #include "internal/graph/runtime/MediaGraphRuntime.h"
-#include "internal/graph/runtime/MediaGraphRuntimeMetrics.h"
+#include "internal/graph/runtime/diagnostics/MediaGraphRuntimeMetrics.h"
 
 #include <string>
 

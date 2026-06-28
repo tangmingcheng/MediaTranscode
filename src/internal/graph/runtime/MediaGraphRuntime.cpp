@@ -1,7 +1,7 @@
 #include "internal/graph/runtime/MediaGraphRuntime.h"
 
-#include "internal/graph/runtime/MediaGraphLifecycle.h"
-#include "internal/graph/runtime/MediaRuntimeNodeFactory.h"
+#include "internal/graph/runtime/lifecycle/MediaGraphLifecycle.h"
+#include "internal/graph/runtime/factory/MediaRuntimeNodeFactory.h"
 
 #include <utility>
 

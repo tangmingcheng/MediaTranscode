@@ -1,6 +1,6 @@
 #pragma once
 
-#include "internal/graph/runtime/MediaGraphExecutionContext.h"
+#include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 #include "internal/graph/runtime/scheduler/MediaRuntimeSchedulePlan.h"
 #include "internal/graph/runtime/scheduler/MediaRuntimeSchedulerPolicy.h"
 #include "media_transcode/Result.h"

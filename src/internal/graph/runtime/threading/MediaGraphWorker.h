@@ -1,7 +1,7 @@
 #pragma once
 
 #include "internal/graph/core/MediaNodeId.h"
-#include "internal/graph/runtime/MediaGraphExecutionContext.h"
+#include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 #include "internal/graph/runtime/MediaRuntimeNode.h"
 #include "media_transcode/Result.h"
 

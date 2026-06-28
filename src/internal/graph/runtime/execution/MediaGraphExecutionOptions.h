@@ -1,7 +1,7 @@
 #pragma once
 
 #include "internal/graph/model/MediaThreadingPolicy.h"
-#include "internal/graph/runtime/MediaGraphRunLoop.h"
+#include "internal/graph/runtime/runloop/MediaGraphRunLoop.h"
 #include "internal/graph/runtime/execution/MediaGraphExecutionMode.h"
 
 namespace media::ffmpeg::graph {

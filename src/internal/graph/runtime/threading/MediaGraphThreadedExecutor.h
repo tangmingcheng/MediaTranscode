@@ -1,10 +1,10 @@
 #pragma once
 
 #include "internal/graph/model/MediaThreadingPolicy.h"
-#include "internal/graph/runtime/MediaGraphExecutionContext.h"
-#include "internal/graph/runtime/MediaGraphRuntimeMetrics.h"
-#include "internal/graph/runtime/MediaGraphScheduler.h"
-#include "internal/graph/runtime/MediaGraphWorker.h"
+#include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
+#include "internal/graph/runtime/diagnostics/MediaGraphRuntimeMetrics.h"
+#include "internal/graph/runtime/scheduler/MediaGraphScheduler.h"
+#include "internal/graph/runtime/threading/MediaGraphWorker.h"
 #include "media_transcode/Result.h"
 
 #include <memory>

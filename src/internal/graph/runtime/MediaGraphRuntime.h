@@ -2,9 +2,9 @@
 
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/model/MediaThreadingPolicy.h"
-#include "internal/graph/runtime/MediaGraphExecutionContext.h"
-#include "internal/graph/runtime/MediaGraphScheduler.h"
-#include "internal/graph/runtime/MediaGraphThreadedExecutor.h"
+#include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
+#include "internal/graph/runtime/scheduler/MediaGraphScheduler.h"
+#include "internal/graph/runtime/threading/MediaGraphThreadedExecutor.h"
 #include "internal/graph/runtime/MediaRuntimeNode.h"
 #include "media_transcode/Result.h"
 

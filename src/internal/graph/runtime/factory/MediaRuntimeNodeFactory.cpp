@@ -1,4 +1,4 @@
-#include "internal/graph/runtime/MediaRuntimeNodeFactory.h"
+#include "internal/graph/runtime/factory/MediaRuntimeNodeFactory.h"
 
 #include "internal/graph/nodes/audio/AudioCopyNode.h"
 #include "internal/graph/nodes/audio/AudioDecodeNode.h"

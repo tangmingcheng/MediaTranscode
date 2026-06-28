@@ -2,7 +2,7 @@
 
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/runtime/MediaGraphRuntime.h"
-#include "internal/graph/runtime/MediaGraphRuntimeReport.h"
+#include "internal/graph/runtime/diagnostics/MediaGraphRuntimeReport.h"
 #include "internal/graph/runtime/execution/MediaGraphExecutionOptions.h"
 #include "internal/graph/runtime/execution/MediaGraphExecutionResult.h"
 #include "media_transcode/Result.h"

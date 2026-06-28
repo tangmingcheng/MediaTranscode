@@ -1,6 +1,6 @@
 #pragma once
 
-#include "internal/graph/runtime/MediaGraphExecutionContext.h"
+#include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 #include "media_transcode/Result.h"
 
 #include <cstddef>
