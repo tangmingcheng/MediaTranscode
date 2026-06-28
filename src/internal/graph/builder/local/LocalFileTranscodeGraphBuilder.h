@@ -20,6 +20,30 @@ struct LocalFileTranscodeOptions {
     bool includeMux = true;
     bool includeLifecycle = false;
 
+    std::string videoCodec = "h264";
+    std::string videoEncoder;
+    std::string rateControlMode = "auto";
+    std::string speedPreset;
+    std::string profile;
+    std::string tune;
+    std::string level;
+
+    int width = 0;
+    int height = 0;
+    int fpsNum = 0;
+    int fpsDen = 1;
+    int videoBitrateKbps = 0;
+    int crf = -1;
+    int quality = -1;
+    int gop = 0;
+    int maxBFrames = 0;
+    bool disableHardware = false;
+
+    std::string audioCodec = "auto";
+    int audioBitrateKbps = 128;
+    int audioSampleRate = 0;
+    int audioChannels = 0;
+
     std::size_t metadataQueueCapacity = 1;
     std::size_t packetQueueCapacity = 256;
     std::size_t frameQueueCapacity = 128;
