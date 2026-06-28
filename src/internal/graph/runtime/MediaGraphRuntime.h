@@ -23,7 +23,7 @@ enum class MediaGraphRuntimeState {
     Aborted
 };
 
-struct MediaGraphRunLoopResult {
+struct MediaGraphRunResult {
     std::size_t iterations = 0;
     std::size_t idleIterations = 0;
     std::uint64_t totalPushed = 0;
@@ -32,7 +32,7 @@ struct MediaGraphRunLoopResult {
     std::uint64_t totalAborted = 0;
     std::uint64_t totalCleared = 0;
     std::size_t queuedBuffers = 0;
-    bool stoppedBecauseIdle = false;
+    bool completed = false;
 };
 
 class MediaGraphRuntime final {
@@ -52,7 +52,7 @@ public:
     ::media::Status start();
     ::media::Status startThreaded();
     ::media::Status processOnce();
-    ::media::Result<MediaGraphRunLoopResult> runUntilIdle();
+    ::media::Result<MediaGraphRunResult> run();
     ::media::Status flush();
     ::media::Status stop();
     void abort() noexcept;
