@@ -1,6 +1,6 @@
 #include "internal/graph/planner/adapters/LocalGraphPlannerAdapter.h"
 
-#include "internal/graph/planner/MediaGraphPlanner.h"
+#include "internal/graph/planner/local/MediaLocalPlanner.h"
 
 #include <utility>
 
@@ -15,54 +15,44 @@ const char* LocalGraphPlannerAdapter::name() const noexcept
     const MediaGraph& graph,
     const MediaGraphPlannerAdapterOptions& options) const
 {
-    MediaGraphPlannerAdapterResult result;
-    result.topology = buildTopology(options);
-    result.policy = buildPolicy(options);
+    MediaLocalPlannerOptions localOptions;
+    localOptions.nodeId = options.localNodeId;
+    localOptions.host = options.host;
+    localOptions.zone = options.zone;
+    localOptions.port = options.basePort;
+    localOptions.enableGpuPlanning = options.enableGpuPlanning;
+    localOptions.enableMeshPlanning = options.enableMeshPlanning;
+    localOptions.preferZeroCopy = options.preferZeroCopy;
 
-    auto planned = MediaGraphPlanner::plan(graph, result.topology, result.policy);
-    if (!planned) {
-        return ::media::Result<MediaGraphPlannerAdapterResult>::failure(planned.error());
+    auto local = MediaLocalPlanner::plan(graph, localOptions);
+    if (!local) {
+        return ::media::Result<MediaGraphPlannerAdapterResult>::failure(local.error());
     }
 
-    result.plannerResult = std::move(planned).value();
+    MediaGraphPlannerAdapterResult result;
+    result.topology = std::move(local.value().topology);
+    result.policy = std::move(local.value().policy);
+    result.plannerResult = std::move(local.value().plannerResult);
     return ::media::Result<MediaGraphPlannerAdapterResult>::success(std::move(result));
 }
 
 MediaGraphClusterTopology LocalGraphPlannerAdapter::buildTopology(const MediaGraphPlannerAdapterOptions& options)
 {
-    MediaGraphClusterTopology topology;
-
-    MediaGraphClusterNode local;
-    local.address.nodeId = options.localNodeId.empty() ? "local" : options.localNodeId;
-    local.address.host = options.host.empty() ? "127.0.0.1" : options.host;
-    local.address.port = options.basePort > 0 ? options.basePort : 19000;
-    local.address.zone = options.zone;
-    local.role = MediaGraphClusterNodeRole::Worker;
-    local.available = true;
-    local.weight = 1;
-
-    topology.addNode(std::move(local));
-    return topology;
+    MediaLocalPlannerOptions localOptions;
+    localOptions.nodeId = options.localNodeId;
+    localOptions.host = options.host;
+    localOptions.zone = options.zone;
+    localOptions.port = options.basePort;
+    return MediaLocalPlanner::buildTopology(localOptions);
 }
 
 MediaGraphPlanningPolicy LocalGraphPlannerAdapter::buildPolicy(const MediaGraphPlannerAdapterOptions& options)
 {
-    MediaGraphPlanningPolicy policy;
-    policy.placementStrategy = MediaGraphPlacementStrategy::SingleNode;
-    policy.enableDistributedExecution = false;
-    policy.enableGpuPlanning = options.enableGpuPlanning;
-    policy.enableMeshPlanning = options.enableMeshPlanning;
-    policy.keepSourceAndSinkOnEdge = false;
-
-    policy.threadingPolicy.mode = MediaThreadingMode::SingleThreaded;
-    policy.optimizationPolicy.level = MediaGraphOptimizationLevel::Safe;
-    policy.optimizationPolicy.enableDiagnosticReport = true;
-    policy.optimizationPolicy.zeroCopyPolicy.mode = options.preferZeroCopy
-        ? MediaZeroCopyMode::Prefer
-        : MediaZeroCopyMode::Disabled;
-    policy.zeroCopyPolicy = policy.optimizationPolicy.zeroCopyPolicy;
-
-    return policy;
+    MediaLocalPlannerOptions localOptions;
+    localOptions.enableGpuPlanning = options.enableGpuPlanning;
+    localOptions.enableMeshPlanning = options.enableMeshPlanning;
+    localOptions.preferZeroCopy = options.preferZeroCopy;
+    return MediaLocalPlanner::buildPolicy(localOptions);
 }
 
 } // namespace media::ffmpeg::graph

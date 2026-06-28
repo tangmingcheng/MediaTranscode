@@ -1,6 +1,6 @@
 #include "internal/graph/planner/adapters/RealtimeGraphPlannerAdapter.h"
 
-#include "internal/graph/planner/MediaGraphPlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimePlanner.h"
 
 #include <utility>
 
@@ -15,76 +15,46 @@ const char* RealtimeGraphPlannerAdapter::name() const noexcept
     const MediaGraph& graph,
     const MediaGraphPlannerAdapterOptions& options) const
 {
-    MediaGraphPlannerAdapterResult result;
-    result.topology = buildTopology(options);
-    result.policy = buildPolicy(options);
+    MediaRealtimePlannerOptions realtimeOptions;
+    realtimeOptions.edgeNodeId = options.edgeNodeId;
+    realtimeOptions.workerNodeId = options.workerNodeId;
+    realtimeOptions.host = options.host;
+    realtimeOptions.zone = options.zone;
+    realtimeOptions.basePort = options.basePort;
+    realtimeOptions.enableGpuPlanning = options.enableGpuPlanning;
+    realtimeOptions.enableMeshPlanning = options.enableMeshPlanning;
+    realtimeOptions.preferZeroCopy = options.preferZeroCopy;
 
-    auto planned = MediaGraphPlanner::plan(graph, result.topology, result.policy);
-    if (!planned) {
-        return ::media::Result<MediaGraphPlannerAdapterResult>::failure(planned.error());
+    auto realtime = MediaRealtimePlanner::plan(graph, realtimeOptions);
+    if (!realtime) {
+        return ::media::Result<MediaGraphPlannerAdapterResult>::failure(realtime.error());
     }
 
-    result.plannerResult = std::move(planned).value();
+    MediaGraphPlannerAdapterResult result;
+    result.topology = std::move(realtime.value().topology);
+    result.policy = std::move(realtime.value().policy);
+    result.plannerResult = std::move(realtime.value().plannerResult);
     return ::media::Result<MediaGraphPlannerAdapterResult>::success(std::move(result));
 }
 
 MediaGraphClusterTopology RealtimeGraphPlannerAdapter::buildTopology(const MediaGraphPlannerAdapterOptions& options)
 {
-    MediaGraphClusterTopology topology;
-
-    MediaGraphClusterNode edge;
-    edge.address.nodeId = options.edgeNodeId.empty() ? "edge" : options.edgeNodeId;
-    edge.address.host = options.host.empty() ? "127.0.0.1" : options.host;
-    edge.address.port = options.basePort > 0 ? options.basePort : 19000;
-    edge.address.zone = options.zone.empty() ? "realtime" : options.zone;
-    edge.role = MediaGraphClusterNodeRole::Edge;
-    edge.available = true;
-    edge.weight = 1;
-    topology.addNode(std::move(edge));
-
-    MediaGraphClusterNode worker;
-    worker.address.nodeId = options.workerNodeId.empty() ? "worker" : options.workerNodeId;
-    worker.address.host = options.host.empty() ? "127.0.0.1" : options.host;
-    worker.address.port = (options.basePort > 0 ? options.basePort : 19000) + 1;
-    worker.address.zone = options.zone.empty() ? "realtime" : options.zone;
-    worker.role = MediaGraphClusterNodeRole::Worker;
-    worker.available = true;
-    worker.weight = 1;
-    topology.addNode(std::move(worker));
-
-    return topology;
+    MediaRealtimePlannerOptions realtimeOptions;
+    realtimeOptions.edgeNodeId = options.edgeNodeId;
+    realtimeOptions.workerNodeId = options.workerNodeId;
+    realtimeOptions.host = options.host;
+    realtimeOptions.zone = options.zone;
+    realtimeOptions.basePort = options.basePort;
+    return MediaRealtimePlanner::buildTopology(realtimeOptions);
 }
 
 MediaGraphPlanningPolicy RealtimeGraphPlannerAdapter::buildPolicy(const MediaGraphPlannerAdapterOptions& options)
 {
-    MediaGraphPlanningPolicy policy;
-    policy.placementStrategy = MediaGraphPlacementStrategy::PreferEdgeForIo;
-    policy.enableDistributedExecution = true;
-    policy.enableGpuPlanning = options.enableGpuPlanning;
-    policy.enableMeshPlanning = options.enableMeshPlanning;
-    policy.keepSourceAndSinkOnEdge = true;
-
-    policy.threadingPolicy.mode = MediaThreadingMode::PerNodeWorker;
-    policy.threadingPolicy.priority = MediaThreadPriority::High;
-    policy.threadingPolicy.idleSleepMs = 0;
-    policy.threadingPolicy.maxIdleSpins = 1;
-
-    policy.optimizationPolicy.level = MediaGraphOptimizationLevel::Realtime;
-    policy.optimizationPolicy.enableNodeFusion = true;
-    policy.optimizationPolicy.enableQueuePolicyTuning = true;
-    policy.optimizationPolicy.enableBackpressurePlanning = true;
-    policy.optimizationPolicy.latencyPolicy.mode = MediaLatencyMode::Realtime;
-    policy.optimizationPolicy.latencyPolicy.targetLatencyUs = 50000;
-    policy.optimizationPolicy.latencyPolicy.maxLatencyUs = 150000;
-    policy.optimizationPolicy.latencyPolicy.enablePacing = true;
-    policy.optimizationPolicy.latencyPolicy.dropLateFrames = true;
-
-    policy.optimizationPolicy.zeroCopyPolicy.mode = options.preferZeroCopy
-        ? MediaZeroCopyMode::Prefer
-        : MediaZeroCopyMode::Disabled;
-    policy.zeroCopyPolicy = policy.optimizationPolicy.zeroCopyPolicy;
-
-    return policy;
+    MediaRealtimePlannerOptions realtimeOptions;
+    realtimeOptions.enableGpuPlanning = options.enableGpuPlanning;
+    realtimeOptions.enableMeshPlanning = options.enableMeshPlanning;
+    realtimeOptions.preferZeroCopy = options.preferZeroCopy;
+    return MediaRealtimePlanner::buildPolicy(realtimeOptions);
 }
 
 } // namespace media::ffmpeg::graph
