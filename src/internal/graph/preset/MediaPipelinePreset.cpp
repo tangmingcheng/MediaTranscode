@@ -1,6 +1,6 @@
 #include "internal/graph/preset/MediaPipelinePreset.h"
 
-#include "internal/graph/builder/local/MediaLocalFileTranscodeGraphBuilder.h"
+#include "internal/graph/builder/local/LocalFileTranscodeGraphBuilder.h"
 
 #include <utility>
 
@@ -12,8 +12,8 @@ namespace media::ffmpeg::graph {
     switch (kind) {
     case MediaPipelinePresetKind::LocalFileRemux:
         return createLocalFileRemux(options);
-    case MediaPipelinePresetKind::LocalFileTranscode:
-        return createLocalFileTranscode(options);
+    case MediaPipelinePresetKind::LocalFileTranscodeSkeleton:
+        return createLocalFileTranscodeSkeleton(options);
     case MediaPipelinePresetKind::RealtimeRtpSkeleton:
         return createRealtimeRtpSkeleton(options);
     default:
@@ -56,16 +56,16 @@ namespace media::ffmpeg::graph {
     return ::media::Result<MediaGraph>::success(std::move(graph));
 }
 
-::media::Result<MediaGraph> MediaPipelinePreset::createLocalFileTranscode(const MediaPipelinePresetOptions& options)
+::media::Result<MediaGraph> MediaPipelinePreset::createLocalFileTranscodeSkeleton(const MediaPipelinePresetOptions& options)
 {
-    MediaLocalFileTranscodeGraphBuilderOptions builderOptions;
+    LocalFileTranscodeOptions builderOptions;
     builderOptions.inputUrl = options.inputUrl;
     builderOptions.outputUrl = options.outputUrl;
     builderOptions.outputFormat = options.outputFormat;
     builderOptions.includeAudio = options.includeAudio;
     builderOptions.includeVideo = options.includeVideo;
 
-    return MediaLocalFileTranscodeGraphBuilder::build(builderOptions);
+    return LocalFileTranscodeGraphBuilder::build(builderOptions);
 }
 
 ::media::Result<MediaGraph> MediaPipelinePreset::createRealtimeRtpSkeleton(const MediaPipelinePresetOptions&)
