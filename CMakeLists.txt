@@ -4,6 +4,7 @@ project(MediaTranscode LANGUAGES CXX)
 
 set(TARGET_CORE "media_transcode_core")
 set(TARGET_GRAPH_DAG_PROBE "media_transcode_graph_dag_probe")
+set(TARGET_GRAPH_QUEUE_PROBE "media_transcode_graph_queue_probe")
 set(THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/3rds")
 
 option(MEDIA_TRANSCODE_BUILD_GRAPH_TOOLS "Build graph DAG validation/debug tools" ON)
@@ -138,6 +139,11 @@ if(MEDIA_TRANSCODE_BUILD_GRAPH_TOOLS)
         tools/graph_dag_probe/main.cpp
     )
     media_transcode_configure_app(${TARGET_GRAPH_DAG_PROBE})
+
+    add_executable(${TARGET_GRAPH_QUEUE_PROBE}
+        tools/graph_queue_probe/main.cpp
+    )
+    media_transcode_configure_app(${TARGET_GRAPH_QUEUE_PROBE})
 endif()
 
 if(MEDIA_TRANSCODE_BUILD_TESTS)
