@@ -5,6 +5,7 @@
 #include "internal/graph/planner/MediaPipelineScorer.h"
 
 #include <algorithm>
+#include <cctype>
 #include <utility>
 
 namespace media::ffmpeg::graph {
