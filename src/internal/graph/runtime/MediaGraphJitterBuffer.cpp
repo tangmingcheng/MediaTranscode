@@ -1,5 +1,7 @@
 #include "internal/graph/runtime/MediaGraphJitterBuffer.h"
 
+#include "internal/graph/runtime/buffer/MediaBuffer.h"
+
 #include <algorithm>
 #include <utility>
 

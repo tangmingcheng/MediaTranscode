@@ -8,7 +8,7 @@ FFmpegFrameBuffer::FFmpegFrameBuffer(::media::ffmpeg::FramePtr frame)
     : m_frame(std::move(frame))
 {
     setPayloadKind(MediaPayloadKind::Frame);
-    if (m_frame && m_frame->key_frame) {
+    if (m_frame && (m_frame->flags & AV_FRAME_FLAG_KEY)) {
         addFlags(MediaBufferFlag::KeyFrame);
     }
 }
