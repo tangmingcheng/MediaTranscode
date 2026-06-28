@@ -1,0 +1,136 @@
+#include "internal/graph/runtime/MediaRuntimeNodeFactory.h"
+
+#include "internal/graph/nodes/audio/AudioCopyNode.h"
+#include "internal/graph/nodes/audio/AudioDecodeNode.h"
+#include "internal/graph/nodes/audio/AudioEncodeNode.h"
+#include "internal/graph/nodes/audio/AudioPacketDrainNode.h"
+#include "internal/graph/nodes/audio/AudioPacketNormalizeNode.h"
+#include "internal/graph/nodes/audio/AudioResampleNode.h"
+#include "internal/graph/nodes/audio/AudioStrategyNode.h"
+#include "internal/graph/nodes/demux/DemuxNode.h"
+#include "internal/graph/nodes/demux/StreamSplitNode.h"
+#include "internal/graph/nodes/input/FileInputNode.h"
+#include "internal/graph/nodes/input/RealtimeInputNode.h"
+#include "internal/graph/nodes/lifecycle/EofBarrierNode.h"
+#include "internal/graph/nodes/lifecycle/FinalizeNode.h"
+#include "internal/graph/nodes/lifecycle/FlushNode.h"
+#include "internal/graph/nodes/mux/FileMuxNode.h"
+#include "internal/graph/nodes/mux/RtpMuxNode.h"
+#include "internal/graph/nodes/output/FileOutputNode.h"
+#include "internal/graph/nodes/output/RtpOutputNode.h"
+#include "internal/graph/nodes/output/SdpWriterNode.h"
+#include "internal/graph/nodes/split/FrameRouteNode.h"
+#include "internal/graph/nodes/split/PacketFanoutNode.h"
+#include "internal/graph/nodes/video/HardwareTransferNode.h"
+#include "internal/graph/nodes/video/VideoDecodeNode.h"
+#include "internal/graph/nodes/video/VideoEncodeNode.h"
+#include "internal/graph/nodes/video/VideoFilterNode.h"
+#include "internal/graph/nodes/video/VideoFrameRateNode.h"
+#include "internal/graph/nodes/video/VideoPacketDrainNode.h"
+#include "internal/graph/nodes/video/VideoTimestampNode.h"
+
+namespace media::ffmpeg::graph {
+
+::media::Result<std::unique_ptr<MediaRuntimeNode>> MediaRuntimeNodeFactory::create(const MediaNode& node)
+{
+    switch (node.kind) {
+    case MediaNodeKind::FileInput:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<FileInputNode>(node.id));
+    case MediaNodeKind::RealtimeInput:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<RealtimeInputNode>(node.id));
+    case MediaNodeKind::Demux:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<DemuxNode>(node.id));
+    case MediaNodeKind::StreamSplit:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<StreamSplitNode>(node.id));
+    case MediaNodeKind::PacketFanout:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<PacketFanoutNode>(node.id));
+    case MediaNodeKind::FrameRoute:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<FrameRouteNode>(node.id));
+    case MediaNodeKind::VideoDecode:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<VideoDecodeNode>(node.id));
+    case MediaNodeKind::VideoTimestamp:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<VideoTimestampNode>(node.id));
+    case MediaNodeKind::HardwareTransfer:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<HardwareTransferNode>(node.id));
+    case MediaNodeKind::VideoFrameRate:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<VideoFrameRateNode>(node.id));
+    case MediaNodeKind::VideoFilter:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<VideoFilterNode>(node.id));
+    case MediaNodeKind::VideoEncode:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<VideoEncodeNode>(node.id));
+    case MediaNodeKind::VideoPacketDrain:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<VideoPacketDrainNode>(node.id));
+    case MediaNodeKind::AudioStrategy:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<AudioStrategyNode>(node.id));
+    case MediaNodeKind::AudioCopy:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<AudioCopyNode>(node.id));
+    case MediaNodeKind::AudioDecode:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<AudioDecodeNode>(node.id));
+    case MediaNodeKind::AudioResample:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<AudioResampleNode>(node.id));
+    case MediaNodeKind::AudioEncode:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<AudioEncodeNode>(node.id));
+    case MediaNodeKind::AudioPacketNormalize:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<AudioPacketNormalizeNode>(node.id));
+    case MediaNodeKind::AudioPacketDrain:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<AudioPacketDrainNode>(node.id));
+    case MediaNodeKind::FileMux:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<FileMuxNode>(node.id));
+    case MediaNodeKind::RtpMux:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<RtpMuxNode>(node.id));
+    case MediaNodeKind::FileOutput:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<FileOutputNode>(node.id));
+    case MediaNodeKind::RtpOutput:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<RtpOutputNode>(node.id));
+    case MediaNodeKind::SdpWriter:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<SdpWriterNode>(node.id));
+    case MediaNodeKind::EofBarrier:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<EofBarrierNode>(node.id));
+    case MediaNodeKind::Flush:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<FlushNode>(node.id));
+    case MediaNodeKind::Finalize:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<FinalizeNode>(node.id));
+    default:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            ::media::ErrorInfo::unsupported("MediaRuntimeNodeFactory unsupported node kind"));
+    }
+}
+
+bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
+{
+    switch (kind) {
+    case MediaNodeKind::FileInput:
+    case MediaNodeKind::RealtimeInput:
+    case MediaNodeKind::Demux:
+    case MediaNodeKind::StreamSplit:
+    case MediaNodeKind::PacketFanout:
+    case MediaNodeKind::FrameRoute:
+    case MediaNodeKind::VideoDecode:
+    case MediaNodeKind::VideoTimestamp:
+    case MediaNodeKind::HardwareTransfer:
+    case MediaNodeKind::VideoFrameRate:
+    case MediaNodeKind::VideoFilter:
+    case MediaNodeKind::VideoEncode:
+    case MediaNodeKind::VideoPacketDrain:
+    case MediaNodeKind::AudioStrategy:
+    case MediaNodeKind::AudioCopy:
+    case MediaNodeKind::AudioDecode:
+    case MediaNodeKind::AudioResample:
+    case MediaNodeKind::AudioEncode:
+    case MediaNodeKind::AudioPacketNormalize:
+    case MediaNodeKind::AudioPacketDrain:
+    case MediaNodeKind::FileMux:
+    case MediaNodeKind::RtpMux:
+    case MediaNodeKind::FileOutput:
+    case MediaNodeKind::RtpOutput:
+    case MediaNodeKind::SdpWriter:
+    case MediaNodeKind::EofBarrier:
+    case MediaNodeKind::Flush:
+    case MediaNodeKind::Finalize:
+        return true;
+    default:
+        return false;
+    }
+}
+
+} // namespace media::ffmpeg::graph

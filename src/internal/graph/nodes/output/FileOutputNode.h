@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/FFmpegRAII.h"
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 
 namespace media::ffmpeg::graph {
@@ -11,6 +12,13 @@ public:
 
 protected:
     ::media::Status onProcess(MediaGraphExecutionContext& context) override;
+
+private:
+    ::media::Status openOutput(MediaGraphExecutionContext& context);
+
+private:
+    bool m_emitted = false;
+    ::media::ffmpeg::OutputFormatContextPtr m_context;
 };
 
 } // namespace media::ffmpeg::graph

@@ -30,6 +30,7 @@ public:
 
     ::media::Status compile(MediaGraph graph);
     ::media::Status registerRuntimeNode(std::unique_ptr<MediaRuntimeNode> node);
+    ::media::Status registerDefaultRuntimeNodes();
 
     void setThreadingPolicy(MediaThreadingPolicy policy) noexcept;
     const MediaThreadingPolicy& threadingPolicy() const noexcept;

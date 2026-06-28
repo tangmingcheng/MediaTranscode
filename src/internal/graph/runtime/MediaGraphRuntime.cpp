@@ -1,6 +1,7 @@
 #include "internal/graph/runtime/MediaGraphRuntime.h"
 
 #include "internal/graph/runtime/MediaGraphLifecycle.h"
+#include "internal/graph/runtime/MediaRuntimeNodeFactory.h"
 
 #include <utility>
 
@@ -15,6 +16,7 @@ namespace media::ffmpeg::graph {
     }
 
     m_context.reset();
+    m_scheduler.clear();
     m_graph = std::move(graph);
 
     auto status = m_context.compile(m_graph);
@@ -30,6 +32,38 @@ namespace media::ffmpeg::graph {
 ::media::Status MediaGraphRuntime::registerRuntimeNode(std::unique_ptr<MediaRuntimeNode> node)
 {
     return m_scheduler.registerNode(std::move(node));
+}
+
+::media::Status MediaGraphRuntime::registerDefaultRuntimeNodes()
+{
+    if (!m_context.compiled()) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::notInitialized("MediaGraphRuntime registerDefaultRuntimeNodes failed: graph is not compiled"));
+    }
+
+    const MediaGraph* currentGraph = m_context.graph();
+    if (!currentGraph) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::notInitialized("MediaGraphRuntime registerDefaultRuntimeNodes failed: graph is null"));
+    }
+
+    for (const MediaNode& node : currentGraph->nodes()) {
+        if (m_scheduler.findNode(node.id)) {
+            continue;
+        }
+
+        auto runtimeNode = MediaRuntimeNodeFactory::create(node);
+        if (!runtimeNode) {
+            return ::media::Status::failure(runtimeNode.error());
+        }
+
+        auto status = m_scheduler.registerNode(std::move(runtimeNode).value());
+        if (!status) {
+            return status;
+        }
+    }
+
+    return ::media::Status::success();
 }
 
 void MediaGraphRuntime::setThreadingPolicy(MediaThreadingPolicy policy) noexcept
