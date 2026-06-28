@@ -6,8 +6,9 @@
 #include <utility>
 
 namespace media::ffmpeg::graph {
-
 namespace {
+
+constexpr std::size_t kIdleThreshold = 16;
 
 struct ChannelActivitySnapshot {
     std::uint64_t pushed = 0;
@@ -178,30 +179,18 @@ const MediaThreadingPolicy& MediaGraphRuntime::threadingPolicy() const noexcept
     return m_scheduler.processOnce(m_context);
 }
 
-::media::Result<MediaGraphRunLoopResult> MediaGraphRuntime::runUntil(MediaGraphRunLoopOptions options,
-                                                                      MediaGraphRunLoopStopPredicate stopPredicate)
+::media::Result<MediaGraphRunLoopResult> MediaGraphRuntime::runUntilIdle()
 {
     if (m_state != MediaGraphRuntimeState::Running) {
         return ::media::Result<MediaGraphRunLoopResult>::failure(
-            ::media::ErrorInfo::notInitialized("MediaGraphRuntime runUntil failed: runtime is not running"));
+            ::media::ErrorInfo::notInitialized("MediaGraphRuntime runUntilIdle failed: runtime is not running"));
     }
-
-    if (options.idleThreshold == 0) {
-        options.idleThreshold = 1;
-    }
-
-    const bool bounded = options.maxIterations > 0;
 
     MediaGraphRunLoopResult result;
     ChannelActivitySnapshot previous = captureChannelActivity(m_context);
     copySnapshotToResult(previous, result);
 
-    if (stopPredicate && stopPredicate(result)) {
-        result.stoppedBecausePredicate = true;
-        return ::media::Result<MediaGraphRunLoopResult>::success(result);
-    }
-
-    while (!bounded || result.iterations < options.maxIterations) {
+    for (;;) {
         auto status = processOnce();
         if (!status) {
             return ::media::Result<MediaGraphRunLoopResult>::failure(status.error());
@@ -215,30 +204,16 @@ const MediaThreadingPolicy& MediaGraphRuntime::threadingPolicy() const noexcept
         const bool noActivity = sameChannelActivity(previous, current) && current.queued == 0;
         if (noActivity) {
             ++result.idleIterations;
+            if (result.idleIterations >= kIdleThreshold) {
+                result.stoppedBecauseIdle = true;
+                return ::media::Result<MediaGraphRunLoopResult>::success(result);
+            }
         } else {
             result.idleIterations = 0;
         }
 
         previous = current;
-
-        if (stopPredicate && stopPredicate(result)) {
-            result.stoppedBecausePredicate = true;
-            return ::media::Result<MediaGraphRunLoopResult>::success(result);
-        }
-
-        if (options.stopOnIdle && result.idleIterations >= options.idleThreshold) {
-            result.stoppedBecauseIdle = true;
-            return ::media::Result<MediaGraphRunLoopResult>::success(result);
-        }
     }
-
-    result.stoppedBecauseMaxIterations = true;
-    return ::media::Result<MediaGraphRunLoopResult>::success(result);
-}
-
-::media::Result<MediaGraphRunLoopResult> MediaGraphRuntime::runUntilIdle(MediaGraphRunLoopOptions options)
-{
-    return runUntil(options, {});
 }
 
 ::media::Status MediaGraphRuntime::flush()
