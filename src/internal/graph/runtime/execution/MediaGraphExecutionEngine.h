@@ -25,7 +25,7 @@ public:
 
     ::media::Status start();
     ::media::Status processOnce();
-    ::media::Result<MediaGraphExecutionResult> runUntilIdle();
+    ::media::Result<MediaGraphExecutionResult> run();
     ::media::Status stop();
     void abort() noexcept;
     void reset();
