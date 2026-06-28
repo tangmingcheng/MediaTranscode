@@ -1,6 +1,7 @@
 #include "internal/graph/builder/local/LocalFileTranscodeGraphBuilder.h"
 #include "internal/graph/runtime/MediaGraphRuntime.h"
 
+#include <cstdlib>
 #include <iostream>
 #include <string>
 #include <utility>
@@ -9,14 +10,14 @@ using namespace media::ffmpeg::graph;
 
 namespace {
 
-std::string argValue(int argc, char** argv, const std::string& key)
+std::string argValue(int argc, char** argv, const std::string& key, const std::string& fallback = {})
 {
     for (int i = 1; i + 1 < argc; ++i) {
         if (std::string(argv[i]) == key) {
             return argv[i + 1];
         }
     }
-    return {};
+    return fallback;
 }
 
 bool hasArg(int argc, char** argv, const std::string& key)
@@ -27,6 +28,12 @@ bool hasArg(int argc, char** argv, const std::string& key)
         }
     }
     return false;
+}
+
+int intArg(int argc, char** argv, const std::string& key, int fallback)
+{
+    const std::string value = argValue(argc, argv, key);
+    return value.empty() ? fallback : std::atoi(value.c_str());
 }
 
 int failStatus(const char* action, const ::media::Status& status)
@@ -42,18 +49,59 @@ int failResult(const char* action, const ::media::Result<T>& result)
     return 1;
 }
 
+LocalFileTranscodeOptions parseOptions(int argc, char** argv)
+{
+    LocalFileTranscodeOptions options;
+    options.inputUrl = argValue(argc, argv, "--input");
+    options.outputUrl = argValue(argc, argv, "--output");
+    options.outputFormat = argValue(argc, argv, "--format");
+    options.includeVideo = !hasArg(argc, argv, "--no-video");
+    options.includeAudio = !hasArg(argc, argv, "--no-audio");
+    options.audioTranscode = hasArg(argc, argv, "--audio-transcode");
+    options.disableHardware = hasArg(argc, argv, "--disable-hw");
+    options.useHardwareTransfer = !options.disableHardware;
+    options.videoCodec = argValue(argc, argv, "--video-codec", options.videoCodec);
+    options.videoEncoder = argValue(argc, argv, "--encoder", options.videoEncoder);
+    options.rateControlMode = argValue(argc, argv, "--rc", options.rateControlMode);
+    options.speedPreset = argValue(argc, argv, "--preset", options.speedPreset);
+    options.profile = argValue(argc, argv, "--profile", options.profile);
+    options.tune = argValue(argc, argv, "--tune", options.tune);
+    options.level = argValue(argc, argv, "--level", options.level);
+    options.width = intArg(argc, argv, "--width", options.width);
+    options.height = intArg(argc, argv, "--height", options.height);
+    options.fpsNum = intArg(argc, argv, "--fps", options.fpsNum);
+    options.videoBitrateKbps = intArg(argc, argv, "--bitrate", options.videoBitrateKbps);
+    options.crf = intArg(argc, argv, "--crf", options.crf);
+    options.quality = intArg(argc, argv, "--quality", options.quality);
+    options.gop = intArg(argc, argv, "--gop", options.gop);
+    options.maxBFrames = intArg(argc, argv, "--bframes", options.maxBFrames);
+    options.audioCodec = argValue(argc, argv, "--audio-codec", options.audioCodec);
+    options.audioBitrateKbps = intArg(argc, argv, "--audio-bitrate", options.audioBitrateKbps);
+    options.audioSampleRate = intArg(argc, argv, "--sample-rate", options.audioSampleRate);
+    options.audioChannels = intArg(argc, argv, "--channels", options.audioChannels);
+    return options;
+}
+
 } // namespace
 
 int main(int argc, char** argv)
 {
     if (argc < 5 || hasArg(argc, argv, "--help") || hasArg(argc, argv, "-h")) {
-        std::cout << "Usage: media_transcode_graph_transcode_cli --input in.mp4 --output out.mp4\n";
+        std::cout << "Usage: media_transcode_graph_transcode_cli --input in.mp4 --output out.mp4 [options]\n";
         return argc < 5 ? 2 : 0;
     }
 
-    LocalFileTranscodeOptions options;
-    options.inputUrl = argValue(argc, argv, "--input");
-    options.outputUrl = argValue(argc, argv, "--output");
+    LocalFileTranscodeOptions options = parseOptions(argc, argv);
+    std::cout << "[CLI] input=" << options.inputUrl
+              << " output=" << options.outputUrl
+              << " video=" << (options.includeVideo ? "on" : "off")
+              << " audio=" << (options.includeAudio ? "on" : "off")
+              << " width=" << options.width
+              << " height=" << options.height
+              << " fps=" << options.fpsNum
+              << " bitrate_kbps=" << options.videoBitrateKbps
+              << " rc=" << options.rateControlMode
+              << '\n';
 
     auto graphResult = LocalFileTranscodeGraphBuilder::build(options);
     if (!graphResult) {
