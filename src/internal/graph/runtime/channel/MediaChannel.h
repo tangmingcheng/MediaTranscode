@@ -44,7 +44,6 @@ public:
     const MediaChannelMetrics& metrics() const noexcept;
 
 private:
-    static std::unique_ptr<MediaQueue> createQueue(const MediaQueuePolicy& policy);
     void refreshQueueMetrics();
 
 private:

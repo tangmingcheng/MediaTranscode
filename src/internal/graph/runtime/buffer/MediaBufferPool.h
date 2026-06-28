@@ -1,43 +1,57 @@
 #pragma once
 
-#include "internal/graph/model/MediaBufferPolicy.h"
-#include "internal/graph/runtime/buffer/MediaBufferAllocator.h"
-#include "internal/graph/runtime/buffer/MediaBufferMetrics.h"
-#include "internal/graph/runtime/buffer/MediaBufferRef.h"
+#include "internal/graph/runtime/buffer/MediaBufferLease.h"
 #include "media_transcode/Result.h"
 
 #include <cstddef>
-#include <memory>
+#include <functional>
 #include <mutex>
 #include <vector>
 
 namespace media::ffmpeg::graph {
 
+struct MediaBufferPoolOptions {
+    std::size_t maxCachedBuffers = 32;
+    bool dropNullBuffers = true;
+};
+
+struct MediaBufferPoolStats {
+    uint64_t acquired = 0;
+    uint64_t reused = 0;
+    uint64_t created = 0;
+    uint64_t released = 0;
+    uint64_t dropped = 0;
+    std::size_t cached = 0;
+    std::size_t peakCached = 0;
+};
+
 class MediaBufferPool final {
 public:
-    MediaBufferPool() = default;
-    explicit MediaBufferPool(MediaBufferPolicy policy);
+    using Factory = std::function<MediaBufferRef()>;
+
+    explicit MediaBufferPool(Factory factory = {}, MediaBufferPoolOptions options = {});
 
     MediaBufferPool(const MediaBufferPool&) = delete;
     MediaBufferPool& operator=(const MediaBufferPool&) = delete;
 
-    void setAllocator(std::unique_ptr<MediaBufferAllocator> allocator);
-    void setPolicy(MediaBufferPolicy policy);
-
-    ::media::Result<MediaBufferRef> acquire();
+    ::media::Result<MediaBufferLease> acquire();
     void release(MediaBufferRef buffer);
     void clear();
+    void trim(std::size_t maxCachedBuffers);
 
-    std::size_t size() const;
-    const MediaBufferPolicy& policy() const noexcept;
-    const MediaBufferMetrics& metrics() const noexcept;
+    std::size_t cached() const;
+    const MediaBufferPoolOptions& options() const noexcept;
+    MediaBufferPoolStats stats() const;
 
 private:
-    MediaBufferPolicy m_policy;
-    std::unique_ptr<MediaBufferAllocator> m_allocator;
+    void refreshCachedStatsLocked();
+
+private:
+    Factory m_factory;
+    MediaBufferPoolOptions m_options;
     mutable std::mutex m_mutex;
-    std::vector<MediaBufferRef> m_available;
-    MediaBufferMetrics m_metrics;
+    std::vector<MediaBufferRef> m_cached;
+    MediaBufferPoolStats m_stats;
 };
 
 } // namespace media::ffmpeg::graph

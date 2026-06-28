@@ -4,99 +4,109 @@
 
 namespace media::ffmpeg::graph {
 
-MediaBufferPool::MediaBufferPool(MediaBufferPolicy policy)
-    : m_policy(std::move(policy))
+MediaBufferPool::MediaBufferPool(Factory factory, MediaBufferPoolOptions options)
+    : m_factory(std::move(factory))
+    , m_options(options)
 {
 }
 
-void MediaBufferPool::setAllocator(std::unique_ptr<MediaBufferAllocator> allocator)
+::media::Result<MediaBufferLease> MediaBufferPool::acquire()
 {
-    std::lock_guard lock(m_mutex);
-    m_allocator = std::move(allocator);
-    m_available.clear();
-    m_metrics.pooledBuffers = 0;
-}
+    MediaBufferRef buffer;
 
-void MediaBufferPool::setPolicy(MediaBufferPolicy policy)
-{
-    std::lock_guard lock(m_mutex);
-    m_policy = std::move(policy);
-}
-
-::media::Result<MediaBufferRef> MediaBufferPool::acquire()
-{
-    std::lock_guard lock(m_mutex);
-
-    if (!m_available.empty()) {
-        MediaBufferRef buffer = std::move(m_available.back());
-        m_available.pop_back();
-        m_metrics.reusedBuffers++;
-        m_metrics.pooledBuffers = m_available.size();
-        return ::media::Result<MediaBufferRef>::success(std::move(buffer));
+    {
+        std::lock_guard lock(m_mutex);
+        ++m_stats.acquired;
+        if (!m_cached.empty()) {
+            buffer = std::move(m_cached.back());
+            m_cached.pop_back();
+            ++m_stats.reused;
+            refreshCachedStatsLocked();
+        }
     }
 
-    if (!m_allocator) {
-        return ::media::Result<MediaBufferRef>::failure(
-            ::media::ErrorInfo::notInitialized("MediaBufferPool acquire failed: allocator is null"));
+    if (!buffer) {
+        if (!m_factory) {
+            return ::media::Result<MediaBufferLease>::failure(
+                ::media::ErrorInfo::notInitialized("MediaBufferPool acquire failed: factory is not set"));
+        }
+
+        buffer = m_factory();
+        if (!buffer) {
+            return ::media::Result<MediaBufferLease>::failure(
+                ::media::ErrorInfo::invalidArgument("MediaBufferPool acquire failed: factory returned null buffer"));
+        }
+
+        std::lock_guard lock(m_mutex);
+        ++m_stats.created;
     }
 
-    auto result = m_allocator->allocate();
-    if (!result) {
-        return result;
-    }
-
-    m_metrics.allocatedBuffers++;
-    return result;
+    MediaBufferLease lease(
+        std::move(buffer),
+        [this](MediaBufferRef released) {
+            release(std::move(released));
+        });
+    return ::media::Result<MediaBufferLease>::success(std::move(lease));
 }
 
 void MediaBufferPool::release(MediaBufferRef buffer)
 {
-    if (!buffer) {
-        return;
-    }
-
     std::lock_guard lock(m_mutex);
-
-    if (!m_policy.allowPoolReuse || !m_policy.usesPool()) {
-        if (m_allocator) {
-            m_allocator->release(std::move(buffer));
-        }
-        m_metrics.releasedBuffers++;
+    if (!buffer && m_options.dropNullBuffers) {
+        ++m_stats.dropped;
         return;
     }
 
-    if (m_policy.memoryBudget.hasBufferLimit() &&
-        m_available.size() >= m_policy.memoryBudget.maxBuffers) {
-        m_metrics.droppedBuffers++;
+    ++m_stats.released;
+    if (m_cached.size() >= m_options.maxCachedBuffers) {
+        ++m_stats.dropped;
         return;
     }
 
-    m_available.push_back(std::move(buffer));
-    m_metrics.releasedBuffers++;
-    m_metrics.pooledBuffers = m_available.size();
+    m_cached.push_back(std::move(buffer));
+    refreshCachedStatsLocked();
 }
 
 void MediaBufferPool::clear()
 {
     std::lock_guard lock(m_mutex);
-    m_available.clear();
-    m_metrics.pooledBuffers = 0;
+    m_cached.clear();
+    refreshCachedStatsLocked();
 }
 
-std::size_t MediaBufferPool::size() const
+void MediaBufferPool::trim(std::size_t maxCachedBuffers)
 {
     std::lock_guard lock(m_mutex);
-    return m_available.size();
+    while (m_cached.size() > maxCachedBuffers) {
+        m_cached.pop_back();
+        ++m_stats.dropped;
+    }
+    refreshCachedStatsLocked();
 }
 
-const MediaBufferPolicy& MediaBufferPool::policy() const noexcept
+std::size_t MediaBufferPool::cached() const
 {
-    return m_policy;
+    std::lock_guard lock(m_mutex);
+    return m_cached.size();
 }
 
-const MediaBufferMetrics& MediaBufferPool::metrics() const noexcept
+const MediaBufferPoolOptions& MediaBufferPool::options() const noexcept
 {
-    return m_metrics;
+    return m_options;
+}
+
+MediaBufferPoolStats MediaBufferPool::stats() const
+{
+    std::lock_guard lock(m_mutex);
+    return m_stats;
+}
+
+void MediaBufferPool::refreshCachedStatsLocked()
+{
+    m_stats.cached = m_cached.size();
+    if (m_stats.cached > m_stats.peakCached) {
+        m_stats.peakCached = m_stats.cached;
+    }
 }
 
 } // namespace media::ffmpeg::graph

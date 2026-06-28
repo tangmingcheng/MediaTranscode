@@ -1,8 +1,6 @@
 #include "internal/graph/runtime/channel/MediaChannel.h"
 
-#include "internal/graph/runtime/queue/MediaBlockingQueue.h"
-#include "internal/graph/runtime/queue/MediaSpscQueue.h"
-#include "internal/graph/runtime/queue/MediaSpscRingQueue.h"
+#include "internal/graph/runtime/queue/MediaQueueFactory.h"
 
 namespace media::ffmpeg::graph {
 
@@ -13,7 +11,7 @@ MediaChannel::MediaChannel(MediaChannelId id, const MediaEdge& edge)
     , m_format(edge.format)
     , m_time(edge.time)
     , m_hardware(edge.hardware)
-    , m_queue(createQueue(edge.policy.queuePolicy))
+    , m_queue(MediaQueueFactory::create(edge.policy.queuePolicy))
 {
     m_binding.channelId = id;
     m_binding.edgeId = edge.id;
@@ -167,21 +165,6 @@ const MediaHardwareDescriptor& MediaChannel::hardwareDescriptor() const noexcept
 const MediaChannelMetrics& MediaChannel::metrics() const noexcept
 {
     return m_metrics;
-}
-
-std::unique_ptr<MediaQueue> MediaChannel::createQueue(const MediaQueuePolicy& policy)
-{
-    switch (policy.mode) {
-    case MediaQueueMode::SpscRing:
-        return std::make_unique<MediaSpscRingQueue>(policy);
-
-    case MediaQueueMode::Direct:
-    case MediaQueueMode::Blocking:
-    case MediaQueueMode::MpscRing:
-    case MediaQueueMode::Unknown:
-    default:
-        return std::make_unique<MediaBlockingQueue>(policy);
-    }
 }
 
 void MediaChannel::refreshQueueMetrics()
