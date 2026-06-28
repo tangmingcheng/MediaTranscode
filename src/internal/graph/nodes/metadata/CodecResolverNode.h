@@ -2,6 +2,8 @@
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 
+struct AVFormatContext;
+
 namespace media::ffmpeg::graph {
 
 class CodecResolverNode final : public FFmpegNodeRuntime {
