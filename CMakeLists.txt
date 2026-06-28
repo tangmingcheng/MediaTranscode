@@ -3,14 +3,12 @@ cmake_minimum_required(VERSION 3.21.1)
 project(MediaTranscode LANGUAGES CXX)
 
 set(TARGET_CORE "media_transcode_core")
-set(TARGET_LOCAL_TRANSCODE_PROBE "media_transcode_local_transcode_probe")
+set(TARGET_GRAPH_DAG_PROBE "media_transcode_graph_dag_probe")
 set(THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/3rds")
 
-option(MEDIA_TRANSCODE_BUILD_EXAMPLES "Build small public API examples" ON)
-option(MEDIA_TRANSCODE_BUILD_TOOLS "Build internal validation/debug tools" ON)
-option(MEDIA_TRANSCODE_BUILD_P1_TOOLS "Build internal P1 realtime debug tools" ON)
-option(MEDIA_TRANSCODE_BUILD_TESTS "Build MediaTranscode tests" ON)
-option(MEDIA_TRANSCODE_ENABLE_INTEGRATION_TESTS "Build and register integration tests" ON)
+option(MEDIA_TRANSCODE_BUILD_GRAPH_TOOLS "Build graph DAG validation/debug tools" ON)
+option(MEDIA_TRANSCODE_BUILD_TESTS "Build MediaTranscode tests" OFF)
+option(MEDIA_TRANSCODE_ENABLE_INTEGRATION_TESTS "Build and register integration tests" OFF)
 option(MEDIA_TRANSCODE_ENABLE_HARDWARE_TESTS "Enable hardware-dependent tests" OFF)
 
 set(MEDIA_TRANSCODE_TEST_SAMPLES_DIR
@@ -24,126 +22,14 @@ if(POLICY CMP0141)
     set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<IF:$<AND:$<C_COMPILER_ID:MSVC>,$<CXX_COMPILER_ID:MSVC>>,$<$<CONFIG:Debug,RelWithDebInfo>:EditAndContinue>,$<$<CONFIG:Debug,RelWithDebInfo>:ProgramDatabase>>")
 endif()
 
+file(GLOB_RECURSE MEDIA_TRANSCODE_GRAPH_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/internal/graph/*.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/internal/graph/*.h"
+)
+list(SORT MEDIA_TRANSCODE_GRAPH_SOURCES)
+
 add_library(${TARGET_CORE} STATIC
-    src/MediaTranscode.cpp
-    src/local/FFmpegLocalFileTranscodeEngine.cpp
-    src/local/FFmpegLocalFileTranscodeEngine.h
-    src/local/FFmpegLocalTranscodeRuntime.cpp
-    src/local/FFmpegLocalTranscodeRuntime.h
-    src/realtime/FFmpegRealtimeStreamTranscodeEngine.cpp
-    src/realtime/FFmpegRealtimeStreamTranscodeEngine.h
-    src/realtime/FFmpegRealtimeVideoPipelineRuntime.cpp
-    src/realtime/FFmpegRealtimeVideoPipelineRuntime.h
-    src/internal/TranscodeTypes.h
-    src/internal/core/video/FFmpegVideoEncodedPacketDrainStage.h
-    src/internal/core/video/FFmpegVideoProcessingPipeline.cpp
-    src/internal/core/video/FFmpegVideoProcessingPipeline.h
-    src/internal/graph/nodes/output/packet/PacketOutputGraph.h
-    src/internal/graph/nodes/output/packet/PacketOutputGraphController.h
-    src/internal/graph/nodes/output/packet/PacketOutputNode.h
-    src/internal/input/FFmpegRealtimeInputSource.cpp
-    src/internal/input/FFmpegRealtimeInputSource.h
-    src/internal/input/FFmpegRealtimeInterruptController.cpp
-    src/internal/input/FFmpegRealtimeInterruptController.h
-    src/internal/output/builders/rtp/FFmpegRtpUrlBuilder.cpp
-    src/internal/output/builders/rtp/FFmpegRtpUrlBuilder.h
-    src/internal/output/capabilities/audio/AudioOutputStreamProvider.h
-    src/internal/output/capabilities/video/VideoOutputStreamProvider.h
-    src/internal/output/muxers/rtp/FFmpegRtpMuxer.cpp
-    src/internal/output/muxers/rtp/FFmpegRtpMuxer.h
-    src/internal/output/nodes/file/FFmpegFileOutputNode.h
-    src/internal/output/nodes/rtp/FFmpegRtpOutputNode.h
-    src/internal/output/sessions/file/FFmpegFileOutputSession.cpp
-    src/internal/output/sessions/file/FFmpegFileOutputSession.h
-    src/internal/output/writers/sdp/FFmpegSdpWriter.cpp
-    src/internal/output/writers/sdp/FFmpegSdpWriter.h
-    src/internal/FFmpegAudioAdapter.cpp
-    src/internal/FFmpegAudioAdapter.h
-    src/internal/FFmpegAudioCopyPipeline.cpp
-    src/internal/FFmpegAudioCopyPipeline.h
-    src/internal/FFmpegAudioEncodePipeline.cpp
-    src/internal/FFmpegAudioEncodePipeline.h
-    src/internal/FFmpegAudioFifo.cpp
-    src/internal/FFmpegAudioFifo.h
-    src/internal/FFmpegAudioPacketWriter.cpp
-    src/internal/FFmpegAudioPacketWriter.h
-    src/internal/FFmpegAudioPipeline.cpp
-    src/internal/FFmpegAudioPipeline.h
-    src/internal/FFmpegAudioPipelineStrategy.cpp
-    src/internal/FFmpegAudioPipelineStrategy.h
-    src/internal/FFmpegAudioPipelineTypes.h
-    src/internal/FFmpegAudioProcessDiagnostics.cpp
-    src/internal/FFmpegAudioProcessDiagnostics.h
-    src/internal/FFmpegAudioStrategyPlanner.cpp
-    src/internal/FFmpegAudioStrategyPlanner.h
-    src/internal/FFmpegBufferSourceMetadataApplier.cpp
-    src/internal/FFmpegBufferSourceMetadataApplier.h
-    src/internal/FFmpegCapability.cpp
-    src/internal/FFmpegCapability.h
-    src/internal/FFmpegEncoderCapabilityMatrix.cpp
-    src/internal/FFmpegEncoderCapabilityMatrix.h
-    src/internal/FFmpegError.h
-    src/internal/FFmpegHardwareBackend.cpp
-    src/internal/FFmpegHardwareBackend.h
-    src/internal/FFmpegHardwareContext.cpp
-    src/internal/FFmpegHardwareContext.h
-    src/internal/FFmpegHardwareDecoder.cpp
-    src/internal/FFmpegHardwareDecoder.h
-    src/internal/FFmpegHardwareEncoderSelector.cpp
-    src/internal/FFmpegHardwareEncoderSelector.h
-    src/internal/FFmpegHardwareFrames.cpp
-    src/internal/FFmpegHardwareFrames.h
-    src/internal/FFmpegHardwareTypes.h
-    src/internal/FFmpegHardwareVideoFilterGraph.cpp
-    src/internal/FFmpegHardwareVideoFilterGraph.h
-    src/internal/FFmpegHardwareVideoFilterPipeline.cpp
-    src/internal/FFmpegHardwareVideoFilterPipeline.h
-    src/internal/FFmpegPhaseDiagnostics.cpp
-    src/internal/FFmpegPhaseDiagnostics.h
-    src/internal/FFmpegPipelinePlanner.cpp
-    src/internal/FFmpegPipelinePlanner.h
-    src/internal/FFmpegRAII.h
-    src/internal/FFmpegTimelineNormalizer.cpp
-    src/internal/FFmpegTimelineNormalizer.h
-    src/internal/FFmpegTranscodeLoopDiagnostics.cpp
-    src/internal/FFmpegTranscodeLoopDiagnostics.h
-    src/internal/FFmpegUtils.cpp
-    src/internal/FFmpegUtils.h
-    src/internal/FFmpegVideoAdapter.cpp
-    src/internal/FFmpegVideoAdapter.h
-    src/internal/FFmpegVideoBitrateControlPlanner.cpp
-    src/internal/FFmpegVideoBitrateControlPlanner.h
-    src/internal/FFmpegVideoBitrateOptionAdapter.cpp
-    src/internal/FFmpegVideoBitrateOptionAdapter.h
-    src/internal/FFmpegVideoColorMetadata.cpp
-    src/internal/FFmpegVideoColorMetadata.h
-    src/internal/FFmpegVideoDecoderStage.cpp
-    src/internal/FFmpegVideoDecoderStage.h
-    src/internal/FFmpegVideoEncodeOptionsApplier.cpp
-    src/internal/FFmpegVideoEncodeOptionsApplier.h
-    src/internal/FFmpegVideoEncoderSelector.cpp
-    src/internal/FFmpegVideoEncoderSelector.h
-    src/internal/FFmpegVideoEncoderStage.cpp
-    src/internal/FFmpegVideoEncoderStage.h
-    src/internal/FFmpegVideoFilterGraph.cpp
-    src/internal/FFmpegVideoFilterGraph.h
-    src/internal/FFmpegVideoFilterStage.cpp
-    src/internal/FFmpegVideoFilterStage.h
-    src/internal/FFmpegVideoFlushDiagnostics.cpp
-    src/internal/FFmpegVideoFlushDiagnostics.h
-    src/internal/FFmpegVideoFrameRateStage.cpp
-    src/internal/FFmpegVideoFrameRateStage.h
-    src/internal/FFmpegVideoFrameRoutingStrategy.cpp
-    src/internal/FFmpegVideoFrameRoutingStrategy.h
-    src/internal/FFmpegVideoHardwareTransferStage.cpp
-    src/internal/FFmpegVideoHardwareTransferStage.h
-    src/internal/FFmpegVideoInputMetadata.cpp
-    src/internal/FFmpegVideoInputMetadata.h
-    src/internal/FFmpegVideoTimestampStage.cpp
-    src/internal/FFmpegVideoTimestampStage.h
-    include/media_transcode/MediaTranscode.h
-    include/media_transcode/MediaTypes.h
-    include/media_transcode/LocalVideoTranscode.h
+    ${MEDIA_TRANSCODE_GRAPH_SOURCES}
     include/media_transcode/Result.h
 )
 
@@ -167,8 +53,6 @@ add_library(thirdparty_spdlog INTERFACE)
 target_include_directories(thirdparty_spdlog INTERFACE
     "${THIRD_PARTY_DIR}/include"
 )
-
-target_link_libraries(${TARGET_CORE} PRIVATE thirdparty_spdlog)
 
 add_library(thirdparty_ffmpeg INTERFACE)
 
@@ -224,11 +108,19 @@ else()
     )
 endif()
 
-target_link_libraries(${TARGET_CORE} PUBLIC thirdparty_ffmpeg)
+target_link_libraries(${TARGET_CORE}
+    PUBLIC
+        thirdparty_ffmpeg
+    PRIVATE
+        thirdparty_spdlog
+)
 
 function(media_transcode_configure_app target_name)
     target_link_libraries(${target_name} PRIVATE MediaTranscode::core)
     target_compile_features(${target_name} PRIVATE cxx_std_20)
+    target_include_directories(${target_name} PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    )
     if(MSVC)
         target_compile_options(${target_name} PRIVATE /utf-8)
     endif()
@@ -241,58 +133,13 @@ function(media_transcode_configure_test target_name)
     )
 endfunction()
 
-if(MEDIA_TRANSCODE_BUILD_TOOLS)
-    add_executable(${TARGET_LOCAL_TRANSCODE_PROBE}
-        tools/local_transcode_probe/main.cpp
+if(MEDIA_TRANSCODE_BUILD_GRAPH_TOOLS)
+    add_executable(${TARGET_GRAPH_DAG_PROBE}
+        tools/graph_dag_probe/main.cpp
     )
-    media_transcode_configure_app(${TARGET_LOCAL_TRANSCODE_PROBE})
-    target_link_libraries(${TARGET_LOCAL_TRANSCODE_PROBE} PRIVATE thirdparty_spdlog)
-endif()
-
-if(MEDIA_TRANSCODE_BUILD_EXAMPLES)
-    add_executable(media_transcode_example_local_sync
-        examples/api/local_transcode_sync.cpp
-    )
-    media_transcode_configure_app(media_transcode_example_local_sync)
+    media_transcode_configure_app(${TARGET_GRAPH_DAG_PROBE})
 endif()
 
 if(MEDIA_TRANSCODE_BUILD_TESTS)
     enable_testing()
-
-    add_executable(media_transcode_unit_tests
-        tests/unit/test_local_transcode_api.cpp
-        tests/common/TestAssert.h
-    )
-    media_transcode_configure_test(media_transcode_unit_tests)
-    add_test(
-        NAME media_transcode_unit_tests
-        COMMAND $<TARGET_FILE:media_transcode_unit_tests>
-    )
-
-    add_executable(media_transcode_missing_input_tests
-        tests/integration/test_local_transcode_missing_input.cpp
-        tests/common/TestAssert.h
-    )
-    media_transcode_configure_test(media_transcode_missing_input_tests)
-    add_test(
-        NAME media_transcode_missing_input_tests
-        COMMAND $<TARGET_FILE:media_transcode_missing_input_tests>
-    )
-
-    if(MEDIA_TRANSCODE_ENABLE_INTEGRATION_TESTS)
-        add_executable(media_transcode_local_transcode_integration_tests
-            tests/integration/test_local_transcode_integration.cpp
-            tests/common/MediaProbe.cpp
-            tests/common/MediaProbe.h
-            tests/common/TestAssert.h
-        )
-        media_transcode_configure_test(media_transcode_local_transcode_integration_tests)
-        add_test(
-            NAME media_transcode_local_transcode_integration_tests
-            COMMAND $<TARGET_FILE:media_transcode_local_transcode_integration_tests> "${MEDIA_TRANSCODE_TEST_SAMPLES_DIR}"
-        )
-        set_tests_properties(media_transcode_local_transcode_integration_tests PROPERTIES
-            SKIP_RETURN_CODE 77
-        )
-    endif()
 endif()
