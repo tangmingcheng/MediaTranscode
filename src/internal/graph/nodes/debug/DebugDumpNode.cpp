@@ -14,7 +14,16 @@ MediaNodeKind DebugDumpNode::staticKind() noexcept
 
 ::media::Status DebugDumpNode::onProcess(MediaGraphExecutionContext& context)
 {
-    return forwardFirstInputToAllOutputs(context);
+    auto buffer = tryPopFirstInput(context);
+    if (!buffer) {
+        return ::media::Status::success();
+    }
+
+    if (outputChannels(context).empty()) {
+        return ::media::Status::success();
+    }
+
+    return pushToAllOutputs(context, buffer.value());
 }
 
 } // namespace media::ffmpeg::graph
