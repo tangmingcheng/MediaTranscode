@@ -1,8 +1,10 @@
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 
 #include "internal/graph/core/MediaGraphValidation.h"
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 
 #include <deque>
+#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -11,7 +13,10 @@ namespace media::ffmpeg::graph {
 
 ::media::Status MediaGraphExecutionContext::compile(const MediaGraph& graph)
 {
+    const bool diagnosticsEnabled = m_diagnosticsEnabled;
     reset();
+    m_diagnosticsEnabled = diagnosticsEnabled;
+    mediaGraphDiagnosticSetGlobalEnabled(m_diagnosticsEnabled);
 
     auto report = MediaGraphValidation::validate(graph);
     if (!report.ok()) {
@@ -35,6 +40,22 @@ namespace media::ffmpeg::graph {
 
     m_graph = &graph;
     m_compiled = true;
+
+    std::ostringstream out;
+    out << "compiled nodes=" << graph.nodeCount()
+        << " edges=" << graph.edgeCount()
+        << " channels=" << m_channels.channels().size()
+        << " execution_order=";
+    bool first = true;
+    for (MediaNodeId nodeId : m_executionOrder) {
+        if (!first) {
+            out << "->";
+        }
+        first = false;
+        out << nodeId.value;
+    }
+    mediaGraphDiagnosticLog(m_diagnosticsEnabled, MediaGraphDiagnosticPhase::RuntimeLifecycle, out.str());
+
     return ::media::Status::success();
 }
 
@@ -44,6 +65,18 @@ void MediaGraphExecutionContext::reset()
     m_channels.clear();
     m_executionOrder.clear();
     m_compiled = false;
+    mediaGraphDiagnosticSetGlobalEnabled(m_diagnosticsEnabled);
+}
+
+void MediaGraphExecutionContext::setDiagnosticsEnabled(bool enabled) noexcept
+{
+    m_diagnosticsEnabled = enabled;
+    mediaGraphDiagnosticSetGlobalEnabled(enabled);
+}
+
+bool MediaGraphExecutionContext::diagnosticsEnabled() const noexcept
+{
+    return m_diagnosticsEnabled;
 }
 
 bool MediaGraphExecutionContext::compiled() const noexcept
@@ -165,6 +198,12 @@ std::vector<MediaChannel*> MediaGraphExecutionContext::outputChannels(MediaNodeI
         auto result = m_channels.createChannel(edge);
         if (!result) {
             return ::media::Status::failure(result.error());
+        }
+
+        if (MediaChannel* channel = result.value()) {
+            mediaGraphDiagnosticLog(m_diagnosticsEnabled,
+                                    MediaGraphDiagnosticPhase::RuntimeChannel,
+                                    std::string("create ") + mediaGraphDiagnosticDescribeChannel(*channel));
         }
     }
 
