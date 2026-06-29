@@ -533,4 +533,22 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
                              " hw_device_ctx=" + (encoderContext->hw_device_ctx ? "set" : "none") +
                              " hw_frames_ctx=" + (encoderContext->hw_frames_ctx ? "set" : "none"));
 
-    ...
+        const int openRet = avcodec_open2(encoderContext.get(), encoder, nullptr);
+        if (openRet < 0) {
+            lastError = std::string(encoder->name ? encoder->name : "unknown") + ": encoder open failed";
+            continue;
+        }
+
+        auto buffer = FFmpegBufferFactory::wrapCodecContext(std::move(encoderContext));
+        if (!buffer) {
+            return ::media::Status::failure(buffer.error());
+        }
+
+        return pushOutput(context, "encoder", std::move(buffer).value());
+    }
+
+    return ::media::Status::failure(
+        ::media::ErrorInfo::unsupported("CodecResolverNode failed to create video encoder: " + lastError));
+}
+
+} // namespace media::ffmpeg::graph
