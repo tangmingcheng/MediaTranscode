@@ -1,5 +1,6 @@
 #include "internal/graph/builder/local/LocalFileTranscodeGraphBuilder.h"
 
+#include "internal/graph/builder/local/LocalFilePlannerOptionBridge.h"
 #include "internal/graph/planner/MediaPipelinePlanner.h"
 
 #include <algorithm>
@@ -166,7 +167,7 @@ void preferSoftwarePlan(MediaPipelinePlan& plan)
         const MediaNodeId hardwareTransfer = graph.addNode(MediaNodeKind::HardwareTransfer, "local.video.hwtransfer", "Local hardware frame transfer");
         const MediaNodeId videoTimestamp = graph.addNode(MediaNodeKind::VideoTimestamp, "local.video.timestamp", "Local video timestamp normalize");
         const MediaNodeId videoFrameRate = graph.addNode(MediaNodeKind::VideoFrameRate, "local.video.framerate", "Local video frame rate control");
-        const MediaNodeId videoFilter = graph.addNode(MediaNodeKind::VideoFilter, "local.video.filter", "Local software video filter");
+        const MediaNodeId videoFilter = graph.addNode(MediaNodeKind::VideoFilter, "local.video.filter", "Local video filter");
         const MediaNodeId videoEncode = graph.addNode(MediaNodeKind::VideoEncode, "local.video.encode", "Local video encode");
 
         applyVideoOptions(graph, codecResolver, options);
@@ -175,7 +176,6 @@ void preferSoftwarePlan(MediaPipelinePlan& plan)
         applyVideoOptions(graph, videoFrameRate, options);
         applyVideoOptions(graph, videoFilter, options);
         applyVideoOptions(graph, videoEncode, options);
-        graph.setNodeOption(videoFilter, "pix_fmt", "yuv420p");
 
         if (videoPlan) {
             auto applyPlanStatus = MediaPipelinePlanner::applyVideoPlanToGraph(graph, videoDecode, videoFilter, videoEncode, *videoPlan);
@@ -183,18 +183,15 @@ void preferSoftwarePlan(MediaPipelinePlan& plan)
                 return ::media::Result<MediaGraph>::failure(applyPlanStatus.error());
             }
 
-            graph.setNodeOption(codecResolver, "decoder", videoPlan->selected.decoder.ffmpegName);
-            graph.setNodeOption(codecResolver, "encoder", videoPlan->selected.encoder.ffmpegName);
-            graph.setNodeOption(codecResolver, "video_codec", videoPlan->outputCodecName);
-            graph.setNodeOption(codecResolver, "pipeline.hardware", videoPlan->selected.decoder.hardware ? "1" : "0");
-            graph.setNodeOption(codecResolver, "pipeline.hwaccel", videoPlan->selected.decoder.hwaccelName);
-            graph.setNodeOption(hardwareTransfer, "pipeline.hardware", videoPlan->selected.decoder.hardware ? "1" : "0");
-            graph.setNodeOption(hardwareTransfer, "pipeline.hwaccel", videoPlan->selected.decoder.hwaccelName);
-        }
-
-        if (!options.videoEncoder.empty()) {
-            graph.setNodeOption(codecResolver, "encoder", options.videoEncoder);
-            graph.setNodeOption(videoEncode, "encoder", options.videoEncoder);
+            LocalFilePlannerNodeIds plannerNodes;
+            plannerNodes.codecResolver = codecResolver;
+            plannerNodes.videoDecode = videoDecode;
+            plannerNodes.hardwareTransfer = hardwareTransfer;
+            plannerNodes.videoTimestamp = videoTimestamp;
+            plannerNodes.videoFrameRate = videoFrameRate;
+            plannerNodes.videoFilter = videoFilter;
+            plannerNodes.videoEncode = videoEncode;
+            applySelectedVideoPlanOptions(graph, plannerNodes, *videoPlan);
         }
 
         graph.addInputPort(codecResolver, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext, true, false);
