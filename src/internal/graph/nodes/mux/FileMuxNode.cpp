@@ -34,6 +34,18 @@ std::string rationalText(AVRational rational)
     return std::to_string(rational.num) + "/" + std::to_string(rational.den);
 }
 
+int codecContextChannelCount(const AVCodecContext* context) noexcept
+{
+    if (!context) {
+        return 0;
+    }
+#if LIBAVUTIL_VERSION_MAJOR >= 57
+    return context->ch_layout.nb_channels;
+#else
+    return context->channels;
+#endif
+}
+
 void muxLog(const std::string& message)
 {
     mediaGraphDiagnosticLog(mediaGraphDiagnosticGlobalEnabled(),
@@ -224,7 +236,7 @@ bool FileMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
         << " width=" << codecContext->width
         << " height=" << codecContext->height
         << " sample_rate=" << codecContext->sample_rate
-        << " channels=" << codecContext->ch_layout.nb_channels
+        << " channels=" << codecContextChannelCount(codecContext)
         << " " << mediaGraphDiagnosticDescribeBuffer(buffer);
     muxLog(out.str());
 
