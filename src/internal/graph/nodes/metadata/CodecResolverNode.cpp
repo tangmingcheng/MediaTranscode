@@ -1,6 +1,7 @@
 #include "internal/graph/nodes/metadata/CodecResolverNode.h"
 
 #include "internal/FFmpegRAII.h"
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
@@ -8,6 +9,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstdint>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -15,7 +17,9 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libavutil/hwcontext.h>
 #include <libavutil/opt.h>
+#include <libavutil/pixdesc.h>
 }
 
 namespace media::ffmpeg::graph {
@@ -38,6 +42,12 @@ int parseIntOption(const MediaNodeOptions* options, const std::string& key, int 
 std::string optionValue(const MediaNodeOptions* options, const std::string& key, std::string fallback = {})
 {
     return options ? options->value(key, std::move(fallback)) : std::move(fallback);
+}
+
+bool truthyOption(const MediaNodeOptions* options, const std::string& key)
+{
+    const std::string value = optionValue(options, key);
+    return value == "1" || value == "true" || value == "yes" || value == "on";
 }
 
 AVCodecID codecIdFromName(const std::string& codecName)
@@ -153,6 +163,69 @@ AVRational resolveFrameRate(AVFormatContext* formatContext, AVStream* stream, co
     return AVRational{ 30, 1 };
 }
 
+AVHWDeviceType deviceTypeFromHwaccelName(const std::string& hwaccel)
+{
+    if (hwaccel.empty()) {
+        return AV_HWDEVICE_TYPE_NONE;
+    }
+    if (hwaccel == "rkmpp") {
+        return AV_HWDEVICE_TYPE_DRM;
+    }
+    return av_hwdevice_find_type_by_name(hwaccel.c_str());
+}
+
+std::string pixelFormatName(AVPixelFormat format)
+{
+    const char* name = av_get_pix_fmt_name(format);
+    return name ? std::string(name) : std::string("unknown");
+}
+
+AVPixelFormat selectHardwarePixelFormat(const AVCodec* decoder, AVHWDeviceType deviceType)
+{
+    if (!decoder || deviceType == AV_HWDEVICE_TYPE_NONE) {
+        return AV_PIX_FMT_NONE;
+    }
+
+    for (int index = 0;; ++index) {
+        const AVCodecHWConfig* config = avcodec_get_hw_config(decoder, index);
+        if (!config) {
+            break;
+        }
+
+        const bool canUseDevice = (config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) != 0;
+        const bool internalOnly = (config->methods & AV_CODEC_HW_CONFIG_METHOD_INTERNAL) != 0;
+        if (canUseDevice && config->device_type == deviceType) {
+            return config->pix_fmt;
+        }
+        if (internalOnly && config->pix_fmt != AV_PIX_FMT_NONE) {
+            return config->pix_fmt;
+        }
+    }
+
+    return AV_PIX_FMT_NONE;
+}
+
+AVPixelFormat plannedHardwareGetFormat(AVCodecContext* context, const AVPixelFormat* formats)
+{
+    const auto* desired = static_cast<const AVPixelFormat*>(context ? context->opaque : nullptr);
+    if (desired && *desired != AV_PIX_FMT_NONE) {
+        for (const AVPixelFormat* current = formats; current && *current != AV_PIX_FMT_NONE; ++current) {
+            if (*current == *desired) {
+                return *current;
+            }
+        }
+    }
+
+    return formats ? formats[0] : AV_PIX_FMT_NONE;
+}
+
+void codecResolverLog(MediaGraphDiagnosticLevel level, const std::string& message)
+{
+    mediaGraphDiagnosticLog(level,
+                            MediaGraphDiagnosticPhase::RuntimeNode,
+                            std::string("codec_resolver.") + message);
+}
+
 } // namespace
 
 CodecResolverNode::CodecResolverNode(MediaNodeId nodeId)
@@ -206,10 +279,22 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
     }
 
     AVStream* stream = formatContext->streams[streamIndex];
-    const AVCodec* decoder = avcodec_find_decoder(stream->codecpar->codec_id);
+    const MediaNodeOptions* options = nodeOptions(context);
+    const std::string plannedDecoder = optionValue(options, "decoder");
+    const bool hardwarePlanned = truthyOption(options, "pipeline.hardware");
+    const std::string hwaccelName = optionValue(options, "pipeline.hwaccel");
+
+    const AVCodec* decoder = nullptr;
+    if (!plannedDecoder.empty() && plannedDecoder != "auto") {
+        decoder = avcodec_find_decoder_by_name(plannedDecoder.c_str());
+    } else {
+        decoder = avcodec_find_decoder(stream->codecpar->codec_id);
+    }
+
     if (!decoder) {
         return ::media::Status::failure(
-            ::media::ErrorInfo::unsupported("CodecResolverNode failed: video decoder not found"));
+            ::media::ErrorInfo::unsupported("CodecResolverNode failed: video decoder not found: " +
+                                           (!plannedDecoder.empty() ? plannedDecoder : std::string(avcodec_get_name(stream->codecpar->codec_id)))));
     }
 
     auto decoderContext = ::media::ffmpeg::makeCodecContext(decoder);
@@ -224,6 +309,41 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
     }
 
     decoderContext->pkt_timebase = stream->time_base;
+
+    m_decoderHardwareDevice.reset();
+    m_decoderHardwarePixelFormat = AV_PIX_FMT_NONE;
+    if (hardwarePlanned) {
+        const AVHWDeviceType deviceType = deviceTypeFromHwaccelName(hwaccelName);
+        m_decoderHardwarePixelFormat = selectHardwarePixelFormat(decoder, deviceType);
+
+        if (deviceType != AV_HWDEVICE_TYPE_NONE) {
+            AVBufferRef* rawDevice = nullptr;
+            const int deviceRet = av_hwdevice_ctx_create(&rawDevice, deviceType, nullptr, nullptr, 0);
+            if (deviceRet < 0) {
+                return FFmpegGraphError::statusFromCode(deviceRet, "av_hwdevice_ctx_create(" + hwaccelName + ")");
+            }
+            m_decoderHardwareDevice = ::media::ffmpeg::BufferRefPtr(rawDevice);
+            decoderContext->hw_device_ctx = av_buffer_ref(m_decoderHardwareDevice.get());
+            if (!decoderContext->hw_device_ctx) {
+                return ::media::Status::failure(
+                    ::media::ErrorInfo::allocationFailed("CodecResolverNode failed: av_buffer_ref(hw_device_ctx)"));
+            }
+        }
+
+        if (m_decoderHardwarePixelFormat != AV_PIX_FMT_NONE) {
+            decoderContext->opaque = &m_decoderHardwarePixelFormat;
+            decoderContext->get_format = plannedHardwareGetFormat;
+        }
+    }
+
+    std::ostringstream out;
+    out << "decoder.open name=" << (decoder->name ? decoder->name : "unknown")
+        << " planned=" << (plannedDecoder.empty() ? "auto" : plannedDecoder)
+        << " hardware=" << (hardwarePlanned ? "true" : "false")
+        << " hwaccel=" << (hwaccelName.empty() ? "none" : hwaccelName)
+        << " hw_pix_fmt=" << pixelFormatName(m_decoderHardwarePixelFormat)
+        << " pkt_tb=" << stream->time_base.num << "/" << stream->time_base.den;
+    codecResolverLog(MediaGraphDiagnosticLevel::State, out.str());
 
     const int openRet = avcodec_open2(decoderContext.get(), decoder, nullptr);
     if (openRet < 0) {
