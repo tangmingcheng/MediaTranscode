@@ -21,12 +21,6 @@ std::string optionValue(const MediaNodeOptions* options, const std::string& key,
     return options ? options->value(key, std::move(fallback)) : std::move(fallback);
 }
 
-bool truthyOption(const MediaNodeOptions* options, const std::string& key)
-{
-    const std::string value = optionValue(options, key);
-    return value == "1" || value == "true" || value == "yes" || value == "on";
-}
-
 std::string pixelFormatName(int format)
 {
     const char* name = av_get_pix_fmt_name(static_cast<AVPixelFormat>(format));
@@ -76,18 +70,17 @@ MediaNodeKind HardwareTransferNode::staticKind() noexcept
             ::media::ErrorInfo::invalidArgument("HardwareTransferNode expected frame buffer"));
     }
 
-    if (!sourceFrame->hw_frames_ctx) {
-        return pushOutput(context, "frame", buffer);
-    }
+    const std::string direction = optionValue(nodeOptions(context), "transfer.direction", "none");
+    const bool hardwareInput = sourceFrame->hw_frames_ctx != nullptr;
 
-    const bool zeroCopy = truthyOption(nodeOptions(context), "pipeline.zero_copy");
-    if (zeroCopy) {
+    if (direction == "none") {
         auto decision = mediaGraphDiagnosticSample(MediaGraphDiagnosticLevel::Flow,
-                                                   "hardware_transfer.zero_copy");
+                                                   "hardware_transfer.none");
         if (decision.shouldLog) {
             std::ostringstream out;
-            out << "zero_copy seq=" << decision.sequence
+            out << "none seq=" << decision.sequence
                 << " fmt=" << pixelFormatName(sourceFrame->format)
+                << " hardware_input=" << (hardwareInput ? "true" : "false")
                 << " pts=" << sourceFrame->pts
                 << " size=" << sourceFrame->width << "x" << sourceFrame->height;
             transferLog(MediaGraphDiagnosticLevel::Flow, out.str());
@@ -95,7 +88,21 @@ MediaNodeKind HardwareTransferNode::staticKind() noexcept
         return pushOutput(context, "frame", buffer);
     }
 
-    return downloadHardwareFrame(context, buffer, sourceFrame);
+    if (direction == "download") {
+        if (!hardwareInput) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument("HardwareTransferNode planner requested download but input frame is not hardware-backed"));
+        }
+        return downloadHardwareFrame(context, buffer, sourceFrame);
+    }
+
+    if (direction == "upload" || direction == "map" || direction == "unmap") {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::unsupported("HardwareTransferNode transfer direction is not implemented yet: " + direction));
+    }
+
+    return ::media::Status::failure(
+        ::media::ErrorInfo::invalidArgument("HardwareTransferNode unknown transfer.direction: " + direction));
 }
 
 ::media::Status HardwareTransferNode::downloadHardwareFrame(MediaGraphExecutionContext& context,
