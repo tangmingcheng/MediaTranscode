@@ -65,21 +65,36 @@ MediaNodeKind VideoTimestampNode::staticKind() noexcept
 
 ::media::Status VideoTimestampNode::onProcess(MediaGraphExecutionContext& context)
 {
-    auto input = tryPopFirstInput(context);
-    if (!input) {
+    if (!m_hasTargetTimeBase) {
+        MediaChannel* codecChannel = context.findInputChannel(nodeId(), "codec");
+        if (!codecChannel) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::notInitialized("VideoTimestampNode codec input channel not found"));
+        }
+
+        MediaBufferRef codecBuffer;
+        if (!codecChannel->tryPop(codecBuffer)) {
+            return ::media::Status::success();
+        }
+        return bindCodecConfig(context, codecBuffer);
+    }
+
+    MediaChannel* frameChannel = context.findInputChannel(nodeId(), "frame");
+    if (!frameChannel) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::notInitialized("VideoTimestampNode frame input channel not found"));
+    }
+
+    MediaBufferRef frameBuffer;
+    if (!frameChannel->tryPop(frameBuffer)) {
         return ::media::Status::success();
     }
 
-    MediaBufferRef buffer = input.value();
-    if (buffer->isEof() || buffer->isFlush()) {
-        return pushToAllOutputs(context, buffer);
+    if (frameBuffer->isEof() || frameBuffer->isFlush()) {
+        return pushToAllOutputs(context, frameBuffer);
     }
 
-    if (auto* codecBuffer = dynamic_cast<FFmpegCodecContextBuffer*>(buffer.get())) {
-        return bindCodecConfig(context, buffer);
-    }
-
-    return normalizeFrame(context, buffer);
+    return normalizeFrame(context, frameBuffer);
 }
 
 ::media::Status VideoTimestampNode::bindCodecConfig(MediaGraphExecutionContext& context, const MediaBufferRef& buffer)
@@ -115,11 +130,6 @@ MediaNodeKind VideoTimestampNode::staticKind() noexcept
 
 ::media::Status VideoTimestampNode::normalizeFrame(MediaGraphExecutionContext& context, const MediaBufferRef& buffer)
 {
-    if (!m_hasTargetTimeBase || !rationalKnown(m_targetTimeBase)) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::notInitialized("VideoTimestampNode requires codec config before frames"));
-    }
-
     AVFrame* frame = FFmpegFrameView::writableFrame(buffer);
     if (!frame) {
         return ::media::Status::failure(
@@ -147,6 +157,7 @@ MediaNodeKind VideoTimestampNode::staticKind() noexcept
 
     MediaTimeDescriptor targetTime = buffer->timeDescriptor();
     targetTime.timeBase = MediaRational{ m_targetTimeBase.num, m_targetTimeBase.den };
+    targetTime.frameRate = MediaRational{};
     buffer->setTimeDescriptor(targetTime);
     buffer->setTimestamps(frame->pts, frame->pkt_dts, frame->duration);
 
