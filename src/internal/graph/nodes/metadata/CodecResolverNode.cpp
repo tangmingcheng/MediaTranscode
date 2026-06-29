@@ -2,6 +2,7 @@
 
 #include "internal/FFmpegRAII.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
+#include "internal/graph/nodes/metadata/CodecResolverHardwareFrames.h"
 #include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
@@ -149,6 +150,25 @@ AVPixelFormat plannedEncoderHardwarePixelFormat(const MediaNodeOptions* options)
     }
 
     return AV_PIX_FMT_NONE;
+}
+
+AVPixelFormat plannedEncoderSoftwarePixelFormat(const MediaNodeOptions* options, AVPixelFormat sourceFormat)
+{
+    const AVPixelFormat hardwareFormat = plannedEncoderHardwarePixelFormat(options);
+    if (hardwareFormat == AV_PIX_FMT_CUDA &&
+        (sourceFormat == AV_PIX_FMT_YUV420P || sourceFormat == AV_PIX_FMT_NONE)) {
+        return AV_PIX_FMT_NV12;
+    }
+
+    if (sourceFormat != AV_PIX_FMT_NONE) {
+        return sourceFormat;
+    }
+
+    if (hardwareFormat == AV_PIX_FMT_CUDA || hardwareFormat == AV_PIX_FMT_D3D11) {
+        return AV_PIX_FMT_NV12;
+    }
+
+    return AV_PIX_FMT_YUV420P;
 }
 
 AVPixelFormat chooseEncoderPixelFormat(const AVCodec* encoder,
@@ -450,6 +470,11 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
             continue;
         }
 
+        const AVPixelFormat plannedHardwareFormat = plannedEncoderHardwarePixelFormat(options);
+        const AVPixelFormat plannedSoftwareFormat = plannedEncoderSoftwarePixelFormat(
+            options,
+            static_cast<AVPixelFormat>(params->format));
+
         encoderContext->width = targetWidth;
         encoderContext->height = targetHeight;
         encoderContext->pix_fmt = encoderPixelFormat;
@@ -464,11 +489,16 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
         encoderContext->color_trc = params->color_trc;
         encoderContext->colorspace = params->color_space;
 
-        if (plannedEncoderHardwarePixelFormat(options) != AV_PIX_FMT_NONE && m_decoderHardwareDevice) {
-            encoderContext->hw_device_ctx = av_buffer_ref(m_decoderHardwareDevice.get());
-            if (!encoderContext->hw_device_ctx) {
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::allocationFailed("CodecResolverNode failed: av_buffer_ref(encoder hw_device_ctx)"));
+        if (plannedHardwareFormat != AV_PIX_FMT_NONE) {
+            auto framesStatus = configureEncoderHardwareFrames(encoderContext.get(),
+                                                               m_decoderHardwareDevice.get(),
+                                                               plannedHardwareFormat,
+                                                               plannedSoftwareFormat,
+                                                               targetWidth,
+                                                               targetHeight,
+                                                               32);
+            if (!framesStatus) {
+                return framesStatus;
             }
         }
 
@@ -496,8 +526,10 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
         codecResolverLog(MediaGraphDiagnosticLevel::State,
                          std::string("encoder.open name=") + (encoder->name ? encoder->name : "unknown") +
                              " pix_fmt=" + pixelFormatName(encoderContext->pix_fmt) +
+                             " sw_format=" + pixelFormatName(plannedSoftwareFormat) +
                              " frame_kind=" + optionValue(options, "encoder.pipeline.frame_kind", "software") +
-                             " hwaccel=" + optionValue(options, "encoder.pipeline.hwaccel", "none"));
+                             " hwaccel=" + optionValue(options, "encoder.pipeline.hwaccel", "none") +
+                             " hw_frames_ctx=" + (encoderContext->hw_frames_ctx ? "set" : "none"));
 
         const int openRet = avcodec_open2(encoderContext.get(), encoder, nullptr);
         if (openRet < 0) {
