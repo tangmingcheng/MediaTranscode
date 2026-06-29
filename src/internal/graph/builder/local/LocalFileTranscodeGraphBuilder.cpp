@@ -246,6 +246,10 @@ void preferSoftwarePlan(MediaPipelinePlan& plan)
             MediaNodeKind::VideoFilter,
             "local.video.filter",
             "Local software video filter");
+        const MediaNodeId videoTimestamp = graph.addNode(
+            MediaNodeKind::VideoTimestamp,
+            "local.video.timestamp",
+            "Local video timestamp normalize");
         const MediaNodeId videoEncode = graph.addNode(
             MediaNodeKind::VideoEncode,
             "local.video.encode",
@@ -350,6 +354,35 @@ void preferSoftwarePlan(MediaPipelinePlan& plan)
                             true,
                             true);
 
+        graph.addInputPort(videoTimestamp,
+                           "codec",
+                           MediaStreamKind::Video,
+                           MediaEdgeKind::Metadata,
+                           MediaPayloadKind::CodecContext,
+                           true,
+                           false);
+        graph.addOutputPort(videoTimestamp,
+                            "codec",
+                            MediaStreamKind::Video,
+                            MediaEdgeKind::Metadata,
+                            MediaPayloadKind::CodecContext,
+                            true,
+                            false);
+        graph.addInputPort(videoTimestamp,
+                           "frame",
+                           MediaStreamKind::Video,
+                           MediaEdgeKind::RawFrame,
+                           MediaPayloadKind::Frame,
+                           true,
+                           true);
+        graph.addOutputPort(videoTimestamp,
+                            "frame",
+                            MediaStreamKind::Video,
+                            MediaEdgeKind::RawFrame,
+                            MediaPayloadKind::Frame,
+                            true,
+                            true);
+
         graph.addInputPort(videoEncode,
                            "codec",
                            MediaStreamKind::Video,
@@ -386,9 +419,15 @@ void preferSoftwarePlan(MediaPipelinePlan& plan)
                       blockingQueuePolicy(options.metadataQueueCapacity));
         graph.connect(codecResolver,
                       "encoder",
+                      videoTimestamp,
+                      "codec",
+                      "local.codec.resolver.encoder -> local.video.timestamp.codec",
+                      blockingQueuePolicy(options.metadataQueueCapacity));
+        graph.connect(videoTimestamp,
+                      "codec",
                       videoEncode,
                       "codec",
-                      "local.codec.resolver.encoder -> local.video.encode.codec",
+                      "local.video.timestamp.codec -> local.video.encode.codec",
                       blockingQueuePolicy(options.metadataQueueCapacity));
         graph.connect(codecResolver,
                       "mux_video",
@@ -410,9 +449,15 @@ void preferSoftwarePlan(MediaPipelinePlan& plan)
                       blockingQueuePolicy(options.frameQueueCapacity));
         graph.connect(videoFilter,
                       "frame",
+                      videoTimestamp,
+                      "frame",
+                      "local.video.filter.frame -> local.video.timestamp.frame",
+                      blockingQueuePolicy(options.frameQueueCapacity));
+        graph.connect(videoTimestamp,
+                      "frame",
                       videoEncode,
                       "frame",
-                      "local.video.filter.frame -> local.video.encode.frame",
+                      "local.video.timestamp.frame -> local.video.encode.frame",
                       blockingQueuePolicy(options.frameQueueCapacity));
         graph.connect(videoEncode,
                       "packet",
