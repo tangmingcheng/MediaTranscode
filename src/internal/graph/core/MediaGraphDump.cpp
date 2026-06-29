@@ -43,6 +43,7 @@ const char* toString(MediaNodeKind kind)
     case MediaNodeKind::MetadataProbe: return "MetadataProbe";
     case MediaNodeKind::DebugDump: return "DebugDump";
     case MediaNodeKind::TraceProbe: return "TraceProbe";
+    case MediaNodeKind::CodecResolver: return "CodecResolver";
     case MediaNodeKind::Unknown:
     default:
         return "Unknown";
@@ -73,6 +74,9 @@ const char* toString(MediaEdgeKind kind)
     case MediaEdgeKind::RawFrame: return "RawFrame";
     case MediaEdgeKind::HardwareFrame: return "HardwareFrame";
     case MediaEdgeKind::SoftwareFrame: return "SoftwareFrame";
+    case MediaEdgeKind::DecoderConfig: return "DecoderConfig";
+    case MediaEdgeKind::EncoderConfig: return "EncoderConfig";
+    case MediaEdgeKind::StreamConfig: return "StreamConfig";
     case MediaEdgeKind::EncodedPacket: return "EncodedPacket";
     case MediaEdgeKind::CopiedPacket: return "CopiedPacket";
     case MediaEdgeKind::MuxedPacket: return "MuxedPacket";
@@ -274,7 +278,6 @@ std::string MediaGraphDump::toGraphvizDot(const MediaGraph& graph,
     }
 
     oss << "}\n";
-
     return oss.str();
 }
 
