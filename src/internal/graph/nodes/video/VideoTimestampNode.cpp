@@ -39,22 +39,6 @@ int64_t rescaleTimestamp(int64_t value, AVRational source, AVRational target) no
     return validTimestamp(value) ? av_rescale_q(value, source, target) : value;
 }
 
-AVRational decoderFrameTimeBase(const AVCodecContext* codecContext) noexcept
-{
-    if (!codecContext) {
-        return AVRational{ 0, 1 };
-    }
-
-    // Decoded AVFrame timestamps belong to the decoder frame time domain, not necessarily
-    // the demux packet time domain. Prefer the codec context time_base for frames; pkt_timebase
-    // is only a fallback when the decoder did not expose a frame time_base.
-    if (rationalKnown(codecContext->time_base)) {
-        return codecContext->time_base;
-    }
-
-    return codecContext->pkt_timebase;
-}
-
 void logTimestamp(MediaGraphDiagnosticLevel level, const std::string& message)
 {
     mediaGraphDiagnosticLog(level,
@@ -131,19 +115,14 @@ MediaNodeKind VideoTimestampNode::staticKind() noexcept
             ::media::ErrorInfo::invalidArgument("VideoTimestampNode expected source codec context buffer"));
     }
 
-    const AVRational sourceTimeBase = decoderFrameTimeBase(codecContext);
-    if (!rationalKnown(sourceTimeBase)) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("VideoTimestampNode requires known source decoder frame time_base"));
-    }
-
-    m_sourceTimeBase = sourceTimeBase;
+    m_sourceTimeBase = codecContext->time_base;
     m_hasSourceTimeBase = true;
 
     std::ostringstream out;
     out << "bind_source_time_base tb=" << rationalText(m_sourceTimeBase)
         << " decoder_tb=" << rationalText(codecContext->time_base)
-        << " pkt_tb=" << rationalText(codecContext->pkt_timebase);
+        << " pkt_tb=" << rationalText(codecContext->pkt_timebase)
+        << " mode=" << (rationalKnown(m_sourceTimeBase) ? "rescale" : "passthrough");
     logTimestamp(MediaGraphDiagnosticLevel::State, out.str());
     return ::media::Status::success();
 }
@@ -191,8 +170,10 @@ MediaNodeKind VideoTimestampNode::staticKind() noexcept
     const int64_t ptsIn = frame->pts;
     const int64_t dtsIn = frame->pkt_dts;
     const int64_t durationIn = frame->duration;
+    const bool canRescale = rationalKnown(m_sourceTimeBase) && rationalKnown(m_targetTimeBase);
 
-    if (m_sourceTimeBase.num != m_targetTimeBase.num || m_sourceTimeBase.den != m_targetTimeBase.den) {
+    if (canRescale &&
+        (m_sourceTimeBase.num != m_targetTimeBase.num || m_sourceTimeBase.den != m_targetTimeBase.den)) {
         frame->pts = rescaleTimestamp(frame->pts, m_sourceTimeBase, m_targetTimeBase);
         frame->pkt_dts = rescaleTimestamp(frame->pkt_dts, m_sourceTimeBase, m_targetTimeBase);
         if (frame->duration > 0) {
@@ -210,6 +191,7 @@ MediaNodeKind VideoTimestampNode::staticKind() noexcept
     if (decision.shouldLog) {
         std::ostringstream out;
         out << "normalize_frame seq=" << decision.sequence
+            << " mode=" << (canRescale ? "rescale" : "passthrough")
             << " source_tb=" << rationalText(m_sourceTimeBase)
             << " target_tb=" << rationalText(m_targetTimeBase)
             << " pts_in=" << ptsIn
