@@ -79,7 +79,7 @@ LocalFileTranscodeOptions parseOptions(int argc, char** argv)
     options.audioBitrateKbps = intArg(argc, argv, "--audio-bitrate", options.audioBitrateKbps);
     options.audioSampleRate = intArg(argc, argv, "--sample-rate", options.audioSampleRate);
     options.audioChannels = intArg(argc, argv, "--channels", options.audioChannels);
-    options.diagnosticLogEnabled = true;
+    options.diagnosticLogEnabled = !hasArg(argc, argv, "--quiet-graph");
     return options;
 }
 
@@ -89,6 +89,7 @@ int main(int argc, char** argv)
 {
     if (argc < 5 || hasArg(argc, argv, "--help") || hasArg(argc, argv, "-h")) {
         std::cout << "Usage: media_transcode_graph_transcode_cli --input in.mp4 --output out.mp4 [options]\n";
+        std::cout << "       add --quiet-graph to disable runtime graph diagnostics\n";
         return argc < 5 ? 2 : 0;
     }
 
@@ -102,6 +103,7 @@ int main(int argc, char** argv)
               << " fps=" << options.fpsNum
               << " bitrate_kbps=" << options.videoBitrateKbps
               << " rc=" << options.rateControlMode
+              << " diagnostics=" << (options.diagnosticLogEnabled ? "on" : "off")
               << '\n';
 
     auto graphResult = LocalFileTranscodeGraphBuilder::build(options);
@@ -110,6 +112,8 @@ int main(int argc, char** argv)
     }
 
     MediaGraphRuntime runtime;
+    runtime.setDiagnosticsEnabled(options.diagnosticLogEnabled);
+
     auto compileStatus = runtime.compile(std::move(graphResult).value());
     if (!compileStatus) {
         return failStatus("compile", compileStatus);
