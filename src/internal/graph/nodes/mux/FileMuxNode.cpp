@@ -54,10 +54,6 @@ MediaNodeKind FileMuxNode::staticKind() noexcept
     }
 
     if (buffer->isEof() || buffer->isFlush()) {
-        auto trailerStatus = writeTrailerIfNeeded();
-        if (!trailerStatus) {
-            return trailerStatus;
-        }
         return forwardIfOutputsExist(context, buffer);
     }
 
