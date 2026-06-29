@@ -409,6 +409,20 @@ void preferSoftwarePlan(MediaPipelinePlan& plan)
                             true);
 
         graph.addInputPort(videoFilter,
+                           "codec",
+                           MediaStreamKind::Video,
+                           MediaEdgeKind::Metadata,
+                           MediaPayloadKind::CodecContext,
+                           true,
+                           false);
+        graph.addOutputPort(videoFilter,
+                            "codec",
+                            MediaStreamKind::Video,
+                            MediaEdgeKind::Metadata,
+                            MediaPayloadKind::CodecContext,
+                            true,
+                            false);
+        graph.addInputPort(videoFilter,
                            "frame",
                            MediaStreamKind::Video,
                            MediaEdgeKind::RawFrame,
@@ -471,9 +485,15 @@ void preferSoftwarePlan(MediaPipelinePlan& plan)
                       blockingQueuePolicy(options.metadataQueueCapacity));
         graph.connect(videoTimestamp,
                       "target_codec",
+                      videoFilter,
+                      "codec",
+                      "local.video.timestamp.target_codec -> local.video.filter.codec",
+                      blockingQueuePolicy(options.metadataQueueCapacity));
+        graph.connect(videoFilter,
+                      "codec",
                       videoEncode,
                       "codec",
-                      "local.video.timestamp.target_codec -> local.video.encode.codec",
+                      "local.video.filter.codec -> local.video.encode.codec",
                       blockingQueuePolicy(options.metadataQueueCapacity));
         graph.connect(codecResolver,
                       "mux_video",
