@@ -8,6 +8,7 @@
 #include <mutex>
 #include <sstream>
 #include <spdlog/spdlog.h>
+#include <string>
 #include <unordered_map>
 
 namespace media::ffmpeg::graph {
@@ -23,6 +24,14 @@ std::string rationalText(MediaRational rational)
         return "unknown";
     }
     return std::to_string(rational.num) + "/" + std::to_string(rational.den);
+}
+
+std::string timestampText(int64_t timestamp)
+{
+    if (timestamp == invalidMediaTimeValue) {
+        return "nop";
+    }
+    return std::to_string(timestamp);
 }
 
 std::string lowerCopy(std::string text)
@@ -301,8 +310,8 @@ std::string mediaGraphDiagnosticDescribeBuffer(const MediaBufferRef& buffer)
 
     out << " stream=" << mediaGraphDiagnosticStreamKindName(buffer->streamKind())
         << " payload=" << mediaGraphDiagnosticPayloadKindName(buffer->payloadKind())
-        << " pts=" << buffer->pts()
-        << " dts=" << buffer->dts()
+        << " pts=" << timestampText(buffer->pts())
+        << " dts=" << timestampText(buffer->dts())
         << " duration=" << buffer->duration()
         << " flags=";
 
