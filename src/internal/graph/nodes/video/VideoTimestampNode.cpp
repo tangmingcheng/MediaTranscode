@@ -7,7 +7,6 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/avutil.h>
-#include <libavutil/mathematics.h>
 }
 
 #include <sstream>
@@ -29,11 +28,6 @@ std::string rationalText(AVRational rational)
     return std::to_string(rational.num) + "/" + std::to_string(rational.den);
 }
 
-bool timestampKnown(int64_t value) noexcept
-{
-    return value != AV_NOPTS_VALUE && value != invalidMediaTimeValue;
-}
-
 int64_t decodedTimestamp(const AVFrame* frame) noexcept
 {
     if (!frame) {
@@ -49,11 +43,6 @@ int64_t decodedTimestamp(const AVFrame* frame) noexcept
         return frame->pkt_dts;
     }
     return AV_NOPTS_VALUE;
-}
-
-int64_t rescaleTimestamp(int64_t value, AVRational source, AVRational target) noexcept
-{
-    return timestampKnown(value) ? av_rescale_q(value, source, target) : value;
 }
 
 void logTimestamp(MediaGraphDiagnosticLevel level, const std::string& message)
@@ -144,7 +133,7 @@ MediaNodeKind VideoTimestampNode::staticKind() noexcept
     out << "bind_source_time_base tb=" << rationalText(m_sourceTimeBase)
         << " decoder_tb=" << rationalText(codecContext->time_base)
         << " pkt_tb=" << rationalText(codecContext->pkt_timebase)
-        << " mode=decoded_timestamp";
+        << " mode=input_stream_time_base";
     logTimestamp(MediaGraphDiagnosticLevel::State, out.str());
     return ::media::Status::success();
 }
@@ -200,15 +189,12 @@ MediaNodeKind VideoTimestampNode::staticKind() noexcept
             ::media::ErrorInfo::invalidArgument("VideoTimestampNode input video frame has no timestamp"));
     }
 
-    frame->pts = rescaleTimestamp(sourceTs, m_sourceTimeBase, m_targetTimeBase);
+    frame->pts = sourceTs;
     frame->pkt_dts = AV_NOPTS_VALUE;
-    if (frame->duration > 0) {
-        frame->duration = av_rescale_q(frame->duration, m_sourceTimeBase, m_targetTimeBase);
-    }
 
-    MediaTimeDescriptor targetTime;
-    targetTime.timeBase = MediaRational{ m_targetTimeBase.num, m_targetTimeBase.den };
-    buffer->setTimeDescriptor(targetTime);
+    MediaTimeDescriptor sourceTime;
+    sourceTime.timeBase = MediaRational{ m_sourceTimeBase.num, m_sourceTimeBase.den };
+    buffer->setTimeDescriptor(sourceTime);
     buffer->setTimestamps(frame->pts, frame->pkt_dts, frame->duration);
 
     auto decision = mediaGraphDiagnosticSample(MediaGraphDiagnosticLevel::Flow,
@@ -216,9 +202,9 @@ MediaNodeKind VideoTimestampNode::staticKind() noexcept
     if (decision.shouldLog) {
         std::ostringstream out;
         out << "normalize_frame seq=" << decision.sequence
-            << " mode=decoded_timestamp"
+            << " mode=input_stream_time_base"
             << " source_tb=" << rationalText(m_sourceTimeBase)
-            << " target_tb=" << rationalText(m_targetTimeBase)
+            << " encoder_tb=" << rationalText(m_targetTimeBase)
             << " source_ts=" << sourceTs
             << " best_in=" << bestIn
             << " pts_in=" << ptsIn
