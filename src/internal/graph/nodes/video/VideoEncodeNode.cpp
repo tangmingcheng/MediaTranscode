@@ -118,6 +118,10 @@ MediaNodeKind VideoEncodeNode::staticKind() noexcept
             return ::media::Status::failure(buffer.error());
         }
 
+        MediaTimeDescriptor timeDescriptor;
+        timeDescriptor.timeBase = MediaRational{ codecContext()->time_base.num, codecContext()->time_base.den };
+        buffer.value()->setTimeDescriptor(timeDescriptor);
+
         auto pushStatus = pushOutput(context, "packet", buffer.value());
         if (!pushStatus) {
             return pushStatus;
