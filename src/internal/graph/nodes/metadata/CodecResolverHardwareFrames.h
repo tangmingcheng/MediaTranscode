@@ -1,6 +1,6 @@
 #pragma once
 
-#include "media_transcode/Status.h"
+#include "media_transcode/Result.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
