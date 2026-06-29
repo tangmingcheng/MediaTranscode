@@ -31,11 +31,6 @@ AVRational toAVRational(MediaRational rational) noexcept
     return AVRational{ rational.num, rational.den };
 }
 
-MediaRational toMediaRational(AVRational rational) noexcept
-{
-    return MediaRational{ rational.num, rational.den };
-}
-
 std::string rationalText(AVRational rational)
 {
     if (!rationalKnown(rational)) {
@@ -146,7 +141,7 @@ MediaNodeKind VideoFilterNode::staticKind() noexcept
         if (!flushStatus) {
             return flushStatus;
         }
-        return pushToAllOutputs(context, frameBuffer);
+        return pushOutput(context, "frame", frameBuffer);
     }
 
     return sendFrame(context, frameBuffer);
