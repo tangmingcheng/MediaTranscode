@@ -223,6 +223,8 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
         return FFmpegGraphError::statusFromCode(copyRet, "avcodec_parameters_to_context(video decoder)");
     }
 
+    decoderContext->pkt_timebase = stream->time_base;
+
     const int openRet = avcodec_open2(decoderContext.get(), decoder, nullptr);
     if (openRet < 0) {
         return FFmpegGraphError::statusFromCode(openRet, "avcodec_open2(video decoder)");
@@ -233,7 +235,20 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
         return ::media::Status::failure(buffer.error());
     }
 
-    return pushOutput(context, "decoder", std::move(buffer).value());
+    MediaBufferRef decoderConfig = std::move(buffer).value();
+    auto decoderStatus = pushOutput(context, "decoder", decoderConfig);
+    if (!decoderStatus) {
+        return decoderStatus;
+    }
+
+    if (context.findOutputChannel(nodeId(), "timestamp_source")) {
+        auto timestampStatus = pushOutput(context, "timestamp_source", decoderConfig);
+        if (!timestampStatus) {
+            return timestampStatus;
+        }
+    }
+
+    return ::media::Status::success();
 }
 
 ::media::Status CodecResolverNode::resolveEncoder(MediaGraphExecutionContext& context, AVFormatContext* formatContext)
