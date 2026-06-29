@@ -59,21 +59,14 @@ MediaNodeKind DemuxNode::staticKind() noexcept
     }
 
     MediaStreamKind streamKind = MediaStreamKind::Unknown;
-    AVStream* stream = nullptr;
     if (packet->stream_index >= 0 && packet->stream_index < static_cast<int>(m_formatContext->nb_streams)) {
-        stream = m_formatContext->streams[packet->stream_index];
-        streamKind = FFmpegDescriptorMapper::toStreamKind(stream->codecpar->codec_type);
+        streamKind = FFmpegDescriptorMapper::toStreamKind(
+            m_formatContext->streams[packet->stream_index]->codecpar->codec_type);
     }
 
     auto buffer = FFmpegBufferFactory::wrapPacket(std::move(packet), streamKind);
     if (!buffer) {
         return ::media::Status::failure(buffer.error());
-    }
-
-    if (stream) {
-        MediaFormatDescriptor descriptor = FFmpegDescriptorMapper::fromStream(stream);
-        buffer.value()->setFormatDescriptor(descriptor);
-        buffer.value()->setTimeDescriptor(descriptor.time);
     }
 
     const auto* packetBuffer = dynamic_cast<const FFmpegPacketBuffer*>(buffer.value().get());
