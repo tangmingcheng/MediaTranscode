@@ -1,6 +1,5 @@
 #include "internal/graph/nodes/demux/StreamSplitNode.h"
 
-#include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegPacketView.h"
 
 namespace media::ffmpeg::graph {
@@ -27,10 +26,34 @@ MediaNodeKind StreamSplitNode::staticKind() noexcept
         return pushToAllOutputs(context, buffer.value());
     }
 
-    return pushToMatchingOutputs(context,
-                                 buffer.value(),
-                                 buffer.value()->streamKind(),
-                                 packet->stream_index);
+    bool pushed = false;
+    for (MediaChannel* channel : outputChannels(context)) {
+        if (!channel) {
+            continue;
+        }
+
+        const auto& binding = channel->binding();
+        const auto& format = channel->formatDescriptor();
+        const bool streamKindMatches =
+            binding.streamKind == MediaStreamKind::Any ||
+            binding.streamKind == MediaStreamKind::Unknown ||
+            binding.streamKind == buffer.value()->streamKind();
+        const bool streamIndexMatches =
+            !format.hasStreamIndex() ||
+            format.streamIndex == packet->stream_index;
+
+        if (!streamKindMatches || !streamIndexMatches) {
+            continue;
+        }
+
+        auto status = channel->push(buffer.value());
+        if (!status) {
+            return status;
+        }
+        pushed = true;
+    }
+
+    return ::media::Status::success();
 }
 
 } // namespace media::ffmpeg::graph
