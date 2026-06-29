@@ -72,12 +72,21 @@ MediaNodeKind VideoEncodeNode::staticKind() noexcept
         return ::media::Status::success();
     }
 
-    MediaChannel* channel = context.findOutputChannel(nodeId(), "codec");
-    if (!channel) {
+    if (MediaChannel* codecChannel = context.findOutputChannel(nodeId(), "codec")) {
+        auto status = codecChannel->push(buffer);
+        if (!status) {
+            return status;
+        }
+        m_encoderConfigEmitted = true;
         return ::media::Status::success();
     }
 
-    auto status = channel->push(buffer);
+    MediaChannel* packetChannel = context.findOutputChannel(nodeId(), "packet");
+    if (!packetChannel) {
+        return ::media::Status::success();
+    }
+
+    auto status = packetChannel->push(buffer);
     if (!status) {
         return status;
     }
