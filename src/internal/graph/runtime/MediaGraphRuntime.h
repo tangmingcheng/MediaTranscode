@@ -42,6 +42,9 @@ public:
     MediaGraphRuntime(const MediaGraphRuntime&) = delete;
     MediaGraphRuntime& operator=(const MediaGraphRuntime&) = delete;
 
+    void setDiagnosticsEnabled(bool enabled) noexcept;
+    bool diagnosticsEnabled() const noexcept;
+
     ::media::Status compile(MediaGraph graph);
     ::media::Status registerRuntimeNode(std::unique_ptr<MediaRuntimeNode> node);
     ::media::Status registerDefaultRuntimeNodes();
