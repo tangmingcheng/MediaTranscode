@@ -7,6 +7,7 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegPacketView.h"
 
 extern "C" {
+#include <libavcodec/packet.h>
 #include <libavutil/version.h>
 }
 
@@ -30,9 +31,38 @@ int registeredStreamIndexFor(MediaStreamKind streamKind,
     }
 }
 
+bool rationalKnown(AVRational rational) noexcept
+{
+    return rational.num != 0 && rational.den != 0;
+}
+
+AVRational toAVRational(MediaRational rational) noexcept
+{
+    return AVRational{ rational.num, rational.den };
+}
+
+AVRational sourcePacketTimeBase(const MediaBufferRef& buffer) noexcept
+{
+    if (!buffer) {
+        return AVRational{ 0, 1 };
+    }
+
+    const MediaRational packetTimeBase = buffer->timeDescriptor().timeBase;
+    if (packetTimeBase.isKnown()) {
+        return toAVRational(packetTimeBase);
+    }
+
+    const MediaRational formatTimeBase = buffer->formatDescriptor().time.timeBase;
+    if (formatTimeBase.isKnown()) {
+        return toAVRational(formatTimeBase);
+    }
+
+    return AVRational{ 0, 1 };
+}
+
 std::string rationalText(AVRational rational)
 {
-    if (rational.num == 0 || rational.den == 0) {
+    if (!rationalKnown(rational)) {
         return "unknown";
     }
     return std::to_string(rational.num) + "/" + std::to_string(rational.den);
@@ -360,21 +390,43 @@ bool FileMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
         return FFmpegGraphError::statusFromCode(refRet, "av_packet_ref(mux packet)");
     }
 
-    packet->stream_index = targetStreamIndex;
-
     AVStream* muxStream = targetStreamIndex >= 0 && targetStreamIndex < static_cast<int>(m_outputContext->nb_streams)
                               ? m_outputContext->streams[targetStreamIndex]
                               : nullptr;
+    const AVRational sourceTimeBase = sourcePacketTimeBase(buffer);
+    const AVRational muxTimeBase = muxStream ? muxStream->time_base : AVRational{ 0, 1 };
+    const int64_t ptsIn = packet->pts;
+    const int64_t dtsIn = packet->dts;
+    const int64_t durationIn = packet->duration;
+
+    if (muxStream && rationalKnown(sourceTimeBase) && rationalKnown(muxTimeBase)) {
+        av_packet_rescale_ts(packet.get(), sourceTimeBase, muxTimeBase);
+    } else {
+        muxSampleLog(MediaGraphDiagnosticLevel::State,
+                     std::string("mux.timestamp_missing.") + mediaGraphDiagnosticStreamKindName(buffer->streamKind()),
+                     std::string("timestamp.warning reason=missing_packet_time_base stream=") +
+                         mediaGraphDiagnosticStreamKindName(buffer->streamKind()) +
+                         " source_tb=" + rationalText(sourceTimeBase) +
+                         " mux_tb=" + rationalText(muxTimeBase) +
+                         " " + mediaGraphDiagnosticDescribeBuffer(buffer));
+    }
+
+    packet->stream_index = targetStreamIndex;
+
     std::ostringstream out;
     out << "write_packet stream=" << mediaGraphDiagnosticStreamKindName(buffer->streamKind())
         << " source_stream_index=" << sourcePacket->stream_index
         << " target_stream_index=" << targetStreamIndex
-        << " pts=" << packet->pts
-        << " dts=" << packet->dts
-        << " duration=" << packet->duration
+        << " source_tb=" << rationalText(sourceTimeBase)
+        << " mux_tb=" << rationalText(muxTimeBase)
+        << " pts_in=" << ptsIn
+        << " dts_in=" << dtsIn
+        << " duration_in=" << durationIn
+        << " pts_out=" << packet->pts
+        << " dts_out=" << packet->dts
+        << " duration_out=" << packet->duration
         << " size=" << packet->size
         << " key=" << ((packet->flags & AV_PKT_FLAG_KEY) ? 1 : 0)
-        << " mux_tb=" << (muxStream ? rationalText(muxStream->time_base) : "unknown")
         << " " << mediaGraphDiagnosticDescribeBuffer(buffer);
     muxSampleLog(MediaGraphDiagnosticLevel::Flow,
                  std::string("mux.write_packet.") + mediaGraphDiagnosticStreamKindName(buffer->streamKind()),
