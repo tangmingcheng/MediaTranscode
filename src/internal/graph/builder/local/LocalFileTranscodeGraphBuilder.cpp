@@ -64,6 +64,8 @@ void preferSoftwarePlan(MediaPipelinePlan& plan)
     MediaPipelinePlannerOptions plannerOptions;
     plannerOptions.outputPath = options.outputUrl;
     plannerOptions.outputCodecName = options.videoCodec.empty() ? "h264" : options.videoCodec;
+    plannerOptions.targetWidth = options.width;
+    plannerOptions.targetHeight = options.height;
     plannerOptions.allowSoftwareFallback = true;
     plannerOptions.requireRuntimeAvailability = true;
     plannerOptions.preferGpu = options.useHardwareTransfer && !options.disableHardware;
