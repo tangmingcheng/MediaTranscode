@@ -45,11 +45,14 @@ AVRational decoderFrameTimeBase(const AVCodecContext* codecContext) noexcept
         return AVRational{ 0, 1 };
     }
 
-    if (rationalKnown(codecContext->pkt_timebase)) {
-        return codecContext->pkt_timebase;
+    // Decoded AVFrame timestamps belong to the decoder frame time domain, not necessarily
+    // the demux packet time domain. Prefer the codec context time_base for frames; pkt_timebase
+    // is only a fallback when the decoder did not expose a frame time_base.
+    if (rationalKnown(codecContext->time_base)) {
+        return codecContext->time_base;
     }
 
-    return codecContext->time_base;
+    return codecContext->pkt_timebase;
 }
 
 void logTimestamp(MediaGraphDiagnosticLevel level, const std::string& message)
@@ -131,14 +134,17 @@ MediaNodeKind VideoTimestampNode::staticKind() noexcept
     const AVRational sourceTimeBase = decoderFrameTimeBase(codecContext);
     if (!rationalKnown(sourceTimeBase)) {
         return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("VideoTimestampNode requires known source decoder time_base"));
+            ::media::ErrorInfo::invalidArgument("VideoTimestampNode requires known source decoder frame time_base"));
     }
 
     m_sourceTimeBase = sourceTimeBase;
     m_hasSourceTimeBase = true;
 
-    logTimestamp(MediaGraphDiagnosticLevel::State,
-                 std::string("bind_source_time_base tb=") + rationalText(m_sourceTimeBase));
+    std::ostringstream out;
+    out << "bind_source_time_base tb=" << rationalText(m_sourceTimeBase)
+        << " decoder_tb=" << rationalText(codecContext->time_base)
+        << " pkt_tb=" << rationalText(codecContext->pkt_timebase);
+    logTimestamp(MediaGraphDiagnosticLevel::State, out.str());
     return ::media::Status::success();
 }
 
