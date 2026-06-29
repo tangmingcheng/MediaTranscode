@@ -16,6 +16,17 @@ extern "C" {
 namespace media::ffmpeg::graph {
 namespace {
 
+std::string optionValue(const MediaNodeOptions* options, const std::string& key, std::string fallback = {})
+{
+    return options ? options->value(key, std::move(fallback)) : std::move(fallback);
+}
+
+bool truthyOption(const MediaNodeOptions* options, const std::string& key)
+{
+    const std::string value = optionValue(options, key);
+    return value == "1" || value == "true" || value == "yes" || value == "on";
+}
+
 std::string pixelFormatName(int format)
 {
     const char* name = av_get_pix_fmt_name(static_cast<AVPixelFormat>(format));
@@ -66,6 +77,21 @@ MediaNodeKind HardwareTransferNode::staticKind() noexcept
     }
 
     if (!sourceFrame->hw_frames_ctx) {
+        return pushOutput(context, "frame", buffer);
+    }
+
+    const bool zeroCopy = truthyOption(nodeOptions(context), "pipeline.zero_copy");
+    if (zeroCopy) {
+        auto decision = mediaGraphDiagnosticSample(MediaGraphDiagnosticLevel::Flow,
+                                                   "hardware_transfer.zero_copy");
+        if (decision.shouldLog) {
+            std::ostringstream out;
+            out << "zero_copy seq=" << decision.sequence
+                << " fmt=" << pixelFormatName(sourceFrame->format)
+                << " pts=" << sourceFrame->pts
+                << " size=" << sourceFrame->width << "x" << sourceFrame->height;
+            transferLog(MediaGraphDiagnosticLevel::Flow, out.str());
+        }
         return pushOutput(context, "frame", buffer);
     }
 
