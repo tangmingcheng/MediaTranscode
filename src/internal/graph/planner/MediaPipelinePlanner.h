@@ -49,6 +49,8 @@ struct MediaPipelinePlannerOptions {
     std::string outputPath;
     std::string outputCodecName = "h264";
     std::string preferredHardware = "auto";
+    int targetWidth = 0;
+    int targetHeight = 0;
     bool preferGpu = true;
     bool allowSoftwareFallback = true;
     bool requireRuntimeAvailability = true;
