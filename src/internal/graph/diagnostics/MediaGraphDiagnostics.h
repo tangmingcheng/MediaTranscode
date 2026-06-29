@@ -9,13 +9,18 @@ enum class MediaGraphDiagnosticPhase {
     PlannerCapability,
     PlannerScore,
     PlannerSelect,
-    GraphBuild
+    GraphBuild,
+
+    RuntimeNode,
+    RuntimeEdge,
+    RuntimeChannel,
+    RuntimeLifecycle
 };
 
 const char* mediaGraphDiagnosticPhaseName(MediaGraphDiagnosticPhase phase) noexcept;
 
 void mediaGraphDiagnosticLog(bool enabled,
-                             MediaGraphDiagnosticPhase phase,
-                             const std::string& message);
+                              MediaGraphDiagnosticPhase phase,
+                              const std::string& message);
 
 } // namespace media::ffmpeg::graph
