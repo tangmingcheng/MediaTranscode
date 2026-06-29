@@ -2,7 +2,6 @@
 
 #include "internal/FFmpegRAII.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
-#include "internal/graph/runtime/ffmpeg/FFmpegDescriptorMapper.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 
@@ -118,10 +117,6 @@ MediaNodeKind VideoEncodeNode::staticKind() noexcept
         if (!buffer) {
             return ::media::Status::failure(buffer.error());
         }
-
-        MediaFormatDescriptor descriptor = FFmpegDescriptorMapper::fromCodecContext(codecContext(), MediaCodecOperation::Encode);
-        buffer.value()->setFormatDescriptor(descriptor);
-        buffer.value()->setTimeDescriptor(descriptor.time);
 
         auto pushStatus = pushOutput(context, "packet", buffer.value());
         if (!pushStatus) {
