@@ -1,6 +1,5 @@
 #include "internal/graph/nodes/mux/FileMuxNode.h"
 
-#include "internal/FFmpegRAII.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/runtime/buffer/FFmpegCodecContextBuffer.h"
 #include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
@@ -137,10 +136,13 @@ MediaNodeKind FileMuxNode::staticKind() noexcept
     muxLog(MediaGraphDiagnosticLevel::State, "stop.begin");
     auto status = writeTrailerIfNeeded();
     if (!status) {
+        releaseRuntimeViews();
         return status;
     }
 
-    return FFmpegNodeRuntime::stop(context);
+    auto stopStatus = FFmpegNodeRuntime::stop(context);
+    releaseRuntimeViews();
+    return stopStatus;
 }
 
 bool FileMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
@@ -150,8 +152,18 @@ bool FileMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
         return false;
     }
 
-    m_outputContextOwner = buffer;
-    m_outputContext = contextBuffer->context();
+    if (contextBuffer->ownership() == FFmpegFormatContextOwnership::Output) {
+        m_outputContextOwner = contextBuffer->takeOutputContext();
+        m_outputContext = m_outputContextOwner.get();
+    } else {
+        m_outputContextOwner.reset();
+        m_outputContext = contextBuffer->context();
+    }
+
+    if (!m_outputContext) {
+        return false;
+    }
+
     m_headerWritten = false;
     m_trailerWritten = false;
     m_videoStreamIndex = invalidMediaStreamIndex;
@@ -159,7 +171,8 @@ bool FileMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
 
     muxLog(MediaGraphDiagnosticLevel::State,
            std::string("bind_output_context nb_streams=") +
-               std::to_string(m_outputContext->nb_streams) + " " +
+               std::to_string(m_outputContext->nb_streams) + " ownership=" +
+               (m_outputContextOwner ? "owned" : "borrowed") + " " +
                mediaGraphDiagnosticDescribeBuffer(buffer));
     return true;
 }
@@ -390,6 +403,17 @@ bool FileMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
     m_trailerWritten = true;
     muxLog(MediaGraphDiagnosticLevel::State, "write_trailer.done");
     return ::media::Status::success();
+}
+
+void FileMuxNode::releaseRuntimeViews() noexcept
+{
+    m_pendingCodecContexts.clear();
+    m_outputContext = nullptr;
+    m_outputContextOwner.reset();
+    m_headerWritten = false;
+    m_trailerWritten = false;
+    m_videoStreamIndex = invalidMediaStreamIndex;
+    m_audioStreamIndex = invalidMediaStreamIndex;
 }
 
 ::media::Status FileMuxNode::forwardIfOutputsExist(MediaGraphExecutionContext& context, const MediaBufferRef& buffer)
