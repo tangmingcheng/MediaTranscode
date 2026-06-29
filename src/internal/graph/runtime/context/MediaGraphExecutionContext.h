@@ -19,6 +19,9 @@ public:
     ::media::Status compile(const MediaGraph& graph);
     void reset();
 
+    void setDiagnosticsEnabled(bool enabled) noexcept;
+    bool diagnosticsEnabled() const noexcept;
+
     bool compiled() const noexcept;
 
     const MediaGraph* graph() const noexcept;
@@ -45,6 +48,7 @@ private:
     MediaChannelRegistry m_channels;
     std::vector<MediaNodeId> m_executionOrder;
     bool m_compiled = false;
+    bool m_diagnosticsEnabled = false;
 };
 
 } // namespace media::ffmpeg::graph
