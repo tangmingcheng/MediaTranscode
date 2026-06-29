@@ -62,6 +62,21 @@ bool startsWith(const std::string& value, const std::string& prefix)
            std::equal(prefix.begin(), prefix.end(), value.begin());
 }
 
+std::string filterRootName(const std::string& name)
+{
+    const std::size_t comma = name.find(',');
+    const std::size_t equals = name.find('=');
+    std::size_t end = std::string::npos;
+    if (comma != std::string::npos && equals != std::string::npos) {
+        end = std::min(comma, equals);
+    } else if (comma != std::string::npos) {
+        end = comma;
+    } else if (equals != std::string::npos) {
+        end = equals;
+    }
+    return end == std::string::npos ? name : name.substr(0, end);
+}
+
 std::string codecSpecificName(const std::string& codec, const std::string& suffix)
 {
     return codec + suffix;
@@ -94,7 +109,59 @@ bool filterExists(const std::string& name)
         return true;
     }
 
-    return avfilter_get_by_name(name.c_str()) != nullptr;
+    const std::string root = filterRootName(name);
+    return !root.empty() && avfilter_get_by_name(root.c_str()) != nullptr;
+}
+
+bool targetResizeRequested(const MediaPipelinePlannerOptions& options) noexcept
+{
+    return options.targetWidth > 0 && options.targetHeight > 0;
+}
+
+std::string targetSizeText(const MediaPipelinePlannerOptions& options)
+{
+    return std::to_string(options.targetWidth) + ":" + std::to_string(options.targetHeight);
+}
+
+std::string cudaFilterName(const MediaPipelinePlannerOptions& options)
+{
+    return targetResizeRequested(options) ? "scale_cuda=" + targetSizeText(options) : "passthrough_cuda";
+}
+
+std::string qsvFilterName(const MediaPipelinePlannerOptions& options)
+{
+    return targetResizeRequested(options)
+               ? "scale_qsv=w=" + std::to_string(options.targetWidth) + ":h=" + std::to_string(options.targetHeight)
+               : "passthrough_qsv";
+}
+
+std::string d3d11FilterName(const MediaPipelinePlannerOptions& options)
+{
+    return targetResizeRequested(options) ? "scale_d3d11=" + targetSizeText(options) : "passthrough_d3d11va";
+}
+
+std::string rkmppFilterName(const MediaPipelinePlannerOptions& options)
+{
+    return targetResizeRequested(options) ? "scale_rkrga=" + targetSizeText(options) : "passthrough_rkmpp";
+}
+
+std::string vaapiFilterName(const MediaPipelinePlannerOptions& options)
+{
+    return targetResizeRequested(options)
+               ? "scale_vaapi=w=" + std::to_string(options.targetWidth) + ":h=" + std::to_string(options.targetHeight)
+               : "passthrough_vaapi";
+}
+
+std::string videotoolboxFilterName(const MediaPipelinePlannerOptions& options)
+{
+    return targetResizeRequested(options) ? "scale_videotoolbox=" + targetSizeText(options) : "passthrough_videotoolbox";
+}
+
+std::string softwareFilterName(const MediaPipelinePlannerOptions& options)
+{
+    return targetResizeRequested(options)
+               ? "scale=" + targetSizeText(options) + ":flags=bicubic,format=pix_fmts=yuv420p"
+               : "passthrough_software";
 }
 
 bool rkmppRuntimeAvailable()
@@ -336,7 +403,8 @@ std::vector<MediaPipelineChainPlan> MediaPipelineCapabilityScanner::enumerateVid
         makeCodecStage(MediaPipelineStageRole::Decoder, "cuda decoder", inputCodec,
                        codecSpecificName(inputCodec, "_cuvid"), "cuda", MediaHardwareDeviceKind::CUDA,
                        true, true, 95),
-        makeFilterStage("cuda passthrough filter", "passthrough_cuda", "cuda",
+        makeFilterStage(targetResizeRequested(options) ? "cuda scale filter" : "cuda passthrough filter",
+                        cudaFilterName(options), "cuda",
                         MediaHardwareDeviceKind::CUDA, true, true, 90),
         makeCodecStage(MediaPipelineStageRole::Encoder, "nvenc encoder", outputCodec,
                        codecSpecificName(outputCodec, "_nvenc"), "cuda", MediaHardwareDeviceKind::CUDA,
@@ -346,7 +414,8 @@ std::vector<MediaPipelineChainPlan> MediaPipelineCapabilityScanner::enumerateVid
         makeCodecStage(MediaPipelineStageRole::Decoder, "qsv decoder", inputCodec,
                        codecSpecificName(inputCodec, "_qsv"), "qsv", MediaHardwareDeviceKind::QSV,
                        true, true, 90),
-        makeFilterStage("qsv passthrough filter", "passthrough_qsv", "qsv",
+        makeFilterStage(targetResizeRequested(options) ? "qsv scale filter" : "qsv passthrough filter",
+                        qsvFilterName(options), "qsv",
                         MediaHardwareDeviceKind::QSV, true, true, 88),
         makeCodecStage(MediaPipelineStageRole::Encoder, "qsv encoder", outputCodec,
                        codecSpecificName(outputCodec, "_qsv"), "qsv", MediaHardwareDeviceKind::QSV,
@@ -355,7 +424,8 @@ std::vector<MediaPipelineChainPlan> MediaPipelineCapabilityScanner::enumerateVid
     add("d3d11va-mediafoundation",
         makeCodecStage(MediaPipelineStageRole::Decoder, "d3d11va decoder", inputCodec, inputCodec,
                        "d3d11va", MediaHardwareDeviceKind::D3D11VA, true, true, 84),
-        makeFilterStage("d3d11va passthrough filter", "passthrough_d3d11va", "d3d11va",
+        makeFilterStage(targetResizeRequested(options) ? "d3d11va scale filter" : "d3d11va passthrough filter",
+                        d3d11FilterName(options), "d3d11va",
                         MediaHardwareDeviceKind::D3D11VA, true, true, 82),
         makeCodecStage(MediaPipelineStageRole::Encoder, "mediafoundation encoder", outputCodec,
                        codecSpecificName(outputCodec, "_mf"), "d3d11va", MediaHardwareDeviceKind::D3D11VA,
@@ -365,7 +435,8 @@ std::vector<MediaPipelineChainPlan> MediaPipelineCapabilityScanner::enumerateVid
         makeCodecStage(MediaPipelineStageRole::Decoder, "rkmpp decoder", inputCodec,
                        codecSpecificName(inputCodec, "_rkmpp"), "rkmpp", MediaHardwareDeviceKind::RKMPP,
                        true, true, 92),
-        makeFilterStage("rga/rkmpp passthrough filter", "passthrough_rkmpp", "rkmpp",
+        makeFilterStage(targetResizeRequested(options) ? "rga/rkmpp scale filter" : "rga/rkmpp passthrough filter",
+                        rkmppFilterName(options), "rkmpp",
                         MediaHardwareDeviceKind::RKMPP, true, true, 90),
         makeCodecStage(MediaPipelineStageRole::Encoder, "rkmpp encoder", outputCodec,
                        codecSpecificName(outputCodec, "_rkmpp"), "rkmpp", MediaHardwareDeviceKind::RKMPP,
@@ -374,7 +445,8 @@ std::vector<MediaPipelineChainPlan> MediaPipelineCapabilityScanner::enumerateVid
     add("vaapi",
         makeCodecStage(MediaPipelineStageRole::Decoder, "vaapi decoder", inputCodec, inputCodec,
                        "vaapi", MediaHardwareDeviceKind::VAAPI, true, true, 82),
-        makeFilterStage("vaapi passthrough filter", "passthrough_vaapi", "vaapi",
+        makeFilterStage(targetResizeRequested(options) ? "vaapi scale filter" : "vaapi passthrough filter",
+                        vaapiFilterName(options), "vaapi",
                         MediaHardwareDeviceKind::VAAPI, true, true, 82),
         makeCodecStage(MediaPipelineStageRole::Encoder, "vaapi encoder", outputCodec,
                        codecSpecificName(outputCodec, "_vaapi"), "vaapi", MediaHardwareDeviceKind::VAAPI,
@@ -383,7 +455,8 @@ std::vector<MediaPipelineChainPlan> MediaPipelineCapabilityScanner::enumerateVid
     add("videotoolbox",
         makeCodecStage(MediaPipelineStageRole::Decoder, "videotoolbox decoder", inputCodec, inputCodec,
                        "videotoolbox", MediaHardwareDeviceKind::VideoToolbox, true, true, 80),
-        makeFilterStage("videotoolbox passthrough filter", "passthrough_videotoolbox", "videotoolbox",
+        makeFilterStage(targetResizeRequested(options) ? "videotoolbox scale filter" : "videotoolbox passthrough filter",
+                        videotoolboxFilterName(options), "videotoolbox",
                         MediaHardwareDeviceKind::VideoToolbox, true, true, 78),
         makeCodecStage(MediaPipelineStageRole::Encoder, "videotoolbox encoder", outputCodec,
                        codecSpecificName(outputCodec, "_videotoolbox"), "videotoolbox",
@@ -393,7 +466,8 @@ std::vector<MediaPipelineChainPlan> MediaPipelineCapabilityScanner::enumerateVid
         add("software",
             makeCodecStage(MediaPipelineStageRole::Decoder, "software decoder", inputCodec, inputCodec,
                            "", MediaHardwareDeviceKind::None, false, false, 30),
-            makeFilterStage("software passthrough filter", "passthrough_software", "",
+            makeFilterStage(targetResizeRequested(options) ? "software scale filter" : "software passthrough filter",
+                            softwareFilterName(options), "",
                             MediaHardwareDeviceKind::None, false, false, 30),
             makeCodecStage(MediaPipelineStageRole::Encoder, "software encoder", outputCodec,
                            softwareEncoderName(outputCodec), "", MediaHardwareDeviceKind::None, false, false, 30));
@@ -401,7 +475,8 @@ std::vector<MediaPipelineChainPlan> MediaPipelineCapabilityScanner::enumerateVid
         add("software-native-codec",
             makeCodecStage(MediaPipelineStageRole::Decoder, "software decoder", inputCodec, inputCodec,
                            "", MediaHardwareDeviceKind::None, false, false, 20),
-            makeFilterStage("software passthrough filter", "passthrough_software", "",
+            makeFilterStage(targetResizeRequested(options) ? "software scale filter" : "software passthrough filter",
+                            softwareFilterName(options), "",
                             MediaHardwareDeviceKind::None, false, false, 20),
             makeCodecStage(MediaPipelineStageRole::Encoder, "native software encoder", outputCodec, outputCodec,
                            "", MediaHardwareDeviceKind::None, false, false, 20));
