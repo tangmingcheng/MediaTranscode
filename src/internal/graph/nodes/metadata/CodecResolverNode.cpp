@@ -526,27 +526,11 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
         codecResolverLog(MediaGraphDiagnosticLevel::State,
                          std::string("encoder.open name=") + (encoder->name ? encoder->name : "unknown") +
                              " pix_fmt=" + pixelFormatName(encoderContext->pix_fmt) +
-                             " sw_format=" + pixelFormatName(plannedSoftwareFormat) +
+                             " hw_frames_format=" + pixelFormatName(plannedHardwareFormat) +
+                             " surface_sw_format=" + pixelFormatName(plannedSoftwareFormat) +
                              " frame_kind=" + optionValue(options, "encoder.pipeline.frame_kind", "software") +
                              " hwaccel=" + optionValue(options, "encoder.pipeline.hwaccel", "none") +
+                             " hw_device_ctx=" + (encoderContext->hw_device_ctx ? "set" : "none") +
                              " hw_frames_ctx=" + (encoderContext->hw_frames_ctx ? "set" : "none"));
 
-        const int openRet = avcodec_open2(encoderContext.get(), encoder, nullptr);
-        if (openRet < 0) {
-            lastError = std::string(encoder->name ? encoder->name : "unknown") + ": encoder open failed";
-            continue;
-        }
-
-        auto buffer = FFmpegBufferFactory::wrapCodecContext(std::move(encoderContext));
-        if (!buffer) {
-            return ::media::Status::failure(buffer.error());
-        }
-
-        return pushOutput(context, "encoder", std::move(buffer).value());
-    }
-
-    return ::media::Status::failure(
-        ::media::ErrorInfo::unsupported("CodecResolverNode failed to create video encoder: " + lastError));
-}
-
-} // namespace media::ffmpeg::graph
+    ...
