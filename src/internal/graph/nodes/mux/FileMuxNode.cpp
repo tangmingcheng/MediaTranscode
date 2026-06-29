@@ -7,6 +7,10 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegPacketView.h"
 
+extern "C" {
+#include <libavutil/version.h>
+}
+
 #include <sstream>
 
 namespace media::ffmpeg::graph {
