@@ -67,6 +67,7 @@ void preferSoftwarePlan(MediaPipelinePlan& plan)
     plannerOptions.requireRuntimeAvailability = true;
     plannerOptions.preferGpu = options.useHardwareTransfer && !options.disableHardware;
     plannerOptions.preferredHardware = plannerOptions.preferGpu ? "auto" : "software";
+    plannerOptions.diagnosticLogEnabled = options.diagnosticLogEnabled;
 
     auto plan = MediaPipelinePlanner::planVideoTranscodeFile(options.inputUrl, plannerOptions);
     if (!plan) {
