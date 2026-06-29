@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/graph/model/MediaTimeDescriptor.h"
 #include "internal/graph/nodes/FFmpegCodecNodeRuntime.h"
 
 namespace media::ffmpeg::graph {
@@ -14,6 +15,9 @@ protected:
 
 private:
     ::media::Status receiveFrames(MediaGraphExecutionContext& context);
+
+private:
+    MediaTimeDescriptor m_inputPacketTime;
 };
 
 } // namespace media::ffmpeg::graph
