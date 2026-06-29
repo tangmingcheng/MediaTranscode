@@ -247,20 +247,26 @@ void preferSoftwarePlan(MediaPipelinePlan& plan)
             MediaNodeKind::VideoDecode,
             "local.video.decode",
             "Local video decode");
-        const MediaNodeId videoFilter = graph.addNode(
-            MediaNodeKind::VideoFilter,
-            "local.video.filter",
-            "Local software video filter");
         const MediaNodeId videoTimestamp = graph.addNode(
             MediaNodeKind::VideoTimestamp,
             "local.video.timestamp",
             "Local video timestamp normalize");
+        const MediaNodeId videoFrameRate = graph.addNode(
+            MediaNodeKind::VideoFrameRate,
+            "local.video.framerate",
+            "Local video frame rate control");
+        const MediaNodeId videoFilter = graph.addNode(
+            MediaNodeKind::VideoFilter,
+            "local.video.filter",
+            "Local software video filter");
         const MediaNodeId videoEncode = graph.addNode(
             MediaNodeKind::VideoEncode,
             "local.video.encode",
             "Local video encode");
 
         applyVideoOptions(graph, codecResolver, options);
+        applyVideoOptions(graph, videoTimestamp, options);
+        applyVideoOptions(graph, videoFrameRate, options);
         applyVideoOptions(graph, videoFilter, options);
         applyVideoOptions(graph, videoEncode, options);
         graph.setNodeOption(videoFilter, "pix_fmt", "yuv420p");
@@ -351,21 +357,6 @@ void preferSoftwarePlan(MediaPipelinePlan& plan)
                             true,
                             true);
 
-        graph.addInputPort(videoFilter,
-                           "frame",
-                           MediaStreamKind::Video,
-                           MediaEdgeKind::RawFrame,
-                           MediaPayloadKind::Frame,
-                           true,
-                           true);
-        graph.addOutputPort(videoFilter,
-                            "frame",
-                            MediaStreamKind::Video,
-                            MediaEdgeKind::RawFrame,
-                            MediaPayloadKind::Frame,
-                            true,
-                            true);
-
         graph.addInputPort(videoTimestamp,
                            "source_codec",
                            MediaStreamKind::Video,
@@ -395,6 +386,36 @@ void preferSoftwarePlan(MediaPipelinePlan& plan)
                            true,
                            true);
         graph.addOutputPort(videoTimestamp,
+                            "frame",
+                            MediaStreamKind::Video,
+                            MediaEdgeKind::RawFrame,
+                            MediaPayloadKind::Frame,
+                            true,
+                            true);
+
+        graph.addInputPort(videoFrameRate,
+                           "frame",
+                           MediaStreamKind::Video,
+                           MediaEdgeKind::RawFrame,
+                           MediaPayloadKind::Frame,
+                           true,
+                           true);
+        graph.addOutputPort(videoFrameRate,
+                            "frame",
+                            MediaStreamKind::Video,
+                            MediaEdgeKind::RawFrame,
+                            MediaPayloadKind::Frame,
+                            true,
+                            true);
+
+        graph.addInputPort(videoFilter,
+                           "frame",
+                           MediaStreamKind::Video,
+                           MediaEdgeKind::RawFrame,
+                           MediaPayloadKind::Frame,
+                           true,
+                           true);
+        graph.addOutputPort(videoFilter,
                             "frame",
                             MediaStreamKind::Video,
                             MediaEdgeKind::RawFrame,
@@ -468,21 +489,27 @@ void preferSoftwarePlan(MediaPipelinePlan& plan)
                       blockingQueuePolicy(options.packetQueueCapacity));
         graph.connect(videoDecode,
                       "frame",
-                      videoFilter,
-                      "frame",
-                      "local.video.decode.frame -> local.video.filter.frame",
-                      blockingQueuePolicy(options.frameQueueCapacity));
-        graph.connect(videoFilter,
-                      "frame",
                       videoTimestamp,
                       "frame",
-                      "local.video.filter.frame -> local.video.timestamp.frame",
+                      "local.video.decode.frame -> local.video.timestamp.frame",
                       blockingQueuePolicy(options.frameQueueCapacity));
         graph.connect(videoTimestamp,
                       "frame",
+                      videoFrameRate,
+                      "frame",
+                      "local.video.timestamp.frame -> local.video.framerate.frame",
+                      blockingQueuePolicy(options.frameQueueCapacity));
+        graph.connect(videoFrameRate,
+                      "frame",
+                      videoFilter,
+                      "frame",
+                      "local.video.framerate.frame -> local.video.filter.frame",
+                      blockingQueuePolicy(options.frameQueueCapacity));
+        graph.connect(videoFilter,
+                      "frame",
                       videoEncode,
                       "frame",
-                      "local.video.timestamp.frame -> local.video.encode.frame",
+                      "local.video.filter.frame -> local.video.encode.frame",
                       blockingQueuePolicy(options.frameQueueCapacity));
         graph.connect(videoEncode,
                       "packet",
