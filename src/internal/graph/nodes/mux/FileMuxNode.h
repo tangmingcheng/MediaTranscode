@@ -29,10 +29,10 @@ private:
     ::media::Status writeHeaderIfNeeded();
     ::media::Status writePacket(const MediaBufferRef& buffer);
     ::media::Status writeTrailerIfNeeded();
+    void releaseRuntimeViews() noexcept;
     ::media::Status forwardIfOutputsExist(MediaGraphExecutionContext& context, const MediaBufferRef& buffer);
 
 private:
-    MediaBufferRef m_outputContextOwner;
     AVFormatContext* m_outputContext = nullptr;
     bool m_headerWritten = false;
     bool m_trailerWritten = false;
