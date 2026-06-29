@@ -1,6 +1,5 @@
 #pragma once
 
-#include "internal/graph/model/MediaTimeDescriptor.h"
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 
 extern "C" {
@@ -18,11 +17,14 @@ protected:
     ::media::Status onProcess(MediaGraphExecutionContext& context) override;
 
 private:
-    ::media::Status bindCodecConfig(MediaGraphExecutionContext& context, const MediaBufferRef& buffer);
+    ::media::Status bindSourceCodecConfig(MediaGraphExecutionContext& context, const MediaBufferRef& buffer);
+    ::media::Status bindTargetCodecConfig(MediaGraphExecutionContext& context, const MediaBufferRef& buffer);
     ::media::Status normalizeFrame(MediaGraphExecutionContext& context, const MediaBufferRef& buffer);
 
 private:
+    bool m_hasSourceTimeBase = false;
     bool m_hasTargetTimeBase = false;
+    AVRational m_sourceTimeBase { 0, 1 };
     AVRational m_targetTimeBase { 0, 1 };
 };
 
