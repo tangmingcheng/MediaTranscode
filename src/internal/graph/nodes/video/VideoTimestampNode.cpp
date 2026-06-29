@@ -106,7 +106,7 @@ MediaNodeKind VideoTimestampNode::staticKind() noexcept
     }
 
     if (frameBuffer->isEof() || frameBuffer->isFlush()) {
-        return pushToAllOutputs(context, frameBuffer);
+        return pushOutput(context, "frame", frameBuffer);
     }
 
     return normalizeFrame(context, frameBuffer);
