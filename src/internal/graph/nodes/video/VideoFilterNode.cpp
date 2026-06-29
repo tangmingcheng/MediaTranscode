@@ -11,6 +11,7 @@ extern "C" {
 #include <libavfilter/buffersrc.h>
 #include <libavutil/avstring.h>
 #include <libavutil/mathematics.h>
+#include <libavutil/mem.h>
 #include <libavutil/pixdesc.h>
 }
 
@@ -29,6 +30,16 @@ bool rationalKnown(AVRational rational) noexcept
 AVRational toAVRational(MediaRational rational) noexcept
 {
     return AVRational{ rational.num, rational.den };
+}
+
+std::string optionValue(const MediaNodeOptions* options, const std::string& key, std::string fallback = {})
+{
+    return options ? options->value(key, std::move(fallback)) : std::move(fallback);
+}
+
+bool startsWith(const std::string& value, const std::string& prefix) noexcept
+{
+    return value.size() >= prefix.size() && value.compare(0, prefix.size(), prefix) == 0;
 }
 
 std::string rationalText(AVRational rational)
@@ -65,29 +76,111 @@ std::string pixelFormatName(AVPixelFormat format)
     return name ? std::string(name) : std::string();
 }
 
-std::string buildFilterDescription(const AVCodecContext* encoderContext)
+std::string plannedFilterName(const MediaNodeOptions* options)
 {
-    if (!encoderContext) {
-        return {};
+    std::string filter = optionValue(options, "filter.pipeline.filter");
+    if (filter.empty()) {
+        filter = optionValue(options, "filter.name");
+    }
+    if (filter.empty()) {
+        filter = optionValue(options, "filter");
+    }
+    if (filter.empty()) {
+        filter = "passthrough_software";
+    }
+    return filter;
+}
+
+std::string buildFilterDescription(const MediaNodeOptions* options)
+{
+    const std::string filter = plannedFilterName(options);
+    if (filter.empty() || startsWith(filter, "passthrough")) {
+        return "null";
+    }
+    return filter;
+}
+
+::media::Status configureHardwareBufferSource(AVFilterGraph* graph,
+                                              AVFilterContext** context,
+                                              const AVFilter* bufferSrc,
+                                              const AVFrame* firstFrame,
+                                              AVRational timeBase,
+                                              AVRational frameRate,
+                                              AVRational pixelAspect)
+{
+    *context = avfilter_graph_alloc_filter(graph, bufferSrc, "in");
+    if (!*context) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::allocationFailed("VideoFilterNode failed: avfilter_graph_alloc_filter(buffer) returned null"));
     }
 
-    const std::string pixFmt = pixelFormatName(encoderContext->pix_fmt);
-    if (pixFmt.empty()) {
-        return {};
+    AVBufferSrcParameters* parameters = av_buffersrc_parameters_alloc();
+    if (!parameters) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::allocationFailed("VideoFilterNode failed: av_buffersrc_parameters_alloc returned null"));
     }
 
-    std::ostringstream desc;
-    bool hasFilter = false;
-    if (encoderContext->width > 0 && encoderContext->height > 0) {
-        desc << "scale=" << encoderContext->width << ":" << encoderContext->height << ":flags=bicubic";
-        hasFilter = true;
+    parameters->format = firstFrame->format;
+    parameters->width = firstFrame->width;
+    parameters->height = firstFrame->height;
+    parameters->time_base = timeBase;
+    parameters->sample_aspect_ratio = pixelAspect;
+    parameters->frame_rate = frameRate;
+    parameters->hw_frames_ctx = av_buffer_ref(firstFrame->hw_frames_ctx);
+    if (!parameters->hw_frames_ctx) {
+        av_freep(&parameters);
+        return ::media::Status::failure(
+            ::media::ErrorInfo::allocationFailed("VideoFilterNode failed: av_buffer_ref(hw_frames_ctx)"));
     }
 
-    if (hasFilter) {
-        desc << ",";
+    const int setRet = av_buffersrc_parameters_set(*context, parameters);
+    av_buffer_unref(&parameters->hw_frames_ctx);
+    av_freep(&parameters);
+    if (setRet < 0) {
+        return FFmpegGraphError::statusFromCode(setRet, "av_buffersrc_parameters_set(video hardware buffer)");
     }
-    desc << "format=pix_fmts=" << pixFmt;
-    return desc.str();
+
+    const int initRet = avfilter_init_str(*context, nullptr);
+    if (initRet < 0) {
+        return FFmpegGraphError::statusFromCode(initRet, "avfilter_init_str(video hardware buffer)");
+    }
+
+    return ::media::Status::success();
+}
+
+::media::Status configureSoftwareBufferSource(AVFilterGraph* graph,
+                                              AVFilterContext** context,
+                                              const AVFilter* bufferSrc,
+                                              const AVFrame* firstFrame,
+                                              AVRational timeBase,
+                                              AVRational frameRate,
+                                              AVRational pixelAspect)
+{
+    char args[512] = {};
+    std::snprintf(args,
+                  sizeof(args),
+                  "video_size=%dx%d:pix_fmt=%d:time_base=%d/%d:pixel_aspect=%d/%d:frame_rate=%d/%d",
+                  firstFrame->width,
+                  firstFrame->height,
+                  firstFrame->format,
+                  timeBase.num,
+                  timeBase.den,
+                  pixelAspect.num,
+                  pixelAspect.den,
+                  frameRate.num,
+                  frameRate.den);
+
+    const int ret = avfilter_graph_create_filter(context,
+                                                 bufferSrc,
+                                                 "in",
+                                                 args,
+                                                 nullptr,
+                                                 graph);
+    if (ret < 0) {
+        return FFmpegGraphError::statusFromCode(ret, "avfilter_graph_create_filter(buffer)");
+    }
+
+    return ::media::Status::success();
 }
 
 void filterLog(MediaGraphDiagnosticLevel level, const std::string& message)
@@ -184,7 +277,7 @@ MediaNodeKind VideoFilterNode::staticKind() noexcept
     return ::media::Status::success();
 }
 
-::media::Status VideoFilterNode::initializeGraph(MediaGraphExecutionContext&, const MediaBufferRef& firstFrameBuffer)
+::media::Status VideoFilterNode::initializeGraph(MediaGraphExecutionContext& context, const MediaBufferRef& firstFrameBuffer)
 {
     const AVFrame* firstFrame = FFmpegFrameView::frame(firstFrameBuffer);
     if (!firstFrame) {
@@ -226,48 +319,45 @@ MediaNodeKind VideoFilterNode::staticKind() noexcept
     m_inputTimeBase = toAVRational(inputTimeBase);
     const AVRational inputFrameRate = chooseInputFrameRate(firstFrameBuffer);
     const AVRational pixelAspect = sanitizeSampleAspectRatio(firstFrame->sample_aspect_ratio);
+    const bool hardwareSource = firstFrame->hw_frames_ctx != nullptr;
 
-    char args[512] = {};
-    std::snprintf(args,
-                  sizeof(args),
-                  "video_size=%dx%d:pix_fmt=%d:time_base=%d/%d:pixel_aspect=%d/%d:frame_rate=%d/%d",
-                  firstFrame->width,
-                  firstFrame->height,
-                  inputFormat,
-                  m_inputTimeBase.num,
-                  m_inputTimeBase.den,
-                  pixelAspect.num,
-                  pixelAspect.den,
-                  inputFrameRate.num,
-                  inputFrameRate.den);
-
-    int ret = avfilter_graph_create_filter(&m_bufferSrcContext,
-                                           bufferSrc,
-                                           "in",
-                                           args,
-                                           nullptr,
-                                           m_filterGraph.get());
-    if (ret < 0) {
+    auto sourceStatus = hardwareSource
+                            ? configureHardwareBufferSource(m_filterGraph.get(),
+                                                            &m_bufferSrcContext,
+                                                            bufferSrc,
+                                                            firstFrame,
+                                                            m_inputTimeBase,
+                                                            inputFrameRate,
+                                                            pixelAspect)
+                            : configureSoftwareBufferSource(m_filterGraph.get(),
+                                                            &m_bufferSrcContext,
+                                                            bufferSrc,
+                                                            firstFrame,
+                                                            m_inputTimeBase,
+                                                            inputFrameRate,
+                                                            pixelAspect);
+    if (!sourceStatus) {
         resetFilterGraph();
-        return FFmpegGraphError::statusFromCode(ret, "avfilter_graph_create_filter(buffer)");
+        return sourceStatus;
     }
 
-    ret = avfilter_graph_create_filter(&m_bufferSinkContext,
-                                       bufferSink,
-                                       "out",
-                                       nullptr,
-                                       nullptr,
-                                       m_filterGraph.get());
+    int ret = avfilter_graph_create_filter(&m_bufferSinkContext,
+                                           bufferSink,
+                                           "out",
+                                           nullptr,
+                                           nullptr,
+                                           m_filterGraph.get());
     if (ret < 0) {
         resetFilterGraph();
         return FFmpegGraphError::statusFromCode(ret, "avfilter_graph_create_filter(buffersink)");
     }
 
-    const std::string filterDescription = buildFilterDescription(m_encoderContext);
+    const std::string filterName = plannedFilterName(nodeOptions(context));
+    const std::string filterDescription = buildFilterDescription(nodeOptions(context));
     if (filterDescription.empty()) {
         resetFilterGraph();
         return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("VideoFilterNode failed to build filter description"));
+            ::media::ErrorInfo::invalidArgument("VideoFilterNode failed to build filter description from planner"));
     }
 
     ::media::ffmpeg::FilterInOutPtr outputs = ::media::ffmpeg::makeFilterInOut();
@@ -332,6 +422,8 @@ MediaNodeKind VideoFilterNode::staticKind() noexcept
         << " encoder_fmt=" << pixelFormatName(m_encoderContext->pix_fmt)
         << " input_size=" << firstFrame->width << "x" << firstFrame->height
         << " encoder_size=" << m_encoderContext->width << "x" << m_encoderContext->height
+        << " hardware_source=" << (hardwareSource ? "true" : "false")
+        << " planner_filter=" << filterName
         << " desc=" << filterDescription;
     filterLog(MediaGraphDiagnosticLevel::State, out.str());
 
@@ -464,6 +556,7 @@ MediaNodeKind VideoFilterNode::staticKind() noexcept
             << " encoder_tb=" << rationalText(m_encoderContext->time_base)
             << " pts_in=" << ptsIn
             << " pts_out=" << frame->pts
+            << " fmt=" << pixelFormatName(static_cast<AVPixelFormat>(frame->format))
             << " duration=" << frame->duration;
         filterLog(MediaGraphDiagnosticLevel::Flow, out.str());
     }
