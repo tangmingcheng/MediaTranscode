@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/FFmpegRAII.h"
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 
@@ -33,6 +34,7 @@ private:
     ::media::Status forwardIfOutputsExist(MediaGraphExecutionContext& context, const MediaBufferRef& buffer);
 
 private:
+    ::media::ffmpeg::OutputFormatContextPtr m_outputContextOwner;
     AVFormatContext* m_outputContext = nullptr;
     bool m_headerWritten = false;
     bool m_trailerWritten = false;
