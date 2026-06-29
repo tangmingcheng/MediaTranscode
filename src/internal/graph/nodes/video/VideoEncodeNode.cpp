@@ -31,7 +31,7 @@ MediaNodeKind VideoEncodeNode::staticKind() noexcept
     }
 
     if (tryBindCodecContext(input.value())) {
-        return ::media::Status::success();
+        return emitEncoderConfig(context, input.value());
     }
 
     if (!hasCodecContext()) {
@@ -63,6 +63,27 @@ MediaNodeKind VideoEncodeNode::staticKind() noexcept
     }
 
     return receivePackets(context);
+}
+
+::media::Status VideoEncodeNode::emitEncoderConfig(MediaGraphExecutionContext& context,
+                                                   const MediaBufferRef& buffer)
+{
+    if (m_encoderConfigEmitted || !buffer) {
+        return ::media::Status::success();
+    }
+
+    MediaChannel* channel = context.findOutputChannel(nodeId(), "codec");
+    if (!channel) {
+        return ::media::Status::success();
+    }
+
+    auto status = channel->push(buffer);
+    if (!status) {
+        return status;
+    }
+
+    m_encoderConfigEmitted = true;
+    return ::media::Status::success();
 }
 
 ::media::Status VideoEncodeNode::receivePackets(MediaGraphExecutionContext& context)
