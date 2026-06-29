@@ -1,5 +1,6 @@
 #include "internal/graph/nodes/mux/FileMuxNode.h"
 
+#include "internal/FFmpegRAII.h"
 #include "internal/graph/runtime/buffer/FFmpegCodecContextBuffer.h"
 #include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
@@ -211,8 +212,8 @@ bool FileMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
         return ::media::Status::success();
     }
 
-    AVPacket* packet = FFmpegPacketView::writablePacket(buffer);
-    if (!packet) {
+    const AVPacket* sourcePacket = FFmpegPacketView::packet(buffer);
+    if (!sourcePacket) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("FileMuxNode expected packet buffer"));
     }
@@ -224,8 +225,6 @@ bool FileMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
         return ::media::Status::success();
     }
 
-    packet->stream_index = targetStreamIndex;
-
     auto headerStatus = writeHeaderIfNeeded();
     if (!headerStatus) {
         return headerStatus;
@@ -235,7 +234,20 @@ bool FileMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
         return ::media::Status::success();
     }
 
-    const int ret = av_interleaved_write_frame(m_outputContext, packet);
+    auto packet = ::media::ffmpeg::makePacket();
+    if (!packet) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::allocationFailed("FileMuxNode failed: av_packet_alloc returned null"));
+    }
+
+    const int refRet = av_packet_ref(packet.get(), sourcePacket);
+    if (refRet < 0) {
+        return FFmpegGraphError::statusFromCode(refRet, "av_packet_ref(mux packet)");
+    }
+
+    packet->stream_index = targetStreamIndex;
+
+    const int ret = av_interleaved_write_frame(m_outputContext, packet.get());
     if (ret < 0) {
         return FFmpegGraphError::statusFromCode(ret, "av_interleaved_write_frame");
     }
