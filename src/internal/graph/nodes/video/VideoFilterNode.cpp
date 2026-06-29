@@ -76,6 +76,31 @@ std::string pixelFormatName(AVPixelFormat format)
     return name ? std::string(name) : std::string();
 }
 
+std::string buildFilterDescription(const AVCodecContext* encoderContext)
+{
+    if (!encoderContext) {
+        return {};
+    }
+
+    const std::string pixFmt = pixelFormatName(encoderContext->pix_fmt);
+    if (pixFmt.empty()) {
+        return {};
+    }
+
+    std::ostringstream desc;
+    bool hasFilter = false;
+    if (encoderContext->width > 0 && encoderContext->height > 0) {
+        desc << "scale=" << encoderContext->width << ":" << encoderContext->height << ":flags=bicubic";
+        hasFilter = true;
+    }
+
+    if (hasFilter) {
+        desc << ",";
+    }
+    desc << "format=pix_fmts=" << pixFmt;
+    return desc.str();
+}
+
 std::string plannedFilterName(const MediaNodeOptions* options)
 {
     std::string filter = optionValue(options, "filter.pipeline.filter");
@@ -126,6 +151,8 @@ std::string buildFilterDescription(const MediaNodeOptions* options)
     parameters->time_base = timeBase;
     parameters->sample_aspect_ratio = pixelAspect;
     parameters->frame_rate = frameRate;
+    parameters->color_space = firstFrame->colorspace;
+    parameters->color_range = firstFrame->color_range;
     parameters->hw_frames_ctx = av_buffer_ref(firstFrame->hw_frames_ctx);
     if (!parameters->hw_frames_ctx) {
         av_freep(&parameters);
