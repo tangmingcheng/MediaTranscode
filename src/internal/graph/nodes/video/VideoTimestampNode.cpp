@@ -29,14 +29,31 @@ std::string rationalText(AVRational rational)
     return std::to_string(rational.num) + "/" + std::to_string(rational.den);
 }
 
-bool validTimestamp(int64_t value) noexcept
+bool timestampKnown(int64_t value) noexcept
 {
     return value != AV_NOPTS_VALUE && value != invalidMediaTimeValue;
 }
 
+int64_t decodedTimestamp(const AVFrame* frame) noexcept
+{
+    if (!frame) {
+        return AV_NOPTS_VALUE;
+    }
+    if (frame->best_effort_timestamp != AV_NOPTS_VALUE) {
+        return frame->best_effort_timestamp;
+    }
+    if (frame->pts != AV_NOPTS_VALUE) {
+        return frame->pts;
+    }
+    if (frame->pkt_dts != AV_NOPTS_VALUE) {
+        return frame->pkt_dts;
+    }
+    return AV_NOPTS_VALUE;
+}
+
 int64_t rescaleTimestamp(int64_t value, AVRational source, AVRational target) noexcept
 {
-    return validTimestamp(value) ? av_rescale_q(value, source, target) : value;
+    return timestampKnown(value) ? av_rescale_q(value, source, target) : value;
 }
 
 void logTimestamp(MediaGraphDiagnosticLevel level, const std::string& message)
@@ -115,14 +132,19 @@ MediaNodeKind VideoTimestampNode::staticKind() noexcept
             ::media::ErrorInfo::invalidArgument("VideoTimestampNode expected source codec context buffer"));
     }
 
-    m_sourceTimeBase = codecContext->time_base;
+    if (!rationalKnown(codecContext->pkt_timebase)) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("VideoTimestampNode requires source stream time_base"));
+    }
+
+    m_sourceTimeBase = codecContext->pkt_timebase;
     m_hasSourceTimeBase = true;
 
     std::ostringstream out;
     out << "bind_source_time_base tb=" << rationalText(m_sourceTimeBase)
         << " decoder_tb=" << rationalText(codecContext->time_base)
         << " pkt_tb=" << rationalText(codecContext->pkt_timebase)
-        << " mode=" << (rationalKnown(m_sourceTimeBase) ? "rescale" : "passthrough");
+        << " mode=decoded_timestamp";
     logTimestamp(MediaGraphDiagnosticLevel::State, out.str());
     return ::media::Status::success();
 }
@@ -168,17 +190,20 @@ MediaNodeKind VideoTimestampNode::staticKind() noexcept
     }
 
     const int64_t ptsIn = frame->pts;
+    const int64_t bestIn = frame->best_effort_timestamp;
     const int64_t dtsIn = frame->pkt_dts;
     const int64_t durationIn = frame->duration;
-    const bool canRescale = rationalKnown(m_sourceTimeBase) && rationalKnown(m_targetTimeBase);
+    const int64_t sourceTs = decodedTimestamp(frame);
 
-    if (canRescale &&
-        (m_sourceTimeBase.num != m_targetTimeBase.num || m_sourceTimeBase.den != m_targetTimeBase.den)) {
-        frame->pts = rescaleTimestamp(frame->pts, m_sourceTimeBase, m_targetTimeBase);
-        frame->pkt_dts = rescaleTimestamp(frame->pkt_dts, m_sourceTimeBase, m_targetTimeBase);
-        if (frame->duration > 0) {
-            frame->duration = av_rescale_q(frame->duration, m_sourceTimeBase, m_targetTimeBase);
-        }
+    if (sourceTs == AV_NOPTS_VALUE) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("VideoTimestampNode input video frame has no timestamp"));
+    }
+
+    frame->pts = rescaleTimestamp(sourceTs, m_sourceTimeBase, m_targetTimeBase);
+    frame->pkt_dts = AV_NOPTS_VALUE;
+    if (frame->duration > 0) {
+        frame->duration = av_rescale_q(frame->duration, m_sourceTimeBase, m_targetTimeBase);
     }
 
     MediaTimeDescriptor targetTime;
@@ -191,9 +216,11 @@ MediaNodeKind VideoTimestampNode::staticKind() noexcept
     if (decision.shouldLog) {
         std::ostringstream out;
         out << "normalize_frame seq=" << decision.sequence
-            << " mode=" << (canRescale ? "rescale" : "passthrough")
+            << " mode=decoded_timestamp"
             << " source_tb=" << rationalText(m_sourceTimeBase)
             << " target_tb=" << rationalText(m_targetTimeBase)
+            << " source_ts=" << sourceTs
+            << " best_in=" << bestIn
             << " pts_in=" << ptsIn
             << " dts_in=" << dtsIn
             << " duration_in=" << durationIn
