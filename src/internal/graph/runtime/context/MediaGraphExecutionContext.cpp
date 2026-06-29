@@ -13,10 +13,10 @@ namespace media::ffmpeg::graph {
 
 ::media::Status MediaGraphExecutionContext::compile(const MediaGraph& graph)
 {
-    const bool diagnosticsEnabled = m_diagnosticsEnabled;
+    const MediaGraphDiagnosticConfig diagnosticConfig = m_diagnosticConfig;
     reset();
-    m_diagnosticsEnabled = diagnosticsEnabled;
-    mediaGraphDiagnosticSetGlobalEnabled(m_diagnosticsEnabled);
+    m_diagnosticConfig = diagnosticConfig;
+    mediaGraphDiagnosticSetGlobalConfig(m_diagnosticConfig);
 
     auto report = MediaGraphValidation::validate(graph);
     if (!report.ok()) {
@@ -54,7 +54,9 @@ namespace media::ffmpeg::graph {
         first = false;
         out << nodeId.value;
     }
-    mediaGraphDiagnosticLog(m_diagnosticsEnabled, MediaGraphDiagnosticPhase::RuntimeLifecycle, out.str());
+    mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::Summary,
+                            MediaGraphDiagnosticPhase::RuntimeLifecycle,
+                            out.str());
 
     return ::media::Status::success();
 }
@@ -65,18 +67,29 @@ void MediaGraphExecutionContext::reset()
     m_channels.clear();
     m_executionOrder.clear();
     m_compiled = false;
-    mediaGraphDiagnosticSetGlobalEnabled(m_diagnosticsEnabled);
+    mediaGraphDiagnosticSetGlobalConfig(m_diagnosticConfig);
 }
 
 void MediaGraphExecutionContext::setDiagnosticsEnabled(bool enabled) noexcept
 {
-    m_diagnosticsEnabled = enabled;
-    mediaGraphDiagnosticSetGlobalEnabled(enabled);
+    m_diagnosticConfig.level = enabled ? MediaGraphDiagnosticLevel::State : MediaGraphDiagnosticLevel::Off;
+    mediaGraphDiagnosticSetGlobalConfig(m_diagnosticConfig);
 }
 
 bool MediaGraphExecutionContext::diagnosticsEnabled() const noexcept
 {
-    return m_diagnosticsEnabled;
+    return m_diagnosticConfig.level != MediaGraphDiagnosticLevel::Off;
+}
+
+void MediaGraphExecutionContext::setDiagnosticConfig(MediaGraphDiagnosticConfig config) noexcept
+{
+    m_diagnosticConfig = config;
+    mediaGraphDiagnosticSetGlobalConfig(m_diagnosticConfig);
+}
+
+const MediaGraphDiagnosticConfig& MediaGraphExecutionContext::diagnosticConfig() const noexcept
+{
+    return m_diagnosticConfig;
 }
 
 bool MediaGraphExecutionContext::compiled() const noexcept
@@ -201,7 +214,7 @@ std::vector<MediaChannel*> MediaGraphExecutionContext::outputChannels(MediaNodeI
         }
 
         if (MediaChannel* channel = result.value()) {
-            mediaGraphDiagnosticLog(m_diagnosticsEnabled,
+            mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
                                     MediaGraphDiagnosticPhase::RuntimeChannel,
                                     std::string("create ") + mediaGraphDiagnosticDescribeChannel(*channel));
         }
