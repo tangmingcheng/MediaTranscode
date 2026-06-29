@@ -1,11 +1,38 @@
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 
 #include "internal/graph/core/MediaGraph.h"
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 
+#include <sstream>
 #include <utility>
 
 namespace media::ffmpeg::graph {
+namespace {
+
+void logEdgeTransfer(MediaGraphExecutionContext& context,
+                     MediaGraphDiagnosticPhase phase,
+                     const char* action,
+                     MediaNodeId nodeId,
+                     const std::string& nodeName,
+                     const MediaChannel& channel,
+                     const MediaBufferRef& buffer)
+{
+    if (!context.diagnosticsEnabled()) {
+        return;
+    }
+
+    std::ostringstream out;
+    out << action
+        << " node=" << nodeId.value
+        << " node_name=" << nodeName
+        << " " << mediaGraphDiagnosticDescribeChannel(channel)
+        << " " << mediaGraphDiagnosticDescribeBuffer(buffer);
+
+    mediaGraphDiagnosticLog(true, phase, out.str());
+}
+
+} // namespace
 
 FFmpegNodeRuntime::FFmpegNodeRuntime(MediaNodeId nodeId, MediaNodeKind kind, std::string name)
     : MediaNodeRuntime(nodeId, kind, std::move(name))
@@ -46,6 +73,14 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
         return ::media::Result<MediaBufferRef>::failure(status.error());
     }
 
+    logEdgeTransfer(context,
+                    MediaGraphDiagnosticPhase::RuntimeEdge,
+                    "pop",
+                    nodeId(),
+                    name(),
+                    *channel,
+                    buffer);
+
     return ::media::Result<MediaBufferRef>::success(std::move(buffer));
 }
 
@@ -58,6 +93,13 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
 
         MediaBufferRef buffer;
         if (channel->tryPop(buffer)) {
+            logEdgeTransfer(context,
+                            MediaGraphDiagnosticPhase::RuntimeEdge,
+                            "try_pop",
+                            nodeId(),
+                            name(),
+                            *channel,
+                            buffer);
             return ::media::Result<MediaBufferRef>::success(std::move(buffer));
         }
     }
@@ -76,7 +118,18 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
             ::media::ErrorInfo::notInitialized("FFmpegNodeRuntime pushOutput failed: output channel not found"));
     }
 
-    return channel->push(std::move(buffer));
+    MediaBufferRef loggedBuffer = buffer;
+    auto status = channel->push(std::move(buffer));
+    if (status) {
+        logEdgeTransfer(context,
+                        MediaGraphDiagnosticPhase::RuntimeEdge,
+                        "push",
+                        nodeId(),
+                        name(),
+                        *channel,
+                        loggedBuffer);
+    }
+    return status;
 }
 
 ::media::Status FFmpegNodeRuntime::pushToAllOutputs(MediaGraphExecutionContext& context,
@@ -97,6 +150,13 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
         if (!status) {
             return status;
         }
+        logEdgeTransfer(context,
+                        MediaGraphDiagnosticPhase::RuntimeEdge,
+                        "push_all",
+                        nodeId(),
+                        name(),
+                        *channel,
+                        buffer);
         pushed = true;
     }
 
@@ -140,6 +200,13 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
             if (!status) {
                 return status;
             }
+            logEdgeTransfer(context,
+                            MediaGraphDiagnosticPhase::RuntimeEdge,
+                            "push_match",
+                            nodeId(),
+                            name(),
+                            *channel,
+                            buffer);
             pushed = true;
         }
     }
