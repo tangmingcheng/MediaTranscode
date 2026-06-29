@@ -18,7 +18,11 @@ void logEdgeTransfer(MediaGraphExecutionContext& context,
                      const MediaChannel& channel,
                      const MediaBufferRef& buffer)
 {
-    if (!context.diagnosticsEnabled()) {
+    // sampling key: node + edge + action
+    const std::string key = std::to_string(nodeId.value) + ":" + std::to_string(channel.edgeId().value) + ":" + action;
+
+    auto decision = mediaGraphDiagnosticSample(MediaGraphDiagnosticLevel::Flow, key);
+    if (!decision.shouldLog) {
         return;
     }
 
@@ -26,10 +30,11 @@ void logEdgeTransfer(MediaGraphExecutionContext& context,
     out << action
         << " node=" << nodeId.value
         << " node_name=" << nodeName
+        << " seq=" << decision.sequence
         << " " << mediaGraphDiagnosticDescribeChannel(channel)
         << " " << mediaGraphDiagnosticDescribeBuffer(buffer);
 
-    mediaGraphDiagnosticLog(true, phase, out.str());
+    mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::Flow, phase, out.str());
 }
 
 } // namespace
@@ -133,7 +138,7 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
 }
 
 ::media::Status FFmpegNodeRuntime::pushToAllOutputs(MediaGraphExecutionContext& context,
-                                                     const MediaBufferRef& buffer)
+                                                      const MediaBufferRef& buffer)
 {
     if (!buffer) {
         return ::media::Status::failure(
@@ -150,6 +155,7 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
         if (!status) {
             return status;
         }
+
         logEdgeTransfer(context,
                         MediaGraphDiagnosticPhase::RuntimeEdge,
                         "push_all",
@@ -200,6 +206,7 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
             if (!status) {
                 return status;
             }
+
             logEdgeTransfer(context,
                             MediaGraphDiagnosticPhase::RuntimeEdge,
                             "push_match",
