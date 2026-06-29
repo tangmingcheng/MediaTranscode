@@ -21,11 +21,6 @@ bool rationalKnown(AVRational rational) noexcept
     return rational.num != 0 && rational.den != 0;
 }
 
-AVRational toAVRational(MediaRational rational) noexcept
-{
-    return AVRational{ rational.num, rational.den };
-}
-
 std::string rationalText(AVRational rational)
 {
     if (!rationalKnown(rational)) {
@@ -42,6 +37,19 @@ bool validTimestamp(int64_t value) noexcept
 int64_t rescaleTimestamp(int64_t value, AVRational source, AVRational target) noexcept
 {
     return validTimestamp(value) ? av_rescale_q(value, source, target) : value;
+}
+
+AVRational decoderFrameTimeBase(const AVCodecContext* codecContext) noexcept
+{
+    if (!codecContext) {
+        return AVRational{ 0, 1 };
+    }
+
+    if (rationalKnown(codecContext->pkt_timebase)) {
+        return codecContext->pkt_timebase;
+    }
+
+    return codecContext->time_base;
 }
 
 void logTimestamp(MediaGraphDiagnosticLevel level, const std::string& message)
@@ -65,18 +73,32 @@ MediaNodeKind VideoTimestampNode::staticKind() noexcept
 
 ::media::Status VideoTimestampNode::onProcess(MediaGraphExecutionContext& context)
 {
-    if (!m_hasTargetTimeBase) {
-        MediaChannel* codecChannel = context.findInputChannel(nodeId(), "codec");
-        if (!codecChannel) {
+    if (!m_hasSourceTimeBase) {
+        MediaChannel* sourceCodecChannel = context.findInputChannel(nodeId(), "source_codec");
+        if (!sourceCodecChannel) {
             return ::media::Status::failure(
-                ::media::ErrorInfo::notInitialized("VideoTimestampNode codec input channel not found"));
+                ::media::ErrorInfo::notInitialized("VideoTimestampNode source_codec input channel not found"));
         }
 
-        MediaBufferRef codecBuffer;
-        if (!codecChannel->tryPop(codecBuffer)) {
+        MediaBufferRef sourceCodecBuffer;
+        if (!sourceCodecChannel->tryPop(sourceCodecBuffer)) {
             return ::media::Status::success();
         }
-        return bindCodecConfig(context, codecBuffer);
+        return bindSourceCodecConfig(context, sourceCodecBuffer);
+    }
+
+    if (!m_hasTargetTimeBase) {
+        MediaChannel* targetCodecChannel = context.findInputChannel(nodeId(), "target_codec");
+        if (!targetCodecChannel) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::notInitialized("VideoTimestampNode target_codec input channel not found"));
+        }
+
+        MediaBufferRef targetCodecBuffer;
+        if (!targetCodecChannel->tryPop(targetCodecBuffer)) {
+            return ::media::Status::success();
+        }
+        return bindTargetCodecConfig(context, targetCodecBuffer);
     }
 
     MediaChannel* frameChannel = context.findInputChannel(nodeId(), "frame");
@@ -97,18 +119,41 @@ MediaNodeKind VideoTimestampNode::staticKind() noexcept
     return normalizeFrame(context, frameBuffer);
 }
 
-::media::Status VideoTimestampNode::bindCodecConfig(MediaGraphExecutionContext& context, const MediaBufferRef& buffer)
+::media::Status VideoTimestampNode::bindSourceCodecConfig(MediaGraphExecutionContext&, const MediaBufferRef& buffer)
 {
     auto* codecBuffer = dynamic_cast<FFmpegCodecContextBuffer*>(buffer.get());
     AVCodecContext* codecContext = codecBuffer ? codecBuffer->context() : nullptr;
     if (!codecContext) {
         return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("VideoTimestampNode expected codec context buffer"));
+            ::media::ErrorInfo::invalidArgument("VideoTimestampNode expected source codec context buffer"));
+    }
+
+    const AVRational sourceTimeBase = decoderFrameTimeBase(codecContext);
+    if (!rationalKnown(sourceTimeBase)) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("VideoTimestampNode requires known source decoder time_base"));
+    }
+
+    m_sourceTimeBase = sourceTimeBase;
+    m_hasSourceTimeBase = true;
+
+    logTimestamp(MediaGraphDiagnosticLevel::State,
+                 std::string("bind_source_time_base tb=") + rationalText(m_sourceTimeBase));
+    return ::media::Status::success();
+}
+
+::media::Status VideoTimestampNode::bindTargetCodecConfig(MediaGraphExecutionContext& context, const MediaBufferRef& buffer)
+{
+    auto* codecBuffer = dynamic_cast<FFmpegCodecContextBuffer*>(buffer.get());
+    AVCodecContext* codecContext = codecBuffer ? codecBuffer->context() : nullptr;
+    if (!codecContext) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("VideoTimestampNode expected target codec context buffer"));
     }
 
     if (!rationalKnown(codecContext->time_base)) {
         return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("VideoTimestampNode requires known encoder time_base"));
+            ::media::ErrorInfo::invalidArgument("VideoTimestampNode requires known target encoder time_base"));
     }
 
     m_targetTimeBase = codecContext->time_base;
@@ -117,7 +162,7 @@ MediaNodeKind VideoTimestampNode::staticKind() noexcept
     logTimestamp(MediaGraphDiagnosticLevel::State,
                  std::string("bind_target_time_base tb=") + rationalText(m_targetTimeBase));
 
-    if (MediaChannel* codecOut = context.findOutputChannel(nodeId(), "codec")) {
+    if (MediaChannel* codecOut = context.findOutputChannel(nodeId(), "target_codec")) {
         auto status = codecOut->push(buffer);
         if (!status) {
             return status;
@@ -125,7 +170,8 @@ MediaNodeKind VideoTimestampNode::staticKind() noexcept
         return ::media::Status::success();
     }
 
-    return pushToAllOutputs(context, buffer);
+    return ::media::Status::failure(
+        ::media::ErrorInfo::notInitialized("VideoTimestampNode target_codec output channel not found"));
 }
 
 ::media::Status VideoTimestampNode::normalizeFrame(MediaGraphExecutionContext& context, const MediaBufferRef& buffer)
@@ -136,28 +182,20 @@ MediaNodeKind VideoTimestampNode::staticKind() noexcept
             ::media::ErrorInfo::invalidArgument("VideoTimestampNode expected frame buffer"));
     }
 
-    const MediaRational sourceRational = buffer->timeDescriptor().timeBase;
-    if (!sourceRational.isKnown()) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("VideoTimestampNode requires known input frame time_base"));
-    }
-
-    const AVRational sourceTimeBase = toAVRational(sourceRational);
     const int64_t ptsIn = frame->pts;
     const int64_t dtsIn = frame->pkt_dts;
     const int64_t durationIn = frame->duration;
 
-    if (sourceTimeBase.num != m_targetTimeBase.num || sourceTimeBase.den != m_targetTimeBase.den) {
-        frame->pts = rescaleTimestamp(frame->pts, sourceTimeBase, m_targetTimeBase);
-        frame->pkt_dts = rescaleTimestamp(frame->pkt_dts, sourceTimeBase, m_targetTimeBase);
+    if (m_sourceTimeBase.num != m_targetTimeBase.num || m_sourceTimeBase.den != m_targetTimeBase.den) {
+        frame->pts = rescaleTimestamp(frame->pts, m_sourceTimeBase, m_targetTimeBase);
+        frame->pkt_dts = rescaleTimestamp(frame->pkt_dts, m_sourceTimeBase, m_targetTimeBase);
         if (frame->duration > 0) {
-            frame->duration = av_rescale_q(frame->duration, sourceTimeBase, m_targetTimeBase);
+            frame->duration = av_rescale_q(frame->duration, m_sourceTimeBase, m_targetTimeBase);
         }
     }
 
-    MediaTimeDescriptor targetTime = buffer->timeDescriptor();
+    MediaTimeDescriptor targetTime;
     targetTime.timeBase = MediaRational{ m_targetTimeBase.num, m_targetTimeBase.den };
-    targetTime.frameRate = MediaRational{};
     buffer->setTimeDescriptor(targetTime);
     buffer->setTimestamps(frame->pts, frame->pkt_dts, frame->duration);
 
@@ -166,7 +204,7 @@ MediaNodeKind VideoTimestampNode::staticKind() noexcept
     if (decision.shouldLog) {
         std::ostringstream out;
         out << "normalize_frame seq=" << decision.sequence
-            << " source_tb=" << rationalText(sourceTimeBase)
+            << " source_tb=" << rationalText(m_sourceTimeBase)
             << " target_tb=" << rationalText(m_targetTimeBase)
             << " pts_in=" << ptsIn
             << " dts_in=" << dtsIn
@@ -185,7 +223,8 @@ MediaNodeKind VideoTimestampNode::staticKind() noexcept
         return ::media::Status::success();
     }
 
-    return pushToAllOutputs(context, buffer);
+    return ::media::Status::failure(
+        ::media::ErrorInfo::notInitialized("VideoTimestampNode frame output channel not found"));
 }
 
 } // namespace media::ffmpeg::graph
