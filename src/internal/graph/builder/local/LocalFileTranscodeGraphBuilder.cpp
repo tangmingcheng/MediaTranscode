@@ -296,6 +296,13 @@ void preferSoftwarePlan(MediaPipelinePlan& plan)
                             true,
                             false);
         graph.addOutputPort(codecResolver,
+                            "timestamp_source",
+                            MediaStreamKind::Video,
+                            MediaEdgeKind::Metadata,
+                            MediaPayloadKind::CodecContext,
+                            true,
+                            false);
+        graph.addOutputPort(codecResolver,
                             "encoder",
                             MediaStreamKind::Video,
                             MediaEdgeKind::Metadata,
@@ -355,14 +362,21 @@ void preferSoftwarePlan(MediaPipelinePlan& plan)
                             true);
 
         graph.addInputPort(videoTimestamp,
-                           "codec",
+                           "source_codec",
+                           MediaStreamKind::Video,
+                           MediaEdgeKind::Metadata,
+                           MediaPayloadKind::CodecContext,
+                           true,
+                           false);
+        graph.addInputPort(videoTimestamp,
+                           "target_codec",
                            MediaStreamKind::Video,
                            MediaEdgeKind::Metadata,
                            MediaPayloadKind::CodecContext,
                            true,
                            false);
         graph.addOutputPort(videoTimestamp,
-                            "codec",
+                            "target_codec",
                             MediaStreamKind::Video,
                             MediaEdgeKind::Metadata,
                             MediaPayloadKind::CodecContext,
@@ -418,16 +432,22 @@ void preferSoftwarePlan(MediaPipelinePlan& plan)
                       "local.codec.resolver.decoder -> local.video.decode.codec",
                       blockingQueuePolicy(options.metadataQueueCapacity));
         graph.connect(codecResolver,
+                      "timestamp_source",
+                      videoTimestamp,
+                      "source_codec",
+                      "local.codec.resolver.timestamp_source -> local.video.timestamp.source_codec",
+                      blockingQueuePolicy(options.metadataQueueCapacity));
+        graph.connect(codecResolver,
                       "encoder",
                       videoTimestamp,
-                      "codec",
-                      "local.codec.resolver.encoder -> local.video.timestamp.codec",
+                      "target_codec",
+                      "local.codec.resolver.encoder -> local.video.timestamp.target_codec",
                       blockingQueuePolicy(options.metadataQueueCapacity));
         graph.connect(videoTimestamp,
-                      "codec",
+                      "target_codec",
                       videoEncode,
                       "codec",
-                      "local.video.timestamp.codec -> local.video.encode.codec",
+                      "local.video.timestamp.target_codec -> local.video.encode.codec",
                       blockingQueuePolicy(options.metadataQueueCapacity));
         graph.connect(codecResolver,
                       "mux_video",
