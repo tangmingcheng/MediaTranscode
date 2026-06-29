@@ -4,6 +4,7 @@
 
 #include <sstream>
 #include <utility>
+#include <vector>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -24,6 +25,30 @@ std::string describeChannels(const std::vector<MediaChannel*>& channels)
         out << mediaGraphDiagnosticDescribeChannel(*channel);
     }
     out << "]";
+    return out.str();
+}
+
+std::string processDiagnosticMessage(const char* action,
+                                     MediaNodeId nodeId,
+                                     const std::string& name,
+                                     MediaNodeKind kind,
+                                     MediaGraphExecutionContext& context,
+                                     const ::media::Status* status = nullptr,
+                                     std::uint64_t sequence = 0)
+{
+    std::ostringstream out;
+    out << action;
+    if (sequence > 0) {
+        out << " seq=" << sequence;
+    }
+    out << " node=" << nodeId.value
+        << " name=" << name
+        << " kind=" << mediaGraphDiagnosticNodeKindName(kind)
+        << " inputs=" << describeChannels(context.inputChannels(nodeId))
+        << " outputs=" << describeChannels(context.outputChannels(nodeId));
+    if (status && !*status) {
+        out << " error=" << status->error().describe();
+    }
     return out.str();
 }
 
@@ -53,30 +78,46 @@ const std::string& MediaNodeRuntime::name() const noexcept
 
 ::media::Status MediaNodeRuntime::process(MediaGraphExecutionContext& context)
 {
-    if (context.diagnosticsEnabled()) {
-        std::ostringstream begin;
-        begin << "process.begin node=" << m_nodeId.value
-              << " name=" << m_name
-              << " kind=" << mediaGraphDiagnosticNodeKindName(m_kind)
-              << " inputs=" << describeChannels(context.inputChannels(m_nodeId))
-              << " outputs=" << describeChannels(context.outputChannels(m_nodeId));
-        mediaGraphDiagnosticLog(true, MediaGraphDiagnosticPhase::RuntimeNode, begin.str());
+    const std::string beginKey = "node:" + std::to_string(m_nodeId.value) + ":process.begin";
+    auto beginDecision = mediaGraphDiagnosticSample(MediaGraphDiagnosticLevel::Trace, beginKey);
+    if (beginDecision.shouldLog) {
+        mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::Trace,
+                                MediaGraphDiagnosticPhase::RuntimeNode,
+                                processDiagnosticMessage("process.begin",
+                                                         m_nodeId,
+                                                         m_name,
+                                                         m_kind,
+                                                         context,
+                                                         nullptr,
+                                                         beginDecision.sequence));
     }
 
     auto status = onProcess(context);
 
-    if (context.diagnosticsEnabled()) {
-        std::ostringstream end;
-        end << "process." << (status ? "done" : "failed")
-            << " node=" << m_nodeId.value
-            << " name=" << m_name
-            << " kind=" << mediaGraphDiagnosticNodeKindName(m_kind)
-            << " inputs=" << describeChannels(context.inputChannels(m_nodeId))
-            << " outputs=" << describeChannels(context.outputChannels(m_nodeId));
-        if (!status) {
-            end << " error=" << status.error().describe();
-        }
-        mediaGraphDiagnosticLog(true, MediaGraphDiagnosticPhase::RuntimeNode, end.str());
+    if (!status) {
+        mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+                                MediaGraphDiagnosticPhase::RuntimeNode,
+                                processDiagnosticMessage("process.failed",
+                                                         m_nodeId,
+                                                         m_name,
+                                                         m_kind,
+                                                         context,
+                                                         &status));
+        return status;
+    }
+
+    const std::string doneKey = "node:" + std::to_string(m_nodeId.value) + ":process.done";
+    auto doneDecision = mediaGraphDiagnosticSample(MediaGraphDiagnosticLevel::Trace, doneKey);
+    if (doneDecision.shouldLog) {
+        mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::Trace,
+                                MediaGraphDiagnosticPhase::RuntimeNode,
+                                processDiagnosticMessage("process.done",
+                                                         m_nodeId,
+                                                         m_name,
+                                                         m_kind,
+                                                         context,
+                                                         &status,
+                                                         doneDecision.sequence));
     }
 
     return status;
