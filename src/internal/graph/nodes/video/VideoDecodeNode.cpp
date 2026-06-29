@@ -57,8 +57,6 @@ MediaNodeKind VideoDecodeNode::staticKind() noexcept
             ::media::ErrorInfo::invalidArgument("VideoDecodeNode expected packet buffer"));
     }
 
-    m_inputPacketTime = input.value()->timeDescriptor();
-
     const int sendRet = avcodec_send_packet(codecContext(), packet);
     if (sendRet < 0 && sendRet != AVERROR(EAGAIN)) {
         return FFmpegGraphError::statusFromCode(sendRet, "avcodec_send_packet(video)");
@@ -88,10 +86,6 @@ MediaNodeKind VideoDecodeNode::staticKind() noexcept
         auto buffer = FFmpegBufferFactory::wrapFrame(std::move(frame), MediaStreamKind::Video);
         if (!buffer) {
             return ::media::Status::failure(buffer.error());
-        }
-
-        if (m_inputPacketTime.hasKnownTimeBase()) {
-            buffer.value()->setTimeDescriptor(m_inputPacketTime);
         }
 
         auto pushStatus = pushToMatchingOutputs(context, buffer.value(), MediaStreamKind::Video);
