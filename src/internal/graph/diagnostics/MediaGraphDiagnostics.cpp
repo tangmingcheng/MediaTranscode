@@ -3,14 +3,19 @@
 #include "internal/graph/runtime/buffer/MediaBuffer.h"
 #include "internal/graph/runtime/channel/MediaChannel.h"
 
-#include <atomic>
+#include <algorithm>
+#include <cctype>
+#include <mutex>
 #include <sstream>
 #include <spdlog/spdlog.h>
+#include <unordered_map>
 
 namespace media::ffmpeg::graph {
 namespace {
 
-std::atomic_bool g_runtimeDiagnosticsEnabled{ false };
+std::mutex g_diagnosticsMutex;
+MediaGraphDiagnosticConfig g_runtimeDiagnosticsConfig;
+std::unordered_map<std::string, std::uint64_t> g_sampleCounters;
 
 std::string rationalText(MediaRational rational)
 {
@@ -18,6 +23,20 @@ std::string rationalText(MediaRational rational)
         return "unknown";
     }
     return std::to_string(rational.num) + "/" + std::to_string(rational.den);
+}
+
+std::string lowerCopy(std::string text)
+{
+    std::transform(text.begin(), text.end(), text.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    return text;
+}
+
+bool levelAtLeast(MediaGraphDiagnosticLevel current, MediaGraphDiagnosticLevel required) noexcept
+{
+    return static_cast<int>(current) >= static_cast<int>(required) &&
+           current != MediaGraphDiagnosticLevel::Off;
 }
 
 } // namespace
@@ -45,6 +64,45 @@ const char* mediaGraphDiagnosticPhaseName(MediaGraphDiagnosticPhase phase) noexc
         return "runtime.lifecycle";
     }
     return "unknown";
+}
+
+const char* mediaGraphDiagnosticLevelName(MediaGraphDiagnosticLevel level) noexcept
+{
+    switch (level) {
+    case MediaGraphDiagnosticLevel::Off:
+        return "off";
+    case MediaGraphDiagnosticLevel::Summary:
+        return "summary";
+    case MediaGraphDiagnosticLevel::State:
+        return "state";
+    case MediaGraphDiagnosticLevel::Flow:
+        return "flow";
+    case MediaGraphDiagnosticLevel::Trace:
+        return "trace";
+    }
+    return "unknown";
+}
+
+MediaGraphDiagnosticLevel mediaGraphDiagnosticLevelFromString(const std::string& text,
+                                                              MediaGraphDiagnosticLevel fallback) noexcept
+{
+    const std::string value = lowerCopy(text);
+    if (value == "off" || value == "quiet" || value == "none" || value == "0") {
+        return MediaGraphDiagnosticLevel::Off;
+    }
+    if (value == "summary" || value == "1") {
+        return MediaGraphDiagnosticLevel::Summary;
+    }
+    if (value == "state" || value == "2") {
+        return MediaGraphDiagnosticLevel::State;
+    }
+    if (value == "flow" || value == "3") {
+        return MediaGraphDiagnosticLevel::Flow;
+    }
+    if (value == "trace" || value == "4" || value == "all") {
+        return MediaGraphDiagnosticLevel::Trace;
+    }
+    return fallback;
 }
 
 const char* mediaGraphDiagnosticNodeKindName(MediaNodeKind kind) noexcept
@@ -115,6 +173,9 @@ const char* mediaGraphDiagnosticEdgeKindName(MediaEdgeKind kind) noexcept
     case MediaEdgeKind::RawFrame: return "RawFrame";
     case MediaEdgeKind::HardwareFrame: return "HardwareFrame";
     case MediaEdgeKind::SoftwareFrame: return "SoftwareFrame";
+    case MediaEdgeKind::DecoderConfig: return "DecoderConfig";
+    case MediaEdgeKind::EncoderConfig: return "EncoderConfig";
+    case MediaEdgeKind::StreamConfig: return "StreamConfig";
     case MediaEdgeKind::EncodedPacket: return "EncodedPacket";
     case MediaEdgeKind::CopiedPacket: return "CopiedPacket";
     case MediaEdgeKind::MuxedPacket: return "MuxedPacket";
@@ -151,12 +212,70 @@ const char* mediaGraphDiagnosticPayloadKindName(MediaPayloadKind kind) noexcept
 
 void mediaGraphDiagnosticSetGlobalEnabled(bool enabled) noexcept
 {
-    g_runtimeDiagnosticsEnabled.store(enabled, std::memory_order_relaxed);
+    MediaGraphDiagnosticConfig config = mediaGraphDiagnosticGlobalConfig();
+    config.level = enabled ? MediaGraphDiagnosticLevel::State : MediaGraphDiagnosticLevel::Off;
+    mediaGraphDiagnosticSetGlobalConfig(config);
 }
 
 bool mediaGraphDiagnosticGlobalEnabled() noexcept
 {
-    return g_runtimeDiagnosticsEnabled.load(std::memory_order_relaxed);
+    return mediaGraphDiagnosticLevelEnabled(MediaGraphDiagnosticLevel::Summary);
+}
+
+void mediaGraphDiagnosticSetGlobalConfig(MediaGraphDiagnosticConfig config)
+{
+    if (config.firstPacketLimit == 0) {
+        config.firstPacketLimit = 1;
+    }
+    if (config.packetSampleInterval == 0) {
+        config.packetSampleInterval = 1;
+    }
+
+    std::lock_guard<std::mutex> lock(g_diagnosticsMutex);
+    g_runtimeDiagnosticsConfig = config;
+    g_sampleCounters.clear();
+}
+
+MediaGraphDiagnosticConfig mediaGraphDiagnosticGlobalConfig()
+{
+    std::lock_guard<std::mutex> lock(g_diagnosticsMutex);
+    return g_runtimeDiagnosticsConfig;
+}
+
+bool mediaGraphDiagnosticLevelEnabled(MediaGraphDiagnosticLevel requiredLevel) noexcept
+{
+    std::lock_guard<std::mutex> lock(g_diagnosticsMutex);
+    return levelAtLeast(g_runtimeDiagnosticsConfig.level, requiredLevel);
+}
+
+MediaGraphDiagnosticSampleDecision mediaGraphDiagnosticSample(MediaGraphDiagnosticLevel requiredLevel,
+                                                              const std::string& key,
+                                                              bool force)
+{
+    std::lock_guard<std::mutex> lock(g_diagnosticsMutex);
+    if (!levelAtLeast(g_runtimeDiagnosticsConfig.level, requiredLevel)) {
+        return {};
+    }
+
+    std::uint64_t& counter = g_sampleCounters[key];
+    ++counter;
+
+    const bool trace = g_runtimeDiagnosticsConfig.level == MediaGraphDiagnosticLevel::Trace;
+    const bool first = counter <= g_runtimeDiagnosticsConfig.firstPacketLimit;
+    const bool sampled = g_runtimeDiagnosticsConfig.packetSampleInterval > 0 &&
+                         (counter % g_runtimeDiagnosticsConfig.packetSampleInterval) == 0;
+
+    MediaGraphDiagnosticSampleDecision decision;
+    decision.sequence = counter;
+    decision.sampled = sampled;
+    decision.shouldLog = force || trace || first || sampled;
+    return decision;
+}
+
+void mediaGraphDiagnosticResetSampling()
+{
+    std::lock_guard<std::mutex> lock(g_diagnosticsMutex);
+    g_sampleCounters.clear();
 }
 
 std::string mediaGraphDiagnosticDescribeBuffer(const MediaBufferRef& buffer)
@@ -241,6 +360,17 @@ void mediaGraphDiagnosticLog(bool enabled,
                              const std::string& message)
 {
     if (!enabled) {
+        return;
+    }
+
+    spdlog::info("[graph][{}] {}", mediaGraphDiagnosticPhaseName(phase), message);
+}
+
+void mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel requiredLevel,
+                             MediaGraphDiagnosticPhase phase,
+                             const std::string& message)
+{
+    if (!mediaGraphDiagnosticLevelEnabled(requiredLevel)) {
         return;
     }
 
