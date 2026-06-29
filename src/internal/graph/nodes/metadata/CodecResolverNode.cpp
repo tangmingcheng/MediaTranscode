@@ -121,8 +121,45 @@ bool pixelFormatSupported(const AVCodec* codec, AVPixelFormat format)
     return false;
 }
 
-AVPixelFormat chooseEncoderPixelFormat(const AVCodec* encoder, AVPixelFormat sourceFormat)
+std::string pixelFormatName(AVPixelFormat format)
 {
+    const char* name = av_get_pix_fmt_name(format);
+    return name ? std::string(name) : std::string("unknown");
+}
+
+AVPixelFormat plannedEncoderHardwarePixelFormat(const MediaNodeOptions* options)
+{
+    if (optionValue(options, "encoder.pipeline.frame_kind") != "hardware") {
+        return AV_PIX_FMT_NONE;
+    }
+
+    const std::string hwaccel = optionValue(options, "encoder.pipeline.hwaccel");
+    const std::string device = optionValue(options, "encoder.pipeline.device");
+    if (hwaccel == "cuda" || device == "cuda") {
+        return AV_PIX_FMT_CUDA;
+    }
+    if (hwaccel == "qsv" || device == "qsv") {
+        return AV_PIX_FMT_QSV;
+    }
+    if (hwaccel == "vaapi" || device == "vaapi") {
+        return AV_PIX_FMT_VAAPI;
+    }
+    if (hwaccel == "d3d11va" || device == "d3d11va") {
+        return AV_PIX_FMT_D3D11;
+    }
+
+    return AV_PIX_FMT_NONE;
+}
+
+AVPixelFormat chooseEncoderPixelFormat(const AVCodec* encoder,
+                                       AVPixelFormat sourceFormat,
+                                       const MediaNodeOptions* options)
+{
+    const AVPixelFormat plannedHardwareFormat = plannedEncoderHardwarePixelFormat(options);
+    if (plannedHardwareFormat != AV_PIX_FMT_NONE) {
+        return pixelFormatSupported(encoder, plannedHardwareFormat) ? plannedHardwareFormat : AV_PIX_FMT_NONE;
+    }
+
     if (sourceFormat != AV_PIX_FMT_NONE && pixelFormatSupported(encoder, sourceFormat)) {
         return sourceFormat;
     }
@@ -172,12 +209,6 @@ AVHWDeviceType deviceTypeFromHwaccelName(const std::string& hwaccel)
         return AV_HWDEVICE_TYPE_DRM;
     }
     return av_hwdevice_find_type_by_name(hwaccel.c_str());
-}
-
-std::string pixelFormatName(AVPixelFormat format)
-{
-    const char* name = av_get_pix_fmt_name(format);
-    return name ? std::string(name) : std::string("unknown");
 }
 
 AVPixelFormat selectHardwarePixelFormat(const AVCodec* decoder, AVHWDeviceType deviceType)
@@ -409,9 +440,19 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
             continue;
         }
 
+        const AVPixelFormat encoderPixelFormat = chooseEncoderPixelFormat(
+            encoder,
+            static_cast<AVPixelFormat>(params->format),
+            options);
+        if (encoderPixelFormat == AV_PIX_FMT_NONE) {
+            lastError = std::string(encoder->name ? encoder->name : "unknown") +
+                        ": planned encoder pixel format unsupported";
+            continue;
+        }
+
         encoderContext->width = targetWidth;
         encoderContext->height = targetHeight;
-        encoderContext->pix_fmt = chooseEncoderPixelFormat(encoder, static_cast<AVPixelFormat>(params->format));
+        encoderContext->pix_fmt = encoderPixelFormat;
         encoderContext->time_base = AVRational{ frameRate.den, frameRate.num };
         encoderContext->framerate = frameRate;
         encoderContext->bit_rate = bitRate;
@@ -422,6 +463,14 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
         encoderContext->color_primaries = params->color_primaries;
         encoderContext->color_trc = params->color_trc;
         encoderContext->colorspace = params->color_space;
+
+        if (plannedEncoderHardwarePixelFormat(options) != AV_PIX_FMT_NONE && m_decoderHardwareDevice) {
+            encoderContext->hw_device_ctx = av_buffer_ref(m_decoderHardwareDevice.get());
+            if (!encoderContext->hw_device_ctx) {
+                return ::media::Status::failure(
+                    ::media::ErrorInfo::allocationFailed("CodecResolverNode failed: av_buffer_ref(encoder hw_device_ctx)"));
+            }
+        }
 
         if (rcMode == "cbr" && bitRate > 0) {
             encoderContext->rc_min_rate = bitRate;
@@ -443,6 +492,12 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
             setPrivateOption(encoderContext.get(), "quality", std::to_string(quality));
             setPrivateOption(encoderContext.get(), "q", std::to_string(quality));
         }
+
+        codecResolverLog(MediaGraphDiagnosticLevel::State,
+                         std::string("encoder.open name=") + (encoder->name ? encoder->name : "unknown") +
+                             " pix_fmt=" + pixelFormatName(encoderContext->pix_fmt) +
+                             " frame_kind=" + optionValue(options, "encoder.pipeline.frame_kind", "software") +
+                             " hwaccel=" + optionValue(options, "encoder.pipeline.hwaccel", "none"));
 
         const int openRet = avcodec_open2(encoderContext.get(), encoder, nullptr);
         if (openRet < 0) {
