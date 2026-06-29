@@ -48,7 +48,7 @@ MediaNodeKind VideoEncodeNode::staticKind() noexcept
         if (!drainStatus) {
             return drainStatus;
         }
-        return pushToAllOutputs(context, input.value());
+        return pushOutput(context, "packet", input.value());
     }
 
     AVFrame* frame = FFmpegFrameView::writableFrame(input.value());
@@ -109,7 +109,7 @@ MediaNodeKind VideoEncodeNode::staticKind() noexcept
             return ::media::Status::failure(buffer.error());
         }
 
-        auto pushStatus = pushToMatchingOutputs(context, buffer.value(), MediaStreamKind::Video);
+        auto pushStatus = pushOutput(context, "packet", buffer.value());
         if (!pushStatus) {
             return pushStatus;
         }
