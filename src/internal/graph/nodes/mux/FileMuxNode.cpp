@@ -12,6 +12,7 @@ extern "C" {
 }
 
 #include <sstream>
+#include <string>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -50,11 +51,28 @@ int codecContextChannelCount(const AVCodecContext* context) noexcept
 #endif
 }
 
-void muxLog(const std::string& message)
+void muxLog(MediaGraphDiagnosticLevel level, const std::string& message)
 {
-    mediaGraphDiagnosticLog(mediaGraphDiagnosticGlobalEnabled(),
+    mediaGraphDiagnosticLog(level,
                             MediaGraphDiagnosticPhase::RuntimeNode,
                             std::string("mux.") + message);
+}
+
+void muxSampleLog(MediaGraphDiagnosticLevel level,
+                  const std::string& key,
+                  const std::string& message)
+{
+    auto decision = mediaGraphDiagnosticSample(level, key);
+    if (!decision.shouldLog) {
+        return;
+    }
+
+    std::ostringstream out;
+    out << message << " seq=" << decision.sequence;
+    if (decision.sampled) {
+        out << " sampled=1";
+    }
+    muxLog(level, out.str());
 }
 
 } // namespace
@@ -88,7 +106,8 @@ MediaNodeKind FileMuxNode::staticKind() noexcept
     }
 
     if (buffer->isEof() || buffer->isFlush()) {
-        muxLog(std::string("control.defer_trailer ") + mediaGraphDiagnosticDescribeBuffer(buffer));
+        muxLog(MediaGraphDiagnosticLevel::State,
+               std::string("control.defer_trailer ") + mediaGraphDiagnosticDescribeBuffer(buffer));
         return forwardIfOutputsExist(context, buffer);
     }
 
@@ -104,7 +123,7 @@ MediaNodeKind FileMuxNode::staticKind() noexcept
 
 ::media::Status FileMuxNode::flush(MediaGraphExecutionContext& context)
 {
-    muxLog("flush.begin");
+    muxLog(MediaGraphDiagnosticLevel::State, "flush.begin");
     auto status = writeTrailerIfNeeded();
     if (!status) {
         return status;
@@ -115,7 +134,7 @@ MediaNodeKind FileMuxNode::staticKind() noexcept
 
 ::media::Status FileMuxNode::stop(MediaGraphExecutionContext& context)
 {
-    muxLog("stop.begin");
+    muxLog(MediaGraphDiagnosticLevel::State, "stop.begin");
     auto status = writeTrailerIfNeeded();
     if (!status) {
         return status;
@@ -138,9 +157,10 @@ bool FileMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
     m_videoStreamIndex = invalidMediaStreamIndex;
     m_audioStreamIndex = invalidMediaStreamIndex;
 
-    muxLog(std::string("bind_output_context nb_streams=") +
-           std::to_string(m_outputContext->nb_streams) + " " +
-           mediaGraphDiagnosticDescribeBuffer(buffer));
+    muxLog(MediaGraphDiagnosticLevel::State,
+           std::string("bind_output_context nb_streams=") +
+               std::to_string(m_outputContext->nb_streams) + " " +
+               mediaGraphDiagnosticDescribeBuffer(buffer));
     return true;
 }
 
@@ -158,9 +178,10 @@ bool FileMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
 
     if (!m_outputContext) {
         m_pendingCodecContexts.push_back(buffer);
-        muxLog(std::string("queue_pending_config pending=") +
-               std::to_string(m_pendingCodecContexts.size()) + " " +
-               mediaGraphDiagnosticDescribeBuffer(buffer));
+        muxLog(MediaGraphDiagnosticLevel::State,
+               std::string("queue_pending_config pending=") +
+                   std::to_string(m_pendingCodecContexts.size()) + " " +
+                   mediaGraphDiagnosticDescribeBuffer(buffer));
         return ::media::Status::success();
     }
 
@@ -175,7 +196,8 @@ bool FileMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
 
     auto pending = std::move(m_pendingCodecContexts);
     m_pendingCodecContexts.clear();
-    muxLog(std::string("register_pending count=") + std::to_string(pending.size()));
+    muxLog(MediaGraphDiagnosticLevel::State,
+           std::string("register_pending count=") + std::to_string(pending.size()));
     for (const auto& buffer : pending) {
         auto status = registerStreamFromCodecContext(buffer);
         if (!status) {
@@ -190,9 +212,10 @@ bool FileMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
 {
     if (!m_outputContext) {
         m_pendingCodecContexts.push_back(buffer);
-        muxLog(std::string("queue_pending_config pending=") +
-               std::to_string(m_pendingCodecContexts.size()) + " " +
-               mediaGraphDiagnosticDescribeBuffer(buffer));
+        muxLog(MediaGraphDiagnosticLevel::State,
+               std::string("queue_pending_config pending=") +
+                   std::to_string(m_pendingCodecContexts.size()) + " " +
+                   mediaGraphDiagnosticDescribeBuffer(buffer));
         return ::media::Status::success();
     }
 
@@ -205,9 +228,10 @@ bool FileMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
 
     const MediaStreamKind streamKind = buffer->streamKind();
     if (registeredStreamIndexFor(streamKind, m_videoStreamIndex, m_audioStreamIndex) != invalidMediaStreamIndex) {
-        muxLog(std::string("register_stream.skip_existing stream=") +
-               mediaGraphDiagnosticStreamKindName(streamKind) +
-               " " + mediaGraphDiagnosticDescribeBuffer(buffer));
+        muxLog(MediaGraphDiagnosticLevel::State,
+               std::string("register_stream.skip_existing stream=") +
+                   mediaGraphDiagnosticStreamKindName(streamKind) +
+                   " " + mediaGraphDiagnosticDescribeBuffer(buffer));
         return ::media::Status::success();
     }
 
@@ -242,7 +266,7 @@ bool FileMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
         << " sample_rate=" << codecContext->sample_rate
         << " channels=" << codecContextChannelCount(codecContext)
         << " " << mediaGraphDiagnosticDescribeBuffer(buffer);
-    muxLog(out.str());
+    muxLog(MediaGraphDiagnosticLevel::State, out.str());
 
     return ::media::Status::success();
 }
@@ -254,25 +278,28 @@ bool FileMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
     }
 
     if (m_outputContext->nb_streams == 0) {
-        muxLog("write_header.wait_no_streams");
+        muxLog(MediaGraphDiagnosticLevel::State, "write_header.wait_no_streams");
         return ::media::Status::success();
     }
 
-    muxLog(std::string("write_header.begin nb_streams=") + std::to_string(m_outputContext->nb_streams));
+    muxLog(MediaGraphDiagnosticLevel::State,
+           std::string("write_header.begin nb_streams=") + std::to_string(m_outputContext->nb_streams));
     const int ret = avformat_write_header(m_outputContext, nullptr);
     if (ret < 0) {
         return FFmpegGraphError::statusFromCode(ret, "avformat_write_header");
     }
 
     m_headerWritten = true;
-    muxLog("write_header.done");
+    muxLog(MediaGraphDiagnosticLevel::State, "write_header.done");
     return ::media::Status::success();
 }
 
 ::media::Status FileMuxNode::writePacket(const MediaBufferRef& buffer)
 {
     if (!m_outputContext) {
-        muxLog(std::string("write_packet.skip_no_output_context ") + mediaGraphDiagnosticDescribeBuffer(buffer));
+        muxSampleLog(MediaGraphDiagnosticLevel::State,
+                     std::string("mux.skip_no_output_context.") + mediaGraphDiagnosticStreamKindName(buffer->streamKind()),
+                     std::string("write_packet.skip_no_output_context ") + mediaGraphDiagnosticDescribeBuffer(buffer));
         return ::media::Status::success();
     }
 
@@ -286,10 +313,12 @@ bool FileMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
                                                            m_videoStreamIndex,
                                                            m_audioStreamIndex);
     if (targetStreamIndex == invalidMediaStreamIndex) {
-        muxLog(std::string("write_packet.drop_unregistered_stream stream=") +
-               mediaGraphDiagnosticStreamKindName(buffer->streamKind()) +
-               " source_stream_index=" + std::to_string(sourcePacket->stream_index) +
-               " " + mediaGraphDiagnosticDescribeBuffer(buffer));
+        muxSampleLog(MediaGraphDiagnosticLevel::State,
+                     std::string("mux.drop_unregistered_stream.") + mediaGraphDiagnosticStreamKindName(buffer->streamKind()),
+                     std::string("write_packet.drop_unregistered_stream stream=") +
+                         mediaGraphDiagnosticStreamKindName(buffer->streamKind()) +
+                         " source_stream_index=" + std::to_string(sourcePacket->stream_index) +
+                         " " + mediaGraphDiagnosticDescribeBuffer(buffer));
         return ::media::Status::success();
     }
 
@@ -299,9 +328,11 @@ bool FileMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
     }
 
     if (!m_headerWritten) {
-        muxLog(std::string("write_packet.wait_header stream=") +
-               mediaGraphDiagnosticStreamKindName(buffer->streamKind()) +
-               " " + mediaGraphDiagnosticDescribeBuffer(buffer));
+        muxSampleLog(MediaGraphDiagnosticLevel::State,
+                     std::string("mux.wait_header.") + mediaGraphDiagnosticStreamKindName(buffer->streamKind()),
+                     std::string("write_packet.wait_header stream=") +
+                         mediaGraphDiagnosticStreamKindName(buffer->streamKind()) +
+                         " " + mediaGraphDiagnosticDescribeBuffer(buffer));
         return ::media::Status::success();
     }
 
@@ -322,7 +353,7 @@ bool FileMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
                               ? m_outputContext->streams[targetStreamIndex]
                               : nullptr;
     std::ostringstream out;
-    out << "write_packet.begin stream=" << mediaGraphDiagnosticStreamKindName(buffer->streamKind())
+    out << "write_packet stream=" << mediaGraphDiagnosticStreamKindName(buffer->streamKind())
         << " source_stream_index=" << sourcePacket->stream_index
         << " target_stream_index=" << targetStreamIndex
         << " pts=" << packet->pts
@@ -332,14 +363,15 @@ bool FileMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
         << " key=" << ((packet->flags & AV_PKT_FLAG_KEY) ? 1 : 0)
         << " mux_tb=" << (muxStream ? rationalText(muxStream->time_base) : "unknown")
         << " " << mediaGraphDiagnosticDescribeBuffer(buffer);
-    muxLog(out.str());
+    muxSampleLog(MediaGraphDiagnosticLevel::Flow,
+                 std::string("mux.write_packet.") + mediaGraphDiagnosticStreamKindName(buffer->streamKind()),
+                 out.str());
 
     const int ret = av_interleaved_write_frame(m_outputContext, packet.get());
     if (ret < 0) {
         return FFmpegGraphError::statusFromCode(ret, "av_interleaved_write_frame");
     }
 
-    muxLog(std::string("write_packet.done target_stream_index=") + std::to_string(targetStreamIndex));
     return ::media::Status::success();
 }
 
@@ -349,14 +381,14 @@ bool FileMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
         return ::media::Status::success();
     }
 
-    muxLog("write_trailer.begin");
+    muxLog(MediaGraphDiagnosticLevel::State, "write_trailer.begin");
     const int ret = av_write_trailer(m_outputContext);
     if (ret < 0) {
         return FFmpegGraphError::statusFromCode(ret, "av_write_trailer");
     }
 
     m_trailerWritten = true;
-    muxLog("write_trailer.done");
+    muxLog(MediaGraphDiagnosticLevel::State, "write_trailer.done");
     return ::media::Status::success();
 }
 
