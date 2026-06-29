@@ -100,6 +100,11 @@ void preferSoftwarePlan(MediaPipelinePlan& plan)
             ::media::ErrorInfo::invalidArgument("LocalFileTranscodeGraphBuilder requires video or audio branch"));
     }
 
+    if (!options.includeVideo) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::unsupported("LocalFileTranscodeGraphBuilder audio-only graph requires audio stream config support"));
+    }
+
     if (options.metadataQueueCapacity == 0 ||
         options.packetQueueCapacity == 0 ||
         options.frameQueueCapacity == 0 ||
@@ -484,48 +489,6 @@ void preferSoftwarePlan(MediaPipelinePlan& plan)
                       mux,
                       "packet",
                       "local.video.encode.packet -> local.file.mux.packet",
-                      blockingQueuePolicy(options.muxQueueCapacity));
-    }
-
-    if (options.includeAudio) {
-        const MediaNodeId audioCopy = graph.addNode(
-            MediaNodeKind::AudioCopy,
-            "local.audio.copy",
-            "Local audio copy");
-
-        graph.addOutputPort(split,
-                            "audio",
-                            MediaStreamKind::Audio,
-                            MediaEdgeKind::InputPacket,
-                            MediaPayloadKind::Packet,
-                            false,
-                            true);
-        graph.addInputPort(audioCopy,
-                           "packet",
-                           MediaStreamKind::Audio,
-                           MediaEdgeKind::InputPacket,
-                           MediaPayloadKind::Packet,
-                           true,
-                           true);
-        graph.addOutputPort(audioCopy,
-                            "packet",
-                            MediaStreamKind::Audio,
-                            MediaEdgeKind::CopiedPacket,
-                            MediaPayloadKind::Packet,
-                            true,
-                            true);
-
-        graph.connect(split,
-                      "audio",
-                      audioCopy,
-                      "packet",
-                      "local.stream.split.audio -> local.audio.copy.packet",
-                      blockingQueuePolicy(options.packetQueueCapacity));
-        graph.connect(audioCopy,
-                      "packet",
-                      mux,
-                      "packet",
-                      "local.audio.copy.packet -> local.file.mux.packet",
                       blockingQueuePolicy(options.muxQueueCapacity));
     }
 
