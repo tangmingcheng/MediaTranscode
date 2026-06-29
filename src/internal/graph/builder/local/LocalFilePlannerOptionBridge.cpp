@@ -84,6 +84,11 @@ void applySelectedVideoPlanOptions(MediaGraph& graph,
     graph.setNodeOption(nodes.codecResolver, "encoder", chain.encoder.ffmpegName);
     graph.setNodeOption(nodes.codecResolver, "video_codec", plan.outputCodecName);
 
+    graph.setNodeOption(nodes.codecResolver, "pipeline.hardware", boolOption(chain.decoder.hardware));
+    graph.setNodeOption(nodes.codecResolver, "pipeline.hwaccel", chain.decoder.hwaccelName);
+    graph.setNodeOption(nodes.codecResolver, "pipeline.device", mediaHardwareDeviceKindName(chain.decoder.deviceKind));
+    graph.setNodeOption(nodes.codecResolver, "pipeline.frame_kind", mediaHardwareFrameKindName(chain.decoder.frameKind));
+
     graph.setNodeOption(nodes.hardwareTransfer, "transfer.direction", transferDirectionForPlan(chain));
 
     graph.setNodeOption(nodes.videoFilter, "filter", chain.filter.filterName);
