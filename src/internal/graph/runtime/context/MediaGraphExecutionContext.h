@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/core/MediaGraph.h"
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/runtime/channel/MediaChannel.h"
 #include "internal/graph/runtime/channel/MediaChannelRegistry.h"
 #include "media_transcode/Result.h"
@@ -21,6 +22,8 @@ public:
 
     void setDiagnosticsEnabled(bool enabled) noexcept;
     bool diagnosticsEnabled() const noexcept;
+    void setDiagnosticConfig(MediaGraphDiagnosticConfig config) noexcept;
+    const MediaGraphDiagnosticConfig& diagnosticConfig() const noexcept;
 
     bool compiled() const noexcept;
 
@@ -48,7 +51,7 @@ private:
     MediaChannelRegistry m_channels;
     std::vector<MediaNodeId> m_executionOrder;
     bool m_compiled = false;
-    bool m_diagnosticsEnabled = false;
+    MediaGraphDiagnosticConfig m_diagnosticConfig;
 };
 
 } // namespace media::ffmpeg::graph
