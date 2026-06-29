@@ -41,6 +41,12 @@ namespace media::ffmpeg::graph {
             ::media::ErrorInfo::invalidArgument("configureEncoderHardwareFrames requires positive dimensions"));
     }
 
+    encoderContext->hw_device_ctx = av_buffer_ref(hardwareDevice);
+    if (!encoderContext->hw_device_ctx) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::allocationFailed("av_buffer_ref(encoder hw_device_ctx) returned null"));
+    }
+
     AVBufferRef* framesRef = av_hwframe_ctx_alloc(hardwareDevice);
     if (!framesRef) {
         return ::media::Status::failure(
@@ -57,7 +63,7 @@ namespace media::ffmpeg::graph {
     const int initRet = av_hwframe_ctx_init(framesRef);
     if (initRet < 0) {
         av_buffer_unref(&framesRef);
-        return FFmpegGraphError::statusFromCode(initRet, "av_hwframe_ctx_init(encoder) ");
+        return FFmpegGraphError::statusFromCode(initRet, "av_hwframe_ctx_init(encoder)");
     }
 
     encoderContext->hw_frames_ctx = framesRef;
