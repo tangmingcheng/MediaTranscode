@@ -6,11 +6,33 @@
 #include "internal/graph/model/MediaStreamKind.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <string>
 
 namespace media::ffmpeg::graph {
 
 class MediaChannel;
+
+enum class MediaGraphDiagnosticLevel {
+    Off = 0,
+    Summary,
+    State,
+    Flow,
+    Trace
+};
+
+struct MediaGraphDiagnosticConfig {
+    MediaGraphDiagnosticLevel level = MediaGraphDiagnosticLevel::State;
+    std::size_t firstPacketLimit = 5;
+    std::size_t packetSampleInterval = 100;
+};
+
+struct MediaGraphDiagnosticSampleDecision {
+    bool shouldLog = false;
+    std::uint64_t sequence = 0;
+    bool sampled = false;
+};
 
 enum class MediaGraphDiagnosticPhase {
     PlannerInput,
@@ -26,6 +48,10 @@ enum class MediaGraphDiagnosticPhase {
 };
 
 const char* mediaGraphDiagnosticPhaseName(MediaGraphDiagnosticPhase phase) noexcept;
+const char* mediaGraphDiagnosticLevelName(MediaGraphDiagnosticLevel level) noexcept;
+MediaGraphDiagnosticLevel mediaGraphDiagnosticLevelFromString(const std::string& text,
+                                                              MediaGraphDiagnosticLevel fallback) noexcept;
+
 const char* mediaGraphDiagnosticNodeKindName(MediaNodeKind kind) noexcept;
 const char* mediaGraphDiagnosticStreamKindName(MediaStreamKind kind) noexcept;
 const char* mediaGraphDiagnosticEdgeKindName(MediaEdgeKind kind) noexcept;
@@ -34,11 +60,23 @@ const char* mediaGraphDiagnosticPayloadKindName(MediaPayloadKind kind) noexcept;
 void mediaGraphDiagnosticSetGlobalEnabled(bool enabled) noexcept;
 bool mediaGraphDiagnosticGlobalEnabled() noexcept;
 
+void mediaGraphDiagnosticSetGlobalConfig(MediaGraphDiagnosticConfig config);
+MediaGraphDiagnosticConfig mediaGraphDiagnosticGlobalConfig();
+bool mediaGraphDiagnosticLevelEnabled(MediaGraphDiagnosticLevel requiredLevel) noexcept;
+
+MediaGraphDiagnosticSampleDecision mediaGraphDiagnosticSample(MediaGraphDiagnosticLevel requiredLevel,
+                                                              const std::string& key,
+                                                              bool force = false);
+void mediaGraphDiagnosticResetSampling();
+
 std::string mediaGraphDiagnosticDescribeBuffer(const MediaBufferRef& buffer);
 std::string mediaGraphDiagnosticDescribeChannel(const MediaChannel& channel);
 
 void mediaGraphDiagnosticLog(bool enabled,
                               MediaGraphDiagnosticPhase phase,
                               const std::string& message);
+void mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel requiredLevel,
+                             MediaGraphDiagnosticPhase phase,
+                             const std::string& message);
 
 } // namespace media::ffmpeg::graph
