@@ -1,6 +1,7 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegDescriptorMapper.h"
 
 extern "C" {
+#include <libavcodec/avcodec.h>
 #include <libavutil/avutil.h>
 #include <libavutil/channel_layout.h>
 #include <libavutil/hwcontext.h>
@@ -8,6 +9,43 @@ extern "C" {
 }
 
 namespace media::ffmpeg::graph {
+namespace {
+
+const char* safeText(const char* text) noexcept
+{
+    return text ? text : "";
+}
+
+const AVCodec* findCodecForParameters(const AVCodecParameters* params) noexcept
+{
+    if (!params || params->codec_id == AV_CODEC_ID_NONE) {
+        return nullptr;
+    }
+    if (params->codec_type == AVMEDIA_TYPE_VIDEO || params->codec_type == AVMEDIA_TYPE_AUDIO ||
+        params->codec_type == AVMEDIA_TYPE_SUBTITLE) {
+        return avcodec_find_decoder(params->codec_id);
+    }
+    return nullptr;
+}
+
+std::string profileNameForParameters(const AVCodecParameters* params)
+{
+    const AVCodec* codec = findCodecForParameters(params);
+    if (!codec || !params) {
+        return {};
+    }
+    return safeText(av_get_profile_name(codec, params->profile));
+}
+
+std::string profileNameForContext(const AVCodecContext* context)
+{
+    if (!context || !context->codec) {
+        return {};
+    }
+    return safeText(av_get_profile_name(context->codec, context->profile));
+}
+
+} // namespace
 
 MediaStreamKind FFmpegDescriptorMapper::toStreamKind(AVMediaType type) noexcept
 {
@@ -68,17 +106,17 @@ MediaFormatDescriptor FFmpegDescriptorMapper::fromCodecParameters(const AVCodecP
     descriptor.codec.operation = MediaCodecOperation::Unknown;
 
     if (const AVCodecDescriptor* codecDesc = avcodec_descriptor_get(params->codec_id)) {
-        descriptor.codec.codecName = codecDesc->name ? codecDesc->name : "";
-        descriptor.codec.codecLongName = codecDesc->long_name ? codecDesc->long_name : "";
+        descriptor.codec.codecName = safeText(codecDesc->name);
+        descriptor.codec.codecLongName = safeText(codecDesc->long_name);
     }
 
     descriptor.codec.bitrate = params->bit_rate;
-    descriptor.codec.profile = av_get_profile_name(nullptr, params->profile) ? av_get_profile_name(nullptr, params->profile) : "";
+    descriptor.codec.profile = profileNameForParameters(params);
     descriptor.codec.level = params->level;
 
     if (params->codec_type == AVMEDIA_TYPE_VIDEO) {
         descriptor.video.size = MediaSize{ params->width, params->height };
-        descriptor.video.pixelFormat = params->format >= 0 ? av_get_pix_fmt_name(static_cast<AVPixelFormat>(params->format)) : "";
+        descriptor.video.pixelFormat = params->format >= 0 ? safeText(av_get_pix_fmt_name(static_cast<AVPixelFormat>(params->format))) : "";
         descriptor.video.sampleAspectRatio = toRational(params->sample_aspect_ratio);
     } else if (params->codec_type == AVMEDIA_TYPE_AUDIO) {
         descriptor.audio.sampleRate = params->sample_rate;
@@ -92,7 +130,7 @@ MediaFormatDescriptor FFmpegDescriptorMapper::fromCodecParameters(const AVCodecP
         descriptor.audio.channels = params->channels;
         descriptor.audio.channelLayout = std::to_string(params->channel_layout);
 #endif
-        descriptor.audio.sampleFormat = params->format >= 0 ? av_get_sample_fmt_name(static_cast<AVSampleFormat>(params->format)) : "";
+        descriptor.audio.sampleFormat = params->format >= 0 ? safeText(av_get_sample_fmt_name(static_cast<AVSampleFormat>(params->format))) : "";
     }
 
     return descriptor;
@@ -109,16 +147,17 @@ MediaFormatDescriptor FFmpegDescriptorMapper::fromCodecContext(const AVCodecCont
     descriptor.streamKind = toStreamKind(context->codec_type);
     descriptor.codec.domain = toCodecDomain(context->codec_type);
     descriptor.codec.operation = operation;
-    descriptor.codec.codecName = context->codec ? context->codec->name : "";
-    descriptor.codec.codecLongName = context->codec ? context->codec->long_name : "";
+    descriptor.codec.codecName = context->codec ? safeText(context->codec->name) : "";
+    descriptor.codec.codecLongName = context->codec ? safeText(context->codec->long_name) : "";
     descriptor.codec.bitrate = context->bit_rate;
+    descriptor.codec.profile = profileNameForContext(context);
     descriptor.codec.level = context->level;
     descriptor.time.timeBase = toRational(context->time_base);
     descriptor.time.frameRate = toRational(context->framerate);
 
     if (context->codec_type == AVMEDIA_TYPE_VIDEO) {
         descriptor.video.size = MediaSize{ context->width, context->height };
-        descriptor.video.pixelFormat = av_get_pix_fmt_name(context->pix_fmt) ? av_get_pix_fmt_name(context->pix_fmt) : "";
+        descriptor.video.pixelFormat = safeText(av_get_pix_fmt_name(context->pix_fmt));
         descriptor.video.sampleAspectRatio = toRational(context->sample_aspect_ratio);
     } else if (context->codec_type == AVMEDIA_TYPE_AUDIO) {
         descriptor.audio.sampleRate = context->sample_rate;
@@ -132,7 +171,7 @@ MediaFormatDescriptor FFmpegDescriptorMapper::fromCodecContext(const AVCodecCont
         descriptor.audio.channels = context->channels;
         descriptor.audio.channelLayout = std::to_string(context->channel_layout);
 #endif
-        descriptor.audio.sampleFormat = av_get_sample_fmt_name(context->sample_fmt) ? av_get_sample_fmt_name(context->sample_fmt) : "";
+        descriptor.audio.sampleFormat = safeText(av_get_sample_fmt_name(context->sample_fmt));
     }
 
     return descriptor;
@@ -149,7 +188,7 @@ MediaFormatDescriptor FFmpegDescriptorMapper::fromFrame(const AVFrame* frame, Me
 
     if (streamKind == MediaStreamKind::Video) {
         descriptor.video.size = MediaSize{ frame->width, frame->height };
-        descriptor.video.pixelFormat = frame->format >= 0 ? av_get_pix_fmt_name(static_cast<AVPixelFormat>(frame->format)) : "";
+        descriptor.video.pixelFormat = frame->format >= 0 ? safeText(av_get_pix_fmt_name(static_cast<AVPixelFormat>(frame->format))) : "";
         descriptor.hardware.frameKind = toHardwareFrameKind(frame);
     } else if (streamKind == MediaStreamKind::Audio) {
         descriptor.audio.sampleRate = frame->sample_rate;
@@ -163,7 +202,7 @@ MediaFormatDescriptor FFmpegDescriptorMapper::fromFrame(const AVFrame* frame, Me
         descriptor.audio.channels = frame->channels;
         descriptor.audio.channelLayout = std::to_string(frame->channel_layout);
 #endif
-        descriptor.audio.sampleFormat = frame->format >= 0 ? av_get_sample_fmt_name(static_cast<AVSampleFormat>(frame->format)) : "";
+        descriptor.audio.sampleFormat = frame->format >= 0 ? safeText(av_get_sample_fmt_name(static_cast<AVSampleFormat>(frame->format))) : "";
     }
 
     descriptor.time.timeBase = MediaRational{ 0, 1 };
