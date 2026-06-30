@@ -22,6 +22,9 @@ void setStageOptions(MediaGraph& graph,
     graph.setNodeOption(nodeId, prefix + ".hwaccel", stage.hwaccelName);
     graph.setNodeOption(nodeId, prefix + ".device", mediaHardwareDeviceKindName(stage.deviceKind));
     graph.setNodeOption(nodeId, prefix + ".frame_kind", mediaHardwareFrameKindName(stage.frameKind));
+    graph.setNodeOption(nodeId, prefix + ".pixel_format", stage.pixelFormat);
+    graph.setNodeOption(nodeId, prefix + ".hw_frames_format", stage.hardwareFramesFormat);
+    graph.setNodeOption(nodeId, prefix + ".surface_pixel_format", stage.surfacePixelFormat);
     graph.setNodeOption(nodeId, prefix + ".hardware", boolOption(stage.hardware));
     graph.setNodeOption(nodeId, prefix + ".zero_copy", boolOption(stage.zeroCopy));
     graph.setNodeOption(nodeId, prefix + ".score", std::to_string(stage.score));
@@ -47,6 +50,15 @@ void setFullPlanOptions(MediaGraph& graph,
     setStageOptions(graph, nodeId, "decoder.pipeline", chain.decoder);
     setStageOptions(graph, nodeId, "filter.pipeline", chain.filter);
     setStageOptions(graph, nodeId, "encoder.pipeline", chain.encoder);
+}
+
+void setCodecResolverEncoderFormatOptions(MediaGraph& graph,
+                                          MediaNodeId codecResolver,
+                                          const MediaPipelineStagePlan& encoder)
+{
+    graph.setNodeOption(codecResolver, "encoder.pixel_format", encoder.pixelFormat);
+    graph.setNodeOption(codecResolver, "encoder.hw_frames_format", encoder.hardwareFramesFormat);
+    graph.setNodeOption(codecResolver, "encoder.surface_pixel_format", encoder.surfacePixelFormat);
 }
 
 std::string transferDirectionForPlan(const MediaPipelineChainPlan& chain)
@@ -83,6 +95,7 @@ void applySelectedVideoPlanOptions(MediaGraph& graph,
     graph.setNodeOption(nodes.codecResolver, "decoder", chain.decoder.ffmpegName);
     graph.setNodeOption(nodes.codecResolver, "encoder", chain.encoder.ffmpegName);
     graph.setNodeOption(nodes.codecResolver, "video_codec", plan.outputCodecName);
+    setCodecResolverEncoderFormatOptions(graph, nodes.codecResolver, chain.encoder);
 
     graph.setNodeOption(nodes.codecResolver, "pipeline.hardware", boolOption(chain.decoder.hardware));
     graph.setNodeOption(nodes.codecResolver, "pipeline.hwaccel", chain.decoder.hwaccelName);
