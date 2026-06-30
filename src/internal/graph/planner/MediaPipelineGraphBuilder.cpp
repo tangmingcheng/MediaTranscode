@@ -42,6 +42,9 @@ std::string stageDisplayName(const MediaPipelineStagePlan& stage)
     ok = ok && setOption(graph, nodeId, "pipeline.hwaccel", stage.hwaccelName);
     ok = ok && setOption(graph, nodeId, "pipeline.device", mediaHardwareDeviceKindName(stage.deviceKind));
     ok = ok && setOption(graph, nodeId, "pipeline.frame_kind", mediaHardwareFrameKindName(stage.frameKind));
+    ok = ok && setOption(graph, nodeId, "pipeline.pixel_format", stage.pixelFormat);
+    ok = ok && setOption(graph, nodeId, "pipeline.hw_frames_format", stage.hardwareFramesFormat);
+    ok = ok && setOption(graph, nodeId, "pipeline.surface_pixel_format", stage.surfacePixelFormat);
     ok = ok && setOption(graph, nodeId, "pipeline.availability_reason", stage.availabilityReason);
 
     if (!stage.codecName.empty()) {
