@@ -31,7 +31,9 @@ private:
     ::media::Status registerStreamFromCodecContext(const MediaBufferRef& buffer);
     ::media::Status registerStreamFromCodecParameters(const MediaBufferRef& buffer);
     ::media::Status writeHeaderIfNeeded();
+    ::media::Status writePendingPacketsIfReady();
     ::media::Status writePacket(const MediaBufferRef& buffer);
+    ::media::Status writePacketNow(const MediaBufferRef& buffer);
     ::media::Status writeTrailerIfNeeded();
     void releaseRuntimeViews() noexcept;
     bool expectedStreamsRegistered() const noexcept;
@@ -48,6 +50,7 @@ private:
     int m_videoStreamIndex = invalidMediaStreamIndex;
     int m_audioStreamIndex = invalidMediaStreamIndex;
     std::vector<MediaBufferRef> m_pendingStreamConfigs;
+    std::vector<MediaBufferRef> m_pendingPackets;
 };
 
 } // namespace media::ffmpeg::graph
