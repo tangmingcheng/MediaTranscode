@@ -106,7 +106,7 @@ MediaNodeKind VideoTimestampNode::staticKind() noexcept
     }
 
     if (frameBuffer->isEof() || frameBuffer->isFlush()) {
-        return pushOutput(context, "frame", frameBuffer);
+        return emitOutput(context, "frame", frameBuffer);
     }
 
     return normalizeFrame(context, frameBuffer);
@@ -158,16 +158,7 @@ MediaNodeKind VideoTimestampNode::staticKind() noexcept
     logTimestamp(MediaGraphDiagnosticLevel::State,
                  std::string("bind_target_time_base tb=") + rationalText(m_targetTimeBase));
 
-    if (MediaChannel* codecOut = context.findOutputChannel(nodeId(), "target_codec")) {
-        auto status = codecOut->push(buffer);
-        if (!status) {
-            return status;
-        }
-        return ::media::Status::success();
-    }
-
-    return ::media::Status::failure(
-        ::media::ErrorInfo::notInitialized("VideoTimestampNode target_codec output channel not found"));
+    return emitOutput(context, "target_codec", buffer);
 }
 
 ::media::Status VideoTimestampNode::normalizeFrame(MediaGraphExecutionContext& context, const MediaBufferRef& buffer)
@@ -216,16 +207,7 @@ MediaNodeKind VideoTimestampNode::staticKind() noexcept
         logTimestamp(MediaGraphDiagnosticLevel::Flow, out.str());
     }
 
-    if (MediaChannel* frameOut = context.findOutputChannel(nodeId(), "frame")) {
-        auto status = frameOut->push(buffer);
-        if (!status) {
-            return status;
-        }
-        return ::media::Status::success();
-    }
-
-    return ::media::Status::failure(
-        ::media::ErrorInfo::notInitialized("VideoTimestampNode frame output channel not found"));
+    return emitOutput(context, "frame", buffer);
 }
 
 } // namespace media::ffmpeg::graph
