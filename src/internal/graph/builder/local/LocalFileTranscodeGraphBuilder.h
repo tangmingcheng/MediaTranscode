@@ -4,6 +4,7 @@
 #include "media_transcode/Result.h"
 
 #include <cstddef>
+#include <optional>
 #include <string>
 
 namespace media::ffmpeg::graph {
@@ -29,15 +30,15 @@ struct LocalFileTranscodeOptions {
     std::string tune;
     std::string level;
 
-    int width = 0;
-    int height = 0;
-    int fpsNum = 0;
-    int fpsDen = 1;
-    int videoBitrateKbps = 0;
-    int crf = -1;
-    int quality = -1;
-    int gop = 0;
-    int maxBFrames = 0;
+    std::optional<int> width;
+    std::optional<int> height;
+    std::optional<int> fpsNum;
+    std::optional<int> fpsDen;
+    std::optional<int> videoBitrateKbps;
+    std::optional<int> crf;
+    std::optional<int> quality;
+    std::optional<int> gop;
+    std::optional<int> maxBFrames;
     bool disableHardware = false;
 
     std::string audioCodec = "auto";
