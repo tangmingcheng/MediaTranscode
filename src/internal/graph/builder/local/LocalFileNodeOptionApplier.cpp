@@ -1,6 +1,7 @@
 #include "internal/graph/builder/local/LocalFileNodeOptionApplier.h"
 
 #include <array>
+#include <optional>
 #include <string>
 
 namespace media::ffmpeg::graph {
@@ -13,43 +14,88 @@ void setIfNotEmpty(MediaGraph& graph, MediaNodeId nodeId, const std::string& key
     }
 }
 
-void setIfPositive(MediaGraph& graph, MediaNodeId nodeId, const std::string& key, int value)
+void setIfPresent(MediaGraph& graph, MediaNodeId nodeId, const std::string& key, const std::optional<int>& value)
 {
-    if (value > 0) {
-        graph.setNodeOption(nodeId, key, std::to_string(value));
+    if (value) {
+        graph.setNodeOption(nodeId, key, std::to_string(*value));
     }
 }
 
-void setIfNonNegative(MediaGraph& graph, MediaNodeId nodeId, const std::string& key, int value)
+::media::Status validateOptionalNonNegative(const std::optional<int>& value, const std::string& name)
 {
-    if (value >= 0) {
-        graph.setNodeOption(nodeId, key, std::to_string(value));
+    if (value && *value < 0) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("LocalFileNodeOptionApplier requires non-negative " + name));
     }
+
+    return ::media::Status::success();
+}
+
+::media::Status validateOptionalPositive(const std::optional<int>& value, const std::string& name)
+{
+    if (value && *value <= 0) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("LocalFileNodeOptionApplier requires positive " + name));
+    }
+
+    return ::media::Status::success();
 }
 
 ::media::Status validateUserVideoOptions(const LocalFileTranscodeOptions& options)
 {
-    if (options.width < 0 || options.height < 0) {
+    if (options.width && *options.width <= 0) {
         return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("LocalFileNodeOptionApplier requires non-negative dimensions"));
+            ::media::ErrorInfo::invalidArgument("LocalFileNodeOptionApplier rejects zero/negative width; omit width to keep source size"));
     }
 
-    const bool widthSpecified = options.width > 0;
-    const bool heightSpecified = options.height > 0;
-    if (widthSpecified != heightSpecified) {
+    if (options.height && *options.height <= 0) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("LocalFileNodeOptionApplier rejects zero/negative height; omit height to keep source size"));
+    }
+
+    if (options.width.has_value() != options.height.has_value()) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("LocalFileNodeOptionApplier requires width and height to be specified together"));
     }
 
-    if (options.fpsNum < 0 || options.fpsDen <= 0) {
+    if (options.fpsNum.has_value() != options.fpsDen.has_value()) {
         return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("LocalFileNodeOptionApplier requires a positive fps denominator"));
+            ::media::ErrorInfo::invalidArgument("LocalFileNodeOptionApplier requires fps numerator and denominator to be specified together"));
     }
 
-    if (options.videoBitrateKbps < 0 || options.crf < -1 || options.quality < -1 ||
-        options.gop < 0 || options.maxBFrames < 0) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("LocalFileNodeOptionApplier received invalid negative video option"));
+    auto status = validateOptionalPositive(options.fpsNum, "fps numerator");
+    if (!status) {
+        return status;
+    }
+
+    status = validateOptionalPositive(options.fpsDen, "fps denominator");
+    if (!status) {
+        return status;
+    }
+
+    status = validateOptionalNonNegative(options.videoBitrateKbps, "video bitrate");
+    if (!status) {
+        return status;
+    }
+
+    status = validateOptionalNonNegative(options.crf, "crf");
+    if (!status) {
+        return status;
+    }
+
+    status = validateOptionalNonNegative(options.quality, "quality");
+    if (!status) {
+        return status;
+    }
+
+    status = validateOptionalNonNegative(options.gop, "gop");
+    if (!status) {
+        return status;
+    }
+
+    status = validateOptionalNonNegative(options.maxBFrames, "bframes");
+    if (!status) {
+        return status;
     }
 
     return ::media::Status::success();
@@ -69,21 +115,15 @@ void applyUserVideoOptionsToNode(MediaGraph& graph, MediaNodeId nodeId, const Lo
     setIfNotEmpty(graph, nodeId, "tune", options.tune);
     setIfNotEmpty(graph, nodeId, "level", options.level);
 
-    if (options.width > 0 && options.height > 0) {
-        graph.setNodeOption(nodeId, "width", std::to_string(options.width));
-        graph.setNodeOption(nodeId, "height", std::to_string(options.height));
-    }
-
-    if (options.fpsNum > 0) {
-        graph.setNodeOption(nodeId, "fps_num", std::to_string(options.fpsNum));
-        graph.setNodeOption(nodeId, "fps_den", std::to_string(options.fpsDen));
-    }
-
-    setIfPositive(graph, nodeId, "bitrate_kbps", options.videoBitrateKbps);
-    setIfNonNegative(graph, nodeId, "crf", options.crf);
-    setIfNonNegative(graph, nodeId, "quality", options.quality);
-    setIfPositive(graph, nodeId, "gop", options.gop);
-    setIfPositive(graph, nodeId, "bframes", options.maxBFrames);
+    setIfPresent(graph, nodeId, "width", options.width);
+    setIfPresent(graph, nodeId, "height", options.height);
+    setIfPresent(graph, nodeId, "fps_num", options.fpsNum);
+    setIfPresent(graph, nodeId, "fps_den", options.fpsDen);
+    setIfPresent(graph, nodeId, "bitrate_kbps", options.videoBitrateKbps);
+    setIfPresent(graph, nodeId, "crf", options.crf);
+    setIfPresent(graph, nodeId, "quality", options.quality);
+    setIfPresent(graph, nodeId, "gop", options.gop);
+    setIfPresent(graph, nodeId, "bframes", options.maxBFrames);
 }
 
 } // namespace
