@@ -7,16 +7,24 @@ namespace {
 
 ::media::Status validateResizeOptions(const LocalFileTranscodeOptions& options)
 {
-    if (options.width < 0 || options.height < 0) {
+    if (options.width && *options.width < 0) {
         return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("LocalFilePlannerRequestBuilder requires non-negative dimensions"));
+            ::media::ErrorInfo::invalidArgument("LocalFilePlannerRequestBuilder requires non-negative width"));
     }
 
-    const bool widthSpecified = options.width > 0;
-    const bool heightSpecified = options.height > 0;
-    if (widthSpecified != heightSpecified) {
+    if (options.height && *options.height < 0) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("LocalFilePlannerRequestBuilder requires non-negative height"));
+    }
+
+    if (options.width.has_value() != options.height.has_value()) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("LocalFilePlannerRequestBuilder requires width and height to be specified together"));
+    }
+
+    if ((options.width && *options.width == 0) || (options.height && *options.height == 0)) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("LocalFilePlannerRequestBuilder rejects zero resize dimensions; omit width and height to keep source size"));
     }
 
     return ::media::Status::success();
@@ -35,8 +43,8 @@ namespace {
     MediaPipelinePlannerOptions plannerOptions;
     plannerOptions.outputPath = options.outputUrl;
     plannerOptions.outputCodecName = options.videoCodec;
-    plannerOptions.targetWidth = options.width;
-    plannerOptions.targetHeight = options.height;
+    plannerOptions.targetWidth = options.width.value_or(0);
+    plannerOptions.targetHeight = options.height.value_or(0);
     plannerOptions.allowSoftwareFallback = false;
     plannerOptions.requireRuntimeAvailability = true;
     plannerOptions.preferGpu = options.useHardwareTransfer && !options.disableHardware;
