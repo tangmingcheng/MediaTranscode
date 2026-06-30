@@ -40,12 +40,6 @@ std::optional<int> optionalIntArg(int argc, char** argv, const std::string& key)
     return std::atoi(value.c_str());
 }
 
-int intArg(int argc, char** argv, const std::string& key, int fallback)
-{
-    const std::string value = argValue(argc, argv, key);
-    return value.empty() ? fallback : std::atoi(value.c_str());
-}
-
 std::string optionalIntText(const std::optional<int>& value)
 {
     return value ? std::to_string(*value) : std::string("source");
@@ -94,9 +88,9 @@ LocalFileTranscodeOptions parseOptions(int argc, char** argv)
     options.gop = optionalIntArg(argc, argv, "--gop");
     options.maxBFrames = optionalIntArg(argc, argv, "--bframes");
     options.audioCodec = argValue(argc, argv, "--audio-codec", options.audioCodec);
-    options.audioBitrateKbps = intArg(argc, argv, "--audio-bitrate", options.audioBitrateKbps);
-    options.audioSampleRate = intArg(argc, argv, "--sample-rate", options.audioSampleRate);
-    options.audioChannels = intArg(argc, argv, "--channels", options.audioChannels);
+    options.audioBitrateKbps = optionalIntArg(argc, argv, "--audio-bitrate");
+    options.audioSampleRate = optionalIntArg(argc, argv, "--sample-rate");
+    options.audioChannels = optionalIntArg(argc, argv, "--channels");
     options.diagnosticLogEnabled = !hasArg(argc, argv, "--quiet-graph");
     return options;
 }
