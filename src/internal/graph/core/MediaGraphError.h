@@ -20,6 +20,7 @@ enum class MediaGraphErrorCode {
     RequiredInputMissing,
     RequiredOutputUnused,
     InputMultiplicityViolation,
+    OutputMultiplicityViolation,
     CycleDetected,
     InvalidPolicy,
     InvalidDescriptor
