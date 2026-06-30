@@ -36,6 +36,11 @@ bool sameHardwareDevice(const MediaPipelineChainPlan& chain) noexcept
            chain.decoder.deviceKind != MediaHardwareDeviceKind::Unknown;
 }
 
+bool containsHardwareStage(const MediaPipelineChainPlan& chain) noexcept
+{
+    return chain.decoder.hardware || chain.filter.hardware || chain.encoder.hardware;
+}
+
 int priorityTotal(const MediaPipelineChainPlan& chain) noexcept
 {
     return chain.decoder.score + chain.filter.score + chain.encoder.score;
@@ -156,11 +161,31 @@ void logCandidate(const MediaPipelinePlannerOptions& options,
                             out.str());
 }
 
+MediaPipelineChainPlan unavailableChain(MediaPipelineChainPlan chain, std::string reason)
+{
+    chain.available = false;
+    chain.allHardware = false;
+    chain.sameHardwareDevice = false;
+    chain.zeroCopy = false;
+    chain.score = kUnavailableScore;
+    chain.reason = std::move(reason);
+    return chain;
+}
+
 } // namespace
 
 MediaPipelineChainPlan MediaPipelineScorer::scoreChain(MediaPipelineChainPlan chain,
-                                                       const MediaPipelinePlannerOptions& /*options*/)
+                                                       const MediaPipelinePlannerOptions& options)
 {
+    if (!options.preferGpu && containsHardwareStage(chain)) {
+        return unavailableChain(std::move(chain), "hardware disabled by request");
+    }
+
+    if (!options.requestedEncoderName.empty() && chain.encoder.ffmpegName != options.requestedEncoderName) {
+        return unavailableChain(std::move(chain),
+                                "encoder does not match requested encoder: " + options.requestedEncoderName);
+    }
+
     chain.available = chain.decoder.available && chain.filter.available && chain.encoder.available;
 
     if (!chain.available) {
