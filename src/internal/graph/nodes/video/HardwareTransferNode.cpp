@@ -55,7 +55,7 @@ MediaNodeKind HardwareTransferNode::staticKind() noexcept
 
     MediaBufferRef buffer = input.value();
     if (buffer->isEof() || buffer->isFlush()) {
-        return pushOutput(context, "frame", buffer);
+        return emitOutput(context, "frame", buffer);
     }
 
     return transferOrForward(context, buffer);
@@ -85,7 +85,7 @@ MediaNodeKind HardwareTransferNode::staticKind() noexcept
                 << " size=" << sourceFrame->width << "x" << sourceFrame->height;
             transferLog(MediaGraphDiagnosticLevel::Flow, out.str());
         }
-        return pushOutput(context, "frame", buffer);
+        return emitOutput(context, "frame", buffer);
     }
 
     if (direction == "download") {
@@ -149,7 +149,7 @@ MediaNodeKind HardwareTransferNode::staticKind() noexcept
         transferLog(MediaGraphDiagnosticLevel::Flow, out.str());
     }
 
-    return pushOutput(context, "frame", output.value());
+    return emitOutput(context, "frame", output.value());
 }
 
 } // namespace media::ffmpeg::graph
