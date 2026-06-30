@@ -24,6 +24,7 @@ const char* toString(MediaNodeKind kind)
     case MediaNodeKind::VideoEncode: return "VideoEncode";
     case MediaNodeKind::VideoPacketDrain: return "VideoPacketDrain";
     case MediaNodeKind::AudioStrategy: return "AudioStrategy";
+    case MediaNodeKind::AudioSourceConfig: return "AudioSourceConfig";
     case MediaNodeKind::AudioCopy: return "AudioCopy";
     case MediaNodeKind::AudioDecode: return "AudioDecode";
     case MediaNodeKind::AudioResample: return "AudioResample";
@@ -258,15 +259,13 @@ std::string MediaGraphDump::toGraphvizDot(const MediaGraph& graph,
 {
     std::ostringstream oss;
 
-    oss << "digraph " << dotEscape(graphName) << " {\n";
+    oss << "digraph " << graphName << " {\n";
     oss << "  rankdir=LR;\n";
-    oss << "  graph [fontname=\"Consolas\"];\n";
     oss << "  node [shape=box, fontname=\"Consolas\"];\n";
     oss << "  edge [fontname=\"Consolas\"];\n\n";
 
     for (const auto& node : graph.nodes()) {
-        oss << "  n" << node.id.value
-            << " [label=\"" << nodeLabel(node) << "\"];\n";
+        oss << "  n" << node.id.value << " [label=\"" << nodeLabel(node) << "\"];\n";
     }
 
     oss << "\n";
