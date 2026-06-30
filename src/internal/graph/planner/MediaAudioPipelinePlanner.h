@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/model/MediaGraphTypes.h"
+#include "internal/graph/model/MediaTranscodeParameters.h"
 #include "media_transcode/Result.h"
 
 #include <optional>
@@ -12,9 +13,16 @@ struct MediaAudioPipelinePlannerOptions {
     bool includeAudio = true;
     bool transformRequested = false;
     std::string requestedCodecName;
+    std::string requestedEncoderName;
+    MediaRateControlMode rateControl = MediaRateControlMode::Auto;
     std::optional<int> requestedBitrateKbps;
+    std::optional<int> requestedMinBitrateKbps;
+    std::optional<int> requestedMaxBitrateKbps;
     std::optional<int> requestedSampleRate;
     std::optional<int> requestedChannels;
+    std::optional<int> requestedQuality;
+    std::string requestedPreset;
+    std::string requestedProfile;
     bool diagnosticLogEnabled = false;
 };
 
