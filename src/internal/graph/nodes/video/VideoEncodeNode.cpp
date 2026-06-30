@@ -132,7 +132,7 @@ MediaNodeKind VideoEncodeNode::staticKind() noexcept
         if (!drainStatus) {
             return drainStatus;
         }
-        return pushOutput(context, "packet", input.value());
+        return emitOutput(context, "packet", input.value());
     }
 
     AVFrame* frame = FFmpegFrameView::writableFrame(input.value());
@@ -181,7 +181,7 @@ MediaNodeKind VideoEncodeNode::staticKind() noexcept
         return ::media::Status::success();
     }
 
-    auto status = pushOutputToAllChannels(context, "codec", buffer);
+    auto status = emitOutput(context, "codec", buffer);
     if (!status) {
         return status;
     }
@@ -230,9 +230,9 @@ MediaNodeKind VideoEncodeNode::staticKind() noexcept
         timeDescriptor.timeBase = MediaRational{ codecContext()->time_base.num, codecContext()->time_base.den };
         buffer.value()->setTimeDescriptor(timeDescriptor);
 
-        auto pushStatus = pushOutput(context, "packet", buffer.value());
-        if (!pushStatus) {
-            return pushStatus;
+        auto emitStatus = emitOutput(context, "packet", buffer.value());
+        if (!emitStatus) {
+            return emitStatus;
         }
     }
 }
