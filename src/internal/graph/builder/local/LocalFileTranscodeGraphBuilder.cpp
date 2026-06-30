@@ -96,6 +96,8 @@ MediaEdgePolicy blockingQueuePolicy(std::size_t capacity)
 
     graph.setNodeOption(fileInput, "url", options.inputUrl);
     graph.setNodeOption(fileOutput, "url", options.outputUrl);
+    graph.setNodeOption(mux, "mux.expect_video", options.includeVideo ? "1" : "0");
+    graph.setNodeOption(mux, "mux.expect_audio", "0");
     if (!options.outputFormat.empty()) {
         graph.setNodeOption(fileOutput, "format", options.outputFormat);
     }
@@ -107,7 +109,7 @@ MediaEdgePolicy blockingQueuePolicy(std::size_t capacity)
 
     graph.addOutputPort(fileOutput, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext, true, false);
     graph.addInputPort(mux, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext, true, false);
-    graph.addInputPort(mux, "codec", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, true);
+    graph.addInputPort(mux, "codec", MediaStreamKind::Any, MediaEdgeKind::Metadata, MediaPayloadKind::Unknown, true, true);
     graph.addInputPort(mux, "packet", MediaStreamKind::Any, MediaEdgeKind::Unknown, MediaPayloadKind::Packet, true, true);
 
     graph.connect(fileInput, "format", demux, "format", "local.file.input.format -> local.demux.format", blockingQueuePolicy(options.metadataQueueCapacity));
