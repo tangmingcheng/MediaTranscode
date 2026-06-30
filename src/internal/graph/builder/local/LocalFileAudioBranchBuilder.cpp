@@ -48,17 +48,18 @@ void setSourceStreamOption(MediaGraph& graph, MediaNodeId nodeId, int sourceStre
         return ::media::Result<bool>::failure(plannerOptions.error());
     }
 
-    auto plan = MediaAudioPipelinePlanner::planFileAudio(options.inputUrl, std::move(plannerOptions).value());
-    if (!plan) {
-        return ::media::Result<bool>::failure(plan.error());
+    auto planResult = MediaAudioPipelinePlanner::planFileAudio(options.inputUrl, std::move(plannerOptions).value());
+    if (!planResult) {
+        return ::media::Result<bool>::failure(planResult.error());
     }
 
-    if (!plan.value().enabled) {
+    MediaAudioPipelinePlan plan = std::move(planResult).value();
+    if (!plan.enabled) {
         graph.setNodeOption(mux, "mux.expect_audio", "0");
         return ::media::Result<bool>::success(false);
     }
 
-    const int streamIndex = plan.value().sourceStreamIndex;
+    const int streamIndex = plan.sourceStreamIndex;
     const MediaNodeId sourceConfig = graph.addNode(MediaNodeKind::AudioSourceConfig,
                                                    "local.audio.source_config",
                                                    "Local audio source config");
