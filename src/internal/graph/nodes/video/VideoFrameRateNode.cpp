@@ -1,6 +1,7 @@
 #include "internal/graph/nodes/video/VideoFrameRateNode.h"
 
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
+#include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
 
@@ -119,8 +120,8 @@ MediaNodeKind VideoFrameRateNode::staticKind() noexcept
     }
 
     const MediaNodeOptions* options = nodeOptions(context);
-    const int fpsNum = parseIntOption(options, "fps_num", 0);
-    const int fpsDen = parseIntOption(options, "fps_den", 1);
+    const int fpsNum = parseIntOption(options, MediaTranscodeOptionKey::VideoFpsNum, 0);
+    const int fpsDen = parseIntOption(options, MediaTranscodeOptionKey::VideoFpsDen, 1);
     if (fpsNum < 0 || fpsDen <= 0) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("VideoFrameRateNode target fps is invalid"));
@@ -260,32 +261,18 @@ MediaNodeKind VideoFrameRateNode::staticKind() noexcept
 
     MediaTimeDescriptor timeDescriptor;
     timeDescriptor.timeBase = toMediaRational(m_inputTimeBase);
-    if (enabled()) {
-        timeDescriptor.frameRate = MediaRational{ m_targetFramePeriod.den, m_targetFramePeriod.num };
-    }
+    timeDescriptor.frameRate = enabled() ? MediaRational{ m_targetFramePeriod.den, m_targetFramePeriod.num }
+                                         : MediaRational{};
     cloned.value()->setTimeDescriptor(timeDescriptor);
     cloned.value()->setTimestamps(outputFrame->pts, outputFrame->pkt_dts, outputFrame->duration);
-
+    m_pendingFrames.push_back(cloned.value());
     m_lastOutputPts = outputPts;
-    m_pendingFrames.push_back(std::move(cloned).value());
     return ::media::Status::success();
 }
 
-::media::Status VideoFrameRateNode::rememberLastInputFrame(const AVFrame* frame)
+int64_t VideoFrameRateNode::targetPtsForIndex(int64_t index) const noexcept
 {
-    auto remembered = FFmpegBufferFactory::cloneFrame(frame, MediaStreamKind::Video);
-    if (!remembered) {
-        return ::media::Status::failure(remembered.error());
-    }
-
-    m_lastInputPts = frame->pts;
-    m_lastInputFrame = std::move(remembered).value();
-    return ::media::Status::success();
-}
-
-int64_t VideoFrameRateNode::targetPtsForIndex(int64_t outputIndex) const noexcept
-{
-    return m_startPts + av_rescale_q(outputIndex, m_targetFramePeriod, m_inputTimeBase);
+    return av_rescale_q(index, m_targetFramePeriod, m_inputTimeBase);
 }
 
 int64_t VideoFrameRateNode::targetFrameDuration() const noexcept
@@ -293,28 +280,42 @@ int64_t VideoFrameRateNode::targetFrameDuration() const noexcept
     if (!enabled()) {
         return 0;
     }
-
-    const int64_t duration = av_rescale_q(1, m_targetFramePeriod, m_inputTimeBase);
-    return duration > 0 ? duration : 1;
-}
-
-const AVFrame* VideoFrameRateNode::chooseSourceFrameForTarget(const AVFrame* currentFrame,
-                                                              int64_t currentPts,
-                                                              int64_t targetPts) const noexcept
-{
-    const AVFrame* lastFrame = FFmpegFrameView::frame(m_lastInputFrame);
-    if (!lastFrame) {
-        return currentFrame;
-    }
-
-    const int64_t currentDistance = absoluteDistance(currentPts, targetPts);
-    const int64_t lastDistance = absoluteDistance(m_lastInputPts, targetPts);
-    return currentDistance < lastDistance ? currentFrame : lastFrame;
+    return av_rescale_q(1, m_targetFramePeriod, m_inputTimeBase);
 }
 
 bool VideoFrameRateNode::enabled() const noexcept
 {
     return rationalKnown(m_targetFramePeriod);
+}
+
+const AVFrame* VideoFrameRateNode::chooseSourceFrameForTarget(const AVFrame* frame, int64_t currentPts, int64_t targetPts) const noexcept
+{
+    if (!m_lastInputFrame || m_lastInputPts == AV_NOPTS_VALUE) {
+        return frame;
+    }
+
+    const int64_t previousDistance = absoluteDistance(targetPts, m_lastInputPts);
+    const int64_t currentDistance = absoluteDistance(currentPts, targetPts);
+    return previousDistance <= currentDistance ? m_lastInputFrame.get() : frame;
+}
+
+::media::Status VideoFrameRateNode::rememberLastInputFrame(const AVFrame* frame)
+{
+    auto cloned = ::media::ffmpeg::makeFrame();
+    if (!cloned) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::allocationFailed("VideoFrameRateNode failed to allocate last input frame"));
+    }
+
+    const int ret = av_frame_ref(cloned.get(), frame);
+    if (ret < 0) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::ffmpegFailure("VideoFrameRateNode failed to reference last input frame", ret));
+    }
+
+    m_lastInputFrame = std::move(cloned);
+    m_lastInputPts = frame->pts;
+    return ::media::Status::success();
 }
 
 } // namespace media::ffmpeg::graph
