@@ -403,8 +403,6 @@ MediaGraphThreadedExecutor& MediaGraphRuntime::threadedExecutor() noexcept
     return m_threadedExecutor;
 }
 
-const MediaGraphThreadedExecutor& MediaGraphThreadedExecutor() const noexcept;
-
 const MediaGraphThreadedExecutor& MediaGraphRuntime::threadedExecutor() const noexcept
 {
     return m_threadedExecutor;
