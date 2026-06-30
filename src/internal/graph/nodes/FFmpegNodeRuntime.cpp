@@ -10,6 +10,76 @@
 namespace media::ffmpeg::graph {
 namespace {
 
+bool isWildcardStream(MediaStreamKind kind) noexcept
+{
+    return kind == MediaStreamKind::Any || kind == MediaStreamKind::Unknown;
+}
+
+bool isWildcardPayload(MediaPayloadKind kind) noexcept
+{
+    return kind == MediaPayloadKind::Unknown;
+}
+
+bool isBypassControlBuffer(const MediaChannel& channel, const MediaBufferRef& buffer) noexcept
+{
+    return buffer &&
+        channel.policy().queuePolicy.allowFlushControlBypass &&
+        buffer->streamKind() == MediaStreamKind::Control &&
+        buffer->payloadKind() == MediaPayloadKind::ControlSignal &&
+        (buffer->isEof() || buffer->isFlush());
+}
+
+::media::Status validateChannelBufferType(const MediaChannel& channel,
+                                          const MediaBufferRef& buffer,
+                                          const char* action)
+{
+    if (!buffer) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(std::string(action) + " failed: buffer is null"));
+    }
+
+    if (isBypassControlBuffer(channel, buffer)) {
+        return ::media::Status::success();
+    }
+
+    const auto& binding = channel.binding();
+    if (!isWildcardStream(binding.streamKind) && binding.streamKind != buffer->streamKind()) {
+        std::ostringstream out;
+        out << action << " failed: stream type mismatch channel="
+            << mediaGraphDiagnosticStreamKindName(binding.streamKind)
+            << " buffer=" << mediaGraphDiagnosticStreamKindName(buffer->streamKind())
+            << " " << mediaGraphDiagnosticDescribeChannel(channel)
+            << " " << mediaGraphDiagnosticDescribeBuffer(buffer);
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(out.str()));
+    }
+
+    if (!isWildcardPayload(binding.payloadKind) && binding.payloadKind != buffer->payloadKind()) {
+        std::ostringstream out;
+        out << action << " failed: payload type mismatch channel="
+            << mediaGraphDiagnosticPayloadKindName(binding.payloadKind)
+            << " buffer=" << mediaGraphDiagnosticPayloadKindName(buffer->payloadKind())
+            << " " << mediaGraphDiagnosticDescribeChannel(channel)
+            << " " << mediaGraphDiagnosticDescribeBuffer(buffer);
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(out.str()));
+    }
+
+    const auto& channelFormat = channel.formatDescriptor();
+    const auto& bufferFormat = buffer->formatDescriptor();
+    if (channelFormat.hasStreamIndex() &&
+        bufferFormat.hasStreamIndex() &&
+        channelFormat.streamIndex != bufferFormat.streamIndex) {
+        std::ostringstream out;
+        out << action << " failed: stream index mismatch channel="
+            << channelFormat.streamIndex
+            << " buffer=" << bufferFormat.streamIndex
+            << " " << mediaGraphDiagnosticDescribeChannel(channel)
+            << " " << mediaGraphDiagnosticDescribeBuffer(buffer);
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(out.str()));
+    }
+
+    return ::media::Status::success();
+}
+
 void logEdgeTransfer(MediaGraphExecutionContext& context,
                      MediaGraphDiagnosticPhase phase,
                      const char* action,
@@ -18,7 +88,6 @@ void logEdgeTransfer(MediaGraphExecutionContext& context,
                      const MediaChannel& channel,
                      const MediaBufferRef& buffer)
 {
-    // sampling key: node + edge + action
     const std::string key = std::to_string(nodeId.value) + ":" + std::to_string(channel.edgeId().value) + ":" + action;
 
     auto decision = mediaGraphDiagnosticSample(MediaGraphDiagnosticLevel::Flow, key);
@@ -78,6 +147,11 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
         return ::media::Result<MediaBufferRef>::failure(status.error());
     }
 
+    auto typeStatus = validateChannelBufferType(*channel, buffer, "popInput");
+    if (!typeStatus) {
+        return ::media::Result<MediaBufferRef>::failure(typeStatus.error());
+    }
+
     logEdgeTransfer(context,
                     MediaGraphDiagnosticPhase::RuntimeEdge,
                     "pop",
@@ -98,6 +172,11 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
 
         MediaBufferRef buffer;
         if (channel->tryPop(buffer)) {
+            auto typeStatus = validateChannelBufferType(*channel, buffer, "tryPopFirstInput");
+            if (!typeStatus) {
+                return ::media::Result<MediaBufferRef>::failure(typeStatus.error());
+            }
+
             logEdgeTransfer(context,
                             MediaGraphDiagnosticPhase::RuntimeEdge,
                             "try_pop",
@@ -135,6 +214,11 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
             continue;
         }
 
+        auto typeStatus = validateChannelBufferType(*channel, buffer, "emitOutput");
+        if (!typeStatus) {
+            return typeStatus;
+        }
+
         auto status = channel->push(buffer);
         if (!status) {
             return status;
@@ -170,6 +254,11 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
     for (MediaChannel* channel : context.outputChannels(nodeId())) {
         if (!channel) {
             continue;
+        }
+
+        auto typeStatus = validateChannelBufferType(*channel, buffer, "pushToAllOutputs");
+        if (!typeStatus) {
+            return typeStatus;
         }
 
         auto status = channel->push(buffer);
@@ -223,6 +312,11 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
             format.streamIndex == streamIndex;
 
         if (streamKindMatches && streamIndexMatches) {
+            auto typeStatus = validateChannelBufferType(*channel, buffer, "pushToMatchingOutputs");
+            if (!typeStatus) {
+                return typeStatus;
+            }
+
             auto status = channel->push(buffer);
             if (!status) {
                 return status;
@@ -239,11 +333,7 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
         }
     }
 
-    if (!pushed) {
-        return pushToAllOutputs(context, buffer);
-    }
-
-    return ::media::Status::success();
+    return pushed ? ::media::Status::success() : ::media::Status::success();
 }
 
 ::media::Status FFmpegNodeRuntime::forward(MediaGraphExecutionContext& context,
