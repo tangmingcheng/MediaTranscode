@@ -1,5 +1,6 @@
 #include "internal/graph/builder/local/LocalFileTranscodeGraphBuilder.h"
 
+#include "internal/graph/builder/local/LocalFileNodeOptionApplier.h"
 #include "internal/graph/builder/local/LocalFilePlannerOptionBridge.h"
 #include "internal/graph/builder/local/LocalFilePlannerRequestBuilder.h"
 #include "internal/graph/planner/MediaPipelinePlanner.h"
@@ -22,26 +23,6 @@ MediaEdgePolicy blockingQueuePolicy(std::size_t capacity)
     policy.queuePolicy.allowFlushControlBypass = true;
     policy.queuePolicy.collectMetrics = true;
     return policy;
-}
-
-void applyVideoOptions(MediaGraph& graph, MediaNodeId nodeId, const LocalFileTranscodeOptions& options)
-{
-    graph.setNodeOption(nodeId, "video_codec", options.videoCodec);
-    graph.setNodeOption(nodeId, "encoder", options.videoEncoder);
-    graph.setNodeOption(nodeId, "rc", options.rateControlMode);
-    graph.setNodeOption(nodeId, "preset", options.speedPreset);
-    graph.setNodeOption(nodeId, "profile", options.profile);
-    graph.setNodeOption(nodeId, "tune", options.tune);
-    graph.setNodeOption(nodeId, "level", options.level);
-    graph.setNodeOption(nodeId, "width", std::to_string(options.width));
-    graph.setNodeOption(nodeId, "height", std::to_string(options.height));
-    graph.setNodeOption(nodeId, "fps_num", std::to_string(options.fpsNum));
-    graph.setNodeOption(nodeId, "fps_den", std::to_string(options.fpsDen));
-    graph.setNodeOption(nodeId, "bitrate_kbps", std::to_string(options.videoBitrateKbps));
-    graph.setNodeOption(nodeId, "crf", std::to_string(options.crf));
-    graph.setNodeOption(nodeId, "quality", std::to_string(options.quality));
-    graph.setNodeOption(nodeId, "gop", std::to_string(options.gop));
-    graph.setNodeOption(nodeId, "bframes", std::to_string(options.maxBFrames));
 }
 
 ::media::Result<MediaPipelinePlan> buildVideoPlan(const LocalFileTranscodeOptions& options)
@@ -142,12 +123,19 @@ void applyVideoOptions(MediaGraph& graph, MediaNodeId nodeId, const LocalFileTra
         const MediaNodeId videoFilter = graph.addNode(MediaNodeKind::VideoFilter, "local.video.filter", "Local video filter");
         const MediaNodeId videoEncode = graph.addNode(MediaNodeKind::VideoEncode, "local.video.encode", "Local video encode");
 
-        applyVideoOptions(graph, codecResolver, options);
-        applyVideoOptions(graph, hardwareTransfer, options);
-        applyVideoOptions(graph, videoTimestamp, options);
-        applyVideoOptions(graph, videoFrameRate, options);
-        applyVideoOptions(graph, videoFilter, options);
-        applyVideoOptions(graph, videoEncode, options);
+        LocalFilePlannerNodeIds plannerNodes;
+        plannerNodes.codecResolver = codecResolver;
+        plannerNodes.videoDecode = videoDecode;
+        plannerNodes.hardwareTransfer = hardwareTransfer;
+        plannerNodes.videoTimestamp = videoTimestamp;
+        plannerNodes.videoFrameRate = videoFrameRate;
+        plannerNodes.videoFilter = videoFilter;
+        plannerNodes.videoEncode = videoEncode;
+
+        auto userOptionStatus = LocalFileNodeOptionApplier::applyUserVideoOptions(graph, plannerNodes, options);
+        if (!userOptionStatus) {
+            return ::media::Result<MediaGraph>::failure(userOptionStatus.error());
+        }
 
         if (videoPlan) {
             auto applyPlanStatus = MediaPipelinePlanner::applyVideoPlanToGraph(graph, videoDecode, videoFilter, videoEncode, *videoPlan);
@@ -155,14 +143,6 @@ void applyVideoOptions(MediaGraph& graph, MediaNodeId nodeId, const LocalFileTra
                 return ::media::Result<MediaGraph>::failure(applyPlanStatus.error());
             }
 
-            LocalFilePlannerNodeIds plannerNodes;
-            plannerNodes.codecResolver = codecResolver;
-            plannerNodes.videoDecode = videoDecode;
-            plannerNodes.hardwareTransfer = hardwareTransfer;
-            plannerNodes.videoTimestamp = videoTimestamp;
-            plannerNodes.videoFrameRate = videoFrameRate;
-            plannerNodes.videoFilter = videoFilter;
-            plannerNodes.videoEncode = videoEncode;
             applySelectedVideoPlanOptions(graph, plannerNodes, *videoPlan);
         }
 
