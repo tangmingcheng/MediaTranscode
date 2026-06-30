@@ -223,16 +223,6 @@ const MediaThreadingPolicy& MediaGraphRuntime::threadingPolicy() const noexcept
     return ::media::Status::success();
 }
 
-::media::Status MediaGraphRuntime::processOnce()
-{
-    if (m_state != MediaGraphRuntimeState::Running) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::notInitialized("MediaGraphRuntime processOnce failed: runtime is not running"));
-    }
-
-    return m_scheduler.processOnce(m_context);
-}
-
 ::media::Result<MediaGraphRunResult> MediaGraphRuntime::run()
 {
     if (m_state != MediaGraphRuntimeState::Running) {
@@ -249,7 +239,7 @@ const MediaThreadingPolicy& MediaGraphRuntime::threadingPolicy() const noexcept
                             "run.begin " + activityText(previous));
 
     for (;;) {
-        auto status = processOnce();
+        auto status = m_scheduler.processOnce(m_context);
         if (!status) {
             return ::media::Result<MediaGraphRunResult>::failure(status.error());
         }
@@ -360,13 +350,15 @@ MediaGraphRuntimeState MediaGraphRuntime::state() const noexcept
 
 bool MediaGraphRuntime::compiled() const noexcept
 {
-    return m_context.compiled();
+    return m_state == MediaGraphRuntimeState::Compiled ||
+           m_state == MediaGraphRuntimeState::Running ||
+           m_state == MediaGraphRuntimeState::ThreadedRunning ||
+           m_state == MediaGraphRuntimeState::Stopped;
 }
 
 bool MediaGraphRuntime::running() const noexcept
 {
-    return m_state == MediaGraphRuntimeState::Running ||
-           m_state == MediaGraphRuntimeState::ThreadedRunning;
+    return m_state == MediaGraphRuntimeState::Running;
 }
 
 bool MediaGraphRuntime::threadedRunning() const noexcept
