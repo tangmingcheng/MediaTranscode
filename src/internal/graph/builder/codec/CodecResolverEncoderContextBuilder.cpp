@@ -1,5 +1,6 @@
 #include "internal/graph/builder/codec/CodecResolverEncoderContextBuilder.h"
 
+#include "internal/graph/builder/codec/CodecResolverEncoderFormatPlanner.h"
 #include "internal/graph/nodes/metadata/CodecResolverHardwareFrames.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 
@@ -13,7 +14,6 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/opt.h>
-#include <libavutil/pixdesc.h>
 }
 
 namespace media::ffmpeg::graph {
@@ -36,84 +36,6 @@ std::optional<int> intOption(const MediaNodeOptions* options, const std::string&
     }
 
     return std::atoi(value.c_str());
-}
-
-bool pixelFormatSupported(const AVCodec* codec, AVPixelFormat format)
-{
-    if (!codec || !codec->pix_fmts || format == AV_PIX_FMT_NONE) {
-        return true;
-    }
-
-    for (const AVPixelFormat* current = codec->pix_fmts; *current != AV_PIX_FMT_NONE; ++current) {
-        if (*current == format) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-AVPixelFormat plannedEncoderHardwarePixelFormat(const MediaNodeOptions* options)
-{
-    if (optionValue(options, "encoder.pipeline.frame_kind") != "hardware") {
-        return AV_PIX_FMT_NONE;
-    }
-
-    const std::string hwaccel = optionValue(options, "encoder.pipeline.hwaccel");
-    const std::string device = optionValue(options, "encoder.pipeline.device");
-    if (hwaccel == "cuda" || device == "cuda") {
-        return AV_PIX_FMT_CUDA;
-    }
-    if (hwaccel == "qsv" || device == "qsv") {
-        return AV_PIX_FMT_QSV;
-    }
-    if (hwaccel == "vaapi" || device == "vaapi") {
-        return AV_PIX_FMT_VAAPI;
-    }
-    if (hwaccel == "d3d11va" || device == "d3d11va") {
-        return AV_PIX_FMT_D3D11;
-    }
-
-    return AV_PIX_FMT_NONE;
-}
-
-AVPixelFormat plannedEncoderSoftwarePixelFormat(const MediaNodeOptions* options, AVPixelFormat sourceFormat)
-{
-    const AVPixelFormat hardwareFormat = plannedEncoderHardwarePixelFormat(options);
-    if (hardwareFormat == AV_PIX_FMT_CUDA &&
-        (sourceFormat == AV_PIX_FMT_YUV420P || sourceFormat == AV_PIX_FMT_NONE)) {
-        return AV_PIX_FMT_NV12;
-    }
-
-    if (sourceFormat != AV_PIX_FMT_NONE) {
-        return sourceFormat;
-    }
-
-    if (hardwareFormat == AV_PIX_FMT_CUDA || hardwareFormat == AV_PIX_FMT_D3D11) {
-        return AV_PIX_FMT_NV12;
-    }
-
-    return AV_PIX_FMT_YUV420P;
-}
-
-AVPixelFormat chooseEncoderPixelFormat(const AVCodec* encoder,
-                                       AVPixelFormat sourceFormat,
-                                       const MediaNodeOptions* options)
-{
-    const AVPixelFormat plannedHardwareFormat = plannedEncoderHardwarePixelFormat(options);
-    if (plannedHardwareFormat != AV_PIX_FMT_NONE) {
-        return pixelFormatSupported(encoder, plannedHardwareFormat) ? plannedHardwareFormat : AV_PIX_FMT_NONE;
-    }
-
-    if (sourceFormat != AV_PIX_FMT_NONE && pixelFormatSupported(encoder, sourceFormat)) {
-        return sourceFormat;
-    }
-
-    if (encoder && encoder->pix_fmts && encoder->pix_fmts[0] != AV_PIX_FMT_NONE) {
-        return encoder->pix_fmts[0];
-    }
-
-    return sourceFormat;
 }
 
 void setPrivateOption(AVCodecContext* context, const std::string& key, const std::string& value)
@@ -197,6 +119,13 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
             ::media::ErrorInfo::unsupported("CodecResolverEncoderContextBuilder encoder not found: " + plannedEncoder));
     }
 
+    auto formatPlanResult = CodecResolverEncoderFormatPlanner::build(
+        CodecResolverEncoderFormatPlanRequest{ encoder, options });
+    if (!formatPlanResult) {
+        return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(formatPlanResult.error());
+    }
+    const CodecResolverEncoderFormatPlan formatPlan = formatPlanResult.value();
+
     auto frameRateResult = resolveFrameRate(request.formatContext, stream, options);
     if (!frameRateResult) {
         return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(frameRateResult.error());
@@ -211,29 +140,18 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
     }
 
     CodecResolverEncoderContextBuildResult result;
+    result.hardwareFramesFormat = formatPlan.hardwareFramesFormat;
+    result.surfaceSoftwareFormat = formatPlan.surfaceSoftwareFormat;
+
     auto encoderContext = ::media::ffmpeg::makeCodecContext(encoder);
     if (!encoderContext) {
         return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
             ::media::ErrorInfo::allocationFailed("CodecResolverEncoderContextBuilder failed: avcodec_alloc_context3 returned null"));
     }
 
-    const AVPixelFormat encoderPixelFormat = chooseEncoderPixelFormat(
-        encoder,
-        static_cast<AVPixelFormat>(params->format),
-        options);
-    if (encoderPixelFormat == AV_PIX_FMT_NONE) {
-        return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
-            ::media::ErrorInfo::unsupported("CodecResolverEncoderContextBuilder planned encoder pixel format unsupported: " + plannedEncoder));
-    }
-
-    result.hardwareFramesFormat = plannedEncoderHardwarePixelFormat(options);
-    result.surfaceSoftwareFormat = plannedEncoderSoftwarePixelFormat(
-        options,
-        static_cast<AVPixelFormat>(params->format));
-
     encoderContext->width = targetWidth;
     encoderContext->height = targetHeight;
-    encoderContext->pix_fmt = encoderPixelFormat;
+    encoderContext->pix_fmt = formatPlan.encoderPixelFormat;
     encoderContext->time_base = AVRational{ frameRate.den, frameRate.num };
     encoderContext->framerate = frameRate;
     encoderContext->sample_aspect_ratio = stream->sample_aspect_ratio;
