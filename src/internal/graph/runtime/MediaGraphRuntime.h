@@ -52,9 +52,8 @@ public:
     void setThreadingPolicy(MediaThreadingPolicy policy) noexcept;
     const MediaThreadingPolicy& threadingPolicy() const noexcept;
 
-    ::media::Status start();
-    ::media::Status startThreaded();
     ::media::Result<MediaGraphRunResult> run();
+    ::media::Status startThreaded();
     ::media::Status flush();
     ::media::Status stop();
     void abort() noexcept;
