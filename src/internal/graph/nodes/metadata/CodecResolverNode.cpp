@@ -1,44 +1,25 @@
 #include "internal/graph/nodes/metadata/CodecResolverNode.h"
 
 #include "internal/FFmpegRAII.h"
+#include "internal/graph/builder/codec/CodecResolverEncoderContextBuilder.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
-#include "internal/graph/nodes/metadata/CodecResolverHardwareFrames.h"
 #include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 
-#include <algorithm>
-#include <cstdlib>
-#include <cstdint>
 #include <sstream>
 #include <string>
 #include <utility>
-#include <vector>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/hwcontext.h>
-#include <libavutil/opt.h>
 #include <libavutil/pixdesc.h>
 }
 
 namespace media::ffmpeg::graph {
 namespace {
-
-int parseIntOption(const MediaNodeOptions* options, const std::string& key, int fallback)
-{
-    if (!options) {
-        return fallback;
-    }
-
-    const std::string value = options->value(key);
-    if (value.empty()) {
-        return fallback;
-    }
-
-    return std::atoi(value.c_str());
-}
 
 std::string optionValue(const MediaNodeOptions* options, const std::string& key, std::string fallback = {})
 {
@@ -51,173 +32,10 @@ bool truthyOption(const MediaNodeOptions* options, const std::string& key)
     return value == "1" || value == "true" || value == "yes" || value == "on";
 }
 
-AVCodecID codecIdFromName(const std::string& codecName)
-{
-    if (codecName == "h264" || codecName == "avc") {
-        return AV_CODEC_ID_H264;
-    }
-    if (codecName == "h265" || codecName == "hevc") {
-        return AV_CODEC_ID_HEVC;
-    }
-    if (codecName == "mpeg4") {
-        return AV_CODEC_ID_MPEG4;
-    }
-    if (codecName == "vp9") {
-        return AV_CODEC_ID_VP9;
-    }
-    return AV_CODEC_ID_H264;
-}
-
-void addEncoderCandidate(std::vector<const AVCodec*>& candidates, const AVCodec* codec)
-{
-    if (!codec) {
-        return;
-    }
-
-    if (std::find(candidates.begin(), candidates.end(), codec) == candidates.end()) {
-        candidates.push_back(codec);
-    }
-}
-
-std::vector<const AVCodec*> encoderCandidates(const MediaNodeOptions* options)
-{
-    std::vector<const AVCodec*> candidates;
-    const std::string explicitEncoder = optionValue(options, "encoder");
-    if (!explicitEncoder.empty() && explicitEncoder != "auto") {
-        addEncoderCandidate(candidates, avcodec_find_encoder_by_name(explicitEncoder.c_str()));
-        return candidates;
-    }
-
-    const AVCodecID codecId = codecIdFromName(optionValue(options, "video_codec", "h264"));
-    if (codecId == AV_CODEC_ID_H264) {
-        addEncoderCandidate(candidates, avcodec_find_encoder_by_name("libx264"));
-        addEncoderCandidate(candidates, avcodec_find_encoder_by_name("h264_mf"));
-        addEncoderCandidate(candidates, avcodec_find_encoder_by_name("h264_nvenc"));
-        addEncoderCandidate(candidates, avcodec_find_encoder_by_name("h264_qsv"));
-        addEncoderCandidate(candidates, avcodec_find_encoder_by_name("h264_amf"));
-    } else if (codecId == AV_CODEC_ID_HEVC) {
-        addEncoderCandidate(candidates, avcodec_find_encoder_by_name("libx265"));
-        addEncoderCandidate(candidates, avcodec_find_encoder_by_name("hevc_mf"));
-        addEncoderCandidate(candidates, avcodec_find_encoder_by_name("hevc_nvenc"));
-        addEncoderCandidate(candidates, avcodec_find_encoder_by_name("hevc_qsv"));
-        addEncoderCandidate(candidates, avcodec_find_encoder_by_name("hevc_amf"));
-    }
-
-    addEncoderCandidate(candidates, avcodec_find_encoder(codecId));
-    return candidates;
-}
-
-bool pixelFormatSupported(const AVCodec* codec, AVPixelFormat format)
-{
-    if (!codec || !codec->pix_fmts || format == AV_PIX_FMT_NONE) {
-        return true;
-    }
-
-    for (const AVPixelFormat* current = codec->pix_fmts; *current != AV_PIX_FMT_NONE; ++current) {
-        if (*current == format) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
 std::string pixelFormatName(AVPixelFormat format)
 {
     const char* name = av_get_pix_fmt_name(format);
     return name ? std::string(name) : std::string("unknown");
-}
-
-AVPixelFormat plannedEncoderHardwarePixelFormat(const MediaNodeOptions* options)
-{
-    if (optionValue(options, "encoder.pipeline.frame_kind") != "hardware") {
-        return AV_PIX_FMT_NONE;
-    }
-
-    const std::string hwaccel = optionValue(options, "encoder.pipeline.hwaccel");
-    const std::string device = optionValue(options, "encoder.pipeline.device");
-    if (hwaccel == "cuda" || device == "cuda") {
-        return AV_PIX_FMT_CUDA;
-    }
-    if (hwaccel == "qsv" || device == "qsv") {
-        return AV_PIX_FMT_QSV;
-    }
-    if (hwaccel == "vaapi" || device == "vaapi") {
-        return AV_PIX_FMT_VAAPI;
-    }
-    if (hwaccel == "d3d11va" || device == "d3d11va") {
-        return AV_PIX_FMT_D3D11;
-    }
-
-    return AV_PIX_FMT_NONE;
-}
-
-AVPixelFormat plannedEncoderSoftwarePixelFormat(const MediaNodeOptions* options, AVPixelFormat sourceFormat)
-{
-    const AVPixelFormat hardwareFormat = plannedEncoderHardwarePixelFormat(options);
-    if (hardwareFormat == AV_PIX_FMT_CUDA &&
-        (sourceFormat == AV_PIX_FMT_YUV420P || sourceFormat == AV_PIX_FMT_NONE)) {
-        return AV_PIX_FMT_NV12;
-    }
-
-    if (sourceFormat != AV_PIX_FMT_NONE) {
-        return sourceFormat;
-    }
-
-    if (hardwareFormat == AV_PIX_FMT_CUDA || hardwareFormat == AV_PIX_FMT_D3D11) {
-        return AV_PIX_FMT_NV12;
-    }
-
-    return AV_PIX_FMT_YUV420P;
-}
-
-AVPixelFormat chooseEncoderPixelFormat(const AVCodec* encoder,
-                                       AVPixelFormat sourceFormat,
-                                       const MediaNodeOptions* options)
-{
-    const AVPixelFormat plannedHardwareFormat = plannedEncoderHardwarePixelFormat(options);
-    if (plannedHardwareFormat != AV_PIX_FMT_NONE) {
-        return pixelFormatSupported(encoder, plannedHardwareFormat) ? plannedHardwareFormat : AV_PIX_FMT_NONE;
-    }
-
-    if (sourceFormat != AV_PIX_FMT_NONE && pixelFormatSupported(encoder, sourceFormat)) {
-        return sourceFormat;
-    }
-
-    if (pixelFormatSupported(encoder, AV_PIX_FMT_YUV420P)) {
-        return AV_PIX_FMT_YUV420P;
-    }
-
-    if (encoder && encoder->pix_fmts && encoder->pix_fmts[0] != AV_PIX_FMT_NONE) {
-        return encoder->pix_fmts[0];
-    }
-
-    return sourceFormat != AV_PIX_FMT_NONE ? sourceFormat : AV_PIX_FMT_YUV420P;
-}
-
-void setPrivateOption(AVCodecContext* context, const std::string& key, const std::string& value)
-{
-    if (!context || !context->priv_data || key.empty() || value.empty()) {
-        return;
-    }
-
-    av_opt_set(context->priv_data, key.c_str(), value.c_str(), 0);
-}
-
-AVRational resolveFrameRate(AVFormatContext* formatContext, AVStream* stream, const MediaNodeOptions* options)
-{
-    const int fpsNum = parseIntOption(options, "fps_num", 0);
-    const int fpsDen = parseIntOption(options, "fps_den", 1);
-    if (fpsNum > 0) {
-        return AVRational{ fpsNum, fpsDen > 0 ? fpsDen : 1 };
-    }
-
-    AVRational frameRate = av_guess_frame_rate(formatContext, stream, nullptr);
-    if (frameRate.num > 0 && frameRate.den > 0) {
-        return frameRate;
-    }
-
-    return AVRational{ 30, 1 };
 }
 
 AVHWDeviceType deviceTypeFromHwaccelName(const std::string& hwaccel)
@@ -430,125 +248,53 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
     }
 
     AVStream* stream = formatContext->streams[streamIndex];
-    AVCodecParameters* params = stream->codecpar;
     const MediaNodeOptions* options = nodeOptions(context);
 
-    const int rawWidth = parseIntOption(options, "width", params->width);
-    const int rawHeight = parseIntOption(options, "height", params->height);
+    CodecResolverEncoderContextBuildRequest request;
+    request.formatContext = formatContext;
+    request.stream = stream;
+    request.options = options;
+    request.hardwareDevice = m_decoderHardwareDevice.get();
 
-    const int targetWidth = rawWidth > 0 ? rawWidth : params->width;
-    const int targetHeight = rawHeight > 0 ? rawHeight : params->height;
-
-    const int bitrateKbps = parseIntOption(options, "bitrate_kbps", 0);
-    const int64_t bitRate = bitrateKbps > 0 ? static_cast<int64_t>(bitrateKbps) * 1000 : 4'000'000;
-    const int gop = parseIntOption(options, "gop", 0);
-    const int bframes = parseIntOption(options, "bframes", 0);
-    const int crf = parseIntOption(options, "crf", -1);
-    const int quality = parseIntOption(options, "quality", -1);
-    const std::string rcMode = optionValue(options, "rc", "auto");
-    const AVRational frameRate = resolveFrameRate(formatContext, stream, options);
-
-    std::string lastError = "no encoder candidates available";
-    for (const AVCodec* encoder : encoderCandidates(options)) {
-        if (!encoder) {
-            continue;
-        }
-
-        auto encoderContext = ::media::ffmpeg::makeCodecContext(encoder);
-        if (!encoderContext) {
-            lastError = std::string(encoder->name ? encoder->name : "unknown") + ": avcodec_alloc_context3 returned null";
-            continue;
-        }
-
-        const AVPixelFormat encoderPixelFormat = chooseEncoderPixelFormat(
-            encoder,
-            static_cast<AVPixelFormat>(params->format),
-            options);
-        if (encoderPixelFormat == AV_PIX_FMT_NONE) {
-            lastError = std::string(encoder->name ? encoder->name : "unknown") +
-                        ": planned encoder pixel format unsupported";
-            continue;
-        }
-
-        const AVPixelFormat plannedHardwareFormat = plannedEncoderHardwarePixelFormat(options);
-        const AVPixelFormat plannedSoftwareFormat = plannedEncoderSoftwarePixelFormat(
-            options,
-            static_cast<AVPixelFormat>(params->format));
-
-        encoderContext->width = targetWidth;
-        encoderContext->height = targetHeight;
-        encoderContext->pix_fmt = encoderPixelFormat;
-        encoderContext->time_base = AVRational{ frameRate.den, frameRate.num };
-        encoderContext->framerate = frameRate;
-        encoderContext->bit_rate = bitRate;
-        encoderContext->gop_size = gop > 0 ? gop : 60;
-        encoderContext->max_b_frames = bframes;
-        encoderContext->sample_aspect_ratio = stream->sample_aspect_ratio;
-        encoderContext->color_range = params->color_range;
-        encoderContext->color_primaries = params->color_primaries;
-        encoderContext->color_trc = params->color_trc;
-        encoderContext->colorspace = params->color_space;
-
-        if (plannedHardwareFormat != AV_PIX_FMT_NONE) {
-            auto framesStatus = configureEncoderHardwareFrames(encoderContext.get(),
-                                                               m_decoderHardwareDevice.get(),
-                                                               plannedHardwareFormat,
-                                                               plannedSoftwareFormat,
-                                                               targetWidth,
-                                                               targetHeight,
-                                                               32);
-            if (!framesStatus) {
-                return framesStatus;
-            }
-        }
-
-        if (rcMode == "cbr" && bitRate > 0) {
-            encoderContext->rc_min_rate = bitRate;
-            encoderContext->rc_max_rate = bitRate;
-            encoderContext->rc_buffer_size = static_cast<int>(bitRate * 2);
-        } else if (rcMode == "vbr" && bitRate > 0) {
-            encoderContext->rc_max_rate = bitRate;
-            encoderContext->rc_buffer_size = static_cast<int>(bitRate * 2);
-        }
-
-        setPrivateOption(encoderContext.get(), "preset", optionValue(options, "preset"));
-        setPrivateOption(encoderContext.get(), "profile", optionValue(options, "profile"));
-        setPrivateOption(encoderContext.get(), "tune", optionValue(options, "tune"));
-        setPrivateOption(encoderContext.get(), "level", optionValue(options, "level"));
-        if (crf >= 0) {
-            setPrivateOption(encoderContext.get(), "crf", std::to_string(crf));
-        }
-        if (quality >= 0) {
-            setPrivateOption(encoderContext.get(), "quality", std::to_string(quality));
-            setPrivateOption(encoderContext.get(), "q", std::to_string(quality));
-        }
-
-        codecResolverLog(MediaGraphDiagnosticLevel::State,
-                         std::string("encoder.open name=") + (encoder->name ? encoder->name : "unknown") +
-                             " pix_fmt=" + pixelFormatName(encoderContext->pix_fmt) +
-                             " hw_frames_format=" + pixelFormatName(plannedHardwareFormat) +
-                             " surface_sw_format=" + pixelFormatName(plannedSoftwareFormat) +
-                             " frame_kind=" + optionValue(options, "encoder.pipeline.frame_kind", "software") +
-                             " hwaccel=" + optionValue(options, "encoder.pipeline.hwaccel", "none") +
-                             " hw_device_ctx=" + (encoderContext->hw_device_ctx ? "set" : "none") +
-                             " hw_frames_ctx=" + (encoderContext->hw_frames_ctx ? "set" : "none"));
-
-        const int openRet = avcodec_open2(encoderContext.get(), encoder, nullptr);
-        if (openRet < 0) {
-            lastError = std::string(encoder->name ? encoder->name : "unknown") + ": encoder open failed";
-            continue;
-        }
-
-        auto buffer = FFmpegBufferFactory::wrapCodecContext(std::move(encoderContext));
-        if (!buffer) {
-            return ::media::Status::failure(buffer.error());
-        }
-
-        return pushOutput(context, "encoder", std::move(buffer).value());
+    auto encoderBuildResult = CodecResolverEncoderContextBuilder::build(request);
+    if (!encoderBuildResult) {
+        return ::media::Status::failure(encoderBuildResult.error());
     }
 
-    return ::media::Status::failure(
-        ::media::ErrorInfo::unsupported("CodecResolverNode failed to create video encoder: " + lastError));
+    CodecResolverEncoderContextBuildResult encoderBuild = std::move(encoderBuildResult).value();
+    AVCodecContext* encoderContext = encoderBuild.context.get();
+    const AVCodec* encoder = encoderContext ? encoderContext->codec : nullptr;
+
+    codecResolverLog(MediaGraphDiagnosticLevel::State,
+                     std::string("encoder.open name=") +
+                         (encoder && encoder->name ? encoder->name : optionValue(options, "encoder", "unknown")) +
+                         " pix_fmt=" + pixelFormatName(encoderContext ? encoderContext->pix_fmt : AV_PIX_FMT_NONE) +
+                         " hw_frames_format=" + pixelFormatName(encoderBuild.hardwareFramesFormat) +
+                         " surface_sw_format=" + pixelFormatName(encoderBuild.surfaceSoftwareFormat) +
+                         " frame_kind=" + optionValue(options, "encoder.pipeline.frame_kind", "missing") +
+                         " hwaccel=" + optionValue(options, "encoder.pipeline.hwaccel", "missing") +
+                         " hw_device_ctx=" + (encoderContext && encoderContext->hw_device_ctx ? "set" : "none") +
+                         " hw_frames_ctx=" + (encoderContext && encoderContext->hw_frames_ctx ? "set" : "none"));
+
+    auto buffer = FFmpegBufferFactory::wrapCodecContext(std::move(encoderBuild.context));
+    if (!buffer) {
+        return ::media::Status::failure(buffer.error());
+    }
+
+    MediaBufferRef encoderConfig = std::move(buffer).value();
+    auto encoderStatus = pushOutput(context, "encoder", encoderConfig);
+    if (!encoderStatus) {
+        return encoderStatus;
+    }
+
+    if (context.findOutputChannel(nodeId(), "mux_video")) {
+        auto muxStatus = pushOutput(context, "mux_video", encoderConfig);
+        if (!muxStatus) {
+            return muxStatus;
+        }
+    }
+
+    return ::media::Status::success();
 }
 
 } // namespace media::ffmpeg::graph
