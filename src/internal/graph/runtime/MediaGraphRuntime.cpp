@@ -171,27 +171,85 @@ const MediaThreadingPolicy& MediaGraphRuntime::threadingPolicy() const noexcept
     return m_threadingPolicy;
 }
 
-::media::Status MediaGraphRuntime::start()
+::media::Result<MediaGraphRunResult> MediaGraphRuntime::run()
 {
     if (!m_context.compiled()) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::notInitialized("MediaGraphRuntime start failed: graph is not compiled"));
+        return ::media::Result<MediaGraphRunResult>::failure(
+            ::media::ErrorInfo::notInitialized("MediaGraphRuntime run failed: graph is not compiled"));
     }
+
+    if (m_state == MediaGraphRuntimeState::ThreadedRunning) {
+        return ::media::Result<MediaGraphRunResult>::failure(
+            ::media::ErrorInfo::invalidArgument("MediaGraphRuntime run failed: threaded runtime is running"));
+    }
+
+    if (m_state == MediaGraphRuntimeState::Stopped ||
+        m_state == MediaGraphRuntimeState::Aborted) {
+        return ::media::Result<MediaGraphRunResult>::failure(
+            ::media::ErrorInfo::invalidArgument("MediaGraphRuntime run failed: runtime has already been stopped or aborted; compile a new graph"));
+    }
+
+    if (m_state != MediaGraphRuntimeState::Running) {
+        mediaGraphDiagnosticLog(diagnosticsEnabled(),
+                                MediaGraphDiagnosticPhase::RuntimeLifecycle,
+                                "start.begin mode=single_thread");
+
+        auto startStatus = m_scheduler.start(m_context);
+        if (!startStatus) {
+            return ::media::Result<MediaGraphRunResult>::failure(startStatus.error());
+        }
+
+        m_state = MediaGraphRuntimeState::Running;
+        mediaGraphDiagnosticLog(diagnosticsEnabled(),
+                                MediaGraphDiagnosticPhase::RuntimeLifecycle,
+                                "start.done state=Running");
+    }
+
+    MediaGraphRunResult result;
+    ChannelActivitySnapshot previous = captureChannelActivity(m_context);
+    copySnapshotToResult(previous, result);
 
     mediaGraphDiagnosticLog(diagnosticsEnabled(),
                             MediaGraphDiagnosticPhase::RuntimeLifecycle,
-                            "start.begin mode=single_thread");
+                            "run.begin " + activityText(previous));
 
-    auto status = m_scheduler.start(m_context);
-    if (!status) {
-        return status;
+    for (;;) {
+        auto status = m_scheduler.processSchedulingStep(m_context);
+        if (!status) {
+            auto stopStatus = stop();
+            (void)stopStatus;
+            return ::media::Result<MediaGraphRunResult>::failure(status.error());
+        }
+
+        ++result.iterations;
+
+        const ChannelActivitySnapshot current = captureChannelActivity(m_context);
+        copySnapshotToResult(current, result);
+
+        const bool noActivity = sameChannelActivity(previous, current) && current.queued == 0;
+        if (noActivity) {
+            ++result.idleIterations;
+            if (result.idleIterations >= kCompletionIdleThreshold) {
+                result.completed = true;
+                mediaGraphDiagnosticLog(diagnosticsEnabled(),
+                                        MediaGraphDiagnosticPhase::RuntimeLifecycle,
+                                        "run.completed iterations=" + std::to_string(result.iterations) +
+                                            " idle_iterations=" + std::to_string(result.idleIterations) +
+                                            " " + activityText(current));
+
+                auto stopStatus = stop();
+                if (!stopStatus) {
+                    return ::media::Result<MediaGraphRunResult>::failure(stopStatus.error());
+                }
+
+                return ::media::Result<MediaGraphRunResult>::success(result);
+            }
+        } else {
+            result.idleIterations = 0;
+        }
+
+        previous = current;
     }
-
-    m_state = MediaGraphRuntimeState::Running;
-    mediaGraphDiagnosticLog(diagnosticsEnabled(),
-                            MediaGraphDiagnosticPhase::RuntimeLifecycle,
-                            "start.done state=Running");
-    return ::media::Status::success();
 }
 
 ::media::Status MediaGraphRuntime::startThreaded()
@@ -221,52 +279,6 @@ const MediaThreadingPolicy& MediaGraphRuntime::threadingPolicy() const noexcept
                             MediaGraphDiagnosticPhase::RuntimeLifecycle,
                             "start.done state=ThreadedRunning");
     return ::media::Status::success();
-}
-
-::media::Result<MediaGraphRunResult> MediaGraphRuntime::run()
-{
-    if (m_state != MediaGraphRuntimeState::Running) {
-        return ::media::Result<MediaGraphRunResult>::failure(
-            ::media::ErrorInfo::notInitialized("MediaGraphRuntime run failed: runtime is not running"));
-    }
-
-    MediaGraphRunResult result;
-    ChannelActivitySnapshot previous = captureChannelActivity(m_context);
-    copySnapshotToResult(previous, result);
-
-    mediaGraphDiagnosticLog(diagnosticsEnabled(),
-                            MediaGraphDiagnosticPhase::RuntimeLifecycle,
-                            "run.begin " + activityText(previous));
-
-    for (;;) {
-        auto status = m_scheduler.processOnce(m_context);
-        if (!status) {
-            return ::media::Result<MediaGraphRunResult>::failure(status.error());
-        }
-
-        ++result.iterations;
-
-        const ChannelActivitySnapshot current = captureChannelActivity(m_context);
-        copySnapshotToResult(current, result);
-
-        const bool noActivity = sameChannelActivity(previous, current) && current.queued == 0;
-        if (noActivity) {
-            ++result.idleIterations;
-            if (result.idleIterations >= kCompletionIdleThreshold) {
-                result.completed = true;
-                mediaGraphDiagnosticLog(diagnosticsEnabled(),
-                                        MediaGraphDiagnosticPhase::RuntimeLifecycle,
-                                        "run.completed iterations=" + std::to_string(result.iterations) +
-                                            " idle_iterations=" + std::to_string(result.idleIterations) +
-                                            " " + activityText(current));
-                return ::media::Result<MediaGraphRunResult>::success(result);
-            }
-        } else {
-            result.idleIterations = 0;
-        }
-
-        previous = current;
-    }
 }
 
 ::media::Status MediaGraphRuntime::flush()
@@ -390,6 +402,8 @@ MediaGraphThreadedExecutor& MediaGraphRuntime::threadedExecutor() noexcept
 {
     return m_threadedExecutor;
 }
+
+const MediaGraphThreadedExecutor& MediaGraphThreadedExecutor() const noexcept;
 
 const MediaGraphThreadedExecutor& MediaGraphRuntime::threadedExecutor() const noexcept
 {
