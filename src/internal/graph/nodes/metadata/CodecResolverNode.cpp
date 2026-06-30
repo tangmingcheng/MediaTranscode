@@ -225,13 +225,13 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
     }
 
     MediaBufferRef decoderConfig = std::move(buffer).value();
-    auto decoderStatus = pushOutput(context, "decoder", decoderConfig);
+    auto decoderStatus = emitOutput(context, "decoder", decoderConfig);
     if (!decoderStatus) {
         return decoderStatus;
     }
 
     if (context.findOutputChannel(nodeId(), "timestamp_source")) {
-        auto timestampStatus = pushOutput(context, "timestamp_source", decoderConfig);
+        auto timestampStatus = emitOutput(context, "timestamp_source", decoderConfig);
         if (!timestampStatus) {
             return timestampStatus;
         }
@@ -281,7 +281,7 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
         return ::media::Status::failure(buffer.error());
     }
 
-    return pushOutput(context, "encoder", std::move(buffer).value());
+    return emitOutput(context, "encoder", std::move(buffer).value());
 }
 
 } // namespace media::ffmpeg::graph
