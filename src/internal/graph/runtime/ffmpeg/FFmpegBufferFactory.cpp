@@ -76,6 +76,46 @@ namespace media::ffmpeg::graph {
         makeMediaBufferRef<FFmpegCodecContextBuffer>(context));
 }
 
+::media::Result<MediaBufferRef> FFmpegBufferFactory::cloneCodecParameters(const AVStream* stream)
+{
+    if (!stream) {
+        return ::media::Result<MediaBufferRef>::failure(
+            ::media::ErrorInfo::invalidArgument("cloneCodecParameters failed: stream is null"));
+    }
+
+    if (!stream->codecpar) {
+        return ::media::Result<MediaBufferRef>::failure(
+            ::media::ErrorInfo::invalidArgument("cloneCodecParameters failed: stream codec parameters are null"));
+    }
+
+    auto parameters = ::media::ffmpeg::makeCodecParameters();
+    if (!parameters) {
+        return ::media::Result<MediaBufferRef>::failure(
+            ::media::ErrorInfo::allocationFailed("cloneCodecParameters failed: avcodec_parameters_alloc returned null"));
+    }
+
+    const int copyRet = avcodec_parameters_copy(parameters.get(), stream->codecpar);
+    if (copyRet < 0) {
+        return ::media::Result<MediaBufferRef>::failure(
+            FFmpegGraphError::fromCode(copyRet, "avcodec_parameters_copy"));
+    }
+
+    auto buffer = makeMediaBufferRef<FFmpegCodecParametersBuffer>(std::move(parameters));
+    MediaFormatDescriptor descriptor = FFmpegDescriptorMapper::fromStream(stream);
+    buffer->setStreamKind(descriptor.streamKind);
+    buffer->setPayloadKind(MediaPayloadKind::CodecParameters);
+    buffer->setFormatDescriptor(descriptor);
+
+    MediaTimeDescriptor timeDescriptor;
+    timeDescriptor.timeBase = descriptor.time.timeBase;
+    timeDescriptor.frameRate = descriptor.time.frameRate;
+    timeDescriptor.startTime = descriptor.time.startTime;
+    timeDescriptor.duration = descriptor.time.duration;
+    buffer->setTimeDescriptor(timeDescriptor);
+
+    return ::media::Result<MediaBufferRef>::success(std::move(buffer));
+}
+
 ::media::Result<MediaBufferRef> FFmpegBufferFactory::wrapPacket(::media::ffmpeg::PacketPtr packet,
                                                                  MediaStreamKind streamKind)
 {
@@ -97,7 +137,7 @@ namespace media::ffmpeg::graph {
 }
 
 ::media::Result<MediaBufferRef> FFmpegBufferFactory::clonePacket(const AVPacket* packet,
-                                                                  MediaStreamKind streamKind)
+                                                                 MediaStreamKind streamKind)
 {
     if (!packet) {
         return ::media::Result<MediaBufferRef>::failure(
@@ -120,7 +160,7 @@ namespace media::ffmpeg::graph {
 }
 
 ::media::Result<MediaBufferRef> FFmpegBufferFactory::wrapFrame(::media::ffmpeg::FramePtr frame,
-                                                                MediaStreamKind streamKind)
+                                                               MediaStreamKind streamKind)
 {
     if (!frame) {
         return ::media::Result<MediaBufferRef>::failure(
@@ -152,7 +192,7 @@ namespace media::ffmpeg::graph {
 }
 
 ::media::Result<MediaBufferRef> FFmpegBufferFactory::cloneFrame(const AVFrame* frame,
-                                                                 MediaStreamKind streamKind)
+                                                                MediaStreamKind streamKind)
 {
     if (!frame) {
         return ::media::Result<MediaBufferRef>::failure(
@@ -175,8 +215,8 @@ namespace media::ffmpeg::graph {
 }
 
 ::media::Result<MediaBufferRef> FFmpegBufferFactory::wrapHardwareFrame(::media::ffmpeg::FramePtr frame,
-                                                                        MediaHardwareDescriptor hardware,
-                                                                        MediaStreamKind streamKind)
+                                                                       MediaHardwareDescriptor hardware,
+                                                                       MediaStreamKind streamKind)
 {
     if (!frame) {
         return ::media::Result<MediaBufferRef>::failure(
