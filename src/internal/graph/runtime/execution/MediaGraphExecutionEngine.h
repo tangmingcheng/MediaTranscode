@@ -23,7 +23,6 @@ public:
     ::media::Status prepare(MediaGraph graph,
                             MediaGraphExecutionOptions options = {});
 
-    ::media::Status start();
     ::media::Result<MediaGraphExecutionResult> run();
     ::media::Status stop();
     void abort() noexcept;
