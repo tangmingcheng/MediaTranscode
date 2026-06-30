@@ -44,19 +44,29 @@ AVRational sanitizeSampleAspectRatio(AVRational ratio) noexcept
     return rationalKnown(ratio) ? ratio : AVRational{ 1, 1 };
 }
 
-AVRational chooseInputFrameRate(const MediaBufferRef& buffer)
+bool frameRateAcceptable(AVRational frameRate) noexcept
+{
+    if (!rationalKnown(frameRate)) {
+        return false;
+    }
+
+    const double fps = av_q2d(frameRate);
+    return fps > 1.0 && fps < 240.0;
+}
+
+AVRational chooseInputFrameRate(const MediaBufferRef& buffer, AVRational fallbackFrameRate) noexcept
 {
     if (buffer) {
         const MediaRational frameRate = buffer->timeDescriptor().frameRate;
         if (frameRate.isKnown()) {
             const AVRational avFrameRate = toAVRational(frameRate);
-            const double fps = av_q2d(avFrameRate);
-            if (fps > 1.0 && fps < 240.0) {
+            if (frameRateAcceptable(avFrameRate)) {
                 return avFrameRate;
             }
         }
     }
-    return AVRational{ 25, 1 };
+
+    return frameRateAcceptable(fallbackFrameRate) ? fallbackFrameRate : AVRational{ 0, 1 };
 }
 
 std::string pixelFormatName(AVPixelFormat format)
@@ -149,11 +159,8 @@ MediaNodeKind VideoFilterNode::staticKind() noexcept
                   " pix_fmt=" + pixelFormatName(codecContext->pix_fmt) +
                   " size=" + std::to_string(codecContext->width) + "x" + std::to_string(codecContext->height));
 
-    if (MediaChannel* codecOut = context.findOutputChannel(nodeId(), "codec")) {
-        auto status = codecOut->push(buffer);
-        if (!status) {
-            return status;
-        }
+    if (context.findOutputChannel(nodeId(), "codec")) {
+        return pushOutputToAllChannels(context, "codec", buffer);
     }
 
     return ::media::Status::success();
@@ -178,7 +185,12 @@ MediaNodeKind VideoFilterNode::staticKind() noexcept
             ::media::ErrorInfo::invalidArgument("VideoFilterNode requires input frame time_base"));
     }
 
-    const AVRational inputFrameRate = chooseInputFrameRate(firstFrameBuffer);
+    const AVRational inputFrameRate = chooseInputFrameRate(firstFrameBuffer, m_encoderContext->framerate);
+    if (!rationalKnown(inputFrameRate)) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("VideoFilterNode cannot resolve input frame rate; upstream must provide frame rate or encoder framerate"));
+    }
+
     const AVRational pixelAspect = sanitizeSampleAspectRatio(firstFrame->sample_aspect_ratio);
 
     VideoFilterGraphBuildRequest request;
@@ -207,6 +219,7 @@ MediaNodeKind VideoFilterNode::staticKind() noexcept
     const AVPixelFormat inputFormat = static_cast<AVPixelFormat>(firstFrame->format);
     std::ostringstream out;
     out << "initialize input_tb=" << rationalText(m_inputTimeBase)
+        << " input_fps=" << rationalText(inputFrameRate)
         << " sink_tb=" << rationalText(m_sinkTimeBase)
         << " encoder_tb=" << rationalText(m_encoderContext->time_base)
         << " input_fmt=" << pixelFormatName(inputFormat)
