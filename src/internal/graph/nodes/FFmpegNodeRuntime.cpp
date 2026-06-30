@@ -113,44 +113,20 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
         ::media::ErrorInfo::notInitialized("FFmpegNodeRuntime tryPopFirstInput failed: no input buffer available"));
 }
 
-::media::Status FFmpegNodeRuntime::pushOutput(MediaGraphExecutionContext& context,
+::media::Status FFmpegNodeRuntime::emitOutput(MediaGraphExecutionContext& context,
                                                const std::string& portName,
-                                               MediaBufferRef buffer)
-{
-    MediaChannel* channel = context.findOutputChannel(nodeId(), portName);
-    if (!channel) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::notInitialized("FFmpegNodeRuntime pushOutput failed: output channel not found"));
-    }
-
-    MediaBufferRef loggedBuffer = buffer;
-    auto status = channel->push(std::move(buffer));
-    if (status) {
-        logEdgeTransfer(context,
-                        MediaGraphDiagnosticPhase::RuntimeEdge,
-                        "push",
-                        nodeId(),
-                        name(),
-                        *channel,
-                        loggedBuffer);
-    }
-    return status;
-}
-
-::media::Status FFmpegNodeRuntime::pushOutputToAllChannels(MediaGraphExecutionContext& context,
-                                                           const std::string& portName,
-                                                           const MediaBufferRef& buffer)
+                                               const MediaBufferRef& buffer)
 {
     if (!buffer) {
         return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("FFmpegNodeRuntime pushOutputToAllChannels failed: buffer is null"));
+            ::media::ErrorInfo::invalidArgument("FFmpegNodeRuntime emitOutput failed: buffer is null"));
     }
 
     const MediaGraph* graph = context.graph();
     const MediaPort* port = graph ? graph->findOutputPort(nodeId(), portName) : nullptr;
     if (!port) {
         return ::media::Status::failure(
-            ::media::ErrorInfo::notInitialized("FFmpegNodeRuntime pushOutputToAllChannels failed: output port not found"));
+            ::media::ErrorInfo::notInitialized("FFmpegNodeRuntime emitOutput failed: output port not found"));
     }
 
     bool pushed = false;
@@ -166,7 +142,7 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
 
         logEdgeTransfer(context,
                         MediaGraphDiagnosticPhase::RuntimeEdge,
-                        "push_port_all",
+                        "emit",
                         nodeId(),
                         name(),
                         *channel,
@@ -176,7 +152,7 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
 
     if (!pushed) {
         return ::media::Status::failure(
-            ::media::ErrorInfo::notInitialized("FFmpegNodeRuntime pushOutputToAllChannels failed: no output channel"));
+            ::media::ErrorInfo::notInitialized("FFmpegNodeRuntime emitOutput failed: no output channel"));
     }
 
     return ::media::Status::success();
@@ -279,7 +255,7 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
         return ::media::Status::failure(buffer.error());
     }
 
-    return pushOutput(context, outputPortName, std::move(buffer).value());
+    return emitOutput(context, outputPortName, std::move(buffer).value());
 }
 
 ::media::Status FFmpegNodeRuntime::forwardFirstInputToAllOutputs(MediaGraphExecutionContext& context)
