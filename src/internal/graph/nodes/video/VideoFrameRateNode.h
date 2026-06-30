@@ -27,7 +27,7 @@ private:
     ::media::Status sendFrame(MediaGraphExecutionContext& context, const MediaBufferRef& buffer);
     ::media::Status drainPending(MediaGraphExecutionContext& context);
     ::media::Status queueFrameReference(const AVFrame* sourceFrame, int64_t outputPts);
-    ::media::Status rememberLastInputFrame(const AVFrame* frame);
+    ::media::Status rememberLastInputFrame(const MediaBufferRef& buffer);
 
     int64_t targetPtsForIndex(int64_t outputIndex) const noexcept;
     int64_t targetFrameDuration() const noexcept;
