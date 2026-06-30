@@ -281,20 +281,7 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
         return ::media::Status::failure(buffer.error());
     }
 
-    MediaBufferRef encoderConfig = std::move(buffer).value();
-    auto encoderStatus = pushOutput(context, "encoder", encoderConfig);
-    if (!encoderStatus) {
-        return encoderStatus;
-    }
-
-    if (context.findOutputChannel(nodeId(), "mux_video")) {
-        auto muxStatus = pushOutput(context, "mux_video", encoderConfig);
-        if (!muxStatus) {
-            return muxStatus;
-        }
-    }
-
-    return ::media::Status::success();
+    return pushOutput(context, "encoder", std::move(buffer).value());
 }
 
 } // namespace media::ffmpeg::graph
