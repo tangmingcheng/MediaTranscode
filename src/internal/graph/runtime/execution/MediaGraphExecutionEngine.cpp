@@ -35,30 +35,6 @@ namespace media::ffmpeg::graph {
     return ::media::Status::success();
 }
 
-::media::Status MediaGraphExecutionEngine::start()
-{
-    if (m_state != MediaGraphExecutionEngineState::Prepared &&
-        m_state != MediaGraphExecutionEngineState::Stopped) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::notInitialized("MediaGraphExecutionEngine start failed: engine is not prepared"));
-    }
-
-    ::media::Status status = ::media::Status::success();
-    if (m_options.mode == MediaGraphExecutionMode::ThreadedRuntime) {
-        status = m_runtime.startThreaded();
-    } else {
-        status = m_runtime.start();
-    }
-
-    if (!status) {
-        m_state = MediaGraphExecutionEngineState::Failed;
-        return status;
-    }
-
-    m_state = MediaGraphExecutionEngineState::Running;
-    return ::media::Status::success();
-}
-
 ::media::Result<MediaGraphExecutionResult> MediaGraphExecutionEngine::run()
 {
     if (m_state != MediaGraphExecutionEngineState::Prepared &&
@@ -69,39 +45,34 @@ namespace media::ffmpeg::graph {
 
     MediaGraphExecutionResult result;
 
-    if (!m_runtime.running() && !m_runtime.threadedRunning()) {
-        auto startStatus = start();
-        if (!startStatus) {
-            return ::media::Result<MediaGraphExecutionResult>::failure(startStatus.error());
-        }
-        result.started = true;
-    }
-
     if (m_options.mode == MediaGraphExecutionMode::ThreadedRuntime) {
+        if (!m_runtime.threadedRunning()) {
+            auto startStatus = m_runtime.startThreaded();
+            if (!startStatus) {
+                m_state = MediaGraphExecutionEngineState::Failed;
+                return ::media::Result<MediaGraphExecutionResult>::failure(startStatus.error());
+            }
+            result.started = true;
+        }
+
         result.report = report();
         m_state = MediaGraphExecutionEngineState::Running;
         return ::media::Result<MediaGraphExecutionResult>::success(std::move(result));
     }
 
+    const bool wasRunning = m_runtime.running();
+    m_state = MediaGraphExecutionEngineState::Running;
+
     auto runResult = m_runtime.run();
     if (!runResult) {
         m_state = MediaGraphExecutionEngineState::Failed;
-        auto stopStatus = m_runtime.stop();
-        (void)stopStatus;
         return ::media::Result<MediaGraphExecutionResult>::failure(runResult.error());
     }
 
+    result.started = !wasRunning;
     result.run = runResult.value();
     result.report = report();
-
-    if (m_options.stopOnCompletion) {
-        auto stopStatus = m_runtime.stop();
-        if (!stopStatus) {
-            m_state = MediaGraphExecutionEngineState::Failed;
-            return ::media::Result<MediaGraphExecutionResult>::failure(stopStatus.error());
-        }
-        result.stopped = true;
-    }
+    result.stopped = m_runtime.state() == MediaGraphRuntimeState::Stopped;
 
     m_state = MediaGraphExecutionEngineState::Completed;
     return ::media::Result<MediaGraphExecutionResult>::success(std::move(result));
