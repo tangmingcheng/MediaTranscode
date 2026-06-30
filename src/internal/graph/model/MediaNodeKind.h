@@ -29,6 +29,7 @@ enum class MediaNodeKind {
 
     /* Audio branch */
     AudioStrategy,
+    AudioSourceConfig,
     AudioCopy,
     AudioDecode,
     AudioResample,
