@@ -3,6 +3,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -30,10 +31,24 @@ bool hasArg(int argc, char** argv, const std::string& key)
     return false;
 }
 
+std::optional<int> optionalIntArg(int argc, char** argv, const std::string& key)
+{
+    const std::string value = argValue(argc, argv, key);
+    if (value.empty()) {
+        return std::nullopt;
+    }
+    return std::atoi(value.c_str());
+}
+
 int intArg(int argc, char** argv, const std::string& key, int fallback)
 {
     const std::string value = argValue(argc, argv, key);
     return value.empty() ? fallback : std::atoi(value.c_str());
+}
+
+std::string optionalIntText(const std::optional<int>& value)
+{
+    return value ? std::to_string(*value) : std::string("source");
 }
 
 int failStatus(const char* action, const ::media::Status& status)
@@ -67,14 +82,17 @@ LocalFileTranscodeOptions parseOptions(int argc, char** argv)
     options.profile = argValue(argc, argv, "--profile", options.profile);
     options.tune = argValue(argc, argv, "--tune", options.tune);
     options.level = argValue(argc, argv, "--level", options.level);
-    options.width = intArg(argc, argv, "--width", options.width);
-    options.height = intArg(argc, argv, "--height", options.height);
-    options.fpsNum = intArg(argc, argv, "--fps", options.fpsNum);
-    options.videoBitrateKbps = intArg(argc, argv, "--bitrate", options.videoBitrateKbps);
-    options.crf = intArg(argc, argv, "--crf", options.crf);
-    options.quality = intArg(argc, argv, "--quality", options.quality);
-    options.gop = intArg(argc, argv, "--gop", options.gop);
-    options.maxBFrames = intArg(argc, argv, "--bframes", options.maxBFrames);
+    options.width = optionalIntArg(argc, argv, "--width");
+    options.height = optionalIntArg(argc, argv, "--height");
+    if (auto fps = optionalIntArg(argc, argv, "--fps")) {
+        options.fpsNum = fps;
+        options.fpsDen = 1;
+    }
+    options.videoBitrateKbps = optionalIntArg(argc, argv, "--bitrate");
+    options.crf = optionalIntArg(argc, argv, "--crf");
+    options.quality = optionalIntArg(argc, argv, "--quality");
+    options.gop = optionalIntArg(argc, argv, "--gop");
+    options.maxBFrames = optionalIntArg(argc, argv, "--bframes");
     options.audioCodec = argValue(argc, argv, "--audio-codec", options.audioCodec);
     options.audioBitrateKbps = intArg(argc, argv, "--audio-bitrate", options.audioBitrateKbps);
     options.audioSampleRate = intArg(argc, argv, "--sample-rate", options.audioSampleRate);
@@ -98,10 +116,10 @@ int main(int argc, char** argv)
               << " output=" << options.outputUrl
               << " video=" << (options.includeVideo ? "on" : "off")
               << " audio=" << (options.includeAudio ? "on" : "off")
-              << " width=" << options.width
-              << " height=" << options.height
-              << " fps=" << options.fpsNum
-              << " bitrate_kbps=" << options.videoBitrateKbps
+              << " width=" << optionalIntText(options.width)
+              << " height=" << optionalIntText(options.height)
+              << " fps=" << optionalIntText(options.fpsNum)
+              << " bitrate_kbps=" << optionalIntText(options.videoBitrateKbps)
               << " rc=" << options.rateControlMode
               << " diagnostics=" << (options.diagnosticLogEnabled ? "on" : "off")
               << '\n';
