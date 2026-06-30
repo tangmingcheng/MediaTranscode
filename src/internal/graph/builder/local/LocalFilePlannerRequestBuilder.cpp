@@ -1,5 +1,7 @@
 #include "internal/graph/builder/local/LocalFilePlannerRequestBuilder.h"
 
+#include <utility>
+
 namespace media::ffmpeg::graph {
 namespace {
 
