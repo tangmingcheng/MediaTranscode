@@ -31,7 +31,13 @@ namespace media::ffmpeg::graph {
 
 ::media::Status MediaStreamingSession::start(bool threaded)
 {
-    auto status = threaded ? m_runtime.startThreaded() : m_runtime.start();
+    if (!threaded) {
+        m_state = MediaStreamingSessionState::Failed;
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("MediaStreamingSession start failed: non-threaded start was removed; use MediaGraphRuntime::run for blocking execution"));
+    }
+
+    auto status = m_runtime.startThreaded();
     if (!status) {
         m_state = MediaStreamingSessionState::Failed;
         return status;
