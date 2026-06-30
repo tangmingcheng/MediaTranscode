@@ -86,7 +86,7 @@ void MediaGraphExecutionContext::setDiagnosticConfig(MediaGraphDiagnosticConfig 
     mediaGraphDiagnosticSetGlobalConfig(m_diagnosticConfig);
 }
 
-const MediaGraphDiagnosticConfig& MediaGraphExecutionContext::diagnosticConfig() const
+const MediaGraphDiagnosticConfig& MediaGraphExecutionContext::diagnosticConfig() const noexcept
 {
     return m_diagnosticConfig;
 }
