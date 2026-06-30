@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <deque>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 
 namespace media::ffmpeg::graph {
@@ -16,16 +15,13 @@ struct TopologyState {
     std::unordered_map<NodeKey, int> outdegree;
     std::unordered_map<NodeKey, std::vector<NodeKey>> adjacency;
     std::unordered_map<NodeKey, MediaNodeId> ids;
-    std::unordered_map<NodeKey, std::size_t> stableIndex;
 };
 
 TopologyState buildState(const MediaGraph& graph)
 {
     TopologyState state;
 
-    const auto& nodes = graph.nodes();
-    for (std::size_t index = 0; index < nodes.size(); ++index) {
-        const MediaNode& node = nodes[index];
+    for (const MediaNode& node : graph.nodes()) {
         if (!node.id) {
             continue;
         }
@@ -34,7 +30,6 @@ TopologyState buildState(const MediaGraph& graph)
         state.indegree[key] = 0;
         state.outdegree[key] = 0;
         state.ids[key] = node.id;
-        state.stableIndex[key] = index;
     }
 
     for (const MediaEdge& edge : graph.edges()) {
@@ -67,7 +62,7 @@ void pushInitialSources(const MediaGraph& graph,
         }
 
         const NodeKey key = node.id.value;
-        auto indegreeIt = state.indegree.find(key);
+        const auto indegreeIt = state.indegree.find(key);
         if (indegreeIt != state.indegree.end() && indegreeIt->second == 0) {
             ready.push_back(key);
             result.sources.push_back(node.id);
@@ -85,7 +80,7 @@ void appendSinks(const MediaGraph& graph,
         }
 
         const NodeKey key = node.id.value;
-        auto outdegreeIt = state.outdegree.find(key);
+        const auto outdegreeIt = state.outdegree.find(key);
         if (outdegreeIt != state.outdegree.end() && outdegreeIt->second == 0) {
             result.sinks.push_back(node.id);
         }
@@ -93,7 +88,7 @@ void appendSinks(const MediaGraph& graph,
 }
 
 void appendLevels(const std::unordered_map<NodeKey, int>& nodeLevels,
-                  const MediaGraphTopologyResult& orderSource,
+                  const std::vector<MediaNodeId>& order,
                   MediaGraphTopologyResult& result)
 {
     int maxLevel = 0;
@@ -103,7 +98,7 @@ void appendLevels(const std::unordered_map<NodeKey, int>& nodeLevels,
 
     result.levels.clear();
     result.levels.resize(static_cast<std::size_t>(maxLevel + 1));
-    for (MediaNodeId nodeId : orderSource.order) {
+    for (MediaNodeId nodeId : order) {
         const auto levelIt = nodeLevels.find(nodeId.value);
         if (levelIt == nodeLevels.end()) {
             continue;
@@ -163,7 +158,7 @@ void appendLevels(const std::unordered_map<NodeKey, int>& nodeLevels,
             ::media::ErrorInfo::invalidArgument("MediaGraphTopology build failed: graph is cyclic"));
     }
 
-    appendLevels(nodeLevels, result, result);
+    appendLevels(nodeLevels, result.order, result);
     return ::media::Result<MediaGraphTopologyResult>::success(std::move(result));
 }
 
