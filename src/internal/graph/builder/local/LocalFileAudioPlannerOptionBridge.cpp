@@ -19,27 +19,42 @@ namespace {
 ::media::Result<MediaAudioPipelinePlannerOptions> LocalFilePlannerRequestBuilder::buildAudioPlannerOptions(
     const LocalFileTranscodeOptions& options)
 {
-    auto bitrate = positiveValue(options.audioBitrateKbps, "audio bitrate");
+    const MediaTranscodeParameterSet& parameters = options.parameters;
+    const MediaAudioTranscodeParameters& audio = parameters.audio;
+
+    auto bitrate = positiveValue(audio.bitrateKbps, "audio bitrate");
     if (!bitrate) {
         return ::media::Result<MediaAudioPipelinePlannerOptions>::failure(bitrate.error());
     }
-    auto sampleRate = positiveValue(options.audioSampleRate, "audio sample rate");
+    auto minBitrate = positiveValue(audio.minBitrateKbps, "audio min bitrate");
+    if (!minBitrate) {
+        return ::media::Result<MediaAudioPipelinePlannerOptions>::failure(minBitrate.error());
+    }
+    auto maxBitrate = positiveValue(audio.maxBitrateKbps, "audio max bitrate");
+    if (!maxBitrate) {
+        return ::media::Result<MediaAudioPipelinePlannerOptions>::failure(maxBitrate.error());
+    }
+    auto sampleRate = positiveValue(audio.sampleRate, "audio sample rate");
     if (!sampleRate) {
         return ::media::Result<MediaAudioPipelinePlannerOptions>::failure(sampleRate.error());
     }
-    auto channels = positiveValue(options.audioChannels, "audio channels");
+    auto channels = positiveValue(audio.channels, "audio channels");
     if (!channels) {
         return ::media::Result<MediaAudioPipelinePlannerOptions>::failure(channels.error());
     }
+    auto quality = positiveValue(audio.quality, "audio quality");
+    if (!quality) {
+        return ::media::Result<MediaAudioPipelinePlannerOptions>::failure(quality.error());
+    }
 
     MediaAudioPipelinePlannerOptions plannerOptions;
-    plannerOptions.includeAudio = options.includeAudio;
-    plannerOptions.transformRequested = options.audioTranscode;
-    plannerOptions.requestedCodecName = options.audioCodec;
-    plannerOptions.requestedBitrateKbps = options.audioBitrateKbps;
-    plannerOptions.requestedSampleRate = options.audioSampleRate;
-    plannerOptions.requestedChannels = options.audioChannels;
-    plannerOptions.diagnosticLogEnabled = options.diagnosticLogEnabled;
+    plannerOptions.includeAudio = parameters.execution.includeAudio;
+    plannerOptions.transformRequested = audio.transcode;
+    plannerOptions.requestedCodecName = audio.codecName;
+    plannerOptions.requestedBitrateKbps = audio.bitrateKbps;
+    plannerOptions.requestedSampleRate = audio.sampleRate;
+    plannerOptions.requestedChannels = audio.channels;
+    plannerOptions.diagnosticLogEnabled = parameters.execution.diagnosticLogEnabled;
     return ::media::Result<MediaAudioPipelinePlannerOptions>::success(std::move(plannerOptions));
 }
 
