@@ -104,11 +104,11 @@ std::vector<const MediaRuntimeNode*> MediaGraphScheduler::orderedRuntimeNodes(co
     return ::media::Status::success();
 }
 
-::media::Status MediaGraphScheduler::processOnce(MediaGraphExecutionContext& context)
+::media::Status MediaGraphScheduler::processSchedulingStep(MediaGraphExecutionContext& context)
 {
     if (m_state != MediaGraphSchedulerState::Running) {
         return ::media::Status::failure(
-            ::media::ErrorInfo::notInitialized("MediaGraphScheduler processOnce failed: scheduler is not running"));
+            ::media::ErrorInfo::notInitialized("MediaGraphScheduler processSchedulingStep failed: scheduler is not running"));
     }
 
     for (MediaRuntimeNode* node : orderedRuntimeNodes(context)) {
