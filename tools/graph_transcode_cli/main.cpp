@@ -5,6 +5,7 @@
 #include <exception>
 #include <iostream>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -41,9 +42,27 @@ std::optional<int> optionalIntArg(int argc, char** argv, const std::string& key)
     return std::atoi(value.c_str());
 }
 
+MediaRateControlMode rateControlArg(int argc, char** argv, const std::string& key)
+{
+    MediaRateControlMode mode = MediaRateControlMode::Auto;
+    const std::string value = argValue(argc, argv, key);
+    if (!parseMediaRateControlMode(value, mode)) {
+        throw std::invalid_argument("unsupported rate control mode for " + key + ": " + value);
+    }
+    return mode;
+}
+
 std::string optionalIntText(const std::optional<int>& value)
 {
     return value ? std::to_string(*value) : std::string("source");
+}
+
+std::string frameRateText(const MediaFrameRateParameters& frameRate)
+{
+    if (!frameRate.numerator) {
+        return "source";
+    }
+    return std::to_string(*frameRate.numerator) + "/" + std::to_string(frameRate.denominator.value_or(1));
 }
 
 int failStatus(const char* action, const ::media::Status& status)
@@ -65,34 +84,45 @@ LocalFileTranscodeOptions parseOptions(int argc, char** argv)
     options.inputUrl = argValue(argc, argv, "--input");
     options.outputUrl = argValue(argc, argv, "--output");
     options.outputFormat = argValue(argc, argv, "--format");
-    options.includeVideo = !hasArg(argc, argv, "--no-video");
-    options.includeAudio = !hasArg(argc, argv, "--no-audio");
-    options.audioTranscode = hasArg(argc, argv, "--audio-transcode");
-    options.disableHardware = hasArg(argc, argv, "--disable-hw");
-    options.useHardwareTransfer = !options.disableHardware;
-    options.videoCodec = argValue(argc, argv, "--video-codec", options.videoCodec);
-    options.videoEncoder = argValue(argc, argv, "--encoder", options.videoEncoder);
-    options.rateControlMode = argValue(argc, argv, "--rc", options.rateControlMode);
-    options.speedPreset = argValue(argc, argv, "--preset", options.speedPreset);
-    options.profile = argValue(argc, argv, "--profile", options.profile);
-    options.tune = argValue(argc, argv, "--tune", options.tune);
-    options.level = argValue(argc, argv, "--level", options.level);
-    options.width = optionalIntArg(argc, argv, "--width");
-    options.height = optionalIntArg(argc, argv, "--height");
+
+    MediaTranscodeParameterSet& parameters = options.parameters;
+    parameters.execution.includeVideo = !hasArg(argc, argv, "--no-video");
+    parameters.execution.includeAudio = !hasArg(argc, argv, "--no-audio");
+    parameters.execution.disableHardware = hasArg(argc, argv, "--disable-hw");
+    parameters.execution.diagnosticLogEnabled = !hasArg(argc, argv, "--quiet-graph");
+
+    parameters.video.codecName = argValue(argc, argv, "--video-codec", parameters.video.codecName);
+    parameters.video.encoderName = argValue(argc, argv, "--encoder", parameters.video.encoderName);
+    parameters.video.rateControl = rateControlArg(argc, argv, "--rc");
+    parameters.video.preset = argValue(argc, argv, "--preset", parameters.video.preset);
+    parameters.video.profile = argValue(argc, argv, "--profile", parameters.video.profile);
+    parameters.video.tune = argValue(argc, argv, "--tune", parameters.video.tune);
+    parameters.video.level = argValue(argc, argv, "--level", parameters.video.level);
+    parameters.video.width = optionalIntArg(argc, argv, "--width");
+    parameters.video.height = optionalIntArg(argc, argv, "--height");
     if (auto fps = optionalIntArg(argc, argv, "--fps")) {
-        options.fpsNum = fps;
-        options.fpsDen = 1;
+        parameters.video.frameRate.numerator = fps;
+        parameters.video.frameRate.denominator = 1;
     }
-    options.videoBitrateKbps = optionalIntArg(argc, argv, "--bitrate");
-    options.crf = optionalIntArg(argc, argv, "--crf");
-    options.quality = optionalIntArg(argc, argv, "--quality");
-    options.gop = optionalIntArg(argc, argv, "--gop");
-    options.maxBFrames = optionalIntArg(argc, argv, "--bframes");
-    options.audioCodec = argValue(argc, argv, "--audio-codec", options.audioCodec);
-    options.audioBitrateKbps = optionalIntArg(argc, argv, "--audio-bitrate");
-    options.audioSampleRate = optionalIntArg(argc, argv, "--sample-rate");
-    options.audioChannels = optionalIntArg(argc, argv, "--channels");
-    options.diagnosticLogEnabled = !hasArg(argc, argv, "--quiet-graph");
+    parameters.video.bitrateKbps = optionalIntArg(argc, argv, "--bitrate");
+    parameters.video.minBitrateKbps = optionalIntArg(argc, argv, "--min-bitrate");
+    parameters.video.maxBitrateKbps = optionalIntArg(argc, argv, "--max-bitrate");
+    parameters.video.quality = optionalIntArg(argc, argv, "--quality");
+    parameters.video.gop = optionalIntArg(argc, argv, "--gop");
+    parameters.video.bFrames = optionalIntArg(argc, argv, "--bframes");
+
+    parameters.audio.transcode = hasArg(argc, argv, "--audio-transcode");
+    parameters.audio.codecName = argValue(argc, argv, "--audio-codec", parameters.audio.codecName);
+    parameters.audio.encoderName = argValue(argc, argv, "--audio-encoder", parameters.audio.encoderName);
+    parameters.audio.rateControl = rateControlArg(argc, argv, "--audio-rc");
+    parameters.audio.bitrateKbps = optionalIntArg(argc, argv, "--audio-bitrate");
+    parameters.audio.minBitrateKbps = optionalIntArg(argc, argv, "--audio-min-bitrate");
+    parameters.audio.maxBitrateKbps = optionalIntArg(argc, argv, "--audio-max-bitrate");
+    parameters.audio.sampleRate = optionalIntArg(argc, argv, "--sample-rate");
+    parameters.audio.channels = optionalIntArg(argc, argv, "--channels");
+    parameters.audio.quality = optionalIntArg(argc, argv, "--audio-quality");
+    parameters.audio.preset = argValue(argc, argv, "--audio-preset", parameters.audio.preset);
+    parameters.audio.profile = argValue(argc, argv, "--audio-profile", parameters.audio.profile);
     return options;
 }
 
@@ -105,16 +135,20 @@ int runGraphTranscodeCli(int argc, char** argv)
     }
 
     LocalFileTranscodeOptions options = parseOptions(argc, argv);
+    const MediaTranscodeParameterSet& parameters = options.parameters;
     std::cout << "[CLI] input=" << options.inputUrl
               << " output=" << options.outputUrl
-              << " video=" << (options.includeVideo ? "on" : "off")
-              << " audio=" << (options.includeAudio ? "on" : "off")
-              << " width=" << optionalIntText(options.width)
-              << " height=" << optionalIntText(options.height)
-              << " fps=" << optionalIntText(options.fpsNum)
-              << " bitrate_kbps=" << optionalIntText(options.videoBitrateKbps)
-              << " rc=" << options.rateControlMode
-              << " diagnostics=" << (options.diagnosticLogEnabled ? "on" : "off")
+              << " video=" << (parameters.execution.includeVideo ? "on" : "off")
+              << " audio=" << (parameters.execution.includeAudio ? "on" : "off")
+              << " width=" << optionalIntText(parameters.video.width)
+              << " height=" << optionalIntText(parameters.video.height)
+              << " fps=" << frameRateText(parameters.video.frameRate)
+              << " bitrate_kbps=" << optionalIntText(parameters.video.bitrateKbps)
+              << " min_bitrate_kbps=" << optionalIntText(parameters.video.minBitrateKbps)
+              << " max_bitrate_kbps=" << optionalIntText(parameters.video.maxBitrateKbps)
+              << " rc=" << mediaRateControlModeName(parameters.video.rateControl)
+              << " quality=" << optionalIntText(parameters.video.quality)
+              << " diagnostics=" << (parameters.execution.diagnosticLogEnabled ? "on" : "off")
               << '\n';
 
     std::cout << "[CLI] graph build begin\n";
@@ -127,7 +161,7 @@ int runGraphTranscodeCli(int argc, char** argv)
               << " edges=" << graph.edgeCount() << '\n';
 
     MediaGraphRuntime runtime;
-    runtime.setDiagnosticsEnabled(options.diagnosticLogEnabled);
+    runtime.setDiagnosticsEnabled(parameters.execution.diagnosticLogEnabled);
 
     std::cout << "[CLI] compile begin\n";
     auto compileStatus = runtime.compile(std::move(graph));
