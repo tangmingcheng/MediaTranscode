@@ -43,6 +43,15 @@ struct CodecContextDeleter {
     }
 };
 
+struct CodecParametersDeleter {
+    void operator()(AVCodecParameters* params) const noexcept
+    {
+        if (params) {
+            avcodec_parameters_free(&params);
+        }
+    }
+};
+
 struct InputFormatContextDeleter {
     void operator()(AVFormatContext* ctx) const noexcept
     {
@@ -133,6 +142,7 @@ struct BufferSrcParametersDeleter {
 using FramePtr = std::unique_ptr<AVFrame, FrameDeleter>;
 using PacketPtr = std::unique_ptr<AVPacket, PacketDeleter>;
 using CodecContextPtr = std::unique_ptr<AVCodecContext, CodecContextDeleter>;
+using CodecParametersPtr = std::unique_ptr<AVCodecParameters, CodecParametersDeleter>;
 using InputFormatContextPtr = std::unique_ptr<AVFormatContext, InputFormatContextDeleter>;
 using OutputFormatContextPtr = std::unique_ptr<AVFormatContext, OutputFormatContextDeleter>;
 using FilterGraphPtr = std::unique_ptr<AVFilterGraph, FilterGraphDeleter>;
@@ -155,6 +165,11 @@ inline PacketPtr makePacket()
 inline CodecContextPtr makeCodecContext(const AVCodec* codec)
 {
     return CodecContextPtr(avcodec_alloc_context3(codec));
+}
+
+inline CodecParametersPtr makeCodecParameters()
+{
+    return CodecParametersPtr(avcodec_parameters_alloc());
 }
 
 inline FilterGraphPtr makeFilterGraph()
