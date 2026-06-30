@@ -29,6 +29,9 @@ protected:
     ::media::Status pushOutput(MediaGraphExecutionContext& context,
                                const std::string& portName,
                                MediaBufferRef buffer);
+    ::media::Status pushOutputToAllChannels(MediaGraphExecutionContext& context,
+                                            const std::string& portName,
+                                            const MediaBufferRef& buffer);
     ::media::Status pushToAllOutputs(MediaGraphExecutionContext& context,
                                       const MediaBufferRef& buffer);
     ::media::Status pushToMatchingOutputs(MediaGraphExecutionContext& context,
