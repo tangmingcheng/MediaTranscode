@@ -13,7 +13,6 @@ struct LocalFileTranscodeOptions {
     std::string inputUrl;
     std::string outputUrl;
     std::string outputFormat;
-
     bool includeVideo = true;
     bool includeAudio = true;
     bool audioTranscode = false;
@@ -21,7 +20,6 @@ struct LocalFileTranscodeOptions {
     bool includeMux = true;
     bool includeLifecycle = false;
     bool diagnosticLogEnabled = true;
-
     std::string videoCodec;
     std::string videoEncoder;
     std::string rateControlMode = "auto";
@@ -29,7 +27,6 @@ struct LocalFileTranscodeOptions {
     std::string profile;
     std::string tune;
     std::string level;
-
     std::optional<int> width;
     std::optional<int> height;
     std::optional<int> fpsNum;
@@ -40,12 +37,10 @@ struct LocalFileTranscodeOptions {
     std::optional<int> gop;
     std::optional<int> maxBFrames;
     bool disableHardware = false;
-
-    std::string audioCodec = "auto";
-    int audioBitrateKbps = 128;
-    int audioSampleRate = 0;
-    int audioChannels = 0;
-
+    std::string audioCodec;
+    std::optional<int> audioBitrateKbps;
+    std::optional<int> audioSampleRate;
+    std::optional<int> audioChannels;
     std::size_t metadataQueueCapacity = 1;
     std::size_t packetQueueCapacity = 256;
     std::size_t frameQueueCapacity = 128;
