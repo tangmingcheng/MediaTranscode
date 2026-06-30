@@ -2,6 +2,7 @@
 
 #include "internal/FFmpegRAII.h"
 #include "internal/graph/runtime/buffer/FFmpegCodecContextBuffer.h"
+#include "internal/graph/runtime/buffer/FFmpegCodecParametersBuffer.h"
 #include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
 #include "internal/graph/runtime/buffer/FFmpegFrameBuffer.h"
 #include "internal/graph/runtime/buffer/FFmpegPacketBuffer.h"
@@ -29,6 +30,7 @@ public:
 
     static ::media::Result<MediaBufferRef> wrapCodecContext(::media::ffmpeg::CodecContextPtr context);
     static ::media::Result<MediaBufferRef> borrowCodecContext(AVCodecContext* context);
+    static ::media::Result<MediaBufferRef> cloneCodecParameters(const AVStream* stream);
 
     static ::media::Result<MediaBufferRef> wrapPacket(::media::ffmpeg::PacketPtr packet,
                                                        MediaStreamKind streamKind = MediaStreamKind::Unknown);
