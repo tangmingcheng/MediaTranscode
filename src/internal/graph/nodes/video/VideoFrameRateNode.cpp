@@ -200,7 +200,7 @@ MediaNodeKind VideoFrameRateNode::staticKind() noexcept
         ++queued;
     }
 
-    auto rememberStatus = rememberLastInputFrame(frame);
+    auto rememberStatus = rememberLastInputFrame(buffer);
     if (!rememberStatus) {
         return rememberStatus;
     }
@@ -290,30 +290,30 @@ bool VideoFrameRateNode::enabled() const noexcept
 
 const AVFrame* VideoFrameRateNode::chooseSourceFrameForTarget(const AVFrame* frame, int64_t currentPts, int64_t targetPts) const noexcept
 {
-    if (!m_lastInputFrame || m_lastInputPts == AV_NOPTS_VALUE) {
+    const AVFrame* previousFrame = FFmpegFrameView::frame(m_lastInputFrame);
+    if (!previousFrame || m_lastInputPts == AV_NOPTS_VALUE) {
         return frame;
     }
 
     const int64_t previousDistance = absoluteDistance(targetPts, m_lastInputPts);
     const int64_t currentDistance = absoluteDistance(currentPts, targetPts);
-    return previousDistance <= currentDistance ? m_lastInputFrame.get() : frame;
+    return previousDistance <= currentDistance ? previousFrame : frame;
 }
 
-::media::Status VideoFrameRateNode::rememberLastInputFrame(const AVFrame* frame)
+::media::Status VideoFrameRateNode::rememberLastInputFrame(const MediaBufferRef& buffer)
 {
-    auto cloned = ::media::ffmpeg::makeFrame();
+    const AVFrame* frame = FFmpegFrameView::frame(buffer);
+    if (!frame) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("VideoFrameRateNode expected frame buffer for history"));
+    }
+
+    auto cloned = FFmpegBufferFactory::cloneFrame(frame, MediaStreamKind::Video);
     if (!cloned) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::allocationFailed("VideoFrameRateNode failed to allocate last input frame"));
+        return ::media::Status::failure(cloned.error());
     }
 
-    const int ret = av_frame_ref(cloned.get(), frame);
-    if (ret < 0) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::ffmpegFailure("VideoFrameRateNode failed to reference last input frame", ret));
-    }
-
-    m_lastInputFrame = std::move(cloned);
+    m_lastInputFrame = cloned.value();
     m_lastInputPts = frame->pts;
     return ::media::Status::success();
 }
