@@ -26,12 +26,9 @@ protected:
                                              const std::string& portName);
     ::media::Result<MediaBufferRef> tryPopFirstInput(MediaGraphExecutionContext& context);
 
-    ::media::Status pushOutput(MediaGraphExecutionContext& context,
+    ::media::Status emitOutput(MediaGraphExecutionContext& context,
                                const std::string& portName,
-                               MediaBufferRef buffer);
-    ::media::Status pushOutputToAllChannels(MediaGraphExecutionContext& context,
-                                            const std::string& portName,
-                                            const MediaBufferRef& buffer);
+                               const MediaBufferRef& buffer);
     ::media::Status pushToAllOutputs(MediaGraphExecutionContext& context,
                                       const MediaBufferRef& buffer);
     ::media::Status pushToMatchingOutputs(MediaGraphExecutionContext& context,
