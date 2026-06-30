@@ -224,9 +224,9 @@ MediaNodeKind VideoFrameRateNode::staticKind() noexcept
         MediaBufferRef frame = std::move(m_pendingFrames.front());
         m_pendingFrames.pop_front();
 
-        auto pushStatus = pushOutput(context, "frame", frame);
-        if (!pushStatus) {
-            return pushStatus;
+        auto emitStatus = emitOutput(context, "frame", frame);
+        if (!emitStatus) {
+            return emitStatus;
         }
     }
 
