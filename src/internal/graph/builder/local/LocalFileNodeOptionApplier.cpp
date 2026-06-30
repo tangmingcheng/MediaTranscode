@@ -41,59 +41,69 @@ void setIfPresent(MediaGraph& graph, MediaNodeId nodeId, const std::string& key,
     return ::media::Status::success();
 }
 
-::media::Status validateUserVideoOptions(const LocalFileTranscodeOptions& options)
+::media::Status validateUserVideoOptions(const MediaVideoTranscodeParameters& video)
 {
-    if (options.width && *options.width <= 0) {
+    if (video.width && *video.width <= 0) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("LocalFileNodeOptionApplier rejects zero/negative width; omit width to keep source size"));
     }
 
-    if (options.height && *options.height <= 0) {
+    if (video.height && *video.height <= 0) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("LocalFileNodeOptionApplier rejects zero/negative height; omit height to keep source size"));
     }
 
-    if (options.width.has_value() != options.height.has_value()) {
+    if (video.width.has_value() != video.height.has_value()) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("LocalFileNodeOptionApplier requires width and height to be specified together"));
     }
 
-    if (options.fpsNum.has_value() != options.fpsDen.has_value()) {
+    if (!video.frameRate.complete()) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("LocalFileNodeOptionApplier requires fps numerator and denominator to be specified together"));
     }
 
-    auto status = validateOptionalPositive(options.fpsNum, "fps numerator");
+    auto status = validateOptionalPositive(video.frameRate.numerator, "fps numerator");
     if (!status) {
         return status;
     }
 
-    status = validateOptionalPositive(options.fpsDen, "fps denominator");
+    status = validateOptionalPositive(video.frameRate.denominator, "fps denominator");
     if (!status) {
         return status;
     }
 
-    status = validateOptionalNonNegative(options.videoBitrateKbps, "video bitrate");
+    status = validateOptionalNonNegative(video.bitrateKbps, "video bitrate");
     if (!status) {
         return status;
     }
 
-    status = validateOptionalNonNegative(options.crf, "crf");
+    status = validateOptionalNonNegative(video.minBitrateKbps, "video min bitrate");
     if (!status) {
         return status;
     }
 
-    status = validateOptionalNonNegative(options.quality, "quality");
+    status = validateOptionalNonNegative(video.maxBitrateKbps, "video max bitrate");
     if (!status) {
         return status;
     }
 
-    status = validateOptionalNonNegative(options.gop, "gop");
+    if (video.minBitrateKbps && video.maxBitrateKbps && *video.minBitrateKbps > *video.maxBitrateKbps) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("LocalFileNodeOptionApplier requires video min bitrate <= max bitrate"));
+    }
+
+    status = validateOptionalNonNegative(video.quality, "quality");
     if (!status) {
         return status;
     }
 
-    status = validateOptionalNonNegative(options.maxBFrames, "bframes");
+    status = validateOptionalNonNegative(video.gop, "gop");
+    if (!status) {
+        return status;
+    }
+
+    status = validateOptionalNonNegative(video.bFrames, "bframes");
     if (!status) {
         return status;
     }
@@ -101,29 +111,27 @@ void setIfPresent(MediaGraph& graph, MediaNodeId nodeId, const std::string& key,
     return ::media::Status::success();
 }
 
-void applyUserVideoOptionsToNode(MediaGraph& graph, MediaNodeId nodeId, const LocalFileTranscodeOptions& options)
+void applyUserVideoOptionsToNode(MediaGraph& graph, MediaNodeId nodeId, const MediaVideoTranscodeParameters& video)
 {
-    setIfNotEmpty(graph, nodeId, "video_codec", options.videoCodec);
-    setIfNotEmpty(graph, nodeId, "encoder", options.videoEncoder);
+    setIfNotEmpty(graph, nodeId, MediaTranscodeOptionKey::VideoCodec, video.codecName);
+    setIfNotEmpty(graph, nodeId, MediaTranscodeOptionKey::VideoEncoder, video.encoderName);
+    graph.setNodeOption(nodeId, MediaTranscodeOptionKey::VideoRateControl, mediaRateControlModeName(video.rateControl));
 
-    if (!options.rateControlMode.empty() && options.rateControlMode != "auto") {
-        graph.setNodeOption(nodeId, "rc", options.rateControlMode);
-    }
+    setIfNotEmpty(graph, nodeId, MediaTranscodeOptionKey::VideoPreset, video.preset);
+    setIfNotEmpty(graph, nodeId, MediaTranscodeOptionKey::VideoProfile, video.profile);
+    setIfNotEmpty(graph, nodeId, MediaTranscodeOptionKey::VideoTune, video.tune);
+    setIfNotEmpty(graph, nodeId, MediaTranscodeOptionKey::VideoLevel, video.level);
 
-    setIfNotEmpty(graph, nodeId, "preset", options.speedPreset);
-    setIfNotEmpty(graph, nodeId, "profile", options.profile);
-    setIfNotEmpty(graph, nodeId, "tune", options.tune);
-    setIfNotEmpty(graph, nodeId, "level", options.level);
-
-    setIfPresent(graph, nodeId, "width", options.width);
-    setIfPresent(graph, nodeId, "height", options.height);
-    setIfPresent(graph, nodeId, "fps_num", options.fpsNum);
-    setIfPresent(graph, nodeId, "fps_den", options.fpsDen);
-    setIfPresent(graph, nodeId, "bitrate_kbps", options.videoBitrateKbps);
-    setIfPresent(graph, nodeId, "crf", options.crf);
-    setIfPresent(graph, nodeId, "quality", options.quality);
-    setIfPresent(graph, nodeId, "gop", options.gop);
-    setIfPresent(graph, nodeId, "bframes", options.maxBFrames);
+    setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoWidth, video.width);
+    setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoHeight, video.height);
+    setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoFpsNum, video.frameRate.numerator);
+    setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoFpsDen, video.frameRate.denominator);
+    setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoBitrateKbps, video.bitrateKbps);
+    setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoMinBitrateKbps, video.minBitrateKbps);
+    setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoMaxBitrateKbps, video.maxBitrateKbps);
+    setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoQuality, video.quality);
+    setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoGop, video.gop);
+    setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoBFrames, video.bFrames);
 }
 
 } // namespace
@@ -132,7 +140,8 @@ void applyUserVideoOptionsToNode(MediaGraph& graph, MediaNodeId nodeId, const Lo
                                                                   const LocalFilePlannerNodeIds& nodes,
                                                                   const LocalFileTranscodeOptions& options)
 {
-    auto validation = validateUserVideoOptions(options);
+    const MediaVideoTranscodeParameters& video = options.parameters.video;
+    auto validation = validateUserVideoOptions(video);
     if (!validation) {
         return validation;
     }
@@ -147,7 +156,7 @@ void applyUserVideoOptionsToNode(MediaGraph& graph, MediaNodeId nodeId, const Lo
     };
 
     for (MediaNodeId nodeId : videoOptionNodes) {
-        applyUserVideoOptionsToNode(graph, nodeId, options);
+        applyUserVideoOptionsToNode(graph, nodeId, video);
     }
 
     return ::media::Status::success();
