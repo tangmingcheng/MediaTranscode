@@ -34,6 +34,10 @@ namespace {
     if (!maxBitrate) {
         return ::media::Result<MediaAudioPipelinePlannerOptions>::failure(maxBitrate.error());
     }
+    if (audio.minBitrateKbps && audio.maxBitrateKbps && *audio.minBitrateKbps > *audio.maxBitrateKbps) {
+        return ::media::Result<MediaAudioPipelinePlannerOptions>::failure(
+            ::media::ErrorInfo::invalidArgument("audio min bitrate must be <= audio max bitrate"));
+    }
     auto sampleRate = positiveValue(audio.sampleRate, "audio sample rate");
     if (!sampleRate) {
         return ::media::Result<MediaAudioPipelinePlannerOptions>::failure(sampleRate.error());
@@ -51,9 +55,16 @@ namespace {
     plannerOptions.includeAudio = parameters.execution.includeAudio;
     plannerOptions.transformRequested = audio.transcode;
     plannerOptions.requestedCodecName = audio.codecName;
+    plannerOptions.requestedEncoderName = audio.encoderName;
+    plannerOptions.rateControl = audio.rateControl;
     plannerOptions.requestedBitrateKbps = audio.bitrateKbps;
+    plannerOptions.requestedMinBitrateKbps = audio.minBitrateKbps;
+    plannerOptions.requestedMaxBitrateKbps = audio.maxBitrateKbps;
     plannerOptions.requestedSampleRate = audio.sampleRate;
     plannerOptions.requestedChannels = audio.channels;
+    plannerOptions.requestedQuality = audio.quality;
+    plannerOptions.requestedPreset = audio.preset;
+    plannerOptions.requestedProfile = audio.profile;
     plannerOptions.diagnosticLogEnabled = parameters.execution.diagnosticLogEnabled;
     return ::media::Result<MediaAudioPipelinePlannerOptions>::success(std::move(plannerOptions));
 }
