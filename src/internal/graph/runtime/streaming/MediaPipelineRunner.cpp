@@ -12,22 +12,10 @@ namespace media::ffmpeg::graph {
         return ::media::Result<MediaPipelineRunResult>::failure(prepareStatus.error());
     }
 
-    auto startStatus = session.start(false);
-    if (!startStatus) {
-        session.abort();
-        return ::media::Result<MediaPipelineRunResult>::failure(startStatus.error());
-    }
-
     auto runResult = session.runtime().run();
     if (!runResult) {
         session.abort();
         return ::media::Result<MediaPipelineRunResult>::failure(runResult.error());
-    }
-
-    auto stopStatus = session.stop();
-    if (!stopStatus) {
-        session.abort();
-        return ::media::Result<MediaPipelineRunResult>::failure(stopStatus.error());
     }
 
     MediaPipelineRunResult result;
