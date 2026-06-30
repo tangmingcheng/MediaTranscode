@@ -1,6 +1,8 @@
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/planner/MediaPipelineAudioSourceProbe.h"
 
+#include <utility>
+
 namespace media::ffmpeg::graph {
 
 ::media::Result<MediaAudioPipelinePlan> MediaAudioPipelinePlanner::planFileAudio(
