@@ -55,6 +55,7 @@ AVPixelFormat selectHardwarePixelFormat(const AVCodec* decoder, AVHWDeviceType d
         return AV_PIX_FMT_NONE;
     }
 
+    AVPixelFormat internalHardwareFormat = AV_PIX_FMT_NONE;
     for (int index = 0;; ++index) {
         const AVCodecHWConfig* config = avcodec_get_hw_config(decoder, index);
         if (!config) {
@@ -66,26 +67,28 @@ AVPixelFormat selectHardwarePixelFormat(const AVCodec* decoder, AVHWDeviceType d
         if (canUseDevice && config->device_type == deviceType) {
             return config->pix_fmt;
         }
-        if (internalOnly && config->pix_fmt != AV_PIX_FMT_NONE) {
-            return config->pix_fmt;
+        if (internalOnly && internalHardwareFormat == AV_PIX_FMT_NONE && config->pix_fmt != AV_PIX_FMT_NONE) {
+            internalHardwareFormat = config->pix_fmt;
         }
     }
 
-    return AV_PIX_FMT_NONE;
+    return internalHardwareFormat;
 }
 
 AVPixelFormat plannedHardwareGetFormat(AVCodecContext* context, const AVPixelFormat* formats)
 {
     const auto* desired = static_cast<const AVPixelFormat*>(context ? context->opaque : nullptr);
-    if (desired && *desired != AV_PIX_FMT_NONE) {
-        for (const AVPixelFormat* current = formats; current && *current != AV_PIX_FMT_NONE; ++current) {
-            if (*current == *desired) {
-                return *current;
-            }
+    if (!desired || *desired == AV_PIX_FMT_NONE) {
+        return formats ? formats[0] : AV_PIX_FMT_NONE;
+    }
+
+    for (const AVPixelFormat* current = formats; current && *current != AV_PIX_FMT_NONE; ++current) {
+        if (*current == *desired) {
+            return *current;
         }
     }
 
-    return formats ? formats[0] : AV_PIX_FMT_NONE;
+    return AV_PIX_FMT_NONE;
 }
 
 void codecResolverLog(MediaGraphDiagnosticLevel level, const std::string& message)
@@ -183,26 +186,31 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
     m_decoderHardwarePixelFormat = AV_PIX_FMT_NONE;
     if (hardwarePlanned) {
         const AVHWDeviceType deviceType = deviceTypeFromHwaccelName(hwaccelName);
+        if (deviceType == AV_HWDEVICE_TYPE_NONE) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument("CodecResolverNode planned hardware decoder requires valid pipeline.hwaccel"));
+        }
+
         m_decoderHardwarePixelFormat = selectHardwarePixelFormat(decoder, deviceType);
-
-        if (deviceType != AV_HWDEVICE_TYPE_NONE) {
-            AVBufferRef* rawDevice = nullptr;
-            const int deviceRet = av_hwdevice_ctx_create(&rawDevice, deviceType, nullptr, nullptr, 0);
-            if (deviceRet < 0) {
-                return FFmpegGraphError::statusFromCode(deviceRet, "av_hwdevice_ctx_create(" + hwaccelName + ")");
-            }
-            m_decoderHardwareDevice = ::media::ffmpeg::BufferRefPtr(rawDevice);
-            decoderContext->hw_device_ctx = av_buffer_ref(m_decoderHardwareDevice.get());
-            if (!decoderContext->hw_device_ctx) {
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::allocationFailed("CodecResolverNode failed: av_buffer_ref(hw_device_ctx)"));
-            }
+        if (m_decoderHardwarePixelFormat == AV_PIX_FMT_NONE) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::unsupported("CodecResolverNode planned hardware decoder format is not supported by selected decoder"));
         }
 
-        if (m_decoderHardwarePixelFormat != AV_PIX_FMT_NONE) {
-            decoderContext->opaque = &m_decoderHardwarePixelFormat;
-            decoderContext->get_format = plannedHardwareGetFormat;
+        AVBufferRef* rawDevice = nullptr;
+        const int deviceRet = av_hwdevice_ctx_create(&rawDevice, deviceType, nullptr, nullptr, 0);
+        if (deviceRet < 0) {
+            return FFmpegGraphError::statusFromCode(deviceRet, "av_hwdevice_ctx_create(" + hwaccelName + ")");
         }
+        m_decoderHardwareDevice = ::media::ffmpeg::BufferRefPtr(rawDevice);
+        decoderContext->hw_device_ctx = av_buffer_ref(m_decoderHardwareDevice.get());
+        if (!decoderContext->hw_device_ctx) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::allocationFailed("CodecResolverNode failed: av_buffer_ref(hw_device_ctx)"));
+        }
+
+        decoderContext->opaque = &m_decoderHardwarePixelFormat;
+        decoderContext->get_format = plannedHardwareGetFormat;
     }
 
     std::ostringstream out;
