@@ -1,9 +1,9 @@
 #include "internal/graph/builder/local/LocalFileTranscodeGraphBuilder.h"
 
 #include "internal/graph/builder/local/LocalFilePlannerOptionBridge.h"
+#include "internal/graph/builder/local/LocalFilePlannerRequestBuilder.h"
 #include "internal/graph/planner/MediaPipelinePlanner.h"
 
-#include <algorithm>
 #include <optional>
 #include <string>
 #include <utility>
@@ -44,44 +44,14 @@ void applyVideoOptions(MediaGraph& graph, MediaNodeId nodeId, const LocalFileTra
     graph.setNodeOption(nodeId, "bframes", std::to_string(options.maxBFrames));
 }
 
-void preferSoftwarePlan(MediaPipelinePlan& plan)
-{
-    auto software = std::find_if(plan.candidates.begin(), plan.candidates.end(), [](const MediaPipelineChainPlan& chain) {
-        return chain.available && chain.label == "software";
-    });
-    if (software == plan.candidates.end()) {
-        software = std::find_if(plan.candidates.begin(), plan.candidates.end(), [](const MediaPipelineChainPlan& chain) {
-            return chain.available && chain.label == "software-native-codec";
-        });
-    }
-    if (software != plan.candidates.end()) {
-        plan.selected = *software;
-    }
-}
-
 ::media::Result<MediaPipelinePlan> buildVideoPlan(const LocalFileTranscodeOptions& options)
 {
-    MediaPipelinePlannerOptions plannerOptions;
-    plannerOptions.outputPath = options.outputUrl;
-    plannerOptions.outputCodecName = options.videoCodec.empty() ? "h264" : options.videoCodec;
-    plannerOptions.targetWidth = options.width;
-    plannerOptions.targetHeight = options.height;
-    plannerOptions.allowSoftwareFallback = true;
-    plannerOptions.requireRuntimeAvailability = true;
-    plannerOptions.preferGpu = options.useHardwareTransfer && !options.disableHardware;
-    plannerOptions.preferredHardware = plannerOptions.preferGpu ? "auto" : "software";
-    plannerOptions.diagnosticLogEnabled = options.diagnosticLogEnabled;
-
-    auto plan = MediaPipelinePlanner::planVideoTranscodeFile(options.inputUrl, plannerOptions);
-    if (!plan) {
-        return plan;
+    auto plannerOptions = LocalFilePlannerRequestBuilder::buildVideoPlannerOptions(options);
+    if (!plannerOptions) {
+        return ::media::Result<MediaPipelinePlan>::failure(plannerOptions.error());
     }
 
-    if (!plannerOptions.preferGpu) {
-        preferSoftwarePlan(plan.value());
-    }
-
-    return plan;
+    return MediaPipelinePlanner::planVideoTranscodeFile(options.inputUrl, std::move(plannerOptions).value());
 }
 
 } // namespace
