@@ -1,7 +1,6 @@
 #include "internal/graph/builder/local/LocalFileTranscodeGraphBuilder.h"
 #include "internal/graph/runtime/MediaGraphRuntime.h"
 
-#include <cstdlib>
 #include <exception>
 #include <iostream>
 #include <optional>
@@ -39,7 +38,13 @@ std::optional<int> optionalIntArg(int argc, char** argv, const std::string& key)
     if (value.empty()) {
         return std::nullopt;
     }
-    return std::atoi(value.c_str());
+
+    std::size_t parsed = 0;
+    const int result = std::stoi(value, &parsed, 10);
+    if (parsed != value.size()) {
+        throw std::invalid_argument("invalid integer value for " + key + ": " + value);
+    }
+    return result;
 }
 
 MediaRateControlMode rateControlArg(int argc, char** argv, const std::string& key)
