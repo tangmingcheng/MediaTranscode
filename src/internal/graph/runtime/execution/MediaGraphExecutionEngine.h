@@ -24,7 +24,6 @@ public:
                             MediaGraphExecutionOptions options = {});
 
     ::media::Status start();
-    ::media::Status processOnce();
     ::media::Result<MediaGraphExecutionResult> run();
     ::media::Status stop();
     void abort() noexcept;
