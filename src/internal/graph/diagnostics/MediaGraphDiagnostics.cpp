@@ -15,6 +15,7 @@ namespace media::ffmpeg::graph {
 namespace {
 
 std::mutex g_diagnosticsMutex;
+bool g_diagnosticsEnabled = true;
 MediaGraphDiagnosticConfig g_runtimeDiagnosticsConfig;
 std::unordered_map<std::string, std::uint64_t> g_sampleCounters;
 
@@ -44,8 +45,8 @@ std::string lowerCopy(std::string text)
 
 bool levelAtLeast(MediaGraphDiagnosticLevel current, MediaGraphDiagnosticLevel required) noexcept
 {
-    return static_cast<int>(current) >= static_cast<int>(required) &&
-           current != MediaGraphDiagnosticLevel::Off;
+    return current != MediaGraphDiagnosticLevel::Off &&
+        static_cast<int>(current) >= static_cast<int>(required);
 }
 
 } // namespace
@@ -53,24 +54,15 @@ bool levelAtLeast(MediaGraphDiagnosticLevel current, MediaGraphDiagnosticLevel r
 const char* mediaGraphDiagnosticPhaseName(MediaGraphDiagnosticPhase phase) noexcept
 {
     switch (phase) {
-    case MediaGraphDiagnosticPhase::PlannerInput:
-        return "planner.input";
-    case MediaGraphDiagnosticPhase::PlannerCapability:
-        return "planner.capability";
-    case MediaGraphDiagnosticPhase::PlannerScore:
-        return "planner.score";
-    case MediaGraphDiagnosticPhase::PlannerSelect:
-        return "planner.select";
-    case MediaGraphDiagnosticPhase::GraphBuild:
-        return "builder.graph";
-    case MediaGraphDiagnosticPhase::RuntimeNode:
-        return "runtime.node";
-    case MediaGraphDiagnosticPhase::RuntimeEdge:
-        return "runtime.edge";
-    case MediaGraphDiagnosticPhase::RuntimeChannel:
-        return "runtime.channel";
-    case MediaGraphDiagnosticPhase::RuntimeLifecycle:
-        return "runtime.lifecycle";
+    case MediaGraphDiagnosticPhase::PlannerInput: return "planner.input";
+    case MediaGraphDiagnosticPhase::PlannerCapability: return "planner.capability";
+    case MediaGraphDiagnosticPhase::PlannerScore: return "planner.score";
+    case MediaGraphDiagnosticPhase::PlannerSelect: return "planner.select";
+    case MediaGraphDiagnosticPhase::GraphBuild: return "builder.graph";
+    case MediaGraphDiagnosticPhase::RuntimeNode: return "runtime.node";
+    case MediaGraphDiagnosticPhase::RuntimeEdge: return "runtime.edge";
+    case MediaGraphDiagnosticPhase::RuntimeChannel: return "runtime.channel";
+    case MediaGraphDiagnosticPhase::RuntimeLifecycle: return "runtime.lifecycle";
     }
     return "unknown";
 }
@@ -78,16 +70,11 @@ const char* mediaGraphDiagnosticPhaseName(MediaGraphDiagnosticPhase phase) noexc
 const char* mediaGraphDiagnosticLevelName(MediaGraphDiagnosticLevel level) noexcept
 {
     switch (level) {
-    case MediaGraphDiagnosticLevel::Off:
-        return "off";
-    case MediaGraphDiagnosticLevel::Summary:
-        return "summary";
-    case MediaGraphDiagnosticLevel::State:
-        return "state";
-    case MediaGraphDiagnosticLevel::Flow:
-        return "flow";
-    case MediaGraphDiagnosticLevel::Trace:
-        return "trace";
+    case MediaGraphDiagnosticLevel::Off: return "off";
+    case MediaGraphDiagnosticLevel::Summary: return "summary";
+    case MediaGraphDiagnosticLevel::State: return "state";
+    case MediaGraphDiagnosticLevel::Flow: return "flow";
+    case MediaGraphDiagnosticLevel::Trace: return "trace";
     }
     return "unknown";
 }
@@ -154,8 +141,7 @@ const char* mediaGraphDiagnosticNodeKindName(MediaNodeKind kind) noexcept
     case MediaNodeKind::TraceProbe: return "TraceProbe";
     case MediaNodeKind::CodecResolver: return "CodecResolver";
     case MediaNodeKind::Unknown:
-    default:
-        return "Unknown";
+    default: return "Unknown";
     }
 }
 
@@ -171,8 +157,7 @@ const char* mediaGraphDiagnosticStreamKindName(MediaStreamKind kind) noexcept
     case MediaStreamKind::Metadata: return "Metadata";
     case MediaStreamKind::Any: return "Any";
     case MediaStreamKind::Unknown:
-    default:
-        return "Unknown";
+    default: return "Unknown";
     }
 }
 
@@ -193,8 +178,7 @@ const char* mediaGraphDiagnosticEdgeKindName(MediaEdgeKind kind) noexcept
     case MediaEdgeKind::Control: return "Control";
     case MediaEdgeKind::Event: return "Event";
     case MediaEdgeKind::Unknown:
-    default:
-        return "Unknown";
+    default: return "Unknown";
     }
 }
 
@@ -215,9 +199,38 @@ const char* mediaGraphDiagnosticPayloadKindName(MediaPayloadKind kind) noexcept
     case MediaPayloadKind::GraphEvent: return "GraphEvent";
     case MediaPayloadKind::DiagnosticRecord: return "DiagnosticRecord";
     case MediaPayloadKind::Unknown:
-    default:
-        return "Unknown";
+    default: return "Unknown";
     }
+}
+
+void mediaGraphDiagnosticSetGlobalEnabled(bool enabled) noexcept
+{
+    std::lock_guard lock(g_diagnosticsMutex);
+    g_diagnosticsEnabled = enabled;
+}
+
+bool mediaGraphDiagnosticGlobalEnabled() noexcept
+{
+    std::lock_guard lock(g_diagnosticsMutex);
+    return g_diagnosticsEnabled;
+}
+
+void mediaGraphDiagnosticSetGlobalConfig(MediaGraphDiagnosticConfig config)
+{
+    std::lock_guard lock(g_diagnosticsMutex);
+    g_runtimeDiagnosticsConfig = config;
+}
+
+MediaGraphDiagnosticConfig mediaGraphDiagnosticGlobalConfig()
+{
+    std::lock_guard lock(g_diagnosticsMutex);
+    return g_runtimeDiagnosticsConfig;
+}
+
+bool mediaGraphDiagnosticLevelEnabled(MediaGraphDiagnosticLevel requiredLevel) noexcept
+{
+    std::lock_guard lock(g_diagnosticsMutex);
+    return g_diagnosticsEnabled && levelAtLeast(g_runtimeDiagnosticsConfig.level, requiredLevel);
 }
 
 std::string mediaGraphDiagnosticDescribeBuffer(const MediaBufferRef& buffer)
@@ -234,7 +247,7 @@ std::string mediaGraphDiagnosticDescribeBuffer(const MediaBufferRef& buffer)
         << " dts=" << timestampText(buffer->dts())
         << " duration=" << buffer->duration()
         << " tb=" << rationalText(buffer->timeDescriptor().timeBase)
-        << " flags=" << static_cast<uint32_t>(buffer->flags());
+        << " flags=" << static_cast<std::uint32_t>(buffer->flags());
     return out.str();
 }
 
@@ -250,28 +263,30 @@ std::string mediaGraphDiagnosticDescribeChannel(const MediaChannel& channel)
     return out.str();
 }
 
-void mediaGraphDiagnosticSetConfig(MediaGraphDiagnosticConfig config) noexcept
+MediaGraphDiagnosticSampleDecision mediaGraphDiagnosticSample(MediaGraphDiagnosticLevel requiredLevel,
+                                                             const std::string& key,
+                                                             bool force)
 {
     std::lock_guard lock(g_diagnosticsMutex);
-    g_runtimeDiagnosticsConfig = config;
-}
-
-MediaGraphDiagnosticConfig mediaGraphDiagnosticConfig() noexcept
-{
-    std::lock_guard lock(g_diagnosticsMutex);
-    return g_runtimeDiagnosticsConfig;
-}
-
-void mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel level,
-                             MediaGraphDiagnosticPhase phase,
-                             const std::string& message)
-{
-    const auto config = mediaGraphDiagnosticConfig();
-    if (!levelAtLeast(config.level, level)) {
-        return;
+    if (!g_diagnosticsEnabled || !levelAtLeast(g_runtimeDiagnosticsConfig.level, requiredLevel)) {
+        return {};
     }
 
-    spdlog::info("[graph][{}] {}", mediaGraphDiagnosticPhaseName(phase), message);
+    auto& count = g_sampleCounters[key];
+    ++count;
+
+    const bool inFirstPacketWindow = count <= g_runtimeDiagnosticsConfig.firstPacketLimit;
+    const bool onSampleInterval = g_runtimeDiagnosticsConfig.packetSampleInterval > 0 &&
+        (count % g_runtimeDiagnosticsConfig.packetSampleInterval) == 0;
+    const bool shouldLog = force || inFirstPacketWindow || onSampleInterval;
+    const bool sampled = !force && !inFirstPacketWindow && !onSampleInterval;
+    return MediaGraphDiagnosticSampleDecision{ shouldLog, count, sampled };
+}
+
+void mediaGraphDiagnosticResetSampling()
+{
+    std::lock_guard lock(g_diagnosticsMutex);
+    g_sampleCounters.clear();
 }
 
 void mediaGraphDiagnosticLog(bool enabled,
@@ -281,30 +296,17 @@ void mediaGraphDiagnosticLog(bool enabled,
     if (!enabled) {
         return;
     }
-
     spdlog::info("[graph][{}] {}", mediaGraphDiagnosticPhaseName(phase), message);
 }
 
-MediaGraphDiagnosticSampleDecision mediaGraphDiagnosticSample(MediaGraphDiagnosticLevel level,
-                                                             const std::string& key)
+void mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel requiredLevel,
+                             MediaGraphDiagnosticPhase phase,
+                             const std::string& message)
 {
-    const auto config = mediaGraphDiagnosticConfig();
-    if (!levelAtLeast(config.level, level)) {
-        return {};
+    if (!mediaGraphDiagnosticLevelEnabled(requiredLevel)) {
+        return;
     }
-
-    std::lock_guard lock(g_diagnosticsMutex);
-    auto& count = g_sampleCounters[key];
-    ++count;
-
-    const bool sampled = config.sampleEvery > 0 && count > 1 && (count % config.sampleEvery) != 0;
-    return MediaGraphDiagnosticSampleDecision{ !sampled, sampled, count };
-}
-
-void mediaGraphDiagnosticResetSamples()
-{
-    std::lock_guard lock(g_diagnosticsMutex);
-    g_sampleCounters.clear();
+    spdlog::info("[graph][{}] {}", mediaGraphDiagnosticPhaseName(phase), message);
 }
 
 } // namespace media::ffmpeg::graph
