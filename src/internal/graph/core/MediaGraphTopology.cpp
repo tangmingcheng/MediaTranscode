@@ -1,6 +1,7 @@
 #include "internal/graph/core/MediaGraphTopology.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <deque>
 #include <unordered_map>
 #include <utility>
