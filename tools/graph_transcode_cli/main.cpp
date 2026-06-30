@@ -2,6 +2,7 @@
 #include "internal/graph/runtime/MediaGraphRuntime.h"
 
 #include <cstdlib>
+#include <exception>
 #include <iostream>
 #include <optional>
 #include <string>
@@ -95,9 +96,7 @@ LocalFileTranscodeOptions parseOptions(int argc, char** argv)
     return options;
 }
 
-} // namespace
-
-int main(int argc, char** argv)
+int runGraphTranscodeCli(int argc, char** argv)
 {
     if (argc < 5 || hasArg(argc, argv, "--help") || hasArg(argc, argv, "-h")) {
         std::cout << "Usage: media_transcode_graph_transcode_cli --input in.mp4 --output out.mp4 [options]\n";
@@ -118,24 +117,33 @@ int main(int argc, char** argv)
               << " diagnostics=" << (options.diagnosticLogEnabled ? "on" : "off")
               << '\n';
 
+    std::cout << "[CLI] graph build begin\n";
     auto graphResult = LocalFileTranscodeGraphBuilder::build(options);
     if (!graphResult) {
         return failResult("graph build", graphResult);
     }
+    MediaGraph graph = std::move(graphResult).value();
+    std::cout << "[CLI] graph build done: nodes=" << graph.nodeCount()
+              << " edges=" << graph.edgeCount() << '\n';
 
     MediaGraphRuntime runtime;
     runtime.setDiagnosticsEnabled(options.diagnosticLogEnabled);
 
-    auto compileStatus = runtime.compile(std::move(graphResult).value());
+    std::cout << "[CLI] compile begin\n";
+    auto compileStatus = runtime.compile(std::move(graph));
     if (!compileStatus) {
         return failStatus("compile", compileStatus);
     }
+    std::cout << "[CLI] compile done\n";
 
+    std::cout << "[CLI] register runtime nodes begin\n";
     auto registerStatus = runtime.registerDefaultRuntimeNodes();
     if (!registerStatus) {
         return failStatus("register default runtime nodes", registerStatus);
     }
+    std::cout << "[CLI] register runtime nodes done\n";
 
+    std::cout << "[CLI] run begin\n";
     auto runResult = runtime.run();
     if (!runResult) {
         return failResult("run", runResult);
@@ -149,5 +157,20 @@ int main(int argc, char** argv)
               << " queued_buffers=" << result.queuedBuffers
               << " completed=" << (result.completed ? "true" : "false")
               << '\n';
-    return 0;
+    return result.completed ? 0 : 1;
+}
+
+} // namespace
+
+int main(int argc, char** argv)
+{
+    try {
+        return runGraphTranscodeCli(argc, argv);
+    } catch (const std::exception& e) {
+        std::cerr << "[CLI] fatal exception: " << e.what() << '\n';
+        return 2;
+    } catch (...) {
+        std::cerr << "[CLI] fatal unknown exception\n";
+        return 2;
+    }
 }
