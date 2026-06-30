@@ -62,8 +62,8 @@ namespace media::ffmpeg::graph {
     builderOptions.inputUrl = options.inputUrl;
     builderOptions.outputUrl = options.outputUrl;
     builderOptions.outputFormat = options.outputFormat;
-    builderOptions.includeAudio = options.includeAudio;
-    builderOptions.includeVideo = options.includeVideo;
+    builderOptions.parameters.execution.includeAudio = options.includeAudio;
+    builderOptions.parameters.execution.includeVideo = options.includeVideo;
 
     return LocalFileTranscodeGraphBuilder::build(builderOptions);
 }
