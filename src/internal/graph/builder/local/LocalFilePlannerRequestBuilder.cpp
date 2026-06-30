@@ -5,24 +5,24 @@
 namespace media::ffmpeg::graph {
 namespace {
 
-::media::Status validateResizeOptions(const LocalFileTranscodeOptions& options)
+::media::Status validateResizeOptions(const MediaVideoTranscodeParameters& video)
 {
-    if (options.width && *options.width < 0) {
+    if (video.width && *video.width < 0) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("LocalFilePlannerRequestBuilder requires non-negative width"));
     }
 
-    if (options.height && *options.height < 0) {
+    if (video.height && *video.height < 0) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("LocalFilePlannerRequestBuilder requires non-negative height"));
     }
 
-    if (options.width.has_value() != options.height.has_value()) {
+    if (video.width.has_value() != video.height.has_value()) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("LocalFilePlannerRequestBuilder requires width and height to be specified together"));
     }
 
-    if ((options.width && *options.width == 0) || (options.height && *options.height == 0)) {
+    if ((video.width && *video.width == 0) || (video.height && *video.height == 0)) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("LocalFilePlannerRequestBuilder rejects zero resize dimensions; omit width and height to keep source size"));
     }
@@ -35,21 +35,25 @@ namespace {
 ::media::Result<MediaPipelinePlannerOptions> LocalFilePlannerRequestBuilder::buildVideoPlannerOptions(
     const LocalFileTranscodeOptions& options)
 {
-    auto resizeValidation = validateResizeOptions(options);
+    const MediaTranscodeParameterSet& parameters = options.parameters;
+    const MediaVideoTranscodeParameters& video = parameters.video;
+
+    auto resizeValidation = validateResizeOptions(video);
     if (!resizeValidation) {
         return ::media::Result<MediaPipelinePlannerOptions>::failure(resizeValidation.error());
     }
 
     MediaPipelinePlannerOptions plannerOptions;
     plannerOptions.outputPath = options.outputUrl;
-    plannerOptions.outputCodecName = options.videoCodec;
-    plannerOptions.targetWidth = options.width.value_or(0);
-    plannerOptions.targetHeight = options.height.value_or(0);
-    plannerOptions.allowSoftwareFallback = false;
+    plannerOptions.outputCodecName = video.codecName;
+    plannerOptions.requestedEncoderName = video.encoderName;
+    plannerOptions.targetWidth = video.width.value_or(0);
+    plannerOptions.targetHeight = video.height.value_or(0);
+    plannerOptions.allowSoftwareFallback = parameters.execution.disableHardware;
     plannerOptions.requireRuntimeAvailability = true;
-    plannerOptions.preferGpu = options.useHardwareTransfer && !options.disableHardware;
+    plannerOptions.preferGpu = !parameters.execution.disableHardware;
     plannerOptions.preferredHardware = plannerOptions.preferGpu ? "auto" : "software";
-    plannerOptions.diagnosticLogEnabled = options.diagnosticLogEnabled;
+    plannerOptions.diagnosticLogEnabled = parameters.execution.diagnosticLogEnabled;
     return ::media::Result<MediaPipelinePlannerOptions>::success(std::move(plannerOptions));
 }
 
