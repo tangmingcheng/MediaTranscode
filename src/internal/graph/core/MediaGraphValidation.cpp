@@ -1,10 +1,10 @@
 #include "internal/graph/core/MediaGraphValidation.h"
 
-#include <functional>
+#include "internal/graph/core/MediaGraphTopology.h"
+
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
-#include <vector>
 
 namespace media::ffmpeg::graph {
 
@@ -61,67 +61,14 @@ void addIssue(MediaGraphValidationReport& report,
     report.issues.push_back({ severity, code, std::move(message), node, port, edge });
 }
 
-enum class VisitState {
-    Unvisited,
-    Visiting,
-    Visited
-};
-
 void validateAcyclic(MediaGraphValidationReport& report, const MediaGraph& graph)
 {
-    std::unordered_map<uint32_t, std::vector<uint32_t>> adjacency;
-    std::unordered_map<uint32_t, VisitState> state;
-
-    for (const auto& node : graph.nodes()) {
-        if (!node.id) {
-            continue;
-        }
-
-        state[node.id.value] = VisitState::Unvisited;
-    }
-
-    for (const auto& edge : graph.edges()) {
-        if (!edge.isValid()) {
-            continue;
-        }
-
-        adjacency[edge.from.nodeId.value].push_back(edge.to.nodeId.value);
-    }
-
-    std::function<bool(uint32_t)> dfs = [&](uint32_t nodeId) -> bool {
-        auto it = state.find(nodeId);
-        if (it == state.end()) {
-            return false;
-        }
-
-        if (it->second == VisitState::Visiting) {
-            return true;
-        }
-
-        if (it->second == VisitState::Visited) {
-            return false;
-        }
-
-        it->second = VisitState::Visiting;
-
-        for (uint32_t next : adjacency[nodeId]) {
-            if (dfs(next)) {
-                return true;
-            }
-        }
-
-        it->second = VisitState::Visited;
-        return false;
-    };
-
-    for (auto& item : state) {
-        if (item.second == VisitState::Unvisited && dfs(item.first)) {
-            addIssue(report,
-                     MediaGraphValidationSeverity::Error,
-                     MediaGraphErrorCode::CycleDetected,
-                     "Cycle detected in media DAG");
-            return;
-        }
+    auto topology = MediaGraphTopology::build(graph);
+    if (!topology) {
+        addIssue(report,
+                 MediaGraphValidationSeverity::Error,
+                 MediaGraphErrorCode::CycleDetected,
+                 "Cycle detected in media DAG");
     }
 }
 
