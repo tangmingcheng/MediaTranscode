@@ -9,6 +9,7 @@ extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/error.h>
 #include <libavutil/hwcontext.h>
+#include <libavutil/pixdesc.h>
 }
 
 #include <algorithm>
@@ -101,6 +102,31 @@ bool decoderExists(const std::string& name)
 bool encoderExists(const std::string& name)
 {
     return !name.empty() && avcodec_find_encoder_by_name(name.c_str()) != nullptr;
+}
+
+bool encoderSupportsPixelFormat(const std::string& name, const std::string& pixelFormatName)
+{
+    const AVCodec* encoder = avcodec_find_encoder_by_name(name.c_str());
+    if (!encoder || pixelFormatName.empty()) {
+        return false;
+    }
+
+    const AVPixelFormat format = av_get_pix_fmt(pixelFormatName.c_str());
+    if (format == AV_PIX_FMT_NONE) {
+        return false;
+    }
+
+    if (!encoder->pix_fmts) {
+        return true;
+    }
+
+    for (const AVPixelFormat* current = encoder->pix_fmts; *current != AV_PIX_FMT_NONE; ++current) {
+        if (*current == format) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 bool filterExists(const std::string& name)
@@ -225,17 +251,23 @@ void assignEncoderPixelFormats(MediaPipelineStagePlan& stage)
         stage.pixelFormat = "yuv420p";
         stage.hardwareFramesFormat.clear();
         stage.surfacePixelFormat.clear();
-        return;
+    } else {
+        stage.pixelFormat = hardwareEncoderPixelFormatName(stage.deviceKind);
+        stage.hardwareFramesFormat = hardwareFramesPixelFormatName(stage.deviceKind);
+        stage.surfacePixelFormat = hardwareSurfacePixelFormatName(stage.deviceKind);
     }
-
-    stage.pixelFormat = hardwareEncoderPixelFormatName(stage.deviceKind);
-    stage.hardwareFramesFormat = hardwareFramesPixelFormatName(stage.deviceKind);
-    stage.surfacePixelFormat = hardwareSurfacePixelFormatName(stage.deviceKind);
 
     if (stage.pixelFormat.empty()) {
         stage.available = false;
-        stage.availabilityReason = "encoder hardware pixel format is not planned for backend: " +
+        stage.availabilityReason = "encoder pixel format is not planned for backend: " +
                                    std::string(mediaHardwareDeviceKindName(stage.deviceKind));
+        return;
+    }
+
+    if (stage.available && !encoderSupportsPixelFormat(stage.ffmpegName, stage.pixelFormat)) {
+        stage.available = false;
+        stage.availabilityReason = "encoder does not support planned pixel format: " +
+                                   stage.ffmpegName + ":" + stage.pixelFormat;
     }
 }
 
