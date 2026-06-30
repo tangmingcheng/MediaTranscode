@@ -59,16 +59,6 @@ namespace media::ffmpeg::graph {
     return ::media::Status::success();
 }
 
-::media::Status MediaGraphExecutionEngine::processOnce()
-{
-    if (m_state != MediaGraphExecutionEngineState::Running) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::notInitialized("MediaGraphExecutionEngine processOnce failed: engine is not running"));
-    }
-
-    return m_runtime.processOnce();
-}
-
 ::media::Result<MediaGraphExecutionResult> MediaGraphExecutionEngine::run()
 {
     if (m_state != MediaGraphExecutionEngineState::Prepared &&
@@ -77,14 +67,9 @@ namespace media::ffmpeg::graph {
             ::media::ErrorInfo::notInitialized("MediaGraphExecutionEngine run failed: engine is not prepared"));
     }
 
-    if (m_options.mode == MediaGraphExecutionMode::Manual) {
-        return ::media::Result<MediaGraphExecutionResult>::failure(
-            ::media::ErrorInfo::invalidArgument("MediaGraphExecutionEngine run failed: manual mode requires explicit control"));
-    }
-
     MediaGraphExecutionResult result;
 
-    if (!m_runtime.running()) {
+    if (!m_runtime.running() && !m_runtime.threadedRunning()) {
         auto startStatus = start();
         if (!startStatus) {
             return ::media::Result<MediaGraphExecutionResult>::failure(startStatus.error());
