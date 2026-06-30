@@ -5,10 +5,12 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 
 extern "C" {
-#include <libavcodec/codec_id.h>
+#include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/error.h>
 }
+
+#include <utility>
 
 namespace media::ffmpeg::graph {
 
