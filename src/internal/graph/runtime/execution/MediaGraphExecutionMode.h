@@ -3,7 +3,6 @@
 namespace media::ffmpeg::graph {
 
 enum class MediaGraphExecutionMode {
-    Manual,
     SingleThreaded,
     ThreadedRuntime
 };
