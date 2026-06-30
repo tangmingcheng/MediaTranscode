@@ -161,7 +161,82 @@ std::string softwareFilterName(const MediaPipelinePlannerOptions& options)
 {
     return targetResizeRequested(options)
                ? "scale=" + targetSizeText(options) + ":flags=bicubic,format=pix_fmts=yuv420p"
-               : "passthrough_software";
+               : "format=pix_fmts=yuv420p";
+}
+
+std::string hardwareEncoderPixelFormatName(MediaHardwareDeviceKind deviceKind)
+{
+    switch (deviceKind) {
+    case MediaHardwareDeviceKind::CUDA:
+        return "cuda";
+    case MediaHardwareDeviceKind::QSV:
+        return "qsv";
+    case MediaHardwareDeviceKind::VAAPI:
+        return "vaapi";
+    case MediaHardwareDeviceKind::D3D11VA:
+        return "d3d11";
+    case MediaHardwareDeviceKind::RKMPP:
+    case MediaHardwareDeviceKind::DRMPrime:
+        return "drm_prime";
+    case MediaHardwareDeviceKind::VideoToolbox:
+        return "videotoolbox";
+    case MediaHardwareDeviceKind::Unknown:
+    case MediaHardwareDeviceKind::None:
+    case MediaHardwareDeviceKind::MediaCodec:
+        break;
+    }
+    return {};
+}
+
+std::string hardwareFramesPixelFormatName(MediaHardwareDeviceKind deviceKind)
+{
+    switch (deviceKind) {
+    case MediaHardwareDeviceKind::CUDA:
+        return "cuda";
+    case MediaHardwareDeviceKind::QSV:
+        return "qsv";
+    case MediaHardwareDeviceKind::VAAPI:
+        return "vaapi";
+    case MediaHardwareDeviceKind::D3D11VA:
+        return "d3d11";
+    case MediaHardwareDeviceKind::Unknown:
+    case MediaHardwareDeviceKind::None:
+    case MediaHardwareDeviceKind::DRMPrime:
+    case MediaHardwareDeviceKind::RKMPP:
+    case MediaHardwareDeviceKind::VideoToolbox:
+    case MediaHardwareDeviceKind::MediaCodec:
+        break;
+    }
+    return {};
+}
+
+std::string hardwareSurfacePixelFormatName(MediaHardwareDeviceKind deviceKind)
+{
+    return hardwareFramesPixelFormatName(deviceKind).empty() ? std::string() : std::string("nv12");
+}
+
+void assignEncoderPixelFormats(MediaPipelineStagePlan& stage)
+{
+    if (stage.role != MediaPipelineStageRole::Encoder) {
+        return;
+    }
+
+    if (!stage.hardware) {
+        stage.pixelFormat = "yuv420p";
+        stage.hardwareFramesFormat.clear();
+        stage.surfacePixelFormat.clear();
+        return;
+    }
+
+    stage.pixelFormat = hardwareEncoderPixelFormatName(stage.deviceKind);
+    stage.hardwareFramesFormat = hardwareFramesPixelFormatName(stage.deviceKind);
+    stage.surfacePixelFormat = hardwareSurfacePixelFormatName(stage.deviceKind);
+
+    if (stage.pixelFormat.empty()) {
+        stage.available = false;
+        stage.availabilityReason = "encoder hardware pixel format is not planned for backend: " +
+                                   std::string(mediaHardwareDeviceKindName(stage.deviceKind));
+    }
 }
 
 bool rkmppRuntimeAvailable()
@@ -296,6 +371,7 @@ MediaPipelineStagePlan makeCodecStage(MediaPipelineStageRole role,
     stage.availabilityReason = codecOk
                                    ? "codec found"
                                    : std::string(role == MediaPipelineStageRole::Decoder ? "decoder not found: " : "encoder not found: ") + stage.ffmpegName;
+    assignEncoderPixelFormats(stage);
     return stage;
 }
 
@@ -466,7 +542,7 @@ std::vector<MediaPipelineChainPlan> MediaPipelineCapabilityScanner::enumerateVid
         add("software",
             makeCodecStage(MediaPipelineStageRole::Decoder, "software decoder", inputCodec, inputCodec,
                            "", MediaHardwareDeviceKind::None, false, false, 30),
-            makeFilterStage(targetResizeRequested(options) ? "software scale filter" : "software passthrough filter",
+            makeFilterStage(targetResizeRequested(options) ? "software scale filter" : "software format filter",
                             softwareFilterName(options), "",
                             MediaHardwareDeviceKind::None, false, false, 30),
             makeCodecStage(MediaPipelineStageRole::Encoder, "software encoder", outputCodec,
@@ -475,7 +551,7 @@ std::vector<MediaPipelineChainPlan> MediaPipelineCapabilityScanner::enumerateVid
         add("software-native-codec",
             makeCodecStage(MediaPipelineStageRole::Decoder, "software decoder", inputCodec, inputCodec,
                            "", MediaHardwareDeviceKind::None, false, false, 20),
-            makeFilterStage(targetResizeRequested(options) ? "software scale filter" : "software passthrough filter",
+            makeFilterStage(targetResizeRequested(options) ? "software scale filter" : "software format filter",
                             softwareFilterName(options), "",
                             MediaHardwareDeviceKind::None, false, false, 20),
             makeCodecStage(MediaPipelineStageRole::Encoder, "native software encoder", outputCodec, outputCodec,
