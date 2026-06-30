@@ -60,6 +60,7 @@ void setSourceStreamOption(MediaGraph& graph, MediaNodeId nodeId, int sourceStre
     }
 
     const int streamIndex = plan.sourceStreamIndex;
+    const MediaGraphQueueParameters& queues = options.parameters.queues;
     const MediaNodeId sourceConfig = graph.addNode(MediaNodeKind::AudioSourceConfig,
                                                    "local.audio.source_config",
                                                    "Local audio source config");
@@ -80,11 +81,11 @@ void setSourceStreamOption(MediaGraph& graph, MediaNodeId nodeId, int sourceStre
     graph.addInputPort(packetNormalize, "packet", MediaStreamKind::Audio, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true);
     graph.addOutputPort(packetNormalize, "packet", MediaStreamKind::Audio, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
 
-    graph.connect(fileInput, "format", sourceConfig, "format", "local.file.input.format -> local.audio.source_config.format", blockingQueuePolicy(options.metadataQueueCapacity));
-    graph.connect(sourceConfig, "codec", mux, "codec", "local.audio.source_config.codec -> local.file.mux.codec", blockingQueuePolicy(options.metadataQueueCapacity));
-    graph.connect(fileInput, "format", packetNormalize, "format", "local.file.input.format -> local.audio.packet_normalize.format", blockingQueuePolicy(options.metadataQueueCapacity));
-    graph.connect(split, "audio", packetNormalize, "packet", "local.stream.split.audio -> local.audio.packet_normalize.packet", blockingQueuePolicy(options.packetQueueCapacity));
-    graph.connect(packetNormalize, "packet", mux, "packet", "local.audio.packet_normalize.packet -> local.file.mux.packet", blockingQueuePolicy(options.muxQueueCapacity));
+    graph.connect(fileInput, "format", sourceConfig, "format", "local.file.input.format -> local.audio.source_config.format", blockingQueuePolicy(queues.metadata));
+    graph.connect(sourceConfig, "codec", mux, "codec", "local.audio.source_config.codec -> local.file.mux.codec", blockingQueuePolicy(queues.metadata));
+    graph.connect(fileInput, "format", packetNormalize, "format", "local.file.input.format -> local.audio.packet_normalize.format", blockingQueuePolicy(queues.metadata));
+    graph.connect(split, "audio", packetNormalize, "packet", "local.stream.split.audio -> local.audio.packet_normalize.packet", blockingQueuePolicy(queues.packet));
+    graph.connect(packetNormalize, "packet", mux, "packet", "local.audio.packet_normalize.packet -> local.file.mux.packet", blockingQueuePolicy(queues.mux));
 
     return ::media::Result<bool>::success(true);
 }
