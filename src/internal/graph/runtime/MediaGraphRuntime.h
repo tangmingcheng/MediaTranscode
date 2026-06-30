@@ -54,7 +54,6 @@ public:
 
     ::media::Status start();
     ::media::Status startThreaded();
-    ::media::Status processOnce();
     ::media::Result<MediaGraphRunResult> run();
     ::media::Status flush();
     ::media::Status stop();
