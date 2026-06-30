@@ -326,6 +326,16 @@ MediaGraphValidationReport MediaGraphValidation::validate(const MediaGraph& grap
                      edge.id);
         }
 
+        if (!fromPort->multiple && outputPortUsage[fromPort->id.value] > 1) {
+            addIssue(report,
+                     MediaGraphValidationSeverity::Error,
+                     MediaGraphErrorCode::OutputMultiplicityViolation,
+                     "Output port used multiple times but multiple=false",
+                     edge.from.nodeId,
+                     edge.from.portId,
+                     edge.id);
+        }
+
         validateEdgePolicy(report, edge);
     }
 
