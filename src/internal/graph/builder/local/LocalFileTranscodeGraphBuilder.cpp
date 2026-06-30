@@ -150,7 +150,6 @@ MediaEdgePolicy blockingQueuePolicy(std::size_t capacity)
         graph.addOutputPort(codecResolver, "decoder", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false);
         graph.addOutputPort(codecResolver, "timestamp_source", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false);
         graph.addOutputPort(codecResolver, "encoder", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false);
-        graph.addOutputPort(codecResolver, "mux_video", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false);
 
         graph.addInputPort(videoDecode, "codec", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false);
         graph.addOutputPort(split, "video", MediaStreamKind::Video, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, false, true);
@@ -184,7 +183,7 @@ MediaEdgePolicy blockingQueuePolicy(std::size_t capacity)
         graph.connect(codecResolver, "encoder", videoTimestamp, "target_codec", "local.codec.resolver.encoder -> local.video.timestamp.target_codec", blockingQueuePolicy(options.metadataQueueCapacity));
         graph.connect(videoTimestamp, "target_codec", videoFilter, "codec", "local.video.timestamp.target_codec -> local.video.filter.codec", blockingQueuePolicy(options.metadataQueueCapacity));
         graph.connect(videoFilter, "codec", videoEncode, "codec", "local.video.filter.codec -> local.video.encode.codec", blockingQueuePolicy(options.metadataQueueCapacity));
-        graph.connect(codecResolver, "mux_video", mux, "codec", "local.codec.resolver.mux_video -> local.file.mux.codec", blockingQueuePolicy(options.metadataQueueCapacity));
+        graph.connect(videoFilter, "codec", mux, "codec", "local.video.filter.codec -> local.file.mux.codec", blockingQueuePolicy(options.metadataQueueCapacity));
         graph.connect(split, "video", videoDecode, "packet", "local.stream.split.video -> local.video.decode.packet", blockingQueuePolicy(options.packetQueueCapacity));
         graph.connect(videoDecode, "frame", hardwareTransfer, "frame", "local.video.decode.frame -> local.video.hwtransfer.frame", blockingQueuePolicy(options.frameQueueCapacity));
         graph.connect(hardwareTransfer, "frame", videoTimestamp, "frame", "local.video.hwtransfer.frame -> local.video.timestamp.frame", blockingQueuePolicy(options.frameQueueCapacity));
