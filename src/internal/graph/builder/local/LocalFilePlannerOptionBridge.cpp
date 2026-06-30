@@ -1,5 +1,7 @@
 #include "internal/graph/builder/local/LocalFilePlannerOptionBridge.h"
 
+#include "internal/graph/model/MediaTranscodeParameters.h"
+
 #include <string>
 
 namespace media::ffmpeg::graph {
@@ -92,9 +94,9 @@ void applySelectedVideoPlanOptions(MediaGraph& graph,
     setFullPlanOptions(graph, nodes.videoFilter, chain);
     setFullPlanOptions(graph, nodes.videoEncode, chain);
 
-    graph.setNodeOption(nodes.codecResolver, "decoder", chain.decoder.ffmpegName);
-    graph.setNodeOption(nodes.codecResolver, "encoder", chain.encoder.ffmpegName);
-    graph.setNodeOption(nodes.codecResolver, "video_codec", plan.outputCodecName);
+    graph.setNodeOption(nodes.codecResolver, MediaTranscodeOptionKey::PlannedDecoder, chain.decoder.ffmpegName);
+    graph.setNodeOption(nodes.codecResolver, MediaTranscodeOptionKey::PlannedEncoder, chain.encoder.ffmpegName);
+    graph.setNodeOption(nodes.codecResolver, MediaTranscodeOptionKey::VideoCodec, plan.outputCodecName);
     setCodecResolverEncoderFormatOptions(graph, nodes.codecResolver, chain.encoder);
 
     graph.setNodeOption(nodes.codecResolver, "pipeline.hardware", boolOption(chain.decoder.hardware));
@@ -104,11 +106,11 @@ void applySelectedVideoPlanOptions(MediaGraph& graph,
 
     graph.setNodeOption(nodes.hardwareTransfer, "transfer.direction", transferDirectionForPlan(chain));
 
-    graph.setNodeOption(nodes.videoFilter, "filter", chain.filter.filterName);
+    graph.setNodeOption(nodes.videoFilter, MediaTranscodeOptionKey::PlannedFilter, chain.filter.filterName);
     graph.setNodeOption(nodes.videoFilter, "filter.name", chain.filter.filterName);
     graph.setNodeOption(nodes.videoFilter, "filter.hwaccel", chain.filter.hwaccelName);
 
-    graph.setNodeOption(nodes.videoEncode, "encoder", chain.encoder.ffmpegName);
+    graph.setNodeOption(nodes.videoEncode, MediaTranscodeOptionKey::PlannedEncoder, chain.encoder.ffmpegName);
 }
 
 } // namespace media::ffmpeg::graph
