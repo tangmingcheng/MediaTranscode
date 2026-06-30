@@ -126,7 +126,7 @@ MediaNodeKind VideoFilterNode::staticKind() noexcept
         if (!flushStatus) {
             return flushStatus;
         }
-        return pushOutput(context, "frame", frameBuffer);
+        return emitOutput(context, "frame", frameBuffer);
     }
 
     return sendFrame(context, frameBuffer);
@@ -160,7 +160,7 @@ MediaNodeKind VideoFilterNode::staticKind() noexcept
                   " size=" + std::to_string(codecContext->width) + "x" + std::to_string(codecContext->height));
 
     if (context.findOutputChannel(nodeId(), "codec")) {
-        return pushOutputToAllChannels(context, "codec", buffer);
+        return emitOutput(context, "codec", buffer);
     }
 
     return ::media::Status::success();
@@ -324,7 +324,7 @@ MediaNodeKind VideoFilterNode::staticKind() noexcept
         buffer.value()->setTimestamps(outputFrame->pts, outputFrame->pkt_dts, outputFrame->duration);
     }
 
-    return pushOutput(context, "frame", buffer.value());
+    return emitOutput(context, "frame", buffer.value());
 }
 
 ::media::Status VideoFilterNode::rescaleAndValidateFrame(AVFrame* frame) noexcept
