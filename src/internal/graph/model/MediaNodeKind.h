@@ -3,61 +3,63 @@
 namespace media::ffmpeg::graph {
 
 enum class MediaNodeKind {
-    Unknown,
+    Unknown = 0,
 
     /* Sources */
-    FileInput,
-    RealtimeInput,
-    RealtimePacketSource,
+    FileInput = 1,
+    RealtimeInput = 2,
+    RealtimePacketSource = 3,
 
     /* Container / stream selection */
-    Demux,
-    StreamSplit,
+    Demux = 4,
+    StreamSplit = 5,
 
     /* Split / route */
-    PacketFanout,
-    FrameRoute,
+    PacketFanout = 6,
+    FrameRoute = 7,
 
     /* Video branch */
-    VideoDecode,
-    VideoTimestamp,
-    HardwareTransfer,
-    VideoFrameRate,
-    VideoFilter,
-    VideoEncode,
-    VideoPacketDrain,
+    VideoDecode = 8,
+    VideoTimestamp = 9,
+    HardwareTransfer = 10,
+    VideoFrameRate = 11,
+    VideoFilter = 12,
+    VideoEncode = 13,
+    VideoPacketDrain = 14,
 
     /* Audio branch */
-    AudioStrategy,
-    AudioSourceConfig,
-    AudioCopy,
-    AudioDecode,
-    AudioResample,
-    AudioEncode,
-    AudioPacketNormalize,
-    AudioPacketDrain,
+    AudioStrategy = 15,
+    AudioCopy = 16,
+    AudioDecode = 17,
+    AudioResample = 18,
+    AudioEncode = 19,
+    AudioPacketNormalize = 20,
+    AudioPacketDrain = 21,
 
     /* Merge / mux */
-    PacketMerge,
-    FileMux,
-    RtpMux,
+    PacketMerge = 22,
+    FileMux = 23,
+    RtpMux = 24,
 
     /* Outputs */
-    FileOutput,
-    RtpOutput,
-    SdpWriter,
+    FileOutput = 25,
+    RtpOutput = 26,
+    SdpWriter = 27,
 
     /* Lifecycle / control */
-    EofBarrier,
-    Flush,
-    Finalize,
-    ControlSignal,
+    EofBarrier = 28,
+    Flush = 29,
+    Finalize = 30,
+    ControlSignal = 31,
 
     /* Metadata / diagnostics */
-    CodecResolver,
-    MetadataProbe,
-    DebugDump,
-    TraceProbe
+    CodecResolver = 32,
+    MetadataProbe = 33,
+    DebugDump = 34,
+    TraceProbe = 35,
+
+    /* New node kinds must only append values. Never insert in the middle. */
+    AudioSourceConfig = 36
 };
 
 } // namespace media::ffmpeg::graph
