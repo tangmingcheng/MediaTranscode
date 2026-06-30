@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <utility>
 
 namespace {
 
@@ -19,6 +20,12 @@ int fail(const std::string& message)
 int failStatus(const std::string& action, const ::media::Status& status)
 {
     return fail(action + ": " + status.error().describe());
+}
+
+template <typename T>
+int failResult(const std::string& action, const ::media::Result<T>& result)
+{
+    return fail(action + ": " + result.error().describe());
 }
 
 std::size_t parsePositiveSize(const char* text, std::size_t fallback)
@@ -46,19 +53,12 @@ MediaEdgePolicy queuePolicy(std::size_t capacity = 1024)
 int main(int argc, char** argv)
 {
     if (argc < 2) {
-        std::cerr << "usage: media_transcode_graph_autorun_probe.exe <input-media-file> [target-packets] [max-iterations]\n";
+        std::cerr << "usage: media_transcode_graph_autorun_probe.exe <input-media-file> [target-packets]\n";
         return 2;
     }
 
     const std::string inputPath = argv[1];
     const std::size_t targetPackets = argc >= 3 ? parsePositiveSize(argv[2], 100) : 100;
-    std::size_t maxIterations = targetPackets * 8 + 256;
-    if (maxIterations < 512) {
-        maxIterations = 512;
-    }
-    if (argc >= 4) {
-        maxIterations = parsePositiveSize(argv[3], maxIterations);
-    }
 
     MediaGraph graph;
     const MediaNodeId fileInput = graph.addNode(MediaNodeKind::FileInput, "file-input");
@@ -120,33 +120,16 @@ int main(int argc, char** argv)
         return failStatus("runtime start", startStatus);
     }
 
-    std::size_t iterations = 0;
-    std::size_t stableIterations = 0;
-    uint64_t lastPopped = 0;
-    while (iterations < maxIterations && demuxPacketChannel->metrics().popped < targetPackets) {
-        auto processStatus = runtime.processOnce();
-        if (!processStatus) {
-            return failStatus("runtime processOnce", processStatus);
-        }
-
-        ++iterations;
-        const uint64_t popped = demuxPacketChannel->metrics().popped;
-        if (popped == lastPopped) {
-            ++stableIterations;
-        } else {
-            stableIterations = 0;
-            lastPopped = popped;
-        }
-
-        if (stableIterations > 64) {
-            break;
-        }
-    }
-
+    auto runResult = runtime.run();
     const auto& metrics = demuxPacketChannel->metrics();
+
     auto stopStatus = runtime.stop();
     if (!stopStatus) {
         return failStatus("runtime stop", stopStatus);
+    }
+
+    if (!runResult) {
+        return failResult("runtime run", runResult);
     }
 
     if (metrics.pushed == 0) {
@@ -156,17 +139,17 @@ int main(int argc, char** argv)
         return fail("autorun packet sink did not consume any packets");
     }
     if (metrics.popped < targetPackets) {
-        return fail("target packets not reached before max iterations; increase max-iterations or use a longer input");
+        return fail("target packets not reached; use a longer input or lower target-packets");
     }
 
+    const auto& run = runResult.value();
     std::cout << "graph autorun probe ok: "
-              << "process_once_iterations=" << iterations
+              << "run_iterations=" << run.iterations
               << ", target_packets=" << targetPackets
               << ", demux_pushed=" << metrics.pushed
               << ", sink_popped=" << metrics.popped
               << ", channel_size=" << demuxPacketChannel->size()
               << ", queue_capacity=" << demuxPacketChannel->capacity()
-              << ", max_iterations=" << maxIterations
               << '\n';
 
     return 0;
