@@ -23,6 +23,9 @@ struct MediaPipelineStagePlan {
     std::string ffmpegName;
     std::string filterName;
     std::string hwaccelName;
+    std::string pixelFormat;
+    std::string hardwareFramesFormat;
+    std::string surfacePixelFormat;
     MediaHardwareDeviceKind deviceKind = MediaHardwareDeviceKind::None;
     MediaHardwareFrameKind frameKind = MediaHardwareFrameKind::Software;
     bool hardware = false;
