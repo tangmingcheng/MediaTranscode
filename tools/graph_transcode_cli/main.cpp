@@ -142,16 +142,7 @@ int main(int argc, char** argv)
         return failStatus("register default runtime nodes", registerStatus);
     }
 
-    auto startStatus = runtime.start();
-    if (!startStatus) {
-        return failStatus("start", startStatus);
-    }
-
     auto runResult = runtime.run();
-    auto stopStatus = runtime.stop();
-    if (!stopStatus) {
-        return failStatus("stop", stopStatus);
-    }
     if (!runResult) {
         return failResult("run", runResult);
     }
