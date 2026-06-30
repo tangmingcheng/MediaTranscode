@@ -39,20 +39,21 @@ MediaEdgePolicy q(std::size_t capacity)
 
 ::media::Status LocalFileTranscodeGraphBuilder::validate(const LocalFileTranscodeOptions& options)
 {
+    const MediaTranscodeParameterSet& parameters = options.parameters;
     if (options.inputUrl.empty()) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument("LocalFileTranscodeGraphBuilder requires inputUrl"));
     }
     if (options.outputUrl.empty()) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument("LocalFileTranscodeGraphBuilder requires outputUrl"));
     }
-    if (!options.includeVideo && !options.includeAudio) {
+    if (!parameters.execution.includeVideo && !parameters.execution.includeAudio) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument("LocalFileTranscodeGraphBuilder requires video or audio branch"));
     }
-    if (!options.includeVideo) {
+    if (!parameters.execution.includeVideo) {
         return ::media::Status::failure(::media::ErrorInfo::unsupported("LocalFileTranscodeGraphBuilder audio-only graph requires video branch planning"));
     }
-    if (options.metadataQueueCapacity == 0 || options.packetQueueCapacity == 0 ||
-        options.frameQueueCapacity == 0 || options.muxQueueCapacity == 0) {
+    if (parameters.queues.metadata == 0 || parameters.queues.packet == 0 ||
+        parameters.queues.frame == 0 || parameters.queues.mux == 0) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument("LocalFileTranscodeGraphBuilder queue capacities must be greater than 0"));
     }
     return ::media::Status::success();
@@ -70,6 +71,7 @@ MediaEdgePolicy q(std::size_t capacity)
         return ::media::Result<MediaGraph>::failure(plannedVideo.error());
     }
     MediaPipelinePlan videoPlan = std::move(plannedVideo).value();
+    const MediaGraphQueueParameters& queues = options.parameters.queues;
 
     MediaGraph graph;
     const MediaNodeId fileInput = graph.addNode(MediaNodeKind::FileInput, "local.file.input", "Local file input");
@@ -95,9 +97,9 @@ MediaEdgePolicy q(std::size_t capacity)
     graph.addInputPort(mux, "codec", MediaStreamKind::Any, MediaEdgeKind::Metadata, MediaPayloadKind::Unknown, true, true);
     graph.addInputPort(mux, "packet", MediaStreamKind::Any, MediaEdgeKind::Unknown, MediaPayloadKind::Packet, true, true);
 
-    graph.connect(fileInput, "format", demux, "format", "local.file.input.format -> local.demux.format", q(options.metadataQueueCapacity));
-    graph.connect(demux, "packet", split, "packet", "local.demux.packet -> local.stream.split.packet", q(options.packetQueueCapacity));
-    graph.connect(fileOutput, "format", mux, "format", "local.file.output.format -> local.file.mux.format", q(options.metadataQueueCapacity));
+    graph.connect(fileInput, "format", demux, "format", "local.file.input.format -> local.demux.format", q(queues.metadata));
+    graph.connect(demux, "packet", split, "packet", "local.demux.packet -> local.stream.split.packet", q(queues.packet));
+    graph.connect(fileOutput, "format", mux, "format", "local.file.output.format -> local.file.mux.format", q(queues.metadata));
 
     auto audio = LocalFileAudioBranchBuilder::buildIfPlanned(graph, options, fileInput, split, mux);
     if (!audio) {
@@ -156,20 +158,20 @@ MediaEdgePolicy q(std::size_t capacity)
     graph.addInputPort(videoEncode, "frame", MediaStreamKind::Video, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true);
     graph.addOutputPort(videoEncode, "packet", MediaStreamKind::Video, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
 
-    graph.connect(fileInput, "format", codecResolver, "format", "local.file.input.format -> local.codec.resolver.format", q(options.metadataQueueCapacity));
-    graph.connect(codecResolver, "decoder", videoDecode, "codec", "local.codec.resolver.decoder -> local.video.decode.codec", q(options.metadataQueueCapacity));
-    graph.connect(codecResolver, "timestamp_source", videoTimestamp, "source_codec", "local.codec.resolver.timestamp_source -> local.video.timestamp.source_codec", q(options.metadataQueueCapacity));
-    graph.connect(codecResolver, "encoder", videoTimestamp, "target_codec", "local.codec.resolver.encoder -> local.video.timestamp.target_codec", q(options.metadataQueueCapacity));
-    graph.connect(videoTimestamp, "target_codec", videoFilter, "codec", "local.video.timestamp.target_codec -> local.video.filter.codec", q(options.metadataQueueCapacity));
-    graph.connect(videoFilter, "codec", videoEncode, "codec", "local.video.filter.codec -> local.video.encode.codec", q(options.metadataQueueCapacity));
-    graph.connect(videoFilter, "codec", mux, "codec", "local.video.filter.codec -> local.file.mux.codec", q(options.metadataQueueCapacity));
-    graph.connect(split, "video", videoDecode, "packet", "local.stream.split.video -> local.video.decode.packet", q(options.packetQueueCapacity));
-    graph.connect(videoDecode, "frame", hardwareTransfer, "frame", "local.video.decode.frame -> local.video.hwtransfer.frame", q(options.frameQueueCapacity));
-    graph.connect(hardwareTransfer, "frame", videoTimestamp, "frame", "local.video.hwtransfer.frame -> local.video.timestamp.frame", q(options.frameQueueCapacity));
-    graph.connect(videoTimestamp, "frame", videoFrameRate, "frame", "local.video.timestamp.frame -> local.video.framerate.frame", q(options.frameQueueCapacity));
-    graph.connect(videoFrameRate, "frame", videoFilter, "frame", "local.video.framerate.frame -> local.video.filter.frame", q(options.frameQueueCapacity));
-    graph.connect(videoFilter, "frame", videoEncode, "frame", "local.video.filter.frame -> local.video.encode.frame", q(options.frameQueueCapacity));
-    graph.connect(videoEncode, "packet", mux, "packet", "local.video.encode.packet -> local.file.mux.packet", q(options.muxQueueCapacity));
+    graph.connect(fileInput, "format", codecResolver, "format", "local.file.input.format -> local.codec.resolver.format", q(queues.metadata));
+    graph.connect(codecResolver, "decoder", videoDecode, "codec", "local.codec.resolver.decoder -> local.video.decode.codec", q(queues.metadata));
+    graph.connect(codecResolver, "timestamp_source", videoTimestamp, "source_codec", "local.codec.resolver.timestamp_source -> local.video.timestamp.source_codec", q(queues.metadata));
+    graph.connect(codecResolver, "encoder", videoTimestamp, "target_codec", "local.codec.resolver.encoder -> local.video.timestamp.target_codec", q(queues.metadata));
+    graph.connect(videoTimestamp, "target_codec", videoFilter, "codec", "local.video.timestamp.target_codec -> local.video.filter.codec", q(queues.metadata));
+    graph.connect(videoFilter, "codec", videoEncode, "codec", "local.video.filter.codec -> local.video.encode.codec", q(queues.metadata));
+    graph.connect(videoFilter, "codec", mux, "codec", "local.video.filter.codec -> local.file.mux.codec", q(queues.metadata));
+    graph.connect(split, "video", videoDecode, "packet", "local.stream.split.video -> local.video.decode.packet", q(queues.packet));
+    graph.connect(videoDecode, "frame", hardwareTransfer, "frame", "local.video.decode.frame -> local.video.hwtransfer.frame", q(queues.frame));
+    graph.connect(hardwareTransfer, "frame", videoTimestamp, "frame", "local.video.hwtransfer.frame -> local.video.timestamp.frame", q(queues.frame));
+    graph.connect(videoTimestamp, "frame", videoFrameRate, "frame", "local.video.timestamp.frame -> local.video.framerate.frame", q(queues.frame));
+    graph.connect(videoFrameRate, "frame", videoFilter, "frame", "local.video.framerate.frame -> local.video.filter.frame", q(queues.frame));
+    graph.connect(videoFilter, "frame", videoEncode, "frame", "local.video.filter.frame -> local.video.encode.frame", q(queues.frame));
+    graph.connect(videoEncode, "packet", mux, "packet", "local.video.encode.packet -> local.file.mux.packet", q(queues.mux));
 
     return ::media::Result<MediaGraph>::success(std::move(graph));
 }
