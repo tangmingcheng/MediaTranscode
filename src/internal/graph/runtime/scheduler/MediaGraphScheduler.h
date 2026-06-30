@@ -35,7 +35,7 @@ public:
 
     ::media::Status configure(MediaGraphExecutionContext& context);
     ::media::Status start(MediaGraphExecutionContext& context);
-    ::media::Status processOnce(MediaGraphExecutionContext& context);
+    ::media::Status processSchedulingStep(MediaGraphExecutionContext& context);
     ::media::Status flush(MediaGraphExecutionContext& context);
     ::media::Status stop(MediaGraphExecutionContext& context);
     void abort(MediaGraphExecutionContext& context) noexcept;
