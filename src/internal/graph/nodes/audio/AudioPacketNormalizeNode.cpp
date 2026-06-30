@@ -2,6 +2,7 @@
 
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
+#include "internal/graph/runtime/channel/MediaChannel.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegDescriptorMapper.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegPacketView.h"
@@ -92,16 +93,27 @@ MediaNodeKind AudioPacketNormalizeNode::staticKind() noexcept
         }
     }
 
-    auto input = popInput(context, "packet");
-    if (!input) {
+    MediaChannel* packetChannel = context.findInputChannel(nodeId(), "packet");
+    if (!packetChannel) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::notInitialized("AudioPacketNormalizeNode packet input channel not found"));
+    }
+
+    MediaBufferRef input;
+    if (!packetChannel->tryPop(input)) {
         return ::media::Status::success();
     }
 
-    if (input.value()->isEof() || input.value()->isFlush()) {
-        return emitOutput(context, "packet", input.value());
+    if (!input) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("AudioPacketNormalizeNode received null input buffer"));
     }
 
-    auto normalized = normalizePacket(input.value());
+    if (input->isEof() || input->isFlush()) {
+        return emitOutput(context, "packet", input);
+    }
+
+    auto normalized = normalizePacket(input);
     if (!normalized) {
         return ::media::Status::failure(normalized.error());
     }
@@ -111,18 +123,29 @@ MediaNodeKind AudioPacketNormalizeNode::staticKind() noexcept
 
 ::media::Status AudioPacketNormalizeNode::bindFormatContext(MediaGraphExecutionContext& context)
 {
-    auto input = popInput(context, "format");
-    if (!input) {
+    MediaChannel* formatChannel = context.findInputChannel(nodeId(), "format");
+    if (!formatChannel) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::notInitialized("AudioPacketNormalizeNode format input channel not found"));
+    }
+
+    MediaBufferRef input;
+    if (!formatChannel->tryPop(input)) {
         return ::media::Status::success();
     }
 
-    auto* formatBuffer = dynamic_cast<FFmpegFormatContextBuffer*>(input.value().get());
+    if (!input) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("AudioPacketNormalizeNode received null format buffer"));
+    }
+
+    auto* formatBuffer = dynamic_cast<FFmpegFormatContextBuffer*>(input.get());
     if (!formatBuffer || !formatBuffer->context()) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("AudioPacketNormalizeNode expected FFmpegFormatContextBuffer"));
     }
 
-    m_formatContextOwner = std::move(input).value();
+    m_formatContextOwner = std::move(input);
     m_formatContext = formatBuffer->context();
     audioPacketNormalizeLog(MediaGraphDiagnosticLevel::State, "bind_format_context");
     return ::media::Status::success();
