@@ -1,13 +1,12 @@
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 
+#include "internal/graph/core/MediaGraphTopology.h"
 #include "internal/graph/core/MediaGraphValidation.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 
-#include <deque>
 #include <sstream>
 #include <string>
-#include <unordered_map>
-#include <vector>
+#include <utility>
 
 namespace media::ffmpeg::graph {
 
@@ -87,7 +86,7 @@ void MediaGraphExecutionContext::setDiagnosticConfig(MediaGraphDiagnosticConfig 
     mediaGraphDiagnosticSetGlobalConfig(m_diagnosticConfig);
 }
 
-const MediaGraphDiagnosticConfig& MediaGraphExecutionContext::diagnosticConfig() const noexcept
+const MediaGraphDiagnosticConfig& MediaGraphExecutionContext::diagnosticConfig() const
 {
     return m_diagnosticConfig;
 }
@@ -225,46 +224,12 @@ std::vector<MediaChannel*> MediaGraphExecutionContext::outputChannels(MediaNodeI
 
 ::media::Status MediaGraphExecutionContext::buildExecutionOrder(const MediaGraph& graph)
 {
-    std::unordered_map<uint32_t, int> indegree;
-    std::unordered_map<uint32_t, std::vector<uint32_t>> adjacency;
-    std::unordered_map<uint32_t, MediaNodeId> ids;
-
-    for (const auto& node : graph.nodes()) {
-        indegree[node.id.value] = 0;
-        ids[node.id.value] = node.id;
+    auto topology = MediaGraphTopology::build(graph);
+    if (!topology) {
+        return ::media::Status::failure(topology.error());
     }
 
-    for (const auto& edge : graph.edges()) {
-        adjacency[edge.from.nodeId.value].push_back(edge.to.nodeId.value);
-        ++indegree[edge.to.nodeId.value];
-    }
-
-    std::deque<uint32_t> ready;
-    for (const auto& item : indegree) {
-        if (item.second == 0) {
-            ready.push_back(item.first);
-        }
-    }
-
-    while (!ready.empty()) {
-        uint32_t current = ready.front();
-        ready.pop_front();
-
-        m_executionOrder.push_back(ids[current]);
-
-        for (uint32_t next : adjacency[current]) {
-            --indegree[next];
-            if (indegree[next] == 0) {
-                ready.push_back(next);
-            }
-        }
-    }
-
-    if (m_executionOrder.size() != graph.nodes().size()) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("MediaGraphExecutionContext compile failed: graph is cyclic"));
-    }
-
+    m_executionOrder = std::move(topology).value().order;
     return ::media::Status::success();
 }
 
