@@ -4,7 +4,6 @@
 #include <utility>
 
 extern "C" {
-#include <libavcodec/avcodec.h>
 #include <libavutil/pixdesc.h>
 }
 
@@ -14,12 +13,6 @@ namespace {
 std::string optionValue(const MediaNodeOptions* options, const std::string& key, std::string fallback = {})
 {
     return options ? options->value(key, std::move(fallback)) : std::move(fallback);
-}
-
-std::string pixelFormatName(AVPixelFormat format)
-{
-    const char* name = av_get_pix_fmt_name(format);
-    return name ? std::string(name) : std::string("unknown");
 }
 
 ::media::Result<AVPixelFormat> parseRequiredPixelFormat(const MediaNodeOptions* options,
@@ -64,21 +57,6 @@ std::string pixelFormatName(AVPixelFormat format)
     return ::media::Result<AVPixelFormat>::success(format);
 }
 
-bool codecSupportsPixelFormat(const AVCodec* codec, AVPixelFormat format)
-{
-    if (!codec || !codec->pix_fmts || format == AV_PIX_FMT_NONE) {
-        return true;
-    }
-
-    for (const AVPixelFormat* current = codec->pix_fmts; *current != AV_PIX_FMT_NONE; ++current) {
-        if (*current == format) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
 ::media::Status validateRequest(const CodecResolverEncoderFormatPlanRequest& request)
 {
     if (!request.encoder) {
@@ -113,13 +91,6 @@ bool codecSupportsPixelFormat(const AVCodec* codec, AVPixelFormat format)
         return ::media::Result<CodecResolverEncoderFormatPlan>::failure(encoderPixelFormat.error());
     }
     plan.encoderPixelFormat = encoderPixelFormat.value();
-
-    if (!codecSupportsPixelFormat(request.encoder, plan.encoderPixelFormat)) {
-        return ::media::Result<CodecResolverEncoderFormatPlan>::failure(
-            ::media::ErrorInfo::unsupported("CodecResolverEncoderFormatPlanner planned encoder pixel format unsupported by " +
-                                           std::string(request.encoder->name ? request.encoder->name : "encoder") +
-                                           ": " + pixelFormatName(plan.encoderPixelFormat)));
-    }
 
     auto hardwareFramesFormat = parseOptionalPixelFormat(request.options,
                                                         "encoder.hw_frames_format",
