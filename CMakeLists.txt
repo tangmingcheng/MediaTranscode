@@ -3,16 +3,10 @@ cmake_minimum_required(VERSION 3.21.1)
 project(MediaTranscode LANGUAGES CXX)
 
 set(TARGET_CORE "media_transcode_core")
-set(TARGET_GRAPH_QUEUE_PROBE "media_transcode_graph_queue_probe")
-set(TARGET_GRAPH_FILE_INPUT_PROBE "media_transcode_graph_file_input_probe")
-set(TARGET_GRAPH_DECODE_PROBE "media_transcode_graph_decode_probe")
-set(TARGET_GRAPH_ENCODE_PROBE "media_transcode_graph_encode_probe")
-set(TARGET_GRAPH_AUTORUN_PROBE "media_transcode_graph_autorun_probe")
-set(TARGET_GRAPH_PLANNER_PROBE "media_transcode_graph_planner_probe")
 set(TARGET_GRAPH_TRANSCODE_CLI "media_transcode_graph_transcode_cli")
 set(THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/3rds")
 
-option(MEDIA_TRANSCODE_BUILD_GRAPH_TOOLS "Build graph DAG validation/debug tools" ON)
+option(MEDIA_TRANSCODE_BUILD_GRAPH_TOOLS "Build graph command line tools" ON)
 option(MEDIA_TRANSCODE_BUILD_TESTS "Build MediaTranscode tests" OFF)
 option(MEDIA_TRANSCODE_ENABLE_INTEGRATION_TESTS "Build and register integration tests" OFF)
 option(MEDIA_TRANSCODE_ENABLE_HARDWARE_TESTS "Enable hardware-dependent tests" OFF)
@@ -166,36 +160,6 @@ function(media_transcode_configure_test target_name)
 endfunction()
 
 if(MEDIA_TRANSCODE_BUILD_GRAPH_TOOLS)
-    add_executable(${TARGET_GRAPH_QUEUE_PROBE}
-        tools/graph_queue_probe/main.cpp
-    )
-    media_transcode_configure_app(${TARGET_GRAPH_QUEUE_PROBE})
-
-    add_executable(${TARGET_GRAPH_FILE_INPUT_PROBE}
-        tools/graph_file_input_probe/main.cpp
-    )
-    media_transcode_configure_app(${TARGET_GRAPH_FILE_INPUT_PROBE})
-
-    add_executable(${TARGET_GRAPH_DECODE_PROBE}
-        tools/graph_decode_probe/main.cpp
-    )
-    media_transcode_configure_app(${TARGET_GRAPH_DECODE_PROBE})
-
-    add_executable(${TARGET_GRAPH_ENCODE_PROBE}
-        tools/graph_encode_probe/main.cpp
-    )
-    media_transcode_configure_app(${TARGET_GRAPH_ENCODE_PROBE})
-
-    add_executable(${TARGET_GRAPH_AUTORUN_PROBE}
-        tools/graph_autorun_probe/main.cpp
-    )
-    media_transcode_configure_app(${TARGET_GRAPH_AUTORUN_PROBE})
-
-    add_executable(${TARGET_GRAPH_PLANNER_PROBE}
-        tools/graph_planner_probe/main.cpp
-    )
-    media_transcode_configure_app(${TARGET_GRAPH_PLANNER_PROBE})
-
     add_executable(${TARGET_GRAPH_TRANSCODE_CLI}
         tools/graph_transcode_cli/main.cpp
     )
