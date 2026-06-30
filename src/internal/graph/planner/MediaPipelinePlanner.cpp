@@ -39,6 +39,11 @@ std::string stageDisplayName(const MediaPipelineStagePlan& stage)
     return stage.componentName;
 }
 
+std::string emptyAsNone(const std::string& value)
+{
+    return value.empty() ? std::string("none") : value;
+}
+
 void logSelectedPlan(const MediaPipelinePlannerOptions& options,
                      const MediaPipelinePlan& plan)
 {
@@ -50,6 +55,9 @@ void logSelectedPlan(const MediaPipelinePlannerOptions& options,
         << " decoder=" << stageDisplayName(selected.decoder)
         << " filter=" << stageDisplayName(selected.filter)
         << " encoder=" << stageDisplayName(selected.encoder)
+        << " encoder_pix_fmt=" << emptyAsNone(selected.encoder.pixelFormat)
+        << " encoder_hw_frames_fmt=" << emptyAsNone(selected.encoder.hardwareFramesFormat)
+        << " encoder_surface_fmt=" << emptyAsNone(selected.encoder.surfacePixelFormat)
         << " backend=" << mediaHardwareDeviceKindName(selected.decoder.deviceKind)
         << " zero_copy=" << (selected.zeroCopy ? "true" : "false");
 
