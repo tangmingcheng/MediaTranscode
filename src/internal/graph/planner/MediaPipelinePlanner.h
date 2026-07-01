@@ -3,6 +3,7 @@
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/core/MediaNodeId.h"
 #include "internal/graph/model/MediaHardwareDescriptor.h"
+#include "internal/graph/model/MediaTranscodeParameters.h"
 #include "media_transcode/Result.h"
 
 #include <string>
@@ -49,6 +50,8 @@ struct MediaPipelineChainPlan {
 };
 
 struct MediaPipelinePlannerOptions {
+    bool includeVideo = true;
+    bool allowPacketCopy = false;
     std::string outputPath;
     std::string outputCodecName = "h264";
     std::string preferredHardware = "auto";
@@ -62,6 +65,9 @@ struct MediaPipelinePlannerOptions {
 };
 
 struct MediaPipelinePlan {
+    bool enabled = false;
+    MediaBranchMode branchMode = MediaBranchMode::Drop;
+    std::string reason;
     std::string inputPath;
     std::string outputPath;
     std::string inputCodecName;
