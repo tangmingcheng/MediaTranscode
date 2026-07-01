@@ -51,7 +51,6 @@ struct MediaPipelineChainPlan {
 struct MediaPipelinePlannerOptions {
     std::string outputPath;
     std::string outputCodecName = "h264";
-    std::string requestedEncoderName;
     std::string preferredHardware = "auto";
     int targetWidth = 0;
     int targetHeight = 0;
