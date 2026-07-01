@@ -86,7 +86,6 @@ bool MediaGraphDeploymentPlanner::isIoNode(MediaNodeKind kind) noexcept
     switch (kind) {
     case MediaNodeKind::FileInput:
     case MediaNodeKind::RealtimeInput:
-    case MediaNodeKind::RealtimePacketSource:
     case MediaNodeKind::FileOutput:
     case MediaNodeKind::RtpOutput:
     case MediaNodeKind::SdpWriter:
