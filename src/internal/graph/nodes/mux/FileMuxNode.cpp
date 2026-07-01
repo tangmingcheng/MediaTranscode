@@ -98,12 +98,15 @@ MediaNodeKind FileMuxNode::staticKind() noexcept
         return expected;
     }
 
-    auto input = tryPopFirstInput(context);
+    auto input = tryPopFirstInputOptional(context);
     if (!input) {
+        return ::media::Status::failure(input.error());
+    }
+    if (!input.value()) {
         return ::media::Status::success();
     }
 
-    MediaBufferRef buffer = input.value();
+    MediaBufferRef buffer = *input.value();
     if (tryBindOutputContext(buffer)) {
         auto status = registerPendingStreamConfigs();
         return status ? writePendingPacketsIfReady() : status;
