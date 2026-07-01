@@ -57,9 +57,30 @@ MediaFormatDescriptor streamIndexDescriptor(MediaStreamKind streamKind, int stre
     return ::media::Result<void>::success();
 }
 
-::media::Result<void> setSourceStreamOption(MediaGraph& graph, MediaNodeId nodeId, int sourceStreamIndex)
+::media::Result<void> setAudioSourceStreamOption(MediaGraph& graph, MediaNodeId nodeId, int sourceStreamIndex)
 {
     return setNodeOptionChecked(graph, nodeId, MediaTranscodeOptionKey::AudioSourceStreamIndex, std::to_string(sourceStreamIndex));
+}
+
+::media::Result<void> setPacketStreamOptions(MediaGraph& graph,
+                                             MediaNodeId nodeId,
+                                             MediaStreamKind streamKind,
+                                             int sourceStreamIndex)
+{
+    const char* streamKindValue = nullptr;
+    if (streamKind == MediaStreamKind::Audio) {
+        streamKindValue = "audio";
+    } else if (streamKind == MediaStreamKind::Video) {
+        streamKindValue = "video";
+    } else {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument("LocalFileAudioBranchBuilder packet stream kind must be audio or video"));
+    }
+
+    if (auto status = setNodeOptionChecked(graph, nodeId, MediaTranscodeOptionKey::PacketSourceStreamIndex, std::to_string(sourceStreamIndex)); !status) {
+        return status;
+    }
+    return setNodeOptionChecked(graph, nodeId, MediaTranscodeOptionKey::PacketStreamKind, streamKindValue);
 }
 
 ::media::Result<void> applyAudioEncodeOptions(MediaGraph& graph,
@@ -122,16 +143,14 @@ MediaFormatDescriptor streamIndexDescriptor(MediaStreamKind streamKind, int stre
     const MediaGraphQueueParameters& queues = options.parameters.queues;
     const MediaAudioTranscodeParameters& audio = options.parameters.audio;
     const int streamIndex = plan.sourceStreamIndex;
-    const MediaNodeId packetNormalize = graph.addNode(MediaNodeKind::AudioPacketNormalize, "local.audio.packet_normalize", "Local audio packet normalize");
+    const MediaNodeId packetNormalize = graph.addNode(MediaNodeKind::PacketNormalize, "local.audio.packet_normalize", "Local audio packet normalize");
     const MediaNodeId codecResolver = graph.addNode(MediaNodeKind::AudioCodecResolver, "local.audio.codec_resolver", "Local audio codec resolver");
     const MediaNodeId decode = graph.addNode(MediaNodeKind::AudioDecode, "local.audio.decode", "Local audio decode");
     const MediaNodeId resample = graph.addNode(MediaNodeKind::AudioResample, "local.audio.resample", "Local audio resample");
     const MediaNodeId encode = graph.addNode(MediaNodeKind::AudioEncode, "local.audio.encode", "Local audio encode");
 
-    for (MediaNodeId nodeId : { packetNormalize, codecResolver }) {
-        auto status = setSourceStreamOption(graph, nodeId, streamIndex);
-        if (!status) return status;
-    }
+    if (auto status = setPacketStreamOptions(graph, packetNormalize, MediaStreamKind::Audio, streamIndex); !status) return status;
+    if (auto status = setAudioSourceStreamOption(graph, codecResolver, streamIndex); !status) return status;
     if (auto status = applyAudioEncodeOptions(graph, codecResolver, audio, plan); !status) return status;
 
     const MediaPortId audioPort = graph.addOutputPort(split, "audio", MediaStreamKind::Audio, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, false, true);
