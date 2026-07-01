@@ -5,9 +5,7 @@
 #include "internal/graph/nodes/audio/AudioDecodeNode.h"
 #include "internal/graph/nodes/audio/AudioEncodeNode.h"
 #include "internal/graph/nodes/audio/AudioPacketDrainNode.h"
-#include "internal/graph/nodes/audio/AudioPacketNormalizeNode.h"
 #include "internal/graph/nodes/audio/AudioResampleNode.h"
-#include "internal/graph/nodes/audio/AudioSourceConfigNode.h"
 #include "internal/graph/nodes/audio/AudioStrategyNode.h"
 #include "internal/graph/nodes/control/ControlSignalNode.h"
 #include "internal/graph/nodes/debug/DebugDumpNode.h"
@@ -72,8 +70,6 @@ namespace media::ffmpeg::graph {
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<VideoPacketDrainNode>(node.id));
     case MediaNodeKind::AudioStrategy:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<AudioStrategyNode>(node.id));
-    case MediaNodeKind::AudioSourceConfig:
-        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<AudioSourceConfigNode>(node.id));
     case MediaNodeKind::AudioCodecResolver:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<AudioCodecResolverNode>(node.id));
     case MediaNodeKind::AudioCopy:
@@ -84,8 +80,6 @@ namespace media::ffmpeg::graph {
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<AudioResampleNode>(node.id));
     case MediaNodeKind::AudioEncode:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<AudioEncodeNode>(node.id));
-    case MediaNodeKind::AudioPacketNormalize:
-        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<AudioPacketNormalizeNode>(node.id));
     case MediaNodeKind::AudioPacketDrain:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<AudioPacketDrainNode>(node.id));
     case MediaNodeKind::PacketSourceConfig:
@@ -143,13 +137,11 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::VideoEncode:
     case MediaNodeKind::VideoPacketDrain:
     case MediaNodeKind::AudioStrategy:
-    case MediaNodeKind::AudioSourceConfig:
     case MediaNodeKind::AudioCodecResolver:
     case MediaNodeKind::AudioCopy:
     case MediaNodeKind::AudioDecode:
     case MediaNodeKind::AudioResample:
     case MediaNodeKind::AudioEncode:
-    case MediaNodeKind::AudioPacketNormalize:
     case MediaNodeKind::AudioPacketDrain:
     case MediaNodeKind::PacketSourceConfig:
     case MediaNodeKind::PacketNormalize:
