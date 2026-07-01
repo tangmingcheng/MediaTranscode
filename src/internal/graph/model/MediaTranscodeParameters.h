@@ -69,7 +69,6 @@ struct MediaFrameRateParameters {
 
 struct MediaVideoTranscodeParameters {
     std::string codecName;
-    std::string encoderName;
     std::optional<int> width;
     std::optional<int> height;
     MediaFrameRateParameters frameRate;
@@ -88,9 +87,7 @@ struct MediaVideoTranscodeParameters {
 };
 
 struct MediaAudioTranscodeParameters {
-    bool transcode = false;
     std::string codecName;
-    std::string encoderName;
     MediaRateControlMode rateControl = MediaRateControlMode::Auto;
     std::optional<int> bitrateKbps;
     std::optional<int> minBitrateKbps;
@@ -133,7 +130,6 @@ inline constexpr char MuxExpectVideo[] = "mux.expect_video";
 inline constexpr char MuxExpectAudio[] = "mux.expect_audio";
 
 inline constexpr char VideoCodec[] = "video.codec";
-inline constexpr char VideoEncoder[] = "video.encoder";
 inline constexpr char VideoWidth[] = "video.width";
 inline constexpr char VideoHeight[] = "video.height";
 inline constexpr char VideoFpsNum[] = "video.fps.num";
@@ -153,7 +149,6 @@ inline constexpr char VideoBFrames[] = "video.bframes";
 
 inline constexpr char AudioSourceStreamIndex[] = "audio.source_stream_index";
 inline constexpr char AudioCodec[] = "audio.codec";
-inline constexpr char AudioEncoder[] = "audio.encoder";
 inline constexpr char AudioRateControl[] = "audio.rc";
 inline constexpr char AudioBitrateKbps[] = "audio.bitrate.kbps";
 inline constexpr char AudioMinBitrateKbps[] = "audio.bitrate.min_kbps";
