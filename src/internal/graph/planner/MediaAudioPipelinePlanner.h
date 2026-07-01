@@ -9,12 +9,6 @@
 
 namespace media::ffmpeg::graph {
 
-enum class MediaAudioPipelineMode {
-    Disabled,
-    Copy,
-    Encode
-};
-
 struct MediaAudioPipelinePlannerOptions {
     bool includeAudio = true;
     std::string requestedCodecName;
@@ -33,7 +27,7 @@ struct MediaAudioPipelinePlannerOptions {
 
 struct MediaAudioPipelinePlan {
     bool enabled = false;
-    MediaAudioPipelineMode mode = MediaAudioPipelineMode::Disabled;
+    MediaBranchMode branchMode = MediaBranchMode::Drop;
     int sourceStreamIndex = invalidMediaStreamIndex;
     std::string sourceCodecName;
     std::string targetCodecName;
