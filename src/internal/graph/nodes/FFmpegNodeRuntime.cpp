@@ -36,24 +36,6 @@ bool isControlBroadcastBuffer(const MediaBufferRef& buffer) noexcept
         buffer->payloadKind() == MediaPayloadKind::ControlSignal;
 }
 
-::media::Status validateControlBroadcastPolicy(const MediaBufferRef& buffer,
-                                               ControlBroadcastPolicy policy,
-                                               const char* action)
-{
-    if (policy == ControlBroadcastPolicy::AllowAnyBuffer) {
-        return ::media::Status::success();
-    }
-
-    if (isControlBroadcastBuffer(buffer)) {
-        return ::media::Status::success();
-    }
-
-    std::ostringstream out;
-    out << action << " failed: non-control buffer requires explicit AllowAnyBuffer policy "
-        << mediaGraphDiagnosticDescribeBuffer(buffer);
-    return ::media::Status::failure(::media::ErrorInfo::invalidArgument(out.str()));
-}
-
 ::media::Status validateChannelBufferType(const MediaChannel& channel,
                                           const MediaBufferRef& buffer,
                                           const char* action)
@@ -310,17 +292,11 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
 }
 
 ::media::Status FFmpegNodeRuntime::pushToAllOutputs(MediaGraphExecutionContext& context,
-                                                     const MediaBufferRef& buffer,
-                                                     ControlBroadcastPolicy policy)
+                                                     const MediaBufferRef& buffer)
 {
     if (!buffer) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("FFmpegNodeRuntime pushToAllOutputs failed: buffer is null"));
-    }
-
-    auto policyStatus = validateControlBroadcastPolicy(buffer, policy, "pushToAllOutputs");
-    if (!policyStatus) {
-        return policyStatus;
     }
 
     bool pushed = false;
@@ -360,7 +336,14 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
 ::media::Status FFmpegNodeRuntime::broadcastControlToAllOutputs(MediaGraphExecutionContext& context,
                                                                  const MediaBufferRef& buffer)
 {
-    return pushToAllOutputs(context, buffer, ControlBroadcastPolicy::ControlOnly);
+    if (!isControlBroadcastBuffer(buffer)) {
+        std::ostringstream out;
+        out << "FFmpegNodeRuntime broadcastControlToAllOutputs failed: expected control buffer "
+            << mediaGraphDiagnosticDescribeBuffer(buffer);
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(out.str()));
+    }
+
+    return pushToAllOutputs(context, buffer);
 }
 
 ::media::Status FFmpegNodeRuntime::pushToMatchingOutputs(MediaGraphExecutionContext& context,
@@ -437,8 +420,7 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
     return emitOutput(context, outputPortName, std::move(buffer).value());
 }
 
-::media::Status FFmpegNodeRuntime::forwardFirstInputToAllOutputs(MediaGraphExecutionContext& context,
-                                                                  ControlBroadcastPolicy policy)
+::media::Status FFmpegNodeRuntime::forwardFirstInputToAllOutputs(MediaGraphExecutionContext& context)
 {
     auto buffer = tryPopFirstInputOptional(context);
     if (!buffer) {
@@ -448,7 +430,7 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
         return ::media::Status::success();
     }
 
-    return pushToAllOutputs(context, *buffer.value(), policy);
+    return pushToAllOutputs(context, *buffer.value());
 }
 
 std::vector<MediaChannel*> FFmpegNodeRuntime::outputChannels(MediaGraphExecutionContext& context)
