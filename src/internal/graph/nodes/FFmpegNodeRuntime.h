@@ -45,7 +45,7 @@ protected:
                                const MediaBufferRef& buffer);
     ::media::Status pushToAllOutputs(MediaGraphExecutionContext& context,
                                       const MediaBufferRef& buffer,
-                                      ControlBroadcastPolicy policy);
+                                      ControlBroadcastPolicy policy = ControlBroadcastPolicy::AllowAnyBuffer);
     ::media::Status broadcastControlToAllOutputs(MediaGraphExecutionContext& context,
                                                   const MediaBufferRef& buffer);
     ::media::Status pushToMatchingOutputs(MediaGraphExecutionContext& context,
