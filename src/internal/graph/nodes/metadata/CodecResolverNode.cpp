@@ -127,12 +127,15 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
         return ::media::Status::success();
     }
 
-    auto input = tryPopFirstInput(context);
+    auto input = tryPopFirstInputOptional(context);
     if (!input) {
+        return ::media::Status::failure(input.error());
+    }
+    if (!input.value()) {
         return ::media::Status::success();
     }
 
-    auto* formatBuffer = dynamic_cast<FFmpegFormatContextBuffer*>(input.value().get());
+    auto* formatBuffer = dynamic_cast<FFmpegFormatContextBuffer*>(input.value()->get());
     if (!formatBuffer || !formatBuffer->context()) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("CodecResolverNode expected FFmpegFormatContextBuffer"));
