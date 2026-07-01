@@ -67,44 +67,36 @@ MediaNodeKind VideoTimestampNode::staticKind() noexcept
 ::media::Status VideoTimestampNode::onProcess(MediaGraphExecutionContext& context)
 {
     if (!m_hasSourceTimeBase) {
-        MediaChannel* sourceCodecChannel = context.findInputChannel(nodeId(), "source_codec");
-        if (!sourceCodecChannel) {
-            return ::media::Status::failure(
-                ::media::ErrorInfo::notInitialized("VideoTimestampNode source_codec input channel not found"));
+        auto sourceCodecInput = tryPopInputOptional(context, "source_codec");
+        if (!sourceCodecInput) {
+            return ::media::Status::failure(sourceCodecInput.error());
         }
-
-        MediaBufferRef sourceCodecBuffer;
-        if (!sourceCodecChannel->tryPop(sourceCodecBuffer)) {
+        if (!sourceCodecInput.value()) {
             return ::media::Status::success();
         }
-        return bindSourceCodecConfig(context, sourceCodecBuffer);
+        return bindSourceCodecConfig(context, *sourceCodecInput.value());
     }
 
     if (!m_hasTargetTimeBase) {
-        MediaChannel* targetCodecChannel = context.findInputChannel(nodeId(), "target_codec");
-        if (!targetCodecChannel) {
-            return ::media::Status::failure(
-                ::media::ErrorInfo::notInitialized("VideoTimestampNode target_codec input channel not found"));
+        auto targetCodecInput = tryPopInputOptional(context, "target_codec");
+        if (!targetCodecInput) {
+            return ::media::Status::failure(targetCodecInput.error());
         }
-
-        MediaBufferRef targetCodecBuffer;
-        if (!targetCodecChannel->tryPop(targetCodecBuffer)) {
+        if (!targetCodecInput.value()) {
             return ::media::Status::success();
         }
-        return bindTargetCodecConfig(context, targetCodecBuffer);
+        return bindTargetCodecConfig(context, *targetCodecInput.value());
     }
 
-    MediaChannel* frameChannel = context.findInputChannel(nodeId(), "frame");
-    if (!frameChannel) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::notInitialized("VideoTimestampNode frame input channel not found"));
+    auto frameInput = tryPopInputOptional(context, "frame");
+    if (!frameInput) {
+        return ::media::Status::failure(frameInput.error());
     }
-
-    MediaBufferRef frameBuffer;
-    if (!frameChannel->tryPop(frameBuffer)) {
+    if (!frameInput.value()) {
         return ::media::Status::success();
     }
 
+    MediaBufferRef frameBuffer = *frameInput.value();
     if (frameBuffer->isEof() || frameBuffer->isFlush()) {
         return emitOutput(context, "frame", frameBuffer);
     }
