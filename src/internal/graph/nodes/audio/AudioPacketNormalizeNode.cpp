@@ -92,22 +92,15 @@ MediaNodeKind AudioPacketNormalizeNode::staticKind() noexcept
         }
     }
 
-    MediaChannel* packetChannel = context.findInputChannel(nodeId(), "packet");
-    if (!packetChannel) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::notInitialized("AudioPacketNormalizeNode packet input channel not found"));
+    auto packetInput = tryPopInputOptional(context, "packet");
+    if (!packetInput) {
+        return ::media::Status::failure(packetInput.error());
     }
-
-    MediaBufferRef input;
-    if (!packetChannel->tryPop(input)) {
+    if (!packetInput.value()) {
         return ::media::Status::success();
     }
 
-    if (!input) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("AudioPacketNormalizeNode received null input buffer"));
-    }
-
+    MediaBufferRef input = *packetInput.value();
     if (input->isEof() || input->isFlush()) {
         return emitOutput(context, "packet", input);
     }
@@ -122,22 +115,15 @@ MediaNodeKind AudioPacketNormalizeNode::staticKind() noexcept
 
 ::media::Status AudioPacketNormalizeNode::bindFormatContext(MediaGraphExecutionContext& context)
 {
-    MediaChannel* formatChannel = context.findInputChannel(nodeId(), "format");
-    if (!formatChannel) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::notInitialized("AudioPacketNormalizeNode format input channel not found"));
+    auto formatInput = tryPopInputOptional(context, "format");
+    if (!formatInput) {
+        return ::media::Status::failure(formatInput.error());
     }
-
-    MediaBufferRef input;
-    if (!formatChannel->tryPop(input)) {
+    if (!formatInput.value()) {
         return ::media::Status::success();
     }
 
-    if (!input) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("AudioPacketNormalizeNode received null format buffer"));
-    }
-
+    MediaBufferRef input = *formatInput.value();
     auto* formatBuffer = dynamic_cast<FFmpegFormatContextBuffer*>(input.get());
     if (!formatBuffer || !formatBuffer->context()) {
         return ::media::Status::failure(
