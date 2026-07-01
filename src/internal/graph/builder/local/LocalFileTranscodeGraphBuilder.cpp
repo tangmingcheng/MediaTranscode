@@ -193,7 +193,10 @@ MediaEdgePolicy q(std::size_t capacity)
     if (!planStatus) {
         return ::media::Result<MediaGraph>::failure(planStatus.error());
     }
-    applySelectedVideoPlanOptions(graph, plannerNodes, videoPlan);
+    auto selectedPlanOptions = applySelectedVideoPlanOptions(graph, plannerNodes, videoPlan);
+    if (!selectedPlanOptions) {
+        return ::media::Result<MediaGraph>::failure(selectedPlanOptions.error());
+    }
 
     if (auto status = addInputPortChecked(graph, codecResolver, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext, true, false); !status) return ::media::Result<MediaGraph>::failure(status.error());
     if (auto status = addOutputPortChecked(graph, codecResolver, "decoder", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false); !status) return ::media::Result<MediaGraph>::failure(status.error());
