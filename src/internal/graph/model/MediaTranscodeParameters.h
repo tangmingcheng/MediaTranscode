@@ -129,6 +129,9 @@ inline constexpr char PlannedEncoder[] = "encoder";
 inline constexpr char PlannedDecoder[] = "decoder";
 inline constexpr char PlannedFilter[] = "filter";
 
+inline constexpr char MuxExpectVideo[] = "mux.expect_video";
+inline constexpr char MuxExpectAudio[] = "mux.expect_audio";
+
 inline constexpr char VideoCodec[] = "video.codec";
 inline constexpr char VideoEncoder[] = "video.encoder";
 inline constexpr char VideoWidth[] = "video.width";
@@ -148,6 +151,7 @@ inline constexpr char VideoLevel[] = "video.level";
 inline constexpr char VideoGop[] = "video.gop";
 inline constexpr char VideoBFrames[] = "video.bframes";
 
+inline constexpr char AudioSourceStreamIndex[] = "audio.source_stream_index";
 inline constexpr char AudioCodec[] = "audio.codec";
 inline constexpr char AudioEncoder[] = "audio.encoder";
 inline constexpr char AudioRateControl[] = "audio.rc";
