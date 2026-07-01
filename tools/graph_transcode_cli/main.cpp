@@ -32,6 +32,13 @@ bool hasArg(int argc, char** argv, const std::string& key)
     return false;
 }
 
+void rejectRemovedArg(int argc, char** argv, const std::string& key)
+{
+    if (hasArg(argc, argv, key)) {
+        throw std::invalid_argument(key + " was removed; encoder selection is planner-owned");
+    }
+}
+
 std::optional<int> optionalIntArg(int argc, char** argv, const std::string& key)
 {
     const std::string value = argValue(argc, argv, key);
@@ -85,6 +92,10 @@ int failResult(const char* action, const ::media::Result<T>& result)
 
 LocalFileTranscodeOptions parseOptions(int argc, char** argv)
 {
+    rejectRemovedArg(argc, argv, "--encoder");
+    rejectRemovedArg(argc, argv, "--audio-encoder");
+    rejectRemovedArg(argc, argv, "--audio-transcode");
+
     LocalFileTranscodeOptions options;
     options.inputUrl = argValue(argc, argv, "--input");
     options.outputUrl = argValue(argc, argv, "--output");
@@ -97,7 +108,6 @@ LocalFileTranscodeOptions parseOptions(int argc, char** argv)
     parameters.execution.diagnosticLogEnabled = !hasArg(argc, argv, "--quiet-graph");
 
     parameters.video.codecName = argValue(argc, argv, "--video-codec", parameters.video.codecName);
-    parameters.video.encoderName = argValue(argc, argv, "--encoder", parameters.video.encoderName);
     parameters.video.rateControl = rateControlArg(argc, argv, "--rc");
     parameters.video.preset = argValue(argc, argv, "--preset", parameters.video.preset);
     parameters.video.profile = argValue(argc, argv, "--profile", parameters.video.profile);
@@ -117,9 +127,7 @@ LocalFileTranscodeOptions parseOptions(int argc, char** argv)
     parameters.video.gop = optionalIntArg(argc, argv, "--gop");
     parameters.video.bFrames = optionalIntArg(argc, argv, "--bframes");
 
-    parameters.audio.transcode = hasArg(argc, argv, "--audio-transcode");
     parameters.audio.codecName = argValue(argc, argv, "--audio-codec", parameters.audio.codecName);
-    parameters.audio.encoderName = argValue(argc, argv, "--audio-encoder", parameters.audio.encoderName);
     parameters.audio.rateControl = rateControlArg(argc, argv, "--audio-rc");
     parameters.audio.bitrateKbps = optionalIntArg(argc, argv, "--audio-bitrate");
     parameters.audio.minBitrateKbps = optionalIntArg(argc, argv, "--audio-min-bitrate");
@@ -137,6 +145,7 @@ int runGraphTranscodeCli(int argc, char** argv)
 {
     if (argc < 5 || hasArg(argc, argv, "--help") || hasArg(argc, argv, "-h")) {
         std::cout << "Usage: media_transcode_graph_transcode_cli --input in.mp4 --output out.mp4 [options]\n";
+        std::cout << "       encoder selection is automatic and planner-owned\n";
         std::cout << "       add --quiet-graph to disable runtime graph diagnostics\n";
         return argc < 5 ? 2 : 0;
     }
