@@ -54,6 +54,7 @@ struct MediaPipelinePlannerOptions {
     std::string preferredHardware = "auto";
     int targetWidth = 0;
     int targetHeight = 0;
+    bool filterRequired = true;
     bool preferGpu = true;
     bool allowSoftwareFallback = true;
     bool requireRuntimeAvailability = true;
