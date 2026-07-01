@@ -112,6 +112,7 @@ LocalFileTranscodeOptions parseOptions(int argc, char** argv)
     parameters.video.bitrateKbps = optionalIntArg(argc, argv, "--bitrate");
     parameters.video.minBitrateKbps = optionalIntArg(argc, argv, "--min-bitrate");
     parameters.video.maxBitrateKbps = optionalIntArg(argc, argv, "--max-bitrate");
+    parameters.video.bufferSizeKbits = optionalIntArg(argc, argv, "--buffer-size");
     parameters.video.quality = optionalIntArg(argc, argv, "--quality");
     parameters.video.gop = optionalIntArg(argc, argv, "--gop");
     parameters.video.bFrames = optionalIntArg(argc, argv, "--bframes");
@@ -123,6 +124,7 @@ LocalFileTranscodeOptions parseOptions(int argc, char** argv)
     parameters.audio.bitrateKbps = optionalIntArg(argc, argv, "--audio-bitrate");
     parameters.audio.minBitrateKbps = optionalIntArg(argc, argv, "--audio-min-bitrate");
     parameters.audio.maxBitrateKbps = optionalIntArg(argc, argv, "--audio-max-bitrate");
+    parameters.audio.bufferSizeKbits = optionalIntArg(argc, argv, "--audio-buffer-size");
     parameters.audio.sampleRate = optionalIntArg(argc, argv, "--sample-rate");
     parameters.audio.channels = optionalIntArg(argc, argv, "--channels");
     parameters.audio.quality = optionalIntArg(argc, argv, "--audio-quality");
@@ -151,6 +153,7 @@ int runGraphTranscodeCli(int argc, char** argv)
               << " bitrate_kbps=" << optionalIntText(parameters.video.bitrateKbps)
               << " min_bitrate_kbps=" << optionalIntText(parameters.video.minBitrateKbps)
               << " max_bitrate_kbps=" << optionalIntText(parameters.video.maxBitrateKbps)
+              << " buffer_size_kbits=" << optionalIntText(parameters.video.bufferSizeKbits)
               << " rc=" << mediaRateControlModeName(parameters.video.rateControl)
               << " quality=" << optionalIntText(parameters.video.quality)
               << " diagnostics=" << (parameters.execution.diagnosticLogEnabled ? "on" : "off")
