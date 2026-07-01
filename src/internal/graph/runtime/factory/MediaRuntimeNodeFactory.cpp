@@ -3,9 +3,7 @@
 #include "internal/graph/nodes/audio/AudioCodecResolverNode.h"
 #include "internal/graph/nodes/audio/AudioDecodeNode.h"
 #include "internal/graph/nodes/audio/AudioEncodeNode.h"
-#include "internal/graph/nodes/audio/AudioPacketDrainNode.h"
 #include "internal/graph/nodes/audio/AudioResampleNode.h"
-#include "internal/graph/nodes/audio/AudioStrategyNode.h"
 #include "internal/graph/nodes/control/ControlSignalNode.h"
 #include "internal/graph/nodes/debug/DebugDumpNode.h"
 #include "internal/graph/nodes/debug/TraceProbeNode.h"
@@ -33,7 +31,6 @@
 #include "internal/graph/nodes/video/VideoEncodeNode.h"
 #include "internal/graph/nodes/video/VideoFilterNode.h"
 #include "internal/graph/nodes/video/VideoFrameRateNode.h"
-#include "internal/graph/nodes/video/VideoPacketDrainNode.h"
 #include "internal/graph/nodes/video/VideoTimestampNode.h"
 
 namespace media::ffmpeg::graph {
@@ -65,10 +62,6 @@ namespace media::ffmpeg::graph {
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<VideoFilterNode>(node.id));
     case MediaNodeKind::VideoEncode:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<VideoEncodeNode>(node.id));
-    case MediaNodeKind::VideoPacketDrain:
-        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<VideoPacketDrainNode>(node.id));
-    case MediaNodeKind::AudioStrategy:
-        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<AudioStrategyNode>(node.id));
     case MediaNodeKind::AudioCodecResolver:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<AudioCodecResolverNode>(node.id));
     case MediaNodeKind::AudioDecode:
@@ -77,8 +70,6 @@ namespace media::ffmpeg::graph {
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<AudioResampleNode>(node.id));
     case MediaNodeKind::AudioEncode:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<AudioEncodeNode>(node.id));
-    case MediaNodeKind::AudioPacketDrain:
-        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<AudioPacketDrainNode>(node.id));
     case MediaNodeKind::PacketSourceConfig:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<PacketSourceConfigNode>(node.id));
     case MediaNodeKind::PacketNormalize:
@@ -132,13 +123,10 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::VideoFrameRate:
     case MediaNodeKind::VideoFilter:
     case MediaNodeKind::VideoEncode:
-    case MediaNodeKind::VideoPacketDrain:
-    case MediaNodeKind::AudioStrategy:
     case MediaNodeKind::AudioCodecResolver:
     case MediaNodeKind::AudioDecode:
     case MediaNodeKind::AudioResample:
     case MediaNodeKind::AudioEncode:
-    case MediaNodeKind::AudioPacketDrain:
     case MediaNodeKind::PacketSourceConfig:
     case MediaNodeKind::PacketNormalize:
     case MediaNodeKind::PacketMerge:
