@@ -24,7 +24,6 @@ MediaGraphInstructionKind MediaGraphInstructionLowerer::classify(MediaNodeKind k
     switch (kind) {
     case MediaNodeKind::FileInput:
     case MediaNodeKind::RealtimeInput:
-    case MediaNodeKind::RealtimePacketSource:
         return MediaGraphInstructionKind::Source;
 
     case MediaNodeKind::FileOutput:
