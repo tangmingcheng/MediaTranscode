@@ -165,6 +165,19 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
 
 ::media::Result<MediaBufferRef> FFmpegNodeRuntime::tryPopFirstInput(MediaGraphExecutionContext& context)
 {
+    auto input = tryPopFirstInputOptional(context);
+    if (!input) {
+        return ::media::Result<MediaBufferRef>::failure(input.error());
+    }
+    if (!input.value()) {
+        return ::media::Result<MediaBufferRef>::failure(
+            ::media::ErrorInfo::notInitialized("FFmpegNodeRuntime tryPopFirstInput failed: no input buffer available"));
+    }
+    return ::media::Result<MediaBufferRef>::success(std::move(*input.value()));
+}
+
+::media::Result<std::optional<MediaBufferRef>> FFmpegNodeRuntime::tryPopFirstInputOptional(MediaGraphExecutionContext& context)
+{
     for (MediaChannel* channel : context.inputChannels(nodeId())) {
         if (!channel) {
             continue;
@@ -174,7 +187,7 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
         if (channel->tryPop(buffer)) {
             auto typeStatus = validateChannelBufferType(*channel, buffer, "tryPopFirstInput");
             if (!typeStatus) {
-                return ::media::Result<MediaBufferRef>::failure(typeStatus.error());
+                return ::media::Result<std::optional<MediaBufferRef>>::failure(typeStatus.error());
             }
 
             logEdgeTransfer(context,
@@ -184,12 +197,11 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
                             name(),
                             *channel,
                             buffer);
-            return ::media::Result<MediaBufferRef>::success(std::move(buffer));
+            return ::media::Result<std::optional<MediaBufferRef>>::success(std::move(buffer));
         }
     }
 
-    return ::media::Result<MediaBufferRef>::failure(
-        ::media::ErrorInfo::notInitialized("FFmpegNodeRuntime tryPopFirstInput failed: no input buffer available"));
+    return ::media::Result<std::optional<MediaBufferRef>>::success(std::nullopt);
 }
 
 ::media::Status FFmpegNodeRuntime::emitOutput(MediaGraphExecutionContext& context,
@@ -350,12 +362,15 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
 
 ::media::Status FFmpegNodeRuntime::forwardFirstInputToAllOutputs(MediaGraphExecutionContext& context)
 {
-    auto buffer = tryPopFirstInput(context);
+    auto buffer = tryPopFirstInputOptional(context);
     if (!buffer) {
+        return ::media::Status::failure(buffer.error());
+    }
+    if (!buffer.value()) {
         return ::media::Status::success();
     }
 
-    return pushToAllOutputs(context, buffer.value());
+    return pushToAllOutputs(context, *buffer.value());
 }
 
 std::vector<MediaChannel*> FFmpegNodeRuntime::outputChannels(MediaGraphExecutionContext& context)
