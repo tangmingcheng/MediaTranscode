@@ -12,6 +12,16 @@
 
 namespace media::ffmpeg::graph {
 
+enum class RouteMatchPolicy {
+    RequireMatch,
+    AllowDrop
+};
+
+enum class ControlBroadcastPolicy {
+    ControlOnly,
+    AllowAnyBuffer
+};
+
 class FFmpegNodeRuntime : public MediaNodeRuntime {
 public:
     FFmpegNodeRuntime(MediaNodeId nodeId, MediaNodeKind kind, std::string name);
@@ -27,21 +37,28 @@ protected:
                                              const std::string& portName);
     ::media::Result<MediaBufferRef> tryPopFirstInput(MediaGraphExecutionContext& context);
     ::media::Result<std::optional<MediaBufferRef>> tryPopFirstInputOptional(MediaGraphExecutionContext& context);
+    ::media::Result<std::optional<MediaBufferRef>> tryPopInputOptional(MediaGraphExecutionContext& context,
+                                                                        const std::string& portName);
 
     ::media::Status emitOutput(MediaGraphExecutionContext& context,
                                const std::string& portName,
                                const MediaBufferRef& buffer);
     ::media::Status pushToAllOutputs(MediaGraphExecutionContext& context,
-                                      const MediaBufferRef& buffer);
+                                      const MediaBufferRef& buffer,
+                                      ControlBroadcastPolicy policy);
+    ::media::Status broadcastControlToAllOutputs(MediaGraphExecutionContext& context,
+                                                  const MediaBufferRef& buffer);
     ::media::Status pushToMatchingOutputs(MediaGraphExecutionContext& context,
                                            const MediaBufferRef& buffer,
                                            MediaStreamKind streamKind,
-                                           int streamIndex = invalidMediaStreamIndex);
+                                           int streamIndex = invalidMediaStreamIndex,
+                                           RouteMatchPolicy policy = RouteMatchPolicy::RequireMatch);
 
     ::media::Status forward(MediaGraphExecutionContext& context,
                             const std::string& inputPortName,
                             const std::string& outputPortName);
-    ::media::Status forwardFirstInputToAllOutputs(MediaGraphExecutionContext& context);
+    ::media::Status forwardFirstInputToAllOutputs(MediaGraphExecutionContext& context,
+                                                   ControlBroadcastPolicy policy = ControlBroadcastPolicy::AllowAnyBuffer);
 
     std::vector<MediaChannel*> outputChannels(MediaGraphExecutionContext& context);
 };
