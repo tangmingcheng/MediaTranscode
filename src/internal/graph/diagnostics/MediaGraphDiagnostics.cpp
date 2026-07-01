@@ -120,7 +120,6 @@ const char* mediaGraphDiagnosticNodeKindName(MediaNodeKind kind) noexcept
     case MediaNodeKind::VideoPacketDrain: return "VideoPacketDrain";
     case MediaNodeKind::AudioStrategy: return "AudioStrategy";
     case MediaNodeKind::AudioCodecResolver: return "AudioCodecResolver";
-    case MediaNodeKind::AudioCopy: return "AudioCopy";
     case MediaNodeKind::AudioDecode: return "AudioDecode";
     case MediaNodeKind::AudioResample: return "AudioResample";
     case MediaNodeKind::AudioEncode: return "AudioEncode";
