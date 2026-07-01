@@ -25,7 +25,7 @@ private:
                                                                            const AVCodecContext* decoderContext) const;
     ::media::Status emitCodecContext(MediaGraphExecutionContext& context,
                                       const char* portName,
-                                      ::media::ffmpeg::CodecContextPtr context);
+                                      ::media::ffmpeg::CodecContextPtr codecContext);
 
 private:
     bool m_emitted = false;
