@@ -101,12 +101,16 @@ MediaNodeKind VideoEncodeNode::staticKind() noexcept
 
 ::media::Status VideoEncodeNode::onProcess(MediaGraphExecutionContext& context)
 {
-    auto input = tryPopFirstInput(context);
+    auto input = tryPopFirstInputOptional(context);
     if (!input) {
+        return ::media::Status::failure(input.error());
+    }
+    if (!input.value()) {
         return ::media::Status::success();
     }
 
-    if (tryBindCodecContext(input.value())) {
+    const MediaBufferRef& buffer = *input.value();
+    if (tryBindCodecContext(buffer)) {
         const AVCodecContext* encoder = codecContext();
         encodeLog(MediaGraphDiagnosticLevel::State,
                   std::string("bind_encoder codec=") + codecName(encoder) +
@@ -115,7 +119,7 @@ MediaNodeKind VideoEncodeNode::staticKind() noexcept
                       " hwaccel=" + optionValue(nodeOptions(context), "encoder.pipeline.hwaccel", "none") +
                       " hw_device_ctx=" + (encoder && encoder->hw_device_ctx ? "set" : "none") +
                       " hw_frames_ctx=" + (encoder && encoder->hw_frames_ctx ? "set" : "none"));
-        return emitEncoderConfig(context, input.value());
+        return emitEncoderConfig(context, buffer);
     }
 
     if (!hasCodecContext()) {
@@ -123,7 +127,7 @@ MediaNodeKind VideoEncodeNode::staticKind() noexcept
             ::media::ErrorInfo::notInitialized("VideoEncodeNode requires codec context before frames"));
     }
 
-    if (input.value()->isEof() || input.value()->isFlush()) {
+    if (buffer->isEof() || buffer->isFlush()) {
         const int sendRet = avcodec_send_frame(codecContext(), nullptr);
         if (sendRet < 0 && sendRet != AVERROR_EOF) {
             return FFmpegGraphError::statusFromCode(sendRet, "avcodec_send_frame(video flush)");
@@ -132,10 +136,10 @@ MediaNodeKind VideoEncodeNode::staticKind() noexcept
         if (!drainStatus) {
             return drainStatus;
         }
-        return emitOutput(context, "packet", input.value());
+        return emitOutput(context, "packet", buffer);
     }
 
-    AVFrame* frame = FFmpegFrameView::writableFrame(input.value());
+    AVFrame* frame = FFmpegFrameView::writableFrame(buffer);
     if (!frame) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("VideoEncodeNode expected frame buffer"));
