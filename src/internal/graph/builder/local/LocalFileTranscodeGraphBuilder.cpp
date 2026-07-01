@@ -111,9 +111,6 @@ MediaEdgePolicy q(std::size_t capacity)
     if (!parameters.execution.includeVideo && !parameters.execution.includeAudio) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument("LocalFileTranscodeGraphBuilder requires video or audio branch"));
     }
-    if (!parameters.execution.includeVideo) {
-        return ::media::Status::failure(::media::ErrorInfo::unsupported("LocalFileTranscodeGraphBuilder audio-only graph requires video branch planning"));
-    }
     if (parameters.queues.metadata == 0 || parameters.queues.packet == 0 ||
         parameters.queues.frame == 0 || parameters.queues.mux == 0) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument("LocalFileTranscodeGraphBuilder queue capacities must be greater than 0"));
@@ -133,7 +130,13 @@ MediaEdgePolicy q(std::size_t capacity)
         return ::media::Result<MediaGraph>::failure(plannedVideo.error());
     }
     MediaPipelinePlan videoPlan = std::move(plannedVideo).value();
+    const bool buildVideoTranscodeBranch = videoPlan.branchMode == MediaBranchMode::TranscodeFrame;
     const MediaGraphQueueParameters& queues = options.parameters.queues;
+
+    if (videoPlan.branchMode == MediaBranchMode::CopyPacket) {
+        return ::media::Result<MediaGraph>::failure(
+            ::media::ErrorInfo::unsupported("LocalFileTranscodeGraphBuilder video copy_packet branch is not implemented yet"));
+    }
 
     MediaGraph graph;
     const MediaNodeId fileInput = graph.addNode(MediaNodeKind::FileInput, "local.file.input", "Local file input");
@@ -144,7 +147,7 @@ MediaEdgePolicy q(std::size_t capacity)
 
     if (auto status = setNodeOptionChecked(graph, fileInput, "url", options.inputUrl); !status) return ::media::Result<MediaGraph>::failure(status.error());
     if (auto status = setNodeOptionChecked(graph, fileOutput, "url", options.outputUrl); !status) return ::media::Result<MediaGraph>::failure(status.error());
-    if (auto status = setNodeOptionChecked(graph, mux, MediaTranscodeOptionKey::MuxExpectVideo, "1"); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = setNodeOptionChecked(graph, mux, MediaTranscodeOptionKey::MuxExpectVideo, buildVideoTranscodeBranch ? "1" : "0"); !status) return ::media::Result<MediaGraph>::failure(status.error());
     if (auto status = setNodeOptionChecked(graph, mux, MediaTranscodeOptionKey::MuxExpectAudio, "0"); !status) return ::media::Result<MediaGraph>::failure(status.error());
     if (!options.outputFormat.empty()) {
         if (auto status = setNodeOptionChecked(graph, fileOutput, "format", options.outputFormat); !status) return ::media::Result<MediaGraph>::failure(status.error());
@@ -166,6 +169,13 @@ MediaEdgePolicy q(std::size_t capacity)
     auto audio = LocalFileAudioBranchBuilder::buildIfPlanned(graph, options, fileInput, split, mux);
     if (!audio) {
         return ::media::Result<MediaGraph>::failure(audio.error());
+    }
+    if (!buildVideoTranscodeBranch) {
+        if (!audio.value()) {
+            return ::media::Result<MediaGraph>::failure(
+                ::media::ErrorInfo::unsupported("LocalFileTranscodeGraphBuilder no media branches were planned"));
+        }
+        return ::media::Result<MediaGraph>::success(std::move(graph));
     }
 
     const MediaNodeId codecResolver = graph.addNode(MediaNodeKind::CodecResolver, "local.codec.resolver", "Local codec resolver");
