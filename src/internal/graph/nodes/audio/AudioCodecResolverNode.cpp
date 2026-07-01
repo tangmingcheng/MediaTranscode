@@ -125,19 +125,23 @@ int chooseSampleRate(const AVCodec* encoder, int requested, int source)
     return ::media::Result<int>::success(kbits * kBitsPerKbit);
 }
 
-const AVCodec* findEncoder(const MediaNodeOptions* options, const AVStream* stream)
+const AVCodec* findEncoder(const MediaNodeOptions* options)
 {
-    const std::string encoderName = optionValue(options, MediaTranscodeOptionKey::AudioEncoder);
-    if (!encoderName.empty()) {
-        return avcodec_find_encoder_by_name(encoderName.c_str());
+    const std::string plannedEncoder = optionValue(options, MediaTranscodeOptionKey::PlannedEncoder);
+    if (!plannedEncoder.empty()) {
+        return avcodec_find_encoder_by_name(plannedEncoder.c_str());
     }
+
     const std::string codecName = optionValue(options, MediaTranscodeOptionKey::AudioCodec);
     if (!codecName.empty()) {
         if (const AVCodec* byName = avcodec_find_encoder_by_name(codecName.c_str())) {
             return byName;
         }
+        if (const AVCodecDescriptor* descriptor = avcodec_descriptor_get_by_name(codecName.c_str())) {
+            return avcodec_find_encoder(descriptor->id);
+        }
     }
-    return stream && stream->codecpar ? avcodec_find_encoder(stream->codecpar->codec_id) : nullptr;
+    return nullptr;
 }
 
 } // namespace
@@ -248,7 +252,7 @@ MediaNodeKind AudioCodecResolverNode::staticKind() noexcept
     const AVCodecContext* decoderContext) const
 {
     const MediaNodeOptions* options = nodeOptions(context);
-    const AVCodec* encoder = findEncoder(options, stream);
+    const AVCodec* encoder = findEncoder(options);
     if (!encoder) {
         return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(
             ::media::ErrorInfo::unsupported("AudioCodecResolverNode audio encoder not found"));
