@@ -4,7 +4,6 @@
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 
 #include <array>
-#include <initializer_list>
 #include <string>
 #include <utility>
 
@@ -48,28 +47,45 @@ MediaFormatDescriptor streamIndexDescriptor(MediaStreamKind streamKind, int stre
     return ::media::Result<void>::success();
 }
 
-::media::Result<void> setSourceStreamOption(MediaGraph& graph, MediaNodeId nodeId, int sourceStreamIndex)
+::media::Result<void> setNodeOptionChecked(MediaGraph& graph, MediaNodeId nodeId, const std::string& key, const std::string& value)
 {
-    if (!graph.setNodeOption(nodeId, MediaTranscodeOptionKey::AudioSourceStreamIndex, std::to_string(sourceStreamIndex))) {
-        return ::media::Result<void>::failure(::media::ErrorInfo::internalError("LocalFileAudioBranchBuilder failed to set audio source stream index"));
+    if (!graph.setNodeOption(nodeId, key, value)) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::internalError("LocalFileAudioBranchBuilder failed to set option: " + key));
     }
     return ::media::Result<void>::success();
 }
 
-void applyAudioOptions(MediaGraph& graph, MediaNodeId nodeId, const MediaAudioTranscodeParameters& audio)
+::media::Result<void> setSourceStreamOption(MediaGraph& graph, MediaNodeId nodeId, int sourceStreamIndex)
 {
-    graph.setNodeOption(nodeId, MediaTranscodeOptionKey::AudioRateControl, mediaRateControlModeName(audio.rateControl));
-    if (!audio.codecName.empty()) graph.setNodeOption(nodeId, MediaTranscodeOptionKey::AudioCodec, audio.codecName);
-    if (!audio.encoderName.empty()) graph.setNodeOption(nodeId, MediaTranscodeOptionKey::AudioEncoder, audio.encoderName);
-    if (audio.bitrateKbps) graph.setNodeOption(nodeId, MediaTranscodeOptionKey::AudioBitrateKbps, std::to_string(*audio.bitrateKbps));
-    if (audio.minBitrateKbps) graph.setNodeOption(nodeId, MediaTranscodeOptionKey::AudioMinBitrateKbps, std::to_string(*audio.minBitrateKbps));
-    if (audio.maxBitrateKbps) graph.setNodeOption(nodeId, MediaTranscodeOptionKey::AudioMaxBitrateKbps, std::to_string(*audio.maxBitrateKbps));
-    if (audio.bufferSizeKbits) graph.setNodeOption(nodeId, MediaTranscodeOptionKey::AudioBufferSizeKbits, std::to_string(*audio.bufferSizeKbits));
-    if (audio.sampleRate) graph.setNodeOption(nodeId, MediaTranscodeOptionKey::AudioSampleRate, std::to_string(*audio.sampleRate));
-    if (audio.channels) graph.setNodeOption(nodeId, MediaTranscodeOptionKey::AudioChannels, std::to_string(*audio.channels));
-    if (audio.quality) graph.setNodeOption(nodeId, MediaTranscodeOptionKey::AudioQuality, std::to_string(*audio.quality));
-    if (!audio.preset.empty()) graph.setNodeOption(nodeId, MediaTranscodeOptionKey::AudioPreset, audio.preset);
-    if (!audio.profile.empty()) graph.setNodeOption(nodeId, MediaTranscodeOptionKey::AudioProfile, audio.profile);
+    return setNodeOptionChecked(graph, nodeId, MediaTranscodeOptionKey::AudioSourceStreamIndex, std::to_string(sourceStreamIndex));
+}
+
+::media::Result<void> applyAudioOptions(MediaGraph& graph, MediaNodeId nodeId, const MediaAudioTranscodeParameters& audio)
+{
+    if (auto status = setNodeOptionChecked(graph, nodeId, MediaTranscodeOptionKey::AudioRateControl, mediaRateControlModeName(audio.rateControl)); !status) return status;
+    if (!audio.codecName.empty()) if (auto status = setNodeOptionChecked(graph, nodeId, MediaTranscodeOptionKey::AudioCodec, audio.codecName); !status) return status;
+    if (!audio.encoderName.empty()) if (auto status = setNodeOptionChecked(graph, nodeId, MediaTranscodeOptionKey::AudioEncoder, audio.encoderName); !status) return status;
+    if (audio.bitrateKbps) if (auto status = setNodeOptionChecked(graph, nodeId, MediaTranscodeOptionKey::AudioBitrateKbps, std::to_string(*audio.bitrateKbps)); !status) return status;
+    if (audio.minBitrateKbps) if (auto status = setNodeOptionChecked(graph, nodeId, MediaTranscodeOptionKey::AudioMinBitrateKbps, std::to_string(*audio.minBitrateKbps)); !status) return status;
+    if (audio.maxBitrateKbps) if (auto status = setNodeOptionChecked(graph, nodeId, MediaTranscodeOptionKey::AudioMaxBitrateKbps, std::to_string(*audio.maxBitrateKbps)); !status) return status;
+    if (audio.bufferSizeKbits) if (auto status = setNodeOptionChecked(graph, nodeId, MediaTranscodeOptionKey::AudioBufferSizeKbits, std::to_string(*audio.bufferSizeKbits)); !status) return status;
+    if (audio.sampleRate) if (auto status = setNodeOptionChecked(graph, nodeId, MediaTranscodeOptionKey::AudioSampleRate, std::to_string(*audio.sampleRate)); !status) return status;
+    if (audio.channels) if (auto status = setNodeOptionChecked(graph, nodeId, MediaTranscodeOptionKey::AudioChannels, std::to_string(*audio.channels)); !status) return status;
+    if (audio.quality) if (auto status = setNodeOptionChecked(graph, nodeId, MediaTranscodeOptionKey::AudioQuality, std::to_string(*audio.quality)); !status) return status;
+    if (!audio.preset.empty()) if (auto status = setNodeOptionChecked(graph, nodeId, MediaTranscodeOptionKey::AudioPreset, audio.preset); !status) return status;
+    if (!audio.profile.empty()) if (auto status = setNodeOptionChecked(graph, nodeId, MediaTranscodeOptionKey::AudioProfile, audio.profile); !status) return status;
+    return ::media::Result<void>::success();
+}
+
+::media::Result<void> addInputPortChecked(MediaGraph& graph, MediaNodeId nodeId, const std::string& name, MediaStreamKind streamKind, MediaEdgeKind edgeKind, MediaPayloadKind payloadKind, bool required, bool multiple)
+{
+    return requirePort(graph.addInputPort(nodeId, name, streamKind, edgeKind, payloadKind, required, multiple), name.c_str());
+}
+
+::media::Result<void> addOutputPortChecked(MediaGraph& graph, MediaNodeId nodeId, const std::string& name, MediaStreamKind streamKind, MediaEdgeKind edgeKind, MediaPayloadKind payloadKind, bool required, bool multiple)
+{
+    return requirePort(graph.addOutputPort(nodeId, name, streamKind, edgeKind, payloadKind, required, multiple), name.c_str());
 }
 
 ::media::Result<void> buildAudioCopyBranch(MediaGraph& graph,
@@ -87,14 +103,14 @@ void applyAudioOptions(MediaGraph& graph, MediaNodeId nodeId, const MediaAudioTr
     auto normalizeStatus = setSourceStreamOption(graph, packetNormalize, streamIndex);
     if (!normalizeStatus) return normalizeStatus;
 
-    graph.addInputPort(sourceConfig, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext, true, false);
-    graph.addOutputPort(sourceConfig, "codec", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::CodecParameters, true, false);
-    graph.addInputPort(packetNormalize, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext, true, false);
+    if (auto status = addInputPortChecked(graph, sourceConfig, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext, true, false); !status) return status;
+    if (auto status = addOutputPortChecked(graph, sourceConfig, "codec", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::CodecParameters, true, false); !status) return status;
+    if (auto status = addInputPortChecked(graph, packetNormalize, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext, true, false); !status) return status;
     const MediaPortId audioPort = graph.addOutputPort(split, "audio", MediaStreamKind::Audio, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, false, true);
     if (auto status = requirePort(audioPort, "split.audio"); !status) return status;
     graph.setPortFormatDescriptor(audioPort, streamIndexDescriptor(MediaStreamKind::Audio, streamIndex));
-    graph.addInputPort(packetNormalize, "packet", MediaStreamKind::Audio, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true);
-    graph.addOutputPort(packetNormalize, "packet", MediaStreamKind::Audio, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
+    if (auto status = addInputPortChecked(graph, packetNormalize, "packet", MediaStreamKind::Audio, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true); !status) return status;
+    if (auto status = addOutputPortChecked(graph, packetNormalize, "packet", MediaStreamKind::Audio, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true); !status) return status;
 
     const std::array<std::pair<MediaEdgeId, const char*>, 5> edges {{
         { graph.connect(fileInput, "format", sourceConfig, "format", "local.file.input.format -> local.audio.source_config.format", blockingQueuePolicy(queues.metadata)), "source_config.format" },
@@ -128,32 +144,32 @@ void applyAudioOptions(MediaGraph& graph, MediaNodeId nodeId, const MediaAudioTr
         auto status = setSourceStreamOption(graph, nodeId, streamIndex);
         if (!status) return status;
     }
-    applyAudioOptions(graph, codecResolver, audio);
+    if (auto status = applyAudioOptions(graph, codecResolver, audio); !status) return status;
 
     const MediaPortId audioPort = graph.addOutputPort(split, "audio", MediaStreamKind::Audio, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, false, true);
     if (auto status = requirePort(audioPort, "split.audio"); !status) return status;
     graph.setPortFormatDescriptor(audioPort, streamIndexDescriptor(MediaStreamKind::Audio, streamIndex));
 
-    graph.addInputPort(packetNormalize, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext, true, false);
-    graph.addInputPort(packetNormalize, "packet", MediaStreamKind::Audio, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true);
-    graph.addOutputPort(packetNormalize, "packet", MediaStreamKind::Audio, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true);
+    if (auto status = addInputPortChecked(graph, packetNormalize, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext, true, false); !status) return status;
+    if (auto status = addInputPortChecked(graph, packetNormalize, "packet", MediaStreamKind::Audio, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true); !status) return status;
+    if (auto status = addOutputPortChecked(graph, packetNormalize, "packet", MediaStreamKind::Audio, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true); !status) return status;
 
-    graph.addInputPort(codecResolver, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext, true, false);
-    graph.addOutputPort(codecResolver, "decoder", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, true);
-    graph.addOutputPort(codecResolver, "encoder", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, true);
+    if (auto status = addInputPortChecked(graph, codecResolver, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext, true, false); !status) return status;
+    if (auto status = addOutputPortChecked(graph, codecResolver, "decoder", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, true); !status) return status;
+    if (auto status = addOutputPortChecked(graph, codecResolver, "encoder", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, true); !status) return status;
 
-    graph.addInputPort(decode, "codec", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false);
-    graph.addInputPort(decode, "packet", MediaStreamKind::Audio, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true);
-    graph.addOutputPort(decode, "frame", MediaStreamKind::Audio, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true);
+    if (auto status = addInputPortChecked(graph, decode, "codec", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false); !status) return status;
+    if (auto status = addInputPortChecked(graph, decode, "packet", MediaStreamKind::Audio, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true); !status) return status;
+    if (auto status = addOutputPortChecked(graph, decode, "frame", MediaStreamKind::Audio, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true); !status) return status;
 
-    graph.addInputPort(resample, "codec", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false);
-    graph.addInputPort(resample, "frame", MediaStreamKind::Audio, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true);
-    graph.addOutputPort(resample, "frame", MediaStreamKind::Audio, MediaEdgeKind::SoftwareFrame, MediaPayloadKind::Frame, true, true);
+    if (auto status = addInputPortChecked(graph, resample, "codec", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false); !status) return status;
+    if (auto status = addInputPortChecked(graph, resample, "frame", MediaStreamKind::Audio, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true); !status) return status;
+    if (auto status = addOutputPortChecked(graph, resample, "frame", MediaStreamKind::Audio, MediaEdgeKind::SoftwareFrame, MediaPayloadKind::Frame, true, true); !status) return status;
 
-    graph.addInputPort(encode, "codec", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false);
-    graph.addInputPort(encode, "frame", MediaStreamKind::Audio, MediaEdgeKind::SoftwareFrame, MediaPayloadKind::Frame, true, true);
-    graph.addOutputPort(encode, "codec", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false);
-    graph.addOutputPort(encode, "packet", MediaStreamKind::Audio, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
+    if (auto status = addInputPortChecked(graph, encode, "codec", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false); !status) return status;
+    if (auto status = addInputPortChecked(graph, encode, "frame", MediaStreamKind::Audio, MediaEdgeKind::SoftwareFrame, MediaPayloadKind::Frame, true, true); !status) return status;
+    if (auto status = addOutputPortChecked(graph, encode, "codec", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false); !status) return status;
+    if (auto status = addOutputPortChecked(graph, encode, "packet", MediaStreamKind::Audio, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true); !status) return status;
 
     const std::array<std::pair<MediaEdgeId, const char*>, 10> edges {{
         { graph.connect(fileInput, "format", packetNormalize, "format", "local.file.input.format -> local.audio.packet_normalize.format", blockingQueuePolicy(queues.metadata)), "packet_normalize.format" },
@@ -195,11 +211,15 @@ void applyAudioOptions(MediaGraph& graph, MediaNodeId nodeId, const MediaAudioTr
 
     MediaAudioPipelinePlan plan = std::move(planResult).value();
     if (!plan.enabled) {
-        graph.setNodeOption(mux, MediaTranscodeOptionKey::MuxExpectAudio, "0");
+        if (auto status = setNodeOptionChecked(graph, mux, MediaTranscodeOptionKey::MuxExpectAudio, "0"); !status) {
+            return ::media::Result<bool>::failure(status.error());
+        }
         return ::media::Result<bool>::success(false);
     }
 
-    graph.setNodeOption(mux, MediaTranscodeOptionKey::MuxExpectAudio, "1");
+    if (auto muxStatus = setNodeOptionChecked(graph, mux, MediaTranscodeOptionKey::MuxExpectAudio, "1"); !muxStatus) {
+        return ::media::Result<bool>::failure(muxStatus.error());
+    }
     auto status = plan.mode == MediaAudioPipelineMode::Encode
         ? buildAudioEncodeBranch(graph, options, fileInput, split, mux, plan.sourceStreamIndex)
         : buildAudioCopyBranch(graph, options, fileInput, split, mux, plan.sourceStreamIndex);
