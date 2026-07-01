@@ -1,7 +1,6 @@
 #include "internal/graph/runtime/factory/MediaRuntimeNodeFactory.h"
 
 #include "internal/graph/nodes/audio/AudioCodecResolverNode.h"
-#include "internal/graph/nodes/audio/AudioCopyNode.h"
 #include "internal/graph/nodes/audio/AudioDecodeNode.h"
 #include "internal/graph/nodes/audio/AudioEncodeNode.h"
 #include "internal/graph/nodes/audio/AudioPacketDrainNode.h"
@@ -72,8 +71,6 @@ namespace media::ffmpeg::graph {
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<AudioStrategyNode>(node.id));
     case MediaNodeKind::AudioCodecResolver:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<AudioCodecResolverNode>(node.id));
-    case MediaNodeKind::AudioCopy:
-        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<AudioCopyNode>(node.id));
     case MediaNodeKind::AudioDecode:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<AudioDecodeNode>(node.id));
     case MediaNodeKind::AudioResample:
@@ -138,7 +135,6 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::VideoPacketDrain:
     case MediaNodeKind::AudioStrategy:
     case MediaNodeKind::AudioCodecResolver:
-    case MediaNodeKind::AudioCopy:
     case MediaNodeKind::AudioDecode:
     case MediaNodeKind::AudioResample:
     case MediaNodeKind::AudioEncode:
