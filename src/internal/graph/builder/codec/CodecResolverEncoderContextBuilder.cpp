@@ -94,6 +94,42 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
     return ::media::Status::success();
 }
 
+::media::Status applyQualityByRateControlMode(AVCodecContext* encoderContext,
+                                              const std::string& rcMode,
+                                              const std::optional<int>& quality)
+{
+    if (!quality) {
+        return ::media::Status::success();
+    }
+
+    if (*quality < 0) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder rejects negative quality"));
+    }
+
+    const std::string value = std::to_string(*quality);
+    if (rcMode == "crf") {
+        setPrivateOption(encoderContext, "crf", value);
+        return ::media::Status::success();
+    }
+
+    if (rcMode == "cq") {
+        setPrivateOption(encoderContext, "cq", value);
+        setPrivateOption(encoderContext, "qp", value);
+        setPrivateOption(encoderContext, "global_quality", value);
+        return ::media::Status::success();
+    }
+
+    if (rcMode == "auto") {
+        setPrivateOption(encoderContext, "quality", value);
+        setPrivateOption(encoderContext, "q", value);
+        return ::media::Status::success();
+    }
+
+    return ::media::Status::failure(
+        ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder rejects quality without crf/cq/auto rate control"));
+}
+
 } // namespace
 
 ::media::Result<CodecResolverEncoderContextBuildResult> CodecResolverEncoderContextBuilder::build(
@@ -244,13 +280,11 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
     setPrivateOption(encoderContext.get(), "tune", optionValue(options, MediaTranscodeOptionKey::VideoTune));
     setPrivateOption(encoderContext.get(), "level", optionValue(options, MediaTranscodeOptionKey::VideoLevel));
 
-    if (auto quality = intOption(options, MediaTranscodeOptionKey::VideoQuality)) {
-        if (*quality < 0) {
-            return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
-                ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder rejects negative quality"));
-        }
-        setPrivateOption(encoderContext.get(), "quality", std::to_string(*quality));
-        setPrivateOption(encoderContext.get(), "q", std::to_string(*quality));
+    auto qualityStatus = applyQualityByRateControlMode(encoderContext.get(),
+                                                       rcMode,
+                                                       intOption(options, MediaTranscodeOptionKey::VideoQuality));
+    if (!qualityStatus) {
+        return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(qualityStatus.error());
     }
 
     const int openRet = avcodec_open2(encoderContext.get(), encoder, nullptr);
