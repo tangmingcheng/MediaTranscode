@@ -88,6 +88,11 @@ void setIfPresent(MediaGraph& graph, MediaNodeId nodeId, const std::string& key,
         return status;
     }
 
+    status = validateOptionalNonNegative(video.bufferSizeKbits, "video buffer size");
+    if (!status) {
+        return status;
+    }
+
     if (video.minBitrateKbps && video.maxBitrateKbps && *video.minBitrateKbps > *video.maxBitrateKbps) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("LocalFileNodeOptionApplier requires video min bitrate <= max bitrate"));
@@ -129,6 +134,7 @@ void applyUserVideoOptionsToNode(MediaGraph& graph, MediaNodeId nodeId, const Me
     setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoBitrateKbps, video.bitrateKbps);
     setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoMinBitrateKbps, video.minBitrateKbps);
     setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoMaxBitrateKbps, video.maxBitrateKbps);
+    setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoBufferSizeKbits, video.bufferSizeKbits);
     setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoQuality, video.quality);
     setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoGop, video.gop);
     setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoBFrames, video.bFrames);
