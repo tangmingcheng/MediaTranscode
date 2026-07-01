@@ -1,8 +1,7 @@
 #include "internal/graph/preset/MediaPipelinePreset.h"
 
 #include "internal/graph/builder/local/LocalFileTranscodeGraphBuilder.h"
-
-#include <utility>
+#include "internal/graph/builder/realtime/MediaRealtimeGraphBuilder.h"
 
 namespace media::ffmpeg::graph {
 
@@ -22,38 +21,10 @@ namespace media::ffmpeg::graph {
     }
 }
 
-::media::Result<MediaGraph> MediaPipelinePreset::createLocalFileRemux(const MediaPipelinePresetOptions& options)
+::media::Result<MediaGraph> MediaPipelinePreset::createLocalFileRemux(const MediaPipelinePresetOptions&)
 {
-    if (options.inputUrl.empty() || options.outputUrl.empty()) {
-        return ::media::Result<MediaGraph>::failure(
-            ::media::ErrorInfo::invalidArgument("LocalFileRemux requires inputUrl and outputUrl"));
-    }
-
-    MediaGraph graph;
-
-    const MediaNodeId fileInput = graph.addNode(MediaNodeKind::FileInput, "file-input");
-    const MediaNodeId fileOutput = graph.addNode(MediaNodeKind::FileOutput, "file-output");
-    const MediaNodeId demux = graph.addNode(MediaNodeKind::Demux, "demux");
-    const MediaNodeId mux = graph.addNode(MediaNodeKind::FileMux, "file-mux");
-
-    graph.setNodeOption(fileInput, "url", options.inputUrl);
-    graph.setNodeOption(fileOutput, "url", options.outputUrl);
-    if (!options.outputFormat.empty()) {
-        graph.setNodeOption(fileOutput, "format", options.outputFormat);
-    }
-
-    graph.addOutputPort(fileInput, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext);
-    graph.addOutputPort(fileOutput, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext);
-    graph.addInputPort(demux, "input", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext);
-    graph.addOutputPort(demux, "packet", MediaStreamKind::Any, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true);
-    graph.addInputPort(mux, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext);
-    graph.addInputPort(mux, "packet", MediaStreamKind::Any, MediaEdgeKind::Unknown, MediaPayloadKind::Packet, true, true);
-
-    graph.connect(fileInput, "format", demux, "input", "input-format");
-    graph.connect(fileOutput, "format", mux, "format", "output-format");
-    graph.connect(demux, "packet", mux, "packet", "demux-packet");
-
-    return ::media::Result<MediaGraph>::success(std::move(graph));
+    return ::media::Result<MediaGraph>::failure(
+        ::media::ErrorInfo::unsupported("LocalFileRemux preset requires generic video packet copy and is not implemented"));
 }
 
 ::media::Result<MediaGraph> MediaPipelinePreset::createLocalFileTranscodeSkeleton(const MediaPipelinePresetOptions& options)
@@ -68,22 +39,17 @@ namespace media::ffmpeg::graph {
     return LocalFileTranscodeGraphBuilder::build(builderOptions);
 }
 
-::media::Result<MediaGraph> MediaPipelinePreset::createRealtimeRtpSkeleton(const MediaPipelinePresetOptions&)
+::media::Result<MediaGraph> MediaPipelinePreset::createRealtimeRtpSkeleton(const MediaPipelinePresetOptions& options)
 {
-    MediaGraph graph;
-    const MediaNodeId realtime = graph.addNode(MediaNodeKind::RealtimeInput, "realtime-input");
-    const MediaNodeId fanout = graph.addNode(MediaNodeKind::PacketFanout, "packet-fanout");
-    const MediaNodeId rtpOutput = graph.addNode(MediaNodeKind::RtpOutput, "rtp-output");
+    MediaRealtimeGraphBuilderOptions builderOptions;
+    builderOptions.kind = MediaRealtimeGraphKind::PacketRelay;
+    builderOptions.inputUrl = options.inputUrl;
+    builderOptions.outputUrl = options.outputUrl;
+    builderOptions.includeAudio = options.includeAudio;
+    builderOptions.includeVideo = options.includeVideo;
+    builderOptions.enablePacketFanout = true;
 
-    graph.addOutputPort(realtime, "packet", MediaStreamKind::Any, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true);
-    graph.addInputPort(fanout, "packet", MediaStreamKind::Any, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true);
-    graph.addOutputPort(fanout, "packet", MediaStreamKind::Any, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true);
-    graph.addInputPort(rtpOutput, "packet", MediaStreamKind::Any, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true);
-
-    graph.connect(realtime, "packet", fanout, "packet", "realtime-packet");
-    graph.connect(fanout, "packet", rtpOutput, "packet", "rtp-output");
-
-    return ::media::Result<MediaGraph>::success(std::move(graph));
+    return MediaRealtimeGraphBuilder::buildPacketRelay(builderOptions);
 }
 
 } // namespace media::ffmpeg::graph
