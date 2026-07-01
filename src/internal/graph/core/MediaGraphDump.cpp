@@ -11,7 +11,6 @@ const char* toString(MediaNodeKind kind)
     switch (kind) {
     case MediaNodeKind::FileInput: return "FileInput";
     case MediaNodeKind::RealtimeInput: return "RealtimeInput";
-    case MediaNodeKind::RealtimePacketSource: return "RealtimePacketSource";
     case MediaNodeKind::Demux: return "Demux";
     case MediaNodeKind::StreamSplit: return "StreamSplit";
     case MediaNodeKind::PacketFanout: return "PacketFanout";
