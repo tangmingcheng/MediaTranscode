@@ -33,7 +33,7 @@ MediaNodeKind FileInputNode::staticKind() noexcept
         return ::media::Status::failure(buffer.error());
     }
 
-    auto pushStatus = pushToAllOutputs(context, buffer.value());
+    auto pushStatus = pushToAllOutputs(context, buffer.value(), ControlBroadcastPolicy::AllowAnyBuffer);
     if (!pushStatus) {
         return pushStatus;
     }
