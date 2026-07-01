@@ -30,6 +30,11 @@ namespace {
     return ::media::Status::success();
 }
 
+bool resizeRequested(const MediaVideoTranscodeParameters& video) noexcept
+{
+    return video.width.has_value() && video.height.has_value();
+}
+
 } // namespace
 
 ::media::Result<MediaPipelinePlannerOptions> LocalFilePlannerRequestBuilder::buildVideoPlannerOptions(
@@ -48,6 +53,7 @@ namespace {
     plannerOptions.outputCodecName = video.codecName;
     plannerOptions.targetWidth = video.width.value_or(0);
     plannerOptions.targetHeight = video.height.value_or(0);
+    plannerOptions.filterRequired = resizeRequested(video);
     plannerOptions.allowSoftwareFallback = parameters.execution.disableHardware;
     plannerOptions.requireRuntimeAvailability = true;
     plannerOptions.preferGpu = !parameters.execution.disableHardware;
