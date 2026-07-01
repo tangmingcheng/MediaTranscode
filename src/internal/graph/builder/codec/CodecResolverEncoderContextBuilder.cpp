@@ -94,6 +94,15 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
     return ::media::Status::success();
 }
 
+::media::Status requireBitrate(const AVCodecContext* encoderContext, const std::string& rcMode)
+{
+    if (!encoderContext || encoderContext->bit_rate <= 0) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder " + rcMode + " mode requires video bitrate"));
+    }
+    return ::media::Status::success();
+}
+
 ::media::Status applyQualityByRateControlMode(AVCodecContext* encoderContext,
                                               const std::string& rcMode,
                                               const std::optional<int>& quality)
@@ -115,7 +124,6 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
 
     if (rcMode == "cq") {
         setPrivateOption(encoderContext, "cq", value);
-        setPrivateOption(encoderContext, "qp", value);
         setPrivateOption(encoderContext, "global_quality", value);
         return ::media::Status::success();
     }
@@ -260,7 +268,11 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
     }
 
     const std::string rcMode = optionValue(options, MediaTranscodeOptionKey::VideoRateControl);
-    if (rcMode == "cbr" && encoderContext->bit_rate > 0) {
+    if (rcMode == "cbr") {
+        auto bitrateStatus = requireBitrate(encoderContext.get(), rcMode);
+        if (!bitrateStatus) {
+            return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(bitrateStatus.error());
+        }
         if (encoderContext->rc_min_rate <= 0) {
             encoderContext->rc_min_rate = encoderContext->bit_rate;
         }
@@ -268,10 +280,17 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
             encoderContext->rc_max_rate = encoderContext->bit_rate;
         }
         encoderContext->rc_buffer_size = static_cast<int>(encoderContext->bit_rate * 2);
-    } else if (rcMode == "vbr" && encoderContext->bit_rate > 0) {
-        if (encoderContext->rc_max_rate <= 0) {
-            encoderContext->rc_max_rate = encoderContext->bit_rate;
+    } else if (rcMode == "cvbr") {
+        auto bitrateStatus = requireBitrate(encoderContext.get(), rcMode);
+        if (!bitrateStatus) {
+            return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(bitrateStatus.error());
         }
+        if (encoderContext->rc_max_rate <= 0) {
+            return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
+                ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder cvbr mode requires video max bitrate"));
+        }
+        encoderContext->rc_buffer_size = static_cast<int>(encoderContext->rc_max_rate * 2);
+    } else if (rcMode == "vbr" && encoderContext->bit_rate > 0) {
         encoderContext->rc_buffer_size = static_cast<int>(encoderContext->bit_rate * 2);
     }
 
