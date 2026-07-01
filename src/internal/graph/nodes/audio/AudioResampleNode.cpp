@@ -66,19 +66,15 @@ MediaNodeKind AudioResampleNode::staticKind() noexcept
         return ::media::Status::success();
     }
 
-    MediaChannel* frameChannel = context.findInputChannel(nodeId(), "frame");
-    if (!frameChannel) {
-        return ::media::Status::failure(::media::ErrorInfo::notInitialized("AudioResampleNode frame input channel not found"));
+    auto frameInput = tryPopInputOptional(context, "frame");
+    if (!frameInput) {
+        return ::media::Status::failure(frameInput.error());
     }
-
-    MediaBufferRef input;
-    if (!frameChannel->tryPop(input)) {
+    if (!frameInput.value()) {
         return ::media::Status::success();
     }
-    if (!input) {
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument("AudioResampleNode received null frame"));
-    }
-    return processFrame(context, input);
+
+    return processFrame(context, *frameInput.value());
 }
 
 ::media::Status AudioResampleNode::bindEncoderContext(MediaGraphExecutionContext& context)
@@ -86,15 +82,16 @@ MediaNodeKind AudioResampleNode::staticKind() noexcept
     if (hasCodecContext()) {
         return ::media::Status::success();
     }
-    MediaChannel* codecChannel = context.findInputChannel(nodeId(), "codec");
-    if (!codecChannel) {
-        return ::media::Status::failure(::media::ErrorInfo::notInitialized("AudioResampleNode codec input channel not found"));
+
+    auto codecInput = tryPopInputOptional(context, "codec");
+    if (!codecInput) {
+        return ::media::Status::failure(codecInput.error());
     }
-    MediaBufferRef input;
-    if (!codecChannel->tryPop(input)) {
+    if (!codecInput.value()) {
         return ::media::Status::success();
     }
-    if (!input || !tryBindCodecContext(input)) {
+
+    if (!tryBindCodecContext(*codecInput.value())) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument("AudioResampleNode expected encoder codec context"));
     }
     return ::media::Status::success();
