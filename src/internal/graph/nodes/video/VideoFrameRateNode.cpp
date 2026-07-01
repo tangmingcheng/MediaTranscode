@@ -105,7 +105,7 @@ MediaNodeKind VideoFrameRateNode::staticKind() noexcept
         if (!drainStatus) {
             return drainStatus;
         }
-        return pushToAllOutputs(context, buffer);
+        return broadcastControlToAllOutputs(context, buffer);
     }
 
     if (!m_initialized) {
