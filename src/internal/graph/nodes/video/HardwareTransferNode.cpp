@@ -48,12 +48,15 @@ MediaNodeKind HardwareTransferNode::staticKind() noexcept
 
 ::media::Status HardwareTransferNode::onProcess(MediaGraphExecutionContext& context)
 {
-    auto input = tryPopFirstInput(context);
+    auto input = tryPopFirstInputOptional(context);
     if (!input) {
+        return ::media::Status::failure(input.error());
+    }
+    if (!input.value()) {
         return ::media::Status::success();
     }
 
-    MediaBufferRef buffer = input.value();
+    const MediaBufferRef& buffer = *input.value();
     if (buffer->isEof() || buffer->isFlush()) {
         return emitOutput(context, "frame", buffer);
     }
