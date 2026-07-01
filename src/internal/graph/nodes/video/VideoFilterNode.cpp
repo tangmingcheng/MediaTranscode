@@ -97,30 +97,25 @@ MediaNodeKind VideoFilterNode::staticKind() noexcept
 ::media::Status VideoFilterNode::onProcess(MediaGraphExecutionContext& context)
 {
     if (!m_encoderContext) {
-        MediaChannel* codecChannel = context.findInputChannel(nodeId(), "codec");
-        if (!codecChannel) {
-            return ::media::Status::failure(
-                ::media::ErrorInfo::notInitialized("VideoFilterNode codec input channel not found"));
+        auto codecInput = tryPopInputOptional(context, "codec");
+        if (!codecInput) {
+            return ::media::Status::failure(codecInput.error());
         }
-
-        MediaBufferRef codecBuffer;
-        if (!codecChannel->tryPop(codecBuffer)) {
+        if (!codecInput.value()) {
             return ::media::Status::success();
         }
-        return bindEncoderConfig(context, codecBuffer);
+        return bindEncoderConfig(context, *codecInput.value());
     }
 
-    MediaChannel* frameChannel = context.findInputChannel(nodeId(), "frame");
-    if (!frameChannel) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::notInitialized("VideoFilterNode frame input channel not found"));
+    auto frameInput = tryPopInputOptional(context, "frame");
+    if (!frameInput) {
+        return ::media::Status::failure(frameInput.error());
     }
-
-    MediaBufferRef frameBuffer;
-    if (!frameChannel->tryPop(frameBuffer)) {
+    if (!frameInput.value()) {
         return drainFrames(context);
     }
 
+    MediaBufferRef frameBuffer = *frameInput.value();
     if (frameBuffer->isEof() || frameBuffer->isFlush()) {
         auto flushStatus = flushGraph(context);
         if (!flushStatus) {
