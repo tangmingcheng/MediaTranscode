@@ -28,23 +28,24 @@ std::string optionValue(const MediaNodeOptions* options, const std::string& key,
     return options ? options->value(key, std::move(fallback)) : std::move(fallback);
 }
 
-std::optional<int> intOption(const MediaNodeOptions* options, const std::string& key)
+::media::Result<std::optional<int>> intOption(const MediaNodeOptions* options, const std::string& key)
 {
     if (!options) {
-        return std::nullopt;
+        return ::media::Result<std::optional<int>>::success(std::nullopt);
     }
     const std::string value = options->value(key);
     if (value.empty()) {
-        return std::nullopt;
+        return ::media::Result<std::optional<int>>::success(std::nullopt);
     }
     int parsed = 0;
     const char* begin = value.data();
     const char* end = value.data() + value.size();
     const auto result = std::from_chars(begin, end, parsed);
     if (result.ec != std::errc{} || result.ptr != end) {
-        return std::nullopt;
+        return ::media::Result<std::optional<int>>::failure(
+            ::media::ErrorInfo::invalidArgument("AudioCodecResolverNode invalid integer option: " + key));
     }
-    return parsed;
+    return ::media::Result<std::optional<int>>::success(parsed);
 }
 
 void setPrivateOption(AVCodecContext* context, const std::string& key, const std::string& value)
@@ -162,12 +163,15 @@ MediaNodeKind AudioCodecResolverNode::staticKind() noexcept
         return ::media::Status::success();
     }
 
-    auto input = tryPopFirstInput(context);
+    auto input = tryPopFirstInputOptional(context);
     if (!input) {
+        return ::media::Status::failure(input.error());
+    }
+    if (!input.value()) {
         return ::media::Status::success();
     }
 
-    auto* formatBuffer = dynamic_cast<FFmpegFormatContextBuffer*>(input.value().get());
+    auto* formatBuffer = dynamic_cast<FFmpegFormatContextBuffer*>(input.value()->get());
     AVFormatContext* formatContext = formatBuffer ? formatBuffer->context() : nullptr;
     if (!formatContext) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument("AudioCodecResolverNode expected format context"));
@@ -206,18 +210,22 @@ MediaNodeKind AudioCodecResolverNode::staticKind() noexcept
 ::media::Result<int> AudioCodecResolverNode::resolveSourceStreamIndex(MediaGraphExecutionContext& context,
                                                                       AVFormatContext* formatContext) const
 {
-    const auto streamIndex = intOption(nodeOptions(context), MediaTranscodeOptionKey::AudioSourceStreamIndex);
-    if (!streamIndex || *streamIndex < 0) {
+    auto streamIndexOption = intOption(nodeOptions(context), MediaTranscodeOptionKey::AudioSourceStreamIndex);
+    if (!streamIndexOption) {
+        return ::media::Result<int>::failure(streamIndexOption.error());
+    }
+    if (!streamIndexOption.value() || *streamIndexOption.value() < 0) {
         return ::media::Result<int>::failure(::media::ErrorInfo::invalidArgument("AudioCodecResolverNode requires audio source stream index"));
     }
-    if (!formatContext || *streamIndex >= static_cast<int>(formatContext->nb_streams)) {
+    const int streamIndex = *streamIndexOption.value();
+    if (!formatContext || streamIndex >= static_cast<int>(formatContext->nb_streams)) {
         return ::media::Result<int>::failure(::media::ErrorInfo::invalidArgument("AudioCodecResolverNode audio source stream index is out of range"));
     }
-    AVStream* stream = formatContext->streams[*streamIndex];
+    AVStream* stream = formatContext->streams[streamIndex];
     if (!stream || !stream->codecpar || stream->codecpar->codec_type != AVMEDIA_TYPE_AUDIO) {
         return ::media::Result<int>::failure(::media::ErrorInfo::invalidArgument("AudioCodecResolverNode source stream is not audio"));
     }
-    return ::media::Result<int>::success(*streamIndex);
+    return ::media::Result<int>::success(streamIndex);
 }
 
 ::media::Result<::media::ffmpeg::CodecContextPtr> AudioCodecResolverNode::buildDecoderContext(AVStream* stream) const
@@ -264,9 +272,13 @@ MediaNodeKind AudioCodecResolverNode::staticKind() noexcept
             ::media::ErrorInfo::allocationFailed("AudioCodecResolverNode failed to allocate encoder context"));
     }
 
+    auto requestedSampleRate = intOption(options, MediaTranscodeOptionKey::AudioSampleRate);
+    if (!requestedSampleRate) {
+        return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(requestedSampleRate.error());
+    }
     const int sourceSampleRate = decoderContext ? decoderContext->sample_rate : (stream && stream->codecpar ? stream->codecpar->sample_rate : 0);
     const int targetSampleRate = chooseSampleRate(encoder,
-                                                  intOption(options, MediaTranscodeOptionKey::AudioSampleRate).value_or(0),
+                                                  requestedSampleRate.value().value_or(0),
                                                   sourceSampleRate);
     if (targetSampleRate <= 0) {
         return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(
@@ -277,13 +289,17 @@ MediaNodeKind AudioCodecResolverNode::staticKind() noexcept
     encoderContext->sample_fmt = chooseSampleFormat(encoder, decoderContext ? decoderContext->sample_fmt : AV_SAMPLE_FMT_NONE);
     encoderContext->time_base = AVRational{ 1, targetSampleRate };
 
+    auto requestedChannels = intOption(options, MediaTranscodeOptionKey::AudioChannels);
+    if (!requestedChannels) {
+        return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(requestedChannels.error());
+    }
 #if LIBAVUTIL_VERSION_MAJOR >= 57
-    if (auto channels = intOption(options, MediaTranscodeOptionKey::AudioChannels)) {
-        if (*channels <= 0) {
+    if (requestedChannels.value()) {
+        if (*requestedChannels.value() <= 0) {
             return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(
                 ::media::ErrorInfo::invalidArgument("AudioCodecResolverNode rejects non-positive audio channel count"));
         }
-        av_channel_layout_default(&encoderContext->ch_layout, *channels);
+        av_channel_layout_default(&encoderContext->ch_layout, *requestedChannels.value());
     } else if (decoderContext && decoderContext->ch_layout.nb_channels > 0) {
         const int ret = av_channel_layout_copy(&encoderContext->ch_layout, &decoderContext->ch_layout);
         if (ret < 0) {
@@ -301,9 +317,9 @@ MediaNodeKind AudioCodecResolverNode::staticKind() noexcept
             ::media::ErrorInfo::invalidArgument("AudioCodecResolverNode requires known audio channel layout"));
     }
 #else
-    if (auto channels = intOption(options, MediaTranscodeOptionKey::AudioChannels)) {
-        encoderContext->channels = *channels;
-        encoderContext->channel_layout = av_get_default_channel_layout(*channels);
+    if (requestedChannels.value()) {
+        encoderContext->channels = *requestedChannels.value();
+        encoderContext->channel_layout = av_get_default_channel_layout(*requestedChannels.value());
     } else if (decoderContext && decoderContext->channels > 0) {
         encoderContext->channels = decoderContext->channels;
         encoderContext->channel_layout = decoderContext->channel_layout ? decoderContext->channel_layout : av_get_default_channel_layout(decoderContext->channels);
@@ -316,8 +332,12 @@ MediaNodeKind AudioCodecResolverNode::staticKind() noexcept
     }
 #endif
 
-    if (auto bitrate = intOption(options, MediaTranscodeOptionKey::AudioBitrateKbps)) {
-        auto bits = bitrateBitsFromKbps(*bitrate, "audio bitrate");
+    auto bitrate = intOption(options, MediaTranscodeOptionKey::AudioBitrateKbps);
+    if (!bitrate) {
+        return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(bitrate.error());
+    }
+    if (bitrate.value()) {
+        auto bits = bitrateBitsFromKbps(*bitrate.value(), "audio bitrate");
         if (!bits) {
             return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(bits.error());
         }
@@ -326,15 +346,24 @@ MediaNodeKind AudioCodecResolverNode::staticKind() noexcept
         encoderContext->bit_rate = stream->codecpar->bit_rate;
     }
 
-    if (auto minBitrate = intOption(options, MediaTranscodeOptionKey::AudioMinBitrateKbps)) {
-        auto bits = bitrateBitsFromKbps(*minBitrate, "audio min bitrate");
+    auto minBitrate = intOption(options, MediaTranscodeOptionKey::AudioMinBitrateKbps);
+    if (!minBitrate) {
+        return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(minBitrate.error());
+    }
+    if (minBitrate.value()) {
+        auto bits = bitrateBitsFromKbps(*minBitrate.value(), "audio min bitrate");
         if (!bits) {
             return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(bits.error());
         }
         encoderContext->rc_min_rate = bits.value();
     }
-    if (auto maxBitrate = intOption(options, MediaTranscodeOptionKey::AudioMaxBitrateKbps)) {
-        auto bits = bitrateBitsFromKbps(*maxBitrate, "audio max bitrate");
+
+    auto maxBitrate = intOption(options, MediaTranscodeOptionKey::AudioMaxBitrateKbps);
+    if (!maxBitrate) {
+        return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(maxBitrate.error());
+    }
+    if (maxBitrate.value()) {
+        auto bits = bitrateBitsFromKbps(*maxBitrate.value(), "audio max bitrate");
         if (!bits) {
             return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(bits.error());
         }
@@ -344,8 +373,13 @@ MediaNodeKind AudioCodecResolverNode::staticKind() noexcept
         return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(
             ::media::ErrorInfo::invalidArgument("AudioCodecResolverNode requires audio min bitrate <= max bitrate"));
     }
-    if (auto bufferSize = intOption(options, MediaTranscodeOptionKey::AudioBufferSizeKbits)) {
-        auto bits = bufferBitsFromKbits(*bufferSize);
+
+    auto bufferSize = intOption(options, MediaTranscodeOptionKey::AudioBufferSizeKbits);
+    if (!bufferSize) {
+        return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(bufferSize.error());
+    }
+    if (bufferSize.value()) {
+        auto bits = bufferBitsFromKbits(*bufferSize.value());
         if (!bits) {
             return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(bits.error());
         }
@@ -354,13 +388,18 @@ MediaNodeKind AudioCodecResolverNode::staticKind() noexcept
 
     setPrivateOption(encoderContext.get(), "preset", optionValue(options, MediaTranscodeOptionKey::AudioPreset));
     setPrivateOption(encoderContext.get(), "profile", optionValue(options, MediaTranscodeOptionKey::AudioProfile));
-    if (auto quality = intOption(options, MediaTranscodeOptionKey::AudioQuality)) {
-        if (*quality < 0) {
+
+    auto quality = intOption(options, MediaTranscodeOptionKey::AudioQuality);
+    if (!quality) {
+        return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(quality.error());
+    }
+    if (quality.value()) {
+        if (*quality.value() < 0) {
             return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(
                 ::media::ErrorInfo::invalidArgument("AudioCodecResolverNode rejects negative audio quality"));
         }
-        setPrivateOption(encoderContext.get(), "q", std::to_string(*quality));
-        setPrivateOption(encoderContext.get(), "quality", std::to_string(*quality));
+        setPrivateOption(encoderContext.get(), "q", std::to_string(*quality.value()));
+        setPrivateOption(encoderContext.get(), "quality", std::to_string(*quality.value()));
     }
 
     const int openRet = avcodec_open2(encoderContext.get(), encoder, nullptr);
