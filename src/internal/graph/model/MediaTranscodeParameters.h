@@ -11,6 +11,7 @@ enum class MediaRateControlMode {
     Auto,
     Cbr,
     Vbr,
+    Crf,
     Cq
 };
 
@@ -20,6 +21,7 @@ inline const char* mediaRateControlModeName(MediaRateControlMode mode) noexcept
     case MediaRateControlMode::Auto: return "auto";
     case MediaRateControlMode::Cbr: return "cbr";
     case MediaRateControlMode::Vbr: return "vbr";
+    case MediaRateControlMode::Crf: return "crf";
     case MediaRateControlMode::Cq: return "cq";
     }
     return "auto";
@@ -37,6 +39,10 @@ inline bool parseMediaRateControlMode(std::string_view text, MediaRateControlMod
     }
     if (text == "vbr") {
         mode = MediaRateControlMode::Vbr;
+        return true;
+    }
+    if (text == "crf") {
+        mode = MediaRateControlMode::Crf;
         return true;
     }
     if (text == "cq") {
