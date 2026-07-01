@@ -79,18 +79,21 @@ MediaNodeKind DemuxNode::staticKind() noexcept
 
 ::media::Status DemuxNode::bindFormatContext(MediaGraphExecutionContext& context)
 {
-    auto buffer = tryPopFirstInput(context);
-    if (!buffer) {
+    auto input = tryPopFirstInputOptional(context);
+    if (!input) {
+        return ::media::Status::failure(input.error());
+    }
+    if (!input.value()) {
         return ::media::Status::success();
     }
 
-    auto* formatBuffer = dynamic_cast<FFmpegFormatContextBuffer*>(buffer.value().get());
+    auto* formatBuffer = dynamic_cast<FFmpegFormatContextBuffer*>(input.value()->get());
     if (!formatBuffer || !formatBuffer->context()) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("DemuxNode expected FFmpegFormatContextBuffer"));
     }
 
-    m_formatContextOwner = std::move(buffer).value();
+    m_formatContextOwner = std::move(*input.value());
     m_formatContext = formatBuffer->context();
     return ::media::Status::success();
 }
