@@ -6,9 +6,6 @@ namespace media::ffmpeg::graph {
 
 class MediaPipelineGraphBuilder final {
 public:
-    static ::media::Result<MediaPipelineGraphBuildResult> buildVideoFileTranscodeGraph(
-        MediaPipelinePlan plan);
-
     static ::media::Status applyVideoPlanToGraph(MediaGraph& graph,
                                                  MediaNodeId videoDecodeNode,
                                                  MediaNodeId videoFilterNode,
