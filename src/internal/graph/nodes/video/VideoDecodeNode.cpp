@@ -52,7 +52,7 @@ MediaNodeKind VideoDecodeNode::staticKind() noexcept
         if (!drainStatus) {
             return drainStatus;
         }
-        return pushToAllOutputs(context, buffer);
+        return broadcastControlToAllOutputs(context, buffer);
     }
 
     AVPacket* packet = FFmpegPacketView::writablePacket(buffer);
