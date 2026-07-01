@@ -431,7 +431,7 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
 {
     auto buffer = popInput(context, inputPortName);
     if (!buffer) {
-        return ::media::Result<MediaBufferRef>::failure(buffer.error());
+        return ::media::Status::failure(buffer.error());
     }
 
     return emitOutput(context, outputPortName, std::move(buffer).value());
