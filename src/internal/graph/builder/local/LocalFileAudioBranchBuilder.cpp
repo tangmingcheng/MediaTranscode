@@ -1,5 +1,6 @@
 #include "internal/graph/builder/local/LocalFileAudioBranchBuilder.h"
 
+#include "internal/graph/builder/MediaPacketCopyBranchBuilder.h"
 #include "internal/graph/builder/local/LocalFilePlannerRequestBuilder.h"
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 
@@ -98,34 +99,17 @@ MediaFormatDescriptor streamIndexDescriptor(MediaStreamKind streamKind, int stre
                                            MediaNodeId mux,
                                            int streamIndex)
 {
-    const MediaGraphQueueParameters& queues = options.parameters.queues;
-    const MediaNodeId sourceConfig = graph.addNode(MediaNodeKind::AudioSourceConfig, "local.audio.source_config", "Local audio source config");
-    const MediaNodeId packetNormalize = graph.addNode(MediaNodeKind::AudioPacketNormalize, "local.audio.packet_normalize", "Local audio packet normalize");
-    auto sourceStatus = setSourceStreamOption(graph, sourceConfig, streamIndex);
-    if (!sourceStatus) return sourceStatus;
-    auto normalizeStatus = setSourceStreamOption(graph, packetNormalize, streamIndex);
-    if (!normalizeStatus) return normalizeStatus;
-
-    if (auto status = addInputPortChecked(graph, sourceConfig, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext, true, false); !status) return status;
-    if (auto status = addOutputPortChecked(graph, sourceConfig, "codec", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::CodecParameters, true, false); !status) return status;
-    if (auto status = addInputPortChecked(graph, packetNormalize, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext, true, false); !status) return status;
-    const MediaPortId audioPort = graph.addOutputPort(split, "audio", MediaStreamKind::Audio, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, false, true);
-    if (auto status = requirePort(audioPort, "split.audio"); !status) return status;
-    graph.setPortFormatDescriptor(audioPort, streamIndexDescriptor(MediaStreamKind::Audio, streamIndex));
-    if (auto status = addInputPortChecked(graph, packetNormalize, "packet", MediaStreamKind::Audio, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true); !status) return status;
-    if (auto status = addOutputPortChecked(graph, packetNormalize, "packet", MediaStreamKind::Audio, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true); !status) return status;
-
-    const std::array<std::pair<MediaEdgeId, const char*>, 5> edges {{
-        { graph.connect(fileInput, "format", sourceConfig, "format", "local.file.input.format -> local.audio.source_config.format", blockingQueuePolicy(queues.metadata)), "source_config.format" },
-        { graph.connect(sourceConfig, "codec", mux, "codec", "local.audio.source_config.codec -> local.file.mux.codec", blockingQueuePolicy(queues.metadata)), "source_config.codec" },
-        { graph.connect(fileInput, "format", packetNormalize, "format", "local.file.input.format -> local.audio.packet_normalize.format", blockingQueuePolicy(queues.metadata)), "packet_normalize.format" },
-        { graph.connect(split, "audio", packetNormalize, "packet", "local.stream.split.audio -> local.audio.packet_normalize.packet", blockingQueuePolicy(queues.packet)), "packet_normalize.packet" },
-        { graph.connect(packetNormalize, "packet", mux, "packet", "local.audio.packet_normalize.packet -> local.file.mux.packet", blockingQueuePolicy(queues.mux)), "packet_normalize.mux" },
-    }};
-    for (const auto& edge : edges) {
-        if (auto status = requireEdge(edge.first, edge.second); !status) return status;
-    }
-    return ::media::Result<void>::success();
+    MediaPacketCopyBranchOptions branchOptions;
+    branchOptions.prefix = "local.audio.copy";
+    branchOptions.streamKind = MediaStreamKind::Audio;
+    branchOptions.sourceStreamIndex = streamIndex;
+    branchOptions.formatSourceNode = fileInput;
+    branchOptions.formatSourcePort = "format";
+    branchOptions.packetSourceNode = split;
+    branchOptions.packetSourcePort = "audio";
+    branchOptions.muxNode = mux;
+    branchOptions.queues = options.parameters.queues;
+    return MediaPacketCopyBranchBuilder::build(graph, branchOptions);
 }
 
 ::media::Result<void> buildAudioEncodeBranch(MediaGraph& graph,
