@@ -4,6 +4,7 @@
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 
 #include <array>
+#include <initializer_list>
 #include <string>
 #include <utility>
 
@@ -79,12 +80,8 @@ void applyAudioOptions(MediaGraph& graph, MediaNodeId nodeId, const MediaAudioTr
                                            int streamIndex)
 {
     const MediaGraphQueueParameters& queues = options.parameters.queues;
-    const MediaNodeId sourceConfig = graph.addNode(MediaNodeKind::AudioSourceConfig,
-                                                   "local.audio.source_config",
-                                                   "Local audio source config");
-    const MediaNodeId packetNormalize = graph.addNode(MediaNodeKind::AudioPacketNormalize,
-                                                      "local.audio.packet_normalize",
-                                                      "Local audio packet normalize");
+    const MediaNodeId sourceConfig = graph.addNode(MediaNodeKind::AudioSourceConfig, "local.audio.source_config", "Local audio source config");
+    const MediaNodeId packetNormalize = graph.addNode(MediaNodeKind::AudioPacketNormalize, "local.audio.packet_normalize", "Local audio packet normalize");
     auto sourceStatus = setSourceStreamOption(graph, sourceConfig, streamIndex);
     if (!sourceStatus) return sourceStatus;
     auto normalizeStatus = setSourceStreamOption(graph, packetNormalize, streamIndex);
@@ -147,14 +144,14 @@ void applyAudioOptions(MediaGraph& graph, MediaNodeId nodeId, const MediaAudioTr
 
     graph.addInputPort(decode, "codec", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false);
     graph.addInputPort(decode, "packet", MediaStreamKind::Audio, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true);
-    graph.addOutputPort(decode, "frame", MediaStreamKind::Audio, MediaEdgeKind::DecodedFrame, MediaPayloadKind::Frame, true, true);
+    graph.addOutputPort(decode, "frame", MediaStreamKind::Audio, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true);
 
     graph.addInputPort(resample, "codec", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false);
-    graph.addInputPort(resample, "frame", MediaStreamKind::Audio, MediaEdgeKind::DecodedFrame, MediaPayloadKind::Frame, true, true);
-    graph.addOutputPort(resample, "frame", MediaStreamKind::Audio, MediaEdgeKind::FilteredFrame, MediaPayloadKind::Frame, true, true);
+    graph.addInputPort(resample, "frame", MediaStreamKind::Audio, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true);
+    graph.addOutputPort(resample, "frame", MediaStreamKind::Audio, MediaEdgeKind::SoftwareFrame, MediaPayloadKind::Frame, true, true);
 
     graph.addInputPort(encode, "codec", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false);
-    graph.addInputPort(encode, "frame", MediaStreamKind::Audio, MediaEdgeKind::FilteredFrame, MediaPayloadKind::Frame, true, true);
+    graph.addInputPort(encode, "frame", MediaStreamKind::Audio, MediaEdgeKind::SoftwareFrame, MediaPayloadKind::Frame, true, true);
     graph.addOutputPort(encode, "codec", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false);
     graph.addOutputPort(encode, "packet", MediaStreamKind::Audio, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
 
