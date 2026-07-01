@@ -84,18 +84,21 @@ MediaNodeKind AudioSourceConfigNode::staticKind() noexcept
 
 ::media::Status AudioSourceConfigNode::bindFormatContext(MediaGraphExecutionContext& context)
 {
-    auto input = tryPopFirstInput(context);
+    auto input = tryPopFirstInputOptional(context);
     if (!input) {
+        return ::media::Status::failure(input.error());
+    }
+    if (!input.value()) {
         return ::media::Status::success();
     }
 
-    auto* formatBuffer = dynamic_cast<FFmpegFormatContextBuffer*>(input.value().get());
+    auto* formatBuffer = dynamic_cast<FFmpegFormatContextBuffer*>(input.value()->get());
     if (!formatBuffer || !formatBuffer->context()) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("AudioSourceConfigNode expected FFmpegFormatContextBuffer"));
     }
 
-    m_formatContextOwner = std::move(input).value();
+    m_formatContextOwner = std::move(*input.value());
     m_formatContext = formatBuffer->context();
     audioSourceConfigLog(MediaGraphDiagnosticLevel::State, "bind_format_context");
     return ::media::Status::success();
