@@ -12,55 +12,71 @@ const char* boolOption(bool value) noexcept
     return value ? "1" : "0";
 }
 
-void setStageOptions(MediaGraph& graph,
-                     MediaNodeId nodeId,
-                     const std::string& prefix,
-                     const MediaPipelineStagePlan& stage)
+::media::Status setNodeOptionChecked(MediaGraph& graph,
+                                      MediaNodeId nodeId,
+                                      const std::string& key,
+                                      const std::string& value)
 {
-    graph.setNodeOption(nodeId, prefix + ".component", stage.componentName);
-    graph.setNodeOption(nodeId, prefix + ".codec", stage.codecName);
-    graph.setNodeOption(nodeId, prefix + ".ffmpeg", stage.ffmpegName);
-    graph.setNodeOption(nodeId, prefix + ".filter", stage.filterName);
-    graph.setNodeOption(nodeId, prefix + ".hwaccel", stage.hwaccelName);
-    graph.setNodeOption(nodeId, prefix + ".device", mediaHardwareDeviceKindName(stage.deviceKind));
-    graph.setNodeOption(nodeId, prefix + ".frame_kind", mediaHardwareFrameKindName(stage.frameKind));
-    graph.setNodeOption(nodeId, prefix + ".pixel_format", stage.pixelFormat);
-    graph.setNodeOption(nodeId, prefix + ".hw_frames_format", stage.hardwareFramesFormat);
-    graph.setNodeOption(nodeId, prefix + ".surface_pixel_format", stage.surfacePixelFormat);
-    graph.setNodeOption(nodeId, prefix + ".hardware", boolOption(stage.hardware));
-    graph.setNodeOption(nodeId, prefix + ".zero_copy", boolOption(stage.zeroCopy));
-    graph.setNodeOption(nodeId, prefix + ".score", std::to_string(stage.score));
+    if (!graph.setNodeOption(nodeId, key, value)) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::internalError("LocalFilePlannerOptionBridge failed to set option: " + key));
+    }
+    return ::media::Status::success();
 }
 
-void setChainOptions(MediaGraph& graph,
-                     MediaNodeId nodeId,
-                     const MediaPipelineChainPlan& chain)
+::media::Status setStageOptions(MediaGraph& graph,
+                                MediaNodeId nodeId,
+                                const std::string& prefix,
+                                const MediaPipelineStagePlan& stage)
 {
-    graph.setNodeOption(nodeId, "pipeline.chain", chain.label);
-    graph.setNodeOption(nodeId, "pipeline.score", std::to_string(chain.score));
-    graph.setNodeOption(nodeId, "pipeline.zero_copy", boolOption(chain.zeroCopy));
-    graph.setNodeOption(nodeId, "pipeline.all_hardware", boolOption(chain.allHardware));
-    graph.setNodeOption(nodeId, "pipeline.same_hardware_device", boolOption(chain.sameHardwareDevice));
-    graph.setNodeOption(nodeId, "pipeline.reason", chain.reason);
+    if (auto status = setNodeOptionChecked(graph, nodeId, prefix + ".component", stage.componentName); !status) return status;
+    if (auto status = setNodeOptionChecked(graph, nodeId, prefix + ".codec", stage.codecName); !status) return status;
+    if (auto status = setNodeOptionChecked(graph, nodeId, prefix + ".ffmpeg", stage.ffmpegName); !status) return status;
+    if (auto status = setNodeOptionChecked(graph, nodeId, prefix + ".filter", stage.filterName); !status) return status;
+    if (auto status = setNodeOptionChecked(graph, nodeId, prefix + ".hwaccel", stage.hwaccelName); !status) return status;
+    if (auto status = setNodeOptionChecked(graph, nodeId, prefix + ".device", mediaHardwareDeviceKindName(stage.deviceKind)); !status) return status;
+    if (auto status = setNodeOptionChecked(graph, nodeId, prefix + ".frame_kind", mediaHardwareFrameKindName(stage.frameKind)); !status) return status;
+    if (auto status = setNodeOptionChecked(graph, nodeId, prefix + ".pixel_format", stage.pixelFormat); !status) return status;
+    if (auto status = setNodeOptionChecked(graph, nodeId, prefix + ".hw_frames_format", stage.hardwareFramesFormat); !status) return status;
+    if (auto status = setNodeOptionChecked(graph, nodeId, prefix + ".surface_pixel_format", stage.surfacePixelFormat); !status) return status;
+    if (auto status = setNodeOptionChecked(graph, nodeId, prefix + ".hardware", boolOption(stage.hardware)); !status) return status;
+    if (auto status = setNodeOptionChecked(graph, nodeId, prefix + ".zero_copy", boolOption(stage.zeroCopy)); !status) return status;
+    if (auto status = setNodeOptionChecked(graph, nodeId, prefix + ".score", std::to_string(stage.score)); !status) return status;
+    return ::media::Status::success();
 }
 
-void setFullPlanOptions(MediaGraph& graph,
-                        MediaNodeId nodeId,
-                        const MediaPipelineChainPlan& chain)
+::media::Status setChainOptions(MediaGraph& graph,
+                                MediaNodeId nodeId,
+                                const MediaPipelineChainPlan& chain)
 {
-    setChainOptions(graph, nodeId, chain);
-    setStageOptions(graph, nodeId, "decoder.pipeline", chain.decoder);
-    setStageOptions(graph, nodeId, "filter.pipeline", chain.filter);
-    setStageOptions(graph, nodeId, "encoder.pipeline", chain.encoder);
+    if (auto status = setNodeOptionChecked(graph, nodeId, "pipeline.chain", chain.label); !status) return status;
+    if (auto status = setNodeOptionChecked(graph, nodeId, "pipeline.score", std::to_string(chain.score)); !status) return status;
+    if (auto status = setNodeOptionChecked(graph, nodeId, "pipeline.zero_copy", boolOption(chain.zeroCopy)); !status) return status;
+    if (auto status = setNodeOptionChecked(graph, nodeId, "pipeline.all_hardware", boolOption(chain.allHardware)); !status) return status;
+    if (auto status = setNodeOptionChecked(graph, nodeId, "pipeline.same_hardware_device", boolOption(chain.sameHardwareDevice)); !status) return status;
+    if (auto status = setNodeOptionChecked(graph, nodeId, "pipeline.reason", chain.reason); !status) return status;
+    return ::media::Status::success();
 }
 
-void setCodecResolverEncoderFormatOptions(MediaGraph& graph,
-                                          MediaNodeId codecResolver,
-                                          const MediaPipelineStagePlan& encoder)
+::media::Status setFullPlanOptions(MediaGraph& graph,
+                                   MediaNodeId nodeId,
+                                   const MediaPipelineChainPlan& chain)
 {
-    graph.setNodeOption(codecResolver, "encoder.pixel_format", encoder.pixelFormat);
-    graph.setNodeOption(codecResolver, "encoder.hw_frames_format", encoder.hardwareFramesFormat);
-    graph.setNodeOption(codecResolver, "encoder.surface_pixel_format", encoder.surfacePixelFormat);
+    if (auto status = setChainOptions(graph, nodeId, chain); !status) return status;
+    if (auto status = setStageOptions(graph, nodeId, "decoder.pipeline", chain.decoder); !status) return status;
+    if (auto status = setStageOptions(graph, nodeId, "filter.pipeline", chain.filter); !status) return status;
+    if (auto status = setStageOptions(graph, nodeId, "encoder.pipeline", chain.encoder); !status) return status;
+    return ::media::Status::success();
+}
+
+::media::Status setCodecResolverEncoderFormatOptions(MediaGraph& graph,
+                                                     MediaNodeId codecResolver,
+                                                     const MediaPipelineStagePlan& encoder)
+{
+    if (auto status = setNodeOptionChecked(graph, codecResolver, "encoder.pixel_format", encoder.pixelFormat); !status) return status;
+    if (auto status = setNodeOptionChecked(graph, codecResolver, "encoder.hw_frames_format", encoder.hardwareFramesFormat); !status) return status;
+    if (auto status = setNodeOptionChecked(graph, codecResolver, "encoder.surface_pixel_format", encoder.surfacePixelFormat); !status) return status;
+    return ::media::Status::success();
 }
 
 std::string transferDirectionForPlan(const MediaPipelineChainPlan& chain)
@@ -80,37 +96,38 @@ std::string transferDirectionForPlan(const MediaPipelineChainPlan& chain)
 
 } // namespace
 
-void applySelectedVideoPlanOptions(MediaGraph& graph,
-                                   const LocalFilePlannerNodeIds& nodes,
-                                   const MediaPipelinePlan& plan)
+::media::Status applySelectedVideoPlanOptions(MediaGraph& graph,
+                                              const LocalFilePlannerNodeIds& nodes,
+                                              const MediaPipelinePlan& plan)
 {
     const MediaPipelineChainPlan& chain = plan.selected;
 
-    setFullPlanOptions(graph, nodes.codecResolver, chain);
-    setFullPlanOptions(graph, nodes.videoDecode, chain);
-    setFullPlanOptions(graph, nodes.hardwareTransfer, chain);
-    setFullPlanOptions(graph, nodes.videoTimestamp, chain);
-    setFullPlanOptions(graph, nodes.videoFrameRate, chain);
-    setFullPlanOptions(graph, nodes.videoFilter, chain);
-    setFullPlanOptions(graph, nodes.videoEncode, chain);
+    if (auto status = setFullPlanOptions(graph, nodes.codecResolver, chain); !status) return status;
+    if (auto status = setFullPlanOptions(graph, nodes.videoDecode, chain); !status) return status;
+    if (auto status = setFullPlanOptions(graph, nodes.hardwareTransfer, chain); !status) return status;
+    if (auto status = setFullPlanOptions(graph, nodes.videoTimestamp, chain); !status) return status;
+    if (auto status = setFullPlanOptions(graph, nodes.videoFrameRate, chain); !status) return status;
+    if (auto status = setFullPlanOptions(graph, nodes.videoFilter, chain); !status) return status;
+    if (auto status = setFullPlanOptions(graph, nodes.videoEncode, chain); !status) return status;
 
-    graph.setNodeOption(nodes.codecResolver, MediaTranscodeOptionKey::PlannedDecoder, chain.decoder.ffmpegName);
-    graph.setNodeOption(nodes.codecResolver, MediaTranscodeOptionKey::PlannedEncoder, chain.encoder.ffmpegName);
-    graph.setNodeOption(nodes.codecResolver, MediaTranscodeOptionKey::VideoCodec, plan.outputCodecName);
-    setCodecResolverEncoderFormatOptions(graph, nodes.codecResolver, chain.encoder);
+    if (auto status = setNodeOptionChecked(graph, nodes.codecResolver, MediaTranscodeOptionKey::PlannedDecoder, chain.decoder.ffmpegName); !status) return status;
+    if (auto status = setNodeOptionChecked(graph, nodes.codecResolver, MediaTranscodeOptionKey::PlannedEncoder, chain.encoder.ffmpegName); !status) return status;
+    if (auto status = setNodeOptionChecked(graph, nodes.codecResolver, MediaTranscodeOptionKey::VideoCodec, plan.outputCodecName); !status) return status;
+    if (auto status = setCodecResolverEncoderFormatOptions(graph, nodes.codecResolver, chain.encoder); !status) return status;
 
-    graph.setNodeOption(nodes.codecResolver, "pipeline.hardware", boolOption(chain.decoder.hardware));
-    graph.setNodeOption(nodes.codecResolver, "pipeline.hwaccel", chain.decoder.hwaccelName);
-    graph.setNodeOption(nodes.codecResolver, "pipeline.device", mediaHardwareDeviceKindName(chain.decoder.deviceKind));
-    graph.setNodeOption(nodes.codecResolver, "pipeline.frame_kind", mediaHardwareFrameKindName(chain.decoder.frameKind));
+    if (auto status = setNodeOptionChecked(graph, nodes.codecResolver, "pipeline.hardware", boolOption(chain.decoder.hardware)); !status) return status;
+    if (auto status = setNodeOptionChecked(graph, nodes.codecResolver, "pipeline.hwaccel", chain.decoder.hwaccelName); !status) return status;
+    if (auto status = setNodeOptionChecked(graph, nodes.codecResolver, "pipeline.device", mediaHardwareDeviceKindName(chain.decoder.deviceKind)); !status) return status;
+    if (auto status = setNodeOptionChecked(graph, nodes.codecResolver, "pipeline.frame_kind", mediaHardwareFrameKindName(chain.decoder.frameKind)); !status) return status;
 
-    graph.setNodeOption(nodes.hardwareTransfer, "transfer.direction", transferDirectionForPlan(chain));
+    if (auto status = setNodeOptionChecked(graph, nodes.hardwareTransfer, "transfer.direction", transferDirectionForPlan(chain)); !status) return status;
 
-    graph.setNodeOption(nodes.videoFilter, MediaTranscodeOptionKey::PlannedFilter, chain.filter.filterName);
-    graph.setNodeOption(nodes.videoFilter, "filter.name", chain.filter.filterName);
-    graph.setNodeOption(nodes.videoFilter, "filter.hwaccel", chain.filter.hwaccelName);
+    if (auto status = setNodeOptionChecked(graph, nodes.videoFilter, MediaTranscodeOptionKey::PlannedFilter, chain.filter.filterName); !status) return status;
+    if (auto status = setNodeOptionChecked(graph, nodes.videoFilter, "filter.name", chain.filter.filterName); !status) return status;
+    if (auto status = setNodeOptionChecked(graph, nodes.videoFilter, "filter.hwaccel", chain.filter.hwaccelName); !status) return status;
 
-    graph.setNodeOption(nodes.videoEncode, MediaTranscodeOptionKey::PlannedEncoder, chain.encoder.ffmpegName);
+    if (auto status = setNodeOptionChecked(graph, nodes.videoEncode, MediaTranscodeOptionKey::PlannedEncoder, chain.encoder.ffmpegName); !status) return status;
+    return ::media::Status::success();
 }
 
 } // namespace media::ffmpeg::graph
