@@ -17,11 +17,6 @@ enum class RouteMatchPolicy {
     AllowDrop
 };
 
-enum class ControlBroadcastPolicy {
-    ControlOnly,
-    AllowAnyBuffer
-};
-
 class FFmpegNodeRuntime : public MediaNodeRuntime {
 public:
     FFmpegNodeRuntime(MediaNodeId nodeId, MediaNodeKind kind, std::string name);
@@ -44,8 +39,7 @@ protected:
                                const std::string& portName,
                                const MediaBufferRef& buffer);
     ::media::Status pushToAllOutputs(MediaGraphExecutionContext& context,
-                                      const MediaBufferRef& buffer,
-                                      ControlBroadcastPolicy policy);
+                                      const MediaBufferRef& buffer);
     ::media::Status broadcastControlToAllOutputs(MediaGraphExecutionContext& context,
                                                   const MediaBufferRef& buffer);
     ::media::Status pushToMatchingOutputs(MediaGraphExecutionContext& context,
@@ -57,8 +51,7 @@ protected:
     ::media::Status forward(MediaGraphExecutionContext& context,
                             const std::string& inputPortName,
                             const std::string& outputPortName);
-    ::media::Status forwardFirstInputToAllOutputs(MediaGraphExecutionContext& context,
-                                                   ControlBroadcastPolicy policy = ControlBroadcastPolicy::AllowAnyBuffer);
+    ::media::Status forwardFirstInputToAllOutputs(MediaGraphExecutionContext& context);
 
     std::vector<MediaChannel*> outputChannels(MediaGraphExecutionContext& context);
 };
