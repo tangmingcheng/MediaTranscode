@@ -7,18 +7,29 @@
 namespace media::ffmpeg::graph {
 namespace {
 
-void setIfNotEmpty(MediaGraph& graph, MediaNodeId nodeId, const std::string& key, const std::string& value)
+::media::Status setNodeOptionChecked(MediaGraph& graph, MediaNodeId nodeId, const std::string& key, const std::string& value)
 {
-    if (!value.empty()) {
-        graph.setNodeOption(nodeId, key, value);
+    if (!graph.setNodeOption(nodeId, key, value)) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::internalError("LocalFileNodeOptionApplier failed to set option: " + key));
     }
+    return ::media::Status::success();
 }
 
-void setIfPresent(MediaGraph& graph, MediaNodeId nodeId, const std::string& key, const std::optional<int>& value)
+::media::Status setIfNotEmpty(MediaGraph& graph, MediaNodeId nodeId, const std::string& key, const std::string& value)
 {
-    if (value) {
-        graph.setNodeOption(nodeId, key, std::to_string(*value));
+    if (value.empty()) {
+        return ::media::Status::success();
     }
+    return setNodeOptionChecked(graph, nodeId, key, value);
+}
+
+::media::Status setIfPresent(MediaGraph& graph, MediaNodeId nodeId, const std::string& key, const std::optional<int>& value)
+{
+    if (!value) {
+        return ::media::Status::success();
+    }
+    return setNodeOptionChecked(graph, nodeId, key, std::to_string(*value));
 }
 
 ::media::Status validateOptionalNonNegative(const std::optional<int>& value, const std::string& name)
@@ -116,28 +127,44 @@ void setIfPresent(MediaGraph& graph, MediaNodeId nodeId, const std::string& key,
     return ::media::Status::success();
 }
 
-void applyUserVideoOptionsToNode(MediaGraph& graph, MediaNodeId nodeId, const MediaVideoTranscodeParameters& video)
+::media::Status applyUserVideoOptionsToNode(MediaGraph& graph, MediaNodeId nodeId, const MediaVideoTranscodeParameters& video)
 {
-    setIfNotEmpty(graph, nodeId, MediaTranscodeOptionKey::VideoCodec, video.codecName);
-    setIfNotEmpty(graph, nodeId, MediaTranscodeOptionKey::VideoEncoder, video.encoderName);
-    graph.setNodeOption(nodeId, MediaTranscodeOptionKey::VideoRateControl, mediaRateControlModeName(video.rateControl));
+    auto status = setIfNotEmpty(graph, nodeId, MediaTranscodeOptionKey::VideoCodec, video.codecName);
+    if (!status) return status;
 
-    setIfNotEmpty(graph, nodeId, MediaTranscodeOptionKey::VideoPreset, video.preset);
-    setIfNotEmpty(graph, nodeId, MediaTranscodeOptionKey::VideoProfile, video.profile);
-    setIfNotEmpty(graph, nodeId, MediaTranscodeOptionKey::VideoTune, video.tune);
-    setIfNotEmpty(graph, nodeId, MediaTranscodeOptionKey::VideoLevel, video.level);
+    status = setNodeOptionChecked(graph, nodeId, MediaTranscodeOptionKey::VideoRateControl, mediaRateControlModeName(video.rateControl));
+    if (!status) return status;
 
-    setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoWidth, video.width);
-    setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoHeight, video.height);
-    setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoFpsNum, video.frameRate.numerator);
-    setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoFpsDen, video.frameRate.denominator);
-    setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoBitrateKbps, video.bitrateKbps);
-    setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoMinBitrateKbps, video.minBitrateKbps);
-    setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoMaxBitrateKbps, video.maxBitrateKbps);
-    setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoBufferSizeKbits, video.bufferSizeKbits);
-    setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoQuality, video.quality);
-    setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoGop, video.gop);
-    setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoBFrames, video.bFrames);
+    status = setIfNotEmpty(graph, nodeId, MediaTranscodeOptionKey::VideoPreset, video.preset);
+    if (!status) return status;
+    status = setIfNotEmpty(graph, nodeId, MediaTranscodeOptionKey::VideoProfile, video.profile);
+    if (!status) return status;
+    status = setIfNotEmpty(graph, nodeId, MediaTranscodeOptionKey::VideoTune, video.tune);
+    if (!status) return status;
+    status = setIfNotEmpty(graph, nodeId, MediaTranscodeOptionKey::VideoLevel, video.level);
+    if (!status) return status;
+
+    status = setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoWidth, video.width);
+    if (!status) return status;
+    status = setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoHeight, video.height);
+    if (!status) return status;
+    status = setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoFpsNum, video.frameRate.numerator);
+    if (!status) return status;
+    status = setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoFpsDen, video.frameRate.denominator);
+    if (!status) return status;
+    status = setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoBitrateKbps, video.bitrateKbps);
+    if (!status) return status;
+    status = setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoMinBitrateKbps, video.minBitrateKbps);
+    if (!status) return status;
+    status = setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoMaxBitrateKbps, video.maxBitrateKbps);
+    if (!status) return status;
+    status = setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoBufferSizeKbits, video.bufferSizeKbits);
+    if (!status) return status;
+    status = setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoQuality, video.quality);
+    if (!status) return status;
+    status = setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoGop, video.gop);
+    if (!status) return status;
+    return setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoBFrames, video.bFrames);
 }
 
 } // namespace
@@ -162,7 +189,10 @@ void applyUserVideoOptionsToNode(MediaGraph& graph, MediaNodeId nodeId, const Me
     };
 
     for (MediaNodeId nodeId : videoOptionNodes) {
-        applyUserVideoOptionsToNode(graph, nodeId, video);
+        auto status = applyUserVideoOptionsToNode(graph, nodeId, video);
+        if (!status) {
+            return status;
+        }
     }
 
     return ::media::Status::success();
