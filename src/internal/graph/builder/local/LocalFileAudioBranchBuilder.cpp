@@ -214,7 +214,7 @@ MediaFormatDescriptor streamIndexDescriptor(MediaStreamKind streamKind, int stre
     }
 
     MediaAudioPipelinePlan plan = std::move(planResult).value();
-    if (!plan.enabled) {
+    if (!plan.enabled || plan.branchMode == MediaBranchMode::Drop) {
         if (auto status = setNodeOptionChecked(graph, mux, MediaTranscodeOptionKey::MuxExpectAudio, "0"); !status) {
             return ::media::Result<bool>::failure(status.error());
         }
@@ -224,7 +224,7 @@ MediaFormatDescriptor streamIndexDescriptor(MediaStreamKind streamKind, int stre
     if (auto muxStatus = setNodeOptionChecked(graph, mux, MediaTranscodeOptionKey::MuxExpectAudio, "1"); !muxStatus) {
         return ::media::Result<bool>::failure(muxStatus.error());
     }
-    auto status = plan.mode == MediaAudioPipelineMode::Encode
+    auto status = plan.branchMode == MediaBranchMode::TranscodeFrame
         ? buildAudioEncodeBranch(graph, options, fileInput, split, mux, plan)
         : buildAudioCopyBranch(graph, options, fileInput, split, mux, plan.sourceStreamIndex);
     if (!status) {
