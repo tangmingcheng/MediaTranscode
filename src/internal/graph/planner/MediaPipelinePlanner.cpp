@@ -210,16 +210,4 @@ const char* mediaHardwareFrameKindName(MediaHardwareFrameKind kind) noexcept
                                                             plan);
 }
 
-::media::Result<MediaPipelineGraphBuildResult> MediaPipelinePlanner::buildPlannedVideoFileTranscodeGraph(
-    const std::string& inputPath,
-    MediaPipelinePlannerOptions options)
-{
-    auto plan = planVideoTranscodeFile(inputPath, options);
-    if (!plan) {
-        return ::media::Result<MediaPipelineGraphBuildResult>::failure(plan.error());
-    }
-
-    return MediaPipelineGraphBuilder::buildVideoFileTranscodeGraph(std::move(plan).value());
-}
-
 } // namespace media::ffmpeg::graph
