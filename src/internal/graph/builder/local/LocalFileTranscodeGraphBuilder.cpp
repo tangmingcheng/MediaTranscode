@@ -82,8 +82,8 @@ MediaEdgePolicy q(std::size_t capacity)
 
     graph.setNodeOption(fileInput, "url", options.inputUrl);
     graph.setNodeOption(fileOutput, "url", options.outputUrl);
-    graph.setNodeOption(mux, "mux.expect_video", "1");
-    graph.setNodeOption(mux, "mux.expect_audio", "0");
+    graph.setNodeOption(mux, MediaTranscodeOptionKey::MuxExpectVideo, "1");
+    graph.setNodeOption(mux, MediaTranscodeOptionKey::MuxExpectAudio, "0");
     if (!options.outputFormat.empty()) {
         graph.setNodeOption(fileOutput, "format", options.outputFormat);
     }
