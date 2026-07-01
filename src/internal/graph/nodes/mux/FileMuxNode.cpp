@@ -427,7 +427,7 @@ bool FileMuxNode::expectedStreamsRegistered() const noexcept
     if (buffer->isEof() || buffer->isFlush()) {
         return broadcastControlToAllOutputs(context, buffer);
     }
-    return pushToAllOutputs(context, buffer, ControlBroadcastPolicy::AllowAnyBuffer);
+    return pushToAllOutputs(context, buffer);
 }
 
 } // namespace media::ffmpeg::graph
