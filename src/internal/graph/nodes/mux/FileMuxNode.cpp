@@ -1,5 +1,6 @@
 #include "internal/graph/nodes/mux/FileMuxNode.h"
 
+#include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/runtime/buffer/FFmpegCodecContextBuffer.h"
 #include "internal/graph/runtime/buffer/FFmpegCodecParametersBuffer.h"
 #include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
@@ -159,11 +160,11 @@ MediaNodeKind FileMuxNode::staticKind() noexcept
     if (m_expectationsBound) {
         return ::media::Status::success();
     }
-    auto video = requiredBool(nodeOptions(context), "mux.expect_video");
+    auto video = requiredBool(nodeOptions(context), MediaTranscodeOptionKey::MuxExpectVideo);
     if (!video) {
         return ::media::Status::failure(video.error());
     }
-    auto audio = requiredBool(nodeOptions(context), "mux.expect_audio");
+    auto audio = requiredBool(nodeOptions(context), MediaTranscodeOptionKey::MuxExpectAudio);
     if (!audio) {
         return ::media::Status::failure(audio.error());
     }
