@@ -6,6 +6,7 @@
 #include "internal/graph/runtime/channel/MediaChannel.h"
 #include "media_transcode/Result.h"
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -25,6 +26,7 @@ protected:
     ::media::Result<MediaBufferRef> popInput(MediaGraphExecutionContext& context,
                                              const std::string& portName);
     ::media::Result<MediaBufferRef> tryPopFirstInput(MediaGraphExecutionContext& context);
+    ::media::Result<std::optional<MediaBufferRef>> tryPopFirstInputOptional(MediaGraphExecutionContext& context);
 
     ::media::Status emitOutput(MediaGraphExecutionContext& context,
                                const std::string& portName,
