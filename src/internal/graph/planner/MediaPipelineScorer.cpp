@@ -41,9 +41,21 @@ bool containsHardwareStage(const MediaPipelineChainPlan& chain) noexcept
     return chain.decoder.hardware || chain.filter.hardware || chain.encoder.hardware;
 }
 
-int priorityTotal(const MediaPipelineChainPlan& chain) noexcept
+bool hardwareUnavailable(const MediaPipelineStagePlan& stage)
 {
-    return chain.decoder.score + chain.filter.score + chain.encoder.score;
+    return stage.hardware && !stage.available &&
+           stage.availabilityReason.find("hardware backend not found") != std::string::npos;
+}
+
+std::string stageDisplayName(const MediaPipelineStagePlan& stage)
+{
+    if (!stage.ffmpegName.empty()) {
+        return stage.ffmpegName;
+    }
+    if (!stage.filterName.empty()) {
+        return stage.filterName;
+    }
+    return stage.componentName;
 }
 
 bool preferredHardwareMatch(const MediaPipelineChainPlan& chain,
@@ -77,23 +89,6 @@ int availableStageSemanticScore(const MediaPipelineStagePlan& stage,
     }
 
     return kMixedHardwareStageScore;
-}
-
-std::string stageDisplayName(const MediaPipelineStagePlan& stage)
-{
-    if (!stage.ffmpegName.empty()) {
-        return stage.ffmpegName;
-    }
-    if (!stage.filterName.empty()) {
-        return stage.filterName;
-    }
-    return stage.componentName;
-}
-
-bool hardwareUnavailable(const MediaPipelineStagePlan& stage)
-{
-    return stage.hardware && !stage.available &&
-           stage.availabilityReason.find("hardware backend not found") != std::string::npos;
 }
 
 std::string unavailableReason(const MediaPipelineChainPlan& chain)
@@ -181,11 +176,6 @@ MediaPipelineChainPlan MediaPipelineScorer::scoreChain(MediaPipelineChainPlan ch
         return unavailableChain(std::move(chain), "hardware disabled by request");
     }
 
-    if (!options.requestedEncoderName.empty() && chain.encoder.ffmpegName != options.requestedEncoderName) {
-        return unavailableChain(std::move(chain),
-                                "encoder does not match requested encoder: " + options.requestedEncoderName);
-    }
-
     chain.available = chain.decoder.available && chain.filter.available && chain.encoder.available;
 
     if (!chain.available) {
@@ -206,6 +196,10 @@ MediaPipelineChainPlan MediaPipelineScorer::scoreChain(MediaPipelineChainPlan ch
                   availableStageSemanticScore(chain.filter, chain) +
                   availableStageSemanticScore(chain.encoder, chain);
 
+    if (preferredHardwareMatch(chain, options)) {
+        chain.score += 100;
+    }
+
     chain.reason = availableReason(chain);
     return chain;
 }
@@ -218,38 +212,8 @@ std::vector<MediaPipelineChainPlan> MediaPipelineScorer::scoreAndSortChains(
         chain = scoreChain(std::move(chain), options);
     }
 
-    std::sort(chains.begin(), chains.end(), [&](const MediaPipelineChainPlan& lhs,
-                                                const MediaPipelineChainPlan& rhs) {
-        if (lhs.available != rhs.available) {
-            return lhs.available && !rhs.available;
-        }
-        if (lhs.score != rhs.score) {
-            return lhs.score > rhs.score;
-        }
-
-        const bool lhsPreferred = preferredHardwareMatch(lhs, options);
-        const bool rhsPreferred = preferredHardwareMatch(rhs, options);
-        if (lhsPreferred != rhsPreferred) {
-            return lhsPreferred && !rhsPreferred;
-        }
-
-        if (lhs.zeroCopy != rhs.zeroCopy) {
-            return lhs.zeroCopy && !rhs.zeroCopy;
-        }
-        if (lhs.sameHardwareDevice != rhs.sameHardwareDevice) {
-            return lhs.sameHardwareDevice && !rhs.sameHardwareDevice;
-        }
-        if (lhs.allHardware != rhs.allHardware) {
-            return lhs.allHardware && !rhs.allHardware;
-        }
-
-        const int lhsPriority = priorityTotal(lhs);
-        const int rhsPriority = priorityTotal(rhs);
-        if (lhsPriority != rhsPriority) {
-            return lhsPriority > rhsPriority;
-        }
-
-        return lhs.label < rhs.label;
+    std::sort(chains.begin(), chains.end(), [](const MediaPipelineChainPlan& a, const MediaPipelineChainPlan& b) {
+        return a.score > b.score;
     });
 
     for (const MediaPipelineChainPlan& chain : chains) {
