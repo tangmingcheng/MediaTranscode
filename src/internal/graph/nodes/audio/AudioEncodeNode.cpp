@@ -25,13 +25,17 @@ MediaNodeKind AudioEncodeNode::staticKind() noexcept
 
 ::media::Status AudioEncodeNode::onProcess(MediaGraphExecutionContext& context)
 {
-    auto input = tryPopFirstInput(context);
+    auto input = tryPopFirstInputOptional(context);
     if (!input) {
+        return ::media::Status::failure(input.error());
+    }
+    if (!input.value()) {
         return ::media::Status::success();
     }
 
-    if (tryBindCodecContext(input.value())) {
-        return emitEncoderConfig(context, input.value());
+    const MediaBufferRef& buffer = *input.value();
+    if (tryBindCodecContext(buffer)) {
+        return emitEncoderConfig(context, buffer);
     }
 
     if (!hasCodecContext()) {
@@ -39,7 +43,7 @@ MediaNodeKind AudioEncodeNode::staticKind() noexcept
             ::media::ErrorInfo::notInitialized("AudioEncodeNode requires codec context before frames"));
     }
 
-    if (input.value()->isEof() || input.value()->isFlush()) {
+    if (buffer->isEof() || buffer->isFlush()) {
         const int sendRet = avcodec_send_frame(codecContext(), nullptr);
         if (sendRet < 0 && sendRet != AVERROR_EOF) {
             return FFmpegGraphError::statusFromCode(sendRet, "avcodec_send_frame(audio flush)");
@@ -48,10 +52,10 @@ MediaNodeKind AudioEncodeNode::staticKind() noexcept
         if (!drainStatus) {
             return drainStatus;
         }
-        return emitOutput(context, "packet", input.value());
+        return emitOutput(context, "packet", buffer);
     }
 
-    AVFrame* frame = FFmpegFrameView::writableFrame(input.value());
+    AVFrame* frame = FFmpegFrameView::writableFrame(buffer);
     if (!frame) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("AudioEncodeNode expected frame buffer"));
