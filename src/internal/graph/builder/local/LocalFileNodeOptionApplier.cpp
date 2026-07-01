@@ -88,7 +88,7 @@ void setIfPresent(MediaGraph& graph, MediaNodeId nodeId, const std::string& key,
         return status;
     }
 
-    status = validateOptionalNonNegative(video.bufferSizeKbits, "video buffer size");
+    status = validateOptionalPositive(video.bufferSizeKbits, "video buffer size");
     if (!status) {
         return status;
     }
