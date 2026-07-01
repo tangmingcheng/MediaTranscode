@@ -7,6 +7,7 @@
 
 #include <cstdlib>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <utility>
@@ -46,6 +47,37 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
     }
 
     av_opt_set(context->priv_data, key.c_str(), value.c_str(), 0);
+}
+
+::media::Result<int> bitsFromKbits(int kbits, const std::string& name)
+{
+    if (kbits <= 0) {
+        return ::media::Result<int>::failure(
+            ::media::ErrorInfo::invalidArgument(name + " must be positive"));
+    }
+
+    constexpr int kBitsPerKbit = 1000;
+    if (kbits > std::numeric_limits<int>::max() / kBitsPerKbit) {
+        return ::media::Result<int>::failure(
+            ::media::ErrorInfo::invalidArgument(name + " is too large"));
+    }
+
+    return ::media::Result<int>::success(kbits * kBitsPerKbit);
+}
+
+::media::Result<int> defaultBufferSizeFromRate(int64_t rateBitsPerSecond, const std::string& rcMode)
+{
+    if (rateBitsPerSecond <= 0) {
+        return ::media::Result<int>::failure(
+            ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder " + rcMode + " mode requires positive bitrate for default buffer size"));
+    }
+
+    if (rateBitsPerSecond > std::numeric_limits<int>::max() / 2) {
+        return ::media::Result<int>::failure(
+            ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder " + rcMode + " default buffer size is too large"));
+    }
+
+    return ::media::Result<int>::success(static_cast<int>(rateBitsPerSecond * 2));
 }
 
 ::media::Result<AVRational> resolveFrameRate(AVFormatContext* formatContext,
@@ -232,6 +264,14 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
             ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder requires video min bitrate <= max bitrate"));
     }
 
+    if (auto bufferSizeKbits = intOption(options, MediaTranscodeOptionKey::VideoBufferSizeKbits)) {
+        auto bufferSizeBits = bitsFromKbits(*bufferSizeKbits, "video buffer size");
+        if (!bufferSizeBits) {
+            return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(bufferSizeBits.error());
+        }
+        encoderContext->rc_buffer_size = bufferSizeBits.value();
+    }
+
     if (auto gop = intOption(options, MediaTranscodeOptionKey::VideoGop)) {
         if (*gop < 0) {
             return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
@@ -273,7 +313,13 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
         if (encoderContext->rc_max_rate <= 0) {
             encoderContext->rc_max_rate = encoderContext->bit_rate;
         }
-        encoderContext->rc_buffer_size = static_cast<int>(encoderContext->bit_rate * 2);
+        if (encoderContext->rc_buffer_size <= 0) {
+            auto defaultBufferSize = defaultBufferSizeFromRate(encoderContext->bit_rate, rcMode);
+            if (!defaultBufferSize) {
+                return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(defaultBufferSize.error());
+            }
+            encoderContext->rc_buffer_size = defaultBufferSize.value();
+        }
     } else if (rcMode == "cvbr") {
         auto bitrateStatus = requireBitrate(encoderContext.get(), rcMode);
         if (!bitrateStatus) {
@@ -283,9 +329,19 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
             return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
                 ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder cvbr mode requires video max bitrate"));
         }
-        encoderContext->rc_buffer_size = static_cast<int>(encoderContext->rc_max_rate * 2);
-    } else if (rcMode == "vbr" && encoderContext->bit_rate > 0) {
-        encoderContext->rc_buffer_size = static_cast<int>(encoderContext->bit_rate * 2);
+        if (encoderContext->rc_buffer_size <= 0) {
+            auto defaultBufferSize = defaultBufferSizeFromRate(encoderContext->rc_max_rate, rcMode);
+            if (!defaultBufferSize) {
+                return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(defaultBufferSize.error());
+            }
+            encoderContext->rc_buffer_size = defaultBufferSize.value();
+        }
+    } else if (rcMode == "vbr" && encoderContext->bit_rate > 0 && encoderContext->rc_buffer_size <= 0) {
+        auto defaultBufferSize = defaultBufferSizeFromRate(encoderContext->bit_rate, rcMode);
+        if (!defaultBufferSize) {
+            return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(defaultBufferSize.error());
+        }
+        encoderContext->rc_buffer_size = defaultBufferSize.value();
     }
 
     setPrivateOption(encoderContext.get(), "preset", optionValue(options, MediaTranscodeOptionKey::VideoPreset));
