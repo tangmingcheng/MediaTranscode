@@ -28,17 +28,24 @@ std::string lowerCopy(std::string value)
     return value;
 }
 
-bool sameHardwareDevice(const MediaPipelineChainPlan& chain) noexcept
+bool sameHardwareDevice(const MediaPipelineChainPlan& chain, const MediaPipelinePlannerOptions& options) noexcept
 {
-    return chain.decoder.deviceKind == chain.filter.deviceKind &&
-           chain.filter.deviceKind == chain.encoder.deviceKind &&
+    if (options.filterRequired) {
+        return chain.decoder.deviceKind == chain.filter.deviceKind &&
+               chain.filter.deviceKind == chain.encoder.deviceKind &&
+               chain.decoder.deviceKind != MediaHardwareDeviceKind::None &&
+               chain.decoder.deviceKind != MediaHardwareDeviceKind::Unknown;
+    }
+
+    return chain.decoder.deviceKind == chain.encoder.deviceKind &&
            chain.decoder.deviceKind != MediaHardwareDeviceKind::None &&
            chain.decoder.deviceKind != MediaHardwareDeviceKind::Unknown;
 }
 
-bool containsHardwareStage(const MediaPipelineChainPlan& chain) noexcept
+bool containsHardwareStage(const MediaPipelineChainPlan& chain, const MediaPipelinePlannerOptions& options) noexcept
 {
-    return chain.decoder.hardware || chain.filter.hardware || chain.encoder.hardware;
+    return chain.decoder.hardware || chain.encoder.hardware ||
+           (options.filterRequired && chain.filter.hardware);
 }
 
 bool hardwareUnavailable(const MediaPipelineStagePlan& stage)
@@ -91,7 +98,8 @@ int availableStageSemanticScore(const MediaPipelineStagePlan& stage,
     return kMixedHardwareStageScore;
 }
 
-std::string unavailableReason(const MediaPipelineChainPlan& chain)
+std::string unavailableReason(const MediaPipelineChainPlan& chain,
+                              const MediaPipelinePlannerOptions& options)
 {
     std::ostringstream out;
     out << "unavailable chain; score=0";
@@ -112,26 +120,34 @@ std::string unavailableReason(const MediaPipelineChainPlan& chain)
     };
 
     appendStage(chain.decoder);
-    appendStage(chain.filter);
+    if (options.filterRequired) {
+        appendStage(chain.filter);
+    }
     appendStage(chain.encoder);
     return out.str();
 }
 
-std::string availableReason(const MediaPipelineChainPlan& chain)
+std::string availableReason(const MediaPipelineChainPlan& chain,
+                            const MediaPipelinePlannerOptions& options)
 {
+    const char* scoreText = options.filterRequired ? "1000+1000+1000" : "1000+1000";
+    const char* sameDeviceScoreText = options.filterRequired ? "900+900+900" : "900+900";
+    const char* transferScoreText = options.filterRequired ? "800+800+800" : "800+800";
+    const char* softwareScoreText = options.filterRequired ? "300+300+300" : "300+300";
+
     if (chain.allHardware && chain.sameHardwareDevice && chain.zeroCopy) {
-        return "full hardware zero-copy chain; score=1000+1000+1000";
+        return std::string("full hardware zero-copy chain; score=") + scoreText;
     }
     if (chain.allHardware && chain.sameHardwareDevice) {
-        return "full hardware same-device chain; score=900+900+900";
+        return std::string("full hardware same-device chain; score=") + sameDeviceScoreText;
     }
     if (chain.allHardware) {
-        return "full hardware chain with transfer risk; score=800+800+800";
+        return std::string("full hardware chain with transfer risk; score=") + transferScoreText;
     }
-    if (chain.decoder.hardware || chain.filter.hardware || chain.encoder.hardware) {
-        return "mixed hardware/software chain";
+    if (chain.decoder.hardware || chain.encoder.hardware || (options.filterRequired && chain.filter.hardware)) {
+        return options.filterRequired ? "mixed hardware/software chain" : "mixed hardware/software chain; filter stage not required";
     }
-    return "software fallback chain; score=300+300+300";
+    return std::string("software fallback chain; score=") + softwareScoreText;
 }
 
 void logCandidate(const MediaPipelinePlannerOptions& options,
@@ -143,9 +159,13 @@ void logCandidate(const MediaPipelinePlannerOptions& options,
         << " status=" << (chain.available ? "available" : "unavailable");
 
     if (chain.available) {
-        out << " decoder=" << stageDisplayName(chain.decoder)
-            << " filter=" << stageDisplayName(chain.filter)
-            << " encoder=" << stageDisplayName(chain.encoder)
+        out << " decoder=" << stageDisplayName(chain.decoder);
+        if (options.filterRequired) {
+            out << " filter=" << stageDisplayName(chain.filter);
+        } else {
+            out << " filter=not_required";
+        }
+        out << " encoder=" << stageDisplayName(chain.encoder)
             << " zero_copy=" << (chain.zeroCopy ? "true" : "false");
     } else {
         out << " reason=\"" << chain.reason << "\"";
@@ -172,35 +192,40 @@ MediaPipelineChainPlan unavailableChain(MediaPipelineChainPlan chain, std::strin
 MediaPipelineChainPlan MediaPipelineScorer::scoreChain(MediaPipelineChainPlan chain,
                                                        const MediaPipelinePlannerOptions& options)
 {
-    if (!options.preferGpu && containsHardwareStage(chain)) {
+    if (!options.preferGpu && containsHardwareStage(chain, options)) {
         return unavailableChain(std::move(chain), "hardware disabled by request");
     }
 
-    chain.available = chain.decoder.available && chain.filter.available && chain.encoder.available;
+    chain.available = chain.decoder.available && chain.encoder.available &&
+                      (!options.filterRequired || chain.filter.available);
 
     if (!chain.available) {
         chain.allHardware = false;
         chain.sameHardwareDevice = false;
         chain.zeroCopy = false;
         chain.score = kUnavailableScore;
-        chain.reason = unavailableReason(chain);
+        chain.reason = unavailableReason(chain, options);
         return chain;
     }
 
-    chain.allHardware = chain.decoder.hardware && chain.filter.hardware && chain.encoder.hardware;
-    chain.sameHardwareDevice = chain.allHardware && sameHardwareDevice(chain);
+    chain.allHardware = chain.decoder.hardware && chain.encoder.hardware &&
+                        (!options.filterRequired || chain.filter.hardware);
+    chain.sameHardwareDevice = chain.allHardware && sameHardwareDevice(chain, options);
     chain.zeroCopy = chain.sameHardwareDevice &&
-                     chain.decoder.zeroCopy && chain.filter.zeroCopy && chain.encoder.zeroCopy;
+                     chain.decoder.zeroCopy && chain.encoder.zeroCopy &&
+                     (!options.filterRequired || chain.filter.zeroCopy);
 
     chain.score = availableStageSemanticScore(chain.decoder, chain) +
-                  availableStageSemanticScore(chain.filter, chain) +
                   availableStageSemanticScore(chain.encoder, chain);
+    if (options.filterRequired) {
+        chain.score += availableStageSemanticScore(chain.filter, chain);
+    }
 
     if (preferredHardwareMatch(chain, options)) {
         chain.score += 100;
     }
 
-    chain.reason = availableReason(chain);
+    chain.reason = availableReason(chain, options);
     return chain;
 }
 
