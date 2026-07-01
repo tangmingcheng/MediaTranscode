@@ -60,7 +60,9 @@ enum class MediaNodeKind {
 
     /* New node kinds must only append values. Never insert in the middle. */
     AudioSourceConfig = 36,
-    AudioCodecResolver = 37
+    AudioCodecResolver = 37,
+    PacketSourceConfig = 38,
+    PacketNormalize = 39
 };
 
 } // namespace media::ffmpeg::graph
