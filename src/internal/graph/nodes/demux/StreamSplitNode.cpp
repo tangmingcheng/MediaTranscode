@@ -16,19 +16,23 @@ MediaNodeKind StreamSplitNode::staticKind() noexcept
 
 ::media::Status StreamSplitNode::onProcess(MediaGraphExecutionContext& context)
 {
-    auto buffer = tryPopFirstInput(context);
-    if (!buffer) {
+    auto input = tryPopFirstInputOptional(context);
+    if (!input) {
+        return ::media::Status::failure(input.error());
+    }
+    if (!input.value()) {
         return ::media::Status::success();
     }
 
-    const AVPacket* packet = FFmpegPacketView::packet(buffer.value());
+    const MediaBufferRef& buffer = *input.value();
+    const AVPacket* packet = FFmpegPacketView::packet(buffer);
     if (!packet) {
-        return pushToAllOutputs(context, buffer.value());
+        return pushToAllOutputs(context, buffer);
     }
 
     return pushToMatchingOutputs(context,
-                                 buffer.value(),
-                                 buffer.value()->streamKind(),
+                                 buffer,
+                                 buffer->streamKind(),
                                  packet->stream_index);
 }
 
