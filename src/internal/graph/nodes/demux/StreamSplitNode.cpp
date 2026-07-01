@@ -27,13 +27,14 @@ MediaNodeKind StreamSplitNode::staticKind() noexcept
     const MediaBufferRef& buffer = *input.value();
     const AVPacket* packet = FFmpegPacketView::packet(buffer);
     if (!packet) {
-        return pushToAllOutputs(context, buffer);
+        return broadcastControlToAllOutputs(context, buffer);
     }
 
     return pushToMatchingOutputs(context,
                                  buffer,
                                  buffer->streamKind(),
-                                 packet->stream_index);
+                                 packet->stream_index,
+                                 RouteMatchPolicy::AllowDrop);
 }
 
 } // namespace media::ffmpeg::graph
