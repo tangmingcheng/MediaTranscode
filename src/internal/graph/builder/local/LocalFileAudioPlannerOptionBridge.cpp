@@ -57,9 +57,7 @@ namespace {
 
     MediaAudioPipelinePlannerOptions plannerOptions;
     plannerOptions.includeAudio = parameters.execution.includeAudio;
-    plannerOptions.transformRequested = audio.transcode;
     plannerOptions.requestedCodecName = audio.codecName;
-    plannerOptions.requestedEncoderName = audio.encoderName;
     plannerOptions.rateControl = audio.rateControl;
     plannerOptions.requestedBitrateKbps = audio.bitrateKbps;
     plannerOptions.requestedMinBitrateKbps = audio.minBitrateKbps;
