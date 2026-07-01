@@ -29,6 +29,31 @@ bool isBypassControlBuffer(const MediaChannel& channel, const MediaBufferRef& bu
         (buffer->isEof() || buffer->isFlush());
 }
 
+bool isControlBroadcastBuffer(const MediaBufferRef& buffer) noexcept
+{
+    return buffer &&
+        buffer->streamKind() == MediaStreamKind::Control &&
+        buffer->payloadKind() == MediaPayloadKind::ControlSignal;
+}
+
+::media::Status validateControlBroadcastPolicy(const MediaBufferRef& buffer,
+                                               ControlBroadcastPolicy policy,
+                                               const char* action)
+{
+    if (policy == ControlBroadcastPolicy::AllowAnyBuffer) {
+        return ::media::Status::success();
+    }
+
+    if (isControlBroadcastBuffer(buffer)) {
+        return ::media::Status::success();
+    }
+
+    std::ostringstream out;
+    out << action << " failed: non-control buffer requires explicit AllowAnyBuffer policy "
+        << mediaGraphDiagnosticDescribeBuffer(buffer);
+    return ::media::Status::failure(::media::ErrorInfo::invalidArgument(out.str()));
+}
+
 ::media::Status validateChannelBufferType(const MediaChannel& channel,
                                           const MediaBufferRef& buffer,
                                           const char* action)
@@ -138,7 +163,7 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
     MediaChannel* channel = context.findInputChannel(nodeId(), portName);
     if (!channel) {
         return ::media::Result<MediaBufferRef>::failure(
-            ::media::ErrorInfo::notInitialized("FFmpegNodeRuntime popInput failed: input channel not found"));
+            ::media::ErrorInfo::notInitialized("FFmpegNodeRuntime popInput failed: input channel not found: " + portName));
     }
 
     MediaBufferRef buffer;
@@ -204,6 +229,36 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
     return ::media::Result<std::optional<MediaBufferRef>>::success(std::nullopt);
 }
 
+::media::Result<std::optional<MediaBufferRef>> FFmpegNodeRuntime::tryPopInputOptional(MediaGraphExecutionContext& context,
+                                                                                       const std::string& portName)
+{
+    MediaChannel* channel = context.findInputChannel(nodeId(), portName);
+    if (!channel) {
+        return ::media::Result<std::optional<MediaBufferRef>>::failure(
+            ::media::ErrorInfo::notInitialized("FFmpegNodeRuntime tryPopInputOptional failed: input channel not found: " + portName));
+    }
+
+    MediaBufferRef buffer;
+    if (!channel->tryPop(buffer)) {
+        return ::media::Result<std::optional<MediaBufferRef>>::success(std::nullopt);
+    }
+
+    auto typeStatus = validateChannelBufferType(*channel, buffer, "tryPopInputOptional");
+    if (!typeStatus) {
+        return ::media::Result<std::optional<MediaBufferRef>>::failure(typeStatus.error());
+    }
+
+    logEdgeTransfer(context,
+                    MediaGraphDiagnosticPhase::RuntimeEdge,
+                    "try_pop",
+                    nodeId(),
+                    name(),
+                    *channel,
+                    buffer);
+
+    return ::media::Result<std::optional<MediaBufferRef>>::success(std::move(buffer));
+}
+
 ::media::Status FFmpegNodeRuntime::emitOutput(MediaGraphExecutionContext& context,
                                                const std::string& portName,
                                                const MediaBufferRef& buffer)
@@ -255,11 +310,17 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
 }
 
 ::media::Status FFmpegNodeRuntime::pushToAllOutputs(MediaGraphExecutionContext& context,
-                                                      const MediaBufferRef& buffer)
+                                                     const MediaBufferRef& buffer,
+                                                     ControlBroadcastPolicy policy)
 {
     if (!buffer) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("FFmpegNodeRuntime pushToAllOutputs failed: buffer is null"));
+    }
+
+    auto policyStatus = validateControlBroadcastPolicy(buffer, policy, "pushToAllOutputs");
+    if (!policyStatus) {
+        return policyStatus;
     }
 
     bool pushed = false;
@@ -296,10 +357,17 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
     return ::media::Status::success();
 }
 
+::media::Status FFmpegNodeRuntime::broadcastControlToAllOutputs(MediaGraphExecutionContext& context,
+                                                                 const MediaBufferRef& buffer)
+{
+    return pushToAllOutputs(context, buffer, ControlBroadcastPolicy::ControlOnly);
+}
+
 ::media::Status FFmpegNodeRuntime::pushToMatchingOutputs(MediaGraphExecutionContext& context,
                                                           const MediaBufferRef& buffer,
                                                           MediaStreamKind streamKind,
-                                                          int streamIndex)
+                                                          int streamIndex,
+                                                          RouteMatchPolicy policy)
 {
     if (!buffer) {
         return ::media::Status::failure(
@@ -345,7 +413,16 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
         }
     }
 
-    return pushed ? ::media::Status::success() : ::media::Status::success();
+    if (pushed || policy == RouteMatchPolicy::AllowDrop) {
+        return ::media::Status::success();
+    }
+
+    std::ostringstream out;
+    out << "FFmpegNodeRuntime pushToMatchingOutputs failed: no matching output channel stream="
+        << mediaGraphDiagnosticStreamKindName(streamKind)
+        << " stream_index=" << streamIndex
+        << " " << mediaGraphDiagnosticDescribeBuffer(buffer);
+    return ::media::Status::failure(::media::ErrorInfo::notInitialized(out.str()));
 }
 
 ::media::Status FFmpegNodeRuntime::forward(MediaGraphExecutionContext& context,
@@ -354,13 +431,14 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
 {
     auto buffer = popInput(context, inputPortName);
     if (!buffer) {
-        return ::media::Status::failure(buffer.error());
+        return ::media::Result<MediaBufferRef>::failure(buffer.error());
     }
 
     return emitOutput(context, outputPortName, std::move(buffer).value());
 }
 
-::media::Status FFmpegNodeRuntime::forwardFirstInputToAllOutputs(MediaGraphExecutionContext& context)
+::media::Status FFmpegNodeRuntime::forwardFirstInputToAllOutputs(MediaGraphExecutionContext& context,
+                                                                  ControlBroadcastPolicy policy)
 {
     auto buffer = tryPopFirstInputOptional(context);
     if (!buffer) {
@@ -370,7 +448,7 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
         return ::media::Status::success();
     }
 
-    return pushToAllOutputs(context, *buffer.value());
+    return pushToAllOutputs(context, *buffer.value(), policy);
 }
 
 std::vector<MediaChannel*> FFmpegNodeRuntime::outputChannels(MediaGraphExecutionContext& context)
