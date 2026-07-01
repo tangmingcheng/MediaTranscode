@@ -46,7 +46,6 @@ namespace {
     MediaPipelinePlannerOptions plannerOptions;
     plannerOptions.outputPath = options.outputUrl;
     plannerOptions.outputCodecName = video.codecName;
-    plannerOptions.requestedEncoderName = video.encoderName;
     plannerOptions.targetWidth = video.width.value_or(0);
     plannerOptions.targetHeight = video.height.value_or(0);
     plannerOptions.allowSoftwareFallback = parameters.execution.disableHardware;
