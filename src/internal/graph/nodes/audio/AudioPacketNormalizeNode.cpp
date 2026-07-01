@@ -1,6 +1,7 @@
 #include "internal/graph/nodes/audio/AudioPacketNormalizeNode.h"
 
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
+#include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
 #include "internal/graph/runtime/channel/MediaChannel.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
@@ -18,8 +19,6 @@ extern "C" {
 namespace media::ffmpeg::graph {
 namespace {
 
-constexpr const char* kAudioSourceStreamIndexOption = "audio.source_stream_index";
-
 void audioPacketNormalizeLog(MediaGraphDiagnosticLevel level, const std::string& message)
 {
     mediaGraphDiagnosticLog(level,
@@ -29,12 +28,12 @@ void audioPacketNormalizeLog(MediaGraphDiagnosticLevel level, const std::string&
 
 ::media::Result<int> parseRequiredSourceStreamIndex(const MediaNodeOptions* options)
 {
-    if (!options || !options->has(kAudioSourceStreamIndexOption)) {
+    if (!options || !options->has(MediaTranscodeOptionKey::AudioSourceStreamIndex)) {
         return ::media::Result<int>::failure(
             ::media::ErrorInfo::invalidArgument("AudioPacketNormalizeNode requires planner option audio.source_stream_index"));
     }
 
-    const std::string value = options->value(kAudioSourceStreamIndexOption);
+    const std::string value = options->value(MediaTranscodeOptionKey::AudioSourceStreamIndex);
     int streamIndex = invalidMediaStreamIndex;
     const char* begin = value.data();
     const char* end = value.data() + value.size();
