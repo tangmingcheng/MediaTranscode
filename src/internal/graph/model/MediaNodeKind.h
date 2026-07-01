@@ -59,7 +59,8 @@ enum class MediaNodeKind {
     TraceProbe = 35,
 
     /* New node kinds must only append values. Never insert in the middle. */
-    AudioSourceConfig = 36
+    AudioSourceConfig = 36,
+    AudioCodecResolver = 37
 };
 
 } // namespace media::ffmpeg::graph
