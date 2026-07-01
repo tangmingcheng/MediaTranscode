@@ -27,6 +27,8 @@
 #include "internal/graph/nodes/output/FileOutputNode.h"
 #include "internal/graph/nodes/output/RtpOutputNode.h"
 #include "internal/graph/nodes/output/SdpWriterNode.h"
+#include "internal/graph/nodes/packet/PacketNormalizeNode.h"
+#include "internal/graph/nodes/packet/PacketSourceConfigNode.h"
 #include "internal/graph/nodes/route/FrameRouteNode.h"
 #include "internal/graph/nodes/split/PacketFanoutNode.h"
 #include "internal/graph/nodes/video/HardwareTransferNode.h"
@@ -86,6 +88,10 @@ namespace media::ffmpeg::graph {
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<AudioPacketNormalizeNode>(node.id));
     case MediaNodeKind::AudioPacketDrain:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<AudioPacketDrainNode>(node.id));
+    case MediaNodeKind::PacketSourceConfig:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<PacketSourceConfigNode>(node.id));
+    case MediaNodeKind::PacketNormalize:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<PacketNormalizeNode>(node.id));
     case MediaNodeKind::PacketMerge:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<PacketMergeNode>(node.id));
     case MediaNodeKind::FileMux:
@@ -145,6 +151,8 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::AudioEncode:
     case MediaNodeKind::AudioPacketNormalize:
     case MediaNodeKind::AudioPacketDrain:
+    case MediaNodeKind::PacketSourceConfig:
+    case MediaNodeKind::PacketNormalize:
     case MediaNodeKind::PacketMerge:
     case MediaNodeKind::FileMux:
     case MediaNodeKind::RtpMux:
