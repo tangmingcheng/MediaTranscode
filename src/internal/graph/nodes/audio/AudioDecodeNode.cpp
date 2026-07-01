@@ -88,6 +88,12 @@ MediaNodeKind AudioDecodeNode::staticKind() noexcept
             return ::media::Status::failure(buffer.error());
         }
 
+        if (codecContext()->pkt_timebase.num > 0 && codecContext()->pkt_timebase.den > 0) {
+            MediaTimeDescriptor timeDescriptor;
+            timeDescriptor.timeBase = MediaRational{ codecContext()->pkt_timebase.num, codecContext()->pkt_timebase.den };
+            buffer.value()->setTimeDescriptor(timeDescriptor);
+        }
+
         auto pushStatus = pushToMatchingOutputs(context, buffer.value(), MediaStreamKind::Audio);
         if (!pushStatus) {
             return pushStatus;
