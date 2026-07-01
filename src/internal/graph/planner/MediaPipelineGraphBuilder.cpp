@@ -82,6 +82,7 @@ void logBuiltGraph(const MediaPipelineGraphBuildResult& result,
     std::ostringstream out;
     out << "nodes=" << graph.nodeCount()
         << " edges=" << graph.edgeCount()
+        << " branch_mode=" << mediaBranchModeName(result.plan.branchMode)
         << " chain=" << result.plan.selected.label
         << " decoder=" << stageDisplayName(result.plan.selected.decoder)
         << " filter=" << stageDisplayName(result.plan.selected.filter)
@@ -100,6 +101,11 @@ void logBuiltGraph(const MediaPipelineGraphBuildResult& result,
                                                                  MediaNodeId videoEncodeNode,
                                                                  const MediaPipelinePlan& plan)
 {
+    if (plan.branchMode != MediaBranchMode::TranscodeFrame) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::unsupported("MediaPipelineGraphBuilder requires transcode_frame video branch"));
+    }
+
     auto decodeStatus = applyStageOptions(graph, videoDecodeNode, plan.selected.decoder, plan.selected);
     if (!decodeStatus) {
         return decodeStatus;
@@ -116,6 +122,11 @@ void logBuiltGraph(const MediaPipelineGraphBuildResult& result,
 ::media::Result<MediaPipelineGraphBuildResult> MediaPipelineGraphBuilder::buildVideoFileTranscodeGraph(
     MediaPipelinePlan plan)
 {
+    if (plan.branchMode != MediaBranchMode::TranscodeFrame) {
+        return ::media::Result<MediaPipelineGraphBuildResult>::failure(
+            ::media::ErrorInfo::unsupported("buildVideoFileTranscodeGraph requires transcode_frame video branch"));
+    }
+
     MediaPipelineGraphBuildResult result;
     result.plan = std::move(plan);
 
