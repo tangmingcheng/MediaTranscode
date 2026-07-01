@@ -50,7 +50,8 @@ void logSelectedPlan(const MediaPipelinePlannerOptions& options,
     const MediaPipelineChainPlan& selected = plan.selected;
 
     std::ostringstream out;
-    out << "selected_chain=" << selected.label
+    out << "branch_mode=" << mediaBranchModeName(plan.branchMode)
+        << " selected_chain=" << selected.label
         << " score=" << selected.score
         << " decoder=" << stageDisplayName(selected.decoder)
         << " filter=" << stageDisplayName(selected.filter)
@@ -132,21 +133,33 @@ const char* mediaHardwareFrameKindName(MediaHardwareFrameKind kind) noexcept
             ::media::ErrorInfo::invalidArgument("planVideoTranscodeFile requires input path"));
     }
 
+    MediaPipelinePlan plan;
+    plan.inputPath = inputPath;
+    plan.outputPath = std::move(options.outputPath);
+    plan.diagnosticLogEnabled = options.diagnosticLogEnabled;
+
+    if (!options.includeVideo) {
+        plan.enabled = false;
+        plan.branchMode = MediaBranchMode::Drop;
+        plan.reason = "disabled";
+        return ::media::Result<MediaPipelinePlan>::success(std::move(plan));
+    }
+
     auto inputCodec = MediaPipelineCapabilityScanner::detectInputVideoCodecName(inputPath);
     if (!inputCodec) {
         return ::media::Result<MediaPipelinePlan>::failure(inputCodec.error());
     }
 
-    MediaPipelinePlan plan;
-    plan.inputPath = inputPath;
-    plan.outputPath = std::move(options.outputPath);
+    plan.enabled = true;
+    plan.branchMode = MediaBranchMode::TranscodeFrame;
+    plan.reason = "transcode_frame";
     plan.inputCodecName = canonicalCodecName(inputCodec.value());
     plan.outputCodecName = canonicalCodecName(options.outputCodecName.empty() ? plan.inputCodecName : options.outputCodecName);
-    plan.diagnosticLogEnabled = options.diagnosticLogEnabled;
 
     {
         std::ostringstream out;
         out << "input=" << plan.inputPath
+            << " branch_mode=" << mediaBranchModeName(plan.branchMode)
             << " input_codec=" << plan.inputCodecName
             << " output_codec=" << plan.outputCodecName;
         mediaGraphDiagnosticLog(options.diagnosticLogEnabled,
@@ -185,6 +198,11 @@ const char* mediaHardwareFrameKindName(MediaHardwareFrameKind kind) noexcept
                                                             MediaNodeId videoEncodeNode,
                                                             const MediaPipelinePlan& plan)
 {
+    if (plan.branchMode != MediaBranchMode::TranscodeFrame) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::unsupported("applyVideoPlanToGraph requires transcode_frame video branch"));
+    }
+
     return MediaPipelineGraphBuilder::applyVideoPlanToGraph(graph,
                                                             videoDecodeNode,
                                                             videoFilterNode,
