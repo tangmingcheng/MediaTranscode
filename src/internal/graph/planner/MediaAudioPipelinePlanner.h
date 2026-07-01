@@ -17,9 +17,7 @@ enum class MediaAudioPipelineMode {
 
 struct MediaAudioPipelinePlannerOptions {
     bool includeAudio = true;
-    bool transformRequested = false;
     std::string requestedCodecName;
-    std::string requestedEncoderName;
     MediaRateControlMode rateControl = MediaRateControlMode::Auto;
     std::optional<int> requestedBitrateKbps;
     std::optional<int> requestedMinBitrateKbps;
