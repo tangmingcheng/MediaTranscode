@@ -61,11 +61,14 @@ MediaFormatDescriptor streamIndexDescriptor(MediaStreamKind streamKind, int stre
     return setNodeOptionChecked(graph, nodeId, MediaTranscodeOptionKey::AudioSourceStreamIndex, std::to_string(sourceStreamIndex));
 }
 
-::media::Result<void> applyAudioOptions(MediaGraph& graph, MediaNodeId nodeId, const MediaAudioTranscodeParameters& audio)
+::media::Result<void> applyAudioEncodeOptions(MediaGraph& graph,
+                                              MediaNodeId nodeId,
+                                              const MediaAudioTranscodeParameters& audio,
+                                              const MediaAudioPipelinePlan& plan)
 {
+    if (auto status = setNodeOptionChecked(graph, nodeId, MediaTranscodeOptionKey::AudioCodec, plan.targetCodecName); !status) return status;
+    if (auto status = setNodeOptionChecked(graph, nodeId, MediaTranscodeOptionKey::PlannedEncoder, plan.targetEncoderName); !status) return status;
     if (auto status = setNodeOptionChecked(graph, nodeId, MediaTranscodeOptionKey::AudioRateControl, mediaRateControlModeName(audio.rateControl)); !status) return status;
-    if (!audio.codecName.empty()) if (auto status = setNodeOptionChecked(graph, nodeId, MediaTranscodeOptionKey::AudioCodec, audio.codecName); !status) return status;
-    if (!audio.encoderName.empty()) if (auto status = setNodeOptionChecked(graph, nodeId, MediaTranscodeOptionKey::AudioEncoder, audio.encoderName); !status) return status;
     if (audio.bitrateKbps) if (auto status = setNodeOptionChecked(graph, nodeId, MediaTranscodeOptionKey::AudioBitrateKbps, std::to_string(*audio.bitrateKbps)); !status) return status;
     if (audio.minBitrateKbps) if (auto status = setNodeOptionChecked(graph, nodeId, MediaTranscodeOptionKey::AudioMinBitrateKbps, std::to_string(*audio.minBitrateKbps)); !status) return status;
     if (audio.maxBitrateKbps) if (auto status = setNodeOptionChecked(graph, nodeId, MediaTranscodeOptionKey::AudioMaxBitrateKbps, std::to_string(*audio.maxBitrateKbps)); !status) return status;
@@ -130,10 +133,11 @@ MediaFormatDescriptor streamIndexDescriptor(MediaStreamKind streamKind, int stre
                                              MediaNodeId fileInput,
                                              MediaNodeId split,
                                              MediaNodeId mux,
-                                             int streamIndex)
+                                             const MediaAudioPipelinePlan& plan)
 {
     const MediaGraphQueueParameters& queues = options.parameters.queues;
     const MediaAudioTranscodeParameters& audio = options.parameters.audio;
+    const int streamIndex = plan.sourceStreamIndex;
     const MediaNodeId packetNormalize = graph.addNode(MediaNodeKind::AudioPacketNormalize, "local.audio.packet_normalize", "Local audio packet normalize");
     const MediaNodeId codecResolver = graph.addNode(MediaNodeKind::AudioCodecResolver, "local.audio.codec_resolver", "Local audio codec resolver");
     const MediaNodeId decode = graph.addNode(MediaNodeKind::AudioDecode, "local.audio.decode", "Local audio decode");
@@ -144,7 +148,7 @@ MediaFormatDescriptor streamIndexDescriptor(MediaStreamKind streamKind, int stre
         auto status = setSourceStreamOption(graph, nodeId, streamIndex);
         if (!status) return status;
     }
-    if (auto status = applyAudioOptions(graph, codecResolver, audio); !status) return status;
+    if (auto status = applyAudioEncodeOptions(graph, codecResolver, audio, plan); !status) return status;
 
     const MediaPortId audioPort = graph.addOutputPort(split, "audio", MediaStreamKind::Audio, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, false, true);
     if (auto status = requirePort(audioPort, "split.audio"); !status) return status;
@@ -221,7 +225,7 @@ MediaFormatDescriptor streamIndexDescriptor(MediaStreamKind streamKind, int stre
         return ::media::Result<bool>::failure(muxStatus.error());
     }
     auto status = plan.mode == MediaAudioPipelineMode::Encode
-        ? buildAudioEncodeBranch(graph, options, fileInput, split, mux, plan.sourceStreamIndex)
+        ? buildAudioEncodeBranch(graph, options, fileInput, split, mux, plan)
         : buildAudioCopyBranch(graph, options, fileInput, split, mux, plan.sourceStreamIndex);
     if (!status) {
         return ::media::Result<bool>::failure(status.error());
