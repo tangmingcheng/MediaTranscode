@@ -8,7 +8,7 @@ enum class MediaNodeKind {
     /* Sources */
     FileInput = 1,
     RealtimeInput = 2,
-    RealtimePacketSource = 3,
+    ReservedRealtimePacketSource = 3,
 
     /* Container / stream selection */
     Demux = 4,
