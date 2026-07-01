@@ -1,6 +1,7 @@
 #include "internal/graph/nodes/audio/AudioCodecResolverNode.h"
 
 #include "internal/graph/model/MediaTranscodeParameters.h"
+#include "internal/graph/runtime/buffer/FFmpegCodecContextBuffer.h"
 #include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegDescriptorMapper.h"
