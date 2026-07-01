@@ -10,7 +10,8 @@ extern "C" {
 #include <libavutil/mathematics.h>
 }
 
-#include <cstdlib>
+#include <charconv>
+#include <optional>
 #include <sstream>
 #include <string>
 
@@ -32,18 +33,27 @@ MediaRational toMediaRational(AVRational rational) noexcept
     return MediaRational{ rational.num, rational.den };
 }
 
-int parseIntOption(const MediaNodeOptions* options, const std::string& key, int fallback)
+::media::Result<std::optional<int>> parseIntOption(const MediaNodeOptions* options, const std::string& key)
 {
     if (!options) {
-        return fallback;
+        return ::media::Result<std::optional<int>>::success(std::nullopt);
     }
 
     const std::string value = options->value(key);
     if (value.empty()) {
-        return fallback;
+        return ::media::Result<std::optional<int>>::success(std::nullopt);
     }
 
-    return std::atoi(value.c_str());
+    int parsed = 0;
+    const char* begin = value.data();
+    const char* end = value.data() + value.size();
+    const auto result = std::from_chars(begin, end, parsed);
+    if (result.ec != std::errc{} || result.ptr != end) {
+        return ::media::Result<std::optional<int>>::failure(
+            ::media::ErrorInfo::invalidArgument("VideoFrameRateNode invalid integer option: " + key));
+    }
+
+    return ::media::Result<std::optional<int>>::success(parsed);
 }
 
 int64_t absoluteDistance(int64_t left, int64_t right) noexcept
@@ -80,12 +90,15 @@ MediaNodeKind VideoFrameRateNode::staticKind() noexcept
 
 ::media::Status VideoFrameRateNode::onProcess(MediaGraphExecutionContext& context)
 {
-    auto input = tryPopFirstInput(context);
+    auto input = tryPopFirstInputOptional(context);
     if (!input) {
+        return ::media::Status::failure(input.error());
+    }
+    if (!input.value()) {
         return drainPending(context);
     }
 
-    MediaBufferRef buffer = input.value();
+    MediaBufferRef buffer = *input.value();
     if (buffer->isEof() || buffer->isFlush()) {
         m_flushed = true;
         auto drainStatus = drainPending(context);
@@ -120,8 +133,17 @@ MediaNodeKind VideoFrameRateNode::staticKind() noexcept
     }
 
     const MediaNodeOptions* options = nodeOptions(context);
-    const int fpsNum = parseIntOption(options, MediaTranscodeOptionKey::VideoFpsNum, 0);
-    const int fpsDen = parseIntOption(options, MediaTranscodeOptionKey::VideoFpsDen, 1);
+    auto fpsNumOption = parseIntOption(options, MediaTranscodeOptionKey::VideoFpsNum);
+    if (!fpsNumOption) {
+        return ::media::Status::failure(fpsNumOption.error());
+    }
+    auto fpsDenOption = parseIntOption(options, MediaTranscodeOptionKey::VideoFpsDen);
+    if (!fpsDenOption) {
+        return ::media::Status::failure(fpsDenOption.error());
+    }
+
+    const int fpsNum = fpsNumOption.value().value_or(0);
+    const int fpsDen = fpsDenOption.value().value_or(1);
     if (fpsNum < 0 || fpsDen <= 0) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("VideoFrameRateNode target fps is invalid"));
