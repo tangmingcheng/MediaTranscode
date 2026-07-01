@@ -8,7 +8,7 @@ enum class MediaNodeKind {
     /* Sources */
     FileInput = 1,
     RealtimeInput = 2,
-    ReservedRealtimePacketSource = 3,
+    ReservedNodeKind3 = 3,
 
     /* Container / stream selection */
     Demux = 4,
@@ -25,16 +25,16 @@ enum class MediaNodeKind {
     VideoFrameRate = 11,
     VideoFilter = 12,
     VideoEncode = 13,
-    ReservedVideoPacketDrain = 14,
+    ReservedNodeKind14 = 14,
 
     /* Audio branch */
-    ReservedAudioStrategy = 15,
-    ReservedAudioCopy = 16,
+    ReservedNodeKind15 = 15,
+    ReservedNodeKind16 = 16,
     AudioDecode = 17,
     AudioResample = 18,
     AudioEncode = 19,
-    ReservedAudioPacketNormalize = 20,
-    ReservedAudioPacketDrain = 21,
+    ReservedNodeKind20 = 20,
+    ReservedNodeKind21 = 21,
 
     /* Merge / mux */
     PacketMerge = 22,
@@ -59,7 +59,7 @@ enum class MediaNodeKind {
     TraceProbe = 35,
 
     /* New node kinds must only append values. Never insert in the middle. */
-    ReservedAudioSourceConfig = 36,
+    ReservedNodeKind36 = 36,
     AudioCodecResolver = 37,
     PacketSourceConfig = 38,
     PacketNormalize = 39
