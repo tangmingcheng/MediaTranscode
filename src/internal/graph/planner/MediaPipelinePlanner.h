@@ -77,19 +77,6 @@ struct MediaPipelinePlan {
     std::vector<MediaPipelineChainPlan> candidates;
 };
 
-struct MediaPipelineGraphBuildResult {
-    MediaGraph graph;
-    MediaPipelinePlan plan;
-    MediaNodeId fileInputNode;
-    MediaNodeId demuxNode;
-    MediaNodeId streamSplitNode;
-    MediaNodeId videoDecodeNode;
-    MediaNodeId videoFilterNode;
-    MediaNodeId videoEncodeNode;
-    MediaNodeId fileMuxNode;
-    MediaNodeId fileOutputNode;
-};
-
 const char* mediaPipelineStageRoleName(MediaPipelineStageRole role) noexcept;
 const char* mediaHardwareDeviceKindName(MediaHardwareDeviceKind kind) noexcept;
 const char* mediaHardwareFrameKindName(MediaHardwareFrameKind kind) noexcept;
@@ -97,10 +84,6 @@ const char* mediaHardwareFrameKindName(MediaHardwareFrameKind kind) noexcept;
 class MediaPipelinePlanner final {
 public:
     static ::media::Result<MediaPipelinePlan> planVideoTranscodeFile(
-        const std::string& inputPath,
-        MediaPipelinePlannerOptions options = {});
-
-    static ::media::Result<MediaPipelineGraphBuildResult> buildPlannedVideoFileTranscodeGraph(
         const std::string& inputPath,
         MediaPipelinePlannerOptions options = {});
 
