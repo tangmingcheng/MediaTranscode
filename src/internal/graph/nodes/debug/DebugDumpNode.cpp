@@ -26,7 +26,7 @@ MediaNodeKind DebugDumpNode::staticKind() noexcept
         return ::media::Status::success();
     }
 
-    return pushToAllOutputs(context, *input.value(), ControlBroadcastPolicy::AllowAnyBuffer);
+    return pushToAllOutputs(context, *input.value());
 }
 
 } // namespace media::ffmpeg::graph
