@@ -53,12 +53,12 @@ public:
 
 private:
     static MediaEdgePolicy realtimeEdgePolicy(const MediaRealtimeGraphBuilderOptions& options) noexcept;
-    static void applyRealtimeInputOptions(MediaGraph& graph,
-                                          MediaNodeId nodeId,
-                                          const MediaRealtimeGraphBuilderOptions& options);
-    static void applyRealtimeOutputOptions(MediaGraph& graph,
-                                           MediaNodeId nodeId,
-                                           const MediaRealtimeGraphBuilderOptions& options);
+    static ::media::Result<void> applyRealtimeInputOptions(MediaGraph& graph,
+                                                          MediaNodeId nodeId,
+                                                          const MediaRealtimeGraphBuilderOptions& options);
+    static ::media::Result<void> applyRealtimeOutputOptions(MediaGraph& graph,
+                                                           MediaNodeId nodeId,
+                                                           const MediaRealtimeGraphBuilderOptions& options);
 };
 
 } // namespace media::ffmpeg::graph
