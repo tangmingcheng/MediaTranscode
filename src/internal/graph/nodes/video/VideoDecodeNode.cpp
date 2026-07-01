@@ -25,12 +25,16 @@ MediaNodeKind VideoDecodeNode::staticKind() noexcept
 
 ::media::Status VideoDecodeNode::onProcess(MediaGraphExecutionContext& context)
 {
-    auto input = tryPopFirstInput(context);
+    auto input = tryPopFirstInputOptional(context);
     if (!input) {
+        return ::media::Status::failure(input.error());
+    }
+    if (!input.value()) {
         return ::media::Status::success();
     }
 
-    if (tryBindCodecContext(input.value())) {
+    const MediaBufferRef& buffer = *input.value();
+    if (tryBindCodecContext(buffer)) {
         return ::media::Status::success();
     }
 
@@ -39,7 +43,7 @@ MediaNodeKind VideoDecodeNode::staticKind() noexcept
             ::media::ErrorInfo::notInitialized("VideoDecodeNode requires codec context before packets"));
     }
 
-    if (input.value()->isEof() || input.value()->isFlush()) {
+    if (buffer->isEof() || buffer->isFlush()) {
         const int sendRet = avcodec_send_packet(codecContext(), nullptr);
         if (sendRet < 0 && sendRet != AVERROR_EOF) {
             return FFmpegGraphError::statusFromCode(sendRet, "avcodec_send_packet(flush)" );
@@ -48,10 +52,10 @@ MediaNodeKind VideoDecodeNode::staticKind() noexcept
         if (!drainStatus) {
             return drainStatus;
         }
-        return pushToAllOutputs(context, input.value());
+        return pushToAllOutputs(context, buffer);
     }
 
-    AVPacket* packet = FFmpegPacketView::writablePacket(input.value());
+    AVPacket* packet = FFmpegPacketView::writablePacket(buffer);
     if (!packet) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("VideoDecodeNode expected packet buffer"));
