@@ -22,13 +22,10 @@ const char* toString(MediaNodeKind kind)
     case MediaNodeKind::VideoFrameRate: return "VideoFrameRate";
     case MediaNodeKind::VideoFilter: return "VideoFilter";
     case MediaNodeKind::VideoEncode: return "VideoEncode";
-    case MediaNodeKind::VideoPacketDrain: return "VideoPacketDrain";
-    case MediaNodeKind::AudioStrategy: return "AudioStrategy";
     case MediaNodeKind::AudioCodecResolver: return "AudioCodecResolver";
     case MediaNodeKind::AudioDecode: return "AudioDecode";
     case MediaNodeKind::AudioResample: return "AudioResample";
     case MediaNodeKind::AudioEncode: return "AudioEncode";
-    case MediaNodeKind::AudioPacketDrain: return "AudioPacketDrain";
     case MediaNodeKind::PacketSourceConfig: return "PacketSourceConfig";
     case MediaNodeKind::PacketNormalize: return "PacketNormalize";
     case MediaNodeKind::PacketMerge: return "PacketMerge";
