@@ -31,7 +31,7 @@ MediaNodeKind AudioEncodeNode::staticKind() noexcept
     }
 
     if (tryBindCodecContext(input.value())) {
-        return ::media::Status::success();
+        return emitEncoderConfig(context, input.value());
     }
 
     if (!hasCodecContext()) {
@@ -48,7 +48,7 @@ MediaNodeKind AudioEncodeNode::staticKind() noexcept
         if (!drainStatus) {
             return drainStatus;
         }
-        return pushToAllOutputs(context, input.value());
+        return emitOutput(context, "packet", input.value());
     }
 
     AVFrame* frame = FFmpegFrameView::writableFrame(input.value());
@@ -63,6 +63,23 @@ MediaNodeKind AudioEncodeNode::staticKind() noexcept
     }
 
     return receivePackets(context);
+}
+
+::media::Status AudioEncodeNode::emitEncoderConfig(MediaGraphExecutionContext& context, const MediaBufferRef& buffer)
+{
+    if (m_encoderConfigEmitted || !buffer) {
+        return ::media::Status::success();
+    }
+    if (!context.findOutputChannel(nodeId(), "codec")) {
+        m_encoderConfigEmitted = true;
+        return ::media::Status::success();
+    }
+    auto status = emitOutput(context, "codec", buffer);
+    if (!status) {
+        return status;
+    }
+    m_encoderConfigEmitted = true;
+    return ::media::Status::success();
 }
 
 ::media::Status AudioEncodeNode::receivePackets(MediaGraphExecutionContext& context)
@@ -88,7 +105,11 @@ MediaNodeKind AudioEncodeNode::staticKind() noexcept
             return ::media::Status::failure(buffer.error());
         }
 
-        auto pushStatus = pushToMatchingOutputs(context, buffer.value(), MediaStreamKind::Audio);
+        MediaTimeDescriptor timeDescriptor;
+        timeDescriptor.timeBase = MediaRational{ codecContext()->time_base.num, codecContext()->time_base.den };
+        buffer.value()->setTimeDescriptor(timeDescriptor);
+
+        auto pushStatus = emitOutput(context, "packet", buffer.value());
         if (!pushStatus) {
             return pushStatus;
         }
