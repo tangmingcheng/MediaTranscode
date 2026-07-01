@@ -122,12 +122,6 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
         return ::media::Status::success();
     }
 
-    if (rcMode == "cq") {
-        setPrivateOption(encoderContext, "cq", value);
-        setPrivateOption(encoderContext, "global_quality", value);
-        return ::media::Status::success();
-    }
-
     if (rcMode == "auto") {
         setPrivateOption(encoderContext, "quality", value);
         setPrivateOption(encoderContext, "q", value);
@@ -135,7 +129,7 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
     }
 
     return ::media::Status::failure(
-        ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder rejects quality without crf/cq/auto rate control"));
+        ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder rejects quality without crf/auto rate control"));
 }
 
 } // namespace
