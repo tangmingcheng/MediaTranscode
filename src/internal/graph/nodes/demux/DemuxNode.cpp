@@ -106,7 +106,7 @@ MediaNodeKind DemuxNode::staticKind() noexcept
     }
 
     m_eofSent = true;
-    return pushToAllOutputs(context, eof.value());
+    return broadcastControlToAllOutputs(context, eof.value());
 }
 
 } // namespace media::ffmpeg::graph
