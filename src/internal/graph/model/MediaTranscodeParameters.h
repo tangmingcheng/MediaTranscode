@@ -145,6 +145,9 @@ inline constexpr char PlannedFilter[] = "filter";
 inline constexpr char MuxExpectVideo[] = "mux.expect_video";
 inline constexpr char MuxExpectAudio[] = "mux.expect_audio";
 
+inline constexpr char PacketSourceStreamIndex[] = "packet.source_stream_index";
+inline constexpr char PacketStreamKind[] = "packet.stream_kind";
+
 inline constexpr char VideoCodec[] = "video.codec";
 inline constexpr char VideoWidth[] = "video.width";
 inline constexpr char VideoHeight[] = "video.height";
