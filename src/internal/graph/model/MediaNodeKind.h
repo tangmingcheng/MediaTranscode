@@ -33,7 +33,7 @@ enum class MediaNodeKind {
     AudioDecode = 17,
     AudioResample = 18,
     AudioEncode = 19,
-    AudioPacketNormalize = 20,
+    ReservedAudioPacketNormalize = 20,
     AudioPacketDrain = 21,
 
     /* Merge / mux */
@@ -59,7 +59,7 @@ enum class MediaNodeKind {
     TraceProbe = 35,
 
     /* New node kinds must only append values. Never insert in the middle. */
-    AudioSourceConfig = 36,
+    ReservedAudioSourceConfig = 36,
     AudioCodecResolver = 37,
     PacketSourceConfig = 38,
     PacketNormalize = 39
