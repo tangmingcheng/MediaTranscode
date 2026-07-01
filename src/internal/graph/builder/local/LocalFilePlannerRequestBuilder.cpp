@@ -49,6 +49,8 @@ bool resizeRequested(const MediaVideoTranscodeParameters& video) noexcept
     }
 
     MediaPipelinePlannerOptions plannerOptions;
+    plannerOptions.includeVideo = parameters.execution.includeVideo;
+    plannerOptions.allowPacketCopy = false;
     plannerOptions.outputPath = options.outputUrl;
     plannerOptions.outputCodecName = video.codecName;
     plannerOptions.targetWidth = video.width.value_or(0);
