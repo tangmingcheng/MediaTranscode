@@ -19,7 +19,7 @@ const char* MediaNodeFusionPass::name() const noexcept
     std::size_t candidates = 0;
     for (const auto& node : graph.nodes()) {
         if (node.kind == MediaNodeKind::VideoTimestamp ||
-            node.kind == MediaNodeKind::AudioPacketNormalize ||
+            node.kind == MediaNodeKind::PacketNormalize ||
             node.kind == MediaNodeKind::VideoFrameRate) {
             ++candidates;
         }
