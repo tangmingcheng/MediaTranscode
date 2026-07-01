@@ -104,6 +104,7 @@ const AVCodec* findAudioEncoderForCodecName(const std::string& codecName)
 {
     MediaAudioPipelinePlan plan;
     if (!options.includeAudio) {
+        plan.branchMode = MediaBranchMode::Drop;
         plan.reason = "disabled";
         return ::media::Result<MediaAudioPipelinePlan>::success(std::move(plan));
     }
@@ -113,6 +114,7 @@ const AVCodec* findAudioEncoderForCodecName(const std::string& codecName)
         return ::media::Result<MediaAudioPipelinePlan>::failure(probe.error());
     }
     if (!probe.value().found) {
+        plan.branchMode = MediaBranchMode::Drop;
         plan.reason = "no_audio";
         return ::media::Result<MediaAudioPipelinePlan>::success(std::move(plan));
     }
@@ -126,11 +128,11 @@ const AVCodec* findAudioEncoderForCodecName(const std::string& codecName)
     plan.sourceStreamIndex = source.streamIndex;
     plan.sourceCodecName = sourceCodec;
     plan.targetCodecName = targetCodec;
-    plan.mode = canCopy ? MediaAudioPipelineMode::Copy : MediaAudioPipelineMode::Encode;
+    plan.branchMode = canCopy ? MediaBranchMode::CopyPacket : MediaBranchMode::TranscodeFrame;
     plan.followsSourceParameters = canCopy;
-    plan.reason = canCopy ? "copy_source_matches_target" : "encode_source_differs_from_target";
+    plan.reason = canCopy ? "copy_source_matches_target" : "transcode_source_differs_from_target";
 
-    if (plan.mode == MediaAudioPipelineMode::Encode) {
+    if (plan.branchMode == MediaBranchMode::TranscodeFrame) {
         const AVCodec* encoder = findAudioEncoderForCodecName(targetCodec);
         if (!encoder || !encoder->name) {
             return ::media::Result<MediaAudioPipelinePlan>::failure(
