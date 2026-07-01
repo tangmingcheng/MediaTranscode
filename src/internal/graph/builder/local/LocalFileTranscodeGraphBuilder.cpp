@@ -35,6 +35,68 @@ MediaEdgePolicy q(std::size_t capacity)
     return MediaPipelinePlanner::planVideoTranscodeFile(options.inputUrl, std::move(plannerOptions).value());
 }
 
+::media::Result<void> setNodeOptionChecked(MediaGraph& graph, MediaNodeId nodeId, const std::string& key, const std::string& value)
+{
+    if (!graph.setNodeOption(nodeId, key, value)) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::internalError("LocalFileTranscodeGraphBuilder failed to set option: " + key));
+    }
+    return ::media::Result<void>::success();
+}
+
+::media::Result<void> requirePort(MediaPortId portId, const char* name)
+{
+    if (!portId.isValid()) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::internalError(std::string("LocalFileTranscodeGraphBuilder failed to add port: ") + name));
+    }
+    return ::media::Result<void>::success();
+}
+
+::media::Result<void> requireEdge(MediaEdgeId edgeId, const char* name)
+{
+    if (!edgeId.isValid()) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::internalError(std::string("LocalFileTranscodeGraphBuilder failed to connect edge: ") + name));
+    }
+    return ::media::Result<void>::success();
+}
+
+::media::Result<void> addInputPortChecked(MediaGraph& graph,
+                                          MediaNodeId nodeId,
+                                          const std::string& name,
+                                          MediaStreamKind streamKind,
+                                          MediaEdgeKind edgeKind,
+                                          MediaPayloadKind payloadKind,
+                                          bool required,
+                                          bool multiple)
+{
+    return requirePort(graph.addInputPort(nodeId, name, streamKind, edgeKind, payloadKind, required, multiple), name.c_str());
+}
+
+::media::Result<void> addOutputPortChecked(MediaGraph& graph,
+                                           MediaNodeId nodeId,
+                                           const std::string& name,
+                                           MediaStreamKind streamKind,
+                                           MediaEdgeKind edgeKind,
+                                           MediaPayloadKind payloadKind,
+                                           bool required,
+                                           bool multiple)
+{
+    return requirePort(graph.addOutputPort(nodeId, name, streamKind, edgeKind, payloadKind, required, multiple), name.c_str());
+}
+
+::media::Result<void> connectChecked(MediaGraph& graph,
+                                     MediaNodeId fromNode,
+                                     const std::string& fromPort,
+                                     MediaNodeId toNode,
+                                     const std::string& toPort,
+                                     const std::string& label,
+                                     const MediaEdgePolicy& policy)
+{
+    return requireEdge(graph.connect(fromNode, fromPort, toNode, toPort, label, policy), label.c_str());
+}
+
 } // namespace
 
 ::media::Status LocalFileTranscodeGraphBuilder::validate(const LocalFileTranscodeOptions& options)
@@ -80,26 +142,26 @@ MediaEdgePolicy q(std::size_t capacity)
     const MediaNodeId fileOutput = graph.addNode(MediaNodeKind::FileOutput, "local.file.output", "Local file output");
     const MediaNodeId mux = graph.addNode(MediaNodeKind::FileMux, "local.file.mux", "Local file mux");
 
-    graph.setNodeOption(fileInput, "url", options.inputUrl);
-    graph.setNodeOption(fileOutput, "url", options.outputUrl);
-    graph.setNodeOption(mux, MediaTranscodeOptionKey::MuxExpectVideo, "1");
-    graph.setNodeOption(mux, MediaTranscodeOptionKey::MuxExpectAudio, "0");
+    if (auto status = setNodeOptionChecked(graph, fileInput, "url", options.inputUrl); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = setNodeOptionChecked(graph, fileOutput, "url", options.outputUrl); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = setNodeOptionChecked(graph, mux, MediaTranscodeOptionKey::MuxExpectVideo, "1"); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = setNodeOptionChecked(graph, mux, MediaTranscodeOptionKey::MuxExpectAudio, "0"); !status) return ::media::Result<MediaGraph>::failure(status.error());
     if (!options.outputFormat.empty()) {
-        graph.setNodeOption(fileOutput, "format", options.outputFormat);
+        if (auto status = setNodeOptionChecked(graph, fileOutput, "format", options.outputFormat); !status) return ::media::Result<MediaGraph>::failure(status.error());
     }
 
-    graph.addOutputPort(fileInput, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext, true, true);
-    graph.addInputPort(demux, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext, true, false);
-    graph.addOutputPort(demux, "packet", MediaStreamKind::Any, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true);
-    graph.addInputPort(split, "packet", MediaStreamKind::Any, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true);
-    graph.addOutputPort(fileOutput, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext, true, false);
-    graph.addInputPort(mux, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext, true, false);
-    graph.addInputPort(mux, "codec", MediaStreamKind::Any, MediaEdgeKind::Metadata, MediaPayloadKind::Unknown, true, true);
-    graph.addInputPort(mux, "packet", MediaStreamKind::Any, MediaEdgeKind::Unknown, MediaPayloadKind::Packet, true, true);
+    if (auto status = addOutputPortChecked(graph, fileInput, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext, true, true); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addInputPortChecked(graph, demux, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext, true, false); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addOutputPortChecked(graph, demux, "packet", MediaStreamKind::Any, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addInputPortChecked(graph, split, "packet", MediaStreamKind::Any, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addOutputPortChecked(graph, fileOutput, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext, true, false); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addInputPortChecked(graph, mux, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext, true, false); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addInputPortChecked(graph, mux, "codec", MediaStreamKind::Any, MediaEdgeKind::Metadata, MediaPayloadKind::Unknown, true, true); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addInputPortChecked(graph, mux, "packet", MediaStreamKind::Any, MediaEdgeKind::Unknown, MediaPayloadKind::Packet, true, true); !status) return ::media::Result<MediaGraph>::failure(status.error());
 
-    graph.connect(fileInput, "format", demux, "format", "local.file.input.format -> local.demux.format", q(queues.metadata));
-    graph.connect(demux, "packet", split, "packet", "local.demux.packet -> local.stream.split.packet", q(queues.packet));
-    graph.connect(fileOutput, "format", mux, "format", "local.file.output.format -> local.file.mux.format", q(queues.metadata));
+    if (auto status = connectChecked(graph, fileInput, "format", demux, "format", "local.file.input.format -> local.demux.format", q(queues.metadata)); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = connectChecked(graph, demux, "packet", split, "packet", "local.demux.packet -> local.stream.split.packet", q(queues.packet)); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = connectChecked(graph, fileOutput, "format", mux, "format", "local.file.output.format -> local.file.mux.format", q(queues.metadata)); !status) return ::media::Result<MediaGraph>::failure(status.error());
 
     auto audio = LocalFileAudioBranchBuilder::buildIfPlanned(graph, options, fileInput, split, mux);
     if (!audio) {
@@ -133,45 +195,45 @@ MediaEdgePolicy q(std::size_t capacity)
     }
     applySelectedVideoPlanOptions(graph, plannerNodes, videoPlan);
 
-    graph.addInputPort(codecResolver, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext, true, false);
-    graph.addOutputPort(codecResolver, "decoder", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false);
-    graph.addOutputPort(codecResolver, "timestamp_source", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false);
-    graph.addOutputPort(codecResolver, "encoder", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false);
-    graph.addInputPort(videoDecode, "codec", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false);
-    graph.addOutputPort(split, "video", MediaStreamKind::Video, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, false, true);
-    graph.addInputPort(videoDecode, "packet", MediaStreamKind::Video, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true);
-    graph.addOutputPort(videoDecode, "frame", MediaStreamKind::Video, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true);
-    graph.addInputPort(hardwareTransfer, "frame", MediaStreamKind::Video, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true);
-    graph.addOutputPort(hardwareTransfer, "frame", MediaStreamKind::Video, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true);
-    graph.addInputPort(videoTimestamp, "source_codec", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false);
-    graph.addInputPort(videoTimestamp, "target_codec", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false);
-    graph.addOutputPort(videoTimestamp, "target_codec", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false);
-    graph.addInputPort(videoTimestamp, "frame", MediaStreamKind::Video, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true);
-    graph.addOutputPort(videoTimestamp, "frame", MediaStreamKind::Video, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true);
-    graph.addInputPort(videoFrameRate, "frame", MediaStreamKind::Video, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true);
-    graph.addOutputPort(videoFrameRate, "frame", MediaStreamKind::Video, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true);
-    graph.addInputPort(videoFilter, "codec", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false);
-    graph.addOutputPort(videoFilter, "codec", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, true);
-    graph.addInputPort(videoFilter, "frame", MediaStreamKind::Video, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true);
-    graph.addOutputPort(videoFilter, "frame", MediaStreamKind::Video, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true);
-    graph.addInputPort(videoEncode, "codec", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false);
-    graph.addInputPort(videoEncode, "frame", MediaStreamKind::Video, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true);
-    graph.addOutputPort(videoEncode, "packet", MediaStreamKind::Video, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
+    if (auto status = addInputPortChecked(graph, codecResolver, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext, true, false); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addOutputPortChecked(graph, codecResolver, "decoder", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addOutputPortChecked(graph, codecResolver, "timestamp_source", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addOutputPortChecked(graph, codecResolver, "encoder", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addInputPortChecked(graph, videoDecode, "codec", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addOutputPortChecked(graph, split, "video", MediaStreamKind::Video, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, false, true); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addInputPortChecked(graph, videoDecode, "packet", MediaStreamKind::Video, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addOutputPortChecked(graph, videoDecode, "frame", MediaStreamKind::Video, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addInputPortChecked(graph, hardwareTransfer, "frame", MediaStreamKind::Video, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addOutputPortChecked(graph, hardwareTransfer, "frame", MediaStreamKind::Video, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addInputPortChecked(graph, videoTimestamp, "source_codec", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addInputPortChecked(graph, videoTimestamp, "target_codec", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addOutputPortChecked(graph, videoTimestamp, "target_codec", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addInputPortChecked(graph, videoTimestamp, "frame", MediaStreamKind::Video, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addOutputPortChecked(graph, videoTimestamp, "frame", MediaStreamKind::Video, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addInputPortChecked(graph, videoFrameRate, "frame", MediaStreamKind::Video, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addOutputPortChecked(graph, videoFrameRate, "frame", MediaStreamKind::Video, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addInputPortChecked(graph, videoFilter, "codec", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addOutputPortChecked(graph, videoFilter, "codec", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, true); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addInputPortChecked(graph, videoFilter, "frame", MediaStreamKind::Video, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addOutputPortChecked(graph, videoFilter, "frame", MediaStreamKind::Video, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addInputPortChecked(graph, videoEncode, "codec", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addInputPortChecked(graph, videoEncode, "frame", MediaStreamKind::Video, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addOutputPortChecked(graph, videoEncode, "packet", MediaStreamKind::Video, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true); !status) return ::media::Result<MediaGraph>::failure(status.error());
 
-    graph.connect(fileInput, "format", codecResolver, "format", "local.file.input.format -> local.codec.resolver.format", q(queues.metadata));
-    graph.connect(codecResolver, "decoder", videoDecode, "codec", "local.codec.resolver.decoder -> local.video.decode.codec", q(queues.metadata));
-    graph.connect(codecResolver, "timestamp_source", videoTimestamp, "source_codec", "local.codec.resolver.timestamp_source -> local.video.timestamp.source_codec", q(queues.metadata));
-    graph.connect(codecResolver, "encoder", videoTimestamp, "target_codec", "local.codec.resolver.encoder -> local.video.timestamp.target_codec", q(queues.metadata));
-    graph.connect(videoTimestamp, "target_codec", videoFilter, "codec", "local.video.timestamp.target_codec -> local.video.filter.codec", q(queues.metadata));
-    graph.connect(videoFilter, "codec", videoEncode, "codec", "local.video.filter.codec -> local.video.encode.codec", q(queues.metadata));
-    graph.connect(videoFilter, "codec", mux, "codec", "local.video.filter.codec -> local.file.mux.codec", q(queues.metadata));
-    graph.connect(split, "video", videoDecode, "packet", "local.stream.split.video -> local.video.decode.packet", q(queues.packet));
-    graph.connect(videoDecode, "frame", hardwareTransfer, "frame", "local.video.decode.frame -> local.video.hwtransfer.frame", q(queues.frame));
-    graph.connect(hardwareTransfer, "frame", videoTimestamp, "frame", "local.video.hwtransfer.frame -> local.video.timestamp.frame", q(queues.frame));
-    graph.connect(videoTimestamp, "frame", videoFrameRate, "frame", "local.video.timestamp.frame -> local.video.framerate.frame", q(queues.frame));
-    graph.connect(videoFrameRate, "frame", videoFilter, "frame", "local.video.framerate.frame -> local.video.filter.frame", q(queues.frame));
-    graph.connect(videoFilter, "frame", videoEncode, "frame", "local.video.filter.frame -> local.video.encode.frame", q(queues.frame));
-    graph.connect(videoEncode, "packet", mux, "packet", "local.video.encode.packet -> local.file.mux.packet", q(queues.mux));
+    if (auto status = connectChecked(graph, fileInput, "format", codecResolver, "format", "local.file.input.format -> local.codec.resolver.format", q(queues.metadata)); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = connectChecked(graph, codecResolver, "decoder", videoDecode, "codec", "local.codec.resolver.decoder -> local.video.decode.codec", q(queues.metadata)); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = connectChecked(graph, codecResolver, "timestamp_source", videoTimestamp, "source_codec", "local.codec.resolver.timestamp_source -> local.video.timestamp.source_codec", q(queues.metadata)); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = connectChecked(graph, codecResolver, "encoder", videoTimestamp, "target_codec", "local.codec.resolver.encoder -> local.video.timestamp.target_codec", q(queues.metadata)); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = connectChecked(graph, videoTimestamp, "target_codec", videoFilter, "codec", "local.video.timestamp.target_codec -> local.video.filter.codec", q(queues.metadata)); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = connectChecked(graph, videoFilter, "codec", videoEncode, "codec", "local.video.filter.codec -> local.video.encode.codec", q(queues.metadata)); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = connectChecked(graph, videoFilter, "codec", mux, "codec", "local.video.filter.codec -> local.file.mux.codec", q(queues.metadata)); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = connectChecked(graph, split, "video", videoDecode, "packet", "local.stream.split.video -> local.video.decode.packet", q(queues.packet)); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = connectChecked(graph, videoDecode, "frame", hardwareTransfer, "frame", "local.video.decode.frame -> local.video.hwtransfer.frame", q(queues.frame)); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = connectChecked(graph, hardwareTransfer, "frame", videoTimestamp, "frame", "local.video.hwtransfer.frame -> local.video.timestamp.frame", q(queues.frame)); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = connectChecked(graph, videoTimestamp, "frame", videoFrameRate, "frame", "local.video.timestamp.frame -> local.video.framerate.frame", q(queues.frame)); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = connectChecked(graph, videoFrameRate, "frame", videoFilter, "frame", "local.video.framerate.frame -> local.video.filter.frame", q(queues.frame)); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = connectChecked(graph, videoFilter, "frame", videoEncode, "frame", "local.video.filter.frame -> local.video.encode.frame", q(queues.frame)); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = connectChecked(graph, videoEncode, "packet", mux, "packet", "local.video.encode.packet -> local.file.mux.packet", q(queues.mux)); !status) return ::media::Result<MediaGraph>::failure(status.error());
 
     return ::media::Result<MediaGraph>::success(std::move(graph));
 }
