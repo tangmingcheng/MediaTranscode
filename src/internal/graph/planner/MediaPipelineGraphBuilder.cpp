@@ -1,29 +1,21 @@
 #include "internal/graph/planner/MediaPipelineGraphBuilder.h"
 
-#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
-
-#include <sstream>
 #include <string>
-#include <utility>
 
 namespace media::ffmpeg::graph {
 
 namespace {
 
-bool setOption(MediaGraph& graph, MediaNodeId nodeId, const std::string& key, const std::string& value)
+::media::Status setOptionChecked(MediaGraph& graph,
+                                 MediaNodeId nodeId,
+                                 const std::string& key,
+                                 const std::string& value)
 {
-    return graph.setNodeOption(nodeId, key, value);
-}
-
-std::string stageDisplayName(const MediaPipelineStagePlan& stage)
-{
-    if (!stage.ffmpegName.empty()) {
-        return stage.ffmpegName;
+    if (!graph.setNodeOption(nodeId, key, value)) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::internalError("MediaPipelineGraphBuilder failed to set option: " + key));
     }
-    if (!stage.filterName.empty()) {
-        return stage.filterName;
-    }
-    return stage.componentName;
+    return ::media::Status::success();
 }
 
 ::media::Status applyStageOptions(MediaGraph& graph,
@@ -31,66 +23,33 @@ std::string stageDisplayName(const MediaPipelineStagePlan& stage)
                                   const MediaPipelineStagePlan& stage,
                                   const MediaPipelineChainPlan& chain)
 {
-    bool ok = true;
-    ok = ok && setOption(graph, nodeId, "pipeline.chain", chain.label);
-    ok = ok && setOption(graph, nodeId, "pipeline.chain_score", std::to_string(chain.score));
-    ok = ok && setOption(graph, nodeId, "pipeline.stage", mediaPipelineStageRoleName(stage.role));
-    ok = ok && setOption(graph, nodeId, "pipeline.component", stage.componentName);
-    ok = ok && setOption(graph, nodeId, "pipeline.available", stage.available ? "1" : "0");
-    ok = ok && setOption(graph, nodeId, "pipeline.zero_copy", stage.zeroCopy ? "1" : "0");
-    ok = ok && setOption(graph, nodeId, "pipeline.hardware", stage.hardware ? "1" : "0");
-    ok = ok && setOption(graph, nodeId, "pipeline.hwaccel", stage.hwaccelName);
-    ok = ok && setOption(graph, nodeId, "pipeline.device", mediaHardwareDeviceKindName(stage.deviceKind));
-    ok = ok && setOption(graph, nodeId, "pipeline.frame_kind", mediaHardwareFrameKindName(stage.frameKind));
-    ok = ok && setOption(graph, nodeId, "pipeline.pixel_format", stage.pixelFormat);
-    ok = ok && setOption(graph, nodeId, "pipeline.hw_frames_format", stage.hardwareFramesFormat);
-    ok = ok && setOption(graph, nodeId, "pipeline.surface_pixel_format", stage.surfacePixelFormat);
-    ok = ok && setOption(graph, nodeId, "pipeline.availability_reason", stage.availabilityReason);
+    if (auto status = setOptionChecked(graph, nodeId, "pipeline.chain", chain.label); !status) return status;
+    if (auto status = setOptionChecked(graph, nodeId, "pipeline.chain_score", std::to_string(chain.score)); !status) return status;
+    if (auto status = setOptionChecked(graph, nodeId, "pipeline.stage", mediaPipelineStageRoleName(stage.role)); !status) return status;
+    if (auto status = setOptionChecked(graph, nodeId, "pipeline.component", stage.componentName); !status) return status;
+    if (auto status = setOptionChecked(graph, nodeId, "pipeline.available", stage.available ? "1" : "0"); !status) return status;
+    if (auto status = setOptionChecked(graph, nodeId, "pipeline.zero_copy", stage.zeroCopy ? "1" : "0"); !status) return status;
+    if (auto status = setOptionChecked(graph, nodeId, "pipeline.hardware", stage.hardware ? "1" : "0"); !status) return status;
+    if (auto status = setOptionChecked(graph, nodeId, "pipeline.hwaccel", stage.hwaccelName); !status) return status;
+    if (auto status = setOptionChecked(graph, nodeId, "pipeline.device", mediaHardwareDeviceKindName(stage.deviceKind)); !status) return status;
+    if (auto status = setOptionChecked(graph, nodeId, "pipeline.frame_kind", mediaHardwareFrameKindName(stage.frameKind)); !status) return status;
+    if (auto status = setOptionChecked(graph, nodeId, "pipeline.pixel_format", stage.pixelFormat); !status) return status;
+    if (auto status = setOptionChecked(graph, nodeId, "pipeline.hw_frames_format", stage.hardwareFramesFormat); !status) return status;
+    if (auto status = setOptionChecked(graph, nodeId, "pipeline.surface_pixel_format", stage.surfacePixelFormat); !status) return status;
+    if (auto status = setOptionChecked(graph, nodeId, "pipeline.availability_reason", stage.availabilityReason); !status) return status;
 
     if (!stage.codecName.empty()) {
-        ok = ok && setOption(graph, nodeId, "codec", stage.codecName);
+        if (auto status = setOptionChecked(graph, nodeId, "codec", stage.codecName); !status) return status;
     }
     if (!stage.ffmpegName.empty()) {
         const char* key = stage.role == MediaPipelineStageRole::Decoder ? "decoder" : "encoder";
-        ok = ok && setOption(graph, nodeId, key, stage.ffmpegName);
+        if (auto status = setOptionChecked(graph, nodeId, key, stage.ffmpegName); !status) return status;
     }
     if (!stage.filterName.empty()) {
-        ok = ok && setOption(graph, nodeId, "filter", stage.filterName);
-    }
-
-    if (!ok) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("failed to apply media pipeline stage options"));
+        if (auto status = setOptionChecked(graph, nodeId, "filter", stage.filterName); !status) return status;
     }
 
     return ::media::Status::success();
-}
-
-MediaEdgePolicy queuePolicy(std::size_t capacity = 256)
-{
-    MediaEdgePolicy policy;
-    policy.queuePolicy.mode = MediaQueueMode::Blocking;
-    policy.queuePolicy.bounded = true;
-    policy.queuePolicy.capacity = capacity;
-    policy.queuePolicy.overflowPolicy = MediaQueueOverflowPolicy::BlockProducer;
-    return policy;
-}
-
-void logBuiltGraph(const MediaPipelineGraphBuildResult& result,
-                   const MediaGraph& graph)
-{
-    std::ostringstream out;
-    out << "nodes=" << graph.nodeCount()
-        << " edges=" << graph.edgeCount()
-        << " branch_mode=" << mediaBranchModeName(result.plan.branchMode)
-        << " chain=" << result.plan.selected.label
-        << " decoder=" << stageDisplayName(result.plan.selected.decoder)
-        << " filter=" << stageDisplayName(result.plan.selected.filter)
-        << " encoder=" << stageDisplayName(result.plan.selected.encoder);
-
-    mediaGraphDiagnosticLog(result.plan.diagnosticLogEnabled,
-                            MediaGraphDiagnosticPhase::GraphBuild,
-                            out.str());
 }
 
 } // namespace
@@ -117,88 +76,6 @@ void logBuiltGraph(const MediaPipelineGraphBuildResult& result,
     }
 
     return applyStageOptions(graph, videoEncodeNode, plan.selected.encoder, plan.selected);
-}
-
-::media::Result<MediaPipelineGraphBuildResult> MediaPipelineGraphBuilder::buildVideoFileTranscodeGraph(
-    MediaPipelinePlan plan)
-{
-    if (plan.branchMode != MediaBranchMode::TranscodeFrame) {
-        return ::media::Result<MediaPipelineGraphBuildResult>::failure(
-            ::media::ErrorInfo::unsupported("buildVideoFileTranscodeGraph requires transcode_frame video branch"));
-    }
-
-    MediaPipelineGraphBuildResult result;
-    result.plan = std::move(plan);
-
-    MediaGraph graph;
-    result.fileInputNode = graph.addNode(MediaNodeKind::FileInput, "file-input");
-    result.demuxNode = graph.addNode(MediaNodeKind::Demux, "demux");
-    result.streamSplitNode = graph.addNode(MediaNodeKind::StreamSplit, "stream-split");
-    result.videoDecodeNode = graph.addNode(MediaNodeKind::VideoDecode, "video-decode");
-    result.videoFilterNode = graph.addNode(MediaNodeKind::VideoFilter, "video-filter");
-    result.videoEncodeNode = graph.addNode(MediaNodeKind::VideoEncode, "video-encode");
-    result.fileOutputNode = graph.addNode(MediaNodeKind::FileOutput, "file-output");
-    result.fileMuxNode = graph.addNode(MediaNodeKind::FileMux, "file-mux");
-
-    graph.setNodeOption(result.fileInputNode, "path", result.plan.inputPath);
-    graph.setNodeOption(result.fileOutputNode,
-                        "path",
-                        result.plan.outputPath.empty() ? "planned-output.mp4" : result.plan.outputPath);
-
-    graph.addOutputPort(result.fileInputNode, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata,
-                        MediaPayloadKind::FormatContext, true, false);
-    graph.addInputPort(result.demuxNode, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata,
-                       MediaPayloadKind::FormatContext, true, false);
-
-    graph.addOutputPort(result.demuxNode, "packet", MediaStreamKind::Any, MediaEdgeKind::InputPacket,
-                        MediaPayloadKind::Packet, true, true);
-    graph.addInputPort(result.streamSplitNode, "packet", MediaStreamKind::Any, MediaEdgeKind::InputPacket,
-                       MediaPayloadKind::Packet, true, true);
-    graph.addOutputPort(result.streamSplitNode, "video", MediaStreamKind::Video, MediaEdgeKind::InputPacket,
-                        MediaPayloadKind::Packet, true, true);
-
-    graph.addInputPort(result.videoDecodeNode, "packet", MediaStreamKind::Video, MediaEdgeKind::InputPacket,
-                       MediaPayloadKind::Packet, true, true);
-    graph.addOutputPort(result.videoDecodeNode, "frame", MediaStreamKind::Video, MediaEdgeKind::RawFrame,
-                        MediaPayloadKind::Frame, true, true);
-
-    graph.addInputPort(result.videoFilterNode, "frame", MediaStreamKind::Video, MediaEdgeKind::RawFrame,
-                       MediaPayloadKind::Frame, true, true);
-    graph.addOutputPort(result.videoFilterNode, "frame", MediaStreamKind::Video, MediaEdgeKind::RawFrame,
-                        MediaPayloadKind::Frame, true, true);
-
-    graph.addInputPort(result.videoEncodeNode, "frame", MediaStreamKind::Video, MediaEdgeKind::RawFrame,
-                       MediaPayloadKind::Frame, true, true);
-    graph.addOutputPort(result.videoEncodeNode, "packet", MediaStreamKind::Video, MediaEdgeKind::EncodedPacket,
-                        MediaPayloadKind::Packet, true, true);
-
-    graph.addOutputPort(result.fileOutputNode, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata,
-                        MediaPayloadKind::FormatContext, true, false);
-    graph.addInputPort(result.fileMuxNode, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata,
-                       MediaPayloadKind::FormatContext, true, false);
-    graph.addInputPort(result.fileMuxNode, "packet", MediaStreamKind::Video, MediaEdgeKind::EncodedPacket,
-                       MediaPayloadKind::Packet, true, true);
-
-    graph.connect(result.fileInputNode, "format", result.demuxNode, "format", "file-input-to-demux", queuePolicy(1));
-    graph.connect(result.demuxNode, "packet", result.streamSplitNode, "packet", "demux-to-stream-split", queuePolicy(256));
-    graph.connect(result.streamSplitNode, "video", result.videoDecodeNode, "packet", "stream-split-to-video-decode", queuePolicy(256));
-    graph.connect(result.videoDecodeNode, "frame", result.videoFilterNode, "frame", "video-decode-to-filter", queuePolicy(256));
-    graph.connect(result.videoFilterNode, "frame", result.videoEncodeNode, "frame", "video-filter-to-encode", queuePolicy(256));
-    graph.connect(result.fileOutputNode, "format", result.fileMuxNode, "format", "file-output-to-mux", queuePolicy(1));
-    graph.connect(result.videoEncodeNode, "packet", result.fileMuxNode, "packet", "video-encode-to-mux", queuePolicy(256));
-
-    auto applyStatus = applyVideoPlanToGraph(graph,
-                                             result.videoDecodeNode,
-                                             result.videoFilterNode,
-                                             result.videoEncodeNode,
-                                             result.plan);
-    if (!applyStatus) {
-        return ::media::Result<MediaPipelineGraphBuildResult>::failure(applyStatus.error());
-    }
-
-    logBuiltGraph(result, graph);
-    result.graph = std::move(graph);
-    return ::media::Result<MediaPipelineGraphBuildResult>::success(std::move(result));
 }
 
 } // namespace media::ffmpeg::graph
