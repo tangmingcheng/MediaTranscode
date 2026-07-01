@@ -7,6 +7,22 @@
 
 namespace media::ffmpeg::graph {
 
+enum class MediaBranchMode {
+    Drop,
+    CopyPacket,
+    TranscodeFrame
+};
+
+inline const char* mediaBranchModeName(MediaBranchMode mode) noexcept
+{
+    switch (mode) {
+    case MediaBranchMode::Drop: return "drop";
+    case MediaBranchMode::CopyPacket: return "copy_packet";
+    case MediaBranchMode::TranscodeFrame: return "transcode_frame";
+    }
+    return "drop";
+}
+
 enum class MediaRateControlMode {
     Auto,
     Cbr,
