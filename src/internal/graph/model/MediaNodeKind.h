@@ -25,16 +25,16 @@ enum class MediaNodeKind {
     VideoFrameRate = 11,
     VideoFilter = 12,
     VideoEncode = 13,
-    VideoPacketDrain = 14,
+    ReservedVideoPacketDrain = 14,
 
     /* Audio branch */
-    AudioStrategy = 15,
+    ReservedAudioStrategy = 15,
     ReservedAudioCopy = 16,
     AudioDecode = 17,
     AudioResample = 18,
     AudioEncode = 19,
     ReservedAudioPacketNormalize = 20,
-    AudioPacketDrain = 21,
+    ReservedAudioPacketDrain = 21,
 
     /* Merge / mux */
     PacketMerge = 22,
