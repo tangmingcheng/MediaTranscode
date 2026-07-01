@@ -1,8 +1,92 @@
 #include "internal/graph/builder/realtime/MediaRealtimeGraphBuilder.h"
 
+#include <string>
 #include <utility>
 
 namespace media::ffmpeg::graph {
+namespace {
+
+::media::Result<void> requirePort(MediaPortId portId, const char* name)
+{
+    if (!portId.isValid()) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::internalError(std::string("MediaRealtimeGraphBuilder failed to add port: ") + name));
+    }
+    return ::media::Result<void>::success();
+}
+
+::media::Result<void> requireEdge(MediaEdgeId edgeId, const char* name)
+{
+    if (!edgeId.isValid()) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::internalError(std::string("MediaRealtimeGraphBuilder failed to connect edge: ") + name));
+    }
+    return ::media::Result<void>::success();
+}
+
+::media::Result<void> setNodeOptionChecked(MediaGraph& graph,
+                                           MediaNodeId nodeId,
+                                           const std::string& key,
+                                           const std::string& value)
+{
+    if (!graph.setNodeOption(nodeId, key, value)) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::internalError("MediaRealtimeGraphBuilder failed to set option: " + key));
+    }
+    return ::media::Result<void>::success();
+}
+
+::media::Result<void> addInputPortChecked(MediaGraph& graph,
+                                          MediaNodeId nodeId,
+                                          const std::string& name,
+                                          MediaStreamKind streamKind,
+                                          MediaEdgeKind edgeKind,
+                                          MediaPayloadKind payloadKind,
+                                          bool required,
+                                          bool multiple)
+{
+    return requirePort(graph.addInputPort(nodeId,
+                                          name,
+                                          streamKind,
+                                          edgeKind,
+                                          payloadKind,
+                                          required,
+                                          multiple),
+                       name.c_str());
+}
+
+::media::Result<void> addOutputPortChecked(MediaGraph& graph,
+                                           MediaNodeId nodeId,
+                                           const std::string& name,
+                                           MediaStreamKind streamKind,
+                                           MediaEdgeKind edgeKind,
+                                           MediaPayloadKind payloadKind,
+                                           bool required,
+                                           bool multiple)
+{
+    return requirePort(graph.addOutputPort(nodeId,
+                                           name,
+                                           streamKind,
+                                           edgeKind,
+                                           payloadKind,
+                                           required,
+                                           multiple),
+                       name.c_str());
+}
+
+::media::Result<void> connectChecked(MediaGraph& graph,
+                                     MediaNodeId fromNode,
+                                     const std::string& fromPort,
+                                     MediaNodeId toNode,
+                                     const std::string& toPort,
+                                     const std::string& label,
+                                     const MediaEdgePolicy& policy,
+                                     bool enabled = true)
+{
+    return requireEdge(graph.connect(fromNode, fromPort, toNode, toPort, label, policy, enabled), label.c_str());
+}
+
+} // namespace
 
 ::media::Result<MediaRealtimeGraphBuilderResult> MediaRealtimeGraphBuilder::build(
     const MediaRealtimeGraphBuilderOptions& options)
@@ -37,73 +121,40 @@ namespace media::ffmpeg::graph {
     MediaGraph graph;
     const MediaEdgePolicy edgePolicy = realtimeEdgePolicy(options);
 
-    const MediaNodeId input = graph.addNode(MediaNodeKind::RealtimeInput, "realtime-input");
-    const MediaNodeId output = graph.addNode(MediaNodeKind::RtpOutput, "rtp-output");
-    applyRealtimeInputOptions(graph, input, options);
-    applyRealtimeOutputOptions(graph, output, options);
+    const MediaNodeId input = graph.addNode(MediaNodeKind::RealtimeInput, "realtime.input", "Realtime packet input");
+    const MediaNodeId output = graph.addNode(MediaNodeKind::RtpOutput, "realtime.rtp.output", "Realtime RTP output");
 
-    graph.addOutputPort(input, "packet", MediaStreamKind::Any, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true);
-    graph.addInputPort(output, "packet", MediaStreamKind::Any, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true);
+    if (auto status = applyRealtimeInputOptions(graph, input, options); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = applyRealtimeOutputOptions(graph, output, options); !status) return ::media::Result<MediaGraph>::failure(status.error());
+
+    if (auto status = addOutputPortChecked(graph, input, "packet", MediaStreamKind::Any, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addInputPortChecked(graph, output, "packet", MediaStreamKind::Any, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true); !status) return ::media::Result<MediaGraph>::failure(status.error());
 
     if (options.enablePacketFanout) {
-        const MediaNodeId fanout = graph.addNode(MediaNodeKind::PacketFanout, "packet-fanout");
-        graph.addInputPort(fanout, "packet", MediaStreamKind::Any, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true);
-        graph.addOutputPort(fanout, "packet", MediaStreamKind::Any, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true);
-        graph.connect(input, "packet", fanout, "packet", "realtime-input-packet", edgePolicy);
-        graph.connect(fanout, "packet", output, "packet", "realtime-output-packet", edgePolicy);
+        const MediaNodeId fanout = graph.addNode(MediaNodeKind::PacketFanout, "realtime.packet.fanout", "Realtime packet fanout");
+        if (auto status = addInputPortChecked(graph, fanout, "packet", MediaStreamKind::Any, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true); !status) return ::media::Result<MediaGraph>::failure(status.error());
+        if (auto status = addOutputPortChecked(graph, fanout, "packet", MediaStreamKind::Any, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true); !status) return ::media::Result<MediaGraph>::failure(status.error());
+        if (auto status = connectChecked(graph, input, "packet", fanout, "packet", "realtime.input.packet -> realtime.packet.fanout.packet", edgePolicy); !status) return ::media::Result<MediaGraph>::failure(status.error());
+        if (auto status = connectChecked(graph, fanout, "packet", output, "packet", "realtime.packet.fanout.packet -> realtime.rtp.output.packet", edgePolicy); !status) return ::media::Result<MediaGraph>::failure(status.error());
     } else {
-        graph.connect(input, "packet", output, "packet", "realtime-packet", edgePolicy);
+        if (auto status = connectChecked(graph, input, "packet", output, "packet", "realtime.input.packet -> realtime.rtp.output.packet", edgePolicy); !status) return ::media::Result<MediaGraph>::failure(status.error());
     }
 
     if (options.enableSdpWriter) {
-        const MediaNodeId sdp = graph.addNode(MediaNodeKind::SdpWriter, "sdp-writer");
-        graph.setNodeOption(sdp, "path", options.sdpPath);
-        graph.addInputPort(sdp, "packet", MediaStreamKind::Any, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, false, true);
-        graph.connect(input, "packet", sdp, "packet", "sdp-packet-probe", edgePolicy, false);
+        const MediaNodeId sdp = graph.addNode(MediaNodeKind::SdpWriter, "realtime.sdp.writer", "Realtime SDP writer");
+        if (auto status = setNodeOptionChecked(graph, sdp, "path", options.sdpPath); !status) return ::media::Result<MediaGraph>::failure(status.error());
+        if (auto status = addInputPortChecked(graph, sdp, "packet", MediaStreamKind::Any, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, false, true); !status) return ::media::Result<MediaGraph>::failure(status.error());
+        if (auto status = connectChecked(graph, input, "packet", sdp, "packet", "realtime.input.packet -> realtime.sdp.writer.packet", edgePolicy, false); !status) return ::media::Result<MediaGraph>::failure(status.error());
     }
 
     return ::media::Result<MediaGraph>::success(std::move(graph));
 }
 
 ::media::Result<MediaGraph> MediaRealtimeGraphBuilder::buildDecodeEncode(
-    const MediaRealtimeGraphBuilderOptions& options)
+    const MediaRealtimeGraphBuilderOptions&)
 {
-    MediaGraph graph;
-    const MediaEdgePolicy edgePolicy = realtimeEdgePolicy(options);
-
-    const MediaNodeId input = graph.addNode(MediaNodeKind::RealtimeInput, "realtime-input");
-    const MediaNodeId split = graph.addNode(MediaNodeKind::StreamSplit, "stream-split");
-    const MediaNodeId videoDecode = graph.addNode(MediaNodeKind::VideoDecode, "video-decode");
-    const MediaNodeId videoEncode = graph.addNode(MediaNodeKind::VideoEncode, "video-encode");
-    const MediaNodeId output = graph.addNode(MediaNodeKind::RtpOutput, "rtp-output");
-
-    applyRealtimeInputOptions(graph, input, options);
-    applyRealtimeOutputOptions(graph, output, options);
-
-    graph.addOutputPort(input, "packet", MediaStreamKind::Any, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true);
-    graph.addInputPort(split, "packet", MediaStreamKind::Any, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true);
-    graph.addOutputPort(split, "video", MediaStreamKind::Video, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, false, true);
-    graph.addOutputPort(split, "audio", MediaStreamKind::Audio, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, false, true);
-    graph.addInputPort(videoDecode, "packet", MediaStreamKind::Video, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, false, true);
-    graph.addOutputPort(videoDecode, "frame", MediaStreamKind::Video, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, false, true);
-    graph.addInputPort(videoEncode, "frame", MediaStreamKind::Video, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, false, true);
-    graph.addOutputPort(videoEncode, "packet", MediaStreamKind::Video, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, false, true);
-    graph.addInputPort(output, "packet", MediaStreamKind::Any, MediaEdgeKind::Unknown, MediaPayloadKind::Packet, true, true);
-
-    graph.connect(input, "packet", split, "packet", "realtime-split-packet", edgePolicy);
-    graph.connect(split, "video", videoDecode, "packet", "realtime-video-packet", edgePolicy, options.includeVideo);
-    graph.connect(videoDecode, "frame", videoEncode, "frame", "realtime-video-frame", edgePolicy, options.includeVideo);
-    graph.connect(videoEncode, "packet", output, "packet", "realtime-video-output", edgePolicy, options.includeVideo);
-
-    if (options.includeAudio) {
-        const MediaNodeId audioCopy = graph.addNode(MediaNodeKind::AudioCopy, "audio-copy");
-        graph.addInputPort(audioCopy, "packet", MediaStreamKind::Audio, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, false, true);
-        graph.addOutputPort(audioCopy, "packet", MediaStreamKind::Audio, MediaEdgeKind::CopiedPacket, MediaPayloadKind::Packet, false, true);
-        graph.connect(split, "audio", audioCopy, "packet", "realtime-audio-packet", edgePolicy, false);
-        graph.connect(audioCopy, "packet", output, "packet", "realtime-audio-output", edgePolicy, false);
-    }
-
-    return ::media::Result<MediaGraph>::success(std::move(graph));
+    return ::media::Result<MediaGraph>::failure(
+        ::media::ErrorInfo::unsupported("MediaRealtimeGraphBuilder decode_encode DAG requires codec config plumbing and is not implemented"));
 }
 
 ::media::Result<MediaGraph> MediaRealtimeGraphBuilder::buildIngestToMux(
@@ -112,25 +163,26 @@ namespace media::ffmpeg::graph {
     MediaGraph graph;
     const MediaEdgePolicy edgePolicy = realtimeEdgePolicy(options);
 
-    const MediaNodeId input = graph.addNode(MediaNodeKind::RealtimeInput, "realtime-input");
-    const MediaNodeId fanout = graph.addNode(MediaNodeKind::PacketFanout, "packet-fanout");
+    const MediaNodeId input = graph.addNode(MediaNodeKind::RealtimeInput, "realtime.input", "Realtime packet input");
+    const MediaNodeId fanout = graph.addNode(MediaNodeKind::PacketFanout, "realtime.packet.fanout", "Realtime packet fanout");
     const MediaNodeId mux = graph.addNode(options.enableRtpMux ? MediaNodeKind::RtpMux : MediaNodeKind::PacketMerge,
-                                          options.enableRtpMux ? "rtp-mux" : "packet-merge");
-    const MediaNodeId output = graph.addNode(MediaNodeKind::RtpOutput, "rtp-output");
+                                          options.enableRtpMux ? "realtime.rtp.mux" : "realtime.packet.merge",
+                                          options.enableRtpMux ? "Realtime RTP mux" : "Realtime packet merge");
+    const MediaNodeId output = graph.addNode(MediaNodeKind::RtpOutput, "realtime.rtp.output", "Realtime RTP output");
 
-    applyRealtimeInputOptions(graph, input, options);
-    applyRealtimeOutputOptions(graph, output, options);
+    if (auto status = applyRealtimeInputOptions(graph, input, options); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = applyRealtimeOutputOptions(graph, output, options); !status) return ::media::Result<MediaGraph>::failure(status.error());
 
-    graph.addOutputPort(input, "packet", MediaStreamKind::Any, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true);
-    graph.addInputPort(fanout, "packet", MediaStreamKind::Any, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true);
-    graph.addOutputPort(fanout, "packet", MediaStreamKind::Any, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true);
-    graph.addInputPort(mux, "packet", MediaStreamKind::Any, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true);
-    graph.addOutputPort(mux, "packet", MediaStreamKind::Any, MediaEdgeKind::MuxedPacket, MediaPayloadKind::Packet, true, true);
-    graph.addInputPort(output, "packet", MediaStreamKind::Any, MediaEdgeKind::MuxedPacket, MediaPayloadKind::Packet, true, true);
+    if (auto status = addOutputPortChecked(graph, input, "packet", MediaStreamKind::Any, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addInputPortChecked(graph, fanout, "packet", MediaStreamKind::Any, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addOutputPortChecked(graph, fanout, "packet", MediaStreamKind::Any, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addInputPortChecked(graph, mux, "packet", MediaStreamKind::Any, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addOutputPortChecked(graph, mux, "packet", MediaStreamKind::Any, MediaEdgeKind::MuxedPacket, MediaPayloadKind::Packet, true, true); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = addInputPortChecked(graph, output, "packet", MediaStreamKind::Any, MediaEdgeKind::MuxedPacket, MediaPayloadKind::Packet, true, true); !status) return ::media::Result<MediaGraph>::failure(status.error());
 
-    graph.connect(input, "packet", fanout, "packet", "realtime-ingest-packet", edgePolicy);
-    graph.connect(fanout, "packet", mux, "packet", "realtime-mux-input", edgePolicy);
-    graph.connect(mux, "packet", output, "packet", "realtime-mux-output", edgePolicy);
+    if (auto status = connectChecked(graph, input, "packet", fanout, "packet", "realtime.input.packet -> realtime.packet.fanout.packet", edgePolicy); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = connectChecked(graph, fanout, "packet", mux, "packet", "realtime.packet.fanout.packet -> realtime.mux.packet", edgePolicy); !status) return ::media::Result<MediaGraph>::failure(status.error());
+    if (auto status = connectChecked(graph, mux, "packet", output, "packet", "realtime.mux.packet -> realtime.rtp.output.packet", edgePolicy); !status) return ::media::Result<MediaGraph>::failure(status.error());
 
     return ::media::Result<MediaGraph>::success(std::move(graph));
 }
@@ -153,28 +205,30 @@ MediaEdgePolicy MediaRealtimeGraphBuilder::realtimeEdgePolicy(const MediaRealtim
     return policy;
 }
 
-void MediaRealtimeGraphBuilder::applyRealtimeInputOptions(MediaGraph& graph,
-                                                          MediaNodeId nodeId,
-                                                          const MediaRealtimeGraphBuilderOptions& options)
+::media::Result<void> MediaRealtimeGraphBuilder::applyRealtimeInputOptions(MediaGraph& graph,
+                                                                           MediaNodeId nodeId,
+                                                                           const MediaRealtimeGraphBuilderOptions& options)
 {
     if (!options.inputUrl.empty()) {
-        graph.setNodeOption(nodeId, "url", options.inputUrl);
+        if (auto status = setNodeOptionChecked(graph, nodeId, "url", options.inputUrl); !status) return status;
     }
     if (!options.mediaId.empty()) {
-        graph.setNodeOption(nodeId, "media_id", options.mediaId);
+        if (auto status = setNodeOptionChecked(graph, nodeId, "media_id", options.mediaId); !status) return status;
     }
+    return ::media::Result<void>::success();
 }
 
-void MediaRealtimeGraphBuilder::applyRealtimeOutputOptions(MediaGraph& graph,
-                                                           MediaNodeId nodeId,
-                                                           const MediaRealtimeGraphBuilderOptions& options)
+::media::Result<void> MediaRealtimeGraphBuilder::applyRealtimeOutputOptions(MediaGraph& graph,
+                                                                            MediaNodeId nodeId,
+                                                                            const MediaRealtimeGraphBuilderOptions& options)
 {
     if (!options.outputUrl.empty()) {
-        graph.setNodeOption(nodeId, "url", options.outputUrl);
+        if (auto status = setNodeOptionChecked(graph, nodeId, "url", options.outputUrl); !status) return status;
     }
     if (!options.mediaId.empty()) {
-        graph.setNodeOption(nodeId, "media_id", options.mediaId);
+        if (auto status = setNodeOptionChecked(graph, nodeId, "media_id", options.mediaId); !status) return status;
     }
+    return ::media::Result<void>::success();
 }
 
 } // namespace media::ffmpeg::graph
