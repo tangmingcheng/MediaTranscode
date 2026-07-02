@@ -2,7 +2,6 @@
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
 
-#include <array>
 #include <string>
 
 namespace media::ffmpeg::graph {
@@ -53,6 +52,24 @@ std::string defaultPacketSourcePort(MediaStreamKind streamKind)
             ::media::ErrorInfo::invalidArgument("MediaPacketCopyBranchBuilder queue capacities must be greater than 0"));
     }
     return ::media::Result<void>::success();
+}
+
+::media::Result<void> connectChecked(MediaGraph& graph,
+                                     MediaNodeId fromNode,
+                                     const std::string& fromPort,
+                                     MediaNodeId toNode,
+                                     const std::string& toPort,
+                                     const std::string& label,
+                                     std::size_t capacity)
+{
+    return MediaGraphBuildSupport::connectChecked(graph,
+                                                  "MediaPacketCopyBranchBuilder",
+                                                  fromNode,
+                                                  fromPort,
+                                                  toNode,
+                                                  toPort,
+                                                  label,
+                                                  MediaGraphBuildSupport::blockingQueuePolicy(capacity));
 }
 
 } // namespace
@@ -151,18 +168,11 @@ std::string defaultPacketSourcePort(MediaStreamKind streamKind)
                                                                    true); !status) return status;
 
     const MediaGraphQueueParameters& queues = options.queues;
-    const std::array<std::pair<MediaEdgeId, const char*>, 5> edges {{
-        { graph.connect(options.formatSourceNode, options.formatSourcePort, sourceConfig, "format", prefix + ".format -> source_config.format", MediaGraphBuildSupport::blockingQueuePolicy(queues.metadata)), "source_config.format" },
-        { graph.connect(sourceConfig, "codec", options.muxNode, options.muxCodecPort, prefix + ".source_config.codec -> mux.codec", MediaGraphBuildSupport::blockingQueuePolicy(queues.metadata)), "source_config.codec" },
-        { graph.connect(options.formatSourceNode, options.formatSourcePort, packetNormalize, "format", prefix + ".format -> normalize.format", MediaGraphBuildSupport::blockingQueuePolicy(queues.metadata)), "normalize.format" },
-        { graph.connect(options.packetSourceNode, packetSourcePort, packetNormalize, "packet", prefix + ".packet -> normalize.packet", MediaGraphBuildSupport::blockingQueuePolicy(queues.packet)), "normalize.packet" },
-        { graph.connect(packetNormalize, "packet", options.muxNode, options.muxPacketPort, prefix + ".normalize.packet -> mux.packet", MediaGraphBuildSupport::blockingQueuePolicy(queues.mux)), "normalize.mux" },
-    }};
-    for (const auto& edge : edges) {
-        if (auto status = MediaGraphBuildSupport::requireEdge(edge.first, owner, edge.second); !status) return status;
-    }
-
-    return ::media::Result<void>::success();
+    if (auto status = connectChecked(graph, options.formatSourceNode, options.formatSourcePort, sourceConfig, "format", prefix + ".format -> source_config.format", queues.metadata); !status) return status;
+    if (auto status = connectChecked(graph, sourceConfig, "codec", options.muxNode, options.muxCodecPort, prefix + ".source_config.codec -> mux.codec", queues.metadata); !status) return status;
+    if (auto status = connectChecked(graph, options.formatSourceNode, options.formatSourcePort, packetNormalize, "format", prefix + ".format -> normalize.format", queues.metadata); !status) return status;
+    if (auto status = connectChecked(graph, options.packetSourceNode, packetSourcePort, packetNormalize, "packet", prefix + ".packet -> normalize.packet", queues.packet); !status) return status;
+    return connectChecked(graph, packetNormalize, "packet", options.muxNode, options.muxPacketPort, prefix + ".normalize.packet -> mux.packet", queues.mux);
 }
 
 } // namespace media::ffmpeg::graph
