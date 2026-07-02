@@ -53,6 +53,17 @@ MediaFormatDescriptor streamIndexDescriptor(MediaStreamKind streamKind, int stre
                                            bool required,
                                            bool multiple);
 
+::media::Result<void> addOutputPortWithFormatDescriptorChecked(MediaGraph& graph,
+                                                              std::string_view owner,
+                                                              MediaNodeId nodeId,
+                                                              std::string name,
+                                                              MediaStreamKind streamKind,
+                                                              MediaEdgeKind edgeKind,
+                                                              MediaPayloadKind payloadKind,
+                                                              bool required,
+                                                              bool multiple,
+                                                              MediaFormatDescriptor descriptor);
+
 ::media::Result<void> connectChecked(MediaGraph& graph,
                                      std::string_view owner,
                                      MediaNodeId fromNode,
