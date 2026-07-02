@@ -5,7 +5,6 @@
 #include "internal/graph/builder/local/LocalFilePlannerRequestBuilder.h"
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 
-#include <array>
 #include <string>
 #include <utility>
 
@@ -131,23 +130,17 @@ constexpr const char* owner = "LocalFileAudioBranchBuilder";
     if (auto status = addOutputPortChecked(graph, encode, "codec", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false); !status) return status;
     if (auto status = addOutputPortChecked(graph, encode, "packet", MediaStreamKind::Audio, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true); !status) return status;
 
-    const std::array<::media::Result<void>, 11> edges {{
-        connectChecked(graph, fileInput, "format", packetNormalize, "format", "local.file.input.format -> local.audio.packet_normalize.format", queues.metadata),
-        connectChecked(graph, split, "audio", packetNormalize, "packet", "local.stream.split.audio -> local.audio.packet_normalize.packet", queues.packet),
-        connectChecked(graph, fileInput, "format", codecResolver, "format", "local.file.input.format -> local.audio.codec_resolver.format", queues.metadata),
-        connectChecked(graph, codecResolver, "decoder", decode, "codec", "local.audio.codec_resolver.decoder -> local.audio.decode.codec", queues.metadata),
-        connectChecked(graph, packetNormalize, "packet", decode, "packet", "local.audio.packet_normalize.packet -> local.audio.decode.packet", queues.packet),
-        connectChecked(graph, codecResolver, "encoder", resample, "codec", "local.audio.codec_resolver.encoder -> local.audio.resample.codec", queues.metadata),
-        connectChecked(graph, decode, "frame", resample, "frame", "local.audio.decode.frame -> local.audio.resample.frame", queues.frame),
-        connectChecked(graph, codecResolver, "encoder", encode, "codec", "local.audio.codec_resolver.encoder -> local.audio.encode.codec", queues.metadata),
-        connectChecked(graph, resample, "frame", encode, "frame", "local.audio.resample.frame -> local.audio.encode.frame", queues.frame),
-        connectChecked(graph, encode, "codec", mux, "codec", "local.audio.encode.codec -> local.file.mux.codec", queues.metadata),
-        connectChecked(graph, encode, "packet", mux, "packet", "local.audio.encode.packet -> local.file.mux.packet", queues.mux),
-    }};
-    for (const auto& edge : edges) {
-        if (!edge) return edge;
-    }
-    return ::media::Result<void>::success();
+    if (auto status = connectChecked(graph, fileInput, "format", packetNormalize, "format", "local.file.input.format -> local.audio.packet_normalize.format", queues.metadata); !status) return status;
+    if (auto status = connectChecked(graph, split, "audio", packetNormalize, "packet", "local.stream.split.audio -> local.audio.packet_normalize.packet", queues.packet); !status) return status;
+    if (auto status = connectChecked(graph, fileInput, "format", codecResolver, "format", "local.file.input.format -> local.audio.codec_resolver.format", queues.metadata); !status) return status;
+    if (auto status = connectChecked(graph, codecResolver, "decoder", decode, "codec", "local.audio.codec_resolver.decoder -> local.audio.decode.codec", queues.metadata); !status) return status;
+    if (auto status = connectChecked(graph, packetNormalize, "packet", decode, "packet", "local.audio.packet_normalize.packet -> local.audio.decode.packet", queues.packet); !status) return status;
+    if (auto status = connectChecked(graph, codecResolver, "encoder", resample, "codec", "local.audio.codec_resolver.encoder -> local.audio.resample.codec", queues.metadata); !status) return status;
+    if (auto status = connectChecked(graph, decode, "frame", resample, "frame", "local.audio.decode.frame -> local.audio.resample.frame", queues.frame); !status) return status;
+    if (auto status = connectChecked(graph, codecResolver, "encoder", encode, "codec", "local.audio.codec_resolver.encoder -> local.audio.encode.codec", queues.metadata); !status) return status;
+    if (auto status = connectChecked(graph, resample, "frame", encode, "frame", "local.audio.resample.frame -> local.audio.encode.frame", queues.frame); !status) return status;
+    if (auto status = connectChecked(graph, encode, "codec", mux, "codec", "local.audio.encode.codec -> local.file.mux.codec", queues.metadata); !status) return status;
+    return connectChecked(graph, encode, "packet", mux, "packet", "local.audio.encode.packet -> local.file.mux.packet", queues.mux);
 }
 
 } // namespace
