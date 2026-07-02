@@ -1,5 +1,6 @@
 #include "internal/graph/builder/local/LocalFileAudioBranchBuilder.h"
 
+#include "internal/graph/builder/MediaGraphBuildSupport.h"
 #include "internal/graph/builder/MediaPacketCopyBranchBuilder.h"
 #include "internal/graph/builder/local/LocalFilePlannerRequestBuilder.h"
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
@@ -11,76 +12,16 @@
 namespace media::ffmpeg::graph {
 namespace {
 
-MediaEdgePolicy blockingQueuePolicy(std::size_t capacity)
-{
-    MediaEdgePolicy policy;
-    policy.queuePolicy.mode = MediaQueueMode::Blocking;
-    policy.queuePolicy.bounded = true;
-    policy.queuePolicy.capacity = capacity;
-    policy.queuePolicy.overflowPolicy = MediaQueueOverflowPolicy::BlockProducer;
-    policy.queuePolicy.preserveOrdering = true;
-    policy.queuePolicy.allowFlushControlBypass = true;
-    policy.queuePolicy.collectMetrics = true;
-    return policy;
-}
-
-MediaFormatDescriptor streamIndexDescriptor(MediaStreamKind streamKind, int streamIndex)
-{
-    MediaFormatDescriptor descriptor;
-    descriptor.streamKind = streamKind;
-    descriptor.streamIndex = streamIndex;
-    return descriptor;
-}
-
-::media::Result<void> requirePort(MediaPortId portId, const char* name)
-{
-    if (!portId.isValid()) {
-        return ::media::Result<void>::failure(::media::ErrorInfo::internalError(std::string("LocalFileAudioBranchBuilder failed to add port: ") + name));
-    }
-    return ::media::Result<void>::success();
-}
-
-::media::Result<void> requireEdge(MediaEdgeId edgeId, const char* name)
-{
-    if (!edgeId.isValid()) {
-        return ::media::Result<void>::failure(::media::ErrorInfo::internalError(std::string("LocalFileAudioBranchBuilder failed to connect edge: ") + name));
-    }
-    return ::media::Result<void>::success();
-}
+constexpr const char* owner = "LocalFileAudioBranchBuilder";
 
 ::media::Result<void> setNodeOptionChecked(MediaGraph& graph, MediaNodeId nodeId, const std::string& key, const std::string& value)
 {
-    if (!graph.setNodeOption(nodeId, key, value)) {
-        return ::media::Result<void>::failure(
-            ::media::ErrorInfo::internalError("LocalFileAudioBranchBuilder failed to set option: " + key));
-    }
-    return ::media::Result<void>::success();
+    return MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, key, value);
 }
 
 ::media::Result<void> setAudioSourceStreamOption(MediaGraph& graph, MediaNodeId nodeId, int sourceStreamIndex)
 {
     return setNodeOptionChecked(graph, nodeId, MediaTranscodeOptionKey::AudioSourceStreamIndex, std::to_string(sourceStreamIndex));
-}
-
-::media::Result<void> setPacketStreamOptions(MediaGraph& graph,
-                                             MediaNodeId nodeId,
-                                             MediaStreamKind streamKind,
-                                             int sourceStreamIndex)
-{
-    const char* streamKindValue = nullptr;
-    if (streamKind == MediaStreamKind::Audio) {
-        streamKindValue = "audio";
-    } else if (streamKind == MediaStreamKind::Video) {
-        streamKindValue = "video";
-    } else {
-        return ::media::Result<void>::failure(
-            ::media::ErrorInfo::invalidArgument("LocalFileAudioBranchBuilder packet stream kind must be audio or video"));
-    }
-
-    if (auto status = setNodeOptionChecked(graph, nodeId, MediaTranscodeOptionKey::PacketSourceStreamIndex, std::to_string(sourceStreamIndex)); !status) {
-        return status;
-    }
-    return setNodeOptionChecked(graph, nodeId, MediaTranscodeOptionKey::PacketStreamKind, streamKindValue);
 }
 
 ::media::Result<void> applyAudioEncodeOptions(MediaGraph& graph,
@@ -105,12 +46,24 @@ MediaFormatDescriptor streamIndexDescriptor(MediaStreamKind streamKind, int stre
 
 ::media::Result<void> addInputPortChecked(MediaGraph& graph, MediaNodeId nodeId, const std::string& name, MediaStreamKind streamKind, MediaEdgeKind edgeKind, MediaPayloadKind payloadKind, bool required, bool multiple)
 {
-    return requirePort(graph.addInputPort(nodeId, name, streamKind, edgeKind, payloadKind, required, multiple), name.c_str());
+    return MediaGraphBuildSupport::addInputPortChecked(graph, owner, nodeId, name, streamKind, edgeKind, payloadKind, required, multiple);
 }
 
 ::media::Result<void> addOutputPortChecked(MediaGraph& graph, MediaNodeId nodeId, const std::string& name, MediaStreamKind streamKind, MediaEdgeKind edgeKind, MediaPayloadKind payloadKind, bool required, bool multiple)
 {
-    return requirePort(graph.addOutputPort(nodeId, name, streamKind, edgeKind, payloadKind, required, multiple), name.c_str());
+    return MediaGraphBuildSupport::addOutputPortChecked(graph, owner, nodeId, name, streamKind, edgeKind, payloadKind, required, multiple);
+}
+
+::media::Result<void> connectChecked(MediaGraph& graph, MediaNodeId fromNode, const std::string& fromPort, MediaNodeId toNode, const std::string& toPort, const std::string& label, std::size_t capacity)
+{
+    return MediaGraphBuildSupport::connectChecked(graph,
+                                                  owner,
+                                                  fromNode,
+                                                  fromPort,
+                                                  toNode,
+                                                  toPort,
+                                                  label,
+                                                  MediaGraphBuildSupport::blockingQueuePolicy(capacity));
 }
 
 ::media::Result<void> buildAudioCopyBranch(MediaGraph& graph,
@@ -149,13 +102,13 @@ MediaFormatDescriptor streamIndexDescriptor(MediaStreamKind streamKind, int stre
     const MediaNodeId resample = graph.addNode(MediaNodeKind::AudioResample, "local.audio.resample", "Local audio resample");
     const MediaNodeId encode = graph.addNode(MediaNodeKind::AudioEncode, "local.audio.encode", "Local audio encode");
 
-    if (auto status = setPacketStreamOptions(graph, packetNormalize, MediaStreamKind::Audio, streamIndex); !status) return status;
+    if (auto status = MediaGraphBuildSupport::setPacketStreamOptions(graph, owner, packetNormalize, MediaStreamKind::Audio, streamIndex); !status) return status;
     if (auto status = setAudioSourceStreamOption(graph, codecResolver, streamIndex); !status) return status;
     if (auto status = applyAudioEncodeOptions(graph, codecResolver, audio, plan); !status) return status;
 
     const MediaPortId audioPort = graph.addOutputPort(split, "audio", MediaStreamKind::Audio, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, false, true);
-    if (auto status = requirePort(audioPort, "split.audio"); !status) return status;
-    graph.setPortFormatDescriptor(audioPort, streamIndexDescriptor(MediaStreamKind::Audio, streamIndex));
+    if (auto status = MediaGraphBuildSupport::requirePort(audioPort, owner, "split.audio"); !status) return status;
+    graph.setPortFormatDescriptor(audioPort, MediaGraphBuildSupport::streamIndexDescriptor(MediaStreamKind::Audio, streamIndex));
 
     if (auto status = addInputPortChecked(graph, packetNormalize, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext, true, false); !status) return status;
     if (auto status = addInputPortChecked(graph, packetNormalize, "packet", MediaStreamKind::Audio, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true); !status) return status;
@@ -178,23 +131,22 @@ MediaFormatDescriptor streamIndexDescriptor(MediaStreamKind streamKind, int stre
     if (auto status = addOutputPortChecked(graph, encode, "codec", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false); !status) return status;
     if (auto status = addOutputPortChecked(graph, encode, "packet", MediaStreamKind::Audio, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true); !status) return status;
 
-    const std::array<std::pair<MediaEdgeId, const char*>, 10> edges {{
-        { graph.connect(fileInput, "format", packetNormalize, "format", "local.file.input.format -> local.audio.packet_normalize.format", blockingQueuePolicy(queues.metadata)), "packet_normalize.format" },
-        { graph.connect(split, "audio", packetNormalize, "packet", "local.stream.split.audio -> local.audio.packet_normalize.packet", blockingQueuePolicy(queues.packet)), "packet_normalize.packet" },
-        { graph.connect(fileInput, "format", codecResolver, "format", "local.file.input.format -> local.audio.codec_resolver.format", blockingQueuePolicy(queues.metadata)), "codec_resolver.format" },
-        { graph.connect(codecResolver, "decoder", decode, "codec", "local.audio.codec_resolver.decoder -> local.audio.decode.codec", blockingQueuePolicy(queues.metadata)), "decode.codec" },
-        { graph.connect(packetNormalize, "packet", decode, "packet", "local.audio.packet_normalize.packet -> local.audio.decode.packet", blockingQueuePolicy(queues.packet)), "decode.packet" },
-        { graph.connect(codecResolver, "encoder", resample, "codec", "local.audio.codec_resolver.encoder -> local.audio.resample.codec", blockingQueuePolicy(queues.metadata)), "resample.codec" },
-        { graph.connect(decode, "frame", resample, "frame", "local.audio.decode.frame -> local.audio.resample.frame", blockingQueuePolicy(queues.frame)), "resample.frame" },
-        { graph.connect(codecResolver, "encoder", encode, "codec", "local.audio.codec_resolver.encoder -> local.audio.encode.codec", blockingQueuePolicy(queues.metadata)), "encode.codec" },
-        { graph.connect(resample, "frame", encode, "frame", "local.audio.resample.frame -> local.audio.encode.frame", blockingQueuePolicy(queues.frame)), "encode.frame" },
-        { graph.connect(encode, "codec", mux, "codec", "local.audio.encode.codec -> local.file.mux.codec", blockingQueuePolicy(queues.metadata)), "encode.mux_codec" },
+    const std::array<::media::Result<void>, 11> edges {{
+        connectChecked(graph, fileInput, "format", packetNormalize, "format", "local.file.input.format -> local.audio.packet_normalize.format", queues.metadata),
+        connectChecked(graph, split, "audio", packetNormalize, "packet", "local.stream.split.audio -> local.audio.packet_normalize.packet", queues.packet),
+        connectChecked(graph, fileInput, "format", codecResolver, "format", "local.file.input.format -> local.audio.codec_resolver.format", queues.metadata),
+        connectChecked(graph, codecResolver, "decoder", decode, "codec", "local.audio.codec_resolver.decoder -> local.audio.decode.codec", queues.metadata),
+        connectChecked(graph, packetNormalize, "packet", decode, "packet", "local.audio.packet_normalize.packet -> local.audio.decode.packet", queues.packet),
+        connectChecked(graph, codecResolver, "encoder", resample, "codec", "local.audio.codec_resolver.encoder -> local.audio.resample.codec", queues.metadata),
+        connectChecked(graph, decode, "frame", resample, "frame", "local.audio.decode.frame -> local.audio.resample.frame", queues.frame),
+        connectChecked(graph, codecResolver, "encoder", encode, "codec", "local.audio.codec_resolver.encoder -> local.audio.encode.codec", queues.metadata),
+        connectChecked(graph, resample, "frame", encode, "frame", "local.audio.resample.frame -> local.audio.encode.frame", queues.frame),
+        connectChecked(graph, encode, "codec", mux, "codec", "local.audio.encode.codec -> local.file.mux.codec", queues.metadata),
+        connectChecked(graph, encode, "packet", mux, "packet", "local.audio.encode.packet -> local.file.mux.packet", queues.mux),
     }};
     for (const auto& edge : edges) {
-        if (auto status = requireEdge(edge.first, edge.second); !status) return status;
+        if (!edge) return edge;
     }
-    auto packetEdge = requireEdge(graph.connect(encode, "packet", mux, "packet", "local.audio.encode.packet -> local.file.mux.packet", blockingQueuePolicy(queues.mux)), "encode.mux_packet");
-    if (!packetEdge) return packetEdge;
     return ::media::Result<void>::success();
 }
 
