@@ -1,6 +1,7 @@
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
 
 #include <string>
+#include <utility>
 
 namespace media::ffmpeg::graph::MediaGraphBuildSupport {
 namespace {
