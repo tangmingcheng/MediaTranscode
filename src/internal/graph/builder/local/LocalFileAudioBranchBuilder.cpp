@@ -5,6 +5,7 @@
 #include "internal/graph/builder/local/LocalFilePlannerRequestBuilder.h"
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 
+#include <cstddef>
 #include <string>
 #include <utility>
 
