@@ -211,7 +211,9 @@ const char* mediaHardwareFrameKindName(MediaHardwareFrameKind kind) noexcept
     plan.inputCodecName = canonicalCodecName(inputCodec.value());
     plan.outputCodecName = canonicalCodecName(options.outputCodecName.empty() ? plan.inputCodecName : options.outputCodecName);
 
+    const bool resizeRequested = options.targetWidth > 0 || options.targetHeight > 0;
     const bool canCopyPackets = options.allowPacketCopy &&
+        !resizeRequested &&
         !options.filterRequired &&
         plan.inputCodecName == plan.outputCodecName;
     plan.branchMode = canCopyPackets ? MediaBranchMode::CopyPacket : MediaBranchMode::TranscodeFrame;
