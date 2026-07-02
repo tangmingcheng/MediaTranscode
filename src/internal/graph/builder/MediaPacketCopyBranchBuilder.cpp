@@ -2,6 +2,7 @@
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
 
+#include <cstddef>
 #include <string>
 
 namespace media::ffmpeg::graph {
