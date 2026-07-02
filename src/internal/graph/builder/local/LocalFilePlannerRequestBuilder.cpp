@@ -35,6 +35,23 @@ bool resizeRequested(const MediaVideoTranscodeParameters& video) noexcept
     return video.width.has_value() && video.height.has_value();
 }
 
+bool encodeOptionsRequested(const MediaVideoTranscodeParameters& video) noexcept
+{
+    return video.frameRate.specified() ||
+        video.rateControl != MediaRateControlMode::Auto ||
+        video.bitrateKbps.has_value() ||
+        video.minBitrateKbps.has_value() ||
+        video.maxBitrateKbps.has_value() ||
+        video.bufferSizeKbits.has_value() ||
+        video.quality.has_value() ||
+        !video.preset.empty() ||
+        !video.tune.empty() ||
+        !video.profile.empty() ||
+        !video.level.empty() ||
+        video.gop.has_value() ||
+        video.bFrames.has_value();
+}
+
 } // namespace
 
 ::media::Result<MediaPipelinePlannerOptions> LocalFilePlannerRequestBuilder::buildVideoPlannerOptions(
@@ -50,7 +67,7 @@ bool resizeRequested(const MediaVideoTranscodeParameters& video) noexcept
 
     MediaPipelinePlannerOptions plannerOptions;
     plannerOptions.includeVideo = parameters.execution.includeVideo;
-    plannerOptions.allowPacketCopy = false;
+    plannerOptions.allowPacketCopy = !resizeRequested(video) && !encodeOptionsRequested(video);
     plannerOptions.outputPath = options.outputUrl;
     plannerOptions.outputCodecName = video.codecName;
     plannerOptions.targetWidth = video.width.value_or(0);
