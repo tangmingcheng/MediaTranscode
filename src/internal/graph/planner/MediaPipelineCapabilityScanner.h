@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/graph/model/MediaGraphTypes.h"
 #include "internal/graph/planner/MediaPipelinePlanner.h"
 
 #include <string>
