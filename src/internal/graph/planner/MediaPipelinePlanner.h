@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/graph/model/MediaGraphTypes.h"
 #include "internal/graph/model/MediaHardwareDescriptor.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "media_transcode/Result.h"
