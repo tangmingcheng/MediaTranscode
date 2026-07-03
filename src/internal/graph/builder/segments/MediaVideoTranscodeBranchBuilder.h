@@ -1,0 +1,38 @@
+#pragma once
+
+#include "internal/graph/core/MediaGraph.h"
+#include "internal/graph/model/MediaTranscodeParameters.h"
+#include "internal/graph/planner/MediaPipelinePlanner.h"
+#include "media_transcode/Result.h"
+
+#include <string>
+
+namespace media::ffmpeg::graph {
+
+struct MediaVideoTranscodeBranchOptions {
+    std::string prefix = "video.transcode";
+    MediaPipelinePlan plan;
+    MediaVideoTranscodeParameters parameters;
+    MediaGraphQueueParameters queues;
+
+    MediaNodeId formatSourceNode = MediaNodeId::invalid();
+    std::string formatSourcePort = "format";
+
+    MediaNodeId packetSourceNode = MediaNodeId::invalid();
+    std::string packetSourcePort = "video";
+
+    MediaNodeId muxNode = MediaNodeId::invalid();
+    std::string muxCodecPort = "codec";
+    std::string muxPacketPort = "packet";
+};
+
+class MediaVideoTranscodeBranchBuilder final {
+public:
+    static ::media::Result<void> build(MediaGraph& graph,
+                                       const MediaVideoTranscodeBranchOptions& options);
+
+private:
+    MediaVideoTranscodeBranchBuilder() = default;
+};
+
+} // namespace media::ffmpeg::graph
