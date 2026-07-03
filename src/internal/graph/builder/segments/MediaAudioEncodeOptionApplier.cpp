@@ -11,17 +11,17 @@ namespace {
 constexpr const char* owner = "MediaAudioEncodeOptionApplier";
 
 ::media::Result<void> setOption(MediaGraph& graph,
-                                MediaNodeId nodeId,
-                                const std::string& key,
-                                const std::string& value)
+                                 MediaNodeId nodeId,
+                                 const std::string& key,
+                                 const std::string& value)
 {
     return MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, key, value);
 }
 
 ::media::Result<void> setIfPresent(MediaGraph& graph,
-                                   MediaNodeId nodeId,
-                                   const std::string& key,
-                                   const std::optional<int>& value)
+                                    MediaNodeId nodeId,
+                                    const std::string& key,
+                                    const std::optional<int>& value)
 {
     if (!value) {
         return ::media::Result<void>::success();
@@ -30,9 +30,9 @@ constexpr const char* owner = "MediaAudioEncodeOptionApplier";
 }
 
 ::media::Result<void> setIfNotEmpty(MediaGraph& graph,
-                                    MediaNodeId nodeId,
-                                    const std::string& key,
-                                    const std::string& value)
+                                     MediaNodeId nodeId,
+                                     const std::string& key,
+                                     const std::string& value)
 {
     if (value.empty()) {
         return ::media::Result<void>::success();
@@ -41,7 +41,7 @@ constexpr const char* owner = "MediaAudioEncodeOptionApplier";
 }
 
 ::media::Result<void> validateOptionalNonNegative(const std::optional<int>& value,
-                                                  const std::string& name)
+                                                   const std::string& name)
 {
     if (value && *value < 0) {
         return ::media::Result<void>::failure(
@@ -51,7 +51,7 @@ constexpr const char* owner = "MediaAudioEncodeOptionApplier";
 }
 
 ::media::Result<void> validateOptionalPositive(const std::optional<int>& value,
-                                               const std::string& name)
+                                                const std::string& name)
 {
     if (value && *value <= 0) {
         return ::media::Result<void>::failure(
@@ -81,12 +81,9 @@ constexpr const char* owner = "MediaAudioEncodeOptionApplier";
 ::media::Result<void> MediaAudioEncodeOptionApplier::applyCodecResolverOptions(
     MediaGraph& graph,
     MediaNodeId codecResolver,
-    const MediaAudioTranscodeParameters& audio,
-    const MediaAudioPipelinePlan& plan)
+    const MediaAudioTranscodeParameters& audio)
 {
     if (auto status = validateAudioOptions(audio); !status) return status;
-    if (auto status = setOption(graph, codecResolver, MediaTranscodeOptionKey::AudioCodec, plan.targetCodecName); !status) return status;
-    if (auto status = setOption(graph, codecResolver, MediaTranscodeOptionKey::PlannedEncoder, plan.targetEncoderName); !status) return status;
     if (auto status = setOption(graph, codecResolver, MediaTranscodeOptionKey::AudioRateControl, mediaRateControlModeName(audio.rateControl)); !status) return status;
     if (auto status = setIfPresent(graph, codecResolver, MediaTranscodeOptionKey::AudioBitrateKbps, audio.bitrateKbps); !status) return status;
     if (auto status = setIfPresent(graph, codecResolver, MediaTranscodeOptionKey::AudioMinBitrateKbps, audio.minBitrateKbps); !status) return status;
