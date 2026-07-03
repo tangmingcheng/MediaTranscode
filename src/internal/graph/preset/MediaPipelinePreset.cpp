@@ -3,6 +3,8 @@
 #include "internal/graph/builder/local/LocalFileTranscodeGraphBuilder.h"
 #include "internal/graph/builder/realtime/MediaRealtimeGraphBuilder.h"
 
+#include <utility>
+
 namespace media::ffmpeg::graph {
 
 ::media::Result<MediaGraph> MediaPipelinePreset::create(MediaPipelinePresetKind kind,
@@ -41,7 +43,11 @@ namespace media::ffmpeg::graph {
     builderOptions.includeVideo = options.includeVideo;
     builderOptions.enablePacketFanout = true;
 
-    return MediaRealtimeGraphBuilder::buildPacketRelay(builderOptions);
+    auto realtime = MediaRealtimeGraphBuilder::build(builderOptions);
+    if (!realtime) {
+        return ::media::Result<MediaGraph>::failure(realtime.error());
+    }
+    return ::media::Result<MediaGraph>::success(std::move(realtime).value().graph);
 }
 
 } // namespace media::ffmpeg::graph
