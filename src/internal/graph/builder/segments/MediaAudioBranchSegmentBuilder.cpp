@@ -1,7 +1,7 @@
 #include "internal/graph/builder/segments/MediaAudioBranchSegmentBuilder.h"
 
-#include "internal/graph/builder/MediaPacketCopyBranchBuilder.h"
 #include "internal/graph/builder/segments/MediaAudioEncodeBranchBuilder.h"
+#include "internal/graph/builder/segments/MediaAudioPacketCopyBranchBuilder.h"
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -28,42 +28,6 @@ namespace {
     return ::media::Result<void>::success();
 }
 
-::media::Result<void> buildCopyBranch(MediaGraph& graph,
-                                      const MediaAudioBranchSegmentOptions& options)
-{
-    MediaPacketCopyBranchOptions branchOptions;
-    branchOptions.prefix = options.prefix + ".copy";
-    branchOptions.streamKind = MediaStreamKind::Audio;
-    branchOptions.sourceStreamIndex = options.plan.sourceStreamIndex;
-    branchOptions.formatSourceNode = options.formatSourceNode;
-    branchOptions.formatSourcePort = options.formatSourcePort;
-    branchOptions.packetSourceNode = options.packetSourceNode;
-    branchOptions.packetSourcePort = options.packetSourcePort;
-    branchOptions.muxNode = options.muxNode;
-    branchOptions.muxCodecPort = options.muxCodecPort;
-    branchOptions.muxPacketPort = options.muxPacketPort;
-    branchOptions.queues = options.queues;
-    return MediaPacketCopyBranchBuilder::build(graph, branchOptions);
-}
-
-::media::Result<void> buildEncodeBranch(MediaGraph& graph,
-                                        const MediaAudioBranchSegmentOptions& options)
-{
-    MediaAudioEncodeBranchOptions encodeOptions;
-    encodeOptions.prefix = options.prefix + ".encode";
-    encodeOptions.plan = options.plan;
-    encodeOptions.parameters = options.parameters;
-    encodeOptions.queues = options.queues;
-    encodeOptions.formatSourceNode = options.formatSourceNode;
-    encodeOptions.formatSourcePort = options.formatSourcePort;
-    encodeOptions.packetSourceNode = options.packetSourceNode;
-    encodeOptions.packetSourcePort = options.packetSourcePort;
-    encodeOptions.muxNode = options.muxNode;
-    encodeOptions.muxCodecPort = options.muxCodecPort;
-    encodeOptions.muxPacketPort = options.muxPacketPort;
-    return MediaAudioEncodeBranchBuilder::build(graph, encodeOptions);
-}
-
 } // namespace
 
 ::media::Result<bool> MediaAudioBranchSegmentBuilder::buildIfPlanned(
@@ -73,20 +37,41 @@ namespace {
     if (!options.plan.enabled || options.plan.branchMode == MediaBranchMode::Drop) {
         return ::media::Result<bool>::success(false);
     }
-    if (options.plan.sourceStreamIndex < 0) {
-        return ::media::Result<bool>::failure(
-            ::media::ErrorInfo::invalidArgument("MediaAudioBranchSegmentBuilder requires planned audio source stream index"));
-    }
+
     if (auto status = validateEndpoints(options); !status) {
         return ::media::Result<bool>::failure(status.error());
     }
 
     ::media::Result<void> buildStatus = ::media::Result<void>::failure(
         ::media::ErrorInfo::unsupported("MediaAudioBranchSegmentBuilder unsupported audio branch mode"));
+
     if (options.plan.branchMode == MediaBranchMode::CopyPacket) {
-        buildStatus = buildCopyBranch(graph, options);
+        MediaAudioPacketCopyBranchOptions copyOptions;
+        copyOptions.prefix = options.prefix + ".copy";
+        copyOptions.plan = options.plan;
+        copyOptions.queues = options.queues;
+        copyOptions.formatSourceNode = options.formatSourceNode;
+        copyOptions.formatSourcePort = options.formatSourcePort;
+        copyOptions.packetSourceNode = options.packetSourceNode;
+        copyOptions.packetSourcePort = options.packetSourcePort;
+        copyOptions.muxNode = options.muxNode;
+        copyOptions.muxCodecPort = options.muxCodecPort;
+        copyOptions.muxPacketPort = options.muxPacketPort;
+        buildStatus = MediaAudioPacketCopyBranchBuilder::build(graph, copyOptions);
     } else if (options.plan.branchMode == MediaBranchMode::TranscodeFrame) {
-        buildStatus = buildEncodeBranch(graph, options);
+        MediaAudioEncodeBranchOptions encodeOptions;
+        encodeOptions.prefix = options.prefix + ".encode";
+        encodeOptions.plan = options.plan;
+        encodeOptions.parameters = options.parameters;
+        encodeOptions.queues = options.queues;
+        encodeOptions.formatSourceNode = options.formatSourceNode;
+        encodeOptions.formatSourcePort = options.formatSourcePort;
+        encodeOptions.packetSourceNode = options.packetSourceNode;
+        encodeOptions.packetSourcePort = options.packetSourcePort;
+        encodeOptions.muxNode = options.muxNode;
+        encodeOptions.muxCodecPort = options.muxCodecPort;
+        encodeOptions.muxPacketPort = options.muxPacketPort;
+        buildStatus = MediaAudioEncodeBranchBuilder::build(graph, encodeOptions);
     }
 
     if (!buildStatus) {
