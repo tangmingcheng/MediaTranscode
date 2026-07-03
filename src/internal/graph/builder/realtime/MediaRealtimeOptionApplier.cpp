@@ -37,4 +37,18 @@ constexpr const char* owner = "MediaRealtimeOptionApplier";
     return ::media::Result<void>::success();
 }
 
+::media::Result<void> MediaRealtimeOptionApplier::applySdpWriterOptions(
+    MediaGraph& graph,
+    MediaNodeId nodeId,
+    const MediaRealtimeGraphBuilderOptions& options)
+{
+    if (!options.sdpPath.empty()) {
+        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, "path", options.sdpPath); !status) return status;
+    }
+    if (!options.mediaId.empty()) {
+        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, "media_id", options.mediaId); !status) return status;
+    }
+    return ::media::Result<void>::success();
+}
+
 } // namespace media::ffmpeg::graph
