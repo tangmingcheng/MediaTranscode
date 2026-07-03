@@ -1,7 +1,5 @@
 #pragma once
 
-#include "internal/graph/core/MediaGraph.h"
-#include "internal/graph/core/MediaNodeId.h"
 #include "internal/graph/model/MediaHardwareDescriptor.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "media_transcode/Result.h"
@@ -87,12 +85,6 @@ public:
     static ::media::Result<MediaPipelinePlan> planVideoTranscodeFile(
         const std::string& inputPath,
         MediaPipelinePlannerOptions options = {});
-
-    static ::media::Status applyVideoPlanToGraph(MediaGraph& graph,
-                                                 MediaNodeId videoDecodeNode,
-                                                 MediaNodeId videoFilterNode,
-                                                 MediaNodeId videoEncodeNode,
-                                                 const MediaPipelinePlan& plan);
 
 private:
     MediaPipelinePlanner() = default;
