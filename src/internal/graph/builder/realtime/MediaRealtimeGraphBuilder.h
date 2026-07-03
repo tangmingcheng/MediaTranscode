@@ -10,7 +10,6 @@ namespace media::ffmpeg::graph {
 
 enum class MediaRealtimeGraphKind {
     PacketRelay,
-    DecodeEncode,
     IngestToMux
 };
 
@@ -43,9 +42,6 @@ public:
         const MediaRealtimeGraphBuilderOptions& options = {});
 
     static ::media::Result<MediaGraph> buildPacketRelay(
-        const MediaRealtimeGraphBuilderOptions& options = {});
-
-    static ::media::Result<MediaGraph> buildDecodeEncode(
         const MediaRealtimeGraphBuilderOptions& options = {});
 
     static ::media::Result<MediaGraph> buildIngestToMux(
