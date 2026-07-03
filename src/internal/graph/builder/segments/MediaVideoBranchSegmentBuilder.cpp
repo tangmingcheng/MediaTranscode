@@ -1,31 +1,29 @@
 #include "internal/graph/builder/segments/MediaVideoBranchSegmentBuilder.h"
 
+#include "internal/graph/builder/segments/MediaBranchEndpointValidator.h"
+#include "internal/graph/builder/segments/MediaVideoBranchOptionsMapper.h"
 #include "internal/graph/builder/segments/MediaVideoPacketCopyBranchBuilder.h"
 #include "internal/graph/builder/segments/MediaVideoTranscodeBranchBuilder.h"
 
 namespace media::ffmpeg::graph {
 namespace {
 
-::media::Result<void> validateEndpoints(const MediaVideoBranchSegmentOptions& options)
+constexpr const char* owner = "MediaVideoBranchSegmentBuilder";
+
+::media::Result<void> buildPlannedVideoBranch(MediaGraph& graph,
+                                              const MediaVideoBranchSegmentOptions& options)
 {
-    if (!options.formatSourceNode.isValid() || options.formatSourcePort.empty()) {
-        return ::media::Result<void>::failure(
-            ::media::ErrorInfo::invalidArgument("MediaVideoBranchSegmentBuilder requires format source endpoint"));
+    switch (options.plan.branchMode) {
+    case MediaBranchMode::CopyPacket:
+        return MediaVideoPacketCopyBranchBuilder::build(graph, makeVideoPacketCopyBranchOptions(options));
+    case MediaBranchMode::TranscodeFrame:
+        return MediaVideoTranscodeBranchBuilder::build(graph, makeVideoTranscodeBranchOptions(options));
+    case MediaBranchMode::Drop:
+        break;
     }
-    if (!options.packetSourceNode.isValid() || options.packetSourcePort.empty()) {
-        return ::media::Result<void>::failure(
-            ::media::ErrorInfo::invalidArgument("MediaVideoBranchSegmentBuilder requires packet source endpoint"));
-    }
-    if (!options.muxNode.isValid() || options.muxCodecPort.empty() || options.muxPacketPort.empty()) {
-        return ::media::Result<void>::failure(
-            ::media::ErrorInfo::invalidArgument("MediaVideoBranchSegmentBuilder requires mux endpoints"));
-    }
-    if (options.queues.metadata == 0 || options.queues.packet == 0 ||
-        options.queues.frame == 0 || options.queues.mux == 0) {
-        return ::media::Result<void>::failure(
-            ::media::ErrorInfo::invalidArgument("MediaVideoBranchSegmentBuilder queue capacities must be greater than 0"));
-    }
-    return ::media::Result<void>::success();
+
+    return ::media::Result<void>::failure(
+        ::media::ErrorInfo::unsupported("MediaVideoBranchSegmentBuilder unsupported video branch mode"));
 }
 
 } // namespace
@@ -38,44 +36,12 @@ namespace {
         return ::media::Result<bool>::success(false);
     }
 
-    if (auto status = validateEndpoints(options); !status) {
+    if (auto status = validateMediaBranchEndpoints(owner, makeVideoBranchEndpointSet(options)); !status) {
         return ::media::Result<bool>::failure(status.error());
     }
 
-    ::media::Result<void> buildStatus = ::media::Result<void>::failure(
-        ::media::ErrorInfo::unsupported("MediaVideoBranchSegmentBuilder unsupported video branch mode"));
-
-    if (options.plan.branchMode == MediaBranchMode::CopyPacket) {
-        MediaVideoPacketCopyBranchOptions copyOptions;
-        copyOptions.prefix = options.prefix + ".copy";
-        copyOptions.plan = options.plan;
-        copyOptions.queues = options.queues;
-        copyOptions.formatSourceNode = options.formatSourceNode;
-        copyOptions.formatSourcePort = options.formatSourcePort;
-        copyOptions.packetSourceNode = options.packetSourceNode;
-        copyOptions.packetSourcePort = options.packetSourcePort;
-        copyOptions.muxNode = options.muxNode;
-        copyOptions.muxCodecPort = options.muxCodecPort;
-        copyOptions.muxPacketPort = options.muxPacketPort;
-        buildStatus = MediaVideoPacketCopyBranchBuilder::build(graph, copyOptions);
-    } else if (options.plan.branchMode == MediaBranchMode::TranscodeFrame) {
-        MediaVideoTranscodeBranchOptions transcodeOptions;
-        transcodeOptions.prefix = options.prefix + ".transcode";
-        transcodeOptions.plan = options.plan;
-        transcodeOptions.parameters = options.parameters;
-        transcodeOptions.queues = options.queues;
-        transcodeOptions.formatSourceNode = options.formatSourceNode;
-        transcodeOptions.formatSourcePort = options.formatSourcePort;
-        transcodeOptions.packetSourceNode = options.packetSourceNode;
-        transcodeOptions.packetSourcePort = options.packetSourcePort;
-        transcodeOptions.muxNode = options.muxNode;
-        transcodeOptions.muxCodecPort = options.muxCodecPort;
-        transcodeOptions.muxPacketPort = options.muxPacketPort;
-        buildStatus = MediaVideoTranscodeBranchBuilder::build(graph, transcodeOptions);
-    }
-
-    if (!buildStatus) {
-        return ::media::Result<bool>::failure(buildStatus.error());
+    if (auto status = buildPlannedVideoBranch(graph, options); !status) {
+        return ::media::Result<bool>::failure(status.error());
     }
     return ::media::Result<bool>::success(true);
 }
