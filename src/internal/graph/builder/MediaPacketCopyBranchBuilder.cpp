@@ -1,33 +1,12 @@
 #include "internal/graph/builder/MediaPacketCopyBranchBuilder.h"
 
-#include <array>
+#include "internal/graph/builder/MediaGraphBuildSupport.h"
+
+#include <cstddef>
 #include <string>
-#include <utility>
 
 namespace media::ffmpeg::graph {
 namespace {
-
-MediaEdgePolicy blockingQueuePolicy(std::size_t capacity)
-{
-    MediaEdgePolicy policy;
-    policy.queuePolicy.mode = MediaQueueMode::Blocking;
-    policy.queuePolicy.bounded = true;
-    policy.queuePolicy.capacity = capacity;
-    policy.queuePolicy.overflowPolicy = MediaQueueOverflowPolicy::BlockProducer;
-    policy.queuePolicy.preserveOrdering = true;
-    policy.queuePolicy.allowFlushControlBypass = true;
-    policy.queuePolicy.collectMetrics = true;
-    return policy;
-}
-
-const char* streamKindOptionName(MediaStreamKind streamKind) noexcept
-{
-    switch (streamKind) {
-    case MediaStreamKind::Video: return "video";
-    case MediaStreamKind::Audio: return "audio";
-    default: return "unknown";
-    }
-}
 
 std::string defaultPrefix(MediaStreamKind streamKind)
 {
@@ -45,82 +24,6 @@ std::string defaultPacketSourcePort(MediaStreamKind streamKind)
     case MediaStreamKind::Audio: return "audio";
     default: return {};
     }
-}
-
-MediaFormatDescriptor streamIndexDescriptor(MediaStreamKind streamKind, int streamIndex)
-{
-    MediaFormatDescriptor descriptor;
-    descriptor.streamKind = streamKind;
-    descriptor.streamIndex = streamIndex;
-    return descriptor;
-}
-
-::media::Result<void> requirePort(MediaPortId portId, const char* name)
-{
-    if (!portId.isValid()) {
-        return ::media::Result<void>::failure(
-            ::media::ErrorInfo::internalError(std::string("MediaPacketCopyBranchBuilder failed to add port: ") + name));
-    }
-    return ::media::Result<void>::success();
-}
-
-::media::Result<void> requireEdge(MediaEdgeId edgeId, const char* name)
-{
-    if (!edgeId.isValid()) {
-        return ::media::Result<void>::failure(
-            ::media::ErrorInfo::internalError(std::string("MediaPacketCopyBranchBuilder failed to connect edge: ") + name));
-    }
-    return ::media::Result<void>::success();
-}
-
-::media::Result<void> setNodeOptionChecked(MediaGraph& graph,
-                                           MediaNodeId nodeId,
-                                           const std::string& key,
-                                           const std::string& value)
-{
-    if (!graph.setNodeOption(nodeId, key, value)) {
-        return ::media::Result<void>::failure(
-            ::media::ErrorInfo::internalError("MediaPacketCopyBranchBuilder failed to set option: " + key));
-    }
-    return ::media::Result<void>::success();
-}
-
-::media::Result<void> addInputPortChecked(MediaGraph& graph,
-                                          MediaNodeId nodeId,
-                                          const std::string& name,
-                                          MediaStreamKind streamKind,
-                                          MediaEdgeKind edgeKind,
-                                          MediaPayloadKind payloadKind,
-                                          bool required,
-                                          bool multiple)
-{
-    return requirePort(graph.addInputPort(nodeId,
-                                          name,
-                                          streamKind,
-                                          edgeKind,
-                                          payloadKind,
-                                          required,
-                                          multiple),
-                       name.c_str());
-}
-
-::media::Result<void> addOutputPortChecked(MediaGraph& graph,
-                                           MediaNodeId nodeId,
-                                           const std::string& name,
-                                           MediaStreamKind streamKind,
-                                           MediaEdgeKind edgeKind,
-                                           MediaPayloadKind payloadKind,
-                                           bool required,
-                                           bool multiple)
-{
-    return requirePort(graph.addOutputPort(nodeId,
-                                           name,
-                                           streamKind,
-                                           edgeKind,
-                                           payloadKind,
-                                           required,
-                                           multiple),
-                       name.c_str());
 }
 
 ::media::Result<void> validateOptions(const MediaPacketCopyBranchOptions& options)
@@ -152,11 +55,30 @@ MediaFormatDescriptor streamIndexDescriptor(MediaStreamKind streamKind, int stre
     return ::media::Result<void>::success();
 }
 
+::media::Result<void> connectChecked(MediaGraph& graph,
+                                     MediaNodeId fromNode,
+                                     const std::string& fromPort,
+                                     MediaNodeId toNode,
+                                     const std::string& toPort,
+                                     const std::string& label,
+                                     std::size_t capacity)
+{
+    return MediaGraphBuildSupport::connectChecked(graph,
+                                                  "MediaPacketCopyBranchBuilder",
+                                                  fromNode,
+                                                  fromPort,
+                                                  toNode,
+                                                  toPort,
+                                                  label,
+                                                  MediaGraphBuildSupport::blockingQueuePolicy(capacity));
+}
+
 } // namespace
 
 ::media::Result<void> MediaPacketCopyBranchBuilder::build(MediaGraph& graph,
                                                           const MediaPacketCopyBranchOptions& options)
 {
+    constexpr const char* owner = "MediaPacketCopyBranchBuilder";
     if (auto status = validateOptions(options); !status) {
         return status;
     }
@@ -178,44 +100,42 @@ MediaFormatDescriptor streamIndexDescriptor(MediaStreamKind streamKind, int stre
                                                      "Packet normalize");
 
     for (MediaNodeId nodeId : { sourceConfig, packetNormalize }) {
-        if (auto status = setNodeOptionChecked(graph,
-                                               nodeId,
-                                               MediaTranscodeOptionKey::PacketSourceStreamIndex,
-                                               std::to_string(options.sourceStreamIndex)); !status) {
-            return status;
-        }
-        if (auto status = setNodeOptionChecked(graph,
-                                               nodeId,
-                                               MediaTranscodeOptionKey::PacketStreamKind,
-                                               streamKindOptionName(options.streamKind)); !status) {
+        if (auto status = MediaGraphBuildSupport::setPacketStreamOptions(graph,
+                                                                         owner,
+                                                                         nodeId,
+                                                                         options.streamKind,
+                                                                         options.sourceStreamIndex); !status) {
             return status;
         }
     }
 
-    if (auto status = addInputPortChecked(graph,
-                                          sourceConfig,
-                                          "format",
-                                          MediaStreamKind::Metadata,
-                                          MediaEdgeKind::Metadata,
-                                          MediaPayloadKind::FormatContext,
-                                          true,
-                                          false); !status) return status;
-    if (auto status = addOutputPortChecked(graph,
-                                           sourceConfig,
-                                           "codec",
-                                           options.streamKind,
-                                           MediaEdgeKind::Metadata,
-                                           MediaPayloadKind::CodecParameters,
-                                           true,
-                                           false); !status) return status;
-    if (auto status = addInputPortChecked(graph,
-                                          packetNormalize,
-                                          "format",
-                                          MediaStreamKind::Metadata,
-                                          MediaEdgeKind::Metadata,
-                                          MediaPayloadKind::FormatContext,
-                                          true,
-                                          false); !status) return status;
+    if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph,
+                                                                  owner,
+                                                                  sourceConfig,
+                                                                  "format",
+                                                                  MediaStreamKind::Metadata,
+                                                                  MediaEdgeKind::Metadata,
+                                                                  MediaPayloadKind::FormatContext,
+                                                                  true,
+                                                                  false); !status) return status;
+    if (auto status = MediaGraphBuildSupport::addOutputPortChecked(graph,
+                                                                   owner,
+                                                                   sourceConfig,
+                                                                   "codec",
+                                                                   options.streamKind,
+                                                                   MediaEdgeKind::Metadata,
+                                                                   MediaPayloadKind::CodecParameters,
+                                                                   true,
+                                                                   false); !status) return status;
+    if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph,
+                                                                  owner,
+                                                                  packetNormalize,
+                                                                  "format",
+                                                                  MediaStreamKind::Metadata,
+                                                                  MediaEdgeKind::Metadata,
+                                                                  MediaPayloadKind::FormatContext,
+                                                                  true,
+                                                                  false); !status) return status;
 
     const MediaPortId packetSource = graph.addOutputPort(options.packetSourceNode,
                                                          packetSourcePort,
@@ -224,39 +144,36 @@ MediaFormatDescriptor streamIndexDescriptor(MediaStreamKind streamKind, int stre
                                                          MediaPayloadKind::Packet,
                                                          false,
                                                          true);
-    if (auto status = requirePort(packetSource, packetSourcePort.c_str()); !status) return status;
-    graph.setPortFormatDescriptor(packetSource, streamIndexDescriptor(options.streamKind, options.sourceStreamIndex));
+    if (auto status = MediaGraphBuildSupport::requirePort(packetSource, owner, packetSourcePort); !status) return status;
+    graph.setPortFormatDescriptor(packetSource,
+                                  MediaGraphBuildSupport::streamIndexDescriptor(options.streamKind,
+                                                                                options.sourceStreamIndex));
 
-    if (auto status = addInputPortChecked(graph,
-                                          packetNormalize,
-                                          "packet",
-                                          options.streamKind,
-                                          MediaEdgeKind::InputPacket,
-                                          MediaPayloadKind::Packet,
-                                          true,
-                                          true); !status) return status;
-    if (auto status = addOutputPortChecked(graph,
-                                           packetNormalize,
-                                           "packet",
-                                           options.streamKind,
-                                           MediaEdgeKind::EncodedPacket,
-                                           MediaPayloadKind::Packet,
-                                           true,
-                                           true); !status) return status;
+    if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph,
+                                                                  owner,
+                                                                  packetNormalize,
+                                                                  "packet",
+                                                                  options.streamKind,
+                                                                  MediaEdgeKind::InputPacket,
+                                                                  MediaPayloadKind::Packet,
+                                                                  true,
+                                                                  true); !status) return status;
+    if (auto status = MediaGraphBuildSupport::addOutputPortChecked(graph,
+                                                                   owner,
+                                                                   packetNormalize,
+                                                                   "packet",
+                                                                   options.streamKind,
+                                                                   MediaEdgeKind::EncodedPacket,
+                                                                   MediaPayloadKind::Packet,
+                                                                   true,
+                                                                   true); !status) return status;
 
     const MediaGraphQueueParameters& queues = options.queues;
-    const std::array<std::pair<MediaEdgeId, const char*>, 5> edges {{
-        { graph.connect(options.formatSourceNode, options.formatSourcePort, sourceConfig, "format", prefix + ".format -> source_config.format", blockingQueuePolicy(queues.metadata)), "source_config.format" },
-        { graph.connect(sourceConfig, "codec", options.muxNode, options.muxCodecPort, prefix + ".source_config.codec -> mux.codec", blockingQueuePolicy(queues.metadata)), "source_config.codec" },
-        { graph.connect(options.formatSourceNode, options.formatSourcePort, packetNormalize, "format", prefix + ".format -> normalize.format", blockingQueuePolicy(queues.metadata)), "normalize.format" },
-        { graph.connect(options.packetSourceNode, packetSourcePort, packetNormalize, "packet", prefix + ".packet -> normalize.packet", blockingQueuePolicy(queues.packet)), "normalize.packet" },
-        { graph.connect(packetNormalize, "packet", options.muxNode, options.muxPacketPort, prefix + ".normalize.packet -> mux.packet", blockingQueuePolicy(queues.mux)), "normalize.mux" },
-    }};
-    for (const auto& edge : edges) {
-        if (auto status = requireEdge(edge.first, edge.second); !status) return status;
-    }
-
-    return ::media::Result<void>::success();
+    if (auto status = connectChecked(graph, options.formatSourceNode, options.formatSourcePort, sourceConfig, "format", prefix + ".format -> source_config.format", queues.metadata); !status) return status;
+    if (auto status = connectChecked(graph, sourceConfig, "codec", options.muxNode, options.muxCodecPort, prefix + ".source_config.codec -> mux.codec", queues.metadata); !status) return status;
+    if (auto status = connectChecked(graph, options.formatSourceNode, options.formatSourcePort, packetNormalize, "format", prefix + ".format -> normalize.format", queues.metadata); !status) return status;
+    if (auto status = connectChecked(graph, options.packetSourceNode, packetSourcePort, packetNormalize, "packet", prefix + ".packet -> normalize.packet", queues.packet); !status) return status;
+    return connectChecked(graph, packetNormalize, "packet", options.muxNode, options.muxPacketPort, prefix + ".normalize.packet -> mux.packet", queues.mux);
 }
 
 } // namespace media::ffmpeg::graph

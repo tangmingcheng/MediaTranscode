@@ -67,6 +67,7 @@ struct MediaPipelinePlannerOptions {
 struct MediaPipelinePlan {
     bool enabled = false;
     MediaBranchMode branchMode = MediaBranchMode::Drop;
+    int sourceStreamIndex = invalidMediaStreamIndex;
     std::string reason;
     std::string inputPath;
     std::string outputPath;

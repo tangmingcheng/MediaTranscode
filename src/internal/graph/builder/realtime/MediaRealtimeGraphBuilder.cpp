@@ -1,39 +1,21 @@
 #include "internal/graph/builder/realtime/MediaRealtimeGraphBuilder.h"
 
+#include "internal/graph/builder/MediaGraphBuildSupport.h"
+
 #include <string>
 #include <utility>
 
 namespace media::ffmpeg::graph {
 namespace {
 
-::media::Result<void> requirePort(MediaPortId portId, const char* name)
-{
-    if (!portId.isValid()) {
-        return ::media::Result<void>::failure(
-            ::media::ErrorInfo::internalError(std::string("MediaRealtimeGraphBuilder failed to add port: ") + name));
-    }
-    return ::media::Result<void>::success();
-}
-
-::media::Result<void> requireEdge(MediaEdgeId edgeId, const char* name)
-{
-    if (!edgeId.isValid()) {
-        return ::media::Result<void>::failure(
-            ::media::ErrorInfo::internalError(std::string("MediaRealtimeGraphBuilder failed to connect edge: ") + name));
-    }
-    return ::media::Result<void>::success();
-}
+constexpr const char* owner = "MediaRealtimeGraphBuilder";
 
 ::media::Result<void> setNodeOptionChecked(MediaGraph& graph,
                                            MediaNodeId nodeId,
                                            const std::string& key,
                                            const std::string& value)
 {
-    if (!graph.setNodeOption(nodeId, key, value)) {
-        return ::media::Result<void>::failure(
-            ::media::ErrorInfo::internalError("MediaRealtimeGraphBuilder failed to set option: " + key));
-    }
-    return ::media::Result<void>::success();
+    return MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, key, value);
 }
 
 ::media::Result<void> addInputPortChecked(MediaGraph& graph,
@@ -45,14 +27,7 @@ namespace {
                                           bool required,
                                           bool multiple)
 {
-    return requirePort(graph.addInputPort(nodeId,
-                                          name,
-                                          streamKind,
-                                          edgeKind,
-                                          payloadKind,
-                                          required,
-                                          multiple),
-                       name.c_str());
+    return MediaGraphBuildSupport::addInputPortChecked(graph, owner, nodeId, name, streamKind, edgeKind, payloadKind, required, multiple);
 }
 
 ::media::Result<void> addOutputPortChecked(MediaGraph& graph,
@@ -64,14 +39,7 @@ namespace {
                                            bool required,
                                            bool multiple)
 {
-    return requirePort(graph.addOutputPort(nodeId,
-                                           name,
-                                           streamKind,
-                                           edgeKind,
-                                           payloadKind,
-                                           required,
-                                           multiple),
-                       name.c_str());
+    return MediaGraphBuildSupport::addOutputPortChecked(graph, owner, nodeId, name, streamKind, edgeKind, payloadKind, required, multiple);
 }
 
 ::media::Result<void> connectChecked(MediaGraph& graph,
@@ -83,7 +51,15 @@ namespace {
                                      const MediaEdgePolicy& policy,
                                      bool enabled = true)
 {
-    return requireEdge(graph.connect(fromNode, fromPort, toNode, toPort, label, policy, enabled), label.c_str());
+    return MediaGraphBuildSupport::connectChecked(graph,
+                                                  owner,
+                                                  fromNode,
+                                                  fromPort,
+                                                  toNode,
+                                                  toPort,
+                                                  label,
+                                                  policy,
+                                                  enabled);
 }
 
 } // namespace
