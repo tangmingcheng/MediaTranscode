@@ -41,20 +41,8 @@ public:
     static ::media::Result<MediaRealtimeGraphBuilderResult> build(
         const MediaRealtimeGraphBuilderOptions& options = {});
 
-    static ::media::Result<MediaGraph> buildPacketRelay(
-        const MediaRealtimeGraphBuilderOptions& options = {});
-
-    static ::media::Result<MediaGraph> buildIngestToMux(
-        const MediaRealtimeGraphBuilderOptions& options = {});
-
 private:
-    static MediaEdgePolicy realtimeEdgePolicy(const MediaRealtimeGraphBuilderOptions& options) noexcept;
-    static ::media::Result<void> applyRealtimeInputOptions(MediaGraph& graph,
-                                                          MediaNodeId nodeId,
-                                                          const MediaRealtimeGraphBuilderOptions& options);
-    static ::media::Result<void> applyRealtimeOutputOptions(MediaGraph& graph,
-                                                           MediaNodeId nodeId,
-                                                           const MediaRealtimeGraphBuilderOptions& options);
+    MediaRealtimeGraphBuilder() = default;
 };
 
 } // namespace media::ffmpeg::graph
