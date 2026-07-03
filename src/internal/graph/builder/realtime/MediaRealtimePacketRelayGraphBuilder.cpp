@@ -40,7 +40,7 @@ constexpr const char* owner = "MediaRealtimePacketRelayGraphBuilder";
 
     if (options.enableSdpWriter) {
         const MediaNodeId sdp = graph.addNode(MediaNodeKind::SdpWriter, "realtime.sdp.writer", "Realtime SDP writer");
-        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, sdp, "path", options.sdpPath); !status) return ::media::Result<MediaGraph>::failure(status.error());
+        if (auto status = MediaRealtimeOptionApplier::applySdpWriterOptions(graph, sdp, options); !status) return ::media::Result<MediaGraph>::failure(status.error());
         if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph, owner, sdp, "packet", MediaStreamKind::Any, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, false, true); !status) return ::media::Result<MediaGraph>::failure(status.error());
         if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, input, "packet", sdp, "packet", "realtime.input.packet -> realtime.sdp.writer.packet", edgePolicy, false); !status) return ::media::Result<MediaGraph>::failure(status.error());
     }
