@@ -1,6 +1,8 @@
 #include "internal/graph/builder/segments/MediaAudioEncodeBranchBuilder.h"
 
+#include "internal/graph/builder/MediaAudioPlanOptionApplier.h"
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/builder/segments/MediaAudioEncodeBranchNodes.h"
 #include "internal/graph/builder/segments/MediaAudioEncodeOptionApplier.h"
 
 namespace media::ffmpeg::graph {
@@ -8,16 +10,8 @@ namespace {
 
 constexpr const char* owner = "MediaAudioEncodeBranchBuilder";
 
-struct MediaAudioEncodeBranchNodes {
-    MediaNodeId packetNormalize = MediaNodeId::invalid();
-    MediaNodeId codecResolver = MediaNodeId::invalid();
-    MediaNodeId decode = MediaNodeId::invalid();
-    MediaNodeId resample = MediaNodeId::invalid();
-    MediaNodeId encode = MediaNodeId::invalid();
-};
-
 MediaAudioEncodeBranchNodes addAudioEncodeNodes(MediaGraph& graph,
-                                                const std::string& prefix)
+                                                 const std::string& prefix)
 {
     MediaAudioEncodeBranchNodes nodes;
     nodes.packetNormalize = graph.addNode(MediaNodeKind::PacketNormalize, prefix + ".packet_normalize", "Audio packet normalize");
@@ -29,8 +23,8 @@ MediaAudioEncodeBranchNodes addAudioEncodeNodes(MediaGraph& graph,
 }
 
 ::media::Result<void> addEncodePorts(MediaGraph& graph,
-                                     const MediaAudioEncodeBranchOptions& options,
-                                     const MediaAudioEncodeBranchNodes& nodes)
+                                      const MediaAudioEncodeBranchOptions& options,
+                                      const MediaAudioEncodeBranchNodes& nodes)
 {
     const MediaPortId audioPort = graph.addOutputPort(options.packetSourceNode, options.packetSourcePort, MediaStreamKind::Audio, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, false, true);
     if (auto status = MediaGraphBuildSupport::requirePort(audioPort, owner, options.packetSourcePort); !status) return status;
@@ -59,8 +53,8 @@ MediaAudioEncodeBranchNodes addAudioEncodeNodes(MediaGraph& graph,
 }
 
 ::media::Result<void> connectEncodePorts(MediaGraph& graph,
-                                         const MediaAudioEncodeBranchOptions& options,
-                                         const MediaAudioEncodeBranchNodes& nodes)
+                                          const MediaAudioEncodeBranchOptions& options,
+                                          const MediaAudioEncodeBranchNodes& nodes)
 {
     const MediaGraphQueueParameters& queues = options.queues;
     if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.formatSourceNode, options.formatSourcePort, nodes.packetNormalize, "format", options.prefix + ".format -> packet_normalize.format", MediaGraphBuildSupport::blockingQueuePolicy(queues.metadata)); !status) return status;
@@ -92,9 +86,8 @@ MediaAudioEncodeBranchNodes addAudioEncodeNodes(MediaGraph& graph,
     }
 
     const MediaAudioEncodeBranchNodes nodes = addAudioEncodeNodes(graph, options.prefix);
-    if (auto status = MediaGraphBuildSupport::setPacketStreamOptions(graph, owner, nodes.packetNormalize, MediaStreamKind::Audio, options.plan.sourceStreamIndex); !status) return status;
-    if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodes.codecResolver, MediaTranscodeOptionKey::AudioSourceStreamIndex, std::to_string(options.plan.sourceStreamIndex)); !status) return status;
-    if (auto status = MediaAudioEncodeOptionApplier::applyCodecResolverOptions(graph, nodes.codecResolver, options.parameters, options.plan); !status) return status;
+    if (auto status = MediaAudioPlanOptionApplier::applySelectedPlan(graph, nodes, options.plan); !status) return status;
+    if (auto status = MediaAudioEncodeOptionApplier::applyCodecResolverOptions(graph, nodes.codecResolver, options.parameters); !status) return status;
     if (auto status = addEncodePorts(graph, options, nodes); !status) return status;
     return connectEncodePorts(graph, options, nodes);
 }
