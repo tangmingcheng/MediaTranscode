@@ -9,8 +9,6 @@ namespace media::ffmpeg::graph {
                                                          const MediaPipelinePresetOptions& options)
 {
     switch (kind) {
-    case MediaPipelinePresetKind::LocalFileRemux:
-        return createLocalFileRemux(options);
     case MediaPipelinePresetKind::LocalFileTranscodeSkeleton:
         return createLocalFileTranscodeSkeleton(options);
     case MediaPipelinePresetKind::RealtimeRtpSkeleton:
@@ -19,12 +17,6 @@ namespace media::ffmpeg::graph {
         return ::media::Result<MediaGraph>::failure(
             ::media::ErrorInfo::unsupported("unsupported media pipeline preset"));
     }
-}
-
-::media::Result<MediaGraph> MediaPipelinePreset::createLocalFileRemux(const MediaPipelinePresetOptions&)
-{
-    return ::media::Result<MediaGraph>::failure(
-        ::media::ErrorInfo::unsupported("LocalFileRemux preset requires generic video packet copy and is not implemented"));
 }
 
 ::media::Result<MediaGraph> MediaPipelinePreset::createLocalFileTranscodeSkeleton(const MediaPipelinePresetOptions& options)
