@@ -7,9 +7,17 @@
 
 namespace media::ffmpeg::graph {
 
+struct MediaInputVideoStreamInfo {
+    int streamIndex = invalidMediaStreamIndex;
+    std::string codecName;
+    int width = 0;
+    int height = 0;
+    MediaRational frameRate;
+};
+
 class MediaPipelineCapabilityScanner final {
 public:
-    static ::media::Result<std::string> detectInputVideoCodecName(const std::string& inputPath);
+    static ::media::Result<MediaInputVideoStreamInfo> detectInputVideoStreamInfo(const std::string& inputPath);
 
     static std::vector<MediaPipelineChainPlan> enumerateVideoTranscodeCandidates(
         const std::string& inputCodecName,
