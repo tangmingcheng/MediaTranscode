@@ -1,11 +1,12 @@
 #include "internal/graph/builder/local/LocalFileTranscodeGraphBuilder.h"
 
-#include "internal/graph/builder/local/LocalFileAudioBranchBuilder.h"
 #include "internal/graph/builder/local/LocalFilePlannerRequestBuilder.h"
+#include "internal/graph/builder/segments/MediaAudioBranchSegmentBuilder.h"
 #include "internal/graph/builder/segments/MediaInputSegmentBuilder.h"
 #include "internal/graph/builder/segments/MediaOutputSegmentBuilder.h"
 #include "internal/graph/builder/segments/MediaPacketSelectSegmentBuilder.h"
 #include "internal/graph/builder/segments/MediaVideoBranchSegmentBuilder.h"
+#include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/planner/MediaPipelinePlanner.h"
 
 #include <utility>
@@ -22,7 +23,21 @@ namespace {
     return MediaPipelinePlanner::planVideoTranscodeFile(options.inputUrl, std::move(plannerOptions).value());
 }
 
+::media::Result<MediaAudioPipelinePlan> audioPlanFor(const LocalFileTranscodeOptions& options)
+{
+    auto plannerOptions = LocalFilePlannerRequestBuilder::buildAudioPlannerOptions(options);
+    if (!plannerOptions) {
+        return ::media::Result<MediaAudioPipelinePlan>::failure(plannerOptions.error());
+    }
+    return MediaAudioPipelinePlanner::planFileAudio(options.inputUrl, std::move(plannerOptions).value());
+}
+
 bool branchEnabled(const MediaPipelinePlan& plan) noexcept
+{
+    return plan.enabled && plan.branchMode != MediaBranchMode::Drop;
+}
+
+bool branchEnabled(const MediaAudioPipelinePlan& plan) noexcept
 {
     return plan.enabled && plan.branchMode != MediaBranchMode::Drop;
 }
@@ -60,6 +75,13 @@ bool branchEnabled(const MediaPipelinePlan& plan) noexcept
         return ::media::Result<MediaGraph>::failure(plannedVideo.error());
     }
     MediaPipelinePlan videoPlan = std::move(plannedVideo).value();
+
+    auto plannedAudio = audioPlanFor(options);
+    if (!plannedAudio) {
+        return ::media::Result<MediaGraph>::failure(plannedAudio.error());
+    }
+    MediaAudioPipelinePlan audioPlan = std::move(plannedAudio).value();
+
     const MediaGraphQueueParameters& queues = options.parameters.queues;
 
     MediaGraph graph;
@@ -87,25 +109,33 @@ bool branchEnabled(const MediaPipelinePlan& plan) noexcept
     outputOptions.outputUrl = options.outputUrl;
     outputOptions.outputFormat = options.outputFormat;
     outputOptions.expectVideo = branchEnabled(videoPlan);
-    outputOptions.expectAudio = false;
+    outputOptions.expectAudio = branchEnabled(audioPlan);
     outputOptions.queues = queues;
     auto output = MediaOutputSegmentBuilder::buildFileMuxOutput(graph, outputOptions);
     if (!output) {
         return ::media::Result<MediaGraph>::failure(output.error());
     }
 
-    auto audio = LocalFileAudioBranchBuilder::buildIfPlanned(graph,
-                                                            options,
-                                                            input.value().input,
-                                                            packetSelect.value().split,
-                                                            output.value().mux);
+    MediaAudioBranchSegmentOptions audioOptions;
+    audioOptions.prefix = "local.audio";
+    audioOptions.plan = std::move(audioPlan);
+    audioOptions.parameters = options.parameters.audio;
+    audioOptions.queues = queues;
+    audioOptions.formatSourceNode = input.value().input;
+    audioOptions.formatSourcePort = input.value().formatPort;
+    audioOptions.packetSourceNode = packetSelect.value().split;
+    audioOptions.packetSourcePort = "audio";
+    audioOptions.muxNode = output.value().mux;
+    audioOptions.muxCodecPort = "codec";
+    audioOptions.muxPacketPort = "packet";
+    auto audio = MediaAudioBranchSegmentBuilder::buildIfPlanned(graph, audioOptions);
     if (!audio) {
         return ::media::Result<MediaGraph>::failure(audio.error());
     }
 
     MediaVideoBranchSegmentOptions videoOptions;
     videoOptions.prefix = "local.video";
-    videoOptions.plan = videoPlan;
+    videoOptions.plan = std::move(videoPlan);
     videoOptions.parameters = options.parameters.video;
     videoOptions.queues = queues;
     videoOptions.formatSourceNode = input.value().input;
