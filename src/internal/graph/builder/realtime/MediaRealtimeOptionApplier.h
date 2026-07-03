@@ -13,6 +13,9 @@ public:
     static ::media::Result<void> applyOutputOptions(MediaGraph& graph,
                                                     MediaNodeId nodeId,
                                                     const MediaRealtimeGraphBuilderOptions& options);
+    static ::media::Result<void> applySdpWriterOptions(MediaGraph& graph,
+                                                       MediaNodeId nodeId,
+                                                       const MediaRealtimeGraphBuilderOptions& options);
 
 private:
     MediaRealtimeOptionApplier() = default;
