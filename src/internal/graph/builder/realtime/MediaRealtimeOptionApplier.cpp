@@ -73,7 +73,11 @@ std::string synthesizeSdpFromHints(const MediaRealtimeGraphBuilderOptions& optio
         return {};
     }
 
-    const std::size_t basePort = parseRealtimeRtpUrlPort(effectiveInputUrl(options)).value_or(0);
+    const auto inputPort = parseRealtimeRtpUrlPort(effectiveInputUrl(options));
+    if (!inputPort) {
+        return {};
+    }
+    const std::size_t basePort = *inputPort;
     std::ostringstream sdp;
     sdp << "v=0\r\n"
         << "o=- 0 0 IN IP4 127.0.0.1\r\n"
@@ -83,7 +87,7 @@ std::string synthesizeSdpFromHints(const MediaRealtimeGraphBuilderOptions& optio
 
     std::size_t hintIndex = 0;
     for (const MediaRtpCodecHint& hint : options.input.codecHints) {
-        const std::size_t port = basePort == 0 ? 0 : basePort + hintIndex * 2;
+        const std::size_t port = basePort + hintIndex * 2;
         sdp << "m=" << mediaName(hint.streamKind) << ' ' << port << " RTP/AVP " << hint.payloadType << "\r\n";
         sdp << "a=rtpmap:" << hint.payloadType << ' ' << rtpmapCodecName(hint.codecName) << '/'
             << hint.clockRate;
@@ -99,9 +103,22 @@ std::string synthesizeSdpFromHints(const MediaRealtimeGraphBuilderOptions& optio
     return sdp.str();
 }
 
+bool needsHintSdpSynthesis(const MediaRealtimeGraphBuilderOptions& options) noexcept
+{
+    return options.input.sdpText.empty() &&
+           options.input.sdpPath.empty() &&
+           !options.input.codecHints.empty();
+}
+
 std::string effectiveInputSdpText(const MediaRealtimeGraphBuilderOptions& options)
 {
-    return !options.input.sdpText.empty() ? options.input.sdpText : synthesizeSdpFromHints(options);
+    if (!options.input.sdpText.empty()) {
+        return options.input.sdpText;
+    }
+    if (!options.input.sdpPath.empty()) {
+        return {};
+    }
+    return synthesizeSdpFromHints(options);
 }
 
 ::media::Result<void> setOption(MediaGraph& graph,
@@ -122,6 +139,10 @@ std::string effectiveInputSdpText(const MediaRealtimeGraphBuilderOptions& option
     MediaNodeId nodeId,
     const MediaRealtimeGraphBuilderOptions& options)
 {
+    if (needsHintSdpSynthesis(options) && !parseRealtimeRtpUrlPort(effectiveInputUrl(options))) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument("Raw RTP codec hints require input URL with a valid RTP port"));
+    }
     if (auto status = setOption(graph, nodeId, "url", effectiveInputUrl(options)); !status) return status;
     if (auto status = setOption(graph, nodeId, "input.mode", inputModeName(options.input.mode)); !status) return status;
     if (auto status = setOption(graph, nodeId, "input.sdp_text", effectiveInputSdpText(options)); !status) return status;

@@ -79,6 +79,18 @@ MediaRealtimeGraphBuilderOptions validRtpTranscodeOptions()
     return options;
 }
 
+MediaRtpCodecHint h264Hint()
+{
+    return MediaRtpCodecHint{
+        MediaStreamKind::Video,
+        "h264",
+        96,
+        90000,
+        0,
+        "packetization-mode=1"
+    };
+}
+
 void testBuildsPacketRelayRtpShape(TestContext& ctx)
 {
     const auto result = MediaRealtimeGraphBuilder::build(validPacketRelayOptions());
@@ -194,14 +206,7 @@ void testBuildsRawRtpWithCompleteHint(TestContext& ctx)
     auto options = validRtpTranscodeOptions();
     options.input.mode = MediaRealtimeInputMode::RawRtp;
     options.input.videoStreamIndex = -1;
-    options.input.codecHints.push_back(MediaRtpCodecHint{
-        MediaStreamKind::Video,
-        "h264",
-        96,
-        90000,
-        0,
-        "packetization-mode=1"
-    });
+    options.input.codecHints.push_back(h264Hint());
 
     const auto result = MediaRealtimeGraphBuilder::build(options);
 
@@ -233,18 +238,27 @@ void testRejectsRawRtpHintWithoutInputPort(TestContext& ctx)
     options.input.url = "rtp://127.0.0.1";
     options.inputUrl = options.input.url;
     options.input.videoStreamIndex = -1;
-    options.input.codecHints.push_back(MediaRtpCodecHint{
-        MediaStreamKind::Video,
-        "h264",
-        96,
-        90000,
-        0,
-        "packetization-mode=1"
-    });
+    options.input.codecHints.push_back(h264Hint());
 
     const auto result = MediaRealtimeGraphBuilder::build(options);
 
     EXPECT_FALSE(ctx, result);
+}
+
+void testRejectsRawRtpHintWithoutInputPortForLegacyRealtimeKinds(TestContext& ctx)
+{
+    auto packetRelay = validPacketRelayOptions();
+    packetRelay.input.mode = MediaRealtimeInputMode::RawRtp;
+    packetRelay.input.url = "rtp://127.0.0.1";
+    packetRelay.inputUrl = packetRelay.input.url;
+    packetRelay.input.codecHints.push_back(h264Hint());
+
+    auto ingestToMux = packetRelay;
+    ingestToMux.kind = MediaRealtimeGraphKind::IngestToMux;
+    ingestToMux.enableRtpMux = true;
+
+    EXPECT_FALSE(ctx, MediaRealtimeGraphBuilder::build(packetRelay));
+    EXPECT_FALSE(ctx, MediaRealtimeGraphBuilder::build(ingestToMux));
 }
 
 void testRejectsInvalidRtpPort(TestContext& ctx)
@@ -353,6 +367,7 @@ int main()
     testBuildsRawRtpWithCompleteHint(ctx);
     testRejectsMissingVideoSourceStreamIndex(ctx);
     testRejectsRawRtpHintWithoutInputPort(ctx);
+    testRejectsRawRtpHintWithoutInputPortForLegacyRealtimeKinds(ctx);
     testRejectsInvalidRtpPort(ctx);
     testRejectsMissingMediaBranch(ctx);
     testBuildsVideoOnlyRealtimeRtpTranscodeShape(ctx);

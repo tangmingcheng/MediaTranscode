@@ -22,6 +22,7 @@
 - Added CLI options for `--video-stream-index` and `--audio-stream-index`.
 - Adjusted realtime RTP CLI branch selection so a single `--video-stream-index` builds a video-only graph unless an audio stream index is also supplied.
 - Added validation that raw RTP codec-hint mode must use an input URL carrying a valid RTP port before SDP synthesis.
+- Moved raw RTP codec-hint SDP port validation into the shared realtime option applier so packet relay and ingest-to-mux builders cannot synthesize SDP with port 0.
 
 ## Verification Evidence
 - `cmake --build out/build/x64-release --target media_transcode_core media_transcode_graph_transcode_cli media_transcode_realtime_graph_tests` completed.
@@ -34,6 +35,7 @@
 - `cmake --build out/build/x64-debug --target media_transcode_realtime_graph_tests --clean-first` completed.
 - `cmake --build out/build/x64-release --target media_transcode_realtime_graph_tests --clean-first` completed.
 - `out/build/x64-release/media_transcode_graph_transcode_cli.exe --realtime-rtp --input rtp://127.0.0.1:5004 --output-host 127.0.0.1 --base-port 5006 --sdp realtime-cli.sdp --media-id video-main --video-stream-index 0 --queue-capacity 16 --dry-run` returned 0 and printed `realtime rtp graph build done: nodes=13 edges=18`.
+- Review follow-up verification added coverage for packet relay and ingest-to-mux raw RTP codec-hint inputs without valid RTP ports.
 
 ## Open Items
 - Add runtime dry-run tests that avoid external network dependencies.
