@@ -168,4 +168,35 @@ endif()
 
 if(MEDIA_TRANSCODE_BUILD_TESTS)
     enable_testing()
+
+    add_executable(media_transcode_realtime_graph_tests
+        tests/unit/test_realtime_rtp_graph.cpp
+    )
+    media_transcode_configure_test(media_transcode_realtime_graph_tests)
+    add_test(NAME media_transcode_realtime_graph_tests
+        COMMAND media_transcode_realtime_graph_tests
+    )
+
+    if(TARGET ${TARGET_GRAPH_TRANSCODE_CLI})
+        add_test(NAME media_transcode_graph_transcode_cli_realtime_rtp_help
+            COMMAND ${TARGET_GRAPH_TRANSCODE_CLI} --help
+        )
+        set_tests_properties(media_transcode_graph_transcode_cli_realtime_rtp_help PROPERTIES
+            PASS_REGULAR_EXPRESSION "--realtime-rtp"
+        )
+
+        add_test(NAME media_transcode_graph_transcode_cli_realtime_rtp_smoke
+            COMMAND ${TARGET_GRAPH_TRANSCODE_CLI}
+                --realtime-rtp
+                --input rtp://127.0.0.1:5004
+                --output rtp://127.0.0.1:5006
+                --sdp realtime-cli.sdp
+                --media-id video-main
+                --queue-capacity 16
+                --dry-run
+        )
+        set_tests_properties(media_transcode_graph_transcode_cli_realtime_rtp_smoke PROPERTIES
+            PASS_REGULAR_EXPRESSION "realtime rtp graph build done"
+        )
+    endif()
 endif()
