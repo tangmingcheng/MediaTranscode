@@ -36,12 +36,16 @@ namespace media::ffmpeg::graph {
 ::media::Result<MediaGraph> MediaPipelinePreset::createRealtimeRtpSkeleton(const MediaPipelinePresetOptions& options)
 {
     MediaRealtimeGraphBuilderOptions builderOptions;
-    builderOptions.kind = MediaRealtimeGraphKind::PacketRelay;
+    builderOptions.kind = MediaRealtimeGraphKind::RtpTranscode;
     builderOptions.inputUrl = options.inputUrl;
     builderOptions.outputUrl = options.outputUrl;
+    builderOptions.input.url = options.inputUrl;
+    builderOptions.output.host = options.outputUrl.empty() ? "127.0.0.1" : options.outputUrl;
     builderOptions.includeAudio = options.includeAudio;
     builderOptions.includeVideo = options.includeVideo;
-    builderOptions.enablePacketFanout = true;
+    builderOptions.parameters.execution.includeAudio = options.includeAudio;
+    builderOptions.parameters.execution.includeVideo = options.includeVideo;
+    builderOptions.parameters.video.bFrames = 0;
 
     auto realtime = MediaRealtimeGraphBuilder::build(builderOptions);
     if (!realtime) {

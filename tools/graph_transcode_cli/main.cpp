@@ -107,11 +107,12 @@ int failResult(const char* action, const ::media::Result<T>& result)
 void printUsage()
 {
     std::cout << "Usage: media_transcode_graph_transcode_cli --input in.mp4 --output out.mp4 [options]\n";
-    std::cout << "       media_transcode_graph_transcode_cli --realtime-rtp --input rtp://host:port --output rtp://host:port --dry-run [options]\n";
+    std::cout << "       media_transcode_graph_transcode_cli --realtime-rtp --input rtp://host:port --output-host 127.0.0.1 --base-port 5004 --sdp out.sdp --dry-run [options]\n";
     std::cout << "       encoder selection is automatic and planner-owned\n";
     std::cout << "       add --quiet-graph to disable runtime graph diagnostics\n";
-    std::cout << "       realtime RTP options: --sdp <path> --media-id <id> --queue-capacity <n>\n";
-    std::cout << "                             --high-watermark <n> --critical-watermark <n> --no-packet-fanout --ingest-to-mux\n";
+    std::cout << "       realtime RTP options: --raw-rtp --input-sdp <path> --media-id <id> --queue-capacity <n>\n";
+    std::cout << "                             --high-watermark <n> --critical-watermark <n> --video-stream-index <n>\n";
+    std::cout << "                             --audio-stream-index <n> --no-audio --no-video\n";
 }
 
 LocalFileTranscodeOptions parseOptions(int argc, char** argv)
@@ -168,25 +169,62 @@ LocalFileTranscodeOptions parseOptions(int argc, char** argv)
 MediaRealtimeGraphBuilderOptions parseRealtimeRtpOptions(int argc, char** argv)
 {
     MediaRealtimeGraphBuilderOptions options;
-    options.kind = hasArg(argc, argv, "--ingest-to-mux")
-        ? MediaRealtimeGraphKind::IngestToMux
-        : MediaRealtimeGraphKind::PacketRelay;
+    options.kind = MediaRealtimeGraphKind::RtpTranscode;
     options.inputUrl = argValue(argc, argv, "--input");
-    options.outputUrl = argValue(argc, argv, "--output");
+    options.input.url = options.inputUrl;
+    options.input.mode = hasArg(argc, argv, "--raw-rtp")
+        ? MediaRealtimeInputMode::RawRtp
+        : MediaRealtimeInputMode::Url;
+    options.input.sdpPath = argValue(argc, argv, "--input-sdp");
+    const auto videoStreamIndex = optionalIntArg(argc, argv, "--video-stream-index");
+    const auto audioStreamIndex = optionalIntArg(argc, argv, "--audio-stream-index");
+    if (videoStreamIndex) {
+        if (*videoStreamIndex < 0) {
+            throw std::invalid_argument("--video-stream-index must be >= 0");
+        }
+        options.input.videoStreamIndex = *videoStreamIndex;
+    }
+    if (audioStreamIndex) {
+        if (*audioStreamIndex < 0) {
+            throw std::invalid_argument("--audio-stream-index must be >= 0");
+        }
+        options.input.audioStreamIndex = *audioStreamIndex;
+    }
+    const bool videoDisabled = hasArg(argc, argv, "--no-video");
+    const bool audioDisabled = hasArg(argc, argv, "--no-audio");
+    options.includeVideo = !videoDisabled && (videoStreamIndex || !audioStreamIndex);
+    options.includeAudio = !audioDisabled && static_cast<bool>(audioStreamIndex);
+    if (videoDisabled) {
+        options.includeVideo = false;
+    }
+    if (audioDisabled) {
+        options.includeAudio = false;
+    }
+    options.output.host = argValue(argc, argv, "--output-host", "127.0.0.1");
+    options.output.basePort = positiveSizeArg(argc, argv, "--base-port", options.output.basePort);
+    options.outputUrl = "rtp://" + options.output.host + ":" + std::to_string(options.output.basePort);
     options.sdpPath = argValue(argc, argv, "--sdp");
+    options.output.sdpPath = options.sdpPath;
     options.mediaId = argValue(argc, argv, "--media-id");
-    options.enablePacketFanout = !hasArg(argc, argv, "--no-packet-fanout");
-    options.enableRtpMux = options.kind == MediaRealtimeGraphKind::IngestToMux;
-    options.enableSdpWriter = options.kind == MediaRealtimeGraphKind::PacketRelay && !options.sdpPath.empty();
+    options.parameters.execution.includeAudio = options.includeAudio;
+    options.parameters.execution.includeVideo = options.includeVideo;
+    options.parameters.execution.disableHardware = hasArg(argc, argv, "--disable-hw");
+    options.parameters.execution.diagnosticLogEnabled = !hasArg(argc, argv, "--quiet-graph");
+    options.parameters.video.bFrames = 0;
+    options.enableRtpMux = true;
+    options.enableSdpWriter = !options.sdpPath.empty();
     options.queueCapacity = positiveSizeArg(argc, argv, "--queue-capacity", options.queueCapacity);
     options.highWatermark = positiveSizeArg(argc, argv, "--high-watermark", options.highWatermark);
     options.criticalWatermark = positiveSizeArg(argc, argv, "--critical-watermark", options.criticalWatermark);
+    options.parameters.queues.packet = options.queueCapacity;
+    options.parameters.queues.frame = options.queueCapacity;
+    options.parameters.queues.mux = options.queueCapacity;
 
     if (options.inputUrl.empty()) {
         throw std::invalid_argument("--realtime-rtp requires --input");
     }
-    if (options.outputUrl.empty()) {
-        throw std::invalid_argument("--realtime-rtp requires --output");
+    if (options.sdpPath.empty()) {
+        throw std::invalid_argument("--realtime-rtp requires --sdp");
     }
     return options;
 }
@@ -198,6 +236,8 @@ const char* realtimeGraphKindName(MediaRealtimeGraphKind kind) noexcept
         return "packet-relay";
     case MediaRealtimeGraphKind::IngestToMux:
         return "ingest-to-mux";
+    case MediaRealtimeGraphKind::RtpTranscode:
+        return "rtp-transcode";
     }
     return "unknown";
 }
@@ -210,10 +250,10 @@ int runRealtimeRtpCli(int argc, char** argv)
     }
 
     const MediaRealtimeGraphBuilderOptions options = parseRealtimeRtpOptions(argc, argv);
-    std::cout << "[CLI] realtime rtp input=" << options.inputUrl
+    std::cout << "[CLI] realtime rtp input=" << options.input.url
               << " output=" << options.outputUrl
+              << " sdp=" << options.output.sdpPath
               << " kind=" << realtimeGraphKindName(options.kind)
-              << " packet_fanout=" << (options.enablePacketFanout ? "on" : "off")
               << " rtp_mux=" << (options.enableRtpMux ? "on" : "off")
               << " sdp_writer=" << (options.enableSdpWriter ? "on" : "off")
               << " queue_capacity=" << options.queueCapacity
@@ -233,9 +273,14 @@ int runRealtimeRtpCli(int argc, char** argv)
 
 int runGraphTranscodeCli(int argc, char** argv)
 {
-    if (argc < 5 || hasArg(argc, argv, "--help") || hasArg(argc, argv, "-h")) {
+    if (hasArg(argc, argv, "--help") || hasArg(argc, argv, "-h")) {
         printUsage();
-        return argc < 5 ? 2 : 0;
+        return 0;
+    }
+
+    if (argc < 5) {
+        printUsage();
+        return 2;
     }
 
     if (hasArg(argc, argv, "--realtime-rtp")) {

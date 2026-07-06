@@ -189,9 +189,11 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
             COMMAND ${TARGET_GRAPH_TRANSCODE_CLI}
                 --realtime-rtp
                 --input rtp://127.0.0.1:5004
-                --output rtp://127.0.0.1:5006
+                --output-host 127.0.0.1
+                --base-port 5006
                 --sdp realtime-cli.sdp
                 --media-id video-main
+                --video-stream-index 0
                 --queue-capacity 16
                 --dry-run
         )

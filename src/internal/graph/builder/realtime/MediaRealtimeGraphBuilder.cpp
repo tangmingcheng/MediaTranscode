@@ -2,6 +2,7 @@
 
 #include "internal/graph/builder/realtime/MediaRealtimeIngestToMuxGraphBuilder.h"
 #include "internal/graph/builder/realtime/MediaRealtimePacketRelayGraphBuilder.h"
+#include "internal/graph/builder/realtime/MediaRealtimeRtpTranscodeGraphBuilder.h"
 
 #include <utility>
 
@@ -19,6 +20,9 @@ namespace media::ffmpeg::graph {
         break;
     case MediaRealtimeGraphKind::IngestToMux:
         graphResult = MediaRealtimeIngestToMuxGraphBuilder::build(options);
+        break;
+    case MediaRealtimeGraphKind::RtpTranscode:
+        graphResult = MediaRealtimeRtpTranscodeGraphBuilder::build(options);
         break;
     }
 
