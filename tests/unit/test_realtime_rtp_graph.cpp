@@ -7,6 +7,7 @@
 #include "internal/graph/core/MediaGraphValidation.h"
 #include "internal/graph/model/MediaNodeKind.h"
 #include "internal/graph/runtime/MediaGraphRuntime.h"
+#include "internal/graph/utils/MediaUrlUtils.h"
 
 #include <filesystem>
 #include <iostream>
@@ -54,12 +55,30 @@ void testValidationRejectsMissingInput(TestContext& ctx)
 {
     MediaRealtimeGraphBuilderOptions options = validRealtimeOptions();
     options.input.url.clear();
-    options.inputUrl.clear();
 
     const auto status = MediaRealtimeRtpTranscodeGraphBuilder::validate(options);
     EXPECT_FALSE(ctx, status);
     if (!status) {
         EXPECT_EQ(ctx, status.error().code, media::ErrorCode::InvalidArgument);
+    }
+}
+
+void testValidationRejectsUnsupportedRealtimeInput(TestContext& ctx)
+{
+    MediaRealtimeGraphBuilderOptions options = validRealtimeOptions();
+    options.input.url = "rtp://127.0.0.1:5004";
+
+    const auto status = MediaRealtimeRtpTranscodeGraphBuilder::validate(options);
+    EXPECT_FALSE(ctx, status);
+    if (!status) {
+        EXPECT_EQ(ctx, status.error().code, media::ErrorCode::Unsupported);
+    }
+
+    options.input.url = "camera.sdp";
+    const auto sdpStatus = MediaRealtimeRtpTranscodeGraphBuilder::validate(options);
+    EXPECT_FALSE(ctx, sdpStatus);
+    if (!sdpStatus) {
+        EXPECT_EQ(ctx, sdpStatus.error().code, media::ErrorCode::Unsupported);
     }
 }
 
@@ -179,6 +198,16 @@ void testRuntimeCompileSupportsAutoHardwareChain(TestContext& ctx)
     expectGraphCompiles(ctx, std::move(graphResult).value());
 }
 
+void testUrlRedactionHidesUserInfo(TestContext& ctx)
+{
+    EXPECT_EQ(ctx,
+              redactUrlUserInfo("rtsp://user:password@example.invalid:554/Streaming/Channels/302"),
+              std::string("rtsp://<redacted>@example.invalid:554/Streaming/Channels/302"));
+    EXPECT_EQ(ctx,
+              redactUrlUserInfo("rtsp://example.invalid/Streaming/Channels/302"),
+              std::string("rtsp://example.invalid/Streaming/Channels/302"));
+}
+
 } // namespace
 
 int main()
@@ -186,7 +215,9 @@ int main()
     TestContext ctx;
 
     testValidationRejectsMissingInput(ctx);
+    testValidationRejectsUnsupportedRealtimeInput(ctx);
     testValidationRejectsOddRtpPort(ctx);
+    testUrlRedactionHidesUserInfo(ctx);
     testLegacyRealtimeKindsAreUnsupported(ctx);
     testBuildPlansVideoStreamAndSoftwareFallback(ctx);
     testRuntimeCompileSupportsSoftwareChain(ctx);

@@ -9,20 +9,20 @@ constexpr const char* owner = "MediaRealtimeOptionApplier";
 
 std::string effectiveInputUrl(const MediaRealtimeGraphBuilderOptions& options)
 {
-    return !options.input.url.empty() ? options.input.url : options.inputUrl;
+    return options.input.url;
 }
 
 std::string effectiveOutputUrl(const MediaRealtimeGraphBuilderOptions& options)
 {
-    return !options.outputUrl.empty()
-        ? options.outputUrl
+    return !options.output.url.empty()
+        ? options.output.url
         : "rtp://" + (options.output.host.empty() ? std::string("127.0.0.1") : options.output.host) +
               ":" + std::to_string(options.output.basePort);
 }
 
 std::string effectiveSdpPath(const MediaRealtimeGraphBuilderOptions& options)
 {
-    return !options.output.sdpPath.empty() ? options.output.sdpPath : options.sdpPath;
+    return options.output.sdpPath;
 }
 
 ::media::Result<void> setOption(MediaGraph& graph,

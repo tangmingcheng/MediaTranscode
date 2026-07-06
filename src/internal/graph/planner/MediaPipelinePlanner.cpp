@@ -3,6 +3,7 @@
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/planner/MediaPipelineCapabilityScanner.h"
 #include "internal/graph/planner/MediaPipelineScorer.h"
+#include "internal/graph/utils/MediaUrlUtils.h"
 
 #include <algorithm>
 #include <cctype>
@@ -113,7 +114,7 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
 
     {
         std::ostringstream out;
-        out << "input=" << plan.inputPath
+        out << "input=" << redactUrlUserInfo(plan.inputPath)
             << " branch_mode=" << mediaBranchModeName(plan.branchMode)
             << " source_stream=" << plan.sourceStreamIndex
             << " input_codec=" << plan.inputCodecName

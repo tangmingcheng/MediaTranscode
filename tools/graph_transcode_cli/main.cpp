@@ -1,6 +1,7 @@
 #include "internal/graph/builder/local/LocalFileTranscodeGraphBuilder.h"
 #include "internal/graph/builder/realtime/MediaRealtimeRtpTranscodeGraphBuilder.h"
 #include "internal/graph/runtime/MediaGraphRuntime.h"
+#include "internal/graph/utils/MediaUrlUtils.h"
 
 #include <chrono>
 #include <exception>
@@ -155,6 +156,9 @@ MediaRealtimeGraphBuilderOptions parseRealtimeOptions(int argc, char** argv)
     MediaRealtimeGraphBuilderOptions options;
     options.kind = MediaRealtimeGraphKind::RtpTranscode;
     options.input.url = argValue(argc, argv, "--input");
+    if (isUnsupportedRealtimeInputUrl(options.input.url)) {
+        throw std::invalid_argument("realtime-rtp mode supports RTSP/realtime media URLs only; raw RTP and SDP input are not supported in this phase");
+    }
     options.input.rtspTransport = argValue(argc, argv, "--rtsp-transport", "tcp");
     options.input.openTimeoutMs = intArg(argc, argv, "--open-timeout-ms", 5000);
     options.input.readTimeoutMs = intArg(argc, argv, "--read-timeout-ms", 5000);
@@ -165,7 +169,7 @@ MediaRealtimeGraphBuilderOptions parseRealtimeOptions(int argc, char** argv)
     options.output.basePort = static_cast<std::size_t>(intArg(argc, argv, "--rtp-port", 5004));
     options.output.sdpPath = argValue(argc, argv, "--sdp", "realtime-rtp.sdp");
     options.output.packetSize = intArg(argc, argv, "--packet-size", 1200);
-    options.outputUrl = argValue(argc, argv, "--output");
+    options.output.url = argValue(argc, argv, "--output");
 
     MediaTranscodeParameterSet& parameters = options.parameters;
     parameters.execution.includeVideo = !hasArg(argc, argv, "--no-video");
@@ -233,7 +237,7 @@ int runGraphTranscodeCli(int argc, char** argv)
     if (mode == "realtime-rtp") {
         MediaRealtimeGraphBuilderOptions options = parseRealtimeOptions(argc, argv);
         const int durationSeconds = intArg(argc, argv, "--duration", 15);
-        std::cout << "[CLI] realtime input=" << options.input.url
+        std::cout << "[CLI] realtime input=" << redactUrlUserInfo(options.input.url)
                   << " rtp=" << options.output.host << ':' << options.output.basePort
                   << " sdp=" << options.output.sdpPath
                   << " duration=" << durationSeconds

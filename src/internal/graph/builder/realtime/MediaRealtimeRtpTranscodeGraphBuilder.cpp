@@ -6,6 +6,7 @@
 #include "internal/graph/builder/segments/MediaPacketSelectSegmentBuilder.h"
 #include "internal/graph/builder/segments/MediaVideoBranchSegmentBuilder.h"
 #include "internal/graph/planner/MediaPipelinePlanner.h"
+#include "internal/graph/utils/MediaUrlUtils.h"
 
 #include <string>
 #include <utility>
@@ -17,7 +18,7 @@ constexpr const char* owner = "MediaRealtimeRtpTranscodeGraphBuilder";
 
 std::string effectiveInputUrl(const MediaRealtimeGraphBuilderOptions& options)
 {
-    return !options.input.url.empty() ? options.input.url : options.inputUrl;
+    return options.input.url;
 }
 
 std::string effectiveOutputHost(const MediaRealtimeGraphBuilderOptions& options)
@@ -27,7 +28,7 @@ std::string effectiveOutputHost(const MediaRealtimeGraphBuilderOptions& options)
 
 bool includeVideoBranch(const MediaRealtimeGraphBuilderOptions& options) noexcept
 {
-    return options.includeVideo && options.parameters.execution.includeVideo;
+    return options.parameters.execution.includeVideo;
 }
 
 bool isValidRtpPort(std::size_t port) noexcept
@@ -100,9 +101,14 @@ bool isValidRtpPort(std::size_t port) noexcept
 ::media::Status MediaRealtimeRtpTranscodeGraphBuilder::validate(
     const MediaRealtimeGraphBuilderOptions& options)
 {
-    if (effectiveInputUrl(options).empty()) {
+    const std::string inputUrl = effectiveInputUrl(options);
+    if (inputUrl.empty()) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("MediaRealtimeRtpTranscodeGraphBuilder requires input URL"));
+    }
+    if (isUnsupportedRealtimeInputUrl(inputUrl)) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::unsupported("MediaRealtimeRtpTranscodeGraphBuilder only supports realtime media URLs in this phase; raw RTP and SDP input are not supported"));
     }
     if (!includeVideoBranch(options)) {
         return ::media::Status::failure(
