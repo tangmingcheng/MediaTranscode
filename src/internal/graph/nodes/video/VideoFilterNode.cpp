@@ -335,10 +335,15 @@ MediaNodeKind VideoFilterNode::staticKind() noexcept
     }
 
     const int64_t ptsIn = frame->pts;
-    frame->pts = rescaleStrictlyIncreasingTimestamp(frame->pts,
-                                                    m_sinkTimeBase,
-                                                    m_encoderContext->time_base,
-                                                    m_lastSubmittedPts);
+    auto rescaledPts = rescaleStrictlyIncreasingTimestamp(frame->pts,
+                                                          m_sinkTimeBase,
+                                                          m_encoderContext->time_base,
+                                                          m_lastSubmittedPts);
+    if (!rescaledPts) {
+        return ::media::Status::failure(rescaledPts.error());
+    }
+
+    frame->pts = rescaledPts.value();
 
     m_lastSubmittedPts = frame->pts;
 

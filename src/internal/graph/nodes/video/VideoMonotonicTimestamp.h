@@ -1,5 +1,7 @@
 #pragma once
 
+#include "media_transcode/Result.h"
+
 #include <cstdint>
 
 extern "C" {
@@ -8,9 +10,9 @@ extern "C" {
 
 namespace media::ffmpeg::graph {
 
-int64_t rescaleStrictlyIncreasingTimestamp(int64_t pts,
-                                           AVRational sourceTimeBase,
-                                           AVRational targetTimeBase,
-                                           int64_t lastSubmittedPts) noexcept;
+::media::Result<int64_t> rescaleStrictlyIncreasingTimestamp(int64_t pts,
+                                                            AVRational sourceTimeBase,
+                                                            AVRational targetTimeBase,
+                                                            int64_t lastSubmittedPts);
 
 } // namespace media::ffmpeg::graph
