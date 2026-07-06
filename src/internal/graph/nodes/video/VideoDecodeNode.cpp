@@ -25,6 +25,21 @@ MediaNodeKind VideoDecodeNode::staticKind() noexcept
 
 ::media::Status VideoDecodeNode::onProcess(MediaGraphExecutionContext& context)
 {
+    if (!hasCodecContext()) {
+        auto codecInput = tryPopInputOptional(context, "codec");
+        if (!codecInput) {
+            return ::media::Status::failure(codecInput.error());
+        }
+        if (!codecInput.value()) {
+            return ::media::Status::success();
+        }
+        if (!tryBindCodecContext(*codecInput.value())) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument("VideoDecodeNode expected codec context on codec input"));
+        }
+        return ::media::Status::success();
+    }
+
     auto input = tryPopFirstInputOptional(context);
     if (!input) {
         return ::media::Status::failure(input.error());
@@ -36,11 +51,6 @@ MediaNodeKind VideoDecodeNode::staticKind() noexcept
     const MediaBufferRef& buffer = *input.value();
     if (tryBindCodecContext(buffer)) {
         return ::media::Status::success();
-    }
-
-    if (!hasCodecContext()) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::notInitialized("VideoDecodeNode requires codec context before packets"));
     }
 
     if (buffer->isEof() || buffer->isFlush()) {

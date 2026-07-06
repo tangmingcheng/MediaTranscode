@@ -72,7 +72,7 @@ target_include_directories(${TARGET_CORE}
 target_compile_features(${TARGET_CORE} PUBLIC cxx_std_20)
 
 if(MSVC)
-    target_compile_options(${TARGET_CORE} PRIVATE /utf-8)
+    target_compile_options(${TARGET_CORE} PRIVATE /utf-8 /EHsc)
 endif()
 
 add_library(thirdparty_spdlog INTERFACE)
@@ -148,7 +148,7 @@ function(media_transcode_configure_app target_name)
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
     )
     if(MSVC)
-        target_compile_options(${target_name} PRIVATE /utf-8)
+        target_compile_options(${target_name} PRIVATE /utf-8 /EHsc)
     endif()
 endfunction()
 
@@ -168,4 +168,13 @@ endif()
 
 if(MEDIA_TRANSCODE_BUILD_TESTS)
     enable_testing()
+
+    add_executable(media_transcode_realtime_graph_tests
+        tests/unit/test_realtime_rtp_graph.cpp
+    )
+    media_transcode_configure_test(media_transcode_realtime_graph_tests)
+    target_compile_definitions(media_transcode_realtime_graph_tests PRIVATE
+        MEDIA_TRANSCODE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+    add_test(NAME media_transcode_realtime_graph_tests COMMAND media_transcode_realtime_graph_tests)
 endif()

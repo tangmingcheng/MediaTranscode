@@ -1,9 +1,6 @@
 #include "internal/graph/preset/MediaPipelinePreset.h"
 
 #include "internal/graph/builder/local/LocalFileTranscodeGraphBuilder.h"
-#include "internal/graph/builder/realtime/MediaRealtimeGraphBuilder.h"
-
-#include <utility>
 
 namespace media::ffmpeg::graph {
 
@@ -35,19 +32,9 @@ namespace media::ffmpeg::graph {
 
 ::media::Result<MediaGraph> MediaPipelinePreset::createRealtimeRtpSkeleton(const MediaPipelinePresetOptions& options)
 {
-    MediaRealtimeGraphBuilderOptions builderOptions;
-    builderOptions.kind = MediaRealtimeGraphKind::PacketRelay;
-    builderOptions.inputUrl = options.inputUrl;
-    builderOptions.outputUrl = options.outputUrl;
-    builderOptions.includeAudio = options.includeAudio;
-    builderOptions.includeVideo = options.includeVideo;
-    builderOptions.enablePacketFanout = true;
-
-    auto realtime = MediaRealtimeGraphBuilder::build(builderOptions);
-    if (!realtime) {
-        return ::media::Result<MediaGraph>::failure(realtime.error());
-    }
-    return ::media::Result<MediaGraph>::success(std::move(realtime).value().graph);
+    (void)options;
+    return ::media::Result<MediaGraph>::failure(
+        ::media::ErrorInfo::unsupported("RealtimeRtpSkeleton preset is superseded by realtime-rtp transcode graph builder"));
 }
 
 } // namespace media::ffmpeg::graph

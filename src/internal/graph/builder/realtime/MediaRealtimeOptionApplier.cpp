@@ -7,6 +7,35 @@ namespace {
 
 constexpr const char* owner = "MediaRealtimeOptionApplier";
 
+std::string effectiveInputUrl(const MediaRealtimeGraphBuilderOptions& options)
+{
+    return !options.input.url.empty() ? options.input.url : options.inputUrl;
+}
+
+std::string effectiveOutputUrl(const MediaRealtimeGraphBuilderOptions& options)
+{
+    return !options.outputUrl.empty()
+        ? options.outputUrl
+        : "rtp://" + (options.output.host.empty() ? std::string("127.0.0.1") : options.output.host) +
+              ":" + std::to_string(options.output.basePort);
+}
+
+std::string effectiveSdpPath(const MediaRealtimeGraphBuilderOptions& options)
+{
+    return !options.output.sdpPath.empty() ? options.output.sdpPath : options.sdpPath;
+}
+
+::media::Result<void> setOption(MediaGraph& graph,
+                                MediaNodeId nodeId,
+                                const std::string& key,
+                                const std::string& value)
+{
+    if (value.empty()) {
+        return ::media::Result<void>::success();
+    }
+    return MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, key, value);
+}
+
 } // namespace
 
 ::media::Result<void> MediaRealtimeOptionApplier::applyInputOptions(
@@ -14,9 +43,13 @@ constexpr const char* owner = "MediaRealtimeOptionApplier";
     MediaNodeId nodeId,
     const MediaRealtimeGraphBuilderOptions& options)
 {
-    if (!options.inputUrl.empty()) {
-        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, "url", options.inputUrl); !status) return status;
-    }
+    if (auto status = setOption(graph, nodeId, "url", effectiveInputUrl(options)); !status) return status;
+    if (auto status = setOption(graph, nodeId, "input.rtsp_transport", options.input.rtspTransport); !status) return status;
+    if (auto status = setOption(graph, nodeId, "input.open_timeout_ms", std::to_string(options.input.openTimeoutMs)); !status) return status;
+    if (auto status = setOption(graph, nodeId, "input.read_timeout_ms", std::to_string(options.input.readTimeoutMs)); !status) return status;
+    if (auto status = setOption(graph, nodeId, "input.analyze_duration_us", std::to_string(options.input.analyzeDurationUs)); !status) return status;
+    if (auto status = setOption(graph, nodeId, "input.probe_size_bytes", std::to_string(options.input.probeSizeBytes)); !status) return status;
+    if (auto status = setOption(graph, nodeId, "input.low_latency", options.input.lowLatency ? "1" : "0"); !status) return status;
     if (!options.mediaId.empty()) {
         if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, "media_id", options.mediaId); !status) return status;
     }
@@ -28,9 +61,8 @@ constexpr const char* owner = "MediaRealtimeOptionApplier";
     MediaNodeId nodeId,
     const MediaRealtimeGraphBuilderOptions& options)
 {
-    if (!options.outputUrl.empty()) {
-        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, "url", options.outputUrl); !status) return status;
-    }
+    if (auto status = setOption(graph, nodeId, "url", effectiveOutputUrl(options)); !status) return status;
+    if (auto status = setOption(graph, nodeId, "rtp.packet_size", std::to_string(options.output.packetSize)); !status) return status;
     if (!options.mediaId.empty()) {
         if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, "media_id", options.mediaId); !status) return status;
     }
@@ -42,9 +74,7 @@ constexpr const char* owner = "MediaRealtimeOptionApplier";
     MediaNodeId nodeId,
     const MediaRealtimeGraphBuilderOptions& options)
 {
-    if (!options.sdpPath.empty()) {
-        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, "path", options.sdpPath); !status) return status;
-    }
+    if (auto status = setOption(graph, nodeId, "path", effectiveSdpPath(options)); !status) return status;
     if (!options.mediaId.empty()) {
         if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, "media_id", options.mediaId); !status) return status;
     }

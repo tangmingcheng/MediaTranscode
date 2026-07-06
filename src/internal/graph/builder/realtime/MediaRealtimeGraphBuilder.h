@@ -1,20 +1,64 @@
 #pragma once
 
 #include "internal/graph/core/MediaGraph.h"
+#include "internal/graph/model/MediaTranscodeParameters.h"
 #include "media_transcode/Result.h"
 
 #include <cstddef>
 #include <string>
+#include <vector>
 
 namespace media::ffmpeg::graph {
 
 enum class MediaRealtimeGraphKind {
     PacketRelay,
-    IngestToMux
+    IngestToMux,
+    RtpTranscode
+};
+
+enum class MediaRealtimeInputMode {
+    Url,
+    RawRtp
+};
+
+struct MediaRtpCodecHint {
+    MediaStreamKind streamKind = MediaStreamKind::Unknown;
+    std::string codecName;
+    int payloadType = -1;
+    int clockRate = 0;
+};
+
+struct MediaRealtimeInputConfig {
+    MediaRealtimeInputMode mode = MediaRealtimeInputMode::Url;
+    std::string url;
+    std::string sdpText;
+    std::string sdpPath;
+    std::string rtspTransport = "tcp";
+    int openTimeoutMs = 5000;
+    int readTimeoutMs = 5000;
+    int analyzeDurationUs = 500000;
+    int probeSizeBytes = 512 * 1024;
+    bool lowLatency = true;
+    int videoStreamIndex = invalidMediaStreamIndex;
+    int audioStreamIndex = invalidMediaStreamIndex;
+    std::vector<MediaRtpCodecHint> codecHints;
+};
+
+struct MediaRealtimeOutputConfig {
+    std::string host = "127.0.0.1";
+    std::size_t basePort = 5004;
+    std::size_t videoRtpPort = 0;
+    std::size_t audioRtpPort = 0;
+    std::string sdpPath;
+    int packetSize = 1200;
 };
 
 struct MediaRealtimeGraphBuilderOptions {
     MediaRealtimeGraphKind kind = MediaRealtimeGraphKind::PacketRelay;
+
+    MediaRealtimeInputConfig input;
+    MediaRealtimeOutputConfig output;
+    MediaTranscodeParameterSet parameters;
 
     std::string inputUrl;
     std::string outputUrl;

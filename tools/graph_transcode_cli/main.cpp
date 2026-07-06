@@ -1,11 +1,14 @@
 #include "internal/graph/builder/local/LocalFileTranscodeGraphBuilder.h"
+#include "internal/graph/builder/realtime/MediaRealtimeRtpTranscodeGraphBuilder.h"
 #include "internal/graph/runtime/MediaGraphRuntime.h"
 
+#include <chrono>
 #include <exception>
 #include <iostream>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 
 using namespace media::ffmpeg::graph;
@@ -52,6 +55,12 @@ std::optional<int> optionalIntArg(int argc, char** argv, const std::string& key)
         throw std::invalid_argument("invalid integer value for " + key + ": " + value);
     }
     return result;
+}
+
+int intArg(int argc, char** argv, const std::string& key, int fallback)
+{
+    auto value = optionalIntArg(argc, argv, key);
+    return value.value_or(fallback);
 }
 
 MediaRateControlMode rateControlArg(int argc, char** argv, const std::string& key)
@@ -141,13 +150,130 @@ LocalFileTranscodeOptions parseOptions(int argc, char** argv)
     return options;
 }
 
+MediaRealtimeGraphBuilderOptions parseRealtimeOptions(int argc, char** argv)
+{
+    MediaRealtimeGraphBuilderOptions options;
+    options.kind = MediaRealtimeGraphKind::RtpTranscode;
+    options.input.url = argValue(argc, argv, "--input");
+    options.input.rtspTransport = argValue(argc, argv, "--rtsp-transport", "tcp");
+    options.input.openTimeoutMs = intArg(argc, argv, "--open-timeout-ms", 5000);
+    options.input.readTimeoutMs = intArg(argc, argv, "--read-timeout-ms", 5000);
+    options.input.analyzeDurationUs = intArg(argc, argv, "--analyze-duration-us", 500000);
+    options.input.probeSizeBytes = intArg(argc, argv, "--probe-size", 512 * 1024);
+    options.input.lowLatency = !hasArg(argc, argv, "--no-low-latency");
+    options.output.host = argValue(argc, argv, "--rtp-host", "127.0.0.1");
+    options.output.basePort = static_cast<std::size_t>(intArg(argc, argv, "--rtp-port", 5004));
+    options.output.sdpPath = argValue(argc, argv, "--sdp", "realtime-rtp.sdp");
+    options.output.packetSize = intArg(argc, argv, "--packet-size", 1200);
+    options.outputUrl = argValue(argc, argv, "--output");
+
+    MediaTranscodeParameterSet& parameters = options.parameters;
+    parameters.execution.includeVideo = !hasArg(argc, argv, "--no-video");
+    parameters.execution.includeAudio = false;
+    parameters.execution.disableHardware = hasArg(argc, argv, "--disable-hw");
+    parameters.execution.diagnosticLogEnabled = !hasArg(argc, argv, "--quiet-graph");
+    parameters.video.codecName = argValue(argc, argv, "--video-codec", "h264");
+    parameters.video.rateControl = rateControlArg(argc, argv, "--rc");
+    parameters.video.preset = argValue(argc, argv, "--preset", "fast");
+    parameters.video.profile = argValue(argc, argv, "--profile", parameters.video.profile);
+    parameters.video.tune = argValue(argc, argv, "--tune", parameters.video.tune);
+    parameters.video.level = argValue(argc, argv, "--level", parameters.video.level);
+    parameters.video.width = optionalIntArg(argc, argv, "--width");
+    parameters.video.height = optionalIntArg(argc, argv, "--height");
+    if (auto fps = optionalIntArg(argc, argv, "--fps")) {
+        parameters.video.frameRate.numerator = fps;
+        parameters.video.frameRate.denominator = 1;
+    }
+    parameters.video.bitrateKbps = optionalIntArg(argc, argv, "--bitrate");
+    parameters.video.minBitrateKbps = optionalIntArg(argc, argv, "--min-bitrate");
+    parameters.video.maxBitrateKbps = optionalIntArg(argc, argv, "--max-bitrate");
+    parameters.video.bufferSizeKbits = optionalIntArg(argc, argv, "--buffer-size");
+    parameters.video.quality = optionalIntArg(argc, argv, "--quality");
+    parameters.video.gop = optionalIntArg(argc, argv, "--gop");
+    parameters.video.bFrames = 0;
+    return options;
+}
+
+const MediaNode* findNodeByKind(const MediaGraph& graph, MediaNodeKind kind)
+{
+    for (const MediaNode& node : graph.nodes()) {
+        if (node.kind == kind) {
+            return &node;
+        }
+    }
+    return nullptr;
+}
+
+void printRealtimePlanSummary(const MediaGraph& graph)
+{
+    const MediaNode* encoder = findNodeByKind(graph, MediaNodeKind::VideoEncode);
+    if (!encoder) {
+        return;
+    }
+
+    std::cout << "[CLI] selected_chain=" << encoder->options.value("pipeline.chain", "unknown")
+              << " score=" << encoder->options.value("pipeline.score", "0")
+              << " decoder=" << encoder->options.value("decoder.pipeline.ffmpeg", "unknown")
+              << " filter=" << encoder->options.value("filter.pipeline.filter", "unknown")
+              << " encoder=" << encoder->options.value("encoder", "unknown")
+              << '\n';
+}
+
 int runGraphTranscodeCli(int argc, char** argv)
 {
+    const std::string mode = argValue(argc, argv, "--mode", "local-file");
     if (argc < 5 || hasArg(argc, argv, "--help") || hasArg(argc, argv, "-h")) {
         std::cout << "Usage: media_transcode_graph_transcode_cli --input in.mp4 --output out.mp4 [options]\n";
+        std::cout << "       media_transcode_graph_transcode_cli --mode realtime-rtp --input rtsp://... --rtp-host 127.0.0.1 --rtp-port 5004 --sdp out.sdp --duration 15\n";
         std::cout << "       encoder selection is automatic and planner-owned\n";
         std::cout << "       add --quiet-graph to disable runtime graph diagnostics\n";
         return argc < 5 ? 2 : 0;
+    }
+
+    if (mode == "realtime-rtp") {
+        MediaRealtimeGraphBuilderOptions options = parseRealtimeOptions(argc, argv);
+        const int durationSeconds = intArg(argc, argv, "--duration", 15);
+        std::cout << "[CLI] realtime input=" << options.input.url
+                  << " rtp=" << options.output.host << ':' << options.output.basePort
+                  << " sdp=" << options.output.sdpPath
+                  << " duration=" << durationSeconds
+                  << " hw=" << (options.parameters.execution.disableHardware ? "disabled" : "auto")
+                  << '\n';
+
+        auto graphResult = MediaRealtimeRtpTranscodeGraphBuilder::build(options);
+        if (!graphResult) {
+            return failResult("realtime graph build", graphResult);
+        }
+        MediaGraph graph = std::move(graphResult).value();
+        printRealtimePlanSummary(graph);
+
+        MediaGraphRuntime runtime;
+        runtime.setDiagnosticsEnabled(options.parameters.execution.diagnosticLogEnabled);
+        auto compileStatus = runtime.compile(std::move(graph));
+        if (!compileStatus) {
+            return failStatus("compile realtime graph", compileStatus);
+        }
+        auto registerStatus = runtime.registerDefaultRuntimeNodes();
+        if (!registerStatus) {
+            return failStatus("register realtime runtime nodes", registerStatus);
+        }
+        auto startStatus = runtime.startThreaded();
+        if (!startStatus) {
+            return failStatus("start realtime runtime", startStatus);
+        }
+        if (durationSeconds > 0) {
+            std::this_thread::sleep_for(std::chrono::seconds(durationSeconds));
+        }
+        auto stopStatus = runtime.stop();
+        if (!stopStatus) {
+            return failStatus("stop realtime runtime", stopStatus);
+        }
+        std::cout << "[CLI] realtime stopped\n";
+        return 0;
+    }
+
+    if (mode != "local-file") {
+        throw std::invalid_argument("unsupported --mode: " + mode);
     }
 
     LocalFileTranscodeOptions options = parseOptions(argc, argv);

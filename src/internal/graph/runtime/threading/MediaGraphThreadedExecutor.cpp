@@ -1,5 +1,7 @@
 #include "internal/graph/runtime/threading/MediaGraphThreadedExecutor.h"
 
+#include "internal/graph/runtime/lifecycle/MediaGraphLifecycle.h"
+
 namespace media::ffmpeg::graph {
 
 void MediaGraphThreadedExecutor::setPolicy(MediaThreadingPolicy policy) noexcept
@@ -70,6 +72,11 @@ const MediaThreadingPolicy& MediaGraphThreadedExecutor::policy() const noexcept
         if (worker) {
             worker->requestStop();
         }
+    }
+
+    auto closeStatus = MediaGraphLifecycle::closeChannels(context);
+    if (!closeStatus) {
+        return closeStatus;
     }
 
     for (auto& worker : m_workers) {

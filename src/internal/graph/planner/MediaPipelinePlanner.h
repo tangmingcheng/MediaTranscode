@@ -61,6 +61,12 @@ struct MediaPipelinePlannerOptions {
     bool allowSoftwareFallback = true;
     bool requireRuntimeAvailability = true;
     bool diagnosticLogEnabled = false;
+    std::string rtspTransport = "tcp";
+    int openTimeoutMs = 5000;
+    int readTimeoutMs = 5000;
+    int analyzeDurationUs = 500000;
+    int probeSizeBytes = 512 * 1024;
+    bool lowLatency = true;
 };
 
 struct MediaPipelinePlan {
@@ -85,6 +91,10 @@ class MediaPipelinePlanner final {
 public:
     static ::media::Result<MediaPipelinePlan> planVideoTranscodeFile(
         const std::string& inputPath,
+        MediaPipelinePlannerOptions options = {});
+
+    static ::media::Result<MediaPipelinePlan> planVideoTranscodeRealtimeUrl(
+        const std::string& inputUrl,
         MediaPipelinePlannerOptions options = {});
 
 private:
