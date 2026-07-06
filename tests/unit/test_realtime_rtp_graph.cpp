@@ -16,6 +16,7 @@ extern "C" {
 
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <string>
 
 namespace {
@@ -232,17 +233,67 @@ void testTimestampRescaleBumpsQuantizedDuplicates(TestContext& ctx)
     const AVRational sourceTimeBase{ 1, 90000 };
     const AVRational encoderTimeBase{ 1, 25 };
 
-    const int64_t first = rescaleStrictlyIncreasingTimestamp(540000,
-                                                             sourceTimeBase,
-                                                             encoderTimeBase,
-                                                             AV_NOPTS_VALUE);
-    EXPECT_EQ(ctx, first, 150);
+    const auto first = rescaleStrictlyIncreasingTimestamp(540000,
+                                                          sourceTimeBase,
+                                                          encoderTimeBase,
+                                                          AV_NOPTS_VALUE);
+    EXPECT_TRUE(ctx, first);
+    if (!first) {
+        return;
+    }
+    EXPECT_EQ(ctx, first.value(), 150);
 
-    const int64_t duplicate = rescaleStrictlyIncreasingTimestamp(540010,
-                                                                 sourceTimeBase,
-                                                                 encoderTimeBase,
-                                                                 first);
-    EXPECT_EQ(ctx, duplicate, 151);
+    const auto duplicate = rescaleStrictlyIncreasingTimestamp(540010,
+                                                              sourceTimeBase,
+                                                              encoderTimeBase,
+                                                              first.value());
+    EXPECT_TRUE(ctx, duplicate);
+    if (!duplicate) {
+        return;
+    }
+    EXPECT_EQ(ctx, duplicate.value(), 151);
+
+    const auto nextQuantized = rescaleStrictlyIncreasingTimestamp(543600,
+                                                                  sourceTimeBase,
+                                                                  encoderTimeBase,
+                                                                  duplicate.value());
+    EXPECT_TRUE(ctx, nextQuantized);
+    if (nextQuantized) {
+        EXPECT_EQ(ctx, nextQuantized.value(), 152);
+    }
+}
+
+void testTimestampRescaleRejectsInvalidBoundaryValues(TestContext& ctx)
+{
+    const AVRational sourceTimeBase{ 1, 90000 };
+    const AVRational encoderTimeBase{ 1, 25 };
+
+    const auto invalidPts = rescaleStrictlyIncreasingTimestamp(AV_NOPTS_VALUE,
+                                                               sourceTimeBase,
+                                                               encoderTimeBase,
+                                                               AV_NOPTS_VALUE);
+    EXPECT_FALSE(ctx, invalidPts);
+    if (!invalidPts) {
+        EXPECT_EQ(ctx, invalidPts.error().code, media::ErrorCode::InvalidArgument);
+    }
+
+    const auto invalidTimeBase = rescaleStrictlyIncreasingTimestamp(540000,
+                                                                    AVRational{ 0, 1 },
+                                                                    encoderTimeBase,
+                                                                    AV_NOPTS_VALUE);
+    EXPECT_FALSE(ctx, invalidTimeBase);
+    if (!invalidTimeBase) {
+        EXPECT_EQ(ctx, invalidTimeBase.error().code, media::ErrorCode::InvalidArgument);
+    }
+
+    const auto maxLastPts = rescaleStrictlyIncreasingTimestamp(540000,
+                                                               sourceTimeBase,
+                                                               encoderTimeBase,
+                                                               std::numeric_limits<int64_t>::max());
+    EXPECT_FALSE(ctx, maxLastPts);
+    if (!maxLastPts) {
+        EXPECT_EQ(ctx, maxLastPts.error().code, media::ErrorCode::InvalidArgument);
+    }
 }
 
 } // namespace
@@ -256,6 +307,7 @@ int main()
     testValidationRejectsOddRtpPort(ctx);
     testUrlRedactionHidesUserInfo(ctx);
     testTimestampRescaleBumpsQuantizedDuplicates(ctx);
+    testTimestampRescaleRejectsInvalidBoundaryValues(ctx);
     testLegacyRealtimeKindsAreUnsupported(ctx);
     testBuildPlansVideoStreamAndSoftwareFallback(ctx);
     testRuntimeCompileSupportsSoftwareChain(ctx);

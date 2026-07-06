@@ -38,7 +38,7 @@ ffplay -protocol_whitelist file,udp,rtp -i out/build/x64-debug/realtime-rtp.sdp
 ffprobe -protocol_whitelist file,udp,rtp -i out/build/x64-debug/realtime-rtp.sdp
 ```
 
-Latest local smoke result with the redacted Channel 301 RTSP source selected `cuda-nvenc`, wrote 312 RTP mux packets, and an independent UDP receiver observed 3138 RTP datagrams with H264 payloads including FU-A IDR and non-IDR fragments. No duplicate timestamp failure was observed.
+Latest local smoke result with the redacted Channel 301 RTSP source selected `cuda-nvenc`, wrote 312 RTP mux packets, and an independent UDP receiver observed 3254 RTP datagrams with H264 payloads including FU-A IDR and non-IDR fragments. No duplicate timestamp failure was observed.
 
 ## Risks
 
