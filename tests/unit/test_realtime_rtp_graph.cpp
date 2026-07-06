@@ -6,8 +6,13 @@
 #include "internal/graph/builder/realtime/MediaRealtimeRtpTranscodeGraphBuilder.h"
 #include "internal/graph/core/MediaGraphValidation.h"
 #include "internal/graph/model/MediaNodeKind.h"
+#include "internal/graph/nodes/video/VideoMonotonicTimestamp.h"
 #include "internal/graph/runtime/MediaGraphRuntime.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
+
+extern "C" {
+#include <libavutil/avutil.h>
+}
 
 #include <filesystem>
 #include <iostream>
@@ -222,6 +227,24 @@ void testUrlRedactionHidesUserInfo(TestContext& ctx)
               std::string("rtsp://example.invalid/Streaming/Channels/302"));
 }
 
+void testTimestampRescaleBumpsQuantizedDuplicates(TestContext& ctx)
+{
+    const AVRational sourceTimeBase{ 1, 90000 };
+    const AVRational encoderTimeBase{ 1, 25 };
+
+    const int64_t first = rescaleStrictlyIncreasingTimestamp(540000,
+                                                             sourceTimeBase,
+                                                             encoderTimeBase,
+                                                             AV_NOPTS_VALUE);
+    EXPECT_EQ(ctx, first, 150);
+
+    const int64_t duplicate = rescaleStrictlyIncreasingTimestamp(540010,
+                                                                 sourceTimeBase,
+                                                                 encoderTimeBase,
+                                                                 first);
+    EXPECT_EQ(ctx, duplicate, 151);
+}
+
 } // namespace
 
 int main()
@@ -232,6 +255,7 @@ int main()
     testValidationRejectsUnsupportedRealtimeInput(ctx);
     testValidationRejectsOddRtpPort(ctx);
     testUrlRedactionHidesUserInfo(ctx);
+    testTimestampRescaleBumpsQuantizedDuplicates(ctx);
     testLegacyRealtimeKindsAreUnsupported(ctx);
     testBuildPlansVideoStreamAndSoftwareFallback(ctx);
     testRuntimeCompileSupportsSoftwareChain(ctx);

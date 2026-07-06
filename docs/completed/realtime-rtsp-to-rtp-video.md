@@ -9,6 +9,7 @@
 - Added URL userinfo redaction for CLI and planner diagnostics.
 - Added runtime nodes for realtime input, RTP output, RTP muxing, and SDP writing.
 - Added RTP mux diagnostics for first packet output and final written packet count.
+- Added monotonic timestamp rescaling after video filtering so RTSP jitter or time-base quantization does not stop realtime RTP output with duplicate encoder PTS values.
 - Added CLI mode:
 
 ```powershell
@@ -27,7 +28,7 @@ out/build/x64-debug/media_transcode_realtime_graph_tests.exe
 RTSP smoke test:
 
 ```powershell
-out/build/x64-debug/media_transcode_graph_transcode_cli.exe --mode realtime-rtp --input rtsp://<redacted>@example.invalid:554/Streaming/Channels/302 --rtp-host 127.0.0.1 --rtp-port 5004 --sdp out/build/x64-debug/realtime-rtp.sdp --duration 15
+out/build/x64-debug/media_transcode_graph_transcode_cli.exe --mode realtime-rtp --input rtsp://<redacted>@example.invalid:554/Streaming/Channels/301 --rtp-host 127.0.0.1 --rtp-port 5004 --sdp out/build/x64-debug/realtime-rtp.sdp --duration 15
 ```
 
 Receiver validation can use the generated SDP while the CLI is running:
@@ -36,6 +37,8 @@ Receiver validation can use the generated SDP while the CLI is running:
 ffplay -protocol_whitelist file,udp,rtp -i out/build/x64-debug/realtime-rtp.sdp
 ffprobe -protocol_whitelist file,udp,rtp -i out/build/x64-debug/realtime-rtp.sdp
 ```
+
+Latest local smoke result with the redacted Channel 301 RTSP source selected `cuda-nvenc`, wrote 312 RTP mux packets, and an independent UDP receiver observed 3138 RTP datagrams with H264 payloads including FU-A IDR and non-IDR fragments. No duplicate timestamp failure was observed.
 
 ## Risks
 

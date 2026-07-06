@@ -2,6 +2,7 @@
 
 #include "internal/graph/builder/video/VideoFilterGraphBuilder.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
+#include "internal/graph/nodes/video/VideoMonotonicTimestamp.h"
 #include "internal/graph/runtime/buffer/FFmpegCodecContextBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
@@ -10,7 +11,6 @@
 extern "C" {
 #include <libavfilter/buffersink.h>
 #include <libavfilter/buffersrc.h>
-#include <libavutil/mathematics.h>
 #include <libavutil/pixdesc.h>
 }
 
@@ -335,14 +335,10 @@ MediaNodeKind VideoFilterNode::staticKind() noexcept
     }
 
     const int64_t ptsIn = frame->pts;
-    frame->pts = av_rescale_q(frame->pts, m_sinkTimeBase, m_encoderContext->time_base);
-
-    if (m_lastSubmittedPts != AV_NOPTS_VALUE && frame->pts <= m_lastSubmittedPts) {
-        std::ostringstream out;
-        out << "VideoFilterNode filtered timestamp is not strictly increasing current=" << frame->pts
-            << " last=" << m_lastSubmittedPts;
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(out.str()));
-    }
+    frame->pts = rescaleStrictlyIncreasingTimestamp(frame->pts,
+                                                    m_sinkTimeBase,
+                                                    m_encoderContext->time_base,
+                                                    m_lastSubmittedPts);
 
     m_lastSubmittedPts = frame->pts;
 
