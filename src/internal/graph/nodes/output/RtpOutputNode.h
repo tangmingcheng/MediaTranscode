@@ -2,7 +2,6 @@
 
 #include "internal/FFmpegRAII.h"
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
-#include "internal/graph/runtime/ffmpeg/FFmpegRtpOutputSession.h"
 
 namespace media::ffmpeg::graph {
 
