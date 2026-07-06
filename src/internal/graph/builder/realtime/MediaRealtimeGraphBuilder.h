@@ -4,8 +4,10 @@
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "media_transcode/Result.h"
 
+#include <cstdint>
 #include <cstddef>
 #include <string>
+#include <vector>
 
 namespace media::ffmpeg::graph {
 

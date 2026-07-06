@@ -100,6 +100,17 @@ int failResult(const char* action, const ::media::Result<T>& result)
     return 1;
 }
 
+void printUsage()
+{
+    std::cout << "Usage: media_transcode_graph_transcode_cli --input in.mp4 --output out.mp4 [options]\n";
+    std::cout << "       media_transcode_graph_transcode_cli --realtime-rtp --input rtp://host:port --output-host 127.0.0.1 --base-port 5004 --sdp out.sdp --dry-run [options]\n";
+    std::cout << "       encoder selection is automatic and planner-owned\n";
+    std::cout << "       add --quiet-graph to disable runtime graph diagnostics\n";
+    std::cout << "       realtime RTP options: --raw-rtp --input-sdp <path> --media-id <id> --queue-capacity <n>\n";
+    std::cout << "                             --high-watermark <n> --critical-watermark <n> --video-stream-index <n>\n";
+    std::cout << "                             --audio-stream-index <n> --no-audio --no-video\n";
+}
+
 LocalFileTranscodeOptions parseOptions(int argc, char** argv)
 {
     rejectRemovedArg(argc, argv, "--encoder");
