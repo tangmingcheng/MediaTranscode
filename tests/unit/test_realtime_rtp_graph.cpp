@@ -80,6 +80,20 @@ void testValidationRejectsUnsupportedRealtimeInput(TestContext& ctx)
     if (!sdpStatus) {
         EXPECT_EQ(ctx, sdpStatus.error().code, media::ErrorCode::Unsupported);
     }
+
+    options.input.url = "udp://127.0.0.1:5004";
+    const auto udpStatus = MediaRealtimeRtpTranscodeGraphBuilder::validate(options);
+    EXPECT_FALSE(ctx, udpStatus);
+    if (!udpStatus) {
+        EXPECT_EQ(ctx, udpStatus.error().code, media::ErrorCode::Unsupported);
+    }
+
+    options.input.url = "sdp://camera";
+    const auto sdpSchemeStatus = MediaRealtimeRtpTranscodeGraphBuilder::validate(options);
+    EXPECT_FALSE(ctx, sdpSchemeStatus);
+    if (!sdpSchemeStatus) {
+        EXPECT_EQ(ctx, sdpSchemeStatus.error().code, media::ErrorCode::Unsupported);
+    }
 }
 
 void testValidationRejectsOddRtpPort(TestContext& ctx)

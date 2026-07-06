@@ -282,7 +282,7 @@ int runGraphTranscodeCli(int argc, char** argv)
 
     LocalFileTranscodeOptions options = parseOptions(argc, argv);
     const MediaTranscodeParameterSet& parameters = options.parameters;
-    std::cout << "[CLI] input=" << options.inputUrl
+    std::cout << "[CLI] input=" << redactUrlUserInfo(options.inputUrl)
               << " output=" << options.outputUrl
               << " video=" << (parameters.execution.includeVideo ? "on" : "off")
               << " audio=" << (parameters.execution.includeAudio ? "on" : "off")
