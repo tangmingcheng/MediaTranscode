@@ -1,11 +1,22 @@
-#include "internal/graph/builder/realtime/MediaRealtimeGraphBuilder.h"
-#include "internal/graph/core/MediaGraph.h"
-#include "internal/graph/model/MediaNodeKind.h"
-
 #include "common/TestAssert.h"
 
-#include <algorithm>
+#include "internal/graph/builder/realtime/MediaRealtimeIngestToMuxGraphBuilder.h"
+#include "internal/graph/builder/realtime/MediaRealtimeGraphBuilder.h"
+#include "internal/graph/builder/realtime/MediaRealtimePacketRelayGraphBuilder.h"
+#include "internal/graph/builder/realtime/MediaRealtimeRtpTranscodeGraphBuilder.h"
+#include "internal/graph/core/MediaGraphValidation.h"
+#include "internal/graph/model/MediaNodeKind.h"
+#include "internal/graph/nodes/video/VideoMonotonicTimestamp.h"
+#include "internal/graph/runtime/MediaGraphRuntime.h"
+#include "internal/graph/utils/MediaUrlUtils.h"
+
+extern "C" {
+#include <libavutil/avutil.h>
+}
+
+#include <filesystem>
 #include <iostream>
+#include <limits>
 #include <string>
 
 namespace {
@@ -13,342 +24,275 @@ namespace {
 using media_transcode::test::TestContext;
 using namespace media::ffmpeg::graph;
 
-bool hasNodeKind(const MediaGraph& graph, MediaNodeKind kind)
+std::string sampleVideoPath()
 {
-    return std::any_of(graph.nodes().begin(), graph.nodes().end(), [kind](const MediaNode& node) {
-        return node.kind == kind;
-    });
+    return (std::filesystem::path(MEDIA_TRANSCODE_SOURCE_DIR) /
+            "tests" /
+            "samples" /
+            "sample_h264_aac_2560x1440.mp4").string();
 }
 
-std::size_t countNodeKind(const MediaGraph& graph, MediaNodeKind kind)
-{
-    return static_cast<std::size_t>(std::count_if(graph.nodes().begin(), graph.nodes().end(), [kind](const MediaNode& node) {
-        return node.kind == kind;
-    }));
-}
-
-const MediaNode* findNodeKind(const MediaGraph& graph, MediaNodeKind kind)
-{
-    const auto it = std::find_if(graph.nodes().begin(), graph.nodes().end(), [kind](const MediaNode& node) {
-        return node.kind == kind;
-    });
-    return it == graph.nodes().end() ? nullptr : &*it;
-}
-
-MediaRealtimeGraphBuilderOptions validPacketRelayOptions()
+MediaRealtimeGraphBuilderOptions validRealtimeOptions()
 {
     MediaRealtimeGraphBuilderOptions options;
-    options.kind = MediaRealtimeGraphKind::PacketRelay;
-    options.inputUrl = "rtp://127.0.0.1:5004";
-    options.outputUrl = "rtp://127.0.0.1:5006";
-    options.sdpPath = "realtime-test.sdp";
-    options.mediaId = "video-main";
-    options.enablePacketFanout = true;
-    options.enableSdpWriter = true;
-    options.queueCapacity = 16;
-    options.highWatermark = 10;
-    options.criticalWatermark = 14;
-    return options;
-}
-
-MediaRealtimeGraphBuilderOptions validRtpTranscodeOptions()
-{
-    MediaRealtimeGraphBuilderOptions options;
-    options.kind = MediaRealtimeGraphKind::RtpTranscode;
-    options.input.url = "rtp://127.0.0.1:5004";
-    options.inputUrl = options.input.url;
-    options.input.videoStreamIndex = 0;
+    options.input.url = sampleVideoPath();
     options.output.host = "127.0.0.1";
-    options.output.basePort = 5006;
-    options.output.sdpPath = "realtime-rtp-test.sdp";
-    options.sdpPath = options.output.sdpPath;
-    options.mediaId = "video-main";
-    options.includeVideo = true;
-    options.includeAudio = false;
+    options.output.basePort = 5004;
+    options.output.sdpPath = "realtime-test.sdp";
     options.parameters.execution.includeVideo = true;
     options.parameters.execution.includeAudio = false;
     options.parameters.execution.disableHardware = true;
+    options.parameters.video.codecName = "h264";
     options.parameters.video.bFrames = 0;
-    options.parameters.queues.metadata = 1;
-    options.parameters.queues.packet = 16;
-    options.parameters.queues.frame = 16;
-    options.parameters.queues.mux = 16;
-    options.queueCapacity = 16;
-    options.highWatermark = 10;
-    options.criticalWatermark = 14;
     return options;
 }
 
-MediaRtpCodecHint h264Hint()
+const MediaNode* findNodeByKind(const MediaGraph& graph, MediaNodeKind kind)
 {
-    return MediaRtpCodecHint{
-        MediaStreamKind::Video,
-        "h264",
-        96,
-        90000,
-        0,
-        "packetization-mode=1"
-    };
+    for (const MediaNode& node : graph.nodes()) {
+        if (node.kind == kind) {
+            return &node;
+        }
+    }
+    return nullptr;
 }
 
-void testBuildsPacketRelayRtpShape(TestContext& ctx)
+void testValidationRejectsMissingInput(TestContext& ctx)
 {
-    const auto result = MediaRealtimeGraphBuilder::build(validPacketRelayOptions());
-
-    EXPECT_TRUE(ctx, result);
-    if (!result) {
-        std::cerr << "packet relay graph build failed: " << result.error().describe() << '\n';
-        return;
-    }
-
-    const MediaGraph& graph = result.value().graph;
-    EXPECT_EQ(ctx, graph.nodeCount(), 4U);
-    EXPECT_EQ(ctx, graph.edgeCount(), 3U);
-    EXPECT_TRUE(ctx, hasNodeKind(graph, MediaNodeKind::RealtimeInput));
-    EXPECT_TRUE(ctx, hasNodeKind(graph, MediaNodeKind::PacketFanout));
-    EXPECT_TRUE(ctx, hasNodeKind(graph, MediaNodeKind::RtpOutput));
-    EXPECT_TRUE(ctx, hasNodeKind(graph, MediaNodeKind::SdpWriter));
-
-    const MediaNode* input = findNodeKind(graph, MediaNodeKind::RealtimeInput);
-    const MediaNode* output = findNodeKind(graph, MediaNodeKind::RtpOutput);
-    const MediaNode* sdp = findNodeKind(graph, MediaNodeKind::SdpWriter);
-    EXPECT_TRUE(ctx, input != nullptr);
-    EXPECT_TRUE(ctx, output != nullptr);
-    EXPECT_TRUE(ctx, sdp != nullptr);
-    if (input != nullptr && output != nullptr && sdp != nullptr) {
-        EXPECT_EQ(ctx, input->options.value("url"), std::string("rtp://127.0.0.1:5004"));
-        EXPECT_EQ(ctx, output->options.value("url"), std::string("rtp://127.0.0.1:5006"));
-        EXPECT_EQ(ctx, sdp->options.value("path"), std::string("realtime-test.sdp"));
-        EXPECT_EQ(ctx, input->options.value("media_id"), std::string("video-main"));
-    }
-}
-
-void testBuildsDirectPacketRelayWithoutFanout(TestContext& ctx)
-{
-    auto options = validPacketRelayOptions();
-    options.enablePacketFanout = false;
-    options.enableSdpWriter = false;
-
-    const auto result = MediaRealtimeGraphBuilder::build(options);
-
-    EXPECT_TRUE(ctx, result);
-    if (!result) {
-        std::cerr << "direct relay graph build failed: " << result.error().describe() << '\n';
-        return;
-    }
-
-    const MediaGraph& graph = result.value().graph;
-    EXPECT_EQ(ctx, graph.nodeCount(), 2U);
-    EXPECT_EQ(ctx, graph.edgeCount(), 1U);
-    EXPECT_TRUE(ctx, hasNodeKind(graph, MediaNodeKind::RealtimeInput));
-    EXPECT_FALSE(ctx, hasNodeKind(graph, MediaNodeKind::PacketFanout));
-    EXPECT_TRUE(ctx, hasNodeKind(graph, MediaNodeKind::RtpOutput));
-}
-
-void testBuildsIngestToRtpMuxShape(TestContext& ctx)
-{
-    auto options = validPacketRelayOptions();
-    options.kind = MediaRealtimeGraphKind::IngestToMux;
-    options.enableRtpMux = true;
-
-    const auto result = MediaRealtimeGraphBuilder::build(options);
-
-    EXPECT_TRUE(ctx, result);
-    if (!result) {
-        std::cerr << "ingest-to-mux graph build failed: " << result.error().describe() << '\n';
-        return;
-    }
-
-    const MediaGraph& graph = result.value().graph;
-    EXPECT_EQ(ctx, graph.nodeCount(), 4U);
-    EXPECT_EQ(ctx, graph.edgeCount(), 3U);
-    EXPECT_TRUE(ctx, hasNodeKind(graph, MediaNodeKind::RealtimeInput));
-    EXPECT_TRUE(ctx, hasNodeKind(graph, MediaNodeKind::PacketFanout));
-    EXPECT_TRUE(ctx, hasNodeKind(graph, MediaNodeKind::RtpMux));
-    EXPECT_TRUE(ctx, hasNodeKind(graph, MediaNodeKind::RtpOutput));
-    EXPECT_FALSE(ctx, hasNodeKind(graph, MediaNodeKind::SdpWriter));
-}
-
-void testRejectsEmptyRealtimeRtpInput(TestContext& ctx)
-{
-    auto options = validRtpTranscodeOptions();
+    MediaRealtimeGraphBuilderOptions options = validRealtimeOptions();
     options.input.url.clear();
-    options.inputUrl.clear();
 
-    const auto result = MediaRealtimeGraphBuilder::build(options);
-
-    EXPECT_FALSE(ctx, result);
-}
-
-void testRejectsRawRtpWithoutSdpOrHints(TestContext& ctx)
-{
-    auto options = validRtpTranscodeOptions();
-    options.input.mode = MediaRealtimeInputMode::RawRtp;
-
-    const auto result = MediaRealtimeGraphBuilder::build(options);
-
-    EXPECT_FALSE(ctx, result);
-}
-
-void testBuildsRawRtpWithSdp(TestContext& ctx)
-{
-    auto options = validRtpTranscodeOptions();
-    options.input.mode = MediaRealtimeInputMode::RawRtp;
-    options.input.sdpPath = "input.sdp";
-
-    const auto result = MediaRealtimeGraphBuilder::build(options);
-
-    EXPECT_TRUE(ctx, result);
-}
-
-void testBuildsRawRtpWithCompleteHint(TestContext& ctx)
-{
-    auto options = validRtpTranscodeOptions();
-    options.input.mode = MediaRealtimeInputMode::RawRtp;
-    options.input.videoStreamIndex = -1;
-    options.input.codecHints.push_back(h264Hint());
-
-    const auto result = MediaRealtimeGraphBuilder::build(options);
-
-    EXPECT_TRUE(ctx, result);
-    if (!result) {
-        return;
-    }
-    const MediaNode* input = findNodeKind(result.value().graph, MediaNodeKind::RealtimeInput);
-    EXPECT_TRUE(ctx, input != nullptr);
-    if (input != nullptr) {
-        EXPECT_FALSE(ctx, input->options.value("input.sdp_text").empty());
+    const auto status = MediaRealtimeRtpTranscodeGraphBuilder::validate(options);
+    EXPECT_FALSE(ctx, status);
+    if (!status) {
+        EXPECT_EQ(ctx, status.error().code, media::ErrorCode::InvalidArgument);
     }
 }
 
-void testRejectsMissingVideoSourceStreamIndex(TestContext& ctx)
+void testValidationRejectsUnsupportedRealtimeInput(TestContext& ctx)
 {
-    auto options = validRtpTranscodeOptions();
-    options.input.videoStreamIndex = -1;
+    MediaRealtimeGraphBuilderOptions options = validRealtimeOptions();
+    options.input.url = "rtp://127.0.0.1:5004";
 
-    const auto result = MediaRealtimeGraphBuilder::build(options);
+    const auto status = MediaRealtimeRtpTranscodeGraphBuilder::validate(options);
+    EXPECT_FALSE(ctx, status);
+    if (!status) {
+        EXPECT_EQ(ctx, status.error().code, media::ErrorCode::Unsupported);
+    }
 
-    EXPECT_FALSE(ctx, result);
+    options.input.url = "camera.sdp";
+    const auto sdpStatus = MediaRealtimeRtpTranscodeGraphBuilder::validate(options);
+    EXPECT_FALSE(ctx, sdpStatus);
+    if (!sdpStatus) {
+        EXPECT_EQ(ctx, sdpStatus.error().code, media::ErrorCode::Unsupported);
+    }
+
+    options.input.url = "udp://127.0.0.1:5004";
+    const auto udpStatus = MediaRealtimeRtpTranscodeGraphBuilder::validate(options);
+    EXPECT_FALSE(ctx, udpStatus);
+    if (!udpStatus) {
+        EXPECT_EQ(ctx, udpStatus.error().code, media::ErrorCode::Unsupported);
+    }
+
+    options.input.url = "sdp://camera";
+    const auto sdpSchemeStatus = MediaRealtimeRtpTranscodeGraphBuilder::validate(options);
+    EXPECT_FALSE(ctx, sdpSchemeStatus);
+    if (!sdpSchemeStatus) {
+        EXPECT_EQ(ctx, sdpSchemeStatus.error().code, media::ErrorCode::Unsupported);
+    }
 }
 
-void testRejectsRawRtpHintWithoutInputPort(TestContext& ctx)
+void testValidationRejectsOddRtpPort(TestContext& ctx)
 {
-    auto options = validRtpTranscodeOptions();
-    options.input.mode = MediaRealtimeInputMode::RawRtp;
-    options.input.url = "rtp://127.0.0.1";
-    options.inputUrl = options.input.url;
-    options.input.videoStreamIndex = -1;
-    options.input.codecHints.push_back(h264Hint());
+    MediaRealtimeGraphBuilderOptions options = validRealtimeOptions();
+    options.output.basePort = 5005;
 
-    const auto result = MediaRealtimeGraphBuilder::build(options);
-
-    EXPECT_FALSE(ctx, result);
+    const auto status = MediaRealtimeRtpTranscodeGraphBuilder::validate(options);
+    EXPECT_FALSE(ctx, status);
+    if (!status) {
+        EXPECT_EQ(ctx, status.error().code, media::ErrorCode::InvalidArgument);
+    }
 }
 
-void testRejectsRawRtpHintWithoutInputPortForLegacyRealtimeKinds(TestContext& ctx)
+void testLegacyRealtimeKindsAreUnsupported(TestContext& ctx)
 {
-    auto packetRelay = validPacketRelayOptions();
-    packetRelay.input.mode = MediaRealtimeInputMode::RawRtp;
-    packetRelay.input.url = "rtp://127.0.0.1";
-    packetRelay.inputUrl = packetRelay.input.url;
-    packetRelay.input.codecHints.push_back(h264Hint());
+    MediaRealtimeGraphBuilderOptions packetRelayOptions;
+    packetRelayOptions.kind = MediaRealtimeGraphKind::PacketRelay;
+    auto packetRelay = MediaRealtimeGraphBuilder::build(packetRelayOptions);
+    EXPECT_FALSE(ctx, packetRelay);
+    if (!packetRelay) {
+        EXPECT_EQ(ctx, packetRelay.error().code, media::ErrorCode::Unsupported);
+    }
 
-    auto ingestToMux = packetRelay;
-    ingestToMux.kind = MediaRealtimeGraphKind::IngestToMux;
-    ingestToMux.enableRtpMux = true;
+    MediaRealtimeGraphBuilderOptions ingestOptions;
+    ingestOptions.kind = MediaRealtimeGraphKind::IngestToMux;
+    auto ingest = MediaRealtimeGraphBuilder::build(ingestOptions);
+    EXPECT_FALSE(ctx, ingest);
+    if (!ingest) {
+        EXPECT_EQ(ctx, ingest.error().code, media::ErrorCode::Unsupported);
+    }
 
-    EXPECT_FALSE(ctx, MediaRealtimeGraphBuilder::build(packetRelay));
-    EXPECT_FALSE(ctx, MediaRealtimeGraphBuilder::build(ingestToMux));
+    auto packetRelayDirect = MediaRealtimePacketRelayGraphBuilder::build(packetRelayOptions);
+    EXPECT_FALSE(ctx, packetRelayDirect);
+    if (!packetRelayDirect) {
+        EXPECT_EQ(ctx, packetRelayDirect.error().code, media::ErrorCode::Unsupported);
+    }
+
+    auto ingestDirect = MediaRealtimeIngestToMuxGraphBuilder::build(ingestOptions);
+    EXPECT_FALSE(ctx, ingestDirect);
+    if (!ingestDirect) {
+        EXPECT_EQ(ctx, ingestDirect.error().code, media::ErrorCode::Unsupported);
+    }
 }
 
-void testRejectsInvalidRtpPort(TestContext& ctx)
+void testBuildPlansVideoStreamAndSoftwareFallback(TestContext& ctx)
 {
-    auto options = validRtpTranscodeOptions();
-    options.output.basePort = 5007;
-
-    const auto result = MediaRealtimeGraphBuilder::build(options);
-
-    EXPECT_FALSE(ctx, result);
-}
-
-void testRejectsMissingMediaBranch(TestContext& ctx)
-{
-    auto options = validRtpTranscodeOptions();
-    options.includeVideo = false;
-    options.includeAudio = false;
-    options.parameters.execution.includeVideo = false;
-    options.parameters.execution.includeAudio = false;
-
-    const auto result = MediaRealtimeGraphBuilder::build(options);
-
-    EXPECT_FALSE(ctx, result);
-}
-
-void testBuildsVideoOnlyRealtimeRtpTranscodeShape(TestContext& ctx)
-{
-    const auto result = MediaRealtimeGraphBuilder::build(validRtpTranscodeOptions());
-
-    EXPECT_TRUE(ctx, result);
-    if (!result) {
-        std::cerr << "realtime RTP transcode graph build failed: " << result.error().describe() << '\n';
+    const auto graphResult = MediaRealtimeRtpTranscodeGraphBuilder::build(validRealtimeOptions());
+    EXPECT_TRUE(ctx, graphResult);
+    if (!graphResult) {
+        std::cerr << graphResult.error().describe() << '\n';
         return;
     }
 
-    const MediaGraph& graph = result.value().graph;
-    EXPECT_TRUE(ctx, hasNodeKind(graph, MediaNodeKind::RealtimeInput));
-    EXPECT_TRUE(ctx, hasNodeKind(graph, MediaNodeKind::Demux));
-    EXPECT_TRUE(ctx, hasNodeKind(graph, MediaNodeKind::StreamSplit));
-    EXPECT_TRUE(ctx, hasNodeKind(graph, MediaNodeKind::CodecResolver));
-    EXPECT_TRUE(ctx, hasNodeKind(graph, MediaNodeKind::VideoDecode));
-    EXPECT_TRUE(ctx, hasNodeKind(graph, MediaNodeKind::VideoEncode));
-    EXPECT_TRUE(ctx, hasNodeKind(graph, MediaNodeKind::RtpMux));
-    EXPECT_TRUE(ctx, hasNodeKind(graph, MediaNodeKind::RtpOutput));
-    EXPECT_TRUE(ctx, hasNodeKind(graph, MediaNodeKind::SdpWriter));
-    EXPECT_FALSE(ctx, hasNodeKind(graph, MediaNodeKind::AudioDecode));
-    EXPECT_FALSE(ctx, hasNodeKind(graph, MediaNodeKind::AudioEncode));
+    const MediaGraph& graph = graphResult.value();
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::RealtimeInput) != nullptr);
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::Demux) != nullptr);
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::VideoDecode) != nullptr);
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::VideoEncode) != nullptr);
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::RtpMux) != nullptr);
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::RtpOutput) != nullptr);
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::SdpWriter) != nullptr);
 
-    const MediaNode* input = findNodeKind(graph, MediaNodeKind::RealtimeInput);
-    const MediaNode* output = findNodeKind(graph, MediaNodeKind::RtpOutput);
-    const MediaNode* sdp = findNodeKind(graph, MediaNodeKind::SdpWriter);
-    EXPECT_TRUE(ctx, input != nullptr);
-    EXPECT_TRUE(ctx, output != nullptr);
-    EXPECT_TRUE(ctx, sdp != nullptr);
-    if (input != nullptr && output != nullptr && sdp != nullptr) {
-        EXPECT_EQ(ctx, input->options.value("url"), std::string("rtp://127.0.0.1:5004"));
-        EXPECT_EQ(ctx, input->options.value("input.mode"), std::string("url"));
-        EXPECT_EQ(ctx, output->options.value("rtp.host"), std::string("127.0.0.1"));
-        EXPECT_EQ(ctx, output->options.value("rtp.base_port"), std::string("5006"));
-        EXPECT_EQ(ctx, sdp->options.value("path"), std::string("realtime-rtp-test.sdp"));
+    const MediaNode* encode = findNodeByKind(graph, MediaNodeKind::VideoEncode);
+    EXPECT_TRUE(ctx, encode != nullptr);
+    if (encode) {
+        EXPECT_EQ(ctx, encode->options.value("pipeline.chain"), std::string("software"));
+        EXPECT_EQ(ctx, encode->options.value("encoder"), std::string("libx264"));
     }
-    EXPECT_TRUE(ctx, graph.edgeCount() >= 8U);
 }
 
-void testBuildsAudioVideoRealtimeRtpTranscodeShape(TestContext& ctx)
+void expectGraphCompiles(TestContext& ctx, MediaGraph graph)
 {
-    auto options = validRtpTranscodeOptions();
-    options.includeAudio = true;
-    options.parameters.execution.includeAudio = true;
-    options.input.audioStreamIndex = 1;
-
-    const auto result = MediaRealtimeGraphBuilder::build(options);
-
-    EXPECT_TRUE(ctx, result);
-    if (!result) {
-        std::cerr << "audio/video realtime RTP transcode graph build failed: " << result.error().describe() << '\n';
+    const auto validation = MediaGraphValidation::validate(graph);
+    EXPECT_TRUE(ctx, validation.ok());
+    if (!validation.ok()) {
+        for (const auto& issue : validation.issues) {
+            std::cerr << "validation issue: " << issue.message
+                      << " node=" << issue.nodeId.value
+                      << " port=" << issue.portId.value
+                      << " edge=" << issue.edgeId.value << '\n';
+        }
         return;
     }
 
-    const MediaGraph& graph = result.value().graph;
-    EXPECT_EQ(ctx, countNodeKind(graph, MediaNodeKind::RtpOutput), 2U);
-    EXPECT_EQ(ctx, countNodeKind(graph, MediaNodeKind::RtpMux), 2U);
-    EXPECT_EQ(ctx, countNodeKind(graph, MediaNodeKind::SdpWriter), 1U);
-    EXPECT_TRUE(ctx, hasNodeKind(graph, MediaNodeKind::VideoEncode));
-    EXPECT_TRUE(ctx, hasNodeKind(graph, MediaNodeKind::AudioEncode));
+    MediaGraphRuntime runtime;
+    const auto compileStatus = runtime.compile(std::move(graph));
+    EXPECT_TRUE(ctx, compileStatus);
+    if (!compileStatus) {
+        std::cerr << compileStatus.error().describe() << '\n';
+    }
+}
 
-    const MediaNode* sdp = findNodeKind(graph, MediaNodeKind::SdpWriter);
-    EXPECT_TRUE(ctx, sdp != nullptr);
-    if (sdp != nullptr) {
-        EXPECT_EQ(ctx, sdp->options.value("sdp.expected_contexts"), std::string("2"));
+void testRuntimeCompileSupportsSoftwareChain(TestContext& ctx)
+{
+    auto graphResult = MediaRealtimeRtpTranscodeGraphBuilder::build(validRealtimeOptions());
+    EXPECT_TRUE(ctx, graphResult);
+    if (!graphResult) {
+        std::cerr << graphResult.error().describe() << '\n';
+        return;
+    }
+    expectGraphCompiles(ctx, std::move(graphResult).value());
+}
+
+void testRuntimeCompileSupportsAutoHardwareChain(TestContext& ctx)
+{
+    MediaRealtimeGraphBuilderOptions options = validRealtimeOptions();
+    options.parameters.execution.disableHardware = false;
+
+    auto graphResult = MediaRealtimeRtpTranscodeGraphBuilder::build(options);
+    EXPECT_TRUE(ctx, graphResult);
+    if (!graphResult) {
+        std::cerr << graphResult.error().describe() << '\n';
+        return;
+    }
+    expectGraphCompiles(ctx, std::move(graphResult).value());
+}
+
+void testUrlRedactionHidesUserInfo(TestContext& ctx)
+{
+    EXPECT_EQ(ctx,
+              redactUrlUserInfo("rtsp://user:password@example.invalid:554/Streaming/Channels/302"),
+              std::string("rtsp://<redacted>@example.invalid:554/Streaming/Channels/302"));
+    EXPECT_EQ(ctx,
+              redactUrlUserInfo("rtsp://example.invalid/Streaming/Channels/302"),
+              std::string("rtsp://example.invalid/Streaming/Channels/302"));
+}
+
+void testTimestampRescaleBumpsQuantizedDuplicates(TestContext& ctx)
+{
+    const AVRational sourceTimeBase{ 1, 90000 };
+    const AVRational encoderTimeBase{ 1, 25 };
+
+    const auto first = rescaleStrictlyIncreasingTimestamp(540000,
+                                                          sourceTimeBase,
+                                                          encoderTimeBase,
+                                                          AV_NOPTS_VALUE);
+    EXPECT_TRUE(ctx, first);
+    if (!first) {
+        return;
+    }
+    EXPECT_EQ(ctx, first.value(), 150);
+
+    const auto duplicate = rescaleStrictlyIncreasingTimestamp(540010,
+                                                              sourceTimeBase,
+                                                              encoderTimeBase,
+                                                              first.value());
+    EXPECT_TRUE(ctx, duplicate);
+    if (!duplicate) {
+        return;
+    }
+    EXPECT_EQ(ctx, duplicate.value(), 151);
+
+    const auto nextQuantized = rescaleStrictlyIncreasingTimestamp(543600,
+                                                                  sourceTimeBase,
+                                                                  encoderTimeBase,
+                                                                  duplicate.value());
+    EXPECT_TRUE(ctx, nextQuantized);
+    if (nextQuantized) {
+        EXPECT_EQ(ctx, nextQuantized.value(), 152);
+    }
+}
+
+void testTimestampRescaleRejectsInvalidBoundaryValues(TestContext& ctx)
+{
+    const AVRational sourceTimeBase{ 1, 90000 };
+    const AVRational encoderTimeBase{ 1, 25 };
+
+    const auto invalidPts = rescaleStrictlyIncreasingTimestamp(AV_NOPTS_VALUE,
+                                                               sourceTimeBase,
+                                                               encoderTimeBase,
+                                                               AV_NOPTS_VALUE);
+    EXPECT_FALSE(ctx, invalidPts);
+    if (!invalidPts) {
+        EXPECT_EQ(ctx, invalidPts.error().code, media::ErrorCode::InvalidArgument);
+    }
+
+    const auto invalidTimeBase = rescaleStrictlyIncreasingTimestamp(540000,
+                                                                    AVRational{ 0, 1 },
+                                                                    encoderTimeBase,
+                                                                    AV_NOPTS_VALUE);
+    EXPECT_FALSE(ctx, invalidTimeBase);
+    if (!invalidTimeBase) {
+        EXPECT_EQ(ctx, invalidTimeBase.error().code, media::ErrorCode::InvalidArgument);
+    }
+
+    const auto maxLastPts = rescaleStrictlyIncreasingTimestamp(540000,
+                                                               sourceTimeBase,
+                                                               encoderTimeBase,
+                                                               std::numeric_limits<int64_t>::max());
+    EXPECT_FALSE(ctx, maxLastPts);
+    if (!maxLastPts) {
+        EXPECT_EQ(ctx, maxLastPts.error().code, media::ErrorCode::InvalidArgument);
     }
 }
 
@@ -358,26 +302,22 @@ int main()
 {
     TestContext ctx;
 
-    testBuildsPacketRelayRtpShape(ctx);
-    testBuildsDirectPacketRelayWithoutFanout(ctx);
-    testBuildsIngestToRtpMuxShape(ctx);
-    testRejectsEmptyRealtimeRtpInput(ctx);
-    testRejectsRawRtpWithoutSdpOrHints(ctx);
-    testBuildsRawRtpWithSdp(ctx);
-    testBuildsRawRtpWithCompleteHint(ctx);
-    testRejectsMissingVideoSourceStreamIndex(ctx);
-    testRejectsRawRtpHintWithoutInputPort(ctx);
-    testRejectsRawRtpHintWithoutInputPortForLegacyRealtimeKinds(ctx);
-    testRejectsInvalidRtpPort(ctx);
-    testRejectsMissingMediaBranch(ctx);
-    testBuildsVideoOnlyRealtimeRtpTranscodeShape(ctx);
-    testBuildsAudioVideoRealtimeRtpTranscodeShape(ctx);
+    testValidationRejectsMissingInput(ctx);
+    testValidationRejectsUnsupportedRealtimeInput(ctx);
+    testValidationRejectsOddRtpPort(ctx);
+    testUrlRedactionHidesUserInfo(ctx);
+    testTimestampRescaleBumpsQuantizedDuplicates(ctx);
+    testTimestampRescaleRejectsInvalidBoundaryValues(ctx);
+    testLegacyRealtimeKindsAreUnsupported(ctx);
+    testBuildPlansVideoStreamAndSoftwareFallback(ctx);
+    testRuntimeCompileSupportsSoftwareChain(ctx);
+    testRuntimeCompileSupportsAutoHardwareChain(ctx);
 
     if (ctx.failures != 0) {
         std::cerr << ctx.failures << " realtime graph test expectation(s) failed\n";
         return 1;
     }
 
-    std::cout << "all realtime graph tests passed\n";
+    std::cout << "realtime graph tests passed\n";
     return 0;
 }

@@ -1,8 +1,6 @@
 #pragma once
 
 #include "internal/graph/core/MediaGraph.h"
-#include "internal/graph/model/MediaLatencyPolicy.h"
-#include "internal/graph/model/MediaStreamKind.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "media_transcode/Result.h"
 
@@ -19,68 +17,34 @@ enum class MediaRealtimeGraphKind {
     RtpTranscode
 };
 
-enum class MediaRealtimeInputMode {
-    Url,
-    RawRtp
-};
-
-struct MediaRtpCodecHint {
-    MediaStreamKind streamKind = MediaStreamKind::Unknown;
-    std::string codecName;
-    int payloadType = -1;
-    int clockRate = 0;
-    int channels = 0;
-    std::string fmtp;
-};
-
 struct MediaRealtimeInputConfig {
-    MediaRealtimeInputMode mode = MediaRealtimeInputMode::Url;
     std::string url;
-    std::string sdpText;
-    std::string sdpPath;
-    std::vector<MediaRtpCodecHint> codecHints;
-    int videoStreamIndex = -1;
-    int audioStreamIndex = -1;
+    std::string rtspTransport = "tcp";
+    int openTimeoutMs = 5000;
     int readTimeoutMs = 5000;
-    bool reconnect = true;
-    int maxReconnectAttempts = 3;
+    int analyzeDurationUs = 500000;
+    int probeSizeBytes = 512 * 1024;
+    bool lowLatency = true;
+    int videoStreamIndex = invalidMediaStreamIndex;
 };
 
-struct MediaRtpOutputConfig {
+struct MediaRealtimeOutputConfig {
     std::string host = "127.0.0.1";
     std::size_t basePort = 5004;
-    std::size_t videoRtpPort = 0;
-    std::size_t videoRtcpPort = 0;
-    std::size_t audioRtpPort = 0;
-    std::size_t audioRtcpPort = 0;
     std::string sdpPath;
-    int ttl = 1;
-    int writeTimeoutMs = 5000;
-};
-
-struct MediaRealtimeTranscodeOptions {
-    MediaRealtimeInputConfig input;
-    MediaRtpOutputConfig output;
-    MediaTranscodeParameterSet parameters;
-    MediaLatencyPolicy latency;
-    bool diagnosticsEnabled = true;
+    std::string url;
+    int packetSize = 1200;
 };
 
 struct MediaRealtimeGraphBuilderOptions {
     MediaRealtimeGraphKind kind = MediaRealtimeGraphKind::PacketRelay;
 
     MediaRealtimeInputConfig input;
-    MediaRtpOutputConfig output;
+    MediaRealtimeOutputConfig output;
     MediaTranscodeParameterSet parameters;
-    MediaLatencyPolicy latency;
 
-    std::string inputUrl;
-    std::string outputUrl;
-    std::string sdpPath;
     std::string mediaId;
 
-    bool includeAudio = true;
-    bool includeVideo = true;
     bool enablePacketFanout = true;
     bool enableRtpMux = false;
     bool enableSdpWriter = false;

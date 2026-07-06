@@ -1,9 +1,13 @@
 #include "internal/graph/nodes/output/RtpOutputNode.h"
 
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
+
+extern "C" {
+#include <libavformat/avformat.h>
+}
 
 #include <string>
-#include <utility>
 
 namespace media::ffmpeg::graph {
 
@@ -23,19 +27,19 @@ MediaNodeKind RtpOutputNode::staticKind() noexcept
         return ::media::Status::success();
     }
 
-    auto status = openIfNeeded(context);
+    auto status = openOutput(context);
     if (!status) {
         return status;
     }
 
-    auto buffer = FFmpegBufferFactory::wrapOutputFormatContext(m_session.takeContext());
+    auto buffer = FFmpegBufferFactory::wrapOutputFormatContext(std::move(m_context));
     if (!buffer) {
         return ::media::Status::failure(buffer.error());
     }
 
-    auto pushStatus = pushToAllOutputs(context, buffer.value());
-    if (!pushStatus) {
-        return pushStatus;
+    auto pushed = emitOutput(context, "format", buffer.value());
+    if (!pushed) {
+        return pushed;
     }
 
     m_formatEmitted = true;
@@ -44,32 +48,44 @@ MediaNodeKind RtpOutputNode::staticKind() noexcept
 
 ::media::Status RtpOutputNode::stop(MediaGraphExecutionContext& context)
 {
-    m_session.close();
+    m_context.reset();
     m_formatEmitted = false;
     return FFmpegNodeRuntime::stop(context);
 }
 
-void RtpOutputNode::abort(MediaGraphExecutionContext& context) noexcept
+::media::Status RtpOutputNode::openOutput(MediaGraphExecutionContext& context)
 {
-    m_session.interrupt();
-    m_session.close();
-    m_formatEmitted = false;
-    FFmpegNodeRuntime::abort(context);
-}
-
-::media::Status RtpOutputNode::openIfNeeded(MediaGraphExecutionContext& context)
-{
-    if (m_session.context()) {
+    if (m_context) {
         return ::media::Status::success();
     }
 
-    FFmpegRtpOutputSessionOptions options;
-    options.url = nodeOption(context, "url");
-    const std::string timeout = nodeOption(context, "rtp.write_timeout_ms");
-    if (!timeout.empty()) {
-        options.writeTimeoutMs = std::stoi(timeout);
+    const std::string url = nodeOption(context, "url");
+    if (url.empty()) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("RtpOutputNode requires node option: url"));
     }
-    return m_session.open(std::move(options));
+
+    AVFormatContext* raw = nullptr;
+    const int allocRet = avformat_alloc_output_context2(&raw, nullptr, "rtp", url.c_str());
+    if (allocRet < 0 || !raw) {
+        return FFmpegGraphError::statusFromCode(allocRet < 0 ? allocRet : AVERROR_UNKNOWN,
+                                                "avformat_alloc_output_context2(rtp)");
+    }
+
+    m_context.reset(raw);
+    const int packetSize = std::stoi(nodeOption(context, "rtp.packet_size", "1200"));
+    if (packetSize > 0) {
+        m_context->packet_size = packetSize;
+    }
+
+    if (m_context->oformat && !(m_context->oformat->flags & AVFMT_NOFILE)) {
+        const int openRet = avio_open(&m_context->pb, url.c_str(), AVIO_FLAG_WRITE);
+        if (openRet < 0) {
+            return FFmpegGraphError::statusFromCode(openRet, "avio_open(rtp)");
+        }
+    }
+
+    return ::media::Status::success();
 }
 
 } // namespace media::ffmpeg::graph

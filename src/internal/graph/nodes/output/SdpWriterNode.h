@@ -1,10 +1,6 @@
 #pragma once
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
-#include "internal/graph/runtime/buffer/MediaBufferRef.h"
-
-#include <string>
-#include <vector>
 
 namespace media::ffmpeg::graph {
 
@@ -15,12 +11,10 @@ public:
 
 protected:
     ::media::Status onProcess(MediaGraphExecutionContext& context) override;
+    ::media::Status stop(MediaGraphExecutionContext& context) override;
+    void abort(MediaGraphExecutionContext& context) noexcept override;
 
 private:
-    ::media::Status writeSdp(MediaGraphExecutionContext& context, const std::string& path);
-
-private:
-    std::vector<MediaBufferRef> m_contextBuffers;
     bool m_written = false;
 };
 

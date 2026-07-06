@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/FFmpegRAII.h"
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegRtpOutputSession.h"
 
@@ -13,13 +14,12 @@ public:
 protected:
     ::media::Status onProcess(MediaGraphExecutionContext& context) override;
     ::media::Status stop(MediaGraphExecutionContext& context) override;
-    void abort(MediaGraphExecutionContext& context) noexcept override;
 
 private:
-    ::media::Status openIfNeeded(MediaGraphExecutionContext& context);
+    ::media::Status openOutput(MediaGraphExecutionContext& context);
 
 private:
-    FFmpegRtpOutputSession m_session;
+    ::media::ffmpeg::OutputFormatContextPtr m_context;
     bool m_formatEmitted = false;
 };
 

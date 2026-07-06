@@ -1,7 +1,7 @@
 #pragma once
 
+#include "internal/FFmpegRAII.h"
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
-#include "internal/graph/runtime/ffmpeg/FFmpegRealtimeInputSession.h"
 
 namespace media::ffmpeg::graph {
 
@@ -16,10 +16,10 @@ protected:
     void abort(MediaGraphExecutionContext& context) noexcept override;
 
 private:
-    ::media::Status openIfNeeded(MediaGraphExecutionContext& context);
+    ::media::Status openInput(MediaGraphExecutionContext& context);
 
 private:
-    FFmpegRealtimeInputSession m_session;
+    ::media::ffmpeg::InputFormatContextPtr m_context;
     bool m_formatEmitted = false;
 };
 

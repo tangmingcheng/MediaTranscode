@@ -72,7 +72,7 @@ target_include_directories(${TARGET_CORE}
 target_compile_features(${TARGET_CORE} PUBLIC cxx_std_20)
 
 if(MSVC)
-    target_compile_options(${TARGET_CORE} PRIVATE /utf-8)
+    target_compile_options(${TARGET_CORE} PRIVATE /utf-8 /EHsc)
 endif()
 
 add_library(thirdparty_spdlog INTERFACE)
@@ -148,7 +148,7 @@ function(media_transcode_configure_app target_name)
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
     )
     if(MSVC)
-        target_compile_options(${target_name} PRIVATE /utf-8)
+        target_compile_options(${target_name} PRIVATE /utf-8 /EHsc)
     endif()
 endfunction()
 
@@ -173,32 +173,8 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
         tests/unit/test_realtime_rtp_graph.cpp
     )
     media_transcode_configure_test(media_transcode_realtime_graph_tests)
-    add_test(NAME media_transcode_realtime_graph_tests
-        COMMAND media_transcode_realtime_graph_tests
+    target_compile_definitions(media_transcode_realtime_graph_tests PRIVATE
+        MEDIA_TRANSCODE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
     )
-
-    if(TARGET ${TARGET_GRAPH_TRANSCODE_CLI})
-        add_test(NAME media_transcode_graph_transcode_cli_realtime_rtp_help
-            COMMAND ${TARGET_GRAPH_TRANSCODE_CLI} --help
-        )
-        set_tests_properties(media_transcode_graph_transcode_cli_realtime_rtp_help PROPERTIES
-            PASS_REGULAR_EXPRESSION "--realtime-rtp"
-        )
-
-        add_test(NAME media_transcode_graph_transcode_cli_realtime_rtp_smoke
-            COMMAND ${TARGET_GRAPH_TRANSCODE_CLI}
-                --realtime-rtp
-                --input rtp://127.0.0.1:5004
-                --output-host 127.0.0.1
-                --base-port 5006
-                --sdp realtime-cli.sdp
-                --media-id video-main
-                --video-stream-index 0
-                --queue-capacity 16
-                --dry-run
-        )
-        set_tests_properties(media_transcode_graph_transcode_cli_realtime_rtp_smoke PROPERTIES
-            PASS_REGULAR_EXPRESSION "realtime rtp graph build done"
-        )
-    endif()
+    add_test(NAME media_transcode_realtime_graph_tests COMMAND media_transcode_realtime_graph_tests)
 endif()
