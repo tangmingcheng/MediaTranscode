@@ -1,6 +1,8 @@
 #include "internal/graph/builder/local/LocalFileTranscodeGraphBuilder.h"
+#include "internal/graph/builder/realtime/MediaRealtimeGraphBuilder.h"
 #include "internal/graph/runtime/MediaGraphRuntime.h"
 
+#include <cstddef>
 #include <exception>
 #include <iostream>
 #include <optional>
@@ -54,6 +56,18 @@ std::optional<int> optionalIntArg(int argc, char** argv, const std::string& key)
     return result;
 }
 
+std::size_t positiveSizeArg(int argc, char** argv, const std::string& key, std::size_t fallback)
+{
+    const auto value = optionalIntArg(argc, argv, key);
+    if (!value) {
+        return fallback;
+    }
+    if (*value <= 0) {
+        throw std::invalid_argument(key + " must be greater than 0");
+    }
+    return static_cast<std::size_t>(*value);
+}
+
 MediaRateControlMode rateControlArg(int argc, char** argv, const std::string& key)
 {
     MediaRateControlMode mode = MediaRateControlMode::Auto;
@@ -88,6 +102,17 @@ int failResult(const char* action, const ::media::Result<T>& result)
 {
     std::cerr << "[CLI] " << action << " failed: " << result.error().describe() << '\n';
     return 1;
+}
+
+void printUsage()
+{
+    std::cout << "Usage: media_transcode_graph_transcode_cli --input in.mp4 --output out.mp4 [options]\n";
+    std::cout << "       media_transcode_graph_transcode_cli --realtime-rtp --input rtp://host:port --output-host 127.0.0.1 --base-port 5004 --sdp out.sdp --dry-run [options]\n";
+    std::cout << "       encoder selection is automatic and planner-owned\n";
+    std::cout << "       add --quiet-graph to disable runtime graph diagnostics\n";
+    std::cout << "       realtime RTP options: --raw-rtp --input-sdp <path> --media-id <id> --queue-capacity <n>\n";
+    std::cout << "                             --high-watermark <n> --critical-watermark <n> --video-stream-index <n>\n";
+    std::cout << "                             --audio-stream-index <n> --no-audio --no-video\n";
 }
 
 LocalFileTranscodeOptions parseOptions(int argc, char** argv)
@@ -141,13 +166,125 @@ LocalFileTranscodeOptions parseOptions(int argc, char** argv)
     return options;
 }
 
+MediaRealtimeGraphBuilderOptions parseRealtimeRtpOptions(int argc, char** argv)
+{
+    MediaRealtimeGraphBuilderOptions options;
+    options.kind = MediaRealtimeGraphKind::RtpTranscode;
+    options.inputUrl = argValue(argc, argv, "--input");
+    options.input.url = options.inputUrl;
+    options.input.mode = hasArg(argc, argv, "--raw-rtp")
+        ? MediaRealtimeInputMode::RawRtp
+        : MediaRealtimeInputMode::Url;
+    options.input.sdpPath = argValue(argc, argv, "--input-sdp");
+    const auto videoStreamIndex = optionalIntArg(argc, argv, "--video-stream-index");
+    const auto audioStreamIndex = optionalIntArg(argc, argv, "--audio-stream-index");
+    if (videoStreamIndex) {
+        if (*videoStreamIndex < 0) {
+            throw std::invalid_argument("--video-stream-index must be >= 0");
+        }
+        options.input.videoStreamIndex = *videoStreamIndex;
+    }
+    if (audioStreamIndex) {
+        if (*audioStreamIndex < 0) {
+            throw std::invalid_argument("--audio-stream-index must be >= 0");
+        }
+        options.input.audioStreamIndex = *audioStreamIndex;
+    }
+    const bool videoDisabled = hasArg(argc, argv, "--no-video");
+    const bool audioDisabled = hasArg(argc, argv, "--no-audio");
+    options.includeVideo = !videoDisabled && (videoStreamIndex || !audioStreamIndex);
+    options.includeAudio = !audioDisabled && static_cast<bool>(audioStreamIndex);
+    if (videoDisabled) {
+        options.includeVideo = false;
+    }
+    if (audioDisabled) {
+        options.includeAudio = false;
+    }
+    options.output.host = argValue(argc, argv, "--output-host", "127.0.0.1");
+    options.output.basePort = positiveSizeArg(argc, argv, "--base-port", options.output.basePort);
+    options.outputUrl = "rtp://" + options.output.host + ":" + std::to_string(options.output.basePort);
+    options.sdpPath = argValue(argc, argv, "--sdp");
+    options.output.sdpPath = options.sdpPath;
+    options.mediaId = argValue(argc, argv, "--media-id");
+    options.parameters.execution.includeAudio = options.includeAudio;
+    options.parameters.execution.includeVideo = options.includeVideo;
+    options.parameters.execution.disableHardware = hasArg(argc, argv, "--disable-hw");
+    options.parameters.execution.diagnosticLogEnabled = !hasArg(argc, argv, "--quiet-graph");
+    options.parameters.video.bFrames = 0;
+    options.enableRtpMux = true;
+    options.enableSdpWriter = !options.sdpPath.empty();
+    options.queueCapacity = positiveSizeArg(argc, argv, "--queue-capacity", options.queueCapacity);
+    options.highWatermark = positiveSizeArg(argc, argv, "--high-watermark", options.highWatermark);
+    options.criticalWatermark = positiveSizeArg(argc, argv, "--critical-watermark", options.criticalWatermark);
+    options.parameters.queues.packet = options.queueCapacity;
+    options.parameters.queues.frame = options.queueCapacity;
+    options.parameters.queues.mux = options.queueCapacity;
+
+    if (options.inputUrl.empty()) {
+        throw std::invalid_argument("--realtime-rtp requires --input");
+    }
+    if (options.sdpPath.empty()) {
+        throw std::invalid_argument("--realtime-rtp requires --sdp");
+    }
+    return options;
+}
+
+const char* realtimeGraphKindName(MediaRealtimeGraphKind kind) noexcept
+{
+    switch (kind) {
+    case MediaRealtimeGraphKind::PacketRelay:
+        return "packet-relay";
+    case MediaRealtimeGraphKind::IngestToMux:
+        return "ingest-to-mux";
+    case MediaRealtimeGraphKind::RtpTranscode:
+        return "rtp-transcode";
+    }
+    return "unknown";
+}
+
+int runRealtimeRtpCli(int argc, char** argv)
+{
+    if (!hasArg(argc, argv, "--dry-run")) {
+        std::cerr << "[CLI] --realtime-rtp currently supports graph dry-run only; add --dry-run\n";
+        return 2;
+    }
+
+    const MediaRealtimeGraphBuilderOptions options = parseRealtimeRtpOptions(argc, argv);
+    std::cout << "[CLI] realtime rtp input=" << options.input.url
+              << " output=" << options.outputUrl
+              << " sdp=" << options.output.sdpPath
+              << " kind=" << realtimeGraphKindName(options.kind)
+              << " rtp_mux=" << (options.enableRtpMux ? "on" : "off")
+              << " sdp_writer=" << (options.enableSdpWriter ? "on" : "off")
+              << " queue_capacity=" << options.queueCapacity
+              << '\n';
+
+    std::cout << "[CLI] realtime rtp graph build begin\n";
+    auto graphResult = MediaRealtimeGraphBuilder::build(options);
+    if (!graphResult) {
+        return failResult("realtime rtp graph build", graphResult);
+    }
+
+    const MediaGraph& graph = graphResult.value().graph;
+    std::cout << "[CLI] realtime rtp graph build done: nodes=" << graph.nodeCount()
+              << " edges=" << graph.edgeCount() << '\n';
+    return 0;
+}
+
 int runGraphTranscodeCli(int argc, char** argv)
 {
-    if (argc < 5 || hasArg(argc, argv, "--help") || hasArg(argc, argv, "-h")) {
-        std::cout << "Usage: media_transcode_graph_transcode_cli --input in.mp4 --output out.mp4 [options]\n";
-        std::cout << "       encoder selection is automatic and planner-owned\n";
-        std::cout << "       add --quiet-graph to disable runtime graph diagnostics\n";
-        return argc < 5 ? 2 : 0;
+    if (hasArg(argc, argv, "--help") || hasArg(argc, argv, "-h")) {
+        printUsage();
+        return 0;
+    }
+
+    if (argc < 5) {
+        printUsage();
+        return 2;
+    }
+
+    if (hasArg(argc, argv, "--realtime-rtp")) {
+        return runRealtimeRtpCli(argc, argv);
     }
 
     LocalFileTranscodeOptions options = parseOptions(argc, argv);
