@@ -247,6 +247,14 @@ void testRawRtpRejectsUnsupportedMetadata(TestContext& ctx)
     MediaRealtimeRtpTranscodeRequest queryUrl = options;
     queryUrl.input.url = "udp://127.0.0.1:5004?pkt_size=1200";
     expectPlannerInvalidArgument(ctx, queryUrl);
+
+    MediaRealtimeRtpTranscodeRequest fragmentUrl = options;
+    fragmentUrl.input.url = "rtp://127.0.0.1:5004#stream";
+    expectPlannerInvalidArgument(ctx, fragmentUrl);
+
+    MediaRealtimeRtpTranscodeRequest userInfoUrl = options;
+    userInfoUrl.input.url = "rtp://user@127.0.0.1:5004";
+    expectPlannerInvalidArgument(ctx, userInfoUrl);
 }
 
 void testRawRtpPlansH264Input(TestContext& ctx)

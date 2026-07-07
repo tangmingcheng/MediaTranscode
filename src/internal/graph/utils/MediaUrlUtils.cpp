@@ -107,6 +107,11 @@ bool isUnsupportedRealtimeInputUrl(const std::string& url)
     }
 
     const std::string authority = normalized.substr(authorityBegin);
+    if (authority.find('@') != std::string::npos) {
+        return ::media::Result<MediaRtpUrlEndpoint>::failure(
+            ::media::ErrorInfo::invalidArgument("Raw RTP input URL must be exactly rtp://host:port or udp://host:port"));
+    }
+
     const std::size_t colon = authority.rfind(':');
     if (colon == std::string::npos || colon == 0 || colon + 1 >= authority.size()) {
         return ::media::Result<MediaRtpUrlEndpoint>::failure(
