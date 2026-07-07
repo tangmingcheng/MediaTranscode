@@ -10,8 +10,6 @@ namespace media::ffmpeg::graph {
     switch (kind) {
     case MediaPipelinePresetKind::LocalFileTranscodeSkeleton:
         return createLocalFileTranscodeSkeleton(options);
-    case MediaPipelinePresetKind::RealtimeRtpSkeleton:
-        return createRealtimeRtpSkeleton(options);
     default:
         return ::media::Result<MediaGraph>::failure(
             ::media::ErrorInfo::unsupported("unsupported media pipeline preset"));
@@ -28,13 +26,6 @@ namespace media::ffmpeg::graph {
     builderOptions.parameters.execution.includeVideo = options.includeVideo;
 
     return LocalFileTranscodeGraphBuilder::build(builderOptions);
-}
-
-::media::Result<MediaGraph> MediaPipelinePreset::createRealtimeRtpSkeleton(const MediaPipelinePresetOptions& options)
-{
-    (void)options;
-    return ::media::Result<MediaGraph>::failure(
-        ::media::ErrorInfo::unsupported("RealtimeRtpSkeleton preset is superseded by realtime-rtp transcode graph builder"));
 }
 
 } // namespace media::ffmpeg::graph
