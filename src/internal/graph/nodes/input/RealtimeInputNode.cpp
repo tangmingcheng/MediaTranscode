@@ -3,6 +3,7 @@
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegRealtimeInputOptions.h"
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -11,24 +12,6 @@ extern "C" {
 #include <string>
 
 namespace media::ffmpeg::graph {
-namespace {
-
-std::string millisecondsAsMicrosecondsText(int milliseconds)
-{
-    return std::to_string(milliseconds * 1000);
-}
-
-void setDictionaryOption(AVDictionary** dictionary,
-                         const std::string& key,
-                         const std::string& value)
-{
-    if (!value.empty()) {
-        av_dict_set(dictionary, key.c_str(), value.c_str(), 0);
-    }
-}
-
-} // namespace
-
 RealtimeInputNode::RealtimeInputNode(MediaNodeId nodeId)
     : FFmpegNodeRuntime(nodeId, staticKind(), "RealtimeInputNode")
 {
@@ -114,17 +97,16 @@ void RealtimeInputNode::abort(MediaGraphExecutionContext& context) noexcept
         return ::media::Status::failure(lowLatency.error());
     }
 
+    FFmpegRealtimeInputOptions realtimeOptions;
+    realtimeOptions.rtspTransport = rtspTransport.value();
+    realtimeOptions.openTimeoutMs = openTimeoutMs.value();
+    realtimeOptions.readTimeoutMs = readTimeoutMs.value();
+    realtimeOptions.analyzeDurationUs = analyzeDurationUs.value();
+    realtimeOptions.probeSizeBytes = probeSizeBytes.value();
+    realtimeOptions.lowLatency = lowLatency.value();
+
     AVDictionary* inputOptions = nullptr;
-    setDictionaryOption(&inputOptions, "rtsp_transport", rtspTransport.value());
-    setDictionaryOption(&inputOptions, "stimeout", millisecondsAsMicrosecondsText(openTimeoutMs.value()));
-    setDictionaryOption(&inputOptions, "rw_timeout", millisecondsAsMicrosecondsText(readTimeoutMs.value()));
-    setDictionaryOption(&inputOptions, "timeout", millisecondsAsMicrosecondsText(readTimeoutMs.value()));
-    setDictionaryOption(&inputOptions, "analyzeduration", std::to_string(analyzeDurationUs.value()));
-    setDictionaryOption(&inputOptions, "probesize", std::to_string(probeSizeBytes.value()));
-    if (lowLatency.value()) {
-        setDictionaryOption(&inputOptions, "fflags", "nobuffer");
-        setDictionaryOption(&inputOptions, "flags", "low_delay");
-    }
+    applyFFmpegRealtimeInputOptions(&inputOptions, realtimeOptions);
 
     AVFormatContext* raw = nullptr;
     const int openRet = avformat_open_input(&raw, url.value().c_str(), nullptr, &inputOptions);

@@ -2,6 +2,8 @@
 
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegRealtimeInputOptions.h"
+#include "internal/graph/utils/MediaCodecNameUtils.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -11,8 +13,6 @@ extern "C" {
 #include <libavutil/hwcontext.h>
 }
 
-#include <algorithm>
-#include <cctype>
 #include <cstdlib>
 #include <sstream>
 #include <string>
@@ -29,26 +29,6 @@ struct HardwareCapability {
 };
 
 using HardwareCapabilityCache = std::unordered_map<std::string, HardwareCapability>;
-
-std::string lowerCopy(std::string value)
-{
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-    });
-    return value;
-}
-
-std::string canonicalCodecName(std::string codec)
-{
-    codec = lowerCopy(std::move(codec));
-    if (codec == "avc" || codec == "h.264") {
-        return "h264";
-    }
-    if (codec == "h265" || codec == "h.265") {
-        return "hevc";
-    }
-    return codec;
-}
 
 std::string ffmpegErrorString(int errorCode)
 {
@@ -79,43 +59,16 @@ MediaRational bestFrameRate(const AVStream* stream) noexcept
     return {};
 }
 
-std::string positiveIntText(int value)
+FFmpegRealtimeInputOptions toFFmpegRealtimeInputOptions(const MediaPipelinePlannerOptions& options)
 {
-    return value > 0 ? std::to_string(value) : std::string();
-}
-
-std::string millisecondsAsMicrosecondsText(int milliseconds)
-{
-    if (milliseconds <= 0) {
-        return {};
-    }
-    constexpr int kMicrosecondsPerMillisecond = 1000;
-    return std::to_string(milliseconds * kMicrosecondsPerMillisecond);
-}
-
-void setDictionaryOption(AVDictionary** dictionary,
-                         const std::string& key,
-                         const std::string& value)
-{
-    if (value.empty()) {
-        return;
-    }
-    av_dict_set(dictionary, key.c_str(), value.c_str(), 0);
-}
-
-void applyRealtimeInputOptions(AVDictionary** dictionary,
-                               const MediaPipelinePlannerOptions& options)
-{
-    setDictionaryOption(dictionary, "rtsp_transport", options.rtspTransport);
-    setDictionaryOption(dictionary, "stimeout", millisecondsAsMicrosecondsText(options.openTimeoutMs));
-    setDictionaryOption(dictionary, "rw_timeout", millisecondsAsMicrosecondsText(options.readTimeoutMs));
-    setDictionaryOption(dictionary, "timeout", millisecondsAsMicrosecondsText(options.readTimeoutMs));
-    setDictionaryOption(dictionary, "analyzeduration", positiveIntText(options.analyzeDurationUs));
-    setDictionaryOption(dictionary, "probesize", positiveIntText(options.probeSizeBytes));
-    if (options.lowLatency) {
-        setDictionaryOption(dictionary, "fflags", "nobuffer");
-        setDictionaryOption(dictionary, "flags", "low_delay");
-    }
+    FFmpegRealtimeInputOptions inputOptions;
+    inputOptions.rtspTransport = options.rtspTransport;
+    inputOptions.openTimeoutMs = options.openTimeoutMs;
+    inputOptions.readTimeoutMs = options.readTimeoutMs;
+    inputOptions.analyzeDurationUs = options.analyzeDurationUs;
+    inputOptions.probeSizeBytes = options.probeSizeBytes;
+    inputOptions.lowLatency = options.lowLatency;
+    return inputOptions;
 }
 
 ::media::Result<MediaInputVideoStreamInfo> detectVideoStreamInfoWithOptions(
@@ -538,7 +491,7 @@ MediaPipelineChainPlan makeRawChain(std::string label,
     const MediaPipelinePlannerOptions& options)
 {
     AVDictionary* rawOptions = nullptr;
-    applyRealtimeInputOptions(&rawOptions, options);
+    applyFFmpegRealtimeInputOptions(&rawOptions, toFFmpegRealtimeInputOptions(options));
     const auto cleanup = [&rawOptions]() {
         if (rawOptions) {
             av_dict_free(&rawOptions);

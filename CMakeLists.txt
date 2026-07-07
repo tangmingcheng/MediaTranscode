@@ -4,6 +4,7 @@ project(MediaTranscode LANGUAGES CXX)
 
 set(TARGET_CORE "media_transcode_core")
 set(TARGET_GRAPH_TRANSCODE_CLI "media_transcode_graph_transcode_cli")
+set(TARGET_REALTIME_RTP_INPUT_CLI "media_transcode_realtime_rtp_input_cli")
 set(THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/3rds")
 
 option(MEDIA_TRANSCODE_BUILD_GRAPH_TOOLS "Build graph command line tools" ON)
@@ -164,6 +165,11 @@ if(MEDIA_TRANSCODE_BUILD_GRAPH_TOOLS)
         tools/graph_transcode_cli/main.cpp
     )
     media_transcode_configure_app(${TARGET_GRAPH_TRANSCODE_CLI})
+
+    add_executable(${TARGET_REALTIME_RTP_INPUT_CLI}
+        tools/realtime_rtp_input_cli/main.cpp
+    )
+    media_transcode_configure_app(${TARGET_REALTIME_RTP_INPUT_CLI})
 endif()
 
 if(MEDIA_TRANSCODE_BUILD_TESTS)

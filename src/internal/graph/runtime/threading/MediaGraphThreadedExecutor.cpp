@@ -134,10 +134,11 @@ bool MediaGraphThreadedExecutor::running() const noexcept
 
 const MediaGraphRuntimeMetrics& MediaGraphThreadedExecutor::metrics() const noexcept
 {
+    refreshMetrics();
     return m_metrics;
 }
 
-void MediaGraphThreadedExecutor::refreshMetrics() noexcept
+void MediaGraphThreadedExecutor::refreshMetrics() const noexcept
 {
     m_metrics.activeWorkers = 0;
     m_metrics.workerIterations = 0;

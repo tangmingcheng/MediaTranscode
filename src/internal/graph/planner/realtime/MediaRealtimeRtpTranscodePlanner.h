@@ -11,6 +11,7 @@ namespace media::ffmpeg::graph {
 
 struct MediaRealtimeRtpInputNodePlan {
     std::string url;
+    std::string sdpText;
     std::string rtspTransport;
     int openTimeoutMs;
     int readTimeoutMs;

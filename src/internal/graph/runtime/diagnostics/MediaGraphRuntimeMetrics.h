@@ -12,6 +12,10 @@ struct MediaGraphRuntimeMetrics {
     uint64_t schedulerStarts = 0;
     uint64_t schedulerStops = 0;
     uint64_t schedulerAborts = 0;
+    uint64_t totalPushed = 0;
+    uint64_t totalPopped = 0;
+    uint64_t encodedPacketsPushed = 0;
+    uint64_t encodedPacketsPopped = 0;
 
     std::size_t activeWorkers = 0;
     std::size_t queuedBuffers = 0;

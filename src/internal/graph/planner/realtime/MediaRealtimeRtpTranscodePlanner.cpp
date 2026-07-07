@@ -1,7 +1,9 @@
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 
+#include "internal/graph/utils/MediaCodecNameUtils.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
 
+#include <sstream>
 #include <string>
 #include <utility>
 
@@ -11,6 +13,8 @@ namespace {
 constexpr int RealtimeNoBidirectionalFrames = 0;
 constexpr bool RealtimeRequiresFilterGraph = true;
 constexpr bool RealtimeRequiresRuntimeAvailability = true;
+constexpr int H264RtpClockRate = 90000;
+constexpr int RawRtpVideoStreamIndex = 0;
 
 bool isValidRtpPort(std::size_t port) noexcept
 {
@@ -62,28 +66,70 @@ MediaVideoTranscodeParameters planRealtimeVideoParameters(const MediaVideoTransc
         return ::media::Result<void>::failure(
             ::media::ErrorInfo::unsupported("Realtime URL input does not accept raw RTP, UDP, or SDP URLs"));
     }
-    if (options.input.rtspTransport.empty() ||
-        !options.input.openTimeoutMs.has_value() ||
+    if (options.input.rtspTransport.empty()) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument("Realtime URL input requires explicit RTSP transport"));
+    }
+    return ::media::Result<void>::success();
+}
+
+::media::Result<void> validateRealtimeInputOpenOptions(const MediaRealtimeRtpTranscodeRequest& options)
+{
+    if (!options.input.openTimeoutMs.has_value() ||
         !options.input.readTimeoutMs.has_value() ||
         !options.input.analyzeDurationUs.has_value() ||
         !options.input.probeSizeBytes.has_value() ||
         !options.input.lowLatency.has_value()) {
         return ::media::Result<void>::failure(
-            ::media::ErrorInfo::invalidArgument("Realtime URL input requires explicit transport, timeouts, probe, and latency options"));
+            ::media::ErrorInfo::invalidArgument("Realtime RTP input requires explicit timeouts, probe, and latency options"));
     }
     return ::media::Result<void>::success();
 }
 
-::media::Result<void> validateRawRtpInput(const MediaRealtimeRtpTranscodeRequest& options)
+::media::Result<MediaRtpUrlEndpoint> validateRawRtpInput(const MediaRealtimeRtpTranscodeRequest& options)
 {
     if (options.input.rtp.codecName.empty() ||
         !options.input.rtp.payloadType.has_value() ||
         !options.input.rtp.clockRate.has_value()) {
-        return ::media::Result<void>::failure(
+        return ::media::Result<MediaRtpUrlEndpoint>::failure(
             ::media::ErrorInfo::invalidArgument("Raw RTP input requires codec name, payload type, and clock rate"));
     }
-    return ::media::Result<void>::failure(
-        ::media::ErrorInfo::unsupported("Raw RTP ingest nodes are not implemented in the current realtime DAG"));
+    if (canonicalCodecName(options.input.rtp.codecName) != "h264") {
+        return ::media::Result<MediaRtpUrlEndpoint>::failure(
+            ::media::ErrorInfo::invalidArgument("Raw RTP input currently supports H264 only"));
+    }
+    if (*options.input.rtp.payloadType < 96 || *options.input.rtp.payloadType > 127) {
+        return ::media::Result<MediaRtpUrlEndpoint>::failure(
+            ::media::ErrorInfo::invalidArgument("Raw RTP H264 payload type must be dynamic range 96..127"));
+    }
+    if (*options.input.rtp.clockRate != H264RtpClockRate) {
+        return ::media::Result<MediaRtpUrlEndpoint>::failure(
+            ::media::ErrorInfo::invalidArgument("Raw RTP H264 clock rate must be 90000"));
+    }
+
+    auto endpoint = parseRtpUdpUrlEndpoint(options.input.url);
+    if (!endpoint) {
+        return ::media::Result<MediaRtpUrlEndpoint>::failure(endpoint.error());
+    }
+    return endpoint;
+}
+
+std::string planRawH264Sdp(const MediaRtpUrlEndpoint& endpoint,
+                           int payloadType,
+                           const std::string& mediaId)
+{
+    std::ostringstream out;
+    out << "v=0\r\n"
+        << "o=- 0 0 IN IP4 " << endpoint.host << "\r\n"
+        << "s=MediaTranscode Raw H264 RTP\r\n"
+        << "c=IN IP4 " << endpoint.host << "\r\n"
+        << "t=0 0\r\n"
+        << "m=video " << endpoint.port << " RTP/AVP " << payloadType << "\r\n"
+        << "a=rtpmap:" << payloadType << " H264/90000\r\n";
+    if (!mediaId.empty()) {
+        out << "a=control:" << mediaId << "\r\n";
+    }
+    return out.str();
 }
 
 ::media::Result<MediaPipelinePlannerOptions> planVideoPipelineOptions(
@@ -185,10 +231,11 @@ MediaEdgePolicy planEdgePolicy(const MediaGraphQueueParameters& queues)
         }
         break;
     case MediaRealtimeInputKind::RawRtp:
-        if (auto status = validateRawRtpInput(options); !status) {
-            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(status.error());
-        }
         break;
+    }
+
+    if (auto status = validateRealtimeInputOpenOptions(options); !status) {
+        return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(status.error());
     }
 
     auto outputUrl = planOutputUrl(options.output);
@@ -196,13 +243,35 @@ MediaEdgePolicy planEdgePolicy(const MediaGraphQueueParameters& queues)
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(outputUrl.error());
     }
 
-    auto pipelineOptions = planVideoPipelineOptions(options, outputUrl.value());
-    if (!pipelineOptions) {
-        return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(pipelineOptions.error());
+    auto pipelineOptionsResult = planVideoPipelineOptions(options, outputUrl.value());
+    if (!pipelineOptionsResult) {
+        return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(pipelineOptionsResult.error());
     }
-    auto plannedVideo = MediaPipelinePlanner::planVideoTranscodeRealtimeUrl(
-        options.input.url,
-        std::move(pipelineOptions).value());
+    MediaPipelinePlannerOptions pipelineOptions = std::move(pipelineOptionsResult).value();
+
+    std::string rawRtpSdpText;
+    ::media::Result<MediaPipelinePlan> plannedVideo =
+        ::media::Result<MediaPipelinePlan>::failure(::media::ErrorInfo::internalError("unplanned realtime RTP video"));
+
+    if (*options.input.kind == MediaRealtimeInputKind::RawRtp) {
+        auto endpoint = validateRawRtpInput(options);
+        if (!endpoint) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(endpoint.error());
+        }
+
+        MediaInputVideoStreamInfo inputInfo;
+        inputInfo.streamIndex = RawRtpVideoStreamIndex;
+        inputInfo.codecName = "h264";
+        rawRtpSdpText = planRawH264Sdp(endpoint.value(), *options.input.rtp.payloadType, options.mediaId);
+        plannedVideo = MediaPipelinePlanner::planVideoTranscodeKnownInput(
+            std::move(inputInfo),
+            options.input.url,
+            std::move(pipelineOptions));
+    } else {
+        plannedVideo = MediaPipelinePlanner::planVideoTranscodeRealtimeUrl(
+            options.input.url,
+            std::move(pipelineOptions));
+    }
     if (!plannedVideo) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(plannedVideo.error());
     }
@@ -214,6 +283,7 @@ MediaEdgePolicy planEdgePolicy(const MediaGraphQueueParameters& queues)
     plan.queues = options.parameters.queues;
     plan.edgePolicy = planEdgePolicy(options.parameters.queues);
     plan.input.url = options.input.url;
+    plan.input.sdpText = std::move(rawRtpSdpText);
     plan.input.rtspTransport = options.input.rtspTransport;
     plan.input.openTimeoutMs = *options.input.openTimeoutMs;
     plan.input.readTimeoutMs = *options.input.readTimeoutMs;
