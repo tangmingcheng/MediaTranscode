@@ -73,7 +73,7 @@ bool encodeOptionsRequested(const MediaVideoTranscodeParameters& video) noexcept
     plannerOptions.targetWidth = video.width.value_or(0);
     plannerOptions.targetHeight = video.height.value_or(0);
     plannerOptions.filterRequired = resizeRequested(video);
-    plannerOptions.allowSoftwareFallback = parameters.execution.disableHardware;
+    plannerOptions.enableSoftwareChain = parameters.execution.disableHardware;
     plannerOptions.requireRuntimeAvailability = true;
     plannerOptions.preferGpu = !parameters.execution.disableHardware;
     plannerOptions.preferredHardware = plannerOptions.preferGpu ? "auto" : "software";

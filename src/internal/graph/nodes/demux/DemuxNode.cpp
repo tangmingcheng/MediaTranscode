@@ -1,6 +1,6 @@
 #include "internal/graph/nodes/demux/DemuxNode.h"
 
-#include "internal/FFmpegRAII.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
 #include "internal/graph/runtime/buffer/FFmpegPacketBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"

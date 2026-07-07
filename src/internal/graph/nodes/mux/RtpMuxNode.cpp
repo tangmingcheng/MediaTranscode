@@ -2,6 +2,7 @@
 
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
+#include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/runtime/buffer/FFmpegCodecContextBuffer.h"
 #include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
@@ -19,21 +20,6 @@ extern "C" {
 
 namespace media::ffmpeg::graph {
 namespace {
-
-bool boolOption(const MediaNodeOptions* options, const char* key, bool fallback)
-{
-    if (!options || !options->has(key)) {
-        return fallback;
-    }
-    const std::string value = options->value(key);
-    if (value == "1" || value == "true" || value == "yes" || value == "on") {
-        return true;
-    }
-    if (value == "0" || value == "false" || value == "no" || value == "off") {
-        return false;
-    }
-    return fallback;
-}
 
 AVRational toAVRational(MediaRational value) noexcept
 {
@@ -146,7 +132,19 @@ MediaNodeKind RtpMuxNode::staticKind() noexcept
     if (m_expectationsBound) {
         return ::media::Status::success();
     }
-    m_expectVideo = boolOption(nodeOptions(context), MediaTranscodeOptionKey::MuxExpectVideo, true);
+    auto video = requiredBoolNodeOption(nodeOptions(context), "RtpMuxNode", MediaTranscodeOptionKey::MuxExpectVideo);
+    if (!video) {
+        return ::media::Status::failure(video.error());
+    }
+    auto audio = requiredBoolNodeOption(nodeOptions(context), "RtpMuxNode", MediaTranscodeOptionKey::MuxExpectAudio);
+    if (!audio) {
+        return ::media::Status::failure(audio.error());
+    }
+    if (audio.value()) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::unsupported("RtpMuxNode is video-only in the current realtime DAG"));
+    }
+    m_expectVideo = video.value();
     m_expectationsBound = true;
     return ::media::Status::success();
 }
@@ -207,7 +205,8 @@ bool RtpMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
 ::media::Status RtpMuxNode::registerStreamFromCodecContext(const MediaBufferRef& buffer)
 {
     if (m_videoStreamIndex != invalidMediaStreamIndex) {
-        return ::media::Status::success();
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("RtpMuxNode received duplicate video stream config"));
     }
 
     auto* codecBuffer = dynamic_cast<FFmpegCodecContextBuffer*>(buffer.get());
@@ -373,7 +372,7 @@ void RtpMuxNode::releaseRuntimeViews() noexcept
     m_trailerWritten = false;
     m_formatEmitted = false;
     m_expectationsBound = false;
-    m_expectVideo = true;
+    m_expectVideo = false;
     m_videoStreamIndex = invalidMediaStreamIndex;
     m_packetsWritten = 0;
 }

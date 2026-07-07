@@ -133,10 +133,10 @@ const MediaNodeOptions* FFmpegNodeRuntime::nodeOptions(MediaGraphExecutionContex
 
 std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
                                            const std::string& key,
-                                           std::string fallback) const
+                                           std::string missingValue) const
 {
     const MediaNodeOptions* options = nodeOptions(context);
-    return options ? options->value(key, std::move(fallback)) : std::move(fallback);
+    return options ? options->value(key, std::move(missingValue)) : std::move(missingValue);
 }
 
 ::media::Result<MediaBufferRef> FFmpegNodeRuntime::popInput(MediaGraphExecutionContext& context,

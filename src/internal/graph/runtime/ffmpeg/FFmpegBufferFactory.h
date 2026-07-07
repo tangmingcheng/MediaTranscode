@@ -1,6 +1,6 @@
 #pragma once
 
-#include "internal/FFmpegRAII.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/runtime/buffer/FFmpegCodecContextBuffer.h"
 #include "internal/graph/runtime/buffer/FFmpegCodecParametersBuffer.h"
 #include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"

@@ -58,7 +58,7 @@ struct MediaPipelinePlannerOptions {
     int targetHeight = 0;
     bool filterRequired = true;
     bool preferGpu = true;
-    bool allowSoftwareFallback = true;
+    bool enableSoftwareChain = true;
     bool requireRuntimeAvailability = true;
     bool diagnosticLogEnabled = false;
     std::string rtspTransport = "tcp";

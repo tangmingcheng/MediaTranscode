@@ -1,6 +1,6 @@
 #include "internal/graph/planner/MediaPipelineAudioSourceProbe.h"
 
-#include "internal/FFmpegRAII.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegDescriptorMapper.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 

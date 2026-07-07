@@ -1,7 +1,7 @@
 #pragma once
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
-#include "internal/FFmpegRAII.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 
 namespace media::ffmpeg::graph {
 

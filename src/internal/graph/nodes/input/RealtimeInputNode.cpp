@@ -1,5 +1,6 @@
 #include "internal/graph/nodes/input/RealtimeInputNode.h"
 
+#include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 
@@ -12,13 +13,9 @@ extern "C" {
 namespace media::ffmpeg::graph {
 namespace {
 
-std::string millisecondsAsMicrosecondsText(const std::string& milliseconds)
+std::string millisecondsAsMicrosecondsText(int milliseconds)
 {
-    if (milliseconds.empty()) {
-        return {};
-    }
-    const int parsed = std::stoi(milliseconds);
-    return parsed > 0 ? std::to_string(parsed * 1000) : std::string();
+    return std::to_string(milliseconds * 1000);
 }
 
 void setDictionaryOption(AVDictionary** dictionary,
@@ -87,26 +84,50 @@ void RealtimeInputNode::abort(MediaGraphExecutionContext& context) noexcept
         return ::media::Status::success();
     }
 
-    const std::string url = nodeOption(context, "url");
-    if (url.empty()) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("RealtimeInputNode requires node option: url"));
+    const MediaNodeOptions* options = nodeOptions(context);
+    auto url = requiredNodeOption(options, "RealtimeInputNode", "url");
+    if (!url) {
+        return ::media::Status::failure(url.error());
+    }
+    auto rtspTransport = requiredNodeOption(options, "RealtimeInputNode", "input.rtsp_transport");
+    if (!rtspTransport) {
+        return ::media::Status::failure(rtspTransport.error());
+    }
+    auto openTimeoutMs = requiredPositiveIntNodeOption(options, "RealtimeInputNode", "input.open_timeout_ms");
+    if (!openTimeoutMs) {
+        return ::media::Status::failure(openTimeoutMs.error());
+    }
+    auto readTimeoutMs = requiredPositiveIntNodeOption(options, "RealtimeInputNode", "input.read_timeout_ms");
+    if (!readTimeoutMs) {
+        return ::media::Status::failure(readTimeoutMs.error());
+    }
+    auto analyzeDurationUs = requiredPositiveIntNodeOption(options, "RealtimeInputNode", "input.analyze_duration_us");
+    if (!analyzeDurationUs) {
+        return ::media::Status::failure(analyzeDurationUs.error());
+    }
+    auto probeSizeBytes = requiredPositiveIntNodeOption(options, "RealtimeInputNode", "input.probe_size_bytes");
+    if (!probeSizeBytes) {
+        return ::media::Status::failure(probeSizeBytes.error());
+    }
+    auto lowLatency = requiredBoolNodeOption(options, "RealtimeInputNode", "input.low_latency");
+    if (!lowLatency) {
+        return ::media::Status::failure(lowLatency.error());
     }
 
     AVDictionary* inputOptions = nullptr;
-    setDictionaryOption(&inputOptions, "rtsp_transport", nodeOption(context, "input.rtsp_transport", "tcp"));
-    setDictionaryOption(&inputOptions, "stimeout", millisecondsAsMicrosecondsText(nodeOption(context, "input.open_timeout_ms")));
-    setDictionaryOption(&inputOptions, "rw_timeout", millisecondsAsMicrosecondsText(nodeOption(context, "input.read_timeout_ms")));
-    setDictionaryOption(&inputOptions, "timeout", millisecondsAsMicrosecondsText(nodeOption(context, "input.read_timeout_ms")));
-    setDictionaryOption(&inputOptions, "analyzeduration", nodeOption(context, "input.analyze_duration_us"));
-    setDictionaryOption(&inputOptions, "probesize", nodeOption(context, "input.probe_size_bytes"));
-    if (nodeOption(context, "input.low_latency", "1") == "1") {
+    setDictionaryOption(&inputOptions, "rtsp_transport", rtspTransport.value());
+    setDictionaryOption(&inputOptions, "stimeout", millisecondsAsMicrosecondsText(openTimeoutMs.value()));
+    setDictionaryOption(&inputOptions, "rw_timeout", millisecondsAsMicrosecondsText(readTimeoutMs.value()));
+    setDictionaryOption(&inputOptions, "timeout", millisecondsAsMicrosecondsText(readTimeoutMs.value()));
+    setDictionaryOption(&inputOptions, "analyzeduration", std::to_string(analyzeDurationUs.value()));
+    setDictionaryOption(&inputOptions, "probesize", std::to_string(probeSizeBytes.value()));
+    if (lowLatency.value()) {
         setDictionaryOption(&inputOptions, "fflags", "nobuffer");
         setDictionaryOption(&inputOptions, "flags", "low_delay");
     }
 
     AVFormatContext* raw = nullptr;
-    const int openRet = avformat_open_input(&raw, url.c_str(), nullptr, &inputOptions);
+    const int openRet = avformat_open_input(&raw, url.value().c_str(), nullptr, &inputOptions);
     if (inputOptions) {
         av_dict_free(&inputOptions);
     }

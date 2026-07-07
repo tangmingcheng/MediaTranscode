@@ -1,6 +1,6 @@
 #include "internal/graph/planner/MediaPipelineCapabilityScanner.h"
 
-#include "internal/FFmpegRAII.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 
 extern "C" {
@@ -630,7 +630,7 @@ std::vector<MediaPipelineChainPlan> MediaPipelineCapabilityScanner::enumerateVid
                        codecSpecificName(outputCodec, "_videotoolbox"), "videotoolbox",
                        MediaHardwareDeviceKind::VideoToolbox, true, true, 80));
 
-    if (options.allowSoftwareFallback) {
+    if (options.enableSoftwareChain) {
         add("software",
             makeCodecStage(MediaPipelineStageRole::Decoder, "software decoder", inputCodec, inputCodec,
                            "", MediaHardwareDeviceKind::None, false, false, 30),

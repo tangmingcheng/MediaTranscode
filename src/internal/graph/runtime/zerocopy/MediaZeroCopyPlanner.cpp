@@ -9,7 +9,7 @@ MediaZeroCopyPlan MediaZeroCopyPlanner::plan(const MediaHardwareDescriptor& from
     MediaZeroCopyPlan result;
 
     if (!policy.enabled()) {
-        result.softwareFallback = true;
+        result.softwareTransfer = true;
         result.steps.push_back({ MediaZeroCopyPlanAction::CopySoftwareFrame,
                                  MediaInteropKind::None,
                                  "zero-copy disabled" });
@@ -34,11 +34,11 @@ MediaZeroCopyPlan MediaZeroCopyPlanner::plan(const MediaHardwareDescriptor& from
         return result;
     }
 
-    if (policy.allowSoftwareFallback) {
-        result.softwareFallback = true;
+    if (policy.allowSoftwareTransfer) {
+        result.softwareTransfer = true;
         result.steps.push_back({ MediaZeroCopyPlanAction::DownloadToSoftware,
                                  MediaInteropKind::None,
-                                 "hardware interop unavailable; fallback to software" });
+                                 "hardware interop unavailable; explicit software transfer selected" });
         return result;
     }
 

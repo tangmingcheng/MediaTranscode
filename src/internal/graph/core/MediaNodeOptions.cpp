@@ -18,10 +18,10 @@ bool MediaNodeOptions::has(const std::string& key) const
     return m_values.find(key) != m_values.end();
 }
 
-std::string MediaNodeOptions::value(const std::string& key, std::string fallback) const
+std::string MediaNodeOptions::value(const std::string& key, std::string missingValue) const
 {
     const auto it = m_values.find(key);
-    return it == m_values.end() ? std::move(fallback) : it->second;
+    return it == m_values.end() ? std::move(missingValue) : it->second;
 }
 
 const MediaNodeOptions::Map& MediaNodeOptions::values() const noexcept

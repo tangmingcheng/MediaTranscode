@@ -1,6 +1,6 @@
 #pragma once
 
-#include "internal/FFmpegRAII.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/core/MediaNodeOptions.h"
 #include "media_transcode/Result.h"
 

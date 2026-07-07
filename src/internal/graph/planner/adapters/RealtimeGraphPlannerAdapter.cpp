@@ -5,6 +5,26 @@
 #include <utility>
 
 namespace media::ffmpeg::graph {
+namespace {
+
+MediaRealtimePlannerOptions makeRealtimeOptions(const MediaGraphPlannerAdapterOptions& options)
+{
+    MediaRealtimePlannerOptions realtimeOptions;
+    realtimeOptions.edgeNodeId = options.edgeNodeId;
+    realtimeOptions.workerNodeId = options.workerNodeId;
+    realtimeOptions.host = options.host;
+    realtimeOptions.zone = options.zone;
+    realtimeOptions.basePort = options.basePort;
+    realtimeOptions.targetLatencyUs = 50000;
+    realtimeOptions.maxLatencyUs = 150000;
+    realtimeOptions.enableGpuPlanning = options.enableGpuPlanning;
+    realtimeOptions.enableMeshPlanning = options.enableMeshPlanning;
+    realtimeOptions.preferZeroCopy = options.preferZeroCopy;
+    realtimeOptions.enableNodeFusion = true;
+    return realtimeOptions;
+}
+
+} // namespace
 
 const char* RealtimeGraphPlannerAdapter::name() const noexcept
 {
@@ -15,15 +35,7 @@ const char* RealtimeGraphPlannerAdapter::name() const noexcept
     const MediaGraph& graph,
     const MediaGraphPlannerAdapterOptions& options) const
 {
-    MediaRealtimePlannerOptions realtimeOptions;
-    realtimeOptions.edgeNodeId = options.edgeNodeId;
-    realtimeOptions.workerNodeId = options.workerNodeId;
-    realtimeOptions.host = options.host;
-    realtimeOptions.zone = options.zone;
-    realtimeOptions.basePort = options.basePort;
-    realtimeOptions.enableGpuPlanning = options.enableGpuPlanning;
-    realtimeOptions.enableMeshPlanning = options.enableMeshPlanning;
-    realtimeOptions.preferZeroCopy = options.preferZeroCopy;
+    MediaRealtimePlannerOptions realtimeOptions = makeRealtimeOptions(options);
 
     auto realtime = MediaRealtimePlanner::plan(graph, realtimeOptions);
     if (!realtime) {
@@ -39,21 +51,13 @@ const char* RealtimeGraphPlannerAdapter::name() const noexcept
 
 MediaGraphClusterTopology RealtimeGraphPlannerAdapter::buildTopology(const MediaGraphPlannerAdapterOptions& options)
 {
-    MediaRealtimePlannerOptions realtimeOptions;
-    realtimeOptions.edgeNodeId = options.edgeNodeId;
-    realtimeOptions.workerNodeId = options.workerNodeId;
-    realtimeOptions.host = options.host;
-    realtimeOptions.zone = options.zone;
-    realtimeOptions.basePort = options.basePort;
+    MediaRealtimePlannerOptions realtimeOptions = makeRealtimeOptions(options);
     return MediaRealtimePlanner::buildTopology(realtimeOptions);
 }
 
 MediaGraphPlanningPolicy RealtimeGraphPlannerAdapter::buildPolicy(const MediaGraphPlannerAdapterOptions& options)
 {
-    MediaRealtimePlannerOptions realtimeOptions;
-    realtimeOptions.enableGpuPlanning = options.enableGpuPlanning;
-    realtimeOptions.enableMeshPlanning = options.enableMeshPlanning;
-    realtimeOptions.preferZeroCopy = options.preferZeroCopy;
+    MediaRealtimePlannerOptions realtimeOptions = makeRealtimeOptions(options);
     return MediaRealtimePlanner::buildPolicy(realtimeOptions);
 }
 

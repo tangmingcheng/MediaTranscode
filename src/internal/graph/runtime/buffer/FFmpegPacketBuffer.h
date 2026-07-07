@@ -1,6 +1,6 @@
 #pragma once
 
-#include "internal/FFmpegRAII.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/runtime/buffer/MediaBuffer.h"
 
 extern "C" {

@@ -1,6 +1,6 @@
 #include "internal/graph/nodes/video/VideoEncodeNode.h"
 
-#include "internal/FFmpegRAII.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
@@ -19,9 +19,9 @@ extern "C" {
 namespace media::ffmpeg::graph {
 namespace {
 
-std::string optionValue(const MediaNodeOptions* options, const std::string& key, std::string fallback = {})
+std::string optionValue(const MediaNodeOptions* options, const std::string& key, std::string missingValue = {})
 {
-    return options ? options->value(key, std::move(fallback)) : std::move(fallback);
+    return options ? options->value(key, std::move(missingValue)) : std::move(missingValue);
 }
 
 bool plannedHardwareEncoder(const MediaNodeOptions* options)

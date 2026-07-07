@@ -54,7 +54,7 @@ bool frameRateAcceptable(AVRational frameRate) noexcept
     return fps > 1.0 && fps < 240.0;
 }
 
-AVRational chooseInputFrameRate(const MediaBufferRef& buffer, AVRational fallbackFrameRate) noexcept
+AVRational chooseInputFrameRate(const MediaBufferRef& buffer, AVRational plannedFrameRate) noexcept
 {
     if (buffer) {
         const MediaRational frameRate = buffer->timeDescriptor().frameRate;
@@ -66,7 +66,7 @@ AVRational chooseInputFrameRate(const MediaBufferRef& buffer, AVRational fallbac
         }
     }
 
-    return frameRateAcceptable(fallbackFrameRate) ? fallbackFrameRate : AVRational{ 0, 1 };
+    return frameRateAcceptable(plannedFrameRate) ? plannedFrameRate : AVRational{ 0, 1 };
 }
 
 std::string pixelFormatName(AVPixelFormat format)

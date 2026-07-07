@@ -16,9 +16,9 @@ extern "C" {
 namespace media::ffmpeg::graph {
 namespace {
 
-std::string optionValue(const MediaNodeOptions* options, const std::string& key, std::string fallback = {})
+std::string optionValue(const MediaNodeOptions* options, const std::string& key, std::string missingValue = {})
 {
-    return options ? options->value(key, std::move(fallback)) : std::move(fallback);
+    return options ? options->value(key, std::move(missingValue)) : std::move(missingValue);
 }
 
 std::string pixelFormatName(int format)
