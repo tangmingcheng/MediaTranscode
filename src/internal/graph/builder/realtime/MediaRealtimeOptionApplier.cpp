@@ -19,6 +19,17 @@ constexpr const char* owner = "MediaRealtimeOptionApplier";
     return MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, key, value);
 }
 
+::media::Result<void> setOptionalOption(MediaGraph& graph,
+                                        MediaNodeId nodeId,
+                                        const std::string& key,
+                                        const std::string& value)
+{
+    if (value.empty()) {
+        return ::media::Result<void>::success();
+    }
+    return MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, key, value);
+}
+
 const char* boolOption(bool value) noexcept
 {
     return value ? "1" : "0";
@@ -32,7 +43,8 @@ const char* boolOption(bool value) noexcept
     const MediaRealtimeRtpInputNodePlan& plan)
 {
     if (auto status = setOption(graph, nodeId, "url", plan.url); !status) return status;
-    if (auto status = setOption(graph, nodeId, "input.rtsp_transport", plan.rtspTransport); !status) return status;
+    if (auto status = setOptionalOption(graph, nodeId, "input.sdp", plan.sdpText); !status) return status;
+    if (auto status = setOptionalOption(graph, nodeId, "input.rtsp_transport", plan.rtspTransport); !status) return status;
     if (auto status = setOption(graph, nodeId, "input.open_timeout_ms", std::to_string(plan.openTimeoutMs)); !status) return status;
     if (auto status = setOption(graph, nodeId, "input.read_timeout_ms", std::to_string(plan.readTimeoutMs)); !status) return status;
     if (auto status = setOption(graph, nodeId, "input.analyze_duration_us", std::to_string(plan.analyzeDurationUs)); !status) return status;

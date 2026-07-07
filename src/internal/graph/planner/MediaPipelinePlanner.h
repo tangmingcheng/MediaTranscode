@@ -69,6 +69,14 @@ struct MediaPipelinePlannerOptions {
     bool lowLatency = true;
 };
 
+struct MediaInputVideoStreamInfo {
+    int streamIndex = invalidMediaStreamIndex;
+    std::string codecName;
+    int width = 0;
+    int height = 0;
+    MediaRational frameRate;
+};
+
 struct MediaPipelinePlan {
     bool enabled = false;
     MediaBranchMode branchMode = MediaBranchMode::Drop;
@@ -94,6 +102,11 @@ public:
         MediaPipelinePlannerOptions options = {});
 
     static ::media::Result<MediaPipelinePlan> planVideoTranscodeRealtimeUrl(
+        const std::string& inputUrl,
+        MediaPipelinePlannerOptions options = {});
+
+    static ::media::Result<MediaPipelinePlan> planVideoTranscodeKnownInput(
+        MediaInputVideoStreamInfo inputInfo,
         const std::string& inputUrl,
         MediaPipelinePlannerOptions options = {});
 

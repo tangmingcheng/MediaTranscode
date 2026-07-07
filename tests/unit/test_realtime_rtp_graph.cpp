@@ -86,6 +86,17 @@ void expectPlannerInvalidArgument(TestContext& ctx, const MediaRealtimeRtpTransc
     }
 }
 
+MediaRealtimeRtpTranscodeRequest validRawRtpOptions()
+{
+    MediaRealtimeRtpTranscodeRequest options = validRealtimeOptions();
+    options.input.kind = MediaRealtimeInputKind::RawRtp;
+    options.input.url = "rtp://127.0.0.1:5004";
+    options.input.rtp.codecName = "h264";
+    options.input.rtp.payloadType = 96;
+    options.input.rtp.clockRate = 90000;
+    return options;
+}
+
 void testValidationRejectsMissingInput(TestContext& ctx)
 {
     MediaRealtimeRtpTranscodeRequest options = validRealtimeOptions();
@@ -175,12 +186,7 @@ void testValidationRejectsUnsupportedRealtimeInput(TestContext& ctx)
 
 void testRawRtpMissingMetadataFailsInPlanner(TestContext& ctx)
 {
-    MediaRealtimeRtpTranscodeRequest options = validRealtimeOptions();
-    options.input.kind = MediaRealtimeInputKind::RawRtp;
-    options.input.url = "rtp://127.0.0.1:5004";
-    options.input.rtp.codecName = "h264";
-    options.input.rtp.payloadType = 96;
-    options.input.rtp.clockRate = 90000;
+    MediaRealtimeRtpTranscodeRequest options = validRawRtpOptions();
 
     MediaRealtimeRtpTranscodeRequest missingCodec = options;
     missingCodec.input.rtp.codecName.clear();
@@ -193,12 +199,45 @@ void testRawRtpMissingMetadataFailsInPlanner(TestContext& ctx)
     MediaRealtimeRtpTranscodeRequest missingClockRate = options;
     missingClockRate.input.rtp.clockRate.reset();
     expectPlannerInvalidArgument(ctx, missingClockRate);
+}
 
-    const auto plan = MediaRealtimeRtpTranscodePlanner::plan(options);
-    EXPECT_FALSE(ctx, plan);
+void testRawRtpRejectsUnsupportedMetadata(TestContext& ctx)
+{
+    MediaRealtimeRtpTranscodeRequest options = validRawRtpOptions();
+
+    MediaRealtimeRtpTranscodeRequest nonH264 = options;
+    nonH264.input.rtp.codecName = "hevc";
+    expectPlannerInvalidArgument(ctx, nonH264);
+
+    MediaRealtimeRtpTranscodeRequest staticPayloadType = options;
+    staticPayloadType.input.rtp.payloadType = 35;
+    expectPlannerInvalidArgument(ctx, staticPayloadType);
+
+    MediaRealtimeRtpTranscodeRequest invalidPayloadType = options;
+    invalidPayloadType.input.rtp.payloadType = 128;
+    expectPlannerInvalidArgument(ctx, invalidPayloadType);
+
+    MediaRealtimeRtpTranscodeRequest invalidClockRate = options;
+    invalidClockRate.input.rtp.clockRate = 48000;
+    expectPlannerInvalidArgument(ctx, invalidClockRate);
+
+    MediaRealtimeRtpTranscodeRequest missingPort = options;
+    missingPort.input.url = "rtp://127.0.0.1";
+    expectPlannerInvalidArgument(ctx, missingPort);
+}
+
+void testRawRtpPlansH264Input(TestContext& ctx)
+{
+    const auto plan = MediaRealtimeRtpTranscodePlanner::plan(validRawRtpOptions());
+    EXPECT_TRUE(ctx, plan);
     if (!plan) {
-        EXPECT_EQ(ctx, plan.error().code, media::ErrorCode::Unsupported);
+        std::cerr << plan.error().describe() << '\n';
+        return;
     }
+
+    EXPECT_EQ(ctx, plan.value().inputKind, MediaRealtimeInputKind::RawRtp);
+    EXPECT_EQ(ctx, plan.value().videoPlan.inputCodecName, std::string("h264"));
+    EXPECT_EQ(ctx, plan.value().videoPlan.sourceStreamIndex, 0);
 }
 
 void testValidationRejectsOddRtpPort(TestContext& ctx)
@@ -237,6 +276,26 @@ void testBuildPlansVideoStreamAndSoftwareExecution(TestContext& ctx)
         EXPECT_EQ(ctx, encode->options.value("pipeline.chain"), std::string("software"));
         EXPECT_EQ(ctx, encode->options.value("encoder"), std::string("libx264"));
     }
+}
+
+void testBuildPlansRawRtpH264Graph(TestContext& ctx)
+{
+    const auto graphResult = MediaRealtimeRtpTranscodeGraphBuilder::build(validRawRtpOptions());
+    EXPECT_TRUE(ctx, graphResult);
+    if (!graphResult) {
+        std::cerr << graphResult.error().describe() << '\n';
+        return;
+    }
+
+    const MediaGraph& graph = graphResult.value();
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::RawRtpInput) != nullptr);
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::Demux) != nullptr);
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::PacketNormalize) != nullptr);
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::VideoDecode) != nullptr);
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::VideoEncode) != nullptr);
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::RtpMux) != nullptr);
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::RtpOutput) != nullptr);
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::SdpWriter) != nullptr);
 }
 
 void testRealtimeBuilderDoesNotOwnPlannerDecisions(TestContext& ctx)
@@ -283,6 +342,17 @@ void expectGraphCompiles(TestContext& ctx, MediaGraph graph)
 void testRuntimeCompileSupportsSoftwareChain(TestContext& ctx)
 {
     auto graphResult = MediaRealtimeRtpTranscodeGraphBuilder::build(validRealtimeOptions());
+    EXPECT_TRUE(ctx, graphResult);
+    if (!graphResult) {
+        std::cerr << graphResult.error().describe() << '\n';
+        return;
+    }
+    expectGraphCompiles(ctx, std::move(graphResult).value());
+}
+
+void testRuntimeCompileSupportsRawRtpChain(TestContext& ctx)
+{
+    auto graphResult = MediaRealtimeRtpTranscodeGraphBuilder::build(validRawRtpOptions());
     EXPECT_TRUE(ctx, graphResult);
     if (!graphResult) {
         std::cerr << graphResult.error().describe() << '\n';
@@ -393,13 +463,17 @@ int main()
     testLegacyArchitectureFilesAreRemoved(ctx);
     testValidationRejectsUnsupportedRealtimeInput(ctx);
     testRawRtpMissingMetadataFailsInPlanner(ctx);
+    testRawRtpRejectsUnsupportedMetadata(ctx);
+    testRawRtpPlansH264Input(ctx);
     testValidationRejectsOddRtpPort(ctx);
     testUrlRedactionHidesUserInfo(ctx);
     testTimestampRescaleBumpsQuantizedDuplicates(ctx);
     testTimestampRescaleRejectsInvalidBoundaryValues(ctx);
     testBuildPlansVideoStreamAndSoftwareExecution(ctx);
+    testBuildPlansRawRtpH264Graph(ctx);
     testRealtimeBuilderDoesNotOwnPlannerDecisions(ctx);
     testRuntimeCompileSupportsSoftwareChain(ctx);
+    testRuntimeCompileSupportsRawRtpChain(ctx);
     testRuntimeCompileSupportsAutoHardwareChain(ctx);
 
     if (ctx.failures != 0) {

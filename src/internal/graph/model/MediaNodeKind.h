@@ -62,7 +62,8 @@ enum class MediaNodeKind {
     ReservedNodeKind36 = 36,
     AudioCodecResolver = 37,
     PacketSourceConfig = 38,
-    PacketNormalize = 39
+    PacketNormalize = 39,
+    RawRtpInput = 40
 };
 
 } // namespace media::ffmpeg::graph

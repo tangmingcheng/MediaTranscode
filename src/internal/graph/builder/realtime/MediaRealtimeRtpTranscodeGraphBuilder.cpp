@@ -26,6 +26,50 @@ constexpr const char* owner = "MediaRealtimeRtpTranscodeGraphBuilder";
                                                         true);
 }
 
+::media::Result<MediaNodeId> addRawRtpPacketNormalize(MediaGraph& graph,
+                                                      MediaNodeId formatSource,
+                                                      MediaNodeId packetSource,
+                                                      int sourceStreamIndex,
+                                                      const MediaGraphQueueParameters& queues)
+{
+    const MediaNodeId normalize = graph.addNode(MediaNodeKind::PacketNormalize,
+                                                "realtime.raw_rtp.normalize",
+                                                "Raw RTP packet normalize");
+    if (!normalize.isValid()) {
+        return ::media::Result<MediaNodeId>::failure(
+            ::media::ErrorInfo::internalError("MediaRealtimeRtpTranscodeGraphBuilder failed to add raw RTP packet normalize node"));
+    }
+    if (auto status = MediaGraphBuildSupport::setPacketStreamOptions(graph,
+                                                                     owner,
+                                                                     normalize,
+                                                                     MediaStreamKind::Video,
+                                                                     sourceStreamIndex); !status) {
+        return ::media::Result<MediaNodeId>::failure(status.error());
+    }
+
+    if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph, owner, normalize, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext, true, false); !status) return ::media::Result<MediaNodeId>::failure(status.error());
+    if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph, owner, normalize, "packet", MediaStreamKind::Video, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true); !status) return ::media::Result<MediaNodeId>::failure(status.error());
+
+    const MediaPortId splitVideo = graph.addOutputPort(packetSource,
+                                                       "video",
+                                                       MediaStreamKind::Video,
+                                                       MediaEdgeKind::InputPacket,
+                                                       MediaPayloadKind::Packet,
+                                                       false,
+                                                       true);
+    if (auto status = MediaGraphBuildSupport::requirePort(splitVideo, owner, "raw RTP stream split video"); !status) {
+        return ::media::Result<MediaNodeId>::failure(status.error());
+    }
+    graph.setPortFormatDescriptor(splitVideo,
+                                  MediaGraphBuildSupport::streamIndexDescriptor(MediaStreamKind::Video,
+                                                                                sourceStreamIndex));
+
+    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, formatSource, "format", normalize, "format", "realtime.raw_rtp.format -> normalize.format", MediaGraphBuildSupport::blockingQueuePolicy(queues.metadata)); !status) return ::media::Result<MediaNodeId>::failure(status.error());
+    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, packetSource, "video", normalize, "packet", "realtime.raw_rtp.packet -> normalize.packet", MediaGraphBuildSupport::blockingQueuePolicy(queues.packet)); !status) return ::media::Result<MediaNodeId>::failure(status.error());
+
+    return ::media::Result<MediaNodeId>::success(normalize);
+}
+
 ::media::Result<void> addRtpOutputChain(MediaGraph& graph,
                                         MediaNodeId output,
                                         MediaNodeId mux,
@@ -65,7 +109,10 @@ constexpr const char* owner = "MediaRealtimeRtpTranscodeGraphBuilder";
 
     MediaGraph graph;
 
-    const MediaNodeId input = graph.addNode(MediaNodeKind::RealtimeInput,
+    const MediaNodeKind inputKind = plan.inputKind == MediaRealtimeInputKind::RawRtp
+        ? MediaNodeKind::RawRtpInput
+        : MediaNodeKind::RealtimeInput;
+    const MediaNodeId input = graph.addNode(inputKind,
                                             "realtime.input",
                                             "Realtime media input");
     const MediaNodeId output = graph.addNode(MediaNodeKind::RtpOutput,
@@ -97,6 +144,21 @@ constexpr const char* owner = "MediaRealtimeRtpTranscodeGraphBuilder";
         return ::media::Result<MediaGraph>::failure(packetSelect.error());
     }
 
+    MediaNodeId videoPacketSourceNode = packetSelect.value().split;
+    std::string videoPacketSourcePort = "video";
+    if (plan.inputKind == MediaRealtimeInputKind::RawRtp) {
+        auto normalized = addRawRtpPacketNormalize(graph,
+                                                   input,
+                                                   packetSelect.value().split,
+                                                   plan.videoPlan.sourceStreamIndex,
+                                                   plan.queues);
+        if (!normalized) {
+            return ::media::Result<MediaGraph>::failure(normalized.error());
+        }
+        videoPacketSourceNode = normalized.value();
+        videoPacketSourcePort = "packet";
+    }
+
     MediaVideoBranchSegmentOptions videoOptions;
     videoOptions.prefix = "realtime.video";
     videoOptions.plan = std::move(plan.videoPlan);
@@ -104,8 +166,8 @@ constexpr const char* owner = "MediaRealtimeRtpTranscodeGraphBuilder";
     videoOptions.queues = plan.queues;
     videoOptions.formatSourceNode = input;
     videoOptions.formatSourcePort = "format";
-    videoOptions.packetSourceNode = packetSelect.value().split;
-    videoOptions.packetSourcePort = "video";
+    videoOptions.packetSourceNode = videoPacketSourceNode;
+    videoOptions.packetSourcePort = videoPacketSourcePort;
     videoOptions.muxNode = mux;
     videoOptions.muxCodecPort = "codec";
     videoOptions.muxPacketPort = "packet";

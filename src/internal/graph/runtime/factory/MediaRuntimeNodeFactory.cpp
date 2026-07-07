@@ -10,6 +10,7 @@
 #include "internal/graph/nodes/demux/DemuxNode.h"
 #include "internal/graph/nodes/demux/StreamSplitNode.h"
 #include "internal/graph/nodes/input/FileInputNode.h"
+#include "internal/graph/nodes/input/RawRtpInputNode.h"
 #include "internal/graph/nodes/input/RealtimeInputNode.h"
 #include "internal/graph/nodes/lifecycle/EofBarrierNode.h"
 #include "internal/graph/nodes/lifecycle/FinalizeNode.h"
@@ -42,6 +43,8 @@ namespace media::ffmpeg::graph {
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<FileInputNode>(node.id));
     case MediaNodeKind::RealtimeInput:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<RealtimeInputNode>(node.id));
+    case MediaNodeKind::RawRtpInput:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<RawRtpInputNode>(node.id));
     case MediaNodeKind::Demux:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<DemuxNode>(node.id));
     case MediaNodeKind::StreamSplit:
@@ -113,6 +116,7 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     switch (kind) {
     case MediaNodeKind::FileInput:
     case MediaNodeKind::RealtimeInput:
+    case MediaNodeKind::RawRtpInput:
     case MediaNodeKind::Demux:
     case MediaNodeKind::StreamSplit:
     case MediaNodeKind::PacketFanout:

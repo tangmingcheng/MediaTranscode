@@ -243,4 +243,20 @@ const char* mediaHardwareFrameKindName(MediaHardwareFrameKind kind) noexcept
     return buildVideoTranscodePlan(inputInfo.value(), inputUrl, std::move(options));
 }
 
+::media::Result<MediaPipelinePlan> MediaPipelinePlanner::planVideoTranscodeKnownInput(
+    MediaInputVideoStreamInfo inputInfo,
+    const std::string& inputUrl,
+    MediaPipelinePlannerOptions options)
+{
+    if (inputUrl.empty()) {
+        return ::media::Result<MediaPipelinePlan>::failure(
+            ::media::ErrorInfo::invalidArgument("planVideoTranscodeKnownInput requires input URL"));
+    }
+    if (inputInfo.streamIndex < 0 || inputInfo.codecName.empty()) {
+        return ::media::Result<MediaPipelinePlan>::failure(
+            ::media::ErrorInfo::invalidArgument("planVideoTranscodeKnownInput requires stream index and codec"));
+    }
+    return buildVideoTranscodePlan(std::move(inputInfo), inputUrl, std::move(options));
+}
+
 } // namespace media::ffmpeg::graph

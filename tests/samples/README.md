@@ -2,7 +2,7 @@
 
 This directory is reserved for small fixtures used by graph validation and realtime RTP smoke testing.
 
-Current graph tests do not require a committed media sample. Realtime RTP validation normally uses a reachable RTSP or realtime video URL and the generated SDP file from `media_transcode_graph_transcode_cli --mode realtime-rtp`.
+Current graph tests do not require a committed media sample. Realtime RTP validation normally uses a reachable RTSP or realtime video URL with `media_transcode_graph_transcode_cli --mode realtime-rtp`, or an H264 RTP sender with `media_transcode_realtime_rtp_input_cli`.
 
 Guidelines for future samples:
 

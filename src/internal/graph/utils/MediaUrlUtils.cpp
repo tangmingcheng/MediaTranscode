@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
+#include <limits>
+#include <utility>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -35,6 +38,22 @@ std::string stripUrlQueryAndFragment(std::string value)
     return value;
 }
 
+::media::Result<uint16_t> parsePortText(const std::string& text)
+{
+    if (text.empty()) {
+        return ::media::Result<uint16_t>::failure(
+            ::media::ErrorInfo::invalidArgument("RTP/UDP URL requires explicit port"));
+    }
+
+    char* end = nullptr;
+    const unsigned long parsed = std::strtoul(text.c_str(), &end, 10);
+    if (!end || *end != '\0' || parsed == 0 || parsed > std::numeric_limits<uint16_t>::max()) {
+        return ::media::Result<uint16_t>::failure(
+            ::media::ErrorInfo::invalidArgument("RTP/UDP URL port must be in range 1..65535"));
+    }
+    return ::media::Result<uint16_t>::success(static_cast<uint16_t>(parsed));
+}
+
 } // namespace
 
 std::string redactUrlUserInfo(const std::string& url)
@@ -62,6 +81,44 @@ bool isUnsupportedRealtimeInputUrl(const std::string& url)
            startsWith(normalized, "udp://") ||
            startsWith(normalized, "sdp://") ||
            endsWith(normalized, ".sdp");
+}
+
+::media::Result<MediaRtpUrlEndpoint> parseRtpUdpUrlEndpoint(const std::string& url)
+{
+    const std::string normalized = stripUrlQueryAndFragment(url);
+    const std::string lower = lowerAscii(normalized);
+    const std::size_t schemeEnd = lower.find("://");
+    if (schemeEnd == std::string::npos) {
+        return ::media::Result<MediaRtpUrlEndpoint>::failure(
+            ::media::ErrorInfo::invalidArgument("RTP/UDP URL requires scheme"));
+    }
+
+    MediaRtpUrlEndpoint endpoint;
+    endpoint.scheme = lower.substr(0, schemeEnd);
+    if (endpoint.scheme != "rtp" && endpoint.scheme != "udp") {
+        return ::media::Result<MediaRtpUrlEndpoint>::failure(
+            ::media::ErrorInfo::invalidArgument("Raw RTP input requires rtp:// or udp:// URL"));
+    }
+
+    const std::size_t authorityBegin = schemeEnd + 3;
+    const std::size_t authorityEnd = normalized.find_first_of("/?#", authorityBegin);
+    const std::string authority = normalized.substr(authorityBegin,
+                                                    authorityEnd == std::string::npos
+                                                        ? std::string::npos
+                                                        : authorityEnd - authorityBegin);
+    const std::size_t colon = authority.rfind(':');
+    if (colon == std::string::npos || colon == 0 || colon + 1 >= authority.size()) {
+        return ::media::Result<MediaRtpUrlEndpoint>::failure(
+            ::media::ErrorInfo::invalidArgument("Raw RTP input URL requires host and port"));
+    }
+
+    endpoint.host = authority.substr(0, colon);
+    auto port = parsePortText(authority.substr(colon + 1));
+    if (!port) {
+        return ::media::Result<MediaRtpUrlEndpoint>::failure(port.error());
+    }
+    endpoint.port = port.value();
+    return ::media::Result<MediaRtpUrlEndpoint>::success(std::move(endpoint));
 }
 
 } // namespace media::ffmpeg::graph

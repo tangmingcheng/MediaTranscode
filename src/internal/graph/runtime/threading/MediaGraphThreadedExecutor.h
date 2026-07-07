@@ -44,13 +44,13 @@ public:
     const MediaGraphRuntimeMetrics& metrics() const noexcept;
 
 private:
-    void refreshMetrics() noexcept;
+    void refreshMetrics() const noexcept;
 
 private:
     MediaThreadingPolicy m_policy;
     MediaGraphThreadedExecutorState m_state = MediaGraphThreadedExecutorState::Idle;
     std::vector<std::unique_ptr<MediaGraphWorker>> m_workers;
-    MediaGraphRuntimeMetrics m_metrics;
+    mutable MediaGraphRuntimeMetrics m_metrics;
 };
 
 } // namespace media::ffmpeg::graph
