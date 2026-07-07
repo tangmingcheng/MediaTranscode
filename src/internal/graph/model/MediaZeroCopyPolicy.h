@@ -26,7 +26,7 @@ struct MediaZeroCopyPolicy {
     bool allowHardwareMapping = true;
     bool allowHardwareDownload = true;
     bool allowHardwareUpload = true;
-    bool allowSoftwareFallback = true;
+    bool allowSoftwareTransfer = true;
 
     constexpr bool enabled() const noexcept
     {

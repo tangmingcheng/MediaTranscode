@@ -1,5 +1,6 @@
 #include "internal/graph/builder/local/LocalFileTranscodeGraphBuilder.h"
 #include "internal/graph/builder/realtime/MediaRealtimeRtpTranscodeGraphBuilder.h"
+#include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/runtime/MediaGraphRuntime.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
 
@@ -16,14 +17,20 @@ using namespace media::ffmpeg::graph;
 
 namespace {
 
-std::string argValue(int argc, char** argv, const std::string& key, const std::string& fallback = {})
+std::string argValue(int argc, char** argv, const std::string& key)
 {
     for (int i = 1; i + 1 < argc; ++i) {
         if (std::string(argv[i]) == key) {
             return argv[i + 1];
         }
     }
-    return fallback;
+    return {};
+}
+
+std::string argValue(int argc, char** argv, const std::string& key, const std::string& missingValue)
+{
+    const std::string value = argValue(argc, argv, key);
+    return value.empty() ? missingValue : value;
 }
 
 bool hasArg(int argc, char** argv, const std::string& key)
@@ -58,10 +65,66 @@ std::optional<int> optionalIntArg(int argc, char** argv, const std::string& key)
     return result;
 }
 
-int intArg(int argc, char** argv, const std::string& key, int fallback)
+int requiredIntArg(int argc, char** argv, const std::string& key)
 {
     auto value = optionalIntArg(argc, argv, key);
-    return value.value_or(fallback);
+    if (!value) {
+        throw std::invalid_argument("missing required integer argument: " + key);
+    }
+    return *value;
+}
+
+std::size_t requiredSizeArg(int argc, char** argv, const std::string& key)
+{
+    const int value = requiredIntArg(argc, argv, key);
+    if (value <= 0) {
+        throw std::invalid_argument(key + " must be positive");
+    }
+    return static_cast<std::size_t>(value);
+}
+
+std::string requiredArg(int argc, char** argv, const std::string& key)
+{
+    const std::string value = argValue(argc, argv, key);
+    if (value.empty()) {
+        throw std::invalid_argument("missing required argument: " + key);
+    }
+    return value;
+}
+
+std::optional<MediaRealtimeInputKind> realtimeInputKindArg(int argc, char** argv)
+{
+    const std::string value = argValue(argc, argv, "--input-kind");
+    if (value.empty()) {
+        return std::nullopt;
+    }
+    if (value == "url") {
+        return MediaRealtimeInputKind::RealtimeUrl;
+    }
+    if (value == "raw-rtp") {
+        return MediaRealtimeInputKind::RawRtp;
+    }
+    throw std::invalid_argument("unsupported --input-kind: " + value);
+}
+
+bool requiredRealtimeBoolArg(int argc, char** argv, const std::string& trueKey, const std::string& falseKey)
+{
+    const bool trueArg = hasArg(argc, argv, trueKey);
+    const bool falseArg = hasArg(argc, argv, falseKey);
+    if (trueArg == falseArg) {
+        throw std::invalid_argument("specify exactly one of " + trueKey + " or " + falseKey);
+    }
+    return trueArg;
+}
+
+MediaRateControlMode requiredRateControlArg(int argc, char** argv, const std::string& key)
+{
+    const std::string value = requiredArg(argc, argv, key);
+    MediaRateControlMode mode = MediaRateControlMode::Auto;
+    if (!parseMediaRateControlMode(value, mode)) {
+        throw std::invalid_argument("unsupported rate control mode for " + key + ": " + value);
+    }
+    return mode;
 }
 
 MediaRateControlMode rateControlArg(int argc, char** argv, const std::string& key)
@@ -105,6 +168,7 @@ LocalFileTranscodeOptions parseOptions(int argc, char** argv)
     rejectRemovedArg(argc, argv, "--encoder");
     rejectRemovedArg(argc, argv, "--audio-encoder");
     rejectRemovedArg(argc, argv, "--audio-transcode");
+    rejectRemovedArg(argc, argv, "--bframes");
 
     LocalFileTranscodeOptions options;
     options.inputUrl = argValue(argc, argv, "--input");
@@ -135,8 +199,6 @@ LocalFileTranscodeOptions parseOptions(int argc, char** argv)
     parameters.video.bufferSizeKbits = optionalIntArg(argc, argv, "--buffer-size");
     parameters.video.quality = optionalIntArg(argc, argv, "--quality");
     parameters.video.gop = optionalIntArg(argc, argv, "--gop");
-    parameters.video.bFrames = optionalIntArg(argc, argv, "--bframes");
-
     parameters.audio.codecName = argValue(argc, argv, "--audio-codec", parameters.audio.codecName);
     parameters.audio.rateControl = rateControlArg(argc, argv, "--audio-rc");
     parameters.audio.bitrateKbps = optionalIntArg(argc, argv, "--audio-bitrate");
@@ -151,34 +213,42 @@ LocalFileTranscodeOptions parseOptions(int argc, char** argv)
     return options;
 }
 
-MediaRealtimeGraphBuilderOptions parseRealtimeOptions(int argc, char** argv)
+MediaRealtimeRtpTranscodeRequest parseRealtimeOptions(int argc, char** argv)
 {
-    MediaRealtimeGraphBuilderOptions options;
-    options.kind = MediaRealtimeGraphKind::RtpTranscode;
-    options.input.url = argValue(argc, argv, "--input");
-    if (isUnsupportedRealtimeInputUrl(options.input.url)) {
-        throw std::invalid_argument("realtime-rtp mode supports RTSP/realtime media URLs only; raw RTP and SDP input are not supported in this phase");
+    MediaRealtimeRtpTranscodeRequest options;
+    options.input.kind = realtimeInputKindArg(argc, argv);
+    options.input.url = requiredArg(argc, argv, "--input");
+    options.input.rtspTransport = argValue(argc, argv, "--rtsp-transport");
+    options.input.openTimeoutMs = optionalIntArg(argc, argv, "--open-timeout-ms");
+    options.input.readTimeoutMs = optionalIntArg(argc, argv, "--read-timeout-ms");
+    options.input.analyzeDurationUs = optionalIntArg(argc, argv, "--analyze-duration-us");
+    options.input.probeSizeBytes = optionalIntArg(argc, argv, "--probe-size");
+    if (hasArg(argc, argv, "--low-latency") || hasArg(argc, argv, "--no-low-latency")) {
+        options.input.lowLatency = requiredRealtimeBoolArg(argc, argv, "--low-latency", "--no-low-latency");
     }
-    options.input.rtspTransport = argValue(argc, argv, "--rtsp-transport", "tcp");
-    options.input.openTimeoutMs = intArg(argc, argv, "--open-timeout-ms", 5000);
-    options.input.readTimeoutMs = intArg(argc, argv, "--read-timeout-ms", 5000);
-    options.input.analyzeDurationUs = intArg(argc, argv, "--analyze-duration-us", 500000);
-    options.input.probeSizeBytes = intArg(argc, argv, "--probe-size", 512 * 1024);
-    options.input.lowLatency = !hasArg(argc, argv, "--no-low-latency");
-    options.output.host = argValue(argc, argv, "--rtp-host", "127.0.0.1");
-    options.output.basePort = static_cast<std::size_t>(intArg(argc, argv, "--rtp-port", 5004));
-    options.output.sdpPath = argValue(argc, argv, "--sdp", "realtime-rtp.sdp");
-    options.output.packetSize = intArg(argc, argv, "--packet-size", 1200);
+    options.input.rtp.codecName = argValue(argc, argv, "--rtp-codec");
+    options.input.rtp.payloadType = optionalIntArg(argc, argv, "--rtp-payload-type");
+    options.input.rtp.clockRate = optionalIntArg(argc, argv, "--rtp-clock-rate");
+    options.output.host = argValue(argc, argv, "--rtp-host");
+    if (auto port = optionalIntArg(argc, argv, "--rtp-port")) {
+        options.output.basePort = static_cast<std::size_t>(*port);
+    }
+    options.output.sdpPath = argValue(argc, argv, "--sdp");
+    options.output.packetSize = optionalIntArg(argc, argv, "--packet-size");
     options.output.url = argValue(argc, argv, "--output");
 
     MediaTranscodeParameterSet& parameters = options.parameters;
-    parameters.execution.includeVideo = !hasArg(argc, argv, "--no-video");
-    parameters.execution.includeAudio = false;
-    parameters.execution.disableHardware = hasArg(argc, argv, "--disable-hw");
-    parameters.execution.diagnosticLogEnabled = !hasArg(argc, argv, "--quiet-graph");
-    parameters.video.codecName = argValue(argc, argv, "--video-codec", "h264");
-    parameters.video.rateControl = rateControlArg(argc, argv, "--rc");
-    parameters.video.preset = argValue(argc, argv, "--preset", "fast");
+    parameters.execution.includeVideo = requiredRealtimeBoolArg(argc, argv, "--video", "--no-video");
+    parameters.execution.includeAudio = requiredRealtimeBoolArg(argc, argv, "--audio", "--no-audio");
+    parameters.execution.disableHardware = !requiredRealtimeBoolArg(argc, argv, "--enable-hw", "--disable-hw");
+    parameters.execution.diagnosticLogEnabled = requiredRealtimeBoolArg(argc, argv, "--graph-diagnostics", "--quiet-graph");
+    parameters.queues.metadata = requiredSizeArg(argc, argv, "--metadata-queue");
+    parameters.queues.packet = requiredSizeArg(argc, argv, "--packet-queue");
+    parameters.queues.frame = requiredSizeArg(argc, argv, "--frame-queue");
+    parameters.queues.mux = requiredSizeArg(argc, argv, "--mux-queue");
+    parameters.video.codecName = requiredArg(argc, argv, "--video-codec");
+    parameters.video.rateControl = requiredRateControlArg(argc, argv, "--rc");
+    parameters.video.preset = argValue(argc, argv, "--preset");
     parameters.video.profile = argValue(argc, argv, "--profile", parameters.video.profile);
     parameters.video.tune = argValue(argc, argv, "--tune", parameters.video.tune);
     parameters.video.level = argValue(argc, argv, "--level", parameters.video.level);
@@ -194,7 +264,6 @@ MediaRealtimeGraphBuilderOptions parseRealtimeOptions(int argc, char** argv)
     parameters.video.bufferSizeKbits = optionalIntArg(argc, argv, "--buffer-size");
     parameters.video.quality = optionalIntArg(argc, argv, "--quality");
     parameters.video.gop = optionalIntArg(argc, argv, "--gop");
-    parameters.video.bFrames = 0;
     return options;
 }
 
@@ -208,37 +277,60 @@ const MediaNode* findNodeByKind(const MediaGraph& graph, MediaNodeKind kind)
     return nullptr;
 }
 
-void printRealtimePlanSummary(const MediaGraph& graph)
+::media::Status printRealtimePlanSummary(const MediaGraph& graph)
 {
     const MediaNode* encoder = findNodeByKind(graph, MediaNodeKind::VideoEncode);
     if (!encoder) {
-        return;
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("realtime graph plan summary requires VideoEncode node"));
     }
 
-    std::cout << "[CLI] selected_chain=" << encoder->options.value("pipeline.chain", "unknown")
-              << " score=" << encoder->options.value("pipeline.score", "0")
-              << " decoder=" << encoder->options.value("decoder.pipeline.ffmpeg", "unknown")
-              << " filter=" << encoder->options.value("filter.pipeline.filter", "unknown")
-              << " encoder=" << encoder->options.value("encoder", "unknown")
+    auto chain = requiredNodeOption(&encoder->options, "graph CLI realtime plan summary", "pipeline.chain");
+    if (!chain) {
+        return ::media::Status::failure(chain.error());
+    }
+    auto score = requiredNodeOption(&encoder->options, "graph CLI realtime plan summary", "pipeline.score");
+    if (!score) {
+        return ::media::Status::failure(score.error());
+    }
+    auto decoder = requiredNodeOption(&encoder->options, "graph CLI realtime plan summary", "decoder.pipeline.ffmpeg");
+    if (!decoder) {
+        return ::media::Status::failure(decoder.error());
+    }
+    auto filter = requiredNodeOption(&encoder->options, "graph CLI realtime plan summary", "filter.pipeline.filter");
+    if (!filter) {
+        return ::media::Status::failure(filter.error());
+    }
+    auto encoderName = requiredNodeOption(&encoder->options, "graph CLI realtime plan summary", "encoder");
+    if (!encoderName) {
+        return ::media::Status::failure(encoderName.error());
+    }
+
+    std::cout << "[CLI] selected_chain=" << chain.value()
+              << " score=" << score.value()
+              << " decoder=" << decoder.value()
+              << " filter=" << filter.value()
+              << " encoder=" << encoderName.value()
               << '\n';
+    return ::media::Status::success();
 }
 
 int runGraphTranscodeCli(int argc, char** argv)
 {
     const std::string mode = argValue(argc, argv, "--mode", "local-file");
-    if (argc < 5 || hasArg(argc, argv, "--help") || hasArg(argc, argv, "-h")) {
+    const bool helpRequested = hasArg(argc, argv, "--help") || hasArg(argc, argv, "-h");
+    if (argc < 5 || helpRequested) {
         std::cout << "Usage: media_transcode_graph_transcode_cli --input in.mp4 --output out.mp4 [options]\n";
-        std::cout << "       media_transcode_graph_transcode_cli --mode realtime-rtp --input rtsp://... --rtp-host 127.0.0.1 --rtp-port 5004 --sdp out.sdp --duration 15\n";
+        std::cout << "       media_transcode_graph_transcode_cli --mode realtime-rtp --input-kind url --input rtsp://... --rtsp-transport tcp --open-timeout-ms 5000 --read-timeout-ms 5000 --analyze-duration-us 500000 --probe-size 524288 --low-latency --rtp-host 127.0.0.1 --rtp-port 5004 --sdp out.sdp --packet-size 1200 --video --no-audio --enable-hw --graph-diagnostics --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --video-codec h264 --rc auto --duration 15\n";
         std::cout << "       encoder selection is automatic and planner-owned\n";
-        std::cout << "       add --quiet-graph to disable runtime graph diagnostics\n";
-        return argc < 5 ? 2 : 0;
+        std::cout << "       realtime mode requires exactly one of --graph-diagnostics or --quiet-graph\n";
+        return helpRequested ? 0 : 2;
     }
 
     if (mode == "realtime-rtp") {
-        MediaRealtimeGraphBuilderOptions options = parseRealtimeOptions(argc, argv);
-        const int durationSeconds = intArg(argc, argv, "--duration", 15);
+        MediaRealtimeRtpTranscodeRequest options = parseRealtimeOptions(argc, argv);
+        const int durationSeconds = requiredIntArg(argc, argv, "--duration");
         std::cout << "[CLI] realtime input=" << redactUrlUserInfo(options.input.url)
-                  << " rtp=" << options.output.host << ':' << options.output.basePort
                   << " sdp=" << options.output.sdpPath
                   << " duration=" << durationSeconds
                   << " hw=" << (options.parameters.execution.disableHardware ? "disabled" : "auto")
@@ -249,7 +341,10 @@ int runGraphTranscodeCli(int argc, char** argv)
             return failResult("realtime graph build", graphResult);
         }
         MediaGraph graph = std::move(graphResult).value();
-        printRealtimePlanSummary(graph);
+        auto summaryStatus = printRealtimePlanSummary(graph);
+        if (!summaryStatus) {
+            return failStatus("print realtime plan summary", summaryStatus);
+        }
 
         MediaGraphRuntime runtime;
         runtime.setDiagnosticsEnabled(options.parameters.execution.diagnosticLogEnabled);

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "internal/FFmpegRAII.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 
@@ -43,7 +43,7 @@ private:
     bool m_trailerWritten = false;
     bool m_formatEmitted = false;
     bool m_expectationsBound = false;
-    bool m_expectVideo = true;
+    bool m_expectVideo = false;
     int m_videoStreamIndex = invalidMediaStreamIndex;
     std::size_t m_packetsWritten = 0;
     std::vector<MediaBufferRef> m_pendingStreamConfigs;

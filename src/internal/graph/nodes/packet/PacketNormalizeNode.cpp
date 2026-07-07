@@ -2,6 +2,7 @@
 
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
+#include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegDescriptorMapper.h"
@@ -12,9 +13,6 @@ extern "C" {
 #include <libavformat/avformat.h>
 }
 
-#include <algorithm>
-#include <charconv>
-#include <cctype>
 #include <string>
 
 namespace media::ffmpeg::graph {
@@ -25,53 +23,6 @@ void packetNormalizeLog(MediaGraphDiagnosticLevel level, const std::string& mess
     mediaGraphDiagnosticLog(level,
                             MediaGraphDiagnosticPhase::RuntimeNode,
                             std::string("packet_normalize.") + message);
-}
-
-std::string lowerCopy(std::string value)
-{
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-    });
-    return value;
-}
-
-::media::Result<int> parseRequiredSourceStreamIndex(const MediaNodeOptions* options)
-{
-    if (!options || !options->has(MediaTranscodeOptionKey::PacketSourceStreamIndex)) {
-        return ::media::Result<int>::failure(
-            ::media::ErrorInfo::invalidArgument("PacketNormalizeNode requires planner option packet.source_stream_index"));
-    }
-
-    const std::string value = options->value(MediaTranscodeOptionKey::PacketSourceStreamIndex);
-    int streamIndex = invalidMediaStreamIndex;
-    const char* begin = value.data();
-    const char* end = value.data() + value.size();
-    const auto result = std::from_chars(begin, end, streamIndex);
-    if (result.ec != std::errc{} || result.ptr != end || streamIndex < 0) {
-        return ::media::Result<int>::failure(
-            ::media::ErrorInfo::invalidArgument("PacketNormalizeNode received invalid packet.source_stream_index"));
-    }
-
-    return ::media::Result<int>::success(streamIndex);
-}
-
-::media::Result<MediaStreamKind> parseRequiredStreamKind(const MediaNodeOptions* options)
-{
-    if (!options || !options->has(MediaTranscodeOptionKey::PacketStreamKind)) {
-        return ::media::Result<MediaStreamKind>::failure(
-            ::media::ErrorInfo::invalidArgument("PacketNormalizeNode requires planner option packet.stream_kind"));
-    }
-
-    const std::string value = lowerCopy(options->value(MediaTranscodeOptionKey::PacketStreamKind));
-    if (value == "video") {
-        return ::media::Result<MediaStreamKind>::success(MediaStreamKind::Video);
-    }
-    if (value == "audio") {
-        return ::media::Result<MediaStreamKind>::success(MediaStreamKind::Audio);
-    }
-
-    return ::media::Result<MediaStreamKind>::failure(
-        ::media::ErrorInfo::invalidArgument("PacketNormalizeNode supports packet.stream_kind values: video, audio"));
 }
 
 bool streamTypeMatches(MediaStreamKind streamKind, const AVStream* stream) noexcept
@@ -179,11 +130,15 @@ MediaNodeKind PacketNormalizeNode::staticKind() noexcept
 
 ::media::Status PacketNormalizeNode::bindSourceStream(MediaGraphExecutionContext& context)
 {
-    auto streamKind = parseRequiredStreamKind(nodeOptions(context));
+    auto streamKind = requiredStreamKindNodeOption(nodeOptions(context),
+                                                   "PacketNormalizeNode",
+                                                   MediaTranscodeOptionKey::PacketStreamKind);
     if (!streamKind) {
         return ::media::Status::failure(streamKind.error());
     }
-    auto streamIndex = parseRequiredSourceStreamIndex(nodeOptions(context));
+    auto streamIndex = requiredNonNegativeIntNodeOption(nodeOptions(context),
+                                                        "PacketNormalizeNode",
+                                                        MediaTranscodeOptionKey::PacketSourceStreamIndex);
     if (!streamIndex) {
         return ::media::Status::failure(streamIndex.error());
     }

@@ -1,116 +1,71 @@
 # MediaTranscode
 
-MediaTranscode is a C++ media transcoding library built around a capability-oriented public API and FFmpeg-backed internal implementations.
+MediaTranscode is a C++20 and FFmpeg-backed media transcode framework centered on the graph DAG architecture.
 
-## Public API layout
+The active code path is the graph runtime:
 
 ```text
+src/internal/graph/        # graph model, planner, builder, runtime, and runtime nodes
+tools/graph_transcode_cli/ # graph CLI entry point
 include/media_transcode/
-    MediaTranscode.h          # Umbrella public header
-    MediaTypes.h              # Shared public enum values
-    LocalVideoTranscode.h     # Local video transcode capability API
-    Result.h                  # Result<T> and ErrorInfo
+    Result.h               # shared Result<T> and ErrorInfo type
 ```
 
-For new code, prefer including the narrowest header you need:
-
-```cpp
-#include "media_transcode/LocalVideoTranscode.h"
-```
-
-Use `MediaTranscode.h` when you want the umbrella public API entry point.
+Only the graph architecture and `Result.h` are documented as active project surfaces.
 
 ## Build
 
+Use the existing CMake flow:
+
 ```bash
-cmake -S . -B build
-cmake --build build
+cmake -S . -B out/build/x64-debug -DMEDIA_TRANSCODE_BUILD_TESTS=ON
+cmake --build out/build/x64-debug --target media_transcode_core
+cmake --build out/build/x64-debug --target media_transcode_graph_transcode_cli
+cmake --build out/build/x64-debug --target media_transcode_realtime_graph_tests
 ```
 
 Useful CMake options:
 
 ```text
-MEDIA_TRANSCODE_BUILD_CLI=ON
-MEDIA_TRANSCODE_BUILD_EXAMPLES=ON
+MEDIA_TRANSCODE_BUILD_GRAPH_TOOLS=ON
 MEDIA_TRANSCODE_BUILD_TESTS=ON
-MEDIA_TRANSCODE_ENABLE_INTEGRATION_TESTS=ON
-MEDIA_TRANSCODE_ENABLE_HARDWARE_TESTS=OFF
 MEDIA_TRANSCODE_TEST_SAMPLES_DIR=<path>
 ```
 
-Hardware-dependent tests are intentionally disabled by default. The default examples and integration tests force software mode so they remain portable across developer machines and CI environments.
+## Realtime RTP DAG Path
 
-## Examples
-
-Small public API examples live in:
+The current realtime path is video-only:
 
 ```text
-examples/api/
+RTSP or realtime URL input
+    -> graph planner
+    -> realtime DAG builder
+    -> graph runtime nodes
+    -> RTP output + SDP
 ```
 
-Current examples:
+Run the graph CLI in realtime RTP mode:
 
-```text
-local_transcode_sync.cpp            # Synchronous local video transcode
-local_transcode_async.cpp           # Async transcode with opaque job handle
-local_transcode_cancel.cpp          # Stop/wait job lifecycle
-local_transcode_error_handling.cpp  # Result<T> / ErrorInfo handling
+```powershell
+out/build/x64-debug/media_transcode_graph_transcode_cli.exe --mode realtime-rtp --input-kind url --input rtsp://... --rtsp-transport tcp --open-timeout-ms 5000 --read-timeout-ms 5000 --analyze-duration-us 500000 --probe-size 524288 --low-latency --rtp-host 127.0.0.1 --rtp-port 5004 --sdp out/build/x64-debug/realtime-rtp.sdp --packet-size 1200 --video --no-audio --enable-hw --graph-diagnostics --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --video-codec h264 --rc auto --duration 15
 ```
 
-The CLI-oriented demo remains separate:
+Receiver validation can use the generated SDP while the CLI is running:
 
-```text
-examples/transcode_cli/
+```powershell
+ffplay -protocol_whitelist file,udp,rtp -i out/build/x64-debug/realtime-rtp.sdp
+ffprobe -protocol_whitelist file,udp,rtp -i out/build/x64-debug/realtime-rtp.sdp
 ```
+
+Raw RTP input is planned but not part of the current completed path.
 
 ## Tests
 
-Enable tests at configure time:
+Build and run the active graph test target:
 
-```bash
-cmake -S . -B build -DMEDIA_TRANSCODE_BUILD_TESTS=ON
-cmake --build build
-ctest --test-dir build --output-on-failure
+```powershell
+cmake --build out/build/x64-debug --target media_transcode_realtime_graph_tests
+out/build/x64-debug/media_transcode_realtime_graph_tests.exe
 ```
 
-Test groups:
-
-```text
-tests/compile/      # Public header compile/include tests
-tests/unit/         # Fast public API and validation tests
-tests/integration/  # FFmpeg-backed smoke tests
-tests/samples/      # Small media samples used by integration/regression tests
-```
-
-The integration smoke test uses:
-
-```text
-tests/samples/sample_h264_aac_320x240.mp4
-```
-
-You can override the sample directory:
-
-```bash
-cmake -S . -B build -DMEDIA_TRANSCODE_TEST_SAMPLES_DIR=/path/to/samples
-```
-
-If a required integration sample is missing, the test returns `77`, and CTest marks it as skipped.
-
-## Current public API pattern
-
-Local video transcoding uses an opaque job handle plus free functions:
-
-```cpp
-media::LocalVideoTranscodeConfig config;
-config.inputPath = "input.mp4";
-config.outputPath = "output.mp4";
-config.videoCodec = media::VideoCodec::H264;
-config.disableHardware = true;
-
-const auto result = media::startLocalVideoTranscodeSync(config);
-if (!result) {
-    // result.error().describe()
-}
-```
-
-Async usage returns `LocalVideoTranscodeJobHandle`; callers operate on it through `waitLocalVideoTranscode`, `stopLocalVideoTranscode`, and query functions.
+`tests/samples/` is reserved for small media fixtures used by graph validation.

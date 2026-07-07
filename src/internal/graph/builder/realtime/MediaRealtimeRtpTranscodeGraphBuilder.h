@@ -1,14 +1,15 @@
 #pragma once
 
-#include "internal/graph/builder/realtime/MediaRealtimeGraphBuilder.h"
+#include "internal/graph/core/MediaGraph.h"
+#include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodeRequest.h"
 #include "media_transcode/Result.h"
 
 namespace media::ffmpeg::graph {
 
 class MediaRealtimeRtpTranscodeGraphBuilder final {
 public:
-    static ::media::Result<MediaGraph> build(const MediaRealtimeGraphBuilderOptions& options);
-    static ::media::Status validate(const MediaRealtimeGraphBuilderOptions& options);
+    static ::media::Result<MediaGraph> build(const MediaRealtimeRtpTranscodeRequest& request);
+    static ::media::Status validate(const MediaRealtimeRtpTranscodeRequest& request);
 
 private:
     MediaRealtimeRtpTranscodeGraphBuilder() = default;

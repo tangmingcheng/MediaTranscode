@@ -19,7 +19,7 @@ This stage is limited to video-only RTSP/realtime URL input. RTP raw input and a
 - Add `tools/graph_transcode_cli --mode realtime-rtp`.
 - Explicitly reject raw RTP/SDP input in this phase.
 - Redact URL userinfo in CLI and planner diagnostics.
-- Add unit coverage for validation, graph construction, and software fallback when hardware is disabled.
+- Add unit coverage for validation, graph construction, and planner-selected software execution when hardware is disabled.
 
 ## Verification
 

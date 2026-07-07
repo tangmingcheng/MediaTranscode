@@ -26,7 +26,7 @@ protected:
     const MediaNodeOptions* nodeOptions(MediaGraphExecutionContext& context) const noexcept;
     std::string nodeOption(MediaGraphExecutionContext& context,
                            const std::string& key,
-                           std::string fallback = {}) const;
+                           std::string missingValue = {}) const;
 
     ::media::Result<MediaBufferRef> popInput(MediaGraphExecutionContext& context,
                                              const std::string& portName);

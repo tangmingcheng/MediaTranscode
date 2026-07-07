@@ -7,33 +7,21 @@ namespace {
 
 constexpr const char* owner = "MediaRealtimeOptionApplier";
 
-std::string effectiveInputUrl(const MediaRealtimeGraphBuilderOptions& options)
-{
-    return options.input.url;
-}
-
-std::string effectiveOutputUrl(const MediaRealtimeGraphBuilderOptions& options)
-{
-    return !options.output.url.empty()
-        ? options.output.url
-        : "rtp://" + (options.output.host.empty() ? std::string("127.0.0.1") : options.output.host) +
-              ":" + std::to_string(options.output.basePort);
-}
-
-std::string effectiveSdpPath(const MediaRealtimeGraphBuilderOptions& options)
-{
-    return options.output.sdpPath;
-}
-
 ::media::Result<void> setOption(MediaGraph& graph,
                                 MediaNodeId nodeId,
                                 const std::string& key,
                                 const std::string& value)
 {
     if (value.empty()) {
-        return ::media::Result<void>::success();
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument("MediaRealtimeOptionApplier requires non-empty option " + key));
     }
     return MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, key, value);
+}
+
+const char* boolOption(bool value) noexcept
+{
+    return value ? "1" : "0";
 }
 
 } // namespace
@@ -41,17 +29,17 @@ std::string effectiveSdpPath(const MediaRealtimeGraphBuilderOptions& options)
 ::media::Result<void> MediaRealtimeOptionApplier::applyInputOptions(
     MediaGraph& graph,
     MediaNodeId nodeId,
-    const MediaRealtimeGraphBuilderOptions& options)
+    const MediaRealtimeRtpInputNodePlan& plan)
 {
-    if (auto status = setOption(graph, nodeId, "url", effectiveInputUrl(options)); !status) return status;
-    if (auto status = setOption(graph, nodeId, "input.rtsp_transport", options.input.rtspTransport); !status) return status;
-    if (auto status = setOption(graph, nodeId, "input.open_timeout_ms", std::to_string(options.input.openTimeoutMs)); !status) return status;
-    if (auto status = setOption(graph, nodeId, "input.read_timeout_ms", std::to_string(options.input.readTimeoutMs)); !status) return status;
-    if (auto status = setOption(graph, nodeId, "input.analyze_duration_us", std::to_string(options.input.analyzeDurationUs)); !status) return status;
-    if (auto status = setOption(graph, nodeId, "input.probe_size_bytes", std::to_string(options.input.probeSizeBytes)); !status) return status;
-    if (auto status = setOption(graph, nodeId, "input.low_latency", options.input.lowLatency ? "1" : "0"); !status) return status;
-    if (!options.mediaId.empty()) {
-        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, "media_id", options.mediaId); !status) return status;
+    if (auto status = setOption(graph, nodeId, "url", plan.url); !status) return status;
+    if (auto status = setOption(graph, nodeId, "input.rtsp_transport", plan.rtspTransport); !status) return status;
+    if (auto status = setOption(graph, nodeId, "input.open_timeout_ms", std::to_string(plan.openTimeoutMs)); !status) return status;
+    if (auto status = setOption(graph, nodeId, "input.read_timeout_ms", std::to_string(plan.readTimeoutMs)); !status) return status;
+    if (auto status = setOption(graph, nodeId, "input.analyze_duration_us", std::to_string(plan.analyzeDurationUs)); !status) return status;
+    if (auto status = setOption(graph, nodeId, "input.probe_size_bytes", std::to_string(plan.probeSizeBytes)); !status) return status;
+    if (auto status = setOption(graph, nodeId, "input.low_latency", boolOption(plan.lowLatency)); !status) return status;
+    if (!plan.mediaId.empty()) {
+        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, "media_id", plan.mediaId); !status) return status;
     }
     return ::media::Result<void>::success();
 }
@@ -59,12 +47,12 @@ std::string effectiveSdpPath(const MediaRealtimeGraphBuilderOptions& options)
 ::media::Result<void> MediaRealtimeOptionApplier::applyOutputOptions(
     MediaGraph& graph,
     MediaNodeId nodeId,
-    const MediaRealtimeGraphBuilderOptions& options)
+    const MediaRealtimeRtpOutputNodePlan& plan)
 {
-    if (auto status = setOption(graph, nodeId, "url", effectiveOutputUrl(options)); !status) return status;
-    if (auto status = setOption(graph, nodeId, "rtp.packet_size", std::to_string(options.output.packetSize)); !status) return status;
-    if (!options.mediaId.empty()) {
-        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, "media_id", options.mediaId); !status) return status;
+    if (auto status = setOption(graph, nodeId, "url", plan.url); !status) return status;
+    if (auto status = setOption(graph, nodeId, "rtp.packet_size", std::to_string(plan.packetSize)); !status) return status;
+    if (!plan.mediaId.empty()) {
+        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, "media_id", plan.mediaId); !status) return status;
     }
     return ::media::Result<void>::success();
 }
@@ -72,13 +60,22 @@ std::string effectiveSdpPath(const MediaRealtimeGraphBuilderOptions& options)
 ::media::Result<void> MediaRealtimeOptionApplier::applySdpWriterOptions(
     MediaGraph& graph,
     MediaNodeId nodeId,
-    const MediaRealtimeGraphBuilderOptions& options)
+    const MediaRealtimeSdpWriterPlan& plan)
 {
-    if (auto status = setOption(graph, nodeId, "path", effectiveSdpPath(options)); !status) return status;
-    if (!options.mediaId.empty()) {
-        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, "media_id", options.mediaId); !status) return status;
+    if (auto status = setOption(graph, nodeId, "path", plan.path); !status) return status;
+    if (!plan.mediaId.empty()) {
+        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, "media_id", plan.mediaId); !status) return status;
     }
     return ::media::Result<void>::success();
+}
+
+::media::Result<void> MediaRealtimeOptionApplier::applyMuxOptions(
+    MediaGraph& graph,
+    MediaNodeId nodeId,
+    const MediaRealtimeMuxNodePlan& plan)
+{
+    if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, MediaTranscodeOptionKey::MuxExpectVideo, boolOption(plan.expectVideo)); !status) return status;
+    return MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, MediaTranscodeOptionKey::MuxExpectAudio, boolOption(plan.expectAudio));
 }
 
 } // namespace media::ffmpeg::graph

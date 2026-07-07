@@ -1,5 +1,6 @@
 #include "internal/graph/nodes/output/RtpOutputNode.h"
 
+#include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 
@@ -59,27 +60,28 @@ MediaNodeKind RtpOutputNode::staticKind() noexcept
         return ::media::Status::success();
     }
 
-    const std::string url = nodeOption(context, "url");
-    if (url.empty()) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("RtpOutputNode requires node option: url"));
+    const MediaNodeOptions* options = nodeOptions(context);
+    auto url = requiredNodeOption(options, "RtpOutputNode", "url");
+    if (!url) {
+        return ::media::Status::failure(url.error());
+    }
+    auto packetSize = requiredPositiveIntNodeOption(options, "RtpOutputNode", "rtp.packet_size");
+    if (!packetSize) {
+        return ::media::Status::failure(packetSize.error());
     }
 
     AVFormatContext* raw = nullptr;
-    const int allocRet = avformat_alloc_output_context2(&raw, nullptr, "rtp", url.c_str());
+    const int allocRet = avformat_alloc_output_context2(&raw, nullptr, "rtp", url.value().c_str());
     if (allocRet < 0 || !raw) {
         return FFmpegGraphError::statusFromCode(allocRet < 0 ? allocRet : AVERROR_UNKNOWN,
                                                 "avformat_alloc_output_context2(rtp)");
     }
 
     m_context.reset(raw);
-    const int packetSize = std::stoi(nodeOption(context, "rtp.packet_size", "1200"));
-    if (packetSize > 0) {
-        m_context->packet_size = packetSize;
-    }
+    m_context->packet_size = packetSize.value();
 
     if (m_context->oformat && !(m_context->oformat->flags & AVFMT_NOFILE)) {
-        const int openRet = avio_open(&m_context->pb, url.c_str(), AVIO_FLAG_WRITE);
+        const int openRet = avio_open(&m_context->pb, url.value().c_str(), AVIO_FLAG_WRITE);
         if (openRet < 0) {
             return FFmpegGraphError::statusFromCode(openRet, "avio_open(rtp)");
         }

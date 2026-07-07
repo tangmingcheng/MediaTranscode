@@ -1,6 +1,6 @@
 #include "internal/graph/nodes/metadata/CodecResolverNode.h"
 
-#include "internal/FFmpegRAII.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/builder/codec/CodecResolverEncoderContextBuilder.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
@@ -27,9 +27,9 @@ struct HardwareDecoderSelection {
     bool requiresDeviceContext = false;
 };
 
-std::string optionValue(const MediaNodeOptions* options, const std::string& key, std::string fallback = {})
+std::string optionValue(const MediaNodeOptions* options, const std::string& key, std::string missingValue = {})
 {
-    return options ? options->value(key, std::move(fallback)) : std::move(fallback);
+    return options ? options->value(key, std::move(missingValue)) : std::move(missingValue);
 }
 
 bool truthyOption(const MediaNodeOptions* options, const std::string& key)

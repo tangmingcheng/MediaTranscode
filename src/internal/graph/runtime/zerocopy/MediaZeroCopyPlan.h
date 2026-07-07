@@ -25,7 +25,7 @@ struct MediaZeroCopyPlanStep {
 
 struct MediaZeroCopyPlan {
     bool zeroCopy = false;
-    bool softwareFallback = false;
+    bool softwareTransfer = false;
     std::vector<MediaZeroCopyPlanStep> steps;
 };
 

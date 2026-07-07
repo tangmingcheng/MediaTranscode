@@ -3,11 +3,38 @@
 #include <utility>
 
 namespace media::ffmpeg::graph {
+namespace {
+
+::media::Status validateOptions(const MediaRealtimePlannerOptions& options)
+{
+    if (options.edgeNodeId.empty() ||
+        options.workerNodeId.empty() ||
+        options.host.empty() ||
+        options.zone.empty()) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("MediaRealtimePlanner requires explicit node ids, host, and zone"));
+    }
+    if (options.basePort <= 0) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("MediaRealtimePlanner requires positive base port"));
+    }
+    if (options.targetLatencyUs <= 0 || options.maxLatencyUs < options.targetLatencyUs) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("MediaRealtimePlanner requires valid latency bounds"));
+    }
+    return ::media::Status::success();
+}
+
+} // namespace
 
 ::media::Result<MediaRealtimePlannerResult> MediaRealtimePlanner::plan(
     const MediaGraph& graph,
     const MediaRealtimePlannerOptions& options)
 {
+    if (auto status = validateOptions(options); !status) {
+        return ::media::Result<MediaRealtimePlannerResult>::failure(status.error());
+    }
+
     MediaRealtimePlannerResult result;
     result.topology = buildTopology(options);
     result.policy = buildPolicy(options);
@@ -25,25 +52,22 @@ namespace media::ffmpeg::graph {
 MediaGraphClusterTopology MediaRealtimePlanner::buildTopology(const MediaRealtimePlannerOptions& options)
 {
     MediaGraphClusterTopology topology;
-    const int basePort = options.basePort > 0 ? options.basePort : 19000;
-    const std::string host = options.host.empty() ? "127.0.0.1" : options.host;
-    const std::string zone = options.zone.empty() ? "realtime" : options.zone;
 
     MediaGraphClusterNode edge;
-    edge.address.nodeId = options.edgeNodeId.empty() ? "edge" : options.edgeNodeId;
-    edge.address.host = host;
-    edge.address.port = basePort;
-    edge.address.zone = zone;
+    edge.address.nodeId = options.edgeNodeId;
+    edge.address.host = options.host;
+    edge.address.port = options.basePort;
+    edge.address.zone = options.zone;
     edge.role = MediaGraphClusterNodeRole::Edge;
     edge.available = true;
     edge.weight = 1;
     topology.addNode(std::move(edge));
 
     MediaGraphClusterNode worker;
-    worker.address.nodeId = options.workerNodeId.empty() ? "worker" : options.workerNodeId;
-    worker.address.host = host;
-    worker.address.port = basePort + 1;
-    worker.address.zone = zone;
+    worker.address.nodeId = options.workerNodeId;
+    worker.address.host = options.host;
+    worker.address.port = options.basePort + 1;
+    worker.address.zone = options.zone;
     worker.role = MediaGraphClusterNodeRole::Worker;
     worker.available = true;
     worker.weight = 1;
@@ -86,7 +110,7 @@ MediaGraphPlanningPolicy MediaRealtimePlanner::buildPolicy(const MediaRealtimePl
         ? MediaZeroCopyMode::Prefer
         : MediaZeroCopyMode::Disabled;
     policy.optimizationPolicy.zeroCopyPolicy.allowHardwareMapping = true;
-    policy.optimizationPolicy.zeroCopyPolicy.allowSoftwareFallback = !options.preferZeroCopy;
+    policy.optimizationPolicy.zeroCopyPolicy.allowSoftwareTransfer = !options.preferZeroCopy;
     policy.zeroCopyPolicy = policy.optimizationPolicy.zeroCopyPolicy;
 
     return policy;

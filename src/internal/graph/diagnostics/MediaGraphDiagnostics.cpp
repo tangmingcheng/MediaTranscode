@@ -80,7 +80,7 @@ const char* mediaGraphDiagnosticLevelName(MediaGraphDiagnosticLevel level) noexc
 }
 
 MediaGraphDiagnosticLevel mediaGraphDiagnosticLevelFromString(const std::string& text,
-                                                              MediaGraphDiagnosticLevel fallback) noexcept
+                                                              MediaGraphDiagnosticLevel missingLevel) noexcept
 {
     const std::string value = lowerCopy(text);
     if (value == "off" || value == "quiet" || value == "none" || value == "0") {
@@ -98,7 +98,7 @@ MediaGraphDiagnosticLevel mediaGraphDiagnosticLevelFromString(const std::string&
     if (value == "trace" || value == "4" || value == "all") {
         return MediaGraphDiagnosticLevel::Trace;
     }
-    return fallback;
+    return missingLevel;
 }
 
 const char* mediaGraphDiagnosticNodeKindName(MediaNodeKind kind) noexcept

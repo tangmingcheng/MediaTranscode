@@ -18,7 +18,7 @@ namespace media::ffmpeg::graph {
         return ::media::Result<MediaBufferRef>::success(input);
     }
 
-    if (plan.softwareFallback) {
+    if (plan.softwareTransfer) {
         return ::media::Result<MediaBufferRef>::success(input);
     }
 

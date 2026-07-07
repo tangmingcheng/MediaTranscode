@@ -39,7 +39,7 @@ struct MediaBufferPolicy {
     bool requireWritable = false;
     bool zeroCopyPreferred = true;
     bool allowHardwareFrames = true;
-    bool allowSoftwareFallback = true;
+    bool allowSoftwareTransfer = true;
 
     constexpr bool usesPool() const noexcept
     {

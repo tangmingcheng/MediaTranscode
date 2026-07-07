@@ -11,7 +11,7 @@ public:
 
     void set(std::string key, std::string value);
     bool has(const std::string& key) const;
-    std::string value(const std::string& key, std::string fallback = {}) const;
+    std::string value(const std::string& key, std::string missingValue = {}) const;
     const Map& values() const noexcept;
     bool empty() const noexcept;
     void clear();

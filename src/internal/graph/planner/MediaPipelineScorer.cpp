@@ -147,7 +147,7 @@ std::string availableReason(const MediaPipelineChainPlan& chain,
     if (chain.decoder.hardware || chain.encoder.hardware || (options.filterRequired && chain.filter.hardware)) {
         return options.filterRequired ? "mixed hardware/software chain" : "mixed hardware/software chain; filter stage not required";
     }
-    return std::string("software fallback chain; score=") + softwareScoreText;
+    return std::string("explicit software chain; score=") + softwareScoreText;
 }
 
 void logCandidate(const MediaPipelinePlannerOptions& options,

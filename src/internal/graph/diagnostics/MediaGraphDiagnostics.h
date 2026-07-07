@@ -50,7 +50,7 @@ enum class MediaGraphDiagnosticPhase {
 const char* mediaGraphDiagnosticPhaseName(MediaGraphDiagnosticPhase phase) noexcept;
 const char* mediaGraphDiagnosticLevelName(MediaGraphDiagnosticLevel level) noexcept;
 MediaGraphDiagnosticLevel mediaGraphDiagnosticLevelFromString(const std::string& text,
-                                                              MediaGraphDiagnosticLevel fallback) noexcept;
+                                                              MediaGraphDiagnosticLevel missingLevel) noexcept;
 
 const char* mediaGraphDiagnosticNodeKindName(MediaNodeKind kind) noexcept;
 const char* mediaGraphDiagnosticStreamKindName(MediaStreamKind kind) noexcept;

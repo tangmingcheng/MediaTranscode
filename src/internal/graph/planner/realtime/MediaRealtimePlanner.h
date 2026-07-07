@@ -11,19 +11,19 @@
 namespace media::ffmpeg::graph {
 
 struct MediaRealtimePlannerOptions {
-    std::string edgeNodeId = "edge";
-    std::string workerNodeId = "worker";
-    std::string host = "127.0.0.1";
-    std::string zone = "realtime";
-    int basePort = 19000;
+    std::string edgeNodeId;
+    std::string workerNodeId;
+    std::string host;
+    std::string zone;
+    int basePort;
 
-    int64_t targetLatencyUs = 50000;
-    int64_t maxLatencyUs = 150000;
+    int64_t targetLatencyUs;
+    int64_t maxLatencyUs;
 
-    bool enableGpuPlanning = true;
-    bool enableMeshPlanning = true;
-    bool preferZeroCopy = true;
-    bool enableNodeFusion = true;
+    bool enableGpuPlanning;
+    bool enableMeshPlanning;
+    bool preferZeroCopy;
+    bool enableNodeFusion;
 };
 
 struct MediaRealtimePlannerResult {
@@ -36,10 +36,10 @@ class MediaRealtimePlanner final {
 public:
     static ::media::Result<MediaRealtimePlannerResult> plan(
         const MediaGraph& graph,
-        const MediaRealtimePlannerOptions& options = {});
+        const MediaRealtimePlannerOptions& options);
 
-    static MediaGraphClusterTopology buildTopology(const MediaRealtimePlannerOptions& options = {});
-    static MediaGraphPlanningPolicy buildPolicy(const MediaRealtimePlannerOptions& options = {});
+    static MediaGraphClusterTopology buildTopology(const MediaRealtimePlannerOptions& options);
+    static MediaGraphPlanningPolicy buildPolicy(const MediaRealtimePlannerOptions& options);
 };
 
 } // namespace media::ffmpeg::graph
