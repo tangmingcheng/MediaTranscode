@@ -51,6 +51,10 @@ MediaRealtimeRtpTranscodeRequest validRealtimeOptions()
     options.parameters.execution.includeVideo = true;
     options.parameters.execution.includeAudio = false;
     options.parameters.execution.disableHardware = true;
+    options.parameters.queues.metadata = 1;
+    options.parameters.queues.packet = 256;
+    options.parameters.queues.frame = 128;
+    options.parameters.queues.mux = 256;
     options.parameters.video.codecName = "h264";
     return options;
 }
