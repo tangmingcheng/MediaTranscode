@@ -85,7 +85,7 @@ bool isUnsupportedRealtimeInputUrl(const std::string& url)
 
 ::media::Result<MediaRtpUrlEndpoint> parseRtpUdpUrlEndpoint(const std::string& url)
 {
-    const std::string normalized = stripUrlQueryAndFragment(url);
+    const std::string normalized = url;
     const std::string lower = lowerAscii(normalized);
     const std::size_t schemeEnd = lower.find("://");
     if (schemeEnd == std::string::npos) {
@@ -101,11 +101,12 @@ bool isUnsupportedRealtimeInputUrl(const std::string& url)
     }
 
     const std::size_t authorityBegin = schemeEnd + 3;
-    const std::size_t authorityEnd = normalized.find_first_of("/?#", authorityBegin);
-    const std::string authority = normalized.substr(authorityBegin,
-                                                    authorityEnd == std::string::npos
-                                                        ? std::string::npos
-                                                        : authorityEnd - authorityBegin);
+    if (normalized.find_first_of("/?#", authorityBegin) != std::string::npos) {
+        return ::media::Result<MediaRtpUrlEndpoint>::failure(
+            ::media::ErrorInfo::invalidArgument("Raw RTP input URL must be exactly rtp://host:port or udp://host:port"));
+    }
+
+    const std::string authority = normalized.substr(authorityBegin);
     const std::size_t colon = authority.rfind(':');
     if (colon == std::string::npos || colon == 0 || colon + 1 >= authority.size()) {
         return ::media::Result<MediaRtpUrlEndpoint>::failure(

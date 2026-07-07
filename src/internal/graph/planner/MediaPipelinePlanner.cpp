@@ -3,30 +3,15 @@
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/planner/MediaPipelineCapabilityScanner.h"
 #include "internal/graph/planner/MediaPipelineScorer.h"
+#include "internal/graph/utils/MediaCodecNameUtils.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
 
-#include <algorithm>
-#include <cctype>
 #include <sstream>
 #include <utility>
 
 namespace media::ffmpeg::graph {
 
 namespace {
-
-std::string canonicalCodecName(std::string codec)
-{
-    std::transform(codec.begin(), codec.end(), codec.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-    });
-    if (codec == "avc" || codec == "h.264") {
-        return "h264";
-    }
-    if (codec == "h265" || codec == "h.265") {
-        return "hevc";
-    }
-    return codec;
-}
 
 std::string stageDisplayName(const MediaPipelineStagePlan& stage)
 {

@@ -1,9 +1,8 @@
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 
+#include "internal/graph/utils/MediaCodecNameUtils.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
 
-#include <algorithm>
-#include <cctype>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -35,17 +34,6 @@ bool planSoftwareChain(const MediaTranscodeExecutionParameters& execution) noexc
 std::string planPreferredHardware(const MediaTranscodeExecutionParameters& execution)
 {
     return planGpuPreference(execution) ? "auto" : "software";
-}
-
-std::string canonicalRawRtpCodecName(std::string codec)
-{
-    std::transform(codec.begin(), codec.end(), codec.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-    });
-    if (codec == "avc" || codec == "h.264") {
-        return "h264";
-    }
-    return codec;
 }
 
 MediaVideoTranscodeParameters planRealtimeVideoParameters(const MediaVideoTranscodeParameters& requested)
@@ -106,7 +94,7 @@ MediaVideoTranscodeParameters planRealtimeVideoParameters(const MediaVideoTransc
         return ::media::Result<MediaRtpUrlEndpoint>::failure(
             ::media::ErrorInfo::invalidArgument("Raw RTP input requires codec name, payload type, and clock rate"));
     }
-    if (canonicalRawRtpCodecName(options.input.rtp.codecName) != "h264") {
+    if (canonicalCodecName(options.input.rtp.codecName) != "h264") {
         return ::media::Result<MediaRtpUrlEndpoint>::failure(
             ::media::ErrorInfo::invalidArgument("Raw RTP input currently supports H264 only"));
     }

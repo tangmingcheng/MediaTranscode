@@ -97,7 +97,7 @@ RealtimeRtpInputCliRuntimeOptions parseRuntimeOptions(int argc, char** argv)
     using Clock = std::chrono::steady_clock;
     const auto startedAt = Clock::now();
     auto lastProgressAt = startedAt;
-    uint64_t lastPushed = 0;
+    uint64_t lastEncodedPacketsPushed = 0;
     bool observedProgress = false;
     const auto workerStartupGrace = std::chrono::milliseconds(
         std::min(options.progressTimeoutMs, std::max(options.pollIntervalMs * 2, 1000)));
@@ -116,8 +116,8 @@ RealtimeRtpInputCliRuntimeOptions parseRuntimeOptions(int argc, char** argv)
             return ::media::Status::failure(
                 ::media::ErrorInfo::notInitialized("realtime runtime has no active workers"));
         }
-        if (report.metrics.totalPushed > lastPushed) {
-            lastPushed = report.metrics.totalPushed;
+        if (report.metrics.encodedPacketsPushed > lastEncodedPacketsPushed) {
+            lastEncodedPacketsPushed = report.metrics.encodedPacketsPushed;
             lastProgressAt = Clock::now();
             observedProgress = true;
         }

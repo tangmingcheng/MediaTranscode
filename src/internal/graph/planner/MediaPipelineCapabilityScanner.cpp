@@ -3,6 +3,7 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegRealtimeInputOptions.h"
+#include "internal/graph/utils/MediaCodecNameUtils.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -12,8 +13,6 @@ extern "C" {
 #include <libavutil/hwcontext.h>
 }
 
-#include <algorithm>
-#include <cctype>
 #include <cstdlib>
 #include <sstream>
 #include <string>
@@ -30,26 +29,6 @@ struct HardwareCapability {
 };
 
 using HardwareCapabilityCache = std::unordered_map<std::string, HardwareCapability>;
-
-std::string lowerCopy(std::string value)
-{
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-    });
-    return value;
-}
-
-std::string canonicalCodecName(std::string codec)
-{
-    codec = lowerCopy(std::move(codec));
-    if (codec == "avc" || codec == "h.264") {
-        return "h264";
-    }
-    if (codec == "h265" || codec == "h.265") {
-        return "hevc";
-    }
-    return codec;
-}
 
 std::string ffmpegErrorString(int errorCode)
 {

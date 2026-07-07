@@ -69,6 +69,21 @@ const MediaNode* findNodeByKind(const MediaGraph& graph, MediaNodeKind kind)
     return nullptr;
 }
 
+const MediaEdge* findEdgeBetweenKinds(const MediaGraph& graph,
+                                      MediaNodeKind fromKind,
+                                      MediaNodeKind toKind,
+                                      MediaEdgeKind edgeKind)
+{
+    for (const MediaEdge& edge : graph.edges()) {
+        const MediaNode* from = graph.findNode(edge.from.nodeId);
+        const MediaNode* to = graph.findNode(edge.to.nodeId);
+        if (from && to && from->kind == fromKind && to->kind == toKind && edge.edgeKind == edgeKind) {
+            return &edge;
+        }
+    }
+    return nullptr;
+}
+
 std::string readTextFile(const std::filesystem::path& path)
 {
     std::ifstream input(path, std::ios::binary);
@@ -224,6 +239,14 @@ void testRawRtpRejectsUnsupportedMetadata(TestContext& ctx)
     MediaRealtimeRtpTranscodeRequest missingPort = options;
     missingPort.input.url = "rtp://127.0.0.1";
     expectPlannerInvalidArgument(ctx, missingPort);
+
+    MediaRealtimeRtpTranscodeRequest pathUrl = options;
+    pathUrl.input.url = "rtp://127.0.0.1:5004/video";
+    expectPlannerInvalidArgument(ctx, pathUrl);
+
+    MediaRealtimeRtpTranscodeRequest queryUrl = options;
+    queryUrl.input.url = "udp://127.0.0.1:5004?pkt_size=1200";
+    expectPlannerInvalidArgument(ctx, queryUrl);
 }
 
 void testRawRtpPlansH264Input(TestContext& ctx)
@@ -296,6 +319,11 @@ void testBuildPlansRawRtpH264Graph(TestContext& ctx)
     EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::RtpMux) != nullptr);
     EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::RtpOutput) != nullptr);
     EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::SdpWriter) != nullptr);
+    EXPECT_TRUE(ctx, findEdgeBetweenKinds(graph, MediaNodeKind::RawRtpInput, MediaNodeKind::Demux, MediaEdgeKind::Metadata) != nullptr);
+    EXPECT_TRUE(ctx, findEdgeBetweenKinds(graph, MediaNodeKind::Demux, MediaNodeKind::StreamSplit, MediaEdgeKind::InputPacket) != nullptr);
+    EXPECT_TRUE(ctx, findEdgeBetweenKinds(graph, MediaNodeKind::StreamSplit, MediaNodeKind::PacketNormalize, MediaEdgeKind::InputPacket) != nullptr);
+    EXPECT_TRUE(ctx, findEdgeBetweenKinds(graph, MediaNodeKind::PacketNormalize, MediaNodeKind::VideoDecode, MediaEdgeKind::InputPacket) != nullptr);
+    EXPECT_TRUE(ctx, findEdgeBetweenKinds(graph, MediaNodeKind::VideoEncode, MediaNodeKind::RtpMux, MediaEdgeKind::EncodedPacket) != nullptr);
 }
 
 void testRealtimeBuilderDoesNotOwnPlannerDecisions(TestContext& ctx)
