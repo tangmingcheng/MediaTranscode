@@ -3,6 +3,7 @@
 #include "internal/graph/builder/realtime/MediaRealtimeRtpTranscodeGraphBuilder.h"
 #include "internal/graph/core/MediaGraphValidation.h"
 #include "internal/graph/model/MediaNodeKind.h"
+#include "internal/graph/model/RealtimeStreamLayout.h"
 #include "internal/graph/nodes/video/VideoMonotonicTimestamp.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 #include "internal/graph/runtime/MediaGraphRuntime.h"
@@ -37,7 +38,8 @@ std::string sampleVideoPath()
 MediaRealtimeRtpTranscodeRequest validRealtimeOptions()
 {
     MediaRealtimeRtpTranscodeRequest options;
-    options.input.kind = MediaRealtimeInputKind::RealtimeUrl;
+    options.input.type = RealtimeInputType::Url;
+    options.input.streamLayout = RealtimeInputStreamLayout::SessionDescribed;
     options.input.url = sampleVideoPath();
     options.input.rtspTransport = "tcp";
     options.input.openTimeoutMs = 5000;
@@ -47,6 +49,7 @@ MediaRealtimeRtpTranscodeRequest validRealtimeOptions()
     options.input.lowLatency = true;
     options.output.host = "127.0.0.1";
     options.output.basePort = 5004;
+    options.output.streamLayout = RealtimeOutputStreamLayout::SeparateStreams;
     options.output.sdpPath = "realtime-test.sdp";
     options.output.packetSize = 1200;
     options.parameters.execution.includeVideo = true;
@@ -166,13 +169,29 @@ void expectCliEnableFlagRejected(TestContext& ctx,
 MediaRealtimeRtpTranscodeRequest validRawRtpOptions()
 {
     MediaRealtimeRtpTranscodeRequest options = validRealtimeOptions();
-    options.input.kind = MediaRealtimeInputKind::RawRtp;
+    options.input.type = RealtimeInputType::RtpPort;
+    options.input.streamLayout = RealtimeInputStreamLayout::SeparateStreams;
     options.input.url.clear();
     options.input.videoRtp.url = "rtp://127.0.0.1:5004";
     options.input.videoRtp.codecName = "h264";
     options.input.videoRtp.payloadType = 96;
     options.input.videoRtp.clockRate = 90000;
     options.input.videoRtp.fmtp = "packetization-mode=1;sprop-parameter-sets=Z01AMpWQAoALWwEQAAA+gAAOpghhA,aOuPIA==;profile-level-id=4D4032";
+    return options;
+}
+
+MediaRealtimeRtpTranscodeRequest validMpegTsUdpOptions()
+{
+    MediaRealtimeRtpTranscodeRequest options = validRealtimeOptions();
+    options.input.type = RealtimeInputType::MpegTsUdp;
+    options.input.streamLayout = RealtimeInputStreamLayout::MuxedTransportStream;
+    options.input.url = sampleVideoPath();
+    options.input.rtspTransport.clear();
+    options.output.streamLayout = RealtimeOutputStreamLayout::MuxedTransportStream;
+    options.output.url = "udp://127.0.0.1:15002";
+    options.output.host.clear();
+    options.output.basePort.reset();
+    options.output.sdpPath.clear();
     return options;
 }
 
@@ -249,7 +268,7 @@ void testValidationRejectsUnsupportedRealtimeInput(TestContext& ctx)
 {
     MediaRealtimeRtpTranscodeRequest options = validRealtimeOptions();
     options.input.url = "rtp://127.0.0.1:5004";
-    options.input.kind = MediaRealtimeInputKind::RealtimeUrl;
+    options.input.type = RealtimeInputType::Url;
 
     const auto status = MediaRealtimeRtpTranscodeGraphBuilder::validate(options);
     EXPECT_FALSE(ctx, status);
@@ -276,6 +295,75 @@ void testValidationRejectsUnsupportedRealtimeInput(TestContext& ctx)
     EXPECT_FALSE(ctx, sdpSchemeStatus);
     if (!sdpSchemeStatus) {
         EXPECT_EQ(ctx, sdpSchemeStatus.error().code, media::ErrorCode::Unsupported);
+    }
+}
+
+void testValidationRequiresExplicitRealtimeStreamClassification(TestContext& ctx)
+{
+    MediaRealtimeRtpTranscodeRequest missingInputType = validRealtimeOptions();
+    missingInputType.input.type.reset();
+    expectPlannerInvalidArgument(ctx, missingInputType);
+
+    MediaRealtimeRtpTranscodeRequest missingInputLayout = validRealtimeOptions();
+    missingInputLayout.input.streamLayout.reset();
+    expectPlannerInvalidArgument(ctx, missingInputLayout);
+
+    MediaRealtimeRtpTranscodeRequest missingOutputLayout = validRealtimeOptions();
+    missingOutputLayout.output.streamLayout.reset();
+    expectPlannerInvalidArgument(ctx, missingOutputLayout);
+}
+
+void testExistingRealtimeModesMapToExplicitLayouts(TestContext& ctx)
+{
+    const auto urlPlan = MediaRealtimeRtpTranscodePlanner::plan(validRealtimeOptions());
+    EXPECT_TRUE(ctx, urlPlan);
+    if (urlPlan) {
+        EXPECT_EQ(ctx, urlPlan.value().inputType, RealtimeInputType::Url);
+        EXPECT_EQ(ctx, urlPlan.value().inputLayout, RealtimeInputStreamLayout::SessionDescribed);
+        EXPECT_EQ(ctx, urlPlan.value().outputLayout, RealtimeOutputStreamLayout::SeparateStreams);
+    }
+
+    const auto rtpPlan = MediaRealtimeRtpTranscodePlanner::plan(validRawRtpOptions());
+    EXPECT_TRUE(ctx, rtpPlan);
+    if (rtpPlan) {
+        EXPECT_EQ(ctx, rtpPlan.value().inputType, RealtimeInputType::RtpPort);
+        EXPECT_EQ(ctx, rtpPlan.value().inputLayout, RealtimeInputStreamLayout::SeparateStreams);
+        EXPECT_EQ(ctx, rtpPlan.value().outputLayout, RealtimeOutputStreamLayout::SeparateStreams);
+    }
+}
+
+void testUnsupportedRealtimeStreamCombinationsFailInPlanner(TestContext& ctx)
+{
+    MediaRealtimeRtpTranscodeRequest sdp = validRealtimeOptions();
+    sdp.input.type = RealtimeInputType::Sdp;
+    auto sdpPlan = MediaRealtimeRtpTranscodePlanner::plan(sdp);
+    EXPECT_FALSE(ctx, sdpPlan);
+    if (!sdpPlan) {
+        EXPECT_EQ(ctx, sdpPlan.error().code, media::ErrorCode::Unsupported);
+    }
+
+    MediaRealtimeRtpTranscodeRequest externalTs = validMpegTsUdpOptions();
+    externalTs.input.type = RealtimeInputType::ExternalMpegTsPacket;
+    auto externalTsPlan = MediaRealtimeRtpTranscodePlanner::plan(externalTs);
+    EXPECT_FALSE(ctx, externalTsPlan);
+    if (!externalTsPlan) {
+        EXPECT_EQ(ctx, externalTsPlan.error().code, media::ErrorCode::Unsupported);
+    }
+
+    MediaRealtimeRtpTranscodeRequest externalRtp = validRawRtpOptions();
+    externalRtp.input.type = RealtimeInputType::ExternalRtpPacket;
+    auto externalRtpPlan = MediaRealtimeRtpTranscodePlanner::plan(externalRtp);
+    EXPECT_FALSE(ctx, externalRtpPlan);
+    if (!externalRtpPlan) {
+        EXPECT_EQ(ctx, externalRtpPlan.error().code, media::ErrorCode::Unsupported);
+    }
+
+    MediaRealtimeRtpTranscodeRequest bundled = validRawRtpOptions();
+    bundled.input.streamLayout = RealtimeInputStreamLayout::BundledStream;
+    auto bundledPlan = MediaRealtimeRtpTranscodePlanner::plan(bundled);
+    EXPECT_FALSE(ctx, bundledPlan);
+    if (!bundledPlan) {
+        EXPECT_EQ(ctx, bundledPlan.error().code, media::ErrorCode::Unsupported);
     }
 }
 
@@ -368,7 +456,7 @@ void testRawRtpPlansH264AndHevcInput(TestContext& ctx)
     const auto h264Plan = MediaRealtimeRtpTranscodePlanner::plan(h264Options);
     EXPECT_TRUE(ctx, h264Plan);
     if (h264Plan) {
-        EXPECT_EQ(ctx, h264Plan.value().inputKind, MediaRealtimeInputKind::RawRtp);
+        EXPECT_EQ(ctx, h264Plan.value().inputType, RealtimeInputType::RtpPort);
         EXPECT_EQ(ctx, h264Plan.value().videoPlan.inputCodecName, std::string("h264"));
         EXPECT_EQ(ctx, h264Plan.value().videoPlan.sourceStreamIndex, 0);
     }
@@ -383,7 +471,7 @@ void testRawRtpPlansH264AndHevcInput(TestContext& ctx)
         return;
     }
 
-    EXPECT_EQ(ctx, hevcPlan.value().inputKind, MediaRealtimeInputKind::RawRtp);
+    EXPECT_EQ(ctx, hevcPlan.value().inputType, RealtimeInputType::RtpPort);
     EXPECT_EQ(ctx, hevcPlan.value().videoPlan.inputCodecName, std::string("hevc"));
     EXPECT_TRUE(ctx, hevcPlan.value().input.sdpText.find("H265/90000") != std::string::npos);
 }
@@ -622,6 +710,33 @@ void testBuildPlansRawRtpAudioVideoGraph(TestContext& ctx)
     EXPECT_TRUE(ctx, findEdgeBetweenKinds(graph, MediaNodeKind::AudioEncode, MediaNodeKind::RtpMux, MediaEdgeKind::EncodedPacket) != nullptr);
 }
 
+void testBuildPlansMpegTsUdpMuxedOutputGraph(TestContext& ctx)
+{
+    const auto graphResult = MediaRealtimeRtpTranscodeGraphBuilder::build(validMpegTsUdpOptions());
+    EXPECT_TRUE(ctx, graphResult);
+    if (!graphResult) {
+        std::cerr << graphResult.error().describe() << '\n';
+        return;
+    }
+
+    const MediaGraph& graph = graphResult.value();
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::RealtimeInput) != nullptr);
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::Demux) != nullptr);
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::StreamSplit) != nullptr);
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::FileOutput) != nullptr);
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::FileMux) != nullptr);
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::RtpOutput), static_cast<std::size_t>(0));
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::RtpMux), static_cast<std::size_t>(0));
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::SdpWriter), static_cast<std::size_t>(0));
+
+    const MediaNode* fileOutput = findNodeByKind(graph, MediaNodeKind::FileOutput);
+    EXPECT_TRUE(ctx, fileOutput != nullptr);
+    if (fileOutput) {
+        EXPECT_EQ(ctx, fileOutput->options.value("url"), std::string("udp://127.0.0.1:15002"));
+        EXPECT_EQ(ctx, fileOutput->options.value("format"), std::string("mpegts"));
+    }
+}
+
 void testRealtimeBuilderDoesNotOwnPlannerDecisions(TestContext& ctx)
 {
     const auto source = readTextFile(std::filesystem::path(MEDIA_TRANSCODE_SOURCE_DIR) /
@@ -825,6 +940,9 @@ int main()
     testValidationRejectsMissingInput(ctx);
     testLegacyArchitectureFilesAreRemoved(ctx);
     testValidationRejectsUnsupportedRealtimeInput(ctx);
+    testValidationRequiresExplicitRealtimeStreamClassification(ctx);
+    testExistingRealtimeModesMapToExplicitLayouts(ctx);
+    testUnsupportedRealtimeStreamCombinationsFailInPlanner(ctx);
     testRawRtpMissingMetadataFailsInPlanner(ctx);
     testRawRtpRejectsUnsupportedMetadata(ctx);
     testRawRtpPlansH264AndHevcInput(ctx);
@@ -843,6 +961,7 @@ int main()
     testBuildPlansRealtimeUrlAudioBranch(ctx);
     testBuildPlansRawRtpH264Graph(ctx);
     testBuildPlansRawRtpAudioVideoGraph(ctx);
+    testBuildPlansMpegTsUdpMuxedOutputGraph(ctx);
     testRealtimeBuilderDoesNotOwnPlannerDecisions(ctx);
     testRuntimeCompileSupportsSoftwareChain(ctx);
     testRuntimeCompileSupportsRawRtpChain(ctx);

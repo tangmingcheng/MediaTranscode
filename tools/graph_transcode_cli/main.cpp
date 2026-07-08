@@ -19,19 +19,55 @@ using namespace media::ffmpeg::graph::cli;
 
 namespace {
 
-std::optional<MediaRealtimeInputKind> realtimeInputKindArg(int argc, char** argv)
+std::optional<RealtimeInputType> realtimeInputTypeArg(int argc, char** argv)
 {
-    const std::string value = argValue(argc, argv, "--input-kind");
+    const std::string value = argValue(argc, argv, "--input-type");
     if (value.empty()) {
         return std::nullopt;
     }
     if (value == "url") {
-        return MediaRealtimeInputKind::RealtimeUrl;
+        return RealtimeInputType::Url;
     }
-    if (value == "raw-rtp") {
-        return MediaRealtimeInputKind::RawRtp;
+    if (value == "rtp-port") {
+        return RealtimeInputType::RtpPort;
     }
-    throw std::invalid_argument("unsupported --input-kind: " + value);
+    if (value == "mpegts-udp") {
+        return RealtimeInputType::MpegTsUdp;
+    }
+    throw std::invalid_argument("unsupported --input-type: " + value);
+}
+
+std::optional<RealtimeInputStreamLayout> realtimeInputLayoutArg(int argc, char** argv)
+{
+    const std::string value = argValue(argc, argv, "--input-layout");
+    if (value.empty()) {
+        return std::nullopt;
+    }
+    if (value == "session") {
+        return RealtimeInputStreamLayout::SessionDescribed;
+    }
+    if (value == "separate") {
+        return RealtimeInputStreamLayout::SeparateStreams;
+    }
+    if (value == "mpegts") {
+        return RealtimeInputStreamLayout::MuxedTransportStream;
+    }
+    throw std::invalid_argument("unsupported --input-layout: " + value);
+}
+
+std::optional<RealtimeOutputStreamLayout> realtimeOutputLayoutArg(int argc, char** argv)
+{
+    const std::string value = argValue(argc, argv, "--output-layout");
+    if (value.empty()) {
+        return std::nullopt;
+    }
+    if (value == "separate") {
+        return RealtimeOutputStreamLayout::SeparateStreams;
+    }
+    if (value == "mpegts") {
+        return RealtimeOutputStreamLayout::MuxedTransportStream;
+    }
+    throw std::invalid_argument("unsupported --output-layout: " + value);
 }
 
 std::string optionalIntText(const std::optional<int>& value)
@@ -102,8 +138,9 @@ LocalFileTranscodeOptions parseOptions(int argc, char** argv)
 MediaRealtimeRtpTranscodeRequest parseRealtimeOptions(int argc, char** argv)
 {
     MediaRealtimeRtpTranscodeRequest options;
-    options.input.kind = realtimeInputKindArg(argc, argv);
-    if (options.input.kind && *options.input.kind == MediaRealtimeInputKind::RawRtp) {
+    options.input.type = realtimeInputTypeArg(argc, argv);
+    options.input.streamLayout = realtimeInputLayoutArg(argc, argv);
+    if (options.input.type && *options.input.type == RealtimeInputType::RtpPort) {
         options.input.videoRtp.url = requiredArg(argc, argv, "--video-rtp-url");
         options.input.videoRtp.codecName = requiredArg(argc, argv, "--video-rtp-codec");
         options.input.videoRtp.payloadType = requiredIntArg(argc, argv, "--video-rtp-payload-type");
@@ -126,6 +163,7 @@ MediaRealtimeRtpTranscodeRequest parseRealtimeOptions(int argc, char** argv)
     options.output.sdpPath = argValue(argc, argv, "--sdp");
     options.output.packetSize = optionalIntArg(argc, argv, "--packet-size");
     options.output.url = argValue(argc, argv, "--output");
+    options.output.streamLayout = realtimeOutputLayoutArg(argc, argv);
 
     MediaTranscodeParameterSet& parameters = options.parameters;
     parameters.execution.includeVideo = requiredExclusiveBoolArg(argc, argv, "--video", "--no-video");
@@ -167,7 +205,7 @@ MediaRealtimeRtpTranscodeRequest parseRealtimeOptions(int argc, char** argv)
     parameters.audio.quality = optionalIntArg(argc, argv, "--audio-quality");
     parameters.audio.preset = argValue(argc, argv, "--audio-preset", parameters.audio.preset);
     parameters.audio.profile = argValue(argc, argv, "--audio-profile", parameters.audio.profile);
-    if (parameters.execution.includeAudio && options.input.kind && *options.input.kind == MediaRealtimeInputKind::RawRtp) {
+    if (parameters.execution.includeAudio && options.input.type && *options.input.type == RealtimeInputType::RtpPort) {
         options.input.audioRtp.url = requiredArg(argc, argv, "--audio-rtp-url");
         options.input.audioRtp.codecName = requiredArg(argc, argv, "--audio-rtp-codec");
         options.input.audioRtp.payloadType = requiredIntArg(argc, argv, "--audio-rtp-payload-type");
@@ -185,8 +223,9 @@ int runGraphTranscodeCli(int argc, char** argv)
     const bool helpRequested = hasArg(argc, argv, "--help") || hasArg(argc, argv, "-h");
     if (argc < 5 || helpRequested) {
         std::cout << "Usage: media_transcode_graph_transcode_cli --input in.mp4 --output out.mp4 [options]\n";
-        std::cout << "       media_transcode_graph_transcode_cli --mode realtime-rtp --input-kind url --input rtsp://... --rtsp-transport tcp --open-timeout-ms 5000 --read-timeout-ms 5000 --analyze-duration-us 500000 --probe-size 524288 --rtp-host 127.0.0.1 --rtp-port 5004 --sdp out.sdp --packet-size 1200 --video --audio --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --video-codec h264 --rc auto --audio-codec aac --duration 15 [--disable-hw] [--quiet-graph] [--no-low-latency]\n";
-        std::cout << "       raw RTP mode uses --video-rtp-url/--video-rtp-codec/--video-rtp-payload-type/--video-rtp-clock-rate/--video-rtp-fmtp and optional --audio-rtp-* when --audio is enabled\n";
+        std::cout << "       media_transcode_graph_transcode_cli --mode realtime-rtp --input-type url --input-layout session --output-layout separate --input rtsp://... --rtsp-transport tcp --open-timeout-ms 5000 --read-timeout-ms 5000 --analyze-duration-us 500000 --probe-size 524288 --rtp-host 127.0.0.1 --rtp-port 5004 --sdp out.sdp --packet-size 1200 --video --audio --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --video-codec h264 --rc auto --audio-codec aac --duration 15 [--disable-hw] [--quiet-graph] [--no-low-latency]\n";
+        std::cout << "       media_transcode_graph_transcode_cli --mode realtime-rtp --input-type mpegts-udp --input-layout mpegts --output-layout mpegts --input udp://0.0.0.0:15000 --output udp://127.0.0.1:15002 --open-timeout-ms 5000 --read-timeout-ms 5000 --analyze-duration-us 500000 --probe-size 524288 --video --no-audio --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --video-codec h264 --rc auto --duration 15 [--disable-hw] [--quiet-graph] [--no-low-latency]\n";
+        std::cout << "       RTP port mode uses --input-type rtp-port --input-layout separate --output-layout separate plus --video-rtp-url/--video-rtp-codec/--video-rtp-payload-type/--video-rtp-clock-rate/--video-rtp-fmtp and optional --audio-rtp-* when --audio is enabled\n";
         std::cout << "       hardware, low latency input, and graph diagnostics are enabled by default; use disable flags only when overriding defaults\n";
         return helpRequested ? 0 : 2;
     }

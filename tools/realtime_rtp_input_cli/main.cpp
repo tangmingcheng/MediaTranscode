@@ -27,7 +27,8 @@ struct RealtimeRtpInputCliRuntimeOptions {
 MediaRealtimeRtpTranscodeRequest parseRawRtpOptions(int argc, char** argv)
 {
     MediaRealtimeRtpTranscodeRequest options;
-    options.input.kind = MediaRealtimeInputKind::RawRtp;
+    options.input.type = RealtimeInputType::RtpPort;
+    options.input.streamLayout = RealtimeInputStreamLayout::SeparateStreams;
     options.input.videoRtp.url = requiredArg(argc, argv, "--video-rtp-url");
     options.input.videoRtp.codecName = requiredArg(argc, argv, "--video-rtp-codec");
     options.input.videoRtp.payloadType = requiredIntArg(argc, argv, "--video-rtp-payload-type");
@@ -42,6 +43,7 @@ MediaRealtimeRtpTranscodeRequest parseRawRtpOptions(int argc, char** argv)
 
     options.output.host = requiredArg(argc, argv, "--rtp-host");
     options.output.basePort = static_cast<std::size_t>(requiredIntArg(argc, argv, "--rtp-port"));
+    options.output.streamLayout = RealtimeOutputStreamLayout::SeparateStreams;
     options.output.sdpPath = requiredArg(argc, argv, "--sdp");
     options.output.packetSize = requiredIntArg(argc, argv, "--packet-size");
 
