@@ -10,16 +10,18 @@
 - Queue capacities now default to invalid `0` in graph parameters and must be supplied by upstream request construction.
 - Realtime video planner reuses the same resize rule as local planning: filter score is included only when resize is requested.
 - Realtime plan summaries report `filter=not_required` when the selected plan does not require a filter stage.
+- Review follow-up removed planner/audio planner default construction, made missing enabled audio a planning error, and removed encoder buffer-size fallback synthesis for bitrate-based modes.
 
 ## Validation
 
 - Added regression coverage in `tests/unit/test_realtime_rtp_graph.cpp` for tool target split, legacy switch removal, source codec inheritance, unknown source codec rejection, and realtime filter scoring.
+- Added regression coverage for planner option default construction removal, missing realtime planner option rejection, missing audio source rejection, and encoder buffer default removal.
 - Build/test targets used by this change:
   - `media_transcode_core`
   - `media_transcode_local_video_cli`
   - `media_transcode_realtime_video_cli`
   - `media_transcode_realtime_graph_tests`
 - `out/build/x64-debug/media_transcode_realtime_graph_tests.exe` passed.
-- Local-file smoke passed with `out/build/x64-debug/test.mp4`.
-- Realtime RTP smoke passed with `encodedPacketsPushed=42` and `workerErrors=0`.
+- Local-file smoke passed with `out/build/x64-debug/test.mp4`, `--no-audio`, `total_pushed=1109`, and `total_popped=1109`.
+- Realtime RTP smoke passed with `encodedPacketsPushed=32` and `workerErrors=0`.
 - Release target build also passed in `out/build/x64-release`.

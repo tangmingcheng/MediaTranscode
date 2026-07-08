@@ -55,8 +55,7 @@ namespace {
         return ::media::Result<MediaAudioPipelinePlannerOptions>::failure(quality.error());
     }
 
-    MediaAudioPipelinePlannerOptions plannerOptions;
-    plannerOptions.includeAudio = parameters.execution.includeAudio;
+    MediaAudioPipelinePlannerOptions plannerOptions(parameters.execution.includeAudio);
     plannerOptions.requestedCodecName = audio.codecName;
     plannerOptions.rateControl = audio.rateControl;
     plannerOptions.requestedBitrateKbps = audio.bitrateKbps;

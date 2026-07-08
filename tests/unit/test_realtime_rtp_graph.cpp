@@ -596,6 +596,53 @@ void testVideoToolsRejectLegacyBusinessSwitches(TestContext& ctx)
     expectTextContains(ctx, combined, "--no-audio");
 }
 
+void testGraphRejectsBehaviorDefaultImplementations(TestContext& ctx)
+{
+    const std::string plannerHeader = repositoryFile("src/internal/graph/planner/MediaPipelinePlanner.h");
+    const std::string audioPlannerHeader = repositoryFile("src/internal/graph/planner/MediaAudioPipelinePlanner.h");
+    const std::string audioPlanner = repositoryFile("src/internal/graph/planner/MediaAudioPipelinePlanner.cpp");
+    const std::string encoderBuilder = repositoryFile("src/internal/graph/builder/codec/CodecResolverEncoderContextBuilder.cpp");
+
+    expectTextContains(ctx, plannerHeader, "MediaPipelinePlannerOptions() = delete");
+    expectTextNotContains(ctx, plannerHeader, "MediaPipelinePlannerOptions options = {}");
+    expectTextContains(ctx, audioPlannerHeader, "MediaAudioPipelinePlannerOptions() = delete");
+    expectTextNotContains(ctx, audioPlannerHeader, "bool includeAudio = true");
+    expectTextNotContains(ctx, audioPlanner, "plan.reason = \"no_audio\"");
+    expectTextNotContains(ctx, encoderBuilder, "defaultBufferSizeFromRate");
+    expectTextNotContains(ctx, encoderBuilder, "default buffer size");
+    expectTextNotContains(ctx, encoderBuilder, "rc_min_rate = encoderContext->bit_rate");
+    expectTextNotContains(ctx, encoderBuilder, "rc_max_rate = encoderContext->bit_rate");
+}
+
+void testPlannerRejectsUnresolvedBehaviorOptions(TestContext& ctx)
+{
+    MediaInputVideoStreamInfo input;
+    input.streamIndex = 0;
+    input.codecName = "h264";
+    input.width = 1920;
+    input.height = 1080;
+
+    MediaPipelinePlannerOptions missingHardwarePreference(true, false, false, true, true, true, false);
+    const auto missingHardware = MediaPipelinePlanner::planVideoTranscodeKnownInput(
+        input,
+        "rtp://127.0.0.1:5004",
+        missingHardwarePreference);
+    EXPECT_FALSE(ctx, missingHardware);
+    if (!missingHardware) {
+        EXPECT_EQ(ctx, missingHardware.error().code, media::ErrorCode::InvalidArgument);
+    }
+
+    MediaPipelinePlannerOptions missingRealtimeOptions(true, false, false, true, true, true, false);
+    missingRealtimeOptions.preferredHardware = "auto";
+    const auto missingRealtime = MediaPipelinePlanner::planVideoTranscodeRealtimeUrl(
+        "rtsp://127.0.0.1/live",
+        missingRealtimeOptions);
+    EXPECT_FALSE(ctx, missingRealtime);
+    if (!missingRealtime) {
+        EXPECT_EQ(ctx, missingRealtime.error().code, media::ErrorCode::InvalidArgument);
+    }
+}
+
 void testValidationRejectsUnsupportedRealtimeInput(TestContext& ctx)
 {
     MediaRealtimeRtpTranscodeRequest options = validRealtimeOptions();
@@ -1364,6 +1411,8 @@ int main()
     testLegacyArchitectureFilesAreRemoved(ctx);
     testVideoToolsAreSplitIntoDedicatedTargets(ctx);
     testVideoToolsRejectLegacyBusinessSwitches(ctx);
+    testGraphRejectsBehaviorDefaultImplementations(ctx);
+    testPlannerRejectsUnresolvedBehaviorOptions(ctx);
     testValidationRejectsUnsupportedRealtimeInput(ctx);
     testValidationRequiresExplicitRealtimeStreamClassification(ctx);
     testExistingRealtimeModesMapToExplicitLayouts(ctx);

@@ -264,17 +264,17 @@ std::string planRawRtpSdp(const MediaRtpUrlEndpoint& videoEndpoint,
         return ::media::Result<MediaPipelinePlannerOptions>::failure(
             ::media::ErrorInfo::invalidArgument("Realtime RTP video width and height must be specified together"));
     }
-    MediaPipelinePlannerOptions plannerOptions;
-    plannerOptions.includeVideo = options.parameters.execution.includeVideo;
-    plannerOptions.allowPacketCopy = false;
+    MediaPipelinePlannerOptions plannerOptions(options.parameters.execution.includeVideo,
+                                               false,
+                                               video.resizeRequested(),
+                                               planGpuPreference(options.parameters.execution),
+                                               planSoftwareChain(options.parameters.execution),
+                                               RealtimeRequiresRuntimeAvailability,
+                                               *options.input.lowLatency);
     plannerOptions.outputPath = outputUrl;
     plannerOptions.outputCodecName = video.codecName;
     plannerOptions.targetWidth = video.width.value_or(0);
     plannerOptions.targetHeight = video.height.value_or(0);
-    plannerOptions.filterRequired = video.resizeRequested();
-    plannerOptions.preferGpu = planGpuPreference(options.parameters.execution);
-    plannerOptions.enableSoftwareChain = planSoftwareChain(options.parameters.execution);
-    plannerOptions.requireRuntimeAvailability = RealtimeRequiresRuntimeAvailability;
     plannerOptions.preferredHardware = planPreferredHardware(options.parameters.execution);
     plannerOptions.diagnosticLogEnabled = options.parameters.execution.diagnosticLogEnabled;
     plannerOptions.rtspTransport = options.input.rtspTransport;
@@ -282,7 +282,6 @@ std::string planRawRtpSdp(const MediaRtpUrlEndpoint& videoEndpoint,
     plannerOptions.readTimeoutMs = *options.input.readTimeoutMs;
     plannerOptions.analyzeDurationUs = *options.input.analyzeDurationUs;
     plannerOptions.probeSizeBytes = *options.input.probeSizeBytes;
-    plannerOptions.lowLatency = *options.input.lowLatency;
     return ::media::Result<MediaPipelinePlannerOptions>::success(std::move(plannerOptions));
 }
 
@@ -324,8 +323,7 @@ std::string planRawRtpSdp(const MediaRtpUrlEndpoint& videoEndpoint,
         return ::media::Result<MediaAudioPipelinePlannerOptions>::failure(status.error());
     }
 
-    MediaAudioPipelinePlannerOptions plannerOptions;
-    plannerOptions.includeAudio = options.parameters.execution.includeAudio;
+    MediaAudioPipelinePlannerOptions plannerOptions(options.parameters.execution.includeAudio);
     plannerOptions.requestedCodecName = audio.codecName;
     plannerOptions.rateControl = audio.rateControl;
     plannerOptions.requestedBitrateKbps = audio.bitrateKbps;

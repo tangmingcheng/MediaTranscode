@@ -90,21 +90,6 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
     return ::media::Result<int>::success(kbits * kBitsPerKbit);
 }
 
-::media::Result<int> defaultBufferSizeFromRate(int64_t rateBitsPerSecond, const std::string& rcMode)
-{
-    if (rateBitsPerSecond <= 0) {
-        return ::media::Result<int>::failure(
-            ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder " + rcMode + " mode requires positive bitrate for default buffer size"));
-    }
-
-    if (rateBitsPerSecond > std::numeric_limits<int>::max() / 2) {
-        return ::media::Result<int>::failure(
-            ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder " + rcMode + " default buffer size is too large"));
-    }
-
-    return ::media::Result<int>::success(static_cast<int>(rateBitsPerSecond * 2));
-}
-
 ::media::Result<AVRational> resolveFrameRate(AVFormatContext* formatContext,
                                              AVStream* stream,
                                              const MediaNodeOptions* options)
@@ -390,17 +375,16 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
             return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(bitrateStatus.error());
         }
         if (encoderContext->rc_min_rate <= 0) {
-            encoderContext->rc_min_rate = encoderContext->bit_rate;
+            return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
+                ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder cbr mode requires explicit video min bitrate"));
         }
         if (encoderContext->rc_max_rate <= 0) {
-            encoderContext->rc_max_rate = encoderContext->bit_rate;
+            return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
+                ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder cbr mode requires explicit video max bitrate"));
         }
         if (encoderContext->rc_buffer_size <= 0) {
-            auto defaultBufferSize = defaultBufferSizeFromRate(encoderContext->bit_rate, rcMode);
-            if (!defaultBufferSize) {
-                return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(defaultBufferSize.error());
-            }
-            encoderContext->rc_buffer_size = defaultBufferSize.value();
+            return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
+                ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder cbr mode requires explicit video buffer size"));
         }
     } else if (rcMode == "cvbr") {
         auto bitrateStatus = requireBitrate(encoderContext.get(), rcMode);
@@ -412,18 +396,9 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
                 ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder cvbr mode requires video max bitrate"));
         }
         if (encoderContext->rc_buffer_size <= 0) {
-            auto defaultBufferSize = defaultBufferSizeFromRate(encoderContext->rc_max_rate, rcMode);
-            if (!defaultBufferSize) {
-                return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(defaultBufferSize.error());
-            }
-            encoderContext->rc_buffer_size = defaultBufferSize.value();
+            return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
+                ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder cvbr mode requires explicit video buffer size"));
         }
-    } else if (rcMode == "vbr" && encoderContext->bit_rate > 0 && encoderContext->rc_buffer_size <= 0) {
-        auto defaultBufferSize = defaultBufferSizeFromRate(encoderContext->bit_rate, rcMode);
-        if (!defaultBufferSize) {
-            return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(defaultBufferSize.error());
-        }
-        encoderContext->rc_buffer_size = defaultBufferSize.value();
     }
 
     setPrivateOption(encoderContext.get(), "preset", optionValue(options, MediaTranscodeOptionKey::VideoPreset));

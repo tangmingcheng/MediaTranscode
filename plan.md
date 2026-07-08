@@ -26,4 +26,4 @@ Split local-file video transcoding and realtime video transcoding into separate 
 - [x] Run `rg` checks for legacy CLI switches/default implementations.
 - [x] Run `git diff --check`.
 - [x] Review the full diff against this plan and fix any missing items before commit.
-- [ ] Commit and push branch `codex/split-video-tools-cli`, open PR, and request a fresh agent review.
+- [x] Commit and push branch `codex/split-video-tools-cli`, open PR, and request a fresh agent review.

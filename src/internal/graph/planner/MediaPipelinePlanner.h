@@ -49,24 +49,43 @@ struct MediaPipelineChainPlan {
 };
 
 struct MediaPipelinePlannerOptions {
-    bool includeVideo = true;
-    bool allowPacketCopy = false;
+    MediaPipelinePlannerOptions() = delete;
+
+    MediaPipelinePlannerOptions(bool includeVideo,
+                                bool allowPacketCopy,
+                                bool filterRequired,
+                                bool preferGpu,
+                                bool enableSoftwareChain,
+                                bool requireRuntimeAvailability,
+                                bool lowLatency) noexcept
+        : includeVideo(includeVideo),
+          allowPacketCopy(allowPacketCopy),
+          filterRequired(filterRequired),
+          preferGpu(preferGpu),
+          enableSoftwareChain(enableSoftwareChain),
+          requireRuntimeAvailability(requireRuntimeAvailability),
+          lowLatency(lowLatency)
+    {
+    }
+
+    bool includeVideo;
+    bool allowPacketCopy;
     std::string outputPath;
     std::string outputCodecName;
     std::string preferredHardware;
     int targetWidth = 0;
     int targetHeight = 0;
-    bool filterRequired = false;
-    bool preferGpu = true;
-    bool enableSoftwareChain = true;
-    bool requireRuntimeAvailability = true;
+    bool filterRequired;
+    bool preferGpu;
+    bool enableSoftwareChain;
+    bool requireRuntimeAvailability;
     bool diagnosticLogEnabled = false;
     std::string rtspTransport;
     int openTimeoutMs = 0;
     int readTimeoutMs = 0;
     int analyzeDurationUs = 0;
     int probeSizeBytes = 0;
-    bool lowLatency = false;
+    bool lowLatency;
 };
 
 struct MediaInputVideoStreamInfo {
@@ -101,16 +120,16 @@ class MediaPipelinePlanner final {
 public:
     static ::media::Result<MediaPipelinePlan> planVideoTranscodeFile(
         const std::string& inputPath,
-        MediaPipelinePlannerOptions options = {});
+        MediaPipelinePlannerOptions options);
 
     static ::media::Result<MediaPipelinePlan> planVideoTranscodeRealtimeUrl(
         const std::string& inputUrl,
-        MediaPipelinePlannerOptions options = {});
+        MediaPipelinePlannerOptions options);
 
     static ::media::Result<MediaPipelinePlan> planVideoTranscodeKnownInput(
         MediaInputVideoStreamInfo inputInfo,
         const std::string& inputUrl,
-        MediaPipelinePlannerOptions options = {});
+        MediaPipelinePlannerOptions options);
 
 private:
     MediaPipelinePlanner() = default;
