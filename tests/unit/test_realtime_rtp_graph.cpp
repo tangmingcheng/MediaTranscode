@@ -90,6 +90,17 @@ std::size_t countNodesByKind(const MediaGraph& graph, MediaNodeKind kind)
     return count;
 }
 
+std::size_t countOccurrences(const std::string& text, const std::string& needle)
+{
+    std::size_t count = 0;
+    std::size_t offset = 0;
+    while ((offset = text.find(needle, offset)) != std::string::npos) {
+        ++count;
+        offset += needle.size();
+    }
+    return count;
+}
+
 const MediaEdge* findEdgeBetweenKinds(const MediaGraph& graph,
                                       MediaNodeKind fromKind,
                                       MediaNodeKind toKind,
@@ -334,7 +345,10 @@ void testRawRtpAudioEndpointRequiredWhenAudioEnabled(TestContext& ctx)
 
 void testRawRtpPlansAudioVideoInput(TestContext& ctx)
 {
-    const auto plan = MediaRealtimeRtpTranscodePlanner::plan(validRawRtpAudioVideoOptions());
+    auto options = validRawRtpAudioVideoOptions();
+    options.input.audioRtp.url = "rtp://192.0.2.10:5006";
+
+    const auto plan = MediaRealtimeRtpTranscodePlanner::plan(options);
     EXPECT_TRUE(ctx, plan);
     if (!plan) {
         std::cerr << plan.error().describe() << '\n';
@@ -346,9 +360,35 @@ void testRawRtpPlansAudioVideoInput(TestContext& ctx)
     EXPECT_EQ(ctx, plan.value().audioPlan.sourceCodecName, std::string("aac"));
     EXPECT_TRUE(ctx, plan.value().input.sdpText.find("m=video 5004 RTP/AVP 96") != std::string::npos);
     EXPECT_TRUE(ctx, plan.value().input.sdpText.find("m=audio 5006 RTP/AVP 97") != std::string::npos);
+    EXPECT_TRUE(ctx, plan.value().input.sdpText.find("m=video 5004 RTP/AVP 96\r\nc=IN IP4 127.0.0.1\r\n") != std::string::npos);
+    EXPECT_TRUE(ctx, plan.value().input.sdpText.find("m=audio 5006 RTP/AVP 97\r\nc=IN IP4 192.0.2.10\r\n") != std::string::npos);
     EXPECT_TRUE(ctx, plan.value().input.sdpText.find("a=fmtp:97 ") != std::string::npos);
     EXPECT_EQ(ctx, plan.value().videoOutput.url, std::string("rtp://127.0.0.1:5004"));
     EXPECT_EQ(ctx, plan.value().audioOutput.url, std::string("rtp://127.0.0.1:5006"));
+}
+
+void testRawRtpPlansOpusAudioInput(TestContext& ctx)
+{
+    MediaRealtimeRtpTranscodeRequest options = validRawRtpAudioVideoOptions();
+    options.parameters.audio.codecName = "opus";
+    options.input.audioRtp.codecName = "opus";
+    options.input.audioRtp.payloadType = 98;
+    options.input.audioRtp.clockRate = 48000;
+    options.input.audioRtp.channels = 2;
+    options.input.audioRtp.fmtp.clear();
+
+    const auto plan = MediaRealtimeRtpTranscodePlanner::plan(options);
+    EXPECT_TRUE(ctx, plan);
+    if (!plan) {
+        std::cerr << plan.error().describe() << '\n';
+        return;
+    }
+
+    EXPECT_TRUE(ctx, plan.value().audioPlan.enabled);
+    EXPECT_EQ(ctx, plan.value().audioPlan.sourceCodecName, std::string("opus"));
+    EXPECT_TRUE(ctx, plan.value().input.sdpText.find("m=audio 5006 RTP/AVP 98") != std::string::npos);
+    EXPECT_TRUE(ctx, plan.value().input.sdpText.find("a=rtpmap:98 opus/48000/2") != std::string::npos);
+    EXPECT_FALSE(ctx, plan.value().input.sdpText.find("a=fmtp:98 ") != std::string::npos);
 }
 
 void testValidationRejectsOddRtpPort(TestContext& ctx)
@@ -361,6 +401,44 @@ void testValidationRejectsOddRtpPort(TestContext& ctx)
     if (!status) {
         EXPECT_EQ(ctx, status.error().code, media::ErrorCode::InvalidArgument);
     }
+}
+
+void testValidationRejectsAudioRtpPortOverflow(TestContext& ctx)
+{
+    MediaRealtimeRtpTranscodeRequest options = validRealtimeOptions();
+    options.parameters.execution.includeAudio = true;
+    options.parameters.audio.codecName = "aac";
+    options.parameters.audio.sampleRate = 48000;
+    options.parameters.audio.channels = 2;
+    options.output.basePort = 65534;
+
+    const auto status = MediaRealtimeRtpTranscodeGraphBuilder::validate(options);
+    EXPECT_FALSE(ctx, status);
+    if (!status) {
+        EXPECT_EQ(ctx, status.error().code, media::ErrorCode::InvalidArgument);
+    }
+}
+
+void testRealtimeNoAudioProbeDoesNotRequestAudio(TestContext& ctx)
+{
+    const auto header = readTextFile(std::filesystem::path(MEDIA_TRANSCODE_SOURCE_DIR) /
+                                     "src" /
+                                     "internal" /
+                                     "graph" /
+                                     "planner" /
+                                     "MediaPipelineCapabilityScanner.h");
+    EXPECT_TRUE(ctx, header.find("detectRealtimeInputStreamInfo(") != std::string::npos);
+    EXPECT_TRUE(ctx, header.find("bool includeAudio") != std::string::npos);
+
+    const auto planner = readTextFile(std::filesystem::path(MEDIA_TRANSCODE_SOURCE_DIR) /
+                                      "src" /
+                                      "internal" /
+                                      "graph" /
+                                      "planner" /
+                                      "realtime" /
+                                      "MediaRealtimeRtpTranscodePlanner.cpp");
+    EXPECT_TRUE(ctx, planner.find("detectRealtimeInputStreamInfo(options.input.url,") != std::string::npos);
+    EXPECT_TRUE(ctx, planner.find("audioRequested(options));") != std::string::npos);
 }
 
 void testBuildPlansVideoStreamAndSoftwareExecution(TestContext& ctx)
@@ -422,6 +500,15 @@ void testBuildPlansRealtimeUrlAudioBranch(TestContext& ctx)
     if (sdpWriter) {
         EXPECT_EQ(ctx, sdpWriter->options.value("sdp.expected_contexts"), std::string("2"));
     }
+    const auto source = readTextFile(std::filesystem::path(MEDIA_TRANSCODE_SOURCE_DIR) /
+                                     "src" /
+                                     "internal" /
+                                     "graph" /
+                                     "nodes" /
+                                     "output" /
+                                     "SdpWriterNode.cpp");
+    EXPECT_EQ(ctx, countOccurrences(source, "av_sdp_create("), static_cast<std::size_t>(1));
+    EXPECT_TRUE(ctx, source.find("contexts.data(), static_cast<int>(contexts.size())") != std::string::npos);
 }
 
 void testBuildPlansRawRtpH264Graph(TestContext& ctx)
@@ -636,7 +723,10 @@ int main()
     testRawRtpPlansH264AndHevcInput(ctx);
     testRawRtpAudioEndpointRequiredWhenAudioEnabled(ctx);
     testRawRtpPlansAudioVideoInput(ctx);
+    testRawRtpPlansOpusAudioInput(ctx);
     testValidationRejectsOddRtpPort(ctx);
+    testValidationRejectsAudioRtpPortOverflow(ctx);
+    testRealtimeNoAudioProbeDoesNotRequestAudio(ctx);
     testUrlRedactionHidesUserInfo(ctx);
     testTimestampRescaleBumpsQuantizedDuplicates(ctx);
     testTimestampRescaleRejectsInvalidBoundaryValues(ctx);

@@ -98,7 +98,7 @@ constexpr int OpusClockRate = 48000;
             return ::media::Result<MediaRealtimeRtpCodecDescriptor>::failure(
                 ::media::ErrorInfo::invalidArgument("Raw RTP Opus clock rate must be 48000"));
         }
-        descriptor.rtpEncodingName = "OPUS";
+        descriptor.rtpEncodingName = "opus";
         descriptor.clockRate = OpusClockRate;
         return ::media::Result<MediaRealtimeRtpCodecDescriptor>::success(std::move(descriptor));
     }

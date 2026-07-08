@@ -23,7 +23,8 @@ public:
         const MediaPipelinePlannerOptions& options);
     static ::media::Result<MediaRealtimeInputStreamInfo> detectRealtimeInputStreamInfo(
         const std::string& inputUrl,
-        const MediaPipelinePlannerOptions& options);
+        const MediaPipelinePlannerOptions& options,
+        bool includeAudio);
 
     static std::vector<MediaPipelineChainPlan> enumerateVideoTranscodeCandidates(
         const std::string& inputCodecName,

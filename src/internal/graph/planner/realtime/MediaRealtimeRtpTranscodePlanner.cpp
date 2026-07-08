@@ -136,6 +136,7 @@ void appendRawRtpSdpMedia(std::ostringstream& out,
 {
     const char* mediaName = descriptor.streamKind == MediaStreamKind::Audio ? "audio" : "video";
     out << "m=" << mediaName << " " << endpoint.port << " RTP/AVP " << *metadata.payloadType << "\r\n"
+        << "c=IN IP4 " << endpoint.host << "\r\n"
         << "a=rtpmap:" << *metadata.payloadType << " " << descriptor.rtpEncodingName << "/" << descriptor.clockRate;
     if (descriptor.streamKind == MediaStreamKind::Audio && descriptor.channels > 0) {
         out << "/" << descriptor.channels;
@@ -161,7 +162,6 @@ std::string planRawRtpSdp(const MediaRtpUrlEndpoint& videoEndpoint,
     out << "v=0\r\n"
         << "o=- 0 0 IN IP4 " << videoEndpoint.host << "\r\n"
         << "s=MediaTranscode Raw RTP\r\n"
-        << "c=IN IP4 " << videoEndpoint.host << "\r\n"
         << "t=0 0\r\n";
     appendRawRtpSdpMedia(out, videoEndpoint, videoMetadata, videoDescriptor, mediaId);
     if (audioEndpoint && audioMetadata && audioDescriptor) {
@@ -422,7 +422,9 @@ MediaEdgePolicy planEdgePolicy(const MediaGraphQueueParameters& queues)
         }
         videoPlan = std::move(plannedVideo).value();
     } else {
-        auto realtimeInput = MediaPipelineCapabilityScanner::detectRealtimeInputStreamInfo(options.input.url, pipelineOptions);
+        auto realtimeInput = MediaPipelineCapabilityScanner::detectRealtimeInputStreamInfo(options.input.url,
+                                                                                           pipelineOptions,
+                                                                                           audioRequested(options));
         if (!realtimeInput) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(realtimeInput.error());
         }

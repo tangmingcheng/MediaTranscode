@@ -115,7 +115,8 @@ FFmpegRealtimeInputOptions toFFmpegRealtimeInputOptions(const MediaPipelinePlann
 
 ::media::Result<MediaRealtimeInputStreamInfo> detectRealtimeStreamInfoWithOptions(
     const std::string& inputPath,
-    AVDictionary** inputOptions)
+    AVDictionary** inputOptions,
+    bool includeAudio)
 {
     AVFormatContext* raw = nullptr;
     const int openRet = avformat_open_input(&raw, inputPath.c_str(), nullptr, inputOptions);
@@ -151,6 +152,9 @@ FFmpegRealtimeInputOptions toFFmpegRealtimeInputOptions(const MediaPipelinePlann
     info.video.width = videoParams->width;
     info.video.height = videoParams->height;
     info.video.frameRate = bestFrameRate(videoStream);
+    if (!includeAudio) {
+        return ::media::Result<MediaRealtimeInputStreamInfo>::success(std::move(info));
+    }
 
     const int audioIndex = av_find_best_stream(inputContext.get(), AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
     if (audioIndex == AVERROR_STREAM_NOT_FOUND) {
@@ -573,7 +577,8 @@ MediaPipelineChainPlan makeRawChain(std::string label,
 
 ::media::Result<MediaRealtimeInputStreamInfo> MediaPipelineCapabilityScanner::detectRealtimeInputStreamInfo(
     const std::string& inputUrl,
-    const MediaPipelinePlannerOptions& options)
+    const MediaPipelinePlannerOptions& options,
+    bool includeAudio)
 {
     AVDictionary* rawOptions = nullptr;
     applyFFmpegRealtimeInputOptions(&rawOptions, toFFmpegRealtimeInputOptions(options));
@@ -583,7 +588,7 @@ MediaPipelineChainPlan makeRawChain(std::string label,
         }
     };
 
-    auto result = detectRealtimeStreamInfoWithOptions(inputUrl, &rawOptions);
+    auto result = detectRealtimeStreamInfoWithOptions(inputUrl, &rawOptions, includeAudio);
     cleanup();
     return result;
 }
