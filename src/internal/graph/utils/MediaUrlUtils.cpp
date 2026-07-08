@@ -83,6 +83,11 @@ bool isUnsupportedRealtimeInputUrl(const std::string& url)
            endsWith(normalized, ".sdp");
 }
 
+bool isUdpUrl(const std::string& url)
+{
+    return startsWith(lowerAscii(url), "udp://");
+}
+
 ::media::Result<MediaRtpUrlEndpoint> parseRtpUdpUrlEndpoint(const std::string& url)
 {
     const std::string normalized = url;

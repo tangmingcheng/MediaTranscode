@@ -3,6 +3,7 @@
 #include "internal/graph/builder/realtime/MediaRealtimeRtpTranscodeGraphBuilder.h"
 #include "internal/graph/core/MediaGraphValidation.h"
 #include "internal/graph/model/MediaNodeKind.h"
+#include "internal/graph/model/RealtimeStreamLayout.h"
 #include "internal/graph/nodes/video/VideoMonotonicTimestamp.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 #include "internal/graph/runtime/MediaGraphRuntime.h"
@@ -13,13 +14,31 @@ extern "C" {
 #include <libavutil/avutil.h>
 }
 
+#include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <limits>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
+
+#ifdef _WIN32
+#define NOMINMAX
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#else
+#include <arpa/inet.h>
+#include <csignal>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -34,10 +53,302 @@ std::string sampleVideoPath()
             "sample_h264_aac_2560x1440.mp4").string();
 }
 
+std::uint32_t testProcessId() noexcept
+{
+#ifdef _WIN32
+    return static_cast<std::uint32_t>(GetCurrentProcessId());
+#else
+    return static_cast<std::uint32_t>(getpid());
+#endif
+}
+
+std::uint16_t localMpegTsUdpPort(std::uint16_t offset) noexcept
+{
+    const std::uint32_t base = 20000 + ((testProcessId() * 17) % 20000);
+    return static_cast<std::uint16_t>(base + offset);
+}
+
+std::uint16_t findAvailableUdpPort() noexcept
+{
+#ifdef _WIN32
+    WSADATA wsaData{};
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+        return localMpegTsUdpPort(0);
+    }
+
+    SOCKET socketHandle = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (socketHandle == INVALID_SOCKET) {
+        WSACleanup();
+        return localMpegTsUdpPort(0);
+    }
+
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = 0;
+    if (bind(socketHandle, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
+        closesocket(socketHandle);
+        WSACleanup();
+        return localMpegTsUdpPort(0);
+    }
+
+    int addressLength = sizeof(address);
+    std::uint16_t port = localMpegTsUdpPort(0);
+    if (getsockname(socketHandle, reinterpret_cast<sockaddr*>(&address), &addressLength) == 0) {
+        port = ntohs(address.sin_port);
+    }
+
+    closesocket(socketHandle);
+    WSACleanup();
+    return port;
+#else
+    const int socketHandle = socket(AF_INET, SOCK_DGRAM, 0);
+    if (socketHandle < 0) {
+        return localMpegTsUdpPort(0);
+    }
+
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = 0;
+    if (bind(socketHandle, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
+        close(socketHandle);
+        return localMpegTsUdpPort(0);
+    }
+
+    socklen_t addressLength = sizeof(address);
+    std::uint16_t port = localMpegTsUdpPort(0);
+    if (getsockname(socketHandle, reinterpret_cast<sockaddr*>(&address), &addressLength) == 0) {
+        port = ntohs(address.sin_port);
+    }
+
+    close(socketHandle);
+    return port;
+#endif
+}
+
+std::uint16_t mpegTsUdpInputPort() noexcept
+{
+    static const std::uint16_t port = findAvailableUdpPort();
+    return port;
+}
+
+std::uint16_t mpegTsUdpOutputPort() noexcept
+{
+    const std::uint16_t inputPort = mpegTsUdpInputPort();
+    if (inputPort <= 65533) {
+        return static_cast<std::uint16_t>(inputPort + 2);
+    }
+    return localMpegTsUdpPort(2);
+}
+
+std::string mpegTsUdpInputUrl()
+{
+    return "udp://127.0.0.1:" + std::to_string(mpegTsUdpInputPort()) + "?fifo_size=1000000&overrun_nonfatal=1";
+}
+
+std::string mpegTsUdpOutputUrl()
+{
+    return "udp://127.0.0.1:" + std::to_string(mpegTsUdpOutputPort());
+}
+
+std::filesystem::path ffmpegExecutablePath()
+{
+#ifdef _WIN32
+    const std::filesystem::path bundled = "D:/mabs/local64/bin-video/ffmpeg.exe";
+    if (std::filesystem::exists(bundled)) {
+        return bundled;
+    }
+#else
+    const std::filesystem::path bundled = "/usr/bin/ffmpeg";
+    if (std::filesystem::exists(bundled)) {
+        return bundled;
+    }
+#endif
+    return "ffmpeg";
+}
+
+#ifdef _WIN32
+std::wstring widenAscii(const std::string& value)
+{
+    return std::wstring(value.begin(), value.end());
+}
+
+class LocalMpegTsUdpSource final {
+public:
+    static ::media::Result<LocalMpegTsUdpSource> start()
+    {
+        const std::filesystem::path ffmpeg = ffmpegExecutablePath();
+        const std::string command =
+            "\"" + ffmpeg.string() + "\" -hide_banner -loglevel error -re -stream_loop -1 -i \"" +
+            sampleVideoPath() + "\" -map 0:v:0 -map 0:a:0? -c copy -f mpegts \"udp://127.0.0.1:" +
+            std::to_string(mpegTsUdpInputPort()) + "?pkt_size=1316\"";
+
+        STARTUPINFOW startupInfo{};
+        startupInfo.cb = sizeof(startupInfo);
+        PROCESS_INFORMATION processInfo{};
+        std::wstring commandLine = widenAscii(command);
+
+        if (!CreateProcessW(nullptr,
+                            commandLine.data(),
+                            nullptr,
+                            nullptr,
+                            FALSE,
+                            CREATE_NO_WINDOW,
+                            nullptr,
+                            nullptr,
+                            &startupInfo,
+                            &processInfo)) {
+            return ::media::Result<LocalMpegTsUdpSource>::failure(
+                ::media::ErrorInfo::invalidArgument("Failed to start local FFmpeg MPEG-TS UDP source"));
+        }
+
+        CloseHandle(processInfo.hThread);
+        LocalMpegTsUdpSource source(processInfo.hProcess);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+        return ::media::Result<LocalMpegTsUdpSource>::success(std::move(source));
+    }
+
+    LocalMpegTsUdpSource(LocalMpegTsUdpSource&& other) noexcept
+        : m_process(other.m_process)
+    {
+        other.m_process = nullptr;
+    }
+
+    LocalMpegTsUdpSource& operator=(LocalMpegTsUdpSource&& other) noexcept
+    {
+        if (this != &other) {
+            stop();
+            m_process = other.m_process;
+            other.m_process = nullptr;
+        }
+        return *this;
+    }
+
+    LocalMpegTsUdpSource(const LocalMpegTsUdpSource&) = delete;
+    LocalMpegTsUdpSource& operator=(const LocalMpegTsUdpSource&) = delete;
+
+    ~LocalMpegTsUdpSource()
+    {
+        stop();
+    }
+
+private:
+    explicit LocalMpegTsUdpSource(HANDLE process)
+        : m_process(process)
+    {
+    }
+
+    void stop() noexcept
+    {
+        if (!m_process) {
+            return;
+        }
+        TerminateProcess(m_process, 0);
+        WaitForSingleObject(m_process, 2000);
+        CloseHandle(m_process);
+        m_process = nullptr;
+    }
+
+    HANDLE m_process = nullptr;
+};
+#else
+class LocalMpegTsUdpSource final {
+public:
+    static ::media::Result<LocalMpegTsUdpSource> start()
+    {
+        const std::filesystem::path ffmpeg = ffmpegExecutablePath();
+        const std::string input = sampleVideoPath();
+        const std::string output = "udp://127.0.0.1:" + std::to_string(mpegTsUdpInputPort()) + "?pkt_size=1316";
+        const pid_t pid = fork();
+        if (pid < 0) {
+            return ::media::Result<LocalMpegTsUdpSource>::failure(
+                ::media::ErrorInfo::invalidArgument("Failed to fork local FFmpeg MPEG-TS UDP source"));
+        }
+        if (pid == 0) {
+            execlp(ffmpeg.string().c_str(),
+                   ffmpeg.filename().string().c_str(),
+                   "-hide_banner",
+                   "-loglevel",
+                   "error",
+                   "-re",
+                   "-stream_loop",
+                   "-1",
+                   "-i",
+                   input.c_str(),
+                   "-map",
+                   "0:v:0",
+                   "-map",
+                   "0:a:0?",
+                   "-c",
+                   "copy",
+                   "-f",
+                   "mpegts",
+                   output.c_str(),
+                   static_cast<char*>(nullptr));
+            _exit(127);
+        }
+
+        LocalMpegTsUdpSource source(pid);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+        int status = 0;
+        if (waitpid(pid, &status, WNOHANG) == pid) {
+            source.m_process = -1;
+            return ::media::Result<LocalMpegTsUdpSource>::failure(
+                ::media::ErrorInfo::invalidArgument("Local FFmpeg MPEG-TS UDP source exited before probe"));
+        }
+        return ::media::Result<LocalMpegTsUdpSource>::success(std::move(source));
+    }
+
+    LocalMpegTsUdpSource(LocalMpegTsUdpSource&& other) noexcept
+        : m_process(other.m_process)
+    {
+        other.m_process = -1;
+    }
+
+    LocalMpegTsUdpSource& operator=(LocalMpegTsUdpSource&& other) noexcept
+    {
+        if (this != &other) {
+            stop();
+            m_process = other.m_process;
+            other.m_process = -1;
+        }
+        return *this;
+    }
+
+    LocalMpegTsUdpSource(const LocalMpegTsUdpSource&) = delete;
+    LocalMpegTsUdpSource& operator=(const LocalMpegTsUdpSource&) = delete;
+
+    ~LocalMpegTsUdpSource()
+    {
+        stop();
+    }
+
+private:
+    explicit LocalMpegTsUdpSource(pid_t process)
+        : m_process(process)
+    {
+    }
+
+    void stop() noexcept
+    {
+        if (m_process <= 0) {
+            return;
+        }
+        kill(m_process, SIGTERM);
+        waitpid(m_process, nullptr, 0);
+        m_process = -1;
+    }
+
+    pid_t m_process = -1;
+};
+#endif
+
 MediaRealtimeRtpTranscodeRequest validRealtimeOptions()
 {
     MediaRealtimeRtpTranscodeRequest options;
-    options.input.kind = MediaRealtimeInputKind::RealtimeUrl;
+    options.input.type = RealtimeInputType::Url;
+    options.input.streamLayout = RealtimeInputStreamLayout::SessionDescribed;
     options.input.url = sampleVideoPath();
     options.input.rtspTransport = "tcp";
     options.input.openTimeoutMs = 5000;
@@ -47,6 +358,7 @@ MediaRealtimeRtpTranscodeRequest validRealtimeOptions()
     options.input.lowLatency = true;
     options.output.host = "127.0.0.1";
     options.output.basePort = 5004;
+    options.output.streamLayout = RealtimeOutputStreamLayout::SeparateStreams;
     options.output.sdpPath = "realtime-test.sdp";
     options.output.packetSize = 1200;
     options.parameters.execution.includeVideo = true;
@@ -166,13 +478,29 @@ void expectCliEnableFlagRejected(TestContext& ctx,
 MediaRealtimeRtpTranscodeRequest validRawRtpOptions()
 {
     MediaRealtimeRtpTranscodeRequest options = validRealtimeOptions();
-    options.input.kind = MediaRealtimeInputKind::RawRtp;
+    options.input.type = RealtimeInputType::RtpPort;
+    options.input.streamLayout = RealtimeInputStreamLayout::SeparateStreams;
     options.input.url.clear();
     options.input.videoRtp.url = "rtp://127.0.0.1:5004";
     options.input.videoRtp.codecName = "h264";
     options.input.videoRtp.payloadType = 96;
     options.input.videoRtp.clockRate = 90000;
     options.input.videoRtp.fmtp = "packetization-mode=1;sprop-parameter-sets=Z01AMpWQAoALWwEQAAA+gAAOpghhA,aOuPIA==;profile-level-id=4D4032";
+    return options;
+}
+
+MediaRealtimeRtpTranscodeRequest validMpegTsUdpOptions()
+{
+    MediaRealtimeRtpTranscodeRequest options = validRealtimeOptions();
+    options.input.type = RealtimeInputType::MpegTsUdp;
+    options.input.streamLayout = RealtimeInputStreamLayout::MuxedTransportStream;
+    options.input.url = mpegTsUdpInputUrl();
+    options.input.rtspTransport.clear();
+    options.output.streamLayout = RealtimeOutputStreamLayout::MuxedTransportStream;
+    options.output.url = mpegTsUdpOutputUrl();
+    options.output.host.clear();
+    options.output.basePort.reset();
+    options.output.sdpPath.clear();
     return options;
 }
 
@@ -249,7 +577,7 @@ void testValidationRejectsUnsupportedRealtimeInput(TestContext& ctx)
 {
     MediaRealtimeRtpTranscodeRequest options = validRealtimeOptions();
     options.input.url = "rtp://127.0.0.1:5004";
-    options.input.kind = MediaRealtimeInputKind::RealtimeUrl;
+    options.input.type = RealtimeInputType::Url;
 
     const auto status = MediaRealtimeRtpTranscodeGraphBuilder::validate(options);
     EXPECT_FALSE(ctx, status);
@@ -276,6 +604,109 @@ void testValidationRejectsUnsupportedRealtimeInput(TestContext& ctx)
     EXPECT_FALSE(ctx, sdpSchemeStatus);
     if (!sdpSchemeStatus) {
         EXPECT_EQ(ctx, sdpSchemeStatus.error().code, media::ErrorCode::Unsupported);
+    }
+}
+
+void testValidationRequiresExplicitRealtimeStreamClassification(TestContext& ctx)
+{
+    MediaRealtimeRtpTranscodeRequest missingInputType = validRealtimeOptions();
+    missingInputType.input.type.reset();
+    expectPlannerInvalidArgument(ctx, missingInputType);
+
+    MediaRealtimeRtpTranscodeRequest missingInputLayout = validRealtimeOptions();
+    missingInputLayout.input.streamLayout.reset();
+    expectPlannerInvalidArgument(ctx, missingInputLayout);
+
+    MediaRealtimeRtpTranscodeRequest missingOutputLayout = validRealtimeOptions();
+    missingOutputLayout.output.streamLayout.reset();
+    expectPlannerInvalidArgument(ctx, missingOutputLayout);
+}
+
+void testExistingRealtimeModesMapToExplicitLayouts(TestContext& ctx)
+{
+    const auto urlPlan = MediaRealtimeRtpTranscodePlanner::plan(validRealtimeOptions());
+    EXPECT_TRUE(ctx, urlPlan);
+    if (urlPlan) {
+        EXPECT_EQ(ctx, urlPlan.value().inputType, RealtimeInputType::Url);
+        EXPECT_EQ(ctx, urlPlan.value().inputLayout, RealtimeInputStreamLayout::SessionDescribed);
+        EXPECT_EQ(ctx, urlPlan.value().outputLayout, RealtimeOutputStreamLayout::SeparateStreams);
+    }
+
+    const auto rtpPlan = MediaRealtimeRtpTranscodePlanner::plan(validRawRtpOptions());
+    EXPECT_TRUE(ctx, rtpPlan);
+    if (rtpPlan) {
+        EXPECT_EQ(ctx, rtpPlan.value().inputType, RealtimeInputType::RtpPort);
+        EXPECT_EQ(ctx, rtpPlan.value().inputLayout, RealtimeInputStreamLayout::SeparateStreams);
+        EXPECT_EQ(ctx, rtpPlan.value().outputLayout, RealtimeOutputStreamLayout::SeparateStreams);
+    }
+}
+
+void testUnsupportedRealtimeStreamCombinationsFailInPlanner(TestContext& ctx)
+{
+    MediaRealtimeRtpTranscodeRequest sdp = validRealtimeOptions();
+    sdp.input.type = RealtimeInputType::Sdp;
+    auto sdpPlan = MediaRealtimeRtpTranscodePlanner::plan(sdp);
+    EXPECT_FALSE(ctx, sdpPlan);
+    if (!sdpPlan) {
+        EXPECT_EQ(ctx, sdpPlan.error().code, media::ErrorCode::Unsupported);
+    }
+
+    MediaRealtimeRtpTranscodeRequest externalTs = validMpegTsUdpOptions();
+    externalTs.input.type = RealtimeInputType::ExternalMpegTsPacket;
+    auto externalTsPlan = MediaRealtimeRtpTranscodePlanner::plan(externalTs);
+    EXPECT_FALSE(ctx, externalTsPlan);
+    if (!externalTsPlan) {
+        EXPECT_EQ(ctx, externalTsPlan.error().code, media::ErrorCode::Unsupported);
+    }
+
+    MediaRealtimeRtpTranscodeRequest externalRtp = validRawRtpOptions();
+    externalRtp.input.type = RealtimeInputType::ExternalRtpPacket;
+    auto externalRtpPlan = MediaRealtimeRtpTranscodePlanner::plan(externalRtp);
+    EXPECT_FALSE(ctx, externalRtpPlan);
+    if (!externalRtpPlan) {
+        EXPECT_EQ(ctx, externalRtpPlan.error().code, media::ErrorCode::Unsupported);
+    }
+
+    MediaRealtimeRtpTranscodeRequest bundled = validRawRtpOptions();
+    bundled.input.streamLayout = RealtimeInputStreamLayout::BundledStream;
+    auto bundledPlan = MediaRealtimeRtpTranscodePlanner::plan(bundled);
+    EXPECT_FALSE(ctx, bundledPlan);
+    if (!bundledPlan) {
+        EXPECT_EQ(ctx, bundledPlan.error().code, media::ErrorCode::Unsupported);
+    }
+
+    MediaRealtimeRtpTranscodeRequest bundledOutput = validRawRtpOptions();
+    bundledOutput.output.streamLayout = RealtimeOutputStreamLayout::BundledStream;
+    auto bundledOutputPlan = MediaRealtimeRtpTranscodePlanner::plan(bundledOutput);
+    EXPECT_FALSE(ctx, bundledOutputPlan);
+    if (!bundledOutputPlan) {
+        EXPECT_EQ(ctx, bundledOutputPlan.error().code, media::ErrorCode::Unsupported);
+    }
+}
+
+void testMpegTsUdpRejectsNonUdpInputUrl(TestContext& ctx)
+{
+    MediaRealtimeRtpTranscodeRequest options = validMpegTsUdpOptions();
+    options.input.url = sampleVideoPath();
+
+    const auto plan = MediaRealtimeRtpTranscodePlanner::plan(options);
+    EXPECT_FALSE(ctx, plan);
+    if (!plan) {
+        EXPECT_EQ(ctx, plan.error().code, media::ErrorCode::InvalidArgument);
+    }
+}
+
+void testSeparateRtpOutputRejectsSingleOutputUrl(TestContext& ctx)
+{
+    MediaRealtimeRtpTranscodeRequest options = validRawRtpOptions();
+    options.output.url = "udp://127.0.0.1:6000";
+    options.output.host.clear();
+    options.output.basePort.reset();
+
+    const auto plan = MediaRealtimeRtpTranscodePlanner::plan(options);
+    EXPECT_FALSE(ctx, plan);
+    if (!plan) {
+        EXPECT_EQ(ctx, plan.error().code, media::ErrorCode::InvalidArgument);
     }
 }
 
@@ -368,7 +799,7 @@ void testRawRtpPlansH264AndHevcInput(TestContext& ctx)
     const auto h264Plan = MediaRealtimeRtpTranscodePlanner::plan(h264Options);
     EXPECT_TRUE(ctx, h264Plan);
     if (h264Plan) {
-        EXPECT_EQ(ctx, h264Plan.value().inputKind, MediaRealtimeInputKind::RawRtp);
+        EXPECT_EQ(ctx, h264Plan.value().inputType, RealtimeInputType::RtpPort);
         EXPECT_EQ(ctx, h264Plan.value().videoPlan.inputCodecName, std::string("h264"));
         EXPECT_EQ(ctx, h264Plan.value().videoPlan.sourceStreamIndex, 0);
     }
@@ -383,7 +814,7 @@ void testRawRtpPlansH264AndHevcInput(TestContext& ctx)
         return;
     }
 
-    EXPECT_EQ(ctx, hevcPlan.value().inputKind, MediaRealtimeInputKind::RawRtp);
+    EXPECT_EQ(ctx, hevcPlan.value().inputType, RealtimeInputType::RtpPort);
     EXPECT_EQ(ctx, hevcPlan.value().videoPlan.inputCodecName, std::string("hevc"));
     EXPECT_TRUE(ctx, hevcPlan.value().input.sdpText.find("H265/90000") != std::string::npos);
 }
@@ -622,6 +1053,40 @@ void testBuildPlansRawRtpAudioVideoGraph(TestContext& ctx)
     EXPECT_TRUE(ctx, findEdgeBetweenKinds(graph, MediaNodeKind::AudioEncode, MediaNodeKind::RtpMux, MediaEdgeKind::EncodedPacket) != nullptr);
 }
 
+void testBuildPlansMpegTsUdpMuxedOutputGraph(TestContext& ctx)
+{
+    auto source = LocalMpegTsUdpSource::start();
+    EXPECT_TRUE(ctx, source);
+    if (!source) {
+        std::cerr << source.error().describe() << '\n';
+        return;
+    }
+
+    const auto graphResult = MediaRealtimeRtpTranscodeGraphBuilder::build(validMpegTsUdpOptions());
+    EXPECT_TRUE(ctx, graphResult);
+    if (!graphResult) {
+        std::cerr << graphResult.error().describe() << '\n';
+        return;
+    }
+
+    const MediaGraph& graph = graphResult.value();
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::RealtimeInput) != nullptr);
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::Demux) != nullptr);
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::StreamSplit) != nullptr);
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::FileOutput) != nullptr);
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::FileMux) != nullptr);
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::RtpOutput), static_cast<std::size_t>(0));
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::RtpMux), static_cast<std::size_t>(0));
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::SdpWriter), static_cast<std::size_t>(0));
+
+    const MediaNode* fileOutput = findNodeByKind(graph, MediaNodeKind::FileOutput);
+    EXPECT_TRUE(ctx, fileOutput != nullptr);
+    if (fileOutput) {
+        EXPECT_EQ(ctx, fileOutput->options.value("url"), mpegTsUdpOutputUrl());
+        EXPECT_EQ(ctx, fileOutput->options.value("format"), std::string("mpegts"));
+    }
+}
+
 void testRealtimeBuilderDoesNotOwnPlannerDecisions(TestContext& ctx)
 {
     const auto source = readTextFile(std::filesystem::path(MEDIA_TRANSCODE_SOURCE_DIR) /
@@ -825,6 +1290,11 @@ int main()
     testValidationRejectsMissingInput(ctx);
     testLegacyArchitectureFilesAreRemoved(ctx);
     testValidationRejectsUnsupportedRealtimeInput(ctx);
+    testValidationRequiresExplicitRealtimeStreamClassification(ctx);
+    testExistingRealtimeModesMapToExplicitLayouts(ctx);
+    testUnsupportedRealtimeStreamCombinationsFailInPlanner(ctx);
+    testMpegTsUdpRejectsNonUdpInputUrl(ctx);
+    testSeparateRtpOutputRejectsSingleOutputUrl(ctx);
     testRawRtpMissingMetadataFailsInPlanner(ctx);
     testRawRtpRejectsUnsupportedMetadata(ctx);
     testRawRtpPlansH264AndHevcInput(ctx);
@@ -843,6 +1313,7 @@ int main()
     testBuildPlansRealtimeUrlAudioBranch(ctx);
     testBuildPlansRawRtpH264Graph(ctx);
     testBuildPlansRawRtpAudioVideoGraph(ctx);
+    testBuildPlansMpegTsUdpMuxedOutputGraph(ctx);
     testRealtimeBuilderDoesNotOwnPlannerDecisions(ctx);
     testRuntimeCompileSupportsSoftwareChain(ctx);
     testRuntimeCompileSupportsRawRtpChain(ctx);

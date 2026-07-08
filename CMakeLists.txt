@@ -182,5 +182,8 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
     target_compile_definitions(media_transcode_realtime_graph_tests PRIVATE
         MEDIA_TRANSCODE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
     )
+    if(WIN32)
+        target_link_libraries(media_transcode_realtime_graph_tests PRIVATE ws2_32)
+    endif()
     add_test(NAME media_transcode_realtime_graph_tests COMMAND media_transcode_realtime_graph_tests)
 endif()

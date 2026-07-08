@@ -50,6 +50,8 @@ MediaVideoTranscodeParameters planRealtimeVideoParameters(const MediaVideoTransc
 struct PlannedOutputUrls {
     std::string videoUrl;
     std::string audioUrl;
+    std::string muxedUrl;
+    std::string muxedFormat;
 };
 
 std::string planOutputRtpUrl(const std::string& host, std::size_t port)
@@ -62,19 +64,76 @@ bool audioRequested(const MediaRealtimeRtpTranscodeRequest& options) noexcept
     return options.parameters.execution.includeAudio;
 }
 
+bool isRealtimeUrlInput(const MediaRealtimeRtpTranscodeRequest& options) noexcept
+{
+    return options.input.type == RealtimeInputType::Url &&
+           options.input.streamLayout == RealtimeInputStreamLayout::SessionDescribed;
+}
+
+bool isRtpPortInput(const MediaRealtimeRtpTranscodeRequest& options) noexcept
+{
+    return options.input.type == RealtimeInputType::RtpPort &&
+           options.input.streamLayout == RealtimeInputStreamLayout::SeparateStreams;
+}
+
+bool isMpegTsUdpInput(const MediaRealtimeRtpTranscodeRequest& options) noexcept
+{
+    return options.input.type == RealtimeInputType::MpegTsUdp &&
+           options.input.streamLayout == RealtimeInputStreamLayout::MuxedTransportStream;
+}
+
+bool isSeparateRtpOutput(const MediaRealtimeRtpTranscodeRequest& options) noexcept
+{
+    return options.output.streamLayout == RealtimeOutputStreamLayout::SeparateStreams;
+}
+
+bool isMuxedTransportStreamOutput(const MediaRealtimeRtpTranscodeRequest& options) noexcept
+{
+    return options.output.streamLayout == RealtimeOutputStreamLayout::MuxedTransportStream;
+}
+
+::media::Result<void> validateExplicitStreamClassification(const MediaRealtimeRtpTranscodeRequest& options)
+{
+    if (!options.input.type.has_value()) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument("Realtime input type must be explicit"));
+    }
+    if (!options.input.streamLayout.has_value()) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument("Realtime input stream layout must be explicit"));
+    }
+    if (!options.output.streamLayout.has_value()) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument("Realtime output stream layout must be explicit"));
+    }
+    return ::media::Result<void>::success();
+}
+
+::media::Result<void> validateSupportedStreamClassification(const MediaRealtimeRtpTranscodeRequest& options)
+{
+    if (isRealtimeUrlInput(options) && isSeparateRtpOutput(options)) {
+        return ::media::Result<void>::success();
+    }
+    if (isRtpPortInput(options) && isSeparateRtpOutput(options)) {
+        return ::media::Result<void>::success();
+    }
+    if (isMpegTsUdpInput(options) && isMuxedTransportStreamOutput(options)) {
+        return ::media::Result<void>::success();
+    }
+    return ::media::Result<void>::failure(
+        ::media::ErrorInfo::unsupported("Realtime input type, input layout, and output layout combination is not supported"));
+}
+
 ::media::Result<PlannedOutputUrls> planOutputUrls(const MediaRealtimeOutputConfig& output,
                                                   bool includeAudio)
 {
     if (!output.url.empty()) {
-        if (includeAudio) {
-            return ::media::Result<PlannedOutputUrls>::failure(
-                ::media::ErrorInfo::invalidArgument("Realtime RTP audio output requires host/basePort so planner can derive per-stream ports"));
-        }
-        return ::media::Result<PlannedOutputUrls>::success({ output.url, {} });
+        return ::media::Result<PlannedOutputUrls>::failure(
+            ::media::ErrorInfo::invalidArgument("Realtime RTP separate output requires host/basePort; single output URL is unsupported"));
     }
     if (output.host.empty() || !output.basePort.has_value()) {
         return ::media::Result<PlannedOutputUrls>::failure(
-            ::media::ErrorInfo::invalidArgument("Realtime RTP output requires explicit url or host/basePort"));
+            ::media::ErrorInfo::invalidArgument("Realtime RTP separate output requires host/basePort"));
     }
     if (!isValidRtpPort(*output.basePort)) {
         return ::media::Result<PlannedOutputUrls>::failure(
@@ -93,6 +152,19 @@ bool audioRequested(const MediaRealtimeRtpTranscodeRequest& options) noexcept
     return ::media::Result<PlannedOutputUrls>::success(std::move(urls));
 }
 
+::media::Result<PlannedOutputUrls> planMuxedTransportStreamOutput(const MediaRealtimeOutputConfig& output)
+{
+    if (output.url.empty()) {
+        return ::media::Result<PlannedOutputUrls>::failure(
+            ::media::ErrorInfo::invalidArgument("MPEG-TS muxed output requires explicit output URL"));
+    }
+    PlannedOutputUrls urls;
+    urls.videoUrl = output.url;
+    urls.muxedUrl = output.url;
+    urls.muxedFormat = "mpegts";
+    return ::media::Result<PlannedOutputUrls>::success(std::move(urls));
+}
+
 ::media::Result<void> validateRealtimeUrlInput(const MediaRealtimeRtpTranscodeRequest& options)
 {
     if (isUnsupportedRealtimeInputUrl(options.input.url)) {
@@ -102,6 +174,15 @@ bool audioRequested(const MediaRealtimeRtpTranscodeRequest& options) noexcept
     if (options.input.rtspTransport.empty()) {
         return ::media::Result<void>::failure(
             ::media::ErrorInfo::invalidArgument("Realtime URL input requires explicit RTSP transport"));
+    }
+    return ::media::Result<void>::success();
+}
+
+::media::Result<void> validateMpegTsUdpInput(const MediaRealtimeRtpTranscodeRequest& options)
+{
+    if (!isUdpUrl(options.input.url)) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument("MPEG-TS UDP input requires udp:// URL"));
     }
     return ::media::Result<void>::success();
 }
@@ -298,11 +379,13 @@ MediaEdgePolicy planEdgePolicy(const MediaGraphQueueParameters& queues)
 ::media::Result<MediaRealtimeRtpTranscodePlan> MediaRealtimeRtpTranscodePlanner::plan(
     const MediaRealtimeRtpTranscodeRequest& options)
 {
-    if (!options.input.kind.has_value()) {
-        return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
-            ::media::ErrorInfo::invalidArgument("Realtime RTP input kind must be explicit"));
+    if (auto status = validateExplicitStreamClassification(options); !status) {
+        return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(status.error());
     }
-    if (*options.input.kind == MediaRealtimeInputKind::RealtimeUrl && options.input.url.empty()) {
+    if (auto status = validateSupportedStreamClassification(options); !status) {
+        return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(status.error());
+    }
+    if ((isRealtimeUrlInput(options) || isMpegTsUdpInput(options)) && options.input.url.empty()) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
             ::media::ErrorInfo::invalidArgument("Realtime RTP input URL must be explicit"));
     }
@@ -310,33 +393,38 @@ MediaEdgePolicy planEdgePolicy(const MediaGraphQueueParameters& queues)
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
             ::media::ErrorInfo::invalidArgument("Realtime RTP transcode requires video branch"));
     }
-    if (!options.output.packetSize.has_value() || *options.output.packetSize <= 0) {
-        return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
-            ::media::ErrorInfo::invalidArgument("Realtime RTP output packet size must be explicit and positive"));
-    }
-    if (options.output.sdpPath.empty()) {
-        return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
-            ::media::ErrorInfo::invalidArgument("Realtime RTP SDP output path must be explicit"));
+    if (isSeparateRtpOutput(options)) {
+        if (!options.output.packetSize.has_value() || *options.output.packetSize <= 0) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                ::media::ErrorInfo::invalidArgument("Realtime RTP output packet size must be explicit and positive"));
+        }
+        if (options.output.sdpPath.empty()) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                ::media::ErrorInfo::invalidArgument("Realtime RTP SDP output path must be explicit"));
+        }
     }
     if (auto queueStatus = validateQueues(options.parameters.queues); !queueStatus) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(queueStatus.error());
     }
 
-    switch (*options.input.kind) {
-    case MediaRealtimeInputKind::RealtimeUrl:
+    if (isRealtimeUrlInput(options)) {
         if (auto status = validateRealtimeUrlInput(options); !status) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(status.error());
         }
-        break;
-    case MediaRealtimeInputKind::RawRtp:
-        break;
+    }
+    if (isMpegTsUdpInput(options)) {
+        if (auto status = validateMpegTsUdpInput(options); !status) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(status.error());
+        }
     }
 
     if (auto status = validateRealtimeInputOpenOptions(options); !status) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(status.error());
     }
 
-    auto outputUrls = planOutputUrls(options.output, audioRequested(options));
+    auto outputUrls = isMuxedTransportStreamOutput(options)
+        ? planMuxedTransportStreamOutput(options.output)
+        : planOutputUrls(options.output, audioRequested(options));
     if (!outputUrls) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(outputUrls.error());
     }
@@ -357,7 +445,7 @@ MediaEdgePolicy planEdgePolicy(const MediaGraphQueueParameters& queues)
     std::string plannedInputUrl = options.input.url;
     MediaPipelinePlan videoPlan;
     MediaAudioPipelinePlan audioPlan;
-    if (*options.input.kind == MediaRealtimeInputKind::RawRtp) {
+    if (isRtpPortInput(options)) {
         auto videoDescriptor = MediaRealtimeRtpCodecRegistry::describe(MediaStreamKind::Video, options.input.videoRtp);
         if (!videoDescriptor) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(videoDescriptor.error());
@@ -464,7 +552,9 @@ MediaEdgePolicy planEdgePolicy(const MediaGraphQueueParameters& queues)
     }
 
     MediaRealtimeRtpTranscodePlan plan;
-    plan.inputKind = *options.input.kind;
+    plan.inputType = *options.input.type;
+    plan.inputLayout = *options.input.streamLayout;
+    plan.outputLayout = *options.output.streamLayout;
     plan.videoPlan = std::move(videoPlan);
     plan.audioPlan = std::move(audioPlan);
     plan.videoParameters = planRealtimeVideoParameters(options.parameters.video);
@@ -480,19 +570,29 @@ MediaEdgePolicy planEdgePolicy(const MediaGraphQueueParameters& queues)
     plan.input.probeSizeBytes = *options.input.probeSizeBytes;
     plan.input.lowLatency = *options.input.lowLatency;
     plan.input.mediaId = options.mediaId;
-    plan.videoOutput.url = outputUrls.value().videoUrl;
-    plan.videoOutput.packetSize = *options.output.packetSize;
-    plan.videoOutput.mediaId = options.mediaId;
-    plan.audioOutput.url = outputUrls.value().audioUrl;
-    plan.audioOutput.packetSize = *options.output.packetSize;
-    plan.audioOutput.mediaId = options.mediaId;
-    plan.sdp.path = options.output.sdpPath;
-    plan.sdp.mediaId = options.mediaId;
-    plan.sdp.expectedContexts = audioRequested(options) ? 2 : 1;
-    plan.videoMux.expectVideo = true;
-    plan.videoMux.expectAudio = false;
-    plan.audioMux.expectVideo = false;
-    plan.audioMux.expectAudio = audioRequested(options);
+    if (isSeparateRtpOutput(options)) {
+        plan.videoOutput.url = outputUrls.value().videoUrl;
+        plan.videoOutput.packetSize = *options.output.packetSize;
+        plan.videoOutput.mediaId = options.mediaId;
+        plan.audioOutput.url = outputUrls.value().audioUrl;
+        plan.audioOutput.packetSize = *options.output.packetSize;
+        plan.audioOutput.mediaId = options.mediaId;
+        plan.sdp.path = options.output.sdpPath;
+        plan.sdp.mediaId = options.mediaId;
+        plan.sdp.expectedContexts = audioRequested(options) ? 2 : 1;
+        plan.videoMux.expectVideo = true;
+        plan.videoMux.expectAudio = false;
+        plan.audioMux.expectVideo = false;
+        plan.audioMux.expectAudio = audioRequested(options);
+    } else {
+        plan.muxedOutput.url = outputUrls.value().muxedUrl;
+        plan.muxedOutput.format = outputUrls.value().muxedFormat;
+        plan.muxedOutput.mediaId = options.mediaId;
+        plan.videoMux.expectVideo = true;
+        plan.videoMux.expectAudio = audioRequested(options);
+        plan.audioMux.expectVideo = false;
+        plan.audioMux.expectAudio = false;
+    }
     return ::media::Result<MediaRealtimeRtpTranscodePlan>::success(std::move(plan));
 }
 

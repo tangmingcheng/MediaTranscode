@@ -72,10 +72,6 @@ void RealtimeInputNode::abort(MediaGraphExecutionContext& context) noexcept
     if (!url) {
         return ::media::Status::failure(url.error());
     }
-    auto rtspTransport = requiredNodeOption(options, "RealtimeInputNode", "input.rtsp_transport");
-    if (!rtspTransport) {
-        return ::media::Status::failure(rtspTransport.error());
-    }
     auto openTimeoutMs = requiredPositiveIntNodeOption(options, "RealtimeInputNode", "input.open_timeout_ms");
     if (!openTimeoutMs) {
         return ::media::Status::failure(openTimeoutMs.error());
@@ -98,7 +94,7 @@ void RealtimeInputNode::abort(MediaGraphExecutionContext& context) noexcept
     }
 
     FFmpegRealtimeInputOptions realtimeOptions;
-    realtimeOptions.rtspTransport = rtspTransport.value();
+    realtimeOptions.rtspTransport = nodeOption(context, "input.rtsp_transport");
     realtimeOptions.openTimeoutMs = openTimeoutMs.value();
     realtimeOptions.readTimeoutMs = readTimeoutMs.value();
     realtimeOptions.analyzeDurationUs = analyzeDurationUs.value();

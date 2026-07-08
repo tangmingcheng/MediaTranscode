@@ -28,6 +28,12 @@ struct MediaRealtimeRtpOutputNodePlan {
     std::string mediaId;
 };
 
+struct MediaRealtimeMuxedOutputPlan {
+    std::string url;
+    std::string format;
+    std::string mediaId;
+};
+
 struct MediaRealtimeSdpWriterPlan {
     std::string path;
     std::string mediaId;
@@ -40,7 +46,9 @@ struct MediaRealtimeMuxNodePlan {
 };
 
 struct MediaRealtimeRtpTranscodePlan {
-    MediaRealtimeInputKind inputKind;
+    RealtimeInputType inputType;
+    RealtimeInputStreamLayout inputLayout;
+    RealtimeOutputStreamLayout outputLayout;
     MediaPipelinePlan videoPlan;
     MediaAudioPipelinePlan audioPlan;
     MediaVideoTranscodeParameters videoParameters;
@@ -50,6 +58,7 @@ struct MediaRealtimeRtpTranscodePlan {
     MediaRealtimeRtpInputNodePlan input;
     MediaRealtimeRtpOutputNodePlan videoOutput;
     MediaRealtimeRtpOutputNodePlan audioOutput;
+    MediaRealtimeMuxedOutputPlan muxedOutput;
     MediaRealtimeSdpWriterPlan sdp;
     MediaRealtimeMuxNodePlan videoMux;
     MediaRealtimeMuxNodePlan audioMux;

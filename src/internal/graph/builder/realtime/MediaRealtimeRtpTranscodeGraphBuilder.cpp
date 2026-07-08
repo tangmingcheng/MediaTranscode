@@ -3,6 +3,7 @@
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
 #include "internal/graph/builder/realtime/MediaRealtimeOptionApplier.h"
 #include "internal/graph/builder/segments/MediaAudioBranchSegmentBuilder.h"
+#include "internal/graph/builder/segments/MediaOutputSegmentBuilder.h"
 #include "internal/graph/builder/segments/MediaPacketSelectSegmentBuilder.h"
 #include "internal/graph/builder/segments/MediaVideoBranchSegmentBuilder.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
@@ -92,6 +93,11 @@ bool branchEnabled(const MediaAudioPipelinePlan& plan) noexcept
     return plan.enabled && plan.branchMode != MediaBranchMode::Drop;
 }
 
+bool separateRtpOutput(const MediaRealtimeRtpTranscodePlan& plan) noexcept
+{
+    return plan.outputLayout == RealtimeOutputStreamLayout::SeparateStreams;
+}
+
 } // namespace
 
 ::media::Status MediaRealtimeRtpTranscodeGraphBuilder::validate(
@@ -115,51 +121,72 @@ bool branchEnabled(const MediaAudioPipelinePlan& plan) noexcept
 
     MediaGraph graph;
 
-    const MediaNodeKind inputKind = plan.inputKind == MediaRealtimeInputKind::RawRtp
+    const MediaNodeKind inputKind = plan.inputType == RealtimeInputType::RtpPort
         ? MediaNodeKind::RawRtpInput
         : MediaNodeKind::RealtimeInput;
     const MediaNodeId input = graph.addNode(inputKind,
                                             "realtime.input",
                                             "Realtime media input");
-    const MediaNodeId videoOutput = graph.addNode(MediaNodeKind::RtpOutput,
-                                                  "realtime.video.rtp.output",
-                                                  "Realtime video RTP output context");
-    const MediaNodeId videoMux = graph.addNode(MediaNodeKind::RtpMux,
-                                               "realtime.video.rtp.mux",
-                                               "Realtime video RTP mux");
     const bool includeAudio = branchEnabled(plan.audioPlan);
-    const MediaNodeId audioOutput = includeAudio
-        ? graph.addNode(MediaNodeKind::RtpOutput,
-                        "realtime.audio.rtp.output",
-                        "Realtime audio RTP output context")
-        : MediaNodeId::invalid();
-    const MediaNodeId audioMux = includeAudio
-        ? graph.addNode(MediaNodeKind::RtpMux,
-                        "realtime.audio.rtp.mux",
-                        "Realtime audio RTP mux")
-        : MediaNodeId::invalid();
-    const MediaNodeId sdp = graph.addNode(MediaNodeKind::SdpWriter,
-                                          "realtime.sdp.writer",
-                                          "Realtime SDP writer");
+    MediaNodeId videoMux = MediaNodeId::invalid();
+    MediaNodeId audioMux = MediaNodeId::invalid();
 
     if (auto status = MediaRealtimeOptionApplier::applyInputOptions(graph, input, plan.input); !status) return ::media::Result<MediaGraph>::failure(status.error());
-    if (auto status = MediaRealtimeOptionApplier::applyOutputOptions(graph, videoOutput, plan.videoOutput); !status) return ::media::Result<MediaGraph>::failure(status.error());
-    if (auto status = MediaRealtimeOptionApplier::applyOutputOptions(graph, videoMux, plan.videoOutput); !status) return ::media::Result<MediaGraph>::failure(status.error());
-    if (includeAudio) {
-        if (auto status = MediaRealtimeOptionApplier::applyOutputOptions(graph, audioOutput, plan.audioOutput); !status) return ::media::Result<MediaGraph>::failure(status.error());
-        if (auto status = MediaRealtimeOptionApplier::applyOutputOptions(graph, audioMux, plan.audioOutput); !status) return ::media::Result<MediaGraph>::failure(status.error());
-    }
-    if (auto status = MediaRealtimeOptionApplier::applySdpWriterOptions(graph, sdp, plan.sdp); !status) return ::media::Result<MediaGraph>::failure(status.error());
-    if (auto status = MediaRealtimeOptionApplier::applyMuxOptions(graph, videoMux, plan.videoMux); !status) return ::media::Result<MediaGraph>::failure(status.error());
-    if (includeAudio) {
-        if (auto status = MediaRealtimeOptionApplier::applyMuxOptions(graph, audioMux, plan.audioMux); !status) return ::media::Result<MediaGraph>::failure(status.error());
-    }
 
     if (auto status = addRealtimeInputPorts(graph, input); !status) return ::media::Result<MediaGraph>::failure(status.error());
-    if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph, owner, sdp, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext, true, true); !status) return ::media::Result<MediaGraph>::failure(status.error());
-    if (auto status = addRtpOutputChain(graph, videoOutput, videoMux, sdp, MediaStreamKind::Video, plan.edgePolicy); !status) return ::media::Result<MediaGraph>::failure(status.error());
-    if (includeAudio) {
-        if (auto status = addRtpOutputChain(graph, audioOutput, audioMux, sdp, MediaStreamKind::Audio, plan.edgePolicy); !status) return ::media::Result<MediaGraph>::failure(status.error());
+
+    if (separateRtpOutput(plan)) {
+        const MediaNodeId videoOutput = graph.addNode(MediaNodeKind::RtpOutput,
+                                                      "realtime.video.rtp.output",
+                                                      "Realtime video RTP output context");
+        videoMux = graph.addNode(MediaNodeKind::RtpMux,
+                                 "realtime.video.rtp.mux",
+                                 "Realtime video RTP mux");
+        const MediaNodeId audioOutput = includeAudio
+            ? graph.addNode(MediaNodeKind::RtpOutput,
+                            "realtime.audio.rtp.output",
+                            "Realtime audio RTP output context")
+            : MediaNodeId::invalid();
+        audioMux = includeAudio
+            ? graph.addNode(MediaNodeKind::RtpMux,
+                            "realtime.audio.rtp.mux",
+                            "Realtime audio RTP mux")
+            : MediaNodeId::invalid();
+        const MediaNodeId sdp = graph.addNode(MediaNodeKind::SdpWriter,
+                                              "realtime.sdp.writer",
+                                              "Realtime SDP writer");
+
+        if (auto status = MediaRealtimeOptionApplier::applyOutputOptions(graph, videoOutput, plan.videoOutput); !status) return ::media::Result<MediaGraph>::failure(status.error());
+        if (auto status = MediaRealtimeOptionApplier::applyOutputOptions(graph, videoMux, plan.videoOutput); !status) return ::media::Result<MediaGraph>::failure(status.error());
+        if (includeAudio) {
+            if (auto status = MediaRealtimeOptionApplier::applyOutputOptions(graph, audioOutput, plan.audioOutput); !status) return ::media::Result<MediaGraph>::failure(status.error());
+            if (auto status = MediaRealtimeOptionApplier::applyOutputOptions(graph, audioMux, plan.audioOutput); !status) return ::media::Result<MediaGraph>::failure(status.error());
+        }
+        if (auto status = MediaRealtimeOptionApplier::applySdpWriterOptions(graph, sdp, plan.sdp); !status) return ::media::Result<MediaGraph>::failure(status.error());
+        if (auto status = MediaRealtimeOptionApplier::applyMuxOptions(graph, videoMux, plan.videoMux); !status) return ::media::Result<MediaGraph>::failure(status.error());
+        if (includeAudio) {
+            if (auto status = MediaRealtimeOptionApplier::applyMuxOptions(graph, audioMux, plan.audioMux); !status) return ::media::Result<MediaGraph>::failure(status.error());
+        }
+
+        if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph, owner, sdp, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext, true, true); !status) return ::media::Result<MediaGraph>::failure(status.error());
+        if (auto status = addRtpOutputChain(graph, videoOutput, videoMux, sdp, MediaStreamKind::Video, plan.edgePolicy); !status) return ::media::Result<MediaGraph>::failure(status.error());
+        if (includeAudio) {
+            if (auto status = addRtpOutputChain(graph, audioOutput, audioMux, sdp, MediaStreamKind::Audio, plan.edgePolicy); !status) return ::media::Result<MediaGraph>::failure(status.error());
+        }
+    } else {
+        FileOutputSegmentOptions outputOptions;
+        outputOptions.prefix = "realtime.mpegts";
+        outputOptions.outputUrl = plan.muxedOutput.url;
+        outputOptions.outputFormat = plan.muxedOutput.format;
+        outputOptions.expectVideo = plan.videoMux.expectVideo;
+        outputOptions.expectAudio = plan.videoMux.expectAudio;
+        outputOptions.queues = plan.queues;
+        auto output = MediaOutputSegmentBuilder::buildFileMuxOutput(graph, outputOptions);
+        if (!output) {
+            return ::media::Result<MediaGraph>::failure(output.error());
+        }
+        videoMux = output.value().mux;
+        audioMux = includeAudio ? output.value().mux : MediaNodeId::invalid();
     }
 
     PacketSelectSegmentOptions packetSelectOptions;
@@ -174,7 +201,7 @@ bool branchEnabled(const MediaAudioPipelinePlan& plan) noexcept
 
     MediaNodeId videoPacketSourceNode = packetSelect.value().split;
     std::string videoPacketSourcePort = "video";
-    if (plan.inputKind == MediaRealtimeInputKind::RawRtp) {
+    if (plan.inputType == RealtimeInputType::RtpPort) {
         auto normalized = addRawRtpPacketNormalize(graph,
                                                    input,
                                                    packetSelect.value().split,

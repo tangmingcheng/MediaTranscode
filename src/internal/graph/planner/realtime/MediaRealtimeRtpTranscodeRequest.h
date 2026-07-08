@@ -1,17 +1,13 @@
 #pragma once
 
 #include "internal/graph/model/MediaTranscodeParameters.h"
+#include "internal/graph/model/RealtimeStreamLayout.h"
 
 #include <cstddef>
 #include <optional>
 #include <string>
 
 namespace media::ffmpeg::graph {
-
-enum class MediaRealtimeInputKind {
-    RealtimeUrl,
-    RawRtp
-};
 
 struct MediaRealtimeRtpInputMetadata {
     std::string url;
@@ -23,7 +19,8 @@ struct MediaRealtimeRtpInputMetadata {
 };
 
 struct MediaRealtimeInputConfig {
-    std::optional<MediaRealtimeInputKind> kind;
+    std::optional<RealtimeInputType> type;
+    std::optional<RealtimeInputStreamLayout> streamLayout;
     std::string url;
     std::string rtspTransport;
     std::optional<int> openTimeoutMs;
@@ -37,6 +34,7 @@ struct MediaRealtimeInputConfig {
 };
 
 struct MediaRealtimeOutputConfig {
+    std::optional<RealtimeOutputStreamLayout> streamLayout;
     std::string host;
     std::optional<std::size_t> basePort;
     std::string sdpPath;
