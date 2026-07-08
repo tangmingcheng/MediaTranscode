@@ -75,6 +75,7 @@ const char* boolOption(bool value) noexcept
     const MediaRealtimeSdpWriterPlan& plan)
 {
     if (auto status = setOption(graph, nodeId, "path", plan.path); !status) return status;
+    if (auto status = setOption(graph, nodeId, "sdp.expected_contexts", std::to_string(plan.expectedContexts)); !status) return status;
     if (!plan.mediaId.empty()) {
         if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, "media_id", plan.mediaId); !status) return status;
     }

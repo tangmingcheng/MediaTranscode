@@ -144,4 +144,38 @@ const AVCodec* findAudioEncoderForCodecName(const std::string& codecName)
     return ::media::Result<MediaAudioPipelinePlan>::success(std::move(plan));
 }
 
+::media::Result<MediaAudioPipelinePlan> MediaAudioPipelinePlanner::planKnownAudioTranscode(
+    MediaInputAudioStreamInfo inputInfo,
+    const MediaAudioPipelinePlannerOptions& options)
+{
+    MediaAudioPipelinePlan plan;
+    if (!options.includeAudio) {
+        plan.branchMode = MediaBranchMode::Drop;
+        plan.reason = "disabled";
+        return ::media::Result<MediaAudioPipelinePlan>::success(std::move(plan));
+    }
+    if (inputInfo.streamIndex < 0 || inputInfo.codecName.empty()) {
+        return ::media::Result<MediaAudioPipelinePlan>::failure(
+            ::media::ErrorInfo::invalidArgument("planKnownAudioTranscode requires stream index and codec"));
+    }
+
+    const std::string sourceCodec = canonicalAudioCodecName(inputInfo.codecName);
+    const std::string targetCodec = canonicalAudioCodecName(options.requestedCodecName.empty() ? sourceCodec : options.requestedCodecName);
+    const AVCodec* encoder = findAudioEncoderForCodecName(targetCodec);
+    if (!encoder || !encoder->name) {
+        return ::media::Result<MediaAudioPipelinePlan>::failure(
+            ::media::ErrorInfo::unsupported("audio encoder not found for codec: " + targetCodec));
+    }
+
+    plan.enabled = true;
+    plan.branchMode = MediaBranchMode::TranscodeFrame;
+    plan.sourceStreamIndex = inputInfo.streamIndex;
+    plan.sourceCodecName = sourceCodec;
+    plan.targetCodecName = targetCodec;
+    plan.targetEncoderName = encoder->name;
+    plan.followsSourceParameters = false;
+    plan.reason = "realtime_transcode";
+    return ::media::Result<MediaAudioPipelinePlan>::success(std::move(plan));
+}
+
 } // namespace media::ffmpeg::graph

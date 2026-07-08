@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/core/MediaEdge.h"
+#include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/planner/MediaPipelinePlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodeRequest.h"
 #include "media_transcode/Result.h"
@@ -30,6 +31,7 @@ struct MediaRealtimeRtpOutputNodePlan {
 struct MediaRealtimeSdpWriterPlan {
     std::string path;
     std::string mediaId;
+    int expectedContexts = 1;
 };
 
 struct MediaRealtimeMuxNodePlan {
@@ -40,13 +42,17 @@ struct MediaRealtimeMuxNodePlan {
 struct MediaRealtimeRtpTranscodePlan {
     MediaRealtimeInputKind inputKind;
     MediaPipelinePlan videoPlan;
+    MediaAudioPipelinePlan audioPlan;
     MediaVideoTranscodeParameters videoParameters;
+    MediaAudioTranscodeParameters audioParameters;
     MediaGraphQueueParameters queues;
     MediaEdgePolicy edgePolicy;
     MediaRealtimeRtpInputNodePlan input;
-    MediaRealtimeRtpOutputNodePlan output;
+    MediaRealtimeRtpOutputNodePlan videoOutput;
+    MediaRealtimeRtpOutputNodePlan audioOutput;
     MediaRealtimeSdpWriterPlan sdp;
-    MediaRealtimeMuxNodePlan mux;
+    MediaRealtimeMuxNodePlan videoMux;
+    MediaRealtimeMuxNodePlan audioMux;
 };
 
 class MediaRealtimeRtpTranscodePlanner final {

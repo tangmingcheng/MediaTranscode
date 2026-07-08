@@ -101,7 +101,14 @@ MediaRealtimeRtpTranscodeRequest parseRealtimeOptions(int argc, char** argv)
 {
     MediaRealtimeRtpTranscodeRequest options;
     options.input.kind = realtimeInputKindArg(argc, argv);
-    options.input.url = requiredArg(argc, argv, "--input");
+    if (options.input.kind && *options.input.kind == MediaRealtimeInputKind::RawRtp) {
+        options.input.videoRtp.url = requiredArg(argc, argv, "--video-rtp-url");
+        options.input.videoRtp.codecName = requiredArg(argc, argv, "--video-rtp-codec");
+        options.input.videoRtp.payloadType = requiredIntArg(argc, argv, "--video-rtp-payload-type");
+        options.input.videoRtp.clockRate = requiredIntArg(argc, argv, "--video-rtp-clock-rate");
+    } else {
+        options.input.url = requiredArg(argc, argv, "--input");
+    }
     options.input.rtspTransport = argValue(argc, argv, "--rtsp-transport");
     options.input.openTimeoutMs = optionalIntArg(argc, argv, "--open-timeout-ms");
     options.input.readTimeoutMs = optionalIntArg(argc, argv, "--read-timeout-ms");
@@ -110,9 +117,6 @@ MediaRealtimeRtpTranscodeRequest parseRealtimeOptions(int argc, char** argv)
     if (hasArg(argc, argv, "--low-latency") || hasArg(argc, argv, "--no-low-latency")) {
         options.input.lowLatency = requiredExclusiveBoolArg(argc, argv, "--low-latency", "--no-low-latency");
     }
-    options.input.rtp.codecName = argValue(argc, argv, "--rtp-codec");
-    options.input.rtp.payloadType = optionalIntArg(argc, argv, "--rtp-payload-type");
-    options.input.rtp.clockRate = optionalIntArg(argc, argv, "--rtp-clock-rate");
     options.output.host = argValue(argc, argv, "--rtp-host");
     if (auto port = optionalIntArg(argc, argv, "--rtp-port")) {
         options.output.basePort = static_cast<std::size_t>(*port);
@@ -148,6 +152,25 @@ MediaRealtimeRtpTranscodeRequest parseRealtimeOptions(int argc, char** argv)
     parameters.video.bufferSizeKbits = optionalIntArg(argc, argv, "--buffer-size");
     parameters.video.quality = optionalIntArg(argc, argv, "--quality");
     parameters.video.gop = optionalIntArg(argc, argv, "--gop");
+    parameters.audio.codecName = argValue(argc, argv, "--audio-codec", parameters.audio.codecName);
+    parameters.audio.rateControl = rateControlArg(argc, argv, "--audio-rc");
+    parameters.audio.bitrateKbps = optionalIntArg(argc, argv, "--audio-bitrate");
+    parameters.audio.minBitrateKbps = optionalIntArg(argc, argv, "--audio-min-bitrate");
+    parameters.audio.maxBitrateKbps = optionalIntArg(argc, argv, "--audio-max-bitrate");
+    parameters.audio.bufferSizeKbits = optionalIntArg(argc, argv, "--audio-buffer-size");
+    parameters.audio.sampleRate = optionalIntArg(argc, argv, "--sample-rate");
+    parameters.audio.channels = optionalIntArg(argc, argv, "--channels");
+    parameters.audio.quality = optionalIntArg(argc, argv, "--audio-quality");
+    parameters.audio.preset = argValue(argc, argv, "--audio-preset", parameters.audio.preset);
+    parameters.audio.profile = argValue(argc, argv, "--audio-profile", parameters.audio.profile);
+    if (parameters.execution.includeAudio && options.input.kind && *options.input.kind == MediaRealtimeInputKind::RawRtp) {
+        options.input.audioRtp.url = requiredArg(argc, argv, "--audio-rtp-url");
+        options.input.audioRtp.codecName = requiredArg(argc, argv, "--audio-rtp-codec");
+        options.input.audioRtp.payloadType = requiredIntArg(argc, argv, "--audio-rtp-payload-type");
+        options.input.audioRtp.clockRate = requiredIntArg(argc, argv, "--audio-rtp-clock-rate");
+        options.input.audioRtp.channels = requiredIntArg(argc, argv, "--audio-rtp-channels");
+        options.input.audioRtp.fmtp = argValue(argc, argv, "--audio-rtp-fmtp");
+    }
     return options;
 }
 
@@ -158,7 +181,8 @@ int runGraphTranscodeCli(int argc, char** argv)
     const bool helpRequested = hasArg(argc, argv, "--help") || hasArg(argc, argv, "-h");
     if (argc < 5 || helpRequested) {
         std::cout << "Usage: media_transcode_graph_transcode_cli --input in.mp4 --output out.mp4 [options]\n";
-        std::cout << "       media_transcode_graph_transcode_cli --mode realtime-rtp --input-kind url --input rtsp://... --rtsp-transport tcp --open-timeout-ms 5000 --read-timeout-ms 5000 --analyze-duration-us 500000 --probe-size 524288 --low-latency --rtp-host 127.0.0.1 --rtp-port 5004 --sdp out.sdp --packet-size 1200 --video --no-audio --enable-hw --graph-diagnostics --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --video-codec h264 --rc auto --duration 15\n";
+        std::cout << "       media_transcode_graph_transcode_cli --mode realtime-rtp --input-kind url --input rtsp://... --rtsp-transport tcp --open-timeout-ms 5000 --read-timeout-ms 5000 --analyze-duration-us 500000 --probe-size 524288 --low-latency --rtp-host 127.0.0.1 --rtp-port 5004 --sdp out.sdp --packet-size 1200 --video --audio --enable-hw --graph-diagnostics --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --video-codec h264 --rc auto --audio-codec aac --duration 15\n";
+        std::cout << "       raw RTP mode uses --video-rtp-url/--video-rtp-codec/--video-rtp-payload-type/--video-rtp-clock-rate and optional --audio-rtp-* when --audio is enabled\n";
         std::cout << "       encoder selection is automatic and planner-owned\n";
         std::cout << "       realtime mode requires exactly one of --graph-diagnostics or --quiet-graph\n";
         return helpRequested ? 0 : 2;

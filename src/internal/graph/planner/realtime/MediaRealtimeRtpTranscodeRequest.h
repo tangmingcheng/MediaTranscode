@@ -14,9 +14,12 @@ enum class MediaRealtimeInputKind {
 };
 
 struct MediaRealtimeRtpInputMetadata {
+    std::string url;
     std::string codecName;
     std::optional<int> payloadType;
     std::optional<int> clockRate;
+    std::optional<int> channels;
+    std::string fmtp;
 };
 
 struct MediaRealtimeInputConfig {
@@ -29,7 +32,8 @@ struct MediaRealtimeInputConfig {
     std::optional<int> probeSizeBytes;
     std::optional<bool> lowLatency;
     std::optional<int> videoStreamIndex;
-    MediaRealtimeRtpInputMetadata rtp;
+    MediaRealtimeRtpInputMetadata videoRtp;
+    MediaRealtimeRtpInputMetadata audioRtp;
 };
 
 struct MediaRealtimeOutputConfig {

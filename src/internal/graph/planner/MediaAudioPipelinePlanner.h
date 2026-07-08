@@ -36,10 +36,21 @@ struct MediaAudioPipelinePlan {
     std::string reason;
 };
 
+struct MediaInputAudioStreamInfo {
+    int streamIndex = invalidMediaStreamIndex;
+    std::string codecName;
+    int sampleRate = 0;
+    int channels = 0;
+};
+
 class MediaAudioPipelinePlanner final {
 public:
     static ::media::Result<MediaAudioPipelinePlan> planFileAudio(
         const std::string& inputPath,
+        const MediaAudioPipelinePlannerOptions& options);
+
+    static ::media::Result<MediaAudioPipelinePlan> planKnownAudioTranscode(
+        MediaInputAudioStreamInfo inputInfo,
         const MediaAudioPipelinePlannerOptions& options);
 
 private:

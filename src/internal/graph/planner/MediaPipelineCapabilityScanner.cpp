@@ -2,6 +2,7 @@
 
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegDescriptorMapper.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegRealtimeInputOptions.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 
@@ -110,6 +111,73 @@ FFmpegRealtimeInputOptions toFFmpegRealtimeInputOptions(const MediaPipelinePlann
     info.height = params->height;
     info.frameRate = bestFrameRate(stream);
     return ::media::Result<MediaInputVideoStreamInfo>::success(std::move(info));
+}
+
+::media::Result<MediaRealtimeInputStreamInfo> detectRealtimeStreamInfoWithOptions(
+    const std::string& inputPath,
+    AVDictionary** inputOptions)
+{
+    AVFormatContext* raw = nullptr;
+    const int openRet = avformat_open_input(&raw, inputPath.c_str(), nullptr, inputOptions);
+    if (openRet < 0) {
+        return ::media::Result<MediaRealtimeInputStreamInfo>::failure(
+            ::media::ErrorInfo::ffmpegFailure("avformat_open_input: " + ffmpegErrorString(openRet), openRet));
+    }
+
+    ::media::ffmpeg::InputFormatContextPtr inputContext(raw);
+    const int infoRet = avformat_find_stream_info(inputContext.get(), nullptr);
+    if (infoRet < 0) {
+        return ::media::Result<MediaRealtimeInputStreamInfo>::failure(
+            ::media::ErrorInfo::ffmpegFailure("avformat_find_stream_info: " + ffmpegErrorString(infoRet), infoRet));
+    }
+
+    const int videoIndex = av_find_best_stream(inputContext.get(), AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+    if (videoIndex < 0) {
+        return ::media::Result<MediaRealtimeInputStreamInfo>::failure(
+            ::media::ErrorInfo::ffmpegFailure("av_find_best_stream(video): " + ffmpegErrorString(videoIndex), videoIndex));
+    }
+
+    AVStream* videoStream = inputContext->streams[videoIndex];
+    const AVCodecParameters* videoParams = videoStream ? videoStream->codecpar : nullptr;
+    const char* videoCodecName = videoParams ? avcodec_get_name(videoParams->codec_id) : nullptr;
+    if (!videoCodecName || std::string(videoCodecName) == "unknown") {
+        return ::media::Result<MediaRealtimeInputStreamInfo>::failure(
+            ::media::ErrorInfo::unsupported("input video codec is unknown"));
+    }
+
+    MediaRealtimeInputStreamInfo info;
+    info.video.streamIndex = videoIndex;
+    info.video.codecName = canonicalCodecName(videoCodecName);
+    info.video.width = videoParams->width;
+    info.video.height = videoParams->height;
+    info.video.frameRate = bestFrameRate(videoStream);
+
+    const int audioIndex = av_find_best_stream(inputContext.get(), AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
+    if (audioIndex == AVERROR_STREAM_NOT_FOUND) {
+        return ::media::Result<MediaRealtimeInputStreamInfo>::success(std::move(info));
+    }
+    if (audioIndex < 0) {
+        return ::media::Result<MediaRealtimeInputStreamInfo>::failure(
+            ::media::ErrorInfo::ffmpegFailure("av_find_best_stream(audio): " + ffmpegErrorString(audioIndex), audioIndex));
+    }
+
+    AVStream* audioStream = inputContext->streams[audioIndex];
+    const AVCodecParameters* audioParams = audioStream ? audioStream->codecpar : nullptr;
+    const char* audioCodecName = audioParams ? avcodec_get_name(audioParams->codec_id) : nullptr;
+    if (!audioCodecName || std::string(audioCodecName) == "unknown") {
+        return ::media::Result<MediaRealtimeInputStreamInfo>::failure(
+            ::media::ErrorInfo::unsupported("input audio codec is unknown"));
+    }
+
+    const MediaFormatDescriptor audioDescriptor = FFmpegDescriptorMapper::fromStream(audioStream);
+    info.hasAudio = true;
+    info.audio.streamIndex = audioIndex;
+    info.audio.codecName = audioDescriptor.codec.codecName.empty()
+                               ? canonicalCodecName(audioCodecName)
+                               : canonicalCodecName(audioDescriptor.codec.codecName);
+    info.audio.sampleRate = audioDescriptor.audio.sampleRate;
+    info.audio.channels = audioDescriptor.audio.channels;
+    return ::media::Result<MediaRealtimeInputStreamInfo>::success(std::move(info));
 }
 
 bool startsWith(const std::string& value, const std::string& prefix)
@@ -499,6 +567,23 @@ MediaPipelineChainPlan makeRawChain(std::string label,
     };
 
     auto result = detectVideoStreamInfoWithOptions(inputUrl, &rawOptions);
+    cleanup();
+    return result;
+}
+
+::media::Result<MediaRealtimeInputStreamInfo> MediaPipelineCapabilityScanner::detectRealtimeInputStreamInfo(
+    const std::string& inputUrl,
+    const MediaPipelinePlannerOptions& options)
+{
+    AVDictionary* rawOptions = nullptr;
+    applyFFmpegRealtimeInputOptions(&rawOptions, toFFmpegRealtimeInputOptions(options));
+    const auto cleanup = [&rawOptions]() {
+        if (rawOptions) {
+            av_dict_free(&rawOptions);
+        }
+    };
+
+    auto result = detectRealtimeStreamInfoWithOptions(inputUrl, &rawOptions);
     cleanup();
     return result;
 }
