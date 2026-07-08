@@ -15,7 +15,7 @@
 - Built `media_transcode_core`, `media_transcode_graph_transcode_cli`, `media_transcode_realtime_rtp_input_cli`, and `media_transcode_realtime_graph_tests`.
 - Ran `out/build/x64-debug/media_transcode_realtime_graph_tests.exe`.
 - Ran `ctest --test-dir out/build/x64-debug --output-on-failure`.
-- The MPEG-TS graph test starts local FFmpeg, remuxes the MP4 sample to MPEG-TS over UDP, and lets the planner probe a loopback `udp://` URL on a per-process test port.
+- The MPEG-TS graph test starts local FFmpeg, remuxes the MP4 sample to MPEG-TS over UDP, and lets the planner probe a loopback `udp://` URL on an OS-assigned test port.
 - Checked the configured MPEG-TS source with `ffprobe`; `udp://192.168.96.154:15666` and `udp://@192.168.96.154:15666` returned invalid data, and forced `-f mpegts` probing did not finish stream discovery, so live smoke is blocked by the external stream payload state.
 
 ## Remaining Risks

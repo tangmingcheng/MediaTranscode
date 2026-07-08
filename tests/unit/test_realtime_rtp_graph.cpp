@@ -27,7 +27,17 @@ extern "C" {
 
 #ifdef _WIN32
 #define NOMINMAX
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
+#else
+#include <arpa/inet.h>
+#include <csignal>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #endif
 
 namespace {
@@ -43,13 +53,93 @@ std::string sampleVideoPath()
             "sample_h264_aac_2560x1440.mp4").string();
 }
 
-std::uint16_t mpegTsUdpInputPort() noexcept
+std::uint32_t testProcessId() noexcept
 {
 #ifdef _WIN32
-    return static_cast<std::uint16_t>(15000 + (GetCurrentProcessId() % 1000));
+    return static_cast<std::uint32_t>(GetCurrentProcessId());
 #else
-    return 15000;
+    return static_cast<std::uint32_t>(getpid());
 #endif
+}
+
+std::uint16_t localMpegTsUdpPort(std::uint16_t offset) noexcept
+{
+    const std::uint32_t base = 20000 + ((testProcessId() * 17) % 20000);
+    return static_cast<std::uint16_t>(base + offset);
+}
+
+std::uint16_t findAvailableUdpPort() noexcept
+{
+#ifdef _WIN32
+    WSADATA wsaData{};
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+        return localMpegTsUdpPort(0);
+    }
+
+    SOCKET socketHandle = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (socketHandle == INVALID_SOCKET) {
+        WSACleanup();
+        return localMpegTsUdpPort(0);
+    }
+
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = 0;
+    if (bind(socketHandle, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
+        closesocket(socketHandle);
+        WSACleanup();
+        return localMpegTsUdpPort(0);
+    }
+
+    int addressLength = sizeof(address);
+    std::uint16_t port = localMpegTsUdpPort(0);
+    if (getsockname(socketHandle, reinterpret_cast<sockaddr*>(&address), &addressLength) == 0) {
+        port = ntohs(address.sin_port);
+    }
+
+    closesocket(socketHandle);
+    WSACleanup();
+    return port;
+#else
+    const int socketHandle = socket(AF_INET, SOCK_DGRAM, 0);
+    if (socketHandle < 0) {
+        return localMpegTsUdpPort(0);
+    }
+
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = 0;
+    if (bind(socketHandle, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
+        close(socketHandle);
+        return localMpegTsUdpPort(0);
+    }
+
+    socklen_t addressLength = sizeof(address);
+    std::uint16_t port = localMpegTsUdpPort(0);
+    if (getsockname(socketHandle, reinterpret_cast<sockaddr*>(&address), &addressLength) == 0) {
+        port = ntohs(address.sin_port);
+    }
+
+    close(socketHandle);
+    return port;
+#endif
+}
+
+std::uint16_t mpegTsUdpInputPort() noexcept
+{
+    static const std::uint16_t port = findAvailableUdpPort();
+    return port;
+}
+
+std::uint16_t mpegTsUdpOutputPort() noexcept
+{
+    const std::uint16_t inputPort = mpegTsUdpInputPort();
+    if (inputPort <= 65533) {
+        return static_cast<std::uint16_t>(inputPort + 2);
+    }
+    return localMpegTsUdpPort(2);
 }
 
 std::string mpegTsUdpInputUrl()
@@ -57,12 +147,24 @@ std::string mpegTsUdpInputUrl()
     return "udp://127.0.0.1:" + std::to_string(mpegTsUdpInputPort()) + "?fifo_size=1000000&overrun_nonfatal=1";
 }
 
+std::string mpegTsUdpOutputUrl()
+{
+    return "udp://127.0.0.1:" + std::to_string(mpegTsUdpOutputPort());
+}
+
 std::filesystem::path ffmpegExecutablePath()
 {
+#ifdef _WIN32
     const std::filesystem::path bundled = "D:/mabs/local64/bin-video/ffmpeg.exe";
     if (std::filesystem::exists(bundled)) {
         return bundled;
     }
+#else
+    const std::filesystem::path bundled = "/usr/bin/ffmpeg";
+    if (std::filesystem::exists(bundled)) {
+        return bundled;
+    }
+#endif
     return "ffmpeg";
 }
 
@@ -155,9 +257,90 @@ class LocalMpegTsUdpSource final {
 public:
     static ::media::Result<LocalMpegTsUdpSource> start()
     {
-        return ::media::Result<LocalMpegTsUdpSource>::failure(
-            ::media::ErrorInfo::unsupported("Local MPEG-TS UDP source helper is only implemented for Windows tests"));
+        const std::filesystem::path ffmpeg = ffmpegExecutablePath();
+        const std::string input = sampleVideoPath();
+        const std::string output = "udp://127.0.0.1:" + std::to_string(mpegTsUdpInputPort()) + "?pkt_size=1316";
+        const pid_t pid = fork();
+        if (pid < 0) {
+            return ::media::Result<LocalMpegTsUdpSource>::failure(
+                ::media::ErrorInfo::invalidArgument("Failed to fork local FFmpeg MPEG-TS UDP source"));
+        }
+        if (pid == 0) {
+            execlp(ffmpeg.string().c_str(),
+                   ffmpeg.filename().string().c_str(),
+                   "-hide_banner",
+                   "-loglevel",
+                   "error",
+                   "-re",
+                   "-stream_loop",
+                   "-1",
+                   "-i",
+                   input.c_str(),
+                   "-map",
+                   "0:v:0",
+                   "-map",
+                   "0:a:0?",
+                   "-c",
+                   "copy",
+                   "-f",
+                   "mpegts",
+                   output.c_str(),
+                   static_cast<char*>(nullptr));
+            _exit(127);
+        }
+
+        LocalMpegTsUdpSource source(pid);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+        int status = 0;
+        if (waitpid(pid, &status, WNOHANG) == pid) {
+            source.m_process = -1;
+            return ::media::Result<LocalMpegTsUdpSource>::failure(
+                ::media::ErrorInfo::invalidArgument("Local FFmpeg MPEG-TS UDP source exited before probe"));
+        }
+        return ::media::Result<LocalMpegTsUdpSource>::success(std::move(source));
     }
+
+    LocalMpegTsUdpSource(LocalMpegTsUdpSource&& other) noexcept
+        : m_process(other.m_process)
+    {
+        other.m_process = -1;
+    }
+
+    LocalMpegTsUdpSource& operator=(LocalMpegTsUdpSource&& other) noexcept
+    {
+        if (this != &other) {
+            stop();
+            m_process = other.m_process;
+            other.m_process = -1;
+        }
+        return *this;
+    }
+
+    LocalMpegTsUdpSource(const LocalMpegTsUdpSource&) = delete;
+    LocalMpegTsUdpSource& operator=(const LocalMpegTsUdpSource&) = delete;
+
+    ~LocalMpegTsUdpSource()
+    {
+        stop();
+    }
+
+private:
+    explicit LocalMpegTsUdpSource(pid_t process)
+        : m_process(process)
+    {
+    }
+
+    void stop() noexcept
+    {
+        if (m_process <= 0) {
+            return;
+        }
+        kill(m_process, SIGTERM);
+        waitpid(m_process, nullptr, 0);
+        m_process = -1;
+    }
+
+    pid_t m_process = -1;
 };
 #endif
 
@@ -314,7 +497,7 @@ MediaRealtimeRtpTranscodeRequest validMpegTsUdpOptions()
     options.input.url = mpegTsUdpInputUrl();
     options.input.rtspTransport.clear();
     options.output.streamLayout = RealtimeOutputStreamLayout::MuxedTransportStream;
-    options.output.url = "udp://127.0.0.1:15002";
+    options.output.url = mpegTsUdpOutputUrl();
     options.output.host.clear();
     options.output.basePort.reset();
     options.output.sdpPath.clear();
@@ -885,7 +1068,7 @@ void testBuildPlansMpegTsUdpMuxedOutputGraph(TestContext& ctx)
     const MediaNode* fileOutput = findNodeByKind(graph, MediaNodeKind::FileOutput);
     EXPECT_TRUE(ctx, fileOutput != nullptr);
     if (fileOutput) {
-        EXPECT_EQ(ctx, fileOutput->options.value("url"), std::string("udp://127.0.0.1:15002"));
+        EXPECT_EQ(ctx, fileOutput->options.value("url"), mpegTsUdpOutputUrl());
         EXPECT_EQ(ctx, fileOutput->options.value("format"), std::string("mpegts"));
     }
 }
