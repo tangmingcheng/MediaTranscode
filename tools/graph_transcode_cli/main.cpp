@@ -62,8 +62,10 @@ LocalFileTranscodeOptions parseOptions(int argc, char** argv)
     MediaTranscodeParameterSet& parameters = options.parameters;
     parameters.execution.includeVideo = !hasArg(argc, argv, "--no-video");
     parameters.execution.includeAudio = !hasArg(argc, argv, "--no-audio");
-    parameters.execution.disableHardware = hasArg(argc, argv, "--disable-hw");
-    parameters.execution.diagnosticLogEnabled = !hasArg(argc, argv, "--quiet-graph");
+    parameters.execution.disableHardware = !enabledByDefaultBoolArg(
+        argc, argv, "--enable-hw", "--disable-hw", "hardware planning");
+    parameters.execution.diagnosticLogEnabled = enabledByDefaultBoolArg(
+        argc, argv, "--graph-diagnostics", "--quiet-graph", "graph diagnostic logging");
 
     parameters.video.codecName = argValue(argc, argv, "--video-codec", parameters.video.codecName);
     parameters.video.rateControl = rateControlArg(argc, argv, "--rc");
@@ -106,6 +108,7 @@ MediaRealtimeRtpTranscodeRequest parseRealtimeOptions(int argc, char** argv)
         options.input.videoRtp.codecName = requiredArg(argc, argv, "--video-rtp-codec");
         options.input.videoRtp.payloadType = requiredIntArg(argc, argv, "--video-rtp-payload-type");
         options.input.videoRtp.clockRate = requiredIntArg(argc, argv, "--video-rtp-clock-rate");
+        options.input.videoRtp.fmtp = argValue(argc, argv, "--video-rtp-fmtp");
     } else {
         options.input.url = requiredArg(argc, argv, "--input");
     }
@@ -114,9 +117,8 @@ MediaRealtimeRtpTranscodeRequest parseRealtimeOptions(int argc, char** argv)
     options.input.readTimeoutMs = optionalIntArg(argc, argv, "--read-timeout-ms");
     options.input.analyzeDurationUs = optionalIntArg(argc, argv, "--analyze-duration-us");
     options.input.probeSizeBytes = optionalIntArg(argc, argv, "--probe-size");
-    if (hasArg(argc, argv, "--low-latency") || hasArg(argc, argv, "--no-low-latency")) {
-        options.input.lowLatency = requiredExclusiveBoolArg(argc, argv, "--low-latency", "--no-low-latency");
-    }
+    options.input.lowLatency = enabledByDefaultBoolArg(
+        argc, argv, "--low-latency", "--no-low-latency", "low latency input mode");
     options.output.host = argValue(argc, argv, "--rtp-host");
     if (auto port = optionalIntArg(argc, argv, "--rtp-port")) {
         options.output.basePort = static_cast<std::size_t>(*port);
@@ -128,8 +130,10 @@ MediaRealtimeRtpTranscodeRequest parseRealtimeOptions(int argc, char** argv)
     MediaTranscodeParameterSet& parameters = options.parameters;
     parameters.execution.includeVideo = requiredExclusiveBoolArg(argc, argv, "--video", "--no-video");
     parameters.execution.includeAudio = requiredExclusiveBoolArg(argc, argv, "--audio", "--no-audio");
-    parameters.execution.disableHardware = !requiredExclusiveBoolArg(argc, argv, "--enable-hw", "--disable-hw");
-    parameters.execution.diagnosticLogEnabled = requiredExclusiveBoolArg(argc, argv, "--graph-diagnostics", "--quiet-graph");
+    parameters.execution.disableHardware = !enabledByDefaultBoolArg(
+        argc, argv, "--enable-hw", "--disable-hw", "hardware planning");
+    parameters.execution.diagnosticLogEnabled = enabledByDefaultBoolArg(
+        argc, argv, "--graph-diagnostics", "--quiet-graph", "graph diagnostic logging");
     parameters.queues.metadata = requiredSizeArg(argc, argv, "--metadata-queue");
     parameters.queues.packet = requiredSizeArg(argc, argv, "--packet-queue");
     parameters.queues.frame = requiredSizeArg(argc, argv, "--frame-queue");
@@ -181,10 +185,9 @@ int runGraphTranscodeCli(int argc, char** argv)
     const bool helpRequested = hasArg(argc, argv, "--help") || hasArg(argc, argv, "-h");
     if (argc < 5 || helpRequested) {
         std::cout << "Usage: media_transcode_graph_transcode_cli --input in.mp4 --output out.mp4 [options]\n";
-        std::cout << "       media_transcode_graph_transcode_cli --mode realtime-rtp --input-kind url --input rtsp://... --rtsp-transport tcp --open-timeout-ms 5000 --read-timeout-ms 5000 --analyze-duration-us 500000 --probe-size 524288 --low-latency --rtp-host 127.0.0.1 --rtp-port 5004 --sdp out.sdp --packet-size 1200 --video --audio --enable-hw --graph-diagnostics --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --video-codec h264 --rc auto --audio-codec aac --duration 15\n";
-        std::cout << "       raw RTP mode uses --video-rtp-url/--video-rtp-codec/--video-rtp-payload-type/--video-rtp-clock-rate and optional --audio-rtp-* when --audio is enabled\n";
-        std::cout << "       encoder selection is automatic and planner-owned\n";
-        std::cout << "       realtime mode requires exactly one of --graph-diagnostics or --quiet-graph\n";
+        std::cout << "       media_transcode_graph_transcode_cli --mode realtime-rtp --input-kind url --input rtsp://... --rtsp-transport tcp --open-timeout-ms 5000 --read-timeout-ms 5000 --analyze-duration-us 500000 --probe-size 524288 --rtp-host 127.0.0.1 --rtp-port 5004 --sdp out.sdp --packet-size 1200 --video --audio --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --video-codec h264 --rc auto --audio-codec aac --duration 15 [--disable-hw] [--quiet-graph] [--no-low-latency]\n";
+        std::cout << "       raw RTP mode uses --video-rtp-url/--video-rtp-codec/--video-rtp-payload-type/--video-rtp-clock-rate/--video-rtp-fmtp and optional --audio-rtp-* when --audio is enabled\n";
+        std::cout << "       hardware, low latency input, and graph diagnostics are enabled by default; use disable flags only when overriding defaults\n";
         return helpRequested ? 0 : 2;
     }
 

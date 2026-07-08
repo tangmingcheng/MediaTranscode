@@ -153,6 +153,7 @@ inline constexpr char VideoWidth[] = "video.width";
 inline constexpr char VideoHeight[] = "video.height";
 inline constexpr char VideoFpsNum[] = "video.fps.num";
 inline constexpr char VideoFpsDen[] = "video.fps.den";
+inline constexpr char VideoSynthesizeMissingTimestamps[] = "video.timestamp.synthesize_missing";
 inline constexpr char VideoRateControl[] = "video.rc";
 inline constexpr char VideoBitrateKbps[] = "video.bitrate.kbps";
 inline constexpr char VideoMinBitrateKbps[] = "video.bitrate.min_kbps";

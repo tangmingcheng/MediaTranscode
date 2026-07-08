@@ -3,6 +3,7 @@
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 
 extern "C" {
+#include <libavutil/avutil.h>
 #include <libavutil/rational.h>
 }
 
@@ -24,6 +25,8 @@ private:
 private:
     bool m_hasSourceTimeBase = false;
     bool m_hasTargetTimeBase = false;
+    bool m_allowSyntheticMissingTimestamps = false;
+    int64_t m_lastOutputTimestamp = AV_NOPTS_VALUE;
     AVRational m_sourceTimeBase { 0, 1 };
     AVRational m_targetTimeBase { 0, 1 };
 };

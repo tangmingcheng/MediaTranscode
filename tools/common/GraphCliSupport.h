@@ -101,6 +101,20 @@ inline bool requiredExclusiveBoolArg(int argc,
     return trueArg;
 }
 
+inline bool enabledByDefaultBoolArg(int argc,
+                                    char** argv,
+                                    const std::string& redundantEnableKey,
+                                    const std::string& disableKey,
+                                    const std::string& settingName)
+{
+    if (hasArg(argc, argv, redundantEnableKey)) {
+        throw std::invalid_argument(
+            redundantEnableKey + " is redundant; " + settingName +
+            " is enabled by default, use " + disableKey + " to disable it");
+    }
+    return !hasArg(argc, argv, disableKey);
+}
+
 inline MediaRateControlMode requiredRateControlArg(int argc, char** argv, const std::string& key)
 {
     const std::string value = requiredArg(argc, argv, key);

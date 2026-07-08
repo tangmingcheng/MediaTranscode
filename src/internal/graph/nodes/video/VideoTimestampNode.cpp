@@ -1,6 +1,9 @@
 #include "internal/graph/nodes/video/VideoTimestampNode.h"
 
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
+#include "internal/graph/model/MediaTranscodeParameters.h"
+#include "internal/graph/nodes/MediaRequiredNodeOptions.h"
+#include "internal/graph/nodes/video/VideoMonotonicTimestamp.h"
 #include "internal/graph/runtime/buffer/FFmpegCodecContextBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
 
@@ -147,8 +150,17 @@ MediaNodeKind VideoTimestampNode::staticKind() noexcept
     m_targetTimeBase = codecContext->time_base;
     m_hasTargetTimeBase = true;
 
+    auto synthesizeMissing = requiredBoolNodeOption(nodeOptions(context),
+                                                    "VideoTimestampNode",
+                                                    MediaTranscodeOptionKey::VideoSynthesizeMissingTimestamps);
+    if (!synthesizeMissing) {
+        return ::media::Status::failure(synthesizeMissing.error());
+    }
+    m_allowSyntheticMissingTimestamps = synthesizeMissing.value();
+
     logTimestamp(MediaGraphDiagnosticLevel::State,
-                 std::string("bind_target_time_base tb=") + rationalText(m_targetTimeBase));
+                 std::string("bind_target_time_base tb=") + rationalText(m_targetTimeBase) +
+                     " synthesize_missing=" + (m_allowSyntheticMissingTimestamps ? "1" : "0"));
 
     return emitOutput(context, "target_codec", buffer);
 }
@@ -165,15 +177,32 @@ MediaNodeKind VideoTimestampNode::staticKind() noexcept
     const int64_t bestIn = frame->best_effort_timestamp;
     const int64_t dtsIn = frame->pkt_dts;
     const int64_t durationIn = frame->duration;
-    const int64_t sourceTs = decodedTimestamp(frame);
+    int64_t sourceTs = decodedTimestamp(frame);
 
     if (sourceTs == AV_NOPTS_VALUE) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("VideoTimestampNode input video frame has no timestamp"));
+        if (!m_allowSyntheticMissingTimestamps) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument("VideoTimestampNode input video frame has no timestamp"));
+        }
+        auto syntheticTs = nextSyntheticTimestamp(m_lastOutputTimestamp,
+                                                  m_targetTimeBase,
+                                                  m_sourceTimeBase);
+        if (!syntheticTs) {
+            return ::media::Status::failure(syntheticTs.error());
+        }
+        auto syntheticDuration = syntheticTimestampStep(m_targetTimeBase, m_sourceTimeBase);
+        if (!syntheticDuration) {
+            return ::media::Status::failure(syntheticDuration.error());
+        }
+        sourceTs = syntheticTs.value();
+        frame->duration = syntheticDuration.value();
     }
 
     frame->pts = sourceTs;
     frame->pkt_dts = AV_NOPTS_VALUE;
+    if (m_lastOutputTimestamp == AV_NOPTS_VALUE || sourceTs > m_lastOutputTimestamp) {
+        m_lastOutputTimestamp = sourceTs;
+    }
 
     MediaTimeDescriptor sourceTime;
     sourceTime.timeBase = MediaRational{ m_sourceTimeBase.num, m_sourceTimeBase.den };

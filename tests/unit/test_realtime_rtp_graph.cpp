@@ -7,6 +7,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 #include "internal/graph/runtime/MediaGraphRuntime.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
+#include "../../tools/common/GraphCliSupport.h"
 
 extern "C" {
 #include <libavutil/avutil.h>
@@ -133,6 +134,35 @@ void expectPlannerInvalidArgument(TestContext& ctx, const MediaRealtimeRtpTransc
     }
 }
 
+bool enabledByDefaultFlag(const std::vector<std::string>& args,
+                          const std::string& enableKey,
+                          const std::string& disableKey)
+{
+    std::vector<char*> argv;
+    argv.reserve(args.size());
+    for (const std::string& arg : args) {
+        argv.push_back(const_cast<char*>(arg.c_str()));
+    }
+    return cli::enabledByDefaultBoolArg(static_cast<int>(argv.size()),
+                                        argv.data(),
+                                        enableKey,
+                                        disableKey,
+                                        "test flag");
+}
+
+void expectCliEnableFlagRejected(TestContext& ctx,
+                                 const std::string& enableKey,
+                                 const std::string& disableKey)
+{
+    bool rejected = false;
+    try {
+        (void)enabledByDefaultFlag({ "tool", enableKey }, enableKey, disableKey);
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    EXPECT_TRUE(ctx, rejected);
+}
+
 MediaRealtimeRtpTranscodeRequest validRawRtpOptions()
 {
     MediaRealtimeRtpTranscodeRequest options = validRealtimeOptions();
@@ -142,6 +172,7 @@ MediaRealtimeRtpTranscodeRequest validRawRtpOptions()
     options.input.videoRtp.codecName = "h264";
     options.input.videoRtp.payloadType = 96;
     options.input.videoRtp.clockRate = 90000;
+    options.input.videoRtp.fmtp = "packetization-mode=1;sprop-parameter-sets=Z01AMpWQAoALWwEQAAA+gAAOpghhA,aOuPIA==;profile-level-id=4D4032";
     return options;
 }
 
@@ -263,6 +294,25 @@ void testRawRtpMissingMetadataFailsInPlanner(TestContext& ctx)
     MediaRealtimeRtpTranscodeRequest missingClockRate = options;
     missingClockRate.input.videoRtp.clockRate.reset();
     expectPlannerInvalidArgument(ctx, missingClockRate);
+
+    MediaRealtimeRtpTranscodeRequest missingVideoFmtp = options;
+    missingVideoFmtp.input.videoRtp.fmtp.clear();
+    expectPlannerInvalidArgument(ctx, missingVideoFmtp);
+
+    MediaRealtimeRtpTranscodeRequest missingPacketizationMode = options;
+    missingPacketizationMode.input.videoRtp.fmtp =
+        "sprop-parameter-sets=Z01AMpWQAoALWwEQAAA+gAAOpghhA,aOuPIA==;profile-level-id=4D4032";
+    expectPlannerInvalidArgument(ctx, missingPacketizationMode);
+
+    MediaRealtimeRtpTranscodeRequest missingProfileLevelId = options;
+    missingProfileLevelId.input.videoRtp.fmtp =
+        "packetization-mode=1;sprop-parameter-sets=Z01AMpWQAoALWwEQAAA+gAAOpghhA,aOuPIA==";
+    expectPlannerInvalidArgument(ctx, missingProfileLevelId);
+
+    MediaRealtimeRtpTranscodeRequest emptySpropParameterSets = options;
+    emptySpropParameterSets.input.videoRtp.fmtp =
+        "packetization-mode=1;sprop-parameter-sets= ;profile-level-id=4D4032";
+    expectPlannerInvalidArgument(ctx, emptySpropParameterSets);
 }
 
 void testRawRtpRejectsUnsupportedMetadata(TestContext& ctx)
@@ -284,6 +334,12 @@ void testRawRtpRejectsUnsupportedMetadata(TestContext& ctx)
     MediaRealtimeRtpTranscodeRequest invalidClockRate = options;
     invalidClockRate.input.videoRtp.clockRate = 48000;
     expectPlannerInvalidArgument(ctx, invalidClockRate);
+
+    MediaRealtimeRtpTranscodeRequest emptyHevcVps = options;
+    emptyHevcVps.input.videoRtp.codecName = "hevc";
+    emptyHevcVps.input.videoRtp.fmtp =
+        "sprop-vps= ;sprop-sps=QgEBAWAAAAMAsAAAAwAAAwB4oAPAgBDlja5JMvA=;sprop-pps=RAHBcrRiQA==";
+    expectPlannerInvalidArgument(ctx, emptyHevcVps);
 
     MediaRealtimeRtpTranscodeRequest missingPort = options;
     missingPort.input.videoRtp.url = "rtp://127.0.0.1";
@@ -319,6 +375,7 @@ void testRawRtpPlansH264AndHevcInput(TestContext& ctx)
 
     auto hevcOptions = validRawRtpOptions();
     hevcOptions.input.videoRtp.codecName = "hevc";
+    hevcOptions.input.videoRtp.fmtp = "sprop-vps=QAEMAf//AWAAAAMAsAAAAwAAAwB4;sprop-sps=QgEBAWAAAAMAsAAAAwAAAwB4oAPAgBDlja5JMvA=;sprop-pps=RAHBcrRiQA==";
     const auto hevcPlan = MediaRealtimeRtpTranscodePlanner::plan(hevcOptions);
     EXPECT_TRUE(ctx, hevcPlan);
     if (!hevcPlan) {
@@ -363,8 +420,12 @@ void testRawRtpPlansAudioVideoInput(TestContext& ctx)
     EXPECT_TRUE(ctx, plan.value().input.sdpText.find("m=video 5004 RTP/AVP 96\r\nc=IN IP4 127.0.0.1\r\n") != std::string::npos);
     EXPECT_TRUE(ctx, plan.value().input.sdpText.find("m=audio 5006 RTP/AVP 97\r\nc=IN IP4 192.0.2.10\r\n") != std::string::npos);
     EXPECT_TRUE(ctx, plan.value().input.sdpText.find("a=fmtp:97 ") != std::string::npos);
-    EXPECT_EQ(ctx, plan.value().videoOutput.url, std::string("rtp://127.0.0.1:5004"));
-    EXPECT_EQ(ctx, plan.value().audioOutput.url, std::string("rtp://127.0.0.1:5006"));
+    EXPECT_EQ(ctx,
+              plan.value().videoOutput.url,
+              std::string("rtp://127.0.0.1:5004?localrtpport=0&localrtcpport=0"));
+    EXPECT_EQ(ctx,
+              plan.value().audioOutput.url,
+              std::string("rtp://127.0.0.1:5006?localrtpport=0&localrtcpport=0"));
 }
 
 void testRawRtpPlansOpusAudioInput(TestContext& ctx)
@@ -492,7 +553,9 @@ void testBuildPlansRealtimeUrlAudioBranch(TestContext& ctx)
     const MediaNode* audioOutput = findNodeByName(graph, "realtime.audio.rtp.output");
     EXPECT_TRUE(ctx, audioOutput != nullptr);
     if (audioOutput) {
-        EXPECT_EQ(ctx, audioOutput->options.value("url"), std::string("rtp://127.0.0.1:5006"));
+        EXPECT_EQ(ctx,
+                  audioOutput->options.value("url"),
+                  std::string("rtp://127.0.0.1:5006?localrtpport=0&localrtcpport=0"));
     }
 
     const MediaNode* sdpWriter = findNodeByKind(graph, MediaNodeKind::SdpWriter);
@@ -529,6 +592,11 @@ void testBuildPlansRawRtpH264Graph(TestContext& ctx)
     EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::RtpMux) != nullptr);
     EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::RtpOutput) != nullptr);
     EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::SdpWriter) != nullptr);
+    const MediaNode* timestampNode = findNodeByKind(graph, MediaNodeKind::VideoTimestamp);
+    EXPECT_TRUE(ctx, timestampNode != nullptr);
+    if (timestampNode) {
+        EXPECT_EQ(ctx, timestampNode->options.value(MediaTranscodeOptionKey::VideoSynthesizeMissingTimestamps), std::string("1"));
+    }
     EXPECT_TRUE(ctx, findEdgeBetweenKinds(graph, MediaNodeKind::RawRtpInput, MediaNodeKind::Demux, MediaEdgeKind::Metadata) != nullptr);
     EXPECT_TRUE(ctx, findEdgeBetweenKinds(graph, MediaNodeKind::Demux, MediaNodeKind::StreamSplit, MediaEdgeKind::InputPacket) != nullptr);
     EXPECT_TRUE(ctx, findEdgeBetweenKinds(graph, MediaNodeKind::StreamSplit, MediaNodeKind::PacketNormalize, MediaEdgeKind::InputPacket) != nullptr);
@@ -709,6 +777,45 @@ void testTimestampRescaleRejectsInvalidBoundaryValues(TestContext& ctx)
     }
 }
 
+void testEnabledByDefaultCliFlagsRejectRedundantEnable(TestContext& ctx)
+{
+    EXPECT_TRUE(ctx, enabledByDefaultFlag({ "tool" }, "--enable-hw", "--disable-hw"));
+    EXPECT_FALSE(ctx, enabledByDefaultFlag({ "tool", "--disable-hw" }, "--enable-hw", "--disable-hw"));
+    expectCliEnableFlagRejected(ctx, "--enable-hw", "--disable-hw");
+    expectCliEnableFlagRejected(ctx, "--low-latency", "--no-low-latency");
+    expectCliEnableFlagRejected(ctx, "--graph-diagnostics", "--quiet-graph");
+}
+
+void testSyntheticTimestampsAdvanceAfterRealTimestamp(TestContext& ctx)
+{
+    const AVRational sourceTimeBase{ 1, 90000 };
+    const AVRational frameStepTimeBase{ 1, 30 };
+
+    const auto firstMissing = nextSyntheticTimestamp(AV_NOPTS_VALUE,
+                                                     frameStepTimeBase,
+                                                     sourceTimeBase);
+    EXPECT_TRUE(ctx, firstMissing);
+    if (firstMissing) {
+        EXPECT_EQ(ctx, firstMissing.value(), 0);
+    }
+
+    const auto afterReal = nextSyntheticTimestamp(900000,
+                                                  frameStepTimeBase,
+                                                  sourceTimeBase);
+    EXPECT_TRUE(ctx, afterReal);
+    if (afterReal) {
+        EXPECT_EQ(ctx, afterReal.value(), 903000);
+    }
+
+    const auto invalidTimeBase = nextSyntheticTimestamp(900000,
+                                                        AVRational{ 0, 1 },
+                                                        sourceTimeBase);
+    EXPECT_FALSE(ctx, invalidTimeBase);
+    if (!invalidTimeBase) {
+        EXPECT_EQ(ctx, invalidTimeBase.error().code, media::ErrorCode::InvalidArgument);
+    }
+}
+
 } // namespace
 
 int main()
@@ -730,6 +837,8 @@ int main()
     testUrlRedactionHidesUserInfo(ctx);
     testTimestampRescaleBumpsQuantizedDuplicates(ctx);
     testTimestampRescaleRejectsInvalidBoundaryValues(ctx);
+    testEnabledByDefaultCliFlagsRejectRedundantEnable(ctx);
+    testSyntheticTimestampsAdvanceAfterRealTimestamp(ctx);
     testBuildPlansVideoStreamAndSoftwareExecution(ctx);
     testBuildPlansRealtimeUrlAudioBranch(ctx);
     testBuildPlansRawRtpH264Graph(ctx);
