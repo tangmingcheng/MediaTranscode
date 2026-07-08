@@ -23,7 +23,7 @@ namespace media::ffmpeg::graph {
     builderOptions.outputUrl = options.outputUrl;
     builderOptions.outputFormat = options.outputFormat;
     builderOptions.parameters.execution.includeAudio = options.includeAudio;
-    builderOptions.parameters.execution.includeVideo = options.includeVideo;
+    builderOptions.parameters.queues = options.queues;
 
     return LocalFileTranscodeGraphBuilder::build(builderOptions);
 }

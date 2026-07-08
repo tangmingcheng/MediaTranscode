@@ -49,24 +49,40 @@ struct MediaPipelineChainPlan {
 };
 
 struct MediaPipelinePlannerOptions {
-    bool includeVideo = true;
-    bool allowPacketCopy = false;
+    MediaPipelinePlannerOptions() = delete;
+
+    MediaPipelinePlannerOptions(bool allowPacketCopy,
+                                bool filterRequired,
+                                bool preferGpu,
+                                bool enableSoftwareChain,
+                                bool requireRuntimeAvailability,
+                                bool lowLatency) noexcept
+        : allowPacketCopy(allowPacketCopy),
+          filterRequired(filterRequired),
+          preferGpu(preferGpu),
+          enableSoftwareChain(enableSoftwareChain),
+          requireRuntimeAvailability(requireRuntimeAvailability),
+          lowLatency(lowLatency)
+    {
+    }
+
+    bool allowPacketCopy;
     std::string outputPath;
-    std::string outputCodecName = "h264";
-    std::string preferredHardware = "auto";
+    std::string outputCodecName;
+    std::string preferredHardware;
     int targetWidth = 0;
     int targetHeight = 0;
-    bool filterRequired = true;
-    bool preferGpu = true;
-    bool enableSoftwareChain = true;
-    bool requireRuntimeAvailability = true;
+    bool filterRequired;
+    bool preferGpu;
+    bool enableSoftwareChain;
+    bool requireRuntimeAvailability;
     bool diagnosticLogEnabled = false;
-    std::string rtspTransport = "tcp";
-    int openTimeoutMs = 5000;
-    int readTimeoutMs = 5000;
-    int analyzeDurationUs = 500000;
-    int probeSizeBytes = 512 * 1024;
-    bool lowLatency = true;
+    std::string rtspTransport;
+    int openTimeoutMs = 0;
+    int readTimeoutMs = 0;
+    int analyzeDurationUs = 0;
+    int probeSizeBytes = 0;
+    bool lowLatency;
 };
 
 struct MediaInputVideoStreamInfo {
@@ -88,6 +104,7 @@ struct MediaPipelinePlan {
     std::string outputCodecName;
     bool diagnosticLogEnabled = false;
     bool synthesizeMissingTimestamps = false;
+    bool filterRequired = false;
     MediaPipelineChainPlan selected;
     std::vector<MediaPipelineChainPlan> candidates;
 };
@@ -100,16 +117,16 @@ class MediaPipelinePlanner final {
 public:
     static ::media::Result<MediaPipelinePlan> planVideoTranscodeFile(
         const std::string& inputPath,
-        MediaPipelinePlannerOptions options = {});
+        MediaPipelinePlannerOptions options);
 
     static ::media::Result<MediaPipelinePlan> planVideoTranscodeRealtimeUrl(
         const std::string& inputUrl,
-        MediaPipelinePlannerOptions options = {});
+        MediaPipelinePlannerOptions options);
 
     static ::media::Result<MediaPipelinePlan> planVideoTranscodeKnownInput(
         MediaInputVideoStreamInfo inputInfo,
         const std::string& inputUrl,
-        MediaPipelinePlannerOptions options = {});
+        MediaPipelinePlannerOptions options);
 
 private:
     MediaPipelinePlanner() = default;

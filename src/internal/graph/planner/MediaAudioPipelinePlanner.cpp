@@ -114,9 +114,8 @@ const AVCodec* findAudioEncoderForCodecName(const std::string& codecName)
         return ::media::Result<MediaAudioPipelinePlan>::failure(probe.error());
     }
     if (!probe.value().found) {
-        plan.branchMode = MediaBranchMode::Drop;
-        plan.reason = "no_audio";
-        return ::media::Result<MediaAudioPipelinePlan>::success(std::move(plan));
+        return ::media::Result<MediaAudioPipelinePlan>::failure(
+            ::media::ErrorInfo::invalidArgument("audio is enabled but input audio stream was not found; pass --no-audio to disable audio"));
     }
 
     const MediaPipelineAudioSourceProbeResult& source = probe.value();

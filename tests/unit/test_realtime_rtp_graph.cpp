@@ -361,7 +361,6 @@ MediaRealtimeRtpTranscodeRequest validRealtimeOptions()
     options.output.streamLayout = RealtimeOutputStreamLayout::SeparateStreams;
     options.output.sdpPath = "realtime-test.sdp";
     options.output.packetSize = 1200;
-    options.parameters.execution.includeVideo = true;
     options.parameters.execution.includeAudio = false;
     options.parameters.execution.disableHardware = true;
     options.parameters.queues.metadata = 1;
@@ -446,33 +445,19 @@ void expectPlannerInvalidArgument(TestContext& ctx, const MediaRealtimeRtpTransc
     }
 }
 
-bool enabledByDefaultFlag(const std::vector<std::string>& args,
-                          const std::string& enableKey,
-                          const std::string& disableKey)
+std::string repositoryFile(const std::string& relativePath)
 {
-    std::vector<char*> argv;
-    argv.reserve(args.size());
-    for (const std::string& arg : args) {
-        argv.push_back(const_cast<char*>(arg.c_str()));
-    }
-    return cli::enabledByDefaultBoolArg(static_cast<int>(argv.size()),
-                                        argv.data(),
-                                        enableKey,
-                                        disableKey,
-                                        "test flag");
+    return readTextFile(std::filesystem::path(MEDIA_TRANSCODE_SOURCE_DIR) / relativePath);
 }
 
-void expectCliEnableFlagRejected(TestContext& ctx,
-                                 const std::string& enableKey,
-                                 const std::string& disableKey)
+void expectTextContains(TestContext& ctx, const std::string& text, const std::string& needle)
 {
-    bool rejected = false;
-    try {
-        (void)enabledByDefaultFlag({ "tool", enableKey }, enableKey, disableKey);
-    } catch (const std::invalid_argument&) {
-        rejected = true;
-    }
-    EXPECT_TRUE(ctx, rejected);
+    EXPECT_TRUE(ctx, text.find(needle) != std::string::npos);
+}
+
+void expectTextNotContains(TestContext& ctx, const std::string& text, const std::string& needle)
+{
+    EXPECT_FALSE(ctx, text.find(needle) != std::string::npos);
 }
 
 MediaRealtimeRtpTranscodeRequest validRawRtpOptions()
@@ -570,6 +555,100 @@ void testLegacyArchitectureFilesAreRemoved(TestContext& ctx)
             std::cerr << "non-graph internal source still exists: "
                       << entry.path().string() << '\n';
         }
+    }
+}
+
+void testVideoToolsAreSplitIntoDedicatedTargets(TestContext& ctx)
+{
+    const std::string cmake = repositoryFile("CMakeLists.txt");
+
+    expectTextContains(ctx, cmake, "TARGET_LOCAL_VIDEO_CLI");
+    expectTextContains(ctx, cmake, "TARGET_REALTIME_VIDEO_CLI");
+    expectTextContains(ctx, cmake, "tools/local_video_cli/main.cpp");
+    expectTextContains(ctx, cmake, "tools/realtime_video_cli/main.cpp");
+    expectTextNotContains(ctx, cmake, "TARGET_GRAPH_TRANSCODE_CLI");
+    expectTextNotContains(ctx, cmake, "TARGET_REALTIME_RTP_INPUT_CLI");
+    EXPECT_FALSE(ctx, std::filesystem::exists(std::filesystem::path(MEDIA_TRANSCODE_SOURCE_DIR) /
+                                              "tools" / "graph_transcode_cli" / "main.cpp"));
+    EXPECT_FALSE(ctx, std::filesystem::exists(std::filesystem::path(MEDIA_TRANSCODE_SOURCE_DIR) /
+                                              "tools" / "realtime_rtp_input_cli" / "main.cpp"));
+}
+
+void testVideoToolsRejectLegacyBusinessSwitches(TestContext& ctx)
+{
+    const std::filesystem::path sourceDir = MEDIA_TRANSCODE_SOURCE_DIR;
+    const std::filesystem::path localTool = sourceDir / "tools" / "local_video_cli" / "main.cpp";
+    const std::filesystem::path realtimeTool = sourceDir / "tools" / "realtime_video_cli" / "main.cpp";
+    EXPECT_TRUE(ctx, std::filesystem::exists(localTool));
+    EXPECT_TRUE(ctx, std::filesystem::exists(realtimeTool));
+
+    const std::string localSource = readTextFile(localTool);
+    const std::string realtimeSource = readTextFile(realtimeTool);
+    const std::string commonSource = repositoryFile("tools/common/VideoCliTranscodeOptions.h");
+    const std::string combined = localSource + "\n" + realtimeSource + "\n" + commonSource;
+
+    expectTextNotContains(ctx, combined, "\"--mode\"");
+    expectTextNotContains(ctx, combined, "\"--video\"");
+    expectTextNotContains(ctx, combined, "\"--audio\"");
+    expectTextNotContains(ctx, combined, "\"--enable-hw\"");
+    expectTextContains(ctx, combined, "--disable-hw");
+    expectTextContains(ctx, combined, "--no-audio");
+}
+
+void testGraphRejectsBehaviorDefaultImplementations(TestContext& ctx)
+{
+    const std::string plannerHeader = repositoryFile("src/internal/graph/planner/MediaPipelinePlanner.h");
+    const std::string audioPlannerHeader = repositoryFile("src/internal/graph/planner/MediaAudioPipelinePlanner.h");
+    const std::string audioPlanner = repositoryFile("src/internal/graph/planner/MediaAudioPipelinePlanner.cpp");
+    const std::string encoderBuilder = repositoryFile("src/internal/graph/builder/codec/CodecResolverEncoderContextBuilder.cpp");
+    const std::string audioResolver = repositoryFile("src/internal/graph/nodes/audio/AudioCodecResolverNode.cpp");
+    const std::string transcodeParameters = repositoryFile("src/internal/graph/model/MediaTranscodeParameters.h");
+    const std::string presetHeader = repositoryFile("src/internal/graph/preset/MediaPipelinePreset.h");
+    const std::string realtimePlanner = repositoryFile("src/internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.cpp");
+
+    expectTextContains(ctx, plannerHeader, "MediaPipelinePlannerOptions() = delete");
+    expectTextNotContains(ctx, plannerHeader, "MediaPipelinePlannerOptions options = {}");
+    expectTextNotContains(ctx, plannerHeader, "includeVideo");
+    expectTextNotContains(ctx, transcodeParameters, "includeVideo");
+    expectTextNotContains(ctx, presetHeader, "includeVideo");
+    expectTextNotContains(ctx, realtimePlanner, "requires video branch");
+    expectTextContains(ctx, audioPlannerHeader, "MediaAudioPipelinePlannerOptions() = delete");
+    expectTextNotContains(ctx, audioPlannerHeader, "bool includeAudio = true");
+    expectTextNotContains(ctx, audioPlanner, "plan.reason = \"no_audio\"");
+    expectTextNotContains(ctx, audioResolver, "supported_samplerates[0]");
+    expectTextContains(ctx, audioResolver, "audio sample rate is not supported by selected encoder");
+    expectTextNotContains(ctx, encoderBuilder, "defaultBufferSizeFromRate");
+    expectTextNotContains(ctx, encoderBuilder, "default buffer size");
+    expectTextNotContains(ctx, encoderBuilder, "rc_min_rate = encoderContext->bit_rate");
+    expectTextNotContains(ctx, encoderBuilder, "rc_max_rate = encoderContext->bit_rate");
+}
+
+void testPlannerRejectsUnresolvedBehaviorOptions(TestContext& ctx)
+{
+    MediaInputVideoStreamInfo input;
+    input.streamIndex = 0;
+    input.codecName = "h264";
+    input.width = 1920;
+    input.height = 1080;
+
+    MediaPipelinePlannerOptions missingHardwarePreference(false, false, true, true, true, false);
+    const auto missingHardware = MediaPipelinePlanner::planVideoTranscodeKnownInput(
+        input,
+        "rtp://127.0.0.1:5004",
+        missingHardwarePreference);
+    EXPECT_FALSE(ctx, missingHardware);
+    if (!missingHardware) {
+        EXPECT_EQ(ctx, missingHardware.error().code, media::ErrorCode::InvalidArgument);
+    }
+
+    MediaPipelinePlannerOptions missingRealtimeOptions(false, false, true, true, true, false);
+    missingRealtimeOptions.preferredHardware = "auto";
+    const auto missingRealtime = MediaPipelinePlanner::planVideoTranscodeRealtimeUrl(
+        "rtsp://127.0.0.1/live",
+        missingRealtimeOptions);
+    EXPECT_FALSE(ctx, missingRealtime);
+    if (!missingRealtime) {
+        EXPECT_EQ(ctx, missingRealtime.error().code, media::ErrorCode::InvalidArgument);
     }
 }
 
@@ -857,6 +936,65 @@ void testRawRtpPlansAudioVideoInput(TestContext& ctx)
     EXPECT_EQ(ctx,
               plan.value().audioOutput.url,
               std::string("rtp://127.0.0.1:5006?localrtpport=0&localrtcpport=0"));
+}
+
+void testRawRtpInheritsSourceCodecsWhenTranscodeCodecsAreOmitted(TestContext& ctx)
+{
+    MediaRealtimeRtpTranscodeRequest options = validRawRtpAudioVideoOptions();
+    options.parameters.video.codecName.clear();
+    options.parameters.audio.codecName.clear();
+
+    auto plan = MediaRealtimeRtpTranscodePlanner::plan(options);
+    EXPECT_TRUE(ctx, plan);
+    if (!plan) {
+        std::cerr << plan.error().describe() << '\n';
+        return;
+    }
+
+    EXPECT_EQ(ctx, plan.value().videoPlan.inputCodecName, std::string("h264"));
+    EXPECT_EQ(ctx, plan.value().videoPlan.outputCodecName, std::string("h264"));
+    EXPECT_EQ(ctx, plan.value().audioPlan.sourceCodecName, std::string("aac"));
+    EXPECT_EQ(ctx, plan.value().audioPlan.targetCodecName, std::string("aac"));
+}
+
+void testRawRtpRejectsUnknownSourceCodecWhenCodecIsNotExplicit(TestContext& ctx)
+{
+    MediaRealtimeRtpTranscodeRequest options = validRawRtpOptions();
+    options.parameters.video.codecName.clear();
+    options.input.videoRtp.codecName = "unknown-source-codec";
+
+    const auto plan = MediaRealtimeRtpTranscodePlanner::plan(options);
+    EXPECT_FALSE(ctx, plan);
+}
+
+void testRealtimeNoResizeDoesNotScoreFilterStage(TestContext& ctx)
+{
+    MediaRealtimeRtpTranscodeRequest options = validRawRtpOptions();
+
+    auto plan = MediaRealtimeRtpTranscodePlanner::plan(options);
+    EXPECT_TRUE(ctx, plan);
+    if (!plan) {
+        std::cerr << plan.error().describe() << '\n';
+        return;
+    }
+
+    EXPECT_EQ(ctx, plan.value().videoPlan.selected.score, 600);
+}
+
+void testRealtimeResizeScoresFilterStage(TestContext& ctx)
+{
+    MediaRealtimeRtpTranscodeRequest options = validRawRtpOptions();
+    options.parameters.video.width = 1280;
+    options.parameters.video.height = 720;
+
+    auto plan = MediaRealtimeRtpTranscodePlanner::plan(options);
+    EXPECT_TRUE(ctx, plan);
+    if (!plan) {
+        std::cerr << plan.error().describe() << '\n';
+        return;
+    }
+
+    EXPECT_EQ(ctx, plan.value().videoPlan.selected.score, 900);
 }
 
 void testRawRtpPlansOpusAudioInput(TestContext& ctx)
@@ -1242,15 +1380,6 @@ void testTimestampRescaleRejectsInvalidBoundaryValues(TestContext& ctx)
     }
 }
 
-void testEnabledByDefaultCliFlagsRejectRedundantEnable(TestContext& ctx)
-{
-    EXPECT_TRUE(ctx, enabledByDefaultFlag({ "tool" }, "--enable-hw", "--disable-hw"));
-    EXPECT_FALSE(ctx, enabledByDefaultFlag({ "tool", "--disable-hw" }, "--enable-hw", "--disable-hw"));
-    expectCliEnableFlagRejected(ctx, "--enable-hw", "--disable-hw");
-    expectCliEnableFlagRejected(ctx, "--low-latency", "--no-low-latency");
-    expectCliEnableFlagRejected(ctx, "--graph-diagnostics", "--quiet-graph");
-}
-
 void testSyntheticTimestampsAdvanceAfterRealTimestamp(TestContext& ctx)
 {
     const AVRational sourceTimeBase{ 1, 90000 };
@@ -1289,6 +1418,10 @@ int main()
 
     testValidationRejectsMissingInput(ctx);
     testLegacyArchitectureFilesAreRemoved(ctx);
+    testVideoToolsAreSplitIntoDedicatedTargets(ctx);
+    testVideoToolsRejectLegacyBusinessSwitches(ctx);
+    testGraphRejectsBehaviorDefaultImplementations(ctx);
+    testPlannerRejectsUnresolvedBehaviorOptions(ctx);
     testValidationRejectsUnsupportedRealtimeInput(ctx);
     testValidationRequiresExplicitRealtimeStreamClassification(ctx);
     testExistingRealtimeModesMapToExplicitLayouts(ctx);
@@ -1300,6 +1433,10 @@ int main()
     testRawRtpPlansH264AndHevcInput(ctx);
     testRawRtpAudioEndpointRequiredWhenAudioEnabled(ctx);
     testRawRtpPlansAudioVideoInput(ctx);
+    testRawRtpInheritsSourceCodecsWhenTranscodeCodecsAreOmitted(ctx);
+    testRawRtpRejectsUnknownSourceCodecWhenCodecIsNotExplicit(ctx);
+    testRealtimeNoResizeDoesNotScoreFilterStage(ctx);
+    testRealtimeResizeScoresFilterStage(ctx);
     testRawRtpPlansOpusAudioInput(ctx);
     testValidationRejectsOddRtpPort(ctx);
     testValidationRejectsAudioRtpPortOverflow(ctx);
@@ -1307,7 +1444,6 @@ int main()
     testUrlRedactionHidesUserInfo(ctx);
     testTimestampRescaleBumpsQuantizedDuplicates(ctx);
     testTimestampRescaleRejectsInvalidBoundaryValues(ctx);
-    testEnabledByDefaultCliFlagsRejectRedundantEnable(ctx);
     testSyntheticTimestampsAdvanceAfterRealTimestamp(ctx);
     testBuildPlansVideoStreamAndSoftwareExecution(ctx);
     testBuildPlansRealtimeUrlAudioBranch(ctx);

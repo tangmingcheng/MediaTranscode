@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/core/MediaGraph.h"
+#include "internal/graph/model/MediaTranscodeParameters.h"
 #include "media_transcode/Result.h"
 
 #include <string>
@@ -16,7 +17,7 @@ struct MediaPipelinePresetOptions {
     std::string outputUrl;
     std::string outputFormat;
     bool includeAudio = true;
-    bool includeVideo = true;
+    MediaGraphQueueParameters queues;
 };
 
 class MediaPipelinePreset final {

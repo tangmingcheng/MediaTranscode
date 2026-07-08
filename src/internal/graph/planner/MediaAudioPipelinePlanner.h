@@ -10,7 +10,14 @@
 namespace media::ffmpeg::graph {
 
 struct MediaAudioPipelinePlannerOptions {
-    bool includeAudio = true;
+    MediaAudioPipelinePlannerOptions() = delete;
+
+    explicit MediaAudioPipelinePlannerOptions(bool includeAudio) noexcept
+        : includeAudio(includeAudio)
+    {
+    }
+
+    bool includeAudio;
     std::string requestedCodecName;
     MediaRateControlMode rateControl = MediaRateControlMode::Auto;
     std::optional<int> requestedBitrateKbps;

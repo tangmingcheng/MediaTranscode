@@ -15,7 +15,6 @@ namespace media::ffmpeg::graph {
 namespace {
 
 constexpr int RealtimeNoBidirectionalFrames = 0;
-constexpr bool RealtimeRequiresFilterGraph = true;
 constexpr bool RealtimeRequiresRuntimeAvailability = true;
 constexpr int RawRtpVideoStreamIndex = 0;
 constexpr int RawRtpAudioStreamIndex = 1;
@@ -265,22 +264,16 @@ std::string planRawRtpSdp(const MediaRtpUrlEndpoint& videoEndpoint,
         return ::media::Result<MediaPipelinePlannerOptions>::failure(
             ::media::ErrorInfo::invalidArgument("Realtime RTP video width and height must be specified together"));
     }
-    if (video.codecName.empty()) {
-        return ::media::Result<MediaPipelinePlannerOptions>::failure(
-            ::media::ErrorInfo::invalidArgument("Realtime RTP video codec must be explicit"));
-    }
-
-    MediaPipelinePlannerOptions plannerOptions;
-    plannerOptions.includeVideo = options.parameters.execution.includeVideo;
-    plannerOptions.allowPacketCopy = false;
+    MediaPipelinePlannerOptions plannerOptions(false,
+                                               video.resizeRequested(),
+                                               planGpuPreference(options.parameters.execution),
+                                               planSoftwareChain(options.parameters.execution),
+                                               RealtimeRequiresRuntimeAvailability,
+                                               *options.input.lowLatency);
     plannerOptions.outputPath = outputUrl;
     plannerOptions.outputCodecName = video.codecName;
     plannerOptions.targetWidth = video.width.value_or(0);
     plannerOptions.targetHeight = video.height.value_or(0);
-    plannerOptions.filterRequired = RealtimeRequiresFilterGraph;
-    plannerOptions.preferGpu = planGpuPreference(options.parameters.execution);
-    plannerOptions.enableSoftwareChain = planSoftwareChain(options.parameters.execution);
-    plannerOptions.requireRuntimeAvailability = RealtimeRequiresRuntimeAvailability;
     plannerOptions.preferredHardware = planPreferredHardware(options.parameters.execution);
     plannerOptions.diagnosticLogEnabled = options.parameters.execution.diagnosticLogEnabled;
     plannerOptions.rtspTransport = options.input.rtspTransport;
@@ -288,7 +281,6 @@ std::string planRawRtpSdp(const MediaRtpUrlEndpoint& videoEndpoint,
     plannerOptions.readTimeoutMs = *options.input.readTimeoutMs;
     plannerOptions.analyzeDurationUs = *options.input.analyzeDurationUs;
     plannerOptions.probeSizeBytes = *options.input.probeSizeBytes;
-    plannerOptions.lowLatency = *options.input.lowLatency;
     return ::media::Result<MediaPipelinePlannerOptions>::success(std::move(plannerOptions));
 }
 
@@ -330,8 +322,7 @@ std::string planRawRtpSdp(const MediaRtpUrlEndpoint& videoEndpoint,
         return ::media::Result<MediaAudioPipelinePlannerOptions>::failure(status.error());
     }
 
-    MediaAudioPipelinePlannerOptions plannerOptions;
-    plannerOptions.includeAudio = options.parameters.execution.includeAudio;
+    MediaAudioPipelinePlannerOptions plannerOptions(options.parameters.execution.includeAudio);
     plannerOptions.requestedCodecName = audio.codecName;
     plannerOptions.rateControl = audio.rateControl;
     plannerOptions.requestedBitrateKbps = audio.bitrateKbps;
@@ -388,10 +379,6 @@ MediaEdgePolicy planEdgePolicy(const MediaGraphQueueParameters& queues)
     if ((isRealtimeUrlInput(options) || isMpegTsUdpInput(options)) && options.input.url.empty()) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
             ::media::ErrorInfo::invalidArgument("Realtime RTP input URL must be explicit"));
-    }
-    if (!options.parameters.execution.includeVideo) {
-        return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
-            ::media::ErrorInfo::invalidArgument("Realtime RTP transcode requires video branch"));
     }
     if (isSeparateRtpOutput(options)) {
         if (!options.output.packetSize.has_value() || *options.output.packetSize <= 0) {

@@ -57,9 +57,11 @@ const char* boolOption(bool value) noexcept
 
 ::media::Result<void> setFullPlanOptions(MediaGraph& graph,
                                          MediaNodeId nodeId,
-                                         const MediaPipelineChainPlan& chain)
+                                         const MediaPipelinePlan& plan)
 {
+    const MediaPipelineChainPlan& chain = plan.selected;
     if (auto status = setChainOptions(graph, nodeId, chain); !status) return status;
+    if (auto status = setOption(graph, nodeId, "pipeline.filter_required", boolOption(plan.filterRequired)); !status) return status;
     if (auto status = setStageOptions(graph, nodeId, "decoder.pipeline", chain.decoder); !status) return status;
     if (auto status = setStageOptions(graph, nodeId, "filter.pipeline", chain.filter); !status) return status;
     return setStageOptions(graph, nodeId, "encoder.pipeline", chain.encoder);
@@ -111,7 +113,7 @@ std::string transferDirectionForPlan(const MediaPipelineChainPlan& chain)
     };
 
     for (MediaNodeId nodeId : plannedNodes) {
-        if (auto status = setFullPlanOptions(graph, nodeId, chain); !status) return status;
+        if (auto status = setFullPlanOptions(graph, nodeId, plan); !status) return status;
     }
 
     if (auto status = setOption(graph, nodes.codecResolver, MediaTranscodeOptionKey::PlannedDecoder, chain.decoder.ffmpegName); !status) return status;

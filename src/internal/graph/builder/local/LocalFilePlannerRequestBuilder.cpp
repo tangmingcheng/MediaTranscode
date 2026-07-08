@@ -30,11 +30,6 @@ namespace {
     return ::media::Status::success();
 }
 
-bool resizeRequested(const MediaVideoTranscodeParameters& video) noexcept
-{
-    return video.width.has_value() && video.height.has_value();
-}
-
 bool encodeOptionsRequested(const MediaVideoTranscodeParameters& video) noexcept
 {
     return video.frameRate.specified() ||
@@ -65,17 +60,16 @@ bool encodeOptionsRequested(const MediaVideoTranscodeParameters& video) noexcept
         return ::media::Result<MediaPipelinePlannerOptions>::failure(resizeValidation.error());
     }
 
-    MediaPipelinePlannerOptions plannerOptions;
-    plannerOptions.includeVideo = parameters.execution.includeVideo;
-    plannerOptions.allowPacketCopy = !resizeRequested(video) && !encodeOptionsRequested(video);
+    MediaPipelinePlannerOptions plannerOptions(!video.resizeRequested() && !encodeOptionsRequested(video),
+                                               video.resizeRequested(),
+                                               !parameters.execution.disableHardware,
+                                               parameters.execution.disableHardware,
+                                               true,
+                                               false);
     plannerOptions.outputPath = options.outputUrl;
     plannerOptions.outputCodecName = video.codecName;
     plannerOptions.targetWidth = video.width.value_or(0);
     plannerOptions.targetHeight = video.height.value_or(0);
-    plannerOptions.filterRequired = resizeRequested(video);
-    plannerOptions.enableSoftwareChain = parameters.execution.disableHardware;
-    plannerOptions.requireRuntimeAvailability = true;
-    plannerOptions.preferGpu = !parameters.execution.disableHardware;
     plannerOptions.preferredHardware = plannerOptions.preferGpu ? "auto" : "software";
     plannerOptions.diagnosticLogEnabled = parameters.execution.diagnosticLogEnabled;
     return ::media::Result<MediaPipelinePlannerOptions>::success(std::move(plannerOptions));

@@ -10,6 +10,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace media::ffmpeg::graph::cli {
 
@@ -39,10 +40,37 @@ inline bool hasArg(int argc, char** argv, const std::string& key)
     return false;
 }
 
-inline void rejectRemovedArg(int argc, char** argv, const std::string& key)
+inline bool containsKey(const std::vector<std::string>& keys, const std::string& key)
 {
-    if (hasArg(argc, argv, key)) {
-        throw std::invalid_argument(key + " was removed; encoder selection is planner-owned");
+    for (const std::string& candidate : keys) {
+        if (candidate == key) {
+            return true;
+        }
+    }
+    return false;
+}
+
+inline void rejectUnknownArgs(int argc,
+                              char** argv,
+                              const std::vector<std::string>& valueArgs,
+                              const std::vector<std::string>& flagArgs)
+{
+    for (int i = 1; i < argc; ++i) {
+        const std::string key = argv[i];
+        if (key.rfind("--", 0) != 0) {
+            continue;
+        }
+        if (containsKey(valueArgs, key)) {
+            if (i + 1 >= argc || std::string(argv[i + 1]).rfind("--", 0) == 0) {
+                throw std::invalid_argument("missing value for argument: " + key);
+            }
+            ++i;
+            continue;
+        }
+        if (containsKey(flagArgs, key)) {
+            continue;
+        }
+        throw std::invalid_argument("unsupported argument: " + key);
     }
 }
 
@@ -101,18 +129,16 @@ inline bool requiredExclusiveBoolArg(int argc,
     return trueArg;
 }
 
-inline bool enabledByDefaultBoolArg(int argc,
-                                    char** argv,
-                                    const std::string& redundantEnableKey,
-                                    const std::string& disableKey,
-                                    const std::string& settingName)
+inline bool disabledByExplicitArg(int argc,
+                                  char** argv,
+                                  const std::string& disableKey,
+                                  const std::string& settingName)
 {
-    if (hasArg(argc, argv, redundantEnableKey)) {
-        throw std::invalid_argument(
-            redundantEnableKey + " is redundant; " + settingName +
-            " is enabled by default, use " + disableKey + " to disable it");
+    if (hasArg(argc, argv, disableKey)) {
+        return true;
     }
-    return !hasArg(argc, argv, disableKey);
+    (void)settingName;
+    return false;
 }
 
 inline MediaRateControlMode requiredRateControlArg(int argc, char** argv, const std::string& key)
@@ -178,9 +204,19 @@ inline ::media::Status printRealtimePlanSummary(const MediaGraph& graph)
     if (!decoder) {
         return ::media::Status::failure(decoder.error());
     }
-    auto filter = requiredNodeOption(&encoder->options, "graph CLI realtime plan summary", "filter.pipeline.filter");
-    if (!filter) {
-        return ::media::Status::failure(filter.error());
+    auto filterRequired = requiredNodeOption(&encoder->options,
+                                             "graph CLI realtime plan summary",
+                                             "pipeline.filter_required");
+    if (!filterRequired) {
+        return ::media::Status::failure(filterRequired.error());
+    }
+    std::string filterText = "not_required";
+    if (filterRequired.value() != "0") {
+        auto filter = requiredNodeOption(&encoder->options, "graph CLI realtime plan summary", "filter.pipeline.filter");
+        if (!filter) {
+            return ::media::Status::failure(filter.error());
+        }
+        filterText = filter.value();
     }
     auto encoderName = requiredNodeOption(&encoder->options, "graph CLI realtime plan summary", "encoder");
     if (!encoderName) {
@@ -190,7 +226,7 @@ inline ::media::Status printRealtimePlanSummary(const MediaGraph& graph)
     std::cout << "[CLI] selected_chain=" << chain.value()
               << " score=" << score.value()
               << " decoder=" << decoder.value()
-              << " filter=" << filter.value()
+              << " filter=" << filterText
               << " encoder=" << encoderName.value()
               << '\n';
     return ::media::Status::success();
