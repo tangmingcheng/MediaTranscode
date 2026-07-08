@@ -100,6 +100,11 @@ struct MediaVideoTranscodeParameters {
     std::string level;
     std::optional<int> gop;
     std::optional<int> bFrames;
+
+    bool resizeRequested() const noexcept
+    {
+        return width.has_value() && height.has_value();
+    }
 };
 
 struct MediaAudioTranscodeParameters {
@@ -124,10 +129,10 @@ struct MediaTranscodeExecutionParameters {
 };
 
 struct MediaGraphQueueParameters {
-    std::size_t metadata = 1;
-    std::size_t packet = 256;
-    std::size_t frame = 128;
-    std::size_t mux = 256;
+    std::size_t metadata = 0;
+    std::size_t packet = 0;
+    std::size_t frame = 0;
+    std::size_t mux = 0;
 };
 
 struct MediaTranscodeParameterSet {

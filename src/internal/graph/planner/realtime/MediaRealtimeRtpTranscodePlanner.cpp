@@ -15,7 +15,6 @@ namespace media::ffmpeg::graph {
 namespace {
 
 constexpr int RealtimeNoBidirectionalFrames = 0;
-constexpr bool RealtimeRequiresFilterGraph = true;
 constexpr bool RealtimeRequiresRuntimeAvailability = true;
 constexpr int RawRtpVideoStreamIndex = 0;
 constexpr int RawRtpAudioStreamIndex = 1;
@@ -265,11 +264,6 @@ std::string planRawRtpSdp(const MediaRtpUrlEndpoint& videoEndpoint,
         return ::media::Result<MediaPipelinePlannerOptions>::failure(
             ::media::ErrorInfo::invalidArgument("Realtime RTP video width and height must be specified together"));
     }
-    if (video.codecName.empty()) {
-        return ::media::Result<MediaPipelinePlannerOptions>::failure(
-            ::media::ErrorInfo::invalidArgument("Realtime RTP video codec must be explicit"));
-    }
-
     MediaPipelinePlannerOptions plannerOptions;
     plannerOptions.includeVideo = options.parameters.execution.includeVideo;
     plannerOptions.allowPacketCopy = false;
@@ -277,7 +271,7 @@ std::string planRawRtpSdp(const MediaRtpUrlEndpoint& videoEndpoint,
     plannerOptions.outputCodecName = video.codecName;
     plannerOptions.targetWidth = video.width.value_or(0);
     plannerOptions.targetHeight = video.height.value_or(0);
-    plannerOptions.filterRequired = RealtimeRequiresFilterGraph;
+    plannerOptions.filterRequired = video.resizeRequested();
     plannerOptions.preferGpu = planGpuPreference(options.parameters.execution);
     plannerOptions.enableSoftwareChain = planSoftwareChain(options.parameters.execution);
     plannerOptions.requireRuntimeAvailability = RealtimeRequiresRuntimeAvailability;

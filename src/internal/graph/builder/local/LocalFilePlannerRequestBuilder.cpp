@@ -30,11 +30,6 @@ namespace {
     return ::media::Status::success();
 }
 
-bool resizeRequested(const MediaVideoTranscodeParameters& video) noexcept
-{
-    return video.width.has_value() && video.height.has_value();
-}
-
 bool encodeOptionsRequested(const MediaVideoTranscodeParameters& video) noexcept
 {
     return video.frameRate.specified() ||
@@ -67,12 +62,12 @@ bool encodeOptionsRequested(const MediaVideoTranscodeParameters& video) noexcept
 
     MediaPipelinePlannerOptions plannerOptions;
     plannerOptions.includeVideo = parameters.execution.includeVideo;
-    plannerOptions.allowPacketCopy = !resizeRequested(video) && !encodeOptionsRequested(video);
+    plannerOptions.allowPacketCopy = !video.resizeRequested() && !encodeOptionsRequested(video);
     plannerOptions.outputPath = options.outputUrl;
     plannerOptions.outputCodecName = video.codecName;
     plannerOptions.targetWidth = video.width.value_or(0);
     plannerOptions.targetHeight = video.height.value_or(0);
-    plannerOptions.filterRequired = resizeRequested(video);
+    plannerOptions.filterRequired = video.resizeRequested();
     plannerOptions.enableSoftwareChain = parameters.execution.disableHardware;
     plannerOptions.requireRuntimeAvailability = true;
     plannerOptions.preferGpu = !parameters.execution.disableHardware;

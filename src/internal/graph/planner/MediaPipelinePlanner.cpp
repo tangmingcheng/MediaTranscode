@@ -76,6 +76,7 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
     plan.inputPath = std::move(inputPath);
     plan.outputPath = std::move(options.outputPath);
     plan.diagnosticLogEnabled = options.diagnosticLogEnabled;
+    plan.filterRequired = options.filterRequired;
 
     if (!options.includeVideo) {
         plan.enabled = false;

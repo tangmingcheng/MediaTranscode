@@ -52,21 +52,21 @@ struct MediaPipelinePlannerOptions {
     bool includeVideo = true;
     bool allowPacketCopy = false;
     std::string outputPath;
-    std::string outputCodecName = "h264";
-    std::string preferredHardware = "auto";
+    std::string outputCodecName;
+    std::string preferredHardware;
     int targetWidth = 0;
     int targetHeight = 0;
-    bool filterRequired = true;
+    bool filterRequired = false;
     bool preferGpu = true;
     bool enableSoftwareChain = true;
     bool requireRuntimeAvailability = true;
     bool diagnosticLogEnabled = false;
-    std::string rtspTransport = "tcp";
-    int openTimeoutMs = 5000;
-    int readTimeoutMs = 5000;
-    int analyzeDurationUs = 500000;
-    int probeSizeBytes = 512 * 1024;
-    bool lowLatency = true;
+    std::string rtspTransport;
+    int openTimeoutMs = 0;
+    int readTimeoutMs = 0;
+    int analyzeDurationUs = 0;
+    int probeSizeBytes = 0;
+    bool lowLatency = false;
 };
 
 struct MediaInputVideoStreamInfo {
@@ -88,6 +88,7 @@ struct MediaPipelinePlan {
     std::string outputCodecName;
     bool diagnosticLogEnabled = false;
     bool synthesizeMissingTimestamps = false;
+    bool filterRequired = false;
     MediaPipelineChainPlan selected;
     std::vector<MediaPipelineChainPlan> candidates;
 };
