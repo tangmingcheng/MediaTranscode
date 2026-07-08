@@ -93,13 +93,18 @@ bool sampleRateSupported(const AVCodec* encoder, int sampleRate)
     return false;
 }
 
-int chooseSampleRate(const AVCodec* encoder, int requested, int source)
+::media::Result<int> chooseSampleRate(const AVCodec* encoder, int requested, int source)
 {
     const int preferred = requested > 0 ? requested : source;
-    if (sampleRateSupported(encoder, preferred)) {
-        return preferred;
+    if (preferred <= 0) {
+        return ::media::Result<int>::failure(
+            ::media::ErrorInfo::invalidArgument("AudioCodecResolverNode requires known audio sample rate"));
     }
-    return encoder && encoder->supported_samplerates ? encoder->supported_samplerates[0] : preferred;
+    if (sampleRateSupported(encoder, preferred)) {
+        return ::media::Result<int>::success(preferred);
+    }
+    return ::media::Result<int>::failure(
+        ::media::ErrorInfo::invalidArgument("AudioCodecResolverNode audio sample rate is not supported by selected encoder"));
 }
 
 ::media::Result<int64_t> bitrateBitsFromKbps(int kbps, const char* name)
@@ -277,17 +282,16 @@ MediaNodeKind AudioCodecResolverNode::staticKind() noexcept
         return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(requestedSampleRate.error());
     }
     const int sourceSampleRate = decoderContext ? decoderContext->sample_rate : (stream && stream->codecpar ? stream->codecpar->sample_rate : 0);
-    const int targetSampleRate = chooseSampleRate(encoder,
-                                                  requestedSampleRate.value().value_or(0),
-                                                  sourceSampleRate);
-    if (targetSampleRate <= 0) {
-        return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(
-            ::media::ErrorInfo::invalidArgument("AudioCodecResolverNode requires known audio sample rate"));
+    auto targetSampleRate = chooseSampleRate(encoder,
+                                             requestedSampleRate.value().value_or(0),
+                                             sourceSampleRate);
+    if (!targetSampleRate) {
+        return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(targetSampleRate.error());
     }
 
-    encoderContext->sample_rate = targetSampleRate;
+    encoderContext->sample_rate = targetSampleRate.value();
     encoderContext->sample_fmt = chooseSampleFormat(encoder, decoderContext ? decoderContext->sample_fmt : AV_SAMPLE_FMT_NONE);
-    encoderContext->time_base = AVRational{ 1, targetSampleRate };
+    encoderContext->time_base = AVRational{ 1, targetSampleRate.value() };
 
     auto requestedChannels = intOption(options, MediaTranscodeOptionKey::AudioChannels);
     if (!requestedChannels) {

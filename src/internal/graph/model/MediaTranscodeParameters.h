@@ -122,7 +122,6 @@ struct MediaAudioTranscodeParameters {
 };
 
 struct MediaTranscodeExecutionParameters {
-    bool includeVideo = true;
     bool includeAudio = true;
     bool disableHardware = false;
     bool diagnosticLogEnabled = true;

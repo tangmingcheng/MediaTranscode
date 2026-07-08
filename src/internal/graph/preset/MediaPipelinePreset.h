@@ -17,7 +17,6 @@ struct MediaPipelinePresetOptions {
     std::string outputUrl;
     std::string outputFormat;
     bool includeAudio = true;
-    bool includeVideo = true;
     MediaGraphQueueParameters queues;
 };
 

@@ -361,7 +361,6 @@ MediaRealtimeRtpTranscodeRequest validRealtimeOptions()
     options.output.streamLayout = RealtimeOutputStreamLayout::SeparateStreams;
     options.output.sdpPath = "realtime-test.sdp";
     options.output.packetSize = 1200;
-    options.parameters.execution.includeVideo = true;
     options.parameters.execution.includeAudio = false;
     options.parameters.execution.disableHardware = true;
     options.parameters.queues.metadata = 1;
@@ -602,12 +601,22 @@ void testGraphRejectsBehaviorDefaultImplementations(TestContext& ctx)
     const std::string audioPlannerHeader = repositoryFile("src/internal/graph/planner/MediaAudioPipelinePlanner.h");
     const std::string audioPlanner = repositoryFile("src/internal/graph/planner/MediaAudioPipelinePlanner.cpp");
     const std::string encoderBuilder = repositoryFile("src/internal/graph/builder/codec/CodecResolverEncoderContextBuilder.cpp");
+    const std::string audioResolver = repositoryFile("src/internal/graph/nodes/audio/AudioCodecResolverNode.cpp");
+    const std::string transcodeParameters = repositoryFile("src/internal/graph/model/MediaTranscodeParameters.h");
+    const std::string presetHeader = repositoryFile("src/internal/graph/preset/MediaPipelinePreset.h");
+    const std::string realtimePlanner = repositoryFile("src/internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.cpp");
 
     expectTextContains(ctx, plannerHeader, "MediaPipelinePlannerOptions() = delete");
     expectTextNotContains(ctx, plannerHeader, "MediaPipelinePlannerOptions options = {}");
+    expectTextNotContains(ctx, plannerHeader, "includeVideo");
+    expectTextNotContains(ctx, transcodeParameters, "includeVideo");
+    expectTextNotContains(ctx, presetHeader, "includeVideo");
+    expectTextNotContains(ctx, realtimePlanner, "requires video branch");
     expectTextContains(ctx, audioPlannerHeader, "MediaAudioPipelinePlannerOptions() = delete");
     expectTextNotContains(ctx, audioPlannerHeader, "bool includeAudio = true");
     expectTextNotContains(ctx, audioPlanner, "plan.reason = \"no_audio\"");
+    expectTextNotContains(ctx, audioResolver, "supported_samplerates[0]");
+    expectTextContains(ctx, audioResolver, "audio sample rate is not supported by selected encoder");
     expectTextNotContains(ctx, encoderBuilder, "defaultBufferSizeFromRate");
     expectTextNotContains(ctx, encoderBuilder, "default buffer size");
     expectTextNotContains(ctx, encoderBuilder, "rc_min_rate = encoderContext->bit_rate");
@@ -622,7 +631,7 @@ void testPlannerRejectsUnresolvedBehaviorOptions(TestContext& ctx)
     input.width = 1920;
     input.height = 1080;
 
-    MediaPipelinePlannerOptions missingHardwarePreference(true, false, false, true, true, true, false);
+    MediaPipelinePlannerOptions missingHardwarePreference(false, false, true, true, true, false);
     const auto missingHardware = MediaPipelinePlanner::planVideoTranscodeKnownInput(
         input,
         "rtp://127.0.0.1:5004",
@@ -632,7 +641,7 @@ void testPlannerRejectsUnresolvedBehaviorOptions(TestContext& ctx)
         EXPECT_EQ(ctx, missingHardware.error().code, media::ErrorCode::InvalidArgument);
     }
 
-    MediaPipelinePlannerOptions missingRealtimeOptions(true, false, false, true, true, true, false);
+    MediaPipelinePlannerOptions missingRealtimeOptions(false, false, true, true, true, false);
     missingRealtimeOptions.preferredHardware = "auto";
     const auto missingRealtime = MediaPipelinePlanner::planVideoTranscodeRealtimeUrl(
         "rtsp://127.0.0.1/live",

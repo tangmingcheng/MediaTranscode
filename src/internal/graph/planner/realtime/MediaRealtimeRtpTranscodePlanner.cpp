@@ -264,8 +264,7 @@ std::string planRawRtpSdp(const MediaRtpUrlEndpoint& videoEndpoint,
         return ::media::Result<MediaPipelinePlannerOptions>::failure(
             ::media::ErrorInfo::invalidArgument("Realtime RTP video width and height must be specified together"));
     }
-    MediaPipelinePlannerOptions plannerOptions(options.parameters.execution.includeVideo,
-                                               false,
+    MediaPipelinePlannerOptions plannerOptions(false,
                                                video.resizeRequested(),
                                                planGpuPreference(options.parameters.execution),
                                                planSoftwareChain(options.parameters.execution),
@@ -380,10 +379,6 @@ MediaEdgePolicy planEdgePolicy(const MediaGraphQueueParameters& queues)
     if ((isRealtimeUrlInput(options) || isMpegTsUdpInput(options)) && options.input.url.empty()) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
             ::media::ErrorInfo::invalidArgument("Realtime RTP input URL must be explicit"));
-    }
-    if (!options.parameters.execution.includeVideo) {
-        return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
-            ::media::ErrorInfo::invalidArgument("Realtime RTP transcode requires video branch"));
     }
     if (isSeparateRtpOutput(options)) {
         if (!options.output.packetSize.has_value() || *options.output.packetSize <= 0) {

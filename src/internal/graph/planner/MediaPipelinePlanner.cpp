@@ -121,13 +121,6 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
     plan.diagnosticLogEnabled = options.diagnosticLogEnabled;
     plan.filterRequired = options.filterRequired;
 
-    if (!options.includeVideo) {
-        plan.enabled = false;
-        plan.branchMode = MediaBranchMode::Drop;
-        plan.reason = "disabled";
-        return ::media::Result<MediaPipelinePlan>::success(std::move(plan));
-    }
-
     plan.enabled = true;
     plan.sourceStreamIndex = inputInfo.streamIndex;
     plan.inputCodecName = canonicalCodecName(inputInfo.codecName);

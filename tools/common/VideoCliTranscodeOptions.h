@@ -8,7 +8,6 @@ namespace media::ffmpeg::graph::cli {
 
 inline void parseCommonVideoTranscodeOptions(int argc, char** argv, MediaTranscodeParameterSet& parameters)
 {
-    parameters.execution.includeVideo = true;
     parameters.execution.includeAudio = !hasArg(argc, argv, "--no-audio");
     parameters.execution.disableHardware = disabledByExplicitArg(argc, argv, "--disable-hw", "hardware planning");
     parameters.execution.diagnosticLogEnabled = !hasArg(argc, argv, "--quiet-graph");

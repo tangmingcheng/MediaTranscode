@@ -51,15 +51,13 @@ struct MediaPipelineChainPlan {
 struct MediaPipelinePlannerOptions {
     MediaPipelinePlannerOptions() = delete;
 
-    MediaPipelinePlannerOptions(bool includeVideo,
-                                bool allowPacketCopy,
+    MediaPipelinePlannerOptions(bool allowPacketCopy,
                                 bool filterRequired,
                                 bool preferGpu,
                                 bool enableSoftwareChain,
                                 bool requireRuntimeAvailability,
                                 bool lowLatency) noexcept
-        : includeVideo(includeVideo),
-          allowPacketCopy(allowPacketCopy),
+        : allowPacketCopy(allowPacketCopy),
           filterRequired(filterRequired),
           preferGpu(preferGpu),
           enableSoftwareChain(enableSoftwareChain),
@@ -68,7 +66,6 @@ struct MediaPipelinePlannerOptions {
     {
     }
 
-    bool includeVideo;
     bool allowPacketCopy;
     std::string outputPath;
     std::string outputCodecName;

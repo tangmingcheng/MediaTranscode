@@ -53,9 +53,6 @@ bool branchEnabled(const MediaAudioPipelinePlan& plan) noexcept
     if (options.outputUrl.empty()) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument("LocalFileTranscodeGraphBuilder requires outputUrl"));
     }
-    if (!parameters.execution.includeVideo && !parameters.execution.includeAudio) {
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument("LocalFileTranscodeGraphBuilder requires video or audio branch"));
-    }
     if (parameters.queues.metadata == 0 || parameters.queues.packet == 0 ||
         parameters.queues.frame == 0 || parameters.queues.mux == 0) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument("LocalFileTranscodeGraphBuilder queue capacities must be greater than 0"));
@@ -150,9 +147,9 @@ bool branchEnabled(const MediaAudioPipelinePlan& plan) noexcept
         return ::media::Result<MediaGraph>::failure(video.error());
     }
 
-    if (!audio.value() && !video.value()) {
+    if (!video.value()) {
         return ::media::Result<MediaGraph>::failure(
-            ::media::ErrorInfo::unsupported("LocalFileTranscodeGraphBuilder no media branches were planned"));
+            ::media::ErrorInfo::unsupported("LocalFileTranscodeGraphBuilder requires planned video branch"));
     }
 
     return ::media::Result<MediaGraph>::success(std::move(graph));

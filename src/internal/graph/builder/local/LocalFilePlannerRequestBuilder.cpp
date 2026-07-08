@@ -60,8 +60,7 @@ bool encodeOptionsRequested(const MediaVideoTranscodeParameters& video) noexcept
         return ::media::Result<MediaPipelinePlannerOptions>::failure(resizeValidation.error());
     }
 
-    MediaPipelinePlannerOptions plannerOptions(parameters.execution.includeVideo,
-                                               !video.resizeRequested() && !encodeOptionsRequested(video),
+    MediaPipelinePlannerOptions plannerOptions(!video.resizeRequested() && !encodeOptionsRequested(video),
                                                video.resizeRequested(),
                                                !parameters.execution.disableHardware,
                                                parameters.execution.disableHardware,
