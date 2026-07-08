@@ -14,13 +14,21 @@ extern "C" {
 #include <libavutil/avutil.h>
 }
 
+#include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <limits>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
+
+#ifdef _WIN32
+#define NOMINMAX
+#include <windows.h>
+#endif
 
 namespace {
 
@@ -34,6 +42,124 @@ std::string sampleVideoPath()
             "samples" /
             "sample_h264_aac_2560x1440.mp4").string();
 }
+
+std::uint16_t mpegTsUdpInputPort() noexcept
+{
+#ifdef _WIN32
+    return static_cast<std::uint16_t>(15000 + (GetCurrentProcessId() % 1000));
+#else
+    return 15000;
+#endif
+}
+
+std::string mpegTsUdpInputUrl()
+{
+    return "udp://127.0.0.1:" + std::to_string(mpegTsUdpInputPort()) + "?fifo_size=1000000&overrun_nonfatal=1";
+}
+
+std::filesystem::path ffmpegExecutablePath()
+{
+    const std::filesystem::path bundled = "D:/mabs/local64/bin-video/ffmpeg.exe";
+    if (std::filesystem::exists(bundled)) {
+        return bundled;
+    }
+    return "ffmpeg";
+}
+
+#ifdef _WIN32
+std::wstring widenAscii(const std::string& value)
+{
+    return std::wstring(value.begin(), value.end());
+}
+
+class LocalMpegTsUdpSource final {
+public:
+    static ::media::Result<LocalMpegTsUdpSource> start()
+    {
+        const std::filesystem::path ffmpeg = ffmpegExecutablePath();
+        const std::string command =
+            "\"" + ffmpeg.string() + "\" -hide_banner -loglevel error -re -stream_loop -1 -i \"" +
+            sampleVideoPath() + "\" -map 0:v:0 -map 0:a:0? -c copy -f mpegts \"udp://127.0.0.1:" +
+            std::to_string(mpegTsUdpInputPort()) + "?pkt_size=1316\"";
+
+        STARTUPINFOW startupInfo{};
+        startupInfo.cb = sizeof(startupInfo);
+        PROCESS_INFORMATION processInfo{};
+        std::wstring commandLine = widenAscii(command);
+
+        if (!CreateProcessW(nullptr,
+                            commandLine.data(),
+                            nullptr,
+                            nullptr,
+                            FALSE,
+                            CREATE_NO_WINDOW,
+                            nullptr,
+                            nullptr,
+                            &startupInfo,
+                            &processInfo)) {
+            return ::media::Result<LocalMpegTsUdpSource>::failure(
+                ::media::ErrorInfo::invalidArgument("Failed to start local FFmpeg MPEG-TS UDP source"));
+        }
+
+        CloseHandle(processInfo.hThread);
+        LocalMpegTsUdpSource source(processInfo.hProcess);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+        return ::media::Result<LocalMpegTsUdpSource>::success(std::move(source));
+    }
+
+    LocalMpegTsUdpSource(LocalMpegTsUdpSource&& other) noexcept
+        : m_process(other.m_process)
+    {
+        other.m_process = nullptr;
+    }
+
+    LocalMpegTsUdpSource& operator=(LocalMpegTsUdpSource&& other) noexcept
+    {
+        if (this != &other) {
+            stop();
+            m_process = other.m_process;
+            other.m_process = nullptr;
+        }
+        return *this;
+    }
+
+    LocalMpegTsUdpSource(const LocalMpegTsUdpSource&) = delete;
+    LocalMpegTsUdpSource& operator=(const LocalMpegTsUdpSource&) = delete;
+
+    ~LocalMpegTsUdpSource()
+    {
+        stop();
+    }
+
+private:
+    explicit LocalMpegTsUdpSource(HANDLE process)
+        : m_process(process)
+    {
+    }
+
+    void stop() noexcept
+    {
+        if (!m_process) {
+            return;
+        }
+        TerminateProcess(m_process, 0);
+        WaitForSingleObject(m_process, 2000);
+        CloseHandle(m_process);
+        m_process = nullptr;
+    }
+
+    HANDLE m_process = nullptr;
+};
+#else
+class LocalMpegTsUdpSource final {
+public:
+    static ::media::Result<LocalMpegTsUdpSource> start()
+    {
+        return ::media::Result<LocalMpegTsUdpSource>::failure(
+            ::media::ErrorInfo::unsupported("Local MPEG-TS UDP source helper is only implemented for Windows tests"));
+    }
+};
+#endif
 
 MediaRealtimeRtpTranscodeRequest validRealtimeOptions()
 {
@@ -185,7 +311,7 @@ MediaRealtimeRtpTranscodeRequest validMpegTsUdpOptions()
     MediaRealtimeRtpTranscodeRequest options = validRealtimeOptions();
     options.input.type = RealtimeInputType::MpegTsUdp;
     options.input.streamLayout = RealtimeInputStreamLayout::MuxedTransportStream;
-    options.input.url = sampleVideoPath();
+    options.input.url = mpegTsUdpInputUrl();
     options.input.rtspTransport.clear();
     options.output.streamLayout = RealtimeOutputStreamLayout::MuxedTransportStream;
     options.output.url = "udp://127.0.0.1:15002";
@@ -364,6 +490,26 @@ void testUnsupportedRealtimeStreamCombinationsFailInPlanner(TestContext& ctx)
     EXPECT_FALSE(ctx, bundledPlan);
     if (!bundledPlan) {
         EXPECT_EQ(ctx, bundledPlan.error().code, media::ErrorCode::Unsupported);
+    }
+
+    MediaRealtimeRtpTranscodeRequest bundledOutput = validRawRtpOptions();
+    bundledOutput.output.streamLayout = RealtimeOutputStreamLayout::BundledStream;
+    auto bundledOutputPlan = MediaRealtimeRtpTranscodePlanner::plan(bundledOutput);
+    EXPECT_FALSE(ctx, bundledOutputPlan);
+    if (!bundledOutputPlan) {
+        EXPECT_EQ(ctx, bundledOutputPlan.error().code, media::ErrorCode::Unsupported);
+    }
+}
+
+void testMpegTsUdpRejectsNonUdpInputUrl(TestContext& ctx)
+{
+    MediaRealtimeRtpTranscodeRequest options = validMpegTsUdpOptions();
+    options.input.url = sampleVideoPath();
+
+    const auto plan = MediaRealtimeRtpTranscodePlanner::plan(options);
+    EXPECT_FALSE(ctx, plan);
+    if (!plan) {
+        EXPECT_EQ(ctx, plan.error().code, media::ErrorCode::InvalidArgument);
     }
 }
 
@@ -712,6 +858,13 @@ void testBuildPlansRawRtpAudioVideoGraph(TestContext& ctx)
 
 void testBuildPlansMpegTsUdpMuxedOutputGraph(TestContext& ctx)
 {
+    auto source = LocalMpegTsUdpSource::start();
+    EXPECT_TRUE(ctx, source);
+    if (!source) {
+        std::cerr << source.error().describe() << '\n';
+        return;
+    }
+
     const auto graphResult = MediaRealtimeRtpTranscodeGraphBuilder::build(validMpegTsUdpOptions());
     EXPECT_TRUE(ctx, graphResult);
     if (!graphResult) {
@@ -943,6 +1096,7 @@ int main()
     testValidationRequiresExplicitRealtimeStreamClassification(ctx);
     testExistingRealtimeModesMapToExplicitLayouts(ctx);
     testUnsupportedRealtimeStreamCombinationsFailInPlanner(ctx);
+    testMpegTsUdpRejectsNonUdpInputUrl(ctx);
     testRawRtpMissingMetadataFailsInPlanner(ctx);
     testRawRtpRejectsUnsupportedMetadata(ctx);
     testRawRtpPlansH264AndHevcInput(ctx);

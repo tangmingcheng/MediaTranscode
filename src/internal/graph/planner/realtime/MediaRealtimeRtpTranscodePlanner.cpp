@@ -181,6 +181,15 @@ bool isMuxedTransportStreamOutput(const MediaRealtimeRtpTranscodeRequest& option
     return ::media::Result<void>::success();
 }
 
+::media::Result<void> validateMpegTsUdpInput(const MediaRealtimeRtpTranscodeRequest& options)
+{
+    if (!isUdpUrl(options.input.url)) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument("MPEG-TS UDP input requires udp:// URL"));
+    }
+    return ::media::Result<void>::success();
+}
+
 ::media::Result<void> validateRealtimeInputOpenOptions(const MediaRealtimeRtpTranscodeRequest& options)
 {
     if (!options.input.openTimeoutMs.has_value() ||
@@ -403,6 +412,11 @@ MediaEdgePolicy planEdgePolicy(const MediaGraphQueueParameters& queues)
 
     if (isRealtimeUrlInput(options)) {
         if (auto status = validateRealtimeUrlInput(options); !status) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(status.error());
+        }
+    }
+    if (isMpegTsUdpInput(options)) {
+        if (auto status = validateMpegTsUdpInput(options); !status) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(status.error());
         }
     }
