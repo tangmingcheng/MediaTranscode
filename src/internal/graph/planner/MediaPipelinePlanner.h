@@ -87,6 +87,7 @@ struct MediaPipelinePlan {
     std::string inputCodecName;
     std::string outputCodecName;
     bool diagnosticLogEnabled = false;
+    bool synthesizeMissingTimestamps = false;
     MediaPipelineChainPlan selected;
     std::vector<MediaPipelineChainPlan> candidates;
 };

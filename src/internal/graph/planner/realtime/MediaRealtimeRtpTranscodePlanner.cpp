@@ -421,6 +421,7 @@ MediaEdgePolicy planEdgePolicy(const MediaGraphQueueParameters& queues)
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(plannedVideo.error());
         }
         videoPlan = std::move(plannedVideo).value();
+        videoPlan.synthesizeMissingTimestamps = true;
     } else {
         auto realtimeInput = MediaPipelineCapabilityScanner::detectRealtimeInputStreamInfo(options.input.url,
                                                                                            pipelineOptions,

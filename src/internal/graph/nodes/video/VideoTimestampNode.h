@@ -24,6 +24,8 @@ private:
 private:
     bool m_hasSourceTimeBase = false;
     bool m_hasTargetTimeBase = false;
+    bool m_allowSyntheticMissingTimestamps = false;
+    int64_t m_syntheticFrameIndex = 0;
     AVRational m_sourceTimeBase { 0, 1 };
     AVRational m_targetTimeBase { 0, 1 };
 };

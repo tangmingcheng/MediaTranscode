@@ -35,20 +35,20 @@ MEDIA_TRANSCODE_TEST_SAMPLES_DIR=<path>
 
 ## Realtime RTP DAG Path
 
-The current realtime path is video-only:
+The current realtime path supports URL/RTSP input and explicit raw RTP input with video and optional audio:
 
 ```text
-RTSP, realtime URL, or raw H264 UDP/RTP input
+RTSP, realtime URL, or raw RTP input
     -> graph planner
     -> realtime DAG builder
     -> graph runtime nodes
-    -> RTP output + SDP
+    -> per-media RTP output + aggregated SDP
 ```
 
 Run the graph CLI in realtime RTP mode:
 
 ```powershell
-out/build/x64-debug/media_transcode_graph_transcode_cli.exe --mode realtime-rtp --input-kind url --input rtsp://... --rtsp-transport tcp --open-timeout-ms 5000 --read-timeout-ms 5000 --analyze-duration-us 500000 --probe-size 524288 --low-latency --rtp-host 127.0.0.1 --rtp-port 5004 --sdp out/build/x64-debug/realtime-rtp.sdp --packet-size 1200 --video --no-audio --enable-hw --graph-diagnostics --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --video-codec h264 --rc auto --duration 15
+out/build/x64-debug/media_transcode_graph_transcode_cli.exe --mode realtime-rtp --input-kind url --input rtsp://... --rtsp-transport tcp --open-timeout-ms 5000 --read-timeout-ms 5000 --analyze-duration-us 500000 --probe-size 524288 --rtp-host 127.0.0.1 --rtp-port 5004 --sdp out/build/x64-debug/realtime-rtp.sdp --packet-size 1200 --video --audio --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --video-codec h264 --rc auto --audio-codec aac --duration 15
 ```
 
 Receiver validation can use the generated SDP while the CLI is running:
@@ -58,13 +58,13 @@ ffplay -protocol_whitelist file,udp,rtp -i out/build/x64-debug/realtime-rtp.sdp
 ffprobe -protocol_whitelist file,udp,rtp -i out/build/x64-debug/realtime-rtp.sdp
 ```
 
-Raw H264 RTP input uses the dedicated validation tool:
+Raw RTP input uses explicit video and optional audio endpoint metadata. Hardware planning, low latency input, and graph diagnostics are enabled by default; use `--disable-hw`, `--no-low-latency`, or `--quiet-graph` only when overriding defaults.
 
 ```powershell
-out/build/x64-debug/media_transcode_realtime_rtp_input_cli.exe --input rtp://127.0.0.1:5004 --rtp-codec h264 --rtp-payload-type 96 --rtp-clock-rate 90000 --open-timeout-ms 5000 --read-timeout-ms 5000 --analyze-duration-us 500000 --probe-size 524288 --low-latency --rtp-host 127.0.0.1 --rtp-port 5006 --sdp out/build/x64-debug/raw-rtp-output.sdp --packet-size 1200 --enable-hw --graph-diagnostics --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --video-codec h264 --rc auto --max-duration 15
+out/build/x64-debug/media_transcode_realtime_rtp_input_cli.exe --video-rtp-url rtp://127.0.0.1:5004 --video-rtp-codec h264 --video-rtp-payload-type 96 --video-rtp-clock-rate 90000 --video-rtp-fmtp "packetization-mode=1;sprop-parameter-sets=...;profile-level-id=..." --open-timeout-ms 5000 --read-timeout-ms 5000 --analyze-duration-us 500000 --probe-size 524288 --rtp-host 127.0.0.1 --rtp-port 5008 --sdp out/build/x64-debug/raw-rtp-output.sdp --packet-size 1200 --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --video-codec h264 --rc auto --max-duration 15
 ```
 
-`udp://host:port` is accepted for UDP-carried RTP. MPEG-TS over UDP and audio RTP are outside this path.
+`udp://host:port` is accepted for UDP-carried RTP. MPEG-TS over UDP is outside this path.
 
 ## Tests
 

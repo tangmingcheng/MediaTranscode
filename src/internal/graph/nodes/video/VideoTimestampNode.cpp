@@ -1,12 +1,15 @@
 #include "internal/graph/nodes/video/VideoTimestampNode.h"
 
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
+#include "internal/graph/model/MediaTranscodeParameters.h"
+#include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/runtime/buffer/FFmpegCodecContextBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/avutil.h>
+#include <libavutil/mathematics.h>
 }
 
 #include <sstream>
@@ -147,8 +150,17 @@ MediaNodeKind VideoTimestampNode::staticKind() noexcept
     m_targetTimeBase = codecContext->time_base;
     m_hasTargetTimeBase = true;
 
+    auto synthesizeMissing = requiredBoolNodeOption(nodeOptions(context),
+                                                    "VideoTimestampNode",
+                                                    MediaTranscodeOptionKey::VideoSynthesizeMissingTimestamps);
+    if (!synthesizeMissing) {
+        return ::media::Status::failure(synthesizeMissing.error());
+    }
+    m_allowSyntheticMissingTimestamps = synthesizeMissing.value();
+
     logTimestamp(MediaGraphDiagnosticLevel::State,
-                 std::string("bind_target_time_base tb=") + rationalText(m_targetTimeBase));
+                 std::string("bind_target_time_base tb=") + rationalText(m_targetTimeBase) +
+                     " synthesize_missing=" + (m_allowSyntheticMissingTimestamps ? "1" : "0"));
 
     return emitOutput(context, "target_codec", buffer);
 }
@@ -165,11 +177,18 @@ MediaNodeKind VideoTimestampNode::staticKind() noexcept
     const int64_t bestIn = frame->best_effort_timestamp;
     const int64_t dtsIn = frame->pkt_dts;
     const int64_t durationIn = frame->duration;
-    const int64_t sourceTs = decodedTimestamp(frame);
+    int64_t sourceTs = decodedTimestamp(frame);
 
     if (sourceTs == AV_NOPTS_VALUE) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("VideoTimestampNode input video frame has no timestamp"));
+        if (!m_allowSyntheticMissingTimestamps) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument("VideoTimestampNode input video frame has no timestamp"));
+        }
+        sourceTs = av_rescale_q(m_syntheticFrameIndex, m_targetTimeBase, m_sourceTimeBase);
+        frame->duration = av_rescale_q(1, m_targetTimeBase, m_sourceTimeBase);
+        ++m_syntheticFrameIndex;
+    } else if (m_allowSyntheticMissingTimestamps) {
+        ++m_syntheticFrameIndex;
     }
 
     frame->pts = sourceTs;

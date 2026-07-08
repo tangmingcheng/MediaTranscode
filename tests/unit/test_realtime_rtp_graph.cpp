@@ -142,6 +142,7 @@ MediaRealtimeRtpTranscodeRequest validRawRtpOptions()
     options.input.videoRtp.codecName = "h264";
     options.input.videoRtp.payloadType = 96;
     options.input.videoRtp.clockRate = 90000;
+    options.input.videoRtp.fmtp = "packetization-mode=1;sprop-parameter-sets=Z01AMpWQAoALWwEQAAA+gAAOpghhA,aOuPIA==;profile-level-id=4D4032";
     return options;
 }
 
@@ -263,6 +264,10 @@ void testRawRtpMissingMetadataFailsInPlanner(TestContext& ctx)
     MediaRealtimeRtpTranscodeRequest missingClockRate = options;
     missingClockRate.input.videoRtp.clockRate.reset();
     expectPlannerInvalidArgument(ctx, missingClockRate);
+
+    MediaRealtimeRtpTranscodeRequest missingVideoFmtp = options;
+    missingVideoFmtp.input.videoRtp.fmtp.clear();
+    expectPlannerInvalidArgument(ctx, missingVideoFmtp);
 }
 
 void testRawRtpRejectsUnsupportedMetadata(TestContext& ctx)
@@ -319,6 +324,7 @@ void testRawRtpPlansH264AndHevcInput(TestContext& ctx)
 
     auto hevcOptions = validRawRtpOptions();
     hevcOptions.input.videoRtp.codecName = "hevc";
+    hevcOptions.input.videoRtp.fmtp = "sprop-vps=QAEMAf//AWAAAAMAsAAAAwAAAwB4;sprop-sps=QgEBAWAAAAMAsAAAAwAAAwB4oAPAgBDlja5JMvA=;sprop-pps=RAHBcrRiQA==";
     const auto hevcPlan = MediaRealtimeRtpTranscodePlanner::plan(hevcOptions);
     EXPECT_TRUE(ctx, hevcPlan);
     if (!hevcPlan) {
@@ -529,6 +535,11 @@ void testBuildPlansRawRtpH264Graph(TestContext& ctx)
     EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::RtpMux) != nullptr);
     EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::RtpOutput) != nullptr);
     EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::SdpWriter) != nullptr);
+    const MediaNode* timestampNode = findNodeByKind(graph, MediaNodeKind::VideoTimestamp);
+    EXPECT_TRUE(ctx, timestampNode != nullptr);
+    if (timestampNode) {
+        EXPECT_EQ(ctx, timestampNode->options.value(MediaTranscodeOptionKey::VideoSynthesizeMissingTimestamps), std::string("1"));
+    }
     EXPECT_TRUE(ctx, findEdgeBetweenKinds(graph, MediaNodeKind::RawRtpInput, MediaNodeKind::Demux, MediaEdgeKind::Metadata) != nullptr);
     EXPECT_TRUE(ctx, findEdgeBetweenKinds(graph, MediaNodeKind::Demux, MediaNodeKind::StreamSplit, MediaEdgeKind::InputPacket) != nullptr);
     EXPECT_TRUE(ctx, findEdgeBetweenKinds(graph, MediaNodeKind::StreamSplit, MediaNodeKind::PacketNormalize, MediaEdgeKind::InputPacket) != nullptr);

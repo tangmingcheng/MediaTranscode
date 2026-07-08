@@ -2,6 +2,9 @@
 
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 
+#include <algorithm>
+#include <cctype>
+#include <initializer_list>
 #include <string>
 
 namespace media::ffmpeg::graph {
@@ -11,6 +14,65 @@ constexpr int DynamicPayloadTypeMin = 96;
 constexpr int DynamicPayloadTypeMax = 127;
 constexpr int VideoClockRate = 90000;
 constexpr int OpusClockRate = 48000;
+
+std::string lowercaseAscii(std::string value)
+{
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    return value;
+}
+
+std::string trimAscii(std::string value)
+{
+    const auto begin = std::find_if_not(value.begin(), value.end(), [](unsigned char ch) {
+        return std::isspace(ch) != 0;
+    });
+    const auto end = std::find_if_not(value.rbegin(), value.rend(), [](unsigned char ch) {
+        return std::isspace(ch) != 0;
+    }).base();
+    if (begin >= end) {
+        return {};
+    }
+    return std::string(begin, end);
+}
+
+bool fmtpHasKey(const std::string& fmtp, const std::string& requiredKey)
+{
+    const std::string wanted = lowercaseAscii(requiredKey);
+    std::size_t offset = 0;
+    while (offset <= fmtp.size()) {
+        const std::size_t separator = fmtp.find(';', offset);
+        const std::string token = trimAscii(fmtp.substr(offset, separator == std::string::npos ? std::string::npos : separator - offset));
+        const std::size_t equals = token.find('=');
+        if (equals != std::string::npos &&
+            lowercaseAscii(trimAscii(token.substr(0, equals))) == wanted) {
+            return true;
+        }
+        if (separator == std::string::npos) {
+            break;
+        }
+        offset = separator + 1;
+    }
+    return false;
+}
+
+::media::Result<void> requireFmtpKeys(const MediaRealtimeRtpInputMetadata& metadata,
+                                      const std::string& owner,
+                                      const std::initializer_list<const char*> keys)
+{
+    if (metadata.fmtp.empty()) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument(owner + " requires fmtp"));
+    }
+    for (const char* key : keys) {
+        if (!fmtpHasKey(metadata.fmtp, key)) {
+            return ::media::Result<void>::failure(
+                ::media::ErrorInfo::invalidArgument(owner + " fmtp requires " + std::string(key)));
+        }
+    }
+    return ::media::Result<void>::success();
+}
 
 ::media::Result<void> validateCommonMetadata(const MediaRealtimeRtpInputMetadata& metadata,
                                              const std::string& owner)
@@ -54,11 +116,19 @@ constexpr int OpusClockRate = 48000;
     descriptor.clockRate = VideoClockRate;
 
     if (codec == "h264") {
+        if (auto status = requireFmtpKeys(metadata, "Raw RTP H264", { "sprop-parameter-sets" }); !status) {
+            return ::media::Result<MediaRealtimeRtpCodecDescriptor>::failure(status.error());
+        }
         descriptor.rtpEncodingName = "H264";
+        descriptor.requiresFmtp = true;
         return ::media::Result<MediaRealtimeRtpCodecDescriptor>::success(std::move(descriptor));
     }
     if (codec == "hevc") {
+        if (auto status = requireFmtpKeys(metadata, "Raw RTP HEVC", { "sprop-vps", "sprop-sps", "sprop-pps" }); !status) {
+            return ::media::Result<MediaRealtimeRtpCodecDescriptor>::failure(status.error());
+        }
         descriptor.rtpEncodingName = "H265";
+        descriptor.requiresFmtp = true;
         return ::media::Result<MediaRealtimeRtpCodecDescriptor>::success(std::move(descriptor));
     }
 
