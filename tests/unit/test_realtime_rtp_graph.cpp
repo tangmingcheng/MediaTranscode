@@ -696,6 +696,20 @@ void testMpegTsUdpRejectsNonUdpInputUrl(TestContext& ctx)
     }
 }
 
+void testSeparateRtpOutputRejectsSingleOutputUrl(TestContext& ctx)
+{
+    MediaRealtimeRtpTranscodeRequest options = validRawRtpOptions();
+    options.output.url = "udp://127.0.0.1:6000";
+    options.output.host.clear();
+    options.output.basePort.reset();
+
+    const auto plan = MediaRealtimeRtpTranscodePlanner::plan(options);
+    EXPECT_FALSE(ctx, plan);
+    if (!plan) {
+        EXPECT_EQ(ctx, plan.error().code, media::ErrorCode::InvalidArgument);
+    }
+}
+
 void testRawRtpMissingMetadataFailsInPlanner(TestContext& ctx)
 {
     MediaRealtimeRtpTranscodeRequest options = validRawRtpOptions();
@@ -1280,6 +1294,7 @@ int main()
     testExistingRealtimeModesMapToExplicitLayouts(ctx);
     testUnsupportedRealtimeStreamCombinationsFailInPlanner(ctx);
     testMpegTsUdpRejectsNonUdpInputUrl(ctx);
+    testSeparateRtpOutputRejectsSingleOutputUrl(ctx);
     testRawRtpMissingMetadataFailsInPlanner(ctx);
     testRawRtpRejectsUnsupportedMetadata(ctx);
     testRawRtpPlansH264AndHevcInput(ctx);

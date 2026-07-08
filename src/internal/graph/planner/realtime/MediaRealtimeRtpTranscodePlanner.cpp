@@ -128,15 +128,12 @@ bool isMuxedTransportStreamOutput(const MediaRealtimeRtpTranscodeRequest& option
                                                   bool includeAudio)
 {
     if (!output.url.empty()) {
-        if (includeAudio) {
-            return ::media::Result<PlannedOutputUrls>::failure(
-                ::media::ErrorInfo::invalidArgument("Realtime RTP audio output requires host/basePort so planner can derive per-stream ports"));
-        }
-        return ::media::Result<PlannedOutputUrls>::success({ output.url, {} });
+        return ::media::Result<PlannedOutputUrls>::failure(
+            ::media::ErrorInfo::invalidArgument("Realtime RTP separate output requires host/basePort; single output URL is unsupported"));
     }
     if (output.host.empty() || !output.basePort.has_value()) {
         return ::media::Result<PlannedOutputUrls>::failure(
-            ::media::ErrorInfo::invalidArgument("Realtime RTP output requires explicit url or host/basePort"));
+            ::media::ErrorInfo::invalidArgument("Realtime RTP separate output requires host/basePort"));
     }
     if (!isValidRtpPort(*output.basePort)) {
         return ::media::Result<PlannedOutputUrls>::failure(
