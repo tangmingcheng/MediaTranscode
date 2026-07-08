@@ -52,6 +52,11 @@ struct PlannedOutputUrls {
     std::string audioUrl;
 };
 
+std::string planOutputRtpUrl(const std::string& host, std::size_t port)
+{
+    return "rtp://" + host + ":" + std::to_string(port) + "?localrtpport=0&localrtcpport=0";
+}
+
 bool audioRequested(const MediaRealtimeRtpTranscodeRequest& options) noexcept
 {
     return options.parameters.execution.includeAudio;
@@ -81,9 +86,9 @@ bool audioRequested(const MediaRealtimeRtpTranscodeRequest& options) noexcept
     }
 
     PlannedOutputUrls urls;
-    urls.videoUrl = "rtp://" + output.host + ":" + std::to_string(*output.basePort);
+    urls.videoUrl = planOutputRtpUrl(output.host, *output.basePort);
     if (includeAudio) {
-        urls.audioUrl = "rtp://" + output.host + ":" + std::to_string(*output.basePort + 2);
+        urls.audioUrl = planOutputRtpUrl(output.host, *output.basePort + 2);
     }
     return ::media::Result<PlannedOutputUrls>::success(std::move(urls));
 }

@@ -15,4 +15,11 @@ namespace media::ffmpeg::graph {
                                                             AVRational targetTimeBase,
                                                             int64_t lastSubmittedPts);
 
+::media::Result<int64_t> syntheticTimestampStep(AVRational frameStepTimeBase,
+                                                AVRational timestampTimeBase);
+
+::media::Result<int64_t> nextSyntheticTimestamp(int64_t lastSubmittedPts,
+                                                AVRational frameStepTimeBase,
+                                                AVRational timestampTimeBase);
+
 } // namespace media::ffmpeg::graph

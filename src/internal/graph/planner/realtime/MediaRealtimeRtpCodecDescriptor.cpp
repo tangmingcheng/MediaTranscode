@@ -37,7 +37,7 @@ std::string trimAscii(std::string value)
     return std::string(begin, end);
 }
 
-bool fmtpHasKey(const std::string& fmtp, const std::string& requiredKey)
+std::string fmtpValue(const std::string& fmtp, const std::string& requiredKey)
 {
     const std::string wanted = lowercaseAscii(requiredKey);
     std::size_t offset = 0;
@@ -47,14 +47,14 @@ bool fmtpHasKey(const std::string& fmtp, const std::string& requiredKey)
         const std::size_t equals = token.find('=');
         if (equals != std::string::npos &&
             lowercaseAscii(trimAscii(token.substr(0, equals))) == wanted) {
-            return true;
+            return trimAscii(token.substr(equals + 1));
         }
         if (separator == std::string::npos) {
             break;
         }
         offset = separator + 1;
     }
-    return false;
+    return {};
 }
 
 ::media::Result<void> requireFmtpKeys(const MediaRealtimeRtpInputMetadata& metadata,
@@ -66,7 +66,7 @@ bool fmtpHasKey(const std::string& fmtp, const std::string& requiredKey)
             ::media::ErrorInfo::invalidArgument(owner + " requires fmtp"));
     }
     for (const char* key : keys) {
-        if (!fmtpHasKey(metadata.fmtp, key)) {
+        if (fmtpValue(metadata.fmtp, key).empty()) {
             return ::media::Result<void>::failure(
                 ::media::ErrorInfo::invalidArgument(owner + " fmtp requires " + std::string(key)));
         }
@@ -116,7 +116,9 @@ bool fmtpHasKey(const std::string& fmtp, const std::string& requiredKey)
     descriptor.clockRate = VideoClockRate;
 
     if (codec == "h264") {
-        if (auto status = requireFmtpKeys(metadata, "Raw RTP H264", { "sprop-parameter-sets" }); !status) {
+        if (auto status = requireFmtpKeys(metadata,
+                                          "Raw RTP H264",
+                                          { "packetization-mode", "sprop-parameter-sets", "profile-level-id" }); !status) {
             return ::media::Result<MediaRealtimeRtpCodecDescriptor>::failure(status.error());
         }
         descriptor.rtpEncodingName = "H264";
