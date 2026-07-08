@@ -16,6 +16,12 @@ std::string canonicalCodecName(std::string codec)
     if (codec == "h265" || codec == "h.265") {
         return "hevc";
     }
+    if (codec == "mp4a" || codec == "mpeg4aac" || codec == "aac_lc") {
+        return "aac";
+    }
+    if (codec == "libopus") {
+        return "opus";
+    }
     return codec;
 }
 

@@ -1,5 +1,6 @@
 #include "internal/graph/nodes/output/SdpWriterNode.h"
 
+#include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
 
 extern "C" {
@@ -9,6 +10,7 @@ extern "C" {
 #include <array>
 #include <fstream>
 #include <string>
+#include <vector>
 
 namespace media::ffmpeg::graph {
 
@@ -27,6 +29,10 @@ MediaNodeKind SdpWriterNode::staticKind() noexcept
     if (m_written) {
         return ::media::Status::success();
     }
+    auto configured = configureExpectedContexts(context);
+    if (!configured) {
+        return configured;
+    }
 
     auto input = tryPopFirstInputOptional(context);
     if (!input) {
@@ -42,16 +48,49 @@ MediaNodeKind SdpWriterNode::staticKind() noexcept
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("SdpWriterNode expected FFmpeg format context"));
     }
+    m_formatBuffers.push_back(*input.value());
+    return writeIfReady(context);
+}
 
+::media::Status SdpWriterNode::configureExpectedContexts(MediaGraphExecutionContext& context)
+{
+    if (m_expectedContextsBound) {
+        return ::media::Status::success();
+    }
+    auto expected = requiredPositiveIntNodeOption(nodeOptions(context), "SdpWriterNode", "sdp.expected_contexts");
+    if (!expected) {
+        return ::media::Status::failure(expected.error());
+    }
+    m_expectedContexts = expected.value();
+    m_expectedContextsBound = true;
+    return ::media::Status::success();
+}
+
+::media::Status SdpWriterNode::writeIfReady(MediaGraphExecutionContext& context)
+{
+    if (static_cast<int>(m_formatBuffers.size()) < m_expectedContexts) {
+        return ::media::Status::success();
+    }
     const std::string path = nodeOption(context, "path");
     if (path.empty()) {
         m_written = true;
         return ::media::Status::success();
     }
 
+    std::vector<AVFormatContext*> contexts;
+    contexts.reserve(m_formatBuffers.size());
+    for (const MediaBufferRef& buffer : m_formatBuffers) {
+        auto* formatBuffer = dynamic_cast<FFmpegFormatContextBuffer*>(buffer.get());
+        AVFormatContext* formatContext = formatBuffer ? formatBuffer->context() : nullptr;
+        if (!formatContext) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument("SdpWriterNode expected buffered FFmpeg format context"));
+        }
+        contexts.push_back(formatContext);
+    }
+
     std::array<char, 16384> text {};
-    AVFormatContext* contexts[] = { formatContext };
-    const int ret = av_sdp_create(contexts, 1, text.data(), static_cast<int>(text.size()));
+    const int ret = av_sdp_create(contexts.data(), static_cast<int>(contexts.size()), text.data(), static_cast<int>(text.size()));
     if (ret < 0) {
         return ::media::Status::failure(
             ::media::ErrorInfo::ffmpegFailure("av_sdp_create failed", ret));
@@ -75,12 +114,18 @@ MediaNodeKind SdpWriterNode::staticKind() noexcept
 ::media::Status SdpWriterNode::stop(MediaGraphExecutionContext& context)
 {
     m_written = false;
+    m_expectedContextsBound = false;
+    m_expectedContexts = 1;
+    m_formatBuffers.clear();
     return FFmpegNodeRuntime::stop(context);
 }
 
 void SdpWriterNode::abort(MediaGraphExecutionContext& context) noexcept
 {
     m_written = false;
+    m_expectedContextsBound = false;
+    m_expectedContexts = 1;
+    m_formatBuffers.clear();
     FFmpegNodeRuntime::abort(context);
 }
 

@@ -3,6 +3,7 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
+#include "internal/graph/model/MediaStreamKind.h"
 
 #include <vector>
 
@@ -27,6 +28,8 @@ private:
     ::media::Status tryBindStreamConfig(const MediaBufferRef& buffer);
     ::media::Status registerPendingStreamConfigs();
     ::media::Status registerStreamFromCodecContext(const MediaBufferRef& buffer);
+    MediaStreamKind expectedStreamKind() const noexcept;
+    const char* expectedStreamName() const noexcept;
     ::media::Status writeHeaderIfNeeded();
     ::media::Status writePendingPacketsIfReady();
     ::media::Status writePacket(const MediaBufferRef& buffer);
@@ -44,7 +47,8 @@ private:
     bool m_formatEmitted = false;
     bool m_expectationsBound = false;
     bool m_expectVideo = false;
-    int m_videoStreamIndex = invalidMediaStreamIndex;
+    bool m_expectAudio = false;
+    int m_streamIndex = invalidMediaStreamIndex;
     std::size_t m_packetsWritten = 0;
     std::vector<MediaBufferRef> m_pendingStreamConfigs;
     std::vector<MediaBufferRef> m_pendingPackets;

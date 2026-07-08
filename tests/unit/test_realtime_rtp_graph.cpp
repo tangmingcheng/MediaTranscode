@@ -69,6 +69,38 @@ const MediaNode* findNodeByKind(const MediaGraph& graph, MediaNodeKind kind)
     return nullptr;
 }
 
+const MediaNode* findNodeByName(const MediaGraph& graph, const std::string& name)
+{
+    for (const MediaNode& node : graph.nodes()) {
+        if (node.name == name) {
+            return &node;
+        }
+    }
+    return nullptr;
+}
+
+std::size_t countNodesByKind(const MediaGraph& graph, MediaNodeKind kind)
+{
+    std::size_t count = 0;
+    for (const MediaNode& node : graph.nodes()) {
+        if (node.kind == kind) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+std::size_t countOccurrences(const std::string& text, const std::string& needle)
+{
+    std::size_t count = 0;
+    std::size_t offset = 0;
+    while ((offset = text.find(needle, offset)) != std::string::npos) {
+        ++count;
+        offset += needle.size();
+    }
+    return count;
+}
+
 const MediaEdge* findEdgeBetweenKinds(const MediaGraph& graph,
                                       MediaNodeKind fromKind,
                                       MediaNodeKind toKind,
@@ -105,10 +137,27 @@ MediaRealtimeRtpTranscodeRequest validRawRtpOptions()
 {
     MediaRealtimeRtpTranscodeRequest options = validRealtimeOptions();
     options.input.kind = MediaRealtimeInputKind::RawRtp;
-    options.input.url = "rtp://127.0.0.1:5004";
-    options.input.rtp.codecName = "h264";
-    options.input.rtp.payloadType = 96;
-    options.input.rtp.clockRate = 90000;
+    options.input.url.clear();
+    options.input.videoRtp.url = "rtp://127.0.0.1:5004";
+    options.input.videoRtp.codecName = "h264";
+    options.input.videoRtp.payloadType = 96;
+    options.input.videoRtp.clockRate = 90000;
+    return options;
+}
+
+MediaRealtimeRtpTranscodeRequest validRawRtpAudioVideoOptions()
+{
+    MediaRealtimeRtpTranscodeRequest options = validRawRtpOptions();
+    options.parameters.execution.includeAudio = true;
+    options.parameters.audio.codecName = "aac";
+    options.parameters.audio.sampleRate = 48000;
+    options.parameters.audio.channels = 2;
+    options.input.audioRtp.url = "rtp://127.0.0.1:5006";
+    options.input.audioRtp.codecName = "aac";
+    options.input.audioRtp.payloadType = 97;
+    options.input.audioRtp.clockRate = 48000;
+    options.input.audioRtp.channels = 2;
+    options.input.audioRtp.fmtp = "profile-level-id=1;mode=AAC-hbr;config=1190;sizelength=13;indexlength=3;indexdeltalength=3";
     return options;
 }
 
@@ -204,15 +253,15 @@ void testRawRtpMissingMetadataFailsInPlanner(TestContext& ctx)
     MediaRealtimeRtpTranscodeRequest options = validRawRtpOptions();
 
     MediaRealtimeRtpTranscodeRequest missingCodec = options;
-    missingCodec.input.rtp.codecName.clear();
+    missingCodec.input.videoRtp.codecName.clear();
     expectPlannerInvalidArgument(ctx, missingCodec);
 
     MediaRealtimeRtpTranscodeRequest missingPayloadType = options;
-    missingPayloadType.input.rtp.payloadType.reset();
+    missingPayloadType.input.videoRtp.payloadType.reset();
     expectPlannerInvalidArgument(ctx, missingPayloadType);
 
     MediaRealtimeRtpTranscodeRequest missingClockRate = options;
-    missingClockRate.input.rtp.clockRate.reset();
+    missingClockRate.input.videoRtp.clockRate.reset();
     expectPlannerInvalidArgument(ctx, missingClockRate);
 }
 
@@ -220,55 +269,126 @@ void testRawRtpRejectsUnsupportedMetadata(TestContext& ctx)
 {
     MediaRealtimeRtpTranscodeRequest options = validRawRtpOptions();
 
-    MediaRealtimeRtpTranscodeRequest nonH264 = options;
-    nonH264.input.rtp.codecName = "hevc";
-    expectPlannerInvalidArgument(ctx, nonH264);
+    MediaRealtimeRtpTranscodeRequest unsupportedVideo = options;
+    unsupportedVideo.input.videoRtp.codecName = "vp9";
+    expectPlannerInvalidArgument(ctx, unsupportedVideo);
 
     MediaRealtimeRtpTranscodeRequest staticPayloadType = options;
-    staticPayloadType.input.rtp.payloadType = 35;
+    staticPayloadType.input.videoRtp.payloadType = 35;
     expectPlannerInvalidArgument(ctx, staticPayloadType);
 
     MediaRealtimeRtpTranscodeRequest invalidPayloadType = options;
-    invalidPayloadType.input.rtp.payloadType = 128;
+    invalidPayloadType.input.videoRtp.payloadType = 128;
     expectPlannerInvalidArgument(ctx, invalidPayloadType);
 
     MediaRealtimeRtpTranscodeRequest invalidClockRate = options;
-    invalidClockRate.input.rtp.clockRate = 48000;
+    invalidClockRate.input.videoRtp.clockRate = 48000;
     expectPlannerInvalidArgument(ctx, invalidClockRate);
 
     MediaRealtimeRtpTranscodeRequest missingPort = options;
-    missingPort.input.url = "rtp://127.0.0.1";
+    missingPort.input.videoRtp.url = "rtp://127.0.0.1";
     expectPlannerInvalidArgument(ctx, missingPort);
 
     MediaRealtimeRtpTranscodeRequest pathUrl = options;
-    pathUrl.input.url = "rtp://127.0.0.1:5004/video";
+    pathUrl.input.videoRtp.url = "rtp://127.0.0.1:5004/video";
     expectPlannerInvalidArgument(ctx, pathUrl);
 
     MediaRealtimeRtpTranscodeRequest queryUrl = options;
-    queryUrl.input.url = "udp://127.0.0.1:5004?pkt_size=1200";
+    queryUrl.input.videoRtp.url = "udp://127.0.0.1:5004?pkt_size=1200";
     expectPlannerInvalidArgument(ctx, queryUrl);
 
     MediaRealtimeRtpTranscodeRequest fragmentUrl = options;
-    fragmentUrl.input.url = "rtp://127.0.0.1:5004#stream";
+    fragmentUrl.input.videoRtp.url = "rtp://127.0.0.1:5004#stream";
     expectPlannerInvalidArgument(ctx, fragmentUrl);
 
     MediaRealtimeRtpTranscodeRequest userInfoUrl = options;
-    userInfoUrl.input.url = "rtp://user@127.0.0.1:5004";
+    userInfoUrl.input.videoRtp.url = "rtp://user@127.0.0.1:5004";
     expectPlannerInvalidArgument(ctx, userInfoUrl);
 }
 
-void testRawRtpPlansH264Input(TestContext& ctx)
+void testRawRtpPlansH264AndHevcInput(TestContext& ctx)
 {
-    const auto plan = MediaRealtimeRtpTranscodePlanner::plan(validRawRtpOptions());
+    auto h264Options = validRawRtpOptions();
+    const auto h264Plan = MediaRealtimeRtpTranscodePlanner::plan(h264Options);
+    EXPECT_TRUE(ctx, h264Plan);
+    if (h264Plan) {
+        EXPECT_EQ(ctx, h264Plan.value().inputKind, MediaRealtimeInputKind::RawRtp);
+        EXPECT_EQ(ctx, h264Plan.value().videoPlan.inputCodecName, std::string("h264"));
+        EXPECT_EQ(ctx, h264Plan.value().videoPlan.sourceStreamIndex, 0);
+    }
+
+    auto hevcOptions = validRawRtpOptions();
+    hevcOptions.input.videoRtp.codecName = "hevc";
+    const auto hevcPlan = MediaRealtimeRtpTranscodePlanner::plan(hevcOptions);
+    EXPECT_TRUE(ctx, hevcPlan);
+    if (!hevcPlan) {
+        std::cerr << hevcPlan.error().describe() << '\n';
+        return;
+    }
+
+    EXPECT_EQ(ctx, hevcPlan.value().inputKind, MediaRealtimeInputKind::RawRtp);
+    EXPECT_EQ(ctx, hevcPlan.value().videoPlan.inputCodecName, std::string("hevc"));
+    EXPECT_TRUE(ctx, hevcPlan.value().input.sdpText.find("H265/90000") != std::string::npos);
+}
+
+void testRawRtpAudioEndpointRequiredWhenAudioEnabled(TestContext& ctx)
+{
+    MediaRealtimeRtpTranscodeRequest missingAudio = validRawRtpOptions();
+    missingAudio.parameters.execution.includeAudio = true;
+    missingAudio.parameters.audio.codecName = "aac";
+    expectPlannerInvalidArgument(ctx, missingAudio);
+
+    MediaRealtimeRtpTranscodeRequest missingFmtp = validRawRtpAudioVideoOptions();
+    missingFmtp.input.audioRtp.fmtp.clear();
+    expectPlannerInvalidArgument(ctx, missingFmtp);
+}
+
+void testRawRtpPlansAudioVideoInput(TestContext& ctx)
+{
+    auto options = validRawRtpAudioVideoOptions();
+    options.input.audioRtp.url = "rtp://192.0.2.10:5006";
+
+    const auto plan = MediaRealtimeRtpTranscodePlanner::plan(options);
     EXPECT_TRUE(ctx, plan);
     if (!plan) {
         std::cerr << plan.error().describe() << '\n';
         return;
     }
 
-    EXPECT_EQ(ctx, plan.value().inputKind, MediaRealtimeInputKind::RawRtp);
-    EXPECT_EQ(ctx, plan.value().videoPlan.inputCodecName, std::string("h264"));
-    EXPECT_EQ(ctx, plan.value().videoPlan.sourceStreamIndex, 0);
+    EXPECT_TRUE(ctx, plan.value().audioPlan.enabled);
+    EXPECT_EQ(ctx, plan.value().audioPlan.sourceStreamIndex, 1);
+    EXPECT_EQ(ctx, plan.value().audioPlan.sourceCodecName, std::string("aac"));
+    EXPECT_TRUE(ctx, plan.value().input.sdpText.find("m=video 5004 RTP/AVP 96") != std::string::npos);
+    EXPECT_TRUE(ctx, plan.value().input.sdpText.find("m=audio 5006 RTP/AVP 97") != std::string::npos);
+    EXPECT_TRUE(ctx, plan.value().input.sdpText.find("m=video 5004 RTP/AVP 96\r\nc=IN IP4 127.0.0.1\r\n") != std::string::npos);
+    EXPECT_TRUE(ctx, plan.value().input.sdpText.find("m=audio 5006 RTP/AVP 97\r\nc=IN IP4 192.0.2.10\r\n") != std::string::npos);
+    EXPECT_TRUE(ctx, plan.value().input.sdpText.find("a=fmtp:97 ") != std::string::npos);
+    EXPECT_EQ(ctx, plan.value().videoOutput.url, std::string("rtp://127.0.0.1:5004"));
+    EXPECT_EQ(ctx, plan.value().audioOutput.url, std::string("rtp://127.0.0.1:5006"));
+}
+
+void testRawRtpPlansOpusAudioInput(TestContext& ctx)
+{
+    MediaRealtimeRtpTranscodeRequest options = validRawRtpAudioVideoOptions();
+    options.parameters.audio.codecName = "opus";
+    options.input.audioRtp.codecName = "opus";
+    options.input.audioRtp.payloadType = 98;
+    options.input.audioRtp.clockRate = 48000;
+    options.input.audioRtp.channels = 2;
+    options.input.audioRtp.fmtp.clear();
+
+    const auto plan = MediaRealtimeRtpTranscodePlanner::plan(options);
+    EXPECT_TRUE(ctx, plan);
+    if (!plan) {
+        std::cerr << plan.error().describe() << '\n';
+        return;
+    }
+
+    EXPECT_TRUE(ctx, plan.value().audioPlan.enabled);
+    EXPECT_EQ(ctx, plan.value().audioPlan.sourceCodecName, std::string("opus"));
+    EXPECT_TRUE(ctx, plan.value().input.sdpText.find("m=audio 5006 RTP/AVP 98") != std::string::npos);
+    EXPECT_TRUE(ctx, plan.value().input.sdpText.find("a=rtpmap:98 opus/48000/2") != std::string::npos);
+    EXPECT_FALSE(ctx, plan.value().input.sdpText.find("a=fmtp:98 ") != std::string::npos);
 }
 
 void testValidationRejectsOddRtpPort(TestContext& ctx)
@@ -281,6 +401,44 @@ void testValidationRejectsOddRtpPort(TestContext& ctx)
     if (!status) {
         EXPECT_EQ(ctx, status.error().code, media::ErrorCode::InvalidArgument);
     }
+}
+
+void testValidationRejectsAudioRtpPortOverflow(TestContext& ctx)
+{
+    MediaRealtimeRtpTranscodeRequest options = validRealtimeOptions();
+    options.parameters.execution.includeAudio = true;
+    options.parameters.audio.codecName = "aac";
+    options.parameters.audio.sampleRate = 48000;
+    options.parameters.audio.channels = 2;
+    options.output.basePort = 65534;
+
+    const auto status = MediaRealtimeRtpTranscodeGraphBuilder::validate(options);
+    EXPECT_FALSE(ctx, status);
+    if (!status) {
+        EXPECT_EQ(ctx, status.error().code, media::ErrorCode::InvalidArgument);
+    }
+}
+
+void testRealtimeNoAudioProbeDoesNotRequestAudio(TestContext& ctx)
+{
+    const auto header = readTextFile(std::filesystem::path(MEDIA_TRANSCODE_SOURCE_DIR) /
+                                     "src" /
+                                     "internal" /
+                                     "graph" /
+                                     "planner" /
+                                     "MediaPipelineCapabilityScanner.h");
+    EXPECT_TRUE(ctx, header.find("detectRealtimeInputStreamInfo(") != std::string::npos);
+    EXPECT_TRUE(ctx, header.find("bool includeAudio") != std::string::npos);
+
+    const auto planner = readTextFile(std::filesystem::path(MEDIA_TRANSCODE_SOURCE_DIR) /
+                                      "src" /
+                                      "internal" /
+                                      "graph" /
+                                      "planner" /
+                                      "realtime" /
+                                      "MediaRealtimeRtpTranscodePlanner.cpp");
+    EXPECT_TRUE(ctx, planner.find("detectRealtimeInputStreamInfo(options.input.url,") != std::string::npos);
+    EXPECT_TRUE(ctx, planner.find("audioRequested(options));") != std::string::npos);
 }
 
 void testBuildPlansVideoStreamAndSoftwareExecution(TestContext& ctx)
@@ -309,6 +467,50 @@ void testBuildPlansVideoStreamAndSoftwareExecution(TestContext& ctx)
     }
 }
 
+void testBuildPlansRealtimeUrlAudioBranch(TestContext& ctx)
+{
+    MediaRealtimeRtpTranscodeRequest options = validRealtimeOptions();
+    options.parameters.execution.includeAudio = true;
+    options.parameters.audio.codecName = "aac";
+    options.parameters.audio.sampleRate = 48000;
+    options.parameters.audio.channels = 2;
+
+    const auto graphResult = MediaRealtimeRtpTranscodeGraphBuilder::build(options);
+    EXPECT_TRUE(ctx, graphResult);
+    if (!graphResult) {
+        std::cerr << graphResult.error().describe() << '\n';
+        return;
+    }
+
+    const MediaGraph& graph = graphResult.value();
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::AudioDecode) != nullptr);
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::AudioResample) != nullptr);
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::AudioEncode) != nullptr);
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::RtpOutput), static_cast<std::size_t>(2));
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::RtpMux), static_cast<std::size_t>(2));
+
+    const MediaNode* audioOutput = findNodeByName(graph, "realtime.audio.rtp.output");
+    EXPECT_TRUE(ctx, audioOutput != nullptr);
+    if (audioOutput) {
+        EXPECT_EQ(ctx, audioOutput->options.value("url"), std::string("rtp://127.0.0.1:5006"));
+    }
+
+    const MediaNode* sdpWriter = findNodeByKind(graph, MediaNodeKind::SdpWriter);
+    EXPECT_TRUE(ctx, sdpWriter != nullptr);
+    if (sdpWriter) {
+        EXPECT_EQ(ctx, sdpWriter->options.value("sdp.expected_contexts"), std::string("2"));
+    }
+    const auto source = readTextFile(std::filesystem::path(MEDIA_TRANSCODE_SOURCE_DIR) /
+                                     "src" /
+                                     "internal" /
+                                     "graph" /
+                                     "nodes" /
+                                     "output" /
+                                     "SdpWriterNode.cpp");
+    EXPECT_EQ(ctx, countOccurrences(source, "av_sdp_create("), static_cast<std::size_t>(1));
+    EXPECT_TRUE(ctx, source.find("contexts.data(), static_cast<int>(contexts.size())") != std::string::npos);
+}
+
 void testBuildPlansRawRtpH264Graph(TestContext& ctx)
 {
     const auto graphResult = MediaRealtimeRtpTranscodeGraphBuilder::build(validRawRtpOptions());
@@ -332,6 +534,24 @@ void testBuildPlansRawRtpH264Graph(TestContext& ctx)
     EXPECT_TRUE(ctx, findEdgeBetweenKinds(graph, MediaNodeKind::StreamSplit, MediaNodeKind::PacketNormalize, MediaEdgeKind::InputPacket) != nullptr);
     EXPECT_TRUE(ctx, findEdgeBetweenKinds(graph, MediaNodeKind::PacketNormalize, MediaNodeKind::VideoDecode, MediaEdgeKind::InputPacket) != nullptr);
     EXPECT_TRUE(ctx, findEdgeBetweenKinds(graph, MediaNodeKind::VideoEncode, MediaNodeKind::RtpMux, MediaEdgeKind::EncodedPacket) != nullptr);
+}
+
+void testBuildPlansRawRtpAudioVideoGraph(TestContext& ctx)
+{
+    const auto graphResult = MediaRealtimeRtpTranscodeGraphBuilder::build(validRawRtpAudioVideoOptions());
+    EXPECT_TRUE(ctx, graphResult);
+    if (!graphResult) {
+        std::cerr << graphResult.error().describe() << '\n';
+        return;
+    }
+
+    const MediaGraph& graph = graphResult.value();
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::RawRtpInput) != nullptr);
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::AudioDecode) != nullptr);
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::AudioEncode) != nullptr);
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::RtpOutput), static_cast<std::size_t>(2));
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::RtpMux), static_cast<std::size_t>(2));
+    EXPECT_TRUE(ctx, findEdgeBetweenKinds(graph, MediaNodeKind::AudioEncode, MediaNodeKind::RtpMux, MediaEdgeKind::EncodedPacket) != nullptr);
 }
 
 void testRealtimeBuilderDoesNotOwnPlannerDecisions(TestContext& ctx)
@@ -500,13 +720,20 @@ int main()
     testValidationRejectsUnsupportedRealtimeInput(ctx);
     testRawRtpMissingMetadataFailsInPlanner(ctx);
     testRawRtpRejectsUnsupportedMetadata(ctx);
-    testRawRtpPlansH264Input(ctx);
+    testRawRtpPlansH264AndHevcInput(ctx);
+    testRawRtpAudioEndpointRequiredWhenAudioEnabled(ctx);
+    testRawRtpPlansAudioVideoInput(ctx);
+    testRawRtpPlansOpusAudioInput(ctx);
     testValidationRejectsOddRtpPort(ctx);
+    testValidationRejectsAudioRtpPortOverflow(ctx);
+    testRealtimeNoAudioProbeDoesNotRequestAudio(ctx);
     testUrlRedactionHidesUserInfo(ctx);
     testTimestampRescaleBumpsQuantizedDuplicates(ctx);
     testTimestampRescaleRejectsInvalidBoundaryValues(ctx);
     testBuildPlansVideoStreamAndSoftwareExecution(ctx);
+    testBuildPlansRealtimeUrlAudioBranch(ctx);
     testBuildPlansRawRtpH264Graph(ctx);
+    testBuildPlansRawRtpAudioVideoGraph(ctx);
     testRealtimeBuilderDoesNotOwnPlannerDecisions(ctx);
     testRuntimeCompileSupportsSoftwareChain(ctx);
     testRuntimeCompileSupportsRawRtpChain(ctx);

@@ -28,15 +28,15 @@ MediaRealtimeRtpTranscodeRequest parseRawRtpOptions(int argc, char** argv)
 {
     MediaRealtimeRtpTranscodeRequest options;
     options.input.kind = MediaRealtimeInputKind::RawRtp;
-    options.input.url = requiredArg(argc, argv, "--input");
+    options.input.videoRtp.url = requiredArg(argc, argv, "--video-rtp-url");
+    options.input.videoRtp.codecName = requiredArg(argc, argv, "--video-rtp-codec");
+    options.input.videoRtp.payloadType = requiredIntArg(argc, argv, "--video-rtp-payload-type");
+    options.input.videoRtp.clockRate = requiredIntArg(argc, argv, "--video-rtp-clock-rate");
     options.input.openTimeoutMs = requiredIntArg(argc, argv, "--open-timeout-ms");
     options.input.readTimeoutMs = requiredIntArg(argc, argv, "--read-timeout-ms");
     options.input.analyzeDurationUs = requiredIntArg(argc, argv, "--analyze-duration-us");
     options.input.probeSizeBytes = requiredIntArg(argc, argv, "--probe-size");
     options.input.lowLatency = requiredExclusiveBoolArg(argc, argv, "--low-latency", "--no-low-latency");
-    options.input.rtp.codecName = requiredArg(argc, argv, "--rtp-codec");
-    options.input.rtp.payloadType = requiredIntArg(argc, argv, "--rtp-payload-type");
-    options.input.rtp.clockRate = requiredIntArg(argc, argv, "--rtp-clock-rate");
 
     options.output.host = requiredArg(argc, argv, "--rtp-host");
     options.output.basePort = static_cast<std::size_t>(requiredIntArg(argc, argv, "--rtp-port"));
@@ -45,7 +45,7 @@ MediaRealtimeRtpTranscodeRequest parseRawRtpOptions(int argc, char** argv)
 
     MediaTranscodeParameterSet& parameters = options.parameters;
     parameters.execution.includeVideo = true;
-    parameters.execution.includeAudio = false;
+    parameters.execution.includeAudio = hasArg(argc, argv, "--audio");
     parameters.execution.disableHardware = !requiredExclusiveBoolArg(argc, argv, "--enable-hw", "--disable-hw");
     parameters.execution.diagnosticLogEnabled = requiredExclusiveBoolArg(argc, argv, "--graph-diagnostics", "--quiet-graph");
     parameters.queues.metadata = requiredSizeArg(argc, argv, "--metadata-queue");
@@ -70,6 +70,19 @@ MediaRealtimeRtpTranscodeRequest parseRawRtpOptions(int argc, char** argv)
     parameters.video.bufferSizeKbits = optionalIntArg(argc, argv, "--buffer-size");
     parameters.video.quality = optionalIntArg(argc, argv, "--quality");
     parameters.video.gop = optionalIntArg(argc, argv, "--gop");
+    parameters.audio.codecName = argValue(argc, argv, "--audio-codec", "aac");
+    parameters.audio.rateControl = rateControlArg(argc, argv, "--audio-rc");
+    parameters.audio.bitrateKbps = optionalIntArg(argc, argv, "--audio-bitrate");
+    parameters.audio.sampleRate = optionalIntArg(argc, argv, "--sample-rate");
+    parameters.audio.channels = optionalIntArg(argc, argv, "--channels");
+    if (parameters.execution.includeAudio) {
+        options.input.audioRtp.url = requiredArg(argc, argv, "--audio-rtp-url");
+        options.input.audioRtp.codecName = requiredArg(argc, argv, "--audio-rtp-codec");
+        options.input.audioRtp.payloadType = requiredIntArg(argc, argv, "--audio-rtp-payload-type");
+        options.input.audioRtp.clockRate = requiredIntArg(argc, argv, "--audio-rtp-clock-rate");
+        options.input.audioRtp.channels = requiredIntArg(argc, argv, "--audio-rtp-channels");
+        options.input.audioRtp.fmtp = argValue(argc, argv, "--audio-rtp-fmtp");
+    }
     return options;
 }
 
@@ -143,15 +156,16 @@ int runRealtimeRtpInputCli(int argc, char** argv)
 {
     const bool helpRequested = hasArg(argc, argv, "--help") || hasArg(argc, argv, "-h");
     if (argc < 5 || helpRequested) {
-        std::cout << "Usage: media_transcode_realtime_rtp_input_cli --input rtp://127.0.0.1:5004 --rtp-codec h264 --rtp-payload-type 96 --rtp-clock-rate 90000 --open-timeout-ms 5000 --read-timeout-ms 5000 --analyze-duration-us 500000 --probe-size 524288 --low-latency --rtp-host 127.0.0.1 --rtp-port 5006 --sdp out.sdp --packet-size 1200 --enable-hw --graph-diagnostics --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --video-codec h264 --rc auto --max-duration 15\n";
+        std::cout << "Usage: media_transcode_realtime_rtp_input_cli --video-rtp-url rtp://127.0.0.1:5004 --video-rtp-codec h264 --video-rtp-payload-type 96 --video-rtp-clock-rate 90000 --open-timeout-ms 5000 --read-timeout-ms 5000 --analyze-duration-us 500000 --probe-size 524288 --low-latency --rtp-host 127.0.0.1 --rtp-port 5008 --sdp out.sdp --packet-size 1200 --enable-hw --graph-diagnostics --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --video-codec h264 --rc auto --max-duration 15\n";
         return helpRequested ? 0 : 2;
     }
 
     MediaRealtimeRtpTranscodeRequest options = parseRawRtpOptions(argc, argv);
     RealtimeRtpInputCliRuntimeOptions runtimeOptions = parseRuntimeOptions(argc, argv);
-    std::cout << "[CLI] raw_rtp_input=" << redactUrlUserInfo(options.input.url)
-              << " rtp_codec=" << options.input.rtp.codecName
-              << " payload_type=" << *options.input.rtp.payloadType
+    std::cout << "[CLI] raw_rtp_video=" << redactUrlUserInfo(options.input.videoRtp.url)
+              << " video_rtp_codec=" << options.input.videoRtp.codecName
+              << " video_payload_type=" << *options.input.videoRtp.payloadType
+              << " audio=" << (options.parameters.execution.includeAudio ? "on" : "off")
               << " output_sdp=" << options.output.sdpPath
               << " max_duration=" << runtimeOptions.maxDurationSeconds
               << " hw=" << (options.parameters.execution.disableHardware ? "disabled" : "auto")

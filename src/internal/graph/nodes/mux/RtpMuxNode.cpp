@@ -140,11 +140,12 @@ MediaNodeKind RtpMuxNode::staticKind() noexcept
     if (!audio) {
         return ::media::Status::failure(audio.error());
     }
-    if (audio.value()) {
+    if (video.value() == audio.value()) {
         return ::media::Status::failure(
-            ::media::ErrorInfo::unsupported("RtpMuxNode is video-only in the current realtime DAG"));
+            ::media::ErrorInfo::invalidArgument("RtpMuxNode requires exactly one media stream kind"));
     }
     m_expectVideo = video.value();
+    m_expectAudio = audio.value();
     m_expectationsBound = true;
     return ::media::Status::success();
 }
@@ -165,7 +166,7 @@ bool RtpMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
     m_headerWritten = false;
     m_trailerWritten = false;
     m_formatEmitted = false;
-    m_videoStreamIndex = invalidMediaStreamIndex;
+    m_streamIndex = invalidMediaStreamIndex;
     return m_outputContext != nullptr;
 }
 
@@ -204,16 +205,17 @@ bool RtpMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
 
 ::media::Status RtpMuxNode::registerStreamFromCodecContext(const MediaBufferRef& buffer)
 {
-    if (m_videoStreamIndex != invalidMediaStreamIndex) {
+    if (m_streamIndex != invalidMediaStreamIndex) {
         return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("RtpMuxNode received duplicate video stream config"));
+            ::media::ErrorInfo::invalidArgument("RtpMuxNode received duplicate stream config"));
     }
 
     auto* codecBuffer = dynamic_cast<FFmpegCodecContextBuffer*>(buffer.get());
     AVCodecContext* codec = codecBuffer ? codecBuffer->context() : nullptr;
-    if (!m_outputContext || !codec || codec->codec_type != AVMEDIA_TYPE_VIDEO || !known(codec->time_base)) {
+    const AVMediaType expectedType = m_expectAudio ? AVMEDIA_TYPE_AUDIO : AVMEDIA_TYPE_VIDEO;
+    if (!m_outputContext || !codec || codec->codec_type != expectedType || !known(codec->time_base)) {
         return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("RtpMuxNode requires video encoder context and time_base"));
+            ::media::ErrorInfo::invalidArgument("RtpMuxNode requires matching encoder context and time_base"));
     }
 
     AVStream* stream = avformat_new_stream(m_outputContext, nullptr);
@@ -229,8 +231,18 @@ bool RtpMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
     stream->time_base = codec->time_base;
     stream->avg_frame_rate = codec->framerate;
     stream->r_frame_rate = codec->framerate;
-    m_videoStreamIndex = stream->index;
+    m_streamIndex = stream->index;
     return ::media::Status::success();
+}
+
+MediaStreamKind RtpMuxNode::expectedStreamKind() const noexcept
+{
+    return m_expectAudio ? MediaStreamKind::Audio : MediaStreamKind::Video;
+}
+
+const char* RtpMuxNode::expectedStreamName() const noexcept
+{
+    return m_expectAudio ? "audio" : "video";
 }
 
 ::media::Status RtpMuxNode::writeHeaderIfNeeded()
@@ -283,16 +295,20 @@ bool RtpMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
 ::media::Status RtpMuxNode::writePacketNow(const MediaBufferRef& buffer)
 {
     const AVPacket* source = FFmpegPacketView::packet(buffer);
-    if (!m_outputContext || !source || m_videoStreamIndex == invalidMediaStreamIndex) {
+    if (!m_outputContext || !source || m_streamIndex == invalidMediaStreamIndex) {
         return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("RtpMuxNode requires output context, video stream, and packet"));
+            ::media::ErrorInfo::invalidArgument("RtpMuxNode requires output context, stream, and packet"));
     }
-    if (m_videoStreamIndex >= static_cast<int>(m_outputContext->nb_streams)) {
+    if (buffer->streamKind() != expectedStreamKind()) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("RtpMuxNode packet stream kind does not match configured mux"));
+    }
+    if (m_streamIndex >= static_cast<int>(m_outputContext->nb_streams)) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("RtpMuxNode packet stream is not registered"));
     }
 
-    AVStream* muxStream = m_outputContext->streams[m_videoStreamIndex];
+    AVStream* muxStream = m_outputContext->streams[m_streamIndex];
     const AVRational srcTb = packetTimeBase(buffer);
     const AVRational muxTb = muxStream ? muxStream->time_base : AVRational{ 0, 1 };
     if (!known(srcTb) || !known(muxTb)) {
@@ -309,7 +325,7 @@ bool RtpMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
         return FFmpegGraphError::statusFromCode(refRet, "av_packet_ref(rtp)");
     }
     av_packet_rescale_ts(packet.get(), srcTb, muxTb);
-    packet->stream_index = m_videoStreamIndex;
+    packet->stream_index = m_streamIndex;
 
     const int writeRet = av_interleaved_write_frame(m_outputContext, packet.get());
     if (writeRet < 0) {
@@ -319,7 +335,7 @@ bool RtpMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
     if (m_packetsWritten == 1) {
         mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
                                 MediaGraphDiagnosticPhase::RuntimeNode,
-                                "rtp_mux.first_packet_written stream=video");
+                                std::string("rtp_mux.first_packet_written stream=") + expectedStreamName());
     }
     return ::media::Status::success();
 }
@@ -373,13 +389,14 @@ void RtpMuxNode::releaseRuntimeViews() noexcept
     m_formatEmitted = false;
     m_expectationsBound = false;
     m_expectVideo = false;
-    m_videoStreamIndex = invalidMediaStreamIndex;
+    m_expectAudio = false;
+    m_streamIndex = invalidMediaStreamIndex;
     m_packetsWritten = 0;
 }
 
 bool RtpMuxNode::expectedStreamsRegistered() const noexcept
 {
-    return !m_expectVideo || m_videoStreamIndex != invalidMediaStreamIndex;
+    return (!m_expectVideo && !m_expectAudio) || m_streamIndex != invalidMediaStreamIndex;
 }
 
 } // namespace media::ffmpeg::graph
