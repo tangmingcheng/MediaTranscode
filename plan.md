@@ -29,4 +29,4 @@ Fix realtime RTP playback quality and stability without adding graph/node defaul
 - [x] Verify video+audio RTP smoke with explicit source-equivalent bitrate and hardware enabled.
 - [x] Use VLC or receiver-side diagnostics to confirm playback behavior and document the result.
 - [x] Update `docs/completed/` with commands and actual results.
-- [ ] Run build/tests, `git diff --check`, commit, push, and request review.
+- [x] Run build/tests, `git diff --check`, commit, push, and request review, including review follow-up fixes.

@@ -5,6 +5,8 @@
 - Added planner coverage and implementation so raw RTP video transcode rejects omitted `--bitrate` when the input bitrate is not observable.
 - Added input video bitrate capture for capability-scanned file/realtime URL inputs.
 - Propagated the resolved realtime video bitrate into graph node options before building runtime nodes.
+- Rejected explicit zero video bitrate in the shared video transcode option applier so graph build does not pass a behavior-changing sentinel into encoder nodes.
+- Added review follow-up coverage for raw RTP zero bitrate rejection, local transcode zero bitrate rejection, and realtime URL observable bitrate inheritance.
 - Retested local video transcode, realtime RTP video-only, realtime RTP video+audio, and VLC-side playback diagnostics with hardware enabled.
 
 ## Root Cause
@@ -25,7 +27,7 @@ Result: exit code `0`; source video is H264, `2560x1440`, `30/1`, `bit_rate=8405
 cmd /c "call D:\VisualStudio2026\VC\Auxiliary\Build\vcvars64.bat && cmake --build out/build/x64-debug --target media_transcode_core media_transcode_local_video_cli media_transcode_realtime_video_cli media_transcode_realtime_graph_tests && out\build\x64-debug\media_transcode_realtime_graph_tests.exe"
 ```
 
-Result: exit code `0`; build completed and output ended with `realtime graph tests passed`.
+Result: exit code `0`; build completed and output ended with `realtime graph tests passed`. This was re-run after code review fixes for zero bitrate rejection and observable bitrate inheritance coverage.
 
 ```powershell
 out\build\x64-debug\media_transcode_realtime_video_cli.exe --input-type rtp --input-layout separate --output-layout separate --video-rtp-url rtp://127.0.0.1:5364 --video-rtp-codec h264 --video-rtp-payload-type 96 --video-rtp-clock-rate 90000 --video-rtp-fmtp "packetization-mode=1;sprop-parameter-sets=Z01AMpWQAoALWwEQAAA+gAAOpghhA,aOuPIA==;profile-level-id=4D4032" --open-timeout-ms 8000 --read-timeout-ms 8000 --analyze-duration-us 500000 --probe-size 524288 --rtp-host 127.0.0.1 --rtp-port 5370 --sdp out\build\x64-debug\codex_missing_bitrate_reject.sdp --packet-size 1200 --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --video-codec h264 --max-duration 1 --progress-timeout-ms 1000 --poll-interval-ms 250 --no-audio

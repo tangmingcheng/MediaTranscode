@@ -1,6 +1,7 @@
 #include "common/TestAssert.h"
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/builder/local/LocalFileTranscodeGraphBuilder.h"
 #include "internal/graph/builder/realtime/MediaRealtimeRtpTranscodeGraphBuilder.h"
 #include "internal/graph/core/MediaGraphValidation.h"
 #include "internal/graph/model/MediaNodeKind.h"
@@ -1103,6 +1104,39 @@ void testRawRtpRejectsMissingVideoBitrate(TestContext& ctx)
     }
 }
 
+void testRawRtpRejectsZeroVideoBitrate(TestContext& ctx)
+{
+    MediaRealtimeRtpTranscodeRequest options = validRawRtpOptions();
+    options.parameters.video.bitrateKbps = 0;
+
+    const auto plan = MediaRealtimeRtpTranscodePlanner::plan(options);
+    EXPECT_FALSE(ctx, plan);
+    if (!plan) {
+        EXPECT_EQ(ctx, plan.error().code, media::ErrorCode::InvalidArgument);
+    }
+}
+
+void testLocalTranscodeRejectsZeroVideoBitrate(TestContext& ctx)
+{
+    LocalFileTranscodeOptions options;
+    options.inputUrl = sampleVideoPath();
+    options.outputUrl = "local-zero-bitrate-test.mp4";
+    options.parameters.execution.includeAudio = false;
+    options.parameters.execution.disableHardware = true;
+    options.parameters.queues.metadata = 1;
+    options.parameters.queues.packet = 256;
+    options.parameters.queues.frame = 128;
+    options.parameters.queues.mux = 256;
+    options.parameters.video.codecName = "h264";
+    options.parameters.video.bitrateKbps = 0;
+
+    const auto graph = LocalFileTranscodeGraphBuilder::build(options);
+    EXPECT_FALSE(ctx, graph);
+    if (!graph) {
+        EXPECT_EQ(ctx, graph.error().code, media::ErrorCode::InvalidArgument);
+    }
+}
+
 void testRawRtpRejectsUnknownSourceCodecWhenCodecIsNotExplicit(TestContext& ctx)
 {
     MediaRealtimeRtpTranscodeRequest options = validRawRtpOptions();
@@ -1215,6 +1249,39 @@ void testRealtimeNoAudioProbeDoesNotRequestAudio(TestContext& ctx)
                                       "MediaRealtimeRtpTranscodePlanner.cpp");
     EXPECT_TRUE(ctx, planner.find("detectRealtimeInputStreamInfo(options.input.url,") != std::string::npos);
     EXPECT_TRUE(ctx, planner.find("audioRequested(options));") != std::string::npos);
+}
+
+void testRealtimeUrlInheritsObservableVideoBitrate(TestContext& ctx)
+{
+    MediaRealtimeRtpTranscodeRequest options = validRealtimeOptions();
+    options.parameters.video.bitrateKbps.reset();
+
+    const auto plan = MediaRealtimeRtpTranscodePlanner::plan(options);
+    EXPECT_TRUE(ctx, plan);
+    if (!plan) {
+        std::cerr << plan.error().describe() << '\n';
+        return;
+    }
+    EXPECT_TRUE(ctx, plan.value().videoParameters.bitrateKbps.has_value());
+    if (!plan.value().videoParameters.bitrateKbps) {
+        return;
+    }
+    EXPECT_TRUE(ctx, *plan.value().videoParameters.bitrateKbps > 0);
+
+    const auto graphResult = MediaRealtimeRtpTranscodeGraphBuilder::build(options);
+    EXPECT_TRUE(ctx, graphResult);
+    if (!graphResult) {
+        std::cerr << graphResult.error().describe() << '\n';
+        return;
+    }
+
+    const MediaNode* codecResolver = findNodeByKind(graphResult.value(), MediaNodeKind::CodecResolver);
+    EXPECT_TRUE(ctx, codecResolver != nullptr);
+    if (codecResolver) {
+        EXPECT_EQ(ctx,
+                  codecResolver->options.value(MediaTranscodeOptionKey::VideoBitrateKbps),
+                  std::to_string(*plan.value().videoParameters.bitrateKbps));
+    }
 }
 
 void testBuildPlansVideoStreamAndSoftwareExecution(TestContext& ctx)
@@ -1799,6 +1866,8 @@ int main()
     testRawRtpPlansAudioVideoInput(ctx);
     testRawRtpInheritsSourceCodecsWhenTranscodeCodecsAreOmitted(ctx);
     testRawRtpRejectsMissingVideoBitrate(ctx);
+    testRawRtpRejectsZeroVideoBitrate(ctx);
+    testLocalTranscodeRejectsZeroVideoBitrate(ctx);
     testRawRtpRejectsUnknownSourceCodecWhenCodecIsNotExplicit(ctx);
     testRealtimeNoResizeDoesNotScoreFilterStage(ctx);
     testRealtimeResizeScoresFilterStage(ctx);
@@ -1806,6 +1875,7 @@ int main()
     testValidationRejectsOddRtpPort(ctx);
     testValidationRejectsAudioRtpPortOverflow(ctx);
     testRealtimeNoAudioProbeDoesNotRequestAudio(ctx);
+    testRealtimeUrlInheritsObservableVideoBitrate(ctx);
     testUrlRedactionHidesUserInfo(ctx);
     testTimestampRescaleBumpsQuantizedDuplicates(ctx);
     testTimestampRescaleRejectsInvalidBoundaryValues(ctx);
