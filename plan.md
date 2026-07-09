@@ -1,29 +1,32 @@
-# Video Tool Split and Graph Default Cleanup Plan
+# Realtime RTP Quality and Playback Stability Plan
 
 ## Goal
 
-Split local-file video transcoding and realtime video transcoding into separate tools, remove redundant CLI switches, and ensure graph/planner code never relies on behavior-changing defaults. Missing transcode parameters must either be resolved from observable input metadata during planning or fail before graph build.
+Fix realtime RTP playback quality and stability without adding graph/node defaults or patch-style runtime behavior.
 
-## Implementation Checklist
+## Root Cause Evidence So Far
 
-- [x] Add tests first for rejected legacy switches, new tool parser semantics, source-codec inheritance, unknown-codec failures, audio-default behavior, and realtime filter scoring.
-- [x] Replace mixed CLI targets with `media_transcode_local_video_cli` and `media_transcode_realtime_video_cli`.
-- [x] Keep common transcode arguments optional in the CLI, but pass absence through as "inherit from source"; do not synthesize codec/rate-control/default stream values in CLI code.
-- [x] Make realtime video tool require explicit `--input-type rtsp|rtp|mpegts-udp`, `--input-layout session|separate|mpegts`, and `--output-layout separate|mpegts`.
-- [x] Remove `--mode`, `--video`, `--audio`, and `--enable-hw`; keep `--disable-hw`, `--no-audio`, `--quiet-graph`, and `--no-low-latency`.
-- [x] Remove graph/planner defaults that decide behavior, especially default video codec, realtime timeout/probe values, queue capacities, and hardware preference strings.
-- [x] Make video always planned for these video tools. Audio is enabled by default and disabled only by `--no-audio`.
-- [x] Reuse the local video planner filter rule for realtime: filter is required only when resize is requested.
-- [x] Update realtime plan summary so no-filter plans report `filter=not_required`.
-- [x] Add a short completion note under `docs/completed/`.
+- Source `test.mp4` video bitrate is about `8405 kb/s`.
+- Current raw RTP realtime output SDP advertises `b=AS:2000` when `--bitrate` is omitted.
+- Raw RTP input metadata currently provides codec/payload/fmtp but no observable source bitrate.
+- This means the graph can reach the encoder without an explicit or observable bitrate, allowing FFmpeg/NVENC defaults to affect behavior.
+- Video+audio smoke writes both audio and video packets, but playback can still show stutter/corruption; remaining candidates are low output bitrate, RTP/H264 parameter signaling, and realtime queue overflow/drop policy.
 
-## Verification
+## Architecture Rules
 
-- [x] Build `media_transcode_core`, `media_transcode_local_video_cli`, `media_transcode_realtime_video_cli`, and `media_transcode_realtime_graph_tests` in `out/build/x64-debug`.
-- [x] Run `out/build/x64-debug/media_transcode_realtime_graph_tests.exe`.
-- [x] Run a local-file smoke using `out/build/x64-debug/test.mp4`.
-- [x] Run a realtime RTP smoke with FFmpeg sender and confirm encoded packet progress when the environment is available.
-- [x] Run `rg` checks for legacy CLI switches/default implementations.
-- [x] Run `git diff --check`.
-- [x] Review the full diff against this plan and fix any missing items before commit.
-- [x] Commit and push branch `codex/split-video-tools-cli`, open PR, and request a fresh agent review.
+- Planner owns all decisions.
+- Runtime nodes must not invent codec, bitrate, queue, or RTP defaults.
+- Missing transcode parameters must resolve from explicit CLI input or observable input metadata; otherwise planning must fail.
+- If realtime queue behavior changes, it must be represented in the plan/edge policy, not hardcoded in nodes.
+
+## Tasks
+
+- [x] Add regression tests proving raw RTP video transcode without explicit bitrate is rejected when bitrate is not observable.
+- [x] Add regression tests proving raw RTP video transcode with explicit bitrate plans successfully and propagates the value to graph node options.
+- [x] Extend video input stream planning data to carry observable bitrate for file/realtime URL inputs.
+- [x] Make raw RTP input planning reject missing bitrate for transcode-frame video when no source bitrate is observable.
+- [x] Verify no-audio RTP smoke with explicit source-equivalent bitrate and hardware enabled.
+- [x] Verify video+audio RTP smoke with explicit source-equivalent bitrate and hardware enabled.
+- [x] Use VLC or receiver-side diagnostics to confirm playback behavior and document the result.
+- [x] Update `docs/completed/` with commands and actual results.
+- [x] Run build/tests, `git diff --check`, commit, push, and request review, including review follow-up fixes.

@@ -82,9 +82,9 @@ constexpr const char* owner = "MediaVideoTranscodeOptionApplier";
 
     if (auto status = validateOptionalPositive(video.frameRate.numerator, "fps numerator"); !status) return status;
     if (auto status = validateOptionalPositive(video.frameRate.denominator, "fps denominator"); !status) return status;
-    if (auto status = validateOptionalNonNegative(video.bitrateKbps, "video bitrate"); !status) return status;
-    if (auto status = validateOptionalNonNegative(video.minBitrateKbps, "video min bitrate"); !status) return status;
-    if (auto status = validateOptionalNonNegative(video.maxBitrateKbps, "video max bitrate"); !status) return status;
+    if (auto status = validateOptionalPositive(video.bitrateKbps, "video bitrate"); !status) return status;
+    if (auto status = validateOptionalPositive(video.minBitrateKbps, "video min bitrate"); !status) return status;
+    if (auto status = validateOptionalPositive(video.maxBitrateKbps, "video max bitrate"); !status) return status;
     if (auto status = validateOptionalPositive(video.bufferSizeKbits, "video buffer size"); !status) return status;
     if (video.minBitrateKbps && video.maxBitrateKbps && *video.minBitrateKbps > *video.maxBitrateKbps) {
         return ::media::Result<void>::failure(

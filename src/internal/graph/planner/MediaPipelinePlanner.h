@@ -5,6 +5,7 @@
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "media_transcode/Result.h"
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -90,6 +91,7 @@ struct MediaInputVideoStreamInfo {
     std::string codecName;
     int width = 0;
     int height = 0;
+    int64_t bitrateBitsPerSecond = 0;
     MediaRational frameRate;
 };
 

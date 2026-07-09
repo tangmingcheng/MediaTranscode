@@ -109,6 +109,7 @@ FFmpegRealtimeInputOptions toFFmpegRealtimeInputOptions(const MediaPipelinePlann
     info.codecName = canonicalCodecName(codecName);
     info.width = params->width;
     info.height = params->height;
+    info.bitrateBitsPerSecond = params->bit_rate;
     info.frameRate = bestFrameRate(stream);
     return ::media::Result<MediaInputVideoStreamInfo>::success(std::move(info));
 }
@@ -151,6 +152,7 @@ FFmpegRealtimeInputOptions toFFmpegRealtimeInputOptions(const MediaPipelinePlann
     info.video.codecName = canonicalCodecName(videoCodecName);
     info.video.width = videoParams->width;
     info.video.height = videoParams->height;
+    info.video.bitrateBitsPerSecond = videoParams->bit_rate;
     info.video.frameRate = bestFrameRate(videoStream);
     if (!includeAudio) {
         return ::media::Result<MediaRealtimeInputStreamInfo>::success(std::move(info));

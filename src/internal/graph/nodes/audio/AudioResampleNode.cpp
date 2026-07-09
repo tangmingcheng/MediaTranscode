@@ -1,5 +1,6 @@
 #include "internal/graph/nodes/audio/AudioResampleNode.h"
 
+#include "internal/graph/nodes/audio/AudioMonotonicTimestamp.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
@@ -248,10 +249,19 @@ bool AudioResampleNode::frameMatchesEncoder(const AVFrame* frame) const noexcept
     if (!outputFrame) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument("AudioResampleNode output frame is invalid"));
     }
-    if (inputFrame->pts != AV_NOPTS_VALUE) {
-        outputFrame->pts = av_rescale_q(inputFrame->pts, srcTb, dstTb);
+    auto pts = monotonicAudioFrameTimestamp(inputFrame->pts, srcTb, dstTb, m_nextOutputPts);
+    if (!pts) {
+        return ::media::Status::failure(pts.error());
     }
+    outputFrame->pts = pts.value();
+    outputFrame->pkt_dts = AV_NOPTS_VALUE;
     outputFrame->duration = outputFrame->nb_samples;
+
+    auto nextPts = nextAudioFrameTimestamp(outputFrame->pts, outputFrame->nb_samples);
+    if (!nextPts) {
+        return ::media::Status::failure(nextPts.error());
+    }
+    m_nextOutputPts = nextPts.value();
 
     MediaTimeDescriptor timeDescriptor;
     timeDescriptor.timeBase = MediaRational{ dstTb.num, dstTb.den };
