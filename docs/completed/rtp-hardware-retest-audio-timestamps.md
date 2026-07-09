@@ -6,6 +6,7 @@
 - Reproduced realtime RTP video+audio failure with a looped `test.mp4` sender before the fix.
 - Added `AudioMonotonicTimestamp` and applied it in `AudioResampleNode` so audio frames submitted to the encoder have monotonic PTS in the encoder sample-rate time base.
 - Added unit coverage for clamping backward RTP audio timestamps and rejecting missing audio source PTS.
+- Added node-level `AudioResampleNode` coverage for cloned frames, resampled frames, timestamp writeback, and missing frame PTS failure.
 
 ## Root Cause
 
@@ -52,6 +53,12 @@ try {
 Result: exit code `0`; selected `cuda-nvenc`, decoder `h264_cuvid`, encoder `h264_nvenc`; final `encodedPacketsPushed=99`, `encodedPacketsPopped=99`, `workerErrors=0`. SDP written to `out\build\x64-debug\codex_retest_rtp_video_only_fixed.sdp` and contains one video RTP media line.
 
 ```powershell
+Get-Content out\build\x64-debug\codex_retest_rtp_video_only_fixed.sdp
+```
+
+Result: exit code `0`; relevant SDP line: `m=video 5190 RTP/AVP 96`.
+
+```powershell
 $ffmpeg = 'D:\mabs\local64\bin-video\ffmpeg.exe'
 $senderArgs = @('-hide_banner','-loglevel','warning','-re','-stream_loop','-1','-i','out\build\x64-debug\test.mp4','-map','0:v:0','-an','-c:v','copy','-f','rtp','-payload_type','96','rtp://127.0.0.1:5164?pkt_size=1200','-map','0:a:0','-vn','-c:a','aac','-ar','44100','-ac','2','-f','rtp','-payload_type','97','rtp://127.0.0.1:5166?pkt_size=1200')
 $sender = Start-Process -FilePath $ffmpeg -ArgumentList $senderArgs -WindowStyle Hidden -PassThru
@@ -64,3 +71,9 @@ try {
 ```
 
 Result: exit code `0`; selected video chain `cuda-nvenc`, decoder `h264_cuvid`, encoder `h264_nvenc`; final `encodedPacketsPushed=331`, `encodedPacketsPopped=331`, `workerErrors=0`. SDP written to `out\build\x64-debug\codex_retest_rtp_av_fixed.sdp` and contains both audio and video RTP media lines.
+
+```powershell
+Get-Content out\build\x64-debug\codex_retest_rtp_av_fixed.sdp
+```
+
+Result: exit code `0`; relevant SDP lines: `m=audio 5172 RTP/AVP 97` and `m=video 5170 RTP/AVP 96`.

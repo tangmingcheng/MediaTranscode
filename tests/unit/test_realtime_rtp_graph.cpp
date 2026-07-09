@@ -1,18 +1,24 @@
 #include "common/TestAssert.h"
 
+#include "internal/graph/builder/MediaGraphBuildSupport.h"
 #include "internal/graph/builder/realtime/MediaRealtimeRtpTranscodeGraphBuilder.h"
 #include "internal/graph/core/MediaGraphValidation.h"
 #include "internal/graph/model/MediaNodeKind.h"
 #include "internal/graph/model/RealtimeStreamLayout.h"
 #include "internal/graph/nodes/audio/AudioMonotonicTimestamp.h"
+#include "internal/graph/nodes/audio/AudioResampleNode.h"
 #include "internal/graph/nodes/video/VideoMonotonicTimestamp.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 #include "internal/graph/runtime/MediaGraphRuntime.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
 #include "../../tools/common/GraphCliSupport.h"
 
 extern "C" {
+#include <libavutil/channel_layout.h>
 #include <libavutil/avutil.h>
+#include <libavutil/mathematics.h>
 }
 
 #include <chrono>
@@ -449,6 +455,131 @@ void expectPlannerInvalidArgument(TestContext& ctx, const MediaRealtimeRtpTransc
 std::string repositoryFile(const std::string& relativePath)
 {
     return readTextFile(std::filesystem::path(MEDIA_TRANSCODE_SOURCE_DIR) / relativePath);
+}
+
+::media::ffmpeg::CodecContextPtr makeTestAudioCodecContext(int sampleRate,
+                                                           AVSampleFormat sampleFormat,
+                                                           int channels)
+{
+    auto codec = ::media::ffmpeg::makeCodecContext(nullptr);
+    if (!codec) {
+        return nullptr;
+    }
+    codec->codec_type = AVMEDIA_TYPE_AUDIO;
+    codec->sample_rate = sampleRate;
+    codec->sample_fmt = sampleFormat;
+#if LIBAVUTIL_VERSION_MAJOR >= 57
+    av_channel_layout_default(&codec->ch_layout, channels);
+#else
+    codec->channels = channels;
+    codec->channel_layout = av_get_default_channel_layout(channels);
+#endif
+    return codec;
+}
+
+::media::Result<MediaBufferRef> makeTestAudioFrame(int sampleRate,
+                                                   AVSampleFormat sampleFormat,
+                                                   int channels,
+                                                   int64_t pts,
+                                                   int samples)
+{
+    auto frame = ::media::ffmpeg::makeFrame();
+    if (!frame) {
+        return ::media::Result<MediaBufferRef>::failure(
+            media::ErrorInfo::allocationFailed("test failed to allocate audio frame"));
+    }
+    frame->format = sampleFormat;
+    frame->sample_rate = sampleRate;
+    frame->nb_samples = samples;
+    frame->pts = pts;
+#if LIBAVUTIL_VERSION_MAJOR >= 57
+    av_channel_layout_default(&frame->ch_layout, channels);
+#else
+    frame->channels = channels;
+    frame->channel_layout = av_get_default_channel_layout(channels);
+#endif
+    const int bufferRet = av_frame_get_buffer(frame.get(), 0);
+    if (bufferRet < 0) {
+        return ::media::Result<MediaBufferRef>::failure(
+            media::ErrorInfo::invalidArgument("test failed to allocate audio frame buffer"));
+    }
+
+    auto buffer = FFmpegBufferFactory::wrapFrame(std::move(frame), MediaStreamKind::Audio);
+    if (!buffer) {
+        return buffer;
+    }
+    MediaTimeDescriptor timeDescriptor;
+    timeDescriptor.timeBase = MediaRational{ 1, sampleRate };
+    buffer.value()->setTimeDescriptor(timeDescriptor);
+    return buffer;
+}
+
+MediaNodeId addAudioResampleHarnessGraph(MediaGraph& graph)
+{
+    const MediaNodeId codecSource = graph.addNode(MediaNodeKind::AudioCodecResolver, "test.codec_source");
+    const MediaNodeId frameSource = graph.addNode(MediaNodeKind::AudioDecode, "test.frame_source");
+    const MediaNodeId resample = graph.addNode(MediaNodeKind::AudioResample, "test.audio_resample");
+    const MediaNodeId sink = graph.addNode(MediaNodeKind::AudioEncode, "test.audio_sink");
+
+    graph.addOutputPort(codecSource, "codec", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, true);
+    graph.addOutputPort(frameSource, "frame", MediaStreamKind::Audio, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true);
+    graph.addInputPort(resample, "codec", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false);
+    graph.addInputPort(resample, "frame", MediaStreamKind::Audio, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true);
+    graph.addOutputPort(resample, "frame", MediaStreamKind::Audio, MediaEdgeKind::SoftwareFrame, MediaPayloadKind::Frame, true, true);
+    graph.addInputPort(sink, "frame", MediaStreamKind::Audio, MediaEdgeKind::SoftwareFrame, MediaPayloadKind::Frame, true, true);
+
+    const MediaEdgePolicy policy = MediaGraphBuildSupport::blockingQueuePolicy(8);
+    graph.connect(codecSource, "codec", resample, "codec", "test.codec -> resample.codec", policy);
+    graph.connect(frameSource, "frame", resample, "frame", "test.frame -> resample.frame", policy);
+    graph.connect(resample, "frame", sink, "frame", "test.resample.frame -> sink.frame", policy);
+    return resample;
+}
+
+::media::Status bindAudioResampleCodec(MediaGraphExecutionContext& execution,
+                                       AudioResampleNode& node,
+                                       MediaNodeId nodeId,
+                                       ::media::ffmpeg::CodecContextPtr codec)
+{
+    auto codecBuffer = FFmpegBufferFactory::wrapCodecContext(std::move(codec));
+    if (!codecBuffer) {
+        return ::media::Status::failure(codecBuffer.error());
+    }
+    MediaChannel* codecInput = execution.findInputChannel(nodeId, "codec");
+    if (!codecInput) {
+        return ::media::Status::failure(media::ErrorInfo::internalError("test missing codec input channel"));
+    }
+    auto pushed = codecInput->push(codecBuffer.value());
+    if (!pushed) {
+        return pushed;
+    }
+    return node.process(execution);
+}
+
+::media::Result<MediaBufferRef> processAudioResampleFrame(MediaGraphExecutionContext& execution,
+                                                          AudioResampleNode& node,
+                                                          MediaNodeId nodeId,
+                                                          const MediaBufferRef& frame)
+{
+    MediaChannel* frameInput = execution.findInputChannel(nodeId, "frame");
+    MediaChannel* frameOutput = execution.findOutputChannel(nodeId, "frame");
+    if (!frameInput || !frameOutput) {
+        return ::media::Result<MediaBufferRef>::failure(
+            media::ErrorInfo::internalError("test missing frame channel"));
+    }
+    auto pushed = frameInput->push(frame);
+    if (!pushed) {
+        return ::media::Result<MediaBufferRef>::failure(pushed.error());
+    }
+    auto processed = node.process(execution);
+    if (!processed) {
+        return ::media::Result<MediaBufferRef>::failure(processed.error());
+    }
+    MediaBufferRef output;
+    if (!frameOutput->tryPop(output)) {
+        return ::media::Result<MediaBufferRef>::failure(
+            media::ErrorInfo::internalError("test expected resampled frame output"));
+    }
+    return ::media::Result<MediaBufferRef>::success(output);
 }
 
 void expectTextContains(TestContext& ctx, const std::string& text, const std::string& needle)
@@ -1461,6 +1592,169 @@ void testAudioTimestampRejectsMissingSourcePts(TestContext& ctx)
     }
 }
 
+void testAudioResampleNodeClampsBackwardClonedFrameTimestamps(TestContext& ctx)
+{
+    MediaGraph graph;
+    const MediaNodeId resampleId = addAudioResampleHarnessGraph(graph);
+    MediaGraphExecutionContext execution;
+    const auto compileStatus = execution.compile(graph);
+    EXPECT_TRUE(ctx, compileStatus);
+    if (!compileStatus) {
+        std::cerr << compileStatus.error().describe() << '\n';
+        return;
+    }
+
+    AudioResampleNode node(resampleId);
+    auto codec = makeTestAudioCodecContext(44100, AV_SAMPLE_FMT_FLTP, 2);
+    EXPECT_TRUE(ctx, codec != nullptr);
+    if (!codec) {
+        return;
+    }
+    const auto bindStatus = bindAudioResampleCodec(execution, node, resampleId, std::move(codec));
+    EXPECT_TRUE(ctx, bindStatus);
+    if (!bindStatus) {
+        std::cerr << bindStatus.error().describe() << '\n';
+        return;
+    }
+
+    auto firstInput = makeTestAudioFrame(44100, AV_SAMPLE_FMT_FLTP, 2, 177152, 1024);
+    EXPECT_TRUE(ctx, firstInput);
+    if (!firstInput) {
+        std::cerr << firstInput.error().describe() << '\n';
+        return;
+    }
+    auto firstOutput = processAudioResampleFrame(execution, node, resampleId, firstInput.value());
+    EXPECT_TRUE(ctx, firstOutput);
+    if (!firstOutput) {
+        std::cerr << firstOutput.error().describe() << '\n';
+        return;
+    }
+    const AVFrame* firstFrame = FFmpegFrameView::frame(firstOutput.value());
+    EXPECT_TRUE(ctx, firstFrame != nullptr);
+    if (!firstFrame) {
+        return;
+    }
+    EXPECT_EQ(ctx, firstFrame->pts, 177152);
+    EXPECT_EQ(ctx, firstFrame->pkt_dts, static_cast<int64_t>(AV_NOPTS_VALUE));
+    EXPECT_EQ(ctx, firstFrame->duration, 1024);
+    EXPECT_EQ(ctx, firstOutput.value()->pts(), 177152);
+    EXPECT_EQ(ctx, firstOutput.value()->dts(), static_cast<int64_t>(AV_NOPTS_VALUE));
+    EXPECT_EQ(ctx, firstOutput.value()->duration(), 1024);
+
+    auto backwardInput = makeTestAudioFrame(44100, AV_SAMPLE_FMT_FLTP, 2, 175190, 1024);
+    EXPECT_TRUE(ctx, backwardInput);
+    if (!backwardInput) {
+        std::cerr << backwardInput.error().describe() << '\n';
+        return;
+    }
+    auto backwardOutput = processAudioResampleFrame(execution, node, resampleId, backwardInput.value());
+    EXPECT_TRUE(ctx, backwardOutput);
+    if (!backwardOutput) {
+        std::cerr << backwardOutput.error().describe() << '\n';
+        return;
+    }
+    const AVFrame* backwardFrame = FFmpegFrameView::frame(backwardOutput.value());
+    EXPECT_TRUE(ctx, backwardFrame != nullptr);
+    if (!backwardFrame) {
+        return;
+    }
+    EXPECT_EQ(ctx, backwardFrame->pts, 178176);
+    EXPECT_EQ(ctx, backwardFrame->pkt_dts, static_cast<int64_t>(AV_NOPTS_VALUE));
+    EXPECT_EQ(ctx, backwardFrame->duration, 1024);
+    EXPECT_EQ(ctx, backwardOutput.value()->pts(), 178176);
+    EXPECT_EQ(ctx, backwardOutput.value()->dts(), static_cast<int64_t>(AV_NOPTS_VALUE));
+    EXPECT_EQ(ctx, backwardOutput.value()->duration(), 1024);
+}
+
+void testAudioResampleNodeNormalizesResampledFrameTimestamps(TestContext& ctx)
+{
+    MediaGraph graph;
+    const MediaNodeId resampleId = addAudioResampleHarnessGraph(graph);
+    MediaGraphExecutionContext execution;
+    const auto compileStatus = execution.compile(graph);
+    EXPECT_TRUE(ctx, compileStatus);
+    if (!compileStatus) {
+        std::cerr << compileStatus.error().describe() << '\n';
+        return;
+    }
+
+    AudioResampleNode node(resampleId);
+    auto codec = makeTestAudioCodecContext(44100, AV_SAMPLE_FMT_FLTP, 2);
+    EXPECT_TRUE(ctx, codec != nullptr);
+    if (!codec) {
+        return;
+    }
+    const auto bindStatus = bindAudioResampleCodec(execution, node, resampleId, std::move(codec));
+    EXPECT_TRUE(ctx, bindStatus);
+    if (!bindStatus) {
+        std::cerr << bindStatus.error().describe() << '\n';
+        return;
+    }
+
+    auto input = makeTestAudioFrame(48000, AV_SAMPLE_FMT_S16, 2, 48000, 1024);
+    EXPECT_TRUE(ctx, input);
+    if (!input) {
+        std::cerr << input.error().describe() << '\n';
+        return;
+    }
+    auto output = processAudioResampleFrame(execution, node, resampleId, input.value());
+    EXPECT_TRUE(ctx, output);
+    if (!output) {
+        std::cerr << output.error().describe() << '\n';
+        return;
+    }
+    const AVFrame* frame = FFmpegFrameView::frame(output.value());
+    EXPECT_TRUE(ctx, frame != nullptr);
+    if (!frame) {
+        return;
+    }
+    const int64_t expectedPts = av_rescale_q(48000, AVRational{ 1, 48000 }, AVRational{ 1, 44100 });
+    EXPECT_EQ(ctx, frame->pts, expectedPts);
+    EXPECT_EQ(ctx, frame->pkt_dts, static_cast<int64_t>(AV_NOPTS_VALUE));
+    EXPECT_EQ(ctx, frame->duration, frame->nb_samples);
+    EXPECT_EQ(ctx, output.value()->pts(), expectedPts);
+    EXPECT_EQ(ctx, output.value()->dts(), static_cast<int64_t>(AV_NOPTS_VALUE));
+    EXPECT_EQ(ctx, output.value()->duration(), frame->nb_samples);
+}
+
+void testAudioResampleNodeRejectsMissingFramePts(TestContext& ctx)
+{
+    MediaGraph graph;
+    const MediaNodeId resampleId = addAudioResampleHarnessGraph(graph);
+    MediaGraphExecutionContext execution;
+    const auto compileStatus = execution.compile(graph);
+    EXPECT_TRUE(ctx, compileStatus);
+    if (!compileStatus) {
+        std::cerr << compileStatus.error().describe() << '\n';
+        return;
+    }
+
+    AudioResampleNode node(resampleId);
+    auto codec = makeTestAudioCodecContext(44100, AV_SAMPLE_FMT_FLTP, 2);
+    EXPECT_TRUE(ctx, codec != nullptr);
+    if (!codec) {
+        return;
+    }
+    const auto bindStatus = bindAudioResampleCodec(execution, node, resampleId, std::move(codec));
+    EXPECT_TRUE(ctx, bindStatus);
+    if (!bindStatus) {
+        std::cerr << bindStatus.error().describe() << '\n';
+        return;
+    }
+
+    auto input = makeTestAudioFrame(44100, AV_SAMPLE_FMT_FLTP, 2, AV_NOPTS_VALUE, 1024);
+    EXPECT_TRUE(ctx, input);
+    if (!input) {
+        std::cerr << input.error().describe() << '\n';
+        return;
+    }
+    const auto output = processAudioResampleFrame(execution, node, resampleId, input.value());
+    EXPECT_FALSE(ctx, output);
+    if (!output) {
+        EXPECT_EQ(ctx, output.error().code, media::ErrorCode::InvalidArgument);
+    }
+}
+
 } // namespace
 
 int main()
@@ -1498,6 +1792,9 @@ int main()
     testSyntheticTimestampsAdvanceAfterRealTimestamp(ctx);
     testAudioTimestampClampsBackwardRtpFrames(ctx);
     testAudioTimestampRejectsMissingSourcePts(ctx);
+    testAudioResampleNodeClampsBackwardClonedFrameTimestamps(ctx);
+    testAudioResampleNodeNormalizesResampledFrameTimestamps(ctx);
+    testAudioResampleNodeRejectsMissingFramePts(ctx);
     testBuildPlansVideoStreamAndSoftwareExecution(ctx);
     testBuildPlansRealtimeUrlAudioBranch(ctx);
     testBuildPlansRawRtpH264Graph(ctx);
