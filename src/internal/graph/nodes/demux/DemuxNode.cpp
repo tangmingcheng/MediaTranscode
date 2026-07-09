@@ -15,6 +15,15 @@ extern "C" {
 #include <utility>
 
 namespace media::ffmpeg::graph {
+namespace {
+
+int demuxInterruptCallback(void* opaque)
+{
+    auto* node = static_cast<DemuxNode*>(opaque);
+    return node && node->abortRequested() ? 1 : 0;
+}
+
+} // namespace
 
 DemuxNode::DemuxNode(MediaNodeId nodeId)
     : FFmpegNodeRuntime(nodeId, staticKind(), "DemuxNode")
@@ -77,6 +86,24 @@ MediaNodeKind DemuxNode::staticKind() noexcept
     return pushToMatchingOutputs(context, buffer.value(), streamKind, streamIndex);
 }
 
+::media::Status DemuxNode::stop(MediaGraphExecutionContext& context)
+{
+    m_abortRequested = true;
+    m_eofSent = false;
+    return FFmpegNodeRuntime::stop(context);
+}
+
+void DemuxNode::abort(MediaGraphExecutionContext& context) noexcept
+{
+    m_abortRequested = true;
+    FFmpegNodeRuntime::abort(context);
+}
+
+bool DemuxNode::abortRequested() const noexcept
+{
+    return m_abortRequested.load();
+}
+
 ::media::Status DemuxNode::bindFormatContext(MediaGraphExecutionContext& context)
 {
     auto input = tryPopFirstInputOptional(context);
@@ -95,6 +122,9 @@ MediaNodeKind DemuxNode::staticKind() noexcept
 
     m_formatContextOwner = std::move(*input.value());
     m_formatContext = formatBuffer->context();
+    m_abortRequested = false;
+    m_formatContext->interrupt_callback.callback = demuxInterruptCallback;
+    m_formatContext->interrupt_callback.opaque = this;
     return ::media::Status::success();
 }
 

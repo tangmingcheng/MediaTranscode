@@ -1,5 +1,6 @@
 #include "internal/graph/builder/local/LocalFileTranscodeGraphBuilder.h"
 
+#include "internal/graph/builder/MediaGraphBuildSupport.h"
 #include "internal/graph/builder/local/LocalFilePlannerRequestBuilder.h"
 #include "internal/graph/builder/segments/MediaAudioBranchSegmentBuilder.h"
 #include "internal/graph/builder/segments/MediaInputSegmentBuilder.h"
@@ -80,6 +81,7 @@ bool branchEnabled(const MediaAudioPipelinePlan& plan) noexcept
     MediaAudioPipelinePlan audioPlan = std::move(plannedAudio).value();
 
     const MediaGraphQueueParameters& queues = options.parameters.queues;
+    const MediaRealtimeEdgePolicySet edgePolicies = MediaGraphBuildSupport::blockingEdgePolicySet(queues);
 
     MediaGraph graph;
 
@@ -96,6 +98,7 @@ bool branchEnabled(const MediaAudioPipelinePlan& plan) noexcept
     packetSelectOptions.formatSourceNode = input.value().input;
     packetSelectOptions.formatSourcePort = input.value().formatPort;
     packetSelectOptions.queues = queues;
+    packetSelectOptions.edgePolicies = edgePolicies;
     auto packetSelect = MediaPacketSelectSegmentBuilder::buildDemuxStreamSplit(graph, packetSelectOptions);
     if (!packetSelect) {
         return ::media::Result<MediaGraph>::failure(packetSelect.error());
@@ -118,6 +121,7 @@ bool branchEnabled(const MediaAudioPipelinePlan& plan) noexcept
     audioOptions.plan = std::move(audioPlan);
     audioOptions.parameters = options.parameters.audio;
     audioOptions.queues = queues;
+    audioOptions.edgePolicies = edgePolicies;
     audioOptions.formatSourceNode = input.value().input;
     audioOptions.formatSourcePort = input.value().formatPort;
     audioOptions.packetSourceNode = packetSelect.value().split;
@@ -135,6 +139,7 @@ bool branchEnabled(const MediaAudioPipelinePlan& plan) noexcept
     videoOptions.plan = std::move(videoPlan);
     videoOptions.parameters = options.parameters.video;
     videoOptions.queues = queues;
+    videoOptions.edgePolicies = edgePolicies;
     videoOptions.formatSourceNode = input.value().input;
     videoOptions.formatSourcePort = input.value().formatPort;
     videoOptions.packetSourceNode = packetSelect.value().split;

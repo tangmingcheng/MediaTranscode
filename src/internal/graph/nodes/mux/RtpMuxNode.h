@@ -27,7 +27,9 @@ private:
     bool tryBindOutputContext(const MediaBufferRef& buffer) noexcept;
     ::media::Status tryBindStreamConfig(const MediaBufferRef& buffer);
     ::media::Status registerPendingStreamConfigs();
+    ::media::Status registerStreamFromConfig(const MediaBufferRef& buffer);
     ::media::Status registerStreamFromCodecContext(const MediaBufferRef& buffer);
+    ::media::Status registerStreamFromCodecParameters(const MediaBufferRef& buffer);
     MediaStreamKind expectedStreamKind() const noexcept;
     const char* expectedStreamName() const noexcept;
     ::media::Status writeHeaderIfNeeded();
@@ -35,6 +37,7 @@ private:
     ::media::Status writePacket(const MediaBufferRef& buffer);
     ::media::Status writePacketNow(const MediaBufferRef& buffer);
     ::media::Status emitFormatIfReady(MediaGraphExecutionContext& context);
+    ::media::Result<MediaBufferRef> makeSdpFormatSnapshot() const;
     ::media::Status writeTrailerIfNeeded();
     void releaseRuntimeViews() noexcept;
     bool expectedStreamsRegistered() const noexcept;

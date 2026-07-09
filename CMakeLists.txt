@@ -150,6 +150,7 @@ function(media_transcode_configure_app target_name)
     )
     if(MSVC)
         target_compile_options(${target_name} PRIVATE /utf-8 /EHsc)
+        target_link_options(${target_name} PRIVATE "$<$<CONFIG:Debug,RelWithDebInfo>:/DEBUG>")
     endif()
 endfunction()
 

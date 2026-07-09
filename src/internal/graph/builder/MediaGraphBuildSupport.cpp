@@ -44,6 +44,18 @@ MediaEdgePolicy blockingQueuePolicy(std::size_t capacity) noexcept
     return policy;
 }
 
+MediaRealtimeEdgePolicySet blockingEdgePolicySet(const MediaGraphQueueParameters& queues) noexcept
+{
+    MediaRealtimeEdgePolicySet policies;
+    policies.metadata = blockingQueuePolicy(queues.metadata);
+    policies.packet = blockingQueuePolicy(queues.packet);
+    policies.videoPacket = blockingQueuePolicy(queues.packet);
+    policies.audioPacket = blockingQueuePolicy(queues.packet);
+    policies.frame = blockingQueuePolicy(queues.frame);
+    policies.mux = blockingQueuePolicy(queues.mux);
+    return policies;
+}
+
 MediaFormatDescriptor streamIndexDescriptor(MediaStreamKind streamKind, int streamIndex) noexcept
 {
     MediaFormatDescriptor descriptor;
@@ -95,6 +107,27 @@ MediaFormatDescriptor streamIndexDescriptor(MediaStreamKind streamKind, int stre
                                 nodeId,
                                 MediaTranscodeOptionKey::PacketStreamKind,
                                 streamKindValue.value());
+}
+
+::media::Result<void> setPacketNormalizeOptions(MediaGraph& graph,
+                                                std::string_view owner,
+                                                MediaNodeId nodeId,
+                                                MediaStreamKind streamKind,
+                                                int sourceStreamIndex,
+                                                bool monotonicPacketTimestamps)
+{
+    if (auto status = setPacketStreamOptions(graph,
+                                             owner,
+                                             nodeId,
+                                             streamKind,
+                                             sourceStreamIndex); !status) {
+        return status;
+    }
+    return setNodeOptionChecked(graph,
+                                owner,
+                                nodeId,
+                                MediaTranscodeOptionKey::PacketMonotonicTimestamps,
+                                monotonicPacketTimestamps ? "1" : "0");
 }
 
 ::media::Result<void> requirePort(MediaPortId portId,

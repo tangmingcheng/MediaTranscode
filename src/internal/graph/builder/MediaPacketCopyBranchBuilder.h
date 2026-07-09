@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/core/MediaGraph.h"
+#include "internal/graph/model/MediaRealtimeEdgePolicySet.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "media_transcode/Result.h"
 
@@ -22,8 +23,10 @@ struct MediaPacketCopyBranchOptions {
     MediaNodeId muxNode = MediaNodeId::invalid();
     std::string muxCodecPort = "codec";
     std::string muxPacketPort = "packet";
+    bool monotonicPacketTimestamps = false;
 
     MediaGraphQueueParameters queues;
+    MediaRealtimeEdgePolicySet edgePolicies;
 };
 
 class MediaPacketCopyBranchBuilder final {

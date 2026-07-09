@@ -39,7 +39,8 @@ public:
     ::media::Status flush(MediaGraphExecutionContext& context);
     ::media::Status stop(MediaGraphExecutionContext& context);
     void abort(MediaGraphExecutionContext& context) noexcept;
-    void clear();
+    void clear(const MediaGraphExecutionContext* context = nullptr);
+    void clear(const std::vector<MediaNodeId>& executionOrder);
 
     MediaGraphSchedulerState state() const noexcept;
     bool running() const noexcept;

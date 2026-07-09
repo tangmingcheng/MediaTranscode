@@ -64,20 +64,20 @@ namespace media::ffmpeg::graph {
                                                             owner,
                                                             options.formatSourceNode,
                                                             options.formatSourcePort,
-                                                            segment.demux,
-                                                            "format",
-                                                            options.prefix + ".format -> demux.format",
-                                                            MediaGraphBuildSupport::blockingQueuePolicy(options.queues.metadata)); !status) {
+                                                             segment.demux,
+                                                             "format",
+                                                             options.prefix + ".format -> demux.format",
+                                                             options.edgePolicies.metadata); !status) {
         return ::media::Result<PacketSelectSegment>::failure(status.error());
     }
     if (auto status = MediaGraphBuildSupport::connectChecked(graph,
                                                             owner,
                                                             segment.demux,
                                                             "packet",
-                                                            segment.split,
-                                                            "packet",
-                                                            options.prefix + ".demux.packet -> stream.split.packet",
-                                                            MediaGraphBuildSupport::blockingQueuePolicy(options.queues.packet)); !status) {
+                                                             segment.split,
+                                                             "packet",
+                                                             options.prefix + ".demux.packet -> stream.split.packet",
+                                                             options.edgePolicies.packet); !status) {
         return ::media::Result<PacketSelectSegment>::failure(status.error());
     }
 

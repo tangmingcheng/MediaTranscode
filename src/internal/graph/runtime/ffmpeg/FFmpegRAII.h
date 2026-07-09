@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cstring>
 #include <memory>
+#include <string_view>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -15,6 +17,43 @@ extern "C" {
 }
 
 namespace media::ffmpeg {
+
+inline int interruptImmediately(void*) noexcept
+{
+    return 1;
+}
+
+inline bool equalsFormatName(const AVInputFormat* format, std::string_view name) noexcept
+{
+    return format && format->name && name == format->name;
+}
+
+inline bool startsWith(std::string_view value, std::string_view prefix) noexcept
+{
+    return value.size() >= prefix.size() && value.substr(0, prefix.size()) == prefix;
+}
+
+inline bool isInterruptibleInputContext(const AVFormatContext* ctx) noexcept
+{
+    if (!ctx) {
+        return false;
+    }
+
+    if (equalsFormatName(ctx->iformat, "sdp") ||
+        equalsFormatName(ctx->iformat, "rtsp")) {
+        return true;
+    }
+
+    const char* url = ctx->url;
+    if (!url) {
+        return false;
+    }
+
+    const std::string_view inputUrl(url, std::strlen(url));
+    return startsWith(inputUrl, "rtp://") ||
+           startsWith(inputUrl, "udp://") ||
+           startsWith(inputUrl, "rtsp://");
+}
 
 struct FrameDeleter {
     void operator()(AVFrame* frame) const noexcept
@@ -57,6 +96,11 @@ struct InputFormatContextDeleter {
     {
         if (!ctx) {
             return;
+        }
+
+        if (isInterruptibleInputContext(ctx)) {
+            ctx->interrupt_callback.callback = interruptImmediately;
+            ctx->interrupt_callback.opaque = nullptr;
         }
 
         AVFormatContext* tmp = ctx;

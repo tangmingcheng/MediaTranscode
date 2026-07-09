@@ -11,8 +11,10 @@
 extern "C" {
 #include <libavcodec/packet.h>
 #include <libavformat/avformat.h>
+#include <libavutil/avutil.h>
 }
 
+#include <limits>
 #include <string>
 
 namespace media::ffmpeg::graph {
@@ -65,6 +67,18 @@ MediaNodeKind PacketNormalizeNode::staticKind() noexcept
     return MediaNodeKind::PacketNormalize;
 }
 
+::media::Status PacketNormalizeNode::stop(MediaGraphExecutionContext& context)
+{
+    releaseFormatContext();
+    return FFmpegNodeRuntime::stop(context);
+}
+
+void PacketNormalizeNode::abort(MediaGraphExecutionContext& context) noexcept
+{
+    releaseFormatContext();
+    FFmpegNodeRuntime::abort(context);
+}
+
 ::media::Status PacketNormalizeNode::onProcess(MediaGraphExecutionContext& context)
 {
     if (!m_formatContext) {
@@ -103,6 +117,16 @@ MediaNodeKind PacketNormalizeNode::staticKind() noexcept
     }
 
     return emitOutput(context, "packet", normalized.value());
+}
+
+void PacketNormalizeNode::releaseFormatContext() noexcept
+{
+    m_formatContextOwner.reset();
+    m_formatContext = nullptr;
+    m_streamKind = MediaStreamKind::Unknown;
+    m_sourceStreamIndex = invalidMediaStreamIndex;
+    m_monotonicPacketTimestamps = false;
+    m_nextPacketDts = invalidMediaTimeValue;
 }
 
 ::media::Status PacketNormalizeNode::bindFormatContext(MediaGraphExecutionContext& context)
@@ -163,9 +187,16 @@ MediaNodeKind PacketNormalizeNode::staticKind() noexcept
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("PacketNormalizeNode requires known upstream packet time_base"));
     }
+    auto monotonicPacketTimestamps = requiredBoolNodeOption(nodeOptions(context),
+                                                           "PacketNormalizeNode",
+                                                           MediaTranscodeOptionKey::PacketMonotonicTimestamps);
+    if (!monotonicPacketTimestamps) {
+        return ::media::Status::failure(monotonicPacketTimestamps.error());
+    }
 
     m_streamKind = streamKind.value();
     m_sourceStreamIndex = index;
+    m_monotonicPacketTimestamps = monotonicPacketTimestamps.value();
     packetNormalizeLog(MediaGraphDiagnosticLevel::State,
                        std::string("bind_source_stream index=") + std::to_string(m_sourceStreamIndex));
     return ::media::Status::success();
@@ -216,7 +247,60 @@ MediaNodeKind PacketNormalizeNode::staticKind() noexcept
     cloned.value()->setTimeDescriptor(timeDescriptorFromStream(sourceStream));
     cloned.value()->setTimestamps(packet->pts, packet->dts, packet->duration);
 
+    if (auto status = normalizePacketTimestamps(cloned.value()); !status) {
+        return ::media::Result<MediaBufferRef>::failure(status.error());
+    }
+
     return cloned;
+}
+
+::media::Status PacketNormalizeNode::normalizePacketTimestamps(MediaBufferRef& buffer)
+{
+    if (!m_monotonicPacketTimestamps) {
+        return ::media::Status::success();
+    }
+
+    AVPacket* packet = FFmpegPacketView::writablePacket(buffer);
+    if (!packet) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("PacketNormalizeNode expected writable packet for timestamp normalization"));
+    }
+    const int64_t packetDts = packet->dts != AV_NOPTS_VALUE ? packet->dts : packet->pts;
+    if (packetDts == AV_NOPTS_VALUE) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("PacketNormalizeNode monotonic packet timestamps require dts or pts"));
+    }
+
+    int64_t normalizedDts = packetDts;
+    if (m_nextPacketDts != invalidMediaTimeValue && normalizedDts < m_nextPacketDts) {
+        normalizedDts = m_nextPacketDts;
+    }
+    const int64_t shift = normalizedDts - packetDts;
+    if (shift > 0) {
+        if (packet->pts != AV_NOPTS_VALUE) {
+            if (packet->pts > std::numeric_limits<int64_t>::max() - shift) {
+                return ::media::Status::failure(
+                    ::media::ErrorInfo::invalidArgument("PacketNormalizeNode packet pts overflow"));
+            }
+            packet->pts += shift;
+        }
+        if (packet->dts != AV_NOPTS_VALUE) {
+            if (packet->dts > std::numeric_limits<int64_t>::max() - shift) {
+                return ::media::Status::failure(
+                    ::media::ErrorInfo::invalidArgument("PacketNormalizeNode packet dts overflow"));
+            }
+            packet->dts += shift;
+        }
+    }
+
+    const int64_t duration = packet->duration > 0 ? packet->duration : 1;
+    if (normalizedDts > std::numeric_limits<int64_t>::max() - duration) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("PacketNormalizeNode packet timestamp cannot advance past int64 max"));
+    }
+    m_nextPacketDts = normalizedDts + duration;
+    buffer->setTimestamps(packet->pts, packet->dts, packet->duration);
+    return ::media::Status::success();
 }
 
 } // namespace media::ffmpeg::graph

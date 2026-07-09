@@ -49,6 +49,7 @@ MediaSpscRingQueue::MediaSpscRingQueue(MediaQueuePolicy policy)
 
 bool MediaSpscRingQueue::tryPush(MediaBufferRef buffer)
 {
+    std::lock_guard<std::mutex> lock(m_mutex);
     if (!buffer || m_closed || m_aborted) {
         ++m_metrics.failedPushes;
         return false;
@@ -70,7 +71,8 @@ bool MediaSpscRingQueue::tryPush(MediaBufferRef buffer)
             ++m_metrics.failedPushes;
             return false;
         case MediaQueueOverflowPolicy::Abort:
-            abort();
+            m_aborted = true;
+            m_closed = true;
             ++m_metrics.failedPushes;
             return false;
         case MediaQueueOverflowPolicy::DropNonKeyFrame:
@@ -95,7 +97,7 @@ bool MediaSpscRingQueue::tryPush(MediaBufferRef buffer)
     m_ring[currentWrite] = std::move(buffer);
     m_write.store(next(currentWrite), std::memory_order_release);
     ++m_metrics.pushed;
-    updateSizeMetrics(size());
+    updateSizeMetrics(sizeLocked());
     return true;
 }
 
@@ -120,6 +122,7 @@ bool MediaSpscRingQueue::tryPush(MediaBufferRef buffer)
 
 bool MediaSpscRingQueue::tryPop(MediaBufferRef& out)
 {
+    std::lock_guard<std::mutex> lock(m_mutex);
     const std::size_t read = m_read.load(std::memory_order_relaxed);
     const std::size_t write = m_write.load(std::memory_order_acquire);
 
@@ -132,23 +135,26 @@ bool MediaSpscRingQueue::tryPop(MediaBufferRef& out)
     m_ring[read].reset();
     m_read.store(next(read), std::memory_order_release);
     ++m_metrics.popped;
-    updateSizeMetrics(size());
+    updateSizeMetrics(sizeLocked());
     return true;
 }
 
 void MediaSpscRingQueue::close()
 {
+    std::lock_guard<std::mutex> lock(m_mutex);
     m_closed = true;
 }
 
 void MediaSpscRingQueue::abort()
 {
+    std::lock_guard<std::mutex> lock(m_mutex);
     m_aborted = true;
     m_closed = true;
 }
 
 void MediaSpscRingQueue::clear()
 {
+    std::lock_guard<std::mutex> lock(m_mutex);
     for (auto& item : m_ring) {
         item.reset();
     }
@@ -169,12 +175,8 @@ bool MediaSpscRingQueue::aborted() const
 
 std::size_t MediaSpscRingQueue::size() const
 {
-    const std::size_t write = m_write.load(std::memory_order_acquire);
-    const std::size_t read = m_read.load(std::memory_order_acquire);
-    if (write >= read) {
-        return write - read;
-    }
-    return m_capacity - read + write;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return sizeLocked();
 }
 
 std::size_t MediaSpscRingQueue::capacity() const
@@ -218,8 +220,18 @@ bool MediaSpscRingQueue::dropOldest()
     m_ring[read].reset();
     m_read.store(next(read), std::memory_order_release);
     ++m_metrics.dropped;
-    updateSizeMetrics(size());
+    updateSizeMetrics(sizeLocked());
     return true;
+}
+
+std::size_t MediaSpscRingQueue::sizeLocked() const noexcept
+{
+    const std::size_t write = m_write.load(std::memory_order_acquire);
+    const std::size_t read = m_read.load(std::memory_order_acquire);
+    if (write >= read) {
+        return write - read;
+    }
+    return m_capacity - read + write;
 }
 
 void MediaSpscRingQueue::updateSizeMetrics(std::size_t current) noexcept

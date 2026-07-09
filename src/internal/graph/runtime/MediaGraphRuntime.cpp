@@ -6,6 +6,7 @@
 
 #include <sstream>
 #include <utility>
+#include <vector>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -347,9 +348,10 @@ void MediaGraphRuntime::reset()
         abort();
     }
 
+    const std::vector<MediaNodeId> executionOrder = m_context.executionOrder();
     m_threadedExecutor.clear();
-    m_scheduler.clear();
     m_context.reset();
+    m_scheduler.clear(executionOrder);
     m_context.setDiagnosticsEnabled(diagnosticsEnabledValue);
     m_graph.clear();
     m_state = MediaGraphRuntimeState::Empty;

@@ -49,6 +49,18 @@ MediaNodeKind PacketSourceConfigNode::staticKind() noexcept
     return MediaNodeKind::PacketSourceConfig;
 }
 
+::media::Status PacketSourceConfigNode::stop(MediaGraphExecutionContext& context)
+{
+    releaseFormatContext();
+    return FFmpegNodeRuntime::stop(context);
+}
+
+void PacketSourceConfigNode::abort(MediaGraphExecutionContext& context) noexcept
+{
+    releaseFormatContext();
+    FFmpegNodeRuntime::abort(context);
+}
+
 ::media::Status PacketSourceConfigNode::onProcess(MediaGraphExecutionContext& context)
 {
     if (m_emitted) {
@@ -73,6 +85,15 @@ MediaNodeKind PacketSourceConfigNode::staticKind() noexcept
     }
 
     return emitSourceConfig(context);
+}
+
+void PacketSourceConfigNode::releaseFormatContext() noexcept
+{
+    m_formatContextOwner.reset();
+    m_formatContext = nullptr;
+    m_streamKind = MediaStreamKind::Unknown;
+    m_sourceStreamIndex = invalidMediaStreamIndex;
+    m_emitted = false;
 }
 
 ::media::Status PacketSourceConfigNode::bindFormatContext(MediaGraphExecutionContext& context)

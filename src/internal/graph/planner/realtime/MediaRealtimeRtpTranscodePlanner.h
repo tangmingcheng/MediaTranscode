@@ -1,6 +1,7 @@
 #pragma once
 
-#include "internal/graph/core/MediaEdge.h"
+#include "internal/graph/model/MediaRealtimeEdgePolicySet.h"
+#include "internal/graph/model/MediaThreadingPolicy.h"
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/planner/MediaPipelinePlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodeRequest.h"
@@ -54,7 +55,8 @@ struct MediaRealtimeRtpTranscodePlan {
     MediaVideoTranscodeParameters videoParameters;
     MediaAudioTranscodeParameters audioParameters;
     MediaGraphQueueParameters queues;
-    MediaEdgePolicy edgePolicy;
+    MediaRealtimeEdgePolicySet edgePolicies;
+    MediaThreadingPolicy threadingPolicy;
     MediaRealtimeRtpInputNodePlan input;
     MediaRealtimeRtpOutputNodePlan videoOutput;
     MediaRealtimeRtpOutputNodePlan audioOutput;

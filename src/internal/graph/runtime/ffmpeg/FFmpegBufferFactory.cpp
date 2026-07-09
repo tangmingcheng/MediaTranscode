@@ -3,6 +3,7 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegDescriptorMapper.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 
+#include <cstring>
 #include <utility>
 
 namespace media::ffmpeg::graph {
@@ -150,10 +151,21 @@ namespace media::ffmpeg::graph {
             ::media::ErrorInfo::allocationFailed("clonePacket failed: av_packet_alloc returned null"));
     }
 
-    const int ret = av_packet_ref(cloned.get(), packet);
+    if (packet->size > 0) {
+        const int payloadRet = av_new_packet(cloned.get(), packet->size);
+        if (payloadRet < 0) {
+            return ::media::Result<MediaBufferRef>::failure(
+                FFmpegGraphError::fromCode(payloadRet, "av_new_packet"));
+        }
+        if (packet->data) {
+            std::memcpy(cloned->data, packet->data, static_cast<std::size_t>(packet->size));
+        }
+    }
+
+    const int ret = av_packet_copy_props(cloned.get(), packet);
     if (ret < 0) {
         return ::media::Result<MediaBufferRef>::failure(
-            FFmpegGraphError::fromCode(ret, "av_packet_ref"));
+            FFmpegGraphError::fromCode(ret, "av_packet_copy_props"));
     }
 
     return wrapPacket(std::move(cloned), streamKind);

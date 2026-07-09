@@ -95,6 +95,7 @@ void MediaGraphWorker::run()
 
         ++m_metrics.idleIterations;
         if (m_config.idleSleepMs > 0) {
+            // non-realtime idle backoff; realtime plans must set idleSleepMs to 0.
             std::this_thread::sleep_for(std::chrono::milliseconds(m_config.idleSleepMs));
         }
     }
