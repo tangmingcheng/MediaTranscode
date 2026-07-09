@@ -49,6 +49,28 @@ std::string optionValue(const MediaNodeOptions* options, const std::string& key,
     return ::media::Result<std::optional<int>>::success(parsed);
 }
 
+::media::Result<std::optional<bool>> boolOption(const MediaNodeOptions* options, const std::string& key)
+{
+    if (!options) {
+        return ::media::Result<std::optional<bool>>::success(std::nullopt);
+    }
+
+    const std::string value = options->value(key);
+    if (value.empty()) {
+        return ::media::Result<std::optional<bool>>::success(std::nullopt);
+    }
+
+    if (value == "1" || value == "true" || value == "yes" || value == "on") {
+        return ::media::Result<std::optional<bool>>::success(true);
+    }
+    if (value == "0" || value == "false" || value == "no" || value == "off") {
+        return ::media::Result<std::optional<bool>>::success(false);
+    }
+
+    return ::media::Result<std::optional<bool>>::failure(
+        ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder invalid boolean option: " + key));
+}
+
 void setPrivateOption(AVCodecContext* context, const std::string& key, const std::string& value)
 {
     if (!context || !context->priv_data || key.empty() || value.empty()) {
@@ -257,6 +279,14 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
     encoderContext->color_primaries = params->color_primaries;
     encoderContext->color_trc = params->color_trc;
     encoderContext->colorspace = params->color_space;
+
+    auto globalHeader = boolOption(options, MediaTranscodeOptionKey::VideoGlobalHeader);
+    if (!globalHeader) {
+        return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(globalHeader.error());
+    }
+    if (globalHeader.value().value_or(false)) {
+        encoderContext->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+    }
 
     auto bitrateKbps = intOption(options, MediaTranscodeOptionKey::VideoBitrateKbps);
     if (!bitrateKbps) {

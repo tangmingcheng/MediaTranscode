@@ -41,6 +41,17 @@ constexpr const char* owner = "MediaVideoTranscodeOptionApplier";
     return setOption(graph, nodeId, key, std::to_string(*value));
 }
 
+::media::Result<void> setIfPresent(MediaGraph& graph,
+                                   MediaNodeId nodeId,
+                                   const std::string& key,
+                                   const std::optional<bool>& value)
+{
+    if (!value) {
+        return ::media::Result<void>::success();
+    }
+    return setOption(graph, nodeId, key, *value ? "1" : "0");
+}
+
 ::media::Result<void> validateOptionalNonNegative(const std::optional<int>& value,
                                                   const std::string& name)
 {
@@ -116,7 +127,8 @@ constexpr const char* owner = "MediaVideoTranscodeOptionApplier";
     if (auto status = setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoBufferSizeKbits, video.bufferSizeKbits); !status) return status;
     if (auto status = setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoQuality, video.quality); !status) return status;
     if (auto status = setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoGop, video.gop); !status) return status;
-    return setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoBFrames, video.bFrames);
+    if (auto status = setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoBFrames, video.bFrames); !status) return status;
+    return setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoGlobalHeader, video.globalHeader);
 }
 
 } // namespace

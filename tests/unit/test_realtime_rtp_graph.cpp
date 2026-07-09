@@ -1073,6 +1073,30 @@ void testRawRtpPlansAudioVideoInput(TestContext& ctx)
               std::string("rtp://127.0.0.1:5006?localrtpport=0&localrtcpport=0"));
 }
 
+void testSeparateRtpH264OutputRequestsGlobalHeader(TestContext& ctx)
+{
+    const auto graphResult = MediaRealtimeRtpTranscodeGraphBuilder::build(validRawRtpAudioVideoOptions());
+    EXPECT_TRUE(ctx, graphResult);
+    if (!graphResult) {
+        std::cerr << graphResult.error().describe() << '\n';
+        return;
+    }
+
+    const MediaNode* codecResolver = findNodeByKind(graphResult.value(), MediaNodeKind::CodecResolver);
+    EXPECT_TRUE(ctx, codecResolver != nullptr);
+    if (codecResolver) {
+        EXPECT_EQ(ctx, codecResolver->options.value(MediaTranscodeOptionKey::VideoGlobalHeader), std::string("1"));
+    }
+}
+
+void testEncoderContextBuilderAppliesGlobalHeaderOption(TestContext& ctx)
+{
+    const std::string encoderBuilder =
+        repositoryFile("src/internal/graph/builder/codec/CodecResolverEncoderContextBuilder.cpp");
+    expectTextContains(ctx, encoderBuilder, "MediaTranscodeOptionKey::VideoGlobalHeader");
+    expectTextContains(ctx, encoderBuilder, "AV_CODEC_FLAG_GLOBAL_HEADER");
+}
+
 void testRawRtpInheritsSourceCodecsWhenTranscodeCodecsAreOmitted(TestContext& ctx)
 {
     MediaRealtimeRtpTranscodeRequest options = validRawRtpAudioVideoOptions();
@@ -1864,6 +1888,8 @@ int main()
     testRawRtpPlansH264AndHevcInput(ctx);
     testRawRtpAudioEndpointRequiredWhenAudioEnabled(ctx);
     testRawRtpPlansAudioVideoInput(ctx);
+    testSeparateRtpH264OutputRequestsGlobalHeader(ctx);
+    testEncoderContextBuilderAppliesGlobalHeaderOption(ctx);
     testRawRtpInheritsSourceCodecsWhenTranscodeCodecsAreOmitted(ctx);
     testRawRtpRejectsMissingVideoBitrate(ctx);
     testRawRtpRejectsZeroVideoBitrate(ctx);

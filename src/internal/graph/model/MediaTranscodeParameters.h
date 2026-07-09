@@ -100,6 +100,7 @@ struct MediaVideoTranscodeParameters {
     std::string level;
     std::optional<int> gop;
     std::optional<int> bFrames;
+    std::optional<bool> globalHeader;
 
     bool resizeRequested() const noexcept
     {
@@ -170,6 +171,7 @@ inline constexpr char VideoProfile[] = "video.profile";
 inline constexpr char VideoLevel[] = "video.level";
 inline constexpr char VideoGop[] = "video.gop";
 inline constexpr char VideoBFrames[] = "video.bframes";
+inline constexpr char VideoGlobalHeader[] = "video.global_header";
 
 inline constexpr char AudioSourceStreamIndex[] = "audio.source_stream_index";
 inline constexpr char AudioCodec[] = "audio.codec";
