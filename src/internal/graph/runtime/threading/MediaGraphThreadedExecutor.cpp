@@ -1,8 +1,20 @@
 #include "internal/graph/runtime/threading/MediaGraphThreadedExecutor.h"
 
+#include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/runtime/lifecycle/MediaGraphLifecycle.h"
 
 namespace media::ffmpeg::graph {
+namespace {
+
+bool shouldInterruptOnThreadedStop(const MediaGraphExecutionContext& context,
+                                   const MediaGraphWorker& worker) noexcept
+{
+    const MediaGraph* graph = context.graph();
+    const MediaNode* node = graph ? graph->findNode(worker.nodeId()) : nullptr;
+    return node && node->kind == MediaNodeKind::Demux;
+}
+
+} // namespace
 
 void MediaGraphThreadedExecutor::setPolicy(MediaThreadingPolicy policy) noexcept
 {
@@ -71,6 +83,9 @@ const MediaThreadingPolicy& MediaGraphThreadedExecutor::policy() const noexcept
     for (auto& worker : m_workers) {
         if (worker) {
             worker->requestStop();
+            if (shouldInterruptOnThreadedStop(context, *worker)) {
+                worker->abort();
+            }
         }
     }
 

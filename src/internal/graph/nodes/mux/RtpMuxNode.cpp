@@ -4,6 +4,7 @@
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/runtime/buffer/FFmpegCodecContextBuffer.h"
+#include "internal/graph/runtime/buffer/FFmpegCodecParametersBuffer.h"
 #include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
@@ -172,7 +173,9 @@ bool RtpMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
 
 ::media::Status RtpMuxNode::tryBindStreamConfig(const MediaBufferRef& buffer)
 {
-    if (!dynamic_cast<FFmpegCodecContextBuffer*>(buffer.get())) {
+    const bool accepted = dynamic_cast<FFmpegCodecContextBuffer*>(buffer.get()) ||
+        dynamic_cast<FFmpegCodecParametersBuffer*>(buffer.get());
+    if (!accepted) {
         return ::media::Status::success();
     }
     if (m_headerWritten) {
@@ -183,7 +186,7 @@ bool RtpMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
         m_pendingStreamConfigs.push_back(buffer);
         return ::media::Status::success();
     }
-    auto registered = registerStreamFromCodecContext(buffer);
+    auto registered = registerStreamFromConfig(buffer);
     return registered ? writePendingPacketsIfReady() : registered;
 }
 
@@ -195,12 +198,28 @@ bool RtpMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
     auto pending = std::move(m_pendingStreamConfigs);
     m_pendingStreamConfigs.clear();
     for (const auto& buffer : pending) {
-        auto status = registerStreamFromCodecContext(buffer);
+        auto status = registerStreamFromConfig(buffer);
         if (!status) {
             return status;
         }
     }
     return ::media::Status::success();
+}
+
+::media::Status RtpMuxNode::registerStreamFromConfig(const MediaBufferRef& buffer)
+{
+    if (!m_outputContext) {
+        m_pendingStreamConfigs.push_back(buffer);
+        return ::media::Status::success();
+    }
+    if (dynamic_cast<FFmpegCodecContextBuffer*>(buffer.get())) {
+        return registerStreamFromCodecContext(buffer);
+    }
+    if (dynamic_cast<FFmpegCodecParametersBuffer*>(buffer.get())) {
+        return registerStreamFromCodecParameters(buffer);
+    }
+    return ::media::Status::failure(
+        ::media::ErrorInfo::invalidArgument("RtpMuxNode expected stream config"));
 }
 
 ::media::Status RtpMuxNode::registerStreamFromCodecContext(const MediaBufferRef& buffer)
@@ -231,6 +250,36 @@ bool RtpMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
     stream->time_base = codec->time_base;
     stream->avg_frame_rate = codec->framerate;
     stream->r_frame_rate = codec->framerate;
+    m_streamIndex = stream->index;
+    return ::media::Status::success();
+}
+
+::media::Status RtpMuxNode::registerStreamFromCodecParameters(const MediaBufferRef& buffer)
+{
+    if (m_streamIndex != invalidMediaStreamIndex) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("RtpMuxNode received duplicate stream config"));
+    }
+
+    auto* paramsBuffer = dynamic_cast<FFmpegCodecParametersBuffer*>(buffer.get());
+    const AVCodecParameters* params = paramsBuffer ? paramsBuffer->parameters() : nullptr;
+    const AVMediaType expectedType = m_expectAudio ? AVMEDIA_TYPE_AUDIO : AVMEDIA_TYPE_VIDEO;
+    if (!m_outputContext || !params || params->codec_type != expectedType || !buffer->timeDescriptor().timeBase.isKnown()) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("RtpMuxNode requires matching codec parameters and time_base"));
+    }
+
+    AVStream* stream = avformat_new_stream(m_outputContext, nullptr);
+    if (!stream) {
+        return ::media::Status::failure(::media::ErrorInfo::allocationFailed("avformat_new_stream(rtp)"));
+    }
+
+    const int ret = avcodec_parameters_copy(stream->codecpar, params);
+    if (ret < 0) {
+        return FFmpegGraphError::statusFromCode(ret, "avcodec_parameters_copy(rtp)");
+    }
+    stream->codecpar->codec_tag = 0;
+    stream->time_base = toAVRational(buffer->timeDescriptor().timeBase);
     m_streamIndex = stream->index;
     return ::media::Status::success();
 }
@@ -353,7 +402,7 @@ const char* RtpMuxNode::expectedStreamName() const noexcept
         return ::media::Status::success();
     }
 
-    auto buffer = FFmpegBufferFactory::borrowFormatContext(m_outputContext);
+    auto buffer = makeSdpFormatSnapshot();
     if (!buffer) {
         return ::media::Status::failure(buffer.error());
     }
@@ -363,6 +412,58 @@ const char* RtpMuxNode::expectedStreamName() const noexcept
     }
     m_formatEmitted = true;
     return ::media::Status::success();
+}
+
+::media::Result<MediaBufferRef> RtpMuxNode::makeSdpFormatSnapshot() const
+{
+    if (!m_outputContext || m_streamIndex == invalidMediaStreamIndex) {
+        return ::media::Result<MediaBufferRef>::failure(
+            ::media::ErrorInfo::invalidArgument("RtpMuxNode requires output context and stream before SDP snapshot"));
+    }
+
+    AVFormatContext* raw = nullptr;
+    const char* url = (m_outputContext->url && m_outputContext->url[0] != '\0')
+        ? m_outputContext->url
+        : nullptr;
+    const int allocRet = avformat_alloc_output_context2(&raw, nullptr, "rtp", url);
+    if (allocRet < 0 || !raw) {
+        return ::media::Result<MediaBufferRef>::failure(
+            FFmpegGraphError::fromCode(allocRet < 0 ? allocRet : AVERROR_UNKNOWN,
+                                       "avformat_alloc_output_context2(rtp sdp snapshot)"));
+    }
+
+    ::media::ffmpeg::OutputFormatContextPtr snapshot(raw);
+    snapshot->packet_size = m_outputContext->packet_size;
+
+    for (unsigned int i = 0; i < m_outputContext->nb_streams; ++i) {
+        const AVStream* source = m_outputContext->streams[i];
+        if (!source || !source->codecpar) {
+            return ::media::Result<MediaBufferRef>::failure(
+                ::media::ErrorInfo::invalidArgument("RtpMuxNode SDP snapshot source stream is invalid"));
+        }
+
+        AVStream* target = avformat_new_stream(snapshot.get(), nullptr);
+        if (!target) {
+            return ::media::Result<MediaBufferRef>::failure(
+                ::media::ErrorInfo::allocationFailed("avformat_new_stream(rtp sdp snapshot)"));
+        }
+
+        const int copyRet = avcodec_parameters_copy(target->codecpar, source->codecpar);
+        if (copyRet < 0) {
+            return ::media::Result<MediaBufferRef>::failure(
+                FFmpegGraphError::fromCode(copyRet, "avcodec_parameters_copy(rtp sdp snapshot)"));
+        }
+
+        target->codecpar->codec_tag = 0;
+        target->id = source->id;
+        target->time_base = source->time_base;
+        target->avg_frame_rate = source->avg_frame_rate;
+        target->r_frame_rate = source->r_frame_rate;
+        target->start_time = source->start_time;
+        target->duration = source->duration;
+    }
+
+    return FFmpegBufferFactory::wrapOutputFormatContext(std::move(snapshot));
 }
 
 ::media::Status RtpMuxNode::writeTrailerIfNeeded()

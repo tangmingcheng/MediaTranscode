@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/core/MediaGraph.h"
+#include "internal/graph/model/MediaRealtimeEdgePolicySet.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/planner/MediaPipelinePlanner.h"
 #include "media_transcode/Result.h"
@@ -14,6 +15,7 @@ struct MediaVideoTranscodeBranchOptions {
     MediaPipelinePlan plan;
     MediaVideoTranscodeParameters parameters;
     MediaGraphQueueParameters queues;
+    MediaRealtimeEdgePolicySet edgePolicies;
 
     MediaNodeId formatSourceNode = MediaNodeId::invalid();
     std::string formatSourcePort = "format";

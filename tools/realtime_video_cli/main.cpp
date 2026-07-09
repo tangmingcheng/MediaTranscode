@@ -1,4 +1,5 @@
 #include "internal/graph/builder/realtime/MediaRealtimeRtpTranscodeGraphBuilder.h"
+#include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 #include "internal/graph/runtime/MediaGraphRuntime.h"
 #include "internal/graph/runtime/diagnostics/MediaGraphRuntimeReport.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
@@ -14,6 +15,10 @@
 #include <thread>
 #include <utility>
 #include <vector>
+
+#if defined(_MSC_VER) && defined(_DEBUG)
+#include <crtdbg.h>
+#endif
 
 using namespace media::ffmpeg::graph;
 using namespace media::ffmpeg::graph::cli;
@@ -243,6 +248,8 @@ RealtimeVideoRuntimeOptions parseRuntimeOptions(int argc, char** argv)
 
 int runRealtimeVideoCli(int argc, char** argv)
 {
+    std::cout << std::unitbuf;
+
     const bool helpRequested = hasArg(argc, argv, "--help") || hasArg(argc, argv, "-h");
     if (argc < 5 || helpRequested) {
         std::cout << "Usage: media_transcode_realtime_video_cli --input-type rtsp|rtp|mpegts-udp --input-layout session|separate|mpegts --output-layout separate|mpegts --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --max-duration 15 [options]\n";
@@ -258,7 +265,13 @@ int runRealtimeVideoCli(int argc, char** argv)
               << " hw=" << (options.parameters.execution.disableHardware ? "disabled" : "auto")
               << '\n';
 
-    auto graphResult = MediaRealtimeRtpTranscodeGraphBuilder::build(options);
+    auto planResult = MediaRealtimeRtpTranscodePlanner::plan(options);
+    if (!planResult) {
+        return failResult("realtime video graph plan", planResult);
+    }
+    MediaRealtimeRtpTranscodePlan plan = std::move(planResult).value();
+
+    auto graphResult = MediaRealtimeRtpTranscodeGraphBuilder::build(plan);
     if (!graphResult) {
         return failResult("realtime video graph build", graphResult);
     }
@@ -270,6 +283,7 @@ int runRealtimeVideoCli(int argc, char** argv)
 
     MediaGraphRuntime runtime;
     runtime.setDiagnosticsEnabled(options.parameters.execution.diagnosticLogEnabled);
+    runtime.setThreadingPolicy(plan.threadingPolicy);
     auto compileStatus = runtime.compile(std::move(graph));
     if (!compileStatus) {
         return failStatus("compile realtime video graph", compileStatus);
@@ -290,6 +304,7 @@ int runRealtimeVideoCli(int argc, char** argv)
     }
     const MediaGraphRuntimeReport finalReport = MediaGraphRuntimeReporter::capture(runtime);
     std::cout << "[CLI] final " << finalReport.summary() << '\n';
+    runtime.reset();
     if (!waitStatus) {
         return failStatus("realtime video runtime progress", waitStatus);
     }
@@ -302,6 +317,13 @@ int runRealtimeVideoCli(int argc, char** argv)
 
 int main(int argc, char** argv)
 {
+#if defined(_MSC_VER) && defined(_DEBUG)
+    _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+    _CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
+#endif
+
     try {
         return runRealtimeVideoCli(argc, argv);
     } catch (const std::exception& e) {

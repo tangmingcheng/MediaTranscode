@@ -1,66 +1,41 @@
-# Realtime RTP Quality and Playback Stability Plan
+# Realtime RTP Audio+Video Smoothness Root-Cause Plan
 
 ## Goal
 
-Fix realtime RTP playback quality and stability without adding graph/node defaults or patch-style runtime behavior.
+Fix realtime RTP audio+video stutter and video corruption at the DAG architecture boundary. Planner owns queue, threading, and copy/transcode decisions; builders materialize planned topology; runtime nodes execute explicit options without hidden fallback timing behavior.
 
-## Root Cause Evidence So Far
+## Root Cause Evidence
 
-- Source `test.mp4` video bitrate is about `8405 kb/s`.
-- Current raw RTP realtime output SDP advertises `b=AS:2000` when `--bitrate` is omitted.
-- Raw RTP input metadata currently provides codec/payload/fmtp but no observable source bitrate.
-- This means the graph can reach the encoder without an explicit or observable bitrate, allowing FFmpeg/NVENC defaults to affect behavior.
-- Video+audio smoke writes both audio and video packets, but playback can still show stutter/corruption; remaining candidates are low output bitrate, RTP/H264 parameter signaling, and realtime queue overflow/drop policy.
-
-## Architecture Rules
-
-- Planner owns all decisions.
-- Runtime nodes must not invent codec, bitrate, queue, or RTP defaults.
-- Missing transcode parameters must resolve from explicit CLI input or observable input metadata; otherwise planning must fail.
-- If realtime queue behavior changes, it must be represented in the plan/edge policy, not hardcoded in nodes.
+- `MediaRealtimeRtpTranscodePlanner` plans `SpscRing` edge policy, but the realtime RTP builder and shared segment builders still call `blockingQueuePolicy(...)` for most heavy data-path edges.
+- `tools/realtime_video_cli` directly starts `MediaGraphRuntime` without applying realtime planner threading policy, so workers keep the default `idleSleepMs=1`.
+- `MediaAudioPipelinePlanner::planKnownAudioTranscode()` always emits `TranscodeFrame`, so raw RTP AAC->AAC cannot use the existing audio packet-copy branch.
+- Fixed sleep in graph worker hot paths is not an industrial realtime DAG default. It is acceptable only as explicit media pacing, non-realtime throttling, shutdown/wait behavior, or external polling.
 
 ## Tasks
 
-- [x] Add regression tests proving raw RTP video transcode without explicit bitrate is rejected when bitrate is not observable.
-- [x] Add regression tests proving raw RTP video transcode with explicit bitrate plans successfully and propagates the value to graph node options.
-- [x] Extend video input stream planning data to carry observable bitrate for file/realtime URL inputs.
-- [x] Make raw RTP input planning reject missing bitrate for transcode-frame video when no source bitrate is observable.
-- [x] Verify no-audio RTP smoke with explicit source-equivalent bitrate and hardware enabled.
-- [x] Verify video+audio RTP smoke with explicit source-equivalent bitrate and hardware enabled.
-- [x] Use VLC or receiver-side diagnostics to confirm playback behavior and document the result.
-- [x] Update `docs/completed/` with commands and actual results.
-- [x] Run build/tests, `git diff --check`, commit, push, and request review, including review follow-up fixes.
+- [x] Add failing tests for raw RTP AAC->AAC packet copy, raw RTP audio transcode when target differs, realtime RTP non-blocking data-path queues, realtime `idleSleepMs=0`, CLI application of planner threading policy, and graph sleep audit classification.
+- [x] Add planner-owned realtime runtime policy and lane-specific edge policies to `MediaRealtimeRtpTranscodePlan`.
+- [x] Update realtime graph/segment builders to consume planned edge policies instead of hardcoded blocking policies on RTP data paths.
+- [x] Refactor known-input audio planning to reuse source-vs-target copy decision and enable raw RTP packet-copy fast path when source and target match.
+- [x] Update realtime CLI to plan once, build from that plan, and set runtime threading policy before `startThreaded()`.
+- [x] Review fixed sleeps under `src/internal/graph`, classify allowed cases, and keep realtime worker hot-path sleep disabled by policy.
+- [x] Run build, unit tests, `ctest`, `git diff --check`, and raw RTP audio+video smoke with FFmpeg/VLC or receiver diagnostics.
+- [x] Document test/smoke commands and actual results in `docs/completed/realtime-rtp-av-smoothness.md`.
+- [x] Review all touched code for missed blocking queues, duplicated audio copy semantics, planner/runtime policy gaps, and unclassified sleeps.
+- [x] Commit, push, open PR, and request a fresh agent PR review.
 
-## Realtime RTP Audio+Video Stutter Investigation
+## Verification Commands
 
-## Goal
+```powershell
+cmake --build out/build/x64-debug --target clean
+cmake --build out/build/x64-debug --target media_transcode_core media_transcode_realtime_video_cli media_transcode_realtime_graph_tests
+out\build\x64-debug\media_transcode_realtime_graph_tests.exe
+ctest --test-dir out/build/x64-debug --output-on-failure
+git diff --check
+```
 
-Find the root cause for VLC stutter/artifacts that appear only when realtime RTP outputs video and audio together, while video-only RTP output is smooth. Any fix must preserve DAG responsibilities: planner owns decisions, graph builder owns topology, runtime nodes only execute explicit options, and no node adds hidden fallbacks or timing patches.
+## Assumptions
 
-## Current Observation
-
-- Video-only realtime RTP output is smooth when hardware is enabled.
-- Video+audio realtime RTP output has synchronized audio/video, but VLC playback can stutter and show artifacts.
-- This narrows the suspect area to audio branch planning/execution, separate RTP dual-output topology, shared scheduler/backpressure, timestamp/rescale behavior, or receiver SDP/session behavior.
-
-## Investigation Tasks
-
-- [x] Reproduce and collect logs for graph video-only RTP output plus VLC.
-- [x] Reproduce and collect logs for graph video+audio RTP output plus VLC.
-- [x] Reproduce FFmpeg direct video+audio RTP output plus VLC using the same source and receiver settings.
-- [x] Compare DAG topology and runtime summaries for video-only vs video+audio output.
-- [x] Inspect whether audio branch work or RTP mux/output writes can block video progress in the current scheduler.
-- [x] Inspect audio/video RTP timestamps, packet counts, packet loss diagnostics, and SDP session layout.
-- [x] Add regression coverage that separate RTP H264 output carries an explicit planner-produced global-header encoder option, including inherited H264 when `--video-codec` is omitted.
-- [x] Implement the architecture-level fix in the planner/builder/encoder-context boundary, then rebuild and smoke test.
-- [x] Commit, push, PR update, and request a fresh review.
-
-## Investigation Result
-
-- The repeated `media_transcode_realtime_graph_tests.exe` access violation was reproduced after adding `std::optional<bool>` to `MediaVideoTranscodeParameters`; a clean rebuild fixed it. Root cause is stale incremental object layout, not a remaining graph source crash.
-- Realtime video+audio RTP uses the hardware path: `h264_cuvid` decode, CUDA frames, `h264_nvenc` encode, and `filter=not_required` when no resize is requested.
-- FFmpeg/NVENC RTP output does not include H264 parameter sets in SDP unless the encoder context uses `AV_CODEC_FLAG_GLOBAL_HEADER`.
-- The graph fix is planner-owned: separate RTP + resolved H264 output codec sets `video.global_header=1`; segment builder propagates it; encoder context builder applies `AV_CODEC_FLAG_GLOBAL_HEADER`.
-- Review follow-up added coverage that `video.global_header=1` is still planned when output codec is inherited from RTP input metadata instead of explicitly requested.
-- VLC now receives SDP with `sprop-parameter-sets` and logs `found NAL_PPS` plus `Received first picture`; no `waiting for SPS/PPS` line was observed in the retest log.
-- VLC still reports RTP loss, playback-late events, and hardware acceleration picture allocation failures. Those remain receiver/network/timing risks to investigate separately if visible stutter persists after the H264 parameter-set signaling fix.
+- Worker-pool or node-fusion rewrite is out of P0 scope unless smoke proves it is required.
+- Audio packet copy is allowed only when source codec and requested target parameters match; encode-only audio options force transcode.
+- Fixed sleep in CLI polling or explicit media pacing can remain when classified. Fixed sleep in realtime worker hot path must not be active for realtime execution.

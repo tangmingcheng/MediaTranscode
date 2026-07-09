@@ -28,7 +28,9 @@ namespace media::ffmpeg::graph {
     branchOptions.muxNode = options.muxNode;
     branchOptions.muxCodecPort = options.muxCodecPort;
     branchOptions.muxPacketPort = options.muxPacketPort;
+    branchOptions.monotonicPacketTimestamps = options.plan.monotonicPacketTimestamps;
     branchOptions.queues = options.queues;
+    branchOptions.edgePolicies = options.edgePolicies;
     return MediaPacketCopyBranchBuilder::build(graph, branchOptions);
 }
 

@@ -56,18 +56,18 @@ MediaAudioEncodeBranchNodes addAudioEncodeNodes(MediaGraph& graph,
                                           const MediaAudioEncodeBranchOptions& options,
                                           const MediaAudioEncodeBranchNodes& nodes)
 {
-    const MediaGraphQueueParameters& queues = options.queues;
-    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.formatSourceNode, options.formatSourcePort, nodes.packetNormalize, "format", options.prefix + ".format -> packet_normalize.format", MediaGraphBuildSupport::blockingQueuePolicy(queues.metadata)); !status) return status;
-    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.packetSourceNode, options.packetSourcePort, nodes.packetNormalize, "packet", options.prefix + ".packet -> packet_normalize.packet", MediaGraphBuildSupport::blockingQueuePolicy(queues.packet)); !status) return status;
-    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.formatSourceNode, options.formatSourcePort, nodes.codecResolver, "format", options.prefix + ".format -> codec_resolver.format", MediaGraphBuildSupport::blockingQueuePolicy(queues.metadata)); !status) return status;
-    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.codecResolver, "decoder", nodes.decode, "codec", options.prefix + ".codec_resolver.decoder -> decode.codec", MediaGraphBuildSupport::blockingQueuePolicy(queues.metadata)); !status) return status;
-    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.packetNormalize, "packet", nodes.decode, "packet", options.prefix + ".packet_normalize.packet -> decode.packet", MediaGraphBuildSupport::blockingQueuePolicy(queues.packet)); !status) return status;
-    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.codecResolver, "encoder", nodes.resample, "codec", options.prefix + ".codec_resolver.encoder -> resample.codec", MediaGraphBuildSupport::blockingQueuePolicy(queues.metadata)); !status) return status;
-    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.decode, "frame", nodes.resample, "frame", options.prefix + ".decode.frame -> resample.frame", MediaGraphBuildSupport::blockingQueuePolicy(queues.frame)); !status) return status;
-    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.codecResolver, "encoder", nodes.encode, "codec", options.prefix + ".codec_resolver.encoder -> encode.codec", MediaGraphBuildSupport::blockingQueuePolicy(queues.metadata)); !status) return status;
-    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.resample, "frame", nodes.encode, "frame", options.prefix + ".resample.frame -> encode.frame", MediaGraphBuildSupport::blockingQueuePolicy(queues.frame)); !status) return status;
-    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.encode, "codec", options.muxNode, options.muxCodecPort, options.prefix + ".encode.codec -> mux.codec", MediaGraphBuildSupport::blockingQueuePolicy(queues.metadata)); !status) return status;
-    return MediaGraphBuildSupport::connectChecked(graph, owner, nodes.encode, "packet", options.muxNode, options.muxPacketPort, options.prefix + ".encode.packet -> mux.packet", MediaGraphBuildSupport::blockingQueuePolicy(queues.mux));
+    const MediaRealtimeEdgePolicySet& policies = options.edgePolicies;
+    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.formatSourceNode, options.formatSourcePort, nodes.packetNormalize, "format", options.prefix + ".format -> packet_normalize.format", policies.metadata); !status) return status;
+    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.packetSourceNode, options.packetSourcePort, nodes.packetNormalize, "packet", options.prefix + ".packet -> packet_normalize.packet", policies.audioPacket); !status) return status;
+    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.formatSourceNode, options.formatSourcePort, nodes.codecResolver, "format", options.prefix + ".format -> codec_resolver.format", policies.metadata); !status) return status;
+    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.codecResolver, "decoder", nodes.decode, "codec", options.prefix + ".codec_resolver.decoder -> decode.codec", policies.metadata); !status) return status;
+    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.packetNormalize, "packet", nodes.decode, "packet", options.prefix + ".packet_normalize.packet -> decode.packet", policies.audioPacket); !status) return status;
+    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.codecResolver, "encoder", nodes.resample, "codec", options.prefix + ".codec_resolver.encoder -> resample.codec", policies.metadata); !status) return status;
+    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.decode, "frame", nodes.resample, "frame", options.prefix + ".decode.frame -> resample.frame", policies.frame); !status) return status;
+    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.codecResolver, "encoder", nodes.encode, "codec", options.prefix + ".codec_resolver.encoder -> encode.codec", policies.metadata); !status) return status;
+    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.resample, "frame", nodes.encode, "frame", options.prefix + ".resample.frame -> encode.frame", policies.frame); !status) return status;
+    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.encode, "codec", options.muxNode, options.muxCodecPort, options.prefix + ".encode.codec -> mux.codec", policies.metadata); !status) return status;
+    return MediaGraphBuildSupport::connectChecked(graph, owner, nodes.encode, "packet", options.muxNode, options.muxPacketPort, options.prefix + ".encode.packet -> mux.packet", policies.mux);
 }
 
 } // namespace

@@ -33,11 +33,12 @@ constexpr const char* owner = "MediaAudioPlanOptionApplier";
             ::media::ErrorInfo::invalidArgument("MediaAudioPlanOptionApplier requires planned audio source stream index"));
     }
 
-    if (auto status = MediaGraphBuildSupport::setPacketStreamOptions(graph,
-                                                                     owner,
-                                                                     nodes.packetNormalize,
-                                                                     MediaStreamKind::Audio,
-                                                                     plan.sourceStreamIndex); !status) return status;
+    if (auto status = MediaGraphBuildSupport::setPacketNormalizeOptions(graph,
+                                                                        owner,
+                                                                        nodes.packetNormalize,
+                                                                        MediaStreamKind::Audio,
+                                                                        plan.sourceStreamIndex,
+                                                                        false); !status) return status;
     if (auto status = setOption(graph, nodes.codecResolver, MediaTranscodeOptionKey::AudioSourceStreamIndex, std::to_string(plan.sourceStreamIndex)); !status) return status;
     if (auto status = setOption(graph, nodes.codecResolver, MediaTranscodeOptionKey::AudioCodec, plan.targetCodecName); !status) return status;
     if (auto status = setOption(graph, nodes.codecResolver, MediaTranscodeOptionKey::PlannedEncoder, plan.targetEncoderName); !status) return status;

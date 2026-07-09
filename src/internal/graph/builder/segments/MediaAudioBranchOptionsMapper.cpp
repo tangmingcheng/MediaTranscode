@@ -22,6 +22,7 @@ MediaAudioPacketCopyBranchOptions makeAudioPacketCopyBranchOptions(const MediaAu
     copyOptions.prefix = options.prefix + ".copy";
     copyOptions.plan = options.plan;
     copyOptions.queues = options.queues;
+    copyOptions.edgePolicies = options.edgePolicies;
     copyOptions.formatSourceNode = options.formatSourceNode;
     copyOptions.formatSourcePort = options.formatSourcePort;
     copyOptions.packetSourceNode = options.packetSourceNode;
@@ -39,6 +40,7 @@ MediaAudioEncodeBranchOptions makeAudioEncodeBranchOptions(const MediaAudioBranc
     encodeOptions.plan = options.plan;
     encodeOptions.parameters = options.parameters;
     encodeOptions.queues = options.queues;
+    encodeOptions.edgePolicies = options.edgePolicies;
     encodeOptions.formatSourceNode = options.formatSourceNode;
     encodeOptions.formatSourcePort = options.formatSourcePort;
     encodeOptions.packetSourceNode = options.packetSourceNode;

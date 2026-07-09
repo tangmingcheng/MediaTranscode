@@ -3,6 +3,7 @@
 #include "internal/graph/runtime/queue/MediaQueue.h"
 
 #include <atomic>
+#include <mutex>
 #include <vector>
 
 namespace media::ffmpeg::graph {
@@ -34,12 +35,14 @@ private:
     bool empty(std::size_t write, std::size_t read) const noexcept;
     std::size_t next(std::size_t index) const noexcept;
     bool dropOldest();
+    std::size_t sizeLocked() const noexcept;
     void updateSizeMetrics(std::size_t current) noexcept;
 
 private:
     MediaQueuePolicy m_policy;
     std::vector<MediaBufferRef> m_ring;
     std::size_t m_capacity = 0;
+    mutable std::mutex m_mutex;
     std::atomic_size_t m_read{ 0 };
     std::atomic_size_t m_write{ 0 };
     std::atomic_bool m_closed{ false };

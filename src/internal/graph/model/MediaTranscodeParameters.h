@@ -152,6 +152,7 @@ inline constexpr char MuxExpectAudio[] = "mux.expect_audio";
 
 inline constexpr char PacketSourceStreamIndex[] = "packet.source_stream_index";
 inline constexpr char PacketStreamKind[] = "packet.stream_kind";
+inline constexpr char PacketMonotonicTimestamps[] = "packet.monotonic_timestamps";
 
 inline constexpr char VideoCodec[] = "video.codec";
 inline constexpr char VideoWidth[] = "video.width";

@@ -40,6 +40,7 @@ struct MediaAudioPipelinePlan {
     std::string targetCodecName;
     std::string targetEncoderName;
     bool followsSourceParameters = false;
+    bool monotonicPacketTimestamps = false;
     std::string reason;
 };
 

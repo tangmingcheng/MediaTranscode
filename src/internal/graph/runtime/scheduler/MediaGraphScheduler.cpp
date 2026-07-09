@@ -165,8 +165,27 @@ void MediaGraphScheduler::abort(MediaGraphExecutionContext& context) noexcept
     m_state = MediaGraphSchedulerState::Aborted;
 }
 
-void MediaGraphScheduler::clear()
+void MediaGraphScheduler::clear(const MediaGraphExecutionContext* context)
 {
+    if (context) {
+        clear(context->executionOrder());
+        return;
+    }
+    m_nodes.clear();
+    m_state = MediaGraphSchedulerState::Idle;
+}
+
+void MediaGraphScheduler::clear(const std::vector<MediaNodeId>& executionOrder)
+{
+    for (auto it = executionOrder.rbegin(); it != executionOrder.rend(); ++it) {
+        auto nodeIt = m_nodes.find(it->value);
+        if (nodeIt == m_nodes.end()) {
+            continue;
+        }
+        std::unique_ptr<MediaRuntimeNode> node = std::move(nodeIt->second);
+        m_nodes.erase(nodeIt);
+        node.reset();
+    }
     m_nodes.clear();
     m_state = MediaGraphSchedulerState::Idle;
 }

@@ -81,14 +81,20 @@ std::string defaultPacketSourcePort(MediaStreamKind streamKind)
                                                      prefix + ".normalize",
                                                      "Packet normalize");
 
-    for (MediaNodeId nodeId : { sourceConfig, packetNormalize }) {
-        if (auto status = MediaGraphBuildSupport::setPacketStreamOptions(graph,
-                                                                         owner,
-                                                                         nodeId,
-                                                                         options.streamKind,
-                                                                         options.sourceStreamIndex); !status) {
-            return status;
-        }
+    if (auto status = MediaGraphBuildSupport::setPacketStreamOptions(graph,
+                                                                     owner,
+                                                                     sourceConfig,
+                                                                     options.streamKind,
+                                                                     options.sourceStreamIndex); !status) {
+        return status;
+    }
+    if (auto status = MediaGraphBuildSupport::setPacketNormalizeOptions(graph,
+                                                                        owner,
+                                                                        packetNormalize,
+                                                                        options.streamKind,
+                                                                        options.sourceStreamIndex,
+                                                                        options.monotonicPacketTimestamps); !status) {
+        return status;
     }
 
     if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph,
@@ -150,12 +156,13 @@ std::string defaultPacketSourcePort(MediaStreamKind streamKind)
                                                                    true,
                                                                    true); !status) return status;
 
-    const MediaGraphQueueParameters& queues = options.queues;
-    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.formatSourceNode, options.formatSourcePort, sourceConfig, "format", prefix + ".format -> source_config.format", MediaGraphBuildSupport::blockingQueuePolicy(queues.metadata)); !status) return status;
-    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, sourceConfig, "codec", options.muxNode, options.muxCodecPort, prefix + ".source_config.codec -> mux.codec", MediaGraphBuildSupport::blockingQueuePolicy(queues.metadata)); !status) return status;
-    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.formatSourceNode, options.formatSourcePort, packetNormalize, "format", prefix + ".format -> normalize.format", MediaGraphBuildSupport::blockingQueuePolicy(queues.metadata)); !status) return status;
-    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.packetSourceNode, packetSourcePort, packetNormalize, "packet", prefix + ".packet -> normalize.packet", MediaGraphBuildSupport::blockingQueuePolicy(queues.packet)); !status) return status;
-    return MediaGraphBuildSupport::connectChecked(graph, owner, packetNormalize, "packet", options.muxNode, options.muxPacketPort, prefix + ".normalize.packet -> mux.packet", MediaGraphBuildSupport::blockingQueuePolicy(queues.mux));
+    const MediaRealtimeEdgePolicySet& policies = options.edgePolicies;
+    const MediaEdgePolicy& packetPolicy = policies.packetPolicy(options.streamKind);
+    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.formatSourceNode, options.formatSourcePort, sourceConfig, "format", prefix + ".format -> source_config.format", policies.metadata); !status) return status;
+    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, sourceConfig, "codec", options.muxNode, options.muxCodecPort, prefix + ".source_config.codec -> mux.codec", policies.metadata); !status) return status;
+    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.formatSourceNode, options.formatSourcePort, packetNormalize, "format", prefix + ".format -> normalize.format", policies.metadata); !status) return status;
+    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.packetSourceNode, packetSourcePort, packetNormalize, "packet", prefix + ".packet -> normalize.packet", packetPolicy); !status) return status;
+    return MediaGraphBuildSupport::connectChecked(graph, owner, packetNormalize, "packet", options.muxNode, options.muxPacketPort, prefix + ".normalize.packet -> mux.packet", policies.mux);
 }
 
 } // namespace media::ffmpeg::graph

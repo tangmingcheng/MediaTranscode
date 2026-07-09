@@ -84,6 +84,32 @@ bool sourceMatchesRequestedTarget(const MediaPipelineAudioSourceProbeResult& sou
     return true;
 }
 
+bool knownSourceMatchesRequestedTarget(const MediaInputAudioStreamInfo& source,
+                                       const MediaAudioPipelinePlannerOptions& options)
+{
+    const std::string sourceCodec = canonicalAudioCodecName(source.codecName);
+    const std::string targetCodec = canonicalAudioCodecName(options.requestedCodecName.empty() ? sourceCodec : options.requestedCodecName);
+    if (targetCodec != sourceCodec) {
+        return false;
+    }
+    if (targetChanged(options.requestedSampleRate, source.sampleRate)) {
+        return false;
+    }
+    if (targetChanged(options.requestedChannels, source.channels)) {
+        return false;
+    }
+    if (options.requestedBitrateKbps) {
+        return false;
+    }
+    if (stringTargetChanged(options.requestedProfile, "")) {
+        return false;
+    }
+    if (requiresEncodeForUnobservableEncoderOption(options)) {
+        return false;
+    }
+    return true;
+}
+
 const AVCodec* findAudioEncoderForCodecName(const std::string& codecName)
 {
     if (codecName.empty()) {
@@ -129,6 +155,7 @@ const AVCodec* findAudioEncoderForCodecName(const std::string& codecName)
     plan.targetCodecName = targetCodec;
     plan.branchMode = canCopy ? MediaBranchMode::CopyPacket : MediaBranchMode::TranscodeFrame;
     plan.followsSourceParameters = canCopy;
+    plan.monotonicPacketTimestamps = false;
     plan.reason = canCopy ? "copy_source_matches_target" : "transcode_source_differs_from_target";
 
     if (plan.branchMode == MediaBranchMode::TranscodeFrame) {
@@ -160,20 +187,24 @@ const AVCodec* findAudioEncoderForCodecName(const std::string& codecName)
 
     const std::string sourceCodec = canonicalAudioCodecName(inputInfo.codecName);
     const std::string targetCodec = canonicalAudioCodecName(options.requestedCodecName.empty() ? sourceCodec : options.requestedCodecName);
-    const AVCodec* encoder = findAudioEncoderForCodecName(targetCodec);
-    if (!encoder || !encoder->name) {
-        return ::media::Result<MediaAudioPipelinePlan>::failure(
-            ::media::ErrorInfo::unsupported("audio encoder not found for codec: " + targetCodec));
-    }
+    const bool canCopy = knownSourceMatchesRequestedTarget(inputInfo, options);
 
     plan.enabled = true;
-    plan.branchMode = MediaBranchMode::TranscodeFrame;
+    plan.branchMode = canCopy ? MediaBranchMode::CopyPacket : MediaBranchMode::TranscodeFrame;
     plan.sourceStreamIndex = inputInfo.streamIndex;
     plan.sourceCodecName = sourceCodec;
     plan.targetCodecName = targetCodec;
-    plan.targetEncoderName = encoder->name;
-    plan.followsSourceParameters = false;
-    plan.reason = "realtime_transcode";
+    plan.followsSourceParameters = canCopy;
+    plan.monotonicPacketTimestamps = canCopy;
+    plan.reason = canCopy ? "copy_known_source_matches_target" : "transcode_known_source_differs_from_target";
+    if (plan.branchMode == MediaBranchMode::TranscodeFrame) {
+        const AVCodec* encoder = findAudioEncoderForCodecName(targetCodec);
+        if (!encoder || !encoder->name) {
+            return ::media::Result<MediaAudioPipelinePlan>::failure(
+                ::media::ErrorInfo::unsupported("audio encoder not found for codec: " + targetCodec));
+        }
+        plan.targetEncoderName = encoder->name;
+    }
     return ::media::Result<MediaAudioPipelinePlan>::success(std::move(plan));
 }
 

@@ -22,6 +22,7 @@ MediaVideoPacketCopyBranchOptions makeVideoPacketCopyBranchOptions(const MediaVi
     copyOptions.prefix = options.prefix + ".copy";
     copyOptions.plan = options.plan;
     copyOptions.queues = options.queues;
+    copyOptions.edgePolicies = options.edgePolicies;
     copyOptions.formatSourceNode = options.formatSourceNode;
     copyOptions.formatSourcePort = options.formatSourcePort;
     copyOptions.packetSourceNode = options.packetSourceNode;
@@ -39,6 +40,7 @@ MediaVideoTranscodeBranchOptions makeVideoTranscodeBranchOptions(const MediaVide
     transcodeOptions.plan = options.plan;
     transcodeOptions.parameters = options.parameters;
     transcodeOptions.queues = options.queues;
+    transcodeOptions.edgePolicies = options.edgePolicies;
     transcodeOptions.formatSourceNode = options.formatSourceNode;
     transcodeOptions.formatSourcePort = options.formatSourcePort;
     transcodeOptions.packetSourceNode = options.packetSourceNode;

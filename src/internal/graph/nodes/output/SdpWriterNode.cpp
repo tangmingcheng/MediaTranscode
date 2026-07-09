@@ -7,12 +7,31 @@ extern "C" {
 #include <libavformat/avformat.h>
 }
 
+#include <algorithm>
 #include <array>
 #include <fstream>
 #include <string>
 #include <vector>
 
 namespace media::ffmpeg::graph {
+namespace {
+
+int mediaOrder(const AVFormatContext* context) noexcept
+{
+    if (!context || context->nb_streams == 0 || !context->streams[0] || !context->streams[0]->codecpar) {
+        return 3;
+    }
+    switch (context->streams[0]->codecpar->codec_type) {
+    case AVMEDIA_TYPE_VIDEO:
+        return 0;
+    case AVMEDIA_TYPE_AUDIO:
+        return 1;
+    default:
+        return 2;
+    }
+}
+
+} // namespace
 
 SdpWriterNode::SdpWriterNode(MediaNodeId nodeId)
     : FFmpegNodeRuntime(nodeId, staticKind(), "SdpWriterNode")
@@ -88,6 +107,9 @@ MediaNodeKind SdpWriterNode::staticKind() noexcept
         }
         contexts.push_back(formatContext);
     }
+    std::stable_sort(contexts.begin(), contexts.end(), [](const AVFormatContext* left, const AVFormatContext* right) {
+        return mediaOrder(left) < mediaOrder(right);
+    });
 
     std::array<char, 16384> text {};
     const int ret = av_sdp_create(contexts.data(), static_cast<int>(contexts.size()), text.data(), static_cast<int>(text.size()));

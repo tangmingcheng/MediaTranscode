@@ -173,6 +173,17 @@ MediaNodeKind VideoEncodeNode::staticKind() noexcept
     return receivePackets(context);
 }
 
+::media::Status VideoEncodeNode::stop(MediaGraphExecutionContext& context)
+{
+    if (hasCodecContext()) {
+        if (auto status = drainEncoderForStop(); !status) {
+            return status;
+        }
+    }
+    m_encoderConfigEmitted = false;
+    return FFmpegCodecNodeRuntime::stop(context);
+}
+
 ::media::Status VideoEncodeNode::emitEncoderConfig(MediaGraphExecutionContext& context,
                                                    const MediaBufferRef& buffer)
 {
@@ -237,6 +248,29 @@ MediaNodeKind VideoEncodeNode::staticKind() noexcept
         auto emitStatus = emitOutput(context, "packet", buffer.value());
         if (!emitStatus) {
             return emitStatus;
+        }
+    }
+}
+
+::media::Status VideoEncodeNode::drainEncoderForStop()
+{
+    const int sendRet = avcodec_send_frame(codecContext(), nullptr);
+    if (sendRet < 0 && sendRet != AVERROR_EOF) {
+        return FFmpegGraphError::statusFromCode(sendRet, "avcodec_send_frame(video stop)");
+    }
+
+    for (;;) {
+        auto packet = ::media::ffmpeg::makePacket();
+        if (!packet) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::allocationFailed("VideoEncodeNode stop failed: av_packet_alloc returned null"));
+        }
+        const int ret = avcodec_receive_packet(codecContext(), packet.get());
+        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+            return ::media::Status::success();
+        }
+        if (ret < 0) {
+            return FFmpegGraphError::statusFromCode(ret, "avcodec_receive_packet(video stop)");
         }
     }
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/core/MediaGraph.h"
+#include "internal/graph/model/MediaRealtimeEdgePolicySet.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "media_transcode/Result.h"
 
@@ -11,6 +12,7 @@
 namespace media::ffmpeg::graph::MediaGraphBuildSupport {
 
 MediaEdgePolicy blockingQueuePolicy(std::size_t capacity) noexcept;
+MediaRealtimeEdgePolicySet blockingEdgePolicySet(const MediaGraphQueueParameters& queues) noexcept;
 MediaFormatDescriptor streamIndexDescriptor(MediaStreamKind streamKind, int streamIndex) noexcept;
 
 ::media::Result<void> setNodeOptionChecked(MediaGraph& graph,
@@ -24,6 +26,13 @@ MediaFormatDescriptor streamIndexDescriptor(MediaStreamKind streamKind, int stre
                                              MediaNodeId nodeId,
                                              MediaStreamKind streamKind,
                                              int sourceStreamIndex);
+
+::media::Result<void> setPacketNormalizeOptions(MediaGraph& graph,
+                                                std::string_view owner,
+                                                MediaNodeId nodeId,
+                                                MediaStreamKind streamKind,
+                                                int sourceStreamIndex,
+                                                bool monotonicPacketTimestamps);
 
 ::media::Result<void> requirePort(MediaPortId portId,
                                   std::string_view owner,

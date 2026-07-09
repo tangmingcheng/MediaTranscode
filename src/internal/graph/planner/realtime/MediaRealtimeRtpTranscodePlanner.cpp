@@ -392,21 +392,48 @@ std::string planRawRtpSdp(const MediaRtpUrlEndpoint& videoEndpoint,
     return ::media::Result<void>::success();
 }
 
-MediaEdgePolicy planEdgePolicy(const MediaGraphQueueParameters& queues)
+MediaEdgePolicy planRealtimeQueuePolicy(std::size_t capacity,
+                                        MediaQueueOverflowPolicy overflowPolicy,
+                                        MediaQueueOrderingPolicy orderingPolicy = MediaQueueOrderingPolicy::Timestamp)
 {
     MediaEdgePolicy policy;
     policy.queuePolicy.mode = MediaQueueMode::SpscRing;
-    policy.queuePolicy.overflowPolicy = MediaQueueOverflowPolicy::DropNonKeyFrame;
-    policy.queuePolicy.orderingPolicy = MediaQueueOrderingPolicy::Timestamp;
-    policy.queuePolicy.capacity = queues.packet;
+    policy.queuePolicy.overflowPolicy = overflowPolicy;
+    policy.queuePolicy.orderingPolicy = orderingPolicy;
+    policy.queuePolicy.capacity = capacity;
     policy.queuePolicy.bounded = true;
     policy.queuePolicy.collectMetrics = true;
     policy.queuePolicy.backpressurePolicy.mode = MediaBackpressureMode::Adaptive;
-    policy.queuePolicy.backpressurePolicy.lowWatermark = queues.packet / 2;
-    policy.queuePolicy.backpressurePolicy.highWatermark = queues.packet - 1;
-    policy.queuePolicy.backpressurePolicy.criticalWatermark = queues.packet;
+    policy.queuePolicy.backpressurePolicy.lowWatermark = capacity / 2;
+    policy.queuePolicy.backpressurePolicy.highWatermark = capacity > 0 ? capacity - 1 : 0;
+    policy.queuePolicy.backpressurePolicy.criticalWatermark = capacity;
     policy.queuePolicy.backpressurePolicy.realtimePriority = true;
     policy.backpressurePolicy = policy.queuePolicy.backpressurePolicy;
+    return policy;
+}
+
+MediaRealtimeEdgePolicySet planEdgePolicies(const MediaGraphQueueParameters& queues)
+{
+    MediaRealtimeEdgePolicySet policies;
+    policies.metadata = planRealtimeQueuePolicy(queues.metadata,
+                                               MediaQueueOverflowPolicy::BlockProducer,
+                                               MediaQueueOrderingPolicy::Fifo);
+    policies.packet = planRealtimeQueuePolicy(queues.packet, MediaQueueOverflowPolicy::DropOldest);
+    policies.videoPacket = planRealtimeQueuePolicy(queues.packet, MediaQueueOverflowPolicy::DropNonKeyFrame);
+    policies.audioPacket = planRealtimeQueuePolicy(queues.packet, MediaQueueOverflowPolicy::DropOldest);
+    policies.frame = planRealtimeQueuePolicy(queues.frame, MediaQueueOverflowPolicy::DropOldest);
+    policies.mux = planRealtimeQueuePolicy(queues.mux, MediaQueueOverflowPolicy::DropOldest);
+    return policies;
+}
+
+MediaThreadingPolicy planThreadingPolicy() noexcept
+{
+    MediaThreadingPolicy policy;
+    policy.mode = MediaThreadingMode::PerNodeWorker;
+    policy.priority = MediaThreadPriority::High;
+    policy.idleSleepMs = 0;
+    policy.maxIdleSpins = 1;
+    policy.collectWorkerMetrics = true;
     return policy;
 }
 
@@ -603,7 +630,8 @@ MediaEdgePolicy planEdgePolicy(const MediaGraphQueueParameters& queues)
     plan.videoParameters = std::move(videoParameters);
     plan.audioParameters = options.parameters.audio;
     plan.queues = options.parameters.queues;
-    plan.edgePolicy = planEdgePolicy(options.parameters.queues);
+    plan.edgePolicies = planEdgePolicies(options.parameters.queues);
+    plan.threadingPolicy = planThreadingPolicy();
     plan.input.url = plannedInputUrl;
     plan.input.sdpText = std::move(rawRtpSdpText);
     plan.input.rtspTransport = options.input.rtspTransport;

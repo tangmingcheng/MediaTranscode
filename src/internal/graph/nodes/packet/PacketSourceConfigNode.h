@@ -11,11 +11,14 @@ class PacketSourceConfigNode final : public FFmpegNodeRuntime {
 public:
     explicit PacketSourceConfigNode(MediaNodeId nodeId);
     static MediaNodeKind staticKind() noexcept;
+    ::media::Status stop(MediaGraphExecutionContext& context) override;
+    void abort(MediaGraphExecutionContext& context) noexcept override;
 
 protected:
     ::media::Status onProcess(MediaGraphExecutionContext& context) override;
 
 private:
+    void releaseFormatContext() noexcept;
     ::media::Status bindFormatContext(MediaGraphExecutionContext& context);
     ::media::Status bindSourceStream(MediaGraphExecutionContext& context);
     ::media::Status emitSourceConfig(MediaGraphExecutionContext& context);

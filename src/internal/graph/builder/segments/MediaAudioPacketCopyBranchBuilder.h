@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/core/MediaGraph.h"
+#include "internal/graph/model/MediaRealtimeEdgePolicySet.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "media_transcode/Result.h"
@@ -13,6 +14,7 @@ struct MediaAudioPacketCopyBranchOptions {
     std::string prefix = "audio.copy";
     MediaAudioPipelinePlan plan;
     MediaGraphQueueParameters queues;
+    MediaRealtimeEdgePolicySet edgePolicies;
 
     MediaNodeId formatSourceNode = MediaNodeId::invalid();
     std::string formatSourcePort = "format";

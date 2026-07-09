@@ -11,10 +11,12 @@ public:
 
 protected:
     ::media::Status onProcess(MediaGraphExecutionContext& context) override;
+    ::media::Status stop(MediaGraphExecutionContext& context) override;
 
 private:
     ::media::Status emitEncoderConfig(MediaGraphExecutionContext& context, const MediaBufferRef& codecBuffer);
     ::media::Status receivePackets(MediaGraphExecutionContext& context);
+    ::media::Status drainEncoderForStop();
 
 private:
     bool m_encoderConfigEmitted = false;
