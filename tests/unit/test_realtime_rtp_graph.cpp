@@ -4,6 +4,7 @@
 #include "internal/graph/core/MediaGraphValidation.h"
 #include "internal/graph/model/MediaNodeKind.h"
 #include "internal/graph/model/RealtimeStreamLayout.h"
+#include "internal/graph/nodes/audio/AudioMonotonicTimestamp.h"
 #include "internal/graph/nodes/video/VideoMonotonicTimestamp.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 #include "internal/graph/runtime/MediaGraphRuntime.h"
@@ -1410,6 +1411,56 @@ void testSyntheticTimestampsAdvanceAfterRealTimestamp(TestContext& ctx)
     }
 }
 
+void testAudioTimestampClampsBackwardRtpFrames(TestContext& ctx)
+{
+    const AVRational sourceTimeBase{ 1, 44100 };
+    const AVRational encoderTimeBase{ 1, 44100 };
+
+    const auto first = monotonicAudioFrameTimestamp(177152,
+                                                    sourceTimeBase,
+                                                    encoderTimeBase,
+                                                    AV_NOPTS_VALUE);
+    EXPECT_TRUE(ctx, first);
+    if (!first) {
+        return;
+    }
+    EXPECT_EQ(ctx, first.value(), 177152);
+
+    const auto next = nextAudioFrameTimestamp(first.value(), 1024);
+    EXPECT_TRUE(ctx, next);
+    if (!next) {
+        return;
+    }
+    EXPECT_EQ(ctx, next.value(), 178176);
+
+    const auto backward = monotonicAudioFrameTimestamp(175190,
+                                                       sourceTimeBase,
+                                                       encoderTimeBase,
+                                                       next.value());
+    EXPECT_TRUE(ctx, backward);
+    if (backward) {
+        EXPECT_EQ(ctx, backward.value(), 178176);
+    }
+}
+
+void testAudioTimestampRejectsMissingSourcePts(TestContext& ctx)
+{
+    const auto missingPts = monotonicAudioFrameTimestamp(AV_NOPTS_VALUE,
+                                                        AVRational{ 1, 44100 },
+                                                        AVRational{ 1, 44100 },
+                                                        AV_NOPTS_VALUE);
+    EXPECT_FALSE(ctx, missingPts);
+    if (!missingPts) {
+        EXPECT_EQ(ctx, missingPts.error().code, media::ErrorCode::InvalidArgument);
+    }
+
+    const auto invalidStep = nextAudioFrameTimestamp(1024, 0);
+    EXPECT_FALSE(ctx, invalidStep);
+    if (!invalidStep) {
+        EXPECT_EQ(ctx, invalidStep.error().code, media::ErrorCode::InvalidArgument);
+    }
+}
+
 } // namespace
 
 int main()
@@ -1445,6 +1496,8 @@ int main()
     testTimestampRescaleBumpsQuantizedDuplicates(ctx);
     testTimestampRescaleRejectsInvalidBoundaryValues(ctx);
     testSyntheticTimestampsAdvanceAfterRealTimestamp(ctx);
+    testAudioTimestampClampsBackwardRtpFrames(ctx);
+    testAudioTimestampRejectsMissingSourcePts(ctx);
     testBuildPlansVideoStreamAndSoftwareExecution(ctx);
     testBuildPlansRealtimeUrlAudioBranch(ctx);
     testBuildPlansRawRtpH264Graph(ctx);
