@@ -53,6 +53,26 @@ try {
 Result: exit code `0`; selected `filter=not_required`, final report had `encodedPacketsPushed=36`, `encodedPacketsPopped=36`, `workerErrors=0`.
 
 ```powershell
+$ffmpeg = 'D:\mabs\local64\bin-video\ffmpeg.exe'
+$senderArgs = @('-hide_banner','-loglevel','warning','-re','-stream_loop','-1','-i','out\build\x64-debug\test.mp4','-map','0:v:0','-an','-c:v','copy','-f','rtp','-payload_type','96','rtp://127.0.0.1:5264?pkt_size=1200','-map','0:a:0','-vn','-c:a','aac','-ar','44100','-ac','2','-f','rtp','-payload_type','97','rtp://127.0.0.1:5266?pkt_size=1200')
+$sender = Start-Process -FilePath $ffmpeg -ArgumentList $senderArgs -WindowStyle Hidden -PassThru
+try {
+    Start-Sleep -Seconds 1
+    out\build\x64-debug\media_transcode_realtime_video_cli.exe --input-type rtp --input-layout separate --output-layout separate --video-rtp-url rtp://127.0.0.1:5264 --video-rtp-codec h264 --video-rtp-payload-type 96 --video-rtp-clock-rate 90000 --video-rtp-fmtp 'packetization-mode=1;sprop-parameter-sets=Z01AMpWQAoALWwEQAAA+gAAOpghhA,aOuPIA==;profile-level-id=4D4032' --audio-rtp-url rtp://127.0.0.1:5266 --audio-rtp-codec aac --audio-rtp-payload-type 97 --audio-rtp-clock-rate 44100 --audio-rtp-channels 2 --audio-rtp-fmtp 'profile-level-id=1;mode=AAC-hbr;config=1210;sizelength=13;indexlength=3;indexdeltalength=3' --open-timeout-ms 8000 --read-timeout-ms 8000 --analyze-duration-us 500000 --probe-size 524288 --rtp-host 127.0.0.1 --rtp-port 5270 --sdp out\build\x64-debug\codex_realtime_video_tool_av_smoke.sdp --packet-size 1200 --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --video-codec h264 --audio-codec aac --rc auto --max-duration 5 --progress-timeout-ms 12000 --poll-interval-ms 250
+} finally {
+    if ($sender -and -not $sender.HasExited) { Stop-Process -Id $sender.Id -Force }
+}
+```
+
+Result: exit code `0`; selected `cuda-nvenc`, decoder `h264_cuvid`, encoder `h264_nvenc`; runtime wrote both `rtp_mux.first_packet_written stream=audio` and `rtp_mux.first_packet_written stream=video`; final report had `encodedPacketsPushed=338`, `encodedPacketsPopped=338`, `workerErrors=0`.
+
+```powershell
+Get-Content out\build\x64-debug\codex_realtime_video_tool_av_smoke.sdp
+```
+
+Result: exit code `0`; relevant SDP lines: `m=audio 5272 RTP/AVP 97` and `m=video 5270 RTP/AVP 96`.
+
+```powershell
 out\build\x64-debug\media_transcode_realtime_video_cli.exe --input-type rtp --input-layout separate --output-layout separate --video-rtp-url rtp://192.168.96.154:15666 --video-rtp-codec h264 --video-rtp-payload-type 96 --video-rtp-clock-rate 90000 --video-rtp-fmtp "packetization-mode=1;sprop-parameter-sets=Z01AMpWQAoALWwEQAAA+gAAOpghhA,aOuPIA==;profile-level-id=4D4032" --open-timeout-ms 8000 --read-timeout-ms 8000 --analyze-duration-us 500000 --probe-size 524288 --rtp-host 127.0.0.1 --rtp-port 5014 --sdp out\build\x64-debug\codex_external_rtp_smoke.sdp --packet-size 1200 --disable-hw --no-audio --quiet-graph --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --video-codec h264 --rc auto --max-duration 5 --progress-timeout-ms 12000 --poll-interval-ms 250
 ```
 
