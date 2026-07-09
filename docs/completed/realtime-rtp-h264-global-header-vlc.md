@@ -6,6 +6,7 @@
 - Made the realtime RTP planner set `video.global_header=1` only when the resolved output is separate RTP H264.
 - Kept the responsibility split: planner decides protocol requirements, video segment builder propagates explicit options, and encoder context builder applies `AV_CODEC_FLAG_GLOBAL_HEADER`.
 - Added realtime graph coverage proving separate RTP H264 output requests the global-header option.
+- Added review follow-up coverage proving separate RTP still requests the global-header option when H264 is inherited from input metadata and `--video-codec` is omitted.
 - Rebuilt cleanly after the parameter layout change and retested realtime RTP video+audio with VLC.
 
 ## Root Cause
@@ -28,7 +29,7 @@ Result: exit code `0`; CMake cleaned `173` files and rebuilt `170` steps. This r
 cmd /c "call D:\VisualStudio2026\VC\Auxiliary\Build\vcvars64.bat && cmake --build out/build/x64-debug --target media_transcode_realtime_graph_tests && out\build\x64-debug\media_transcode_realtime_graph_tests.exe"
 ```
 
-Result: exit code `0`; output ended with `realtime graph tests passed`.
+Result: exit code `0`; output ended with `realtime graph tests passed`. This was re-run after adding the review follow-up test for inherited H264 global-header planning.
 
 ```powershell
 D:\mabs\local64\bin-video\ffmpeg.exe -hide_banner -loglevel warning -re -stream_loop -1 -i out\build\x64-debug\test.mp4 -map 0:v:0 -an -c:v copy -f rtp -payload_type 96 "rtp://127.0.0.1:5704?pkt_size=1200" -map 0:a:0 -vn -c:a aac -ar 44100 -ac 2 -f rtp -payload_type 97 "rtp://127.0.0.1:5706?pkt_size=1200"

@@ -51,9 +51,9 @@ Find the root cause for VLC stutter/artifacts that appear only when realtime RTP
 - [x] Compare DAG topology and runtime summaries for video-only vs video+audio output.
 - [x] Inspect whether audio branch work or RTP mux/output writes can block video progress in the current scheduler.
 - [x] Inspect audio/video RTP timestamps, packet counts, packet loss diagnostics, and SDP session layout.
-- [x] Add regression coverage that separate RTP H264 output carries an explicit planner-produced global-header encoder option.
+- [x] Add regression coverage that separate RTP H264 output carries an explicit planner-produced global-header encoder option, including inherited H264 when `--video-codec` is omitted.
 - [x] Implement the architecture-level fix in the planner/builder/encoder-context boundary, then rebuild and smoke test.
-- [ ] Commit, push, PR update, and request a fresh review.
+- [x] Commit, push, PR update, and request a fresh review.
 
 ## Investigation Result
 
@@ -61,5 +61,6 @@ Find the root cause for VLC stutter/artifacts that appear only when realtime RTP
 - Realtime video+audio RTP uses the hardware path: `h264_cuvid` decode, CUDA frames, `h264_nvenc` encode, and `filter=not_required` when no resize is requested.
 - FFmpeg/NVENC RTP output does not include H264 parameter sets in SDP unless the encoder context uses `AV_CODEC_FLAG_GLOBAL_HEADER`.
 - The graph fix is planner-owned: separate RTP + resolved H264 output codec sets `video.global_header=1`; segment builder propagates it; encoder context builder applies `AV_CODEC_FLAG_GLOBAL_HEADER`.
+- Review follow-up added coverage that `video.global_header=1` is still planned when output codec is inherited from RTP input metadata instead of explicitly requested.
 - VLC now receives SDP with `sprop-parameter-sets` and logs `found NAL_PPS` plus `Received first picture`; no `waiting for SPS/PPS` line was observed in the retest log.
 - VLC still reports RTP loss, playback-late events, and hardware acceleration picture allocation failures. Those remain receiver/network/timing risks to investigate separately if visible stutter persists after the H264 parameter-set signaling fix.
