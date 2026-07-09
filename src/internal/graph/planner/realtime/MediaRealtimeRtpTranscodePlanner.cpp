@@ -120,6 +120,22 @@ bool isMuxedTransportStreamOutput(const MediaRealtimeRtpTranscodeRequest& option
     return options.output.streamLayout == RealtimeOutputStreamLayout::MuxedTransportStream;
 }
 
+bool rtpVideoCodecRequiresGlobalHeader(const std::string& codecName)
+{
+    const std::string codec = canonicalCodecName(codecName);
+    return codec == "h264" || codec == "avc" || codec == "avc1";
+}
+
+void applyRealtimeOutputVideoRequirements(MediaVideoTranscodeParameters& parameters,
+                                          RealtimeOutputStreamLayout outputLayout,
+                                          const std::string& outputCodecName)
+{
+    if (outputLayout == RealtimeOutputStreamLayout::SeparateStreams &&
+        rtpVideoCodecRequiresGlobalHeader(outputCodecName)) {
+        parameters.globalHeader = true;
+    }
+}
+
 ::media::Result<void> validateExplicitStreamClassification(const MediaRealtimeRtpTranscodeRequest& options)
 {
     if (!options.input.type.has_value()) {
@@ -598,6 +614,9 @@ MediaEdgePolicy planEdgePolicy(const MediaGraphQueueParameters& queues)
     plan.input.lowLatency = *options.input.lowLatency;
     plan.input.mediaId = options.mediaId;
     if (isSeparateRtpOutput(options)) {
+        applyRealtimeOutputVideoRequirements(plan.videoParameters,
+                                             plan.outputLayout,
+                                             plan.videoPlan.outputCodecName);
         plan.videoOutput.url = outputUrls.value().videoUrl;
         plan.videoOutput.packetSize = *options.output.packetSize;
         plan.videoOutput.mediaId = options.mediaId;
