@@ -603,6 +603,7 @@ MediaRealtimeRtpTranscodeRequest validRawRtpOptions()
     options.input.videoRtp.payloadType = 96;
     options.input.videoRtp.clockRate = 90000;
     options.input.videoRtp.fmtp = "packetization-mode=1;sprop-parameter-sets=Z01AMpWQAoALWwEQAAA+gAAOpghhA,aOuPIA==;profile-level-id=4D4032";
+    options.parameters.video.bitrateKbps = 8406;
     return options;
 }
 
@@ -618,6 +619,7 @@ MediaRealtimeRtpTranscodeRequest validMpegTsUdpOptions()
     options.output.host.clear();
     options.output.basePort.reset();
     options.output.sdpPath.clear();
+    options.parameters.video.bitrateKbps = 8406;
     return options;
 }
 
@@ -1089,6 +1091,18 @@ void testRawRtpInheritsSourceCodecsWhenTranscodeCodecsAreOmitted(TestContext& ct
     EXPECT_EQ(ctx, plan.value().audioPlan.targetCodecName, std::string("aac"));
 }
 
+void testRawRtpRejectsMissingVideoBitrate(TestContext& ctx)
+{
+    MediaRealtimeRtpTranscodeRequest options = validRawRtpOptions();
+    options.parameters.video.bitrateKbps.reset();
+
+    const auto plan = MediaRealtimeRtpTranscodePlanner::plan(options);
+    EXPECT_FALSE(ctx, plan);
+    if (!plan) {
+        EXPECT_EQ(ctx, plan.error().code, media::ErrorCode::InvalidArgument);
+    }
+}
+
 void testRawRtpRejectsUnknownSourceCodecWhenCodecIsNotExplicit(TestContext& ctx)
 {
     MediaRealtimeRtpTranscodeRequest options = validRawRtpOptions();
@@ -1297,6 +1311,11 @@ void testBuildPlansRawRtpH264Graph(TestContext& ctx)
     EXPECT_TRUE(ctx, timestampNode != nullptr);
     if (timestampNode) {
         EXPECT_EQ(ctx, timestampNode->options.value(MediaTranscodeOptionKey::VideoSynthesizeMissingTimestamps), std::string("1"));
+    }
+    const MediaNode* codecResolver = findNodeByKind(graph, MediaNodeKind::CodecResolver);
+    EXPECT_TRUE(ctx, codecResolver != nullptr);
+    if (codecResolver) {
+        EXPECT_EQ(ctx, codecResolver->options.value(MediaTranscodeOptionKey::VideoBitrateKbps), std::string("8406"));
     }
     EXPECT_TRUE(ctx, findEdgeBetweenKinds(graph, MediaNodeKind::RawRtpInput, MediaNodeKind::Demux, MediaEdgeKind::Metadata) != nullptr);
     EXPECT_TRUE(ctx, findEdgeBetweenKinds(graph, MediaNodeKind::Demux, MediaNodeKind::StreamSplit, MediaEdgeKind::InputPacket) != nullptr);
@@ -1779,6 +1798,7 @@ int main()
     testRawRtpAudioEndpointRequiredWhenAudioEnabled(ctx);
     testRawRtpPlansAudioVideoInput(ctx);
     testRawRtpInheritsSourceCodecsWhenTranscodeCodecsAreOmitted(ctx);
+    testRawRtpRejectsMissingVideoBitrate(ctx);
     testRawRtpRejectsUnknownSourceCodecWhenCodecIsNotExplicit(ctx);
     testRealtimeNoResizeDoesNotScoreFilterStage(ctx);
     testRealtimeResizeScoresFilterStage(ctx);

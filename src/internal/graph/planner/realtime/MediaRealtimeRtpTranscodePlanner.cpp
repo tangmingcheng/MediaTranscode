@@ -6,6 +6,7 @@
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
 
+#include <limits>
 #include <sstream>
 #include <optional>
 #include <string>
@@ -44,6 +45,34 @@ MediaVideoTranscodeParameters planRealtimeVideoParameters(const MediaVideoTransc
     MediaVideoTranscodeParameters planned = requested;
     planned.bFrames = RealtimeNoBidirectionalFrames;
     return planned;
+}
+
+::media::Result<MediaVideoTranscodeParameters> resolveRealtimeVideoParameters(
+    const MediaVideoTranscodeParameters& requested,
+    const MediaInputVideoStreamInfo& inputInfo)
+{
+    MediaVideoTranscodeParameters planned = planRealtimeVideoParameters(requested);
+    if (planned.bitrateKbps && *planned.bitrateKbps < 0) {
+        return ::media::Result<MediaVideoTranscodeParameters>::failure(
+            ::media::ErrorInfo::invalidArgument("Realtime RTP video bitrate must be non-negative"));
+    }
+    if (!planned.bitrateKbps) {
+        if (inputInfo.bitrateBitsPerSecond <= 0) {
+            return ::media::Result<MediaVideoTranscodeParameters>::failure(
+                ::media::ErrorInfo::invalidArgument("Realtime RTP video bitrate is required when input bitrate is not observable"));
+        }
+        const int64_t sourceBitrateKbps = (inputInfo.bitrateBitsPerSecond + 999) / 1000;
+        if (sourceBitrateKbps > std::numeric_limits<int>::max()) {
+            return ::media::Result<MediaVideoTranscodeParameters>::failure(
+                ::media::ErrorInfo::invalidArgument("Realtime RTP video bitrate is too large"));
+        }
+        planned.bitrateKbps = static_cast<int>(sourceBitrateKbps);
+    }
+    if (planned.bitrateKbps && *planned.bitrateKbps == 0) {
+        return ::media::Result<MediaVideoTranscodeParameters>::failure(
+            ::media::ErrorInfo::invalidArgument("Realtime RTP video bitrate must be positive"));
+    }
+    return ::media::Result<MediaVideoTranscodeParameters>::success(std::move(planned));
 }
 
 struct PlannedOutputUrls {
@@ -432,6 +461,7 @@ MediaEdgePolicy planEdgePolicy(const MediaGraphQueueParameters& queues)
     std::string plannedInputUrl = options.input.url;
     MediaPipelinePlan videoPlan;
     MediaAudioPipelinePlan audioPlan;
+    MediaVideoTranscodeParameters videoParameters;
     if (isRtpPortInput(options)) {
         auto videoDescriptor = MediaRealtimeRtpCodecRegistry::describe(MediaStreamKind::Video, options.input.videoRtp);
         if (!videoDescriptor) {
@@ -493,6 +523,11 @@ MediaEdgePolicy planEdgePolicy(const MediaGraphQueueParameters& queues)
         MediaInputVideoStreamInfo inputInfo;
         inputInfo.streamIndex = RawRtpVideoStreamIndex;
         inputInfo.codecName = videoDescriptor.value().codecName;
+        auto plannedVideoParameters = resolveRealtimeVideoParameters(options.parameters.video, inputInfo);
+        if (!plannedVideoParameters) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(plannedVideoParameters.error());
+        }
+        videoParameters = std::move(plannedVideoParameters).value();
         auto plannedVideo = MediaPipelinePlanner::planVideoTranscodeKnownInput(
             std::move(inputInfo),
             plannedInputUrl,
@@ -518,6 +553,11 @@ MediaEdgePolicy planEdgePolicy(const MediaGraphQueueParameters& queues)
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(plannedVideo.error());
         }
         videoPlan = std::move(plannedVideo).value();
+        auto plannedVideoParameters = resolveRealtimeVideoParameters(options.parameters.video, realtimeInput.value().video);
+        if (!plannedVideoParameters) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(plannedVideoParameters.error());
+        }
+        videoParameters = std::move(plannedVideoParameters).value();
 
         if (audioRequested(options)) {
             if (!realtimeInput.value().hasAudio) {
@@ -544,7 +584,7 @@ MediaEdgePolicy planEdgePolicy(const MediaGraphQueueParameters& queues)
     plan.outputLayout = *options.output.streamLayout;
     plan.videoPlan = std::move(videoPlan);
     plan.audioPlan = std::move(audioPlan);
-    plan.videoParameters = planRealtimeVideoParameters(options.parameters.video);
+    plan.videoParameters = std::move(videoParameters);
     plan.audioParameters = options.parameters.audio;
     plan.queues = options.parameters.queues;
     plan.edgePolicy = planEdgePolicy(options.parameters.queues);
