@@ -917,6 +917,15 @@ void testCapabilityScanningResponsibilitiesAreSeparated(TestContext& ctx)
     expectTextNotContains(ctx, facade, "av_hwdevice_ctx_create");
 }
 
+void testRealtimePlannerOutputPolicyIsSeparated(TestContext& ctx)
+{
+    const std::string planner = repositoryFile("src/internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.cpp");
+    const std::string outputPolicy = repositoryFile("src/internal/graph/planner/realtime/MediaRealtimeOutputPolicyPlanner.h");
+    expectTextContains(ctx, outputPolicy, "class MediaRealtimeOutputPolicyPlanner final");
+    expectTextNotContains(ctx, planner, "applyRtpOutputWritePacing");
+    expectTextNotContains(ctx, planner, "planMuxedTransportStreamOutput");
+}
+
 void testPlannerRejectsUnresolvedBehaviorOptions(TestContext& ctx)
 {
     MediaInputVideoStreamInfo input;
@@ -3042,6 +3051,7 @@ int main()
     testVideoToolsRejectLegacyBusinessSwitches(ctx);
     testGraphRejectsBehaviorDefaultImplementations(ctx);
     testCapabilityScanningResponsibilitiesAreSeparated(ctx);
+    testRealtimePlannerOutputPolicyIsSeparated(ctx);
     testPlannerRejectsUnresolvedBehaviorOptions(ctx);
     testValidationRejectsUnsupportedRealtimeInput(ctx);
     testValidationRequiresExplicitRealtimeStreamClassification(ctx);
