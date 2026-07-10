@@ -52,4 +52,4 @@ VLC subjective playback completed for 60 seconds. Human observation reported smo
 ## Remaining Risks
 
 - Per-node workers still create one OS thread per runtime node; a bounded worker pool remains a separate scalability improvement.
-- Commit, push, PR creation, and independent PR review remain pending.
+- Implementation commit `891b08a` was pushed and PR #20 was created. Independent review of the final PR head remains pending.

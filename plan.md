@@ -23,7 +23,8 @@ Eliminate realtime audio/video DAG busy waiting without fixed sleeps or node-spe
 - [x] Run event-runtime tests, realtime graph tests, CTest, hardware A/V smoke, and software A/V comparison smoke.
 - [x] Update the project-wide `QUALITY_SCORE.md` from an industrial DAG-engine review.
 - [x] Complete final implementation review closure.
-- [ ] Commit, push, create the PR, and complete independent PR review.
+- [x] Commit, push, and create PR #20.
+- [ ] Complete independent review of the final PR head.
 - [x] Perform 60-second VLC subjective playback validation with human observation.
 
 ## Acceptance Evidence
