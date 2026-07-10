@@ -2,6 +2,7 @@
 
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/nodes/FFmpegCodecNodeRuntime.h"
+#include "internal/graph/runtime/lifecycle/MediaInputTerminalTracker.h"
 
 #include <cstdint>
 
@@ -17,7 +18,7 @@ public:
     static MediaNodeKind staticKind() noexcept;
 
 protected:
-    ::media::Status onProcess(MediaGraphExecutionContext& context) override;
+    ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context) override;
 
 private:
     ::media::Status bindEncoderContext(MediaGraphExecutionContext& context);
@@ -29,6 +30,8 @@ private:
 private:
     ::media::ffmpeg::SwrContextPtr m_swr;
     int64_t m_nextOutputPts = AV_NOPTS_VALUE;
+    MediaInputTerminalTracker m_terminals { { "frame" } };
+    bool m_eofEmitted = false;
 };
 
 } // namespace media::ffmpeg::graph

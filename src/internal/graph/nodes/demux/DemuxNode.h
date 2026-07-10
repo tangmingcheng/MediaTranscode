@@ -2,6 +2,7 @@
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 
 #include <atomic>
 
@@ -14,18 +15,22 @@ public:
     explicit DemuxNode(MediaNodeId nodeId);
     static MediaNodeKind staticKind() noexcept;
     bool abortRequested() const noexcept;
-
-protected:
-    ::media::Status onProcess(MediaGraphExecutionContext& context) override;
+    bool hasBoundFormatContext() const noexcept;
+    ::media::Status start(MediaGraphExecutionContext& context) override;
     ::media::Status stop(MediaGraphExecutionContext& context) override;
     void abort(MediaGraphExecutionContext& context) noexcept override;
 
+protected:
+    ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context) override;
+    void interrupt(MediaGraphExecutionContext& context) noexcept override;
+
 private:
+    void resetRuntimeState() noexcept;
     ::media::Status bindFormatContext(MediaGraphExecutionContext& context);
     ::media::Status emitEof(MediaGraphExecutionContext& context);
 
 private:
-    MediaBufferRef m_formatContextOwner;
+    ::media::ffmpeg::InputFormatContextPtr m_formatContextOwner;
     AVFormatContext* m_formatContext = nullptr;
     std::atomic_bool m_abortRequested { false };
     bool m_eofSent = false;

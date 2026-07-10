@@ -112,8 +112,7 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
     return ::media::Result<int>::success(kbits * kBitsPerKbit);
 }
 
-::media::Result<AVRational> resolveFrameRate(AVFormatContext* formatContext,
-                                             AVStream* stream,
+::media::Result<AVRational> resolveFrameRate(const MediaTimeDescriptor& sourceTime,
                                              const MediaNodeOptions* options)
 {
     auto fpsNumResult = intOption(options, MediaTranscodeOptionKey::VideoFpsNum);
@@ -135,17 +134,8 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
         return ::media::Result<AVRational>::success(AVRational{ *fpsNum, *fpsDen });
     }
 
-    AVRational frameRate = av_guess_frame_rate(formatContext, stream, nullptr);
-    if (frameRate.num > 0 && frameRate.den > 0) {
-        return ::media::Result<AVRational>::success(frameRate);
-    }
-
-    if (stream && stream->avg_frame_rate.num > 0 && stream->avg_frame_rate.den > 0) {
-        return ::media::Result<AVRational>::success(stream->avg_frame_rate);
-    }
-
-    if (stream && stream->r_frame_rate.num > 0 && stream->r_frame_rate.den > 0) {
-        return ::media::Result<AVRational>::success(stream->r_frame_rate);
+    if (sourceTime.frameRate.num > 0 && sourceTime.frameRate.den > 0) {
+        return ::media::Result<AVRational>::success(AVRational{ sourceTime.frameRate.num, sourceTime.frameRate.den });
     }
 
     return ::media::Result<AVRational>::failure(
@@ -154,12 +144,7 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
 
 ::media::Status validateRequest(const CodecResolverEncoderContextBuildRequest& request)
 {
-    if (!request.formatContext) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder requires format context"));
-    }
-
-    if (!request.stream || !request.stream->codecpar) {
+    if (!request.codecParameters) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("CodecResolverEncoderContextBuilder requires source stream"));
     }
@@ -216,8 +201,7 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
     }
 
     const MediaNodeOptions* options = request.options;
-    AVStream* stream = request.stream;
-    AVCodecParameters* params = stream->codecpar;
+    const AVCodecParameters* params = request.codecParameters;
 
     const std::string plannedEncoder = optionValue(options, MediaTranscodeOptionKey::PlannedEncoder);
     if (plannedEncoder.empty() || plannedEncoder == "auto") {
@@ -238,7 +222,7 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
     }
     const CodecResolverEncoderFormatPlan formatPlan = formatPlanResult.value();
 
-    auto frameRateResult = resolveFrameRate(request.formatContext, stream, options);
+    auto frameRateResult = resolveFrameRate(request.sourceTime, options);
     if (!frameRateResult) {
         return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(frameRateResult.error());
     }
@@ -274,7 +258,8 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
     encoderContext->pix_fmt = formatPlan.encoderPixelFormat;
     encoderContext->time_base = AVRational{ frameRate.den, frameRate.num };
     encoderContext->framerate = frameRate;
-    encoderContext->sample_aspect_ratio = stream->sample_aspect_ratio;
+    encoderContext->sample_aspect_ratio = AVRational{ request.sourceFormat.video.sampleAspectRatio.num,
+                                                      request.sourceFormat.video.sampleAspectRatio.den };
     encoderContext->color_range = params->color_range;
     encoderContext->color_primaries = params->color_primaries;
     encoderContext->color_trc = params->color_trc;

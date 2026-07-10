@@ -112,9 +112,9 @@ std::vector<const MediaRuntimeNode*> MediaGraphScheduler::orderedRuntimeNodes(co
     }
 
     for (MediaRuntimeNode* node : orderedRuntimeNodes(context)) {
-        auto status = node->process(context);
-        if (!status) {
-            return status;
+        auto result = node->process(context);
+        if (!result) {
+            return ::media::Status::failure(result.error());
         }
     }
 

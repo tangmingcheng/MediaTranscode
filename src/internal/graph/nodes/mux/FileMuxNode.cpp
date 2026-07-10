@@ -91,44 +91,76 @@ MediaNodeKind FileMuxNode::staticKind() noexcept
     return MediaNodeKind::FileMux;
 }
 
-::media::Status FileMuxNode::onProcess(MediaGraphExecutionContext& context)
+::media::Result<MediaNodeProcessResult> FileMuxNode::onProcess(MediaGraphExecutionContext& context)
 {
     auto expected = bindMuxExpectations(context);
     if (!expected) {
-        return expected;
+        return processProgress(expected);
+    }
+    if (m_completion.readyForTrailer()) {
+        auto pending = writePendingPacketsIfReady();
+        if (!pending) return processProgress(pending);
+        auto trailer = writeTrailerIfNeeded();
+        return processFinished(trailer);
     }
 
-    auto input = tryPopFirstInputOptional(context);
+    auto input = tryPopFirstInputWithChannelOptional(context);
     if (!input) {
-        return ::media::Status::failure(input.error());
+        return ::media::Result<MediaNodeProcessResult>::failure(input.error());
     }
     if (!input.value()) {
-        return ::media::Status::success();
+        bool allClosed = true;
+        for (MediaChannel* channel : context.inputChannels(nodeId())) {
+            allClosed = allClosed && channel->closed() && channel->size() == 0;
+            if (channel->closed() && channel->size() == 0 &&
+                channel->binding().edgeKind == MediaEdgeKind::EncodedPacket) {
+                m_completion.markInputClosed(std::to_string(channel->id().value));
+            }
+        }
+        if (allClosed && m_completion.readyForTrailer()) {
+            auto pending = writePendingPacketsIfReady();
+            if (!pending) return processProgress(pending);
+            auto trailer = writeTrailerIfNeeded();
+            if (!trailer) return processProgress(trailer);
+            return processFinished();
+        }
+        return processWaiting();
     }
 
-    MediaBufferRef buffer = *input.value();
+    MediaBufferRef buffer = input.value()->buffer;
     if (tryBindOutputContext(buffer)) {
         auto status = registerPendingStreamConfigs();
-        return status ? writePendingPacketsIfReady() : status;
+        return processProgress(status ? writePendingPacketsIfReady() : status);
     }
 
     auto configStatus = tryBindStreamConfig(buffer);
     if (!configStatus) {
-        return configStatus;
+        return processProgress(configStatus);
     }
 
-    if (buffer->isEof() || buffer->isFlush()) {
-        return forwardIfOutputsExist(context, buffer);
+    if (buffer->isEof()) {
+        m_completion.markInputEof(std::to_string(input.value()->channel->id().value));
+        if (m_completion.readyForTrailer()) {
+            auto pending = writePendingPacketsIfReady();
+            if (!pending) return processProgress(pending);
+            auto trailer = writeTrailerIfNeeded();
+            if (!trailer) return processProgress(trailer);
+            return processFinished(forwardIfOutputsExist(context, buffer));
+        }
+        return processProgress(forwardIfOutputsExist(context, buffer));
+    }
+    if (buffer->isFlush()) {
+        return processProgress(forwardIfOutputsExist(context, buffer));
     }
 
     if (FFmpegPacketView::isPacket(buffer)) {
         auto status = writePacket(buffer);
         if (!status) {
-            return status;
+            return processProgress(status);
         }
     }
 
-    return forwardIfOutputsExist(context, buffer);
+    return processProgress(forwardIfOutputsExist(context, buffer));
 }
 
 ::media::Status FileMuxNode::flush(MediaGraphExecutionContext& context)
@@ -173,6 +205,17 @@ MediaNodeKind FileMuxNode::staticKind() noexcept
     }
     m_expectVideo = video.value();
     m_expectAudio = audio.value();
+    std::vector<std::string> terminalInputs;
+    for (MediaChannel* channel : context.inputChannels(nodeId())) {
+        if (channel && channel->binding().edgeKind == MediaEdgeKind::EncodedPacket) {
+            terminalInputs.push_back(std::to_string(channel->id().value));
+        }
+    }
+    std::vector<std::string> expectedConfigs;
+    if (m_expectVideo) expectedConfigs.emplace_back("video");
+    if (m_expectAudio) expectedConfigs.emplace_back("audio");
+    m_completion.setExpectedConfigKeys(std::move(expectedConfigs));
+    m_completion.setExpectedTerminalChannels(std::move(terminalInputs));
     m_expectationsBound = true;
     return ::media::Status::success();
 }
@@ -275,6 +318,7 @@ bool FileMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
         stream->r_frame_rate = codec->framerate;
     }
     setStreamIndex(kind, stream->index, m_videoStreamIndex, m_audioStreamIndex);
+    m_completion.markConfigReady(kind == MediaStreamKind::Video ? "video" : "audio");
     return ::media::Status::success();
 }
 
@@ -301,6 +345,7 @@ bool FileMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
     stream->codecpar->codec_tag = 0;
     stream->time_base = toAVRational(buffer->timeDescriptor().timeBase);
     setStreamIndex(kind, stream->index, m_videoStreamIndex, m_audioStreamIndex);
+    m_completion.markConfigReady(kind == MediaStreamKind::Video ? "video" : "audio");
     return ::media::Status::success();
 }
 
@@ -317,6 +362,7 @@ bool FileMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
         return FFmpegGraphError::statusFromCode(ret, "avformat_write_header");
     }
     m_headerWritten = true;
+    m_completion.markHeaderWritten();
     return ::media::Status::success();
 }
 
@@ -328,6 +374,7 @@ bool FileMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
     }
     auto pending = std::move(m_pendingPackets);
     m_pendingPackets.clear();
+    m_completion.setPendingPackets(0);
     for (const auto& buffer : pending) {
         auto status = writePacketNow(buffer);
         if (!status) {
@@ -345,6 +392,7 @@ bool FileMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
     }
     if (!m_headerWritten) {
         m_pendingPackets.push_back(buffer);
+        m_completion.setPendingPackets(m_pendingPackets.size());
         return ::media::Status::success();
     }
     auto pending = writePendingPacketsIfReady();
@@ -395,6 +443,7 @@ bool FileMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
         return FFmpegGraphError::statusFromCode(ret, "av_write_trailer");
     }
     m_trailerWritten = true;
+    m_completion.markTrailerWritten();
     return ::media::Status::success();
 }
 
@@ -409,6 +458,8 @@ void FileMuxNode::releaseRuntimeViews() noexcept
     m_expectationsBound = false;
     m_expectVideo = false;
     m_expectAudio = false;
+    m_eofInputs = 0;
+    m_completion.reset();
     m_videoStreamIndex = invalidMediaStreamIndex;
     m_audioStreamIndex = invalidMediaStreamIndex;
 }

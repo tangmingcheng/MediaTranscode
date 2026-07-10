@@ -46,22 +46,48 @@ MediaNodeKind HardwareTransferNode::staticKind() noexcept
     return MediaNodeKind::HardwareTransfer;
 }
 
-::media::Status HardwareTransferNode::onProcess(MediaGraphExecutionContext& context)
+::media::Result<MediaNodeProcessResult> HardwareTransferNode::onProcess(MediaGraphExecutionContext& context)
 {
+    if (m_terminals.finished()) {
+        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
+    }
+
     auto input = tryPopFirstInputOptional(context);
     if (!input) {
-        return ::media::Status::failure(input.error());
+        return ::media::Result<MediaNodeProcessResult>::failure(input.error());
     }
     if (!input.value()) {
-        return ::media::Status::success();
+        MediaChannel* frameInput = context.findInputChannel(nodeId(), "frame");
+        if (frameInput && frameInput->closed()) {
+            m_terminals.markClosed("frame");
+            return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
+        }
+        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::waiting());
     }
 
     const MediaBufferRef& buffer = *input.value();
     if (buffer->isEof() || buffer->isFlush()) {
-        return emitOutput(context, "frame", buffer);
+        const bool eof = buffer->isEof();
+        if (eof && m_eofEmitted) {
+            return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
+        }
+        auto emitStatus = emitOutput(context, "frame", buffer);
+        if (!emitStatus) {
+            return ::media::Result<MediaNodeProcessResult>::failure(emitStatus.error());
+        }
+        if (eof) {
+            m_terminals.markEof("frame");
+            m_eofEmitted = true;
+        }
+        return ::media::Result<MediaNodeProcessResult>::success(
+            eof ? MediaNodeProcessResult::finished() : MediaNodeProcessResult::progress());
     }
 
-    return transferOrForward(context, buffer);
+    auto transferStatus = transferOrForward(context, buffer);
+    if (!transferStatus) {
+        return ::media::Result<MediaNodeProcessResult>::failure(transferStatus.error());
+    }
+    return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
 }
 
 ::media::Status HardwareTransferNode::transferOrForward(MediaGraphExecutionContext& context,

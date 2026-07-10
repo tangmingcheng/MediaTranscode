@@ -4,9 +4,9 @@
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 
-struct AVFormatContext;
-
 namespace media::ffmpeg::graph {
+
+struct FFmpegInputStreamSnapshot;
 
 class PacketNormalizeNode final : public FFmpegNodeRuntime {
 public:
@@ -16,7 +16,7 @@ public:
     void abort(MediaGraphExecutionContext& context) noexcept override;
 
 protected:
-    ::media::Status onProcess(MediaGraphExecutionContext& context) override;
+    ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context) override;
 
 private:
     void releaseFormatContext() noexcept;
@@ -27,7 +27,7 @@ private:
 
 private:
     MediaBufferRef m_formatContextOwner;
-    AVFormatContext* m_formatContext = nullptr;
+    const FFmpegInputStreamSnapshot* m_sourceStream = nullptr;
     MediaStreamKind m_streamKind = MediaStreamKind::Unknown;
     int m_sourceStreamIndex = invalidMediaStreamIndex;
     bool m_monotonicPacketTimestamps = false;

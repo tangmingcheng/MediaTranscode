@@ -76,7 +76,7 @@ const std::string& MediaNodeRuntime::name() const noexcept
     return m_name;
 }
 
-::media::Status MediaNodeRuntime::process(MediaGraphExecutionContext& context)
+::media::Result<MediaNodeProcessResult> MediaNodeRuntime::process(MediaGraphExecutionContext& context)
 {
     const std::string beginKey = "node:" + std::to_string(m_nodeId.value) + ":process.begin";
     auto beginDecision = mediaGraphDiagnosticSample(MediaGraphDiagnosticLevel::Trace, beginKey);
@@ -92,9 +92,10 @@ const std::string& MediaNodeRuntime::name() const noexcept
                                                          beginDecision.sequence));
     }
 
-    auto status = onProcess(context);
+    auto outcome = onProcess(context);
 
-    if (!status) {
+    if (!outcome) {
+        auto status = ::media::Status::failure(outcome.error());
         mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
                                 MediaGraphDiagnosticPhase::RuntimeNode,
                                 processDiagnosticMessage("process.failed",
@@ -103,7 +104,7 @@ const std::string& MediaNodeRuntime::name() const noexcept
                                                          m_kind,
                                                          context,
                                                          &status));
-        return status;
+        return outcome;
     }
 
     const std::string doneKey = "node:" + std::to_string(m_nodeId.value) + ":process.done";
@@ -116,16 +117,38 @@ const std::string& MediaNodeRuntime::name() const noexcept
                                                          m_name,
                                                          m_kind,
                                                          context,
-                                                         &status,
+                                                         nullptr,
                                                          doneDecision.sequence));
     }
 
-    return status;
+    if (outcome.value().state == MediaNodeProcessState::Finished) {
+        for (MediaChannel* channel : context.outputChannels(m_nodeId)) {
+            channel->close();
+        }
+    }
+    return outcome;
 }
 
-::media::Status MediaNodeRuntime::onProcess(MediaGraphExecutionContext&)
+::media::Result<MediaNodeProcessResult> MediaNodeRuntime::onProcess(MediaGraphExecutionContext&)
 {
-    return ::media::Status::success();
+    return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
+}
+
+::media::Result<MediaNodeProcessResult> MediaNodeRuntime::processProgress(::media::Status status)
+{
+    return status ? ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress())
+                  : ::media::Result<MediaNodeProcessResult>::failure(status.error());
+}
+
+::media::Result<MediaNodeProcessResult> MediaNodeRuntime::processWaiting()
+{
+    return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::waiting());
+}
+
+::media::Result<MediaNodeProcessResult> MediaNodeRuntime::processFinished(::media::Status status)
+{
+    return status ? ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished())
+                  : ::media::Result<MediaNodeProcessResult>::failure(status.error());
 }
 
 } // namespace media::ffmpeg::graph

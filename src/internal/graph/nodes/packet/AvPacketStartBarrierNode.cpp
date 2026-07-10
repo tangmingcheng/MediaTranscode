@@ -24,18 +24,32 @@ MediaNodeKind AvPacketStartBarrierNode::staticKind() noexcept
     return MediaNodeKind::AvPacketStartBarrier;
 }
 
-::media::Status AvPacketStartBarrierNode::onProcess(MediaGraphExecutionContext& context)
+::media::Result<MediaNodeProcessResult> AvPacketStartBarrierNode::onProcess(MediaGraphExecutionContext& context)
 {
     auto configured = configure(context);
     if (!configured) {
-        return configured;
+        return processProgress(configured);
     }
 
-    if (auto status = processCodec(context, "video_codec", "video_codec"); !status) return status;
-    if (auto status = processCodec(context, "audio_codec", "audio_codec"); !status) return status;
-    if (auto status = processPacket(context, "video_packet", "video_packet", m_expectVideo, m_videoReady, m_pendingVideo); !status) return status;
-    if (auto status = processPacket(context, "audio_packet", "audio_packet", m_expectAudio, m_audioReady, m_pendingAudio); !status) return status;
-    return releaseIfReady(context);
+    bool progressed = false;
+    auto videoCodec = processCodec(context, "video_codec", "video_codec");
+    if (!videoCodec) return ::media::Result<MediaNodeProcessResult>::failure(videoCodec.error());
+    progressed = progressed || videoCodec.value();
+    auto audioCodec = processCodec(context, "audio_codec", "audio_codec");
+    if (!audioCodec) return ::media::Result<MediaNodeProcessResult>::failure(audioCodec.error());
+    progressed = progressed || audioCodec.value();
+    auto videoPacket = processPacket(context, "video_packet", "video_packet", m_expectVideo, m_videoReady, m_videoEof, m_pendingVideo);
+    if (!videoPacket) return ::media::Result<MediaNodeProcessResult>::failure(videoPacket.error());
+    progressed = progressed || videoPacket.value();
+    auto audioPacket = processPacket(context, "audio_packet", "audio_packet", m_expectAudio, m_audioReady, m_audioEof, m_pendingAudio);
+    if (!audioPacket) return ::media::Result<MediaNodeProcessResult>::failure(audioPacket.error());
+    progressed = progressed || audioPacket.value();
+    auto released = releaseIfReady(context);
+    if (!released) return ::media::Result<MediaNodeProcessResult>::failure(released.error());
+    if (released && (!m_expectVideo || m_videoEof) && (!m_expectAudio || m_audioEof)) {
+        return processFinished(released);
+    }
+    return progressed ? processProgress(released) : processWaiting();
 }
 
 ::media::Status AvPacketStartBarrierNode::stop(MediaGraphExecutionContext& context)
@@ -88,50 +102,64 @@ void AvPacketStartBarrierNode::abort(MediaGraphExecutionContext& context) noexce
     return ::media::Status::success();
 }
 
-::media::Status AvPacketStartBarrierNode::processCodec(MediaGraphExecutionContext& context,
+::media::Result<bool> AvPacketStartBarrierNode::processCodec(MediaGraphExecutionContext& context,
                                                        const char* inputPort,
                                                        const char* outputPort)
 {
     auto input = tryPopInputOptional(context, inputPort);
     if (!input) {
-        return ::media::Status::failure(input.error());
+        return ::media::Result<bool>::failure(input.error());
     }
     if (!input.value()) {
-        return ::media::Status::success();
+        return ::media::Result<bool>::success(false);
     }
-    return emitOutput(context, outputPort, *input.value());
+    auto status = emitOutput(context, outputPort, *input.value());
+    return status ? ::media::Result<bool>::success(true) : ::media::Result<bool>::failure(status.error());
 }
 
-::media::Status AvPacketStartBarrierNode::processPacket(MediaGraphExecutionContext& context,
+::media::Result<bool> AvPacketStartBarrierNode::processPacket(MediaGraphExecutionContext& context,
                                                         const char* inputPort,
                                                         const char* outputPort,
                                                         bool expected,
                                                         bool& ready,
+                                                        bool& eof,
                                                         MediaBufferRef& pending)
 {
     if (!expected) {
-        return ::media::Status::success();
+        return ::media::Result<bool>::success(false);
     }
 
     auto input = tryPopInputOptional(context, inputPort);
     if (!input) {
-        return ::media::Status::failure(input.error());
+        return ::media::Result<bool>::failure(input.error());
     }
     if (!input.value()) {
-        return ::media::Status::success();
+        return ::media::Result<bool>::success(false);
     }
 
     MediaBufferRef buffer = *input.value();
+    if (buffer->isEof()) {
+        eof = true;
+        ready = true;
+        if (pending) {
+            auto pendingStatus = emitOutput(context, outputPort, pending);
+            if (!pendingStatus) return ::media::Result<bool>::failure(pendingStatus.error());
+            pending.reset();
+        }
+        auto status = emitOutput(context, outputPort, buffer);
+        return status ? ::media::Result<bool>::success(true) : ::media::Result<bool>::failure(status.error());
+    }
     if (m_open) {
-        return emitOutput(context, outputPort, buffer);
+        auto status = emitOutput(context, outputPort, buffer);
+        return status ? ::media::Result<bool>::success(true) : ::media::Result<bool>::failure(status.error());
     }
     if (m_requireVideoKeyFrame && buffer->streamKind() == MediaStreamKind::Video && !buffer->isKeyFrame()) {
-        return ::media::Status::success();
+        return ::media::Result<bool>::success(true);
     }
 
     pending = buffer;
     ready = true;
-    return ::media::Status::success();
+    return ::media::Result<bool>::success(true);
 }
 
 ::media::Status AvPacketStartBarrierNode::releaseIfReady(MediaGraphExecutionContext& context)
@@ -171,6 +199,8 @@ void AvPacketStartBarrierNode::reset() noexcept
     m_open = false;
     m_videoReady = false;
     m_audioReady = false;
+    m_videoEof = false;
+    m_audioEof = false;
     m_pendingVideo.reset();
     m_pendingAudio.reset();
 }

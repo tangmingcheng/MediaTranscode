@@ -3,6 +3,7 @@
 #include "internal/graph/runtime/queue/MediaQueue.h"
 
 #include <atomic>
+#include <condition_variable>
 #include <mutex>
 #include <vector>
 
@@ -44,6 +45,8 @@ private:
     std::vector<MediaBufferRef> m_ring;
     std::size_t m_capacity = 0;
     mutable std::mutex m_mutex;
+    std::condition_variable m_notEmpty;
+    std::condition_variable m_notFull;
     std::atomic_size_t m_read{ 0 };
     std::atomic_size_t m_write{ 0 };
     std::atomic_bool m_closed{ false };

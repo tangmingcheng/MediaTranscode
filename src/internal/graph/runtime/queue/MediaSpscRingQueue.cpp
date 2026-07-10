@@ -2,7 +2,6 @@
 
 #include "internal/graph/runtime/buffer/MediaBuffer.h"
 
-#include <thread>
 #include <utility>
 
 namespace media::ffmpeg::graph {
@@ -55,7 +54,12 @@ MediaSpscRingQueue::MediaSpscRingQueue(MediaQueuePolicy policy)
         if (m_policy.overflowPolicy == MediaQueueOverflowPolicy::DropNonKeyFrame &&
             buffer->isKeyFrame()) {
             ++m_metrics.blockedPushes;
-            std::this_thread::yield();
+            std::unique_lock<std::mutex> lock(m_mutex);
+            m_notFull.wait(lock, [&] {
+                const auto write = m_write.load(std::memory_order_acquire);
+                const auto read = m_read.load(std::memory_order_acquire);
+                return m_closed || m_aborted || !full(write, read);
+            });
             continue;
         }
 
@@ -65,7 +69,12 @@ MediaSpscRingQueue::MediaSpscRingQueue(MediaQueuePolicy policy)
         }
 
         ++m_metrics.blockedPushes;
-        std::this_thread::yield();
+        std::unique_lock<std::mutex> lock(m_mutex);
+        m_notFull.wait(lock, [&] {
+            const auto write = m_write.load(std::memory_order_acquire);
+            const auto read = m_read.load(std::memory_order_acquire);
+            return m_closed || m_aborted || !full(write, read);
+        });
     }
 
     return ::media::Status::success();
@@ -97,6 +106,8 @@ bool MediaSpscRingQueue::tryPush(MediaBufferRef buffer)
             m_aborted = true;
             m_closed = true;
             ++m_metrics.failedPushes;
+            m_notEmpty.notify_all();
+            m_notFull.notify_all();
             return false;
         case MediaQueueOverflowPolicy::DropNonKeyFrame:
             if (!buffer->isKeyFrame()) {
@@ -119,6 +130,7 @@ bool MediaSpscRingQueue::tryPush(MediaBufferRef buffer)
     m_write.store(next(currentWrite), std::memory_order_release);
     ++m_metrics.pushed;
     updateSizeMetrics(sizeLocked());
+    m_notEmpty.notify_one();
     return true;
 }
 
@@ -135,7 +147,12 @@ bool MediaSpscRingQueue::tryPush(MediaBufferRef buffer)
                 ::media::ErrorInfo::notInitialized("MediaSpscRingQueue pop failed: queue closed and empty"));
         }
 
-        std::this_thread::yield();
+        std::unique_lock<std::mutex> lock(m_mutex);
+        m_notEmpty.wait(lock, [&] {
+            const auto write = m_write.load(std::memory_order_acquire);
+            const auto read = m_read.load(std::memory_order_acquire);
+            return m_closed || m_aborted || !empty(write, read);
+        });
     }
 
     return ::media::Status::success();
@@ -157,6 +174,7 @@ bool MediaSpscRingQueue::tryPop(MediaBufferRef& out)
     m_read.store(next(read), std::memory_order_release);
     ++m_metrics.popped;
     updateSizeMetrics(sizeLocked());
+    m_notFull.notify_one();
     return true;
 }
 
@@ -164,6 +182,8 @@ void MediaSpscRingQueue::close()
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_closed = true;
+    m_notEmpty.notify_all();
+    m_notFull.notify_all();
 }
 
 void MediaSpscRingQueue::abort()
@@ -171,6 +191,8 @@ void MediaSpscRingQueue::abort()
     std::lock_guard<std::mutex> lock(m_mutex);
     m_aborted = true;
     m_closed = true;
+    m_notEmpty.notify_all();
+    m_notFull.notify_all();
 }
 
 void MediaSpscRingQueue::clear()
@@ -182,6 +204,7 @@ void MediaSpscRingQueue::clear()
     m_read.store(0, std::memory_order_release);
     m_write.store(0, std::memory_order_release);
     updateSizeMetrics(0);
+    m_notFull.notify_all();
 }
 
 bool MediaSpscRingQueue::closed() const

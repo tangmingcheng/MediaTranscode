@@ -3,6 +3,7 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
+#include "internal/graph/runtime/lifecycle/MediaInputTerminalTracker.h"
 
 #include <cstdint>
 
@@ -21,14 +22,14 @@ public:
     static MediaNodeKind staticKind() noexcept;
 
 protected:
-    ::media::Status onProcess(MediaGraphExecutionContext& context) override;
+    ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context) override;
 
 private:
     ::media::Status bindEncoderConfig(MediaGraphExecutionContext& context, const MediaBufferRef& buffer);
     ::media::Status initializeGraph(MediaGraphExecutionContext& context, const MediaBufferRef& firstFrameBuffer);
     ::media::Status sendFrame(MediaGraphExecutionContext& context, const MediaBufferRef& buffer);
     ::media::Status flushGraph(MediaGraphExecutionContext& context);
-    ::media::Status drainFrames(MediaGraphExecutionContext& context);
+      ::media::Status drainFrames(MediaGraphExecutionContext& context, bool* produced = nullptr);
     ::media::Status emitFrame(MediaGraphExecutionContext& context, ::media::ffmpeg::FramePtr frame);
     ::media::Status rescaleAndValidateFrame(AVFrame* frame) noexcept;
     void resetFilterGraph() noexcept;
@@ -44,6 +45,8 @@ private:
     int64_t m_lastSubmittedPts = AV_NOPTS_VALUE;
     bool m_graphInitialized = false;
     bool m_flushed = false;
+    MediaInputTerminalTracker m_terminals { { "frame" } };
+    bool m_eofEmitted = false;
 };
 
 } // namespace media::ffmpeg::graph

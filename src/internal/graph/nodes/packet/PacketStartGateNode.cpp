@@ -21,28 +21,29 @@ MediaNodeKind PacketStartGateNode::staticKind() noexcept
     return MediaNodeKind::PacketStartGate;
 }
 
-::media::Status PacketStartGateNode::onProcess(MediaGraphExecutionContext& context)
+::media::Result<MediaNodeProcessResult> PacketStartGateNode::onProcess(MediaGraphExecutionContext& context)
 {
     auto configured = configure(context);
     if (!configured) {
-        return configured;
+        return processProgress(configured);
     }
 
     auto input = tryPopFirstInputOptional(context);
     if (!input) {
-        return ::media::Status::failure(input.error());
+        return ::media::Result<MediaNodeProcessResult>::failure(input.error());
     }
     if (!input.value()) {
-        return ::media::Status::success();
+        return processWaiting();
     }
 
     MediaBufferRef buffer = *input.value();
     if (buffer->isEof() || buffer->isFlush()) {
-        return emitOutput(context, "packet", buffer);
+        auto status = emitOutput(context, "packet", buffer);
+        return buffer->isEof() ? processFinished(status) : processProgress(status);
     }
 
     if (!m_open && m_requireKeyFrame && !buffer->isKeyFrame()) {
-        return ::media::Status::success();
+        return processProgress();
     }
 
     if (!m_open) {
@@ -52,7 +53,7 @@ MediaNodeKind PacketStartGateNode::staticKind() noexcept
                                 "packet_start_gate.open");
     }
 
-    return emitOutput(context, "packet", buffer);
+    return processProgress(emitOutput(context, "packet", buffer));
 }
 
 ::media::Status PacketStartGateNode::stop(MediaGraphExecutionContext& context)

@@ -270,8 +270,9 @@ bool MediaBlockingQueue::fullLocked() const
 void MediaBlockingQueue::updateSizeMetricsLocked()
 {
     m_metrics.currentSize = m_queue.size();
-    if (m_metrics.currentSize > m_metrics.peakSize) {
-        m_metrics.peakSize = m_metrics.currentSize;
+    const std::size_t current = m_metrics.currentSize.load();
+    if (current > m_metrics.peakSize.load()) {
+        m_metrics.peakSize = current;
     }
 }
 

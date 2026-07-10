@@ -12,7 +12,7 @@ public:
     void abort(MediaGraphExecutionContext& context) noexcept override;
 
 protected:
-    ::media::Status onProcess(MediaGraphExecutionContext& context) override;
+    ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context) override;
 
 private:
     ::media::Status configure(MediaGraphExecutionContext& context);

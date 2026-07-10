@@ -2,6 +2,7 @@
 
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/core/MediaNodeOptions.h"
+#include "internal/graph/model/MediaFormatDescriptor.h"
 #include "media_transcode/Result.h"
 
 extern "C" {
@@ -9,14 +10,14 @@ extern "C" {
 }
 
 struct AVBufferRef;
-struct AVFormatContext;
-struct AVStream;
+struct AVCodecParameters;
 
 namespace media::ffmpeg::graph {
 
 struct CodecResolverEncoderContextBuildRequest {
-    AVFormatContext* formatContext = nullptr;
-    AVStream* stream = nullptr;
+    const AVCodecParameters* codecParameters = nullptr;
+    MediaFormatDescriptor sourceFormat;
+    MediaTimeDescriptor sourceTime;
     const MediaNodeOptions* options = nullptr;
     AVBufferRef* hardwareDevice = nullptr;
 };

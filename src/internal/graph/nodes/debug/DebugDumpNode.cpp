@@ -1,4 +1,5 @@
 #include "internal/graph/nodes/debug/DebugDumpNode.h"
+#include "internal/graph/runtime/buffer/MediaBuffer.h"
 
 namespace media::ffmpeg::graph {
 
@@ -12,21 +13,22 @@ MediaNodeKind DebugDumpNode::staticKind() noexcept
     return MediaNodeKind::DebugDump;
 }
 
-::media::Status DebugDumpNode::onProcess(MediaGraphExecutionContext& context)
+::media::Result<MediaNodeProcessResult> DebugDumpNode::onProcess(MediaGraphExecutionContext& context)
 {
     auto input = tryPopFirstInputOptional(context);
     if (!input) {
-        return ::media::Status::failure(input.error());
+        return ::media::Result<MediaNodeProcessResult>::failure(input.error());
     }
     if (!input.value()) {
-        return ::media::Status::success();
+        return processWaiting();
     }
 
     if (outputChannels(context).empty()) {
-        return ::media::Status::success();
+        return (*input.value())->isEof() ? processFinished() : processProgress();
     }
 
-    return pushToAllOutputs(context, *input.value());
+    auto status = pushToAllOutputs(context, *input.value());
+    return (*input.value())->isEof() ? processFinished(status) : processProgress(status);
 }
 
 } // namespace media::ffmpeg::graph

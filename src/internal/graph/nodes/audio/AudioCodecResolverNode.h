@@ -3,11 +3,10 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 
-extern "C" {
-#include <libavformat/avformat.h>
-}
-
 namespace media::ffmpeg::graph {
+
+struct FFmpegInputStreamSnapshot;
+class FFmpegFormatContextBuffer;
 
 class AudioCodecResolverNode final : public FFmpegNodeRuntime {
 public:
@@ -15,13 +14,14 @@ public:
     static MediaNodeKind staticKind() noexcept;
 
 protected:
-    ::media::Status onProcess(MediaGraphExecutionContext& context) override;
+    ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context) override;
 
 private:
-    ::media::Result<int> resolveSourceStreamIndex(MediaGraphExecutionContext& context, AVFormatContext* formatContext) const;
-    ::media::Result<::media::ffmpeg::CodecContextPtr> buildDecoderContext(AVStream* stream) const;
+    ::media::Result<const FFmpegInputStreamSnapshot*> resolveSourceStream(MediaGraphExecutionContext& context,
+                                                                          const FFmpegFormatContextBuffer& format) const;
+    ::media::Result<::media::ffmpeg::CodecContextPtr> buildDecoderContext(const FFmpegInputStreamSnapshot& stream) const;
     ::media::Result<::media::ffmpeg::CodecContextPtr> buildEncoderContext(MediaGraphExecutionContext& context,
-                                                                           const AVStream* stream,
+                                                                           const FFmpegInputStreamSnapshot& stream,
                                                                            const AVCodecContext* decoderContext) const;
     ::media::Status emitCodecContext(MediaGraphExecutionContext& context,
                                       const char* portName,

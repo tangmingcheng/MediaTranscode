@@ -121,50 +121,51 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
     return MediaNodeKind::CodecResolver;
 }
 
-::media::Status CodecResolverNode::onProcess(MediaGraphExecutionContext& context)
+::media::Result<MediaNodeProcessResult> CodecResolverNode::onProcess(MediaGraphExecutionContext& context)
 {
     if (m_emitted) {
-        return ::media::Status::success();
+        return processFinished();
     }
 
     auto input = tryPopFirstInputOptional(context);
     if (!input) {
-        return ::media::Status::failure(input.error());
+        return ::media::Result<MediaNodeProcessResult>::failure(input.error());
     }
     if (!input.value()) {
-        return ::media::Status::success();
+        return processWaiting();
     }
 
     auto* formatBuffer = dynamic_cast<FFmpegFormatContextBuffer*>(input.value()->get());
-    if (!formatBuffer || !formatBuffer->context()) {
-        return ::media::Status::failure(
+    if (!formatBuffer || !formatBuffer->inputSnapshotComplete()) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
             ::media::ErrorInfo::invalidArgument("CodecResolverNode expected FFmpegFormatContextBuffer"));
     }
 
-    AVFormatContext* formatContext = formatBuffer->context();
-
-    auto decoderStatus = resolveDecoder(context, formatContext);
-    if (!decoderStatus) {
-        return decoderStatus;
+    const FFmpegInputStreamSnapshot* stream = nullptr;
+    for (int index = 0; (stream = formatBuffer->inputStreamSnapshot(index)) != nullptr; ++index) {
+        if (stream->streamKind == MediaStreamKind::Video) break;
+    }
+    if (!stream || stream->streamKind != MediaStreamKind::Video) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::invalidArgument("CodecResolverNode requires video input snapshot"));
     }
 
-    auto encoderStatus = resolveEncoder(context, formatContext);
+    auto decoderStatus = resolveDecoder(context, *stream);
+    if (!decoderStatus) {
+        return processProgress(decoderStatus);
+    }
+
+    auto encoderStatus = resolveEncoder(context, *stream);
     if (!encoderStatus) {
-        return encoderStatus;
+        return processProgress(encoderStatus);
     }
 
     m_emitted = true;
-    return ::media::Status::success();
+    return processFinished();
 }
 
-::media::Status CodecResolverNode::resolveDecoder(MediaGraphExecutionContext& context, AVFormatContext* formatContext)
+::media::Status CodecResolverNode::resolveDecoder(MediaGraphExecutionContext& context, const FFmpegInputStreamSnapshot& stream)
 {
-    const int streamIndex = av_find_best_stream(formatContext, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
-    if (streamIndex < 0) {
-        return FFmpegGraphError::statusFromCode(streamIndex, "av_find_best_stream(video decoder)");
-    }
-
-    AVStream* stream = formatContext->streams[streamIndex];
     const MediaNodeOptions* options = nodeOptions(context);
     const std::string plannedDecoder = optionValue(options, "decoder");
     const bool hardwarePlanned = truthyOption(options, "pipeline.hardware");
@@ -174,13 +175,13 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
     if (!plannedDecoder.empty() && plannedDecoder != "auto") {
         decoder = avcodec_find_decoder_by_name(plannedDecoder.c_str());
     } else {
-        decoder = avcodec_find_decoder(stream->codecpar->codec_id);
+        decoder = avcodec_find_decoder(stream.codecParameters->codec_id);
     }
 
     if (!decoder) {
         return ::media::Status::failure(
             ::media::ErrorInfo::unsupported("CodecResolverNode failed: video decoder not found: " +
-                                           (!plannedDecoder.empty() ? plannedDecoder : std::string(avcodec_get_name(stream->codecpar->codec_id)))));
+                                           (!plannedDecoder.empty() ? plannedDecoder : std::string(avcodec_get_name(stream.codecParameters->codec_id)))));
     }
 
     auto decoderContext = ::media::ffmpeg::makeCodecContext(decoder);
@@ -189,12 +190,12 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
             ::media::ErrorInfo::allocationFailed("CodecResolverNode failed: avcodec_alloc_context3(decoder) returned null"));
     }
 
-    const int copyRet = avcodec_parameters_to_context(decoderContext.get(), stream->codecpar);
+    const int copyRet = avcodec_parameters_to_context(decoderContext.get(), stream.codecParameters.get());
     if (copyRet < 0) {
         return FFmpegGraphError::statusFromCode(copyRet, "avcodec_parameters_to_context(video decoder)");
     }
 
-    decoderContext->pkt_timebase = stream->time_base;
+    decoderContext->pkt_timebase = AVRational{ stream.time.timeBase.num, stream.time.timeBase.den };
 
     m_decoderHardwareDevice.reset();
     m_decoderHardwarePixelFormat = AV_PIX_FMT_NONE;
@@ -240,7 +241,7 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
         << " hwaccel=" << (hwaccelName.empty() ? "none" : hwaccelName)
         << " hw_pix_fmt=" << pixelFormatName(m_decoderHardwarePixelFormat)
         << " hw_device_ctx=" << (decoderUsesHardwareDevice ? "set" : "none")
-        << " pkt_tb=" << stream->time_base.num << "/" << stream->time_base.den;
+        << " pkt_tb=" << stream.time.timeBase.num << "/" << stream.time.timeBase.den;
     codecResolverLog(MediaGraphDiagnosticLevel::State, out.str());
 
     const int openRet = avcodec_open2(decoderContext.get(), decoder, nullptr);
@@ -269,19 +270,14 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
     return ::media::Status::success();
 }
 
-::media::Status CodecResolverNode::resolveEncoder(MediaGraphExecutionContext& context, AVFormatContext* formatContext)
+::media::Status CodecResolverNode::resolveEncoder(MediaGraphExecutionContext& context, const FFmpegInputStreamSnapshot& stream)
 {
-    const int streamIndex = av_find_best_stream(formatContext, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
-    if (streamIndex < 0) {
-        return FFmpegGraphError::statusFromCode(streamIndex, "av_find_best_stream(video encoder source)");
-    }
-
-    AVStream* stream = formatContext->streams[streamIndex];
     const MediaNodeOptions* options = nodeOptions(context);
 
     CodecResolverEncoderContextBuildRequest request;
-    request.formatContext = formatContext;
-    request.stream = stream;
+    request.codecParameters = stream.codecParameters.get();
+    request.sourceFormat = stream.format;
+    request.sourceTime = stream.time;
     request.options = options;
     request.hardwareDevice = m_decoderHardwareDevice.get();
 

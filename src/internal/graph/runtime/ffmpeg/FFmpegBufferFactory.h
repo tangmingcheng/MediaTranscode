@@ -31,6 +31,7 @@ public:
     static ::media::Result<MediaBufferRef> wrapCodecContext(::media::ffmpeg::CodecContextPtr context);
     static ::media::Result<MediaBufferRef> borrowCodecContext(AVCodecContext* context);
     static ::media::Result<MediaBufferRef> cloneCodecParameters(const AVStream* stream);
+    static ::media::Result<MediaBufferRef> cloneCodecParameters(const FFmpegInputStreamSnapshot& stream);
 
     static ::media::Result<MediaBufferRef> wrapPacket(::media::ffmpeg::PacketPtr packet,
                                                        MediaStreamKind streamKind = MediaStreamKind::Unknown);

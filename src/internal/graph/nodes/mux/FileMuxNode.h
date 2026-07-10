@@ -3,6 +3,7 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
+#include "internal/graph/nodes/mux/MediaMuxCompletionState.h"
 
 #include <vector>
 
@@ -18,7 +19,7 @@ public:
     static MediaNodeKind staticKind() noexcept;
 
 protected:
-    ::media::Status onProcess(MediaGraphExecutionContext& context) override;
+    ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context) override;
     ::media::Status flush(MediaGraphExecutionContext& context) override;
     ::media::Status stop(MediaGraphExecutionContext& context) override;
 
@@ -47,6 +48,8 @@ private:
     bool m_expectationsBound = false;
     bool m_expectVideo = false;
     bool m_expectAudio = false;
+    std::size_t m_eofInputs = 0;
+    MediaMuxCompletionState m_completion;
     int m_videoStreamIndex = invalidMediaStreamIndex;
     int m_audioStreamIndex = invalidMediaStreamIndex;
     std::vector<MediaBufferRef> m_pendingStreamConfigs;

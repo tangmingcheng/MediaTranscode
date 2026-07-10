@@ -4,9 +4,12 @@
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/runtime/channel/MediaChannel.h"
 #include "internal/graph/runtime/channel/MediaChannelRegistry.h"
+#include "internal/graph/runtime/threading/MediaNodeWakeup.h"
 #include "media_transcode/Result.h"
 
 #include <vector>
+#include <memory>
+#include <unordered_map>
 
 namespace media::ffmpeg::graph {
 
@@ -41,6 +44,8 @@ public:
 
     std::vector<MediaChannel*> inputChannels(MediaNodeId nodeId);
     std::vector<MediaChannel*> outputChannels(MediaNodeId nodeId);
+    MediaNodeWakeup& nodeWakeup(MediaNodeId nodeId);
+    void interruptNodeWakeups() noexcept;
 
 private:
     ::media::Status buildChannels(const MediaGraph& graph);
@@ -50,6 +55,7 @@ private:
     const MediaGraph* m_graph = nullptr;
     MediaChannelRegistry m_channels;
     std::vector<MediaNodeId> m_executionOrder;
+    std::unordered_map<uint32_t, std::unique_ptr<MediaNodeWakeup>> m_nodeWakeups;
     bool m_compiled = false;
     MediaGraphDiagnosticConfig m_diagnosticConfig;
 };

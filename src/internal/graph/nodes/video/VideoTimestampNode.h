@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
+#include "internal/graph/runtime/lifecycle/MediaInputTerminalTracker.h"
 
 extern "C" {
 #include <libavutil/avutil.h>
@@ -15,7 +16,7 @@ public:
     static MediaNodeKind staticKind() noexcept;
 
 protected:
-    ::media::Status onProcess(MediaGraphExecutionContext& context) override;
+    ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context) override;
 
 private:
     ::media::Status bindSourceCodecConfig(MediaGraphExecutionContext& context, const MediaBufferRef& buffer);
@@ -29,6 +30,8 @@ private:
     int64_t m_lastOutputTimestamp = AV_NOPTS_VALUE;
     AVRational m_sourceTimeBase { 0, 1 };
     AVRational m_targetTimeBase { 0, 1 };
+    MediaInputTerminalTracker m_terminals { { "frame" } };
+    bool m_eofEmitted = false;
 };
 
 } // namespace media::ffmpeg::graph

@@ -67,44 +67,78 @@ MediaNodeKind VideoTimestampNode::staticKind() noexcept
     return MediaNodeKind::VideoTimestamp;
 }
 
-::media::Status VideoTimestampNode::onProcess(MediaGraphExecutionContext& context)
+::media::Result<MediaNodeProcessResult> VideoTimestampNode::onProcess(MediaGraphExecutionContext& context)
 {
+    if (m_terminals.finished()) {
+        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
+    }
+
     if (!m_hasSourceTimeBase) {
         auto sourceCodecInput = tryPopInputOptional(context, "source_codec");
         if (!sourceCodecInput) {
-            return ::media::Status::failure(sourceCodecInput.error());
+            return ::media::Result<MediaNodeProcessResult>::failure(sourceCodecInput.error());
         }
         if (!sourceCodecInput.value()) {
-            return ::media::Status::success();
+            return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::waiting());
         }
-        return bindSourceCodecConfig(context, *sourceCodecInput.value());
+        auto bindStatus = bindSourceCodecConfig(context, *sourceCodecInput.value());
+        if (!bindStatus) {
+            return ::media::Result<MediaNodeProcessResult>::failure(bindStatus.error());
+        }
+        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
     }
 
     if (!m_hasTargetTimeBase) {
         auto targetCodecInput = tryPopInputOptional(context, "target_codec");
         if (!targetCodecInput) {
-            return ::media::Status::failure(targetCodecInput.error());
+            return ::media::Result<MediaNodeProcessResult>::failure(targetCodecInput.error());
         }
         if (!targetCodecInput.value()) {
-            return ::media::Status::success();
+            return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::waiting());
         }
-        return bindTargetCodecConfig(context, *targetCodecInput.value());
+        auto bindStatus = bindTargetCodecConfig(context, *targetCodecInput.value());
+        if (!bindStatus) {
+            return ::media::Result<MediaNodeProcessResult>::failure(bindStatus.error());
+        }
+        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
     }
 
     auto frameInput = tryPopInputOptional(context, "frame");
     if (!frameInput) {
-        return ::media::Status::failure(frameInput.error());
+        return ::media::Result<MediaNodeProcessResult>::failure(frameInput.error());
     }
     if (!frameInput.value()) {
-        return ::media::Status::success();
+        MediaChannel* frameChannel = context.findInputChannel(nodeId(), "frame");
+        if (frameChannel && frameChannel->closed()) {
+            m_terminals.markClosed("frame");
+            return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
+        }
+        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::waiting());
     }
 
     MediaBufferRef frameBuffer = *frameInput.value();
     if (frameBuffer->isEof() || frameBuffer->isFlush()) {
-        return emitOutput(context, "frame", frameBuffer);
+        const bool eof = frameBuffer->isEof();
+        if (eof && m_eofEmitted) {
+            return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
+        }
+        auto emitStatus = emitOutput(context, "frame", frameBuffer);
+        if (!emitStatus) {
+            return ::media::Result<MediaNodeProcessResult>::failure(emitStatus.error());
+        }
+        if (eof) {
+            m_terminals.markEof("frame");
+            m_eofEmitted = true;
+        }
+        return ::media::Result<MediaNodeProcessResult>::success(
+            eof ? MediaNodeProcessResult::finished() : MediaNodeProcessResult::progress());
     }
 
-    return normalizeFrame(context, frameBuffer);
+    auto normalizeStatus = normalizeFrame(context, frameBuffer);
+    if (!normalizeStatus) {
+        return ::media::Result<MediaNodeProcessResult>::failure(normalizeStatus.error());
+    }
+    return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
 }
 
 ::media::Status VideoTimestampNode::bindSourceCodecConfig(MediaGraphExecutionContext&, const MediaBufferRef& buffer)

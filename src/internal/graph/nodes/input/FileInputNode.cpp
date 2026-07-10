@@ -17,29 +17,29 @@ MediaNodeKind FileInputNode::staticKind() noexcept
     return MediaNodeKind::FileInput;
 }
 
-::media::Status FileInputNode::onProcess(MediaGraphExecutionContext& context)
+::media::Result<MediaNodeProcessResult> FileInputNode::onProcess(MediaGraphExecutionContext& context)
 {
     if (m_emitted) {
-        return ::media::Status::success();
+        return processFinished();
     }
 
     auto status = openInput(context);
     if (!status) {
-        return status;
+        return processProgress(status);
     }
 
     auto buffer = FFmpegBufferFactory::wrapInputFormatContext(std::move(m_context));
     if (!buffer) {
-        return ::media::Status::failure(buffer.error());
+        return ::media::Result<MediaNodeProcessResult>::failure(buffer.error());
     }
 
     auto pushStatus = pushToAllOutputs(context, buffer.value());
     if (!pushStatus) {
-        return pushStatus;
+        return processProgress(pushStatus);
     }
 
     m_emitted = true;
-    return ::media::Status::success();
+    return processProgress();
 }
 
 ::media::Status FileInputNode::openInput(MediaGraphExecutionContext& context)

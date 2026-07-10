@@ -8,6 +8,10 @@ namespace media::ffmpeg::graph {
 struct MediaGraphRuntimeMetrics {
     uint64_t processIterations = 0;
     uint64_t workerIterations = 0;
+    uint64_t workerProcessCalls = 0;
+    uint64_t workerProgress = 0;
+    uint64_t workerWaits = 0;
+    uint64_t workerWakeups = 0;
     uint64_t workerErrors = 0;
     uint64_t schedulerStarts = 0;
     uint64_t schedulerStops = 0;

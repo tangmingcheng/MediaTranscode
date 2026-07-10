@@ -187,4 +187,13 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
         target_link_libraries(media_transcode_realtime_graph_tests PRIVATE ws2_32)
     endif()
     add_test(NAME media_transcode_realtime_graph_tests COMMAND media_transcode_realtime_graph_tests)
+
+    add_executable(media_transcode_event_runtime_tests
+        tests/unit/test_event_driven_runtime.cpp
+        tests/unit/event_runtime_threading_queue_tests.cpp
+        tests/unit/event_runtime_ffmpeg_ownership_tests.cpp
+        tests/unit/event_runtime_multi_input_tests.cpp
+    )
+    media_transcode_configure_test(media_transcode_event_runtime_tests)
+    add_test(NAME media_transcode_event_runtime_tests COMMAND media_transcode_event_runtime_tests)
 endif()

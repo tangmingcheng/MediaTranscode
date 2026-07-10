@@ -99,14 +99,23 @@ MediaNodeKind VideoEncodeNode::staticKind() noexcept
     return MediaNodeKind::VideoEncode;
 }
 
-::media::Status VideoEncodeNode::onProcess(MediaGraphExecutionContext& context)
+::media::Result<MediaNodeProcessResult> VideoEncodeNode::onProcess(MediaGraphExecutionContext& context)
 {
+    if (m_terminals.finished()) {
+        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
+    }
+
     auto input = tryPopFirstInputOptional(context);
     if (!input) {
-        return ::media::Status::failure(input.error());
+        return ::media::Result<MediaNodeProcessResult>::failure(input.error());
     }
     if (!input.value()) {
-        return ::media::Status::success();
+        MediaChannel* frameInput = context.findInputChannel(nodeId(), "frame");
+        if (frameInput && frameInput->closed()) {
+            m_terminals.markClosed("frame");
+            return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
+        }
+        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::waiting());
     }
 
     const MediaBufferRef& buffer = *input.value();
@@ -119,35 +128,53 @@ MediaNodeKind VideoEncodeNode::staticKind() noexcept
                       " hwaccel=" + optionValue(nodeOptions(context), "encoder.pipeline.hwaccel", "none") +
                       " hw_device_ctx=" + (encoder && encoder->hw_device_ctx ? "set" : "none") +
                       " hw_frames_ctx=" + (encoder && encoder->hw_frames_ctx ? "set" : "none"));
-        return emitEncoderConfig(context, buffer);
+        auto emitStatus = emitEncoderConfig(context, buffer);
+        if (!emitStatus) {
+            return ::media::Result<MediaNodeProcessResult>::failure(emitStatus.error());
+        }
+        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
     }
 
     if (!hasCodecContext()) {
-        return ::media::Status::failure(
+        return ::media::Result<MediaNodeProcessResult>::failure(
             ::media::ErrorInfo::notInitialized("VideoEncodeNode requires codec context before frames"));
     }
 
     if (buffer->isEof() || buffer->isFlush()) {
+        const bool eof = buffer->isEof();
+        if (eof && m_eofEmitted) {
+            return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
+        }
         const int sendRet = avcodec_send_frame(codecContext(), nullptr);
         if (sendRet < 0 && sendRet != AVERROR_EOF) {
-            return FFmpegGraphError::statusFromCode(sendRet, "avcodec_send_frame(video flush)");
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                FFmpegGraphError::fromCode(sendRet, "avcodec_send_frame(video flush)"));
         }
         auto drainStatus = receivePackets(context);
         if (!drainStatus) {
-            return drainStatus;
+            return ::media::Result<MediaNodeProcessResult>::failure(drainStatus.error());
         }
-        return emitOutput(context, "packet", buffer);
+        auto emitStatus = emitOutput(context, "packet", buffer);
+        if (!emitStatus) {
+            return ::media::Result<MediaNodeProcessResult>::failure(emitStatus.error());
+        }
+        if (eof) {
+            m_terminals.markEof("frame");
+            m_eofEmitted = true;
+        }
+        return ::media::Result<MediaNodeProcessResult>::success(
+            eof ? MediaNodeProcessResult::finished() : MediaNodeProcessResult::progress());
     }
 
     AVFrame* frame = FFmpegFrameView::writableFrame(buffer);
     if (!frame) {
-        return ::media::Status::failure(
+        return ::media::Result<MediaNodeProcessResult>::failure(
             ::media::ErrorInfo::invalidArgument("VideoEncodeNode expected frame buffer"));
     }
 
     auto validateStatus = validateFrameAgainstPlan(nodeOptions(context), codecContext(), frame);
     if (!validateStatus) {
-        return validateStatus;
+        return ::media::Result<MediaNodeProcessResult>::failure(validateStatus.error());
     }
 
     auto decision = mediaGraphDiagnosticSample(MediaGraphDiagnosticLevel::Flow,
@@ -167,10 +194,15 @@ MediaNodeKind VideoEncodeNode::staticKind() noexcept
 
     const int sendRet = avcodec_send_frame(codecContext(), frame);
     if (sendRet < 0 && sendRet != AVERROR(EAGAIN)) {
-        return FFmpegGraphError::statusFromCode(sendRet, "avcodec_send_frame(video)");
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            FFmpegGraphError::fromCode(sendRet, "avcodec_send_frame(video)"));
     }
 
-    return receivePackets(context);
+    auto receiveStatus = receivePackets(context);
+    if (!receiveStatus) {
+        return ::media::Result<MediaNodeProcessResult>::failure(receiveStatus.error());
+    }
+    return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
 }
 
 ::media::Status VideoEncodeNode::stop(MediaGraphExecutionContext& context)

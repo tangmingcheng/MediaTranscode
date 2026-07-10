@@ -23,29 +23,29 @@ MediaNodeKind RtpOutputNode::staticKind() noexcept
     return MediaNodeKind::RtpOutput;
 }
 
-::media::Status RtpOutputNode::onProcess(MediaGraphExecutionContext& context)
+::media::Result<MediaNodeProcessResult> RtpOutputNode::onProcess(MediaGraphExecutionContext& context)
 {
     if (m_formatEmitted) {
-        return ::media::Status::success();
+        return processFinished();
     }
 
     auto status = openOutput(context);
     if (!status) {
-        return status;
+        return processProgress(status);
     }
 
     auto buffer = FFmpegBufferFactory::wrapOutputFormatContext(std::move(m_context));
     if (!buffer) {
-        return ::media::Status::failure(buffer.error());
+        return ::media::Result<MediaNodeProcessResult>::failure(buffer.error());
     }
 
     auto pushed = emitOutput(context, "format", buffer.value());
     if (!pushed) {
-        return pushed;
+        return processProgress(pushed);
     }
 
     m_formatEmitted = true;
-    return ::media::Status::success();
+    return processProgress();
 }
 
 ::media::Status RtpOutputNode::stop(MediaGraphExecutionContext& context)

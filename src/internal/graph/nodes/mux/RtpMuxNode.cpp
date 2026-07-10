@@ -77,54 +77,84 @@ MediaNodeKind RtpMuxNode::staticKind() noexcept
     return MediaNodeKind::RtpMux;
 }
 
-::media::Status RtpMuxNode::onProcess(MediaGraphExecutionContext& context)
+::media::Result<MediaNodeProcessResult> RtpMuxNode::onProcess(MediaGraphExecutionContext& context)
 {
     auto configured = configureExpectations(context);
     if (!configured) {
-        return configured;
+        return processProgress(configured);
+    }
+    if (m_completion.readyForTrailer()) {
+        auto pending = writePendingPacketsIfReady();
+        if (!pending) return processProgress(pending);
+        auto trailer = writeTrailerIfNeeded();
+        return processFinished(trailer);
     }
 
-    auto input = tryPopFirstInputOptional(context);
+    auto input = tryPopFirstInputWithChannelOptional(context);
     if (!input) {
-        return ::media::Status::failure(input.error());
+        return ::media::Result<MediaNodeProcessResult>::failure(input.error());
     }
     if (!input.value()) {
-        return ::media::Status::success();
+        bool allClosed = true;
+        for (MediaChannel* channel : context.inputChannels(nodeId())) {
+            allClosed = allClosed && channel->closed() && channel->size() == 0;
+            if (channel->closed() && channel->size() == 0 &&
+                channel->binding().edgeKind == MediaEdgeKind::EncodedPacket) {
+                m_completion.markInputClosed(std::to_string(channel->id().value));
+            }
+        }
+        if (allClosed && m_completion.readyForTrailer()) {
+            auto pending = writePendingPacketsIfReady();
+            if (!pending) return processProgress(pending);
+            auto trailer = writeTrailerIfNeeded();
+            if (!trailer) return processProgress(trailer);
+            return processFinished();
+        }
+        return processWaiting();
     }
 
-    MediaBufferRef buffer = *input.value();
+    MediaBufferRef buffer = input.value()->buffer;
     if (tryBindOutputContext(buffer)) {
         auto status = registerPendingStreamConfigs();
         if (!status) {
-            return status;
+            return processProgress(status);
         }
         status = writePendingPacketsIfReady();
-        return status ? emitFormatIfReady(context) : status;
+        return processProgress(status ? emitFormatIfReady(context) : status);
     }
 
     auto configStatus = tryBindStreamConfig(buffer);
     if (!configStatus) {
-        return configStatus;
+        return processProgress(configStatus);
     }
 
     auto sdpStatus = emitFormatIfReady(context);
     if (!sdpStatus) {
-        return sdpStatus;
+        return processProgress(sdpStatus);
     }
 
-    if (buffer->isEof() || buffer->isFlush()) {
-        return ::media::Status::success();
+    if (buffer->isEof()) {
+        m_completion.markInputEof(std::to_string(input.value()->channel->id().value));
+        if (!m_completion.readyForTrailer()) return processProgress();
+        auto pending = writePendingPacketsIfReady();
+        if (!pending) return processProgress(pending);
+        auto trailer = writeTrailerIfNeeded();
+        if (!trailer) return processProgress(trailer);
+        return processFinished();
+    }
+    if (buffer->isFlush()) {
+        return processProgress();
     }
 
     if (FFmpegPacketView::isPacket(buffer)) {
         auto status = writePacket(buffer);
         if (!status) {
-            return status;
+            return processProgress(status);
         }
-        return emitFormatIfReady(context);
+        return processProgress(emitFormatIfReady(context));
     }
 
-    return ::media::Status::success();
+    return processProgress();
 }
 
 ::media::Status RtpMuxNode::stop(MediaGraphExecutionContext& context)
@@ -166,6 +196,14 @@ MediaNodeKind RtpMuxNode::staticKind() noexcept
     }
     m_expectVideo = video.value();
     m_expectAudio = audio.value();
+    std::vector<std::string> terminalInputs;
+    for (MediaChannel* channel : context.inputChannels(nodeId())) {
+        if (channel && channel->binding().edgeKind == MediaEdgeKind::EncodedPacket) {
+            terminalInputs.push_back(std::to_string(channel->id().value));
+        }
+    }
+    m_completion.setExpectedConfigKeys({expectedStreamName()});
+    m_completion.setExpectedTerminalChannels(std::move(terminalInputs));
 
     auto pacing = requiredBoolNodeOption(nodeOptions(context), "RtpMuxNode", "rtp.pacing.enabled");
     if (!pacing) {
@@ -298,6 +336,7 @@ bool RtpMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
     stream->avg_frame_rate = codec->framerate;
     stream->r_frame_rate = codec->framerate;
     m_streamIndex = stream->index;
+    m_completion.markConfigReady(expectedStreamName());
     return ::media::Status::success();
 }
 
@@ -328,6 +367,7 @@ bool RtpMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
     stream->codecpar->codec_tag = 0;
     stream->time_base = toAVRational(buffer->timeDescriptor().timeBase);
     m_streamIndex = stream->index;
+    m_completion.markConfigReady(expectedStreamName());
     return ::media::Status::success();
 }
 
@@ -354,6 +394,7 @@ const char* RtpMuxNode::expectedStreamName() const noexcept
         return FFmpegGraphError::statusFromCode(ret, "avformat_write_header(rtp)");
     }
     m_headerWritten = true;
+    m_completion.markHeaderWritten();
     return ::media::Status::success();
 }
 
@@ -365,6 +406,7 @@ const char* RtpMuxNode::expectedStreamName() const noexcept
     }
     auto pending = std::move(m_pendingPackets);
     m_pendingPackets.clear();
+    m_completion.setPendingPackets(0);
     for (const auto& buffer : pending) {
         auto status = writePacketNow(buffer);
         if (!status) {
@@ -415,6 +457,7 @@ const char* RtpMuxNode::expectedStreamName() const noexcept
     }
     if (!m_headerWritten) {
         m_pendingPackets.push_back(buffer);
+        m_completion.setPendingPackets(m_pendingPackets.size());
         return ::media::Status::success();
     }
     auto pending = writePendingPacketsIfReady();
@@ -622,6 +665,7 @@ const char* RtpMuxNode::expectedStreamName() const noexcept
         return FFmpegGraphError::statusFromCode(ret, "av_write_trailer(rtp)");
     }
     m_trailerWritten = true;
+    m_completion.markTrailerWritten();
     return ::media::Status::success();
 }
 
@@ -629,6 +673,7 @@ void RtpMuxNode::releaseRuntimeViews() noexcept
 {
     m_pendingStreamConfigs.clear();
     m_pendingPackets.clear();
+    m_completion.reset();
     m_outputContext = nullptr;
     m_outputContextOwner.reset();
     m_headerWritten = false;

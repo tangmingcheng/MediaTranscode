@@ -26,4 +26,8 @@ void MediaRuntimeNode::abort(MediaGraphExecutionContext&) noexcept
 {
 }
 
+void MediaRuntimeNode::interrupt(MediaGraphExecutionContext&) noexcept
+{
+}
+
 } // namespace media::ffmpeg::graph

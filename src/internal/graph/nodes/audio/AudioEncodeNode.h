@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/nodes/FFmpegCodecNodeRuntime.h"
+#include "internal/graph/runtime/lifecycle/MediaInputTerminalTracker.h"
 
 namespace media::ffmpeg::graph {
 
@@ -10,7 +11,7 @@ public:
     static MediaNodeKind staticKind() noexcept;
 
 protected:
-    ::media::Status onProcess(MediaGraphExecutionContext& context) override;
+    ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context) override;
 
 private:
     ::media::Status emitEncoderConfig(MediaGraphExecutionContext& context, const MediaBufferRef& buffer);
@@ -18,6 +19,8 @@ private:
 
 private:
     bool m_encoderConfigEmitted = false;
+    MediaInputTerminalTracker m_terminals { { "frame" } };
+    bool m_eofEmitted = false;
 };
 
 } // namespace media::ffmpeg::graph
