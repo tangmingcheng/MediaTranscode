@@ -938,6 +938,20 @@ void testRealtimePlannerValidationAndInputPlanningAreSeparated(TestContext& ctx)
     expectTextNotContains(ctx, planner, "prepareRealtimeInput(");
 }
 
+void testRtpMuxResponsibilitiesAreSeparated(TestContext& ctx)
+{
+    const std::string node = repositoryFile("src/internal/graph/nodes/mux/RtpMuxNode.cpp");
+    const std::string session = repositoryFile("src/internal/graph/nodes/mux/RtpMuxFfmpegSession.h");
+    const std::string protocol = repositoryFile("src/internal/graph/nodes/mux/RtpMuxProtocolIo.h");
+    const std::string state = repositoryFile("src/internal/graph/nodes/mux/RtpMuxStateMachine.h");
+    expectTextContains(ctx, session, "class RtpMuxFfmpegSession final");
+    expectTextContains(ctx, protocol, "class RtpMuxProtocolIo final");
+    expectTextContains(ctx, state, "class RtpMuxStateMachine final");
+    expectTextNotContains(ctx, node, "avformat_write_header");
+    expectTextNotContains(ctx, node, "av_interleaved_write_frame");
+    expectTextNotContains(ctx, node, "av_write_trailer");
+}
+
 void testPlannerRejectsUnresolvedBehaviorOptions(TestContext& ctx)
 {
     MediaInputVideoStreamInfo input;
@@ -1887,11 +1901,12 @@ void testRealtimeRtpMuxUsesPlannerPacingPolicy(TestContext& ctx)
     }
 
     const std::string muxSource = repositoryFile("src/internal/graph/nodes/mux/RtpMuxNode.cpp");
-    expectTextContains(ctx, muxSource, "m_pacingClock.waitUntil");
+    const std::string protocolSource = repositoryFile("src/internal/graph/nodes/mux/RtpMuxProtocolIo.cpp");
+    expectTextContains(ctx, muxSource, "m_session.pacingClock().waitUntil");
     expectTextContains(ctx, muxSource, "normalizePacketTimestamps");
     expectTextContains(ctx, muxSource, "startPacingSessionIfNeeded");
     expectTextContains(ctx, muxSource, "rtp_mux.pacing_session_started");
-    expectTextContains(ctx, muxSource, "av_interleaved_write_frame");
+    expectTextContains(ctx, protocolSource, "av_interleaved_write_frame");
 }
 
 void testRealtimeRtpOutputUsesPlannerWritePacingPolicy(TestContext& ctx)
@@ -3065,6 +3080,7 @@ int main()
     testCapabilityScanningResponsibilitiesAreSeparated(ctx);
     testRealtimePlannerOutputPolicyIsSeparated(ctx);
     testRealtimePlannerValidationAndInputPlanningAreSeparated(ctx);
+    testRtpMuxResponsibilitiesAreSeparated(ctx);
     testPlannerRejectsUnresolvedBehaviorOptions(ctx);
     testValidationRejectsUnsupportedRealtimeInput(ctx);
     testValidationRequiresExplicitRealtimeStreamClassification(ctx);

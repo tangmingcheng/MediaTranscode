@@ -1,18 +1,13 @@
 #pragma once
 
-#include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
-#include "internal/graph/runtime/MediaGraphPacingClock.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 #include "internal/graph/model/MediaStreamKind.h"
-#include "internal/graph/nodes/mux/MediaMuxCompletionState.h"
+#include "internal/graph/nodes/mux/RtpMuxFfmpegSession.h"
+#include "internal/graph/nodes/mux/RtpMuxStateMachine.h"
 
 #include <vector>
 #include <chrono>
-
-extern "C" {
-#include <libavformat/avformat.h>
-}
 
 namespace media::ffmpeg::graph {
 
@@ -48,26 +43,11 @@ private:
     bool expectedStreamsRegistered() const noexcept;
 
 private:
-    ::media::ffmpeg::OutputFormatContextPtr m_outputContextOwner;
-    AVFormatContext* m_outputContext = nullptr;
-    MediaGraphPacingClock m_pacingClock;
-    bool m_headerWritten = false;
-    bool m_trailerWritten = false;
-    bool m_formatEmitted = false;
-    bool m_expectationsBound = false;
-    bool m_expectVideo = false;
-    bool m_expectAudio = false;
-    bool m_monotonicPacketTimestamps = false;
-    bool m_startupDelayElapsed = false;
-    bool m_pacingSessionStarted = false;
-    int m_streamIndex = invalidMediaStreamIndex;
-    int m_startupDelayMs = 0;
-    int64_t m_nextPacketDts = AV_NOPTS_VALUE;
-    std::size_t m_packetsWritten = 0;
+    RtpMuxFfmpegSession m_session;
+    RtpMuxStateMachine m_state;
     std::chrono::steady_clock::time_point m_startupReadyAt {};
     std::vector<MediaBufferRef> m_pendingStreamConfigs;
     std::vector<MediaBufferRef> m_pendingPackets;
-    MediaMuxCompletionState m_completion;
 };
 
 } // namespace media::ffmpeg::graph
