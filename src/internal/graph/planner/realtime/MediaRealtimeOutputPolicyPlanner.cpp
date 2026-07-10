@@ -1,4 +1,5 @@
 #include "internal/graph/planner/realtime/MediaRealtimeOutputPolicyPlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
 
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 
@@ -15,10 +16,6 @@ constexpr int64_t PacingHeadroomNumerator = 5;
 constexpr int64_t PacingHeadroomDenominator = 4;
 constexpr int64_t PacingBurstPackets = 2;
 
-bool audioRequested(const MediaRealtimeRtpTranscodeRequest& request) noexcept
-{
-    return request.parameters.execution.includeAudio;
-}
 
 bool validRtpPort(std::size_t port) noexcept
 {
@@ -78,12 +75,12 @@ MediaLatencyPolicy muxPacing() noexcept
     }
     const std::size_t videoPort = *request.output.basePort;
     const std::size_t audioPort = videoPort + 2;
-    if (!validRtpPort(videoPort) || (audioRequested(request) && !validRtpPort(audioPort))) {
+    if (!validRtpPort(videoPort) || (MediaRealtimeRequestClassifier::audioRequested(request) && !validRtpPort(audioPort))) {
         return ::media::Result<MediaRealtimeOutputUrls>::failure(
             ::media::ErrorInfo::invalidArgument("Realtime RTP output ports must be valid even RTP ports"));
     }
     urls.video = rtpUrl(request.output.host, videoPort);
-    if (audioRequested(request)) urls.audio = rtpUrl(request.output.host, audioPort);
+    if (MediaRealtimeRequestClassifier::audioRequested(request)) urls.audio = rtpUrl(request.output.host, audioPort);
     return ::media::Result<MediaRealtimeOutputUrls>::success(std::move(urls));
 }
 
@@ -97,7 +94,7 @@ MediaLatencyPolicy muxPacing() noexcept
         plan.muxedOutput.format = urls.muxedFormat;
         plan.muxedOutput.mediaId = request.mediaId;
         plan.videoMux.expectVideo = true;
-        plan.videoMux.expectAudio = audioRequested(request);
+        plan.videoMux.expectAudio = MediaRealtimeRequestClassifier::audioRequested(request);
         return ::media::Status::success();
     }
 
@@ -120,18 +117,18 @@ MediaLatencyPolicy muxPacing() noexcept
                                       : DefaultAudioBitsPerSecond);
     plan.sdp.path = request.output.sdpPath;
     plan.sdp.mediaId = request.mediaId;
-    plan.sdp.expectedContexts = audioRequested(request) ? 2 : 1;
+    plan.sdp.expectedContexts = MediaRealtimeRequestClassifier::audioRequested(request) ? 2 : 1;
     plan.videoMux.expectVideo = true;
     plan.videoMux.pacingPolicy = muxPacing();
     plan.videoMux.monotonicPacketTimestamps = true;
     plan.videoMux.startupDelayMs = RtpSessionStartupDelayMs;
-    plan.audioMux.expectAudio = audioRequested(request);
+    plan.audioMux.expectAudio = MediaRealtimeRequestClassifier::audioRequested(request);
     plan.audioMux.pacingPolicy = muxPacing();
-    plan.audioMux.monotonicPacketTimestamps = audioRequested(request);
-    plan.audioMux.startupDelayMs = audioRequested(request) ? RtpSessionStartupDelayMs : 0;
+    plan.audioMux.monotonicPacketTimestamps = MediaRealtimeRequestClassifier::audioRequested(request);
+    plan.audioMux.startupDelayMs = MediaRealtimeRequestClassifier::audioRequested(request) ? RtpSessionStartupDelayMs : 0;
     plan.avStartBarrier.expectVideo = true;
-    plan.avStartBarrier.expectAudio = audioRequested(request);
-    plan.avStartBarrier.requireVideoKeyFrame = audioRequested(request);
+    plan.avStartBarrier.expectAudio = MediaRealtimeRequestClassifier::audioRequested(request);
+    plan.avStartBarrier.requireVideoKeyFrame = MediaRealtimeRequestClassifier::audioRequested(request);
     return ::media::Status::success();
 }
 

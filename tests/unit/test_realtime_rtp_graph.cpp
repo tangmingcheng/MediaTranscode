@@ -926,6 +926,18 @@ void testRealtimePlannerOutputPolicyIsSeparated(TestContext& ctx)
     expectTextNotContains(ctx, planner, "planMuxedTransportStreamOutput");
 }
 
+void testRealtimePlannerValidationAndInputPlanningAreSeparated(TestContext& ctx)
+{
+    const std::string planner = repositoryFile("src/internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.cpp");
+    const std::string validator = repositoryFile("src/internal/graph/planner/realtime/MediaRealtimeRequestValidator.h");
+    const std::string inputPlanner = repositoryFile("src/internal/graph/planner/realtime/MediaRealtimeInputPlanner.h");
+    expectTextContains(ctx, validator, "class MediaRealtimeRequestValidator final");
+    expectTextContains(ctx, inputPlanner, "class MediaRealtimeInputPlanner final");
+    expectTextNotContains(ctx, planner, "validateExplicitStreamClassification");
+    expectTextNotContains(ctx, planner, "appendRawRtpSdpMedia");
+    expectTextNotContains(ctx, planner, "prepareRealtimeInput(");
+}
+
 void testPlannerRejectsUnresolvedBehaviorOptions(TestContext& ctx)
 {
     MediaInputVideoStreamInfo input;
@@ -1570,15 +1582,15 @@ void testRealtimeNoAudioProbeDoesNotRequestAudio(TestContext& ctx)
     EXPECT_TRUE(ctx, header.find("detectRealtimeInputStreamInfo(") != std::string::npos);
     EXPECT_TRUE(ctx, header.find("bool includeAudio") != std::string::npos);
 
-    const auto planner = readTextFile(std::filesystem::path(MEDIA_TRANSCODE_SOURCE_DIR) /
-                                      "src" /
-                                      "internal" /
-                                      "graph" /
-                                      "planner" /
-                                      "realtime" /
-                                      "MediaRealtimeRtpTranscodePlanner.cpp");
-    EXPECT_TRUE(ctx, planner.find("prepareRealtimeInput(") != std::string::npos);
-    EXPECT_TRUE(ctx, planner.find("audioRequested(request));") != std::string::npos);
+    const auto inputPlanner = readTextFile(std::filesystem::path(MEDIA_TRANSCODE_SOURCE_DIR) /
+                                           "src" /
+                                           "internal" /
+                                           "graph" /
+                                           "planner" /
+                                           "realtime" /
+                                           "MediaRealtimeInputPlanner.cpp");
+    EXPECT_TRUE(ctx, inputPlanner.find("prepareRealtimeInput(") != std::string::npos);
+    EXPECT_TRUE(ctx, inputPlanner.find("audioRequested(request)") != std::string::npos);
 }
 
 void testRealtimeUrlInheritsObservableVideoBitrate(TestContext& ctx)
@@ -3052,6 +3064,7 @@ int main()
     testGraphRejectsBehaviorDefaultImplementations(ctx);
     testCapabilityScanningResponsibilitiesAreSeparated(ctx);
     testRealtimePlannerOutputPolicyIsSeparated(ctx);
+    testRealtimePlannerValidationAndInputPlanningAreSeparated(ctx);
     testPlannerRejectsUnresolvedBehaviorOptions(ctx);
     testValidationRejectsUnsupportedRealtimeInput(ctx);
     testValidationRequiresExplicitRealtimeStreamClassification(ctx);
