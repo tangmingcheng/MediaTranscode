@@ -1,4 +1,7 @@
 #include "internal/graph/planner/MediaPipelineCapabilityScanner.h"
+#include "internal/graph/planner/capability/MediaHardwareCapabilityProbe.h"
+#include "internal/graph/planner/capability/MediaInputCapabilityProbe.h"
+#include "internal/graph/planner/capability/MediaVideoCapabilityScanner.h"
 
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
@@ -76,14 +79,9 @@ FFmpegRealtimeInputOptions toFFmpegRealtimeInputOptions(const MediaPipelinePlann
     const std::string& inputPath,
     AVDictionary** inputOptions)
 {
-    AVFormatContext* raw = nullptr;
-    const int openRet = avformat_open_input(&raw, inputPath.c_str(), nullptr, inputOptions);
-    if (openRet < 0) {
-        return ::media::Result<MediaInputVideoStreamInfo>::failure(
-            ::media::ErrorInfo::ffmpegFailure("avformat_open_input: " + ffmpegErrorString(openRet), openRet));
-    }
-
-    ::media::ffmpeg::InputFormatContextPtr inputContext(raw);
+    auto opened = MediaInputCapabilityProbe::open(inputPath, inputOptions);
+    if (!opened) return ::media::Result<MediaInputVideoStreamInfo>::failure(opened.error());
+    ::media::ffmpeg::InputFormatContextPtr inputContext = std::move(opened).value();
     const int infoRet = avformat_find_stream_info(inputContext.get(), nullptr);
     if (infoRet < 0) {
         return ::media::Result<MediaInputVideoStreamInfo>::failure(
@@ -176,14 +174,9 @@ FFmpegRealtimeInputOptions toFFmpegRealtimeInputOptions(const MediaPipelinePlann
     AVDictionary** inputOptions,
     bool includeAudio)
 {
-    AVFormatContext* raw = nullptr;
-    const int openRet = avformat_open_input(&raw, inputPath.c_str(), nullptr, inputOptions);
-    if (openRet < 0) {
-        return ::media::Result<MediaRealtimeInputStreamInfo>::failure(
-            ::media::ErrorInfo::ffmpegFailure("avformat_open_input: " + ffmpegErrorString(openRet), openRet));
-    }
-
-    ::media::ffmpeg::InputFormatContextPtr inputContext(raw);
+    auto opened = MediaInputCapabilityProbe::open(inputPath, inputOptions);
+    if (!opened) return ::media::Result<MediaRealtimeInputStreamInfo>::failure(opened.error());
+    ::media::ffmpeg::InputFormatContextPtr inputContext = std::move(opened).value();
     const int infoRet = avformat_find_stream_info(inputContext.get(), nullptr);
     if (infoRet < 0) {
         return ::media::Result<MediaRealtimeInputStreamInfo>::failure(
@@ -232,12 +225,12 @@ std::string softwareEncoderName(const std::string& outputCodec)
 
 bool decoderExists(const std::string& name)
 {
-    return !name.empty() && avcodec_find_decoder_by_name(name.c_str()) != nullptr;
+    return MediaHardwareCapabilityProbe::decoderExists(name);
 }
 
 bool encoderExists(const std::string& name)
 {
-    return !name.empty() && avcodec_find_encoder_by_name(name.c_str()) != nullptr;
+    return MediaHardwareCapabilityProbe::encoderExists(name);
 }
 
 bool filterExists(const std::string& name)
@@ -247,7 +240,7 @@ bool filterExists(const std::string& name)
     }
 
     const std::string root = filterRootName(name);
-    return !root.empty() && avfilter_get_by_name(root.c_str()) != nullptr;
+    return MediaHardwareCapabilityProbe::filterExists(root);
 }
 
 bool targetResizeRequested(const MediaPipelinePlannerOptions& options) noexcept
@@ -611,15 +604,7 @@ MediaPipelineChainPlan makeRawChain(std::string label,
         inputUrl, options, includeAudio,
         [](const std::string& url, AVDictionary** inputOptions)
             -> ::media::Result<::media::ffmpeg::InputFormatContextPtr> {
-            AVFormatContext* raw = nullptr;
-            const int result = avformat_open_input(&raw, url.c_str(), nullptr, inputOptions);
-            if (result < 0) {
-                return ::media::Result<::media::ffmpeg::InputFormatContextPtr>::failure(
-                    ::media::ErrorInfo::ffmpegFailure(
-                        "avformat_open_input: " + ffmpegErrorString(result), result));
-            }
-            return ::media::Result<::media::ffmpeg::InputFormatContextPtr>::success(
-                ::media::ffmpeg::InputFormatContextPtr(raw));
+            return MediaInputCapabilityProbe::open(url, inputOptions);
         });
 }
 
@@ -661,7 +646,7 @@ MediaPipelineChainPlan makeRawChain(std::string label,
     return ::media::Result<MediaPreparedRealtimeInputScan>::success(std::move(scan));
 }
 
-std::vector<MediaPipelineChainPlan> MediaPipelineCapabilityScanner::enumerateVideoTranscodeCandidates(
+std::vector<MediaPipelineChainPlan> MediaVideoCapabilityScanner::enumerateTranscodeCandidates(
     const std::string& inputCodecName,
     const std::string& outputCodecName,
     const MediaPipelinePlannerOptions& options)
@@ -762,6 +747,14 @@ std::vector<MediaPipelineChainPlan> MediaPipelineCapabilityScanner::enumerateVid
     }
 
     return chains;
+}
+
+std::vector<MediaPipelineChainPlan> MediaPipelineCapabilityScanner::enumerateVideoTranscodeCandidates(
+    const std::string& inputCodecName,
+    const std::string& outputCodecName,
+    const MediaPipelinePlannerOptions& options)
+{
+    return MediaVideoCapabilityScanner::enumerateTranscodeCandidates(inputCodecName, outputCodecName, options);
 }
 
 } // namespace media::ffmpeg::graph

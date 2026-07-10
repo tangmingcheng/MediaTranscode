@@ -901,6 +901,20 @@ void testGraphRejectsBehaviorDefaultImplementations(TestContext& ctx)
     expectTextNotContains(ctx, encoderBuilder, "rc_max_rate = encoderContext->bit_rate");
 }
 
+void testCapabilityScanningResponsibilitiesAreSeparated(TestContext& ctx)
+{
+    const std::string facade = repositoryFile("src/internal/graph/planner/MediaPipelineCapabilityScanner.cpp");
+    const std::string inputProbe = repositoryFile("src/internal/graph/planner/capability/MediaInputCapabilityProbe.h");
+    const std::string videoScanner = repositoryFile("src/internal/graph/planner/capability/MediaVideoCapabilityScanner.h");
+    const std::string hardwareProbe = repositoryFile("src/internal/graph/planner/capability/MediaHardwareCapabilityProbe.h");
+
+    expectTextContains(ctx, inputProbe, "class MediaInputCapabilityProbe final");
+    expectTextContains(ctx, videoScanner, "class MediaVideoCapabilityScanner final");
+    expectTextContains(ctx, hardwareProbe, "class MediaHardwareCapabilityProbe final");
+    expectTextNotContains(ctx, facade, "avformat_open_input");
+    expectTextNotContains(ctx, facade, "av_hwdevice_ctx_create");
+}
+
 void testPlannerRejectsUnresolvedBehaviorOptions(TestContext& ctx)
 {
     MediaInputVideoStreamInfo input;
@@ -3025,6 +3039,7 @@ int main()
     testVideoToolsAreSplitIntoDedicatedTargets(ctx);
     testVideoToolsRejectLegacyBusinessSwitches(ctx);
     testGraphRejectsBehaviorDefaultImplementations(ctx);
+    testCapabilityScanningResponsibilitiesAreSeparated(ctx);
     testPlannerRejectsUnresolvedBehaviorOptions(ctx);
     testValidationRejectsUnsupportedRealtimeInput(ctx);
     testValidationRequiresExplicitRealtimeStreamClassification(ctx);
