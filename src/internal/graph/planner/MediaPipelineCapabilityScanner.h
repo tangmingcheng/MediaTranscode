@@ -3,6 +3,7 @@
 #include "internal/graph/model/MediaGraphTypes.h"
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/planner/MediaPipelinePlanner.h"
+#include "internal/graph/planner/realtime/MediaPreparedRealtimeInput.h"
 
 #include <string>
 #include <vector>
@@ -15,6 +16,11 @@ struct MediaRealtimeInputStreamInfo {
     MediaInputAudioStreamInfo audio;
 };
 
+struct MediaPreparedRealtimeInputScan final {
+    MediaRealtimeInputStreamInfo streams;
+    MediaPreparedRealtimeInput prepared;
+};
+
 class MediaPipelineCapabilityScanner final {
 public:
     static ::media::Result<MediaInputVideoStreamInfo> detectInputVideoStreamInfo(const std::string& inputPath);
@@ -25,6 +31,15 @@ public:
         const std::string& inputUrl,
         const MediaPipelinePlannerOptions& options,
         bool includeAudio);
+    static ::media::Result<MediaPreparedRealtimeInputScan> prepareRealtimeInput(
+        const std::string& inputUrl,
+        const MediaPipelinePlannerOptions& options,
+        bool includeAudio);
+    static ::media::Result<MediaPreparedRealtimeInputScan> prepareRealtimeInput(
+        const std::string& inputUrl,
+        const MediaPipelinePlannerOptions& options,
+        bool includeAudio,
+        const MediaRealtimeInputOpener& opener);
 
     static std::vector<MediaPipelineChainPlan> enumerateVideoTranscodeCandidates(
         const std::string& inputCodecName,

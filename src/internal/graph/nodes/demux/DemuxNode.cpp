@@ -1,4 +1,5 @@
 #include "internal/graph/nodes/demux/DemuxNode.h"
+#include "internal/graph/nodes/demux/DemuxReadFailureClassifier.h"
 
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
@@ -71,7 +72,7 @@ MediaNodeKind DemuxNode::staticKind() noexcept
     }
 
     if (ret < 0) {
-        return processProgress(FFmpegGraphError::statusFromCode(ret, "av_read_frame"));
+        return processProgress(classifyDemuxReadFailure(ret, m_abortRequested));
     }
 
     MediaStreamKind streamKind = MediaStreamKind::Unknown;

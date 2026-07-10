@@ -56,21 +56,21 @@ const MediaChannelBinding& MediaChannel::binding() const noexcept
     return status;
 }
 
-bool MediaChannel::tryPush(MediaBufferRef buffer)
+MediaQueuePushOutcome MediaChannel::pushOutcome(MediaBufferRef buffer)
 {
     if (!m_queue) {
-        return false;
+        return MediaQueuePushOutcome::Closed;
     }
 
-    const bool ok = m_queue->tryPush(std::move(buffer));
-    if (ok) {
+    const MediaQueuePushOutcome outcome = m_queue->pushOutcome(std::move(buffer));
+    if (outcome == MediaQueuePushOutcome::Accepted) {
         m_metrics.pushed++;
         if (m_consumerWakeup) {
             m_consumerWakeup->notify();
         }
     }
     refreshQueueMetrics();
-    return ok;
+    return outcome;
 }
 
 ::media::Status MediaChannel::pop(MediaBufferRef& out)
@@ -83,6 +83,9 @@ bool MediaChannel::tryPush(MediaBufferRef buffer)
     auto status = m_queue->pop(out);
     if (status) {
         m_metrics.popped++;
+        if (m_producerWakeup) {
+            m_producerWakeup->notify();
+        }
     }
     refreshQueueMetrics();
     return status;
@@ -97,6 +100,9 @@ bool MediaChannel::tryPop(MediaBufferRef& out)
     const bool ok = m_queue->tryPop(out);
     if (ok) {
         m_metrics.popped++;
+        if (m_producerWakeup) {
+            m_producerWakeup->notify();
+        }
     }
     refreshQueueMetrics();
     return ok;
@@ -111,6 +117,9 @@ void MediaChannel::close()
     if (m_consumerWakeup) {
         m_consumerWakeup->notify();
     }
+    if (m_producerWakeup) {
+        m_producerWakeup->notify();
+    }
     refreshQueueMetrics();
 }
 
@@ -123,6 +132,9 @@ void MediaChannel::abort()
     if (m_consumerWakeup) {
         m_consumerWakeup->notify();
     }
+    if (m_producerWakeup) {
+        m_producerWakeup->notify();
+    }
     refreshQueueMetrics();
 }
 
@@ -134,6 +146,9 @@ void MediaChannel::clear()
     m_metrics.cleared++;
     if (m_consumerWakeup) {
         m_consumerWakeup->notify();
+    }
+    if (m_producerWakeup) {
+        m_producerWakeup->notify();
     }
     refreshQueueMetrics();
 }
@@ -186,6 +201,11 @@ const MediaChannelMetrics& MediaChannel::metrics() const noexcept
 void MediaChannel::setConsumerWakeup(MediaNodeWakeup& wakeup) noexcept
 {
     m_consumerWakeup = &wakeup;
+}
+
+void MediaChannel::setProducerWakeup(MediaNodeWakeup& wakeup) noexcept
+{
+    m_producerWakeup = &wakeup;
 }
 
 void MediaChannel::refreshQueueMetrics()

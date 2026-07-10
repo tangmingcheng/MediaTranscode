@@ -88,8 +88,26 @@ MediaNodeKind VideoFrameRateNode::staticKind() noexcept
     return MediaNodeKind::VideoFrameRate;
 }
 
+::media::Status VideoFrameRateNode::start(MediaGraphExecutionContext& context) { resetRuntimeState(); return FFmpegNodeRuntime::start(context); }
+::media::Status VideoFrameRateNode::stop(MediaGraphExecutionContext& context) { auto status = FFmpegNodeRuntime::stop(context); resetRuntimeState(); return status; }
+void VideoFrameRateNode::abort(MediaGraphExecutionContext& context) noexcept { FFmpegNodeRuntime::abort(context); resetRuntimeState(); }
+void VideoFrameRateNode::resetRuntimeState() noexcept
+{
+    m_initialized = false; m_started = false; m_flushed = false; m_inputTimeBase = {0,1}; m_targetFramePeriod = {0,1};
+    m_startPts = 0; m_nextOutputIndex = 0; m_lastInputPts = 0; m_lastOutputPts = AV_NOPTS_VALUE;
+    m_lastInputFrame.reset(); m_pendingFrames.clear(); m_terminals.reset(); m_eofEmitted = false;
+    m_terminalBuffer.reset(); m_terminalPending = false; m_terminalIsEof = false;
+}
+
 ::media::Result<MediaNodeProcessResult> VideoFrameRateNode::onProcess(MediaGraphExecutionContext& context)
 {
+    if (m_terminalPending) {
+        return continueTerminal(context);
+    }
+    const bool hadPendingOutput = !m_pendingFrames.empty();
+    auto pendingDrain = drainPending(context);
+    if (!pendingDrain) return processProgress(std::move(pendingDrain));
+    if (hadPendingOutput) return processProgress();
     if (m_terminals.finished()) {
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
     }
@@ -120,20 +138,10 @@ MediaNodeKind VideoFrameRateNode::staticKind() noexcept
             return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
         }
         m_flushed = true;
-        auto drainStatus = drainPending(context);
-        if (!drainStatus) {
-            return ::media::Result<MediaNodeProcessResult>::failure(drainStatus.error());
-        }
-        auto broadcastStatus = broadcastControlToAllOutputs(context, buffer);
-        if (!broadcastStatus) {
-            return ::media::Result<MediaNodeProcessResult>::failure(broadcastStatus.error());
-        }
-        if (eof) {
-            m_terminals.markEof("frame");
-            m_eofEmitted = true;
-        }
-        return ::media::Result<MediaNodeProcessResult>::success(
-            eof ? MediaNodeProcessResult::finished() : MediaNodeProcessResult::progress());
+        m_terminalBuffer = buffer;
+        m_terminalPending = true;
+        m_terminalIsEof = eof;
+        return continueTerminal(context);
     }
 
     if (!m_initialized) {
@@ -153,6 +161,24 @@ MediaNodeKind VideoFrameRateNode::staticKind() noexcept
         return ::media::Result<MediaNodeProcessResult>::failure(drainStatus.error());
     }
     return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
+}
+
+::media::Result<MediaNodeProcessResult> VideoFrameRateNode::continueTerminal(
+    MediaGraphExecutionContext& context)
+{
+    auto drainStatus = drainPending(context);
+    if (!drainStatus) return processProgress(std::move(drainStatus));
+    const bool eof = m_terminalIsEof;
+    MediaBufferRef terminal = std::move(m_terminalBuffer);
+    m_terminalPending = false;
+    m_terminalIsEof = false;
+    if (eof) {
+        m_terminals.markEof("frame");
+        m_eofEmitted = true;
+    }
+    auto broadcastStatus = broadcastControlToAllOutputs(context, terminal);
+    return eof ? processFinished(std::move(broadcastStatus))
+               : processProgress(std::move(broadcastStatus));
 }
 
 ::media::Status VideoFrameRateNode::initializeFromFirstFrame(MediaGraphExecutionContext& context,

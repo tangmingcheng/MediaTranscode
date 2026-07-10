@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace media::ffmpeg::graph {
@@ -47,6 +48,7 @@ public:
 
 private:
     std::unordered_map<uint32_t, std::unique_ptr<MediaRuntimeNode>> m_nodes;
+    std::unordered_set<uint32_t> m_finishedNodes;
     MediaGraphSchedulerState m_state = MediaGraphSchedulerState::Idle;
 };
 

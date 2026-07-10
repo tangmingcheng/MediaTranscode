@@ -24,8 +24,13 @@ public:
     ::media::Status start(MediaGraphExecutionContext& context) override;
     ::media::Status stop(MediaGraphExecutionContext& context) override;
     void abort(MediaGraphExecutionContext& context) noexcept override;
+    ::media::Result<MediaNodeProcessResult> process(MediaGraphExecutionContext& context) override;
 
 protected:
+    bool canFinishProcess() const noexcept override;
+    ::media::Result<MediaNodeProcessResult> processProgress(::media::Status status = ::media::Status::success());
+    ::media::Result<MediaNodeProcessResult> processFinished(::media::Status status = ::media::Status::success());
+    std::size_t pendingOutputBufferCount() const noexcept;
     struct PoppedChannelBuffer {
         MediaChannel* channel = nullptr;
         MediaBufferRef buffer;
@@ -59,7 +64,20 @@ protected:
     std::vector<MediaChannel*> outputChannels(MediaGraphExecutionContext& context);
 
 private:
+    struct PendingTransfer {
+        MediaBufferRef buffer;
+        std::vector<MediaChannel*> channels;
+        std::size_t nextChannel = 0;
+    };
+    ::media::Status transferOrDefer(MediaGraphExecutionContext& context,
+                                    const std::vector<MediaChannel*>& channels,
+                                    const MediaBufferRef& buffer,
+                                    const char* action);
+    ::media::Status drainPendingTransfers(MediaGraphExecutionContext& context, bool& waiting);
     std::size_t m_nextInputIndex = 0;
+    std::optional<PendingTransfer> m_pendingTransfer;
+    bool m_finishPending = false;
+    bool m_finished = false;
 };
 
 #define MEDIA_FFMPEG_GRAPH_DECLARE_FFMPEG_NODE(ClassName) \

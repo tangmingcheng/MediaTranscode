@@ -9,6 +9,31 @@ FFmpegCodecNodeRuntime::FFmpegCodecNodeRuntime(MediaNodeId nodeId, MediaNodeKind
 {
 }
 
+::media::Status FFmpegCodecNodeRuntime::start(MediaGraphExecutionContext& context)
+{
+    resetCodecContext();
+    return FFmpegNodeRuntime::start(context);
+}
+
+::media::Status FFmpegCodecNodeRuntime::stop(MediaGraphExecutionContext& context)
+{
+    auto status = FFmpegNodeRuntime::stop(context);
+    resetCodecContext();
+    return status;
+}
+
+void FFmpegCodecNodeRuntime::abort(MediaGraphExecutionContext& context) noexcept
+{
+    FFmpegNodeRuntime::abort(context);
+    resetCodecContext();
+}
+
+void FFmpegCodecNodeRuntime::resetCodecContext() noexcept
+{
+    m_codecContext = nullptr;
+    m_codecContextOwner.reset();
+}
+
 bool FFmpegCodecNodeRuntime::tryBindCodecContext(const MediaBufferRef& buffer) noexcept
 {
     auto* codecBuffer = dynamic_cast<FFmpegCodecContextBuffer*>(buffer.get());

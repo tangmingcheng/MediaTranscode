@@ -184,16 +184,17 @@ bool separateRtpOutput(const MediaRealtimeRtpTranscodePlan& plan) noexcept
 ::media::Status MediaRealtimeRtpTranscodeGraphBuilder::validate(
     const MediaRealtimeRtpTranscodeRequest& options)
 {
-    auto plan = MediaRealtimeRtpTranscodePlanner::plan(options);
-    if (!plan) {
-        return ::media::Status::failure(plan.error());
-    }
-    return ::media::Status::success();
+    return MediaRealtimeRtpTranscodePlanner::validateRealtimeRequestNoIo(options);
 }
 
 ::media::Result<MediaGraph> MediaRealtimeRtpTranscodeGraphBuilder::build(
     const MediaRealtimeRtpTranscodeRequest& options)
 {
+    if (!options.input.type || *options.input.type != RealtimeInputType::RtpPort) {
+        return ::media::Result<MediaGraph>::failure(
+            ::media::ErrorInfo::unsupported(
+                "URL and MPEG-TS realtime input require preflight() and buildExecutable()"));
+    }
     auto realtimePlan = MediaRealtimeRtpTranscodePlanner::plan(options);
     if (!realtimePlan) {
         return ::media::Result<MediaGraph>::failure(realtimePlan.error());
@@ -367,6 +368,40 @@ bool separateRtpOutput(const MediaRealtimeRtpTranscodePlan& plan) noexcept
     }
 
     return ::media::Result<MediaGraph>::success(std::move(graph));
+}
+
+::media::Result<MediaRealtimeExecutableGraph> MediaRealtimeRtpTranscodeGraphBuilder::buildExecutable(
+    MediaRealtimeTranscodePreflight preflight)
+{
+    const bool requiresPrepared = preflight.plan.inputType != RealtimeInputType::RtpPort;
+    if (requiresPrepared && (!preflight.prepared || !preflight.prepared->valid())) {
+        return ::media::Result<MediaRealtimeExecutableGraph>::failure(
+            ::media::ErrorInfo::notInitialized("realtime executable graph requires prepared input"));
+    }
+    auto graphResult = build(std::move(preflight.plan));
+    if (!graphResult) {
+        return ::media::Result<MediaRealtimeExecutableGraph>::failure(graphResult.error());
+    }
+    MediaRealtimeExecutableGraph executable;
+    executable.graph = std::move(graphResult).value();
+    if (requiresPrepared) {
+        MediaNodeId inputId = MediaNodeId::invalid();
+        for (const MediaNode& node : executable.graph.nodes()) {
+            if (node.kind != MediaNodeKind::RealtimeInput) continue;
+            if (inputId.isValid()) {
+                return ::media::Result<MediaRealtimeExecutableGraph>::failure(
+                    ::media::ErrorInfo::invalidArgument("realtime executable graph has duplicate realtime inputs"));
+            }
+            inputId = node.id;
+        }
+        if (!inputId.isValid()) {
+            return ::media::Result<MediaRealtimeExecutableGraph>::failure(
+                ::media::ErrorInfo::notInitialized("realtime executable graph has no realtime input node"));
+        }
+        executable.inputBindings.push_back(
+            MediaPreparedRealtimeInputBinding{inputId, std::move(*preflight.prepared)});
+    }
+    return ::media::Result<MediaRealtimeExecutableGraph>::success(std::move(executable));
 }
 
 } // namespace media::ffmpeg::graph

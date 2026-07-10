@@ -94,8 +94,24 @@ MediaNodeKind VideoFilterNode::staticKind() noexcept
     return MediaNodeKind::VideoFilter;
 }
 
+::media::Status VideoFilterNode::start(MediaGraphExecutionContext& context) { resetRuntimeState(); return FFmpegNodeRuntime::start(context); }
+::media::Status VideoFilterNode::stop(MediaGraphExecutionContext& context) { auto status = FFmpegNodeRuntime::stop(context); resetRuntimeState(); return status; }
+void VideoFilterNode::abort(MediaGraphExecutionContext& context) noexcept { FFmpegNodeRuntime::abort(context); resetRuntimeState(); }
+void VideoFilterNode::resetRuntimeState() noexcept
+{
+    resetFilterGraph(); m_encoderConfig.reset(); m_encoderContext = nullptr; m_terminals.reset(); m_eofEmitted = false;
+    m_terminalBuffer.reset(); m_terminalPending = false; m_terminalIsEof = false;
+}
+
 ::media::Result<MediaNodeProcessResult> VideoFilterNode::onProcess(MediaGraphExecutionContext& context)
 {
+    if (m_terminalPending) {
+        return continueTerminal(context);
+    }
+    bool producedPendingFrame = false;
+    auto pendingDrain = drainFrames(context, &producedPendingFrame);
+    if (!pendingDrain) return processProgress(std::move(pendingDrain));
+    if (producedPendingFrame) return processProgress();
     if (m_terminals.finished()) {
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
     }
@@ -140,20 +156,10 @@ MediaNodeKind VideoFilterNode::staticKind() noexcept
         if (eof && m_eofEmitted) {
             return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
         }
-        auto flushStatus = flushGraph(context);
-        if (!flushStatus) {
-            return ::media::Result<MediaNodeProcessResult>::failure(flushStatus.error());
-        }
-        auto emitStatus = emitOutput(context, "frame", frameBuffer);
-        if (!emitStatus) {
-            return ::media::Result<MediaNodeProcessResult>::failure(emitStatus.error());
-        }
-        if (eof) {
-            m_terminals.markEof("frame");
-            m_eofEmitted = true;
-        }
-        return ::media::Result<MediaNodeProcessResult>::success(
-            eof ? MediaNodeProcessResult::finished() : MediaNodeProcessResult::progress());
+        m_terminalBuffer = frameBuffer;
+        m_terminalPending = true;
+        m_terminalIsEof = eof;
+        return continueTerminal(context);
     }
 
     auto sendStatus = sendFrame(context, frameBuffer);
@@ -161,6 +167,27 @@ MediaNodeKind VideoFilterNode::staticKind() noexcept
         return ::media::Result<MediaNodeProcessResult>::failure(sendStatus.error());
     }
     return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
+}
+
+::media::Result<MediaNodeProcessResult> VideoFilterNode::continueTerminal(
+    MediaGraphExecutionContext& context)
+{
+    auto flushStatus = flushGraph(context);
+    if (!flushStatus) return processProgress(std::move(flushStatus));
+    auto drainStatus = drainFrames(context);
+    if (!drainStatus) return processProgress(std::move(drainStatus));
+
+    const bool eof = m_terminalIsEof;
+    MediaBufferRef terminal = std::move(m_terminalBuffer);
+    m_terminalPending = false;
+    m_terminalIsEof = false;
+    if (eof) {
+        m_terminals.markEof("frame");
+        m_eofEmitted = true;
+    }
+    auto emitStatus = emitOutput(context, "frame", terminal);
+    return eof ? processFinished(std::move(emitStatus))
+               : processProgress(std::move(emitStatus));
 }
 
 ::media::Status VideoFilterNode::bindEncoderConfig(MediaGraphExecutionContext& context, const MediaBufferRef& buffer)

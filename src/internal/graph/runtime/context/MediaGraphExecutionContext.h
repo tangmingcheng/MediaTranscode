@@ -19,9 +19,12 @@ public:
 
     MediaGraphExecutionContext(const MediaGraphExecutionContext&) = delete;
     MediaGraphExecutionContext& operator=(const MediaGraphExecutionContext&) = delete;
+    MediaGraphExecutionContext(MediaGraphExecutionContext&&) noexcept = default;
+    MediaGraphExecutionContext& operator=(MediaGraphExecutionContext&&) noexcept = default;
 
     ::media::Status compile(const MediaGraph& graph);
     void reset();
+    void rebindCompiledGraph(const MediaGraph& graph) noexcept;
 
     void setDiagnosticsEnabled(bool enabled) noexcept;
     bool diagnosticsEnabled() const noexcept;

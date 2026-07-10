@@ -43,7 +43,7 @@ MediaBlockingQueue::MediaBlockingQueue(MediaQueuePolicy policy)
     if (m_closed) {
         m_metrics.failedPushes++;
         return ::media::Status::failure(
-            ::media::ErrorInfo::notInitialized("MediaBlockingQueue push failed: queue closed"));
+            ::media::ErrorInfo::cancelled("MediaBlockingQueue push interrupted: queue closed"));
     }
 
     while (fullLocked()) {
@@ -66,10 +66,15 @@ MediaBlockingQueue::MediaBlockingQueue(MediaQueuePolicy policy)
             m_notFull.wait(lock, [&] { return !fullLocked() || m_closed || m_aborted; });
         }
 
-        if (m_aborted || m_closed) {
+        if (m_aborted) {
             m_metrics.failedPushes++;
             return ::media::Status::failure(
-                ::media::ErrorInfo::internalError("MediaBlockingQueue push interrupted"));
+                ::media::ErrorInfo::internalError("MediaBlockingQueue push failed: queue aborted"));
+        }
+        if (m_closed) {
+            m_metrics.failedPushes++;
+            return ::media::Status::failure(
+                ::media::ErrorInfo::cancelled("MediaBlockingQueue push interrupted: queue closed"));
         }
     }
 
@@ -87,27 +92,59 @@ MediaBlockingQueue::MediaBlockingQueue(MediaQueuePolicy policy)
     return ::media::Status::success();
 }
 
-bool MediaBlockingQueue::tryPush(MediaBufferRef buffer)
+MediaQueuePushOutcome MediaBlockingQueue::pushOutcome(MediaBufferRef buffer)
 {
     if (!buffer) {
-        return false;
+        return MediaQueuePushOutcome::WouldBlock;
     }
 
     std::lock_guard lock(m_mutex);
-    if (m_aborted || m_closed) {
+    if (m_aborted) {
         m_metrics.failedPushes++;
-        return false;
+        return MediaQueuePushOutcome::Aborted;
+    }
+    if (m_closed) {
+        m_metrics.failedPushes++;
+        return MediaQueuePushOutcome::Closed;
     }
 
     if (fullLocked()) {
-        auto status = handleOverflowLocked(buffer);
-        if (status &&
-            overflowPolicyDropsIncoming(m_policy, buffer)) {
-            return true;
-        }
-        if (!status || fullLocked()) {
+        switch (m_policy.overflowPolicy) {
+        case MediaQueueOverflowPolicy::DropNewest:
+            m_metrics.dropped++;
+            return MediaQueuePushOutcome::Dropped;
+        case MediaQueueOverflowPolicy::DropNonKeyFrame:
+            if (!buffer->isKeyFrame()) {
+                m_metrics.dropped++;
+                return MediaQueuePushOutcome::Dropped;
+            }
+            for (auto it = m_queue.begin(); it != m_queue.end(); ++it) {
+                if (*it && !(*it)->isKeyFrame()) {
+                    m_queue.erase(it);
+                    m_metrics.dropped++;
+                    updateSizeMetricsLocked();
+                    break;
+                }
+            }
+            if (fullLocked()) {
+                return MediaQueuePushOutcome::WouldBlock;
+            }
+            break;
+        case MediaQueueOverflowPolicy::DropOldest:
+            m_queue.pop_front();
+            m_metrics.dropped++;
+            updateSizeMetricsLocked();
+            break;
+        case MediaQueueOverflowPolicy::Abort:
+            m_aborted = true;
+            m_closed = true;
             m_metrics.failedPushes++;
-            return false;
+            m_notEmpty.notify_all();
+            m_notFull.notify_all();
+            return MediaQueuePushOutcome::Aborted;
+        case MediaQueueOverflowPolicy::BlockProducer:
+        default:
+            return MediaQueuePushOutcome::WouldBlock;
         }
     }
 
@@ -115,7 +152,7 @@ bool MediaBlockingQueue::tryPush(MediaBufferRef buffer)
     m_metrics.pushed++;
     updateSizeMetricsLocked();
     m_notEmpty.notify_one();
-    return true;
+    return MediaQueuePushOutcome::Accepted;
 }
 
 ::media::Status MediaBlockingQueue::pop(MediaBufferRef& out)
@@ -132,7 +169,7 @@ bool MediaBlockingQueue::tryPush(MediaBufferRef buffer)
     if (m_queue.empty()) {
         m_metrics.failedPops++;
         return ::media::Status::failure(
-            ::media::ErrorInfo::notInitialized("MediaBlockingQueue pop failed: queue closed and empty"));
+            ::media::ErrorInfo::cancelled("MediaBlockingQueue pop interrupted: queue closed and empty"));
     }
 
     out = std::move(m_queue.front());

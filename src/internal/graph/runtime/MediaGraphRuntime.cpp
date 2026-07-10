@@ -7,6 +7,7 @@
 #include <sstream>
 #include <utility>
 #include <vector>
+#include <unordered_set>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -94,23 +95,61 @@ bool MediaGraphRuntime::diagnosticsEnabled() const noexcept
             ::media::ErrorInfo::invalidArgument("MediaGraphRuntime compile failed: runtime is running"));
     }
 
+    return compileTransaction(std::move(graph), {});
+}
+
+::media::Status MediaGraphRuntime::compile(MediaRealtimeExecutableGraph executable)
+{
+    std::unordered_set<std::uint64_t> bindingIds;
+    for (const auto& binding : executable.inputBindings) {
+        if (!binding.nodeId.isValid() || !binding.prepared.valid() ||
+            !bindingIds.insert(binding.nodeId.value).second) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument("MediaGraphRuntime duplicate or invalid prepared input binding"));
+        }
+        const MediaNode* node = executable.graph.findNode(binding.nodeId);
+        if (!node || node->kind != MediaNodeKind::RealtimeInput) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument("MediaGraphRuntime prepared binding target is not RealtimeInput"));
+        }
+    }
+
+    for (const MediaNode& node : executable.graph.nodes()) {
+        if (node.kind == MediaNodeKind::RealtimeInput && !bindingIds.contains(node.id.value)) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::notInitialized("MediaGraphRuntime missing prepared RealtimeInput binding"));
+        }
+    }
+    return compileTransaction(std::move(executable.graph), std::move(executable.inputBindings));
+}
+
+::media::Status MediaGraphRuntime::compileTransaction(
+    MediaGraph graph,
+    std::vector<MediaPreparedRealtimeInputBinding> inputBindings)
+{
     mediaGraphDiagnosticLog(diagnosticsEnabled(),
                             MediaGraphDiagnosticPhase::RuntimeLifecycle,
                             "compile.begin");
 
-    m_context.reset();
-    m_scheduler.clear();
-    m_graph = std::move(graph);
-
-    auto status = m_context.compile(m_graph);
+    MediaGraphExecutionContext preparedContext;
+    preparedContext.setDiagnosticConfig(m_context.diagnosticConfig());
+    auto status = preparedContext.compile(graph);
     if (!status) {
-        m_state = MediaGraphRuntimeState::Empty;
         mediaGraphDiagnosticLog(diagnosticsEnabled(),
                                 MediaGraphDiagnosticPhase::RuntimeLifecycle,
                                 std::string("compile.failed error=") + status.error().describe());
         return status;
     }
 
+    const std::vector<MediaNodeId> oldExecutionOrder = m_context.executionOrder();
+    m_threadedExecutor.clear();
+    m_scheduler.clear(oldExecutionOrder);
+    m_graph = std::move(graph);
+    preparedContext.rebindCompiledGraph(m_graph);
+    m_context = std::move(preparedContext);
+    m_inputBindings = std::move(inputBindings);
+    m_acceptanceCollector.reset();
+    m_queueHighWatermark = 0;
     m_state = MediaGraphRuntimeState::Compiled;
     mediaGraphDiagnosticLog(diagnosticsEnabled(),
                             MediaGraphDiagnosticPhase::RuntimeLifecycle,
@@ -141,7 +180,14 @@ bool MediaGraphRuntime::diagnosticsEnabled() const noexcept
             continue;
         }
 
-        auto runtimeNode = MediaRuntimeNodeFactory::create(node);
+        MediaPreparedRealtimeInputBinding* binding = nullptr;
+        for (auto& candidate : m_inputBindings) {
+            if (candidate.nodeId == node.id) {
+                binding = &candidate;
+                break;
+            }
+        }
+        auto runtimeNode = MediaRuntimeNodeFactory::create(node, binding);
         if (!runtimeNode) {
             return ::media::Status::failure(runtimeNode.error());
         }
@@ -321,6 +367,10 @@ const MediaThreadingPolicy& MediaGraphRuntime::threadingPolicy() const noexcept
     auto closeStatus = MediaGraphLifecycle::closeChannels(m_context);
 
     if (!schedulerStatus) {
+        if (m_threadedExecutor.state() == MediaGraphThreadedExecutorState::Aborted) {
+            MediaGraphLifecycle::abortChannels(m_context);
+            m_state = MediaGraphRuntimeState::Aborted;
+        }
         return schedulerStatus;
     }
 
@@ -360,6 +410,7 @@ void MediaGraphRuntime::reset()
     m_scheduler.clear(executionOrder);
     m_context.setDiagnosticsEnabled(diagnosticsEnabledValue);
     m_graph.clear();
+    m_inputBindings.clear();
     m_acceptanceCollector.reset();
     m_queueHighWatermark = 0;
     m_state = MediaGraphRuntimeState::Empty;

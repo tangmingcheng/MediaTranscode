@@ -70,6 +70,11 @@ void MediaGraphExecutionContext::reset()
     mediaGraphDiagnosticSetGlobalConfig(m_diagnosticConfig);
 }
 
+void MediaGraphExecutionContext::rebindCompiledGraph(const MediaGraph& graph) noexcept
+{
+    if (m_compiled) m_graph = &graph;
+}
+
 void MediaGraphExecutionContext::setDiagnosticsEnabled(bool enabled) noexcept
 {
     m_diagnosticConfig.level = enabled ? MediaGraphDiagnosticLevel::State : MediaGraphDiagnosticLevel::Off;
@@ -234,6 +239,7 @@ void MediaGraphExecutionContext::interruptNodeWakeups() noexcept
 
         if (MediaChannel* channel = result.value()) {
             channel->setConsumerWakeup(nodeWakeup(edge.to.nodeId));
+            channel->setProducerWakeup(nodeWakeup(edge.from.nodeId));
             mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
                                     MediaGraphDiagnosticPhase::RuntimeChannel,
                                     std::string("create ") + mediaGraphDiagnosticDescribeChannel(*channel));

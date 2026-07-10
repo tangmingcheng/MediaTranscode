@@ -1,6 +1,7 @@
 #pragma once
 
 #include <condition_variable>
+#include <chrono>
 #include <cstddef>
 #include <mutex>
 
@@ -15,10 +16,11 @@ public:
         m_condition.notify_all();
     }
 
-    void waitForArrivals(std::size_t expected)
+    bool waitForArrivals(std::size_t expected,
+                         std::chrono::milliseconds timeout = std::chrono::seconds(5))
     {
         std::unique_lock<std::mutex> lock(m_mutex);
-        m_condition.wait(lock, [&] { return m_arrivals >= expected; });
+        return m_condition.wait_for(lock, timeout, [&] { return m_arrivals >= expected; });
     }
 
     void open()
@@ -28,10 +30,10 @@ public:
         m_condition.notify_all();
     }
 
-    void waitUntilOpen()
+    bool waitUntilOpen(std::chrono::milliseconds timeout = std::chrono::seconds(5))
     {
         std::unique_lock<std::mutex> lock(m_mutex);
-        m_condition.wait(lock, [&] { return m_open; });
+        return m_condition.wait_for(lock, timeout, [&] { return m_open; });
     }
 
 private:

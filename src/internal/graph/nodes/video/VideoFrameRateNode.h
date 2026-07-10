@@ -19,11 +19,17 @@ class VideoFrameRateNode final : public FFmpegNodeRuntime {
 public:
     explicit VideoFrameRateNode(MediaNodeId nodeId);
     static MediaNodeKind staticKind() noexcept;
+    ::media::Status start(MediaGraphExecutionContext& context) override;
+    ::media::Status stop(MediaGraphExecutionContext& context) override;
+    void abort(MediaGraphExecutionContext& context) noexcept override;
 
 protected:
     ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context) override;
 
 private:
+    friend struct VideoFrameRateNodeLifecycleTestAccess;
+
+    ::media::Result<MediaNodeProcessResult> continueTerminal(MediaGraphExecutionContext& context);
     ::media::Status initializeFromFirstFrame(MediaGraphExecutionContext& context, const MediaBufferRef& buffer);
     ::media::Status sendFrame(MediaGraphExecutionContext& context, const MediaBufferRef& buffer);
     ::media::Status drainPending(MediaGraphExecutionContext& context);
@@ -36,6 +42,7 @@ private:
                                               int64_t currentPts,
                                               int64_t targetPts) const noexcept;
     bool enabled() const noexcept;
+    void resetRuntimeState() noexcept;
 
 private:
     bool m_initialized = false;
@@ -54,6 +61,9 @@ private:
     std::deque<MediaBufferRef> m_pendingFrames;
     MediaInputTerminalTracker m_terminals { { "frame" } };
     bool m_eofEmitted = false;
+    MediaBufferRef m_terminalBuffer;
+    bool m_terminalPending = false;
+    bool m_terminalIsEof = false;
 };
 
 } // namespace media::ffmpeg::graph

@@ -22,7 +22,9 @@ enum class ErrorCode {
     FFmpegFailure,
     IoFailure,
     HardwareUnavailable,
-    InternalError
+    InternalError,
+    Cancelled,
+    WouldBlock
 };
 
 /**
@@ -39,7 +41,9 @@ inline const char* errorCodeName(ErrorCode code) noexcept
     case ErrorCode::FFmpegFailure: return "FFmpegFailure";
     case ErrorCode::IoFailure: return "IoFailure";
     case ErrorCode::HardwareUnavailable: return "HardwareUnavailable";
+    case ErrorCode::WouldBlock: return "WouldBlock";
     case ErrorCode::InternalError: return "InternalError";
+    case ErrorCode::Cancelled: return "Cancelled";
     default: return "Unknown";
     }
 }
@@ -125,9 +129,19 @@ struct ErrorInfo {
         return make(ErrorCode::HardwareUnavailable, std::move(message));
     }
 
+    static ErrorInfo wouldBlock(std::string message)
+    {
+        return make(ErrorCode::WouldBlock, std::move(message));
+    }
+
     static ErrorInfo internalError(std::string message)
     {
         return make(ErrorCode::InternalError, std::move(message));
+    }
+
+    static ErrorInfo cancelled(std::string message)
+    {
+        return make(ErrorCode::Cancelled, std::move(message));
     }
 };
 

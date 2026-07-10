@@ -93,6 +93,7 @@ std::vector<const MediaRuntimeNode*> MediaGraphScheduler::orderedRuntimeNodes(co
         }
     }
 
+    m_finishedNodes.clear();
     for (MediaRuntimeNode* node : orderedRuntimeNodes(context)) {
         auto status = node->start(context);
         if (!status) {
@@ -112,9 +113,15 @@ std::vector<const MediaRuntimeNode*> MediaGraphScheduler::orderedRuntimeNodes(co
     }
 
     for (MediaRuntimeNode* node : orderedRuntimeNodes(context)) {
+        if (m_finishedNodes.contains(node->nodeId().value)) {
+            continue;
+        }
         auto result = node->process(context);
         if (!result) {
             return ::media::Status::failure(result.error());
+        }
+        if (result.value().state == MediaNodeProcessState::Finished) {
+            m_finishedNodes.insert(node->nodeId().value);
         }
     }
 
@@ -172,6 +179,7 @@ void MediaGraphScheduler::clear(const MediaGraphExecutionContext* context)
         return;
     }
     m_nodes.clear();
+    m_finishedNodes.clear();
     m_state = MediaGraphSchedulerState::Idle;
 }
 
@@ -187,6 +195,7 @@ void MediaGraphScheduler::clear(const std::vector<MediaNodeId>& executionOrder)
         node.reset();
     }
     m_nodes.clear();
+    m_finishedNodes.clear();
     m_state = MediaGraphSchedulerState::Idle;
 }
 

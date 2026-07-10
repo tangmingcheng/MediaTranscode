@@ -57,6 +57,14 @@ MediaNodeKind AudioResampleNode::staticKind() noexcept
     return MediaNodeKind::AudioResample;
 }
 
+::media::Status AudioResampleNode::start(MediaGraphExecutionContext& context) { resetRuntimeState(); return FFmpegCodecNodeRuntime::start(context); }
+::media::Status AudioResampleNode::stop(MediaGraphExecutionContext& context) { auto status = FFmpegCodecNodeRuntime::stop(context); resetRuntimeState(); return status; }
+void AudioResampleNode::abort(MediaGraphExecutionContext& context) noexcept { FFmpegCodecNodeRuntime::abort(context); resetRuntimeState(); }
+void AudioResampleNode::resetRuntimeState() noexcept
+{
+    m_swr.reset(); m_nextOutputPts = AV_NOPTS_VALUE; m_terminals.reset(); m_eofEmitted = false;
+}
+
 ::media::Result<MediaNodeProcessResult> AudioResampleNode::onProcess(MediaGraphExecutionContext& context)
 {
     if (m_terminals.finished()) {
@@ -87,6 +95,11 @@ MediaNodeKind AudioResampleNode::staticKind() noexcept
     const bool eof = frameInput.value()->get()->isEof();
     if (eof && m_eofEmitted) {
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
+    }
+    if (eof) {
+        m_terminals.markEof("frame");
+        m_eofEmitted = true;
+        return processFinished(emitOutput(context, "frame", *frameInput.value()));
     }
     auto processStatus = processFrame(context, *frameInput.value());
     if (!processStatus) {

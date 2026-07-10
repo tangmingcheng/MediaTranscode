@@ -6,11 +6,15 @@
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/planner/MediaPipelinePlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodeRequest.h"
+#include "internal/graph/planner/realtime/MediaPreparedRealtimeInput.h"
 #include "media_transcode/Result.h"
 
 #include <string>
+#include <optional>
 
 namespace media::ffmpeg::graph {
+
+struct MediaRealtimeInputStreamInfo;
 
 struct MediaRealtimeRtpInputNodePlan {
     std::string url;
@@ -83,12 +87,30 @@ struct MediaRealtimeRtpTranscodePlan {
     MediaRealtimeAvStartBarrierPlan avStartBarrier;
 };
 
+struct MediaRealtimeTranscodePreflight final {
+    MediaRealtimeRtpTranscodePlan plan;
+    std::optional<MediaPreparedRealtimeInput> prepared;
+};
+
 class MediaRealtimeRtpTranscodePlanner final {
 public:
     static ::media::Result<MediaRealtimeRtpTranscodePlan> plan(
         const MediaRealtimeRtpTranscodeRequest& request);
+    static ::media::Result<MediaRealtimeTranscodePreflight> preflight(
+        const MediaRealtimeRtpTranscodeRequest& request);
+    static ::media::Result<MediaRealtimeTranscodePreflight> preflight(
+        const MediaRealtimeRtpTranscodeRequest& request,
+        const MediaRealtimeInputOpener& opener);
+    static ::media::Status validateRealtimeRequestNoIo(
+        const MediaRealtimeRtpTranscodeRequest& request);
 
 private:
+    static ::media::Result<MediaRealtimeRtpTranscodePlan> planWithInput(
+        const MediaRealtimeRtpTranscodeRequest& request,
+        const MediaRealtimeInputStreamInfo* inputInfo);
+    static ::media::Result<MediaRealtimeTranscodePreflight> preflightImpl(
+        const MediaRealtimeRtpTranscodeRequest& request,
+        const MediaRealtimeInputOpener* opener);
     MediaRealtimeRtpTranscodePlanner() = default;
 };
 

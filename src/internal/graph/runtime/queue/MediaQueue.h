@@ -9,6 +9,14 @@
 
 namespace media::ffmpeg::graph {
 
+enum class MediaQueuePushOutcome {
+    Accepted,
+    Dropped,
+    WouldBlock,
+    Closed,
+    Aborted
+};
+
 class MediaQueue {
 public:
     virtual ~MediaQueue() = default;
@@ -17,7 +25,7 @@ public:
     MediaQueue& operator=(const MediaQueue&) = delete;
 
     virtual ::media::Status push(MediaBufferRef buffer) = 0;
-    virtual bool tryPush(MediaBufferRef buffer) = 0;
+    virtual MediaQueuePushOutcome pushOutcome(MediaBufferRef buffer) = 0;
     virtual ::media::Status pop(MediaBufferRef& out) = 0;
     virtual bool tryPop(MediaBufferRef& out) = 0;
 

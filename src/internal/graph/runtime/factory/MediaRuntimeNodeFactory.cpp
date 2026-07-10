@@ -40,11 +40,23 @@ namespace media::ffmpeg::graph {
 
 ::media::Result<std::unique_ptr<MediaRuntimeNode>> MediaRuntimeNodeFactory::create(const MediaNode& node)
 {
+    return create(node, nullptr);
+}
+
+::media::Result<std::unique_ptr<MediaRuntimeNode>> MediaRuntimeNodeFactory::create(
+    const MediaNode& node,
+    MediaPreparedRealtimeInputBinding* binding)
+{
     switch (node.kind) {
     case MediaNodeKind::FileInput:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<FileInputNode>(node.id));
     case MediaNodeKind::RealtimeInput:
-        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<RealtimeInputNode>(node.id));
+        if (!binding || binding->nodeId != node.id || !binding->prepared.valid()) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                ::media::ErrorInfo::notInitialized("RealtimeInput runtime requires prepared node binding"));
+        }
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+            std::make_unique<RealtimeInputNode>(node.id, std::move(binding->prepared)));
     case MediaNodeKind::RawRtpInput:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<RawRtpInputNode>(node.id));
     case MediaNodeKind::Demux:

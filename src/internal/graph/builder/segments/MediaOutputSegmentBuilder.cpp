@@ -25,7 +25,6 @@ const char* boolOption(bool value) noexcept
         return ::media::Result<FileOutputSegment>::failure(
             ::media::ErrorInfo::invalidArgument("MediaOutputSegmentBuilder metadata queue capacity must be greater than 0"));
     }
-
     FileOutputSegment segment;
     segment.fileOutput = graph.addNode(MediaNodeKind::FileOutput,
                                        options.prefix + ".output",

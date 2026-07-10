@@ -26,7 +26,7 @@ public:
     const MediaChannelBinding& binding() const noexcept;
 
     ::media::Status push(MediaBufferRef buffer);
-    bool tryPush(MediaBufferRef buffer);
+    MediaQueuePushOutcome pushOutcome(MediaBufferRef buffer);
     ::media::Status pop(MediaBufferRef& out);
     bool tryPop(MediaBufferRef& out);
 
@@ -45,6 +45,7 @@ public:
     const MediaHardwareDescriptor& hardwareDescriptor() const noexcept;
     const MediaChannelMetrics& metrics() const noexcept;
     void setConsumerWakeup(MediaNodeWakeup& wakeup) noexcept;
+    void setProducerWakeup(MediaNodeWakeup& wakeup) noexcept;
 
 private:
     void refreshQueueMetrics();
@@ -60,6 +61,7 @@ private:
     std::unique_ptr<MediaQueue> m_queue;
     MediaChannelMetrics m_metrics;
     MediaNodeWakeup* m_consumerWakeup = nullptr;
+    MediaNodeWakeup* m_producerWakeup = nullptr;
 };
 
 } // namespace media::ffmpeg::graph

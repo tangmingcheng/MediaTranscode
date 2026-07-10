@@ -91,6 +91,14 @@ const MediaThreadingPolicy& MediaGraphThreadedExecutor::policy() const noexcept
         }
     }
 
+    if (metrics().workerErrors != 0) {
+        scheduler.abort(context);
+        m_state = MediaGraphThreadedExecutorState::Aborted;
+        return ::media::Status::failure(
+            ::media::ErrorInfo::internalError(
+                "MediaGraphThreadedExecutor stop harvested a worker failure; executor aborted"));
+    }
+
     auto status = scheduler.stop(context);
     if (!status) {
         return status;

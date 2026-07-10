@@ -278,26 +278,27 @@ int runRealtimeVideoCli(int argc, char** argv)
               << " hw=" << (options.parameters.execution.disableHardware ? "disabled" : "auto")
               << '\n';
 
-    auto planResult = MediaRealtimeRtpTranscodePlanner::plan(options);
-    if (!planResult) {
-        return failResult("realtime video graph plan", planResult);
+    auto preflightResult = MediaRealtimeRtpTranscodePlanner::preflight(options);
+    if (!preflightResult) {
+        return failResult("realtime video graph preflight", preflightResult);
     }
-    MediaRealtimeRtpTranscodePlan plan = std::move(planResult).value();
+    MediaRealtimeTranscodePreflight preflight = std::move(preflightResult).value();
+    const MediaThreadingPolicy threadingPolicy = preflight.plan.threadingPolicy;
 
-    auto graphResult = MediaRealtimeRtpTranscodeGraphBuilder::build(plan);
-    if (!graphResult) {
-        return failResult("realtime video graph build", graphResult);
+    auto executableResult = MediaRealtimeRtpTranscodeGraphBuilder::buildExecutable(std::move(preflight));
+    if (!executableResult) {
+        return failResult("realtime video executable graph build", executableResult);
     }
-    MediaGraph graph = std::move(graphResult).value();
-    auto summaryStatus = printRealtimePlanSummary(graph);
+    MediaRealtimeExecutableGraph executable = std::move(executableResult).value();
+    auto summaryStatus = printRealtimePlanSummary(executable.graph);
     if (!summaryStatus) {
         return failStatus("print realtime video plan summary", summaryStatus);
     }
 
     MediaGraphRuntime runtime;
     runtime.setDiagnosticsEnabled(options.parameters.execution.diagnosticLogEnabled);
-    runtime.setThreadingPolicy(plan.threadingPolicy);
-    auto compileStatus = runtime.compile(std::move(graph));
+    runtime.setThreadingPolicy(threadingPolicy);
+    auto compileStatus = runtime.compile(std::move(executable));
     if (!compileStatus) {
         return failStatus("compile realtime video graph", compileStatus);
     }

@@ -6,6 +6,9 @@
 #include "internal/graph/nodes/mux/MediaMuxCompletionState.h"
 #include "internal/graph/nodes/merge/PacketMergeNode.h"
 #include "internal/graph/nodes/demux/DemuxNode.h"
+#include "internal/graph/nodes/video/VideoDecodeNode.h"
+#include "internal/graph/nodes/video/VideoFilterNode.h"
+#include "internal/graph/nodes/video/VideoFrameRateNode.h"
 #include "internal/graph/runtime/MediaRuntimeNode.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 #include "internal/graph/runtime/lifecycle/MediaInputTerminalTracker.h"
@@ -23,11 +26,119 @@
 #include <sstream>
 #include <thread>
 
+namespace media::ffmpeg::graph {
+
+struct VideoDecodeNodeLifecycleTestAccess {
+    static bool bindCodec(VideoDecodeNode& node, const MediaBufferRef& buffer)
+    {
+        return node.tryBindCodecContext(buffer);
+    }
+
+    static void injectInterruptedTerminal(VideoDecodeNode& node, const MediaBufferRef& terminal)
+    {
+        node.m_receivePending = true;
+        node.m_flushPending = true;
+        node.m_flushIsEof = true;
+        node.m_flushSent = true;
+        node.m_flushBuffer = terminal;
+        node.m_eofEmitted = true;
+        node.m_terminals.markEof("packet");
+    }
+
+    static bool reset(const VideoDecodeNode& node)
+    {
+        return !node.hasCodecContext() && !node.m_receivePending && !node.m_flushPending &&
+               !node.m_flushIsEof && !node.m_flushSent && !node.m_flushBuffer &&
+               !node.m_eofEmitted && !node.m_terminals.finished();
+    }
+};
+
+struct VideoFilterNodeLifecycleTestAccess {
+    static ::media::Status emit(VideoFilterNode& node,
+                                MediaGraphExecutionContext& context,
+                                const MediaBufferRef& buffer)
+    {
+        return node.emitOutput(context, "frame", buffer);
+    }
+
+    static void injectInterruptedTerminal(VideoFilterNode& node, const MediaBufferRef& terminal)
+    {
+        node.m_terminalBuffer = terminal;
+        node.m_terminalPending = true;
+        node.m_terminalIsEof = true;
+        node.m_flushed = true;
+        node.m_eofEmitted = true;
+        node.m_terminals.markEof("frame");
+    }
+
+    static bool reset(const VideoFilterNode& node)
+    {
+        return !node.m_terminalBuffer && !node.m_terminalPending && !node.m_terminalIsEof &&
+               !node.m_flushed && !node.m_eofEmitted && !node.m_terminals.finished();
+    }
+};
+
+struct VideoFrameRateNodeLifecycleTestAccess {
+    static void queuePending(VideoFrameRateNode& node, const MediaBufferRef& buffer)
+    {
+        node.m_pendingFrames.push_back(buffer);
+    }
+
+    static void injectInterruptedPending(VideoFrameRateNode& node, const MediaBufferRef& buffer)
+    {
+        node.m_pendingFrames.push_back(buffer);
+        node.m_lastInputFrame = buffer;
+        node.m_terminalBuffer = buffer;
+        node.m_terminalPending = true;
+        node.m_terminalIsEof = true;
+        node.m_initialized = true;
+        node.m_started = true;
+        node.m_flushed = true;
+        node.m_eofEmitted = true;
+        node.m_terminals.markEof("frame");
+    }
+
+    static bool reset(const VideoFrameRateNode& node)
+    {
+        return node.m_pendingFrames.empty() && !node.m_lastInputFrame && !node.m_terminalBuffer &&
+               !node.m_terminalPending && !node.m_terminalIsEof && !node.m_initialized &&
+               !node.m_started && !node.m_flushed && !node.m_eofEmitted &&
+               !node.m_terminals.finished();
+    }
+
+    static std::size_t pending(const VideoFrameRateNode& node)
+    {
+        return node.m_pendingFrames.size() + node.pendingOutputBufferCount();
+    }
+};
+
+} // namespace media::ffmpeg::graph
+
 namespace {
 
 using media_transcode::test::TestContext;
 using media_transcode::test::makePacketBuffer;
 using namespace media::ffmpeg::graph;
+
+::media::Result<MediaBufferRef> makeVideoFrameBuffer(std::int64_t pts)
+{
+    auto frame = ::media::ffmpeg::makeFrame();
+    if (!frame) {
+        return ::media::Result<MediaBufferRef>::failure(
+            ::media::ErrorInfo::allocationFailed("test frame allocation failed"));
+    }
+    frame->pts = pts;
+    frame->format = AV_PIX_FMT_YUV420P;
+    frame->width = 16;
+    frame->height = 16;
+    auto buffer = FFmpegBufferFactory::wrapFrame(std::move(frame), MediaStreamKind::Video);
+    if (buffer) {
+        MediaTimeDescriptor time;
+        time.timeBase = MediaRational{1, 25};
+        buffer.value()->setTimeDescriptor(time);
+    }
+    return buffer;
+}
 
 std::string readSource(const char* path)
 {
@@ -180,6 +291,141 @@ void testInputMetadataConsumersDoNotReadRuntimeStreams(TestContext& ctx)
     }
 }
 
+void testInterruptedFfmpegNodeStateDoesNotLeakAcrossSameInstanceRestart(TestContext& ctx)
+{
+    MediaGraphExecutionContext execution;
+    auto terminal = makePacketBuffer(false, 7);
+    EXPECT_TRUE(ctx, terminal);
+    if (!terminal) return;
+
+    VideoDecodeNode decode(MediaNodeId{101});
+    auto codec = FFmpegBufferFactory::wrapCodecContext(::media::ffmpeg::makeCodecContext(nullptr));
+    EXPECT_TRUE(ctx, codec);
+    if (!codec) return;
+    EXPECT_TRUE(ctx, VideoDecodeNodeLifecycleTestAccess::bindCodec(decode, codec.value()));
+    VideoDecodeNodeLifecycleTestAccess::injectInterruptedTerminal(decode, terminal.value());
+    EXPECT_TRUE(ctx, decode.stop(execution));
+    EXPECT_TRUE(ctx, decode.start(execution));
+    EXPECT_TRUE(ctx, VideoDecodeNodeLifecycleTestAccess::reset(decode));
+    auto decodeResult = decode.process(execution);
+    EXPECT_TRUE(ctx, !decodeResult || decodeResult.value().state != MediaNodeProcessState::Finished);
+
+    VideoFilterNode filter(MediaNodeId{102});
+    VideoFilterNodeLifecycleTestAccess::injectInterruptedTerminal(filter, terminal.value());
+    EXPECT_TRUE(ctx, filter.stop(execution));
+    EXPECT_TRUE(ctx, filter.start(execution));
+    EXPECT_TRUE(ctx, VideoFilterNodeLifecycleTestAccess::reset(filter));
+    auto filterResult = filter.process(execution);
+    EXPECT_TRUE(ctx, !filterResult || filterResult.value().state != MediaNodeProcessState::Finished);
+
+    VideoFrameRateNode frameRate(MediaNodeId{103});
+    VideoFrameRateNodeLifecycleTestAccess::injectInterruptedPending(frameRate, terminal.value());
+    EXPECT_TRUE(ctx, frameRate.stop(execution));
+    EXPECT_TRUE(ctx, frameRate.start(execution));
+    EXPECT_TRUE(ctx, VideoFrameRateNodeLifecycleTestAccess::reset(frameRate));
+    auto frameRateResult = frameRate.process(execution);
+    EXPECT_TRUE(ctx, !frameRateResult || frameRateResult.value().state != MediaNodeProcessState::Finished);
+}
+
+MediaGraph makeSlowVideoNodeGraph(MediaNodeKind kind,
+                                  MediaNodeId& source,
+                                  MediaNodeId& nodeId,
+                                  MediaNodeId& sink,
+                                  bool codecInput)
+{
+    MediaGraph graph;
+    source = graph.addNode(MediaNodeKind::ControlSignal, "slow.source");
+    nodeId = graph.addNode(kind, "slow.video.node");
+    sink = graph.addNode(MediaNodeKind::ControlSignal, "slow.sink");
+    graph.addOutputPort(source, "frame", MediaStreamKind::Video,
+                        MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true);
+    graph.addInputPort(nodeId, "frame", MediaStreamKind::Video,
+                       MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true);
+    graph.addOutputPort(nodeId, "frame", MediaStreamKind::Video,
+                        MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true);
+    graph.addInputPort(sink, "frame", MediaStreamKind::Video,
+                       MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true);
+    if (codecInput) {
+        const MediaNodeId codecSource = graph.addNode(MediaNodeKind::ControlSignal, "slow.codec.source");
+        graph.addOutputPort(codecSource, "codec", MediaStreamKind::Metadata,
+                            MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, true);
+        graph.addInputPort(nodeId, "codec", MediaStreamKind::Metadata,
+                           MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, true);
+        graph.connect(codecSource, "codec", nodeId, "codec", "slow codec metadata",
+                      MediaGraphBuildSupport::blockingQueuePolicy(1));
+    }
+    graph.connect(source, "frame", nodeId, "frame", "slow upstream",
+                  MediaGraphBuildSupport::blockingQueuePolicy(4));
+    graph.connect(nodeId, "frame", sink, "frame", "slow consumer",
+                  MediaGraphBuildSupport::blockingQueuePolicy(1));
+    return graph;
+}
+
+void testVideoInternalPendingDrainsBeforeSustainedUpstream(TestContext& ctx)
+{
+    auto filler = makeVideoFrameBuffer(700);
+    auto first = makeVideoFrameBuffer(701);
+    auto second = makeVideoFrameBuffer(702);
+    auto upstream = makeVideoFrameBuffer(799);
+    EXPECT_TRUE(ctx, filler && first && second && upstream);
+    if (!filler || !first || !second || !upstream) return;
+
+    MediaNodeId source;
+    MediaNodeId nodeId;
+    MediaNodeId sink;
+    MediaGraph fpsGraph = makeSlowVideoNodeGraph(
+        VideoFrameRateNode::staticKind(), source, nodeId, sink, false);
+    MediaGraphExecutionContext fpsExecution;
+    EXPECT_TRUE(ctx, fpsExecution.compile(fpsGraph));
+    MediaChannel* fpsInput = fpsExecution.findInputChannel(nodeId, "frame");
+    MediaChannel* fpsOutput = fpsExecution.findInputChannel(sink, "frame");
+    EXPECT_TRUE(ctx, fpsInput && fpsOutput);
+    EXPECT_TRUE(ctx, fpsInput->push(upstream.value()));
+    EXPECT_TRUE(ctx, fpsOutput->push(filler.value()));
+    VideoFrameRateNode frameRate(nodeId);
+    EXPECT_TRUE(ctx, frameRate.start(fpsExecution));
+    VideoFrameRateNodeLifecycleTestAccess::queuePending(frameRate, first.value());
+    VideoFrameRateNodeLifecycleTestAccess::queuePending(frameRate, second.value());
+    auto blocked = frameRate.process(fpsExecution);
+    EXPECT_TRUE(ctx, blocked && blocked.value().state == MediaNodeProcessState::Waiting);
+    EXPECT_EQ(ctx, VideoFrameRateNodeLifecycleTestAccess::pending(frameRate), static_cast<std::size_t>(2));
+    EXPECT_EQ(ctx, fpsInput->metrics().queue.currentSize.load(), static_cast<std::size_t>(1));
+    MediaBufferRef value;
+    EXPECT_TRUE(ctx, fpsOutput->tryPop(value));
+    EXPECT_TRUE(ctx, value && value->pts() == 700);
+    EXPECT_TRUE(ctx, frameRate.process(fpsExecution));
+    EXPECT_TRUE(ctx, fpsOutput->tryPop(value));
+    EXPECT_TRUE(ctx, value && value->pts() == 701);
+    EXPECT_EQ(ctx, fpsInput->metrics().queue.currentSize.load(), static_cast<std::size_t>(1));
+    EXPECT_EQ(ctx, VideoFrameRateNodeLifecycleTestAccess::pending(frameRate), static_cast<std::size_t>(1));
+    EXPECT_TRUE(ctx, frameRate.process(fpsExecution));
+    EXPECT_TRUE(ctx, fpsOutput->tryPop(value));
+    EXPECT_TRUE(ctx, value && value->pts() == 702);
+    EXPECT_EQ(ctx, fpsInput->metrics().queue.currentSize.load(), static_cast<std::size_t>(1));
+    EXPECT_TRUE(ctx, frameRate.stop(fpsExecution));
+
+    MediaGraph filterGraph = makeSlowVideoNodeGraph(
+        VideoFilterNode::staticKind(), source, nodeId, sink, true);
+    MediaGraphExecutionContext filterExecution;
+    EXPECT_TRUE(ctx, filterExecution.compile(filterGraph));
+    MediaChannel* filterInput = filterExecution.findInputChannel(nodeId, "frame");
+    MediaChannel* filterOutput = filterExecution.findInputChannel(sink, "frame");
+    EXPECT_TRUE(ctx, filterInput && filterOutput);
+    EXPECT_TRUE(ctx, filterInput->push(upstream.value()));
+    EXPECT_TRUE(ctx, filterOutput->push(filler.value()));
+    VideoFilterNode filter(nodeId);
+    EXPECT_TRUE(ctx, filter.start(filterExecution));
+    auto pendingStatus = VideoFilterNodeLifecycleTestAccess::emit(filter, filterExecution, first.value());
+    EXPECT_FALSE(ctx, pendingStatus);
+    EXPECT_TRUE(ctx, pendingStatus.error().code == ::media::ErrorCode::WouldBlock);
+    EXPECT_TRUE(ctx, filterOutput->tryPop(value));
+    EXPECT_TRUE(ctx, filter.process(filterExecution));
+    EXPECT_TRUE(ctx, filterOutput->tryPop(value));
+    EXPECT_TRUE(ctx, value && value->pts() == 701);
+    EXPECT_EQ(ctx, filterInput->metrics().queue.currentSize.load(), static_cast<std::size_t>(1));
+    EXPECT_TRUE(ctx, filter.stop(filterExecution));
+}
+
 } // namespace
 
 void runEventRuntimeFfmpegOwnershipTests(media_transcode::test::TestContext& ctx)
@@ -188,4 +434,6 @@ void runEventRuntimeFfmpegOwnershipTests(media_transcode::test::TestContext& ctx
     testInputSnapshotCreationPropagatesInvalidStreamFailures(ctx);
     testDemuxSameInstanceReleasesAndRebindsInputContext(ctx);
     testInputMetadataConsumersDoNotReadRuntimeStreams(ctx);
+    testInterruptedFfmpegNodeStateDoesNotLeakAcrossSameInstanceRestart(ctx);
+    testVideoInternalPendingDrainsBeforeSustainedUpstream(ctx);
 }

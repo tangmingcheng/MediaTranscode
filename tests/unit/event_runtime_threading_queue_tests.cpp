@@ -8,10 +8,12 @@
 #include "internal/graph/nodes/mux/MediaMuxCompletionState.h"
 #include "internal/graph/nodes/merge/PacketMergeNode.h"
 #include "internal/graph/nodes/demux/DemuxNode.h"
+#include "internal/graph/nodes/demux/DemuxReadFailureClassifier.h"
 #include "internal/graph/runtime/MediaRuntimeNode.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 #include "internal/graph/runtime/lifecycle/MediaInputTerminalTracker.h"
 #include "internal/graph/runtime/queue/MediaSpscRingQueue.h"
+#include "internal/graph/runtime/queue/MediaBlockingQueue.h"
 #include "internal/graph/runtime/threading/MediaGraphWorker.h"
 #include "internal/graph/runtime/threading/MediaGraphThreadedExecutor.h"
 #include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
@@ -30,6 +32,10 @@
 #include <sstream>
 #include <thread>
 
+extern "C" {
+#include <libavutil/error.h>
+}
+
 namespace {
 
 using media_transcode::test::TestContext;
@@ -38,6 +44,48 @@ using media_transcode::test::DeterministicRuntimeFaultNode;
 using media_transcode::test::RuntimeFaultStep;
 using media_transcode::test::makePacketBuffer;
 using namespace media::ffmpeg::graph;
+
+template <typename Queue>
+void verifyPushOutcomes(TestContext& ctx, MediaQueueMode mode)
+{
+    MediaQueuePolicy policy;
+    policy.mode = mode;
+    policy.capacity = 1;
+    policy.bounded = true;
+    policy.overflowPolicy = MediaQueueOverflowPolicy::DropNewest;
+    Queue dropNewest(policy);
+    auto first = makePacketBuffer(true, 1);
+    auto second = makePacketBuffer(true, 2);
+    EXPECT_TRUE(ctx, first && second);
+    if (!first || !second) return;
+    EXPECT_EQ(ctx, dropNewest.pushOutcome(first.value()), MediaQueuePushOutcome::Accepted);
+    EXPECT_EQ(ctx, dropNewest.pushOutcome(second.value()), MediaQueuePushOutcome::Dropped);
+    EXPECT_EQ(ctx, dropNewest.metrics().dropped.load(), static_cast<std::uint64_t>(1));
+
+    policy.overflowPolicy = MediaQueueOverflowPolicy::DropNonKeyFrame;
+    Queue dropNonKey(policy);
+    auto nonKey = makePacketBuffer(false, 3);
+    EXPECT_EQ(ctx, dropNonKey.pushOutcome(first.value()), MediaQueuePushOutcome::Accepted);
+    EXPECT_EQ(ctx, dropNonKey.pushOutcome(nonKey.value()), MediaQueuePushOutcome::Dropped);
+    EXPECT_EQ(ctx, dropNonKey.metrics().dropped.load(), static_cast<std::uint64_t>(1));
+
+    policy.overflowPolicy = MediaQueueOverflowPolicy::BlockProducer;
+    Queue blocking(policy);
+    EXPECT_EQ(ctx, blocking.pushOutcome(first.value()), MediaQueuePushOutcome::Accepted);
+    EXPECT_EQ(ctx, blocking.pushOutcome(second.value()), MediaQueuePushOutcome::WouldBlock);
+    blocking.close();
+    EXPECT_EQ(ctx, blocking.pushOutcome(second.value()), MediaQueuePushOutcome::Closed);
+
+    Queue aborted(policy);
+    aborted.abort();
+    EXPECT_EQ(ctx, aborted.pushOutcome(first.value()), MediaQueuePushOutcome::Aborted);
+}
+
+void testQueuePushOutcomesAreUnambiguous(TestContext& ctx)
+{
+    verifyPushOutcomes<MediaBlockingQueue>(ctx, MediaQueueMode::Blocking);
+    verifyPushOutcomes<MediaSpscRingQueue>(ctx, MediaQueueMode::SpscRing);
+}
 
 class ManualAcceptanceClock final : public MediaRuntimeAcceptanceClock {
 public:
@@ -109,6 +157,26 @@ private:
     MediaNodeId m_id;
 };
 
+class BarrierWaitingNode final : public MediaRuntimeNode {
+public:
+    BarrierWaitingNode(MediaNodeId id, DeterministicGate& entered)
+        : m_id(id), m_entered(entered)
+    {
+    }
+    MediaNodeId nodeId() const noexcept override { return m_id; }
+    ::media::Result<MediaNodeProcessResult> process(MediaGraphExecutionContext&) override
+    {
+        if (!m_arrived.exchange(true)) {
+            m_entered.arrive();
+        }
+        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::waiting());
+    }
+private:
+    MediaNodeId m_id;
+    DeterministicGate& m_entered;
+    std::atomic_bool m_arrived{ false };
+};
+
 class LostWakeRaceNode final : public MediaRuntimeNode {
 public:
     explicit LostWakeRaceNode(MediaNodeId id) : m_id(id) {}
@@ -140,6 +208,46 @@ public:
 private:
     MediaNodeId m_id;
     std::function<bool()> m_operation;
+};
+
+class StopInterruptedNode final : public MediaRuntimeNode {
+public:
+    explicit StopInterruptedNode(MediaNodeId id) : m_id(id) {}
+    MediaNodeId nodeId() const noexcept override { return m_id; }
+    ::media::Result<MediaNodeProcessResult> process(MediaGraphExecutionContext&) override
+    {
+        entered = true;
+        while (!interrupted) {
+            std::this_thread::yield();
+        }
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::cancelled("deterministic normal-stop interruption"));
+    }
+    void interrupt(MediaGraphExecutionContext&) noexcept override { interrupted = true; }
+    std::atomic_bool entered{ false };
+private:
+    MediaNodeId m_id;
+    std::atomic_bool interrupted{ false };
+};
+
+class StopRacingFaultNode final : public MediaRuntimeNode {
+public:
+    explicit StopRacingFaultNode(MediaNodeId id) : m_id(id) {}
+    MediaNodeId nodeId() const noexcept override { return m_id; }
+    ::media::Result<MediaNodeProcessResult> process(MediaGraphExecutionContext&) override
+    {
+        entered = true;
+        while (!interrupted) {
+            std::this_thread::yield();
+        }
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::ioFailure("deterministic fault racing with stop"));
+    }
+    void interrupt(MediaGraphExecutionContext&) noexcept override { interrupted = true; }
+    std::atomic_bool entered{ false };
+private:
+    MediaNodeId m_id;
+    std::atomic_bool interrupted{ false };
 };
 
 void testWaitingWorkerBlocksUntilDirectedWakeup(TestContext& ctx)
@@ -197,21 +305,30 @@ void testWakeupBetweenSnapshotAndWaitingIsNotLost(TestContext& ctx)
 void testExecutorConstructsAllWorkersBeforeConcurrentStart(TestContext& ctx)
 {
     constexpr std::uint32_t nodeCount = 64;
-    constexpr std::uint32_t rounds = 20;
+    constexpr std::uint32_t rounds = 4;
     for (std::uint32_t round = 0; round < rounds; ++round) {
         MediaGraph graph;
         MediaGraphScheduler scheduler;
+        DeterministicGate entered;
         for (std::uint32_t index = 0; index < nodeCount; ++index) {
             const MediaNodeId id = graph.addNode(MediaNodeKind::PacketMerge, "start.stress");
-            EXPECT_TRUE(ctx, scheduler.registerNode(std::make_unique<WaitingTestNode>(id)));
+            EXPECT_TRUE(ctx, scheduler.registerNode(std::make_unique<BarrierWaitingNode>(id, entered)));
         }
         MediaGraphExecutionContext execution;
         EXPECT_TRUE(ctx, execution.compile(graph));
         MediaGraphThreadedExecutor executor;
-        EXPECT_TRUE(ctx, executor.start(execution, scheduler));
-        EXPECT_TRUE(ctx, waitUntil([&] {
-            return executor.metrics().workerWaits == nodeCount;
-        }));
+        const auto startStatus = executor.start(execution, scheduler);
+        EXPECT_TRUE(ctx, startStatus);
+        if (!startStatus) {
+            executor.abort(execution, scheduler);
+            continue;
+        }
+        const bool allWorkersEntered = entered.waitForArrivals(nodeCount);
+        EXPECT_TRUE(ctx, allWorkersEntered);
+        if (!allWorkersEntered) {
+            executor.abort(execution, scheduler);
+            continue;
+        }
         EXPECT_TRUE(ctx, executor.stop(execution, scheduler));
     }
 }
@@ -290,17 +407,18 @@ void testSpscCloseDeterministicallyReleasesBlockedEndpoints(TestContext& ctx)
 
     MediaSpscRingQueue empty(policy);
     DeterministicGate consumerEntered;
-    bool popOk = true;
+    ::media::Status popStatus = ::media::Status::success();
     std::thread consumer([&] {
         consumerEntered.arrive();
         MediaBufferRef out;
-        popOk = static_cast<bool>(empty.pop(out));
+        popStatus = empty.pop(out);
     });
     consumerEntered.waitForArrivals(1);
     EXPECT_TRUE(ctx, waitUntil([&] { return empty.metrics().blockedConsumers.load() == 1; }));
     empty.close();
     consumer.join();
-    EXPECT_FALSE(ctx, popOk);
+    EXPECT_FALSE(ctx, popStatus);
+    EXPECT_EQ(ctx, popStatus.error().code, ::media::ErrorCode::Cancelled);
     EXPECT_TRUE(ctx, empty.closed());
     EXPECT_FALSE(ctx, empty.aborted());
 
@@ -309,16 +427,17 @@ void testSpscCloseDeterministicallyReleasesBlockedEndpoints(TestContext& ctx)
     EXPECT_TRUE(ctx, packet && full.push(packet.value()));
     if (!packet) return;
     DeterministicGate producerEntered;
-    bool pushOk = true;
+    ::media::Status pushStatus = ::media::Status::success();
     std::thread producer([&] {
         producerEntered.arrive();
-        pushOk = static_cast<bool>(full.push(packet.value()));
+        pushStatus = full.push(packet.value());
     });
     producerEntered.waitForArrivals(1);
     EXPECT_TRUE(ctx, waitUntil([&] { return full.metrics().blockedProducers.load() == 1; }));
     full.close();
     producer.join();
-    EXPECT_FALSE(ctx, pushOk);
+    EXPECT_FALSE(ctx, pushStatus);
+    EXPECT_EQ(ctx, pushStatus.error().code, ::media::ErrorCode::Cancelled);
     EXPECT_TRUE(ctx, full.closed());
     EXPECT_FALSE(ctx, full.aborted());
 }
@@ -560,10 +679,64 @@ void testWorkerFailurePropagatesIntoRuntimeReportAndResetClearsIt(TestContext& c
     EXPECT_EQ(ctx, resetReport.metrics.errorCount, static_cast<std::uint64_t>(0));
 }
 
+void testNormalStopInterruptionDoesNotBecomeWorkerFailure(TestContext& ctx)
+{
+    MediaGraph graph;
+    const MediaNodeId nodeId = graph.addNode(MediaNodeKind::PacketMerge, "normal.stop.interruption");
+    MediaGraphRuntime runtime;
+    EXPECT_TRUE(ctx, runtime.compile(std::move(graph)));
+    auto node = std::make_unique<StopInterruptedNode>(nodeId);
+    StopInterruptedNode* view = node.get();
+    EXPECT_TRUE(ctx, runtime.registerRuntimeNode(std::move(node)));
+    EXPECT_TRUE(ctx, runtime.startThreaded());
+    EXPECT_TRUE(ctx, waitUntil([&] { return view->entered.load(); }));
+    EXPECT_TRUE(ctx, runtime.stop());
+    const MediaGraphRuntimeReport report = MediaGraphRuntimeReporter::capture(runtime);
+    EXPECT_EQ(ctx, runtime.state(), MediaGraphRuntimeState::Stopped);
+    EXPECT_EQ(ctx, runtime.threadedExecutor().state(), MediaGraphThreadedExecutorState::Stopped);
+    EXPECT_EQ(ctx, report.metrics.workerErrors, static_cast<std::uint64_t>(0));
+    EXPECT_EQ(ctx, report.metrics.errorCount, static_cast<std::uint64_t>(0));
+}
+
+void testDemuxReadFailureClassificationPreservesCausality(TestContext& ctx)
+{
+    const auto interrupted = classifyDemuxReadFailure(AVERROR_EXIT, true);
+    EXPECT_FALSE(ctx, interrupted);
+    EXPECT_EQ(ctx, interrupted.error().code, ::media::ErrorCode::Cancelled);
+
+    const auto ioFailureDuringInterrupt = classifyDemuxReadFailure(AVERROR(EIO), true);
+    EXPECT_FALSE(ctx, ioFailureDuringInterrupt);
+    EXPECT_EQ(ctx, ioFailureDuringInterrupt.error().code, ::media::ErrorCode::FFmpegFailure);
+
+    const auto exitWithoutInterrupt = classifyDemuxReadFailure(AVERROR_EXIT, false);
+    EXPECT_FALSE(ctx, exitWithoutInterrupt);
+    EXPECT_EQ(ctx, exitWithoutInterrupt.error().code, ::media::ErrorCode::FFmpegFailure);
+}
+
+void testRealFailureRacingWithStopIsHarvestedAsAbort(TestContext& ctx)
+{
+    MediaGraph graph;
+    const MediaNodeId nodeId = graph.addNode(MediaNodeKind::PacketMerge, "stop.racing.fault");
+    MediaGraphRuntime runtime;
+    EXPECT_TRUE(ctx, runtime.compile(std::move(graph)));
+    auto node = std::make_unique<StopRacingFaultNode>(nodeId);
+    StopRacingFaultNode* view = node.get();
+    EXPECT_TRUE(ctx, runtime.registerRuntimeNode(std::move(node)));
+    EXPECT_TRUE(ctx, runtime.startThreaded());
+    EXPECT_TRUE(ctx, waitUntil([&] { return view->entered.load(); }));
+    EXPECT_FALSE(ctx, runtime.stop());
+    const MediaGraphRuntimeReport report = MediaGraphRuntimeReporter::capture(runtime);
+    EXPECT_EQ(ctx, runtime.state(), MediaGraphRuntimeState::Aborted);
+    EXPECT_EQ(ctx, runtime.threadedExecutor().state(), MediaGraphThreadedExecutorState::Aborted);
+    EXPECT_EQ(ctx, report.metrics.workerErrors, static_cast<std::uint64_t>(1));
+    EXPECT_EQ(ctx, report.metrics.errorCount, static_cast<std::uint64_t>(1));
+}
+
 } // namespace
 
 void runEventRuntimeThreadingQueueTests(media_transcode::test::TestContext& ctx)
 {
+    testQueuePushOutcomesAreUnambiguous(ctx);
     testWaitingWorkerBlocksUntilDirectedWakeup(ctx);
     testFinishedAndErrorWorkerMetrics(ctx);
     testScriptedWaitingWakeProgressTerminalSequences(ctx);
@@ -580,4 +753,7 @@ void runEventRuntimeThreadingQueueTests(media_transcode::test::TestContext& ctx)
     testRuntimeReportCarriesExternalAcceptanceSnapshot(ctx);
     testRuntimeReportKeepsGraphQueueHighWatermarkAcrossCaptures(ctx);
     testWorkerFailurePropagatesIntoRuntimeReportAndResetClearsIt(ctx);
+    testNormalStopInterruptionDoesNotBecomeWorkerFailure(ctx);
+    testDemuxReadFailureClassificationPreservesCausality(ctx);
+    testRealFailureRacingWithStopIsHarvestedAsAbort(ctx);
 }

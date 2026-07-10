@@ -99,8 +99,25 @@ MediaNodeKind VideoEncodeNode::staticKind() noexcept
     return MediaNodeKind::VideoEncode;
 }
 
+::media::Status VideoEncodeNode::start(MediaGraphExecutionContext& context) { resetRuntimeState(); return FFmpegCodecNodeRuntime::start(context); }
+void VideoEncodeNode::abort(MediaGraphExecutionContext& context) noexcept { FFmpegCodecNodeRuntime::abort(context); resetRuntimeState(); }
+void VideoEncodeNode::resetRuntimeState() noexcept
+{
+    m_encoderConfigEmitted = false; m_terminals.reset(); m_eofEmitted = false; m_receivePending = false;
+    m_flushPending = false; m_flushIsEof = false; m_flushSent = false; m_flushBuffer.reset();
+}
+
 ::media::Result<MediaNodeProcessResult> VideoEncodeNode::onProcess(MediaGraphExecutionContext& context)
 {
+    if (m_flushPending) {
+        return continueFlush(context);
+    }
+    if (m_receivePending) {
+        auto receiveResult = receivePackets(context);
+        if (!receiveResult) return processProgress(::media::Status::failure(receiveResult.error()));
+        m_receivePending = false;
+        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
+    }
     if (m_terminals.finished()) {
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
     }
@@ -145,25 +162,11 @@ MediaNodeKind VideoEncodeNode::staticKind() noexcept
         if (eof && m_eofEmitted) {
             return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
         }
-        const int sendRet = avcodec_send_frame(codecContext(), nullptr);
-        if (sendRet < 0 && sendRet != AVERROR_EOF) {
-            return ::media::Result<MediaNodeProcessResult>::failure(
-                FFmpegGraphError::fromCode(sendRet, "avcodec_send_frame(video flush)"));
-        }
-        auto drainStatus = receivePackets(context);
-        if (!drainStatus) {
-            return ::media::Result<MediaNodeProcessResult>::failure(drainStatus.error());
-        }
-        auto emitStatus = emitOutput(context, "packet", buffer);
-        if (!emitStatus) {
-            return ::media::Result<MediaNodeProcessResult>::failure(emitStatus.error());
-        }
-        if (eof) {
-            m_terminals.markEof("frame");
-            m_eofEmitted = true;
-        }
-        return ::media::Result<MediaNodeProcessResult>::success(
-            eof ? MediaNodeProcessResult::finished() : MediaNodeProcessResult::progress());
+        m_flushPending = true;
+        m_flushIsEof = eof;
+        m_flushSent = false;
+        m_flushBuffer = buffer;
+        return continueFlush(context);
     }
 
     AVFrame* frame = FFmpegFrameView::writableFrame(buffer);
@@ -212,8 +215,9 @@ MediaNodeKind VideoEncodeNode::staticKind() noexcept
             return status;
         }
     }
-    m_encoderConfigEmitted = false;
-    return FFmpegCodecNodeRuntime::stop(context);
+    auto status = FFmpegCodecNodeRuntime::stop(context);
+    resetRuntimeState();
+    return status;
 }
 
 ::media::Status VideoEncodeNode::emitEncoderConfig(MediaGraphExecutionContext& context,
@@ -237,22 +241,26 @@ MediaNodeKind VideoEncodeNode::staticKind() noexcept
     return ::media::Status::success();
 }
 
-::media::Status VideoEncodeNode::receivePackets(MediaGraphExecutionContext& context)
+::media::Result<bool> VideoEncodeNode::receivePackets(MediaGraphExecutionContext& context)
 {
     while (true) {
         auto packet = ::media::ffmpeg::makePacket();
         if (!packet) {
-            return ::media::Status::failure(
+            return ::media::Result<bool>::failure(
                 ::media::ErrorInfo::allocationFailed("VideoEncodeNode failed: av_packet_alloc returned null"));
         }
 
         const int ret = avcodec_receive_packet(codecContext(), packet.get());
-        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
-            return ::media::Status::success();
+        if (ret == AVERROR(EAGAIN)) {
+            return ::media::Result<bool>::success(false);
+        }
+        if (ret == AVERROR_EOF) {
+            return ::media::Result<bool>::success(true);
         }
 
         if (ret < 0) {
-            return FFmpegGraphError::statusFromCode(ret, "avcodec_receive_packet(video)");
+            return ::media::Result<bool>::failure(
+                FFmpegGraphError::fromCode(ret, "avcodec_receive_packet(video)"));
         }
 
         auto decision = mediaGraphDiagnosticSample(MediaGraphDiagnosticLevel::Flow,
@@ -270,7 +278,7 @@ MediaNodeKind VideoEncodeNode::staticKind() noexcept
 
         auto buffer = FFmpegBufferFactory::wrapPacket(std::move(packet), MediaStreamKind::Video);
         if (!buffer) {
-            return ::media::Status::failure(buffer.error());
+            return ::media::Result<bool>::failure(buffer.error());
         }
 
         MediaTimeDescriptor timeDescriptor;
@@ -279,9 +287,46 @@ MediaNodeKind VideoEncodeNode::staticKind() noexcept
 
         auto emitStatus = emitOutput(context, "packet", buffer.value());
         if (!emitStatus) {
-            return emitStatus;
+            if (emitStatus.error().code == ::media::ErrorCode::WouldBlock && !m_flushPending) {
+                m_receivePending = true;
+            }
+            return ::media::Result<bool>::failure(emitStatus.error());
         }
     }
+}
+
+::media::Result<MediaNodeProcessResult> VideoEncodeNode::continueFlush(
+    MediaGraphExecutionContext& context)
+{
+    if (!m_flushSent) {
+        const int sendRet = avcodec_send_frame(codecContext(), nullptr);
+        if (sendRet == 0 || sendRet == AVERROR_EOF) {
+            m_flushSent = true;
+        } else if (sendRet != AVERROR(EAGAIN)) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                FFmpegGraphError::fromCode(sendRet, "avcodec_send_frame(video flush)"));
+        }
+    }
+    auto drainResult = receivePackets(context);
+    if (!drainResult) {
+        return processProgress(::media::Status::failure(drainResult.error()));
+    }
+    if (!drainResult.value()) {
+        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
+    }
+
+    const bool eof = m_flushIsEof;
+    MediaBufferRef terminal = std::move(m_flushBuffer);
+    m_flushPending = false;
+    m_flushIsEof = false;
+    m_flushSent = false;
+    if (eof) {
+        m_terminals.markEof("frame");
+        m_eofEmitted = true;
+    }
+    auto emitStatus = emitOutput(context, "packet", terminal);
+    return eof ? processFinished(std::move(emitStatus))
+               : processProgress(std::move(emitStatus));
 }
 
 ::media::Status VideoEncodeNode::drainEncoderForStop()

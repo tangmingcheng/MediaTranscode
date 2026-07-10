@@ -16,6 +16,9 @@ class AudioResampleNode final : public FFmpegCodecNodeRuntime {
 public:
     explicit AudioResampleNode(MediaNodeId nodeId);
     static MediaNodeKind staticKind() noexcept;
+    ::media::Status start(MediaGraphExecutionContext& context) override;
+    ::media::Status stop(MediaGraphExecutionContext& context) override;
+    void abort(MediaGraphExecutionContext& context) noexcept override;
 
 protected:
     ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context) override;
@@ -26,6 +29,7 @@ private:
     ::media::Status emitConvertedFrame(MediaGraphExecutionContext& context, const AVFrame* inputFrame, const MediaBufferRef& inputBuffer);
     ::media::Status ensureSwrInitialized(const AVFrame* inputFrame);
     bool frameMatchesEncoder(const AVFrame* frame) const noexcept;
+    void resetRuntimeState() noexcept;
 
 private:
     ::media::ffmpeg::SwrContextPtr m_swr;

@@ -1,5 +1,10 @@
 #include "internal/graph/runtime/threading/MediaGraphWorker.h"
 
+#include "internal/graph/core/MediaGraph.h"
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
+
+#include <string>
+
 namespace media::ffmpeg::graph {
 
 MediaGraphWorker::MediaGraphWorker(MediaRuntimeNode& node,
@@ -88,7 +93,23 @@ void MediaGraphWorker::run()
         ++m_metrics.processCalls;
         auto result = m_node.process(m_context);
 
+        const bool cancellationRequested = m_stopRequested || m_aborted;
+        const bool interruptedByCancellation =
+            !result && result.error().code == ::media::ErrorCode::Cancelled;
+        if (cancellationRequested && interruptedByCancellation) {
+            break;
+        }
+
         if (!result) {
+            const MediaGraph* graph = m_context.graph();
+            const MediaNode* node = graph ? graph->findNode(m_node.nodeId()) : nullptr;
+            mediaGraphDiagnosticLog(
+                MediaGraphDiagnosticLevel::State,
+                MediaGraphDiagnosticPhase::RuntimeNode,
+                "worker.failed node=" + std::to_string(m_node.nodeId().value) +
+                    " kind=" + mediaGraphDiagnosticNodeKindName(
+                        node ? node->kind : MediaNodeKind::Unknown) +
+                    " error=" + result.error().describe());
             ++m_metrics.errors;
             ++consecutiveErrors;
             if (consecutiveErrors >= m_config.maxConsecutiveErrors) {

@@ -7,12 +7,14 @@
 #include "internal/graph/runtime/threading/MediaGraphThreadedExecutor.h"
 #include "internal/graph/runtime/MediaRuntimeNode.h"
 #include "internal/graph/runtime/diagnostics/MediaRuntimeAcceptanceCollector.h"
+#include "internal/graph/runtime/factory/MediaRealtimeExecutableGraph.h"
 #include "media_transcode/Result.h"
 
 #include <cstddef>
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 namespace media::ffmpeg::graph {
 
@@ -48,6 +50,7 @@ public:
     bool diagnosticsEnabled() const noexcept;
 
     ::media::Status compile(MediaGraph graph);
+    ::media::Status compile(MediaRealtimeExecutableGraph executable);
     ::media::Status registerRuntimeNode(std::unique_ptr<MediaRuntimeNode> node);
     ::media::Status registerDefaultRuntimeNodes();
 
@@ -82,6 +85,10 @@ public:
     std::size_t observeQueueHighWatermark(std::size_t queued) const noexcept;
 
 private:
+    ::media::Status compileTransaction(
+        MediaGraph graph,
+        std::vector<MediaPreparedRealtimeInputBinding> inputBindings);
+
     MediaGraph m_graph;
     MediaGraphExecutionContext m_context;
     MediaGraphScheduler m_scheduler;
@@ -90,6 +97,7 @@ private:
     MediaGraphRuntimeState m_state = MediaGraphRuntimeState::Empty;
     MediaRuntimeAcceptanceCollector m_acceptanceCollector;
     mutable std::atomic_size_t m_queueHighWatermark{ 0 };
+    std::vector<MediaPreparedRealtimeInputBinding> m_inputBindings;
 };
 
 } // namespace media::ffmpeg::graph

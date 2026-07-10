@@ -12,19 +12,99 @@ namespace media::ffmpeg::graph {
 ::media::Status FFmpegNodeRuntime::start(MediaGraphExecutionContext& context)
 {
     m_nextInputIndex = 0;
+    m_pendingTransfer.reset();
+    m_finishPending = false;
+    m_finished = false;
     return MediaNodeRuntime::start(context);
 }
 
 ::media::Status FFmpegNodeRuntime::stop(MediaGraphExecutionContext& context)
 {
     m_nextInputIndex = 0;
+    m_pendingTransfer.reset();
+    m_finishPending = false;
+    m_finished = false;
     return MediaNodeRuntime::stop(context);
 }
 
 void FFmpegNodeRuntime::abort(MediaGraphExecutionContext& context) noexcept
 {
     m_nextInputIndex = 0;
+    m_pendingTransfer.reset();
+    m_finishPending = false;
+    m_finished = false;
     MediaNodeRuntime::abort(context);
+}
+
+::media::Result<MediaNodeProcessResult> FFmpegNodeRuntime::process(MediaGraphExecutionContext& context)
+{
+    if (m_finished) {
+        return ::media::Result<MediaNodeProcessResult>::success(
+            MediaNodeProcessResult::finished());
+    }
+    const bool hadPendingTransfer = m_pendingTransfer.has_value();
+    bool waiting = false;
+    auto pendingStatus = drainPendingTransfers(context, waiting);
+    if (!pendingStatus) {
+        return ::media::Result<MediaNodeProcessResult>::failure(pendingStatus.error());
+    }
+    if (waiting) {
+        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::waiting());
+    }
+    if (hadPendingTransfer) {
+        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
+    }
+    if (m_finishPending) {
+        for (MediaChannel* channel : context.outputChannels(nodeId())) {
+            if (channel) {
+                channel->close();
+            }
+        }
+        m_finishPending = false;
+        m_finished = true;
+        return ::media::Result<MediaNodeProcessResult>::success(
+            MediaNodeProcessResult::finished());
+    }
+    auto outcome = MediaNodeRuntime::process(context);
+    if (!outcome && outcome.error().code == ::media::ErrorCode::WouldBlock) {
+        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::waiting());
+    }
+    if (outcome && outcome.value().state == MediaNodeProcessState::Finished &&
+        m_pendingTransfer.has_value()) {
+        m_finishPending = true;
+        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
+    }
+    if (outcome && outcome.value().state == MediaNodeProcessState::Finished) {
+        m_finished = true;
+    }
+    return outcome;
+}
+
+bool FFmpegNodeRuntime::canFinishProcess() const noexcept
+{
+    return !m_pendingTransfer.has_value();
+}
+
+::media::Result<MediaNodeProcessResult> FFmpegNodeRuntime::processProgress(::media::Status status)
+{
+    if (!status && status.error().code == ::media::ErrorCode::WouldBlock) {
+        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::waiting());
+    }
+    return MediaNodeRuntime::processProgress(std::move(status));
+}
+
+::media::Result<MediaNodeProcessResult> FFmpegNodeRuntime::processFinished(::media::Status status)
+{
+    if (!status && status.error().code == ::media::ErrorCode::WouldBlock) {
+        m_finishPending = true;
+        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
+    }
+    return MediaNodeRuntime::processFinished(std::move(status));
+}
+
+std::size_t FFmpegNodeRuntime::pendingOutputBufferCount() const noexcept
+{
+    return m_pendingTransfer ? 1u : 0u;
 }
 namespace {
 
@@ -307,38 +387,21 @@ FFmpegNodeRuntime::tryPopFirstInputWithChannelOptional(MediaGraphExecutionContex
             ::media::ErrorInfo::notInitialized("FFmpegNodeRuntime emitOutput failed: output port not found"));
     }
 
-    bool pushed = false;
+    std::vector<MediaChannel*> targets;
     for (MediaChannel* channel : context.outputChannels(nodeId())) {
         if (!channel || channel->binding().from.portId != port->id) {
             continue;
         }
 
-        auto typeStatus = validateChannelBufferType(*channel, buffer, "emitOutput");
-        if (!typeStatus) {
-            return typeStatus;
-        }
-
-        auto status = channel->push(buffer);
-        if (!status) {
-            return status;
-        }
-
-        logEdgeTransfer(context,
-                        MediaGraphDiagnosticPhase::RuntimeEdge,
-                        "emit",
-                        nodeId(),
-                        name(),
-                        *channel,
-                        buffer);
-        pushed = true;
+        targets.push_back(channel);
     }
 
-    if (!pushed) {
+    if (targets.empty()) {
         return ::media::Status::failure(
             ::media::ErrorInfo::notInitialized("FFmpegNodeRuntime emitOutput failed: no output channel"));
     }
 
-    return ::media::Status::success();
+    return transferOrDefer(context, targets, buffer, "emit");
 }
 
 ::media::Status FFmpegNodeRuntime::pushToAllOutputs(MediaGraphExecutionContext& context,
@@ -349,38 +412,21 @@ FFmpegNodeRuntime::tryPopFirstInputWithChannelOptional(MediaGraphExecutionContex
             ::media::ErrorInfo::invalidArgument("FFmpegNodeRuntime pushToAllOutputs failed: buffer is null"));
     }
 
-    bool pushed = false;
+    std::vector<MediaChannel*> targets;
     for (MediaChannel* channel : context.outputChannels(nodeId())) {
         if (!channel) {
             continue;
         }
 
-        auto typeStatus = validateChannelBufferType(*channel, buffer, "pushToAllOutputs");
-        if (!typeStatus) {
-            return typeStatus;
-        }
-
-        auto status = channel->push(buffer);
-        if (!status) {
-            return status;
-        }
-
-        logEdgeTransfer(context,
-                        MediaGraphDiagnosticPhase::RuntimeEdge,
-                        "push_all",
-                        nodeId(),
-                        name(),
-                        *channel,
-                        buffer);
-        pushed = true;
+        targets.push_back(channel);
     }
 
-    if (!pushed) {
+    if (targets.empty()) {
         return ::media::Status::failure(
             ::media::ErrorInfo::notInitialized("FFmpegNodeRuntime pushToAllOutputs failed: no output channel"));
     }
 
-    return ::media::Status::success();
+    return transferOrDefer(context, targets, buffer, "push_all");
 }
 
 ::media::Status FFmpegNodeRuntime::broadcastControlToAllOutputs(MediaGraphExecutionContext& context,
@@ -407,7 +453,7 @@ FFmpegNodeRuntime::tryPopFirstInputWithChannelOptional(MediaGraphExecutionContex
             ::media::ErrorInfo::invalidArgument("FFmpegNodeRuntime pushToMatchingOutputs failed: buffer is null"));
     }
 
-    bool pushed = false;
+    std::vector<MediaChannel*> targets;
     for (MediaChannel* channel : context.outputChannels(nodeId())) {
         if (!channel) {
             continue;
@@ -425,28 +471,14 @@ FFmpegNodeRuntime::tryPopFirstInputWithChannelOptional(MediaGraphExecutionContex
             format.streamIndex == streamIndex;
 
         if (streamKindMatches && streamIndexMatches) {
-            auto typeStatus = validateChannelBufferType(*channel, buffer, "pushToMatchingOutputs");
-            if (!typeStatus) {
-                return typeStatus;
-            }
-
-            auto status = channel->push(buffer);
-            if (!status) {
-                return status;
-            }
-
-            logEdgeTransfer(context,
-                            MediaGraphDiagnosticPhase::RuntimeEdge,
-                            "push_match",
-                            nodeId(),
-                            name(),
-                            *channel,
-                            buffer);
-            pushed = true;
+            targets.push_back(channel);
         }
     }
 
-    if (pushed || policy == RouteMatchPolicy::AllowDrop) {
+    if (!targets.empty()) {
+        return transferOrDefer(context, targets, buffer, "push_match");
+    }
+    if (policy == RouteMatchPolicy::AllowDrop) {
         return ::media::Status::success();
     }
 
@@ -456,6 +488,79 @@ FFmpegNodeRuntime::tryPopFirstInputWithChannelOptional(MediaGraphExecutionContex
         << " stream_index=" << streamIndex
         << " " << mediaGraphDiagnosticDescribeBuffer(buffer);
     return ::media::Status::failure(::media::ErrorInfo::notInitialized(out.str()));
+}
+
+::media::Status FFmpegNodeRuntime::transferOrDefer(MediaGraphExecutionContext& context,
+                                                    const std::vector<MediaChannel*>& channels,
+                                                    const MediaBufferRef& buffer,
+                                                    const char* action)
+{
+    if (m_pendingTransfer) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::wouldBlock("FFmpegNodeRuntime output transfer is pending"));
+    }
+    for (MediaChannel* channel : channels) {
+        auto typeStatus = validateChannelBufferType(*channel, buffer, action);
+        if (!typeStatus) {
+            return typeStatus;
+        }
+    }
+
+    for (std::size_t index = 0; index < channels.size(); ++index) {
+        MediaChannel* channel = channels[index];
+        const MediaQueuePushOutcome outcome = channel->pushOutcome(buffer);
+        if (outcome == MediaQueuePushOutcome::WouldBlock) {
+            m_pendingTransfer = PendingTransfer{ buffer, channels, index };
+            return ::media::Status::failure(
+                ::media::ErrorInfo::wouldBlock("FFmpegNodeRuntime output channel would block"));
+        }
+        if (outcome == MediaQueuePushOutcome::Aborted) {
+                return ::media::Status::failure(
+                    ::media::ErrorInfo::internalError("FFmpegNodeRuntime output channel aborted"));
+        }
+        if (outcome == MediaQueuePushOutcome::Closed) {
+                return ::media::Status::failure(
+                    ::media::ErrorInfo::cancelled("FFmpegNodeRuntime output channel closed"));
+        }
+        if (outcome == MediaQueuePushOutcome::Dropped) {
+            continue;
+        }
+        logEdgeTransfer(context, MediaGraphDiagnosticPhase::RuntimeEdge, action,
+                        nodeId(), name(), *channel, buffer);
+    }
+    return ::media::Status::success();
+}
+
+::media::Status FFmpegNodeRuntime::drainPendingTransfers(MediaGraphExecutionContext& context,
+                                                          bool& waiting)
+{
+    waiting = false;
+    while (m_pendingTransfer) {
+        PendingTransfer& transfer = *m_pendingTransfer;
+        MediaChannel* channel = transfer.channels[transfer.nextChannel];
+        const MediaQueuePushOutcome outcome = channel->pushOutcome(transfer.buffer);
+        if (outcome == MediaQueuePushOutcome::WouldBlock) {
+            waiting = true;
+            return ::media::Status::success();
+        }
+        if (outcome == MediaQueuePushOutcome::Aborted) {
+                return ::media::Status::failure(
+                    ::media::ErrorInfo::internalError("FFmpegNodeRuntime pending output channel aborted"));
+        }
+        if (outcome == MediaQueuePushOutcome::Closed) {
+                return ::media::Status::failure(
+                    ::media::ErrorInfo::cancelled("FFmpegNodeRuntime pending output channel closed"));
+        }
+        if (outcome == MediaQueuePushOutcome::Accepted) {
+            logEdgeTransfer(context, MediaGraphDiagnosticPhase::RuntimeEdge, "pending_emit",
+                            nodeId(), name(), *channel, transfer.buffer);
+        }
+        ++transfer.nextChannel;
+        if (transfer.nextChannel == transfer.channels.size()) {
+            m_pendingTransfer.reset();
+        }
+    }
+    return ::media::Status::success();
 }
 
 std::vector<MediaChannel*> FFmpegNodeRuntime::outputChannels(MediaGraphExecutionContext& context)
