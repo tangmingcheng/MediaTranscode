@@ -288,77 +288,17 @@ bool RtpMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
         return ::media::Status::success();
     }
     if (dynamic_cast<FFmpegCodecContextBuffer*>(buffer.get())) {
-        return registerStreamFromCodecContext(buffer);
+        auto registered = m_session.registerStreamConfig(buffer, expectedStreamKind());
+        if (registered) m_state.completion().markConfigReady(expectedStreamName());
+        return registered;
     }
     if (dynamic_cast<FFmpegCodecParametersBuffer*>(buffer.get())) {
-        return registerStreamFromCodecParameters(buffer);
+        auto registered = m_session.registerStreamConfig(buffer, expectedStreamKind());
+        if (registered) m_state.completion().markConfigReady(expectedStreamName());
+        return registered;
     }
     return ::media::Status::failure(
         ::media::ErrorInfo::invalidArgument("RtpMuxNode expected stream config"));
-}
-
-::media::Status RtpMuxNode::registerStreamFromCodecContext(const MediaBufferRef& buffer)
-{
-    if (m_session.streamIndex() != invalidMediaStreamIndex) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("RtpMuxNode received duplicate stream config"));
-    }
-
-    auto* codecBuffer = dynamic_cast<FFmpegCodecContextBuffer*>(buffer.get());
-    AVCodecContext* codec = codecBuffer ? codecBuffer->context() : nullptr;
-    const AVMediaType expectedType = m_state.expectAudio() ? AVMEDIA_TYPE_AUDIO : AVMEDIA_TYPE_VIDEO;
-    if (!m_session.context() || !codec || codec->codec_type != expectedType || !known(codec->time_base)) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("RtpMuxNode requires matching encoder context and time_base"));
-    }
-
-    AVStream* stream = avformat_new_stream(m_session.context(), nullptr);
-    if (!stream) {
-        return ::media::Status::failure(::media::ErrorInfo::allocationFailed("avformat_new_stream(rtp)"));
-    }
-
-    const int ret = avcodec_parameters_from_context(stream->codecpar, codec);
-    if (ret < 0) {
-        return FFmpegGraphError::statusFromCode(ret, "avcodec_parameters_from_context(rtp)");
-    }
-    stream->codecpar->codec_tag = 0;
-    stream->time_base = codec->time_base;
-    stream->avg_frame_rate = codec->framerate;
-    stream->r_frame_rate = codec->framerate;
-    m_session.streamIndex() = stream->index;
-    m_state.completion().markConfigReady(expectedStreamName());
-    return ::media::Status::success();
-}
-
-::media::Status RtpMuxNode::registerStreamFromCodecParameters(const MediaBufferRef& buffer)
-{
-    if (m_session.streamIndex() != invalidMediaStreamIndex) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("RtpMuxNode received duplicate stream config"));
-    }
-
-    auto* paramsBuffer = dynamic_cast<FFmpegCodecParametersBuffer*>(buffer.get());
-    const AVCodecParameters* params = paramsBuffer ? paramsBuffer->parameters() : nullptr;
-    const AVMediaType expectedType = m_state.expectAudio() ? AVMEDIA_TYPE_AUDIO : AVMEDIA_TYPE_VIDEO;
-    if (!m_session.context() || !params || params->codec_type != expectedType || !buffer->timeDescriptor().timeBase.isKnown()) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("RtpMuxNode requires matching codec parameters and time_base"));
-    }
-
-    AVStream* stream = avformat_new_stream(m_session.context(), nullptr);
-    if (!stream) {
-        return ::media::Status::failure(::media::ErrorInfo::allocationFailed("avformat_new_stream(rtp)"));
-    }
-
-    const int ret = avcodec_parameters_copy(stream->codecpar, params);
-    if (ret < 0) {
-        return FFmpegGraphError::statusFromCode(ret, "avcodec_parameters_copy(rtp)");
-    }
-    stream->codecpar->codec_tag = 0;
-    stream->time_base = toAVRational(buffer->timeDescriptor().timeBase);
-    m_session.streamIndex() = stream->index;
-    m_state.completion().markConfigReady(expectedStreamName());
-    return ::media::Status::success();
 }
 
 MediaStreamKind RtpMuxNode::expectedStreamKind() const noexcept
@@ -486,7 +426,7 @@ const char* RtpMuxNode::expectedStreamName() const noexcept
     }
     av_packet_rescale_ts(packet.get(), srcTb, muxTb);
     packet->stream_index = m_session.streamIndex();
-    if (auto status = normalizePacketTimestamps(*packet); !status) {
+    if (auto status = m_session.normalizePacketTimestamps(*packet, m_state.monotonicPacketTimestamps()); !status) {
         return status;
     }
 
@@ -514,56 +454,6 @@ const char* RtpMuxNode::expectedStreamName() const noexcept
     return ::media::Status::success();
 }
 
-::media::Status RtpMuxNode::normalizePacketTimestamps(AVPacket& packet)
-{
-    if (!m_state.monotonicPacketTimestamps()) {
-        return ::media::Status::success();
-    }
-
-    if (packet.dts == AV_NOPTS_VALUE && packet.pts == AV_NOPTS_VALUE) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("RtpMuxNode monotonic RTP timestamps require dts or pts"));
-    }
-
-    int64_t shift = 0;
-    if (m_session.nextPacketDts() != AV_NOPTS_VALUE) {
-        if (packet.dts != AV_NOPTS_VALUE && packet.dts < m_session.nextPacketDts()) {
-            shift = std::max(shift, m_session.nextPacketDts() - packet.dts);
-        }
-        if (packet.pts != AV_NOPTS_VALUE && packet.pts < m_session.nextPacketDts()) {
-            shift = std::max(shift, m_session.nextPacketDts() - packet.pts);
-        }
-    }
-    if (shift > 0) {
-        if (packet.pts != AV_NOPTS_VALUE) {
-            if (packet.pts > std::numeric_limits<int64_t>::max() - shift) {
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::invalidArgument("RtpMuxNode packet pts overflow"));
-            }
-            packet.pts += shift;
-        }
-        if (packet.dts != AV_NOPTS_VALUE) {
-            if (packet.dts > std::numeric_limits<int64_t>::max() - shift) {
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::invalidArgument("RtpMuxNode packet dts overflow"));
-            }
-            packet.dts += shift;
-        }
-    }
-
-    int64_t normalizedDts = packet.dts != AV_NOPTS_VALUE ? packet.dts : packet.pts;
-    if (packet.pts != AV_NOPTS_VALUE && packet.pts > normalizedDts) {
-        normalizedDts = packet.pts;
-    }
-    const int64_t duration = packet.duration > 0 ? packet.duration : 1;
-    if (normalizedDts > std::numeric_limits<int64_t>::max() - duration) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("RtpMuxNode packet timestamp cannot advance past int64 max"));
-    }
-    m_session.nextPacketDts() = normalizedDts + duration;
-    return ::media::Status::success();
-}
-
 ::media::Status RtpMuxNode::emitFormatIfReady(MediaGraphExecutionContext& context)
 {
     if (m_state.formatEmitted() || outputChannels(context).empty()) {
@@ -577,7 +467,7 @@ const char* RtpMuxNode::expectedStreamName() const noexcept
         return ::media::Status::success();
     }
 
-    auto buffer = makeSdpFormatSnapshot();
+    auto buffer = m_session.makeSdpFormatSnapshot();
     if (!buffer) {
         return ::media::Status::failure(buffer.error());
     }
@@ -587,58 +477,6 @@ const char* RtpMuxNode::expectedStreamName() const noexcept
     }
     m_state.formatEmitted() = true;
     return ::media::Status::success();
-}
-
-::media::Result<MediaBufferRef> RtpMuxNode::makeSdpFormatSnapshot() const
-{
-    if (!m_session.context() || m_session.streamIndex() == invalidMediaStreamIndex) {
-        return ::media::Result<MediaBufferRef>::failure(
-            ::media::ErrorInfo::invalidArgument("RtpMuxNode requires output context and stream before SDP snapshot"));
-    }
-
-    AVFormatContext* raw = nullptr;
-    const char* url = (m_session.context()->url && m_session.context()->url[0] != '\0')
-        ? m_session.context()->url
-        : nullptr;
-    const int allocRet = avformat_alloc_output_context2(&raw, nullptr, "rtp", url);
-    if (allocRet < 0 || !raw) {
-        return ::media::Result<MediaBufferRef>::failure(
-            FFmpegGraphError::fromCode(allocRet < 0 ? allocRet : AVERROR_UNKNOWN,
-                                       "avformat_alloc_output_context2(rtp sdp snapshot)"));
-    }
-
-    ::media::ffmpeg::OutputFormatContextPtr snapshot(raw);
-    snapshot->packet_size = m_session.context()->packet_size;
-
-    for (unsigned int i = 0; i < m_session.context()->nb_streams; ++i) {
-        const AVStream* source = m_session.context()->streams[i];
-        if (!source || !source->codecpar) {
-            return ::media::Result<MediaBufferRef>::failure(
-                ::media::ErrorInfo::invalidArgument("RtpMuxNode SDP snapshot source stream is invalid"));
-        }
-
-        AVStream* target = avformat_new_stream(snapshot.get(), nullptr);
-        if (!target) {
-            return ::media::Result<MediaBufferRef>::failure(
-                ::media::ErrorInfo::allocationFailed("avformat_new_stream(rtp sdp snapshot)"));
-        }
-
-        const int copyRet = avcodec_parameters_copy(target->codecpar, source->codecpar);
-        if (copyRet < 0) {
-            return ::media::Result<MediaBufferRef>::failure(
-                FFmpegGraphError::fromCode(copyRet, "avcodec_parameters_copy(rtp sdp snapshot)"));
-        }
-
-        target->codecpar->codec_tag = 0;
-        target->id = source->id;
-        target->time_base = source->time_base;
-        target->avg_frame_rate = source->avg_frame_rate;
-        target->r_frame_rate = source->r_frame_rate;
-        target->start_time = source->start_time;
-        target->duration = source->duration;
-    }
-
-    return FFmpegBufferFactory::wrapOutputFormatContext(std::move(snapshot));
 }
 
 ::media::Status RtpMuxNode::writeTrailerIfNeeded()

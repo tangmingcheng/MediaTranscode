@@ -3,17 +3,23 @@
 #include "internal/graph/runtime/MediaGraphPacingClock.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
+#include "internal/graph/model/MediaStreamKind.h"
 
 #include <cstddef>
 #include <cstdint>
 
 struct AVFormatContext;
+struct AVPacket;
+struct AVRational;
 
 namespace media::ffmpeg::graph {
 
 class RtpMuxFfmpegSession final {
 public:
     bool bindOutput(const MediaBufferRef& buffer) noexcept;
+    ::media::Status registerStreamConfig(const MediaBufferRef& buffer, MediaStreamKind expectedKind);
+    ::media::Status normalizePacketTimestamps(AVPacket& packet, bool enabled);
+    ::media::Result<MediaBufferRef> makeSdpFormatSnapshot() const;
     void reset() noexcept;
 
     AVFormatContext* context() const noexcept;
@@ -23,6 +29,7 @@ public:
     std::size_t& packetsWritten() noexcept;
     std::size_t packetsWritten() const noexcept;
     MediaGraphPacingClock& pacingClock() noexcept;
+    static bool validTimeBase(AVRational value) noexcept;
 
 private:
     ::media::ffmpeg::OutputFormatContextPtr m_owner;

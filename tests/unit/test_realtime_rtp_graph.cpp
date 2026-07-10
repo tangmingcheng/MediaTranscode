@@ -1798,10 +1798,10 @@ void testRealtimeCliAppliesPlannerThreadingPolicy(TestContext& ctx)
 
 void testRtpMuxEmitsSdpSnapshotInsteadOfBorrowedLiveContext(TestContext& ctx)
 {
-    const std::string muxSource = repositoryFile("src/internal/graph/nodes/mux/RtpMuxNode.cpp");
-    expectTextContains(ctx, muxSource, "makeSdpFormatSnapshot()");
-    expectTextContains(ctx, muxSource, "avformat_alloc_output_context2(&raw, nullptr, \"rtp\", url)");
-    expectTextNotContains(ctx, muxSource, "FFmpegBufferFactory::borrowFormatContext(m_outputContext)");
+    const std::string sessionSource = repositoryFile("src/internal/graph/nodes/mux/RtpMuxFfmpegSession.cpp");
+    expectTextContains(ctx, sessionSource, "makeSdpFormatSnapshot()");
+    expectTextContains(ctx, sessionSource, "avformat_alloc_output_context2(&raw, nullptr, \"rtp\", url)");
+    expectTextNotContains(ctx, sessionSource, "FFmpegBufferFactory::borrowFormatContext");
 }
 
 void testSdpWriterOrdersSeparateRtpContextsByMediaType(TestContext& ctx)
