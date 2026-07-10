@@ -14,6 +14,7 @@ namespace media::ffmpeg::graph {
 
 struct MediaGraphWorkerConfig {
     uint32_t idleSleepMs = 1;
+    uint32_t maxIdleSpins = 4;
     uint32_t maxConsecutiveErrors = 1;
 };
 

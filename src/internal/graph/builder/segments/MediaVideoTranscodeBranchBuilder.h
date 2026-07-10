@@ -16,6 +16,7 @@ struct MediaVideoTranscodeBranchOptions {
     MediaVideoTranscodeParameters parameters;
     MediaGraphQueueParameters queues;
     MediaRealtimeEdgePolicySet edgePolicies;
+    bool inputStartRequiresKeyFrame = false;
 
     MediaNodeId formatSourceNode = MediaNodeId::invalid();
     std::string formatSourcePort = "format";

@@ -67,7 +67,7 @@ MediaAudioEncodeBranchNodes addAudioEncodeNodes(MediaGraph& graph,
     if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.codecResolver, "encoder", nodes.encode, "codec", options.prefix + ".codec_resolver.encoder -> encode.codec", policies.metadata); !status) return status;
     if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.resample, "frame", nodes.encode, "frame", options.prefix + ".resample.frame -> encode.frame", policies.frame); !status) return status;
     if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.encode, "codec", options.muxNode, options.muxCodecPort, options.prefix + ".encode.codec -> mux.codec", policies.metadata); !status) return status;
-    return MediaGraphBuildSupport::connectChecked(graph, owner, nodes.encode, "packet", options.muxNode, options.muxPacketPort, options.prefix + ".encode.packet -> mux.packet", policies.mux);
+    return MediaGraphBuildSupport::connectChecked(graph, owner, nodes.encode, "packet", options.muxNode, options.muxPacketPort, options.prefix + ".encode.packet -> mux.packet", policies.audioMux);
 }
 
 } // namespace

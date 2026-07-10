@@ -3,6 +3,19 @@
 #include "internal/graph/runtime/buffer/MediaBuffer.h"
 
 namespace media::ffmpeg::graph {
+namespace {
+
+bool overflowPolicyDropsIncoming(const MediaQueuePolicy& policy, const MediaBufferRef& buffer) noexcept
+{
+    if (policy.overflowPolicy == MediaQueueOverflowPolicy::DropNewest) {
+        return true;
+    }
+    return policy.overflowPolicy == MediaQueueOverflowPolicy::DropNonKeyFrame &&
+           buffer &&
+           !buffer->isKeyFrame();
+}
+
+} // namespace
 
 MediaBlockingQueue::MediaBlockingQueue(MediaQueuePolicy policy)
     : m_policy(std::move(policy))
@@ -38,6 +51,15 @@ MediaBlockingQueue::MediaBlockingQueue(MediaQueuePolicy policy)
             auto status = handleOverflowLocked(buffer);
             if (!status || !fullLocked()) {
                 break;
+            }
+            if (overflowPolicyDropsIncoming(m_policy, buffer)) {
+                return ::media::Status::success();
+            }
+            if (m_policy.overflowPolicy == MediaQueueOverflowPolicy::DropNonKeyFrame &&
+                buffer->isKeyFrame()) {
+                m_metrics.blockedPushes++;
+                m_notFull.wait(lock, [&] { return !fullLocked() || m_closed || m_aborted; });
+                continue;
             }
         } else {
             m_metrics.blockedPushes++;
@@ -79,6 +101,10 @@ bool MediaBlockingQueue::tryPush(MediaBufferRef buffer)
 
     if (fullLocked()) {
         auto status = handleOverflowLocked(buffer);
+        if (status &&
+            overflowPolicyDropsIncoming(m_policy, buffer)) {
+            return true;
+        }
         if (!status || fullLocked()) {
             m_metrics.failedPushes++;
             return false;
@@ -201,8 +227,7 @@ bool MediaBlockingQueue::fullLocked() const
     switch (m_policy.overflowPolicy) {
     case MediaQueueOverflowPolicy::DropNewest:
         m_metrics.dropped++;
-        return ::media::Status::failure(
-            ::media::ErrorInfo::internalError("MediaBlockingQueue dropped newest buffer"));
+        return ::media::Status::success();
 
     case MediaQueueOverflowPolicy::DropOldest:
         if (!m_queue.empty()) {
@@ -215,8 +240,7 @@ bool MediaBlockingQueue::fullLocked() const
     case MediaQueueOverflowPolicy::DropNonKeyFrame:
         if (incoming && !incoming->isKeyFrame()) {
             m_metrics.dropped++;
-            return ::media::Status::failure(
-                ::media::ErrorInfo::internalError("MediaBlockingQueue dropped non-key incoming buffer"));
+            return ::media::Status::success();
         }
         for (auto it = m_queue.begin(); it != m_queue.end(); ++it) {
             if (*it && !(*it)->isKeyFrame()) {
@@ -226,8 +250,7 @@ bool MediaBlockingQueue::fullLocked() const
                 return ::media::Status::success();
             }
         }
-        return ::media::Status::failure(
-            ::media::ErrorInfo::internalError("MediaBlockingQueue has no droppable non-key buffer"));
+        return ::media::Status::success();
 
     case MediaQueueOverflowPolicy::Abort:
         m_aborted = true;

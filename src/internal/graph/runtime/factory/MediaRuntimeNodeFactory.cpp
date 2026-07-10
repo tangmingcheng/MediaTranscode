@@ -23,8 +23,10 @@
 #include "internal/graph/nodes/output/FileOutputNode.h"
 #include "internal/graph/nodes/output/RtpOutputNode.h"
 #include "internal/graph/nodes/output/SdpWriterNode.h"
+#include "internal/graph/nodes/packet/AvPacketStartBarrierNode.h"
 #include "internal/graph/nodes/packet/PacketNormalizeNode.h"
 #include "internal/graph/nodes/packet/PacketSourceConfigNode.h"
+#include "internal/graph/nodes/packet/PacketStartGateNode.h"
 #include "internal/graph/nodes/route/FrameRouteNode.h"
 #include "internal/graph/nodes/split/PacketFanoutNode.h"
 #include "internal/graph/nodes/video/HardwareTransferNode.h"
@@ -77,6 +79,10 @@ namespace media::ffmpeg::graph {
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<PacketSourceConfigNode>(node.id));
     case MediaNodeKind::PacketNormalize:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<PacketNormalizeNode>(node.id));
+    case MediaNodeKind::AvPacketStartBarrier:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<AvPacketStartBarrierNode>(node.id));
+    case MediaNodeKind::PacketStartGate:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<PacketStartGateNode>(node.id));
     case MediaNodeKind::PacketMerge:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<PacketMergeNode>(node.id));
     case MediaNodeKind::FileMux:
@@ -133,6 +139,8 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::AudioEncode:
     case MediaNodeKind::PacketSourceConfig:
     case MediaNodeKind::PacketNormalize:
+    case MediaNodeKind::AvPacketStartBarrier:
+    case MediaNodeKind::PacketStartGate:
     case MediaNodeKind::PacketMerge:
     case MediaNodeKind::FileMux:
     case MediaNodeKind::RtpMux:

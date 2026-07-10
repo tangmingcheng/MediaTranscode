@@ -1,5 +1,7 @@
 #pragma once
 
+#include "internal/graph/runtime/ffmpeg/FFmpegPacedAvio.h"
+
 #include <cstring>
 #include <memory>
 #include <string_view>
@@ -116,7 +118,11 @@ struct OutputFormatContextDeleter {
         }
 
         if (ctx->oformat && !(ctx->oformat->flags & AVFMT_NOFILE) && ctx->pb) {
-            avio_closep(&ctx->pb);
+            if (isPacedWriteAvio(ctx->pb)) {
+                closePacedWriteAvio(&ctx->pb);
+            } else {
+                avio_closep(&ctx->pb);
+            }
         }
 
         avformat_free_context(ctx);

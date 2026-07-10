@@ -7,6 +7,7 @@ namespace media::ffmpeg::graph {
 void MediaGraphPacingClock::reset()
 {
     m_start = Clock::now();
+    m_basePts.reset();
 }
 
 void MediaGraphPacingClock::setPolicy(MediaLatencyPolicy policy) noexcept
@@ -28,8 +29,11 @@ const MediaLatencyPolicy& MediaGraphPacingClock::policy() const noexcept
     if (m_start == Clock::time_point{}) {
         reset();
     }
+    if (!m_basePts.has_value()) {
+        m_basePts = pts;
+    }
 
-    const auto target = m_start + toMicroseconds(pts, timeBase);
+    const auto target = m_start + toMicroseconds(pts - *m_basePts, timeBase);
     const auto now = Clock::now();
 
     if (target > now) {

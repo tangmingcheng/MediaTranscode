@@ -16,9 +16,15 @@ namespace media::ffmpeg::graph {
 namespace {
 
 constexpr int RealtimeNoBidirectionalFrames = 0;
+constexpr int RealtimeDefaultGopFrames = 30;
+constexpr int RealtimeRtpSessionStartupDelayMs = 1000;
+constexpr int64_t RealtimeDefaultAudioOutputBitsPerSecond = 320000;
+constexpr int64_t RealtimeOutputPacingHeadroomNumerator = 5;
+constexpr int64_t RealtimeOutputPacingHeadroomDenominator = 4;
+constexpr int64_t RealtimeOutputPacingBurstPackets = 2;
 constexpr bool RealtimeRequiresRuntimeAvailability = true;
 constexpr int RawRtpVideoStreamIndex = 0;
-constexpr int RawRtpAudioStreamIndex = 1;
+constexpr int RawRtpAudioStreamIndex = 0;
 
 bool isValidRtpPort(std::size_t port) noexcept
 {
@@ -43,8 +49,32 @@ std::string planPreferredHardware(const MediaTranscodeExecutionParameters& execu
 MediaVideoTranscodeParameters planRealtimeVideoParameters(const MediaVideoTranscodeParameters& requested)
 {
     MediaVideoTranscodeParameters planned = requested;
+    if (!planned.gop) {
+        planned.gop = RealtimeDefaultGopFrames;
+    }
     planned.bFrames = RealtimeNoBidirectionalFrames;
     return planned;
+}
+
+int64_t planOutputWritePacingBytesPerSecond(int64_t bitsPerSecond) noexcept
+{
+    if (bitsPerSecond <= 0) {
+        return 1;
+    }
+    const int64_t bytesPerSecond = (bitsPerSecond + 7) / 8;
+    return std::max<int64_t>(1,
+                             bytesPerSecond * RealtimeOutputPacingHeadroomNumerator /
+                                 RealtimeOutputPacingHeadroomDenominator);
+}
+
+void applyRtpOutputWritePacing(MediaRealtimeRtpOutputNodePlan& output,
+                               int64_t bitsPerSecond) noexcept
+{
+    output.writePacingEnabled = true;
+    output.writePacingBytesPerSecond = planOutputWritePacingBytesPerSecond(bitsPerSecond);
+    output.writePacingBurstBytes = std::max<int64_t>(1,
+                                                     static_cast<int64_t>(output.packetSize) *
+                                                         RealtimeOutputPacingBurstPackets);
 }
 
 ::media::Result<MediaVideoTranscodeParameters> resolveRealtimeVideoParameters(
@@ -280,23 +310,17 @@ void appendRawRtpSdpMedia(std::ostringstream& out,
     }
 }
 
-std::string planRawRtpSdp(const MediaRtpUrlEndpoint& videoEndpoint,
-                          const MediaRealtimeRtpInputMetadata& videoMetadata,
-                          const MediaRealtimeRtpCodecDescriptor& videoDescriptor,
-                          const MediaRtpUrlEndpoint* audioEndpoint,
-                          const MediaRealtimeRtpInputMetadata* audioMetadata,
-                          const MediaRealtimeRtpCodecDescriptor* audioDescriptor,
-                          const std::string& mediaId)
+std::string planSingleRawRtpSdp(const MediaRtpUrlEndpoint& endpoint,
+                                const MediaRealtimeRtpInputMetadata& metadata,
+                                const MediaRealtimeRtpCodecDescriptor& descriptor,
+                                const std::string& mediaId)
 {
     std::ostringstream out;
     out << "v=0\r\n"
-        << "o=- 0 0 IN IP4 " << videoEndpoint.host << "\r\n"
+        << "o=- 0 0 IN IP4 127.0.0.1\r\n"
         << "s=MediaTranscode Raw RTP\r\n"
         << "t=0 0\r\n";
-    appendRawRtpSdpMedia(out, videoEndpoint, videoMetadata, videoDescriptor, mediaId);
-    if (audioEndpoint && audioMetadata && audioDescriptor) {
-        appendRawRtpSdpMedia(out, *audioEndpoint, *audioMetadata, *audioDescriptor, mediaId);
-    }
+    appendRawRtpSdpMedia(out, endpoint, metadata, descriptor, mediaId);
     return out.str();
 }
 
@@ -423,6 +447,8 @@ MediaRealtimeEdgePolicySet planEdgePolicies(const MediaGraphQueueParameters& que
     policies.audioPacket = planRealtimeQueuePolicy(queues.packet, MediaQueueOverflowPolicy::DropOldest);
     policies.frame = planRealtimeQueuePolicy(queues.frame, MediaQueueOverflowPolicy::DropOldest);
     policies.mux = planRealtimeQueuePolicy(queues.mux, MediaQueueOverflowPolicy::DropOldest);
+    policies.videoMux = planRealtimeQueuePolicy(queues.mux, MediaQueueOverflowPolicy::DropNonKeyFrame);
+    policies.audioMux = planRealtimeQueuePolicy(queues.mux, MediaQueueOverflowPolicy::DropOldest);
     return policies;
 }
 
@@ -435,6 +461,23 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
     policy.maxIdleSpins = 1;
     policy.collectWorkerMetrics = true;
     return policy;
+}
+
+MediaLatencyPolicy planRtpMuxPacingPolicy() noexcept
+{
+    MediaLatencyPolicy policy;
+    policy.mode = MediaLatencyMode::Realtime;
+    policy.enablePacing = true;
+    return policy;
+}
+
+MediaRealtimeAvStartBarrierPlan planAvStartBarrierPolicy(bool includeAudio) noexcept
+{
+    MediaRealtimeAvStartBarrierPlan plan;
+    plan.expectVideo = true;
+    plan.expectAudio = includeAudio;
+    plan.requireVideoKeyFrame = includeAudio;
+    return plan;
 }
 
 } // namespace
@@ -500,7 +543,9 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
     }
     MediaAudioPipelinePlannerOptions audioOptions = std::move(audioOptionsResult).value();
 
-    std::string rawRtpSdpText;
+    std::string videoRawRtpSdpText;
+    std::string audioRawRtpSdpText;
+    std::string plannedAudioInputUrl;
     std::string plannedInputUrl = options.input.url;
     MediaPipelinePlan videoPlan;
     MediaAudioPipelinePlan audioPlan;
@@ -515,12 +560,6 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(videoEndpoint.error());
         }
 
-        const MediaRtpUrlEndpoint* audioEndpointPtr = nullptr;
-        const MediaRealtimeRtpInputMetadata* audioMetadataPtr = nullptr;
-        const MediaRealtimeRtpCodecDescriptor* audioDescriptorPtr = nullptr;
-        MediaRtpUrlEndpoint audioEndpointValue;
-        MediaRealtimeRtpCodecDescriptor audioDescriptorValue;
-
         if (audioRequested(options)) {
             auto audioDescriptor = MediaRealtimeRtpCodecRegistry::describe(MediaStreamKind::Audio, options.input.audioRtp);
             if (!audioDescriptor) {
@@ -530,17 +569,17 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
             if (!audioEndpoint) {
                 return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(audioEndpoint.error());
             }
-            audioEndpointValue = audioEndpoint.value();
-            audioDescriptorValue = audioDescriptor.value();
-            audioEndpointPtr = &audioEndpointValue;
-            audioMetadataPtr = &options.input.audioRtp;
-            audioDescriptorPtr = &audioDescriptorValue;
+            plannedAudioInputUrl = options.input.audioRtp.url;
+            audioRawRtpSdpText = planSingleRawRtpSdp(audioEndpoint.value(),
+                                                     options.input.audioRtp,
+                                                     audioDescriptor.value(),
+                                                     options.mediaId);
 
             MediaInputAudioStreamInfo audioInfo;
             audioInfo.streamIndex = RawRtpAudioStreamIndex;
-            audioInfo.codecName = audioDescriptorValue.codecName;
-            audioInfo.sampleRate = audioDescriptorValue.clockRate;
-            audioInfo.channels = audioDescriptorValue.channels;
+            audioInfo.codecName = audioDescriptor.value().codecName;
+            audioInfo.sampleRate = audioDescriptor.value().clockRate;
+            audioInfo.channels = audioDescriptor.value().channels;
             auto plannedAudio = MediaAudioPipelinePlanner::planKnownAudioTranscode(std::move(audioInfo), audioOptions);
             if (!plannedAudio) {
                 return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(plannedAudio.error());
@@ -554,13 +593,10 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
             audioPlan = std::move(plannedAudio).value();
         }
 
-        rawRtpSdpText = planRawRtpSdp(videoEndpoint.value(),
-                                      options.input.videoRtp,
-                                      videoDescriptor.value(),
-                                      audioEndpointPtr,
-                                      audioMetadataPtr,
-                                      audioDescriptorPtr,
-                                      options.mediaId);
+        videoRawRtpSdpText = planSingleRawRtpSdp(videoEndpoint.value(),
+                                                 options.input.videoRtp,
+                                                 videoDescriptor.value(),
+                                                 options.mediaId);
         plannedInputUrl = options.input.videoRtp.url;
 
         MediaInputVideoStreamInfo inputInfo;
@@ -632,8 +668,9 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
     plan.queues = options.parameters.queues;
     plan.edgePolicies = planEdgePolicies(options.parameters.queues);
     plan.threadingPolicy = planThreadingPolicy();
+    plan.videoInputStartRequiresKeyFrame = isRtpPortInput(options);
     plan.input.url = plannedInputUrl;
-    plan.input.sdpText = std::move(rawRtpSdpText);
+    plan.input.sdpText = std::move(videoRawRtpSdpText);
     plan.input.rtspTransport = options.input.rtspTransport;
     plan.input.openTimeoutMs = *options.input.openTimeoutMs;
     plan.input.readTimeoutMs = *options.input.readTimeoutMs;
@@ -641,6 +678,18 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
     plan.input.probeSizeBytes = *options.input.probeSizeBytes;
     plan.input.lowLatency = *options.input.lowLatency;
     plan.input.mediaId = options.mediaId;
+    if (isRtpPortInput(options) && audioRequested(options)) {
+        plan.useIsolatedAudioInput = true;
+        plan.audioInput.url = std::move(plannedAudioInputUrl);
+        plan.audioInput.sdpText = std::move(audioRawRtpSdpText);
+        plan.audioInput.rtspTransport = options.input.rtspTransport;
+        plan.audioInput.openTimeoutMs = *options.input.openTimeoutMs;
+        plan.audioInput.readTimeoutMs = *options.input.readTimeoutMs;
+        plan.audioInput.analyzeDurationUs = *options.input.analyzeDurationUs;
+        plan.audioInput.probeSizeBytes = *options.input.probeSizeBytes;
+        plan.audioInput.lowLatency = *options.input.lowLatency;
+        plan.audioInput.mediaId = options.mediaId;
+    }
     if (isSeparateRtpOutput(options)) {
         applyRealtimeOutputVideoRequirements(plan.videoParameters,
                                              plan.outputLayout,
@@ -648,16 +697,29 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
         plan.videoOutput.url = outputUrls.value().videoUrl;
         plan.videoOutput.packetSize = *options.output.packetSize;
         plan.videoOutput.mediaId = options.mediaId;
+        applyRtpOutputWritePacing(plan.videoOutput,
+                                  static_cast<int64_t>(*plan.videoParameters.bitrateKbps) * 1000);
         plan.audioOutput.url = outputUrls.value().audioUrl;
         plan.audioOutput.packetSize = *options.output.packetSize;
         plan.audioOutput.mediaId = options.mediaId;
+        applyRtpOutputWritePacing(plan.audioOutput,
+                                  options.parameters.audio.bitrateKbps
+                                      ? static_cast<int64_t>(*options.parameters.audio.bitrateKbps) * 1000
+                                      : RealtimeDefaultAudioOutputBitsPerSecond);
         plan.sdp.path = options.output.sdpPath;
         plan.sdp.mediaId = options.mediaId;
         plan.sdp.expectedContexts = audioRequested(options) ? 2 : 1;
         plan.videoMux.expectVideo = true;
         plan.videoMux.expectAudio = false;
+        plan.videoMux.pacingPolicy = planRtpMuxPacingPolicy();
+        plan.videoMux.monotonicPacketTimestamps = true;
+        plan.videoMux.startupDelayMs = RealtimeRtpSessionStartupDelayMs;
         plan.audioMux.expectVideo = false;
         plan.audioMux.expectAudio = audioRequested(options);
+        plan.audioMux.pacingPolicy = planRtpMuxPacingPolicy();
+        plan.audioMux.monotonicPacketTimestamps = audioRequested(options);
+        plan.audioMux.startupDelayMs = audioRequested(options) ? RealtimeRtpSessionStartupDelayMs : 0;
+        plan.avStartBarrier = planAvStartBarrierPolicy(audioRequested(options));
     } else {
         plan.muxedOutput.url = outputUrls.value().muxedUrl;
         plan.muxedOutput.format = outputUrls.value().muxedFormat;
