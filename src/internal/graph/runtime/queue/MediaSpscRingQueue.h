@@ -35,6 +35,7 @@ private:
     bool empty(std::size_t write, std::size_t read) const noexcept;
     std::size_t next(std::size_t index) const noexcept;
     bool dropOldest();
+    bool dropOldestNonKeyFrame();
     std::size_t sizeLocked() const noexcept;
     void updateSizeMetrics(std::size_t current) noexcept;
 

@@ -6,6 +6,19 @@
 #include <utility>
 
 namespace media::ffmpeg::graph {
+namespace {
+
+bool overflowPolicyDropsIncoming(const MediaQueuePolicy& policy, const MediaBufferRef& buffer) noexcept
+{
+    if (policy.overflowPolicy == MediaQueueOverflowPolicy::DropNewest) {
+        return true;
+    }
+    return policy.overflowPolicy == MediaQueueOverflowPolicy::DropNonKeyFrame &&
+           buffer &&
+           !buffer->isKeyFrame();
+}
+
+} // namespace
 
 MediaSpscRingQueue::MediaSpscRingQueue(MediaQueuePolicy policy)
     : m_policy(std::move(policy))
@@ -35,9 +48,20 @@ MediaSpscRingQueue::MediaSpscRingQueue(MediaQueuePolicy policy)
                 ::media::ErrorInfo::notInitialized("MediaSpscRingQueue push failed: queue closed or aborted"));
         }
 
+        if (overflowPolicyDropsIncoming(m_policy, buffer)) {
+            return ::media::Status::success();
+        }
+
+        if (m_policy.overflowPolicy == MediaQueueOverflowPolicy::DropNonKeyFrame &&
+            buffer->isKeyFrame()) {
+            ++m_metrics.blockedPushes;
+            std::this_thread::yield();
+            continue;
+        }
+
         if (m_policy.overflowPolicy != MediaQueueOverflowPolicy::BlockProducer) {
             return ::media::Status::failure(
-                ::media::ErrorInfo::internalError("MediaSpscRingQueue push failed: overflow policy rejected buffer"));
+                ::media::ErrorInfo::internalError("MediaSpscRingQueue push failed: overflow policy could not accept buffer"));
         }
 
         ++m_metrics.blockedPushes;
@@ -68,7 +92,6 @@ bool MediaSpscRingQueue::tryPush(MediaBufferRef buffer)
             break;
         case MediaQueueOverflowPolicy::DropNewest:
             ++m_metrics.dropped;
-            ++m_metrics.failedPushes;
             return false;
         case MediaQueueOverflowPolicy::Abort:
             m_aborted = true;
@@ -78,11 +101,9 @@ bool MediaSpscRingQueue::tryPush(MediaBufferRef buffer)
         case MediaQueueOverflowPolicy::DropNonKeyFrame:
             if (!buffer->isKeyFrame()) {
                 ++m_metrics.dropped;
-                ++m_metrics.failedPushes;
                 return false;
             }
-            if (!dropOldest()) {
-                ++m_metrics.failedPushes;
+            if (!dropOldestNonKeyFrame()) {
                 return false;
             }
             break;
@@ -222,6 +243,35 @@ bool MediaSpscRingQueue::dropOldest()
     ++m_metrics.dropped;
     updateSizeMetrics(sizeLocked());
     return true;
+}
+
+bool MediaSpscRingQueue::dropOldestNonKeyFrame()
+{
+    const std::size_t read = m_read.load(std::memory_order_relaxed);
+    const std::size_t write = m_write.load(std::memory_order_acquire);
+    if (empty(write, read)) {
+        return false;
+    }
+
+    std::size_t candidate = read;
+    while (candidate != write) {
+        if (m_ring[candidate] && !m_ring[candidate]->isKeyFrame()) {
+            std::size_t current = candidate;
+            while (current != read) {
+                const std::size_t previous = current == 0 ? m_capacity - 1 : current - 1;
+                m_ring[current] = std::move(m_ring[previous]);
+                current = previous;
+            }
+            m_ring[read].reset();
+            m_read.store(next(read), std::memory_order_release);
+            ++m_metrics.dropped;
+            updateSizeMetrics(sizeLocked());
+            return true;
+        }
+        candidate = next(candidate);
+    }
+
+    return false;
 }
 
 std::size_t MediaSpscRingQueue::sizeLocked() const noexcept

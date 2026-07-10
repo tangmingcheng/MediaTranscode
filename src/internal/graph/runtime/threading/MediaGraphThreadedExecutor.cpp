@@ -48,6 +48,7 @@ const MediaThreadingPolicy& MediaGraphThreadedExecutor::policy() const noexcept
 
     MediaGraphWorkerConfig workerConfig;
     workerConfig.idleSleepMs = m_policy.idleSleepMs;
+    workerConfig.maxIdleSpins = m_policy.maxIdleSpins;
 
     for (MediaRuntimeNode* node : scheduler.orderedRuntimeNodes(context)) {
         if (!node) {

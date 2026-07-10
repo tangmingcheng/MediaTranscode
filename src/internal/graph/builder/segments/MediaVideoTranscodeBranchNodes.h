@@ -6,6 +6,7 @@ namespace media::ffmpeg::graph {
 
 struct MediaVideoTranscodeBranchNodes {
     MediaNodeId codecResolver = MediaNodeId::invalid();
+    MediaNodeId packetStartGate = MediaNodeId::invalid();
     MediaNodeId videoDecode = MediaNodeId::invalid();
     MediaNodeId hardwareTransfer = MediaNodeId::invalid();
     MediaNodeId videoTimestamp = MediaNodeId::invalid();

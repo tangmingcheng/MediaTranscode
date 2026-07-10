@@ -12,10 +12,17 @@ struct MediaRealtimeEdgePolicySet {
     MediaEdgePolicy audioPacket;
     MediaEdgePolicy frame;
     MediaEdgePolicy mux;
+    MediaEdgePolicy videoMux;
+    MediaEdgePolicy audioMux;
 
     const MediaEdgePolicy& packetPolicy(MediaStreamKind streamKind) const noexcept
     {
         return streamKind == MediaStreamKind::Audio ? audioPacket : videoPacket;
+    }
+
+    const MediaEdgePolicy& muxPolicy(MediaStreamKind streamKind) const noexcept
+    {
+        return streamKind == MediaStreamKind::Audio ? audioMux : videoMux;
     }
 };
 

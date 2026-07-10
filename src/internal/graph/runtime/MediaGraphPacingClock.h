@@ -5,6 +5,7 @@
 #include "media_transcode/Result.h"
 
 #include <chrono>
+#include <optional>
 
 namespace media::ffmpeg::graph {
 
@@ -24,6 +25,7 @@ private:
 private:
     MediaLatencyPolicy m_policy;
     Clock::time_point m_start = Clock::time_point{};
+    std::optional<MediaTimeValue> m_basePts;
 };
 
 } // namespace media::ffmpeg::graph

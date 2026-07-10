@@ -158,11 +158,12 @@ std::string defaultPacketSourcePort(MediaStreamKind streamKind)
 
     const MediaRealtimeEdgePolicySet& policies = options.edgePolicies;
     const MediaEdgePolicy& packetPolicy = policies.packetPolicy(options.streamKind);
+    const MediaEdgePolicy& muxPolicy = policies.muxPolicy(options.streamKind);
     if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.formatSourceNode, options.formatSourcePort, sourceConfig, "format", prefix + ".format -> source_config.format", policies.metadata); !status) return status;
     if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, sourceConfig, "codec", options.muxNode, options.muxCodecPort, prefix + ".source_config.codec -> mux.codec", policies.metadata); !status) return status;
     if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.formatSourceNode, options.formatSourcePort, packetNormalize, "format", prefix + ".format -> normalize.format", policies.metadata); !status) return status;
     if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.packetSourceNode, packetSourcePort, packetNormalize, "packet", prefix + ".packet -> normalize.packet", packetPolicy); !status) return status;
-    return MediaGraphBuildSupport::connectChecked(graph, owner, packetNormalize, "packet", options.muxNode, options.muxPacketPort, prefix + ".normalize.packet -> mux.packet", policies.mux);
+    return MediaGraphBuildSupport::connectChecked(graph, owner, packetNormalize, "packet", options.muxNode, options.muxPacketPort, prefix + ".normalize.packet -> mux.packet", muxPolicy);
 }
 
 } // namespace media::ffmpeg::graph

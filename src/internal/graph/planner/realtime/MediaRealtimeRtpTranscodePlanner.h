@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/graph/model/MediaLatencyPolicy.h"
 #include "internal/graph/model/MediaRealtimeEdgePolicySet.h"
 #include "internal/graph/model/MediaThreadingPolicy.h"
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
@@ -27,6 +28,9 @@ struct MediaRealtimeRtpOutputNodePlan {
     std::string url;
     int packetSize;
     std::string mediaId;
+    bool writePacingEnabled = false;
+    int64_t writePacingBytesPerSecond = 0;
+    int64_t writePacingBurstBytes = 0;
 };
 
 struct MediaRealtimeMuxedOutputPlan {
@@ -44,6 +48,15 @@ struct MediaRealtimeSdpWriterPlan {
 struct MediaRealtimeMuxNodePlan {
     bool expectVideo;
     bool expectAudio;
+    MediaLatencyPolicy pacingPolicy;
+    bool monotonicPacketTimestamps = false;
+    int startupDelayMs = 0;
+};
+
+struct MediaRealtimeAvStartBarrierPlan {
+    bool expectVideo = false;
+    bool expectAudio = false;
+    bool requireVideoKeyFrame = false;
 };
 
 struct MediaRealtimeRtpTranscodePlan {
@@ -57,13 +70,17 @@ struct MediaRealtimeRtpTranscodePlan {
     MediaGraphQueueParameters queues;
     MediaRealtimeEdgePolicySet edgePolicies;
     MediaThreadingPolicy threadingPolicy;
+    bool videoInputStartRequiresKeyFrame = false;
     MediaRealtimeRtpInputNodePlan input;
+    MediaRealtimeRtpInputNodePlan audioInput;
+    bool useIsolatedAudioInput = false;
     MediaRealtimeRtpOutputNodePlan videoOutput;
     MediaRealtimeRtpOutputNodePlan audioOutput;
     MediaRealtimeMuxedOutputPlan muxedOutput;
     MediaRealtimeSdpWriterPlan sdp;
     MediaRealtimeMuxNodePlan videoMux;
     MediaRealtimeMuxNodePlan audioMux;
+    MediaRealtimeAvStartBarrierPlan avStartBarrier;
 };
 
 class MediaRealtimeRtpTranscodePlanner final {

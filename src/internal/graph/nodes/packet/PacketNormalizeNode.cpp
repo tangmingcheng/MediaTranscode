@@ -14,6 +14,7 @@ extern "C" {
 #include <libavutil/avutil.h>
 }
 
+#include <algorithm>
 #include <limits>
 #include <string>
 
@@ -265,17 +266,20 @@ void PacketNormalizeNode::releaseFormatContext() noexcept
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("PacketNormalizeNode expected writable packet for timestamp normalization"));
     }
-    const int64_t packetDts = packet->dts != AV_NOPTS_VALUE ? packet->dts : packet->pts;
-    if (packetDts == AV_NOPTS_VALUE) {
+    if (packet->dts == AV_NOPTS_VALUE && packet->pts == AV_NOPTS_VALUE) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("PacketNormalizeNode monotonic packet timestamps require dts or pts"));
     }
 
-    int64_t normalizedDts = packetDts;
-    if (m_nextPacketDts != invalidMediaTimeValue && normalizedDts < m_nextPacketDts) {
-        normalizedDts = m_nextPacketDts;
+    int64_t shift = 0;
+    if (m_nextPacketDts != invalidMediaTimeValue) {
+        if (packet->dts != AV_NOPTS_VALUE && packet->dts < m_nextPacketDts) {
+            shift = std::max(shift, m_nextPacketDts - packet->dts);
+        }
+        if (packet->pts != AV_NOPTS_VALUE && packet->pts < m_nextPacketDts) {
+            shift = std::max(shift, m_nextPacketDts - packet->pts);
+        }
     }
-    const int64_t shift = normalizedDts - packetDts;
     if (shift > 0) {
         if (packet->pts != AV_NOPTS_VALUE) {
             if (packet->pts > std::numeric_limits<int64_t>::max() - shift) {
@@ -291,8 +295,15 @@ void PacketNormalizeNode::releaseFormatContext() noexcept
             }
             packet->dts += shift;
         }
+        packetNormalizeLog(MediaGraphDiagnosticLevel::State,
+                           "monotonic_shift stream=" + std::to_string(m_sourceStreamIndex) +
+                               " shift=" + std::to_string(shift));
     }
 
+    int64_t normalizedDts = packet->dts != AV_NOPTS_VALUE ? packet->dts : packet->pts;
+    if (packet->pts != AV_NOPTS_VALUE && packet->pts > normalizedDts) {
+        normalizedDts = packet->pts;
+    }
     const int64_t duration = packet->duration > 0 ? packet->duration : 1;
     if (normalizedDts > std::numeric_limits<int64_t>::max() - duration) {
         return ::media::Status::failure(

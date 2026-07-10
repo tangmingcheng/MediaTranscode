@@ -77,6 +77,7 @@ void MediaGraphWorker::run()
 {
     m_running = true;
     uint32_t consecutiveErrors = 0;
+    uint32_t idleSpinsSinceYield = 0;
 
     while (!m_stopRequested && !m_aborted) {
         auto status = m_node.process(m_context);
@@ -97,6 +98,13 @@ void MediaGraphWorker::run()
         if (m_config.idleSleepMs > 0) {
             // non-realtime idle backoff; realtime plans must set idleSleepMs to 0.
             std::this_thread::sleep_for(std::chrono::milliseconds(m_config.idleSleepMs));
+            idleSpinsSinceYield = 0;
+        } else if (m_config.maxIdleSpins > 0) {
+            ++idleSpinsSinceYield;
+            if (idleSpinsSinceYield >= m_config.maxIdleSpins) {
+                std::this_thread::yield();
+                idleSpinsSinceYield = 0;
+            }
         }
     }
 
