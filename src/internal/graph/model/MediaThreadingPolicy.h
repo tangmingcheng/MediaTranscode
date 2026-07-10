@@ -23,9 +23,6 @@ struct MediaThreadingPolicy {
     MediaThreadPriority priority = MediaThreadPriority::Normal;
 
     std::size_t maxWorkerThreads = 0;
-    uint32_t idleSleepMs = 1;
-    uint32_t maxIdleSpins = 4;
-
     bool pinWorkers = false;
     bool collectWorkerMetrics = true;
 

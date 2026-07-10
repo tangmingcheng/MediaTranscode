@@ -18,10 +18,13 @@ public:
     MediaNodeKind kind() const noexcept;
     const std::string& name() const noexcept;
 
-    ::media::Status process(MediaGraphExecutionContext& context) override;
+    ::media::Result<MediaNodeProcessResult> process(MediaGraphExecutionContext& context) override;
 
 protected:
-    virtual ::media::Status onProcess(MediaGraphExecutionContext& context);
+    virtual ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context);
+    static ::media::Result<MediaNodeProcessResult> processProgress(::media::Status status = ::media::Status::success());
+    static ::media::Result<MediaNodeProcessResult> processWaiting();
+    static ::media::Result<MediaNodeProcessResult> processFinished(::media::Status status = ::media::Status::success());
 
 private:
     MediaNodeId m_nodeId;
@@ -35,7 +38,7 @@ public: \
     explicit ClassName(MediaNodeId nodeId); \
     static MediaNodeKind staticKind() noexcept; \
 protected: \
-    ::media::Status onProcess(MediaGraphExecutionContext& context) override; \
+    ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context) override; \
 };
 
 #define MEDIA_FFMPEG_GRAPH_DEFINE_NODE(ClassName, KindValue) \
@@ -47,9 +50,9 @@ MediaNodeKind ClassName::staticKind() noexcept \
 { \
     return KindValue; \
 } \
-::media::Status ClassName::onProcess(MediaGraphExecutionContext&) \
+::media::Result<MediaNodeProcessResult> ClassName::onProcess(MediaGraphExecutionContext&) \
 { \
-    return ::media::Status::success(); \
+    return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished()); \
 }
 
 } // namespace media::ffmpeg::graph

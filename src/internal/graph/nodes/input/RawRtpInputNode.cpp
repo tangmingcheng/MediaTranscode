@@ -25,29 +25,29 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     return MediaNodeKind::RawRtpInput;
 }
 
-::media::Status RawRtpInputNode::onProcess(MediaGraphExecutionContext& context)
+::media::Result<MediaNodeProcessResult> RawRtpInputNode::onProcess(MediaGraphExecutionContext& context)
 {
     if (m_formatEmitted) {
-        return ::media::Status::success();
+        return processFinished();
     }
 
     auto status = openInput(context);
     if (!status) {
-        return status;
+        return processProgress(status);
     }
 
     auto buffer = FFmpegBufferFactory::wrapInputFormatContext(std::move(m_context));
     if (!buffer) {
-        return ::media::Status::failure(buffer.error());
+        return ::media::Result<MediaNodeProcessResult>::failure(buffer.error());
     }
 
     auto pushed = emitOutput(context, "format", buffer.value());
     if (!pushed) {
-        return pushed;
+        return processProgress(pushed);
     }
 
     m_formatEmitted = true;
-    return ::media::Status::success();
+    return processProgress();
 }
 
 ::media::Status RawRtpInputNode::stop(MediaGraphExecutionContext& context)

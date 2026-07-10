@@ -1,4 +1,5 @@
 #include "common/TestAssert.h"
+#include "common/GraphRuntimeTestSupport.h"
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
 #include "internal/graph/builder/local/LocalFileTranscodeGraphBuilder.h"
@@ -18,6 +19,7 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/runtime/queue/MediaBlockingQueue.h"
 #include "internal/graph/runtime/queue/MediaSpscRingQueue.h"
+#include "internal/graph/runtime/threading/MediaGraphWorker.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
 #include "../../tools/common/GraphCliSupport.h"
 
@@ -57,6 +59,7 @@ extern "C" {
 namespace {
 
 using media_transcode::test::TestContext;
+using media_transcode::test::makePacketBuffer;
 using namespace media::ffmpeg::graph;
 
 std::string sampleVideoPath()
@@ -663,7 +666,8 @@ MediaNodeId addAudioResampleHarnessGraph(MediaGraph& graph)
     if (!pushed) {
         return pushed;
     }
-    return node.process(execution);
+    auto processed = node.process(execution);
+    return processed ? ::media::Status::success() : ::media::Status::failure(processed.error());
 }
 
 ::media::Result<MediaBufferRef> processAudioResampleFrame(MediaGraphExecutionContext& execution,
@@ -1359,8 +1363,6 @@ void testRealtimePlanOwnsThreadingPolicy(TestContext& ctx)
     }
 
     EXPECT_EQ(ctx, plan.value().threadingPolicy.mode, MediaThreadingMode::PerNodeWorker);
-    EXPECT_EQ(ctx, plan.value().threadingPolicy.idleSleepMs, static_cast<uint32_t>(0));
-    EXPECT_EQ(ctx, plan.value().threadingPolicy.maxIdleSpins, static_cast<uint32_t>(1));
 }
 
 void testRawRtpRejectsMissingVideoBitrate(TestContext& ctx)
@@ -1769,15 +1771,16 @@ void testGraphFixedSleepsAreClassified(TestContext& ctx)
     }
 }
 
-void testRealtimeWorkerUsesPlannerIdleSpinPolicy(TestContext& ctx)
+void testRealtimeWorkerUsesEventDrivenWait(TestContext& ctx)
 {
     const std::string executorSource = repositoryFile("src/internal/graph/runtime/threading/MediaGraphThreadedExecutor.cpp");
-    expectTextContains(ctx, executorSource, "workerConfig.maxIdleSpins = m_policy.maxIdleSpins");
+    EXPECT_TRUE(ctx, executorSource.find("idleSleepMs") == std::string::npos);
+    EXPECT_TRUE(ctx, executorSource.find("maxIdleSpins") == std::string::npos);
 
     const std::string workerSource = repositoryFile("src/internal/graph/runtime/threading/MediaGraphWorker.cpp");
-    expectTextContains(ctx, workerSource, "idleSpinsSinceYield");
-    expectTextContains(ctx, workerSource, "std::this_thread::yield()");
-    expectTextContains(ctx, workerSource, "m_config.maxIdleSpins");
+    expectTextContains(ctx, workerSource, "MediaNodeProcessState::Waiting");
+    expectTextContains(ctx, workerSource, "waitForChange");
+    EXPECT_TRUE(ctx, workerSource.find("std::this_thread::yield") == std::string::npos);
 }
 
 void testRealtimeRtpMuxUsesPlannerPacingPolicy(TestContext& ctx)
@@ -1897,22 +1900,6 @@ void testRealtimePlannerOwnsShortGopForRtpKeyFrameRecovery(TestContext& ctx)
         EXPECT_EQ(ctx, codecResolver->options.value(MediaTranscodeOptionKey::VideoGop), std::string("30"));
         EXPECT_EQ(ctx, codecResolver->options.value(MediaTranscodeOptionKey::VideoBFrames), std::string("0"));
     }
-}
-
-::media::Result<MediaBufferRef> makePacketBuffer(bool keyFrame,
-                                                 int64_t pts = 0,
-                                                 MediaStreamKind streamKind = MediaStreamKind::Video)
-{
-    auto packet = ::media::ffmpeg::makePacket();
-    if (!packet) {
-        return ::media::Result<MediaBufferRef>::failure(
-            media::ErrorInfo::allocationFailed("test packet allocation failed"));
-    }
-    packet->flags = keyFrame ? AV_PKT_FLAG_KEY : 0;
-    packet->pts = pts;
-    packet->dts = pts;
-    packet->duration = 1;
-    return FFmpegBufferFactory::wrapPacket(std::move(packet), streamKind);
 }
 
 void testPacketKeyFrameFlagMapsToMediaBuffer(TestContext& ctx)
@@ -2260,16 +2247,22 @@ void testStartBarrierKeepsLatestPreOpenPacket(TestContext& ctx)
     }
 
     EXPECT_TRUE(ctx, audioInput->push(earlyAudio.value()));
-    EXPECT_TRUE(ctx, node.process(execution));
+    auto earlyResult = node.process(execution);
+    EXPECT_TRUE(ctx, earlyResult);
+    if (earlyResult) EXPECT_EQ(ctx, earlyResult.value().state, MediaNodeProcessState::Progress);
     MediaBufferRef output;
     EXPECT_FALSE(ctx, audioOutput->tryPop(output));
 
     EXPECT_TRUE(ctx, audioInput->push(latestAudio.value()));
-    EXPECT_TRUE(ctx, node.process(execution));
+    auto latestResult = node.process(execution);
+    EXPECT_TRUE(ctx, latestResult);
+    if (latestResult) EXPECT_EQ(ctx, latestResult.value().state, MediaNodeProcessState::Progress);
     EXPECT_FALSE(ctx, audioOutput->tryPop(output));
 
     EXPECT_TRUE(ctx, videoInput->push(deltaVideo.value()));
-    EXPECT_TRUE(ctx, node.process(execution));
+    auto deltaResult = node.process(execution);
+    EXPECT_TRUE(ctx, deltaResult);
+    if (deltaResult) EXPECT_EQ(ctx, deltaResult.value().state, MediaNodeProcessState::Progress);
     EXPECT_FALSE(ctx, videoOutput->tryPop(output));
     EXPECT_FALSE(ctx, audioOutput->tryPop(output));
 
@@ -2283,6 +2276,23 @@ void testStartBarrierKeepsLatestPreOpenPacket(TestContext& ctx)
     EXPECT_TRUE(ctx, audioOutput->tryPop(output));
     if (output) {
         EXPECT_EQ(ctx, output->pts(), static_cast<MediaTimeValue>(200));
+    }
+
+    auto queuedVideo1 = makePacketBuffer(true, 400, MediaStreamKind::Video);
+    auto queuedVideo2 = makePacketBuffer(true, 500, MediaStreamKind::Video);
+    auto queuedVideo3 = makePacketBuffer(true, 600, MediaStreamKind::Video);
+    EXPECT_TRUE(ctx, queuedVideo1 && queuedVideo2 && queuedVideo3);
+    if (queuedVideo1 && queuedVideo2 && queuedVideo3) {
+        EXPECT_TRUE(ctx, videoInput->push(queuedVideo1.value()));
+        EXPECT_TRUE(ctx, videoInput->push(queuedVideo2.value()));
+        EXPECT_TRUE(ctx, videoInput->push(queuedVideo3.value()));
+        MediaGraphWorker worker(node, execution);
+        EXPECT_TRUE(ctx, worker.start());
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        EXPECT_EQ(ctx, videoInput->size(), static_cast<std::size_t>(0));
+        EXPECT_TRUE(ctx, worker.metrics().progress.load() >= static_cast<std::uint64_t>(3));
+        worker.requestStop();
+        worker.join();
     }
 }
 
@@ -2849,7 +2859,7 @@ int main()
     testRtpMuxEmitsSdpSnapshotInsteadOfBorrowedLiveContext(ctx);
     testSdpWriterOrdersSeparateRtpContextsByMediaType(ctx);
     testGraphFixedSleepsAreClassified(ctx);
-    testRealtimeWorkerUsesPlannerIdleSpinPolicy(ctx);
+    testRealtimeWorkerUsesEventDrivenWait(ctx);
     testRealtimeRtpMuxUsesPlannerPacingPolicy(ctx);
     testRealtimeRtpOutputUsesPlannerWritePacingPolicy(ctx);
     testRealtimePlannerOwnsShortGopForRtpKeyFrameRecovery(ctx);

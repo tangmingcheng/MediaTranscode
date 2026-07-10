@@ -10,7 +10,7 @@ public:
     static MediaNodeKind staticKind() noexcept;
 
 protected:
-    ::media::Status onProcess(MediaGraphExecutionContext& context) override;
+    ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context) override;
 };
 
 } // namespace media::ffmpeg::graph

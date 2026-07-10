@@ -28,34 +28,6 @@ void packetNormalizeLog(MediaGraphDiagnosticLevel level, const std::string& mess
                             std::string("packet_normalize.") + message);
 }
 
-bool streamTypeMatches(MediaStreamKind streamKind, const AVStream* stream) noexcept
-{
-    if (!stream || !stream->codecpar) {
-        return false;
-    }
-    if (streamKind == MediaStreamKind::Video) {
-        return stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO;
-    }
-    if (streamKind == MediaStreamKind::Audio) {
-        return stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO;
-    }
-    return false;
-}
-
-MediaTimeDescriptor timeDescriptorFromStream(const AVStream* stream)
-{
-    MediaTimeDescriptor descriptor;
-    if (!stream) {
-        return descriptor;
-    }
-
-    descriptor.timeBase = FFmpegDescriptorMapper::toRational(stream->time_base);
-    descriptor.frameRate = FFmpegDescriptorMapper::toRational(stream->avg_frame_rate);
-    descriptor.startTime = stream->start_time;
-    descriptor.duration = stream->duration;
-    return descriptor;
-}
-
 } // namespace
 
 PacketNormalizeNode::PacketNormalizeNode(MediaNodeId nodeId)
@@ -80,50 +52,51 @@ void PacketNormalizeNode::abort(MediaGraphExecutionContext& context) noexcept
     FFmpegNodeRuntime::abort(context);
 }
 
-::media::Status PacketNormalizeNode::onProcess(MediaGraphExecutionContext& context)
+::media::Result<MediaNodeProcessResult> PacketNormalizeNode::onProcess(MediaGraphExecutionContext& context)
 {
-    if (!m_formatContext) {
+    if (!m_formatContextOwner) {
         auto bindStatus = bindFormatContext(context);
         if (!bindStatus) {
-            return bindStatus;
+            return processProgress(bindStatus);
         }
-        if (!m_formatContext) {
-            return ::media::Status::success();
+        if (!m_formatContextOwner) {
+            return processWaiting();
         }
     }
 
     if (m_sourceStreamIndex == invalidMediaStreamIndex) {
         auto streamStatus = bindSourceStream(context);
         if (!streamStatus) {
-            return streamStatus;
+            return processProgress(streamStatus);
         }
     }
 
     auto packetInput = tryPopInputOptional(context, "packet");
     if (!packetInput) {
-        return ::media::Status::failure(packetInput.error());
+        return ::media::Result<MediaNodeProcessResult>::failure(packetInput.error());
     }
     if (!packetInput.value()) {
-        return ::media::Status::success();
+        return processWaiting();
     }
 
     MediaBufferRef input = *packetInput.value();
     if (input->isEof() || input->isFlush()) {
-        return emitOutput(context, "packet", input);
+        auto status = emitOutput(context, "packet", input);
+        return input->isEof() ? processFinished(status) : processProgress(status);
     }
 
     auto normalized = normalizePacket(input);
     if (!normalized) {
-        return ::media::Status::failure(normalized.error());
+        return ::media::Result<MediaNodeProcessResult>::failure(normalized.error());
     }
 
-    return emitOutput(context, "packet", normalized.value());
+    return processProgress(emitOutput(context, "packet", normalized.value()));
 }
 
 void PacketNormalizeNode::releaseFormatContext() noexcept
 {
     m_formatContextOwner.reset();
-    m_formatContext = nullptr;
+    m_sourceStream = nullptr;
     m_streamKind = MediaStreamKind::Unknown;
     m_sourceStreamIndex = invalidMediaStreamIndex;
     m_monotonicPacketTimestamps = false;
@@ -142,13 +115,12 @@ void PacketNormalizeNode::releaseFormatContext() noexcept
 
     MediaBufferRef input = *formatInput.value();
     auto* formatBuffer = dynamic_cast<FFmpegFormatContextBuffer*>(input.get());
-    if (!formatBuffer || !formatBuffer->context()) {
+    if (!formatBuffer || !formatBuffer->inputSnapshotComplete()) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("PacketNormalizeNode expected FFmpegFormatContextBuffer"));
     }
 
     m_formatContextOwner = std::move(input);
-    m_formatContext = formatBuffer->context();
     packetNormalizeLog(MediaGraphDiagnosticLevel::State, "bind_format_context");
     return ::media::Status::success();
 }
@@ -168,23 +140,19 @@ void PacketNormalizeNode::releaseFormatContext() noexcept
         return ::media::Status::failure(streamIndex.error());
     }
 
-    if (!m_formatContext) {
+    if (!m_formatContextOwner) {
         return ::media::Status::failure(
             ::media::ErrorInfo::notInitialized("PacketNormalizeNode requires format context before source stream binding"));
     }
 
     const int index = streamIndex.value();
-    if (index < 0 || index >= static_cast<int>(m_formatContext->nb_streams)) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("PacketNormalizeNode planner source stream index is out of range"));
-    }
-
-    const AVStream* stream = m_formatContext->streams[index];
-    if (!streamTypeMatches(streamKind.value(), stream)) {
+    const auto* formatBuffer = dynamic_cast<const FFmpegFormatContextBuffer*>(m_formatContextOwner.get());
+    m_sourceStream = formatBuffer ? formatBuffer->inputStreamSnapshot(index) : nullptr;
+    if (!m_sourceStream || m_sourceStream->streamKind != streamKind.value()) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("PacketNormalizeNode planner source stream kind does not match stream"));
     }
-    if (stream->time_base.num == 0 || stream->time_base.den == 0) {
+    if (m_sourceStream->time.timeBase.num == 0 || m_sourceStream->time.timeBase.den == 0) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("PacketNormalizeNode requires known upstream packet time_base"));
     }
@@ -205,7 +173,7 @@ void PacketNormalizeNode::releaseFormatContext() noexcept
 
 ::media::Result<MediaBufferRef> PacketNormalizeNode::normalizePacket(const MediaBufferRef& buffer)
 {
-    if (!m_formatContext || m_sourceStreamIndex == invalidMediaStreamIndex) {
+    if (!m_sourceStream || m_sourceStreamIndex == invalidMediaStreamIndex) {
         return ::media::Result<MediaBufferRef>::failure(
             ::media::ErrorInfo::notInitialized("PacketNormalizeNode requires source stream before packet normalization"));
     }
@@ -221,12 +189,6 @@ void PacketNormalizeNode::releaseFormatContext() noexcept
             ::media::ErrorInfo::invalidArgument("PacketNormalizeNode received packet from non-planned stream"));
     }
 
-    AVStream* sourceStream = m_formatContext->streams[m_sourceStreamIndex];
-    if (!sourceStream) {
-        return ::media::Result<MediaBufferRef>::failure(
-            ::media::ErrorInfo::notInitialized("PacketNormalizeNode source stream is null"));
-    }
-
     auto cloned = FFmpegBufferFactory::clonePacket(sourcePacket, m_streamKind);
     if (!cloned) {
         return cloned;
@@ -240,12 +202,12 @@ void PacketNormalizeNode::releaseFormatContext() noexcept
 
     packet->pos = -1;
 
-    MediaFormatDescriptor formatDescriptor = FFmpegDescriptorMapper::fromStream(sourceStream);
+    MediaFormatDescriptor formatDescriptor = m_sourceStream->format;
     formatDescriptor.streamKind = m_streamKind;
     cloned.value()->setStreamKind(m_streamKind);
     cloned.value()->setPayloadKind(MediaPayloadKind::Packet);
     cloned.value()->setFormatDescriptor(formatDescriptor);
-    cloned.value()->setTimeDescriptor(timeDescriptorFromStream(sourceStream));
+    cloned.value()->setTimeDescriptor(m_sourceStream->time);
     cloned.value()->setTimestamps(packet->pts, packet->dts, packet->duration);
 
     if (auto status = normalizePacketTimestamps(cloned.value()); !status) {

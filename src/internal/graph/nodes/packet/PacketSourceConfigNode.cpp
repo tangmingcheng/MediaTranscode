@@ -23,20 +23,6 @@ void packetSourceConfigLog(MediaGraphDiagnosticLevel level, const std::string& m
                             std::string("packet_source_config.") + message);
 }
 
-bool streamTypeMatches(MediaStreamKind streamKind, const AVStream* stream) noexcept
-{
-    if (!stream || !stream->codecpar) {
-        return false;
-    }
-    if (streamKind == MediaStreamKind::Video) {
-        return stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO;
-    }
-    if (streamKind == MediaStreamKind::Audio) {
-        return stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO;
-    }
-    return false;
-}
-
 } // namespace
 
 PacketSourceConfigNode::PacketSourceConfigNode(MediaNodeId nodeId)
@@ -61,36 +47,36 @@ void PacketSourceConfigNode::abort(MediaGraphExecutionContext& context) noexcept
     FFmpegNodeRuntime::abort(context);
 }
 
-::media::Status PacketSourceConfigNode::onProcess(MediaGraphExecutionContext& context)
+::media::Result<MediaNodeProcessResult> PacketSourceConfigNode::onProcess(MediaGraphExecutionContext& context)
 {
     if (m_emitted) {
-        return ::media::Status::success();
+        return processFinished();
     }
 
-    if (!m_formatContext) {
+    if (!m_formatContextOwner) {
         auto bindStatus = bindFormatContext(context);
         if (!bindStatus) {
-            return bindStatus;
+            return processProgress(bindStatus);
         }
-        if (!m_formatContext) {
-            return ::media::Status::success();
+        if (!m_formatContextOwner) {
+            return processWaiting();
         }
     }
 
     if (m_sourceStreamIndex == invalidMediaStreamIndex) {
         auto streamStatus = bindSourceStream(context);
         if (!streamStatus) {
-            return streamStatus;
+            return processProgress(streamStatus);
         }
     }
 
-    return emitSourceConfig(context);
+    return processFinished(emitSourceConfig(context));
 }
 
 void PacketSourceConfigNode::releaseFormatContext() noexcept
 {
     m_formatContextOwner.reset();
-    m_formatContext = nullptr;
+    m_sourceStream = nullptr;
     m_streamKind = MediaStreamKind::Unknown;
     m_sourceStreamIndex = invalidMediaStreamIndex;
     m_emitted = false;
@@ -108,13 +94,12 @@ void PacketSourceConfigNode::releaseFormatContext() noexcept
 
     MediaBufferRef buffer = *input.value();
     auto* formatBuffer = dynamic_cast<FFmpegFormatContextBuffer*>(buffer.get());
-    if (!formatBuffer || !formatBuffer->context()) {
+    if (!formatBuffer || !formatBuffer->inputSnapshotComplete()) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("PacketSourceConfigNode expected FFmpegFormatContextBuffer"));
     }
 
     m_formatContextOwner = std::move(buffer);
-    m_formatContext = formatBuffer->context();
     packetSourceConfigLog(MediaGraphDiagnosticLevel::State, "bind_format_context");
     return ::media::Status::success();
 }
@@ -134,19 +119,15 @@ void PacketSourceConfigNode::releaseFormatContext() noexcept
         return ::media::Status::failure(streamIndex.error());
     }
 
-    if (!m_formatContext) {
+    if (!m_formatContextOwner) {
         return ::media::Status::failure(
             ::media::ErrorInfo::notInitialized("PacketSourceConfigNode requires format context before source stream binding"));
     }
 
     const int index = streamIndex.value();
-    if (index < 0 || index >= static_cast<int>(m_formatContext->nb_streams)) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("PacketSourceConfigNode planner source stream index is out of range"));
-    }
-
-    const AVStream* stream = m_formatContext->streams[index];
-    if (!streamTypeMatches(streamKind.value(), stream)) {
+    const auto* formatBuffer = dynamic_cast<const FFmpegFormatContextBuffer*>(m_formatContextOwner.get());
+    m_sourceStream = formatBuffer ? formatBuffer->inputStreamSnapshot(index) : nullptr;
+    if (!m_sourceStream || m_sourceStream->streamKind != streamKind.value()) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("PacketSourceConfigNode planner source stream kind does not match stream"));
     }
@@ -163,13 +144,12 @@ void PacketSourceConfigNode::releaseFormatContext() noexcept
 
 ::media::Status PacketSourceConfigNode::emitSourceConfig(MediaGraphExecutionContext& context)
 {
-    if (!m_formatContext || m_sourceStreamIndex == invalidMediaStreamIndex) {
+    if (!m_sourceStream || m_sourceStreamIndex == invalidMediaStreamIndex) {
         return ::media::Status::failure(
             ::media::ErrorInfo::notInitialized("PacketSourceConfigNode requires source stream before emitting config"));
     }
 
-    AVStream* stream = m_formatContext->streams[m_sourceStreamIndex];
-    auto buffer = FFmpegBufferFactory::cloneCodecParameters(stream);
+    auto buffer = FFmpegBufferFactory::cloneCodecParameters(*m_sourceStream);
     if (!buffer) {
         return ::media::Status::failure(buffer.error());
     }
@@ -181,8 +161,8 @@ void PacketSourceConfigNode::releaseFormatContext() noexcept
     std::ostringstream out;
     out << "emit_source_config stream=" << mediaGraphDiagnosticStreamKindName(m_streamKind)
         << " index=" << m_sourceStreamIndex
-        << " time_base=" << stream->time_base.num << "/" << stream->time_base.den
-        << " codec_id=" << stream->codecpar->codec_id;
+        << " time_base=" << m_sourceStream->time.timeBase.num << "/" << m_sourceStream->time.timeBase.den
+        << " codec_id=" << m_sourceStream->codecParameters->codec_id;
     packetSourceConfigLog(MediaGraphDiagnosticLevel::State, out.str());
 
     auto emitStatus = emitOutput(context, "codec", buffer.value());

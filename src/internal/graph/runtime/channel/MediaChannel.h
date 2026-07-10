@@ -12,6 +12,8 @@
 
 namespace media::ffmpeg::graph {
 
+class MediaNodeWakeup;
+
 class MediaChannel final {
 public:
     MediaChannel(MediaChannelId id, const MediaEdge& edge);
@@ -42,6 +44,7 @@ public:
     const MediaTimeDescriptor& timeDescriptor() const noexcept;
     const MediaHardwareDescriptor& hardwareDescriptor() const noexcept;
     const MediaChannelMetrics& metrics() const noexcept;
+    void setConsumerWakeup(MediaNodeWakeup& wakeup) noexcept;
 
 private:
     void refreshQueueMetrics();
@@ -56,6 +59,7 @@ private:
     MediaHardwareDescriptor m_hardware;
     std::unique_ptr<MediaQueue> m_queue;
     MediaChannelMetrics m_metrics;
+    MediaNodeWakeup* m_consumerWakeup = nullptr;
 };
 
 } // namespace media::ffmpeg::graph

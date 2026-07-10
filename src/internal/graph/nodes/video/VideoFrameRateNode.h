@@ -2,6 +2,7 @@
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
+#include "internal/graph/runtime/lifecycle/MediaInputTerminalTracker.h"
 
 #include <cstdint>
 #include <deque>
@@ -20,7 +21,7 @@ public:
     static MediaNodeKind staticKind() noexcept;
 
 protected:
-    ::media::Status onProcess(MediaGraphExecutionContext& context) override;
+    ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context) override;
 
 private:
     ::media::Status initializeFromFirstFrame(MediaGraphExecutionContext& context, const MediaBufferRef& buffer);
@@ -51,6 +52,8 @@ private:
 
     MediaBufferRef m_lastInputFrame;
     std::deque<MediaBufferRef> m_pendingFrames;
+    MediaInputTerminalTracker m_terminals { { "frame" } };
+    bool m_eofEmitted = false;
 };
 
 } // namespace media::ffmpeg::graph

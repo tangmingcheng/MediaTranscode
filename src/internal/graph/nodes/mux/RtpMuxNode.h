@@ -5,6 +5,7 @@
 #include "internal/graph/runtime/MediaGraphPacingClock.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 #include "internal/graph/model/MediaStreamKind.h"
+#include "internal/graph/nodes/mux/MediaMuxCompletionState.h"
 
 #include <vector>
 #include <chrono>
@@ -21,7 +22,7 @@ public:
     static MediaNodeKind staticKind() noexcept;
 
 protected:
-    ::media::Status onProcess(MediaGraphExecutionContext& context) override;
+    ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context) override;
     ::media::Status stop(MediaGraphExecutionContext& context) override;
 
 private:
@@ -66,6 +67,7 @@ private:
     std::chrono::steady_clock::time_point m_startupReadyAt {};
     std::vector<MediaBufferRef> m_pendingStreamConfigs;
     std::vector<MediaBufferRef> m_pendingPackets;
+    MediaMuxCompletionState m_completion;
 };
 
 } // namespace media::ffmpeg::graph

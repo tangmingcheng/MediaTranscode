@@ -14,27 +14,28 @@ MediaNodeKind StreamSplitNode::staticKind() noexcept
     return MediaNodeKind::StreamSplit;
 }
 
-::media::Status StreamSplitNode::onProcess(MediaGraphExecutionContext& context)
+::media::Result<MediaNodeProcessResult> StreamSplitNode::onProcess(MediaGraphExecutionContext& context)
 {
     auto input = tryPopFirstInputOptional(context);
     if (!input) {
-        return ::media::Status::failure(input.error());
+        return ::media::Result<MediaNodeProcessResult>::failure(input.error());
     }
     if (!input.value()) {
-        return ::media::Status::success();
+        return processWaiting();
     }
 
     const MediaBufferRef& buffer = *input.value();
     const AVPacket* packet = FFmpegPacketView::packet(buffer);
     if (!packet) {
-        return broadcastControlToAllOutputs(context, buffer);
+        auto status = broadcastControlToAllOutputs(context, buffer);
+        return buffer->isEof() ? processFinished(status) : processProgress(status);
     }
 
-    return pushToMatchingOutputs(context,
+    return processProgress(pushToMatchingOutputs(context,
                                  buffer,
                                  buffer->streamKind(),
                                  packet->stream_index,
-                                 RouteMatchPolicy::AllowDrop);
+                                 RouteMatchPolicy::AllowDrop));
 }
 
 } // namespace media::ffmpeg::graph

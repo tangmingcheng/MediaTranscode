@@ -29,8 +29,11 @@ namespace media::ffmpeg::graph {
             ::media::ErrorInfo::invalidArgument("wrapInputFormatContext failed: context is null"));
     }
 
-    return ::media::Result<MediaBufferRef>::success(
-        makeMediaBufferRef<FFmpegFormatContextBuffer>(std::move(context)));
+    auto created = FFmpegFormatContextBuffer::createInput(std::move(context));
+    if (!created) {
+        return ::media::Result<MediaBufferRef>::failure(created.error());
+    }
+    return ::media::Result<MediaBufferRef>::success(MediaBufferRef(std::move(created).value()));
 }
 
 ::media::Result<MediaBufferRef> FFmpegBufferFactory::wrapOutputFormatContext(::media::ffmpeg::OutputFormatContextPtr context)
@@ -114,6 +117,29 @@ namespace media::ffmpeg::graph {
     timeDescriptor.duration = descriptor.time.duration;
     buffer->setTimeDescriptor(timeDescriptor);
 
+    return ::media::Result<MediaBufferRef>::success(std::move(buffer));
+}
+
+::media::Result<MediaBufferRef> FFmpegBufferFactory::cloneCodecParameters(const FFmpegInputStreamSnapshot& stream)
+{
+    if (!stream.codecParameters) {
+        return ::media::Result<MediaBufferRef>::failure(
+            ::media::ErrorInfo::invalidArgument("cloneCodecParameters failed: snapshot codec parameters are null"));
+    }
+    auto parameters = ::media::ffmpeg::makeCodecParameters();
+    if (!parameters) {
+        return ::media::Result<MediaBufferRef>::failure(
+            ::media::ErrorInfo::allocationFailed("cloneCodecParameters failed: avcodec_parameters_alloc returned null"));
+    }
+    const int copyRet = avcodec_parameters_copy(parameters.get(), stream.codecParameters.get());
+    if (copyRet < 0) {
+        return ::media::Result<MediaBufferRef>::failure(FFmpegGraphError::fromCode(copyRet, "avcodec_parameters_copy"));
+    }
+    auto buffer = makeMediaBufferRef<FFmpegCodecParametersBuffer>(std::move(parameters));
+    buffer->setStreamKind(stream.streamKind);
+    buffer->setPayloadKind(MediaPayloadKind::CodecParameters);
+    buffer->setFormatDescriptor(stream.format);
+    buffer->setTimeDescriptor(stream.time);
     return ::media::Result<MediaBufferRef>::success(std::move(buffer));
 }
 

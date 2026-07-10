@@ -162,80 +162,78 @@ MediaNodeKind AudioCodecResolverNode::staticKind() noexcept
     return MediaNodeKind::AudioCodecResolver;
 }
 
-::media::Status AudioCodecResolverNode::onProcess(MediaGraphExecutionContext& context)
+::media::Result<MediaNodeProcessResult> AudioCodecResolverNode::onProcess(MediaGraphExecutionContext& context)
 {
     if (m_emitted) {
-        return ::media::Status::success();
+        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
     }
 
     auto input = tryPopFirstInputOptional(context);
     if (!input) {
-        return ::media::Status::failure(input.error());
+        return ::media::Result<MediaNodeProcessResult>::failure(input.error());
     }
     if (!input.value()) {
-        return ::media::Status::success();
+        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::waiting());
     }
 
     auto* formatBuffer = dynamic_cast<FFmpegFormatContextBuffer*>(input.value()->get());
-    AVFormatContext* formatContext = formatBuffer ? formatBuffer->context() : nullptr;
-    if (!formatContext) {
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument("AudioCodecResolverNode expected format context"));
+
+    if (!formatBuffer || !formatBuffer->inputSnapshotComplete()) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::invalidArgument("AudioCodecResolverNode expected format context"));
     }
 
-    auto streamIndex = resolveSourceStreamIndex(context, formatContext);
-    if (!streamIndex) {
-        return ::media::Status::failure(streamIndex.error());
+    auto stream = resolveSourceStream(context, *formatBuffer);
+    if (!stream) {
+        return ::media::Result<MediaNodeProcessResult>::failure(stream.error());
     }
 
-    AVStream* stream = formatContext->streams[streamIndex.value()];
-    auto decoder = buildDecoderContext(stream);
+    auto decoder = buildDecoderContext(*stream.value());
     if (!decoder) {
-        return ::media::Status::failure(decoder.error());
+        return ::media::Result<MediaNodeProcessResult>::failure(decoder.error());
     }
 
-    auto encoder = buildEncoderContext(context, stream, decoder.value().get());
+    auto encoder = buildEncoderContext(context, *stream.value(), decoder.value().get());
     if (!encoder) {
-        return ::media::Status::failure(encoder.error());
+        return ::media::Result<MediaNodeProcessResult>::failure(encoder.error());
     }
 
     auto decoderStatus = emitCodecContext(context, "decoder", std::move(decoder).value());
     if (!decoderStatus) {
-        return decoderStatus;
+        return ::media::Result<MediaNodeProcessResult>::failure(decoderStatus.error());
     }
 
     auto encoderStatus = emitCodecContext(context, "encoder", std::move(encoder).value());
     if (!encoderStatus) {
-        return encoderStatus;
+        return ::media::Result<MediaNodeProcessResult>::failure(encoderStatus.error());
     }
 
     m_emitted = true;
-    return ::media::Status::success();
+    return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
 }
 
-::media::Result<int> AudioCodecResolverNode::resolveSourceStreamIndex(MediaGraphExecutionContext& context,
-                                                                      AVFormatContext* formatContext) const
+::media::Result<const FFmpegInputStreamSnapshot*> AudioCodecResolverNode::resolveSourceStream(
+    MediaGraphExecutionContext& context,
+    const FFmpegFormatContextBuffer& format) const
 {
     auto streamIndexOption = intOption(nodeOptions(context), MediaTranscodeOptionKey::AudioSourceStreamIndex);
     if (!streamIndexOption) {
-        return ::media::Result<int>::failure(streamIndexOption.error());
+        return ::media::Result<const FFmpegInputStreamSnapshot*>::failure(streamIndexOption.error());
     }
     if (!streamIndexOption.value() || *streamIndexOption.value() < 0) {
-        return ::media::Result<int>::failure(::media::ErrorInfo::invalidArgument("AudioCodecResolverNode requires audio source stream index"));
+        return ::media::Result<const FFmpegInputStreamSnapshot*>::failure(::media::ErrorInfo::invalidArgument("AudioCodecResolverNode requires audio source stream index"));
     }
     const int streamIndex = *streamIndexOption.value();
-    if (!formatContext || streamIndex >= static_cast<int>(formatContext->nb_streams)) {
-        return ::media::Result<int>::failure(::media::ErrorInfo::invalidArgument("AudioCodecResolverNode audio source stream index is out of range"));
+    const auto* stream = format.inputStreamSnapshot(streamIndex);
+    if (!stream || stream->streamKind != MediaStreamKind::Audio) {
+        return ::media::Result<const FFmpegInputStreamSnapshot*>::failure(::media::ErrorInfo::invalidArgument("AudioCodecResolverNode source stream is not audio"));
     }
-    AVStream* stream = formatContext->streams[streamIndex];
-    if (!stream || !stream->codecpar || stream->codecpar->codec_type != AVMEDIA_TYPE_AUDIO) {
-        return ::media::Result<int>::failure(::media::ErrorInfo::invalidArgument("AudioCodecResolverNode source stream is not audio"));
-    }
-    return ::media::Result<int>::success(streamIndex);
+    return ::media::Result<const FFmpegInputStreamSnapshot*>::success(stream);
 }
 
-::media::Result<::media::ffmpeg::CodecContextPtr> AudioCodecResolverNode::buildDecoderContext(AVStream* stream) const
+::media::Result<::media::ffmpeg::CodecContextPtr> AudioCodecResolverNode::buildDecoderContext(const FFmpegInputStreamSnapshot& stream) const
 {
-    const AVCodec* decoder = stream && stream->codecpar ? avcodec_find_decoder(stream->codecpar->codec_id) : nullptr;
+    const AVCodec* decoder = stream.codecParameters ? avcodec_find_decoder(stream.codecParameters->codec_id) : nullptr;
     if (!decoder) {
         return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(
             ::media::ErrorInfo::unsupported("AudioCodecResolverNode audio decoder not found"));
@@ -245,12 +243,12 @@ MediaNodeKind AudioCodecResolverNode::staticKind() noexcept
         return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(
             ::media::ErrorInfo::allocationFailed("AudioCodecResolverNode failed to allocate decoder context"));
     }
-    const int copyRet = avcodec_parameters_to_context(context.get(), stream->codecpar);
+    const int copyRet = avcodec_parameters_to_context(context.get(), stream.codecParameters.get());
     if (copyRet < 0) {
         return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(
             FFmpegGraphError::fromCode(copyRet, "avcodec_parameters_to_context(audio decoder)"));
     }
-    context->pkt_timebase = stream->time_base;
+    context->pkt_timebase = AVRational{ stream.time.timeBase.num, stream.time.timeBase.den };
     const int openRet = avcodec_open2(context.get(), decoder, nullptr);
     if (openRet < 0) {
         return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(
@@ -261,7 +259,7 @@ MediaNodeKind AudioCodecResolverNode::staticKind() noexcept
 
 ::media::Result<::media::ffmpeg::CodecContextPtr> AudioCodecResolverNode::buildEncoderContext(
     MediaGraphExecutionContext& context,
-    const AVStream* stream,
+    const FFmpegInputStreamSnapshot& stream,
     const AVCodecContext* decoderContext) const
 {
     const MediaNodeOptions* options = nodeOptions(context);
@@ -281,7 +279,7 @@ MediaNodeKind AudioCodecResolverNode::staticKind() noexcept
     if (!requestedSampleRate) {
         return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(requestedSampleRate.error());
     }
-    const int sourceSampleRate = decoderContext ? decoderContext->sample_rate : (stream && stream->codecpar ? stream->codecpar->sample_rate : 0);
+    const int sourceSampleRate = decoderContext ? decoderContext->sample_rate : (stream.codecParameters ? stream.codecParameters->sample_rate : 0);
     auto targetSampleRate = chooseSampleRate(encoder,
                                              requestedSampleRate.value().value_or(0),
                                              sourceSampleRate);
@@ -310,8 +308,8 @@ MediaNodeKind AudioCodecResolverNode::staticKind() noexcept
             return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(
                 FFmpegGraphError::fromCode(ret, "av_channel_layout_copy(audio encoder)"));
         }
-    } else if (stream && stream->codecpar && stream->codecpar->ch_layout.nb_channels > 0) {
-        const int ret = av_channel_layout_copy(&encoderContext->ch_layout, &stream->codecpar->ch_layout);
+    } else if (stream.codecParameters && stream.codecParameters->ch_layout.nb_channels > 0) {
+        const int ret = av_channel_layout_copy(&encoderContext->ch_layout, &stream.codecParameters->ch_layout);
         if (ret < 0) {
             return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(
                 FFmpegGraphError::fromCode(ret, "av_channel_layout_copy(audio encoder codecpar)"));
@@ -327,9 +325,9 @@ MediaNodeKind AudioCodecResolverNode::staticKind() noexcept
     } else if (decoderContext && decoderContext->channels > 0) {
         encoderContext->channels = decoderContext->channels;
         encoderContext->channel_layout = decoderContext->channel_layout ? decoderContext->channel_layout : av_get_default_channel_layout(decoderContext->channels);
-    } else if (stream && stream->codecpar && stream->codecpar->channels > 0) {
-        encoderContext->channels = stream->codecpar->channels;
-        encoderContext->channel_layout = stream->codecpar->channel_layout ? stream->codecpar->channel_layout : av_get_default_channel_layout(stream->codecpar->channels);
+    } else if (stream.codecParameters && stream.codecParameters->channels > 0) {
+        encoderContext->channels = stream.codecParameters->channels;
+        encoderContext->channel_layout = stream.codecParameters->channel_layout ? stream.codecParameters->channel_layout : av_get_default_channel_layout(stream.codecParameters->channels);
     } else {
         return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(
             ::media::ErrorInfo::invalidArgument("AudioCodecResolverNode requires known audio channels"));
@@ -346,8 +344,8 @@ MediaNodeKind AudioCodecResolverNode::staticKind() noexcept
             return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(bits.error());
         }
         encoderContext->bit_rate = bits.value();
-    } else if (stream && stream->codecpar && stream->codecpar->bit_rate > 0) {
-        encoderContext->bit_rate = stream->codecpar->bit_rate;
+    } else if (stream.codecParameters && stream.codecParameters->bit_rate > 0) {
+        encoderContext->bit_rate = stream.codecParameters->bit_rate;
     }
 
     auto minBitrate = intOption(options, MediaTranscodeOptionKey::AudioMinBitrateKbps);

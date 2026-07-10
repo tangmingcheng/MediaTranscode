@@ -15,6 +15,7 @@ extern "C" {
 #include <utility>
 
 namespace media::ffmpeg::graph {
+
 namespace {
 
 int demuxInterruptCallback(void* opaque)
@@ -35,36 +36,42 @@ MediaNodeKind DemuxNode::staticKind() noexcept
     return MediaNodeKind::Demux;
 }
 
-::media::Status DemuxNode::onProcess(MediaGraphExecutionContext& context)
+::media::Status DemuxNode::start(MediaGraphExecutionContext& context)
+{
+    resetRuntimeState();
+    return FFmpegNodeRuntime::start(context);
+}
+
+::media::Result<MediaNodeProcessResult> DemuxNode::onProcess(MediaGraphExecutionContext& context)
 {
     if (!m_formatContext) {
         auto status = bindFormatContext(context);
         if (!status) {
-            return status;
+            return processProgress(status);
         }
 
         if (!m_formatContext) {
-            return ::media::Status::success();
+            return processWaiting();
         }
     }
 
     if (m_eofSent) {
-        return ::media::Status::success();
+        return processFinished();
     }
 
     auto packet = ::media::ffmpeg::makePacket();
     if (!packet) {
-        return ::media::Status::failure(
+        return ::media::Result<MediaNodeProcessResult>::failure(
             ::media::ErrorInfo::allocationFailed("DemuxNode failed: av_packet_alloc returned null"));
     }
 
     const int ret = av_read_frame(m_formatContext, packet.get());
     if (ret == AVERROR_EOF) {
-        return emitEof(context);
+        return processFinished(emitEof(context));
     }
 
     if (ret < 0) {
-        return FFmpegGraphError::statusFromCode(ret, "av_read_frame");
+        return processProgress(FFmpegGraphError::statusFromCode(ret, "av_read_frame"));
     }
 
     MediaStreamKind streamKind = MediaStreamKind::Unknown;
@@ -75,7 +82,7 @@ MediaNodeKind DemuxNode::staticKind() noexcept
 
     auto buffer = FFmpegBufferFactory::wrapPacket(std::move(packet), streamKind);
     if (!buffer) {
-        return ::media::Status::failure(buffer.error());
+        return ::media::Result<MediaNodeProcessResult>::failure(buffer.error());
     }
 
     const auto* packetBuffer = dynamic_cast<const FFmpegPacketBuffer*>(buffer.value().get());
@@ -83,25 +90,46 @@ MediaNodeKind DemuxNode::staticKind() noexcept
                                 ? packetBuffer->packet()->stream_index
                                 : invalidMediaStreamIndex;
 
-    return pushToMatchingOutputs(context, buffer.value(), streamKind, streamIndex);
+    return processProgress(pushToMatchingOutputs(context, buffer.value(), streamKind, streamIndex));
 }
 
 ::media::Status DemuxNode::stop(MediaGraphExecutionContext& context)
 {
-    m_abortRequested = true;
-    m_eofSent = false;
+    resetRuntimeState();
     return FFmpegNodeRuntime::stop(context);
 }
 
 void DemuxNode::abort(MediaGraphExecutionContext& context) noexcept
 {
-    m_abortRequested = true;
+    resetRuntimeState();
     FFmpegNodeRuntime::abort(context);
+}
+
+void DemuxNode::interrupt(MediaGraphExecutionContext&) noexcept
+{
+    m_abortRequested = true;
 }
 
 bool DemuxNode::abortRequested() const noexcept
 {
     return m_abortRequested.load();
+}
+
+bool DemuxNode::hasBoundFormatContext() const noexcept
+{
+    return m_formatContext != nullptr && m_formatContextOwner != nullptr;
+}
+
+void DemuxNode::resetRuntimeState() noexcept
+{
+    if (m_formatContext) {
+        m_formatContext->interrupt_callback.callback = nullptr;
+        m_formatContext->interrupt_callback.opaque = nullptr;
+    }
+    m_formatContext = nullptr;
+    m_formatContextOwner.reset();
+    m_eofSent = false;
+    m_abortRequested = false;
 }
 
 ::media::Status DemuxNode::bindFormatContext(MediaGraphExecutionContext& context)
@@ -120,8 +148,12 @@ bool DemuxNode::abortRequested() const noexcept
             ::media::ErrorInfo::invalidArgument("DemuxNode expected FFmpegFormatContextBuffer"));
     }
 
-    m_formatContextOwner = std::move(*input.value());
-    m_formatContext = formatBuffer->context();
+    m_formatContextOwner = formatBuffer->takeInputContext();
+    m_formatContext = m_formatContextOwner.get();
+    if (!m_formatContext) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("DemuxNode requires exclusive input format context ownership"));
+    }
     m_abortRequested = false;
     m_formatContext->interrupt_callback.callback = demuxInterruptCallback;
     m_formatContext->interrupt_callback.opaque = this;

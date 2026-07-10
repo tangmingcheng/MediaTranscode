@@ -7,9 +7,9 @@ extern "C" {
 #include <libavutil/pixfmt.h>
 }
 
-struct AVFormatContext;
-
 namespace media::ffmpeg::graph {
+
+struct FFmpegInputStreamSnapshot;
 
 class CodecResolverNode final : public FFmpegNodeRuntime {
 public:
@@ -17,11 +17,11 @@ public:
     static MediaNodeKind staticKind() noexcept;
 
 protected:
-    ::media::Status onProcess(MediaGraphExecutionContext& context) override;
+    ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context) override;
 
 private:
-    ::media::Status resolveDecoder(MediaGraphExecutionContext& context, AVFormatContext* formatContext);
-    ::media::Status resolveEncoder(MediaGraphExecutionContext& context, AVFormatContext* formatContext);
+    ::media::Status resolveDecoder(MediaGraphExecutionContext& context, const FFmpegInputStreamSnapshot& stream);
+    ::media::Status resolveEncoder(MediaGraphExecutionContext& context, const FFmpegInputStreamSnapshot& stream);
 
 private:
     bool m_emitted = false;

@@ -94,37 +94,71 @@ MediaNodeKind VideoFilterNode::staticKind() noexcept
     return MediaNodeKind::VideoFilter;
 }
 
-::media::Status VideoFilterNode::onProcess(MediaGraphExecutionContext& context)
+::media::Result<MediaNodeProcessResult> VideoFilterNode::onProcess(MediaGraphExecutionContext& context)
 {
+    if (m_terminals.finished()) {
+        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
+    }
+
     if (!m_encoderContext) {
         auto codecInput = tryPopInputOptional(context, "codec");
         if (!codecInput) {
-            return ::media::Status::failure(codecInput.error());
+            return ::media::Result<MediaNodeProcessResult>::failure(codecInput.error());
         }
         if (!codecInput.value()) {
-            return ::media::Status::success();
+            return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::waiting());
         }
-        return bindEncoderConfig(context, *codecInput.value());
+        auto bindStatus = bindEncoderConfig(context, *codecInput.value());
+        if (!bindStatus) {
+            return ::media::Result<MediaNodeProcessResult>::failure(bindStatus.error());
+        }
+        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
     }
 
     auto frameInput = tryPopInputOptional(context, "frame");
     if (!frameInput) {
-        return ::media::Status::failure(frameInput.error());
+        return ::media::Result<MediaNodeProcessResult>::failure(frameInput.error());
     }
     if (!frameInput.value()) {
-        return drainFrames(context);
+        MediaChannel* frameChannel = context.findInputChannel(nodeId(), "frame");
+        if (frameChannel && frameChannel->closed()) {
+            m_terminals.markClosed("frame");
+            return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
+        }
+        auto drainStatus = drainFrames(context);
+        if (!drainStatus) {
+            return ::media::Result<MediaNodeProcessResult>::failure(drainStatus.error());
+        }
+        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::waiting());
     }
 
     MediaBufferRef frameBuffer = *frameInput.value();
     if (frameBuffer->isEof() || frameBuffer->isFlush()) {
+        const bool eof = frameBuffer->isEof();
+        if (eof && m_eofEmitted) {
+            return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
+        }
         auto flushStatus = flushGraph(context);
         if (!flushStatus) {
-            return flushStatus;
+            return ::media::Result<MediaNodeProcessResult>::failure(flushStatus.error());
         }
-        return emitOutput(context, "frame", frameBuffer);
+        auto emitStatus = emitOutput(context, "frame", frameBuffer);
+        if (!emitStatus) {
+            return ::media::Result<MediaNodeProcessResult>::failure(emitStatus.error());
+        }
+        if (eof) {
+            m_terminals.markEof("frame");
+            m_eofEmitted = true;
+        }
+        return ::media::Result<MediaNodeProcessResult>::success(
+            eof ? MediaNodeProcessResult::finished() : MediaNodeProcessResult::progress());
     }
 
-    return sendFrame(context, frameBuffer);
+    auto sendStatus = sendFrame(context, frameBuffer);
+    if (!sendStatus) {
+        return ::media::Result<MediaNodeProcessResult>::failure(sendStatus.error());
+    }
+    return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
 }
 
 ::media::Status VideoFilterNode::bindEncoderConfig(MediaGraphExecutionContext& context, const MediaBufferRef& buffer)

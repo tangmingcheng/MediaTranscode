@@ -13,18 +13,19 @@ public:
     void abort(MediaGraphExecutionContext& context) noexcept override;
 
 protected:
-    ::media::Status onProcess(MediaGraphExecutionContext& context) override;
+    ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context) override;
 
 private:
     ::media::Status configure(MediaGraphExecutionContext& context);
-    ::media::Status processCodec(MediaGraphExecutionContext& context,
+    ::media::Result<bool> processCodec(MediaGraphExecutionContext& context,
                                  const char* inputPort,
                                  const char* outputPort);
-    ::media::Status processPacket(MediaGraphExecutionContext& context,
+    ::media::Result<bool> processPacket(MediaGraphExecutionContext& context,
                                   const char* inputPort,
                                   const char* outputPort,
                                   bool expected,
                                   bool& ready,
+                                  bool& eof,
                                   MediaBufferRef& pending);
     ::media::Status releaseIfReady(MediaGraphExecutionContext& context);
     void reset() noexcept;
@@ -37,6 +38,8 @@ private:
     bool m_open = false;
     bool m_videoReady = false;
     bool m_audioReady = false;
+    bool m_videoEof = false;
+    bool m_audioEof = false;
     MediaBufferRef m_pendingVideo;
     MediaBufferRef m_pendingAudio;
 };

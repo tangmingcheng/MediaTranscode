@@ -57,25 +57,47 @@ MediaNodeKind AudioResampleNode::staticKind() noexcept
     return MediaNodeKind::AudioResample;
 }
 
-::media::Status AudioResampleNode::onProcess(MediaGraphExecutionContext& context)
+::media::Result<MediaNodeProcessResult> AudioResampleNode::onProcess(MediaGraphExecutionContext& context)
 {
+    if (m_terminals.finished()) {
+        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
+    }
+
     auto bindStatus = bindEncoderContext(context);
     if (!bindStatus) {
-        return bindStatus;
+        return ::media::Result<MediaNodeProcessResult>::failure(bindStatus.error());
     }
     if (!hasCodecContext()) {
-        return ::media::Status::success();
+        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::waiting());
     }
 
     auto frameInput = tryPopInputOptional(context, "frame");
     if (!frameInput) {
-        return ::media::Status::failure(frameInput.error());
+        return ::media::Result<MediaNodeProcessResult>::failure(frameInput.error());
     }
     if (!frameInput.value()) {
-        return ::media::Status::success();
+        MediaChannel* frameChannel = context.findInputChannel(nodeId(), "frame");
+        if (frameChannel && frameChannel->closed()) {
+            m_terminals.markClosed("frame");
+            return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
+        }
+        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::waiting());
     }
 
-    return processFrame(context, *frameInput.value());
+    const bool eof = frameInput.value()->get()->isEof();
+    if (eof && m_eofEmitted) {
+        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
+    }
+    auto processStatus = processFrame(context, *frameInput.value());
+    if (!processStatus) {
+        return ::media::Result<MediaNodeProcessResult>::failure(processStatus.error());
+    }
+    if (eof) {
+        m_terminals.markEof("frame");
+        m_eofEmitted = true;
+    }
+    return ::media::Result<MediaNodeProcessResult>::success(
+        eof ? MediaNodeProcessResult::finished() : MediaNodeProcessResult::progress());
 }
 
 ::media::Status AudioResampleNode::bindEncoderContext(MediaGraphExecutionContext& context)

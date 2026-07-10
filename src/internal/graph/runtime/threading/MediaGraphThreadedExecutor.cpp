@@ -4,18 +4,6 @@
 #include "internal/graph/runtime/lifecycle/MediaGraphLifecycle.h"
 
 namespace media::ffmpeg::graph {
-namespace {
-
-bool shouldInterruptOnThreadedStop(const MediaGraphExecutionContext& context,
-                                   const MediaGraphWorker& worker) noexcept
-{
-    const MediaGraph* graph = context.graph();
-    const MediaNode* node = graph ? graph->findNode(worker.nodeId()) : nullptr;
-    return node && node->kind == MediaNodeKind::Demux;
-}
-
-} // namespace
-
 void MediaGraphThreadedExecutor::setPolicy(MediaThreadingPolicy policy) noexcept
 {
     m_policy = policy;
@@ -47,22 +35,27 @@ const MediaThreadingPolicy& MediaGraphThreadedExecutor::policy() const noexcept
     }
 
     MediaGraphWorkerConfig workerConfig;
-    workerConfig.idleSleepMs = m_policy.idleSleepMs;
-    workerConfig.maxIdleSpins = m_policy.maxIdleSpins;
+    const auto runtimeNodes = scheduler.orderedRuntimeNodes(context);
+    m_workers.clear();
+    m_workers.reserve(runtimeNodes.size());
 
-    for (MediaRuntimeNode* node : scheduler.orderedRuntimeNodes(context)) {
+    // Construct every worker before any worker thread is allowed to run. Worker
+    // construction binds its node wakeup in the execution context; interleaving
+    // that registry mutation with a running worker is undefined behaviour.
+    for (MediaRuntimeNode* node : runtimeNodes) {
         if (!node) {
             continue;
         }
 
-        auto worker = std::make_unique<MediaGraphWorker>(*node, context, workerConfig);
+        m_workers.push_back(std::make_unique<MediaGraphWorker>(*node, context, workerConfig));
+    }
+
+    for (auto& worker : m_workers) {
         auto status = worker->start();
         if (!status) {
             abort(context, scheduler);
             return status;
         }
-
-        m_workers.push_back(std::move(worker));
     }
 
     m_state = MediaGraphThreadedExecutorState::Running;
@@ -84,9 +77,6 @@ const MediaThreadingPolicy& MediaGraphThreadedExecutor::policy() const noexcept
     for (auto& worker : m_workers) {
         if (worker) {
             worker->requestStop();
-            if (shouldInterruptOnThreadedStop(context, *worker)) {
-                worker->abort();
-            }
         }
     }
 
@@ -119,6 +109,8 @@ void MediaGraphThreadedExecutor::abort(MediaGraphExecutionContext& context,
             worker->abort();
         }
     }
+
+    MediaGraphLifecycle::abortChannels(context);
 
     for (auto& worker : m_workers) {
         if (worker) {
@@ -158,6 +150,10 @@ void MediaGraphThreadedExecutor::refreshMetrics() const noexcept
 {
     m_metrics.activeWorkers = 0;
     m_metrics.workerIterations = 0;
+    m_metrics.workerProcessCalls = 0;
+    m_metrics.workerProgress = 0;
+    m_metrics.workerWaits = 0;
+    m_metrics.workerWakeups = 0;
     m_metrics.workerErrors = 0;
 
     for (const auto& worker : m_workers) {
@@ -169,7 +165,11 @@ void MediaGraphThreadedExecutor::refreshMetrics() const noexcept
             ++m_metrics.activeWorkers;
         }
 
-        m_metrics.workerIterations += worker->metrics().iterations;
+        m_metrics.workerProgress += worker->metrics().progress;
+        m_metrics.workerProcessCalls += worker->metrics().processCalls;
+        m_metrics.workerIterations = m_metrics.workerProcessCalls;
+        m_metrics.workerWaits += worker->metrics().waits;
+        m_metrics.workerWakeups += worker->metrics().wakeups;
         m_metrics.workerErrors += worker->metrics().errors;
     }
 }

@@ -211,6 +211,23 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
     return ::media::Result<std::optional<MediaBufferRef>>::success(std::nullopt);
 }
 
+::media::Result<std::optional<FFmpegNodeRuntime::PoppedChannelBuffer>>
+FFmpegNodeRuntime::tryPopFirstInputWithChannelOptional(MediaGraphExecutionContext& context)
+{
+    for (MediaChannel* channel : context.inputChannels(nodeId())) {
+        if (!channel) continue;
+        MediaBufferRef buffer;
+        if (!channel->tryPop(buffer)) continue;
+        auto typeStatus = validateChannelBufferType(*channel, buffer, "tryPopFirstInputWithChannel");
+        if (!typeStatus) {
+            return ::media::Result<std::optional<PoppedChannelBuffer>>::failure(typeStatus.error());
+        }
+        return ::media::Result<std::optional<PoppedChannelBuffer>>::success(
+            PoppedChannelBuffer{ channel, std::move(buffer) });
+    }
+    return ::media::Result<std::optional<PoppedChannelBuffer>>::success(std::nullopt);
+}
+
 ::media::Result<std::optional<MediaBufferRef>> FFmpegNodeRuntime::tryPopInputOptional(MediaGraphExecutionContext& context,
                                                                                        const std::string& portName)
 {
@@ -406,31 +423,6 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
         << " stream_index=" << streamIndex
         << " " << mediaGraphDiagnosticDescribeBuffer(buffer);
     return ::media::Status::failure(::media::ErrorInfo::notInitialized(out.str()));
-}
-
-::media::Status FFmpegNodeRuntime::forward(MediaGraphExecutionContext& context,
-                                            const std::string& inputPortName,
-                                            const std::string& outputPortName)
-{
-    auto buffer = popInput(context, inputPortName);
-    if (!buffer) {
-        return ::media::Status::failure(buffer.error());
-    }
-
-    return emitOutput(context, outputPortName, std::move(buffer).value());
-}
-
-::media::Status FFmpegNodeRuntime::forwardFirstInputToAllOutputs(MediaGraphExecutionContext& context)
-{
-    auto buffer = tryPopFirstInputOptional(context);
-    if (!buffer) {
-        return ::media::Status::failure(buffer.error());
-    }
-    if (!buffer.value()) {
-        return ::media::Status::success();
-    }
-
-    return pushToAllOutputs(context, *buffer.value());
 }
 
 std::vector<MediaChannel*> FFmpegNodeRuntime::outputChannels(MediaGraphExecutionContext& context)

@@ -43,32 +43,33 @@ MediaNodeKind SdpWriterNode::staticKind() noexcept
     return MediaNodeKind::SdpWriter;
 }
 
-::media::Status SdpWriterNode::onProcess(MediaGraphExecutionContext& context)
+::media::Result<MediaNodeProcessResult> SdpWriterNode::onProcess(MediaGraphExecutionContext& context)
 {
     if (m_written) {
-        return ::media::Status::success();
+        return processFinished();
     }
     auto configured = configureExpectedContexts(context);
     if (!configured) {
-        return configured;
+        return processProgress(configured);
     }
 
     auto input = tryPopFirstInputOptional(context);
     if (!input) {
-        return ::media::Status::failure(input.error());
+        return ::media::Result<MediaNodeProcessResult>::failure(input.error());
     }
     if (!input.value()) {
-        return ::media::Status::success();
+        return processWaiting();
     }
 
     auto* formatBuffer = dynamic_cast<FFmpegFormatContextBuffer*>(input.value()->get());
     AVFormatContext* formatContext = formatBuffer ? formatBuffer->context() : nullptr;
     if (!formatContext) {
-        return ::media::Status::failure(
+        return ::media::Result<MediaNodeProcessResult>::failure(
             ::media::ErrorInfo::invalidArgument("SdpWriterNode expected FFmpeg format context"));
     }
     m_formatBuffers.push_back(*input.value());
-    return writeIfReady(context);
+    auto status = writeIfReady(context);
+    return m_written ? processFinished(status) : processProgress(status);
 }
 
 ::media::Status SdpWriterNode::configureExpectedContexts(MediaGraphExecutionContext& context)

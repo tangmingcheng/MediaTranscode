@@ -13,7 +13,7 @@ public:
     static MediaNodeKind staticKind() noexcept;
 
 protected:
-    ::media::Status onProcess(MediaGraphExecutionContext& context) override;
+    ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context) override;
     ::media::Status stop(MediaGraphExecutionContext& context) override;
     void abort(MediaGraphExecutionContext& context) noexcept override;
 

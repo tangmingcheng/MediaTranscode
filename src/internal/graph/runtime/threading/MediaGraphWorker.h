@@ -6,22 +6,21 @@
 #include "media_transcode/Result.h"
 
 #include <atomic>
-#include <chrono>
 #include <cstdint>
 #include <thread>
 
 namespace media::ffmpeg::graph {
 
 struct MediaGraphWorkerConfig {
-    uint32_t idleSleepMs = 1;
-    uint32_t maxIdleSpins = 4;
     uint32_t maxConsecutiveErrors = 1;
 };
 
 struct MediaGraphWorkerMetrics {
-    uint64_t iterations = 0;
-    uint64_t idleIterations = 0;
-    uint64_t errors = 0;
+    std::atomic_uint64_t processCalls{ 0 };
+    std::atomic_uint64_t progress{ 0 };
+    std::atomic_uint64_t waits{ 0 };
+    std::atomic_uint64_t wakeups{ 0 };
+    std::atomic_uint64_t errors{ 0 };
 };
 
 class MediaGraphWorker final {
@@ -52,6 +51,7 @@ private:
 private:
     MediaRuntimeNode& m_node;
     MediaGraphExecutionContext& m_context;
+    MediaNodeWakeup& m_wakeup;
     MediaGraphWorkerConfig m_config;
     std::thread m_thread;
     std::atomic_bool m_running{ false };

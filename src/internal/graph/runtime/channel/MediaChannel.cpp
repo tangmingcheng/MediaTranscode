@@ -1,6 +1,7 @@
 #include "internal/graph/runtime/channel/MediaChannel.h"
 
 #include "internal/graph/runtime/queue/MediaQueueFactory.h"
+#include "internal/graph/runtime/threading/MediaNodeWakeup.h"
 
 namespace media::ffmpeg::graph {
 
@@ -47,6 +48,9 @@ const MediaChannelBinding& MediaChannel::binding() const noexcept
     auto status = m_queue->push(std::move(buffer));
     if (status) {
         m_metrics.pushed++;
+        if (m_consumerWakeup) {
+            m_consumerWakeup->notify();
+        }
     }
     refreshQueueMetrics();
     return status;
@@ -61,6 +65,9 @@ bool MediaChannel::tryPush(MediaBufferRef buffer)
     const bool ok = m_queue->tryPush(std::move(buffer));
     if (ok) {
         m_metrics.pushed++;
+        if (m_consumerWakeup) {
+            m_consumerWakeup->notify();
+        }
     }
     refreshQueueMetrics();
     return ok;
@@ -101,6 +108,9 @@ void MediaChannel::close()
         m_queue->close();
     }
     m_metrics.closed++;
+    if (m_consumerWakeup) {
+        m_consumerWakeup->notify();
+    }
     refreshQueueMetrics();
 }
 
@@ -110,6 +120,9 @@ void MediaChannel::abort()
         m_queue->abort();
     }
     m_metrics.aborted++;
+    if (m_consumerWakeup) {
+        m_consumerWakeup->notify();
+    }
     refreshQueueMetrics();
 }
 
@@ -119,6 +132,9 @@ void MediaChannel::clear()
         m_queue->clear();
     }
     m_metrics.cleared++;
+    if (m_consumerWakeup) {
+        m_consumerWakeup->notify();
+    }
     refreshQueueMetrics();
 }
 
@@ -165,6 +181,11 @@ const MediaHardwareDescriptor& MediaChannel::hardwareDescriptor() const noexcept
 const MediaChannelMetrics& MediaChannel::metrics() const noexcept
 {
     return m_metrics;
+}
+
+void MediaChannel::setConsumerWakeup(MediaNodeWakeup& wakeup) noexcept
+{
+    m_consumerWakeup = &wakeup;
 }
 
 void MediaChannel::refreshQueueMetrics()

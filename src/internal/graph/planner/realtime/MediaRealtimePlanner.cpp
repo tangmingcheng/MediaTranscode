@@ -87,8 +87,6 @@ MediaGraphPlanningPolicy MediaRealtimePlanner::buildPolicy(const MediaRealtimePl
 
     policy.threadingPolicy.mode = MediaThreadingMode::PerNodeWorker;
     policy.threadingPolicy.priority = MediaThreadPriority::High;
-    policy.threadingPolicy.idleSleepMs = 0;
-    policy.threadingPolicy.maxIdleSpins = 1;
     policy.threadingPolicy.collectWorkerMetrics = true;
 
     policy.optimizationPolicy.level = MediaGraphOptimizationLevel::Realtime;

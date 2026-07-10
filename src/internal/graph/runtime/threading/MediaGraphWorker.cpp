@@ -7,6 +7,7 @@ MediaGraphWorker::MediaGraphWorker(MediaRuntimeNode& node,
                                    MediaGraphWorkerConfig config)
     : m_node(node)
     , m_context(context)
+    , m_wakeup(context.nodeWakeup(node.nodeId()))
     , m_config(config)
 {
 }
@@ -32,13 +33,16 @@ MediaGraphWorker::~MediaGraphWorker()
 void MediaGraphWorker::requestStop() noexcept
 {
     m_stopRequested = true;
+    m_wakeup.interrupt();
+    m_node.interrupt(m_context);
 }
 
 void MediaGraphWorker::abort() noexcept
 {
     m_aborted = true;
     m_stopRequested = true;
-    m_node.abort(m_context);
+    m_wakeup.interrupt();
+    m_node.interrupt(m_context);
 }
 
 void MediaGraphWorker::join()
@@ -77,13 +81,14 @@ void MediaGraphWorker::run()
 {
     m_running = true;
     uint32_t consecutiveErrors = 0;
-    uint32_t idleSpinsSinceYield = 0;
+    m_wakeup.reset();
 
     while (!m_stopRequested && !m_aborted) {
-        auto status = m_node.process(m_context);
-        ++m_metrics.iterations;
+        const MediaNodeWakeup::Sequence observedSequence = m_wakeup.sequence();
+        ++m_metrics.processCalls;
+        auto result = m_node.process(m_context);
 
-        if (!status) {
+        if (!result) {
             ++m_metrics.errors;
             ++consecutiveErrors;
             if (consecutiveErrors >= m_config.maxConsecutiveErrors) {
@@ -94,17 +99,23 @@ void MediaGraphWorker::run()
             consecutiveErrors = 0;
         }
 
-        ++m_metrics.idleIterations;
-        if (m_config.idleSleepMs > 0) {
-            // non-realtime idle backoff; realtime plans must set idleSleepMs to 0.
-            std::this_thread::sleep_for(std::chrono::milliseconds(m_config.idleSleepMs));
-            idleSpinsSinceYield = 0;
-        } else if (m_config.maxIdleSpins > 0) {
-            ++idleSpinsSinceYield;
-            if (idleSpinsSinceYield >= m_config.maxIdleSpins) {
-                std::this_thread::yield();
-                idleSpinsSinceYield = 0;
+        if (!result) {
+            continue;
+        }
+
+        switch (result.value().state) {
+        case MediaNodeProcessState::Progress:
+            ++m_metrics.progress;
+            break;
+        case MediaNodeProcessState::Waiting:
+            ++m_metrics.waits;
+            if (m_wakeup.waitForChange(observedSequence)) {
+                ++m_metrics.wakeups;
             }
+            break;
+        case MediaNodeProcessState::Finished:
+            m_running = false;
+            return;
         }
     }
 

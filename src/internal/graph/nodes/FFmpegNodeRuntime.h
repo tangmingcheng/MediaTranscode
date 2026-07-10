@@ -23,6 +23,10 @@ public:
     ~FFmpegNodeRuntime() override = default;
 
 protected:
+    struct PoppedChannelBuffer {
+        MediaChannel* channel = nullptr;
+        MediaBufferRef buffer;
+    };
     const MediaNodeOptions* nodeOptions(MediaGraphExecutionContext& context) const noexcept;
     std::string nodeOption(MediaGraphExecutionContext& context,
                            const std::string& key,
@@ -32,6 +36,7 @@ protected:
                                              const std::string& portName);
     ::media::Result<MediaBufferRef> tryPopFirstInput(MediaGraphExecutionContext& context);
     ::media::Result<std::optional<MediaBufferRef>> tryPopFirstInputOptional(MediaGraphExecutionContext& context);
+    ::media::Result<std::optional<PoppedChannelBuffer>> tryPopFirstInputWithChannelOptional(MediaGraphExecutionContext& context);
     ::media::Result<std::optional<MediaBufferRef>> tryPopInputOptional(MediaGraphExecutionContext& context,
                                                                         const std::string& portName);
 
@@ -48,11 +53,6 @@ protected:
                                            int streamIndex = invalidMediaStreamIndex,
                                            RouteMatchPolicy policy = RouteMatchPolicy::RequireMatch);
 
-    ::media::Status forward(MediaGraphExecutionContext& context,
-                            const std::string& inputPortName,
-                            const std::string& outputPortName);
-    ::media::Status forwardFirstInputToAllOutputs(MediaGraphExecutionContext& context);
-
     std::vector<MediaChannel*> outputChannels(MediaGraphExecutionContext& context);
 };
 
@@ -62,7 +62,7 @@ public: \
     explicit ClassName(MediaNodeId nodeId); \
     static MediaNodeKind staticKind() noexcept; \
 protected: \
-    ::media::Status onProcess(MediaGraphExecutionContext& context) override; \
+    ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context) override; \
 };
 
 #define MEDIA_FFMPEG_GRAPH_DEFINE_FFMPEG_NODE(ClassName, KindValue) \
@@ -74,9 +74,9 @@ MediaNodeKind ClassName::staticKind() noexcept \
 { \
     return KindValue; \
 } \
-::media::Status ClassName::onProcess(MediaGraphExecutionContext&) \
+::media::Result<MediaNodeProcessResult> ClassName::onProcess(MediaGraphExecutionContext&) \
 { \
-    return ::media::Status::success(); \
+    return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished()); \
 }
 
 } // namespace media::ffmpeg::graph

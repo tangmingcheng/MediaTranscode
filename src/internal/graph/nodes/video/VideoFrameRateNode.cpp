@@ -88,39 +88,71 @@ MediaNodeKind VideoFrameRateNode::staticKind() noexcept
     return MediaNodeKind::VideoFrameRate;
 }
 
-::media::Status VideoFrameRateNode::onProcess(MediaGraphExecutionContext& context)
+::media::Result<MediaNodeProcessResult> VideoFrameRateNode::onProcess(MediaGraphExecutionContext& context)
 {
+    if (m_terminals.finished()) {
+        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
+    }
+
     auto input = tryPopFirstInputOptional(context);
     if (!input) {
-        return ::media::Status::failure(input.error());
+        return ::media::Result<MediaNodeProcessResult>::failure(input.error());
     }
     if (!input.value()) {
-        return drainPending(context);
+        MediaChannel* frameInput = context.findInputChannel(nodeId(), "frame");
+        if (frameInput && frameInput->closed()) {
+            m_terminals.markClosed("frame");
+            return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
+        }
+        const bool hadPendingFrames = !m_pendingFrames.empty();
+        auto drainStatus = drainPending(context);
+        if (!drainStatus) {
+            return ::media::Result<MediaNodeProcessResult>::failure(drainStatus.error());
+        }
+        return ::media::Result<MediaNodeProcessResult>::success(
+            hadPendingFrames ? MediaNodeProcessResult::progress() : MediaNodeProcessResult::waiting());
     }
 
     MediaBufferRef buffer = *input.value();
     if (buffer->isEof() || buffer->isFlush()) {
+        const bool eof = buffer->isEof();
+        if (eof && m_eofEmitted) {
+            return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
+        }
         m_flushed = true;
         auto drainStatus = drainPending(context);
         if (!drainStatus) {
-            return drainStatus;
+            return ::media::Result<MediaNodeProcessResult>::failure(drainStatus.error());
         }
-        return broadcastControlToAllOutputs(context, buffer);
+        auto broadcastStatus = broadcastControlToAllOutputs(context, buffer);
+        if (!broadcastStatus) {
+            return ::media::Result<MediaNodeProcessResult>::failure(broadcastStatus.error());
+        }
+        if (eof) {
+            m_terminals.markEof("frame");
+            m_eofEmitted = true;
+        }
+        return ::media::Result<MediaNodeProcessResult>::success(
+            eof ? MediaNodeProcessResult::finished() : MediaNodeProcessResult::progress());
     }
 
     if (!m_initialized) {
         auto initStatus = initializeFromFirstFrame(context, buffer);
         if (!initStatus) {
-            return initStatus;
+            return ::media::Result<MediaNodeProcessResult>::failure(initStatus.error());
         }
     }
 
     auto sendStatus = sendFrame(context, buffer);
     if (!sendStatus) {
-        return sendStatus;
+        return ::media::Result<MediaNodeProcessResult>::failure(sendStatus.error());
     }
 
-    return drainPending(context);
+    auto drainStatus = drainPending(context);
+    if (!drainStatus) {
+        return ::media::Result<MediaNodeProcessResult>::failure(drainStatus.error());
+    }
+    return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
 }
 
 ::media::Status VideoFrameRateNode::initializeFromFirstFrame(MediaGraphExecutionContext& context,

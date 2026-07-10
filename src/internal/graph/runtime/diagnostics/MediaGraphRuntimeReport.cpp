@@ -7,6 +7,10 @@ std::string MediaGraphRuntimeReport::summary() const
     return "runtime report: queued=" + std::to_string(metrics.queuedBuffers) +
            ", peakQueued=" + std::to_string(metrics.peakQueuedBuffers) +
            ", workers=" + std::to_string(metrics.activeWorkers) +
+           ", workerProgress=" + std::to_string(metrics.workerProgress) +
+           ", workerProcessCalls=" + std::to_string(metrics.workerProcessCalls) +
+           ", workerWaits=" + std::to_string(metrics.workerWaits) +
+           ", workerWakeups=" + std::to_string(metrics.workerWakeups) +
            ", workerErrors=" + std::to_string(metrics.workerErrors) +
            ", totalPushed=" + std::to_string(metrics.totalPushed) +
            ", totalPopped=" + std::to_string(metrics.totalPopped) +

@@ -457,8 +457,6 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
     MediaThreadingPolicy policy;
     policy.mode = MediaThreadingMode::PerNodeWorker;
     policy.priority = MediaThreadPriority::High;
-    policy.idleSleepMs = 0;
-    policy.maxIdleSpins = 1;
     policy.collectWorkerMetrics = true;
     return policy;
 }

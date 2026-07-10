@@ -65,6 +65,7 @@ void MediaGraphExecutionContext::reset()
     m_graph = nullptr;
     m_channels.clear();
     m_executionOrder.clear();
+    m_nodeWakeups.clear();
     m_compiled = false;
     mediaGraphDiagnosticSetGlobalConfig(m_diagnosticConfig);
 }
@@ -204,6 +205,25 @@ std::vector<MediaChannel*> MediaGraphExecutionContext::outputChannels(MediaNodeI
     return result;
 }
 
+MediaNodeWakeup& MediaGraphExecutionContext::nodeWakeup(MediaNodeId nodeId)
+{
+    auto& wakeup = m_nodeWakeups[nodeId.value];
+    if (!wakeup) {
+        wakeup = std::make_unique<MediaNodeWakeup>();
+    }
+    return *wakeup;
+}
+
+void MediaGraphExecutionContext::interruptNodeWakeups() noexcept
+{
+    for (auto& [nodeId, wakeup] : m_nodeWakeups) {
+        (void)nodeId;
+        if (wakeup) {
+            wakeup->interrupt();
+        }
+    }
+}
+
 ::media::Status MediaGraphExecutionContext::buildChannels(const MediaGraph& graph)
 {
     for (const auto& edge : graph.edges()) {
@@ -213,6 +233,7 @@ std::vector<MediaChannel*> MediaGraphExecutionContext::outputChannels(MediaNodeI
         }
 
         if (MediaChannel* channel = result.value()) {
+            channel->setConsumerWakeup(nodeWakeup(edge.to.nodeId));
             mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
                                     MediaGraphDiagnosticPhase::RuntimeChannel,
                                     std::string("create ") + mediaGraphDiagnosticDescribeChannel(*channel));
