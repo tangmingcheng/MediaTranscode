@@ -190,6 +190,9 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
 
     add_executable(media_transcode_event_runtime_tests
         tests/unit/test_event_driven_runtime.cpp
+        tests/unit/event_runtime_threading_queue_tests.cpp
+        tests/unit/event_runtime_ffmpeg_ownership_tests.cpp
+        tests/unit/event_runtime_multi_input_tests.cpp
     )
     media_transcode_configure_test(media_transcode_event_runtime_tests)
     add_test(NAME media_transcode_event_runtime_tests COMMAND media_transcode_event_runtime_tests)

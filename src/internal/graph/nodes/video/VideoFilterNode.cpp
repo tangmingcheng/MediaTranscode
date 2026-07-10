@@ -125,11 +125,13 @@ MediaNodeKind VideoFilterNode::staticKind() noexcept
             m_terminals.markClosed("frame");
             return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
         }
-        auto drainStatus = drainFrames(context);
+        bool produced = false;
+        auto drainStatus = drainFrames(context, &produced);
         if (!drainStatus) {
             return ::media::Result<MediaNodeProcessResult>::failure(drainStatus.error());
         }
-        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::waiting());
+        return ::media::Result<MediaNodeProcessResult>::success(
+            produced ? MediaNodeProcessResult::progress() : MediaNodeProcessResult::waiting());
     }
 
     MediaBufferRef frameBuffer = *frameInput.value();
@@ -303,8 +305,9 @@ MediaNodeKind VideoFilterNode::staticKind() noexcept
     return drainFrames(context);
 }
 
-::media::Status VideoFilterNode::drainFrames(MediaGraphExecutionContext& context)
+::media::Status VideoFilterNode::drainFrames(MediaGraphExecutionContext& context, bool* produced)
 {
+    if (produced) *produced = false;
     if (!m_graphInitialized) {
         return ::media::Status::success();
     }
@@ -334,6 +337,7 @@ MediaNodeKind VideoFilterNode::staticKind() noexcept
         if (!emitStatus) {
             return emitStatus;
         }
+        if (produced) *produced = true;
     }
 }
 

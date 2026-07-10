@@ -16,6 +16,7 @@ Eliminate realtime audio/video DAG busy waiting without fixed sleeps or node-spe
 - [x] Make workers continue on progress, block without lost wakeups on waiting, and exit on finished.
 - [x] Replace SPSC blocking spin loops with condition-variable waits and deterministic lifecycle notifications.
 - [x] Add multi-input terminal tracking and exact mux config/terminal completion state.
+- [x] Add lifecycle-reset round-robin input arbitration so continuously busy inputs cannot starve later channels.
 - [x] Remove realtime idle sleep/spin planner parameters.
 - [x] Construct all workers before starting any thread, then start them in a second stage.
 - [x] Publish immutable per-stream FFmpeg snapshots after input probing, including deep-copied codec parameters, format, time, index, and stream kind.
@@ -30,7 +31,7 @@ Eliminate realtime audio/video DAG busy waiting without fixed sleeps or node-spe
 ## Acceptance Evidence
 
 - Event-runtime and realtime graph test executables pass; CTest passes 2/2.
-- Hardware CUDA/NVENC 60-second smoke after the final ownership fixes: 0.40% whole-machine CPU, 0.875 CPU seconds, 1663 frames, `drop_frames=0`, `workerErrors=0`.
+- Hardware CUDA/NVENC 60-second smoke on the final implementation: 0.58% whole-machine CPU, 1.281 CPU seconds, 1663 frames, `drop_frames=0`, `workerErrors=0`.
 - Software 60-second smoke: 16.8% whole-machine CPU and 36.953 CPU seconds; scheduler idle spinning is absent and codec cost remains measurable.
 - `git diff --check` passes; modified text files remain UTF-8 with CRLF line endings.
 - VLC subjective playback completed: the observer reported smooth video, normal audio, and no perceptible A/V drift.

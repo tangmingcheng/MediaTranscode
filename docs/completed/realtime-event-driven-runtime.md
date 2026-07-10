@@ -9,9 +9,11 @@ Realtime per-node workers and SPSC blocking operations retried with yield loops 
 - Every runtime node directly returns `Progress`, `Waiting`, or `Finished`; errors remain explicit failures.
 - Per-node sequence wakeups provide targeted channel notification and lost-wakeup-safe waiting.
 - Multi-input nodes track terminal state by channel identity. Mux completion independently tracks exact config keys, terminal channels, header, pending packets, and trailer.
+- Multi-input consumption uses lifecycle-reset round-robin arbitration, preventing a continuously busy first channel from starving later inputs.
 - SPSC blocking operations use condition variables with deterministic close and abort behavior.
 - The executor constructs all workers before starting threads, avoiding partially initialized runtime observation.
 - Input nodes publish immutable per-stream snapshots after probing. Snapshots own deep-copied codec parameters plus format, time, index, and kind.
+- Snapshots freeze the FFmpeg-resolved source frame rate while the probed input context is still available, preserving `av_guess_frame_rate`, average-rate, and real-rate behavior.
 - Demux exclusively owns and mutates the input format context. Packet normalization, source configuration, and codec resolvers consume snapshots only.
 
 ## Test Commands And Results
@@ -38,7 +40,7 @@ Result: passed, 2/2 tests.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File out\build\x64-debug\codex_av_scheduler_smoke.ps1
 ```
 
-- Hardware CUDA/NVENC, 60 seconds after the final ownership fixes: 0.40% whole-machine CPU, 0.875 CPU seconds, 1663 frames, `drop_frames=0`, `workerErrors=0`.
+- Hardware CUDA/NVENC, 60 seconds on the final implementation: 0.58% whole-machine CPU, 1.281 CPU seconds, 1663 frames, `drop_frames=0`, `workerErrors=0`.
 - Software encoding, 60 seconds: 16.8% whole-machine CPU and 36.953 CPU seconds. The remaining load is codec work rather than scheduler idle spinning.
 
 ```powershell

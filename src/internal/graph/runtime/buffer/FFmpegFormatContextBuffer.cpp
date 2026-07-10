@@ -14,11 +14,20 @@ MediaStreamKind streamKindFromCodecType(AVMediaType type) noexcept
     return MediaStreamKind::Unknown;
 }
 
-MediaTimeDescriptor snapshotTime(const AVStream& stream)
+AVRational resolvedSourceFrameRate(AVFormatContext& context, AVStream& stream) noexcept
+{
+    AVRational frameRate = av_guess_frame_rate(&context, &stream, nullptr);
+    if (frameRate.num > 0 && frameRate.den > 0) return frameRate;
+    if (stream.avg_frame_rate.num > 0 && stream.avg_frame_rate.den > 0) return stream.avg_frame_rate;
+    if (stream.r_frame_rate.num > 0 && stream.r_frame_rate.den > 0) return stream.r_frame_rate;
+    return AVRational{0, 1};
+}
+
+MediaTimeDescriptor snapshotTime(AVFormatContext& context, AVStream& stream)
 {
     MediaTimeDescriptor time;
     time.timeBase = FFmpegDescriptorMapper::toRational(stream.time_base);
-    time.frameRate = FFmpegDescriptorMapper::toRational(stream.avg_frame_rate);
+    time.frameRate = FFmpegDescriptorMapper::toRational(resolvedSourceFrameRate(context, stream));
     time.startTime = stream.start_time;
     time.duration = stream.duration;
     return time;
@@ -59,7 +68,7 @@ FFmpegFormatContextBuffer::FFmpegFormatContextBuffer(InputTag, ::media::ffmpeg::
     }
     m_inputStreams.reserve(input->nb_streams);
     for (unsigned int index = 0; index < input->nb_streams; ++index) {
-        const AVStream* stream = input->streams[index];
+        AVStream* stream = input->streams[index];
         if (!stream) {
             return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
                 "input snapshot stream " + std::to_string(index) + " is null"));
@@ -83,7 +92,7 @@ FFmpegFormatContextBuffer::FFmpegFormatContextBuffer(InputTag, ::media::ffmpeg::
         snapshot.streamKind = streamKindFromCodecType(stream->codecpar->codec_type);
         snapshot.codecParameters = std::move(parameters);
         snapshot.format = FFmpegDescriptorMapper::fromStream(stream);
-        snapshot.time = snapshotTime(*stream);
+        snapshot.time = snapshotTime(*input, *stream);
         m_inputStreams.push_back(std::move(snapshot));
     }
     m_inputSnapshotComplete = m_inputStreams.size() == input->nb_streams;

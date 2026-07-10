@@ -21,6 +21,9 @@ class FFmpegNodeRuntime : public MediaNodeRuntime {
 public:
     FFmpegNodeRuntime(MediaNodeId nodeId, MediaNodeKind kind, std::string name);
     ~FFmpegNodeRuntime() override = default;
+    ::media::Status start(MediaGraphExecutionContext& context) override;
+    ::media::Status stop(MediaGraphExecutionContext& context) override;
+    void abort(MediaGraphExecutionContext& context) noexcept override;
 
 protected:
     struct PoppedChannelBuffer {
@@ -54,6 +57,9 @@ protected:
                                            RouteMatchPolicy policy = RouteMatchPolicy::RequireMatch);
 
     std::vector<MediaChannel*> outputChannels(MediaGraphExecutionContext& context);
+
+private:
+    std::size_t m_nextInputIndex = 0;
 };
 
 #define MEDIA_FFMPEG_GRAPH_DECLARE_FFMPEG_NODE(ClassName) \
