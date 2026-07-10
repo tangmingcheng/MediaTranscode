@@ -179,32 +179,24 @@ const MediaThreadingPolicy& MediaGraphRuntime::threadingPolicy() const noexcept
             ::media::ErrorInfo::notInitialized("MediaGraphRuntime run failed: graph is not compiled"));
     }
 
-    if (m_state == MediaGraphRuntimeState::ThreadedRunning) {
+    if (m_state != MediaGraphRuntimeState::Compiled) {
         return ::media::Result<MediaGraphRunResult>::failure(
-            ::media::ErrorInfo::invalidArgument("MediaGraphRuntime run failed: threaded runtime is running"));
+            ::media::ErrorInfo::invalidArgument("MediaGraphRuntime run failed: runtime is not compiled and ready"));
     }
 
-    if (m_state == MediaGraphRuntimeState::Stopped ||
-        m_state == MediaGraphRuntimeState::Aborted) {
-        return ::media::Result<MediaGraphRunResult>::failure(
-            ::media::ErrorInfo::invalidArgument("MediaGraphRuntime run failed: runtime has already been stopped or aborted; compile a new graph"));
+    mediaGraphDiagnosticLog(diagnosticsEnabled(),
+                            MediaGraphDiagnosticPhase::RuntimeLifecycle,
+                            "start.begin mode=single_thread");
+
+    auto startStatus = m_scheduler.start(m_context);
+    if (!startStatus) {
+        return ::media::Result<MediaGraphRunResult>::failure(startStatus.error());
     }
 
-    if (m_state != MediaGraphRuntimeState::Running) {
-        mediaGraphDiagnosticLog(diagnosticsEnabled(),
-                                MediaGraphDiagnosticPhase::RuntimeLifecycle,
-                                "start.begin mode=single_thread");
-
-        auto startStatus = m_scheduler.start(m_context);
-        if (!startStatus) {
-            return ::media::Result<MediaGraphRunResult>::failure(startStatus.error());
-        }
-
-        m_state = MediaGraphRuntimeState::Running;
-        mediaGraphDiagnosticLog(diagnosticsEnabled(),
-                                MediaGraphDiagnosticPhase::RuntimeLifecycle,
-                                "start.done state=Running");
-    }
+    m_state = MediaGraphRuntimeState::Running;
+    mediaGraphDiagnosticLog(diagnosticsEnabled(),
+                            MediaGraphDiagnosticPhase::RuntimeLifecycle,
+                            "start.done state=Running");
 
     MediaGraphRunResult result;
     ChannelActivitySnapshot previous = captureChannelActivity(m_context);
@@ -260,9 +252,9 @@ const MediaThreadingPolicy& MediaGraphRuntime::threadingPolicy() const noexcept
             ::media::ErrorInfo::notInitialized("MediaGraphRuntime startThreaded failed: graph is not compiled"));
     }
 
-    if (m_state == MediaGraphRuntimeState::Running) {
+    if (m_state != MediaGraphRuntimeState::Compiled) {
         return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("MediaGraphRuntime startThreaded failed: single-thread runtime is running"));
+            ::media::ErrorInfo::invalidArgument("MediaGraphRuntime startThreaded failed: runtime is not compiled and ready"));
     }
 
     mediaGraphDiagnosticLog(diagnosticsEnabled(),
@@ -296,11 +288,25 @@ const MediaThreadingPolicy& MediaGraphRuntime::threadingPolicy() const noexcept
     return status;
 }
 
+::media::Status MediaGraphRuntime::synchronizeThreadedState()
+{
+    if (m_state != MediaGraphRuntimeState::ThreadedRunning ||
+        !m_threadedExecutor.failed()) {
+        return ::media::Status::success();
+    }
+
+    m_threadedExecutor.abort(m_context, m_scheduler);
+    m_state = MediaGraphRuntimeState::Aborted;
+    return ::media::Status::failure(
+        ::media::ErrorInfo::internalError("MediaGraphRuntime threaded worker failed; runtime aborted"));
+}
+
 ::media::Status MediaGraphRuntime::stop()
 {
-    if (!m_context.compiled()) {
-        m_state = MediaGraphRuntimeState::Stopped;
-        return ::media::Status::success();
+    if (m_state != MediaGraphRuntimeState::Running &&
+        m_state != MediaGraphRuntimeState::ThreadedRunning) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("MediaGraphRuntime stop failed: runtime is not running"));
     }
 
     mediaGraphDiagnosticLog(diagnosticsEnabled(), MediaGraphDiagnosticPhase::RuntimeLifecycle, "stop.begin");
@@ -354,6 +360,8 @@ void MediaGraphRuntime::reset()
     m_scheduler.clear(executionOrder);
     m_context.setDiagnosticsEnabled(diagnosticsEnabledValue);
     m_graph.clear();
+    m_acceptanceCollector.reset();
+    m_queueHighWatermark = 0;
     m_state = MediaGraphRuntimeState::Empty;
 }
 
@@ -377,7 +385,7 @@ bool MediaGraphRuntime::running() const noexcept
 
 bool MediaGraphRuntime::threadedRunning() const noexcept
 {
-    return m_state == MediaGraphRuntimeState::ThreadedRunning;
+    return state() == MediaGraphRuntimeState::ThreadedRunning;
 }
 
 MediaGraphExecutionContext& MediaGraphRuntime::context() noexcept
@@ -413,6 +421,25 @@ const MediaGraphThreadedExecutor& MediaGraphRuntime::threadedExecutor() const no
 const MediaGraph* MediaGraphRuntime::graph() const noexcept
 {
     return m_context.graph();
+}
+
+MediaRuntimeAcceptanceCollector& MediaGraphRuntime::acceptanceCollector() noexcept
+{
+    return m_acceptanceCollector;
+}
+
+const MediaRuntimeAcceptanceCollector& MediaGraphRuntime::acceptanceCollector() const noexcept
+{
+    return m_acceptanceCollector;
+}
+
+std::size_t MediaGraphRuntime::observeQueueHighWatermark(std::size_t queued) const noexcept
+{
+    std::size_t peak = m_queueHighWatermark.load(std::memory_order_relaxed);
+    while (queued > peak && !m_queueHighWatermark.compare_exchange_weak(
+               peak, queued, std::memory_order_relaxed, std::memory_order_relaxed)) {
+    }
+    return queued > peak ? queued : peak;
 }
 
 } // namespace media::ffmpeg::graph

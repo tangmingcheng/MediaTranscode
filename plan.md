@@ -1,37 +1,30 @@
-# Realtime Event-Driven Runtime Plan
+# QUALITY_SCORE Priority Improvements Plan
 
 ## Goal
 
-Eliminate realtime audio/video DAG busy waiting without fixed sleeps or node-specific polling, while preserving planner-owned topology, capacity, overflow, and codec decisions.
-
-## Confirmed Root Causes
-
-- Per-node workers retried immediately when nodes had no input, and SPSC blocking operations used yield loops.
-- Concurrent runtime nodes originally shared mutable input `AVFormatContext` / `AVStream` state after probing.
+Implement the five `QUALITY_SCORE.md` priority improvements in order, with each phase independently reviewed and gated by deterministic tests plus local, separate-RTP, and MPEG-TS audio/video validation.
 
 ## Tasks
 
-- [x] Make every runtime node return `Progress`, `Waiting`, or `Finished` directly; keep errors as `Result` failures.
-- [x] Add per-node sequence-based wakeups with targeted channel `push`, `close`, `abort`, and `clear` notification.
-- [x] Make workers continue on progress, block without lost wakeups on waiting, and exit on finished.
-- [x] Replace SPSC blocking spin loops with condition-variable waits and deterministic lifecycle notifications.
-- [x] Add multi-input terminal tracking and exact mux config/terminal completion state.
-- [x] Add lifecycle-reset round-robin input arbitration so continuously busy inputs cannot starve later channels.
-- [x] Remove realtime idle sleep/spin planner parameters.
-- [x] Construct all workers before starting any thread, then start them in a second stage.
-- [x] Publish immutable per-stream FFmpeg snapshots after input probing, including deep-copied codec parameters, format, time, index, and stream kind.
-- [x] Make Demux the exclusive owner and mutable consumer of the input format context; downstream metadata and packet nodes consume snapshots only.
-- [x] Run event-runtime tests, realtime graph tests, CTest, hardware A/V smoke, and software A/V comparison smoke.
-- [x] Update the project-wide `QUALITY_SCORE.md` from an industrial DAG-engine review.
-- [x] Complete final implementation review closure.
-- [x] Commit, push, and create PR #20.
-- [x] Complete independent review of the final PR head with a PASS verdict.
-- [x] Perform 60-second VLC subjective playback validation with human observation.
+- [x] Priority 1: Add deterministic concurrency stress, fault injection, lifecycle coverage, fairness tests, and acceptance metrics collection.
+- [ ] Priority 2: Split oversized planner, mux, capability scanner, and runtime responsibilities.
+- [ ] Priority 3: Separate core, planner, builder, runtime, node, integration, hardware, and performance test tiers.
+- [ ] Priority 4: Reject or explicitly mark incomplete optimizer, GPU, and distributed execution capabilities.
+- [ ] Priority 5: Establish repeatable performance and stability baselines and update `QUALITY_SCORE.md` from evidence.
+- [ ] Run final local, separate-RTP, and MPEG-TS hardware/software acceptance, including stability and VLC review.
+- [ ] Complete whole-branch review, push, create PR, and obtain independent PASS review.
 
-## Acceptance Evidence
+## Priority 1 Evidence
 
-- Event-runtime and realtime graph test executables pass; CTest passes 2/2.
-- Hardware CUDA/NVENC 60-second smoke on the final implementation: 0.58% whole-machine CPU, 1.281 CPU seconds, 1663 frames, `drop_frames=0`, `workerErrors=0`.
-- Software 60-second smoke: 16.8% whole-machine CPU and 36.953 CPU seconds; scheduler idle spinning is absent and codec cost remains measurable.
-- `git diff --check` passes; modified text files remain UTF-8 with CRLF line endings.
-- VLC subjective playback completed: the observer reported smooth video, normal audio, and no perceptible A/V drift.
+- Event-runtime tests passed 20 consecutive runs with zero failures.
+- Realtime graph regression passed.
+- Runtime lifecycle state matrix, worker failure harvesting, deterministic queue waiter release, scripted fault sequences, and concurrent multi-input fairness are covered.
+- Windows process/system CPU, working set, thread count, sampled queue high-water mark, progress stalls, and errors are exposed through a thread-safe acceptance collector and runtime report.
+- Independent task review verdict: PASS.
+
+## Global Constraints
+
+- Planner remains the only decision owner; runtime nodes do not add defaults or fallback behavior.
+- Local and realtime CLIs remain separate.
+- Modified text files use UTF-8 and CRLF.
+- Existing unrelated working-tree files are excluded from all commits.

@@ -7,6 +7,16 @@
 namespace media::ffmpeg::graph {
 namespace {
 
+class ScopedWaiter final {
+public:
+    explicit ScopedWaiter(std::atomic_size_t& count) noexcept : m_count(count) { ++m_count; }
+    ~ScopedWaiter() { --m_count; }
+    ScopedWaiter(const ScopedWaiter&) = delete;
+    ScopedWaiter& operator=(const ScopedWaiter&) = delete;
+private:
+    std::atomic_size_t& m_count;
+};
+
 bool overflowPolicyDropsIncoming(const MediaQueuePolicy& policy, const MediaBufferRef& buffer) noexcept
 {
     if (policy.overflowPolicy == MediaQueueOverflowPolicy::DropNewest) {
@@ -55,6 +65,7 @@ MediaSpscRingQueue::MediaSpscRingQueue(MediaQueuePolicy policy)
             buffer->isKeyFrame()) {
             ++m_metrics.blockedPushes;
             std::unique_lock<std::mutex> lock(m_mutex);
+            const ScopedWaiter waiter(m_metrics.blockedProducers);
             m_notFull.wait(lock, [&] {
                 const auto write = m_write.load(std::memory_order_acquire);
                 const auto read = m_read.load(std::memory_order_acquire);
@@ -70,6 +81,7 @@ MediaSpscRingQueue::MediaSpscRingQueue(MediaQueuePolicy policy)
 
         ++m_metrics.blockedPushes;
         std::unique_lock<std::mutex> lock(m_mutex);
+        const ScopedWaiter waiter(m_metrics.blockedProducers);
         m_notFull.wait(lock, [&] {
             const auto write = m_write.load(std::memory_order_acquire);
             const auto read = m_read.load(std::memory_order_acquire);
@@ -148,6 +160,7 @@ bool MediaSpscRingQueue::tryPush(MediaBufferRef buffer)
         }
 
         std::unique_lock<std::mutex> lock(m_mutex);
+        const ScopedWaiter waiter(m_metrics.blockedConsumers);
         m_notEmpty.wait(lock, [&] {
             const auto write = m_write.load(std::memory_order_acquire);
             const auto read = m_read.load(std::memory_order_acquire);

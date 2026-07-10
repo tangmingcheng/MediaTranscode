@@ -126,7 +126,10 @@ void MediaGraphThreadedExecutor::abort(MediaGraphExecutionContext& context,
 void MediaGraphThreadedExecutor::clear()
 {
     m_workers.clear();
-    m_metrics = {};
+    {
+        std::lock_guard<std::mutex> lock(m_metricsMutex);
+        m_metrics = {};
+    }
     m_state = MediaGraphThreadedExecutorState::Idle;
 }
 
@@ -140,14 +143,22 @@ bool MediaGraphThreadedExecutor::running() const noexcept
     return m_state == MediaGraphThreadedExecutorState::Running;
 }
 
-const MediaGraphRuntimeMetrics& MediaGraphThreadedExecutor::metrics() const noexcept
+bool MediaGraphThreadedExecutor::failed() const noexcept
+{
+    return metrics().workerErrors != 0;
+}
+
+MediaGraphRuntimeMetrics MediaGraphThreadedExecutor::metrics() const noexcept
 {
     refreshMetrics();
+    std::lock_guard<std::mutex> lock(m_metricsMutex);
     return m_metrics;
 }
 
 void MediaGraphThreadedExecutor::refreshMetrics() const noexcept
 {
+    std::lock_guard<std::mutex> lock(m_metricsMutex);
+    m_metrics.threadCount = m_workers.size();
     m_metrics.activeWorkers = 0;
     m_metrics.workerIterations = 0;
     m_metrics.workerProcessCalls = 0;
@@ -172,6 +183,7 @@ void MediaGraphThreadedExecutor::refreshMetrics() const noexcept
         m_metrics.workerWakeups += worker->metrics().wakeups;
         m_metrics.workerErrors += worker->metrics().errors;
     }
+    m_metrics.errorCount = m_metrics.workerErrors;
 }
 
 } // namespace media::ffmpeg::graph

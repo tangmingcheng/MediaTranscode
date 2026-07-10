@@ -90,35 +90,59 @@ void testPacketMergeWaitsForEveryInputTerminal(TestContext& ctx)
     MediaGraphExecutionContext execution;
     EXPECT_TRUE(ctx, execution.compile(graph));
     PacketMergeNode merge(mergeId);
+    auto eof = makePacketBuffer(false, 1);
+    EXPECT_TRUE(ctx, eof);
+    if (!eof) return;
+    eof.value()->addFlags(MediaBufferFlag::Eof);
+    MediaChannel* inputA = execution.findInputChannel(mergeId, "a");
+    MediaChannel* inputB = execution.findInputChannel(mergeId, "b");
+    MediaChannel* output = execution.findInputChannel(sink, "packet");
+    for (std::int64_t pts = 0; pts < 8; ++pts) {
+        auto packet = makePacketBuffer(false, pts);
+        EXPECT_TRUE(ctx, packet && inputA->push(packet.value()));
+    }
+
+    std::atomic_bool producersOk{ true };
+    std::thread busyProducer([&] {
+        for (std::int64_t pts = 8; pts < 256; ++pts) {
+            auto packet = makePacketBuffer(false, pts);
+            if (!packet || !inputA->push(packet.value())) producersOk = false;
+        }
+        if (!inputA->push(eof.value())) producersOk = false;
+    });
+    std::thread sparseProducer([&] {
+        for (std::int64_t pts : { -3, -2, -1 }) {
+            auto packet = makePacketBuffer(false, pts);
+            if (!packet || !inputB->push(packet.value())) producersOk = false;
+        }
+        if (!inputB->push(eof.value())) producersOk = false;
+    });
     MediaGraphWorker worker(merge, execution);
     EXPECT_TRUE(ctx, worker.start());
-    auto eof = makePacketBuffer(false, 1);
-    auto firstA = makePacketBuffer(false, 10);
-    auto secondA = makePacketBuffer(false, 11);
-    auto tailB = makePacketBuffer(false, 20);
-    EXPECT_TRUE(ctx, eof && firstA && secondA && tailB);
-    if (!eof || !firstA || !secondA || !tailB) return;
-    eof.value()->addFlags(MediaBufferFlag::Eof);
-    EXPECT_TRUE(ctx, execution.findInputChannel(mergeId, "a")->push(firstA.value()));
-    EXPECT_TRUE(ctx, execution.findInputChannel(mergeId, "a")->push(secondA.value()));
-    EXPECT_TRUE(ctx, execution.findInputChannel(mergeId, "a")->push(eof.value()));
-    EXPECT_TRUE(ctx, execution.findInputChannel(mergeId, "a")->push(eof.value()));
-    EXPECT_TRUE(ctx, execution.findInputChannel(mergeId, "b")->push(tailB.value()));
-    EXPECT_TRUE(ctx, execution.findInputChannel(mergeId, "b")->push(eof.value()));
+
+    std::size_t outputIndex = 0;
+    std::size_t busyCount = 0;
+    std::size_t sparseCount = 0;
+    std::size_t firstSparseIndex = 999;
+    for (;;) {
+        MediaBufferRef packet;
+        EXPECT_TRUE(ctx, output->pop(packet));
+        if (!packet || packet->isEof()) break;
+        if (packet->pts() < 0) {
+            if (firstSparseIndex == 999) firstSparseIndex = outputIndex;
+            ++sparseCount;
+        } else {
+            ++busyCount;
+        }
+        ++outputIndex;
+    }
+    busyProducer.join();
+    sparseProducer.join();
     worker.join();
-    MediaChannel* output = execution.findInputChannel(sink, "packet");
-    MediaBufferRef first;
-    MediaBufferRef second;
-    MediaBufferRef third;
-    MediaBufferRef terminal;
-    EXPECT_TRUE(ctx, output && output->tryPop(first));
-    EXPECT_TRUE(ctx, first && !first->isEof() && first->pts() == 10);
-    EXPECT_TRUE(ctx, output && output->tryPop(second));
-    EXPECT_TRUE(ctx, second && !second->isEof() && second->pts() == 20);
-    EXPECT_TRUE(ctx, output && output->tryPop(third));
-    EXPECT_TRUE(ctx, third && !third->isEof() && third->pts() == 11);
-    EXPECT_TRUE(ctx, output && output->tryPop(terminal));
-    EXPECT_TRUE(ctx, terminal && terminal->isEof());
+    EXPECT_TRUE(ctx, producersOk.load());
+    EXPECT_EQ(ctx, busyCount, static_cast<std::size_t>(256));
+    EXPECT_EQ(ctx, sparseCount, static_cast<std::size_t>(3));
+    EXPECT_TRUE(ctx, firstSparseIndex < static_cast<std::size_t>(16));
     MediaBufferRef extra;
     EXPECT_FALSE(ctx, output && output->tryPop(extra));
 }

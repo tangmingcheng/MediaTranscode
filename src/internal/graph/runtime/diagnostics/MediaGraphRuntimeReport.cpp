@@ -6,12 +6,20 @@ std::string MediaGraphRuntimeReport::summary() const
 {
     return "runtime report: queued=" + std::to_string(metrics.queuedBuffers) +
            ", peakQueued=" + std::to_string(metrics.peakQueuedBuffers) +
+           ", threads=" + std::to_string(metrics.threadCount) +
+           ", processThreads=" + std::to_string(metrics.processThreadCount) +
            ", workers=" + std::to_string(metrics.activeWorkers) +
            ", workerProgress=" + std::to_string(metrics.workerProgress) +
            ", workerProcessCalls=" + std::to_string(metrics.workerProcessCalls) +
            ", workerWaits=" + std::to_string(metrics.workerWaits) +
            ", workerWakeups=" + std::to_string(metrics.workerWakeups) +
            ", workerErrors=" + std::to_string(metrics.workerErrors) +
+           ", errors=" + std::to_string(metrics.errorCount) +
+           ", stalledIntervals=" + std::to_string(metrics.stalledIntervals) +
+           ", cpuSamples=" + std::to_string(metrics.cpuSampleCount) +
+           ", averageCpuPercent=" + std::to_string(metrics.averageCpuPercent) +
+           ", averageProcessCpuPercent=" + std::to_string(metrics.averageProcessCpuPercent) +
+           ", workingSetBytes=" + std::to_string(metrics.workingSetBytes) +
            ", totalPushed=" + std::to_string(metrics.totalPushed) +
            ", totalPopped=" + std::to_string(metrics.totalPopped) +
            ", encodedPacketsPushed=" + std::to_string(metrics.encodedPacketsPushed) +
@@ -19,10 +27,24 @@ std::string MediaGraphRuntimeReport::summary() const
            ", backpressureItems=" + std::to_string(backpressure.decisions.size());
 }
 
+MediaGraphRuntimeReport MediaGraphRuntimeReporter::capture(MediaGraphRuntime& runtime)
+{
+    (void)runtime.synchronizeThreadedState();
+    return capture(static_cast<const MediaGraphRuntime&>(runtime));
+}
+
 MediaGraphRuntimeReport MediaGraphRuntimeReporter::capture(const MediaGraphRuntime& runtime)
 {
     MediaGraphRuntimeReport report;
     report.state = runtime.state();
+    const MediaGraphRuntimeMetrics acceptance = runtime.acceptanceCollector().snapshot();
+    report.metrics.cpuSampleCount = acceptance.cpuSampleCount;
+    report.metrics.averageCpuPercent = acceptance.averageCpuPercent;
+    report.metrics.stalledIntervals = acceptance.stalledIntervals;
+    report.metrics.errorCount = acceptance.errorCount;
+    report.metrics.averageProcessCpuPercent = acceptance.averageProcessCpuPercent;
+    report.metrics.workingSetBytes = acceptance.workingSetBytes;
+    report.metrics.processThreadCount = acceptance.processThreadCount;
 
     std::size_t queued = 0;
     for (const MediaChannel* channel : runtime.context().channels().channels()) {
@@ -37,18 +59,27 @@ MediaGraphRuntimeReport MediaGraphRuntimeReporter::capture(const MediaGraphRunti
         }
     }
 
-    report.metrics.updateQueuedBuffers(queued);
-    if (runtime.threadedRunning()) {
+    const std::size_t graphQueuePeak = runtime.observeQueueHighWatermark(queued);
+    report.metrics.updateQueuedBuffers(queued, graphQueuePeak);
+    const MediaGraphRuntimeMetrics executorMetrics = runtime.threadedExecutor().metrics();
+    if (executorMetrics.threadCount != 0 || executorMetrics.workerErrors != 0) {
         const uint64_t totalPushed = report.metrics.totalPushed;
         const uint64_t totalPopped = report.metrics.totalPopped;
         const uint64_t encodedPacketsPushed = report.metrics.encodedPacketsPushed;
         const uint64_t encodedPacketsPopped = report.metrics.encodedPacketsPopped;
-        report.metrics = runtime.threadedExecutor().metrics();
+        report.metrics = executorMetrics;
+        report.metrics.cpuSampleCount = acceptance.cpuSampleCount;
+        report.metrics.averageCpuPercent = acceptance.averageCpuPercent;
+        report.metrics.stalledIntervals = acceptance.stalledIntervals;
+        report.metrics.errorCount += acceptance.errorCount;
         report.metrics.totalPushed = totalPushed;
         report.metrics.totalPopped = totalPopped;
         report.metrics.encodedPacketsPushed = encodedPacketsPushed;
         report.metrics.encodedPacketsPopped = encodedPacketsPopped;
-        report.metrics.updateQueuedBuffers(queued);
+        report.metrics.averageProcessCpuPercent = acceptance.averageProcessCpuPercent;
+        report.metrics.workingSetBytes = acceptance.workingSetBytes;
+        report.metrics.processThreadCount = acceptance.processThreadCount;
+        report.metrics.updateQueuedBuffers(queued, graphQueuePeak);
     }
 
     report.backpressure = MediaBackpressureController::inspect(runtime.context());

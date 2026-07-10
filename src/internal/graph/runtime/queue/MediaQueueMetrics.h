@@ -13,6 +13,8 @@ struct MediaQueueMetrics {
     std::atomic_uint64_t blockedPushes{ 0 };
     std::atomic_uint64_t failedPushes{ 0 };
     std::atomic_uint64_t failedPops{ 0 };
+    std::atomic_size_t blockedProducers{ 0 };
+    std::atomic_size_t blockedConsumers{ 0 };
     std::atomic_size_t currentSize{ 0 };
     std::atomic_size_t peakSize{ 0 };
 
@@ -23,6 +25,7 @@ struct MediaQueueMetrics {
         pushed = other.pushed.load(); popped = other.popped.load(); dropped = other.dropped.load();
         blockedPushes = other.blockedPushes.load(); failedPushes = other.failedPushes.load();
         failedPops = other.failedPops.load(); currentSize = other.currentSize.load(); peakSize = other.peakSize.load();
+        blockedProducers = other.blockedProducers.load(); blockedConsumers = other.blockedConsumers.load();
         return *this;
     }
 };

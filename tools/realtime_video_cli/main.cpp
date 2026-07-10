@@ -209,7 +209,20 @@ RealtimeVideoRuntimeOptions parseRuntimeOptions(int argc, char** argv)
     const auto workerStartupGrace = std::chrono::milliseconds(
         std::min(options.progressTimeoutMs, std::max(options.pollIntervalMs * 2, 1000)));
 
-    while (runtime.threadedRunning()) {
+    while (true) {
+        auto lifecycleStatus = runtime.synchronizeThreadedState();
+        if (!lifecycleStatus) {
+            return lifecycleStatus;
+        }
+        if (!runtime.threadedRunning()) {
+            break;
+        }
+        const MediaGraphRuntimeReport progressReport = MediaGraphRuntimeReporter::capture(runtime);
+        auto sampleStatus = runtime.acceptanceCollector().sample(
+            progressReport.metrics.encodedPacketsPushed);
+        if (!sampleStatus) {
+            return sampleStatus;
+        }
         const MediaGraphRuntimeReport report = MediaGraphRuntimeReporter::capture(runtime);
         std::cout << "[CLI] " << report.summary() << '\n';
 

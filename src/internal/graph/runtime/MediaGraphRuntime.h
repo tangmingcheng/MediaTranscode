@@ -6,9 +6,11 @@
 #include "internal/graph/runtime/scheduler/MediaGraphScheduler.h"
 #include "internal/graph/runtime/threading/MediaGraphThreadedExecutor.h"
 #include "internal/graph/runtime/MediaRuntimeNode.h"
+#include "internal/graph/runtime/diagnostics/MediaRuntimeAcceptanceCollector.h"
 #include "media_transcode/Result.h"
 
 #include <cstddef>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 
@@ -54,6 +56,7 @@ public:
 
     ::media::Result<MediaGraphRunResult> run();
     ::media::Status startThreaded();
+    ::media::Status synchronizeThreadedState();
     ::media::Status flush();
     ::media::Status stop();
     void abort() noexcept;
@@ -74,6 +77,9 @@ public:
     const MediaGraphThreadedExecutor& threadedExecutor() const noexcept;
 
     const MediaGraph* graph() const noexcept;
+    MediaRuntimeAcceptanceCollector& acceptanceCollector() noexcept;
+    const MediaRuntimeAcceptanceCollector& acceptanceCollector() const noexcept;
+    std::size_t observeQueueHighWatermark(std::size_t queued) const noexcept;
 
 private:
     MediaGraph m_graph;
@@ -82,6 +88,8 @@ private:
     MediaGraphThreadedExecutor m_threadedExecutor;
     MediaThreadingPolicy m_threadingPolicy;
     MediaGraphRuntimeState m_state = MediaGraphRuntimeState::Empty;
+    MediaRuntimeAcceptanceCollector m_acceptanceCollector;
+    mutable std::atomic_size_t m_queueHighWatermark{ 0 };
 };
 
 } // namespace media::ffmpeg::graph
