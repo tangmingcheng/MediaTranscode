@@ -952,6 +952,18 @@ void testRtpMuxResponsibilitiesAreSeparated(TestContext& ctx)
     expectTextNotContains(ctx, node, "av_write_trailer");
 }
 
+void testRuntimeCompilationAndLifecycleAreSeparated(TestContext& ctx)
+{
+    const std::string runtime = repositoryFile("src/internal/graph/runtime/MediaGraphRuntime.cpp");
+    const std::string compiler = repositoryFile("src/internal/graph/runtime/compilation/MediaGraphRuntimeCompiler.h");
+    const std::string lifecycle = repositoryFile("src/internal/graph/runtime/lifecycle/MediaGraphRuntimeLifecycleExecutor.h");
+    expectTextContains(ctx, compiler, "class MediaGraphRuntimeCompiler final");
+    expectTextContains(ctx, lifecycle, "class MediaGraphRuntimeLifecycleExecutor final");
+    expectTextNotContains(ctx, runtime, "processSchedulingStep");
+    expectTextNotContains(ctx, runtime, "MediaRuntimeNodeFactory::create");
+    expectTextNotContains(ctx, runtime, "preparedContext.compile");
+}
+
 void testPlannerRejectsUnresolvedBehaviorOptions(TestContext& ctx)
 {
     MediaInputVideoStreamInfo input;
@@ -3081,6 +3093,7 @@ int main()
     testRealtimePlannerOutputPolicyIsSeparated(ctx);
     testRealtimePlannerValidationAndInputPlanningAreSeparated(ctx);
     testRtpMuxResponsibilitiesAreSeparated(ctx);
+    testRuntimeCompilationAndLifecycleAreSeparated(ctx);
     testPlannerRejectsUnresolvedBehaviorOptions(ctx);
     testValidationRejectsUnsupportedRealtimeInput(ctx);
     testValidationRequiresExplicitRealtimeStreamClassification(ctx);

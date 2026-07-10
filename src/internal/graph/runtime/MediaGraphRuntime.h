@@ -18,6 +18,8 @@
 
 namespace media::ffmpeg::graph {
 
+class MediaGraphRuntimeLifecycleExecutor;
+
 enum class MediaGraphRuntimeState {
     Empty,
     Compiled,
@@ -85,6 +87,7 @@ public:
     std::size_t observeQueueHighWatermark(std::size_t queued) const noexcept;
 
 private:
+    friend class MediaGraphRuntimeLifecycleExecutor;
     ::media::Status compileTransaction(
         MediaGraph graph,
         std::vector<MediaPreparedRealtimeInputBinding> inputBindings);
