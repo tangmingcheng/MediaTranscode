@@ -9,6 +9,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+Import-Module (Join-Path $PSScriptRoot 'Priority5Acceptance.psm1') -Force
 $normalizedPath = $env:Path
 [Environment]::SetEnvironmentVariable('PATH', $null, 'Process')
 [Environment]::SetEnvironmentVariable('Path', $null, 'Process')
@@ -86,6 +87,11 @@ try {
     }
 
     $cpuSamples = [Collections.Generic.List[double]]::new()
+    $peakWorkingSet = [uint64]0
+    $peakThreadCount = 0
+    $maximumProgressGapMs = 0.0
+    $lastObservedProgress = [uint64]0
+    $progressObservedAt = [DateTime]::UtcNow
     $previousCpu = $cliProcess.TotalProcessorTime.TotalSeconds
     $sampleTimer = [Diagnostics.Stopwatch]::StartNew()
     while (-not $cliProcess.HasExited) {
@@ -94,6 +100,24 @@ try {
         $elapsed = [Math]::Max($sampleTimer.Elapsed.TotalSeconds, 0.001)
         $currentCpu = $cliProcess.TotalProcessorTime.TotalSeconds
         $cpuSamples.Add(([Math]::Max(0.0, $currentCpu-$previousCpu) / $elapsed / $logicalProcessors) * 100.0)
+        $peakWorkingSet = [Math]::Max($peakWorkingSet, [uint64]$cliProcess.WorkingSet64)
+        $peakThreadCount = [Math]::Max($peakThreadCount, $cliProcess.Threads.Count)
+        if (Test-Path $cliLog) {
+            $liveText = Get-Content -LiteralPath $cliLog -Raw -ErrorAction SilentlyContinue
+            $progressMatches = [regex]::Matches($liveText, 'encodedPacketsPushed=(\d+)')
+            if ($progressMatches.Count -gt 0) {
+                $progress = [uint64]$progressMatches[$progressMatches.Count-1].Groups[1].Value
+                if ($progress -gt $lastObservedProgress) {
+                    if ($lastObservedProgress -gt 0) {
+                        $maximumProgressGapMs = [Math]::Max($maximumProgressGapMs, ([DateTime]::UtcNow - $progressObservedAt).TotalMilliseconds)
+                    }
+                    $lastObservedProgress = $progress
+                    $progressObservedAt = [DateTime]::UtcNow
+                } elseif ($lastObservedProgress -gt 0) {
+                    $maximumProgressGapMs = [Math]::Max($maximumProgressGapMs, ([DateTime]::UtcNow - $progressObservedAt).TotalMilliseconds)
+                }
+            }
+        }
         $previousCpu = $currentCpu
         $sampleTimer.Restart()
     }
@@ -119,11 +143,45 @@ try {
     if ($driftMs -gt 100.0) { throw "A/V drift gate failed: $driftMs ms" }
     $sorted = @($cpuSamples | Sort-Object)
     $average = ($cpuSamples | Measure-Object -Average).Average
-    $p95 = $sorted[[Math]::Min($sorted.Count-1, [Math]::Ceiling($sorted.Count*0.95)-1)]
+    $p95 = Get-Percentile -Values $sorted -Percentile 0.95
     $limit = if ($DisableHw) { 25.0 } else { 5.0 }
     if ($average -gt $limit) { throw "average CLI CPU gate failed: $average > $limit" }
 
-    [ordered]@{status='pass';mode=$Mode;hardware=-not $DisableHw;duration_seconds=$DurationSeconds;average_cli_cpu_percent=$average;p95_cli_cpu_percent=$p95;av_drift_ms=$driftMs;output=$capture} | ConvertTo-Json -Compress
+    $queueHighWatermark = [uint64]0
+    $droppedBuffers = [uint64]0
+    $workerErrors = [uint64]0
+    $runtimeErrors = [uint64]0
+    $stalledIntervals = [uint64]0
+    foreach ($entry in @(
+        @{ Pattern='peakQueued=(\d+)'; Name='queue' },
+        @{ Pattern='droppedBuffers=(\d+)'; Name='drop' },
+        @{ Pattern='workerErrors=(\d+)'; Name='worker' },
+        @{ Pattern='errors=(\d+)'; Name='error' },
+        @{ Pattern='stalledIntervals=(\d+)'; Name='stall' }
+    )) {
+        $matches = [regex]::Matches($cliText, $entry.Pattern)
+        if ($matches.Count -eq 0) { throw "runtime report metric missing: $($entry.Name)" }
+        $maximum = [uint64](($matches | ForEach-Object { [uint64]$_.Groups[1].Value } | Measure-Object -Maximum).Maximum)
+        switch ($entry.Name) {
+            'queue' { $queueHighWatermark = $maximum }
+            'drop' { $droppedBuffers = $maximum }
+            'worker' { $workerErrors = $maximum }
+            'error' { $runtimeErrors = $maximum }
+            'stall' { $stalledIntervals = $maximum }
+        }
+    }
+    $encodingPath = if ($DisableHw) { 'software/libx264' } else { 'cuda-nvenc/h264_nvenc' }
+    $report = [pscustomobject][ordered]@{
+        status='pass';scenario="${Mode}_$tag";mode=$Mode;hardware=-not $DisableHw
+        machine=Get-Priority5MachineInfo;encoding_path=$encodingPath;duration_seconds=$DurationSeconds
+        average_cli_cpu_percent=$average;p95_cli_cpu_percent=$p95
+        peak_working_set_bytes=$peakWorkingSet;peak_thread_count=$peakThreadCount
+        queue_high_watermark=$queueHighWatermark;max_progress_gap_ms=$maximumProgressGapMs
+        dropped_buffers=$droppedBuffers;worker_errors=$workerErrors;runtime_errors=$runtimeErrors
+        stalled_intervals=$stalledIntervals;av_drift_ms=$driftMs;output=$capture
+    }
+    Test-Priority5RealtimeReport -Report $report -Hardware (-not $DisableHw) | Out-Null
+    $report | ConvertTo-Json -Depth 4 -Compress
 } finally {
     Stop-GateProcesses
 }
