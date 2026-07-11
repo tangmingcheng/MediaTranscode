@@ -9,10 +9,13 @@
 #include "internal/graph/model/RealtimeStreamLayout.h"
 #include "internal/graph/nodes/packet/AvPacketStartBarrierNode.h"
 #include "internal/graph/nodes/packet/PacketStartGateNode.h"
+#include "internal/graph/nodes/mux/RtpMuxStateMachine.h"
 #include "internal/graph/nodes/audio/AudioMonotonicTimestamp.h"
+#include "internal/graph/nodes/audio/AudioDecodeNode.h"
 #include "internal/graph/nodes/audio/AudioResampleNode.h"
 #include "internal/graph/nodes/video/VideoMonotonicTimestamp.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeOutputPolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaPreparedRealtimeInput.h"
 #include "internal/graph/planner/MediaPipelineCapabilityScanner.h"
 #include "internal/graph/runtime/MediaGraphRuntime.h"
@@ -772,6 +775,7 @@ MediaRealtimeRtpTranscodeRequest validRawRtpAudioVideoOptions()
     MediaRealtimeRtpTranscodeRequest options = validRawRtpOptions();
     options.parameters.execution.includeAudio = true;
     options.parameters.audio.codecName = "aac";
+    options.parameters.audio.bitrateKbps = 320;
     options.parameters.audio.sampleRate = 48000;
     options.parameters.audio.channels = 2;
     options.input.audioRtp.url = "rtp://127.0.0.1:5006";
@@ -779,6 +783,7 @@ MediaRealtimeRtpTranscodeRequest validRawRtpAudioVideoOptions()
     options.input.audioRtp.payloadType = 97;
     options.input.audioRtp.clockRate = 48000;
     options.input.audioRtp.channels = 2;
+    options.input.audioRtp.bitrateKbps = 320;
     options.input.audioRtp.fmtp = "profile-level-id=1;mode=AAC-hbr;config=1190;sizelength=13;indexlength=3;indexdeltalength=3";
     return options;
 }
@@ -908,13 +913,17 @@ void testCapabilityScanningResponsibilitiesAreSeparated(TestContext& ctx)
     const std::string audioProbe = repositoryFile("src/internal/graph/planner/capability/MediaAudioCapabilityProbe.h");
     const std::string videoScanner = repositoryFile("src/internal/graph/planner/capability/MediaVideoCapabilityScanner.h");
     const std::string hardwareProbe = repositoryFile("src/internal/graph/planner/capability/MediaHardwareCapabilityProbe.h");
+    const std::string streamProbe = repositoryFile("src/internal/graph/planner/capability/MediaStreamCapabilityProbe.h");
 
     expectTextContains(ctx, inputProbe, "class MediaInputCapabilityProbe final");
     expectTextContains(ctx, audioProbe, "class MediaAudioCapabilityProbe final");
     expectTextContains(ctx, videoScanner, "class MediaVideoCapabilityScanner final");
     expectTextContains(ctx, hardwareProbe, "class MediaHardwareCapabilityProbe final");
+    expectTextContains(ctx, streamProbe, "class MediaStreamCapabilityProbe final");
     expectTextNotContains(ctx, facade, "avformat_open_input");
     expectTextNotContains(ctx, facade, "av_hwdevice_ctx_create");
+    expectTextNotContains(ctx, facade, "avformat_find_stream_info");
+    expectTextNotContains(ctx, facade, "av_find_best_stream");
 }
 
 void testRealtimePlannerOutputPolicyIsSeparated(TestContext& ctx)
@@ -924,6 +933,125 @@ void testRealtimePlannerOutputPolicyIsSeparated(TestContext& ctx)
     expectTextContains(ctx, outputPolicy, "class MediaRealtimeOutputPolicyPlanner final");
     expectTextNotContains(ctx, planner, "applyRtpOutputWritePacing");
     expectTextNotContains(ctx, planner, "planMuxedTransportStreamOutput");
+}
+
+void testRealtimeOutputPolicyInitializesEveryMuxExpectation(TestContext& ctx)
+{
+    auto separate = MediaRealtimeRtpTranscodePlanner::plan(validRawRtpAudioVideoOptions());
+    EXPECT_TRUE(ctx, separate);
+    if (separate) {
+        EXPECT_TRUE(ctx, separate.value().videoMux.expectVideo);
+        EXPECT_FALSE(ctx, separate.value().videoMux.expectAudio);
+        EXPECT_FALSE(ctx, separate.value().audioMux.expectVideo);
+        EXPECT_TRUE(ctx, separate.value().audioMux.expectAudio);
+    }
+
+    auto request = validMpegTsUdpOptions();
+    request.parameters.execution.includeAudio = true;
+    MediaRealtimeOutputUrls urls;
+    urls.muxed = request.output.url;
+    urls.muxedFormat = "mpegts";
+    MediaRealtimeRtpTranscodePlan muxed;
+    const auto status = MediaRealtimeOutputPolicyPlanner::apply(request, urls, muxed);
+    EXPECT_TRUE(ctx, status);
+    EXPECT_TRUE(ctx, muxed.videoMux.expectVideo);
+    EXPECT_TRUE(ctx, muxed.videoMux.expectAudio);
+    EXPECT_FALSE(ctx, muxed.audioMux.expectVideo);
+    EXPECT_FALSE(ctx, muxed.audioMux.expectAudio);
+}
+
+void testRtpMuxStateMachineRejectsIllegalTransitions(TestContext& ctx)
+{
+    RtpMuxStateMachine state;
+    EXPECT_FALSE(ctx, state.markHeaderWritten());
+    EXPECT_FALSE(ctx, state.bindExpectations(false, false, true, 0));
+    EXPECT_FALSE(ctx, state.bindExpectations(true, true, true, 0));
+    EXPECT_TRUE(ctx, state.bindExpectations(true, false, true, 10));
+    EXPECT_FALSE(ctx, state.bindExpectations(true, false, true, 10));
+    EXPECT_FALSE(ctx, state.markHeaderWritten());
+    EXPECT_TRUE(ctx, state.bindOutput());
+    EXPECT_TRUE(ctx, state.outputBound());
+    EXPECT_FALSE(ctx, state.bindOutput());
+    EXPECT_FALSE(ctx, state.markPacingSessionStarted());
+    EXPECT_TRUE(ctx, state.markStartupDelayElapsed());
+    EXPECT_FALSE(ctx, state.markStartupDelayElapsed());
+    EXPECT_TRUE(ctx, state.markPacingSessionStarted());
+    EXPECT_TRUE(ctx, state.markHeaderWritten());
+    EXPECT_FALSE(ctx, state.markHeaderWritten());
+    EXPECT_TRUE(ctx, state.markFormatEmitted());
+    EXPECT_FALSE(ctx, state.markFormatEmitted());
+    EXPECT_FALSE(ctx, state.markTrailerWritten());
+    state.setExpectedInputs({"video"}, {"packet"});
+    EXPECT_TRUE(ctx, state.markConfigReady("video"));
+    EXPECT_TRUE(ctx, state.markInputEof("packet"));
+    EXPECT_TRUE(ctx, state.markTrailerWritten());
+    EXPECT_FALSE(ctx, state.markTrailerWritten());
+    EXPECT_FALSE(ctx, state.bindOutput());
+    state.reset();
+    EXPECT_FALSE(ctx, state.expectationsBound());
+    EXPECT_FALSE(ctx, state.headerWritten());
+    EXPECT_FALSE(ctx, state.trailerWritten());
+}
+
+void testAudioDecodeWaitsForCodecMetadataBeforePackets(TestContext& ctx)
+{
+    MediaGraph graph;
+    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(4);
+    const MediaNodeId codecSource = graph.addNode(MediaNodeKind::DebugDump, "test.audio.codec_source");
+    const MediaNodeId packetSource = graph.addNode(MediaNodeKind::DebugDump, "test.audio.packet_source");
+    const MediaNodeId decoder = graph.addNode(MediaNodeKind::AudioDecode, "test.audio.decoder");
+    const MediaNodeId sink = graph.addNode(MediaNodeKind::DebugDump, "test.audio.frame_sink");
+    graph.addOutputPort(codecSource, "codec", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext);
+    graph.addOutputPort(packetSource, "packet", MediaStreamKind::Audio, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet);
+    graph.addInputPort(decoder, "codec", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext);
+    graph.addInputPort(decoder, "packet", MediaStreamKind::Audio, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet);
+    graph.addOutputPort(decoder, "frame", MediaStreamKind::Audio, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame);
+    graph.addInputPort(sink, "frame", MediaStreamKind::Audio, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame);
+    graph.connect(codecSource, "codec", decoder, "codec", "test.audio.codec", policy);
+    graph.connect(packetSource, "packet", decoder, "packet", "test.audio.packet", policy);
+    graph.connect(decoder, "frame", sink, "frame", "test.audio.frame", policy);
+
+    MediaGraphExecutionContext execution;
+    EXPECT_TRUE(ctx, execution.compile(graph));
+    MediaChannel* packetInput = execution.findInputChannel(decoder, "packet");
+    EXPECT_TRUE(ctx, packetInput != nullptr);
+    if (!packetInput) return;
+    auto packet = makePacketBuffer(true, 0, MediaStreamKind::Audio);
+    EXPECT_TRUE(ctx, packet);
+    if (!packet) return;
+    EXPECT_TRUE(ctx, packetInput->push(packet.value()));
+    AudioDecodeNode node(decoder);
+    auto result = node.process(execution);
+    EXPECT_TRUE(ctx, result);
+    if (result) EXPECT_EQ(ctx, result.value().state, MediaNodeProcessState::Waiting);
+    EXPECT_EQ(ctx, packetInput->size(), static_cast<std::size_t>(1));
+}
+
+void testRealtimeOutputPolicyRejectsMissingAudioPacingBitrate(TestContext& ctx)
+{
+    auto request = validRawRtpAudioVideoOptions();
+    request.parameters.audio.bitrateKbps.reset();
+    auto urls = MediaRealtimeOutputPolicyPlanner::planUrls(request);
+    EXPECT_TRUE(ctx, urls);
+    if (!urls) return;
+    MediaRealtimeRtpTranscodePlan plan;
+    plan.videoPlan.outputCodecName = "h264";
+    plan.videoParameters.bitrateKbps = 8406;
+    const auto status = MediaRealtimeOutputPolicyPlanner::apply(request, urls.value(), plan);
+    EXPECT_FALSE(ctx, status);
+}
+
+void testRealtimePlannerNaturallySelectsAudioVideoTranscode(TestContext& ctx)
+{
+    auto request = validRawRtpAudioVideoOptions();
+    request.parameters.audio.sampleRate = 44100;
+    request.parameters.audio.bitrateKbps = 256;
+    const auto plan = MediaRealtimeRtpTranscodePlanner::plan(request);
+    EXPECT_TRUE(ctx, plan);
+    if (!plan) return;
+    EXPECT_EQ(ctx, plan.value().videoPlan.branchMode, MediaBranchMode::TranscodeFrame);
+    EXPECT_EQ(ctx, plan.value().audioPlan.branchMode, MediaBranchMode::TranscodeFrame);
+    EXPECT_FALSE(ctx, plan.value().audioPlan.followsSourceParameters);
 }
 
 void testRealtimePlannerValidationAndInputPlanningAreSeparated(TestContext& ctx)
@@ -1586,6 +1714,7 @@ void testValidationRejectsAudioRtpPortOverflow(TestContext& ctx)
     MediaRealtimeRtpTranscodeRequest options = validRealtimeOptions();
     options.parameters.execution.includeAudio = true;
     options.parameters.audio.codecName = "aac";
+    options.parameters.audio.bitrateKbps = 320;
     options.parameters.audio.sampleRate = 48000;
     options.parameters.audio.channels = 2;
     options.output.basePort = 65534;
@@ -1683,6 +1812,7 @@ void testBuildPlansRealtimeUrlAudioBranch(TestContext& ctx)
     MediaRealtimeRtpTranscodeRequest options = validRealtimeOptions();
     options.parameters.execution.includeAudio = true;
     options.parameters.audio.codecName = "aac";
+    options.parameters.audio.bitrateKbps = 320;
     options.parameters.audio.sampleRate = 48000;
     options.parameters.audio.channels = 2;
 
@@ -3091,6 +3221,11 @@ int main()
     testGraphRejectsBehaviorDefaultImplementations(ctx);
     testCapabilityScanningResponsibilitiesAreSeparated(ctx);
     testRealtimePlannerOutputPolicyIsSeparated(ctx);
+    testRealtimeOutputPolicyInitializesEveryMuxExpectation(ctx);
+    testRtpMuxStateMachineRejectsIllegalTransitions(ctx);
+    testAudioDecodeWaitsForCodecMetadataBeforePackets(ctx);
+    testRealtimeOutputPolicyRejectsMissingAudioPacingBitrate(ctx);
+    testRealtimePlannerNaturallySelectsAudioVideoTranscode(ctx);
     testRealtimePlannerValidationAndInputPlanningAreSeparated(ctx);
     testRtpMuxResponsibilitiesAreSeparated(ctx);
     testRuntimeCompilationAndLifecycleAreSeparated(ctx);

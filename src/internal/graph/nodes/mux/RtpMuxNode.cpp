@@ -84,7 +84,7 @@ MediaNodeKind RtpMuxNode::staticKind() noexcept
     if (!configured) {
         return processProgress(configured);
     }
-    if (m_state.completion().readyForTrailer()) {
+    if (m_state.readyForTrailer()) {
         auto pending = writePendingPacketsIfReady();
         if (!pending) return processProgress(pending);
         auto trailer = writeTrailerIfNeeded();
@@ -101,10 +101,10 @@ MediaNodeKind RtpMuxNode::staticKind() noexcept
             allClosed = allClosed && channel->closed() && channel->size() == 0;
             if (channel->closed() && channel->size() == 0 &&
                 channel->binding().edgeKind == MediaEdgeKind::EncodedPacket) {
-                m_state.completion().markInputClosed(std::to_string(channel->id().value));
+                m_state.markInputClosed(std::to_string(channel->id().value));
             }
         }
-        if (allClosed && m_state.completion().readyForTrailer()) {
+        if (allClosed && m_state.readyForTrailer()) {
             auto pending = writePendingPacketsIfReady();
             if (!pending) return processProgress(pending);
             auto trailer = writeTrailerIfNeeded();
@@ -135,8 +135,8 @@ MediaNodeKind RtpMuxNode::staticKind() noexcept
     }
 
     if (buffer->isEof()) {
-        m_state.completion().markInputEof(std::to_string(input.value()->channel->id().value));
-        if (!m_state.completion().readyForTrailer()) return processProgress();
+        m_state.markInputEof(std::to_string(input.value()->channel->id().value));
+        if (!m_state.readyForTrailer()) return processProgress();
         auto pending = writePendingPacketsIfReady();
         if (!pending) return processProgress(pending);
         auto trailer = writeTrailerIfNeeded();
@@ -165,10 +165,12 @@ MediaNodeKind RtpMuxNode::staticKind() noexcept
         releaseRuntimeViews();
         return pending;
     }
-    auto trailer = writeTrailerIfNeeded();
-    if (!trailer) {
-        releaseRuntimeViews();
-        return trailer;
+    if (m_state.readyForTrailer()) {
+        auto trailer = writeTrailerIfNeeded();
+        if (!trailer) {
+            releaseRuntimeViews();
+            return trailer;
+        }
     }
     mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
                             MediaGraphDiagnosticPhase::RuntimeNode,
@@ -195,16 +197,13 @@ MediaNodeKind RtpMuxNode::staticKind() noexcept
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("RtpMuxNode requires exactly one media stream kind"));
     }
-    m_state.expectVideo() = video.value();
-    m_state.expectAudio() = audio.value();
     std::vector<std::string> terminalInputs;
     for (MediaChannel* channel : context.inputChannels(nodeId())) {
         if (channel && channel->binding().edgeKind == MediaEdgeKind::EncodedPacket) {
             terminalInputs.push_back(std::to_string(channel->id().value));
         }
     }
-    m_state.completion().setExpectedConfigKeys({expectedStreamName()});
-    m_state.completion().setExpectedTerminalChannels(std::move(terminalInputs));
+    m_state.setExpectedInputs({expectedStreamName()}, std::move(terminalInputs));
 
     auto pacing = requiredBoolNodeOption(nodeOptions(context), "RtpMuxNode", "rtp.pacing.enabled");
     if (!pacing) {
@@ -222,7 +221,6 @@ MediaNodeKind RtpMuxNode::staticKind() noexcept
     if (!monotonicPacketTimestamps) {
         return ::media::Status::failure(monotonicPacketTimestamps.error());
     }
-    m_state.monotonicPacketTimestamps() = monotonicPacketTimestamps.value();
 
     auto startupDelayMs = requiredNonNegativeIntNodeOption(nodeOptions(context),
                                                           "RtpMuxNode",
@@ -230,20 +228,16 @@ MediaNodeKind RtpMuxNode::staticKind() noexcept
     if (!startupDelayMs) {
         return ::media::Status::failure(startupDelayMs.error());
     }
-    m_state.startupDelayMs() = startupDelayMs.value();
-    m_state.startupDelayElapsed() = m_state.startupDelayMs() == 0;
-
-    m_state.expectationsBound() = true;
-    return ::media::Status::success();
+    return m_state.bindExpectations(video.value(), audio.value(),
+                                    monotonicPacketTimestamps.value(), startupDelayMs.value());
 }
 
 bool RtpMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
 {
-    if (!m_session.bindOutput(buffer)) return false;
-    m_state.headerWritten() = false;
-    m_state.trailerWritten() = false;
-    m_state.formatEmitted() = false;
-    return true;
+    if (!m_state.bindOutput()) return false;
+    if (m_session.bindOutput(buffer)) return true;
+    m_state.cancelOutputBinding();
+    return false;
 }
 
 ::media::Status RtpMuxNode::tryBindStreamConfig(const MediaBufferRef& buffer)
@@ -289,12 +283,12 @@ bool RtpMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
     }
     if (dynamic_cast<FFmpegCodecContextBuffer*>(buffer.get())) {
         auto registered = m_session.registerStreamConfig(buffer, expectedStreamKind());
-        if (registered) m_state.completion().markConfigReady(expectedStreamName());
+        if (registered) m_state.markConfigReady(expectedStreamName());
         return registered;
     }
     if (dynamic_cast<FFmpegCodecParametersBuffer*>(buffer.get())) {
         auto registered = m_session.registerStreamConfig(buffer, expectedStreamKind());
-        if (registered) m_state.completion().markConfigReady(expectedStreamName());
+        if (registered) m_state.markConfigReady(expectedStreamName());
         return registered;
     }
     return ::media::Status::failure(
@@ -321,9 +315,7 @@ const char* RtpMuxNode::expectedStreamName() const noexcept
     }
     auto written = RtpMuxProtocolIo::writeHeader(*m_session.context());
     if (!written) return written;
-    m_state.headerWritten() = true;
-    m_state.completion().markHeaderWritten();
-    return ::media::Status::success();
+    return m_state.markHeaderWritten();
 }
 
 ::media::Status RtpMuxNode::writePendingPacketsIfReady()
@@ -334,7 +326,7 @@ const char* RtpMuxNode::expectedStreamName() const noexcept
     }
     auto pending = std::move(m_pendingPackets);
     m_pendingPackets.clear();
-    m_state.completion().setPendingPackets(0);
+    m_state.setPendingPackets(0);
     for (const auto& buffer : pending) {
         auto status = writePacketNow(buffer);
         if (!status) {
@@ -359,7 +351,7 @@ const char* RtpMuxNode::expectedStreamName() const noexcept
         if (m_startupReadyAt > now) {
             std::this_thread::sleep_until(m_startupReadyAt);
         }
-        m_state.startupDelayElapsed() = true;
+        if (auto elapsed = m_state.markStartupDelayElapsed(); !elapsed) return elapsed;
         mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
                                 MediaGraphDiagnosticPhase::RuntimeNode,
                                 std::string("rtp_mux.startup_delay_elapsed stream=") + expectedStreamName() +
@@ -370,7 +362,7 @@ const char* RtpMuxNode::expectedStreamName() const noexcept
     if (m_session.context() && m_session.context()->pb) {
         ::media::ffmpeg::resetPacedWriteAvio(m_session.context()->pb);
     }
-    m_state.pacingSessionStarted() = true;
+    if (auto started = m_state.markPacingSessionStarted(); !started) return started;
     mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
                             MediaGraphDiagnosticPhase::RuntimeNode,
                             std::string("rtp_mux.pacing_session_started stream=") + expectedStreamName());
@@ -385,7 +377,7 @@ const char* RtpMuxNode::expectedStreamName() const noexcept
     }
     if (!m_state.headerWritten()) {
         m_pendingPackets.push_back(buffer);
-        m_state.completion().setPendingPackets(m_pendingPackets.size());
+        m_state.setPendingPackets(m_pendingPackets.size());
         return ::media::Status::success();
     }
     auto pending = writePendingPacketsIfReady();
@@ -475,8 +467,7 @@ const char* RtpMuxNode::expectedStreamName() const noexcept
     if (!pushed) {
         return pushed;
     }
-    m_state.formatEmitted() = true;
-    return ::media::Status::success();
+    return m_state.markFormatEmitted();
 }
 
 ::media::Status RtpMuxNode::writeTrailerIfNeeded()
@@ -486,9 +477,7 @@ const char* RtpMuxNode::expectedStreamName() const noexcept
     }
     auto written = RtpMuxProtocolIo::writeTrailer(*m_session.context());
     if (!written) return written;
-    m_state.trailerWritten() = true;
-    m_state.completion().markTrailerWritten();
-    return ::media::Status::success();
+    return m_state.markTrailerWritten();
 }
 
 void RtpMuxNode::releaseRuntimeViews() noexcept

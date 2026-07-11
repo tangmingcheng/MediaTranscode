@@ -49,6 +49,7 @@ struct MediaInputAudioStreamInfo {
     std::string codecName;
     int sampleRate = 0;
     int channels = 0;
+    int64_t bitrateBitsPerSecond = 0;
 };
 
 class MediaAudioPipelinePlanner final {

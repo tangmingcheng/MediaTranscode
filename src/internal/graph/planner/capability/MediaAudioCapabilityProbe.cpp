@@ -41,6 +41,7 @@ namespace media::ffmpeg::graph {
                                       : canonicalCodecName(descriptor.codec.codecName);
     capability.stream.sampleRate = descriptor.audio.sampleRate;
     capability.stream.channels = descriptor.audio.channels;
+    capability.stream.bitrateBitsPerSecond = descriptor.codec.bitrate;
     return ::media::Result<MediaAudioCapability>::success(std::move(capability));
 }
 

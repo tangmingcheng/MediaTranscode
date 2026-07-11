@@ -45,6 +45,21 @@ void AudioDecodeNode::resetRuntimeState() noexcept
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
     }
 
+    if (!hasCodecContext()) {
+        auto codecInput = tryPopInputOptional(context, "codec");
+        if (!codecInput) {
+            return ::media::Result<MediaNodeProcessResult>::failure(codecInput.error());
+        }
+        if (!codecInput.value()) {
+            return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::waiting());
+        }
+        if (!tryBindCodecContext(*codecInput.value())) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                ::media::ErrorInfo::invalidArgument("AudioDecodeNode expected codec context on codec input"));
+        }
+        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
+    }
+
     auto input = tryPopFirstInputOptional(context);
     if (!input) {
         return ::media::Result<MediaNodeProcessResult>::failure(input.error());
@@ -59,15 +74,6 @@ void AudioDecodeNode::resetRuntimeState() noexcept
     }
 
     const MediaBufferRef& buffer = *input.value();
-    if (tryBindCodecContext(buffer)) {
-        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
-    }
-
-    if (!hasCodecContext()) {
-        return ::media::Result<MediaNodeProcessResult>::failure(
-            ::media::ErrorInfo::notInitialized("AudioDecodeNode requires codec context before packets"));
-    }
-
     if (buffer->isEof() || buffer->isFlush()) {
         const bool eof = buffer->isEof();
         if (eof && m_eofEmitted) {

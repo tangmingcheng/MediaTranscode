@@ -95,6 +95,9 @@ void fillNodePlan(
         audio.codecName = audioDescriptor.value().codecName;
         audio.sampleRate = audioDescriptor.value().clockRate;
         audio.channels = audioDescriptor.value().channels;
+        audio.bitrateBitsPerSecond = request.input.audioRtp.bitrateKbps
+            ? static_cast<int64_t>(*request.input.audioRtp.bitrateKbps) * 1000
+            : 0;
         result.audio = std::move(audio);
     }
     return ::media::Result<MediaRealtimeRawInputPlan>::success(std::move(result));

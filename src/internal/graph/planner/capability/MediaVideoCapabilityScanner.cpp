@@ -1,28 +1,12 @@
 #include "internal/graph/planner/capability/MediaVideoCapabilityScanner.h"
 #include "internal/graph/planner/capability/MediaHardwareCapabilityProbe.h"
-#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
-
-extern "C" {
-#include <libavutil/hwcontext.h>
-}
-
-#include <cstdlib>
-#include <sstream>
 #include <string>
-#include <unordered_map>
 #include <utility>
 
 namespace media::ffmpeg::graph {
 
 namespace {
-
-struct HardwareCapability {
-    bool available = false;
-    std::string reason;
-};
-
-using HardwareCapabilityCache = std::unordered_map<std::string, HardwareCapability>;
 
 bool startsWith(const std::string& value, const std::string& prefix)
 {
@@ -206,109 +190,6 @@ void assignEncoderPixelFormats(MediaPipelineStagePlan& stage)
     }
 }
 
-bool rkmppRuntimeAvailable()
-{
-    return decoderExists("h264_rkmpp") || decoderExists("hevc_rkmpp") ||
-           encoderExists("h264_rkmpp") || encoderExists("hevc_rkmpp");
-}
-
-void logHardwareCapability(const MediaPipelinePlannerOptions& options,
-                           MediaHardwareDeviceKind kind,
-                           const std::string& hwaccelName,
-                           const HardwareCapability& capability)
-{
-    if (kind == MediaHardwareDeviceKind::None) {
-        return;
-    }
-
-    std::ostringstream out;
-    out << "backend=" << mediaHardwareDeviceKindName(kind)
-        << " status=" << (capability.available ? "found" : "not_found");
-
-    if (capability.available) {
-        out << " probe=static";
-        if (!hwaccelName.empty()) {
-            out << " hwaccel=" << hwaccelName;
-        }
-        out << " note=runtime_device_not_created";
-    }
-
-    mediaGraphDiagnosticLog(options.diagnosticLogEnabled,
-                            MediaGraphDiagnosticPhase::PlannerCapability,
-                            out.str());
-}
-
-HardwareCapability probeHardwareCapability(MediaHardwareDeviceKind kind,
-                                           const std::string& hwaccelName)
-{
-    HardwareCapability capability;
-
-    if (kind == MediaHardwareDeviceKind::None) {
-        capability.available = true;
-        capability.reason = "software path";
-        return capability;
-    }
-
-    if (kind == MediaHardwareDeviceKind::RKMPP) {
-        capability.available = rkmppRuntimeAvailable();
-        capability.reason = capability.available ? "hardware backend found" : "hardware backend not found";
-        return capability;
-    }
-
-    if (hwaccelName.empty()) {
-        capability.available = false;
-        capability.reason = "hardware backend not found";
-        return capability;
-    }
-
-    const AVHWDeviceType type = av_hwdevice_find_type_by_name(hwaccelName.c_str());
-    capability.available = type != AV_HWDEVICE_TYPE_NONE;
-    capability.reason = capability.available
-                            ? "hardware backend found; runtime device not created"
-                            : "hardware backend not found";
-    return capability;
-}
-
-std::string hardwareCapabilityKey(MediaHardwareDeviceKind kind,
-                                  const std::string& hwaccelName)
-{
-    return std::string(mediaHardwareDeviceKindName(kind)) + ":" + hwaccelName;
-}
-
-const HardwareCapability& cachedHardwareCapability(HardwareCapabilityCache& cache,
-                                                   MediaHardwareDeviceKind kind,
-                                                   const std::string& hwaccelName,
-                                                   const MediaPipelinePlannerOptions& options)
-{
-    const std::string key = hardwareCapabilityKey(kind, hwaccelName);
-    auto iter = cache.find(key);
-    if (iter != cache.end()) {
-        return iter->second;
-    }
-
-    auto inserted = cache.emplace(key, probeHardwareCapability(kind, hwaccelName));
-    logHardwareCapability(options, kind, hwaccelName, inserted.first->second);
-    return inserted.first->second;
-}
-
-void applyHardwareCapability(MediaPipelineStagePlan& stage,
-                             HardwareCapabilityCache& cache,
-                             const MediaPipelinePlannerOptions& options)
-{
-    if (!stage.available) {
-        return;
-    }
-
-    if (!stage.hardware) {
-        stage.availabilityReason = "available";
-        return;
-    }
-
-    const HardwareCapability& capability = cachedHardwareCapability(cache, stage.deviceKind, stage.hwaccelName, options);
-    stage.available = capability.available;
-    stage.availabilityReason = capability.reason;
-}
-
 MediaPipelineStagePlan makeCodecStage(MediaPipelineStageRole role,
                                        std::string componentName,
                                        std::string codecName,
@@ -371,7 +252,7 @@ MediaPipelineChainPlan makeRawChain(std::string label,
                                     MediaPipelineStagePlan decoder,
                                     MediaPipelineStagePlan filter,
                                     MediaPipelineStagePlan encoder,
-                                    HardwareCapabilityCache& hardwareCache,
+                                    MediaHardwareCapabilityProbe& hardwareProbe,
                                     const MediaPipelinePlannerOptions& options)
 {
     MediaPipelineChainPlan chain;
@@ -384,9 +265,9 @@ MediaPipelineChainPlan makeRawChain(std::string label,
         return chain;
     }
 
-    applyHardwareCapability(chain.decoder, hardwareCache, options);
-    applyHardwareCapability(chain.filter, hardwareCache, options);
-    applyHardwareCapability(chain.encoder, hardwareCache, options);
+    hardwareProbe.apply(chain.decoder, options);
+    hardwareProbe.apply(chain.filter, options);
+    hardwareProbe.apply(chain.encoder, options);
     return chain;
 }
 
@@ -399,14 +280,14 @@ std::vector<MediaPipelineChainPlan> MediaVideoCapabilityScanner::enumerateTransc
 {
     const std::string inputCodec = canonicalCodecName(inputCodecName);
     const std::string outputCodec = canonicalCodecName(outputCodecName);
-    HardwareCapabilityCache hardwareCache;
+    static MediaHardwareCapabilityProbe hardwareProbe;
     std::vector<MediaPipelineChainPlan> chains;
 
     auto add = [&](std::string label,
                    MediaPipelineStagePlan decoder,
                    MediaPipelineStagePlan filter,
                    MediaPipelineStagePlan encoder) {
-        chains.push_back(makeRawChain(std::move(label), std::move(decoder), std::move(filter), std::move(encoder), hardwareCache, options));
+        chains.push_back(makeRawChain(std::move(label), std::move(decoder), std::move(filter), std::move(encoder), hardwareProbe, options));
     };
 
     add("cuda-nvenc",
@@ -496,4 +377,3 @@ std::vector<MediaPipelineChainPlan> MediaVideoCapabilityScanner::enumerateTransc
 }
 
 } // namespace media::ffmpeg::graph
-

@@ -99,7 +99,12 @@ bool knownSourceMatchesRequestedTarget(const MediaInputAudioStreamInfo& source,
         return false;
     }
     if (options.requestedBitrateKbps) {
-        return false;
+        const int64_t sourceKbps = source.bitrateBitsPerSecond > 0
+            ? (source.bitrateBitsPerSecond + 999) / 1000
+            : 0;
+        if (sourceKbps <= 0 || *options.requestedBitrateKbps != sourceKbps) {
+            return false;
+        }
     }
     if (stringTargetChanged(options.requestedProfile, "")) {
         return false;

@@ -11,7 +11,6 @@ namespace media::ffmpeg::graph {
 namespace {
 
 constexpr int RtpSessionStartupDelayMs = 1000;
-constexpr int64_t DefaultAudioBitsPerSecond = 320000;
 constexpr int64_t PacingHeadroomNumerator = 5;
 constexpr int64_t PacingHeadroomDenominator = 4;
 constexpr int64_t PacingBurstPackets = 2;
@@ -95,6 +94,8 @@ MediaLatencyPolicy muxPacing() noexcept
         plan.muxedOutput.mediaId = request.mediaId;
         plan.videoMux.expectVideo = true;
         plan.videoMux.expectAudio = MediaRealtimeRequestClassifier::audioRequested(request);
+        plan.audioMux.expectVideo = false;
+        plan.audioMux.expectAudio = false;
         return ::media::Status::success();
     }
 
@@ -109,19 +110,25 @@ MediaLatencyPolicy muxPacing() noexcept
     plan.videoOutput.packetSize = *request.output.packetSize;
     plan.videoOutput.mediaId = request.mediaId;
     applyPacing(plan.videoOutput, static_cast<int64_t>(*plan.videoParameters.bitrateKbps) * 1000);
-    plan.audioOutput.url = urls.audio;
-    plan.audioOutput.packetSize = *request.output.packetSize;
-    plan.audioOutput.mediaId = request.mediaId;
-    applyPacing(plan.audioOutput, request.parameters.audio.bitrateKbps
-                                      ? static_cast<int64_t>(*request.parameters.audio.bitrateKbps) * 1000
-                                      : DefaultAudioBitsPerSecond);
+    if (MediaRealtimeRequestClassifier::audioRequested(request)) {
+        if (!request.parameters.audio.bitrateKbps || *request.parameters.audio.bitrateKbps <= 0) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument("Realtime RTP audio output requires explicit positive audio bitrate"));
+        }
+        plan.audioOutput.url = urls.audio;
+        plan.audioOutput.packetSize = *request.output.packetSize;
+        plan.audioOutput.mediaId = request.mediaId;
+        applyPacing(plan.audioOutput, static_cast<int64_t>(*request.parameters.audio.bitrateKbps) * 1000);
+    }
     plan.sdp.path = request.output.sdpPath;
     plan.sdp.mediaId = request.mediaId;
     plan.sdp.expectedContexts = MediaRealtimeRequestClassifier::audioRequested(request) ? 2 : 1;
     plan.videoMux.expectVideo = true;
+    plan.videoMux.expectAudio = false;
     plan.videoMux.pacingPolicy = muxPacing();
     plan.videoMux.monotonicPacketTimestamps = true;
     plan.videoMux.startupDelayMs = RtpSessionStartupDelayMs;
+    plan.audioMux.expectVideo = false;
     plan.audioMux.expectAudio = MediaRealtimeRequestClassifier::audioRequested(request);
     plan.audioMux.pacingPolicy = muxPacing();
     plan.audioMux.monotonicPacketTimestamps = MediaRealtimeRequestClassifier::audioRequested(request);
