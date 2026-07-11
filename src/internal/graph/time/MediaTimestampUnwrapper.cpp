@@ -25,6 +25,20 @@ std::uint64_t modulusFor(MediaTimestampCounterKind counterKind) noexcept
 
 } // namespace
 
+::media::Result<MediaProtocolTimestamp> MediaProtocolTimestamp::create(
+    std::int64_t ticks,
+    int timeBaseNumerator,
+    int timeBaseDenominator)
+{
+    if (timeBaseNumerator <= 0 || timeBaseDenominator <= 0) {
+        return ::media::Result<MediaProtocolTimestamp>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MediaProtocolTimestamp requires a positive time base"));
+    }
+    return ::media::Result<MediaProtocolTimestamp>::success(
+        MediaProtocolTimestamp(ticks, timeBaseNumerator, timeBaseDenominator));
+}
+
 ::media::Result<MediaTimestampUnwrapper> MediaTimestampUnwrapper::create(
     MediaTimestampCounterKind counterKind,
     std::uint64_t generation)
@@ -56,10 +70,9 @@ MediaTimestampUnwrapResult MediaTimestampUnwrapper::unwrap(
         static_cast<std::uint64_t>(rawTimestamp.ticks()) >= m_modulus) {
         return discontinuity(MediaTimestampDiscontinuityReason::RawValueOutOfRange);
     }
-    if (!rawTimestamp.hasValidTimeBase() ||
-        (m_initialized &&
-         (rawTimestamp.timeBaseNumerator() != m_timeBaseNumerator ||
-          rawTimestamp.timeBaseDenominator() != m_timeBaseDenominator))) {
+    if (m_initialized &&
+        (rawTimestamp.timeBaseNumerator() != m_timeBaseNumerator ||
+         rawTimestamp.timeBaseDenominator() != m_timeBaseDenominator)) {
         return discontinuity(MediaTimestampDiscontinuityReason::TimeBaseMismatch);
     }
 
@@ -146,9 +159,12 @@ MediaTimestampUnwrapResult MediaTimestampUnwrapper::discontinuity(
 {
     return {MediaTimestampUnwrapStatus::Discontinuity,
             reason,
-            MediaProtocolTimestamp(m_lastUnwrappedTimestamp,
-                                   m_timeBaseNumerator,
-                                   m_timeBaseDenominator),
+            m_initialized
+                ? std::optional<MediaProtocolTimestamp>(
+                      MediaProtocolTimestamp(m_lastUnwrappedTimestamp,
+                                             m_timeBaseNumerator,
+                                             m_timeBaseDenominator))
+                : std::nullopt,
             m_generation};
 }
 

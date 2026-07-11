@@ -3,11 +3,27 @@
 #include "media_transcode/Result.h"
 
 #include <cstdint>
+#include <optional>
 
 namespace media::ffmpeg::graph {
 
 class MediaProtocolTimestamp final {
 public:
+    static ::media::Result<MediaProtocolTimestamp> create(
+        std::int64_t ticks,
+        int timeBaseNumerator,
+        int timeBaseDenominator);
+
+    constexpr std::int64_t ticks() const noexcept { return m_ticks; }
+    constexpr int timeBaseNumerator() const noexcept { return m_timeBaseNumerator; }
+    constexpr int timeBaseDenominator() const noexcept { return m_timeBaseDenominator; }
+
+    friend constexpr bool operator==(MediaProtocolTimestamp,
+                                     MediaProtocolTimestamp) noexcept = default;
+
+private:
+    friend class MediaTimestampUnwrapper;
+
     constexpr MediaProtocolTimestamp(std::int64_t ticks,
                                      int timeBaseNumerator,
                                      int timeBaseDenominator) noexcept
@@ -17,19 +33,6 @@ public:
     {
     }
 
-    constexpr std::int64_t ticks() const noexcept { return m_ticks; }
-    constexpr int timeBaseNumerator() const noexcept { return m_timeBaseNumerator; }
-    constexpr int timeBaseDenominator() const noexcept { return m_timeBaseDenominator; }
-
-    constexpr bool hasValidTimeBase() const noexcept
-    {
-        return m_timeBaseNumerator > 0 && m_timeBaseDenominator > 0;
-    }
-
-    friend constexpr bool operator==(MediaProtocolTimestamp,
-                                     MediaProtocolTimestamp) noexcept = default;
-
-private:
     std::int64_t m_ticks = 0;
     int m_timeBaseNumerator = 0;
     int m_timeBaseDenominator = 0;
@@ -59,7 +62,7 @@ struct MediaTimestampUnwrapResult {
     MediaTimestampUnwrapStatus status = MediaTimestampUnwrapStatus::Discontinuity;
     MediaTimestampDiscontinuityReason reason =
         MediaTimestampDiscontinuityReason::None;
-    MediaProtocolTimestamp timestamp{0, 0, 0};
+    std::optional<MediaProtocolTimestamp> timestamp;
     std::uint64_t generation = 0;
 };
 
