@@ -18,6 +18,7 @@ struct MediaGraphRuntimeMetrics {
     uint64_t schedulerAborts = 0;
     uint64_t totalPushed = 0;
     uint64_t totalPopped = 0;
+    uint64_t droppedBuffers = 0;
     uint64_t encodedPacketsPushed = 0;
     uint64_t encodedPacketsPopped = 0;
     uint64_t cpuSampleCount = 0;

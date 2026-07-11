@@ -22,6 +22,7 @@ std::string MediaGraphRuntimeReport::summary() const
            ", workingSetBytes=" + std::to_string(metrics.workingSetBytes) +
            ", totalPushed=" + std::to_string(metrics.totalPushed) +
            ", totalPopped=" + std::to_string(metrics.totalPopped) +
+           ", droppedBuffers=" + std::to_string(metrics.droppedBuffers) +
            ", encodedPacketsPushed=" + std::to_string(metrics.encodedPacketsPushed) +
            ", encodedPacketsPopped=" + std::to_string(metrics.encodedPacketsPopped) +
            ", backpressureItems=" + std::to_string(backpressure.decisions.size());
@@ -52,6 +53,7 @@ MediaGraphRuntimeReport MediaGraphRuntimeReporter::capture(const MediaGraphRunti
             queued += channel->size();
             report.metrics.totalPushed += channel->metrics().pushed;
             report.metrics.totalPopped += channel->metrics().popped;
+            report.metrics.droppedBuffers += channel->metrics().queue.dropped;
             if (channel->binding().edgeKind == MediaEdgeKind::EncodedPacket) {
                 report.metrics.encodedPacketsPushed += channel->metrics().pushed;
                 report.metrics.encodedPacketsPopped += channel->metrics().popped;
@@ -65,6 +67,7 @@ MediaGraphRuntimeReport MediaGraphRuntimeReporter::capture(const MediaGraphRunti
     if (executorMetrics.threadCount != 0 || executorMetrics.workerErrors != 0) {
         const uint64_t totalPushed = report.metrics.totalPushed;
         const uint64_t totalPopped = report.metrics.totalPopped;
+        const uint64_t droppedBuffers = report.metrics.droppedBuffers;
         const uint64_t encodedPacketsPushed = report.metrics.encodedPacketsPushed;
         const uint64_t encodedPacketsPopped = report.metrics.encodedPacketsPopped;
         report.metrics = executorMetrics;
@@ -74,6 +77,7 @@ MediaGraphRuntimeReport MediaGraphRuntimeReporter::capture(const MediaGraphRunti
         report.metrics.errorCount += acceptance.errorCount;
         report.metrics.totalPushed = totalPushed;
         report.metrics.totalPopped = totalPopped;
+        report.metrics.droppedBuffers = droppedBuffers;
         report.metrics.encodedPacketsPushed = encodedPacketsPushed;
         report.metrics.encodedPacketsPopped = encodedPacketsPopped;
         report.metrics.averageProcessCpuPercent = acceptance.averageProcessCpuPercent;

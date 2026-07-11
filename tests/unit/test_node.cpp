@@ -170,6 +170,7 @@ void testAudioEncodeFixedFrameStateMachine(TestContext& ctx)
     if (eofPopped) EXPECT_TRUE(ctx, output->isEof());
     EXPECT_TRUE(ctx, node.process(execution));
     EXPECT_EQ(ctx, api->sentSamples.size(), static_cast<std::size_t>(4));
+    EXPECT_FALSE(ctx, packetOutput->tryPop(output));
 }
 
 } // namespace

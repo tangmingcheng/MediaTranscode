@@ -653,6 +653,33 @@ void testRuntimeReportKeepsGraphQueueHighWatermarkAcrossCaptures(TestContext& ct
               static_cast<std::size_t>(0));
 }
 
+void testRuntimeReportAggregatesQueueDrops(TestContext& ctx)
+{
+    MediaGraph graph;
+    const MediaNodeId source = graph.addNode(MediaNodeKind::Demux, "drop.source");
+    const MediaNodeId sink = graph.addNode(MediaNodeKind::PacketMerge, "drop.sink");
+    graph.addOutputPort(source, "packet", MediaStreamKind::Video, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+    graph.addInputPort(sink, "packet", MediaStreamKind::Video, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+    MediaEdgePolicy edgePolicy = MediaGraphBuildSupport::blockingQueuePolicy(1);
+    edgePolicy.queuePolicy.overflowPolicy = MediaQueueOverflowPolicy::DropNewest;
+    graph.connect(source, "packet", sink, "packet", "drop.edge", edgePolicy);
+
+    MediaGraphRuntime runtime;
+    EXPECT_TRUE(ctx, runtime.compile(std::move(graph)));
+    MediaChannel* channel = runtime.context().findOutputChannel(source, "packet");
+    EXPECT_TRUE(ctx, channel != nullptr);
+    if (!channel) return;
+    auto first = makePacketBuffer(true, 1);
+    auto second = makePacketBuffer(true, 2);
+    EXPECT_TRUE(ctx, first && second);
+    if (!first || !second) return;
+    EXPECT_TRUE(ctx, channel->push(first.value()));
+    EXPECT_TRUE(ctx, channel->push(second.value()));
+    const MediaGraphRuntimeReport report = MediaGraphRuntimeReporter::capture(runtime);
+    EXPECT_EQ(ctx, report.metrics.droppedBuffers, static_cast<std::uint64_t>(1));
+    EXPECT_TRUE(ctx, report.summary().find("droppedBuffers=1") != std::string::npos);
+}
+
 void testWorkerFailurePropagatesIntoRuntimeReportAndResetClearsIt(TestContext& ctx)
 {
     MediaGraph graph;
@@ -752,6 +779,7 @@ void runEventRuntimeThreadingQueueTests(media_transcode::test::TestContext& ctx)
     testRunningStateLifecycleBoundaries(ctx);
     testRuntimeReportCarriesExternalAcceptanceSnapshot(ctx);
     testRuntimeReportKeepsGraphQueueHighWatermarkAcrossCaptures(ctx);
+    testRuntimeReportAggregatesQueueDrops(ctx);
     testWorkerFailurePropagatesIntoRuntimeReportAndResetClearsIt(ctx);
     testNormalStopInterruptionDoesNotBecomeWorkerFailure(ctx);
     testDemuxReadFailureClassificationPreservesCausality(ctx);

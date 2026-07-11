@@ -113,7 +113,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'capture full decode failed' }
 
     $cliText = Get-Content -LiteralPath $cliLog -Raw
-    if ($cliText -match 'workerErrors=[1-9]' -or $cliText -match 'errors=[1-9]' -or $cliText -match 'stalledIntervals=[1-9]' -or $cliText -match '(?i)drop.?frame') { throw 'runtime error, drop, or stall gate failed' }
+    if (-not $DisableHw -and ($cliText -notmatch 'selected_chain=cuda-nvenc' -or $cliText -notmatch 'encoder=h264_nvenc')) { throw 'hardware gate did not select CUDA/NVENC' }
+    if ($cliText -match 'workerErrors=[1-9]' -or $cliText -match 'errors=[1-9]' -or $cliText -match 'stalledIntervals=[1-9]' -or $cliText -match 'droppedBuffers=[1-9]') { throw 'runtime error, drop, or stall gate failed' }
     $driftMs = [Math]::Abs((Last-PacketPts 'v:0') - (Last-PacketPts 'a:0')) * 1000.0
     if ($driftMs -gt 100.0) { throw "A/V drift gate failed: $driftMs ms" }
     $sorted = @($cpuSamples | Sort-Object)
