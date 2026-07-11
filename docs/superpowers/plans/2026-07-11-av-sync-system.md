@@ -58,7 +58,7 @@
 
 **RED:** Test both supported topologies, explicit rejection of separate RTP to TS, complete RTP identities/clock rates/CNAME/SR parameters, complete TS program/PID/PCR parameters, ordered thresholds, and 1000/5000 ppm bounds. Test that every missing required field fails before graph construction.
 
-**GREEN:** Replace `MediaRealtimeAvStartBarrierPlan`, `MediaRealtimeAvSyncGroupPlan`, mux pacing flags, and implicit sync choices with one `MediaAvSyncPlan` embedded in the realtime plan. The specialized planner classifies the topology and validates all values; downstream objects receive values only.
+**GREEN:** Add one complete `MediaAvSyncPlan` to the realtime plan and make the specialized planner classify the topology and validate every new synchronization value. The pre-existing barrier/mux fields remain byte-for-byte only as a temporary build seam because their replacement scheduler and protocol clocks are implemented in later tasks; Task 2 must not add adapters, fallback, derived defaults, or new consumers for those fields. Task 12 removes the legacy fields and path atomically when all replacement runtime components exist.
 
 **REFACTOR:** Keep request validation, topology classification, and A/V sync policy construction in separate files while the realtime planner remains the sole orchestration/decision owner.
 
