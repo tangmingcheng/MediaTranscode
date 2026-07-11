@@ -1,0 +1,30 @@
+name: Test tiers
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  deterministic:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - run: cmake --preset x64-debug-deterministic
+      - run: cmake --build --preset deterministic --clean-first
+      - run: ctest --preset deterministic
+
+  explicit-tiers:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        tier: [integration, hardware, performance]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - run: cmake --preset x64-debug-${{ matrix.tier }}
+      - run: cmake --build --preset ${{ matrix.tier }} --clean-first
+      - run: ctest --preset ${{ matrix.tier }}

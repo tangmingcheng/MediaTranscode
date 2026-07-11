@@ -8,7 +8,7 @@ Implement the five `QUALITY_SCORE.md` priority improvements in order, with each 
 
 - [x] Priority 1: Add deterministic concurrency stress, fault injection, lifecycle coverage, fairness tests, and acceptance metrics collection.
 - [x] Priority 2: Split oversized planner, mux, capability scanner, and runtime responsibilities.
-- [ ] Priority 3: Separate core, planner, builder, runtime, node, integration, hardware, and performance test tiers.
+- [x] Priority 3: Separate core, planner, builder, runtime, node, integration, hardware, and performance test tiers.
 - [ ] Priority 4: Reject or explicitly mark incomplete optimizer, GPU, and distributed execution capabilities.
 - [ ] Priority 5: Establish repeatable performance and stability baselines and update `QUALITY_SCORE.md` from evidence.
 - [ ] Run final local, separate-RTP, and MPEG-TS hardware/software acceptance, including stability and VLC review.
@@ -33,6 +33,15 @@ Implement the five `QUALITY_SCORE.md` priority improvements in order, with each 
 - Audio and video were both transcoded by explicit target parameters; no test-only transcode switch was added.
 - Independent review findings were addressed: audio RTP pacing has no bitrate fallback, RTP mux state transitions are constrained, capability stream inspection moved out of the facade, and audio decode waits for codec metadata.
 - Fourth independent Priority 2 review verdict: PASS.
+
+## Priority 3 Evidence
+
+- Core, planner, builder, runtime, and node tests are independent deterministic targets and labels.
+- Integration, hardware, and performance targets require explicit CMake options and have dedicated presets and CI jobs.
+- Unsupported hardware exits with code 77 and is reported by CTest as skipped; CUDA device creation passed on the validation host.
+- A clean rebuild completed before the final 9/9 CTest pass.
+- Local MP4, separate RTP, and MPEG-TS UDP H264/AAC hardware/software 60-second gates passed; audio transcode was naturally selected from the 44.1 kHz target difference.
+- A discovered audio-encoder startup race is covered: frames remain queued until required codec metadata is bound.
 
 ## Global Constraints
 

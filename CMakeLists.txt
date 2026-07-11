@@ -11,6 +11,7 @@ option(MEDIA_TRANSCODE_BUILD_GRAPH_TOOLS "Build graph command line tools" ON)
 option(MEDIA_TRANSCODE_BUILD_TESTS "Build MediaTranscode tests" OFF)
 option(MEDIA_TRANSCODE_ENABLE_INTEGRATION_TESTS "Build and register integration tests" OFF)
 option(MEDIA_TRANSCODE_ENABLE_HARDWARE_TESTS "Enable hardware-dependent tests" OFF)
+option(MEDIA_TRANSCODE_ENABLE_PERFORMANCE_TESTS "Build and register performance tests" OFF)
 
 set(MEDIA_TRANSCODE_TEST_SAMPLES_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/samples"
@@ -166,6 +167,11 @@ function(media_transcode_configure_test target_name)
     )
 endfunction()
 
+function(media_transcode_register_test target_name test_labels)
+    add_test(NAME ${target_name} COMMAND ${target_name})
+    set_tests_properties(${target_name} PROPERTIES LABELS "${test_labels}")
+endfunction()
+
 if(MEDIA_TRANSCODE_BUILD_GRAPH_TOOLS)
     add_executable(${TARGET_LOCAL_VIDEO_CLI}
         tools/local_video_cli/main.cpp
@@ -181,24 +187,64 @@ endif()
 if(MEDIA_TRANSCODE_BUILD_TESTS)
     enable_testing()
 
-    add_executable(media_transcode_realtime_graph_tests
-        tests/unit/test_realtime_rtp_graph.cpp
-    )
-    media_transcode_configure_test(media_transcode_realtime_graph_tests)
-    target_compile_definitions(media_transcode_realtime_graph_tests PRIVATE
-        MEDIA_TRANSCODE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
-    )
-    if(WIN32)
-        target_link_libraries(media_transcode_realtime_graph_tests PRIVATE ws2_32)
-    endif()
-    add_test(NAME media_transcode_realtime_graph_tests COMMAND media_transcode_realtime_graph_tests)
+    add_executable(media_transcode_core_tests tests/unit/test_core.cpp)
+    media_transcode_configure_test(media_transcode_core_tests)
+    media_transcode_register_test(media_transcode_core_tests "core;deterministic")
 
-    add_executable(media_transcode_event_runtime_tests
+    add_executable(media_transcode_planner_tests tests/unit/test_planner.cpp)
+    media_transcode_configure_test(media_transcode_planner_tests)
+    media_transcode_register_test(media_transcode_planner_tests "planner;deterministic")
+
+    add_executable(media_transcode_builder_tests tests/unit/test_builder.cpp)
+    media_transcode_configure_test(media_transcode_builder_tests)
+    media_transcode_register_test(media_transcode_builder_tests "builder;deterministic")
+
+    add_executable(media_transcode_runtime_tests
         tests/unit/test_event_driven_runtime.cpp
         tests/unit/event_runtime_threading_queue_tests.cpp
         tests/unit/event_runtime_ffmpeg_ownership_tests.cpp
         tests/unit/event_runtime_multi_input_tests.cpp
     )
-    media_transcode_configure_test(media_transcode_event_runtime_tests)
-    add_test(NAME media_transcode_event_runtime_tests COMMAND media_transcode_event_runtime_tests)
+    media_transcode_configure_test(media_transcode_runtime_tests)
+    media_transcode_register_test(media_transcode_runtime_tests "runtime;deterministic")
+
+    add_executable(media_transcode_node_tests tests/unit/test_node.cpp)
+    media_transcode_configure_test(media_transcode_node_tests)
+    media_transcode_register_test(media_transcode_node_tests "node;deterministic")
+
+    add_test(NAME media_transcode_test_tier_contract
+        COMMAND ${CMAKE_COMMAND}
+            -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/verify_test_tiers.cmake
+    )
+    set_tests_properties(media_transcode_test_tier_contract PROPERTIES
+        LABELS "core;deterministic"
+    )
+
+    if(MEDIA_TRANSCODE_ENABLE_INTEGRATION_TESTS)
+        add_executable(media_transcode_integration_tests
+            tests/unit/test_realtime_rtp_graph.cpp
+        )
+        media_transcode_configure_test(media_transcode_integration_tests)
+        target_compile_definitions(media_transcode_integration_tests PRIVATE
+            MEDIA_TRANSCODE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+        )
+        if(WIN32)
+            target_link_libraries(media_transcode_integration_tests PRIVATE ws2_32)
+        endif()
+        media_transcode_register_test(media_transcode_integration_tests "integration")
+    endif()
+
+    if(MEDIA_TRANSCODE_ENABLE_HARDWARE_TESTS)
+        add_executable(media_transcode_hardware_tests tests/hardware/test_hardware.cpp)
+        media_transcode_configure_test(media_transcode_hardware_tests)
+        media_transcode_register_test(media_transcode_hardware_tests "hardware")
+        set_tests_properties(media_transcode_hardware_tests PROPERTIES SKIP_RETURN_CODE 77)
+    endif()
+
+    if(MEDIA_TRANSCODE_ENABLE_PERFORMANCE_TESTS)
+        add_executable(media_transcode_performance_tests tests/performance/test_performance.cpp)
+        media_transcode_configure_test(media_transcode_performance_tests)
+        media_transcode_register_test(media_transcode_performance_tests "performance")
+    endif()
 endif()

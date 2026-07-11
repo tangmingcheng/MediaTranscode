@@ -45,6 +45,25 @@ void AudioEncodeNode::resetRuntimeState() noexcept
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
     }
 
+    if (!hasCodecContext()) {
+        auto codecInput = tryPopInputOptional(context, "codec");
+        if (!codecInput) {
+            return ::media::Result<MediaNodeProcessResult>::failure(codecInput.error());
+        }
+        if (!codecInput.value()) {
+            return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::waiting());
+        }
+        if (!tryBindCodecContext(*codecInput.value())) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                ::media::ErrorInfo::invalidArgument("AudioEncodeNode expected codec context on codec input"));
+        }
+        auto emitStatus = emitEncoderConfig(context, *codecInput.value());
+        if (!emitStatus) {
+            return ::media::Result<MediaNodeProcessResult>::failure(emitStatus.error());
+        }
+        return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
+    }
+
     auto input = tryPopFirstInputOptional(context);
     if (!input) {
         return ::media::Result<MediaNodeProcessResult>::failure(input.error());
@@ -65,11 +84,6 @@ void AudioEncodeNode::resetRuntimeState() noexcept
             return ::media::Result<MediaNodeProcessResult>::failure(emitStatus.error());
         }
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
-    }
-
-    if (!hasCodecContext()) {
-        return ::media::Result<MediaNodeProcessResult>::failure(
-            ::media::ErrorInfo::notInitialized("AudioEncodeNode requires codec context before frames"));
     }
 
     if (buffer->isEof() || buffer->isFlush()) {

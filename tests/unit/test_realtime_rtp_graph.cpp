@@ -12,6 +12,7 @@
 #include "internal/graph/nodes/mux/RtpMuxStateMachine.h"
 #include "internal/graph/nodes/audio/AudioMonotonicTimestamp.h"
 #include "internal/graph/nodes/audio/AudioDecodeNode.h"
+#include "internal/graph/nodes/audio/AudioEncodeNode.h"
 #include "internal/graph/nodes/audio/AudioResampleNode.h"
 #include "internal/graph/nodes/video/VideoMonotonicTimestamp.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
@@ -1025,6 +1026,39 @@ void testAudioDecodeWaitsForCodecMetadataBeforePackets(TestContext& ctx)
     EXPECT_TRUE(ctx, result);
     if (result) EXPECT_EQ(ctx, result.value().state, MediaNodeProcessState::Waiting);
     EXPECT_EQ(ctx, packetInput->size(), static_cast<std::size_t>(1));
+}
+
+void testAudioEncodeWaitsForCodecMetadataBeforeFrames(TestContext& ctx)
+{
+    MediaGraph graph;
+    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(4);
+    const MediaNodeId codecSource = graph.addNode(MediaNodeKind::DebugDump, "test.audio.encoder_codec_source");
+    const MediaNodeId frameSource = graph.addNode(MediaNodeKind::DebugDump, "test.audio.encoder_frame_source");
+    const MediaNodeId encoder = graph.addNode(MediaNodeKind::AudioEncode, "test.audio.encoder");
+    graph.addOutputPort(codecSource, "codec", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext);
+    graph.addOutputPort(frameSource, "frame", MediaStreamKind::Audio, MediaEdgeKind::SoftwareFrame, MediaPayloadKind::Frame);
+    graph.addInputPort(encoder, "codec", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext);
+    graph.addInputPort(encoder, "frame", MediaStreamKind::Audio, MediaEdgeKind::SoftwareFrame, MediaPayloadKind::Frame);
+    graph.connect(codecSource, "codec", encoder, "codec", "test.audio.encoder_codec", policy);
+    graph.connect(frameSource, "frame", encoder, "frame", "test.audio.encoder_frame", policy);
+
+    MediaGraphExecutionContext execution;
+    EXPECT_TRUE(ctx, execution.compile(graph));
+    MediaChannel* frameInput = execution.findInputChannel(encoder, "frame");
+    EXPECT_TRUE(ctx, frameInput != nullptr);
+    if (!frameInput) return;
+    auto frame = ::media::ffmpeg::makeFrame();
+    EXPECT_TRUE(ctx, frame != nullptr);
+    if (!frame) return;
+    auto frameBuffer = FFmpegBufferFactory::wrapFrame(std::move(frame), MediaStreamKind::Audio);
+    EXPECT_TRUE(ctx, frameBuffer);
+    if (!frameBuffer) return;
+    EXPECT_TRUE(ctx, frameInput->push(frameBuffer.value()));
+    AudioEncodeNode node(encoder);
+    auto result = node.process(execution);
+    EXPECT_TRUE(ctx, result);
+    if (result) EXPECT_EQ(ctx, result.value().state, MediaNodeProcessState::Waiting);
+    EXPECT_EQ(ctx, frameInput->size(), static_cast<std::size_t>(1));
 }
 
 void testRealtimeOutputPolicyRejectsMissingAudioPacingBitrate(TestContext& ctx)
@@ -3224,6 +3258,7 @@ int main()
     testRealtimeOutputPolicyInitializesEveryMuxExpectation(ctx);
     testRtpMuxStateMachineRejectsIllegalTransitions(ctx);
     testAudioDecodeWaitsForCodecMetadataBeforePackets(ctx);
+    testAudioEncodeWaitsForCodecMetadataBeforeFrames(ctx);
     testRealtimeOutputPolicyRejectsMissingAudioPacingBitrate(ctx);
     testRealtimePlannerNaturallySelectsAudioVideoTranscode(ctx);
     testRealtimePlannerValidationAndInputPlanningAreSeparated(ctx);

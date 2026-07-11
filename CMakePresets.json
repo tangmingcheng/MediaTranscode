@@ -1,5 +1,5 @@
 ﻿{
-    "version": 3,
+    "version": 6,
     "configurePresets": [
         {
             "name": "windows-base",
@@ -56,6 +56,73 @@
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release"
             }
+        },
+        {
+            "name": "x64-debug-deterministic",
+            "displayName": "x64 Debug deterministic tests",
+            "inherits": "x64-debug",
+            "cacheVariables": {
+                "MEDIA_TRANSCODE_BUILD_TESTS": "ON",
+                "MEDIA_TRANSCODE_ENABLE_INTEGRATION_TESTS": "OFF",
+                "MEDIA_TRANSCODE_ENABLE_HARDWARE_TESTS": "OFF",
+                "MEDIA_TRANSCODE_ENABLE_PERFORMANCE_TESTS": "OFF"
+            }
+        },
+        {
+            "name": "x64-debug-integration",
+            "displayName": "x64 Debug integration tests",
+            "inherits": "x64-debug-deterministic",
+            "cacheVariables": {
+                "MEDIA_TRANSCODE_ENABLE_INTEGRATION_TESTS": "ON"
+            }
+        },
+        {
+            "name": "x64-debug-hardware",
+            "displayName": "x64 Debug hardware tests",
+            "inherits": "x64-debug-deterministic",
+            "cacheVariables": {
+                "MEDIA_TRANSCODE_ENABLE_HARDWARE_TESTS": "ON"
+            }
+        },
+        {
+            "name": "x64-debug-performance",
+            "displayName": "x64 Debug performance tests",
+            "inherits": "x64-debug-deterministic",
+            "cacheVariables": {
+                "MEDIA_TRANSCODE_ENABLE_PERFORMANCE_TESTS": "ON"
+            }
+        }
+    ],
+    "buildPresets": [
+        { "name": "deterministic", "configurePreset": "x64-debug-deterministic" },
+        { "name": "integration", "configurePreset": "x64-debug-integration" },
+        { "name": "hardware", "configurePreset": "x64-debug-hardware" },
+        { "name": "performance", "configurePreset": "x64-debug-performance" }
+    ],
+    "testPresets": [
+        {
+            "name": "deterministic",
+            "configurePreset": "x64-debug-deterministic",
+            "filter": { "include": { "label": "deterministic" } },
+            "output": { "outputOnFailure": true }
+        },
+        {
+            "name": "integration",
+            "configurePreset": "x64-debug-integration",
+            "filter": { "include": { "label": "integration" } },
+            "output": { "outputOnFailure": true }
+        },
+        {
+            "name": "hardware",
+            "configurePreset": "x64-debug-hardware",
+            "filter": { "include": { "label": "hardware" } },
+            "output": { "outputOnFailure": true }
+        },
+        {
+            "name": "performance",
+            "configurePreset": "x64-debug-performance",
+            "filter": { "include": { "label": "performance" } },
+            "output": { "outputOnFailure": true }
         }
     ]
 }
