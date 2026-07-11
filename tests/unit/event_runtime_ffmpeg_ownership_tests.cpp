@@ -248,8 +248,8 @@ void testDemuxSameInstanceReleasesAndRebindsInputContext(TestContext& ctx)
         EXPECT_TRUE(ctx, execution.compile(graph));
 
         AVFormatContext* raw = nullptr;
-        const auto mediaPath = std::filesystem::path(__FILE__).parent_path().parent_path().parent_path() /
-                               "out/build/x64-debug/test.mp4";
+        const auto mediaPath = std::filesystem::path(__FILE__).parent_path().parent_path() /
+                               "samples/sample_h264_aac_2560x1440.mp4";
         EXPECT_TRUE(ctx, avformat_open_input(&raw, mediaPath.string().c_str(), nullptr, nullptr) >= 0);
         if (!raw) return;
         ::media::ffmpeg::InputFormatContextPtr input(raw);

@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 
 $archive = Join-Path $env:RUNNER_TEMP 'ffmpeg-sdk.zip'
-$sdkParent = Join-Path $env:GITHUB_WORKSPACE '.ci/ffmpeg'
+$sdkParent = Join-Path $env:RUNNER_TEMP 'ffmpeg-sdk'
 $headers = @{
     Accept = 'application/octet-stream'
     Authorization = "Bearer $env:GITHUB_TOKEN"
@@ -23,8 +23,13 @@ if (-not $sdk -or -not (Test-Path (Join-Path $sdk.FullName 'lib'))) {
     throw 'FFmpeg SDK layout is unsupported'
 }
 
-$debugLib = Join-Path $sdk.FullName 'debug/lib'
-New-Item $debugLib -ItemType Directory -Force | Out-Null
-Copy-Item (Join-Path $sdk.FullName 'lib/*.lib') $debugLib
-"FFMPEG_ROOT=$($sdk.FullName)" | Out-File $env:GITHUB_ENV -Append
-(Join-Path $sdk.FullName 'bin') | Out-File $env:GITHUB_PATH -Append
+$projectFfmpeg = Join-Path $env:GITHUB_WORKSPACE '3rds/ffmpeg'
+$projectInclude = Join-Path $projectFfmpeg 'include'
+$projectDebugLib = Join-Path $projectFfmpeg 'debug/lib'
+$projectLib = Join-Path $projectFfmpeg 'lib'
+$projectBin = Join-Path $projectFfmpeg 'bin'
+New-Item $projectInclude,$projectDebugLib,$projectLib,$projectBin -ItemType Directory -Force | Out-Null
+Copy-Item (Join-Path $sdk.FullName 'include/*') $projectInclude -Recurse -Force
+Copy-Item (Join-Path $sdk.FullName 'lib/*.lib') $projectDebugLib -Force
+Copy-Item (Join-Path $sdk.FullName 'lib/*.lib') $projectLib -Force
+Copy-Item (Join-Path $sdk.FullName 'bin/*.dll') $projectBin -Force

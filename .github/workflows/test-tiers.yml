@@ -20,9 +20,9 @@ jobs:
       - name: Prepare pinned FFmpeg 8.1 shared SDK
         shell: pwsh
         run: .github/scripts/prepare-ffmpeg-sdk.ps1
-      - run: cmake --preset x64-debug-deterministic -DFFMPEG_ROOT="$env:FFMPEG_ROOT"
+      - run: cmake --preset x64-debug-deterministic
       - run: cmake --build --preset deterministic --clean-first
-      - run: Copy-Item "$env:FFMPEG_ROOT/bin/*.dll" out/build/x64-debug-deterministic
+      - run: Copy-Item "3rds/ffmpeg/bin/*.dll" out/build/x64-debug-deterministic
       - run: ctest --preset deterministic
 
   explicit-tiers:
@@ -37,7 +37,7 @@ jobs:
       - name: Prepare pinned FFmpeg 8.1 shared SDK
         shell: pwsh
         run: .github/scripts/prepare-ffmpeg-sdk.ps1
-      - run: cmake --preset x64-debug-${{ matrix.tier }} -DFFMPEG_ROOT="$env:FFMPEG_ROOT"
+      - run: cmake --preset x64-debug-${{ matrix.tier }}
       - run: cmake --build --preset ${{ matrix.tier }} --clean-first
-      - run: Copy-Item "$env:FFMPEG_ROOT/bin/*.dll" "out/build/x64-debug-${{ matrix.tier }}"
+      - run: Copy-Item "3rds/ffmpeg/bin/*.dll" "out/build/x64-debug-${{ matrix.tier }}"
       - run: ctest --preset ${{ matrix.tier }}

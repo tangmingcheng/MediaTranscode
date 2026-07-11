@@ -2741,8 +2741,13 @@ void testRuntimeCompileSupportsAutoHardwareChain(TestContext& ctx)
     options.parameters.execution.disableHardware = false;
 
     auto graphResult = preparedGraph(options);
-    EXPECT_TRUE(ctx, graphResult);
     if (!graphResult) {
+        if (graphResult.error().code == ::media::ErrorCode::HardwareUnavailable) {
+            std::cout << "SKIPPED: unsupported auto hardware chain: "
+                      << graphResult.error().describe() << '\n';
+            return;
+        }
+        EXPECT_TRUE(ctx, graphResult);
         std::cerr << graphResult.error().describe() << '\n';
         return;
     }

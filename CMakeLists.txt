@@ -90,8 +90,7 @@ target_include_directories(thirdparty_spdlog INTERFACE
 add_library(thirdparty_ffmpeg INTERFACE)
 
 if(WIN32)
-    set(FFMPEG_ROOT "${THIRD_PARTY_DIR}/ffmpeg" CACHE PATH
-        "FFmpeg development package root containing include, lib, and bin directories")
+    set(FFMPEG_ROOT "${THIRD_PARTY_DIR}/ffmpeg")
 
     target_include_directories(thirdparty_ffmpeg INTERFACE
         "${FFMPEG_ROOT}/include"
