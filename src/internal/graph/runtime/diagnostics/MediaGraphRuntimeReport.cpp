@@ -1,5 +1,7 @@
 #include "internal/graph/runtime/diagnostics/MediaGraphRuntimeReport.h"
 
+#include <algorithm>
+
 namespace media::ffmpeg::graph {
 
 std::string MediaGraphRuntimeReport::summary() const
@@ -48,9 +50,11 @@ MediaGraphRuntimeReport MediaGraphRuntimeReporter::capture(const MediaGraphRunti
     report.metrics.processThreadCount = acceptance.processThreadCount;
 
     std::size_t queued = 0;
+    std::size_t channelQueuePeaks = 0;
     for (const MediaChannel* channel : runtime.context().channels().channels()) {
         if (channel) {
             queued += channel->size();
+            channelQueuePeaks += channel->metrics().queue.peakSize;
             report.metrics.totalPushed += channel->metrics().pushed;
             report.metrics.totalPopped += channel->metrics().popped;
             report.metrics.droppedBuffers += channel->metrics().queue.dropped;
@@ -61,7 +65,8 @@ MediaGraphRuntimeReport MediaGraphRuntimeReporter::capture(const MediaGraphRunti
         }
     }
 
-    const std::size_t graphQueuePeak = runtime.observeQueueHighWatermark(queued);
+    const std::size_t graphQueuePeak = std::max(
+        runtime.observeQueueHighWatermark(queued), channelQueuePeaks);
     report.metrics.updateQueuedBuffers(queued, graphQueuePeak);
     const MediaGraphRuntimeMetrics executorMetrics = runtime.threadedExecutor().metrics();
     if (executorMetrics.threadCount != 0 || executorMetrics.workerErrors != 0) {

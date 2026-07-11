@@ -25,6 +25,25 @@ if ($Scenario.Count -gt 0) {
 }
 if ($selected.Count -eq 0) { throw 'priority5 requires at least one selected scenario' }
 
+if ([string]::IsNullOrWhiteSpace($ReportPath)) {
+    $reportDirectory = Join-Path $repoRoot $config.report_directory
+    $ReportPath = Join-Path $reportDirectory ("priority5-{0}.json" -f [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss'))
+}
+$resolvedReportPath = if ([IO.Path]::IsPathRooted($ReportPath)) {
+    [IO.Path]::GetFullPath($ReportPath)
+} else {
+    [IO.Path]::GetFullPath((Join-Path $repoRoot $ReportPath))
+}
+$resolvedReportDirectory = Split-Path -Parent $resolvedReportPath
+New-Item -ItemType Directory -Path $resolvedReportDirectory -Force | Out-Null
+
+function Write-Priority5Report([object]$Value) {
+    $temporaryPath = Join-Path $resolvedReportDirectory ((Split-Path -Leaf $resolvedReportPath) + '.tmp')
+    $json = $Value | ConvertTo-Json -Depth 8
+    [IO.File]::WriteAllText($temporaryPath, $json, [Text.UTF8Encoding]::new($false))
+    Move-Item -LiteralPath $temporaryPath -Destination $resolvedReportPath -Force
+}
+
 $reports = [Collections.Generic.List[object]]::new()
 foreach ($item in $selected) {
     $duration = if ($PSBoundParameters.ContainsKey('DurationSeconds')) { $DurationSeconds } else { [int]$item.stability_seconds }
@@ -37,18 +56,8 @@ foreach ($item in $selected) {
         if (-not $item.hardware) { $arguments += '-DisableHw' }
         $output = & powershell.exe @arguments
         if ($LASTEXITCODE -ne 0) { throw "priority5 scenario failed: $($item.name)" }
-        $gate = $output | Select-Object -Last 1 | ConvertFrom-Json
-        $report = [pscustomobject][ordered]@{
-            status = $gate.status
-            scenario = $item.name
-            mode = 'local'
-            hardware = [bool]$item.hardware
-            machine = Get-Priority5MachineInfo
-            encoding_path = if ($item.hardware) { 'cuda-nvenc/h264_nvenc' } else { 'software/libx264' }
-            duration_seconds = [double]$gate.elapsed_seconds
-            loops = [int]$gate.loops
-            output = $gate.output
-        }
+        $report = $output | Select-Object -Last 1 | ConvertFrom-Json
+        Test-Priority5LocalReport -Report $report -Hardware ([bool]$item.hardware) | Out-Null
     } else {
         $arguments = @(
             '-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $PSScriptRoot 'run_priority4_realtime_gate.ps1'),
@@ -62,11 +71,22 @@ foreach ($item in $selected) {
         Test-Priority5RealtimeReport -Report $report -Hardware ([bool]$item.hardware) | Out-Null
     }
     $reports.Add($report)
+    Write-Priority5Report ([ordered]@{
+        schema_version = 1
+        status = 'running'
+        generated_utc = [DateTime]::UtcNow.ToString('o')
+        git_commit = (& git -C $repoRoot rev-parse HEAD).Trim()
+        machine = Get-Priority5MachineInfo
+        completed_scenarios = $reports.Count
+        requested_scenarios = $selected.Count
+        scenarios = @($reports)
+    })
 }
 
 $realtimeReports = @($reports | Where-Object mode -ne 'local')
 $result = [ordered]@{
     schema_version = 1
+    status = 'pass'
     generated_utc = [DateTime]::UtcNow.ToString('o')
     git_commit = (& git -C $repoRoot rev-parse HEAD).Trim()
     machine = Get-Priority5MachineInfo
@@ -74,17 +94,5 @@ $result = [ordered]@{
     realtime_summary = if ($realtimeReports.Count -gt 0) { Merge-Priority5Reports -Reports $realtimeReports } else { $null }
 }
 
-if ([string]::IsNullOrWhiteSpace($ReportPath)) {
-    $reportDirectory = Join-Path $repoRoot $config.report_directory
-    New-Item -ItemType Directory -Path $reportDirectory -Force | Out-Null
-    $ReportPath = Join-Path $reportDirectory ("priority5-{0}.json" -f [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss'))
-}
-$resolvedReportPath = if ([IO.Path]::IsPathRooted($ReportPath)) {
-    [IO.Path]::GetFullPath($ReportPath)
-} else {
-    [IO.Path]::GetFullPath((Join-Path $repoRoot $ReportPath))
-}
-New-Item -ItemType Directory -Path (Split-Path -Parent $resolvedReportPath) -Force | Out-Null
-$json = $result | ConvertTo-Json -Depth 8
-[IO.File]::WriteAllText($resolvedReportPath, $json, [Text.UTF8Encoding]::new($false))
+Write-Priority5Report $result
 [ordered]@{ status='pass'; report=$resolvedReportPath; scenario_count=$reports.Count } | ConvertTo-Json -Compress

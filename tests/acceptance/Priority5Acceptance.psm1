@@ -52,6 +52,28 @@ function Test-Priority5RealtimeReport {
     return $true
 }
 
+function Test-Priority5LocalReport {
+    param(
+        [Parameter(Mandatory = $true)][object]$Report,
+        [Parameter(Mandatory = $true)][bool]$Hardware
+    )
+    $required = @(
+        'status','scenario','machine','encoding_path','duration_seconds','loops',
+        'average_cli_cpu_percent','p95_cli_cpu_percent','peak_working_set_bytes',
+        'peak_thread_count','queue_high_watermark','maximum_loop_duration_ms',
+        'dropped_buffers','worker_errors','runtime_errors','stalled_intervals','maximum_av_drift_ms'
+    )
+    foreach ($name in $required) { Assert-ReportField -Report $Report -Name $name }
+    if ($Report.status -ne 'pass') { throw 'priority5 local report status is not pass' }
+    if ($Hardware -and $Report.encoding_path -ne 'cuda-nvenc/h264_nvenc') { throw 'local hardware report did not use CUDA/NVENC' }
+    if (-not $Hardware -and $Report.encoding_path -ne 'software/libx264') { throw 'local software report did not use libx264' }
+    if ([double]$Report.maximum_av_drift_ms -gt 100.0) { throw 'local A/V drift gate failed' }
+    foreach ($name in @('dropped_buffers','worker_errors','runtime_errors','stalled_intervals')) {
+        if ([uint64]$Report.$name -ne 0) { throw "nonzero local runtime failure metric '$name'" }
+    }
+    return $true
+}
+
 function Merge-Priority5Reports {
     param([Parameter(Mandatory = $true)][object[]]$Reports)
     if ($Reports.Count -eq 0) { throw 'at least one report is required' }
@@ -71,4 +93,4 @@ function Merge-Priority5Reports {
     }
 }
 
-Export-ModuleMember -Function Get-Percentile,Get-Priority5MachineInfo,Test-Priority5RealtimeReport,Merge-Priority5Reports
+Export-ModuleMember -Function Get-Percentile,Get-Priority5MachineInfo,Test-Priority5RealtimeReport,Test-Priority5LocalReport,Merge-Priority5Reports

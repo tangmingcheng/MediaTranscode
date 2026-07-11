@@ -43,3 +43,7 @@ jobs:
       - run: Copy-Item "3rds/ffmpeg/bin/*.dll" "out/build/x64-debug-${{ matrix.tier }}"
       - run: Copy-Item "3rds/ffmpeg/bin/ffmpeg.exe" "out/build/x64-debug-${{ matrix.tier }}"
       - run: ctest --preset ${{ matrix.tier }}
+      - if: matrix.tier == 'performance'
+        name: Validate Priority 5 report contract
+        shell: pwsh
+        run: tests/acceptance/test_priority5_reporting.ps1

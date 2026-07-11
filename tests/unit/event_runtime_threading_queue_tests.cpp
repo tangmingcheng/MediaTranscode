@@ -677,6 +677,7 @@ void testRuntimeReportAggregatesQueueDrops(TestContext& ctx)
     EXPECT_TRUE(ctx, channel->push(second.value()));
     const MediaGraphRuntimeReport report = MediaGraphRuntimeReporter::capture(runtime);
     EXPECT_EQ(ctx, report.metrics.droppedBuffers, static_cast<std::uint64_t>(1));
+    EXPECT_EQ(ctx, report.metrics.peakQueuedBuffers, static_cast<std::size_t>(1));
     EXPECT_TRUE(ctx, report.summary().find("droppedBuffers=1") != std::string::npos);
 }
 
