@@ -23,6 +23,7 @@ jobs:
       - run: cmake --preset x64-debug-deterministic
       - run: cmake --build --preset deterministic --clean-first
       - run: Copy-Item "3rds/ffmpeg/bin/*.dll" out/build/x64-debug-deterministic
+      - run: Copy-Item "3rds/ffmpeg/bin/ffmpeg.exe" out/build/x64-debug-deterministic
       - run: ctest --preset deterministic
 
   explicit-tiers:
@@ -40,4 +41,5 @@ jobs:
       - run: cmake --preset x64-debug-${{ matrix.tier }}
       - run: cmake --build --preset ${{ matrix.tier }} --clean-first
       - run: Copy-Item "3rds/ffmpeg/bin/*.dll" "out/build/x64-debug-${{ matrix.tier }}"
+      - run: Copy-Item "3rds/ffmpeg/bin/ffmpeg.exe" "out/build/x64-debug-${{ matrix.tier }}"
       - run: ctest --preset ${{ matrix.tier }}

@@ -33,3 +33,4 @@ Copy-Item (Join-Path $sdk.FullName 'include/*') $projectInclude -Recurse -Force
 Copy-Item (Join-Path $sdk.FullName 'lib/*.lib') $projectDebugLib -Force
 Copy-Item (Join-Path $sdk.FullName 'lib/*.lib') $projectLib -Force
 Copy-Item (Join-Path $sdk.FullName 'bin/*.dll') $projectBin -Force
+Copy-Item (Join-Path $sdk.FullName 'bin/ffmpeg.exe') $projectBin -Force

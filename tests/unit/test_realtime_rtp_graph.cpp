@@ -179,14 +179,15 @@ std::string mpegTsUdpOutputUrl()
 std::filesystem::path ffmpegExecutablePath()
 {
 #ifdef _WIN32
-    const std::filesystem::path bundled = "D:/mabs/local64/bin-video/ffmpeg.exe";
-    if (std::filesystem::exists(bundled)) {
-        return bundled;
-    }
-#else
-    const std::filesystem::path bundled = "/usr/bin/ffmpeg";
-    if (std::filesystem::exists(bundled)) {
-        return bundled;
+    std::vector<wchar_t> modulePath(32768);
+    const DWORD length = GetModuleFileNameW(nullptr, modulePath.data(),
+                                            static_cast<DWORD>(modulePath.size()));
+    if (length > 0 && length < modulePath.size()) {
+        const std::filesystem::path sibling =
+            std::filesystem::path(std::wstring(modulePath.data(), length)).parent_path() / "ffmpeg.exe";
+        if (std::filesystem::exists(sibling)) {
+            return sibling;
+        }
     }
 #endif
     return "ffmpeg";
