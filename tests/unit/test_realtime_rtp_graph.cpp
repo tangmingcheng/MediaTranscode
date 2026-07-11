@@ -16,6 +16,7 @@
 #include "internal/graph/nodes/audio/AudioResampleNode.h"
 #include "internal/graph/nodes/video/VideoMonotonicTimestamp.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
+#include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
 #include "internal/graph/planner/realtime/MediaRealtimeOutputPolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaPreparedRealtimeInput.h"
 #include "internal/graph/planner/MediaPipelineCapabilityScanner.h"
@@ -1445,6 +1446,21 @@ void testRawRtpPlansAudioVideoInput(TestContext& ctx)
               std::string("rtp://127.0.0.1:5006?localrtpport=0&localrtcpport=0"));
 }
 
+void testRealtimePlanEmbedsValidatedAvSyncContract(TestContext& ctx)
+{
+    const auto result = MediaRealtimeRtpTranscodePlanner::plan(validRawRtpAudioVideoOptions());
+    EXPECT_TRUE(ctx, result);
+    if (!result) return;
+
+    EXPECT_TRUE(ctx, MediaAvSyncPlanValidator::validate(result.value().avSync));
+    EXPECT_EQ(ctx,
+              *result.value().avSync.topology,
+              MediaAvSyncTopology::SeparateRtpToSeparateRtp);
+    EXPECT_EQ(ctx,
+              *result.value().avSync.rtp->videoInput.clockRate,
+              *validRawRtpAudioVideoOptions().input.videoRtp.clockRate);
+}
+
 void testRawRtpAudioVideoGraphUsesIsolatedInputs(TestContext& ctx)
 {
     const auto graphResult = MediaRealtimeRtpTranscodeGraphBuilder::build(validRawRtpAudioVideoOptions());
@@ -1842,7 +1858,7 @@ void testBuildPlansVideoStreamAndSoftwareExecution(TestContext& ctx)
     }
 }
 
-void testBuildPlansRealtimeUrlAudioBranch(TestContext& ctx)
+void testRealtimeUrlAudioTopologyIsRejectedBeforeGraphConstruction(TestContext& ctx)
 {
     MediaRealtimeRtpTranscodeRequest options = validRealtimeOptions();
     options.parameters.execution.includeAudio = true;
@@ -1852,41 +1868,8 @@ void testBuildPlansRealtimeUrlAudioBranch(TestContext& ctx)
     options.parameters.audio.channels = 2;
 
     const auto graphResult = preparedGraph(options);
-    EXPECT_TRUE(ctx, graphResult);
-    if (!graphResult) {
-        std::cerr << graphResult.error().describe() << '\n';
-        return;
-    }
-
-    const MediaGraph& graph = graphResult.value();
-    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::AudioDecode) != nullptr);
-    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::AudioResample) != nullptr);
-    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::AudioEncode) != nullptr);
-    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::RtpOutput), static_cast<std::size_t>(2));
-    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::RtpMux), static_cast<std::size_t>(2));
-
-    const MediaNode* audioOutput = findNodeByName(graph, "realtime.audio.rtp.output");
-    EXPECT_TRUE(ctx, audioOutput != nullptr);
-    if (audioOutput) {
-        EXPECT_EQ(ctx,
-                  audioOutput->options.value("url"),
-                  std::string("rtp://127.0.0.1:5006?localrtpport=0&localrtcpport=0"));
-    }
-
-    const MediaNode* sdpWriter = findNodeByKind(graph, MediaNodeKind::SdpWriter);
-    EXPECT_TRUE(ctx, sdpWriter != nullptr);
-    if (sdpWriter) {
-        EXPECT_EQ(ctx, sdpWriter->options.value("sdp.expected_contexts"), std::string("2"));
-    }
-    const auto source = readTextFile(std::filesystem::path(MEDIA_TRANSCODE_SOURCE_DIR) /
-                                     "src" /
-                                     "internal" /
-                                     "graph" /
-                                     "nodes" /
-                                     "output" /
-                                     "SdpWriterNode.cpp");
-    EXPECT_EQ(ctx, countOccurrences(source, "av_sdp_create("), static_cast<std::size_t>(1));
-    EXPECT_TRUE(ctx, source.find("contexts.data(), static_cast<int>(contexts.size())") != std::string::npos);
+    EXPECT_FALSE(ctx, graphResult);
+    if (!graphResult) EXPECT_EQ(ctx, graphResult.error().code, media::ErrorCode::Unsupported);
 }
 
 void testBuildPlansRawRtpH264Graph(TestContext& ctx)
@@ -3300,6 +3283,7 @@ int main()
     testRawRtpPlansH264AndHevcInput(ctx);
     testRawRtpAudioEndpointRequiredWhenAudioEnabled(ctx);
     testRawRtpPlansAudioVideoInput(ctx);
+    testRealtimePlanEmbedsValidatedAvSyncContract(ctx);
     testRawRtpAudioVideoGraphUsesIsolatedInputs(ctx);
     testSeparateRtpH264OutputRequestsGlobalHeader(ctx);
     testSeparateRtpInheritedH264OutputRequestsGlobalHeader(ctx);
@@ -3329,7 +3313,7 @@ int main()
     testAudioResampleNodeNormalizesResampledFrameTimestamps(ctx);
     testAudioResampleNodeRejectsMissingFramePts(ctx);
     testBuildPlansVideoStreamAndSoftwareExecution(ctx);
-    testBuildPlansRealtimeUrlAudioBranch(ctx);
+    testRealtimeUrlAudioTopologyIsRejectedBeforeGraphConstruction(ctx);
     testBuildPlansRawRtpH264Graph(ctx);
     testBuildPlansRawRtpAudioVideoGraph(ctx);
     testRealtimeRtpDataPathUsesPlannedNonBlockingQueues(ctx);

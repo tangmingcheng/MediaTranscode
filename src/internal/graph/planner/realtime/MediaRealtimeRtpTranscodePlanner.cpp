@@ -2,6 +2,7 @@
 
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/planner/MediaPipelineCapabilityScanner.h"
+#include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeInputPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeOutputPolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
@@ -335,6 +336,13 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
     if (auto outputStatus = MediaRealtimeOutputPolicyPlanner::apply(options, outputUrls.value(), plan);
         !outputStatus) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(outputStatus.error());
+    }
+    if (MediaRealtimeRequestClassifier::audioRequested(options)) {
+        auto avSync = MediaAvSyncPlanner::plan(options);
+        if (!avSync) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(avSync.error());
+        }
+        plan.avSync = std::move(avSync).value();
     }
     return ::media::Result<MediaRealtimeRtpTranscodePlan>::success(std::move(plan));
 }

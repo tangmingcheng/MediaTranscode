@@ -5,6 +5,7 @@
 #include "internal/graph/model/MediaThreadingPolicy.h"
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/planner/MediaPipelinePlanner.h"
+#include "internal/graph/planner/avsync/MediaAvSyncPlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodeRequest.h"
 #include "internal/graph/planner/realtime/MediaPreparedRealtimeInput.h"
 #include "media_transcode/Result.h"
@@ -85,6 +86,7 @@ struct MediaRealtimeRtpTranscodePlan {
     MediaRealtimeMuxNodePlan videoMux;
     MediaRealtimeMuxNodePlan audioMux;
     MediaRealtimeAvStartBarrierPlan avStartBarrier;
+    MediaAvSyncPlan avSync;
 };
 
 struct MediaRealtimeTranscodePreflight final {

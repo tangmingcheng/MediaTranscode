@@ -13,6 +13,12 @@ namespace {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("Realtime input type and input/output stream layouts must be explicit"));
     }
+    if (*request.input.type == RealtimeInputType::RtpPort &&
+        *request.input.streamLayout == RealtimeInputStreamLayout::SeparateStreams &&
+        *request.output.streamLayout == RealtimeOutputStreamLayout::MuxedTransportStream) {
+        return ::media::Status::failure(::media::ErrorInfo::unsupported(
+            "Synchronized separate RTP input to MPEG-TS output is not supported"));
+    }
     const bool supported =
         (MediaRealtimeRequestClassifier::realtimeUrlInput(request) && MediaRealtimeRequestClassifier::separateRtpOutput(request)) ||
         (MediaRealtimeRequestClassifier::rawRtpInput(request) && MediaRealtimeRequestClassifier::separateRtpOutput(request)) ||

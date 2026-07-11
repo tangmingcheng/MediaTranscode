@@ -6,6 +6,8 @@
 #include "internal/graph/planner/MediaGraphDeploymentPlanner.h"
 #include "internal/graph/planner/MediaGraphMeshPlanner.h"
 #include "internal/graph/planner/MediaGraphPlanningPolicy.h"
+#include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
+#include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimePlanner.h"
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/runtime/distributed/MediaGraphRemoteExecutor.h"
@@ -21,9 +23,221 @@
 using namespace media::ffmpeg::graph;
 using media_transcode::test::TestContext;
 
+namespace {
+
+MediaRealtimeRtpTranscodeRequest avSyncRtpRequest()
+{
+    MediaRealtimeRtpTranscodeRequest request;
+    request.mediaId = "planner-av-sync";
+    request.input.type = RealtimeInputType::RtpPort;
+    request.input.streamLayout = RealtimeInputStreamLayout::SeparateStreams;
+    request.input.videoRtp.payloadType = 96;
+    request.input.videoRtp.clockRate = 90000;
+    request.input.audioRtp.payloadType = 97;
+    request.input.audioRtp.clockRate = 48000;
+    request.output.streamLayout = RealtimeOutputStreamLayout::SeparateStreams;
+    request.parameters.execution.includeAudio = true;
+    return request;
+}
+
+MediaRealtimeRtpTranscodeRequest avSyncTsRequest()
+{
+    MediaRealtimeRtpTranscodeRequest request;
+    request.mediaId = "planner-av-sync-ts";
+    request.input.type = RealtimeInputType::MpegTsUdp;
+    request.input.streamLayout = RealtimeInputStreamLayout::MuxedTransportStream;
+    request.output.streamLayout = RealtimeOutputStreamLayout::MuxedTransportStream;
+    request.parameters.execution.includeAudio = true;
+    return request;
+}
+
+void testAvSyncPlannerBuildsCompleteRtpContract(TestContext& ctx)
+{
+    const auto result = MediaAvSyncPlanner::plan(avSyncRtpRequest());
+    EXPECT_TRUE(ctx, result);
+    if (!result) return;
+
+    const MediaAvSyncPlan& plan = result.value();
+    EXPECT_EQ(ctx, *plan.topology, MediaAvSyncTopology::SeparateRtpToSeparateRtp);
+    EXPECT_EQ(ctx, *plan.sourceClockMode, MediaAvSyncSourceClockMode::RtpSenderReports);
+    EXPECT_EQ(ctx, *plan.canonicalTimeBaseNumerator, 1);
+    EXPECT_EQ(ctx, *plan.canonicalTimeBaseDenominator, 1000000000);
+    EXPECT_EQ(ctx, *plan.rtp->videoInput.clockRate, 90000);
+    EXPECT_EQ(ctx, *plan.rtp->audioInput.clockRate, 48000);
+    EXPECT_TRUE(ctx, *plan.rtp->input.requireCommonCname);
+    EXPECT_TRUE(ctx, *plan.rtp->input.requireSenderReports);
+    EXPECT_TRUE(ctx, *plan.rtp->videoOutput.ssrc != *plan.rtp->audioOutput.ssrc);
+    EXPECT_EQ(ctx, *plan.rtp->videoOutput.cname, *plan.rtp->audioOutput.cname);
+    EXPECT_TRUE(ctx, *plan.rtp->output.useSharedNtpEpoch);
+    EXPECT_TRUE(ctx, plan.rtp->output.senderReportIntervalNs->nanoseconds() > 0);
+    EXPECT_TRUE(ctx, MediaAvSyncPlanValidator::validate(plan));
+}
+
+void testAvSyncPlannerBuildsCompleteTsContract(TestContext& ctx)
+{
+    const auto result = MediaAvSyncPlanner::plan(avSyncTsRequest());
+    EXPECT_TRUE(ctx, result);
+    if (!result) return;
+
+    const MediaAvSyncPlan& plan = result.value();
+    EXPECT_EQ(ctx, *plan.topology, MediaAvSyncTopology::MpegTsToMpegTs);
+    EXPECT_EQ(ctx, *plan.sourceClockMode, MediaAvSyncSourceClockMode::MpegTsPcr);
+    EXPECT_TRUE(ctx, plan.ts.has_value());
+    EXPECT_TRUE(ctx, *plan.ts->programNumber > 0);
+    EXPECT_TRUE(ctx, *plan.ts->videoPid != *plan.ts->audioPid);
+    EXPECT_TRUE(ctx, *plan.ts->pcrPid == *plan.ts->videoPid);
+    EXPECT_TRUE(ctx, plan.ts->pcrIntervalNs->nanoseconds() > 0);
+    EXPECT_TRUE(ctx, *plan.ts->maximumPcrGapNs >= *plan.ts->pcrIntervalNs);
+    EXPECT_EQ(ctx, *plan.ts->timestampTimeBaseNumerator, 1);
+    EXPECT_EQ(ctx, *plan.ts->timestampTimeBaseDenominator, 90000);
+    EXPECT_TRUE(ctx, MediaAvSyncPlanValidator::validate(plan));
+}
+
+void testAvSyncPlannerRejectsSeparateRtpToTs(TestContext& ctx)
+{
+    auto request = avSyncRtpRequest();
+    request.output.streamLayout = RealtimeOutputStreamLayout::MuxedTransportStream;
+    const auto result = MediaAvSyncPlanner::plan(request);
+    EXPECT_FALSE(ctx, result);
+    if (!result) EXPECT_EQ(ctx, result.error().code, media::ErrorCode::Unsupported);
+}
+
+void testAvSyncValidatorRejectsMissingAndInconsistentFields(TestContext& ctx)
+{
+    const auto result = MediaAvSyncPlanner::plan(avSyncRtpRequest());
+    EXPECT_TRUE(ctx, result);
+    if (!result) return;
+    const MediaAvSyncPlan complete = result.value();
+
+    auto expectInvalid = [&ctx](MediaAvSyncPlan plan) {
+        const auto status = MediaAvSyncPlanValidator::validate(plan);
+        EXPECT_FALSE(ctx, status);
+        if (!status) EXPECT_EQ(ctx, status.error().code, media::ErrorCode::InvalidArgument);
+    };
+
+#define EXPECT_MISSING(field)                 \
+    do {                                      \
+        MediaAvSyncPlan missing = complete;   \
+        missing.field.reset();                \
+        expectInvalid(std::move(missing));    \
+    } while (false)
+
+    EXPECT_MISSING(topology);
+    EXPECT_MISSING(sourceClockMode);
+    EXPECT_MISSING(masterClockMode);
+    EXPECT_MISSING(canonicalTimeBaseNumerator);
+    EXPECT_MISSING(canonicalTimeBaseDenominator);
+    EXPECT_MISSING(startup.requireVideoKeyFrame);
+    EXPECT_MISSING(startup.trimAudioToCommonStart);
+    EXPECT_MISSING(startup.maximumWaitNs);
+    EXPECT_MISSING(startup.prerollNs);
+    EXPECT_MISSING(startup.keyFrameWaitNs);
+    EXPECT_MISSING(startup.maximumAudioTrimNs);
+    EXPECT_MISSING(startup.maximumInitialSkewNs);
+    EXPECT_MISSING(startup.outputLeadNs);
+    EXPECT_MISSING(audioServo.deadbandNs);
+    EXPECT_MISSING(audioServo.shortControlWindowNs);
+    EXPECT_MISSING(audioServo.longControlWindowNs);
+    EXPECT_MISSING(audioServo.proportionalGainPpm);
+    EXPECT_MISSING(audioServo.integralGainPpm);
+    EXPECT_MISSING(audioServo.maximumSlewPpmPerSecond);
+    EXPECT_MISSING(audioServo.normalCorrectionLimitPpm);
+    EXPECT_MISSING(audioServo.recoveryCorrectionLimitPpm);
+    EXPECT_MISSING(audioServo.compensationWindowNs);
+    EXPECT_MISSING(video.earlyHoldThresholdNs);
+    EXPECT_MISSING(video.lateDisplayThresholdNs);
+    EXPECT_MISSING(video.dropThresholdNs);
+    EXPECT_MISSING(video.allowRecoveryRepeat);
+    EXPECT_MISSING(video.maximumConsecutiveRecoveryActions);
+    EXPECT_MISSING(recovery.suspectThresholdNs);
+    EXPECT_MISSING(recovery.hardDiscontinuityThresholdNs);
+    EXPECT_MISSING(recovery.reacquisitionTimeoutNs);
+    EXPECT_MISSING(metrics.collectStateAndGeneration);
+    EXPECT_MISSING(metrics.collectClockEvidence);
+    EXPECT_MISSING(metrics.collectQueueDurations);
+    EXPECT_MISSING(metrics.collectPhaseErrors);
+    EXPECT_MISSING(metrics.collectAudioCorrection);
+    EXPECT_MISSING(metrics.collectVideoRecoveryCounts);
+    EXPECT_MISSING(metrics.collectDiscontinuityCounts);
+    EXPECT_MISSING(metrics.collectProtocolClockHealth);
+    EXPECT_MISSING(metrics.maximumStartupSkewNs);
+    EXPECT_MISSING(metrics.maximumSteadyP95SkewNs);
+    EXPECT_MISSING(metrics.maximumSteadyP99SkewNs);
+    EXPECT_MISSING(metrics.maximumDriftNsPerHour);
+    EXPECT_MISSING(rtp->videoInput.identity);
+    EXPECT_MISSING(rtp->videoInput.payloadType);
+    EXPECT_MISSING(rtp->videoInput.clockRate);
+    EXPECT_MISSING(rtp->audioInput.identity);
+    EXPECT_MISSING(rtp->audioInput.payloadType);
+    EXPECT_MISSING(rtp->audioInput.clockRate);
+    EXPECT_MISSING(rtp->input.requireCommonCname);
+    EXPECT_MISSING(rtp->input.requireSenderReports);
+    EXPECT_MISSING(rtp->input.senderReportTimeoutNs);
+    EXPECT_MISSING(rtp->input.maximumExtrapolationNs);
+    EXPECT_MISSING(rtp->videoOutput.identity);
+    EXPECT_MISSING(rtp->videoOutput.payloadType);
+    EXPECT_MISSING(rtp->videoOutput.clockRate);
+    EXPECT_MISSING(rtp->videoOutput.ssrc);
+    EXPECT_MISSING(rtp->videoOutput.baseTimestamp);
+    EXPECT_MISSING(rtp->videoOutput.cname);
+    EXPECT_MISSING(rtp->audioOutput.identity);
+    EXPECT_MISSING(rtp->audioOutput.payloadType);
+    EXPECT_MISSING(rtp->audioOutput.clockRate);
+    EXPECT_MISSING(rtp->audioOutput.ssrc);
+    EXPECT_MISSING(rtp->audioOutput.baseTimestamp);
+    EXPECT_MISSING(rtp->audioOutput.cname);
+    EXPECT_MISSING(rtp->output.useSharedNtpEpoch);
+    EXPECT_MISSING(rtp->output.senderReportIntervalNs);
+#undef EXPECT_MISSING
+    MediaAvSyncPlan missingRtpPolicy = complete;
+    missingRtpPolicy.rtp.reset();
+    expectInvalid(std::move(missingRtpPolicy));
+
+    MediaAvSyncPlan unordered = complete;
+    unordered.video.lateDisplayThresholdNs = *unordered.recovery.hardDiscontinuityThresholdNs;
+    expectInvalid(std::move(unordered));
+    MediaAvSyncPlan excessiveNormalCorrection = complete;
+    excessiveNormalCorrection.audioServo.normalCorrectionLimitPpm = 1001;
+    expectInvalid(std::move(excessiveNormalCorrection));
+    MediaAvSyncPlan excessiveRecoveryCorrection = complete;
+    excessiveRecoveryCorrection.audioServo.recoveryCorrectionLimitPpm = 5001;
+    expectInvalid(std::move(excessiveRecoveryCorrection));
+
+    const auto tsResult = MediaAvSyncPlanner::plan(avSyncTsRequest());
+    EXPECT_TRUE(ctx, tsResult);
+    if (!tsResult) return;
+    const MediaAvSyncPlan completeTs = tsResult.value();
+#define EXPECT_MISSING_TS(field)                 \
+    do {                                         \
+        MediaAvSyncPlan missing = completeTs;    \
+        missing.ts->field.reset();               \
+        expectInvalid(std::move(missing));       \
+    } while (false)
+    EXPECT_MISSING_TS(programNumber);
+    EXPECT_MISSING_TS(programMapPid);
+    EXPECT_MISSING_TS(videoPid);
+    EXPECT_MISSING_TS(audioPid);
+    EXPECT_MISSING_TS(pcrPid);
+    EXPECT_MISSING_TS(pcrIntervalNs);
+    EXPECT_MISSING_TS(maximumPcrGapNs);
+    EXPECT_MISSING_TS(maximumPcrJitterNs);
+    EXPECT_MISSING_TS(timestampTimeBaseNumerator);
+    EXPECT_MISSING_TS(timestampTimeBaseDenominator);
+#undef EXPECT_MISSING_TS
+    MediaAvSyncPlan missingTsPolicy = completeTs;
+    missingTsPolicy.ts.reset();
+    expectInvalid(std::move(missingTsPolicy));
+}
+
+} // namespace
+
 int main()
 {
     TestContext ctx;
+    testAvSyncPlannerBuildsCompleteRtpContract(ctx);
+    testAvSyncPlannerBuildsCompleteTsContract(ctx);
+    testAvSyncPlannerRejectsSeparateRtpToTs(ctx);
+    testAvSyncValidatorRejectsMissingAndInconsistentFields(ctx);
     MediaInputAudioStreamInfo source;
     source.streamIndex = 0;
     source.codecName = "aac";
