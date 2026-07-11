@@ -64,23 +64,86 @@
 
 **Commit:** `feat: plan complete av synchronization policy`
 
-## Task 3: RTP RTCP source-clock evidence
+## Task 3: Application-owned RTP/RTCP ingress and source clock
+
+FFmpeg's public RTP API exposes received SR side data but not incoming SDES CNAME, and privately owns both RTP/RTCP sockets. Custom AVIO is not used by the `AVFMT_NOFILE` RTP demuxer, and a loopback relay would add a second UDP buffer, TOCTOU port allocation, and changed RTCP semantics. Guaranteed synchronization therefore replaces the raw-RTP FFmpeg transport/depacketizer boundary instead of adding a side reader or fallback. Task 3 is complete only when 3A, 3B, and 3C pass one combined review gate.
+
+### Task 3A: RTP/RTCP transport and protocol evidence
 
 **Files:**
 
+- Create `src/internal/graph/runtime/network/MediaSocketRuntime.h`
+- Create `src/internal/graph/runtime/network/MediaSocketRuntime.cpp`
+- Create `src/internal/graph/runtime/network/MediaUdpSocket.h`
+- Create `src/internal/graph/runtime/network/MediaUdpSocket.cpp`
+- Create `src/internal/graph/protocol/rtp/MediaRtpUdpTransport.h`
+- Create `src/internal/graph/protocol/rtp/MediaRtpUdpTransport.cpp`
+- Create `src/internal/graph/protocol/rtp/MediaRtpPacketParser.h`
+- Create `src/internal/graph/protocol/rtp/MediaRtpPacketParser.cpp`
+- Create `src/internal/graph/protocol/rtp/MediaRtcpCompoundParser.h`
+- Create `src/internal/graph/protocol/rtp/MediaRtcpCompoundParser.cpp`
+- Create `src/internal/graph/protocol/rtp/MediaRtcpClockEvidence.h`
 - Create `src/internal/graph/protocol/rtp/MediaRtcpSenderReportTracker.h`
 - Create `src/internal/graph/protocol/rtp/MediaRtcpSenderReportTracker.cpp`
-- Create `src/internal/graph/protocol/rtp/MediaRtpSourceClockMapper.h`
-- Create `src/internal/graph/protocol/rtp/MediaRtpSourceClockMapper.cpp`
+- Modify `src/internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h`
+- Modify `src/internal/graph/planner/realtime/MediaRealtimeInputPlanner.cpp`
+- Modify `tests/unit/test_node.cpp`
+- Modify `tests/unit/test_event_driven_runtime.cpp`
+
+**RED:** Test strict RTP header parsing and RTCP compound SR/SDES/BYE parsing, including version, padding, length, multiple chunks/items, alignment, unknown packet types, truncation, and malformed packets. Test same-SSRC media/SR/CNAME readiness, missing evidence, SSRC/CNAME change, NTP regression, expiry, and BYE. Test socket lifecycle, bind failure, cancellation, sparse/simultaneous RTP+RTCP, stop/reset/abort, and no spin.
+
+**GREEN:** Each raw input owns one RAII RTP/RTCP socket pair. The event-driven transport blocks on RTP, RTCP, and cancellation; steady receive time is used only for timeout/health metrics. Planner supplies bind family/address, exact RTP/RTCP ports, payload/clock identity, receive buffer, datagram limit, reorder policy, and SR/CNAME timeouts. Nodes add no port, timeout, buffer, multicast, or clock defaults.
+
+**REFACTOR:** Keep socket ownership, datagram classification, RTP parsing, RTCP parsing, and evidence tracking as separate responsibilities.
+
+**Commit:** `feat: own RTP RTCP ingress and clock evidence`
+
+### Task 3B: Registry-driven RTP depacketization and graph boundary
+
+**Files:**
+
+- Create `src/internal/graph/protocol/rtp/MediaRtpReorderBuffer.h`
+- Create `src/internal/graph/protocol/rtp/MediaRtpReorderBuffer.cpp`
+- Create `src/internal/graph/protocol/rtp/MediaRtpDepacketizer.h`
+- Create `src/internal/graph/protocol/rtp/MediaRtpDepacketizerFactory.h`
+- Create `src/internal/graph/protocol/rtp/MediaRtpDepacketizerFactory.cpp`
+- Create focused H264, HEVC, AAC MPEG4-GENERIC, and Opus depacketizers under `src/internal/graph/protocol/rtp/depacketizer/`
+- Create `src/internal/graph/nodes/input/MediaRawRtpStreamDescriptorFactory.h`
+- Create `src/internal/graph/nodes/input/MediaRawRtpStreamDescriptorFactory.cpp`
 - Modify `src/internal/graph/nodes/input/RawRtpInputNode.h`
 - Modify `src/internal/graph/nodes/input/RawRtpInputNode.cpp`
+- Modify `src/internal/graph/runtime/ffmpeg/FFmpegFormatContextBuffer.h`
+- Modify `src/internal/graph/runtime/ffmpeg/FFmpegFormatContextBuffer.cpp`
+- Modify `src/internal/graph/builder/realtime/MediaRealtimeOptionApplier.cpp`
+- Modify `src/internal/graph/builder/realtime/MediaRealtimeRtpTranscodeGraphBuilder.cpp`
 - Modify `tests/unit/test_node.cpp`
+- Modify `tests/unit/test_realtime_rtp_graph.cpp`
 
-**RED:** Test RTP/NTP mapping for audio/video with matching CNAME, RTP wrap, SR jitter and bounded rate estimation, NTP regression, invalid slope, SR timeout/extrapolation expiry, SSRC change, and CNAME mismatch. Confirm absent SR/CNAME produces a structured failure instead of arrival-time mapping.
+**RED:** Test reorder, duplicate, gap, sequence wrap, SSRC/payload change, incomplete access-unit loss, and exact RTP timestamp preservation. Cover H264 single NAL/STAP-A/FU-A, HEVC single NAL/AP/FU, strict AAC AU headers/config, and Opus packet duration; malformed and unsupported packetization modes must fail. Assert raw RTP graphs no longer contain an SDP input, `DemuxNode`, `StreamSplitNode`, or private-socket side reader.
 
-**GREEN:** Parse and expose RTCP SR/SDES evidence from the raw RTP input and implement the tracker/mapper as protocol-only components. Published running time must remain continuous across accepted SR updates.
+**GREEN:** `RawRtpInputNode` directly emits an immutable stream snapshot, complete FFmpeg packet access units, clock evidence, and structured RTP/RTCP events. FFmpeg starts at `AVPacket + AVCodecParameters`; the raw path no longer opens an RTP URL or synthetic SDP. The depacketizer factory supports exactly the codecs/modes already accepted by the raw-RTP planner and rejects unsupported modes during planning.
 
-**REFACTOR:** Keep packet reception, RTCP evidence tracking, and timestamp conversion separate; use planner-provided identifiers and thresholds only.
+**REFACTOR:** Parser, reorder buffer, codec depacketizers, descriptor creation, and graph I/O remain independent. No codec-specific branch belongs in the transport or node lifecycle.
+
+**Commit:** `feat: depacketize planned RTP streams in graph`
+
+### Task 3C: Cross-stream SR/CNAME source-clock mapping
+
+**Files:**
+
+- Create `src/internal/graph/protocol/rtp/MediaRtpSourceClockMapper.h`
+- Create `src/internal/graph/protocol/rtp/MediaRtpSourceClockMapper.cpp`
+- Create `src/internal/graph/protocol/rtp/MediaRtpClockGroupValidator.h`
+- Create `src/internal/graph/protocol/rtp/MediaRtpClockGroupValidator.cpp`
+- Modify `src/internal/graph/nodes/input/RawRtpInputNode.cpp`
+- Modify `tests/unit/test_node.cpp`
+- Modify `tests/unit/test_realtime_rtp_graph.cpp`
+
+**RED:** Test matching-CNAME audio/video mapping, RTP wrap, bounded SR jitter/rate estimation, NTP regression, invalid slope, timeout/extrapolation expiry, SSRC/CNAME change, and group generation reset. Confirm missing SR/CNAME never uses SDP, wall clock, or arrival time and prevents startup readiness.
+
+**GREEN:** Map unwrapped RTP through valid SR RTP/NTP pairs into a common source domain. Accept a group only when observed media SSRC, SR SSRC, and non-empty SDES CNAME match for each stream and audio/video CNAME octets are identical. Accepted SR updates refine rate/offset without jumping published running time; expiry requests group reacquisition.
+
+**REFACTOR:** Transport supplies datagrams, parser supplies evidence, tracker maintains per-stream validity, group validator establishes identity, and mapper only converts timestamps.
 
 **Commit:** `feat: map RTP sender clocks into common source time`
 
