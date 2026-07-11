@@ -4,38 +4,25 @@
 
 namespace media::ffmpeg::graph {
 
-::media::Status MediaGraphRemoteExecutor::deploy(MediaGraphDeploymentPlan plan)
+::media::Status MediaGraphRemoteExecutor::deploy(MediaGraphDeploymentPlan)
 {
-    if (plan.empty()) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("MediaGraphRemoteExecutor deploy failed: deployment plan is empty"));
-    }
-
-    m_plan = std::move(plan);
-    m_state = MediaGraphRemoteExecutorState::Deployed;
-    return ::media::Status::success();
+    return ::media::Status::failure(
+        ::media::ErrorInfo::unsupported(
+            "MediaGraphRemoteExecutor is unsupported: remote deployment transport is not implemented"));
 }
 
 ::media::Status MediaGraphRemoteExecutor::start()
 {
-    if (m_state != MediaGraphRemoteExecutorState::Deployed &&
-        m_state != MediaGraphRemoteExecutorState::Stopped) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::notInitialized("MediaGraphRemoteExecutor start failed: executor is not deployed"));
-    }
-
-    m_state = MediaGraphRemoteExecutorState::Running;
-    return ::media::Status::success();
+    return ::media::Status::failure(
+        ::media::ErrorInfo::unsupported(
+            "MediaGraphRemoteExecutor is unsupported: remote execution is not implemented"));
 }
 
 ::media::Status MediaGraphRemoteExecutor::stop()
 {
-    if (m_state == MediaGraphRemoteExecutorState::Idle) {
-        return ::media::Status::success();
-    }
-
-    m_state = MediaGraphRemoteExecutorState::Stopped;
-    return ::media::Status::success();
+    return ::media::Status::failure(
+        ::media::ErrorInfo::unsupported(
+            "MediaGraphRemoteExecutor is unsupported: remote execution is not implemented"));
 }
 
 void MediaGraphRemoteExecutor::reset()

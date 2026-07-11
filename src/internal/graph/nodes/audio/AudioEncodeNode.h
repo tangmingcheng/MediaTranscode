@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/graph/nodes/audio/AudioEncoderFrameQueue.h"
 #include "internal/graph/nodes/FFmpegCodecNodeRuntime.h"
 #include "internal/graph/runtime/lifecycle/MediaInputTerminalTracker.h"
 
@@ -19,6 +20,8 @@ protected:
 private:
     ::media::Status emitEncoderConfig(MediaGraphExecutionContext& context, const MediaBufferRef& buffer);
     ::media::Result<bool> receivePackets(MediaGraphExecutionContext& context);
+    ::media::Result<MediaNodeProcessResult> encodeQueuedFrame(MediaGraphExecutionContext& context,
+                                                              bool allowPartial);
     ::media::Result<MediaNodeProcessResult> continueFlush(MediaGraphExecutionContext& context);
     void resetRuntimeState() noexcept;
 
@@ -31,6 +34,8 @@ private:
     bool m_flushIsEof = false;
     bool m_flushSent = false;
     MediaBufferRef m_flushBuffer;
+    AudioEncoderFrameQueue m_frameQueue;
+    ::media::ffmpeg::FramePtr m_pendingFrame;
 };
 
 } // namespace media::ffmpeg::graph

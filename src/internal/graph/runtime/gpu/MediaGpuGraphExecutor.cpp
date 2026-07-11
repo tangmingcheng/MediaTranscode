@@ -4,29 +4,18 @@
 
 namespace media::ffmpeg::graph {
 
-::media::Status MediaGpuGraphExecutor::prepare(MediaGpuGraphCommandList commands)
+::media::Status MediaGpuGraphExecutor::prepare(MediaGpuGraphCommandList)
 {
-    if (commands.empty()) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("MediaGpuGraphExecutor prepare failed: command list is empty"));
-    }
-
-    m_commands = std::move(commands);
-    m_state = MediaGpuGraphExecutorState::Prepared;
-    return ::media::Status::success();
+    return ::media::Status::failure(
+        ::media::ErrorInfo::unsupported(
+            "MediaGpuGraphExecutor is unsupported: generic GPU command execution is not implemented"));
 }
 
 ::media::Status MediaGpuGraphExecutor::execute()
 {
-    if (m_state != MediaGpuGraphExecutorState::Prepared &&
-        m_state != MediaGpuGraphExecutorState::Completed) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::notInitialized("MediaGpuGraphExecutor execute failed: executor is not prepared"));
-    }
-
-    m_state = MediaGpuGraphExecutorState::Running;
-    m_state = MediaGpuGraphExecutorState::Completed;
-    return ::media::Status::success();
+    return ::media::Status::failure(
+        ::media::ErrorInfo::unsupported(
+            "MediaGpuGraphExecutor is unsupported: generic GPU command execution is not implemented"));
 }
 
 void MediaGpuGraphExecutor::reset()

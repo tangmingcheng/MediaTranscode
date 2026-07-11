@@ -16,18 +16,9 @@ const char* MediaNodeFusionPass::name() const noexcept
         return ::media::Status::success();
     }
 
-    std::size_t candidates = 0;
-    for (const auto& node : graph.nodes()) {
-        if (node.kind == MediaNodeKind::VideoTimestamp ||
-            node.kind == MediaNodeKind::PacketNormalize ||
-            node.kind == MediaNodeKind::VideoFrameRate) {
-            ++candidates;
-        }
-    }
-
-    report.info(name(), "fusion candidates detected=" + std::to_string(candidates));
-    report.info(name(), "structural fusion is deferred until node capability metadata is complete");
-    return ::media::Status::success();
+    return ::media::Status::failure(
+        ::media::ErrorInfo::unsupported(
+            "MediaNodeFusionPass is unsupported: structural fusion is not implemented"));
 }
 
 } // namespace media::ffmpeg::graph

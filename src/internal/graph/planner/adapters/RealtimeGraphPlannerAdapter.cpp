@@ -20,7 +20,7 @@ MediaRealtimePlannerOptions makeRealtimeOptions(const MediaGraphPlannerAdapterOp
     realtimeOptions.enableGpuPlanning = options.enableGpuPlanning;
     realtimeOptions.enableMeshPlanning = options.enableMeshPlanning;
     realtimeOptions.preferZeroCopy = options.preferZeroCopy;
-    realtimeOptions.enableNodeFusion = true;
+    realtimeOptions.enableNodeFusion = false;
     return realtimeOptions;
 }
 

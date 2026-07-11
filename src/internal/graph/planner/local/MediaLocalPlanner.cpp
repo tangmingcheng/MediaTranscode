@@ -51,11 +51,11 @@ MediaGraphPlanningPolicy MediaLocalPlanner::buildPolicy(const MediaLocalPlannerO
     policy.threadingPolicy.mode = MediaThreadingMode::SingleThreaded;
     policy.threadingPolicy.priority = MediaThreadPriority::Normal;
 
-    policy.optimizationPolicy.level = MediaGraphOptimizationLevel::Safe;
+    policy.optimizationPolicy.level = MediaGraphOptimizationLevel::None;
     policy.optimizationPolicy.enableNodeFusion = false;
-    policy.optimizationPolicy.enableRedundantTransferElimination = true;
-    policy.optimizationPolicy.enableQueuePolicyTuning = true;
-    policy.optimizationPolicy.enableBackpressurePlanning = true;
+    policy.optimizationPolicy.enableRedundantTransferElimination = false;
+    policy.optimizationPolicy.enableQueuePolicyTuning = false;
+    policy.optimizationPolicy.enableBackpressurePlanning = false;
     policy.optimizationPolicy.enableDiagnosticReport = true;
 
     policy.optimizationPolicy.latencyPolicy.mode = MediaLatencyMode::Balanced;

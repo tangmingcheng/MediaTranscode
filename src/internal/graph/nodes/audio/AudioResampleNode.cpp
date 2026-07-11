@@ -284,7 +284,9 @@ bool AudioResampleNode::frameMatchesEncoder(const AVFrame* frame) const noexcept
     if (!outputFrame) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument("AudioResampleNode output frame is invalid"));
     }
-    auto pts = monotonicAudioFrameTimestamp(inputFrame->pts, srcTb, dstTb, m_nextOutputPts);
+    auto pts = m_nextOutputPts != AV_NOPTS_VALUE
+        ? ::media::Result<int64_t>::success(m_nextOutputPts)
+        : monotonicAudioFrameTimestamp(inputFrame->pts, srcTb, dstTb, m_nextOutputPts);
     if (!pts) {
         return ::media::Status::failure(pts.error());
     }

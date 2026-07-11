@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/graph/model/MediaGraphCapability.h"
 #include "internal/graph/runtime/gpu/MediaGpuGraphCommand.h"
 #include "media_transcode/Result.h"
 
@@ -15,6 +16,11 @@ enum class MediaGpuGraphExecutorState {
 
 class MediaGpuGraphExecutor final {
 public:
+    static constexpr MediaCapabilityMaturity capabilityMaturity() noexcept
+    {
+        return mediaGraphCapabilityMaturity(MediaGraphCapability::GenericGpuExecution);
+    }
+
     ::media::Status prepare(MediaGpuGraphCommandList commands);
     ::media::Status execute();
     void reset();

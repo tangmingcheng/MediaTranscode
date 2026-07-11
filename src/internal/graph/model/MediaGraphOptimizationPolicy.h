@@ -14,20 +14,24 @@ enum class MediaGraphOptimizationLevel {
 };
 
 struct MediaGraphOptimizationPolicy {
-    MediaGraphOptimizationLevel level = MediaGraphOptimizationLevel::Safe;
+    MediaGraphOptimizationLevel level = MediaGraphOptimizationLevel::None;
     MediaLatencyPolicy latencyPolicy;
     MediaThreadingPolicy threadingPolicy;
     MediaZeroCopyPolicy zeroCopyPolicy;
 
     bool enableNodeFusion = false;
-    bool enableRedundantTransferElimination = true;
-    bool enableQueuePolicyTuning = true;
-    bool enableBackpressurePlanning = true;
+    bool enableRedundantTransferElimination = false;
+    bool enableQueuePolicyTuning = false;
+    bool enableBackpressurePlanning = false;
     bool enableDiagnosticReport = true;
 
     constexpr bool enabled() const noexcept
     {
-        return level != MediaGraphOptimizationLevel::None;
+        return level != MediaGraphOptimizationLevel::None ||
+               enableNodeFusion ||
+               enableRedundantTransferElimination ||
+               enableQueuePolicyTuning ||
+               enableBackpressurePlanning;
     }
 };
 

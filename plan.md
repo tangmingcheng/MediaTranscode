@@ -9,7 +9,7 @@ Implement the five `QUALITY_SCORE.md` priority improvements in order, with each 
 - [x] Priority 1: Add deterministic concurrency stress, fault injection, lifecycle coverage, fairness tests, and acceptance metrics collection.
 - [x] Priority 2: Split oversized planner, mux, capability scanner, and runtime responsibilities.
 - [x] Priority 3: Separate core, planner, builder, runtime, node, integration, hardware, and performance test tiers.
-- [ ] Priority 4: Reject or explicitly mark incomplete optimizer, GPU, and distributed execution capabilities.
+- [x] Priority 4: Reject or explicitly mark incomplete optimizer, GPU, and distributed execution capabilities.
 - [ ] Priority 5: Establish repeatable performance and stability baselines and update `QUALITY_SCORE.md` from evidence.
 - [ ] Run final local, separate-RTP, and MPEG-TS hardware/software acceptance, including stability and VLC review.
 - [ ] Complete whole-branch review, push, create PR, and obtain independent PASS review.
@@ -42,6 +42,15 @@ Implement the five `QUALITY_SCORE.md` priority improvements in order, with each 
 - A clean rebuild completed before the final 9/9 CTest pass.
 - Local MP4, separate RTP, and MPEG-TS UDP H264/AAC hardware/software 60-second gates passed; audio transcode was naturally selected from the 44.1 kHz target difference.
 - A discovered audio-encoder startup race is covered: frames remain queued until required codec metadata is bound.
+
+## Priority 4 Evidence
+
+- A single capability-maturity matrix marks CUDA/NVENC transcode stable and graph optimization, generic GPU execution, and distributed execution unsupported.
+- Planner, optimizer passes, GPU executor, remote executor, mesh planner, and multi-node deployment now reject unsupported requests instead of reporting deferred or simulated success.
+- Default policies no longer enable incomplete optimizer, GPU, mesh, or distributed paths.
+- AAC-bound audio is explicitly reframed to the encoder frame size after resampling; 44.1 kHz to 48 kHz audio/video transcode passed for local, separate RTP, and MPEG-TS paths.
+- Clean deterministic, integration, hardware, and performance tiers passed. FFmpeg runtime binaries were copied beside each executable without CMake changes.
+- Sixty-second local hardware/software loops and realtime hardware/software gates passed. Final realtime average CPU was 1.4707%/5.4218% for RTP and 1.7568%/5.6632% for MPEG-TS (hardware/software respectively).
 
 ## Global Constraints
 

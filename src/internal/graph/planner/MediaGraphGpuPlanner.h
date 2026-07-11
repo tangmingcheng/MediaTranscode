@@ -19,9 +19,6 @@ public:
         const MediaGraph& graph,
         const MediaGraphPlanningPolicy& policy = {});
 
-private:
-    static bool isGpuCandidate(MediaNodeKind kind) noexcept;
-    static MediaGpuGraphCommandKind commandKindFor(MediaNodeKind kind) noexcept;
 };
 
 } // namespace media::ffmpeg::graph

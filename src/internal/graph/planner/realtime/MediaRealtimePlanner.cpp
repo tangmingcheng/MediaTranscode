@@ -34,19 +34,9 @@ namespace {
     if (auto status = validateOptions(options); !status) {
         return ::media::Result<MediaRealtimePlannerResult>::failure(status.error());
     }
-
-    MediaRealtimePlannerResult result;
-    result.topology = buildTopology(options);
-    result.policy = buildPolicy(options);
-
-    auto planned = MediaGraphPlanner::plan(graph, result.topology, result.policy);
-    if (!planned) {
-        return ::media::Result<MediaRealtimePlannerResult>::failure(planned.error());
-    }
-
-    result.plannerResult = std::move(planned).value();
-    result.plannerResult.report.info("realtime-planner", "realtime graph planning completed");
-    return ::media::Result<MediaRealtimePlannerResult>::success(std::move(result));
+    return ::media::Result<MediaRealtimePlannerResult>::failure(
+        ::media::ErrorInfo::unsupported(
+            "MediaRealtimePlanner is unsupported: multi-node realtime deployment is not implemented"));
 }
 
 MediaGraphClusterTopology MediaRealtimePlanner::buildTopology(const MediaRealtimePlannerOptions& options)
@@ -80,7 +70,7 @@ MediaGraphPlanningPolicy MediaRealtimePlanner::buildPolicy(const MediaRealtimePl
 {
     MediaGraphPlanningPolicy policy;
     policy.placementStrategy = MediaGraphPlacementStrategy::PreferEdgeForIo;
-    policy.enableDistributedExecution = true;
+    policy.enableDistributedExecution = false;
     policy.enableGpuPlanning = options.enableGpuPlanning;
     policy.enableMeshPlanning = options.enableMeshPlanning;
     policy.keepSourceAndSinkOnEdge = true;
@@ -89,11 +79,11 @@ MediaGraphPlanningPolicy MediaRealtimePlanner::buildPolicy(const MediaRealtimePl
     policy.threadingPolicy.priority = MediaThreadPriority::High;
     policy.threadingPolicy.collectWorkerMetrics = true;
 
-    policy.optimizationPolicy.level = MediaGraphOptimizationLevel::Realtime;
+    policy.optimizationPolicy.level = MediaGraphOptimizationLevel::None;
     policy.optimizationPolicy.enableNodeFusion = options.enableNodeFusion;
-    policy.optimizationPolicy.enableRedundantTransferElimination = true;
-    policy.optimizationPolicy.enableQueuePolicyTuning = true;
-    policy.optimizationPolicy.enableBackpressurePlanning = true;
+    policy.optimizationPolicy.enableRedundantTransferElimination = false;
+    policy.optimizationPolicy.enableQueuePolicyTuning = false;
+    policy.optimizationPolicy.enableBackpressurePlanning = false;
     policy.optimizationPolicy.enableDiagnosticReport = true;
 
     policy.optimizationPolicy.latencyPolicy.mode = MediaLatencyMode::Realtime;

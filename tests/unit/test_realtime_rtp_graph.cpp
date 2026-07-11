@@ -3036,6 +3036,24 @@ void testAudioResampleNodeNormalizesResampledFrameTimestamps(TestContext& ctx)
     EXPECT_EQ(ctx, output.value()->pts(), expectedPts);
     EXPECT_EQ(ctx, output.value()->dts(), static_cast<int64_t>(AV_NOPTS_VALUE));
     EXPECT_EQ(ctx, output.value()->duration(), frame->nb_samples);
+
+    const int firstOutputSamples = frame->nb_samples;
+    auto secondInput = makeTestAudioFrame(48000, AV_SAMPLE_FMT_S16, 2, 49024, 1024);
+    EXPECT_TRUE(ctx, secondInput);
+    if (!secondInput) {
+        return;
+    }
+    auto secondOutput = processAudioResampleFrame(execution, node, resampleId, secondInput.value());
+    EXPECT_TRUE(ctx, secondOutput);
+    if (!secondOutput) {
+        std::cerr << secondOutput.error().describe() << '\n';
+        return;
+    }
+    const AVFrame* secondFrame = FFmpegFrameView::frame(secondOutput.value());
+    EXPECT_TRUE(ctx, secondFrame != nullptr);
+    if (secondFrame) {
+        EXPECT_EQ(ctx, secondFrame->pts, expectedPts + firstOutputSamples);
+    }
 }
 
 void testAudioResampleNodeRejectsMissingFramePts(TestContext& ctx)

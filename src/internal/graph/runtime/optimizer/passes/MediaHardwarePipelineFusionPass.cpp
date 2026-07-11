@@ -16,19 +16,9 @@ const char* MediaHardwarePipelineFusionPass::name() const noexcept
         return ::media::Status::success();
     }
 
-    std::size_t hardwareAwareNodes = 0;
-    for (const MediaNode& node : graph.nodes()) {
-        if (node.kind == MediaNodeKind::HardwareTransfer ||
-            node.kind == MediaNodeKind::VideoDecode ||
-            node.kind == MediaNodeKind::VideoEncode ||
-            node.kind == MediaNodeKind::VideoFilter) {
-            ++hardwareAwareNodes;
-        }
-    }
-
-    report.info(name(), "hardware-aware nodes detected=" + std::to_string(hardwareAwareNodes));
-    report.info(name(), "fusion lowering deferred until concrete device capabilities are probed");
-    return ::media::Status::success();
+    return ::media::Status::failure(
+        ::media::ErrorInfo::unsupported(
+            "MediaHardwarePipelineFusionPass is unsupported: hardware graph fusion is not implemented"));
 }
 
 } // namespace media::ffmpeg::graph
