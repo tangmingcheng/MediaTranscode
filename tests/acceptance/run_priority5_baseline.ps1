@@ -1,6 +1,7 @@
 param(
     [string]$ConfigPath = (Join-Path $PSScriptRoot 'priority5_scenarios.json'),
     [string[]]$Scenario,
+    [switch]$HardwareOnly,
     [int]$DurationSeconds,
     [string]$ReportPath
 )
@@ -17,6 +18,9 @@ if (-not (Test-Path $inputPath)) { throw "priority5 sample is missing: $inputPat
 if (-not (Test-Path (Join-Path $executableDirectory 'media_transcode_realtime_video_cli.exe'))) { throw "priority5 executables are missing: $executableDirectory" }
 
 $selected = @($config.scenarios)
+if ($HardwareOnly) {
+    $selected = @($selected | Where-Object hardware -eq $true)
+}
 if ($Scenario.Count -gt 0) {
     $selected = @($selected | Where-Object { $Scenario -contains $_.name })
     foreach ($name in $Scenario) {

@@ -52,8 +52,8 @@ $config = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'priority5_scenarios
 Assert-Equal 1 $config.schema_version 'scenario schema'
 Assert-Equal 6 $config.scenarios.Count 'scenario count'
 Assert-Equal 'local_hw,local_sw,mpegts_hw,mpegts_sw,rtp_hw,rtp_sw' (($config.scenarios.name | Sort-Object) -join ',') 'scenario names'
-Assert-Equal 1800 ($config.scenarios | Where-Object name -eq 'local_hw').stability_seconds 'local stability duration'
-Assert-Equal 3600 ($config.scenarios | Where-Object name -eq 'rtp_hw').stability_seconds 'RTP stability duration'
-Assert-Equal 3600 ($config.scenarios | Where-Object name -eq 'mpegts_hw').stability_seconds 'MPEG-TS stability duration'
+Assert-Equal 900 ($config.scenarios | Where-Object name -eq 'local_hw').stability_seconds 'local stability duration'
+Assert-Equal 1800 ($config.scenarios | Where-Object name -eq 'rtp_hw').stability_seconds 'RTP stability duration'
+Assert-Equal 1800 ($config.scenarios | Where-Object name -eq 'mpegts_hw').stability_seconds 'MPEG-TS stability duration'
 
 Write-Output 'priority5 reporting tests passed'

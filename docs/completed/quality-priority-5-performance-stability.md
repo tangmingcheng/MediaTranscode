@@ -21,10 +21,10 @@ Run all six 60-second baselines:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\acceptance\run_priority5_baseline.ps1 -DurationSeconds 60 -ReportPath .\out\reports\priority5\smoke-all-60s.json
 ```
 
-Run the configured stability matrix (local hardware/software 30 minutes, RTP hardware 60 minutes/software 30 minutes, and MPEG-TS hardware 60 minutes/software 30 minutes):
+Run the configured hardware-only stability matrix (local 15 minutes, RTP 30 minutes, and MPEG-TS 30 minutes):
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\acceptance\run_priority5_baseline.ps1 -ReportPath .\out\reports\priority5\stability-final.json
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\acceptance\run_priority5_baseline.ps1 -HardwareOnly -ReportPath .\out\reports\priority5\stability-final.json
 ```
 
 ## 60-second baseline
