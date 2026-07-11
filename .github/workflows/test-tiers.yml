@@ -1,5 +1,10 @@
 name: Test tiers
 
+env:
+  FFMPEG_ASSET_ID: "472604443"
+  FFMPEG_SHA256: "c53d5ec6ffbf476d3beba8b185ad009ae7359e7730deeb5fafde89c4553a9ffc"
+  GITHUB_TOKEN: ${{ github.token }}
+
 on:
   pull_request:
   push:
@@ -12,8 +17,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ilammy/msvc-dev-cmd@v1
-      - run: cmake --preset x64-debug-deterministic
+      - name: Prepare pinned FFmpeg 8.1 shared SDK
+        shell: pwsh
+        run: .github/scripts/prepare-ffmpeg-sdk.ps1
+      - run: cmake --preset x64-debug-deterministic -DFFMPEG_ROOT="$env:FFMPEG_ROOT"
       - run: cmake --build --preset deterministic --clean-first
+      - run: Copy-Item "$env:FFMPEG_ROOT/bin/*.dll" out/build/x64-debug-deterministic
       - run: ctest --preset deterministic
 
   explicit-tiers:
@@ -25,6 +34,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ilammy/msvc-dev-cmd@v1
-      - run: cmake --preset x64-debug-${{ matrix.tier }}
+      - name: Prepare pinned FFmpeg 8.1 shared SDK
+        shell: pwsh
+        run: .github/scripts/prepare-ffmpeg-sdk.ps1
+      - run: cmake --preset x64-debug-${{ matrix.tier }} -DFFMPEG_ROOT="$env:FFMPEG_ROOT"
       - run: cmake --build --preset ${{ matrix.tier }} --clean-first
+      - run: Copy-Item "$env:FFMPEG_ROOT/bin/*.dll" "out/build/x64-debug-${{ matrix.tier }}"
       - run: ctest --preset ${{ matrix.tier }}

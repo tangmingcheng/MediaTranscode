@@ -8,7 +8,7 @@ Priority 3 separates deterministic component tests from explicitly enabled integ
 - CMake configure, build, and test presets expose deterministic, integration, hardware, and performance workflows.
 - Default deterministic configuration excludes environment-dependent tiers.
 - Hardware capability absence returns code 77 and is reported as skipped with an unsupported reason.
-- Windows CI runs the deterministic tier separately and runs each explicit tier as an independent matrix job.
+- Windows CI downloads a fixed FFmpeg 8.1 shared SDK asset, verifies its SHA256, and supplies its headers, import libraries, and runtime DLLs before running the deterministic tier and each explicit matrix tier.
 - Audio encoding now waits for required codec metadata before consuming queued frames; this removes the startup race found by the software RTP gate.
 
 No audio transcode switch was added. All acceptance paths request H264/AAC with 44.1 kHz audio, so planner comparison against the 48 kHz source naturally selects audio and video transcoding.
