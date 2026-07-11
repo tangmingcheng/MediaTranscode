@@ -49,8 +49,10 @@ Implement the five `QUALITY_SCORE.md` priority improvements in order, with each 
 - Planner, optimizer passes, GPU executor, remote executor, mesh planner, and multi-node deployment now reject unsupported requests instead of reporting deferred or simulated success.
 - Default policies no longer enable incomplete optimizer, GPU, mesh, or distributed paths.
 - AAC-bound audio is explicitly reframed to the encoder frame size after resampling; 44.1 kHz to 48 kHz audio/video transcode passed for local, separate RTP, and MPEG-TS paths.
+- Deterministic audio-encoder tests cover send-side EAGAIN retry, output backpressure, partial EOF framing, flush, and single terminal propagation.
 - Clean deterministic, integration, hardware, and performance tiers passed. FFmpeg runtime binaries were copied beside each executable without CMake changes.
-- Sixty-second local hardware/software loops and realtime hardware/software gates passed. Final realtime average CPU was 1.4707%/5.4218% for RTP and 1.7568%/5.6632% for MPEG-TS (hardware/software respectively).
+- Repeatable PowerShell gates record exact commands, full decode, stream integrity, worker/drop/stall errors, average/P95 CLI CPU, and final A/V drift.
+- Sixty-second local hardware/software loops and realtime hardware/software gates passed. Final realtime average CPU was 1.58%/6.01% for RTP and 1.68%/5.94% for MPEG-TS (hardware/software respectively); final A/V drift stayed between 7 ms and 31 ms.
 
 ## Global Constraints
 

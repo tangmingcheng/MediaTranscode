@@ -14,7 +14,15 @@ extern "C" {
 namespace media::ffmpeg::graph {
 
 AudioEncodeNode::AudioEncodeNode(MediaNodeId nodeId)
+    : AudioEncodeNode(nodeId, makeFFmpegAudioEncoderCodecApi())
+{
+}
+
+AudioEncodeNode::AudioEncodeNode(
+    MediaNodeId nodeId,
+    std::shared_ptr<AudioEncoderCodecApi> codecApi)
     : FFmpegCodecNodeRuntime(nodeId, staticKind(), "AudioEncodeNode")
+    , m_codecApi(std::move(codecApi))
 {
 }
 
@@ -125,7 +133,11 @@ void AudioEncodeNode::resetRuntimeState() noexcept
         return encodeQueuedFrame(context, false);
     }
 
-    const int sendRet = avcodec_send_frame(codecContext(), frame);
+    if (!m_codecApi) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::notInitialized("AudioEncodeNode requires an encoder codec API"));
+    }
+    const int sendRet = m_codecApi->sendFrame(codecContext(), frame);
     if (sendRet < 0 && sendRet != AVERROR(EAGAIN)) {
         return ::media::Result<MediaNodeProcessResult>::failure(
             FFmpegGraphError::fromCode(sendRet, "avcodec_send_frame(audio)"));
@@ -154,7 +166,7 @@ void AudioEncodeNode::resetRuntimeState() noexcept
         m_pendingFrame = std::move(frame).value();
     }
 
-    const int sendRet = avcodec_send_frame(codecContext(), m_pendingFrame.get());
+    const int sendRet = m_codecApi->sendFrame(codecContext(), m_pendingFrame.get());
     if (sendRet == AVERROR(EAGAIN)) {
         auto receiveStatus = receivePackets(context);
         if (!receiveStatus) {
@@ -201,7 +213,7 @@ void AudioEncodeNode::resetRuntimeState() noexcept
                 ::media::ErrorInfo::allocationFailed("AudioEncodeNode failed: av_packet_alloc returned null"));
         }
 
-        const int ret = avcodec_receive_packet(codecContext(), packet.get());
+        const int ret = m_codecApi->receivePacket(codecContext(), packet.get());
         if (ret == AVERROR(EAGAIN)) return ::media::Result<bool>::success(false);
         if (ret == AVERROR_EOF) return ::media::Result<bool>::success(true);
 
@@ -233,7 +245,7 @@ void AudioEncodeNode::resetRuntimeState() noexcept
         return encodeQueuedFrame(context, true);
     }
     if (!m_flushSent) {
-        const int sendRet = avcodec_send_frame(codecContext(), nullptr);
+        const int sendRet = m_codecApi->sendFrame(codecContext(), nullptr);
         if (sendRet == 0 || sendRet == AVERROR_EOF) m_flushSent = true;
         else if (sendRet != AVERROR(EAGAIN))
             return ::media::Result<MediaNodeProcessResult>::failure(

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/graph/nodes/audio/AudioEncoderCodecApi.h"
 #include "internal/graph/nodes/audio/AudioEncoderFrameQueue.h"
 #include "internal/graph/nodes/FFmpegCodecNodeRuntime.h"
 #include "internal/graph/runtime/lifecycle/MediaInputTerminalTracker.h"
@@ -9,6 +10,7 @@ namespace media::ffmpeg::graph {
 class AudioEncodeNode final : public FFmpegCodecNodeRuntime {
 public:
     explicit AudioEncodeNode(MediaNodeId nodeId);
+    AudioEncodeNode(MediaNodeId nodeId, std::shared_ptr<AudioEncoderCodecApi> codecApi);
     static MediaNodeKind staticKind() noexcept;
     ::media::Status start(MediaGraphExecutionContext& context) override;
     ::media::Status stop(MediaGraphExecutionContext& context) override;
@@ -34,6 +36,7 @@ private:
     bool m_flushIsEof = false;
     bool m_flushSent = false;
     MediaBufferRef m_flushBuffer;
+    std::shared_ptr<AudioEncoderCodecApi> m_codecApi;
     AudioEncoderFrameQueue m_frameQueue;
     ::media::ffmpeg::FramePtr m_pendingFrame;
 };
