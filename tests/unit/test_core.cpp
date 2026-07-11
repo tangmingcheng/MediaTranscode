@@ -50,76 +50,161 @@ void testRunningTimeRationalRescale(TestContext& ctx)
     EXPECT_FALSE(ctx, MediaRunningTime::checkedFromTicks(1, 1, 0));
     EXPECT_FALSE(ctx, MediaRunningTime::checkedFromTicks(
                           std::numeric_limits<std::int64_t>::max(), 1, 1));
+
+    const auto exactMinimum = MediaRunningTime::checkedFromTicks(
+        std::numeric_limits<std::int64_t>::min(), 1, 1'000'000'000);
+    EXPECT_TRUE(ctx, exactMinimum);
+    if (exactMinimum) {
+        EXPECT_EQ(ctx,
+                  exactMinimum.value().nanoseconds(),
+                  std::numeric_limits<std::int64_t>::min());
+    }
+    EXPECT_FALSE(ctx, MediaRunningTime::checkedFromTicks(
+                          std::numeric_limits<std::int64_t>::min(),
+                          2,
+                          1'000'000'000));
 }
 
-void expectForwardWrap(TestContext& ctx, std::uint8_t bitWidth)
+void expectForwardWrap(TestContext& ctx,
+                       MediaTimestampCounterKind counterKind,
+                       std::uint64_t modulus,
+                       int timeBaseNumerator,
+                       int timeBaseDenominator)
 {
-    auto unwrapper = MediaTimestampUnwrapper::create(bitWidth, 7);
+    auto unwrapper = MediaTimestampUnwrapper::create(counterKind, 7);
     EXPECT_TRUE(ctx, unwrapper);
     if (!unwrapper) {
         return;
     }
 
-    const std::uint64_t modulus = std::uint64_t{1} << bitWidth;
-    const auto beforeWrap = unwrapper.value().unwrap(modulus - 3);
+    EXPECT_EQ(ctx, unwrapper.value().counterKind(), counterKind);
+    EXPECT_EQ(ctx, unwrapper.value().modulus(), modulus);
+
+    const auto beforeWrap = unwrapper.value().unwrap(
+        MediaProtocolTimestamp(modulus - 3, timeBaseNumerator, timeBaseDenominator));
     EXPECT_EQ(ctx, beforeWrap.status, MediaTimestampUnwrapStatus::Value);
-    EXPECT_EQ(ctx, beforeWrap.timestamp, static_cast<std::int64_t>(modulus - 3));
+    EXPECT_EQ(ctx, beforeWrap.timestamp.ticks(), static_cast<std::int64_t>(modulus - 3));
+    EXPECT_EQ(ctx, beforeWrap.timestamp.timeBaseNumerator(), timeBaseNumerator);
+    EXPECT_EQ(ctx, beforeWrap.timestamp.timeBaseDenominator(), timeBaseDenominator);
     EXPECT_EQ(ctx, beforeWrap.generation, static_cast<std::uint64_t>(7));
 
-    const auto afterWrap = unwrapper.value().unwrap(3);
+    const auto afterWrap = unwrapper.value().unwrap(
+        MediaProtocolTimestamp(3, timeBaseNumerator, timeBaseDenominator));
     EXPECT_EQ(ctx, afterWrap.status, MediaTimestampUnwrapStatus::Value);
-    EXPECT_EQ(ctx, afterWrap.timestamp, static_cast<std::int64_t>(modulus + 3));
+    EXPECT_EQ(ctx, afterWrap.timestamp.ticks(), static_cast<std::int64_t>(modulus + 3));
+    EXPECT_EQ(ctx, afterWrap.timestamp.timeBaseNumerator(), timeBaseNumerator);
+    EXPECT_EQ(ctx, afterWrap.timestamp.timeBaseDenominator(), timeBaseDenominator);
     EXPECT_EQ(ctx, afterWrap.generation, static_cast<std::uint64_t>(7));
 }
 
 void testTimestampWraps(TestContext& ctx)
 {
-    expectForwardWrap(ctx, 32); // RTP timestamp.
-    expectForwardWrap(ctx, 33); // MPEG-TS PTS/DTS.
-
-    auto pcrUnwrapper = MediaTimestampUnwrapper::createPcr(9);
-    EXPECT_TRUE(ctx, pcrUnwrapper);
-    if (!pcrUnwrapper) {
-        return;
-    }
-
+    constexpr std::uint64_t rtpModulus = std::uint64_t{1} << 32;
+    constexpr std::uint64_t ptsModulus = std::uint64_t{1} << 33;
     constexpr std::uint64_t pcrModulus = (std::uint64_t{1} << 33) * 300;
-    const auto beforePcrWrap = pcrUnwrapper.value().unwrap(pcrModulus - 3);
-    EXPECT_EQ(ctx, beforePcrWrap.status, MediaTimestampUnwrapStatus::Value);
-    EXPECT_EQ(ctx, beforePcrWrap.timestamp, static_cast<std::int64_t>(pcrModulus - 3));
-
-    const auto afterPcrWrap = pcrUnwrapper.value().unwrap(3);
-    EXPECT_EQ(ctx, afterPcrWrap.status, MediaTimestampUnwrapStatus::Value);
-    EXPECT_EQ(ctx, afterPcrWrap.timestamp, static_cast<std::int64_t>(pcrModulus + 3));
-    EXPECT_EQ(ctx, afterPcrWrap.generation, static_cast<std::uint64_t>(9));
+    expectForwardWrap(ctx, MediaTimestampCounterKind::Rtp32, rtpModulus, 1, 90'000);
+    expectForwardWrap(ctx, MediaTimestampCounterKind::MpegTsPtsDts33, ptsModulus, 1, 90'000);
+    expectForwardWrap(ctx, MediaTimestampCounterKind::MpegTsPcr27Mhz, pcrModulus, 1, 27'000'000);
 }
 
 void testTimestampDiscontinuityAndReset(TestContext& ctx)
 {
-    auto unwrapper = MediaTimestampUnwrapper::create(32, 11);
+    auto unwrapper = MediaTimestampUnwrapper::create(MediaTimestampCounterKind::Rtp32, 11);
     EXPECT_TRUE(ctx, unwrapper);
     if (!unwrapper) {
         return;
     }
 
-    EXPECT_EQ(ctx, unwrapper.value().unwrap(1'000).status, MediaTimestampUnwrapStatus::Value);
-    const auto backward = unwrapper.value().unwrap(999);
+    const auto timestamp = [](std::uint64_t ticks) {
+        return MediaProtocolTimestamp(ticks, 1, 90'000);
+    };
+
+    EXPECT_EQ(ctx, unwrapper.value().unwrap(timestamp(1'000)).status, MediaTimestampUnwrapStatus::Value);
+    const auto backward = unwrapper.value().unwrap(timestamp(999));
     EXPECT_EQ(ctx, backward.status, MediaTimestampUnwrapStatus::Discontinuity);
     EXPECT_EQ(ctx, backward.reason, MediaTimestampDiscontinuityReason::BackwardMovement);
     EXPECT_EQ(ctx, backward.generation, static_cast<std::uint64_t>(11));
 
-    const auto continued = unwrapper.value().unwrap(1'001);
+    const auto continued = unwrapper.value().unwrap(timestamp(1'001));
     EXPECT_EQ(ctx, continued.status, MediaTimestampUnwrapStatus::Value);
-    EXPECT_EQ(ctx, continued.timestamp, static_cast<std::int64_t>(1'001));
+    EXPECT_EQ(ctx, continued.timestamp.ticks(), static_cast<std::int64_t>(1'001));
 
     unwrapper.value().reset(12);
-    const auto resetValue = unwrapper.value().unwrap(5);
+    const auto resetValue = unwrapper.value().unwrap(timestamp(5));
     EXPECT_EQ(ctx, resetValue.status, MediaTimestampUnwrapStatus::Value);
-    EXPECT_EQ(ctx, resetValue.timestamp, static_cast<std::int64_t>(5));
+    EXPECT_EQ(ctx, resetValue.timestamp.ticks(), static_cast<std::int64_t>(5));
     EXPECT_EQ(ctx, resetValue.generation, static_cast<std::uint64_t>(12));
+}
 
-    EXPECT_FALSE(ctx, MediaTimestampUnwrapper::create(31, 0));
-    EXPECT_FALSE(ctx, MediaTimestampUnwrapper::create(63, 0));
+void testTimestampBoundaryClassificationAndStatePreservation(TestContext& ctx)
+{
+    constexpr std::uint64_t modulus = std::uint64_t{1} << 32;
+    constexpr std::uint64_t halfRange = modulus / 2;
+    const auto timestamp = [](std::uint64_t ticks) {
+        return MediaProtocolTimestamp(ticks, 1, 90'000);
+    };
+
+    auto forward = MediaTimestampUnwrapper::create(MediaTimestampCounterKind::Rtp32, 21);
+    EXPECT_TRUE(ctx, forward);
+    if (!forward) return;
+    EXPECT_EQ(ctx, forward.value().unwrap(timestamp(10)).status, MediaTimestampUnwrapStatus::Value);
+    const auto forwardHalf = forward.value().unwrap(timestamp(10 + halfRange));
+    EXPECT_EQ(ctx, forwardHalf.reason, MediaTimestampDiscontinuityReason::AmbiguousMovement);
+    const auto forwardContinued = forward.value().unwrap(timestamp(11));
+    EXPECT_EQ(ctx, forwardContinued.status, MediaTimestampUnwrapStatus::Value);
+    EXPECT_EQ(ctx, forwardContinued.timestamp.ticks(), static_cast<std::int64_t>(11));
+
+    auto backward = MediaTimestampUnwrapper::create(MediaTimestampCounterKind::Rtp32, 22);
+    EXPECT_TRUE(ctx, backward);
+    if (!backward) return;
+    EXPECT_EQ(ctx, backward.value().unwrap(timestamp(halfRange + 10)).status, MediaTimestampUnwrapStatus::Value);
+    const auto backwardHalf = backward.value().unwrap(timestamp(10));
+    EXPECT_EQ(ctx, backwardHalf.reason, MediaTimestampDiscontinuityReason::AmbiguousMovement);
+    const auto backwardContinued = backward.value().unwrap(timestamp(halfRange + 11));
+    EXPECT_EQ(ctx, backwardContinued.status, MediaTimestampUnwrapStatus::Value);
+    EXPECT_EQ(ctx,
+              backwardContinued.timestamp.ticks(),
+              static_cast<std::int64_t>(halfRange + 11));
+
+    const auto outOfRange = backward.value().unwrap(timestamp(modulus));
+    EXPECT_EQ(ctx, outOfRange.reason, MediaTimestampDiscontinuityReason::RawValueOutOfRange);
+    const auto negativeRaw = backward.value().unwrap(MediaProtocolTimestamp(-1, 1, 90'000));
+    EXPECT_EQ(ctx, negativeRaw.reason, MediaTimestampDiscontinuityReason::RawValueOutOfRange);
+    const auto wrongTimeBase = backward.value().unwrap(MediaProtocolTimestamp(20, 1, 48'000));
+    EXPECT_EQ(ctx, wrongTimeBase.reason, MediaTimestampDiscontinuityReason::TimeBaseMismatch);
+    const auto afterOutOfRange = backward.value().unwrap(timestamp(halfRange + 12));
+    EXPECT_EQ(ctx, afterOutOfRange.status, MediaTimestampUnwrapStatus::Value);
+    EXPECT_EQ(ctx,
+              afterOutOfRange.timestamp.ticks(),
+              static_cast<std::int64_t>(halfRange + 12));
+}
+
+void testTimestampUnwrappedOverflowPreservesState(TestContext& ctx)
+{
+    constexpr std::uint64_t modulus = (std::uint64_t{1} << 33) * 300;
+    constexpr std::uint64_t step = modulus / 2 - 1;
+    auto unwrapper = MediaTimestampUnwrapper::create(MediaTimestampCounterKind::MpegTsPcr27Mhz, 31);
+    EXPECT_TRUE(ctx, unwrapper);
+    if (!unwrapper) return;
+
+    const auto timestamp = [](std::uint64_t ticks) {
+        return MediaProtocolTimestamp(ticks, 1, 27'000'000);
+    };
+    std::uint64_t raw = 0;
+    std::uint64_t lastAcceptedRaw = raw;
+    EXPECT_EQ(ctx, unwrapper.value().unwrap(timestamp(raw)).status, MediaTimestampUnwrapStatus::Value);
+    MediaTimestampUnwrapResult result;
+    do {
+        raw = (raw + step) % modulus;
+        result = unwrapper.value().unwrap(timestamp(raw));
+        if (result.status == MediaTimestampUnwrapStatus::Value) {
+            lastAcceptedRaw = raw;
+        }
+    } while (result.status == MediaTimestampUnwrapStatus::Value);
+
+    EXPECT_EQ(ctx, result.reason, MediaTimestampDiscontinuityReason::UnwrappedValueOverflow);
+    const auto preserved = unwrapper.value().unwrap(timestamp((lastAcceptedRaw + 1) % modulus));
+    EXPECT_EQ(ctx, preserved.status, MediaTimestampUnwrapStatus::Value);
 }
 
 } // namespace
@@ -142,5 +227,7 @@ int main()
     testRunningTimeRationalRescale(ctx);
     testTimestampWraps(ctx);
     testTimestampDiscontinuityAndReset(ctx);
+    testTimestampBoundaryClassificationAndStatePreservation(ctx);
+    testTimestampUnwrappedOverflowPreservesState(ctx);
     return ctx.failures == 0 ? 0 : 1;
 }
