@@ -49,6 +49,7 @@ bool presentText(const std::optional<std::string>& value)
         !positive(startup.keyFrameWaitNs) || !positive(startup.maximumAudioTrimNs) ||
         !positive(startup.maximumInitialSkewNs) || !positive(startup.outputLeadNs) ||
         *startup.maximumAudioTrimNs > *startup.prerollNs ||
+        *startup.maximumInitialSkewNs >= *startup.outputLeadNs ||
         *startup.prerollNs >= *startup.keyFrameWaitNs ||
         *startup.keyFrameWaitNs > *startup.maximumWaitNs) {
         return invalid("ordered startup thresholds");
@@ -63,9 +64,11 @@ bool presentText(const std::optional<std::string>& value)
         !positive(servo.recoveryCorrectionLimitPpm) ||
         !positive(servo.compensationWindowNs) ||
         *servo.deadbandNs >= *servo.shortControlWindowNs ||
-        *servo.shortControlWindowNs >= *servo.longControlWindowNs ||
+        *servo.shortControlWindowNs >= *servo.compensationWindowNs ||
+        *servo.compensationWindowNs >= *servo.longControlWindowNs ||
         *servo.normalCorrectionLimitPpm > 1000 ||
         *servo.recoveryCorrectionLimitPpm > 5000 ||
+        *servo.maximumSlewPpmPerSecond > *servo.normalCorrectionLimitPpm ||
         *servo.normalCorrectionLimitPpm > *servo.recoveryCorrectionLimitPpm) {
         return invalid("audio servo policy");
     }
@@ -137,7 +140,10 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
         !rtp.input.requireSenderReports || !*rtp.input.requireSenderReports ||
         !positive(rtp.input.senderReportTimeoutNs) ||
         !positive(rtp.input.maximumExtrapolationNs) ||
-        *rtp.input.senderReportTimeoutNs > *rtp.input.maximumExtrapolationNs) {
+        !positive(rtp.input.maximumSenderReportSkewNs) ||
+        *rtp.input.senderReportTimeoutNs >= *rtp.input.maximumExtrapolationNs ||
+        *rtp.input.maximumExtrapolationNs >= *plan.recovery.reacquisitionTimeoutNs ||
+        *rtp.input.maximumSenderReportSkewNs >= *plan.recovery.hardDiscontinuityThresholdNs) {
         return invalid("RTP input identities, CNAME, or sender report policy");
     }
     if (!validRtpOutputStream(rtp.videoOutput) ||
@@ -145,7 +151,8 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
         *rtp.videoOutput.ssrc == *rtp.audioOutput.ssrc ||
         *rtp.videoOutput.cname != *rtp.audioOutput.cname ||
         !rtp.output.useSharedNtpEpoch || !*rtp.output.useSharedNtpEpoch ||
-        !positive(rtp.output.senderReportIntervalNs)) {
+        !positive(rtp.output.senderReportIntervalNs) ||
+        *rtp.output.senderReportIntervalNs >= *rtp.input.senderReportTimeoutNs) {
         return invalid("RTP output identities, CNAME, or sender report policy");
     }
     return ::media::Status::success();
@@ -158,15 +165,21 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
         return invalid("MPEG-TS topology clock contract");
     }
     const auto& ts = *plan.ts;
-    if (!positive(ts.programNumber) || !positive(ts.programMapPid) ||
-        !positive(ts.videoPid) || !positive(ts.audioPid) || !positive(ts.pcrPid) ||
+    constexpr int MinimumAssignablePid = 0x0020;
+    constexpr int NullPid = 0x1FFF;
+    if (!positive(ts.programNumber) || *ts.programNumber > 0xFFFF ||
+        !ts.programMapPid || *ts.programMapPid < MinimumAssignablePid || *ts.programMapPid >= NullPid ||
+        !ts.videoPid || *ts.videoPid < MinimumAssignablePid || *ts.videoPid >= NullPid ||
+        !ts.audioPid || *ts.audioPid < MinimumAssignablePid || *ts.audioPid >= NullPid ||
+        !ts.pcrPid || *ts.pcrPid < MinimumAssignablePid || *ts.pcrPid >= NullPid ||
         *ts.programMapPid == *ts.videoPid || *ts.programMapPid == *ts.audioPid ||
+        *ts.programMapPid == *ts.pcrPid ||
         *ts.videoPid == *ts.audioPid ||
         (*ts.pcrPid != *ts.videoPid && *ts.pcrPid != *ts.audioPid) ||
         !positive(ts.pcrIntervalNs) || !positive(ts.maximumPcrGapNs) ||
         !positive(ts.maximumPcrJitterNs) ||
-        *ts.pcrIntervalNs > *ts.maximumPcrGapNs ||
-        *ts.maximumPcrJitterNs >= *ts.maximumPcrGapNs ||
+        *ts.maximumPcrJitterNs >= *ts.pcrIntervalNs ||
+        *ts.pcrIntervalNs >= *ts.maximumPcrGapNs ||
         !positive(ts.timestampTimeBaseNumerator) ||
         !positive(ts.timestampTimeBaseDenominator)) {
         return invalid("MPEG-TS program, PID, PCR, or timestamp policy");

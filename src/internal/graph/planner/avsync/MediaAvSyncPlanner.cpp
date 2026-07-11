@@ -105,6 +105,7 @@ void planSharedPolicy(MediaAvSyncPlan& plan)
     plan.rtp->input.requireSenderReports = true;
     plan.rtp->input.senderReportTimeoutNs = runningTime(3 * Second);
     plan.rtp->input.maximumExtrapolationNs = runningTime(5 * Second);
+    plan.rtp->input.maximumSenderReportSkewNs = runningTime(50 * Millisecond);
 
     const int audioOutputRate = request.parameters.audio.sampleRate.value_or(
         *request.input.audioRtp.clockRate);

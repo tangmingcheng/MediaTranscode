@@ -1448,16 +1448,22 @@ void testRawRtpPlansAudioVideoInput(TestContext& ctx)
 
 void testRealtimePlanEmbedsValidatedAvSyncContract(TestContext& ctx)
 {
+    const auto videoOnly = MediaRealtimeRtpTranscodePlanner::plan(validRawRtpOptions());
+    EXPECT_TRUE(ctx, videoOnly);
+    if (videoOnly) EXPECT_FALSE(ctx, videoOnly.value().avSync.has_value());
+
     const auto result = MediaRealtimeRtpTranscodePlanner::plan(validRawRtpAudioVideoOptions());
     EXPECT_TRUE(ctx, result);
     if (!result) return;
 
-    EXPECT_TRUE(ctx, MediaAvSyncPlanValidator::validate(result.value().avSync));
+    EXPECT_TRUE(ctx, result.value().avSync.has_value());
+    if (!result.value().avSync) return;
+    EXPECT_TRUE(ctx, MediaAvSyncPlanValidator::validate(*result.value().avSync));
     EXPECT_EQ(ctx,
-              *result.value().avSync.topology,
+              *result.value().avSync->topology,
               MediaAvSyncTopology::SeparateRtpToSeparateRtp);
     EXPECT_EQ(ctx,
-              *result.value().avSync.rtp->videoInput.clockRate,
+              *result.value().avSync->rtp->videoInput.clockRate,
               *validRawRtpAudioVideoOptions().input.videoRtp.clockRate);
 }
 

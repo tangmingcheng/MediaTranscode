@@ -94,3 +94,19 @@ Result before the final topology expectation correction: deterministic tests 1-6
 ## Sequencing Concern
 
 The pre-existing startup-barrier and per-mux pacing plan fields remain physically unchanged as a temporary build seam because their replacement runtime components are not implemented in Task 2. No adapter, compatibility branch, new fallback, or expanded legacy population was added. Task 12 must remove those legacy fields and the old execution path when the graph-level coordinator and shared scheduler consume `MediaAvSyncPlan`.
+
+## Review Fix Evidence
+
+### RED
+
+`cmake --build out\build\x64-debug --target media_transcode_integration_tests` failed at `test_realtime_rtp_graph.cpp:1453` because `MediaAvSyncPlan` had no `has_value()`. This proved a video-only plan could not represent synchronization as absent.
+
+`cmake --build out\build\x64-debug --target media_transcode_planner_tests && out\build\x64-debug\media_transcode_planner_tests.exe` failed named mutations for program-number overflow, reserved/null TS PIDs, startup skew ordering, audio slew ordering, RTP SR timeout/extrapolation ordering, and TS PCR jitter/interval/gap ordering.
+
+After adding the requested RTP SR skew test, the planner test build failed because `MediaAvSyncRtpInputPolicy::maximumSenderReportSkewNs` did not exist. A second RED run failed the named audio filter/control/estimator and RTP SR interval/timeout comparisons.
+
+### GREEN
+
+The realtime plan now stores `std::optional<MediaAvSyncPlan>`: video-only paths leave it absent, while synchronized A/V paths contain the specialized planner's fully validated result. The validator now enforces valid program/PID ranges and isolated ordering invariants for startup, servo, video, recovery, metrics, RTP SR, and TS PCR policies.
+
+Final verification: the post-review clean rebuild completed 213/213 steps; `ctest -R media_transcode_planner_tests` passed 1/1 in 0.08 seconds; `ctest -R media_transcode_integration_tests` passed 1/1 in 76.63 seconds.

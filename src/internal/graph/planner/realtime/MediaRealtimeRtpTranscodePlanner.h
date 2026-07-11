@@ -86,7 +86,7 @@ struct MediaRealtimeRtpTranscodePlan {
     MediaRealtimeMuxNodePlan videoMux;
     MediaRealtimeMuxNodePlan audioMux;
     MediaRealtimeAvStartBarrierPlan avStartBarrier;
-    MediaAvSyncPlan avSync;
+    std::optional<MediaAvSyncPlan> avSync;
 };
 
 struct MediaRealtimeTranscodePreflight final {

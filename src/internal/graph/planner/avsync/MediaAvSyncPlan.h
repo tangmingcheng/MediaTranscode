@@ -70,6 +70,7 @@ struct MediaAvSyncRtpInputPolicy {
     std::optional<bool> requireSenderReports;
     std::optional<MediaRunningTime> senderReportTimeoutNs;
     std::optional<MediaRunningTime> maximumExtrapolationNs;
+    std::optional<MediaRunningTime> maximumSenderReportSkewNs;
 };
 
 struct MediaAvSyncRtpOutputStreamPlan {

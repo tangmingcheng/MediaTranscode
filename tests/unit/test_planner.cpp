@@ -174,6 +174,7 @@ void testAvSyncValidatorRejectsMissingAndInconsistentFields(TestContext& ctx)
     EXPECT_MISSING(rtp->input.requireSenderReports);
     EXPECT_MISSING(rtp->input.senderReportTimeoutNs);
     EXPECT_MISSING(rtp->input.maximumExtrapolationNs);
+    EXPECT_MISSING(rtp->input.maximumSenderReportSkewNs);
     EXPECT_MISSING(rtp->videoOutput.identity);
     EXPECT_MISSING(rtp->videoOutput.payloadType);
     EXPECT_MISSING(rtp->videoOutput.clockRate);
@@ -229,6 +230,92 @@ void testAvSyncValidatorRejectsMissingAndInconsistentFields(TestContext& ctx)
     expectInvalid(std::move(missingTsPolicy));
 }
 
+MediaRunningTime avSyncTime(std::int64_t nanoseconds)
+{
+    return MediaRunningTime::fromNanoseconds(nanoseconds);
+}
+
+void expectInvalidAvSyncMutation(TestContext& ctx,
+                                 MediaAvSyncPlan plan,
+                                 const char* invariant)
+{
+    const auto status = MediaAvSyncPlanValidator::validate(plan);
+    if (status) std::cerr << "expected invalid A/V sync invariant: " << invariant << '\n';
+    EXPECT_FALSE(ctx, status);
+}
+
+void testAvSyncValidatorRejectsProtocolIdentifierBoundaries(TestContext& ctx)
+{
+    const auto result = MediaAvSyncPlanner::plan(avSyncTsRequest());
+    EXPECT_TRUE(ctx, result);
+    if (!result) return;
+    const MediaAvSyncPlan complete = result.value();
+    auto mutate = [&](const char* name, auto mutation) {
+        MediaAvSyncPlan plan = complete;
+        mutation(*plan.ts);
+        expectInvalidAvSyncMutation(ctx, std::move(plan), name);
+    };
+
+    mutate("program number zero", [](auto& ts) { ts.programNumber = 0; });
+    mutate("program number overflow", [](auto& ts) { ts.programNumber = 0x10000; });
+    mutate("PMT PID reserved low", [](auto& ts) { ts.programMapPid = 0x000F; });
+    mutate("video PID reserved low", [](auto& ts) { ts.videoPid = 0x0010; });
+    mutate("audio PID null", [](auto& ts) { ts.audioPid = 0x1FFF; });
+    mutate("PCR PID overflow", [](auto& ts) { ts.pcrPid = 0x2000; });
+}
+
+void testAvSyncValidatorRejectsIsolatedNumericAndOrderingInvariants(TestContext& ctx)
+{
+    const auto rtpResult = MediaAvSyncPlanner::plan(avSyncRtpRequest());
+    const auto tsResult = MediaAvSyncPlanner::plan(avSyncTsRequest());
+    EXPECT_TRUE(ctx, rtpResult);
+    EXPECT_TRUE(ctx, tsResult);
+    if (!rtpResult || !tsResult) return;
+
+    const MediaAvSyncPlan rtp = rtpResult.value();
+    auto rejectRtp = [&](const char* name, auto mutation) {
+        MediaAvSyncPlan plan = rtp;
+        mutation(plan);
+        expectInvalidAvSyncMutation(ctx, std::move(plan), name);
+    };
+    rejectRtp("startup wait positive", [](auto& p) { p.startup.maximumWaitNs = avSyncTime(0); });
+    rejectRtp("startup preroll positive", [](auto& p) { p.startup.prerollNs = avSyncTime(-1); });
+    rejectRtp("startup skew within output lead", [](auto& p) { p.startup.maximumInitialSkewNs = *p.startup.outputLeadNs; });
+    rejectRtp("audio deadband positive", [](auto& p) { p.audioServo.deadbandNs = avSyncTime(0); });
+    rejectRtp("audio filter after deadband", [](auto& p) { p.audioServo.shortControlWindowNs = *p.audioServo.deadbandNs; });
+    rejectRtp("audio estimator after filter", [](auto& p) { p.audioServo.longControlWindowNs = *p.audioServo.shortControlWindowNs; });
+    rejectRtp("audio control after filter", [](auto& p) { p.audioServo.compensationWindowNs = *p.audioServo.shortControlWindowNs; });
+    rejectRtp("audio estimator after control", [](auto& p) { p.audioServo.longControlWindowNs = *p.audioServo.compensationWindowNs; });
+    rejectRtp("audio recovery not below normal", [](auto& p) { p.audioServo.recoveryCorrectionLimitPpm = *p.audioServo.normalCorrectionLimitPpm - 1; });
+    rejectRtp("audio slew within normal correction", [](auto& p) { p.audioServo.maximumSlewPpmPerSecond = *p.audioServo.normalCorrectionLimitPpm + 1; });
+    rejectRtp("audio hard threshold after recovery", [](auto& p) { p.recovery.hardDiscontinuityThresholdNs = *p.recovery.suspectThresholdNs; });
+    rejectRtp("video hold positive", [](auto& p) { p.video.earlyHoldThresholdNs = avSyncTime(0); });
+    rejectRtp("video late after hold", [](auto& p) { p.video.lateDisplayThresholdNs = *p.video.earlyHoldThresholdNs; });
+    rejectRtp("video drop after late", [](auto& p) { p.video.dropThresholdNs = *p.video.lateDisplayThresholdNs; });
+    rejectRtp("video recovery count positive", [](auto& p) { p.video.maximumConsecutiveRecoveryActions = 0; });
+    rejectRtp("discontinuity after video recovery", [](auto& p) { p.recovery.suspectThresholdNs = *p.video.dropThresholdNs; });
+    rejectRtp("reacquire after hard threshold", [](auto& p) { p.recovery.reacquisitionTimeoutNs = *p.recovery.hardDiscontinuityThresholdNs; });
+    rejectRtp("metrics p95 positive", [](auto& p) { p.metrics.maximumSteadyP95SkewNs = avSyncTime(0); });
+    rejectRtp("metrics p99 after p95", [](auto& p) { p.metrics.maximumSteadyP99SkewNs = avSyncTime(1); });
+    rejectRtp("metrics startup accepts p99", [](auto& p) { p.metrics.maximumStartupSkewNs = avSyncTime(1); });
+    rejectRtp("RTP SR interval positive", [](auto& p) { p.rtp->output.senderReportIntervalNs = avSyncTime(0); });
+    rejectRtp("RTP SR interval before timeout", [](auto& p) { p.rtp->output.senderReportIntervalNs = *p.rtp->input.senderReportTimeoutNs; });
+    rejectRtp("RTP timeout within extrapolation", [](auto& p) { p.rtp->input.senderReportTimeoutNs = *p.rtp->input.maximumExtrapolationNs; });
+    rejectRtp("RTP extrapolation before reacquire", [](auto& p) { p.rtp->input.maximumExtrapolationNs = *p.recovery.reacquisitionTimeoutNs; });
+    rejectRtp("RTP SR skew positive", [](auto& p) { p.rtp->input.maximumSenderReportSkewNs = avSyncTime(0); });
+    rejectRtp("RTP SR skew below hard discontinuity", [](auto& p) { p.rtp->input.maximumSenderReportSkewNs = *p.recovery.hardDiscontinuityThresholdNs; });
+
+    const MediaAvSyncPlan ts = tsResult.value();
+    auto rejectTs = [&](const char* name, auto mutation) {
+        MediaAvSyncPlan plan = ts;
+        mutation(plan);
+        expectInvalidAvSyncMutation(ctx, std::move(plan), name);
+    };
+    rejectTs("TS PCR interval positive", [](auto& p) { p.ts->pcrIntervalNs = avSyncTime(0); });
+    rejectTs("TS PCR jitter below interval", [](auto& p) { p.ts->maximumPcrJitterNs = *p.ts->pcrIntervalNs; });
+    rejectTs("TS PCR gap after interval", [](auto& p) { p.ts->maximumPcrGapNs = *p.ts->pcrIntervalNs; });
+}
+
 } // namespace
 
 int main()
@@ -238,6 +325,8 @@ int main()
     testAvSyncPlannerBuildsCompleteTsContract(ctx);
     testAvSyncPlannerRejectsSeparateRtpToTs(ctx);
     testAvSyncValidatorRejectsMissingAndInconsistentFields(ctx);
+    testAvSyncValidatorRejectsProtocolIdentifierBoundaries(ctx);
+    testAvSyncValidatorRejectsIsolatedNumericAndOrderingInvariants(ctx);
     MediaInputAudioStreamInfo source;
     source.streamIndex = 0;
     source.codecName = "aac";
