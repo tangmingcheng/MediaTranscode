@@ -19,7 +19,8 @@ struct MediaRtpUdpTransport::Impl final {
          WSAEVENT cancelEvent,
 #endif
          std::size_t datagramBytes,
-         int readTimeoutMs)
+         int readTimeoutMs,
+         std::shared_ptr<MediaRtpUdpTransportOperationObserver> observer)
         : runtime(std::move(socketRuntime))
         , rtp(std::move(rtpSocket))
         , rtcp(std::move(rtcpSocket))
@@ -30,6 +31,7 @@ struct MediaRtpUdpTransport::Impl final {
 #endif
         , maximumDatagramBytes(datagramBytes)
         , cancellableReadTimeoutMs(readTimeoutMs)
+        , operationObserver(std::move(observer))
         , preferRtcp(false)
         , state(State::Running)
         , cancellationSequence(0)
@@ -47,6 +49,7 @@ struct MediaRtpUdpTransport::Impl final {
 #endif
     std::size_t maximumDatagramBytes;
     int cancellableReadTimeoutMs;
+    std::shared_ptr<MediaRtpUdpTransportOperationObserver> operationObserver;
     bool preferRtcp;
     std::mutex lifecycleMutex;
     std::mutex receiveMutex;
@@ -115,7 +118,8 @@ MediaRtpUdpTransport& MediaRtpUdpTransport::operator=(MediaRtpUdpTransport&& oth
     }
     return ::media::Result<MediaRtpUdpTransport>::success(MediaRtpUdpTransport(std::make_shared<Impl>(
         runtime.value(), std::move(rtp.value()), std::move(rtcp.value()), cancellationEvent,
-        config.maximumDatagramBytes, config.cancellableReadTimeoutMs)));
+        config.maximumDatagramBytes, config.cancellableReadTimeoutMs,
+        config.operationObserver)));
 #else
     return transportError(::media::ErrorInfo::unsupported("RTP UDP event wait is currently implemented for Windows"));
 #endif
@@ -156,6 +160,10 @@ MediaRtpUdpTransport& MediaRtpUdpTransport::operator=(MediaRtpUdpTransport&& oth
         }
         impl->receiveActive = true;
         sequence = impl->cancellationSequence;
+    }
+    if (impl->operationObserver) {
+        impl->operationObserver->afterLifetimeAcquired(
+            MediaRtpUdpTransportOperation::Receive);
     }
     auto finishError = [impl, sequence](::media::ErrorInfo error) {
         std::lock_guard lifecycleLock(impl->lifecycleMutex);
@@ -219,7 +227,16 @@ MediaRtpUdpTransport& MediaRtpUdpTransport::operator=(MediaRtpUdpTransport&& oth
 #ifdef _WIN32
     const auto impl = snapshot();
     if (!impl) return ::media::Status::failure(::media::ErrorInfo::notInitialized("RTP UDP transport is closed"));
+    if (impl->operationObserver) {
+        impl->operationObserver->afterLifetimeAcquired(
+            MediaRtpUdpTransportOperation::Stop);
+    }
     std::lock_guard lifecycleLock(impl->lifecycleMutex);
+    if (impl->state == Impl::State::Aborted ||
+        impl->cancellationEvent == WSA_INVALID_EVENT) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::cancelled("RTP UDP transport was closed during stop"));
+    }
     if (impl->state == Impl::State::Running) {
         impl->state = Impl::State::StopRequested;
         ++impl->cancellationSequence;
@@ -261,7 +278,16 @@ MediaRtpUdpTransport& MediaRtpUdpTransport::operator=(MediaRtpUdpTransport&& oth
     const auto impl = snapshot();
     if (!impl) return ::media::Status::failure(::media::ErrorInfo::notInitialized("RTP UDP transport is closed"));
 #ifdef _WIN32
+    if (impl->operationObserver) {
+        impl->operationObserver->afterLifetimeAcquired(
+            MediaRtpUdpTransportOperation::Abort);
+    }
     std::lock_guard lifecycleLock(impl->lifecycleMutex);
+    if (impl->state == Impl::State::Aborted ||
+        impl->cancellationEvent == WSA_INVALID_EVENT) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::cancelled("RTP UDP transport was closed during abort"));
+    }
     impl->state = Impl::State::Aborted;
     ++impl->cancellationSequence;
     if (!WSASetEvent(impl->cancellationEvent)) {
@@ -285,16 +311,21 @@ void MediaRtpUdpTransport::close() noexcept
         std::lock_guard lifecycleLock(impl->lifecycleMutex);
         impl->state = Impl::State::Aborted;
         ++impl->cancellationSequence;
-        (void)WSASetEvent(impl->cancellationEvent);
+        if (impl->cancellationEvent != WSA_INVALID_EVENT) {
+            (void)WSASetEvent(impl->cancellationEvent);
+        }
     }
 #endif
     std::unique_lock receiveLock(impl->receiveMutex);
     impl->rtp.close();
     impl->rtcp.close();
 #ifdef _WIN32
-    if (impl->cancellationEvent != WSA_INVALID_EVENT) {
-        WSACloseEvent(impl->cancellationEvent);
-        impl->cancellationEvent = WSA_INVALID_EVENT;
+    {
+        std::lock_guard lifecycleLock(impl->lifecycleMutex);
+        if (impl->cancellationEvent != WSA_INVALID_EVENT) {
+            WSACloseEvent(impl->cancellationEvent);
+            impl->cancellationEvent = WSA_INVALID_EVENT;
+        }
     }
 #endif
 }

@@ -11,6 +11,19 @@
 
 namespace media::ffmpeg::graph {
 
+enum class MediaRtpUdpTransportOperation {
+    Receive,
+    Stop,
+    Abort
+};
+
+class MediaRtpUdpTransportOperationObserver {
+public:
+    virtual ~MediaRtpUdpTransportOperationObserver() = default;
+    virtual void afterLifetimeAcquired(
+        MediaRtpUdpTransportOperation operation) noexcept = 0;
+};
+
 struct MediaRtpUdpTransportConfig final {
     MediaIpAddressFamily addressFamily;
     std::string bindAddress;
@@ -19,6 +32,7 @@ struct MediaRtpUdpTransportConfig final {
     int receiveBufferBytes;
     std::size_t maximumDatagramBytes;
     int cancellableReadTimeoutMs;
+    std::shared_ptr<MediaRtpUdpTransportOperationObserver> operationObserver;
 };
 
 enum class MediaRtpUdpChannel {

@@ -138,3 +138,63 @@ Existing unrelated acceptance-script changes, generated FFmpeg headers, `.codex`
 - The 64-bit ingress sequence intentionally fails closed if it ever wraps to zero; practical wrap is unreachable, but no reset protocol exists while a node is running.
 - Fixed local UDP port ranges in transport tests can collide with an unrelated process on the same host; the tests scan a range but do not ask the OS for an atomic adjacent even/odd pair.
 - Startup consumption/atomic release remains deferred to Task 6 by explicit instruction.
+
+## Fresh review 299bd36 Important fixes
+
+### Deterministic RED
+
+The transport concurrency tests were replaced with a controlled operation observer. The first focused build failed because `MediaRtpUdpTransportOperationObserver` and `MediaRtpUdpTransportOperation` did not exist, proving that the old API had no deterministic way to establish a real protected receive/lifecycle entry:
+
+```powershell
+cmd.exe /d /s /c "call D:\VisualStudio2026\Common7\Tools\VsDevCmd.bat -arch=x64 -host_arch=x64 >nul && cmake --build out\build\x64-debug --config Debug --target media_transcode_runtime_tests media_transcode_node_tests"
+```
+
+The compiler reported the missing observer base, operation enum, and observer-bearing config contract.
+
+The fairness authenticity RED then compiled and ran, but failed because the final bounded-turn snapshot had neither audio nor video calibration and was not `Locked`. This proved that an emptied input channel was not evidence that audio clock evidence had affected the validator.
+
+### Cancellation resource lifetime
+
+- `Impl::lifecycleMutex` is now the sole authority for cancellation state, cancellation sequence, `receiveActive`, and every `WSASetEvent`, `WSAResetEvent`, `WSACloseEvent`, and invalid-handle assignment.
+- The consistent nested lock order is `receiveMutex` then `lifecycleMutex`. `close()` performs its initial cancellation under lifecycle ownership, releases it, acquires the receive lock, then reacquires lifecycle ownership for event closure.
+- `stop()` and `abort()` take a stable `Impl` snapshot, then revalidate state and the event under lifecycle ownership. If `close()` won the race, they return `Cancelled` without touching the closed event.
+- The receive observer fires only after the receive mutex is held and `receiveActive` is set. The stop/abort observer fires after the stable lifetime snapshot and before lifecycle acquisition.
+
+Deterministic tests now prove:
+
+- receive-entry versus close: close remains blocked on the real active receive until the barrier releases; receive returns `Cancelled`, never `NotInitialized`.
+- stop versus close: close completes while stop is paused after snapshot; resumed stop returns `Cancelled` without an invalid event operation.
+- abort versus close: the same controlled interleaving returns `Cancelled` without an invalid event operation.
+
+### Bounded fairness evidence
+
+The clock-group test now uses two stacked video invalidations followed by fresh video generation 5 and audio generation 2 evidence. Within the explicit four-envelope processing budget:
+
+- every snapshot before the final one is asserted not `Locked`;
+- the final snapshot must be `Locked`;
+- the final video calibration must carry generation 5;
+- the final audio calibration must carry generation 2.
+
+The scheduler prioritizes at most two invalidations per stream per turn. This drains the bounded stacked invalidation window before its clocks without introducing an unbounded drain, then gives the other stream a processing opportunity within the same turn.
+
+### Fresh final verification
+
+```powershell
+cmd.exe /d /s /c "call D:\VisualStudio2026\Common7\Tools\VsDevCmd.bat -arch=x64 -host_arch=x64 >nul && cmake --build out\build\x64-debug --config Debug --clean-first"
+```
+
+Result: exit 0; 238 files cleaned; 239/239 build steps completed.
+
+```powershell
+ctest --test-dir out/build/x64-debug -C Debug --output-on-failure -L deterministic
+```
+
+Result: final fresh rerun 6/6 passed, 0 failed, 3.18 seconds.
+
+```powershell
+ctest --test-dir out/build/x64-debug -C Debug --output-on-failure -R media_transcode_integration_tests
+```
+
+Result: 1/1 passed, 0 failed, 79.75 seconds.
+
+The modification whitelist remains the list above; this review round changed only `MediaRtpUdpTransport.h/.cpp`, `RawRtpInputNode.cpp`, `MediaRtpClockGroupNode.cpp`, `test_event_driven_runtime.cpp`, `test_node.cpp`, and this report. The startup-consumer finding remains intentionally untouched.

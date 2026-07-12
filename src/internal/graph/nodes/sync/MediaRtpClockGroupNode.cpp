@@ -43,9 +43,10 @@ MediaNodeKind MediaRtpClockGroupNode::staticKind() noexcept
         }
     }
     constexpr int MaximumEnvelopesPerProcess = 4;
+    constexpr int MaximumPrioritizedInvalidationsPerStream = 2;
     bool processedAny = false;
-    bool videoInvalidationPrioritized = false;
-    bool audioInvalidationPrioritized = false;
+    int prioritizedVideoInvalidations = 0;
+    int prioritizedAudioInvalidations = 0;
     for (int index = 0; index < MaximumEnvelopesPerProcess; ++index) {
         auto invalidation = pendingInvalidation(context);
         if (!invalidation) {
@@ -55,12 +56,13 @@ MediaNodeKind MediaRtpClockGroupNode::staticKind() noexcept
         const MediaStreamKind preferred = m_preferAudio
             ? MediaStreamKind::Audio
             : MediaStreamKind::Video;
-        const bool invalidationAlreadyPrioritized = invalidation.value() &&
+        const bool invalidationPriorityExhausted = invalidation.value() &&
             (*invalidation.value() == MediaStreamKind::Video
-                 ? videoInvalidationPrioritized
-                 : audioInvalidationPrioritized);
+                 ? prioritizedVideoInvalidations
+                 : prioritizedAudioInvalidations) >=
+                MaximumPrioritizedInvalidationsPerStream;
         const MediaStreamKind first = invalidation.value() &&
-                !invalidationAlreadyPrioritized
+                !invalidationPriorityExhausted
             ? *invalidation.value()
             : preferred;
         const MediaStreamKind secondary = first == MediaStreamKind::Video
@@ -78,9 +80,9 @@ MediaNodeKind MediaRtpClockGroupNode::staticKind() noexcept
         processedAny = true;
         if (invalidation.value() && selected == *invalidation.value()) {
             if (selected == MediaStreamKind::Video) {
-                videoInvalidationPrioritized = true;
+                ++prioritizedVideoInvalidations;
             } else {
-                audioInvalidationPrioritized = true;
+                ++prioritizedAudioInvalidations;
             }
         }
         m_preferAudio = selected == MediaStreamKind::Video;

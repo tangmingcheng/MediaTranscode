@@ -196,7 +196,8 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     auto transport = MediaRtpUdpTransport::open(MediaRtpUdpTransportConfig{
         family.value() == "ipv6" ? MediaIpAddressFamily::Ipv6 : MediaIpAddressFamily::Ipv4,
         address.value(), static_cast<uint16_t>(rtpPort.value()), static_cast<uint16_t>(rtcpPort.value()),
-        receiveBuffer.value(), static_cast<std::size_t>(datagramBytes.value()), readTimeout.value()});
+        receiveBuffer.value(), static_cast<std::size_t>(datagramBytes.value()), readTimeout.value(),
+        nullptr});
     if (!transport) return ::media::Status::failure(transport.error());
     m_transport = std::move(transport).value();
     m_reorder = std::make_unique<MediaRtpReorderBuffer>(MediaRtpReorderConfig{

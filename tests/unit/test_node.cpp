@@ -633,14 +633,19 @@ void testRtpClockGroupRejectsStaleCrossPortEvidence(TestContext& ctx)
         return channel.push(makeMediaBufferRef<MediaRtpIngressEventBuffer>(
             std::move(value), sequence));
     };
-    auto drainStates = [&]() {
-        std::vector<MediaRtpClockGroupState> states;
+    auto drainSnapshots = [&]() {
+        std::vector<MediaRtpClockGroupSnapshot> snapshots;
         MediaBufferRef buffer;
         while (output->tryPop(buffer)) {
             const auto* groupBuffer = dynamic_cast<const MediaRtpClockGroupBuffer*>(buffer.get());
             EXPECT_TRUE(ctx, groupBuffer != nullptr);
-            if (groupBuffer) states.push_back(groupBuffer->snapshot().state);
+            if (groupBuffer) snapshots.push_back(groupBuffer->snapshot());
         }
+        return snapshots;
+    };
+    auto drainStates = [&]() {
+        std::vector<MediaRtpClockGroupState> states;
+        for (const auto& snapshot : drainSnapshots()) states.push_back(snapshot.state);
         return states;
     };
 
@@ -732,17 +737,28 @@ void testRtpClockGroupRejectsStaleCrossPortEvidence(TestContext& ctx)
         EXPECT_FALSE(ctx, state == MediaRtpClockGroupState::Locked);
     }
 
-    for (std::uint64_t generation = 4; generation <= 8; ++generation) {
-        EXPECT_TRUE(ctx, videoEvent->push(
-            makeMediaBufferRef<MediaRtpIngressEventBuffer>(
-                MediaRtpClockInvalidation{generation}, generation + 12)));
-    }
-    EXPECT_TRUE(ctx, pushEvidence(*audioClock, evidence(22, 48'000, 1), 8));
+    EXPECT_TRUE(ctx, videoEvent->push(
+        makeMediaBufferRef<MediaRtpIngressEventBuffer>(
+            MediaRtpClockInvalidation{4}, 16)));
+    EXPECT_TRUE(ctx, videoEvent->push(
+        makeMediaBufferRef<MediaRtpIngressEventBuffer>(
+            MediaRtpClockInvalidation{5}, 17)));
+    EXPECT_TRUE(ctx, pushEvidence(*videoClock, evidence(11, 90'000, 5), 18));
+    EXPECT_TRUE(ctx, pushEvidence(*audioClock, evidence(22, 48'000, 2), 8));
     EXPECT_TRUE(ctx, node.process(execution));
-    EXPECT_EQ(ctx, audioClock->size(), static_cast<std::size_t>(0));
-    const auto boundedFairnessStates = drainStates();
-    for (const auto state : boundedFairnessStates) {
-        EXPECT_FALSE(ctx, state == MediaRtpClockGroupState::Locked);
+    const auto boundedFairnessSnapshots = drainSnapshots();
+    EXPECT_TRUE(ctx, !boundedFairnessSnapshots.empty());
+    for (std::size_t index = 0; index + 1 < boundedFairnessSnapshots.size(); ++index) {
+        EXPECT_FALSE(ctx, boundedFairnessSnapshots[index].state ==
+                          MediaRtpClockGroupState::Locked);
+    }
+    if (!boundedFairnessSnapshots.empty()) {
+        const auto& locked = boundedFairnessSnapshots.back();
+        EXPECT_EQ(ctx, locked.state, MediaRtpClockGroupState::Locked);
+        EXPECT_TRUE(ctx, locked.video.has_value());
+        EXPECT_TRUE(ctx, locked.audio.has_value());
+        if (locked.video) EXPECT_EQ(ctx, locked.video->generation, static_cast<std::uint64_t>(5));
+        if (locked.audio) EXPECT_EQ(ctx, locked.audio->generation, static_cast<std::uint64_t>(2));
     }
     EXPECT_TRUE(ctx, node.stop(execution));
     execution.reset();
