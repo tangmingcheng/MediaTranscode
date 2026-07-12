@@ -24,7 +24,6 @@ constexpr int RtpReceiveBufferBytes = 4 * 1024 * 1024;
 constexpr int RtpMaximumDatagramBytes = 65'535;
 constexpr std::size_t RtpReorderWindowPackets = 64;
 constexpr int RtpMaximumReorderDelayMs = 100;
-constexpr int RtpCancellableReadTimeoutMs = 2'500;
 constexpr int RtcpSenderReportTimeoutMs = 3'000;
 constexpr int RtcpCnameTimeoutMs = 5'000;
 
@@ -148,6 +147,11 @@ void fillNodePlan(
 ::media::Result<MediaRealtimeRawInputPlan> MediaRealtimeInputPlanner::planRawRtp(
     const MediaRealtimeRtpTranscodeRequest& request)
 {
+    if (!request.input.readTimeoutMs || *request.input.readTimeoutMs <= 0) {
+        return ::media::Result<MediaRealtimeRawInputPlan>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Raw RTP input requires an explicit positive read timeout"));
+    }
     auto videoDescriptor = MediaRealtimeRtpCodecRegistry::describe(MediaStreamKind::Video, request.input.videoRtp);
     if (!videoDescriptor) return ::media::Result<MediaRealtimeRawInputPlan>::failure(videoDescriptor.error());
     auto videoEndpoint = endpoint(request.input.videoRtp, "Raw RTP video");
@@ -160,7 +164,7 @@ void fillNodePlan(
     result.video.codecName = videoDescriptor.value().codecName;
     result.videoTransport = transportPlan(
         videoEndpoint.value(), request.input.videoRtp, videoDescriptor.value(),
-        request.input.readTimeoutMs.value_or(RtpCancellableReadTimeoutMs));
+        *request.input.readTimeoutMs);
     result.videoDepacketizer = depacketizerPlan(MediaStreamKind::Video, request.input.videoRtp, videoDescriptor.value());
     if (auto status = MediaRtpDepacketizerFactory::validate(result.videoDepacketizer); !status) {
         return ::media::Result<MediaRealtimeRawInputPlan>::failure(status.error());
@@ -184,7 +188,7 @@ void fillNodePlan(
         result.audio = std::move(audio);
         result.audioTransport = transportPlan(
             audioEndpoint.value(), request.input.audioRtp, audioDescriptor.value(),
-            request.input.readTimeoutMs.value_or(RtpCancellableReadTimeoutMs));
+            *request.input.readTimeoutMs);
         result.audioDepacketizer = depacketizerPlan(MediaStreamKind::Audio, request.input.audioRtp, audioDescriptor.value());
         if (auto status = MediaRtpDepacketizerFactory::validate(*result.audioDepacketizer); !status) {
             return ::media::Result<MediaRealtimeRawInputPlan>::failure(status.error());

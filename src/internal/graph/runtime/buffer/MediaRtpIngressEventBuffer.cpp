@@ -2,8 +2,11 @@
 
 namespace media::ffmpeg::graph {
 
-MediaRtpIngressEventBuffer::MediaRtpIngressEventBuffer(MediaRtcpClockEvidence evidence)
+MediaRtpIngressEventBuffer::MediaRtpIngressEventBuffer(
+    MediaRtcpClockEvidence evidence,
+    std::uint64_t sequence)
     : m_kind(MediaRtpIngressEventKind::ClockEvidence)
+    , m_sequence(sequence)
     , m_clockEvidence(std::move(evidence))
 {
     setStreamKind(MediaStreamKind::Metadata);
@@ -13,8 +16,10 @@ MediaRtpIngressEventBuffer::MediaRtpIngressEventBuffer(MediaRtcpClockEvidence ev
 
 MediaRtpIngressEventBuffer::MediaRtpIngressEventBuffer(
     MediaRtpDiscontinuity discontinuity,
-    std::uint64_t generation)
+    std::uint64_t generation,
+    std::uint64_t sequence)
     : m_kind(MediaRtpIngressEventKind::Discontinuity)
+    , m_sequence(sequence)
     , m_discontinuity(discontinuity)
     , m_discontinuityGeneration(generation)
 {
@@ -24,8 +29,11 @@ MediaRtpIngressEventBuffer::MediaRtpIngressEventBuffer(
     setDiagnosticName("rtp.discontinuity");
 }
 
-MediaRtpIngressEventBuffer::MediaRtpIngressEventBuffer(MediaRtpClockObservation observation)
+MediaRtpIngressEventBuffer::MediaRtpIngressEventBuffer(
+    MediaRtpClockObservation observation,
+    std::uint64_t sequence)
     : m_kind(MediaRtpIngressEventKind::ClockObservation)
+    , m_sequence(sequence)
     , m_clockObservation(observation)
 {
     setStreamKind(MediaStreamKind::Metadata);
@@ -33,8 +41,11 @@ MediaRtpIngressEventBuffer::MediaRtpIngressEventBuffer(MediaRtpClockObservation 
     setDiagnosticName("rtp.clock_observation");
 }
 
-MediaRtpIngressEventBuffer::MediaRtpIngressEventBuffer(MediaRtpClockInvalidation invalidation)
+MediaRtpIngressEventBuffer::MediaRtpIngressEventBuffer(
+    MediaRtpClockInvalidation invalidation,
+    std::uint64_t sequence)
     : m_kind(MediaRtpIngressEventKind::ClockInvalidation)
+    , m_sequence(sequence)
     , m_clockInvalidation(invalidation)
 {
     setStreamKind(MediaStreamKind::Metadata);
@@ -50,5 +61,6 @@ const std::optional<MediaRtpDiscontinuity>& MediaRtpIngressEventBuffer::disconti
 const std::optional<std::uint64_t>& MediaRtpIngressEventBuffer::discontinuityGeneration() const noexcept { return m_discontinuityGeneration; }
 const std::optional<MediaRtpClockObservation>& MediaRtpIngressEventBuffer::clockObservation() const noexcept { return m_clockObservation; }
 const std::optional<MediaRtpClockInvalidation>& MediaRtpIngressEventBuffer::clockInvalidation() const noexcept { return m_clockInvalidation; }
+std::uint64_t MediaRtpIngressEventBuffer::sequence() const noexcept { return m_sequence; }
 
 } // namespace media::ffmpeg::graph

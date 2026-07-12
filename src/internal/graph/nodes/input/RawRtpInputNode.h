@@ -32,6 +32,7 @@ private:
     ::media::Status queueClockTransition(MediaGraphExecutionContext& context,
                                          std::int64_t observedAtNs);
     void resetState() noexcept;
+    std::uint64_t nextIngressSequence() noexcept;
 
     MediaRtpUdpTransport m_transport;
     std::unique_ptr<MediaRtpReorderBuffer> m_reorder;
@@ -45,7 +46,9 @@ private:
     bool m_initialized = false;
     bool m_formatEmitted = false;
     bool m_requireCname = false;
+    std::optional<MediaRtcpCompositionMode> m_rtcpCompositionMode;
     int m_cancellableReadTimeoutMs = 0;
+    std::uint64_t m_nextIngressSequence = 1;
 };
 
 } // namespace media::ffmpeg::graph

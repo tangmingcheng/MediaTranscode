@@ -20,11 +20,20 @@ protected:
     ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context) override;
 
 private:
+    struct StreamPending final {
+        MediaBufferRef event;
+        MediaBufferRef clock;
+        std::optional<std::uint64_t> lastProcessedSequence;
+    };
+
     ::media::Status configure(MediaGraphExecutionContext& context);
-    ::media::Result<bool> processPort(MediaGraphExecutionContext& context,
-                                      const char* portName,
-                                      MediaStreamKind streamKind,
-                                      bool clockPort);
+    ::media::Result<bool> processStream(MediaGraphExecutionContext& context,
+                                        MediaStreamKind streamKind);
+    ::media::Status fillPending(MediaGraphExecutionContext& context,
+                                const char* portName,
+                                MediaBufferRef& pending);
+    ::media::Result<std::optional<MediaStreamKind>> pendingInvalidation(
+        MediaGraphExecutionContext& context);
     ::media::Status processClock(const MediaRtpIngressEventBuffer& event,
                                  MediaStreamKind streamKind);
     ::media::Status publish(MediaGraphExecutionContext& context, std::int64_t observedAtNs);
@@ -39,6 +48,9 @@ private:
     std::optional<std::uint64_t> m_audioGeneration;
     std::optional<std::uint64_t> m_minimumVideoGeneration;
     std::optional<std::uint64_t> m_minimumAudioGeneration;
+    StreamPending m_videoPending;
+    StreamPending m_audioPending;
+    bool m_preferAudio = false;
     bool m_configured = false;
     bool m_initialPublished = false;
 };

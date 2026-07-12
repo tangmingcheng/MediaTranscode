@@ -36,7 +36,7 @@ struct MediaRealtimeRtpTransportPlan final {
     bool requireCname;
     int senderReportTimeoutMs;
     int cnameTimeoutMs;
-    MediaRtcpCompositionMode rtcpCompositionMode;
+    std::optional<MediaRtcpCompositionMode> rtcpCompositionMode;
 };
 
 struct MediaRealtimeRtpInputNodePlan {

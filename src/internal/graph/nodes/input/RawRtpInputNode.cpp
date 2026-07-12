@@ -180,8 +180,10 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
         else if (!channels) error = &channels.error(); else error = &accessUnitDuration.error();
         return ::media::Status::failure(*error);
     }
+    auto rtcpComposition = parseMediaRtcpCompositionMode(compositionMode.value());
+    if (!rtcpComposition) return ::media::Status::failure(rtcpComposition.error());
     if (rtpPort.value() > 65535 || rtcpPort.value() > 65535 || payloadType.value() > 127 ||
-        (family.value() != "ipv4" && family.value() != "ipv6") || compositionMode.value() != "strict_compound_rfc3550") {
+        (family.value() != "ipv4" && family.value() != "ipv6")) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument("RawRtpInputNode planned numeric option is out of range"));
     }
     m_config = MediaRtpDepacketizerConfig{
@@ -216,6 +218,7 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     }
     m_streamSnapshot = MediaBufferRef(std::move(snapshot).value());
     m_requireCname = requireCname.value();
+    m_rtcpCompositionMode = std::move(rtcpComposition).value();
     m_cancellableReadTimeoutMs = readTimeout.value();
     m_initialized = true;
     return ::media::Status::success();
@@ -250,7 +253,7 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
             m_events.emplace_back(
                 "event",
                 makeMediaBufferRef<MediaRtpIngressEventBuffer>(
-                    discontinuity, m_clockTracker->generation()));
+                    discontinuity, m_clockTracker->generation(), nextIngressSequence()));
         }
     }
     for (const MediaRtpPacket& packet : reordered.packets) {
@@ -275,8 +278,13 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
 
 ::media::Status RawRtpInputNode::processRtcp(MediaGraphExecutionContext& context, MediaRtpUdpDatagram datagram)
 {
+    if (!m_rtcpCompositionMode) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::notInitialized(
+                "RawRtpInputNode requires planned RTCP composition mode"));
+    }
     auto packets = MediaRtcpCompoundParser::parse(datagram.bytes, MediaRtcpCompoundPolicy{
-        MediaRtcpCompositionMode::StrictCompoundRfc3550, m_requireCname});
+        *m_rtcpCompositionMode, m_requireCname});
     if (!packets) return ::media::Status::failure(packets.error());
     const int64_t observedAtNs = steadyNowNs();
     auto status = m_clockTracker->observe(packets.value(), observedAtNs);
@@ -286,7 +294,8 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
             m_events.emplace_back(
                 "event",
                 makeMediaBufferRef<MediaRtpIngressEventBuffer>(
-                    MediaRtpClockInvalidation{m_clockTracker->generation()}));
+                    MediaRtpClockInvalidation{m_clockTracker->generation()},
+                    nextIngressSequence()));
         }
         return ::media::Status::success();
     }
@@ -299,7 +308,10 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
                 return scheduleStatus;
             }
         }
-        m_events.emplace_back("clock", makeMediaBufferRef<MediaRtpIngressEventBuffer>(std::move(evidence).value()));
+        m_events.emplace_back(
+            "clock",
+            makeMediaBufferRef<MediaRtpIngressEventBuffer>(
+                std::move(evidence).value(), nextIngressSequence()));
     }
     return ::media::Status::success();
 }
@@ -317,7 +329,7 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     m_events.emplace_back(
         "event",
         makeMediaBufferRef<MediaRtpIngressEventBuffer>(
-            MediaRtpClockObservation{observedAtNs}));
+            MediaRtpClockObservation{observedAtNs}, nextIngressSequence()));
     return ::media::Status::success();
 }
 
@@ -350,7 +362,14 @@ void RawRtpInputNode::resetState() noexcept
     m_initialized = false;
     m_formatEmitted = false;
     m_requireCname = false;
+    m_rtcpCompositionMode.reset();
     m_cancellableReadTimeoutMs = 0;
+    m_nextIngressSequence = 1;
+}
+
+std::uint64_t RawRtpInputNode::nextIngressSequence() noexcept
+{
+    return m_nextIngressSequence++;
 }
 
 } // namespace media::ffmpeg::graph

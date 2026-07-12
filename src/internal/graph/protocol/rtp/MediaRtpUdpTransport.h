@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -54,8 +55,11 @@ public:
 
 private:
     struct Impl;
-    explicit MediaRtpUdpTransport(std::unique_ptr<Impl> impl) noexcept;
-    std::unique_ptr<Impl> m_impl;
+    explicit MediaRtpUdpTransport(std::shared_ptr<Impl> impl) noexcept;
+    std::shared_ptr<Impl> snapshot() const noexcept;
+
+    mutable std::mutex m_handleMutex;
+    std::shared_ptr<Impl> m_impl;
 };
 
 } // namespace media::ffmpeg::graph

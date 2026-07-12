@@ -4,6 +4,7 @@
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
 #include "internal/graph/builder/local/LocalFileTranscodeGraphBuilder.h"
 #include "internal/graph/builder/realtime/MediaRealtimeRtpTranscodeGraphBuilder.h"
+#include "internal/graph/builder/realtime/MediaRealtimeOptionApplier.h"
 #include "internal/graph/core/MediaGraphValidation.h"
 #include "internal/graph/model/MediaNodeKind.h"
 #include "internal/graph/model/RealtimeStreamLayout.h"
@@ -16,6 +17,7 @@
 #include "internal/graph/nodes/audio/AudioResampleNode.h"
 #include "internal/graph/nodes/video/VideoMonotonicTimestamp.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeInputPlanner.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
 #include "internal/graph/planner/realtime/MediaRealtimeOutputPolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaPreparedRealtimeInput.h"
@@ -789,6 +791,49 @@ MediaRealtimeRtpTranscodeRequest validRawRtpAudioVideoOptions()
     options.input.audioRtp.bitrateKbps = 320;
     options.input.audioRtp.fmtp = "profile-level-id=1;mode=AAC-hbr;config=1190;sizelength=13;indexlength=3;indexdeltalength=3";
     return options;
+}
+
+void testRawRtpPublicPlannerRequiresPositiveReadTimeout(TestContext& ctx)
+{
+    auto missing = validRawRtpOptions();
+    missing.input.readTimeoutMs.reset();
+    auto missingPlan = MediaRealtimeInputPlanner::planRawRtp(missing);
+    EXPECT_FALSE(ctx, missingPlan);
+    if (!missingPlan) EXPECT_EQ(ctx, missingPlan.error().code, media::ErrorCode::InvalidArgument);
+
+    auto zero = validRawRtpOptions();
+    zero.input.readTimeoutMs = 0;
+    auto zeroPlan = MediaRealtimeInputPlanner::planRawRtp(zero);
+    EXPECT_FALSE(ctx, zeroPlan);
+    if (!zeroPlan) EXPECT_EQ(ctx, zeroPlan.error().code, media::ErrorCode::InvalidArgument);
+
+    auto negative = validRawRtpOptions();
+    negative.input.readTimeoutMs = -1;
+    auto negativePlan = MediaRealtimeInputPlanner::planRawRtp(negative);
+    EXPECT_FALSE(ctx, negativePlan);
+    if (!negativePlan) EXPECT_EQ(ctx, negativePlan.error().code, media::ErrorCode::InvalidArgument);
+}
+
+void testRealtimeOptionApplierRejectsUnsupportedRtcpComposition(TestContext& ctx)
+{
+    auto planned = MediaRealtimeRtpTranscodePlanner::plan(validRawRtpOptions());
+    EXPECT_TRUE(ctx, planned);
+    if (!planned || !planned.value().input.rtpTransport) return;
+
+    planned.value().input.rtpTransport->rtcpCompositionMode =
+        static_cast<MediaRtcpCompositionMode>(255);
+    MediaGraph graph;
+    const MediaNodeId input = graph.addNode(MediaNodeKind::RawRtpInput, "test.raw_rtp");
+    const auto applied = MediaRealtimeOptionApplier::applyInputOptions(
+        graph, input, planned.value().input);
+    EXPECT_FALSE(ctx, applied);
+    if (!applied) EXPECT_EQ(ctx, applied.error().code, media::ErrorCode::InvalidArgument);
+
+    planned.value().input.rtpTransport->rtcpCompositionMode.reset();
+    const auto missing = MediaRealtimeOptionApplier::applyInputOptions(
+        graph, input, planned.value().input);
+    EXPECT_FALSE(ctx, missing);
+    if (!missing) EXPECT_EQ(ctx, missing.error().code, media::ErrorCode::InvalidArgument);
 }
 
 void testValidationRejectsMissingInput(TestContext& ctx)
@@ -3418,6 +3463,8 @@ int main()
     testRawRtpRejectsUnsupportedMetadata(ctx);
     testRawRtpPlansH264AndHevcInput(ctx);
     testRawRtpAudioEndpointRequiredWhenAudioEnabled(ctx);
+    testRawRtpPublicPlannerRequiresPositiveReadTimeout(ctx);
+    testRealtimeOptionApplierRejectsUnsupportedRtcpComposition(ctx);
     testRawRtpPlansAudioVideoInput(ctx);
     testRealtimePlanEmbedsValidatedAvSyncContract(ctx);
     testRawRtpAudioVideoGraphUsesIsolatedInputs(ctx);

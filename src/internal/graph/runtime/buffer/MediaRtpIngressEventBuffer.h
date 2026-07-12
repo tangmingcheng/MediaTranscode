@@ -25,11 +25,15 @@ struct MediaRtpClockInvalidation final {
 
 class MediaRtpIngressEventBuffer final : public MediaBuffer {
 public:
-    explicit MediaRtpIngressEventBuffer(MediaRtcpClockEvidence evidence);
+    MediaRtpIngressEventBuffer(MediaRtcpClockEvidence evidence,
+                               std::uint64_t sequence);
     MediaRtpIngressEventBuffer(MediaRtpDiscontinuity discontinuity,
-                               std::uint64_t generation);
-    explicit MediaRtpIngressEventBuffer(MediaRtpClockObservation observation);
-    explicit MediaRtpIngressEventBuffer(MediaRtpClockInvalidation invalidation);
+                               std::uint64_t generation,
+                               std::uint64_t sequence);
+    MediaRtpIngressEventBuffer(MediaRtpClockObservation observation,
+                               std::uint64_t sequence);
+    MediaRtpIngressEventBuffer(MediaRtpClockInvalidation invalidation,
+                               std::uint64_t sequence);
 
     MediaBufferType type() const noexcept override;
     MediaRtpIngressEventKind kind() const noexcept;
@@ -38,9 +42,11 @@ public:
     const std::optional<std::uint64_t>& discontinuityGeneration() const noexcept;
     const std::optional<MediaRtpClockObservation>& clockObservation() const noexcept;
     const std::optional<MediaRtpClockInvalidation>& clockInvalidation() const noexcept;
+    std::uint64_t sequence() const noexcept;
 
 private:
     MediaRtpIngressEventKind m_kind;
+    std::uint64_t m_sequence;
     std::optional<MediaRtcpClockEvidence> m_clockEvidence;
     std::optional<MediaRtpDiscontinuity> m_discontinuity;
     std::optional<std::uint64_t> m_discontinuityGeneration;

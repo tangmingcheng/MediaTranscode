@@ -78,7 +78,15 @@ const char* boolOption(bool value) noexcept
         if (auto status = set("rtcp.require_cname", boolOption(transport.requireCname)); !status) return status;
         if (auto status = set("rtcp.sender_report_timeout_ms", std::to_string(transport.senderReportTimeoutMs)); !status) return status;
         if (auto status = set("rtcp.cname_timeout_ms", std::to_string(transport.cnameTimeoutMs)); !status) return status;
-        if (auto status = set("rtcp.composition_mode", "strict_compound_rfc3550"); !status) return status;
+        if (!transport.rtcpCompositionMode) {
+            return ::media::Result<void>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "raw RTP input requires planner-owned RTCP composition mode"));
+        }
+        auto composition = serializeMediaRtcpCompositionMode(
+            *transport.rtcpCompositionMode);
+        if (!composition) return ::media::Result<void>::failure(composition.error());
+        if (auto status = set("rtcp.composition_mode", std::move(composition).value()); !status) return status;
         if (auto status = set("rtp.stream_kind", depacketizer.streamKind == MediaStreamKind::Video ? "video" : "audio"); !status) return status;
         if (auto status = set("rtp.codec", depacketizer.codecName); !status) return status;
         if (auto status = set("rtp.fmtp", depacketizer.fmtp); !status) return status;

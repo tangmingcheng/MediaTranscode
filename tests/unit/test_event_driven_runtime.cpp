@@ -5,6 +5,7 @@
 #include "internal/graph/runtime/network/MediaUdpSocket.h"
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <future>
 #include <iostream>
@@ -156,6 +157,7 @@ void testRtpUdpTransportReceivesBothChannelsAndCancels(TestContext& ctx)
     EXPECT_TRUE(ctx, sender.value().sendTo("127.0.0.1", transport.value().rtpPort(), rtp));
     const auto afterReset = sparseReceive.get();
     EXPECT_TRUE(ctx, afterReset);
+    if (!afterReset) std::cerr << afterReset.error().describe() << '\n';
 
     auto replacementTransport = MediaRtpUdpTransport::open(MediaRtpUdpTransportConfig{
         MediaIpAddressFamily::Ipv4, "127.0.0.1", 41'000, 41'001, 262144, 2048, 5'000});
@@ -185,6 +187,53 @@ void testRtpUdpTransportReceivesBothChannelsAndCancels(TestContext& ctx)
     EXPECT_FALSE(ctx, transport.value().isOpen());
 }
 
+void testRtpUdpTransportCloseRacesQueuedReceiveEntries(TestContext& ctx)
+{
+#ifndef _WIN32
+    return;
+#else
+    ::media::Result<MediaRtpUdpTransport> transport =
+        ::media::Result<MediaRtpUdpTransport>::failure(
+            ::media::ErrorInfo::ioFailure("test transport was not opened"));
+    for (uint16_t port = 42'000; !transport && port < 43'000;
+         port = static_cast<uint16_t>(port + 2)) {
+        transport = MediaRtpUdpTransport::open(MediaRtpUdpTransportConfig{
+            MediaIpAddressFamily::Ipv4, "127.0.0.1", port,
+            static_cast<uint16_t>(port + 1), 262144, 2048, 5'000});
+    }
+    EXPECT_TRUE(ctx, transport);
+    if (!transport) {
+        std::cerr << transport.error().describe() << '\n';
+        return;
+    }
+
+    constexpr std::size_t ReceiverCount = 16;
+    std::array<std::future<::media::Result<MediaRtpUdpDatagram>>, ReceiverCount> receives;
+    std::atomic<std::size_t> entered{0};
+    for (auto& receive : receives) {
+        receive = std::async(std::launch::async, [&] {
+            entered.fetch_add(1, std::memory_order_release);
+            return transport.value().receive();
+        });
+    }
+    while (entered.load(std::memory_order_acquire) != ReceiverCount) {
+        std::this_thread::yield();
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    transport.value().close();
+
+    for (auto& receive : receives) {
+        EXPECT_EQ(ctx, receive.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+        const auto result = receive.get();
+        EXPECT_FALSE(ctx, result);
+        if (!result) {
+            EXPECT_TRUE(ctx, result.error().code == media::ErrorCode::Cancelled ||
+                             result.error().code == media::ErrorCode::NotInitialized);
+        }
+    }
+#endif
+}
+
 } // namespace
 
 int main()
@@ -192,6 +241,7 @@ int main()
     media_transcode::test::TestContext ctx;
     testUdpSocketLifecycleAndBindFailure(ctx);
     testRtpUdpTransportReceivesBothChannelsAndCancels(ctx);
+    testRtpUdpTransportCloseRacesQueuedReceiveEntries(ctx);
     runEventRuntimeThreadingQueueTests(ctx);
     runEventRuntimeFfmpegOwnershipTests(ctx);
     runEventRuntimeMultiInputTests(ctx);

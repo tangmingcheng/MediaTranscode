@@ -42,20 +42,48 @@ MediaNodeKind MediaRtpClockGroupNode::staticKind() noexcept
             return ::media::Result<MediaNodeProcessResult>::failure(initial.error());
         }
     }
-    const struct PortSpec {
-        const char* name;
-        MediaStreamKind streamKind;
-        bool clock;
-    } ports[] = {
-        {"video_event", MediaStreamKind::Video, false},
-        {"audio_event", MediaStreamKind::Audio, false},
-        {"video_clock", MediaStreamKind::Video, true},
-        {"audio_clock", MediaStreamKind::Audio, true}};
+    constexpr int MaximumEnvelopesPerProcess = 4;
     bool processedAny = false;
-    for (const auto& port : ports) {
-        auto processed = processPort(context, port.name, port.streamKind, port.clock);
+    bool videoInvalidationPrioritized = false;
+    bool audioInvalidationPrioritized = false;
+    for (int index = 0; index < MaximumEnvelopesPerProcess; ++index) {
+        auto invalidation = pendingInvalidation(context);
+        if (!invalidation) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                invalidation.error());
+        }
+        const MediaStreamKind preferred = m_preferAudio
+            ? MediaStreamKind::Audio
+            : MediaStreamKind::Video;
+        const bool invalidationAlreadyPrioritized = invalidation.value() &&
+            (*invalidation.value() == MediaStreamKind::Video
+                 ? videoInvalidationPrioritized
+                 : audioInvalidationPrioritized);
+        const MediaStreamKind first = invalidation.value() &&
+                !invalidationAlreadyPrioritized
+            ? *invalidation.value()
+            : preferred;
+        const MediaStreamKind secondary = first == MediaStreamKind::Video
+            ? MediaStreamKind::Audio
+            : MediaStreamKind::Video;
+        auto processed = processStream(context, first);
         if (!processed) return ::media::Result<MediaNodeProcessResult>::failure(processed.error());
-        processedAny = processedAny || processed.value();
+        MediaStreamKind selected = first;
+        if (!processed.value()) {
+            processed = processStream(context, secondary);
+            if (!processed) return ::media::Result<MediaNodeProcessResult>::failure(processed.error());
+            selected = secondary;
+        }
+        if (!processed.value()) break;
+        processedAny = true;
+        if (invalidation.value() && selected == *invalidation.value()) {
+            if (selected == MediaStreamKind::Video) {
+                videoInvalidationPrioritized = true;
+            } else {
+                audioInvalidationPrioritized = true;
+            }
+        }
+        m_preferAudio = selected == MediaStreamKind::Video;
     }
     return processedAny ? processProgress() : processWaiting();
 }
@@ -98,23 +126,66 @@ MediaNodeKind MediaRtpClockGroupNode::staticKind() noexcept
     return ::media::Status::success();
 }
 
-::media::Result<bool> MediaRtpClockGroupNode::processPort(
+::media::Result<bool> MediaRtpClockGroupNode::processStream(
     MediaGraphExecutionContext& context,
-    const char* portName,
-    MediaStreamKind streamKind,
-    bool clockPort)
+    MediaStreamKind streamKind)
 {
-    auto input = tryPopInputOptional(context, portName);
-    if (!input) return ::media::Result<bool>::failure(input.error());
-    if (!input.value()) return ::media::Result<bool>::success(false);
-    const auto* event = dynamic_cast<const MediaRtpIngressEventBuffer*>(input.value()->get());
+    StreamPending& pending = streamKind == MediaStreamKind::Video
+        ? m_videoPending
+        : m_audioPending;
+    const char* eventPort = streamKind == MediaStreamKind::Video
+        ? "video_event"
+        : "audio_event";
+    const char* clockPort = streamKind == MediaStreamKind::Video
+        ? "video_clock"
+        : "audio_clock";
+    if (auto status = fillPending(context, eventPort, pending.event); !status) {
+        return ::media::Result<bool>::failure(status.error());
+    }
+    if (auto status = fillPending(context, clockPort, pending.clock); !status) {
+        return ::media::Result<bool>::failure(status.error());
+    }
+    if (!pending.event && !pending.clock) {
+        return ::media::Result<bool>::success(false);
+    }
+    const auto* eventEnvelope = pending.event
+        ? dynamic_cast<const MediaRtpIngressEventBuffer*>(pending.event.get())
+        : nullptr;
+    const auto* clockEnvelope = pending.clock
+        ? dynamic_cast<const MediaRtpIngressEventBuffer*>(pending.clock.get())
+        : nullptr;
+    if ((pending.event && !eventEnvelope) || (pending.clock && !clockEnvelope)) {
+        return ::media::Result<bool>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MediaRtpClockGroupNode requires ordered RTP ingress event buffers"));
+    }
+    if (eventEnvelope && clockEnvelope &&
+        eventEnvelope->sequence() == clockEnvelope->sequence()) {
+        return ::media::Result<bool>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MediaRtpClockGroupNode requires unique per-stream ingress sequence"));
+    }
+    const bool selectedClock = clockEnvelope &&
+        (!eventEnvelope || clockEnvelope->sequence() < eventEnvelope->sequence());
+    MediaBufferRef selected = selectedClock
+        ? std::move(pending.clock)
+        : std::move(pending.event);
+    const auto* event = dynamic_cast<const MediaRtpIngressEventBuffer*>(selected.get());
     if (!event) {
         return ::media::Result<bool>::failure(
             ::media::ErrorInfo::invalidArgument("MediaRtpClockGroupNode requires RTP ingress event buffers"));
     }
+    if (event->sequence() == 0 ||
+        (pending.lastProcessedSequence &&
+         event->sequence() <= *pending.lastProcessedSequence)) {
+        return ::media::Result<bool>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MediaRtpClockGroupNode requires strictly ordered ingress sequence"));
+    }
+    pending.lastProcessedSequence = event->sequence();
     ::media::Status status = ::media::Status::success();
     std::int64_t observationTimeNs = steadyNowNs();
-    if (clockPort) {
+    if (selectedClock) {
         status = processClock(*event, streamKind);
     } else if (event->kind() == MediaRtpIngressEventKind::ClockObservation &&
                event->clockObservation()) {
@@ -164,6 +235,55 @@ MediaNodeKind MediaRtpClockGroupNode::staticKind() noexcept
         return ::media::Result<bool>::failure(published.error());
     }
     return ::media::Result<bool>::success(true);
+}
+
+::media::Status MediaRtpClockGroupNode::fillPending(
+    MediaGraphExecutionContext& context,
+    const char* portName,
+    MediaBufferRef& pending)
+{
+    if (pending) return ::media::Status::success();
+    auto input = tryPopInputOptional(context, portName);
+    if (!input) return ::media::Status::failure(input.error());
+    if (input.value()) pending = std::move(*input.value());
+    return ::media::Status::success();
+}
+
+::media::Result<std::optional<MediaStreamKind>>
+MediaRtpClockGroupNode::pendingInvalidation(MediaGraphExecutionContext& context)
+{
+    if (auto status = fillPending(context, "video_event", m_videoPending.event);
+        !status) {
+        return ::media::Result<std::optional<MediaStreamKind>>::failure(
+            status.error());
+    }
+    if (auto status = fillPending(context, "audio_event", m_audioPending.event);
+        !status) {
+        return ::media::Result<std::optional<MediaStreamKind>>::failure(
+            status.error());
+    }
+    const auto invalidates = [](const MediaBufferRef& buffer) {
+        const auto* event = buffer
+            ? dynamic_cast<const MediaRtpIngressEventBuffer*>(buffer.get())
+            : nullptr;
+        return event &&
+            (event->kind() == MediaRtpIngressEventKind::ClockInvalidation ||
+             event->kind() == MediaRtpIngressEventKind::Discontinuity);
+    };
+    const bool video = invalidates(m_videoPending.event);
+    const bool audio = invalidates(m_audioPending.event);
+    if (!video && !audio) {
+        return ::media::Result<std::optional<MediaStreamKind>>::success(
+            std::nullopt);
+    }
+    return ::media::Result<std::optional<MediaStreamKind>>::success(
+        video && audio
+            ? std::optional<MediaStreamKind>(m_preferAudio
+                  ? MediaStreamKind::Audio
+                  : MediaStreamKind::Video)
+            : std::optional<MediaStreamKind>(video
+                  ? MediaStreamKind::Video
+                  : MediaStreamKind::Audio));
 }
 
 ::media::Status MediaRtpClockGroupNode::processClock(
@@ -233,6 +353,9 @@ void MediaRtpClockGroupNode::resetState() noexcept
     m_audioGeneration.reset();
     m_minimumVideoGeneration.reset();
     m_minimumAudioGeneration.reset();
+    m_videoPending = {};
+    m_audioPending = {};
+    m_preferAudio = false;
     m_configured = false;
     m_initialPublished = false;
 }
