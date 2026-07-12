@@ -12,6 +12,13 @@ namespace {
 
 constexpr int RawVideoStreamIndex = 0;
 constexpr int RawAudioStreamIndex = 0;
+constexpr int RtpReceiveBufferBytes = 4 * 1024 * 1024;
+constexpr int RtpMaximumDatagramBytes = 65'535;
+constexpr std::size_t RtpReorderWindowPackets = 64;
+constexpr int RtpMaximumReorderDelayMs = 100;
+constexpr int RtpCancellableReadTimeoutMs = 2'500;
+constexpr int RtcpSenderReportTimeoutMs = 3'000;
+constexpr int RtcpCnameTimeoutMs = 5'000;
 
 ::media::Result<MediaRtpUrlEndpoint> endpoint(
     const MediaRealtimeRtpInputMetadata& metadata,
@@ -25,6 +32,32 @@ constexpr int RawAudioStreamIndex = 0;
             ::media::ErrorInfo::invalidArgument(owner + " port must be an even port in range 1..65534"));
     }
     return parsed;
+}
+
+MediaRealtimeRtpTransportPlan transportPlan(
+    const MediaRtpUrlEndpoint& endpoint,
+    const MediaRealtimeRtpInputMetadata& metadata,
+    const MediaRealtimeRtpCodecDescriptor& descriptor,
+    int cancellableReadTimeoutMs)
+{
+    const bool ipv6 = endpoint.host.size() >= 2 && endpoint.host.front() == '[' && endpoint.host.back() == ']';
+    return MediaRealtimeRtpTransportPlan{
+        ipv6 ? MediaIpAddressFamily::Ipv6 : MediaIpAddressFamily::Ipv4,
+        endpoint.host,
+        endpoint.port,
+        static_cast<uint16_t>(endpoint.port + 1),
+        static_cast<uint8_t>(*metadata.payloadType),
+        descriptor.clockRate,
+        RtpReceiveBufferBytes,
+        RtpMaximumDatagramBytes,
+        RtpReorderWindowPackets,
+        RtpMaximumReorderDelayMs,
+        cancellableReadTimeoutMs,
+        true,
+        true,
+        RtcpSenderReportTimeoutMs,
+        RtcpCnameTimeoutMs
+    };
 }
 
 std::string sdp(
@@ -54,6 +87,7 @@ void fillNodePlan(
     const MediaRealtimeRtpTranscodeRequest& request,
     std::string url,
     std::string sdpText,
+    std::optional<MediaRealtimeRtpTransportPlan> transport,
     MediaRealtimeRtpInputNodePlan& node)
 {
     node.url = std::move(url);
@@ -65,6 +99,7 @@ void fillNodePlan(
     node.probeSizeBytes = *request.input.probeSizeBytes;
     node.lowLatency = *request.input.lowLatency;
     node.mediaId = request.mediaId;
+    node.rtpTransport = std::move(transport);
 }
 
 } // namespace
@@ -82,6 +117,9 @@ void fillNodePlan(
     result.videoSdp = sdp(videoEndpoint.value(), request.input.videoRtp, videoDescriptor.value(), request.mediaId);
     result.video.streamIndex = RawVideoStreamIndex;
     result.video.codecName = videoDescriptor.value().codecName;
+    result.videoTransport = transportPlan(
+        videoEndpoint.value(), request.input.videoRtp, videoDescriptor.value(),
+        request.input.readTimeoutMs.value_or(RtpCancellableReadTimeoutMs));
 
     if (MediaRealtimeRequestClassifier::audioRequested(request)) {
         auto audioDescriptor = MediaRealtimeRtpCodecRegistry::describe(MediaStreamKind::Audio, request.input.audioRtp);
@@ -99,6 +137,9 @@ void fillNodePlan(
             ? static_cast<int64_t>(*request.input.audioRtp.bitrateKbps) * 1000
             : 0;
         result.audio = std::move(audio);
+        result.audioTransport = transportPlan(
+            audioEndpoint.value(), request.input.audioRtp, audioDescriptor.value(),
+            request.input.readTimeoutMs.value_or(RtpCancellableReadTimeoutMs));
     }
     return ::media::Result<MediaRealtimeRawInputPlan>::success(std::move(result));
 }
@@ -111,10 +152,11 @@ void MediaRealtimeInputPlanner::applyNodePlans(
     fillNodePlan(request,
                  raw ? raw->videoUrl : request.input.url,
                  raw ? raw->videoSdp : std::string{},
+                 raw ? std::optional<MediaRealtimeRtpTransportPlan>(raw->videoTransport) : std::nullopt,
                  plan.input);
     if (raw && raw->audio) {
         plan.useIsolatedAudioInput = true;
-        fillNodePlan(request, raw->audioUrl, raw->audioSdp, plan.audioInput);
+        fillNodePlan(request, raw->audioUrl, raw->audioSdp, raw->audioTransport, plan.audioInput);
     }
 }
 

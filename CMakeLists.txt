@@ -148,6 +148,10 @@ target_link_libraries(${TARGET_CORE}
         thirdparty_spdlog
 )
 
+if(WIN32)
+    target_link_libraries(${TARGET_CORE} PUBLIC ws2_32)
+endif()
+
 function(media_transcode_configure_app target_name)
     target_link_libraries(${target_name} PRIVATE MediaTranscode::core)
     target_compile_features(${target_name} PRIVATE cxx_std_20)

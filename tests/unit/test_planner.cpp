@@ -9,6 +9,7 @@
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimePlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeInputPlanner.h"
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/runtime/distributed/MediaGraphRemoteExecutor.h"
 #include "internal/graph/runtime/gpu/MediaGpuGraphExecutor.h"
@@ -71,6 +72,51 @@ void testAvSyncPlannerBuildsCompleteRtpContract(TestContext& ctx)
     EXPECT_TRUE(ctx, *plan.rtp->output.useSharedNtpEpoch);
     EXPECT_TRUE(ctx, plan.rtp->output.senderReportIntervalNs->nanoseconds() > 0);
     EXPECT_TRUE(ctx, MediaAvSyncPlanValidator::validate(plan));
+}
+
+void testRawRtpInputPlannerProducesCompleteTransportPolicy(TestContext& ctx)
+{
+    MediaRealtimeRtpTranscodeRequest request;
+    request.mediaId = "rtp-policy";
+    request.input.type = RealtimeInputType::RtpPort;
+    request.input.streamLayout = RealtimeInputStreamLayout::SeparateStreams;
+    request.input.rtspTransport = "udp";
+    request.input.openTimeoutMs = 1'000;
+    request.input.readTimeoutMs = 2'500;
+    request.input.analyzeDurationUs = 100'000;
+    request.input.probeSizeBytes = 32'768;
+    request.input.lowLatency = true;
+    request.input.videoRtp.url = "rtp://127.0.0.1:5004";
+    request.input.videoRtp.codecName = "h264";
+    request.input.videoRtp.payloadType = 96;
+    request.input.videoRtp.clockRate = 90'000;
+    request.input.videoRtp.fmtp =
+        "packetization-mode=1;sprop-parameter-sets=Z01AMpWQAoALWwEQAAA+gAAOpghA,aOuPIA==;profile-level-id=4D4032";
+    request.parameters.execution.includeAudio = false;
+
+    const auto raw = MediaRealtimeInputPlanner::planRawRtp(request);
+    EXPECT_TRUE(ctx, raw);
+    if (!raw) return;
+    MediaRealtimeRtpTranscodePlan plan;
+    MediaRealtimeInputPlanner::applyNodePlans(request, &raw.value(), plan);
+    EXPECT_TRUE(ctx, plan.input.rtpTransport.has_value());
+    if (!plan.input.rtpTransport) return;
+    const MediaRealtimeRtpTransportPlan& transport = *plan.input.rtpTransport;
+    EXPECT_EQ(ctx, transport.addressFamily, MediaIpAddressFamily::Ipv4);
+    EXPECT_EQ(ctx, transport.bindAddress, std::string("127.0.0.1"));
+    EXPECT_EQ(ctx, transport.rtpPort, static_cast<uint16_t>(5004));
+    EXPECT_EQ(ctx, transport.rtcpPort, static_cast<uint16_t>(5005));
+    EXPECT_EQ(ctx, transport.payloadType, static_cast<uint8_t>(96));
+    EXPECT_EQ(ctx, transport.clockRate, 90'000);
+    EXPECT_EQ(ctx, transport.receiveBufferBytes, 4 * 1024 * 1024);
+    EXPECT_EQ(ctx, transport.maximumDatagramBytes, 65'535);
+    EXPECT_EQ(ctx, transport.reorderWindowPackets, static_cast<std::size_t>(64));
+    EXPECT_EQ(ctx, transport.maximumReorderDelayMs, 100);
+    EXPECT_EQ(ctx, transport.cancellableReadTimeoutMs, 2'500);
+    EXPECT_TRUE(ctx, transport.requireSenderReports);
+    EXPECT_TRUE(ctx, transport.requireCname);
+    EXPECT_EQ(ctx, transport.senderReportTimeoutMs, 3'000);
+    EXPECT_EQ(ctx, transport.cnameTimeoutMs, 5'000);
 }
 
 void testAvSyncPlannerBuildsCompleteTsContract(TestContext& ctx)
@@ -322,6 +368,7 @@ int main()
 {
     TestContext ctx;
     testAvSyncPlannerBuildsCompleteRtpContract(ctx);
+    testRawRtpInputPlannerProducesCompleteTransportPolicy(ctx);
     testAvSyncPlannerBuildsCompleteTsContract(ctx);
     testAvSyncPlannerRejectsSeparateRtpToTs(ctx);
     testAvSyncValidatorRejectsMissingAndInconsistentFields(ctx);

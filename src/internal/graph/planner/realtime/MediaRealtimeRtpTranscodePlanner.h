@@ -2,6 +2,7 @@
 
 #include "internal/graph/model/MediaLatencyPolicy.h"
 #include "internal/graph/model/MediaRealtimeEdgePolicySet.h"
+#include "internal/graph/model/MediaIpAddressFamily.h"
 #include "internal/graph/model/MediaThreadingPolicy.h"
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/planner/MediaPipelinePlanner.h"
@@ -17,6 +18,24 @@ namespace media::ffmpeg::graph {
 
 struct MediaRealtimeInputStreamInfo;
 
+struct MediaRealtimeRtpTransportPlan final {
+    MediaIpAddressFamily addressFamily;
+    std::string bindAddress;
+    uint16_t rtpPort;
+    uint16_t rtcpPort;
+    uint8_t payloadType;
+    int clockRate;
+    int receiveBufferBytes;
+    int maximumDatagramBytes;
+    std::size_t reorderWindowPackets;
+    int maximumReorderDelayMs;
+    int cancellableReadTimeoutMs;
+    bool requireSenderReports;
+    bool requireCname;
+    int senderReportTimeoutMs;
+    int cnameTimeoutMs;
+};
+
 struct MediaRealtimeRtpInputNodePlan {
     std::string url;
     std::string sdpText;
@@ -27,6 +46,7 @@ struct MediaRealtimeRtpInputNodePlan {
     int probeSizeBytes;
     bool lowLatency;
     std::string mediaId;
+    std::optional<MediaRealtimeRtpTransportPlan> rtpTransport;
 };
 
 struct MediaRealtimeRtpOutputNodePlan {
