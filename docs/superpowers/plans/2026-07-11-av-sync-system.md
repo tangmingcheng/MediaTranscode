@@ -149,23 +149,7 @@ FFmpeg's public RTP API exposes received SR side data but not incoming SDES CNAM
 
 ## Task 4: MPEG-TS program clock evidence
 
-**Files:**
-
-- Create `src/internal/graph/protocol/mpegts/MediaTsProgramClockTracker.h`
-- Create `src/internal/graph/protocol/mpegts/MediaTsProgramClockTracker.cpp`
-- Create `src/internal/graph/protocol/mpegts/MediaTsSourceClockMapper.h`
-- Create `src/internal/graph/protocol/mpegts/MediaTsSourceClockMapper.cpp`
-- Modify `src/internal/graph/nodes/input/RealtimeInputNode.h`
-- Modify `src/internal/graph/nodes/input/RealtimeInputNode.cpp`
-- Modify `tests/unit/test_node.cpp`
-
-**RED:** Test planner-selected program/PCR PID locking, PTS presentation and DTS decode mapping, PCR and PTS wrap, PCR jitter, discontinuity indicator, excessive PCR gap, PCR regression, program change, and PCR PID change.
-
-**GREEN:** Extract program clock evidence without choosing program/PID policy in the node. Map PTS and DTS through the common PCR epoch; never substitute DTS for missing PTS.
-
-**REFACTOR:** Share only strong-time and unwrap primitives with RTP; keep MPEG-TS protocol semantics isolated.
-
-**Commit:** `feat: map MPEG-TS program clocks into source time`
+Implementation is governed by `docs/superpowers/plans/2026-07-12-mpeg-ts-program-clock-input.md`. The expanded plan replaces the original narrow task because FFmpeg's public packet boundary does not expose PCR/adaptation evidence; the approved design uses one observed custom-AVIO byte owner without modifying FFmpeg.
 
 ## Task 5: Canonical mapper and generation isolation
 
