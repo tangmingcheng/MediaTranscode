@@ -71,14 +71,14 @@ MediaNodeKind MediaRtpClockGroupNode::staticKind() noexcept
         auto processed = processStream(context, first);
         if (!processed) return ::media::Result<MediaNodeProcessResult>::failure(processed.error());
         MediaStreamKind selected = first;
-        if (!processed.value()) {
+        if (processed.value() == StreamProcessOutcome::NoInput) {
             processed = processStream(context, secondary);
             if (!processed) return ::media::Result<MediaNodeProcessResult>::failure(processed.error());
             selected = secondary;
         }
-        if (!processed.value()) break;
+        if (processed.value() == StreamProcessOutcome::NoInput) break;
         processedAny = true;
-        if (invalidation.value() && selected == *invalidation.value()) {
+        if (processed.value() == StreamProcessOutcome::Invalidation) {
             if (selected == MediaStreamKind::Video) {
                 ++prioritizedVideoInvalidations;
             } else {
@@ -128,7 +128,8 @@ MediaNodeKind MediaRtpClockGroupNode::staticKind() noexcept
     return ::media::Status::success();
 }
 
-::media::Result<bool> MediaRtpClockGroupNode::processStream(
+::media::Result<MediaRtpClockGroupNode::StreamProcessOutcome>
+MediaRtpClockGroupNode::processStream(
     MediaGraphExecutionContext& context,
     MediaStreamKind streamKind)
 {
@@ -142,13 +143,14 @@ MediaNodeKind MediaRtpClockGroupNode::staticKind() noexcept
         ? "video_clock"
         : "audio_clock";
     if (auto status = fillPending(context, eventPort, pending.event); !status) {
-        return ::media::Result<bool>::failure(status.error());
+        return ::media::Result<StreamProcessOutcome>::failure(status.error());
     }
     if (auto status = fillPending(context, clockPort, pending.clock); !status) {
-        return ::media::Result<bool>::failure(status.error());
+        return ::media::Result<StreamProcessOutcome>::failure(status.error());
     }
     if (!pending.event && !pending.clock) {
-        return ::media::Result<bool>::success(false);
+        return ::media::Result<StreamProcessOutcome>::success(
+            StreamProcessOutcome::NoInput);
     }
     const auto* eventEnvelope = pending.event
         ? dynamic_cast<const MediaRtpIngressEventBuffer*>(pending.event.get())
@@ -157,13 +159,13 @@ MediaNodeKind MediaRtpClockGroupNode::staticKind() noexcept
         ? dynamic_cast<const MediaRtpIngressEventBuffer*>(pending.clock.get())
         : nullptr;
     if ((pending.event && !eventEnvelope) || (pending.clock && !clockEnvelope)) {
-        return ::media::Result<bool>::failure(
+        return ::media::Result<StreamProcessOutcome>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "MediaRtpClockGroupNode requires ordered RTP ingress event buffers"));
     }
     if (eventEnvelope && clockEnvelope &&
         eventEnvelope->sequence() == clockEnvelope->sequence()) {
-        return ::media::Result<bool>::failure(
+        return ::media::Result<StreamProcessOutcome>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "MediaRtpClockGroupNode requires unique per-stream ingress sequence"));
     }
@@ -174,13 +176,13 @@ MediaNodeKind MediaRtpClockGroupNode::staticKind() noexcept
         : std::move(pending.event);
     const auto* event = dynamic_cast<const MediaRtpIngressEventBuffer*>(selected.get());
     if (!event) {
-        return ::media::Result<bool>::failure(
+        return ::media::Result<StreamProcessOutcome>::failure(
             ::media::ErrorInfo::invalidArgument("MediaRtpClockGroupNode requires RTP ingress event buffers"));
     }
     if (event->sequence() == 0 ||
         (pending.lastProcessedSequence &&
          event->sequence() <= *pending.lastProcessedSequence)) {
-        return ::media::Result<bool>::failure(
+        return ::media::Result<StreamProcessOutcome>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "MediaRtpClockGroupNode requires strictly ordered ingress sequence"));
     }
@@ -193,7 +195,7 @@ MediaNodeKind MediaRtpClockGroupNode::staticKind() noexcept
                event->clockObservation()) {
         observationTimeNs = event->clockObservation()->observedAtNs;
         if (observationTimeNs < 0) {
-            return ::media::Result<bool>::failure(
+            return ::media::Result<StreamProcessOutcome>::failure(
                 ::media::ErrorInfo::invalidArgument(
                     "MediaRtpClockGroupNode clock observation time must be non-negative"));
         }
@@ -234,9 +236,14 @@ MediaNodeKind MediaRtpClockGroupNode::staticKind() noexcept
     }
     auto published = publish(context, observationTimeNs);
     if (!published && published.error().code != ::media::ErrorCode::NotInitialized) {
-        return ::media::Result<bool>::failure(published.error());
+        return ::media::Result<StreamProcessOutcome>::failure(published.error());
     }
-    return ::media::Result<bool>::success(true);
+    const bool invalidation = !selectedClock &&
+        (event->kind() == MediaRtpIngressEventKind::ClockInvalidation ||
+         event->kind() == MediaRtpIngressEventKind::Discontinuity);
+    return ::media::Result<StreamProcessOutcome>::success(
+        invalidation ? StreamProcessOutcome::Invalidation
+                     : StreamProcessOutcome::Regular);
 }
 
 ::media::Status MediaRtpClockGroupNode::fillPending(

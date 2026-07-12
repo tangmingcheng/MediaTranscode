@@ -20,6 +20,12 @@ protected:
     ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context) override;
 
 private:
+    enum class StreamProcessOutcome {
+        NoInput,
+        Regular,
+        Invalidation
+    };
+
     struct StreamPending final {
         MediaBufferRef event;
         MediaBufferRef clock;
@@ -27,8 +33,9 @@ private:
     };
 
     ::media::Status configure(MediaGraphExecutionContext& context);
-    ::media::Result<bool> processStream(MediaGraphExecutionContext& context,
-                                        MediaStreamKind streamKind);
+    ::media::Result<StreamProcessOutcome> processStream(
+        MediaGraphExecutionContext& context,
+        MediaStreamKind streamKind);
     ::media::Status fillPending(MediaGraphExecutionContext& context,
                                 const char* portName,
                                 MediaBufferRef& pending);

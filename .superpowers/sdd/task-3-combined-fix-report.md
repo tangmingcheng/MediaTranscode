@@ -198,3 +198,85 @@ ctest --test-dir out/build/x64-debug -C Debug --output-on-failure -R media_trans
 Result: 1/1 passed, 0 failed, 79.75 seconds.
 
 The modification whitelist remains the list above; this review round changed only `MediaRtpUdpTransport.h/.cpp`, `RawRtpInputNode.cpp`, `MediaRtpClockGroupNode.cpp`, `test_event_driven_runtime.cpp`, `test_node.cpp`, and this report. The startup-consumer finding remains intentionally untouched.
+
+## Fresh reviewer v2 closure
+
+### RED
+
+The virtual operation observer was first removed from the tests and replaced with the wished-for concrete phase-controller API. The focused build failed because `MediaRtpUdpTransportPhaseController` and `MediaRtpUdpTransportPhase` did not exist. This proved that the deterministic, non-callback handshake facility was absent.
+
+The five-invalidation backlog regression then failed at the first bounded turn: its last snapshot was not `Acquiring`. The trace showed that a regular video clock selected ahead of the queued invalidation was incorrectly counted against the invalidation priority quota, so cross-stream audio evidence ran after only one invalidation and was immediately cleared by the second.
+
+Focused RED/GREEN command:
+
+```powershell
+cmd.exe /d /s /c "call D:\VisualStudio2026\Common7\Tools\VsDevCmd.bat -arch=x64 -host_arch=x64 >nul && cmake --build out\build\x64-debug --config Debug --target media_transcode_runtime_tests media_transcode_node_tests"
+ctest --test-dir out/build/x64-debug -C Debug --output-on-failure -R "media_transcode_(runtime|node)_tests"
+```
+
+Final focused result: 2/2 passed, 0 failed.
+
+### Concrete phase controller
+
+- `MediaRtpUdpTransportOperationObserver` and all virtual callbacks were removed.
+- `MediaRtpUdpTransportPhaseController` is concrete, final, non-copyable, and supports only five fixed phases: protected receive entry, stop lifetime acquisition, abort lifetime acquisition, close receive-lock wait, and close receive-lock acquisition.
+- The controller owns only phase state, a mutex, and a condition variable. It cannot execute caller code.
+- Every controller operation is `noexcept`; synchronization exceptions mark the controller unhealthy instead of escaping through transport code.
+- Armed waits have an explicit maximum duration. A timeout marks the controller unhealthy and releases the transport path, preventing teardown deadlock.
+- Production supplies a null controller explicitly; the controller does not influence planner decisions or normal transport behavior.
+
+The receive-close regression now uses symmetric handshakes:
+
+1. Receive reaches `ReceiveProtected` while holding the receive mutex and after setting `receiveActive`.
+2. Close reaches `CloseReceiveWait` immediately before attempting that mutex.
+3. The test releases the close wait phase, so close must block on the already-owned mutex.
+4. The test releases receive, then observes `CloseReceiveAcquired`.
+5. Receive must return `Cancelled`; `NotInitialized` is not accepted.
+
+No timeout-based scheduling inference remains in the close-race coverage. Stop-close and abort-close remain paused after stable lifetime acquisition and resume only after close has completed event teardown.
+
+### Bounded invalidation scheduling
+
+`processStream` now returns `NoInput`, `Regular`, or `Invalidation`. Only the `Invalidation` result consumes the named maximum of two prioritized invalidations per stream per processing turn; an ordinary clock selected ahead of an event cannot consume this quota.
+
+The regression queues one earlier regular video clock, five stacked video invalidations, and cross-stream audio evidence:
+
+- Turn 1 processes the earlier clock, exactly two prioritized invalidations, then audio evidence. All snapshots are non-`Locked`; the last snapshot is `Acquiring` and its group generation has advanced by exactly two, proving the audio evidence affected validator state within the bounded turn.
+- Turn 2 processes the remaining three invalidations. Every snapshot remains non-`Locked`.
+- Turn 3 supplies fresh video generation 8 and audio generation 3 evidence. The final snapshot is `Locked` and exposes exactly those two generations.
+
+This proves no temporary lock, no starvation, real cross-stream processing, and final generation correctness for a backlog larger than the priority bound.
+
+### v2 final verification
+
+```powershell
+cmd.exe /d /s /c "call D:\VisualStudio2026\Common7\Tools\VsDevCmd.bat -arch=x64 -host_arch=x64 >nul && cmake --build out\build\x64-debug --config Debug --clean-first"
+```
+
+Result: exit 0; 239 files cleaned; 240/240 build steps completed.
+
+```powershell
+ctest --test-dir out/build/x64-debug -C Debug --output-on-failure -L deterministic
+```
+
+Result: final fresh rerun 6/6 passed, 0 failed, 2.98 seconds.
+
+```powershell
+ctest --test-dir out/build/x64-debug -C Debug --output-on-failure -R media_transcode_integration_tests
+```
+
+Result: 1/1 passed, 0 failed, 80.31 seconds.
+
+v2 modification whitelist:
+
+- `.superpowers/sdd/task-3-combined-fix-report.md`
+- `src/internal/graph/nodes/sync/MediaRtpClockGroupNode.cpp`
+- `src/internal/graph/nodes/sync/MediaRtpClockGroupNode.h`
+- `src/internal/graph/protocol/rtp/MediaRtpUdpTransport.cpp`
+- `src/internal/graph/protocol/rtp/MediaRtpUdpTransport.h`
+- `src/internal/graph/protocol/rtp/MediaRtpUdpTransportPhaseController.cpp`
+- `src/internal/graph/protocol/rtp/MediaRtpUdpTransportPhaseController.h`
+- `tests/unit/test_event_driven_runtime.cpp`
+- `tests/unit/test_node.cpp`
+
+Startup-consumer coordination remains untouched.

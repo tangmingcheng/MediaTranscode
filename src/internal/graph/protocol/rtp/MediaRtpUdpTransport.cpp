@@ -20,7 +20,7 @@ struct MediaRtpUdpTransport::Impl final {
 #endif
          std::size_t datagramBytes,
          int readTimeoutMs,
-         std::shared_ptr<MediaRtpUdpTransportOperationObserver> observer)
+         std::shared_ptr<MediaRtpUdpTransportPhaseController> controller)
         : runtime(std::move(socketRuntime))
         , rtp(std::move(rtpSocket))
         , rtcp(std::move(rtcpSocket))
@@ -31,7 +31,7 @@ struct MediaRtpUdpTransport::Impl final {
 #endif
         , maximumDatagramBytes(datagramBytes)
         , cancellableReadTimeoutMs(readTimeoutMs)
-        , operationObserver(std::move(observer))
+        , phaseController(std::move(controller))
         , preferRtcp(false)
         , state(State::Running)
         , cancellationSequence(0)
@@ -49,7 +49,7 @@ struct MediaRtpUdpTransport::Impl final {
 #endif
     std::size_t maximumDatagramBytes;
     int cancellableReadTimeoutMs;
-    std::shared_ptr<MediaRtpUdpTransportOperationObserver> operationObserver;
+    std::shared_ptr<MediaRtpUdpTransportPhaseController> phaseController;
     bool preferRtcp;
     std::mutex lifecycleMutex;
     std::mutex receiveMutex;
@@ -119,7 +119,7 @@ MediaRtpUdpTransport& MediaRtpUdpTransport::operator=(MediaRtpUdpTransport&& oth
     return ::media::Result<MediaRtpUdpTransport>::success(MediaRtpUdpTransport(std::make_shared<Impl>(
         runtime.value(), std::move(rtp.value()), std::move(rtcp.value()), cancellationEvent,
         config.maximumDatagramBytes, config.cancellableReadTimeoutMs,
-        config.operationObserver)));
+        config.phaseController)));
 #else
     return transportError(::media::ErrorInfo::unsupported("RTP UDP event wait is currently implemented for Windows"));
 #endif
@@ -161,9 +161,9 @@ MediaRtpUdpTransport& MediaRtpUdpTransport::operator=(MediaRtpUdpTransport&& oth
         impl->receiveActive = true;
         sequence = impl->cancellationSequence;
     }
-    if (impl->operationObserver) {
-        impl->operationObserver->afterLifetimeAcquired(
-            MediaRtpUdpTransportOperation::Receive);
+    if (impl->phaseController) {
+        impl->phaseController->synchronize(
+            MediaRtpUdpTransportPhase::ReceiveProtected);
     }
     auto finishError = [impl, sequence](::media::ErrorInfo error) {
         std::lock_guard lifecycleLock(impl->lifecycleMutex);
@@ -227,9 +227,9 @@ MediaRtpUdpTransport& MediaRtpUdpTransport::operator=(MediaRtpUdpTransport&& oth
 #ifdef _WIN32
     const auto impl = snapshot();
     if (!impl) return ::media::Status::failure(::media::ErrorInfo::notInitialized("RTP UDP transport is closed"));
-    if (impl->operationObserver) {
-        impl->operationObserver->afterLifetimeAcquired(
-            MediaRtpUdpTransportOperation::Stop);
+    if (impl->phaseController) {
+        impl->phaseController->synchronize(
+            MediaRtpUdpTransportPhase::StopLifetimeAcquired);
     }
     std::lock_guard lifecycleLock(impl->lifecycleMutex);
     if (impl->state == Impl::State::Aborted ||
@@ -278,9 +278,9 @@ MediaRtpUdpTransport& MediaRtpUdpTransport::operator=(MediaRtpUdpTransport&& oth
     const auto impl = snapshot();
     if (!impl) return ::media::Status::failure(::media::ErrorInfo::notInitialized("RTP UDP transport is closed"));
 #ifdef _WIN32
-    if (impl->operationObserver) {
-        impl->operationObserver->afterLifetimeAcquired(
-            MediaRtpUdpTransportOperation::Abort);
+    if (impl->phaseController) {
+        impl->phaseController->synchronize(
+            MediaRtpUdpTransportPhase::AbortLifetimeAcquired);
     }
     std::lock_guard lifecycleLock(impl->lifecycleMutex);
     if (impl->state == Impl::State::Aborted ||
@@ -316,7 +316,15 @@ void MediaRtpUdpTransport::close() noexcept
         }
     }
 #endif
+    if (impl->phaseController) {
+        impl->phaseController->synchronize(
+            MediaRtpUdpTransportPhase::CloseReceiveWait);
+    }
     std::unique_lock receiveLock(impl->receiveMutex);
+    if (impl->phaseController) {
+        impl->phaseController->synchronize(
+            MediaRtpUdpTransportPhase::CloseReceiveAcquired);
+    }
     impl->rtp.close();
     impl->rtcp.close();
 #ifdef _WIN32

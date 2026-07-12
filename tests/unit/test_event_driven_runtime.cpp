@@ -6,7 +6,6 @@
 
 #include <array>
 #include <chrono>
-#include <condition_variable>
 #include <future>
 #include <iostream>
 #include <span>
@@ -15,47 +14,6 @@
 #ifdef _WIN32
 #include <windows.h>
 #endif
-
-class BlockingTransportOperationObserver final
-    : public media::ffmpeg::graph::MediaRtpUdpTransportOperationObserver {
-public:
-    explicit BlockingTransportOperationObserver(
-        media::ffmpeg::graph::MediaRtpUdpTransportOperation operation) noexcept
-        : m_operation(operation)
-    {
-    }
-
-    void afterLifetimeAcquired(
-        media::ffmpeg::graph::MediaRtpUdpTransportOperation operation) noexcept override
-    {
-        if (operation != m_operation) return;
-        std::unique_lock lock(m_mutex);
-        m_entered = true;
-        m_condition.notify_all();
-        m_condition.wait(lock, [this] { return m_released; });
-    }
-
-    bool waitUntilEntered()
-    {
-        std::unique_lock lock(m_mutex);
-        return m_condition.wait_for(lock, std::chrono::seconds(1),
-                                    [this] { return m_entered; });
-    }
-
-    void release()
-    {
-        std::lock_guard lock(m_mutex);
-        m_released = true;
-        m_condition.notify_all();
-    }
-
-private:
-    media::ffmpeg::graph::MediaRtpUdpTransportOperation m_operation;
-    std::mutex m_mutex;
-    std::condition_variable m_condition;
-    bool m_entered = false;
-    bool m_released = false;
-};
 
 namespace {
 
@@ -213,23 +171,12 @@ void testRtpUdpTransportReceivesBothChannelsAndCancels(TestContext& ctx)
         transport.value() = std::move(replacementTransport.value());
     }
 
-    std::promise<void> closeEntered;
-    auto closeReceive = std::async(std::launch::async, [&] {
-        closeEntered.set_value();
-        return transport.value().receive();
-    });
-    closeEntered.get_future().wait();
-    EXPECT_EQ(ctx, closeReceive.wait_for(std::chrono::milliseconds(25)), std::future_status::timeout);
-    EXPECT_TRUE(ctx, transport.value().stop());
     transport.value().close();
-    const auto closedReceive = closeReceive.get();
-    EXPECT_FALSE(ctx, closedReceive);
-    if (!closedReceive) EXPECT_EQ(ctx, closedReceive.error().code, media::ErrorCode::Cancelled);
     EXPECT_FALSE(ctx, transport.value().isOpen());
 }
 
 ::media::Result<MediaRtpUdpTransport> openObservedTransport(
-    std::shared_ptr<MediaRtpUdpTransportOperationObserver> observer,
+    std::shared_ptr<MediaRtpUdpTransportPhaseController> controller,
     uint16_t firstPort)
 {
 #ifndef _WIN32
@@ -244,7 +191,7 @@ void testRtpUdpTransportReceivesBothChannelsAndCancels(TestContext& ctx)
         transport = MediaRtpUdpTransport::open(MediaRtpUdpTransportConfig{
             MediaIpAddressFamily::Ipv4, "127.0.0.1", port,
             static_cast<uint16_t>(port + 1), 262144, 2048, 5'000,
-            observer});
+            controller});
     }
     return transport;
 #endif
@@ -255,30 +202,36 @@ void testRtpUdpTransportReceiveEntryRacesCloseDeterministically(TestContext& ctx
 #ifndef _WIN32
     return;
 #else
-    auto observer = std::make_shared<BlockingTransportOperationObserver>(
-        MediaRtpUdpTransportOperation::Receive);
-    auto transport = openObservedTransport(observer, 42'000);
+    auto controller = std::make_shared<MediaRtpUdpTransportPhaseController>(5'000);
+    controller->arm(MediaRtpUdpTransportPhase::ReceiveProtected);
+    controller->arm(MediaRtpUdpTransportPhase::CloseReceiveWait);
+    auto transport = openObservedTransport(controller, 42'000);
     EXPECT_TRUE(ctx, transport);
     if (!transport) return;
 
     auto receive = std::async(std::launch::async, [&] {
         return transport.value().receive();
     });
-    EXPECT_TRUE(ctx, observer->waitUntilEntered());
+    EXPECT_TRUE(ctx, controller->waitUntilReached(
+        MediaRtpUdpTransportPhase::ReceiveProtected, 1'000));
     auto close = std::async(std::launch::async, [&] {
         transport.value().close();
     });
-    EXPECT_EQ(ctx, close.wait_for(std::chrono::milliseconds(25)),
-              std::future_status::timeout);
-    observer->release();
+    EXPECT_TRUE(ctx, controller->waitUntilReached(
+        MediaRtpUdpTransportPhase::CloseReceiveWait, 1'000));
+    controller->release(MediaRtpUdpTransportPhase::CloseReceiveWait);
+    controller->release(MediaRtpUdpTransportPhase::ReceiveProtected);
     EXPECT_EQ(ctx, receive.wait_for(std::chrono::seconds(1)),
               std::future_status::ready);
     const auto result = receive.get();
     EXPECT_FALSE(ctx, result);
     if (!result) EXPECT_EQ(ctx, result.error().code, media::ErrorCode::Cancelled);
+    EXPECT_TRUE(ctx, controller->waitUntilReached(
+        MediaRtpUdpTransportPhase::CloseReceiveAcquired, 1'000));
     EXPECT_EQ(ctx, close.wait_for(std::chrono::seconds(1)),
               std::future_status::ready);
     close.get();
+    EXPECT_TRUE(ctx, controller->healthy());
 #endif
 }
 
@@ -287,30 +240,32 @@ void testRtpUdpTransportStopAndAbortRaceCloseDeterministically(TestContext& ctx)
 #ifndef _WIN32
     return;
 #else
-    const auto run = [&](MediaRtpUdpTransportOperation operation,
+    const auto run = [&](MediaRtpUdpTransportPhase phase,
                          uint16_t firstPort) {
-        auto observer = std::make_shared<BlockingTransportOperationObserver>(operation);
-        auto transport = openObservedTransport(observer, firstPort);
+        auto controller = std::make_shared<MediaRtpUdpTransportPhaseController>(5'000);
+        controller->arm(phase);
+        auto transport = openObservedTransport(controller, firstPort);
         EXPECT_TRUE(ctx, transport);
         if (!transport) return;
 
         auto lifecycle = std::async(std::launch::async, [&] {
-            return operation == MediaRtpUdpTransportOperation::Stop
+            return phase == MediaRtpUdpTransportPhase::StopLifetimeAcquired
                 ? transport.value().stop()
                 : transport.value().abort();
         });
-        EXPECT_TRUE(ctx, observer->waitUntilEntered());
+        EXPECT_TRUE(ctx, controller->waitUntilReached(phase, 1'000));
         transport.value().close();
-        observer->release();
+        controller->release(phase);
         EXPECT_EQ(ctx, lifecycle.wait_for(std::chrono::seconds(1)),
                   std::future_status::ready);
         const auto status = lifecycle.get();
         EXPECT_FALSE(ctx, status);
         if (!status) EXPECT_EQ(ctx, status.error().code, media::ErrorCode::Cancelled);
+        EXPECT_TRUE(ctx, controller->healthy());
     };
 
-    run(MediaRtpUdpTransportOperation::Stop, 42'500);
-    run(MediaRtpUdpTransportOperation::Abort, 43'000);
+    run(MediaRtpUdpTransportPhase::StopLifetimeAcquired, 42'500);
+    run(MediaRtpUdpTransportPhase::AbortLifetimeAcquired, 43'000);
 #endif
 }
 

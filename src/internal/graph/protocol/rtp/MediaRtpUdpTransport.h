@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/graph/protocol/rtp/MediaRtpUdpTransportPhaseController.h"
 #include "internal/graph/runtime/network/MediaUdpSocket.h"
 #include "media_transcode/Result.h"
 
@@ -11,19 +12,6 @@
 
 namespace media::ffmpeg::graph {
 
-enum class MediaRtpUdpTransportOperation {
-    Receive,
-    Stop,
-    Abort
-};
-
-class MediaRtpUdpTransportOperationObserver {
-public:
-    virtual ~MediaRtpUdpTransportOperationObserver() = default;
-    virtual void afterLifetimeAcquired(
-        MediaRtpUdpTransportOperation operation) noexcept = 0;
-};
-
 struct MediaRtpUdpTransportConfig final {
     MediaIpAddressFamily addressFamily;
     std::string bindAddress;
@@ -32,7 +20,7 @@ struct MediaRtpUdpTransportConfig final {
     int receiveBufferBytes;
     std::size_t maximumDatagramBytes;
     int cancellableReadTimeoutMs;
-    std::shared_ptr<MediaRtpUdpTransportOperationObserver> operationObserver;
+    std::shared_ptr<MediaRtpUdpTransportPhaseController> phaseController;
 };
 
 enum class MediaRtpUdpChannel {
