@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
+#include "internal/graph/runtime/buffer/FFmpegCodecParametersSnapshot.h"
 #include "internal/graph/runtime/buffer/MediaBuffer.h"
 #include "internal/graph/model/MediaFormatDescriptor.h"
 #include "internal/graph/model/MediaTimeDescriptor.h"
@@ -14,6 +15,7 @@ enum class FFmpegFormatContextOwnership {
     Input,
     Output,
     Borrowed,
+    Snapshot,
     Transferred,
     Empty
 };
@@ -21,9 +23,12 @@ enum class FFmpegFormatContextOwnership {
 struct FFmpegInputStreamSnapshot final {
     int index = -1;
     MediaStreamKind streamKind = MediaStreamKind::Unknown;
-    ::media::ffmpeg::CodecParametersPtr codecParameters;
+    FFmpegCodecParametersSnapshot codec;
     MediaFormatDescriptor format;
     MediaTimeDescriptor time;
+
+    bool codecParametersComplete() const noexcept;
+    ::media::Result<::media::ffmpeg::CodecParametersPtr> cloneCodecParameters() const;
 };
 
 class FFmpegFormatContextBuffer final : public MediaBuffer {
@@ -33,6 +38,8 @@ public:
 
     static ::media::Result<std::unique_ptr<FFmpegFormatContextBuffer>> createInput(
         ::media::ffmpeg::InputFormatContextPtr context);
+    static ::media::Result<std::unique_ptr<FFmpegFormatContextBuffer>> createSnapshot(
+        std::vector<FFmpegInputStreamSnapshot> streams);
 
     MediaBufferType type() const noexcept override;
 
@@ -48,7 +55,9 @@ public:
 
 private:
     struct InputTag {};
+    struct SnapshotTag {};
     explicit FFmpegFormatContextBuffer(InputTag, ::media::ffmpeg::InputFormatContextPtr context);
+    explicit FFmpegFormatContextBuffer(SnapshotTag, std::vector<FFmpegInputStreamSnapshot> streams);
     ::media::Status buildInputSnapshot();
 
     FFmpegFormatContextOwnership m_ownership = FFmpegFormatContextOwnership::Borrowed;

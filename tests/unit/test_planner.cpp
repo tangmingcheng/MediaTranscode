@@ -126,7 +126,8 @@ void testRawRtpInputPlannerProducesCompleteTransportPolicy(TestContext& ctx)
     if (ipv6Raw) {
         EXPECT_EQ(ctx, ipv6Raw.value().videoTransport.addressFamily, MediaIpAddressFamily::Ipv6);
         EXPECT_EQ(ctx, ipv6Raw.value().videoTransport.bindAddress, std::string("::1"));
-        EXPECT_TRUE(ctx, ipv6Raw.value().videoSdp.find("c=IN IP6 ::1") != std::string::npos);
+        EXPECT_TRUE(ctx, ipv6Raw.value().videoSdp.empty());
+        EXPECT_EQ(ctx, ipv6Raw.value().videoDepacketizer.codecName, std::string("h264"));
     }
 
     auto multicastV4 = request;

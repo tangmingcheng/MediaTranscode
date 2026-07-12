@@ -16,6 +16,10 @@ namespace media::ffmpeg::graph {
         return ::media::Result<void>::failure(
             ::media::ErrorInfo::invalidArgument("audio packet copy branch requires a planned source stream index"));
     }
+    if (!options.normalizePackets.has_value()) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument("audio packet copy branch requires explicit normalization policy"));
+    }
 
     MediaPacketCopyBranchOptions branchOptions;
     branchOptions.prefix = options.prefix;
@@ -29,6 +33,7 @@ namespace media::ffmpeg::graph {
     branchOptions.muxCodecPort = options.muxCodecPort;
     branchOptions.muxPacketPort = options.muxPacketPort;
     branchOptions.monotonicPacketTimestamps = options.plan.monotonicPacketTimestamps;
+    branchOptions.normalizePackets = options.normalizePackets;
     branchOptions.queues = options.queues;
     branchOptions.edgePolicies = options.edgePolicies;
     return MediaPacketCopyBranchBuilder::build(graph, branchOptions);

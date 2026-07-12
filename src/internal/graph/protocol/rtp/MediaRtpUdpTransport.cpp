@@ -1,5 +1,6 @@
 #include "internal/graph/protocol/rtp/MediaRtpUdpTransport.h"
 
+#include <algorithm>
 #include <mutex>
 #include <utility>
 
@@ -113,6 +114,19 @@ MediaRtpUdpTransport& MediaRtpUdpTransport::operator=(MediaRtpUdpTransport&& oth
 
 ::media::Result<MediaRtpUdpDatagram> MediaRtpUdpTransport::receive()
 {
+    if (!m_impl) {
+        return ::media::Result<MediaRtpUdpDatagram>::failure(
+            ::media::ErrorInfo::notInitialized("RTP UDP transport is closed"));
+    }
+    return receive(m_impl->cancellableReadTimeoutMs);
+}
+
+::media::Result<MediaRtpUdpDatagram> MediaRtpUdpTransport::receive(int timeoutOverrideMs)
+{
+    if (timeoutOverrideMs <= 0) {
+        return ::media::Result<MediaRtpUdpDatagram>::failure(
+            ::media::ErrorInfo::invalidArgument("RTP UDP receive timeout override must be positive"));
+    }
     if (!isOpen()) {
         return ::media::Result<MediaRtpUdpDatagram>::failure(
             ::media::ErrorInfo::notInitialized("RTP UDP transport is closed"));
@@ -146,7 +160,7 @@ MediaRtpUdpTransport& MediaRtpUdpTransport::operator=(MediaRtpUdpTransport&& oth
                             static_cast<WSAEVENT>(preferred->waitHandle()),
                             static_cast<WSAEVENT>(secondary->waitHandle())};
     const DWORD wait = WSAWaitForMultipleEvents(3, events, FALSE,
-        static_cast<DWORD>(m_impl->cancellableReadTimeoutMs), FALSE);
+        static_cast<DWORD>((std::min)(timeoutOverrideMs, m_impl->cancellableReadTimeoutMs)), FALSE);
     if (wait == WSA_WAIT_TIMEOUT) {
         return finishError(::media::ErrorInfo::wouldBlock("RTP UDP receive timed out"));
     }

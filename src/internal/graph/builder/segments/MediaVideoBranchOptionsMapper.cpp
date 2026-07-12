@@ -30,6 +30,7 @@ MediaVideoPacketCopyBranchOptions makeVideoPacketCopyBranchOptions(const MediaVi
     copyOptions.muxNode = options.muxNode;
     copyOptions.muxCodecPort = options.muxCodecPort;
     copyOptions.muxPacketPort = options.muxPacketPort;
+    copyOptions.normalizePackets = options.normalizePacketCopy;
     return copyOptions;
 }
 

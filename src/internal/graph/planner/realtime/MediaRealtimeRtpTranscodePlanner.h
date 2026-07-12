@@ -10,6 +10,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodeRequest.h"
 #include "internal/graph/planner/realtime/MediaPreparedRealtimeInput.h"
 #include "internal/graph/protocol/rtp/MediaRtcpCompositionPolicy.h"
+#include "internal/graph/protocol/rtp/MediaRtpDepacketizer.h"
 #include "media_transcode/Result.h"
 
 #include <string>
@@ -49,6 +50,7 @@ struct MediaRealtimeRtpInputNodePlan {
     bool lowLatency;
     std::string mediaId;
     std::optional<MediaRealtimeRtpTransportPlan> rtpTransport;
+    std::optional<MediaRtpDepacketizerConfig> rtpDepacketizer;
 };
 
 struct MediaRealtimeRtpOutputNodePlan {
@@ -101,6 +103,8 @@ struct MediaRealtimeRtpTranscodePlan {
     MediaRealtimeRtpInputNodePlan input;
     MediaRealtimeRtpInputNodePlan audioInput;
     bool useIsolatedAudioInput = false;
+    bool videoPacketCopyNormalizationRequired;
+    bool audioPacketNormalizationRequired;
     MediaRealtimeRtpOutputNodePlan videoOutput;
     MediaRealtimeRtpOutputNodePlan audioOutput;
     MediaRealtimeMuxedOutputPlan muxedOutput;

@@ -122,20 +122,9 @@ namespace media::ffmpeg::graph {
 
 ::media::Result<MediaBufferRef> FFmpegBufferFactory::cloneCodecParameters(const FFmpegInputStreamSnapshot& stream)
 {
-    if (!stream.codecParameters) {
-        return ::media::Result<MediaBufferRef>::failure(
-            ::media::ErrorInfo::invalidArgument("cloneCodecParameters failed: snapshot codec parameters are null"));
-    }
-    auto parameters = ::media::ffmpeg::makeCodecParameters();
-    if (!parameters) {
-        return ::media::Result<MediaBufferRef>::failure(
-            ::media::ErrorInfo::allocationFailed("cloneCodecParameters failed: avcodec_parameters_alloc returned null"));
-    }
-    const int copyRet = avcodec_parameters_copy(parameters.get(), stream.codecParameters.get());
-    if (copyRet < 0) {
-        return ::media::Result<MediaBufferRef>::failure(FFmpegGraphError::fromCode(copyRet, "avcodec_parameters_copy"));
-    }
-    auto buffer = makeMediaBufferRef<FFmpegCodecParametersBuffer>(std::move(parameters));
+    auto parameters = stream.cloneCodecParameters();
+    if (!parameters) return ::media::Result<MediaBufferRef>::failure(parameters.error());
+    auto buffer = makeMediaBufferRef<FFmpegCodecParametersBuffer>(std::move(parameters).value());
     buffer->setStreamKind(stream.streamKind);
     buffer->setPayloadKind(MediaPayloadKind::CodecParameters);
     buffer->setFormatDescriptor(stream.format);

@@ -53,6 +53,38 @@ const char* boolOption(bool value) noexcept
     if (!plan.mediaId.empty()) {
         if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, "media_id", plan.mediaId); !status) return status;
     }
+    if (plan.rtpTransport.has_value() != plan.rtpDepacketizer.has_value()) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument("raw RTP input requires transport and depacketizer plans together"));
+    }
+    if (plan.rtpTransport && plan.rtpDepacketizer) {
+        const auto& transport = *plan.rtpTransport;
+        const auto& depacketizer = *plan.rtpDepacketizer;
+        const auto set = [&](const char* key, std::string value) {
+            return MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, key, std::move(value));
+        };
+        if (auto status = set("rtp.address_family", transport.addressFamily == MediaIpAddressFamily::Ipv6 ? "ipv6" : "ipv4"); !status) return status;
+        if (auto status = set("rtp.bind_address", transport.bindAddress); !status) return status;
+        if (auto status = set("rtp.port", std::to_string(transport.rtpPort)); !status) return status;
+        if (auto status = set("rtcp.port", std::to_string(transport.rtcpPort)); !status) return status;
+        if (auto status = set("rtp.payload_type", std::to_string(transport.payloadType)); !status) return status;
+        if (auto status = set("rtp.clock_rate", std::to_string(transport.clockRate)); !status) return status;
+        if (auto status = set("rtp.receive_buffer_bytes", std::to_string(transport.receiveBufferBytes)); !status) return status;
+        if (auto status = set("rtp.maximum_datagram_bytes", std::to_string(transport.maximumDatagramBytes)); !status) return status;
+        if (auto status = set("rtp.reorder_window_packets", std::to_string(transport.reorderWindowPackets)); !status) return status;
+        if (auto status = set("rtp.maximum_reorder_delay_ms", std::to_string(transport.maximumReorderDelayMs)); !status) return status;
+        if (auto status = set("rtp.cancellable_read_timeout_ms", std::to_string(transport.cancellableReadTimeoutMs)); !status) return status;
+        if (auto status = set("rtcp.require_sender_reports", boolOption(transport.requireSenderReports)); !status) return status;
+        if (auto status = set("rtcp.require_cname", boolOption(transport.requireCname)); !status) return status;
+        if (auto status = set("rtcp.sender_report_timeout_ms", std::to_string(transport.senderReportTimeoutMs)); !status) return status;
+        if (auto status = set("rtcp.cname_timeout_ms", std::to_string(transport.cnameTimeoutMs)); !status) return status;
+        if (auto status = set("rtcp.composition_mode", "strict_compound_rfc3550"); !status) return status;
+        if (auto status = set("rtp.stream_kind", depacketizer.streamKind == MediaStreamKind::Video ? "video" : "audio"); !status) return status;
+        if (auto status = set("rtp.codec", depacketizer.codecName); !status) return status;
+        if (auto status = set("rtp.fmtp", depacketizer.fmtp); !status) return status;
+        if (auto status = set("rtp.channels", std::to_string(depacketizer.channels)); !status) return status;
+        if (auto status = set("rtp.access_unit_duration_ticks", std::to_string(depacketizer.accessUnitDurationRtpTicks)); !status) return status;
+    }
     return ::media::Result<void>::success();
 }
 

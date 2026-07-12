@@ -324,6 +324,8 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
     plan.inputType = *options.input.type;
     plan.inputLayout = *options.input.streamLayout;
     plan.outputLayout = *options.output.streamLayout;
+    plan.audioPacketNormalizationRequired = *options.input.type != RealtimeInputType::RtpPort;
+    plan.videoPacketCopyNormalizationRequired = *options.input.type != RealtimeInputType::RtpPort;
     plan.videoPlan = std::move(videoPlan);
     plan.audioPlan = std::move(audioPlan);
     plan.videoParameters = std::move(videoParameters);

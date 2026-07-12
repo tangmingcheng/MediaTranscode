@@ -5,6 +5,7 @@
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "media_transcode/Result.h"
 
+#include <optional>
 #include <string>
 
 namespace media::ffmpeg::graph {
@@ -24,6 +25,7 @@ struct MediaPacketCopyBranchOptions {
     std::string muxCodecPort = "codec";
     std::string muxPacketPort = "packet";
     bool monotonicPacketTimestamps = false;
+    std::optional<bool> normalizePackets;
 
     MediaGraphQueueParameters queues;
     MediaRealtimeEdgePolicySet edgePolicies;

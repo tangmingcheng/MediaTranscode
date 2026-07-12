@@ -2,6 +2,7 @@
 
 #include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpCodecDescriptor.h"
+#include "internal/graph/protocol/rtp/MediaRtpDepacketizerFactory.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
 
 #include <sstream>
@@ -105,28 +106,20 @@ MediaRealtimeRtpTransportPlan transportPlan(
     };
 }
 
-std::string sdp(
-    const MediaRtpUrlEndpoint& endpoint,
+MediaRtpDepacketizerConfig depacketizerPlan(
+    MediaStreamKind streamKind,
     const MediaRealtimeRtpInputMetadata& metadata,
-    const MediaRealtimeRtpCodecDescriptor& descriptor,
-    const std::string& mediaId)
+    const MediaRealtimeRtpCodecDescriptor& descriptor)
 {
-    std::ostringstream out;
-    out << "v=0\r\n"
-        << "o=- 0 0 IN IP4 127.0.0.1\r\n"
-        << "s=MediaTranscode Raw RTP\r\n"
-        << "t=0 0\r\n";
-    const char* mediaName = descriptor.streamKind == MediaStreamKind::Audio ? "audio" : "video";
-    out << "m=" << mediaName << " " << endpoint.port << " RTP/AVP " << *metadata.payloadType << "\r\n"
-        << "c=IN " << (endpoint.host.find(':') != std::string::npos ? "IP6 " : "IP4 ")
-        << endpoint.host << "\r\n"
-        << "a=rtpmap:" << *metadata.payloadType << " " << descriptor.rtpEncodingName << "/"
-        << descriptor.clockRate;
-    if (descriptor.channels > 0) out << "/" << descriptor.channels;
-    out << "\r\n";
-    if (!metadata.fmtp.empty()) out << "a=fmtp:" << *metadata.payloadType << " " << metadata.fmtp << "\r\n";
-    if (!mediaId.empty()) out << "a=control:" << mediaId << "." << mediaName << "\r\n";
-    return out.str();
+    return MediaRtpDepacketizerConfig{
+        streamKind,
+        descriptor.codecName,
+        metadata.fmtp,
+        static_cast<uint8_t>(*metadata.payloadType),
+        descriptor.clockRate,
+        descriptor.channels,
+        descriptor.accessUnitDurationRtpTicks
+    };
 }
 
 void fillNodePlan(
@@ -134,6 +127,7 @@ void fillNodePlan(
     std::string url,
     std::string sdpText,
     std::optional<MediaRealtimeRtpTransportPlan> transport,
+    std::optional<MediaRtpDepacketizerConfig> depacketizer,
     MediaRealtimeRtpInputNodePlan& node)
 {
     node.url = std::move(url);
@@ -146,6 +140,7 @@ void fillNodePlan(
     node.lowLatency = *request.input.lowLatency;
     node.mediaId = request.mediaId;
     node.rtpTransport = std::move(transport);
+    node.rtpDepacketizer = std::move(depacketizer);
 }
 
 } // namespace
@@ -160,12 +155,16 @@ void fillNodePlan(
 
     MediaRealtimeRawInputPlan result;
     result.videoUrl = request.input.videoRtp.url;
-    result.videoSdp = sdp(videoEndpoint.value(), request.input.videoRtp, videoDescriptor.value(), request.mediaId);
+    result.videoSdp.clear();
     result.video.streamIndex = RawVideoStreamIndex;
     result.video.codecName = videoDescriptor.value().codecName;
     result.videoTransport = transportPlan(
         videoEndpoint.value(), request.input.videoRtp, videoDescriptor.value(),
         request.input.readTimeoutMs.value_or(RtpCancellableReadTimeoutMs));
+    result.videoDepacketizer = depacketizerPlan(MediaStreamKind::Video, request.input.videoRtp, videoDescriptor.value());
+    if (auto status = MediaRtpDepacketizerFactory::validate(result.videoDepacketizer); !status) {
+        return ::media::Result<MediaRealtimeRawInputPlan>::failure(status.error());
+    }
 
     if (MediaRealtimeRequestClassifier::audioRequested(request)) {
         auto audioDescriptor = MediaRealtimeRtpCodecRegistry::describe(MediaStreamKind::Audio, request.input.audioRtp);
@@ -173,7 +172,7 @@ void fillNodePlan(
         auto audioEndpoint = endpoint(request.input.audioRtp, "Raw RTP audio");
         if (!audioEndpoint) return ::media::Result<MediaRealtimeRawInputPlan>::failure(audioEndpoint.error());
         result.audioUrl = request.input.audioRtp.url;
-        result.audioSdp = sdp(audioEndpoint.value(), request.input.audioRtp, audioDescriptor.value(), request.mediaId);
+        result.audioSdp.clear();
         MediaInputAudioStreamInfo audio;
         audio.streamIndex = RawAudioStreamIndex;
         audio.codecName = audioDescriptor.value().codecName;
@@ -186,6 +185,10 @@ void fillNodePlan(
         result.audioTransport = transportPlan(
             audioEndpoint.value(), request.input.audioRtp, audioDescriptor.value(),
             request.input.readTimeoutMs.value_or(RtpCancellableReadTimeoutMs));
+        result.audioDepacketizer = depacketizerPlan(MediaStreamKind::Audio, request.input.audioRtp, audioDescriptor.value());
+        if (auto status = MediaRtpDepacketizerFactory::validate(*result.audioDepacketizer); !status) {
+            return ::media::Result<MediaRealtimeRawInputPlan>::failure(status.error());
+        }
     }
     return ::media::Result<MediaRealtimeRawInputPlan>::success(std::move(result));
 }
@@ -199,10 +202,11 @@ void MediaRealtimeInputPlanner::applyNodePlans(
                  raw ? raw->videoUrl : request.input.url,
                  raw ? raw->videoSdp : std::string{},
                  raw ? std::optional<MediaRealtimeRtpTransportPlan>(raw->videoTransport) : std::nullopt,
+                 raw ? std::optional<MediaRtpDepacketizerConfig>(raw->videoDepacketizer) : std::nullopt,
                  plan.input);
     if (raw && raw->audio) {
         plan.useIsolatedAudioInput = true;
-        fillNodePlan(request, raw->audioUrl, raw->audioSdp, raw->audioTransport, plan.audioInput);
+        fillNodePlan(request, raw->audioUrl, raw->audioSdp, raw->audioTransport, raw->audioDepacketizer, plan.audioInput);
     }
 }
 

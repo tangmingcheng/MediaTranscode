@@ -129,6 +129,7 @@ bool branchEnabled(const MediaAudioPipelinePlan& plan) noexcept
     audioOptions.muxNode = output.value().mux;
     audioOptions.muxCodecPort = "codec";
     audioOptions.muxPacketPort = "packet";
+    audioOptions.normalizeInputPackets = true;
     auto audio = MediaAudioBranchSegmentBuilder::buildIfPlanned(graph, audioOptions);
     if (!audio) {
         return ::media::Result<MediaGraph>::failure(audio.error());
@@ -146,7 +147,8 @@ bool branchEnabled(const MediaAudioPipelinePlan& plan) noexcept
     videoOptions.packetSourcePort = "video";
     videoOptions.muxNode = output.value().mux;
     videoOptions.muxCodecPort = "codec";
-    videoOptions.muxPacketPort = "packet";
+      videoOptions.muxPacketPort = "packet";
+      videoOptions.normalizePacketCopy = true;
     auto video = MediaVideoBranchSegmentBuilder::buildIfPlanned(graph, videoOptions);
     if (!video) {
         return ::media::Result<MediaGraph>::failure(video.error());

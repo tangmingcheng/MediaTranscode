@@ -22,7 +22,8 @@ constexpr const char* owner = "MediaAudioPlanOptionApplier";
 ::media::Result<void> MediaAudioPlanOptionApplier::applySelectedPlan(
     MediaGraph& graph,
     const MediaAudioEncodeBranchNodes& nodes,
-    const MediaAudioPipelinePlan& plan)
+    const MediaAudioPipelinePlan& plan,
+    bool normalizePackets)
 {
     if (plan.branchMode != MediaBranchMode::TranscodeFrame) {
         return ::media::Result<void>::failure(
@@ -33,12 +34,14 @@ constexpr const char* owner = "MediaAudioPlanOptionApplier";
             ::media::ErrorInfo::invalidArgument("MediaAudioPlanOptionApplier requires planned audio source stream index"));
     }
 
-    if (auto status = MediaGraphBuildSupport::setPacketNormalizeOptions(graph,
+    if (normalizePackets) {
+        if (auto status = MediaGraphBuildSupport::setPacketNormalizeOptions(graph,
                                                                         owner,
                                                                         nodes.packetNormalize,
                                                                         MediaStreamKind::Audio,
                                                                         plan.sourceStreamIndex,
                                                                         false); !status) return status;
+    }
     if (auto status = setOption(graph, nodes.codecResolver, MediaTranscodeOptionKey::AudioSourceStreamIndex, std::to_string(plan.sourceStreamIndex)); !status) return status;
     if (auto status = setOption(graph, nodes.codecResolver, MediaTranscodeOptionKey::AudioCodec, plan.targetCodecName); !status) return status;
     if (auto status = setOption(graph, nodes.codecResolver, MediaTranscodeOptionKey::PlannedEncoder, plan.targetEncoderName); !status) return status;

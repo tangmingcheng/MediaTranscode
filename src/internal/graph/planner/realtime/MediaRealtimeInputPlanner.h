@@ -15,10 +15,12 @@ struct MediaRealtimeRawInputPlan final {
     std::string videoSdp;
     MediaInputVideoStreamInfo video;
     MediaRealtimeRtpTransportPlan videoTransport;
+    MediaRtpDepacketizerConfig videoDepacketizer;
     std::string audioUrl;
     std::string audioSdp;
     std::optional<MediaInputAudioStreamInfo> audio;
     std::optional<MediaRealtimeRtpTransportPlan> audioTransport;
+    std::optional<MediaRtpDepacketizerConfig> audioDepacketizer;
 };
 
 class MediaRealtimeInputPlanner final {

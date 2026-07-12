@@ -7,6 +7,7 @@
 #include "media_transcode/Result.h"
 
 #include <string>
+#include <optional>
 
 namespace media::ffmpeg::graph {
 
@@ -27,6 +28,7 @@ struct MediaVideoBranchSegmentOptions {
     MediaNodeId muxNode = MediaNodeId::invalid();
     std::string muxCodecPort = "codec";
     std::string muxPacketPort = "packet";
+    std::optional<bool> normalizePacketCopy;
 };
 
 class MediaVideoBranchSegmentBuilder final {

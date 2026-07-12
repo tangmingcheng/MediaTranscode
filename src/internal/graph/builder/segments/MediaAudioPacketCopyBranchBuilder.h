@@ -6,6 +6,7 @@
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "media_transcode/Result.h"
 
+#include <optional>
 #include <string>
 
 namespace media::ffmpeg::graph {
@@ -25,6 +26,7 @@ struct MediaAudioPacketCopyBranchOptions {
     MediaNodeId muxNode = MediaNodeId::invalid();
     std::string muxCodecPort = "codec";
     std::string muxPacketPort = "packet";
+    std::optional<bool> normalizePackets;
 };
 
 class MediaAudioPacketCopyBranchBuilder final {

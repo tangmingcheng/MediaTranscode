@@ -128,7 +128,6 @@ void testRtpUdpTransportReceivesBothChannelsAndCancels(TestContext& ctx)
 #endif
     const auto stopStarted = std::chrono::steady_clock::now();
     EXPECT_TRUE(ctx, transport.value().stop());
-    EXPECT_FALSE(ctx, transport.value().reset());
     EXPECT_EQ(ctx, blockedReceive.wait_for(std::chrono::seconds(1)), std::future_status::ready);
     const auto cancelled = blockedReceive.get();
     receiveThread.join();

@@ -1,19 +1,27 @@
 #include "internal/graph/nodes/input/RawRtpInputNode.h"
 
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
+#include "internal/graph/nodes/input/MediaRawRtpStreamDescriptorFactory.h"
+#include "internal/graph/protocol/rtp/MediaRtcpCompoundParser.h"
+#include "internal/graph/protocol/rtp/MediaRtpDepacketizerFactory.h"
+#include "internal/graph/protocol/rtp/MediaRtpPacketParser.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
-#include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
-#include "internal/graph/runtime/ffmpeg/FFmpegRealtimeInputOptions.h"
-
-extern "C" {
-#include <libavformat/avformat.h>
-}
+#include "internal/graph/runtime/buffer/MediaRtpIngressEventBuffer.h"
 
 #include <chrono>
-#include <fstream>
-#include <string>
+#include <algorithm>
+#include <utility>
 
 namespace media::ffmpeg::graph {
+namespace {
+
+int64_t steadyNowNs() noexcept
+{
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+} // namespace
 
 RawRtpInputNode::RawRtpInputNode(MediaNodeId nodeId)
     : FFmpegNodeRuntime(nodeId, staticKind(), "RawRtpInputNode")
@@ -27,148 +35,238 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
 
 ::media::Result<MediaNodeProcessResult> RawRtpInputNode::onProcess(MediaGraphExecutionContext& context)
 {
-    if (m_formatEmitted) {
-        return processFinished();
+    if (!m_initialized) {
+        if (auto status = initialize(context); !status) return processProgress(status);
+    }
+    if (!m_formatEmitted) {
+        m_formatEmitted = true;
+        return processProgress(emitOutput(context, "format", m_streamSnapshot));
+    }
+    if (!m_events.empty()) {
+        auto event = std::move(m_events.front());
+        m_events.pop_front();
+        return processProgress(emitOutput(context, event.first, event.second));
+    }
+    if (!m_packets.empty()) {
+        MediaBufferRef packet = std::move(m_packets.front());
+        m_packets.pop_front();
+        return processProgress(emitOutput(context, "packet", packet));
     }
 
-    auto status = openInput(context);
-    if (!status) {
+    const auto now = std::chrono::steady_clock::now();
+    auto expired = m_reorder->expire(now);
+    if (!expired) return processProgress(::media::Status::failure(expired.error()));
+    if (auto status = processReordered(context, std::move(expired).value()); !status) {
         return processProgress(status);
     }
-
-    auto buffer = FFmpegBufferFactory::wrapInputFormatContext(std::move(m_context));
-    if (!buffer) {
-        return ::media::Result<MediaNodeProcessResult>::failure(buffer.error());
+    if (!m_events.empty()) {
+        auto event = std::move(m_events.front());
+        m_events.pop_front();
+        return processProgress(emitOutput(context, event.first, event.second));
+    }
+    if (!m_packets.empty()) {
+        MediaBufferRef packet = std::move(m_packets.front());
+        m_packets.pop_front();
+        return processProgress(emitOutput(context, "packet", packet));
     }
 
-    auto pushed = emitOutput(context, "format", buffer.value());
-    if (!pushed) {
-        return processProgress(pushed);
+    int receiveTimeoutMs = m_cancellableReadTimeoutMs;
+    if (const auto deadline = m_reorder->nextDeadline()) {
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(*deadline - now);
+        const int deadlineTimeoutMs = remaining.count() > 0 ? static_cast<int>(remaining.count()) : 1;
+        receiveTimeoutMs = std::min(receiveTimeoutMs, deadlineTimeoutMs);
     }
+    auto datagram = m_transport.receive(receiveTimeoutMs);
+    if (!datagram) {
+        if (datagram.error().code == ::media::ErrorCode::WouldBlock) {
+            auto timedOut = m_reorder->expire(std::chrono::steady_clock::now());
+            if (!timedOut) return processProgress(::media::Status::failure(timedOut.error()));
+            if (auto status = processReordered(context, std::move(timedOut).value()); !status) {
+                return processProgress(status);
+            }
+            if (!m_events.empty()) {
+                auto event = std::move(m_events.front());
+                m_events.pop_front();
+                return processProgress(emitOutput(context, event.first, event.second));
+            }
+            if (!m_packets.empty()) {
+                MediaBufferRef packet = std::move(m_packets.front());
+                m_packets.pop_front();
+                return processProgress(emitOutput(context, "packet", packet));
+            }
+            return processProgress();
+        }
+        return processProgress(::media::Status::failure(datagram.error()));
+    }
+    auto status = datagram.value().channel == MediaRtpUdpChannel::Rtp
+        ? processRtp(context, std::move(datagram).value())
+        : processRtcp(context, std::move(datagram).value());
+    if (!status) return processProgress(status);
+    if (!m_events.empty()) {
+        auto event = std::move(m_events.front());
+        m_events.pop_front();
+        return processProgress(emitOutput(context, event.first, event.second));
+    }
+    if (m_packets.empty()) return processProgress();
+    MediaBufferRef packet = std::move(m_packets.front());
+    m_packets.pop_front();
+    return processProgress(emitOutput(context, "packet", packet));
+}
 
-    m_formatEmitted = true;
-    return processProgress();
+::media::Status RawRtpInputNode::initialize(MediaGraphExecutionContext& context)
+{
+    const MediaNodeOptions* options = nodeOptions(context);
+    auto family = requiredNodeOption(options, "RawRtpInputNode", "rtp.address_family");
+    auto address = requiredNodeOption(options, "RawRtpInputNode", "rtp.bind_address");
+    auto rtpPort = requiredPositiveIntNodeOption(options, "RawRtpInputNode", "rtp.port");
+    auto rtcpPort = requiredPositiveIntNodeOption(options, "RawRtpInputNode", "rtcp.port");
+    auto payloadType = requiredPositiveIntNodeOption(options, "RawRtpInputNode", "rtp.payload_type");
+    auto clockRate = requiredPositiveIntNodeOption(options, "RawRtpInputNode", "rtp.clock_rate");
+    auto receiveBuffer = requiredPositiveIntNodeOption(options, "RawRtpInputNode", "rtp.receive_buffer_bytes");
+    auto datagramBytes = requiredPositiveIntNodeOption(options, "RawRtpInputNode", "rtp.maximum_datagram_bytes");
+    auto reorderWindow = requiredPositiveIntNodeOption(options, "RawRtpInputNode", "rtp.reorder_window_packets");
+    auto reorderDelay = requiredPositiveIntNodeOption(options, "RawRtpInputNode", "rtp.maximum_reorder_delay_ms");
+    auto readTimeout = requiredPositiveIntNodeOption(options, "RawRtpInputNode", "rtp.cancellable_read_timeout_ms");
+    auto requireSr = requiredBoolNodeOption(options, "RawRtpInputNode", "rtcp.require_sender_reports");
+    auto requireCname = requiredBoolNodeOption(options, "RawRtpInputNode", "rtcp.require_cname");
+    auto srTimeout = requiredPositiveIntNodeOption(options, "RawRtpInputNode", "rtcp.sender_report_timeout_ms");
+    auto cnameTimeout = requiredPositiveIntNodeOption(options, "RawRtpInputNode", "rtcp.cname_timeout_ms");
+    auto compositionMode = requiredNodeOption(options, "RawRtpInputNode", "rtcp.composition_mode");
+    auto streamKind = requiredStreamKindNodeOption(options, "RawRtpInputNode", "rtp.stream_kind");
+    auto codec = requiredNodeOption(options, "RawRtpInputNode", "rtp.codec");
+    auto fmtp = requiredPossiblyEmptyNodeOption(options, "RawRtpInputNode", "rtp.fmtp");
+    auto channels = requiredNonNegativeIntNodeOption(options, "RawRtpInputNode", "rtp.channels");
+    auto accessUnitDuration = requiredNonNegativeIntNodeOption(
+        options, "RawRtpInputNode", "rtp.access_unit_duration_ticks");
+    if (!family || !address || !rtpPort || !rtcpPort || !payloadType || !clockRate || !receiveBuffer ||
+        !datagramBytes || !reorderWindow || !reorderDelay || !readTimeout || !requireSr || !requireCname ||
+        !srTimeout || !cnameTimeout || !compositionMode || !streamKind || !codec || !fmtp || !channels || !accessUnitDuration) {
+        const ::media::ErrorInfo* error = nullptr;
+        if (!family) error = &family.error(); else if (!address) error = &address.error(); else if (!rtpPort) error = &rtpPort.error();
+        else if (!rtcpPort) error = &rtcpPort.error(); else if (!payloadType) error = &payloadType.error(); else if (!clockRate) error = &clockRate.error();
+        else if (!receiveBuffer) error = &receiveBuffer.error(); else if (!datagramBytes) error = &datagramBytes.error(); else if (!reorderWindow) error = &reorderWindow.error();
+        else if (!reorderDelay) error = &reorderDelay.error(); else if (!readTimeout) error = &readTimeout.error(); else if (!requireSr) error = &requireSr.error();
+        else if (!requireCname) error = &requireCname.error(); else if (!srTimeout) error = &srTimeout.error(); else if (!cnameTimeout) error = &cnameTimeout.error();
+        else if (!compositionMode) error = &compositionMode.error(); else if (!streamKind) error = &streamKind.error(); else if (!codec) error = &codec.error();
+        else if (!fmtp) error = &fmtp.error();
+        else if (!channels) error = &channels.error(); else error = &accessUnitDuration.error();
+        return ::media::Status::failure(*error);
+    }
+    if (rtpPort.value() > 65535 || rtcpPort.value() > 65535 || payloadType.value() > 127 ||
+        (family.value() != "ipv4" && family.value() != "ipv6") || compositionMode.value() != "strict_compound_rfc3550") {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument("RawRtpInputNode planned numeric option is out of range"));
+    }
+    m_config = MediaRtpDepacketizerConfig{
+        streamKind.value(), codec.value(), fmtp.value(),
+        static_cast<uint8_t>(payloadType.value()), clockRate.value(), channels.value(), accessUnitDuration.value()};
+    auto depacketizer = MediaRtpDepacketizerFactory::create(m_config);
+    if (!depacketizer) return ::media::Status::failure(depacketizer.error());
+    auto snapshot = MediaRawRtpStreamDescriptorFactory::create(m_config);
+    if (!snapshot) return ::media::Status::failure(snapshot.error());
+    auto transport = MediaRtpUdpTransport::open(MediaRtpUdpTransportConfig{
+        family.value() == "ipv6" ? MediaIpAddressFamily::Ipv6 : MediaIpAddressFamily::Ipv4,
+        address.value(), static_cast<uint16_t>(rtpPort.value()), static_cast<uint16_t>(rtcpPort.value()),
+        receiveBuffer.value(), static_cast<std::size_t>(datagramBytes.value()), readTimeout.value()});
+    if (!transport) return ::media::Status::failure(transport.error());
+    m_transport = std::move(transport).value();
+    m_reorder = std::make_unique<MediaRtpReorderBuffer>(MediaRtpReorderConfig{
+        static_cast<std::size_t>(reorderWindow.value()), std::chrono::milliseconds(reorderDelay.value()),
+        static_cast<uint8_t>(payloadType.value())});
+    m_depacketizer = std::move(depacketizer).value();
+    m_clockTracker = std::make_unique<MediaRtcpSenderReportTracker>(MediaRtcpSenderReportTrackerConfig{
+        requireSr.value(), requireCname.value(), static_cast<int64_t>(srTimeout.value()) * 1'000'000,
+        static_cast<int64_t>(cnameTimeout.value()) * 1'000'000});
+    m_streamSnapshot = MediaBufferRef(std::move(snapshot).value());
+    m_requireCname = requireCname.value();
+    m_cancellableReadTimeoutMs = readTimeout.value();
+    m_initialized = true;
+    return ::media::Status::success();
+}
+
+::media::Status RawRtpInputNode::processRtp(MediaGraphExecutionContext& context, MediaRtpUdpDatagram datagram)
+{
+    auto parsed = MediaRtpPacketParser::parse(datagram.bytes);
+    if (!parsed) return ::media::Status::failure(parsed.error());
+    m_clockTracker->observeMedia(parsed.value().ssrc, steadyNowNs());
+    auto reordered = m_reorder->push(std::move(parsed).value(), std::chrono::steady_clock::now());
+    if (!reordered) return ::media::Status::failure(reordered.error());
+    return processReordered(context, std::move(reordered).value());
+}
+
+::media::Status RawRtpInputNode::processReordered(
+    MediaGraphExecutionContext& context,
+    MediaRtpReorderResult reordered)
+{
+    for (const auto& discontinuity : reordered.discontinuities) {
+        m_depacketizer->discontinuity(discontinuity.reason);
+        if (context.findOutputChannel(nodeId(), "event")) {
+            m_events.emplace_back("event", makeMediaBufferRef<MediaRtpIngressEventBuffer>(discontinuity));
+        }
+    }
+    for (const MediaRtpPacket& packet : reordered.packets) {
+        auto depacketized = m_depacketizer->push(packet);
+        if (!depacketized) return ::media::Status::failure(depacketized.error());
+        for (MediaRtpAccessUnit& unit : depacketized.value().accessUnits) {
+            auto buffer = FFmpegBufferFactory::wrapPacket(std::move(unit.packet), m_config.streamKind);
+            if (!buffer) return ::media::Status::failure(buffer.error());
+            buffer.value()->setTimeDescriptor(MediaTimeDescriptor{unit.timeBase});
+            MediaFormatDescriptor format;
+            format.streamKind = m_config.streamKind;
+            format.streamIndex = 0;
+            format.time.timeBase = unit.timeBase;
+            format.isInput = true;
+            format.isRealtime = true;
+            buffer.value()->setFormatDescriptor(std::move(format));
+            m_packets.push_back(std::move(buffer).value());
+        }
+    }
+    return ::media::Status::success();
+}
+
+::media::Status RawRtpInputNode::processRtcp(MediaGraphExecutionContext& context, MediaRtpUdpDatagram datagram)
+{
+    auto packets = MediaRtcpCompoundParser::parse(datagram.bytes, MediaRtcpCompoundPolicy{
+        MediaRtcpCompositionMode::StrictCompoundRfc3550, m_requireCname});
+    if (!packets) return ::media::Status::failure(packets.error());
+    const int64_t observedAtNs = steadyNowNs();
+    auto status = m_clockTracker->observe(packets.value(), observedAtNs);
+    if (!status) return status;
+    auto evidence = m_clockTracker->evidence(observedAtNs);
+    if (evidence && context.findOutputChannel(nodeId(), "clock")) {
+        m_events.emplace_back("clock", makeMediaBufferRef<MediaRtpIngressEventBuffer>(std::move(evidence).value()));
+    }
+    return ::media::Status::success();
 }
 
 ::media::Status RawRtpInputNode::stop(MediaGraphExecutionContext& context)
 {
-    m_context.reset();
-    m_formatEmitted = false;
-    cleanupSdpFile();
-    return FFmpegNodeRuntime::stop(context);
+    auto transportStatus = m_transport.stop();
+    m_transport.close();
+    resetState();
+    auto baseStatus = FFmpegNodeRuntime::stop(context);
+    return !transportStatus ? transportStatus : baseStatus;
 }
 
 void RawRtpInputNode::abort(MediaGraphExecutionContext& context) noexcept
 {
-    m_context.reset();
-    m_formatEmitted = false;
-    cleanupSdpFile();
+    (void)m_transport.abort();
+    m_transport.close();
+    resetState();
     FFmpegNodeRuntime::abort(context);
 }
 
-::media::Status RawRtpInputNode::openInput(MediaGraphExecutionContext& context)
+void RawRtpInputNode::resetState() noexcept
 {
-    if (m_context) {
-        return ::media::Status::success();
-    }
-
-    const MediaNodeOptions* options = nodeOptions(context);
-    auto sdpText = requiredNodeOption(options, "RawRtpInputNode", "input.sdp");
-    if (!sdpText) {
-        return ::media::Status::failure(sdpText.error());
-    }
-    auto openTimeoutMs = requiredPositiveIntNodeOption(options, "RawRtpInputNode", "input.open_timeout_ms");
-    if (!openTimeoutMs) {
-        return ::media::Status::failure(openTimeoutMs.error());
-    }
-    auto readTimeoutMs = requiredPositiveIntNodeOption(options, "RawRtpInputNode", "input.read_timeout_ms");
-    if (!readTimeoutMs) {
-        return ::media::Status::failure(readTimeoutMs.error());
-    }
-    auto analyzeDurationUs = requiredPositiveIntNodeOption(options, "RawRtpInputNode", "input.analyze_duration_us");
-    if (!analyzeDurationUs) {
-        return ::media::Status::failure(analyzeDurationUs.error());
-    }
-    auto probeSizeBytes = requiredPositiveIntNodeOption(options, "RawRtpInputNode", "input.probe_size_bytes");
-    if (!probeSizeBytes) {
-        return ::media::Status::failure(probeSizeBytes.error());
-    }
-    auto lowLatency = requiredBoolNodeOption(options, "RawRtpInputNode", "input.low_latency");
-    if (!lowLatency) {
-        return ::media::Status::failure(lowLatency.error());
-    }
-
-    auto sdpPath = writeSdpFile(sdpText.value());
-    if (!sdpPath) {
-        return ::media::Status::failure(sdpPath.error());
-    }
-    m_sdpPath = sdpPath.value();
-
-    FFmpegRealtimeInputOptions realtimeOptions;
-    realtimeOptions.openTimeoutMs = openTimeoutMs.value();
-    realtimeOptions.readTimeoutMs = readTimeoutMs.value();
-    realtimeOptions.analyzeDurationUs = analyzeDurationUs.value();
-    realtimeOptions.probeSizeBytes = probeSizeBytes.value();
-    realtimeOptions.lowLatency = lowLatency.value();
-    realtimeOptions.allowFileUdpRtpProtocols = true;
-
-    AVDictionary* inputOptions = nullptr;
-    applyFFmpegRealtimeInputOptions(&inputOptions, realtimeOptions);
-
-    AVFormatContext* raw = nullptr;
-    const AVInputFormat* sdpFormat = av_find_input_format("sdp");
-    const int openRet = avformat_open_input(&raw, m_sdpPath.string().c_str(), sdpFormat, &inputOptions);
-    if (inputOptions) {
-        av_dict_free(&inputOptions);
-    }
-    if (openRet < 0) {
-        cleanupSdpFile();
-        return FFmpegGraphError::statusFromCode(openRet, "avformat_open_input(raw rtp sdp)");
-    }
-
-    m_context.reset(raw);
-    const int infoRet = avformat_find_stream_info(m_context.get(), nullptr);
-    if (infoRet < 0) {
-        m_context.reset();
-        cleanupSdpFile();
-        return FFmpegGraphError::statusFromCode(infoRet, "avformat_find_stream_info(raw rtp)");
-    }
-
-    return ::media::Status::success();
-}
-
-::media::Result<std::filesystem::path> RawRtpInputNode::writeSdpFile(const std::string& sdpText) const
-{
-    if (sdpText.empty()) {
-        return ::media::Result<std::filesystem::path>::failure(
-            ::media::ErrorInfo::invalidArgument("RawRtpInputNode requires non-empty SDP text"));
-    }
-
-    const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-    const std::filesystem::path path = std::filesystem::temp_directory_path() /
-        ("media_transcode_raw_rtp_" + std::to_string(nodeId().value) + "_" + std::to_string(stamp) + ".sdp");
-
-    std::ofstream output(path, std::ios::binary | std::ios::trunc);
-    if (!output) {
-        return ::media::Result<std::filesystem::path>::failure(
-            ::media::ErrorInfo::ioFailure("RawRtpInputNode failed to create temporary SDP file"));
-    }
-    output.write(sdpText.data(), static_cast<std::streamsize>(sdpText.size()));
-    if (!output) {
-        return ::media::Result<std::filesystem::path>::failure(
-            ::media::ErrorInfo::ioFailure("RawRtpInputNode failed to write temporary SDP file"));
-    }
-    return ::media::Result<std::filesystem::path>::success(path);
-}
-
-void RawRtpInputNode::cleanupSdpFile() noexcept
-{
-    if (m_sdpPath.empty()) {
-        return;
-    }
-    std::error_code ignored;
-    std::filesystem::remove(m_sdpPath, ignored);
-    m_sdpPath.clear();
+    m_reorder.reset();
+    m_depacketizer.reset();
+    m_clockTracker.reset();
+    m_streamSnapshot.reset();
+    m_packets.clear();
+    m_events.clear();
+    m_initialized = false;
+    m_formatEmitted = false;
+    m_requireCname = false;
+    m_cancellableReadTimeoutMs = 0;
 }
 
 } // namespace media::ffmpeg::graph

@@ -3,6 +3,7 @@
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/nodes/audio/AudioEncodeNode.h"
+#include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/nodes/audio/AudioEncoderFrameQueue.h"
 #include "internal/graph/nodes/mux/RtpMuxStateMachine.h"
 #include "internal/graph/protocol/rtp/MediaRtcpCompoundParser.h"
@@ -26,7 +27,21 @@ extern "C" {
 using namespace media::ffmpeg::graph;
 using media_transcode::test::TestContext;
 
+void runRtpDepacketizerTests(TestContext& ctx);
+
 namespace {
+
+void testRequiredPossiblyEmptyNodeOption(TestContext& ctx)
+{
+    MediaNodeOptions options;
+    auto missing = requiredPossiblyEmptyNodeOption(&options, "RawRtpInputNode", "rtp.fmtp");
+    EXPECT_FALSE(ctx, missing);
+
+    options.set("rtp.fmtp", "");
+    auto explicitEmpty = requiredPossiblyEmptyNodeOption(&options, "RawRtpInputNode", "rtp.fmtp");
+    EXPECT_TRUE(ctx, explicitEmpty);
+    if (explicitEmpty) EXPECT_TRUE(ctx, explicitEmpty.value().empty());
+}
 
 void appendU16(std::vector<uint8_t>& bytes, uint16_t value)
 {
@@ -605,9 +620,11 @@ int main()
         if (!gapStatus) EXPECT_EQ(ctx, gapStatus.error().code, media::ErrorCode::InvalidArgument);
     }
     testRtpPacketParserStrictHeader(ctx);
+    testRequiredPossiblyEmptyNodeOption(ctx);
     testRtcpCompoundParserStrictPackets(ctx);
     testRtcpEvidenceRequiresSameSsrcAndExpires(ctx);
     testRtcpEvidenceRejectsIdentityAndClockDiscontinuities(ctx);
+    runRtpDepacketizerTests(ctx);
     testAudioEncodeFixedFrameStateMachine(ctx);
     return ctx.failures == 0 ? 0 : 1;
 }

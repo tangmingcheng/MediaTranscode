@@ -14,6 +14,7 @@ struct MediaRealtimeRtpCodecDescriptor {
     std::string rtpEncodingName;
     int clockRate = 0;
     int channels = 0;
+    int accessUnitDurationRtpTicks = 0;
     bool requiresFmtp = false;
 };
 

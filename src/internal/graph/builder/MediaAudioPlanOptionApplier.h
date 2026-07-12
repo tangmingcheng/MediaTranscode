@@ -10,8 +10,9 @@ namespace media::ffmpeg::graph {
 class MediaAudioPlanOptionApplier final {
 public:
     static ::media::Result<void> applySelectedPlan(MediaGraph& graph,
-                                                   const MediaAudioEncodeBranchNodes& nodes,
-                                                   const MediaAudioPipelinePlan& plan);
+                                                    const MediaAudioEncodeBranchNodes& nodes,
+                                                    const MediaAudioPipelinePlan& plan,
+                                                    bool normalizePackets);
 
 private:
     MediaAudioPlanOptionApplier() = default;

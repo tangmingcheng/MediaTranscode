@@ -43,6 +43,7 @@ public:
     static ::media::Result<MediaRtpUdpTransport> open(const MediaRtpUdpTransportConfig& config);
 
     ::media::Result<MediaRtpUdpDatagram> receive();
+    ::media::Result<MediaRtpUdpDatagram> receive(int timeoutOverrideMs);
     ::media::Status stop() noexcept;
     ::media::Status reset() noexcept;
     ::media::Status abort() noexcept;

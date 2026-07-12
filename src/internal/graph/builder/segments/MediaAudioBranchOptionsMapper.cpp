@@ -30,6 +30,7 @@ MediaAudioPacketCopyBranchOptions makeAudioPacketCopyBranchOptions(const MediaAu
     copyOptions.muxNode = options.muxNode;
     copyOptions.muxCodecPort = options.muxCodecPort;
     copyOptions.muxPacketPort = options.muxPacketPort;
+    copyOptions.normalizePackets = options.normalizeInputPackets;
     return copyOptions;
 }
 
@@ -48,6 +49,7 @@ MediaAudioEncodeBranchOptions makeAudioEncodeBranchOptions(const MediaAudioBranc
     encodeOptions.muxNode = options.muxNode;
     encodeOptions.muxCodecPort = options.muxCodecPort;
     encodeOptions.muxPacketPort = options.muxPacketPort;
+    encodeOptions.normalizePackets = options.normalizeInputPackets;
     return encodeOptions;
 }
 

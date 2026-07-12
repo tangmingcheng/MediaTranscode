@@ -1,6 +1,8 @@
 #include "internal/graph/planner/realtime/MediaRealtimeRtpCodecDescriptor.h"
 
 #include "internal/graph/utils/MediaCodecNameUtils.h"
+#include "internal/graph/protocol/rtp/MediaAacAudioSpecificConfig.h"
+#include "internal/graph/protocol/rtp/MediaRtpFmtp.h"
 
 #include <algorithm>
 #include <cctype>
@@ -14,7 +16,6 @@ constexpr int DynamicPayloadTypeMin = 96;
 constexpr int DynamicPayloadTypeMax = 127;
 constexpr int VideoClockRate = 90000;
 constexpr int OpusClockRate = 48000;
-
 std::string lowercaseAscii(std::string value)
 {
     std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
@@ -23,38 +24,27 @@ std::string lowercaseAscii(std::string value)
     return value;
 }
 
-std::string trimAscii(std::string value)
+::media::Result<int> plannedAacAccessUnitDuration(
+    const MediaRealtimeRtpInputMetadata& metadata)
 {
-    const auto begin = std::find_if_not(value.begin(), value.end(), [](unsigned char ch) {
-        return std::isspace(ch) != 0;
-    });
-    const auto end = std::find_if_not(value.rbegin(), value.rend(), [](unsigned char ch) {
-        return std::isspace(ch) != 0;
-    }).base();
-    if (begin >= end) {
-        return {};
+    auto fmtp = parseRtpFmtp(metadata.fmtp);
+    if (!fmtp) return ::media::Result<int>::failure(fmtp.error());
+    const auto configEntry = fmtp.value().find("config");
+    if (configEntry == fmtp.value().end() || configEntry->second.empty()) {
+        return ::media::Result<int>::failure(
+            ::media::ErrorInfo::invalidArgument("Raw RTP AAC fmtp requires config"));
     }
-    return std::string(begin, end);
-}
-
-std::string fmtpValue(const std::string& fmtp, const std::string& requiredKey)
-{
-    const std::string wanted = lowercaseAscii(requiredKey);
-    std::size_t offset = 0;
-    while (offset <= fmtp.size()) {
-        const std::size_t separator = fmtp.find(';', offset);
-        const std::string token = trimAscii(fmtp.substr(offset, separator == std::string::npos ? std::string::npos : separator - offset));
-        const std::size_t equals = token.find('=');
-        if (equals != std::string::npos &&
-            lowercaseAscii(trimAscii(token.substr(0, equals))) == wanted) {
-            return trimAscii(token.substr(equals + 1));
-        }
-        if (separator == std::string::npos) {
-            break;
-        }
-        offset = separator + 1;
+    auto config = decodeRtpFmtpHex(configEntry->second);
+    if (!config) return ::media::Result<int>::failure(config.error());
+    auto asc = parseAacAudioSpecificConfig(config.value());
+    if (!asc) return ::media::Result<int>::failure(asc.error());
+    if (!metadata.clockRate || *metadata.clockRate != asc.value().sampleRate ||
+        !metadata.channels || *metadata.channels != asc.value().channels) {
+        return ::media::Result<int>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Raw RTP AAC AudioSpecificConfig conflicts with planned clock rate or channels"));
     }
-    return {};
+    return ::media::Result<int>::success(asc.value().frameSamples);
 }
 
 ::media::Result<void> requireFmtpKeys(const MediaRealtimeRtpInputMetadata& metadata,
@@ -65,8 +55,11 @@ std::string fmtpValue(const std::string& fmtp, const std::string& requiredKey)
         return ::media::Result<void>::failure(
             ::media::ErrorInfo::invalidArgument(owner + " requires fmtp"));
     }
+    auto parameters = parseRtpFmtp(metadata.fmtp);
+    if (!parameters) return ::media::Result<void>::failure(parameters.error());
     for (const char* key : keys) {
-        if (fmtpValue(metadata.fmtp, key).empty()) {
+        const auto found = parameters.value().find(lowercaseAscii(key));
+        if (found == parameters.value().end() || found->second.empty()) {
             return ::media::Result<void>::failure(
                 ::media::ErrorInfo::invalidArgument(owner + " fmtp requires " + std::string(key)));
         }
@@ -162,6 +155,11 @@ std::string fmtpValue(const std::string& fmtp, const std::string& requiredKey)
         }
         descriptor.rtpEncodingName = "MPEG4-GENERIC";
         descriptor.clockRate = *metadata.clockRate;
+        auto duration = plannedAacAccessUnitDuration(metadata);
+        if (!duration) {
+            return ::media::Result<MediaRealtimeRtpCodecDescriptor>::failure(duration.error());
+        }
+        descriptor.accessUnitDurationRtpTicks = duration.value();
         descriptor.requiresFmtp = true;
         return ::media::Result<MediaRealtimeRtpCodecDescriptor>::success(std::move(descriptor));
     }

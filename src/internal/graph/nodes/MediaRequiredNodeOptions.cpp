@@ -53,6 +53,17 @@ std::string lowerCopy(std::string value)
     return ::media::Result<std::string>::success(value);
 }
 
+::media::Result<std::string> requiredPossiblyEmptyNodeOption(const MediaNodeOptions* options,
+                                                             const char* nodeName,
+                                                             const char* key)
+{
+    if (!options || !options->has(key)) {
+        return ::media::Result<std::string>::failure(
+            ::media::ErrorInfo::invalidArgument(std::string(nodeName) + " requires node option: " + key));
+    }
+    return ::media::Result<std::string>::success(options->value(key));
+}
+
 ::media::Result<int> requiredPositiveIntNodeOption(const MediaNodeOptions* options,
                                                    const char* nodeName,
                                                    const char* key)

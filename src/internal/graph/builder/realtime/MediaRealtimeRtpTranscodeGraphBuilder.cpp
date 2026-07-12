@@ -34,51 +34,6 @@ struct RealtimePacketInputChain {
                                                         true);
 }
 
-::media::Result<MediaNodeId> addRawRtpPacketNormalize(MediaGraph& graph,
-                                                      MediaNodeId formatSource,
-                                                      MediaNodeId packetSource,
-                                                      int sourceStreamIndex,
-                                                      const MediaRealtimeEdgePolicySet& edgePolicies)
-{
-    const MediaNodeId normalize = graph.addNode(MediaNodeKind::PacketNormalize,
-                                                "realtime.raw_rtp.normalize",
-                                                "Raw RTP packet normalize");
-    if (!normalize.isValid()) {
-        return ::media::Result<MediaNodeId>::failure(
-            ::media::ErrorInfo::internalError("MediaRealtimeRtpTranscodeGraphBuilder failed to add raw RTP packet normalize node"));
-    }
-    if (auto status = MediaGraphBuildSupport::setPacketNormalizeOptions(graph,
-                                                                        owner,
-                                                                        normalize,
-                                                                        MediaStreamKind::Video,
-                                                                        sourceStreamIndex,
-                                                                        false); !status) {
-        return ::media::Result<MediaNodeId>::failure(status.error());
-    }
-
-    if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph, owner, normalize, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext, true, false); !status) return ::media::Result<MediaNodeId>::failure(status.error());
-    if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph, owner, normalize, "packet", MediaStreamKind::Video, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true); !status) return ::media::Result<MediaNodeId>::failure(status.error());
-
-    const MediaPortId splitVideo = graph.addOutputPort(packetSource,
-                                                       "video",
-                                                       MediaStreamKind::Video,
-                                                       MediaEdgeKind::InputPacket,
-                                                       MediaPayloadKind::Packet,
-                                                       false,
-                                                       true);
-    if (auto status = MediaGraphBuildSupport::requirePort(splitVideo, owner, "raw RTP stream split video"); !status) {
-        return ::media::Result<MediaNodeId>::failure(status.error());
-    }
-    graph.setPortFormatDescriptor(splitVideo,
-                                  MediaGraphBuildSupport::streamIndexDescriptor(MediaStreamKind::Video,
-                                                                                sourceStreamIndex));
-
-    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, formatSource, "format", normalize, "format", "realtime.raw_rtp.format -> normalize.format", edgePolicies.metadata); !status) return ::media::Result<MediaNodeId>::failure(status.error());
-    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, packetSource, "video", normalize, "packet", "realtime.raw_rtp.packet -> normalize.packet", edgePolicies.videoPacket); !status) return ::media::Result<MediaNodeId>::failure(status.error());
-
-    return ::media::Result<MediaNodeId>::success(normalize);
-}
-
 ::media::Result<RealtimePacketInputChain> addRealtimePacketInputChain(
     MediaGraph& graph,
     MediaNodeKind inputKind,
@@ -98,6 +53,27 @@ struct RealtimePacketInputChain {
     }
     if (auto status = addRealtimeInputPorts(graph, input); !status) {
         return ::media::Result<RealtimePacketInputChain>::failure(status.error());
+    }
+
+    if (inputKind == MediaNodeKind::RawRtpInput) {
+        if (!inputPlan.rtpDepacketizer) {
+            return ::media::Result<RealtimePacketInputChain>::failure(
+                ::media::ErrorInfo::invalidArgument("raw RTP input requires depacketizer plan"));
+        }
+        if (auto status = MediaGraphBuildSupport::addOutputPortChecked(
+                graph, owner, input, "clock", MediaStreamKind::Metadata, MediaEdgeKind::Metadata,
+                MediaPayloadKind::GraphEvent, false, true); !status) {
+            return ::media::Result<RealtimePacketInputChain>::failure(status.error());
+        }
+        if (auto status = MediaGraphBuildSupport::addOutputPortChecked(
+                graph, owner, input, "event", MediaStreamKind::Metadata, MediaEdgeKind::Metadata,
+                MediaPayloadKind::GraphEvent, false, true); !status) {
+            return ::media::Result<RealtimePacketInputChain>::failure(status.error());
+        }
+        RealtimePacketInputChain chain;
+        chain.input = input;
+        chain.packetSelect.split = input;
+        return ::media::Result<RealtimePacketInputChain>::success(chain);
     }
 
     PacketSelectSegmentOptions packetSelectOptions;
@@ -302,19 +278,7 @@ bool separateRtpOutput(const MediaRealtimeRtpTranscodePlan& plan) noexcept
     }
 
     MediaNodeId videoPacketSourceNode = videoInputChain.value().packetSelect.split;
-    std::string videoPacketSourcePort = "video";
-    if (plan.inputType == RealtimeInputType::RtpPort) {
-        auto normalized = addRawRtpPacketNormalize(graph,
-                                                    videoInputChain.value().input,
-                                                    videoInputChain.value().packetSelect.split,
-                                                    plan.videoPlan.sourceStreamIndex,
-                                                    plan.edgePolicies);
-        if (!normalized) {
-            return ::media::Result<MediaGraph>::failure(normalized.error());
-        }
-        videoPacketSourceNode = normalized.value();
-        videoPacketSourcePort = "packet";
-    }
+    std::string videoPacketSourcePort = plan.inputType == RealtimeInputType::RtpPort ? "packet" : "video";
 
     MediaVideoBranchSegmentOptions videoOptions;
     videoOptions.prefix = "realtime.video";
@@ -330,6 +294,7 @@ bool separateRtpOutput(const MediaRealtimeRtpTranscodePlan& plan) noexcept
     videoOptions.muxNode = avStartBarrier.isValid() ? avStartBarrier : videoMux;
     videoOptions.muxCodecPort = avStartBarrier.isValid() ? "video_codec" : "codec";
     videoOptions.muxPacketPort = avStartBarrier.isValid() ? "video_packet" : "packet";
+    videoOptions.normalizePacketCopy = plan.videoPacketCopyNormalizationRequired;
     auto video = MediaVideoBranchSegmentBuilder::buildIfPlanned(graph, videoOptions);
     if (!video) {
         return ::media::Result<MediaGraph>::failure(video.error());
@@ -354,6 +319,8 @@ bool separateRtpOutput(const MediaRealtimeRtpTranscodePlan& plan) noexcept
             ? audioInputChain.packetSelect.split
             : videoInputChain.value().packetSelect.split;
         audioOptions.packetSourcePort = "audio";
+        if (isolateRawRtpAudio) audioOptions.packetSourcePort = "packet";
+        audioOptions.normalizeInputPackets = plan.audioPacketNormalizationRequired;
         audioOptions.muxNode = avStartBarrier.isValid() ? avStartBarrier : audioMux;
         audioOptions.muxCodecPort = avStartBarrier.isValid() ? "audio_codec" : "codec";
         audioOptions.muxPacketPort = avStartBarrier.isValid() ? "audio_packet" : "packet";

@@ -25,6 +25,7 @@
 #include <filesystem>
 #include <sstream>
 #include <thread>
+#include <type_traits>
 
 namespace media::ffmpeg::graph {
 
@@ -116,6 +117,11 @@ struct VideoFrameRateNodeLifecycleTestAccess {
 
 namespace {
 
+template <typename T>
+concept ExposesCodecParametersMember = requires(const T& value) {
+    value.codecParameters;
+};
+
 using media_transcode::test::TestContext;
 using media_transcode::test::makePacketBuffer;
 using namespace media::ffmpeg::graph;
@@ -151,6 +157,9 @@ std::string readSource(const char* path)
 
 void testInputStreamSnapshotOwnsDeepCopyAfterSourceRelease(TestContext& ctx)
 {
+    static_assert(!ExposesCodecParametersMember<FFmpegInputStreamSnapshot>,
+                  "input stream snapshots must not expose owned FFmpeg storage");
+
     ::media::ffmpeg::InputFormatContextPtr source(avformat_alloc_context());
     EXPECT_TRUE(ctx, source != nullptr);
     if (!source) return;
@@ -177,8 +186,8 @@ void testInputStreamSnapshotOwnsDeepCopyAfterSourceRelease(TestContext& ctx)
     EXPECT_TRUE(ctx, buffer && buffer->inputSnapshotComplete());
     if (!buffer) return;
     const auto* snapshot = buffer->inputStreamSnapshot(0);
-    EXPECT_TRUE(ctx, snapshot && snapshot->codecParameters);
-    if (!snapshot || !snapshot->codecParameters) return;
+    EXPECT_TRUE(ctx, snapshot != nullptr);
+    if (!snapshot) return;
     AVFormatContext* mutableSource = buffer->context();
     mutableSource->streams[0]->codecpar->width = 320;
     mutableSource->streams[0]->codecpar->extradata[0] = 0x7f;
@@ -186,8 +195,17 @@ void testInputStreamSnapshotOwnsDeepCopyAfterSourceRelease(TestContext& ctx)
     EXPECT_EQ(ctx, buffer->ownership(), FFmpegFormatContextOwnership::Transferred);
     EXPECT_TRUE(ctx, buffer->context() == nullptr);
     exclusiveSource.reset();
-    EXPECT_EQ(ctx, snapshot->codecParameters->width, 1920);
-    EXPECT_EQ(ctx, snapshot->codecParameters->extradata[0], static_cast<std::uint8_t>(0x11));
+    auto firstClone = snapshot->cloneCodecParameters();
+    auto secondClone = snapshot->cloneCodecParameters();
+    EXPECT_TRUE(ctx, firstClone);
+    EXPECT_TRUE(ctx, secondClone);
+    if (!firstClone || !secondClone) return;
+    EXPECT_TRUE(ctx, firstClone.value().get() != secondClone.value().get());
+    EXPECT_TRUE(ctx, firstClone.value()->extradata != secondClone.value()->extradata);
+    firstClone.value()->width = 640;
+    firstClone.value()->extradata[0] = 0x55;
+    EXPECT_EQ(ctx, secondClone.value()->width, 1920);
+    EXPECT_EQ(ctx, secondClone.value()->extradata[0], static_cast<std::uint8_t>(0x11));
     EXPECT_EQ(ctx, snapshot->format.video.size.width, 1920);
     EXPECT_EQ(ctx, snapshot->time.timeBase.den, 90000);
     EXPECT_EQ(ctx, snapshot->time.frameRate.num, 25);

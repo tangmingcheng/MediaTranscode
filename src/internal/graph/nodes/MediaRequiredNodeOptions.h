@@ -12,6 +12,10 @@ namespace media::ffmpeg::graph {
                                                 const char* nodeName,
                                                 const char* key);
 
+::media::Result<std::string> requiredPossiblyEmptyNodeOption(const MediaNodeOptions* options,
+                                                             const char* nodeName,
+                                                             const char* key);
+
 ::media::Result<int> requiredPositiveIntNodeOption(const MediaNodeOptions* options,
                                                    const char* nodeName,
                                                    const char* key);

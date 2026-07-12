@@ -1,9 +1,13 @@
 #pragma once
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
-#include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
+#include "internal/graph/protocol/rtp/MediaRtcpSenderReportTracker.h"
+#include "internal/graph/protocol/rtp/MediaRtpDepacketizer.h"
+#include "internal/graph/protocol/rtp/MediaRtpReorderBuffer.h"
+#include "internal/graph/protocol/rtp/MediaRtpUdpTransport.h"
 
-#include <filesystem>
+#include <deque>
+#include <memory>
 
 namespace media::ffmpeg::graph {
 
@@ -18,14 +22,24 @@ protected:
     void abort(MediaGraphExecutionContext& context) noexcept override;
 
 private:
-    ::media::Status openInput(MediaGraphExecutionContext& context);
-    ::media::Result<std::filesystem::path> writeSdpFile(const std::string& sdpText) const;
-    void cleanupSdpFile() noexcept;
+    ::media::Status initialize(MediaGraphExecutionContext& context);
+    ::media::Status processRtp(MediaGraphExecutionContext& context, MediaRtpUdpDatagram datagram);
+    ::media::Status processRtcp(MediaGraphExecutionContext& context, MediaRtpUdpDatagram datagram);
+    ::media::Status processReordered(MediaGraphExecutionContext& context, MediaRtpReorderResult reordered);
+    void resetState() noexcept;
 
-private:
-    ::media::ffmpeg::InputFormatContextPtr m_context;
-    std::filesystem::path m_sdpPath;
+    MediaRtpUdpTransport m_transport;
+    std::unique_ptr<MediaRtpReorderBuffer> m_reorder;
+    std::unique_ptr<MediaRtpDepacketizer> m_depacketizer;
+    std::unique_ptr<MediaRtcpSenderReportTracker> m_clockTracker;
+    MediaRtpDepacketizerConfig m_config;
+    MediaBufferRef m_streamSnapshot;
+    std::deque<MediaBufferRef> m_packets;
+    std::deque<std::pair<std::string, MediaBufferRef>> m_events;
+    bool m_initialized = false;
     bool m_formatEmitted = false;
+    bool m_requireCname = false;
+    int m_cancellableReadTimeoutMs = 0;
 };
 
 } // namespace media::ffmpeg::graph

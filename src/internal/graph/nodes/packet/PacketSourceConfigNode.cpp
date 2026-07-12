@@ -5,6 +5,7 @@
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
+#include "internal/graph/runtime/buffer/FFmpegCodecParametersBuffer.h"
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -159,10 +160,16 @@ void PacketSourceConfigNode::releaseFormatContext() noexcept
     }
 
     std::ostringstream out;
+    const auto* parametersBuffer = dynamic_cast<const FFmpegCodecParametersBuffer*>(buffer.value().get());
+    const AVCodecParameters* parameters = parametersBuffer ? parametersBuffer->parameters() : nullptr;
+    if (!parameters) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::notInitialized("PacketSourceConfigNode cloned codec parameters are unavailable"));
+    }
     out << "emit_source_config stream=" << mediaGraphDiagnosticStreamKindName(m_streamKind)
         << " index=" << m_sourceStreamIndex
         << " time_base=" << m_sourceStream->time.timeBase.num << "/" << m_sourceStream->time.timeBase.den
-        << " codec_id=" << m_sourceStream->codecParameters->codec_id;
+        << " codec_id=" << parameters->codec_id;
     packetSourceConfigLog(MediaGraphDiagnosticLevel::State, out.str());
 
     auto emitStatus = emitOutput(context, "codec", buffer.value());

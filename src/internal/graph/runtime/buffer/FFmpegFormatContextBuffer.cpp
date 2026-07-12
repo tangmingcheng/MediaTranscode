@@ -35,6 +35,17 @@ MediaTimeDescriptor snapshotTime(AVFormatContext& context, AVStream& stream)
 
 } // namespace
 
+bool FFmpegInputStreamSnapshot::codecParametersComplete() const noexcept
+{
+    return codec.complete();
+}
+
+::media::Result<::media::ffmpeg::CodecParametersPtr>
+FFmpegInputStreamSnapshot::cloneCodecParameters() const
+{
+    return codec.cloneCodecParameters();
+}
+
 FFmpegFormatContextBuffer::FFmpegFormatContextBuffer(InputTag, ::media::ffmpeg::InputFormatContextPtr context)
     : m_ownership(FFmpegFormatContextOwnership::Input)
     , m_inputContext(std::move(context))
@@ -57,6 +68,33 @@ FFmpegFormatContextBuffer::FFmpegFormatContextBuffer(InputTag, ::media::ffmpeg::
         return ::media::Result<std::unique_ptr<FFmpegFormatContextBuffer>>::failure(snapshot.error());
     }
     return ::media::Result<std::unique_ptr<FFmpegFormatContextBuffer>>::success(std::move(buffer));
+}
+
+FFmpegFormatContextBuffer::FFmpegFormatContextBuffer(
+    SnapshotTag,
+    std::vector<FFmpegInputStreamSnapshot> streams)
+    : m_ownership(FFmpegFormatContextOwnership::Snapshot)
+    , m_inputStreams(std::move(streams))
+    , m_inputSnapshotComplete(true)
+{
+    setPayloadKind(MediaPayloadKind::FormatContext);
+    setStreamKind(MediaStreamKind::Metadata);
+}
+
+::media::Result<std::unique_ptr<FFmpegFormatContextBuffer>> FFmpegFormatContextBuffer::createSnapshot(
+    std::vector<FFmpegInputStreamSnapshot> streams)
+{
+    if (streams.empty()) return ::media::Result<std::unique_ptr<FFmpegFormatContextBuffer>>::failure(
+        ::media::ErrorInfo::invalidArgument("FFmpeg input snapshot requires at least one stream"));
+    for (std::size_t index = 0; index < streams.size(); ++index) {
+        if (streams[index].index != static_cast<int>(index) || !streams[index].codecParametersComplete() ||
+            !streams[index].time.timeBase.isKnown()) {
+            return ::media::Result<std::unique_ptr<FFmpegFormatContextBuffer>>::failure(
+                ::media::ErrorInfo::invalidArgument("FFmpeg input snapshot stream is incomplete"));
+        }
+    }
+    return ::media::Result<std::unique_ptr<FFmpegFormatContextBuffer>>::success(
+        std::unique_ptr<FFmpegFormatContextBuffer>(new FFmpegFormatContextBuffer(SnapshotTag{}, std::move(streams))));
 }
 
 ::media::Status FFmpegFormatContextBuffer::buildInputSnapshot()
@@ -90,7 +128,9 @@ FFmpegFormatContextBuffer::FFmpegFormatContextBuffer(InputTag, ::media::ffmpeg::
         FFmpegInputStreamSnapshot snapshot;
         snapshot.index = static_cast<int>(index);
         snapshot.streamKind = streamKindFromCodecType(stream->codecpar->codec_type);
-        snapshot.codecParameters = std::move(parameters);
+        auto ownedSnapshot = FFmpegCodecParametersSnapshot::takeOwnership(std::move(parameters));
+        if (!ownedSnapshot) return ::media::Status::failure(ownedSnapshot.error());
+        snapshot.codec = std::move(ownedSnapshot).value();
         snapshot.format = FFmpegDescriptorMapper::fromStream(stream);
         snapshot.time = snapshotTime(*input, *stream);
         m_inputStreams.push_back(std::move(snapshot));

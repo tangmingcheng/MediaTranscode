@@ -35,6 +35,10 @@ constexpr const char* owner = "MediaAudioBranchSegmentBuilder";
     if (!options.plan.enabled || options.plan.branchMode == MediaBranchMode::Drop) {
         return ::media::Result<bool>::success(false);
     }
+    if (!options.normalizeInputPackets.has_value()) {
+        return ::media::Result<bool>::failure(
+            ::media::ErrorInfo::invalidArgument("MediaAudioBranchSegmentBuilder requires explicit input packet normalization policy"));
+    }
 
     if (auto status = validateMediaBranchEndpoints(owner, makeAudioBranchEndpointSet(options)); !status) {
         return ::media::Result<bool>::failure(status.error());
