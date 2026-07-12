@@ -23,7 +23,7 @@
 
 ---
 
-### Task 4.1: Incremental TS framing and PSI inventory
+### Task 1: Incremental TS framing and PSI inventory
 
 **Files:**
 - Create: `src/internal/graph/protocol/mpegts/MediaTsPacketParser.h`
@@ -69,7 +69,7 @@
   git commit -m "feat: parse MPEG-TS clock and program evidence"
   ```
 
-### Task 4.2: Evidence timeline, PCR tracker, and source mapper
+### Task 2: Evidence timeline, PCR tracker, and source mapper
 
 **Files:**
 - Create: `src/internal/graph/protocol/mpegts/MediaTsEvidenceTimeline.h`
@@ -117,7 +117,7 @@
   git commit -m "feat: map MPEG-TS program clocks into source time"
   ```
 
-### Task 4.3: Observed AVIO and move-only prepared input session
+### Task 3: Observed AVIO and move-only prepared input session
 
 **Files:**
 - Create: `src/internal/graph/runtime/ffmpeg/FFmpegObservedReadAvio.h`
@@ -163,7 +163,7 @@
   git commit -m "feat: own observed MPEG-TS AVIO session"
   ```
 
-### Task 4.4: Planner-owned program inventory and complete TS plan
+### Task 4: Planner-owned program inventory and complete TS plan
 
 **Files:**
 - Create: `src/internal/graph/planner/realtime/MediaTsProgramSelector.h`
@@ -213,7 +213,7 @@
   git commit -m "feat: plan MPEG-TS program clock ownership"
   ```
 
-### Task 4.5: Dedicated MPEG-TS demux node and graph wiring
+### Task 5: Dedicated MPEG-TS demux node and graph wiring
 
 **Files:**
 - Create: `src/internal/graph/nodes/demux/MpegTsDemuxNode.h`
@@ -265,7 +265,7 @@
   git commit -m "feat: demux MPEG-TS with program clock evidence"
   ```
 
-### Task 4.6: Real UDP integration, lifecycle faults, and Task 4 gate
+### Task 6: Real UDP integration, lifecycle faults, and Task 4 gate
 
 **Files:**
 - Create: `tests/unit/mpeg_ts_observed_avio_integration_tests.cpp`
