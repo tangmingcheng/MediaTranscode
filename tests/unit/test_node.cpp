@@ -16,6 +16,7 @@ extern "C" {
 #include <libavutil/error.h>
 }
 
+#include <array>
 #include <deque>
 #include <memory>
 #include <span>
@@ -83,6 +84,20 @@ std::vector<uint8_t> compoundWithSdes(uint32_t ssrc, uint32_t ntpSeconds,
     auto identity = sdes(ssrc, cname);
     bytes.insert(bytes.end(), identity.begin(), identity.end());
     return bytes;
+}
+
+std::vector<uint8_t> byeWithReason(uint32_t ssrc, const std::string& reason,
+                                   std::size_t alignmentBytes)
+{
+    std::vector<uint8_t> body;
+    appendU32(body, ssrc);
+    body.push_back(static_cast<uint8_t>(reason.size()));
+    body.insert(body.end(), reason.begin(), reason.end());
+    body.insert(body.end(), alignmentBytes, 0);
+    std::vector<uint8_t> packet{0x81, 203};
+    appendU16(packet, static_cast<uint16_t>((body.size() + 4) / 4 - 1));
+    packet.insert(packet.end(), body.begin(), body.end());
+    return packet;
 }
 
 auto parseRtcp(std::span<const uint8_t> bytes, bool requireCname)
@@ -209,6 +224,35 @@ void testRtcpCompoundParserStrictPackets(TestContext& ctx)
     auto malformedByeCompound = senderReport(sender, 2, 0, 2);
     malformedByeCompound.insert(malformedByeCompound.end(), malformedBye.begin(), malformedBye.end());
     EXPECT_FALSE(ctx, parseRtcp(malformedByeCompound, false));
+
+    const std::array<std::pair<std::string, std::size_t>, 4> alignedReasons{{
+        {"end", 0}, {"ok", 1}, {"x", 2}, {"", 3}
+    }};
+    for (const auto& [reason, alignment] : alignedReasons) {
+        auto withReason = senderReport(sender, 3, 0, 3);
+        auto byePacket = byeWithReason(sender, reason, alignment);
+        withReason.insert(withReason.end(), byePacket.begin(), byePacket.end());
+        EXPECT_TRUE(ctx, parseRtcp(withReason, false));
+    }
+    auto overlongBye = senderReport(sender, 3, 0, 3);
+    auto overlongByePacket = byeWithReason(sender, "end", 4);
+    overlongBye.insert(overlongBye.end(), overlongByePacket.begin(), overlongByePacket.end());
+    EXPECT_FALSE(ctx, parseRtcp(overlongBye, false));
+
+    auto paddedBase = compoundWithSdes(sender, 4, 4, "camera-a");
+    const std::vector<uint8_t> validFinalPadding{0xA0, 210, 0, 1, 0, 0, 0, 4};
+    auto validPaddedCompound = paddedBase;
+    validPaddedCompound.insert(validPaddedCompound.end(), validFinalPadding.begin(), validFinalPadding.end());
+    EXPECT_TRUE(ctx, parseRtcp(validPaddedCompound, true));
+    auto zeroPaddingCompound = paddedBase;
+    const std::vector<uint8_t> zeroFinalPadding{0xA0, 210, 0, 1, 0, 0, 0, 0};
+    zeroPaddingCompound.insert(zeroPaddingCompound.end(), zeroFinalPadding.begin(), zeroFinalPadding.end());
+    EXPECT_FALSE(ctx, parseRtcp(zeroPaddingCompound, true));
+    auto oversizedPaddingCompound = paddedBase;
+    const std::vector<uint8_t> oversizedFinalPadding{0xA0, 210, 0, 1, 0, 0, 0, 8};
+    oversizedPaddingCompound.insert(oversizedPaddingCompound.end(),
+                                    oversizedFinalPadding.begin(), oversizedFinalPadding.end());
+    EXPECT_FALSE(ctx, parseRtcp(oversizedPaddingCompound, true));
 }
 
 void testRtcpEvidenceRequiresSameSsrcAndExpires(TestContext& ctx)

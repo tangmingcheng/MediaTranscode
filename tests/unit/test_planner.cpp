@@ -132,6 +132,18 @@ void testRawRtpInputPlannerProducesCompleteTransportPolicy(TestContext& ctx)
     auto multicastV4 = request;
     multicastV4.input.videoRtp.url = "rtp://239.1.2.3:5004";
     EXPECT_FALSE(ctx, MediaRealtimeInputPlanner::planRawRtp(multicastV4));
+    auto zeroNetwork = request;
+    zeroNetwork.input.videoRtp.url = "rtp://0.1.2.3:5004";
+    EXPECT_FALSE(ctx, MediaRealtimeInputPlanner::planRawRtp(zeroNetwork));
+    auto reservedHigh = request;
+    reservedHigh.input.videoRtp.url = "rtp://240.0.0.1:5004";
+    EXPECT_FALSE(ctx, MediaRealtimeInputPlanner::planRawRtp(reservedHigh));
+    auto reserved255 = request;
+    reserved255.input.videoRtp.url = "rtp://255.0.0.1:5004";
+    EXPECT_FALSE(ctx, MediaRealtimeInputPlanner::planRawRtp(reserved255));
+    auto loopback = request;
+    loopback.input.videoRtp.url = "rtp://127.0.0.1:5004";
+    EXPECT_TRUE(ctx, MediaRealtimeInputPlanner::planRawRtp(loopback));
     auto multicastV6 = request;
     multicastV6.input.videoRtp.url = "rtp://[ff02::1]:5004";
     EXPECT_FALSE(ctx, MediaRealtimeInputPlanner::planRawRtp(multicastV6));

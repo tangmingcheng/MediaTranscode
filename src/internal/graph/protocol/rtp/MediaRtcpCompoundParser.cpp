@@ -112,7 +112,10 @@ PacketResult parsePacket(std::span<const uint8_t> bytes, uint8_t count, uint8_t 
             if (reasonSize > end - offset) return packetError("RTCP BYE reason is truncated");
             packet.byeReason.assign(bytes.begin() + offset, bytes.begin() + offset + reasonSize);
             offset += reasonSize;
-            if (!zeroBytes(bytes, offset, end)) return packetError("RTCP BYE alignment padding is invalid");
+            const std::size_t alignedEnd = (offset + 3) & ~std::size_t(3);
+            if (alignedEnd != end || !zeroBytes(bytes, offset, end)) {
+                return packetError("RTCP BYE alignment padding is invalid");
+            }
         }
         return PacketResult::success(std::move(packet));
     }

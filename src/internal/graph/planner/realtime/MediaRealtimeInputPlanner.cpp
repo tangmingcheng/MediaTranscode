@@ -41,7 +41,7 @@ struct NumericUnicastAddress final {
     if (!bracketed && inet_pton(AF_INET, text.c_str(), &ipv4) == 1) {
         const uint32_t value = ntohl(ipv4.s_addr);
         const uint8_t first = static_cast<uint8_t>(value >> 24);
-        if (value == 0 || value == 0xFFFFFFFFu || (first >= 224 && first <= 239)) {
+        if (first == 0 || first >= 224) {
             return ::media::Result<NumericUnicastAddress>::failure(
                 ::media::ErrorInfo::invalidArgument(owner + " requires numeric unicast address"));
         }
