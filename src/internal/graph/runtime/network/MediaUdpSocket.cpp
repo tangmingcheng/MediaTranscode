@@ -220,13 +220,31 @@ void* MediaUdpSocket::waitHandle() const noexcept
 #endif
 }
 
-void MediaUdpSocket::consumeNetworkEvent() noexcept
+::media::Status MediaUdpSocket::consumeNetworkEvent() noexcept
 {
 #ifdef _WIN32
-    if (isOpen()) {
-        WSANETWORKEVENTS events{};
-        WSAEnumNetworkEvents(m_impl->socket, m_impl->event, &events);
+    if (!isOpen()) return ::media::Status::failure(::media::ErrorInfo::notInitialized("UDP socket is closed"));
+    WSANETWORKEVENTS events{};
+    if (WSAEnumNetworkEvents(m_impl->socket, m_impl->event, &events) == SOCKET_ERROR) {
+        return ::media::Status::failure(::media::ErrorInfo::ioFailure(
+            "UDP network event query failed", WSAGetLastError()));
     }
+    if ((events.lNetworkEvents & FD_READ) != 0 && events.iErrorCode[FD_READ_BIT] != 0) {
+        return ::media::Status::failure(::media::ErrorInfo::ioFailure(
+            "UDP read event failed", events.iErrorCode[FD_READ_BIT]));
+    }
+    if ((events.lNetworkEvents & FD_CLOSE) != 0) {
+        const int error = events.iErrorCode[FD_CLOSE_BIT] != 0
+            ? events.iErrorCode[FD_CLOSE_BIT]
+            : WSAECONNRESET;
+        return ::media::Status::failure(::media::ErrorInfo::ioFailure("UDP socket close event", error));
+    }
+    if ((events.lNetworkEvents & FD_READ) == 0) {
+        return ::media::Status::failure(::media::ErrorInfo::wouldBlock("UDP event had no readable datagram"));
+    }
+    return ::media::Status::success();
+#else
+    return ::media::Status::failure(::media::ErrorInfo::unsupported("UDP events are unavailable"));
 #endif
 }
 

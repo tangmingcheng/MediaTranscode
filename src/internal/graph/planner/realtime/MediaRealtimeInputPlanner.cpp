@@ -7,6 +7,13 @@
 #include <sstream>
 #include <utility>
 
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#endif
+
 namespace media::ffmpeg::graph {
 namespace {
 
@@ -20,6 +27,40 @@ constexpr int RtpCancellableReadTimeoutMs = 2'500;
 constexpr int RtcpSenderReportTimeoutMs = 3'000;
 constexpr int RtcpCnameTimeoutMs = 5'000;
 
+struct NumericUnicastAddress final {
+    MediaIpAddressFamily family;
+    std::string text;
+};
+
+::media::Result<NumericUnicastAddress> numericUnicastAddress(
+    const std::string& host, const std::string& owner)
+{
+    const bool bracketed = host.size() >= 2 && host.front() == '[' && host.back() == ']';
+    const std::string text = bracketed ? host.substr(1, host.size() - 2) : host;
+    in_addr ipv4{};
+    if (!bracketed && inet_pton(AF_INET, text.c_str(), &ipv4) == 1) {
+        const uint32_t value = ntohl(ipv4.s_addr);
+        const uint8_t first = static_cast<uint8_t>(value >> 24);
+        if (value == 0 || value == 0xFFFFFFFFu || (first >= 224 && first <= 239)) {
+            return ::media::Result<NumericUnicastAddress>::failure(
+                ::media::ErrorInfo::invalidArgument(owner + " requires numeric unicast address"));
+        }
+        return ::media::Result<NumericUnicastAddress>::success(
+            NumericUnicastAddress{MediaIpAddressFamily::Ipv4, text});
+    }
+    in6_addr ipv6{};
+    if (bracketed && inet_pton(AF_INET6, text.c_str(), &ipv6) == 1) {
+        if (IN6_IS_ADDR_MULTICAST(&ipv6) || IN6_IS_ADDR_UNSPECIFIED(&ipv6)) {
+            return ::media::Result<NumericUnicastAddress>::failure(
+                ::media::ErrorInfo::invalidArgument(owner + " requires numeric unicast address"));
+        }
+        return ::media::Result<NumericUnicastAddress>::success(
+            NumericUnicastAddress{MediaIpAddressFamily::Ipv6, text});
+    }
+    return ::media::Result<NumericUnicastAddress>::failure(
+        ::media::ErrorInfo::invalidArgument(owner + " requires numeric IPv4 or bracketed IPv6 unicast address"));
+}
+
 ::media::Result<MediaRtpUrlEndpoint> endpoint(
     const MediaRealtimeRtpInputMetadata& metadata,
     const std::string& owner)
@@ -31,6 +72,9 @@ constexpr int RtcpCnameTimeoutMs = 5'000;
         return ::media::Result<MediaRtpUrlEndpoint>::failure(
             ::media::ErrorInfo::invalidArgument(owner + " port must be an even port in range 1..65534"));
     }
+    auto address = numericUnicastAddress(parsed.value().host, owner);
+    if (!address) return ::media::Result<MediaRtpUrlEndpoint>::failure(address.error());
+    parsed.value().host = std::move(address.value().text);
     return parsed;
 }
 
@@ -40,7 +84,7 @@ MediaRealtimeRtpTransportPlan transportPlan(
     const MediaRealtimeRtpCodecDescriptor& descriptor,
     int cancellableReadTimeoutMs)
 {
-    const bool ipv6 = endpoint.host.size() >= 2 && endpoint.host.front() == '[' && endpoint.host.back() == ']';
+    const bool ipv6 = endpoint.host.find(':') != std::string::npos;
     return MediaRealtimeRtpTransportPlan{
         ipv6 ? MediaIpAddressFamily::Ipv6 : MediaIpAddressFamily::Ipv4,
         endpoint.host,
@@ -56,7 +100,8 @@ MediaRealtimeRtpTransportPlan transportPlan(
         true,
         true,
         RtcpSenderReportTimeoutMs,
-        RtcpCnameTimeoutMs
+        RtcpCnameTimeoutMs,
+        MediaRtcpCompositionMode::StrictCompoundRfc3550
     };
 }
 
@@ -73,7 +118,8 @@ std::string sdp(
         << "t=0 0\r\n";
     const char* mediaName = descriptor.streamKind == MediaStreamKind::Audio ? "audio" : "video";
     out << "m=" << mediaName << " " << endpoint.port << " RTP/AVP " << *metadata.payloadType << "\r\n"
-        << "c=IN IP4 " << endpoint.host << "\r\n"
+        << "c=IN " << (endpoint.host.find(':') != std::string::npos ? "IP6 " : "IP4 ")
+        << endpoint.host << "\r\n"
         << "a=rtpmap:" << *metadata.payloadType << " " << descriptor.rtpEncodingName << "/"
         << descriptor.clockRate;
     if (descriptor.channels > 0) out << "/" << descriptor.channels;

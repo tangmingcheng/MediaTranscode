@@ -43,9 +43,9 @@ public:
     static ::media::Result<MediaRtpUdpTransport> open(const MediaRtpUdpTransportConfig& config);
 
     ::media::Result<MediaRtpUdpDatagram> receive();
-    void stop() noexcept;
+    ::media::Status stop() noexcept;
     ::media::Status reset() noexcept;
-    void abort() noexcept;
+    ::media::Status abort() noexcept;
     void close() noexcept;
     bool isOpen() const noexcept;
     uint16_t rtpPort() const noexcept;

@@ -45,7 +45,7 @@ PacketResult parsePacket(std::span<const uint8_t> bytes, uint8_t count, uint8_t 
 {
     const std::size_t end = bytes.size() - paddingSize;
     MediaRtcpPacket packet{MediaRtcpPacketKind::Unknown, packetType, count, paddingSize,
-                           std::nullopt, {}, {}, {}};
+                           std::nullopt, std::nullopt, {}, {}, {}};
     if (packetType == 200) {
         const std::size_t reportBytes = static_cast<std::size_t>(count) * 24;
         if (end != 28 + reportBytes) return packetError("RTCP sender report length is invalid");
@@ -54,6 +54,13 @@ PacketResult parsePacket(std::span<const uint8_t> bytes, uint8_t count, uint8_t 
             readU32(bytes, 4),
             MediaRtcpNtpTimestamp{readU32(bytes, 8), readU32(bytes, 12)},
             readU32(bytes, 16), readU32(bytes, 20), readU32(bytes, 24)};
+        return PacketResult::success(std::move(packet));
+    }
+    if (packetType == 201) {
+        const std::size_t reportBytes = static_cast<std::size_t>(count) * 24;
+        if (end != 8 + reportBytes) return packetError("RTCP receiver report length is invalid");
+        packet.kind = MediaRtcpPacketKind::ReceiverReport;
+        packet.receiverReportSsrc = readU32(bytes, 4);
         return PacketResult::success(std::move(packet));
     }
     if (packetType == 202) {
@@ -115,8 +122,11 @@ PacketResult parsePacket(std::span<const uint8_t> bytes, uint8_t count, uint8_t 
 } // namespace
 
 ::media::Result<std::vector<MediaRtcpPacket>> MediaRtcpCompoundParser::parse(
-    std::span<const uint8_t> datagram)
+    std::span<const uint8_t> datagram, const MediaRtcpCompoundPolicy& policy)
 {
+    if (policy.mode != MediaRtcpCompositionMode::StrictCompoundRfc3550) {
+        return compoundError("Unsupported RTCP composition mode");
+    }
     if (datagram.empty()) return compoundError("RTCP compound datagram is empty");
     std::vector<MediaRtcpPacket> packets;
     std::size_t offset = 0;
@@ -148,6 +158,25 @@ PacketResult parsePacket(std::span<const uint8_t> bytes, uint8_t count, uint8_t 
         if (!packet) return CompoundResult::failure(packet.error());
         packets.push_back(std::move(packet.value()));
         offset += packetSize;
+    }
+    if (packets.front().kind != MediaRtcpPacketKind::SenderReport &&
+        packets.front().kind != MediaRtcpPacketKind::ReceiverReport) {
+        return compoundError("Strict RTCP compound packet must begin with SR or RR");
+    }
+    if (policy.requireCname) {
+        const uint32_t source = packets.front().kind == MediaRtcpPacketKind::SenderReport
+            ? packets.front().senderReport->ssrc
+            : *packets.front().receiverReportSsrc;
+        bool matchingCname = false;
+        for (const MediaRtcpPacket& packet : packets) {
+            for (const MediaRtcpSdesChunk& chunk : packet.sdesChunks) {
+                if (chunk.ssrc != source) continue;
+                for (const MediaRtcpSdesItem& item : chunk.items) {
+                    if (item.type == 1 && !item.value.empty()) matchingCname = true;
+                }
+            }
+        }
+        if (!matchingCname) return compoundError("Strict RTCP compound packet requires matching non-empty CNAME");
     }
     return CompoundResult::success(std::move(packets));
 }

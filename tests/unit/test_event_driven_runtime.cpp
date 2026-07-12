@@ -5,17 +5,36 @@
 #include "internal/graph/runtime/network/MediaUdpSocket.h"
 
 #include <array>
+#include <chrono>
 #include <future>
 #include <iostream>
 #include <span>
+#include <thread>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace {
 
 using namespace media::ffmpeg::graph;
 using media_transcode::test::TestContext;
 
+#ifdef _WIN32
+uint64_t fileTimeTicks(const FILETIME& value)
+{
+    return (static_cast<uint64_t>(value.dwHighDateTime) << 32) | value.dwLowDateTime;
+}
+#endif
+
 void testUdpSocketLifecycleAndBindFailure(TestContext& ctx)
 {
+#ifndef _WIN32
+    const auto unsupportedRuntime = MediaSocketRuntime::create();
+    EXPECT_FALSE(ctx, unsupportedRuntime);
+    if (!unsupportedRuntime) EXPECT_EQ(ctx, unsupportedRuntime.error().code, media::ErrorCode::Unsupported);
+    return;
+#endif
     auto runtime = MediaSocketRuntime::create();
     EXPECT_TRUE(ctx, runtime);
     if (!runtime) return;
@@ -85,22 +104,85 @@ void testRtpUdpTransportReceivesBothChannelsAndCancels(TestContext& ctx)
                          (second.value().channel == MediaRtpUdpChannel::Rtp && second.value().bytes == std::vector<uint8_t>(rtp.begin(), rtp.end())));
     }
 
-    auto blockedReceive = std::async(std::launch::async, [&transport] {
-        return transport.value().receive();
+    EXPECT_FALSE(ctx, transport.value().reset());
+    std::promise<void> entered;
+    std::promise<::media::Result<MediaRtpUdpDatagram>> receivePromise;
+    auto blockedReceive = receivePromise.get_future();
+    std::thread receiveThread([&] {
+        entered.set_value();
+        receivePromise.set_value(transport.value().receive());
     });
-    transport.value().stop();
+    entered.get_future().wait();
+    EXPECT_EQ(ctx, blockedReceive.wait_for(std::chrono::milliseconds(25)), std::future_status::timeout);
+#ifdef _WIN32
+    FILETIME creation{}, exit{}, kernelBefore{}, userBefore{};
+    FILETIME kernelAfter{}, userAfter{};
+    EXPECT_TRUE(ctx, GetThreadTimes(receiveThread.native_handle(), &creation, &exit,
+                                    &kernelBefore, &userBefore) != 0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(75));
+    EXPECT_TRUE(ctx, GetThreadTimes(receiveThread.native_handle(), &creation, &exit,
+                                    &kernelAfter, &userAfter) != 0);
+    const uint64_t cpuTicks = fileTimeTicks(kernelAfter) + fileTimeTicks(userAfter) -
+                              fileTimeTicks(kernelBefore) - fileTimeTicks(userBefore);
+    EXPECT_TRUE(ctx, cpuTicks < 50'000); // less than 5 ms CPU while blocked
+#endif
+    const auto stopStarted = std::chrono::steady_clock::now();
+    EXPECT_TRUE(ctx, transport.value().stop());
+    EXPECT_FALSE(ctx, transport.value().reset());
+    EXPECT_EQ(ctx, blockedReceive.wait_for(std::chrono::seconds(1)), std::future_status::ready);
     const auto cancelled = blockedReceive.get();
+    receiveThread.join();
+    EXPECT_TRUE(ctx, std::chrono::steady_clock::now() - stopStarted < std::chrono::seconds(1));
     EXPECT_FALSE(ctx, cancelled);
     if (!cancelled) EXPECT_EQ(ctx, cancelled.error().code, media::ErrorCode::Cancelled);
     EXPECT_TRUE(ctx, transport.value().reset());
+
     EXPECT_TRUE(ctx, sender.value().sendTo("127.0.0.1", transport.value().rtpPort(), rtp));
-    const auto afterReset = transport.value().receive();
+    EXPECT_TRUE(ctx, transport.value().stop());
+    const auto cancelledOverReadyNetwork = transport.value().receive();
+    EXPECT_FALSE(ctx, cancelledOverReadyNetwork);
+    if (!cancelledOverReadyNetwork) {
+        EXPECT_EQ(ctx, cancelledOverReadyNetwork.error().code, media::ErrorCode::Cancelled);
+    }
+    EXPECT_TRUE(ctx, transport.value().reset());
+    EXPECT_TRUE(ctx, transport.value().receive());
+
+    std::promise<void> sparseEntered;
+    auto sparseReceive = std::async(std::launch::async, [&] {
+        sparseEntered.set_value();
+        return transport.value().receive();
+    });
+    sparseEntered.get_future().wait();
+    EXPECT_EQ(ctx, sparseReceive.wait_for(std::chrono::milliseconds(25)), std::future_status::timeout);
+    EXPECT_TRUE(ctx, sender.value().sendTo("127.0.0.1", transport.value().rtpPort(), rtp));
+    const auto afterReset = sparseReceive.get();
     EXPECT_TRUE(ctx, afterReset);
 
-    transport.value().abort();
-    const auto aborted = transport.value().receive();
-    EXPECT_FALSE(ctx, aborted);
+    auto replacementTransport = MediaRtpUdpTransport::open(MediaRtpUdpTransportConfig{
+        MediaIpAddressFamily::Ipv4, "127.0.0.1", 41'000, 41'001, 262144, 2048, 5'000});
+    EXPECT_TRUE(ctx, replacementTransport);
+    if (replacementTransport) {
+        const uint16_t replacedRtpPort = replacementTransport.value().rtpPort();
+        replacementTransport.value() = std::move(transport.value());
+        auto reboundTransport = MediaRtpUdpTransport::open(MediaRtpUdpTransportConfig{
+            MediaIpAddressFamily::Ipv4, "127.0.0.1", replacedRtpPort,
+            static_cast<uint16_t>(replacedRtpPort + 1), 262144, 2048, 5'000});
+        EXPECT_TRUE(ctx, reboundTransport);
+        transport.value() = std::move(replacementTransport.value());
+    }
+
+    std::promise<void> closeEntered;
+    auto closeReceive = std::async(std::launch::async, [&] {
+        closeEntered.set_value();
+        return transport.value().receive();
+    });
+    closeEntered.get_future().wait();
+    EXPECT_EQ(ctx, closeReceive.wait_for(std::chrono::milliseconds(25)), std::future_status::timeout);
+    EXPECT_TRUE(ctx, transport.value().stop());
     transport.value().close();
+    const auto closedReceive = closeReceive.get();
+    EXPECT_FALSE(ctx, closedReceive);
+    if (!closedReceive) EXPECT_EQ(ctx, closedReceive.error().code, media::ErrorCode::Cancelled);
     EXPECT_FALSE(ctx, transport.value().isOpen());
 }
 

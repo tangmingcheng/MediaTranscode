@@ -31,7 +31,6 @@ void MediaRtcpSenderReportTracker::observeMedia(uint32_t ssrc, int64_t observedA
 {
     if (m_mediaSsrc && *m_mediaSsrc != ssrc) {
         invalidate();
-        m_lastAcceptedNtp.reset();
     } else if (!m_mediaSsrc && m_senderReport && m_senderReport->ssrc != ssrc) {
         m_senderReport.reset();
         m_lastAcceptedNtp.reset();
@@ -103,7 +102,6 @@ uint64_t MediaRtcpSenderReportTracker::generation() const noexcept
 void MediaRtcpSenderReportTracker::reset() noexcept
 {
     invalidate();
-    m_lastAcceptedNtp.reset();
 }
 
 void MediaRtcpSenderReportTracker::invalidate() noexcept
@@ -112,6 +110,7 @@ void MediaRtcpSenderReportTracker::invalidate() noexcept
     m_mediaSsrc.reset();
     m_senderReport.reset();
     m_cname.clear();
+    m_lastAcceptedNtp.reset();
     m_senderReportObservedAtNs = 0;
     m_cnameObservedAtNs = 0;
 }

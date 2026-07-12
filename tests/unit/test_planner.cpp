@@ -117,6 +117,30 @@ void testRawRtpInputPlannerProducesCompleteTransportPolicy(TestContext& ctx)
     EXPECT_TRUE(ctx, transport.requireCname);
     EXPECT_EQ(ctx, transport.senderReportTimeoutMs, 3'000);
     EXPECT_EQ(ctx, transport.cnameTimeoutMs, 5'000);
+    EXPECT_EQ(ctx, transport.rtcpCompositionMode, MediaRtcpCompositionMode::StrictCompoundRfc3550);
+
+    auto ipv6Request = request;
+    ipv6Request.input.videoRtp.url = "rtp://[::1]:5004";
+    const auto ipv6Raw = MediaRealtimeInputPlanner::planRawRtp(ipv6Request);
+    EXPECT_TRUE(ctx, ipv6Raw);
+    if (ipv6Raw) {
+        EXPECT_EQ(ctx, ipv6Raw.value().videoTransport.addressFamily, MediaIpAddressFamily::Ipv6);
+        EXPECT_EQ(ctx, ipv6Raw.value().videoTransport.bindAddress, std::string("::1"));
+        EXPECT_TRUE(ctx, ipv6Raw.value().videoSdp.find("c=IN IP6 ::1") != std::string::npos);
+    }
+
+    auto multicastV4 = request;
+    multicastV4.input.videoRtp.url = "rtp://239.1.2.3:5004";
+    EXPECT_FALSE(ctx, MediaRealtimeInputPlanner::planRawRtp(multicastV4));
+    auto multicastV6 = request;
+    multicastV6.input.videoRtp.url = "rtp://[ff02::1]:5004";
+    EXPECT_FALSE(ctx, MediaRealtimeInputPlanner::planRawRtp(multicastV6));
+    auto hostname = request;
+    hostname.input.videoRtp.url = "rtp://localhost:5004";
+    EXPECT_FALSE(ctx, MediaRealtimeInputPlanner::planRawRtp(hostname));
+    auto familyMismatch = request;
+    familyMismatch.input.videoRtp.url = "rtp://[127.0.0.1]:5004";
+    EXPECT_FALSE(ctx, MediaRealtimeInputPlanner::planRawRtp(familyMismatch));
 }
 
 void testAvSyncPlannerBuildsCompleteTsContract(TestContext& ctx)

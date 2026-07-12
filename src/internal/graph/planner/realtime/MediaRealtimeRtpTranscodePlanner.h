@@ -9,6 +9,7 @@
 #include "internal/graph/planner/avsync/MediaAvSyncPlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodeRequest.h"
 #include "internal/graph/planner/realtime/MediaPreparedRealtimeInput.h"
+#include "internal/graph/protocol/rtp/MediaRtcpCompositionPolicy.h"
 #include "media_transcode/Result.h"
 
 #include <string>
@@ -34,6 +35,7 @@ struct MediaRealtimeRtpTransportPlan final {
     bool requireCname;
     int senderReportTimeoutMs;
     int cnameTimeoutMs;
+    MediaRtcpCompositionMode rtcpCompositionMode;
 };
 
 struct MediaRealtimeRtpInputNodePlan {

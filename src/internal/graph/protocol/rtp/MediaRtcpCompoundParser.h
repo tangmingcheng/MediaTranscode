@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/protocol/rtp/MediaRtcpClockEvidence.h"
+#include "internal/graph/protocol/rtp/MediaRtcpCompositionPolicy.h"
 #include "media_transcode/Result.h"
 
 #include <cstdint>
@@ -13,6 +14,7 @@ namespace media::ffmpeg::graph {
 
 enum class MediaRtcpPacketKind {
     SenderReport,
+    ReceiverReport,
     SourceDescription,
     Bye,
     Unknown
@@ -42,6 +44,7 @@ struct MediaRtcpPacket final {
     uint8_t count;
     uint8_t paddingSize;
     std::optional<MediaRtcpSenderReport> senderReport;
+    std::optional<uint32_t> receiverReportSsrc;
     std::vector<MediaRtcpSdesChunk> sdesChunks;
     std::vector<uint32_t> byeSources;
     std::vector<uint8_t> byeReason;
@@ -49,7 +52,8 @@ struct MediaRtcpPacket final {
 
 class MediaRtcpCompoundParser final {
 public:
-    static ::media::Result<std::vector<MediaRtcpPacket>> parse(std::span<const uint8_t> datagram);
+    static ::media::Result<std::vector<MediaRtcpPacket>> parse(
+        std::span<const uint8_t> datagram, const MediaRtcpCompoundPolicy& policy);
 
 private:
     MediaRtcpCompoundParser() = delete;

@@ -44,7 +44,7 @@ private:
     explicit MediaUdpSocket(std::unique_ptr<Impl> impl) noexcept;
     ::media::Result<std::vector<uint8_t>> receive(std::size_t maximumDatagramBytes);
     void* waitHandle() const noexcept;
-    void consumeNetworkEvent() noexcept;
+    ::media::Status consumeNetworkEvent() noexcept;
 
     friend class MediaRtpUdpTransport;
     std::unique_ptr<Impl> m_impl;

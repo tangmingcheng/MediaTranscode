@@ -76,6 +76,21 @@ std::vector<uint8_t> sdes(uint32_t firstSsrc, const std::string& firstCname,
     return bytes;
 }
 
+std::vector<uint8_t> compoundWithSdes(uint32_t ssrc, uint32_t ntpSeconds,
+                                      uint32_t rtpTimestamp, const std::string& cname)
+{
+    auto bytes = senderReport(ssrc, ntpSeconds, 0, rtpTimestamp);
+    auto identity = sdes(ssrc, cname);
+    bytes.insert(bytes.end(), identity.begin(), identity.end());
+    return bytes;
+}
+
+auto parseRtcp(std::span<const uint8_t> bytes, bool requireCname)
+{
+    return MediaRtcpCompoundParser::parse(bytes, MediaRtcpCompoundPolicy{
+        MediaRtcpCompositionMode::StrictCompoundRfc3550, requireCname});
+}
+
 void testRtpPacketParserStrictHeader(TestContext& ctx)
 {
     const std::vector<uint8_t> bytes{
@@ -130,7 +145,7 @@ void testRtcpCompoundParserStrictPackets(TestContext& ctx)
                                    0x00, 0x00, 0x00, 0x04};
     compound.insert(compound.end(), bye.begin(), bye.end());
 
-    const auto parsed = MediaRtcpCompoundParser::parse(compound);
+    const auto parsed = parseRtcp(compound, true);
     EXPECT_TRUE(ctx, parsed);
     if (!parsed) return;
     EXPECT_EQ(ctx, parsed.value().size(), static_cast<std::size_t>(4));
@@ -151,19 +166,49 @@ void testRtcpCompoundParserStrictPackets(TestContext& ctx)
 
     auto invalidVersion = compound;
     invalidVersion[0] = 0x40;
-    EXPECT_FALSE(ctx, MediaRtcpCompoundParser::parse(invalidVersion));
+    EXPECT_FALSE(ctx, parseRtcp(invalidVersion, true));
     auto invalidLength = compound;
     invalidLength[2] = 0x7F;
     invalidLength[3] = 0xFF;
-    EXPECT_FALSE(ctx, MediaRtcpCompoundParser::parse(invalidLength));
-    EXPECT_FALSE(ctx, MediaRtcpCompoundParser::parse(
-        std::span<const uint8_t>(compound.data(), compound.size() - 1)));
+    EXPECT_FALSE(ctx, parseRtcp(invalidLength, true));
+    EXPECT_FALSE(ctx, parseRtcp(
+        std::span<const uint8_t>(compound.data(), compound.size() - 1), true));
     auto invalidNonFinalPadding = compound;
     invalidNonFinalPadding[0] |= 0x20;
-    EXPECT_FALSE(ctx, MediaRtcpCompoundParser::parse(invalidNonFinalPadding));
+    EXPECT_FALSE(ctx, parseRtcp(invalidNonFinalPadding, true));
     auto invalidSdes = descriptions;
     invalidSdes[9] = 0x7F;
-    EXPECT_FALSE(ctx, MediaRtcpCompoundParser::parse(invalidSdes));
+    EXPECT_FALSE(ctx, parseRtcp(invalidSdes, true));
+
+    EXPECT_FALSE(ctx, parseRtcp(descriptions, true));
+    EXPECT_FALSE(ctx, parseRtcp(std::vector<uint8_t>{0x81, 203, 0, 1, 0, 0, 0, 7}, true));
+    EXPECT_FALSE(ctx, parseRtcp(unknown, true));
+    EXPECT_FALSE(ctx, parseRtcp(senderReport(sender, 1, 0, 1), true));
+    auto emptyIdentity = senderReport(sender, 1, 0, 1);
+    auto emptySdes = sdes(sender, "");
+    emptyIdentity.insert(emptyIdentity.end(), emptySdes.begin(), emptySdes.end());
+    EXPECT_FALSE(ctx, parseRtcp(emptyIdentity, true));
+
+    std::vector<uint8_t> rr{0x80, 201, 0, 1};
+    appendU32(rr, sender);
+    rr.insert(rr.end(), descriptions.begin(), descriptions.end());
+    EXPECT_TRUE(ctx, parseRtcp(rr, true));
+
+    std::vector<uint8_t> byeReason{0x81, 203, 0, 2};
+    appendU32(byeReason, sender);
+    byeReason.insert(byeReason.end(), {3, 'e', 'n', 'd'});
+    auto compoundBye = senderReport(sender, 2, 0, 2);
+    compoundBye.insert(compoundBye.end(), byeReason.begin(), byeReason.end());
+    const auto parsedBye = parseRtcp(compoundBye, false);
+    EXPECT_TRUE(ctx, parsedBye);
+    if (parsedBye) EXPECT_EQ(ctx, parsedBye.value().back().byeReason,
+                             std::vector<uint8_t>({'e', 'n', 'd'}));
+    std::vector<uint8_t> malformedBye{0x81, 203, 0, 2};
+    appendU32(malformedBye, sender);
+    malformedBye.insert(malformedBye.end(), {2, 'o', 'k', 1});
+    auto malformedByeCompound = senderReport(sender, 2, 0, 2);
+    malformedByeCompound.insert(malformedByeCompound.end(), malformedBye.begin(), malformedBye.end());
+    EXPECT_FALSE(ctx, parseRtcp(malformedByeCompound, false));
 }
 
 void testRtcpEvidenceRequiresSameSsrcAndExpires(TestContext& ctx)
@@ -171,8 +216,8 @@ void testRtcpEvidenceRequiresSameSsrcAndExpires(TestContext& ctx)
     const MediaRtcpSenderReportTrackerConfig config{true, true, 1'000, 2'000};
     MediaRtcpSenderReportTracker tracker(config);
     tracker.observeMedia(0x11111111, 100);
-    auto report = MediaRtcpCompoundParser::parse(senderReport(0x11111111, 10, 20, 30));
-    auto identity = MediaRtcpCompoundParser::parse(sdes(0x11111111, "camera"));
+    auto report = parseRtcp(senderReport(0x11111111, 10, 0, 30), false);
+    auto identity = parseRtcp(compoundWithSdes(0x11111111, 10, 30, "camera"), true);
     EXPECT_TRUE(ctx, report);
     EXPECT_TRUE(ctx, identity);
     if (!report || !identity) return;
@@ -185,15 +230,15 @@ void testRtcpEvidenceRequiresSameSsrcAndExpires(TestContext& ctx)
         EXPECT_EQ(ctx, ready.value().ssrc, static_cast<uint32_t>(0x11111111));
         EXPECT_EQ(ctx, ready.value().cname, std::vector<uint8_t>({'c','a','m','e','r','a'}));
     }
-    EXPECT_FALSE(ctx, tracker.evidence(1'201));
+    EXPECT_FALSE(ctx, tracker.evidence(1'301));
 
     MediaRtcpSenderReportTracker mismatch(config);
     mismatch.observeMedia(0x11111111, 100);
-    auto otherReport = MediaRtcpCompoundParser::parse(senderReport(0x22222222, 10, 20, 30));
+    auto otherReport = parseRtcp(senderReport(0x22222222, 10, 0, 30), false);
     EXPECT_TRUE(ctx, otherReport);
     if (otherReport) EXPECT_TRUE(ctx, mismatch.observe(otherReport.value(), 200));
     EXPECT_FALSE(ctx, mismatch.evidence(200));
-    auto matchingOlderReport = MediaRtcpCompoundParser::parse(senderReport(0x11111111, 9, 20, 30));
+    auto matchingOlderReport = parseRtcp(senderReport(0x11111111, 9, 0, 30), false);
     EXPECT_TRUE(ctx, matchingOlderReport);
     if (matchingOlderReport) EXPECT_TRUE(ctx, mismatch.observe(matchingOlderReport.value(), 210));
 }
@@ -203,8 +248,8 @@ void testRtcpEvidenceRejectsIdentityAndClockDiscontinuities(TestContext& ctx)
     const MediaRtcpSenderReportTrackerConfig config{true, true, 10'000, 10'000};
     MediaRtcpSenderReportTracker tracker(config);
     tracker.observeMedia(7, 10);
-    auto initialSr = MediaRtcpCompoundParser::parse(senderReport(7, 100, 0, 1000));
-    auto initialCname = MediaRtcpCompoundParser::parse(sdes(7, "source-a"));
+    auto initialSr = parseRtcp(senderReport(7, 100, 0, 1000), false);
+    auto initialCname = parseRtcp(compoundWithSdes(7, 100, 1000, "source-a"), true);
     EXPECT_TRUE(ctx, initialSr && initialCname);
     if (!initialSr || !initialCname) return;
     EXPECT_TRUE(ctx, tracker.observe(initialSr.value(), 20));
@@ -212,28 +257,52 @@ void testRtcpEvidenceRejectsIdentityAndClockDiscontinuities(TestContext& ctx)
     EXPECT_TRUE(ctx, tracker.evidence(20));
     const uint64_t generation = tracker.generation();
 
-    auto regressed = MediaRtcpCompoundParser::parse(senderReport(7, 99, 0, 2000));
+    auto regressed = parseRtcp(senderReport(7, 99, 0, 2000), false);
     EXPECT_TRUE(ctx, regressed);
     if (regressed) EXPECT_FALSE(ctx, tracker.observe(regressed.value(), 30));
     EXPECT_TRUE(ctx, tracker.generation() > generation);
     EXPECT_FALSE(ctx, tracker.evidence(30));
 
     tracker.observeMedia(7, 40);
-    EXPECT_TRUE(ctx, tracker.observe(initialSr.value(), 40));
-    EXPECT_TRUE(ctx, tracker.observe(initialCname.value(), 40));
-    auto changed = MediaRtcpCompoundParser::parse(sdes(7, "source-b"));
+    auto reacquired = parseRtcp(compoundWithSdes(7, 50, 500, "source-a"), true);
+    EXPECT_TRUE(ctx, reacquired);
+    if (reacquired) EXPECT_TRUE(ctx, tracker.observe(reacquired.value(), 40));
+    EXPECT_TRUE(ctx, tracker.evidence(40));
+    auto changed = parseRtcp(compoundWithSdes(7, 50, 500, "source-b"), true);
     EXPECT_TRUE(ctx, changed);
     if (changed) EXPECT_FALSE(ctx, tracker.observe(changed.value(), 50));
     EXPECT_FALSE(ctx, tracker.evidence(50));
 
     tracker.observeMedia(7, 60);
-    EXPECT_TRUE(ctx, tracker.observe(initialSr.value(), 60));
-    EXPECT_TRUE(ctx, tracker.observe(initialCname.value(), 60));
+    auto afterIdentityChange = parseRtcp(compoundWithSdes(7, 10, 100, "source-a"), true);
+    EXPECT_TRUE(ctx, afterIdentityChange);
+    if (afterIdentityChange) EXPECT_TRUE(ctx, tracker.observe(afterIdentityChange.value(), 60));
     const std::vector<uint8_t> byeBytes{0x81, 203, 0x00, 0x01, 0, 0, 0, 7};
-    auto bye = MediaRtcpCompoundParser::parse(byeBytes);
+    auto byeCompound = senderReport(7, 100, 0, 1000);
+    byeCompound.insert(byeCompound.end(), byeBytes.begin(), byeBytes.end());
+    auto bye = parseRtcp(byeCompound, false);
     EXPECT_TRUE(ctx, bye);
     if (bye) EXPECT_FALSE(ctx, tracker.observe(bye.value(), 70));
     EXPECT_FALSE(ctx, tracker.evidence(70));
+
+    MediaRtcpSenderReportTracker sameInstant(config);
+    sameInstant.observeMedia(9, 1);
+    auto firstInstant = parseRtcp(senderReport(9, 5, 6, 100), false);
+    auto changedRtp = parseRtcp(senderReport(9, 5, 6, 101), false);
+    EXPECT_TRUE(ctx, firstInstant && changedRtp);
+    if (firstInstant) EXPECT_TRUE(ctx, sameInstant.observe(firstInstant.value(), 2));
+    if (changedRtp) EXPECT_FALSE(ctx, sameInstant.observe(changedRtp.value(), 3));
+
+    MediaRtcpSenderReportTracker changedSsrc(config);
+    changedSsrc.observeMedia(10, 1);
+    auto oldSource = parseRtcp(compoundWithSdes(10, 100, 1000, "old"), true);
+    EXPECT_TRUE(ctx, oldSource);
+    if (oldSource) EXPECT_TRUE(ctx, changedSsrc.observe(oldSource.value(), 2));
+    changedSsrc.observeMedia(11, 3);
+    auto newSource = parseRtcp(compoundWithSdes(11, 1, 10, "new"), true);
+    EXPECT_TRUE(ctx, newSource);
+    if (newSource) EXPECT_TRUE(ctx, changedSsrc.observe(newSource.value(), 4));
+    EXPECT_TRUE(ctx, changedSsrc.evidence(4));
 }
 
 class ScriptedAudioEncoderCodecApi final : public AudioEncoderCodecApi {
