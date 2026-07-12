@@ -32,6 +32,7 @@
 - Create: `src/internal/graph/protocol/mpegts/MediaTsPsiSectionAssembler.cpp`
 - Create: `src/internal/graph/protocol/mpegts/MediaTsProgramInventory.h`
 - Create: `tests/unit/mpeg_ts_packet_tests.cpp`
+- Modify: `tests/unit/test_node.cpp`
 - Modify: `CMakeLists.txt`
 
 **Interfaces:**

@@ -1,5 +1,6 @@
 #include "internal/graph/protocol/mpegts/MediaTsPacketParser.h"
 
+#include <algorithm>
 #include <limits>
 
 namespace media::ffmpeg::graph {
@@ -35,65 +36,113 @@ MediaTsPacketParser::MediaTsPacketParser(MediaTsPacketSink& sink)
         return invalidPacket("MPEG-TS absolute input offset overflow");
     }
 
-    if (bufferedSize() == 0) {
-        m_buffer.clear();
-        m_bufferBegin = 0;
-        m_bufferOffset = m_nextInputOffset;
-    }
-    m_buffer.insert(m_buffer.end(), bytes.begin(), bytes.end());
-    m_nextInputOffset += bytes.size();
-    return processBufferedBytes();
-}
-
-std::size_t MediaTsPacketParser::bufferedSize() const noexcept
-{
-    return m_buffer.size() - m_bufferBegin;
-}
-
-void MediaTsPacketParser::consumeBufferedBytes(std::size_t count)
-{
-    m_bufferBegin += count;
-    m_bufferOffset += count;
-    if (m_bufferBegin >= 4096 && m_bufferBegin * 2 >= m_buffer.size()) {
-        m_buffer.erase(m_buffer.begin(), m_buffer.begin() + m_bufferBegin);
-        m_bufferBegin = 0;
-    }
-}
-
-::media::Status MediaTsPacketParser::processBufferedBytes()
-{
     constexpr std::size_t PacketSize = 188;
+    const uint64_t inputOffset = m_nextInputOffset;
+    m_nextInputOffset += bytes.size();
+    std::size_t inputIndex = 0;
+
+    auto logicalByte = [&](std::size_t index) -> uint8_t {
+        return index < m_carrySize
+            ? m_carry[index]
+            : bytes[inputIndex + index - m_carrySize];
+    };
+    auto discardLogicalPrefix = [&](std::size_t count) {
+        if (count < m_carrySize) {
+            std::move(m_carry.begin() + count, m_carry.begin() + m_carrySize, m_carry.begin());
+            m_carrySize -= count;
+            m_carryOffset += count;
+            return;
+        }
+        inputIndex += count - m_carrySize;
+        m_carrySize = 0;
+    };
+    auto retainLogicalTail = [&]() {
+        const std::size_t total = m_carrySize + bytes.size() - inputIndex;
+        const std::size_t keep = std::min(PacketSize, total);
+        std::array<uint8_t, PacketSize> retained{};
+        for (std::size_t index = 0; index < keep; ++index) {
+            retained[index] = logicalByte(total - keep + index);
+        }
+        std::copy_n(retained.begin(), keep, m_carry.begin());
+        m_carrySize = keep;
+        m_carryOffset = inputOffset + bytes.size() - keep;
+        inputIndex = bytes.size();
+    };
+
     while (true) {
-        if (!m_strideLocked) {
+        if (m_carrySize != 0) {
+            const std::size_t total = m_carrySize + bytes.size() - inputIndex;
+            if (m_strideLocked) {
+                if (total < PacketSize + 1) {
+                    const std::size_t append = bytes.size() - inputIndex;
+                    std::copy_n(bytes.begin() + inputIndex, append, m_carry.begin() + m_carrySize);
+                    m_carrySize += append;
+                    return ::media::Status::success();
+                }
+                if (m_carry[0] != 0x47 || logicalByte(PacketSize) != 0x47) {
+                    m_strideLocked = false;
+                    discardLogicalPrefix(1);
+                    continue;
+                }
+                for (std::size_t index = 0; index < PacketSize; ++index) {
+                    m_packetScratch[index] = logicalByte(index);
+                }
+                m_copiedPacketBytes += PacketSize;
+                const uint64_t packetOffset = m_carryOffset;
+                auto status = parsePacket(m_packetScratch, packetOffset);
+                discardLogicalPrefix(PacketSize);
+                if (!status) return status;
+                continue;
+            }
+
             bool acquired = false;
-            for (std::size_t index = m_bufferBegin;
-                 index + PacketSize < m_buffer.size(); ++index) {
-                if (m_buffer[index] == 0x47 && m_buffer[index + PacketSize] == 0x47) {
-                    consumeBufferedBytes(index - m_bufferBegin);
+            for (std::size_t index = 0; index + PacketSize < total; ++index) {
+                if (logicalByte(index) == 0x47 && logicalByte(index + PacketSize) == 0x47) {
+                    discardLogicalPrefix(index);
                     m_strideLocked = true;
                     acquired = true;
                     break;
                 }
             }
             if (!acquired) {
-                if (bufferedSize() > PacketSize) consumeBufferedBytes(bufferedSize() - PacketSize);
+                retainLogicalTail();
                 return ::media::Status::success();
             }
-        }
-
-        if (bufferedSize() < PacketSize) return ::media::Status::success();
-        if (m_buffer[m_bufferBegin] != 0x47) {
-            m_strideLocked = false;
-            consumeBufferedBytes(1);
             continue;
         }
-        const auto packet = std::span<const uint8_t>(m_buffer).subspan(m_bufferBegin, PacketSize);
-        auto status = parsePacket(packet, m_bufferOffset);
-        if (!status) {
-            consumeBufferedBytes(PacketSize);
-            return status;
+
+        const auto remaining = bytes.subspan(inputIndex);
+        if (m_strideLocked) {
+            if (remaining.size() < PacketSize + 1) {
+                std::copy(remaining.begin(), remaining.end(), m_carry.begin());
+                m_carrySize = remaining.size();
+                m_carryOffset = inputOffset + inputIndex;
+                return ::media::Status::success();
+            }
+            if (remaining[0] != 0x47 || remaining[PacketSize] != 0x47) {
+                m_strideLocked = false;
+                ++inputIndex;
+                continue;
+            }
+            auto status = parsePacket(remaining.first(PacketSize), inputOffset + inputIndex);
+            inputIndex += PacketSize;
+            if (!status) return status;
+            continue;
         }
-        consumeBufferedBytes(PacketSize);
+
+        bool acquired = false;
+        for (std::size_t index = 0; index + PacketSize < remaining.size(); ++index) {
+            if (remaining[index] == 0x47 && remaining[index + PacketSize] == 0x47) {
+                inputIndex += index;
+                m_strideLocked = true;
+                acquired = true;
+                break;
+            }
+        }
+        if (!acquired) {
+            retainLogicalTail();
+            return ::media::Status::success();
+        }
     }
 }
 

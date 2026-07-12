@@ -40,17 +40,24 @@ Reviewer follow-up RED/GREEN:
 - A separate generation RED exited 1 because reacquiring an identical PMT after discontinuity did not republish inventory for the new generation.
 - GREEN command: the same focused build-and-run command after each implementation cycle. Result: exit 0 with all reviewer regressions active.
 
+Second re-review RED/GREEN:
+
+- RED first failed compilation because bounded-retention/copy observability was absent, then failed behavior assertions for per-packet next-stride confirmation and adaptation-only PSI discontinuity.
+- GREEN covers an inserted `0x47` whose shifted header/PCR bytes are syntactically valid, confirmation split across pushes, a 4096-packet fragment, explicit last-packet waiting, and adaptation-only PAT/PMT generation reset. Focused build and executable exited 0.
+
 ## Boundary Review
 
 - Payload bytes are exposed as a `std::span` over the parser's packet buffer only during the synchronous sink call; the parser creates no media-payload vector copy.
-- Unlocked acquisition requires sync candidates exactly 188 bytes apart and retains at most 188 candidate bytes across pushes; locked partial packet state retains at most 187 bytes. Packet offsets use checked `uint64_t` accounting.
-- Locked sync loss enters sliding reacquisition without publishing unconfirmed PCR/PSI. False sync, one-byte insertion, and one-byte deletion recover at the next confirmed stride; structurally malformed packets at confirmed alignment fail closed.
+- Every packet, including packets in locked state, requires the next sync byte exactly 188 bytes later before publication. The final packet remains pending until a later push supplies that proof; there is no flush or fallback.
+- Input fragments are traversed directly. Packets wholly inside the caller's immutable span expose that span synchronously without a payload copy. A fixed 188-byte carry and fixed 188-byte packet scratch are used only for candidate tails and cross-fragment packets; retained bytes never exceed 188 and do not scale with AVIO fragment size.
+- Locked sync loss enters sliding reacquisition without publishing unconfirmed PCR/PSI. False sync, inserted `0x47`, one-byte insertion, and one-byte deletion recover at the next confirmed stride; structurally malformed packets fail closed only after their alignment is confirmed by the next stride.
 - Adaptation parsing validates fields in specification order: PCR, OPCR, splice countdown, private-data length/data, adaptation-extension length/data, and LTW/piecewise-rate/seamless-splice lengths. All bounds are checked before indexing.
 - PAT/PMT section length and descriptor loops are bounded before access; CRC, table id, version, `current_next`, PAT transport-stream id, PMT program-number identity, PID identity, duplicate mapping, and same-version mutation are fail-closed.
 - The assembler inventories every PAT program and waits for every mapped PMT; it never selects a program or supplies fallback PIDs.
 - Duplicate current-version tables are idempotent; PAT/PMT version changes publish a distinct snapshot after the complete inventory is available.
 - Multi-section PAT/PMT tables accept out-of-order sections, remain acquiring while any section is missing, aggregate only `0..last_section_number`, and discard old incomplete aggregation on version replacement.
 - Continuity loss and explicit discontinuity clear the affected PID's partial section and incomplete table aggregation. Reacquired identical inventory is republished for the new generation rather than deduplicated across the boundary.
+- Adaptation-only discontinuity packets are processed before empty-payload return, so PAT and PMT generation state is invalidated even when the packet carries no PSI bytes.
 - 192-byte and 204-byte packet strides return `Unsupported`; only 188-byte packets are accepted.
 
 ## Whitelist

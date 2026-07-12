@@ -80,12 +80,14 @@ void MediaTsPsiSectionAssembler::resetPidGeneration(uint16_t pid)
     const bool isPat = packet.pid == 0;
     const bool isKnownPmt = std::any_of(m_patPrograms.begin(), m_patPrograms.end(),
         [&](const PatProgram& program) { return program.pmtPid == packet.pid; });
-    if ((!isPat && !isKnownPmt) || packet.payloadSpan.empty()) return ::media::Status::success();
+    if (!isPat && !isKnownPmt) return ::media::Status::success();
 
     if (packet.discontinuity) {
         resetPidGeneration(packet.pid);
+        if (packet.payloadSpan.empty()) return ::media::Status::success();
         if (!packet.payloadUnitStart) return invalidSection("MPEG-TS PSI discontinuity lacks a section start");
     }
+    if (packet.payloadSpan.empty()) return ::media::Status::success();
     auto& state = m_sections[packet.pid];
     if (packet.payloadUnitStart) {
         const std::size_t pointer = packet.payloadSpan[0];

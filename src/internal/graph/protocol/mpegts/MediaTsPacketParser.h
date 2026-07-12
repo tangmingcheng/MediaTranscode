@@ -2,13 +2,13 @@
 
 #include "media_transcode/Result.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <span>
 #include <unordered_map>
-#include <vector>
 
 namespace media::ffmpeg::graph {
 
@@ -38,6 +38,8 @@ public:
         MediaTsPacketSink& sink);
 
     ::media::Status push(std::span<const uint8_t> bytes);
+    std::size_t retainedByteCount() const noexcept { return m_carrySize; }
+    uint64_t copiedPacketByteCount() const noexcept { return m_copiedPacketBytes; }
 
 private:
     struct ContinuityState final {
@@ -45,16 +47,15 @@ private:
     };
 
     explicit MediaTsPacketParser(MediaTsPacketSink& sink);
-    ::media::Status processBufferedBytes();
     ::media::Status parsePacket(std::span<const uint8_t> packet, uint64_t byteOffset);
-    void consumeBufferedBytes(std::size_t count);
-    std::size_t bufferedSize() const noexcept;
 
     MediaTsPacketSink& m_sink;
-    std::vector<uint8_t> m_buffer;
-    std::size_t m_bufferBegin = 0;
-    uint64_t m_bufferOffset = 0;
+    std::array<uint8_t, 188> m_carry{};
+    std::array<uint8_t, 188> m_packetScratch{};
+    std::size_t m_carrySize = 0;
+    uint64_t m_carryOffset = 0;
     uint64_t m_nextInputOffset = 0;
+    uint64_t m_copiedPacketBytes = 0;
     bool m_strideLocked = false;
     std::unordered_map<uint16_t, ContinuityState> m_continuity;
 };
