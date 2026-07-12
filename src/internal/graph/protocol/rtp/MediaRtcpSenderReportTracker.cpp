@@ -147,18 +147,17 @@ void MediaRtcpSenderReportTracker::invalidate() noexcept
         return item.type == 1;
     });
     if (cname == chunk.items.end()) return ::media::Status::success();
+    if (!m_mediaSsrc || chunk.ssrc != *m_mediaSsrc) return ::media::Status::success();
     if (cname->value.empty()) {
         invalidate();
         return invalidEvidence("RTCP CNAME must not be empty");
     }
-    if (!m_cname.empty() && m_mediaSsrc && chunk.ssrc == *m_mediaSsrc && m_cname != cname->value) {
+    if (!m_cname.empty() && m_cname != cname->value) {
         invalidate();
         return invalidEvidence("RTCP CNAME changed for active source");
     }
-    if (m_mediaSsrc && chunk.ssrc == *m_mediaSsrc) {
-        m_cname = cname->value;
-        m_cnameObservedAtNs = observedAtNs;
-    }
+    m_cname = cname->value;
+    m_cnameObservedAtNs = observedAtNs;
     return ::media::Status::success();
 }
 

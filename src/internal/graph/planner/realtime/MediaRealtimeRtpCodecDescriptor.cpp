@@ -2,6 +2,7 @@
 
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 #include "internal/graph/protocol/rtp/MediaAacAudioSpecificConfig.h"
+#include "internal/graph/protocol/rtp/MediaOpusRtpCapability.h"
 #include "internal/graph/protocol/rtp/MediaRtpFmtp.h"
 
 #include <algorithm>
@@ -167,6 +168,10 @@ std::string lowercaseAscii(std::string value)
         if (*metadata.clockRate != OpusClockRate) {
             return ::media::Result<MediaRealtimeRtpCodecDescriptor>::failure(
                 ::media::ErrorInfo::invalidArgument("Raw RTP Opus clock rate must be 48000"));
+        }
+        if (auto status = validateOpusRtpMappingFamilyZeroChannels(*metadata.channels);
+            !status) {
+            return ::media::Result<MediaRealtimeRtpCodecDescriptor>::failure(status.error());
         }
         descriptor.rtpEncodingName = "opus";
         descriptor.clockRate = OpusClockRate;

@@ -5,6 +5,7 @@
 #include "internal/graph/nodes/audio/AudioEncodeNode.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/nodes/audio/AudioEncoderFrameQueue.h"
+#include "internal/graph/nodes/input/MediaRawRtpStreamDescriptorFactory.h"
 #include "internal/graph/nodes/mux/RtpMuxStateMachine.h"
 #include "internal/graph/nodes/sync/MediaRtpClockGroupNode.h"
 #include "internal/graph/protocol/rtp/MediaRtcpCompoundParser.h"
@@ -76,22 +77,31 @@ std::vector<uint8_t> senderReport(uint32_t ssrc, uint32_t ntpSeconds, uint32_t n
     return bytes;
 }
 
-std::vector<uint8_t> sdes(uint32_t firstSsrc, const std::string& firstCname,
-                          uint32_t secondSsrc = 0, const std::string& secondCname = {})
+struct SdesItemInput final {
+    uint8_t type = 0;
+    std::string value;
+};
+
+struct SdesChunkInput final {
+    uint32_t ssrc = 0;
+    std::vector<SdesItemInput> items;
+};
+
+std::vector<uint8_t> sourceDescription(std::span<const SdesChunkInput> chunks)
 {
-    const uint8_t count = secondSsrc == 0 ? 1 : 2;
     std::vector<uint8_t> body;
-    auto appendChunk = [&body](uint32_t ssrc, const std::string& cname) {
-        appendU32(body, ssrc);
-        body.push_back(1);
-        body.push_back(static_cast<uint8_t>(cname.size()));
-        body.insert(body.end(), cname.begin(), cname.end());
+    for (const auto& chunk : chunks) {
+        appendU32(body, chunk.ssrc);
+        for (const auto& item : chunk.items) {
+            body.push_back(item.type);
+            body.push_back(static_cast<uint8_t>(item.value.size()));
+            body.insert(body.end(), item.value.begin(), item.value.end());
+        }
         body.push_back(0);
         while ((body.size() % 4) != 0) body.push_back(0);
-    };
-    appendChunk(firstSsrc, firstCname);
-    if (secondSsrc != 0) appendChunk(secondSsrc, secondCname);
-    std::vector<uint8_t> bytes{static_cast<uint8_t>(0x80 | count), 202};
+    }
+    std::vector<uint8_t> bytes{
+        static_cast<uint8_t>(0x80 | static_cast<uint8_t>(chunks.size())), 202};
     appendU16(bytes, static_cast<uint16_t>((body.size() + 4) / 4 - 1));
     bytes.insert(bytes.end(), body.begin(), body.end());
     return bytes;
@@ -101,7 +111,8 @@ std::vector<uint8_t> compoundWithSdes(uint32_t ssrc, uint32_t ntpSeconds,
                                       uint32_t rtpTimestamp, const std::string& cname)
 {
     auto bytes = senderReport(ssrc, ntpSeconds, 0, rtpTimestamp);
-    auto identity = sdes(ssrc, cname);
+    const std::array chunks{SdesChunkInput{ssrc, {{1, cname}}}};
+    auto identity = sourceDescription(chunks);
     bytes.insert(bytes.end(), identity.begin(), identity.end());
     return bytes;
 }
@@ -170,7 +181,10 @@ void testRtcpCompoundParserStrictPackets(TestContext& ctx)
 {
     const uint32_t sender = 0x10203040;
     auto compound = senderReport(sender, 0x11223344, 0x55667788, 0x90ABCDEF);
-    auto descriptions = sdes(sender, "camera-a", 0x50607080, "audio-a");
+    const std::array descriptionChunks{
+        SdesChunkInput{sender, {{1, "camera-a"}}},
+        SdesChunkInput{0x50607080, {{1, "audio-a"}}}};
+    auto descriptions = sourceDescription(descriptionChunks);
     compound.insert(compound.end(), descriptions.begin(), descriptions.end());
     const std::vector<uint8_t> unknown{0x80, 210, 0x00, 0x01, 1, 2, 3, 4};
     compound.insert(compound.end(), unknown.begin(), unknown.end());
@@ -220,7 +234,8 @@ void testRtcpCompoundParserStrictPackets(TestContext& ctx)
     EXPECT_FALSE(ctx, parseRtcp(unknown, true));
     EXPECT_FALSE(ctx, parseRtcp(senderReport(sender, 1, 0, 1), true));
     auto emptyIdentity = senderReport(sender, 1, 0, 1);
-    auto emptySdes = sdes(sender, "");
+    const std::array emptyChunks{SdesChunkInput{sender, {{1, ""}}}};
+    auto emptySdes = sourceDescription(emptyChunks);
     emptyIdentity.insert(emptyIdentity.end(), emptySdes.begin(), emptySdes.end());
     EXPECT_FALSE(ctx, parseRtcp(emptyIdentity, true));
 
@@ -307,6 +322,73 @@ void testRtcpEvidenceRequiresSameSsrcAndExpires(TestContext& ctx)
     auto matchingOlderReport = parseRtcp(senderReport(0x11111111, 9, 0, 30), false);
     EXPECT_TRUE(ctx, matchingOlderReport);
     if (matchingOlderReport) EXPECT_TRUE(ctx, mismatch.observe(matchingOlderReport.value(), 210));
+}
+
+void testRtcpEvidenceScopesCnameValidationToActiveSsrc(TestContext& ctx)
+{
+    const MediaRtcpSenderReportTrackerConfig config{true, true, 10'000, 10'000};
+    constexpr uint32_t activeSsrc = 0x10203040;
+    constexpr uint32_t unrelatedSsrc = 0x50607080;
+
+    MediaRtcpSenderReportTracker tracker(config);
+    tracker.observeMedia(activeSsrc, 1);
+    auto compound = senderReport(activeSsrc, 10, 0, 900);
+    const std::array chunks{
+        SdesChunkInput{activeSsrc, {{2, "active-name"}, {1, "camera-a"}}},
+        SdesChunkInput{unrelatedSsrc, {{1, ""}}}};
+    auto descriptions = sourceDescription(chunks);
+    compound.insert(compound.end(), descriptions.begin(), descriptions.end());
+    const auto parsed = parseRtcp(compound, true);
+    EXPECT_TRUE(ctx, parsed);
+    if (!parsed) return;
+
+    const auto generation = tracker.generation();
+    EXPECT_TRUE(ctx, tracker.observe(parsed.value(), 2));
+    EXPECT_EQ(ctx, tracker.generation(), generation);
+    const auto ready = tracker.evidence(2);
+    EXPECT_TRUE(ctx, ready);
+    if (ready) {
+        EXPECT_EQ(ctx, ready.value().cnameSsrc, activeSsrc);
+        EXPECT_EQ(ctx, ready.value().cname,
+                  std::vector<uint8_t>({'c','a','m','e','r','a','-','a'}));
+    }
+
+    MediaRtcpSenderReportTracker emptyActive(config);
+    emptyActive.observeMedia(activeSsrc, 1);
+    auto emptyCompound = senderReport(activeSsrc, 10, 0, 900);
+    const std::array emptyActiveChunks{
+        SdesChunkInput{activeSsrc, {{2, "active-name"}, {1, ""}}},
+        SdesChunkInput{unrelatedSsrc, {{1, "other"}}}};
+    auto emptyDescriptions = sourceDescription(emptyActiveChunks);
+    emptyCompound.insert(emptyCompound.end(), emptyDescriptions.begin(), emptyDescriptions.end());
+    const auto parsedEmptyActive = parseRtcp(emptyCompound, false);
+    EXPECT_TRUE(ctx, parsedEmptyActive);
+    if (!parsedEmptyActive) return;
+    const auto emptyGeneration = emptyActive.generation();
+    EXPECT_FALSE(ctx, emptyActive.observe(parsedEmptyActive.value(), 2));
+    EXPECT_EQ(ctx, emptyActive.generation(), emptyGeneration + 1);
+    EXPECT_FALSE(ctx, emptyActive.evidence(2));
+}
+
+void testRawRtpOpusDescriptorAcceptsOnlyMappingFamilyZeroChannels(TestContext& ctx)
+{
+    const auto create = [](int channels) {
+        return MediaRawRtpStreamDescriptorFactory::create(MediaRtpDepacketizerConfig{
+            MediaStreamKind::Audio, "opus", "", 98, 48'000, channels, 0});
+    };
+
+    EXPECT_TRUE(ctx, create(1));
+    EXPECT_TRUE(ctx, create(2));
+    const auto missingChannels = create(0);
+    EXPECT_FALSE(ctx, missingChannels);
+    if (!missingChannels) {
+        EXPECT_EQ(ctx, missingChannels.error().code, media::ErrorCode::InvalidArgument);
+    }
+    const auto unsupportedChannels = create(3);
+    EXPECT_FALSE(ctx, unsupportedChannels);
+    if (!unsupportedChannels) {
+        EXPECT_EQ(ctx, unsupportedChannels.error().code, media::ErrorCode::InvalidArgument);
+    }
 }
 
 void testRtcpEvidenceRejectsIdentityAndClockDiscontinuities(TestContext& ctx)
@@ -897,7 +979,9 @@ int main()
     testRequiredPossiblyEmptyNodeOption(ctx);
     testRtcpCompoundParserStrictPackets(ctx);
     testRtcpEvidenceRequiresSameSsrcAndExpires(ctx);
+    testRtcpEvidenceScopesCnameValidationToActiveSsrc(ctx);
     testRtcpEvidenceRejectsIdentityAndClockDiscontinuities(ctx);
+    testRawRtpOpusDescriptorAcceptsOnlyMappingFamilyZeroChannels(ctx);
     testRtpIngressClockLifecycleEventsAreStructured(ctx);
     runRtpDepacketizerTests(ctx);
     runRtpSourceClockTests(ctx);

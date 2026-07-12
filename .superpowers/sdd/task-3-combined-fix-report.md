@@ -280,3 +280,39 @@ v2 modification whitelist:
 - `tests/unit/test_node.cpp`
 
 Startup-consumer coordination remains untouched.
+
+## Final combined reviewer v3 closure
+
+### Opus mapping-family-zero boundary
+
+- Added `validateOpusRtpMappingFamilyZeroChannels` as the single `1..2` channel capability constraint.
+- The realtime RTP codec registry and `MediaRtpDepacketizerFactory` both reuse that constraint; `MediaRawRtpStreamDescriptorFactory` continues to validate through the factory instead of duplicating codec policy.
+- Planner and descriptor regressions prove mono and stereo succeed while channel counts 0 and 3 fail with `InvalidArgument`.
+
+### Active-source SDES identity
+
+- `MediaRtcpSenderReportTracker` now filters SDES chunks by the active media SSRC before CNAME validation.
+- A parsed compound regression covers multiple chunks and multiple items: an active non-empty CNAME plus an unrelated empty CNAME preserves evidence and generation; an active empty CNAME invalidates exactly once.
+
+### Transport test port ownership
+
+- Initial, replacement, receive-close, stop-close, and abort-close transport tests now share `openTransportInPortRange`.
+- The replacement move/rebind regression no longer assumes a fixed free RTP/RTCP port pair.
+
+### Fresh verification
+
+Full clean rebuild result: exit 0; 240 files cleaned; 241/241 build steps completed.
+
+```powershell
+ctest --test-dir out/build/x64-debug -C Debug --output-on-failure -L deterministic
+```
+
+Result: 6/6 passed, 0 failed, 3.36 seconds.
+
+```powershell
+ctest --test-dir out/build/x64-debug -C Debug --output-on-failure -R media_transcode_integration_tests
+```
+
+Result: 1/1 passed, 0 failed, 80.47 seconds.
+
+Final combined reviewer v3 changed only the Opus capability/consumers, RTCP tracker, the three focused test files, and this report. Startup-consumer coordination remains untouched.

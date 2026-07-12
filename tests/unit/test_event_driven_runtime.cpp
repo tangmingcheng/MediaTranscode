@@ -27,6 +27,28 @@ uint64_t fileTimeTicks(const FILETIME& value)
 }
 #endif
 
+::media::Result<MediaRtpUdpTransport> openTransportInPortRange(
+    std::shared_ptr<MediaRtpUdpTransportPhaseController> controller,
+    uint16_t firstPort)
+{
+#ifndef _WIN32
+    return ::media::Result<MediaRtpUdpTransport>::failure(
+        ::media::ErrorInfo::unsupported("Windows transport test"));
+#else
+    ::media::Result<MediaRtpUdpTransport> transport =
+        ::media::Result<MediaRtpUdpTransport>::failure(
+            ::media::ErrorInfo::ioFailure("test transport was not opened"));
+    for (uint16_t port = firstPort; !transport && port < firstPort + 500;
+         port = static_cast<uint16_t>(port + 2)) {
+        transport = MediaRtpUdpTransport::open(MediaRtpUdpTransportConfig{
+            MediaIpAddressFamily::Ipv4, "127.0.0.1", port,
+            static_cast<uint16_t>(port + 1), 262144, 2048, 5'000,
+            controller});
+    }
+    return transport;
+#endif
+}
+
 void testUdpSocketLifecycleAndBindFailure(TestContext& ctx)
 {
 #ifndef _WIN32
@@ -64,18 +86,13 @@ void testUdpSocketLifecycleAndBindFailure(TestContext& ctx)
 
 void testRtpUdpTransportReceivesBothChannelsAndCancels(TestContext& ctx)
 {
-    auto transport = MediaRtpUdpTransport::open(MediaRtpUdpTransportConfig{
-        MediaIpAddressFamily::Ipv4, "127.0.0.1", 0, 0, 262144, 2048, 5'000, nullptr});
-    EXPECT_FALSE(ctx, transport);
+    EXPECT_FALSE(ctx, MediaRtpUdpTransport::open(MediaRtpUdpTransportConfig{
+        MediaIpAddressFamily::Ipv4, "127.0.0.1", 0, 0, 262144, 2048, 5'000, nullptr}));
     EXPECT_FALSE(ctx, MediaRtpUdpTransport::open(MediaRtpUdpTransportConfig{
         MediaIpAddressFamily::Ipv4, "127.0.0.1", 40'001, 40'002, 262144, 2048, 5'000, nullptr}));
     EXPECT_FALSE(ctx, MediaRtpUdpTransport::open(MediaRtpUdpTransportConfig{
         MediaIpAddressFamily::Ipv4, "127.0.0.1", 40'000, 40'004, 262144, 2048, 5'000, nullptr}));
-    for (uint16_t port = 40'000; !transport && port < 41'000; port = static_cast<uint16_t>(port + 2)) {
-        transport = MediaRtpUdpTransport::open(MediaRtpUdpTransportConfig{
-            MediaIpAddressFamily::Ipv4, "127.0.0.1", port, static_cast<uint16_t>(port + 1),
-            262144, 2048, 5'000, nullptr});
-    }
+    auto transport = openTransportInPortRange(nullptr, 40'000);
     EXPECT_TRUE(ctx, transport);
     if (!transport) return;
     EXPECT_TRUE(ctx, transport.value().rtpPort() != 0);
@@ -158,8 +175,7 @@ void testRtpUdpTransportReceivesBothChannelsAndCancels(TestContext& ctx)
     EXPECT_TRUE(ctx, afterReset);
     if (!afterReset) std::cerr << afterReset.error().describe() << '\n';
 
-    auto replacementTransport = MediaRtpUdpTransport::open(MediaRtpUdpTransportConfig{
-        MediaIpAddressFamily::Ipv4, "127.0.0.1", 41'000, 41'001, 262144, 2048, 5'000, nullptr});
+    auto replacementTransport = openTransportInPortRange(nullptr, 41'000);
     EXPECT_TRUE(ctx, replacementTransport);
     if (replacementTransport) {
         const uint16_t replacedRtpPort = replacementTransport.value().rtpPort();
@@ -175,28 +191,6 @@ void testRtpUdpTransportReceivesBothChannelsAndCancels(TestContext& ctx)
     EXPECT_FALSE(ctx, transport.value().isOpen());
 }
 
-::media::Result<MediaRtpUdpTransport> openObservedTransport(
-    std::shared_ptr<MediaRtpUdpTransportPhaseController> controller,
-    uint16_t firstPort)
-{
-#ifndef _WIN32
-    return ::media::Result<MediaRtpUdpTransport>::failure(
-        ::media::ErrorInfo::unsupported("Windows transport test"));
-#else
-    ::media::Result<MediaRtpUdpTransport> transport =
-        ::media::Result<MediaRtpUdpTransport>::failure(
-            ::media::ErrorInfo::ioFailure("test transport was not opened"));
-    for (uint16_t port = firstPort; !transport && port < firstPort + 500;
-         port = static_cast<uint16_t>(port + 2)) {
-        transport = MediaRtpUdpTransport::open(MediaRtpUdpTransportConfig{
-            MediaIpAddressFamily::Ipv4, "127.0.0.1", port,
-            static_cast<uint16_t>(port + 1), 262144, 2048, 5'000,
-            controller});
-    }
-    return transport;
-#endif
-}
-
 void testRtpUdpTransportReceiveEntryRacesCloseDeterministically(TestContext& ctx)
 {
 #ifndef _WIN32
@@ -205,7 +199,7 @@ void testRtpUdpTransportReceiveEntryRacesCloseDeterministically(TestContext& ctx
     auto controller = std::make_shared<MediaRtpUdpTransportPhaseController>(5'000);
     controller->arm(MediaRtpUdpTransportPhase::ReceiveProtected);
     controller->arm(MediaRtpUdpTransportPhase::CloseReceiveWait);
-    auto transport = openObservedTransport(controller, 42'000);
+    auto transport = openTransportInPortRange(controller, 42'000);
     EXPECT_TRUE(ctx, transport);
     if (!transport) return;
 
@@ -244,7 +238,7 @@ void testRtpUdpTransportStopAndAbortRaceCloseDeterministically(TestContext& ctx)
                          uint16_t firstPort) {
         auto controller = std::make_shared<MediaRtpUdpTransportPhaseController>(5'000);
         controller->arm(phase);
-        auto transport = openObservedTransport(controller, firstPort);
+        auto transport = openTransportInPortRange(controller, firstPort);
         EXPECT_TRUE(ctx, transport);
         if (!transport) return;
 

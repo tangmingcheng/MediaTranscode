@@ -2,6 +2,7 @@
 
 #include "internal/graph/protocol/rtp/MediaRtpFmtp.h"
 #include "internal/graph/protocol/rtp/MediaAacAudioSpecificConfig.h"
+#include "internal/graph/protocol/rtp/MediaOpusRtpCapability.h"
 #include "internal/graph/protocol/rtp/depacketizer/MediaAacRtpDepacketizer.h"
 #include "internal/graph/protocol/rtp/depacketizer/MediaH264RtpDepacketizer.h"
 #include "internal/graph/protocol/rtp/depacketizer/MediaHevcRtpDepacketizer.h"
@@ -86,9 +87,11 @@ std::string lower(std::string value)
     if (auto status = validateConfig(config); !status) return status;
     const std::string codec = lower(config.codecName);
     if (codec == "opus") {
-        if (config.streamKind != MediaStreamKind::Audio || config.clockRate != 48000 || config.channels <= 0) return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("Opus RTP requires planned audio, 48000 Hz, and channels"));
-        return ::media::Status::success();
+        if (config.streamKind != MediaStreamKind::Audio || config.clockRate != 48000) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "Opus RTP requires planned audio at 48000 Hz"));
+        }
+        return validateOpusRtpMappingFamilyZeroChannels(config.channels);
     }
     auto fmtp = parseRtpFmtp(config.fmtp);
     if (!fmtp) return ::media::Status::failure(fmtp.error());

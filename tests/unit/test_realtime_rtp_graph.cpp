@@ -1874,15 +1874,30 @@ void testRealtimeResizeScoresFilterStage(TestContext& ctx)
 
 void testRawRtpPlansOpusAudioInput(TestContext& ctx)
 {
-    MediaRealtimeRtpTranscodeRequest options = validRawRtpAudioVideoOptions();
-    options.parameters.audio.codecName = "opus";
-    options.input.audioRtp.codecName = "opus";
-    options.input.audioRtp.payloadType = 98;
-    options.input.audioRtp.clockRate = 48000;
-    options.input.audioRtp.channels = 2;
-    options.input.audioRtp.fmtp.clear();
+    const auto request = [](int channels) {
+        MediaRealtimeRtpTranscodeRequest options = validRawRtpAudioVideoOptions();
+        options.parameters.audio.codecName = "opus";
+        options.input.audioRtp.codecName = "opus";
+        options.input.audioRtp.payloadType = 98;
+        options.input.audioRtp.clockRate = 48000;
+        options.input.audioRtp.channels = channels;
+        options.input.audioRtp.fmtp.clear();
+        return options;
+    };
 
-    const auto plan = MediaRealtimeRtpTranscodePlanner::plan(options);
+    EXPECT_TRUE(ctx, MediaRealtimeRtpTranscodePlanner::plan(request(1)));
+    const auto missingChannels = MediaRealtimeRtpTranscodePlanner::plan(request(0));
+    EXPECT_FALSE(ctx, missingChannels);
+    if (!missingChannels) {
+        EXPECT_EQ(ctx, missingChannels.error().code, media::ErrorCode::InvalidArgument);
+    }
+    const auto unsupportedChannels = MediaRealtimeRtpTranscodePlanner::plan(request(3));
+    EXPECT_FALSE(ctx, unsupportedChannels);
+    if (!unsupportedChannels) {
+        EXPECT_EQ(ctx, unsupportedChannels.error().code, media::ErrorCode::InvalidArgument);
+    }
+
+    const auto plan = MediaRealtimeRtpTranscodePlanner::plan(request(2));
     EXPECT_TRUE(ctx, plan);
     if (!plan) {
         std::cerr << plan.error().describe() << '\n';
