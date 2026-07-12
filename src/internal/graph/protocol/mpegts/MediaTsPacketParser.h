@@ -2,13 +2,13 @@
 
 #include "media_transcode/Result.h"
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <span>
 #include <unordered_map>
+#include <vector>
 
 namespace media::ffmpeg::graph {
 
@@ -28,6 +28,7 @@ public:
 
     // packet.payloadSpan is valid only for the duration of this synchronous call.
     virtual ::media::Status onPacket(const MediaTsPacketView& packet) = 0;
+    virtual ::media::Status onContinuityLoss(uint16_t) { return ::media::Status::success(); }
 };
 
 class MediaTsPacketParser final {
@@ -44,13 +45,17 @@ private:
     };
 
     explicit MediaTsPacketParser(MediaTsPacketSink& sink);
-    ::media::Status parsePacket();
+    ::media::Status processBufferedBytes();
+    ::media::Status parsePacket(std::span<const uint8_t> packet, uint64_t byteOffset);
+    void consumeBufferedBytes(std::size_t count);
+    std::size_t bufferedSize() const noexcept;
 
     MediaTsPacketSink& m_sink;
-    std::array<uint8_t, 188> m_packet{};
-    std::size_t m_retainedSize = 0;
+    std::vector<uint8_t> m_buffer;
+    std::size_t m_bufferBegin = 0;
+    uint64_t m_bufferOffset = 0;
     uint64_t m_nextInputOffset = 0;
-    uint64_t m_packetOffset = 0;
+    bool m_strideLocked = false;
     std::unordered_map<uint16_t, ContinuityState> m_continuity;
 };
 

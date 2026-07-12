@@ -53,6 +53,28 @@ MediaTsPsiSectionAssembler::MediaTsPsiSectionAssembler(MediaTsProgramInventorySi
 {
 }
 
+void MediaTsPsiSectionAssembler::resetPidGeneration(uint16_t pid)
+{
+    m_sections.erase(pid);
+    m_lastPublished.reset();
+    if (pid == 0) {
+        m_patAssembly.reset();
+        m_patVersion.reset();
+        m_patPrograms.clear();
+        m_pmtAssemblies.clear();
+        m_programsByPmtPid.clear();
+        return;
+    }
+    m_pmtAssemblies.erase(pid);
+    m_programsByPmtPid.erase(pid);
+}
+
+::media::Status MediaTsPsiSectionAssembler::onContinuityLoss(uint16_t pid)
+{
+    resetPidGeneration(pid);
+    return ::media::Status::success();
+}
+
 ::media::Status MediaTsPsiSectionAssembler::onPacket(const MediaTsPacketView& packet)
 {
     const bool isPat = packet.pid == 0;
@@ -60,13 +82,11 @@ MediaTsPsiSectionAssembler::MediaTsPsiSectionAssembler(MediaTsProgramInventorySi
         [&](const PatProgram& program) { return program.pmtPid == packet.pid; });
     if ((!isPat && !isKnownPmt) || packet.payloadSpan.empty()) return ::media::Status::success();
 
-    auto& state = m_sections[packet.pid];
-    if (packet.discontinuity && !state.bytes.empty()) {
-        state = {};
-        if (!packet.payloadUnitStart) {
-            return invalidSection("MPEG-TS PSI section crossed a discontinuity");
-        }
+    if (packet.discontinuity) {
+        resetPidGeneration(packet.pid);
+        if (!packet.payloadUnitStart) return invalidSection("MPEG-TS PSI discontinuity lacks a section start");
     }
+    auto& state = m_sections[packet.pid];
     if (packet.payloadUnitStart) {
         const std::size_t pointer = packet.payloadSpan[0];
         if (pointer > packet.payloadSpan.size() - 1) return invalidSection("MPEG-TS PSI pointer field exceeds payload");
@@ -141,16 +161,18 @@ MediaTsPsiSectionAssembler::MediaTsPsiSectionAssembler(MediaTsProgramInventorySi
     }
 
     const uint8_t version = static_cast<uint8_t>((section[5] >> 1) & 0x1F);
+    const uint16_t transportStreamId = readU16(section, 3);
     const uint8_t sectionNumber = section[6];
     const uint8_t lastSectionNumber = section[7];
     if (!m_patAssembly || m_patAssembly->version != version) {
-        m_patAssembly = PatTableAssembly{version, lastSectionNumber, {}};
+        m_patAssembly = PatTableAssembly{transportStreamId, version, lastSectionNumber, {}};
         m_patVersion.reset();
         m_patPrograms.clear();
         m_pmtAssemblies.clear();
         m_programsByPmtPid.clear();
-    } else if (m_patAssembly->lastSectionNumber != lastSectionNumber) {
-        return invalidSection("MPEG-TS PAT last section changed without a version change");
+    } else if (m_patAssembly->lastSectionNumber != lastSectionNumber ||
+               m_patAssembly->transportStreamId != transportStreamId) {
+        return invalidSection("MPEG-TS PAT identity changed without a version change");
     }
 
     const auto existingSection = m_patAssembly->sections.find(sectionNumber);

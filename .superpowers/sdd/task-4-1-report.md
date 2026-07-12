@@ -6,6 +6,7 @@
 - Added strict transport header, adaptation field, PCR, continuity, and discontinuity validation.
 - Added PAT/PMT section reassembly, ordered multi-section aggregation, MPEG-2 CRC32 validation, current/version validation, and immutable multi-program inventory snapshots.
 - Added deterministic node tests with generated valid-CRC transport bytes and explicit 192/204-byte stride rejection.
+- Reviewer follow-up added confirmed 188-byte stride acquisition/reacquisition, complete adaptation-field bounds validation, PSI table identity checks, and generation-safe discontinuity handling.
 
 ## TDD Evidence
 
@@ -33,15 +34,23 @@ ctest --test-dir out/build/x64-debug -C Debug -L deterministic --output-on-failu
 - Focused CTest: 1/1 passed.
 - Deterministic CTest label: 6/6 passed.
 
+Reviewer follow-up RED/GREEN:
+
+- RED command: the focused build-and-run command above. Result: executable exited 1 with failures for false sync acquisition, cross-fragment acquisition, truncated OPCR/private/extension/LTW/piecewise/seamless fields, PAT TSID conflict, and PSI discontinuity/continuity generation reset.
+- A separate generation RED exited 1 because reacquiring an identical PMT after discontinuity did not republish inventory for the new generation.
+- GREEN command: the same focused build-and-run command after each implementation cycle. Result: exit 0 with all reviewer regressions active.
+
 ## Boundary Review
 
 - Payload bytes are exposed as a `std::span` over the parser's packet buffer only during the synchronous sink call; the parser creates no media-payload vector copy.
-- Retained fragment state contains at most 187 bytes between pushes; packet offsets use checked `uint64_t` accounting.
-- Adaptation lengths, adaptation-only body length, reserved fields, PCR reserved bits, and PCR extension range are validated before indexing.
-- PAT/PMT section length and descriptor loops are bounded before access; CRC, table id, version, `current_next`, PID identity, duplicate mapping, and same-version mutation are fail-closed.
+- Unlocked acquisition requires sync candidates exactly 188 bytes apart and retains at most 188 candidate bytes across pushes; locked partial packet state retains at most 187 bytes. Packet offsets use checked `uint64_t` accounting.
+- Locked sync loss enters sliding reacquisition without publishing unconfirmed PCR/PSI. False sync, one-byte insertion, and one-byte deletion recover at the next confirmed stride; structurally malformed packets at confirmed alignment fail closed.
+- Adaptation parsing validates fields in specification order: PCR, OPCR, splice countdown, private-data length/data, adaptation-extension length/data, and LTW/piecewise-rate/seamless-splice lengths. All bounds are checked before indexing.
+- PAT/PMT section length and descriptor loops are bounded before access; CRC, table id, version, `current_next`, PAT transport-stream id, PMT program-number identity, PID identity, duplicate mapping, and same-version mutation are fail-closed.
 - The assembler inventories every PAT program and waits for every mapped PMT; it never selects a program or supplies fallback PIDs.
 - Duplicate current-version tables are idempotent; PAT/PMT version changes publish a distinct snapshot after the complete inventory is available.
 - Multi-section PAT/PMT tables accept out-of-order sections, remain acquiring while any section is missing, aggregate only `0..last_section_number`, and discard old incomplete aggregation on version replacement.
+- Continuity loss and explicit discontinuity clear the affected PID's partial section and incomplete table aggregation. Reacquired identical inventory is republished for the new generation rather than deduplicated across the boundary.
 - 192-byte and 204-byte packet strides return `Unsupported`; only 188-byte packets are accepted.
 
 ## Whitelist

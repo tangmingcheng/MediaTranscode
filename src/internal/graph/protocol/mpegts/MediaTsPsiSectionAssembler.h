@@ -16,6 +16,7 @@ public:
     explicit MediaTsPsiSectionAssembler(MediaTsProgramInventorySink& sink);
 
     ::media::Status onPacket(const MediaTsPacketView& packet) override;
+    ::media::Status onContinuityLoss(uint16_t pid) override;
 
 private:
     struct SectionState final {
@@ -31,6 +32,7 @@ private:
     };
 
     struct PatTableAssembly final {
+        uint16_t transportStreamId = 0;
         uint8_t version = 0;
         uint8_t lastSectionNumber = 0;
         std::unordered_map<uint8_t, std::vector<PatProgram>> sections;
@@ -49,6 +51,7 @@ private:
     ::media::Status parsePat(std::span<const uint8_t> section);
     ::media::Status parsePmt(uint16_t pid, std::span<const uint8_t> section);
     ::media::Status publishIfComplete();
+    void resetPidGeneration(uint16_t pid);
 
     MediaTsProgramInventorySink& m_sink;
     std::unordered_map<uint16_t, SectionState> m_sections;
