@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <exception>
+#include <cstdint>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -92,6 +93,25 @@ std::string lowerCopy(std::string value)
     }
     return ::media::Result<int>::failure(
         ::media::ErrorInfo::invalidArgument(std::string(nodeName) + " requires non-negative integer option: " + key));
+}
+
+::media::Result<std::int64_t> requiredPositiveInt64NodeOption(const MediaNodeOptions* options,
+                                                              const char* nodeName,
+                                                              const char* key)
+{
+    auto text = requiredNodeOption(options, nodeName, key);
+    if (!text) return ::media::Result<std::int64_t>::failure(text.error());
+    try {
+        std::size_t parsedLength = 0;
+        const std::int64_t parsed = std::stoll(text.value(), &parsedLength, 10);
+        if (parsedLength == text.value().size() && parsed > 0) {
+            return ::media::Result<std::int64_t>::success(parsed);
+        }
+    } catch (const std::exception&) {
+    }
+    return ::media::Result<std::int64_t>::failure(
+        ::media::ErrorInfo::invalidArgument(
+            std::string(nodeName) + " requires positive 64-bit integer option: " + key));
 }
 
 ::media::Result<bool> requiredBoolNodeOption(const MediaNodeOptions* options,

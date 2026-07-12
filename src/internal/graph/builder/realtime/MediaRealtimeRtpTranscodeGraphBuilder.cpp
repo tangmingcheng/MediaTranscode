@@ -119,6 +119,80 @@ bool separateRtpOutput(const MediaRealtimeRtpTranscodePlan& plan) noexcept
     return plan.outputLayout == RealtimeOutputStreamLayout::SeparateStreams;
 }
 
+::media::Result<MediaNodeId> addRtpClockGroup(
+    MediaGraph& graph,
+    MediaNodeId videoInput,
+    MediaNodeId audioInput,
+    const MediaAvSyncPlan& avSync,
+    std::int64_t videoCnameTimeoutNs,
+    std::int64_t audioCnameTimeoutNs,
+    const MediaRealtimeEdgePolicySet& edgePolicies)
+{
+    if (!avSync.rtp || !avSync.rtp->videoInput.clockRate || !avSync.rtp->audioInput.clockRate ||
+        !avSync.rtp->input.senderReportTimeoutNs || !avSync.rtp->input.maximumExtrapolationNs ||
+        !avSync.rtp->input.maximumSenderReportSkewNs ||
+        !avSync.rtp->input.maximumSenderClockRateErrorPpm ||
+        !avSync.rtp->input.maximumSenderClockResidualNs ||
+        videoCnameTimeoutNs <= 0 || audioCnameTimeoutNs <= 0) {
+        return ::media::Result<MediaNodeId>::failure(
+            ::media::ErrorInfo::invalidArgument("RTP clock group requires a complete planner-owned A/V sync plan"));
+    }
+    const MediaNodeId group = graph.addNode(MediaNodeKind::RtpClockGroup,
+                                            "realtime.rtp.clock_group",
+                                            "Realtime RTP source clock group");
+    if (!group.isValid()) {
+        return ::media::Result<MediaNodeId>::failure(
+            ::media::ErrorInfo::internalError("failed to add RTP clock group node"));
+    }
+    const auto set = [&](const char* key, std::string value) {
+        return MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, group, key, value);
+    };
+    if (auto status = set("rtp_clock_group.video_clock_rate", std::to_string(*avSync.rtp->videoInput.clockRate)); !status) return ::media::Result<MediaNodeId>::failure(status.error());
+    if (auto status = set("rtp_clock_group.audio_clock_rate", std::to_string(*avSync.rtp->audioInput.clockRate)); !status) return ::media::Result<MediaNodeId>::failure(status.error());
+    if (auto status = set("rtp_clock_group.sender_report_timeout_ns", std::to_string(avSync.rtp->input.senderReportTimeoutNs->nanoseconds())); !status) return ::media::Result<MediaNodeId>::failure(status.error());
+    if (auto status = set("rtp_clock_group.maximum_extrapolation_ns", std::to_string(avSync.rtp->input.maximumExtrapolationNs->nanoseconds())); !status) return ::media::Result<MediaNodeId>::failure(status.error());
+    if (auto status = set("rtp_clock_group.maximum_inter_stream_skew_ns", std::to_string(avSync.rtp->input.maximumSenderReportSkewNs->nanoseconds())); !status) return ::media::Result<MediaNodeId>::failure(status.error());
+    if (auto status = set("rtp_clock_group.maximum_sender_clock_residual_ns", std::to_string(avSync.rtp->input.maximumSenderClockResidualNs->nanoseconds())); !status) return ::media::Result<MediaNodeId>::failure(status.error());
+    if (auto status = set("rtp_clock_group.video_cname_timeout_ns", std::to_string(videoCnameTimeoutNs)); !status) return ::media::Result<MediaNodeId>::failure(status.error());
+    if (auto status = set("rtp_clock_group.audio_cname_timeout_ns", std::to_string(audioCnameTimeoutNs)); !status) return ::media::Result<MediaNodeId>::failure(status.error());
+    if (auto status = set("rtp_clock_group.maximum_sender_clock_rate_error_ppm", std::to_string(*avSync.rtp->input.maximumSenderClockRateErrorPpm)); !status) return ::media::Result<MediaNodeId>::failure(status.error());
+    for (MediaNodeId input : {videoInput, audioInput}) {
+        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
+                graph, owner, input, "rtcp.maximum_extrapolation_ns",
+                std::to_string(avSync.rtp->input.maximumExtrapolationNs->nanoseconds())); !status) {
+            return ::media::Result<MediaNodeId>::failure(status.error());
+        }
+    }
+
+    const struct PortSpec {
+        const char* name;
+    } inputs[] = {{"video_clock"}, {"video_event"}, {"audio_clock"}, {"audio_event"}};
+    for (const auto& input : inputs) {
+        if (auto status = MediaGraphBuildSupport::addInputPortChecked(
+                graph, owner, group, input.name, MediaStreamKind::Metadata,
+                MediaEdgeKind::Metadata, MediaPayloadKind::GraphEvent, true, false); !status) {
+            return ::media::Result<MediaNodeId>::failure(status.error());
+        }
+    }
+    if (auto status = MediaGraphBuildSupport::addOutputPortChecked(
+            graph, owner, group, "clock_group", MediaStreamKind::Metadata,
+            MediaEdgeKind::Metadata, MediaPayloadKind::GraphEvent, false, true); !status) {
+        return ::media::Result<MediaNodeId>::failure(status.error());
+    }
+    const auto connect = [&](MediaNodeId from,
+                             const char* fromPort,
+                             const char* toPort,
+                             const char* label) {
+        return MediaGraphBuildSupport::connectChecked(
+            graph, owner, from, fromPort, group, toPort, label, edgePolicies.metadata);
+    };
+    if (auto status = connect(videoInput, "clock", "video_clock", "video RTP clock -> RTP clock group"); !status) return ::media::Result<MediaNodeId>::failure(status.error());
+    if (auto status = connect(videoInput, "event", "video_event", "video RTP event -> RTP clock group"); !status) return ::media::Result<MediaNodeId>::failure(status.error());
+    if (auto status = connect(audioInput, "clock", "audio_clock", "audio RTP clock -> RTP clock group"); !status) return ::media::Result<MediaNodeId>::failure(status.error());
+    if (auto status = connect(audioInput, "event", "audio_event", "audio RTP event -> RTP clock group"); !status) return ::media::Result<MediaNodeId>::failure(status.error());
+    return ::media::Result<MediaNodeId>::success(group);
+}
+
 ::media::Result<MediaNodeId> addAvPacketStartBarrier(MediaGraph& graph,
                                                       MediaNodeId videoMux,
                                                       MediaNodeId audioMux,
@@ -275,6 +349,22 @@ bool separateRtpOutput(const MediaRealtimeRtpTranscodePlan& plan) noexcept
             return ::media::Result<MediaGraph>::failure(audioInput.error());
         }
         audioInputChain = audioInput.value();
+
+        if (!plan.avSync || !plan.input.rtpTransport || !plan.audioInput.rtpTransport) {
+            return ::media::Result<MediaGraph>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "isolated RTP A/V inputs require A/V sync and transport plans"));
+        }
+        auto clockGroup = addRtpClockGroup(graph,
+                                           videoInputChain.value().input,
+                                           audioInputChain.input,
+                                           *plan.avSync,
+                                           static_cast<std::int64_t>(
+                                               plan.input.rtpTransport->cnameTimeoutMs) * 1'000'000,
+                                           static_cast<std::int64_t>(
+                                               plan.audioInput.rtpTransport->cnameTimeoutMs) * 1'000'000,
+                                           plan.edgePolicies);
+        if (!clockGroup) return ::media::Result<MediaGraph>::failure(clockGroup.error());
     }
 
     MediaNodeId videoPacketSourceNode = videoInputChain.value().packetSelect.split;

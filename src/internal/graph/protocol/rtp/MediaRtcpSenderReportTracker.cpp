@@ -40,6 +40,11 @@ void MediaRtcpSenderReportTracker::observeMedia(uint32_t ssrc, int64_t observedA
     (void)observedAtNs;
 }
 
+void MediaRtcpSenderReportTracker::observeContinuityLoss() noexcept
+{
+    invalidate();
+}
+
 ::media::Status MediaRtcpSenderReportTracker::observe(
     const std::vector<MediaRtcpPacket>& packets, int64_t observedAtNs)
 {
@@ -90,7 +95,8 @@ void MediaRtcpSenderReportTracker::observeMedia(uint32_t ssrc, int64_t observedA
     }
     if (!m_senderReport) return missing("Clock evidence requires an RTCP sender report");
     return ::media::Result<MediaRtcpClockEvidence>::success(MediaRtcpClockEvidence{
-        *m_mediaSsrc, m_senderReport->ntp, m_senderReport->rtpTimestamp, m_cname,
+        *m_mediaSsrc, m_senderReport->ssrc, *m_mediaSsrc,
+        m_senderReport->ntp, m_senderReport->rtpTimestamp, m_cname,
         m_senderReportObservedAtNs, m_cnameObservedAtNs, m_generation});
 }
 
@@ -141,7 +147,10 @@ void MediaRtcpSenderReportTracker::invalidate() noexcept
         return item.type == 1;
     });
     if (cname == chunk.items.end()) return ::media::Status::success();
-    if (cname->value.empty()) return invalidEvidence("RTCP CNAME must not be empty");
+    if (cname->value.empty()) {
+        invalidate();
+        return invalidEvidence("RTCP CNAME must not be empty");
+    }
     if (!m_cname.empty() && m_mediaSsrc && chunk.ssrc == *m_mediaSsrc && m_cname != cname->value) {
         invalidate();
         return invalidEvidence("RTCP CNAME changed for active source");

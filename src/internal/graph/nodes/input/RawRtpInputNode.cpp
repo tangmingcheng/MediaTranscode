@@ -54,9 +54,20 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     }
 
     const auto now = std::chrono::steady_clock::now();
+    const std::int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        now.time_since_epoch()).count();
+    if (auto status = queueClockTransition(context, nowNs); !status) {
+        return processProgress(status);
+    }
+    if (!m_events.empty()) {
+        auto event = std::move(m_events.front());
+        m_events.pop_front();
+        return processProgress(emitOutput(context, event.first, event.second));
+    }
     auto expired = m_reorder->expire(now);
     if (!expired) return processProgress(::media::Status::failure(expired.error()));
-    if (auto status = processReordered(context, std::move(expired).value()); !status) {
+    if (auto status = processReordered(context, std::move(expired).value(),
+                                       m_clockTracker->generation()); !status) {
         return processProgress(status);
     }
     if (!m_events.empty()) {
@@ -76,12 +87,21 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
         const int deadlineTimeoutMs = remaining.count() > 0 ? static_cast<int>(remaining.count()) : 1;
         receiveTimeoutMs = std::min(receiveTimeoutMs, deadlineTimeoutMs);
     }
+    if (m_clockSchedule) {
+        auto clockTimeout = m_clockSchedule->receiveTimeoutMs(nowNs, receiveTimeoutMs);
+        if (!clockTimeout) return processProgress(::media::Status::failure(clockTimeout.error()));
+        receiveTimeoutMs = clockTimeout.value();
+    }
     auto datagram = m_transport.receive(receiveTimeoutMs);
     if (!datagram) {
         if (datagram.error().code == ::media::ErrorCode::WouldBlock) {
+            if (auto clockStatus = queueClockTransition(context, steadyNowNs()); !clockStatus) {
+                return processProgress(clockStatus);
+            }
             auto timedOut = m_reorder->expire(std::chrono::steady_clock::now());
             if (!timedOut) return processProgress(::media::Status::failure(timedOut.error()));
-            if (auto status = processReordered(context, std::move(timedOut).value()); !status) {
+            if (auto status = processReordered(context, std::move(timedOut).value(),
+                                               m_clockTracker->generation()); !status) {
                 return processProgress(status);
             }
             if (!m_events.empty()) {
@@ -131,6 +151,14 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     auto requireCname = requiredBoolNodeOption(options, "RawRtpInputNode", "rtcp.require_cname");
     auto srTimeout = requiredPositiveIntNodeOption(options, "RawRtpInputNode", "rtcp.sender_report_timeout_ms");
     auto cnameTimeout = requiredPositiveIntNodeOption(options, "RawRtpInputNode", "rtcp.cname_timeout_ms");
+    const bool sourceClockMappingEnabled = options && options->has("rtcp.maximum_extrapolation_ns");
+    ::media::Result<std::int64_t> maximumExtrapolation =
+        ::media::Result<std::int64_t>::failure(
+            ::media::ErrorInfo::notInitialized("RTP source clock mapping is not enabled"));
+    if (sourceClockMappingEnabled) {
+        maximumExtrapolation = requiredPositiveInt64NodeOption(
+            options, "RawRtpInputNode", "rtcp.maximum_extrapolation_ns");
+    }
     auto compositionMode = requiredNodeOption(options, "RawRtpInputNode", "rtcp.composition_mode");
     auto streamKind = requiredStreamKindNodeOption(options, "RawRtpInputNode", "rtp.stream_kind");
     auto codec = requiredNodeOption(options, "RawRtpInputNode", "rtp.codec");
@@ -176,6 +204,16 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     m_clockTracker = std::make_unique<MediaRtcpSenderReportTracker>(MediaRtcpSenderReportTrackerConfig{
         requireSr.value(), requireCname.value(), static_cast<int64_t>(srTimeout.value()) * 1'000'000,
         static_cast<int64_t>(cnameTimeout.value()) * 1'000'000});
+    if (sourceClockMappingEnabled) {
+        if (!maximumExtrapolation) return ::media::Status::failure(maximumExtrapolation.error());
+        auto schedule = MediaRtpClockObservationSchedule::create(
+            static_cast<std::int64_t>(srTimeout.value()) * 1'000'000,
+            maximumExtrapolation.value(),
+            static_cast<std::int64_t>(cnameTimeout.value()) * 1'000'000);
+        if (!schedule) return ::media::Status::failure(schedule.error());
+        m_clockSchedule = std::make_unique<MediaRtpClockObservationSchedule>(
+            std::move(schedule).value());
+    }
     m_streamSnapshot = MediaBufferRef(std::move(snapshot).value());
     m_requireCname = requireCname.value();
     m_cancellableReadTimeoutMs = readTimeout.value();
@@ -187,20 +225,32 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
 {
     auto parsed = MediaRtpPacketParser::parse(datagram.bytes);
     if (!parsed) return ::media::Status::failure(parsed.error());
+    const std::uint64_t generationBeforeObservation = m_clockTracker->generation();
     m_clockTracker->observeMedia(parsed.value().ssrc, steadyNowNs());
     auto reordered = m_reorder->push(std::move(parsed).value(), std::chrono::steady_clock::now());
     if (!reordered) return ::media::Status::failure(reordered.error());
-    return processReordered(context, std::move(reordered).value());
+    return processReordered(context, std::move(reordered).value(),
+                            generationBeforeObservation);
 }
 
 ::media::Status RawRtpInputNode::processReordered(
     MediaGraphExecutionContext& context,
-    MediaRtpReorderResult reordered)
+    MediaRtpReorderResult reordered,
+    std::uint64_t generationBeforeObservation)
 {
+    if (!reordered.discontinuities.empty()) {
+        if (m_clockTracker->generation() == generationBeforeObservation) {
+            m_clockTracker->observeContinuityLoss();
+        }
+        if (m_clockSchedule) m_clockSchedule->reset();
+    }
     for (const auto& discontinuity : reordered.discontinuities) {
         m_depacketizer->discontinuity(discontinuity.reason);
         if (context.findOutputChannel(nodeId(), "event")) {
-            m_events.emplace_back("event", makeMediaBufferRef<MediaRtpIngressEventBuffer>(discontinuity));
+            m_events.emplace_back(
+                "event",
+                makeMediaBufferRef<MediaRtpIngressEventBuffer>(
+                    discontinuity, m_clockTracker->generation()));
         }
     }
     for (const MediaRtpPacket& packet : reordered.packets) {
@@ -230,11 +280,44 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     if (!packets) return ::media::Status::failure(packets.error());
     const int64_t observedAtNs = steadyNowNs();
     auto status = m_clockTracker->observe(packets.value(), observedAtNs);
-    if (!status) return status;
+    if (!status) {
+        if (m_clockSchedule) m_clockSchedule->reset();
+        if (context.findOutputChannel(nodeId(), "event")) {
+            m_events.emplace_back(
+                "event",
+                makeMediaBufferRef<MediaRtpIngressEventBuffer>(
+                    MediaRtpClockInvalidation{m_clockTracker->generation()}));
+        }
+        return ::media::Status::success();
+    }
     auto evidence = m_clockTracker->evidence(observedAtNs);
     if (evidence && context.findOutputChannel(nodeId(), "clock")) {
+        if (m_clockSchedule) {
+            if (auto scheduleStatus = m_clockSchedule->observeEvidence(
+                    evidence.value().senderReportObservedAtNs,
+                    evidence.value().cnameObservedAtNs); !scheduleStatus) {
+                return scheduleStatus;
+            }
+        }
         m_events.emplace_back("clock", makeMediaBufferRef<MediaRtpIngressEventBuffer>(std::move(evidence).value()));
     }
+    return ::media::Status::success();
+}
+
+::media::Status RawRtpInputNode::queueClockTransition(
+    MediaGraphExecutionContext& context,
+    std::int64_t observedAtNs)
+{
+    if (!m_clockSchedule || !context.findOutputChannel(nodeId(), "event")) {
+        return ::media::Status::success();
+    }
+    auto transition = m_clockSchedule->transition(observedAtNs);
+    if (!transition) return ::media::Status::failure(transition.error());
+    if (!transition.value()) return ::media::Status::success();
+    m_events.emplace_back(
+        "event",
+        makeMediaBufferRef<MediaRtpIngressEventBuffer>(
+            MediaRtpClockObservation{observedAtNs}));
     return ::media::Status::success();
 }
 
@@ -260,6 +343,7 @@ void RawRtpInputNode::resetState() noexcept
     m_reorder.reset();
     m_depacketizer.reset();
     m_clockTracker.reset();
+    m_clockSchedule.reset();
     m_streamSnapshot.reset();
     m_packets.clear();
     m_events.clear();

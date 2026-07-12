@@ -65,7 +65,8 @@ enum class MediaNodeKind {
     PacketNormalize = 39,
     RawRtpInput = 40,
     AvPacketStartBarrier = 41,
-    PacketStartGate = 42
+    PacketStartGate = 42,
+    RtpClockGroup = 43
 };
 
 } // namespace media::ffmpeg::graph

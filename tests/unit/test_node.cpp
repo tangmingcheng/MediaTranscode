@@ -6,10 +6,13 @@
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/nodes/audio/AudioEncoderFrameQueue.h"
 #include "internal/graph/nodes/mux/RtpMuxStateMachine.h"
+#include "internal/graph/nodes/sync/MediaRtpClockGroupNode.h"
 #include "internal/graph/protocol/rtp/MediaRtcpCompoundParser.h"
 #include "internal/graph/protocol/rtp/MediaRtcpSenderReportTracker.h"
 #include "internal/graph/protocol/rtp/MediaRtpPacketParser.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
+#include "internal/graph/runtime/buffer/MediaRtpIngressEventBuffer.h"
+#include "internal/graph/runtime/buffer/MediaRtpClockGroupBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 
@@ -18,6 +21,7 @@ extern "C" {
 }
 
 #include <array>
+#include <chrono>
 #include <deque>
 #include <memory>
 #include <span>
@@ -28,6 +32,7 @@ using namespace media::ffmpeg::graph;
 using media_transcode::test::TestContext;
 
 void runRtpDepacketizerTests(TestContext& ctx);
+void runRtpSourceClockTests(TestContext& ctx);
 
 namespace {
 
@@ -286,7 +291,9 @@ void testRtcpEvidenceRequiresSameSsrcAndExpires(TestContext& ctx)
     const auto ready = tracker.evidence(300);
     EXPECT_TRUE(ctx, ready);
     if (ready) {
-        EXPECT_EQ(ctx, ready.value().ssrc, static_cast<uint32_t>(0x11111111));
+        EXPECT_EQ(ctx, ready.value().observedMediaSsrc, static_cast<uint32_t>(0x11111111));
+        EXPECT_EQ(ctx, ready.value().senderReportSsrc, static_cast<uint32_t>(0x11111111));
+        EXPECT_EQ(ctx, ready.value().cnameSsrc, static_cast<uint32_t>(0x11111111));
         EXPECT_EQ(ctx, ready.value().cname, std::vector<uint8_t>({'c','a','m','e','r','a'}));
     }
     EXPECT_FALSE(ctx, tracker.evidence(1'301));
@@ -362,6 +369,44 @@ void testRtcpEvidenceRejectsIdentityAndClockDiscontinuities(TestContext& ctx)
     EXPECT_TRUE(ctx, newSource);
     if (newSource) EXPECT_TRUE(ctx, changedSsrc.observe(newSource.value(), 4));
     EXPECT_TRUE(ctx, changedSsrc.evidence(4));
+    const auto continuityGeneration = changedSsrc.generation();
+    changedSsrc.observeContinuityLoss();
+    EXPECT_EQ(ctx, changedSsrc.generation(), continuityGeneration + 1);
+    EXPECT_FALSE(ctx, changedSsrc.evidence(5));
+
+    MediaRtcpSenderReportTracker emptyCname(config);
+    emptyCname.observeMedia(12, 1);
+    const MediaRtcpPacket emptyIdentity{
+        MediaRtcpPacketKind::SourceDescription, 202, 1, 0, std::nullopt, std::nullopt,
+        {{12, {{1, {}}}}}, {}, {}};
+    const auto emptyGeneration = emptyCname.generation();
+    EXPECT_FALSE(ctx, emptyCname.observe({emptyIdentity}, 2));
+    EXPECT_TRUE(ctx, emptyCname.generation() > emptyGeneration);
+    EXPECT_FALSE(ctx, emptyCname.evidence(2));
+}
+
+void testRtpIngressClockLifecycleEventsAreStructured(TestContext& ctx)
+{
+    MediaRtpIngressEventBuffer discontinuity(
+        MediaRtpDiscontinuity{MediaRtpDiscontinuityReason::SsrcChanged, 1, 2}, 7);
+    EXPECT_EQ(ctx, discontinuity.kind(), MediaRtpIngressEventKind::Discontinuity);
+    EXPECT_EQ(ctx, discontinuity.discontinuityGeneration(),
+              std::optional<std::uint64_t>(7));
+
+    MediaRtpIngressEventBuffer observation(MediaRtpClockObservation{123456});
+    EXPECT_EQ(ctx, observation.kind(), MediaRtpIngressEventKind::ClockObservation);
+    EXPECT_TRUE(ctx, observation.clockObservation().has_value());
+    if (observation.clockObservation()) {
+        EXPECT_EQ(ctx, observation.clockObservation()->observedAtNs, static_cast<std::int64_t>(123456));
+    }
+
+    MediaRtpIngressEventBuffer invalidated(MediaRtpClockInvalidation{9});
+    EXPECT_EQ(ctx, invalidated.kind(), MediaRtpIngressEventKind::ClockInvalidation);
+    EXPECT_TRUE(ctx, invalidated.clockInvalidation().has_value());
+    if (invalidated.clockInvalidation()) {
+        EXPECT_EQ(ctx, invalidated.clockInvalidation()->generation, static_cast<std::uint64_t>(9));
+    }
+    EXPECT_TRUE(ctx, hasFlag(invalidated.flags(), MediaBufferFlag::Discontinuity));
 }
 
 class ScriptedAudioEncoderCodecApi final : public AudioEncoderCodecApi {
@@ -515,6 +560,165 @@ void testAudioEncodeFixedFrameStateMachine(TestContext& ctx)
     EXPECT_FALSE(ctx, packetOutput->tryPop(output));
 }
 
+void testRtpClockGroupRejectsStaleCrossPortEvidence(TestContext& ctx)
+{
+    MediaGraph graph;
+    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(8);
+    const MediaNodeId videoClockSource = graph.addNode(MediaNodeKind::DebugDump, "test.video_clock");
+    const MediaNodeId videoEventSource = graph.addNode(MediaNodeKind::DebugDump, "test.video_event");
+    const MediaNodeId audioClockSource = graph.addNode(MediaNodeKind::DebugDump, "test.audio_clock");
+    const MediaNodeId audioEventSource = graph.addNode(MediaNodeKind::DebugDump, "test.audio_event");
+    const MediaNodeId group = graph.addNode(MediaNodeKind::RtpClockGroup, "test.clock_group");
+    const MediaNodeId sink = graph.addNode(MediaNodeKind::DebugDump, "test.clock_group_sink");
+
+    graph.addOutputPort(videoClockSource, "clock", MediaStreamKind::Metadata,
+                        MediaEdgeKind::Metadata, MediaPayloadKind::Unknown);
+    graph.addOutputPort(videoEventSource, "event", MediaStreamKind::Metadata,
+                        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+    graph.addOutputPort(audioClockSource, "clock", MediaStreamKind::Metadata,
+                        MediaEdgeKind::Metadata, MediaPayloadKind::Unknown);
+    graph.addOutputPort(audioEventSource, "event", MediaStreamKind::Metadata,
+                        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+    graph.addInputPort(group, "video_clock", MediaStreamKind::Metadata,
+                       MediaEdgeKind::Metadata, MediaPayloadKind::Unknown);
+    graph.addInputPort(group, "video_event", MediaStreamKind::Metadata,
+                       MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+    graph.addInputPort(group, "audio_clock", MediaStreamKind::Metadata,
+                       MediaEdgeKind::Metadata, MediaPayloadKind::Unknown);
+    graph.addInputPort(group, "audio_event", MediaStreamKind::Metadata,
+                       MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+    graph.addOutputPort(group, "clock_group", MediaStreamKind::Metadata,
+                        MediaEdgeKind::Metadata, MediaPayloadKind::Unknown);
+    graph.addInputPort(sink, "clock_group", MediaStreamKind::Metadata,
+                       MediaEdgeKind::Metadata, MediaPayloadKind::Unknown);
+    graph.connect(videoClockSource, "clock", group, "video_clock", "test.video_clock", policy);
+    graph.connect(videoEventSource, "event", group, "video_event", "test.video_event", policy);
+    graph.connect(audioClockSource, "clock", group, "audio_clock", "test.audio_clock", policy);
+    graph.connect(audioEventSource, "event", group, "audio_event", "test.audio_event", policy);
+    graph.connect(group, "clock_group", sink, "clock_group", "test.clock_group", policy);
+
+    graph.setNodeOption(group, "rtp_clock_group.video_clock_rate", "90000");
+    graph.setNodeOption(group, "rtp_clock_group.audio_clock_rate", "48000");
+    graph.setNodeOption(group, "rtp_clock_group.sender_report_timeout_ns", "3000000000");
+    graph.setNodeOption(group, "rtp_clock_group.maximum_extrapolation_ns", "5000000000");
+    graph.setNodeOption(group, "rtp_clock_group.maximum_inter_stream_skew_ns", "50000000");
+    graph.setNodeOption(group, "rtp_clock_group.maximum_sender_clock_residual_ns", "250000000");
+    graph.setNodeOption(group, "rtp_clock_group.video_cname_timeout_ns", "5000000000");
+    graph.setNodeOption(group, "rtp_clock_group.audio_cname_timeout_ns", "5000000000");
+    graph.setNodeOption(group, "rtp_clock_group.maximum_sender_clock_rate_error_ppm", "1000");
+
+    MediaGraphExecutionContext execution;
+    EXPECT_TRUE(ctx, execution.compile(graph));
+    MediaChannel* videoClock = execution.findInputChannel(group, "video_clock");
+    MediaChannel* videoEvent = execution.findInputChannel(group, "video_event");
+    MediaChannel* audioClock = execution.findInputChannel(group, "audio_clock");
+    MediaChannel* audioEvent = execution.findInputChannel(group, "audio_event");
+    MediaChannel* output = execution.findOutputChannel(group, "clock_group");
+    EXPECT_TRUE(ctx, videoClock != nullptr);
+    EXPECT_TRUE(ctx, videoEvent != nullptr);
+    EXPECT_TRUE(ctx, audioClock != nullptr);
+    EXPECT_TRUE(ctx, audioEvent != nullptr);
+    EXPECT_TRUE(ctx, output != nullptr);
+    if (!videoClock || !videoEvent || !audioClock || !audioEvent || !output) return;
+
+    const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    auto evidence = [now](std::uint32_t ssrc, std::uint32_t rtpTimestamp,
+                          std::uint64_t generation) {
+        return MediaRtcpClockEvidence{ssrc, ssrc, ssrc, {100, 0}, rtpTimestamp,
+                                      {'c', 'a', 'm', 'e', 'r', 'a'}, now, now, generation};
+    };
+    auto pushEvidence = [](MediaChannel& channel, MediaRtcpClockEvidence value) {
+        return channel.push(makeMediaBufferRef<MediaRtpIngressEventBuffer>(std::move(value)));
+    };
+    auto drainStates = [&]() {
+        std::vector<MediaRtpClockGroupState> states;
+        MediaBufferRef buffer;
+        while (output->tryPop(buffer)) {
+            const auto* groupBuffer = dynamic_cast<const MediaRtpClockGroupBuffer*>(buffer.get());
+            EXPECT_TRUE(ctx, groupBuffer != nullptr);
+            if (groupBuffer) states.push_back(groupBuffer->snapshot().state);
+        }
+        return states;
+    };
+
+    MediaRtpClockGroupNode node(group);
+    EXPECT_TRUE(ctx, node.process(execution));
+    drainStates();
+
+    EXPECT_TRUE(ctx, videoEvent->push(
+        makeMediaBufferRef<MediaRtpIngressEventBuffer>(MediaRtpClockObservation{-1})));
+    EXPECT_FALSE(ctx, node.process(execution));
+    drainStates();
+
+    for (int i = 0; i < 3; ++i) {
+        EXPECT_TRUE(ctx, videoEvent->push(
+            makeMediaBufferRef<MediaRtpIngressEventBuffer>(MediaRtpClockObservation{now})));
+    }
+    EXPECT_TRUE(ctx, audioEvent->push(
+        makeMediaBufferRef<MediaRtpIngressEventBuffer>(MediaRtpClockObservation{now})));
+    EXPECT_TRUE(ctx, pushEvidence(*videoClock, evidence(11, 90'000, 1)));
+    EXPECT_TRUE(ctx, pushEvidence(*audioClock, evidence(22, 48'000, 1)));
+    EXPECT_TRUE(ctx, node.process(execution));
+    EXPECT_EQ(ctx, videoEvent->size(), static_cast<std::size_t>(2));
+    EXPECT_EQ(ctx, audioEvent->size(), static_cast<std::size_t>(0));
+    EXPECT_EQ(ctx, videoClock->size(), static_cast<std::size_t>(0));
+    EXPECT_EQ(ctx, audioClock->size(), static_cast<std::size_t>(0));
+    const auto fairStates = drainStates();
+    EXPECT_TRUE(ctx, !fairStates.empty());
+    if (!fairStates.empty()) {
+        EXPECT_EQ(ctx, fairStates.back(), MediaRtpClockGroupState::Locked);
+    }
+    videoEvent->clear();
+
+    EXPECT_TRUE(ctx, videoEvent->push(makeMediaBufferRef<MediaRtpIngressEventBuffer>(
+        MediaRtpDiscontinuity{MediaRtpDiscontinuityReason::SequenceGap, 10, 11}, 2)));
+    EXPECT_TRUE(ctx, pushEvidence(*videoClock, evidence(11, 90'000, 1)));
+    EXPECT_TRUE(ctx, pushEvidence(*audioClock, evidence(22, 48'000, 1)));
+    EXPECT_TRUE(ctx, node.process(execution));
+    const auto discontinuityStates = drainStates();
+    for (const auto state : discontinuityStates) {
+        EXPECT_FALSE(ctx, state == MediaRtpClockGroupState::Locked);
+    }
+    EXPECT_TRUE(ctx, pushEvidence(*videoClock, evidence(11, 90'000, 2)));
+    EXPECT_TRUE(ctx, pushEvidence(*audioClock, evidence(22, 48'000, 1)));
+    EXPECT_TRUE(ctx, node.process(execution));
+    const auto discontinuityRecoveryStates = drainStates();
+    EXPECT_TRUE(ctx, !discontinuityRecoveryStates.empty());
+    if (!discontinuityRecoveryStates.empty()) {
+        EXPECT_EQ(ctx, discontinuityRecoveryStates.back(), MediaRtpClockGroupState::Locked);
+    }
+
+    EXPECT_TRUE(ctx, pushEvidence(*videoClock, evidence(11, 90'000, 1)));
+    EXPECT_TRUE(ctx, pushEvidence(*audioClock, evidence(22, 48'000, 1)));
+    EXPECT_TRUE(ctx, videoEvent->push(
+        makeMediaBufferRef<MediaRtpIngressEventBuffer>(MediaRtpClockInvalidation{2})));
+    for (int i = 0; i < 3; ++i) EXPECT_TRUE(ctx, node.process(execution));
+    const auto staleStates = drainStates();
+    for (const auto state : staleStates) {
+        EXPECT_FALSE(ctx, state == MediaRtpClockGroupState::Locked);
+    }
+
+    EXPECT_TRUE(ctx, pushEvidence(*videoClock, evidence(11, 90'000, 1)));
+    EXPECT_TRUE(ctx, node.process(execution));
+    const auto rejectedStates = drainStates();
+    for (const auto state : rejectedStates) {
+        EXPECT_FALSE(ctx, state == MediaRtpClockGroupState::Locked);
+    }
+
+    EXPECT_TRUE(ctx, pushEvidence(*videoClock, evidence(11, 90'000, 2)));
+    EXPECT_TRUE(ctx, pushEvidence(*audioClock, evidence(22, 48'000, 1)));
+    EXPECT_TRUE(ctx, node.process(execution));
+    EXPECT_TRUE(ctx, node.process(execution));
+    const auto reacquiredStates = drainStates();
+    EXPECT_TRUE(ctx, !reacquiredStates.empty());
+    if (!reacquiredStates.empty()) {
+        EXPECT_EQ(ctx, reacquiredStates.back(), MediaRtpClockGroupState::Locked);
+    }
+    EXPECT_TRUE(ctx, node.stop(execution));
+    execution.reset();
+}
+
 } // namespace
 
 int main()
@@ -624,7 +828,10 @@ int main()
     testRtcpCompoundParserStrictPackets(ctx);
     testRtcpEvidenceRequiresSameSsrcAndExpires(ctx);
     testRtcpEvidenceRejectsIdentityAndClockDiscontinuities(ctx);
+    testRtpIngressClockLifecycleEventsAreStructured(ctx);
     runRtpDepacketizerTests(ctx);
+    runRtpSourceClockTests(ctx);
     testAudioEncodeFixedFrameStateMachine(ctx);
+    testRtpClockGroupRejectsStaleCrossPortEvidence(ctx);
     return ctx.failures == 0 ? 0 : 1;
 }

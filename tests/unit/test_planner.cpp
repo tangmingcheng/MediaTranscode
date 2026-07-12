@@ -67,6 +67,9 @@ void testAvSyncPlannerBuildsCompleteRtpContract(TestContext& ctx)
     EXPECT_EQ(ctx, *plan.rtp->audioInput.clockRate, 48000);
     EXPECT_TRUE(ctx, *plan.rtp->input.requireCommonCname);
     EXPECT_TRUE(ctx, *plan.rtp->input.requireSenderReports);
+    EXPECT_EQ(ctx, *plan.rtp->input.maximumSenderClockRateErrorPpm, 1000);
+    EXPECT_EQ(ctx, plan.rtp->input.maximumSenderClockResidualNs->nanoseconds(),
+              250'000'000);
     EXPECT_TRUE(ctx, *plan.rtp->videoOutput.ssrc != *plan.rtp->audioOutput.ssrc);
     EXPECT_EQ(ctx, *plan.rtp->videoOutput.cname, *plan.rtp->audioOutput.cname);
     EXPECT_TRUE(ctx, *plan.rtp->output.useSharedNtpEpoch);
@@ -258,6 +261,8 @@ void testAvSyncValidatorRejectsMissingAndInconsistentFields(TestContext& ctx)
     EXPECT_MISSING(rtp->input.senderReportTimeoutNs);
     EXPECT_MISSING(rtp->input.maximumExtrapolationNs);
     EXPECT_MISSING(rtp->input.maximumSenderReportSkewNs);
+    EXPECT_MISSING(rtp->input.maximumSenderClockRateErrorPpm);
+    EXPECT_MISSING(rtp->input.maximumSenderClockResidualNs);
     EXPECT_MISSING(rtp->videoOutput.identity);
     EXPECT_MISSING(rtp->videoOutput.payloadType);
     EXPECT_MISSING(rtp->videoOutput.clockRate);
@@ -387,6 +392,8 @@ void testAvSyncValidatorRejectsIsolatedNumericAndOrderingInvariants(TestContext&
     rejectRtp("RTP extrapolation before reacquire", [](auto& p) { p.rtp->input.maximumExtrapolationNs = *p.recovery.reacquisitionTimeoutNs; });
     rejectRtp("RTP SR skew positive", [](auto& p) { p.rtp->input.maximumSenderReportSkewNs = avSyncTime(0); });
     rejectRtp("RTP SR skew below hard discontinuity", [](auto& p) { p.rtp->input.maximumSenderReportSkewNs = *p.recovery.hardDiscontinuityThresholdNs; });
+    rejectRtp("RTP sender clock rate error positive", [](auto& p) { p.rtp->input.maximumSenderClockRateErrorPpm = 0; });
+    rejectRtp("RTP sender clock residual positive", [](auto& p) { p.rtp->input.maximumSenderClockResidualNs = avSyncTime(0); });
 
     const MediaAvSyncPlan ts = tsResult.value();
     auto rejectTs = [&](const char* name, auto mutation) {

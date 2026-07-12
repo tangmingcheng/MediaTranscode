@@ -215,6 +215,7 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
     add_executable(media_transcode_node_tests
         tests/unit/test_node.cpp
         tests/unit/rtp_depacketizer_tests.cpp
+        tests/unit/rtp_source_clock_tests.cpp
     )
     media_transcode_configure_test(media_transcode_node_tests)
     media_transcode_register_test(media_transcode_node_tests "node;deterministic")

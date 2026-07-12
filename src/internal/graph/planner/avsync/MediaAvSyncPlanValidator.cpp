@@ -141,6 +141,10 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
         !positive(rtp.input.senderReportTimeoutNs) ||
         !positive(rtp.input.maximumExtrapolationNs) ||
         !positive(rtp.input.maximumSenderReportSkewNs) ||
+        !rtp.input.maximumSenderClockRateErrorPpm ||
+        *rtp.input.maximumSenderClockRateErrorPpm <= 0 ||
+        *rtp.input.maximumSenderClockRateErrorPpm >= 1'000'000 ||
+        !positive(rtp.input.maximumSenderClockResidualNs) ||
         *rtp.input.senderReportTimeoutNs >= *rtp.input.maximumExtrapolationNs ||
         *rtp.input.maximumExtrapolationNs >= *plan.recovery.reacquisitionTimeoutNs ||
         *rtp.input.maximumSenderReportSkewNs >= *plan.recovery.hardDiscontinuityThresholdNs) {

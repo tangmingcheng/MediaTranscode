@@ -2029,6 +2029,37 @@ void testBuildPlansRawRtpAudioVideoGraph(TestContext& ctx)
     EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::AudioEncode), static_cast<std::size_t>(0));
     EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::RtpOutput), static_cast<std::size_t>(2));
     EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::RtpMux), static_cast<std::size_t>(2));
+    const MediaNode* clockGroup = findNodeByKind(graph, MediaNodeKind::RtpClockGroup);
+    EXPECT_TRUE(ctx, clockGroup != nullptr);
+    if (clockGroup) {
+        EXPECT_TRUE(ctx, graph.findOutputPort(clockGroup->id, "clock_group") != nullptr);
+        EXPECT_EQ(ctx, clockGroup->options.value("rtp_clock_group.video_clock_rate"), std::string("90000"));
+        EXPECT_EQ(ctx, clockGroup->options.value("rtp_clock_group.audio_clock_rate"), std::string("48000"));
+        EXPECT_EQ(ctx, clockGroup->options.value("rtp_clock_group.sender_report_timeout_ns"), std::string("3000000000"));
+        EXPECT_EQ(ctx, clockGroup->options.value("rtp_clock_group.maximum_extrapolation_ns"), std::string("5000000000"));
+        EXPECT_EQ(ctx, clockGroup->options.value("rtp_clock_group.maximum_inter_stream_skew_ns"), std::string("50000000"));
+        EXPECT_EQ(ctx, clockGroup->options.value("rtp_clock_group.maximum_sender_clock_residual_ns"), std::string("250000000"));
+        EXPECT_EQ(ctx, clockGroup->options.value("rtp_clock_group.video_cname_timeout_ns"), std::string("5000000000"));
+        EXPECT_EQ(ctx, clockGroup->options.value("rtp_clock_group.audio_cname_timeout_ns"), std::string("5000000000"));
+        EXPECT_EQ(ctx, clockGroup->options.value("rtp_clock_group.maximum_sender_clock_rate_error_ppm"), std::string("1000"));
+    }
+    EXPECT_TRUE(ctx, findEdgeByNames(graph, "realtime.video.input", "clock",
+                                     "realtime.rtp.clock_group", "video_clock") != nullptr);
+    EXPECT_TRUE(ctx, findEdgeByNames(graph, "realtime.video.input", "event",
+                                     "realtime.rtp.clock_group", "video_event") != nullptr);
+    EXPECT_TRUE(ctx, findEdgeByNames(graph, "realtime.audio.input", "clock",
+                                     "realtime.rtp.clock_group", "audio_clock") != nullptr);
+    EXPECT_TRUE(ctx, findEdgeByNames(graph, "realtime.audio.input", "event",
+                                     "realtime.rtp.clock_group", "audio_event") != nullptr);
+    const MediaNode* videoIngress = findNodeByName(graph, "realtime.video.input");
+    const MediaNode* audioIngress = findNodeByName(graph, "realtime.audio.input");
+    EXPECT_TRUE(ctx, videoIngress != nullptr && audioIngress != nullptr);
+    if (videoIngress && audioIngress) {
+        EXPECT_EQ(ctx, videoIngress->options.value("rtcp.maximum_extrapolation_ns"),
+                  std::string("5000000000"));
+        EXPECT_EQ(ctx, audioIngress->options.value("rtcp.maximum_extrapolation_ns"),
+                  std::string("5000000000"));
+    }
     EXPECT_TRUE(ctx, findEdgeBetweenKinds(graph,
                                           MediaNodeKind::RawRtpInput,
                                           MediaNodeKind::AvPacketStartBarrier,

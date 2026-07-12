@@ -22,6 +22,7 @@ public:
     explicit MediaRtcpSenderReportTracker(MediaRtcpSenderReportTrackerConfig config);
 
     void observeMedia(uint32_t ssrc, int64_t observedAtNs);
+    void observeContinuityLoss() noexcept;
     ::media::Status observe(const std::vector<MediaRtcpPacket>& packets, int64_t observedAtNs);
     ::media::Result<MediaRtcpClockEvidence> evidence(int64_t observedAtNs) const;
     uint64_t generation() const noexcept;

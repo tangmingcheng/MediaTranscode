@@ -13,7 +13,9 @@ struct MediaRtcpNtpTimestamp final {
 };
 
 struct MediaRtcpClockEvidence final {
-    uint32_t ssrc;
+    uint32_t observedMediaSsrc;
+    uint32_t senderReportSsrc;
+    uint32_t cnameSsrc;
     MediaRtcpNtpTimestamp ntp;
     uint32_t rtpTimestamp;
     std::vector<uint8_t> cname;
