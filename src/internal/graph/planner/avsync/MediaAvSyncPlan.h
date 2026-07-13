@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/graph/sync/MediaAvSyncTopology.h"
 #include "internal/graph/time/MediaRunningTime.h"
 
 #include <cstdint>
@@ -7,11 +8,6 @@
 #include <string>
 
 namespace media::ffmpeg::graph {
-
-enum class MediaAvSyncTopology : std::uint8_t {
-    SeparateRtpToSeparateRtp = 0,
-    MpegTsToMpegTs = 1
-};
 
 enum class MediaAvSyncSourceClockMode : std::uint8_t {
     RtpSenderReports = 0,

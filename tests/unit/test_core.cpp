@@ -2,6 +2,9 @@
 
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/core/MediaGraphValidation.h"
+#include "internal/graph/planner/avsync/MediaAvSyncPlan.h"
+#include "internal/graph/sync/MediaAvSyncError.h"
+#include "internal/graph/time/MediaCanonicalTimeMapper.h"
 #include "internal/graph/time/MediaRunningTime.h"
 #include "internal/graph/time/MediaTimestampUnwrapper.h"
 
@@ -256,6 +259,361 @@ void testProtocolTimestampValidityAndEmptyInitialState(TestContext& ctx)
     EXPECT_TRUE(ctx, accepted.timestamp.has_value());
 }
 
+MediaCanonicalSourceTimestamp sourceTimestamp(
+    std::optional<MediaRunningTime> presentationTime,
+    std::optional<MediaRunningTime> decodeTime,
+    std::optional<MediaRunningTime> duration,
+    std::uint64_t generation,
+    const char* sourceIdentity,
+    MediaTimeMappingConfidence confidence)
+{
+    return MediaCanonicalSourceTimestamp(
+        presentationTime,
+        decodeTime,
+        duration,
+        generation,
+        sourceIdentity,
+        confidence);
+}
+
+void testCanonicalMappingAcrossProtocolTimeBases(TestContext& ctx)
+{
+    const auto rtpSource = MediaRunningTime::checkedFromTicks(180'000, 1, 90'000);
+    const auto tsSource = MediaRunningTime::checkedFromTicks(54'000'000, 1, 27'000'000);
+    EXPECT_TRUE(ctx, rtpSource);
+    EXPECT_TRUE(ctx, tsSource);
+    if (!rtpSource || !tsSource) return;
+
+    const auto mapper = MediaCanonicalTimeMapper::create(MediaCanonicalTimeMapperConfig{
+        MediaRunningTime::fromNanoseconds(1'000'000'000),
+        MediaRunningTime::fromNanoseconds(250'000'000),
+        MediaAvSyncTopology::SeparateRtpToSeparateRtp,
+        "clock-group-a",
+        7});
+    EXPECT_TRUE(ctx, mapper);
+    if (!mapper) return;
+
+    const auto rtp = mapper.value().map(sourceTimestamp(
+        rtpSource.value(),
+        rtpSource.value(),
+        MediaRunningTime::fromNanoseconds(20'000'000),
+        7,
+        "clock-group-a",
+        MediaTimeMappingConfidence::Locked));
+    const auto ts = mapper.value().map(sourceTimestamp(
+        tsSource.value(),
+        tsSource.value(),
+        MediaRunningTime::fromNanoseconds(20'000'000),
+        7,
+        "clock-group-a",
+        MediaTimeMappingConfidence::Locked));
+    EXPECT_TRUE(ctx, rtp);
+    EXPECT_TRUE(ctx, ts);
+    if (!rtp || !ts) return;
+    EXPECT_EQ(ctx, rtp.value().presentationTime().nanoseconds(), 1'250'000'000);
+    EXPECT_EQ(ctx, ts.value().presentationTime(), rtp.value().presentationTime());
+    EXPECT_EQ(ctx, rtp.value().generation(), static_cast<std::uint64_t>(7));
+    EXPECT_EQ(ctx, ts.value().sourceIdentity(), std::string("clock-group-a"));
+}
+
+void testCanonicalMappingKeepsPresentationAndDecodeSeparate(TestContext& ctx)
+{
+    const auto mapper = MediaCanonicalTimeMapper::create(MediaCanonicalTimeMapperConfig{
+        MediaRunningTime::fromNanoseconds(10'000'000'000),
+        MediaRunningTime::fromNanoseconds(0),
+        MediaAvSyncTopology::MpegTsToMpegTs,
+        "video",
+        3});
+    EXPECT_TRUE(ctx, mapper);
+    if (!mapper) return;
+
+    const auto mapped = mapper.value().map(sourceTimestamp(
+        MediaRunningTime::fromNanoseconds(10'080'000'000),
+        MediaRunningTime::fromNanoseconds(10'040'000'000),
+        MediaRunningTime::fromNanoseconds(20'000'000),
+        3,
+        "video",
+        MediaTimeMappingConfidence::Degraded));
+    EXPECT_TRUE(ctx, mapped);
+    if (!mapped) return;
+    EXPECT_EQ(ctx, mapped.value().presentationTime().nanoseconds(), 80'000'000);
+    EXPECT_TRUE(ctx, mapped.value().decodeTime());
+    EXPECT_EQ(ctx, mapped.value().decodeTime()->nanoseconds(), 40'000'000);
+    EXPECT_TRUE(ctx, mapped.value().duration());
+    EXPECT_EQ(ctx, mapped.value().duration()->nanoseconds(), 20'000'000);
+    EXPECT_EQ(ctx, mapped.value().confidence(), MediaTimeMappingConfidence::Degraded);
+}
+
+void testCanonicalMappingLargeValuesAvoidIntermediateOverflow(TestContext& ctx)
+{
+    constexpr auto maximum = std::numeric_limits<std::int64_t>::max();
+    const auto mapper = MediaCanonicalTimeMapper::create(MediaCanonicalTimeMapperConfig{
+        MediaRunningTime::fromNanoseconds(maximum - 1'000),
+        MediaRunningTime::fromNanoseconds(500),
+        MediaAvSyncTopology::MpegTsToMpegTs,
+        "large",
+        4});
+    EXPECT_TRUE(ctx, mapper);
+    if (!mapper) return;
+
+    const auto mapped = mapper.value().map(sourceTimestamp(
+        MediaRunningTime::fromNanoseconds(maximum - 1),
+        std::nullopt,
+        std::nullopt,
+        4,
+        "large",
+        MediaTimeMappingConfidence::Locked));
+    EXPECT_TRUE(ctx, mapped);
+    if (mapped) {
+        EXPECT_EQ(ctx, mapped.value().presentationTime().nanoseconds(), 1'499);
+        EXPECT_FALSE(ctx, mapped.value().decodeTime());
+    }
+}
+
+void testCanonicalMappingRejectsUnmappableEvidence(TestContext& ctx)
+{
+    const auto unbound = MediaCanonicalTimeMapper::create(MediaCanonicalTimeMapperConfig{
+        MediaRunningTime::fromNanoseconds(0),
+        MediaRunningTime::fromNanoseconds(0),
+        MediaAvSyncTopology::MpegTsToMpegTs,
+        "",
+        9});
+    EXPECT_FALSE(ctx, unbound);
+    if (!unbound) {
+        EXPECT_EQ(ctx, unbound.error().code(), MediaAvSyncErrorCode::EmptySourceIdentity);
+        EXPECT_EQ(ctx, unbound.error().topology(), MediaAvSyncTopology::MpegTsToMpegTs);
+    }
+
+    const auto mapper = MediaCanonicalTimeMapper::create(MediaCanonicalTimeMapperConfig{
+        MediaRunningTime::fromNanoseconds(0),
+        MediaRunningTime::fromNanoseconds(0),
+        MediaAvSyncTopology::MpegTsToMpegTs,
+        "audio",
+        9});
+    EXPECT_TRUE(ctx, mapper);
+    if (!mapper) return;
+
+    const auto missingPresentation = mapper.value().map(sourceTimestamp(
+        std::nullopt,
+        MediaRunningTime::fromNanoseconds(123),
+        std::nullopt,
+        9,
+        "audio",
+        MediaTimeMappingConfidence::Locked));
+    EXPECT_FALSE(ctx, missingPresentation);
+    if (!missingPresentation) {
+        EXPECT_EQ(ctx, missingPresentation.error().code(), MediaAvSyncErrorCode::MissingSourceEvidence);
+        EXPECT_EQ(ctx, missingPresentation.error().state(), MediaAvSyncErrorState::Mapping);
+        EXPECT_EQ(ctx, missingPresentation.error().observedStreamIdentity(), std::string("audio"));
+        EXPECT_EQ(ctx, missingPresentation.error().observedGeneration(), std::optional<std::uint64_t>(9));
+    }
+
+    const auto wrongIdentity = mapper.value().map(sourceTimestamp(
+        MediaRunningTime::fromNanoseconds(123),
+        std::nullopt,
+        std::nullopt,
+        9,
+        "video",
+        MediaTimeMappingConfidence::Locked));
+    EXPECT_FALSE(ctx, wrongIdentity);
+    if (!wrongIdentity) {
+        EXPECT_EQ(ctx, wrongIdentity.error().code(), MediaAvSyncErrorCode::SourceIdentityMismatch);
+        EXPECT_EQ(ctx, wrongIdentity.error().expectedStreamIdentity(), std::string("audio"));
+        EXPECT_EQ(ctx, wrongIdentity.error().observedStreamIdentity(), std::string("video"));
+    }
+}
+
+void testCanonicalMappingResetRejectsOldGeneration(TestContext& ctx)
+{
+    auto mapper = MediaCanonicalTimeMapper::create(MediaCanonicalTimeMapperConfig{
+        MediaRunningTime::fromNanoseconds(1'000),
+        MediaRunningTime::fromNanoseconds(10),
+        MediaAvSyncTopology::SeparateRtpToSeparateRtp,
+        "video",
+        20});
+    EXPECT_TRUE(ctx, mapper);
+    if (!mapper) return;
+
+    const auto oldEvidence = sourceTimestamp(
+        MediaRunningTime::fromNanoseconds(1'100),
+        std::nullopt,
+        std::nullopt,
+        20,
+        "video",
+        MediaTimeMappingConfidence::Locked);
+    EXPECT_TRUE(ctx, mapper.value().map(oldEvidence));
+
+    EXPECT_TRUE(ctx, mapper.value().reset(MediaCanonicalTimeMapperConfig{
+        MediaRunningTime::fromNanoseconds(5'000),
+        MediaRunningTime::fromNanoseconds(0),
+        MediaAvSyncTopology::SeparateRtpToSeparateRtp,
+        "video",
+        21}));
+    EXPECT_EQ(ctx, mapper.value().generation(), static_cast<std::uint64_t>(21));
+
+    const auto rejected = mapper.value().map(oldEvidence);
+    EXPECT_FALSE(ctx, rejected);
+    if (!rejected) {
+        EXPECT_EQ(ctx, rejected.error().code(), MediaAvSyncErrorCode::GenerationMismatch);
+        EXPECT_EQ(ctx, rejected.error().expectedGeneration(), std::optional<std::uint64_t>(21));
+        EXPECT_EQ(ctx, rejected.error().observedGeneration(), std::optional<std::uint64_t>(20));
+    }
+
+    const auto staleReset = mapper.value().reset(MediaCanonicalTimeMapperConfig{
+        MediaRunningTime::fromNanoseconds(0),
+        MediaRunningTime::fromNanoseconds(0),
+        MediaAvSyncTopology::SeparateRtpToSeparateRtp,
+        "video",
+        20});
+    EXPECT_FALSE(ctx, staleReset);
+    EXPECT_EQ(ctx, mapper.value().generation(), static_cast<std::uint64_t>(21));
+
+    const auto emptyIdentityReset = mapper.value().reset(MediaCanonicalTimeMapperConfig{
+        MediaRunningTime::fromNanoseconds(-100),
+        MediaRunningTime::fromNanoseconds(-200),
+        MediaAvSyncTopology::MpegTsToMpegTs,
+        "",
+        22});
+    EXPECT_FALSE(ctx, emptyIdentityReset);
+    if (!emptyIdentityReset) {
+        EXPECT_EQ(ctx,
+                  emptyIdentityReset.error().code(),
+                  MediaAvSyncErrorCode::EmptySourceIdentity);
+    }
+    const auto preserved = mapper.value().map(sourceTimestamp(
+        MediaRunningTime::fromNanoseconds(5'100),
+        std::nullopt,
+        std::nullopt,
+        21,
+        "video",
+        MediaTimeMappingConfidence::Locked));
+    EXPECT_TRUE(ctx, preserved);
+    if (preserved) {
+        EXPECT_EQ(ctx, preserved.value().presentationTime().nanoseconds(), 100);
+    }
+}
+
+void testCanonicalMappingRejectsFutureGenerationAndOverflow(TestContext& ctx)
+{
+    auto mapper = MediaCanonicalTimeMapper::create(MediaCanonicalTimeMapperConfig{
+        MediaRunningTime::fromNanoseconds(-10),
+        MediaRunningTime::fromNanoseconds(std::numeric_limits<std::int64_t>::max() - 5),
+        MediaAvSyncTopology::MpegTsToMpegTs,
+        "audio",
+        30});
+    EXPECT_TRUE(ctx, mapper);
+    if (!mapper) return;
+
+    const auto future = mapper.value().map(sourceTimestamp(
+        MediaRunningTime::fromNanoseconds(-10),
+        std::nullopt,
+        std::nullopt,
+        31,
+        "audio",
+        MediaTimeMappingConfidence::Locked));
+    EXPECT_FALSE(ctx, future);
+
+    const auto overflow = mapper.value().map(sourceTimestamp(
+        MediaRunningTime::fromNanoseconds(0),
+        std::nullopt,
+        std::nullopt,
+        30,
+        "audio",
+        MediaTimeMappingConfidence::Locked));
+    EXPECT_FALSE(ctx, overflow);
+    if (!overflow) {
+        EXPECT_EQ(ctx, overflow.error().code(), MediaAvSyncErrorCode::TimeOverflow);
+        EXPECT_TRUE(ctx, overflow.error().observedSourceTime());
+        EXPECT_EQ(ctx, overflow.error().sourceEpoch().nanoseconds(), -10);
+        EXPECT_EQ(ctx,
+                  overflow.error().runningTimeEpoch().nanoseconds(),
+                  std::numeric_limits<std::int64_t>::max() - 5);
+    }
+
+    const auto negativeDuration = mapper.value().map(sourceTimestamp(
+        MediaRunningTime::fromNanoseconds(-10),
+        std::nullopt,
+        MediaRunningTime::fromNanoseconds(-1),
+        30,
+        "audio",
+        MediaTimeMappingConfidence::Locked));
+    EXPECT_FALSE(ctx, negativeDuration);
+}
+
+void testCanonicalMappingAvoidsRepresentableAffineIntermediateOverflow(TestContext& ctx)
+{
+    constexpr auto minimum = std::numeric_limits<std::int64_t>::min();
+    constexpr auto maximum = std::numeric_limits<std::int64_t>::max();
+
+    const auto positiveMapper = MediaCanonicalTimeMapper::create(MediaCanonicalTimeMapperConfig{
+        MediaRunningTime::fromNanoseconds(-1),
+        MediaRunningTime::fromNanoseconds(-1),
+        MediaAvSyncTopology::SeparateRtpToSeparateRtp,
+        "video",
+        41});
+    EXPECT_TRUE(ctx, positiveMapper);
+    if (positiveMapper) {
+        const auto mapped = positiveMapper.value().map(sourceTimestamp(
+            MediaRunningTime::fromNanoseconds(maximum),
+            MediaRunningTime::fromNanoseconds(maximum),
+            std::nullopt,
+            41,
+            "video",
+            MediaTimeMappingConfidence::Locked));
+        EXPECT_TRUE(ctx, mapped);
+        if (mapped) {
+            EXPECT_EQ(ctx, mapped.value().presentationTime().nanoseconds(), maximum);
+            EXPECT_EQ(ctx, mapped.value().decodeTime()->nanoseconds(), maximum);
+        }
+    }
+
+    auto negativeMapper = MediaCanonicalTimeMapper::create(MediaCanonicalTimeMapperConfig{
+        MediaRunningTime::fromNanoseconds(1),
+        MediaRunningTime::fromNanoseconds(1),
+        MediaAvSyncTopology::MpegTsToMpegTs,
+        "audio",
+        42});
+    EXPECT_TRUE(ctx, negativeMapper);
+    if (negativeMapper) {
+        const auto cancellationMapped = negativeMapper.value().map(sourceTimestamp(
+            MediaRunningTime::fromNanoseconds(minimum),
+            MediaRunningTime::fromNanoseconds(minimum),
+            std::nullopt,
+            42,
+            "audio",
+            MediaTimeMappingConfidence::Locked));
+        EXPECT_TRUE(ctx, cancellationMapped);
+        if (cancellationMapped) {
+            EXPECT_EQ(ctx,
+                      cancellationMapped.value().presentationTime().nanoseconds(),
+                      minimum);
+            EXPECT_EQ(ctx,
+                      cancellationMapped.value().decodeTime()->nanoseconds(),
+                      minimum);
+        }
+
+        const auto threeTermCancellation = negativeMapper.value().reset(
+            MediaCanonicalTimeMapperConfig{
+                MediaRunningTime::fromNanoseconds(minimum),
+                MediaRunningTime::fromNanoseconds(minimum),
+                MediaAvSyncTopology::MpegTsToMpegTs,
+                "audio",
+                43});
+        EXPECT_TRUE(ctx, threeTermCancellation);
+        const auto mapped = negativeMapper.value().map(sourceTimestamp(
+            MediaRunningTime::fromNanoseconds(minimum),
+            std::nullopt,
+            std::nullopt,
+            43,
+            "audio",
+            MediaTimeMappingConfidence::Locked));
+        EXPECT_TRUE(ctx, mapped);
+        if (mapped) {
+            EXPECT_EQ(ctx, mapped.value().presentationTime().nanoseconds(), minimum);
+        }
+    }
+}
+
 } // namespace
 
 int main()
@@ -279,5 +637,12 @@ int main()
     testTimestampBoundaryClassificationAndStatePreservation(ctx);
     testTimestampUnwrappedOverflowPreservesState(ctx);
     testProtocolTimestampValidityAndEmptyInitialState(ctx);
+    testCanonicalMappingAcrossProtocolTimeBases(ctx);
+    testCanonicalMappingKeepsPresentationAndDecodeSeparate(ctx);
+    testCanonicalMappingLargeValuesAvoidIntermediateOverflow(ctx);
+    testCanonicalMappingRejectsUnmappableEvidence(ctx);
+    testCanonicalMappingResetRejectsOldGeneration(ctx);
+    testCanonicalMappingRejectsFutureGenerationAndOverflow(ctx);
+    testCanonicalMappingAvoidsRepresentableAffineIntermediateOverflow(ctx);
     return ctx.failures == 0 ? 0 : 1;
 }

@@ -2,6 +2,7 @@
 
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <utility>
 
 namespace media {
@@ -148,23 +149,26 @@ struct ErrorInfo {
 /**
  * @brief Lightweight expected-like return type.
  *
- * Result<T> owns either a T value or an ErrorInfo. It does not throw exceptions.
- * Always check ok() or use the explicit bool operator before calling value().
+ * Result<T, E> owns either a T value or an E error. ErrorInfo remains the
+ * default error type. It does not throw exceptions. Always check ok() or use
+ * the explicit bool operator before calling value() or error().
  */
-template <typename T>
+template <typename T, typename E = ErrorInfo>
 class Result {
 public:
     static Result success(T value)
     {
-        return Result(std::move(value));
+        return Result(ValueTag{}, std::move(value));
     }
 
-    static Result failure(ErrorInfo error)
+    static Result failure(E error)
     {
-        if (error.ok()) {
-            error = ErrorInfo::internalError("unknown error");
+        if constexpr (std::is_same_v<E, ErrorInfo>) {
+            if (error.ok()) {
+                error = ErrorInfo::internalError("unknown error");
+            }
         }
-        return Result(std::move(error));
+        return Result(ErrorTag{}, std::move(error));
     }
 
     bool ok() const noexcept
@@ -192,9 +196,9 @@ public:
         return std::move(*m_value);
     }
 
-    const ErrorInfo& error() const noexcept
+    const E& error() const noexcept
     {
-        return m_error;
+        return *m_error;
     }
 
     T valueOr(T fallback) const
@@ -203,44 +207,51 @@ public:
     }
 
 private:
-    explicit Result(T value)
+    struct ValueTag {};
+    struct ErrorTag {};
+
+    Result(ValueTag, T value)
         : m_value(std::move(value))
     {
+        if constexpr (std::is_same_v<E, ErrorInfo>) {
+            m_error.emplace();
+        }
     }
 
-    explicit Result(ErrorInfo error)
-        : m_value(std::nullopt)
-        , m_error(std::move(error))
+    Result(ErrorTag, E error)
+        : m_error(std::move(error))
     {
     }
 
 private:
     std::optional<T> m_value;
-    ErrorInfo m_error;
+    std::optional<E> m_error;
 };
 
 /**
  * @brief Result specialization for operations that only need success/failure.
  */
-template <>
-class Result<void> {
+template <typename E>
+class Result<void, E> {
 public:
     static Result success()
     {
         return Result();
     }
 
-    static Result failure(ErrorInfo error)
+    static Result failure(E error)
     {
-        if (error.ok()) {
-            error = ErrorInfo::internalError("unknown error");
+        if constexpr (std::is_same_v<E, ErrorInfo>) {
+            if (error.ok()) {
+                error = ErrorInfo::internalError("unknown error");
+            }
         }
         return Result(std::move(error));
     }
 
     bool ok() const noexcept
     {
-        return m_error.ok();
+        return m_ok;
     }
 
     explicit operator bool() const noexcept
@@ -248,21 +259,28 @@ public:
         return ok();
     }
 
-    const ErrorInfo& error() const noexcept
+    const E& error() const noexcept
     {
-        return m_error;
+        return *m_error;
     }
 
 private:
-    Result() = default;
+    Result()
+    {
+        if constexpr (std::is_same_v<E, ErrorInfo>) {
+            m_error.emplace();
+        }
+    }
 
-    explicit Result(ErrorInfo error)
-        : m_error(std::move(error))
+    explicit Result(E error)
+        : m_ok(false)
+        , m_error(std::move(error))
     {
     }
 
 private:
-    ErrorInfo m_error;
+    bool m_ok{true};
+    std::optional<E> m_error;
 };
 
 using Status = Result<void>;
