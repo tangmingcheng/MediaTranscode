@@ -60,7 +60,8 @@ std::array<uint8_t, 188> sectionPacket(uint16_t pid, std::vector<uint8_t> sectio
     return packet;
 }
 
-std::vector<uint8_t> validMpegTsBytes(std::size_t extraPesPackets = 0)
+std::vector<uint8_t> validMpegTsBytes(std::size_t extraPesPackets = 0,
+                                      bool counterLoss = false)
 {
     std::vector<uint8_t> pat{0x00, 0xB0, 0x0D, 0x00, 0x01, 0xC1, 0, 0,
                              0, 1, 0xE1, 0x00};
@@ -81,7 +82,7 @@ std::vector<uint8_t> validMpegTsBytes(std::size_t extraPesPackets = 0)
     nullPacket.fill(0xFF);
     nullPacket[0] = 0x47; nullPacket[1] = 0x1F; nullPacket[2] = 0xFF; nullPacket[3] = 0x10;
     auto secondPes = pes;
-    secondPes[3] = 0x11;
+    secondPes[3] = counterLoss ? 0x13 : 0x11;
     std::vector<uint8_t> bytes;
     const auto patPacket = sectionPacket(0, std::move(pat));
     const auto pmtPacket = sectionPacket(0x100, std::move(pmt));
@@ -548,6 +549,33 @@ void testSessionProbeAndPreparedTransfer(TestContext& ctx)
     EXPECT_EQ(ctx, opener.closeCount(), std::size_t{1});
 }
 
+void testSessionPublishesParserContinuityEvidence(TestContext& ctx)
+{
+    FragmentedOpener opener(validMpegTsBytes(0, true));
+    MediaTsInputSessionOptions options;
+    options.protocolUrl = "test://continuity-evidence";
+    options.avioBufferBytes = 64;
+    options.packetStride = 188;
+    options.evidenceCapacity = 32;
+    options.maximumPositionRegressionBytes = 188 * 8;
+    auto session = MediaTsInputSession::open(options, opener);
+    EXPECT_TRUE(ctx, session);
+    if (!session) return;
+    auto evidence = session.value()->evidenceSnapshotAfter(std::nullopt);
+    EXPECT_TRUE(ctx, evidence);
+    const auto event = std::find_if(
+        evidence.value().begin(), evidence.value().end(),
+        [](const MediaTsEvidenceCheckpoint& item) {
+            return item.continuityEvent && item.continuityEvent->pid == 0x101;
+        });
+    EXPECT_TRUE(ctx, event != evidence.value().end());
+    if (event != evidence.value().end()) {
+        EXPECT_EQ(ctx, event->continuityEvent->byteOffset, event->byteOffset);
+        EXPECT_EQ(ctx, event->continuityEvent->reason,
+                  MediaTsContinuityEventReason::CounterLoss);
+    }
+}
+
 void testSessionRejectsUnsupportedAndIncompleteInput(TestContext& ctx)
 {
     FragmentedOpener opener(validMpegTsBytes());
@@ -752,6 +780,7 @@ void runMpegTsInputSessionTests(TestContext& ctx)
     testReentrantCloseFailsWithoutDeadlock(ctx);
     testCheckpointRetainsEveryObservedPcrPid(ctx);
     testSessionProbeAndPreparedTransfer(ctx);
+    testSessionPublishesParserContinuityEvidence(ctx);
     testSessionRejectsUnsupportedAndIncompleteInput(ctx);
     testPreparedDestructionBeforeTransferClosesOnce(ctx);
     testSessionCloseRejectsNewReads(ctx);

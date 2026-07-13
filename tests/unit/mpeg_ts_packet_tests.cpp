@@ -204,7 +204,14 @@ public:
         return ::media::Status::success();
     }
 
+    ::media::Status onContinuityEvent(const MediaTsContinuityEvent& event) override
+    {
+        continuityEvents.push_back(event);
+        return ::media::Status::success();
+    }
+
     std::vector<RecordedPacket> packets;
+    std::vector<MediaTsContinuityEvent> continuityEvents;
 };
 
 class CountingPacketSink final : public MediaTsPacketSink {
@@ -293,7 +300,22 @@ void testMultiplePacketsAndMalformedPackets(TestContext& ctx)
     EXPECT_TRUE(ctx, continuityParser);
     EXPECT_TRUE(ctx, continuityParser.value()->push(first));
     second[3] = 0x12;
-    EXPECT_FALSE(ctx, continuityParser.value()->push(confirmedPacket(second)));
+    EXPECT_TRUE(ctx, continuityParser.value()->push(confirmedPacket(second)));
+    EXPECT_EQ(ctx, continuitySink.continuityEvents.size(), std::size_t{1});
+    EXPECT_EQ(ctx, continuitySink.continuityEvents.front().pid, std::uint16_t{0x120});
+    EXPECT_EQ(ctx, continuitySink.continuityEvents.front().byteOffset, std::uint64_t{188});
+    EXPECT_EQ(ctx, continuitySink.continuityEvents.front().reason,
+              MediaTsContinuityEventReason::CounterLoss);
+
+    RecordingPacketSink discontinuitySink;
+    auto discontinuityParser = MediaTsPacketParser::create(188, discontinuitySink);
+    EXPECT_TRUE(ctx, discontinuityParser);
+    auto explicitBreak = pcrPacket(0x101, 0, 1, 0, true);
+    EXPECT_TRUE(ctx, discontinuityParser.value()->push(confirmedPacket(explicitBreak)));
+    EXPECT_EQ(ctx, discontinuitySink.continuityEvents.size(), std::size_t{1});
+    EXPECT_EQ(ctx, discontinuitySink.continuityEvents.front().pid, std::uint16_t{0x101});
+    EXPECT_EQ(ctx, discontinuitySink.continuityEvents.front().reason,
+              MediaTsContinuityEventReason::DiscontinuityIndicator);
 
     EXPECT_FALSE(ctx, MediaTsPacketParser::create(192, sink));
     EXPECT_FALSE(ctx, MediaTsPacketParser::create(204, sink));
@@ -538,7 +560,7 @@ void testPsiRejectsInvalidEvidence(TestContext& ctx)
     auto unrelated = payloadPacket(0x300, 0, false, std::array<uint8_t, 1>{0xAA});
     EXPECT_TRUE(ctx, truncatedParser.value()->push(unrelated));
     auto wrongContinuation = exactPayloadPacket(0, 2, false, std::span(longPat).subspan(8));
-    EXPECT_FALSE(ctx, truncatedParser.value()->push(confirmedPacket(wrongContinuation)));
+    EXPECT_TRUE(ctx, truncatedParser.value()->push(confirmedPacket(wrongContinuation)));
 }
 
 void testPsiCrossPacketAssemblyAndExplicitTruncation(TestContext& ctx)
@@ -659,7 +681,7 @@ void testPsiAggregateIdentityAndDiscontinuity(TestContext& ctx)
     auto continuityParser = MediaTsPacketParser::create(188, continuityAssembler);
     EXPECT_TRUE(ctx, continuityParser);
     EXPECT_TRUE(ctx, continuityParser.value()->push(sectionPacket(0, 0, patSection(4, programOne, 0, 1))));
-    EXPECT_FALSE(ctx, continuityParser.value()->push(confirmedPacket(
+    EXPECT_TRUE(ctx, continuityParser.value()->push(confirmedPacket(
         sectionPacket(0, 2, patSection(4, programTwo, 1, 1)))));
     EXPECT_TRUE(ctx, continuityParser.value()->push(sectionPacket(0, 3, patSection(4, programTwo, 1, 1))));
     EXPECT_TRUE(ctx, continuitySink.snapshots.empty());

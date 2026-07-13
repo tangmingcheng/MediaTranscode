@@ -58,7 +58,40 @@ MediaTsClockProjection::MediaTsClockProjection(
 ::media::Status MediaTsClockProjection::replayOne(
     const MediaTsEvidenceCheckpoint& evidence)
 {
-    if (m_checkpoints.empty() && evidence.generation != m_tracker.generation()) {
+    if (evidence.pcrObservation &&
+        evidence.pcrObservation->byteOffset != evidence.byteOffset) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("MPEG-TS projection PCR offset mismatch"));
+    }
+    if (evidence.continuityEvent &&
+        evidence.continuityEvent->byteOffset != evidence.byteOffset) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("MPEG-TS projection continuity event offset mismatch"));
+    }
+    if (evidence.pcrObservation) {
+        const bool matchingDiscontinuityEvent = evidence.continuityEvent &&
+            evidence.continuityEvent->pid == evidence.pcrObservation->pid &&
+            evidence.continuityEvent->reason ==
+                MediaTsContinuityEventReason::DiscontinuityIndicator;
+        if (evidence.pcrObservation->discontinuity != matchingDiscontinuityEvent) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "MPEG-TS PCR discontinuity must match its raw continuity event"));
+        }
+    }
+    if (m_lastRawTransportGeneration) {
+        if (evidence.generation < *m_lastRawTransportGeneration ||
+            evidence.generation - *m_lastRawTransportGeneration > 1) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument("MPEG-TS raw transport generation is non-contiguous"));
+        }
+        const bool advanced = evidence.generation != *m_lastRawTransportGeneration;
+        if (advanced != evidence.continuityEvent.has_value()) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument("MPEG-TS raw transport generation/event mismatch"));
+        }
+    }
+    if (!m_lastRawTransportGeneration && evidence.generation != m_tracker.generation()) {
         auto seeded = MediaTsProgramClockTracker::create(m_policy, evidence.generation);
         if (!seeded) return ::media::Status::failure(seeded.error());
         m_tracker = std::move(seeded).value();
@@ -75,6 +108,13 @@ MediaTsClockProjection::MediaTsClockProjection(
             ::media::ErrorInfo::invalidArgument("MPEG-TS clock projection capacity exhausted"));
     }
     if (auto status = validateInventory(evidence.inventory); !status) return status;
+    if (evidence.continuityEvent) {
+        const auto pid = evidence.continuityEvent->pid;
+        ::media::Status continuity = pid == m_policy.pcrPid
+            ? m_tracker.observePcrContinuityLoss(pid)
+            : m_tracker.observeElementaryContinuityLoss(pid);
+        if (!continuity) return continuity;
+    }
     if (evidence.pcrObservation && evidence.pcrObservation->pid == m_policy.pcrPid) {
         const auto& raw = *evidence.pcrObservation;
         auto status = m_tracker.observe(MediaTsPcrObservation{
@@ -85,7 +125,7 @@ MediaTsClockProjection::MediaTsClockProjection(
             .videoPid = m_policy.videoPid,
             .audioPid = m_policy.audioPid,
             .pcr27Mhz = raw.pcr27Mhz,
-            .discontinuity = raw.discontinuity});
+            .discontinuity = false});
         if (!status) return status;
     }
     std::optional<MediaTsPcrCalibration> calibration;
@@ -99,6 +139,7 @@ MediaTsClockProjection::MediaTsClockProjection(
         .calibration = calibration,
         .generation = m_tracker.generation()});
     m_lastReplayedOffset = evidence.byteOffset;
+    m_lastRawTransportGeneration = evidence.generation;
     return ::media::Status::success();
 }
 

@@ -258,15 +258,20 @@ MediaTsPacketParser::MediaTsPacketParser(MediaTsPacketSink& sink)
     }
 
     const auto previous = m_continuity.find(pid);
+    if (discontinuity) {
+        auto eventStatus = m_sink.onContinuityEvent(MediaTsContinuityEvent{
+            byteOffset, pid, MediaTsContinuityEventReason::DiscontinuityIndicator});
+        if (!eventStatus) return eventStatus;
+    }
     if (!discontinuity && previous != m_continuity.end()) {
         const uint8_t expected = hasPayload
             ? static_cast<uint8_t>((previous->second.counter + 1) & 0x0F)
             : previous->second.counter;
         if (continuityCounter != expected) {
-            auto resetStatus = m_sink.onContinuityLoss(pid);
+            auto resetStatus = m_sink.onContinuityEvent(MediaTsContinuityEvent{
+                byteOffset, pid, MediaTsContinuityEventReason::CounterLoss});
             m_continuity.erase(pid);
             if (!resetStatus) return resetStatus;
-            return invalidPacket("MPEG-TS continuity counter loss");
         }
     }
 

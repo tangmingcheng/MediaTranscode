@@ -43,6 +43,7 @@ private:
     std::vector<MediaTsClockProjectionCheckpoint> m_checkpoints;
     std::optional<std::uint64_t> m_lastReplayedOffset;
     std::optional<std::uint64_t> m_packetPositionHighWatermark;
+    std::optional<std::uint64_t> m_lastRawTransportGeneration;
 };
 
 } // namespace media::ffmpeg::graph

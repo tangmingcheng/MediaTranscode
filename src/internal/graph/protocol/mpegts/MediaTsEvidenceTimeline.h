@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/protocol/mpegts/MediaTsProgramInventory.h"
+#include "internal/graph/protocol/mpegts/MediaTsPacketParser.h"
 #include "media_transcode/Result.h"
 
 #include <cstddef>
@@ -24,6 +25,7 @@ struct MediaTsEvidenceCheckpoint final {
     std::uint64_t byteOffset = 0;
     MediaTsProgramInventorySnapshot inventory;
     std::optional<MediaTsRawPcrEvidence> pcrObservation;
+    std::optional<MediaTsContinuityEvent> continuityEvent;
     bool discontinuity = false;
     std::uint64_t generation = 0;
 };

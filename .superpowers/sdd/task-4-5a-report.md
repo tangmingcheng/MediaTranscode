@@ -35,3 +35,11 @@ ctest --test-dir out/build/x64-debug -C Debug --output-on-failure -R "media_tran
 
 - Task 4.5B must call `observePacketPosition()` before incremental replay so safe projection eviction follows actual FFmpeg packet-position progress.
 - Task 4.5B must keep independent video and audio PTS/DTS mapper state while sharing this PCR-domain projection.
+
+## Reviewer Follow-up
+
+- Raw transport checkpoints now carry an explicit continuity event with PID, packet byte offset, and either counter-loss or discontinuity-indicator reason. The parser publishes the event before the packet, and the session observer merges both into one same-offset checkpoint.
+- Raw transport generation describes every observed transport continuity event. Selected source generation is the clock tracker's generation and changes only for selected video, audio, or PCR PID events; unrelated PID events leave source calibration and generation unchanged.
+- Projection requires non-regressing raw generation. After the first retained range item seeds state, every increment must be exactly one and must have one matching event; jumps and event/generation mismatches fail transactionally.
+- Selected elementary or PCR continuity events clear calibration and require PCR reacquisition. A PCR discontinuity event and same-packet PCR observation advance selected source generation only once.
+- Parser-to-session production-shaped coverage verifies counter-loss evidence reaches the ordered session snapshot. Deterministic projection tests cover selected and unrelated PIDs, same-offset validation, generation jumps/regressions, capacity, rollback bounds, exhaustion, and eviction recovery.

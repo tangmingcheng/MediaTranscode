@@ -58,10 +58,14 @@ public:
     ::media::Status onPacket(const MediaTsPacketView& packet) override
     {
         std::lock_guard lock(m_mutex);
-        if (packet.discontinuity) ++m_generation;
+        if (m_pendingContinuityEvent &&
+            m_pendingContinuityEvent->byteOffset != packet.byteOffset) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument("MPEG-TS continuity event was not merged with its packet"));
+        }
         auto assembled = m_assembler->onPacket(packet);
         if (!assembled) return assembled;
-        if (!m_inventoryDirty && !packet.pcr27Mhz && !packet.discontinuity) {
+        if (!m_inventoryDirty && !packet.pcr27Mhz && !m_pendingContinuityEvent) {
             return ::media::Status::success();
         }
         MediaTsEvidenceCheckpoint checkpoint;
@@ -75,17 +79,30 @@ public:
                 .discontinuity = packet.discontinuity};
         }
         checkpoint.discontinuity = packet.discontinuity;
+        checkpoint.continuityEvent = m_pendingContinuityEvent;
         checkpoint.generation = m_generation;
         auto appended = m_timeline.append(std::move(checkpoint));
-        if (appended) m_inventoryDirty = false;
+        if (appended) {
+            m_inventoryDirty = false;
+            m_pendingContinuityEvent.reset();
+        }
         return appended;
     }
 
-    ::media::Status onContinuityLoss(std::uint16_t pid) override
+    ::media::Status onContinuityEvent(const MediaTsContinuityEvent& event) override
     {
         std::lock_guard lock(m_mutex);
+        if (m_pendingContinuityEvent) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument("MPEG-TS packet produced duplicate continuity events"));
+        }
+        if (m_generation == std::numeric_limits<std::uint64_t>::max()) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument("MPEG-TS transport generation exhausted"));
+        }
         ++m_generation;
-        return m_assembler->onContinuityLoss(pid);
+        m_pendingContinuityEvent = event;
+        return m_assembler->onContinuityEvent(event);
     }
 
     ::media::Status onProgramInventory(MediaTsProgramInventorySnapshot snapshot) override
@@ -123,6 +140,7 @@ private:
     std::unique_ptr<MediaTsPsiSectionAssembler> m_assembler;
     MediaTsEvidenceTimeline m_timeline;
     std::optional<MediaTsProgramInventorySnapshot> m_inventory;
+    std::optional<MediaTsContinuityEvent> m_pendingContinuityEvent;
     bool m_inventoryDirty = false;
     mutable std::recursive_mutex m_mutex;
     std::uint64_t m_nextOffset = 0;

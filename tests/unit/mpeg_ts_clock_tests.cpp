@@ -41,6 +41,11 @@ MediaTsEvidenceCheckpoint clockEvidence(std::uint64_t offset,
         .pid = 0x101,
         .pcr27Mhz = rawPcr,
         .discontinuity = discontinuity};
+    if (discontinuity) {
+        value.continuityEvent = MediaTsContinuityEvent{
+            offset, 0x101, MediaTsContinuityEventReason::DiscontinuityIndicator};
+        value.generation = 2;
+    }
     return value;
 }
 
@@ -157,6 +162,7 @@ void testEvidenceOrderedRangeAndClockProjection(TestContext& ctx)
         clockEvidence(300, 5'400'000),
         clockEvidence(400, 0, true),
         clockEvidence(500, 2'700'000)};
+    next[2].generation = 2;
     EXPECT_TRUE(ctx, projection.value().replay(next));
     auto afterDiscontinuity = projection.value().atOrBefore(500);
     EXPECT_TRUE(ctx, afterDiscontinuity);
@@ -179,6 +185,62 @@ void testEvidenceOrderedRangeAndClockProjection(TestContext& ctx)
     auto seeded = MediaTsClockProjection::create(clockPolicy(), 2, 400).value();
     EXPECT_TRUE(ctx, seeded.replay({retainedGeneration}));
     EXPECT_EQ(ctx, seeded.atOrBefore(100).value().generation, std::uint64_t{7});
+
+    auto generationRules = MediaTsClockProjection::create(clockPolicy(), 8, 400).value();
+    auto base = clockEvidence(100, 0);
+    auto locked = clockEvidence(200, 2'700'000);
+    EXPECT_TRUE(ctx, generationRules.replay({base, locked}));
+    const auto beforeFailure = generationRules.atOrBefore(200).value();
+    auto jump = clockEvidence(300, 5'400'000);
+    jump.generation = 3;
+    EXPECT_FALSE(ctx, generationRules.replay({jump}));
+    EXPECT_EQ(ctx, generationRules.atOrBefore(200).value().generation,
+              beforeFailure.generation);
+    auto eventWithoutAdvance = clockEvidence(300, 5'400'000);
+    eventWithoutAdvance.continuityEvent = MediaTsContinuityEvent{
+        300, 0x777, MediaTsContinuityEventReason::CounterLoss};
+    EXPECT_FALSE(ctx, generationRules.replay({eventWithoutAdvance}));
+    auto unrelated = clockEvidence(300, 5'400'000);
+    unrelated.generation = 2;
+    unrelated.continuityEvent = MediaTsContinuityEvent{
+        300, 0x777, MediaTsContinuityEventReason::CounterLoss};
+    EXPECT_TRUE(ctx, generationRules.replay({unrelated}));
+    EXPECT_EQ(ctx, generationRules.atOrBefore(300).value().generation,
+              beforeFailure.generation);
+    auto selectedBreak = clockEvidence(400, 8'100'000);
+    selectedBreak.generation = 3;
+    selectedBreak.continuityEvent = MediaTsContinuityEvent{
+        400, 0x201, MediaTsContinuityEventReason::CounterLoss};
+    EXPECT_TRUE(ctx, generationRules.replay({selectedBreak}));
+    EXPECT_FALSE(ctx, generationRules.atOrBefore(400).value().calibration.has_value());
+
+    auto mismatch = clockEvidence(500, 10'800'000);
+    mismatch.generation = 4;
+    mismatch.continuityEvent = MediaTsContinuityEvent{
+        499, 0x201, MediaTsContinuityEventReason::CounterLoss};
+    EXPECT_FALSE(ctx, generationRules.replay({mismatch}));
+
+    auto pcrOffsetMismatch = clockEvidence(500, 10'800'000);
+    pcrOffsetMismatch.generation = 3;
+    pcrOffsetMismatch.pcrObservation->byteOffset = 499;
+    EXPECT_FALSE(ctx, generationRules.replay({pcrOffsetMismatch}));
+    EXPECT_EQ(ctx, generationRules.lastReplayedOffset(),
+              std::optional<std::uint64_t>{400});
+
+    auto exhaustedProjection = MediaTsClockProjection::create(clockPolicy(), 2, 188).value();
+    auto exhaustedEvent = clockEvidence(100, 0);
+    exhaustedEvent.generation = std::numeric_limits<std::uint64_t>::max();
+    exhaustedEvent.continuityEvent = MediaTsContinuityEvent{
+        100, 0x201, MediaTsContinuityEventReason::CounterLoss};
+    EXPECT_FALSE(ctx, exhaustedProjection.replay({exhaustedEvent}));
+    EXPECT_FALSE(ctx, exhaustedProjection.lastReplayedOffset().has_value());
+
+    auto eviction = MediaTsClockProjection::create(clockPolicy(), 2, 100).value();
+    EXPECT_TRUE(ctx, eviction.replay({clockEvidence(100, 0), clockEvidence(200, 2'700'000)}));
+    EXPECT_TRUE(ctx, eviction.observePacketPosition(300));
+    EXPECT_TRUE(ctx, eviction.replay({clockEvidence(300, 5'400'000)}));
+    EXPECT_FALSE(ctx, eviction.atOrBefore(100));
+    EXPECT_TRUE(ctx, eviction.atOrBefore(200));
 }
 
 void testProgramClockTracker(TestContext& ctx)

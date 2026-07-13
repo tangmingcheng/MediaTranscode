@@ -69,9 +69,10 @@ void MediaTsPsiSectionAssembler::resetPidGeneration(uint16_t pid)
     m_programsByPmtPid.erase(pid);
 }
 
-::media::Status MediaTsPsiSectionAssembler::onContinuityLoss(uint16_t pid)
+::media::Status MediaTsPsiSectionAssembler::onContinuityEvent(
+    const MediaTsContinuityEvent& event)
 {
-    resetPidGeneration(pid);
+    resetPidGeneration(event.pid);
     return ::media::Status::success();
 }
 

@@ -22,13 +22,28 @@ struct MediaTsPacketView final {
     std::span<const uint8_t> payloadSpan;
 };
 
+enum class MediaTsContinuityEventReason {
+    CounterLoss,
+    DiscontinuityIndicator
+};
+
+struct MediaTsContinuityEvent final {
+    std::uint64_t byteOffset = 0;
+    std::uint16_t pid = 0;
+    MediaTsContinuityEventReason reason = MediaTsContinuityEventReason::CounterLoss;
+
+    bool operator==(const MediaTsContinuityEvent&) const = default;
+};
+
 class MediaTsPacketSink {
 public:
     virtual ~MediaTsPacketSink() = default;
 
     // packet.payloadSpan is valid only for the duration of this synchronous call.
     virtual ::media::Status onPacket(const MediaTsPacketView& packet) = 0;
-    virtual ::media::Status onContinuityLoss(uint16_t) { return ::media::Status::success(); }
+    virtual ::media::Status onContinuityEvent(const MediaTsContinuityEvent&) {
+        return ::media::Status::success();
+    }
 };
 
 class MediaTsPacketParser final {

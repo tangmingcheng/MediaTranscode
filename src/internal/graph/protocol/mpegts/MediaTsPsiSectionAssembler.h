@@ -16,7 +16,7 @@ public:
     explicit MediaTsPsiSectionAssembler(MediaTsProgramInventorySink& sink);
 
     ::media::Status onPacket(const MediaTsPacketView& packet) override;
-    ::media::Status onContinuityLoss(uint16_t pid) override;
+    ::media::Status onContinuityEvent(const MediaTsContinuityEvent& event) override;
 
 private:
     struct SectionState final {
