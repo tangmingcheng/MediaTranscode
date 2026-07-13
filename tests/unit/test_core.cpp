@@ -51,6 +51,30 @@ void testRunningTimeArithmetic(TestContext& ctx)
     EXPECT_FALSE(ctx, subtractOverflow);
 }
 
+void testDefaultResultErrorContract(TestContext& ctx)
+{
+    const auto valueSuccess = ::media::Result<int>::success(7);
+    EXPECT_TRUE(ctx, valueSuccess);
+    EXPECT_EQ(ctx, valueSuccess.value(), 7);
+    EXPECT_TRUE(ctx, valueSuccess.error().ok());
+    EXPECT_EQ(ctx, valueSuccess.error().code, ::media::ErrorCode::None);
+
+    const auto valueNormalized = ::media::Result<int>::failure(::media::ErrorInfo{});
+    EXPECT_FALSE(ctx, valueNormalized);
+    EXPECT_EQ(ctx, valueNormalized.error().code, ::media::ErrorCode::InternalError);
+    EXPECT_EQ(ctx, valueNormalized.error().message, std::string("unknown error"));
+
+    const auto voidSuccess = ::media::Result<void>::success();
+    EXPECT_TRUE(ctx, voidSuccess);
+    EXPECT_TRUE(ctx, voidSuccess.error().ok());
+    EXPECT_EQ(ctx, voidSuccess.error().code, ::media::ErrorCode::None);
+
+    const auto voidNormalized = ::media::Result<void>::failure(::media::ErrorInfo{});
+    EXPECT_FALSE(ctx, voidNormalized);
+    EXPECT_EQ(ctx, voidNormalized.error().code, ::media::ErrorCode::InternalError);
+    EXPECT_EQ(ctx, voidNormalized.error().message, std::string("unknown error"));
+}
+
 void testRunningTimeRationalRescale(TestContext& ctx)
 {
     const auto oneSecond = MediaRunningTime::checkedFromTicks(90'000, 1, 90'000);
@@ -614,6 +638,44 @@ void testCanonicalMappingAvoidsRepresentableAffineIntermediateOverflow(TestConte
     }
 }
 
+void testCanonicalMappingRejectsFinalValueBelowMinimum(TestContext& ctx)
+{
+    constexpr auto minimum = std::numeric_limits<std::int64_t>::min();
+    const auto mapper = MediaCanonicalTimeMapper::create(MediaCanonicalTimeMapperConfig{
+        MediaRunningTime::fromNanoseconds(1),
+        MediaRunningTime::fromNanoseconds(minimum),
+        MediaAvSyncTopology::SeparateRtpToSeparateRtp,
+        "audio",
+        44});
+    EXPECT_TRUE(ctx, mapper);
+    if (!mapper) return;
+
+    const auto belowMinimum = mapper.value().map(sourceTimestamp(
+        MediaRunningTime::fromNanoseconds(0),
+        std::nullopt,
+        std::nullopt,
+        44,
+        "audio",
+        MediaTimeMappingConfidence::Locked));
+    EXPECT_FALSE(ctx, belowMinimum);
+    if (!belowMinimum) {
+        EXPECT_EQ(ctx, belowMinimum.error().code(), MediaAvSyncErrorCode::TimeOverflow);
+        EXPECT_EQ(ctx, belowMinimum.error().state(), MediaAvSyncErrorState::Mapping);
+        EXPECT_EQ(ctx,
+                  belowMinimum.error().topology(),
+                  MediaAvSyncTopology::SeparateRtpToSeparateRtp);
+        EXPECT_EQ(ctx,
+                  belowMinimum.error().observedSourceTime(),
+                  std::optional<MediaRunningTime>(MediaRunningTime::fromNanoseconds(0)));
+        EXPECT_EQ(ctx, belowMinimum.error().sourceEpoch().nanoseconds(), 1);
+        EXPECT_EQ(ctx, belowMinimum.error().runningTimeEpoch().nanoseconds(), minimum);
+        EXPECT_EQ(ctx, belowMinimum.error().minimumRunningTimeNs(), minimum);
+        EXPECT_EQ(ctx,
+                  belowMinimum.error().maximumRunningTimeNs(),
+                  std::numeric_limits<std::int64_t>::max());
+    }
+}
+
 } // namespace
 
 int main()
@@ -631,6 +693,7 @@ int main()
     EXPECT_EQ(ctx, graph.edgeCount(), static_cast<std::size_t>(1));
     EXPECT_TRUE(ctx, MediaGraphValidation::validate(graph).ok());
     testRunningTimeArithmetic(ctx);
+    testDefaultResultErrorContract(ctx);
     testRunningTimeRationalRescale(ctx);
     testTimestampWraps(ctx);
     testTimestampDiscontinuityAndReset(ctx);
@@ -644,5 +707,6 @@ int main()
     testCanonicalMappingResetRejectsOldGeneration(ctx);
     testCanonicalMappingRejectsFutureGenerationAndOverflow(ctx);
     testCanonicalMappingAvoidsRepresentableAffineIntermediateOverflow(ctx);
+    testCanonicalMappingRejectsFinalValueBelowMinimum(ctx);
     return ctx.failures == 0 ? 0 : 1;
 }
