@@ -23,6 +23,7 @@ struct MediaTsInputSessionOptions final {
     std::size_t packetStride = 188;
     std::size_t evidenceCapacity = 0;
     std::uint64_t maximumPositionRegressionBytes = 0;
+    FFmpegObservedAvioLifecycleSink* lifecycleSink = nullptr;
 };
 
 class MediaTsInputSession final {
@@ -59,6 +60,7 @@ private:
     std::unique_ptr<EvidenceObserver> m_evidenceObserver;
     std::unique_ptr<FFmpegObservedReadAvio> m_observedAvio;
     AVFormatContext* m_formatContext = nullptr;
+    FFmpegObservedAvioLifecycleSink* m_lifecycleSink = nullptr;
     std::vector<FFmpegInputStreamSnapshot> m_streamSnapshots;
 };
 

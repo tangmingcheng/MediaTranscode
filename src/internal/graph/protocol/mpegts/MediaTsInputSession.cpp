@@ -2,6 +2,7 @@
 
 #include "internal/graph/protocol/mpegts/MediaTsPacketParser.h"
 #include "internal/graph/protocol/mpegts/MediaTsPsiSectionAssembler.h"
+#include "internal/graph/runtime/buffer/FFmpegInputStreamSnapshotFactory.h"
 
 #include <limits>
 #include <optional>
@@ -110,8 +111,9 @@ MediaTsInputSession::~MediaTsInputSession()
 {
     m_interruptState.cancel();
     if (m_formatContext) {
-        m_formatContext->pb = nullptr;
         avformat_close_input(&m_formatContext);
+        if (m_lifecycleSink) m_lifecycleSink->onLifecycleEvent(
+            FFmpegObservedAvioLifecycleEvent::FormatClosed);
     }
     m_observedAvio.reset();
 }
@@ -138,6 +140,7 @@ MediaTsInputSession::~MediaTsInputSession()
             ::media::ErrorInfo::unsupported("only 188-byte MPEG-TS framing is supported"));
     }
     auto session = std::unique_ptr<MediaTsInputSession>(new MediaTsInputSession());
+    session->m_lifecycleSink = options.lifecycleSink;
     auto observer = EvidenceObserver::create(options.packetStride, options.evidenceCapacity,
                                              options.maximumPositionRegressionBytes);
     if (!observer) return ::media::Result<std::unique_ptr<MediaTsInputSession>>::failure(observer.error());
@@ -145,10 +148,12 @@ MediaTsInputSession::~MediaTsInputSession()
     auto avio = opener
         ? FFmpegObservedReadAvio::open(
               options.protocolUrl, options.protocolOptions, options.avioBufferBytes,
-              *session->m_evidenceObserver, session->m_interruptState, *opener)
+              *session->m_evidenceObserver, session->m_interruptState, *opener,
+              options.lifecycleSink)
         : FFmpegObservedReadAvio::open(
               options.protocolUrl, options.protocolOptions, options.avioBufferBytes,
-              *session->m_evidenceObserver, session->m_interruptState);
+              *session->m_evidenceObserver, session->m_interruptState,
+              options.lifecycleSink);
     if (!avio) return ::media::Result<std::unique_ptr<MediaTsInputSession>>::failure(avio.error());
     session->m_observedAvio = std::move(avio.value());
     session->m_formatContext = avformat_alloc_context();
@@ -162,7 +167,11 @@ MediaTsInputSession::~MediaTsInputSession()
             ::media::ErrorInfo::notInitialized("FFmpeg MPEG-TS demuxer is unavailable"));
     }
     AVDictionary* demuxOptions = nullptr;
-    av_dict_copy(&demuxOptions, options.demuxOptions, 0);
+    const int dictionaryResult = av_dict_copy(&demuxOptions, options.demuxOptions, 0);
+    if (dictionaryResult < 0) {
+        return ::media::Result<std::unique_ptr<MediaTsInputSession>>::failure(
+            ::media::ErrorInfo::allocationFailed("failed to copy MPEG-TS demux options"));
+    }
     int result = avformat_open_input(&session->m_formatContext, nullptr, inputFormat, &demuxOptions);
     av_dict_free(&demuxOptions);
     if (result >= 0) result = avformat_find_stream_info(session->m_formatContext, nullptr);
@@ -181,26 +190,9 @@ MediaTsInputSession::~MediaTsInputSession()
 
 ::media::Status MediaTsInputSession::buildStreamSnapshots()
 {
-    auto buffer = FFmpegFormatContextBuffer::createInput(
-        ::media::ffmpeg::InputFormatContextPtr(m_formatContext));
-    if (!buffer) return ::media::Status::failure(buffer.error());
-    for (unsigned index = 0; index < m_formatContext->nb_streams; ++index) {
-        const auto* snapshot = buffer.value()->inputStreamSnapshot(static_cast<int>(index));
-        if (!snapshot) return ::media::Status::failure(
-            ::media::ErrorInfo::notInitialized("MPEG-TS stream snapshot is incomplete"));
-        auto codec = snapshot->cloneCodecParameters();
-        if (!codec) return ::media::Status::failure(codec.error());
-        auto ownedCodec = FFmpegCodecParametersSnapshot::takeOwnership(std::move(codec.value()));
-        if (!ownedCodec) return ::media::Status::failure(ownedCodec.error());
-        FFmpegInputStreamSnapshot copy;
-        copy.index = snapshot->index;
-        copy.streamKind = snapshot->streamKind;
-        copy.codec = std::move(ownedCodec.value());
-        copy.format = snapshot->format;
-        copy.time = snapshot->time;
-        m_streamSnapshots.push_back(std::move(copy));
-    }
-    buffer.value()->takeInputContext().release();
+    auto snapshots = FFmpegInputStreamSnapshotFactory::fromFormatContext(*m_formatContext);
+    if (!snapshots) return ::media::Status::failure(snapshots.error());
+    m_streamSnapshots = std::move(snapshots.value());
     return ::media::Status::success();
 }
 

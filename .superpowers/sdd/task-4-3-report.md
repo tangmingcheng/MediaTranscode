@@ -42,3 +42,13 @@ ctest --test-dir out\build\x64-debug -C Debug -L deterministic --output-on-failu
 - Task 4.4 must filter raw PCR evidence by the planner-selected PCR PID; Task 4.3 intentionally retains all observed PID identities and performs no selection.
 - Timeline capacity and maximum FFmpeg packet-position regression still require planner-owned joint validation.
 - Production UDP integration and node consumption remain Task 4.4 scope; this task verifies the deterministic AVIO/session ownership boundary.
+
+## Reviewer Follow-up
+
+- Replaced the temporary owning wrapper around the session's borrowed `AVFormatContext` with `FFmpegInputStreamSnapshotFactory::fromFormatContext(const AVFormatContext&)`. Both `FFmpegFormatContextBuffer` and `MediaTsInputSession` now use this single snapshot implementation. A failure on a later stream leaves the borrowed context owned and safely destructible by its original owner.
+- Added production-like session tests using valid-CRC PAT/PMT packets and AAC PES bytes through the inner AVIO seam. They exercise explicit MPEG-TS open/probe, complete inventory, stream snapshots, separate protocol/demux dictionaries, unsupported stride, incomplete input, protocol failure, prepared creation, one transfer, double transfer, and destruction before and after transfer.
+- Observer failures and exceptions are stored under synchronization. The successful read that discovered a failure remains unchanged; the next callback returns `AVERROR_INVALIDDATA` without reading inner AVIO again.
+- Added callback quiescence with closing state, active-callback accounting, a condition variable, and an RAII callback guard. `close()` cancels and requests protocol interruption, then waits without polling. Resource release occurs after quiescence during destruction.
+- Corrected custom-I/O teardown to retain `pb` while `avformat_close_input()` closes the format context, followed by outer buffer/context release and inner AVIO close. The deterministic lifecycle seam verifies `FormatClosed`, `OuterClosed`, `InnerClosed` order and one inner close.
+
+Follow-up RED was the missing borrowed snapshot factory include. Subsequent behavior RED covered the next-read observer error boundary and real session/prepared ownership. The final focused and deterministic results are recorded from the commands below rather than inferred from the original Task 4.3 run.

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
-#include "internal/graph/runtime/buffer/FFmpegCodecParametersSnapshot.h"
+#include "internal/graph/runtime/buffer/FFmpegInputStreamSnapshot.h"
 #include "internal/graph/runtime/buffer/MediaBuffer.h"
 #include "internal/graph/model/MediaFormatDescriptor.h"
 #include "internal/graph/model/MediaTimeDescriptor.h"
@@ -18,17 +18,6 @@ enum class FFmpegFormatContextOwnership {
     Snapshot,
     Transferred,
     Empty
-};
-
-struct FFmpegInputStreamSnapshot final {
-    int index = -1;
-    MediaStreamKind streamKind = MediaStreamKind::Unknown;
-    FFmpegCodecParametersSnapshot codec;
-    MediaFormatDescriptor format;
-    MediaTimeDescriptor time;
-
-    bool codecParametersComplete() const noexcept;
-    ::media::Result<::media::ffmpeg::CodecParametersPtr> cloneCodecParameters() const;
 };
 
 class FFmpegFormatContextBuffer final : public MediaBuffer {

@@ -2,6 +2,7 @@
 
 #include "internal/graph/protocol/mpegts/MediaTsEvidenceTimeline.h"
 #include "internal/graph/runtime/buffer/MediaTsPreparedInputBuffer.h"
+#include "internal/graph/runtime/buffer/FFmpegInputStreamSnapshotFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegObservedReadAvio.h"
 
 extern "C" {
@@ -10,15 +11,83 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <memory>
 #include <span>
 #include <vector>
+#include <thread>
+#include <condition_variable>
+#include <mutex>
+#include <stdexcept>
 
 using media_transcode::test::TestContext;
 using namespace media::ffmpeg::graph;
 
 namespace {
+
+uint32_t crc32Mpeg(std::span<const uint8_t> bytes)
+{
+    uint32_t crc = 0xFFFFFFFFU;
+    for (const uint8_t byte : bytes) {
+        crc ^= static_cast<uint32_t>(byte) << 24;
+        for (int bit = 0; bit < 8; ++bit) {
+            crc = (crc & 0x80000000U) ? (crc << 1) ^ 0x04C11DB7U : crc << 1;
+        }
+    }
+    return crc;
+}
+
+void appendCrc(std::vector<uint8_t>& section)
+{
+    const auto crc = crc32Mpeg(section);
+    section.insert(section.end(), {static_cast<uint8_t>(crc >> 24),
+                                   static_cast<uint8_t>(crc >> 16),
+                                   static_cast<uint8_t>(crc >> 8),
+                                   static_cast<uint8_t>(crc)});
+}
+
+std::array<uint8_t, 188> sectionPacket(uint16_t pid, std::vector<uint8_t> section)
+{
+    std::array<uint8_t, 188> packet;
+    packet.fill(0xFF);
+    packet[0] = 0x47;
+    packet[1] = static_cast<uint8_t>(0x40 | (pid >> 8));
+    packet[2] = static_cast<uint8_t>(pid);
+    packet[3] = 0x10;
+    packet[4] = 0;
+    std::copy(section.begin(), section.end(), packet.begin() + 5);
+    return packet;
+}
+
+std::vector<uint8_t> validMpegTsBytes()
+{
+    std::vector<uint8_t> pat{0x00, 0xB0, 0x0D, 0x00, 0x01, 0xC1, 0, 0,
+                             0, 1, 0xE1, 0x00};
+    appendCrc(pat);
+    std::vector<uint8_t> pmt{0x02, 0xB0, 0x12, 0, 1, 0xC1, 0, 0,
+                             0xE1, 0x01, 0xF0, 0,
+                             0x0F, 0xE1, 0x01, 0xF0, 0};
+    appendCrc(pmt);
+    std::array<uint8_t, 188> pes;
+    pes.fill(0xFF);
+    pes[0] = 0x47; pes[1] = 0x41; pes[2] = 0x01; pes[3] = 0x10;
+    const std::array<uint8_t, 27> payload{
+        0,0,1,0xC0,0,21,0x80,0x80,5,0x21,0,1,0,1,
+        0xFF,0xF1,0x50,0x80,0x01,0xBF,0xFC,
+        0x21,0x10,0x04,0x60,0x8C,0x1C};
+    std::copy(payload.begin(), payload.end(), pes.begin() + 4);
+    std::array<uint8_t, 188> nullPacket;
+    nullPacket.fill(0xFF);
+    nullPacket[0] = 0x47; nullPacket[1] = 0x1F; nullPacket[2] = 0xFF; nullPacket[3] = 0x10;
+    auto secondPes = pes;
+    secondPes[3] = 0x11;
+    const std::array packets{sectionPacket(0, std::move(pat)),
+                             sectionPacket(0x100, std::move(pmt)), pes, secondPes, nullPacket};
+    std::vector<uint8_t> bytes;
+    for (const auto& packet : packets) bytes.insert(bytes.end(), packet.begin(), packet.end());
+    return bytes;
+}
 
 class FragmentedOpener final : public FFmpegProtocolAvioOpener {
 public:
@@ -27,8 +96,10 @@ public:
         : m_bytes(std::move(bytes)), m_terminalResult(terminalResult) {}
 
     ::media::Result<AVIOContext*> open(
-        const std::string&, AVDictionary**, const AVIOInterruptCB*) override
+        const std::string&, AVDictionary** options, const AVIOInterruptCB*) override
     {
+        sawProtocolOption = av_dict_get(*options, "protocol_only", nullptr, 0) != nullptr;
+        sawDemuxOption = av_dict_get(*options, "scan_all_pmts", nullptr, 0) != nullptr;
         auto* buffer = static_cast<unsigned char*>(av_malloc(7));
         auto* context = avio_alloc_context(buffer, 7, 0, this, &read, nullptr, nullptr);
         return context
@@ -39,16 +110,23 @@ public:
 
     void close(AVIOContext** context) noexcept override
     {
+        ++m_closeCount;
         if (context && *context) {
             av_freep(&(*context)->buffer);
             avio_context_free(context);
         }
     }
 
+    std::size_t readCount() const noexcept { return m_readCount; }
+    std::size_t closeCount() const noexcept { return m_closeCount; }
+    bool sawProtocolOption = false;
+    bool sawDemuxOption = false;
+
 private:
     static int read(void* opaque, uint8_t* destination, int requested)
     {
         auto& self = *static_cast<FragmentedOpener*>(opaque);
+        ++self.m_readCount;
         if (self.m_offset == self.m_bytes.size()) return self.m_terminalResult;
         const auto count = std::min<std::size_t>({3, self.m_bytes.size() - self.m_offset,
                                                   static_cast<std::size_t>(requested)});
@@ -60,6 +138,8 @@ private:
     std::vector<uint8_t> m_bytes;
     std::size_t m_offset = 0;
     int m_terminalResult = AVERROR_EOF;
+    std::size_t m_readCount = 0;
+    std::size_t m_closeCount = 0;
 };
 
 class RecordingObserver final : public FFmpegObservedByteSink {
@@ -78,6 +158,88 @@ public:
     std::vector<std::uint64_t> offsets;
     std::vector<std::size_t> lengths;
     std::vector<uint8_t> observed;
+};
+
+class BlockingOpener final : public FFmpegProtocolAvioOpener {
+public:
+    ::media::Result<AVIOContext*> open(
+        const std::string&, AVDictionary**, const AVIOInterruptCB* interrupt) override
+    {
+        m_interrupt = *interrupt;
+        auto* buffer = static_cast<unsigned char*>(av_malloc(16));
+        auto* context = avio_alloc_context(buffer, 16, 0, this, &read, nullptr, nullptr);
+        return context
+            ? ::media::Result<AVIOContext*>::success(context)
+            : ::media::Result<AVIOContext*>::failure(
+                  ::media::ErrorInfo::allocationFailed("blocking AVIO allocation failed"));
+    }
+
+    void requestInterrupt(AVIOContext*) noexcept override
+    {
+        std::lock_guard lock(m_mutex);
+        m_interrupted = true;
+        m_changed.notify_all();
+    }
+
+    void close(AVIOContext** context) noexcept override
+    {
+        if (context && *context) {
+            av_freep(&(*context)->buffer);
+            avio_context_free(context);
+        }
+    }
+
+    void waitUntilReadStarted()
+    {
+        std::unique_lock lock(m_mutex);
+        m_changed.wait(lock, [this] { return m_readStarted; });
+    }
+
+private:
+    static int read(void* opaque, uint8_t*, int)
+    {
+        auto& self = *static_cast<BlockingOpener*>(opaque);
+        std::unique_lock lock(self.m_mutex);
+        self.m_readStarted = true;
+        self.m_changed.notify_all();
+        self.m_changed.wait(lock, [&self] { return self.m_interrupted; });
+        return self.m_interrupt.callback(self.m_interrupt.opaque) ? AVERROR_EXIT : AVERROR(EIO);
+    }
+
+    AVIOInterruptCB m_interrupt{};
+    std::mutex m_mutex;
+    std::condition_variable m_changed;
+    bool m_readStarted = false;
+    bool m_interrupted = false;
+};
+
+class FailingOpener final : public FFmpegProtocolAvioOpener {
+public:
+    ::media::Result<AVIOContext*> open(
+        const std::string&, AVDictionary**, const AVIOInterruptCB*) override
+    {
+        return ::media::Result<AVIOContext*>::failure(
+            ::media::ErrorInfo::ioFailure("planned protocol open failure", AVERROR(EIO)));
+    }
+    void close(AVIOContext**) noexcept override { ++closeCount; }
+    std::size_t closeCount = 0;
+};
+
+class RecordingLifecycle final : public FFmpegObservedAvioLifecycleSink {
+public:
+    void onLifecycleEvent(FFmpegObservedAvioLifecycleEvent event) noexcept override
+    {
+        events.push_back(event);
+    }
+    std::vector<FFmpegObservedAvioLifecycleEvent> events;
+};
+
+class ThrowingObserver final : public FFmpegObservedByteSink {
+public:
+    ::media::Status onBytes(std::uint64_t, std::span<const uint8_t>) override
+    {
+        throw std::runtime_error("observer failure");
+    }
 };
 
 void testObservedReadIsTransparent(TestContext& ctx)
@@ -125,6 +287,30 @@ void testObserverFailureDoesNotRewriteSuccessfulRead(TestContext& ctx)
     EXPECT_EQ(ctx, avio_read(opened.value()->outer(), bytes, 3), 3);
     EXPECT_EQ(ctx, bytes[0], uint8_t{9});
     EXPECT_TRUE(ctx, opened.value()->observerFailure().has_value());
+    const auto readsBeforeFailureBoundary = opener.readCount();
+    EXPECT_EQ(ctx, avio_read(opened.value()->outer(), bytes, 1), AVERROR_INVALIDDATA);
+    EXPECT_EQ(ctx, opener.readCount(), readsBeforeFailureBoundary);
+}
+
+void testBorrowedSnapshotFailureDoesNotOwnFormatContext(TestContext& ctx)
+{
+    AVFormatContext* format = avformat_alloc_context();
+    EXPECT_TRUE(ctx, format != nullptr);
+    if (!format) return;
+    AVStream* first = avformat_new_stream(format, nullptr);
+    AVStream* second = avformat_new_stream(format, nullptr);
+    EXPECT_TRUE(ctx, first != nullptr);
+    EXPECT_TRUE(ctx, second != nullptr);
+    if (!first || !second) {
+        avformat_free_context(format);
+        return;
+    }
+    avcodec_parameters_free(&second->codecpar);
+    auto snapshots = FFmpegInputStreamSnapshotFactory::fromFormatContext(*format);
+    EXPECT_FALSE(ctx, snapshots);
+    EXPECT_EQ(ctx, format->nb_streams, 2U);
+    EXPECT_TRUE(ctx, format->streams[0] == first);
+    avformat_free_context(format);
 }
 
 void testTerminalReadStatesRemainDistinct(TestContext& ctx)
@@ -192,12 +378,146 @@ void testCheckpointRetainsEveryObservedPcrPid(TestContext& ctx)
     EXPECT_FALSE(ctx, timeline.append(std::move(leaked)));
 }
 
+void testCloseWaitsForActiveReadCallback(TestContext& ctx)
+{
+    BlockingOpener opener;
+    RecordingObserver observer;
+    FFmpegAvioInterruptState interrupt;
+    auto opened = FFmpegObservedReadAvio::open(
+        "test://blocking", nullptr, 16, observer, interrupt, opener);
+    EXPECT_TRUE(ctx, opened);
+    if (!opened) return;
+    AVIOContext* outer = opened.value()->outer();
+    int readResult = 0;
+    std::thread reader([&] {
+        uint8_t byte{};
+        readResult = avio_read(outer, &byte, 1);
+    });
+    opener.waitUntilReadStarted();
+    opened.value()->close();
+    reader.join();
+    EXPECT_EQ(ctx, readResult, AVERROR_EXIT);
+    EXPECT_TRUE(ctx, interrupt.cancelled());
+}
+
+void testObserverExceptionBecomesStructuredFailure(TestContext& ctx)
+{
+    FragmentedOpener opener({1, 2});
+    ThrowingObserver observer;
+    FFmpegAvioInterruptState interrupt;
+    auto opened = FFmpegObservedReadAvio::open(
+        "test://throwing", nullptr, 16, observer, interrupt, opener);
+    EXPECT_TRUE(ctx, opened);
+    if (!opened) return;
+    uint8_t bytes[2]{};
+    EXPECT_EQ(ctx, avio_read(opened.value()->outer(), bytes, 2), 2);
+    auto status = opened.value()->status();
+    EXPECT_FALSE(ctx, status);
+    if (!status) EXPECT_EQ(ctx, status.error().code, ::media::ErrorCode::InternalError);
+    EXPECT_EQ(ctx, avio_read(opened.value()->outer(), bytes, 1), AVERROR_INVALIDDATA);
+}
+
+void testSessionProbeAndPreparedTransfer(TestContext& ctx)
+{
+    FragmentedOpener opener(validMpegTsBytes());
+    MediaTsInputSessionOptions options;
+    options.protocolUrl = "test://mpegts";
+    options.avioBufferBytes = 64;
+    options.packetStride = 188;
+    options.evidenceCapacity = 32;
+    options.maximumPositionRegressionBytes = 188 * 8;
+    RecordingLifecycle lifecycle;
+    options.lifecycleSink = &lifecycle;
+    AVDictionary* protocolOptions = nullptr;
+    AVDictionary* demuxOptions = nullptr;
+    av_dict_set(&protocolOptions, "protocol_only", "preserved", 0);
+    av_dict_set(&demuxOptions, "scan_all_pmts", "1", 0);
+    options.protocolOptions = protocolOptions;
+    options.demuxOptions = demuxOptions;
+    auto session = MediaTsInputSession::open(options, opener);
+    EXPECT_TRUE(ctx, av_dict_get(protocolOptions, "protocol_only", nullptr, 0) != nullptr);
+    EXPECT_TRUE(ctx, av_dict_get(demuxOptions, "scan_all_pmts", nullptr, 0) != nullptr);
+    EXPECT_TRUE(ctx, opener.sawProtocolOption);
+    EXPECT_FALSE(ctx, opener.sawDemuxOption);
+    av_dict_free(&protocolOptions);
+    av_dict_free(&demuxOptions);
+    EXPECT_TRUE(ctx, session);
+    if (!session) return;
+    EXPECT_EQ(ctx, session.value()->programInventory().programs.size(), std::size_t{1});
+    EXPECT_FALSE(ctx, session.value()->streamSnapshots().empty());
+    auto prepared = MediaTsPreparedInputBuffer::create(std::move(session.value()));
+    EXPECT_TRUE(ctx, prepared);
+    if (!prepared) return;
+    auto taken = prepared.value()->takeSession();
+    EXPECT_TRUE(ctx, taken);
+    EXPECT_FALSE(ctx, prepared.value()->takeSession());
+    taken.value().reset();
+    EXPECT_EQ(ctx, opener.closeCount(), std::size_t{1});
+    EXPECT_EQ(ctx, lifecycle.events.size(), std::size_t{3});
+    if (lifecycle.events.size() == 3) {
+        EXPECT_EQ(ctx, lifecycle.events[0], FFmpegObservedAvioLifecycleEvent::FormatClosed);
+        EXPECT_EQ(ctx, lifecycle.events[1], FFmpegObservedAvioLifecycleEvent::OuterClosed);
+        EXPECT_EQ(ctx, lifecycle.events[2], FFmpegObservedAvioLifecycleEvent::InnerClosed);
+    }
+}
+
+void testSessionRejectsUnsupportedAndIncompleteInput(TestContext& ctx)
+{
+    FragmentedOpener opener(validMpegTsBytes());
+    MediaTsInputSessionOptions unsupported;
+    unsupported.protocolUrl = "test://mpegts";
+    unsupported.avioBufferBytes = 64;
+    unsupported.packetStride = 192;
+    unsupported.evidenceCapacity = 8;
+    EXPECT_FALSE(ctx, MediaTsInputSession::open(unsupported, opener));
+    EXPECT_EQ(ctx, opener.readCount(), std::size_t{0});
+
+    FragmentedOpener incomplete(std::vector<uint8_t>(188 * 3, 0x47));
+    MediaTsInputSessionOptions options;
+    options.protocolUrl = "test://incomplete";
+    options.avioBufferBytes = 64;
+    options.packetStride = 188;
+    options.evidenceCapacity = 8;
+    auto failed = MediaTsInputSession::open(options, incomplete);
+    EXPECT_FALSE(ctx, failed);
+    EXPECT_EQ(ctx, incomplete.closeCount(), std::size_t{1});
+
+    FailingOpener failing;
+    options.protocolUrl = "test://open-failure";
+    auto openFailed = MediaTsInputSession::open(options, failing);
+    EXPECT_FALSE(ctx, openFailed);
+    EXPECT_EQ(ctx, failing.closeCount, std::size_t{0});
+}
+
+void testPreparedDestructionBeforeTransferClosesOnce(TestContext& ctx)
+{
+    FragmentedOpener opener(validMpegTsBytes());
+    MediaTsInputSessionOptions options;
+    options.protocolUrl = "test://prepared-destruction";
+    options.avioBufferBytes = 64;
+    options.packetStride = 188;
+    options.evidenceCapacity = 32;
+    auto session = MediaTsInputSession::open(options, opener);
+    EXPECT_TRUE(ctx, session);
+    if (!session) return;
+    auto prepared = MediaTsPreparedInputBuffer::create(std::move(session.value()));
+    EXPECT_TRUE(ctx, prepared);
+    prepared.value().reset();
+    EXPECT_EQ(ctx, opener.closeCount(), std::size_t{1});
+}
+
 } // namespace
 
 void runMpegTsInputSessionTests(TestContext& ctx)
 {
     testObservedReadIsTransparent(ctx);
     testObserverFailureDoesNotRewriteSuccessfulRead(ctx);
+    testBorrowedSnapshotFailureDoesNotOwnFormatContext(ctx);
     testTerminalReadStatesRemainDistinct(ctx);
+    testCloseWaitsForActiveReadCallback(ctx);
+    testObserverExceptionBecomesStructuredFailure(ctx);
     testCheckpointRetainsEveryObservedPcrPid(ctx);
+    testSessionProbeAndPreparedTransfer(ctx);
+    testSessionRejectsUnsupportedAndIncompleteInput(ctx);
+    testPreparedDestructionBeforeTransferClosesOnce(ctx);
 }
