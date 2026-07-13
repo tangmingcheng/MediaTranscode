@@ -12,12 +12,14 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <cstring>
 #include <memory>
 #include <span>
 #include <vector>
 #include <thread>
+#include <chrono>
 #include <condition_variable>
 #include <mutex>
 #include <stdexcept>
@@ -62,14 +64,16 @@ std::array<uint8_t, 188> sectionPacket(uint16_t pid, std::vector<uint8_t> sectio
 }
 
 std::vector<uint8_t> validMpegTsBytes(std::size_t extraPesPackets = 0,
-                                      bool counterLoss = false)
+                                      bool counterLoss = false,
+                                      bool includeOpenVideoPes = false)
 {
     std::vector<uint8_t> pat{0x00, 0xB0, 0x0D, 0x00, 0x01, 0xC1, 0, 0,
                              0, 1, 0xE1, 0x00};
     appendCrc(pat);
-    std::vector<uint8_t> pmt{0x02, 0xB0, 0x12, 0, 1, 0xC1, 0, 0,
+    std::vector<uint8_t> pmt{0x02, 0xB0, 0x17, 0, 1, 0xC1, 0, 0,
                              0xE1, 0x01, 0xF0, 0,
-                             0x0F, 0xE1, 0x01, 0xF0, 0};
+                             0x0F, 0xE1, 0x01, 0xF0, 0,
+                             0x1B, 0xE1, 0x02, 0xF0, 0};
     appendCrc(pmt);
     std::array<uint8_t, 188> pes;
     pes.fill(0xFF);
@@ -84,10 +88,23 @@ std::vector<uint8_t> validMpegTsBytes(std::size_t extraPesPackets = 0,
     nullPacket[0] = 0x47; nullPacket[1] = 0x1F; nullPacket[2] = 0xFF; nullPacket[3] = 0x10;
     auto secondPes = pes;
     secondPes[3] = counterLoss ? 0x13 : 0x11;
+    if (counterLoss && includeOpenVideoPes) secondPes[1] &= 0xBF;
     std::vector<uint8_t> bytes;
     const auto patPacket = sectionPacket(0, std::move(pat));
     const auto pmtPacket = sectionPacket(0x100, std::move(pmt));
-    for (const auto& packet : {patPacket, pmtPacket, pes, secondPes}) {
+    bytes.insert(bytes.end(), patPacket.begin(), patPacket.end());
+    bytes.insert(bytes.end(), pmtPacket.begin(), pmtPacket.end());
+    if (includeOpenVideoPes) {
+        auto videoPes = pes;
+        videoPes[1] = 0x41;
+        videoPes[2] = 0x02;
+        videoPes[7] = 0xE0;
+        const std::array<std::uint8_t, 13> h264AccessUnit{
+            0, 0, 0, 1, 0x09, 0xF0, 0, 0, 0, 1, 0x65, 0x88, 0x84};
+        std::copy(h264AccessUnit.begin(), h264AccessUnit.end(), videoPes.begin() + 18);
+        bytes.insert(bytes.end(), videoPes.begin(), videoPes.end());
+    }
+    for (const auto& packet : {pes, secondPes}) {
         bytes.insert(bytes.end(), packet.begin(), packet.end());
     }
     for (std::size_t index = 0; index < extraPesPackets; ++index) {
@@ -97,6 +114,37 @@ std::vector<uint8_t> validMpegTsBytes(std::size_t extraPesPackets = 0,
     }
     bytes.insert(bytes.end(), nullPacket.begin(), nullPacket.end());
     return bytes;
+}
+
+::media::Status configureRuntimeBindingForTest(MediaTsInputSession& session,
+                                                std::size_t capacity)
+{
+    const FFmpegInputStreamSnapshot* video = nullptr;
+    const FFmpegInputStreamSnapshot* audio = nullptr;
+    for (const auto& stream : session.streamSnapshots()) {
+        if (stream.streamKind == MediaStreamKind::Video) video = &stream;
+        if (stream.streamKind == MediaStreamKind::Audio) audio = &stream;
+    }
+    if (!video || !audio || session.programSnapshots().empty()) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::notInitialized("test A/V program is incomplete"));
+    }
+    std::optional<std::uint16_t> videoPid;
+    std::optional<std::uint16_t> audioPid;
+    for (const auto& binding : session.programSnapshots().front().streamBindings) {
+        if (binding.streamIndex == video->index) videoPid = binding.elementaryPid;
+        if (binding.streamIndex == audio->index) audioPid = binding.elementaryPid;
+    }
+    if (!videoPid || !audioPid) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::notInitialized("test A/V PID binding is incomplete"));
+    }
+    return session.configureRuntimeBinding(MediaTsRuntimeBinding{
+        MediaTsPacketOriginPolicy::PerStreamPesCarry,
+        MediaTsRuntimeStreamBinding{video->index, *videoPid},
+        MediaTsRuntimeStreamBinding{audio->index, *audioPid},
+        static_cast<std::uint16_t>(session.programSnapshots().front().pcrPid),
+        capacity});
 }
 
 class FragmentedOpener final : public FFmpegProtocolAvioOpener {
@@ -272,10 +320,11 @@ public:
             avio_context_free(context);
         }
     }
-    void waitUntilBlocked()
+    bool waitUntilBlocked()
     {
         std::unique_lock lock(m_mutex);
-        m_changed.wait(lock, [this] { return m_blocked; });
+        return m_changed.wait_for(
+            lock, std::chrono::seconds(5), [this] { return m_blocked; });
     }
     std::size_t readCount()
     {
@@ -460,6 +509,52 @@ void testCheckpointRetainsEveryObservedPcrPid(TestContext& ctx)
     EXPECT_FALSE(ctx, timeline.append(std::move(leaked)));
 }
 
+void testEvictedProbeEvidenceCannotConfigureSourceBoundaries(TestContext& ctx)
+{
+    auto created = MediaTsEvidenceTimeline::create(4, 188);
+    EXPECT_TRUE(ctx, created);
+    if (!created) return;
+    auto timeline = std::move(created.value());
+    for (const auto offset : {std::uint64_t{0}, std::uint64_t{188},
+                              std::uint64_t{376}, std::uint64_t{564}}) {
+        MediaTsEvidenceCheckpoint checkpoint;
+        checkpoint.byteOffset = offset;
+        EXPECT_TRUE(ctx, timeline.append(std::move(checkpoint)));
+    }
+    EXPECT_TRUE(ctx, timeline.observePacketPosition(564));
+    const std::array<std::uint16_t, 3> sourcePids{0x101, 0x102, 0x103};
+    const auto complete = timeline.completeContinuityOffsetsFor(sourcePids);
+    EXPECT_FALSE(ctx, complete);
+    if (!complete) {
+        EXPECT_EQ(ctx, complete.error().code, ::media::ErrorCode::NotInitialized);
+    }
+}
+
+void testProbeBoundaryHistoryFiltersNonSelectedPid(TestContext& ctx)
+{
+    auto created = MediaTsEvidenceTimeline::create(8, 188 * 8);
+    EXPECT_TRUE(ctx, created);
+    if (!created) return;
+    auto timeline = std::move(created.value());
+    MediaTsEvidenceCheckpoint unrelated;
+    unrelated.byteOffset = 188;
+    unrelated.continuityEvent = MediaTsContinuityEvent{
+        188, 0x777, MediaTsContinuityEventReason::CounterLoss};
+    MediaTsEvidenceCheckpoint audio;
+    audio.byteOffset = 376;
+    audio.continuityEvent = MediaTsContinuityEvent{
+        376, 0x102, MediaTsContinuityEventReason::CounterLoss};
+    EXPECT_TRUE(ctx, timeline.append(std::move(unrelated)));
+    EXPECT_TRUE(ctx, timeline.append(std::move(audio)));
+    const std::array<std::uint16_t, 3> sourcePids{0x101, 0x102, 0x103};
+    const auto boundaries = timeline.completeContinuityOffsetsFor(sourcePids);
+    EXPECT_TRUE(ctx, boundaries);
+    if (boundaries) {
+        EXPECT_EQ(ctx, boundaries.value().size(), std::size_t{1});
+        EXPECT_EQ(ctx, boundaries.value().front(), std::uint64_t{376});
+    }
+}
+
 void testCloseWaitsForActiveReadCallback(TestContext& ctx)
 {
     BlockingOpener opener;
@@ -522,6 +617,7 @@ void testSessionProbeAndPreparedTransfer(TestContext& ctx)
     options.avioBufferBytes = 64;
     options.packetStride = 188;
     options.evidenceCapacity = 32;
+    options.pesProvenanceCapacity = 32;
     options.maximumPositionRegressionBytes = 188 * 8;
     AVDictionary* protocolOptions = nullptr;
     AVDictionary* demuxOptions = nullptr;
@@ -558,6 +654,7 @@ void testSessionPublishesParserContinuityEvidence(TestContext& ctx)
     options.avioBufferBytes = 64;
     options.packetStride = 188;
     options.evidenceCapacity = 32;
+    options.pesProvenanceCapacity = 32;
     options.maximumPositionRegressionBytes = 188 * 8;
     auto session = MediaTsInputSession::open(options, opener);
     EXPECT_TRUE(ctx, session);
@@ -577,6 +674,49 @@ void testSessionPublishesParserContinuityEvidence(TestContext& ctx)
     }
 }
 
+void testSessionReplaysProbeContinuityAcrossSelectedProgram(TestContext& ctx)
+{
+    FragmentedOpener opener(validMpegTsBytes(0, true, true));
+    MediaTsInputSessionOptions options;
+    options.protocolUrl = "test://probe-boundary-replay";
+    options.avioBufferBytes = 64;
+    options.packetStride = 188;
+    options.evidenceCapacity = 32;
+    options.pesProvenanceCapacity = 32;
+    options.maximumPositionRegressionBytes = 188 * 8;
+    auto session = MediaTsInputSession::open(options, opener);
+    EXPECT_TRUE(ctx, session);
+    if (!session) return;
+    auto configured = configureRuntimeBindingForTest(*session.value(), 32);
+    EXPECT_TRUE(ctx, configured);
+    if (!configured) return;
+
+    bool sawVideoReacquire = false;
+    bool sawAudioReacquire = false;
+    for (int attempt = 0; attempt < 32; ++attempt) {
+        auto read = session.value()->readFrame();
+        EXPECT_TRUE(ctx, read);
+        if (!read || read.value().state == MediaTsReadFrameState::EndOfStream) break;
+        if (read.value().state != MediaTsReadFrameState::Frame ||
+            !read.value().packet) continue;
+        const auto stream = std::find_if(
+            session.value()->streamSnapshots().begin(),
+            session.value()->streamSnapshots().end(),
+            [&read](const FFmpegInputStreamSnapshot& snapshot) {
+                return snapshot.index == read.value().packet->stream_index;
+            });
+        EXPECT_TRUE(ctx, stream != session.value()->streamSnapshots().end());
+        if (stream == session.value()->streamSnapshots().end()) continue;
+        const auto kind = stream->streamKind;
+        if (read.value().provenance.readiness !=
+            MediaSourceClockReadiness::ReacquireRequired) continue;
+        sawVideoReacquire = sawVideoReacquire || kind == MediaStreamKind::Video;
+        sawAudioReacquire = sawAudioReacquire || kind == MediaStreamKind::Audio;
+    }
+    EXPECT_TRUE(ctx, sawVideoReacquire);
+    EXPECT_TRUE(ctx, sawAudioReacquire);
+}
+
 void testSessionRejectsUnsupportedAndIncompleteInput(TestContext& ctx)
 {
     FragmentedOpener opener(validMpegTsBytes());
@@ -585,6 +725,7 @@ void testSessionRejectsUnsupportedAndIncompleteInput(TestContext& ctx)
     unsupported.avioBufferBytes = 64;
     unsupported.packetStride = 192;
     unsupported.evidenceCapacity = 8;
+    unsupported.pesProvenanceCapacity = 8;
     EXPECT_FALSE(ctx, MediaTsInputSession::open(unsupported, opener));
     EXPECT_EQ(ctx, opener.readCount(), std::size_t{0});
 
@@ -594,6 +735,7 @@ void testSessionRejectsUnsupportedAndIncompleteInput(TestContext& ctx)
     options.avioBufferBytes = 64;
     options.packetStride = 188;
     options.evidenceCapacity = 8;
+    options.pesProvenanceCapacity = 8;
     auto failed = MediaTsInputSession::open(options, incomplete);
     EXPECT_FALSE(ctx, failed);
     EXPECT_EQ(ctx, incomplete.closeCount(), std::size_t{1});
@@ -613,6 +755,7 @@ void testPreparedDestructionBeforeTransferClosesOnce(TestContext& ctx)
     options.avioBufferBytes = 64;
     options.packetStride = 188;
     options.evidenceCapacity = 32;
+    options.pesProvenanceCapacity = 32;
     auto session = MediaTsInputSession::open(options, opener);
     EXPECT_TRUE(ctx, session);
     if (!session) return;
@@ -630,17 +773,49 @@ void testSessionCloseRejectsNewReads(TestContext& ctx)
     options.avioBufferBytes = 64;
     options.packetStride = 188;
     options.evidenceCapacity = 32;
+    options.pesProvenanceCapacity = 32;
     auto session = MediaTsInputSession::open(options, opener);
     EXPECT_TRUE(ctx, session);
     if (!session) return;
     EXPECT_TRUE(ctx, session.value()->close());
-    auto packet = ::media::ffmpeg::makePacket();
-    EXPECT_TRUE(ctx, packet != nullptr);
-    if (packet) {
-        auto read = session.value()->readFrame(*packet);
-        EXPECT_FALSE(ctx, read);
-        if (!read) EXPECT_EQ(ctx, read.error().code, ::media::ErrorCode::Cancelled);
+    auto read = session.value()->readFrame();
+    EXPECT_FALSE(ctx, read);
+    if (!read) EXPECT_EQ(ctx, read.error().code, ::media::ErrorCode::Cancelled);
+    EXPECT_EQ(ctx, opener.closeCount(), std::size_t{1});
+}
+
+void testFiniteProductionSessionPublishesEndOfStream(TestContext& ctx)
+{
+    FragmentedOpener opener(validMpegTsBytes(16));
+    MediaTsInputSessionOptions options;
+    options.protocolUrl = "test://finite-session-eof";
+    options.avioBufferBytes = 64;
+    options.packetStride = 188;
+    options.evidenceCapacity = 64;
+    options.pesProvenanceCapacity = 64;
+    options.maximumPositionRegressionBytes = 188 * 16;
+    auto session = MediaTsInputSession::open(options, opener);
+    EXPECT_TRUE(ctx, session);
+    if (!session) return;
+
+    auto unboundRead = session.value()->readFrame();
+    EXPECT_FALSE(ctx, unboundRead);
+    if (!unboundRead) {
+        EXPECT_EQ(ctx, unboundRead.error().code, ::media::ErrorCode::NotInitialized);
     }
+    auto configured = configureRuntimeBindingForTest(*session.value(), 64);
+    EXPECT_TRUE(ctx, configured);
+    if (!configured) return;
+
+    bool sawEndOfStream = false;
+    for (int attempt = 0; attempt < 128 && !sawEndOfStream; ++attempt) {
+        auto read = session.value()->readFrame();
+        EXPECT_TRUE(ctx, read);
+        if (!read) break;
+        sawEndOfStream = read.value().state == MediaTsReadFrameState::EndOfStream;
+    }
+    EXPECT_TRUE(ctx, sawEndOfStream);
+    session.value().reset();
     EXPECT_EQ(ctx, opener.closeCount(), std::size_t{1});
 }
 
@@ -656,21 +831,38 @@ void testSessionCloseInterruptsBlockedRead(TestContext& ctx)
     options.avioBufferBytes = 64;
     options.packetStride = 188;
     options.evidenceCapacity = 128;
+    options.pesProvenanceCapacity = 128;
     auto session = MediaTsInputSession::open(options, opener);
     av_dict_free(&demuxOptions);
     EXPECT_TRUE(ctx, session);
     if (!session) return;
-    ::media::Result<MediaTsReadFrameState> read =
-        ::media::Result<MediaTsReadFrameState>::success(MediaTsReadFrameState::Waiting);
+    auto configured = configureRuntimeBindingForTest(*session.value(), 128);
+    EXPECT_TRUE(ctx, configured);
+    if (!configured) return;
+    ::media::Result<MediaTsReadFrameEnvelope> read =
+        ::media::Result<MediaTsReadFrameEnvelope>::success(
+            MediaTsReadFrameEnvelope{MediaTsReadFrameState::Waiting});
+    std::atomic_bool readerFinished{false};
     std::thread reader([&] {
-        auto packet = ::media::ffmpeg::makePacket();
         for (;;) {
-            av_packet_unref(packet.get());
-            read = session.value()->readFrame(*packet);
-            if (!read || read.value() != MediaTsReadFrameState::Frame) return;
+            read = session.value()->readFrame();
+            if (!read || read.value().state != MediaTsReadFrameState::Frame) break;
         }
+        readerFinished = true;
     });
-    opener.waitUntilBlocked();
+    const bool blocked = opener.waitUntilBlocked();
+    EXPECT_TRUE(ctx, blocked);
+    if (!blocked) {
+        if (readerFinished) {
+            reader.join();
+            if (!read) std::cerr << "blocked reader exited: " << read.error().describe() << '\n';
+            EXPECT_TRUE(ctx, session.value()->close());
+            return;
+        }
+        EXPECT_TRUE(ctx, session.value()->close());
+        reader.join();
+        return;
+    }
     std::mutex statusMutex;
     std::condition_variable statusChanged;
     bool initialStatusRead = false;
@@ -698,8 +890,12 @@ void testSessionCloseInterruptsBlockedRead(TestContext& ctx)
     EXPECT_TRUE(ctx, statuses[0]);
     auto inventoryWhileReading = session.value()->programInventory();
     EXPECT_EQ(ctx, inventoryWhileReading.programs.size(), std::size_t{1});
-    auto evidenceWhileReading = session.value()->evidenceAtOrBefore(188);
+    auto evidenceWhileReading = session.value()->evidenceAtOrBefore(375);
     EXPECT_TRUE(ctx, evidenceWhileReading);
+    if (evidenceWhileReading) {
+        EXPECT_EQ(ctx, evidenceWhileReading.value().byteOffset, std::uint64_t{375});
+        EXPECT_FALSE(ctx, evidenceWhileReading.value().inventory.programs.empty());
+    }
     auto evidenceSnapshot = session.value()->evidenceSnapshotAfter(std::nullopt);
     EXPECT_TRUE(ctx, evidenceSnapshot);
     EXPECT_FALSE(ctx, evidenceSnapshot.value().empty());
@@ -708,8 +904,7 @@ void testSessionCloseInterruptsBlockedRead(TestContext& ctx)
     EXPECT_TRUE(ctx, noNewEvidence);
     EXPECT_TRUE(ctx, noNewEvidence.value().empty());
     const auto readsBeforeSecondReader = opener.readCount();
-    auto secondPacket = ::media::ffmpeg::makePacket();
-    auto secondRead = session.value()->readFrame(*secondPacket);
+    auto secondRead = session.value()->readFrame();
     EXPECT_FALSE(ctx, secondRead);
     if (!secondRead) EXPECT_EQ(ctx, secondRead.error().code, ::media::ErrorCode::InvalidArgument);
     EXPECT_EQ(ctx, opener.readCount(), readsBeforeSecondReader);
@@ -746,21 +941,30 @@ void testInterruptedTerminalResultsAreCancelled(TestContext& ctx)
         options.avioBufferBytes = 64;
         options.packetStride = 188;
         options.evidenceCapacity = 128;
+        options.pesProvenanceCapacity = 128;
         auto session = MediaTsInputSession::open(options, opener);
         av_dict_free(&demuxOptions);
         EXPECT_TRUE(ctx, session);
         if (!session) continue;
-        ::media::Result<MediaTsReadFrameState> read =
-            ::media::Result<MediaTsReadFrameState>::success(MediaTsReadFrameState::Waiting);
+        auto configured = configureRuntimeBindingForTest(*session.value(), 128);
+        EXPECT_TRUE(ctx, configured);
+        if (!configured) continue;
+        ::media::Result<MediaTsReadFrameEnvelope> read =
+            ::media::Result<MediaTsReadFrameEnvelope>::success(
+                MediaTsReadFrameEnvelope{MediaTsReadFrameState::Waiting});
         std::thread reader([&] {
-            auto packet = ::media::ffmpeg::makePacket();
             for (;;) {
-                av_packet_unref(packet.get());
-                read = session.value()->readFrame(*packet);
-                if (!read || read.value() != MediaTsReadFrameState::Frame) return;
+                read = session.value()->readFrame();
+                if (!read || read.value().state != MediaTsReadFrameState::Frame) return;
             }
         });
-        opener.waitUntilBlocked();
+        const bool blocked = opener.waitUntilBlocked();
+        EXPECT_TRUE(ctx, blocked);
+        if (!blocked) {
+            EXPECT_TRUE(ctx, session.value()->close());
+            reader.join();
+            continue;
+        }
         EXPECT_TRUE(ctx, session.value()->close());
         reader.join();
         EXPECT_FALSE(ctx, read);
@@ -780,11 +984,15 @@ void runMpegTsInputSessionTests(TestContext& ctx)
     testObserverExceptionBecomesStructuredFailure(ctx);
     testReentrantCloseFailsWithoutDeadlock(ctx);
     testCheckpointRetainsEveryObservedPcrPid(ctx);
+    testEvictedProbeEvidenceCannotConfigureSourceBoundaries(ctx);
+    testProbeBoundaryHistoryFiltersNonSelectedPid(ctx);
     testSessionProbeAndPreparedTransfer(ctx);
     testSessionPublishesParserContinuityEvidence(ctx);
+    testSessionReplaysProbeContinuityAcrossSelectedProgram(ctx);
     testSessionRejectsUnsupportedAndIncompleteInput(ctx);
     testPreparedDestructionBeforeTransferClosesOnce(ctx);
     testSessionCloseRejectsNewReads(ctx);
+    testFiniteProductionSessionPublishesEndOfStream(ctx);
     testSessionCloseInterruptsBlockedRead(ctx);
     testInterruptedTerminalResultsAreCancelled(ctx);
 }

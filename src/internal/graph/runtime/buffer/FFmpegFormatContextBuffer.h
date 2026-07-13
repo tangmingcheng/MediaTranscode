@@ -2,6 +2,7 @@
 
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/runtime/buffer/FFmpegInputStreamSnapshot.h"
+#include "internal/graph/runtime/buffer/FFmpegInputSnapshotBuffer.h"
 #include "internal/graph/runtime/buffer/MediaBuffer.h"
 #include "internal/graph/model/MediaFormatDescriptor.h"
 #include "internal/graph/model/MediaTimeDescriptor.h"
@@ -20,7 +21,8 @@ enum class FFmpegFormatContextOwnership {
     Empty
 };
 
-class FFmpegFormatContextBuffer final : public MediaBuffer {
+class FFmpegFormatContextBuffer final : public MediaBuffer,
+                                        public FFmpegInputSnapshotBuffer {
 public:
     explicit FFmpegFormatContextBuffer(::media::ffmpeg::OutputFormatContextPtr context);
     explicit FFmpegFormatContextBuffer(AVFormatContext* borrowedContext);
@@ -36,8 +38,8 @@ public:
     const AVFormatContext* context() const noexcept;
 
     FFmpegFormatContextOwnership ownership() const noexcept;
-    const FFmpegInputStreamSnapshot* inputStreamSnapshot(int streamIndex) const noexcept;
-    bool inputSnapshotComplete() const noexcept;
+    const FFmpegInputStreamSnapshot* inputStreamSnapshot(int streamIndex) const noexcept override;
+    bool inputSnapshotComplete() const noexcept override;
 
     ::media::ffmpeg::InputFormatContextPtr takeInputContext() noexcept;
     ::media::ffmpeg::OutputFormatContextPtr takeOutputContext() noexcept;

@@ -2,7 +2,7 @@
 
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/runtime/buffer/FFmpegCodecContextBuffer.h"
-#include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
+#include "internal/graph/runtime/buffer/FFmpegInputSnapshotBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegDescriptorMapper.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
@@ -176,11 +176,11 @@ MediaNodeKind AudioCodecResolverNode::staticKind() noexcept
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::waiting());
     }
 
-    auto* formatBuffer = dynamic_cast<FFmpegFormatContextBuffer*>(input.value()->get());
+    auto* formatBuffer = dynamic_cast<FFmpegInputSnapshotBuffer*>(input.value()->get());
 
     if (!formatBuffer || !formatBuffer->inputSnapshotComplete()) {
         return ::media::Result<MediaNodeProcessResult>::failure(
-            ::media::ErrorInfo::invalidArgument("AudioCodecResolverNode expected format context"));
+            ::media::ErrorInfo::invalidArgument("AudioCodecResolverNode expected complete input snapshots"));
     }
 
     auto stream = resolveSourceStream(context, *formatBuffer);
@@ -214,7 +214,7 @@ MediaNodeKind AudioCodecResolverNode::staticKind() noexcept
 
 ::media::Result<const FFmpegInputStreamSnapshot*> AudioCodecResolverNode::resolveSourceStream(
     MediaGraphExecutionContext& context,
-    const FFmpegFormatContextBuffer& format) const
+    const FFmpegInputSnapshotBuffer& format) const
 {
     auto streamIndexOption = intOption(nodeOptions(context), MediaTranscodeOptionKey::AudioSourceStreamIndex);
     if (!streamIndexOption) {

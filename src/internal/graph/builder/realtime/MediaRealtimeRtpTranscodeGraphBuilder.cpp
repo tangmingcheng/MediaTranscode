@@ -94,14 +94,6 @@ struct RealtimePacketInputChain {
                 MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext, true, true); !status) {
             return ::media::Result<RealtimePacketInputChain>::failure(status.error());
         }
-        for (const auto [name, kind] : {std::pair{"video", MediaStreamKind::Video},
-                                       std::pair{"audio", MediaStreamKind::Audio}}) {
-            if (auto status = MediaGraphBuildSupport::addOutputPortChecked(
-                    graph, owner, demux, name, kind, MediaEdgeKind::InputPacket,
-                    MediaPayloadKind::Packet, true, true); !status) {
-                return ::media::Result<RealtimePacketInputChain>::failure(status.error());
-            }
-        }
         if (auto status = MediaGraphBuildSupport::connectChecked(
                 graph, owner, input, "format", demux, "format",
                 "realtime.input.format -> mpegts_demux.format", edgePolicies.metadata); !status) {

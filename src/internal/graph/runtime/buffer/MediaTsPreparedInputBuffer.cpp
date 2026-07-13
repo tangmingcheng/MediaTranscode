@@ -50,6 +50,15 @@ MediaTsPreparedInputBuffer::streamSnapshots() const noexcept
     return m_streamSnapshots;
 }
 
+const FFmpegInputStreamSnapshot* MediaTsPreparedInputBuffer::inputStreamSnapshot(
+    int streamIndex) const noexcept
+{
+    for (const auto& stream : m_streamSnapshots) {
+        if (stream.index == streamIndex) return &stream;
+    }
+    return nullptr;
+}
+
 const MediaTsProgramInventorySnapshot&
 MediaTsPreparedInputBuffer::programInventory() const noexcept
 {

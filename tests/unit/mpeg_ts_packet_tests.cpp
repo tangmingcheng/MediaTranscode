@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <string>
 #include <vector>
 
 using media_transcode::test::TestContext;
@@ -214,6 +215,53 @@ public:
     std::vector<MediaTsContinuityEvent> continuityEvents;
 };
 
+class RecordingPrefixSink final : public MediaTsIncrementalPacketSink {
+public:
+    explicit RecordingPrefixSink(std::vector<std::string>* eventOrder = nullptr)
+        : m_eventOrder(eventOrder) {}
+
+    ::media::Status onPacketEvidence(const MediaTsPacketEvidenceView& packet) override
+    {
+        evidence.push_back(packet);
+        if (m_eventOrder) m_eventOrder->push_back("evidence");
+        return ::media::Status::success();
+    }
+
+    ::media::Status onPacketPrefix(const MediaTsPacketPrefixView& packet) override
+    {
+        packets.push_back(packet);
+        if (m_eventOrder) m_eventOrder->push_back("prefix");
+        return ::media::Status::success();
+    }
+
+    std::vector<MediaTsPacketEvidenceView> evidence;
+    std::vector<MediaTsPacketPrefixView> packets;
+
+private:
+    std::vector<std::string>* m_eventOrder;
+};
+
+class OrderedPacketSink final : public MediaTsPacketSink {
+public:
+    explicit OrderedPacketSink(std::vector<std::string>& eventOrder)
+        : m_eventOrder(eventOrder) {}
+
+    ::media::Status onPacket(const MediaTsPacketView&) override
+    {
+        m_eventOrder.push_back("packet");
+        return ::media::Status::success();
+    }
+
+    ::media::Status onContinuityEvent(const MediaTsContinuityEvent&) override
+    {
+        m_eventOrder.push_back("continuity");
+        return ::media::Status::success();
+    }
+
+private:
+    std::vector<std::string>& m_eventOrder;
+};
+
 class CountingPacketSink final : public MediaTsPacketSink {
 public:
     ::media::Status onPacket(const MediaTsPacketView&) override
@@ -239,7 +287,7 @@ public:
 void testPacketFramingAndPcr(TestContext& ctx)
 {
     RecordingPacketSink sink;
-    auto parser = MediaTsPacketParser::create(188, sink);
+    auto parser = MediaTsPacketParser::create(188, sink, nullptr);
     EXPECT_TRUE(ctx, parser);
     if (!parser) return;
 
@@ -266,10 +314,139 @@ void testPacketFramingAndPcr(TestContext& ctx)
     EXPECT_TRUE(ctx, sink.packets[1].payload.empty());
 }
 
+void testDefinitivePesPrefixPublicationAcrossFragmentBoundaries(TestContext& ctx)
+{
+    const auto lockPacket = payloadPacket(0x120, 0, false, std::array<uint8_t, 1>{1});
+    const auto pesPacket = payloadPacket(
+        0x101, 3, true, std::array<uint8_t, 6>{0x00, 0x00, 0x01, 0xE0, 0, 0});
+
+    for (const std::size_t available :
+         std::array<std::size_t, 6>{1, 3, 4, 5, 6, 7}) {
+        RecordingPacketSink packetSink;
+        RecordingPrefixSink prefixSink;
+        auto parser = MediaTsPacketParser::create(188, packetSink, &prefixSink);
+        EXPECT_TRUE(ctx, parser);
+        if (!parser) continue;
+        std::vector<uint8_t> bytes(lockPacket.begin(), lockPacket.end());
+        bytes.insert(bytes.end(), pesPacket.begin(), pesPacket.begin() + available);
+        EXPECT_TRUE(ctx, parser.value()->push(bytes));
+        EXPECT_EQ(ctx, prefixSink.evidence.size(), available >= 4 ? std::size_t{2}
+                                                                  : std::size_t{1});
+        EXPECT_EQ(ctx, prefixSink.packets.size(), available == 7 ? std::size_t{2}
+                                                                 : std::size_t{1});
+        if (prefixSink.packets.size() == 2) {
+            const auto& prefix = prefixSink.packets.back();
+            EXPECT_EQ(ctx, prefix.byteOffset, std::uint64_t{188});
+            EXPECT_EQ(ctx, prefix.pid, std::uint16_t{0x101});
+            EXPECT_TRUE(ctx, prefix.payloadUnitStart);
+            EXPECT_TRUE(ctx, prefix.pesStart);
+        }
+        EXPECT_EQ(ctx, packetSink.packets.size(), std::size_t{1});
+    }
+
+    auto adaptedPes = pesPacket;
+    adaptedPes[3] = 0x33;
+    adaptedPes[4] = 2;
+    adaptedPes[5] = 0;
+    adaptedPes[6] = 0xFF;
+    adaptedPes[7] = 0;
+    adaptedPes[8] = 0;
+    adaptedPes[9] = 1;
+    for (const std::size_t available :
+         std::array<std::size_t, 7>{4, 5, 6, 7, 8, 9, 10}) {
+        RecordingPacketSink packetSink;
+        RecordingPrefixSink prefixSink;
+        auto parser = MediaTsPacketParser::create(188, packetSink, &prefixSink);
+        EXPECT_TRUE(ctx, parser);
+        if (!parser) continue;
+        std::vector<uint8_t> bytes(lockPacket.begin(), lockPacket.end());
+        bytes.insert(bytes.end(), adaptedPes.begin(), adaptedPes.begin() + available);
+        EXPECT_TRUE(ctx, parser.value()->push(bytes));
+        EXPECT_EQ(ctx, prefixSink.evidence.size(), available >= 7 ? std::size_t{2}
+                                                                  : std::size_t{1});
+        EXPECT_EQ(ctx, prefixSink.packets.size(), available == 10 ? std::size_t{2}
+                                                                  : std::size_t{1});
+    }
+
+    const auto pcrLockPacket = payloadPacket(
+        0x101, 0, false, std::array<uint8_t, 1>{1});
+    auto pcrWithPayload = pcrPacket(0x101, 2, 90'000, 7, false);
+    pcrWithPayload[3] = 0x30;
+    pcrWithPayload[4] = 7;
+    std::vector<std::string> pcrOrder;
+    OrderedPacketSink pcrPacketSink(pcrOrder);
+    RecordingPrefixSink pcrPrefixSink(&pcrOrder);
+    auto pcrParser = MediaTsPacketParser::create(188, pcrPacketSink, &pcrPrefixSink);
+    EXPECT_TRUE(ctx, pcrParser);
+    if (pcrParser) {
+        std::vector<uint8_t> bytes(pcrLockPacket.begin(), pcrLockPacket.end());
+        bytes.insert(bytes.end(), pcrWithPayload.begin(), pcrWithPayload.begin() + 12);
+        EXPECT_TRUE(ctx, pcrParser.value()->push(bytes));
+        EXPECT_EQ(ctx, pcrPrefixSink.evidence.size(), std::size_t{2});
+        if (pcrPrefixSink.evidence.size() == 2) {
+            EXPECT_EQ(ctx, pcrPrefixSink.evidence.back().pcr27Mhz,
+                      std::optional<std::uint64_t>{90'000ULL * 300 + 7});
+        }
+        EXPECT_EQ(ctx, pcrPrefixSink.packets.size(), std::size_t{2});
+        EXPECT_EQ(ctx, pcrOrder.size(), std::size_t{6});
+        if (pcrOrder.size() == 6) {
+            EXPECT_EQ(ctx, pcrOrder[3], std::string("continuity"));
+            EXPECT_EQ(ctx, pcrOrder[4], std::string("evidence"));
+            EXPECT_EQ(ctx, pcrOrder[5], std::string("prefix"));
+        }
+        std::vector<uint8_t> completion(
+            pcrWithPayload.begin() + 12, pcrWithPayload.end());
+        completion.push_back(0x47);
+        EXPECT_TRUE(ctx, pcrParser.value()->push(completion));
+        EXPECT_EQ(ctx, pcrPrefixSink.evidence.size(), std::size_t{2});
+        EXPECT_EQ(ctx, pcrOrder.back(), std::string("packet"));
+    }
+}
+
+void testPrefixContinuityOrderingAndPartialTail(TestContext& ctx)
+{
+    std::vector<std::string> eventOrder;
+    OrderedPacketSink packetSink(eventOrder);
+    RecordingPrefixSink prefixSink(&eventOrder);
+    auto parser = MediaTsPacketParser::create(188, packetSink, &prefixSink);
+    EXPECT_TRUE(ctx, parser);
+    if (!parser) return;
+
+    const auto first = payloadPacket(0x101, 0, true,
+                                     std::array<uint8_t, 3>{0, 0, 1});
+    const auto broken = payloadPacket(0x101, 2, true,
+                                      std::array<uint8_t, 3>{0, 0, 1});
+    std::vector<uint8_t> bytes(first.begin(), first.end());
+    bytes.insert(bytes.end(), broken.begin(), broken.begin() + 4);
+    EXPECT_TRUE(ctx, parser.value()->push(bytes));
+    EXPECT_EQ(ctx, eventOrder.size(), std::size_t{5});
+    if (eventOrder.size() == 5) {
+        EXPECT_EQ(ctx, eventOrder[0], std::string("evidence"));
+        EXPECT_EQ(ctx, eventOrder[1], std::string("prefix"));
+        EXPECT_EQ(ctx, eventOrder[2], std::string("packet"));
+        EXPECT_EQ(ctx, eventOrder[3], std::string("continuity"));
+        EXPECT_EQ(ctx, eventOrder[4], std::string("evidence"));
+    }
+    EXPECT_TRUE(ctx, parser.value()->push(std::span(broken).subspan(4, 3)));
+    EXPECT_EQ(ctx, eventOrder.back(), std::string("prefix"));
+
+    RecordingPacketSink incompletePacketSink;
+    RecordingPrefixSink incompletePrefixSink;
+    auto incomplete = MediaTsPacketParser::create(
+        188, incompletePacketSink, &incompletePrefixSink);
+    EXPECT_TRUE(ctx, incomplete);
+    if (!incomplete) return;
+    std::vector<uint8_t> partial(first.begin(), first.end());
+    partial.insert(partial.end(), broken.begin(), broken.begin() + 3);
+    EXPECT_TRUE(ctx, incomplete.value()->push(partial));
+    EXPECT_EQ(ctx, incompletePrefixSink.packets.size(), std::size_t{1});
+    EXPECT_EQ(ctx, incompletePrefixSink.evidence.size(), std::size_t{1});
+}
+
 void testMultiplePacketsAndMalformedPackets(TestContext& ctx)
 {
     RecordingPacketSink sink;
-    auto parser = MediaTsPacketParser::create(188, sink);
+    auto parser = MediaTsPacketParser::create(188, sink, nullptr);
     EXPECT_TRUE(ctx, parser);
     if (!parser) return;
     auto first = payloadPacket(0x120, 0, false, std::array<uint8_t, 2>{1, 2});
@@ -286,7 +463,7 @@ void testMultiplePacketsAndMalformedPackets(TestContext& ctx)
     EXPECT_FALSE(ctx, parser.value()->push(confirmedPacket(invalidLength)));
 
     RecordingPacketSink extensionSink;
-    auto extensionParser = MediaTsPacketParser::create(188, extensionSink);
+    auto extensionParser = MediaTsPacketParser::create(188, extensionSink, nullptr);
     EXPECT_TRUE(ctx, extensionParser);
     const std::array extensionLock{first, second};
     EXPECT_TRUE(ctx, extensionParser.value()->push(packets(extensionLock)));
@@ -296,7 +473,7 @@ void testMultiplePacketsAndMalformedPackets(TestContext& ctx)
     EXPECT_FALSE(ctx, extensionParser.value()->push(confirmedPacket(invalidExtension)));
 
     RecordingPacketSink continuitySink;
-    auto continuityParser = MediaTsPacketParser::create(188, continuitySink);
+    auto continuityParser = MediaTsPacketParser::create(188, continuitySink, nullptr);
     EXPECT_TRUE(ctx, continuityParser);
     EXPECT_TRUE(ctx, continuityParser.value()->push(first));
     second[3] = 0x12;
@@ -308,7 +485,7 @@ void testMultiplePacketsAndMalformedPackets(TestContext& ctx)
               MediaTsContinuityEventReason::CounterLoss);
 
     RecordingPacketSink discontinuitySink;
-    auto discontinuityParser = MediaTsPacketParser::create(188, discontinuitySink);
+    auto discontinuityParser = MediaTsPacketParser::create(188, discontinuitySink, nullptr);
     EXPECT_TRUE(ctx, discontinuityParser);
     auto explicitBreak = pcrPacket(0x101, 0, 1, 0, true);
     EXPECT_TRUE(ctx, discontinuityParser.value()->push(confirmedPacket(explicitBreak)));
@@ -317,8 +494,8 @@ void testMultiplePacketsAndMalformedPackets(TestContext& ctx)
     EXPECT_EQ(ctx, discontinuitySink.continuityEvents.front().reason,
               MediaTsContinuityEventReason::DiscontinuityIndicator);
 
-    EXPECT_FALSE(ctx, MediaTsPacketParser::create(192, sink));
-    EXPECT_FALSE(ctx, MediaTsPacketParser::create(204, sink));
+    EXPECT_FALSE(ctx, MediaTsPacketParser::create(192, sink, nullptr));
+    EXPECT_FALSE(ctx, MediaTsPacketParser::create(204, sink, nullptr));
 }
 
 void testStrideAcquisitionAndReacquisition(TestContext& ctx)
@@ -327,7 +504,7 @@ void testStrideAcquisitionAndReacquisition(TestContext& ctx)
     const auto second = payloadPacket(0x121, 0, false, std::array<uint8_t, 1>{2});
 
     RecordingPacketSink falseSyncSink;
-    auto falseSyncParser = MediaTsPacketParser::create(188, falseSyncSink);
+    auto falseSyncParser = MediaTsPacketParser::create(188, falseSyncSink, nullptr);
     EXPECT_TRUE(ctx, falseSyncParser);
     std::vector<uint8_t> falseSync{0x47, 0x00, 0x11, 0x22};
     const std::array falseSyncPackets{first, second};
@@ -342,7 +519,7 @@ void testStrideAcquisitionAndReacquisition(TestContext& ctx)
     }
 
     RecordingPacketSink fragmentedSink;
-    auto fragmentedParser = MediaTsPacketParser::create(188, fragmentedSink);
+    auto fragmentedParser = MediaTsPacketParser::create(188, fragmentedSink, nullptr);
     EXPECT_TRUE(ctx, fragmentedParser);
     EXPECT_TRUE(ctx, fragmentedParser.value()->push(std::span(realBytes).first(188)));
     EXPECT_TRUE(ctx, fragmentedSink.packets.empty());
@@ -353,7 +530,7 @@ void testStrideAcquisitionAndReacquisition(TestContext& ctx)
     EXPECT_EQ(ctx, fragmentedSink.packets.size(), static_cast<std::size_t>(2));
 
     RecordingPacketSink insertionSink;
-    auto insertionParser = MediaTsPacketParser::create(188, insertionSink);
+    auto insertionParser = MediaTsPacketParser::create(188, insertionSink, nullptr);
     EXPECT_TRUE(ctx, insertionParser);
     const auto third = payloadPacket(0x122, 0, false, std::array<uint8_t, 1>{3});
     const auto fourth = payloadPacket(0x123, 0, false, std::array<uint8_t, 1>{4});
@@ -369,7 +546,7 @@ void testStrideAcquisitionAndReacquisition(TestContext& ctx)
     }
 
     RecordingPacketSink deletionSink;
-    auto deletionParser = MediaTsPacketParser::create(188, deletionSink);
+    auto deletionParser = MediaTsPacketParser::create(188, deletionSink, nullptr);
     EXPECT_TRUE(ctx, deletionParser);
     const auto fifth = payloadPacket(0x124, 0, false, std::array<uint8_t, 1>{5});
     std::vector<uint8_t> deleted = realBytes;
@@ -385,7 +562,7 @@ void testStrideAcquisitionAndReacquisition(TestContext& ctx)
     }
 
     RecordingPacketSink malformedSink;
-    auto malformedParser = MediaTsPacketParser::create(188, malformedSink);
+    auto malformedParser = MediaTsPacketParser::create(188, malformedSink, nullptr);
     EXPECT_TRUE(ctx, malformedParser);
     EXPECT_TRUE(ctx, malformedParser.value()->push(realBytes));
     auto malformed = adaptationPacket(0x130, 0, std::array<uint8_t, 1>{0x10});
@@ -402,7 +579,7 @@ void testEveryPacketRequiresNextStrideConfirmation(TestContext& ctx)
     auto fourth = payloadPacket(0x152, 0, false, std::array<uint8_t, 1>{4});
 
     RecordingPacketSink sink;
-    auto parser = MediaTsPacketParser::create(188, sink);
+    auto parser = MediaTsPacketParser::create(188, sink, nullptr);
     EXPECT_TRUE(ctx, parser);
     EXPECT_TRUE(ctx, parser.value()->push(first));
     EXPECT_TRUE(ctx, sink.packets.empty());
@@ -424,7 +601,7 @@ void testEveryPacketRequiresNextStrideConfirmation(TestContext& ctx)
     }
 
     CountingPacketSink largeSink;
-    auto largeParser = MediaTsPacketParser::create(188, largeSink);
+    auto largeParser = MediaTsPacketParser::create(188, largeSink, nullptr);
     EXPECT_TRUE(ctx, largeParser);
     std::vector<uint8_t> largeFragment;
     constexpr std::size_t PacketCount = 4096;
@@ -450,7 +627,7 @@ void testCompleteAdaptationStructureValidation(TestContext& ctx)
 
     auto rejects = [&](std::span<const uint8_t> adaptation) {
         RecordingPacketSink sink;
-        auto parser = MediaTsPacketParser::create(188, sink);
+        auto parser = MediaTsPacketParser::create(188, sink, nullptr);
         if (!parser || !parser.value()->push(lockBytes)) return false;
         return !parser.value()->push(confirmedPacket(adaptationPacket(0x142, 0, adaptation)));
     };
@@ -464,7 +641,7 @@ void testCompleteAdaptationStructureValidation(TestContext& ctx)
         0x0B, 0xE0, 0x00, 0x00, 0xC0, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00, 0x00};
     RecordingPacketSink validSink;
-    auto validParser = MediaTsPacketParser::create(188, validSink);
+    auto validParser = MediaTsPacketParser::create(188, validSink, nullptr);
     EXPECT_TRUE(ctx, validParser);
     EXPECT_TRUE(ctx, validParser.value()->push(lockBytes));
     EXPECT_TRUE(ctx, validParser.value()->push(confirmedPacket(adaptationPacket(0x142, 0, complete))));
@@ -482,7 +659,7 @@ void testPsiInventoryAndVersions(TestContext& ctx)
 {
     RecordingInventorySink inventorySink;
     MediaTsPsiSectionAssembler assembler(inventorySink);
-    auto parser = MediaTsPacketParser::create(188, assembler);
+    auto parser = MediaTsPacketParser::create(188, assembler, nullptr);
     EXPECT_TRUE(ctx, parser);
     if (!parser) return;
 
@@ -524,7 +701,7 @@ void testPsiRejectsInvalidEvidence(TestContext& ctx)
 {
     RecordingInventorySink inventorySink;
     MediaTsPsiSectionAssembler assembler(inventorySink);
-    auto parser = MediaTsPacketParser::create(188, assembler);
+    auto parser = MediaTsPacketParser::create(188, assembler, nullptr);
     EXPECT_TRUE(ctx, parser);
     if (!parser) return;
 
@@ -537,7 +714,7 @@ void testPsiRejectsInvalidEvidence(TestContext& ctx)
 
     RecordingInventorySink currentSink;
     MediaTsPsiSectionAssembler currentAssembler(currentSink);
-    auto currentParser = MediaTsPacketParser::create(188, currentAssembler);
+    auto currentParser = MediaTsPacketParser::create(188, currentAssembler, nullptr);
     EXPECT_TRUE(ctx, currentParser);
     auto nonCurrentPat = patSection(1, std::array{std::pair<uint16_t, uint16_t>{1, 0x100}});
     nonCurrentPat.resize(nonCurrentPat.size() - 4);
@@ -550,7 +727,7 @@ void testPsiRejectsInvalidEvidence(TestContext& ctx)
 
     RecordingInventorySink truncatedSink;
     MediaTsPsiSectionAssembler truncatedAssembler(truncatedSink);
-    auto truncatedParser = MediaTsPacketParser::create(188, truncatedAssembler);
+    auto truncatedParser = MediaTsPacketParser::create(188, truncatedAssembler, nullptr);
     EXPECT_TRUE(ctx, truncatedParser);
     auto longPat = patSection(1, std::array{std::pair<uint16_t, uint16_t>{1, 0x100}});
     std::vector<uint8_t> firstPayload{0};
@@ -569,7 +746,7 @@ void testPsiCrossPacketAssemblyAndExplicitTruncation(TestContext& ctx)
 
     RecordingInventorySink inventorySink;
     MediaTsPsiSectionAssembler assembler(inventorySink);
-    auto parser = MediaTsPacketParser::create(188, assembler);
+    auto parser = MediaTsPacketParser::create(188, assembler, nullptr);
     EXPECT_TRUE(ctx, parser);
     if (!parser) return;
     std::vector<uint8_t> firstPayload{0};
@@ -583,7 +760,7 @@ void testPsiCrossPacketAssemblyAndExplicitTruncation(TestContext& ctx)
 
     RecordingInventorySink truncatedSink;
     MediaTsPsiSectionAssembler truncatedAssembler(truncatedSink);
-    auto truncatedParser = MediaTsPacketParser::create(188, truncatedAssembler);
+    auto truncatedParser = MediaTsPacketParser::create(188, truncatedAssembler, nullptr);
     EXPECT_TRUE(ctx, truncatedParser);
     if (!truncatedParser) return;
     EXPECT_TRUE(ctx, truncatedParser.value()->push(exactPayloadPacket(0, 0, true, firstPayload)));
@@ -594,7 +771,7 @@ void testMultiSectionPsiAggregation(TestContext& ctx)
 {
     RecordingInventorySink sink;
     MediaTsPsiSectionAssembler assembler(sink);
-    auto parser = MediaTsPacketParser::create(188, assembler);
+    auto parser = MediaTsPacketParser::create(188, assembler, nullptr);
     EXPECT_TRUE(ctx, parser);
     if (!parser) return;
     const std::array programOne{std::pair<uint16_t, uint16_t>{1, 0x100}};
@@ -636,7 +813,7 @@ void testPsiAggregateIdentityAndDiscontinuity(TestContext& ctx)
 
     RecordingInventorySink identitySink;
     MediaTsPsiSectionAssembler identityAssembler(identitySink);
-    auto identityParser = MediaTsPacketParser::create(188, identityAssembler);
+    auto identityParser = MediaTsPacketParser::create(188, identityAssembler, nullptr);
     EXPECT_TRUE(ctx, identityParser);
     EXPECT_TRUE(ctx, identityParser.value()->push(sectionPacket(0, 0, patSection(1, programOne, 0, 1, 0x10))));
     EXPECT_FALSE(ctx, identityParser.value()->push(confirmedPacket(
@@ -645,7 +822,7 @@ void testPsiAggregateIdentityAndDiscontinuity(TestContext& ctx)
 
     RecordingInventorySink patDiscontinuitySink;
     MediaTsPsiSectionAssembler patDiscontinuityAssembler(patDiscontinuitySink);
-    auto patDiscontinuityParser = MediaTsPacketParser::create(188, patDiscontinuityAssembler);
+    auto patDiscontinuityParser = MediaTsPacketParser::create(188, patDiscontinuityAssembler, nullptr);
     EXPECT_TRUE(ctx, patDiscontinuityParser);
     EXPECT_TRUE(ctx, patDiscontinuityParser.value()->push(sectionPacket(0, 0, patSection(2, programOne, 0, 1))));
     const auto patSecond = patSection(2, programTwo, 1, 1);
@@ -660,7 +837,7 @@ void testPsiAggregateIdentityAndDiscontinuity(TestContext& ctx)
     const std::array audio{MediaTsElementaryStreamInfo{0x102, 0x0F}};
     RecordingInventorySink pmtDiscontinuitySink;
     MediaTsPsiSectionAssembler pmtDiscontinuityAssembler(pmtDiscontinuitySink);
-    auto pmtDiscontinuityParser = MediaTsPacketParser::create(188, pmtDiscontinuityAssembler);
+    auto pmtDiscontinuityParser = MediaTsPacketParser::create(188, pmtDiscontinuityAssembler, nullptr);
     EXPECT_TRUE(ctx, pmtDiscontinuityParser);
     EXPECT_TRUE(ctx, pmtDiscontinuityParser.value()->push(sectionPacket(0, 0, patSection(3, programOne))));
     EXPECT_TRUE(ctx, pmtDiscontinuityParser.value()->push(sectionPacket(0x100, 0, pmtSection(1, 1, 0x101, video, 0, 1))));
@@ -678,7 +855,7 @@ void testPsiAggregateIdentityAndDiscontinuity(TestContext& ctx)
 
     RecordingInventorySink continuitySink;
     MediaTsPsiSectionAssembler continuityAssembler(continuitySink);
-    auto continuityParser = MediaTsPacketParser::create(188, continuityAssembler);
+    auto continuityParser = MediaTsPacketParser::create(188, continuityAssembler, nullptr);
     EXPECT_TRUE(ctx, continuityParser);
     EXPECT_TRUE(ctx, continuityParser.value()->push(sectionPacket(0, 0, patSection(4, programOne, 0, 1))));
     EXPECT_TRUE(ctx, continuityParser.value()->push(confirmedPacket(
@@ -688,7 +865,7 @@ void testPsiAggregateIdentityAndDiscontinuity(TestContext& ctx)
 
     RecordingInventorySink generationSink;
     MediaTsPsiSectionAssembler generationAssembler(generationSink);
-    auto generationParser = MediaTsPacketParser::create(188, generationAssembler);
+    auto generationParser = MediaTsPacketParser::create(188, generationAssembler, nullptr);
     EXPECT_TRUE(ctx, generationParser);
     EXPECT_TRUE(ctx, generationParser.value()->push(sectionPacket(0, 0, patSection(5, programOne))));
     EXPECT_TRUE(ctx, generationParser.value()->push(sectionPacket(0x100, 0, pmtSection(1, 2, 0x101, video))));
@@ -710,7 +887,7 @@ void testAdaptationOnlyDiscontinuityResetsPsiGeneration(TestContext& ctx)
 
     RecordingInventorySink patSink;
     MediaTsPsiSectionAssembler patAssembler(patSink);
-    auto patParser = MediaTsPacketParser::create(188, patAssembler);
+    auto patParser = MediaTsPacketParser::create(188, patAssembler, nullptr);
     EXPECT_TRUE(ctx, patParser);
     EXPECT_TRUE(ctx, patParser.value()->push(sectionPacket(0, 0, patSection(6, program))));
     EXPECT_TRUE(ctx, patParser.value()->push(sectionPacket(0x100, 0, pmtSection(1, 2, 0x101, video))));
@@ -723,7 +900,7 @@ void testAdaptationOnlyDiscontinuityResetsPsiGeneration(TestContext& ctx)
 
     RecordingInventorySink pmtSink;
     MediaTsPsiSectionAssembler pmtAssembler(pmtSink);
-    auto pmtParser = MediaTsPacketParser::create(188, pmtAssembler);
+    auto pmtParser = MediaTsPacketParser::create(188, pmtAssembler, nullptr);
     EXPECT_TRUE(ctx, pmtParser);
     EXPECT_TRUE(ctx, pmtParser.value()->push(sectionPacket(0, 0, patSection(7, program))));
     EXPECT_TRUE(ctx, pmtParser.value()->push(sectionPacket(0x100, 0, pmtSection(1, 3, 0x101, video))));
@@ -739,6 +916,8 @@ void testAdaptationOnlyDiscontinuityResetsPsiGeneration(TestContext& ctx)
 void runMpegTsPacketTests(TestContext& ctx)
 {
     testPacketFramingAndPcr(ctx);
+    testDefinitivePesPrefixPublicationAcrossFragmentBoundaries(ctx);
+    testPrefixContinuityOrderingAndPartialTail(ctx);
     testMultiplePacketsAndMalformedPackets(ctx);
     testStrideAcquisitionAndReacquisition(ctx);
     testCompleteAdaptationStructureValidation(ctx);

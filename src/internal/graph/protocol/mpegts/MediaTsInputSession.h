@@ -3,8 +3,11 @@
 #include "internal/graph/protocol/mpegts/MediaTsEvidenceTimeline.h"
 #include "internal/graph/protocol/mpegts/MediaTsDemuxSession.h"
 #include "internal/graph/protocol/mpegts/MediaTsPublicProgramSnapshot.h"
+#include "internal/graph/protocol/mpegts/MediaTsPesProvenanceTimeline.h"
+#include "internal/graph/protocol/mpegts/MediaTsReturnedPesCursor.h"
 #include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegObservedReadAvio.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -24,8 +27,9 @@ struct MediaTsInputSessionOptions final {
     AVDictionary* protocolOptions = nullptr;
     AVDictionary* demuxOptions = nullptr;
     std::size_t avioBufferBytes = 0;
-    std::size_t packetStride = 188;
+    std::size_t packetStride = 0;
     std::size_t evidenceCapacity = 0;
+    std::size_t pesProvenanceCapacity = 0;
     std::uint64_t maximumPositionRegressionBytes = 0;
 };
 
@@ -43,7 +47,8 @@ public:
     MediaTsInputSession(MediaTsInputSession&&) = delete;
     MediaTsInputSession& operator=(MediaTsInputSession&&) = delete;
 
-    ::media::Result<MediaTsReadFrameState> readFrame(AVPacket& packet) override;
+    ::media::Result<MediaTsReadFrameEnvelope> readFrame() override;
+    ::media::Status configureRuntimeBinding(const MediaTsRuntimeBinding& binding);
     ::media::Status close() noexcept override;
     void cancel() noexcept override { m_interruptState.cancel(); }
     const std::vector<FFmpegInputStreamSnapshot>& streamSnapshots() const noexcept override;
@@ -67,6 +72,7 @@ private:
         const MediaTsInputSessionOptions& options,
         FFmpegProtocolAvioOpener* opener);
     ::media::Status buildStreamSnapshots();
+    ::media::Result<MediaTsPacketProvenance> provenanceFor(const AVPacket& packet);
 
     FFmpegAvioInterruptState m_interruptState;
     std::unique_ptr<EvidenceObserver> m_evidenceObserver;
@@ -81,6 +87,8 @@ private:
     bool m_closed = false;
     std::optional<::media::ErrorInfo> m_finalError;
     MediaTsInputRuntimeContract m_runtimeContract{};
+    std::unique_ptr<MediaTsReturnedPesCursor> m_returnedPesCursor;
+    bool m_runtimeBindingConfigured = false;
 };
 
 } // namespace media::ffmpeg::graph

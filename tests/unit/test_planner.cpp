@@ -107,18 +107,18 @@ const MediaTsSelectedProgramPlan& selectedTsProgram()
 
 void testTsEvidenceCapacityCoversProbeRollbackAndPredecessor(TestContext& ctx)
 {
-    auto exact = MediaRealtimeTsInputPlan::create(188, 376, 188, 4);
+    auto exact = MediaRealtimeTsInputPlan::create(188, 3'008, 188, 35, 1);
     EXPECT_TRUE(ctx, exact);
-    if (exact) EXPECT_EQ(ctx, exact.value().evidenceTimelineCapacity, std::size_t{4});
-    EXPECT_FALSE(ctx, MediaRealtimeTsInputPlan::create(188, 376, 188, 3));
+    if (exact) EXPECT_EQ(ctx, exact.value().evidenceTimelineCapacity, std::size_t{35});
+    EXPECT_FALSE(ctx, MediaRealtimeTsInputPlan::create(188, 3'008, 188, 34, 1));
     EXPECT_FALSE(ctx, MediaRealtimeTsInputPlan::create(
         188, std::numeric_limits<std::uint64_t>::max(), 188,
-        std::numeric_limits<std::size_t>::max()));
+        std::numeric_limits<std::size_t>::max(), 1));
 }
 
 void testTsInputPlanValidatorRejectsEveryMutation(TestContext& ctx)
 {
-    auto created = MediaRealtimeTsInputPlan::create(188, 376, 188, 4);
+    auto created = MediaRealtimeTsInputPlan::create(188, 3'008, 188, 35, 1);
     EXPECT_TRUE(ctx, created);
     if (!created) return;
     auto valid = created.value();
@@ -134,7 +134,7 @@ void testTsInputPlanValidatorRejectsEveryMutation(TestContext& ctx)
     valid.timestampTimeBaseNumerator = 1;
     valid.timestampTimeBaseDenominator = 90'000;
     MediaRealtimeRtpInputNodePlan input{};
-    input.probeSizeBytes = 376;
+    input.probeSizeBytes = 3'008;
     input.mpegTs = valid;
     EXPECT_TRUE(ctx, MediaRealtimeTsInputPlanValidator::validate(RealtimeInputType::MpegTsUdp, input));
     EXPECT_FALSE(ctx, MediaRealtimeTsInputPlanValidator::validate(RealtimeInputType::Url, input));
@@ -150,8 +150,12 @@ void testTsInputPlanValidatorRejectsEveryMutation(TestContext& ctx)
     mutated([](auto& plan) { plan.avioBufferBytes = 0; });
     mutated([](auto& plan) { plan.maximumDatagramBytes = 0; });
     mutated([](auto& plan) { plan.maximumDatagramBytes = plan.avioBufferBytes + 1; });
-    mutated([](auto& plan) { plan.evidenceTimelineCapacity = 3; });
+    mutated([](auto& plan) { plan.evidenceTimelineCapacity = 34; });
     mutated([](auto& plan) { plan.maximumPacketPositionRegressionBytes = 0; });
+    mutated([](auto& plan) { plan.pesProvenanceCapacity = 0; });
+    mutated([](auto& plan) {
+        plan.packetOriginPolicy = static_cast<MediaTsPacketOriginPolicy>(99);
+    });
 }
 
 MediaRealtimeRtpTranscodeRequest avSyncRtpRequest()

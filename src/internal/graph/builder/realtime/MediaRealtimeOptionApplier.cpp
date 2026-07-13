@@ -115,6 +115,9 @@ const char* boolOption(bool value) noexcept
     if (auto s = set("mpegts.evidence_timeline_capacity", plan.evidenceTimelineCapacity); !s) return s;
     if (auto s = set("mpegts.projection_capacity", plan.projectionCapacity); !s) return s;
     if (auto s = set("mpegts.maximum_position_regression_bytes", plan.maximumPacketPositionRegressionBytes); !s) return s;
+    if (auto s = set("mpegts.pes_provenance_capacity", plan.pesProvenanceCapacity); !s) return s;
+    if (auto s = set("mpegts.packet_origin_policy",
+                     static_cast<int>(plan.packetOriginPolicy)); !s) return s;
     if (auto s = set("mpegts.timestamp_time_base_num", plan.timestampTimeBaseNumerator); !s) return s;
     if (auto s = set("mpegts.timestamp_time_base_den", plan.timestampTimeBaseDenominator); !s) return s;
     if (auto s = set("mpegts.initial_source_generation", plan.initialSourceGeneration); !s) return s;

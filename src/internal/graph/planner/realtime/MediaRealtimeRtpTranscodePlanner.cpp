@@ -209,7 +209,8 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
     std::size_t packetSize,
     std::uint64_t probeWindowBytes,
     std::uint64_t maximumPacketPositionRegressionBytes,
-    std::size_t evidenceTimelineCapacity)
+    std::size_t evidenceTimelineCapacity,
+    std::size_t selectedStreamCount)
 {
     auto minimum = minimumEvidenceCapacity(
         packetSize, probeWindowBytes, maximumPacketPositionRegressionBytes);
@@ -220,6 +221,10 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
         return ::media::Result<MediaRealtimeTsInputPlan>::failure(
             ::media::ErrorInfo::invalidArgument("MPEG-TS evidence capacity is below worst-case requirement"));
     }
+    if (selectedStreamCount == 0 || selectedStreamCount > 2) {
+        return ::media::Result<MediaRealtimeTsInputPlan>::failure(
+            ::media::ErrorInfo::invalidArgument("invalid MPEG-TS selected stream count"));
+    }
     MediaRealtimeTsInputPlan result;
     result.demuxFormat = "mpegts";
     result.packetSize = packetSize;
@@ -227,6 +232,10 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
     result.maximumDatagramBytes = 65'535;
     result.evidenceTimelineCapacity = evidenceTimelineCapacity;
     result.maximumPacketPositionRegressionBytes = maximumPacketPositionRegressionBytes;
+    result.pesProvenanceCapacity =
+        static_cast<std::size_t>((probeWindowBytes + packetSize - 1) / packetSize) +
+        selectedStreamCount;
+    result.packetOriginPolicy = MediaTsPacketOriginPolicy::PerStreamPesCarry;
     return ::media::Result<MediaRealtimeTsInputPlan>::success(std::move(result));
 }
 
@@ -251,11 +260,22 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
     const auto probePackets = packetCount(probeWindowBytes);
     const auto rollbackPackets = packetCount(maximumPacketPositionRegressionBytes);
     if (!probePackets || !rollbackPackets ||
-        *probePackets > std::numeric_limits<std::uint64_t>::max() - *rollbackPackets - 1) {
+        *probePackets > std::numeric_limits<std::uint64_t>::max() - *rollbackPackets) {
         return ::media::Result<std::size_t>::failure(
             ::media::ErrorInfo::invalidArgument("MPEG-TS evidence capacity arithmetic overflow"));
     }
-    const std::uint64_t required = *probePackets + *rollbackPackets + 1;
+    const std::uint64_t retainedPackets = *probePackets + *rollbackPackets;
+    constexpr std::uint64_t CheckpointsPerPacket = 2;
+    constexpr std::uint64_t PredecessorCheckpoint = 1;
+    if (retainedPackets >
+        (std::numeric_limits<std::uint64_t>::max() - PredecessorCheckpoint) /
+            CheckpointsPerPacket) {
+        return ::media::Result<std::size_t>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MPEG-TS evidence checkpoint multiplication overflow"));
+    }
+    const std::uint64_t required =
+        retainedPackets * CheckpointsPerPacket + PredecessorCheckpoint;
     if (required > (std::numeric_limits<std::size_t>::max)()) {
         return ::media::Result<std::size_t>::failure(
             ::media::ErrorInfo::invalidArgument("MPEG-TS evidence capacity exceeds platform size"));
@@ -406,7 +426,7 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
         }
         auto ts = MediaRealtimeTsInputPlan::create(
             PacketSize, probeBytes, MaximumRegressionBytes,
-            capacity.value());
+            capacity.value(), MediaRealtimeRequestClassifier::audioRequested(options) ? 2 : 1);
         if (!ts) return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(ts.error());
         plan.input.mpegTs = std::move(ts).value();
     }

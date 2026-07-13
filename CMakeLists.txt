@@ -215,6 +215,7 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
     add_executable(media_transcode_node_tests
         tests/unit/test_node.cpp
         tests/unit/mpeg_ts_packet_tests.cpp
+        tests/unit/mpeg_ts_pes_provenance_timeline_tests.cpp
         tests/unit/mpeg_ts_clock_tests.cpp
         tests/unit/mpeg_ts_input_session_tests.cpp
         tests/unit/mpeg_ts_demux_node_tests.cpp
@@ -245,6 +246,34 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
             target_link_libraries(media_transcode_integration_tests PRIVATE ws2_32)
         endif()
         media_transcode_register_test(media_transcode_integration_tests "integration")
+
+        add_executable(media_transcode_mpeg_ts_integration_tests
+            tests/unit/mpeg_ts_observed_avio_integration_tests.cpp
+        )
+        media_transcode_configure_test(media_transcode_mpeg_ts_integration_tests)
+        target_compile_definitions(media_transcode_mpeg_ts_integration_tests PRIVATE
+            MEDIA_TRANSCODE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+        )
+        if(WIN32)
+            target_link_libraries(media_transcode_mpeg_ts_integration_tests PRIVATE ws2_32)
+        endif()
+        media_transcode_register_test(media_transcode_mpeg_ts_integration_tests "integration")
+
+        add_executable(media_transcode_mpeg_ts_crafted_udp_fault_tests
+            tests/unit/mpeg_ts_crafted_udp_fault_tests.cpp
+            tests/unit/fixtures/MpegTsCraftedUdpFixture.cpp
+        )
+        media_transcode_configure_test(media_transcode_mpeg_ts_crafted_udp_fault_tests)
+        target_compile_definitions(media_transcode_mpeg_ts_crafted_udp_fault_tests PRIVATE
+            MEDIA_TRANSCODE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+        )
+        if(WIN32)
+            target_link_libraries(media_transcode_mpeg_ts_crafted_udp_fault_tests PRIVATE ws2_32)
+        endif()
+        media_transcode_register_test(media_transcode_mpeg_ts_crafted_udp_fault_tests "integration")
+        set_tests_properties(media_transcode_mpeg_ts_crafted_udp_fault_tests PROPERTIES
+            SKIP_RETURN_CODE 77
+        )
     endif()
 
     if(MEDIA_TRANSCODE_ENABLE_HARDWARE_TESTS)

@@ -2,18 +2,23 @@
 
 #include "internal/graph/protocol/mpegts/MediaTsDemuxSession.h"
 #include "internal/graph/runtime/buffer/MediaBuffer.h"
+#include "internal/graph/runtime/buffer/FFmpegInputSnapshotBuffer.h"
 
 #include <memory>
 
 namespace media::ffmpeg::graph {
 
-class MediaTsPreparedInputBuffer final : public MediaBuffer {
+class MediaTsPreparedInputBuffer final : public MediaBuffer,
+                                         public FFmpegInputSnapshotBuffer {
 public:
     static ::media::Result<std::unique_ptr<MediaTsPreparedInputBuffer>> create(
         std::unique_ptr<MediaTsDemuxSession> session);
 
     MediaBufferType type() const noexcept override;
     const std::vector<FFmpegInputStreamSnapshot>& streamSnapshots() const noexcept;
+    const FFmpegInputStreamSnapshot* inputStreamSnapshot(
+        int streamIndex) const noexcept override;
+    bool inputSnapshotComplete() const noexcept override { return true; }
     const std::vector<FFmpegInputProgramSnapshot>& programSnapshots() const noexcept;
     const MediaTsProgramInventorySnapshot& programInventory() const noexcept;
     ::media::Result<std::unique_ptr<MediaTsDemuxSession>> takeSession();

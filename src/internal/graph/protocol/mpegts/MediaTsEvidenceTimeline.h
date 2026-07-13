@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <deque>
 #include <optional>
+#include <span>
 #include <vector>
 
 namespace media::ffmpeg::graph {
@@ -42,6 +43,8 @@ public:
     ::media::Status observePacketPosition(std::uint64_t packetPosition);
     ::media::Result<std::vector<MediaTsEvidenceCheckpoint>> snapshotAfter(
         std::optional<std::uint64_t> exclusiveOffset) const;
+    ::media::Result<std::vector<std::uint64_t>> completeContinuityOffsetsFor(
+        std::span<const std::uint16_t> sourcePids) const;
 
 private:
     MediaTsEvidenceTimeline(std::size_t capacity,
@@ -52,6 +55,7 @@ private:
     std::uint64_t m_maximumPositionRegressionBytes;
     std::optional<std::uint64_t> m_highWatermark;
     std::deque<MediaTsEvidenceCheckpoint> m_checkpoints;
+    bool m_historyComplete = true;
 };
 
 } // namespace media::ffmpeg::graph

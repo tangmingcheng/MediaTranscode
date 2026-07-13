@@ -33,6 +33,8 @@ private:
     ::media::Result<MediaPacketSourceTiming> timingFor(
         const AVPacket& packet, const MediaTsClockProjectionCheckpoint& checkpoint,
         StreamClock& clock);
+    ::media::Result<MediaTsClockProjectionCheckpoint> sourceClockCheckpoint(
+        std::uint64_t packetPosition);
     ::media::Status emitEof(MediaGraphExecutionContext& context);
     void reset() noexcept;
 
@@ -41,6 +43,7 @@ private:
     std::optional<MediaTsProgramClockPolicy> m_policy;
     int m_videoStreamIndex = -1;
     int m_audioStreamIndex = -1;
+    std::uint64_t m_initialSourceGeneration = 0;
     StreamClock m_videoClock;
     StreamClock m_audioClock;
     bool m_eofSent = false;

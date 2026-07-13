@@ -98,6 +98,31 @@ MediaTsEvidenceTimeline::snapshotAfter(
         std::vector<MediaTsEvidenceCheckpoint>(first, m_checkpoints.end()));
 }
 
+::media::Result<std::vector<std::uint64_t>>
+MediaTsEvidenceTimeline::completeContinuityOffsetsFor(
+    std::span<const std::uint16_t> sourcePids) const
+{
+    if (sourcePids.empty()) {
+        return ::media::Result<std::vector<std::uint64_t>>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MPEG-TS source PID set must not be empty"));
+    }
+    if (!m_historyComplete) {
+        return ::media::Result<std::vector<std::uint64_t>>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "MPEG-TS continuity history was evicted before runtime binding"));
+    }
+    std::vector<std::uint64_t> offsets;
+    for (const auto& checkpoint : m_checkpoints) {
+        if (!checkpoint.continuityEvent) continue;
+        const auto pid = checkpoint.continuityEvent->pid;
+        if (std::find(sourcePids.begin(), sourcePids.end(), pid) != sourcePids.end()) {
+            offsets.push_back(checkpoint.byteOffset);
+        }
+    }
+    return ::media::Result<std::vector<std::uint64_t>>::success(std::move(offsets));
+}
+
 void MediaTsEvidenceTimeline::evictSafeCheckpoints()
 {
     if (!m_highWatermark || *m_highWatermark <= m_maximumPositionRegressionBytes) return;
@@ -106,6 +131,7 @@ void MediaTsEvidenceTimeline::evictSafeCheckpoints()
     while (m_checkpoints.size() > 1 &&
            m_checkpoints[1].byteOffset <= earliestLegalPosition) {
         m_checkpoints.pop_front();
+        m_historyComplete = false;
     }
 }
 

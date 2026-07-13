@@ -133,6 +133,56 @@ void testEvidenceTimelineBoundaries(TestContext& ctx)
     if (earliestLegal) EXPECT_EQ(ctx, earliestLegal.value().generation, std::uint64_t{2});
 }
 
+void testEarlyEvidenceAndCompletedPsiReplayRemainDistinct(TestContext& ctx)
+{
+    auto timeline = MediaTsEvidenceTimeline::create(4, 752).value();
+    auto early = clockEvidence(376, 0);
+    early.continuityEvent = MediaTsContinuityEvent{
+        376, 0x201, MediaTsContinuityEventReason::CounterLoss};
+    early.generation = 1;
+    EXPECT_TRUE(ctx, timeline.append(early));
+
+    auto firstReplay = timeline.snapshotAfter(std::nullopt);
+    EXPECT_TRUE(ctx, firstReplay);
+    EXPECT_EQ(ctx, firstReplay.value().size(), std::size_t{1});
+    auto completedPsi = checkpoint(563, 1);
+    completedPsi.inventory = early.inventory;
+
+    auto exactCapacity = MediaTsEvidenceTimeline::create(2, 752).value();
+    EXPECT_TRUE(ctx, exactCapacity.append(early));
+    EXPECT_TRUE(ctx, exactCapacity.append(completedPsi));
+    auto insufficientCapacity = MediaTsEvidenceTimeline::create(1, 752).value();
+    EXPECT_TRUE(ctx, insufficientCapacity.append(early));
+    EXPECT_FALSE(ctx, insufficientCapacity.append(completedPsi));
+
+    EXPECT_TRUE(ctx, timeline.append(completedPsi));
+    auto incrementalReplay = timeline.snapshotAfter(376);
+    EXPECT_TRUE(ctx, incrementalReplay);
+    EXPECT_EQ(ctx, incrementalReplay.value().size(), std::size_t{1});
+    if (!incrementalReplay.value().empty()) {
+        const auto& item = incrementalReplay.value().front();
+        EXPECT_EQ(ctx, item.byteOffset, std::uint64_t{563});
+        EXPECT_EQ(ctx, item.generation, std::uint64_t{1});
+        EXPECT_FALSE(ctx, item.pcrObservation.has_value());
+        EXPECT_FALSE(ctx, item.continuityEvent.has_value());
+        EXPECT_FALSE(ctx, item.inventory.programs.empty());
+    }
+
+    auto projection = MediaTsClockProjection::create(
+        clockPolicy(), 4, 752, 0, 0).value();
+    EXPECT_TRUE(ctx, projection.replay(firstReplay.value()));
+    const auto earlyProjection = projection.atOrBefore(376);
+    EXPECT_TRUE(ctx, projection.replay(incrementalReplay.value()));
+    const auto completedProjection = projection.atOrBefore(563);
+    EXPECT_TRUE(ctx, earlyProjection && completedProjection);
+    if (earlyProjection && completedProjection) {
+        EXPECT_EQ(ctx, completedProjection.value().generation,
+                  earlyProjection.value().generation);
+        EXPECT_EQ(ctx, completedProjection.value().readiness,
+                  earlyProjection.value().readiness);
+    }
+}
+
 void testEvidenceOrderedRangeAndClockProjection(TestContext& ctx)
 {
     auto timeline = MediaTsEvidenceTimeline::create(5, 400).value();
@@ -478,6 +528,7 @@ void runMpegTsClockTests(TestContext& ctx)
 
     testEvidenceTimeline(ctx);
     testEvidenceTimelineBoundaries(ctx);
+    testEarlyEvidenceAndCompletedPsiReplayRemainDistinct(ctx);
     testEvidenceOrderedRangeAndClockProjection(ctx);
     testProgramClockTracker(ctx);
     testSourceClockMapper(ctx);

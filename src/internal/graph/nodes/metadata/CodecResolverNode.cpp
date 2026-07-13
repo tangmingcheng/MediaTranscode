@@ -3,7 +3,7 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/builder/codec/CodecResolverEncoderContextBuilder.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
-#include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
+#include "internal/graph/runtime/buffer/FFmpegInputSnapshotBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 
@@ -135,10 +135,10 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
         return processWaiting();
     }
 
-    auto* formatBuffer = dynamic_cast<FFmpegFormatContextBuffer*>(input.value()->get());
+    auto* formatBuffer = dynamic_cast<FFmpegInputSnapshotBuffer*>(input.value()->get());
     if (!formatBuffer || !formatBuffer->inputSnapshotComplete()) {
         return ::media::Result<MediaNodeProcessResult>::failure(
-            ::media::ErrorInfo::invalidArgument("CodecResolverNode expected FFmpegFormatContextBuffer"));
+            ::media::ErrorInfo::invalidArgument("CodecResolverNode expected complete input snapshots"));
     }
 
     const FFmpegInputStreamSnapshot* stream = nullptr;

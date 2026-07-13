@@ -19,14 +19,14 @@ protected:
     ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context) override;
 
 private:
-    void releaseFormatContext() noexcept;
-    ::media::Status bindFormatContext(MediaGraphExecutionContext& context);
+    void releaseInputSnapshots() noexcept;
+    ::media::Status bindInputSnapshots(MediaGraphExecutionContext& context);
     ::media::Status bindSourceStream(MediaGraphExecutionContext& context);
     ::media::Result<MediaBufferRef> normalizePacket(const MediaBufferRef& buffer);
     ::media::Status normalizePacketTimestamps(MediaBufferRef& buffer);
 
 private:
-    MediaBufferRef m_formatContextOwner;
+    MediaBufferRef m_inputSnapshotOwner;
     const FFmpegInputStreamSnapshot* m_sourceStream = nullptr;
     MediaStreamKind m_streamKind = MediaStreamKind::Unknown;
     int m_sourceStreamIndex = invalidMediaStreamIndex;

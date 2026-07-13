@@ -45,7 +45,7 @@ constexpr std::uint64_t TsMaximumPacketPositionRegressionBytes = 1024 * 1024;
     if (!capacity) return ::media::Result<MediaPreparedRealtimeInputScan>::failure(capacity.error());
     const auto policy = MediaRealtimeTsInputPlan::create(
         TsPacketSize, probeBytes, TsMaximumPacketPositionRegressionBytes,
-        capacity.value());
+        capacity.value(), MediaRealtimeRequestClassifier::audioRequested(request) ? 2 : 1);
     if (!policy) return ::media::Result<MediaPreparedRealtimeInputScan>::failure(policy.error());
 
     MediaTsInputSessionOptions options;
@@ -74,6 +74,7 @@ constexpr std::uint64_t TsMaximumPacketPositionRegressionBytes = 1024 * 1024;
     options.avioBufferBytes = policy.value().avioBufferBytes;
     options.packetStride = policy.value().packetSize;
     options.evidenceCapacity = policy.value().evidenceTimelineCapacity;
+    options.pesProvenanceCapacity = policy.value().pesProvenanceCapacity;
     options.maximumPositionRegressionBytes =
         policy.value().maximumPacketPositionRegressionBytes;
     auto opened = opener ? (*opener)(options) : MediaTsInputSession::open(options);
@@ -96,7 +97,22 @@ constexpr std::uint64_t TsMaximumPacketPositionRegressionBytes = 1024 * 1024;
         session->programSnapshots(), session->programInventory(),
         video->index, audio ? audio->index : -1);
     if (!selected) return ::media::Result<MediaPreparedRealtimeInputScan>::failure(selected.error());
-
+    if (!audio) {
+        return ::media::Result<MediaPreparedRealtimeInputScan>::failure(
+            ::media::ErrorInfo::unsupported(
+                "MPEG-TS PES provenance currently requires planned audio and video"));
+    }
+    MediaTsRuntimeBinding runtimeBinding;
+    runtimeBinding.originPolicy = policy.value().packetOriginPolicy;
+    runtimeBinding.video = MediaTsRuntimeStreamBinding{
+        video->index, static_cast<std::uint16_t>(selected.value().videoPid)};
+    runtimeBinding.audio = MediaTsRuntimeStreamBinding{
+        audio->index, static_cast<std::uint16_t>(selected.value().audioPid)};
+    runtimeBinding.pcrPid = static_cast<std::uint16_t>(selected.value().pcrPid);
+    runtimeBinding.pesProvenanceCapacity = policy.value().pesProvenanceCapacity;
+    if (auto configured = session->configureRuntimeBinding(runtimeBinding); !configured) {
+        return ::media::Result<MediaPreparedRealtimeInputScan>::failure(configured.error());
+    }
     MediaPreparedRealtimeInputScan result;
     result.streams.video.streamIndex = video->index;
     result.streams.video.codecName = video->format.codec.codecName;

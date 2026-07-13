@@ -5,6 +5,7 @@
 #include "internal/graph/runtime/buffer/FFmpegInputStreamSnapshotFactory.h"
 
 #include <limits>
+#include <array>
 #include <optional>
 
 extern "C" {
@@ -16,11 +17,13 @@ namespace media::ffmpeg::graph {
 class MediaTsInputSession::EvidenceObserver final
     : public FFmpegObservedByteSink,
       public MediaTsPacketSink,
+      public MediaTsIncrementalPacketSink,
       public MediaTsProgramInventorySink {
 public:
     static ::media::Result<std::unique_ptr<EvidenceObserver>> create(
         std::size_t packetStride,
         std::size_t evidenceCapacity,
+        std::size_t pesProvenanceCapacity,
         std::uint64_t maximumPositionRegressionBytes)
     {
         auto timeline = MediaTsEvidenceTimeline::create(
@@ -29,9 +32,17 @@ public:
             return ::media::Result<std::unique_ptr<EvidenceObserver>>::failure(timeline.error());
         }
         auto result = std::unique_ptr<EvidenceObserver>(
-            new EvidenceObserver(std::move(timeline.value())));
+            new EvidenceObserver(std::move(timeline.value()), packetStride));
+        auto provenance = MediaTsPesProvenanceTimeline::create(
+            packetStride, pesProvenanceCapacity, maximumPositionRegressionBytes);
+        if (!provenance) {
+            return ::media::Result<std::unique_ptr<EvidenceObserver>>::failure(
+                provenance.error());
+        }
+        result->m_pesProvenance =
+            std::make_unique<MediaTsPesProvenanceTimeline>(std::move(provenance.value()));
         result->m_assembler = std::make_unique<MediaTsPsiSectionAssembler>(*result);
-        auto parser = MediaTsPacketParser::create(packetStride, *result);
+        auto parser = MediaTsPacketParser::create(packetStride, *result, result.get());
         if (!parser) {
             return ::media::Result<std::unique_ptr<EvidenceObserver>>::failure(parser.error());
         }
@@ -58,14 +69,40 @@ public:
     ::media::Status onPacket(const MediaTsPacketView& packet) override
     {
         std::lock_guard lock(m_mutex);
-        if (m_pendingContinuityEvent &&
-            m_pendingContinuityEvent->byteOffset != packet.byteOffset) {
+        if (m_pendingContinuityEvent) {
             return ::media::Status::failure(
-                ::media::ErrorInfo::invalidArgument("MPEG-TS continuity event was not merged with its packet"));
+                ::media::ErrorInfo::invalidArgument(
+                    "MPEG-TS full packet arrived before its provenance prefix"));
         }
         auto assembled = m_assembler->onPacket(packet);
         if (!assembled) return assembled;
-        if (!m_inventoryDirty && !packet.pcr27Mhz && !m_pendingContinuityEvent) {
+        if (!m_inventoryDirty) return ::media::Status::success();
+        const auto packetEndDelta = m_packetStride - 1;
+        if (packet.byteOffset >
+            std::numeric_limits<std::uint64_t>::max() - packetEndDelta) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "MPEG-TS packet-end evidence offset overflow"));
+        }
+        MediaTsEvidenceCheckpoint checkpoint;
+        checkpoint.byteOffset = packet.byteOffset + packetEndDelta;
+        if (m_inventory) checkpoint.inventory = *m_inventory;
+        checkpoint.generation = m_generation;
+        auto appended = m_timeline.append(std::move(checkpoint));
+        if (appended) m_inventoryDirty = false;
+        return appended;
+    }
+
+    ::media::Status onPacketEvidence(const MediaTsPacketEvidenceView& packet) override
+    {
+        std::lock_guard lock(m_mutex);
+        if (m_pendingContinuityEvent &&
+            m_pendingContinuityEvent->byteOffset != packet.byteOffset) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "MPEG-TS continuity event was not merged with its packet evidence"));
+        }
+        if (!packet.pcr27Mhz && !m_pendingContinuityEvent) {
             return ::media::Status::success();
         }
         MediaTsEvidenceCheckpoint checkpoint;
@@ -73,20 +110,33 @@ public:
         if (m_inventory) checkpoint.inventory = *m_inventory;
         if (packet.pcr27Mhz) {
             checkpoint.pcrObservation = MediaTsRawPcrEvidence{
-                .byteOffset = packet.byteOffset,
-                .pid = packet.pid,
-                .pcr27Mhz = *packet.pcr27Mhz,
-                .discontinuity = packet.discontinuity};
+                packet.byteOffset, packet.pid, *packet.pcr27Mhz, packet.discontinuity};
         }
-        checkpoint.discontinuity = packet.discontinuity;
         checkpoint.continuityEvent = m_pendingContinuityEvent;
+        checkpoint.discontinuity = packet.discontinuity;
         checkpoint.generation = m_generation;
-        auto appended = m_timeline.append(std::move(checkpoint));
-        if (appended) {
-            m_inventoryDirty = false;
-            m_pendingContinuityEvent.reset();
+        return m_timeline.append(std::move(checkpoint));
+    }
+
+    ::media::Status onPacketPrefix(const MediaTsPacketPrefixView& packet) override
+    {
+        std::lock_guard lock(m_mutex);
+        if (m_pendingContinuityEvent &&
+            m_pendingContinuityEvent->byteOffset != packet.byteOffset) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "MPEG-TS continuity event was not merged with its packet prefix"));
         }
-        return appended;
+        if (m_pendingContinuityEvent) {
+            if (!m_runtimeBinding) {
+                auto continuity = m_pesProvenance->onContinuityEvent(
+                    *m_pendingContinuityEvent, packet.payloadUnitStart);
+                if (!continuity) return continuity;
+            }
+        }
+        auto provenance = m_pesProvenance->onPacketPrefix(packet);
+        if (provenance) m_pendingContinuityEvent.reset();
+        return provenance;
     }
 
     ::media::Status onContinuityEvent(const MediaTsContinuityEvent& event) override
@@ -100,14 +150,27 @@ public:
             return ::media::Status::failure(
                 ::media::ErrorInfo::invalidArgument("MPEG-TS transport generation exhausted"));
         }
+        auto assembled = m_assembler->onContinuityEvent(event);
+        if (!assembled) return assembled;
+        if (m_runtimeBinding && m_runtimeBinding->isSourceClockPid(event.pid)) {
+            auto boundary = m_pesProvenance->onSourceClockBoundary(event.byteOffset);
+            if (!boundary) return boundary;
+        }
         ++m_generation;
         m_pendingContinuityEvent = event;
-        return m_assembler->onContinuityEvent(event);
+        return ::media::Status::success();
     }
 
     ::media::Status onProgramInventory(MediaTsProgramInventorySnapshot snapshot) override
     {
         std::lock_guard lock(m_mutex);
+        for (const auto& program : snapshot.programs) {
+            for (const auto& stream : program.elementaryStreams) {
+                if (auto tracked = m_pesProvenance->trackPid(stream.pid); !tracked) {
+                    return tracked;
+                }
+            }
+        }
         m_inventory = std::move(snapshot);
         m_inventoryDirty = true;
         return ::media::Status::success();
@@ -138,19 +201,64 @@ public:
         return m_timeline.observePacketPosition(packetPosition);
     }
 
+    ::media::Status configureRuntimeBinding(const MediaTsRuntimeBinding& binding)
+    {
+        std::lock_guard lock(m_mutex);
+        if (m_runtimeBinding) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "MPEG-TS evidence observer binding is already configured"));
+        }
+        const std::array<std::uint16_t, 3> sourcePids{
+            binding.video.pid, binding.audio.pid, binding.pcrPid};
+        auto historicalBoundaries =
+            m_timeline.completeContinuityOffsetsFor(sourcePids);
+        if (!historicalBoundaries) {
+            return ::media::Status::failure(historicalBoundaries.error());
+        }
+        auto candidate = *m_pesProvenance;
+        const std::array<std::uint16_t, 2> selectedPids{
+            binding.video.pid, binding.audio.pid};
+        auto selected = candidate.configureSelectedPids(selectedPids);
+        if (!selected) return selected;
+        auto replayed = candidate.replaySourceClockBoundaries(
+            historicalBoundaries.value());
+        if (!replayed) return replayed;
+        *m_pesProvenance = std::move(candidate);
+        m_runtimeBinding = binding;
+        return ::media::Status::success();
+    }
+
+    ::media::Result<MediaTsPesProvenanceAnchor> resolvePesAnchor(
+        std::uint64_t packetPosition, std::uint16_t pid) const
+    {
+        std::lock_guard lock(m_mutex);
+        return m_pesProvenance->resolveAnchor(packetPosition, pid);
+    }
+
+    ::media::Result<MediaTsPesProvenanceAnchor> pesStateForAnchor(
+        const MediaTsPesProvenanceAnchor& anchor) const
+    {
+        std::lock_guard lock(m_mutex);
+        return m_pesProvenance->stateForAnchor(anchor);
+    }
+
 private:
-    explicit EvidenceObserver(MediaTsEvidenceTimeline timeline)
-        : m_timeline(std::move(timeline)) {}
+    EvidenceObserver(MediaTsEvidenceTimeline timeline, std::size_t packetStride)
+        : m_timeline(std::move(timeline)), m_packetStride(packetStride) {}
 
     std::unique_ptr<MediaTsPacketParser> m_parser;
     std::unique_ptr<MediaTsPsiSectionAssembler> m_assembler;
     MediaTsEvidenceTimeline m_timeline;
+    std::unique_ptr<MediaTsPesProvenanceTimeline> m_pesProvenance;
     std::optional<MediaTsProgramInventorySnapshot> m_inventory;
     std::optional<MediaTsContinuityEvent> m_pendingContinuityEvent;
+    std::optional<MediaTsRuntimeBinding> m_runtimeBinding;
     bool m_inventoryDirty = false;
     mutable std::recursive_mutex m_mutex;
     std::uint64_t m_nextOffset = 0;
     std::uint64_t m_generation = 0;
+    std::size_t m_packetStride;
 };
 
 class MediaTsInputSession::ReadLease final {
@@ -214,16 +322,16 @@ MediaTsInputSession::~MediaTsInputSession()
     return ::media::Status::success();
 }
 
-::media::Result<MediaTsReadFrameState> MediaTsInputSession::readFrame(AVPacket& packet)
+::media::Result<MediaTsReadFrameEnvelope> MediaTsInputSession::readFrame()
 {
     {
         std::lock_guard lock(m_sessionMutex);
         if (m_closing || m_closed || !m_formatContext) {
-            return ::media::Result<MediaTsReadFrameState>::failure(
+            return ::media::Result<MediaTsReadFrameEnvelope>::failure(
                 ::media::ErrorInfo::cancelled("MPEG-TS input session is closed"));
         }
         if (m_activeReads != 0) {
-            return ::media::Result<MediaTsReadFrameState>::failure(
+            return ::media::Result<MediaTsReadFrameEnvelope>::failure(
                 ::media::ErrorInfo::invalidArgument(
                     "MPEG-TS input session permits one active reader"));
         }
@@ -231,33 +339,90 @@ MediaTsInputSession::~MediaTsInputSession()
     }
     ReadLease guard(*this);
 
-    const int result = av_read_frame(m_formatContext, &packet);
+    auto packet = ::media::ffmpeg::makePacket();
+    if (!packet) {
+        return ::media::Result<MediaTsReadFrameEnvelope>::failure(
+            ::media::ErrorInfo::allocationFailed("failed to allocate MPEG-TS packet"));
+    }
+    const int result = av_read_frame(m_formatContext, packet.get());
     const auto observerStatus = m_observedAvio->status();
     if (!observerStatus) {
-        return ::media::Result<MediaTsReadFrameState>::failure(observerStatus.error());
+        return ::media::Result<MediaTsReadFrameEnvelope>::failure(observerStatus.error());
     }
     {
         std::lock_guard lock(m_sessionMutex);
         if (m_closing || m_closed || m_interruptState.cancelled()) {
-            return ::media::Result<MediaTsReadFrameState>::failure(
+            return ::media::Result<MediaTsReadFrameEnvelope>::failure(
                 ::media::ErrorInfo::cancelled("MPEG-TS input read was cancelled"));
         }
     }
     if (result >= 0) {
-        return ::media::Result<MediaTsReadFrameState>::success(MediaTsReadFrameState::Frame);
+        auto provenance = provenanceFor(*packet);
+        if (!provenance) {
+            return ::media::Result<MediaTsReadFrameEnvelope>::failure(provenance.error());
+        }
+        return ::media::Result<MediaTsReadFrameEnvelope>::success(MediaTsReadFrameEnvelope{
+            MediaTsReadFrameState::Frame, std::move(packet), provenance.value()});
     }
     if (result == AVERROR(EAGAIN)) {
-        return ::media::Result<MediaTsReadFrameState>::success(MediaTsReadFrameState::Waiting);
+        return ::media::Result<MediaTsReadFrameEnvelope>::success(
+            MediaTsReadFrameEnvelope{MediaTsReadFrameState::Waiting});
     }
     if (result == AVERROR_EOF) {
-        return ::media::Result<MediaTsReadFrameState>::success(MediaTsReadFrameState::EndOfStream);
+        return ::media::Result<MediaTsReadFrameEnvelope>::success(
+            MediaTsReadFrameEnvelope{MediaTsReadFrameState::EndOfStream});
     }
     if (result == AVERROR_EXIT) {
-        return ::media::Result<MediaTsReadFrameState>::failure(
+        return ::media::Result<MediaTsReadFrameEnvelope>::failure(
             ::media::ErrorInfo::cancelled("MPEG-TS input read was cancelled"));
     }
-    return ::media::Result<MediaTsReadFrameState>::failure(
+    return ::media::Result<MediaTsReadFrameEnvelope>::failure(
         ::media::ErrorInfo::ffmpegFailure("failed to read MPEG-TS frame", result));
+}
+
+::media::Status MediaTsInputSession::configureRuntimeBinding(
+    const MediaTsRuntimeBinding& binding)
+{
+    if (m_runtimeBindingConfigured ||
+        binding.originPolicy != MediaTsPacketOriginPolicy::PerStreamPesCarry ||
+        binding.video.streamIndex < 0 || binding.audio.streamIndex < 0 ||
+        binding.video.streamIndex == binding.audio.streamIndex ||
+        binding.video.pid == 0 || binding.audio.pid == 0 ||
+        binding.video.pid == binding.audio.pid ||
+        binding.pcrPid == 0 || binding.pcrPid >= 0x1FFF ||
+        binding.pesProvenanceCapacity != m_runtimeContract.pesProvenanceCapacity) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "invalid MPEG-TS runtime PES provenance binding"));
+    }
+    if (auto configured = m_evidenceObserver->configureRuntimeBinding(binding);
+        !configured) {
+        return configured;
+    }
+    auto cursor = MediaTsReturnedPesCursor::create(binding);
+    if (!cursor) return ::media::Status::failure(cursor.error());
+    m_returnedPesCursor = std::make_unique<MediaTsReturnedPesCursor>(
+        std::move(cursor.value()));
+    m_runtimeBindingConfigured = true;
+    m_runtimeContract.originBinding = binding;
+    return ::media::Status::success();
+}
+
+::media::Result<MediaTsPacketProvenance> MediaTsInputSession::provenanceFor(
+    const AVPacket& packet)
+{
+    if (!m_runtimeBindingConfigured) {
+        return ::media::Result<MediaTsPacketProvenance>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "MPEG-TS runtime PES provenance binding is not configured"));
+    }
+    return m_returnedPesCursor->resolve(
+        packet.stream_index, packet.pos,
+        [this](std::uint64_t position, std::uint16_t pid) {
+            return m_evidenceObserver->resolvePesAnchor(position, pid);
+        },
+        [this](const MediaTsPesProvenanceAnchor& anchor) {
+            return m_evidenceObserver->pesStateForAnchor(anchor);
+        });
 }
 
 ::media::Result<std::unique_ptr<MediaTsInputSession>> MediaTsInputSession::open(
@@ -284,8 +449,10 @@ MediaTsInputSession::~MediaTsInputSession()
     auto session = std::unique_ptr<MediaTsInputSession>(new MediaTsInputSession());
     session->m_runtimeContract = MediaTsInputRuntimeContract{
         options.packetStride, options.evidenceCapacity,
-        options.maximumPositionRegressionBytes};
+        options.maximumPositionRegressionBytes, options.pesProvenanceCapacity,
+        std::nullopt};
     auto observer = EvidenceObserver::create(options.packetStride, options.evidenceCapacity,
+                                             options.pesProvenanceCapacity,
                                              options.maximumPositionRegressionBytes);
     if (!observer) return ::media::Result<std::unique_ptr<MediaTsInputSession>>::failure(observer.error());
     session->m_evidenceObserver = std::move(observer.value());

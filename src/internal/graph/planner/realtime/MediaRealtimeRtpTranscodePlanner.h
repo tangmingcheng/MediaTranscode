@@ -11,6 +11,7 @@
 #include "internal/graph/planner/realtime/MediaPreparedRealtimeInput.h"
 #include "internal/graph/protocol/rtp/MediaRtcpCompositionPolicy.h"
 #include "internal/graph/protocol/rtp/MediaRtpDepacketizer.h"
+#include "internal/graph/protocol/mpegts/MediaTsPacketOriginPolicy.h"
 #include "media_transcode/Result.h"
 
 #include <string>
@@ -47,6 +48,8 @@ struct MediaRealtimeTsInputPlan final {
     std::size_t maximumDatagramBytes = 0;
     std::size_t evidenceTimelineCapacity = 0;
     std::uint64_t maximumPacketPositionRegressionBytes = 0;
+    std::size_t pesProvenanceCapacity = 0;
+    MediaTsPacketOriginPolicy packetOriginPolicy;
     int programNumber = 0;
     int programMapPid = 0;
     int videoPid = 0;
@@ -65,7 +68,8 @@ struct MediaRealtimeTsInputPlan final {
         std::size_t packetSize,
         std::uint64_t probeWindowBytes,
         std::uint64_t maximumPacketPositionRegressionBytes,
-        std::size_t evidenceTimelineCapacity);
+        std::size_t evidenceTimelineCapacity,
+        std::size_t selectedStreamCount);
     static ::media::Result<std::size_t> minimumEvidenceCapacity(
         std::size_t packetSize,
         std::uint64_t probeWindowBytes,
