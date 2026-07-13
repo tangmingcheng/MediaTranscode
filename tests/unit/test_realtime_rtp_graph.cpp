@@ -2819,8 +2819,9 @@ void testBuildPlansMpegTsUdpMuxedOutputGraph(TestContext& ctx)
 
     const MediaGraph& graph = graphResult.value();
     EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::RealtimeInput) != nullptr);
-    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::Demux) != nullptr);
-    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::StreamSplit) != nullptr);
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::MpegTsDemux) != nullptr);
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::Demux) == nullptr);
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::StreamSplit) == nullptr);
     EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::FileOutput) != nullptr);
     EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::FileMux) != nullptr);
     EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::PacketStartGate) != nullptr);
@@ -3495,6 +3496,14 @@ void testMpegTsPreflightOpensOneSessionAndKeepsTaggedBinding(TestContext& ctx)
         std::move(preflight).value());
     EXPECT_TRUE(ctx, executable);
     if (executable) {
+        std::size_t tsDemuxCount = 0;
+        std::size_t genericDemuxCount = 0;
+        for (const auto& node : executable.value().graph.nodes()) {
+            if (node.kind == MediaNodeKind::MpegTsDemux) ++tsDemuxCount;
+            if (node.kind == MediaNodeKind::Demux) ++genericDemuxCount;
+        }
+        EXPECT_EQ(ctx, tsDemuxCount, std::size_t{1});
+        EXPECT_EQ(ctx, genericDemuxCount, std::size_t{0});
         EXPECT_EQ(ctx, executable.value().inputBindings.size(), std::size_t{1});
         if (executable.value().inputBindings.empty()) return;
         auto& binding = executable.value().inputBindings.front();

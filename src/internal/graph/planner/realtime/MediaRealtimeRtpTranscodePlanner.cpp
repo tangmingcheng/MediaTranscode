@@ -421,6 +421,22 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
         }
         plan.avSync = std::move(avSync).value();
     }
+    if (plan.input.mpegTs && selectedTsProgram) {
+        auto& ts = *plan.input.mpegTs;
+        ts.programNumber = selectedTsProgram->programNumber;
+        ts.programMapPid = selectedTsProgram->programMapPid;
+        ts.videoPid = selectedTsProgram->videoPid;
+        ts.audioPid = selectedTsProgram->audioPid;
+        ts.pcrPid = selectedTsProgram->pcrPid;
+        ts.pcrInterval27Mhz = 540'000;
+        ts.maximumPcrJitter27Mhz = 135'000;
+        ts.maximumPcrGap27Mhz = 2'700'000;
+        ts.projectionCapacity = ts.evidenceTimelineCapacity;
+        ts.timestampTimeBaseNumerator = 1;
+        ts.timestampTimeBaseDenominator = 90'000;
+        ts.initialSourceGeneration = 0;
+        ts.initialRawTransportGeneration = 0;
+    }
     if (auto status = MediaRealtimeTsInputPlanValidator::validate(plan.inputType, plan.input);
         !status) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(status.error());

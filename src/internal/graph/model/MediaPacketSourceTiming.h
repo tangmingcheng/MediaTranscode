@@ -5,10 +5,17 @@
 
 namespace media::ffmpeg::graph {
 
+enum class MediaSourceClockReadiness {
+    Acquiring,
+    Locked,
+    ReacquireRequired
+};
+
 struct MediaPacketSourceTiming final {
     std::optional<std::int64_t> presentationNs;
     std::optional<std::int64_t> decodeNs;
-    std::uint64_t generation = 0;
+    MediaSourceClockReadiness readiness;
+    std::uint64_t generation;
 
     bool operator==(const MediaPacketSourceTiming&) const = default;
 };

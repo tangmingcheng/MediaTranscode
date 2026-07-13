@@ -9,11 +9,13 @@ MediaTsClockProjection::MediaTsClockProjection(
     MediaTsProgramClockPolicy policy,
     std::size_t capacity,
     std::uint64_t maximumPositionRegressionBytes,
+    std::uint64_t initialSourceGeneration,
     std::uint64_t expectedInitialRawTransportGeneration,
     MediaTsProgramClockTracker tracker) noexcept
     : m_policy(policy)
     , m_capacity(capacity)
     , m_maximumPositionRegressionBytes(maximumPositionRegressionBytes)
+    , m_initialSourceGeneration(initialSourceGeneration)
     , m_expectedInitialRawTransportGeneration(expectedInitialRawTransportGeneration)
     , m_tracker(std::move(tracker))
 {
@@ -36,6 +38,7 @@ MediaTsClockProjection::MediaTsClockProjection(
     }
     return ::media::Result<MediaTsClockProjection>::success(
         MediaTsClockProjection(policy, capacity, maximumPositionRegressionBytes,
+                               initialSourceGeneration,
                                expectedInitialRawTransportGeneration,
                                std::move(tracker).value()));
 }
@@ -151,6 +154,11 @@ MediaTsClockProjection::MediaTsClockProjection(
     m_checkpoints.push_back(MediaTsClockProjectionCheckpoint{
         .byteOffset = evidence.byteOffset,
         .calibration = calibration,
+        .readiness = calibration
+            ? MediaSourceClockReadiness::Locked
+            : (m_tracker.generation() == m_initialSourceGeneration
+                ? MediaSourceClockReadiness::Acquiring
+                : MediaSourceClockReadiness::ReacquireRequired),
         .generation = m_tracker.generation()});
     m_lastReplayedOffset = evidence.byteOffset;
     m_lastRawTransportGeneration = evidence.generation;

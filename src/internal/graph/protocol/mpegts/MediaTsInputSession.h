@@ -54,6 +54,7 @@ public:
         std::uint64_t packetPosition) const;
     ::media::Result<std::vector<MediaTsEvidenceCheckpoint>> evidenceSnapshotAfter(
         std::optional<std::uint64_t> exclusiveOffset) const;
+    ::media::Status observePacketPosition(std::uint64_t packetPosition);
     FFmpegAvioInterruptState& interruptState() noexcept { return m_interruptState; }
     ::media::Status status() const;
 

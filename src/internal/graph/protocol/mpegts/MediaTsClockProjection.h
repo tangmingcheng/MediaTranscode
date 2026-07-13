@@ -2,6 +2,7 @@
 
 #include "internal/graph/protocol/mpegts/MediaTsEvidenceTimeline.h"
 #include "internal/graph/protocol/mpegts/MediaTsProgramClockTracker.h"
+#include "internal/graph/model/MediaPacketSourceTiming.h"
 
 #include <cstddef>
 #include <optional>
@@ -10,9 +11,10 @@
 namespace media::ffmpeg::graph {
 
 struct MediaTsClockProjectionCheckpoint final {
-    std::uint64_t byteOffset = 0;
+    std::uint64_t byteOffset;
     std::optional<MediaTsPcrCalibration> calibration;
-    std::uint64_t generation = 0;
+    MediaSourceClockReadiness readiness;
+    std::uint64_t generation;
 };
 
 class MediaTsClockProjection final {
@@ -34,6 +36,7 @@ private:
     MediaTsClockProjection(MediaTsProgramClockPolicy policy,
                            std::size_t capacity,
                            std::uint64_t maximumPositionRegressionBytes,
+                           std::uint64_t initialSourceGeneration,
                            std::uint64_t expectedInitialRawTransportGeneration,
                            MediaTsProgramClockTracker tracker) noexcept;
     ::media::Status replayOne(const MediaTsEvidenceCheckpoint& evidence);
@@ -42,6 +45,7 @@ private:
     MediaTsProgramClockPolicy m_policy;
     std::size_t m_capacity;
     std::uint64_t m_maximumPositionRegressionBytes;
+    std::uint64_t m_initialSourceGeneration;
     std::uint64_t m_expectedInitialRawTransportGeneration;
     MediaTsProgramClockTracker m_tracker;
     std::vector<MediaTsClockProjectionCheckpoint> m_checkpoints;

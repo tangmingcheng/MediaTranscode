@@ -154,6 +154,7 @@ void testEvidenceOrderedRangeAndClockProjection(TestContext& ctx)
     auto rollback = projection.value().atOrBefore(200);
     EXPECT_TRUE(ctx, at300);
     EXPECT_TRUE(ctx, rollback);
+    EXPECT_EQ(ctx, at300.value().readiness, MediaSourceClockReadiness::Locked);
     EXPECT_EQ(ctx, at300.value().calibration->pcr27Mhz, std::int64_t{5'400'000});
     EXPECT_EQ(ctx, rollback.value().calibration->pcr27Mhz, std::int64_t{2'700'000});
 
@@ -190,6 +191,8 @@ void testEvidenceOrderedRangeAndClockProjection(TestContext& ctx)
     auto base = clockEvidence(100, 0);
     auto locked = clockEvidence(200, 2'700'000);
     EXPECT_TRUE(ctx, generationRules.replay({base, locked}));
+    EXPECT_EQ(ctx, generationRules.atOrBefore(100).value().readiness,
+              MediaSourceClockReadiness::Acquiring);
     const auto beforeFailure = generationRules.atOrBefore(200).value();
     auto jump = clockEvidence(300, 5'400'000);
     jump.generation = 3;
@@ -213,6 +216,8 @@ void testEvidenceOrderedRangeAndClockProjection(TestContext& ctx)
         400, 0x201, MediaTsContinuityEventReason::CounterLoss};
     EXPECT_TRUE(ctx, generationRules.replay({selectedBreak}));
     EXPECT_FALSE(ctx, generationRules.atOrBefore(400).value().calibration.has_value());
+    EXPECT_EQ(ctx, generationRules.atOrBefore(400).value().readiness,
+              MediaSourceClockReadiness::ReacquireRequired);
 
     auto mismatch = clockEvidence(500, 10'800'000);
     mismatch.generation = 3;
@@ -462,10 +467,12 @@ void runMpegTsClockTests(TestContext& ctx)
     const MediaPacketSourceTiming sourceTiming{
         .presentationNs = 1'000'000'000,
         .decodeNs = 500'000'000,
+        .readiness = MediaSourceClockReadiness::Locked,
         .generation = 7};
     FFmpegPacketBuffer timedPacket(std::move(packet), sourceTiming);
     EXPECT_TRUE(ctx, timedPacket.sourceTiming().has_value());
     EXPECT_EQ(ctx, timedPacket.sourceTiming()->generation, std::uint64_t{7});
+    EXPECT_EQ(ctx, timedPacket.sourceTiming()->readiness, MediaSourceClockReadiness::Locked);
     EXPECT_EQ(ctx, timedPacket.packet()->pts, std::int64_t{90000});
     EXPECT_EQ(ctx, timedPacket.packet()->dts, std::int64_t{45000});
 

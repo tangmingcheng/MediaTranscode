@@ -96,6 +96,29 @@ const char* boolOption(bool value) noexcept
     return ::media::Result<void>::success();
 }
 
+::media::Result<void> MediaRealtimeOptionApplier::applyMpegTsDemuxOptions(
+    MediaGraph& graph, MediaNodeId nodeId, const MediaRealtimeTsInputPlan& plan)
+{
+    const auto set = [&](const char* key, auto value) {
+        return MediaGraphBuildSupport::setNodeOptionChecked(
+            graph, owner, nodeId, key, std::to_string(value));
+    };
+    if (auto s = set("mpegts.program_number", plan.programNumber); !s) return s;
+    if (auto s = set("mpegts.pmt_pid", plan.programMapPid); !s) return s;
+    if (auto s = set("mpegts.video_pid", plan.videoPid); !s) return s;
+    if (auto s = set("mpegts.audio_pid", plan.audioPid); !s) return s;
+    if (auto s = set("mpegts.pcr_pid", plan.pcrPid); !s) return s;
+    if (auto s = set("mpegts.pcr_interval_27mhz", plan.pcrInterval27Mhz); !s) return s;
+    if (auto s = set("mpegts.maximum_pcr_jitter_27mhz", plan.maximumPcrJitter27Mhz); !s) return s;
+    if (auto s = set("mpegts.maximum_pcr_gap_27mhz", plan.maximumPcrGap27Mhz); !s) return s;
+    if (auto s = set("mpegts.projection_capacity", plan.projectionCapacity); !s) return s;
+    if (auto s = set("mpegts.maximum_position_regression_bytes", plan.maximumPacketPositionRegressionBytes); !s) return s;
+    if (auto s = set("mpegts.timestamp_time_base_num", plan.timestampTimeBaseNumerator); !s) return s;
+    if (auto s = set("mpegts.timestamp_time_base_den", plan.timestampTimeBaseDenominator); !s) return s;
+    if (auto s = set("mpegts.initial_source_generation", plan.initialSourceGeneration); !s) return s;
+    return set("mpegts.initial_raw_generation", plan.initialRawTransportGeneration);
+}
+
 ::media::Result<void> MediaRealtimeOptionApplier::applyOutputOptions(
     MediaGraph& graph,
     MediaNodeId nodeId,

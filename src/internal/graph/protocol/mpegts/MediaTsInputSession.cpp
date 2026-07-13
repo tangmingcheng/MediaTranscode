@@ -132,6 +132,12 @@ public:
         return m_timeline.snapshotAfter(exclusiveOffset);
     }
 
+    ::media::Status observePacketPosition(std::uint64_t packetPosition)
+    {
+        std::lock_guard lock(m_mutex);
+        return m_timeline.observePacketPosition(packetPosition);
+    }
+
 private:
     explicit EvidenceObserver(MediaTsEvidenceTimeline timeline)
         : m_timeline(std::move(timeline)) {}
@@ -384,6 +390,11 @@ MediaTsInputSession::evidenceSnapshotAfter(
     std::optional<std::uint64_t> exclusiveOffset) const
 {
     return m_evidenceObserver->evidenceSnapshotAfter(exclusiveOffset);
+}
+
+::media::Status MediaTsInputSession::observePacketPosition(std::uint64_t packetPosition)
+{
+    return m_evidenceObserver->observePacketPosition(packetPosition);
 }
 
 ::media::Status MediaTsInputSession::status() const

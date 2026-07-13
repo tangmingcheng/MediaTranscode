@@ -77,6 +77,43 @@ struct RealtimePacketInputChain {
         return ::media::Result<RealtimePacketInputChain>::success(chain);
     }
 
+    if (inputPlan.mpegTs) {
+        const MediaNodeId demux = graph.addNode(MediaNodeKind::MpegTsDemux,
+                                                prefix + ".mpegts_demux",
+                                                "MPEG-TS program-clock demux");
+        if (!demux.isValid()) {
+            return ::media::Result<RealtimePacketInputChain>::failure(
+                ::media::ErrorInfo::internalError("failed to add MPEG-TS demux node"));
+        }
+        if (auto status = MediaRealtimeOptionApplier::applyMpegTsDemuxOptions(
+                graph, demux, *inputPlan.mpegTs); !status) {
+            return ::media::Result<RealtimePacketInputChain>::failure(status.error());
+        }
+        if (auto status = MediaGraphBuildSupport::addInputPortChecked(
+                graph, owner, demux, "format", MediaStreamKind::Metadata,
+                MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext, true, true); !status) {
+            return ::media::Result<RealtimePacketInputChain>::failure(status.error());
+        }
+        for (const auto [name, kind] : {std::pair{"video", MediaStreamKind::Video},
+                                       std::pair{"audio", MediaStreamKind::Audio}}) {
+            if (auto status = MediaGraphBuildSupport::addOutputPortChecked(
+                    graph, owner, demux, name, kind, MediaEdgeKind::InputPacket,
+                    MediaPayloadKind::Packet, true, true); !status) {
+                return ::media::Result<RealtimePacketInputChain>::failure(status.error());
+            }
+        }
+        if (auto status = MediaGraphBuildSupport::connectChecked(
+                graph, owner, input, "format", demux, "format",
+                "realtime.input.format -> mpegts_demux.format", edgePolicies.metadata); !status) {
+            return ::media::Result<RealtimePacketInputChain>::failure(status.error());
+        }
+        RealtimePacketInputChain chain;
+        chain.input = input;
+        chain.packetSelect.demux = demux;
+        chain.packetSelect.split = demux;
+        return ::media::Result<RealtimePacketInputChain>::success(chain);
+    }
+
     PacketSelectSegmentOptions packetSelectOptions;
     packetSelectOptions.prefix = prefix;
     packetSelectOptions.formatSourceNode = input;

@@ -11,6 +11,9 @@ public:
     static ::media::Result<void> applyInputOptions(MediaGraph& graph,
                                                    MediaNodeId nodeId,
                                                    const MediaRealtimeRtpInputNodePlan& plan);
+    static ::media::Result<void> applyMpegTsDemuxOptions(MediaGraph& graph,
+                                                         MediaNodeId nodeId,
+                                                         const MediaRealtimeTsInputPlan& plan);
     static ::media::Result<void> applyOutputOptions(MediaGraph& graph,
                                                     MediaNodeId nodeId,
                                                     const MediaRealtimeRtpOutputNodePlan& plan);
