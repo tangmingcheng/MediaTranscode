@@ -10,11 +10,17 @@ extern "C" {
 
 namespace media::ffmpeg::graph {
 
+struct FFmpegInputProgramStreamBinding final {
+    int streamIndex;
+    int elementaryPid;
+    bool operator==(const FFmpegInputProgramStreamBinding&) const = default;
+};
+
 struct FFmpegInputProgramSnapshot final {
     int programNumber = 0;
     int pmtPid = 0;
     int pcrPid = 0;
-    std::vector<int> streamIndexes;
+    std::vector<FFmpegInputProgramStreamBinding> streamBindings;
 
     bool operator==(const FFmpegInputProgramSnapshot&) const = default;
 };

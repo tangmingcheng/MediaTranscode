@@ -7,6 +7,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeOutputPolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestValidator.h"
+#include "internal/graph/planner/realtime/MediaRealtimeTsInputPlanValidator.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 
 #include <limits>
@@ -222,7 +223,7 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
     MediaRealtimeTsInputPlan result;
     result.demuxFormat = "mpegts";
     result.packetSize = packetSize;
-    result.avioBufferBytes = 32 * 1024;
+    result.avioBufferBytes = 65'535;
     result.maximumDatagramBytes = 65'535;
     result.evidenceTimelineCapacity = evidenceTimelineCapacity;
     result.maximumPacketPositionRegressionBytes = maximumPacketPositionRegressionBytes;
@@ -419,6 +420,10 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(avSync.error());
         }
         plan.avSync = std::move(avSync).value();
+    }
+    if (auto status = MediaRealtimeTsInputPlanValidator::validate(plan.inputType, plan.input);
+        !status) {
+        return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(status.error());
     }
     return ::media::Result<MediaRealtimeRtpTranscodePlan>::success(std::move(plan));
 }

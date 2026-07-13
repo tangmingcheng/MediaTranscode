@@ -62,10 +62,12 @@ const FFmpegInputStreamSnapshot* MediaPreparedRealtimeInput::inputStreamSnapshot
     return found == snapshots.end() ? nullptr : &*found;
 }
 
-MediaBufferRef MediaPreparedRealtimeInput::releaseBuffer() noexcept
+::media::Result<MediaBufferRef> MediaPreparedRealtimeInput::releaseBuffer() noexcept
 {
-    if (m_genericBuffer) return MediaBufferRef(m_genericBuffer.release());
-    return MediaBufferRef(m_tsBuffer.release());
+    if (m_genericBuffer) return ::media::Result<MediaBufferRef>::success(MediaBufferRef(m_genericBuffer.release()));
+    if (m_tsBuffer) return ::media::Result<MediaBufferRef>::success(MediaBufferRef(m_tsBuffer.release()));
+    return ::media::Result<MediaBufferRef>::failure(
+        ::media::ErrorInfo::notInitialized("prepared realtime input was already transferred"));
 }
 
 } // namespace media::ffmpeg::graph

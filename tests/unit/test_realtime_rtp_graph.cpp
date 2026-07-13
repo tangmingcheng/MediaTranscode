@@ -3294,6 +3294,10 @@ void testPreparedRealtimeInputIsMoveOnlyAndSourceBecomesEmpty(TestContext& ctx)
     EXPECT_TRUE(ctx, destination.inputStreamSnapshot(0) != nullptr);
     static_assert(!std::is_copy_constructible_v<MediaPreparedRealtimeInput>);
     static_assert(!std::is_copy_assignable_v<MediaPreparedRealtimeInput>);
+
+    auto released = destination.releaseBuffer();
+    EXPECT_TRUE(ctx, released);
+    EXPECT_FALSE(ctx, destination.releaseBuffer());
 }
 
 MediaPreparedRealtimeInput makePreparedInputForBinding(TestContext& ctx)
@@ -3343,8 +3347,10 @@ void testExecutableRuntimeRejectsMissingAndDuplicatePreparedBindings(TestContext
 
     MediaRealtimeExecutableGraph duplicate;
     const MediaNodeId duplicateId = duplicate.graph.addNode(MediaNodeKind::RealtimeInput, "prepared.input");
-    duplicate.inputBindings.push_back({duplicateId, makePreparedInputForBinding(ctx)});
-    duplicate.inputBindings.push_back({duplicateId, makePreparedInputForBinding(ctx)});
+    duplicate.inputBindings.push_back({duplicateId, MediaPreparedRealtimeInputKind::Generic,
+                                       makePreparedInputForBinding(ctx)});
+    duplicate.inputBindings.push_back({duplicateId, MediaPreparedRealtimeInputKind::Generic,
+                                       makePreparedInputForBinding(ctx)});
     {
         MediaGraphRuntime duplicateRuntime;
         auto duplicateStatus = duplicateRuntime.compile(std::move(duplicate));
@@ -3357,7 +3363,8 @@ MediaRealtimeExecutableGraph makePreparedExecutableGraph(TestContext& ctx)
 {
     MediaRealtimeExecutableGraph executable;
     const MediaNodeId inputId = executable.graph.addNode(MediaNodeKind::RealtimeInput, "transaction.input");
-    executable.inputBindings.push_back({inputId, makePreparedInputForBinding(ctx)});
+    executable.inputBindings.push_back({inputId, MediaPreparedRealtimeInputKind::Generic,
+                                        makePreparedInputForBinding(ctx)});
     return executable;
 }
 
@@ -3434,6 +3441,31 @@ void testInvalidPreflightDoesNotInvokeOpener(TestContext& ctx)
     EXPECT_EQ(ctx, openCount, 0);
 }
 
+void testRuntimeRejectsWrongPreparedBindingKindBeforeEmission(TestContext& ctx)
+{
+    MediaRealtimeExecutableGraph executable;
+    const MediaNodeId inputId = executable.graph.addNode(MediaNodeKind::RealtimeInput, "wrong.kind.input");
+    executable.graph.addOutputPort(inputId, "format", MediaStreamKind::Metadata,
+                                   MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext,
+                                   true, true);
+    executable.inputBindings.push_back({inputId, MediaPreparedRealtimeInputKind::MpegTs,
+                                        makePreparedInputForBinding(ctx)});
+    MediaGraphRuntime runtime;
+    EXPECT_TRUE(ctx, runtime.compile(std::move(executable)));
+    EXPECT_TRUE(ctx, runtime.registerDefaultRuntimeNodes());
+    auto run = runtime.run();
+    EXPECT_FALSE(ctx, run);
+    if (!run) EXPECT_EQ(ctx, run.error().code, ::media::ErrorCode::InvalidArgument);
+}
+
+void testEmptyGenericOpenerIsRejected(TestContext& ctx)
+{
+    MediaRealtimePreflightIo io;
+    auto preflight = MediaRealtimeRtpTranscodePlanner::preflight(validRealtimeOptions(), io);
+    EXPECT_FALSE(ctx, preflight);
+    if (!preflight) EXPECT_EQ(ctx, preflight.error().code, ::media::ErrorCode::InvalidArgument);
+}
+
 void testMpegTsPreflightOpensOneSessionAndKeepsTaggedBinding(TestContext& ctx)
 {
     auto source = LocalMpegTsUdpSource::start();
@@ -3458,6 +3490,26 @@ void testMpegTsPreflightOpensOneSessionAndKeepsTaggedBinding(TestContext& ctx)
     if (preflight.value().prepared) {
         EXPECT_EQ(ctx, preflight.value().prepared->kind().value(),
                   MediaPreparedRealtimeInputKind::MpegTs);
+    }
+    auto executable = MediaRealtimeRtpTranscodeGraphBuilder::buildExecutable(
+        std::move(preflight).value());
+    EXPECT_TRUE(ctx, executable);
+    if (executable) {
+        EXPECT_EQ(ctx, executable.value().inputBindings.size(), std::size_t{1});
+        if (executable.value().inputBindings.empty()) return;
+        auto& binding = executable.value().inputBindings.front();
+        EXPECT_EQ(ctx, binding.expectedKind, MediaPreparedRealtimeInputKind::MpegTs);
+        auto released = binding.prepared.releaseBuffer();
+        EXPECT_TRUE(ctx, released);
+        EXPECT_FALSE(ctx, binding.prepared.releaseBuffer());
+        if (released) {
+            auto* tsBuffer = dynamic_cast<MediaTsPreparedInputBuffer*>(released.value().get());
+            EXPECT_TRUE(ctx, tsBuffer != nullptr);
+            if (tsBuffer) {
+                EXPECT_TRUE(ctx, tsBuffer->takeSession());
+                EXPECT_FALSE(ctx, tsBuffer->takeSession());
+            }
+        }
     }
 }
 
@@ -3497,7 +3549,9 @@ int main()
     testExecutableRuntimeRejectsMissingAndDuplicatePreparedBindings(ctx);
     testRuntimeCompileFailurePreservesPreviousGraphAndBindings(ctx);
     testSuccessfulPlainCompileReplacesPreparedBindingWithSameNodeId(ctx);
+    testRuntimeRejectsWrongPreparedBindingKindBeforeEmission(ctx);
     testInvalidPreflightDoesNotInvokeOpener(ctx);
+    testEmptyGenericOpenerIsRejected(ctx);
     testMpegTsPreflightOpensOneSessionAndKeepsTaggedBinding(ctx);
     testMpegTsPreflightPropagatesSessionOpenFailure(ctx);
     testUrlAndMpegTsPurePlanApisRequirePreparedPreflight(ctx);

@@ -57,7 +57,8 @@ namespace media::ffmpeg::graph {
                 ::media::ErrorInfo::notInitialized("RealtimeInput runtime requires prepared node binding"));
         }
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
-            std::make_unique<RealtimeInputNode>(node.id, std::move(binding->prepared)));
+            std::make_unique<RealtimeInputNode>(node.id, binding->expectedKind,
+                                                std::move(binding->prepared)));
     case MediaNodeKind::RawRtpInput:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<RawRtpInputNode>(node.id));
     case MediaNodeKind::Demux:

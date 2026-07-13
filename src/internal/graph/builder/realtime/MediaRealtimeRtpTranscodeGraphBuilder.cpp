@@ -1,4 +1,5 @@
 #include "internal/graph/builder/realtime/MediaRealtimeRtpTranscodeGraphBuilder.h"
+#include "internal/graph/planner/realtime/MediaRealtimeTsInputPlanValidator.h"
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
 #include "internal/graph/builder/realtime/MediaRealtimeOptionApplier.h"
@@ -430,6 +431,10 @@ bool separateRtpOutput(const MediaRealtimeRtpTranscodePlan& plan) noexcept
 ::media::Result<MediaRealtimeExecutableGraph> MediaRealtimeRtpTranscodeGraphBuilder::buildExecutable(
     MediaRealtimeTranscodePreflight preflight)
 {
+    if (auto status = MediaRealtimeTsInputPlanValidator::validate(
+            preflight.plan.inputType, preflight.plan.input); !status) {
+        return ::media::Result<MediaRealtimeExecutableGraph>::failure(status.error());
+    }
     const bool requiresPrepared = preflight.plan.inputType != RealtimeInputType::RtpPort;
     if (requiresPrepared && (!preflight.prepared || !preflight.prepared->valid())) {
         return ::media::Result<MediaRealtimeExecutableGraph>::failure(
@@ -456,7 +461,12 @@ bool separateRtpOutput(const MediaRealtimeRtpTranscodePlan& plan) noexcept
                 ::media::ErrorInfo::notInitialized("realtime executable graph has no realtime input node"));
         }
         executable.inputBindings.push_back(
-            MediaPreparedRealtimeInputBinding{inputId, std::move(*preflight.prepared)});
+            MediaPreparedRealtimeInputBinding{
+                inputId,
+                preflight.plan.inputType == RealtimeInputType::MpegTsUdp
+                    ? MediaPreparedRealtimeInputKind::MpegTs
+                    : MediaPreparedRealtimeInputKind::Generic,
+                std::move(*preflight.prepared)});
     }
     return ::media::Result<MediaRealtimeExecutableGraph>::success(std::move(executable));
 }

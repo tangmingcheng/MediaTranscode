@@ -7,6 +7,7 @@ namespace media::ffmpeg::graph {
 
 struct MediaPreparedRealtimeInputBinding final {
     MediaNodeId nodeId;
+    MediaPreparedRealtimeInputKind expectedKind;
     MediaPreparedRealtimeInput prepared;
 };
 

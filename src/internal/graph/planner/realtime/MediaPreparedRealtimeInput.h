@@ -42,7 +42,7 @@ public:
     bool valid() const noexcept;
     std::optional<MediaPreparedRealtimeInputKind> kind() const noexcept;
     const FFmpegInputStreamSnapshot* inputStreamSnapshot(int streamIndex) const noexcept;
-    MediaBufferRef releaseBuffer() noexcept;
+    ::media::Result<MediaBufferRef> releaseBuffer() noexcept;
 
 private:
     explicit MediaPreparedRealtimeInput(std::unique_ptr<FFmpegFormatContextBuffer> buffer);

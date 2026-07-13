@@ -1,9 +1,11 @@
 #include "internal/graph/nodes/input/RealtimeInputNode.h"
 
 namespace media::ffmpeg::graph {
-RealtimeInputNode::RealtimeInputNode(MediaNodeId nodeId, MediaPreparedRealtimeInput prepared)
+RealtimeInputNode::RealtimeInputNode(MediaNodeId nodeId, MediaPreparedRealtimeInputKind expectedKind,
+                                     MediaPreparedRealtimeInput prepared)
     : FFmpegNodeRuntime(nodeId, staticKind(), "RealtimeInputNode")
-    , m_formatBuffer(prepared.releaseBuffer())
+    , m_expectedKind(expectedKind)
+    , m_prepared(std::move(prepared))
 {
 }
 
@@ -16,6 +18,16 @@ MediaNodeKind RealtimeInputNode::staticKind() noexcept
 {
     if (m_formatEmitted) {
         return processFinished();
+    }
+
+    if (!m_formatBuffer) {
+        if (!m_prepared.kind() || *m_prepared.kind() != m_expectedKind) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                ::media::ErrorInfo::invalidArgument("prepared realtime input kind does not match planner binding"));
+        }
+        auto released = m_prepared.releaseBuffer();
+        if (!released) return ::media::Result<MediaNodeProcessResult>::failure(released.error());
+        m_formatBuffer = std::move(released).value();
     }
 
     if (!m_formatBuffer) {

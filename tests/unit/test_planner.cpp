@@ -10,6 +10,7 @@
 #include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimePlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeInputPlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeTsInputPlanValidator.h"
 #include "internal/graph/planner/realtime/MediaTsProgramSelector.h"
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/runtime/distributed/MediaGraphRemoteExecutor.h"
@@ -32,7 +33,9 @@ FFmpegInputProgramSnapshot publicProgram(int number,
                                          int pcrPid,
                                          std::initializer_list<int> streams)
 {
-    return FFmpegInputProgramSnapshot{number, pmtPid, pcrPid, streams};
+    FFmpegInputProgramSnapshot snapshot{number, pmtPid, pcrPid, {}};
+    for (const auto stream : streams) snapshot.streamBindings.push_back({stream, stream + 700});
+    return snapshot;
 }
 
 MediaTsProgramInfo parserProgram(std::uint16_t number,
@@ -51,7 +54,7 @@ MediaTsProgramInfo parserProgram(std::uint16_t number,
 void testTsProgramSelectorRequiresOneCrossValidatedProgram(TestContext& ctx)
 {
     const std::vector<FFmpegInputProgramSnapshot> programs{
-        publicProgram(7, 777, 701, {3, 5})
+        FFmpegInputProgramSnapshot{7, 777, 701, {{5, 705}, {3, 703}}}
     };
     MediaTsProgramInventorySnapshot inventory;
     inventory.programs.push_back(parserProgram(7, 777, 701, {703, 705}));
@@ -82,6 +85,18 @@ void testTsProgramSelectorRejectsAmbiguityAndInventoryMismatch(TestContext& ctx)
         inventory, 3, 5));
     EXPECT_FALSE(ctx, MediaTsProgramSelector::select(
         {publicProgram(7, 777, 701, {3, 5})}, inventory, 3, 9));
+    EXPECT_FALSE(ctx, MediaTsProgramSelector::select(
+        {FFmpegInputProgramSnapshot{7, 777, 701, {{3, 703}, {3, 705}}}},
+        inventory, 3, 5));
+    EXPECT_FALSE(ctx, MediaTsProgramSelector::select(
+        {FFmpegInputProgramSnapshot{7, 777, 701, {{3, 703}, {5, 703}}}},
+        inventory, 3, 5));
+    EXPECT_FALSE(ctx, MediaTsProgramSelector::select(
+        {FFmpegInputProgramSnapshot{7, 777, 701, {{3, 0x2000}, {5, 705}}}},
+        inventory, 3, 5));
+    EXPECT_FALSE(ctx, MediaTsProgramSelector::select(
+        {FFmpegInputProgramSnapshot{7, 777, 701, {{3, 703}, {5, 706}}}},
+        inventory, 3, 5));
 }
 
 const MediaTsSelectedProgramPlan& selectedTsProgram()
@@ -99,6 +114,33 @@ void testTsEvidenceCapacityCoversProbeRollbackAndPredecessor(TestContext& ctx)
     EXPECT_FALSE(ctx, MediaRealtimeTsInputPlan::create(
         188, std::numeric_limits<std::uint64_t>::max(), 188,
         std::numeric_limits<std::size_t>::max()));
+}
+
+void testTsInputPlanValidatorRejectsEveryMutation(TestContext& ctx)
+{
+    auto created = MediaRealtimeTsInputPlan::create(188, 376, 188, 4);
+    EXPECT_TRUE(ctx, created);
+    if (!created) return;
+    const auto valid = created.value();
+    MediaRealtimeRtpInputNodePlan input{};
+    input.probeSizeBytes = 376;
+    input.mpegTs = valid;
+    EXPECT_TRUE(ctx, MediaRealtimeTsInputPlanValidator::validate(RealtimeInputType::MpegTsUdp, input));
+    EXPECT_FALSE(ctx, MediaRealtimeTsInputPlanValidator::validate(RealtimeInputType::Url, input));
+    input.mpegTs.reset();
+    EXPECT_FALSE(ctx, MediaRealtimeTsInputPlanValidator::validate(RealtimeInputType::MpegTsUdp, input));
+    const auto mutated = [&](auto change) {
+        input.mpegTs = valid;
+        change(*input.mpegTs);
+        EXPECT_FALSE(ctx, MediaRealtimeTsInputPlanValidator::validate(RealtimeInputType::MpegTsUdp, input));
+    };
+    mutated([](auto& plan) { plan.demuxFormat = "ts"; });
+    mutated([](auto& plan) { plan.packetSize = 0; });
+    mutated([](auto& plan) { plan.avioBufferBytes = 0; });
+    mutated([](auto& plan) { plan.maximumDatagramBytes = 0; });
+    mutated([](auto& plan) { plan.maximumDatagramBytes = plan.avioBufferBytes + 1; });
+    mutated([](auto& plan) { plan.evidenceTimelineCapacity = 3; });
+    mutated([](auto& plan) { plan.maximumPacketPositionRegressionBytes = 0; });
 }
 
 MediaRealtimeRtpTranscodeRequest avSyncRtpRequest()
@@ -488,6 +530,8 @@ void testAvSyncValidatorRejectsIsolatedNumericAndOrderingInvariants(TestContext&
 int main()
 {
     TestContext ctx;
+
+    testTsInputPlanValidatorRejectsEveryMutation(ctx);
     testTsProgramSelectorRequiresOneCrossValidatedProgram(ctx);
     testTsProgramSelectorRejectsAmbiguityAndInventoryMismatch(ctx);
     testTsEvidenceCapacityCoversProbeRollbackAndPredecessor(ctx);

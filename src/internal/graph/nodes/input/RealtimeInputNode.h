@@ -7,7 +7,8 @@ namespace media::ffmpeg::graph {
 
 class RealtimeInputNode final : public FFmpegNodeRuntime {
 public:
-    RealtimeInputNode(MediaNodeId nodeId, MediaPreparedRealtimeInput prepared);
+    RealtimeInputNode(MediaNodeId nodeId, MediaPreparedRealtimeInputKind expectedKind,
+                      MediaPreparedRealtimeInput prepared);
     static MediaNodeKind staticKind() noexcept;
 
 protected:
@@ -16,6 +17,8 @@ protected:
     void abort(MediaGraphExecutionContext& context) noexcept override;
 
 private:
+    MediaPreparedRealtimeInputKind m_expectedKind;
+    MediaPreparedRealtimeInput m_prepared;
     MediaBufferRef m_formatBuffer;
     bool m_formatEmitted = false;
 };
