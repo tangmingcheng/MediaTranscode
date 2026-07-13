@@ -33,7 +33,7 @@ ctest --test-dir out\build\x64-debug -C Debug -L deterministic --output-on-failu
 ## Ownership Review
 
 - Local FFmpeg `libavformat/aviobuf.c` shows `avio_context_free` does not free `AVIOContext::buffer`; the outer buffer is therefore freed explicitly once before the outer context.
-- Session destruction cancels reads, closes the format context with its custom `pb` detached, frees the outer buffer/context, then closes the inner protocol AVIO. `AVFMT_FLAG_CUSTOM_IO` prevents FFmpeg from owning the outer AVIO.
+- Session destruction cancels and quiesces reads, closes the format context while retaining its custom `pb`, frees the outer buffer/context, then closes the inner protocol AVIO. `AVFMT_FLAG_CUSTOM_IO` prevents FFmpeg from owning the outer AVIO.
 - The outer callback opaque points to the owning `FFmpegObservedReadAvio` for the full outer-context lifetime. The protocol opener outlives inner ownership; production uses a process-lifetime implementation and deterministic tests keep the seam alive through AVIO destruction.
 - Absolute read offsets use checked unsigned addition. Observer failure, timeout, EOF, and cancellation do not enter retry loops.
 
