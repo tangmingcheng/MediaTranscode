@@ -282,6 +282,9 @@ MediaTsInputSession::~MediaTsInputSession()
             ::media::ErrorInfo::unsupported("only 188-byte MPEG-TS framing is supported"));
     }
     auto session = std::unique_ptr<MediaTsInputSession>(new MediaTsInputSession());
+    session->m_runtimeContract = MediaTsInputRuntimeContract{
+        options.packetStride, options.evidenceCapacity,
+        options.maximumPositionRegressionBytes};
     auto observer = EvidenceObserver::create(options.packetStride, options.evidenceCapacity,
                                              options.maximumPositionRegressionBytes);
     if (!observer) return ::media::Result<std::unique_ptr<MediaTsInputSession>>::failure(observer.error());
@@ -377,6 +380,11 @@ MediaTsInputSession::cloneStreamSnapshots() const
 MediaTsProgramInventorySnapshot MediaTsInputSession::programInventory() const
 {
     return *m_evidenceObserver->inventory();
+}
+
+const MediaTsInputRuntimeContract& MediaTsInputSession::runtimeContract() const noexcept
+{
+    return m_runtimeContract;
 }
 
 ::media::Result<MediaTsEvidenceCheckpoint> MediaTsInputSession::evidenceAtOrBefore(

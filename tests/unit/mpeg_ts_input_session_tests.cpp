@@ -1,6 +1,7 @@
 #include "common/TestAssert.h"
 
 #include "internal/graph/protocol/mpegts/MediaTsEvidenceTimeline.h"
+#include "internal/graph/protocol/mpegts/MediaTsInputSession.h"
 #include "internal/graph/runtime/buffer/MediaTsPreparedInputBuffer.h"
 #include "internal/graph/runtime/buffer/FFmpegInputStreamSnapshotFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegObservedReadAvio.h"

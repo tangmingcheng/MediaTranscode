@@ -5,8 +5,10 @@
 - Added explicit `Acquiring`, `Locked`, and `ReacquireRequired` source-clock readiness to packet timing and projection history.
 - Added `MpegTsDemuxNode` as the exclusive owner of the prepared MPEG-TS session. It replays preflight evidence before position observation, advances raw and projected retention before incremental replay, and queries immutable historical calibration by packet position.
 - Video and audio use independent PTS/DTS mappers while sharing the selected PCR projection. Missing timestamps remain absent and the owned `AVPacket` timestamps are not rewritten.
+- Mapper state is retained independently per stream and source generation, so legal read-ahead rollback cannot reset a newer generation. Signed packet timestamps are normalized into the MPEG-TS 33-bit domain.
 - Synchronized MPEG-TS graphs use `RealtimeInput -> MpegTsDemux`; generic URL input retains `Demux`, and raw RTP remains direct.
 - Planner output serializes selected program identities, PCR policy, capacities, regression, timestamp time base, and initial source/raw generations. Validation rejects incomplete plans.
+- Added a dedicated `MediaTsDemuxSession` injection boundary. Prepared buffers transfer it exclusively and declare Metadata/FormatContext descriptors. The node validates the transferred session contract and rejects duplicate bindings.
 
 ## TDD Evidence
 
@@ -29,9 +31,9 @@ ctest --test-dir out/build/x64-debug -C Debug --output-on-failure -R media_trans
 - Clean-first rebuilt 246 compilation/link steps successfully.
 - Node tests passed 1/1.
 - Builder tests passed 1/1.
-- Integration tests passed; `LastTest.log` records `realtime graph tests passed` in 77.15 seconds.
+- Final clean-first rebuilt all 260 steps; deterministic passed 6/6 and integration passed 1/1 in 89.82 seconds.
+- Deterministic demux tests cover wrong/missing inputs and options, duplicate binding, complete and incremental evidence, read-ahead rollback, discontinuity/reacquisition, cross-generation history, negative positions, stream/program mismatch, missing evidence, projection overflow, Waiting/EOF/failure/cancellation, stop/abort, missing PTS/DTS, and raw timestamp preservation.
 
 ## Remaining Risk
 
-- Deterministic node-level injected-session coverage is still thinner than the complete lifecycle matrix in the brief; timeout, cancellation, duplicate bind, overflow, rollback, and timestamp preservation are covered primarily by the underlying session/projection/mapper components and the live integration path.
 - Initial generation parsing currently accepts the planner-produced non-negative integer range; a future externally supplied 64-bit generation would need a dedicated unsigned node-option parser.

@@ -2,6 +2,7 @@
 
 #include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
 #include "internal/graph/runtime/buffer/MediaTsPreparedInputBuffer.h"
+#include "internal/graph/protocol/mpegts/MediaTsInputSession.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 #include "media_transcode/Result.h"
 

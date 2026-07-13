@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/protocol/mpegts/MediaTsEvidenceTimeline.h"
+#include "internal/graph/protocol/mpegts/MediaTsDemuxSession.h"
 #include "internal/graph/protocol/mpegts/MediaTsPublicProgramSnapshot.h"
 #include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegObservedReadAvio.h"
@@ -28,9 +29,7 @@ struct MediaTsInputSessionOptions final {
     std::uint64_t maximumPositionRegressionBytes = 0;
 };
 
-enum class MediaTsReadFrameState { Frame, Waiting, EndOfStream };
-
-class MediaTsInputSession final {
+class MediaTsInputSession final : public MediaTsDemuxSession {
 public:
     static ::media::Result<std::unique_ptr<MediaTsInputSession>> open(
         const MediaTsInputSessionOptions& options);
@@ -44,17 +43,19 @@ public:
     MediaTsInputSession(MediaTsInputSession&&) = delete;
     MediaTsInputSession& operator=(MediaTsInputSession&&) = delete;
 
-    ::media::Result<MediaTsReadFrameState> readFrame(AVPacket& packet);
-    ::media::Status close() noexcept;
-    const std::vector<FFmpegInputStreamSnapshot>& streamSnapshots() const noexcept;
-    const std::vector<FFmpegInputProgramSnapshot>& programSnapshots() const noexcept;
-    ::media::Result<std::vector<FFmpegInputStreamSnapshot>> cloneStreamSnapshots() const;
-    MediaTsProgramInventorySnapshot programInventory() const;
+    ::media::Result<MediaTsReadFrameState> readFrame(AVPacket& packet) override;
+    ::media::Status close() noexcept override;
+    void cancel() noexcept override { m_interruptState.cancel(); }
+    const std::vector<FFmpegInputStreamSnapshot>& streamSnapshots() const noexcept override;
+    const std::vector<FFmpegInputProgramSnapshot>& programSnapshots() const noexcept override;
+    ::media::Result<std::vector<FFmpegInputStreamSnapshot>> cloneStreamSnapshots() const override;
+    MediaTsProgramInventorySnapshot programInventory() const override;
+    const MediaTsInputRuntimeContract& runtimeContract() const noexcept override;
     ::media::Result<MediaTsEvidenceCheckpoint> evidenceAtOrBefore(
         std::uint64_t packetPosition) const;
     ::media::Result<std::vector<MediaTsEvidenceCheckpoint>> evidenceSnapshotAfter(
-        std::optional<std::uint64_t> exclusiveOffset) const;
-    ::media::Status observePacketPosition(std::uint64_t packetPosition);
+        std::optional<std::uint64_t> exclusiveOffset) const override;
+    ::media::Status observePacketPosition(std::uint64_t packetPosition) override;
     FFmpegAvioInterruptState& interruptState() noexcept { return m_interruptState; }
     ::media::Status status() const;
 
@@ -79,6 +80,7 @@ private:
     bool m_closing = false;
     bool m_closed = false;
     std::optional<::media::ErrorInfo> m_finalError;
+    MediaTsInputRuntimeContract m_runtimeContract{};
 };
 
 } // namespace media::ffmpeg::graph

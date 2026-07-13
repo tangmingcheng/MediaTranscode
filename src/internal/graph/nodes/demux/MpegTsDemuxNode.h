@@ -3,9 +3,9 @@
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/protocol/mpegts/MediaTsClockProjection.h"
 #include "internal/graph/protocol/mpegts/MediaTsSourceClockMapper.h"
-#include "internal/graph/protocol/mpegts/MediaTsInputSession.h"
+#include "internal/graph/protocol/mpegts/MediaTsDemuxSession.h"
 
-#include <atomic>
+#include <map>
 #include <memory>
 #include <optional>
 
@@ -24,19 +24,19 @@ protected:
 
 private:
     struct StreamClock {
-        std::optional<MediaTsSourceClockMapper> mapper;
-        std::optional<std::uint64_t> generation;
-        MediaSourceClockReadiness readiness = MediaSourceClockReadiness::Acquiring;
+        std::map<std::uint64_t, MediaTsSourceClockMapper> mappers;
+        void discardBefore(std::uint64_t generation);
     };
 
     ::media::Status bind(MediaGraphExecutionContext& context);
+    ::media::Status rejectDuplicateBinding(MediaGraphExecutionContext& context);
     ::media::Result<MediaPacketSourceTiming> timingFor(
         const AVPacket& packet, const MediaTsClockProjectionCheckpoint& checkpoint,
         StreamClock& clock);
     ::media::Status emitEof(MediaGraphExecutionContext& context);
     void reset() noexcept;
 
-    std::unique_ptr<MediaTsInputSession> m_session;
+    std::unique_ptr<MediaTsDemuxSession> m_session;
     std::optional<MediaTsClockProjection> m_projection;
     std::optional<MediaTsProgramClockPolicy> m_policy;
     int m_videoStreamIndex = -1;

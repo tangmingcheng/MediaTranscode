@@ -223,4 +223,10 @@ std::optional<std::uint64_t> MediaTsClockProjection::lastReplayedOffset() const 
     return m_lastReplayedOffset;
 }
 
+std::uint64_t MediaTsClockProjection::oldestRetainedGeneration() const noexcept
+{
+    return m_checkpoints.empty() ? m_initialSourceGeneration
+                                 : m_checkpoints.front().generation;
+}
+
 } // namespace media::ffmpeg::graph

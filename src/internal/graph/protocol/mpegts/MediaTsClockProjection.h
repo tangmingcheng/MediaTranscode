@@ -30,6 +30,7 @@ public:
     ::media::Result<MediaTsClockProjectionCheckpoint> atOrBefore(
         std::uint64_t packetPosition) const;
     std::optional<std::uint64_t> lastReplayedOffset() const noexcept;
+    std::uint64_t oldestRetainedGeneration() const noexcept;
     ::media::Status observePacketPosition(std::uint64_t packetPosition);
 
 private:

@@ -25,11 +25,17 @@ namespace {
 std::optional<std::uint64_t> packetTimestamp(std::int64_t value)
 {
     if (value == AV_NOPTS_VALUE) return std::nullopt;
-    if (value < 0) return std::numeric_limits<std::uint64_t>::max();
-    return static_cast<std::uint64_t>(value);
+    constexpr std::int64_t modulus = std::int64_t{1} << 33;
+    const auto normalized = value % modulus;
+    return static_cast<std::uint64_t>(normalized < 0 ? normalized + modulus : normalized);
 }
 
 } // namespace
+
+void MpegTsDemuxNode::StreamClock::discardBefore(std::uint64_t generation)
+{
+    mappers.erase(mappers.begin(), mappers.lower_bound(generation));
+}
 
 MpegTsDemuxNode::MpegTsDemuxNode(MediaNodeId nodeId)
     : FFmpegNodeRuntime(nodeId, staticKind(), "MpegTsDemuxNode")
@@ -64,6 +70,8 @@ MediaNodeKind MpegTsDemuxNode::staticKind() noexcept
     auto interval = requiredPositiveInt64NodeOption(options, "MpegTsDemuxNode", "mpegts.pcr_interval_27mhz");
     auto jitter = requiredPositiveInt64NodeOption(options, "MpegTsDemuxNode", "mpegts.maximum_pcr_jitter_27mhz");
     auto gap = requiredPositiveInt64NodeOption(options, "MpegTsDemuxNode", "mpegts.maximum_pcr_gap_27mhz");
+    auto packetStride = requiredPositiveIntNodeOption(options, "MpegTsDemuxNode", "mpegts.packet_stride");
+    auto evidenceCapacity = requiredPositiveIntNodeOption(options, "MpegTsDemuxNode", "mpegts.evidence_timeline_capacity");
     auto capacity = requiredPositiveIntNodeOption(options, "MpegTsDemuxNode", "mpegts.projection_capacity");
     auto regression = requiredPositiveInt64NodeOption(options, "MpegTsDemuxNode", "mpegts.maximum_position_regression_bytes");
     auto numerator = requiredPositiveIntNodeOption(options, "MpegTsDemuxNode", "mpegts.timestamp_time_base_num");
@@ -71,13 +79,14 @@ MediaNodeKind MpegTsDemuxNode::staticKind() noexcept
     auto sourceGeneration = requiredGeneration(options, "mpegts.initial_source_generation");
     auto rawGeneration = requiredGeneration(options, "mpegts.initial_raw_generation");
     if (!program || !pmt || !video || !audio || !pcr || !interval || !jitter || !gap ||
-        !capacity || !regression || !numerator || !denominator || !sourceGeneration ||
+        !packetStride || !evidenceCapacity || !capacity || !regression || !numerator || !denominator || !sourceGeneration ||
         !rawGeneration) {
         const ::media::ErrorInfo* error = nullptr;
         if (!program) error = &program.error(); else if (!pmt) error = &pmt.error();
         else if (!video) error = &video.error(); else if (!audio) error = &audio.error();
         else if (!pcr) error = &pcr.error(); else if (!interval) error = &interval.error();
         else if (!jitter) error = &jitter.error(); else if (!gap) error = &gap.error();
+        else if (!packetStride) error = &packetStride.error(); else if (!evidenceCapacity) error = &evidenceCapacity.error();
         else if (!capacity) error = &capacity.error(); else if (!regression) error = &regression.error();
         else if (!numerator) error = &numerator.error(); else if (!denominator) error = &denominator.error();
         else if (!sourceGeneration) error = &sourceGeneration.error(); else error = &rawGeneration.error();
@@ -97,6 +106,14 @@ MediaNodeKind MpegTsDemuxNode::staticKind() noexcept
     if (!projection) return ::media::Status::failure(projection.error());
     auto session = prepared->takeSession();
     if (!session) return ::media::Status::failure(session.error());
+    const auto& runtimeContract = session.value()->runtimeContract();
+    if (runtimeContract.packetStride != static_cast<std::size_t>(packetStride.value()) ||
+        runtimeContract.evidenceCapacity != static_cast<std::size_t>(evidenceCapacity.value()) ||
+        runtimeContract.maximumPositionRegressionBytes !=
+            static_cast<std::uint64_t>(regression.value())) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "MpegTsDemuxNode prepared session violates the planned runtime contract"));
+    }
     auto preflight = session.value()->evidenceSnapshotAfter(std::nullopt);
     if (!preflight) return ::media::Status::failure(preflight.error());
     if (auto status = projection.value().replay(preflight.value()); !status) return status;
@@ -123,25 +140,30 @@ MediaNodeKind MpegTsDemuxNode::staticKind() noexcept
 ::media::Result<MediaPacketSourceTiming> MpegTsDemuxNode::timingFor(
     const AVPacket& packet, const MediaTsClockProjectionCheckpoint& checkpoint, StreamClock& clock)
 {
-    if (clock.generation != checkpoint.generation || clock.readiness != checkpoint.readiness) {
-        clock.mapper.reset();
-        clock.generation = checkpoint.generation;
-        clock.readiness = checkpoint.readiness;
-    }
     MediaPacketSourceTiming timing{std::nullopt, std::nullopt, checkpoint.readiness, checkpoint.generation};
     if (checkpoint.readiness != MediaSourceClockReadiness::Locked) {
         return ::media::Result<MediaPacketSourceTiming>::success(timing);
     }
-    if (!clock.mapper) {
-        auto mapper = MediaTsSourceClockMapper::create(checkpoint.calibration);
-        if (!mapper) return ::media::Result<MediaPacketSourceTiming>::failure(mapper.error());
-        clock.mapper = std::move(mapper).value();
+    auto mapper = clock.mappers.find(checkpoint.generation);
+    if (mapper == clock.mappers.end()) {
+        auto created = MediaTsSourceClockMapper::create(checkpoint.calibration);
+        if (!created) return ::media::Result<MediaPacketSourceTiming>::failure(created.error());
+        mapper = clock.mappers.emplace(checkpoint.generation, std::move(created).value()).first;
     }
-    auto mapped = clock.mapper->map(packetTimestamp(packet.pts), packetTimestamp(packet.dts));
+    auto mapped = mapper->second.map(packetTimestamp(packet.pts), packetTimestamp(packet.dts));
     if (!mapped) return ::media::Result<MediaPacketSourceTiming>::failure(mapped.error());
     if (mapped.value().presentationTime) timing.presentationNs = mapped.value().presentationTime->nanoseconds();
     if (mapped.value().decodeTime) timing.decodeNs = mapped.value().decodeTime->nanoseconds();
     return ::media::Result<MediaPacketSourceTiming>::success(timing);
+}
+
+::media::Status MpegTsDemuxNode::rejectDuplicateBinding(MediaGraphExecutionContext& context)
+{
+    auto input = tryPopFirstInputOptional(context);
+    if (!input) return ::media::Status::failure(input.error());
+    if (!input.value()) return ::media::Status::success();
+    return ::media::Status::failure(
+        ::media::ErrorInfo::invalidArgument("MpegTsDemuxNode rejects duplicate binding"));
 }
 
 ::media::Result<MediaNodeProcessResult> MpegTsDemuxNode::onProcess(MediaGraphExecutionContext& context)
@@ -149,6 +171,8 @@ MediaNodeKind MpegTsDemuxNode::staticKind() noexcept
     if (!m_session) {
         if (auto status = bind(context); !status) return processProgress(status);
         if (!m_session) return processWaiting();
+    } else if (auto status = rejectDuplicateBinding(context); !status) {
+        return processProgress(status);
     }
     if (m_eofSent) return processFinished();
     auto packet = ::media::ffmpeg::makePacket();
@@ -170,6 +194,9 @@ MediaNodeKind MpegTsDemuxNode::staticKind() noexcept
     auto incremental = m_session->evidenceSnapshotAfter(m_projection->lastReplayedOffset());
     if (!incremental) return ::media::Result<MediaNodeProcessResult>::failure(incremental.error());
     if (auto status = m_projection->replay(incremental.value()); !status) return processProgress(status);
+    const auto oldestGeneration = m_projection->oldestRetainedGeneration();
+    m_videoClock.discardBefore(oldestGeneration);
+    m_audioClock.discardBefore(oldestGeneration);
     auto checkpoint = m_projection->atOrBefore(position);
     if (!checkpoint) return ::media::Result<MediaNodeProcessResult>::failure(checkpoint.error());
     auto timing = timingFor(*packet, checkpoint.value(), video ? m_videoClock : m_audioClock);
@@ -205,7 +232,7 @@ void MpegTsDemuxNode::reset() noexcept
 void MpegTsDemuxNode::interrupt(MediaGraphExecutionContext&) noexcept
 {
     m_aborted = true;
-    if (m_session) m_session->interruptState().cancel();
+    if (m_session) m_session->cancel();
 }
 
 void MpegTsDemuxNode::abort(MediaGraphExecutionContext& context) noexcept

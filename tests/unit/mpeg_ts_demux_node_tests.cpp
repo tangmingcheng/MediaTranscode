@@ -1,0 +1,447 @@
+#include "common/TestAssert.h"
+
+#include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/core/MediaGraph.h"
+#include "internal/graph/nodes/demux/MpegTsDemuxNode.h"
+#include "internal/graph/runtime/buffer/FFmpegPacketBuffer.h"
+#include "internal/graph/runtime/buffer/MediaTsPreparedInputBuffer.h"
+#include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
+
+extern "C" {
+#include <libavutil/avutil.h>
+}
+
+#include <deque>
+#include <memory>
+#include <optional>
+#include <utility>
+#include <vector>
+
+using namespace media::ffmpeg::graph;
+using media_transcode::test::TestContext;
+
+namespace {
+
+constexpr int kVideoStream = 0;
+constexpr int kAudioStream = 1;
+
+MediaTsProgramInventorySnapshot inventory()
+{
+    return {1, {{1, 0x100, 1, 0x101, {{0x201, 0x1b}, {0x202, 0x0f}}}}};
+}
+
+MediaTsEvidenceCheckpoint evidence(std::uint64_t offset, std::uint64_t pcr,
+                                   bool discontinuity = false,
+                                   std::uint64_t generation = 0)
+{
+    MediaTsEvidenceCheckpoint value;
+    value.byteOffset = offset;
+    value.inventory = inventory();
+    value.pcrObservation = MediaTsRawPcrEvidence{offset, 0x101, pcr, discontinuity};
+    value.discontinuity = discontinuity;
+    value.generation = generation;
+    if (discontinuity) {
+        value.continuityEvent = MediaTsContinuityEvent{
+            offset, 0x101, MediaTsContinuityEventReason::DiscontinuityIndicator};
+    }
+    return value;
+}
+
+struct ScriptedFrame final {
+    MediaTsReadFrameState state = MediaTsReadFrameState::Waiting;
+    int streamIndex = kVideoStream;
+    std::int64_t position = 0;
+    std::int64_t pts = AV_NOPTS_VALUE;
+    std::int64_t dts = AV_NOPTS_VALUE;
+    AVRational timeBase{1, 90'000};
+};
+
+class ScriptedTsSession final : public MediaTsDemuxSession {
+public:
+    struct Stats final { int closeCalls = 0; int cancelCalls = 0; };
+
+    explicit ScriptedTsSession(std::shared_ptr<Stats> value = std::make_shared<Stats>())
+        : stats(std::move(value))
+    {
+        streams.emplace_back(); streams.back().index = kVideoStream;
+        streams.back().streamKind = MediaStreamKind::Video;
+        streams.emplace_back(); streams.back().index = kAudioStream;
+        streams.back().streamKind = MediaStreamKind::Audio;
+    }
+
+    std::deque<ScriptedFrame> frames;
+    std::vector<MediaTsEvidenceCheckpoint> evidenceTimeline;
+    MediaTsInputRuntimeContract contract{188, 32, 4'096};
+    std::vector<FFmpegInputStreamSnapshot> streams;
+    std::vector<FFmpegInputProgramSnapshot> programs{
+        FFmpegInputProgramSnapshot{1, 0x100, 0x101,
+                                   {{kVideoStream, 0x201}, {kAudioStream, 0x202}}}};
+    std::vector<std::uint64_t> observedPositions;
+    std::optional<std::uint64_t> preflightLimit;
+    std::shared_ptr<Stats> stats;
+    bool failRead = false;
+    bool cancelRead = false;
+    bool failEvidence = false;
+    bool failObserve = false;
+
+    ::media::Result<MediaTsReadFrameState> readFrame(AVPacket& packet) override
+    {
+        if (cancelRead) return ::media::Result<MediaTsReadFrameState>::failure(
+            ::media::ErrorInfo::cancelled("scripted cancelled read"));
+        if (failRead) return ::media::Result<MediaTsReadFrameState>::failure(
+            ::media::ErrorInfo::invalidArgument("scripted read failure"));
+        if (frames.empty()) return ::media::Result<MediaTsReadFrameState>::success(MediaTsReadFrameState::Waiting);
+        const auto frame = frames.front(); frames.pop_front();
+        if (frame.state == MediaTsReadFrameState::Frame) {
+            packet.stream_index = frame.streamIndex; packet.pos = frame.position;
+            packet.pts = frame.pts; packet.dts = frame.dts;
+            packet.time_base = frame.timeBase;
+        }
+        return ::media::Result<MediaTsReadFrameState>::success(frame.state);
+    }
+    ::media::Status close() noexcept override { ++stats->closeCalls; return ::media::Status::success(); }
+    void cancel() noexcept override { ++stats->cancelCalls; }
+    const std::vector<FFmpegInputStreamSnapshot>& streamSnapshots() const noexcept override { return streams; }
+    const std::vector<FFmpegInputProgramSnapshot>& programSnapshots() const noexcept override { return programs; }
+    ::media::Result<std::vector<FFmpegInputStreamSnapshot>> cloneStreamSnapshots() const override
+    {
+        std::vector<FFmpegInputStreamSnapshot> result;
+        result.emplace_back(); result.back().index = kVideoStream;
+        result.emplace_back(); result.back().index = kAudioStream;
+        return ::media::Result<std::vector<FFmpegInputStreamSnapshot>>::success(std::move(result));
+    }
+    MediaTsProgramInventorySnapshot programInventory() const override { return inventory(); }
+    const MediaTsInputRuntimeContract& runtimeContract() const noexcept override { return contract; }
+    ::media::Result<std::vector<MediaTsEvidenceCheckpoint>> evidenceSnapshotAfter(
+        std::optional<std::uint64_t> exclusiveOffset) const override
+    {
+        if (failEvidence) return ::media::Result<std::vector<MediaTsEvidenceCheckpoint>>::failure(
+            ::media::ErrorInfo::invalidArgument("scripted evidence failure"));
+        const auto visible = exclusiveOffset
+            ? (observedPositions.empty() ? std::optional<std::uint64_t>{}
+                                         : std::optional<std::uint64_t>{observedPositions.back()})
+            : preflightLimit;
+        std::vector<MediaTsEvidenceCheckpoint> result;
+        for (const auto& item : evidenceTimeline) {
+            if (exclusiveOffset && item.byteOffset <= *exclusiveOffset) continue;
+            if (visible && item.byteOffset > *visible) continue;
+            result.push_back(item);
+        }
+        return ::media::Result<std::vector<MediaTsEvidenceCheckpoint>>::success(std::move(result));
+    }
+    ::media::Status observePacketPosition(std::uint64_t position) override
+    {
+        if (failObserve) return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("scripted observe failure"));
+        observedPositions.push_back(position);
+        return ::media::Status::success();
+    }
+};
+
+struct NodeFixture final {
+    MediaGraph graph;
+    MediaNodeId source, demux, videoSink, audioSink;
+    MediaGraphExecutionContext execution;
+
+    explicit NodeFixture(bool options = true)
+    {
+        const auto queue = MediaGraphBuildSupport::blockingQueuePolicy(16);
+        source = graph.addNode(MediaNodeKind::DebugDump, "test.source");
+        demux = graph.addNode(MediaNodeKind::MpegTsDemux, "test.demux");
+        videoSink = graph.addNode(MediaNodeKind::DebugDump, "test.video");
+        audioSink = graph.addNode(MediaNodeKind::DebugDump, "test.audio");
+        graph.addOutputPort(source, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext);
+        graph.addInputPort(demux, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext);
+        graph.addOutputPort(demux, "video", MediaStreamKind::Video, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet);
+        graph.addOutputPort(demux, "audio", MediaStreamKind::Audio, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet);
+        graph.addInputPort(videoSink, "video", MediaStreamKind::Video, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet);
+        graph.addInputPort(audioSink, "audio", MediaStreamKind::Audio, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet);
+        graph.connect(source, "format", demux, "format", "format", queue);
+        graph.connect(demux, "video", videoSink, "video", "video", queue);
+        graph.connect(demux, "audio", audioSink, "audio", "audio", queue);
+        if (options) setOptions();
+    }
+    void setOptions(std::size_t projectionCapacity = 32, const std::string& skipped = {})
+    {
+        const std::vector<std::pair<std::string, std::string>> values{
+            {"mpegts.program_number", "1"}, {"mpegts.pmt_pid", "256"},
+            {"mpegts.video_pid", "513"}, {"mpegts.audio_pid", "514"},
+            {"mpegts.pcr_pid", "257"}, {"mpegts.pcr_interval_27mhz", "2700000"},
+            {"mpegts.maximum_pcr_jitter_27mhz", "2700"}, {"mpegts.maximum_pcr_gap_27mhz", "8100000"},
+            {"mpegts.packet_stride", "188"}, {"mpegts.evidence_timeline_capacity", "32"},
+            {"mpegts.projection_capacity", std::to_string(projectionCapacity)},
+            {"mpegts.maximum_position_regression_bytes", "4096"},
+            {"mpegts.timestamp_time_base_num", "1"}, {"mpegts.timestamp_time_base_den", "90000"},
+            {"mpegts.initial_source_generation", "0"}, {"mpegts.initial_raw_generation", "0"}};
+        for (const auto& [key, value] : values) {
+            if (key != skipped) graph.setNodeOption(demux, key, value);
+        }
+    }
+    bool compile() { return static_cast<bool>(execution.compile(graph)); }
+    MediaChannel* input() { return execution.findInputChannel(demux, "format"); }
+    MediaChannel* video() { return execution.findOutputChannel(demux, "video"); }
+    MediaChannel* audio() { return execution.findOutputChannel(demux, "audio"); }
+};
+
+MediaBufferRef prepared(std::unique_ptr<MediaTsDemuxSession> session)
+{
+    auto result = MediaTsPreparedInputBuffer::create(std::move(session));
+    return result ? MediaBufferRef(std::move(result).value()) : MediaBufferRef{};
+}
+
+const FFmpegPacketBuffer* popPacket(MediaChannel& channel, MediaBufferRef& owner)
+{
+    return channel.tryPop(owner) ? dynamic_cast<const FFmpegPacketBuffer*>(owner.get()) : nullptr;
+}
+
+void testBindingFailures(TestContext& ctx)
+{
+    NodeFixture missing(false); EXPECT_TRUE(ctx, missing.compile());
+    EXPECT_TRUE(ctx, missing.input()->push(prepared(std::make_unique<ScriptedTsSession>())));
+    MpegTsDemuxNode missingNode(missing.demux); EXPECT_FALSE(ctx, missingNode.process(missing.execution));
+
+    NodeFixture wrong; EXPECT_TRUE(ctx, wrong.compile());
+    auto eof = FFmpegBufferFactory::makeEof(MediaStreamKind::Metadata);
+    EXPECT_TRUE(ctx, wrong.input()->push(eof.value()));
+    MpegTsDemuxNode wrongNode(wrong.demux); EXPECT_FALSE(ctx, wrongNode.process(wrong.execution));
+
+    for (const auto* missingKey : {"mpegts.packet_stride", "mpegts.evidence_timeline_capacity"}) {
+        NodeFixture fixture(false); fixture.setOptions(32, missingKey);
+        EXPECT_TRUE(ctx, fixture.compile());
+        EXPECT_TRUE(ctx, fixture.input()->push(prepared(std::make_unique<ScriptedTsSession>())));
+        MpegTsDemuxNode node(fixture.demux); EXPECT_FALSE(ctx, node.process(fixture.execution));
+    }
+
+    for (int failure = 0; failure < 3; ++failure) {
+        NodeFixture fixture; EXPECT_TRUE(ctx, fixture.compile());
+        auto session = std::make_unique<ScriptedTsSession>();
+        if (failure == 0) session->programs[0].programNumber = 2;
+        if (failure == 1) session->programs[0].streamBindings.pop_back();
+        if (failure == 2) session->failEvidence = true;
+        EXPECT_TRUE(ctx, fixture.input()->push(prepared(std::move(session))));
+        MpegTsDemuxNode node(fixture.demux); EXPECT_FALSE(ctx, node.process(fixture.execution));
+    }
+}
+
+void testDuplicateTransferAndRuntimeContract(TestContext& ctx)
+{
+    auto bufferResult = MediaTsPreparedInputBuffer::create(std::make_unique<ScriptedTsSession>());
+    EXPECT_TRUE(ctx, bufferResult);
+    EXPECT_TRUE(ctx, bufferResult.value()->takeSession());
+    EXPECT_FALSE(ctx, bufferResult.value()->takeSession());
+
+    NodeFixture duplicate; EXPECT_TRUE(ctx, duplicate.compile());
+    auto first = std::make_unique<ScriptedTsSession>();
+    first->evidenceTimeline = {evidence(100, 0), evidence(200, 2'700'000)};
+    first->frames.push_back({MediaTsReadFrameState::Waiting});
+    EXPECT_TRUE(ctx, duplicate.input()->push(prepared(std::move(first))));
+    MpegTsDemuxNode duplicateNode(duplicate.demux);
+    EXPECT_TRUE(ctx, duplicateNode.process(duplicate.execution));
+    EXPECT_TRUE(ctx, duplicate.input()->push(prepared(std::make_unique<ScriptedTsSession>())));
+    EXPECT_FALSE(ctx, duplicateNode.process(duplicate.execution));
+
+    NodeFixture fixture; EXPECT_TRUE(ctx, fixture.compile());
+    auto session = std::make_unique<ScriptedTsSession>(); session->contract.packetStride = 192;
+    EXPECT_TRUE(ctx, fixture.input()->push(prepared(std::move(session))));
+    MpegTsDemuxNode node(fixture.demux); EXPECT_FALSE(ctx, node.process(fixture.execution));
+}
+
+void testFramesRollbackAndLifecycle(TestContext& ctx)
+{
+    NodeFixture fixture; EXPECT_TRUE(ctx, fixture.compile());
+    auto stats = std::make_shared<ScriptedTsSession::Stats>();
+    auto session = std::make_unique<ScriptedTsSession>(stats); auto* observer = session.get();
+    session->evidenceTimeline = {evidence(100, 0), evidence(200, 2'700'000)};
+    session->frames = {{MediaTsReadFrameState::Waiting},
+        {MediaTsReadFrameState::Frame, kVideoStream, 200, 90'000, 89'000},
+        {MediaTsReadFrameState::Frame, kAudioStream, 150, AV_NOPTS_VALUE, AV_NOPTS_VALUE},
+        {MediaTsReadFrameState::EndOfStream}};
+    EXPECT_TRUE(ctx, fixture.input()->push(prepared(std::move(session))));
+    MpegTsDemuxNode node(fixture.demux);
+    auto waiting = node.process(fixture.execution); EXPECT_TRUE(ctx, waiting);
+    if (waiting) EXPECT_EQ(ctx, waiting.value().state, MediaNodeProcessState::Waiting);
+    EXPECT_TRUE(ctx, node.process(fixture.execution));
+    MediaBufferRef videoOwner; const auto* video = popPacket(*fixture.video(), videoOwner);
+    EXPECT_TRUE(ctx, video != nullptr);
+    if (video && video->sourceTiming()) {
+        EXPECT_EQ(ctx, video->packet()->pts, std::int64_t{90'000});
+        EXPECT_EQ(ctx, video->packet()->dts, std::int64_t{89'000});
+        EXPECT_EQ(ctx, video->sourceTiming()->readiness, MediaSourceClockReadiness::Locked);
+    }
+    EXPECT_TRUE(ctx, node.process(fixture.execution));
+    MediaBufferRef audioOwner; const auto* audio = popPacket(*fixture.audio(), audioOwner);
+    EXPECT_TRUE(ctx, audio != nullptr);
+    if (audio && audio->sourceTiming()) {
+        EXPECT_EQ(ctx, audio->packet()->pts, std::int64_t{AV_NOPTS_VALUE});
+        EXPECT_FALSE(ctx, audio->sourceTiming()->presentationNs.has_value());
+    }
+    EXPECT_EQ(ctx, observer->observedPositions.size(), std::size_t{2});
+    auto finished = node.process(fixture.execution); EXPECT_TRUE(ctx, finished);
+    if (finished) EXPECT_EQ(ctx, finished.value().state, MediaNodeProcessState::Finished);
+    MediaBufferRef vEof, aEof; EXPECT_TRUE(ctx, fixture.video()->tryPop(vEof));
+    EXPECT_TRUE(ctx, fixture.audio()->tryPop(aEof));
+    node.abort(fixture.execution);
+    EXPECT_EQ(ctx, stats->cancelCalls, 1); EXPECT_EQ(ctx, stats->closeCalls, 1);
+
+    NodeFixture stopped; EXPECT_TRUE(ctx, stopped.compile());
+    auto stopStats = std::make_shared<ScriptedTsSession::Stats>();
+    auto stopSession = std::make_unique<ScriptedTsSession>(stopStats);
+    stopSession->evidenceTimeline = {evidence(100, 0), evidence(200, 2'700'000)};
+    stopSession->frames.push_back({MediaTsReadFrameState::Waiting});
+    EXPECT_TRUE(ctx, stopped.input()->push(prepared(std::move(stopSession))));
+    MpegTsDemuxNode stoppedNode(stopped.demux);
+    EXPECT_TRUE(ctx, stoppedNode.process(stopped.execution));
+    EXPECT_TRUE(ctx, stoppedNode.stop(stopped.execution));
+    EXPECT_EQ(ctx, stopStats->cancelCalls, 0); EXPECT_EQ(ctx, stopStats->closeCalls, 1);
+}
+
+void testNegativePtsDtsMapAs33BitValues(TestContext& ctx)
+{
+    NodeFixture fixture; EXPECT_TRUE(ctx, fixture.compile());
+    auto session = std::make_unique<ScriptedTsSession>();
+    session->evidenceTimeline = {evidence(100, 0), evidence(200, 2'700'000)};
+    session->frames.push_back({MediaTsReadFrameState::Frame, kVideoStream, 200, -1, -45'000, {1, 90'000}});
+    EXPECT_TRUE(ctx, fixture.input()->push(prepared(std::move(session))));
+    MpegTsDemuxNode node(fixture.demux); EXPECT_TRUE(ctx, node.process(fixture.execution));
+    MediaBufferRef owner; const auto* packet = popPacket(*fixture.video(), owner);
+    EXPECT_TRUE(ctx, packet != nullptr);
+    if (packet && packet->sourceTiming()) {
+        EXPECT_EQ(ctx, packet->packet()->pts, std::int64_t{-1});
+        EXPECT_EQ(ctx, packet->packet()->dts, std::int64_t{-45'000});
+        EXPECT_EQ(ctx, packet->packet()->time_base.num, 1);
+        EXPECT_EQ(ctx, packet->packet()->time_base.den, 90'000);
+        EXPECT_EQ(ctx, packet->sourceTiming()->presentationNs, std::optional<std::int64_t>{-11'111});
+        EXPECT_EQ(ctx, packet->sourceTiming()->decodeNs, std::optional<std::int64_t>{-500'000'000});
+    }
+
+    NodeFixture dtsFixture; EXPECT_TRUE(ctx, dtsFixture.compile());
+    auto dtsSession = std::make_unique<ScriptedTsSession>();
+    dtsSession->evidenceTimeline = {evidence(100, 0), evidence(200, 2'700'000)};
+    dtsSession->frames.push_back({MediaTsReadFrameState::Frame, kVideoStream, 200,
+                                 AV_NOPTS_VALUE, 0, {1001, 90'000}});
+    EXPECT_TRUE(ctx, dtsFixture.input()->push(prepared(std::move(dtsSession))));
+    MpegTsDemuxNode dtsNode(dtsFixture.demux);
+    EXPECT_TRUE(ctx, dtsNode.process(dtsFixture.execution));
+    MediaBufferRef dtsOwner; const auto* dtsPacket = popPacket(*dtsFixture.video(), dtsOwner);
+    EXPECT_TRUE(ctx, dtsPacket != nullptr);
+    if (dtsPacket && dtsPacket->sourceTiming()) {
+        EXPECT_FALSE(ctx, dtsPacket->sourceTiming()->presentationNs.has_value());
+        EXPECT_EQ(ctx, dtsPacket->sourceTiming()->decodeNs, std::optional<std::int64_t>{0});
+        EXPECT_EQ(ctx, dtsPacket->packet()->pts, std::int64_t{AV_NOPTS_VALUE});
+        EXPECT_EQ(ctx, dtsPacket->packet()->dts, std::int64_t{0});
+        EXPECT_EQ(ctx, dtsPacket->packet()->time_base.num, 1001);
+        EXPECT_EQ(ctx, dtsPacket->packet()->time_base.den, 90'000);
+    }
+}
+
+void testIncrementalReacquireAndRollback(TestContext& ctx)
+{
+    constexpr std::int64_t modulus = std::int64_t{1} << 33;
+    NodeFixture fixture; EXPECT_TRUE(ctx, fixture.compile());
+    auto session = std::make_unique<ScriptedTsSession>(); session->preflightLimit = 200;
+    session->evidenceTimeline = {evidence(100, 0), evidence(200, 2'700'000),
+        evidence(300, 5'400'000, true, 1), evidence(400, 8'100'000, false, 1),
+        evidence(500, 10'800'000, false, 1)};
+    session->frames = {
+        {MediaTsReadFrameState::Frame, kVideoStream, 200, modulus - 1, modulus - 1},
+        {MediaTsReadFrameState::Frame, kVideoStream, 200, 1, 1},
+        {MediaTsReadFrameState::Frame, kVideoStream, 200, 3'000'000'000, 3'000'000'000},
+        {MediaTsReadFrameState::Frame, kVideoStream, 200, 6'000'000'000, 6'000'000'000},
+        {MediaTsReadFrameState::Frame, kVideoStream, 200, modulus - 1, modulus - 1},
+        {MediaTsReadFrameState::Frame, kVideoStream, 300, 180'000, 180'000},
+        {MediaTsReadFrameState::Frame, kVideoStream, 500, 90'000, 90'000},
+        {MediaTsReadFrameState::Frame, kVideoStream, 200, 1, 1}};
+    EXPECT_TRUE(ctx, fixture.input()->push(prepared(std::move(session))));
+    MpegTsDemuxNode node(fixture.demux);
+    for (int index = 0; index < 5; ++index) {
+        EXPECT_TRUE(ctx, node.process(fixture.execution));
+        MediaBufferRef seededOwner; const auto* seeded = popPacket(*fixture.video(), seededOwner);
+        EXPECT_TRUE(ctx, seeded != nullptr);
+        if (seeded && seeded->sourceTiming()) {
+            EXPECT_EQ(ctx, seeded->sourceTiming()->generation, std::uint64_t{0});
+        }
+    }
+    EXPECT_TRUE(ctx, node.process(fixture.execution));
+    MediaBufferRef first; auto* reacquire = popPacket(*fixture.video(), first);
+    EXPECT_TRUE(ctx, reacquire != nullptr);
+    if (reacquire && reacquire->sourceTiming()) {
+        EXPECT_EQ(ctx, reacquire->sourceTiming()->readiness, MediaSourceClockReadiness::ReacquireRequired);
+        EXPECT_EQ(ctx, reacquire->sourceTiming()->generation, std::uint64_t{1});
+    }
+    EXPECT_TRUE(ctx, node.process(fixture.execution));
+    MediaBufferRef second; auto* locked = popPacket(*fixture.video(), second);
+    EXPECT_TRUE(ctx, locked != nullptr);
+    if (locked && locked->sourceTiming()) {
+        EXPECT_EQ(ctx, locked->sourceTiming()->readiness, MediaSourceClockReadiness::Locked);
+        EXPECT_EQ(ctx, locked->sourceTiming()->generation, std::uint64_t{1});
+        EXPECT_EQ(ctx, locked->sourceTiming()->presentationNs, std::optional<std::int64_t>{1'000'000'000});
+    }
+    EXPECT_TRUE(ctx, node.process(fixture.execution));
+    MediaBufferRef third; auto* rollback = popPacket(*fixture.video(), third);
+    EXPECT_TRUE(ctx, rollback != nullptr);
+    if (rollback && rollback->sourceTiming()) {
+        EXPECT_EQ(ctx, rollback->sourceTiming()->generation, std::uint64_t{0});
+        EXPECT_EQ(ctx, rollback->sourceTiming()->presentationNs,
+                  std::optional<std::int64_t>{95'443'717'700'000});
+        EXPECT_EQ(ctx, rollback->sourceTiming()->decodeNs,
+                  std::optional<std::int64_t>{95'443'717'700'000});
+    }
+}
+
+void testCancelledReadAndSessionTimelineFailurePropagation(TestContext& ctx)
+{
+    for (const bool timelineFailure : {false, true}) {
+        NodeFixture fixture; EXPECT_TRUE(ctx, fixture.compile());
+        auto session = std::make_unique<ScriptedTsSession>();
+        session->evidenceTimeline = {evidence(100, 0), evidence(200, 2'700'000)};
+        if (timelineFailure) {
+            session->failObserve = true;
+            session->frames.push_back({MediaTsReadFrameState::Frame, kVideoStream, 200, 0, 0});
+        } else {
+            session->cancelRead = true;
+        }
+        EXPECT_TRUE(ctx, fixture.input()->push(prepared(std::move(session))));
+        MpegTsDemuxNode node(fixture.demux); auto result = node.process(fixture.execution);
+        EXPECT_FALSE(ctx, result);
+        if (!result) EXPECT_EQ(ctx, result.error().code,
+            timelineFailure ? media::ErrorCode::InvalidArgument : media::ErrorCode::Cancelled);
+    }
+}
+
+void testPacketAndSessionFailures(TestContext& ctx)
+{
+    for (int failure = 0; failure < 5; ++failure) {
+        NodeFixture fixture; EXPECT_TRUE(ctx, fixture.compile());
+        auto session = std::make_unique<ScriptedTsSession>();
+        if (failure == 0) session->failRead = true;
+        else {
+            session->evidenceTimeline = failure == 4 ? std::vector<MediaTsEvidenceCheckpoint>{}
+                                                     : std::vector<MediaTsEvidenceCheckpoint>{evidence(100, 0), evidence(200, 2'700'000)};
+            session->frames.push_back({MediaTsReadFrameState::Frame,
+                failure == 1 ? 99 : kVideoStream, failure == 2 ? -1 : 200, 0, 0});
+            if (failure == 3) session->failObserve = true;
+        }
+        EXPECT_TRUE(ctx, fixture.input()->push(prepared(std::move(session))));
+        MpegTsDemuxNode node(fixture.demux); EXPECT_FALSE(ctx, node.process(fixture.execution));
+    }
+
+    NodeFixture overflow; overflow.setOptions(2); EXPECT_TRUE(ctx, overflow.compile());
+    auto session = std::make_unique<ScriptedTsSession>();
+    session->evidenceTimeline = {evidence(100, 0), evidence(200, 2'700'000), evidence(300, 5'400'000)};
+    EXPECT_TRUE(ctx, overflow.input()->push(prepared(std::move(session))));
+    MpegTsDemuxNode overflowNode(overflow.demux); EXPECT_FALSE(ctx, overflowNode.process(overflow.execution));
+}
+
+} // namespace
+
+void runMpegTsDemuxNodeTests(TestContext& ctx)
+{
+    testBindingFailures(ctx);
+    testDuplicateTransferAndRuntimeContract(ctx);
+    testFramesRollbackAndLifecycle(ctx);
+    testNegativePtsDtsMapAs33BitValues(ctx);
+    testIncrementalReacquireAndRollback(ctx);
+    testPacketAndSessionFailures(ctx);
+    testCancelledReadAndSessionTimelineFailurePropagation(ctx);
+}
