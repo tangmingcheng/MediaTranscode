@@ -60,7 +60,7 @@ std::array<uint8_t, 188> sectionPacket(uint16_t pid, std::vector<uint8_t> sectio
     return packet;
 }
 
-std::vector<uint8_t> validMpegTsBytes()
+std::vector<uint8_t> validMpegTsBytes(std::size_t extraPesPackets = 0)
 {
     std::vector<uint8_t> pat{0x00, 0xB0, 0x0D, 0x00, 0x01, 0xC1, 0, 0,
                              0, 1, 0xE1, 0x00};
@@ -82,10 +82,18 @@ std::vector<uint8_t> validMpegTsBytes()
     nullPacket[0] = 0x47; nullPacket[1] = 0x1F; nullPacket[2] = 0xFF; nullPacket[3] = 0x10;
     auto secondPes = pes;
     secondPes[3] = 0x11;
-    const std::array packets{sectionPacket(0, std::move(pat)),
-                             sectionPacket(0x100, std::move(pmt)), pes, secondPes, nullPacket};
     std::vector<uint8_t> bytes;
-    for (const auto& packet : packets) bytes.insert(bytes.end(), packet.begin(), packet.end());
+    const auto patPacket = sectionPacket(0, std::move(pat));
+    const auto pmtPacket = sectionPacket(0x100, std::move(pmt));
+    for (const auto& packet : {patPacket, pmtPacket, pes, secondPes}) {
+        bytes.insert(bytes.end(), packet.begin(), packet.end());
+    }
+    for (std::size_t index = 0; index < extraPesPackets; ++index) {
+        auto extra = pes;
+        extra[3] = static_cast<uint8_t>(0x10 | ((index + 2) & 0x0F));
+        bytes.insert(bytes.end(), extra.begin(), extra.end());
+    }
+    bytes.insert(bytes.end(), nullPacket.begin(), nullPacket.end());
     return bytes;
 }
 
@@ -225,21 +233,82 @@ public:
     std::size_t closeCount = 0;
 };
 
-class RecordingLifecycle final : public FFmpegObservedAvioLifecycleSink {
-public:
-    void onLifecycleEvent(FFmpegObservedAvioLifecycleEvent event) noexcept override
-    {
-        events.push_back(event);
-    }
-    std::vector<FFmpegObservedAvioLifecycleEvent> events;
-};
-
 class ThrowingObserver final : public FFmpegObservedByteSink {
 public:
     ::media::Status onBytes(std::uint64_t, std::span<const uint8_t>) override
     {
         throw std::runtime_error("observer failure");
     }
+};
+
+class BlockingByteOpener final : public FFmpegProtocolAvioOpener {
+public:
+    explicit BlockingByteOpener(std::vector<uint8_t> bytes) : m_bytes(std::move(bytes)) {}
+    ::media::Result<AVIOContext*> open(
+        const std::string&, AVDictionary**, const AVIOInterruptCB* interrupt) override
+    {
+        m_interrupt = *interrupt;
+        auto* buffer = static_cast<unsigned char*>(av_malloc(64));
+        auto* context = avio_alloc_context(buffer, 64, 0, this, &read, nullptr, nullptr);
+        return context ? ::media::Result<AVIOContext*>::success(context)
+                       : ::media::Result<AVIOContext*>::failure(
+                             ::media::ErrorInfo::allocationFailed("blocking byte AVIO allocation failed"));
+    }
+    void requestInterrupt(AVIOContext*) noexcept override
+    {
+        std::lock_guard lock(m_mutex);
+        m_interrupted = true;
+        m_changed.notify_all();
+    }
+    void close(AVIOContext** context) noexcept override
+    {
+        ++closeCount;
+        if (context && *context) {
+            av_freep(&(*context)->buffer);
+            avio_context_free(context);
+        }
+    }
+    void waitUntilBlocked()
+    {
+        std::unique_lock lock(m_mutex);
+        m_changed.wait(lock, [this] { return m_blocked; });
+    }
+    std::size_t closeCount = 0;
+private:
+    static int read(void* opaque, uint8_t* destination, int requested)
+    {
+        auto& self = *static_cast<BlockingByteOpener*>(opaque);
+        std::unique_lock lock(self.m_mutex);
+        if (self.m_offset < self.m_bytes.size()) {
+            const auto count = std::min<std::size_t>(
+                self.m_bytes.size() - self.m_offset, static_cast<std::size_t>(requested));
+            std::memcpy(destination, self.m_bytes.data() + self.m_offset, count);
+            self.m_offset += count;
+            return static_cast<int>(count);
+        }
+        self.m_blocked = true;
+        self.m_changed.notify_all();
+        self.m_changed.wait(lock, [&self] { return self.m_interrupted; });
+        return self.m_interrupt.callback(self.m_interrupt.opaque) ? AVERROR_EXIT : AVERROR(EIO);
+    }
+    std::vector<uint8_t> m_bytes;
+    std::size_t m_offset = 0;
+    AVIOInterruptCB m_interrupt{};
+    std::mutex m_mutex;
+    std::condition_variable m_changed;
+    bool m_blocked = false;
+    bool m_interrupted = false;
+};
+
+class ReentrantCloseObserver final : public FFmpegObservedByteSink {
+public:
+    ::media::Status onBytes(std::uint64_t, std::span<const uint8_t>) override
+    {
+        closeStatus = owner->close();
+        return closeStatus;
+    }
+    FFmpegObservedReadAvio* owner = nullptr;
+    ::media::Status closeStatus = ::media::Status::success();
 };
 
 void testObservedReadIsTransparent(TestContext& ctx)
@@ -417,6 +486,21 @@ void testObserverExceptionBecomesStructuredFailure(TestContext& ctx)
     EXPECT_EQ(ctx, avio_read(opened.value()->outer(), bytes, 1), AVERROR_INVALIDDATA);
 }
 
+void testReentrantCloseFailsWithoutDeadlock(TestContext& ctx)
+{
+    FragmentedOpener opener({1});
+    ReentrantCloseObserver observer;
+    FFmpegAvioInterruptState interrupt;
+    auto opened = FFmpegObservedReadAvio::open(
+        "test://reentrant", nullptr, 16, observer, interrupt, opener);
+    EXPECT_TRUE(ctx, opened);
+    if (!opened) return;
+    observer.owner = opened.value().get();
+    uint8_t byte{};
+    EXPECT_EQ(ctx, avio_read(opened.value()->outer(), &byte, 1), 1);
+    EXPECT_FALSE(ctx, observer.closeStatus);
+}
+
 void testSessionProbeAndPreparedTransfer(TestContext& ctx)
 {
     FragmentedOpener opener(validMpegTsBytes());
@@ -426,8 +510,6 @@ void testSessionProbeAndPreparedTransfer(TestContext& ctx)
     options.packetStride = 188;
     options.evidenceCapacity = 32;
     options.maximumPositionRegressionBytes = 188 * 8;
-    RecordingLifecycle lifecycle;
-    options.lifecycleSink = &lifecycle;
     AVDictionary* protocolOptions = nullptr;
     AVDictionary* demuxOptions = nullptr;
     av_dict_set(&protocolOptions, "protocol_only", "preserved", 0);
@@ -453,12 +535,6 @@ void testSessionProbeAndPreparedTransfer(TestContext& ctx)
     EXPECT_FALSE(ctx, prepared.value()->takeSession());
     taken.value().reset();
     EXPECT_EQ(ctx, opener.closeCount(), std::size_t{1});
-    EXPECT_EQ(ctx, lifecycle.events.size(), std::size_t{3});
-    if (lifecycle.events.size() == 3) {
-        EXPECT_EQ(ctx, lifecycle.events[0], FFmpegObservedAvioLifecycleEvent::FormatClosed);
-        EXPECT_EQ(ctx, lifecycle.events[1], FFmpegObservedAvioLifecycleEvent::OuterClosed);
-        EXPECT_EQ(ctx, lifecycle.events[2], FFmpegObservedAvioLifecycleEvent::InnerClosed);
-    }
 }
 
 void testSessionRejectsUnsupportedAndIncompleteInput(TestContext& ctx)
@@ -506,6 +582,62 @@ void testPreparedDestructionBeforeTransferClosesOnce(TestContext& ctx)
     EXPECT_EQ(ctx, opener.closeCount(), std::size_t{1});
 }
 
+void testSessionCloseRejectsNewReads(TestContext& ctx)
+{
+    FragmentedOpener opener(validMpegTsBytes());
+    MediaTsInputSessionOptions options;
+    options.protocolUrl = "test://session-close";
+    options.avioBufferBytes = 64;
+    options.packetStride = 188;
+    options.evidenceCapacity = 32;
+    auto session = MediaTsInputSession::open(options, opener);
+    EXPECT_TRUE(ctx, session);
+    if (!session) return;
+    EXPECT_TRUE(ctx, session.value()->close());
+    auto packet = ::media::ffmpeg::makePacket();
+    EXPECT_TRUE(ctx, packet != nullptr);
+    if (packet) {
+        auto read = session.value()->readFrame(*packet);
+        EXPECT_FALSE(ctx, read);
+        if (!read) EXPECT_EQ(ctx, read.error().code, ::media::ErrorCode::Cancelled);
+    }
+    EXPECT_EQ(ctx, opener.closeCount(), std::size_t{1});
+}
+
+void testSessionCloseInterruptsBlockedRead(TestContext& ctx)
+{
+    BlockingByteOpener opener(validMpegTsBytes(64));
+    AVDictionary* demuxOptions = nullptr;
+    av_dict_set(&demuxOptions, "probesize", "512", 0);
+    av_dict_set(&demuxOptions, "analyzeduration", "0", 0);
+    MediaTsInputSessionOptions options;
+    options.protocolUrl = "test://session-blocking";
+    options.demuxOptions = demuxOptions;
+    options.avioBufferBytes = 64;
+    options.packetStride = 188;
+    options.evidenceCapacity = 128;
+    auto session = MediaTsInputSession::open(options, opener);
+    av_dict_free(&demuxOptions);
+    EXPECT_TRUE(ctx, session);
+    if (!session) return;
+    ::media::Result<MediaTsReadFrameState> read =
+        ::media::Result<MediaTsReadFrameState>::success(MediaTsReadFrameState::Waiting);
+    std::thread reader([&] {
+        auto packet = ::media::ffmpeg::makePacket();
+        for (;;) {
+            av_packet_unref(packet.get());
+            read = session.value()->readFrame(*packet);
+            if (!read || read.value() != MediaTsReadFrameState::Frame) return;
+        }
+    });
+    opener.waitUntilBlocked();
+    EXPECT_TRUE(ctx, session.value()->close());
+    reader.join();
+    EXPECT_FALSE(ctx, read);
+    if (!read) EXPECT_EQ(ctx, read.error().code, ::media::ErrorCode::Cancelled);
+    EXPECT_EQ(ctx, opener.closeCount, std::size_t{1});
+}
+
 } // namespace
 
 void runMpegTsInputSessionTests(TestContext& ctx)
@@ -516,8 +648,11 @@ void runMpegTsInputSessionTests(TestContext& ctx)
     testTerminalReadStatesRemainDistinct(ctx);
     testCloseWaitsForActiveReadCallback(ctx);
     testObserverExceptionBecomesStructuredFailure(ctx);
+    testReentrantCloseFailsWithoutDeadlock(ctx);
     testCheckpointRetainsEveryObservedPcrPid(ctx);
     testSessionProbeAndPreparedTransfer(ctx);
     testSessionRejectsUnsupportedAndIncompleteInput(ctx);
     testPreparedDestructionBeforeTransferClosesOnce(ctx);
+    testSessionCloseRejectsNewReads(ctx);
+    testSessionCloseInterruptsBlockedRead(ctx);
 }

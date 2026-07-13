@@ -26,18 +26,6 @@ public:
                                     std::span<const std::uint8_t> bytes) = 0;
 };
 
-enum class FFmpegObservedAvioLifecycleEvent {
-    FormatClosed,
-    OuterClosed,
-    InnerClosed
-};
-
-class FFmpegObservedAvioLifecycleSink {
-public:
-    virtual ~FFmpegObservedAvioLifecycleSink() = default;
-    virtual void onLifecycleEvent(FFmpegObservedAvioLifecycleEvent event) noexcept = 0;
-};
-
 class FFmpegAvioInterruptState final {
 public:
     void cancel() noexcept { m_cancelled.store(true, std::memory_order_release); }
@@ -65,16 +53,14 @@ public:
         AVDictionary* protocolOptions,
         std::size_t bufferBytes,
         FFmpegObservedByteSink& observer,
-        FFmpegAvioInterruptState& interruptState,
-        FFmpegObservedAvioLifecycleSink* lifecycleSink = nullptr);
+        FFmpegAvioInterruptState& interruptState);
     static ::media::Result<std::unique_ptr<FFmpegObservedReadAvio>> open(
         const std::string& protocolUrl,
         AVDictionary* protocolOptions,
         std::size_t bufferBytes,
         FFmpegObservedByteSink& observer,
         FFmpegAvioInterruptState& interruptState,
-        FFmpegProtocolAvioOpener& opener,
-        FFmpegObservedAvioLifecycleSink* lifecycleSink = nullptr);
+        FFmpegProtocolAvioOpener& opener);
 
     ~FFmpegObservedReadAvio();
     FFmpegObservedReadAvio(const FFmpegObservedReadAvio&) = delete;
@@ -83,20 +69,18 @@ public:
     AVIOContext* outer() noexcept { return m_outer; }
     std::optional<::media::ErrorInfo> observerFailure() const;
     ::media::Status status() const;
-    void close() noexcept;
+    ::media::Status close() noexcept;
 
 private:
     FFmpegObservedReadAvio(FFmpegObservedByteSink& observer,
                            FFmpegAvioInterruptState& interruptState,
-                           FFmpegProtocolAvioOpener& opener,
-                           FFmpegObservedAvioLifecycleSink* lifecycleSink) noexcept;
+                           FFmpegProtocolAvioOpener& opener) noexcept;
     static int read(void* opaque, std::uint8_t* destination, int requested);
     static int interrupt(void* opaque) noexcept;
 
     FFmpegObservedByteSink& m_observer;
     FFmpegAvioInterruptState& m_interruptState;
     FFmpegProtocolAvioOpener& m_opener;
-    FFmpegObservedAvioLifecycleSink* m_lifecycleSink = nullptr;
     AVIOContext* m_inner = nullptr;
     AVIOContext* m_outer = nullptr;
     std::uint64_t m_offset = 0;
@@ -107,6 +91,7 @@ private:
     bool m_closing = false;
     bool m_closed = false;
     std::optional<::media::ErrorInfo> m_observerFailure;
+    static thread_local FFmpegObservedReadAvio* s_callbackOwner;
 };
 
 } // namespace media::ffmpeg::graph

@@ -8,6 +8,7 @@ extern "C" {
 #include <limits>
 
 namespace media::ffmpeg::graph {
+thread_local FFmpegObservedReadAvio* FFmpegObservedReadAvio::s_callbackOwner = nullptr;
 namespace {
 
 class ProductionProtocolAvioOpener final : public FFmpegProtocolAvioOpener {
@@ -43,10 +44,8 @@ ProductionProtocolAvioOpener& productionOpener()
 FFmpegObservedReadAvio::FFmpegObservedReadAvio(
     FFmpegObservedByteSink& observer,
     FFmpegAvioInterruptState& interruptState,
-    FFmpegProtocolAvioOpener& opener,
-    FFmpegObservedAvioLifecycleSink* lifecycleSink) noexcept
+    FFmpegProtocolAvioOpener& opener) noexcept
     : m_observer(observer), m_interruptState(interruptState), m_opener(opener)
-    , m_lifecycleSink(lifecycleSink)
 {
 }
 
@@ -56,24 +55,24 @@ FFmpegObservedReadAvio::~FFmpegObservedReadAvio()
     if (m_outer) {
         av_freep(&m_outer->buffer);
         avio_context_free(&m_outer);
-        if (m_lifecycleSink) m_lifecycleSink->onLifecycleEvent(
-            FFmpegObservedAvioLifecycleEvent::OuterClosed);
     }
     if (m_inner) {
         m_opener.close(&m_inner);
-        if (m_lifecycleSink) m_lifecycleSink->onLifecycleEvent(
-            FFmpegObservedAvioLifecycleEvent::InnerClosed);
     }
 }
 
-void FFmpegObservedReadAvio::close() noexcept
+::media::Status FFmpegObservedReadAvio::close() noexcept
 {
+    if (s_callbackOwner == this) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "observed AVIO close cannot be called from its read callback"));
+    }
     {
         std::unique_lock lock(m_stateMutex);
-        if (m_closed) return;
+        if (m_closed) return ::media::Status::success();
         if (m_closing) {
             m_callbacksDone.wait(lock, [this] { return m_closed; });
-            return;
+            return ::media::Status::success();
         }
         m_closing = true;
     }
@@ -88,6 +87,7 @@ void FFmpegObservedReadAvio::close() noexcept
         m_closed = true;
     }
     m_callbacksDone.notify_all();
+    return ::media::Status::success();
 }
 
 ::media::Result<std::unique_ptr<FFmpegObservedReadAvio>> FFmpegObservedReadAvio::open(
@@ -95,11 +95,10 @@ void FFmpegObservedReadAvio::close() noexcept
     AVDictionary* protocolOptions,
     std::size_t bufferBytes,
     FFmpegObservedByteSink& observer,
-    FFmpegAvioInterruptState& interruptState,
-    FFmpegObservedAvioLifecycleSink* lifecycleSink)
+    FFmpegAvioInterruptState& interruptState)
 {
     return open(protocolUrl, protocolOptions, bufferBytes, observer, interruptState,
-                productionOpener(), lifecycleSink);
+                productionOpener());
 }
 
 ::media::Result<std::unique_ptr<FFmpegObservedReadAvio>> FFmpegObservedReadAvio::open(
@@ -108,8 +107,7 @@ void FFmpegObservedReadAvio::close() noexcept
     std::size_t bufferBytes,
     FFmpegObservedByteSink& observer,
     FFmpegAvioInterruptState& interruptState,
-    FFmpegProtocolAvioOpener& opener,
-    FFmpegObservedAvioLifecycleSink* lifecycleSink)
+    FFmpegProtocolAvioOpener& opener)
 {
     if (protocolUrl.empty() || bufferBytes == 0 ||
         bufferBytes > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
@@ -117,7 +115,7 @@ void FFmpegObservedReadAvio::close() noexcept
             ::media::ErrorInfo::invalidArgument("invalid observed AVIO configuration"));
     }
     auto result = std::unique_ptr<FFmpegObservedReadAvio>(
-        new FFmpegObservedReadAvio(observer, interruptState, opener, lifecycleSink));
+        new FFmpegObservedReadAvio(observer, interruptState, opener));
     AVIOInterruptCB interruptCallback{&FFmpegObservedReadAvio::interrupt, &interruptState};
     AVDictionary* options = nullptr;
     const int dictionaryResult = av_dict_copy(&options, protocolOptions, 0);
@@ -159,13 +157,17 @@ int FFmpegObservedReadAvio::read(void* opaque, std::uint8_t* destination, int re
     }
     struct CallbackGuard final {
         FFmpegObservedReadAvio& owner;
+        FFmpegObservedReadAvio* previous = nullptr;
+        CallbackGuard(FFmpegObservedReadAvio& value)
+            : owner(value), previous(s_callbackOwner) { s_callbackOwner = &owner; }
         ~CallbackGuard()
         {
+            s_callbackOwner = previous;
             std::lock_guard lock(owner.m_stateMutex);
             --owner.m_activeCallbacks;
             if (owner.m_activeCallbacks == 0) owner.m_callbacksDone.notify_all();
         }
-    } guard{self};
+    } guard(self);
     std::lock_guard readLock(self.m_readMutex);
     if (self.m_interruptState.cancelled()) return AVERROR_EXIT;
     const int result = avio_read(self.m_inner, destination, requested);

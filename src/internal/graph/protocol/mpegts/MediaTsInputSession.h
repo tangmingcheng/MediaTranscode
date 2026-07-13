@@ -12,6 +12,8 @@ extern "C" {
 #include <memory>
 #include <string>
 #include <vector>
+#include <mutex>
+#include <condition_variable>
 
 namespace media::ffmpeg::graph {
 
@@ -23,8 +25,9 @@ struct MediaTsInputSessionOptions final {
     std::size_t packetStride = 188;
     std::size_t evidenceCapacity = 0;
     std::uint64_t maximumPositionRegressionBytes = 0;
-    FFmpegObservedAvioLifecycleSink* lifecycleSink = nullptr;
 };
+
+enum class MediaTsReadFrameState { Frame, Waiting, EndOfStream };
 
 class MediaTsInputSession final {
 public:
@@ -40,7 +43,8 @@ public:
     MediaTsInputSession(MediaTsInputSession&&) = delete;
     MediaTsInputSession& operator=(MediaTsInputSession&&) = delete;
 
-    AVFormatContext* formatContext() noexcept { return m_formatContext; }
+    ::media::Result<MediaTsReadFrameState> readFrame(AVPacket& packet);
+    ::media::Status close() noexcept;
     const std::vector<FFmpegInputStreamSnapshot>& streamSnapshots() const noexcept;
     ::media::Result<std::vector<FFmpegInputStreamSnapshot>> cloneStreamSnapshots() const;
     const MediaTsProgramInventorySnapshot& programInventory() const noexcept;
@@ -50,6 +54,7 @@ public:
 
 private:
     class EvidenceObserver;
+    class ReadLease;
     MediaTsInputSession() = default;
     static ::media::Result<std::unique_ptr<MediaTsInputSession>> openWithOpener(
         const MediaTsInputSessionOptions& options,
@@ -60,8 +65,12 @@ private:
     std::unique_ptr<EvidenceObserver> m_evidenceObserver;
     std::unique_ptr<FFmpegObservedReadAvio> m_observedAvio;
     AVFormatContext* m_formatContext = nullptr;
-    FFmpegObservedAvioLifecycleSink* m_lifecycleSink = nullptr;
     std::vector<FFmpegInputStreamSnapshot> m_streamSnapshots;
+    std::mutex m_sessionMutex;
+    std::condition_variable m_readsDone;
+    std::size_t m_activeReads = 0;
+    bool m_closing = false;
+    bool m_closed = false;
 };
 
 } // namespace media::ffmpeg::graph

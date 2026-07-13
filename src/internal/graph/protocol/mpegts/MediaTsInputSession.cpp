@@ -7,6 +7,10 @@
 #include <limits>
 #include <optional>
 
+extern "C" {
+#include <libavutil/error.h>
+}
+
 namespace media::ffmpeg::graph {
 
 class MediaTsInputSession::EvidenceObserver final
@@ -107,15 +111,87 @@ private:
     std::uint64_t m_generation = 0;
 };
 
+class MediaTsInputSession::ReadLease final {
+public:
+    explicit ReadLease(MediaTsInputSession& session) noexcept : m_session(session) {}
+    ~ReadLease()
+    {
+        std::lock_guard lock(m_session.m_sessionMutex);
+        --m_session.m_activeReads;
+        if (m_session.m_activeReads == 0) m_session.m_readsDone.notify_all();
+    }
+private:
+    MediaTsInputSession& m_session;
+};
+
 MediaTsInputSession::~MediaTsInputSession()
 {
-    m_interruptState.cancel();
+    close();
+}
+
+::media::Status MediaTsInputSession::close() noexcept
+{
+    {
+        std::unique_lock lock(m_sessionMutex);
+        if (m_closed) return ::media::Status::success();
+        if (m_closing) {
+            m_readsDone.wait(lock, [this] { return m_closed; });
+            return ::media::Status::success();
+        }
+        m_closing = true;
+    }
+    if (m_observedAvio) {
+        auto quiesced = m_observedAvio->close();
+        if (!quiesced) return quiesced;
+    }
+    {
+        std::unique_lock lock(m_sessionMutex);
+        m_readsDone.wait(lock, [this] { return m_activeReads == 0; });
+    }
     if (m_formatContext) {
         avformat_close_input(&m_formatContext);
-        if (m_lifecycleSink) m_lifecycleSink->onLifecycleEvent(
-            FFmpegObservedAvioLifecycleEvent::FormatClosed);
     }
     m_observedAvio.reset();
+    {
+        std::lock_guard lock(m_sessionMutex);
+        m_closed = true;
+    }
+    m_readsDone.notify_all();
+    return ::media::Status::success();
+}
+
+::media::Result<MediaTsReadFrameState> MediaTsInputSession::readFrame(AVPacket& packet)
+{
+    {
+        std::lock_guard lock(m_sessionMutex);
+        if (m_closing || m_closed || !m_formatContext) {
+            return ::media::Result<MediaTsReadFrameState>::failure(
+                ::media::ErrorInfo::cancelled("MPEG-TS input session is closed"));
+        }
+        ++m_activeReads;
+    }
+    ReadLease guard(*this);
+
+    const int result = av_read_frame(m_formatContext, &packet);
+    const auto observerStatus = m_observedAvio->status();
+    if (!observerStatus) {
+        return ::media::Result<MediaTsReadFrameState>::failure(observerStatus.error());
+    }
+    if (result >= 0) {
+        return ::media::Result<MediaTsReadFrameState>::success(MediaTsReadFrameState::Frame);
+    }
+    if (result == AVERROR(EAGAIN)) {
+        return ::media::Result<MediaTsReadFrameState>::success(MediaTsReadFrameState::Waiting);
+    }
+    if (result == AVERROR_EOF) {
+        return ::media::Result<MediaTsReadFrameState>::success(MediaTsReadFrameState::EndOfStream);
+    }
+    if (result == AVERROR_EXIT || m_interruptState.cancelled()) {
+        return ::media::Result<MediaTsReadFrameState>::failure(
+            ::media::ErrorInfo::cancelled("MPEG-TS input read was cancelled"));
+    }
+    return ::media::Result<MediaTsReadFrameState>::failure(
+        ::media::ErrorInfo::ffmpegFailure("failed to read MPEG-TS frame", result));
 }
 
 ::media::Result<std::unique_ptr<MediaTsInputSession>> MediaTsInputSession::open(
@@ -140,7 +216,6 @@ MediaTsInputSession::~MediaTsInputSession()
             ::media::ErrorInfo::unsupported("only 188-byte MPEG-TS framing is supported"));
     }
     auto session = std::unique_ptr<MediaTsInputSession>(new MediaTsInputSession());
-    session->m_lifecycleSink = options.lifecycleSink;
     auto observer = EvidenceObserver::create(options.packetStride, options.evidenceCapacity,
                                              options.maximumPositionRegressionBytes);
     if (!observer) return ::media::Result<std::unique_ptr<MediaTsInputSession>>::failure(observer.error());
@@ -148,12 +223,10 @@ MediaTsInputSession::~MediaTsInputSession()
     auto avio = opener
         ? FFmpegObservedReadAvio::open(
               options.protocolUrl, options.protocolOptions, options.avioBufferBytes,
-              *session->m_evidenceObserver, session->m_interruptState, *opener,
-              options.lifecycleSink)
+              *session->m_evidenceObserver, session->m_interruptState, *opener)
         : FFmpegObservedReadAvio::open(
               options.protocolUrl, options.protocolOptions, options.avioBufferBytes,
-              *session->m_evidenceObserver, session->m_interruptState,
-              options.lifecycleSink);
+              *session->m_evidenceObserver, session->m_interruptState);
     if (!avio) return ::media::Result<std::unique_ptr<MediaTsInputSession>>::failure(avio.error());
     session->m_observedAvio = std::move(avio.value());
     session->m_formatContext = avformat_alloc_context();
