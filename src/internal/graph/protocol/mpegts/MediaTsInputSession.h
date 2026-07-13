@@ -47,8 +47,9 @@ public:
     ::media::Status close() noexcept;
     const std::vector<FFmpegInputStreamSnapshot>& streamSnapshots() const noexcept;
     ::media::Result<std::vector<FFmpegInputStreamSnapshot>> cloneStreamSnapshots() const;
-    const MediaTsProgramInventorySnapshot& programInventory() const noexcept;
-    const MediaTsEvidenceTimeline& evidenceTimeline() const noexcept;
+    MediaTsProgramInventorySnapshot programInventory() const;
+    ::media::Result<MediaTsEvidenceCheckpoint> evidenceAtOrBefore(
+        std::uint64_t packetPosition) const;
     FFmpegAvioInterruptState& interruptState() noexcept { return m_interruptState; }
     ::media::Status status() const;
 

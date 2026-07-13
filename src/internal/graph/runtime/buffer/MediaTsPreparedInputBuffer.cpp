@@ -8,7 +8,8 @@ MediaTsPreparedInputBuffer::MediaTsPreparedInputBuffer(
     : m_session(std::move(session)), m_streamSnapshots(std::move(streamSnapshots))
 {
     if (m_session) {
-        m_programInventory = m_session->programInventory();
+        const auto inventory = m_session->programInventory();
+        m_programInventory = inventory;
     }
 }
 

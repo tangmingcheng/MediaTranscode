@@ -42,6 +42,7 @@ public:
     ::media::Status onBytes(std::uint64_t absoluteOffset,
                             std::span<const std::uint8_t> bytes) override
     {
+        std::lock_guard lock(m_mutex);
         if (absoluteOffset != m_nextOffset) {
             return ::media::Status::failure(
                 ::media::ErrorInfo::invalidArgument("non-contiguous MPEG-TS observed offset"));
@@ -56,6 +57,7 @@ public:
 
     ::media::Status onPacket(const MediaTsPacketView& packet) override
     {
+        std::lock_guard lock(m_mutex);
         if (packet.discontinuity) ++m_generation;
         auto assembled = m_assembler->onPacket(packet);
         if (!assembled) return assembled;
@@ -81,22 +83,30 @@ public:
 
     ::media::Status onContinuityLoss(std::uint16_t pid) override
     {
+        std::lock_guard lock(m_mutex);
         ++m_generation;
         return m_assembler->onContinuityLoss(pid);
     }
 
     ::media::Status onProgramInventory(MediaTsProgramInventorySnapshot snapshot) override
     {
+        std::lock_guard lock(m_mutex);
         m_inventory = std::move(snapshot);
         m_inventoryDirty = true;
         return ::media::Status::success();
     }
 
-    const std::optional<MediaTsProgramInventorySnapshot>& inventory() const noexcept
+    std::optional<MediaTsProgramInventorySnapshot> inventory() const
     {
+        std::lock_guard lock(m_mutex);
         return m_inventory;
     }
-    const MediaTsEvidenceTimeline& timeline() const noexcept { return m_timeline; }
+    ::media::Result<MediaTsEvidenceCheckpoint> evidenceAtOrBefore(
+        std::uint64_t packetPosition) const
+    {
+        std::lock_guard lock(m_mutex);
+        return m_timeline.atOrBefore(packetPosition);
+    }
 
 private:
     explicit EvidenceObserver(MediaTsEvidenceTimeline timeline)
@@ -107,6 +117,7 @@ private:
     MediaTsEvidenceTimeline m_timeline;
     std::optional<MediaTsProgramInventorySnapshot> m_inventory;
     bool m_inventoryDirty = false;
+    mutable std::recursive_mutex m_mutex;
     std::uint64_t m_nextOffset = 0;
     std::uint64_t m_generation = 0;
 };
@@ -168,6 +179,11 @@ MediaTsInputSession::~MediaTsInputSession()
             return ::media::Result<MediaTsReadFrameState>::failure(
                 ::media::ErrorInfo::cancelled("MPEG-TS input session is closed"));
         }
+        if (m_activeReads != 0) {
+            return ::media::Result<MediaTsReadFrameState>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "MPEG-TS input session permits one active reader"));
+        }
         ++m_activeReads;
     }
     ReadLease guard(*this);
@@ -176,6 +192,13 @@ MediaTsInputSession::~MediaTsInputSession()
     const auto observerStatus = m_observedAvio->status();
     if (!observerStatus) {
         return ::media::Result<MediaTsReadFrameState>::failure(observerStatus.error());
+    }
+    {
+        std::lock_guard lock(m_sessionMutex);
+        if (m_closing || m_closed || m_interruptState.cancelled()) {
+            return ::media::Result<MediaTsReadFrameState>::failure(
+                ::media::ErrorInfo::cancelled("MPEG-TS input read was cancelled"));
+        }
     }
     if (result >= 0) {
         return ::media::Result<MediaTsReadFrameState>::success(MediaTsReadFrameState::Frame);
@@ -186,7 +209,7 @@ MediaTsInputSession::~MediaTsInputSession()
     if (result == AVERROR_EOF) {
         return ::media::Result<MediaTsReadFrameState>::success(MediaTsReadFrameState::EndOfStream);
     }
-    if (result == AVERROR_EXIT || m_interruptState.cancelled()) {
+    if (result == AVERROR_EXIT) {
         return ::media::Result<MediaTsReadFrameState>::failure(
             ::media::ErrorInfo::cancelled("MPEG-TS input read was cancelled"));
     }
@@ -252,7 +275,8 @@ MediaTsInputSession::~MediaTsInputSession()
         ::media::ErrorInfo::ffmpegFailure("failed to probe MPEG-TS input", result));
     auto observerStatus = session->m_observedAvio->status();
     if (!observerStatus) return ::media::Result<std::unique_ptr<MediaTsInputSession>>::failure(observerStatus.error());
-    if (!session->m_evidenceObserver->inventory() || session->m_evidenceObserver->inventory()->programs.empty()) {
+    const auto inventory = session->m_evidenceObserver->inventory();
+    if (!inventory || inventory->programs.empty()) {
         return ::media::Result<std::unique_ptr<MediaTsInputSession>>::failure(
             ::media::ErrorInfo::notInitialized("MPEG-TS PAT/PMT inventory is incomplete"));
     }
@@ -299,14 +323,15 @@ MediaTsInputSession::cloneStreamSnapshots() const
     return ::media::Result<std::vector<FFmpegInputStreamSnapshot>>::success(std::move(result));
 }
 
-const MediaTsProgramInventorySnapshot& MediaTsInputSession::programInventory() const noexcept
+MediaTsProgramInventorySnapshot MediaTsInputSession::programInventory() const
 {
     return *m_evidenceObserver->inventory();
 }
 
-const MediaTsEvidenceTimeline& MediaTsInputSession::evidenceTimeline() const noexcept
+::media::Result<MediaTsEvidenceCheckpoint> MediaTsInputSession::evidenceAtOrBefore(
+    std::uint64_t packetPosition) const
 {
-    return m_evidenceObserver->timeline();
+    return m_evidenceObserver->evidenceAtOrBefore(packetPosition);
 }
 
 ::media::Status MediaTsInputSession::status() const

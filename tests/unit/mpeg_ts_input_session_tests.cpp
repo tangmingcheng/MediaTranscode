@@ -243,7 +243,9 @@ public:
 
 class BlockingByteOpener final : public FFmpegProtocolAvioOpener {
 public:
-    explicit BlockingByteOpener(std::vector<uint8_t> bytes) : m_bytes(std::move(bytes)) {}
+    explicit BlockingByteOpener(std::vector<uint8_t> bytes,
+                                int interruptResult = AVERROR_EXIT)
+        : m_bytes(std::move(bytes)), m_interruptResult(interruptResult) {}
     ::media::Result<AVIOContext*> open(
         const std::string&, AVDictionary**, const AVIOInterruptCB* interrupt) override
     {
@@ -273,12 +275,18 @@ public:
         std::unique_lock lock(m_mutex);
         m_changed.wait(lock, [this] { return m_blocked; });
     }
+    std::size_t readCount()
+    {
+        std::lock_guard lock(m_mutex);
+        return m_readCount;
+    }
     std::size_t closeCount = 0;
 private:
     static int read(void* opaque, uint8_t* destination, int requested)
     {
         auto& self = *static_cast<BlockingByteOpener*>(opaque);
         std::unique_lock lock(self.m_mutex);
+        ++self.m_readCount;
         if (self.m_offset < self.m_bytes.size()) {
             const auto count = std::min<std::size_t>(
                 self.m_bytes.size() - self.m_offset, static_cast<std::size_t>(requested));
@@ -289,7 +297,8 @@ private:
         self.m_blocked = true;
         self.m_changed.notify_all();
         self.m_changed.wait(lock, [&self] { return self.m_interrupted; });
-        return self.m_interrupt.callback(self.m_interrupt.opaque) ? AVERROR_EXIT : AVERROR(EIO);
+        return self.m_interrupt.callback(self.m_interrupt.opaque)
+            ? self.m_interruptResult : AVERROR(EIO);
     }
     std::vector<uint8_t> m_bytes;
     std::size_t m_offset = 0;
@@ -298,6 +307,8 @@ private:
     std::condition_variable m_changed;
     bool m_blocked = false;
     bool m_interrupted = false;
+    std::size_t m_readCount = 0;
+    int m_interruptResult = AVERROR_EXIT;
 };
 
 class ReentrantCloseObserver final : public FFmpegObservedByteSink {
@@ -631,11 +642,56 @@ void testSessionCloseInterruptsBlockedRead(TestContext& ctx)
         }
     });
     opener.waitUntilBlocked();
+    auto inventoryWhileReading = session.value()->programInventory();
+    EXPECT_EQ(ctx, inventoryWhileReading.programs.size(), std::size_t{1});
+    auto evidenceWhileReading = session.value()->evidenceAtOrBefore(188);
+    EXPECT_TRUE(ctx, evidenceWhileReading);
+    const auto readsBeforeSecondReader = opener.readCount();
+    auto secondPacket = ::media::ffmpeg::makePacket();
+    auto secondRead = session.value()->readFrame(*secondPacket);
+    EXPECT_FALSE(ctx, secondRead);
+    if (!secondRead) EXPECT_EQ(ctx, secondRead.error().code, ::media::ErrorCode::InvalidArgument);
+    EXPECT_EQ(ctx, opener.readCount(), readsBeforeSecondReader);
     EXPECT_TRUE(ctx, session.value()->close());
     reader.join();
     EXPECT_FALSE(ctx, read);
     if (!read) EXPECT_EQ(ctx, read.error().code, ::media::ErrorCode::Cancelled);
     EXPECT_EQ(ctx, opener.closeCount, std::size_t{1});
+}
+
+void testInterruptedTerminalResultsAreCancelled(TestContext& ctx)
+{
+    for (const int terminalResult : {AVERROR_EOF, AVERROR(EAGAIN)}) {
+        BlockingByteOpener opener(validMpegTsBytes(64), terminalResult);
+        AVDictionary* demuxOptions = nullptr;
+        av_dict_set(&demuxOptions, "probesize", "512", 0);
+        av_dict_set(&demuxOptions, "analyzeduration", "0", 0);
+        MediaTsInputSessionOptions options;
+        options.protocolUrl = "test://cancel-classification";
+        options.demuxOptions = demuxOptions;
+        options.avioBufferBytes = 64;
+        options.packetStride = 188;
+        options.evidenceCapacity = 128;
+        auto session = MediaTsInputSession::open(options, opener);
+        av_dict_free(&demuxOptions);
+        EXPECT_TRUE(ctx, session);
+        if (!session) continue;
+        ::media::Result<MediaTsReadFrameState> read =
+            ::media::Result<MediaTsReadFrameState>::success(MediaTsReadFrameState::Waiting);
+        std::thread reader([&] {
+            auto packet = ::media::ffmpeg::makePacket();
+            for (;;) {
+                av_packet_unref(packet.get());
+                read = session.value()->readFrame(*packet);
+                if (!read || read.value() != MediaTsReadFrameState::Frame) return;
+            }
+        });
+        opener.waitUntilBlocked();
+        EXPECT_TRUE(ctx, session.value()->close());
+        reader.join();
+        EXPECT_FALSE(ctx, read);
+        if (!read) EXPECT_EQ(ctx, read.error().code, ::media::ErrorCode::Cancelled);
+    }
 }
 
 } // namespace
@@ -655,4 +711,5 @@ void runMpegTsInputSessionTests(TestContext& ctx)
     testPreparedDestructionBeforeTransferClosesOnce(ctx);
     testSessionCloseRejectsNewReads(ctx);
     testSessionCloseInterruptsBlockedRead(ctx);
+    testInterruptedTerminalResultsAreCancelled(ctx);
 }
