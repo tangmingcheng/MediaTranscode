@@ -8,16 +8,20 @@
 
 ## TDD Evidence
 
-- RED: the node target failed because the three requested clock component headers did not exist.
+- Initial RED: the node target failed because the three requested clock component headers did not exist.
+- Review RED: selected identity fields/APIs were absent; negative nearest-epoch mapping selected a distant future epoch; pair and discontinuity transactions lacked regression coverage.
 - GREEN: `cmake --build out/build/x64-debug --config Debug --target media_transcode_node_tests` succeeded.
 - GREEN: `out\build\x64-debug\media_transcode_node_tests.exe` exited with code 0.
 
 ## Review
 
-- Rejected observations do not mutate PCR, PTS, or DTS unwrap state.
+- PCR observation and PTS/DTS pair mapping use candidate-state transactions; rejected operations publish no partial generation, calibration, unwrap, or epoch-offset state.
 - PCR modulus is `(1 << 33) * 300`; PTS/DTS modulus is `1 << 33`.
-- Epoch alignment and source-time conversion use checked signed arithmetic paths.
+- Epoch alignment evaluates representable adjacent candidates with unsigned distance, chooses the earlier epoch on exact half ties, and uses checked signed arithmetic for offsets and source deltas.
 - Timeline eviction retains the predecessor needed by the earliest legal rollback query and fails when capacity cannot be reclaimed safely.
+- PCR, elementary PID, program, PMT, and selected stream identity are immutable inputs; unrelated continuity loss does not invalidate calibration.
+- Across discontinuity generations, a new PCR-only source anchor is clamped to the last published source time and then advances exclusively by PCR delta.
+- Timeline queries return checkpoints by value for clear immutable ownership; checkpoint payload copies remain a future profiling concern.
 
 ## Remaining Concerns
 

@@ -13,6 +13,8 @@ struct MediaTsProgramClockPolicy final {
     std::uint16_t programNumber = 0;
     std::uint16_t pmtPid = 0;
     std::uint16_t pcrPid = 0;
+    std::uint16_t videoPid = 0;
+    std::uint16_t audioPid = 0;
     std::int64_t pcrInterval27Mhz = 0;
     std::int64_t maximumJitter27Mhz = 0;
     std::int64_t maximumGap27Mhz = 0;
@@ -23,6 +25,8 @@ struct MediaTsPcrObservation final {
     std::uint16_t programNumber = 0;
     std::uint16_t pmtPid = 0;
     std::uint16_t pcrPid = 0;
+    std::uint16_t videoPid = 0;
+    std::uint16_t audioPid = 0;
     std::uint64_t pcr27Mhz = 0;
     bool discontinuity = false;
 };
@@ -40,9 +44,12 @@ public:
         std::uint64_t generation);
 
     ::media::Status observe(const MediaTsPcrObservation& observation);
-    ::media::Status observeContinuityLoss(std::uint16_t pid);
+    ::media::Status observePcrContinuityLoss(std::uint16_t pid);
+    ::media::Status observeElementaryContinuityLoss(std::uint16_t pid);
     ::media::Status observeProgramIdentity(std::uint16_t programNumber,
                                            std::uint16_t pmtPid,
+                                           std::uint16_t videoPid,
+                                           std::uint16_t audioPid,
                                            std::uint16_t pcrPid) const;
     bool ready() const noexcept { return m_ready; }
     std::uint64_t generation() const noexcept { return m_generation; }
@@ -52,12 +59,17 @@ private:
     MediaTsProgramClockTracker(MediaTsProgramClockPolicy policy,
                                std::uint64_t generation,
                                MediaTimestampUnwrapper unwrapper) noexcept;
-    void reacquire();
+    ::media::Status observeCandidate(const MediaTsPcrObservation& observation);
+    ::media::Status reacquire();
 
     MediaTsProgramClockPolicy m_policy;
     std::uint64_t m_generation;
     MediaTimestampUnwrapper m_unwrapper;
     std::optional<std::int64_t> m_previousPcr;
+    std::optional<std::uint64_t> m_previousByteOffset;
+    std::optional<std::int64_t> m_generationPcrAnchor;
+    std::optional<MediaRunningTime> m_generationSourceAnchor;
+    std::optional<MediaRunningTime> m_lastPublishedSourceTime;
     std::optional<MediaTsPcrCalibration> m_calibration;
     bool m_ready = false;
 };

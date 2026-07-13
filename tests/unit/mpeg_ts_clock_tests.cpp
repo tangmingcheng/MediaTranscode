@@ -5,6 +5,7 @@
 #include "internal/graph/protocol/mpegts/MediaTsSourceClockMapper.h"
 
 #include <cstdint>
+#include <limits>
 #include <optional>
 
 using namespace media::ffmpeg::graph;
@@ -26,6 +27,8 @@ MediaTsProgramClockPolicy clockPolicy()
         .programNumber = 1,
         .pmtPid = 0x100,
         .pcrPid = 0x101,
+        .videoPid = 0x201,
+        .audioPid = 0x202,
         .pcrInterval27Mhz = 2'700'000,
         .maximumJitter27Mhz = 2'700,
         .maximumGap27Mhz = 8'100'000};
@@ -40,6 +43,8 @@ MediaTsPcrObservation pcr(std::uint64_t raw,
         .programNumber = 1,
         .pmtPid = 0x100,
         .pcrPid = 0x101,
+        .videoPid = 0x201,
+        .audioPid = 0x202,
         .pcr27Mhz = raw,
         .discontinuity = discontinuity};
 }
@@ -78,6 +83,28 @@ void testEvidenceTimeline(TestContext& ctx)
     EXPECT_FALSE(ctx, retained);
 }
 
+void testEvidenceTimelineBoundaries(TestContext& ctx)
+{
+    auto one = MediaTsEvidenceTimeline::create(1, 100);
+    EXPECT_TRUE(ctx, one);
+    EXPECT_TRUE(ctx, one.value().append(checkpoint(100, 4)));
+    EXPECT_TRUE(ctx, one.value().observePacketPosition(200));
+    EXPECT_FALSE(ctx, one.value().append(checkpoint(300, 5)));
+    auto exactBound = one.value().atOrBefore(100);
+    EXPECT_TRUE(ctx, exactBound);
+    EXPECT_FALSE(ctx, one.value().atOrBefore(99));
+
+    auto predecessor = MediaTsEvidenceTimeline::create(3, 100);
+    EXPECT_TRUE(ctx, predecessor);
+    EXPECT_TRUE(ctx, predecessor.value().append(checkpoint(50, 1)));
+    EXPECT_TRUE(ctx, predecessor.value().append(checkpoint(150, 2)));
+    EXPECT_TRUE(ctx, predecessor.value().append(checkpoint(250, 3)));
+    EXPECT_TRUE(ctx, predecessor.value().observePacketPosition(250));
+    auto earliestLegal = predecessor.value().atOrBefore(150);
+    EXPECT_TRUE(ctx, earliestLegal);
+    if (earliestLegal) EXPECT_EQ(ctx, earliestLegal.value().generation, std::uint64_t{2});
+}
+
 void testProgramClockTracker(TestContext& ctx)
 {
     auto created = MediaTsProgramClockTracker::create(clockPolicy(), 7);
@@ -109,12 +136,21 @@ void testProgramClockTracker(TestContext& ctx)
     EXPECT_TRUE(ctx, identity.value().observe(pcr(1'000'000, 0)));
     EXPECT_FALSE(ctx, identity.value().observe(pcr(900'000, 188)));
     EXPECT_TRUE(ctx, identity.value().observe(pcr(3'700'000, 376)));
+    EXPECT_FALSE(ctx, identity.value().observe(pcr(6'400'000, 376)));
+
+    auto wrongElementary = pcr(1, 0);
+    wrongElementary.videoPid = 0x211;
+    EXPECT_FALSE(ctx, identity.value().observe(wrongElementary));
+    EXPECT_TRUE(ctx, identity.value().observePcrContinuityLoss(0x777));
+    EXPECT_TRUE(ctx, identity.value().ready());
+    EXPECT_TRUE(ctx, identity.value().observeElementaryContinuityLoss(0x201));
+    EXPECT_FALSE(ctx, identity.value().ready());
 
     auto events = MediaTsProgramClockTracker::create(clockPolicy(), 3);
     EXPECT_TRUE(ctx, events);
     if (!events) return;
     EXPECT_TRUE(ctx, events.value().observe(pcr(1'000'000, 0)));
-    EXPECT_TRUE(ctx, events.value().observeContinuityLoss(0x101));
+    EXPECT_TRUE(ctx, events.value().observePcrContinuityLoss(0x101));
     EXPECT_FALSE(ctx, events.value().ready());
     EXPECT_EQ(ctx, events.value().generation(), std::uint64_t{4});
     EXPECT_TRUE(ctx, events.value().observe(pcr(2'000'000, 188, true)));
@@ -122,8 +158,46 @@ void testProgramClockTracker(TestContext& ctx)
     EXPECT_FALSE(ctx, events.value().ready());
     EXPECT_TRUE(ctx, events.value().observe(pcr(4'700'000, 376)));
     EXPECT_TRUE(ctx, events.value().ready());
-    EXPECT_FALSE(ctx, events.value().observeProgramIdentity(2, 0x100, 0x101));
-    EXPECT_FALSE(ctx, events.value().observeProgramIdentity(1, 0x100, 0x102));
+    EXPECT_FALSE(ctx, events.value().observeProgramIdentity(2, 0x100, 0x201, 0x202, 0x101));
+    EXPECT_FALSE(ctx, events.value().observeProgramIdentity(1, 0x100, 0x201, 0x202, 0x102));
+
+    auto atomic = MediaTsProgramClockTracker::create(clockPolicy(), 11);
+    EXPECT_TRUE(ctx, atomic);
+    EXPECT_TRUE(ctx, atomic.value().observe(pcr(10'000'000, 0)));
+    EXPECT_TRUE(ctx, atomic.value().observe(pcr(12'700'000, 188)));
+    auto beforeInvalid = atomic.value().calibration();
+    auto invalidDiscontinuity = pcr((std::uint64_t{1} << 33) * 300, 376, true);
+    EXPECT_FALSE(ctx, atomic.value().observe(invalidDiscontinuity));
+    EXPECT_EQ(ctx, atomic.value().generation(), std::uint64_t{11});
+    EXPECT_TRUE(ctx, atomic.value().ready());
+    auto afterInvalid = atomic.value().calibration();
+    EXPECT_TRUE(ctx, afterInvalid);
+    if (beforeInvalid && afterInvalid)
+        EXPECT_EQ(ctx, afterInvalid.value().pcr27Mhz, beforeInvalid.value().pcr27Mhz);
+
+    auto continuous = MediaTsProgramClockTracker::create(clockPolicy(), 20);
+    EXPECT_TRUE(ctx, continuous);
+    EXPECT_TRUE(ctx, continuous.value().observe(pcr(100'000'000, 0)));
+    EXPECT_TRUE(ctx, continuous.value().observe(pcr(102'700'000, 188)));
+    auto oldTime = continuous.value().calibration().value().sourceTime;
+    EXPECT_TRUE(ctx, continuous.value().observe(pcr(0, 376, true)));
+    EXPECT_TRUE(ctx, continuous.value().observe(pcr(2'700'000, 564)));
+    auto resetTime = continuous.value().calibration();
+    EXPECT_TRUE(ctx, resetTime);
+    if (resetTime) EXPECT_TRUE(ctx, resetTime.value().sourceTime >= oldTime);
+    EXPECT_TRUE(ctx, continuous.value().observe(pcr(2'000'000'000, 752, true)));
+    EXPECT_TRUE(ctx, continuous.value().observe(pcr(2'002'700'000, 940)));
+    auto secondGeneration = continuous.value().calibration();
+    EXPECT_TRUE(ctx, secondGeneration);
+    if (resetTime && secondGeneration)
+        EXPECT_TRUE(ctx, secondGeneration.value().sourceTime >= resetTime.value().sourceTime);
+
+    auto exhausted = MediaTsProgramClockTracker::create(
+        clockPolicy(), std::numeric_limits<std::uint64_t>::max());
+    EXPECT_TRUE(ctx, exhausted);
+    EXPECT_TRUE(ctx, exhausted.value().observe(pcr(0, 0)));
+    EXPECT_FALSE(ctx, exhausted.value().observePcrContinuityLoss(0x101));
+    EXPECT_EQ(ctx, exhausted.value().generation(), std::numeric_limits<std::uint64_t>::max());
 }
 
 void testSourceClockMapper(TestContext& ctx)
@@ -170,6 +244,45 @@ void testSourceClockMapper(TestContext& ctx)
 
     auto noAnchor = MediaTsSourceClockMapper::create(std::nullopt);
     EXPECT_FALSE(ctx, noAnchor);
+
+    auto pairAtomic = MediaTsSourceClockMapper::create(anchor);
+    EXPECT_TRUE(ctx, pairAtomic);
+    EXPECT_FALSE(ctx, pairAtomic.value().map(0, std::uint64_t{1} << 33));
+    auto retryPair = pairAtomic.value().map(0, 0);
+    auto freshPair = MediaTsSourceClockMapper::create(anchor).value().map(0, 0);
+    EXPECT_TRUE(ctx, retryPair);
+    EXPECT_TRUE(ctx, freshPair);
+    if (retryPair && freshPair) {
+        EXPECT_EQ(ctx, retryPair.value().presentationTime,
+                  freshPair.value().presentationTime);
+        EXPECT_EQ(ctx, retryPair.value().decodeTime, freshPair.value().decodeTime);
+    }
+
+    MediaTsPcrCalibration halfAnchor{
+        .generation = 1,
+        .pcr27Mhz = ((std::int64_t{1} << 32) * 300),
+        .sourceTime = MediaRunningTime::fromNanoseconds(0)};
+    auto halfTie = MediaTsSourceClockMapper::create(halfAnchor).value().map(0, std::nullopt);
+    EXPECT_TRUE(ctx, halfTie);
+    if (halfTie && halfTie.value().presentationTime)
+        EXPECT_EQ(ctx, halfTie.value().presentationTime->nanoseconds(),
+                  MediaRunningTime::checkedFromTicks(-(std::int64_t{1} << 32), 1, 90'000).value().nanoseconds());
+
+    auto dtsWrapMapper = MediaTsSourceClockMapper::create(anchor);
+    EXPECT_TRUE(ctx, dtsWrapMapper);
+    EXPECT_TRUE(ctx, dtsWrapMapper.value().map(std::nullopt, (std::uint64_t{1} << 33) - 1));
+    EXPECT_TRUE(ctx, dtsWrapMapper.value().map(std::nullopt, 1));
+
+    MediaTsPcrCalibration zeroAnchor{
+        .generation = 2,
+        .pcr27Mhz = 0,
+        .sourceTime = MediaRunningTime::fromNanoseconds(0)};
+    auto negativeEpoch = MediaTsSourceClockMapper::create(zeroAnchor).value().map(
+        (std::uint64_t{1} << 33) - 1, std::nullopt);
+    EXPECT_TRUE(ctx, negativeEpoch);
+    if (negativeEpoch && negativeEpoch.value().presentationTime)
+        EXPECT_EQ(ctx, negativeEpoch.value().presentationTime->nanoseconds(),
+                  std::int64_t{-11'111});
 }
 
 } // namespace
@@ -177,6 +290,7 @@ void testSourceClockMapper(TestContext& ctx)
 void runMpegTsClockTests(TestContext& ctx)
 {
     testEvidenceTimeline(ctx);
+    testEvidenceTimelineBoundaries(ctx);
     testProgramClockTracker(ctx);
     testSourceClockMapper(ctx);
 }

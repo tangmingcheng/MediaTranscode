@@ -27,11 +27,14 @@ private:
                              MediaTimestampUnwrapper dtsUnwrapper) noexcept;
     ::media::Result<std::optional<MediaRunningTime>> mapOne(
         std::optional<std::uint64_t> raw,
-        MediaTimestampUnwrapper& unwrapper);
+        MediaTimestampUnwrapper& unwrapper,
+        std::optional<std::int64_t>& epochOffset);
 
     MediaTsPcrCalibration m_calibration;
     MediaTimestampUnwrapper m_ptsUnwrapper;
     MediaTimestampUnwrapper m_dtsUnwrapper;
+    std::optional<std::int64_t> m_ptsEpochOffset;
+    std::optional<std::int64_t> m_dtsEpochOffset;
 };
 
 } // namespace media::ffmpeg::graph
