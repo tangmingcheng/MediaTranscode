@@ -28,7 +28,7 @@ ctest --test-dir out/build/x64-debug -C Debug --output-on-failure -R "media_tran
 
 - FFmpeg read-ahead cannot reorder clock observation: only ordered raw evidence advances the tracker.
 - Duplicate evidence from incremental snapshots is ignored only after the incoming range itself is proven strictly ordered.
-- A journal beginning after an earlier discontinuity seeds the tracker from the retained evidence generation.
+- Projection starts from an explicit source-generation value and requires complete raw transport history from the configured raw-generation origin; a retained journal missing that origin fails instead of seeding source state from raw generation.
 - Projection retention uses the planner-provided packet-position regression bound and keeps the predecessor required by the earliest legal rollback.
 
 ## Remaining Risk
