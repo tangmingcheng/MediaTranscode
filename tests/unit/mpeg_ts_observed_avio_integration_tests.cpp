@@ -213,6 +213,9 @@ MediaRealtimeRtpTranscodeRequest integrationRequest(std::uint16_t inputPort,
     request.parameters.execution.disableHardware = true;
     request.parameters.queues.metadata = 1;
     request.parameters.queues.packet = 256;
+    request.avSyncStartup.maximumVideoUnitBytes = 4 * 1024 * 1024;
+    request.avSyncStartup.maximumAudioUnitBytes = 1024 * 1024;
+    request.avSyncStartup.maximumGap = MediaRunningTime::fromNanoseconds(40'000'000);
     request.parameters.queues.frame = 128;
     request.parameters.queues.mux = 256;
     request.parameters.video.codecName = "h264";

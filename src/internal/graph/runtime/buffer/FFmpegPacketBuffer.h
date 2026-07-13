@@ -16,6 +16,9 @@ public:
                        std::optional<MediaPacketSourceTiming> sourceTiming);
 
     MediaBufferType type() const noexcept override;
+    // Counts packet payload plus every FFmpeg side-data payload. Object allocator
+    // overhead is owned by the runtime pool budget rather than this payload budget.
+    std::optional<std::uint64_t> payloadFootprintBytes() const noexcept override;
 
     AVPacket* packet() noexcept;
     const AVPacket* packet() const noexcept;

@@ -105,6 +105,9 @@ void rejectUnknownRealtimeArgs(int argc, char** argv)
         "--max-duration",
         "--progress-timeout-ms",
         "--poll-interval-ms",
+        "--startup-max-video-unit-bytes",
+        "--startup-max-audio-unit-bytes",
+        "--startup-max-gap-ms",
     };
     valueArgs.insert(valueArgs.end(), realtimeValueArgs.begin(), realtimeValueArgs.end());
 
@@ -177,6 +180,18 @@ MediaRealtimeRtpTranscodeRequest parseRealtimeOptions(int argc, char** argv)
     parseRealtimeOutputOptions(argc, argv, options.output);
     parseCommonVideoTranscodeOptions(argc, argv, options.parameters);
     parseAudioRtpOptionsIfNeeded(argc, argv, options);
+    if (options.parameters.execution.includeAudio) {
+        options.avSyncStartup.maximumVideoUnitBytes = requiredSizeArg(
+            argc, argv, "--startup-max-video-unit-bytes");
+        options.avSyncStartup.maximumAudioUnitBytes = requiredSizeArg(
+            argc, argv, "--startup-max-audio-unit-bytes");
+        const int maximumGapMs = requiredIntArg(argc, argv, "--startup-max-gap-ms");
+        if (maximumGapMs <= 0) {
+            throw std::invalid_argument("startup maximum gap must be positive");
+        }
+        options.avSyncStartup.maximumGap = MediaRunningTime::fromNanoseconds(
+            static_cast<std::int64_t>(maximumGapMs) * 1'000'000);
+    }
     return options;
 }
 
@@ -265,7 +280,7 @@ int runRealtimeVideoCli(int argc, char** argv)
 
     const bool helpRequested = hasArg(argc, argv, "--help") || hasArg(argc, argv, "-h");
     if (argc < 5 || helpRequested) {
-        std::cout << "Usage: media_transcode_realtime_video_cli --input-type rtsp|rtp|mpegts-udp --input-layout session|separate|mpegts --output-layout separate|mpegts --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --max-duration 15 [options]\n";
+        std::cout << "Usage: media_transcode_realtime_video_cli --input-type rtsp|rtp|mpegts-udp --input-layout session|separate|mpegts --output-layout separate|mpegts --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --startup-max-video-unit-bytes 4194304 --startup-max-audio-unit-bytes 1048576 --startup-max-gap-ms 40 --max-duration 15 [options]\n";
         return helpRequested ? 0 : 2;
     }
 

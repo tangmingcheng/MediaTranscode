@@ -18,13 +18,23 @@ enum class MediaAvSyncErrorCode {
     GenerationMismatch,
     InvalidGenerationTransition,
     InvalidDuration,
-    TimeOverflow
+    TimeOverflow,
+    StartupTimeout,
+    KeyFrameTimeout,
+    EofBeforeRelease,
+    MissingCanonicalTime,
+    AudioTrimLimitExceeded,
+    StartupCapacityExceeded,
+    StartupInvalidTransition,
+    StartupAborted,
+    StartupUpstreamError
 };
 
 enum class MediaAvSyncErrorState {
     Configuring,
     Mapping,
-    Resetting
+    Resetting,
+    Startup
 };
 
 class MediaAvSyncError final {
@@ -92,7 +102,9 @@ public:
 
     ::media::ErrorInfo toErrorInfo() const
     {
-        std::string message = "A/V sync operation=" + m_operation;
+        std::string message = "A/V sync code=" +
+                              std::to_string(static_cast<int>(m_code));
+        message += " operation=" + m_operation;
         message += " topology=" + std::to_string(static_cast<int>(m_topology));
         message += " state=" + std::to_string(static_cast<int>(m_state));
         message += " expected_stream=" + m_expectedStreamIdentity;
@@ -136,5 +148,10 @@ private:
     std::int64_t m_maximumRunningTimeNs;
     std::string m_detail;
 };
+
+template <typename T>
+using MediaAvSyncResult = ::media::Result<T, MediaAvSyncError>;
+
+using MediaAvSyncStatus = MediaAvSyncResult<void>;
 
 } // namespace media::ffmpeg::graph

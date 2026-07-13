@@ -7,6 +7,7 @@
 #include "internal/graph/model/MediaTimeDescriptor.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace media::ffmpeg::graph {
@@ -47,6 +48,7 @@ public:
     MediaBuffer& operator=(const MediaBuffer&) = delete;
 
     virtual MediaBufferType type() const noexcept = 0;
+    virtual std::optional<std::uint64_t> payloadFootprintBytes() const noexcept;
 
     MediaStreamKind streamKind() const noexcept;
     MediaPayloadKind payloadKind() const noexcept;

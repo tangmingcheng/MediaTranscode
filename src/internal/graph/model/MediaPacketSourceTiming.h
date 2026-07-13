@@ -6,9 +6,10 @@
 namespace media::ffmpeg::graph {
 
 enum class MediaSourceClockReadiness {
-    Acquiring,
-    Locked,
-    ReacquireRequired
+    Acquiring = 0,
+    Locked = 1,
+    ReacquireRequired = 2,
+    Degraded = 3
 };
 
 struct MediaPacketSourceTiming final {

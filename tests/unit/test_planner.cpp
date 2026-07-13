@@ -170,6 +170,10 @@ MediaRealtimeRtpTranscodeRequest avSyncRtpRequest()
     request.input.audioRtp.clockRate = 48000;
     request.output.streamLayout = RealtimeOutputStreamLayout::SeparateStreams;
     request.parameters.execution.includeAudio = true;
+    request.parameters.queues.packet = 64;
+    request.avSyncStartup.maximumVideoUnitBytes = 4 * 1024 * 1024;
+    request.avSyncStartup.maximumAudioUnitBytes = 1024 * 1024;
+    request.avSyncStartup.maximumGap = MediaRunningTime::fromNanoseconds(40'000'000);
     return request;
 }
 
@@ -181,6 +185,10 @@ MediaRealtimeRtpTranscodeRequest avSyncTsRequest()
     request.input.streamLayout = RealtimeInputStreamLayout::MuxedTransportStream;
     request.output.streamLayout = RealtimeOutputStreamLayout::MuxedTransportStream;
     request.parameters.execution.includeAudio = true;
+    request.parameters.queues.packet = 64;
+    request.avSyncStartup.maximumVideoUnitBytes = 4 * 1024 * 1024;
+    request.avSyncStartup.maximumAudioUnitBytes = 1024 * 1024;
+    request.avSyncStartup.maximumGap = MediaRunningTime::fromNanoseconds(40'000'000);
     return request;
 }
 
@@ -207,6 +215,10 @@ void testAvSyncPlannerBuildsCompleteRtpContract(TestContext& ctx)
     EXPECT_TRUE(ctx, *plan.rtp->output.useSharedNtpEpoch);
     EXPECT_TRUE(ctx, plan.rtp->output.senderReportIntervalNs->nanoseconds() > 0);
     EXPECT_TRUE(ctx, MediaAvSyncPlanValidator::validate(plan));
+
+    auto excessiveCapacity = avSyncRtpRequest();
+    excessiveCapacity.parameters.queues.packet = 257;
+    EXPECT_FALSE(ctx, MediaAvSyncPlanner::plan(excessiveCapacity));
 }
 
 void testRawRtpInputPlannerProducesCompleteTransportPolicy(TestContext& ctx)
@@ -355,6 +367,15 @@ void testAvSyncValidatorRejectsMissingAndInconsistentFields(TestContext& ctx)
     EXPECT_MISSING(startup.maximumAudioTrimNs);
     EXPECT_MISSING(startup.maximumInitialSkewNs);
     EXPECT_MISSING(startup.outputLeadNs);
+    EXPECT_MISSING(startup.videoCapacity);
+    EXPECT_MISSING(startup.audioCapacity);
+    EXPECT_MISSING(startup.videoByteCapacity);
+    EXPECT_MISSING(startup.audioByteCapacity);
+    EXPECT_MISSING(startup.maximumVideoUnitBytes);
+    EXPECT_MISSING(startup.maximumAudioUnitBytes);
+    EXPECT_MISSING(startup.videoIdentity);
+    EXPECT_MISSING(startup.audioIdentity);
+    EXPECT_MISSING(startup.allowDegradedClock);
     EXPECT_MISSING(audioServo.deadbandNs);
     EXPECT_MISSING(audioServo.shortControlWindowNs);
     EXPECT_MISSING(audioServo.longControlWindowNs);
@@ -503,6 +524,27 @@ void testAvSyncValidatorRejectsIsolatedNumericAndOrderingInvariants(TestContext&
     rejectRtp("startup wait positive", [](auto& p) { p.startup.maximumWaitNs = avSyncTime(0); });
     rejectRtp("startup preroll positive", [](auto& p) { p.startup.prerollNs = avSyncTime(-1); });
     rejectRtp("startup skew within output lead", [](auto& p) { p.startup.maximumInitialSkewNs = *p.startup.outputLeadNs; });
+    rejectRtp("startup video capacity positive", [](auto& p) { p.startup.videoCapacity = 0; });
+    rejectRtp("startup audio capacity positive", [](auto& p) { p.startup.audioCapacity = 0; });
+    rejectRtp("startup capacity representable", [](auto& p) { p.startup.videoCapacity = std::numeric_limits<std::size_t>::max(); });
+    rejectRtp("startup video capacity bounded", [](auto& p) {
+        p.startup.videoCapacity = 257;
+        p.startup.videoByteCapacity = 257 * *p.startup.maximumVideoUnitBytes;
+    });
+    rejectRtp("startup audio capacity bounded", [](auto& p) {
+        p.startup.audioCapacity = 257;
+        p.startup.audioByteCapacity = 257 * *p.startup.maximumAudioUnitBytes;
+    });
+    rejectRtp("startup byte capacity matches units", [](auto& p) { ++*p.startup.videoByteCapacity; });
+    rejectRtp("startup unit byte maximum positive", [](auto& p) { p.startup.maximumVideoUnitBytes = 0; });
+    rejectRtp("startup byte capacity serializable", [](auto& p) {
+        p.startup.maximumVideoUnitBytes = static_cast<std::uint64_t>(
+            std::numeric_limits<std::int64_t>::max()) + 1;
+        p.startup.videoByteCapacity = p.startup.maximumVideoUnitBytes;
+        p.startup.videoCapacity = 1;
+    });
+    rejectRtp("startup degraded clock denied", [](auto& p) { p.startup.allowDegradedClock = true; });
+    rejectRtp("startup identities distinct", [](auto& p) { p.startup.audioIdentity = p.startup.videoIdentity; });
     rejectRtp("audio deadband positive", [](auto& p) { p.audioServo.deadbandNs = avSyncTime(0); });
     rejectRtp("audio filter after deadband", [](auto& p) { p.audioServo.shortControlWindowNs = *p.audioServo.deadbandNs; });
     rejectRtp("audio estimator after filter", [](auto& p) { p.audioServo.longControlWindowNs = *p.audioServo.shortControlWindowNs; });

@@ -4,6 +4,7 @@
 #include "internal/graph/time/MediaRunningTime.h"
 
 #include <cstdint>
+#include <cstddef>
 #include <optional>
 #include <string>
 
@@ -26,7 +27,17 @@ struct MediaAvSyncStartupPolicy {
     std::optional<MediaRunningTime> keyFrameWaitNs;
     std::optional<MediaRunningTime> maximumAudioTrimNs;
     std::optional<MediaRunningTime> maximumInitialSkewNs;
+    std::optional<MediaRunningTime> maximumGapNs;
     std::optional<MediaRunningTime> outputLeadNs;
+    std::optional<std::size_t> videoCapacity;
+    std::optional<std::size_t> audioCapacity;
+    std::optional<std::uint64_t> videoByteCapacity;
+    std::optional<std::uint64_t> audioByteCapacity;
+    std::optional<std::uint64_t> maximumVideoUnitBytes;
+    std::optional<std::uint64_t> maximumAudioUnitBytes;
+    std::optional<std::string> videoIdentity;
+    std::optional<std::string> audioIdentity;
+    std::optional<bool> allowDegradedClock;
 };
 
 struct MediaAvSyncAudioServoPolicy {

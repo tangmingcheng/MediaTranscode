@@ -393,6 +393,9 @@ MediaRealtimeRtpTranscodeRequest validRealtimeOptions()
     options.parameters.execution.disableHardware = true;
     options.parameters.queues.metadata = 1;
     options.parameters.queues.packet = 256;
+    options.avSyncStartup.maximumVideoUnitBytes = 4 * 1024 * 1024;
+    options.avSyncStartup.maximumAudioUnitBytes = 1024 * 1024;
+    options.avSyncStartup.maximumGap = MediaRunningTime::fromNanoseconds(40'000'000);
     options.parameters.queues.frame = 128;
     options.parameters.queues.mux = 256;
     options.parameters.video.codecName = "h264";

@@ -1,6 +1,8 @@
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
+#include "internal/graph/sync/startup/MediaAvStartupLimits.h"
 
 #include <optional>
+#include <limits>
 #include <string>
 
 namespace media::ffmpeg::graph {
@@ -29,6 +31,18 @@ bool presentText(const std::optional<std::string>& value)
     return value && !value->empty();
 }
 
+bool validByteCapacity(const std::optional<std::size_t>& units,
+                       const std::optional<std::uint64_t>& maximumUnitBytes,
+                       const std::optional<std::uint64_t>& bytes)
+{
+    constexpr auto MaximumSerialized = static_cast<std::uint64_t>(
+        std::numeric_limits<std::int64_t>::max());
+    return positive(units) && positive(maximumUnitBytes) && positive(bytes) &&
+           *maximumUnitBytes <= MaximumSerialized && *bytes <= MaximumSerialized &&
+           *units <= std::numeric_limits<std::uint64_t>::max() / *maximumUnitBytes &&
+           *bytes == static_cast<std::uint64_t>(*units) * *maximumUnitBytes;
+}
+
 ::media::Status validateShared(const MediaAvSyncPlan& plan)
 {
     if (!plan.topology) return invalid("topology");
@@ -48,10 +62,22 @@ bool presentText(const std::optional<std::string>& value)
         !positive(startup.maximumWaitNs) || !positive(startup.prerollNs) ||
         !positive(startup.keyFrameWaitNs) || !positive(startup.maximumAudioTrimNs) ||
         !positive(startup.maximumInitialSkewNs) || !positive(startup.outputLeadNs) ||
+        !positive(startup.maximumGapNs) ||
         *startup.maximumAudioTrimNs > *startup.prerollNs ||
+        *startup.maximumGapNs >= *startup.prerollNs ||
         *startup.maximumInitialSkewNs >= *startup.outputLeadNs ||
         *startup.prerollNs >= *startup.keyFrameWaitNs ||
-        *startup.keyFrameWaitNs > *startup.maximumWaitNs) {
+        *startup.keyFrameWaitNs > *startup.maximumWaitNs ||
+        !positive(startup.videoCapacity) || !positive(startup.audioCapacity) ||
+        !validByteCapacity(startup.videoCapacity, startup.maximumVideoUnitBytes,
+                           startup.videoByteCapacity) ||
+        !validByteCapacity(startup.audioCapacity, startup.maximumAudioUnitBytes,
+                           startup.audioByteCapacity) ||
+        *startup.videoCapacity > MediaAvStartupMaximumUnitCapacity ||
+        *startup.audioCapacity > MediaAvStartupMaximumUnitCapacity ||
+        !presentText(startup.videoIdentity) || !presentText(startup.audioIdentity) ||
+        *startup.videoIdentity == *startup.audioIdentity ||
+        !startup.allowDegradedClock || *startup.allowDegradedClock) {
         return invalid("ordered startup thresholds");
     }
 
