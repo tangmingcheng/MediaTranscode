@@ -276,7 +276,7 @@ void VideoEncodeNode::resetRuntimeState() noexcept
             encodeLog(MediaGraphDiagnosticLevel::Flow, out.str());
         }
 
-        auto buffer = FFmpegBufferFactory::wrapPacket(std::move(packet), MediaStreamKind::Video);
+        auto buffer = FFmpegBufferFactory::wrapPacket(std::move(packet), MediaStreamKind::Video, std::nullopt);
         if (!buffer) {
             return ::media::Result<bool>::failure(buffer.error());
         }

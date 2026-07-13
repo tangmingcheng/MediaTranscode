@@ -108,6 +108,13 @@ public:
         return m_timeline.atOrBefore(packetPosition);
     }
 
+    ::media::Result<std::vector<MediaTsEvidenceCheckpoint>> evidenceSnapshotAfter(
+        std::optional<std::uint64_t> exclusiveOffset) const
+    {
+        std::lock_guard lock(m_mutex);
+        return m_timeline.snapshotAfter(exclusiveOffset);
+    }
+
 private:
     explicit EvidenceObserver(MediaTsEvidenceTimeline timeline)
         : m_timeline(std::move(timeline)) {}
@@ -352,6 +359,13 @@ MediaTsProgramInventorySnapshot MediaTsInputSession::programInventory() const
     std::uint64_t packetPosition) const
 {
     return m_evidenceObserver->evidenceAtOrBefore(packetPosition);
+}
+
+::media::Result<std::vector<MediaTsEvidenceCheckpoint>>
+MediaTsInputSession::evidenceSnapshotAfter(
+    std::optional<std::uint64_t> exclusiveOffset) const
+{
+    return m_evidenceObserver->evidenceSnapshotAfter(exclusiveOffset);
 }
 
 ::media::Status MediaTsInputSession::status() const

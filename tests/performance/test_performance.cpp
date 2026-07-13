@@ -20,7 +20,7 @@ int main()
     auto packet = ::media::ffmpeg::makePacket();
     EXPECT_TRUE(ctx, packet != nullptr);
     if (!packet) return 1;
-    auto buffer = FFmpegBufferFactory::wrapPacket(std::move(packet), MediaStreamKind::Video);
+    auto buffer = FFmpegBufferFactory::wrapPacket(std::move(packet), MediaStreamKind::Video, std::nullopt);
     EXPECT_TRUE(ctx, buffer);
     if (!buffer) return 1;
 

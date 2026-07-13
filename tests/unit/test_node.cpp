@@ -591,7 +591,7 @@ void testAudioEncodeFixedFrameStateMachine(TestContext& ctx)
     EXPECT_TRUE(ctx, blockerPacket != nullptr);
     if (!blockerPacket) return;
     EXPECT_TRUE(ctx, av_new_packet(blockerPacket.get(), 1) >= 0);
-    auto blocker = FFmpegBufferFactory::wrapPacket(std::move(blockerPacket), MediaStreamKind::Audio);
+    auto blocker = FFmpegBufferFactory::wrapPacket(std::move(blockerPacket), MediaStreamKind::Audio, std::nullopt);
     EXPECT_TRUE(ctx, blocker);
     if (!blocker) return;
     EXPECT_TRUE(ctx, packetOutput->push(blocker.value()));

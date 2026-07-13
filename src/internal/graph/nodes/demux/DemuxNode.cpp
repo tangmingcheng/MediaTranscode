@@ -81,7 +81,7 @@ MediaNodeKind DemuxNode::staticKind() noexcept
             m_formatContext->streams[packet->stream_index]->codecpar->codec_type);
     }
 
-    auto buffer = FFmpegBufferFactory::wrapPacket(std::move(packet), streamKind);
+    auto buffer = FFmpegBufferFactory::wrapPacket(std::move(packet), streamKind, std::nullopt);
     if (!buffer) {
         return ::media::Result<MediaNodeProcessResult>::failure(buffer.error());
     }

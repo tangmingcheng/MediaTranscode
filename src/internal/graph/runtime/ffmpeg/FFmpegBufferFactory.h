@@ -34,7 +34,8 @@ public:
     static ::media::Result<MediaBufferRef> cloneCodecParameters(const FFmpegInputStreamSnapshot& stream);
 
     static ::media::Result<MediaBufferRef> wrapPacket(::media::ffmpeg::PacketPtr packet,
-                                                       MediaStreamKind streamKind = MediaStreamKind::Unknown);
+                                                       MediaStreamKind streamKind,
+                                                       std::optional<MediaPacketSourceTiming> sourceTiming);
     static ::media::Result<MediaBufferRef> clonePacket(const AVPacket* packet,
                                                        MediaStreamKind streamKind = MediaStreamKind::Unknown);
 

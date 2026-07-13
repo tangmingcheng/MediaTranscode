@@ -671,6 +671,13 @@ void testSessionCloseInterruptsBlockedRead(TestContext& ctx)
     EXPECT_EQ(ctx, inventoryWhileReading.programs.size(), std::size_t{1});
     auto evidenceWhileReading = session.value()->evidenceAtOrBefore(188);
     EXPECT_TRUE(ctx, evidenceWhileReading);
+    auto evidenceSnapshot = session.value()->evidenceSnapshotAfter(std::nullopt);
+    EXPECT_TRUE(ctx, evidenceSnapshot);
+    EXPECT_FALSE(ctx, evidenceSnapshot.value().empty());
+    auto noNewEvidence = session.value()->evidenceSnapshotAfter(
+        evidenceSnapshot.value().back().byteOffset);
+    EXPECT_TRUE(ctx, noNewEvidence);
+    EXPECT_TRUE(ctx, noNewEvidence.value().empty());
     const auto readsBeforeSecondReader = opener.readCount();
     auto secondPacket = ::media::ffmpeg::makePacket();
     auto secondRead = session.value()->readFrame(*secondPacket);

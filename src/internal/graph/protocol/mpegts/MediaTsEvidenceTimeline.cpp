@@ -78,6 +78,21 @@ MediaTsEvidenceTimeline::MediaTsEvidenceTimeline(
     return ::media::Status::success();
 }
 
+::media::Result<std::vector<MediaTsEvidenceCheckpoint>>
+MediaTsEvidenceTimeline::snapshotAfter(
+    std::optional<std::uint64_t> exclusiveOffset) const
+{
+    const auto first = exclusiveOffset
+        ? std::upper_bound(
+              m_checkpoints.begin(), m_checkpoints.end(), *exclusiveOffset,
+              [](std::uint64_t offset, const MediaTsEvidenceCheckpoint& item) {
+                  return offset < item.byteOffset;
+              })
+        : m_checkpoints.begin();
+    return ::media::Result<std::vector<MediaTsEvidenceCheckpoint>>::success(
+        std::vector<MediaTsEvidenceCheckpoint>(first, m_checkpoints.end()));
+}
+
 void MediaTsEvidenceTimeline::evictSafeCheckpoints()
 {
     if (!m_highWatermark || *m_highWatermark <= m_maximumPositionRegressionBytes) return;

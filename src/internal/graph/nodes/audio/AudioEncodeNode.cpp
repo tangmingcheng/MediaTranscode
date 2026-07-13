@@ -221,7 +221,7 @@ void AudioEncodeNode::resetRuntimeState() noexcept
             return ::media::Result<bool>::failure(FFmpegGraphError::fromCode(ret, "avcodec_receive_packet(audio)"));
         }
 
-        auto buffer = FFmpegBufferFactory::wrapPacket(std::move(packet), MediaStreamKind::Audio);
+        auto buffer = FFmpegBufferFactory::wrapPacket(std::move(packet), MediaStreamKind::Audio, std::nullopt);
         if (!buffer) {
             return ::media::Result<bool>::failure(buffer.error());
         }

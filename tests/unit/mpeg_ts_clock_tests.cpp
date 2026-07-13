@@ -3,6 +3,9 @@
 #include "internal/graph/protocol/mpegts/MediaTsEvidenceTimeline.h"
 #include "internal/graph/protocol/mpegts/MediaTsProgramClockTracker.h"
 #include "internal/graph/protocol/mpegts/MediaTsSourceClockMapper.h"
+#include "internal/graph/protocol/mpegts/MediaTsClockProjection.h"
+#include "internal/graph/model/MediaPacketSourceTiming.h"
+#include "internal/graph/runtime/buffer/FFmpegPacketBuffer.h"
 
 #include <cstdint>
 #include <limits>
@@ -19,6 +22,25 @@ MediaTsEvidenceCheckpoint checkpoint(std::uint64_t offset, std::uint64_t generat
     value.byteOffset = offset;
     value.pcrObservation.reset();
     value.generation = generation;
+    return value;
+}
+
+MediaTsEvidenceCheckpoint clockEvidence(std::uint64_t offset,
+                                        std::uint64_t rawPcr,
+                                        bool discontinuity = false)
+{
+    MediaTsEvidenceCheckpoint value = checkpoint(offset);
+    value.inventory.programs.push_back(MediaTsProgramInfo{
+        .programNumber = 1,
+        .pmtPid = 0x100,
+        .pmtVersion = 1,
+        .pcrPid = 0x101,
+        .elementaryStreams = {{0x201, 0x1b}, {0x202, 0x0f}}});
+    value.pcrObservation = MediaTsRawPcrEvidence{
+        .byteOffset = offset,
+        .pid = 0x101,
+        .pcr27Mhz = rawPcr,
+        .discontinuity = discontinuity};
     return value;
 }
 
@@ -104,6 +126,59 @@ void testEvidenceTimelineBoundaries(TestContext& ctx)
     auto earliestLegal = predecessor.value().atOrBefore(150);
     EXPECT_TRUE(ctx, earliestLegal);
     if (earliestLegal) EXPECT_EQ(ctx, earliestLegal.value().generation, std::uint64_t{2});
+}
+
+void testEvidenceOrderedRangeAndClockProjection(TestContext& ctx)
+{
+    auto timeline = MediaTsEvidenceTimeline::create(5, 400).value();
+    EXPECT_TRUE(ctx, timeline.append(clockEvidence(100, 0)));
+    EXPECT_TRUE(ctx, timeline.append(clockEvidence(200, 2'700'000)));
+    EXPECT_TRUE(ctx, timeline.append(clockEvidence(300, 5'400'000)));
+    auto initial = timeline.snapshotAfter(std::nullopt);
+    EXPECT_TRUE(ctx, initial);
+    EXPECT_EQ(ctx, initial.value().size(), std::size_t{3});
+    auto incremental = timeline.snapshotAfter(200);
+    EXPECT_TRUE(ctx, incremental);
+    EXPECT_EQ(ctx, incremental.value().size(), std::size_t{1});
+    EXPECT_EQ(ctx, incremental.value().front().byteOffset, std::uint64_t{300});
+
+    auto projection = MediaTsClockProjection::create(clockPolicy(), 5, 400);
+    EXPECT_TRUE(ctx, projection);
+    EXPECT_TRUE(ctx, projection.value().replay(initial.value()));
+    auto at300 = projection.value().atOrBefore(300);
+    auto rollback = projection.value().atOrBefore(200);
+    EXPECT_TRUE(ctx, at300);
+    EXPECT_TRUE(ctx, rollback);
+    EXPECT_EQ(ctx, at300.value().calibration->pcr27Mhz, std::int64_t{5'400'000});
+    EXPECT_EQ(ctx, rollback.value().calibration->pcr27Mhz, std::int64_t{2'700'000});
+
+    const auto generationBefore = at300.value().generation;
+    std::vector<MediaTsEvidenceCheckpoint> next{
+        clockEvidence(300, 5'400'000),
+        clockEvidence(400, 0, true),
+        clockEvidence(500, 2'700'000)};
+    EXPECT_TRUE(ctx, projection.value().replay(next));
+    auto afterDiscontinuity = projection.value().atOrBefore(500);
+    EXPECT_TRUE(ctx, afterDiscontinuity);
+    EXPECT_TRUE(ctx, afterDiscontinuity.value().generation > generationBefore);
+    EXPECT_EQ(ctx, projection.value().lastReplayedOffset(), std::optional<std::uint64_t>{500});
+    auto rollbackAgain = projection.value().atOrBefore(200);
+    EXPECT_TRUE(ctx, rollbackAgain);
+    EXPECT_EQ(ctx, rollbackAgain.value().generation, rollback.value().generation);
+
+    EXPECT_TRUE(ctx, projection.value().observePacketPosition(500));
+    auto outOfOrder = MediaTsClockProjection::create(clockPolicy(), 5, 400).value();
+    EXPECT_FALSE(ctx, outOfOrder.replay({clockEvidence(200, 0), clockEvidence(100, 2'700'000)}));
+    auto overflow = MediaTsClockProjection::create(clockPolicy(), 1, 400).value();
+    EXPECT_FALSE(ctx, overflow.replay({clockEvidence(100, 0), clockEvidence(200, 2'700'000)}));
+    auto wrongIdentity = clockEvidence(100, 0);
+    wrongIdentity.inventory.programs.front().pcrPid = 0x102;
+    EXPECT_FALSE(ctx, MediaTsClockProjection::create(clockPolicy(), 2, 400).value().replay({wrongIdentity}));
+    auto retainedGeneration = clockEvidence(100, 0);
+    retainedGeneration.generation = 7;
+    auto seeded = MediaTsClockProjection::create(clockPolicy(), 2, 400).value();
+    EXPECT_TRUE(ctx, seeded.replay({retainedGeneration}));
+    EXPECT_EQ(ctx, seeded.atOrBefore(100).value().generation, std::uint64_t{7});
 }
 
 void testProgramClockTracker(TestContext& ctx)
@@ -290,8 +365,22 @@ void testSourceClockMapper(TestContext& ctx)
 
 void runMpegTsClockTests(TestContext& ctx)
 {
+    auto packet = ::media::ffmpeg::makePacket();
+    packet->pts = 90000;
+    packet->dts = 45000;
+    const MediaPacketSourceTiming sourceTiming{
+        .presentationNs = 1'000'000'000,
+        .decodeNs = 500'000'000,
+        .generation = 7};
+    FFmpegPacketBuffer timedPacket(std::move(packet), sourceTiming);
+    EXPECT_TRUE(ctx, timedPacket.sourceTiming().has_value());
+    EXPECT_EQ(ctx, timedPacket.sourceTiming()->generation, std::uint64_t{7});
+    EXPECT_EQ(ctx, timedPacket.packet()->pts, std::int64_t{90000});
+    EXPECT_EQ(ctx, timedPacket.packet()->dts, std::int64_t{45000});
+
     testEvidenceTimeline(ctx);
     testEvidenceTimelineBoundaries(ctx);
+    testEvidenceOrderedRangeAndClockProjection(ctx);
     testProgramClockTracker(ctx);
     testSourceClockMapper(ctx);
 }

@@ -52,6 +52,8 @@ public:
     MediaTsProgramInventorySnapshot programInventory() const;
     ::media::Result<MediaTsEvidenceCheckpoint> evidenceAtOrBefore(
         std::uint64_t packetPosition) const;
+    ::media::Result<std::vector<MediaTsEvidenceCheckpoint>> evidenceSnapshotAfter(
+        std::optional<std::uint64_t> exclusiveOffset) const;
     FFmpegAvioInterruptState& interruptState() noexcept { return m_interruptState; }
     ::media::Status status() const;
 

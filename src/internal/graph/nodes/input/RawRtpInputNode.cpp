@@ -261,7 +261,7 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
         auto depacketized = m_depacketizer->push(packet);
         if (!depacketized) return ::media::Status::failure(depacketized.error());
         for (MediaRtpAccessUnit& unit : depacketized.value().accessUnits) {
-            auto buffer = FFmpegBufferFactory::wrapPacket(std::move(unit.packet), m_config.streamKind);
+            auto buffer = FFmpegBufferFactory::wrapPacket(std::move(unit.packet), m_config.streamKind, std::nullopt);
             if (!buffer) return ::media::Status::failure(buffer.error());
             buffer.value()->setTimeDescriptor(MediaTimeDescriptor{unit.timeBase});
             MediaFormatDescriptor format;

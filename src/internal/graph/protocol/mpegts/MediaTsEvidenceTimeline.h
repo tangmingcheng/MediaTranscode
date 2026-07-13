@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <deque>
 #include <optional>
+#include <vector>
 
 namespace media::ffmpeg::graph {
 
@@ -37,6 +38,8 @@ public:
     ::media::Result<MediaTsEvidenceCheckpoint> atOrBefore(
         std::uint64_t packetPosition) const;
     ::media::Status observePacketPosition(std::uint64_t packetPosition);
+    ::media::Result<std::vector<MediaTsEvidenceCheckpoint>> snapshotAfter(
+        std::optional<std::uint64_t> exclusiveOffset) const;
 
 private:
     MediaTsEvidenceTimeline(std::size_t capacity,

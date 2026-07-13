@@ -133,14 +133,15 @@ namespace media::ffmpeg::graph {
 }
 
 ::media::Result<MediaBufferRef> FFmpegBufferFactory::wrapPacket(::media::ffmpeg::PacketPtr packet,
-                                                                 MediaStreamKind streamKind)
+                                                                 MediaStreamKind streamKind,
+                                                                 std::optional<MediaPacketSourceTiming> sourceTiming)
 {
     if (!packet) {
         return ::media::Result<MediaBufferRef>::failure(
             ::media::ErrorInfo::invalidArgument("wrapPacket failed: packet is null"));
     }
 
-    auto buffer = makeMediaBufferRef<FFmpegPacketBuffer>(std::move(packet));
+    auto buffer = makeMediaBufferRef<FFmpegPacketBuffer>(std::move(packet), std::move(sourceTiming));
     buffer->setStreamKind(streamKind);
     buffer->setPayloadKind(MediaPayloadKind::Packet);
     if (const auto* packetBuffer = dynamic_cast<const FFmpegPacketBuffer*>(buffer.get())) {
@@ -183,7 +184,7 @@ namespace media::ffmpeg::graph {
             FFmpegGraphError::fromCode(ret, "av_packet_copy_props"));
     }
 
-    return wrapPacket(std::move(cloned), streamKind);
+    return wrapPacket(std::move(cloned), streamKind, std::nullopt);
 }
 
 ::media::Result<MediaBufferRef> FFmpegBufferFactory::wrapFrame(::media::ffmpeg::FramePtr frame,
