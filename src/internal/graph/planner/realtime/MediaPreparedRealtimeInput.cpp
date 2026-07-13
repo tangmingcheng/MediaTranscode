@@ -1,12 +1,19 @@
 #include "internal/graph/planner/realtime/MediaPreparedRealtimeInput.h"
 
+#include <algorithm>
 #include <utility>
 
 namespace media::ffmpeg::graph {
 
 MediaPreparedRealtimeInput::MediaPreparedRealtimeInput(
     std::unique_ptr<FFmpegFormatContextBuffer> buffer)
-    : m_buffer(std::move(buffer))
+    : m_genericBuffer(std::move(buffer))
+{
+}
+
+MediaPreparedRealtimeInput::MediaPreparedRealtimeInput(
+    std::unique_ptr<MediaTsPreparedInputBuffer> buffer)
+    : m_tsBuffer(std::move(buffer))
 {
 }
 
@@ -21,29 +28,44 @@ MediaPreparedRealtimeInput::MediaPreparedRealtimeInput(
         MediaPreparedRealtimeInput(std::move(buffer).value()));
 }
 
+::media::Result<MediaPreparedRealtimeInput> MediaPreparedRealtimeInput::createMpegTs(
+    std::unique_ptr<MediaTsInputSession> session)
+{
+    auto buffer = MediaTsPreparedInputBuffer::create(std::move(session));
+    if (!buffer) return ::media::Result<MediaPreparedRealtimeInput>::failure(buffer.error());
+    return ::media::Result<MediaPreparedRealtimeInput>::success(
+        MediaPreparedRealtimeInput(std::move(buffer.value())));
+}
+
 bool MediaPreparedRealtimeInput::valid() const noexcept
 {
-    return m_buffer && m_buffer->context() && m_buffer->inputSnapshotComplete();
+    return (m_genericBuffer && m_genericBuffer->context() &&
+            m_genericBuffer->inputSnapshotComplete()) || m_tsBuffer;
 }
 
-AVFormatContext* MediaPreparedRealtimeInput::context() noexcept
+std::optional<MediaPreparedRealtimeInputKind> MediaPreparedRealtimeInput::kind() const noexcept
 {
-    return m_buffer ? m_buffer->context() : nullptr;
-}
-
-const AVFormatContext* MediaPreparedRealtimeInput::context() const noexcept
-{
-    return m_buffer ? m_buffer->context() : nullptr;
+    if (m_genericBuffer) return MediaPreparedRealtimeInputKind::Generic;
+    if (m_tsBuffer) return MediaPreparedRealtimeInputKind::MpegTs;
+    return std::nullopt;
 }
 
 const FFmpegInputStreamSnapshot* MediaPreparedRealtimeInput::inputStreamSnapshot(int streamIndex) const noexcept
 {
-    return m_buffer ? m_buffer->inputStreamSnapshot(streamIndex) : nullptr;
+    if (m_genericBuffer) return m_genericBuffer->inputStreamSnapshot(streamIndex);
+    if (!m_tsBuffer) return nullptr;
+    const auto& snapshots = m_tsBuffer->streamSnapshots();
+    const auto found = std::find_if(snapshots.begin(), snapshots.end(),
+        [streamIndex](const FFmpegInputStreamSnapshot& snapshot) {
+            return snapshot.index == streamIndex;
+        });
+    return found == snapshots.end() ? nullptr : &*found;
 }
 
-MediaBufferRef MediaPreparedRealtimeInput::releaseFormatBuffer() noexcept
+MediaBufferRef MediaPreparedRealtimeInput::releaseBuffer() noexcept
 {
-    return MediaBufferRef(m_buffer.release());
+    if (m_genericBuffer) return MediaBufferRef(m_genericBuffer.release());
+    return MediaBufferRef(m_tsBuffer.release());
 }
 
 } // namespace media::ffmpeg::graph

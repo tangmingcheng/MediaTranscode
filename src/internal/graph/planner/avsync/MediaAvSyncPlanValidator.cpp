@@ -179,7 +179,6 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
         *ts.programMapPid == *ts.videoPid || *ts.programMapPid == *ts.audioPid ||
         *ts.programMapPid == *ts.pcrPid ||
         *ts.videoPid == *ts.audioPid ||
-        (*ts.pcrPid != *ts.videoPid && *ts.pcrPid != *ts.audioPid) ||
         !positive(ts.pcrIntervalNs) || !positive(ts.maximumPcrGapNs) ||
         !positive(ts.maximumPcrJitterNs) ||
         *ts.maximumPcrJitterNs >= *ts.pcrIntervalNs ||

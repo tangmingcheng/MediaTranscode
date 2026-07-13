@@ -8,9 +8,16 @@ MediaTsPreparedInputBuffer::MediaTsPreparedInputBuffer(
     : m_session(std::move(session)), m_streamSnapshots(std::move(streamSnapshots))
 {
     if (m_session) {
+        m_programSnapshots = m_session->programSnapshots();
         const auto inventory = m_session->programInventory();
         m_programInventory = inventory;
     }
+}
+
+const std::vector<FFmpegInputProgramSnapshot>&
+MediaTsPreparedInputBuffer::programSnapshots() const noexcept
+{
+    return m_programSnapshots;
 }
 
 ::media::Result<std::unique_ptr<MediaTsPreparedInputBuffer>>

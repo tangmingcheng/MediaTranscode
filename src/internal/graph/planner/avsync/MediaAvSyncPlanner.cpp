@@ -132,18 +132,18 @@ void planSharedPolicy(MediaAvSyncPlan& plan)
     return ::media::Result<MediaAvSyncPlan>::success(std::move(plan));
 }
 
-::media::Result<MediaAvSyncPlan> planTs()
+::media::Result<MediaAvSyncPlan> planTs(const MediaTsSelectedProgramPlan& selected)
 {
     MediaAvSyncPlan plan;
     planSharedPolicy(plan);
     plan.topology = MediaAvSyncTopology::MpegTsToMpegTs;
     plan.sourceClockMode = MediaAvSyncSourceClockMode::MpegTsPcr;
     plan.ts.emplace();
-    plan.ts->programNumber = 1;
-    plan.ts->programMapPid = 4096;
-    plan.ts->videoPid = 256;
-    plan.ts->audioPid = 257;
-    plan.ts->pcrPid = 256;
+    plan.ts->programNumber = selected.programNumber;
+    plan.ts->programMapPid = selected.programMapPid;
+    plan.ts->videoPid = selected.videoPid;
+    plan.ts->audioPid = selected.audioPid;
+    plan.ts->pcrPid = selected.pcrPid;
     plan.ts->pcrIntervalNs = runningTime(20 * Millisecond);
     plan.ts->maximumPcrGapNs = runningTime(100 * Millisecond);
     plan.ts->maximumPcrJitterNs = runningTime(5 * Millisecond);
@@ -159,7 +159,8 @@ void planSharedPolicy(MediaAvSyncPlan& plan)
 } // namespace
 
 ::media::Result<MediaAvSyncPlan> MediaAvSyncPlanner::plan(
-    const MediaRealtimeRtpTranscodeRequest& request)
+    const MediaRealtimeRtpTranscodeRequest& request,
+    const MediaTsSelectedProgramPlan* selectedTsProgram)
 {
     if (!request.parameters.execution.includeAudio) {
         return ::media::Result<MediaAvSyncPlan>::failure(
@@ -171,7 +172,12 @@ void planSharedPolicy(MediaAvSyncPlan& plan)
     }
     if (MediaRealtimeRequestClassifier::mpegTsUdpInput(request) &&
         MediaRealtimeRequestClassifier::muxedTransportOutput(request)) {
-        return planTs();
+        if (!selectedTsProgram) {
+            return ::media::Result<MediaAvSyncPlan>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "MPEG-TS A/V synchronization requires planner-selected program identity"));
+        }
+        return planTs(*selectedTsProgram);
     }
     if (MediaRealtimeRequestClassifier::rawRtpInput(request) &&
         MediaRealtimeRequestClassifier::muxedTransportOutput(request)) {

@@ -204,6 +204,64 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
 
 } // namespace
 
+::media::Result<MediaRealtimeTsInputPlan> MediaRealtimeTsInputPlan::create(
+    std::size_t packetSize,
+    std::uint64_t probeWindowBytes,
+    std::uint64_t maximumPacketPositionRegressionBytes,
+    std::size_t evidenceTimelineCapacity)
+{
+    auto minimum = minimumEvidenceCapacity(
+        packetSize, probeWindowBytes, maximumPacketPositionRegressionBytes);
+    if (!minimum) {
+        return ::media::Result<MediaRealtimeTsInputPlan>::failure(minimum.error());
+    }
+    if (evidenceTimelineCapacity < minimum.value()) {
+        return ::media::Result<MediaRealtimeTsInputPlan>::failure(
+            ::media::ErrorInfo::invalidArgument("MPEG-TS evidence capacity is below worst-case requirement"));
+    }
+    MediaRealtimeTsInputPlan result;
+    result.demuxFormat = "mpegts";
+    result.packetSize = packetSize;
+    result.avioBufferBytes = 32 * 1024;
+    result.maximumDatagramBytes = 65'535;
+    result.evidenceTimelineCapacity = evidenceTimelineCapacity;
+    result.maximumPacketPositionRegressionBytes = maximumPacketPositionRegressionBytes;
+    return ::media::Result<MediaRealtimeTsInputPlan>::success(std::move(result));
+}
+
+::media::Result<std::size_t> MediaRealtimeTsInputPlan::minimumEvidenceCapacity(
+    std::size_t packetSize,
+    std::uint64_t probeWindowBytes,
+    std::uint64_t maximumPacketPositionRegressionBytes)
+{
+    if (packetSize != 188 || probeWindowBytes == 0 ||
+        maximumPacketPositionRegressionBytes == 0) {
+        return ::media::Result<std::size_t>::failure(
+            ::media::ErrorInfo::invalidArgument("invalid MPEG-TS input evidence policy"));
+    }
+    const auto packetCount = [packetSize](std::uint64_t bytes)
+        -> std::optional<std::uint64_t> {
+        const auto stride = static_cast<std::uint64_t>(packetSize);
+        if (bytes > std::numeric_limits<std::uint64_t>::max() - (stride - 1)) {
+            return std::nullopt;
+        }
+        return (bytes + stride - 1) / stride;
+    };
+    const auto probePackets = packetCount(probeWindowBytes);
+    const auto rollbackPackets = packetCount(maximumPacketPositionRegressionBytes);
+    if (!probePackets || !rollbackPackets ||
+        *probePackets > std::numeric_limits<std::uint64_t>::max() - *rollbackPackets - 1) {
+        return ::media::Result<std::size_t>::failure(
+            ::media::ErrorInfo::invalidArgument("MPEG-TS evidence capacity arithmetic overflow"));
+    }
+    const std::uint64_t required = *probePackets + *rollbackPackets + 1;
+    if (required > (std::numeric_limits<std::size_t>::max)()) {
+        return ::media::Result<std::size_t>::failure(
+            ::media::ErrorInfo::invalidArgument("MPEG-TS evidence capacity exceeds platform size"));
+    }
+    return ::media::Result<std::size_t>::success(static_cast<std::size_t>(required));
+}
+
 ::media::Result<MediaRealtimeRtpTranscodePlan> MediaRealtimeRtpTranscodePlanner::plan(
     const MediaRealtimeRtpTranscodeRequest& options)
 {
@@ -212,12 +270,13 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
             ::media::ErrorInfo::unsupported(
                 "URL and MPEG-TS realtime input require preflight() to preserve the prepared session"));
     }
-    return planWithInput(options, nullptr);
+    return planWithInput(options, nullptr, nullptr);
 }
 
 ::media::Result<MediaRealtimeRtpTranscodePlan> MediaRealtimeRtpTranscodePlanner::planWithInput(
     const MediaRealtimeRtpTranscodeRequest& options,
-    const MediaRealtimeInputStreamInfo* preparedInput)
+    const MediaRealtimeInputStreamInfo* preparedInput,
+    const MediaTsSelectedProgramPlan* selectedTsProgram)
 {
     if (auto status = validateRealtimeRequestNoIo(options); !status) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(status.error());
@@ -335,12 +394,27 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
     plan.threadingPolicy = planThreadingPolicy();
     plan.videoInputStartRequiresKeyFrame = MediaRealtimeRequestClassifier::unreliablePacketBoundary(options);
     MediaRealtimeInputPlanner::applyNodePlans(options, rawInput ? &*rawInput : nullptr, plan);
+    if (MediaRealtimeRequestClassifier::mpegTsUdpInput(options)) {
+        constexpr std::uint64_t MaximumRegressionBytes = 1024 * 1024;
+        constexpr std::uint64_t PacketSize = 188;
+        const auto probeBytes = static_cast<std::uint64_t>(*options.input.probeSizeBytes);
+        auto capacity = MediaRealtimeTsInputPlan::minimumEvidenceCapacity(
+            PacketSize, probeBytes, MaximumRegressionBytes);
+        if (!capacity) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(capacity.error());
+        }
+        auto ts = MediaRealtimeTsInputPlan::create(
+            PacketSize, probeBytes, MaximumRegressionBytes,
+            capacity.value());
+        if (!ts) return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(ts.error());
+        plan.input.mpegTs = std::move(ts).value();
+    }
     if (auto outputStatus = MediaRealtimeOutputPolicyPlanner::apply(options, outputUrls.value(), plan);
         !outputStatus) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(outputStatus.error());
     }
     if (MediaRealtimeRequestClassifier::audioRequested(options)) {
-        auto avSync = MediaAvSyncPlanner::plan(options);
+        auto avSync = MediaAvSyncPlanner::plan(options, selectedTsProgram);
         if (!avSync) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(avSync.error());
         }
@@ -357,14 +431,14 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
 
 ::media::Result<MediaRealtimeTranscodePreflight> MediaRealtimeRtpTranscodePlanner::preflight(
     const MediaRealtimeRtpTranscodeRequest& request,
-    const MediaRealtimeInputOpener& opener)
+    const MediaRealtimePreflightIo& io)
 {
-    return preflightImpl(request, &opener);
+    return preflightImpl(request, &io);
 }
 
 ::media::Result<MediaRealtimeTranscodePreflight> MediaRealtimeRtpTranscodePlanner::preflightImpl(
     const MediaRealtimeRtpTranscodeRequest& request,
-    const MediaRealtimeInputOpener* opener)
+    const MediaRealtimePreflightIo* io)
 {
     if (auto status = validateRealtimeRequestNoIo(request); !status) {
         return ::media::Result<MediaRealtimeTranscodePreflight>::failure(status.error());
@@ -385,12 +459,14 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
     if (!pipelineOptions) {
         return ::media::Result<MediaRealtimeTranscodePreflight>::failure(pipelineOptions.error());
     }
-    auto scanned = MediaRealtimeInputPlanner::prepare(request, pipelineOptions.value(), opener);
+    auto scanned = MediaRealtimeInputPlanner::prepare(request, pipelineOptions.value(), io);
     if (!scanned) {
         return ::media::Result<MediaRealtimeTranscodePreflight>::failure(scanned.error());
     }
     MediaPreparedRealtimeInputScan scan = std::move(scanned).value();
-    auto planned = planWithInput(request, &scan.streams);
+    auto planned = planWithInput(
+        request, &scan.streams,
+        scan.selectedTsProgram ? &*scan.selectedTsProgram : nullptr);
     if (!planned) {
         return ::media::Result<MediaRealtimeTranscodePreflight>::failure(planned.error());
     }

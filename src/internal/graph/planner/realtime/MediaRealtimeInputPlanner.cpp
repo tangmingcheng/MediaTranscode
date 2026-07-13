@@ -2,11 +2,17 @@
 
 #include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpCodecDescriptor.h"
+#include "internal/graph/planner/realtime/MediaTsProgramSelector.h"
 #include "internal/graph/protocol/rtp/MediaRtpDepacketizerFactory.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
 
 #include <sstream>
+#include <limits>
 #include <utility>
+
+extern "C" {
+#include <libavutil/dict.h>
+}
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -26,6 +32,92 @@ constexpr std::size_t RtpReorderWindowPackets = 64;
 constexpr int RtpMaximumReorderDelayMs = 100;
 constexpr int RtcpSenderReportTimeoutMs = 3'000;
 constexpr int RtcpCnameTimeoutMs = 5'000;
+constexpr std::size_t TsPacketSize = 188;
+constexpr std::uint64_t TsMaximumPacketPositionRegressionBytes = 1024 * 1024;
+
+::media::Result<MediaPreparedRealtimeInputScan> prepareMpegTs(
+    const MediaRealtimeRtpTranscodeRequest& request,
+    const MediaTsInputSessionOpener* opener)
+{
+    const auto probeBytes = static_cast<std::uint64_t>(*request.input.probeSizeBytes);
+    auto capacity = MediaRealtimeTsInputPlan::minimumEvidenceCapacity(
+        TsPacketSize, probeBytes, TsMaximumPacketPositionRegressionBytes);
+    if (!capacity) return ::media::Result<MediaPreparedRealtimeInputScan>::failure(capacity.error());
+    const auto policy = MediaRealtimeTsInputPlan::create(
+        TsPacketSize, probeBytes, TsMaximumPacketPositionRegressionBytes,
+        capacity.value());
+    if (!policy) return ::media::Result<MediaPreparedRealtimeInputScan>::failure(policy.error());
+
+    MediaTsInputSessionOptions options;
+    options.protocolUrl = request.input.url;
+    AVDictionary* protocolOptions = nullptr;
+    AVDictionary* demuxOptions = nullptr;
+    const auto microseconds = [](int milliseconds) {
+        return std::to_string(static_cast<std::int64_t>(milliseconds) * 1000);
+    };
+    av_dict_set(&protocolOptions, "stimeout",
+                microseconds(*request.input.openTimeoutMs).c_str(), 0);
+    av_dict_set(&protocolOptions, "rw_timeout",
+                microseconds(*request.input.readTimeoutMs).c_str(), 0);
+    av_dict_set(&protocolOptions, "timeout",
+                microseconds(*request.input.readTimeoutMs).c_str(), 0);
+    av_dict_set(&demuxOptions, "analyzeduration",
+                std::to_string(*request.input.analyzeDurationUs).c_str(), 0);
+    av_dict_set(&demuxOptions, "probesize",
+                std::to_string(*request.input.probeSizeBytes).c_str(), 0);
+    if (*request.input.lowLatency) {
+        av_dict_set(&demuxOptions, "fflags", "nobuffer", 0);
+        av_dict_set(&demuxOptions, "flags", "low_delay", 0);
+    }
+    options.protocolOptions = protocolOptions;
+    options.demuxOptions = demuxOptions;
+    options.avioBufferBytes = policy.value().avioBufferBytes;
+    options.packetStride = policy.value().packetSize;
+    options.evidenceCapacity = policy.value().evidenceTimelineCapacity;
+    options.maximumPositionRegressionBytes =
+        policy.value().maximumPacketPositionRegressionBytes;
+    auto opened = opener ? (*opener)(options) : MediaTsInputSession::open(options);
+    av_dict_free(&protocolOptions);
+    av_dict_free(&demuxOptions);
+    if (!opened) return ::media::Result<MediaPreparedRealtimeInputScan>::failure(opened.error());
+    auto session = std::move(opened).value();
+
+    const FFmpegInputStreamSnapshot* video = nullptr;
+    const FFmpegInputStreamSnapshot* audio = nullptr;
+    for (const auto& stream : session->streamSnapshots()) {
+        if (!video && stream.streamKind == MediaStreamKind::Video) video = &stream;
+        if (!audio && stream.streamKind == MediaStreamKind::Audio) audio = &stream;
+    }
+    if (!video || (MediaRealtimeRequestClassifier::audioRequested(request) && !audio)) {
+        return ::media::Result<MediaPreparedRealtimeInputScan>::failure(
+            ::media::ErrorInfo::notInitialized("MPEG-TS selected A/V streams are incomplete"));
+    }
+    auto selected = MediaTsProgramSelector::select(
+        session->programSnapshots(), session->programInventory(),
+        video->index, audio ? audio->index : -1);
+    if (!selected) return ::media::Result<MediaPreparedRealtimeInputScan>::failure(selected.error());
+
+    MediaPreparedRealtimeInputScan result;
+    result.streams.video.streamIndex = video->index;
+    result.streams.video.codecName = video->format.codec.codecName;
+    result.streams.video.width = video->format.video.size.width;
+    result.streams.video.height = video->format.video.size.height;
+    result.streams.video.bitrateBitsPerSecond = video->format.codec.bitrate;
+    result.streams.video.frameRate = video->format.video.frameRate;
+    if (audio) {
+        result.streams.hasAudio = true;
+        result.streams.audio.streamIndex = audio->index;
+        result.streams.audio.codecName = audio->format.codec.codecName;
+        result.streams.audio.sampleRate = audio->format.audio.sampleRate;
+        result.streams.audio.channels = audio->format.audio.channels;
+        result.streams.audio.bitrateBitsPerSecond = audio->format.codec.bitrate;
+    }
+    auto prepared = MediaPreparedRealtimeInput::createMpegTs(std::move(session));
+    if (!prepared) return ::media::Result<MediaPreparedRealtimeInputScan>::failure(prepared.error());
+    result.prepared = std::move(prepared).value();
+    result.selectedTsProgram = selected.value();
+    return ::media::Result<MediaPreparedRealtimeInputScan>::success(std::move(result));
+}
 
 struct NumericUnicastAddress final {
     MediaIpAddressFamily family;
@@ -217,11 +309,18 @@ void MediaRealtimeInputPlanner::applyNodePlans(
 ::media::Result<MediaPreparedRealtimeInputScan> MediaRealtimeInputPlanner::prepare(
     const MediaRealtimeRtpTranscodeRequest& request,
     const MediaPipelinePlannerOptions& options,
-    const MediaRealtimeInputOpener* opener)
+    const MediaRealtimePreflightIo* io)
 {
-    return opener
+    if (MediaRealtimeRequestClassifier::mpegTsUdpInput(request)) {
+        if (io && !io->openMpegTs) {
+            return ::media::Result<MediaPreparedRealtimeInputScan>::failure(
+                ::media::ErrorInfo::invalidArgument("MPEG-TS preflight opener is required"));
+        }
+        return prepareMpegTs(request, io ? &io->openMpegTs : nullptr);
+    }
+    return io
         ? MediaPipelineCapabilityScanner::prepareRealtimeInput(
-              request.input.url, options, MediaRealtimeRequestClassifier::audioRequested(request), *opener)
+              request.input.url, options, MediaRealtimeRequestClassifier::audioRequested(request), io->openGeneric)
         : MediaPipelineCapabilityScanner::prepareRealtimeInput(
               request.input.url, options, MediaRealtimeRequestClassifier::audioRequested(request));
 }

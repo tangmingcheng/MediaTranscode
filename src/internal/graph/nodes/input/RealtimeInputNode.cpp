@@ -3,7 +3,7 @@
 namespace media::ffmpeg::graph {
 RealtimeInputNode::RealtimeInputNode(MediaNodeId nodeId, MediaPreparedRealtimeInput prepared)
     : FFmpegNodeRuntime(nodeId, staticKind(), "RealtimeInputNode")
-    , m_formatBuffer(prepared.releaseFormatBuffer())
+    , m_formatBuffer(prepared.releaseBuffer())
 {
 }
 

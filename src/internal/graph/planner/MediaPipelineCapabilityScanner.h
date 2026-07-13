@@ -4,6 +4,7 @@
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/planner/MediaPipelinePlanner.h"
 #include "internal/graph/planner/realtime/MediaPreparedRealtimeInput.h"
+#include "internal/graph/planner/realtime/MediaTsProgramSelector.h"
 
 #include <string>
 #include <vector>
@@ -19,6 +20,7 @@ struct MediaRealtimeInputStreamInfo {
 struct MediaPreparedRealtimeInputScan final {
     MediaRealtimeInputStreamInfo streams;
     MediaPreparedRealtimeInput prepared;
+    std::optional<MediaTsSelectedProgramPlan> selectedTsProgram;
 };
 
 class MediaPipelineCapabilityScanner final {

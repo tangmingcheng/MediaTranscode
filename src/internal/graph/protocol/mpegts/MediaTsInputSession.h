@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/protocol/mpegts/MediaTsEvidenceTimeline.h"
+#include "internal/graph/protocol/mpegts/MediaTsPublicProgramSnapshot.h"
 #include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegObservedReadAvio.h"
 
@@ -46,6 +47,7 @@ public:
     ::media::Result<MediaTsReadFrameState> readFrame(AVPacket& packet);
     ::media::Status close() noexcept;
     const std::vector<FFmpegInputStreamSnapshot>& streamSnapshots() const noexcept;
+    const std::vector<FFmpegInputProgramSnapshot>& programSnapshots() const noexcept;
     ::media::Result<std::vector<FFmpegInputStreamSnapshot>> cloneStreamSnapshots() const;
     MediaTsProgramInventorySnapshot programInventory() const;
     ::media::Result<MediaTsEvidenceCheckpoint> evidenceAtOrBefore(
@@ -67,6 +69,7 @@ private:
     std::unique_ptr<FFmpegObservedReadAvio> m_observedAvio;
     AVFormatContext* m_formatContext = nullptr;
     std::vector<FFmpegInputStreamSnapshot> m_streamSnapshots;
+    std::vector<FFmpegInputProgramSnapshot> m_programSnapshots;
     mutable std::mutex m_sessionMutex;
     std::condition_variable m_readsDone;
     std::size_t m_activeReads = 0;

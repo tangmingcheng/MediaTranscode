@@ -301,13 +301,21 @@ MediaTsInputSession::~MediaTsInputSession()
 {
     auto snapshots = FFmpegInputStreamSnapshotFactory::fromFormatContext(*m_formatContext);
     if (!snapshots) return ::media::Status::failure(snapshots.error());
+    auto programs = MediaTsPublicProgramSnapshotFactory::fromFormatContext(*m_formatContext);
+    if (!programs) return ::media::Status::failure(programs.error());
     m_streamSnapshots = std::move(snapshots.value());
+    m_programSnapshots = std::move(programs.value());
     return ::media::Status::success();
 }
 
 const std::vector<FFmpegInputStreamSnapshot>& MediaTsInputSession::streamSnapshots() const noexcept
 {
     return m_streamSnapshots;
+}
+
+const std::vector<FFmpegInputProgramSnapshot>& MediaTsInputSession::programSnapshots() const noexcept
+{
+    return m_programSnapshots;
 }
 
 ::media::Result<std::vector<FFmpegInputStreamSnapshot>>

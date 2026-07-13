@@ -19,6 +19,7 @@
 namespace media::ffmpeg::graph {
 
 struct MediaRealtimeInputStreamInfo;
+struct MediaTsSelectedProgramPlan;
 
 struct MediaRealtimeRtpTransportPlan final {
     MediaIpAddressFamily addressFamily;
@@ -39,6 +40,25 @@ struct MediaRealtimeRtpTransportPlan final {
     std::optional<MediaRtcpCompositionMode> rtcpCompositionMode;
 };
 
+struct MediaRealtimeTsInputPlan final {
+    std::string demuxFormat;
+    std::size_t packetSize = 0;
+    std::size_t avioBufferBytes = 0;
+    std::size_t maximumDatagramBytes = 0;
+    std::size_t evidenceTimelineCapacity = 0;
+    std::uint64_t maximumPacketPositionRegressionBytes = 0;
+
+    static ::media::Result<MediaRealtimeTsInputPlan> create(
+        std::size_t packetSize,
+        std::uint64_t probeWindowBytes,
+        std::uint64_t maximumPacketPositionRegressionBytes,
+        std::size_t evidenceTimelineCapacity);
+    static ::media::Result<std::size_t> minimumEvidenceCapacity(
+        std::size_t packetSize,
+        std::uint64_t probeWindowBytes,
+        std::uint64_t maximumPacketPositionRegressionBytes);
+};
+
 struct MediaRealtimeRtpInputNodePlan {
     std::string url;
     std::string sdpText;
@@ -51,6 +71,7 @@ struct MediaRealtimeRtpInputNodePlan {
     std::string mediaId;
     std::optional<MediaRealtimeRtpTransportPlan> rtpTransport;
     std::optional<MediaRtpDepacketizerConfig> rtpDepacketizer;
+    std::optional<MediaRealtimeTsInputPlan> mpegTs;
 };
 
 struct MediaRealtimeRtpOutputNodePlan {
@@ -128,17 +149,18 @@ public:
         const MediaRealtimeRtpTranscodeRequest& request);
     static ::media::Result<MediaRealtimeTranscodePreflight> preflight(
         const MediaRealtimeRtpTranscodeRequest& request,
-        const MediaRealtimeInputOpener& opener);
+        const MediaRealtimePreflightIo& io);
     static ::media::Status validateRealtimeRequestNoIo(
         const MediaRealtimeRtpTranscodeRequest& request);
 
 private:
     static ::media::Result<MediaRealtimeRtpTranscodePlan> planWithInput(
         const MediaRealtimeRtpTranscodeRequest& request,
-        const MediaRealtimeInputStreamInfo* inputInfo);
+        const MediaRealtimeInputStreamInfo* inputInfo,
+        const MediaTsSelectedProgramPlan* selectedTsProgram = nullptr);
     static ::media::Result<MediaRealtimeTranscodePreflight> preflightImpl(
         const MediaRealtimeRtpTranscodeRequest& request,
-        const MediaRealtimeInputOpener* opener);
+        const MediaRealtimePreflightIo* io);
     MediaRealtimeRtpTranscodePlanner() = default;
 };
 

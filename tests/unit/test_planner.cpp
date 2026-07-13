@@ -10,6 +10,7 @@
 #include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimePlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeInputPlanner.h"
+#include "internal/graph/planner/realtime/MediaTsProgramSelector.h"
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/runtime/distributed/MediaGraphRemoteExecutor.h"
 #include "internal/graph/runtime/gpu/MediaGpuGraphExecutor.h"
@@ -25,6 +26,80 @@ using namespace media::ffmpeg::graph;
 using media_transcode::test::TestContext;
 
 namespace {
+
+FFmpegInputProgramSnapshot publicProgram(int number,
+                                         int pmtPid,
+                                         int pcrPid,
+                                         std::initializer_list<int> streams)
+{
+    return FFmpegInputProgramSnapshot{number, pmtPid, pcrPid, streams};
+}
+
+MediaTsProgramInfo parserProgram(std::uint16_t number,
+                                 std::uint16_t pmtPid,
+                                 std::uint16_t pcrPid,
+                                 std::initializer_list<std::uint16_t> pids)
+{
+    MediaTsProgramInfo program;
+    program.programNumber = number;
+    program.pmtPid = pmtPid;
+    program.pcrPid = pcrPid;
+    for (const auto pid : pids) program.elementaryStreams.push_back({pid, 0x06});
+    return program;
+}
+
+void testTsProgramSelectorRequiresOneCrossValidatedProgram(TestContext& ctx)
+{
+    const std::vector<FFmpegInputProgramSnapshot> programs{
+        publicProgram(7, 777, 701, {3, 5})
+    };
+    MediaTsProgramInventorySnapshot inventory;
+    inventory.programs.push_back(parserProgram(7, 777, 701, {703, 705}));
+
+    const auto selected = MediaTsProgramSelector::select(programs, inventory, 3, 5);
+    EXPECT_TRUE(ctx, selected);
+    if (!selected) return;
+    EXPECT_EQ(ctx, selected.value().programNumber, 7);
+    EXPECT_EQ(ctx, selected.value().programMapPid, 777);
+    EXPECT_EQ(ctx, selected.value().videoPid, 703);
+    EXPECT_EQ(ctx, selected.value().audioPid, 705);
+    EXPECT_EQ(ctx, selected.value().pcrPid, 701);
+}
+
+void testTsProgramSelectorRejectsAmbiguityAndInventoryMismatch(TestContext& ctx)
+{
+    MediaTsProgramInventorySnapshot inventory;
+    inventory.programs.push_back(parserProgram(7, 777, 701, {703, 705}));
+    inventory.programs.push_back(parserProgram(8, 888, 801, {803, 805}));
+
+    EXPECT_FALSE(ctx, MediaTsProgramSelector::select(
+        {publicProgram(7, 777, 701, {3, 5}), publicProgram(8, 888, 801, {3, 5})},
+        inventory, 3, 5));
+    EXPECT_FALSE(ctx, MediaTsProgramSelector::select(
+        {publicProgram(7, 778, 701, {3, 5})}, inventory, 3, 5));
+    EXPECT_FALSE(ctx, MediaTsProgramSelector::select(
+        {publicProgram(7, 777, 701, {3}), publicProgram(8, 888, 801, {5})},
+        inventory, 3, 5));
+    EXPECT_FALSE(ctx, MediaTsProgramSelector::select(
+        {publicProgram(7, 777, 701, {3, 5})}, inventory, 3, 9));
+}
+
+const MediaTsSelectedProgramPlan& selectedTsProgram()
+{
+    static const MediaTsSelectedProgramPlan selected{7, 777, 703, 705, 701};
+    return selected;
+}
+
+void testTsEvidenceCapacityCoversProbeRollbackAndPredecessor(TestContext& ctx)
+{
+    auto exact = MediaRealtimeTsInputPlan::create(188, 376, 188, 4);
+    EXPECT_TRUE(ctx, exact);
+    if (exact) EXPECT_EQ(ctx, exact.value().evidenceTimelineCapacity, std::size_t{4});
+    EXPECT_FALSE(ctx, MediaRealtimeTsInputPlan::create(188, 376, 188, 3));
+    EXPECT_FALSE(ctx, MediaRealtimeTsInputPlan::create(
+        188, std::numeric_limits<std::uint64_t>::max(), 188,
+        std::numeric_limits<std::size_t>::max()));
+}
 
 MediaRealtimeRtpTranscodeRequest avSyncRtpRequest()
 {
@@ -161,7 +236,7 @@ void testRawRtpInputPlannerProducesCompleteTransportPolicy(TestContext& ctx)
 
 void testAvSyncPlannerBuildsCompleteTsContract(TestContext& ctx)
 {
-    const auto result = MediaAvSyncPlanner::plan(avSyncTsRequest());
+    const auto result = MediaAvSyncPlanner::plan(avSyncTsRequest(), &selectedTsProgram());
     EXPECT_TRUE(ctx, result);
     if (!result) return;
 
@@ -169,9 +244,11 @@ void testAvSyncPlannerBuildsCompleteTsContract(TestContext& ctx)
     EXPECT_EQ(ctx, *plan.topology, MediaAvSyncTopology::MpegTsToMpegTs);
     EXPECT_EQ(ctx, *plan.sourceClockMode, MediaAvSyncSourceClockMode::MpegTsPcr);
     EXPECT_TRUE(ctx, plan.ts.has_value());
-    EXPECT_TRUE(ctx, *plan.ts->programNumber > 0);
-    EXPECT_TRUE(ctx, *plan.ts->videoPid != *plan.ts->audioPid);
-    EXPECT_TRUE(ctx, *plan.ts->pcrPid == *plan.ts->videoPid);
+    EXPECT_EQ(ctx, *plan.ts->programNumber, 7);
+    EXPECT_EQ(ctx, *plan.ts->programMapPid, 777);
+    EXPECT_EQ(ctx, *plan.ts->videoPid, 703);
+    EXPECT_EQ(ctx, *plan.ts->audioPid, 705);
+    EXPECT_EQ(ctx, *plan.ts->pcrPid, 701);
     EXPECT_TRUE(ctx, plan.ts->pcrIntervalNs->nanoseconds() > 0);
     EXPECT_TRUE(ctx, *plan.ts->maximumPcrGapNs >= *plan.ts->pcrIntervalNs);
     EXPECT_EQ(ctx, *plan.ts->timestampTimeBaseNumerator, 1);
@@ -292,7 +369,7 @@ void testAvSyncValidatorRejectsMissingAndInconsistentFields(TestContext& ctx)
     excessiveRecoveryCorrection.audioServo.recoveryCorrectionLimitPpm = 5001;
     expectInvalid(std::move(excessiveRecoveryCorrection));
 
-    const auto tsResult = MediaAvSyncPlanner::plan(avSyncTsRequest());
+    const auto tsResult = MediaAvSyncPlanner::plan(avSyncTsRequest(), &selectedTsProgram());
     EXPECT_TRUE(ctx, tsResult);
     if (!tsResult) return;
     const MediaAvSyncPlan completeTs = tsResult.value();
@@ -334,7 +411,7 @@ void expectInvalidAvSyncMutation(TestContext& ctx,
 
 void testAvSyncValidatorRejectsProtocolIdentifierBoundaries(TestContext& ctx)
 {
-    const auto result = MediaAvSyncPlanner::plan(avSyncTsRequest());
+    const auto result = MediaAvSyncPlanner::plan(avSyncTsRequest(), &selectedTsProgram());
     EXPECT_TRUE(ctx, result);
     if (!result) return;
     const MediaAvSyncPlan complete = result.value();
@@ -355,7 +432,7 @@ void testAvSyncValidatorRejectsProtocolIdentifierBoundaries(TestContext& ctx)
 void testAvSyncValidatorRejectsIsolatedNumericAndOrderingInvariants(TestContext& ctx)
 {
     const auto rtpResult = MediaAvSyncPlanner::plan(avSyncRtpRequest());
-    const auto tsResult = MediaAvSyncPlanner::plan(avSyncTsRequest());
+    const auto tsResult = MediaAvSyncPlanner::plan(avSyncTsRequest(), &selectedTsProgram());
     EXPECT_TRUE(ctx, rtpResult);
     EXPECT_TRUE(ctx, tsResult);
     if (!rtpResult || !tsResult) return;
@@ -411,6 +488,9 @@ void testAvSyncValidatorRejectsIsolatedNumericAndOrderingInvariants(TestContext&
 int main()
 {
     TestContext ctx;
+    testTsProgramSelectorRequiresOneCrossValidatedProgram(ctx);
+    testTsProgramSelectorRejectsAmbiguityAndInventoryMismatch(ctx);
+    testTsEvidenceCapacityCoversProbeRollbackAndPredecessor(ctx);
     testAvSyncPlannerBuildsCompleteRtpContract(ctx);
     testRawRtpInputPlannerProducesCompleteTransportPolicy(ctx);
     testAvSyncPlannerBuildsCompleteTsContract(ctx);

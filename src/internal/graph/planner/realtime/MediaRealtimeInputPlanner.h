@@ -34,7 +34,7 @@ public:
     static ::media::Result<MediaPreparedRealtimeInputScan> prepare(
         const MediaRealtimeRtpTranscodeRequest& request,
         const MediaPipelinePlannerOptions& options,
-        const MediaRealtimeInputOpener* opener);
+        const MediaRealtimePreflightIo* io);
 
 private:
     MediaRealtimeInputPlanner() = delete;

@@ -3416,16 +3416,64 @@ void testInvalidPreflightDoesNotInvokeOpener(TestContext& ctx)
     MediaRealtimeRtpTranscodeRequest invalid = validMpegTsUdpOptions();
     invalid.input.url.clear();
     int openCount = 0;
-    auto preflight = MediaRealtimeRtpTranscodePlanner::preflight(
-        invalid,
-        [&openCount](const std::string&, AVDictionary**)
+    MediaRealtimePreflightIo io;
+    io.openGeneric = [&openCount](const std::string&, AVDictionary**)
             -> ::media::Result<::media::ffmpeg::InputFormatContextPtr> {
             ++openCount;
             return ::media::Result<::media::ffmpeg::InputFormatContextPtr>::failure(
                 ::media::ErrorInfo::internalError("opener must not run"));
-        });
+        };
+    io.openMpegTs = [&openCount](const MediaTsInputSessionOptions&)
+            -> ::media::Result<std::unique_ptr<MediaTsInputSession>> {
+            ++openCount;
+            return ::media::Result<std::unique_ptr<MediaTsInputSession>>::failure(
+                ::media::ErrorInfo::internalError("opener must not run"));
+        };
+    auto preflight = MediaRealtimeRtpTranscodePlanner::preflight(invalid, io);
     EXPECT_FALSE(ctx, preflight);
     EXPECT_EQ(ctx, openCount, 0);
+}
+
+void testMpegTsPreflightOpensOneSessionAndKeepsTaggedBinding(TestContext& ctx)
+{
+    auto source = LocalMpegTsUdpSource::start();
+    EXPECT_TRUE(ctx, source);
+    if (!source) return;
+    int tsOpenCount = 0;
+    MediaRealtimePreflightIo io;
+    io.openGeneric = [](const std::string&, AVDictionary**)
+        -> ::media::Result<::media::ffmpeg::InputFormatContextPtr> {
+        return ::media::Result<::media::ffmpeg::InputFormatContextPtr>::failure(
+            ::media::ErrorInfo::internalError("generic opener used for MPEG-TS"));
+    };
+    io.openMpegTs = [&tsOpenCount](const MediaTsInputSessionOptions& options) {
+        ++tsOpenCount;
+        return MediaTsInputSession::open(options);
+    };
+    auto preflight = MediaRealtimeRtpTranscodePlanner::preflight(validMpegTsUdpOptions(), io);
+    EXPECT_TRUE(ctx, preflight);
+    EXPECT_EQ(ctx, tsOpenCount, 1);
+    if (!preflight) return;
+    EXPECT_TRUE(ctx, preflight.value().prepared.has_value());
+    if (preflight.value().prepared) {
+        EXPECT_EQ(ctx, preflight.value().prepared->kind().value(),
+                  MediaPreparedRealtimeInputKind::MpegTs);
+    }
+}
+
+void testMpegTsPreflightPropagatesSessionOpenFailure(TestContext& ctx)
+{
+    int tsOpenCount = 0;
+    MediaRealtimePreflightIo io;
+    io.openMpegTs = [&tsOpenCount](const MediaTsInputSessionOptions&)
+        -> ::media::Result<std::unique_ptr<MediaTsInputSession>> {
+        ++tsOpenCount;
+        return ::media::Result<std::unique_ptr<MediaTsInputSession>>::failure(
+            ::media::ErrorInfo::internalError("injected TS open failure"));
+    };
+    auto preflight = MediaRealtimeRtpTranscodePlanner::preflight(validMpegTsUdpOptions(), io);
+    EXPECT_FALSE(ctx, preflight);
+    EXPECT_EQ(ctx, tsOpenCount, 1);
 }
 
 void testUrlAndMpegTsPurePlanApisRequirePreparedPreflight(TestContext& ctx)
@@ -3450,6 +3498,8 @@ int main()
     testRuntimeCompileFailurePreservesPreviousGraphAndBindings(ctx);
     testSuccessfulPlainCompileReplacesPreparedBindingWithSameNodeId(ctx);
     testInvalidPreflightDoesNotInvokeOpener(ctx);
+    testMpegTsPreflightOpensOneSessionAndKeepsTaggedBinding(ctx);
+    testMpegTsPreflightPropagatesSessionOpenFailure(ctx);
     testUrlAndMpegTsPurePlanApisRequirePreparedPreflight(ctx);
     testValidationRejectsMissingInput(ctx);
     testLegacyArchitectureFilesAreRemoved(ctx);
