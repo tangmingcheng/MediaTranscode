@@ -17,6 +17,7 @@ MediaTsEvidenceCheckpoint checkpoint(std::uint64_t offset, std::uint64_t generat
 {
     MediaTsEvidenceCheckpoint value;
     value.byteOffset = offset;
+    value.pcrObservation.reset();
     value.generation = generation;
     return value;
 }

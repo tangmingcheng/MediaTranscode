@@ -36,6 +36,7 @@ void runRtpDepacketizerTests(TestContext& ctx);
 void runRtpSourceClockTests(TestContext& ctx);
 void runMpegTsPacketTests(TestContext& ctx);
 void runMpegTsClockTests(TestContext& ctx);
+void runMpegTsInputSessionTests(TestContext& ctx);
 
 namespace {
 
@@ -989,6 +990,7 @@ int main()
     runRtpSourceClockTests(ctx);
     runMpegTsPacketTests(ctx);
     runMpegTsClockTests(ctx);
+    runMpegTsInputSessionTests(ctx);
     testAudioEncodeFixedFrameStateMachine(ctx);
     testRtpClockGroupRejectsStaleCrossPortEvidence(ctx);
     return ctx.failures == 0 ? 0 : 1;

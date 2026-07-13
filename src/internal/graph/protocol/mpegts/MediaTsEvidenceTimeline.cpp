@@ -26,6 +26,11 @@ MediaTsEvidenceTimeline::MediaTsEvidenceTimeline(
 
 ::media::Status MediaTsEvidenceTimeline::append(MediaTsEvidenceCheckpoint checkpoint)
 {
+    if (checkpoint.pcrObservation &&
+        checkpoint.pcrObservation->byteOffset != checkpoint.byteOffset) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("MPEG-TS PCR evidence offset must match its checkpoint"));
+    }
     if (!m_checkpoints.empty() && checkpoint.byteOffset <= m_checkpoints.back().byteOffset) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("MPEG-TS evidence offsets must increase strictly"));

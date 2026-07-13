@@ -10,10 +10,19 @@
 
 namespace media::ffmpeg::graph {
 
+struct MediaTsRawPcrEvidence final {
+    std::uint64_t byteOffset = 0;
+    std::uint16_t pid = 0;
+    std::uint64_t pcr27Mhz = 0;
+    bool discontinuity = false;
+
+    bool operator==(const MediaTsRawPcrEvidence&) const = default;
+};
+
 struct MediaTsEvidenceCheckpoint final {
     std::uint64_t byteOffset = 0;
     MediaTsProgramInventorySnapshot inventory;
-    std::optional<std::int64_t> pcr27Mhz;
+    std::optional<MediaTsRawPcrEvidence> pcrObservation;
     bool discontinuity = false;
     std::uint64_t generation = 0;
 };

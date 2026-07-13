@@ -216,6 +216,7 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
         tests/unit/test_node.cpp
         tests/unit/mpeg_ts_packet_tests.cpp
         tests/unit/mpeg_ts_clock_tests.cpp
+        tests/unit/mpeg_ts_input_session_tests.cpp
         tests/unit/rtp_depacketizer_tests.cpp
         tests/unit/rtp_source_clock_tests.cpp
     )
