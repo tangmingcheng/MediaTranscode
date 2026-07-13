@@ -67,11 +67,12 @@ private:
     std::unique_ptr<FFmpegObservedReadAvio> m_observedAvio;
     AVFormatContext* m_formatContext = nullptr;
     std::vector<FFmpegInputStreamSnapshot> m_streamSnapshots;
-    std::mutex m_sessionMutex;
+    mutable std::mutex m_sessionMutex;
     std::condition_variable m_readsDone;
     std::size_t m_activeReads = 0;
     bool m_closing = false;
     bool m_closed = false;
+    std::optional<::media::ErrorInfo> m_finalError;
 };
 
 } // namespace media::ffmpeg::graph

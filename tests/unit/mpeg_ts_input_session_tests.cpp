@@ -642,6 +642,31 @@ void testSessionCloseInterruptsBlockedRead(TestContext& ctx)
         }
     });
     opener.waitUntilBlocked();
+    std::mutex statusMutex;
+    std::condition_variable statusChanged;
+    bool initialStatusRead = false;
+    bool closeFinished = false;
+    std::array<::media::Status, 3> statuses{
+        ::media::Status::success(), ::media::Status::success(), ::media::Status::success()};
+    std::thread statusReader([&] {
+        statuses[0] = session.value()->status();
+        {
+            std::lock_guard lock(statusMutex);
+            initialStatusRead = true;
+        }
+        statusChanged.notify_all();
+        {
+            std::unique_lock lock(statusMutex);
+            statusChanged.wait(lock, [&] { return closeFinished; });
+        }
+        statuses[1] = session.value()->status();
+        statuses[2] = session.value()->status();
+    });
+    {
+        std::unique_lock lock(statusMutex);
+        statusChanged.wait(lock, [&] { return initialStatusRead; });
+    }
+    EXPECT_TRUE(ctx, statuses[0]);
     auto inventoryWhileReading = session.value()->programInventory();
     EXPECT_EQ(ctx, inventoryWhileReading.programs.size(), std::size_t{1});
     auto evidenceWhileReading = session.value()->evidenceAtOrBefore(188);
@@ -653,10 +678,23 @@ void testSessionCloseInterruptsBlockedRead(TestContext& ctx)
     if (!secondRead) EXPECT_EQ(ctx, secondRead.error().code, ::media::ErrorCode::InvalidArgument);
     EXPECT_EQ(ctx, opener.readCount(), readsBeforeSecondReader);
     EXPECT_TRUE(ctx, session.value()->close());
+    {
+        std::lock_guard lock(statusMutex);
+        closeFinished = true;
+    }
+    statusChanged.notify_all();
     reader.join();
+    statusReader.join();
     EXPECT_FALSE(ctx, read);
     if (!read) EXPECT_EQ(ctx, read.error().code, ::media::ErrorCode::Cancelled);
     EXPECT_EQ(ctx, opener.closeCount, std::size_t{1});
+    EXPECT_FALSE(ctx, statuses[1]);
+    EXPECT_FALSE(ctx, statuses[2]);
+    if (!statuses[1] && !statuses[2]) {
+        EXPECT_EQ(ctx, statuses[1].error().code, ::media::ErrorCode::Cancelled);
+        EXPECT_EQ(ctx, statuses[2].error().code, ::media::ErrorCode::Cancelled);
+        EXPECT_EQ(ctx, statuses[1].error().message, statuses[2].error().message);
+    }
 }
 
 void testInterruptedTerminalResultsAreCancelled(TestContext& ctx)

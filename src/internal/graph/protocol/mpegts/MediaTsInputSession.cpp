@@ -142,6 +142,7 @@ MediaTsInputSession::~MediaTsInputSession()
 
 ::media::Status MediaTsInputSession::close() noexcept
 {
+    std::unique_ptr<FFmpegObservedReadAvio> observedToDestroy;
     {
         std::unique_lock lock(m_sessionMutex);
         if (m_closed) return ::media::Status::success();
@@ -162,11 +163,22 @@ MediaTsInputSession::~MediaTsInputSession()
     if (m_formatContext) {
         avformat_close_input(&m_formatContext);
     }
-    m_observedAvio.reset();
     {
         std::lock_guard lock(m_sessionMutex);
+        if (m_observedAvio) {
+            const auto observedStatus = m_observedAvio->status();
+            m_finalError = observedStatus
+                ? std::optional<::media::ErrorInfo>(::media::ErrorInfo::cancelled(
+                      "MPEG-TS input session is closed"))
+                : std::optional<::media::ErrorInfo>(observedStatus.error());
+        } else if (!m_finalError) {
+            m_finalError = ::media::ErrorInfo::cancelled(
+                "MPEG-TS input session is closed");
+        }
+        observedToDestroy = std::move(m_observedAvio);
         m_closed = true;
     }
+    observedToDestroy.reset();
     m_readsDone.notify_all();
     return ::media::Status::success();
 }
@@ -336,8 +348,19 @@ MediaTsProgramInventorySnapshot MediaTsInputSession::programInventory() const
 
 ::media::Status MediaTsInputSession::status() const
 {
-    return m_observedAvio ? m_observedAvio->status() : ::media::Status::failure(
-        ::media::ErrorInfo::notInitialized("MPEG-TS session AVIO is unavailable"));
+    std::lock_guard lock(m_sessionMutex);
+    if (m_finalError) return ::media::Status::failure(*m_finalError);
+    if (!m_observedAvio) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::notInitialized("MPEG-TS session AVIO is unavailable"));
+    }
+    const auto observedStatus = m_observedAvio->status();
+    if (!observedStatus) return observedStatus;
+    if (m_closing || m_closed) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::cancelled("MPEG-TS input session is closing"));
+    }
+    return ::media::Status::success();
 }
 
 } // namespace media::ffmpeg::graph
