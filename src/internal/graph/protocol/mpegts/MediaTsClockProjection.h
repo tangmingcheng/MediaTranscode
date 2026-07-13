@@ -20,7 +20,9 @@ public:
     static ::media::Result<MediaTsClockProjection> create(
         MediaTsProgramClockPolicy policy,
         std::size_t capacity,
-        std::uint64_t maximumPositionRegressionBytes);
+        std::uint64_t maximumPositionRegressionBytes,
+        std::uint64_t initialSourceGeneration,
+        std::uint64_t expectedInitialRawTransportGeneration);
 
     ::media::Status replay(const std::vector<MediaTsEvidenceCheckpoint>& evidence);
     ::media::Result<MediaTsClockProjectionCheckpoint> atOrBefore(
@@ -32,6 +34,7 @@ private:
     MediaTsClockProjection(MediaTsProgramClockPolicy policy,
                            std::size_t capacity,
                            std::uint64_t maximumPositionRegressionBytes,
+                           std::uint64_t expectedInitialRawTransportGeneration,
                            MediaTsProgramClockTracker tracker) noexcept;
     ::media::Status replayOne(const MediaTsEvidenceCheckpoint& evidence);
     ::media::Status validateInventory(const MediaTsProgramInventorySnapshot& inventory) const;
@@ -39,6 +42,7 @@ private:
     MediaTsProgramClockPolicy m_policy;
     std::size_t m_capacity;
     std::uint64_t m_maximumPositionRegressionBytes;
+    std::uint64_t m_expectedInitialRawTransportGeneration;
     MediaTsProgramClockTracker m_tracker;
     std::vector<MediaTsClockProjectionCheckpoint> m_checkpoints;
     std::optional<std::uint64_t> m_lastReplayedOffset;

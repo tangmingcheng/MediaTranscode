@@ -1,6 +1,7 @@
 #include "internal/graph/protocol/mpegts/MediaTsClockProjection.h"
 
 #include <algorithm>
+#include <limits>
 
 namespace media::ffmpeg::graph {
 
@@ -8,10 +9,12 @@ MediaTsClockProjection::MediaTsClockProjection(
     MediaTsProgramClockPolicy policy,
     std::size_t capacity,
     std::uint64_t maximumPositionRegressionBytes,
+    std::uint64_t expectedInitialRawTransportGeneration,
     MediaTsProgramClockTracker tracker) noexcept
     : m_policy(policy)
     , m_capacity(capacity)
     , m_maximumPositionRegressionBytes(maximumPositionRegressionBytes)
+    , m_expectedInitialRawTransportGeneration(expectedInitialRawTransportGeneration)
     , m_tracker(std::move(tracker))
 {
 }
@@ -19,18 +22,21 @@ MediaTsClockProjection::MediaTsClockProjection(
 ::media::Result<MediaTsClockProjection> MediaTsClockProjection::create(
     MediaTsProgramClockPolicy policy,
     std::size_t capacity,
-    std::uint64_t maximumPositionRegressionBytes)
+    std::uint64_t maximumPositionRegressionBytes,
+    std::uint64_t initialSourceGeneration,
+    std::uint64_t expectedInitialRawTransportGeneration)
 {
     if (capacity == 0) {
         return ::media::Result<MediaTsClockProjection>::failure(
             ::media::ErrorInfo::invalidArgument("MPEG-TS clock projection capacity must be positive"));
     }
-    auto tracker = MediaTsProgramClockTracker::create(policy, 0);
+    auto tracker = MediaTsProgramClockTracker::create(policy, initialSourceGeneration);
     if (!tracker) {
         return ::media::Result<MediaTsClockProjection>::failure(tracker.error());
     }
     return ::media::Result<MediaTsClockProjection>::success(
         MediaTsClockProjection(policy, capacity, maximumPositionRegressionBytes,
+                               expectedInitialRawTransportGeneration,
                                std::move(tracker).value()));
 }
 
@@ -79,7 +85,20 @@ MediaTsClockProjection::MediaTsClockProjection(
                     "MPEG-TS PCR discontinuity must match its raw continuity event"));
         }
     }
-    if (m_lastRawTransportGeneration) {
+    if (!m_lastRawTransportGeneration) {
+        const bool hasEvent = evidence.continuityEvent.has_value();
+        const bool exactOrigin = !hasEvent &&
+            evidence.generation == m_expectedInitialRawTransportGeneration;
+        const bool firstTransition = hasEvent &&
+            m_expectedInitialRawTransportGeneration !=
+                std::numeric_limits<std::uint64_t>::max() &&
+            evidence.generation == m_expectedInitialRawTransportGeneration + 1;
+        if (!exactOrigin && !firstTransition) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "MPEG-TS clock projection missing bootstrap/history"));
+        }
+    } else {
         if (evidence.generation < *m_lastRawTransportGeneration ||
             evidence.generation - *m_lastRawTransportGeneration > 1) {
             return ::media::Status::failure(
@@ -90,11 +109,6 @@ MediaTsClockProjection::MediaTsClockProjection(
             return ::media::Status::failure(
                 ::media::ErrorInfo::invalidArgument("MPEG-TS raw transport generation/event mismatch"));
         }
-    }
-    if (!m_lastRawTransportGeneration && evidence.generation != m_tracker.generation()) {
-        auto seeded = MediaTsProgramClockTracker::create(m_policy, evidence.generation);
-        if (!seeded) return ::media::Status::failure(seeded.error());
-        m_tracker = std::move(seeded).value();
     }
     if (m_packetPositionHighWatermark &&
         *m_packetPositionHighWatermark > m_maximumPositionRegressionBytes) {
