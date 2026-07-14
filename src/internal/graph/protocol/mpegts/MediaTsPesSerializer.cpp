@@ -64,29 +64,30 @@ bool validClock(const MediaTsPacketClock& clock) noexcept
         }
     }
 
-    MediaTsPesHeader output;
-    output.size = 9 + timestampBytes;
-    output.bytes[2] = 0x01;
-    output.bytes[3] = streamId;
+    std::array<std::uint8_t, 19> bytes{};
+    const std::size_t size = 9 + timestampBytes;
+    bytes[2] = 0x01;
+    bytes[3] = streamId;
     const std::size_t packetLength = stream == MediaScheduledStream::Video
         ? 0
         : 3 + timestampBytes + framedPayloadBytes;
-    output.bytes[4] = static_cast<std::uint8_t>(packetLength >> 8);
-    output.bytes[5] = static_cast<std::uint8_t>(packetLength);
-    output.bytes[6] = 0x80;
-    output.bytes[7] = hasDts ? 0xC0 : 0x80;
-    output.bytes[8] = static_cast<std::uint8_t>(timestampBytes);
+    bytes[4] = static_cast<std::uint8_t>(packetLength >> 8);
+    bytes[5] = static_cast<std::uint8_t>(packetLength);
+    bytes[6] = 0x80;
+    bytes[7] = hasDts ? 0xC0 : 0x80;
+    bytes[8] = static_cast<std::uint8_t>(timestampBytes);
 
     auto pts = MediaTsTimestampFieldSerializer::serialize(
         hasDts ? 0x3 : 0x2, clock.wirePts);
     if (!pts) return invalid("MPEG-TS PES PTS cannot be serialized");
-    std::copy(pts.value().begin(), pts.value().end(), output.bytes.begin() + 9);
+    std::copy(pts.value().begin(), pts.value().end(), bytes.begin() + 9);
     if (hasDts) {
         auto dts = MediaTsTimestampFieldSerializer::serialize(0x1, clock.wireDts);
         if (!dts) return invalid("MPEG-TS PES DTS cannot be serialized");
-        std::copy(dts.value().begin(), dts.value().end(), output.bytes.begin() + 14);
+        std::copy(dts.value().begin(), dts.value().end(), bytes.begin() + 14);
     }
-    return ::media::Result<MediaTsPesHeader>::success(std::move(output));
+    return ::media::Result<MediaTsPesHeader>::success(
+        MediaTsPesHeader(stream, std::move(bytes), size, framedPayloadBytes));
 }
 
 } // namespace media::ffmpeg::graph

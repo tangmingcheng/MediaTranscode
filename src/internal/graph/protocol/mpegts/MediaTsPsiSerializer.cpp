@@ -66,12 +66,45 @@ std::vector<std::uint8_t> serializePmt(const MediaTsMuxPlanParameters& parameter
 
 } // namespace
 
+MediaTsPsiPlanIdentity::MediaTsPsiPlanIdentity(
+    const MediaTsMuxPlanParameters& parameters) noexcept
+    : m_patPid(parameters.patPid),
+      m_transportStreamId(parameters.transportStreamId),
+      m_programNumber(parameters.programNumber),
+      m_programMapPid(parameters.programMapPid),
+      m_pcrPid(parameters.pcrPid),
+      m_videoPid(parameters.videoPid),
+      m_audioPid(parameters.audioPid),
+      m_tableVersion(parameters.tableVersion),
+      m_videoStreamType(parameters.videoStreamType),
+      m_audioStreamType(parameters.audioStreamType)
+{
+}
+
+bool MediaTsPsiPlanIdentity::matches(const MediaTsMuxPlan& plan) const noexcept
+{
+    const auto& parameters = plan.parameters();
+    return m_patPid == parameters.patPid &&
+           m_transportStreamId == parameters.transportStreamId &&
+           m_programNumber == parameters.programNumber &&
+           m_programMapPid == parameters.programMapPid &&
+           m_pcrPid == parameters.pcrPid &&
+           m_videoPid == parameters.videoPid &&
+           m_audioPid == parameters.audioPid &&
+           m_tableVersion == parameters.tableVersion &&
+           m_videoStreamType == parameters.videoStreamType &&
+           m_audioStreamType == parameters.audioStreamType;
+}
+
 ::media::Result<MediaTsProgramTables> MediaTsPsiSerializer::serialize(
     const MediaTsMuxPlan& plan)
 {
     const auto& parameters = plan.parameters();
+    const MediaTsPsiPlanIdentity identity(parameters);
     return ::media::Result<MediaTsProgramTables>::success(
-        MediaTsProgramTables{serializePat(parameters), serializePmt(parameters)});
+        MediaTsProgramTables(
+            MediaTsPatSection(identity, serializePat(parameters)),
+            MediaTsPmtSection(identity, serializePmt(parameters))));
 }
 
 } // namespace media::ffmpeg::graph

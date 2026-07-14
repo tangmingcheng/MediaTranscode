@@ -62,19 +62,19 @@ void testProgramTableGoldenBytesAndParserCrossCheck(TestContext& ctx)
     auto tables = MediaTsPsiSerializer::serialize(serializerPlan());
     EXPECT_TRUE(ctx, tables);
     if (!tables) return;
-    EXPECT_TRUE(ctx, std::equal(tables.value().pat.begin(), tables.value().pat.end(),
+    EXPECT_TRUE(ctx, std::equal(tables.value().pat().bytes().begin(), tables.value().pat().bytes().end(),
                                expectedPat.begin(), expectedPat.end()));
-    EXPECT_TRUE(ctx, std::equal(tables.value().pmt.begin(), tables.value().pmt.end(),
+    EXPECT_TRUE(ctx, std::equal(tables.value().pmt().bytes().begin(), tables.value().pmt().bytes().end(),
                                expectedPmt.begin(), expectedPmt.end()));
-    EXPECT_EQ(ctx, MediaTsCrc32::compute(tables.value().pat), std::uint32_t{0});
-    EXPECT_EQ(ctx, MediaTsCrc32::compute(tables.value().pmt), std::uint32_t{0});
+    EXPECT_EQ(ctx, MediaTsCrc32::compute(tables.value().pat().bytes()), std::uint32_t{0});
+    EXPECT_EQ(ctx, MediaTsCrc32::compute(tables.value().pmt().bytes()), std::uint32_t{0});
 
     InventorySink sink;
     MediaTsPsiSectionAssembler assembler(sink);
     std::vector<std::uint8_t> patPayload{0};
-    patPayload.insert(patPayload.end(), tables.value().pat.begin(), tables.value().pat.end());
+    patPayload.insert(patPayload.end(), tables.value().pat().bytes().begin(), tables.value().pat().bytes().end());
     std::vector<std::uint8_t> pmtPayload{0};
-    pmtPayload.insert(pmtPayload.end(), tables.value().pmt.begin(), tables.value().pmt.end());
+    pmtPayload.insert(pmtPayload.end(), tables.value().pmt().bytes().begin(), tables.value().pmt().bytes().end());
     EXPECT_TRUE(ctx, assembler.onPacket(MediaTsPacketView{
         0, 0, true, 0, false, std::nullopt, patPayload}));
     EXPECT_TRUE(ctx, assembler.onPacket(MediaTsPacketView{
@@ -98,23 +98,25 @@ void testPesTimestampGoldenBytes(TestContext& ctx)
     auto audio = MediaTsPesSerializer::header(MediaScheduledStream::Audio, ptsOnly, 100);
     EXPECT_TRUE(ctx, audio);
     if (audio) {
+        EXPECT_EQ(ctx, audio.value().framedPayloadBytes(), std::size_t{100});
         const std::array<std::uint8_t, 14> expected{
             0x00, 0x00, 0x01, 0xC0, 0x00, 0x6C, 0x80, 0x80, 0x05,
             0x21, 0x04, 0x8D, 0x8A, 0xCF};
-        EXPECT_EQ(ctx, audio.value().size, expected.size());
-        EXPECT_TRUE(ctx, std::equal(expected.begin(), expected.end(), audio.value().bytes.begin()));
+        EXPECT_EQ(ctx, audio.value().bytes().size(), expected.size());
+        EXPECT_TRUE(ctx, std::equal(expected.begin(), expected.end(), audio.value().bytes().begin()));
     }
 
     const MediaTsPacketClock reordered{0x1234567, 0x1020304, 0x1234567, 0x1020304};
     auto video = MediaTsPesSerializer::header(MediaScheduledStream::Video, reordered, 5);
     EXPECT_TRUE(ctx, video);
     if (video) {
+        EXPECT_EQ(ctx, video.value().framedPayloadBytes(), std::size_t{5});
         const std::array<std::uint8_t, 19> expected{
             0x00, 0x00, 0x01, 0xE0, 0x00, 0x00, 0x80, 0xC0, 0x0A,
             0x31, 0x04, 0x8D, 0x8A, 0xCF,
             0x11, 0x04, 0x09, 0x06, 0x09};
-        EXPECT_EQ(ctx, video.value().size, expected.size());
-        EXPECT_TRUE(ctx, std::equal(expected.begin(), expected.end(), video.value().bytes.begin()));
+        EXPECT_EQ(ctx, video.value().bytes().size(), expected.size());
+        EXPECT_TRUE(ctx, std::equal(expected.begin(), expected.end(), video.value().bytes().begin()));
     }
 
     const auto wrap = (std::uint64_t{1} << 33) - 1;
@@ -123,7 +125,7 @@ void testPesTimestampGoldenBytes(TestContext& ctx)
     EXPECT_TRUE(ctx, wrapHeader);
     if (wrapHeader) {
         const std::array<std::uint8_t, 5> expected{0x2F, 0xFF, 0xFF, 0xFF, 0xFF};
-        EXPECT_TRUE(ctx, std::equal(expected.begin(), expected.end(), wrapHeader.value().bytes.begin() + 9));
+        EXPECT_TRUE(ctx, std::equal(expected.begin(), expected.end(), wrapHeader.value().bytes().begin() + 9));
     }
 }
 
@@ -168,17 +170,17 @@ void testPesUsesExtendedTimestampsAcrossEqualWireWrap(TestContext& ctx)
         MediaScheduledStream::Video, clock, 1);
     EXPECT_TRUE(ctx, header);
     if (!header) return;
-    EXPECT_EQ(ctx, header.value().size, std::size_t{19});
-    EXPECT_EQ(ctx, header.value().bytes[7], std::uint8_t{0xC0});
-    EXPECT_EQ(ctx, header.value().bytes[8], std::uint8_t{10});
-    EXPECT_EQ(ctx, header.value().bytes[9] >> 4, std::uint8_t{3});
-    EXPECT_EQ(ctx, header.value().bytes[14] >> 4, std::uint8_t{1});
-    EXPECT_EQ(ctx, header.value().bytes[9] & 0x0F,
-              header.value().bytes[14] & 0x0F);
+    EXPECT_EQ(ctx, header.value().bytes().size(), std::size_t{19});
+    EXPECT_EQ(ctx, header.value().bytes()[7], std::uint8_t{0xC0});
+    EXPECT_EQ(ctx, header.value().bytes()[8], std::uint8_t{10});
+    EXPECT_EQ(ctx, header.value().bytes()[9] >> 4, std::uint8_t{3});
+    EXPECT_EQ(ctx, header.value().bytes()[14] >> 4, std::uint8_t{1});
+    EXPECT_EQ(ctx, header.value().bytes()[9] & 0x0F,
+              header.value().bytes()[14] & 0x0F);
     EXPECT_TRUE(ctx, std::equal(
-        header.value().bytes.begin() + 10,
-        header.value().bytes.begin() + 14,
-        header.value().bytes.begin() + 15));
+        header.value().bytes().begin() + 10,
+        header.value().bytes().begin() + 14,
+        header.value().bytes().begin() + 15));
 }
 
 void testPesAcceptsNegativeExtendedTimestampPositiveModulo(TestContext& ctx)
@@ -191,11 +193,11 @@ void testPesAcceptsNegativeExtendedTimestampPositiveModulo(TestContext& ctx)
         MediaScheduledStream::Audio, valid, 1);
     EXPECT_TRUE(ctx, header);
     if (header) {
-        EXPECT_EQ(ctx, header.value().size, std::size_t{14});
+        EXPECT_EQ(ctx, header.value().bytes().size(), std::size_t{14});
         const std::array<std::uint8_t, 5> expected{
             0x2F, 0xFF, 0xFF, 0xFF, 0xFF};
         EXPECT_TRUE(ctx, std::equal(
-            expected.begin(), expected.end(), header.value().bytes.begin() + 9));
+            expected.begin(), expected.end(), header.value().bytes().begin() + 9));
     }
 
     const MediaTsPacketClock mismatched{-1, -1, WrappedNegativeOne - 1,
