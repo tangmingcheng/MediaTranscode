@@ -1,46 +1,13 @@
 #pragma once
 
-#include "internal/graph/model/MediaTranscodeParameters.h"
-#include "internal/graph/planner/audio/MediaAudioProfile.h"
+#include "internal/graph/planner/audio/MediaResolvedAudioTargetDecision.h"
 #include "media_transcode/Result.h"
 
-#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace media::ffmpeg::graph {
-
-struct MediaAudioOutputRequirement final {
-    std::optional<std::string> codecName;
-    std::optional<MediaAudioProfile> profile;
-    std::optional<int> sampleRate;
-    std::optional<int> channels;
-};
-
-struct MediaResolvedAudioSource final {
-    std::string codecName;
-    MediaAudioProfile profile = MediaAudioProfile::unknown();
-    int sampleRate = 0;
-    int channels = 0;
-    std::string channelLayout;
-    std::string sampleFormat;
-    std::int64_t bitrateBitsPerSecond = 0;
-};
-
-struct MediaResolvedAudioRequest final {
-    std::string codecName;
-    std::optional<MediaAudioProfile> profile;
-    std::optional<int> sampleRate;
-    std::optional<int> channels;
-    MediaRateControlMode rateControl = MediaRateControlMode::Auto;
-    std::optional<int> bitrateKbps;
-    std::optional<int> minBitrateKbps;
-    std::optional<int> maxBitrateKbps;
-    std::optional<int> bufferSizeKbits;
-    std::optional<int> quality;
-    std::string preset;
-};
 
 struct MediaSelectedAudioEncoder final {
     std::string name;
@@ -52,9 +19,7 @@ struct MediaSelectedAudioEncoder final {
 class MediaResolvedAudioOutputPlan final {
 public:
     static ::media::Result<MediaResolvedAudioOutputPlan> create(
-        const MediaResolvedAudioSource& source,
-        const MediaResolvedAudioRequest& request,
-        const MediaAudioOutputRequirement& topologyRequirement,
+        const MediaResolvedAudioTargetDecision& target,
         const std::optional<MediaSelectedAudioEncoder>& selectedEncoder);
 
     const std::string& codecName() const noexcept;

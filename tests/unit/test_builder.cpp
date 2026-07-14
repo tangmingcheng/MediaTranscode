@@ -25,8 +25,11 @@ MediaAudioEncodeBranchOptions audioEncodeOptions(MediaGraph& graph)
         "aac", MediaAudioProfile::knownAacLow(), 44'100, 2, "stereo", "fltp", 128'000};
     MediaResolvedAudioRequest request;
     request.sampleRate = 48'000;
+    auto target = MediaResolvedAudioTargetDecision::create(source, request, {});
     auto resolved = MediaResolvedAudioOutputPlan::create(
-        source, request, {}, std::optional<MediaSelectedAudioEncoder>{{"aac", "fltp"}});
+        target.value(),
+        std::optional<MediaSelectedAudioEncoder>{{
+            "aac", "fltp", {}, {MediaAudioProfile::knownAacLow().ffmpegProfileId()}}});
     options.plan.resolvedOutput = std::move(resolved).value();
     options.normalizePackets = false;
     options.formatSourceNode = graph.addNode(MediaNodeKind::DebugDump, "format_source");

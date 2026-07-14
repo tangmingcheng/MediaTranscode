@@ -367,17 +367,16 @@ MediaNodeKind AudioCodecResolverNode::staticKind() noexcept
         encoderContext->rc_buffer_size = bits.value();
     }
 
-    const std::string profile = optionValue(options, MediaTranscodeOptionKey::AudioProfile);
-    if (profile.empty() || profile == "unknown") {
-        return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(
-            ::media::ErrorInfo::invalidArgument("AudioCodecResolverNode requires resolved audio profile"));
+    auto profileId = intOption(options, MediaTranscodeOptionKey::AudioProfileId);
+    if (!profileId) {
+        return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(profileId.error());
     }
-    if (profile == "aac_low") {
-        encoderContext->profile = AV_PROFILE_AAC_LOW;
-    } else if (profile != "not_applicable") {
+    if (!profileId.value()) {
         return ::media::Result<::media::ffmpeg::CodecContextPtr>::failure(
-            ::media::ErrorInfo::unsupported("AudioCodecResolverNode planned audio profile is unsupported"));
+            ::media::ErrorInfo::invalidArgument(
+                "AudioCodecResolverNode requires planned audio profile id"));
     }
+    encoderContext->profile = *profileId.value();
     const std::string preset = optionValue(options, MediaTranscodeOptionKey::AudioPreset);
     if (!preset.empty()) {
         if (auto status = setPrivateOption(encoderContext.get(), "preset", preset); !status) {

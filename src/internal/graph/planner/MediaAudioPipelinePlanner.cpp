@@ -22,6 +22,11 @@ namespace {
     if (profileName.empty()) {
         return ::media::Result<std::optional<MediaAudioProfile>>::success(std::nullopt);
     }
+    if (canonicalCodecName(codecName) != "aac") {
+        return ::media::Result<std::optional<MediaAudioProfile>>::failure(
+            ::media::ErrorInfo::unsupported(
+                "explicit audio profile is only supported for AAC output"));
+    }
     auto profile = MediaAudioProfile::fromCodecProfile(codecName, profileName);
     if (!profile) return ::media::Result<std::optional<MediaAudioProfile>>::failure(profile.error());
     return ::media::Result<std::optional<MediaAudioProfile>>::success(profile.value());
@@ -57,6 +62,9 @@ namespace {
             selected.supportedProfileIds.push_back(profile->profile);
         }
     }
+    if (canonicalCodecName(codecName) == "aac" && selected.supportedProfileIds.empty()) {
+        selected.supportedProfileIds.push_back(AV_PROFILE_AAC_LOW);
+    }
     return ::media::Result<MediaSelectedAudioEncoder>::success(std::move(selected));
 }
 
@@ -74,7 +82,11 @@ MediaResolvedAudioSource resolvedSource(const MediaInputAudioStreamInfo& input)
     MediaResolvedAudioRequest request;
     request.codecName = options.requestedCodecName;
     const std::string targetCodec = canonicalCodecName(
-        request.codecName.empty() ? source.codecName : request.codecName);
+        request.codecName.empty()
+            ? (options.outputRequirement.codecName
+                   ? *options.outputRequirement.codecName
+                   : source.codecName)
+            : request.codecName);
     auto profile = requestedProfile(targetCodec, options.requestedProfile);
     if (!profile) return ::media::Result<MediaResolvedAudioRequest>::failure(profile.error());
     request.profile = profile.value();
@@ -86,6 +98,9 @@ MediaResolvedAudioSource resolvedSource(const MediaInputAudioStreamInfo& input)
     if (!request.profile && targetCodec == "aac" &&
         (targetCodec != source.codecName || formatChange || encoderOnlyRequest)) {
         request.profile = MediaAudioProfile::knownAacLow();
+    }
+    if (!request.profile && targetCodec != "aac") {
+        request.profile = MediaAudioProfile::notApplicable();
     }
     request.sampleRate = options.requestedSampleRate;
     request.channels = options.requestedChannels;
@@ -149,13 +164,16 @@ MediaResolvedAudioSource resolvedSource(const MediaInputAudioStreamInfo& input)
     const MediaResolvedAudioSource source = resolvedSource(inputInfo);
     auto request = resolvedRequest(options, source);
     if (!request) return ::media::Result<MediaAudioPipelinePlan>::failure(request.error());
-    const std::string targetCodec = canonicalCodecName(request.value().codecName.empty()
-        ? (options.outputRequirement.codecName ? *options.outputRequirement.codecName : source.codecName)
-        : request.value().codecName);
-    auto encoder = selectAudioEncoder(targetCodec);
-    if (!encoder) return ::media::Result<MediaAudioPipelinePlan>::failure(encoder.error());
-    auto output = MediaResolvedAudioOutputPlan::create(
-        source, request.value(), options.outputRequirement, encoder.value());
+    auto target = MediaResolvedAudioTargetDecision::create(
+        source, request.value(), options.outputRequirement);
+    if (!target) return ::media::Result<MediaAudioPipelinePlan>::failure(target.error());
+    std::optional<MediaSelectedAudioEncoder> encoder;
+    if (target.value().branchMode() == MediaBranchMode::TranscodeFrame) {
+        auto selected = selectAudioEncoder(target.value().codecName());
+        if (!selected) return ::media::Result<MediaAudioPipelinePlan>::failure(selected.error());
+        encoder = std::move(selected).value();
+    }
+    auto output = MediaResolvedAudioOutputPlan::create(target.value(), encoder);
     if (!output) return ::media::Result<MediaAudioPipelinePlan>::failure(output.error());
 
     plan.enabled = true;

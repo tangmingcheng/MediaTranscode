@@ -439,7 +439,7 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
         !outputStatus) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(outputStatus.error());
     }
-    std::optional<MediaProjectMpegTsOutputPlan> resolvedTsOutput;
+    std::optional<MediaProjectMpegTsResolvedPipelineFacts> resolvedTsFacts;
     if (MediaRealtimeRequestClassifier::mpegTsUdpInput(options) &&
         MediaRealtimeRequestClassifier::muxedTransportOutput(options)) {
         if (!plan.audioPlan.resolvedOutput) {
@@ -447,18 +447,13 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
                 ::media::ErrorInfo::notInitialized(
                     "Project MPEG-TS output requires resolved audio format facts"));
         }
-        auto resolved = MediaProjectMpegTsOutputPlan::create(
-            plan.videoPlan.outputCodecName, *plan.audioPlan.resolvedOutput);
-        if (!resolved) {
-            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
-                resolved.error());
-        }
-        resolvedTsOutput = std::move(resolved).value();
+        resolvedTsFacts.emplace(MediaProjectMpegTsResolvedPipelineFacts{
+            plan.videoPlan.outputCodecName, *plan.audioPlan.resolvedOutput});
     }
     if (MediaRealtimeRequestClassifier::audioRequested(options)) {
         auto avSync = MediaAvSyncPlanner::plan(
             options, selectedTsProgram,
-            resolvedTsOutput ? &*resolvedTsOutput : nullptr);
+            resolvedTsFacts ? &*resolvedTsFacts : nullptr);
         if (!avSync) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(avSync.error());
         }

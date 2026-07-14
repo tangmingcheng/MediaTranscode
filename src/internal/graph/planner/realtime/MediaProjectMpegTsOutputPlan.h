@@ -12,7 +12,8 @@ class MediaProjectMpegTsOutputPlan final {
 public:
     static ::media::Result<MediaProjectMpegTsOutputPlan> create(
         const std::string& videoCodecName,
-        const MediaResolvedAudioOutputPlan& audioOutput);
+        const MediaResolvedAudioOutputPlan& audioOutput,
+        MediaRunningTime transportDecodeLead);
 
     int audioSampleRate() const noexcept;
     const MediaTsMuxPlan& muxPlan() const noexcept;

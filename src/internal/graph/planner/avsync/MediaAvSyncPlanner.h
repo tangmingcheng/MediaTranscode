@@ -4,6 +4,7 @@
 #include "internal/graph/planner/realtime/MediaTsProgramSelector.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodeRequest.h"
 #include "internal/graph/planner/realtime/MediaProjectMpegTsOutputPlan.h"
+#include "internal/graph/planner/realtime/MediaProjectMpegTsResolvedPipelineFacts.h"
 #include "media_transcode/Result.h"
 
 namespace media::ffmpeg::graph {
@@ -13,7 +14,7 @@ public:
     static ::media::Result<MediaAvSyncPlan> plan(
         const MediaRealtimeRtpTranscodeRequest& request,
         const MediaTsSelectedProgramPlan* selectedTsProgram = nullptr,
-        const MediaProjectMpegTsOutputPlan* resolvedTsOutput = nullptr);
+        const MediaProjectMpegTsResolvedPipelineFacts* resolvedTsFacts = nullptr);
 
 private:
     MediaAvSyncPlanner() = delete;

@@ -64,6 +64,7 @@ std::string plannedProfile(const MediaAudioProfile& profile)
     if (auto status = setOption(graph, nodes.codecResolver, MediaTranscodeOptionKey::AudioChannelLayout, output.channelLayout()); !status) return status;
     if (auto status = setOption(graph, nodes.codecResolver, MediaTranscodeOptionKey::AudioSampleFormat, output.sampleFormat()); !status) return status;
     if (auto status = setOption(graph, nodes.codecResolver, MediaTranscodeOptionKey::AudioProfile, plannedProfile(output.profile())); !status) return status;
+    if (auto status = setOption(graph, nodes.codecResolver, MediaTranscodeOptionKey::AudioProfileId, std::to_string(output.profile().ffmpegProfileId())); !status) return status;
     if (auto status = setOptional(graph, nodes.codecResolver, MediaTranscodeOptionKey::AudioBitrateKbps, output.bitrateKbps()); !status) return status;
     if (auto status = setOptional(graph, nodes.codecResolver, MediaTranscodeOptionKey::AudioMinBitrateKbps, output.minBitrateKbps()); !status) return status;
     if (auto status = setOptional(graph, nodes.codecResolver, MediaTranscodeOptionKey::AudioMaxBitrateKbps, output.maxBitrateKbps()); !status) return status;

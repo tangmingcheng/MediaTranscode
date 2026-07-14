@@ -960,7 +960,7 @@ void testGraphRejectsBehaviorDefaultImplementations(TestContext& ctx)
     expectTextNotContains(ctx, audioResolver, "av_channel_layout_copy(audio encoder");
     expectTextNotContains(ctx, audioResolver, "AV_SAMPLE_FMT_FLTP");
     expectTextContains(ctx, audioResolver, "AudioSampleFormat");
-    expectTextContains(ctx, audioResolver, "requires resolved audio profile");
+    expectTextContains(ctx, audioResolver, "requires planned audio profile id");
     expectTextContains(ctx, audioResolver, "av_opt_set(audio encoder");
     expectTextContains(ctx, audioResolver, "audio sample rate is not supported by selected encoder");
     expectTextNotContains(ctx, encoderBuilder, "defaultBufferSizeFromRate");

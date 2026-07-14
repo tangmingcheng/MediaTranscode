@@ -8,7 +8,8 @@ namespace media::ffmpeg::graph {
 
 ::media::Result<MediaProjectMpegTsOutputPlan> MediaProjectMpegTsOutputPlan::create(
     const std::string& videoCodecName,
-    const MediaResolvedAudioOutputPlan& audioOutput)
+    const MediaResolvedAudioOutputPlan& audioOutput,
+    MediaRunningTime transportDecodeLead)
 {
     if (canonicalCodecName(videoCodecName) != "h264" ||
         audioOutput.codecName() != "aac" ||
@@ -29,7 +30,7 @@ namespace media::ffmpeg::graph {
             MediaRunningTime::fromNanoseconds(20'000'000),
             MediaRunningTime::fromNanoseconds(100'000'000),
             MediaRunningTime::fromNanoseconds(5'000'000), 1, 90'000},
-        MediaRunningTime::fromNanoseconds(100'000'000), 188,
+        transportDecodeLead, 188,
         MediaTsContinuitySeeds{0, 0, 0, 0}, 7,
         MediaTsOutputTransportKind::Udp});
     if (!mux) return ::media::Result<MediaProjectMpegTsOutputPlan>::failure(mux.error());

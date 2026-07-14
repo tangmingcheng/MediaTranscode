@@ -201,7 +201,7 @@ std::uint32_t stableIdentity(const std::string& value) noexcept
 ::media::Result<MediaAvSyncPlan> planTs(
     const MediaRealtimeRtpTranscodeRequest& request,
     const MediaTsSelectedProgramPlan& selected,
-    const MediaProjectMpegTsOutputPlan& resolvedOutput)
+    const MediaProjectMpegTsResolvedPipelineFacts& resolvedFacts)
 {
     MediaAvSyncPlan plan;
     if (auto status = planSharedPolicy(plan, request); !status) {
@@ -223,9 +223,19 @@ std::uint32_t stableIdentity(const std::string& value) noexcept
                                  std::to_string(selected.audioPid);
     plan.ts->pcrPid = selected.pcrPid;
 
-    plan.audioServo.outputSampleRate = resolvedOutput.audioSampleRate();
-
-    plan.ts->outputMux = resolvedOutput.muxPlan();
+    if (!plan.startup.outputLeadNs) {
+        return ::media::Result<MediaAvSyncPlan>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "MPEG-TS output requires planner-owned startup output lead"));
+    }
+    auto resolvedOutput = MediaProjectMpegTsOutputPlan::create(
+        resolvedFacts.videoCodecName, resolvedFacts.audioOutput,
+        *plan.startup.outputLeadNs);
+    if (!resolvedOutput) {
+        return ::media::Result<MediaAvSyncPlan>::failure(resolvedOutput.error());
+    }
+    plan.audioServo.outputSampleRate = resolvedOutput.value().audioSampleRate();
+    plan.ts->outputMux = resolvedOutput.value().muxPlan();
 
     if (auto status = MediaAvSyncPlanValidator::validate(plan); !status) {
         return ::media::Result<MediaAvSyncPlan>::failure(status.error());
@@ -238,7 +248,7 @@ std::uint32_t stableIdentity(const std::string& value) noexcept
 ::media::Result<MediaAvSyncPlan> MediaAvSyncPlanner::plan(
     const MediaRealtimeRtpTranscodeRequest& request,
     const MediaTsSelectedProgramPlan* selectedTsProgram,
-    const MediaProjectMpegTsOutputPlan* resolvedTsOutput)
+    const MediaProjectMpegTsResolvedPipelineFacts* resolvedTsFacts)
 {
     if (!request.parameters.execution.includeAudio) {
         return ::media::Result<MediaAvSyncPlan>::failure(
@@ -246,7 +256,7 @@ std::uint32_t stableIdentity(const std::string& value) noexcept
     }
     if (MediaRealtimeRequestClassifier::rawRtpInput(request) &&
         MediaRealtimeRequestClassifier::separateRtpOutput(request)) {
-        if (resolvedTsOutput) {
+        if (resolvedTsFacts) {
             return ::media::Result<MediaAvSyncPlan>::failure(
                 ::media::ErrorInfo::invalidArgument(
                     "RTP A/V synchronization does not accept an MPEG-TS resolved output plan"));
@@ -260,12 +270,12 @@ std::uint32_t stableIdentity(const std::string& value) noexcept
                 ::media::ErrorInfo::notInitialized(
                     "MPEG-TS A/V synchronization requires planner-selected program identity"));
         }
-        if (!resolvedTsOutput) {
+        if (!resolvedTsFacts) {
             return ::media::Result<MediaAvSyncPlan>::failure(
                 ::media::ErrorInfo::notInitialized(
                     "MPEG-TS A/V synchronization requires resolved output media facts"));
         }
-        return planTs(request, *selectedTsProgram, *resolvedTsOutput);
+        return planTs(request, *selectedTsProgram, *resolvedTsFacts);
     }
     if (MediaRealtimeRequestClassifier::rawRtpInput(request) &&
         MediaRealtimeRequestClassifier::muxedTransportOutput(request)) {
