@@ -942,6 +942,9 @@ void testGraphRejectsBehaviorDefaultImplementations(TestContext& ctx)
     const std::string audioPlanner = repositoryFile("src/internal/graph/planner/MediaAudioPipelinePlanner.cpp");
     const std::string encoderBuilder = repositoryFile("src/internal/graph/builder/codec/CodecResolverEncoderContextBuilder.cpp");
     const std::string audioResolver = repositoryFile("src/internal/graph/nodes/audio/AudioCodecResolverNode.cpp");
+    const std::string audioPlanApplier = repositoryFile("src/internal/graph/builder/MediaAudioPlanOptionApplier.cpp");
+    const std::string audioCapabilityProvider = repositoryFile(
+        "src/internal/graph/planner/audio/capability/MediaAudioEncoderCapabilityProvider.cpp");
     const std::string transcodeParameters = repositoryFile("src/internal/graph/model/MediaTranscodeParameters.h");
     const std::string presetHeader = repositoryFile("src/internal/graph/preset/MediaPipelinePreset.h");
     const std::string realtimePlanner = repositoryFile("src/internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.cpp");
@@ -955,12 +958,19 @@ void testGraphRejectsBehaviorDefaultImplementations(TestContext& ctx)
     expectTextContains(ctx, audioPlannerHeader, "MediaAudioPipelinePlannerOptions() = delete");
     expectTextNotContains(ctx, audioPlannerHeader, "bool includeAudio = true");
     expectTextNotContains(ctx, audioPlanner, "plan.reason = \"no_audio\"");
+    expectTextNotContains(ctx, audioPlanner, "supportedProfileIds.push_back(AV_PROFILE_AAC_LOW)");
+    expectTextContains(ctx, audioPlanner, "MediaAudioEncoderCapabilityProvider::verify");
+    expectTextContains(ctx, audioCapabilityProvider, "avcodec_open2");
+    expectTextNotContains(ctx, audioCapabilityProvider, "AV_PROFILE_AAC_LOW");
     expectTextNotContains(ctx, audioResolver, "supported_samplerates[0]");
     expectTextNotContains(ctx, audioResolver, "codecParameters.value()->bit_rate");
     expectTextNotContains(ctx, audioResolver, "av_channel_layout_copy(audio encoder");
     expectTextNotContains(ctx, audioResolver, "AV_SAMPLE_FMT_FLTP");
     expectTextContains(ctx, audioResolver, "AudioSampleFormat");
     expectTextContains(ctx, audioResolver, "requires planned audio profile id");
+    expectTextNotContains(ctx, audioPlanApplier, "plannedProfile");
+    expectTextNotContains(ctx, audioPlanApplier, "MediaTranscodeOptionKey::AudioProfile,");
+    expectTextNotContains(ctx, transcodeParameters, "char AudioProfile[]");
     expectTextContains(ctx, audioResolver, "av_opt_set(audio encoder");
     expectTextContains(ctx, audioResolver, "audio sample rate is not supported by selected encoder");
     expectTextNotContains(ctx, encoderBuilder, "defaultBufferSizeFromRate");

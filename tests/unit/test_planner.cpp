@@ -825,6 +825,11 @@ void testResolvedAudioPlannerMatrix(TestContext& ctx)
     if (unavailableCodecCopy) {
         EXPECT_EQ(ctx, unavailableCodecCopy.value().branchMode, MediaBranchMode::CopyPacket);
     }
+    auto unsupportedAacRate = ordinary;
+    unsupportedAacRate.requestedSampleRate = 12'345;
+    EXPECT_FALSE(ctx, MediaAudioPipelinePlanner::planKnownAudio(
+        source("aac", MediaAudioProfile::knownAacLow(), 48'000, 2),
+        unsupportedAacRate));
 
     MediaAudioPipelinePlannerOptions ts(true);
     ts.outputRequirement.codecName = "aac";

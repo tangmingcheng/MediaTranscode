@@ -23,16 +23,6 @@ constexpr const char* owner = "MediaAudioPlanOptionApplier";
                  : ::media::Result<void>::success();
 }
 
-std::string plannedProfile(const MediaAudioProfile& profile)
-{
-    switch (profile.knowledge()) {
-    case MediaAudioProfileKnowledge::Known: return profile.canonicalName();
-    case MediaAudioProfileKnowledge::NotApplicable: return "not_applicable";
-    case MediaAudioProfileKnowledge::Unknown: return "unknown";
-    }
-    return {};
-}
-
 } // namespace
 
 ::media::Result<void> MediaAudioPlanOptionApplier::applySelectedPlan(
@@ -63,7 +53,6 @@ std::string plannedProfile(const MediaAudioProfile& profile)
     if (auto status = setOption(graph, nodes.codecResolver, MediaTranscodeOptionKey::AudioChannels, std::to_string(output.channels())); !status) return status;
     if (auto status = setOption(graph, nodes.codecResolver, MediaTranscodeOptionKey::AudioChannelLayout, output.channelLayout()); !status) return status;
     if (auto status = setOption(graph, nodes.codecResolver, MediaTranscodeOptionKey::AudioSampleFormat, output.sampleFormat()); !status) return status;
-    if (auto status = setOption(graph, nodes.codecResolver, MediaTranscodeOptionKey::AudioProfile, plannedProfile(output.profile())); !status) return status;
     if (auto status = setOption(graph, nodes.codecResolver, MediaTranscodeOptionKey::AudioProfileId, std::to_string(output.profile().ffmpegProfileId())); !status) return status;
     if (auto status = setOptional(graph, nodes.codecResolver, MediaTranscodeOptionKey::AudioBitrateKbps, output.bitrateKbps()); !status) return status;
     if (auto status = setOptional(graph, nodes.codecResolver, MediaTranscodeOptionKey::AudioMinBitrateKbps, output.minBitrateKbps()); !status) return status;

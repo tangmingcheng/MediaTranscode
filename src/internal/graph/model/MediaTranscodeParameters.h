@@ -187,7 +187,6 @@ inline constexpr char AudioChannelLayout[] = "audio.channel_layout";
 inline constexpr char AudioSampleFormat[] = "audio.sample_format";
 inline constexpr char AudioQuality[] = "audio.quality";
 inline constexpr char AudioPreset[] = "audio.preset";
-inline constexpr char AudioProfile[] = "audio.profile";
 inline constexpr char AudioProfileId[] = "audio.profile.ffmpeg_id";
 } // namespace MediaTranscodeOptionKey
 

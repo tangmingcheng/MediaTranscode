@@ -1,12 +1,8 @@
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 
 #include "internal/graph/planner/MediaPipelineAudioSourceProbe.h"
+#include "internal/graph/planner/audio/capability/MediaAudioEncoderCapabilityProvider.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
-
-extern "C" {
-#include <libavcodec/avcodec.h>
-#include <libavutil/samplefmt.h>
-}
 
 #include <optional>
 #include <string>
@@ -30,42 +26,6 @@ namespace {
     auto profile = MediaAudioProfile::fromCodecProfile(codecName, profileName);
     if (!profile) return ::media::Result<std::optional<MediaAudioProfile>>::failure(profile.error());
     return ::media::Result<std::optional<MediaAudioProfile>>::success(profile.value());
-}
-
-::media::Result<MediaSelectedAudioEncoder> selectAudioEncoder(const std::string& codecName)
-{
-    const AVCodec* encoder = avcodec_find_encoder_by_name(codecName.c_str());
-    if (!encoder) {
-        const AVCodecDescriptor* descriptor = avcodec_descriptor_get_by_name(codecName.c_str());
-        encoder = descriptor ? avcodec_find_encoder(descriptor->id) : nullptr;
-    }
-    if (!encoder || !encoder->name || !encoder->sample_fmts ||
-        encoder->sample_fmts[0] == AV_SAMPLE_FMT_NONE) {
-        return ::media::Result<MediaSelectedAudioEncoder>::failure(
-            ::media::ErrorInfo::unsupported("complete audio encoder capability not found for codec: " + codecName));
-    }
-    const char* sampleFormat = av_get_sample_fmt_name(encoder->sample_fmts[0]);
-    if (!sampleFormat) {
-        return ::media::Result<MediaSelectedAudioEncoder>::failure(
-            ::media::ErrorInfo::unsupported("audio encoder sample format is unknown: " + codecName));
-    }
-    MediaSelectedAudioEncoder selected;
-    selected.name = encoder->name;
-    selected.sampleFormat = sampleFormat;
-    if (encoder->supported_samplerates) {
-        for (const int* rate = encoder->supported_samplerates; *rate != 0; ++rate) {
-            selected.supportedSampleRates.push_back(*rate);
-        }
-    }
-    if (encoder->profiles) {
-        for (const AVProfile* profile = encoder->profiles; profile->name; ++profile) {
-            selected.supportedProfileIds.push_back(profile->profile);
-        }
-    }
-    if (canonicalCodecName(codecName) == "aac" && selected.supportedProfileIds.empty()) {
-        selected.supportedProfileIds.push_back(AV_PROFILE_AAC_LOW);
-    }
-    return ::media::Result<MediaSelectedAudioEncoder>::success(std::move(selected));
 }
 
 MediaResolvedAudioSource resolvedSource(const MediaInputAudioStreamInfo& input)
@@ -169,7 +129,7 @@ MediaResolvedAudioSource resolvedSource(const MediaInputAudioStreamInfo& input)
     if (!target) return ::media::Result<MediaAudioPipelinePlan>::failure(target.error());
     std::optional<MediaSelectedAudioEncoder> encoder;
     if (target.value().branchMode() == MediaBranchMode::TranscodeFrame) {
-        auto selected = selectAudioEncoder(target.value().codecName());
+        auto selected = MediaAudioEncoderCapabilityProvider::verify(target.value());
         if (!selected) return ::media::Result<MediaAudioPipelinePlan>::failure(selected.error());
         encoder = std::move(selected).value();
     }
