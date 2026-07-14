@@ -18,7 +18,7 @@ extern "C" {
 namespace media::ffmpeg::graph {
 
 ScheduledRtpMuxFfmpegSession::ScheduledRtpMuxFfmpegSession(
-    FFmpegDatagramSink sink)
+    ScheduledRtpRewrittenDatagramSink sink)
     : m_sink(std::move(sink))
 {
 }
@@ -233,9 +233,9 @@ ScheduledRtpMuxFfmpegSession::~ScheduledRtpMuxFfmpegSession()
     auto rewritten = MediaRtpDatagramRewriter::rewrite(
         datagram, parameters, m_rewriteScratch);
     if (!rewritten) {
-        return rewritten;
+        return ::media::Status::failure(rewritten.error());
     }
-    return m_sink(m_rewriteScratch);
+    return m_sink(m_rewriteScratch, rewritten.value().payloadOctets());
 }
 
 ::media::Status ScheduledRtpMuxFfmpegSession::preserveCallbackFailure()

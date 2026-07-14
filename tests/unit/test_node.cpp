@@ -37,6 +37,7 @@ void runRtpDepacketizerTests(TestContext& ctx);
 void runRtpSourceClockTests(TestContext& ctx);
 void runRtpOutputClockTests(TestContext& ctx);
 void runScheduledRtpPacketizationTests(TestContext& ctx);
+void runScheduledRtpSenderTests(TestContext& ctx);
 void runMpegTsPacketTests(TestContext& ctx);
 void runMpegTsPesProvenanceTimelineTests(TestContext& ctx);
 void runMpegTsClockTests(TestContext& ctx);
@@ -998,6 +999,7 @@ int main()
     runRtpSourceClockTests(ctx);
     runRtpOutputClockTests(ctx);
     runScheduledRtpPacketizationTests(ctx);
+    runScheduledRtpSenderTests(ctx);
     runMpegTsPacketTests(ctx);
     runMpegTsPesProvenanceTimelineTests(ctx);
     runMpegTsClockTests(ctx);

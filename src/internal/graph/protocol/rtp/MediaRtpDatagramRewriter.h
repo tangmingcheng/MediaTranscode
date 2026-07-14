@@ -43,9 +43,24 @@ private:
     MediaRtpTimestamp m_timestamp;
 };
 
+class MediaRtpDatagramRewriteResult final {
+public:
+    std::size_t payloadOctets() const noexcept { return m_payloadOctets; }
+
+private:
+    friend class MediaRtpDatagramRewriter;
+
+    explicit MediaRtpDatagramRewriteResult(std::size_t payloadOctets) noexcept
+        : m_payloadOctets(payloadOctets)
+    {
+    }
+
+    std::size_t m_payloadOctets;
+};
+
 class MediaRtpDatagramRewriter final {
 public:
-    static ::media::Status rewrite(
+    static ::media::Result<MediaRtpDatagramRewriteResult> rewrite(
         std::span<const std::uint8_t> datagram,
         const MediaRtpDatagramRewriteParameters& parameters,
         std::vector<std::uint8_t>& output);

@@ -29,6 +29,7 @@ namespace {
 static_assert(!std::is_default_constructible_v<FFmpegDatagramWriteAvioConfig>);
 static_assert(!std::is_default_constructible_v<MediaRtpDatagramRewriteParameters>);
 static_assert(!std::is_default_constructible_v<MediaRtpDatagramRewriteIdentity>);
+static_assert(!std::is_default_constructible_v<MediaRtpDatagramRewriteResult>);
 static_assert(!std::is_default_constructible_v<ScheduledRtpMuxStreamConfig>);
 static_assert(!std::is_constructible_v<MediaRtpTimestamp, std::uint64_t, std::uint32_t>);
 
@@ -85,8 +86,13 @@ void testDatagramWriteAvioLifecycleAndFailure(TestContext& ctx)
     EXPECT_EQ(ctx, delivered.size(), static_cast<std::size_t>(1));
     EXPECT_FALSE(ctx, avio.value()->close());
     EXPECT_TRUE(ctx, avio.value()->reset());
-    EXPECT_TRUE(ctx, avio.value()->open());
-    EXPECT_TRUE(ctx, avio.value()->close());
+    for (int cycle = 0; cycle < 64; ++cycle) {
+        EXPECT_TRUE(ctx, avio.value()->open());
+        EXPECT_TRUE(ctx, avio.value()->context() != nullptr);
+        EXPECT_TRUE(ctx, avio.value()->context()->buffer != nullptr);
+        EXPECT_TRUE(ctx, avio.value()->close());
+        EXPECT_TRUE(ctx, avio.value()->reset());
+    }
 
     const auto sinkError = ::media::ErrorInfo::ioFailure("structured sink failure", -77);
     auto failing = FFmpegDatagramWriteAvio::create(
@@ -144,6 +150,7 @@ void testRtpDatagramRewritePreservesStructure(TestContext& ctx)
     EXPECT_TRUE(ctx, rewritten.data() == scratchStorage);
     EXPECT_EQ(ctx, rewritten.capacity(), scratchCapacity);
     if (rewriteStatus) {
+        EXPECT_EQ(ctx, rewriteStatus.value().payloadOctets(), static_cast<std::size_t>(3));
         EXPECT_EQ(ctx, rewritten[0], 0x80u);
         EXPECT_EQ(ctx, rewritten[1], 0xE0u);
         EXPECT_EQ(ctx, rewritten[2], 0x12u);
@@ -170,6 +177,7 @@ void testRtpDatagramRewritePreservesStructure(TestContext& ctx)
     EXPECT_TRUE(ctx, rewritten.data() == scratchStorage);
     EXPECT_EQ(ctx, rewritten.capacity(), scratchCapacity);
     if (complexRewriteStatus) {
+        EXPECT_EQ(ctx, complexRewriteStatus.value().payloadOctets(), static_cast<std::size_t>(1));
         EXPECT_EQ(ctx, rewritten[0], originalComplex[0]);
         EXPECT_EQ(ctx, rewritten[1], originalComplex[1]);
         EXPECT_EQ(ctx, rewritten[2], originalComplex[2]);
@@ -295,7 +303,7 @@ void testScheduledMuxRealPacketization(TestContext& ctx)
 
     std::vector<std::vector<std::uint8_t>> datagrams;
     ScheduledRtpMuxFfmpegSession session(
-        [&datagrams](std::span<const std::uint8_t> bytes) {
+        [&datagrams](std::span<const std::uint8_t> bytes, std::size_t) {
             datagrams.emplace_back(bytes.begin(), bytes.end());
             return ::media::Status::success();
         });
@@ -419,7 +427,7 @@ void testScheduledMuxRealPacketization(TestContext& ctx)
         if (audioConfig) {
             std::vector<std::vector<std::uint8_t>> audioDatagrams;
             ScheduledRtpMuxFfmpegSession audioSession(
-                [&audioDatagrams](std::span<const std::uint8_t> bytes) {
+                [&audioDatagrams](std::span<const std::uint8_t> bytes, std::size_t) {
                     audioDatagrams.emplace_back(bytes.begin(), bytes.end());
                     return ::media::Status::success();
                 });
@@ -478,7 +486,7 @@ void testScheduledMuxPropagatesSinkFailure(TestContext& ctx)
     std::size_t successfulDatagrams = 0;
     ScheduledRtpMuxFfmpegSession session(
         [&injectPartialFailure, &callbackCount, &successfulDatagrams](
-            std::span<const std::uint8_t>) {
+            std::span<const std::uint8_t>, std::size_t) {
             ++callbackCount;
             if (injectPartialFailure && callbackCount == 2) {
                 return ::media::Status::failure(

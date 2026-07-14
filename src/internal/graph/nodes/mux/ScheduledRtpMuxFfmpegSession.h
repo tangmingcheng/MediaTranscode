@@ -1,11 +1,13 @@
 #pragma once
 
 #include "internal/graph/nodes/mux/ScheduledRtpMuxStreamConfig.h"
+#include "internal/graph/nodes/mux/ScheduledRtpPacketizerSession.h"
 #include "internal/graph/protocol/rtp/MediaRtpTimestamp.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegDatagramWriteAvio.h"
 #include "media_transcode/Result.h"
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <vector>
 
@@ -14,18 +16,18 @@ struct AVPacket;
 
 namespace media::ffmpeg::graph {
 
-class ScheduledRtpMuxFfmpegSession final {
+class ScheduledRtpMuxFfmpegSession final : public ScheduledRtpPacketizerSession {
 public:
-    explicit ScheduledRtpMuxFfmpegSession(FFmpegDatagramSink sink);
+    explicit ScheduledRtpMuxFfmpegSession(ScheduledRtpRewrittenDatagramSink sink);
     ~ScheduledRtpMuxFfmpegSession();
 
     ScheduledRtpMuxFfmpegSession(const ScheduledRtpMuxFfmpegSession&) = delete;
     ScheduledRtpMuxFfmpegSession& operator=(const ScheduledRtpMuxFfmpegSession&) = delete;
 
     ::media::Status configure(ScheduledRtpMuxStreamConfig config);
-    ::media::Status open();
+    ::media::Status open() override;
     ::media::Status writeAccessUnit(const AVPacket& packet,
-                                    MediaRtpTimestamp timestamp);
+                                    MediaRtpTimestamp timestamp) override;
     ::media::Status writeTrailer();
     ::media::Status reset() noexcept;
 
@@ -43,7 +45,7 @@ private:
     void poison(::media::ErrorInfo error);
     void releaseOutput() noexcept;
 
-    FFmpegDatagramSink m_sink;
+    ScheduledRtpRewrittenDatagramSink m_sink;
     std::optional<ScheduledRtpMuxStreamConfig> m_config;
     AVFormatContext* m_context = nullptr;
     std::unique_ptr<FFmpegDatagramWriteAvio> m_avio;

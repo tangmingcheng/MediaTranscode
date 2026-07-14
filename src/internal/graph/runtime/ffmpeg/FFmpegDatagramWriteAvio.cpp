@@ -161,6 +161,7 @@ int FFmpegDatagramWriteAvio::deliver(
 void FFmpegDatagramWriteAvio::release() noexcept
 {
     if (m_context) {
+        av_freep(&m_context->buffer);
         avio_context_free(&m_context);
     }
 }
