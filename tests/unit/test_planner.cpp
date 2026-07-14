@@ -837,6 +837,17 @@ void testResolvedAudioPlannerMatrix(TestContext& ctx)
     explicitOpus.requestedCodecName = "opus";
     EXPECT_FALSE(ctx, MediaAudioPipelinePlanner::planKnownAudio(
         source("opus", MediaAudioProfile::notApplicable(), 48'000, 2), explicitOpus));
+
+    MediaResolvedAudioSource encoderSource{
+        "aac", MediaAudioProfile::knownAacLow(), 44'100, 2, "stereo", "fltp", 128'000};
+    MediaResolvedAudioRequest encoderRequest;
+    encoderRequest.sampleRate = 48'000;
+    EXPECT_FALSE(ctx, MediaResolvedAudioOutputPlan::create(
+        encoderSource, encoderRequest, {},
+        MediaSelectedAudioEncoder{"aac", "fltp", {44'100}, {}}));
+    EXPECT_FALSE(ctx, MediaResolvedAudioOutputPlan::create(
+        encoderSource, encoderRequest, {},
+        MediaSelectedAudioEncoder{"aac", "fltp", {48'000}, {AV_PROFILE_AAC_HE}}));
 }
 
 } // namespace

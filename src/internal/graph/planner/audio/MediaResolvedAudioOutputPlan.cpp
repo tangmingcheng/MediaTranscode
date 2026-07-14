@@ -3,6 +3,7 @@
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 
 #include <utility>
+#include <algorithm>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -56,6 +57,21 @@ template <typename T>
     if (!copy && (!selectedEncoder || selectedEncoder->name.empty() || selectedEncoder->sampleFormat.empty())) {
         return ::media::Result<MediaResolvedAudioOutputPlan>::failure(
             ::media::ErrorInfo::invalidArgument("transcode audio output requires complete selected encoder"));
+    }
+    if (!copy && !selectedEncoder->supportedSampleRates.empty() &&
+        std::find(selectedEncoder->supportedSampleRates.begin(),
+                  selectedEncoder->supportedSampleRates.end(), sampleRate.value()) ==
+            selectedEncoder->supportedSampleRates.end()) {
+        return ::media::Result<MediaResolvedAudioOutputPlan>::failure(
+            ::media::ErrorInfo::unsupported("selected audio encoder does not support resolved sample rate"));
+    }
+    if (!copy && profile.value().knowledge() == MediaAudioProfileKnowledge::Known &&
+        !selectedEncoder->supportedProfileIds.empty() &&
+        std::find(selectedEncoder->supportedProfileIds.begin(),
+                  selectedEncoder->supportedProfileIds.end(), profile.value().ffmpegProfileId()) ==
+            selectedEncoder->supportedProfileIds.end()) {
+        return ::media::Result<MediaResolvedAudioOutputPlan>::failure(
+            ::media::ErrorInfo::unsupported("selected audio encoder does not support resolved profile"));
     }
 
     MediaResolvedAudioOutputPlan plan;

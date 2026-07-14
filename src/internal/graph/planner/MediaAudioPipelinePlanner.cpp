@@ -44,7 +44,20 @@ namespace {
         return ::media::Result<MediaSelectedAudioEncoder>::failure(
             ::media::ErrorInfo::unsupported("audio encoder sample format is unknown: " + codecName));
     }
-    return ::media::Result<MediaSelectedAudioEncoder>::success({encoder->name, sampleFormat});
+    MediaSelectedAudioEncoder selected;
+    selected.name = encoder->name;
+    selected.sampleFormat = sampleFormat;
+    if (encoder->supported_samplerates) {
+        for (const int* rate = encoder->supported_samplerates; *rate != 0; ++rate) {
+            selected.supportedSampleRates.push_back(*rate);
+        }
+    }
+    if (encoder->profiles) {
+        for (const AVProfile* profile = encoder->profiles; profile->name; ++profile) {
+            selected.supportedProfileIds.push_back(profile->profile);
+        }
+    }
+    return ::media::Result<MediaSelectedAudioEncoder>::success(std::move(selected));
 }
 
 MediaResolvedAudioSource resolvedSource(const MediaInputAudioStreamInfo& input)

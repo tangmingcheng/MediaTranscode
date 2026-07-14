@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace media::ffmpeg::graph {
 
@@ -44,6 +45,8 @@ struct MediaResolvedAudioRequest final {
 struct MediaSelectedAudioEncoder final {
     std::string name;
     std::string sampleFormat;
+    std::vector<int> supportedSampleRates;
+    std::vector<int> supportedProfileIds;
 };
 
 class MediaResolvedAudioOutputPlan final {
