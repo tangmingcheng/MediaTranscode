@@ -1,4 +1,5 @@
 #include "internal/graph/protocol/mpegts/MediaTsPsiSectionAssembler.h"
+#include "internal/graph/protocol/mpegts/MediaTsCrc32.h"
 
 #include <algorithm>
 #include <unordered_set>
@@ -16,18 +17,6 @@ uint16_t readU16(std::span<const uint8_t> bytes, std::size_t offset)
     return static_cast<uint16_t>((static_cast<uint16_t>(bytes[offset]) << 8) | bytes[offset + 1]);
 }
 
-uint32_t crc32Mpeg(std::span<const uint8_t> bytes)
-{
-    uint32_t crc = 0xFFFFFFFFU;
-    for (const uint8_t byte : bytes) {
-        crc ^= static_cast<uint32_t>(byte) << 24;
-        for (int bit = 0; bit < 8; ++bit) {
-            crc = (crc & 0x80000000U) != 0 ? (crc << 1) ^ 0x04C11DB7U : crc << 1;
-        }
-    }
-    return crc;
-}
-
 ::media::Status validateLongSection(std::span<const uint8_t> section,
                                     uint8_t tableId,
                                     std::size_t minimumSize)
@@ -42,7 +31,7 @@ uint32_t crc32Mpeg(std::span<const uint8_t> bytes)
     if ((section[5] & 0xC0) != 0xC0) return invalidSection("MPEG-TS PSI version reserved bits are invalid");
     if ((section[5] & 0x01) == 0) return invalidSection("MPEG-TS PSI current_next is not current");
     if (section[6] > section[7]) return invalidSection("MPEG-TS PSI section number exceeds last section");
-    if (crc32Mpeg(section) != 0) return invalidSection("MPEG-TS PSI CRC32 is invalid");
+    if (MediaTsCrc32::compute(section) != 0) return invalidSection("MPEG-TS PSI CRC32 is invalid");
     return ::media::Status::success();
 }
 

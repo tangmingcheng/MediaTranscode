@@ -51,6 +51,8 @@ void runAvStartupCoordinatorTests(TestContext& ctx);
 void runAudioSwrCompensationExecutorTests(TestContext& ctx);
 void runAudioResampleNodeTests(TestContext& ctx);
 void runOutputByteSinkTests(TestContext& ctx);
+void runMpegTsOutputSerializerTests(TestContext& ctx);
+void runMpegTsAccessUnitFramerTests(TestContext& ctx);
 
 namespace {
 
@@ -1278,6 +1280,8 @@ int main()
     runAudioSwrCompensationExecutorTests(ctx);
     runAudioResampleNodeTests(ctx);
     runOutputByteSinkTests(ctx);
+    runMpegTsOutputSerializerTests(ctx);
+    runMpegTsAccessUnitFramerTests(ctx);
     testAudioEncodeFixedFrameStateMachine(ctx);
     testRtpClockGroupRejectsStaleCrossPortEvidence(ctx);
     return ctx.failures == 0 ? 0 : 1;
