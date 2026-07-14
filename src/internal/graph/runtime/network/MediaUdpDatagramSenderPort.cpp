@@ -1,38 +1,12 @@
 #include "internal/graph/runtime/network/MediaUdpDatagramSenderPort.h"
-
-#ifdef _WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#else
-#include <arpa/inet.h>
-#endif
-
-#include <array>
 #include <utility>
 
 namespace media::ffmpeg::graph {
 
-namespace {
-
-bool isNumericAddress(MediaIpAddressFamily family, const std::string& address)
-{
-    std::array<std::uint8_t, 16> storage{};
-    const int nativeFamily = family == MediaIpAddressFamily::Ipv4 ? AF_INET : AF_INET6;
-#ifdef _WIN32
-    return InetPtonA(nativeFamily, address.c_str(), storage.data()) == 1;
-#else
-    return inet_pton(nativeFamily, address.c_str(), storage.data()) == 1;
-#endif
-}
-
-} // namespace
-
 MediaUdpDatagramEndpoint::MediaUdpDatagramEndpoint(
-    MediaIpAddressFamily addressFamily,
-    std::string numericAddress,
+    MediaNumericIpAddress address,
     std::uint16_t port) noexcept
-    : m_addressFamily(addressFamily),
-      m_numericAddress(std::move(numericAddress)),
+    : m_address(std::move(address)),
       m_port(port)
 {
 }
@@ -42,13 +16,14 @@ MediaUdpDatagramEndpoint::MediaUdpDatagramEndpoint(
     std::string numericAddress,
     std::uint16_t port)
 {
-    if (!isNumericAddress(addressFamily, numericAddress)) {
+    auto address = MediaNumericIpAddress::create(
+        addressFamily, std::move(numericAddress));
+    if (!address) {
         return ::media::Result<MediaUdpDatagramEndpoint>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "UDP endpoint requires a numeric address in the selected family"));
+            address.error());
     }
     return ::media::Result<MediaUdpDatagramEndpoint>::success(
-        MediaUdpDatagramEndpoint(addressFamily, std::move(numericAddress), port));
+        MediaUdpDatagramEndpoint(std::move(address.value()), port));
 }
 
 MediaUdpDatagramSenderPortOpenRequest::MediaUdpDatagramSenderPortOpenRequest(

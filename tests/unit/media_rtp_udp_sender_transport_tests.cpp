@@ -25,6 +25,9 @@ static_assert(!std::is_default_constructible_v<MediaUdpDatagramSendOutcome>);
 
 void testConfigIsCompleteAndStrict(TestContext& ctx)
 {
+    const std::string embeddedNulAddress("127.0.0.1\0INJECT", 16);
+    EXPECT_FALSE(ctx, MediaUdpDatagramEndpoint::create(
+        MediaIpAddressFamily::Ipv4, embeddedNulAddress, 5004));
     auto fixed = MediaRtpUdpLocalPortPolicy::fixedAdjacent(6000, 6001);
     EXPECT_TRUE(ctx, fixed);
     if (!fixed) return;

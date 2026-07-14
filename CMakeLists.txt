@@ -238,6 +238,18 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
     media_transcode_configure_test(media_transcode_node_tests)
     media_transcode_register_test(media_transcode_node_tests "node;deterministic")
 
+    add_executable(media_transcode_atomic_file_publisher_tests
+        tests/unit/media_atomic_utf8_file_publisher_tests.cpp
+    )
+    media_transcode_configure_test(media_transcode_atomic_file_publisher_tests)
+    media_transcode_register_test(media_transcode_atomic_file_publisher_tests "runtime;deterministic")
+
+    add_executable(media_transcode_rtp_sdp_description_tests
+        tests/unit/media_rtp_sdp_description_tests.cpp
+    )
+    media_transcode_configure_test(media_transcode_rtp_sdp_description_tests)
+    media_transcode_register_test(media_transcode_rtp_sdp_description_tests "core;deterministic")
+
     add_test(NAME media_transcode_test_tier_contract
         COMMAND ${CMAKE_COMMAND}
             -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
