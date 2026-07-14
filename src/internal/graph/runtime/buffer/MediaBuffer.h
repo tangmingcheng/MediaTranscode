@@ -21,7 +21,8 @@ enum class MediaBufferType {
     Frame,
     HardwareFrame,
     Control,
-    Event
+    Event,
+    OutputByteSink
 };
 
 enum class MediaBufferFlag : uint32_t {
