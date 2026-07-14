@@ -230,6 +230,8 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
         tests/unit/mpeg_ts_output_serializer_tests.cpp
         tests/unit/mpeg_ts_access_unit_framer_tests.cpp
         tests/unit/mpeg_ts_output_packetizer_tests.cpp
+        tests/unit/mpeg_ts_output_session_tests.cpp
+        tests/unit/fixtures/MediaTsPesTimestampInspector.cpp
         tests/unit/output_byte_sink_tests.cpp
         tests/unit/rtp_depacketizer_tests.cpp
         tests/unit/rtp_output_clock_tests.cpp
@@ -305,6 +307,20 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
             target_link_libraries(media_transcode_mpeg_ts_integration_tests PRIVATE ws2_32)
         endif()
         media_transcode_register_test(media_transcode_mpeg_ts_integration_tests "integration")
+
+        add_executable(media_transcode_mpeg_ts_output_decode_integration_tests
+            tests/unit/mpeg_ts_output_decode_integration_tests.cpp
+            tests/unit/fixtures/MediaTsSampleStreamConfigFixture.cpp
+        )
+        media_transcode_configure_test(media_transcode_mpeg_ts_output_decode_integration_tests)
+        target_compile_definitions(media_transcode_mpeg_ts_output_decode_integration_tests PRIVATE
+            MEDIA_TRANSCODE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+        )
+        media_transcode_register_test(
+            media_transcode_mpeg_ts_output_decode_integration_tests "integration")
+        set_tests_properties(media_transcode_mpeg_ts_output_decode_integration_tests PROPERTIES
+            SKIP_RETURN_CODE 77
+        )
 
         add_executable(media_transcode_mpeg_ts_crafted_udp_fault_tests
             tests/unit/mpeg_ts_crafted_udp_fault_tests.cpp

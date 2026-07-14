@@ -1,9 +1,22 @@
 #include "internal/graph/protocol/mpegts/MediaTsOutputClockGenerator.h"
 
 #include <limits>
+#include <optional>
 #include <string>
 
 namespace media::ffmpeg::graph {
+
+struct MediaTsOutputClockControlState final {
+    enum class PendingKind : std::uint8_t { None, Packet, Pcr };
+
+    std::optional<std::int64_t> lastVideoExtendedDts;
+    std::optional<std::int64_t> lastAudioExtendedDts;
+    std::optional<MediaRunningTime> lastPcrMasterTime;
+    std::uint64_t nextRevision = 1;
+    std::uint64_t pendingRevision = 0;
+    PendingKind pendingKind = PendingKind::None;
+};
+
 namespace {
 
 constexpr std::int64_t NanosecondsPerSecond = 1'000'000'000;
@@ -69,6 +82,112 @@ std::uint64_t absoluteDistance(std::int64_t lhs, std::int64_t rhs) noexcept
 
 } // namespace
 
+MediaTsPreparedPacketClock::MediaTsPreparedPacketClock(
+    std::weak_ptr<MediaTsOutputClockControlState> owner,
+    std::uint64_t revision,
+    MediaScheduledStream stream,
+    MediaTsPacketClock clock) noexcept
+    : m_owner(std::move(owner))
+    , m_revision(revision)
+    , m_stream(stream)
+    , m_clock(clock)
+    , m_valid(true)
+{
+}
+
+MediaTsPreparedPacketClock::~MediaTsPreparedPacketClock()
+{
+    cancel();
+}
+
+MediaTsPreparedPacketClock::MediaTsPreparedPacketClock(
+    MediaTsPreparedPacketClock&& other) noexcept
+    : m_owner(std::move(other.m_owner))
+    , m_revision(other.m_revision)
+    , m_stream(other.m_stream)
+    , m_clock(other.m_clock)
+    , m_valid(other.m_valid)
+{
+    other.m_valid = false;
+}
+
+MediaTsPreparedPacketClock& MediaTsPreparedPacketClock::operator=(
+    MediaTsPreparedPacketClock&& other) noexcept
+{
+    if (this == &other) return *this;
+    cancel();
+    m_owner = std::move(other.m_owner);
+    m_revision = other.m_revision;
+    m_stream = other.m_stream;
+    m_clock = other.m_clock;
+    m_valid = other.m_valid;
+    other.m_valid = false;
+    return *this;
+}
+
+void MediaTsPreparedPacketClock::cancel() noexcept
+{
+    if (!m_valid) return;
+    if (auto owner = m_owner.lock(); owner &&
+        owner->pendingKind == MediaTsOutputClockControlState::PendingKind::Packet &&
+        owner->pendingRevision == m_revision) {
+        owner->pendingKind = MediaTsOutputClockControlState::PendingKind::None;
+        owner->pendingRevision = 0;
+    }
+    m_valid = false;
+}
+
+MediaTsPreparedPcrClock::MediaTsPreparedPcrClock(
+    std::weak_ptr<MediaTsOutputClockControlState> owner,
+    std::uint64_t revision,
+    MediaTsPcrClock clock) noexcept
+    : m_owner(std::move(owner))
+    , m_revision(revision)
+    , m_clock(clock)
+    , m_valid(true)
+{
+}
+
+MediaTsPreparedPcrClock::~MediaTsPreparedPcrClock()
+{
+    cancel();
+}
+
+MediaTsPreparedPcrClock::MediaTsPreparedPcrClock(
+    MediaTsPreparedPcrClock&& other) noexcept
+    : m_owner(std::move(other.m_owner))
+    , m_revision(other.m_revision)
+    , m_clock(other.m_clock)
+    , m_valid(other.m_valid)
+{
+    other.m_valid = false;
+}
+
+MediaTsPreparedPcrClock& MediaTsPreparedPcrClock::operator=(
+    MediaTsPreparedPcrClock&& other) noexcept
+{
+    if (this == &other) return *this;
+    cancel();
+    m_owner = std::move(other.m_owner);
+    m_revision = other.m_revision;
+    m_clock = other.m_clock;
+    m_valid = other.m_valid;
+    other.m_valid = false;
+    return *this;
+}
+
+void MediaTsPreparedPcrClock::cancel() noexcept
+{
+    if (!m_valid) return;
+    if (auto owner = m_owner.lock(); owner &&
+        owner->pendingKind == MediaTsOutputClockControlState::PendingKind::Pcr &&
+        owner->pendingRevision == m_revision) {
+        owner->pendingKind = MediaTsOutputClockControlState::PendingKind::None;
+        owner->pendingRevision = 0;
+    }
+    m_valid = false;
+}
+
 ::media::Result<MediaTsOutputClockGenerator> MediaTsOutputClockGenerator::create(
     MediaTsOutputClockPolicy policy,
     MediaPlaybackEpoch epoch)
@@ -88,8 +207,10 @@ std::uint64_t absoluteDistance(std::int64_t lhs, std::int64_t rhs) noexcept
 
 MediaTsOutputClockGenerator::MediaTsOutputClockGenerator(
     MediaTsOutputClockPolicy policy,
-    MediaPlaybackEpoch epoch) noexcept
-    : m_policy(std::move(policy)), m_epoch(epoch)
+    MediaPlaybackEpoch epoch)
+    : m_policy(std::move(policy))
+    , m_epoch(epoch)
+    , m_control(std::make_shared<MediaTsOutputClockControlState>())
 {
 }
 
@@ -127,7 +248,7 @@ MediaTsOutputClockGenerator::MediaTsOutputClockGenerator(
                        : ::media::Result<std::int64_t>::failure(nanoseconds.error());
 }
 
-::media::Result<MediaTsPacketClock> MediaTsOutputClockGenerator::project(
+::media::Result<MediaTsPreparedPacketClock> MediaTsOutputClockGenerator::preparePacket(
     std::uint64_t generation,
     MediaScheduledStream stream,
     MediaRunningTime presentationOnMaster,
@@ -136,92 +257,135 @@ MediaTsOutputClockGenerator::MediaTsOutputClockGenerator(
     MediaRunningTime transportDecodeLead)
 {
     if (auto status = validateGeneration(generation); !status) {
-        return ::media::Result<MediaTsPacketClock>::failure(status.error());
+        return ::media::Result<MediaTsPreparedPacketClock>::failure(status.error());
     }
     auto actualLead = dispatchOnMaster.checkedSubtract(emitOnMaster);
     if (!actualLead || transportDecodeLead.nanoseconds() <= 0 ||
         actualLead.value() != transportDecodeLead) {
-        return ::media::Result<MediaTsPacketClock>::failure(
+        return ::media::Result<MediaTsPreparedPacketClock>::failure(
             invalid("dispatch-to-emission lead differs from transport plan").error());
     }
     auto pts = timestampTicks(presentationOnMaster);
     auto dts = timestampTicks(dispatchOnMaster);
-    if (!pts) return ::media::Result<MediaTsPacketClock>::failure(pts.error());
-    if (!dts) return ::media::Result<MediaTsPacketClock>::failure(dts.error());
+    if (!pts) return ::media::Result<MediaTsPreparedPacketClock>::failure(pts.error());
+    if (!dts) return ::media::Result<MediaTsPreparedPacketClock>::failure(dts.error());
     if (dts.value() > pts.value()) {
-        return ::media::Result<MediaTsPacketClock>::failure(
+        return ::media::Result<MediaTsPreparedPacketClock>::failure(
             invalid("decode timestamp exceeds presentation timestamp").error());
     }
     std::optional<std::int64_t>* lastExtendedDts = nullptr;
     switch (stream) {
     case MediaScheduledStream::Video:
-        lastExtendedDts = &m_lastVideoExtendedDts;
+        lastExtendedDts = &m_control->lastVideoExtendedDts;
         break;
     case MediaScheduledStream::Audio:
-        lastExtendedDts = &m_lastAudioExtendedDts;
+        lastExtendedDts = &m_control->lastAudioExtendedDts;
         break;
     default:
-        return ::media::Result<MediaTsPacketClock>::failure(
+        return ::media::Result<MediaTsPreparedPacketClock>::failure(
             invalid("stream kind is unsupported").error());
     }
     if (*lastExtendedDts && dts.value() < **lastExtendedDts) {
-        return ::media::Result<MediaTsPacketClock>::failure(
+        return ::media::Result<MediaTsPreparedPacketClock>::failure(
             invalid("decode timeline regressed").error());
     }
-    *lastExtendedDts = dts.value();
-    return ::media::Result<MediaTsPacketClock>::success(MediaTsPacketClock{
-        pts.value(), dts.value(), positiveModulo(pts.value(), TimestampModulus),
-        positiveModulo(dts.value(), TimestampModulus)});
+    if (m_control->pendingKind != MediaTsOutputClockControlState::PendingKind::None ||
+        m_control->nextRevision == 0 ||
+        m_control->nextRevision == std::numeric_limits<std::uint64_t>::max()) {
+        return ::media::Result<MediaTsPreparedPacketClock>::failure(
+            invalid("already has a pending transaction or exhausted revisions").error());
+    }
+    const std::uint64_t revision = m_control->nextRevision++;
+    m_control->pendingKind = MediaTsOutputClockControlState::PendingKind::Packet;
+    m_control->pendingRevision = revision;
+    return ::media::Result<MediaTsPreparedPacketClock>::success(
+        MediaTsPreparedPacketClock(
+            m_control, revision, stream,
+            MediaTsPacketClock{
+                pts.value(), dts.value(), positiveModulo(pts.value(), TimestampModulus),
+                positiveModulo(dts.value(), TimestampModulus)}));
 }
 
-::media::Result<std::vector<MediaTsPcrClock>>
-MediaTsOutputClockGenerator::advancePcrThrough(
+::media::Status MediaTsOutputClockGenerator::commitPacket(
+    MediaTsPreparedPacketClock&& prepared)
+{
+    auto owner = prepared.m_owner.lock();
+    if (!prepared.m_valid || owner != m_control ||
+        owner->pendingKind != MediaTsOutputClockControlState::PendingKind::Packet ||
+        owner->pendingRevision != prepared.m_revision) {
+        return invalid("packet transaction token is stale or foreign");
+    }
+    switch (prepared.m_stream) {
+    case MediaScheduledStream::Video:
+        owner->lastVideoExtendedDts = prepared.m_clock.extendedDts;
+        break;
+    case MediaScheduledStream::Audio:
+        owner->lastAudioExtendedDts = prepared.m_clock.extendedDts;
+        break;
+    default:
+        return invalid("packet transaction stream is unsupported");
+    }
+    owner->pendingKind = MediaTsOutputClockControlState::PendingKind::None;
+    owner->pendingRevision = 0;
+    prepared.m_valid = false;
+    return ::media::Status::success();
+}
+
+::media::Result<MediaTsPreparedPcrClock>
+MediaTsOutputClockGenerator::preparePcr(
     std::uint64_t generation,
-    MediaRunningTime masterTime)
+    MediaRunningTime exactDeadline)
 {
     if (auto status = validateGeneration(generation); !status) {
-        return ::media::Result<std::vector<MediaTsPcrClock>>::failure(status.error());
+        return ::media::Result<MediaTsPreparedPcrClock>::failure(status.error());
     }
-    if (masterTime < m_epoch.masterRelease ||
-        (m_lastPcrMasterTime && masterTime < *m_lastPcrMasterTime)) {
-        return ::media::Result<std::vector<MediaTsPcrClock>>::failure(
-            invalid("PCR schedule regressed").error());
+    if (m_control->pendingKind != MediaTsOutputClockControlState::PendingKind::None ||
+        m_control->nextRevision == 0 ||
+        m_control->nextRevision == std::numeric_limits<std::uint64_t>::max()) {
+        return ::media::Result<MediaTsPreparedPcrClock>::failure(
+            invalid("already has a pending transaction or exhausted revisions").error());
     }
-    const MediaRunningTime previous = m_lastPcrMasterTime
-        ? *m_lastPcrMasterTime : m_epoch.masterRelease;
-    auto gap = masterTime.checkedSubtract(previous);
-    if (!gap || gap.value() > m_policy.maximumPcrGap) {
-        return ::media::Result<std::vector<MediaTsPcrClock>>::failure(
-            invalid("PCR request exceeded maximum gap").error());
+    MediaRunningTime expected = m_epoch.masterRelease;
+    if (m_control->lastPcrMasterTime) {
+        auto next = m_control->lastPcrMasterTime->checkedAdd(m_policy.pcrInterval);
+        if (!next) {
+            return ::media::Result<MediaTsPreparedPcrClock>::failure(next.error());
+        }
+        expected = next.value();
     }
+    if (exactDeadline != expected) {
+        return ::media::Result<MediaTsPreparedPcrClock>::failure(
+            invalid("PCR deadline is not the next planned sample").error());
+    }
+    auto extended = pcrTicks(exactDeadline);
+    if (!extended) {
+        return ::media::Result<MediaTsPreparedPcrClock>::failure(extended.error());
+    }
+    const std::uint64_t revision = m_control->nextRevision++;
+    m_control->pendingKind = MediaTsOutputClockControlState::PendingKind::Pcr;
+    m_control->pendingRevision = revision;
+    return ::media::Result<MediaTsPreparedPcrClock>::success(
+        MediaTsPreparedPcrClock(
+            m_control, revision,
+            MediaTsPcrClock{
+                generation, exactDeadline, extended.value(),
+                positiveModulo(extended.value(), PcrModulus)}));
+}
 
-    MediaRunningTime next = m_epoch.masterRelease;
-    if (m_lastPcrMasterTime) {
-        auto nextResult = m_lastPcrMasterTime->checkedAdd(m_policy.pcrInterval);
-        if (!nextResult) {
-            return ::media::Result<std::vector<MediaTsPcrClock>>::failure(
-                nextResult.error());
-        }
-        next = nextResult.value();
+::media::Status MediaTsOutputClockGenerator::commitPcr(
+    MediaTsPreparedPcrClock&& prepared)
+{
+    auto owner = prepared.m_owner.lock();
+    if (!prepared.m_valid || owner != m_control ||
+        owner->pendingKind != MediaTsOutputClockControlState::PendingKind::Pcr ||
+        owner->pendingRevision != prepared.m_revision) {
+        return invalid("PCR transaction token is stale or foreign");
     }
-    std::vector<MediaTsPcrClock> result;
-    std::optional<MediaRunningTime> lastGenerated;
-    while (next <= masterTime) {
-        auto extended = pcrTicks(next);
-        if (!extended) {
-            return ::media::Result<std::vector<MediaTsPcrClock>>::failure(
-                extended.error());
-        }
-        result.push_back(MediaTsPcrClock{
-            generation, next, extended.value(),
-            positiveModulo(extended.value(), PcrModulus)});
-        lastGenerated = next;
-        auto following = next.checkedAdd(m_policy.pcrInterval);
-        if (!following) break;
-        next = following.value();
-    }
-    if (lastGenerated) m_lastPcrMasterTime = *lastGenerated;
-    return ::media::Result<std::vector<MediaTsPcrClock>>::success(std::move(result));
+    owner->lastPcrMasterTime = prepared.m_clock.masterTime;
+    owner->pendingKind = MediaTsOutputClockControlState::PendingKind::None;
+    owner->pendingRevision = 0;
+    prepared.m_valid = false;
+    return ::media::Status::success();
 }
 
 ::media::Status MediaTsOutputClockGenerator::validateSerializedPcr(

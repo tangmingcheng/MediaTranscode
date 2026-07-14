@@ -66,4 +66,32 @@ MediaTsMaterializedVideoConfig::MediaTsMaterializedVideoConfig(
 {
 }
 
+::media::Result<MediaTsMaterializedAudioConfig>
+MediaTsMaterializedAudioConfig::create(
+    std::uint8_t audioObjectType,
+    std::uint8_t samplingFrequencyIndex,
+    std::uint8_t channelConfiguration)
+{
+    if (audioObjectType < 1 || audioObjectType > 4 ||
+        samplingFrequencyIndex > 12 ||
+        channelConfiguration < 1 || channelConfiguration > 7) {
+        return ::media::Result<MediaTsMaterializedAudioConfig>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MPEG-TS materialized AAC config is invalid"));
+    }
+    return ::media::Result<MediaTsMaterializedAudioConfig>::success(
+        MediaTsMaterializedAudioConfig(
+            audioObjectType, samplingFrequencyIndex, channelConfiguration));
+}
+
+MediaTsMaterializedAudioConfig::MediaTsMaterializedAudioConfig(
+    std::uint8_t audioObjectType,
+    std::uint8_t samplingFrequencyIndex,
+    std::uint8_t channelConfiguration) noexcept
+    : m_audioObjectType(audioObjectType)
+    , m_samplingFrequencyIndex(samplingFrequencyIndex)
+    , m_channelConfiguration(channelConfiguration)
+{
+}
+
 } // namespace media::ffmpeg::graph

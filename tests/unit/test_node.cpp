@@ -54,6 +54,7 @@ void runOutputByteSinkTests(TestContext& ctx);
 void runMpegTsOutputSerializerTests(TestContext& ctx);
 void runMpegTsAccessUnitFramerTests(TestContext& ctx);
 void runMpegTsOutputPacketizerTests(TestContext& ctx);
+void runMpegTsOutputSessionTests(TestContext& ctx);
 
 namespace {
 
@@ -63,6 +64,44 @@ MediaTsOutputClockPolicy tsOutputClockPolicy()
         MediaRunningTime::fromNanoseconds(20'000'000),
         MediaRunningTime::fromNanoseconds(40'000'000),
         MediaRunningTime::fromNanoseconds(1'000'000), 1, 90'000};
+}
+
+::media::Result<MediaTsPacketClock> projectCommitted(
+    MediaTsOutputClockGenerator& generator,
+    std::uint64_t generation,
+    MediaScheduledStream stream,
+    MediaRunningTime presentationOnMaster,
+    MediaRunningTime dispatchOnMaster,
+    MediaRunningTime emitOnMaster,
+    MediaRunningTime transportDecodeLead)
+{
+    auto prepared = generator.preparePacket(
+        generation, stream, presentationOnMaster, dispatchOnMaster,
+        emitOnMaster, transportDecodeLead);
+    if (!prepared) {
+        return ::media::Result<MediaTsPacketClock>::failure(prepared.error());
+    }
+    const auto clock = prepared.value().clock();
+    auto committed = generator.commitPacket(std::move(prepared).value());
+    return committed
+        ? ::media::Result<MediaTsPacketClock>::success(clock)
+        : ::media::Result<MediaTsPacketClock>::failure(committed.error());
+}
+
+::media::Result<MediaTsPcrClock> pcrCommitted(
+    MediaTsOutputClockGenerator& generator,
+    std::uint64_t generation,
+    MediaRunningTime deadline)
+{
+    auto prepared = generator.preparePcr(generation, deadline);
+    if (!prepared) {
+        return ::media::Result<MediaTsPcrClock>::failure(prepared.error());
+    }
+    const auto clock = prepared.value().clock();
+    auto committed = generator.commitPcr(std::move(prepared).value());
+    return committed
+        ? ::media::Result<MediaTsPcrClock>::success(clock)
+        : ::media::Result<MediaTsPcrClock>::failure(committed.error());
 }
 
 void testMpegTsOutputClockUsesOneEpoch(TestContext& ctx)
@@ -75,7 +114,7 @@ void testMpegTsOutputClockUsesOneEpoch(TestContext& ctx)
     if (!created) return;
     auto generator = std::move(created).value();
 
-    auto reordered = generator.project(
+    auto reordered = projectCommitted(generator,
         7, MediaScheduledStream::Video,
         MediaRunningTime::fromNanoseconds(10'040'000'000),
         MediaRunningTime::fromNanoseconds(10'020'000'000),
@@ -88,74 +127,74 @@ void testMpegTsOutputClockUsesOneEpoch(TestContext& ctx)
         EXPECT_EQ(ctx, reordered.value().wirePts, std::uint64_t{183'600});
         EXPECT_EQ(ctx, reordered.value().wireDts, std::uint64_t{181'800});
     }
-    auto independentAudio = generator.project(
+    auto independentAudio = projectCommitted(generator,
         7, MediaScheduledStream::Audio,
         MediaRunningTime::fromNanoseconds(10'015'000'000),
         MediaRunningTime::fromNanoseconds(10'010'000'000),
         MediaRunningTime::fromNanoseconds(9'910'000'000),
         MediaRunningTime::fromNanoseconds(100'000'000));
     EXPECT_TRUE(ctx, independentAudio);
-    EXPECT_FALSE(ctx, generator.project(
+    EXPECT_FALSE(ctx, projectCommitted(generator,
         7, MediaScheduledStream::Video,
         MediaRunningTime::fromNanoseconds(10'030'000'000),
         MediaRunningTime::fromNanoseconds(10'019'000'000),
         MediaRunningTime::fromNanoseconds(9'919'000'000),
         MediaRunningTime::fromNanoseconds(100'000'000)));
-    EXPECT_TRUE(ctx, generator.project(
+    EXPECT_TRUE(ctx, projectCommitted(generator,
         7, MediaScheduledStream::Video,
         MediaRunningTime::fromNanoseconds(10'041'000'000),
         MediaRunningTime::fromNanoseconds(10'021'000'000),
         MediaRunningTime::fromNanoseconds(9'921'000'000),
         MediaRunningTime::fromNanoseconds(100'000'000)));
-    EXPECT_FALSE(ctx, generator.project(
+    EXPECT_FALSE(ctx, projectCommitted(generator,
         7, static_cast<MediaScheduledStream>(0xFF),
         MediaRunningTime::fromNanoseconds(10'020'000'000),
         MediaRunningTime::fromNanoseconds(10'010'000'000),
         MediaRunningTime::fromNanoseconds(9'910'000'000),
         MediaRunningTime::fromNanoseconds(100'000'000)));
-    EXPECT_FALSE(ctx, generator.project(
+    EXPECT_FALSE(ctx, projectCommitted(generator,
         8, MediaScheduledStream::Video,
         MediaRunningTime::fromNanoseconds(10'060'000'000),
         MediaRunningTime::fromNanoseconds(10'040'000'000),
         MediaRunningTime::fromNanoseconds(9'940'000'000),
         MediaRunningTime::fromNanoseconds(100'000'000)));
-    EXPECT_FALSE(ctx, generator.project(
+    EXPECT_FALSE(ctx, projectCommitted(generator,
         7, MediaScheduledStream::Audio,
         MediaRunningTime::fromNanoseconds(10'020'000'000),
         MediaRunningTime::fromNanoseconds(10'040'000'000),
         MediaRunningTime::fromNanoseconds(9'940'000'000),
         MediaRunningTime::fromNanoseconds(100'000'000)));
 
-    auto pcrOrigin = generator.advancePcrThrough(
+    auto pcrOrigin = pcrCommitted(generator,
         7, MediaRunningTime::fromNanoseconds(10'000'000'000));
-    auto pcrMiddle = generator.advancePcrThrough(
+    auto pcrTwenty = pcrCommitted(generator,
+        7, MediaRunningTime::fromNanoseconds(10'020'000'000));
+    auto pcrMiddle = pcrCommitted(generator,
         7, MediaRunningTime::fromNanoseconds(10'040'000'000));
-    auto pcr = generator.advancePcrThrough(
+    auto pcr = pcrCommitted(generator,
         7, MediaRunningTime::fromNanoseconds(10'060'000'000));
     EXPECT_TRUE(ctx, pcrOrigin);
+    EXPECT_TRUE(ctx, pcrTwenty);
     EXPECT_TRUE(ctx, pcrMiddle);
     EXPECT_TRUE(ctx, pcr);
-    if (pcrOrigin && pcrMiddle && pcr) {
-        EXPECT_EQ(ctx, pcrOrigin.value().size(), std::size_t{1});
-        EXPECT_EQ(ctx, pcrMiddle.value().size(), std::size_t{2});
-        EXPECT_EQ(ctx, pcr.value().size(), std::size_t{1});
-        EXPECT_EQ(ctx, pcrOrigin.value()[0].extended27Mhz, std::int64_t{54'000'000});
-        EXPECT_EQ(ctx, pcrOrigin.value()[0].generation, std::uint64_t{7});
-        EXPECT_EQ(ctx, pcrMiddle.value()[0].extended27Mhz, std::int64_t{54'540'000});
-        EXPECT_EQ(ctx, pcr.value()[0].extended27Mhz, std::int64_t{55'620'000});
-        EXPECT_EQ(ctx, pcr.value()[0].wire27Mhz, std::uint64_t{55'620'000});
+    if (pcrOrigin && pcrTwenty && pcrMiddle && pcr) {
+        EXPECT_EQ(ctx, pcrOrigin.value().extended27Mhz, std::int64_t{54'000'000});
+        EXPECT_EQ(ctx, pcrOrigin.value().generation, std::uint64_t{7});
+        EXPECT_EQ(ctx, pcrTwenty.value().extended27Mhz, std::int64_t{54'540'000});
+        EXPECT_EQ(ctx, pcr.value().extended27Mhz, std::int64_t{55'620'000});
+        EXPECT_EQ(ctx, pcr.value().wire27Mhz, std::uint64_t{55'620'000});
         EXPECT_TRUE(ctx, generator.validateSerializedPcr(
-            pcr.value()[0], pcr.value()[0].extended27Mhz + 27'000));
+            pcr.value(), pcr.value().extended27Mhz + 27'000));
         EXPECT_FALSE(ctx, generator.validateSerializedPcr(
-            pcr.value()[0], pcr.value()[0].extended27Mhz + 27'001));
+            pcr.value(), pcr.value().extended27Mhz + 27'001));
     }
-    EXPECT_FALSE(ctx, generator.advancePcrThrough(
+    EXPECT_FALSE(ctx, generator.preparePcr(
         7, MediaRunningTime::fromNanoseconds(10'100'000'001)));
 
     auto lateFirst = MediaTsOutputClockGenerator::create(
         tsOutputClockPolicy(), epoch);
     EXPECT_TRUE(ctx, lateFirst);
-    if (lateFirst) EXPECT_FALSE(ctx, lateFirst.value().advancePcrThrough(
+    if (lateFirst) EXPECT_FALSE(ctx, lateFirst.value().preparePcr(
         7, MediaRunningTime::fromNanoseconds(10'040'000'001)));
 
     const MediaTsPcrClock zeroPcr{
@@ -187,12 +226,13 @@ void testMpegTsOutputClockUsesOneEpoch(TestContext& ctx)
             MediaRunningTime::fromNanoseconds(0), 9});
     EXPECT_TRUE(ctx, transactional);
     if (transactional) {
-        EXPECT_FALSE(ctx, transactional.value().advancePcrThrough(
+        EXPECT_FALSE(ctx, transactional.value().preparePcr(
             9, MediaRunningTime::fromNanoseconds(20'000'000)));
-        auto retryOrigin = transactional.value().advancePcrThrough(
+        auto retryOrigin = transactional.value().preparePcr(
             9, MediaRunningTime::fromNanoseconds(0));
         EXPECT_TRUE(ctx, retryOrigin);
-        if (retryOrigin) EXPECT_EQ(ctx, retryOrigin.value().size(), std::size_t{1});
+        if (retryOrigin) EXPECT_EQ(ctx, retryOrigin.value().clock().masterTime,
+                                  MediaRunningTime::fromNanoseconds(0));
     }
 }
 
@@ -226,13 +266,13 @@ void testMpegTsOutputClockRejectsInvalidPolicyAndHandlesWrap(TestContext& ctx)
             wrapEpochNs.value(), MediaRunningTime::fromNanoseconds(0), 3});
     EXPECT_TRUE(ctx, wrapped);
     if (!wrapped) return;
-    auto before = wrapped.value().project(
+    auto before = projectCommitted(wrapped.value(),
         3, MediaScheduledStream::Video,
         MediaRunningTime::fromNanoseconds(5'000'000),
         MediaRunningTime::fromNanoseconds(0),
         MediaRunningTime::fromNanoseconds(-100'000'000),
         MediaRunningTime::fromNanoseconds(100'000'000));
-    auto after = wrapped.value().project(
+    auto after = projectCommitted(wrapped.value(),
         3, MediaScheduledStream::Video,
         MediaRunningTime::fromNanoseconds(20'000'000),
         MediaRunningTime::fromNanoseconds(10'000'000),
@@ -245,16 +285,16 @@ void testMpegTsOutputClockRejectsInvalidPolicyAndHandlesWrap(TestContext& ctx)
         EXPECT_EQ(ctx, after.value().wirePts, std::uint64_t{900});
         EXPECT_EQ(ctx, after.value().wireDts, std::uint64_t{0});
     }
-    auto pcrBeforeWrap = wrapped.value().advancePcrThrough(
+    auto pcrBeforeWrap = pcrCommitted(wrapped.value(),
         3, MediaRunningTime::fromNanoseconds(0));
-    auto pcrAfterWrap = wrapped.value().advancePcrThrough(
+    auto pcrAfterWrap = pcrCommitted(wrapped.value(),
         3, MediaRunningTime::fromNanoseconds(20'000'000));
     EXPECT_TRUE(ctx, pcrBeforeWrap);
     EXPECT_TRUE(ctx, pcrAfterWrap);
     if (pcrBeforeWrap && pcrAfterWrap) {
-        EXPECT_EQ(ctx, pcrBeforeWrap.value().front().wire27Mhz,
+        EXPECT_EQ(ctx, pcrBeforeWrap.value().wire27Mhz,
                   (std::uint64_t{1} << 33) * 300 - 270'000);
-        EXPECT_EQ(ctx, pcrAfterWrap.value().front().wire27Mhz,
+        EXPECT_EQ(ctx, pcrAfterWrap.value().wire27Mhz,
                   std::uint64_t{270'000});
     }
 
@@ -263,7 +303,7 @@ void testMpegTsOutputClockRejectsInvalidPolicyAndHandlesWrap(TestContext& ctx)
             MediaRunningTime::fromNanoseconds(std::numeric_limits<std::int64_t>::max()),
             MediaRunningTime::fromNanoseconds(0), 4});
     EXPECT_TRUE(ctx, overflow);
-    if (overflow) EXPECT_FALSE(ctx, overflow.value().project(
+    if (overflow) EXPECT_FALSE(ctx, projectCommitted(overflow.value(),
         4, MediaScheduledStream::Video,
         MediaRunningTime::fromNanoseconds(1),
         MediaRunningTime::fromNanoseconds(1),
@@ -295,24 +335,78 @@ void testMpegTsOutputClockRequiresExactTransportDecodeLead(TestContext& ctx)
     EXPECT_TRUE(ctx, clock);
     if (!clock) return;
 
-    EXPECT_TRUE(ctx, clock.value().project(
+    EXPECT_TRUE(ctx, projectCommitted(clock.value(),
         epoch.generation, MediaScheduledStream::Video,
         MediaRunningTime::fromNanoseconds(240'000'000),
         MediaRunningTime::fromNanoseconds(220'000'000),
         MediaRunningTime::fromNanoseconds(120'000'000),
         plan.value().transportDecodeLead()));
-    EXPECT_FALSE(ctx, clock.value().project(
+    EXPECT_FALSE(ctx, projectCommitted(clock.value(),
         epoch.generation, MediaScheduledStream::Video,
         MediaRunningTime::fromNanoseconds(260'000'000),
         MediaRunningTime::fromNanoseconds(240'000'000),
         MediaRunningTime::fromNanoseconds(141'000'000),
         plan.value().transportDecodeLead()));
-    EXPECT_TRUE(ctx, clock.value().project(
+    EXPECT_TRUE(ctx, projectCommitted(clock.value(),
         epoch.generation, MediaScheduledStream::Video,
         MediaRunningTime::fromNanoseconds(260'000'000),
         MediaRunningTime::fromNanoseconds(240'000'000),
         MediaRunningTime::fromNanoseconds(140'000'000),
         plan.value().transportDecodeLead()));
+}
+
+void testMpegTsOutputClockCommitsOnlyCompletedTransactions(TestContext& ctx)
+{
+    const MediaPlaybackEpoch epoch{
+        MediaRunningTime::fromNanoseconds(0),
+        MediaRunningTime::fromNanoseconds(0), 12};
+    auto first = MediaTsOutputClockGenerator::create(tsOutputClockPolicy(), epoch);
+    auto foreign = MediaTsOutputClockGenerator::create(tsOutputClockPolicy(), epoch);
+    EXPECT_TRUE(ctx, first);
+    EXPECT_TRUE(ctx, foreign);
+    if (!first || !foreign) return;
+
+    {
+        auto abandoned = first.value().preparePacket(
+            12, MediaScheduledStream::Video,
+            MediaRunningTime::fromNanoseconds(30'000'000),
+            MediaRunningTime::fromNanoseconds(20'000'000),
+            MediaRunningTime::fromNanoseconds(-80'000'000),
+            MediaRunningTime::fromNanoseconds(100'000'000));
+        EXPECT_TRUE(ctx, abandoned);
+    }
+    auto retry = first.value().preparePacket(
+        12, MediaScheduledStream::Video,
+        MediaRunningTime::fromNanoseconds(20'000'000),
+        MediaRunningTime::fromNanoseconds(10'000'000),
+        MediaRunningTime::fromNanoseconds(-90'000'000),
+        MediaRunningTime::fromNanoseconds(100'000'000));
+    EXPECT_TRUE(ctx, retry);
+    if (retry) {
+        EXPECT_FALSE(ctx, foreign.value().commitPacket(std::move(retry).value()));
+        EXPECT_TRUE(ctx, first.value().commitPacket(std::move(retry).value()));
+    }
+    EXPECT_FALSE(ctx, projectCommitted(
+        first.value(), 12, MediaScheduledStream::Video,
+        MediaRunningTime::fromNanoseconds(15'000'000),
+        MediaRunningTime::fromNanoseconds(5'000'000),
+        MediaRunningTime::fromNanoseconds(-95'000'000),
+        MediaRunningTime::fromNanoseconds(100'000'000)));
+
+    {
+        auto abandoned = first.value().preparePcr(
+            12, MediaRunningTime::fromNanoseconds(0));
+        EXPECT_TRUE(ctx, abandoned);
+    }
+    auto pcrRetry = first.value().preparePcr(
+        12, MediaRunningTime::fromNanoseconds(0));
+    EXPECT_TRUE(ctx, pcrRetry);
+    if (pcrRetry) {
+        EXPECT_FALSE(ctx, foreign.value().commitPcr(std::move(pcrRetry).value()));
+        EXPECT_TRUE(ctx, first.value().commitPcr(std::move(pcrRetry).value()));
+    }
+    EXPECT_FALSE(ctx, first.value().preparePcr(
+        12, MediaRunningTime::fromNanoseconds(0)));
 }
 
 void testRequiredPossiblyEmptyNodeOption(TestContext& ctx)
@@ -1158,6 +1252,7 @@ int main()
     testMpegTsOutputClockUsesOneEpoch(ctx);
     testMpegTsOutputClockRejectsInvalidPolicyAndHandlesWrap(ctx);
     testMpegTsOutputClockRequiresExactTransportDecodeLead(ctx);
+    testMpegTsOutputClockCommitsOnlyCompletedTransactions(ctx);
     RtpMuxStateMachine state;
     EXPECT_TRUE(ctx, state.bindExpectations(true, false, true, 0));
     EXPECT_TRUE(ctx, state.bindOutput());
@@ -1284,6 +1379,7 @@ int main()
     runMpegTsOutputSerializerTests(ctx);
     runMpegTsAccessUnitFramerTests(ctx);
     runMpegTsOutputPacketizerTests(ctx);
+    runMpegTsOutputSessionTests(ctx);
     testAudioEncodeFixedFrameStateMachine(ctx);
     testRtpClockGroupRejectsStaleCrossPortEvidence(ctx);
     return ctx.failures == 0 ? 0 : 1;
