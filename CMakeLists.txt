@@ -229,6 +229,7 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
         tests/unit/mpeg_ts_demux_node_tests.cpp
         tests/unit/rtp_depacketizer_tests.cpp
         tests/unit/rtp_output_clock_tests.cpp
+        tests/unit/scheduled_rtp_packetization_tests.cpp
         tests/unit/rtp_source_clock_tests.cpp
     )
     media_transcode_configure_test(media_transcode_node_tests)

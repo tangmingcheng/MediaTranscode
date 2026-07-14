@@ -36,6 +36,7 @@ using media_transcode::test::TestContext;
 void runRtpDepacketizerTests(TestContext& ctx);
 void runRtpSourceClockTests(TestContext& ctx);
 void runRtpOutputClockTests(TestContext& ctx);
+void runScheduledRtpPacketizationTests(TestContext& ctx);
 void runMpegTsPacketTests(TestContext& ctx);
 void runMpegTsPesProvenanceTimelineTests(TestContext& ctx);
 void runMpegTsClockTests(TestContext& ctx);
@@ -996,6 +997,7 @@ int main()
     runRtpDepacketizerTests(ctx);
     runRtpSourceClockTests(ctx);
     runRtpOutputClockTests(ctx);
+    runScheduledRtpPacketizationTests(ctx);
     runMpegTsPacketTests(ctx);
     runMpegTsPesProvenanceTimelineTests(ctx);
     runMpegTsClockTests(ctx);
