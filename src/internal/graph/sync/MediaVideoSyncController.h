@@ -5,11 +5,13 @@
 #include "internal/graph/sync/MediaVideoSyncDecision.h"
 
 #include <cstdint>
+#include <optional>
 #include <variant>
 
 namespace media::ffmpeg::graph {
 
 struct MediaVideoFrameMeasurement final {
+    MediaRunningTime dispatchOnMaster;
     MediaRunningTime targetPresentationOnMaster;
     MediaRunningTime masterNow;
     std::uint64_t generation = 0;
@@ -18,6 +20,7 @@ struct MediaVideoFrameMeasurement final {
 };
 
 struct MediaVideoRepeatRequest final {
+    MediaRunningTime repeatDispatchOnMaster;
     MediaRunningTime repeatPresentationOnMaster;
     MediaRunningTime lastEmittedPresentationOnMaster;
     MediaRunningTime masterNow;
@@ -67,6 +70,8 @@ private:
         std::uint64_t observedGeneration,
         std::uint64_t sequence) const;
     MediaAvSyncStatus validateSequence(std::uint64_t sequence) const;
+    MediaAvSyncStatus validateFrameIdentity(
+        const MediaVideoFrameMeasurement& measurement) const;
     MediaAvSyncError error(MediaAvSyncErrorCode code,
                            const char* operation,
                            std::uint64_t observedGeneration,
@@ -81,6 +86,13 @@ private:
     Policy m_policy;
     std::uint64_t m_generation = 0;
     std::uint64_t m_lastSequence = 0;
+    struct HeldFrameIdentity final {
+        std::uint64_t sequence;
+        MediaRunningTime dispatchOnMaster;
+        MediaRunningTime targetPresentationOnMaster;
+        bool keyFrame;
+    };
+    std::optional<HeldFrameIdentity> m_heldFrame;
     int m_consecutiveRecoveryActions = 0;
 };
 

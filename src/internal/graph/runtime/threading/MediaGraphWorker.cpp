@@ -4,6 +4,8 @@
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 
 #include <string>
+#include <algorithm>
+#include <chrono>
 
 namespace media::ffmpeg::graph {
 
@@ -130,7 +132,36 @@ void MediaGraphWorker::run()
             break;
         case MediaNodeProcessState::Waiting:
             ++m_metrics.waits;
-            if (m_wakeup.waitForChange(observedSequence)) {
+            if (result.value().deadlineWait) {
+                const auto& deadlineWait = *result.value().deadlineWait;
+                auto group = m_context.findAvSyncGroup(deadlineWait.syncGroup);
+                if (!group) {
+                    ++m_metrics.errors;
+                    m_aborted = true;
+                    break;
+                }
+                auto now = group->clock()->now();
+                if (!now) {
+                    ++m_metrics.errors;
+                    m_aborted = true;
+                    break;
+                }
+                auto remaining = deadlineWait.masterDeadline.checkedSubtract(now.value());
+                if (!remaining) {
+                    ++m_metrics.errors;
+                    m_aborted = true;
+                    break;
+                }
+                const auto timeout = std::chrono::nanoseconds(
+                    std::max<std::int64_t>(0, remaining.value().nanoseconds()));
+                const auto outcome = m_wakeup.wait(observedSequence, timeout);
+                if (outcome == MediaNodeWakeup::WaitOutcome::Notified) {
+                    ++m_metrics.wakeups;
+                } else if (outcome == MediaNodeWakeup::WaitOutcome::Deadline) {
+                    ++m_metrics.deadlines;
+                }
+            } else if (m_wakeup.wait(observedSequence) ==
+                       MediaNodeWakeup::WaitOutcome::Notified) {
                 ++m_metrics.wakeups;
             }
             break;

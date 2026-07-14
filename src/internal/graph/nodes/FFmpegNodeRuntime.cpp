@@ -2,6 +2,7 @@
 
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
+#include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 
 #include <sstream>
@@ -106,6 +107,13 @@ std::size_t FFmpegNodeRuntime::pendingOutputBufferCount() const noexcept
 {
     return m_pendingTransfer ? 1u : 0u;
 }
+
+void FFmpegNodeRuntime::cancelPendingOutputTransfer() noexcept
+{
+    m_pendingTransfer.reset();
+    m_finishPending = false;
+    m_finished = false;
+}
 namespace {
 
 bool isWildcardStream(MediaStreamKind kind) noexcept
@@ -120,11 +128,25 @@ bool isWildcardPayload(MediaPayloadKind kind) noexcept
 
 bool isBypassControlBuffer(const MediaChannel& channel, const MediaBufferRef& buffer) noexcept
 {
-    return buffer &&
-        channel.policy().queuePolicy.allowFlushControlBypass &&
-        buffer->streamKind() == MediaStreamKind::Control &&
-        buffer->payloadKind() == MediaPayloadKind::ControlSignal &&
-        (buffer->isEof() || buffer->isFlush());
+    if (!buffer ||
+        !channel.policy().queuePolicy.allowFlushControlBypass ||
+        buffer->streamKind() != MediaStreamKind::Control ||
+        buffer->payloadKind() != MediaPayloadKind::ControlSignal) {
+        return false;
+    }
+    const auto* control = dynamic_cast<const MediaControlBuffer*>(buffer.get());
+    if (!control) {
+        return false;
+    }
+    switch (control->controlKind()) {
+    case MediaControlBufferKind::Eof:
+    case MediaControlBufferKind::Flush:
+    case MediaControlBufferKind::Abort:
+        return true;
+    case MediaControlBufferKind::Unknown:
+        return false;
+    }
+    return false;
 }
 
 bool isControlBroadcastBuffer(const MediaBufferRef& buffer) noexcept

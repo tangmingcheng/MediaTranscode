@@ -20,6 +20,7 @@ struct MediaGraphWorkerMetrics {
     std::atomic_uint64_t progress{ 0 };
     std::atomic_uint64_t waits{ 0 };
     std::atomic_uint64_t wakeups{ 0 };
+    std::atomic_uint64_t deadlines{ 0 };
     std::atomic_uint64_t errors{ 0 };
 };
 

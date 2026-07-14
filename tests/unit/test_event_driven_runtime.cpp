@@ -275,6 +275,7 @@ int main()
     runEventRuntimeThreadingQueueTests(ctx);
     runEventRuntimeFfmpegOwnershipTests(ctx);
     runEventRuntimeMultiInputTests(ctx);
+    runAvOutputSchedulerTests(ctx);
     if (ctx.failures != 0) {
         std::cerr << ctx.failures << " event runtime expectation(s) failed\n";
         return 1;

@@ -212,6 +212,7 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
         tests/unit/event_runtime_threading_queue_tests.cpp
         tests/unit/event_runtime_ffmpeg_ownership_tests.cpp
         tests/unit/event_runtime_multi_input_tests.cpp
+        tests/unit/av_output_scheduler_tests.cpp
     )
     media_transcode_configure_test(media_transcode_runtime_tests)
     media_transcode_register_test(media_transcode_runtime_tests "runtime;deterministic")

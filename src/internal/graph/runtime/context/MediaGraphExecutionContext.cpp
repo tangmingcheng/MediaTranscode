@@ -66,6 +66,7 @@ void MediaGraphExecutionContext::reset()
     m_channels.clear();
     m_executionOrder.clear();
     m_nodeWakeups.clear();
+    m_avSyncGroups.clear();
     m_compiled = false;
     mediaGraphDiagnosticSetGlobalConfig(m_diagnosticConfig);
 }
@@ -227,6 +228,36 @@ void MediaGraphExecutionContext::interruptNodeWakeups() noexcept
             wakeup->interrupt();
         }
     }
+}
+
+::media::Status MediaGraphExecutionContext::registerAvSyncGroup(
+    MediaAvSyncGroupKey key,
+    MediaAvSyncPlan plan,
+    std::shared_ptr<MediaMasterClock> clock)
+{
+    return m_avSyncGroups.registerGroup(
+        std::move(key), std::move(plan), std::move(clock));
+}
+
+::media::Status MediaGraphExecutionContext::activatePlaybackEpoch(
+    const MediaAvSyncGroupKey& key,
+    MediaPlaybackEpoch epoch)
+{
+    return m_avSyncGroups.activatePlaybackEpoch(key, epoch);
+}
+
+::media::Status MediaGraphExecutionContext::activateNextPlaybackEpoch(
+    const MediaAvSyncGroupKey& key,
+    MediaPlaybackEpoch epoch)
+{
+    return m_avSyncGroups.activateNextPlaybackEpoch(key, epoch);
+}
+
+std::shared_ptr<MediaAvSyncGroupRuntime>
+MediaGraphExecutionContext::findAvSyncGroup(
+    const MediaAvSyncGroupKey& key) const noexcept
+{
+    return m_avSyncGroups.find(key);
 }
 
 ::media::Status MediaGraphExecutionContext::buildChannels(const MediaGraph& graph)

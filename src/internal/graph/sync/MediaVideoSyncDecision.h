@@ -3,6 +3,7 @@
 #include "internal/graph/time/MediaRunningTime.h"
 
 #include <cstdint>
+#include <optional>
 
 namespace media::ffmpeg::graph {
 
@@ -34,6 +35,10 @@ public:
     {
         return m_consecutiveRecoveryActions;
     }
+    const std::optional<MediaRunningTime>& recheckAtMasterTime() const noexcept
+    {
+        return m_recheckAtMasterTime;
+    }
 
 private:
     friend class MediaVideoSyncController;
@@ -43,13 +48,15 @@ private:
                            MediaRunningTime phaseError,
                            std::uint64_t generation,
                            std::uint64_t sequence,
-                           int consecutiveRecoveryActions) noexcept
+                           int consecutiveRecoveryActions,
+                           std::optional<MediaRunningTime> recheckAtMasterTime = std::nullopt) noexcept
         : m_kind(kind)
         , m_presentationOnMaster(presentationOnMaster)
         , m_phaseError(phaseError)
         , m_generation(generation)
         , m_sequence(sequence)
         , m_consecutiveRecoveryActions(consecutiveRecoveryActions)
+        , m_recheckAtMasterTime(recheckAtMasterTime)
     {
     }
 
@@ -59,6 +66,7 @@ private:
     std::uint64_t m_generation = 0;
     std::uint64_t m_sequence = 0;
     int m_consecutiveRecoveryActions = 0;
+    std::optional<MediaRunningTime> m_recheckAtMasterTime;
 };
 
 } // namespace media::ffmpeg::graph

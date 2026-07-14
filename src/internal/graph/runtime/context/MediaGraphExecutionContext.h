@@ -5,6 +5,7 @@
 #include "internal/graph/runtime/channel/MediaChannel.h"
 #include "internal/graph/runtime/channel/MediaChannelRegistry.h"
 #include "internal/graph/runtime/threading/MediaNodeWakeup.h"
+#include "internal/graph/runtime/context/MediaAvSyncGroupRegistry.h"
 #include "media_transcode/Result.h"
 
 #include <vector>
@@ -19,8 +20,8 @@ public:
 
     MediaGraphExecutionContext(const MediaGraphExecutionContext&) = delete;
     MediaGraphExecutionContext& operator=(const MediaGraphExecutionContext&) = delete;
-    MediaGraphExecutionContext(MediaGraphExecutionContext&&) noexcept = default;
-    MediaGraphExecutionContext& operator=(MediaGraphExecutionContext&&) noexcept = default;
+    MediaGraphExecutionContext(MediaGraphExecutionContext&&) = default;
+    MediaGraphExecutionContext& operator=(MediaGraphExecutionContext&&) = default;
 
     ::media::Status compile(const MediaGraph& graph);
     void reset();
@@ -49,6 +50,15 @@ public:
     std::vector<MediaChannel*> outputChannels(MediaNodeId nodeId);
     MediaNodeWakeup& nodeWakeup(MediaNodeId nodeId);
     void interruptNodeWakeups() noexcept;
+    ::media::Status registerAvSyncGroup(MediaAvSyncGroupKey key,
+                                        MediaAvSyncPlan plan,
+                                        std::shared_ptr<MediaMasterClock> clock);
+    ::media::Status activatePlaybackEpoch(const MediaAvSyncGroupKey& key,
+                                          MediaPlaybackEpoch epoch);
+    ::media::Status activateNextPlaybackEpoch(const MediaAvSyncGroupKey& key,
+                                              MediaPlaybackEpoch epoch);
+    std::shared_ptr<MediaAvSyncGroupRuntime> findAvSyncGroup(
+        const MediaAvSyncGroupKey& key) const noexcept;
 
 private:
     ::media::Status buildChannels(const MediaGraph& graph);
@@ -59,6 +69,7 @@ private:
     MediaChannelRegistry m_channels;
     std::vector<MediaNodeId> m_executionOrder;
     std::unordered_map<uint32_t, std::unique_ptr<MediaNodeWakeup>> m_nodeWakeups;
+    MediaAvSyncGroupRegistry m_avSyncGroups;
     bool m_compiled = false;
     MediaGraphDiagnosticConfig m_diagnosticConfig;
 };

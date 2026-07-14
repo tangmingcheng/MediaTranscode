@@ -1,0 +1,23 @@
+Task 1: complete (commits 2e76432..8064fdb, review clean)
+Task 2: complete (commits 8064fdb..eedd41a, review clean)
+Task 3A: complete (commits 0116faf..6959b0f, review clean; Task 3 combined gate pending 3B/3C)
+Task 3B: complete (commits 6959b0f..bd8bab0, review clean; Task 3 combined gate pending 3C)
+Task 3C: complete (commits bd8bab0..294b22c, review clean; Task 3 combined gate pending)
+Task 3 combined fixes: complete (commits 294b22c..98499b4, scoped review clean; startup-readiness boundary awaiting human adjudication)
+Task 3: complete (commits 0116faf..59d7da4, final combined gate PASS; readiness producer only per human adjudication)
+Minor backlog: LocalFileTranscodeGraphBuilder.cpp:150 adjacent assignments have inconsistent two-space indentation; fix during final global cleanup.
+Task 4.1: complete (commits 0bf3a5e..cfdca5b, review clean)
+Task 4.2: complete (commits cfdca5b..8184611, review clean)
+Minor backlog: add direct near-INT64_MAX TS epoch candidate regression; profile timeline inventory by-value copies before final performance gate.
+Task 4.3: complete (commits 8184611..eddde83, review clean)
+Task 4.4: complete (commits eddde83..920f22c, review clean)
+Minor backlog: add TS packetSize=192 mutation test; consider future strict whole-inventory public/parser consistency if selected-program scope expands.
+Task 4.5A: complete (commits 920f22c..31a2125, review clean)
+Task 4.5B: complete (dedicated MPEG-TS demux, program-clock evidence mapping, deterministic lifecycle/fault matrix, final review PASS)
+Task 4.6: complete (263 outputs removed; eight test targets rebuilt; deterministic 6/6 in 3.39s and integration 3/3 in 159.04s; reviewer rerun deterministic 6/6 in 3.18s; final staged review PASS Critical/Important/Minor 0/0/0; pre-binding continuity history is filtered by selected A/V/PCR PIDs and transactionally replayed into crossing PES ranges, evicted history fails closed; active-PES continuity invalidation plus future-PES read-ahead isolation, complete runtime binding, real UDP normal/crafted fault paths, lifecycle and process/progress/wait/wakeup idle plateau; packet gate/atomic A/V release reserved for global Task 6)
+Task 5: complete (commit 6b9d297; canonical source-epoch to running-epoch mapper; explicit topology/source identity/confidence/generation; independent PTS/DTS mapping; exact full-affine int64 boundary validation; typed structured sync errors; transactional higher-generation reset; old/future generation rejection; final clean rebuild succeeded; focused 1/1 in 3.33s; deterministic 6/6 in 4.04s; integration 3/3 in 149.16s; fresh reviewer PASS with 0 Critical/Important)
+Task 5 audit backlog for later replacement tasks: remove synchronized-path PacketNormalize/RTP mux rebase, synthetic audio/video timestamps, and per-mux pacing authority in Tasks 7/8/9/12; do not wrap them as canonical helpers.
+Task 6: complete (atomic common A/V startup coordinator; persistent arrival-suffix coverage; clean-first 276/277; deterministic 6/6; integration 3/3; fresh review PASS 0/0/0)
+Task 7: complete (bounded audio drift servo and SWR compensation execution; clean-first 285/286; deterministic 6/6; integration 3/3; fresh review PASS 0/0/0)
+Task 8: complete (complete-plan video synchronization controller; strong frame/repeat inputs; hold/display/drop/repeat/key-frame/reacquire decisions; transactional generation isolation; clean-first 287/288; deterministic 6/6; integration 3/3; fresh review PASS 0/0/0; deadline execution and production wiring reserved for Tasks 9/12)
+Task 9: complete (shared steady master clock; atomic playback epochs and sync-group registry; DTS dispatch/PTS presentation dual-time contract; lost-wakeup-safe timed worker wait; single A/V scheduler; strict generation/EOF/Flush/Abort/backpressure semantics; identified repeat request identity and real AVPacket clone coverage; final clean-first 298/299; deterministic 6/6; integration 3/3; independent review PASS 0/0/0; production wiring reserved for Task 12)

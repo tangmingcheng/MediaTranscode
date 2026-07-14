@@ -33,6 +33,7 @@ const char* toString(MediaNodeKind kind)
     case MediaNodeKind::PacketStartGate: return "PacketStartGate";
     case MediaNodeKind::RtpClockGroup: return "RtpClockGroup";
     case MediaNodeKind::AvStartupCoordinator: return "AvStartupCoordinator";
+    case MediaNodeKind::AvOutputScheduler: return "AvOutputScheduler";
     case MediaNodeKind::PacketMerge: return "PacketMerge";
     case MediaNodeKind::FileMux: return "FileMux";
     case MediaNodeKind::RtpMux: return "RtpMux";

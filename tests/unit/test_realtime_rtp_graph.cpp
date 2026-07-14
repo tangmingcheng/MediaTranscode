@@ -2225,7 +2225,12 @@ void testRealtimeWorkerUsesEventDrivenWait(TestContext& ctx)
 
     const std::string workerSource = repositoryFile("src/internal/graph/runtime/threading/MediaGraphWorker.cpp");
     expectTextContains(ctx, workerSource, "MediaNodeProcessState::Waiting");
-    expectTextContains(ctx, workerSource, "waitForChange");
+    expectTextContains(ctx, workerSource,
+                       "m_wakeup.wait(observedSequence, timeout)");
+    expectTextContains(ctx, workerSource,
+                       "m_wakeup.wait(observedSequence)");
+    expectTextNotContains(ctx, workerSource, "waitForChange");
+    expectTextNotContains(ctx, workerSource, "waitUntil");
     EXPECT_TRUE(ctx, workerSource.find("std::this_thread::yield") == std::string::npos);
 }
 

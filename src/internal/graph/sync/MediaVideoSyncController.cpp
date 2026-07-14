@@ -80,77 +80,113 @@ MediaAvSyncResult<MediaVideoSyncDecision> MediaVideoSyncController::updateFrame(
                   measurement.targetPresentationOnMaster,
                   "video sync sequence must be positive"));
     }
+    if (auto status = validateFrameIdentity(measurement); !status) {
+        return MediaAvSyncResult<MediaVideoSyncDecision>::failure(status.error());
+    }
 
-    auto phase = measurement.targetPresentationOnMaster.checkedSubtract(
+    auto presentationPhase = measurement.targetPresentationOnMaster.checkedSubtract(
         measurement.masterNow);
-    if (!phase) {
+    if (!presentationPhase) {
         return MediaAvSyncResult<MediaVideoSyncDecision>::failure(
             error(MediaAvSyncErrorCode::TimeOverflow,
                   "measure_frame",
                   measurement.generation,
                   measurement.targetPresentationOnMaster,
-                  phase.error().message.c_str()));
+                  presentationPhase.error().message.c_str()));
     }
-    if (auto status = validateSequence(measurement.sequence); !status) {
-        return MediaAvSyncResult<MediaVideoSyncDecision>::failure(status.error());
+    auto dispatchPhase = measurement.dispatchOnMaster.checkedSubtract(
+        measurement.masterNow);
+    if (!dispatchPhase) {
+        return MediaAvSyncResult<MediaVideoSyncDecision>::failure(
+            error(MediaAvSyncErrorCode::TimeOverflow,
+                  "dispatch_deadline",
+                  measurement.generation,
+                  measurement.targetPresentationOnMaster,
+                  dispatchPhase.error().message.c_str()));
     }
-
-    const std::int64_t errorNs = phase.value().nanoseconds();
+    const std::int64_t errorNs = presentationPhase.value().nanoseconds();
     const std::int64_t hard = m_policy.hardDiscontinuityThresholdNs;
-    if (errorNs >= hard || errorNs <= -hard) {
+    if (errorNs <= -hard) {
+        m_heldFrame.reset();
         m_lastSequence = measurement.sequence;
         m_consecutiveRecoveryActions = 0;
         return MediaAvSyncResult<MediaVideoSyncDecision>::success(
             decision(MediaVideoSyncDecisionKind::Reacquire,
                      measurement.targetPresentationOnMaster,
-                     phase.value(),
+                     presentationPhase.value(),
                      measurement.sequence));
     }
-    if (errorNs > m_policy.earlyHoldThresholdNs) {
-        m_lastSequence = measurement.sequence;
-        m_consecutiveRecoveryActions = 0;
+    if (dispatchPhase.value().nanoseconds() > m_policy.earlyHoldThresholdNs) {
+        auto recheckAt = measurement.dispatchOnMaster.checkedSubtract(
+            MediaRunningTime::fromNanoseconds(m_policy.earlyHoldThresholdNs));
+        if (!recheckAt) {
+            return MediaAvSyncResult<MediaVideoSyncDecision>::failure(
+                error(MediaAvSyncErrorCode::TimeOverflow,
+                      "hold_deadline",
+                      measurement.generation,
+                      measurement.targetPresentationOnMaster,
+                      recheckAt.error().message.c_str()));
+        }
+        m_heldFrame = HeldFrameIdentity{measurement.sequence,
+                                        measurement.dispatchOnMaster,
+                                        measurement.targetPresentationOnMaster,
+                                        measurement.keyFrame};
         return MediaAvSyncResult<MediaVideoSyncDecision>::success(
-            decision(MediaVideoSyncDecisionKind::Hold,
-                     measurement.targetPresentationOnMaster,
-                     phase.value(),
-                     measurement.sequence));
+            MediaVideoSyncDecision(MediaVideoSyncDecisionKind::Hold,
+                                   measurement.targetPresentationOnMaster,
+                                   presentationPhase.value(),
+                                   m_generation,
+                                   measurement.sequence,
+                                   m_consecutiveRecoveryActions,
+                                   recheckAt.value()));
     }
     if (errorNs >= -m_policy.lateDisplayThresholdNs) {
+        m_heldFrame.reset();
         m_lastSequence = measurement.sequence;
         m_consecutiveRecoveryActions = 0;
         return MediaAvSyncResult<MediaVideoSyncDecision>::success(
             decision(MediaVideoSyncDecisionKind::Display,
                      measurement.targetPresentationOnMaster,
-                     phase.value(),
+                     presentationPhase.value(),
                      measurement.sequence));
     }
     if (errorNs > -m_policy.dropThresholdNs) {
+        m_heldFrame.reset();
         m_lastSequence = measurement.sequence;
         m_consecutiveRecoveryActions = 0;
         return MediaAvSyncResult<MediaVideoSyncDecision>::success(
             decision(MediaVideoSyncDecisionKind::DisplayLate,
                      measurement.targetPresentationOnMaster,
-                     phase.value(),
+                     presentationPhase.value(),
                      measurement.sequence));
     }
     if (measurement.keyFrame) {
+        m_heldFrame.reset();
         m_lastSequence = measurement.sequence;
         m_consecutiveRecoveryActions = 0;
         return MediaAvSyncResult<MediaVideoSyncDecision>::success(
             decision(MediaVideoSyncDecisionKind::DisplayPreservedKeyFrame,
                      measurement.targetPresentationOnMaster,
-                     phase.value(),
+                     presentationPhase.value(),
                      measurement.sequence));
     }
     return recoveryDecision(MediaVideoSyncDecisionKind::Drop,
                             measurement.targetPresentationOnMaster,
-                            phase.value(),
+                            presentationPhase.value(),
                             measurement.sequence);
 }
 
 MediaAvSyncResult<MediaVideoSyncDecision> MediaVideoSyncController::updateRepeat(
     const MediaVideoRepeatRequest& request)
 {
+    if (m_heldFrame && request.generation == m_generation) {
+        return MediaAvSyncResult<MediaVideoSyncDecision>::failure(
+            error(MediaAvSyncErrorCode::InvalidVideoSyncMeasurement,
+                  "measure_repeat",
+                  request.generation,
+                  request.repeatPresentationOnMaster,
+                  "repeat cannot overtake a held video frame"));
+    }
     if (request.generation != m_generation) {
         return isolatedGenerationDecision(
             request.repeatPresentationOnMaster,
@@ -168,39 +204,70 @@ MediaAvSyncResult<MediaVideoSyncDecision> MediaVideoSyncController::updateRepeat
     }
 
 
-    auto phase = request.repeatPresentationOnMaster.checkedSubtract(request.masterNow);
-    if (!phase) {
+    auto presentationPhase = request.repeatPresentationOnMaster.checkedSubtract(
+        request.masterNow);
+    if (!presentationPhase) {
         return MediaAvSyncResult<MediaVideoSyncDecision>::failure(
             error(MediaAvSyncErrorCode::TimeOverflow,
                   "measure_repeat",
                   request.generation,
                   request.repeatPresentationOnMaster,
-                  phase.error().message.c_str()));
+                  presentationPhase.error().message.c_str()));
+    }
+    auto dispatchPhase = request.repeatDispatchOnMaster.checkedSubtract(
+        request.masterNow);
+    if (!dispatchPhase) {
+        return MediaAvSyncResult<MediaVideoSyncDecision>::failure(
+            error(MediaAvSyncErrorCode::TimeOverflow,
+                  "repeat_dispatch_deadline",
+                  request.generation,
+                  request.repeatPresentationOnMaster,
+                  dispatchPhase.error().message.c_str()));
     }
     if (auto status = validateSequence(request.sequence); !status) {
         return MediaAvSyncResult<MediaVideoSyncDecision>::failure(status.error());
     }
     if (!(request.lastEmittedPresentationOnMaster <
-              request.repeatPresentationOnMaster) ||
-        request.repeatPresentationOnMaster > request.masterNow) {
+              request.repeatPresentationOnMaster)) {
         return MediaAvSyncResult<MediaVideoSyncDecision>::failure(
             error(MediaAvSyncErrorCode::InvalidVideoSyncMeasurement,
                   "measure_repeat",
                   request.generation,
                   request.repeatPresentationOnMaster,
-                  "repeat request requires last emitted < repeat slot <= master now"));
+                  "repeat request requires last emitted presentation < repeat presentation"));
     }
 
-    const std::int64_t errorNs = phase.value().nanoseconds();
+    const std::int64_t errorNs = presentationPhase.value().nanoseconds();
     const std::int64_t hard = m_policy.hardDiscontinuityThresholdNs;
-    if (errorNs >= hard || errorNs <= -hard) {
+    if (errorNs <= -hard) {
         m_lastSequence = request.sequence;
         m_consecutiveRecoveryActions = 0;
         return MediaAvSyncResult<MediaVideoSyncDecision>::success(
             decision(MediaVideoSyncDecisionKind::Reacquire,
                      request.repeatPresentationOnMaster,
-                     phase.value(),
+                     presentationPhase.value(),
                      request.sequence));
+    }
+    if (dispatchPhase.value().nanoseconds() > m_policy.earlyHoldThresholdNs) {
+        auto recheckAt = request.repeatDispatchOnMaster.checkedSubtract(
+            MediaRunningTime::fromNanoseconds(m_policy.earlyHoldThresholdNs));
+        if (!recheckAt) {
+            return MediaAvSyncResult<MediaVideoSyncDecision>::failure(
+                error(MediaAvSyncErrorCode::TimeOverflow,
+                      "repeat_hold_deadline",
+                      request.generation,
+                      request.repeatPresentationOnMaster,
+                      recheckAt.error().message.c_str()));
+        }
+        return MediaAvSyncResult<MediaVideoSyncDecision>::success(
+            MediaVideoSyncDecision(
+                MediaVideoSyncDecisionKind::Hold,
+                request.repeatPresentationOnMaster,
+                presentationPhase.value(),
+                m_generation,
+                request.sequence,
+                m_consecutiveRecoveryActions,
+                recheckAt.value()));
     }
     if (!m_policy.allowRecoveryRepeat) {
         m_lastSequence = request.sequence;
@@ -208,12 +275,12 @@ MediaAvSyncResult<MediaVideoSyncDecision> MediaVideoSyncController::updateRepeat
         return MediaAvSyncResult<MediaVideoSyncDecision>::success(
             decision(MediaVideoSyncDecisionKind::NoAction,
                      request.repeatPresentationOnMaster,
-                     phase.value(),
+                     presentationPhase.value(),
                      request.sequence));
     }
     return recoveryDecision(MediaVideoSyncDecisionKind::RepeatPreviousFrame,
                             request.repeatPresentationOnMaster,
-                            phase.value(),
+                            presentationPhase.value(),
                             request.sequence);
 }
 
@@ -224,6 +291,7 @@ MediaVideoSyncController::recoveryDecision(
     MediaRunningTime phaseError,
     std::uint64_t sequence)
 {
+    m_heldFrame.reset();
     m_lastSequence = sequence;
     if (m_consecutiveRecoveryActions >=
         m_policy.maximumConsecutiveRecoveryActions) {
@@ -269,6 +337,25 @@ MediaAvSyncStatus MediaVideoSyncController::validateSequence(
     return MediaAvSyncStatus::success();
 }
 
+MediaAvSyncStatus MediaVideoSyncController::validateFrameIdentity(
+    const MediaVideoFrameMeasurement& measurement) const
+{
+    if (!m_heldFrame) return validateSequence(measurement.sequence);
+    if (measurement.sequence != m_heldFrame->sequence ||
+        measurement.dispatchOnMaster != m_heldFrame->dispatchOnMaster ||
+        measurement.targetPresentationOnMaster !=
+            m_heldFrame->targetPresentationOnMaster ||
+        measurement.keyFrame != m_heldFrame->keyFrame) {
+        return MediaAvSyncStatus::failure(
+            error(MediaAvSyncErrorCode::InvalidVideoSyncMeasurement,
+                  "validate_held_frame",
+                  measurement.generation,
+                  measurement.targetPresentationOnMaster,
+                  "held video identity is immutable until a terminal decision"));
+    }
+    return MediaAvSyncStatus::success();
+}
+
 MediaAvSyncStatus MediaVideoSyncController::reset(std::uint64_t generation)
 {
     if (generation == 0 || generation <= m_generation) {
@@ -281,6 +368,7 @@ MediaAvSyncStatus MediaVideoSyncController::reset(std::uint64_t generation)
     }
     m_generation = generation;
     m_lastSequence = 0;
+    m_heldFrame.reset();
     m_consecutiveRecoveryActions = 0;
     return MediaAvSyncStatus::success();
 }

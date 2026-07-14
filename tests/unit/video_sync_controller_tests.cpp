@@ -55,6 +55,7 @@ MediaVideoFrameMeasurement measurement(
 {
     return MediaVideoFrameMeasurement{
         ms(presentationMs),
+        ms(presentationMs),
         ms(presentationMs - phaseErrorMs),
         generation,
         sequence,
@@ -69,6 +70,7 @@ MediaVideoRepeatRequest repeatRequest(
     std::uint64_t generation = 1) noexcept
 {
     return MediaVideoRepeatRequest{
+        ms(repeatPresentationMs),
         ms(repeatPresentationMs),
         ms(lastEmittedPresentationMs),
         ms(masterNowMs),
@@ -100,19 +102,19 @@ void testEarlyHoldAndDisplayWindowsKeepPresentationTime(TestContext& ctx)
               earlyMeasurement.targetPresentationOnMaster);
     EXPECT_EQ(ctx, early.value().phaseError(), ms(21));
 
-    const auto exactEarly = measurement(1'040, 20, 2);
+    const auto exactEarly = measurement(1'000, 20, 1);
     auto displayEarly = controller.update(exactEarly);
     EXPECT_TRUE(ctx, displayEarly);
     if (!displayEarly) return;
     EXPECT_EQ(ctx, displayEarly.value().kind(), MediaVideoSyncDecisionKind::Display);
 
-    const auto exactLate = measurement(1'080, -40, 3);
+    const auto exactLate = measurement(1'080, -40, 2);
     auto displayLateBoundary = controller.update(exactLate);
     EXPECT_TRUE(ctx, displayLateBoundary);
     if (!displayLateBoundary) return;
     EXPECT_EQ(ctx, displayLateBoundary.value().kind(), MediaVideoSyncDecisionKind::Display);
 
-    const auto lateMeasurement = measurement(1'120, -41, 4);
+    const auto lateMeasurement = measurement(1'120, -41, 3);
     auto late = controller.update(lateMeasurement);
     EXPECT_TRUE(ctx, late);
     if (!late) return;
@@ -164,8 +166,24 @@ void testRepeatOnlyAuthorizesExplicitCadenceRecovery(TestContext& ctx)
     auto unavailableController = std::move(unavailableCreated).value();
     EXPECT_FALSE(ctx, unavailableController.update(
         repeatRequest(3'000, 3'000, 3'020, 1)));
-    EXPECT_FALSE(ctx, unavailableController.update(
-        repeatRequest(3'040, 3'000, 3'020, 1)));
+    auto decodeLeadRepeat = unavailableController.update(
+        repeatRequest(3'040, 3'000, 3'020, 1));
+    EXPECT_TRUE(ctx, decodeLeadRepeat);
+    if (decodeLeadRepeat) {
+        EXPECT_EQ(ctx, decodeLeadRepeat.value().kind(),
+                  MediaVideoSyncDecisionKind::RepeatPreviousFrame);
+    }
+
+    auto heldRepeatCreated = makeController(ctx, true);
+    if (!heldRepeatCreated) return;
+    auto heldRepeatController = std::move(heldRepeatCreated).value();
+    auto heldRepeat = heldRepeatController.update(
+        repeatRequest(3'041, 3'000, 3'020, 1));
+    EXPECT_TRUE(ctx, heldRepeat);
+    if (heldRepeat) {
+        EXPECT_EQ(ctx, heldRepeat.value().kind(),
+                  MediaVideoSyncDecisionKind::Hold);
+    }
 
     auto disabledCreated = makeController(ctx, false);
     if (!disabledCreated) return;
@@ -227,15 +245,17 @@ void testRecoveryCountResetRulesAndLimit(TestContext& ctx)
     auto controller = std::move(created).value();
     auto first = controller.update(measurement(5'000, -80, 1));
     auto hold = controller.update(measurement(5'040, 21, 2));
+    auto release = controller.update(measurement(5'040, 20, 2));
     auto displayLate = controller.update(measurement(5'080, -41, 3));
     auto key = controller.update(measurement(5'120, -100, 4, true));
     auto second = controller.update(measurement(5'160, -80, 5));
     auto third = controller.update(measurement(5'200, -80, 6));
     auto fourth = controller.update(measurement(5'240, -80, 7));
-    EXPECT_TRUE(ctx, first && hold && displayLate && key && second && third && fourth);
-    if (!first || !hold || !displayLate || !key || !second || !third || !fourth) return;
+    EXPECT_TRUE(ctx, first && hold && release && displayLate && key && second && third && fourth);
+    if (!first || !hold || !release || !displayLate || !key || !second || !third || !fourth) return;
     EXPECT_EQ(ctx, first.value().consecutiveRecoveryActions(), 1);
-    EXPECT_EQ(ctx, hold.value().consecutiveRecoveryActions(), 0);
+    EXPECT_EQ(ctx, hold.value().consecutiveRecoveryActions(), 1);
+    EXPECT_EQ(ctx, release.value().kind(), MediaVideoSyncDecisionKind::Display);
     EXPECT_EQ(ctx, displayLate.value().consecutiveRecoveryActions(), 0);
     EXPECT_EQ(ctx, key.value().consecutiveRecoveryActions(), 0);
     EXPECT_EQ(ctx, second.value().kind(), MediaVideoSyncDecisionKind::Drop);
@@ -279,7 +299,18 @@ void testHardDiscontinuityAndGenerationIsolation(TestContext& ctx)
     auto hardEarly = controller.update(measurement(6'000, 250, 1, true, 2));
     EXPECT_TRUE(ctx, hardEarly);
     if (!hardEarly) return;
-    EXPECT_EQ(ctx, hardEarly.value().kind(), MediaVideoSyncDecisionKind::Reacquire);
+    EXPECT_EQ(ctx, hardEarly.value().kind(), MediaVideoSyncDecisionKind::Hold);
+
+    auto decodeLeadCreated = makeController(ctx);
+    if (!decodeLeadCreated) return;
+    auto decodeLeadController = std::move(decodeLeadCreated).value();
+    auto decodeLead = decodeLeadController.update(MediaVideoFrameMeasurement{
+        ms(6'000), ms(6'100), ms(6'000), 1, 1, true});
+    EXPECT_TRUE(ctx, decodeLead);
+    if (decodeLead) {
+        EXPECT_EQ(ctx, decodeLead.value().kind(),
+                  MediaVideoSyncDecisionKind::Display);
+    }
 
     EXPECT_TRUE(ctx, controller.reset(3));
     EXPECT_TRUE(ctx, controller.update(measurement(7'000, -80, 1, false, 3)));
@@ -293,12 +324,14 @@ void testHardDiscontinuityAndGenerationIsolation(TestContext& ctx)
     EXPECT_EQ(ctx, future.value().consecutiveRecoveryActions(), 1);
 
     MediaVideoFrameMeasurement staleOverflow{
+        MediaRunningTime::fromNanoseconds(0),
         MediaRunningTime::fromNanoseconds(std::numeric_limits<std::int64_t>::max()),
         MediaRunningTime::fromNanoseconds(-1),
         2,
         2,
         false};
     MediaVideoRepeatRequest futureOverflow{
+        MediaRunningTime::fromNanoseconds(0),
         MediaRunningTime::fromNanoseconds(std::numeric_limits<std::int64_t>::max()),
         MediaRunningTime::fromNanoseconds(0),
         MediaRunningTime::fromNanoseconds(-1),
@@ -345,6 +378,7 @@ void testMeasurementPolicyAndResetContracts(TestContext& ctx)
     EXPECT_FALSE(ctx, controller.update(measurement(8'040, 0, 0)));
 
     MediaVideoSyncMeasurement overflow = MediaVideoFrameMeasurement{
+        MediaRunningTime::fromNanoseconds(0),
         MediaRunningTime::fromNanoseconds(std::numeric_limits<std::int64_t>::max()),
         MediaRunningTime::fromNanoseconds(-1),
         1, 2, false};
@@ -356,6 +390,7 @@ void testMeasurementPolicyAndResetContracts(TestContext& ctx)
     EXPECT_TRUE(ctx, controller.update(measurement(8'040, 0, 2)));
 
     MediaVideoSyncMeasurement repeatOverflow = MediaVideoRepeatRequest{
+        MediaRunningTime::fromNanoseconds(0),
         MediaRunningTime::fromNanoseconds(std::numeric_limits<std::int64_t>::max()),
         MediaRunningTime::fromNanoseconds(0),
         MediaRunningTime::fromNanoseconds(-1),
@@ -397,6 +432,48 @@ void testMeasurementPolicyAndResetContracts(TestContext& ctx)
     EXPECT_TRUE(ctx, controller.update(newGeneration));
 }
 
+void testHoldDoesNotConsumeFrameBeforeDeadlineReevaluation(TestContext& ctx)
+{
+    auto created = makeController(ctx);
+    if (!created) return;
+    auto controller = std::move(created).value();
+    const auto heldFrame = measurement(10'100, 100, 1, true);
+    auto hold = controller.update(heldFrame);
+    EXPECT_TRUE(ctx, hold);
+    if (!hold) return;
+    EXPECT_EQ(ctx, hold.value().kind(), MediaVideoSyncDecisionKind::Hold);
+    EXPECT_TRUE(ctx, hold.value().recheckAtMasterTime().has_value());
+    if (hold.value().recheckAtMasterTime()) {
+        EXPECT_EQ(ctx, *hold.value().recheckAtMasterTime(), ms(10'080));
+    }
+
+    auto beforeDeadline = heldFrame;
+    beforeDeadline.masterNow = MediaRunningTime::fromNanoseconds(
+        ms(10'080).nanoseconds() - 1);
+    auto stillHeld = controller.update(beforeDeadline);
+    EXPECT_TRUE(ctx, stillHeld);
+    if (stillHeld) {
+        EXPECT_EQ(ctx, stillHeld.value().kind(), MediaVideoSyncDecisionKind::Hold);
+    }
+    auto overtakingFrame = measurement(10'120, 40, 2, true);
+    EXPECT_FALSE(ctx, controller.update(overtakingFrame));
+    auto changedTarget = heldFrame;
+    changedTarget.targetPresentationOnMaster = ms(10'101);
+    EXPECT_FALSE(ctx, controller.update(changedTarget));
+    auto changedKeyFrame = heldFrame;
+    changedKeyFrame.keyFrame = false;
+    EXPECT_FALSE(ctx, controller.update(changedKeyFrame));
+
+    auto dueFrame = heldFrame;
+    dueFrame.masterNow = ms(10'080);
+    auto display = controller.update(dueFrame);
+    EXPECT_TRUE(ctx, display);
+    if (display) {
+        EXPECT_EQ(ctx, display.value().kind(), MediaVideoSyncDecisionKind::Display);
+        EXPECT_EQ(ctx, display.value().sequence(), static_cast<std::uint64_t>(1));
+    }
+}
+
 } // namespace
 
 void runVideoSyncControllerTests(TestContext& ctx)
@@ -408,4 +485,5 @@ void runVideoSyncControllerTests(TestContext& ctx)
     testRecoveryCountResetRulesAndLimit(ctx);
     testHardDiscontinuityAndGenerationIsolation(ctx);
     testMeasurementPolicyAndResetContracts(ctx);
+    testHoldDoesNotConsumeFrameBeforeDeadlineReevaluation(ctx);
 }
