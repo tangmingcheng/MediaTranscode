@@ -160,6 +160,50 @@ void testTimestampFieldRejectsInvalidPrefixAndOutOfRangeWireValue(TestContext& c
     }
 }
 
+void testPesUsesExtendedTimestampsAcrossEqualWireWrap(TestContext& ctx)
+{
+    constexpr std::int64_t Wrap = std::int64_t{1} << 33;
+    const MediaTsPacketClock clock{Wrap + 5, 5, 5, 5};
+    auto header = MediaTsPesSerializer::header(
+        MediaScheduledStream::Video, clock, 1);
+    EXPECT_TRUE(ctx, header);
+    if (!header) return;
+    EXPECT_EQ(ctx, header.value().size, std::size_t{19});
+    EXPECT_EQ(ctx, header.value().bytes[7], std::uint8_t{0xC0});
+    EXPECT_EQ(ctx, header.value().bytes[8], std::uint8_t{10});
+    EXPECT_EQ(ctx, header.value().bytes[9] >> 4, std::uint8_t{3});
+    EXPECT_EQ(ctx, header.value().bytes[14] >> 4, std::uint8_t{1});
+    EXPECT_EQ(ctx, header.value().bytes[9] & 0x0F,
+              header.value().bytes[14] & 0x0F);
+    EXPECT_TRUE(ctx, std::equal(
+        header.value().bytes.begin() + 10,
+        header.value().bytes.begin() + 14,
+        header.value().bytes.begin() + 15));
+}
+
+void testPesAcceptsNegativeExtendedTimestampPositiveModulo(TestContext& ctx)
+{
+    constexpr std::uint64_t WrappedNegativeOne =
+        (std::uint64_t{1} << 33) - 1;
+    const MediaTsPacketClock valid{-1, -1, WrappedNegativeOne,
+                                   WrappedNegativeOne};
+    auto header = MediaTsPesSerializer::header(
+        MediaScheduledStream::Audio, valid, 1);
+    EXPECT_TRUE(ctx, header);
+    if (header) {
+        EXPECT_EQ(ctx, header.value().size, std::size_t{14});
+        const std::array<std::uint8_t, 5> expected{
+            0x2F, 0xFF, 0xFF, 0xFF, 0xFF};
+        EXPECT_TRUE(ctx, std::equal(
+            expected.begin(), expected.end(), header.value().bytes.begin() + 9));
+    }
+
+    const MediaTsPacketClock mismatched{-1, -1, WrappedNegativeOne - 1,
+                                        WrappedNegativeOne};
+    EXPECT_FALSE(ctx, MediaTsPesSerializer::header(
+        MediaScheduledStream::Audio, mismatched, 1));
+}
+
 } // namespace
 
 void runMpegTsOutputSerializerTests(TestContext& ctx)
@@ -168,4 +212,6 @@ void runMpegTsOutputSerializerTests(TestContext& ctx)
     testPesTimestampGoldenBytes(ctx);
     testPesRejectsInvalidStreamClockAndAudioLengthOverflow(ctx);
     testTimestampFieldRejectsInvalidPrefixAndOutOfRangeWireValue(ctx);
+    testPesUsesExtendedTimestampsAcrossEqualWireWrap(ctx);
+    testPesAcceptsNegativeExtendedTimestampPositiveModulo(ctx);
 }
