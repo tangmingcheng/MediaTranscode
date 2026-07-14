@@ -220,11 +220,6 @@ std::uint32_t stableIdentity(const std::string& value) noexcept
     plan.startup.audioIdentity = groupIdentity + ".pid." +
                                  std::to_string(selected.audioPid);
     plan.ts->pcrPid = selected.pcrPid;
-    plan.ts->pcrIntervalNs = runningTime(20 * Millisecond);
-    plan.ts->maximumPcrGapNs = runningTime(100 * Millisecond);
-    plan.ts->maximumPcrJitterNs = runningTime(5 * Millisecond);
-    plan.ts->timestampTimeBaseNumerator = 1;
-    plan.ts->timestampTimeBaseDenominator = 90000;
 
     if (!request.parameters.audio.sampleRate) {
         return ::media::Result<MediaAvSyncPlan>::failure(
@@ -232,6 +227,23 @@ std::uint32_t stableIdentity(const std::string& value) noexcept
                 "Synchronized MPEG-TS requires resolved output audio sample rate"));
     }
     plan.audioServo.outputSampleRate = *request.parameters.audio.sampleRate;
+
+    auto outputMux = MediaTsMuxPlan::create(MediaTsMuxPlanParameters{
+        1, 1, 0x0000, 0x0100, 0x0101, 0x0102, 0x0101, 0,
+        runningTime(100 * Millisecond), 0x1B, 0x0F,
+        MediaTsH264InputLayout::LengthPrefixed, 4,
+        MediaTsParameterSetPolicy::BeforeRandomAccess,
+        MediaTsAacAdtsPlan{0, 2, 3, 2},
+        MediaTsOutputClockPolicy{
+            runningTime(20 * Millisecond), runningTime(100 * Millisecond),
+            runningTime(5 * Millisecond), 1, 90'000},
+        *plan.startup.outputLeadNs, 188,
+        MediaTsContinuitySeeds{0, 0, 0, 0}, 7,
+        MediaTsOutputTransportKind::Udp});
+    if (!outputMux) {
+        return ::media::Result<MediaAvSyncPlan>::failure(outputMux.error());
+    }
+    plan.ts->outputMux = std::move(outputMux).value();
 
     if (auto status = MediaAvSyncPlanValidator::validate(plan); !status) {
         return ::media::Result<MediaAvSyncPlan>::failure(status.error());

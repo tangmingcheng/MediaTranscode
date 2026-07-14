@@ -61,11 +61,6 @@ std::uint64_t absoluteDistance(std::int64_t lhs, std::int64_t rhs) noexcept
     return lhsMagnitude + rhsMagnitude;
 }
 
-bool assignablePid(int pid) noexcept
-{
-    return pid >= 0x0020 && pid < 0x1FFF;
-}
-
 ::media::Status invalid(const char* reason)
 {
     return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
@@ -74,41 +69,13 @@ bool assignablePid(int pid) noexcept
 
 } // namespace
 
-MediaTsOutputClockPolicy::MediaTsOutputClockPolicy(
-    int programNumberValue,
-    int programMapPidValue,
-    int videoPidValue,
-    int audioPidValue,
-    int pcrPidValue,
-    MediaRunningTime pcrIntervalValue,
-    MediaRunningTime maximumPcrGapValue,
-    MediaRunningTime maximumPcrJitterValue,
-    int timestampTimeBaseNumeratorValue,
-    int timestampTimeBaseDenominatorValue) noexcept
-    : programNumber(programNumberValue), programMapPid(programMapPidValue),
-      videoPid(videoPidValue), audioPid(audioPidValue), pcrPid(pcrPidValue),
-      pcrInterval(pcrIntervalValue), maximumPcrGap(maximumPcrGapValue),
-      maximumPcrJitter(maximumPcrJitterValue),
-      timestampTimeBaseNumerator(timestampTimeBaseNumeratorValue),
-      timestampTimeBaseDenominator(timestampTimeBaseDenominatorValue)
-{
-}
-
 ::media::Result<MediaTsOutputClockGenerator> MediaTsOutputClockGenerator::create(
     MediaTsOutputClockPolicy policy,
     MediaPlaybackEpoch epoch)
 {
-    if (policy.programNumber <= 0 || policy.programNumber > 0xFFFF ||
-        !assignablePid(policy.programMapPid) || !assignablePid(policy.videoPid) ||
-        !assignablePid(policy.audioPid) || !assignablePid(policy.pcrPid) ||
-        policy.programMapPid == policy.videoPid ||
-        policy.programMapPid == policy.audioPid ||
-        policy.programMapPid == policy.pcrPid ||
-        policy.videoPid == policy.audioPid ||
-        (policy.pcrPid != policy.videoPid && policy.pcrPid != policy.audioPid) ||
-        policy.pcrInterval.nanoseconds() <= 0 ||
+    if (policy.pcrInterval.nanoseconds() <= 0 ||
         policy.maximumPcrGap.nanoseconds() <= policy.pcrInterval.nanoseconds() ||
-        policy.maximumPcrJitter.nanoseconds() < 0 ||
+        policy.maximumPcrJitter.nanoseconds() <= 0 ||
         policy.maximumPcrJitter.nanoseconds() >= policy.pcrInterval.nanoseconds() ||
         policy.timestampTimeBaseNumerator != 1 ||
         policy.timestampTimeBaseDenominator != 90'000 || epoch.generation == 0) {
@@ -164,10 +131,18 @@ MediaTsOutputClockGenerator::MediaTsOutputClockGenerator(
     std::uint64_t generation,
     MediaScheduledStream stream,
     MediaRunningTime presentationOnMaster,
-    MediaRunningTime dispatchOnMaster)
+    MediaRunningTime dispatchOnMaster,
+    MediaRunningTime emitOnMaster,
+    MediaRunningTime transportDecodeLead)
 {
     if (auto status = validateGeneration(generation); !status) {
         return ::media::Result<MediaTsPacketClock>::failure(status.error());
+    }
+    auto actualLead = dispatchOnMaster.checkedSubtract(emitOnMaster);
+    if (!actualLead || transportDecodeLead.nanoseconds() <= 0 ||
+        actualLead.value() != transportDecodeLead) {
+        return ::media::Result<MediaTsPacketClock>::failure(
+            invalid("dispatch-to-emission lead differs from transport plan").error());
     }
     auto pts = timestampTicks(presentationOnMaster);
     auto dts = timestampTicks(dispatchOnMaster);

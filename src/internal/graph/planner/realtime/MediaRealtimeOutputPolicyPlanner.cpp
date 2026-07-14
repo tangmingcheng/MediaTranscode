@@ -2,6 +2,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
 
 #include "internal/graph/utils/MediaCodecNameUtils.h"
+#include "internal/graph/utils/MediaUrlUtils.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -57,6 +58,12 @@ MediaLatencyPolicy muxPacing() noexcept
         if (request.output.url.empty()) {
             return ::media::Result<MediaRealtimeOutputUrls>::failure(
                 ::media::ErrorInfo::invalidArgument("MPEG-TS muxed output requires explicit output URL"));
+        }
+        auto endpoint = parseRtpUdpUrlEndpoint(request.output.url);
+        if (!endpoint || endpoint.value().scheme != "udp") {
+            return ::media::Result<MediaRealtimeOutputUrls>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Project MPEG-TS output requires an explicit udp://host:port endpoint"));
         }
         urls.video = request.output.url;
         urls.muxed = request.output.url;

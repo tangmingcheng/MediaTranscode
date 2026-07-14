@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/graph/protocol/mpegts/MediaTsMuxPlan.h"
 #include "internal/graph/sync/MediaAvSyncTopology.h"
 #include "internal/graph/time/MediaRunningTime.h"
 
@@ -130,11 +131,7 @@ struct MediaAvSyncTsPlan {
     std::optional<int> videoPid;
     std::optional<int> audioPid;
     std::optional<int> pcrPid;
-    std::optional<MediaRunningTime> pcrIntervalNs;
-    std::optional<MediaRunningTime> maximumPcrGapNs;
-    std::optional<MediaRunningTime> maximumPcrJitterNs;
-    std::optional<int> timestampTimeBaseNumerator;
-    std::optional<int> timestampTimeBaseDenominator;
+    std::optional<MediaTsMuxPlan> outputMux;
 };
 
 struct MediaAvSyncMetricsPolicy {

@@ -278,13 +278,8 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
         *ts.programMapPid == *ts.videoPid || *ts.programMapPid == *ts.audioPid ||
         *ts.programMapPid == *ts.pcrPid ||
         *ts.videoPid == *ts.audioPid ||
-        !positive(ts.pcrIntervalNs) || !positive(ts.maximumPcrGapNs) ||
-        !positive(ts.maximumPcrJitterNs) ||
-        *ts.maximumPcrJitterNs >= *ts.pcrIntervalNs ||
-        *ts.pcrIntervalNs >= *ts.maximumPcrGapNs ||
-        !positive(ts.timestampTimeBaseNumerator) ||
-        !positive(ts.timestampTimeBaseDenominator)) {
-        return invalid("MPEG-TS program, PID, PCR, or timestamp policy");
+        !ts.outputMux) {
+        return invalid("MPEG-TS input selection or output mux plan");
     }
     return ::media::Status::success();
 }

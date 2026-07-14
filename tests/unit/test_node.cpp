@@ -11,6 +11,7 @@
 #include "internal/graph/protocol/rtp/MediaRtcpCompoundParser.h"
 #include "internal/graph/protocol/rtp/MediaRtcpSenderReportTracker.h"
 #include "internal/graph/protocol/rtp/MediaRtpPacketParser.h"
+#include "internal/graph/protocol/mpegts/MediaTsMuxPlan.h"
 #include "internal/graph/protocol/mpegts/MediaTsOutputClockGenerator.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 #include "internal/graph/runtime/buffer/MediaRtpIngressEventBuffer.h"
@@ -54,11 +55,10 @@ namespace {
 
 MediaTsOutputClockPolicy tsOutputClockPolicy()
 {
-    return MediaTsOutputClockPolicy(
-        1, 0x100, 0x101, 0x102, 0x101,
+    return MediaTsOutputClockPolicy{
         MediaRunningTime::fromNanoseconds(20'000'000),
         MediaRunningTime::fromNanoseconds(40'000'000),
-        MediaRunningTime::fromNanoseconds(1'000'000), 1, 90'000);
+        MediaRunningTime::fromNanoseconds(1'000'000), 1, 90'000};
 }
 
 void testMpegTsOutputClockUsesOneEpoch(TestContext& ctx)
@@ -74,7 +74,9 @@ void testMpegTsOutputClockUsesOneEpoch(TestContext& ctx)
     auto reordered = generator.project(
         7, MediaScheduledStream::Video,
         MediaRunningTime::fromNanoseconds(10'040'000'000),
-        MediaRunningTime::fromNanoseconds(10'020'000'000));
+        MediaRunningTime::fromNanoseconds(10'020'000'000),
+        MediaRunningTime::fromNanoseconds(9'920'000'000),
+        MediaRunningTime::fromNanoseconds(100'000'000));
     EXPECT_TRUE(ctx, reordered);
     if (reordered) {
         EXPECT_EQ(ctx, reordered.value().extendedPts, std::int64_t{183'600});
@@ -85,28 +87,40 @@ void testMpegTsOutputClockUsesOneEpoch(TestContext& ctx)
     auto independentAudio = generator.project(
         7, MediaScheduledStream::Audio,
         MediaRunningTime::fromNanoseconds(10'015'000'000),
-        MediaRunningTime::fromNanoseconds(10'010'000'000));
+        MediaRunningTime::fromNanoseconds(10'010'000'000),
+        MediaRunningTime::fromNanoseconds(9'910'000'000),
+        MediaRunningTime::fromNanoseconds(100'000'000));
     EXPECT_TRUE(ctx, independentAudio);
     EXPECT_FALSE(ctx, generator.project(
         7, MediaScheduledStream::Video,
         MediaRunningTime::fromNanoseconds(10'030'000'000),
-        MediaRunningTime::fromNanoseconds(10'019'000'000)));
+        MediaRunningTime::fromNanoseconds(10'019'000'000),
+        MediaRunningTime::fromNanoseconds(9'919'000'000),
+        MediaRunningTime::fromNanoseconds(100'000'000)));
     EXPECT_TRUE(ctx, generator.project(
         7, MediaScheduledStream::Video,
         MediaRunningTime::fromNanoseconds(10'041'000'000),
-        MediaRunningTime::fromNanoseconds(10'021'000'000)));
+        MediaRunningTime::fromNanoseconds(10'021'000'000),
+        MediaRunningTime::fromNanoseconds(9'921'000'000),
+        MediaRunningTime::fromNanoseconds(100'000'000)));
     EXPECT_FALSE(ctx, generator.project(
         7, static_cast<MediaScheduledStream>(0xFF),
         MediaRunningTime::fromNanoseconds(10'020'000'000),
-        MediaRunningTime::fromNanoseconds(10'010'000'000)));
+        MediaRunningTime::fromNanoseconds(10'010'000'000),
+        MediaRunningTime::fromNanoseconds(9'910'000'000),
+        MediaRunningTime::fromNanoseconds(100'000'000)));
     EXPECT_FALSE(ctx, generator.project(
         8, MediaScheduledStream::Video,
         MediaRunningTime::fromNanoseconds(10'060'000'000),
-        MediaRunningTime::fromNanoseconds(10'040'000'000)));
+        MediaRunningTime::fromNanoseconds(10'040'000'000),
+        MediaRunningTime::fromNanoseconds(9'940'000'000),
+        MediaRunningTime::fromNanoseconds(100'000'000)));
     EXPECT_FALSE(ctx, generator.project(
         7, MediaScheduledStream::Audio,
         MediaRunningTime::fromNanoseconds(10'020'000'000),
-        MediaRunningTime::fromNanoseconds(10'040'000'000)));
+        MediaRunningTime::fromNanoseconds(10'040'000'000),
+        MediaRunningTime::fromNanoseconds(9'940'000'000),
+        MediaRunningTime::fromNanoseconds(100'000'000)));
 
     auto pcrOrigin = generator.advancePcrThrough(
         7, MediaRunningTime::fromNanoseconds(10'000'000'000));
@@ -184,23 +198,20 @@ void testMpegTsOutputClockRejectsInvalidPolicyAndHandlesWrap(TestContext& ctx)
         MediaRunningTime::fromNanoseconds(0),
         MediaRunningTime::fromNanoseconds(0), 1};
     EXPECT_FALSE(ctx, MediaTsOutputClockGenerator::create(
-        MediaTsOutputClockPolicy(
-            0, 0x100, 0x101, 0x102, 0x101,
-            MediaRunningTime::fromNanoseconds(20'000'000),
-            MediaRunningTime::fromNanoseconds(40'000'000),
-            MediaRunningTime::fromNanoseconds(1'000'000), 1, 90'000), epoch));
+        MediaTsOutputClockPolicy{
+            MediaRunningTime::fromNanoseconds(0),
+            MediaRunningTime::fromNanoseconds(100'000'000),
+            MediaRunningTime::fromNanoseconds(5'000'000), 1, 90'000}, epoch));
     EXPECT_FALSE(ctx, MediaTsOutputClockGenerator::create(
-        MediaTsOutputClockPolicy(
-            1, 0x100, 0x101, 0x101, 0x101,
+        MediaTsOutputClockPolicy{
             MediaRunningTime::fromNanoseconds(20'000'000),
-            MediaRunningTime::fromNanoseconds(40'000'000),
-            MediaRunningTime::fromNanoseconds(1'000'000), 1, 90'000), epoch));
+            MediaRunningTime::fromNanoseconds(20'000'000),
+            MediaRunningTime::fromNanoseconds(5'000'000), 1, 90'000}, epoch));
     EXPECT_FALSE(ctx, MediaTsOutputClockGenerator::create(
-        MediaTsOutputClockPolicy(
-            1, 0x100, 0x101, 0x102, 0x103,
+        MediaTsOutputClockPolicy{
             MediaRunningTime::fromNanoseconds(20'000'000),
-            MediaRunningTime::fromNanoseconds(40'000'000),
-            MediaRunningTime::fromNanoseconds(1'000'000), 1, 90'000), epoch));
+            MediaRunningTime::fromNanoseconds(100'000'000),
+            MediaRunningTime::fromNanoseconds(20'000'000), 1, 90'000}, epoch));
 
     constexpr std::int64_t wrapTicks = std::int64_t{1} << 33;
     auto wrapEpochNs = MediaRunningTime::checkedFromTicks(wrapTicks - 900, 1, 90'000);
@@ -214,11 +225,15 @@ void testMpegTsOutputClockRejectsInvalidPolicyAndHandlesWrap(TestContext& ctx)
     auto before = wrapped.value().project(
         3, MediaScheduledStream::Video,
         MediaRunningTime::fromNanoseconds(5'000'000),
-        MediaRunningTime::fromNanoseconds(0));
+        MediaRunningTime::fromNanoseconds(0),
+        MediaRunningTime::fromNanoseconds(-100'000'000),
+        MediaRunningTime::fromNanoseconds(100'000'000));
     auto after = wrapped.value().project(
         3, MediaScheduledStream::Video,
         MediaRunningTime::fromNanoseconds(20'000'000),
-        MediaRunningTime::fromNanoseconds(10'000'000));
+        MediaRunningTime::fromNanoseconds(10'000'000),
+        MediaRunningTime::fromNanoseconds(-90'000'000),
+        MediaRunningTime::fromNanoseconds(100'000'000));
     EXPECT_TRUE(ctx, before);
     EXPECT_TRUE(ctx, after);
     if (before && after) {
@@ -247,7 +262,53 @@ void testMpegTsOutputClockRejectsInvalidPolicyAndHandlesWrap(TestContext& ctx)
     if (overflow) EXPECT_FALSE(ctx, overflow.value().project(
         4, MediaScheduledStream::Video,
         MediaRunningTime::fromNanoseconds(1),
-        MediaRunningTime::fromNanoseconds(1)));
+        MediaRunningTime::fromNanoseconds(1),
+        MediaRunningTime::fromNanoseconds(-99'999'999),
+        MediaRunningTime::fromNanoseconds(100'000'000)));
+}
+
+void testMpegTsOutputClockRequiresExactTransportDecodeLead(TestContext& ctx)
+{
+    auto plan = MediaTsMuxPlan::create(MediaTsMuxPlanParameters{
+        1, 1, 0x0000, 0x0100, 0x0101, 0x0102, 0x0101, 0,
+        MediaRunningTime::fromNanoseconds(100'000'000), 0x1B, 0x0F,
+        MediaTsH264InputLayout::LengthPrefixed, 4,
+        MediaTsParameterSetPolicy::BeforeRandomAccess,
+        MediaTsAacAdtsPlan{0, 2, 3, 2},
+        MediaTsOutputClockPolicy{
+            MediaRunningTime::fromNanoseconds(20'000'000),
+            MediaRunningTime::fromNanoseconds(100'000'000),
+            MediaRunningTime::fromNanoseconds(5'000'000), 1, 90'000},
+        MediaRunningTime::fromNanoseconds(100'000'000), 188,
+        MediaTsContinuitySeeds{0, 0, 0, 0}, 7,
+        MediaTsOutputTransportKind::Udp});
+    EXPECT_TRUE(ctx, plan);
+    if (!plan) return;
+    const MediaPlaybackEpoch epoch{
+        MediaRunningTime::fromNanoseconds(0),
+        MediaRunningTime::fromNanoseconds(0), 11};
+    auto clock = MediaTsOutputClockGenerator::create(plan.value().clockPolicy(), epoch);
+    EXPECT_TRUE(ctx, clock);
+    if (!clock) return;
+
+    EXPECT_TRUE(ctx, clock.value().project(
+        epoch.generation, MediaScheduledStream::Video,
+        MediaRunningTime::fromNanoseconds(240'000'000),
+        MediaRunningTime::fromNanoseconds(220'000'000),
+        MediaRunningTime::fromNanoseconds(120'000'000),
+        plan.value().transportDecodeLead()));
+    EXPECT_FALSE(ctx, clock.value().project(
+        epoch.generation, MediaScheduledStream::Video,
+        MediaRunningTime::fromNanoseconds(260'000'000),
+        MediaRunningTime::fromNanoseconds(240'000'000),
+        MediaRunningTime::fromNanoseconds(141'000'000),
+        plan.value().transportDecodeLead()));
+    EXPECT_TRUE(ctx, clock.value().project(
+        epoch.generation, MediaScheduledStream::Video,
+        MediaRunningTime::fromNanoseconds(260'000'000),
+        MediaRunningTime::fromNanoseconds(240'000'000),
+        MediaRunningTime::fromNanoseconds(140'000'000),
+        plan.value().transportDecodeLead()));
 }
 
 void testRequiredPossiblyEmptyNodeOption(TestContext& ctx)
@@ -1092,6 +1153,7 @@ int main()
 
     testMpegTsOutputClockUsesOneEpoch(ctx);
     testMpegTsOutputClockRejectsInvalidPolicyAndHandlesWrap(ctx);
+    testMpegTsOutputClockRequiresExactTransportDecodeLead(ctx);
     RtpMuxStateMachine state;
     EXPECT_TRUE(ctx, state.bindExpectations(true, false, true, 0));
     EXPECT_TRUE(ctx, state.bindOutput());

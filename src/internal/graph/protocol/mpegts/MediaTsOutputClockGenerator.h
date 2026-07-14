@@ -11,24 +11,6 @@
 namespace media::ffmpeg::graph {
 
 struct MediaTsOutputClockPolicy final {
-    MediaTsOutputClockPolicy() = delete;
-    MediaTsOutputClockPolicy(
-        int programNumber,
-        int programMapPid,
-        int videoPid,
-        int audioPid,
-        int pcrPid,
-        MediaRunningTime pcrInterval,
-        MediaRunningTime maximumPcrGap,
-        MediaRunningTime maximumPcrJitter,
-        int timestampTimeBaseNumerator,
-        int timestampTimeBaseDenominator) noexcept;
-
-    int programNumber;
-    int programMapPid;
-    int videoPid;
-    int audioPid;
-    int pcrPid;
     MediaRunningTime pcrInterval;
     MediaRunningTime maximumPcrGap;
     MediaRunningTime maximumPcrJitter;
@@ -60,7 +42,9 @@ public:
         std::uint64_t generation,
         MediaScheduledStream stream,
         MediaRunningTime presentationOnMaster,
-        MediaRunningTime dispatchOnMaster);
+        MediaRunningTime dispatchOnMaster,
+        MediaRunningTime emitOnMaster,
+        MediaRunningTime transportDecodeLead);
     ::media::Result<std::vector<MediaTsPcrClock>> advancePcrThrough(
         std::uint64_t generation,
         MediaRunningTime masterTime);

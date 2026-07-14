@@ -10,8 +10,10 @@
 #include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimePlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeInputPlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeOutputPolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeTsInputPlanValidator.h"
 #include "internal/graph/planner/realtime/MediaTsProgramSelector.h"
+#include "internal/graph/protocol/mpegts/MediaTsMuxPlan.h"
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/runtime/distributed/MediaGraphRemoteExecutor.h"
 #include "internal/graph/runtime/gpu/MediaGpuGraphExecutor.h"
@@ -194,6 +196,97 @@ MediaRealtimeRtpTranscodeRequest avSyncTsRequest()
     return request;
 }
 
+MediaTsMuxPlanParameters validTsMuxPlanParameters()
+{
+    return MediaTsMuxPlanParameters{
+        1, 1, 0x0000, 0x0100, 0x0101, 0x0102, 0x0101, 0,
+        MediaRunningTime::fromNanoseconds(100'000'000), 0x1B, 0x0F,
+        MediaTsH264InputLayout::LengthPrefixed, 4,
+        MediaTsParameterSetPolicy::BeforeRandomAccess,
+        MediaTsAacAdtsPlan{0, 2, 3, 2},
+        MediaTsOutputClockPolicy{
+            MediaRunningTime::fromNanoseconds(20'000'000),
+            MediaRunningTime::fromNanoseconds(100'000'000),
+            MediaRunningTime::fromNanoseconds(5'000'000), 1, 90'000},
+        MediaRunningTime::fromNanoseconds(100'000'000), 188,
+        MediaTsContinuitySeeds{0, 0, 0, 0}, 7,
+        MediaTsOutputTransportKind::Udp};
+}
+
+void testTsMuxPlanRejectsEveryInvalidField(TestContext& ctx)
+{
+    EXPECT_TRUE(ctx, MediaTsMuxPlan::create(validTsMuxPlanParameters()));
+    const auto reject = [&ctx](const char* name, auto mutation) {
+        auto parameters = validTsMuxPlanParameters();
+        mutation(parameters);
+        const auto result = MediaTsMuxPlan::create(std::move(parameters));
+        if (result) std::cerr << "expected invalid TS mux field: " << name << '\n';
+        EXPECT_FALSE(ctx, result);
+    };
+
+    reject("transport stream id", [](auto& p) { p.transportStreamId = 0; });
+    reject("program number", [](auto& p) { p.programNumber = 0; });
+    reject("PAT PID", [](auto& p) { p.patPid = 1; });
+    reject("PMT PID collision", [](auto& p) { p.programMapPid = p.videoPid; });
+    reject("video PID collision", [](auto& p) { p.videoPid = p.audioPid; });
+    reject("audio PID collision", [](auto& p) { p.audioPid = p.videoPid; });
+    reject("PCR PID is not ES", [](auto& p) { p.pcrPid = 0x0103; });
+    reject("table version", [](auto& p) { p.tableVersion = 32; });
+    reject("PSI repeat positive", [](auto& p) {
+        p.psiRepeatInterval = MediaRunningTime::fromNanoseconds(0);
+    });
+    reject("PSI after PCR interval", [](auto& p) { p.psiRepeatInterval = p.clock.pcrInterval; });
+    reject("video stream type", [](auto& p) { p.videoStreamType = 0x24; });
+    reject("audio stream type", [](auto& p) { p.audioStreamType = 0x11; });
+    reject("H264 layout", [](auto& p) {
+        p.h264InputLayout = static_cast<MediaTsH264InputLayout>(0xFF);
+    });
+    reject("NAL length zero", [](auto& p) { p.h264NalLengthBytes = 0; });
+    reject("NAL length five", [](auto& p) { p.h264NalLengthBytes = 5; });
+    reject("parameter set policy", [](auto& p) {
+        p.parameterSetPolicy = static_cast<MediaTsParameterSetPolicy>(0xFF);
+    });
+    reject("AAC MPEG id", [](auto& p) { p.aac.mpegId = 2; });
+    reject("AAC object type", [](auto& p) { p.aac.audioObjectType = 0; });
+    reject("AAC sampling index", [](auto& p) { p.aac.samplingFrequencyIndex = 13; });
+    reject("AAC channels", [](auto& p) { p.aac.channelConfiguration = 0; });
+    reject("PCR interval positive", [](auto& p) {
+        p.clock.pcrInterval = MediaRunningTime::fromNanoseconds(0);
+    });
+    reject("PCR gap ordered", [](auto& p) { p.clock.maximumPcrGap = p.clock.pcrInterval; });
+    reject("PCR jitter ordered", [](auto& p) { p.clock.maximumPcrJitter = p.clock.pcrInterval; });
+    reject("timestamp numerator", [](auto& p) { p.clock.timestampTimeBaseNumerator = 2; });
+    reject("timestamp denominator", [](auto& p) { p.clock.timestampTimeBaseDenominator = 1'000; });
+    reject("transport lead", [](auto& p) {
+        p.transportDecodeLead = MediaRunningTime::fromNanoseconds(0);
+    });
+    reject("packet size", [](auto& p) { p.packetSize = 192; });
+    reject("PAT continuity", [](auto& p) { p.continuity.pat = 16; });
+    reject("PMT continuity", [](auto& p) { p.continuity.pmt = 16; });
+    reject("video continuity", [](auto& p) { p.continuity.video = 16; });
+    reject("audio continuity", [](auto& p) { p.continuity.audio = 16; });
+    reject("datagram minimum", [](auto& p) { p.maximumPacketsPerDatagram = 0; });
+    reject("datagram maximum", [](auto& p) { p.maximumPacketsPerDatagram = 8; });
+    reject("transport kind", [](auto& p) {
+        p.transportKind = static_cast<MediaTsOutputTransportKind>(0xFF);
+    });
+}
+
+void testProjectTsOutputRequiresExplicitUdpEndpoint(TestContext& ctx)
+{
+    auto request = avSyncTsRequest();
+    const auto accepts = [&](const char* url) {
+        request.output.url = url;
+        return MediaRealtimeOutputPolicyPlanner::planUrls(request);
+    };
+    EXPECT_TRUE(ctx, accepts("udp://127.0.0.1:5000"));
+    EXPECT_FALSE(ctx, accepts("rtp://127.0.0.1:5000"));
+    EXPECT_FALSE(ctx, accepts("output.ts"));
+    EXPECT_FALSE(ctx, accepts("udp://:5000"));
+    EXPECT_FALSE(ctx, accepts("udp://127.0.0.1"));
+    EXPECT_FALSE(ctx, accepts("srt://127.0.0.1:5000"));
+}
+
 void testAvSyncPlannerBuildsCompleteRtpContract(TestContext& ctx)
 {
     const auto result = MediaAvSyncPlanner::plan(avSyncRtpRequest());
@@ -320,10 +413,16 @@ void testAvSyncPlannerBuildsCompleteTsContract(TestContext& ctx)
     EXPECT_EQ(ctx, *plan.ts->videoPid, 703);
     EXPECT_EQ(ctx, *plan.ts->audioPid, 705);
     EXPECT_EQ(ctx, *plan.ts->pcrPid, 701);
-    EXPECT_TRUE(ctx, plan.ts->pcrIntervalNs->nanoseconds() > 0);
-    EXPECT_TRUE(ctx, *plan.ts->maximumPcrGapNs >= *plan.ts->pcrIntervalNs);
-    EXPECT_EQ(ctx, *plan.ts->timestampTimeBaseNumerator, 1);
-    EXPECT_EQ(ctx, *plan.ts->timestampTimeBaseDenominator, 90000);
+    EXPECT_TRUE(ctx, plan.ts->outputMux.has_value());
+    if (!plan.ts->outputMux) return;
+    const auto& output = plan.ts->outputMux->parameters();
+    EXPECT_EQ(ctx, output.transportStreamId, std::uint16_t{1});
+    EXPECT_EQ(ctx, output.programNumber, std::uint16_t{1});
+    EXPECT_EQ(ctx, output.programMapPid, std::uint16_t{0x0100});
+    EXPECT_EQ(ctx, output.videoPid, std::uint16_t{0x0101});
+    EXPECT_EQ(ctx, output.audioPid, std::uint16_t{0x0102});
+    EXPECT_EQ(ctx, output.pcrPid, std::uint16_t{0x0101});
+    EXPECT_EQ(ctx, plan.ts->outputMux->transportDecodeLead(), *plan.startup.outputLeadNs);
     EXPECT_TRUE(ctx, MediaAvSyncPlanValidator::validate(plan));
 }
 
@@ -479,11 +578,7 @@ void testAvSyncValidatorRejectsMissingAndInconsistentFields(TestContext& ctx)
     EXPECT_MISSING_TS(videoPid);
     EXPECT_MISSING_TS(audioPid);
     EXPECT_MISSING_TS(pcrPid);
-    EXPECT_MISSING_TS(pcrIntervalNs);
-    EXPECT_MISSING_TS(maximumPcrGapNs);
-    EXPECT_MISSING_TS(maximumPcrJitterNs);
-    EXPECT_MISSING_TS(timestampTimeBaseNumerator);
-    EXPECT_MISSING_TS(timestampTimeBaseDenominator);
+    EXPECT_MISSING_TS(outputMux);
 #undef EXPECT_MISSING_TS
     MediaAvSyncPlan missingTsPolicy = completeTs;
     missingTsPolicy.ts.reset();
@@ -618,15 +713,6 @@ void testAvSyncValidatorRejectsIsolatedNumericAndOrderingInvariants(TestContext&
     rejectRtp("RTP sender clock rate error positive", [](auto& p) { p.rtp->input.maximumSenderClockRateErrorPpm = 0; });
     rejectRtp("RTP sender clock residual positive", [](auto& p) { p.rtp->input.maximumSenderClockResidualNs = avSyncTime(0); });
 
-    const MediaAvSyncPlan ts = tsResult.value();
-    auto rejectTs = [&](const char* name, auto mutation) {
-        MediaAvSyncPlan plan = ts;
-        mutation(plan);
-        expectInvalidAvSyncMutation(ctx, std::move(plan), name);
-    };
-    rejectTs("TS PCR interval positive", [](auto& p) { p.ts->pcrIntervalNs = avSyncTime(0); });
-    rejectTs("TS PCR jitter below interval", [](auto& p) { p.ts->maximumPcrJitterNs = *p.ts->pcrIntervalNs; });
-    rejectTs("TS PCR gap after interval", [](auto& p) { p.ts->maximumPcrGapNs = *p.ts->pcrIntervalNs; });
 }
 
 } // namespace
@@ -636,6 +722,8 @@ int main()
     TestContext ctx;
 
     testTsInputPlanValidatorRejectsEveryMutation(ctx);
+    testTsMuxPlanRejectsEveryInvalidField(ctx);
+    testProjectTsOutputRequiresExplicitUdpEndpoint(ctx);
     testTsProgramSelectorRequiresOneCrossValidatedProgram(ctx);
     testTsProgramSelectorRejectsAmbiguityAndInventoryMismatch(ctx);
     testTsEvidenceCapacityCoversProbeRollbackAndPredecessor(ctx);
