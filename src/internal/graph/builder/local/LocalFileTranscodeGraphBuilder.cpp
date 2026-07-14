@@ -119,7 +119,6 @@ bool branchEnabled(const MediaAudioPipelinePlan& plan) noexcept
     MediaAudioBranchSegmentOptions audioOptions;
     audioOptions.prefix = "local.audio";
     audioOptions.plan = std::move(audioPlan);
-    audioOptions.parameters = options.parameters.audio;
     audioOptions.queues = queues;
     audioOptions.edgePolicies = edgePolicies;
     audioOptions.formatSourceNode = input.value().input;

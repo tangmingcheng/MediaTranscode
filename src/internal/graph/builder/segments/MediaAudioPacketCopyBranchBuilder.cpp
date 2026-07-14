@@ -16,6 +16,13 @@ namespace media::ffmpeg::graph {
         return ::media::Result<void>::failure(
             ::media::ErrorInfo::invalidArgument("audio packet copy branch requires a planned source stream index"));
     }
+    if (!options.plan.resolvedOutput ||
+        options.plan.resolvedOutput->branchMode() != MediaBranchMode::CopyPacket ||
+        !options.plan.resolvedOutput->encoderName().empty()) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "audio packet copy branch requires complete resolved copy output"));
+    }
     if (!options.normalizePackets.has_value()) {
         return ::media::Result<void>::failure(
             ::media::ErrorInfo::invalidArgument("audio packet copy branch requires explicit normalization policy"));

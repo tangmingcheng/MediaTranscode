@@ -126,6 +126,12 @@ constexpr std::uint64_t TsMaximumPacketPositionRegressionBytes = 1024 * 1024;
         result.streams.audio.codecName = audio->format.codec.codecName;
         result.streams.audio.sampleRate = audio->format.audio.sampleRate;
         result.streams.audio.channels = audio->format.audio.channels;
+        result.streams.audio.channelLayout = audio->format.audio.channelLayout;
+        result.streams.audio.sampleFormat = audio->format.audio.sampleFormat;
+        auto profile = MediaAudioProfile::fromCodecProfile(
+            audio->format.codec.codecName, audio->format.codec.profile);
+        if (!profile) return ::media::Result<MediaPreparedRealtimeInputScan>::failure(profile.error());
+        result.streams.audio.profile = profile.value();
         result.streams.audio.bitrateBitsPerSecond = audio->format.codec.bitrate;
     }
     auto prepared = MediaPreparedRealtimeInput::createMpegTs(std::move(session));
@@ -290,6 +296,9 @@ void fillNodePlan(
         audio.codecName = audioDescriptor.value().codecName;
         audio.sampleRate = audioDescriptor.value().clockRate;
         audio.channels = audioDescriptor.value().channels;
+        audio.channelLayout = audio.channels == 1 ? "mono" : "stereo";
+        audio.sampleFormat = "unknown";
+        audio.profile = audioDescriptor.value().audioProfile;
         audio.bitrateBitsPerSecond = request.input.audioRtp.bitrateKbps
             ? static_cast<int64_t>(*request.input.audioRtp.bitrateKbps) * 1000
             : 0;

@@ -133,7 +133,6 @@ struct MediaRealtimeRtpTranscodePlan {
     MediaPipelinePlan videoPlan;
     MediaAudioPipelinePlan audioPlan;
     MediaVideoTranscodeParameters videoParameters;
-    MediaAudioTranscodeParameters audioParameters;
     MediaGraphQueueParameters queues;
     MediaRealtimeEdgePolicySet edgePolicies;
     MediaThreadingPolicy threadingPolicy;

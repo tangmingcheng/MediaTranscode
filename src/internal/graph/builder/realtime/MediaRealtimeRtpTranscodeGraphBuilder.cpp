@@ -428,7 +428,6 @@ bool separateRtpOutput(const MediaRealtimeRtpTranscodePlan& plan) noexcept
         MediaAudioBranchSegmentOptions audioOptions;
         audioOptions.prefix = "realtime.audio";
         audioOptions.plan = std::move(plan.audioPlan);
-        audioOptions.parameters = plan.audioParameters;
         audioOptions.queues = plan.queues;
         audioOptions.edgePolicies = plan.edgePolicies;
         audioOptions.formatSourceNode = isolateRawRtpAudio

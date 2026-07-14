@@ -4,7 +4,6 @@
 #include "internal/graph/builder/MediaAudioPlanOptionApplier.h"
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
 #include "internal/graph/builder/segments/MediaAudioEncodeBranchNodes.h"
-#include "internal/graph/builder/segments/MediaAudioEncodeOptionApplier.h"
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -170,6 +169,12 @@ MediaAudioEncodeBranchNodes addAudioEncodeNodes(MediaGraph& graph,
         return ::media::Result<void>::failure(
             ::media::ErrorInfo::invalidArgument("MediaAudioEncodeBranchBuilder requires planned audio source stream index"));
     }
+    if (!options.plan.resolvedOutput ||
+        options.plan.resolvedOutput->branchMode() != MediaBranchMode::TranscodeFrame) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MediaAudioEncodeBranchBuilder requires complete resolved audio output"));
+    }
     if (!options.normalizePackets.has_value()) {
         return ::media::Result<void>::failure(
             ::media::ErrorInfo::invalidArgument("MediaAudioEncodeBranchBuilder requires explicit packet normalization policy"));
@@ -181,7 +186,6 @@ MediaAudioEncodeBranchNodes addAudioEncodeNodes(MediaGraph& graph,
     const MediaAudioEncodeBranchNodes nodes = addAudioEncodeNodes(graph, options.prefix, *options.normalizePackets);
     if (auto status = MediaAudioPlanOptionApplier::applySelectedPlan(
             graph, nodes, options.plan, *options.normalizePackets); !status) return status;
-    if (auto status = MediaAudioEncodeOptionApplier::applyCodecResolverOptions(graph, nodes.codecResolver, options.parameters); !status) return status;
     if (auto status = applyCorrectionOptions(graph, options, nodes.resample); !status) return status;
     if (auto status = addEncodePorts(graph, options, nodes); !status) return status;
     return connectEncodePorts(graph, options, nodes);

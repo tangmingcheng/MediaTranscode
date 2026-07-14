@@ -153,6 +153,12 @@ MediaVideoTranscodeParameters planRealtimeVideoParameters(const MediaVideoTransc
     plannerOptions.requestedQuality = audio.quality;
     plannerOptions.requestedPreset = audio.preset;
     plannerOptions.requestedProfile = audio.profile;
+    if (MediaRealtimeRequestClassifier::muxedTransportOutput(options)) {
+        plannerOptions.outputRequirement.codecName = "aac";
+        plannerOptions.outputRequirement.profile = MediaAudioProfile::knownAacLow();
+        plannerOptions.outputRequirement.sampleRate = 48'000;
+        plannerOptions.outputRequirement.channels = 2;
+    }
     plannerOptions.diagnosticLogEnabled = options.parameters.execution.diagnosticLogEnabled;
     return ::media::Result<MediaAudioPipelinePlannerOptions>::success(std::move(plannerOptions));
 }
@@ -324,21 +330,19 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
     MediaPipelinePlan videoPlan;
     MediaAudioPipelinePlan audioPlan;
     MediaVideoTranscodeParameters videoParameters;
-    std::optional<int> resolvedAudioSampleRate;
-    std::optional<int> resolvedAudioChannels;
     if (MediaRealtimeRequestClassifier::rawRtpInput(options)) {
         auto raw = MediaRealtimeInputPlanner::planRawRtp(options);
         if (!raw) return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(raw.error());
         rawInput.emplace(std::move(raw).value());
 
         if (MediaRealtimeRequestClassifier::audioRequested(options)) {
-            auto plannedAudio = MediaAudioPipelinePlanner::planKnownAudioTranscode(*rawInput->audio, audioOptions);
+            auto plannedAudio = MediaAudioPipelinePlanner::planKnownAudio(*rawInput->audio, audioOptions);
             if (!plannedAudio) {
                 return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(plannedAudio.error());
             }
             audioPlan = std::move(plannedAudio).value();
         } else {
-            auto plannedAudio = MediaAudioPipelinePlanner::planKnownAudioTranscode({}, audioOptions);
+            auto plannedAudio = MediaAudioPipelinePlanner::planKnownAudio({}, audioOptions);
             if (!plannedAudio) {
                 return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(plannedAudio.error());
             }
@@ -388,23 +392,13 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
                 return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
                     ::media::ErrorInfo::invalidArgument("Realtime RTP audio was requested but input has no audio stream"));
             }
-            auto plannedAudio = MediaAudioPipelinePlanner::planKnownAudioTranscode(realtimeInput.audio, audioOptions);
+            auto plannedAudio = MediaAudioPipelinePlanner::planKnownAudio(realtimeInput.audio, audioOptions);
             if (!plannedAudio) {
                 return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(plannedAudio.error());
             }
             audioPlan = std::move(plannedAudio).value();
-            if (options.parameters.audio.sampleRate) {
-                resolvedAudioSampleRate = *options.parameters.audio.sampleRate;
-            } else {
-                resolvedAudioSampleRate = realtimeInput.audio.sampleRate;
-            }
-            if (options.parameters.audio.channels) {
-                resolvedAudioChannels = *options.parameters.audio.channels;
-            } else {
-                resolvedAudioChannels = realtimeInput.audio.channels;
-            }
         } else {
-            auto plannedAudio = MediaAudioPipelinePlanner::planKnownAudioTranscode({}, audioOptions);
+            auto plannedAudio = MediaAudioPipelinePlanner::planKnownAudio({}, audioOptions);
             if (!plannedAudio) {
                 return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(plannedAudio.error());
             }
@@ -421,7 +415,6 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
     plan.videoPlan = std::move(videoPlan);
     plan.audioPlan = std::move(audioPlan);
     plan.videoParameters = std::move(videoParameters);
-    plan.audioParameters = options.parameters.audio;
     plan.queues = options.parameters.queues;
     plan.edgePolicies = planEdgePolicies(options.parameters.queues);
     plan.threadingPolicy = planThreadingPolicy();
@@ -446,17 +439,16 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
         !outputStatus) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(outputStatus.error());
     }
-    std::optional<MediaAvSyncResolvedOutputPlan> resolvedTsOutput;
+    std::optional<MediaProjectMpegTsOutputPlan> resolvedTsOutput;
     if (MediaRealtimeRequestClassifier::mpegTsUdpInput(options) &&
         MediaRealtimeRequestClassifier::muxedTransportOutput(options)) {
-        if (!resolvedAudioSampleRate || !resolvedAudioChannels) {
+        if (!plan.audioPlan.resolvedOutput) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
                 ::media::ErrorInfo::notInitialized(
                     "Project MPEG-TS output requires resolved audio format facts"));
         }
-        auto resolved = MediaAvSyncResolvedOutputPlan::create(
-            plan.videoPlan.outputCodecName, plan.audioPlan.targetCodecName,
-            *resolvedAudioSampleRate, *resolvedAudioChannels);
+        auto resolved = MediaProjectMpegTsOutputPlan::create(
+            plan.videoPlan.outputCodecName, *plan.audioPlan.resolvedOutput);
         if (!resolved) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
                 resolved.error());

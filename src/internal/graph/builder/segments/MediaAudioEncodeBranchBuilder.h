@@ -16,7 +16,6 @@ namespace media::ffmpeg::graph {
 struct MediaAudioEncodeBranchOptions {
     std::string prefix = "audio.encode";
     MediaAudioPipelinePlan plan;
-    MediaAudioTranscodeParameters parameters;
     MediaGraphQueueParameters queues;
     MediaRealtimeEdgePolicySet edgePolicies;
 

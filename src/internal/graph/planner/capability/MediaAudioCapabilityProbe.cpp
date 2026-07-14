@@ -41,6 +41,14 @@ namespace media::ffmpeg::graph {
                                       : canonicalCodecName(descriptor.codec.codecName);
     capability.stream.sampleRate = descriptor.audio.sampleRate;
     capability.stream.channels = descriptor.audio.channels;
+    capability.stream.channelLayout = descriptor.audio.channelLayout;
+    capability.stream.sampleFormat = descriptor.audio.sampleFormat;
+    auto profile = MediaAudioProfile::fromCodecProfile(
+        capability.stream.codecName, descriptor.codec.profile);
+    if (!profile) {
+        return ::media::Result<MediaAudioCapability>::failure(profile.error());
+    }
+    capability.stream.profile = profile.value();
     capability.stream.bitrateBitsPerSecond = descriptor.codec.bitrate;
     return ::media::Result<MediaAudioCapability>::success(std::move(capability));
 }

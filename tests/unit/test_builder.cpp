@@ -21,8 +21,13 @@ MediaAudioEncodeBranchOptions audioEncodeOptions(MediaGraph& graph)
     options.plan.enabled = true;
     options.plan.branchMode = MediaBranchMode::TranscodeFrame;
     options.plan.sourceStreamIndex = 1;
-    options.plan.targetCodecName = "aac";
-    options.plan.targetEncoderName = "aac";
+    MediaResolvedAudioSource source{
+        "aac", MediaAudioProfile::knownAacLow(), 44'100, 2, "stereo", "fltp", 128'000};
+    MediaResolvedAudioRequest request;
+    request.sampleRate = 48'000;
+    auto resolved = MediaResolvedAudioOutputPlan::create(
+        source, request, {}, std::optional<MediaSelectedAudioEncoder>{{"aac", "fltp"}});
+    options.plan.resolvedOutput = std::move(resolved).value();
     options.normalizePackets = false;
     options.formatSourceNode = graph.addNode(MediaNodeKind::DebugDump, "format_source");
     graph.addOutputPort(options.formatSourceNode, "format", MediaStreamKind::Metadata,
@@ -51,6 +56,13 @@ const MediaNode* resampleNode(const MediaGraph& graph)
 
 void testAudioCorrectionBuilderContract(TestContext& ctx)
 {
+    MediaGraph incompleteGraph;
+    auto incomplete = audioEncodeOptions(incompleteGraph);
+    incomplete.plan.resolvedOutput.reset();
+    incomplete.correctionMode = MediaAudioCorrectionExecutionMode::Disabled;
+    EXPECT_FALSE(ctx, MediaAudioEncodeBranchBuilder::build(incompleteGraph, incomplete));
+    EXPECT_TRUE(ctx, resampleNode(incompleteGraph) == nullptr);
+
     MediaGraph missingSourceGraph;
     auto missingSource = audioEncodeOptions(missingSourceGraph);
     missingSource.correctionMode = MediaAudioCorrectionExecutionMode::ExternalCorrectionRequired;

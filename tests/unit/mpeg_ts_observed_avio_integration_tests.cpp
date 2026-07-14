@@ -207,7 +207,7 @@ MediaRealtimeRtpTranscodeRequest integrationRequest(std::uint16_t inputPort,
     request.input.probeSizeBytes = 512 * 1024;
     request.input.lowLatency = true;
     request.output.streamLayout = RealtimeOutputStreamLayout::MuxedTransportStream;
-    request.output.url = "udp://127.0.0.1:" + std::to_string(outputPort) + "?pkt_size=1316";
+    request.output.url = "udp://127.0.0.1:" + std::to_string(outputPort);
     request.output.packetSize = 1'316;
     request.parameters.execution.includeAudio = true;
     request.parameters.execution.disableHardware = true;

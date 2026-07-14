@@ -201,7 +201,7 @@ std::uint32_t stableIdentity(const std::string& value) noexcept
 ::media::Result<MediaAvSyncPlan> planTs(
     const MediaRealtimeRtpTranscodeRequest& request,
     const MediaTsSelectedProgramPlan& selected,
-    const MediaAvSyncResolvedOutputPlan& resolvedOutput)
+    const MediaProjectMpegTsOutputPlan& resolvedOutput)
 {
     MediaAvSyncPlan plan;
     if (auto status = planSharedPolicy(plan, request); !status) {
@@ -225,22 +225,7 @@ std::uint32_t stableIdentity(const std::string& value) noexcept
 
     plan.audioServo.outputSampleRate = resolvedOutput.audioSampleRate();
 
-    auto outputMux = MediaTsMuxPlan::create(MediaTsMuxPlanParameters{
-        1, 1, 0x0000, 0x0100, 0x0101, 0x0102, 0x0101, 0,
-        runningTime(100 * Millisecond), 0x1B, 0x0F,
-        MediaTsH264InputLayout::LengthPrefixed, 4,
-        MediaTsParameterSetPolicy::BeforeRandomAccess,
-        resolvedOutput.aacAdtsPlan(),
-        MediaTsOutputClockPolicy{
-            runningTime(20 * Millisecond), runningTime(100 * Millisecond),
-            runningTime(5 * Millisecond), 1, 90'000},
-        *plan.startup.outputLeadNs, 188,
-        MediaTsContinuitySeeds{0, 0, 0, 0}, 7,
-        MediaTsOutputTransportKind::Udp});
-    if (!outputMux) {
-        return ::media::Result<MediaAvSyncPlan>::failure(outputMux.error());
-    }
-    plan.ts->outputMux = std::move(outputMux).value();
+    plan.ts->outputMux = resolvedOutput.muxPlan();
 
     if (auto status = MediaAvSyncPlanValidator::validate(plan); !status) {
         return ::media::Result<MediaAvSyncPlan>::failure(status.error());
@@ -250,72 +235,10 @@ std::uint32_t stableIdentity(const std::string& value) noexcept
 
 } // namespace
 
-::media::Result<MediaAvSyncResolvedOutputPlan>
-MediaAvSyncResolvedOutputPlan::create(
-    std::string videoCodecName,
-    std::string audioCodecName,
-    int audioSampleRate,
-    int audioChannels)
-{
-    videoCodecName = canonicalCodecName(std::move(videoCodecName));
-    audioCodecName = canonicalCodecName(std::move(audioCodecName));
-    if (videoCodecName != "h264" || audioCodecName != "aac" ||
-        audioSampleRate != 48'000 || audioChannels != 2) {
-        return ::media::Result<MediaAvSyncResolvedOutputPlan>::failure(
-            ::media::ErrorInfo::unsupported(
-                "Project MPEG-TS output requires resolved H.264 and AAC-LC 48 kHz stereo output"));
-    }
-    return ::media::Result<MediaAvSyncResolvedOutputPlan>::success(
-        MediaAvSyncResolvedOutputPlan(
-            std::move(videoCodecName), std::move(audioCodecName),
-            audioSampleRate, audioChannels,
-            MediaTsAacAdtsPlan{0, 2, 3, 2}));
-}
-
-MediaAvSyncResolvedOutputPlan::MediaAvSyncResolvedOutputPlan(
-    std::string videoCodecName,
-    std::string audioCodecName,
-    int audioSampleRate,
-    int audioChannels,
-    MediaTsAacAdtsPlan aacAdts) noexcept
-    : m_videoCodecName(std::move(videoCodecName)),
-      m_audioCodecName(std::move(audioCodecName)),
-      m_audioSampleRate(audioSampleRate),
-      m_audioChannels(audioChannels),
-      m_aacAdts(aacAdts)
-{
-}
-
-const std::string& MediaAvSyncResolvedOutputPlan::videoCodecName() const noexcept
-{
-    return m_videoCodecName;
-}
-
-const std::string& MediaAvSyncResolvedOutputPlan::audioCodecName() const noexcept
-{
-    return m_audioCodecName;
-}
-
-int MediaAvSyncResolvedOutputPlan::audioSampleRate() const noexcept
-{
-    return m_audioSampleRate;
-}
-
-int MediaAvSyncResolvedOutputPlan::audioChannels() const noexcept
-{
-    return m_audioChannels;
-}
-
-const MediaTsAacAdtsPlan&
-MediaAvSyncResolvedOutputPlan::aacAdtsPlan() const noexcept
-{
-    return m_aacAdts;
-}
-
 ::media::Result<MediaAvSyncPlan> MediaAvSyncPlanner::plan(
     const MediaRealtimeRtpTranscodeRequest& request,
     const MediaTsSelectedProgramPlan* selectedTsProgram,
-    const MediaAvSyncResolvedOutputPlan* resolvedTsOutput)
+    const MediaProjectMpegTsOutputPlan* resolvedTsOutput)
 {
     if (!request.parameters.execution.includeAudio) {
         return ::media::Result<MediaAvSyncPlan>::failure(

@@ -15,6 +15,7 @@
 #include "internal/graph/planner/realtime/MediaTsProgramSelector.h"
 #include "internal/graph/protocol/mpegts/MediaTsMuxPlan.h"
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
+#include "internal/graph/planner/audio/MediaAudioProfile.h"
 #include "internal/graph/runtime/distributed/MediaGraphRemoteExecutor.h"
 #include "internal/graph/runtime/gpu/MediaGpuGraphExecutor.h"
 #include "internal/graph/runtime/optimizer/MediaGraphCompiler.h"
@@ -196,38 +197,40 @@ MediaRealtimeRtpTranscodeRequest avSyncTsRequest()
     return request;
 }
 
-MediaAvSyncResolvedOutputPlan validTsResolvedOutput()
+MediaResolvedAudioOutputPlan resolvedAacOutput(MediaAudioProfile profile)
 {
-    auto resolved = MediaAvSyncResolvedOutputPlan::create(
-        "h264", "aac", 48'000, 2);
+    MediaResolvedAudioSource source{
+        "aac", profile, 48'000, 2, "stereo", "fltp", 128'000};
+    MediaResolvedAudioRequest request;
+    auto resolved = MediaResolvedAudioOutputPlan::create(
+        source, request, {}, std::optional<MediaSelectedAudioEncoder>{{"aac", "fltp"}});
+    return std::move(resolved).value();
+}
+
+MediaProjectMpegTsOutputPlan validTsResolvedOutput()
+{
+    auto audio = resolvedAacOutput(MediaAudioProfile::knownAacLow());
+    auto resolved = MediaProjectMpegTsOutputPlan::create("h264", audio);
     return std::move(resolved).value();
 }
 
 void testTsResolvedOutputSupportMatrix(TestContext& ctx)
 {
-    const auto valid = MediaAvSyncResolvedOutputPlan::create(
-        "h264", "aac", 48'000, 2);
+    const auto audio = resolvedAacOutput(MediaAudioProfile::knownAacLow());
+    const auto valid = MediaProjectMpegTsOutputPlan::create("h264", audio);
     EXPECT_TRUE(ctx, valid);
     if (valid) {
-        EXPECT_EQ(ctx, valid.value().videoCodecName(), std::string("h264"));
-        EXPECT_EQ(ctx, valid.value().audioCodecName(), std::string("aac"));
         EXPECT_EQ(ctx, valid.value().audioSampleRate(), 48'000);
-        EXPECT_EQ(ctx, valid.value().audioChannels(), 2);
-        EXPECT_EQ(ctx, valid.value().aacAdtsPlan().audioObjectType,
+        EXPECT_EQ(ctx, valid.value().muxPlan().parameters().aac.audioObjectType,
                   std::uint8_t{2});
-        EXPECT_EQ(ctx, valid.value().aacAdtsPlan().samplingFrequencyIndex,
+        EXPECT_EQ(ctx, valid.value().muxPlan().parameters().aac.samplingFrequencyIndex,
                   std::uint8_t{3});
-        EXPECT_EQ(ctx, valid.value().aacAdtsPlan().channelConfiguration,
+        EXPECT_EQ(ctx, valid.value().muxPlan().parameters().aac.channelConfiguration,
                   std::uint8_t{2});
     }
-    EXPECT_FALSE(ctx, MediaAvSyncResolvedOutputPlan::create(
-        "hevc", "aac", 48'000, 2));
-    EXPECT_FALSE(ctx, MediaAvSyncResolvedOutputPlan::create(
-        "h264", "opus", 48'000, 2));
-    EXPECT_FALSE(ctx, MediaAvSyncResolvedOutputPlan::create(
-        "h264", "aac", 44'100, 2));
-    EXPECT_FALSE(ctx, MediaAvSyncResolvedOutputPlan::create(
-        "h264", "aac", 48'000, 1));
+    EXPECT_FALSE(ctx, MediaProjectMpegTsOutputPlan::create("hevc", audio));
+    EXPECT_FALSE(ctx, MediaProjectMpegTsOutputPlan::create(
+        "h264", resolvedAacOutput(MediaAudioProfile::unknown())));
 }
 
 MediaTsMuxPlanParameters validTsMuxPlanParameters()
@@ -757,6 +760,85 @@ void testAvSyncValidatorRejectsIsolatedNumericAndOrderingInvariants(TestContext&
 
 }
 
+void testResolvedAudioPlannerMatrix(TestContext& ctx)
+{
+    auto source = [](std::string codec, MediaAudioProfile profile, int rate, int channels) {
+        MediaInputAudioStreamInfo value;
+        value.streamIndex = 1;
+        value.codecName = std::move(codec);
+        value.profile = std::move(profile);
+        value.sampleRate = rate;
+        value.channels = channels;
+        value.channelLayout = channels == 1 ? "mono" : "stereo";
+        value.sampleFormat = "fltp";
+        value.bitrateBitsPerSecond = 128'000;
+        return value;
+    };
+    const auto he = MediaAudioProfile::fromCodecProfile("aac", "HE-AAC");
+    EXPECT_TRUE(ctx, he);
+    if (!he) return;
+
+    MediaAudioPipelinePlannerOptions ordinary(true);
+    auto lcCopy = MediaAudioPipelinePlanner::planKnownAudio(
+        source("aac", MediaAudioProfile::knownAacLow(), 48'000, 2), ordinary);
+    EXPECT_TRUE(ctx, lcCopy);
+    if (lcCopy) EXPECT_EQ(ctx, lcCopy.value().branchMode, MediaBranchMode::CopyPacket);
+
+    auto unknownCopy = MediaAudioPipelinePlanner::planKnownAudio(
+        source("aac", MediaAudioProfile::unknown(), 48'000, 2), ordinary);
+    EXPECT_TRUE(ctx, unknownCopy);
+    if (unknownCopy && unknownCopy.value().resolvedOutput) {
+        EXPECT_EQ(ctx, unknownCopy.value().branchMode, MediaBranchMode::CopyPacket);
+        EXPECT_EQ(ctx, unknownCopy.value().resolvedOutput->profile().knowledge(),
+                  MediaAudioProfileKnowledge::Unknown);
+    }
+
+    MediaAudioPipelinePlannerOptions ts(true);
+    ts.outputRequirement.codecName = "aac";
+    ts.outputRequirement.profile = MediaAudioProfile::knownAacLow();
+    ts.outputRequirement.sampleRate = 48'000;
+    ts.outputRequirement.channels = 2;
+    auto heToLc = MediaAudioPipelinePlanner::planKnownAudio(
+        source("aac", he.value(), 48'000, 2), ts);
+    EXPECT_TRUE(ctx, heToLc);
+    if (heToLc) EXPECT_EQ(ctx, heToLc.value().branchMode, MediaBranchMode::TranscodeFrame);
+    auto unknownToLc = MediaAudioPipelinePlanner::planKnownAudio(
+        source("aac", MediaAudioProfile::unknown(), 48'000, 2), ts);
+    EXPECT_TRUE(ctx, unknownToLc);
+    if (unknownToLc) EXPECT_EQ(ctx, unknownToLc.value().branchMode, MediaBranchMode::TranscodeFrame);
+    auto mono441 = MediaAudioPipelinePlanner::planKnownAudio(
+        source("aac", MediaAudioProfile::knownAacLow(), 44'100, 1), ts);
+    EXPECT_TRUE(ctx, mono441);
+    if (mono441 && mono441.value().resolvedOutput) {
+        EXPECT_EQ(ctx, mono441.value().resolvedOutput->sampleRate(), 48'000);
+        EXPECT_EQ(ctx, mono441.value().resolvedOutput->channels(), 2);
+    }
+    auto opusToAac = MediaAudioPipelinePlanner::planKnownAudio(
+        source("opus", MediaAudioProfile::notApplicable(), 48'000, 2), ts);
+    EXPECT_TRUE(ctx, opusToAac);
+    if (opusToAac && opusToAac.value().resolvedOutput) {
+        EXPECT_EQ(ctx, opusToAac.value().resolvedOutput->codecName(), std::string("aac"));
+        EXPECT_EQ(ctx, opusToAac.value().resolvedOutput->profile().canonicalName(), std::string("aac_low"));
+    }
+
+    auto explicitHe = ts;
+    explicitHe.requestedProfile = "aac_he";
+    EXPECT_FALSE(ctx, MediaAudioPipelinePlanner::planKnownAudio(
+        source("aac", he.value(), 48'000, 2), explicitHe));
+    auto explicitRate = ts;
+    explicitRate.requestedSampleRate = 44'100;
+    EXPECT_FALSE(ctx, MediaAudioPipelinePlanner::planKnownAudio(
+        source("aac", MediaAudioProfile::knownAacLow(), 48'000, 2), explicitRate));
+    auto explicitMono = ts;
+    explicitMono.requestedChannels = 1;
+    EXPECT_FALSE(ctx, MediaAudioPipelinePlanner::planKnownAudio(
+        source("aac", MediaAudioProfile::knownAacLow(), 48'000, 2), explicitMono));
+    auto explicitOpus = ts;
+    explicitOpus.requestedCodecName = "opus";
+    EXPECT_FALSE(ctx, MediaAudioPipelinePlanner::planKnownAudio(
+        source("opus", MediaAudioProfile::notApplicable(), 48'000, 2), explicitOpus));
+}
+
 } // namespace
 
 int main()
@@ -766,6 +848,7 @@ int main()
     testTsInputPlanValidatorRejectsEveryMutation(ctx);
     testTsMuxPlanRejectsEveryInvalidField(ctx);
     testTsResolvedOutputSupportMatrix(ctx);
+    testResolvedAudioPlannerMatrix(ctx);
     testProjectTsOutputRequiresExplicitUdpEndpoint(ctx);
     testTsProgramSelectorRequiresOneCrossValidatedProgram(ctx);
     testTsProgramSelectorRejectsAmbiguityAndInventoryMismatch(ctx);
@@ -780,8 +863,11 @@ int main()
     MediaInputAudioStreamInfo source;
     source.streamIndex = 0;
     source.codecName = "aac";
+    source.profile = MediaAudioProfile::knownAacLow();
     source.sampleRate = 48000;
     source.channels = 2;
+    source.channelLayout = "stereo";
+    source.sampleFormat = "fltp";
     source.bitrateBitsPerSecond = 320000;
 
     MediaAudioPipelinePlannerOptions copyOptions(true);
@@ -789,15 +875,32 @@ int main()
     copyOptions.requestedSampleRate = 48000;
     copyOptions.requestedChannels = 2;
     copyOptions.requestedBitrateKbps = 320;
-    const auto copy = MediaAudioPipelinePlanner::planKnownAudioTranscode(source, copyOptions);
+    const auto copy = MediaAudioPipelinePlanner::planKnownAudio(source, copyOptions);
     EXPECT_TRUE(ctx, copy);
-    if (copy) EXPECT_EQ(ctx, copy.value().branchMode, MediaBranchMode::CopyPacket);
+    if (copy) {
+        EXPECT_EQ(ctx, copy.value().branchMode, MediaBranchMode::CopyPacket);
+        EXPECT_TRUE(ctx, copy.value().resolvedOutput.has_value());
+        if (copy.value().resolvedOutput) {
+            EXPECT_EQ(ctx, copy.value().resolvedOutput->profile().knowledge(),
+                      MediaAudioProfileKnowledge::Known);
+            EXPECT_EQ(ctx, copy.value().resolvedOutput->profile().canonicalName(),
+                      std::string("aac_low"));
+            EXPECT_TRUE(ctx, copy.value().resolvedOutput->encoderName().empty());
+        }
+    }
 
     auto transcodeOptions = copyOptions;
     transcodeOptions.requestedSampleRate = 44100;
-    const auto transcode = MediaAudioPipelinePlanner::planKnownAudioTranscode(source, transcodeOptions);
+    const auto transcode = MediaAudioPipelinePlanner::planKnownAudio(source, transcodeOptions);
     EXPECT_TRUE(ctx, transcode);
-    if (transcode) EXPECT_EQ(ctx, transcode.value().branchMode, MediaBranchMode::TranscodeFrame);
+    if (transcode) {
+        EXPECT_EQ(ctx, transcode.value().branchMode, MediaBranchMode::TranscodeFrame);
+        EXPECT_TRUE(ctx, transcode.value().resolvedOutput.has_value());
+        if (transcode.value().resolvedOutput) {
+            EXPECT_EQ(ctx, transcode.value().resolvedOutput->sampleRate(), 44100);
+            EXPECT_FALSE(ctx, transcode.value().resolvedOutput->encoderName().empty());
+        }
+    }
 
     const MediaGraphPlanningPolicy defaultPlanningPolicy;
     EXPECT_FALSE(ctx, defaultPlanningPolicy.enableDistributedExecution);

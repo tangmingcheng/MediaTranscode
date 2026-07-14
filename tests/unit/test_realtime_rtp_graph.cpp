@@ -779,6 +779,7 @@ MediaRealtimeRtpTranscodeRequest validMpegTsUdpOptions()
     options.output.host.clear();
     options.output.basePort.reset();
     options.output.sdpPath.clear();
+    options.parameters.execution.includeAudio = true;
     options.parameters.video.bitrateKbps = 8406;
     return options;
 }
@@ -955,6 +956,12 @@ void testGraphRejectsBehaviorDefaultImplementations(TestContext& ctx)
     expectTextNotContains(ctx, audioPlannerHeader, "bool includeAudio = true");
     expectTextNotContains(ctx, audioPlanner, "plan.reason = \"no_audio\"");
     expectTextNotContains(ctx, audioResolver, "supported_samplerates[0]");
+    expectTextNotContains(ctx, audioResolver, "codecParameters.value()->bit_rate");
+    expectTextNotContains(ctx, audioResolver, "av_channel_layout_copy(audio encoder");
+    expectTextNotContains(ctx, audioResolver, "AV_SAMPLE_FMT_FLTP");
+    expectTextContains(ctx, audioResolver, "AudioSampleFormat");
+    expectTextContains(ctx, audioResolver, "requires resolved audio profile");
+    expectTextContains(ctx, audioResolver, "av_opt_set(audio encoder");
     expectTextContains(ctx, audioResolver, "audio sample rate is not supported by selected encoder");
     expectTextNotContains(ctx, encoderBuilder, "defaultBufferSizeFromRate");
     expectTextNotContains(ctx, encoderBuilder, "default buffer size");
@@ -1140,7 +1147,7 @@ void testRealtimePlannerNaturallySelectsAudioVideoTranscode(TestContext& ctx)
     if (!plan) return;
     EXPECT_EQ(ctx, plan.value().videoPlan.branchMode, MediaBranchMode::TranscodeFrame);
     EXPECT_EQ(ctx, plan.value().audioPlan.branchMode, MediaBranchMode::TranscodeFrame);
-    EXPECT_FALSE(ctx, plan.value().audioPlan.followsSourceParameters);
+    EXPECT_TRUE(ctx, plan.value().audioPlan.resolvedOutput.has_value());
 }
 
 void testRealtimePlannerValidationAndInputPlanningAreSeparated(TestContext& ctx)
@@ -1670,7 +1677,10 @@ void testRawRtpInheritsSourceCodecsWhenTranscodeCodecsAreOmitted(TestContext& ct
     EXPECT_EQ(ctx, plan.value().videoPlan.inputCodecName, std::string("h264"));
     EXPECT_EQ(ctx, plan.value().videoPlan.outputCodecName, std::string("h264"));
     EXPECT_EQ(ctx, plan.value().audioPlan.sourceCodecName, std::string("aac"));
-    EXPECT_EQ(ctx, plan.value().audioPlan.targetCodecName, std::string("aac"));
+    EXPECT_TRUE(ctx, plan.value().audioPlan.resolvedOutput.has_value());
+    if (plan.value().audioPlan.resolvedOutput) {
+        EXPECT_EQ(ctx, plan.value().audioPlan.resolvedOutput->codecName(), std::string("aac"));
+    }
 }
 
 void testRawRtpMatchingAudioPlansPacketCopy(TestContext& ctx)
@@ -1689,7 +1699,7 @@ void testRawRtpMatchingAudioPlansPacketCopy(TestContext& ctx)
 
     EXPECT_TRUE(ctx, plan.value().audioPlan.enabled);
     EXPECT_EQ(ctx, plan.value().audioPlan.branchMode, MediaBranchMode::CopyPacket);
-    EXPECT_TRUE(ctx, plan.value().audioPlan.followsSourceParameters);
+    EXPECT_TRUE(ctx, plan.value().audioPlan.resolvedOutput.has_value());
     EXPECT_TRUE(ctx, plan.value().audioPlan.monotonicPacketTimestamps);
 
     const auto graphResult = MediaRealtimeRtpTranscodeGraphBuilder::build(options);
@@ -1747,7 +1757,7 @@ void testRawRtpAudioTranscodesWhenTargetDiffers(TestContext& ctx)
     }
 
     EXPECT_EQ(ctx, plan.value().audioPlan.branchMode, MediaBranchMode::TranscodeFrame);
-    EXPECT_FALSE(ctx, plan.value().audioPlan.followsSourceParameters);
+    EXPECT_TRUE(ctx, plan.value().audioPlan.resolvedOutput.has_value());
     EXPECT_FALSE(ctx, plan.value().audioPlan.monotonicPacketTimestamps);
     EXPECT_FALSE(ctx, plan.value().audioPacketNormalizationRequired);
     auto graph = MediaRealtimeRtpTranscodeGraphBuilder::build(std::move(plan).value());
@@ -3499,7 +3509,10 @@ void testMpegTsPreflightOpensOneSessionAndKeepsTaggedBinding(TestContext& ctx)
     auto preflight = MediaRealtimeRtpTranscodePlanner::preflight(validMpegTsUdpOptions(), io);
     EXPECT_TRUE(ctx, preflight);
     EXPECT_EQ(ctx, tsOpenCount, 1);
-    if (!preflight) return;
+    if (!preflight) {
+        std::cerr << preflight.error().describe() << '\n';
+        return;
+    }
     EXPECT_TRUE(ctx, preflight.value().prepared.has_value());
     if (preflight.value().prepared) {
         EXPECT_EQ(ctx, preflight.value().prepared->kind().value(),

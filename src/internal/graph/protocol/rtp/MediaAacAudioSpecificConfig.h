@@ -8,6 +8,7 @@
 namespace media::ffmpeg::graph {
 
 struct MediaAacAudioSpecificConfig final {
+    int audioObjectType = 0;
     int sampleRate = 0;
     int channels = 0;
     int frameSamples = 0;

@@ -45,6 +45,7 @@ int channelCount(int configuration) noexcept
     }
 
     return ::media::Result<MediaAacAudioSpecificConfig>::success({
+        audioObjectType,
         AacSampleRates[samplingFrequencyIndex],
         channelCount(channelConfiguration),
         frameLengthFlag ? AacShortFrameSamples : AacLongFrameSamples

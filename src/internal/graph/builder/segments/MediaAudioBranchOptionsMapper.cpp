@@ -39,7 +39,6 @@ MediaAudioEncodeBranchOptions makeAudioEncodeBranchOptions(const MediaAudioBranc
     MediaAudioEncodeBranchOptions encodeOptions;
     encodeOptions.prefix = options.prefix + ".encode";
     encodeOptions.plan = options.plan;
-    encodeOptions.parameters = options.parameters;
     encodeOptions.queues = options.queues;
     encodeOptions.edgePolicies = options.edgePolicies;
     encodeOptions.formatSourceNode = options.formatSourceNode;
