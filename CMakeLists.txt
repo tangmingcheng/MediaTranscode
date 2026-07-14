@@ -194,6 +194,7 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
     add_executable(media_transcode_core_tests
         tests/unit/test_core.cpp
         tests/unit/audio_drift_servo_tests.cpp
+        tests/unit/video_sync_controller_tests.cpp
     )
     media_transcode_configure_test(media_transcode_core_tests)
     media_transcode_register_test(media_transcode_core_tests "core;deterministic")

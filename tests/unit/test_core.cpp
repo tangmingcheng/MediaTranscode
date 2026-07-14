@@ -4,6 +4,7 @@
 #include "internal/graph/core/MediaGraphValidation.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlan.h"
 #include "internal/graph/sync/MediaAvSyncError.h"
+#include "internal/graph/sync/MediaVideoSyncController.h"
 #include "internal/graph/time/MediaCanonicalTimeMapper.h"
 #include "internal/graph/time/MediaRunningTime.h"
 #include "internal/graph/time/MediaTimestampUnwrapper.h"
@@ -15,6 +16,7 @@ using namespace media::ffmpeg::graph;
 using media_transcode::test::TestContext;
 
 void runAudioDriftServoTests(TestContext& ctx);
+void runVideoSyncControllerTests(TestContext& ctx);
 
 namespace {
 
@@ -711,5 +713,6 @@ int main()
     testCanonicalMappingAvoidsRepresentableAffineIntermediateOverflow(ctx);
     testCanonicalMappingRejectsFinalValueBelowMinimum(ctx);
     runAudioDriftServoTests(ctx);
+    runVideoSyncControllerTests(ctx);
     return ctx.failures == 0 ? 0 : 1;
 }

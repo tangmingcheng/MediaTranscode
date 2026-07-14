@@ -30,7 +30,9 @@ enum class MediaAvSyncErrorCode {
     StartupUpstreamError,
     InvalidAudioServoPolicy,
     InvalidAudioServoMeasurement,
-    AudioCorrectionQuantizationFailed
+    AudioCorrectionQuantizationFailed,
+    InvalidVideoSyncPolicy,
+    InvalidVideoSyncMeasurement
 };
 
 enum class MediaAvSyncErrorState {
@@ -38,7 +40,8 @@ enum class MediaAvSyncErrorState {
     Mapping,
     Resetting,
     Startup,
-    AudioServo
+    AudioServo,
+    VideoSync
 };
 
 class MediaAvSyncError final {

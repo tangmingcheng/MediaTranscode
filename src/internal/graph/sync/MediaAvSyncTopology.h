@@ -6,7 +6,8 @@ namespace media::ffmpeg::graph {
 
 enum class MediaAvSyncTopology : std::uint8_t {
     SeparateRtpToSeparateRtp = 0,
-    MpegTsToMpegTs = 1
+    MpegTsToMpegTs = 1,
+    Unknown = 255
 };
 
 } // namespace media::ffmpeg::graph
