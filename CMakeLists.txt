@@ -231,6 +231,8 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
         tests/unit/rtp_output_clock_tests.cpp
         tests/unit/scheduled_rtp_packetization_tests.cpp
         tests/unit/scheduled_rtp_sender_tests.cpp
+        tests/unit/media_rtp_udp_sender_transport_tests.cpp
+        tests/unit/media_rtp_udp_sender_composition_tests.cpp
         tests/unit/rtp_source_clock_tests.cpp
     )
     media_transcode_configure_test(media_transcode_node_tests)
@@ -246,6 +248,24 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
     )
 
     if(MEDIA_TRANSCODE_ENABLE_INTEGRATION_TESTS)
+        add_executable(media_transcode_rtp_udp_sender_loopback_tests
+            tests/unit/media_rtp_udp_sender_loopback_tests.cpp
+        )
+        media_transcode_configure_test(media_transcode_rtp_udp_sender_loopback_tests)
+        media_transcode_register_test(media_transcode_rtp_udp_sender_loopback_tests "integration")
+        set_tests_properties(media_transcode_rtp_udp_sender_loopback_tests PROPERTIES
+            SKIP_RETURN_CODE 77
+        )
+
+        add_executable(media_transcode_rtp_udp_sender_ipv6_loopback_tests
+            tests/unit/media_rtp_udp_sender_ipv6_loopback_tests.cpp
+        )
+        media_transcode_configure_test(media_transcode_rtp_udp_sender_ipv6_loopback_tests)
+        media_transcode_register_test(media_transcode_rtp_udp_sender_ipv6_loopback_tests "integration")
+        set_tests_properties(media_transcode_rtp_udp_sender_ipv6_loopback_tests PROPERTIES
+            SKIP_RETURN_CODE 77
+        )
+
         add_executable(media_transcode_integration_tests
             tests/unit/test_realtime_rtp_graph.cpp
         )
