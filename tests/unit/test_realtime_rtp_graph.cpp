@@ -674,6 +674,8 @@ MediaNodeId addAudioResampleHarnessGraph(MediaGraph& graph)
     const MediaNodeId frameSource = graph.addNode(MediaNodeKind::AudioDecode, "test.frame_source");
     const MediaNodeId resample = graph.addNode(MediaNodeKind::AudioResample, "test.audio_resample");
     const MediaNodeId sink = graph.addNode(MediaNodeKind::AudioEncode, "test.audio_sink");
+    graph.setNodeOption(
+        resample, MediaAudioCorrectionOptionKey::Mode, "disabled");
 
     graph.addOutputPort(codecSource, "codec", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, true);
     graph.addOutputPort(frameSource, "frame", MediaStreamKind::Audio, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true);
@@ -694,6 +696,9 @@ MediaNodeId addAudioResampleHarnessGraph(MediaGraph& graph)
                                        MediaNodeId nodeId,
                                        ::media::ffmpeg::CodecContextPtr codec)
 {
+    if (auto started = node.start(execution); !started) {
+        return started;
+    }
     auto codecBuffer = FFmpegBufferFactory::wrapCodecContext(std::move(codec));
     if (!codecBuffer) {
         return ::media::Status::failure(codecBuffer.error());

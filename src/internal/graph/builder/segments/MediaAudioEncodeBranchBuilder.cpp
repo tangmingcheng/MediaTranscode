@@ -1,4 +1,5 @@
 #include "internal/graph/builder/segments/MediaAudioEncodeBranchBuilder.h"
+#include "internal/graph/sync/MediaAudioDriftServoLimits.h"
 
 #include "internal/graph/builder/MediaAudioPlanOptionApplier.h"
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
@@ -9,6 +10,69 @@ namespace media::ffmpeg::graph {
 namespace {
 
 constexpr const char* owner = "MediaAudioEncodeBranchBuilder";
+
+::media::Result<void> validateCorrectionOptions(
+    const MediaAudioEncodeBranchOptions& options)
+{
+    if (!options.correctionMode) {
+        return ::media::Result<void>::failure(::media::ErrorInfo::invalidArgument(
+            "MediaAudioEncodeBranchBuilder requires explicit audio correction mode"));
+    }
+    if (*options.correctionMode == MediaAudioCorrectionExecutionMode::Disabled) {
+        if (options.correctionGeneration || options.correctionLookaheadWindows ||
+            options.correctionSourceNode.isValid() ||
+            !options.correctionSourcePort.empty()) {
+            return ::media::Result<void>::failure(::media::ErrorInfo::invalidArgument(
+                "disabled audio correction rejects external correction configuration"));
+        }
+        return ::media::Result<void>::success();
+    }
+    if (*options.correctionMode !=
+        MediaAudioCorrectionExecutionMode::ExternalCorrectionRequired) {
+        return ::media::Result<void>::failure(::media::ErrorInfo::invalidArgument(
+            "MediaAudioEncodeBranchBuilder rejects unknown audio correction mode"));
+    }
+    if (!options.correctionGeneration || *options.correctionGeneration == 0 ||
+        !options.correctionLookaheadWindows ||
+        *options.correctionLookaheadWindows == 0 ||
+        *options.correctionLookaheadWindows >
+            MediaAudioDriftServoLimits::MaximumCorrectionLookaheadWindows ||
+        !options.correctionSourceNode.isValid() || options.correctionSourcePort.empty()) {
+        return ::media::Result<void>::failure(::media::ErrorInfo::invalidArgument(
+            "external audio correction requires generation and source endpoint"));
+    }
+    return ::media::Result<void>::success();
+}
+
+::media::Result<void> applyCorrectionOptions(
+    MediaGraph& graph,
+    const MediaAudioEncodeBranchOptions& options,
+    MediaNodeId resample)
+{
+    if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
+            graph,
+            owner,
+            resample,
+            MediaAudioCorrectionOptionKey::Mode,
+            mediaAudioCorrectionExecutionModeName(*options.correctionMode)); !status) {
+        return status;
+    }
+    if (*options.correctionMode == MediaAudioCorrectionExecutionMode::ExternalCorrectionRequired) {
+        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
+            graph,
+            owner,
+            resample,
+            MediaAudioCorrectionOptionKey::Generation,
+            std::to_string(*options.correctionGeneration)); !status) {
+            return status;
+        }
+        return MediaGraphBuildSupport::setNodeOptionChecked(
+            graph, owner, resample,
+            MediaAudioCorrectionOptionKey::LookaheadWindows,
+            std::to_string(*options.correctionLookaheadWindows));
+    }
+    return ::media::Result<void>::success();
+}
 
 MediaAudioEncodeBranchNodes addAudioEncodeNodes(MediaGraph& graph,
                                                  const std::string& prefix,
@@ -49,6 +113,11 @@ MediaAudioEncodeBranchNodes addAudioEncodeNodes(MediaGraph& graph,
 
     if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph, owner, nodes.resample, "codec", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false); !status) return status;
     if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph, owner, nodes.resample, "frame", MediaStreamKind::Audio, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true); !status) return status;
+    if (*options.correctionMode == MediaAudioCorrectionExecutionMode::ExternalCorrectionRequired) {
+        if (auto status = MediaGraphBuildSupport::addInputPortChecked(
+                graph, owner, nodes.resample, "correction", MediaStreamKind::Audio,
+                MediaEdgeKind::Event, MediaPayloadKind::GraphEvent, true, true); !status) return status;
+    }
     if (auto status = MediaGraphBuildSupport::addOutputPortChecked(graph, owner, nodes.resample, "frame", MediaStreamKind::Audio, MediaEdgeKind::SoftwareFrame, MediaPayloadKind::Frame, true, true); !status) return status;
 
     if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph, owner, nodes.encode, "codec", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false); !status) return status;
@@ -75,6 +144,12 @@ MediaAudioEncodeBranchNodes addAudioEncodeNodes(MediaGraph& graph,
     }
     if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.codecResolver, "encoder", nodes.resample, "codec", options.prefix + ".codec_resolver.encoder -> resample.codec", policies.metadata); !status) return status;
     if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.decode, "frame", nodes.resample, "frame", options.prefix + ".decode.frame -> resample.frame", policies.frame); !status) return status;
+    if (*options.correctionMode == MediaAudioCorrectionExecutionMode::ExternalCorrectionRequired) {
+        if (auto status = MediaGraphBuildSupport::connectChecked(
+                graph, owner, options.correctionSourceNode, options.correctionSourcePort,
+                nodes.resample, "correction",
+                options.prefix + ".correction -> resample.correction", policies.metadata); !status) return status;
+    }
     if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.codecResolver, "encoder", nodes.encode, "codec", options.prefix + ".codec_resolver.encoder -> encode.codec", policies.metadata); !status) return status;
     if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.resample, "frame", nodes.encode, "frame", options.prefix + ".resample.frame -> encode.frame", policies.frame); !status) return status;
     if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.encode, "codec", options.muxNode, options.muxCodecPort, options.prefix + ".encode.codec -> mux.codec", policies.metadata); !status) return status;
@@ -99,11 +174,15 @@ MediaAudioEncodeBranchNodes addAudioEncodeNodes(MediaGraph& graph,
         return ::media::Result<void>::failure(
             ::media::ErrorInfo::invalidArgument("MediaAudioEncodeBranchBuilder requires explicit packet normalization policy"));
     }
+    if (auto status = validateCorrectionOptions(options); !status) {
+        return status;
+    }
 
     const MediaAudioEncodeBranchNodes nodes = addAudioEncodeNodes(graph, options.prefix, *options.normalizePackets);
     if (auto status = MediaAudioPlanOptionApplier::applySelectedPlan(
             graph, nodes, options.plan, *options.normalizePackets); !status) return status;
     if (auto status = MediaAudioEncodeOptionApplier::applyCodecResolverOptions(graph, nodes.codecResolver, options.parameters); !status) return status;
+    if (auto status = applyCorrectionOptions(graph, options, nodes.resample); !status) return status;
     if (auto status = addEncodePorts(graph, options, nodes); !status) return status;
     return connectEncodePorts(graph, options, nodes);
 }

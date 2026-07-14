@@ -1,4 +1,6 @@
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
+#include "internal/graph/sync/MediaAudioDriftServoLimits.h"
+#include "internal/graph/sync/MediaAudioDriftServoPolicyValidator.h"
 #include "internal/graph/sync/startup/MediaAvStartupLimits.h"
 
 #include <optional>
@@ -82,18 +84,89 @@ bool validByteCapacity(const std::optional<std::size_t>& units,
     }
 
     const auto& servo = plan.audioServo;
-    if (!positive(servo.deadbandNs) || !positive(servo.shortControlWindowNs) ||
-        !positive(servo.longControlWindowNs) ||
-        !positive(servo.proportionalGainPpm) || !positive(servo.integralGainPpm) ||
+    if (!positive(servo.deadbandNs) ||
+        !positive(servo.phaseFilterTimeConstantNs) ||
+        !positive(servo.frequencyFilterTimeConstantNs) ||
+        !positive(servo.proportionalGainPpmPerSecond) ||
+        !positive(servo.integralGainPpmPerSecondSquared) ||
+        !positive(servo.integratorLimitPpm) ||
+        !servo.frequencyFeedForwardNumerator ||
+        *servo.frequencyFeedForwardNumerator < 0 ||
+        !positive(servo.frequencyFeedForwardDenominator) ||
+        *servo.frequencyFeedForwardNumerator >
+            *servo.frequencyFeedForwardDenominator ||
+        !servo.frequencyDeadbandPpm || *servo.frequencyDeadbandPpm < 0 ||
+        !positive(servo.maximumMeasuredFrequencyPpm) ||
+        !positive(servo.recoveryExitFrequencyPpm) ||
+        *servo.frequencyDeadbandPpm >= *servo.recoveryExitFrequencyPpm ||
+        *servo.recoveryExitFrequencyPpm >= *servo.maximumMeasuredFrequencyPpm ||
+        !servo.antiWindupMode ||
+        *servo.antiWindupMode !=
+            MediaAudioServoAntiWindupMode::ConditionalIntegration ||
+        !positive(servo.minimumUpdateIntervalNs) ||
+        !positive(servo.maximumMeasurementGapNs) ||
         !positive(servo.maximumSlewPpmPerSecond) ||
         !positive(servo.normalCorrectionLimitPpm) ||
         !positive(servo.recoveryCorrectionLimitPpm) ||
+        !positive(servo.recoveryEnterThresholdNs) ||
+        !positive(servo.recoveryExitThresholdNs) ||
+        !positive(servo.recoveryExitHoldNs) ||
         !positive(servo.compensationWindowNs) ||
-        *servo.deadbandNs >= *servo.shortControlWindowNs ||
-        *servo.shortControlWindowNs >= *servo.compensationWindowNs ||
-        *servo.compensationWindowNs >= *servo.longControlWindowNs ||
-        *servo.normalCorrectionLimitPpm > 1000 ||
-        *servo.recoveryCorrectionLimitPpm > 5000 ||
+        !positive(servo.commandLeadNs) ||
+        !positive(servo.outputSampleRate) ||
+        !positive(servo.correctionLookaheadWindows) ||
+        !MediaAudioDriftServoPolicyValidator::leadCoversWorstPositiveGap(
+            servo.commandLeadNs->nanoseconds(),
+            servo.maximumMeasurementGapNs->nanoseconds(),
+            *servo.outputSampleRate,
+            *servo.recoveryCorrectionLimitPpm) ||
+        *servo.minimumUpdateIntervalNs >= *servo.phaseFilterTimeConstantNs ||
+        *servo.phaseFilterTimeConstantNs >= *servo.maximumMeasurementGapNs ||
+        *servo.maximumMeasurementGapNs >= *servo.frequencyFilterTimeConstantNs ||
+        *servo.deadbandNs >= *servo.recoveryExitThresholdNs ||
+        *servo.recoveryExitThresholdNs >= *servo.recoveryEnterThresholdNs ||
+        !positive(plan.recovery.hardDiscontinuityThresholdNs) ||
+        *servo.recoveryEnterThresholdNs >=
+            *plan.recovery.hardDiscontinuityThresholdNs ||
+        *servo.recoveryExitHoldNs < *servo.minimumUpdateIntervalNs ||
+        *servo.maximumMeasurementGapNs >= *servo.commandLeadNs ||
+        *servo.commandLeadNs >= *servo.compensationWindowNs ||
+        *servo.compensationWindowNs >= *servo.frequencyFilterTimeConstantNs ||
+        servo.compensationWindowNs->nanoseconds() >
+            (std::numeric_limits<std::int64_t>::max() -
+             MediaAudioDriftServoLimits::NanosecondsPerSecond) /
+                *servo.outputSampleRate ||
+        servo.compensationWindowNs->nanoseconds() *
+                static_cast<std::int64_t>(*servo.outputSampleRate) <
+            MediaAudioDriftServoLimits::NanosecondsPerSecond ||
+        servo.compensationWindowNs->nanoseconds() *
+                static_cast<std::int64_t>(*servo.outputSampleRate) /
+                MediaAudioDriftServoLimits::NanosecondsPerSecond >
+            std::numeric_limits<int>::max() ||
+        *servo.correctionLookaheadWindows >
+            MediaAudioDriftServoLimits::MaximumCorrectionLookaheadWindows ||
+        *servo.outputSampleRate > MediaAudioDriftServoLimits::MaximumOutputSampleRate ||
+        servo.maximumMeasurementGapNs->nanoseconds() >
+            MediaAudioDriftServoLimits::MaximumMeasurementGapNs ||
+        servo.frequencyFilterTimeConstantNs->nanoseconds() >
+            MediaAudioDriftServoLimits::MaximumPolicyDurationNs ||
+        servo.compensationWindowNs->nanoseconds() >
+            MediaAudioDriftServoLimits::MaximumPolicyDurationNs ||
+        servo.recoveryExitHoldNs->nanoseconds() >
+            MediaAudioDriftServoLimits::MaximumPolicyDurationNs ||
+        *servo.proportionalGainPpmPerSecond >
+            MediaAudioDriftServoLimits::MaximumProportionalGainPpmPerSecond ||
+        *servo.integralGainPpmPerSecondSquared >
+            MediaAudioDriftServoLimits::MaximumIntegralGainPpmPerSecondSquared ||
+        *servo.maximumMeasuredFrequencyPpm >
+            MediaAudioDriftServoLimits::MaximumMeasuredFrequencyPpm ||
+        plan.recovery.hardDiscontinuityThresholdNs->nanoseconds() >
+            MediaAudioDriftServoLimits::MaximumHardDiscontinuityNs ||
+        *servo.normalCorrectionLimitPpm >
+            MediaAudioDriftServoLimits::MaximumNormalCorrectionPpm ||
+        *servo.recoveryCorrectionLimitPpm >
+            MediaAudioDriftServoLimits::MaximumRecoveryCorrectionPpm ||
+        *servo.integratorLimitPpm > *servo.recoveryCorrectionLimitPpm ||
         *servo.maximumSlewPpmPerSecond > *servo.normalCorrectionLimitPpm ||
         *servo.normalCorrectionLimitPpm > *servo.recoveryCorrectionLimitPpm) {
         return invalid("audio servo policy");

@@ -86,14 +86,29 @@ std::uint32_t stableIdentity(const std::string& value) noexcept
     plan.startup.allowDegradedClock = false;
 
     plan.audioServo.deadbandNs = runningTime(Millisecond);
-    plan.audioServo.shortControlWindowNs = runningTime(250 * Millisecond);
-    plan.audioServo.longControlWindowNs = runningTime(5 * Second);
-    plan.audioServo.proportionalGainPpm = 250;
-    plan.audioServo.integralGainPpm = 50;
+    plan.audioServo.phaseFilterTimeConstantNs = runningTime(250 * Millisecond);
+    plan.audioServo.frequencyFilterTimeConstantNs = runningTime(5 * Second);
+    plan.audioServo.proportionalGainPpmPerSecond = 20'000;
+    plan.audioServo.integralGainPpmPerSecondSquared = 1'000;
+    plan.audioServo.integratorLimitPpm = 2'000;
+    plan.audioServo.frequencyFeedForwardNumerator = 1;
+    plan.audioServo.frequencyFeedForwardDenominator = 1;
+    plan.audioServo.frequencyDeadbandPpm = 10;
+    plan.audioServo.maximumMeasuredFrequencyPpm = 10'000;
+    plan.audioServo.recoveryExitFrequencyPpm = 500;
+    plan.audioServo.antiWindupMode =
+        MediaAudioServoAntiWindupMode::ConditionalIntegration;
+    plan.audioServo.minimumUpdateIntervalNs = runningTime(10 * Millisecond);
+    plan.audioServo.maximumMeasurementGapNs = runningTime(Second);
     plan.audioServo.maximumSlewPpmPerSecond = 100;
     plan.audioServo.normalCorrectionLimitPpm = 1000;
     plan.audioServo.recoveryCorrectionLimitPpm = 5000;
-    plan.audioServo.compensationWindowNs = runningTime(Second);
+    plan.audioServo.recoveryEnterThresholdNs = runningTime(100 * Millisecond);
+    plan.audioServo.recoveryExitThresholdNs = runningTime(50 * Millisecond);
+    plan.audioServo.recoveryExitHoldNs = runningTime(500 * Millisecond);
+    plan.audioServo.compensationWindowNs = runningTime(2 * Second);
+    plan.audioServo.commandLeadNs = runningTime(1500 * Millisecond);
+    plan.audioServo.correctionLookaheadWindows = 2;
 
     plan.video.earlyHoldThresholdNs = runningTime(20 * Millisecond);
     plan.video.lateDisplayThresholdNs = runningTime(40 * Millisecond);
@@ -160,6 +175,7 @@ std::uint32_t stableIdentity(const std::string& value) noexcept
 
     const int audioOutputRate = request.parameters.audio.sampleRate.value_or(
         *request.input.audioRtp.clockRate);
+    plan.audioServo.outputSampleRate = audioOutputRate;
     plan.rtp->videoOutput.identity = groupIdentity + ".output.video";
     plan.rtp->videoOutput.payloadType = 96;
     plan.rtp->videoOutput.clockRate = 90000;
@@ -209,6 +225,13 @@ std::uint32_t stableIdentity(const std::string& value) noexcept
     plan.ts->maximumPcrJitterNs = runningTime(5 * Millisecond);
     plan.ts->timestampTimeBaseNumerator = 1;
     plan.ts->timestampTimeBaseDenominator = 90000;
+
+    if (!request.parameters.audio.sampleRate) {
+        return ::media::Result<MediaAvSyncPlan>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Synchronized MPEG-TS requires resolved output audio sample rate"));
+    }
+    plan.audioServo.outputSampleRate = *request.parameters.audio.sampleRate;
 
     if (auto status = MediaAvSyncPlanValidator::validate(plan); !status) {
         return ::media::Result<MediaAvSyncPlan>::failure(status.error());

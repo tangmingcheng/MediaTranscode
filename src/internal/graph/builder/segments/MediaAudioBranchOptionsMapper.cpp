@@ -50,6 +50,11 @@ MediaAudioEncodeBranchOptions makeAudioEncodeBranchOptions(const MediaAudioBranc
     encodeOptions.muxCodecPort = options.muxCodecPort;
     encodeOptions.muxPacketPort = options.muxPacketPort;
     encodeOptions.normalizePackets = options.normalizeInputPackets;
+    encodeOptions.correctionMode = options.correctionMode;
+    encodeOptions.correctionGeneration = options.correctionGeneration;
+    encodeOptions.correctionLookaheadWindows = options.correctionLookaheadWindows;
+    encodeOptions.correctionSourceNode = options.correctionSourceNode;
+    encodeOptions.correctionSourcePort = options.correctionSourcePort;
     return encodeOptions;
 }
 

@@ -191,7 +191,10 @@ endif()
 if(MEDIA_TRANSCODE_BUILD_TESTS)
     enable_testing()
 
-    add_executable(media_transcode_core_tests tests/unit/test_core.cpp)
+    add_executable(media_transcode_core_tests
+        tests/unit/test_core.cpp
+        tests/unit/audio_drift_servo_tests.cpp
+    )
     media_transcode_configure_test(media_transcode_core_tests)
     media_transcode_register_test(media_transcode_core_tests "core;deterministic")
 
@@ -214,6 +217,8 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
 
     add_executable(media_transcode_node_tests
         tests/unit/test_node.cpp
+        tests/unit/audio_swr_compensation_executor_tests.cpp
+        tests/unit/audio_resample_node_tests.cpp
         tests/unit/av_startup_coordinator_tests.cpp
         tests/unit/mpeg_ts_packet_tests.cpp
         tests/unit/mpeg_ts_pes_provenance_timeline_tests.cpp

@@ -27,14 +27,18 @@ enum class MediaAvSyncErrorCode {
     StartupCapacityExceeded,
     StartupInvalidTransition,
     StartupAborted,
-    StartupUpstreamError
+    StartupUpstreamError,
+    InvalidAudioServoPolicy,
+    InvalidAudioServoMeasurement,
+    AudioCorrectionQuantizationFailed
 };
 
 enum class MediaAvSyncErrorState {
     Configuring,
     Mapping,
     Resetting,
-    Startup
+    Startup,
+    AudioServo
 };
 
 class MediaAvSyncError final {

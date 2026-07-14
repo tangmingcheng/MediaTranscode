@@ -40,16 +40,35 @@ struct MediaAvSyncStartupPolicy {
     std::optional<bool> allowDegradedClock;
 };
 
+enum class MediaAudioServoAntiWindupMode : std::uint8_t {
+    ConditionalIntegration = 0
+};
+
 struct MediaAvSyncAudioServoPolicy {
     std::optional<MediaRunningTime> deadbandNs;
-    std::optional<MediaRunningTime> shortControlWindowNs;
-    std::optional<MediaRunningTime> longControlWindowNs;
-    std::optional<int> proportionalGainPpm;
-    std::optional<int> integralGainPpm;
+    std::optional<MediaRunningTime> phaseFilterTimeConstantNs;
+    std::optional<MediaRunningTime> frequencyFilterTimeConstantNs;
+    std::optional<int> proportionalGainPpmPerSecond;
+    std::optional<int> integralGainPpmPerSecondSquared;
+    std::optional<int> integratorLimitPpm;
+    std::optional<int> frequencyFeedForwardNumerator;
+    std::optional<int> frequencyFeedForwardDenominator;
+    std::optional<int> frequencyDeadbandPpm;
+    std::optional<int> maximumMeasuredFrequencyPpm;
+    std::optional<int> recoveryExitFrequencyPpm;
+    std::optional<MediaAudioServoAntiWindupMode> antiWindupMode;
+    std::optional<MediaRunningTime> minimumUpdateIntervalNs;
+    std::optional<MediaRunningTime> maximumMeasurementGapNs;
     std::optional<int> maximumSlewPpmPerSecond;
     std::optional<int> normalCorrectionLimitPpm;
     std::optional<int> recoveryCorrectionLimitPpm;
+    std::optional<MediaRunningTime> recoveryEnterThresholdNs;
+    std::optional<MediaRunningTime> recoveryExitThresholdNs;
+    std::optional<MediaRunningTime> recoveryExitHoldNs;
     std::optional<MediaRunningTime> compensationWindowNs;
+    std::optional<MediaRunningTime> commandLeadNs;
+    std::optional<int> outputSampleRate;
+    std::optional<std::size_t> correctionLookaheadWindows;
 };
 
 struct MediaAvSyncVideoPolicy {

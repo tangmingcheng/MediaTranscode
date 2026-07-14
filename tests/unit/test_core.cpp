@@ -14,6 +14,8 @@
 using namespace media::ffmpeg::graph;
 using media_transcode::test::TestContext;
 
+void runAudioDriftServoTests(TestContext& ctx);
+
 namespace {
 
 MediaProtocolTimestamp protocolTimestamp(TestContext& ctx,
@@ -708,5 +710,6 @@ int main()
     testCanonicalMappingRejectsFutureGenerationAndOverflow(ctx);
     testCanonicalMappingAvoidsRepresentableAffineIntermediateOverflow(ctx);
     testCanonicalMappingRejectsFinalValueBelowMinimum(ctx);
+    runAudioDriftServoTests(ctx);
     return ctx.failures == 0 ? 0 : 1;
 }

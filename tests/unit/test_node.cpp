@@ -17,6 +17,7 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 
+
 extern "C" {
 #include <libavutil/error.h>
 }
@@ -40,6 +41,8 @@ void runMpegTsClockTests(TestContext& ctx);
 void runMpegTsInputSessionTests(TestContext& ctx);
 void runMpegTsDemuxNodeTests(TestContext& ctx);
 void runAvStartupCoordinatorTests(TestContext& ctx);
+void runAudioSwrCompensationExecutorTests(TestContext& ctx);
+void runAudioResampleNodeTests(TestContext& ctx);
 
 namespace {
 
@@ -997,6 +1000,8 @@ int main()
     runMpegTsInputSessionTests(ctx);
     runMpegTsDemuxNodeTests(ctx);
     runAvStartupCoordinatorTests(ctx);
+    runAudioSwrCompensationExecutorTests(ctx);
+    runAudioResampleNodeTests(ctx);
     testAudioEncodeFixedFrameStateMachine(ctx);
     testRtpClockGroupRejectsStaleCrossPortEvidence(ctx);
     return ctx.failures == 0 ? 0 : 1;
