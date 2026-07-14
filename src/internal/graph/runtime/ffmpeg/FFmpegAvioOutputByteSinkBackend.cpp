@@ -6,6 +6,7 @@ extern "C" {
 #include <libavformat/avio.h>
 }
 
+#include <limits>
 #include <new>
 #include <utility>
 
@@ -40,6 +41,11 @@ public:
     int error() const noexcept override
     {
         return m_error;
+    }
+
+    std::size_t maximumWriteBytes() const noexcept override
+    {
+        return static_cast<std::size_t>(std::numeric_limits<int>::max());
     }
 
     int close() noexcept override

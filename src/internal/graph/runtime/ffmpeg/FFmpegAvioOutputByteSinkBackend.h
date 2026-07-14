@@ -2,6 +2,7 @@
 
 #include "media_transcode/Result.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -20,6 +21,7 @@ public:
     virtual void write(std::span<const std::uint8_t> bytes) = 0;
     virtual void flush() = 0;
     virtual int error() const noexcept = 0;
+    virtual std::size_t maximumWriteBytes() const noexcept = 0;
     virtual int close() noexcept = 0;
 };
 

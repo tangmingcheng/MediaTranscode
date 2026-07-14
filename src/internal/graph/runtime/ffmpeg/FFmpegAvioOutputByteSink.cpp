@@ -7,7 +7,6 @@ extern "C" {
 #include <libavformat/avio.h>
 }
 
-#include <limits>
 #include <new>
 #include <utility>
 
@@ -94,9 +93,9 @@ FFmpegAvioOutputByteSink::~FFmpegAvioOutputByteSink() noexcept
             ::media::ErrorInfo::invalidArgument("output byte sink write must not be empty"));
         return ::media::Result<std::size_t>::failure(*m_firstFailure);
     }
-    if (bytes.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+    if (bytes.size() > m_backend->maximumWriteBytes()) {
         preserveFailure(::media::ErrorInfo::invalidArgument(
-            "output byte sink write exceeds the FFmpeg AVIO size limit"));
+            "output byte sink write exceeds the backend capacity"));
         return ::media::Result<std::size_t>::failure(*m_firstFailure);
     }
 

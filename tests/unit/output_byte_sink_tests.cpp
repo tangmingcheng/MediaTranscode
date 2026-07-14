@@ -14,7 +14,6 @@ extern "C" {
 #include <cerrno>
 #include <filesystem>
 #include <fstream>
-#include <limits>
 #include <memory>
 #include <span>
 #include <string>
@@ -54,6 +53,12 @@ private:
 };
 
 struct FakeAvioBackendState final {
+    explicit FakeAvioBackendState(std::size_t maximumWriteBytes)
+        : maximumWriteBytes(maximumWriteBytes)
+    {
+    }
+
+    const std::size_t maximumWriteBytes;
     int writeCalls = 0;
     int flushCalls = 0;
     int closeCalls = 0;
@@ -82,6 +87,10 @@ public:
     }
 
     int error() const noexcept override { return m_state.currentError; }
+    std::size_t maximumWriteBytes() const noexcept override
+    {
+        return m_state.maximumWriteBytes;
+    }
 
     int close() noexcept override
     {
@@ -218,7 +227,7 @@ void testBufferTransfersOwnershipExactlyOnce(TestContext& ctx)
 void testInputFailuresPoisonTheSink(TestContext& ctx)
 {
     const std::array<std::uint8_t, 2> bytes{1, 2};
-    FakeAvioBackendState emptyState;
+    FakeAvioBackendState emptyState{8};
     auto emptySink = fakeSink(ctx, emptyState);
     if (!emptySink) return;
     auto emptyFailure = emptySink->write({});
@@ -235,27 +244,47 @@ void testInputFailuresPoisonTheSink(TestContext& ctx)
     }
     EXPECT_EQ(ctx, emptyState.writeCalls, 0);
     EXPECT_EQ(ctx, emptyState.flushCalls, 0);
-    EXPECT_FALSE(ctx, emptySink->close());
-    EXPECT_FALSE(ctx, emptySink->close());
+    auto emptyClose = emptySink->close();
+    auto repeatedEmptyClose = emptySink->close();
+    EXPECT_FALSE(ctx, emptyClose);
+    EXPECT_FALSE(ctx, repeatedEmptyClose);
+    if (!emptyFailure && !emptyClose && !repeatedEmptyClose) {
+        expectSameError(ctx, emptyClose.error(), emptyFailure.error());
+        expectSameError(ctx, repeatedEmptyClose.error(), emptyFailure.error());
+    }
     EXPECT_EQ(ctx, emptyState.closeCalls, 1);
 
-    FakeAvioBackendState oversizedState;
+    FakeAvioBackendState oversizedState{2};
     auto oversizedSink = fakeSink(ctx, oversizedState);
     if (!oversizedSink) return;
-    std::uint8_t dummy = 0;
-    const std::span<const std::uint8_t> oversized(
-        &dummy, static_cast<std::size_t>(std::numeric_limits<int>::max()) + 1);
+    const std::array<std::uint8_t, 3> oversized{1, 2, 3};
     auto oversizedFailure = oversizedSink->write(oversized);
     EXPECT_FALSE(ctx, oversizedFailure);
+    auto writeAfterOversized = oversizedSink->write(bytes);
+    auto flushAfterOversized = oversizedSink->flush();
+    auto closeAfterOversized = oversizedSink->close();
+    auto repeatedCloseAfterOversized = oversizedSink->close();
+    EXPECT_FALSE(ctx, writeAfterOversized);
+    EXPECT_FALSE(ctx, flushAfterOversized);
+    EXPECT_FALSE(ctx, closeAfterOversized);
+    EXPECT_FALSE(ctx, repeatedCloseAfterOversized);
+    if (!oversizedFailure && !writeAfterOversized && !flushAfterOversized &&
+        !closeAfterOversized && !repeatedCloseAfterOversized) {
+        expectSameError(ctx, writeAfterOversized.error(), oversizedFailure.error());
+        expectSameError(ctx, flushAfterOversized.error(), oversizedFailure.error());
+        expectSameError(ctx, closeAfterOversized.error(), oversizedFailure.error());
+        expectSameError(ctx, repeatedCloseAfterOversized.error(), oversizedFailure.error());
+    }
     EXPECT_EQ(ctx, oversizedState.writeCalls, 0);
     EXPECT_EQ(ctx, oversizedState.flushCalls, 0);
+    EXPECT_EQ(ctx, oversizedState.closeCalls, 1);
 }
 
 void testBackendFailuresAreTerminalAndPreserveFirstError(TestContext& ctx)
 {
     const std::array<std::uint8_t, 3> bytes{1, 2, 3};
 
-    FakeAvioBackendState writeState;
+    FakeAvioBackendState writeState{8};
     writeState.writeFailure = AVERROR(EIO);
     writeState.closeFailure = AVERROR(ENOSPC);
     auto writeSink = fakeSink(ctx, writeState);
@@ -284,7 +313,7 @@ void testBackendFailuresAreTerminalAndPreserveFirstError(TestContext& ctx)
     EXPECT_FALSE(ctx, writeSink->close());
     EXPECT_EQ(ctx, writeState.closeCalls, 1);
 
-    FakeAvioBackendState flushState;
+    FakeAvioBackendState flushState{8};
     flushState.flushFailure = AVERROR(EPIPE);
     auto flushSink = fakeSink(ctx, flushState);
     if (!flushSink) return;
@@ -298,7 +327,7 @@ void testBackendFailuresAreTerminalAndPreserveFirstError(TestContext& ctx)
     EXPECT_EQ(ctx, flushState.writeCalls, 0);
     EXPECT_EQ(ctx, flushState.flushCalls, 1);
 
-    FakeAvioBackendState closeState;
+    FakeAvioBackendState closeState{8};
     closeState.closeFailure = AVERROR(ENOSPC);
     auto closeSink = fakeSink(ctx, closeState);
     if (!closeSink) return;
@@ -318,14 +347,14 @@ void testBackendFailuresAreTerminalAndPreserveFirstError(TestContext& ctx)
 
 void testBackendCloseOccursExactlyOnce(TestContext& ctx)
 {
-    FakeAvioBackendState destructorState;
+    FakeAvioBackendState destructorState{8};
     {
         auto sink = fakeSink(ctx, destructorState);
         if (!sink) return;
     }
     EXPECT_EQ(ctx, destructorState.closeCalls, 1);
 
-    FakeAvioBackendState explicitState;
+    FakeAvioBackendState explicitState{8};
     auto sink = fakeSink(ctx, explicitState);
     if (!sink) return;
     EXPECT_TRUE(ctx, sink->close());
