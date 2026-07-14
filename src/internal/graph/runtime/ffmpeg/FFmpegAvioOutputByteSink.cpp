@@ -1,5 +1,6 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegAvioOutputByteSink.h"
 
+#include "internal/graph/runtime/ffmpeg/FFmpegAvioOutputByteSinkBackend.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 
 extern "C" {
@@ -23,8 +24,9 @@ bool validWriteFlags(int flags) noexcept
 
 } // namespace
 
-FFmpegAvioOutputByteSink::FFmpegAvioOutputByteSink(AVIOContext* context) noexcept
-    : m_context(context)
+FFmpegAvioOutputByteSink::FFmpegAvioOutputByteSink(
+    std::unique_ptr<FFmpegAvioOutputByteSinkBackend> backend) noexcept
+    : m_backend(std::move(backend))
 {
 }
 
@@ -41,23 +43,27 @@ FFmpegAvioOutputByteSink::open(std::string url, int writeFlags)
                 "output byte sink requires supported write-only AVIO flags"));
     }
 
-    AVIOContext* context = nullptr;
-    const int openResult = avio_open2(
-        &context, url.c_str(), writeFlags, nullptr, nullptr);
-    if (openResult < 0) {
+    auto backend = FFmpegAvioOutputByteSinkBackend::open(
+        std::move(url), writeFlags);
+    if (!backend) {
         return ::media::Result<std::unique_ptr<FFmpegAvioOutputByteSink>>::failure(
-            FFmpegGraphError::fromCode(openResult, "avio_open2(output byte sink)"));
+            backend.error());
     }
-    if (!context) {
-        return ::media::Result<std::unique_ptr<FFmpegAvioOutputByteSink>>::failure(
-            ::media::ErrorInfo::internalError(
-                "avio_open2 succeeded without an output context"));
-    }
+    return create(std::move(backend).value());
+}
 
+::media::Result<std::unique_ptr<FFmpegAvioOutputByteSink>>
+FFmpegAvioOutputByteSink::create(
+    std::unique_ptr<FFmpegAvioOutputByteSinkBackend> backend)
+{
+    if (!backend) {
+        return ::media::Result<std::unique_ptr<FFmpegAvioOutputByteSink>>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "output byte sink requires an owned AVIO backend"));
+    }
     auto sink = std::unique_ptr<FFmpegAvioOutputByteSink>(
-        new (std::nothrow) FFmpegAvioOutputByteSink(context));
+        new (std::nothrow) FFmpegAvioOutputByteSink(std::move(backend)));
     if (!sink) {
-        avio_closep(&context);
         return ::media::Result<std::unique_ptr<FFmpegAvioOutputByteSink>>::failure(
             ::media::ErrorInfo::allocationFailed("FFmpegAvioOutputByteSink"));
     }
@@ -67,8 +73,8 @@ FFmpegAvioOutputByteSink::open(std::string url, int writeFlags)
 
 FFmpegAvioOutputByteSink::~FFmpegAvioOutputByteSink() noexcept
 {
-    if (!m_closed && m_context) {
-        avio_closep(&m_context);
+    if (!m_closed && m_backend) {
+        static_cast<void>(m_backend->close());
         m_closed = true;
     }
 }
@@ -76,28 +82,29 @@ FFmpegAvioOutputByteSink::~FFmpegAvioOutputByteSink() noexcept
 ::media::Result<std::size_t> FFmpegAvioOutputByteSink::write(
     std::span<const std::uint8_t> bytes)
 {
-    if (m_closed || !m_context) {
-        return ::media::Result<std::size_t>::failure(
-            ::media::ErrorInfo::notInitialized("output byte sink is closed"));
-    }
     if (m_firstFailure) {
         return ::media::Result<std::size_t>::failure(*m_firstFailure);
     }
-    if (bytes.empty()) {
+    if (m_closed || !m_backend) {
         return ::media::Result<std::size_t>::failure(
+            ::media::ErrorInfo::notInitialized("output byte sink is closed"));
+    }
+    if (bytes.empty()) {
+        preserveFailure(
             ::media::ErrorInfo::invalidArgument("output byte sink write must not be empty"));
+        return ::media::Result<std::size_t>::failure(*m_firstFailure);
     }
     if (bytes.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
-        return ::media::Result<std::size_t>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "output byte sink write exceeds the FFmpeg AVIO size limit"));
+        preserveFailure(::media::ErrorInfo::invalidArgument(
+            "output byte sink write exceeds the FFmpeg AVIO size limit"));
+        return ::media::Result<std::size_t>::failure(*m_firstFailure);
     }
 
-    avio_write(m_context, bytes.data(), static_cast<int>(bytes.size()));
-    avio_flush(m_context);
-    if (m_context->error < 0) {
+    m_backend->write(bytes);
+    m_backend->flush();
+    if (m_backend->error() < 0) {
         preserveFailure(FFmpegGraphError::fromCode(
-            m_context->error, "avio_write(output byte sink)"));
+            m_backend->error(), "avio_write/avio_flush(output byte sink)"));
         return ::media::Result<std::size_t>::failure(*m_firstFailure);
     }
     return ::media::Result<std::size_t>::success(bytes.size());
@@ -105,16 +112,16 @@ FFmpegAvioOutputByteSink::~FFmpegAvioOutputByteSink() noexcept
 
 ::media::Status FFmpegAvioOutputByteSink::flush()
 {
-    if (m_closed || !m_context) {
+    if (m_firstFailure) return currentStatus();
+    if (m_closed || !m_backend) {
         return ::media::Status::failure(
             ::media::ErrorInfo::notInitialized("output byte sink is closed"));
     }
-    if (m_firstFailure) return currentStatus();
 
-    avio_flush(m_context);
-    if (m_context->error < 0) {
+    m_backend->flush();
+    if (m_backend->error() < 0) {
         preserveFailure(FFmpegGraphError::fromCode(
-            m_context->error, "avio_flush(output byte sink)"));
+            m_backend->error(), "avio_flush(output byte sink)"));
     }
     return currentStatus();
 }
@@ -123,8 +130,8 @@ FFmpegAvioOutputByteSink::~FFmpegAvioOutputByteSink() noexcept
 {
     if (m_closed) return currentStatus();
 
-    if (m_context) {
-        const int closeResult = avio_closep(&m_context);
+    if (m_backend) {
+        const int closeResult = m_backend->close();
         if (closeResult < 0) {
             preserveFailure(FFmpegGraphError::fromCode(
                 closeResult, "avio_closep(output byte sink)"));

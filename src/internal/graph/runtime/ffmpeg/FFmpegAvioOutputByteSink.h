@@ -6,15 +6,17 @@
 #include <optional>
 #include <string>
 
-struct AVIOContext;
-
 namespace media::ffmpeg::graph {
+
+class FFmpegAvioOutputByteSinkBackend;
 
 class FFmpegAvioOutputByteSink final : public MediaOutputByteSink {
 public:
     static ::media::Result<std::unique_ptr<FFmpegAvioOutputByteSink>> open(
         std::string url,
         int writeFlags);
+    static ::media::Result<std::unique_ptr<FFmpegAvioOutputByteSink>> create(
+        std::unique_ptr<FFmpegAvioOutputByteSinkBackend> backend);
 
     ~FFmpegAvioOutputByteSink() noexcept override;
 
@@ -27,12 +29,13 @@ public:
     ::media::Status close() override;
 
 private:
-    explicit FFmpegAvioOutputByteSink(AVIOContext* context) noexcept;
+    explicit FFmpegAvioOutputByteSink(
+        std::unique_ptr<FFmpegAvioOutputByteSinkBackend> backend) noexcept;
 
     ::media::Status currentStatus() const;
     void preserveFailure(::media::ErrorInfo error);
 
-    AVIOContext* m_context = nullptr;
+    std::unique_ptr<FFmpegAvioOutputByteSinkBackend> m_backend;
     bool m_closed = false;
     std::optional<::media::ErrorInfo> m_firstFailure;
 };
