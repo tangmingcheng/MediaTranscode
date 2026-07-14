@@ -16,6 +16,8 @@
 #include "internal/graph/protocol/mpegts/MediaTsMuxPlan.h"
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/planner/audio/MediaAudioProfile.h"
+#include "internal/graph/planner/audio/capability/MediaAudioEncoderTargetIdentityValidator.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/runtime/distributed/MediaGraphRemoteExecutor.h"
 #include "internal/graph/runtime/gpu/MediaGpuGraphExecutor.h"
 #include "internal/graph/runtime/optimizer/MediaGraphCompiler.h"
@@ -25,6 +27,11 @@
 #include "internal/graph/runtime/optimizer/passes/MediaNodeFusionPass.h"
 #include "internal/graph/runtime/optimizer/passes/MediaRedundantTransferEliminationPass.h"
 #include "internal/graph/runtime/optimizer/passes/MediaSimdSchedulingPass.h"
+
+extern "C" {
+#include <libavutil/channel_layout.h>
+#include <libavutil/samplefmt.h>
+}
 
 using namespace media::ffmpeg::graph;
 using media_transcode::test::TestContext;
@@ -921,6 +928,46 @@ void testResolvedAudioPlannerMatrix(TestContext& ctx)
     }
 }
 
+void testAudioEncoderTargetIdentityValidator(TestContext& ctx)
+{
+    MediaResolvedAudioSource source{
+        "aac", MediaAudioProfile::knownAacLow(), 48'000, 2,
+        "stereo", "fltp", 128'000};
+    MediaResolvedAudioRequest request;
+    request.sampleRate = 44'100;
+    const auto target = MediaResolvedAudioTargetDecision::create(source, request, {});
+    EXPECT_TRUE(ctx, target);
+    if (!target) return;
+
+    auto context = ::media::ffmpeg::makeCodecContext(nullptr);
+    EXPECT_TRUE(ctx, context != nullptr);
+    if (!context) return;
+    context->sample_rate = target.value().sampleRate();
+    context->sample_fmt = AV_SAMPLE_FMT_FLTP;
+    context->profile = target.value().profile().ffmpegProfileId();
+    context->time_base = AVRational{2, target.value().sampleRate() * 2};
+    EXPECT_TRUE(ctx, av_channel_layout_from_string(
+                         &context->ch_layout,
+                         target.value().channelLayout().c_str()) >= 0);
+    EXPECT_TRUE(ctx, MediaAudioEncoderTargetIdentityValidator::validate(
+                         target.value(), AV_SAMPLE_FMT_FLTP, *context));
+
+    av_channel_layout_uninit(&context->ch_layout);
+    const AVChannelLayout differentTwoChannelLayout = AV_CHANNEL_LAYOUT_STEREO_DOWNMIX;
+    EXPECT_TRUE(ctx, av_channel_layout_copy(
+                         &context->ch_layout, &differentTwoChannelLayout) >= 0);
+    EXPECT_FALSE(ctx, MediaAudioEncoderTargetIdentityValidator::validate(
+                          target.value(), AV_SAMPLE_FMT_FLTP, *context));
+
+    av_channel_layout_uninit(&context->ch_layout);
+    EXPECT_TRUE(ctx, av_channel_layout_from_string(
+                         &context->ch_layout,
+                         target.value().channelLayout().c_str()) >= 0);
+    context->time_base = AVRational{1, 48'000};
+    EXPECT_FALSE(ctx, MediaAudioEncoderTargetIdentityValidator::validate(
+                          target.value(), AV_SAMPLE_FMT_FLTP, *context));
+}
+
 } // namespace
 
 int main()
@@ -931,6 +978,7 @@ int main()
     testTsMuxPlanRejectsEveryInvalidField(ctx);
     testTsResolvedOutputSupportMatrix(ctx);
     testResolvedAudioPlannerMatrix(ctx);
+    testAudioEncoderTargetIdentityValidator(ctx);
     testProjectTsOutputRequiresExplicitUdpEndpoint(ctx);
     testTsProgramSelectorRequiresOneCrossValidatedProgram(ctx);
     testTsProgramSelectorRejectsAmbiguityAndInventoryMismatch(ctx);

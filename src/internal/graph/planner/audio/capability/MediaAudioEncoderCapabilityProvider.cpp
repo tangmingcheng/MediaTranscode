@@ -1,4 +1,5 @@
 #include "internal/graph/planner/audio/capability/MediaAudioEncoderCapabilityProvider.h"
+#include "internal/graph/planner/audio/capability/MediaAudioEncoderTargetIdentityValidator.h"
 
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
@@ -105,19 +106,9 @@ std::vector<const AVCodec*> encoderCandidates(const std::string& codecName)
                 openStatus,
                 "avcodec_open2(audio encoder capability " + target.codecName() + ")"));
     }
-    const bool profileChanged =
-        target.profile().knowledge() == MediaAudioProfileKnowledge::Known &&
-        context->profile != target.profile().ffmpegProfileId();
-#if LIBAVUTIL_VERSION_MAJOR >= 57
-    const bool channelsChanged = context->ch_layout.nb_channels != target.channels();
-#else
-    const bool channelsChanged = context->channels != target.channels();
-#endif
-    if (context->sample_rate != target.sampleRate() ||
-        context->sample_fmt != sampleFormat || channelsChanged || profileChanged) {
-        return ::media::Result<MediaSelectedAudioEncoder>::failure(
-            ::media::ErrorInfo::unsupported(
-                "audio encoder changed the exact planner target during capability verification"));
+    if (auto identity = MediaAudioEncoderTargetIdentityValidator::validate(
+            target, sampleFormat, *context); !identity) {
+        return ::media::Result<MediaSelectedAudioEncoder>::failure(identity.error());
     }
 
     MediaSelectedAudioEncoder verified;
