@@ -11,7 +11,8 @@ class MediaAvSyncPlanner final {
 public:
     static ::media::Result<MediaAvSyncPlan> plan(
         const MediaRealtimeRtpTranscodeRequest& request,
-        const MediaTsSelectedProgramPlan* selectedTsProgram = nullptr);
+        const MediaTsSelectedProgramPlan* selectedTsProgram = nullptr,
+        const MediaAvSyncResolvedOutputPlan* resolvedTsOutput = nullptr);
 
 private:
     MediaAvSyncPlanner() = delete;

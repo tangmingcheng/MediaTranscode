@@ -196,6 +196,40 @@ MediaRealtimeRtpTranscodeRequest avSyncTsRequest()
     return request;
 }
 
+MediaAvSyncResolvedOutputPlan validTsResolvedOutput()
+{
+    auto resolved = MediaAvSyncResolvedOutputPlan::create(
+        "h264", "aac", 48'000, 2);
+    return std::move(resolved).value();
+}
+
+void testTsResolvedOutputSupportMatrix(TestContext& ctx)
+{
+    const auto valid = MediaAvSyncResolvedOutputPlan::create(
+        "h264", "aac", 48'000, 2);
+    EXPECT_TRUE(ctx, valid);
+    if (valid) {
+        EXPECT_EQ(ctx, valid.value().videoCodecName(), std::string("h264"));
+        EXPECT_EQ(ctx, valid.value().audioCodecName(), std::string("aac"));
+        EXPECT_EQ(ctx, valid.value().audioSampleRate(), 48'000);
+        EXPECT_EQ(ctx, valid.value().audioChannels(), 2);
+        EXPECT_EQ(ctx, valid.value().aacAdtsPlan().audioObjectType,
+                  std::uint8_t{2});
+        EXPECT_EQ(ctx, valid.value().aacAdtsPlan().samplingFrequencyIndex,
+                  std::uint8_t{3});
+        EXPECT_EQ(ctx, valid.value().aacAdtsPlan().channelConfiguration,
+                  std::uint8_t{2});
+    }
+    EXPECT_FALSE(ctx, MediaAvSyncResolvedOutputPlan::create(
+        "hevc", "aac", 48'000, 2));
+    EXPECT_FALSE(ctx, MediaAvSyncResolvedOutputPlan::create(
+        "h264", "opus", 48'000, 2));
+    EXPECT_FALSE(ctx, MediaAvSyncResolvedOutputPlan::create(
+        "h264", "aac", 44'100, 2));
+    EXPECT_FALSE(ctx, MediaAvSyncResolvedOutputPlan::create(
+        "h264", "aac", 48'000, 1));
+}
+
 MediaTsMuxPlanParameters validTsMuxPlanParameters()
 {
     return MediaTsMuxPlanParameters{
@@ -400,7 +434,9 @@ void testRawRtpInputPlannerProducesCompleteTransportPolicy(TestContext& ctx)
 
 void testAvSyncPlannerBuildsCompleteTsContract(TestContext& ctx)
 {
-    const auto result = MediaAvSyncPlanner::plan(avSyncTsRequest(), &selectedTsProgram());
+    const auto resolvedOutput = validTsResolvedOutput();
+    const auto result = MediaAvSyncPlanner::plan(
+        avSyncTsRequest(), &selectedTsProgram(), &resolvedOutput);
     EXPECT_TRUE(ctx, result);
     if (!result) return;
 
@@ -563,7 +599,9 @@ void testAvSyncValidatorRejectsMissingAndInconsistentFields(TestContext& ctx)
     excessiveRecoveryCorrection.audioServo.recoveryCorrectionLimitPpm = 5001;
     expectInvalid(std::move(excessiveRecoveryCorrection));
 
-    const auto tsResult = MediaAvSyncPlanner::plan(avSyncTsRequest(), &selectedTsProgram());
+    const auto resolvedOutput = validTsResolvedOutput();
+    const auto tsResult = MediaAvSyncPlanner::plan(
+        avSyncTsRequest(), &selectedTsProgram(), &resolvedOutput);
     EXPECT_TRUE(ctx, tsResult);
     if (!tsResult) return;
     const MediaAvSyncPlan completeTs = tsResult.value();
@@ -601,7 +639,9 @@ void expectInvalidAvSyncMutation(TestContext& ctx,
 
 void testAvSyncValidatorRejectsProtocolIdentifierBoundaries(TestContext& ctx)
 {
-    const auto result = MediaAvSyncPlanner::plan(avSyncTsRequest(), &selectedTsProgram());
+    const auto resolvedOutput = validTsResolvedOutput();
+    const auto result = MediaAvSyncPlanner::plan(
+        avSyncTsRequest(), &selectedTsProgram(), &resolvedOutput);
     EXPECT_TRUE(ctx, result);
     if (!result) return;
     const MediaAvSyncPlan complete = result.value();
@@ -622,7 +662,9 @@ void testAvSyncValidatorRejectsProtocolIdentifierBoundaries(TestContext& ctx)
 void testAvSyncValidatorRejectsIsolatedNumericAndOrderingInvariants(TestContext& ctx)
 {
     const auto rtpResult = MediaAvSyncPlanner::plan(avSyncRtpRequest());
-    const auto tsResult = MediaAvSyncPlanner::plan(avSyncTsRequest(), &selectedTsProgram());
+    const auto resolvedOutput = validTsResolvedOutput();
+    const auto tsResult = MediaAvSyncPlanner::plan(
+        avSyncTsRequest(), &selectedTsProgram(), &resolvedOutput);
     EXPECT_TRUE(ctx, rtpResult);
     EXPECT_TRUE(ctx, tsResult);
     if (!rtpResult || !tsResult) return;
@@ -723,6 +765,7 @@ int main()
 
     testTsInputPlanValidatorRejectsEveryMutation(ctx);
     testTsMuxPlanRejectsEveryInvalidField(ctx);
+    testTsResolvedOutputSupportMatrix(ctx);
     testProjectTsOutputRequiresExplicitUdpEndpoint(ctx);
     testTsProgramSelectorRequiresOneCrossValidatedProgram(ctx);
     testTsProgramSelectorRejectsAmbiguityAndInventoryMismatch(ctx);

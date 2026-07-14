@@ -324,6 +324,8 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
     MediaPipelinePlan videoPlan;
     MediaAudioPipelinePlan audioPlan;
     MediaVideoTranscodeParameters videoParameters;
+    std::optional<int> resolvedAudioSampleRate;
+    std::optional<int> resolvedAudioChannels;
     if (MediaRealtimeRequestClassifier::rawRtpInput(options)) {
         auto raw = MediaRealtimeInputPlanner::planRawRtp(options);
         if (!raw) return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(raw.error());
@@ -391,6 +393,16 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
                 return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(plannedAudio.error());
             }
             audioPlan = std::move(plannedAudio).value();
+            if (options.parameters.audio.sampleRate) {
+                resolvedAudioSampleRate = *options.parameters.audio.sampleRate;
+            } else {
+                resolvedAudioSampleRate = realtimeInput.audio.sampleRate;
+            }
+            if (options.parameters.audio.channels) {
+                resolvedAudioChannels = *options.parameters.audio.channels;
+            } else {
+                resolvedAudioChannels = realtimeInput.audio.channels;
+            }
         } else {
             auto plannedAudio = MediaAudioPipelinePlanner::planKnownAudioTranscode({}, audioOptions);
             if (!plannedAudio) {
@@ -434,8 +446,27 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
         !outputStatus) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(outputStatus.error());
     }
+    std::optional<MediaAvSyncResolvedOutputPlan> resolvedTsOutput;
+    if (MediaRealtimeRequestClassifier::mpegTsUdpInput(options) &&
+        MediaRealtimeRequestClassifier::muxedTransportOutput(options)) {
+        if (!resolvedAudioSampleRate || !resolvedAudioChannels) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "Project MPEG-TS output requires resolved audio format facts"));
+        }
+        auto resolved = MediaAvSyncResolvedOutputPlan::create(
+            plan.videoPlan.outputCodecName, plan.audioPlan.targetCodecName,
+            *resolvedAudioSampleRate, *resolvedAudioChannels);
+        if (!resolved) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                resolved.error());
+        }
+        resolvedTsOutput = std::move(resolved).value();
+    }
     if (MediaRealtimeRequestClassifier::audioRequested(options)) {
-        auto avSync = MediaAvSyncPlanner::plan(options, selectedTsProgram);
+        auto avSync = MediaAvSyncPlanner::plan(
+            options, selectedTsProgram,
+            resolvedTsOutput ? &*resolvedTsOutput : nullptr);
         if (!avSync) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(avSync.error());
         }

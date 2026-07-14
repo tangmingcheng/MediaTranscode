@@ -20,6 +20,35 @@ enum class MediaAvSyncMasterClockMode : std::uint8_t {
     SteadyMonotonic = 0
 };
 
+class MediaAvSyncResolvedOutputPlan final {
+public:
+    static ::media::Result<MediaAvSyncResolvedOutputPlan> create(
+        std::string videoCodecName,
+        std::string audioCodecName,
+        int audioSampleRate,
+        int audioChannels);
+
+    const std::string& videoCodecName() const noexcept;
+    const std::string& audioCodecName() const noexcept;
+    int audioSampleRate() const noexcept;
+    int audioChannels() const noexcept;
+    const MediaTsAacAdtsPlan& aacAdtsPlan() const noexcept;
+
+private:
+    MediaAvSyncResolvedOutputPlan(
+        std::string videoCodecName,
+        std::string audioCodecName,
+        int audioSampleRate,
+        int audioChannels,
+        MediaTsAacAdtsPlan aacAdts) noexcept;
+
+    std::string m_videoCodecName;
+    std::string m_audioCodecName;
+    int m_audioSampleRate;
+    int m_audioChannels;
+    MediaTsAacAdtsPlan m_aacAdts;
+};
+
 struct MediaAvSyncStartupPolicy {
     std::optional<bool> requireVideoKeyFrame;
     std::optional<bool> trimAudioToCommonStart;

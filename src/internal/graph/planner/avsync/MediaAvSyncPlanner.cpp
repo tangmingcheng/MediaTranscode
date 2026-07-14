@@ -3,6 +3,7 @@
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
 #include "internal/graph/sync/startup/MediaAvStartupLimits.h"
+#include "internal/graph/utils/MediaCodecNameUtils.h"
 
 #include <cstdint>
 #include <limits>
@@ -199,7 +200,8 @@ std::uint32_t stableIdentity(const std::string& value) noexcept
 
 ::media::Result<MediaAvSyncPlan> planTs(
     const MediaRealtimeRtpTranscodeRequest& request,
-    const MediaTsSelectedProgramPlan& selected)
+    const MediaTsSelectedProgramPlan& selected,
+    const MediaAvSyncResolvedOutputPlan& resolvedOutput)
 {
     MediaAvSyncPlan plan;
     if (auto status = planSharedPolicy(plan, request); !status) {
@@ -221,19 +223,14 @@ std::uint32_t stableIdentity(const std::string& value) noexcept
                                  std::to_string(selected.audioPid);
     plan.ts->pcrPid = selected.pcrPid;
 
-    if (!request.parameters.audio.sampleRate) {
-        return ::media::Result<MediaAvSyncPlan>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "Synchronized MPEG-TS requires resolved output audio sample rate"));
-    }
-    plan.audioServo.outputSampleRate = *request.parameters.audio.sampleRate;
+    plan.audioServo.outputSampleRate = resolvedOutput.audioSampleRate();
 
     auto outputMux = MediaTsMuxPlan::create(MediaTsMuxPlanParameters{
         1, 1, 0x0000, 0x0100, 0x0101, 0x0102, 0x0101, 0,
         runningTime(100 * Millisecond), 0x1B, 0x0F,
         MediaTsH264InputLayout::LengthPrefixed, 4,
         MediaTsParameterSetPolicy::BeforeRandomAccess,
-        MediaTsAacAdtsPlan{0, 2, 3, 2},
+        resolvedOutput.aacAdtsPlan(),
         MediaTsOutputClockPolicy{
             runningTime(20 * Millisecond), runningTime(100 * Millisecond),
             runningTime(5 * Millisecond), 1, 90'000},
@@ -253,9 +250,72 @@ std::uint32_t stableIdentity(const std::string& value) noexcept
 
 } // namespace
 
+::media::Result<MediaAvSyncResolvedOutputPlan>
+MediaAvSyncResolvedOutputPlan::create(
+    std::string videoCodecName,
+    std::string audioCodecName,
+    int audioSampleRate,
+    int audioChannels)
+{
+    videoCodecName = canonicalCodecName(std::move(videoCodecName));
+    audioCodecName = canonicalCodecName(std::move(audioCodecName));
+    if (videoCodecName != "h264" || audioCodecName != "aac" ||
+        audioSampleRate != 48'000 || audioChannels != 2) {
+        return ::media::Result<MediaAvSyncResolvedOutputPlan>::failure(
+            ::media::ErrorInfo::unsupported(
+                "Project MPEG-TS output requires resolved H.264 and AAC-LC 48 kHz stereo output"));
+    }
+    return ::media::Result<MediaAvSyncResolvedOutputPlan>::success(
+        MediaAvSyncResolvedOutputPlan(
+            std::move(videoCodecName), std::move(audioCodecName),
+            audioSampleRate, audioChannels,
+            MediaTsAacAdtsPlan{0, 2, 3, 2}));
+}
+
+MediaAvSyncResolvedOutputPlan::MediaAvSyncResolvedOutputPlan(
+    std::string videoCodecName,
+    std::string audioCodecName,
+    int audioSampleRate,
+    int audioChannels,
+    MediaTsAacAdtsPlan aacAdts) noexcept
+    : m_videoCodecName(std::move(videoCodecName)),
+      m_audioCodecName(std::move(audioCodecName)),
+      m_audioSampleRate(audioSampleRate),
+      m_audioChannels(audioChannels),
+      m_aacAdts(aacAdts)
+{
+}
+
+const std::string& MediaAvSyncResolvedOutputPlan::videoCodecName() const noexcept
+{
+    return m_videoCodecName;
+}
+
+const std::string& MediaAvSyncResolvedOutputPlan::audioCodecName() const noexcept
+{
+    return m_audioCodecName;
+}
+
+int MediaAvSyncResolvedOutputPlan::audioSampleRate() const noexcept
+{
+    return m_audioSampleRate;
+}
+
+int MediaAvSyncResolvedOutputPlan::audioChannels() const noexcept
+{
+    return m_audioChannels;
+}
+
+const MediaTsAacAdtsPlan&
+MediaAvSyncResolvedOutputPlan::aacAdtsPlan() const noexcept
+{
+    return m_aacAdts;
+}
+
 ::media::Result<MediaAvSyncPlan> MediaAvSyncPlanner::plan(
     const MediaRealtimeRtpTranscodeRequest& request,
-    const MediaTsSelectedProgramPlan* selectedTsProgram)
+    const MediaTsSelectedProgramPlan* selectedTsProgram,
+    const MediaAvSyncResolvedOutputPlan* resolvedTsOutput)
 {
     if (!request.parameters.execution.includeAudio) {
         return ::media::Result<MediaAvSyncPlan>::failure(
@@ -263,6 +323,11 @@ std::uint32_t stableIdentity(const std::string& value) noexcept
     }
     if (MediaRealtimeRequestClassifier::rawRtpInput(request) &&
         MediaRealtimeRequestClassifier::separateRtpOutput(request)) {
+        if (resolvedTsOutput) {
+            return ::media::Result<MediaAvSyncPlan>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "RTP A/V synchronization does not accept an MPEG-TS resolved output plan"));
+        }
         return planRtp(request);
     }
     if (MediaRealtimeRequestClassifier::mpegTsUdpInput(request) &&
@@ -272,7 +337,12 @@ std::uint32_t stableIdentity(const std::string& value) noexcept
                 ::media::ErrorInfo::notInitialized(
                     "MPEG-TS A/V synchronization requires planner-selected program identity"));
         }
-        return planTs(request, *selectedTsProgram);
+        if (!resolvedTsOutput) {
+            return ::media::Result<MediaAvSyncPlan>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "MPEG-TS A/V synchronization requires resolved output media facts"));
+        }
+        return planTs(request, *selectedTsProgram, *resolvedTsOutput);
     }
     if (MediaRealtimeRequestClassifier::rawRtpInput(request) &&
         MediaRealtimeRequestClassifier::muxedTransportOutput(request)) {
