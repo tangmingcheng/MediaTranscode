@@ -298,4 +298,21 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
     return invalid("topology");
 }
 
+::media::Status MediaAvSyncPlanValidator::validatePolicy(
+    const MediaAvSyncPlan& plan)
+{
+    if (plan.audioServo.commandLeadNs || plan.audioServo.compensationWindowNs ||
+        plan.audioServo.frequencyFilterTimeConstantNs) {
+        return invalid("incomplete policy contains finalized correction timing");
+    }
+    MediaAvSyncPlan validation = plan;
+    validation.audioServo.commandLeadNs =
+        MediaRunningTime::fromNanoseconds(1'500'000'000);
+    validation.audioServo.compensationWindowNs =
+        MediaRunningTime::fromNanoseconds(2'000'000'000);
+    validation.audioServo.frequencyFilterTimeConstantNs =
+        MediaRunningTime::fromNanoseconds(5'000'000'000);
+    return validate(validation);
+}
+
 } // namespace media::ffmpeg::graph

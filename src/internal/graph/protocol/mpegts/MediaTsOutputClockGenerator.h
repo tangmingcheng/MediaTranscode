@@ -15,6 +15,8 @@ struct MediaTsOutputClockPolicy final {
     MediaRunningTime maximumPcrJitter;
     int timestampTimeBaseNumerator;
     int timestampTimeBaseDenominator;
+    friend bool operator==(const MediaTsOutputClockPolicy&,
+                           const MediaTsOutputClockPolicy&) = default;
 };
 
 struct MediaTsPacketClock final {

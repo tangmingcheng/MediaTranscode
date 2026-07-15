@@ -88,7 +88,6 @@ std::uint32_t stableIdentity(const std::string& value) noexcept
 
     plan.audioServo.deadbandNs = runningTime(Millisecond);
     plan.audioServo.phaseFilterTimeConstantNs = runningTime(250 * Millisecond);
-    plan.audioServo.frequencyFilterTimeConstantNs = runningTime(5 * Second);
     plan.audioServo.proportionalGainPpmPerSecond = 20'000;
     plan.audioServo.integralGainPpmPerSecondSquared = 1'000;
     plan.audioServo.integratorLimitPpm = 2'000;
@@ -107,8 +106,6 @@ std::uint32_t stableIdentity(const std::string& value) noexcept
     plan.audioServo.recoveryEnterThresholdNs = runningTime(100 * Millisecond);
     plan.audioServo.recoveryExitThresholdNs = runningTime(50 * Millisecond);
     plan.audioServo.recoveryExitHoldNs = runningTime(500 * Millisecond);
-    plan.audioServo.compensationWindowNs = runningTime(2 * Second);
-    plan.audioServo.commandLeadNs = runningTime(1500 * Millisecond);
     plan.audioServo.correctionLookaheadWindows = 2;
 
     plan.video.earlyHoldThresholdNs = runningTime(20 * Millisecond);
@@ -192,7 +189,7 @@ std::uint32_t stableIdentity(const std::string& value) noexcept
     plan.rtp->output.useSharedNtpEpoch = true;
     plan.rtp->output.senderReportIntervalNs = runningTime(Second);
 
-    if (auto status = MediaAvSyncPlanValidator::validate(plan); !status) {
+    if (auto status = MediaAvSyncPlanValidator::validatePolicy(plan); !status) {
         return ::media::Result<MediaAvSyncPlan>::failure(status.error());
     }
     return ::media::Result<MediaAvSyncPlan>::success(std::move(plan));
@@ -237,7 +234,7 @@ std::uint32_t stableIdentity(const std::string& value) noexcept
     plan.audioServo.outputSampleRate = resolvedOutput.value().audioSampleRate();
     plan.ts->outputMux = resolvedOutput.value().muxPlan();
 
-    if (auto status = MediaAvSyncPlanValidator::validate(plan); !status) {
+    if (auto status = MediaAvSyncPlanValidator::validatePolicy(plan); !status) {
         return ::media::Result<MediaAvSyncPlan>::failure(status.error());
     }
     return ::media::Result<MediaAvSyncPlan>::success(std::move(plan));

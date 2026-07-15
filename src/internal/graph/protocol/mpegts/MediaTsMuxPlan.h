@@ -26,6 +26,8 @@ struct MediaTsContinuitySeeds final {
     std::uint8_t pmt;
     std::uint8_t video;
     std::uint8_t audio;
+    friend bool operator==(const MediaTsContinuitySeeds&,
+                           const MediaTsContinuitySeeds&) = default;
 };
 
 struct MediaTsAacAdtsPlan final {
@@ -33,6 +35,8 @@ struct MediaTsAacAdtsPlan final {
     std::uint8_t audioObjectType;
     std::uint8_t samplingFrequencyIndex;
     std::uint8_t channelConfiguration;
+    friend bool operator==(const MediaTsAacAdtsPlan&,
+                           const MediaTsAacAdtsPlan&) = default;
 };
 
 struct MediaTsMuxPlanParameters final {
@@ -57,6 +61,8 @@ struct MediaTsMuxPlanParameters final {
     MediaTsContinuitySeeds continuity;
     std::uint8_t maximumPacketsPerDatagram;
     MediaTsOutputTransportKind transportKind;
+    friend bool operator==(const MediaTsMuxPlanParameters&,
+                           const MediaTsMuxPlanParameters&) = default;
 };
 
 class MediaTsMuxPlan final {

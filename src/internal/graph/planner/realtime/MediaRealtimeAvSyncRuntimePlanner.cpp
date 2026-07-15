@@ -67,7 +67,7 @@ namespace {
     MediaRealtimeRtpOutputNodePlan& legacyOutput,
     const MediaAvSyncRtpOutputStreamPlan& synchronization,
     const std::string& codecName,
-    MediaScheduledRtpPacketizationMode packetizationMode,
+    std::optional<int> maximumAccessUnitSamples,
     MediaRunningTime senderLead,
     MediaRunningTime senderReportInterval)
 {
@@ -82,19 +82,20 @@ namespace {
     const auto streamKind = stream == MediaScheduledStream::Video
         ? MediaStreamKind::Video
         : MediaStreamKind::Audio;
-    MediaScheduledRtpPacketizationPlan packetization{
-        streamKind,
-        canonicalCodecName(codecName),
-        1,
-        *synchronization.clockRate,
-        packetizationMode,
+    auto packetization = MediaScheduledRtpPacketizationPlan::create(
+        streamKind, codecName, 1, *synchronization.clockRate,
         *synchronization.payloadType,
-        static_cast<std::size_t>(legacyOutput.packetSize)};
+        static_cast<std::size_t>(legacyOutput.packetSize),
+        maximumAccessUnitSamples);
+    if (!packetization) {
+        return ::media::Result<MediaScheduledRtpOutputPlan>::failure(
+            packetization.error());
+    }
     return ::media::Result<MediaScheduledRtpOutputPlan>::success(
         MediaScheduledRtpOutputPlan{
             stream,
             std::move(*legacyOutput.scheduledTransport),
-            std::move(packetization),
+            std::move(packetization).value(),
             *synchronization.ssrc,
             *synchronization.baseTimestamp,
             *synchronization.clockRate,
@@ -269,7 +270,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             outer.videoOutput,
             synchronization.rtp->videoOutput,
             outer.videoPlan.outputCodecName,
-            MediaScheduledRtpPacketizationMode::H264AnnexB,
+            std::nullopt,
             *synchronization.startup.outputLeadNs,
             *synchronization.rtp->output.senderReportIntervalNs);
         auto audio = scheduledRtpOutput(
@@ -277,7 +278,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             outer.audioOutput,
             synchronization.rtp->audioOutput,
             outer.audioPlan.resolvedOutput->codecName(),
-            MediaScheduledRtpPacketizationMode::AacLatm,
+            outer.audioPlan.resolvedOutput->codecFrameSamples(),
             *synchronization.startup.outputLeadNs,
             *synchronization.rtp->output.senderReportIntervalNs);
         if (!video || !audio) {

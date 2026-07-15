@@ -9,6 +9,8 @@
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/planner/MediaPipelinePlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
+#include "internal/graph/planner/realtime/MediaRealtimeAvSyncPlanningFacts.h"
+#include "internal/graph/planner/realtime/MediaScheduledRtpPacketizationPlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodeRequest.h"
 #include "internal/graph/planner/realtime/MediaPreparedRealtimeInput.h"
 #include "internal/graph/protocol/rtp/MediaRtcpCompositionPolicy.h"
@@ -154,6 +156,7 @@ struct MediaRealtimeRtpTranscodePlan {
     MediaRealtimeMuxNodePlan videoMux;
     MediaRealtimeMuxNodePlan audioMux;
     MediaRealtimeAvStartBarrierPlan avStartBarrier;
+    std::optional<MediaRealtimeAvSyncComponentBounds> avSyncComponentBounds;
     std::optional<MediaRealtimeAvSyncRuntimePlan> avSyncRuntime;
 };
 

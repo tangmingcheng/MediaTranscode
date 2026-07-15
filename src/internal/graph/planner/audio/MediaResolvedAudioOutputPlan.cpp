@@ -4,23 +4,10 @@
 #include <utility>
 
 namespace media::ffmpeg::graph {
-namespace {
-
-::media::Result<int> resolvedCodecFrameSamples(const std::string& codecName)
-{
-    if (codecName == "aac") {
-        return ::media::Result<int>::success(1024);
-    }
-    return ::media::Result<int>::failure(
-        ::media::ErrorInfo::unsupported(
-            "selected audio codec does not publish a bounded frame size"));
-}
-
-} // namespace
-
 ::media::Result<MediaResolvedAudioOutputPlan> MediaResolvedAudioOutputPlan::create(
     const MediaResolvedAudioTargetDecision& target,
-    const std::optional<MediaSelectedAudioEncoder>& selectedEncoder)
+    const std::optional<MediaSelectedAudioEncoder>& selectedEncoder,
+    std::optional<int> copiedAccessUnitSamples)
 {
     const bool copy = target.branchMode() == MediaBranchMode::CopyPacket;
     if (copy && selectedEncoder) {
@@ -53,10 +40,11 @@ namespace {
             ::media::ErrorInfo::unsupported("selected audio encoder does not support resolved profile"));
     }
 
-    auto frameSamples = resolvedCodecFrameSamples(target.codecName());
-    if (!frameSamples && !copy) {
+    if ((copy && (!copiedAccessUnitSamples || *copiedAccessUnitSamples <= 0)) ||
+        (!copy && copiedAccessUnitSamples)) {
         return ::media::Result<MediaResolvedAudioOutputPlan>::failure(
-            frameSamples.error());
+            ::media::ErrorInfo::notInitialized(
+                "resolved audio output requires branch-owned access-unit timing"));
     }
     MediaResolvedAudioOutputPlan plan;
     plan.m_codecName = target.codecName();
@@ -72,7 +60,7 @@ namespace {
     plan.m_branchMode = copy ? MediaBranchMode::CopyPacket : MediaBranchMode::TranscodeFrame;
     if (!copy) plan.m_encoderName = selectedEncoder->name;
     plan.m_codecFrameSamples = copy
-        ? (frameSamples ? frameSamples.value() : 0)
+        ? *copiedAccessUnitSamples
         : selectedEncoder->frameSizeSamples;
     plan.m_encoderDelaySamples = copy ? 0 : selectedEncoder->delaySamples;
     if ((!copy && plan.m_codecFrameSamples <= 0) ||

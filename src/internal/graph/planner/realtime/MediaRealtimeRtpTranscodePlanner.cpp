@@ -20,6 +20,48 @@
 namespace media::ffmpeg::graph {
 namespace {
 
+::media::Result<MediaRealtimeAvSyncComponentBounds> planAvSyncComponentBounds(
+    const MediaRealtimeRtpTranscodePlan& plan)
+{
+    if (!plan.audioPlan.decoderTiming || !plan.audioPlan.resamplerTiming ||
+        !plan.audioPlan.resolvedOutput ||
+        plan.audioPlan.resolvedOutput->codecFrameSamples() <= 0) {
+        return ::media::Result<MediaRealtimeAvSyncComponentBounds>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "synchronized audio components did not publish timing bounds"));
+    }
+    const auto multiply = [](std::size_t capacity, std::int64_t samples,
+                             const char* owner) -> ::media::Result<std::int64_t> {
+        if (capacity == 0 || samples <= 0 ||
+            capacity > static_cast<std::size_t>(
+                std::numeric_limits<std::int64_t>::max() / samples)) {
+            return ::media::Result<std::int64_t>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    std::string(owner) + " bound is not representable"));
+        }
+        return ::media::Result<std::int64_t>::success(
+            static_cast<std::int64_t>(capacity) * samples);
+    };
+    const auto decoderBlock = plan.audioPlan.decoderTiming->maximumOutputBlockSamples;
+    const auto resamplerBlock = plan.audioPlan.resamplerTiming->maximumOutputBlockSamples;
+    const auto encoderBlock = plan.audioPlan.resolvedOutput->codecFrameSamples();
+    auto decode = multiply(plan.queues.packet, decoderBlock, "decode queue");
+    auto resample = multiply(plan.queues.frame, decoderBlock, "resample queue");
+    auto encode = multiply(plan.queues.frame, resamplerBlock, "encode queue");
+    auto scheduler = multiply(plan.queues.mux, encoderBlock, "scheduler queue");
+    auto mailbox = multiply(plan.queues.metadata, resamplerBlock, "correction mailbox");
+    if (!decode || !resample || !encode || !scheduler || !mailbox) {
+        return ::media::Result<MediaRealtimeAvSyncComponentBounds>::failure(
+            !decode ? decode.error() : !resample ? resample.error() :
+            !encode ? encode.error() : !scheduler ? scheduler.error() : mailbox.error());
+    }
+    return ::media::Result<MediaRealtimeAvSyncComponentBounds>::success(
+        MediaRealtimeAvSyncComponentBounds{
+            plan.audioPlan.decoderTiming->delaySamples,
+            decode.value(), resample.value(), encode.value(), scheduler.value(),
+            encoderBlock, mailbox.value(), resamplerBlock, plan.queues.metadata});
+}
+
 constexpr int RealtimeNoBidirectionalFrames = 0;
 constexpr int RealtimeDefaultGopFrames = 30;
 constexpr bool RealtimeRequiresRuntimeAvailability = true;
@@ -440,6 +482,14 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
     if (auto outputStatus = MediaRealtimeOutputPolicyPlanner::apply(options, outputUrls.value(), plan);
         !outputStatus) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(outputStatus.error());
+    }
+    if (MediaRealtimeRequestClassifier::audioRequested(options)) {
+        auto componentBounds = planAvSyncComponentBounds(plan);
+        if (!componentBounds) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                componentBounds.error());
+        }
+        plan.avSyncComponentBounds = std::move(componentBounds).value();
     }
     std::optional<MediaProjectMpegTsResolvedPipelineFacts> resolvedTsFacts;
     if (MediaRealtimeRequestClassifier::mpegTsUdpInput(options) &&

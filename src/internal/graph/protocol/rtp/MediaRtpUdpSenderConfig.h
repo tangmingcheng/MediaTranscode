@@ -54,6 +54,7 @@ public:
     MediaRtpUdpSenderConfig& operator=(const MediaRtpUdpSenderConfig&) = delete;
 
     MediaIpAddressFamily addressFamily() const noexcept { return m_addressFamily; }
+    const std::string& localNumericAddress() const noexcept { return m_localNumericAddress; }
     const MediaUdpDatagramEndpoint& remoteRtpEndpoint() const noexcept
     {
         return m_remoteRtpEndpoint;
@@ -66,6 +67,12 @@ public:
     {
         return m_maximumDatagramBytes;
     }
+    const MediaRtpUdpLocalPortPolicy& localPortPolicy() const noexcept
+    {
+        return m_localPortPolicy;
+    }
+    int sendBufferBytes() const noexcept { return m_sendBufferBytes; }
+    MediaUdpSenderIoBehavior ioBehavior() const noexcept { return m_ioBehavior; }
 
 private:
     friend class MediaRtpUdpSenderTransport;

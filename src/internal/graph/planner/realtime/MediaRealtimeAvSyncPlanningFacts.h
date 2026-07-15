@@ -24,4 +24,16 @@ struct MediaRealtimeAvSyncPlanningFacts final {
     std::optional<MediaRunningTime> terminalDrainWindow;
 };
 
+struct MediaRealtimeAvSyncComponentBounds final {
+    std::int64_t decoderDelaySamples;
+    std::int64_t decodeQueueSamples;
+    std::int64_t resampleQueueSamples;
+    std::int64_t encodeQueueSamples;
+    std::int64_t schedulerQueueSamples;
+    std::int64_t protocolBatchSamples;
+    std::int64_t mailboxDeliveryMarginSamples;
+    std::int64_t maximumResamplerOutputBlockSamples;
+    std::size_t mailboxCapacity;
+};
+
 } // namespace media::ffmpeg::graph

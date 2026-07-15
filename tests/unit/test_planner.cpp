@@ -270,8 +270,8 @@ void testRealtimePlannerProducesCompleteAvSyncRuntimeProduct(TestContext& ctx)
                   "audio_correction_generation_state"}));
     const auto& rtp = std::get<MediaSeparateRtpOutputRuntimePlan>(
         runtime.protocolOutput);
-    EXPECT_EQ(ctx, rtp.video.packetization.codecName, std::string("h264"));
-    EXPECT_EQ(ctx, rtp.video.packetization.streamTimeBaseDenominator, 90'000);
+    EXPECT_EQ(ctx, rtp.video.packetization.codecName(), std::string("h264"));
+    EXPECT_EQ(ctx, rtp.video.packetization.streamTimeBaseDenominator(), 90'000);
     EXPECT_EQ(ctx, rtp.video.transport.remoteRtpEndpoint().port(),
               std::uint16_t{6000});
     EXPECT_EQ(ctx, rtp.audio.transport.remoteRtpEndpoint().port(),
@@ -287,6 +287,11 @@ void testRealtimeAvSyncRuntimeProductRejectsIndependentMutations(TestContext& ct
     EXPECT_TRUE(ctx, planned);
     if (!planned || !planned.value().avSyncRuntime) return;
     auto& outer = planned.value();
+    auto requiredRuntime = std::move(outer.avSyncRuntime);
+    outer.avSyncRuntime.reset();
+    EXPECT_FALSE(ctx, MediaRealtimeRtpTranscodePlanner::validatePlannedProduct(
+                          outer));
+    outer.avSyncRuntime = std::move(requiredRuntime);
     auto& runtime = *outer.avSyncRuntime;
     const auto expectInvalid = [&ctx, &outer]() {
         EXPECT_FALSE(ctx,
@@ -418,15 +423,23 @@ void testRealtimeAvSyncRuntimeProductRejectsIndependentMutations(TestContext& ct
     rtp.sdpPath.clear();
     expectInvalid();
     rtp.sdpPath = outer.sdp.path;
-    rtp.video.packetization.codecName.clear();
+    const auto originalVideoPacketization = rtp.video.packetization;
+    auto changedVideoTimeBase = MediaScheduledRtpPacketizationPlan::create(
+        MediaStreamKind::Video, "h264", 1, 90'001,
+        originalVideoPacketization.payloadType(),
+        originalVideoPacketization.maximumDatagramBytes());
+    EXPECT_TRUE(ctx, changedVideoTimeBase);
+    rtp.video.packetization = std::move(changedVideoTimeBase).value();
     expectInvalid();
-    rtp.video.packetization.codecName = "h264";
-    ++rtp.video.packetization.streamTimeBaseDenominator;
+    rtp.video.packetization = originalVideoPacketization;
+    auto changedVideoPayload = MediaScheduledRtpPacketizationPlan::create(
+        MediaStreamKind::Video, "h264", 1, 90'000,
+        originalVideoPacketization.payloadType() + 1,
+        originalVideoPacketization.maximumDatagramBytes());
+    EXPECT_TRUE(ctx, changedVideoPayload);
+    rtp.video.packetization = std::move(changedVideoPayload).value();
     expectInvalid();
-    --rtp.video.packetization.streamTimeBaseDenominator;
-    ++rtp.video.packetization.payloadType;
-    expectInvalid();
-    --rtp.video.packetization.payloadType;
+    rtp.video.packetization = originalVideoPacketization;
     ++rtp.video.ssrc;
     expectInvalid();
     --rtp.video.ssrc;
@@ -447,9 +460,16 @@ void testRealtimeAvSyncRuntimeProductRejectsIndependentMutations(TestContext& ct
     rtp.audio.senderReportInterval = MediaRunningTime::fromNanoseconds(0);
     expectInvalid();
     rtp.audio.senderReportInterval = reportInterval;
-    ++rtp.audio.packetization.payloadType;
+    const auto originalAudioPacketization = rtp.audio.packetization;
+    auto changedAudioPayload = MediaScheduledRtpPacketizationPlan::create(
+        MediaStreamKind::Audio, "aac", 1, 48'000,
+        originalAudioPacketization.payloadType() + 1,
+        originalAudioPacketization.maximumDatagramBytes(),
+        originalAudioPacketization.maximumAccessUnitSamples());
+    EXPECT_TRUE(ctx, changedAudioPayload);
+    rtp.audio.packetization = std::move(changedAudioPayload).value();
     expectInvalid();
-    --rtp.audio.packetization.payloadType;
+    rtp.audio.packetization = originalAudioPacketization;
     outer.videoOutput.writePacingEnabled = true;
     expectInvalid();
     outer.videoOutput.writePacingEnabled = false;
@@ -476,19 +496,37 @@ void testRealtimeAvSyncRuntimeProductRejectsIndependentMutations(TestContext& ct
         EXPECT_FALSE(ctx, MediaRealtimeAvSyncPlanningFactsResolver::resolve(
                               outer, runtime.synchronization));
     };
-    const auto decoderDelay = outer.audioPlan.decoderDelaySamples;
-    outer.audioPlan.decoderDelaySamples.reset();
+    const auto componentBounds = outer.avSyncComponentBounds;
+    outer.avSyncComponentBounds.reset();
     expectMissingFacts();
-    outer.audioPlan.decoderDelaySamples = decoderDelay;
+    outer.avSyncComponentBounds = componentBounds;
+    const auto decodeQueueSamples = outer.avSyncComponentBounds->decodeQueueSamples;
+    outer.avSyncComponentBounds->decodeQueueSamples = 0;
+    expectMissingFacts();
+    outer.avSyncComponentBounds->decodeQueueSamples = decodeQueueSamples;
     const auto maximumResamplerBlock =
-        outer.audioPlan.maximumResamplerOutputBlockSamples;
-    outer.audioPlan.maximumResamplerOutputBlockSamples.reset();
+        outer.avSyncComponentBounds->maximumResamplerOutputBlockSamples;
+    outer.avSyncComponentBounds->maximumResamplerOutputBlockSamples = 0;
     expectMissingFacts();
-    outer.audioPlan.maximumResamplerOutputBlockSamples = maximumResamplerBlock;
-    const auto packetCapacity = outer.queues.packet;
-    outer.queues.packet = 0;
-    expectMissingFacts();
-    outer.queues.packet = packetCapacity;
+    outer.avSyncComponentBounds->maximumResamplerOutputBlockSamples = maximumResamplerBlock;
+    const auto originalBounds = *outer.avSyncComponentBounds;
+    outer.avSyncComponentBounds = MediaRealtimeAvSyncComponentBounds{
+        17, 101, 103, 107, 109, 113, 127, 131, 137};
+    const auto independentFacts = MediaRealtimeAvSyncPlanningFactsResolver::resolve(
+        outer, runtime.synchronization);
+    EXPECT_TRUE(ctx, independentFacts);
+    if (independentFacts) {
+        EXPECT_EQ(ctx, *independentFacts.value().decoderDelaySamples, 17);
+        EXPECT_EQ(ctx, *independentFacts.value().decodeQueueSamples, 101);
+        EXPECT_EQ(ctx, *independentFacts.value().resampleQueueSamples, 103);
+        EXPECT_EQ(ctx, *independentFacts.value().encodeQueueSamples, 107);
+        EXPECT_EQ(ctx, *independentFacts.value().schedulerQueueSamples, 109);
+        EXPECT_EQ(ctx, *independentFacts.value().protocolBatchSamples, 113);
+        EXPECT_EQ(ctx, *independentFacts.value().mailboxDeliveryMarginSamples, 127);
+        EXPECT_EQ(ctx, *independentFacts.value().maximumResamplerOutputBlockSamples, 131);
+        EXPECT_EQ(ctx, *independentFacts.value().mailboxCapacity, std::size_t{137});
+    }
+    outer.avSyncComponentBounds = originalBounds;
     auto resolvedOutput = std::move(outer.audioPlan.resolvedOutput);
     outer.audioPlan.resolvedOutput.reset();
     expectMissingFacts();
@@ -501,7 +539,8 @@ void testRealtimeAvSyncRuntimeProductRejectsIndependentMutations(TestContext& ct
     const auto servoCommandLead =
         runtime.synchronization.audioServo.commandLeadNs;
     runtime.synchronization.audioServo.commandLeadNs.reset();
-    expectMissingFacts();
+    EXPECT_TRUE(ctx, MediaRealtimeAvSyncPlanningFactsResolver::resolve(
+                         outer, runtime.synchronization));
     runtime.synchronization.audioServo.commandLeadNs = servoCommandLead;
 
     outer.videoOutput.url =
@@ -536,7 +575,8 @@ MediaResolvedAudioOutputPlan resolvedAacOutput(MediaAudioProfile profile)
         "aac", profile, 48'000, 2, "stereo", "fltp", 128'000};
     MediaResolvedAudioRequest request;
     auto target = MediaResolvedAudioTargetDecision::create(source, request, {});
-    auto resolved = MediaResolvedAudioOutputPlan::create(target.value(), std::nullopt);
+    auto resolved = MediaResolvedAudioOutputPlan::create(
+        target.value(), std::nullopt, 1024);
     return std::move(resolved).value();
 }
 
@@ -582,6 +622,18 @@ void testRealtimePlannerProducesCompleteTsAvSyncRuntimeProduct(TestContext& ctx)
     auto& protocol = std::get<MediaProjectMpegTsRuntimeOutputPlan>(
         outer.avSyncRuntime->protocolOutput);
     protocol.url.clear();
+    EXPECT_FALSE(ctx,
+                 MediaRealtimeRtpTranscodePlanner::validatePlannedProduct(
+                     outer));
+    protocol.url = outer.muxedOutput.url;
+    auto changedMuxParameters = protocol.protocol.muxPlan().parameters();
+    changedMuxParameters.tableVersion = 1;
+    auto changedMux = MediaTsMuxPlan::create(changedMuxParameters);
+    EXPECT_TRUE(ctx, changedMux);
+    auto changedProtocol = MediaProjectMpegTsOutputPlan::accept(
+        protocol.protocol.audioSampleRate(), std::move(changedMux).value());
+    EXPECT_TRUE(ctx, changedProtocol);
+    protocol.protocol = std::move(changedProtocol).value();
     EXPECT_FALSE(ctx,
                  MediaRealtimeRtpTranscodePlanner::validatePlannedProduct(
                      outer));
@@ -723,7 +775,11 @@ void testAvSyncPlannerBuildsCompleteRtpContract(TestContext& ctx)
     EXPECT_EQ(ctx, *plan.rtp->videoOutput.cname, *plan.rtp->audioOutput.cname);
     EXPECT_TRUE(ctx, *plan.rtp->output.useSharedNtpEpoch);
     EXPECT_TRUE(ctx, plan.rtp->output.senderReportIntervalNs->nanoseconds() > 0);
-    EXPECT_TRUE(ctx, MediaAvSyncPlanValidator::validate(plan));
+    EXPECT_FALSE(ctx, plan.audioServo.commandLeadNs.has_value());
+    EXPECT_FALSE(ctx, plan.audioServo.compensationWindowNs.has_value());
+    EXPECT_FALSE(ctx, plan.audioServo.frequencyFilterTimeConstantNs.has_value());
+    EXPECT_TRUE(ctx, MediaAvSyncPlanValidator::validatePolicy(plan));
+    EXPECT_FALSE(ctx, MediaAvSyncPlanValidator::validate(plan));
 
     auto excessiveCapacity = avSyncRtpRequest();
     excessiveCapacity.parameters.queues.packet = 257;
@@ -839,7 +895,11 @@ void testAvSyncPlannerBuildsCompleteTsContract(TestContext& ctx)
     EXPECT_EQ(ctx, output.audioPid, std::uint16_t{0x0102});
     EXPECT_EQ(ctx, output.pcrPid, std::uint16_t{0x0101});
     EXPECT_EQ(ctx, plan.ts->outputMux->transportDecodeLead(), *plan.startup.outputLeadNs);
-    EXPECT_TRUE(ctx, MediaAvSyncPlanValidator::validate(plan));
+    EXPECT_FALSE(ctx, plan.audioServo.commandLeadNs.has_value());
+    EXPECT_FALSE(ctx, plan.audioServo.compensationWindowNs.has_value());
+    EXPECT_FALSE(ctx, plan.audioServo.frequencyFilterTimeConstantNs.has_value());
+    EXPECT_TRUE(ctx, MediaAvSyncPlanValidator::validatePolicy(plan));
+    EXPECT_FALSE(ctx, MediaAvSyncPlanValidator::validate(plan));
 }
 
 void testAvSyncPlannerRejectsSeparateRtpToTs(TestContext& ctx)
@@ -851,12 +911,23 @@ void testAvSyncPlannerRejectsSeparateRtpToTs(TestContext& ctx)
     if (!result) EXPECT_EQ(ctx, result.error().code, media::ErrorCode::Unsupported);
 }
 
+MediaAvSyncPlan finalizedAvSyncTestPlan(MediaAvSyncPlan plan)
+{
+    plan.audioServo.commandLeadNs =
+        MediaRunningTime::fromNanoseconds(1'500'000'000);
+    plan.audioServo.compensationWindowNs =
+        MediaRunningTime::fromNanoseconds(2'000'000'000);
+    plan.audioServo.frequencyFilterTimeConstantNs =
+        MediaRunningTime::fromNanoseconds(5'000'000'000);
+    return plan;
+}
+
 void testAvSyncValidatorRejectsMissingAndInconsistentFields(TestContext& ctx)
 {
     const auto result = MediaAvSyncPlanner::plan(avSyncRtpRequest());
     EXPECT_TRUE(ctx, result);
     if (!result) return;
-    const MediaAvSyncPlan complete = result.value();
+    const MediaAvSyncPlan complete = finalizedAvSyncTestPlan(result.value());
 
     auto expectInvalid = [&ctx](MediaAvSyncPlan plan) {
         const auto status = MediaAvSyncPlanValidator::validate(plan);
@@ -984,7 +1055,7 @@ void testAvSyncValidatorRejectsMissingAndInconsistentFields(TestContext& ctx)
         avSyncTsRequest(), &selectedTsProgram(), &resolvedOutput);
     EXPECT_TRUE(ctx, tsResult);
     if (!tsResult) return;
-    const MediaAvSyncPlan completeTs = tsResult.value();
+    const MediaAvSyncPlan completeTs = finalizedAvSyncTestPlan(tsResult.value());
 #define EXPECT_MISSING_TS(field)                 \
     do {                                         \
         MediaAvSyncPlan missing = completeTs;    \
@@ -1024,7 +1095,7 @@ void testAvSyncValidatorRejectsProtocolIdentifierBoundaries(TestContext& ctx)
         avSyncTsRequest(), &selectedTsProgram(), &resolvedOutput);
     EXPECT_TRUE(ctx, result);
     if (!result) return;
-    const MediaAvSyncPlan complete = result.value();
+    const MediaAvSyncPlan complete = finalizedAvSyncTestPlan(result.value());
     auto mutate = [&](const char* name, auto mutation) {
         MediaAvSyncPlan plan = complete;
         mutation(*plan.ts);
@@ -1049,7 +1120,7 @@ void testAvSyncValidatorRejectsIsolatedNumericAndOrderingInvariants(TestContext&
     EXPECT_TRUE(ctx, tsResult);
     if (!rtpResult || !tsResult) return;
 
-    const MediaAvSyncPlan rtp = rtpResult.value();
+    const MediaAvSyncPlan rtp = finalizedAvSyncTestPlan(rtpResult.value());
     auto rejectRtp = [&](const char* name, auto mutation) {
         MediaAvSyncPlan plan = rtp;
         mutation(plan);
@@ -1149,6 +1220,8 @@ void testResolvedAudioPlannerMatrix(TestContext& ctx)
         value.channelLayout = channels == 1 ? "mono" : "stereo";
         value.sampleFormat = "fltp";
         value.bitrateBitsPerSecond = 128'000;
+        value.decoderDelaySamples = 0;
+        value.maximumAccessUnitSamples = 1024;
         return value;
     };
     const auto he = MediaAudioProfile::fromCodecProfile("aac", "HE-AAC");
@@ -1260,13 +1333,13 @@ void testResolvedAudioPlannerMatrix(TestContext& ctx)
     if (!encoderTarget) return;
     EXPECT_FALSE(ctx, MediaResolvedAudioOutputPlan::create(
         encoderTarget.value(),
-        MediaSelectedAudioEncoder{"aac", "fltp", {44'100}, {}}));
+        MediaSelectedAudioEncoder{"aac", "fltp", {44'100}, {}}, std::nullopt));
     EXPECT_FALSE(ctx, MediaResolvedAudioOutputPlan::create(
         encoderTarget.value(),
-        MediaSelectedAudioEncoder{"aac", "fltp", {48'000}, {AV_PROFILE_AAC_HE}}));
+        MediaSelectedAudioEncoder{"aac", "fltp", {48'000}, {AV_PROFILE_AAC_HE}}, std::nullopt));
     EXPECT_FALSE(ctx, MediaResolvedAudioOutputPlan::create(
         encoderTarget.value(),
-        MediaSelectedAudioEncoder{"aac", "fltp", {48'000}, {}}));
+        MediaSelectedAudioEncoder{"aac", "fltp", {48'000}, {}}, std::nullopt));
 
     MediaResolvedAudioSource aacWithoutProfile{
         "aac", MediaAudioProfile::notApplicable(), 48'000, 2, "stereo", "fltp", 128'000};
@@ -1291,7 +1364,7 @@ void testResolvedAudioPlannerMatrix(TestContext& ctx)
         EXPECT_FALSE(ctx, MediaResolvedAudioOutputPlan::create(
             copyTarget.value(),
             MediaSelectedAudioEncoder{
-                "aac", "fltp", {48'000}, {AV_PROFILE_AAC_LOW}}));
+                "aac", "fltp", {48'000}, {AV_PROFILE_AAC_LOW}}, 1024));
     }
 }
 
@@ -1369,6 +1442,8 @@ int main()
     source.channelLayout = "stereo";
     source.sampleFormat = "fltp";
     source.bitrateBitsPerSecond = 320000;
+    source.decoderDelaySamples = 0;
+    source.maximumAccessUnitSamples = 1024;
 
     MediaAudioPipelinePlannerOptions copyOptions(true);
     copyOptions.requestedCodecName = "aac";

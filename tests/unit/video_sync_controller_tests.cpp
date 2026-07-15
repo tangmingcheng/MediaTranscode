@@ -41,6 +41,9 @@ MediaAvSyncPlan completePlan(bool allowRepeat = true)
     auto planned = MediaAvSyncPlanner::plan(avSyncRequest());
     if (!planned) return {};
     MediaAvSyncPlan plan = std::move(planned).value();
+    plan.audioServo.commandLeadNs = ms(1'500);
+    plan.audioServo.compensationWindowNs = ms(2'000);
+    plan.audioServo.frequencyFilterTimeConstantNs = ms(5'000);
     plan.video.allowRecoveryRepeat = allowRepeat;
     plan.video.maximumConsecutiveRecoveryActions = 2;
     return plan;

@@ -22,7 +22,8 @@ class MediaResolvedAudioOutputPlan final {
 public:
     static ::media::Result<MediaResolvedAudioOutputPlan> create(
         const MediaResolvedAudioTargetDecision& target,
-        const std::optional<MediaSelectedAudioEncoder>& selectedEncoder);
+        const std::optional<MediaSelectedAudioEncoder>& selectedEncoder,
+        std::optional<int> copiedAccessUnitSamples);
 
     const std::string& codecName() const noexcept;
     const MediaAudioProfile& profile() const noexcept;

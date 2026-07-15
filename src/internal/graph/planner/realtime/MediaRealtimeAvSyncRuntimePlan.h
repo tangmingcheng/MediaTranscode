@@ -7,6 +7,7 @@
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlan.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlan.h"
+#include "internal/graph/planner/avsync/MediaAvSyncOutputAdapterKind.h"
 #include "internal/graph/planner/realtime/MediaProjectMpegTsOutputPlan.h"
 #include "internal/graph/planner/realtime/MediaScheduledRtpOutputPlan.h"
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
@@ -16,11 +17,6 @@
 #include <variant>
 
 namespace media::ffmpeg::graph {
-
-enum class MediaAvSyncOutputAdapterKind : std::uint8_t {
-    ScheduledSeparateRtp = 0,
-    ProjectMpegTs = 1
-};
 
 struct MediaAudioCorrectionReachabilityPlan final {
     int outputSampleRate;

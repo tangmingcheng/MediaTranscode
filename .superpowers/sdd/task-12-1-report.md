@@ -31,3 +31,22 @@
 
 - This planner-product task does not provide the later Task 12 production runtime wiring or hardware playback acceptance; those remain gated by the subsequent design sequence.
 - Legacy pacing/barrier fields still physically exist for non-synchronized paths. Synchronized validation requires them to remain inert until the later atomic authority-removal task.
+
+## Independent review remediation
+
+- RED: under `VsDevCmd.bat`, the planner target built and the planner executable failed at `tests/unit/test_planner.cpp:293` because removing the mandatory synchronized runtime product was still accepted.
+- GREEN: synchronized A/V products now reject an absent runtime product; video-only products remain explicitly non-synchronized.
+- Decoder, resampler, queue, mailbox, and protocol bounds are published as typed planning facts. The resolver only validates and transfers them. A regression supplies distinct values for every bound and verifies none are substituted.
+- Copy-path codec frame timing is supplied by the selected input capability; the production AAC `1024` codec-name fallback was removed. Raw RTP uses the parsed access-unit duration, while prepared MPEG-TS requires codec parameters to publish frame size and initial padding.
+- RTP packetization is immutable, non-default-constructible, and created by one codec-to-packetization factory. Runtime planning no longer passes a packetization-mode constant.
+- `MediaAvSyncPlanner` emits an explicitly incomplete policy. Correction lead, compensation window, and frequency filter are finalized once from reachability facts before the full validator accepts the runtime plan.
+- RTP validation now covers typed local/remote addressing, address family, RTP/RTCP ports, local-port policy, send buffer, datagram size, and I/O behavior. MPEG-TS validation compares the complete accepted mux parameter product.
+- `MediaAvSyncOutputAdapterKind` moved to a neutral plan header, removing the transition planner's dependency on the full runtime product.
+
+### Review remediation verification
+
+- `cmd.exe /d /s /c '"D:\VisualStudio2026\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 && cmake --build out\build\x64-debug --config Debug --target media_transcode_planner_tests && out\build\x64-debug\media_transcode_planner_tests.exe'` - exit 0.
+- `cmd.exe /d /s /c '"D:\VisualStudio2026\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 && cmake --build out\build\x64-debug --config Debug --clean-first --target all'` - exit 0; 389 files cleaned and 389 build actions completed.
+- `out\build\x64-debug\media_transcode_planner_tests.exe` - exit 0.
+- `out\build\x64-debug\media_transcode_builder_tests.exe` - exit 0.
+- `ctest --test-dir out\build\x64-debug -C Debug --output-on-failure -L deterministic --timeout 60` - 8/8 passed, 0 failed, 12.87 seconds.

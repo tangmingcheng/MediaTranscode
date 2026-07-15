@@ -19,7 +19,10 @@ namespace media::ffmpeg::graph {
             ::media::ErrorInfo::invalidArgument(
                 std::string("Invalid synchronized runtime product: ") + field));
     };
-    if (!outer.avSyncRuntime) return ::media::Status::success();
+    if (!outer.avSyncRuntime) {
+        if (outer.audioPlan.enabled) return invalid("required runtime product is absent");
+        return ::media::Status::success();
+    }
     const auto& runtime = *outer.avSyncRuntime;
     if (runtime.groupKey.value() != "realtime.av" ||
         !MediaAvSyncPlanValidator::validate(runtime.synchronization)) {
@@ -148,19 +151,32 @@ namespace media::ffmpeg::graph {
             return sync.payloadType && sync.clockRate && sync.ssrc &&
                 sync.baseTimestamp && sync.cname &&
                 candidate.stream == stream &&
-                candidate.packetization.streamKind ==
+                candidate.packetization.streamKind() ==
                     (stream == MediaScheduledStream::Video
                          ? MediaStreamKind::Video
                          : MediaStreamKind::Audio) &&
-                !candidate.packetization.codecName.empty() &&
-                candidate.packetization.streamTimeBaseNumerator == 1 &&
-                candidate.packetization.streamTimeBaseDenominator ==
+                !candidate.packetization.codecName().empty() &&
+                candidate.packetization.streamTimeBaseNumerator() == 1 &&
+                candidate.packetization.streamTimeBaseDenominator() ==
                     *sync.clockRate &&
-                candidate.packetization.packetizationMode == mode &&
-                candidate.packetization.payloadType == *sync.payloadType &&
-                candidate.packetization.maximumDatagramBytes > 0 &&
+                candidate.packetization.packetizationMode() == mode &&
+                candidate.packetization.payloadType() == *sync.payloadType &&
+                candidate.packetization.maximumDatagramBytes() > 0 &&
                 candidate.transport.maximumDatagramBytes() ==
-                    candidate.packetization.maximumDatagramBytes &&
+                    candidate.packetization.maximumDatagramBytes() &&
+                !candidate.transport.localNumericAddress().empty() &&
+                !candidate.transport.remoteRtpEndpoint().numericAddress().empty() &&
+                !candidate.transport.remoteRtcpEndpoint().numericAddress().empty() &&
+                candidate.transport.remoteRtpEndpoint().port() > 0 &&
+                candidate.transport.remoteRtcpEndpoint().port() ==
+                    candidate.transport.remoteRtpEndpoint().port() + 1 &&
+                candidate.transport.localPortPolicy().kind() ==
+                    MediaRtpUdpLocalPortPolicyKind::OsAssignedIndependent &&
+                !candidate.transport.localPortPolicy().rtpPort() &&
+                !candidate.transport.localPortPolicy().rtcpPort() &&
+                candidate.transport.sendBufferBytes() > 0 &&
+                candidate.transport.ioBehavior() ==
+                    MediaUdpSenderIoBehavior::NonBlockingRejectOnPressure &&
                 candidate.ssrc == *sync.ssrc &&
                 candidate.baseTimestamp == *sync.baseTimestamp &&
                 candidate.clockRate == *sync.clockRate &&
@@ -196,7 +212,11 @@ namespace media::ffmpeg::graph {
         if (output.url.empty() ||
             output.resourceKind != MediaOutputResourceKind::ByteSink ||
             output.muxSessionKind != MediaMuxSessionKind::ProjectMpegTs ||
-            output.protocol.audioSampleRate() != correction.outputSampleRate) {
+            output.protocol.audioSampleRate() != correction.outputSampleRate ||
+            !runtime.synchronization.ts ||
+            !runtime.synchronization.ts->outputMux ||
+            output.protocol.muxPlan().parameters() !=
+                runtime.synchronization.ts->outputMux->parameters()) {
             return invalid("MPEG-TS protocol output");
         }
     } else {

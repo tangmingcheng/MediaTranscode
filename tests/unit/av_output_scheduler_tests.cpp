@@ -101,7 +101,11 @@ MediaAvSyncPlan completePlan()
     request.avSyncStartup.maximumAudioUnitBytes = 1024 * 1024;
     request.avSyncStartup.maximumGap = ms(40);
     auto plan = MediaAvSyncPlanner::plan(request);
-    return std::move(plan).value();
+    auto finalized = std::move(plan).value();
+    finalized.audioServo.commandLeadNs = ms(1'500);
+    finalized.audioServo.compensationWindowNs = ms(2'000);
+    finalized.audioServo.frequencyFilterTimeConstantNs = ms(5'000);
+    return finalized;
 }
 
 template <typename Predicate>

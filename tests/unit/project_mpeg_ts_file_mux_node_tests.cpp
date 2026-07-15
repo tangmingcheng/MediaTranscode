@@ -114,7 +114,11 @@ MediaAvSyncPlan avSyncPlan()
     request.avSyncStartup.maximumVideoUnitBytes = 4 * 1024 * 1024;
     request.avSyncStartup.maximumAudioUnitBytes = 1024 * 1024;
     request.avSyncStartup.maximumGap = ms(40);
-    return MediaAvSyncPlanner::plan(request).value();
+    auto plan = MediaAvSyncPlanner::plan(request).value();
+    plan.audioServo.commandLeadNs = ms(1'500);
+    plan.audioServo.compensationWindowNs = ms(2'000);
+    plan.audioServo.frequencyFilterTimeConstantNs = ms(5'000);
+    return plan;
 }
 
 MediaBufferRef codecParameters(MediaStreamKind kind)

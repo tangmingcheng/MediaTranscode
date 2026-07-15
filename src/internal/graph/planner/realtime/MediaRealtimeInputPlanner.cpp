@@ -133,6 +133,17 @@ constexpr std::uint64_t TsMaximumPacketPositionRegressionBytes = 1024 * 1024;
         if (!profile) return ::media::Result<MediaPreparedRealtimeInputScan>::failure(profile.error());
         result.streams.audio.profile = profile.value();
         result.streams.audio.bitrateBitsPerSecond = audio->format.codec.bitrate;
+        auto codecParameters = audio->cloneCodecParameters();
+        if (!codecParameters || codecParameters.value()->frame_size <= 0 ||
+            codecParameters.value()->initial_padding < 0) {
+            return ::media::Result<MediaPreparedRealtimeInputScan>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "selected MPEG-TS audio stream does not publish decoder timing bounds"));
+        }
+        result.streams.audio.decoderDelaySamples =
+            codecParameters.value()->initial_padding;
+        result.streams.audio.maximumAccessUnitSamples =
+            codecParameters.value()->frame_size;
     }
     auto prepared = MediaPreparedRealtimeInput::createMpegTs(std::move(session));
     if (!prepared) return ::media::Result<MediaPreparedRealtimeInputScan>::failure(prepared.error());
@@ -302,6 +313,11 @@ void fillNodePlan(
         audio.bitrateBitsPerSecond = request.input.audioRtp.bitrateKbps
             ? static_cast<int64_t>(*request.input.audioRtp.bitrateKbps) * 1000
             : 0;
+        audio.decoderDelaySamples = 0;
+        if (audioDescriptor.value().accessUnitDurationRtpTicks > 0) {
+            audio.maximumAccessUnitSamples =
+                audioDescriptor.value().accessUnitDurationRtpTicks;
+        }
         result.audio = std::move(audio);
         result.audioTransport = transportPlan(
             audioEndpoint.value(), request.input.audioRtp, audioDescriptor.value(),

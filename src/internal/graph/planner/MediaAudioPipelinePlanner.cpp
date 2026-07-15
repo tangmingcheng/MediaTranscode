@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <limits>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -133,7 +134,11 @@ MediaResolvedAudioSource resolvedSource(const MediaInputAudioStreamInfo& input)
         if (!selected) return ::media::Result<MediaAudioPipelinePlan>::failure(selected.error());
         encoder = std::move(selected).value();
     }
-    auto output = MediaResolvedAudioOutputPlan::create(target.value(), encoder);
+    auto output = MediaResolvedAudioOutputPlan::create(
+        target.value(), encoder,
+        target.value().branchMode() == MediaBranchMode::CopyPacket
+            ? inputInfo.maximumAccessUnitSamples
+            : std::nullopt);
     if (!output) return ::media::Result<MediaAudioPipelinePlan>::failure(output.error());
 
     plan.enabled = true;
@@ -144,10 +149,18 @@ MediaResolvedAudioSource resolvedSource(const MediaInputAudioStreamInfo& input)
     plan.reason = plan.branchMode == MediaBranchMode::CopyPacket
         ? "copy_source_matches_resolved_output" : "transcode_source_differs_from_resolved_output";
     plan.resolvedOutput = std::move(output).value();
-    if (plan.resolvedOutput->codecFrameSamples() > 0) {
-        plan.decoderDelaySamples = plan.resolvedOutput->codecFrameSamples();
-        plan.maximumResamplerOutputBlockSamples =
-            plan.resolvedOutput->codecFrameSamples();
+    if (inputInfo.decoderDelaySamples && inputInfo.maximumAccessUnitSamples &&
+        *inputInfo.decoderDelaySamples >= 0 && *inputInfo.maximumAccessUnitSamples > 0) {
+        plan.decoderTiming = MediaAudioPipelinePlan::DecoderTiming{
+            *inputInfo.decoderDelaySamples, *inputInfo.maximumAccessUnitSamples};
+        const auto scaled =
+            (static_cast<std::int64_t>(*inputInfo.maximumAccessUnitSamples) *
+                 plan.resolvedOutput->sampleRate() + inputInfo.sampleRate - 1) /
+            inputInfo.sampleRate;
+        if (scaled > 0 && scaled <= std::numeric_limits<int>::max()) {
+            plan.resamplerTiming = MediaAudioPipelinePlan::ResamplerTiming{
+                static_cast<int>(scaled)};
+        }
     }
     return ::media::Result<MediaAudioPipelinePlan>::success(std::move(plan));
 }

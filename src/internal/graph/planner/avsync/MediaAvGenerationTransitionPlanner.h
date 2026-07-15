@@ -1,7 +1,7 @@
 #pragma once
 
 #include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlan.h"
-#include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
+#include "internal/graph/planner/avsync/MediaAvSyncOutputAdapterKind.h"
 
 namespace media::ffmpeg::graph {
 
