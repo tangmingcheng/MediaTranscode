@@ -1031,6 +1031,12 @@ void testRealtimeOutputPolicyInitializesEveryMuxExpectation(TestContext& ctx)
     EXPECT_TRUE(ctx, muxed.videoMux.expectAudio);
     EXPECT_FALSE(ctx, muxed.audioMux.expectVideo);
     EXPECT_FALSE(ctx, muxed.audioMux.expectAudio);
+    EXPECT_TRUE(ctx, muxed.muxedOutput.muxSessionKind.has_value());
+    if (muxed.muxedOutput.muxSessionKind) {
+        EXPECT_EQ(ctx,
+                  *muxed.muxedOutput.muxSessionKind,
+                  MediaMuxSessionKind::FFmpegFile);
+    }
 }
 
 void testRtpMuxStateMachineRejectsIllegalTransitions(TestContext& ctx)

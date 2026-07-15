@@ -4,6 +4,7 @@
 #include "internal/graph/model/MediaRealtimeEdgePolicySet.h"
 #include "internal/graph/model/MediaIpAddressFamily.h"
 #include "internal/graph/model/MediaThreadingPolicy.h"
+#include "internal/graph/model/MediaMuxSessionKind.h"
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/planner/MediaPipelinePlanner.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlan.h"
@@ -104,6 +105,7 @@ struct MediaRealtimeMuxedOutputPlan {
     std::string url;
     std::string format;
     std::string mediaId;
+    std::optional<MediaMuxSessionKind> muxSessionKind;
 };
 
 struct MediaRealtimeSdpWriterPlan {

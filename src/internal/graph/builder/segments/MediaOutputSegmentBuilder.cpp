@@ -25,6 +25,20 @@ const char* boolOption(bool value) noexcept
         return ::media::Result<FileOutputSegment>::failure(
             ::media::ErrorInfo::invalidArgument("MediaOutputSegmentBuilder metadata queue capacity must be greater than 0"));
     }
+    if (!options.muxSessionKind) {
+        return ::media::Result<FileOutputSegment>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MediaOutputSegmentBuilder requires muxSessionKind"));
+    }
+    if (!options.expectVideo && !options.expectAudio) {
+        return ::media::Result<FileOutputSegment>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MediaOutputSegmentBuilder requires at least one mux stream"));
+    }
+    auto sessionKind = mediaMuxSessionKindOptionValue(*options.muxSessionKind);
+    if (!sessionKind) {
+        return ::media::Result<FileOutputSegment>::failure(sessionKind.error());
+    }
     FileOutputSegment segment;
     segment.fileOutput = graph.addNode(MediaNodeKind::FileOutput,
                                        options.prefix + ".output",
@@ -46,6 +60,14 @@ const char* boolOption(bool value) noexcept
                                                                    segment.mux,
                                                                    MediaTranscodeOptionKey::MuxExpectVideo,
                                                                    boolOption(options.expectVideo)); !status) {
+        return ::media::Result<FileOutputSegment>::failure(status.error());
+    }
+    if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
+            graph,
+            owner,
+            segment.mux,
+            MediaTranscodeOptionKey::MuxSessionKind,
+            sessionKind.value()); !status) {
         return ::media::Result<FileOutputSegment>::failure(status.error());
     }
     if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph,

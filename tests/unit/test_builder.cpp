@@ -6,6 +6,9 @@
 #include "internal/graph/builder/segments/MediaVideoPacketCopyBranchBuilder.h"
 #include "internal/graph/builder/segments/MediaAudioBranchSegmentBuilder.h"
 #include "internal/graph/builder/segments/MediaAudioEncodeBranchBuilder.h"
+#include "internal/graph/builder/segments/MediaOutputSegmentBuilder.h"
+#include "internal/graph/model/MediaMuxSessionKind.h"
+#include "internal/graph/planner/local/MediaLocalFileOutputPlanner.h"
 
 #include <optional>
 #include <type_traits>
@@ -123,6 +126,82 @@ void testAudioCorrectionBuilderContract(TestContext& ctx)
     }
 }
 
+void testFileMuxSessionKindIsExplicit(TestContext& ctx)
+{
+    FileOutputSegmentOptions missing;
+    missing.outputUrl = "output.mp4";
+    missing.queues.metadata = 1;
+    MediaGraph missingGraph;
+    EXPECT_FALSE(ctx, MediaOutputSegmentBuilder::buildFileMuxOutput(missingGraph, missing));
+
+    FileOutputSegmentOptions invalid = missing;
+    invalid.muxSessionKind = static_cast<MediaMuxSessionKind>(255);
+    MediaGraph invalidGraph;
+    EXPECT_FALSE(ctx, MediaOutputSegmentBuilder::buildFileMuxOutput(invalidGraph, invalid));
+
+    FileOutputSegmentOptions zeroStreams = missing;
+    zeroStreams.muxSessionKind = MediaMuxSessionKind::FFmpegFile;
+    MediaGraph zeroStreamsGraph;
+    EXPECT_FALSE(ctx, MediaOutputSegmentBuilder::buildFileMuxOutput(
+        zeroStreamsGraph, zeroStreams));
+
+    FileOutputSegmentOptions explicitFfmpeg = missing;
+    explicitFfmpeg.muxSessionKind = MediaMuxSessionKind::FFmpegFile;
+    explicitFfmpeg.expectVideo = true;
+    MediaGraph graph;
+    auto built = MediaOutputSegmentBuilder::buildFileMuxOutput(graph, explicitFfmpeg);
+    EXPECT_TRUE(ctx, built);
+    if (built) {
+        const MediaNode* mux = graph.findNode(built.value().mux);
+        EXPECT_TRUE(ctx, mux != nullptr);
+        if (mux) {
+            EXPECT_EQ(ctx,
+                      mux->options.value(MediaTranscodeOptionKey::MuxSessionKind),
+                      std::string("ffmpeg_file"));
+        }
+    }
+}
+
+void testLocalOutputPlannerOwnsMuxSessionDecision(TestContext& ctx)
+{
+    EXPECT_FALSE(ctx, MediaLocalFileOutputPlanner::plan({}, "mp4"));
+    auto plan = MediaLocalFileOutputPlanner::plan("output.mp4", "mp4");
+    EXPECT_TRUE(ctx, plan);
+    if (plan) {
+        EXPECT_TRUE(ctx, plan.value().muxSessionKind.has_value());
+        if (plan.value().muxSessionKind) {
+            EXPECT_EQ(ctx,
+                      *plan.value().muxSessionKind,
+                      MediaMuxSessionKind::FFmpegFile);
+        }
+    }
+}
+
+void testMuxSessionKindOptionMappingFailsClosed(TestContext& ctx)
+{
+    auto ffmpeg = mediaMuxSessionKindOptionValue(MediaMuxSessionKind::FFmpegFile);
+    EXPECT_TRUE(ctx, ffmpeg);
+    if (ffmpeg) EXPECT_EQ(ctx, ffmpeg.value(), std::string("ffmpeg_file"));
+    auto project = mediaMuxSessionKindOptionValue(MediaMuxSessionKind::ProjectMpegTs);
+    EXPECT_TRUE(ctx, project);
+    if (project) EXPECT_EQ(ctx, project.value(), std::string("project_mpegts"));
+    EXPECT_FALSE(ctx, mediaMuxSessionKindOptionValue(
+        static_cast<MediaMuxSessionKind>(255)));
+
+    auto parsedFfmpeg = parseMediaMuxSessionKindOption("ffmpeg_file");
+    EXPECT_TRUE(ctx, parsedFfmpeg);
+    if (parsedFfmpeg) {
+        EXPECT_EQ(ctx, parsedFfmpeg.value(), MediaMuxSessionKind::FFmpegFile);
+    }
+    auto parsedProject = parseMediaMuxSessionKindOption("project_mpegts");
+    EXPECT_TRUE(ctx, parsedProject);
+    if (parsedProject) {
+        EXPECT_EQ(ctx, parsedProject.value(), MediaMuxSessionKind::ProjectMpegTs);
+    }
+    EXPECT_FALSE(ctx, parseMediaMuxSessionKindOption(""));
+    EXPECT_FALSE(ctx, parseMediaMuxSessionKindOption("unknown"));
+}
+
 } // namespace
 
 int main()
@@ -159,5 +238,8 @@ int main()
     EXPECT_FALSE(ctx, audioEncode.correctionMode.has_value());
     EXPECT_FALSE(ctx, audioEncode.correctionGeneration.has_value());
     testAudioCorrectionBuilderContract(ctx);
+    testFileMuxSessionKindIsExplicit(ctx);
+    testLocalOutputPlannerOwnsMuxSessionDecision(ctx);
+    testMuxSessionKindOptionMappingFailsClosed(ctx);
     return ctx.failures == 0 ? 0 : 1;
 }

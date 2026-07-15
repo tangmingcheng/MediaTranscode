@@ -2,9 +2,11 @@
 
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
+#include "internal/graph/model/MediaMuxSessionKind.h"
 #include "media_transcode/Result.h"
 
 #include <string>
+#include <optional>
 
 namespace media::ffmpeg::graph {
 
@@ -14,6 +16,7 @@ struct FileOutputSegmentOptions {
     std::string outputFormat;
     bool expectVideo = false;
     bool expectAudio = false;
+    std::optional<MediaMuxSessionKind> muxSessionKind;
     MediaGraphQueueParameters queues;
 };
 

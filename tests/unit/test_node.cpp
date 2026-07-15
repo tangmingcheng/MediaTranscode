@@ -55,6 +55,7 @@ void runMpegTsOutputSerializerTests(TestContext& ctx);
 void runMpegTsAccessUnitFramerTests(TestContext& ctx);
 void runMpegTsOutputPacketizerTests(TestContext& ctx);
 void runMpegTsOutputSessionTests(TestContext& ctx);
+void runFileMuxSessionTests(TestContext& ctx);
 
 namespace {
 
@@ -1380,6 +1381,7 @@ int main()
     runMpegTsAccessUnitFramerTests(ctx);
     runMpegTsOutputPacketizerTests(ctx);
     runMpegTsOutputSessionTests(ctx);
+    runFileMuxSessionTests(ctx);
     testAudioEncodeFixedFrameStateMachine(ctx);
     testRtpClockGroupRejectsStaleCrossPortEvidence(ctx);
     return ctx.failures == 0 ? 0 : 1;

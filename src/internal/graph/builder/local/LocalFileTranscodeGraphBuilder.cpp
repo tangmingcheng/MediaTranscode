@@ -9,6 +9,7 @@
 #include "internal/graph/builder/segments/MediaVideoBranchSegmentBuilder.h"
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/planner/MediaPipelinePlanner.h"
+#include "internal/graph/planner/local/MediaLocalFileOutputPlanner.h"
 
 #include <utility>
 
@@ -80,6 +81,12 @@ bool branchEnabled(const MediaAudioPipelinePlan& plan) noexcept
     }
     MediaAudioPipelinePlan audioPlan = std::move(plannedAudio).value();
 
+    auto outputPlan = MediaLocalFileOutputPlanner::plan(
+        options.outputUrl, options.outputFormat);
+    if (!outputPlan) {
+        return ::media::Result<MediaGraph>::failure(outputPlan.error());
+    }
+
     const MediaGraphQueueParameters& queues = options.parameters.queues;
     const MediaRealtimeEdgePolicySet edgePolicies = MediaGraphBuildSupport::blockingEdgePolicySet(queues);
 
@@ -106,10 +113,11 @@ bool branchEnabled(const MediaAudioPipelinePlan& plan) noexcept
 
     FileOutputSegmentOptions outputOptions;
     outputOptions.prefix = "local.file";
-    outputOptions.outputUrl = options.outputUrl;
-    outputOptions.outputFormat = options.outputFormat;
+    outputOptions.outputUrl = outputPlan.value().url;
+    outputOptions.outputFormat = outputPlan.value().format;
     outputOptions.expectVideo = branchEnabled(videoPlan);
     outputOptions.expectAudio = branchEnabled(audioPlan);
+    outputOptions.muxSessionKind = outputPlan.value().muxSessionKind;
     outputOptions.queues = queues;
     auto output = MediaOutputSegmentBuilder::buildFileMuxOutput(graph, outputOptions);
     if (!output) {

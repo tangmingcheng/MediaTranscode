@@ -345,6 +345,12 @@ bool separateRtpOutput(const MediaRealtimeRtpTranscodePlan& plan) noexcept
         outputOptions.outputFormat = plan.muxedOutput.format;
         outputOptions.expectVideo = plan.videoMux.expectVideo;
         outputOptions.expectAudio = plan.videoMux.expectAudio;
+        if (!plan.muxedOutput.muxSessionKind) {
+            return ::media::Result<MediaGraph>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "realtime muxed output requires planner-selected mux session kind"));
+        }
+        outputOptions.muxSessionKind = plan.muxedOutput.muxSessionKind;
         outputOptions.queues = plan.queues;
         auto output = MediaOutputSegmentBuilder::buildFileMuxOutput(graph, outputOptions);
         if (!output) {
