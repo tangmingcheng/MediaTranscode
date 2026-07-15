@@ -218,6 +218,13 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
     media_transcode_configure_test(media_transcode_runtime_tests)
     media_transcode_register_test(media_transcode_runtime_tests "runtime;deterministic")
 
+    add_executable(media_transcode_av_generation_transition_tests
+        tests/unit/av_generation_transition_tests.cpp
+    )
+    media_transcode_configure_test(media_transcode_av_generation_transition_tests)
+    media_transcode_register_test(
+        media_transcode_av_generation_transition_tests "runtime;deterministic")
+
     add_executable(media_transcode_node_tests
         tests/unit/test_node.cpp
         tests/unit/audio_swr_compensation_executor_tests.cpp
