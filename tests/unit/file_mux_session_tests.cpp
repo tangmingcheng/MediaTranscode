@@ -134,7 +134,7 @@ struct FileMuxHarness final {
                             MediaEdgeKind::Metadata, MediaPayloadKind::Unknown);
         graph.addOutputPort(packetSource, "out", MediaStreamKind::Video,
                             MediaEdgeKind::EncodedPacket, MediaPayloadKind::Unknown);
-        graph.addInputPort(mux, "format", MediaStreamKind::Metadata,
+        graph.addInputPort(mux, "resource", MediaStreamKind::Metadata,
                            MediaEdgeKind::Metadata, MediaPayloadKind::Unknown);
         graph.addInputPort(mux, "codec", MediaStreamKind::Any,
                            MediaEdgeKind::Metadata, MediaPayloadKind::Unknown, true, true);
@@ -144,7 +144,7 @@ struct FileMuxHarness final {
         policy.queuePolicy.bounded = true;
         policy.queuePolicy.capacity = 8;
         policy.queuePolicy.allowFlushControlBypass = true;
-        graph.connect(resourceSource, "out", mux, "format", "resource", policy);
+        graph.connect(resourceSource, "out", mux, "resource", "resource", policy);
         graph.connect(configSource, "out", mux, "codec", "config", policy);
         graph.connect(packetSource, "out", mux, "packet", "packet", policy);
         EXPECT_TRUE(ctx, execution.compile(graph));
@@ -173,9 +173,7 @@ void testFactoryFailsClosed(TestContext& ctx)
     options.set(MediaTranscodeOptionKey::MuxSessionKind, "unknown");
     EXPECT_FALSE(ctx, factory.create(options));
     options.set(MediaTranscodeOptionKey::MuxSessionKind, "project_mpegts");
-    auto unsupported = factory.create(options);
-    EXPECT_FALSE(ctx, unsupported);
-    if (!unsupported) EXPECT_EQ(ctx, unsupported.error().code, ::media::ErrorCode::Unsupported);
+    EXPECT_FALSE(ctx, factory.create(options));
 
     options.set(MediaTranscodeOptionKey::MuxSessionKind, "ffmpeg_file");
     EXPECT_FALSE(ctx, factory.create(options));
@@ -323,7 +321,7 @@ void testNodeDelegatesLifecycleInOrder(TestContext& ctx)
 {
     FileMuxHarness harness;
     if (!harness.initialize(ctx)) return;
-    EXPECT_TRUE(ctx, harness.push("format", testBuffer(MediaStreamKind::Metadata)));
+    EXPECT_TRUE(ctx, harness.push("resource", testBuffer(MediaStreamKind::Metadata)));
     EXPECT_TRUE(ctx, harness.runtime->process(harness.execution));
     EXPECT_TRUE(ctx, harness.push("codec", testBuffer(MediaStreamKind::Video)));
     EXPECT_TRUE(ctx, harness.runtime->process(harness.execution));
@@ -333,7 +331,7 @@ void testNodeDelegatesLifecycleInOrder(TestContext& ctx)
     EXPECT_TRUE(ctx, flush);
     if (flush) EXPECT_TRUE(ctx, harness.push("packet", std::move(flush).value()));
     EXPECT_TRUE(ctx, harness.runtime->process(harness.execution));
-    harness.close("format");
+    harness.close("resource");
     harness.close("codec");
     auto eof = FFmpegBufferFactory::makeEof(MediaStreamKind::Control);
     EXPECT_TRUE(ctx, eof);
@@ -386,7 +384,7 @@ void testNodeDefersFinishUntilMetadataInputsClose(TestContext& ctx)
     EXPECT_TRUE(ctx, harness.trace->calls.empty() ||
         harness.trace->calls.back() != "finish");
 
-    harness.close("format");
+    harness.close("resource");
     harness.close("codec");
     auto allFinished = harness.runtime->process(harness.execution);
     EXPECT_TRUE(ctx, allFinished);

@@ -231,7 +231,12 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
         tests/unit/mpeg_ts_access_unit_framer_tests.cpp
         tests/unit/mpeg_ts_output_packetizer_tests.cpp
         tests/unit/mpeg_ts_output_session_tests.cpp
+        tests/unit/mpeg_ts_mux_runtime_buffer_tests.cpp
+        tests/unit/mpeg_ts_ffmpeg_config_materializer_tests.cpp
+        tests/unit/project_mpeg_ts_mux_session_adapter_tests.cpp
+        tests/unit/project_mpeg_ts_file_mux_node_tests.cpp
         tests/unit/file_mux_session_tests.cpp
+        tests/unit/file_output_resource_tests.cpp
         tests/unit/fixtures/MediaTsPesTimestampInspector.cpp
         tests/unit/output_byte_sink_tests.cpp
         tests/unit/rtp_depacketizer_tests.cpp

@@ -150,6 +150,7 @@ inline constexpr char PlannedFilter[] = "filter";
 inline constexpr char MuxExpectVideo[] = "mux.expect_video";
 inline constexpr char MuxExpectAudio[] = "mux.expect_audio";
 inline constexpr char MuxSessionKind[] = "mux.session_kind";
+inline constexpr char OutputResourceKind[] = "output.resource_kind";
 
 inline constexpr char PacketSourceStreamIndex[] = "packet.source_stream_index";
 inline constexpr char PacketStreamKind[] = "packet.stream_kind";

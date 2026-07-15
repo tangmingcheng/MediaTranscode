@@ -4,6 +4,7 @@
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/nodes/mux/FFmpegFileMuxSession.h"
+#include "internal/graph/nodes/mux/ProjectMpegTsMuxSessionAdapter.h"
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -48,10 +49,25 @@ namespace {
         return ::media::Result<std::unique_ptr<MediaMuxSession>>::success(
             std::make_unique<FFmpegFileMuxSession>(video.value(), audio.value()));
     }
-    case MediaMuxSessionKind::ProjectMpegTs:
-        return ::media::Result<std::unique_ptr<MediaMuxSession>>::failure(
-            ::media::ErrorInfo::unsupported(
-                "project-owned MPEG-TS mux session is not implemented in Task 6"));
+    case MediaMuxSessionKind::ProjectMpegTs: {
+        auto video = requiredBoolNodeOption(
+            &options, "MediaMuxSessionFactory", MediaTranscodeOptionKey::MuxExpectVideo);
+        if (!video) {
+            return ::media::Result<std::unique_ptr<MediaMuxSession>>::failure(video.error());
+        }
+        auto audio = requiredBoolNodeOption(
+            &options, "MediaMuxSessionFactory", MediaTranscodeOptionKey::MuxExpectAudio);
+        if (!audio) {
+            return ::media::Result<std::unique_ptr<MediaMuxSession>>::failure(audio.error());
+        }
+        if (!video.value() || !audio.value()) {
+            return ::media::Result<std::unique_ptr<MediaMuxSession>>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "project MPEG-TS mux session requires planned video and audio"));
+        }
+        return ::media::Result<std::unique_ptr<MediaMuxSession>>::success(
+            std::make_unique<ProjectMpegTsMuxSessionAdapter>());
+    }
     }
     return ::media::Result<std::unique_ptr<MediaMuxSession>>::failure(
         ::media::ErrorInfo::unsupported("MediaMuxSessionFactory unsupported session kind"));

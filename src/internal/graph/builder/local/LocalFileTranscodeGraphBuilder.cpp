@@ -115,6 +115,7 @@ bool branchEnabled(const MediaAudioPipelinePlan& plan) noexcept
     outputOptions.prefix = "local.file";
     outputOptions.outputUrl = outputPlan.value().url;
     outputOptions.outputFormat = outputPlan.value().format;
+    outputOptions.outputResourceKind = outputPlan.value().outputResourceKind;
     outputOptions.expectVideo = branchEnabled(videoPlan);
     outputOptions.expectAudio = branchEnabled(audioPlan);
     outputOptions.muxSessionKind = outputPlan.value().muxSessionKind;

@@ -28,7 +28,8 @@ public:
 
     ::media::Status start(MediaRunningTime emitOnMaster);
     ::media::Result<AdvanceResult> advanceThrough(MediaRunningTime emitOnMaster);
-    ::media::Status writeAccessUnit(const MediaTsAccessUnitView& unit);
+    ::media::Result<AdvanceResult> writeAccessUnit(
+        const MediaTsAccessUnitView& unit);
     ::media::Status finish();
     void abort() noexcept;
 

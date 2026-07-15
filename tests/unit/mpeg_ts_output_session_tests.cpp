@@ -206,17 +206,29 @@ void accessUnitsAndPoison(TestContext& ctx)
     EXPECT_TRUE(ctx, session->advanceThrough(
         MediaRunningTime::fromNanoseconds(100'000'000)));
     const std::array<std::uint8_t, 7> video{0, 0, 0, 3, 0x65, 1, 2};
-    EXPECT_TRUE(ctx, session->writeAccessUnit(MediaTsAccessUnitView{
+    auto videoWrite = session->writeAccessUnit(MediaTsAccessUnitView{
         video, MediaScheduledStream::Video, 9,
         MediaRunningTime::fromNanoseconds(240'000'000),
         MediaRunningTime::fromNanoseconds(220'000'000),
-        MediaRunningTime::fromNanoseconds(120'000'000), true}));
+        MediaRunningTime::fromNanoseconds(120'000'000), true});
+    EXPECT_TRUE(ctx, videoWrite);
+    if (videoWrite) {
+        EXPECT_EQ(ctx, videoWrite.value().nextDeadline,
+                  MediaRunningTime::fromNanoseconds(140'000'000));
+        EXPECT_TRUE(ctx, videoWrite.value().packetsWritten >= std::size_t{2});
+    }
     const std::array<std::uint8_t, 3> audio{1, 2, 3};
-    EXPECT_TRUE(ctx, session->writeAccessUnit(MediaTsAccessUnitView{
+    auto audioWrite = session->writeAccessUnit(MediaTsAccessUnitView{
         audio, MediaScheduledStream::Audio, 9,
         MediaRunningTime::fromNanoseconds(240'000'000),
         MediaRunningTime::fromNanoseconds(240'000'000),
-        MediaRunningTime::fromNanoseconds(140'000'000), false}));
+        MediaRunningTime::fromNanoseconds(140'000'000), false});
+    EXPECT_TRUE(ctx, audioWrite);
+    if (audioWrite) {
+        EXPECT_EQ(ctx, audioWrite.value().nextDeadline,
+                  MediaRunningTime::fromNanoseconds(160'000'000));
+        EXPECT_TRUE(ctx, audioWrite.value().packetsWritten >= std::size_t{2});
+    }
     EXPECT_FALSE(ctx, session->writeAccessUnit(MediaTsAccessUnitView{
         audio, MediaScheduledStream::Audio, 8,
         MediaRunningTime::fromNanoseconds(260'000'000),

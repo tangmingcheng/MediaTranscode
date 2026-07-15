@@ -224,24 +224,29 @@ MediaTsMuxSession::advanceFailure(::media::ErrorInfo error)
         AdvanceResult{deadline, packetCount});
 }
 
-::media::Status MediaTsMuxSession::writeAccessUnit(
+::media::Result<MediaTsMuxSession::AdvanceResult>
+MediaTsMuxSession::writeAccessUnit(
     const MediaTsAccessUnitView& unit)
 {
     auto advanced = advanceThrough(unit.emitOnMaster);
-    if (!advanced) return ::media::Status::failure(advanced.error());
+    if (!advanced) {
+        return ::media::Result<AdvanceResult>::failure(advanced.error());
+    }
     if (unit.generation != m_epoch.generation || unit.payload.empty() ||
         (m_lastAccessUnitEmission &&
          unit.emitOnMaster < *m_lastAccessUnitEmission)) {
-        return poison(invalid("MPEG-TS access unit identity or order is invalid"));
+        return advanceFailure(
+            invalid("MPEG-TS access unit identity or order is invalid"));
     }
     if (unit.stream == MediaScheduledStream::Audio && unit.randomAccess) {
-        return poison(invalid("MPEG-TS audio access unit cannot be random access"));
+        return advanceFailure(
+            invalid("MPEG-TS audio access unit cannot be random access"));
     }
     auto clock = m_clock.preparePacket(
         unit.generation, unit.stream, unit.presentationOnMaster,
         unit.dispatchOnMaster, unit.emitOnMaster,
         m_plan.transportDecodeLead());
-    if (!clock) return poison(clock.error());
+    if (!clock) return advanceFailure(clock.error());
 
     std::span<const std::uint8_t> framedBytes;
     std::optional<MediaTsFramedAccessUnit> framedVideo;
@@ -250,7 +255,7 @@ MediaTsMuxSession::advanceFailure(::media::ErrorInfo error)
     case MediaScheduledStream::Video: {
         auto framed = MediaTsH264AccessUnitFramer::frame(
             m_plan, m_video, unit.payload, unit.randomAccess);
-        if (!framed) return poison(framed.error());
+        if (!framed) return advanceFailure(framed.error());
         framedVideo.emplace(std::move(framed).value());
         framedBytes = framedVideo->bytes();
         break;
@@ -258,27 +263,32 @@ MediaTsMuxSession::advanceFailure(::media::ErrorInfo error)
     case MediaScheduledStream::Audio: {
         auto framed = MediaTsAacAdtsFramer::frame(
             m_plan.parameters().aac, unit.payload);
-        if (!framed) return poison(framed.error());
+        if (!framed) return advanceFailure(framed.error());
         framedAudio = std::move(framed).value();
         framedBytes = framedAudio;
         break;
     }
     default:
-        return poison(invalid("MPEG-TS access unit stream is unsupported"));
+        return advanceFailure(
+            invalid("MPEG-TS access unit stream is unsupported"));
     }
     auto header = MediaTsPesSerializer::header(
         unit.stream, clock.value().clock(), framedBytes.size());
-    if (!header) return poison(header.error());
+    if (!header) return advanceFailure(header.error());
     auto cursor = m_packetizer.beginPes(
         unit.stream, header.value(), framedBytes, unit.randomAccess);
-    if (!cursor) return poison(cursor.error());
+    if (!cursor) return advanceFailure(cursor.error());
     auto packetCursor = std::move(cursor).value();
     auto result = m_writer.writeCursor(packetCursor);
-    if (!result) return poison(result.error());
+    if (!result) return advanceFailure(result.error());
     auto clockCommit = m_clock.commitPacket(std::move(clock).value());
-    if (!clockCommit) return poison(clockCommit.error());
+    if (!clockCommit) return advanceFailure(clockCommit.error());
+    auto packetsWritten = checkedPacketCount(
+        advanced.value().packetsWritten, result.value());
+    if (!packetsWritten) return advanceFailure(packetsWritten.error());
     m_lastAccessUnitEmission = unit.emitOnMaster;
-    return ::media::Status::success();
+    return ::media::Result<AdvanceResult>::success(
+        AdvanceResult{advanced.value().nextDeadline, packetsWritten.value()});
 }
 
 ::media::Status MediaTsMuxSession::finish()

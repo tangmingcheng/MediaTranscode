@@ -22,7 +22,9 @@ enum class MediaBufferType {
     HardwareFrame,
     Control,
     Event,
-    OutputByteSink
+    OutputByteSink,
+    TsMuxRuntimePlan,
+    TsAccessUnit
 };
 
 enum class MediaBufferFlag : uint32_t {

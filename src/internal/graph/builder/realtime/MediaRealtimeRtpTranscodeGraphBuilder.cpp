@@ -343,6 +343,7 @@ bool separateRtpOutput(const MediaRealtimeRtpTranscodePlan& plan) noexcept
         outputOptions.prefix = "realtime.mpegts";
         outputOptions.outputUrl = plan.muxedOutput.url;
         outputOptions.outputFormat = plan.muxedOutput.format;
+        outputOptions.outputResourceKind = plan.muxedOutput.outputResourceKind;
         outputOptions.expectVideo = plan.videoMux.expectVideo;
         outputOptions.expectAudio = plan.videoMux.expectAudio;
         if (!plan.muxedOutput.muxSessionKind) {

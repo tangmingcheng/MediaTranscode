@@ -99,6 +99,8 @@ MediaLatencyPolicy muxPacing() noexcept
         plan.muxedOutput.url = urls.muxed;
         plan.muxedOutput.format = urls.muxedFormat;
         plan.muxedOutput.mediaId = request.mediaId;
+        plan.muxedOutput.outputResourceKind =
+            MediaOutputResourceKind::FFmpegFormatContext;
         plan.muxedOutput.muxSessionKind = MediaMuxSessionKind::FFmpegFile;
         plan.videoMux.expectVideo = true;
         plan.videoMux.expectAudio = MediaRealtimeRequestClassifier::audioRequested(request);

@@ -8,6 +8,7 @@
 #include "internal/graph/builder/segments/MediaAudioEncodeBranchBuilder.h"
 #include "internal/graph/builder/segments/MediaOutputSegmentBuilder.h"
 #include "internal/graph/model/MediaMuxSessionKind.h"
+#include "internal/graph/model/MediaOutputResourceKind.h"
 #include "internal/graph/planner/local/MediaLocalFileOutputPlanner.h"
 
 #include <optional>
@@ -133,6 +134,15 @@ void testFileMuxSessionKindIsExplicit(TestContext& ctx)
     missing.queues.metadata = 1;
     MediaGraph missingGraph;
     EXPECT_FALSE(ctx, MediaOutputSegmentBuilder::buildFileMuxOutput(missingGraph, missing));
+    EXPECT_TRUE(ctx, missingGraph.nodes().empty());
+
+    FileOutputSegmentOptions missingResource = missing;
+    missingResource.muxSessionKind = MediaMuxSessionKind::FFmpegFile;
+    missingResource.expectVideo = true;
+    MediaGraph missingResourceGraph;
+    EXPECT_FALSE(ctx, MediaOutputSegmentBuilder::buildFileMuxOutput(
+        missingResourceGraph, missingResource));
+    EXPECT_TRUE(ctx, missingResourceGraph.nodes().empty());
 
     FileOutputSegmentOptions invalid = missing;
     invalid.muxSessionKind = static_cast<MediaMuxSessionKind>(255);
@@ -146,6 +156,7 @@ void testFileMuxSessionKindIsExplicit(TestContext& ctx)
         zeroStreamsGraph, zeroStreams));
 
     FileOutputSegmentOptions explicitFfmpeg = missing;
+    explicitFfmpeg.outputResourceKind = MediaOutputResourceKind::FFmpegFormatContext;
     explicitFfmpeg.muxSessionKind = MediaMuxSessionKind::FFmpegFile;
     explicitFfmpeg.expectVideo = true;
     MediaGraph graph;
@@ -153,12 +164,54 @@ void testFileMuxSessionKindIsExplicit(TestContext& ctx)
     EXPECT_TRUE(ctx, built);
     if (built) {
         const MediaNode* mux = graph.findNode(built.value().mux);
+        const MediaNode* output = graph.findNode(built.value().fileOutput);
         EXPECT_TRUE(ctx, mux != nullptr);
+        EXPECT_TRUE(ctx, output != nullptr);
         if (mux) {
             EXPECT_EQ(ctx,
                       mux->options.value(MediaTranscodeOptionKey::MuxSessionKind),
                       std::string("ffmpeg_file"));
         }
+        if (output) {
+            EXPECT_EQ(ctx,
+                      output->options.value(MediaTranscodeOptionKey::OutputResourceKind),
+                      std::string("ffmpeg_format_context"));
+        }
+    }
+
+    FileOutputSegmentOptions mismatched = explicitFfmpeg;
+    mismatched.outputResourceKind = MediaOutputResourceKind::ByteSink;
+    MediaGraph mismatchedGraph;
+    EXPECT_FALSE(ctx, MediaOutputSegmentBuilder::buildFileMuxOutput(
+        mismatchedGraph, mismatched));
+    EXPECT_TRUE(ctx, mismatchedGraph.nodes().empty());
+
+    FileOutputSegmentOptions explicitProject = missing;
+    explicitProject.outputResourceKind = MediaOutputResourceKind::ByteSink;
+    explicitProject.muxSessionKind = MediaMuxSessionKind::ProjectMpegTs;
+    explicitProject.expectVideo = true;
+    explicitProject.expectAudio = true;
+    MediaGraph projectGraph;
+    auto project = MediaOutputSegmentBuilder::buildFileMuxOutput(
+        projectGraph, explicitProject);
+    EXPECT_TRUE(ctx, project);
+    if (project) {
+        const MediaPort* resource = projectGraph.findInputPort(
+            project.value().mux, "resource");
+        const MediaPort* planPort = projectGraph.findInputPort(
+            project.value().mux, "plan");
+        const MediaPort* codec = projectGraph.findInputPort(
+            project.value().mux, "codec");
+        const MediaPort* packet = projectGraph.findInputPort(
+            project.value().mux, "packet");
+        EXPECT_TRUE(ctx, resource != nullptr);
+        EXPECT_TRUE(ctx, planPort != nullptr);
+        EXPECT_TRUE(ctx, codec != nullptr);
+        EXPECT_TRUE(ctx, packet != nullptr);
+        if (resource) EXPECT_EQ(ctx, resource->payloadKind, MediaPayloadKind::OutputByteSink);
+        if (planPort) EXPECT_EQ(ctx, planPort->payloadKind, MediaPayloadKind::TsMuxRuntimePlan);
+        if (codec) EXPECT_EQ(ctx, codec->payloadKind, MediaPayloadKind::CodecParameters);
+        if (packet) EXPECT_EQ(ctx, packet->payloadKind, MediaPayloadKind::TsAccessUnit);
     }
 }
 
@@ -169,12 +222,35 @@ void testLocalOutputPlannerOwnsMuxSessionDecision(TestContext& ctx)
     EXPECT_TRUE(ctx, plan);
     if (plan) {
         EXPECT_TRUE(ctx, plan.value().muxSessionKind.has_value());
+        EXPECT_TRUE(ctx, plan.value().outputResourceKind.has_value());
         if (plan.value().muxSessionKind) {
             EXPECT_EQ(ctx,
                       *plan.value().muxSessionKind,
                       MediaMuxSessionKind::FFmpegFile);
         }
+        if (plan.value().outputResourceKind) {
+            EXPECT_EQ(ctx,
+                      *plan.value().outputResourceKind,
+                      MediaOutputResourceKind::FFmpegFormatContext);
+        }
     }
+}
+
+void testOutputResourceKindOptionMappingFailsClosed(TestContext& ctx)
+{
+    auto ffmpeg = mediaOutputResourceKindOptionValue(
+        MediaOutputResourceKind::FFmpegFormatContext);
+    EXPECT_TRUE(ctx, ffmpeg);
+    if (ffmpeg) {
+        EXPECT_EQ(ctx, ffmpeg.value(), std::string("ffmpeg_format_context"));
+    }
+    auto sink = mediaOutputResourceKindOptionValue(MediaOutputResourceKind::ByteSink);
+    EXPECT_TRUE(ctx, sink);
+    if (sink) EXPECT_EQ(ctx, sink.value(), std::string("byte_sink"));
+    EXPECT_FALSE(ctx, mediaOutputResourceKindOptionValue(
+        static_cast<MediaOutputResourceKind>(255)));
+    EXPECT_FALSE(ctx, parseMediaOutputResourceKindOption(""));
+    EXPECT_FALSE(ctx, parseMediaOutputResourceKindOption("unknown"));
 }
 
 void testMuxSessionKindOptionMappingFailsClosed(TestContext& ctx)
@@ -241,5 +317,6 @@ int main()
     testFileMuxSessionKindIsExplicit(ctx);
     testLocalOutputPlannerOwnsMuxSessionDecision(ctx);
     testMuxSessionKindOptionMappingFailsClosed(ctx);
+    testOutputResourceKindOptionMappingFailsClosed(ctx);
     return ctx.failures == 0 ? 0 : 1;
 }

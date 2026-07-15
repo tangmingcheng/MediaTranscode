@@ -168,7 +168,7 @@ void FileMuxNode::observeClosedInputs(MediaGraphExecutionContext& context)
     if (input.buffer->isFlush()) {
         return remember(m_session->flush(context));
     }
-    if (port->name == "format") {
+    if (port->name == "resource" || port->name == "plan") {
         return remember(m_session->bindResource(context, input.buffer));
     }
     if (port->name == "codec") {

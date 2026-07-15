@@ -3,6 +3,7 @@
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/model/MediaMuxSessionKind.h"
+#include "internal/graph/model/MediaOutputResourceKind.h"
 #include "media_transcode/Result.h"
 
 #include <string>
@@ -14,6 +15,7 @@ struct FileOutputSegmentOptions {
     std::string prefix = "output.file";
     std::string outputUrl;
     std::string outputFormat;
+    std::optional<MediaOutputResourceKind> outputResourceKind;
     bool expectVideo = false;
     bool expectAudio = false;
     std::optional<MediaMuxSessionKind> muxSessionKind;

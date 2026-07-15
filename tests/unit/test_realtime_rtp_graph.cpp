@@ -1032,10 +1032,16 @@ void testRealtimeOutputPolicyInitializesEveryMuxExpectation(TestContext& ctx)
     EXPECT_FALSE(ctx, muxed.audioMux.expectVideo);
     EXPECT_FALSE(ctx, muxed.audioMux.expectAudio);
     EXPECT_TRUE(ctx, muxed.muxedOutput.muxSessionKind.has_value());
+    EXPECT_TRUE(ctx, muxed.muxedOutput.outputResourceKind.has_value());
     if (muxed.muxedOutput.muxSessionKind) {
         EXPECT_EQ(ctx,
                   *muxed.muxedOutput.muxSessionKind,
                   MediaMuxSessionKind::FFmpegFile);
+    }
+    if (muxed.muxedOutput.outputResourceKind) {
+        EXPECT_EQ(ctx,
+                  *muxed.muxedOutput.outputResourceKind,
+                  MediaOutputResourceKind::FFmpegFormatContext);
     }
 }
 
@@ -2848,6 +2854,18 @@ void testBuildPlansMpegTsUdpMuxedOutputGraph(TestContext& ctx)
         return;
     }
     EXPECT_TRUE(ctx, planResult.value().videoInputStartRequiresKeyFrame);
+    EXPECT_TRUE(ctx, planResult.value().muxedOutput.muxSessionKind.has_value());
+    EXPECT_TRUE(ctx, planResult.value().muxedOutput.outputResourceKind.has_value());
+    if (planResult.value().muxedOutput.muxSessionKind) {
+        EXPECT_EQ(ctx,
+                  *planResult.value().muxedOutput.muxSessionKind,
+                  MediaMuxSessionKind::FFmpegFile);
+    }
+    if (planResult.value().muxedOutput.outputResourceKind) {
+        EXPECT_EQ(ctx,
+                  *planResult.value().muxedOutput.outputResourceKind,
+                  MediaOutputResourceKind::FFmpegFormatContext);
+    }
 
     const auto graphResult = MediaRealtimeRtpTranscodeGraphBuilder::build(std::move(planResult).value());
     EXPECT_TRUE(ctx, graphResult);
@@ -2873,6 +2891,17 @@ void testBuildPlansMpegTsUdpMuxedOutputGraph(TestContext& ctx)
     if (fileOutput) {
         EXPECT_EQ(ctx, fileOutput->options.value("url"), mpegTsUdpOutputUrl());
         EXPECT_EQ(ctx, fileOutput->options.value("format"), std::string("mpegts"));
+        EXPECT_EQ(ctx,
+                  fileOutput->options.value(
+                      MediaTranscodeOptionKey::OutputResourceKind),
+                  std::string("ffmpeg_format_context"));
+    }
+    const MediaNode* fileMux = findNodeByKind(graph, MediaNodeKind::FileMux);
+    EXPECT_TRUE(ctx, fileMux != nullptr);
+    if (fileMux) {
+        EXPECT_EQ(ctx,
+                  fileMux->options.value(MediaTranscodeOptionKey::MuxSessionKind),
+                  std::string("ffmpeg_file"));
     }
 }
 
