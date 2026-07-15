@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <utility>
 
 namespace media::ffmpeg::graph {
@@ -46,6 +47,35 @@ MediaLatencyPolicy muxPacing() noexcept
     policy.mode = MediaLatencyMode::Realtime;
     policy.enablePacing = true;
     return policy;
+}
+
+::media::Result<MediaRtpUdpSenderConfig> scheduledTransport(
+    const std::string& host,
+    std::size_t rtpPort,
+    const MediaRealtimeRtpOutputNodePlan& output)
+{
+    const bool bracketedIpv6 = host.size() > 2 && host.front() == '[' &&
+        host.back() == ']';
+    const std::string numericHost = bracketedIpv6
+        ? host.substr(1, host.size() - 2)
+        : host;
+    if (rtpPort == 0 || rtpPort > 65534 || output.packetSize <= 0 ||
+        output.writePacingBurstBytes <= 0 ||
+        output.writePacingBurstBytes > std::numeric_limits<int>::max()) {
+        return ::media::Result<MediaRtpUdpSenderConfig>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "scheduled RTP transport facts are incomplete"));
+    }
+    return MediaRtpUdpSenderConfig::create(
+        bracketedIpv6 ? MediaIpAddressFamily::Ipv6 : MediaIpAddressFamily::Ipv4,
+        bracketedIpv6 ? "::" : "0.0.0.0",
+        numericHost,
+        static_cast<std::uint16_t>(rtpPort),
+        static_cast<std::uint16_t>(rtpPort + 1),
+        MediaRtpUdpLocalPortPolicy::osAssignedIndependent(),
+        static_cast<int>(output.writePacingBurstBytes),
+        static_cast<std::size_t>(output.packetSize),
+        MediaUdpSenderIoBehavior::NonBlockingRejectOnPressure);
 }
 
 } // namespace
@@ -129,6 +159,16 @@ MediaLatencyPolicy muxPacing() noexcept
         plan.audioOutput.packetSize = *request.output.packetSize;
         plan.audioOutput.mediaId = request.mediaId;
         applyPacing(plan.audioOutput, static_cast<int64_t>(*request.parameters.audio.bitrateKbps) * 1000);
+        auto videoTransport = scheduledTransport(
+            request.output.host, *request.output.basePort, plan.videoOutput);
+        auto audioTransport = scheduledTransport(
+            request.output.host, *request.output.basePort + 2, plan.audioOutput);
+        if (!videoTransport || !audioTransport) {
+            return ::media::Status::failure(
+                videoTransport ? audioTransport.error() : videoTransport.error());
+        }
+        plan.videoOutput.scheduledTransport = std::move(videoTransport).value();
+        plan.audioOutput.scheduledTransport = std::move(audioTransport).value();
     }
     plan.sdp.path = request.output.sdpPath;
     plan.sdp.mediaId = request.mediaId;

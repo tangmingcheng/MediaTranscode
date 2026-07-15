@@ -1,0 +1,208 @@
+#include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlanValidator.h"
+
+#include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlanner.h"
+#include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
+#include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
+
+#include <cstdint>
+#include <limits>
+#include <string>
+#include <variant>
+
+namespace media::ffmpeg::graph {
+
+::media::Status MediaRealtimeAvSyncRuntimePlanValidator::validate(
+    const MediaRealtimeRtpTranscodePlan& outer)
+{
+    const auto invalid = [](const char* field) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                std::string("Invalid synchronized runtime product: ") + field));
+    };
+    if (!outer.avSyncRuntime) return ::media::Status::success();
+    const auto& runtime = *outer.avSyncRuntime;
+    if (runtime.groupKey.value() != "realtime.av" ||
+        !MediaAvSyncPlanValidator::validate(runtime.synchronization)) {
+        return invalid("group or synchronization plan");
+    }
+    if (runtime.queues.metadata != outer.queues.metadata ||
+        runtime.queues.packet != outer.queues.packet ||
+        runtime.queues.frame != outer.queues.frame ||
+        runtime.queues.mux != outer.queues.mux) {
+        return invalid("queue product");
+    }
+    const auto validEdge = [](const MediaEdgePolicy& edge,
+                              std::size_t capacity) {
+        return edge.queuePolicy.mode == MediaQueueMode::SpscRing &&
+            edge.queuePolicy.capacity == capacity &&
+            edge.queuePolicy.bounded && edge.queuePolicy.collectMetrics &&
+            edge.queuePolicy.backpressurePolicy.mode ==
+                MediaBackpressureMode::Adaptive &&
+            edge.queuePolicy.backpressurePolicy.criticalWatermark == capacity &&
+            edge.backpressurePolicy.mode == MediaBackpressureMode::Adaptive &&
+            edge.backpressurePolicy.criticalWatermark == capacity;
+    };
+    if (!validEdge(runtime.edgePolicies.metadata, runtime.queues.metadata) ||
+        !validEdge(runtime.edgePolicies.packet, runtime.queues.packet) ||
+        !validEdge(runtime.edgePolicies.videoPacket, runtime.queues.packet) ||
+        !validEdge(runtime.edgePolicies.audioPacket, runtime.queues.packet) ||
+        !validEdge(runtime.edgePolicies.frame, runtime.queues.frame) ||
+        !validEdge(runtime.edgePolicies.mux, runtime.queues.mux) ||
+        !validEdge(runtime.edgePolicies.videoMux, runtime.queues.mux) ||
+        !validEdge(runtime.edgePolicies.audioMux, runtime.queues.mux)) {
+        return invalid("edge-policy product");
+    }
+    if (runtime.threadingPolicy.mode != MediaThreadingMode::PerNodeWorker ||
+        runtime.threadingPolicy.priority != MediaThreadPriority::High ||
+        runtime.threadingPolicy.maxWorkerThreads != 0 ||
+        runtime.threadingPolicy.pinWorkers ||
+        !runtime.threadingPolicy.collectWorkerMetrics) {
+        return invalid("threading product");
+    }
+    if (runtime.transition.acknowledgementTimeout <=
+            MediaRunningTime::fromNanoseconds(0) ||
+        runtime.transition.terminalDrainWindow <=
+            MediaRunningTime::fromNanoseconds(0)) {
+        return invalid("transition timeout");
+    }
+    if (runtime.outputAdapter !=
+            MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp &&
+        runtime.outputAdapter != MediaAvSyncOutputAdapterKind::ProjectMpegTs) {
+        return invalid("output adapter");
+    }
+    const auto expected = MediaAvGenerationTransitionPlanner::plan(
+        runtime.outputAdapter,
+        runtime.transition.acknowledgementTimeout,
+        runtime.transition.terminalDrainWindow);
+    if (runtime.transition.participants.size() !=
+        expected.participants.size()) {
+        return invalid("transition participant count");
+    }
+    for (std::size_t index = 0; index < expected.participants.size(); ++index) {
+        if (runtime.transition.participants[index].participant !=
+                expected.participants[index].participant ||
+            runtime.transition.participants[index].requiredChildren !=
+                expected.participants[index].requiredChildren) {
+            return invalid("transition participant children");
+        }
+    }
+    const auto& correction = runtime.audioCorrection;
+    const bool reachabilitySumRepresentable =
+        correction.worstCaseInFlightSamples >= 0 &&
+        correction.mailboxDeliveryMarginSamples > 0 &&
+        correction.maximumResamplerOutputBlockSamples > 0 &&
+        correction.worstCaseInFlightSamples <=
+            std::numeric_limits<std::int64_t>::max() -
+                correction.mailboxDeliveryMarginSamples &&
+        correction.worstCaseInFlightSamples +
+                correction.mailboxDeliveryMarginSamples <=
+            std::numeric_limits<std::int64_t>::max() -
+                correction.maximumResamplerOutputBlockSamples;
+    if (correction.outputSampleRate <= 0 ||
+        correction.epochOutputSampleIndex != 0 ||
+        correction.worstCaseInFlightSamples < 0 ||
+        correction.mailboxDeliveryMarginSamples <= 0 ||
+        correction.maximumResamplerOutputBlockSamples <= 0 ||
+        correction.mailboxCapacity != runtime.queues.metadata ||
+        !reachabilitySumRepresentable ||
+        correction.commandLeadSamples <=
+            correction.worstCaseInFlightSamples +
+                correction.mailboxDeliveryMarginSamples +
+                correction.maximumResamplerOutputBlockSamples ||
+        !runtime.synchronization.audioServo.outputSampleRate ||
+        correction.outputSampleRate !=
+            *runtime.synchronization.audioServo.outputSampleRate) {
+        return invalid("audio correction reachability");
+    }
+    if (outer.videoOutput.writePacingEnabled ||
+        outer.videoOutput.writePacingBytesPerSecond != 0 ||
+        outer.videoOutput.writePacingBurstBytes != 0 ||
+        outer.audioOutput.writePacingEnabled ||
+        outer.audioOutput.writePacingBytesPerSecond != 0 ||
+        outer.audioOutput.writePacingBurstBytes != 0 ||
+        outer.videoMux.pacingPolicy.enablePacing ||
+        outer.videoMux.startupDelayMs != 0 ||
+        outer.audioMux.pacingPolicy.enablePacing ||
+        outer.audioMux.startupDelayMs != 0 ||
+        outer.avStartBarrier.expectVideo || outer.avStartBarrier.expectAudio ||
+        outer.avStartBarrier.requireVideoKeyFrame) {
+        return invalid("legacy pacing or barrier authority");
+    }
+
+    if (*runtime.synchronization.topology ==
+        MediaAvSyncTopology::SeparateRtpToSeparateRtp) {
+        if (outer.inputLayout != RealtimeInputStreamLayout::SeparateStreams ||
+            outer.outputLayout != RealtimeOutputStreamLayout::SeparateStreams ||
+            runtime.outputAdapter !=
+                MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp ||
+            !std::holds_alternative<MediaSeparateRtpOutputRuntimePlan>(
+                runtime.protocolOutput) || !runtime.synchronization.rtp) {
+            return invalid("RTP topology and adapter");
+        }
+        const auto& output =
+            std::get<MediaSeparateRtpOutputRuntimePlan>(runtime.protocolOutput);
+        const auto validRtp = [](const MediaScheduledRtpOutputPlan& candidate,
+                                 const MediaAvSyncRtpOutputStreamPlan& sync,
+                                 MediaScheduledStream stream,
+                                 MediaScheduledRtpPacketizationMode mode) {
+            return sync.payloadType && sync.clockRate && sync.ssrc &&
+                sync.baseTimestamp && sync.cname &&
+                candidate.stream == stream &&
+                candidate.packetization.streamKind ==
+                    (stream == MediaScheduledStream::Video
+                         ? MediaStreamKind::Video
+                         : MediaStreamKind::Audio) &&
+                !candidate.packetization.codecName.empty() &&
+                candidate.packetization.streamTimeBaseNumerator == 1 &&
+                candidate.packetization.streamTimeBaseDenominator ==
+                    *sync.clockRate &&
+                candidate.packetization.packetizationMode == mode &&
+                candidate.packetization.payloadType == *sync.payloadType &&
+                candidate.packetization.maximumDatagramBytes > 0 &&
+                candidate.transport.maximumDatagramBytes() ==
+                    candidate.packetization.maximumDatagramBytes &&
+                candidate.ssrc == *sync.ssrc &&
+                candidate.baseTimestamp == *sync.baseTimestamp &&
+                candidate.clockRate == *sync.clockRate &&
+                candidate.cname == *sync.cname &&
+                candidate.senderLead > MediaRunningTime::fromNanoseconds(0) &&
+                candidate.senderReportInterval >
+                    MediaRunningTime::fromNanoseconds(0);
+        };
+        if (output.sdpPath.empty() ||
+            !validRtp(output.video,
+                      runtime.synchronization.rtp->videoOutput,
+                      MediaScheduledStream::Video,
+                      MediaScheduledRtpPacketizationMode::H264AnnexB) ||
+            !validRtp(output.audio,
+                      runtime.synchronization.rtp->audioOutput,
+                      MediaScheduledStream::Audio,
+                      MediaScheduledRtpPacketizationMode::AacLatm)) {
+            return invalid("RTP protocol output");
+        }
+    } else if (*runtime.synchronization.topology ==
+               MediaAvSyncTopology::MpegTsToMpegTs) {
+        if (outer.inputLayout !=
+                RealtimeInputStreamLayout::MuxedTransportStream ||
+            outer.outputLayout !=
+                RealtimeOutputStreamLayout::MuxedTransportStream ||
+            runtime.outputAdapter != MediaAvSyncOutputAdapterKind::ProjectMpegTs ||
+            !std::holds_alternative<MediaProjectMpegTsRuntimeOutputPlan>(
+                runtime.protocolOutput)) {
+            return invalid("MPEG-TS topology and adapter");
+        }
+        const auto& output = std::get<MediaProjectMpegTsRuntimeOutputPlan>(
+            runtime.protocolOutput);
+        if (output.url.empty() ||
+            output.resourceKind != MediaOutputResourceKind::ByteSink ||
+            output.muxSessionKind != MediaMuxSessionKind::ProjectMpegTs ||
+            output.protocol.audioSampleRate() != correction.outputSampleRate) {
+            return invalid("MPEG-TS protocol output");
+        }
+    } else {
+        return invalid("synchronization topology");
+    }
+    return ::media::Status::success();
+}
+
+} // namespace media::ffmpeg::graph

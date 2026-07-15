@@ -4,6 +4,20 @@
 #include <utility>
 
 namespace media::ffmpeg::graph {
+namespace {
+
+::media::Result<int> resolvedCodecFrameSamples(const std::string& codecName)
+{
+    if (codecName == "aac") {
+        return ::media::Result<int>::success(1024);
+    }
+    return ::media::Result<int>::failure(
+        ::media::ErrorInfo::unsupported(
+            "selected audio codec does not publish a bounded frame size"));
+}
+
+} // namespace
+
 ::media::Result<MediaResolvedAudioOutputPlan> MediaResolvedAudioOutputPlan::create(
     const MediaResolvedAudioTargetDecision& target,
     const std::optional<MediaSelectedAudioEncoder>& selectedEncoder)
@@ -39,6 +53,11 @@ namespace media::ffmpeg::graph {
             ::media::ErrorInfo::unsupported("selected audio encoder does not support resolved profile"));
     }
 
+    auto frameSamples = resolvedCodecFrameSamples(target.codecName());
+    if (!frameSamples && !copy) {
+        return ::media::Result<MediaResolvedAudioOutputPlan>::failure(
+            frameSamples.error());
+    }
     MediaResolvedAudioOutputPlan plan;
     plan.m_codecName = target.codecName();
     plan.m_profile = target.profile();
@@ -52,6 +71,16 @@ namespace media::ffmpeg::graph {
     }
     plan.m_branchMode = copy ? MediaBranchMode::CopyPacket : MediaBranchMode::TranscodeFrame;
     if (!copy) plan.m_encoderName = selectedEncoder->name;
+    plan.m_codecFrameSamples = copy
+        ? (frameSamples ? frameSamples.value() : 0)
+        : selectedEncoder->frameSizeSamples;
+    plan.m_encoderDelaySamples = copy ? 0 : selectedEncoder->delaySamples;
+    if ((!copy && plan.m_codecFrameSamples <= 0) ||
+        plan.m_encoderDelaySamples < 0) {
+        return ::media::Result<MediaResolvedAudioOutputPlan>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "resolved audio output lacks bounded codec timing facts"));
+    }
     plan.m_rateControl = target.rateControl();
     plan.m_bitrateKbps = target.bitrateKbps();
     plan.m_minBitrateKbps = target.minBitrateKbps();
@@ -77,5 +106,7 @@ const std::optional<int>& MediaResolvedAudioOutputPlan::maxBitrateKbps() const n
 const std::optional<int>& MediaResolvedAudioOutputPlan::bufferSizeKbits() const noexcept { return m_bufferSizeKbits; }
 const std::optional<int>& MediaResolvedAudioOutputPlan::quality() const noexcept { return m_quality; }
 const std::string& MediaResolvedAudioOutputPlan::preset() const noexcept { return m_preset; }
+int MediaResolvedAudioOutputPlan::codecFrameSamples() const noexcept { return m_codecFrameSamples; }
+int MediaResolvedAudioOutputPlan::encoderDelaySamples() const noexcept { return m_encoderDelaySamples; }
 
 } // namespace media::ffmpeg::graph

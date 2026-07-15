@@ -38,6 +38,21 @@ namespace media::ffmpeg::graph {
         MediaProjectMpegTsOutputPlan(audioOutput.sampleRate(), std::move(mux).value()));
 }
 
+::media::Result<MediaProjectMpegTsOutputPlan> MediaProjectMpegTsOutputPlan::accept(
+    int audioSampleRate,
+    MediaTsMuxPlan muxPlan)
+{
+    if (audioSampleRate <= 0 ||
+        muxPlan.parameters().aac.samplingFrequencyIndex > 12 ||
+        muxPlan.parameters().maximumPacketsPerDatagram == 0) {
+        return ::media::Result<MediaProjectMpegTsOutputPlan>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "accepted project MPEG-TS output plan is incomplete"));
+    }
+    return ::media::Result<MediaProjectMpegTsOutputPlan>::success(
+        MediaProjectMpegTsOutputPlan(audioSampleRate, std::move(muxPlan)));
+}
+
 MediaProjectMpegTsOutputPlan::MediaProjectMpegTsOutputPlan(
     int audioSampleRate, MediaTsMuxPlan muxPlan)
     : m_audioSampleRate(audioSampleRate), m_muxPlan(std::move(muxPlan))

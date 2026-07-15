@@ -8,7 +8,7 @@
 #include "internal/graph/model/MediaOutputResourceKind.h"
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/planner/MediaPipelinePlanner.h"
-#include "internal/graph/planner/avsync/MediaAvSyncPlan.h"
+#include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodeRequest.h"
 #include "internal/graph/planner/realtime/MediaPreparedRealtimeInput.h"
 #include "internal/graph/protocol/rtp/MediaRtcpCompositionPolicy.h"
@@ -100,6 +100,7 @@ struct MediaRealtimeRtpOutputNodePlan {
     bool writePacingEnabled = false;
     int64_t writePacingBytesPerSecond = 0;
     int64_t writePacingBurstBytes = 0;
+    std::optional<MediaRtpUdpSenderConfig> scheduledTransport;
 };
 
 struct MediaRealtimeMuxedOutputPlan {
@@ -153,7 +154,7 @@ struct MediaRealtimeRtpTranscodePlan {
     MediaRealtimeMuxNodePlan videoMux;
     MediaRealtimeMuxNodePlan audioMux;
     MediaRealtimeAvStartBarrierPlan avStartBarrier;
-    std::optional<MediaAvSyncPlan> avSync;
+    std::optional<MediaRealtimeAvSyncRuntimePlan> avSyncRuntime;
 };
 
 struct MediaRealtimeTranscodePreflight final {
@@ -172,6 +173,8 @@ public:
         const MediaRealtimePreflightIo& io);
     static ::media::Status validateRealtimeRequestNoIo(
         const MediaRealtimeRtpTranscodeRequest& request);
+    static ::media::Status validatePlannedProduct(
+        const MediaRealtimeRtpTranscodePlan& plan);
 
 private:
     static ::media::Result<MediaRealtimeRtpTranscodePlan> planWithInput(

@@ -144,6 +144,11 @@ MediaResolvedAudioSource resolvedSource(const MediaInputAudioStreamInfo& input)
     plan.reason = plan.branchMode == MediaBranchMode::CopyPacket
         ? "copy_source_matches_resolved_output" : "transcode_source_differs_from_resolved_output";
     plan.resolvedOutput = std::move(output).value();
+    if (plan.resolvedOutput->codecFrameSamples() > 0) {
+        plan.decoderDelaySamples = plan.resolvedOutput->codecFrameSamples();
+        plan.maximumResamplerOutputBlockSamples =
+            plan.resolvedOutput->codecFrameSamples();
+    }
     return ::media::Result<MediaAudioPipelinePlan>::success(std::move(plan));
 }
 

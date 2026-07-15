@@ -1551,7 +1551,7 @@ void testRawRtpPlansAudioVideoInput(TestContext& ctx)
     auto options = validRawRtpAudioVideoOptions();
     options.input.audioRtp.url = "rtp://192.0.2.10:5006";
 
-    const auto plan = MediaRealtimeRtpTranscodePlanner::plan(options);
+    auto plan = MediaRealtimeRtpTranscodePlanner::plan(options);
     EXPECT_TRUE(ctx, plan);
     if (!plan) {
         std::cerr << plan.error().describe() << '\n';
@@ -1591,20 +1591,21 @@ void testRealtimePlanEmbedsValidatedAvSyncContract(TestContext& ctx)
 {
     const auto videoOnly = MediaRealtimeRtpTranscodePlanner::plan(validRawRtpOptions());
     EXPECT_TRUE(ctx, videoOnly);
-    if (videoOnly) EXPECT_FALSE(ctx, videoOnly.value().avSync.has_value());
+    if (videoOnly) EXPECT_FALSE(ctx, videoOnly.value().avSyncRuntime.has_value());
 
     const auto result = MediaRealtimeRtpTranscodePlanner::plan(validRawRtpAudioVideoOptions());
     EXPECT_TRUE(ctx, result);
     if (!result) return;
 
-    EXPECT_TRUE(ctx, result.value().avSync.has_value());
-    if (!result.value().avSync) return;
-    EXPECT_TRUE(ctx, MediaAvSyncPlanValidator::validate(*result.value().avSync));
+    EXPECT_TRUE(ctx, result.value().avSyncRuntime.has_value());
+    if (!result.value().avSyncRuntime) return;
+    EXPECT_TRUE(ctx, MediaAvSyncPlanValidator::validate(
+                         result.value().avSyncRuntime->synchronization));
     EXPECT_EQ(ctx,
-              *result.value().avSync->topology,
+              *result.value().avSyncRuntime->synchronization.topology,
               MediaAvSyncTopology::SeparateRtpToSeparateRtp);
     EXPECT_EQ(ctx,
-              *result.value().avSync->rtp->videoInput.clockRate,
+              *result.value().avSyncRuntime->synchronization.rtp->videoInput.clockRate,
               *validRawRtpAudioVideoOptions().input.videoRtp.clockRate);
 }
 
@@ -1771,7 +1772,7 @@ void testRawRtpAudioTranscodesWhenTargetDiffers(TestContext& ctx)
     options.parameters.audio.sampleRate = 48000;
     options.parameters.audio.channels = 2;
 
-    const auto plan = MediaRealtimeRtpTranscodePlanner::plan(options);
+    auto plan = MediaRealtimeRtpTranscodePlanner::plan(options);
     EXPECT_TRUE(ctx, plan);
     if (!plan) {
         std::cerr << plan.error().describe() << '\n';
@@ -1795,7 +1796,7 @@ void testRawRtpAudioTranscodesWhenTargetDiffers(TestContext& ctx)
     opusInput.input.audioRtp.clockRate = 48000;
     opusInput.input.audioRtp.channels = 2;
     opusInput.input.audioRtp.fmtp.clear();
-    const auto opusPlan = MediaRealtimeRtpTranscodePlanner::plan(opusInput);
+    auto opusPlan = MediaRealtimeRtpTranscodePlanner::plan(opusInput);
     EXPECT_TRUE(ctx, opusPlan);
     if (opusPlan) {
         EXPECT_EQ(ctx, opusPlan.value().audioPlan.branchMode, MediaBranchMode::TranscodeFrame);
@@ -2846,7 +2847,8 @@ void testBuildPlansMpegTsUdpMuxedOutputGraph(TestContext& ctx)
 
     auto preflightResult = MediaRealtimeRtpTranscodePlanner::preflight(validMpegTsUdpOptions());
     auto planResult = preflightResult
-        ? ::media::Result<MediaRealtimeRtpTranscodePlan>::success(preflightResult.value().plan)
+        ? ::media::Result<MediaRealtimeRtpTranscodePlan>::success(
+              std::move(preflightResult).value().plan)
         : ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(preflightResult.error());
     EXPECT_TRUE(ctx, planResult);
     if (!planResult) {

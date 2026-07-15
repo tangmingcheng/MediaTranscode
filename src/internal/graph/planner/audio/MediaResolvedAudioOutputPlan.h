@@ -14,6 +14,8 @@ struct MediaSelectedAudioEncoder final {
     std::string sampleFormat;
     std::vector<int> supportedSampleRates;
     std::vector<int> supportedProfileIds;
+    int frameSizeSamples = 0;
+    int delaySamples = 0;
 };
 
 class MediaResolvedAudioOutputPlan final {
@@ -37,6 +39,8 @@ public:
     const std::optional<int>& bufferSizeKbits() const noexcept;
     const std::optional<int>& quality() const noexcept;
     const std::string& preset() const noexcept;
+    int codecFrameSamples() const noexcept;
+    int encoderDelaySamples() const noexcept;
 
 private:
     MediaResolvedAudioOutputPlan() = default;
@@ -56,6 +60,8 @@ private:
     std::optional<int> m_bufferSizeKbits;
     std::optional<int> m_quality;
     std::string m_preset;
+    int m_codecFrameSamples = 0;
+    int m_encoderDelaySamples = 0;
 };
 
 } // namespace media::ffmpeg::graph

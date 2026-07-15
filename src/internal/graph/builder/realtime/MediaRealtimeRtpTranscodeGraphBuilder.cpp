@@ -387,7 +387,7 @@ bool separateRtpOutput(const MediaRealtimeRtpTranscodePlan& plan) noexcept
         }
         audioInputChain = audioInput.value();
 
-        if (!plan.avSync || !plan.input.rtpTransport || !plan.audioInput.rtpTransport) {
+        if (!plan.avSyncRuntime || !plan.input.rtpTransport || !plan.audioInput.rtpTransport) {
             return ::media::Result<MediaGraph>::failure(
                 ::media::ErrorInfo::notInitialized(
                     "isolated RTP A/V inputs require A/V sync and transport plans"));
@@ -395,7 +395,7 @@ bool separateRtpOutput(const MediaRealtimeRtpTranscodePlan& plan) noexcept
         auto clockGroup = addRtpClockGroup(graph,
                                            videoInputChain.value().input,
                                            audioInputChain.input,
-                                           *plan.avSync,
+                                           plan.avSyncRuntime->synchronization,
                                            static_cast<std::int64_t>(
                                                plan.input.rtpTransport->cnameTimeoutMs) * 1'000'000,
                                            static_cast<std::int64_t>(

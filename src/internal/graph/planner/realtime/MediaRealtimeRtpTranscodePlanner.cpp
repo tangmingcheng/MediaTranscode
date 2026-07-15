@@ -5,6 +5,8 @@
 #include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeInputPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeOutputPolicyPlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlanValidator.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestValidator.h"
 #include "internal/graph/planner/realtime/MediaRealtimeTsInputPlanValidator.h"
@@ -457,7 +459,24 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
         if (!avSync) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(avSync.error());
         }
-        plan.avSync = std::move(avSync).value();
+        auto runtime = MediaRealtimeAvSyncRuntimePlanner::plan(
+            plan, std::move(avSync).value());
+        if (!runtime) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                runtime.error());
+        }
+        plan.avSyncRuntime = std::move(runtime).value();
+        plan.videoOutput.writePacingEnabled = false;
+        plan.videoOutput.writePacingBytesPerSecond = 0;
+        plan.videoOutput.writePacingBurstBytes = 0;
+        plan.audioOutput.writePacingEnabled = false;
+        plan.audioOutput.writePacingBytesPerSecond = 0;
+        plan.audioOutput.writePacingBurstBytes = 0;
+        plan.videoMux.pacingPolicy = {};
+        plan.videoMux.startupDelayMs = 0;
+        plan.audioMux.pacingPolicy = {};
+        plan.audioMux.startupDelayMs = 0;
+        plan.avStartBarrier = {};
     }
     if (plan.input.mpegTs && selectedTsProgram) {
         auto& ts = *plan.input.mpegTs;
@@ -478,6 +497,10 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
     if (auto status = MediaRealtimeTsInputPlanValidator::validate(plan.inputType, plan.input);
         !status) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(status.error());
+    }
+    if (auto status = validatePlannedProduct(plan); !status) {
+        return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+            status.error());
     }
     return ::media::Result<MediaRealtimeRtpTranscodePlan>::success(std::move(plan));
 }
@@ -542,4 +565,9 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
     return MediaRealtimeRequestValidator::validate(request);
 }
 
+::media::Status MediaRealtimeRtpTranscodePlanner::validatePlannedProduct(
+    const MediaRealtimeRtpTranscodePlan& plan)
+{
+    return MediaRealtimeAvSyncRuntimePlanValidator::validate(plan);
+}
 } // namespace media::ffmpeg::graph

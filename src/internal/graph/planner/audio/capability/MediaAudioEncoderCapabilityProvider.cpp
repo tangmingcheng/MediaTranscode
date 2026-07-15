@@ -114,6 +114,13 @@ std::vector<const AVCodec*> encoderCandidates(const std::string& codecName)
     MediaSelectedAudioEncoder verified;
     verified.name = encoder.name;
     verified.sampleFormat = sampleFormatName;
+    verified.frameSizeSamples = context->frame_size;
+    verified.delaySamples = context->delay;
+    if (verified.frameSizeSamples <= 0 || verified.delaySamples < 0) {
+        return ::media::Result<MediaSelectedAudioEncoder>::failure(
+            ::media::ErrorInfo::unsupported(
+                "selected audio encoder does not report bounded frame and delay facts"));
+    }
     verified.supportedSampleRates.push_back(target.sampleRate());
     if (target.profile().knowledge() == MediaAudioProfileKnowledge::Known) {
         verified.supportedProfileIds.push_back(target.profile().ffmpegProfileId());

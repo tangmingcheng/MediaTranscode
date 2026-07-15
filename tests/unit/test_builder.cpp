@@ -33,7 +33,8 @@ MediaAudioEncodeBranchOptions audioEncodeOptions(MediaGraph& graph)
     auto resolved = MediaResolvedAudioOutputPlan::create(
         target.value(),
         std::optional<MediaSelectedAudioEncoder>{{
-            "aac", "fltp", {}, {MediaAudioProfile::knownAacLow().ffmpegProfileId()}}});
+            "aac", "fltp", {},
+            {MediaAudioProfile::knownAacLow().ffmpegProfileId()}, 1024, 0}});
     options.plan.resolvedOutput = std::move(resolved).value();
     options.normalizePackets = false;
     options.formatSourceNode = graph.addNode(MediaNodeKind::DebugDump, "format_source");

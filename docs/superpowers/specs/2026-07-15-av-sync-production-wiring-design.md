@@ -136,7 +136,7 @@ Division uses the project running-time checked rational conversion and the commi
 
 The feedback path is a control plane, not a DAG edge. The group runtime owns one bounded, generation-tagged `MediaAudioCorrectionMailbox` and a monotonic resampler `highestProducedSampleIndex` watermark. `MediaAudioDriftServoNode` publishes a correction with a unique sequence, future effective output sample index, compensation window, and planner-selected command lead. `AudioResampleNode` reads the mailbox before the matching future sample window, applies each command exactly once, and records an acknowledgement containing the actual produced sample interval. The next measurement is based on that acknowledged interval. Late, stale, duplicate, skipped, or unacknowledged commands are structured synchronization errors and trigger reacquisition; mailbox capacity and expiry are planner-owned.
 
-Before graph construction the planner converts every bounded audio decode/resample/encode/scheduler/protocol queue, decoder delay, encoder lookahead, protocol batch, mailbox delivery bound, and maximum resampler output block to output samples and proves:
+Before graph construction, codec/capability preflight and the selected queue, resampler, and protocol planners publish mandatory typed bounds into one `MediaRealtimeAvSyncPlanningFacts` product. The user request remains intent-only. Missing component facts reject the synchronized plan; the resolver cannot replace them with fixed constants, defaults, or fallback estimates. The planner converts every bounded audio decode/resample/encode/scheduler/protocol queue, decoder delay, encoder lookahead, protocol batch, mailbox delivery bound, and maximum resampler output block to output samples and proves:
 
 ```text
 commandLeadSamples > worstCaseInFlightSamples
@@ -164,6 +164,8 @@ The output graph binds plan, byte sink, video/audio codec parameters, and schedu
 ## Separate RTP Production Output
 
 `MediaScheduledRtpOutputNode` is a single-stream protocol adapter instantiated once for video and once for audio. Each instance consumes only its scheduled stream and a complete typed RTP runtime plan.
+
+The planner-owned RTP runtime plan carries an immutable packetization descriptor containing every decision available before encoder creation, including codec identity, stream time base, packetization mode, payload type, and maximum datagram size. It does not contain encoder-owned `AVCodecParameters`, codec extradata, or `ScheduledRtpMuxStreamConfig`. After the selected encoder opens, the Task 10 output adapter materializes `ScheduledRtpMuxStreamConfig` from the descriptor plus the encoder's real output parameters, rejecting any mismatch without choosing a new value or falling back.
 
 The node is the only production RTP output seam and composes the existing `ScheduledRtpSenderSession`, `ScheduledRtpMuxFfmpegSessionFactory`, UDP transport, clock mapper, and sender-report generator. Task 12 wires and owns these accepted Task 1-11 components; it does not duplicate their packetization, clock mapping, or RTCP behavior.
 

@@ -42,6 +42,8 @@ struct MediaAudioPipelinePlan {
     std::optional<MediaResolvedAudioOutputPlan> resolvedOutput;
     bool monotonicPacketTimestamps = false;
     std::string reason;
+    std::optional<int> decoderDelaySamples;
+    std::optional<int> maximumResamplerOutputBlockSamples;
 };
 
 struct MediaInputAudioStreamInfo {

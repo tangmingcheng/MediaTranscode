@@ -9,6 +9,10 @@
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimePlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
+#include "internal/graph/planner/realtime/MediaRealtimeAvSyncPlanningFactsResolver.h"
+#include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeInputPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeOutputPolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeTsInputPlanValidator.h"
@@ -188,6 +192,328 @@ MediaRealtimeRtpTranscodeRequest avSyncRtpRequest()
     return request;
 }
 
+MediaRealtimeRtpTranscodeRequest completeAvSyncRtpRequest()
+{
+    auto request = avSyncRtpRequest();
+    request.input.openTimeoutMs = 5'000;
+    request.input.readTimeoutMs = 5'000;
+    request.input.analyzeDurationUs = 500'000;
+    request.input.probeSizeBytes = 512 * 1024;
+    request.input.lowLatency = true;
+    request.input.videoRtp.url = "rtp://127.0.0.1:5004";
+    request.input.videoRtp.codecName = "h264";
+    request.input.videoRtp.fmtp =
+        "packetization-mode=1;sprop-parameter-sets=Z01AMpWQAoALWwEQAAA+gAAOpghA,aOuPIA==;profile-level-id=4D4032";
+    request.input.audioRtp.url = "rtp://127.0.0.1:5006";
+    request.input.audioRtp.codecName = "aac";
+    request.input.audioRtp.channels = 2;
+    request.input.audioRtp.bitrateKbps = 320;
+    request.input.audioRtp.fmtp =
+        "profile-level-id=1;mode=AAC-hbr;config=1190;sizelength=13;indexlength=3;indexdeltalength=3";
+    request.output.host = "127.0.0.1";
+    request.output.basePort = 6000;
+    request.output.sdpPath = "planner-av-sync.sdp";
+    request.output.packetSize = 1200;
+    request.parameters.execution.disableHardware = true;
+    request.parameters.video.codecName = "h264";
+    request.parameters.video.bitrateKbps = 8'000;
+    request.parameters.audio.codecName = "aac";
+    request.parameters.audio.bitrateKbps = 320;
+    request.parameters.audio.channels = 2;
+    request.parameters.queues.metadata = 4;
+    request.parameters.queues.packet = 4;
+    request.parameters.queues.frame = 4;
+    request.parameters.queues.mux = 4;
+    return request;
+}
+
+void testRealtimePlannerProducesCompleteAvSyncRuntimeProduct(TestContext& ctx)
+{
+    const auto planned = MediaRealtimeRtpTranscodePlanner::plan(
+        completeAvSyncRtpRequest());
+    EXPECT_TRUE(ctx, planned);
+    if (!planned) {
+        std::cerr << planned.error().describe() << '\n';
+        return;
+    }
+
+    EXPECT_TRUE(ctx, planned.value().avSyncRuntime.has_value());
+    if (!planned.value().avSyncRuntime) return;
+    const auto& runtime = *planned.value().avSyncRuntime;
+    EXPECT_EQ(ctx, runtime.groupKey.value(), std::string("realtime.av"));
+    EXPECT_EQ(ctx, runtime.outputAdapter,
+              MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp);
+    EXPECT_EQ(ctx, runtime.audioCorrection.epochOutputSampleIndex,
+              std::int64_t{0});
+    EXPECT_TRUE(ctx,
+                runtime.audioCorrection.commandLeadSamples >
+                    runtime.audioCorrection.worstCaseInFlightSamples +
+                        runtime.audioCorrection.mailboxDeliveryMarginSamples +
+                        runtime.audioCorrection.maximumResamplerOutputBlockSamples);
+    EXPECT_TRUE(ctx, MediaRealtimeRtpTranscodePlanner::validatePlannedProduct(
+                         planned.value()));
+    EXPECT_EQ(ctx, runtime.transition.participants.size(), std::size_t{5});
+    EXPECT_EQ(ctx, runtime.transition.participants[0].participant,
+              MediaAvGenerationParticipant::CanonicalLineage);
+    EXPECT_EQ(ctx, runtime.transition.participants[0].requiredChildren,
+              (std::vector<std::string>{
+                  "startup_generation_state",
+                  "video_decoder_lineage_registry",
+                  "video_filter_lineage_registry",
+                  "video_encoder_lineage_registry",
+                  "audio_decoder_lineage_registry",
+                  "audio_startup_trim_lineage_registry",
+                  "audio_resampler_lineage_registry",
+                  "audio_encoder_lineage_registry"}));
+    EXPECT_EQ(ctx, runtime.transition.participants[1].requiredChildren,
+              (std::vector<std::string>{
+                  "audio_correction_generation_state"}));
+    const auto& rtp = std::get<MediaSeparateRtpOutputRuntimePlan>(
+        runtime.protocolOutput);
+    EXPECT_EQ(ctx, rtp.video.packetization.codecName, std::string("h264"));
+    EXPECT_EQ(ctx, rtp.video.packetization.streamTimeBaseDenominator, 90'000);
+    EXPECT_EQ(ctx, rtp.video.transport.remoteRtpEndpoint().port(),
+              std::uint16_t{6000});
+    EXPECT_EQ(ctx, rtp.audio.transport.remoteRtpEndpoint().port(),
+              std::uint16_t{6002});
+    EXPECT_EQ(ctx, planned.value().videoOutput.url,
+              std::string("rtp://127.0.0.1:6000?localrtpport=0&localrtcpport=0"));
+}
+
+void testRealtimeAvSyncRuntimeProductRejectsIndependentMutations(TestContext& ctx)
+{
+    auto planned = MediaRealtimeRtpTranscodePlanner::plan(
+        completeAvSyncRtpRequest());
+    EXPECT_TRUE(ctx, planned);
+    if (!planned || !planned.value().avSyncRuntime) return;
+    auto& outer = planned.value();
+    auto& runtime = *outer.avSyncRuntime;
+    const auto expectInvalid = [&ctx, &outer]() {
+        EXPECT_FALSE(ctx,
+                     MediaRealtimeRtpTranscodePlanner::validatePlannedProduct(
+                         outer));
+    };
+
+    runtime.groupKey = MediaAvSyncGroupKey("wrong");
+    expectInvalid();
+    runtime.groupKey = MediaAvSyncGroupKey("realtime.av");
+    ++runtime.queues.metadata;
+    expectInvalid();
+    --runtime.queues.metadata;
+    ++runtime.queues.packet;
+    expectInvalid();
+    --runtime.queues.packet;
+    ++runtime.queues.frame;
+    expectInvalid();
+    --runtime.queues.frame;
+    ++runtime.queues.mux;
+    expectInvalid();
+    --runtime.queues.mux;
+    ++runtime.edgePolicies.metadata.queuePolicy.capacity;
+    expectInvalid();
+    --runtime.edgePolicies.metadata.queuePolicy.capacity;
+    ++runtime.edgePolicies.packet.queuePolicy.capacity;
+    expectInvalid();
+    --runtime.edgePolicies.packet.queuePolicy.capacity;
+    ++runtime.edgePolicies.videoPacket.queuePolicy.capacity;
+    expectInvalid();
+    --runtime.edgePolicies.videoPacket.queuePolicy.capacity;
+    ++runtime.edgePolicies.audioPacket.queuePolicy.capacity;
+    expectInvalid();
+    --runtime.edgePolicies.audioPacket.queuePolicy.capacity;
+    ++runtime.edgePolicies.frame.queuePolicy.capacity;
+    expectInvalid();
+    --runtime.edgePolicies.frame.queuePolicy.capacity;
+    ++runtime.edgePolicies.mux.queuePolicy.capacity;
+    expectInvalid();
+    --runtime.edgePolicies.mux.queuePolicy.capacity;
+    ++runtime.edgePolicies.videoMux.queuePolicy.capacity;
+    expectInvalid();
+    --runtime.edgePolicies.videoMux.queuePolicy.capacity;
+    ++runtime.edgePolicies.audioMux.queuePolicy.capacity;
+    expectInvalid();
+    --runtime.edgePolicies.audioMux.queuePolicy.capacity;
+    runtime.threadingPolicy.mode = MediaThreadingMode::SingleThreaded;
+    expectInvalid();
+    runtime.threadingPolicy.mode = MediaThreadingMode::PerNodeWorker;
+    runtime.threadingPolicy.priority = MediaThreadPriority::Normal;
+    expectInvalid();
+    runtime.threadingPolicy.priority = MediaThreadPriority::High;
+    runtime.threadingPolicy.maxWorkerThreads = 1;
+    expectInvalid();
+    runtime.threadingPolicy.maxWorkerThreads = 0;
+    runtime.threadingPolicy.pinWorkers = true;
+    expectInvalid();
+    runtime.threadingPolicy.pinWorkers = false;
+    runtime.threadingPolicy.collectWorkerMetrics = false;
+    expectInvalid();
+    runtime.threadingPolicy.collectWorkerMetrics = true;
+    runtime.transition.participants[0].requiredChildren[0] = "wrong";
+    expectInvalid();
+    runtime.transition.participants[0].requiredChildren[0] =
+        "startup_generation_state";
+    ++runtime.audioCorrection.mailboxCapacity;
+    expectInvalid();
+    --runtime.audioCorrection.mailboxCapacity;
+    const auto maximumBlock =
+        runtime.audioCorrection.maximumResamplerOutputBlockSamples;
+    runtime.audioCorrection.maximumResamplerOutputBlockSamples =
+        runtime.audioCorrection.commandLeadSamples;
+    expectInvalid();
+    runtime.audioCorrection.maximumResamplerOutputBlockSamples = maximumBlock;
+    const auto worstCase = runtime.audioCorrection.worstCaseInFlightSamples;
+    runtime.audioCorrection.worstCaseInFlightSamples = -1;
+    expectInvalid();
+    runtime.audioCorrection.worstCaseInFlightSamples = worstCase;
+    const auto mailboxMargin =
+        runtime.audioCorrection.mailboxDeliveryMarginSamples;
+    runtime.audioCorrection.mailboxDeliveryMarginSamples = 0;
+    expectInvalid();
+    runtime.audioCorrection.mailboxDeliveryMarginSamples = mailboxMargin;
+    const auto commandLead = runtime.audioCorrection.commandLeadSamples;
+    runtime.audioCorrection.commandLeadSamples = worstCase + mailboxMargin +
+        maximumBlock;
+    expectInvalid();
+    runtime.audioCorrection.commandLeadSamples = commandLead;
+    runtime.audioCorrection.epochOutputSampleIndex = 1;
+    expectInvalid();
+    runtime.audioCorrection.epochOutputSampleIndex = 0;
+    const auto outputSampleRate = runtime.audioCorrection.outputSampleRate;
+    runtime.audioCorrection.outputSampleRate = 0;
+    expectInvalid();
+    runtime.audioCorrection.outputSampleRate = outputSampleRate;
+    auto removedParticipant = std::move(runtime.transition.participants.back());
+    runtime.transition.participants.pop_back();
+    expectInvalid();
+    runtime.transition.participants.push_back(std::move(removedParticipant));
+    runtime.transition.participants[4].participant =
+        MediaAvGenerationParticipant::ProjectMpegTsOutput;
+    expectInvalid();
+    runtime.transition.participants[4].participant =
+        MediaAvGenerationParticipant::RtpAudioOutput;
+    const auto acknowledgementTimeout =
+        runtime.transition.acknowledgementTimeout;
+    runtime.transition.acknowledgementTimeout =
+        MediaRunningTime::fromNanoseconds(0);
+    expectInvalid();
+    runtime.transition.acknowledgementTimeout = acknowledgementTimeout;
+    const auto terminalDrainWindow = runtime.transition.terminalDrainWindow;
+    runtime.transition.terminalDrainWindow =
+        MediaRunningTime::fromNanoseconds(0);
+    expectInvalid();
+    runtime.transition.terminalDrainWindow = terminalDrainWindow;
+    const auto topology = runtime.synchronization.topology;
+    runtime.synchronization.topology = MediaAvSyncTopology::MpegTsToMpegTs;
+    expectInvalid();
+    runtime.synchronization.topology = topology;
+    outer.outputLayout = RealtimeOutputStreamLayout::MuxedTransportStream;
+    expectInvalid();
+    outer.outputLayout = RealtimeOutputStreamLayout::SeparateStreams;
+    runtime.outputAdapter = MediaAvSyncOutputAdapterKind::ProjectMpegTs;
+    expectInvalid();
+    runtime.outputAdapter =
+        MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp;
+    auto& rtp = std::get<MediaSeparateRtpOutputRuntimePlan>(
+        runtime.protocolOutput);
+    rtp.sdpPath.clear();
+    expectInvalid();
+    rtp.sdpPath = outer.sdp.path;
+    rtp.video.packetization.codecName.clear();
+    expectInvalid();
+    rtp.video.packetization.codecName = "h264";
+    ++rtp.video.packetization.streamTimeBaseDenominator;
+    expectInvalid();
+    --rtp.video.packetization.streamTimeBaseDenominator;
+    ++rtp.video.packetization.payloadType;
+    expectInvalid();
+    --rtp.video.packetization.payloadType;
+    ++rtp.video.ssrc;
+    expectInvalid();
+    --rtp.video.ssrc;
+    ++rtp.video.baseTimestamp;
+    expectInvalid();
+    --rtp.video.baseTimestamp;
+    ++rtp.video.clockRate;
+    expectInvalid();
+    --rtp.video.clockRate;
+    rtp.video.cname.clear();
+    expectInvalid();
+    rtp.video.cname = *runtime.synchronization.rtp->videoOutput.cname;
+    const auto videoLead = rtp.video.senderLead;
+    rtp.video.senderLead = MediaRunningTime::fromNanoseconds(0);
+    expectInvalid();
+    rtp.video.senderLead = videoLead;
+    const auto reportInterval = rtp.audio.senderReportInterval;
+    rtp.audio.senderReportInterval = MediaRunningTime::fromNanoseconds(0);
+    expectInvalid();
+    rtp.audio.senderReportInterval = reportInterval;
+    ++rtp.audio.packetization.payloadType;
+    expectInvalid();
+    --rtp.audio.packetization.payloadType;
+    outer.videoOutput.writePacingEnabled = true;
+    expectInvalid();
+    outer.videoOutput.writePacingEnabled = false;
+    outer.videoOutput.writePacingBytesPerSecond = 1;
+    expectInvalid();
+    outer.videoOutput.writePacingBytesPerSecond = 0;
+    outer.videoOutput.writePacingBurstBytes = 1;
+    expectInvalid();
+    outer.videoOutput.writePacingBurstBytes = 0;
+    outer.audioOutput.writePacingEnabled = true;
+    expectInvalid();
+    outer.audioOutput.writePacingEnabled = false;
+    outer.videoMux.pacingPolicy.enablePacing = true;
+    expectInvalid();
+    outer.videoMux.pacingPolicy.enablePacing = false;
+    outer.audioMux.startupDelayMs = 1;
+    expectInvalid();
+    outer.audioMux.startupDelayMs = 0;
+    outer.avStartBarrier.expectVideo = true;
+    expectInvalid();
+    outer.avStartBarrier.expectVideo = false;
+
+    const auto expectMissingFacts = [&ctx, &outer, &runtime]() {
+        EXPECT_FALSE(ctx, MediaRealtimeAvSyncPlanningFactsResolver::resolve(
+                              outer, runtime.synchronization));
+    };
+    const auto decoderDelay = outer.audioPlan.decoderDelaySamples;
+    outer.audioPlan.decoderDelaySamples.reset();
+    expectMissingFacts();
+    outer.audioPlan.decoderDelaySamples = decoderDelay;
+    const auto maximumResamplerBlock =
+        outer.audioPlan.maximumResamplerOutputBlockSamples;
+    outer.audioPlan.maximumResamplerOutputBlockSamples.reset();
+    expectMissingFacts();
+    outer.audioPlan.maximumResamplerOutputBlockSamples = maximumResamplerBlock;
+    const auto packetCapacity = outer.queues.packet;
+    outer.queues.packet = 0;
+    expectMissingFacts();
+    outer.queues.packet = packetCapacity;
+    auto resolvedOutput = std::move(outer.audioPlan.resolvedOutput);
+    outer.audioPlan.resolvedOutput.reset();
+    expectMissingFacts();
+    outer.audioPlan.resolvedOutput = std::move(resolvedOutput);
+    const auto servoSampleRate =
+        runtime.synchronization.audioServo.outputSampleRate;
+    runtime.synchronization.audioServo.outputSampleRate.reset();
+    expectMissingFacts();
+    runtime.synchronization.audioServo.outputSampleRate = servoSampleRate;
+    const auto servoCommandLead =
+        runtime.synchronization.audioServo.commandLeadNs;
+    runtime.synchronization.audioServo.commandLeadNs.reset();
+    expectMissingFacts();
+    runtime.synchronization.audioServo.commandLeadNs = servoCommandLead;
+
+    outer.videoOutput.url =
+        "rtp://203.0.113.10:9?untrusted_decision=1";
+    EXPECT_TRUE(ctx, MediaRealtimeRtpTranscodePlanner::validatePlannedProduct(
+                         outer));
+
+    auto nonNumericHost = completeAvSyncRtpRequest();
+    nonNumericHost.output.host = "localhost";
+    EXPECT_FALSE(ctx, MediaRealtimeRtpTranscodePlanner::plan(nonNumericHost));
+}
+
 MediaRealtimeRtpTranscodeRequest avSyncTsRequest()
 {
     MediaRealtimeRtpTranscodeRequest request;
@@ -218,6 +544,47 @@ MediaProjectMpegTsResolvedPipelineFacts validTsResolvedFacts()
 {
     auto audio = resolvedAacOutput(MediaAudioProfile::knownAacLow());
     return MediaProjectMpegTsResolvedPipelineFacts{"h264", std::move(audio)};
+}
+
+void testRealtimePlannerProducesCompleteTsAvSyncRuntimeProduct(TestContext& ctx)
+{
+    auto outerResult = MediaRealtimeRtpTranscodePlanner::plan(
+        completeAvSyncRtpRequest());
+    EXPECT_TRUE(ctx, outerResult);
+    if (!outerResult) return;
+    auto outer = std::move(outerResult).value();
+    outer.inputLayout = RealtimeInputStreamLayout::MuxedTransportStream;
+    outer.outputLayout = RealtimeOutputStreamLayout::MuxedTransportStream;
+    outer.muxedOutput.url = "udp://127.0.0.1:7000";
+
+    const auto resolvedOutput = validTsResolvedFacts();
+    auto synchronization = MediaAvSyncPlanner::plan(
+        avSyncTsRequest(), &selectedTsProgram(), &resolvedOutput);
+    EXPECT_TRUE(ctx, synchronization);
+    if (!synchronization) return;
+    auto runtime = MediaRealtimeAvSyncRuntimePlanner::plan(
+        outer, std::move(synchronization).value());
+    EXPECT_TRUE(ctx, runtime);
+    if (!runtime) return;
+    outer.avSyncRuntime = std::move(runtime).value();
+
+    EXPECT_TRUE(ctx,
+                MediaRealtimeRtpTranscodePlanner::validatePlannedProduct(outer));
+    const auto& planned = *outer.avSyncRuntime;
+    EXPECT_EQ(ctx, planned.outputAdapter,
+              MediaAvSyncOutputAdapterKind::ProjectMpegTs);
+    EXPECT_EQ(ctx, planned.transition.participants.size(), std::size_t{4});
+    EXPECT_EQ(ctx, planned.transition.participants.back().participant,
+              MediaAvGenerationParticipant::ProjectMpegTsOutput);
+    EXPECT_TRUE(ctx,
+                std::holds_alternative<MediaProjectMpegTsRuntimeOutputPlan>(
+                    planned.protocolOutput));
+    auto& protocol = std::get<MediaProjectMpegTsRuntimeOutputPlan>(
+        outer.avSyncRuntime->protocolOutput);
+    protocol.url.clear();
+    EXPECT_FALSE(ctx,
+                 MediaRealtimeRtpTranscodePlanner::validatePlannedProduct(
+                     outer));
 }
 
 void testTsResolvedOutputSupportMatrix(TestContext& ctx)
@@ -984,6 +1351,9 @@ int main()
     testTsProgramSelectorRejectsAmbiguityAndInventoryMismatch(ctx);
     testTsEvidenceCapacityCoversProbeRollbackAndPredecessor(ctx);
     testAvSyncPlannerBuildsCompleteRtpContract(ctx);
+    testRealtimePlannerProducesCompleteAvSyncRuntimeProduct(ctx);
+    testRealtimePlannerProducesCompleteTsAvSyncRuntimeProduct(ctx);
+    testRealtimeAvSyncRuntimeProductRejectsIndependentMutations(ctx);
     testRawRtpInputPlannerProducesCompleteTransportPolicy(ctx);
     testAvSyncPlannerBuildsCompleteTsContract(ctx);
     testAvSyncPlannerRejectsSeparateRtpToTs(ctx);

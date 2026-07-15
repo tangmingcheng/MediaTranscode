@@ -32,6 +32,10 @@
 **Files:**
 - Create: `src/internal/graph/planner/avsync/MediaAvGenerationTransitionPlan.h`
 - Create: `src/internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h`
+- Create: `src/internal/graph/planner/realtime/MediaRealtimeAvSyncPlanningFacts.h`
+- Create: `src/internal/graph/planner/realtime/MediaRealtimeAvSyncPlanningFactsResolver.h`
+- Create: `src/internal/graph/planner/realtime/MediaRealtimeAvSyncPlanningFactsResolver.cpp`
+- Create: `src/internal/graph/planner/realtime/MediaScheduledRtpPacketizationPlan.h`
 - Create: `src/internal/graph/planner/realtime/MediaScheduledRtpOutputPlan.h`
 - Create: `src/internal/graph/planner/realtime/MediaScheduledRtpOutputPlan.cpp`
 - Create: `src/internal/graph/sync/MediaAudioPlaybackOrigin.h`
@@ -43,8 +47,10 @@
 - Modify: `tests/unit/test_planner.cpp`
 
 **Interfaces:**
-- Consumes the accepted `MediaAvSyncPlan`, `MediaGraphQueueParameters`, codec delay facts, RTP sender policy, and `MediaTsMuxPlan`.
+- Consumes the accepted `MediaAvSyncPlan`, `MediaGraphQueueParameters`, and mandatory typed `MediaRealtimeAvSyncPlanningFacts` produced by codec/capability preflight, plus RTP sender policy or `MediaTsMuxPlan`.
 - Produces the sole `MediaRealtimeAvSyncRuntimePlan` consumed by the executable binding and synchronized builder.
+- The user request remains intent-only. The facts resolver collects decoder delay, encoder lookahead, protocol batch, mailbox-delivery, and maximum-resampler-block facts from the selected codec/capability, queue, resampler, and protocol plans. A synchronized plan fails if any selected component cannot report its bound; the resolver cannot substitute constants or defaults.
+- Planner output carries an immutable RTP packetization descriptor, not `AVCodecParameters` or `ScheduledRtpMuxStreamConfig`. Task 10 materializes the runtime mux config only after the selected encoder exposes its real output codec parameters and extradata, and may validate but not revise the descriptor.
 
 ```cpp
 enum class MediaAvSyncOutputAdapterKind : std::uint8_t {
@@ -85,7 +91,7 @@ struct MediaAvGenerationTransitionPlan final {
 struct MediaScheduledRtpOutputPlan final {
     MediaScheduledStream stream;
     MediaRtpUdpSenderConfig transport;
-    ScheduledRtpMuxStreamConfig packetization;
+    MediaScheduledRtpPacketizationPlan packetization;
     std::uint32_t ssrc;
     std::uint32_t baseTimestamp;
     int clockRate;
@@ -129,7 +135,7 @@ struct MediaAudioPlaybackOrigin final {
 };
 ```
 
-`MediaSeparateRtpOutputRuntimePlan` contains complete video/audio `MediaScheduledRtpOutputPlan` values and the typed SDP publication path. `MediaProjectMpegTsRuntimeOutputPlan` contains the output URL, explicit `ByteSink + ProjectMpegTs` kinds, and the accepted `MediaProjectMpegTsOutputPlan`. Synchronized builders consume only this variant and the nested queue/edge/threading products; they do not combine decisions from outer legacy plan fields.
+`MediaSeparateRtpOutputRuntimePlan` contains complete video/audio `MediaScheduledRtpOutputPlan` decisions and the typed SDP publication path. Its packetization descriptors include selected codec identity, stream time base, packetization mode, payload type, maximum datagram size, and all other non-runtime packetization decisions, but never encoder-owned `AVCodecParameters` or extradata. `MediaProjectMpegTsRuntimeOutputPlan` contains the output URL, explicit `ByteSink + ProjectMpegTs` kinds, and the accepted `MediaProjectMpegTsOutputPlan`. Synchronized builders consume only this variant and the nested queue/edge/threading products; they do not combine decisions from outer legacy plan fields.
 
 - [ ] **Step 1: Write failing planner-product tests**
 
@@ -154,7 +160,7 @@ Run `cmake --build out/build/x64-debug --clean-first --target all`. Expected: co
 
 - [ ] **Step 3: Implement the planner product and proof**
 
-Replace `std::optional<MediaAvSyncPlan> avSync` with `std::optional<MediaRealtimeAvSyncRuntimePlan> avSyncRuntime`. Until Task 11 physically removes the legacy struct fields, synchronized requests must leave them inert and validation must reject any conflicting barrier/pacing value. Convert every bounded audio queue, decoder delay, encoder lookahead, protocol batch, mailbox delivery margin, and maximum resampler block to output samples with checked arithmetic. Reject missing facts, overflow, duplicate/missing participants, incorrect adapter/topology pairs, or failure of:
+Replace `std::optional<MediaAvSyncPlan> avSync` with `std::optional<MediaRealtimeAvSyncRuntimePlan> avSyncRuntime`. Until Task 11 physically removes the legacy struct fields, synchronized requests must leave them inert and validation must reject any conflicting barrier/pacing value. Extend the selected codec/capability, queue, resampler, and protocol planning products only as needed to expose mandatory typed bounds to `MediaRealtimeAvSyncPlanningFactsResolver`; do not add user-facing knobs. Convert every bounded audio queue, decoder delay, encoder lookahead, protocol batch, mailbox delivery margin, and maximum resampler block to output samples with checked arithmetic. Reject missing facts, overflow, duplicate/missing participants, incorrect adapter/topology pairs, or failure of:
 
 ```text
 commandLeadSamples > worstCaseInFlightSamples
@@ -860,7 +866,7 @@ Run `cmake --build out/build/x64-debug --clean-first --target all`. Expected: mi
 
 - [ ] **Step 3: Implement by composition, not rewrite**
 
-Instantiate one node per stream. Compose the accepted `ScheduledRtpSenderSession`, `ScheduledRtpMuxFfmpegSessionFactory`, UDP sender transport, RTP clock mapper, and RTCP generator. Extend the sender transaction boundary only enough to report success after the full access-unit datagram batch; the node then stamps one `MediaProtocolCommitAcknowledgement` with group-clock `observedAt`. Use `MediaRtpSdpDescription`, `MediaRtpSdpSerializer`, and `MediaAtomicUtf8FilePublisher`; do not use `av_sdp_create` or `std::ofstream` replacement.
+Instantiate one node per stream. After the selected encoder opens, materialize `ScheduledRtpMuxStreamConfig` exactly once from the Task 1 packetization descriptor plus the encoder's real output `AVCodecParameters` and extradata. Validate codec identity, time base, packetization mode, payload type, and datagram limit against the descriptor; any mismatch is terminal and no value is revised or inferred. Compose the accepted `ScheduledRtpSenderSession`, `ScheduledRtpMuxFfmpegSessionFactory`, UDP sender transport, RTP clock mapper, and RTCP generator. Extend the sender transaction boundary only enough to report success after the full access-unit datagram batch; the node then stamps one `MediaProtocolCommitAcknowledgement` with group-clock `observedAt`. Use `MediaRtpSdpDescription`, `MediaRtpSdpSerializer`, and `MediaAtomicUtf8FilePublisher`; do not use `av_sdp_create` or `std::ofstream` replacement.
 
 - [ ] **Step 4: Run GREEN and integration tests**
 

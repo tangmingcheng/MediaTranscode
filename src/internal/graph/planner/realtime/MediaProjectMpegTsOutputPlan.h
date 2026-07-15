@@ -14,6 +14,9 @@ public:
         const std::string& videoCodecName,
         const MediaResolvedAudioOutputPlan& audioOutput,
         MediaRunningTime transportDecodeLead);
+    static ::media::Result<MediaProjectMpegTsOutputPlan> accept(
+        int audioSampleRate,
+        MediaTsMuxPlan muxPlan);
 
     int audioSampleRate() const noexcept;
     const MediaTsMuxPlan& muxPlan() const noexcept;
