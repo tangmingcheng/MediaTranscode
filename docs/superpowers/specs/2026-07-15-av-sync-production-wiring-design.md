@@ -75,14 +75,16 @@ The coordinator progresses through acquiring, priming, armed, and released state
 
 `MediaPlaybackEpochBinderNode` is the only component issued a `MediaPlaybackEpochActivationCapability`. It validates the release group, plan, generation, and common window; uses `activatePlaybackEpoch` for the first generation and `activateNextPlaybackEpoch` only after a completed generation-transition barrier; and forwards both released stream sets only after activation succeeds. General runtime and node contexts cannot activate an epoch without this capability. Repeated, partial, old-generation, or conflicting release transactions fail without forwarding media.
 
+Epoch activation also publishes one immutable `MediaAudioPlaybackOrigin` for the same generation. It contains the epoch source/master anchors, the planner-required output sample rate, and an explicit nonnegative `epochOutputSampleIndex`. The audio trim/resample path must prove its first post-trim output sample is that index and corresponds exactly to `epoch.sourceStart`; it cannot infer, reset, or locally choose the origin.
+
 After binding, the video path is decode, filter, encode, and shared scheduler. The audio path is decode, one `MediaAudioStartupTrimNode`, resample, encode, and shared scheduler. The trim node is the sole consumer of `trimLeadingSamples`; no codec, resampler, scheduler, or protocol adapter may infer or repeat startup trimming.
 
 On discontinuity or hard synchronization error, `MediaAvGenerationTransitionCoordinator` executes one in-band transaction for the whole group:
 
 1. Revoke the old generation output permit so neither protocol adapter can commit more media.
 2. Broadcast a typed purge carrying old generation, proposed next generation, and transition sequence to startup, lineage registries, servo/correction mailbox, scheduler, RTP output, and MPEG-TS output.
-3. Require every planner-declared participant to clear queued media, pending commits, correction commands, deadlines, protocol session state, and generation-local counters, then acknowledge that exact transition sequence.
-4. Issue the binder its next-generation activation permission only after every acknowledgement succeeds; `activateNextPlaybackEpoch` publishes the new generation output permit atomically.
+3. Require every planner-declared aggregate participant to clear all of its child state before acknowledging that exact transition sequence. Startup has no independent participant: the canonical-lineage aggregate owns the single startup-generation state and every codec/filter/trim registry. The audio-correction participant has one planner-named child, `audio_correction_generation_state`, whose single transaction clears servo, mailbox, resampler watermark, and pending acknowledgements. A partial child or internal-state purge cannot produce the aggregate acknowledgement.
+4. Issue the binder its next-generation activation permission only after every acknowledgement succeeds. The capability calls the same group-owned transition service that validated the completed sequence; publishing the new epoch, audio playback origin, and output permit occurs under one critical section.
 
 Old-generation media cannot cross the revoked permit or the acknowledgement barrier. A stale, missing, duplicate, or failed acknowledgement poisons the group and aborts both streams. Audio and video never independently rebase.
 
@@ -121,7 +123,7 @@ The scheduler requires `emitOnMaster <= dispatchOnMaster <= presentationOnMaster
 
 Both output protocols expose the same typed `MediaProtocolCommitAcknowledgement`. The RTP adapter creates it only after `ScheduledRtpSenderSession::sendAccessUnit` has successfully written the complete access-unit datagram batch to the UDP sink. The project MPEG-TS adapter creates it only after `MediaMuxSession::write` has successfully completed every byte-sink write for that access unit; `FileMuxNode` publishes the acknowledgement on a typed side output even though audio and video share one mux. A returned `Status` alone is not a measurement: the adapter adds the committed generation, stream, source sequence, presentation/emission times, exact output sample interval, and master-clock commit observation. Partial or deferred sink writes cannot acknowledge.
 
-`MediaAudioPlayheadCommitNode`, consuming the audio `MediaProtocolCommitAcknowledgement`, is the sole producer of `MediaAudioDriftMeasurement`. Let the committed output sample interval be `[sampleBegin, sampleEnd)`, `epochSampleIndex` be the exact output sample index aligned with `epoch.sourceStart`, the unit master presentation window be `[presentationOnMaster, presentationOnMaster + duration)`, and `observedAt` be a group master-clock read taken immediately after the complete sink write. It computes:
+`MediaAudioPlayheadCommitNode`, consuming the audio `MediaProtocolCommitAcknowledgement`, is the sole producer of `MediaAudioDriftMeasurement`. Let the committed output sample interval be `[sampleBegin, sampleEnd)`, `epochSampleIndex` come from the active group-owned `MediaAudioPlaybackOrigin`, the unit master presentation window be `[presentationOnMaster, presentationOnMaster + duration)`, and `observedAt` be the acknowledgement value captured by the protocol adapter immediately after the complete sink write. The playhead node must not read the clock again. It computes:
 
 ```text
 sampleEndOnMaster = epoch.masterRelease
