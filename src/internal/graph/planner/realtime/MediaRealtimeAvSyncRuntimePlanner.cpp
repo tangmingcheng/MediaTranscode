@@ -3,64 +3,15 @@
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
 #include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncPlanningFactsResolver.h"
+#include "internal/graph/planner/realtime/MediaAudioCorrectionReachabilityPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
-#include "internal/graph/utils/MediaCodecNameUtils.h"
 
-#include <algorithm>
-#include <limits>
 #include <optional>
-#include <string>
 #include <utility>
 #include <variant>
 
 namespace media::ffmpeg::graph {
 namespace {
-
-::media::Result<std::int64_t> checkedAdd(std::int64_t left,
-                                        std::int64_t right,
-                                        const char* owner)
-{
-    if (left < 0 || right < 0 ||
-        left > std::numeric_limits<std::int64_t>::max() - right) {
-        return ::media::Result<std::int64_t>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                std::string(owner) + " sample bound overflow"));
-    }
-    return ::media::Result<std::int64_t>::success(left + right);
-}
-
-::media::Result<std::int64_t> runningTimeToSamples(MediaRunningTime time,
-                                                   int sampleRate)
-{
-    constexpr std::int64_t NanosecondsPerSecond = 1'000'000'000;
-    if (time <= MediaRunningTime::fromNanoseconds(0) || sampleRate <= 0 ||
-        time.nanoseconds() >
-            (std::numeric_limits<std::int64_t>::max() -
-             (NanosecondsPerSecond - 1)) / sampleRate) {
-        return ::media::Result<std::int64_t>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "audio command lead cannot be converted to output samples"));
-    }
-    return ::media::Result<std::int64_t>::success(
-        (time.nanoseconds() * sampleRate + NanosecondsPerSecond - 1) /
-        NanosecondsPerSecond);
-}
-
-::media::Result<MediaRunningTime> samplesToRunningTime(std::int64_t samples,
-                                                       int sampleRate)
-{
-    constexpr std::int64_t NanosecondsPerSecond = 1'000'000'000;
-    if (samples <= 0 || sampleRate <= 0 ||
-        samples > (std::numeric_limits<std::int64_t>::max() - sampleRate + 1) /
-                      NanosecondsPerSecond) {
-        return ::media::Result<MediaRunningTime>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "audio sample bound cannot be converted to running time"));
-    }
-    return ::media::Result<MediaRunningTime>::success(
-        MediaRunningTime::fromNanoseconds(
-            (samples * NanosecondsPerSecond + sampleRate - 1) / sampleRate));
-}
 
 ::media::Result<MediaScheduledRtpOutputPlan> scheduledRtpOutput(
     MediaScheduledStream stream,
@@ -91,133 +42,6 @@ namespace {
             senderReportInterval});
 }
 
-::media::Result<MediaAudioCorrectionReachabilityPlan> reachabilityPlan(
-    MediaAvSyncPlan& synchronization,
-    const MediaRealtimeAvSyncPlanningFacts& facts)
-{
-    if (!facts.outputSampleRate || !facts.decoderDelaySamples ||
-        !facts.encoderLookaheadSamples || !facts.decodeQueueSamples ||
-        !facts.resampleQueueSamples || !facts.encodeQueueSamples ||
-        !facts.schedulerQueueSamples || !facts.protocolBatchSamples ||
-        !facts.mailboxDeliveryMarginSamples ||
-        !facts.maximumResamplerOutputBlockSamples || !facts.mailboxCapacity) {
-        return ::media::Result<MediaAudioCorrectionReachabilityPlan>::failure(
-            ::media::ErrorInfo::notInitialized(
-                "A/V synchronization planning facts are incomplete"));
-    }
-    std::int64_t worst = 0;
-    for (const auto value : {
-             *facts.decoderDelaySamples,
-             *facts.encoderLookaheadSamples,
-             *facts.decodeQueueSamples,
-             *facts.resampleQueueSamples,
-             *facts.encodeQueueSamples,
-             *facts.schedulerQueueSamples,
-             *facts.protocolBatchSamples}) {
-        auto sum = checkedAdd(worst, value, "audio in-flight");
-        if (!sum) {
-            return ::media::Result<MediaAudioCorrectionReachabilityPlan>::failure(
-                sum.error());
-        }
-        worst = sum.value();
-    }
-    auto required = checkedAdd(
-        worst, *facts.mailboxDeliveryMarginSamples, "audio command lead");
-    if (!required) {
-        return ::media::Result<MediaAudioCorrectionReachabilityPlan>::failure(
-            required.error());
-    }
-    required = checkedAdd(required.value(),
-                          *facts.maximumResamplerOutputBlockSamples,
-                          "audio command lead");
-    if (!required || required.value() == std::numeric_limits<std::int64_t>::max()) {
-        return ::media::Result<MediaAudioCorrectionReachabilityPlan>::failure(
-            required ? ::media::ErrorInfo::invalidArgument(
-                           "audio command lead has no strict representable margin")
-                     : required.error());
-    }
-    if (!synchronization.audioServo.maximumMeasurementGapNs ||
-        !synchronization.audioServo.recoveryCorrectionLimitPpm) {
-        return ::media::Result<MediaAudioCorrectionReachabilityPlan>::failure(
-            ::media::ErrorInfo::notInitialized(
-                "audio measurement gap fact is missing"));
-    }
-    auto measurementGapSamples = runningTimeToSamples(
-        *synchronization.audioServo.maximumMeasurementGapNs,
-        *facts.outputSampleRate);
-    if (!measurementGapSamples ||
-        measurementGapSamples.value() ==
-            std::numeric_limits<std::int64_t>::max()) {
-        return ::media::Result<MediaAudioCorrectionReachabilityPlan>::failure(
-            measurementGapSamples
-                ? ::media::ErrorInfo::invalidArgument(
-                      "audio measurement gap has no strict representable margin")
-                : measurementGapSamples.error());
-    }
-    const auto correctionPpm = static_cast<std::int64_t>(
-        *synchronization.audioServo.recoveryCorrectionLimitPpm);
-    if (correctionPpm <= 0 || measurementGapSamples.value() >
-        (std::numeric_limits<std::int64_t>::max() - 999'999) /
-            correctionPpm) {
-        return ::media::Result<MediaAudioCorrectionReachabilityPlan>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "audio measurement correction headroom overflow"));
-    }
-    const std::int64_t correctionHeadroomSamples =
-        (measurementGapSamples.value() * correctionPpm + 999'999) / 1'000'000;
-    auto measurementLead = checkedAdd(
-        measurementGapSamples.value(), correctionHeadroomSamples,
-        "audio measurement command lead");
-    if (!measurementLead ||
-        measurementLead.value() == std::numeric_limits<std::int64_t>::max()) {
-        return ::media::Result<MediaAudioCorrectionReachabilityPlan>::failure(
-            measurementLead
-                ? ::media::ErrorInfo::invalidArgument(
-                      "audio measurement command lead has no strict margin")
-                : measurementLead.error());
-    }
-    const std::int64_t commandLeadSamples = std::max(
-        required.value() + 1, measurementLead.value() + 1);
-    auto commandLead = samplesToRunningTime(commandLeadSamples, *facts.outputSampleRate);
-    auto compensationSamples = checkedAdd(
-        commandLeadSamples,
-        *facts.maximumResamplerOutputBlockSamples,
-        "audio compensation window");
-    auto compensation = compensationSamples
-        ? samplesToRunningTime(compensationSamples.value(),
-                               *facts.outputSampleRate)
-        : ::media::Result<MediaRunningTime>::failure(
-              compensationSamples.error());
-    auto frequency = compensation
-        ? checkedAdd(compensation.value().nanoseconds(), 1'000'000'000,
-                     "audio frequency filter")
-        : ::media::Result<std::int64_t>::failure(compensation.error());
-    if (!commandLead || !compensation || !frequency ||
-        frequency.value() > 60'000'000'000) {
-        return ::media::Result<MediaAudioCorrectionReachabilityPlan>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "bounded audio queues exceed the synchronization policy duration"));
-    }
-    synchronization.audioServo.commandLeadNs = commandLead.value();
-    synchronization.audioServo.compensationWindowNs = compensation.value();
-    synchronization.audioServo.frequencyFilterTimeConstantNs =
-        MediaRunningTime::fromNanoseconds(frequency.value());
-    if (auto status = MediaAvSyncPlanValidator::validate(synchronization); !status) {
-        return ::media::Result<MediaAudioCorrectionReachabilityPlan>::failure(
-            status.error());
-    }
-    return ::media::Result<MediaAudioCorrectionReachabilityPlan>::success(
-        MediaAudioCorrectionReachabilityPlan{
-            *facts.outputSampleRate,
-            0,
-            worst,
-            *facts.protocolBatchSamples,
-            *facts.mailboxDeliveryMarginSamples,
-            *facts.maximumResamplerOutputBlockSamples,
-            commandLeadSamples,
-            *facts.mailboxCapacity});
-}
-
 } // namespace
 
 ::media::Result<MediaRealtimeAvSyncRuntimePlan>
@@ -231,13 +55,24 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
         return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
             facts.error());
     }
-    auto correction = reachabilityPlan(synchronization, facts.value());
+    auto correction = MediaAudioCorrectionReachabilityPlanner::plan(
+        synchronization, facts.value());
     if (!correction || !facts.value().acknowledgementTimeout ||
         !facts.value().terminalDrainWindow || !synchronization.topology) {
         return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
             correction ? ::media::ErrorInfo::notInitialized(
                              "A/V generation transition timing facts are incomplete")
                        : correction.error());
+    }
+    synchronization.audioServo.commandLeadNs = correction.value().commandLead;
+    synchronization.audioServo.compensationWindowNs =
+        correction.value().compensationWindow;
+    synchronization.audioServo.frequencyFilterTimeConstantNs =
+        correction.value().frequencyFilterTimeConstant;
+    if (auto status = MediaAvSyncPlanValidator::validate(synchronization);
+        !status) {
+        return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
+            status.error());
     }
 
     MediaAvSyncOutputAdapterKind adapter;
@@ -320,7 +155,8 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             outer.edgePolicies,
             outer.threadingPolicy,
             std::move(transition),
-            std::move(correction).value()});
+            facts.value(),
+            correction.value().correction});
 }
 
 } // namespace media::ffmpeg::graph

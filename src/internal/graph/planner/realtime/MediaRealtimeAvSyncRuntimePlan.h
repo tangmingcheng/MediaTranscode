@@ -9,6 +9,7 @@
 #include "internal/graph/planner/avsync/MediaAvSyncPlan.h"
 #include "internal/graph/planner/avsync/MediaAvSyncOutputAdapterKind.h"
 #include "internal/graph/planner/realtime/MediaProjectMpegTsOutputPlan.h"
+#include "internal/graph/planner/realtime/MediaRealtimeAvSyncPlanningFacts.h"
 #include "internal/graph/planner/realtime/MediaScheduledRtpOutputPlan.h"
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
 
@@ -27,6 +28,8 @@ struct MediaAudioCorrectionReachabilityPlan final {
     std::int64_t maximumResamplerOutputBlockSamples;
     std::int64_t commandLeadSamples;
     std::size_t mailboxCapacity;
+    friend bool operator==(const MediaAudioCorrectionReachabilityPlan&,
+                           const MediaAudioCorrectionReachabilityPlan&) = default;
 };
 
 struct MediaSeparateRtpOutputRuntimePlan final {
@@ -52,6 +55,7 @@ struct MediaRealtimeAvSyncRuntimePlan final {
     MediaRealtimeEdgePolicySet edgePolicies;
     MediaThreadingPolicy threadingPolicy;
     MediaAvGenerationTransitionPlan transition;
+    MediaRealtimeAvSyncPlanningFacts planningFacts;
     MediaAudioCorrectionReachabilityPlan audioCorrection;
 };
 

@@ -7,92 +7,18 @@
 #include "internal/graph/planner/realtime/MediaRealtimeOutputPolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlanValidator.h"
+#include "internal/graph/planner/realtime/MediaRealtimeAvSyncComponentBoundsPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestValidator.h"
 #include "internal/graph/planner/realtime/MediaRealtimeTsInputPlanValidator.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 
-#include <limits>
 #include <optional>
 #include <string>
 #include <utility>
 
 namespace media::ffmpeg::graph {
 namespace {
-
-::media::Result<MediaRealtimeAvSyncComponentBounds> planAvSyncComponentBounds(
-    const MediaRealtimeRtpTranscodePlan& plan)
-{
-    if (!plan.audioPlan.selectedDecoder || !plan.audioPlan.selectedResampler ||
-        !plan.audioPlan.resolvedOutput ||
-        plan.audioPlan.resolvedOutput->codecFrameSamples() <= 0) {
-        return ::media::Result<MediaRealtimeAvSyncComponentBounds>::failure(
-            ::media::ErrorInfo::notInitialized(
-                "synchronized audio components did not publish timing bounds"));
-    }
-    const auto multiply = [](std::size_t capacity, std::int64_t samples,
-                             const char* owner) -> ::media::Result<std::int64_t> {
-        if (capacity == 0 || samples <= 0 ||
-            capacity > static_cast<std::size_t>(
-                std::numeric_limits<std::int64_t>::max() / samples)) {
-            return ::media::Result<std::int64_t>::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    std::string(owner) + " bound is not representable"));
-        }
-        return ::media::Result<std::int64_t>::success(
-            static_cast<std::int64_t>(capacity) * samples);
-    };
-    const auto convertToOutput = [](std::int64_t inputSamples,
-                                    int inputRate, int outputRate,
-                                    const char* owner)
-        -> ::media::Result<std::int64_t> {
-        if (inputSamples < 0 || inputRate <= 0 || outputRate <= 0 ||
-            inputSamples > (std::numeric_limits<std::int64_t>::max() -
-                            inputRate + 1) / outputRate) {
-            return ::media::Result<std::int64_t>::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    std::string(owner) + " conversion is not representable"));
-        }
-        return ::media::Result<std::int64_t>::success(
-            (inputSamples * outputRate + inputRate - 1) / inputRate);
-    };
-    const auto& decoder = *plan.audioPlan.selectedDecoder;
-    const auto& resampler = *plan.audioPlan.selectedResampler;
-    const int outputRate = plan.audioPlan.resolvedOutput->sampleRate();
-    auto decoderDelay = convertToOutput(
-        decoder.delayInputSamples, decoder.inputSampleRate, outputRate,
-        "decoder delay");
-    auto decoderBlockOutput = convertToOutput(
-        decoder.maximumOutputBlockInputSamples,
-        decoder.outputSampleRate, outputRate, "decoder output block");
-    if (!decoderDelay || !decoderBlockOutput ||
-        resampler.outputSampleRate != outputRate) {
-        return ::media::Result<MediaRealtimeAvSyncComponentBounds>::failure(
-            !decoderDelay ? decoderDelay.error() : !decoderBlockOutput
-                ? decoderBlockOutput.error()
-                : ::media::ErrorInfo::invalidArgument(
-                      "resampler output sample domain conflicts with encoder"));
-    }
-    const auto decoderBlock = decoderBlockOutput.value();
-    const auto resamplerBlock = resampler.maximumOutputBlockSamples;
-    const auto encoderBlock = plan.audioPlan.resolvedOutput->codecFrameSamples();
-    auto decode = multiply(plan.queues.packet, decoderBlock, "decode queue");
-    auto resample = multiply(plan.queues.frame, decoderBlock, "resample queue");
-    auto encode = multiply(plan.queues.frame, resamplerBlock, "encode queue");
-    auto scheduler = multiply(plan.queues.mux, encoderBlock, "scheduler queue");
-    auto mailbox = multiply(plan.queues.metadata, resamplerBlock, "correction mailbox");
-    if (!decode || !resample || !encode || !scheduler || !mailbox) {
-        return ::media::Result<MediaRealtimeAvSyncComponentBounds>::failure(
-            !decode ? decode.error() : !resample ? resample.error() :
-            !encode ? encode.error() : !scheduler ? scheduler.error() : mailbox.error());
-    }
-    return ::media::Result<MediaRealtimeAvSyncComponentBounds>::success(
-        MediaRealtimeAvSyncComponentBounds{
-            decoderDelay.value(),
-            decode.value(), resample.value(), encode.value(), scheduler.value(),
-            mailbox.value(), resamplerBlock,
-            plan.queues.metadata});
-}
 
 ::media::Status planScheduledRtpPacketization(
     MediaRealtimeRtpTranscodePlan& plan,
@@ -550,7 +476,8 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(outputStatus.error());
     }
     if (MediaRealtimeRequestClassifier::audioRequested(options)) {
-        auto componentBounds = planAvSyncComponentBounds(plan);
+        auto componentBounds =
+            MediaRealtimeAvSyncComponentBoundsPlanner::plan(plan);
         if (!componentBounds) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
                 componentBounds.error());

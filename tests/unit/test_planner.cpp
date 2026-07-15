@@ -12,6 +12,8 @@
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncPlanningFactsResolver.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlanner.h"
+#include "internal/graph/planner/realtime/MediaAudioCorrectionReachabilityPlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeAvSyncComponentBoundsPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeInputPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeOutputPolicyPlanner.h"
@@ -247,7 +249,7 @@ void testRealtimePlannerProducesCompleteAvSyncRuntimeProduct(TestContext& ctx)
         const auto& decoder = *planned.value().audioPlan.selectedDecoder;
         const auto& resampler = *planned.value().audioPlan.selectedResampler;
         EXPECT_TRUE(ctx, !decoder.name.empty());
-        EXPECT_TRUE(ctx, decoder.delayInputSamples >= 0);
+        EXPECT_TRUE(ctx, decoder.delayOutputSamples >= 0);
         EXPECT_EQ(ctx, decoder.maximumOutputBlockInputSamples, 1024);
         EXPECT_EQ(ctx, resampler.maximumInputBlockSamples,
                   decoder.maximumOutputBlockInputSamples);
@@ -306,6 +308,23 @@ void testRealtimePlannerProducesCompleteAvSyncRuntimeProduct(TestContext& ctx)
               std::string("rtp://127.0.0.1:6000?localrtpport=0&localrtcpport=0"));
 }
 
+void testDecoderDelayUsesSelectedOutputSampleDomain(TestContext& ctx)
+{
+    auto planned = MediaRealtimeRtpTranscodePlanner::plan(
+        completeAvSyncRtpRequest());
+    EXPECT_TRUE(ctx, planned);
+    if (!planned || !planned.value().audioPlan.selectedDecoder ||
+        !planned.value().audioPlan.selectedResampler) return;
+    auto& outer = planned.value();
+    outer.audioPlan.selectedDecoder->inputSampleRate = 96'000;
+    outer.audioPlan.selectedDecoder->outputSampleRate = 48'000;
+    outer.audioPlan.selectedDecoder->delayOutputSamples = 480;
+    outer.audioPlan.selectedResampler->inputSampleRate = 48'000;
+    auto bounds = MediaRealtimeAvSyncComponentBoundsPlanner::plan(outer);
+    EXPECT_TRUE(ctx, bounds);
+    if (bounds) EXPECT_EQ(ctx, bounds.value().decoderDelaySamples, 480);
+}
+
 void testRealtimeAvSyncRuntimeProductRejectsIndependentMutations(TestContext& ctx)
 {
     auto planned = MediaRealtimeRtpTranscodePlanner::plan(
@@ -324,6 +343,101 @@ void testRealtimeAvSyncRuntimeProductRejectsIndependentMutations(TestContext& ct
                      MediaRealtimeRtpTranscodePlanner::validatePlannedProduct(
                          outer));
     };
+
+    const auto selectedComponentBounds = outer.avSyncComponentBounds;
+    outer.avSyncComponentBounds.reset();
+    expectInvalid();
+    outer.avSyncComponentBounds = selectedComponentBounds;
+    ++outer.avSyncComponentBounds->decodeQueueSamples;
+    expectInvalid();
+    outer.avSyncComponentBounds = selectedComponentBounds;
+    const auto selectedDecoderDelay =
+        outer.audioPlan.selectedDecoder->delayOutputSamples;
+    ++outer.audioPlan.selectedDecoder->delayOutputSamples;
+    expectInvalid();
+    outer.audioPlan.selectedDecoder->delayOutputSamples = selectedDecoderDelay;
+    const auto selectedResamplerBlock =
+        outer.audioPlan.selectedResampler->maximumOutputBlockSamples;
+    ++outer.audioPlan.selectedResampler->maximumOutputBlockSamples;
+    expectInvalid();
+    outer.audioPlan.selectedResampler->maximumOutputBlockSamples =
+        selectedResamplerBlock;
+
+    const auto selectedPlanningFacts = runtime.planningFacts;
+    runtime.planningFacts.outputSampleRate.reset();
+    expectInvalid();
+    runtime.planningFacts = selectedPlanningFacts;
+    ++*runtime.planningFacts.decoderDelaySamples;
+    expectInvalid();
+    runtime.planningFacts = selectedPlanningFacts;
+    ++*runtime.planningFacts.encoderLookaheadSamples;
+    expectInvalid();
+    runtime.planningFacts = selectedPlanningFacts;
+    ++*runtime.planningFacts.decodeQueueSamples;
+    expectInvalid();
+    runtime.planningFacts = selectedPlanningFacts;
+    ++*runtime.planningFacts.resampleQueueSamples;
+    expectInvalid();
+    runtime.planningFacts = selectedPlanningFacts;
+    ++*runtime.planningFacts.encodeQueueSamples;
+    expectInvalid();
+    runtime.planningFacts = selectedPlanningFacts;
+    ++*runtime.planningFacts.schedulerQueueSamples;
+    expectInvalid();
+    runtime.planningFacts = selectedPlanningFacts;
+    ++*runtime.planningFacts.protocolBatchSamples;
+    expectInvalid();
+    runtime.planningFacts = selectedPlanningFacts;
+    ++*runtime.planningFacts.mailboxDeliveryMarginSamples;
+    expectInvalid();
+    runtime.planningFacts = selectedPlanningFacts;
+    ++*runtime.planningFacts.maximumResamplerOutputBlockSamples;
+    expectInvalid();
+    runtime.planningFacts = selectedPlanningFacts;
+    ++*runtime.planningFacts.mailboxCapacity;
+    expectInvalid();
+    runtime.planningFacts = selectedPlanningFacts;
+    runtime.planningFacts.acknowledgementTimeout =
+        MediaRunningTime::fromNanoseconds(
+            runtime.planningFacts.acknowledgementTimeout->nanoseconds() + 1);
+    expectInvalid();
+    runtime.planningFacts = selectedPlanningFacts;
+    runtime.planningFacts.terminalDrainWindow =
+        MediaRunningTime::fromNanoseconds(
+            runtime.planningFacts.terminalDrainWindow->nanoseconds() + 1);
+    expectInvalid();
+    runtime.planningFacts = selectedPlanningFacts;
+
+    auto alternateFacts = selectedPlanningFacts;
+    ++*alternateFacts.decodeQueueSamples;
+    auto alternateCorrection = MediaAudioCorrectionReachabilityPlanner::plan(
+        runtime.synchronization, alternateFacts);
+    EXPECT_TRUE(ctx, alternateCorrection);
+    if (alternateCorrection) {
+        const auto selectedCorrection = runtime.audioCorrection;
+        const auto selectedCommandLead =
+            runtime.synchronization.audioServo.commandLeadNs;
+        const auto selectedCompensation =
+            runtime.synchronization.audioServo.compensationWindowNs;
+        const auto selectedFrequency =
+            runtime.synchronization.audioServo.frequencyFilterTimeConstantNs;
+        runtime.planningFacts = alternateFacts;
+        runtime.audioCorrection = alternateCorrection.value().correction;
+        runtime.synchronization.audioServo.commandLeadNs =
+            alternateCorrection.value().commandLead;
+        runtime.synchronization.audioServo.compensationWindowNs =
+            alternateCorrection.value().compensationWindow;
+        runtime.synchronization.audioServo.frequencyFilterTimeConstantNs =
+            alternateCorrection.value().frequencyFilterTimeConstant;
+        expectInvalid();
+        runtime.planningFacts = selectedPlanningFacts;
+        runtime.audioCorrection = selectedCorrection;
+        runtime.synchronization.audioServo.commandLeadNs = selectedCommandLead;
+        runtime.synchronization.audioServo.compensationWindowNs =
+            selectedCompensation;
+        runtime.synchronization.audioServo.frequencyFilterTimeConstantNs =
+            selectedFrequency;
+    }
 
     runtime.groupKey = MediaAvSyncGroupKey("wrong");
     expectInvalid();
@@ -406,6 +520,28 @@ void testRealtimeAvSyncRuntimeProductRejectsIndependentMutations(TestContext& ct
         maximumBlock;
     expectInvalid();
     runtime.audioCorrection.commandLeadSamples = commandLead;
+    const auto commandLeadTime =
+        runtime.synchronization.audioServo.commandLeadNs;
+    runtime.synchronization.audioServo.commandLeadNs =
+        MediaRunningTime::fromNanoseconds(
+            commandLeadTime->nanoseconds() + 1);
+    expectInvalid();
+    runtime.synchronization.audioServo.commandLeadNs = commandLeadTime;
+    const auto compensationTime =
+        runtime.synchronization.audioServo.compensationWindowNs;
+    runtime.synchronization.audioServo.compensationWindowNs =
+        MediaRunningTime::fromNanoseconds(
+            compensationTime->nanoseconds() + 1);
+    expectInvalid();
+    runtime.synchronization.audioServo.compensationWindowNs = compensationTime;
+    const auto frequencyTime =
+        runtime.synchronization.audioServo.frequencyFilterTimeConstantNs;
+    runtime.synchronization.audioServo.frequencyFilterTimeConstantNs =
+        MediaRunningTime::fromNanoseconds(
+            frequencyTime->nanoseconds() + 1);
+    expectInvalid();
+    runtime.synchronization.audioServo.frequencyFilterTimeConstantNs =
+        frequencyTime;
     runtime.audioCorrection.epochOutputSampleIndex = 1;
     expectInvalid();
     runtime.audioCorrection.epochOutputSampleIndex = 0;
@@ -1866,6 +2002,7 @@ int main()
     testTsEvidenceCapacityCoversProbeRollbackAndPredecessor(ctx);
     testAvSyncPlannerBuildsCompleteRtpContract(ctx);
     testRealtimePlannerProducesCompleteAvSyncRuntimeProduct(ctx);
+    testDecoderDelayUsesSelectedOutputSampleDomain(ctx);
     testRealtimePlannerProducesCompleteTsAvSyncRuntimeProduct(ctx);
     testSelectedResamplerPublishesSteadyStateBound(ctx);
     testRealtimeAvSyncRuntimeProductRejectsIndependentMutations(ctx);

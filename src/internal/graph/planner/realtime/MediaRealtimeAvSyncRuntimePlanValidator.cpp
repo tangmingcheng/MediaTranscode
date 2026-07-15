@@ -3,6 +3,9 @@
 #include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlanner.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
+#include "internal/graph/planner/realtime/MediaAudioCorrectionReachabilityPlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeAvSyncComponentBoundsPlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeAvSyncPlanningFactsResolver.h"
 
 #include <cstdint>
 #include <limits>
@@ -27,6 +30,31 @@ namespace media::ffmpeg::graph {
     if (runtime.groupKey.value() != "realtime.av" ||
         !MediaAvSyncPlanValidator::validate(runtime.synchronization)) {
         return invalid("group or synchronization plan");
+    }
+    auto selectedBounds = MediaRealtimeAvSyncComponentBoundsPlanner::plan(outer);
+    if (!selectedBounds || !outer.avSyncComponentBounds ||
+        selectedBounds.value() != *outer.avSyncComponentBounds) {
+        return invalid("selected component bounds");
+    }
+    auto selectedFacts = MediaRealtimeAvSyncPlanningFactsResolver::resolve(
+        outer, runtime.synchronization);
+    if (!selectedFacts || selectedFacts.value() != runtime.planningFacts) {
+        return invalid("selected planning facts");
+    }
+    auto expectedCorrection = MediaAudioCorrectionReachabilityPlanner::plan(
+        runtime.synchronization, runtime.planningFacts);
+    if (!expectedCorrection ||
+        runtime.audioCorrection != expectedCorrection.value().correction ||
+        !runtime.synchronization.audioServo.commandLeadNs ||
+        !runtime.synchronization.audioServo.compensationWindowNs ||
+        !runtime.synchronization.audioServo.frequencyFilterTimeConstantNs ||
+        *runtime.synchronization.audioServo.commandLeadNs !=
+            expectedCorrection.value().commandLead ||
+        *runtime.synchronization.audioServo.compensationWindowNs !=
+            expectedCorrection.value().compensationWindow ||
+        *runtime.synchronization.audioServo.frequencyFilterTimeConstantNs !=
+            expectedCorrection.value().frequencyFilterTimeConstant) {
+        return invalid("audio correction derivation");
     }
     if (runtime.queues.metadata != outer.queues.metadata ||
         runtime.queues.packet != outer.queues.packet ||
@@ -65,7 +93,13 @@ namespace media::ffmpeg::graph {
     if (runtime.transition.acknowledgementTimeout <=
             MediaRunningTime::fromNanoseconds(0) ||
         runtime.transition.terminalDrainWindow <=
-            MediaRunningTime::fromNanoseconds(0)) {
+            MediaRunningTime::fromNanoseconds(0) ||
+        !runtime.planningFacts.acknowledgementTimeout ||
+        !runtime.planningFacts.terminalDrainWindow ||
+        runtime.transition.acknowledgementTimeout !=
+            *runtime.planningFacts.acknowledgementTimeout ||
+        runtime.transition.terminalDrainWindow !=
+            *runtime.planningFacts.terminalDrainWindow) {
         return invalid("transition timeout");
     }
     if (runtime.outputAdapter !=

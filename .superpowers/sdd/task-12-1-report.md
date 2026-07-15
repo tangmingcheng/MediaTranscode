@@ -48,6 +48,14 @@
 - `out/build/x64-debug/media_transcode_runtime_tests.exe` - exit 0.
 - `ctest --test-dir out/build/x64-debug -C Debug --output-on-failure -L deterministic --timeout 60` - 8/8 passed, 0 failed, 12.62 seconds after CRLF normalization.
 
+## Third-review findings 12-13 remediation
+
+- Renamed the decoder fact to `delayOutputSamples` with no compatibility alias. The shared component-bounds planner converts it from the selected decoder output sample rate and rejects decoder/resampler/encoder domain conflicts. An unequal 96 kHz input / 48 kHz decoder-output regression preserves a 480-sample decoder delay instead of scaling it as an input-domain value.
+- The authoritative runtime product now retains the complete finalized `MediaRealtimeAvSyncPlanningFacts`. Final validation recomputes component bounds from selected decoder, resampler, queue, encoder, and mailbox products; resolves protocol facts; compares every retained fact; and uses one shared checked reachability planner to compare the complete correction product and exact command-lead, compensation-window, and frequency-filter time representations.
+- Tamper coverage removes component facts, substitutes positive component bounds, mutates every retained planning fact, mutates each correction/time field, and substitutes a separately recomputed positive self-consistent facts/correction/time set. All are rejected against the selected components.
+- RED: planner compilation failed at the missing shared component/reachability planner contracts. Focused GREEN: planner build and executable both exited `0` with the new unequal-rate and authoritative-product regressions.
+- Fresh verification: planner, builder, node, core, and runtime executables exited `0`; after final CRLF normalization, clean-first all exited `0` with 393 files cleaned and 394 actions, and deterministic passed 8/8 in 14.05 seconds.
+
 ## Independent review remediation
 
 - RED: under `VsDevCmd.bat`, the planner target built and the planner executable failed at `tests/unit/test_planner.cpp:293` because removing the mandatory synchronized runtime product was still accepted.

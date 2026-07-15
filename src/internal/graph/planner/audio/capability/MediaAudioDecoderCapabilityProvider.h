@@ -15,7 +15,7 @@ struct MediaSelectedAudioDecoder final {
     int inputSampleRate;
     int outputSampleRate;
     int outputChannels;
-    std::int64_t delayInputSamples;
+    std::int64_t delayOutputSamples;
     std::int64_t maximumOutputBlockInputSamples;
 };
 

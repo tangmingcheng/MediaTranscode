@@ -22,6 +22,8 @@ struct MediaRealtimeAvSyncPlanningFacts final {
     std::optional<std::size_t> mailboxCapacity;
     std::optional<MediaRunningTime> acknowledgementTimeout;
     std::optional<MediaRunningTime> terminalDrainWindow;
+    friend bool operator==(const MediaRealtimeAvSyncPlanningFacts&,
+                           const MediaRealtimeAvSyncPlanningFacts&) = default;
 };
 
 struct MediaRealtimeAvSyncComponentBounds final {
@@ -33,6 +35,8 @@ struct MediaRealtimeAvSyncComponentBounds final {
     std::int64_t mailboxDeliveryMarginSamples;
     std::int64_t maximumResamplerOutputBlockSamples;
     std::size_t mailboxCapacity;
+    friend bool operator==(const MediaRealtimeAvSyncComponentBounds&,
+                           const MediaRealtimeAvSyncComponentBounds&) = default;
 };
 
 } // namespace media::ffmpeg::graph
