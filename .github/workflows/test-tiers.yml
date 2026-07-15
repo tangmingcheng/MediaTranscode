@@ -1,9 +1,9 @@
 name: Test tiers
 
 env:
-  FFMPEG_ASSET_ID: "472604443"
-  FFMPEG_SHA256: "c53d5ec6ffbf476d3beba8b185ad009ae7359e7730deeb5fafde89c4553a9ffc"
-  GITHUB_TOKEN: ${{ github.token }}
+  FFMPEG_RELEASE_TAG: "autobuild-2026-07-14-13-19"
+  FFMPEG_ASSET_NAME: "ffmpeg-n8.1.2-22-g94138f6973-win64-gpl-shared-8.1.zip"
+  FFMPEG_SHA256: "3cd74234a1c9acf2546143bcc68b3ffe84e16f32e3be32f5096d61844739b17d"
 
 on:
   pull_request:
@@ -17,6 +17,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ilammy/msvc-dev-cmd@v1
+      - name: Validate FFmpeg SDK pin contract
+        shell: pwsh
+        run: tests/ci/test_prepare_ffmpeg_sdk_contract.ps1
       - name: Prepare pinned FFmpeg 8.1 shared SDK
         shell: pwsh
         run: .github/scripts/prepare-ffmpeg-sdk.ps1

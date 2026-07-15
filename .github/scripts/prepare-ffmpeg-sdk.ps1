@@ -1,15 +1,23 @@
 $ErrorActionPreference = 'Stop'
 
-$archive = Join-Path $env:RUNNER_TEMP 'ffmpeg-sdk.zip'
-$sdkParent = Join-Path $env:RUNNER_TEMP 'ffmpeg-sdk'
-$headers = @{
-    Accept = 'application/octet-stream'
-    Authorization = "Bearer $env:GITHUB_TOKEN"
-    'X-GitHub-Api-Version' = '2022-11-28'
+$requiredEnvironmentVariables = @(
+    'FFMPEG_RELEASE_TAG',
+    'FFMPEG_ASSET_NAME',
+    'FFMPEG_SHA256',
+    'RUNNER_TEMP',
+    'GITHUB_WORKSPACE'
+)
+foreach ($name in $requiredEnvironmentVariables) {
+    if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+        throw "Required environment variable $name is not set"
+    }
 }
 
-Invoke-WebRequest "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/assets/$env:FFMPEG_ASSET_ID" `
-    -Headers $headers -OutFile $archive
+$archive = Join-Path $env:RUNNER_TEMP 'ffmpeg-sdk.zip'
+$sdkParent = Join-Path $env:RUNNER_TEMP 'ffmpeg-sdk'
+$downloadUri = "https://github.com/BtbN/FFmpeg-Builds/releases/download/$env:FFMPEG_RELEASE_TAG/$env:FFMPEG_ASSET_NAME"
+
+Invoke-WebRequest $downloadUri -OutFile $archive
 $actualHash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actualHash -ne $env:FFMPEG_SHA256) {
     throw "FFmpeg SDK checksum mismatch: $actualHash"
