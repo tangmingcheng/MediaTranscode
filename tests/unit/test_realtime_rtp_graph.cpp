@@ -2139,7 +2139,8 @@ void testBuildPlansRawRtpH264Graph(TestContext& ctx)
 
 void testBuildPlansRawRtpAudioVideoGraph(TestContext& ctx)
 {
-    const auto graphResult = MediaRealtimeRtpTranscodeGraphBuilder::build(validRawRtpAudioVideoOptions());
+    const auto request = validRawRtpAudioVideoOptions();
+    const auto graphResult = MediaRealtimeRtpTranscodeGraphBuilder::build(request);
     EXPECT_TRUE(ctx, graphResult);
     if (!graphResult) {
         std::cerr << graphResult.error().describe() << '\n';
@@ -2148,10 +2149,28 @@ void testBuildPlansRawRtpAudioVideoGraph(TestContext& ctx)
 
     const MediaGraph& graph = graphResult.value();
     EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::RawRtpInput) != nullptr);
+    EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::VideoTimestamp) == nullptr);
     EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::AudioDecode), static_cast<std::size_t>(1));
     EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::AudioEncode), static_cast<std::size_t>(1));
     EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::RtpOutput), static_cast<std::size_t>(2));
     EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::RtpMux), static_cast<std::size_t>(2));
+    const MediaNode* videoDecode = findNodeByName(
+        graph, "realtime.video.transcode.decode");
+    const MediaNode* videoFrameRate = findNodeByName(
+        graph, "realtime.video.transcode.framerate");
+    EXPECT_TRUE(ctx, videoDecode != nullptr);
+    EXPECT_TRUE(ctx, videoFrameRate != nullptr);
+    if (videoDecode && videoFrameRate) {
+        EXPECT_EQ(ctx,
+                  videoDecode->options.value("video.lineage.capacity"),
+                  std::to_string(request.parameters.queues.frame));
+        EXPECT_EQ(ctx,
+                  videoDecode->options.value("video.lineage.identity"),
+                  std::string("video_decode"));
+        EXPECT_EQ(ctx,
+                  videoFrameRate->options.value("video.lineage.identity"),
+                  std::string("video_frame_rate"));
+    }
     const MediaNode* clockGroup = findNodeByKind(graph, MediaNodeKind::RtpClockGroup);
     EXPECT_TRUE(ctx, clockGroup != nullptr);
     if (clockGroup) {

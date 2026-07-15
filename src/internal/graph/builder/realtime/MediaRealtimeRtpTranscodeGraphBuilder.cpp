@@ -285,6 +285,10 @@ bool separateRtpOutput(const MediaRealtimeRtpTranscodePlan& plan) noexcept
 ::media::Result<MediaGraph> MediaRealtimeRtpTranscodeGraphBuilder::build(
     MediaRealtimeRtpTranscodePlan plan)
 {
+    if (auto status = MediaRealtimeRtpTranscodePlanner::validatePlannedProduct(
+            plan); !status) {
+        return ::media::Result<MediaGraph>::failure(status.error());
+    }
     if (plan.muxedOutput.muxSessionKind ==
         MediaMuxSessionKind::ProjectMpegTs) {
         return ::media::Result<MediaGraph>::failure(
@@ -420,6 +424,15 @@ bool separateRtpOutput(const MediaRealtimeRtpTranscodePlan& plan) noexcept
     videoOptions.queues = plan.queues;
     videoOptions.edgePolicies = plan.edgePolicies;
     videoOptions.inputStartRequiresKeyFrame = plan.videoInputStartRequiresKeyFrame;
+    if (plan.avSyncRuntime) {
+        if (plan.avSyncRuntime->queues.frame == 0) {
+            return ::media::Result<MediaGraph>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Synchronized realtime video requires positive planned lineage capacity"));
+        }
+        videoOptions.canonicalLineageCapacity =
+            plan.avSyncRuntime->queues.frame;
+    }
     videoOptions.formatSourceNode = videoInputChain.value().input;
     videoOptions.formatSourcePort = "format";
     videoOptions.packetSourceNode = videoPacketSourceNode;

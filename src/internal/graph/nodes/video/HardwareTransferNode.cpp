@@ -4,6 +4,7 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
+#include "internal/graph/sync/MediaCanonicalVideoFrameBuffer.h"
 
 extern "C" {
 #include <libavutil/hwcontext.h>
@@ -178,7 +179,14 @@ MediaNodeKind HardwareTransferNode::staticKind() noexcept
         transferLog(MediaGraphDiagnosticLevel::Flow, out.str());
     }
 
-    return emitOutput(context, "frame", output.value());
+    MediaBufferRef transferred = output.value();
+    if (auto lineage = FFmpegFrameView::canonicalLineage(buffer)) {
+        auto canonical = MediaCanonicalVideoFrameBuffer::create(
+            transferred, std::move(lineage));
+        if (!canonical) return ::media::Status::failure(canonical.error());
+        transferred = std::move(canonical).value();
+    }
+    return emitOutput(context, "frame", transferred);
 }
 
 } // namespace media::ffmpeg::graph

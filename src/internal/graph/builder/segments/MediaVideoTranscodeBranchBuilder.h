@@ -7,6 +7,7 @@
 #include "media_transcode/Result.h"
 
 #include <string>
+#include <optional>
 
 namespace media::ffmpeg::graph {
 
@@ -17,6 +18,7 @@ struct MediaVideoTranscodeBranchOptions {
     MediaGraphQueueParameters queues;
     MediaRealtimeEdgePolicySet edgePolicies;
     bool inputStartRequiresKeyFrame = false;
+    std::optional<std::size_t> canonicalLineageCapacity;
 
     MediaNodeId formatSourceNode = MediaNodeId::invalid();
     std::string formatSourcePort = "format";

@@ -43,6 +43,9 @@ void FFmpegNodeRuntime::abort(MediaGraphExecutionContext& context) noexcept
         return ::media::Result<MediaNodeProcessResult>::success(
             MediaNodeProcessResult::finished());
     }
+    if (m_pendingTransfer && !pendingOutputIsCurrent(m_pendingTransfer->buffer)) {
+        m_pendingTransfer.reset();
+    }
     const bool hadPendingTransfer = m_pendingTransfer.has_value();
     bool waiting = false;
     auto pendingStatus = drainPendingTransfers(context, waiting);
@@ -106,6 +109,16 @@ bool FFmpegNodeRuntime::canFinishProcess() const noexcept
 std::size_t FFmpegNodeRuntime::pendingOutputBufferCount() const noexcept
 {
     return m_pendingTransfer ? 1u : 0u;
+}
+
+bool FFmpegNodeRuntime::retainsPendingOutput(const MediaBufferRef& buffer) const noexcept
+{
+    return m_pendingTransfer && m_pendingTransfer->buffer == buffer;
+}
+
+bool FFmpegNodeRuntime::pendingOutputIsCurrent(const MediaBufferRef&) const noexcept
+{
+    return true;
 }
 
 void FFmpegNodeRuntime::cancelPendingOutputTransfer() noexcept

@@ -7,6 +7,7 @@
 #include "internal/graph/nodes/merge/PacketMergeNode.h"
 #include "internal/graph/nodes/demux/DemuxNode.h"
 #include "internal/graph/nodes/video/VideoDecodeNode.h"
+#include "internal/graph/nodes/video/VideoEncodeNode.h"
 #include "internal/graph/nodes/video/VideoFilterNode.h"
 #include "internal/graph/nodes/video/VideoFrameRateNode.h"
 #include "internal/graph/runtime/MediaRuntimeNode.h"
@@ -17,6 +18,12 @@
 #include "internal/graph/runtime/threading/MediaGraphThreadedExecutor.h"
 #include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
+#include "internal/graph/runtime/ffmpeg/MediaVideoDecoderCodecApi.h"
+#include "internal/graph/runtime/ffmpeg/MediaVideoEncoderCodecApi.h"
+#include "internal/graph/sync/MediaCanonicalVideoFrameBuffer.h"
+#include "internal/graph/sync/MediaCanonicalLineage.h"
+#include "internal/graph/sync/lineage/MediaVideoFrameRateState.h"
 
 #include <atomic>
 #include <chrono>
@@ -82,34 +89,40 @@ struct VideoFilterNodeLifecycleTestAccess {
 struct VideoFrameRateNodeLifecycleTestAccess {
     static void queuePending(VideoFrameRateNode& node, const MediaBufferRef& buffer)
     {
-        node.m_pendingFrames.push_back(buffer);
+        auto guard = node.m_state->lock();
+        node.m_state->data().pendingFrames.push_back({buffer, 0});
     }
 
     static void injectInterruptedPending(VideoFrameRateNode& node, const MediaBufferRef& buffer)
     {
-        node.m_pendingFrames.push_back(buffer);
-        node.m_lastInputFrame = buffer;
+        auto guard = node.m_state->lock();
+        auto& state = node.m_state->data();
+        state.pendingFrames.push_back({buffer, 0});
+        state.lastInputFrame = {buffer, 0};
         node.m_terminalBuffer = buffer;
         node.m_terminalPending = true;
         node.m_terminalIsEof = true;
-        node.m_initialized = true;
-        node.m_started = true;
-        node.m_flushed = true;
+        state.initialized = true;
+        state.started = true;
+        state.flushed = true;
         node.m_eofEmitted = true;
         node.m_terminals.markEof("frame");
     }
 
     static bool reset(const VideoFrameRateNode& node)
     {
-        return node.m_pendingFrames.empty() && !node.m_lastInputFrame && !node.m_terminalBuffer &&
-               !node.m_terminalPending && !node.m_terminalIsEof && !node.m_initialized &&
-               !node.m_started && !node.m_flushed && !node.m_eofEmitted &&
+        auto guard = node.m_state->lock();
+        const auto& state = node.m_state->data();
+        return state.pendingFrames.empty() && !state.lastInputFrame.buffer && !node.m_terminalBuffer &&
+               !node.m_terminalPending && !node.m_terminalIsEof && !state.initialized &&
+               !state.started && !state.flushed && !node.m_eofEmitted &&
                !node.m_terminals.finished();
     }
 
     static std::size_t pending(const VideoFrameRateNode& node)
     {
-        return node.m_pendingFrames.size() + node.pendingOutputBufferCount();
+        auto guard = node.m_state->lock();
+        return node.m_state->data().pendingFrames.size() + node.pendingOutputBufferCount();
     }
 };
 
@@ -144,6 +157,29 @@ using namespace media::ffmpeg::graph;
         buffer.value()->setTimeDescriptor(time);
     }
     return buffer;
+}
+
+::media::Result<MediaBufferRef> makeCanonicalVideoFrameBuffer(
+    std::int64_t pts,
+    std::uint64_t generation)
+{
+    auto frame = makeVideoFrameBuffer(pts);
+    if (!frame) return frame;
+    const auto running = MediaRunningTime::fromNanoseconds(pts * 40'000'000);
+    auto lineage = std::make_shared<const MediaCanonicalLineage>(
+        MediaCanonicalLineage{
+            running, running, MediaRunningTime::fromNanoseconds(40'000'000),
+            MediaDecodeOrderMode::PresentationOrderNoReorder,
+            "frame-rate-node-test", MediaSourceAccessUnitSequence(pts + 1),
+            MediaTimeMappingConfidence::Locked, generation});
+    auto canonical = MediaCanonicalVideoFrameBuffer::create(
+        frame.value(), std::move(lineage));
+    if (canonical) {
+        canonical.value()->setTimeDescriptor(frame.value()->timeDescriptor());
+    }
+    return canonical
+        ? ::media::Result<MediaBufferRef>::success(std::move(canonical).value())
+        : ::media::Result<MediaBufferRef>::failure(canonical.error());
 }
 
 std::string readSource(const char* path)
@@ -419,6 +455,7 @@ void testVideoInternalPendingDrainsBeforeSustainedUpstream(TestContext& ctx)
     EXPECT_TRUE(ctx, frameRate.process(fpsExecution));
     EXPECT_TRUE(ctx, fpsOutput->tryPop(value));
     EXPECT_TRUE(ctx, value && value->pts() == 702);
+    EXPECT_FALSE(ctx, fpsOutput->tryPop(value));
     EXPECT_EQ(ctx, fpsInput->metrics().queue.currentSize.load(), static_cast<std::size_t>(1));
     EXPECT_TRUE(ctx, frameRate.stop(fpsExecution));
 
@@ -444,6 +481,45 @@ void testVideoInternalPendingDrainsBeforeSustainedUpstream(TestContext& ctx)
     EXPECT_TRUE(ctx, filter.stop(filterExecution));
 }
 
+void testFrameRatePurgeClearsPendingHistoryAndRestartsGeneration(TestContext& ctx)
+{
+    auto filler = makeVideoFrameBuffer(700);
+    auto oldFrame = makeCanonicalVideoFrameBuffer(10, 51);
+    auto nextFrame = makeCanonicalVideoFrameBuffer(20, 52);
+    EXPECT_TRUE(ctx, filler && oldFrame && nextFrame);
+    if (!filler || !oldFrame || !nextFrame) return;
+
+    MediaNodeId source;
+    MediaNodeId nodeId;
+    MediaNodeId sink;
+    MediaGraph graph = makeSlowVideoNodeGraph(
+        VideoFrameRateNode::staticKind(), source, nodeId, sink, false);
+    MediaGraphExecutionContext execution;
+    EXPECT_TRUE(ctx, execution.compile(graph));
+    MediaChannel* input = execution.findInputChannel(nodeId, "frame");
+    MediaChannel* output = execution.findInputChannel(sink, "frame");
+    EXPECT_TRUE(ctx, input && output);
+    if (!input || !output) return;
+
+    auto state = std::make_shared<MediaVideoFrameRateState>(true);
+    VideoFrameRateNode node(nodeId, state);
+    EXPECT_TRUE(ctx, node.start(execution));
+    EXPECT_TRUE(ctx, output->push(filler.value()));
+    EXPECT_TRUE(ctx, input->push(oldFrame.value()));
+    auto blocked = node.process(execution);
+    EXPECT_TRUE(ctx, blocked && blocked.value().state == MediaNodeProcessState::Waiting);
+    EXPECT_TRUE(ctx, state->purge({51, 52, 1}));
+
+    MediaBufferRef observed;
+    EXPECT_TRUE(ctx, output->tryPop(observed));
+    EXPECT_TRUE(ctx, input->push(nextFrame.value()));
+    EXPECT_TRUE(ctx, node.process(execution));
+    EXPECT_TRUE(ctx, output->tryPop(observed));
+    auto lineage = FFmpegFrameView::canonicalLineage(observed);
+    EXPECT_TRUE(ctx, lineage && lineage->generation == 52);
+    EXPECT_TRUE(ctx, node.stop(execution));
+}
+
 } // namespace
 
 void runEventRuntimeFfmpegOwnershipTests(media_transcode::test::TestContext& ctx)
@@ -454,4 +530,5 @@ void runEventRuntimeFfmpegOwnershipTests(media_transcode::test::TestContext& ctx
     testInputMetadataConsumersDoNotReadRuntimeStreams(ctx);
     testInterruptedFfmpegNodeStateDoesNotLeakAcrossSameInstanceRestart(ctx);
     testVideoInternalPendingDrainsBeforeSustainedUpstream(ctx);
+    testFrameRatePurgeClearsPendingHistoryAndRestartsGeneration(ctx);
 }

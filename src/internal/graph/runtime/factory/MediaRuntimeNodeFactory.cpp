@@ -44,8 +44,49 @@
 #include "internal/graph/nodes/video/VideoFilterNode.h"
 #include "internal/graph/nodes/video/VideoFrameRateNode.h"
 #include "internal/graph/nodes/video/VideoTimestampNode.h"
+#include "internal/graph/sync/lineage/MediaVideoLineageStagePreparation.h"
+#include "internal/graph/sync/lineage/MediaVideoFrameRateState.h"
 
 namespace media::ffmpeg::graph {
+namespace {
+
+template <typename Node>
+::media::Result<std::unique_ptr<MediaRuntimeNode>> createVideoLineageStage(
+    const MediaNode& node)
+{
+    auto prepared = prepareMediaVideoLineageStage(
+        node, Node::generationPurgeIdentity());
+    if (!prepared) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            prepared.error());
+    }
+    if (prepared.value()) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+            std::make_unique<Node>(node.id, std::move(prepared).value()));
+    }
+    return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+        std::make_unique<Node>(node.id));
+}
+
+::media::Result<std::unique_ptr<MediaRuntimeNode>> createVideoFrameRateStage(
+    const MediaNode& node)
+{
+    auto capacity = prepareMediaVideoLineageStageCapacity(
+        node, VideoFrameRateNode::generationPurgeIdentity());
+    if (!capacity) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            capacity.error());
+    }
+    if (capacity.value()) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+            std::make_unique<VideoFrameRateNode>(
+                node.id, std::make_shared<MediaVideoFrameRateState>(true)));
+    }
+    return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+        std::make_unique<VideoFrameRateNode>(node.id));
+}
+
+} // namespace
 
 ::media::Result<std::unique_ptr<MediaRuntimeNode>> MediaRuntimeNodeFactory::create(const MediaNode& node)
 {
@@ -80,17 +121,17 @@ namespace media::ffmpeg::graph {
     case MediaNodeKind::FrameRoute:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<FrameRouteNode>(node.id));
     case MediaNodeKind::VideoDecode:
-        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<VideoDecodeNode>(node.id));
+        return createVideoLineageStage<VideoDecodeNode>(node);
     case MediaNodeKind::VideoTimestamp:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<VideoTimestampNode>(node.id));
     case MediaNodeKind::HardwareTransfer:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<HardwareTransferNode>(node.id));
     case MediaNodeKind::VideoFrameRate:
-        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<VideoFrameRateNode>(node.id));
+        return createVideoFrameRateStage(node);
     case MediaNodeKind::VideoFilter:
-        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<VideoFilterNode>(node.id));
+        return createVideoLineageStage<VideoFilterNode>(node);
     case MediaNodeKind::VideoEncode:
-        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<VideoEncodeNode>(node.id));
+        return createVideoLineageStage<VideoEncodeNode>(node);
     case MediaNodeKind::AudioCodecResolver:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<AudioCodecResolverNode>(node.id));
     case MediaNodeKind::AudioDecode:

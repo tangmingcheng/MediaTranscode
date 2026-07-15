@@ -31,7 +31,9 @@ protected:
     ::media::Result<MediaNodeProcessResult> processProgress(::media::Status status = ::media::Status::success());
     ::media::Result<MediaNodeProcessResult> processFinished(::media::Status status = ::media::Status::success());
     std::size_t pendingOutputBufferCount() const noexcept;
+    bool retainsPendingOutput(const MediaBufferRef& buffer) const noexcept;
     void cancelPendingOutputTransfer() noexcept;
+    virtual bool pendingOutputIsCurrent(const MediaBufferRef& buffer) const noexcept;
     struct PoppedChannelBuffer {
         MediaChannel* channel = nullptr;
         MediaBufferRef buffer;

@@ -7,9 +7,10 @@ std::vector<std::string> canonicalLineageChildren()
 {
     return {
         "startup_generation_state",
-        "video_decoder_lineage_registry",
-        "video_filter_lineage_registry",
-        "video_encoder_lineage_registry",
+        "video_decode",
+        "video_frame_rate",
+        "video_filter",
+        "video_encode",
         "audio_decoder_lineage_registry",
         "audio_startup_trim_lineage_registry",
         "audio_resampler_lineage_registry",

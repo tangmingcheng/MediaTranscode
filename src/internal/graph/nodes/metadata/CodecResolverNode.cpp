@@ -6,6 +6,8 @@
 #include "internal/graph/runtime/buffer/FFmpegInputSnapshotBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
+#include "internal/graph/runtime/ffmpeg/MediaFfmpegCopyOpaqueCapability.h"
+#include "internal/graph/sync/lineage/MediaVideoLineageCopyOpaqueOption.h"
 
 #include <sstream>
 #include <string>
@@ -198,6 +200,20 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
     }
 
     decoderContext->pkt_timebase = AVRational{ stream.time.timeBase.num, stream.time.timeBase.den };
+    auto copyOpaque = parseMediaVideoLineageCopyOpaqueOption(options);
+    if (!copyOpaque) {
+        return ::media::Status::failure(copyOpaque.error());
+    }
+    if (copyOpaque.value()) {
+#if defined(AV_CODEC_FLAG_COPY_OPAQUE)
+        if (auto status = requireMediaFfmpegCopyOpaqueCapability(); !status) {
+            return status;
+        }
+        decoderContext->flags |= AV_CODEC_FLAG_COPY_OPAQUE;
+#else
+        return requireMediaFfmpegCopyOpaqueCapability();
+#endif
+    }
 
     m_decoderHardwareDevice.reset();
     m_decoderHardwarePixelFormat = AV_PIX_FMT_NONE;
