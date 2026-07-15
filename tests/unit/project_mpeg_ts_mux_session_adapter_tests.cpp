@@ -92,7 +92,7 @@ MediaTsMuxPlan muxPlan()
         MediaTsAacAdtsPlan{0, 2, 3, 2},
         MediaTsOutputClockPolicy{ms(20), ms(100), ms(5), 1, 90'000},
         ms(100), 188, MediaTsContinuitySeeds{0, 0, 0, 0}, 7,
-        MediaTsOutputTransportKind::Udp}).value();
+        MediaTsOutputTransportKind::Udp, 1024}).value();
 }
 
 MediaAvSyncPlan avSyncPlan()

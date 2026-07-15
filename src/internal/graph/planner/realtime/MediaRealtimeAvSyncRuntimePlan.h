@@ -22,6 +22,7 @@ struct MediaAudioCorrectionReachabilityPlan final {
     int outputSampleRate;
     std::int64_t epochOutputSampleIndex;
     std::int64_t worstCaseInFlightSamples;
+    std::int64_t protocolBatchSamples;
     std::int64_t mailboxDeliveryMarginSamples;
     std::int64_t maximumResamplerOutputBlockSamples;
     std::int64_t commandLeadSamples;

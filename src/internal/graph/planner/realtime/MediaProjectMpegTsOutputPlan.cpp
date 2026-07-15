@@ -32,7 +32,7 @@ namespace media::ffmpeg::graph {
             MediaRunningTime::fromNanoseconds(5'000'000), 1, 90'000},
         transportDecodeLead, 188,
         MediaTsContinuitySeeds{0, 0, 0, 0}, 7,
-        MediaTsOutputTransportKind::Udp});
+        MediaTsOutputTransportKind::Udp, audioOutput.codecFrameSamples()});
     if (!mux) return ::media::Result<MediaProjectMpegTsOutputPlan>::failure(mux.error());
     return ::media::Result<MediaProjectMpegTsOutputPlan>::success(
         MediaProjectMpegTsOutputPlan(audioOutput.sampleRate(), std::move(mux).value()));

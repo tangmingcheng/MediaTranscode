@@ -61,6 +61,7 @@ struct MediaTsMuxPlanParameters final {
     MediaTsContinuitySeeds continuity;
     std::uint8_t maximumPacketsPerDatagram;
     MediaTsOutputTransportKind transportKind;
+    int maximumAudioAccessUnitSamples;
     friend bool operator==(const MediaTsMuxPlanParameters&,
                            const MediaTsMuxPlanParameters&) = default;
 };

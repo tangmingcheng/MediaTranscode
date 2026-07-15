@@ -122,7 +122,7 @@ MediaTsMuxPlan plan(MediaTsH264InputLayout h264InputLayout,
             MediaRunningTime::fromNanoseconds(5'000'000), 1, 90'000},
         MediaRunningTime::fromNanoseconds(100'000'000), 188,
         MediaTsContinuitySeeds{0, 0, 0, 0}, 7,
-        MediaTsOutputTransportKind::Udp}).value();
+        MediaTsOutputTransportKind::Udp, 1024}).value();
 }
 
 MediaTsMuxSession::Binding bindingAt(RecordingByteSink*& observation,

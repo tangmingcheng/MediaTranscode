@@ -19,7 +19,7 @@ MediaRealtimeAvSyncPlanningFactsResolver::resolve(
     const auto& bounds = *plan.avSyncComponentBounds;
     if (bounds.decoderDelaySamples < 0 || bounds.decodeQueueSamples <= 0 ||
         bounds.resampleQueueSamples <= 0 || bounds.encodeQueueSamples <= 0 ||
-        bounds.schedulerQueueSamples <= 0 || bounds.protocolBatchSamples <= 0 ||
+        bounds.schedulerQueueSamples <= 0 ||
         bounds.mailboxDeliveryMarginSamples <= 0 ||
         bounds.maximumResamplerOutputBlockSamples <= 0 ||
         bounds.mailboxCapacity == 0) {
@@ -36,7 +36,32 @@ MediaRealtimeAvSyncPlanningFactsResolver::resolve(
     facts.resampleQueueSamples = bounds.resampleQueueSamples;
     facts.encodeQueueSamples = bounds.encodeQueueSamples;
     facts.schedulerQueueSamples = bounds.schedulerQueueSamples;
-    facts.protocolBatchSamples = bounds.protocolBatchSamples;
+    if (synchronization.topology ==
+        MediaAvSyncTopology::SeparateRtpToSeparateRtp) {
+        if (!plan.videoOutput.scheduledPacketization ||
+            !plan.audioOutput.scheduledPacketization ||
+            !plan.audioOutput.scheduledPacketization->maximumAccessUnitSamples()) {
+            return ::media::Result<MediaRealtimeAvSyncPlanningFacts>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "scheduled RTP packetization does not publish audio batch timing"));
+        }
+        facts.protocolBatchSamples =
+            *plan.audioOutput.scheduledPacketization->maximumAccessUnitSamples();
+    } else if (synchronization.topology == MediaAvSyncTopology::MpegTsToMpegTs) {
+        if (!synchronization.ts || !synchronization.ts->outputMux ||
+            synchronization.ts->outputMux->parameters()
+                    .maximumAudioAccessUnitSamples <= 0) {
+            return ::media::Result<MediaRealtimeAvSyncPlanningFacts>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "MPEG-TS mux selection does not publish audio batch timing"));
+        }
+        facts.protocolBatchSamples = synchronization.ts->outputMux->parameters()
+                                         .maximumAudioAccessUnitSamples;
+    } else {
+        return ::media::Result<MediaRealtimeAvSyncPlanningFacts>::failure(
+            ::media::ErrorInfo::unsupported(
+                "synchronized protocol batch topology is unsupported"));
+    }
     facts.mailboxDeliveryMarginSamples = bounds.mailboxDeliveryMarginSamples;
     facts.maximumResamplerOutputBlockSamples = bounds.maximumResamplerOutputBlockSamples;
     facts.mailboxCapacity = bounds.mailboxCapacity;

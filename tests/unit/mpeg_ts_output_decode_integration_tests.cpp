@@ -98,7 +98,7 @@ MediaTsMuxPlan makePlan(std::uint8_t nalLengthBytes, int frequencyIndex, int cha
                                  MediaRunningTime::fromNanoseconds(5'000'000), 1, 90'000},
         MediaRunningTime::fromNanoseconds(100'000'000), 188,
         MediaTsContinuitySeeds{0, 0, 0, 0}, 7,
-        MediaTsOutputTransportKind::Udp}).value();
+        MediaTsOutputTransportKind::Udp, 1024}).value();
 }
 
 struct DecoderOpenResult final {

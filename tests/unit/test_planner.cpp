@@ -238,6 +238,32 @@ void testRealtimePlannerProducesCompleteAvSyncRuntimeProduct(TestContext& ctx)
     }
 
     EXPECT_TRUE(ctx, planned.value().avSyncRuntime.has_value());
+    EXPECT_EQ(ctx, planned.value().audioPlan.branchMode,
+              MediaBranchMode::TranscodeFrame);
+    EXPECT_TRUE(ctx, planned.value().audioPlan.selectedDecoder.has_value());
+    EXPECT_TRUE(ctx, planned.value().audioPlan.selectedResampler.has_value());
+    if (planned.value().audioPlan.selectedDecoder &&
+        planned.value().audioPlan.selectedResampler) {
+        const auto& decoder = *planned.value().audioPlan.selectedDecoder;
+        const auto& resampler = *planned.value().audioPlan.selectedResampler;
+        EXPECT_TRUE(ctx, !decoder.name.empty());
+        EXPECT_TRUE(ctx, decoder.delayInputSamples >= 0);
+        EXPECT_EQ(ctx, decoder.maximumOutputBlockInputSamples, 1024);
+        EXPECT_EQ(ctx, resampler.maximumInputBlockSamples,
+                  decoder.maximumOutputBlockInputSamples);
+        EXPECT_TRUE(ctx, resampler.maximumOutputBlockSamples >=
+            (decoder.maximumOutputBlockInputSamples *
+                 resampler.outputSampleRate + resampler.inputSampleRate - 1) /
+                resampler.inputSampleRate);
+        auto incompleteDecoder = decoder;
+        incompleteDecoder.maximumOutputBlockInputSamples = 0;
+        EXPECT_FALSE(ctx, MediaAudioResamplerCapabilityProvider::verify(
+                              incompleteDecoder,
+                              *planned.value().audioPlan.resolvedOutput));
+    }
+    const std::array<std::uint8_t, 2> aacLc48kStereo{0x11, 0x90};
+    EXPECT_FALSE(ctx, MediaAudioDecoderCapabilityProvider::verifyAac(
+                          44'100, 2, aacLc48kStereo));
     if (!planned.value().avSyncRuntime) return;
     const auto& runtime = *planned.value().avSyncRuntime;
     EXPECT_EQ(ctx, runtime.groupKey.value(), std::string("realtime.av"));
@@ -387,6 +413,10 @@ void testRealtimeAvSyncRuntimeProductRejectsIndependentMutations(TestContext& ct
     runtime.audioCorrection.outputSampleRate = 0;
     expectInvalid();
     runtime.audioCorrection.outputSampleRate = outputSampleRate;
+    const auto protocolBatch = runtime.audioCorrection.protocolBatchSamples;
+    ++runtime.audioCorrection.protocolBatchSamples;
+    expectInvalid();
+    runtime.audioCorrection.protocolBatchSamples = protocolBatch;
     auto removedParticipant = std::move(runtime.transition.participants.back());
     runtime.transition.participants.pop_back();
     expectInvalid();
@@ -424,6 +454,17 @@ void testRealtimeAvSyncRuntimeProductRejectsIndependentMutations(TestContext& ct
     expectInvalid();
     rtp.sdpPath = outer.sdp.path;
     const auto originalVideoPacketization = rtp.video.packetization;
+    rtp.video.stream = MediaScheduledStream::Audio;
+    expectInvalid();
+    rtp.video.stream = MediaScheduledStream::Video;
+    auto changedVideoTimeBaseNumerator = MediaScheduledRtpPacketizationPlan::create(
+        MediaStreamKind::Video, "h264", 2, 90'000,
+        originalVideoPacketization.payloadType(),
+        originalVideoPacketization.maximumDatagramBytes());
+    EXPECT_TRUE(ctx, changedVideoTimeBaseNumerator);
+    rtp.video.packetization = std::move(changedVideoTimeBaseNumerator).value();
+    expectInvalid();
+    rtp.video.packetization = originalVideoPacketization;
     auto changedVideoTimeBase = MediaScheduledRtpPacketizationPlan::create(
         MediaStreamKind::Video, "h264", 1, 90'001,
         originalVideoPacketization.payloadType(),
@@ -440,6 +481,18 @@ void testRealtimeAvSyncRuntimeProductRejectsIndependentMutations(TestContext& ct
     rtp.video.packetization = std::move(changedVideoPayload).value();
     expectInvalid();
     rtp.video.packetization = originalVideoPacketization;
+    auto changedVideoDatagram = MediaScheduledRtpPacketizationPlan::create(
+        MediaStreamKind::Video, "h264", 1, 90'000,
+        originalVideoPacketization.payloadType(),
+        originalVideoPacketization.maximumDatagramBytes() + 1);
+    EXPECT_TRUE(ctx, changedVideoDatagram);
+    rtp.video.packetization = std::move(changedVideoDatagram).value();
+    expectInvalid();
+    rtp.video.packetization = originalVideoPacketization;
+    EXPECT_FALSE(ctx, MediaScheduledRtpPacketizationPlan::create(
+                          MediaStreamKind::Video, "vp9", 1, 90'000,
+                          originalVideoPacketization.payloadType(),
+                          originalVideoPacketization.maximumDatagramBytes()));
     ++rtp.video.ssrc;
     expectInvalid();
     --rtp.video.ssrc;
@@ -456,11 +509,36 @@ void testRealtimeAvSyncRuntimeProductRejectsIndependentMutations(TestContext& ct
     rtp.video.senderLead = MediaRunningTime::fromNanoseconds(0);
     expectInvalid();
     rtp.video.senderLead = videoLead;
+    const auto videoReportInterval = rtp.video.senderReportInterval;
+    rtp.video.senderReportInterval = MediaRunningTime::fromNanoseconds(0);
+    expectInvalid();
+    rtp.video.senderReportInterval = videoReportInterval;
     const auto reportInterval = rtp.audio.senderReportInterval;
     rtp.audio.senderReportInterval = MediaRunningTime::fromNanoseconds(0);
     expectInvalid();
     rtp.audio.senderReportInterval = reportInterval;
     const auto originalAudioPacketization = rtp.audio.packetization;
+    rtp.audio.stream = MediaScheduledStream::Video;
+    expectInvalid();
+    rtp.audio.stream = MediaScheduledStream::Audio;
+    auto changedAudioTimeBaseNumerator = MediaScheduledRtpPacketizationPlan::create(
+        MediaStreamKind::Audio, "aac", 2, 48'000,
+        originalAudioPacketization.payloadType(),
+        originalAudioPacketization.maximumDatagramBytes(),
+        originalAudioPacketization.maximumAccessUnitSamples());
+    EXPECT_TRUE(ctx, changedAudioTimeBaseNumerator);
+    rtp.audio.packetization = std::move(changedAudioTimeBaseNumerator).value();
+    expectInvalid();
+    rtp.audio.packetization = originalAudioPacketization;
+    auto changedAudioTimeBaseDenominator = MediaScheduledRtpPacketizationPlan::create(
+        MediaStreamKind::Audio, "aac", 1, 48'001,
+        originalAudioPacketization.payloadType(),
+        originalAudioPacketization.maximumDatagramBytes(),
+        originalAudioPacketization.maximumAccessUnitSamples());
+    EXPECT_TRUE(ctx, changedAudioTimeBaseDenominator);
+    rtp.audio.packetization = std::move(changedAudioTimeBaseDenominator).value();
+    expectInvalid();
+    rtp.audio.packetization = originalAudioPacketization;
     auto changedAudioPayload = MediaScheduledRtpPacketizationPlan::create(
         MediaStreamKind::Audio, "aac", 1, 48'000,
         originalAudioPacketization.payloadType() + 1,
@@ -470,6 +548,220 @@ void testRealtimeAvSyncRuntimeProductRejectsIndependentMutations(TestContext& ct
     rtp.audio.packetization = std::move(changedAudioPayload).value();
     expectInvalid();
     rtp.audio.packetization = originalAudioPacketization;
+    auto changedAudioAccessUnit = MediaScheduledRtpPacketizationPlan::create(
+        MediaStreamKind::Audio, "aac", 1, 48'000,
+        originalAudioPacketization.payloadType(),
+        originalAudioPacketization.maximumDatagramBytes(),
+        *originalAudioPacketization.maximumAccessUnitSamples() + 1);
+    EXPECT_TRUE(ctx, changedAudioAccessUnit);
+    rtp.audio.packetization = std::move(changedAudioAccessUnit).value();
+    expectInvalid();
+    rtp.audio.packetization = originalAudioPacketization;
+    auto changedAudioDatagram = MediaScheduledRtpPacketizationPlan::create(
+        MediaStreamKind::Audio, "aac", 1, 48'000,
+        originalAudioPacketization.payloadType(),
+        originalAudioPacketization.maximumDatagramBytes() + 1,
+        originalAudioPacketization.maximumAccessUnitSamples());
+    EXPECT_TRUE(ctx, changedAudioDatagram);
+    rtp.audio.packetization = std::move(changedAudioDatagram).value();
+    expectInvalid();
+    rtp.audio.packetization = originalAudioPacketization;
+    EXPECT_FALSE(ctx, MediaScheduledRtpPacketizationPlan::create(
+                          MediaStreamKind::Audio, "opus", 1, 48'000,
+                          originalAudioPacketization.payloadType(),
+                          originalAudioPacketization.maximumDatagramBytes(),
+                          originalAudioPacketization.maximumAccessUnitSamples()));
+    EXPECT_FALSE(ctx, MediaScheduledRtpPacketizationPlan::create(
+                          MediaStreamKind::Audio, "aac", 1, 48'000,
+                          originalAudioPacketization.payloadType(),
+                          originalAudioPacketization.maximumDatagramBytes()));
+    ++rtp.audio.ssrc;
+    expectInvalid();
+    --rtp.audio.ssrc;
+    ++rtp.audio.baseTimestamp;
+    expectInvalid();
+    --rtp.audio.baseTimestamp;
+    ++rtp.audio.clockRate;
+    expectInvalid();
+    --rtp.audio.clockRate;
+    const auto audioCname = rtp.audio.cname;
+    rtp.audio.cname.clear();
+    expectInvalid();
+    rtp.audio.cname = audioCname;
+    const auto audioLead = rtp.audio.senderLead;
+    rtp.audio.senderLead = MediaRunningTime::fromNanoseconds(0);
+    expectInvalid();
+    rtp.audio.senderLead = audioLead;
+
+    const auto videoFamily = rtp.video.transport.addressFamily();
+    const auto videoLocal = rtp.video.transport.localNumericAddress();
+    const auto videoRemote =
+        rtp.video.transport.remoteRtpEndpoint().numericAddress();
+    const auto videoRtpPort = rtp.video.transport.remoteRtpEndpoint().port();
+    const auto videoRtcpPort = rtp.video.transport.remoteRtcpEndpoint().port();
+    const auto videoSendBuffer = rtp.video.transport.sendBufferBytes();
+    const auto videoMaximumDatagram =
+        rtp.video.transport.maximumDatagramBytes();
+    const auto installVideoTransport = [&](MediaIpAddressFamily family,
+                                           std::string local,
+                                           std::string remote,
+                                           std::uint16_t rtpPort,
+                                           std::uint16_t rtcpPort,
+                                           MediaRtpUdpLocalPortPolicy localPorts,
+                                           int sendBuffer,
+                                           std::size_t maximumDatagram) {
+        auto transport = MediaRtpUdpSenderConfig::create(
+            family, std::move(local), std::move(remote), rtpPort, rtcpPort,
+            std::move(localPorts), sendBuffer, maximumDatagram,
+            MediaUdpSenderIoBehavior::NonBlockingRejectOnPressure);
+        EXPECT_TRUE(ctx, transport);
+        if (transport) rtp.video.transport = std::move(transport).value();
+    };
+    const auto restoreVideoTransport = [&]() {
+        installVideoTransport(
+            videoFamily, videoLocal, videoRemote, videoRtpPort, videoRtcpPort,
+            MediaRtpUdpLocalPortPolicy::osAssignedIndependent(),
+            videoSendBuffer, videoMaximumDatagram);
+    };
+    installVideoTransport(
+        MediaIpAddressFamily::Ipv6, "::", "::1", videoRtpPort,
+        videoRtcpPort, MediaRtpUdpLocalPortPolicy::osAssignedIndependent(),
+        videoSendBuffer, videoMaximumDatagram);
+    expectInvalid();
+    restoreVideoTransport();
+    installVideoTransport(
+        videoFamily, "127.0.0.1", videoRemote, videoRtpPort, videoRtcpPort,
+        MediaRtpUdpLocalPortPolicy::osAssignedIndependent(), videoSendBuffer,
+        videoMaximumDatagram);
+    expectInvalid();
+    restoreVideoTransport();
+    installVideoTransport(
+        videoFamily, videoLocal, "127.0.0.2", videoRtpPort, videoRtcpPort,
+        MediaRtpUdpLocalPortPolicy::osAssignedIndependent(), videoSendBuffer,
+        videoMaximumDatagram);
+    expectInvalid();
+    restoreVideoTransport();
+    installVideoTransport(
+        videoFamily, videoLocal, videoRemote,
+        static_cast<std::uint16_t>(videoRtpPort + 10),
+        static_cast<std::uint16_t>(videoRtcpPort + 10),
+        MediaRtpUdpLocalPortPolicy::osAssignedIndependent(), videoSendBuffer,
+        videoMaximumDatagram);
+    expectInvalid();
+    restoreVideoTransport();
+    auto fixedPorts = MediaRtpUdpLocalPortPolicy::fixedAdjacent(7000, 7001);
+    EXPECT_TRUE(ctx, fixedPorts);
+    if (fixedPorts) {
+        installVideoTransport(
+            videoFamily, videoLocal, videoRemote, videoRtpPort, videoRtcpPort,
+            std::move(fixedPorts).value(), videoSendBuffer,
+            videoMaximumDatagram);
+        expectInvalid();
+        restoreVideoTransport();
+    }
+    installVideoTransport(
+        videoFamily, videoLocal, videoRemote, videoRtpPort, videoRtcpPort,
+        MediaRtpUdpLocalPortPolicy::osAssignedIndependent(),
+        videoSendBuffer + 1, videoMaximumDatagram);
+    expectInvalid();
+    restoreVideoTransport();
+    installVideoTransport(
+        videoFamily, videoLocal, videoRemote, videoRtpPort, videoRtcpPort,
+        MediaRtpUdpLocalPortPolicy::osAssignedIndependent(), videoSendBuffer,
+        videoMaximumDatagram - 1);
+    expectInvalid();
+    restoreVideoTransport();
+    EXPECT_FALSE(ctx, MediaRtpUdpSenderConfig::create(
+                          MediaIpAddressFamily::Ipv4, "::", videoRemote,
+                          videoRtpPort, videoRtcpPort,
+                          MediaRtpUdpLocalPortPolicy::osAssignedIndependent(),
+                          videoSendBuffer, videoMaximumDatagram,
+                          MediaUdpSenderIoBehavior::NonBlockingRejectOnPressure));
+    EXPECT_FALSE(ctx, MediaRtpUdpSenderConfig::create(
+                          videoFamily, videoLocal, videoRemote,
+                          videoRtpPort, videoRtcpPort,
+                          MediaRtpUdpLocalPortPolicy::osAssignedIndependent(),
+                          videoSendBuffer, videoMaximumDatagram,
+                          static_cast<MediaUdpSenderIoBehavior>(0xFF)));
+
+    const auto audioFamily = rtp.audio.transport.addressFamily();
+    const auto audioLocal = rtp.audio.transport.localNumericAddress();
+    const auto audioRemote =
+        rtp.audio.transport.remoteRtpEndpoint().numericAddress();
+    const auto audioRtpPort = rtp.audio.transport.remoteRtpEndpoint().port();
+    const auto audioRtcpPort = rtp.audio.transport.remoteRtcpEndpoint().port();
+    const auto audioSendBuffer = rtp.audio.transport.sendBufferBytes();
+    const auto audioMaximumDatagram =
+        rtp.audio.transport.maximumDatagramBytes();
+    const auto installAudioTransport = [&](MediaIpAddressFamily family,
+                                           std::string local,
+                                           std::string remote,
+                                           std::uint16_t rtpPort,
+                                           std::uint16_t rtcpPort,
+                                           MediaRtpUdpLocalPortPolicy localPorts,
+                                           int sendBuffer,
+                                           std::size_t maximumDatagram) {
+        auto transport = MediaRtpUdpSenderConfig::create(
+            family, std::move(local), std::move(remote), rtpPort, rtcpPort,
+            std::move(localPorts), sendBuffer, maximumDatagram,
+            MediaUdpSenderIoBehavior::NonBlockingRejectOnPressure);
+        EXPECT_TRUE(ctx, transport);
+        if (transport) rtp.audio.transport = std::move(transport).value();
+    };
+    const auto restoreAudioTransport = [&]() {
+        installAudioTransport(
+            audioFamily, audioLocal, audioRemote, audioRtpPort, audioRtcpPort,
+            MediaRtpUdpLocalPortPolicy::osAssignedIndependent(),
+            audioSendBuffer, audioMaximumDatagram);
+    };
+    installAudioTransport(
+        MediaIpAddressFamily::Ipv6, "::", "::1", audioRtpPort,
+        audioRtcpPort, MediaRtpUdpLocalPortPolicy::osAssignedIndependent(),
+        audioSendBuffer, audioMaximumDatagram);
+    expectInvalid();
+    restoreAudioTransport();
+    installAudioTransport(
+        audioFamily, "127.0.0.1", audioRemote, audioRtpPort, audioRtcpPort,
+        MediaRtpUdpLocalPortPolicy::osAssignedIndependent(), audioSendBuffer,
+        audioMaximumDatagram);
+    expectInvalid();
+    restoreAudioTransport();
+    installAudioTransport(
+        audioFamily, audioLocal, "127.0.0.2", audioRtpPort, audioRtcpPort,
+        MediaRtpUdpLocalPortPolicy::osAssignedIndependent(), audioSendBuffer,
+        audioMaximumDatagram);
+    expectInvalid();
+    restoreAudioTransport();
+    installAudioTransport(
+        audioFamily, audioLocal, audioRemote,
+        static_cast<std::uint16_t>(audioRtpPort + 2),
+        static_cast<std::uint16_t>(audioRtcpPort + 2),
+        MediaRtpUdpLocalPortPolicy::osAssignedIndependent(), audioSendBuffer,
+        audioMaximumDatagram);
+    expectInvalid();
+    restoreAudioTransport();
+    auto audioFixedPorts = MediaRtpUdpLocalPortPolicy::fixedAdjacent(7002, 7003);
+    EXPECT_TRUE(ctx, audioFixedPorts);
+    if (audioFixedPorts) {
+        installAudioTransport(
+            audioFamily, audioLocal, audioRemote, audioRtpPort, audioRtcpPort,
+            std::move(audioFixedPorts).value(), audioSendBuffer,
+            audioMaximumDatagram);
+        expectInvalid();
+        restoreAudioTransport();
+    }
+    installAudioTransport(
+        audioFamily, audioLocal, audioRemote, audioRtpPort, audioRtcpPort,
+        MediaRtpUdpLocalPortPolicy::osAssignedIndependent(),
+        audioSendBuffer + 1, audioMaximumDatagram);
+    expectInvalid();
+    restoreAudioTransport();
+    installAudioTransport(
+        audioFamily, audioLocal, audioRemote, audioRtpPort, audioRtcpPort,
+        MediaRtpUdpLocalPortPolicy::osAssignedIndependent(), audioSendBuffer,
+        audioMaximumDatagram - 1);
+    expectInvalid();
+    restoreAudioTransport();
     outer.videoOutput.writePacingEnabled = true;
     expectInvalid();
     outer.videoOutput.writePacingEnabled = false;
@@ -496,6 +788,14 @@ void testRealtimeAvSyncRuntimeProductRejectsIndependentMutations(TestContext& ct
         EXPECT_FALSE(ctx, MediaRealtimeAvSyncPlanningFactsResolver::resolve(
                               outer, runtime.synchronization));
     };
+    auto missingRuntimeOutputFormat = std::move(outer.audioPlan.resolvedOutput);
+    outer.audioPlan.resolvedOutput.reset();
+    expectInvalid();
+    outer.audioPlan.resolvedOutput = std::move(missingRuntimeOutputFormat);
+    const auto audioPacketization = outer.audioOutput.scheduledPacketization;
+    outer.audioOutput.scheduledPacketization.reset();
+    expectMissingFacts();
+    outer.audioOutput.scheduledPacketization = audioPacketization;
     const auto componentBounds = outer.avSyncComponentBounds;
     outer.avSyncComponentBounds.reset();
     expectMissingFacts();
@@ -511,7 +811,7 @@ void testRealtimeAvSyncRuntimeProductRejectsIndependentMutations(TestContext& ct
     outer.avSyncComponentBounds->maximumResamplerOutputBlockSamples = maximumResamplerBlock;
     const auto originalBounds = *outer.avSyncComponentBounds;
     outer.avSyncComponentBounds = MediaRealtimeAvSyncComponentBounds{
-        17, 101, 103, 107, 109, 113, 127, 131, 137};
+        17, 101, 103, 107, 109, 127, 131, 137};
     const auto independentFacts = MediaRealtimeAvSyncPlanningFactsResolver::resolve(
         outer, runtime.synchronization);
     EXPECT_TRUE(ctx, independentFacts);
@@ -521,7 +821,7 @@ void testRealtimeAvSyncRuntimeProductRejectsIndependentMutations(TestContext& ct
         EXPECT_EQ(ctx, *independentFacts.value().resampleQueueSamples, 103);
         EXPECT_EQ(ctx, *independentFacts.value().encodeQueueSamples, 107);
         EXPECT_EQ(ctx, *independentFacts.value().schedulerQueueSamples, 109);
-        EXPECT_EQ(ctx, *independentFacts.value().protocolBatchSamples, 113);
+        EXPECT_EQ(ctx, *independentFacts.value().protocolBatchSamples, 1024);
         EXPECT_EQ(ctx, *independentFacts.value().mailboxDeliveryMarginSamples, 127);
         EXPECT_EQ(ctx, *independentFacts.value().maximumResamplerOutputBlockSamples, 131);
         EXPECT_EQ(ctx, *independentFacts.value().mailboxCapacity, std::size_t{137});
@@ -578,6 +878,39 @@ MediaResolvedAudioOutputPlan resolvedAacOutput(MediaAudioProfile profile)
     auto resolved = MediaResolvedAudioOutputPlan::create(
         target.value(), std::nullopt, 1024);
     return std::move(resolved).value();
+}
+
+void testSelectedResamplerPublishesSteadyStateBound(TestContext& ctx)
+{
+    MediaResolvedAudioSource source{
+        "aac", MediaAudioProfile::knownAacLow(), 48'000, 2,
+        "stereo", "fltp", 128'000};
+    MediaResolvedAudioRequest request;
+    request.sampleRate = 44'100;
+    auto target = MediaResolvedAudioTargetDecision::create(source, request, {});
+    EXPECT_TRUE(ctx, target);
+    if (!target) return;
+    auto output = MediaResolvedAudioOutputPlan::create(
+        target.value(),
+        MediaSelectedAudioEncoder{
+            "aac", "fltp", {44'100}, {AV_PROFILE_AAC_LOW}, 1024, 0},
+        std::nullopt);
+    EXPECT_TRUE(ctx, output);
+    if (!output) return;
+    const std::array<std::uint8_t, 2> aacLc48kStereo{0x11, 0x90};
+    auto decoder = MediaAudioDecoderCapabilityProvider::verifyAac(
+        48'000, 2, aacLc48kStereo);
+    EXPECT_TRUE(ctx, decoder);
+    if (!decoder) return;
+    auto resampler = MediaAudioResamplerCapabilityProvider::verify(
+        decoder.value(), output.value());
+    EXPECT_TRUE(ctx, resampler);
+    if (!resampler) return;
+    const auto freshRateScaled =
+        (decoder.value().maximumOutputBlockInputSamples * 44'100 + 47'999) /
+        48'000;
+    EXPECT_TRUE(ctx, resampler.value().maximumOutputBlockSamples >
+                         freshRateScaled);
 }
 
 MediaProjectMpegTsResolvedPipelineFacts validTsResolvedFacts()
@@ -637,6 +970,99 @@ void testRealtimePlannerProducesCompleteTsAvSyncRuntimeProduct(TestContext& ctx)
     EXPECT_FALSE(ctx,
                  MediaRealtimeRtpTranscodePlanner::validatePlannedProduct(
                      outer));
+    protocol.protocol = MediaProjectMpegTsOutputPlan::accept(
+        protocol.protocol.audioSampleRate(),
+        *outer.avSyncRuntime->synchronization.ts->outputMux).value();
+    const auto rejectChangedMux = [&](const char* name, auto mutation) {
+        auto parameters =
+            outer.avSyncRuntime->synchronization.ts->outputMux->parameters();
+        mutation(parameters);
+        auto mux = MediaTsMuxPlan::create(std::move(parameters));
+        if (!mux) return;
+        auto accepted = MediaProjectMpegTsOutputPlan::accept(
+            protocol.protocol.audioSampleRate(), std::move(mux).value());
+        EXPECT_TRUE(ctx, accepted);
+        if (!accepted) return;
+        protocol.protocol = std::move(accepted).value();
+        if (MediaRealtimeRtpTranscodePlanner::validatePlannedProduct(outer)) {
+            std::cerr << "expected TS runtime mux mismatch: " << name << '\n';
+        }
+        EXPECT_FALSE(ctx,
+            MediaRealtimeRtpTranscodePlanner::validatePlannedProduct(outer));
+        protocol.protocol = MediaProjectMpegTsOutputPlan::accept(
+            outer.avSyncRuntime->audioCorrection.outputSampleRate,
+            *outer.avSyncRuntime->synchronization.ts->outputMux).value();
+    };
+    rejectChangedMux("transportStreamId", [](auto& p) { p.transportStreamId = 2; });
+    rejectChangedMux("programNumber", [](auto& p) { p.programNumber = 2; });
+    rejectChangedMux("programMapPid", [](auto& p) { p.programMapPid = 0x0110; });
+    rejectChangedMux("videoPid", [](auto& p) { p.videoPid = p.pcrPid = 0x0111; });
+    rejectChangedMux("audioPid", [](auto& p) { p.audioPid = 0x0112; });
+    rejectChangedMux("pcrPid", [](auto& p) { p.pcrPid = p.audioPid; });
+    rejectChangedMux("tableVersion", [](auto& p) { p.tableVersion = 1; });
+    rejectChangedMux("psiRepeatInterval", [](auto& p) {
+        p.psiRepeatInterval = MediaRunningTime::fromNanoseconds(50'000'000);
+    });
+    rejectChangedMux("h264InputLayout", [](auto& p) {
+        p.h264InputLayout = MediaTsH264InputLayout::AnnexB;
+    });
+    rejectChangedMux("h264NalLengthBytes", [](auto& p) { p.h264NalLengthBytes = 3; });
+    rejectChangedMux("parameterSetPolicy", [](auto& p) {
+        p.parameterSetPolicy = MediaTsParameterSetPolicy::Never;
+    });
+    rejectChangedMux("aac.mpegId", [](auto& p) { p.aac.mpegId = 1; });
+    rejectChangedMux("aac.audioObjectType", [](auto& p) { p.aac.audioObjectType = 1; });
+    rejectChangedMux("aac.samplingFrequencyIndex", [](auto& p) {
+        p.aac.samplingFrequencyIndex = 4;
+    });
+    rejectChangedMux("aac.channelConfiguration", [](auto& p) {
+        p.aac.channelConfiguration = 1;
+    });
+    rejectChangedMux("clock.pcrInterval", [](auto& p) {
+        p.clock.pcrInterval = MediaRunningTime::fromNanoseconds(25'000'000);
+    });
+    rejectChangedMux("clock.maximumPcrGap", [](auto& p) {
+        p.clock.maximumPcrGap = MediaRunningTime::fromNanoseconds(200'000'000);
+    });
+    rejectChangedMux("clock.maximumPcrJitter", [](auto& p) {
+        p.clock.maximumPcrJitter = MediaRunningTime::fromNanoseconds(4'000'000);
+    });
+    rejectChangedMux("transportDecodeLead", [](auto& p) {
+        p.transportDecodeLead = MediaRunningTime::fromNanoseconds(101'000'000);
+    });
+    rejectChangedMux("continuity.pat", [](auto& p) { p.continuity.pat = 1; });
+    rejectChangedMux("continuity.pmt", [](auto& p) { p.continuity.pmt = 1; });
+    rejectChangedMux("continuity.video", [](auto& p) { p.continuity.video = 1; });
+    rejectChangedMux("continuity.audio", [](auto& p) { p.continuity.audio = 1; });
+    rejectChangedMux("maximumPacketsPerDatagram", [](auto& p) {
+        p.maximumPacketsPerDatagram = 6;
+    });
+    rejectChangedMux("maximumAudioAccessUnitSamples", [](auto& p) {
+        p.maximumAudioAccessUnitSamples = 960;
+    });
+
+    protocol.protocol = MediaProjectMpegTsOutputPlan::accept(
+        protocol.protocol.audioSampleRate() + 1,
+        *outer.avSyncRuntime->synchronization.ts->outputMux).value();
+    EXPECT_FALSE(ctx, MediaRealtimeRtpTranscodePlanner::validatePlannedProduct(outer));
+    protocol.protocol = MediaProjectMpegTsOutputPlan::accept(
+        outer.avSyncRuntime->audioCorrection.outputSampleRate,
+        *outer.avSyncRuntime->synchronization.ts->outputMux).value();
+    protocol.url += "?mutated=1";
+    EXPECT_FALSE(ctx, MediaRealtimeRtpTranscodePlanner::validatePlannedProduct(outer));
+    protocol.url = outer.muxedOutput.url;
+    protocol.resourceKind = MediaOutputResourceKind::FFmpegFormatContext;
+    EXPECT_FALSE(ctx, MediaRealtimeRtpTranscodePlanner::validatePlannedProduct(outer));
+    protocol.resourceKind = MediaOutputResourceKind::ByteSink;
+    protocol.muxSessionKind = MediaMuxSessionKind::FFmpegFile;
+    EXPECT_FALSE(ctx, MediaRealtimeRtpTranscodePlanner::validatePlannedProduct(outer));
+    protocol.muxSessionKind = MediaMuxSessionKind::ProjectMpegTs;
+    outer.muxedOutput.outputResourceKind = MediaOutputResourceKind::FFmpegFormatContext;
+    EXPECT_FALSE(ctx, MediaRealtimeRtpTranscodePlanner::validatePlannedProduct(outer));
+    outer.muxedOutput.outputResourceKind = MediaOutputResourceKind::ByteSink;
+    outer.muxedOutput.muxSessionKind = MediaMuxSessionKind::FFmpegFile;
+    EXPECT_FALSE(ctx, MediaRealtimeRtpTranscodePlanner::validatePlannedProduct(outer));
+    outer.muxedOutput.muxSessionKind = MediaMuxSessionKind::ProjectMpegTs;
 }
 
 void testTsResolvedOutputSupportMatrix(TestContext& ctx)
@@ -676,7 +1102,7 @@ MediaTsMuxPlanParameters validTsMuxPlanParameters()
             MediaRunningTime::fromNanoseconds(5'000'000), 1, 90'000},
         MediaRunningTime::fromNanoseconds(100'000'000), 188,
         MediaTsContinuitySeeds{0, 0, 0, 0}, 7,
-        MediaTsOutputTransportKind::Udp};
+        MediaTsOutputTransportKind::Udp, 1024};
 }
 
 void testTsMuxPlanRejectsEveryInvalidField(TestContext& ctx)
@@ -736,7 +1162,12 @@ void testTsMuxPlanRejectsEveryInvalidField(TestContext& ctx)
     reject("transport kind", [](auto& p) {
         p.transportKind = static_cast<MediaTsOutputTransportKind>(0xFF);
     });
+    reject("audio access-unit samples", [](auto& p) {
+        p.maximumAudioAccessUnitSamples = 0;
+    });
 }
+
+#include <array>
 
 void testProjectTsOutputRequiresExplicitUdpEndpoint(TestContext& ctx)
 {
@@ -1220,7 +1651,6 @@ void testResolvedAudioPlannerMatrix(TestContext& ctx)
         value.channelLayout = channels == 1 ? "mono" : "stereo";
         value.sampleFormat = "fltp";
         value.bitrateBitsPerSecond = 128'000;
-        value.decoderDelaySamples = 0;
         value.maximumAccessUnitSamples = 1024;
         return value;
     };
@@ -1235,6 +1665,17 @@ void testResolvedAudioPlannerMatrix(TestContext& ctx)
         source("aac", MediaAudioProfile::knownAacLow(), 48'000, 2), ordinary);
     EXPECT_TRUE(ctx, lcCopy);
     if (lcCopy) EXPECT_EQ(ctx, lcCopy.value().branchMode, MediaBranchMode::CopyPacket);
+
+    auto synchronized = ordinary;
+    synchronized.outputRequirement.requireFrameTranscode = true;
+    auto lcSynchronized = MediaAudioPipelinePlanner::planKnownAudio(
+        source("aac", MediaAudioProfile::knownAacLow(), 48'000, 2),
+        synchronized);
+    EXPECT_TRUE(ctx, lcSynchronized);
+    if (lcSynchronized) {
+        EXPECT_EQ(ctx, lcSynchronized.value().branchMode,
+                  MediaBranchMode::TranscodeFrame);
+    }
 
     auto unknownCopy = MediaAudioPipelinePlanner::planKnownAudio(
         source("aac", MediaAudioProfile::unknown(), 48'000, 2), ordinary);
@@ -1426,6 +1867,7 @@ int main()
     testAvSyncPlannerBuildsCompleteRtpContract(ctx);
     testRealtimePlannerProducesCompleteAvSyncRuntimeProduct(ctx);
     testRealtimePlannerProducesCompleteTsAvSyncRuntimeProduct(ctx);
+    testSelectedResamplerPublishesSteadyStateBound(ctx);
     testRealtimeAvSyncRuntimeProductRejectsIndependentMutations(ctx);
     testRawRtpInputPlannerProducesCompleteTransportPolicy(ctx);
     testAvSyncPlannerBuildsCompleteTsContract(ctx);
@@ -1442,7 +1884,6 @@ int main()
     source.channelLayout = "stereo";
     source.sampleFormat = "fltp";
     source.bitrateBitsPerSecond = 320000;
-    source.decoderDelaySamples = 0;
     source.maximumAccessUnitSamples = 1024;
 
     MediaAudioPipelinePlannerOptions copyOptions(true);

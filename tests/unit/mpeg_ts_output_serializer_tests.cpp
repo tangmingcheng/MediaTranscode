@@ -32,7 +32,7 @@ MediaTsMuxPlan serializerPlan()
             MediaRunningTime::fromNanoseconds(5'000'000), 1, 90'000},
         MediaRunningTime::fromNanoseconds(100'000'000), 188,
         MediaTsContinuitySeeds{0, 0, 0, 0}, 7,
-        MediaTsOutputTransportKind::Udp});
+        MediaTsOutputTransportKind::Udp, 1024});
     return std::move(plan).value();
 }
 

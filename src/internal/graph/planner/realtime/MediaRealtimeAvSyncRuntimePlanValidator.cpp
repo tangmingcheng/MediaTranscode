@@ -104,6 +104,7 @@ namespace media::ffmpeg::graph {
     if (correction.outputSampleRate <= 0 ||
         correction.epochOutputSampleIndex != 0 ||
         correction.worstCaseInFlightSamples < 0 ||
+        correction.protocolBatchSamples <= 0 ||
         correction.mailboxDeliveryMarginSamples <= 0 ||
         correction.maximumResamplerOutputBlockSamples <= 0 ||
         correction.mailboxCapacity != runtime.queues.metadata ||
@@ -144,29 +145,52 @@ namespace media::ffmpeg::graph {
         }
         const auto& output =
             std::get<MediaSeparateRtpOutputRuntimePlan>(runtime.protocolOutput);
-        const auto validRtp = [](const MediaScheduledRtpOutputPlan& candidate,
-                                 const MediaAvSyncRtpOutputStreamPlan& sync,
-                                 MediaScheduledStream stream,
-                                 MediaScheduledRtpPacketizationMode mode) {
+        const auto samePacketization = [](const auto& left, const auto& right) {
+            return left.streamKind() == right.streamKind() &&
+                left.codecName() == right.codecName() &&
+                left.streamTimeBaseNumerator() == right.streamTimeBaseNumerator() &&
+                left.streamTimeBaseDenominator() == right.streamTimeBaseDenominator() &&
+                left.packetizationMode() == right.packetizationMode() &&
+                left.payloadType() == right.payloadType() &&
+                left.maximumDatagramBytes() == right.maximumDatagramBytes() &&
+                left.maximumAccessUnitSamples() == right.maximumAccessUnitSamples();
+        };
+        const auto validRtp = [&](const MediaScheduledRtpOutputPlan& candidate,
+                                  const MediaAvSyncRtpOutputStreamPlan& sync,
+                                  const MediaScheduledRtpPacketizationPlan& selected,
+                                  const std::string& expectedCodec,
+                                  MediaScheduledStream stream,
+                                  MediaScheduledRtpPacketizationMode mode) {
+            const auto family = candidate.transport.addressFamily();
+            const bool video = stream == MediaScheduledStream::Video;
             return sync.payloadType && sync.clockRate && sync.ssrc &&
                 sync.baseTimestamp && sync.cname &&
                 candidate.stream == stream &&
+                samePacketization(candidate.packetization, selected) &&
                 candidate.packetization.streamKind() ==
-                    (stream == MediaScheduledStream::Video
+                    (video
                          ? MediaStreamKind::Video
                          : MediaStreamKind::Audio) &&
-                !candidate.packetization.codecName().empty() &&
+                candidate.packetization.codecName() == expectedCodec &&
                 candidate.packetization.streamTimeBaseNumerator() == 1 &&
                 candidate.packetization.streamTimeBaseDenominator() ==
                     *sync.clockRate &&
                 candidate.packetization.packetizationMode() == mode &&
                 candidate.packetization.payloadType() == *sync.payloadType &&
                 candidate.packetization.maximumDatagramBytes() > 0 &&
+                (video
+                    ? !candidate.packetization.maximumAccessUnitSamples()
+                    : candidate.packetization.maximumAccessUnitSamples() ==
+                          correction.protocolBatchSamples) &&
                 candidate.transport.maximumDatagramBytes() ==
                     candidate.packetization.maximumDatagramBytes() &&
-                !candidate.transport.localNumericAddress().empty() &&
+                candidate.transport.remoteRtpEndpoint().addressFamily() == family &&
+                candidate.transport.remoteRtcpEndpoint().addressFamily() == family &&
+                candidate.transport.localNumericAddress() ==
+                    (family == MediaIpAddressFamily::Ipv4 ? "0.0.0.0" : "::") &&
                 !candidate.transport.remoteRtpEndpoint().numericAddress().empty() &&
-                !candidate.transport.remoteRtcpEndpoint().numericAddress().empty() &&
+                candidate.transport.remoteRtcpEndpoint().numericAddress() ==
+                    candidate.transport.remoteRtpEndpoint().numericAddress() &&
                 candidate.transport.remoteRtpEndpoint().port() > 0 &&
                 candidate.transport.remoteRtcpEndpoint().port() ==
                     candidate.transport.remoteRtpEndpoint().port() + 1 &&
@@ -174,26 +198,46 @@ namespace media::ffmpeg::graph {
                     MediaRtpUdpLocalPortPolicyKind::OsAssignedIndependent &&
                 !candidate.transport.localPortPolicy().rtpPort() &&
                 !candidate.transport.localPortPolicy().rtcpPort() &&
-                candidate.transport.sendBufferBytes() > 0 &&
+                candidate.transport.maximumDatagramBytes() <=
+                    static_cast<std::size_t>(std::numeric_limits<int>::max() / 2) &&
+                candidate.transport.sendBufferBytes() ==
+                    static_cast<int>(candidate.transport.maximumDatagramBytes() * 2) &&
                 candidate.transport.ioBehavior() ==
                     MediaUdpSenderIoBehavior::NonBlockingRejectOnPressure &&
                 candidate.ssrc == *sync.ssrc &&
                 candidate.baseTimestamp == *sync.baseTimestamp &&
                 candidate.clockRate == *sync.clockRate &&
                 candidate.cname == *sync.cname &&
-                candidate.senderLead > MediaRunningTime::fromNanoseconds(0) &&
-                candidate.senderReportInterval >
-                    MediaRunningTime::fromNanoseconds(0);
+                runtime.synchronization.startup.outputLeadNs &&
+                runtime.synchronization.rtp->output.senderReportIntervalNs &&
+                candidate.senderLead ==
+                    *runtime.synchronization.startup.outputLeadNs &&
+                candidate.senderReportInterval ==
+                    *runtime.synchronization.rtp->output.senderReportIntervalNs;
         };
-        if (output.sdpPath.empty() ||
+        if (output.sdpPath.empty() || output.sdpPath != outer.sdp.path ||
+            !outer.videoOutput.scheduledPacketization ||
+            !outer.audioOutput.scheduledPacketization ||
+            outer.videoPlan.outputCodecName.empty() ||
+            !outer.audioPlan.resolvedOutput ||
             !validRtp(output.video,
                       runtime.synchronization.rtp->videoOutput,
+                      *outer.videoOutput.scheduledPacketization,
+                      outer.videoPlan.outputCodecName,
                       MediaScheduledStream::Video,
                       MediaScheduledRtpPacketizationMode::H264AnnexB) ||
             !validRtp(output.audio,
                       runtime.synchronization.rtp->audioOutput,
+                      *outer.audioOutput.scheduledPacketization,
+                      outer.audioPlan.resolvedOutput->codecName(),
                       MediaScheduledStream::Audio,
-                      MediaScheduledRtpPacketizationMode::AacLatm)) {
+                      MediaScheduledRtpPacketizationMode::AacLatm) ||
+            output.video.transport.addressFamily() !=
+                output.audio.transport.addressFamily() ||
+            output.video.transport.remoteRtpEndpoint().numericAddress() !=
+                output.audio.transport.remoteRtpEndpoint().numericAddress() ||
+            output.audio.transport.remoteRtpEndpoint().port() !=
+                output.video.transport.remoteRtpEndpoint().port() + 2) {
             return invalid("RTP protocol output");
         }
     } else if (*runtime.synchronization.topology ==
@@ -209,9 +253,11 @@ namespace media::ffmpeg::graph {
         }
         const auto& output = std::get<MediaProjectMpegTsRuntimeOutputPlan>(
             runtime.protocolOutput);
-        if (output.url.empty() ||
+        if (output.url.empty() || output.url != outer.muxedOutput.url ||
             output.resourceKind != MediaOutputResourceKind::ByteSink ||
+            outer.muxedOutput.outputResourceKind != output.resourceKind ||
             output.muxSessionKind != MediaMuxSessionKind::ProjectMpegTs ||
+            outer.muxedOutput.muxSessionKind != output.muxSessionKind ||
             output.protocol.audioSampleRate() != correction.outputSampleRate ||
             !runtime.synchronization.ts ||
             !runtime.synchronization.ts->outputMux ||

@@ -103,6 +103,7 @@ struct MediaRealtimeRtpOutputNodePlan {
     int64_t writePacingBytesPerSecond = 0;
     int64_t writePacingBurstBytes = 0;
     std::optional<MediaRtpUdpSenderConfig> scheduledTransport;
+    std::optional<MediaScheduledRtpPacketizationPlan> scheduledPacketization;
 };
 
 struct MediaRealtimeMuxedOutputPlan {

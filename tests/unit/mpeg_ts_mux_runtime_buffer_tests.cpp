@@ -31,7 +31,7 @@ MediaTsMuxPlan muxPlan()
             MediaRunningTime::fromNanoseconds(5'000'000), 1, 90'000},
         MediaRunningTime::fromNanoseconds(100'000'000), 188,
         MediaTsContinuitySeeds{0, 0, 0, 0}, 7,
-        MediaTsOutputTransportKind::Udp}).value();
+        MediaTsOutputTransportKind::Udp, 1024}).value();
 }
 
 MediaBufferRef packetBuffer(MediaStreamKind stream, bool keyFrame, int size = 4)

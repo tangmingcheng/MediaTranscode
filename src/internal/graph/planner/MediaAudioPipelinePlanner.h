@@ -3,6 +3,8 @@
 #include "internal/graph/model/MediaGraphTypes.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/planner/audio/MediaResolvedAudioOutputPlan.h"
+#include "internal/graph/planner/audio/capability/MediaAudioDecoderCapabilityProvider.h"
+#include "internal/graph/planner/audio/capability/MediaAudioResamplerCapabilityProvider.h"
 #include "media_transcode/Result.h"
 
 #include <optional>
@@ -42,15 +44,8 @@ struct MediaAudioPipelinePlan {
     std::optional<MediaResolvedAudioOutputPlan> resolvedOutput;
     bool monotonicPacketTimestamps = false;
     std::string reason;
-    struct DecoderTiming final {
-        int delaySamples;
-        int maximumOutputBlockSamples;
-    };
-    struct ResamplerTiming final {
-        int maximumOutputBlockSamples;
-    };
-    std::optional<DecoderTiming> decoderTiming;
-    std::optional<ResamplerTiming> resamplerTiming;
+    std::optional<MediaSelectedAudioDecoder> selectedDecoder;
+    std::optional<MediaSelectedAudioResampler> selectedResampler;
 };
 
 struct MediaInputAudioStreamInfo {
@@ -62,8 +57,8 @@ struct MediaInputAudioStreamInfo {
     std::string sampleFormat;
     MediaAudioProfile profile = MediaAudioProfile::unknown();
     int64_t bitrateBitsPerSecond = 0;
-    std::optional<int> decoderDelaySamples;
     std::optional<int> maximumAccessUnitSamples;
+    std::optional<MediaSelectedAudioDecoder> selectedDecoder;
 };
 
 class MediaAudioPipelinePlanner final {

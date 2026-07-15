@@ -32,6 +32,22 @@
 - This planner-product task does not provide the later Task 12 production runtime wiring or hardware playback acceptance; those remain gated by the subsequent design sequence.
 - Legacy pacing/barrier fields still physically exist for non-synchronized paths. Synchronized validation requires them to remain inert until the later atomic authority-removal task.
 
+## Third-review remediation
+
+- Added complete separate-RTP mutation proof for both stream descriptors, both typed transports, cross-stream endpoint layout, sender identity/timing, and the audio packetization/correction batch equality. Non-representable codec/mode/address-family/I/O combinations are rejected by their typed factories.
+- Audited every `MediaTsMuxPlanParameters` field: all legally constructible alternatives are rejected as runtime mismatches; fixed-domain and invalid values are covered by the mux-plan factory matrix. All outer TS runtime fields, including protocol audio sample rate, are mutated independently.
+- Selected AAC decoder capability comes from an opened RAII `AVCodecContext`. Selected resampler capability comes from an initialized RAII `SwrContext`; it primes one rational phase and requires two identical subsequent phase-state sequences before publishing the maximum `swr_get_out_samples` bound. A 48 kHz to 44.1 kHz regression proves the steady-state bound exceeds the fresh rate-scaled block. No FFmpeg runtime context is stored in a plan.
+- RED: resetting the selected resolved audio output caused the runtime validator to dereference an empty optional and leave the planner test process hung. GREEN: the RTP validator now rejects the incomplete selected product before descriptor comparison.
+
+## Fresh verification after final source changes
+
+- `out/build/x64-debug/media_transcode_planner_tests.exe` - exit 0.
+- `out/build/x64-debug/media_transcode_builder_tests.exe` - exit 0.
+- `out/build/x64-debug/media_transcode_node_tests.exe` - exit 0.
+- `out/build/x64-debug/media_transcode_core_tests.exe` - exit 0.
+- `out/build/x64-debug/media_transcode_runtime_tests.exe` - exit 0.
+- `ctest --test-dir out/build/x64-debug -C Debug --output-on-failure -L deterministic --timeout 60` - 8/8 passed, 0 failed, 12.62 seconds after CRLF normalization.
+
 ## Independent review remediation
 
 - RED: under `VsDevCmd.bat`, the planner target built and the planner executable failed at `tests/unit/test_planner.cpp:293` because removing the mandatory synchronized runtime product was still accepted.

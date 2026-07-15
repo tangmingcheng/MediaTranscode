@@ -96,7 +96,8 @@ template <typename T>
         request.quality || !request.preset.empty();
     const bool copy = codec.value() == sourceCodec && profile.value() == source.profile &&
         sampleRate.value() == source.sampleRate && channels.value() == source.channels &&
-        bitrateMatches && !encoderOnlyRequest;
+        bitrateMatches && !encoderOnlyRequest &&
+        !topologyRequirement.requireFrameTranscode;
     if (auto status = validateCodecProfile(codec.value(), profile.value(), copy); !status) {
         return ::media::Result<MediaResolvedAudioTargetDecision>::failure(status.error());
     }

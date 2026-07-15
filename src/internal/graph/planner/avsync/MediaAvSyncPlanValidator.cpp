@@ -45,7 +45,7 @@ bool validByteCapacity(const std::optional<std::size_t>& units,
            *bytes == static_cast<std::uint64_t>(*units) * *maximumUnitBytes;
 }
 
-::media::Status validateShared(const MediaAvSyncPlan& plan)
+::media::Status validateShared(const MediaAvSyncPlan& plan, bool finalized)
 {
     if (!plan.topology) return invalid("topology");
     if (!plan.sourceClockMode) return invalid("sourceClockMode");
@@ -86,7 +86,6 @@ bool validByteCapacity(const std::optional<std::size_t>& units,
     const auto& servo = plan.audioServo;
     if (!positive(servo.deadbandNs) ||
         !positive(servo.phaseFilterTimeConstantNs) ||
-        !positive(servo.frequencyFilterTimeConstantNs) ||
         !positive(servo.proportionalGainPpmPerSecond) ||
         !positive(servo.integralGainPpmPerSecondSquared) ||
         !positive(servo.integratorLimitPpm) ||
@@ -111,47 +110,21 @@ bool validByteCapacity(const std::optional<std::size_t>& units,
         !positive(servo.recoveryEnterThresholdNs) ||
         !positive(servo.recoveryExitThresholdNs) ||
         !positive(servo.recoveryExitHoldNs) ||
-        !positive(servo.compensationWindowNs) ||
-        !positive(servo.commandLeadNs) ||
         !positive(servo.outputSampleRate) ||
         !positive(servo.correctionLookaheadWindows) ||
-        !MediaAudioDriftServoPolicyValidator::leadCoversWorstPositiveGap(
-            servo.commandLeadNs->nanoseconds(),
-            servo.maximumMeasurementGapNs->nanoseconds(),
-            *servo.outputSampleRate,
-            *servo.recoveryCorrectionLimitPpm) ||
         *servo.minimumUpdateIntervalNs >= *servo.phaseFilterTimeConstantNs ||
         *servo.phaseFilterTimeConstantNs >= *servo.maximumMeasurementGapNs ||
-        *servo.maximumMeasurementGapNs >= *servo.frequencyFilterTimeConstantNs ||
         *servo.deadbandNs >= *servo.recoveryExitThresholdNs ||
         *servo.recoveryExitThresholdNs >= *servo.recoveryEnterThresholdNs ||
         !positive(plan.recovery.hardDiscontinuityThresholdNs) ||
         *servo.recoveryEnterThresholdNs >=
             *plan.recovery.hardDiscontinuityThresholdNs ||
         *servo.recoveryExitHoldNs < *servo.minimumUpdateIntervalNs ||
-        *servo.maximumMeasurementGapNs >= *servo.commandLeadNs ||
-        *servo.commandLeadNs >= *servo.compensationWindowNs ||
-        *servo.compensationWindowNs >= *servo.frequencyFilterTimeConstantNs ||
-        servo.compensationWindowNs->nanoseconds() >
-            (std::numeric_limits<std::int64_t>::max() -
-             MediaAudioDriftServoLimits::NanosecondsPerSecond) /
-                *servo.outputSampleRate ||
-        servo.compensationWindowNs->nanoseconds() *
-                static_cast<std::int64_t>(*servo.outputSampleRate) <
-            MediaAudioDriftServoLimits::NanosecondsPerSecond ||
-        servo.compensationWindowNs->nanoseconds() *
-                static_cast<std::int64_t>(*servo.outputSampleRate) /
-                MediaAudioDriftServoLimits::NanosecondsPerSecond >
-            std::numeric_limits<int>::max() ||
         *servo.correctionLookaheadWindows >
             MediaAudioDriftServoLimits::MaximumCorrectionLookaheadWindows ||
         *servo.outputSampleRate > MediaAudioDriftServoLimits::MaximumOutputSampleRate ||
         servo.maximumMeasurementGapNs->nanoseconds() >
             MediaAudioDriftServoLimits::MaximumMeasurementGapNs ||
-        servo.frequencyFilterTimeConstantNs->nanoseconds() >
-            MediaAudioDriftServoLimits::MaximumPolicyDurationNs ||
-        servo.compensationWindowNs->nanoseconds() >
-            MediaAudioDriftServoLimits::MaximumPolicyDurationNs ||
         servo.recoveryExitHoldNs->nanoseconds() >
             MediaAudioDriftServoLimits::MaximumPolicyDurationNs ||
         *servo.proportionalGainPpmPerSecond >
@@ -170,6 +143,38 @@ bool validByteCapacity(const std::optional<std::size_t>& units,
         *servo.maximumSlewPpmPerSecond > *servo.normalCorrectionLimitPpm ||
         *servo.normalCorrectionLimitPpm > *servo.recoveryCorrectionLimitPpm) {
         return invalid("audio servo policy");
+    }
+    if (!finalized) {
+        if (servo.commandLeadNs || servo.compensationWindowNs ||
+            servo.frequencyFilterTimeConstantNs) {
+            return invalid("incomplete policy contains finalized correction timing");
+        }
+    } else if (
+        !positive(servo.frequencyFilterTimeConstantNs) ||
+        !positive(servo.compensationWindowNs) || !positive(servo.commandLeadNs) ||
+        !MediaAudioDriftServoPolicyValidator::leadCoversWorstPositiveGap(
+            servo.commandLeadNs->nanoseconds(),
+            servo.maximumMeasurementGapNs->nanoseconds(),
+            *servo.outputSampleRate, *servo.recoveryCorrectionLimitPpm) ||
+        *servo.maximumMeasurementGapNs >= *servo.commandLeadNs ||
+        *servo.commandLeadNs >= *servo.compensationWindowNs ||
+        *servo.compensationWindowNs >= *servo.frequencyFilterTimeConstantNs ||
+        servo.compensationWindowNs->nanoseconds() >
+            (std::numeric_limits<std::int64_t>::max() -
+             MediaAudioDriftServoLimits::NanosecondsPerSecond) /
+                *servo.outputSampleRate ||
+        servo.compensationWindowNs->nanoseconds() *
+                static_cast<std::int64_t>(*servo.outputSampleRate) <
+            MediaAudioDriftServoLimits::NanosecondsPerSecond ||
+        servo.compensationWindowNs->nanoseconds() *
+                static_cast<std::int64_t>(*servo.outputSampleRate) /
+                MediaAudioDriftServoLimits::NanosecondsPerSecond >
+            std::numeric_limits<int>::max() ||
+        servo.frequencyFilterTimeConstantNs->nanoseconds() >
+            MediaAudioDriftServoLimits::MaximumPolicyDurationNs ||
+        servo.compensationWindowNs->nanoseconds() >
+            MediaAudioDriftServoLimits::MaximumPolicyDurationNs) {
+        return invalid("finalized audio correction timing");
     }
 
     const auto& video = plan.video;
@@ -288,7 +293,7 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
 
 ::media::Status MediaAvSyncPlanValidator::validate(const MediaAvSyncPlan& plan)
 {
-    if (auto status = validateShared(plan); !status) return status;
+    if (auto status = validateShared(plan, true); !status) return status;
     switch (*plan.topology) {
     case MediaAvSyncTopology::SeparateRtpToSeparateRtp:
         return validateRtp(plan);
@@ -301,18 +306,14 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
 ::media::Status MediaAvSyncPlanValidator::validatePolicy(
     const MediaAvSyncPlan& plan)
 {
-    if (plan.audioServo.commandLeadNs || plan.audioServo.compensationWindowNs ||
-        plan.audioServo.frequencyFilterTimeConstantNs) {
-        return invalid("incomplete policy contains finalized correction timing");
+    if (auto status = validateShared(plan, false); !status) return status;
+    switch (*plan.topology) {
+    case MediaAvSyncTopology::SeparateRtpToSeparateRtp:
+        return validateRtp(plan);
+    case MediaAvSyncTopology::MpegTsToMpegTs:
+        return validateTs(plan);
     }
-    MediaAvSyncPlan validation = plan;
-    validation.audioServo.commandLeadNs =
-        MediaRunningTime::fromNanoseconds(1'500'000'000);
-    validation.audioServo.compensationWindowNs =
-        MediaRunningTime::fromNanoseconds(2'000'000'000);
-    validation.audioServo.frequencyFilterTimeConstantNs =
-        MediaRunningTime::fromNanoseconds(5'000'000'000);
-    return validate(validation);
+    return invalid("topology");
 }
 
 } // namespace media::ffmpeg::graph

@@ -112,7 +112,8 @@ bool validContinuitySeeds(const MediaTsContinuitySeeds& seeds) noexcept
         !validContinuitySeeds(parameters.continuity) ||
         parameters.maximumPacketsPerDatagram < 1 ||
         parameters.maximumPacketsPerDatagram > 7 ||
-        !validTransportKind(parameters.transportKind)) {
+        !validTransportKind(parameters.transportKind) ||
+        parameters.maximumAudioAccessUnitSamples <= 0) {
         return invalid("contains an invalid transport contract");
     }
     return ::media::Result<MediaTsMuxPlan>::success(

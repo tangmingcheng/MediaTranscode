@@ -66,36 +66,23 @@ namespace {
     MediaScheduledStream stream,
     MediaRealtimeRtpOutputNodePlan& legacyOutput,
     const MediaAvSyncRtpOutputStreamPlan& synchronization,
-    const std::string& codecName,
-    std::optional<int> maximumAccessUnitSamples,
     MediaRunningTime senderLead,
     MediaRunningTime senderReportInterval)
 {
     if (!synchronization.payloadType || !synchronization.ssrc ||
         !synchronization.baseTimestamp || !synchronization.clockRate ||
         !synchronization.cname || synchronization.cname->empty() ||
-        legacyOutput.packetSize <= 0 || !legacyOutput.scheduledTransport) {
+        legacyOutput.packetSize <= 0 || !legacyOutput.scheduledTransport ||
+        !legacyOutput.scheduledPacketization) {
         return ::media::Result<MediaScheduledRtpOutputPlan>::failure(
             ::media::ErrorInfo::notInitialized(
                 "scheduled RTP output requires complete protocol planning facts"));
-    }
-    const auto streamKind = stream == MediaScheduledStream::Video
-        ? MediaStreamKind::Video
-        : MediaStreamKind::Audio;
-    auto packetization = MediaScheduledRtpPacketizationPlan::create(
-        streamKind, codecName, 1, *synchronization.clockRate,
-        *synchronization.payloadType,
-        static_cast<std::size_t>(legacyOutput.packetSize),
-        maximumAccessUnitSamples);
-    if (!packetization) {
-        return ::media::Result<MediaScheduledRtpOutputPlan>::failure(
-            packetization.error());
     }
     return ::media::Result<MediaScheduledRtpOutputPlan>::success(
         MediaScheduledRtpOutputPlan{
             stream,
             std::move(*legacyOutput.scheduledTransport),
-            std::move(packetization).value(),
+            *legacyOutput.scheduledPacketization,
             *synchronization.ssrc,
             *synchronization.baseTimestamp,
             *synchronization.clockRate,
@@ -224,6 +211,7 @@ namespace {
             *facts.outputSampleRate,
             0,
             worst,
+            *facts.protocolBatchSamples,
             *facts.mailboxDeliveryMarginSamples,
             *facts.maximumResamplerOutputBlockSamples,
             commandLeadSamples,
@@ -269,16 +257,12 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             MediaScheduledStream::Video,
             outer.videoOutput,
             synchronization.rtp->videoOutput,
-            outer.videoPlan.outputCodecName,
-            std::nullopt,
             *synchronization.startup.outputLeadNs,
             *synchronization.rtp->output.senderReportIntervalNs);
         auto audio = scheduledRtpOutput(
             MediaScheduledStream::Audio,
             outer.audioOutput,
             synchronization.rtp->audioOutput,
-            outer.audioPlan.resolvedOutput->codecName(),
-            outer.audioPlan.resolvedOutput->codecFrameSamples(),
             *synchronization.startup.outputLeadNs,
             *synchronization.rtp->output.senderReportIntervalNs);
         if (!video || !audio) {
@@ -308,6 +292,8 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
                 accepted.error());
         }
         adapter = MediaAvSyncOutputAdapterKind::ProjectMpegTs;
+        outer.muxedOutput.outputResourceKind = MediaOutputResourceKind::ByteSink;
+        outer.muxedOutput.muxSessionKind = MediaMuxSessionKind::ProjectMpegTs;
         protocolOutput.emplace(std::in_place_type<MediaProjectMpegTsRuntimeOutputPlan>,
             MediaProjectMpegTsRuntimeOutputPlan{
                 outer.muxedOutput.url,

@@ -15,6 +15,7 @@ struct MediaAudioOutputRequirement final {
     std::optional<MediaAudioProfile> profile;
     std::optional<int> sampleRate;
     std::optional<int> channels;
+    bool requireFrameTranscode = false;
 };
 
 struct MediaResolvedAudioSource final {

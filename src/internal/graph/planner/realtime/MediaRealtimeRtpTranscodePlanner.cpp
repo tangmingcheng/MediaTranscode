@@ -23,7 +23,7 @@ namespace {
 ::media::Result<MediaRealtimeAvSyncComponentBounds> planAvSyncComponentBounds(
     const MediaRealtimeRtpTranscodePlan& plan)
 {
-    if (!plan.audioPlan.decoderTiming || !plan.audioPlan.resamplerTiming ||
+    if (!plan.audioPlan.selectedDecoder || !plan.audioPlan.selectedResampler ||
         !plan.audioPlan.resolvedOutput ||
         plan.audioPlan.resolvedOutput->codecFrameSamples() <= 0) {
         return ::media::Result<MediaRealtimeAvSyncComponentBounds>::failure(
@@ -42,8 +42,39 @@ namespace {
         return ::media::Result<std::int64_t>::success(
             static_cast<std::int64_t>(capacity) * samples);
     };
-    const auto decoderBlock = plan.audioPlan.decoderTiming->maximumOutputBlockSamples;
-    const auto resamplerBlock = plan.audioPlan.resamplerTiming->maximumOutputBlockSamples;
+    const auto convertToOutput = [](std::int64_t inputSamples,
+                                    int inputRate, int outputRate,
+                                    const char* owner)
+        -> ::media::Result<std::int64_t> {
+        if (inputSamples < 0 || inputRate <= 0 || outputRate <= 0 ||
+            inputSamples > (std::numeric_limits<std::int64_t>::max() -
+                            inputRate + 1) / outputRate) {
+            return ::media::Result<std::int64_t>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    std::string(owner) + " conversion is not representable"));
+        }
+        return ::media::Result<std::int64_t>::success(
+            (inputSamples * outputRate + inputRate - 1) / inputRate);
+    };
+    const auto& decoder = *plan.audioPlan.selectedDecoder;
+    const auto& resampler = *plan.audioPlan.selectedResampler;
+    const int outputRate = plan.audioPlan.resolvedOutput->sampleRate();
+    auto decoderDelay = convertToOutput(
+        decoder.delayInputSamples, decoder.inputSampleRate, outputRate,
+        "decoder delay");
+    auto decoderBlockOutput = convertToOutput(
+        decoder.maximumOutputBlockInputSamples,
+        decoder.outputSampleRate, outputRate, "decoder output block");
+    if (!decoderDelay || !decoderBlockOutput ||
+        resampler.outputSampleRate != outputRate) {
+        return ::media::Result<MediaRealtimeAvSyncComponentBounds>::failure(
+            !decoderDelay ? decoderDelay.error() : !decoderBlockOutput
+                ? decoderBlockOutput.error()
+                : ::media::ErrorInfo::invalidArgument(
+                      "resampler output sample domain conflicts with encoder"));
+    }
+    const auto decoderBlock = decoderBlockOutput.value();
+    const auto resamplerBlock = resampler.maximumOutputBlockSamples;
     const auto encoderBlock = plan.audioPlan.resolvedOutput->codecFrameSamples();
     auto decode = multiply(plan.queues.packet, decoderBlock, "decode queue");
     auto resample = multiply(plan.queues.frame, decoderBlock, "resample queue");
@@ -57,9 +88,42 @@ namespace {
     }
     return ::media::Result<MediaRealtimeAvSyncComponentBounds>::success(
         MediaRealtimeAvSyncComponentBounds{
-            plan.audioPlan.decoderTiming->delaySamples,
+            decoderDelay.value(),
             decode.value(), resample.value(), encode.value(), scheduler.value(),
-            encoderBlock, mailbox.value(), resamplerBlock, plan.queues.metadata});
+            mailbox.value(), resamplerBlock,
+            plan.queues.metadata});
+}
+
+::media::Status planScheduledRtpPacketization(
+    MediaRealtimeRtpTranscodePlan& plan,
+    const MediaAvSyncPlan& synchronization)
+{
+    if (!synchronization.rtp || !synchronization.rtp->videoOutput.clockRate ||
+        !synchronization.rtp->videoOutput.payloadType ||
+        !synchronization.rtp->audioOutput.clockRate ||
+        !synchronization.rtp->audioOutput.payloadType ||
+        !plan.audioPlan.resolvedOutput || plan.videoOutput.packetSize <= 0 ||
+        plan.audioOutput.packetSize <= 0) {
+        return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+            "scheduled RTP packetization requires complete selected protocol facts"));
+    }
+    auto video = MediaScheduledRtpPacketizationPlan::create(
+        MediaStreamKind::Video, plan.videoPlan.outputCodecName, 1,
+        *synchronization.rtp->videoOutput.clockRate,
+        *synchronization.rtp->videoOutput.payloadType,
+        static_cast<std::size_t>(plan.videoOutput.packetSize));
+    auto audio = MediaScheduledRtpPacketizationPlan::create(
+        MediaStreamKind::Audio, plan.audioPlan.resolvedOutput->codecName(), 1,
+        *synchronization.rtp->audioOutput.clockRate,
+        *synchronization.rtp->audioOutput.payloadType,
+        static_cast<std::size_t>(plan.audioOutput.packetSize),
+        plan.audioPlan.resolvedOutput->codecFrameSamples());
+    if (!video || !audio) {
+        return ::media::Status::failure(video ? audio.error() : video.error());
+    }
+    plan.videoOutput.scheduledPacketization = std::move(video).value();
+    plan.audioOutput.scheduledPacketization = std::move(audio).value();
+    return ::media::Status::success();
 }
 
 constexpr int RealtimeNoBidirectionalFrames = 0;
@@ -197,6 +261,8 @@ MediaVideoTranscodeParameters planRealtimeVideoParameters(const MediaVideoTransc
     plannerOptions.requestedQuality = audio.quality;
     plannerOptions.requestedPreset = audio.preset;
     plannerOptions.requestedProfile = audio.profile;
+    plannerOptions.outputRequirement.requireFrameTranscode =
+        MediaRealtimeRequestClassifier::audioRequested(options);
     if (MediaRealtimeRequestClassifier::muxedTransportOutput(options)) {
         plannerOptions.outputRequirement.codecName = "aac";
         plannerOptions.outputRequirement.profile = MediaAudioProfile::knownAacLow();
@@ -508,6 +574,14 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
             resolvedTsFacts ? &*resolvedTsFacts : nullptr);
         if (!avSync) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(avSync.error());
+        }
+        if (avSync.value().topology ==
+            MediaAvSyncTopology::SeparateRtpToSeparateRtp) {
+            if (auto status = planScheduledRtpPacketization(
+                    plan, avSync.value()); !status) {
+                return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                    status.error());
+            }
         }
         auto runtime = MediaRealtimeAvSyncRuntimePlanner::plan(
             plan, std::move(avSync).value());

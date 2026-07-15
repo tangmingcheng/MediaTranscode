@@ -34,7 +34,7 @@ MediaTsMuxPlanParameters packetizerParameters(
             MediaRunningTime::fromNanoseconds(100'000'000),
             MediaRunningTime::fromNanoseconds(5'000'000), 1, 90'000},
         MediaRunningTime::fromNanoseconds(100'000'000), 188, seeds, 7,
-        MediaTsOutputTransportKind::Udp};
+        MediaTsOutputTransportKind::Udp, 1024};
 }
 
 MediaTsMuxPlan packetizerPlan(MediaTsContinuitySeeds seeds = {3, 5, 7, 9})
