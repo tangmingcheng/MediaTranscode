@@ -129,6 +129,8 @@ const char* mediaGraphDiagnosticNodeKindName(MediaNodeKind kind) noexcept
     case MediaNodeKind::AvStartupCoordinator: return "AvStartupCoordinator";
     case MediaNodeKind::AvOutputScheduler: return "AvOutputScheduler";
     case MediaNodeKind::PlaybackEpochBinder: return "PlaybackEpochBinder";
+    case MediaNodeKind::CanonicalInput: return "CanonicalInput";
+    case MediaNodeKind::AvBoundReleaseExtractor: return "AvBoundReleaseExtractor";
     case MediaNodeKind::PacketMerge: return "PacketMerge";
     case MediaNodeKind::FileMux: return "FileMux";
     case MediaNodeKind::RtpMux: return "RtpMux";

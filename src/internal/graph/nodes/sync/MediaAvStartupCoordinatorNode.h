@@ -6,17 +6,28 @@
 #include <memory>
 #include <deque>
 #include <optional>
+#include <string_view>
 #include <unordered_map>
+#include "internal/graph/sync/MediaAvSyncGroupKey.h"
 
 namespace media::ffmpeg::graph {
 
 class MediaAvStartupEnvelopeBuffer;
 class MediaControlBuffer;
+class MediaAvStartupGenerationState;
+class MediaAvGenerationPurgeTarget;
+struct MediaAvStartupCoordinatorNodePreparation;
 
 class MediaAvStartupCoordinatorNode final : public FFmpegNodeRuntime {
 public:
-    explicit MediaAvStartupCoordinatorNode(MediaNodeId nodeId);
+    MediaAvStartupCoordinatorNode(
+        MediaNodeId nodeId,
+        MediaAvStartupCoordinatorNodePreparation preparation);
+    ~MediaAvStartupCoordinatorNode() override;
     static MediaNodeKind staticKind() noexcept;
+    static std::string_view generationPurgeIdentity() noexcept;
+    std::shared_ptr<MediaAvGenerationPurgeTarget> generationPurgeTarget() const noexcept;
+    ::media::Status start(MediaGraphExecutionContext& context) override;
     ::media::Status stop(MediaGraphExecutionContext& context) override;
     void abort(MediaGraphExecutionContext& context) noexcept override;
 
@@ -31,7 +42,6 @@ private:
         Clock
     };
 
-    ::media::Status configure(MediaGraphExecutionContext& context);
     ::media::Result<bool> fillPendingMedia(MediaGraphExecutionContext& context,
                                            const char* portName,
                                            std::deque<MediaBufferRef>& pending);
@@ -57,11 +67,10 @@ private:
         const MediaAvStartupDecision& decision,
         const MediaAvStartupEnvelopeBuffer& envelope);
     void erasePurged(const std::vector<MediaAvStartupUnitId>& purged) noexcept;
-    void resetState() noexcept;
+    void clearTransientState() noexcept;
 
     std::unique_ptr<MediaAvStartupCoordinator> m_coordinator;
-    std::unordered_map<MediaAvStartupUnitId, MediaBufferRef,
-                       MediaAvStartupUnitIdHash> m_payloads;
+    std::shared_ptr<MediaAvStartupGenerationState> m_generationState;
     std::deque<MediaBufferRef> m_pendingVideo;
     std::deque<MediaBufferRef> m_pendingAudio;
     MediaBufferRef m_pendingClock;

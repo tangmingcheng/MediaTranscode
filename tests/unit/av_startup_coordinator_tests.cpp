@@ -10,7 +10,9 @@
 #include "internal/graph/runtime/buffer/FFmpegPacketBuffer.h"
 #include "internal/graph/runtime/buffer/MediaRtpClockGroupBuffer.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
+#include "internal/graph/runtime/MediaGraphRuntime.h"
 #include "internal/graph/runtime/factory/MediaRuntimeNodeFactory.h"
+#include "internal/graph/sync/startup/MediaAvStartupGenerationState.h"
 
 #include <cstdint>
 #include <limits>
@@ -817,6 +819,7 @@ void setNodePolicy(MediaGraph& graph, MediaNodeId node)
     graph.setNodeOption(node, "av_startup.maximum_audio_unit_bytes", "100");
     graph.setNodeOption(node, "av_startup.video_identity", "video-main");
     graph.setNodeOption(node, "av_startup.audio_identity", "audio-main");
+    graph.setNodeOption(node, "av_startup.sync_group", "startup-group");
 }
 
 struct StartupNodeHarness final {
@@ -824,6 +827,8 @@ struct StartupNodeHarness final {
     MediaNodeId coordinator;
     MediaGraphExecutionContext execution;
     std::unique_ptr<MediaRuntimeNode> runtime;
+    MediaAvStartupCoordinatorNode* coordinatorRuntime = nullptr;
+    std::shared_ptr<MediaAvStartupGenerationState> generationState;
 
     bool initialize(TestContext& ctx)
     {
@@ -860,6 +865,15 @@ struct StartupNodeHarness final {
         EXPECT_TRUE(ctx, created);
         if (!created) return false;
         runtime = std::move(created).value();
+        coordinatorRuntime = dynamic_cast<MediaAvStartupCoordinatorNode*>(runtime.get());
+        EXPECT_TRUE(ctx, coordinatorRuntime != nullptr);
+        if (!coordinatorRuntime) return false;
+        EXPECT_EQ(ctx, coordinatorRuntime->generationPurgeIdentity(),
+                  MediaAvStartupGenerationState::plannedIdentity());
+        generationState = std::dynamic_pointer_cast<MediaAvStartupGenerationState>(
+            coordinatorRuntime->generationPurgeTarget());
+        EXPECT_TRUE(ctx, generationState != nullptr);
+        if (!generationState) return false;
         EXPECT_TRUE(ctx, runtime->start(execution));
         return true;
     }
@@ -888,6 +902,63 @@ struct StartupNodeHarness final {
             makeMediaBufferRef<MediaControlBuffer>(kind));
     }
 };
+
+void testFactoryRejectsIncompleteStartupConfiguration(TestContext& ctx)
+{
+    MediaGraph graph;
+    const auto coordinator = graph.addNode(MediaNodeKind::AvStartupCoordinator,
+                                           "startup.incomplete");
+    graph.addInputPort(coordinator, "video", MediaStreamKind::Metadata,
+                       MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+    graph.addInputPort(coordinator, "audio", MediaStreamKind::Metadata,
+                       MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+    graph.addInputPort(coordinator, "clock", MediaStreamKind::Metadata,
+                       MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+    graph.addOutputPort(coordinator, "release", MediaStreamKind::Metadata,
+                        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+    EXPECT_FALSE(ctx, MediaRuntimeNodeFactory::create(*graph.findNode(coordinator)));
+    MediaGraphRuntime runtime;
+    EXPECT_FALSE(ctx, runtime.compile(std::move(graph)));
+}
+
+void testGenerationTargetIdentitySurvivesLifecycleCleanup(TestContext& ctx)
+{
+    StartupNodeHarness harness;
+    if (!harness.initialize(ctx)) return;
+    auto external = harness.generationState;
+    const auto* identity = external.get();
+    MediaAvStartupAccessUnit unit{
+        MediaAvStartupStream::Video, "video-main", 1, 100, ns(0), ns(40),
+        MediaSourceClockReadiness::Locked, 7, true, std::nullopt};
+    const MediaAvStartupUnitId id{MediaAvStartupStream::Video, 7, 1};
+    EXPECT_TRUE(ctx, external->store(MediaAvSyncGroupKey("startup-group"), unit,
+                                     makeMediaBufferRef<SizedStartupPayload>(100)));
+    EXPECT_TRUE(ctx, harness.runtime->stop(harness.execution));
+    EXPECT_TRUE(ctx, harness.coordinatorRuntime->generationPurgeTarget().get() == identity);
+    EXPECT_FALSE(ctx, external->take(id));
+
+    EXPECT_TRUE(ctx, harness.runtime->start(harness.execution));
+    EXPECT_TRUE(ctx, harness.coordinatorRuntime->generationPurgeTarget().get() == identity);
+    EXPECT_TRUE(ctx, external->store(MediaAvSyncGroupKey("startup-group"), unit,
+                                     makeMediaBufferRef<SizedStartupPayload>(100)));
+    harness.runtime->abort(harness.execution);
+    EXPECT_TRUE(ctx, harness.coordinatorRuntime->generationPurgeTarget().get() == identity);
+    EXPECT_FALSE(ctx, external->take(id));
+
+    harness.runtime.reset();
+    EXPECT_FALSE(ctx, external->take(id));
+    auto recreated = MediaRuntimeNodeFactory::create(
+        *harness.graph.findNode(harness.coordinator));
+    EXPECT_TRUE(ctx, recreated);
+    if (recreated) {
+        const auto* next = dynamic_cast<const MediaAvStartupCoordinatorNode*>(
+            recreated.value().get());
+        EXPECT_TRUE(ctx, next != nullptr);
+        if (next) {
+            EXPECT_TRUE(ctx, next->generationPurgeTarget().get() != identity);
+        }
+    }
+}
 
 void testNodeWaitsWithoutClockOrMedia(TestContext& ctx)
 {
@@ -1084,6 +1155,9 @@ void testNodePublishesOneImmutablePairedEnvelope(TestContext& ctx)
     const auto* release = dynamic_cast<const MediaAvStartupReleaseBuffer*>(emitted.get());
     EXPECT_TRUE(ctx, release != nullptr);
     if (release) {
+        EXPECT_EQ(ctx, release->groupKey(), MediaAvSyncGroupKey("startup-group"));
+        EXPECT_EQ(ctx, release->releaseKind(),
+                  MediaAvStartupReleaseKind::InitialAtomicRelease);
         EXPECT_EQ(ctx, release->epoch().generation, static_cast<std::uint64_t>(7));
         EXPECT_TRUE(ctx, !release->video().empty());
         EXPECT_TRUE(ctx, !release->audio().empty());
@@ -1203,13 +1277,15 @@ void testNodeFailsClosedWithoutCommonCanonicalEnvelope(TestContext& ctx)
     setNodePolicy(graph, coordinator);
     MediaGraphExecutionContext execution;
     EXPECT_TRUE(ctx, execution.compile(graph));
-    MediaAvStartupCoordinatorNode runtime(coordinator);
-    EXPECT_TRUE(ctx, runtime.start(execution));
+    auto runtime = MediaRuntimeNodeFactory::create(*graph.findNode(coordinator));
+    EXPECT_TRUE(ctx, runtime);
+    if (!runtime) return;
+    EXPECT_TRUE(ctx, runtime.value()->start(execution));
     EXPECT_TRUE(ctx, execution.findInputChannel(coordinator, "video")->push(
         makeMediaBufferRef<MediaRtpClockGroupBuffer>(MediaRtpClockGroupSnapshot{
             MediaRtpClockGroupState::Acquiring, 0, {}, std::nullopt, std::nullopt})));
-    EXPECT_FALSE(ctx, runtime.process(execution));
-    runtime.abort(execution);
+    EXPECT_FALSE(ctx, runtime.value()->process(execution));
+    runtime.value()->abort(execution);
 }
 
 } // namespace
@@ -1239,6 +1315,8 @@ void runAvStartupCoordinatorTests(TestContext& ctx)
     testGlobalWatermarkPreventsLateEventTimeRegression(ctx);
     testEnvelopeUsesTrustedPayloadFootprint(ctx);
     testFfmpegPacketFootprintIncludesSideDataOnlyPayload(ctx);
+    testFactoryRejectsIncompleteStartupConfiguration(ctx);
+    testGenerationTargetIdentitySurvivesLifecycleCleanup(ctx);
     testNodeWaitsWithoutClockOrMedia(ctx);
     testNodeProcessesDeadlineMediaBeforeEqualClockTick(ctx);
     testNodeDoesNotLetFutureMediaStarveDeadlineClock(ctx);

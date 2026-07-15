@@ -70,7 +70,9 @@ enum class MediaNodeKind {
     MpegTsDemux = 44,
     AvStartupCoordinator = 45,
     AvOutputScheduler = 46,
-    PlaybackEpochBinder = 47
+    PlaybackEpochBinder = 47,
+    CanonicalInput = 48,
+    AvBoundReleaseExtractor = 49
 };
 
 } // namespace media::ffmpeg::graph

@@ -32,8 +32,11 @@
 #include "internal/graph/nodes/split/PacketFanoutNode.h"
 #include "internal/graph/nodes/sync/MediaRtpClockGroupNode.h"
 #include "internal/graph/nodes/sync/MediaAvStartupCoordinatorNode.h"
+#include "internal/graph/nodes/sync/MediaAvStartupCoordinatorNodePreparation.h"
 #include "internal/graph/nodes/sync/MediaAvOutputSchedulerNode.h"
 #include "internal/graph/nodes/sync/MediaPlaybackEpochBinderNode.h"
+#include "internal/graph/nodes/sync/MediaCanonicalInputNode.h"
+#include "internal/graph/nodes/sync/MediaAvBoundReleaseExtractorNode.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/nodes/video/HardwareTransferNode.h"
 #include "internal/graph/nodes/video/VideoDecodeNode.h"
@@ -106,8 +109,16 @@ namespace media::ffmpeg::graph {
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<PacketStartGateNode>(node.id));
     case MediaNodeKind::RtpClockGroup:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<MediaRtpClockGroupNode>(node.id));
-    case MediaNodeKind::AvStartupCoordinator:
-        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<MediaAvStartupCoordinatorNode>(node.id));
+    case MediaNodeKind::AvStartupCoordinator: {
+        auto prepared = prepareMediaAvStartupCoordinatorNode(node);
+        if (!prepared) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                prepared.error());
+        }
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+            std::make_unique<MediaAvStartupCoordinatorNode>(
+                node.id, std::move(prepared).value()));
+    }
     case MediaNodeKind::AvOutputScheduler:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::make_unique<MediaAvOutputSchedulerNode>(node.id));
@@ -115,6 +126,12 @@ namespace media::ffmpeg::graph {
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
             ::media::ErrorInfo::notInitialized(
                 "PlaybackEpochBinder requires compiler-issued activation authority"));
+    case MediaNodeKind::CanonicalInput:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+            std::make_unique<MediaCanonicalInputNode>(node.id));
+    case MediaNodeKind::AvBoundReleaseExtractor:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+            std::make_unique<MediaAvBoundReleaseExtractorNode>(node.id));
     case MediaNodeKind::PacketMerge:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<PacketMergeNode>(node.id));
     case MediaNodeKind::FileMux:
@@ -206,6 +223,8 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::AvStartupCoordinator:
     case MediaNodeKind::AvOutputScheduler:
     case MediaNodeKind::PlaybackEpochBinder:
+    case MediaNodeKind::CanonicalInput:
+    case MediaNodeKind::AvBoundReleaseExtractor:
     case MediaNodeKind::PacketMerge:
     case MediaNodeKind::FileMux:
     case MediaNodeKind::RtpMux:

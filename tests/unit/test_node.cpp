@@ -18,6 +18,7 @@
 #include "internal/graph/runtime/buffer/MediaRtpClockGroupBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
+#include "internal/graph/runtime/factory/MediaRuntimeNodeFactory.h"
 
 
 extern "C" {
@@ -1394,5 +1395,8 @@ int main()
     runFileOutputResourceTests(ctx);
     testAudioEncodeFixedFrameStateMachine(ctx);
     testRtpClockGroupRejectsStaleCrossPortEvidence(ctx);
+    EXPECT_TRUE(ctx, MediaRuntimeNodeFactory::supported(MediaNodeKind::CanonicalInput));
+    EXPECT_TRUE(ctx, MediaRuntimeNodeFactory::supported(
+                         MediaNodeKind::AvBoundReleaseExtractor));
     return ctx.failures == 0 ? 0 : 1;
 }

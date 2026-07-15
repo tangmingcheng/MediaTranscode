@@ -232,6 +232,13 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
     media_transcode_register_test(
         media_transcode_av_playback_epoch_binder_tests "runtime;deterministic")
 
+    add_executable(media_transcode_canonical_lineage_tests
+        tests/unit/canonical_lineage_tests.cpp
+    )
+    media_transcode_configure_test(media_transcode_canonical_lineage_tests)
+    media_transcode_register_test(
+        media_transcode_canonical_lineage_tests "node;deterministic")
+
     add_executable(media_transcode_node_tests
         tests/unit/test_node.cpp
         tests/unit/audio_swr_compensation_executor_tests.cpp

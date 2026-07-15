@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <memory>
 
 namespace media::ffmpeg::graph {
 
@@ -15,6 +16,8 @@ enum class MediaDecodeOrderMode : std::uint8_t {
     ReorderedRequiresDecodeTime,
     PresentationOrderNoReorder
 };
+
+struct MediaCanonicalLineage;
 
 class MediaSourceAccessUnitSequence final {
 public:
@@ -31,42 +34,30 @@ class MediaCanonicalAccessUnitBuffer final : public MediaBuffer {
 public:
     static ::media::Result<MediaBufferRef> create(
         MediaBufferRef media,
-        MediaScheduledStream stream,
-        MediaRunningTime canonicalPresentation,
-        std::optional<MediaRunningTime> canonicalDecode,
-        MediaRunningTime canonicalDuration,
-        MediaDecodeOrderMode decodeOrder,
-        std::uint64_t generation,
-        MediaSourceAccessUnitSequence sourceSequence);
+        std::shared_ptr<const MediaCanonicalLineage> lineage);
 
     MediaBufferType type() const noexcept override;
+    std::optional<std::uint64_t> payloadFootprintBytes() const noexcept override;
     const MediaBufferRef& media() const noexcept { return m_media; }
     MediaScheduledStream stream() const noexcept { return m_stream; }
-    MediaRunningTime canonicalPresentation() const noexcept { return m_canonicalPresentation; }
-    const std::optional<MediaRunningTime>& canonicalDecode() const noexcept { return m_canonicalDecode; }
+    MediaRunningTime canonicalPresentation() const noexcept;
+    const std::optional<MediaRunningTime>& canonicalDecode() const noexcept;
     ::media::Result<MediaRunningTime> canonicalDispatch() const noexcept;
-    MediaRunningTime canonicalDuration() const noexcept { return m_canonicalDuration; }
-    MediaDecodeOrderMode decodeOrder() const noexcept { return m_decodeOrder; }
-    std::uint64_t generation() const noexcept { return m_generation; }
-    MediaSourceAccessUnitSequence sourceSequence() const noexcept { return m_sourceSequence; }
+    MediaRunningTime canonicalDuration() const noexcept;
+    MediaDecodeOrderMode decodeOrder() const noexcept;
+    std::uint64_t generation() const noexcept;
+    MediaSourceAccessUnitSequence sourceSequence() const noexcept;
+    const std::shared_ptr<const MediaCanonicalLineage>& lineage() const noexcept
+    { return m_lineage; }
 
 private:
-    MediaCanonicalAccessUnitBuffer(MediaBufferRef media,
-                                   MediaScheduledStream stream,
-                                   MediaRunningTime canonicalPresentation,
-                                   std::optional<MediaRunningTime> canonicalDecode,
-                                   MediaRunningTime canonicalDuration,
-                                   MediaDecodeOrderMode decodeOrder,
-                                   std::uint64_t generation,
-                                   MediaSourceAccessUnitSequence sourceSequence);
+    MediaCanonicalAccessUnitBuffer(
+        MediaBufferRef media,
+        MediaScheduledStream stream,
+        std::shared_ptr<const MediaCanonicalLineage> lineage);
     MediaBufferRef m_media;
     MediaScheduledStream m_stream;
-    MediaRunningTime m_canonicalPresentation;
-    std::optional<MediaRunningTime> m_canonicalDecode;
-    MediaRunningTime m_canonicalDuration;
-    MediaDecodeOrderMode m_decodeOrder;
-    std::uint64_t m_generation;
-    MediaSourceAccessUnitSequence m_sourceSequence;
+    std::shared_ptr<const MediaCanonicalLineage> m_lineage;
 };
 
 } // namespace media::ffmpeg::graph

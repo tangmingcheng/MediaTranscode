@@ -3,6 +3,8 @@
 #include "internal/graph/runtime/buffer/MediaBuffer.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 #include "internal/graph/sync/MediaAvStartupCoordinator.h"
+#include "internal/graph/sync/MediaAudioPlaybackOrigin.h"
+#include "internal/graph/sync/MediaAvSyncGroupKey.h"
 
 namespace media::ffmpeg::graph {
 
@@ -41,19 +43,42 @@ struct MediaAvReleasedUnit final {
     std::uint32_t trimLeadingSamples;
 };
 
+enum class MediaAvStartupReleaseKind : std::uint8_t {
+    InitialAtomicRelease = 0,
+    ActiveEpochPassThrough = 1
+};
+
 class MediaAvStartupReleaseBuffer final : public MediaBuffer {
 public:
-    MediaAvStartupReleaseBuffer(MediaPlaybackEpoch epoch,
-                                std::vector<MediaAvReleasedUnit> video,
-                                std::vector<MediaAvReleasedUnit> audio);
+    static ::media::Status validateReleaseKind(
+        MediaAvStartupReleaseKind releaseKind) noexcept;
+    static ::media::Result<MediaBufferRef> create(
+        MediaAvSyncGroupKey groupKey,
+        MediaAvStartupReleaseKind releaseKind,
+        MediaPlaybackEpoch epoch,
+        MediaAudioPlaybackOrigin audioOrigin,
+        std::vector<MediaAvReleasedUnit> video,
+        std::vector<MediaAvReleasedUnit> audio);
 
     MediaBufferType type() const noexcept override;
+    const MediaAvSyncGroupKey& groupKey() const noexcept;
+    MediaAvStartupReleaseKind releaseKind() const noexcept;
     const MediaPlaybackEpoch& epoch() const noexcept;
+    const MediaAudioPlaybackOrigin& audioOrigin() const noexcept;
     const std::vector<MediaAvReleasedUnit>& video() const noexcept;
     const std::vector<MediaAvReleasedUnit>& audio() const noexcept;
 
 private:
+    MediaAvStartupReleaseBuffer(MediaAvSyncGroupKey groupKey,
+                                MediaAvStartupReleaseKind releaseKind,
+                                MediaPlaybackEpoch epoch,
+                                MediaAudioPlaybackOrigin audioOrigin,
+                                std::vector<MediaAvReleasedUnit> video,
+                                std::vector<MediaAvReleasedUnit> audio);
+    MediaAvSyncGroupKey m_groupKey;
+    MediaAvStartupReleaseKind m_releaseKind;
     MediaPlaybackEpoch m_epoch;
+    MediaAudioPlaybackOrigin m_audioOrigin;
     std::vector<MediaAvReleasedUnit> m_video;
     std::vector<MediaAvReleasedUnit> m_audio;
 };
