@@ -52,18 +52,12 @@ public:
     MediaNodeWakeup& nodeWakeup(MediaNodeId nodeId);
     void interruptNodeWakeups() noexcept;
     void shutdownAvSyncGroups() noexcept;
-    ::media::Status registerAvSyncGroup(MediaAvSyncGroupKey key,
-                                        MediaAvSyncPlan plan,
-                                        std::shared_ptr<MediaMasterClock> clock);
     ::media::Status registerAvSyncGroup(
         MediaAvSyncGroupKey key,
         MediaAvSyncPlan plan,
-        std::shared_ptr<MediaSteadyMasterClock> clock,
-        std::shared_ptr<const MediaSharedNtpEpoch> sharedNtpEpoch);
-    ::media::Status activatePlaybackEpoch(const MediaAvSyncGroupKey& key,
-                                          MediaPlaybackEpoch epoch);
-    ::media::Status activateNextPlaybackEpoch(const MediaAvSyncGroupKey& key,
-                                              MediaPlaybackEpoch epoch);
+        std::shared_ptr<MediaMasterClock> clock,
+        std::shared_ptr<const MediaSharedNtpEpoch> sharedNtpEpoch,
+        std::shared_ptr<MediaAvEpochTransitionService> transitionService);
     std::shared_ptr<MediaAvSyncGroupRuntime> findAvSyncGroup(
         const MediaAvSyncGroupKey& key) const noexcept;
 

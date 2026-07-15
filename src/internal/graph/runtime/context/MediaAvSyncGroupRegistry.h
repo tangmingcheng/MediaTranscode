@@ -15,18 +15,12 @@ public:
     MediaAvSyncGroupRegistry(MediaAvSyncGroupRegistry&& other);
     MediaAvSyncGroupRegistry& operator=(MediaAvSyncGroupRegistry&& other);
 
-    ::media::Status registerGroup(MediaAvSyncGroupKey key,
-                                  MediaAvSyncPlan plan,
-                                  std::shared_ptr<MediaMasterClock> clock);
     ::media::Status registerGroup(
         MediaAvSyncGroupKey key,
         MediaAvSyncPlan plan,
-        std::shared_ptr<MediaSteadyMasterClock> clock,
-        std::shared_ptr<const MediaSharedNtpEpoch> sharedNtpEpoch);
-    ::media::Status activatePlaybackEpoch(const MediaAvSyncGroupKey& key,
-                                          MediaPlaybackEpoch epoch);
-    ::media::Status activateNextPlaybackEpoch(const MediaAvSyncGroupKey& key,
-                                              MediaPlaybackEpoch epoch);
+        std::shared_ptr<MediaMasterClock> clock,
+        std::shared_ptr<const MediaSharedNtpEpoch> sharedNtpEpoch,
+        std::shared_ptr<MediaAvEpochTransitionService> transitionService);
     std::shared_ptr<MediaAvSyncGroupRuntime> find(
         const MediaAvSyncGroupKey& key) const noexcept;
     void clear() noexcept;

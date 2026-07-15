@@ -244,35 +244,13 @@ void MediaGraphExecutionContext::shutdownAvSyncGroups() noexcept
 ::media::Status MediaGraphExecutionContext::registerAvSyncGroup(
     MediaAvSyncGroupKey key,
     MediaAvSyncPlan plan,
-    std::shared_ptr<MediaMasterClock> clock)
-{
-    return m_avSyncGroups.registerGroup(
-        std::move(key), std::move(plan), std::move(clock));
-}
-
-::media::Status MediaGraphExecutionContext::registerAvSyncGroup(
-    MediaAvSyncGroupKey key,
-    MediaAvSyncPlan plan,
-    std::shared_ptr<MediaSteadyMasterClock> clock,
-    std::shared_ptr<const MediaSharedNtpEpoch> sharedNtpEpoch)
+    std::shared_ptr<MediaMasterClock> clock,
+    std::shared_ptr<const MediaSharedNtpEpoch> sharedNtpEpoch,
+    std::shared_ptr<MediaAvEpochTransitionService> transitionService)
 {
     return m_avSyncGroups.registerGroup(
         std::move(key), std::move(plan), std::move(clock),
-        std::move(sharedNtpEpoch));
-}
-
-::media::Status MediaGraphExecutionContext::activatePlaybackEpoch(
-    const MediaAvSyncGroupKey& key,
-    MediaPlaybackEpoch epoch)
-{
-    return m_avSyncGroups.activatePlaybackEpoch(key, epoch);
-}
-
-::media::Status MediaGraphExecutionContext::activateNextPlaybackEpoch(
-    const MediaAvSyncGroupKey& key,
-    MediaPlaybackEpoch epoch)
-{
-    return m_avSyncGroups.activateNextPlaybackEpoch(key, epoch);
+        std::move(sharedNtpEpoch), std::move(transitionService));
 }
 
 std::shared_ptr<MediaAvSyncGroupRuntime>

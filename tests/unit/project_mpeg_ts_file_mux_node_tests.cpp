@@ -1,9 +1,11 @@
 #include "common/TestAssert.h"
+#include "common/AvSyncRuntimeTestSupport.h"
 
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/nodes/mux/FileMuxNode.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
+#include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 #include "internal/graph/runtime/buffer/FFmpegCodecParametersBuffer.h"
 #include "internal/graph/runtime/buffer/MediaOutputByteSinkBuffer.h"
@@ -180,6 +182,7 @@ struct ProjectFileMuxHarness final {
     MediaGraph graph;
     MediaGraphExecutionContext execution;
     MediaNodeId mux;
+    MediaNodeId binder;
     MediaNodeId planSource;
     MediaNodeId sinkSource;
     MediaNodeId videoConfigSource;
@@ -192,6 +195,7 @@ struct ProjectFileMuxHarness final {
         std::make_shared<ManualClock>(epoch.masterRelease);
     std::shared_ptr<SinkState> sink = std::make_shared<SinkState>();
     std::unique_ptr<FileMuxNode> runtime;
+    std::unique_ptr<MediaGraphRuntime> graphRuntime;
 
     bool initialize(TestContext& ctx)
     {
@@ -217,6 +221,14 @@ struct ProjectFileMuxHarness final {
                                       MediaStreamKind::Audio,
                                       MediaEdgeKind::EncodedPacket,
                                       MediaPayloadKind::TsAccessUnit);
+        const auto scheduler = graph.addNode(
+            MediaNodeKind::AvOutputScheduler, "project.av.scheduler");
+        binder = graph.addNode(
+            MediaNodeKind::PlaybackEpochBinder, "project.epoch.binder");
+        graph.setNodeOption(scheduler, "av_scheduler.sync_group",
+                            group.value());
+        graph.setNodeOption(binder, "playback_epoch_binder.sync_group",
+                            group.value());
         mux = graph.addNode(MediaNodeKind::FileMux, "project.file.mux");
         graph.setNodeOption(mux, MediaTranscodeOptionKey::MuxSessionKind,
                             "project_mpegts");
@@ -241,7 +253,14 @@ struct ProjectFileMuxHarness final {
         connect(videoPacketSource, "packet", "packet", "video.packet.edge");
         connect(audioPacketSource, "packet", "packet", "audio.packet.edge");
 
-        EXPECT_TRUE(ctx, execution.compile(graph));
+        EXPECT_TRUE(ctx, media_transcode::test::compileAndActivateAvSyncRuntime(
+            std::move(graph),
+            MediaAvSyncRuntimeBinding{
+                group, avSyncPlan(),
+                MediaAvGenerationTransitionPlanner::plan(
+                    MediaAvSyncOutputAdapterKind::ProjectMpegTs,
+                    ms(1'000), ms(500))},
+            clock, epoch, binder, execution, graphRuntime));
         EXPECT_EQ(ctx, channel(planSource)->binding().payloadKind,
                   MediaPayloadKind::TsMuxRuntimePlan);
         EXPECT_EQ(ctx, channel(sinkSource)->binding().payloadKind,
@@ -254,8 +273,6 @@ struct ProjectFileMuxHarness final {
                   MediaPayloadKind::TsAccessUnit);
         EXPECT_EQ(ctx, channel(audioPacketSource)->binding().payloadKind,
                   MediaPayloadKind::TsAccessUnit);
-        EXPECT_TRUE(ctx, execution.registerAvSyncGroup(group, avSyncPlan(), clock));
-        EXPECT_TRUE(ctx, execution.activatePlaybackEpoch(group, epoch));
         runtime = std::make_unique<FileMuxNode>(mux);
         EXPECT_TRUE(ctx, runtime->start(execution));
         return execution.compiled();

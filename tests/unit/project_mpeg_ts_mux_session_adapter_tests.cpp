@@ -1,9 +1,11 @@
 #include "common/TestAssert.h"
+#include "common/AvSyncRuntimeTestSupport.h"
 
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/nodes/mux/MediaMuxSessionFactory.h"
 #include "internal/graph/nodes/mux/ProjectMpegTsMuxSessionAdapter.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
+#include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 #include "internal/graph/runtime/buffer/FFmpegCodecParametersBuffer.h"
 #include "internal/graph/runtime/buffer/MediaOutputByteSinkBuffer.h"
@@ -121,15 +123,33 @@ MediaAvSyncPlan avSyncPlan()
 
 struct Fixture final {
     MediaGraphExecutionContext context;
+    std::unique_ptr<MediaGraphRuntime> graphRuntime;
     MediaAvSyncGroupKey group{"project-ts-group"};
     MediaPlaybackEpoch epoch{ms(0), ms(1'000), 7};
     std::shared_ptr<ManualClock> clock = std::make_shared<ManualClock>(epoch.masterRelease);
 
     bool activate(TestContext& ctx)
     {
-        EXPECT_TRUE(ctx, context.registerAvSyncGroup(group, avSyncPlan(), clock));
-        EXPECT_TRUE(ctx, context.activatePlaybackEpoch(group, epoch));
-        return context.findAvSyncGroup(group) != nullptr;
+        MediaGraph graph;
+        const auto scheduler = graph.addNode(
+            MediaNodeKind::AvOutputScheduler, "adapter.av.scheduler");
+        const auto binder = graph.addNode(
+            MediaNodeKind::PlaybackEpochBinder, "adapter.epoch.binder");
+        graph.setNodeOption(scheduler, "av_scheduler.sync_group",
+                            group.value());
+        graph.setNodeOption(binder, "playback_epoch_binder.sync_group",
+                            group.value());
+        const bool activated =
+            media_transcode::test::compileAndActivateAvSyncRuntime(
+                std::move(graph),
+                MediaAvSyncRuntimeBinding{
+                    group, avSyncPlan(),
+                    MediaAvGenerationTransitionPlanner::plan(
+                        MediaAvSyncOutputAdapterKind::ProjectMpegTs,
+                        ms(1'000), ms(500))},
+                clock, epoch, binder, context, graphRuntime);
+        EXPECT_TRUE(ctx, activated);
+        return activated;
     }
 
     MediaBufferRef planBuffer() const

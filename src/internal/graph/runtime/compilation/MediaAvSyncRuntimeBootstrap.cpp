@@ -37,19 +37,27 @@ MediaAvSyncRuntimeBootstrap::createClocks(
     return clocks;
 }
 
-::media::Status MediaAvSyncRuntimeBootstrap::registerGroup(
+::media::Result<MediaPlaybackEpochActivationCapability>
+MediaAvSyncRuntimeBootstrap::registerGroupAndIssueActivationCapability(
     const MediaAvSyncRuntimeBinding& binding,
     MediaAvSyncClockBundle clocks,
     MediaGraphExecutionContext& context)
 {
-    if (!context.compiled()) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::notInitialized(
-                "A/V sync runtime bootstrap requires a compiled context"));
+    auto transition = MediaAvEpochTransitionService::create(binding.transition);
+    if (!transition) {
+        return ::media::Result<MediaPlaybackEpochActivationCapability>::failure(
+            transition.error());
     }
-    return context.registerAvSyncGroup(
+    auto service = std::move(transition).value();
+    auto registered = context.registerAvSyncGroup(
         binding.groupKey, binding.plan, std::move(clocks.masterClock),
-        std::move(clocks.sharedNtpEpoch));
+        std::move(clocks.sharedNtpEpoch), service);
+    if (!registered) {
+        return ::media::Result<MediaPlaybackEpochActivationCapability>::failure(
+            registered.error());
+    }
+    return ::media::Result<MediaPlaybackEpochActivationCapability>::success(
+        MediaPlaybackEpochActivationCapability(service));
 }
 
 } // namespace media::ffmpeg::graph

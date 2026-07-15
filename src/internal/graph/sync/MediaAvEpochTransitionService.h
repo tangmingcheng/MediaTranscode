@@ -10,6 +10,8 @@
 
 namespace media::ffmpeg::graph {
 
+class MediaPlaybackEpochActivationCapability;
+
 struct MediaAvEpochTransitionSnapshot final {
     MediaAvGenerationReadiness readiness;
     std::optional<MediaPlaybackEpoch> playbackEpoch;
@@ -23,23 +25,24 @@ public:
     static ::media::Result<std::shared_ptr<MediaAvEpochTransitionService>> create(
         MediaAvGenerationTransitionPlan plan);
 
-    ::media::Status activateInitial(
-        MediaPlaybackEpoch epoch,
-        MediaAudioPlaybackOrigin audioOrigin);
     ::media::Result<MediaAvGenerationPurge> beginReacquisition(
         std::uint64_t oldGeneration,
         std::uint64_t nextGeneration);
     ::media::Result<bool> acknowledge(
         MediaAvGenerationAcknowledgement acknowledgement);
     ::media::Status pollTransitionTimeout(MediaRunningTime elapsedSinceBegin);
-    ::media::Status activateNextAfter(
-        std::uint64_t completedTransitionSequence,
-        MediaPlaybackEpoch epoch,
-        MediaAudioPlaybackOrigin audioOrigin);
     void abort() noexcept;
     MediaAvEpochTransitionSnapshot snapshot() const noexcept;
 
 private:
+    friend class MediaPlaybackEpochActivationCapability;
+    ::media::Status activateInitial(
+        MediaPlaybackEpoch epoch,
+        MediaAudioPlaybackOrigin audioOrigin);
+    ::media::Status activateNextAfter(
+        std::uint64_t completedTransitionSequence,
+        MediaPlaybackEpoch epoch,
+        MediaAudioPlaybackOrigin audioOrigin);
     explicit MediaAvEpochTransitionService(
         MediaAvGenerationTransitionCoordinator coordinator);
     static ::media::Status validateEpochPair(

@@ -45,23 +45,13 @@ MediaAvSyncGroupRegistry& MediaAvSyncGroupRegistry::operator=(
 ::media::Status MediaAvSyncGroupRegistry::registerGroup(
     MediaAvSyncGroupKey key,
     MediaAvSyncPlan plan,
-    std::shared_ptr<MediaMasterClock> clock)
-{
-    auto runtime = MediaAvSyncGroupRuntime::create(
-        key, std::move(plan), std::move(clock));
-    if (!runtime) return ::media::Status::failure(runtime.error());
-    return registerRuntime(std::move(runtime).value());
-}
-
-::media::Status MediaAvSyncGroupRegistry::registerGroup(
-    MediaAvSyncGroupKey key,
-    MediaAvSyncPlan plan,
-    std::shared_ptr<MediaSteadyMasterClock> clock,
-    std::shared_ptr<const MediaSharedNtpEpoch> sharedNtpEpoch)
+    std::shared_ptr<MediaMasterClock> clock,
+    std::shared_ptr<const MediaSharedNtpEpoch> sharedNtpEpoch,
+    std::shared_ptr<MediaAvEpochTransitionService> transitionService)
 {
     auto runtime = MediaAvSyncGroupRuntime::create(
         std::move(key), std::move(plan), std::move(clock),
-        std::move(sharedNtpEpoch));
+        std::move(sharedNtpEpoch), std::move(transitionService));
     if (!runtime) return ::media::Status::failure(runtime.error());
     return registerRuntime(std::move(runtime).value());
 }
@@ -77,26 +67,6 @@ MediaAvSyncGroupRegistry& MediaAvSyncGroupRegistry::operator=(
                 "A/V sync group is already registered"));
     }
     return ::media::Status::success();
-}
-
-::media::Status MediaAvSyncGroupRegistry::activatePlaybackEpoch(
-    const MediaAvSyncGroupKey& key,
-    MediaPlaybackEpoch epoch)
-{
-    auto group = find(key);
-    return group ? group->activatePlaybackEpoch(epoch)
-                 : ::media::Status::failure(::media::ErrorInfo::notInitialized(
-                       "A/V sync group is not registered"));
-}
-
-::media::Status MediaAvSyncGroupRegistry::activateNextPlaybackEpoch(
-    const MediaAvSyncGroupKey& key,
-    MediaPlaybackEpoch epoch)
-{
-    auto group = find(key);
-    return group ? group->activateNextPlaybackEpoch(epoch)
-                 : ::media::Status::failure(::media::ErrorInfo::notInitialized(
-                       "A/V sync group is not registered"));
 }
 
 std::shared_ptr<MediaAvSyncGroupRuntime> MediaAvSyncGroupRegistry::find(

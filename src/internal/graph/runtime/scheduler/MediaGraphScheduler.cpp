@@ -4,20 +4,48 @@
 
 namespace media::ffmpeg::graph {
 
+static_assert(noexcept(std::hash<uint32_t>{}(uint32_t{})));
+static_assert(noexcept(std::equal_to<uint32_t>{}(uint32_t{}, uint32_t{})));
+
 ::media::Status MediaGraphScheduler::registerNode(std::unique_ptr<MediaRuntimeNode> node)
 {
-    if (!node || !node->nodeId()) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("MediaGraphScheduler registerNode failed: node is invalid"));
+    std::vector<std::unique_ptr<MediaRuntimeNode>> nodes;
+    nodes.push_back(std::move(node));
+    return registerNodes(std::move(nodes));
+}
+
+::media::Status MediaGraphScheduler::registerNodes(
+    std::vector<std::unique_ptr<MediaRuntimeNode>> nodes)
+{
+    std::unordered_set<uint32_t> preparedIds;
+    preparedIds.reserve(nodes.size());
+    for (const auto& node : nodes) {
+        if (!node || !node->nodeId()) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "MediaGraphScheduler registerNodes failed: node is invalid"));
+        }
+        const uint32_t key = node->nodeId().value;
+        if (m_nodes.contains(key) || !preparedIds.insert(key).second) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "MediaGraphScheduler registerNodes failed: duplicate runtime node"));
+        }
     }
 
-    const uint32_t key = node->nodeId().value;
-    if (m_nodes.find(key) != m_nodes.end()) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("MediaGraphScheduler registerNode failed: duplicate runtime node"));
+    decltype(m_nodes) preparedNodes;
+    preparedNodes.reserve(nodes.size());
+    for (auto& node : nodes) {
+        const uint32_t key = node->nodeId().value;
+        preparedNodes.emplace(key, std::move(node));
     }
 
-    m_nodes[key] = std::move(node);
+    // Allocate the live bucket array before publication. Inserting extracted
+    // node handles then reuses their allocated nodes and cannot partially
+    // publish because uint32_t hashing/equality are non-throwing.
+    m_nodes.reserve(m_nodes.size() + preparedNodes.size());
+    while (!preparedNodes.empty()) {
+        auto node = preparedNodes.extract(preparedNodes.begin());
+        m_nodes.insert(std::move(node));
+    }
     return ::media::Status::success();
 }
 

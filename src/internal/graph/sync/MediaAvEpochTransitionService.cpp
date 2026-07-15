@@ -4,6 +4,8 @@
 
 namespace media::ffmpeg::graph {
 
+// Activation entry points are intentionally private to the runtime capability.
+
 MediaAvEpochTransitionService::MediaAvEpochTransitionService(
     MediaAvGenerationTransitionCoordinator coordinator)
     : m_coordinator(std::move(coordinator))

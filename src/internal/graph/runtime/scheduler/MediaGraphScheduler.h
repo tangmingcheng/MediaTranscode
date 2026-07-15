@@ -28,6 +28,8 @@ public:
     MediaGraphScheduler& operator=(const MediaGraphScheduler&) = delete;
 
     ::media::Status registerNode(std::unique_ptr<MediaRuntimeNode> node);
+    ::media::Status registerNodes(
+        std::vector<std::unique_ptr<MediaRuntimeNode>> nodes);
     MediaRuntimeNode* findNode(MediaNodeId nodeId);
     const MediaRuntimeNode* findNode(MediaNodeId nodeId) const;
 

@@ -52,7 +52,10 @@ public:
 ::media::Status MediaGraphRuntimeCompiler::validateBindings(const MediaRealtimeExecutableGraph& executable)
 {
     std::unordered_set<std::uint64_t> bindingIds;
-    bool hasAvSyncGroupReference = false;
+    std::size_t schedulerCount = 0;
+    std::size_t binderCount = 0;
+    std::size_t schedulerReferenceCount = 0;
+    std::size_t binderReferenceCount = 0;
     for (const auto& binding : executable.inputBindings) {
         if (!binding.nodeId.isValid() || !binding.prepared.valid() ||
             !bindingIds.insert(binding.nodeId.value).second) {
@@ -66,6 +69,8 @@ public:
         }
     }
     for (const MediaNode& node : executable.graph.nodes()) {
+        if (node.kind == MediaNodeKind::AvOutputScheduler) ++schedulerCount;
+        if (node.kind == MediaNodeKind::PlaybackEpochBinder) ++binderCount;
         if (node.kind == MediaNodeKind::RealtimeInput && !bindingIds.contains(node.id.value)) {
             return ::media::Status::failure(
                 ::media::ErrorInfo::notInitialized("MediaGraphRuntime missing prepared RealtimeInput binding"));
@@ -74,14 +79,22 @@ public:
             constexpr std::string_view SyncGroupSuffix = ".sync_group";
             constexpr std::string_view SchedulerGroupKey =
                 "av_scheduler.sync_group";
+            constexpr std::string_view BinderGroupKey =
+                "playback_epoch_binder.sync_group";
             if (!key.ends_with(SyncGroupSuffix)) continue;
-            if (node.kind != MediaNodeKind::AvOutputScheduler ||
-                key != SchedulerGroupKey) {
+            const bool schedulerConsumer =
+                node.kind == MediaNodeKind::AvOutputScheduler &&
+                key == SchedulerGroupKey;
+            const bool binderConsumer =
+                node.kind == MediaNodeKind::PlaybackEpochBinder &&
+                key == BinderGroupKey;
+            if (!schedulerConsumer && !binderConsumer) {
                 return ::media::Status::failure(
                     ::media::ErrorInfo::invalidArgument(
                         "MediaGraphRuntime found an unsupported A/V sync group consumer"));
             }
-            hasAvSyncGroupReference = true;
+            if (schedulerConsumer) ++schedulerReferenceCount;
+            if (binderConsumer) ++binderReferenceCount;
             if (value.empty() || !executable.avSyncBinding) {
                 return ::media::Status::failure(
                     ::media::ErrorInfo::notInitialized(
@@ -104,11 +117,15 @@ public:
                 executable.avSyncBinding->plan); !status) {
             return status;
         }
-        if (!hasAvSyncGroupReference) {
+        if (schedulerCount != 1 || binderCount != 1 ||
+            schedulerReferenceCount != 1 || binderReferenceCount != 1) {
             return ::media::Status::failure(
                 ::media::ErrorInfo::notInitialized(
-                    "MediaGraphRuntime A/V sync binding has no graph consumer"));
+                    "MediaGraphRuntime A/V sync binding requires exactly one scheduler and one playback epoch binder"));
         }
+    } else if (schedulerCount != 0 || binderCount != 0) {
+        return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+            "Synchronized runtime nodes require an A/V sync binding"));
     }
     return ::media::Status::success();
 }
@@ -117,6 +134,9 @@ public:
     MediaRealtimeExecutableGraph executable,
     MediaGraph& activeGraph,
     std::vector<MediaPreparedRealtimeInputBinding>& activeBindings,
+    std::optional<MediaPlaybackEpochActivationCapability>&
+        playbackEpochActivationCapability,
+    const std::shared_ptr<MediaAvSyncClockSource>& avSyncClockSource,
     MediaGraphExecutionContext& context,
     MediaGraphScheduler& scheduler,
     MediaGraphThreadedExecutor& threadedExecutor,
@@ -140,17 +160,25 @@ public:
                                 std::string("compile.failed error=") + compiled.error().describe());
         return compiled;
     }
+    std::optional<MediaPlaybackEpochActivationCapability> preparedCapability;
     if (executable.avSyncBinding) {
-        ProductionAvSyncClockSource clockSource;
+        ProductionAvSyncClockSource productionClockSource;
+        MediaAvSyncClockSource& clockSource = avSyncClockSource
+            ? *avSyncClockSource
+            : static_cast<MediaAvSyncClockSource&>(productionClockSource);
         auto clocks = MediaAvSyncRuntimeBootstrap::createClocks(
             *executable.avSyncBinding, clockSource);
         if (!clocks) {
             return ::media::Status::failure(clocks.error());
         }
-        auto registered = MediaAvSyncRuntimeBootstrap::registerGroup(
+        auto registered = MediaAvSyncRuntimeBootstrap::
+            registerGroupAndIssueActivationCapability(
             *executable.avSyncBinding, std::move(clocks).value(),
             preparedContext);
-        if (!registered) return registered;
+        if (!registered) {
+            return ::media::Status::failure(registered.error());
+        }
+        preparedCapability.emplace(std::move(registered).value());
     }
     const std::vector<MediaNodeId> oldExecutionOrder = context.executionOrder();
     context.shutdownAvSyncGroups();
@@ -160,6 +188,7 @@ public:
     preparedContext.rebindCompiledGraph(activeGraph);
     context = std::move(preparedContext);
     activeBindings = std::move(executable.inputBindings);
+    playbackEpochActivationCapability = std::move(preparedCapability);
     acceptanceCollector.reset();
     queueHighWatermark = 0;
     state = MediaGraphRuntimeState::Compiled;
@@ -177,14 +206,43 @@ public:
 ::media::Status MediaGraphRuntimeCompiler::registerDefaults(
     MediaGraphExecutionContext& context,
     MediaGraphScheduler& scheduler,
-    std::vector<MediaPreparedRealtimeInputBinding>& inputBindings)
+    std::vector<MediaPreparedRealtimeInputBinding>& inputBindings,
+    std::optional<MediaPlaybackEpochActivationCapability>&
+        playbackEpochActivationCapability)
 {
     if (!context.compiled() || !context.graph()) {
         return ::media::Status::failure(
             ::media::ErrorInfo::notInitialized("MediaGraphRuntime default registration requires compiled graph"));
     }
+    std::vector<std::unique_ptr<MediaRuntimeNode>> preparedNodes;
+    preparedNodes.reserve(context.graph()->nodes().size());
+    const MediaNode* binder = nullptr;
     for (const MediaNode& node : context.graph()->nodes()) {
+        if (node.kind == MediaNodeKind::PlaybackEpochBinder) {
+            binder = &node;
+            break;
+        }
+    }
+    if (binder) {
+        if (!playbackEpochActivationCapability) {
+            return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+                "Playback epoch binder is missing compiler-issued activation authority"));
+        }
+        if (scheduler.findNode(binder->id)) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "Playback epoch binder runtime node is already registered"));
+        }
+    } else if (playbackEpochActivationCapability) {
+        return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+            "Compiler-issued activation authority has no playback epoch binder"));
+    }
+    for (const MediaNode& node : context.graph()->nodes()) {
+        if (node.kind == MediaNodeKind::PlaybackEpochBinder) continue;
         if (scheduler.findNode(node.id)) continue;
+        if (!MediaRuntimeNodeFactory::supported(node.kind)) {
+            return ::media::Status::failure(::media::ErrorInfo::unsupported(
+                "Default runtime registration encountered an unsupported planned node"));
+        }
         MediaPreparedRealtimeInputBinding* binding = nullptr;
         for (auto& candidate : inputBindings) {
             if (candidate.nodeId == node.id) { binding = &candidate; break; }
@@ -195,9 +253,19 @@ public:
                                 "register node=" + std::to_string(node.id.value) +
                                     " name=" + node.name +
                                     " kind=" + mediaGraphDiagnosticNodeKindName(node.kind));
-        auto registered = scheduler.registerNode(std::move(runtimeNode).value());
-        if (!registered) return registered;
+        preparedNodes.push_back(std::move(runtimeNode).value());
     }
+    if (binder && !scheduler.findNode(binder->id)) {
+        auto runtimeNode = MediaRuntimeNodeFactory::createPlaybackEpochBinder(
+            *binder, std::move(*playbackEpochActivationCapability));
+        if (!runtimeNode) {
+            return ::media::Status::failure(runtimeNode.error());
+        }
+        preparedNodes.push_back(std::move(runtimeNode).value());
+    }
+    auto registered = scheduler.registerNodes(std::move(preparedNodes));
+    if (!registered) return registered;
+    if (binder) playbackEpochActivationCapability.reset();
     return ::media::Status::success();
 }
 

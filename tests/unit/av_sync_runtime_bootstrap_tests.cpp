@@ -1,6 +1,7 @@
 #include "common/TestAssert.h"
 
 #include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
+#include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlanner.h"
 #include "internal/graph/runtime/MediaGraphRuntime.h"
 #include "internal/graph/runtime/compilation/MediaGraphRuntimeCompiler.h"
 #include "internal/graph/runtime/compilation/MediaAvSyncRuntimeBootstrap.h"
@@ -52,11 +53,22 @@ MediaGraph graphWithGroupReference(const std::optional<std::string>& group)
     MediaGraph graph;
     const auto node = graph.addNode(
         MediaNodeKind::AvOutputScheduler, "scheduler");
+    const auto binder = graph.addNode(
+        MediaNodeKind::PlaybackEpochBinder, "epoch-binder");
     graph.addNode(MediaNodeKind::Finalize, "sink");
     if (group) {
         graph.setNodeOption(node, "av_scheduler.sync_group", *group);
+        graph.setNodeOption(binder, "playback_epoch_binder.sync_group", *group);
     }
     return graph;
+}
+
+MediaAvGenerationTransitionPlan completeTransitionPlan(
+    MediaAvSyncOutputAdapterKind adapter =
+        MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp)
+{
+    return MediaAvGenerationTransitionPlanner::plan(
+        adapter, ms(1'000), ms(500));
 }
 
 MediaGraph graphWithInvalidGroupReference(MediaNodeKind kind,
@@ -76,7 +88,8 @@ MediaRealtimeExecutableGraph executableWith(
     MediaRealtimeExecutableGraph executable;
     executable.graph = graphWithGroupReference(nodeGroup);
     executable.avSyncBinding.emplace(MediaAvSyncRuntimeBinding{
-        MediaAvSyncGroupKey(std::move(bindingGroup)), std::move(plan)});
+        MediaAvSyncGroupKey(std::move(bindingGroup)), std::move(plan),
+        completeTransitionPlan()});
     return executable;
 }
 
@@ -226,40 +239,40 @@ void testBootstrapRejectsIncompleteBindings(TestContext& ctx)
 void testBootstrapCapturesOneClockAndOneRtpEpoch(TestContext& ctx)
 {
     const MediaAvSyncRuntimeBinding binding{
-        MediaAvSyncGroupKey("realtime.av"), completeRtpPlan()};
-    DeterministicClockSource source;
-    auto clocks = MediaAvSyncRuntimeBootstrap::createClocks(binding, source);
+        MediaAvSyncGroupKey("realtime.av"), completeRtpPlan(),
+        completeTransitionPlan()};
+    auto source = std::make_shared<DeterministicClockSource>();
+    auto clocks = MediaAvSyncRuntimeBootstrap::createClocks(binding, *source);
     EXPECT_TRUE(ctx, clocks);
-    EXPECT_EQ(ctx, source.captures, 1);
+    EXPECT_EQ(ctx, source->captures, 1);
     if (!clocks) return;
     EXPECT_TRUE(ctx, clocks.value().masterClock != nullptr);
     EXPECT_TRUE(ctx, clocks.value().sharedNtpEpoch != nullptr);
-    EXPECT_TRUE(ctx, clocks.value().masterClock == source.lastClock.lock());
-    EXPECT_TRUE(ctx, clocks.value().sharedNtpEpoch == source.lastEpoch.lock());
+    EXPECT_TRUE(ctx, clocks.value().masterClock == source->lastClock.lock());
+    EXPECT_TRUE(ctx, clocks.value().sharedNtpEpoch == source->lastEpoch.lock());
 
-    MediaGraphExecutionContext context;
-    auto graph = graphWithGroupReference(std::string("realtime.av"));
-    EXPECT_TRUE(ctx, context.compile(graph));
-    EXPECT_TRUE(ctx, MediaAvSyncRuntimeBootstrap::registerGroup(
-                         binding, clocks.value(), context));
-    EXPECT_FALSE(ctx, MediaAvSyncRuntimeBootstrap::registerGroup(
-                          binding, clocks.value(), context));
-    auto group = context.findAvSyncGroup(binding.groupKey);
+    MediaGraphRuntime runtime(source);
+    MediaRealtimeExecutableGraph executable;
+    executable.graph = graphWithGroupReference(std::string("realtime.av"));
+    executable.avSyncBinding.emplace(binding);
+    EXPECT_TRUE(ctx, runtime.compile(std::move(executable)));
+    EXPECT_EQ(ctx, source->captures, 2);
+    auto group = runtime.context().findAvSyncGroup(binding.groupKey);
     EXPECT_TRUE(ctx, group != nullptr);
     if (!group) return;
     EXPECT_EQ(ctx, group->lifecycleState(),
               MediaAvSyncGroupRuntime::LifecycleState::AwaitingEpoch);
-    EXPECT_TRUE(ctx, group->clock() == clocks.value().masterClock);
-    EXPECT_TRUE(ctx, group->sharedNtpEpoch() == clocks.value().sharedNtpEpoch);
+    EXPECT_TRUE(ctx, group->clock() == source->lastClock.lock());
+    EXPECT_TRUE(ctx, group->sharedNtpEpoch() == source->lastEpoch.lock());
     const auto firstSharedEpoch = group->sharedNtpEpoch();
     const auto secondSharedEpoch = group->sharedNtpEpoch();
     EXPECT_TRUE(ctx, firstSharedEpoch.get() == secondSharedEpoch.get());
     EXPECT_FALSE(ctx, group->playbackEpoch());
-    context.shutdownAvSyncGroups();
-    context.shutdownAvSyncGroups();
+    runtime.context().shutdownAvSyncGroups();
+    runtime.context().shutdownAvSyncGroups();
     EXPECT_EQ(ctx, group->lifecycleState(),
               MediaAvSyncGroupRuntime::LifecycleState::Aborted);
-    EXPECT_TRUE(ctx, context.findAvSyncGroup(binding.groupKey) == nullptr);
+    EXPECT_TRUE(ctx, runtime.context().findAvSyncGroup(binding.groupKey) == nullptr);
 
     InvalidClockSource invalidSource;
     EXPECT_FALSE(ctx, MediaAvSyncRuntimeBootstrap::createClocks(
@@ -292,7 +305,8 @@ void testTsClockCaptureDoesNotCreateNtpEpoch(TestContext& ctx)
     tsPlan.ts->outputMux = std::move(mux).value();
 
     const MediaAvSyncRuntimeBinding binding{
-        MediaAvSyncGroupKey("realtime.av"), std::move(tsPlan)};
+        MediaAvSyncGroupKey("realtime.av"), std::move(tsPlan),
+        completeTransitionPlan(MediaAvSyncOutputAdapterKind::ProjectMpegTs)};
     DeterministicClockSource source;
     auto clocks = MediaAvSyncRuntimeBootstrap::createClocks(binding, source);
     EXPECT_TRUE(ctx, clocks);
@@ -364,8 +378,9 @@ void testRuntimeRollbackAndLifecycleCleanup(TestContext& ctx)
     EXPECT_TRUE(ctx, recompiled.compile(executableWith(completeRtpPlan())));
     auto recompiledOldGroup = recompiled.context().findAvSyncGroup(
         MediaAvSyncGroupKey("realtime.av"));
-    EXPECT_TRUE(ctx, recompiled.compile(
-                         graphWithGroupReference(std::nullopt)));
+    MediaGraph unsynchronized;
+    unsynchronized.addNode(MediaNodeKind::Finalize, "unsynchronized");
+    EXPECT_TRUE(ctx, recompiled.compile(std::move(unsynchronized)));
     EXPECT_TRUE(ctx, recompiledOldGroup &&
         recompiledOldGroup->lifecycleState() ==
             MediaAvSyncGroupRuntime::LifecycleState::Aborted);

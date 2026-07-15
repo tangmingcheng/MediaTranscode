@@ -8,17 +8,20 @@
 #include "internal/graph/runtime/MediaRuntimeNode.h"
 #include "internal/graph/runtime/diagnostics/MediaRuntimeAcceptanceCollector.h"
 #include "internal/graph/runtime/factory/MediaRealtimeExecutableGraph.h"
+#include "internal/graph/sync/MediaPlaybackEpochActivationCapability.h"
 #include "media_transcode/Result.h"
 
 #include <cstddef>
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace media::ffmpeg::graph {
 
 class MediaGraphRuntimeLifecycleExecutor;
+class MediaAvSyncClockSource;
 
 enum class MediaGraphRuntimeState {
     Empty,
@@ -44,6 +47,8 @@ struct MediaGraphRunResult {
 class MediaGraphRuntime final {
 public:
     MediaGraphRuntime() = default;
+    explicit MediaGraphRuntime(
+        std::shared_ptr<MediaAvSyncClockSource> avSyncClockSource);
 
     MediaGraphRuntime(const MediaGraphRuntime&) = delete;
     MediaGraphRuntime& operator=(const MediaGraphRuntime&) = delete;
@@ -99,6 +104,9 @@ private:
     MediaRuntimeAcceptanceCollector m_acceptanceCollector;
     mutable std::atomic_size_t m_queueHighWatermark{ 0 };
     std::vector<MediaPreparedRealtimeInputBinding> m_inputBindings;
+    std::optional<MediaPlaybackEpochActivationCapability>
+        m_playbackEpochActivationCapability;
+    std::shared_ptr<MediaAvSyncClockSource> m_avSyncClockSource;
 };
 
 } // namespace media::ffmpeg::graph

@@ -3,6 +3,7 @@
 #include "internal/graph/runtime/factory/MediaAvSyncRuntimeBinding.h"
 #include "internal/graph/time/MediaSharedNtpEpoch.h"
 #include "internal/graph/time/MediaSteadyMasterClock.h"
+#include "internal/graph/sync/MediaPlaybackEpochActivationCapability.h"
 
 #include <media_transcode/Result.h>
 
@@ -11,9 +12,10 @@
 namespace media::ffmpeg::graph {
 
 class MediaGraphExecutionContext;
+class MediaGraphRuntimeCompiler;
 
 struct MediaAvSyncClockBundle final {
-    std::shared_ptr<MediaSteadyMasterClock> masterClock;
+    std::shared_ptr<MediaMasterClock> masterClock;
     std::shared_ptr<const MediaSharedNtpEpoch> sharedNtpEpoch;
 };
 
@@ -29,12 +31,13 @@ public:
     static ::media::Result<MediaAvSyncClockBundle> createClocks(
         const MediaAvSyncRuntimeBinding& binding,
         MediaAvSyncClockSource& source);
-    static ::media::Status registerGroup(
+private:
+    friend class MediaGraphRuntimeCompiler;
+    static ::media::Result<MediaPlaybackEpochActivationCapability>
+    registerGroupAndIssueActivationCapability(
         const MediaAvSyncRuntimeBinding& binding,
         MediaAvSyncClockBundle clocks,
         MediaGraphExecutionContext& context);
-
-private:
     MediaAvSyncRuntimeBootstrap() = delete;
 };
 

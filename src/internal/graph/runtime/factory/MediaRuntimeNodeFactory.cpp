@@ -33,6 +33,8 @@
 #include "internal/graph/nodes/sync/MediaRtpClockGroupNode.h"
 #include "internal/graph/nodes/sync/MediaAvStartupCoordinatorNode.h"
 #include "internal/graph/nodes/sync/MediaAvOutputSchedulerNode.h"
+#include "internal/graph/nodes/sync/MediaPlaybackEpochBinderNode.h"
+#include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/nodes/video/HardwareTransferNode.h"
 #include "internal/graph/nodes/video/VideoDecodeNode.h"
 #include "internal/graph/nodes/video/VideoEncodeNode.h"
@@ -109,6 +111,10 @@ namespace media::ffmpeg::graph {
     case MediaNodeKind::AvOutputScheduler:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::make_unique<MediaAvOutputSchedulerNode>(node.id));
+    case MediaNodeKind::PlaybackEpochBinder:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "PlaybackEpochBinder requires compiler-issued activation authority"));
     case MediaNodeKind::PacketMerge:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<PacketMergeNode>(node.id));
     case MediaNodeKind::FileMux:
@@ -143,6 +149,34 @@ namespace media::ffmpeg::graph {
     }
 }
 
+::media::Result<std::unique_ptr<MediaRuntimeNode>>
+MediaRuntimeNodeFactory::createPlaybackEpochBinder(
+    const MediaNode& node,
+    MediaPlaybackEpochActivationCapability capability)
+{
+    if (node.kind != MediaNodeKind::PlaybackEpochBinder) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Playback epoch binder factory requires the binder node kind"));
+    }
+    auto group = requiredNodeOption(
+        &node.options, "MediaPlaybackEpochBinderNode",
+        "playback_epoch_binder.sync_group");
+    if (!group) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            group.error());
+    }
+    MediaAvSyncGroupKey groupKey(std::move(group).value());
+    if (!groupKey.valid()) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Playback epoch binder requires a valid planned sync group"));
+    }
+    return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+        std::make_unique<MediaPlaybackEpochBinderNode>(
+            node.id, std::move(groupKey), std::move(capability)));
+}
+
 bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
 {
     switch (kind) {
@@ -171,6 +205,7 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::RtpClockGroup:
     case MediaNodeKind::AvStartupCoordinator:
     case MediaNodeKind::AvOutputScheduler:
+    case MediaNodeKind::PlaybackEpochBinder:
     case MediaNodeKind::PacketMerge:
     case MediaNodeKind::FileMux:
     case MediaNodeKind::RtpMux:

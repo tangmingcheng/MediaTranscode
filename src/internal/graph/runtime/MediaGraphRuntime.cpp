@@ -8,6 +8,12 @@
 
 namespace media::ffmpeg::graph {
 
+MediaGraphRuntime::MediaGraphRuntime(
+    std::shared_ptr<MediaAvSyncClockSource> avSyncClockSource)
+    : m_avSyncClockSource(std::move(avSyncClockSource))
+{
+}
+
 void MediaGraphRuntime::setDiagnosticsEnabled(bool enabled) noexcept
 {
     m_context.setDiagnosticsEnabled(enabled);
@@ -46,6 +52,8 @@ bool MediaGraphRuntime::diagnosticsEnabled() const noexcept
 {
     return MediaGraphRuntimeCompiler::compile(
         std::move(executable), m_graph, m_inputBindings,
+        m_playbackEpochActivationCapability,
+        m_avSyncClockSource,
         m_context, m_scheduler, m_threadedExecutor, m_acceptanceCollector,
         m_queueHighWatermark, m_state);
 }
@@ -57,7 +65,9 @@ bool MediaGraphRuntime::diagnosticsEnabled() const noexcept
 
 ::media::Status MediaGraphRuntime::registerDefaultRuntimeNodes()
 {
-    return MediaGraphRuntimeCompiler::registerDefaults(m_context, m_scheduler, m_inputBindings);
+    return MediaGraphRuntimeCompiler::registerDefaults(
+        m_context, m_scheduler, m_inputBindings,
+        m_playbackEpochActivationCapability);
 }
 
 void MediaGraphRuntime::setThreadingPolicy(MediaThreadingPolicy policy) noexcept

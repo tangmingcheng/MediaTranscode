@@ -1,14 +1,17 @@
 #include "common/TestAssert.h"
 #include "common/GraphRuntimeTestSupport.h"
-
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
 #include "internal/graph/core/MediaGraphDump.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/nodes/sync/MediaAvOutputSchedulerNode.h"
+#include "internal/graph/nodes/sync/MediaPlaybackEpochBinderNode.h"
+#include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlanner.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/buffer/FFmpegPacketBuffer.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
+#include "internal/graph/runtime/MediaGraphRuntime.h"
+#include "internal/graph/runtime/compilation/MediaAvSyncRuntimeBootstrap.h"
 #include "internal/graph/runtime/factory/MediaRuntimeNodeFactory.h"
 #include "internal/graph/runtime/threading/MediaGraphWorker.h"
 #include "internal/graph/runtime/threading/MediaNodeWakeup.h"
@@ -125,6 +128,7 @@ struct SchedulerFixture final {
     MediaNodeId video;
     MediaNodeId audio;
     MediaNodeId scheduler;
+    MediaNodeId binder;
     MediaNodeId sink;
 };
 
@@ -137,9 +141,12 @@ SchedulerFixture graphWithScheduler(bool option = true,
     f.video = f.graph.addNode(MediaNodeKind::Demux, "video");
     f.audio = f.graph.addNode(MediaNodeKind::Demux, "audio");
     f.scheduler = f.graph.addNode(MediaNodeKind::AvOutputScheduler, "scheduler");
+    f.binder = f.graph.addNode(MediaNodeKind::PlaybackEpochBinder, "epoch-binder");
     f.sink = f.graph.addNode(MediaNodeKind::RtpOutput, "sink");
     if (option) f.graph.setNodeOption(
         f.scheduler, "av_scheduler.sync_group", "matrix-group");
+    if (option) f.graph.setNodeOption(
+        f.binder, "playback_epoch_binder.sync_group", "matrix-group");
     f.graph.addOutputPort(f.video, "packet", MediaStreamKind::Video,
                           MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
     f.graph.addOutputPort(f.audio, "packet", MediaStreamKind::Audio,
@@ -198,16 +205,68 @@ const FFmpegPacketBuffer* scheduledPacket(const MediaScheduledAccessUnit* unit)
         : nullptr;
 }
 
+class TestAvSyncClockSource final : public MediaAvSyncClockSource {
+public:
+    explicit TestAvSyncClockSource(std::shared_ptr<MediaMasterClock> clock)
+        : m_clock(std::move(clock))
+    {
+    }
+
+    ::media::Result<MediaAvSyncClockBundle> capture(
+        bool requireSharedNtpEpoch) override
+    {
+        std::shared_ptr<const MediaSharedNtpEpoch> sharedEpoch;
+        if (requireSharedNtpEpoch) {
+            auto created = MediaSharedNtpEpoch::create(
+                ms(0), std::chrono::nanoseconds(0));
+            if (!created) {
+                return ::media::Result<MediaAvSyncClockBundle>::failure(
+                    created.error());
+            }
+            sharedEpoch = std::make_shared<const MediaSharedNtpEpoch>(
+                std::move(created).value());
+        }
+        return ::media::Result<MediaAvSyncClockBundle>::success(
+            MediaAvSyncClockBundle{m_clock, std::move(sharedEpoch)});
+    }
+
+private:
+    std::shared_ptr<MediaMasterClock> m_clock;
+};
+
+MediaAvGenerationTransitionPlan schedulerTransitionPlan()
+{
+    return MediaAvGenerationTransitionPlanner::plan(
+        MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp,
+        ms(1'000), ms(500));
+}
+
 bool startFixture(TestContext& ctx, SchedulerFixture& f,
                   MediaGraphExecutionContext& execution,
                   const std::shared_ptr<MediaMasterClock>& clock,
                   MediaPlaybackEpoch epoch)
 {
-    if (!execution.compile(f.graph)) return false;
-    if (!execution.registerAvSyncGroup(
-            MediaAvSyncGroupKey("matrix-group"), completePlan(), clock)) return false;
-    if (!execution.activatePlaybackEpoch(
-            MediaAvSyncGroupKey("matrix-group"), epoch)) return false;
+    static std::vector<std::unique_ptr<MediaGraphRuntime>> runtimes;
+    auto runtime = std::make_unique<MediaGraphRuntime>(
+        std::make_shared<TestAvSyncClockSource>(clock));
+    MediaRealtimeExecutableGraph executable;
+    executable.graph = std::move(f.graph);
+    executable.avSyncBinding.emplace(MediaAvSyncRuntimeBinding{
+        MediaAvSyncGroupKey("matrix-group"), completePlan(),
+        schedulerTransitionPlan()});
+    if (!runtime->compile(std::move(executable)) ||
+        !runtime->registerDefaultRuntimeNodes()) {
+        return false;
+    }
+    auto* binder = dynamic_cast<MediaPlaybackEpochBinderNode*>(
+        runtime->scheduler().findNode(f.binder));
+    if (!binder || !binder->publishInitial(
+            epoch, {epoch.generation, epoch.sourceStart,
+                    epoch.masterRelease, 0, 48'000})) {
+        return false;
+    }
+    execution = std::move(runtime->context());
+    runtimes.push_back(std::move(runtime));
     return true;
 }
 
@@ -265,59 +324,6 @@ void testWakeupReportsDeadlineNotificationAndInterruption(TestContext& ctx)
               MediaNodeWakeup::WaitOutcome::Interrupted);
     interrupter.join();
     wakeup.reset();
-}
-
-void testEpochLifecycleAndObservableReacquisition(TestContext& ctx)
-{
-    auto clock = std::make_shared<TestMasterClock>(ms(0));
-    auto created = MediaAvSyncGroupRuntime::create(
-        MediaAvSyncGroupKey("epoch"), completePlan(), clock);
-    EXPECT_TRUE(ctx, created);
-    if (!created) return;
-    auto group = created.value();
-    EXPECT_FALSE(ctx, group->playbackEpoch());
-    EXPECT_TRUE(ctx, group->activatePlaybackEpoch({ms(10), ms(100), 1}));
-    EXPECT_FALSE(ctx, group->activatePlaybackEpoch({ms(10), ms(100), 1}));
-    auto mapped = group->mapCanonicalToMaster(ms(30));
-    EXPECT_TRUE(ctx, mapped && mapped.value() == ms(120));
-    auto future = group->observeGeneration(3);
-    EXPECT_TRUE(ctx, future && future.value() ==
-                         MediaAvSyncGroupRuntime::GenerationDisposition::ReacquisitionRequired);
-    auto request = group->reacquisitionRequest();
-    EXPECT_TRUE(ctx, request && request->observedGeneration == 3 &&
-                         request->reason == MediaAvReacquisitionReason::FutureGeneration);
-    EXPECT_TRUE(ctx, group->requestReacquisition(
-        {1, MediaAvReacquisitionReason::HardDiscontinuity}));
-    EXPECT_TRUE(ctx, group->reacquisitionRequest() == request);
-    EXPECT_FALSE(ctx, group->requestReacquisition(
-        {1, MediaAvReacquisitionReason::FutureGeneration}));
-    EXPECT_FALSE(ctx, group->requestReacquisition(
-        {3, MediaAvReacquisitionReason::Flush}));
-    EXPECT_FALSE(ctx, group->activateNextPlaybackEpoch({ms(10), ms(100), 2}));
-    EXPECT_TRUE(ctx, group->activateNextPlaybackEpoch({ms(40), ms(200), 3}));
-    EXPECT_FALSE(ctx, group->reacquisitionRequest());
-    group->markAborted();
-    auto afterAbort = group->observeGeneration(4);
-    EXPECT_FALSE(ctx, afterAbort);
-    EXPECT_EQ(ctx, group->lifecycleState(),
-              MediaAvSyncGroupRuntime::LifecycleState::Aborted);
-    EXPECT_FALSE(ctx, group->reacquisitionRequest());
-    EXPECT_FALSE(ctx, group->requestReacquisition(
-        {3, MediaAvReacquisitionReason::HardDiscontinuity}));
-    EXPECT_FALSE(ctx, group->activatePlaybackEpoch({ms(0), ms(0), 4}));
-
-    auto discontinuity = MediaAvSyncGroupRuntime::create(
-        MediaAvSyncGroupKey("hard"), completePlan(), clock);
-    EXPECT_TRUE(ctx, discontinuity);
-    EXPECT_TRUE(ctx, discontinuity.value()->activatePlaybackEpoch(
-        {ms(0), ms(0), 5}));
-    EXPECT_TRUE(ctx, discontinuity.value()->requestReacquisition(
-        {5, MediaAvReacquisitionReason::HardDiscontinuity}));
-    EXPECT_FALSE(ctx, discontinuity.value()->activateNextPlaybackEpoch(
-        {ms(0), ms(0), 5}));
-    EXPECT_TRUE(ctx, discontinuity.value()->activateNextPlaybackEpoch(
-        {ms(50), ms(200), 6}));
-    EXPECT_FALSE(ctx, discontinuity.value()->reacquisitionRequest());
 }
 
 void testDispatchOrderingPrecedesPresentationDecision(TestContext& ctx)
@@ -541,14 +547,25 @@ void testUnknownControlIsRejectedWithoutFlush(TestContext& ctx)
 void testRegistryMoveKeepsSourceAndTargetUsable(TestContext& ctx)
 {
     auto clock = std::make_shared<TestMasterClock>(ms(0));
+    const auto registerGroup = [&](MediaAvSyncGroupRegistry& registry,
+                                   const char* key) {
+        auto transition = MediaAvEpochTransitionService::create(
+            schedulerTransitionPlan());
+        auto sharedEpoch = MediaSharedNtpEpoch::create(
+            ms(0), std::chrono::nanoseconds(0));
+        if (!transition || !sharedEpoch) return false;
+        return static_cast<bool>(registry.registerGroup(
+            MediaAvSyncGroupKey(key), completePlan(), clock,
+            std::make_shared<const MediaSharedNtpEpoch>(
+                std::move(sharedEpoch).value()),
+            std::move(transition).value()));
+    };
     MediaAvSyncGroupRegistry source;
-    EXPECT_TRUE(ctx, source.registerGroup(
-        MediaAvSyncGroupKey("before-move"), completePlan(), clock));
+    EXPECT_TRUE(ctx, registerGroup(source, "before-move"));
     MediaAvSyncGroupRegistry target(std::move(source));
     EXPECT_TRUE(ctx, target.find(MediaAvSyncGroupKey("before-move")) != nullptr);
     EXPECT_TRUE(ctx, source.find(MediaAvSyncGroupKey("before-move")) == nullptr);
-    EXPECT_TRUE(ctx, source.registerGroup(
-        MediaAvSyncGroupKey("before-move"), completePlan(), clock));
+    EXPECT_TRUE(ctx, registerGroup(source, "before-move"));
     EXPECT_TRUE(ctx, source.find(MediaAvSyncGroupKey("before-move")) != nullptr);
     EXPECT_TRUE(ctx, target.find(MediaAvSyncGroupKey("before-move")) != nullptr);
     target.clear();
@@ -556,10 +573,8 @@ void testRegistryMoveKeepsSourceAndTargetUsable(TestContext& ctx)
 
     MediaAvSyncGroupRegistry assignedSource;
     MediaAvSyncGroupRegistry assignedTarget;
-    EXPECT_TRUE(ctx, assignedSource.registerGroup(
-        MediaAvSyncGroupKey("assigned-source"), completePlan(), clock));
-    EXPECT_TRUE(ctx, assignedTarget.registerGroup(
-        MediaAvSyncGroupKey("replaced-target"), completePlan(), clock));
+    EXPECT_TRUE(ctx, registerGroup(assignedSource, "assigned-source"));
+    EXPECT_TRUE(ctx, registerGroup(assignedTarget, "replaced-target"));
     assignedTarget = std::move(assignedSource);
     EXPECT_TRUE(ctx, assignedTarget.find(
         MediaAvSyncGroupKey("assigned-source")) != nullptr);
@@ -567,8 +582,7 @@ void testRegistryMoveKeepsSourceAndTargetUsable(TestContext& ctx)
         MediaAvSyncGroupKey("replaced-target")) == nullptr);
     EXPECT_TRUE(ctx, assignedSource.find(
         MediaAvSyncGroupKey("assigned-source")) == nullptr);
-    EXPECT_TRUE(ctx, assignedSource.registerGroup(
-        MediaAvSyncGroupKey("assigned-source"), completePlan(), clock));
+    EXPECT_TRUE(ctx, registerGroup(assignedSource, "assigned-source"));
 }
 
 void testDtsOrderingMappingAndEqualTimeRoundRobin(TestContext& ctx)
@@ -1261,12 +1275,6 @@ void testFutureGenerationFlushAbortAndConfigurationFailures(TestContext& ctx)
     EXPECT_TRUE(ctx, missingGroupExecution.compile(missingGroup.graph));
     MediaAvOutputSchedulerNode missingGroupNode(missingGroup.scheduler);
     EXPECT_FALSE(ctx, missingGroupNode.start(missingGroupExecution));
-    EXPECT_TRUE(ctx, missingGroupExecution.registerAvSyncGroup(
-        MediaAvSyncGroupKey("matrix-group"), completePlan(), clock));
-    EXPECT_TRUE(ctx, missingGroupExecution.activatePlaybackEpoch(
-        MediaAvSyncGroupKey("matrix-group"), {ms(0), ms(0), 1}));
-    EXPECT_TRUE(ctx, missingGroupNode.start(missingGroupExecution));
-    EXPECT_TRUE(ctx, missingGroupNode.stop(missingGroupExecution));
 
     auto nonblocking = graphWithScheduler(
         true, MediaQueueOverflowPolicy::DropNewest, 8);
@@ -1302,7 +1310,6 @@ void runAvOutputSchedulerTests(media_transcode::test::TestContext& ctx)
 {
     testSteadyClockOriginAndOverflow(ctx);
     testWakeupReportsDeadlineNotificationAndInterruption(ctx);
-    testEpochLifecycleAndObservableReacquisition(ctx);
     testRegistryMoveKeepsSourceAndTargetUsable(ctx);
     testDtsOrderingMappingAndEqualTimeRoundRobin(ctx);
     testDispatchOrderingPrecedesPresentationDecision(ctx);

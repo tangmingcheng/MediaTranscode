@@ -7,6 +7,7 @@
 #include "internal/graph/time/MediaMasterClock.h"
 #include "internal/graph/time/MediaSharedNtpEpoch.h"
 #include "internal/graph/time/MediaSteadyMasterClock.h"
+#include "internal/graph/sync/MediaAvEpochTransitionService.h"
 
 #include <memory>
 #include <mutex>
@@ -21,12 +22,9 @@ public:
     static ::media::Result<std::shared_ptr<MediaAvSyncGroupRuntime>> create(
         MediaAvSyncGroupKey key,
         MediaAvSyncPlan plan,
-        std::shared_ptr<MediaMasterClock> clock);
-    static ::media::Result<std::shared_ptr<MediaAvSyncGroupRuntime>> create(
-        MediaAvSyncGroupKey key,
-        MediaAvSyncPlan plan,
-        std::shared_ptr<MediaSteadyMasterClock> clock,
-        std::shared_ptr<const MediaSharedNtpEpoch> sharedNtpEpoch);
+        std::shared_ptr<MediaMasterClock> clock,
+        std::shared_ptr<const MediaSharedNtpEpoch> sharedNtpEpoch,
+        std::shared_ptr<MediaAvEpochTransitionService> transitionService);
 
     const MediaAvSyncGroupKey& key() const noexcept { return m_key; }
     const MediaAvSyncPlan& plan() const noexcept { return m_plan; }
@@ -35,9 +33,14 @@ public:
     {
         return m_sharedNtpEpoch;
     }
-    ::media::Status activatePlaybackEpoch(MediaPlaybackEpoch epoch);
-    ::media::Status activateNextPlaybackEpoch(MediaPlaybackEpoch epoch);
     ::media::Result<MediaPlaybackEpoch> playbackEpoch() const;
+    MediaAvEpochTransitionSnapshot epochTransitionSnapshot() const noexcept;
+    ::media::Result<MediaAvGenerationPurge> beginEpochReacquisition(
+        std::uint64_t oldGeneration,
+        std::uint64_t nextGeneration);
+    ::media::Result<bool> acknowledgeEpochReacquisition(
+        MediaAvGenerationAcknowledgement acknowledgement);
+    ::media::Status pollEpochReacquisitionTimeout();
     ::media::Result<GenerationDisposition> observeGeneration(
         std::uint64_t generation);
     ::media::Status requestReacquisition(MediaAvReacquisitionRequest request) noexcept;
@@ -52,16 +55,17 @@ private:
     MediaAvSyncGroupRuntime(MediaAvSyncGroupKey key,
                             MediaAvSyncPlan plan,
                             std::shared_ptr<MediaMasterClock> clock,
-                            std::shared_ptr<const MediaSharedNtpEpoch> sharedNtpEpoch);
+                            std::shared_ptr<const MediaSharedNtpEpoch> sharedNtpEpoch,
+                            std::shared_ptr<MediaAvEpochTransitionService> transitionService);
 
     MediaAvSyncGroupKey m_key;
     MediaAvSyncPlan m_plan;
     std::shared_ptr<MediaMasterClock> m_clock;
     std::shared_ptr<const MediaSharedNtpEpoch> m_sharedNtpEpoch;
+    std::shared_ptr<MediaAvEpochTransitionService> m_transitionService;
     mutable std::mutex m_epochMutex;
-    std::optional<MediaPlaybackEpoch> m_epoch;
     std::optional<MediaAvReacquisitionRequest> m_reacquisitionRequest;
-    LifecycleState m_lifecycleState = LifecycleState::AwaitingEpoch;
+    std::optional<MediaRunningTime> m_epochReacquisitionBeganAt;
 };
 
 } // namespace media::ffmpeg::graph
