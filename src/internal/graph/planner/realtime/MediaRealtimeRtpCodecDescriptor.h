@@ -16,6 +16,7 @@ struct MediaRealtimeRtpCodecDescriptor {
     int clockRate = 0;
     int channels = 0;
     int accessUnitDurationRtpTicks = 0;
+    int maximumAccessUnitDurationRtpTicks = 0;
     MediaAudioProfile audioProfile = MediaAudioProfile::notApplicable();
     bool requiresFmtp = false;
 };

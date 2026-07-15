@@ -161,6 +161,7 @@ std::string lowercaseAscii(std::string value)
             return ::media::Result<MediaRealtimeRtpCodecDescriptor>::failure(duration.error());
         }
         descriptor.accessUnitDurationRtpTicks = duration.value();
+        descriptor.maximumAccessUnitDurationRtpTicks = duration.value();
         descriptor.audioProfile = MediaAudioProfile::knownAacLow();
         descriptor.requiresFmtp = true;
         return ::media::Result<MediaRealtimeRtpCodecDescriptor>::success(std::move(descriptor));
@@ -176,6 +177,8 @@ std::string lowercaseAscii(std::string value)
         }
         descriptor.rtpEncodingName = "opus";
         descriptor.clockRate = OpusClockRate;
+        descriptor.maximumAccessUnitDurationRtpTicks =
+            MaximumOpusRtpAccessUnitSamples;
         descriptor.audioProfile = MediaAudioProfile::notApplicable();
         return ::media::Result<MediaRealtimeRtpCodecDescriptor>::success(std::move(descriptor));
     }

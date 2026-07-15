@@ -10,6 +10,11 @@
 
 namespace media::ffmpeg::graph {
 
+MediaGraphExecutionContext::~MediaGraphExecutionContext()
+{
+    shutdownAvSyncGroups();
+}
+
 ::media::Status MediaGraphExecutionContext::compile(const MediaGraph& graph)
 {
     const MediaGraphDiagnosticConfig diagnosticConfig = m_diagnosticConfig;
@@ -62,11 +67,11 @@ namespace media::ffmpeg::graph {
 
 void MediaGraphExecutionContext::reset()
 {
+    shutdownAvSyncGroups();
     m_graph = nullptr;
     m_channels.clear();
     m_executionOrder.clear();
     m_nodeWakeups.clear();
-    m_avSyncGroups.clear();
     m_compiled = false;
     mediaGraphDiagnosticSetGlobalConfig(m_diagnosticConfig);
 }
@@ -230,6 +235,12 @@ void MediaGraphExecutionContext::interruptNodeWakeups() noexcept
     }
 }
 
+void MediaGraphExecutionContext::shutdownAvSyncGroups() noexcept
+{
+    interruptNodeWakeups();
+    m_avSyncGroups.clear();
+}
+
 ::media::Status MediaGraphExecutionContext::registerAvSyncGroup(
     MediaAvSyncGroupKey key,
     MediaAvSyncPlan plan,
@@ -237,6 +248,17 @@ void MediaGraphExecutionContext::interruptNodeWakeups() noexcept
 {
     return m_avSyncGroups.registerGroup(
         std::move(key), std::move(plan), std::move(clock));
+}
+
+::media::Status MediaGraphExecutionContext::registerAvSyncGroup(
+    MediaAvSyncGroupKey key,
+    MediaAvSyncPlan plan,
+    std::shared_ptr<MediaSteadyMasterClock> clock,
+    std::shared_ptr<const MediaSharedNtpEpoch> sharedNtpEpoch)
+{
+    return m_avSyncGroups.registerGroup(
+        std::move(key), std::move(plan), std::move(clock),
+        std::move(sharedNtpEpoch));
 }
 
 ::media::Status MediaGraphExecutionContext::activatePlaybackEpoch(

@@ -26,21 +26,26 @@ bool MediaGraphRuntime::diagnosticsEnabled() const noexcept
             ::media::ErrorInfo::invalidArgument("MediaGraphRuntime compile failed: runtime is running"));
     }
 
-    return compileTransaction(std::move(graph), {});
+    MediaRealtimeExecutableGraph executable;
+    executable.graph = std::move(graph);
+    return compileTransaction(std::move(executable));
 }
 
 ::media::Status MediaGraphRuntime::compile(MediaRealtimeExecutableGraph executable)
 {
-    if (auto valid = MediaGraphRuntimeCompiler::validateBindings(executable); !valid) return valid;
-    return compileTransaction(std::move(executable.graph), std::move(executable.inputBindings));
+    if (m_state == MediaGraphRuntimeState::Running ||
+        m_state == MediaGraphRuntimeState::ThreadedRunning) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument("MediaGraphRuntime compile failed: runtime is running"));
+    }
+    return compileTransaction(std::move(executable));
 }
 
 ::media::Status MediaGraphRuntime::compileTransaction(
-    MediaGraph graph,
-    std::vector<MediaPreparedRealtimeInputBinding> inputBindings)
+    MediaRealtimeExecutableGraph executable)
 {
     return MediaGraphRuntimeCompiler::compile(
-        std::move(graph), std::move(inputBindings), m_graph, m_inputBindings,
+        std::move(executable), m_graph, m_inputBindings,
         m_context, m_scheduler, m_threadedExecutor, m_acceptanceCollector,
         m_queueHighWatermark, m_state);
 }

@@ -9,10 +9,12 @@ namespace media::ffmpeg::graph {
 MediaAvSyncGroupRuntime::MediaAvSyncGroupRuntime(
     MediaAvSyncGroupKey key,
     MediaAvSyncPlan plan,
-    std::shared_ptr<MediaMasterClock> clock)
+    std::shared_ptr<MediaMasterClock> clock,
+    std::shared_ptr<const MediaSharedNtpEpoch> sharedNtpEpoch)
     : m_key(std::move(key))
     , m_plan(std::move(plan))
     , m_clock(std::move(clock))
+    , m_sharedNtpEpoch(std::move(sharedNtpEpoch))
 {
 }
 
@@ -34,7 +36,37 @@ MediaAvSyncGroupRuntime::create(
     }
     return ::media::Result<std::shared_ptr<MediaAvSyncGroupRuntime>>::success(
         std::shared_ptr<MediaAvSyncGroupRuntime>(new MediaAvSyncGroupRuntime(
-            std::move(key), std::move(plan), std::move(clock))));
+            std::move(key), std::move(plan), std::move(clock), nullptr)));
+}
+
+::media::Result<std::shared_ptr<MediaAvSyncGroupRuntime>>
+MediaAvSyncGroupRuntime::create(
+    MediaAvSyncGroupKey key,
+    MediaAvSyncPlan plan,
+    std::shared_ptr<MediaSteadyMasterClock> clock,
+    std::shared_ptr<const MediaSharedNtpEpoch> sharedNtpEpoch)
+{
+    if (!key.valid() || !clock) {
+        return ::media::Result<std::shared_ptr<MediaAvSyncGroupRuntime>>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "A/V sync group requires a key and steady master clock"));
+    }
+    auto status = MediaAvSyncPlanValidator::validate(plan);
+    if (!status) {
+        return ::media::Result<std::shared_ptr<MediaAvSyncGroupRuntime>>::failure(
+            status.error());
+    }
+    const bool requiresNtp = *plan.topology ==
+        MediaAvSyncTopology::SeparateRtpToSeparateRtp;
+    if (static_cast<bool>(sharedNtpEpoch) != requiresNtp) {
+        return ::media::Result<std::shared_ptr<MediaAvSyncGroupRuntime>>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "A/V sync group clock bundle does not match its topology"));
+    }
+    return ::media::Result<std::shared_ptr<MediaAvSyncGroupRuntime>>::success(
+        std::shared_ptr<MediaAvSyncGroupRuntime>(new MediaAvSyncGroupRuntime(
+            std::move(key), std::move(plan), std::move(clock),
+            std::move(sharedNtpEpoch))));
 }
 
 ::media::Status MediaAvSyncGroupRuntime::activatePlaybackEpoch(
@@ -167,6 +199,11 @@ void MediaAvSyncGroupRuntime::markAborted() noexcept
 {
     std::lock_guard<std::mutex> lock(m_epochMutex);
     m_lifecycleState = LifecycleState::Aborted;
+}
+
+void MediaAvSyncGroupRuntime::shutdown() noexcept
+{
+    markAborted();
 }
 
 MediaAvSyncGroupRuntime::LifecycleState

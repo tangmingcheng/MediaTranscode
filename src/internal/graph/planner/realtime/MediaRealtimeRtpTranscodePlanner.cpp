@@ -475,15 +475,6 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
         !outputStatus) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(outputStatus.error());
     }
-    if (MediaRealtimeRequestClassifier::audioRequested(options)) {
-        auto componentBounds =
-            MediaRealtimeAvSyncComponentBoundsPlanner::plan(plan);
-        if (!componentBounds) {
-            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
-                componentBounds.error());
-        }
-        plan.avSyncComponentBounds = std::move(componentBounds).value();
-    }
     std::optional<MediaProjectMpegTsResolvedPipelineFacts> resolvedTsFacts;
     if (MediaRealtimeRequestClassifier::mpegTsUdpInput(options) &&
         MediaRealtimeRequestClassifier::muxedTransportOutput(options)) {
@@ -502,6 +493,13 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
         if (!avSync) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(avSync.error());
         }
+        auto componentBounds =
+            MediaRealtimeAvSyncComponentBoundsPlanner::plan(plan);
+        if (!componentBounds) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                componentBounds.error());
+        }
+        plan.avSyncComponentBounds = std::move(componentBounds).value();
         if (avSync.value().topology ==
             MediaAvSyncTopology::SeparateRtpToSeparateRtp) {
             if (auto status = planScheduledRtpPacketization(

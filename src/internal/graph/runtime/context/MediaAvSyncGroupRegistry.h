@@ -18,6 +18,11 @@ public:
     ::media::Status registerGroup(MediaAvSyncGroupKey key,
                                   MediaAvSyncPlan plan,
                                   std::shared_ptr<MediaMasterClock> clock);
+    ::media::Status registerGroup(
+        MediaAvSyncGroupKey key,
+        MediaAvSyncPlan plan,
+        std::shared_ptr<MediaSteadyMasterClock> clock,
+        std::shared_ptr<const MediaSharedNtpEpoch> sharedNtpEpoch);
     ::media::Status activatePlaybackEpoch(const MediaAvSyncGroupKey& key,
                                           MediaPlaybackEpoch epoch);
     ::media::Status activateNextPlaybackEpoch(const MediaAvSyncGroupKey& key,
@@ -28,6 +33,8 @@ public:
 
 private:
     struct State;
+    ::media::Status registerRuntime(
+        std::shared_ptr<MediaAvSyncGroupRuntime> runtime);
     std::unique_ptr<State> m_state;
 };
 

@@ -17,6 +17,7 @@ namespace media::ffmpeg::graph {
 class MediaGraphExecutionContext final {
 public:
     MediaGraphExecutionContext() = default;
+    ~MediaGraphExecutionContext();
 
     MediaGraphExecutionContext(const MediaGraphExecutionContext&) = delete;
     MediaGraphExecutionContext& operator=(const MediaGraphExecutionContext&) = delete;
@@ -50,9 +51,15 @@ public:
     std::vector<MediaChannel*> outputChannels(MediaNodeId nodeId);
     MediaNodeWakeup& nodeWakeup(MediaNodeId nodeId);
     void interruptNodeWakeups() noexcept;
+    void shutdownAvSyncGroups() noexcept;
     ::media::Status registerAvSyncGroup(MediaAvSyncGroupKey key,
                                         MediaAvSyncPlan plan,
                                         std::shared_ptr<MediaMasterClock> clock);
+    ::media::Status registerAvSyncGroup(
+        MediaAvSyncGroupKey key,
+        MediaAvSyncPlan plan,
+        std::shared_ptr<MediaSteadyMasterClock> clock,
+        std::shared_ptr<const MediaSharedNtpEpoch> sharedNtpEpoch);
     ::media::Status activatePlaybackEpoch(const MediaAvSyncGroupKey& key,
                                           MediaPlaybackEpoch epoch);
     ::media::Status activateNextPlaybackEpoch(const MediaAvSyncGroupKey& key,

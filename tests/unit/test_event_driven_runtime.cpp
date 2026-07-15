@@ -265,6 +265,9 @@ void testRtpUdpTransportStopAndAbortRaceCloseDeterministically(TestContext& ctx)
 
 } // namespace
 
+void runAvSyncRuntimeBootstrapTests(
+    media_transcode::test::TestContext& ctx);
+
 int main()
 {
     media_transcode::test::TestContext ctx;
@@ -276,6 +279,7 @@ int main()
     runEventRuntimeFfmpegOwnershipTests(ctx);
     runEventRuntimeMultiInputTests(ctx);
     runAvOutputSchedulerTests(ctx);
+    runAvSyncRuntimeBootstrapTests(ctx);
     if (ctx.failures != 0) {
         std::cerr << ctx.failures << " event runtime expectation(s) failed\n";
         return 1;

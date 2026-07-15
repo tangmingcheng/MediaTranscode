@@ -1,4 +1,5 @@
 #include "internal/graph/protocol/rtp/depacketizer/MediaOpusRtpDepacketizer.h"
+#include "internal/graph/protocol/rtp/MediaOpusRtpCapability.h"
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -118,7 +119,7 @@ int opusFrameSamples(int config) noexcept
         }
     }
     const int64_t duration = static_cast<int64_t>(frameSamples) * frames;
-    if (duration > 5760) return ::media::Result<int64_t>::failure(
+    if (duration > MaximumOpusRtpAccessUnitSamples) return ::media::Result<int64_t>::failure(
         ::media::ErrorInfo::invalidArgument("Opus RTP packet duration exceeds 120 ms"));
     return ::media::Result<int64_t>::success(duration);
 }

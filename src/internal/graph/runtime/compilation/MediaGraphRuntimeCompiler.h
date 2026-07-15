@@ -22,8 +22,7 @@ enum class MediaGraphRuntimeState;
 class MediaGraphRuntimeCompiler final {
 public:
     static ::media::Status compile(
-        MediaGraph graph,
-        std::vector<MediaPreparedRealtimeInputBinding> inputBindings,
+        MediaRealtimeExecutableGraph executable,
         MediaGraph& activeGraph,
         std::vector<MediaPreparedRealtimeInputBinding>& activeBindings,
         MediaGraphExecutionContext& context,

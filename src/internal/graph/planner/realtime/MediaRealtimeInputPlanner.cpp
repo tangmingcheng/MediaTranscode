@@ -136,17 +136,12 @@ constexpr std::uint64_t TsMaximumPacketPositionRegressionBytes = 1024 * 1024;
         result.streams.audio.profile = profile.value();
         result.streams.audio.bitrateBitsPerSecond = audio->format.codec.bitrate;
         auto codecParameters = audio->cloneCodecParameters();
-        if (!codecParameters || codecParameters.value()->extradata_size <= 0 ||
-            !codecParameters.value()->extradata) {
+        if (!codecParameters) {
             return ::media::Result<MediaPreparedRealtimeInputScan>::failure(
-                ::media::ErrorInfo::notInitialized(
-                    "selected MPEG-TS audio stream does not publish decoder configuration"));
+                codecParameters.error());
         }
-        auto decoder = MediaAudioDecoderCapabilityProvider::verifyAac(
-            result.streams.audio.sampleRate, result.streams.audio.channels,
-            std::span<const std::uint8_t>(
-                codecParameters.value()->extradata,
-                static_cast<std::size_t>(codecParameters.value()->extradata_size)));
+        auto decoder = MediaAudioDecoderCapabilityProvider::verifyAacAdts(
+            *codecParameters.value());
         if (!decoder) {
             return ::media::Result<MediaPreparedRealtimeInputScan>::failure(
                 decoder.error());
@@ -323,32 +318,44 @@ void fillNodePlan(
         audio.bitrateBitsPerSecond = request.input.audioRtp.bitrateKbps
             ? static_cast<int64_t>(*request.input.audioRtp.bitrateKbps) * 1000
             : 0;
-        auto fmtp = parseRtpFmtp(request.input.audioRtp.fmtp);
-        if (!fmtp) {
-            return ::media::Result<MediaRealtimeRawInputPlan>::failure(fmtp.error());
+        ::media::Result<MediaSelectedAudioDecoder> decoder =
+            ::media::Result<MediaSelectedAudioDecoder>::failure(
+                ::media::ErrorInfo::unsupported(
+                    "Raw RTP audio decoder capability is not supported"));
+        if (audioDescriptor.value().codecName == "aac") {
+            auto fmtp = parseRtpFmtp(request.input.audioRtp.fmtp);
+            if (!fmtp) {
+                return ::media::Result<MediaRealtimeRawInputPlan>::failure(
+                    fmtp.error());
+            }
+            const auto config = fmtp.value().find("config");
+            if (config == fmtp.value().end()) {
+                return ::media::Result<MediaRealtimeRawInputPlan>::failure(
+                    ::media::ErrorInfo::notInitialized(
+                        "Raw RTP AAC decoder configuration is missing"));
+            }
+            auto configBytes = decodeRtpFmtpHex(config->second);
+            if (!configBytes) {
+                return ::media::Result<MediaRealtimeRawInputPlan>::failure(
+                    configBytes.error());
+            }
+            decoder = MediaAudioDecoderCapabilityProvider::
+                verifyAacAudioSpecificConfig(
+                    audio.sampleRate, audio.channels, configBytes.value());
+        } else if (audioDescriptor.value().codecName == "opus") {
+            decoder = MediaAudioDecoderCapabilityProvider::verifyOpusRtp(
+                audio.sampleRate, audio.channels,
+                audioDescriptor.value().maximumAccessUnitDurationRtpTicks);
         }
-        const auto config = fmtp.value().find("config");
-        if (config == fmtp.value().end()) {
-            return ::media::Result<MediaRealtimeRawInputPlan>::failure(
-                ::media::ErrorInfo::notInitialized(
-                    "Raw RTP audio decoder configuration is missing"));
-        }
-        auto configBytes = decodeRtpFmtpHex(config->second);
-        if (!configBytes) {
-            return ::media::Result<MediaRealtimeRawInputPlan>::failure(
-                configBytes.error());
-        }
-        auto decoder = MediaAudioDecoderCapabilityProvider::verifyAac(
-            audio.sampleRate, audio.channels, configBytes.value());
         if (!decoder) {
             return ::media::Result<MediaRealtimeRawInputPlan>::failure(
                 decoder.error());
         }
         if (decoder.value().maximumOutputBlockInputSamples !=
-            audioDescriptor.value().accessUnitDurationRtpTicks) {
+            audioDescriptor.value().maximumAccessUnitDurationRtpTicks) {
             return ::media::Result<MediaRealtimeRawInputPlan>::failure(
                 ::media::ErrorInfo::invalidArgument(
-                    "selected AAC decoder block conflicts with RTP packetization"));
+                    "selected audio decoder block conflicts with RTP packetization"));
         }
         audio.maximumAccessUnitSamples = static_cast<int>(
             decoder.value().maximumOutputBlockInputSamples);

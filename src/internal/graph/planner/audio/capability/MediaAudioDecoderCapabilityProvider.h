@@ -6,6 +6,8 @@
 #include <span>
 #include <string>
 
+struct AVCodecParameters;
+
 namespace media::ffmpeg::graph {
 
 struct MediaSelectedAudioDecoder final {
@@ -21,9 +23,14 @@ struct MediaSelectedAudioDecoder final {
 
 class MediaAudioDecoderCapabilityProvider final {
 public:
-    static ::media::Result<MediaSelectedAudioDecoder> verifyAac(
+    static ::media::Result<MediaSelectedAudioDecoder> verifyAacAudioSpecificConfig(
         int inputSampleRate, int channels,
         std::span<const std::uint8_t> audioSpecificConfig);
+    static ::media::Result<MediaSelectedAudioDecoder> verifyAacAdts(
+        const AVCodecParameters& codecParameters);
+    static ::media::Result<MediaSelectedAudioDecoder> verifyOpusRtp(
+        int inputSampleRate, int channels,
+        std::int64_t maximumAccessUnitSamples);
 
 private:
     MediaAudioDecoderCapabilityProvider() = delete;

@@ -17,7 +17,10 @@ MediaAvSyncGroupRegistry::MediaAvSyncGroupRegistry()
 {
 }
 
-MediaAvSyncGroupRegistry::~MediaAvSyncGroupRegistry() = default;
+MediaAvSyncGroupRegistry::~MediaAvSyncGroupRegistry()
+{
+    clear();
+}
 
 MediaAvSyncGroupRegistry::MediaAvSyncGroupRegistry(
     MediaAvSyncGroupRegistry&& other)
@@ -32,11 +35,13 @@ MediaAvSyncGroupRegistry& MediaAvSyncGroupRegistry::operator=(
     MediaAvSyncGroupRegistry&& other)
 {
     if (this == &other) return *this;
+    clear();
     std::scoped_lock lock(m_state->mutex, other.m_state->mutex);
     m_state->groups = std::move(other.m_state->groups);
     other.m_state->groups.clear();
     return *this;
 }
+
 ::media::Status MediaAvSyncGroupRegistry::registerGroup(
     MediaAvSyncGroupKey key,
     MediaAvSyncPlan plan,
@@ -45,9 +50,28 @@ MediaAvSyncGroupRegistry& MediaAvSyncGroupRegistry::operator=(
     auto runtime = MediaAvSyncGroupRuntime::create(
         key, std::move(plan), std::move(clock));
     if (!runtime) return ::media::Status::failure(runtime.error());
-    auto shared = std::move(runtime).value();
+    return registerRuntime(std::move(runtime).value());
+}
+
+::media::Status MediaAvSyncGroupRegistry::registerGroup(
+    MediaAvSyncGroupKey key,
+    MediaAvSyncPlan plan,
+    std::shared_ptr<MediaSteadyMasterClock> clock,
+    std::shared_ptr<const MediaSharedNtpEpoch> sharedNtpEpoch)
+{
+    auto runtime = MediaAvSyncGroupRuntime::create(
+        std::move(key), std::move(plan), std::move(clock),
+        std::move(sharedNtpEpoch));
+    if (!runtime) return ::media::Status::failure(runtime.error());
+    return registerRuntime(std::move(runtime).value());
+}
+
+::media::Status MediaAvSyncGroupRegistry::registerRuntime(
+    std::shared_ptr<MediaAvSyncGroupRuntime> runtime)
+{
+    const MediaAvSyncGroupKey key = runtime->key();
     std::lock_guard<std::mutex> lock(m_state->mutex);
-    if (!m_state->groups.emplace(shared->key(), std::move(shared)).second) {
+    if (!m_state->groups.emplace(key, std::move(runtime)).second) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument(
                 "A/V sync group is already registered"));
@@ -85,8 +109,15 @@ std::shared_ptr<MediaAvSyncGroupRuntime> MediaAvSyncGroupRegistry::find(
 
 void MediaAvSyncGroupRegistry::clear() noexcept
 {
-    std::lock_guard<std::mutex> lock(m_state->mutex);
-    m_state->groups.clear();
+    decltype(m_state->groups) groups;
+    {
+        std::lock_guard<std::mutex> lock(m_state->mutex);
+        groups.swap(m_state->groups);
+    }
+    for (auto& [key, group] : groups) {
+        (void)key;
+        if (group) group->shutdown();
+    }
 }
 
 } // namespace media::ffmpeg::graph

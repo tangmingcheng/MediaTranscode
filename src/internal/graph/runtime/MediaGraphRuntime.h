@@ -88,9 +88,7 @@ public:
 
 private:
     friend class MediaGraphRuntimeLifecycleExecutor;
-    ::media::Status compileTransaction(
-        MediaGraph graph,
-        std::vector<MediaPreparedRealtimeInputBinding> inputBindings);
+    ::media::Status compileTransaction(MediaRealtimeExecutableGraph executable);
 
     MediaGraph m_graph;
     MediaGraphExecutionContext m_context;

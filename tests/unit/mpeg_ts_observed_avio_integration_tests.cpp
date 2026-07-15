@@ -419,9 +419,10 @@ void testProductionUdpSessionPublishesMappedProgramClock(TestContext& ctx,
     EXPECT_TRUE(ctx, session->close());
 }
 
-void testProductionPlannerBuilderRuntimeLifecycle(TestContext& ctx,
-                                                  std::uint16_t inputPort,
-                                                  std::uint16_t outputPort)
+void testProductionBuilderRejectsUnassembledSynchronizedGraph(
+    TestContext& ctx,
+    std::uint16_t inputPort,
+    std::uint16_t outputPort)
 {
     auto sender = FfmpegMpegTsUdpSender::start(inputPort);
     EXPECT_TRUE(ctx, sender);
@@ -432,65 +433,11 @@ void testProductionPlannerBuilderRuntimeLifecycle(TestContext& ctx,
     if (!preflight) return;
     auto executable = MediaRealtimeRtpTranscodeGraphBuilder::buildExecutable(
         std::move(preflight).value());
-    EXPECT_TRUE(ctx, executable);
-    if (!executable) return;
-    MediaGraphRuntime runtime;
-    const auto validation = MediaGraphValidation::validate(executable.value().graph);
-    for (const auto& issue : validation.issues) {
-        if (issue.severity == MediaGraphValidationSeverity::Error) {
-            std::cerr << "MPEG-TS executable validation: " << issue.message << '\n';
-        }
+    EXPECT_FALSE(ctx, executable);
+    if (!executable) {
+        EXPECT_EQ(ctx, executable.error().code, media::ErrorCode::Unsupported);
     }
-    EXPECT_TRUE(ctx, runtime.compile(std::move(executable).value()));
-    EXPECT_TRUE(ctx, runtime.registerDefaultRuntimeNodes());
-    EXPECT_TRUE(ctx, runtime.startThreaded());
-    if (!runtime.threadedRunning()) return;
-    std::this_thread::sleep_for(std::chrono::seconds(2));
-    EXPECT_TRUE(ctx, runtime.synchronizeThreadedState());
-    const auto metrics = runtime.threadedExecutor().metrics();
-    EXPECT_TRUE(ctx, metrics.workerProgress > 0);
-    EXPECT_EQ(ctx, metrics.workerErrors, std::uint64_t{0});
-    EXPECT_TRUE(ctx, runtime.stop());
-    EXPECT_EQ(ctx, runtime.state(), MediaGraphRuntimeState::Stopped);
-    runtime.reset();
-    EXPECT_EQ(ctx, runtime.state(), MediaGraphRuntimeState::Empty);
-
     sender.value().stop();
-    auto restartSender = FfmpegMpegTsUdpSender::start(inputPort);
-    EXPECT_TRUE(ctx, restartSender);
-    if (!restartSender) return;
-    auto restartPreflight = MediaRealtimeRtpTranscodePlanner::preflight(
-        integrationRequest(inputPort, outputPort));
-    EXPECT_TRUE(ctx, restartPreflight);
-    if (!restartPreflight) return;
-    auto restartExecutable = MediaRealtimeRtpTranscodeGraphBuilder::buildExecutable(
-        std::move(restartPreflight).value());
-    EXPECT_TRUE(ctx, restartExecutable);
-    if (!restartExecutable) return;
-    EXPECT_TRUE(ctx, runtime.compile(std::move(restartExecutable).value()));
-    EXPECT_TRUE(ctx, runtime.registerDefaultRuntimeNodes());
-    EXPECT_TRUE(ctx, restartSender.value().pause());
-    EXPECT_TRUE(ctx, runtime.startThreaded());
-    if (!runtime.threadedRunning()) return;
-
-    bool observedIdleWait = false;
-    for (int attempt = 0; attempt < 20 && !observedIdleWait; ++attempt) {
-        const auto before = runtime.threadedExecutor().metrics();
-        std::this_thread::sleep_for(std::chrono::milliseconds(250));
-        const auto after = runtime.threadedExecutor().metrics();
-        observedIdleWait = before.workerProcessCalls > 0 &&
-            before.workerWaits > 0 &&
-            before.workerProcessCalls == after.workerProcessCalls &&
-            before.workerProgress == after.workerProgress &&
-            before.workerWaits == after.workerWaits &&
-            before.workerWakeups == after.workerWakeups;
-    }
-    EXPECT_TRUE(ctx, observedIdleWait);
-    EXPECT_EQ(ctx, runtime.threadedExecutor().metrics().workerErrors, std::uint64_t{0});
-    runtime.abort();
-    EXPECT_EQ(ctx, runtime.state(), MediaGraphRuntimeState::Aborted);
-    runtime.reset();
-    EXPECT_EQ(ctx, runtime.state(), MediaGraphRuntimeState::Empty);
 }
 
 void testProductionInvalidProvenanceBindingFailsClosed(TestContext& ctx,
@@ -522,7 +469,7 @@ int main()
     const auto basePort = integrationBasePort();
     testProductionUdpSessionPublishesMappedProgramClock(ctx, basePort,
                                                         static_cast<std::uint16_t>(basePort + 1));
-    testProductionPlannerBuilderRuntimeLifecycle(
+    testProductionBuilderRejectsUnassembledSynchronizedGraph(
         ctx, static_cast<std::uint16_t>(basePort + 2),
         static_cast<std::uint16_t>(basePort + 3));
     testProductionInvalidProvenanceBindingFailsClosed(

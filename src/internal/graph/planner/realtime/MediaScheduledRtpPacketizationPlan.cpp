@@ -20,12 +20,17 @@ MediaScheduledRtpPacketizationPlan::create(
                maximumAccessUnitSamples && *maximumAccessUnitSamples > 0) {
         mode = MediaScheduledRtpPacketizationMode::AacLatm;
     }
-    if (!mode || streamTimeBaseNumerator <= 0 ||
-        streamTimeBaseDenominator <= 0 || payloadType < 0 || payloadType > 127 ||
-        maximumDatagramBytes == 0) {
+    if (!mode) {
+        return ::media::Result<MediaScheduledRtpPacketizationPlan>::failure(
+            ::media::ErrorInfo::unsupported(
+                "scheduled RTP packetization codec is unsupported: " +
+                codecName));
+    }
+    if (streamTimeBaseNumerator <= 0 || streamTimeBaseDenominator <= 0 ||
+        payloadType < 0 || payloadType > 127 || maximumDatagramBytes == 0) {
         return ::media::Result<MediaScheduledRtpPacketizationPlan>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "scheduled RTP packetization selection is incomplete or unsupported"));
+                "scheduled RTP packetization selection is incomplete"));
     }
     return ::media::Result<MediaScheduledRtpPacketizationPlan>::success(
         MediaScheduledRtpPacketizationPlan(

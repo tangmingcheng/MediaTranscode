@@ -285,6 +285,12 @@ bool separateRtpOutput(const MediaRealtimeRtpTranscodePlan& plan) noexcept
 ::media::Result<MediaGraph> MediaRealtimeRtpTranscodeGraphBuilder::build(
     MediaRealtimeRtpTranscodePlan plan)
 {
+    if (plan.muxedOutput.muxSessionKind ==
+        MediaMuxSessionKind::ProjectMpegTs) {
+        return ::media::Result<MediaGraph>::failure(
+            ::media::ErrorInfo::unsupported(
+                "synchronized MPEG-TS output requires scheduled A/V production adapters"));
+    }
     MediaGraph graph;
 
     const MediaNodeKind inputKind = plan.inputType == RealtimeInputType::RtpPort
@@ -475,6 +481,11 @@ bool separateRtpOutput(const MediaRealtimeRtpTranscodePlan& plan) noexcept
     if (requiresPrepared && (!preflight.prepared || !preflight.prepared->valid())) {
         return ::media::Result<MediaRealtimeExecutableGraph>::failure(
             ::media::ErrorInfo::notInitialized("realtime executable graph requires prepared input"));
+    }
+    if (preflight.plan.avSyncRuntime) {
+        return ::media::Result<MediaRealtimeExecutableGraph>::failure(
+            ::media::ErrorInfo::unsupported(
+                "synchronized realtime execution requires scheduled A/V production adapters"));
     }
     auto graphResult = build(std::move(preflight.plan));
     if (!graphResult) {

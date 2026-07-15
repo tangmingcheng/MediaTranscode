@@ -22,6 +22,7 @@
 #include "internal/graph/protocol/mpegts/MediaTsMuxPlan.h"
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/planner/audio/MediaAudioProfile.h"
+#include "internal/graph/planner/audio/capability/MediaAudioDecoderCapabilityProvider.h"
 #include "internal/graph/planner/audio/capability/MediaAudioEncoderTargetIdentityValidator.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/runtime/distributed/MediaGraphRemoteExecutor.h"
@@ -35,6 +36,7 @@
 #include "internal/graph/runtime/optimizer/passes/MediaSimdSchedulingPass.h"
 
 extern "C" {
+#include <libavcodec/avcodec.h>
 #include <libavutil/channel_layout.h>
 #include <libavutil/samplefmt.h>
 }
@@ -264,7 +266,7 @@ void testRealtimePlannerProducesCompleteAvSyncRuntimeProduct(TestContext& ctx)
                               *planned.value().audioPlan.resolvedOutput));
     }
     const std::array<std::uint8_t, 2> aacLc48kStereo{0x11, 0x90};
-    EXPECT_FALSE(ctx, MediaAudioDecoderCapabilityProvider::verifyAac(
+    EXPECT_FALSE(ctx, MediaAudioDecoderCapabilityProvider::verifyAacAudioSpecificConfig(
                           44'100, 2, aacLc48kStereo));
     if (!planned.value().avSyncRuntime) return;
     const auto& runtime = *planned.value().avSyncRuntime;
@@ -1034,7 +1036,7 @@ void testSelectedResamplerPublishesSteadyStateBound(TestContext& ctx)
     EXPECT_TRUE(ctx, output);
     if (!output) return;
     const std::array<std::uint8_t, 2> aacLc48kStereo{0x11, 0x90};
-    auto decoder = MediaAudioDecoderCapabilityProvider::verifyAac(
+    auto decoder = MediaAudioDecoderCapabilityProvider::verifyAacAudioSpecificConfig(
         48'000, 2, aacLc48kStereo);
     EXPECT_TRUE(ctx, decoder);
     if (!decoder) return;
@@ -1047,6 +1049,54 @@ void testSelectedResamplerPublishesSteadyStateBound(TestContext& ctx)
         48'000;
     EXPECT_TRUE(ctx, resampler.value().maximumOutputBlockSamples >
                          freshRateScaled);
+}
+
+void testAacAdtsDecoderCapabilityDoesNotRequireContainerExtradata(
+    TestContext& ctx)
+{
+    auto parameters = ::media::ffmpeg::makeCodecParameters();
+    EXPECT_TRUE(ctx, parameters != nullptr);
+    if (!parameters) return;
+    parameters->codec_type = AVMEDIA_TYPE_AUDIO;
+    parameters->codec_id = AV_CODEC_ID_AAC;
+    parameters->profile = AV_PROFILE_AAC_LOW;
+    parameters->sample_rate = 48'000;
+    parameters->format = AV_SAMPLE_FMT_FLTP;
+    av_channel_layout_default(&parameters->ch_layout, 2);
+    EXPECT_TRUE(ctx, parameters->extradata == nullptr);
+    EXPECT_EQ(ctx, parameters->extradata_size, 0);
+
+    const auto decoder =
+        MediaAudioDecoderCapabilityProvider::verifyAacAdts(*parameters);
+    if (!decoder) std::cerr << decoder.error().describe() << '\n';
+    EXPECT_TRUE(ctx, decoder);
+    if (!decoder) return;
+    EXPECT_EQ(ctx, decoder.value().inputSampleRate, 48'000);
+    EXPECT_EQ(ctx, decoder.value().outputSampleRate, 48'000);
+    EXPECT_EQ(ctx, decoder.value().outputChannels, 2);
+    EXPECT_TRUE(ctx, decoder.value().delayOutputSamples >= 0);
+    EXPECT_EQ(ctx, decoder.value().maximumOutputBlockInputSamples, 1024);
+}
+
+void testOpusRtpDecoderCapabilityUsesPlannedProtocolBound(TestContext& ctx)
+{
+    constexpr std::int64_t MaximumOpusRtpAccessUnitSamples = 5'760;
+    const auto decoder = MediaAudioDecoderCapabilityProvider::verifyOpusRtp(
+        48'000, 2, MaximumOpusRtpAccessUnitSamples);
+    EXPECT_TRUE(ctx, decoder);
+    if (!decoder) return;
+    EXPECT_EQ(ctx, decoder.value().inputSampleRate, 48'000);
+    EXPECT_EQ(ctx, decoder.value().outputSampleRate, 48'000);
+    EXPECT_EQ(ctx, decoder.value().outputChannels, 2);
+    EXPECT_TRUE(ctx, decoder.value().delayOutputSamples >= 0);
+    EXPECT_EQ(ctx, decoder.value().maximumOutputBlockInputSamples,
+              MaximumOpusRtpAccessUnitSamples);
+    EXPECT_FALSE(ctx, MediaAudioDecoderCapabilityProvider::verifyOpusRtp(
+                          48'000, 2, 0));
+    EXPECT_FALSE(ctx, MediaAudioDecoderCapabilityProvider::verifyOpusRtp(
+                          44'100, 2, MaximumOpusRtpAccessUnitSamples));
+    EXPECT_FALSE(ctx, MediaAudioDecoderCapabilityProvider::verifyOpusRtp(
+                          48'000, 3, MaximumOpusRtpAccessUnitSamples));
 }
 
 MediaProjectMpegTsResolvedPipelineFacts validTsResolvedFacts()
@@ -2005,6 +2055,8 @@ int main()
     testDecoderDelayUsesSelectedOutputSampleDomain(ctx);
     testRealtimePlannerProducesCompleteTsAvSyncRuntimeProduct(ctx);
     testSelectedResamplerPublishesSteadyStateBound(ctx);
+    testAacAdtsDecoderCapabilityDoesNotRequireContainerExtradata(ctx);
+    testOpusRtpDecoderCapabilityUsesPlannedProtocolBound(ctx);
     testRealtimeAvSyncRuntimeProductRejectsIndependentMutations(ctx);
     testRawRtpInputPlannerProducesCompleteTransportPolicy(ctx);
     testAvSyncPlannerBuildsCompleteTsContract(ctx);
