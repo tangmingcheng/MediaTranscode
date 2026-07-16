@@ -5,6 +5,7 @@ project(MediaTranscode LANGUAGES CXX)
 set(TARGET_CORE "media_transcode_core")
 set(TARGET_LOCAL_VIDEO_CLI "media_transcode_local_video_cli")
 set(TARGET_REALTIME_VIDEO_CLI "media_transcode_realtime_video_cli")
+set(TARGET_BUILD_WEEK_CLI "media_transcode_build_week_cli")
 set(THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/3rds")
 
 option(MEDIA_TRANSCODE_BUILD_GRAPH_TOOLS "Build graph command line tools" ON)
@@ -146,6 +147,7 @@ function(media_transcode_configure_app target_name)
     target_link_libraries(${target_name} PRIVATE MediaTranscode::core)
     target_compile_features(${target_name} PRIVATE cxx_std_20)
     target_include_directories(${target_name} PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
     )
     if(MSVC)
@@ -171,6 +173,12 @@ if(MEDIA_TRANSCODE_BUILD_GRAPH_TOOLS)
         tools/realtime_video_cli/main.cpp
     )
     media_transcode_configure_app(${TARGET_REALTIME_VIDEO_CLI})
+
+    add_executable(${TARGET_BUILD_WEEK_CLI}
+        tools/build_week_cli/main.cpp
+        tools/build_week_cli/BuildWeekCli.cpp
+    )
+    media_transcode_configure_app(${TARGET_BUILD_WEEK_CLI})
 endif()
 
 if(MEDIA_TRANSCODE_BUILD_TESTS)
@@ -196,4 +204,11 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
     )
     media_transcode_configure_test(media_transcode_event_runtime_tests)
     add_test(NAME media_transcode_event_runtime_tests COMMAND media_transcode_event_runtime_tests)
+
+    add_executable(media_transcode_build_week_cli_tests
+        tests/unit/test_build_week_cli.cpp
+        tools/build_week_cli/BuildWeekCli.cpp
+    )
+    media_transcode_configure_test(media_transcode_build_week_cli_tests)
+    add_test(NAME media_transcode_build_week_cli_tests COMMAND media_transcode_build_week_cli_tests)
 endif()
