@@ -21,6 +21,11 @@ jobs:
             libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev \
             libswscale-dev libswresample-dev
 
+      - name: Prepare test fixture
+        run: |
+          mkdir -p out/build/x64-debug
+          cp tests/samples/sample_h264_aac_2560x1440.mp4 out/build/x64-debug/test.mp4
+
       - name: Configure
         run: cmake -S . -B out/build/ci -G Ninja -DMEDIA_TRANSCODE_BUILD_TESTS=ON
 
