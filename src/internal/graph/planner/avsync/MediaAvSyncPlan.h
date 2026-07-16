@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/protocol/mpegts/MediaTsMuxPlan.h"
+#include "internal/graph/protocol/rtp/MediaRtpClockGroupPolicy.h"
 #include "internal/graph/sync/MediaAvSyncTopology.h"
 #include "internal/graph/time/MediaRunningTime.h"
 
@@ -93,6 +94,8 @@ struct MediaAvSyncRtpInputStreamPlan {
 };
 
 struct MediaAvSyncRtpInputPolicy {
+    MediaRtpCommonEpochPolicy commonEpochPolicy =
+        MediaRtpCommonEpochPolicy::Unknown;
     std::optional<bool> requireCommonCname;
     std::optional<bool> requireSenderReports;
     std::optional<MediaRunningTime> senderReportTimeoutNs;

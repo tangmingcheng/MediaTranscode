@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/graph/protocol/rtp/MediaRtpClockGroupPolicy.h"
 #include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
 #include "internal/graph/time/MediaRunningTime.h"
 
@@ -20,10 +21,6 @@ enum class MediaClockEvidencePolicy : std::uint8_t {
 
 enum class MediaTerminalDurationPolicy : std::uint8_t {
     RepeatLastObservedPositiveDelta
-};
-
-enum class MediaRtpCommonEpochPolicy : std::uint8_t {
-    EarliestLockedSenderReportSourceTime
 };
 
 struct MediaRtpInputClockAssemblyPlan final {

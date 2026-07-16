@@ -176,7 +176,8 @@ void testGroupRequiresExactCommonIdentityAndCurrentEvidence(TestContext& ctx)
 {
     auto validatorResult = MediaRtpClockGroupValidator::create(
         MediaRtpClockGroupValidatorConfig{3 * Second, 5 * Second, 50'000'000,
-                                          5 * Second, 5 * Second});
+                                          5 * Second, 5 * Second,
+                                          MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime});
     EXPECT_TRUE(ctx, validatorResult);
     if (!validatorResult) return;
     auto validator = std::move(validatorResult).value();
@@ -218,7 +219,8 @@ void testGroupRejectsMismatchSkewAndHasNoFallback(TestContext& ctx)
     auto makeValidator = [] {
         return MediaRtpClockGroupValidator::create(
             MediaRtpClockGroupValidatorConfig{3 * Second, 5 * Second, 50'000'000,
-                                              5 * Second, 5 * Second}).value();
+                                              5 * Second, 5 * Second,
+                                              MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime}).value();
     };
     const auto video = evidence(11, 100, 0, 0, "camera-a", 0, 1);
 
@@ -255,7 +257,8 @@ void testGroupDegradesExpiresAndInvalidatesOnIngressDiscontinuity(TestContext& c
 {
     auto validator = MediaRtpClockGroupValidator::create(
         MediaRtpClockGroupValidatorConfig{3 * Second, 5 * Second, 50'000'000,
-                                          5 * Second, 5 * Second}).value();
+                                          5 * Second, 5 * Second,
+                                          MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime}).value();
     const auto video = evidence(11, 100, 0, 0, "camera", 0, 1);
     const auto audio = evidence(22, 100, 0, 0, "camera", 0, 1);
     EXPECT_TRUE(ctx, validator.observe(MediaStreamKind::Video, video, calibration(video, 90'000)));
@@ -309,7 +312,8 @@ void testCnameFreshnessExpiresGroupAndCapsReceiveDeadline(TestContext& ctx)
 {
     auto validator = MediaRtpClockGroupValidator::create(
         MediaRtpClockGroupValidatorConfig{3 * Second, 5 * Second, 50'000'000,
-                                          4 * Second, 4 * Second}).value();
+                                          4 * Second, 4 * Second,
+                                          MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime}).value();
     auto video = evidence(11, 100, 0, 0, "camera", 4 * Second, 1);
     auto audio = evidence(22, 100, 0, 0, "camera", 4 * Second, 1);
     video.cnameObservedAtNs = 0;

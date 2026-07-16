@@ -31,7 +31,9 @@ bool matchingCalibration(const MediaRtcpClockEvidence& evidence,
     if (config.senderReportTimeoutNs <= 0 ||
         config.maximumExtrapolationNs <= config.senderReportTimeoutNs ||
         config.maximumInterStreamSkewNs <= 0 || config.videoCnameTimeoutNs <= 0 ||
-        config.audioCnameTimeoutNs <= 0) {
+        config.audioCnameTimeoutNs <= 0 ||
+        config.commonEpochPolicy !=
+            MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime) {
         return ::media::Result<MediaRtpClockGroupValidator>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "RTP clock group validator requires complete ordered planner thresholds"));

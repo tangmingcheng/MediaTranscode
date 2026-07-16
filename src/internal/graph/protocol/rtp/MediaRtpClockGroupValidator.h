@@ -2,6 +2,7 @@
 
 #include "internal/graph/model/MediaStreamKind.h"
 #include "internal/graph/protocol/rtp/MediaRtpSourceClockMapper.h"
+#include "internal/graph/protocol/rtp/MediaRtpClockGroupPolicy.h"
 #include "media_transcode/Result.h"
 
 #include <cstdint>
@@ -23,6 +24,7 @@ struct MediaRtpClockGroupValidatorConfig final {
     std::int64_t maximumInterStreamSkewNs;
     std::int64_t videoCnameTimeoutNs;
     std::int64_t audioCnameTimeoutNs;
+    MediaRtpCommonEpochPolicy commonEpochPolicy;
 };
 
 struct MediaRtpLockedClockGroup final {

@@ -4,20 +4,32 @@
 #include "internal/graph/nodes/sync/MediaRtpClockSnapshotFanoutNode.h"
 #include "internal/graph/nodes/sync/MediaRtpPacketClockBinderNode.h"
 #include "internal/graph/protocol/rtp/MediaRtpPacketClockProjector.h"
+#include "internal/graph/protocol/rtp/MediaRtpClockGroupPolicy.h"
+#include "internal/graph/protocol/rtp/MediaRtpPacketTimestampAligner.h"
+#include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlanner.h"
+#include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
 #include "internal/graph/runtime/buffer/FFmpegPacketBuffer.h"
 #include "internal/graph/runtime/buffer/MediaRtpClockGroupBuffer.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
+#include "internal/graph/sync/MediaAvEpochTransitionService.h"
+#include "internal/graph/time/MediaMasterClock.h"
+#include "internal/graph/time/MediaSharedNtpEpoch.h"
 
+#include <atomic>
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <vector>
 
 using namespace media::ffmpeg::graph;
+
+static_assert(static_cast<std::uint8_t>(
+                  MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime) == 0);
 
 #undef assert
 #define assert(condition)                                                        \
@@ -30,6 +42,74 @@ using namespace media::ffmpeg::graph;
     } while (false)
 
 namespace {
+
+class TestMasterClock final : public MediaMasterClock {
+public:
+    explicit TestMasterClock(MediaRunningTime now) : m_now(now.nanoseconds()) {}
+
+    ::media::Result<MediaRunningTime> now() const noexcept override
+    {
+        return ::media::Result<MediaRunningTime>::success(
+            MediaRunningTime::fromNanoseconds(m_now.load()));
+    }
+
+    void set(MediaRunningTime now) noexcept { m_now.store(now.nanoseconds()); }
+
+private:
+    std::atomic<std::int64_t> m_now;
+};
+
+MediaAvSyncPlan completeAvSyncPlan()
+{
+    MediaRealtimeRtpTranscodeRequest request;
+    request.mediaId = "rtp-binder-tests";
+    request.input.type = RealtimeInputType::RtpPort;
+    request.input.streamLayout = RealtimeInputStreamLayout::SeparateStreams;
+    request.input.videoRtp.payloadType = 96;
+    request.input.videoRtp.clockRate = 90'000;
+    request.input.audioRtp.payloadType = 97;
+    request.input.audioRtp.clockRate = 48'000;
+    request.output.streamLayout = RealtimeOutputStreamLayout::SeparateStreams;
+    request.parameters.execution.includeAudio = true;
+    request.parameters.audio.sampleRate = 48'000;
+    request.parameters.queues.packet = 8;
+    request.avSyncStartup.maximumVideoUnitBytes = 1024 * 1024;
+    request.avSyncStartup.maximumAudioUnitBytes = 1024 * 1024;
+    request.avSyncStartup.maximumGap = MediaRunningTime::fromNanoseconds(40'000'000);
+    auto plan = MediaAvSyncPlanner::plan(request);
+    assert(plan);
+    auto finalized = std::move(plan).value();
+    finalized.audioServo.commandLeadNs =
+        MediaRunningTime::fromNanoseconds(1'500'000'000);
+    finalized.audioServo.compensationWindowNs =
+        MediaRunningTime::fromNanoseconds(2'000'000'000);
+    finalized.audioServo.frequencyFilterTimeConstantNs =
+        MediaRunningTime::fromNanoseconds(5'000'000'000);
+    return finalized;
+}
+
+void registerSyncGroup(MediaGraphExecutionContext& execution,
+                       const std::shared_ptr<TestMasterClock>& clock)
+{
+    auto epoch = MediaSharedNtpEpoch::create(
+        MediaRunningTime::fromNanoseconds(0), std::chrono::nanoseconds(0));
+    assert(epoch);
+    auto transition = MediaAvGenerationTransitionPlanner::plan(
+        MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp,
+        MediaRunningTime::fromNanoseconds(1'000'000'000),
+        MediaRunningTime::fromNanoseconds(1'000'000'000));
+    auto service = MediaAvEpochTransitionService::create(std::move(transition));
+    assert(service);
+    auto registered = execution.registerAvSyncGroup(
+        MediaAvSyncGroupKey("rtp-binder-group"), completeAvSyncPlan(), clock,
+        std::make_shared<MediaSharedNtpEpoch>(std::move(epoch).value()),
+        std::move(service).value());
+    if (!registered) {
+        std::fprintf(stderr, "sync group registration failed: %s\n",
+                     registered.error().describe().c_str());
+    }
+    assert(registered);
+}
 
 MediaRtpSourceClockCalibration calibration(
     std::uint32_t ssrc,
@@ -90,7 +170,29 @@ MediaBufferRef packet(MediaStreamKind stream, std::int64_t extendedTimestamp,
     auto wrapped = FFmpegBufferFactory::wrapPacket(
         std::move(value), stream, std::nullopt);
     assert(wrapped);
+    wrapped.value()->setTimeDescriptor(MediaTimeDescriptor{
+        MediaRational{1, stream == MediaStreamKind::Video ? 90'000 : 48'000}});
     return std::move(wrapped).value();
+}
+
+void rawPacketTimestampsAlignToLockedSenderReportAnchor()
+{
+    MediaRtpPacketTimestampAligner aligner;
+    const auto video = lockedSnapshot().locked->video;
+    auto wrapped = aligner.align(video, 0x00000010U);
+    auto reordered = aligner.align(video, 0xffffffe0U);
+    assert(wrapped && wrapped.value() == 0x100000010ULL);
+    assert(reordered && reordered.value() == 0xffffffe0ULL);
+
+    assert(!aligner.align(video, video.rtpAnchor + 0x80000000U));
+    auto overflow = video;
+    overflow.rtpAnchor = std::numeric_limits<std::uint32_t>::max();
+    overflow.extendedRtpAnchor = std::numeric_limits<std::int64_t>::max();
+    assert(!aligner.align(overflow, 0));
+    auto underflow = video;
+    underflow.rtpAnchor = 0;
+    underflow.extendedRtpAnchor = 0;
+    assert(!aligner.align(underflow, std::numeric_limits<std::uint32_t>::max()));
 }
 
 void projectionUsesOneLockedEpochAndAcceptsExtendedWrapAndReordering()
@@ -131,7 +233,8 @@ void validatorKeepsOneCommonEpochForAGroupGeneration()
     auto validator = MediaRtpClockGroupValidator::create(
         MediaRtpClockGroupValidatorConfig{
             3'000'000'000LL, 5'000'000'000LL, 50'000'000,
-            5'000'000'000LL, 5'000'000'000LL});
+            5'000'000'000LL, 5'000'000'000LL,
+            MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime});
     assert(validator);
     auto group = std::move(validator).value();
     const auto cname = std::vector<std::uint8_t>{0x63, 0x00, 0xff};
@@ -179,6 +282,9 @@ void malformedOrUnavailableSnapshotsFailClosed()
     }
 }
 
+template <typename Node>
+void processSucceeds(Node& node, MediaGraphExecutionContext& execution);
+
 struct BinderFixture final {
     MediaGraph graph;
     MediaNodeId packetSource;
@@ -186,9 +292,10 @@ struct BinderFixture final {
     MediaNodeId binder;
     MediaNodeId sink;
     MediaGraphExecutionContext execution;
+    std::shared_ptr<TestMasterClock> masterClock;
 
     BinderFixture(MediaStreamKind stream, std::size_t acquiringCapacity = 2,
-                  std::size_t outputCapacity = 4)
+                  std::size_t outputCapacity = 4, bool includeSyncGroup = true)
     {
         packetSource = graph.addNode(MediaNodeKind::DebugDump, "packet.source");
         clockSource = graph.addNode(MediaNodeKind::DebugDump, "clock.source");
@@ -218,6 +325,10 @@ struct BinderFixture final {
                                    std::to_string(acquiringCapacity)));
         assert(graph.setNodeOption(binder, "rtp_clock_binder.acquiring_timeout_ns",
                                    "1000000000"));
+        if (includeSyncGroup) {
+            assert(graph.setNodeOption(binder, "rtp_clock_binder.sync_group",
+                                       "rtp-binder-group"));
+        }
         if (stream == MediaStreamKind::Video) {
             assert(graph.setNodeOption(binder, "rtp_clock_binder.duration_clock_rate",
                                        "90000"));
@@ -226,12 +337,88 @@ struct BinderFixture final {
                 "repeat_last_observed_positive_delta"));
         }
         assert(execution.compile(graph));
+        masterClock = std::make_shared<TestMasterClock>(
+            MediaRunningTime::fromNanoseconds(0));
+        registerSyncGroup(execution, masterClock);
     }
 
     MediaChannel* packetInput() { return execution.findInputChannel(binder, "packet"); }
     MediaChannel* clockInput() { return execution.findInputChannel(binder, "clock"); }
     MediaChannel* output() { return execution.findOutputChannel(binder, "packet"); }
 };
+
+void acquiringDeadlineUsesRegisteredMasterClock()
+{
+    BinderFixture expired(MediaStreamKind::Audio);
+    MediaRtpPacketClockBinderNode expiredNode(expired.binder);
+    assert(expired.packetInput()->push(packet(MediaStreamKind::Audio, 48'000, 480)));
+    processSucceeds(expiredNode, expired.execution);
+    auto waiting = expiredNode.process(expired.execution);
+    assert(waiting && waiting.value().deadlineWait);
+    assert(waiting.value().deadlineWait->syncGroup ==
+           MediaAvSyncGroupKey("rtp-binder-group"));
+    assert(waiting.value().deadlineWait->masterDeadline ==
+           MediaRunningTime::fromNanoseconds(1'000'000'000));
+    expired.masterClock->set(MediaRunningTime::fromNanoseconds(999'999'999));
+    waiting = expiredNode.process(expired.execution);
+    assert(waiting && waiting.value().deadlineWait);
+    expired.masterClock->set(MediaRunningTime::fromNanoseconds(1'000'000'000));
+    assert(!expiredNode.process(expired.execution));
+
+    BinderFixture lockAtDeadline(MediaStreamKind::Audio);
+    MediaRtpPacketClockBinderNode lockAtDeadlineNode(lockAtDeadline.binder);
+    assert(lockAtDeadline.packetInput()->push(
+        packet(MediaStreamKind::Audio, 48'000, 480)));
+    processSucceeds(lockAtDeadlineNode, lockAtDeadline.execution);
+    assert(lockAtDeadline.clockInput()->push(
+        makeMediaBufferRef<MediaRtpClockGroupBuffer>(lockedSnapshot())));
+    lockAtDeadline.masterClock->set(
+        MediaRunningTime::fromNanoseconds(1'000'000'000));
+    processSucceeds(lockAtDeadlineNode, lockAtDeadline.execution);
+    processSucceeds(lockAtDeadlineNode, lockAtDeadline.execution);
+
+    BinderFixture locked(MediaStreamKind::Audio);
+    MediaRtpPacketClockBinderNode lockedNode(locked.binder);
+    assert(locked.packetInput()->push(packet(MediaStreamKind::Audio, 48'000, 480)));
+    processSucceeds(lockedNode, locked.execution);
+    assert(locked.clockInput()->push(
+        makeMediaBufferRef<MediaRtpClockGroupBuffer>(lockedSnapshot())));
+    processSucceeds(lockedNode, locked.execution);
+    locked.masterClock->set(MediaRunningTime::fromNanoseconds(2'000'000'000));
+    processSucceeds(lockedNode, locked.execution);
+    auto afterLock = lockedNode.process(locked.execution);
+    assert(afterLock && !afterLock.value().deadlineWait);
+
+    BinderFixture reset(MediaStreamKind::Audio);
+    MediaRtpPacketClockBinderNode resetNode(reset.binder);
+    assert(reset.packetInput()->push(packet(MediaStreamKind::Audio, 48'000, 480)));
+    processSucceeds(resetNode, reset.execution);
+    assert(resetNode.stop(reset.execution));
+    auto afterStop = resetNode.process(reset.execution);
+    assert(afterStop && !afterStop.value().deadlineWait);
+    assert(reset.packetInput()->push(packet(MediaStreamKind::Audio, 48'480, 480)));
+    processSucceeds(resetNode, reset.execution);
+    resetNode.abort(reset.execution);
+    auto afterAbort = resetNode.process(reset.execution);
+    assert(afterAbort && !afterAbort.value().deadlineWait);
+
+    BinderFixture missing(MediaStreamKind::Audio, 2, 4, false);
+    MediaRtpPacketClockBinderNode missingNode(missing.binder);
+    assert(!missingNode.process(missing.execution));
+}
+
+void validatorRequiresExplicitSupportedCommonEpochPolicy()
+{
+    MediaRtpClockGroupValidatorConfig config{
+        3'000'000'000LL, 5'000'000'000LL, 50'000'000,
+        5'000'000'000LL, 5'000'000'000LL,
+        MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime};
+    assert(MediaRtpClockGroupValidator::create(config));
+    config.commonEpochPolicy = MediaRtpCommonEpochPolicy::Unknown;
+    assert(!MediaRtpClockGroupValidator::create(config));
+    config.commonEpochPolicy = static_cast<MediaRtpCommonEpochPolicy>(99);
+    assert(!MediaRtpClockGroupValidator::create(config));
+}
 
 template <typename Node>
 void processSucceeds(Node& node, MediaGraphExecutionContext& execution)
@@ -310,7 +497,8 @@ void validatorMayRelockButBinderRejectsTheNewGroupGeneration()
     auto validator = MediaRtpClockGroupValidator::create(
         MediaRtpClockGroupValidatorConfig{
             3'000'000'000LL, 5'000'000'000LL, 50'000'000,
-            5'000'000'000LL, 5'000'000'000LL});
+            5'000'000'000LL, 5'000'000'000LL,
+            MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime});
     assert(validator);
     auto group = std::move(validator).value();
     const auto video1 = evidence(11, 90'000, 4, 0);
@@ -355,9 +543,9 @@ void videoDurationUsesLookaheadAndOnlyExplicitTerminalReuse()
     assert(fixture.clockInput()->push(
         makeMediaBufferRef<MediaRtpClockGroupBuffer>(lockedSnapshot())));
     processSucceeds(node, fixture.execution);
-    assert(fixture.packetInput()->push(packet(MediaStreamKind::Video, 0x100000010LL)));
+    assert(fixture.packetInput()->push(packet(MediaStreamKind::Video, 0x10)));
     processSucceeds(node, fixture.execution);
-    assert(fixture.packetInput()->push(packet(MediaStreamKind::Video, 0x100000bc8LL)));
+    assert(fixture.packetInput()->push(packet(MediaStreamKind::Video, 0xbc8)));
     processSucceeds(node, fixture.execution);
     MediaBufferRef firstOwner;
     const auto* first = popPacket(*fixture.output(), firstOwner);
@@ -383,6 +571,19 @@ void videoDurationUsesLookaheadAndOnlyExplicitTerminalReuse()
     auto earlyEof = FFmpegBufferFactory::makeEof(MediaStreamKind::Video);
     assert(earlyEof && noDelta.packetInput()->push(earlyEof.value()));
     assert(!noDeltaNode.process(noDelta.execution));
+}
+
+void videoDurationClockRateRejectsMismatchedPacketTimeBase()
+{
+    BinderFixture fixture(MediaStreamKind::Video);
+    MediaRtpPacketClockBinderNode node(fixture.binder);
+    assert(fixture.clockInput()->push(
+        makeMediaBufferRef<MediaRtpClockGroupBuffer>(lockedSnapshot())));
+    processSucceeds(node, fixture.execution);
+    auto mismatched = packet(MediaStreamKind::Video, 0x10);
+    mismatched->setTimeDescriptor(MediaTimeDescriptor{MediaRational{1, 48'000}});
+    assert(fixture.packetInput()->push(std::move(mismatched)));
+    assert(!node.process(fixture.execution));
 }
 
 void outputWouldBlockRetriesWithoutLosingPacketOwnership()
@@ -447,14 +648,18 @@ void fanoutPublishesTheSameImmutableSnapshotBuffer()
 
 int main()
 {
+    rawPacketTimestampsAlignToLockedSenderReportAnchor();
     projectionUsesOneLockedEpochAndAcceptsExtendedWrapAndReordering();
     registeredNodeKindsHaveStableDiagnosticNames();
     validatorKeepsOneCommonEpochForAGroupGeneration();
+    validatorRequiresExplicitSupportedCommonEpochPolicy();
     malformedOrUnavailableSnapshotsFailClosed();
+    acquiringDeadlineUsesRegisteredMasterClock();
     clockAndPacketMayArriveInEitherOrderWithMatchingGeneration();
     acquiringIsBoundedAndEvidenceAndGenerationChangesFailClosed();
     validatorMayRelockButBinderRejectsTheNewGroupGeneration();
     videoDurationUsesLookaheadAndOnlyExplicitTerminalReuse();
+    videoDurationClockRateRejectsMismatchedPacketTimeBase();
     outputWouldBlockRetriesWithoutLosingPacketOwnership();
     fanoutPublishesTheSameImmutableSnapshotBuffer();
     return 0;

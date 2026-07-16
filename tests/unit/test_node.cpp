@@ -1155,6 +1155,9 @@ void testRtpClockGroupRejectsStaleCrossPortEvidence(TestContext& ctx)
     graph.setNodeOption(group, "rtp_clock_group.video_cname_timeout_ns", "5000000000");
     graph.setNodeOption(group, "rtp_clock_group.audio_cname_timeout_ns", "5000000000");
     graph.setNodeOption(group, "rtp_clock_group.maximum_sender_clock_rate_error_ppm", "1000");
+    graph.setNodeOption(
+        group, "rtp_clock_group.common_epoch_policy",
+        "earliest_locked_sender_report_source_time");
 
     MediaGraphExecutionContext execution;
     EXPECT_TRUE(ctx, execution.compile(graph));

@@ -2,14 +2,17 @@
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/protocol/rtp/MediaRtpPacketClockProjector.h"
+#include "internal/graph/protocol/rtp/MediaRtpPacketTimestampAligner.h"
 
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <optional>
 
 namespace media::ffmpeg::graph {
+
+class MediaAvSyncGroupRuntime;
 
 class MediaRtpPacketClockBinderNode final : public FFmpegNodeRuntime {
 public:
@@ -25,6 +28,7 @@ protected:
 private:
     ::media::Status configure(MediaGraphExecutionContext& context);
     ::media::Status acceptClock(const MediaBufferRef& buffer);
+    ::media::Status checkAcquiringDeadline() const;
     ::media::Status bufferAcquiring(MediaBufferRef buffer);
     ::media::Status bindPacket(MediaGraphExecutionContext& context,
                                MediaBufferRef buffer);
@@ -35,10 +39,13 @@ private:
     void resetState() noexcept;
 
     MediaRtpPacketClockProjector m_projector;
+    MediaRtpPacketTimestampAligner m_timestampAligner;
     std::optional<MediaRtpClockGroupSnapshot> m_lockedSnapshot;
     std::optional<std::uint64_t> m_lockedGeneration;
     std::deque<MediaBufferRef> m_acquiringPackets;
-    std::optional<std::chrono::steady_clock::time_point> m_acquiringStarted;
+    std::optional<MediaAvSyncGroupKey> m_syncGroupKey;
+    std::shared_ptr<MediaAvSyncGroupRuntime> m_syncGroup;
+    std::optional<MediaRunningTime> m_acquiringDeadline;
     MediaBufferRef m_videoLookahead;
     std::optional<std::uint64_t> m_videoLookaheadTimestamp;
     std::optional<std::int64_t> m_lastPositiveVideoDelta;
@@ -46,7 +53,7 @@ private:
     MediaStreamKind m_streamKind = MediaStreamKind::Unknown;
     MediaScheduledStream m_scheduledStream = MediaScheduledStream::Video;
     std::size_t m_acquiringCapacity = 0;
-    std::chrono::nanoseconds m_acquiringTimeout{0};
+    std::int64_t m_acquiringTimeoutNs = 0;
     int m_durationClockRate = 0;
     bool m_configured = false;
 };

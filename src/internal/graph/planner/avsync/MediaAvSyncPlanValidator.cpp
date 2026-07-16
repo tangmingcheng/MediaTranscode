@@ -240,6 +240,8 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
     }
     const auto& rtp = *plan.rtp;
     if (!validRtpInputStream(rtp.videoInput) || !validRtpInputStream(rtp.audioInput) ||
+        rtp.input.commonEpochPolicy !=
+            MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime ||
         !rtp.input.requireCommonCname || !*rtp.input.requireCommonCname ||
         !rtp.input.requireSenderReports || !*rtp.input.requireSenderReports ||
         !positive(rtp.input.senderReportTimeoutNs) ||

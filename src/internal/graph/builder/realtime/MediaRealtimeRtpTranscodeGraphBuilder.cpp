@@ -163,6 +163,8 @@ bool separateRtpOutput(const MediaRealtimeRtpTranscodePlan& plan) noexcept
         !avSync.rtp->input.maximumSenderReportSkewNs ||
         !avSync.rtp->input.maximumSenderClockRateErrorPpm ||
         !avSync.rtp->input.maximumSenderClockResidualNs ||
+        !mediaRtpCommonEpochPolicyOptionValue(
+            avSync.rtp->input.commonEpochPolicy) ||
         videoCnameTimeoutNs <= 0 || audioCnameTimeoutNs <= 0) {
         return ::media::Result<MediaNodeId>::failure(
             ::media::ErrorInfo::invalidArgument("RTP clock group requires a complete planner-owned A/V sync plan"));
@@ -186,6 +188,12 @@ bool separateRtpOutput(const MediaRealtimeRtpTranscodePlan& plan) noexcept
     if (auto status = set("rtp_clock_group.video_cname_timeout_ns", std::to_string(videoCnameTimeoutNs)); !status) return ::media::Result<MediaNodeId>::failure(status.error());
     if (auto status = set("rtp_clock_group.audio_cname_timeout_ns", std::to_string(audioCnameTimeoutNs)); !status) return ::media::Result<MediaNodeId>::failure(status.error());
     if (auto status = set("rtp_clock_group.maximum_sender_clock_rate_error_ppm", std::to_string(*avSync.rtp->input.maximumSenderClockRateErrorPpm)); !status) return ::media::Result<MediaNodeId>::failure(status.error());
+    if (auto status = set(
+            "rtp_clock_group.common_epoch_policy",
+            mediaRtpCommonEpochPolicyOptionValue(
+                avSync.rtp->input.commonEpochPolicy)); !status) {
+        return ::media::Result<MediaNodeId>::failure(status.error());
+    }
     for (MediaNodeId input : {videoInput, audioInput}) {
         if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
                 graph, owner, input, "rtcp.maximum_extrapolation_ns",
