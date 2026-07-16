@@ -666,9 +666,24 @@ Commit as `feat: enable av sync production graphs`.
 
 Expose structured counters/status for clock acquisition wait, locked generation, terminal degradation, discontinuity, requested reacquisition, startup release, scheduler dispatch, protocol commit, queue high-water, progress stall, and A/V drift. Task 12 never silently restarts or drops into legacy execution.
 
+Add one structured A/V timeline diagnostic record instead of ad-hoc text logs.
+Each record carries sync group, generation, stream, canonical AU sequence,
+canonical presentation time, mapped master presentation/dispatch time, actual
+protocol commit time, queue latency, and terminal/error state. The scheduler and
+protocol adapters publish facts to the existing runtime report; they do not
+independently calculate policy or emit competing drift values. A single
+diagnostic analyzer derives startup offset, per-event A/V skew, P50/P95/maximum
+and final absolute drift, and drift slope over the observation window.
+
 - [ ] **Step 1: Write RED fault-injection tests**
 
 Inject degradation/discontinuity/reacquire at each pre-start and active boundary. Assert first-error preservation, group abort, retained-state cleanup, no post-error protocol writes, and no hidden restart.
+
+Also inject deterministic interleaved A/V access units and verify the timeline
+records preserve exact sequence/generation/master-time relationships across
+scheduler dispatch and protocol commit. Missing, duplicate, reordered, or
+cross-generation diagnostic records fail the analyzer rather than being
+silently omitted.
 
 - [ ] **Step 2: Implement structured fail-closed reporting**
 
@@ -691,6 +706,7 @@ Commit as `feat: report av sync production failures`.
 - Reuse/update as necessary: `tests/acceptance/run_av_sync_gate.ps1`
 - Reuse/update as necessary: `tests/acceptance/inspect_rtp_sync.ps1`
 - Reuse/update as necessary: `tests/acceptance/inspect_mpegts_sync.ps1`
+- Create: `tests/acceptance/analyze_av_sync_timeline.ps1`
 
 - [ ] **Step 1: Full clean deterministic verification**
 
@@ -716,32 +732,40 @@ Copy the required DLLs from `D:\mabs\local64\bin-video` beside `out\build\x64-de
 
 - [ ] **Step 4: Run a 20-30 second hardware separate-RTP smoke**
 
-Use the repository fixture/sender and the production CLI. Input and output are
-separate video/audio RTP streams. Probe the generated dual-media SDP directly;
+Use the deterministic flash/beep fixture and the production CLI. Input and
+output are separate video/audio RTP streams. Probe the generated dual-media SDP directly;
 do not substitute a captured `.ts`. Record only
 `media_transcode_realtime_video_cli` process CPU, memory, threads, queue peaks,
-stalls, decode errors, drops, and measured A/V offset/drift. Require both
-streams, zero decode/worker/drop errors, no stall over 5 seconds, and absolute
-A/V offset within 100 ms before opening VLC.
+stalls, decode errors, drops, the structured runtime A/V timeline, and decoded
+flash/beep event measurements. Require both streams, zero decode/worker/drop
+errors, no stall over 5 seconds, complete scheduler-to-protocol diagnostic
+lineage, absolute startup/final/maximum A/V offset within 100 ms, and no
+statistically sustained drift slope before opening VLC.
 
 - [ ] **Step 5: Run a 20-30 second hardware MPEG-TS smoke**
 
 Use UDP MPEG-TS input and UDP MPEG-TS output through the production CLI. Probe
 the actual output directly and require decodable H.264/AAC, valid
 program/PIDs/PCR/PTS/DTS/continuity, zero worker/decode/drop errors, no stall
-over 5 seconds, and absolute A/V offset within 100 ms.
+over 5 seconds, complete structured runtime A/V timeline, decoded flash/beep
+event measurements, absolute startup/final/maximum A/V offset within 100 ms,
+and no statistically sustained drift slope.
 
 - [ ] **Step 6: Open the separate-RTP SDP in VLC for the user**
 
 Launch `D:\VideoLAN\VLC\vlc.exe` with the generated SDP while both scheduled
 senders remain live. Let the user observe picture continuity, normal audio, no
 stutter, no perceptible startup offset, and no drift. Wait for explicit user
-confirmation before marking RTP human verification passed.
+confirmation before marking RTP human verification passed. This is a subjective
+quality observation only; it does not replace or override the automated drift
+gate.
 
 - [ ] **Step 7: Open the MPEG-TS output directly in VLC for the user**
 
 Launch VLC on the live UDP TS output, wait for explicit user confirmation, and
-do not play a capture-remux or mark passed from automated probes alone.
+do not play a capture-remux. Record the result as subjective playback quality;
+do not use human perception as the precise synchronization measurement and do
+not override a failed automated drift gate.
 
 - [ ] **Step 8: Run the formal 120-second hardware gates**
 
@@ -751,6 +775,10 @@ decode/worker/drop/continuous-frame errors; no stall over 5 seconds; final
 absolute A/V drift <= 100 ms; hardware whole-machine-normalized average process
 CPU for `media_transcode_realtime_video_cli` <= 5%. Record P95/average CPU,
 memory, threads, queue peaks, maximum latency, protocol errors, and drift.
+The formal report must include runtime-timeline and decoded-event startup
+offset, per-event skew series, P50/P95/maximum/final drift, drift slope, matched
+event count, and confidence. Any disagreement between internal scheduling facts
+and decoded output is a failure requiring root-cause analysis.
 
 - [ ] **Step 9: Update evidence and quality score**
 
