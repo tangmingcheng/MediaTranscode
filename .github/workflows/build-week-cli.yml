@@ -1,0 +1,36 @@
+name: Build Week CLI
+
+on:
+  push:
+    branches:
+      - openai-build-week/demo-cli
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build g++ pkg-config \
+            libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev \
+            libswscale-dev libswresample-dev
+
+      - name: Configure
+        run: cmake -S . -B out/build/ci -G Ninja -DMEDIA_TRANSCODE_BUILD_TESTS=ON
+
+      - name: Build
+        run: |
+          cmake --build out/build/ci --target \
+            media_transcode_build_week_cli \
+            media_transcode_build_week_cli_tests \
+            media_transcode_event_runtime_tests \
+            media_transcode_realtime_graph_tests
+
+      - name: Test
+        run: ctest --test-dir out/build/ci --output-on-failure
