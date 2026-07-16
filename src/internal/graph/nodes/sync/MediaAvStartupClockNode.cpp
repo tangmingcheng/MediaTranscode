@@ -2,7 +2,9 @@
 
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/runtime/buffer/MediaAvStartupEnvelopeBuffer.h"
+#include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/buffer/MediaSourceClockStateBuffer.h"
+#include "internal/graph/runtime/channel/MediaRequiredInputReader.h"
 #include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
 
 namespace media::ffmpeg::graph {
@@ -74,11 +76,32 @@ MediaNodeKind MediaAvStartupClockNode::staticKind() noexcept
 ::media::Result<MediaNodeProcessResult> MediaAvStartupClockNode::onProcess(
     MediaGraphExecutionContext& context)
 {
-    auto state = tryPopInputOptional(context, "clock");
+    auto state = tryReadRequiredInput(
+        context.findInputChannel(nodeId(), "clock"),
+        "A/V startup clock", "clock");
     if (!state) {
         return ::media::Result<MediaNodeProcessResult>::failure(state.error());
     }
     if (state.value()) {
+        if (const auto* control = dynamic_cast<const MediaControlBuffer*>(
+                state.value()->get())) {
+            if (control->controlKind() == MediaControlBufferKind::Unknown) {
+                return ::media::Result<MediaNodeProcessResult>::failure(
+                    ::media::ErrorInfo::invalidArgument(
+                        "A/V startup clock rejects unknown control"));
+            }
+            if (!m_generation) {
+                return ::media::Result<MediaNodeProcessResult>::failure(
+                    ::media::ErrorInfo::cancelled(
+                        "A/V startup clock rejects control before source-clock lock"));
+            }
+            const bool finished =
+                control->controlKind() == MediaControlBufferKind::Eof ||
+                control->controlKind() == MediaControlBufferKind::Abort;
+            auto emitted = emitOutput(context, "tick", *state.value());
+            return finished ? processFinished(std::move(emitted))
+                            : processProgress(std::move(emitted));
+        }
         const auto* clockState = dynamic_cast<const MediaSourceClockStateBuffer*>(
             state.value()->get());
         if (!clockState) {

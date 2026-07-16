@@ -2,6 +2,8 @@
 
 #include "internal/graph/runtime/buffer/MediaAvReleasedAudioBuffer.h"
 #include "internal/graph/runtime/buffer/MediaAvStartupEnvelopeBuffer.h"
+#include "internal/graph/runtime/buffer/MediaControlBuffer.h"
+#include "internal/graph/runtime/channel/MediaRequiredInputReader.h"
 
 namespace media::ffmpeg::graph {
 
@@ -31,7 +33,8 @@ void MediaAvBoundReleaseExtractorNode::abort(
 
 ::media::Result<bool> MediaAvBoundReleaseExtractorNode::preflight(
     MediaGraphExecutionContext& context,
-    const MediaAvStartupReleaseBuffer& release) const
+    std::size_t requiredVideoCapacity,
+    std::size_t requiredAudioCapacity) const
 {
     MediaChannel* video = context.findOutputChannel(nodeId(), "video");
     MediaChannel* audio = context.findOutputChannel(nodeId(), "audio");
@@ -39,7 +42,7 @@ void MediaAvBoundReleaseExtractorNode::abort(
         return ::media::Result<bool>::failure(::media::ErrorInfo::notInitialized(
             "A/V bound release extractor requires explicit video and audio outputs"));
     }
-    if (video->closed() || audio->closed()) {
+    if (video->closed() || audio->closed() || video->aborted() || audio->aborted()) {
         return ::media::Result<bool>::failure(::media::ErrorInfo::cancelled(
             "A/V bound release extractor output is closed"));
     }
@@ -50,8 +53,10 @@ void MediaAvBoundReleaseExtractorNode::abort(
         return ::media::Result<bool>::failure(::media::ErrorInfo::invalidArgument(
             "Atomic A/V release requires blocking output queue policy"));
     }
-    const bool videoReady = video->capacity() - video->size() >= release.video().size();
-    const bool audioReady = audio->capacity() - audio->size() >= m_stagedAudio.size();
+    const bool videoReady = video->capacity() - video->size() >=
+                            requiredVideoCapacity;
+    const bool audioReady = audio->capacity() - audio->size() >=
+                            requiredAudioCapacity;
     return ::media::Result<bool>::success(videoReady && audioReady);
 }
 
@@ -106,10 +111,37 @@ void MediaAvBoundReleaseExtractorNode::abort(
 MediaAvBoundReleaseExtractorNode::onProcess(MediaGraphExecutionContext& context)
 {
     if (!m_pending) {
-        auto input = tryPopInputOptional(context, "in");
+        auto input = tryReadRequiredInput(
+            context.findInputChannel(nodeId(), "in"),
+            "A/V bound release extractor", "in");
         if (!input) return ::media::Result<MediaNodeProcessResult>::failure(input.error());
         if (!input.value()) return processWaiting();
         m_pending = std::move(*input.value());
+    }
+    if (const auto* control = dynamic_cast<const MediaControlBuffer*>(
+            m_pending.get())) {
+        if (control->controlKind() == MediaControlBufferKind::Unknown) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "A/V bound release extractor rejects unknown control"));
+        }
+        auto ready = preflight(context, 1, 1);
+        if (!ready) {
+            return ::media::Result<MediaNodeProcessResult>::failure(ready.error());
+        }
+        if (!ready.value()) return processWaiting();
+        MediaChannel* video = context.findOutputChannel(nodeId(), "video");
+        MediaChannel* audio = context.findOutputChannel(nodeId(), "audio");
+        if (video->pushOutcome(m_pending) != MediaQueuePushOutcome::Accepted ||
+            audio->pushOutcome(m_pending) != MediaQueuePushOutcome::Accepted) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                ::media::ErrorInfo::internalError(
+                    "A/V control release commit diverged after preflight"));
+        }
+        const bool finished = control->controlKind() == MediaControlBufferKind::Eof ||
+                              control->controlKind() == MediaControlBufferKind::Abort;
+        m_pending.reset();
+        return finished ? processFinished() : processProgress();
     }
     const auto* release = dynamic_cast<const MediaAvStartupReleaseBuffer*>(m_pending.get());
     if (!release) {
@@ -122,7 +154,8 @@ MediaAvBoundReleaseExtractorNode::onProcess(MediaGraphExecutionContext& context)
             return ::media::Result<MediaNodeProcessResult>::failure(status.error());
         }
     }
-    auto ready = preflight(context, *release);
+    auto ready = preflight(
+        context, release->video().size(), m_stagedAudio.size());
     if (!ready) return ::media::Result<MediaNodeProcessResult>::failure(ready.error());
     if (!ready.value()) return processWaiting();
     auto committed = commit(context, *release);

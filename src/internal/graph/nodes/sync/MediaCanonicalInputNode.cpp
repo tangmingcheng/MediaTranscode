@@ -3,6 +3,8 @@
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/runtime/buffer/FFmpegPacketBuffer.h"
 #include "internal/graph/runtime/buffer/MediaAvStartupEnvelopeBuffer.h"
+#include "internal/graph/runtime/buffer/MediaControlBuffer.h"
+#include "internal/graph/runtime/channel/MediaRequiredInputReader.h"
 #include "internal/graph/sync/MediaCanonicalLineage.h"
 
 extern "C" {
@@ -253,9 +255,24 @@ MediaCanonicalInputNode::canonicalize(
 {
     if (auto configured = configure(context); !configured)
         return processProgress(configured);
-    auto input = tryPopInputOptional(context, "in");
+    auto input = tryReadRequiredInput(
+        context.findInputChannel(nodeId(), "in"),
+        "Canonical input", "in");
     if (!input) return ::media::Result<MediaNodeProcessResult>::failure(input.error());
     if (!input.value()) return processWaiting();
+    if (const auto* control = dynamic_cast<const MediaControlBuffer*>(
+            input.value()->get())) {
+        if (control->controlKind() == MediaControlBufferKind::Unknown) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Canonical input rejects unknown control"));
+        }
+        auto terminal = broadcastControlToAllOutputs(context, *input.value());
+        return control->controlKind() == MediaControlBufferKind::Eof ||
+                       control->controlKind() == MediaControlBufferKind::Abort
+            ? processFinished(std::move(terminal))
+            : processProgress(std::move(terminal));
+    }
     const auto* packet = dynamic_cast<const FFmpegPacketBuffer*>(input.value()->get());
     if (!packet || !packet->sourceTiming())
         return ::media::Result<MediaNodeProcessResult>::failure(

@@ -6,22 +6,30 @@
 
 namespace media::ffmpeg::graph {
 
+class MediaControlBuffer;
+
+enum class MediaStartupReleaseTransactionKind {
+    Release,
+    Control
+};
+
 class MediaStartupReleaseTransactionBuffer final : public MediaBuffer {
 public:
     static ::media::Result<MediaBufferRef> create(MediaBufferRef release);
+    static ::media::Result<MediaBufferRef> createControl(MediaBufferRef control);
 
     MediaBufferType type() const noexcept override;
-    const MediaBufferRef& release() const noexcept;
-    const MediaAvSyncGroupKey& groupKey() const noexcept;
-    MediaAvStartupReleaseKind releaseKind() const noexcept;
-    const MediaPlaybackEpoch& epoch() const noexcept;
-    const MediaAudioPlaybackOrigin& audioOrigin() const noexcept;
+    MediaStartupReleaseTransactionKind transactionKind() const noexcept;
+    const MediaBufferRef& payload() const noexcept;
+    const MediaAvStartupReleaseBuffer* release() const noexcept;
+    const MediaControlBuffer* control() const noexcept;
 
 private:
-    explicit MediaStartupReleaseTransactionBuffer(MediaBufferRef release);
-    const MediaAvStartupReleaseBuffer& typedRelease() const noexcept;
-
-    const MediaBufferRef m_release;
+    MediaStartupReleaseTransactionBuffer(
+        MediaStartupReleaseTransactionKind transactionKind,
+        MediaBufferRef payload);
+    const MediaStartupReleaseTransactionKind m_transactionKind;
+    const MediaBufferRef m_payload;
 };
 
 } // namespace media::ffmpeg::graph

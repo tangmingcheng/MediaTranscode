@@ -1,5 +1,6 @@
 #include "internal/graph/nodes/sync/MediaPlaybackEpochBinderNode.h"
 #include "internal/graph/runtime/buffer/MediaAvStartupEnvelopeBuffer.h"
+#include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/buffer/MediaStartupReleaseTransactionBuffer.h"
 #include "internal/graph/runtime/channel/MediaChannel.h"
 #include "internal/graph/runtime/channel/MediaRequiredInputReader.h"
@@ -47,13 +48,21 @@ MediaPlaybackEpochBinderNode::process(MediaGraphExecutionContext& context)
     }
     const auto* release = dynamic_cast<const MediaAvStartupReleaseBuffer*>(
         m_pendingRelease.get());
-    if (!release || release->groupKey() != m_groupKey) {
+    const auto* control = dynamic_cast<const MediaControlBuffer*>(
+        m_pendingRelease.get());
+    if (!release && !control) {
         return failTerminal(::media::ErrorInfo::invalidArgument(
-            "Playback epoch binder rejects mismatched startup release"));
+            "Playback epoch binder requires a typed release or control"));
     }
-    if (auto status = MediaAvStartupReleaseBuffer::validateReleaseKind(
-            release->releaseKind()); !status) {
-        return failTerminal(status.error());
+    if (release) {
+        if (release->groupKey() != m_groupKey) {
+            return failTerminal(::media::ErrorInfo::invalidArgument(
+                "Playback epoch binder rejects mismatched startup release"));
+        }
+        if (auto status = MediaAvStartupReleaseBuffer::validateReleaseKind(
+                release->releaseKind()); !status) {
+            return failTerminal(status.error());
+        }
     }
     MediaChannel* output = context.findOutputChannel(nodeId(), "transaction");
     if (!output) {
@@ -65,7 +74,7 @@ MediaPlaybackEpochBinderNode::process(MediaGraphExecutionContext& context)
         return failTerminal(::media::ErrorInfo::invalidArgument(
             "Playback epoch binder requires a blocking transaction output"));
     }
-    if (output->closed()) {
+    if (output->closed() || output->aborted()) {
         return failTerminal(::media::ErrorInfo::cancelled(
             "Playback epoch binder transaction output is closed"));
     }
@@ -73,8 +82,9 @@ MediaPlaybackEpochBinderNode::process(MediaGraphExecutionContext& context)
         return ::media::Result<MediaNodeProcessResult>::success(
             MediaNodeProcessResult::waiting());
     }
-    auto transaction = MediaStartupReleaseTransactionBuffer::create(
-        m_pendingRelease);
+    auto transaction = release
+        ? MediaStartupReleaseTransactionBuffer::create(m_pendingRelease)
+        : MediaStartupReleaseTransactionBuffer::createControl(m_pendingRelease);
     if (!transaction) {
         return failTerminal(transaction.error());
     }
@@ -92,9 +102,13 @@ MediaPlaybackEpochBinderNode::process(MediaGraphExecutionContext& context)
                 : ::media::ErrorInfo::internalError(
                       "Playback epoch binder transaction commit failed"));
     }
+    const bool finished = control &&
+        (control->controlKind() == MediaControlBufferKind::Eof ||
+         control->controlKind() == MediaControlBufferKind::Abort);
     m_pendingRelease.reset();
     return ::media::Result<MediaNodeProcessResult>::success(
-        MediaNodeProcessResult::progress());
+        finished ? MediaNodeProcessResult::finished()
+                 : MediaNodeProcessResult::progress());
 }
 
 ::media::Result<MediaNodeProcessResult>

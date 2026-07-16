@@ -9,6 +9,7 @@
 #include "internal/graph/runtime/MediaGraphRuntime.h"
 #include "internal/graph/runtime/buffer/MediaPlaybackEpochActivatedBuffer.h"
 #include "internal/graph/runtime/buffer/MediaStartupReleaseTransactionBuffer.h"
+#include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/buffer/MediaAvStartupEnvelopeBuffer.h"
 #include "internal/graph/runtime/channel/MediaChannel.h"
 #include "internal/graph/runtime/compilation/MediaGraphRuntimeCompiler.h"
@@ -17,6 +18,7 @@
 #include "internal/graph/runtime/factory/MediaRuntimeNodeFactory.h"
 #include "internal/graph/runtime/buffer/MediaRtpClockGroupBuffer.h"
 #include "internal/graph/runtime/buffer/MediaSourceClockStateBuffer.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
 
 #include <chrono>
@@ -299,10 +301,13 @@ void testActivationReleaseTransactionPreservesReferences(TestContext& ctx)
         : nullptr;
     EXPECT_TRUE(ctx, transaction != nullptr);
     if (transaction) {
-        EXPECT_TRUE(ctx, transaction->release() == expectedRelease);
-        EXPECT_EQ(ctx, transaction->groupKey(),
-                  MediaAvSyncGroupKey("task4-group"));
-        EXPECT_EQ(ctx, transaction->epoch(), epoch());
+        EXPECT_TRUE(ctx, transaction->payload() == expectedRelease);
+        EXPECT_TRUE(ctx, transaction->release() != nullptr);
+        if (transaction->release()) {
+            EXPECT_EQ(ctx, transaction->release()->groupKey(),
+                      MediaAvSyncGroupKey("task4-group"));
+            EXPECT_EQ(ctx, transaction->release()->epoch(), epoch());
+        }
     }
 }
 
@@ -400,6 +405,57 @@ void testRequiredInputTerminalStateFailsPermanently(TestContext& ctx)
     verify(true, true);
     verify(false, false);
     verify(false, true);
+}
+
+void testEofTraversesBinderAndSequencerWithoutEpochActivation(TestContext& ctx)
+{
+    auto fixture = startFixture(ctx);
+    if (!fixture->binder || !fixture->sequencer || !fixture->group) return;
+    auto eof = FFmpegBufferFactory::makeEof(MediaStreamKind::Metadata);
+    EXPECT_TRUE(ctx, eof);
+    if (!eof) return;
+    EXPECT_TRUE(ctx, fixture->releaseInput->push(eof.value()));
+    const auto bound = fixture->binder->process(fixture->runtime.context());
+    EXPECT_TRUE(ctx, bound &&
+                         bound.value().state == MediaNodeProcessState::Finished);
+    EXPECT_EQ(ctx, fixture->transaction->size(), static_cast<std::size_t>(1));
+    const auto sequenced = fixture->sequencer->process(
+        fixture->runtime.context());
+    EXPECT_TRUE(ctx, sequenced &&
+                         sequenced.value().state == MediaNodeProcessState::Finished);
+    EXPECT_EQ(ctx, fixture->group->lifecycleState(),
+              MediaAvSyncGroupRuntime::LifecycleState::AwaitingEpoch);
+    EXPECT_EQ(ctx, fixture->firstEvent->size(), static_cast<std::size_t>(0));
+    EXPECT_EQ(ctx, fixture->secondEvent->size(), static_cast<std::size_t>(0));
+    MediaBufferRef output;
+    EXPECT_TRUE(ctx, fixture->boundRelease->tryPop(output));
+    EXPECT_TRUE(ctx, output == eof.value());
+}
+
+void testEofReleaseIsAtomicAcrossBackpressure(TestContext& ctx)
+{
+    auto fixture = startFixture(ctx);
+    if (!fixture->binder || !fixture->sequencer) return;
+    auto filler = makeMediaBufferRef<MediaAvStartupClockBuffer>(ms(0));
+    auto eof = FFmpegBufferFactory::makeEof(MediaStreamKind::Metadata);
+    EXPECT_TRUE(ctx, eof && fixture->boundRelease->push(filler));
+    if (!eof) return;
+    EXPECT_TRUE(ctx, fixture->releaseInput->push(eof.value()));
+    EXPECT_TRUE(ctx, fixture->binder->process(fixture->runtime.context()));
+    const auto blocked = fixture->sequencer->process(fixture->runtime.context());
+    EXPECT_TRUE(ctx, blocked &&
+                         blocked.value().state == MediaNodeProcessState::Waiting);
+    EXPECT_EQ(ctx, fixture->firstEvent->size(), static_cast<std::size_t>(0));
+    EXPECT_EQ(ctx, fixture->secondEvent->size(), static_cast<std::size_t>(0));
+    MediaBufferRef discarded;
+    EXPECT_TRUE(ctx, fixture->boundRelease->tryPop(discarded));
+    const auto committed = fixture->sequencer->process(
+        fixture->runtime.context());
+    EXPECT_TRUE(ctx, committed &&
+                         committed.value().state == MediaNodeProcessState::Finished);
+    MediaBufferRef output;
+    EXPECT_TRUE(ctx, fixture->boundRelease->tryPop(output));
+    EXPECT_TRUE(ctx, output == eof.value());
 }
 
 void testBinderWaitsForTransactionCapacityBeforeActivation(TestContext& ctx)
@@ -671,6 +727,147 @@ void testRtpAdapterPublishesGenericLockedState(TestContext& ctx)
                          state->generation() == 1);
 }
 
+void testControlTransactionPreservesExactReference(TestContext& ctx)
+{
+    auto eof = FFmpegBufferFactory::makeEof(MediaStreamKind::Metadata);
+    EXPECT_TRUE(ctx, eof);
+    if (!eof) return;
+    auto envelope = MediaStartupReleaseTransactionBuffer::createControl(
+        eof.value());
+    EXPECT_TRUE(ctx, envelope);
+    const auto* transaction = envelope
+        ? dynamic_cast<const MediaStartupReleaseTransactionBuffer*>(
+              envelope.value().get())
+        : nullptr;
+    EXPECT_TRUE(ctx, transaction != nullptr);
+    if (transaction) {
+        EXPECT_EQ(ctx, transaction->transactionKind(),
+                  MediaStartupReleaseTransactionKind::Control);
+        EXPECT_TRUE(ctx, transaction->payload() == eof.value());
+    }
+    EXPECT_FALSE(ctx, MediaStartupReleaseTransactionBuffer::createControl(
+                          makeMediaBufferRef<MediaControlBuffer>(
+                              MediaControlBufferKind::Unknown)));
+}
+
+void testRtpAdapterPropagatesTerminalWithoutInventingClockState(TestContext& ctx)
+{
+    MediaGraph graph;
+    const auto source = graph.addNode(MediaNodeKind::DebugDump, "source");
+    const auto adapter = graph.addNode(
+        MediaNodeKind::RtpSourceClockStateAdapter, "adapter");
+    const auto sink = graph.addNode(MediaNodeKind::DebugDump, "sink");
+    graph.addOutputPort(source, "clock", MediaStreamKind::Metadata,
+                        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+    graph.addInputPort(adapter, "clock", MediaStreamKind::Metadata,
+                       MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+    graph.addOutputPort(adapter, "state", MediaStreamKind::Metadata,
+                        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+    graph.addInputPort(sink, "state", MediaStreamKind::Metadata,
+                       MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(2);
+    graph.connect(source, "clock", adapter, "clock", "clock", policy);
+    graph.connect(adapter, "state", sink, "state", "state", policy);
+    MediaGraphExecutionContext execution;
+    EXPECT_TRUE(ctx, execution.compile(graph));
+    MediaRtpSourceClockStateAdapterNode node(adapter);
+    auto eof = FFmpegBufferFactory::makeEof(MediaStreamKind::Metadata);
+    EXPECT_TRUE(ctx, eof);
+    EXPECT_TRUE(ctx, execution.findInputChannel(adapter, "clock")->push(eof.value()));
+    const auto result = node.process(execution);
+    EXPECT_TRUE(ctx, result &&
+                         result.value().state == MediaNodeProcessState::Finished);
+    MediaBufferRef output;
+    EXPECT_TRUE(ctx, execution.findInputChannel(sink, "state")->tryPop(output));
+    EXPECT_TRUE(ctx, output == eof.value() && output->isEof());
+    EXPECT_TRUE(ctx, execution.findInputChannel(sink, "state")->size() == 0);
+}
+
+void testTypedControlsTraverseReleaseWithoutActivation(TestContext& ctx)
+{
+    for (const auto kind : {MediaControlBufferKind::Flush,
+                            MediaControlBufferKind::Abort}) {
+        auto fixture = startFixture(ctx);
+        if (!fixture->binder || !fixture->sequencer || !fixture->group) return;
+        auto control = makeMediaBufferRef<MediaControlBuffer>(kind);
+        EXPECT_TRUE(ctx, fixture->releaseInput->push(control));
+        const auto expected = kind == MediaControlBufferKind::Flush
+            ? MediaNodeProcessState::Progress
+            : MediaNodeProcessState::Finished;
+        const auto bound = fixture->binder->process(fixture->runtime.context());
+        const auto sequenced = fixture->sequencer->process(
+            fixture->runtime.context());
+        EXPECT_TRUE(ctx, bound && bound.value().state == expected);
+        EXPECT_TRUE(ctx, sequenced && sequenced.value().state == expected);
+        EXPECT_EQ(ctx, fixture->group->lifecycleState(),
+                  MediaAvSyncGroupRuntime::LifecycleState::AwaitingEpoch);
+        EXPECT_EQ(ctx, fixture->firstEvent->size(), static_cast<std::size_t>(0));
+        EXPECT_EQ(ctx, fixture->secondEvent->size(), static_cast<std::size_t>(0));
+        MediaBufferRef output;
+        EXPECT_TRUE(ctx, fixture->boundRelease->tryPop(output));
+        EXPECT_TRUE(ctx, output == control);
+    }
+}
+
+void testRtpAdapterPropagatesTypedControlsAndFailsClosed(TestContext& ctx)
+{
+    const auto verify = [&](std::optional<MediaControlBufferKind> kind,
+                            bool abortInput) {
+        MediaGraph graph;
+        const auto source = graph.addNode(MediaNodeKind::DebugDump, "source");
+        const auto adapter = graph.addNode(
+            MediaNodeKind::RtpSourceClockStateAdapter, "adapter");
+        const auto sink = graph.addNode(MediaNodeKind::DebugDump, "sink");
+        graph.addOutputPort(source, "clock", MediaStreamKind::Metadata,
+                            MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+        graph.addInputPort(adapter, "clock", MediaStreamKind::Metadata,
+                           MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+        graph.addOutputPort(adapter, "state", MediaStreamKind::Metadata,
+                            MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+        graph.addInputPort(sink, "state", MediaStreamKind::Metadata,
+                           MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+        const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(2);
+        graph.connect(source, "clock", adapter, "clock", "clock", policy);
+        graph.connect(adapter, "state", sink, "state", "state", policy);
+        MediaGraphExecutionContext execution;
+        EXPECT_TRUE(ctx, execution.compile(graph));
+        MediaRtpSourceClockStateAdapterNode node(adapter);
+        MediaBufferRef control;
+        if (kind) {
+            control = makeMediaBufferRef<MediaControlBuffer>(*kind);
+            EXPECT_TRUE(ctx, execution.findInputChannel(adapter, "clock")->push(
+                                 control));
+        } else if (abortInput) {
+            execution.findInputChannel(adapter, "clock")->abort();
+        } else {
+            execution.findInputChannel(adapter, "clock")->close();
+        }
+        const auto result = node.process(execution);
+        if (!kind) {
+            EXPECT_FALSE(ctx, result);
+            if (!result) EXPECT_EQ(ctx, result.error().code, ::media::ErrorCode::Cancelled);
+            const auto repeated = node.process(execution);
+            EXPECT_FALSE(ctx, repeated);
+            if (!result && !repeated) {
+                EXPECT_EQ(ctx, repeated.error().code, result.error().code);
+                EXPECT_EQ(ctx, repeated.error().message, result.error().message);
+            }
+            return;
+        }
+        const auto expected = *kind == MediaControlBufferKind::Flush
+            ? MediaNodeProcessState::Progress
+            : MediaNodeProcessState::Finished;
+        EXPECT_TRUE(ctx, result && result.value().state == expected);
+        MediaBufferRef output;
+        EXPECT_TRUE(ctx, execution.findInputChannel(sink, "state")->tryPop(output));
+        EXPECT_TRUE(ctx, output == control);
+    };
+    verify(MediaControlBufferKind::Flush, false);
+    verify(MediaControlBufferKind::Abort, false);
+    verify(std::nullopt, false);
+    verify(std::nullopt, true);
+}
+
 void testStartupClockUsesRegisteredMasterDeadline(TestContext& ctx)
 {
     auto fixture = binderFixture();
@@ -726,7 +923,112 @@ void testStartupClockUsesRegisteredMasterDeadline(TestContext& ctx)
     master->set(ms(110));
     EXPECT_TRUE(ctx, node->process(runtime.context()));
     EXPECT_TRUE(ctx, runtime.context().findInputChannel(sink, "tick")->size() == 1);
-    EXPECT_TRUE(ctx, node->stop(runtime.context()));
+    MediaBufferRef second;
+    EXPECT_TRUE(ctx, runtime.context().findInputChannel(sink, "tick")->tryPop(second));
+    auto flush = makeMediaBufferRef<MediaControlBuffer>(
+        MediaControlBufferKind::Flush);
+    EXPECT_TRUE(ctx, runtime.context().findInputChannel(clockNode, "clock")->push(
+                         flush));
+    const auto flushed = node->process(runtime.context());
+    EXPECT_TRUE(ctx, flushed && flushed.value().state ==
+                                    MediaNodeProcessState::Progress);
+    MediaBufferRef forwardedFlush;
+    EXPECT_TRUE(ctx, runtime.context().findInputChannel(sink, "tick")->tryPop(
+                         forwardedFlush));
+    EXPECT_TRUE(ctx, forwardedFlush == flush);
+    auto eof = FFmpegBufferFactory::makeEof(MediaStreamKind::Metadata);
+    EXPECT_TRUE(ctx, eof);
+    if (eof) {
+        EXPECT_TRUE(ctx, runtime.context().findInputChannel(clockNode, "clock")->push(
+                             eof.value()));
+        const auto terminal = node->process(runtime.context());
+        EXPECT_TRUE(ctx, terminal && terminal.value().state ==
+                                         MediaNodeProcessState::Finished);
+        MediaBufferRef forwarded;
+        EXPECT_TRUE(ctx, runtime.context().findInputChannel(sink, "tick")->tryPop(
+                             forwarded));
+        EXPECT_TRUE(ctx, forwarded == eof.value());
+    }
+}
+
+void testStartupClockFailsClosedBeforeLockAndOnMissingTerminal(TestContext& ctx)
+{
+    const auto verify = [&](int termination) {
+        auto fixture = binderFixture();
+        const auto source = fixture.executable.graph.addNode(
+            MediaNodeKind::DebugDump, "clock-state-source");
+        const auto clockNode = fixture.executable.graph.addNode(
+            MediaNodeKind::AvStartupClock, "startup-clock");
+        const auto sink = fixture.executable.graph.addNode(
+            MediaNodeKind::DebugDump, "tick-sink");
+        fixture.executable.graph.setNodeOption(
+            clockNode, "av_startup_clock.sync_group", "task4-group");
+        fixture.executable.graph.setNodeOption(
+            clockNode, "av_startup_clock.interval_ns", "10000000");
+        fixture.executable.graph.addOutputPort(
+            source, "state", MediaStreamKind::Metadata,
+            MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+        fixture.executable.graph.addInputPort(
+            clockNode, "clock", MediaStreamKind::Metadata,
+            MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+        fixture.executable.graph.addOutputPort(
+            clockNode, "tick", MediaStreamKind::Metadata,
+            MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+        fixture.executable.graph.addInputPort(
+            sink, "tick", MediaStreamKind::Metadata,
+            MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+        const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(2);
+        fixture.executable.graph.connect(
+            source, "state", clockNode, "clock", "state", policy);
+        fixture.executable.graph.connect(
+            clockNode, "tick", sink, "tick", "tick", policy);
+        MediaGraphRuntime runtime;
+        EXPECT_TRUE(ctx, runtime.compile(std::move(fixture.executable)));
+        EXPECT_TRUE(ctx, runtime.registerDefaultRuntimeNodes());
+        auto* node = dynamic_cast<MediaAvStartupClockNode*>(
+            runtime.scheduler().findNode(clockNode));
+        EXPECT_TRUE(ctx, node != nullptr);
+        if (!node) return;
+        EXPECT_TRUE(ctx, node->start(runtime.context()));
+        MediaChannel* input = runtime.context().findInputChannel(clockNode, "clock");
+        if (termination == 3) {
+            EXPECT_TRUE(ctx, input->push(
+                                 makeMediaBufferRef<MediaSourceClockStateBuffer>(
+                                     MediaSourceClockReadiness::Locked, 1, false)));
+            EXPECT_TRUE(ctx, node->process(runtime.context()));
+            MediaBufferRef tick;
+            EXPECT_TRUE(ctx, runtime.context().findInputChannel(sink, "tick")->tryPop(
+                                 tick));
+            auto abort = makeMediaBufferRef<MediaControlBuffer>(
+                MediaControlBufferKind::Abort);
+            EXPECT_TRUE(ctx, input->push(abort));
+            const auto finished = node->process(runtime.context());
+            EXPECT_TRUE(ctx, finished && finished.value().state ==
+                                              MediaNodeProcessState::Finished);
+            MediaBufferRef forwarded;
+            EXPECT_TRUE(ctx, runtime.context().findInputChannel(sink, "tick")->tryPop(
+                                 forwarded));
+            EXPECT_TRUE(ctx, forwarded == abort);
+            return;
+        }
+        if (termination == 0) {
+            auto eof = FFmpegBufferFactory::makeEof(MediaStreamKind::Metadata);
+            EXPECT_TRUE(ctx, eof && input->push(eof.value()));
+        } else if (termination == 1) {
+            input->close();
+        } else {
+            input->abort();
+        }
+        const auto failed = node->process(runtime.context());
+        EXPECT_FALSE(ctx, failed);
+        if (!failed) EXPECT_EQ(ctx, failed.error().code, ::media::ErrorCode::Cancelled);
+        EXPECT_EQ(ctx, runtime.context().findInputChannel(sink, "tick")->size(),
+                  static_cast<std::size_t>(0));
+    };
+    verify(0);
+    verify(1);
+    verify(2);
+    verify(3);
 }
 
 } // namespace
@@ -737,8 +1039,12 @@ int main()
     testTaskFourRuntimeKindsAreAppendOnly(ctx);
     testActivatedEventIsCompleteAndImmutable(ctx);
     testActivationReleaseTransactionPreservesReferences(ctx);
+    testControlTransactionPreservesExactReference(ctx);
     testOpenEmptyRequiredInputsRemainWaiting(ctx);
     testRequiredInputTerminalStateFailsPermanently(ctx);
+    testEofTraversesBinderAndSequencerWithoutEpochActivation(ctx);
+    testEofReleaseIsAtomicAcrossBackpressure(ctx);
+    testTypedControlsTraverseReleaseWithoutActivation(ctx);
     testBinderWaitsForTransactionCapacityBeforeActivation(ctx);
     testSequencerCommitsOneEventToAllTargetsBeforeRelease(ctx);
     testEveryBlockedSequencerTargetPreventsPrefixVisibility(ctx);
@@ -748,6 +1054,9 @@ int main()
     testThreadedStopAndAbortDiscardRetainedReleaseTransaction(ctx);
     testTaskFourFactorySurfaceIsComplete(ctx);
     testRtpAdapterPublishesGenericLockedState(ctx);
+    testRtpAdapterPropagatesTerminalWithoutInventingClockState(ctx);
+    testRtpAdapterPropagatesTypedControlsAndFailsClosed(ctx);
     testStartupClockUsesRegisteredMasterDeadline(ctx);
+    testStartupClockFailsClosedBeforeLockAndOnMissingTerminal(ctx);
     return ctx.failures == 0 ? 0 : 1;
 }

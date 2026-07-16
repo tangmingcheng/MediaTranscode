@@ -1,4 +1,5 @@
 #include "internal/graph/runtime/buffer/MediaStartupReleaseTransactionBuffer.h"
+#include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 
 #include <utility>
 
@@ -23,12 +24,31 @@ namespace media::ffmpeg::graph {
         return ::media::Result<MediaBufferRef>::failure(status.error());
     }
     return ::media::Result<MediaBufferRef>::success(MediaBufferRef(
-        new MediaStartupReleaseTransactionBuffer(std::move(release))));
+        new MediaStartupReleaseTransactionBuffer(
+            MediaStartupReleaseTransactionKind::Release,
+            std::move(release))));
+}
+
+::media::Result<MediaBufferRef>
+MediaStartupReleaseTransactionBuffer::createControl(MediaBufferRef control)
+{
+    const auto* typed = dynamic_cast<const MediaControlBuffer*>(control.get());
+    if (!typed || typed->controlKind() == MediaControlBufferKind::Unknown) {
+        return ::media::Result<MediaBufferRef>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Startup release transaction requires a typed control"));
+    }
+    return ::media::Result<MediaBufferRef>::success(MediaBufferRef(
+        new MediaStartupReleaseTransactionBuffer(
+            MediaStartupReleaseTransactionKind::Control,
+            std::move(control))));
 }
 
 MediaStartupReleaseTransactionBuffer::MediaStartupReleaseTransactionBuffer(
-    MediaBufferRef release)
-    : m_release(std::move(release))
+    MediaStartupReleaseTransactionKind transactionKind,
+    MediaBufferRef payload)
+    : m_transactionKind(transactionKind)
+    , m_payload(std::move(payload))
 {
     setStreamKind(MediaStreamKind::Metadata);
     setPayloadKind(MediaPayloadKind::GraphEvent);
@@ -40,40 +60,31 @@ MediaBufferType MediaStartupReleaseTransactionBuffer::type() const noexcept
     return MediaBufferType::Event;
 }
 
-const MediaBufferRef&
+MediaStartupReleaseTransactionKind
+MediaStartupReleaseTransactionBuffer::transactionKind() const noexcept
+{
+    return m_transactionKind;
+}
+
+const MediaBufferRef& MediaStartupReleaseTransactionBuffer::payload() const noexcept
+{
+    return m_payload;
+}
+
+const MediaAvStartupReleaseBuffer*
 MediaStartupReleaseTransactionBuffer::release() const noexcept
 {
-    return m_release;
+    return m_transactionKind == MediaStartupReleaseTransactionKind::Release
+        ? dynamic_cast<const MediaAvStartupReleaseBuffer*>(m_payload.get())
+        : nullptr;
 }
 
-const MediaAvSyncGroupKey&
-MediaStartupReleaseTransactionBuffer::groupKey() const noexcept
+const MediaControlBuffer*
+MediaStartupReleaseTransactionBuffer::control() const noexcept
 {
-    return typedRelease().groupKey();
-}
-
-MediaAvStartupReleaseKind
-MediaStartupReleaseTransactionBuffer::releaseKind() const noexcept
-{
-    return typedRelease().releaseKind();
-}
-
-const MediaPlaybackEpoch&
-MediaStartupReleaseTransactionBuffer::epoch() const noexcept
-{
-    return typedRelease().epoch();
-}
-
-const MediaAudioPlaybackOrigin&
-MediaStartupReleaseTransactionBuffer::audioOrigin() const noexcept
-{
-    return typedRelease().audioOrigin();
-}
-
-const MediaAvStartupReleaseBuffer&
-MediaStartupReleaseTransactionBuffer::typedRelease() const noexcept
-{
-    return static_cast<const MediaAvStartupReleaseBuffer&>(*m_release);
+    return m_transactionKind == MediaStartupReleaseTransactionKind::Control
+        ? dynamic_cast<const MediaControlBuffer*>(m_payload.get())
+        : nullptr;
 }
 
 } // namespace media::ffmpeg::graph

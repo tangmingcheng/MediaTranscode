@@ -2,6 +2,8 @@
 
 #include "internal/graph/runtime/buffer/MediaRtpClockGroupBuffer.h"
 #include "internal/graph/runtime/buffer/MediaSourceClockStateBuffer.h"
+#include "internal/graph/runtime/buffer/MediaControlBuffer.h"
+#include "internal/graph/runtime/channel/MediaRequiredInputReader.h"
 
 namespace media::ffmpeg::graph {
 
@@ -21,11 +23,26 @@ MediaNodeKind MediaRtpSourceClockStateAdapterNode::staticKind() noexcept
 MediaRtpSourceClockStateAdapterNode::onProcess(
     MediaGraphExecutionContext& context)
 {
-    auto input = tryPopInputOptional(context, "clock");
+    auto input = tryReadRequiredInput(
+        context.findInputChannel(nodeId(), "clock"),
+        "RTP source-clock state adapter", "clock");
     if (!input) {
         return ::media::Result<MediaNodeProcessResult>::failure(input.error());
     }
     if (!input.value()) return processWaiting();
+    if (const auto* control = dynamic_cast<const MediaControlBuffer*>(
+            input.value()->get())) {
+        if (control->controlKind() == MediaControlBufferKind::Unknown) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "RTP source-clock state adapter rejects unknown control"));
+        }
+        auto terminal = broadcastControlToAllOutputs(context, *input.value());
+        return control->controlKind() == MediaControlBufferKind::Eof ||
+                       control->controlKind() == MediaControlBufferKind::Abort
+            ? processFinished(std::move(terminal))
+            : processProgress(std::move(terminal));
+    }
     const auto* clock = dynamic_cast<const MediaRtpClockGroupBuffer*>(
         input.value()->get());
     if (!clock) {

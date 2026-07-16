@@ -11,6 +11,7 @@
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 #include "internal/graph/runtime/factory/MediaRuntimeNodeFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
+#include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/sync/MediaAvEpochTransitionService.h"
 #include "internal/graph/sync/startup/MediaInitialClockAcquisitionDeadline.h"
 #include "internal/graph/time/MediaMasterClock.h"
@@ -470,6 +471,49 @@ void canonicalInputUsesExactAudioSampleSpanAndRejectsInvalidTiming()
     assert(!noRuntimeTimeBase.runtime->process(noRuntimeTimeBase.execution));
 }
 
+void canonicalInputPropagatesTerminalWithoutInventingMedia()
+{
+    CanonicalHarness harness(MediaStreamKind::Audio, "audio_samples", 48'000, 960);
+    auto eof = FFmpegBufferFactory::makeEof(MediaStreamKind::Audio);
+    assert(eof);
+    assert(harness.input()->push(eof.value()));
+    const auto result = harness.runtime->process(harness.execution);
+    assert(result);
+    assert(result.value().state == MediaNodeProcessState::Finished);
+    MediaBufferRef output;
+    assert(harness.output()->tryPop(output));
+    assert(output == eof.value());
+    assert(output->isEof());
+    assert(harness.output()->size() == 0);
+}
+
+void canonicalInputPropagatesExplicitAbortAndFailsClosedOnMissingTerminal()
+{
+    for (const auto kind : {MediaControlBufferKind::Flush,
+                            MediaControlBufferKind::Abort}) {
+        CanonicalHarness harness(MediaStreamKind::Audio, "audio_samples", 48'000, 960);
+        auto control = makeMediaBufferRef<MediaControlBuffer>(kind);
+        assert(harness.input()->push(control));
+        const auto result = harness.runtime->process(harness.execution);
+        assert(result && result.value().state ==
+                             (kind == MediaControlBufferKind::Abort
+                                  ? MediaNodeProcessState::Finished
+                                  : MediaNodeProcessState::Progress));
+        MediaBufferRef output;
+        assert(harness.output()->tryPop(output) && output == control);
+    }
+    for (const bool abortChannel : {false, true}) {
+        CanonicalHarness harness(MediaStreamKind::Audio, "audio_samples", 48'000, 960);
+        if (abortChannel) harness.input()->abort();
+        else harness.input()->close();
+        const auto result = harness.runtime->process(harness.execution);
+        assert(!result && result.error().code == ::media::ErrorCode::Cancelled);
+        const auto repeated = harness.runtime->process(harness.execution);
+        assert(!repeated && repeated.error().code == result.error().code &&
+               repeated.error().message == result.error().message);
+    }
+}
+
 void nodeKindFactoryAndDiagnosticsAreComplete()
 {
     MediaGraph graph;
@@ -493,6 +537,8 @@ int main()
     gateDeadlinePreflightPrecedesAllQueuedEvidence();
     canonicalInputUsesRuntimeGenerationAndRtpTsPacketDuration();
     canonicalInputUsesExactAudioSampleSpanAndRejectsInvalidTiming();
+    canonicalInputPropagatesTerminalWithoutInventingMedia();
+    canonicalInputPropagatesExplicitAbortAndFailsClosedOnMissingTerminal();
     nodeKindFactoryAndDiagnosticsAreComplete();
     return 0;
 }

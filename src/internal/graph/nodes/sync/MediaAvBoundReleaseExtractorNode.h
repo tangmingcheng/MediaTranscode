@@ -20,8 +20,10 @@ protected:
         MediaGraphExecutionContext& context) override;
 
 private:
-    ::media::Result<bool> preflight(MediaGraphExecutionContext& context,
-                                    const MediaAvStartupReleaseBuffer& release) const;
+    ::media::Result<bool> preflight(
+        MediaGraphExecutionContext& context,
+        std::size_t requiredVideoCapacity,
+        std::size_t requiredAudioCapacity) const;
     ::media::Status commit(MediaGraphExecutionContext& context,
                            const MediaAvStartupReleaseBuffer& release);
     ::media::Status stageAudio(const MediaAvStartupReleaseBuffer& release);

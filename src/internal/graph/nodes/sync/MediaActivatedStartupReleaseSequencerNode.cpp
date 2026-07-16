@@ -3,6 +3,7 @@
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/runtime/buffer/MediaPlaybackEpochActivatedBuffer.h"
 #include "internal/graph/runtime/buffer/MediaStartupReleaseTransactionBuffer.h"
+#include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/channel/MediaChannel.h"
 #include "internal/graph/runtime/channel/MediaRequiredInputReader.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
@@ -129,17 +130,13 @@ MediaActivatedStartupReleaseSequencerNode::process(
     const auto* transaction =
         dynamic_cast<const MediaStartupReleaseTransactionBuffer*>(
             m_pendingTransaction.get());
-    if (!transaction || transaction->groupKey() != m_groupKey) {
+    if (!transaction) {
         return failTerminal(
             ::media::ErrorInfo::invalidArgument(
-                "Activation release sequencer rejects a mismatched transaction"));
+                "Activation release sequencer requires a typed transaction"));
     }
 
-    auto eventChannels = channelsForPort(context, nodeId(), "activated");
     auto releaseChannels = channelsForPort(context, nodeId(), "bound_release");
-    if (!eventChannels) {
-        return failTerminal(eventChannels.error());
-    }
     if (!releaseChannels) {
         return failTerminal(releaseChannels.error());
     }
@@ -148,20 +145,55 @@ MediaActivatedStartupReleaseSequencerNode::process(
             ::media::ErrorInfo::invalidArgument(
                 "Activation release sequencer requires one release target"));
     }
-    auto eventReady = preflight(eventChannels.value());
     auto releaseReady = preflight(releaseChannels.value());
-    if (!eventReady) {
-        return failTerminal(eventReady.error());
-    }
     if (!releaseReady) {
         return failTerminal(releaseReady.error());
     }
-    if (!eventReady.value() || !releaseReady.value()) {
+    if (!releaseReady.value()) {
         return ::media::Result<MediaNodeProcessResult>::success(
             MediaNodeProcessResult::waiting());
     }
 
-    switch (transaction->releaseKind()) {
+    if (transaction->transactionKind() ==
+        MediaStartupReleaseTransactionKind::Control) {
+        const auto* control = transaction->control();
+        if (!control) {
+            return failTerminal(::media::ErrorInfo::invalidArgument(
+                "Activation release sequencer rejects an invalid control transaction"));
+        }
+        if (auto status = commit(*releaseChannels.value().front(),
+                                 transaction->payload()); !status) {
+            return failTerminal(status.error());
+        }
+        const bool finished =
+            control->controlKind() == MediaControlBufferKind::Eof ||
+            control->controlKind() == MediaControlBufferKind::Abort;
+        m_pendingTransaction.reset();
+        return ::media::Result<MediaNodeProcessResult>::success(
+            finished ? MediaNodeProcessResult::finished()
+                     : MediaNodeProcessResult::progress());
+    }
+
+    const auto* release = transaction->release();
+    if (!release || release->groupKey() != m_groupKey) {
+        return failTerminal(
+            ::media::ErrorInfo::invalidArgument(
+                "Activation release sequencer rejects a mismatched transaction"));
+    }
+    auto eventChannels = channelsForPort(context, nodeId(), "activated");
+    if (!eventChannels) {
+        return failTerminal(eventChannels.error());
+    }
+    auto eventReady = preflight(eventChannels.value());
+    if (!eventReady) {
+        return failTerminal(eventReady.error());
+    }
+    if (!eventReady.value()) {
+        return ::media::Result<MediaNodeProcessResult>::success(
+            MediaNodeProcessResult::waiting());
+    }
+
+    switch (release->releaseKind()) {
     case MediaAvStartupReleaseKind::InitialAtomicRelease: {
         if (m_activatedEvent) {
             return failTerminal(
@@ -169,12 +201,12 @@ MediaActivatedStartupReleaseSequencerNode::process(
                     "Activation release sequencer rejects duplicate initial activation"));
         }
         auto event = MediaPlaybackEpochActivatedBuffer::create(
-            m_groupKey, transaction->epoch(), transaction->audioOrigin());
+            m_groupKey, release->epoch(), release->audioOrigin());
         if (!event) {
             return failTerminal(event.error());
         }
         if (auto activated = m_capability.activateInitial(
-                transaction->epoch(), transaction->audioOrigin()); !activated) {
+                release->epoch(), release->audioOrigin()); !activated) {
             return failTerminal(activated.error());
         }
         m_activatedEvent = std::move(event).value();
@@ -183,9 +215,9 @@ MediaActivatedStartupReleaseSequencerNode::process(
     case MediaAvStartupReleaseKind::ActiveEpochPassThrough: {
         const auto* event = dynamic_cast<const MediaPlaybackEpochActivatedBuffer*>(
             m_activatedEvent.get());
-        if (!event || event->groupKey() != transaction->groupKey() ||
-            event->epoch() != transaction->epoch() ||
-            event->audioOrigin() != transaction->audioOrigin()) {
+        if (!event || event->groupKey() != release->groupKey() ||
+            event->epoch() != release->epoch() ||
+            event->audioOrigin() != release->audioOrigin()) {
             return failTerminal(
                 ::media::ErrorInfo::invalidArgument(
                     "Activation release sequencer rejects pass-through before matching activation"));
@@ -200,7 +232,7 @@ MediaActivatedStartupReleaseSequencerNode::process(
         }
     }
     if (auto status = commit(*releaseChannels.value().front(),
-                             transaction->release()); !status) {
+                             transaction->payload()); !status) {
         return failTerminal(status.error());
     }
     m_pendingTransaction.reset();

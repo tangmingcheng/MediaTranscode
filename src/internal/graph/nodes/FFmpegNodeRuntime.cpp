@@ -151,12 +151,6 @@ bool isStreamCompatibleControlBuffer(
     if (!control) {
         return false;
     }
-    const auto channelStream = channel.binding().streamKind;
-    if (buffer->streamKind() != MediaStreamKind::Control &&
-        !isWildcardStream(channelStream) &&
-        buffer->streamKind() != channelStream) {
-        return false;
-    }
     switch (control->controlKind()) {
     case MediaControlBufferKind::Eof:
     case MediaControlBufferKind::Flush:

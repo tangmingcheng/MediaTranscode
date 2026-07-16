@@ -9,6 +9,7 @@
 #include "internal/graph/runtime/buffer/FFmpegFrameBuffer.h"
 #include "internal/graph/runtime/buffer/MediaAvStartupEnvelopeBuffer.h"
 #include "internal/graph/runtime/buffer/MediaAvReleasedAudioBuffer.h"
+#include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/sync/MediaCanonicalAudioSamplesBuffer.h"
 #include "internal/graph/sync/MediaCanonicalVideoFrameBuffer.h"
@@ -504,6 +505,126 @@ void testExtractorPreservesAudioTrimAndIdentity(TestContext& ctx)
     }
 }
 
+void testExtractorAtomicallyFansOutExactEofReference(TestContext& ctx)
+{
+    MediaGraph graph;
+    const auto source = graph.addNode(MediaNodeKind::DebugDump, "source");
+    const auto extractor = graph.addNode(
+        MediaNodeKind::AvBoundReleaseExtractor, "extractor");
+    const auto videoSink = graph.addNode(MediaNodeKind::DebugDump, "video");
+    const auto audioSink = graph.addNode(MediaNodeKind::DebugDump, "audio");
+    graph.addOutputPort(source, "out", MediaStreamKind::Metadata,
+                        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+    graph.addInputPort(extractor, "in", MediaStreamKind::Metadata,
+                       MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+    graph.addOutputPort(extractor, "video", MediaStreamKind::Video,
+                        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+    graph.addOutputPort(extractor, "audio", MediaStreamKind::Audio,
+                        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+    graph.addInputPort(videoSink, "in", MediaStreamKind::Video,
+                       MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+    graph.addInputPort(audioSink, "in", MediaStreamKind::Audio,
+                       MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+    graph.connect(source, "out", extractor, "in", "release",
+                  MediaGraphBuildSupport::blockingQueuePolicy(2));
+    graph.connect(extractor, "video", videoSink, "in", "video",
+                  MediaGraphBuildSupport::blockingQueuePolicy(1));
+    graph.connect(extractor, "audio", audioSink, "in", "audio",
+                  MediaGraphBuildSupport::blockingQueuePolicy(1));
+    MediaGraphExecutionContext execution;
+    EXPECT_TRUE(ctx, execution.compile(graph));
+    MediaAvBoundReleaseExtractorNode node(extractor);
+    EXPECT_TRUE(ctx, node.start(execution));
+    auto eof = FFmpegBufferFactory::makeEof(MediaStreamKind::Metadata);
+    EXPECT_TRUE(ctx, eof);
+    if (!eof) return;
+    auto blocker = packet(MediaStreamKind::Audio);
+    EXPECT_TRUE(ctx, execution.findOutputChannel(extractor, "audio")->push(blocker));
+    EXPECT_TRUE(ctx, execution.findInputChannel(extractor, "in")->push(eof.value()));
+    const auto blocked = node.process(execution);
+    EXPECT_TRUE(ctx, blocked && blocked.value().state == MediaNodeProcessState::Waiting);
+    EXPECT_EQ(ctx, execution.findOutputChannel(extractor, "video")->size(),
+              static_cast<std::size_t>(0));
+    MediaBufferRef discarded;
+    EXPECT_TRUE(ctx, execution.findOutputChannel(extractor, "audio")->tryPop(discarded));
+    const auto committed = node.process(execution);
+    EXPECT_TRUE(ctx, committed && committed.value().state ==
+                                      MediaNodeProcessState::Finished);
+    MediaBufferRef video;
+    MediaBufferRef audio;
+    EXPECT_TRUE(ctx, execution.findOutputChannel(extractor, "video")->tryPop(video));
+    EXPECT_TRUE(ctx, execution.findOutputChannel(extractor, "audio")->tryPop(audio));
+    EXPECT_TRUE(ctx, video == eof.value() && audio == eof.value());
+}
+
+void testExtractorHandlesTypedControlsAndRequiredInputTermination(TestContext& ctx)
+{
+    const auto verify = [&](std::optional<MediaControlBufferKind> kind,
+                            bool abortInput) {
+        MediaGraph graph;
+        const auto source = graph.addNode(MediaNodeKind::DebugDump, "source");
+        const auto extractor = graph.addNode(
+            MediaNodeKind::AvBoundReleaseExtractor, "extractor");
+        const auto videoSink = graph.addNode(MediaNodeKind::DebugDump, "video");
+        const auto audioSink = graph.addNode(MediaNodeKind::DebugDump, "audio");
+        graph.addOutputPort(source, "out", MediaStreamKind::Metadata,
+                            MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+        graph.addInputPort(extractor, "in", MediaStreamKind::Metadata,
+                           MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+        graph.addOutputPort(extractor, "video", MediaStreamKind::Video,
+                            MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+        graph.addOutputPort(extractor, "audio", MediaStreamKind::Audio,
+                            MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+        graph.addInputPort(videoSink, "in", MediaStreamKind::Video,
+                           MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+        graph.addInputPort(audioSink, "in", MediaStreamKind::Audio,
+                           MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+        const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(1);
+        graph.connect(source, "out", extractor, "in", "release", policy);
+        graph.connect(extractor, "video", videoSink, "in", "video", policy);
+        graph.connect(extractor, "audio", audioSink, "in", "audio", policy);
+        MediaGraphExecutionContext execution;
+        EXPECT_TRUE(ctx, execution.compile(graph));
+        MediaAvBoundReleaseExtractorNode node(extractor);
+        EXPECT_TRUE(ctx, node.start(execution));
+        MediaBufferRef control;
+        if (kind) {
+            control = makeMediaBufferRef<MediaControlBuffer>(*kind);
+            EXPECT_TRUE(ctx, execution.findInputChannel(extractor, "in")->push(
+                                 control));
+        } else if (abortInput) {
+            execution.findInputChannel(extractor, "in")->abort();
+        } else {
+            execution.findInputChannel(extractor, "in")->close();
+        }
+        const auto result = node.process(execution);
+        if (!kind) {
+            EXPECT_FALSE(ctx, result);
+            if (!result) EXPECT_EQ(ctx, result.error().code, ::media::ErrorCode::Cancelled);
+            const auto repeated = node.process(execution);
+            EXPECT_FALSE(ctx, repeated);
+            if (!result && !repeated) {
+                EXPECT_EQ(ctx, repeated.error().code, result.error().code);
+                EXPECT_EQ(ctx, repeated.error().message, result.error().message);
+            }
+            return;
+        }
+        const auto expected = *kind == MediaControlBufferKind::Flush
+            ? MediaNodeProcessState::Progress
+            : MediaNodeProcessState::Finished;
+        EXPECT_TRUE(ctx, result && result.value().state == expected);
+        MediaBufferRef video;
+        MediaBufferRef audio;
+        EXPECT_TRUE(ctx, execution.findOutputChannel(extractor, "video")->tryPop(video));
+        EXPECT_TRUE(ctx, execution.findOutputChannel(extractor, "audio")->tryPop(audio));
+        EXPECT_TRUE(ctx, video == control && audio == control);
+    };
+    verify(MediaControlBufferKind::Flush, false);
+    verify(MediaControlBufferKind::Abort, false);
+    verify(std::nullopt, false);
+    verify(std::nullopt, true);
+}
+
 } // namespace
 
 int main()
@@ -519,5 +640,7 @@ int main()
     testFailedMappingDoesNotConsumeCanonicalSequence(ctx);
     testExtractorPreflightsCompoundReleaseWithoutPartialCommit(ctx);
     testExtractorPreservesAudioTrimAndIdentity(ctx);
+    testExtractorAtomicallyFansOutExactEofReference(ctx);
+    testExtractorHandlesTypedControlsAndRequiredInputTermination(ctx);
     return ctx.failures == 0 ? 0 : 1;
 }
