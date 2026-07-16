@@ -499,6 +499,47 @@ void testRealtimeAvSyncRuntimeProductRejectsIndependentMutations(TestContext& ct
     expectInvalid();
     runtime.edgePolicies.synchronizedPacket.queuePolicy.overflowPolicy =
         MediaQueueOverflowPolicy::BlockProducer;
+    const MediaEdgePolicy synchronizedPacketPolicy =
+        runtime.edgePolicies.synchronizedPacket;
+    const auto expectSynchronizedPacketMutationInvalid =
+        [&runtime, &expectInvalid, &synchronizedPacketPolicy](auto mutate) {
+            mutate(runtime.edgePolicies.synchronizedPacket);
+            expectInvalid();
+            runtime.edgePolicies.synchronizedPacket = synchronizedPacketPolicy;
+        };
+    expectSynchronizedPacketMutationInvalid([](MediaEdgePolicy& policy) {
+        policy.queuePolicy.preserveOrdering = false;
+    });
+    expectSynchronizedPacketMutationInvalid([](MediaEdgePolicy& policy) {
+        policy.queuePolicy.allowFlushControlBypass = false;
+    });
+    expectSynchronizedPacketMutationInvalid([](MediaEdgePolicy& policy) {
+        ++policy.queuePolicy.reserveCapacity;
+    });
+    expectSynchronizedPacketMutationInvalid([](MediaEdgePolicy& policy) {
+        ++policy.queuePolicy.backpressurePolicy.lowWatermark;
+    });
+    expectSynchronizedPacketMutationInvalid([](MediaEdgePolicy& policy) {
+        ++policy.queuePolicy.backpressurePolicy.highWatermark;
+    });
+    expectSynchronizedPacketMutationInvalid([](MediaEdgePolicy& policy) {
+        policy.queuePolicy.backpressurePolicy.realtimePriority = false;
+    });
+    expectSynchronizedPacketMutationInvalid([](MediaEdgePolicy& policy) {
+        policy.queuePolicy.backpressurePolicy.propagateUpstream = false;
+    });
+    expectSynchronizedPacketMutationInvalid([](MediaEdgePolicy& policy) {
+        policy.queuePolicy.backpressurePolicy.reportMetrics = false;
+    });
+    expectSynchronizedPacketMutationInvalid([](MediaEdgePolicy& policy) {
+        policy.backpressurePolicy.propagateUpstream = false;
+    });
+    expectSynchronizedPacketMutationInvalid([](MediaEdgePolicy& policy) {
+        policy.backpressurePolicy.reportMetrics = false;
+    });
+    expectSynchronizedPacketMutationInvalid([](MediaEdgePolicy& policy) {
+        policy.bufferPolicy.ownership = MediaBufferOwnership::MoveOnly;
+    });
     ++runtime.edgePolicies.frame.queuePolicy.capacity;
     expectInvalid();
     --runtime.edgePolicies.frame.queuePolicy.capacity;

@@ -16,6 +16,9 @@ struct MediaRealtimeEdgePolicySet {
     MediaEdgePolicy videoMux;
     MediaEdgePolicy audioMux;
 
+    constexpr bool operator==(
+        const MediaRealtimeEdgePolicySet&) const noexcept = default;
+
     const MediaEdgePolicy& packetPolicy(MediaStreamKind streamKind) const noexcept
     {
         return streamKind == MediaStreamKind::Audio ? audioPacket : videoPacket;

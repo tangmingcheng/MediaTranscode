@@ -22,11 +22,14 @@ existing `PacketStartGate` outside this segment.
   exact planner options, and one graph support helper owns validated mutation.
   Every graph mutation is sequential and fail-fast.
 - The planner owns a dedicated bounded synchronized-packet edge policy. It is
-  FIFO and `BlockProducer`; the segment consumes it without deriving policy.
+  FIFO and `BlockProducer`; one realtime edge-policy planner produces the full
+  policy set, and validation compares the complete structural product without
+  duplicating policy decisions.
 - Source endpoints are validate-only. Missing ports, mismatched types, or
   non-fanout ports fail immediately; the segment never invents an upstream
-  protocol interface. The main builder explicitly declares Raw RTP packet and
-  MPEG-TS video/audio/clock outputs.
+  protocol interface. For synchronized assembly only, the main builder
+  explicitly declares Raw RTP packet and MPEG-TS video/audio/clock outputs;
+  legacy branch builders remain the sole port owners outside that path.
 - Compiler sync-group validation accepts only the exact RTP binder, initial
   lock gate, and startup coordinator option consumers.
 
@@ -39,19 +42,40 @@ port was silently created by the segment; the test exited with one failed
 expectation. Replacing interface creation with validate-only behavior made the
 same test GREEN. Exact edge types, capacities, FIFO ordering, blocking
 backpressure, group identifiers, protocol variants, video-only isolation, and
-compiler fail-closed behavior are covered.
+compiler fail-closed behavior are covered. Independent mutations of every
+previously under-validated synchronized-packet policy field formed the policy
+validation RED; exact comparison with the single planner product made all
+mutations GREEN. A video-only graph-validation RED exposed duplicate legacy
+port ownership, which was removed by limiting explicit source-port ownership
+to synchronized assembly.
 
 ## Test Results
 
-The focused integration executable selected these five Task 5 cases: RTP
-assembly, compiler fail-closed boundary, direct MPEG-TS assembly, missing-port
-rejection, and video-only legacy gating.
+The permanent selector covers eight Task 5 cases: RTP assembly, compiler
+fail-closed boundary, direct MPEG-TS assembly with exact released endpoints,
+missing-port rejection, video-only legacy isolation, two synchronized audio
+decode-source checks, and replacement of the legacy inert start barrier.
+
+```powershell
+& .\out\build\x64-debug\media_transcode_integration_tests.exe --task5-av-sync-input
+```
+
+Result: PASS, eight focused cases, exit code 0.
 
 ```powershell
 & .\out\build\x64-debug\media_transcode_integration_tests.exe
 ```
 
-Result: PASS, five focused cases, exit code 0.
+Result: FAIL, exit code 1, with exactly three pre-existing
+Opus/scheduled-RTP planner expectations:
+
+- `testRawRtpRejectsUnsupportedOpusOutputAndPlansOpusInputToAac`: `opusPlan`.
+- `testRawRtpPlansOpusAudioInput`: one-channel request plan.
+- `testRawRtpPlansOpusAudioInput`: two-channel request plan.
+
+Both failed plans report `NotInitialized: scheduled RTP packetization does
+not publish audio batch timing`. No Task 5 structure, policy, endpoint, or
+legacy-isolation expectation failed.
 
 ```powershell
 & .\out\build\x64-debug\media_transcode_planner_tests.exe
@@ -77,14 +101,11 @@ Result: PASS, exit code 0.
 
 Result: PASS, exit code 0.
 
-The final VS2026 clean-first rebuild removed 479 artifacts and completed all
-480 actions with exit code 0. `/showIncludes` remained absent. The focused five
-cases and all four layered executables were rerun after that rebuild and each
-returned exit code 0.
-
-The normal unfiltered integration executable still reports six existing
-planner expectations in the Opus/scheduled RTP audio timing area. Those
-failures predate Task 5 and are not hidden or changed by this work.
+The final VS2026 clean-first rebuild removed 480 artifacts and completed the
+481-step build with exit code 0. `/showIncludes` remained absent. Every command
+above was rerun directly against those clean artifacts; the focused selector
+and all four layered executables returned exit code 0, while the unfiltered
+integration result remained the explicit three-expectation baseline above.
 
 ## Explicit Boundaries and Risks
 
@@ -97,8 +118,8 @@ failures predate Task 5 and are not hidden or changed by this work.
   scheduler/output assembly is incomplete. `buildExecutable` likewise returns
   `Unsupported`; later output tasks must connect the endpoint.
 - Protocol binders and gates forward terminal/control input toward canonical
-  input, whose production EOF/control contract is not yet completed. Task 5 is
-  therefore structural input assembly and does not claim end-to-end executable
-  EOF completion.
+  input, whose production EOF/control contract is not yet completed. This is
+  explicit Task 6 RED prerequisite debt: Task 5 adds no EOF/control bypass and
+  does not claim end-to-end executable EOF completion.
 - The existing Opus/scheduled RTP planner expectation failures remain for a
   separate scoped fix.

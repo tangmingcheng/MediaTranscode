@@ -23,6 +23,9 @@ struct MediaBackpressurePolicy {
     bool reportMetrics = true;
     bool realtimePriority = false;
 
+    constexpr bool operator==(
+        const MediaBackpressurePolicy&) const noexcept = default;
+
     constexpr bool enabled() const noexcept
     {
         return mode != MediaBackpressureMode::None;

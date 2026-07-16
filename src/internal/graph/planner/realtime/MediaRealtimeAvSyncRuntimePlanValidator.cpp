@@ -5,6 +5,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 #include "internal/graph/planner/realtime/MediaAudioCorrectionReachabilityPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncComponentBoundsPlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeEdgePolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncPlanningFactsResolver.h"
 
 #include <cstdint>
@@ -107,34 +108,9 @@ namespace media::ffmpeg::graph {
         runtime.queues.mux != outer.queues.mux) {
         return invalid("queue product");
     }
-    const auto validEdge = [](const MediaEdgePolicy& edge,
-                              std::size_t capacity) {
-        return edge.queuePolicy.mode == MediaQueueMode::SpscRing &&
-            edge.queuePolicy.capacity == capacity &&
-            edge.queuePolicy.bounded && edge.queuePolicy.collectMetrics &&
-            edge.queuePolicy.backpressurePolicy.mode ==
-                MediaBackpressureMode::Adaptive &&
-            edge.queuePolicy.backpressurePolicy.criticalWatermark == capacity &&
-            edge.backpressurePolicy.mode == MediaBackpressureMode::Adaptive &&
-            edge.backpressurePolicy.criticalWatermark == capacity;
-    };
-    if (!validEdge(runtime.edgePolicies.metadata, runtime.queues.metadata) ||
-        !validEdge(runtime.edgePolicies.packet, runtime.queues.packet) ||
-        !validEdge(runtime.edgePolicies.videoPacket, runtime.queues.packet) ||
-        !validEdge(runtime.edgePolicies.audioPacket, runtime.queues.packet) ||
-        !validEdge(runtime.edgePolicies.synchronizedPacket,
-                   runtime.queues.packet) ||
-        !validEdge(runtime.edgePolicies.frame, runtime.queues.frame) ||
-        !validEdge(runtime.edgePolicies.mux, runtime.queues.mux) ||
-        !validEdge(runtime.edgePolicies.videoMux, runtime.queues.mux) ||
-        !validEdge(runtime.edgePolicies.audioMux, runtime.queues.mux)) {
+    if (runtime.edgePolicies !=
+        MediaRealtimeEdgePolicyPlanner::plan(runtime.queues)) {
         return invalid("edge-policy product");
-    }
-    if (runtime.edgePolicies.synchronizedPacket.queuePolicy.overflowPolicy !=
-            MediaQueueOverflowPolicy::BlockProducer ||
-        runtime.edgePolicies.synchronizedPacket.queuePolicy.orderingPolicy !=
-            MediaQueueOrderingPolicy::Fifo) {
-        return invalid("synchronized packet edge policy");
     }
     if (runtime.threadingPolicy.mode != MediaThreadingMode::PerNodeWorker ||
         runtime.threadingPolicy.priority != MediaThreadPriority::High ||

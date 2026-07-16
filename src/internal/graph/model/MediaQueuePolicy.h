@@ -45,6 +45,8 @@ struct MediaQueuePolicy {
     bool allowFlushControlBypass = true;
     bool collectMetrics = true;
 
+    constexpr bool operator==(const MediaQueuePolicy&) const noexcept = default;
+
     constexpr bool isDirect() const noexcept
     {
         return mode == MediaQueueMode::Direct;

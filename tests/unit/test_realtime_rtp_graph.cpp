@@ -48,6 +48,7 @@ extern "C" {
 #include <limits>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -1985,10 +1986,18 @@ void testSynchronizedMpegTsSegmentUsesSharedProtocolNeutralStartupChain(
         graph, "test.ts.av_sync.video.protocol_binder");
     const MediaNode* audioGate = findNodeByName(
         graph, "test.ts.av_sync.audio.protocol_binder");
+    const MediaNode* sequencer = findNodeByName(
+        graph, "test.ts.av_sync.startup.activation_sequencer");
+    const MediaNode* extractor = findNodeByName(
+        graph, "test.ts.av_sync.startup.release_extractor");
     EXPECT_TRUE(ctx, sourceClock != nullptr);
     EXPECT_TRUE(ctx, videoGate != nullptr);
     EXPECT_TRUE(ctx, audioGate != nullptr);
-    if (!sourceClock || !videoGate || !audioGate) return;
+    EXPECT_TRUE(ctx, sequencer != nullptr);
+    EXPECT_TRUE(ctx, extractor != nullptr);
+    if (!sourceClock || !videoGate || !audioGate || !sequencer || !extractor) {
+        return;
+    }
     EXPECT_EQ(ctx, sourceClock->kind, MediaNodeKind::SourceClockStateFanout);
     EXPECT_EQ(ctx, videoGate->kind, MediaNodeKind::InitialLockedPacketGate);
     EXPECT_EQ(ctx, audioGate->kind, MediaNodeKind::InitialLockedPacketGate);
@@ -2037,9 +2046,13 @@ void testSynchronizedMpegTsSegmentUsesSharedProtocolNeutralStartupChain(
               outer.avSyncRuntime->groupKey.value());
     EXPECT_FALSE(ctx, videoGate->options.has("initial_locked_gate.generation"));
     EXPECT_FALSE(ctx, audioGate->options.has("initial_locked_gate.generation"));
-    EXPECT_TRUE(ctx, segment.value().releasedVideo.valid());
-    EXPECT_TRUE(ctx, segment.value().releasedAudio.valid());
-    EXPECT_TRUE(ctx, segment.value().activatedRelease.valid());
+    EXPECT_EQ(ctx, segment.value().releasedVideo.node, extractor->id);
+    EXPECT_EQ(ctx, segment.value().releasedVideo.port, std::string("video"));
+    EXPECT_EQ(ctx, segment.value().releasedAudio.node, extractor->id);
+    EXPECT_EQ(ctx, segment.value().releasedAudio.port, std::string("audio"));
+    EXPECT_EQ(ctx, segment.value().activatedRelease.node, sequencer->id);
+    EXPECT_EQ(ctx, segment.value().activatedRelease.port,
+              std::string("activated"));
 }
 
 void testSynchronizedInputSegmentRejectsMissingProtocolSourcePort(
@@ -2079,6 +2092,17 @@ void testVideoOnlyRealtimeInputKeepsLegacyPacketStartGateOutsideSyncSegment(
     EXPECT_TRUE(ctx, graphResult);
     if (!graphResult) return;
     const MediaGraph& graph = graphResult.value();
+    const MediaGraphValidationReport validation =
+        MediaGraphValidation::validate(graph);
+    EXPECT_TRUE(ctx, validation.ok());
+    if (!validation.ok()) {
+        for (const auto& issue : validation.issues) {
+            std::cerr << "validation issue: " << issue.message
+                      << " node=" << issue.nodeId.value
+                      << " port=" << issue.portId.value
+                      << " edge=" << issue.edgeId.value << '\n';
+        }
+    }
     EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::PacketStartGate),
               static_cast<std::size_t>(1));
     EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::AvStartupCoordinator),
@@ -2202,10 +2226,17 @@ void testRawRtpMatchingAudioPlansSynchronizedFrameTranscode(TestContext& ctx)
     EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::AudioEncode), static_cast<std::size_t>(1));
     const MediaNode* audioNormalize = findNodeByName(graph, "realtime.audio.copy.normalize");
     EXPECT_TRUE(ctx, audioNormalize == nullptr);
+    EXPECT_TRUE(ctx,
+                findEdgeByNames(
+                    graph,
+                    "realtime.av_sync.startup.release_extractor",
+                    "audio",
+                    "realtime.audio.encode.decode",
+                    "packet") != nullptr);
     EXPECT_TRUE(ctx, findEdgeBetweenKinds(graph,
                                           MediaNodeKind::RawRtpInput,
                                           MediaNodeKind::AudioDecode,
-                                          MediaEdgeKind::InputPacket) != nullptr);
+                                          MediaEdgeKind::InputPacket) == nullptr);
 }
 
 void testRawRtpVideoPacketCopySkipsContainerNormalization(TestContext& ctx)
@@ -2644,10 +2675,17 @@ void testBuildPlansRawRtpAudioVideoGraph(TestContext& ctx)
         EXPECT_EQ(ctx, audioIngress->options.value("rtcp.maximum_extrapolation_ns"),
                   std::string("5000000000"));
     }
+    EXPECT_TRUE(ctx,
+                findEdgeByNames(
+                    graph,
+                    "realtime.av_sync.startup.release_extractor",
+                    "audio",
+                    "realtime.audio.encode.decode",
+                    "packet") != nullptr);
     EXPECT_TRUE(ctx, findEdgeBetweenKinds(graph,
                                           MediaNodeKind::RawRtpInput,
                                           MediaNodeKind::AudioDecode,
-                                          MediaEdgeKind::InputPacket) != nullptr);
+                                          MediaEdgeKind::InputPacket) == nullptr);
 }
 
 void testRealtimeRtpDataPathUsesPlannedNonBlockingQueues(TestContext& ctx)
@@ -3072,7 +3110,7 @@ void testRealtimeMuxEdgesUseStreamSpecificPolicies(TestContext& ctx)
     }
 }
 
-void testSeparateRtpAudioVideoLeavesLegacyStartBarrierInert(TestContext& ctx)
+void testSeparateRtpAudioVideoUsesSynchronizedInputRelease(TestContext& ctx)
 {
     auto plan = MediaRealtimeRtpTranscodePlanner::plan(validRawRtpAudioVideoOptions());
     EXPECT_TRUE(ctx, plan);
@@ -3093,51 +3131,33 @@ void testSeparateRtpAudioVideoLeavesLegacyStartBarrierInert(TestContext& ctx)
     }
 
     const MediaGraph& graph = graphResult.value();
-    const MediaNode* barrier = findNodeByName(graph, "realtime.av.start_barrier");
-    EXPECT_TRUE(ctx, barrier != nullptr);
-    if (!barrier) {
-        return;
-    }
-    EXPECT_EQ(ctx, barrier->kind, MediaNodeKind::AvPacketStartBarrier);
-    EXPECT_EQ(ctx, barrier->options.value("av_start_barrier.expect_video"), std::string("0"));
-    EXPECT_EQ(ctx, barrier->options.value("av_start_barrier.expect_audio"), std::string("0"));
-    EXPECT_EQ(ctx, barrier->options.value("av_start_barrier.require_video_key_frame"), std::string("0"));
-
+    EXPECT_TRUE(ctx,
+                findNodeByName(graph, "realtime.av.start_barrier") == nullptr);
+    EXPECT_TRUE(ctx,
+                findNodeByName(graph, "realtime.video.transcode.packet_start_gate") ==
+                    nullptr);
+    EXPECT_TRUE(ctx,
+                findNodeByName(
+                    graph, "realtime.av_sync.startup.coordinator") != nullptr);
+    EXPECT_TRUE(ctx,
+                findNodeByName(
+                    graph,
+                    "realtime.av_sync.startup.activation_sequencer") != nullptr);
+    EXPECT_TRUE(ctx,
+                findNodeByName(
+                    graph, "realtime.av_sync.startup.release_extractor") !=
+                    nullptr);
     EXPECT_TRUE(ctx,
                 findEdgeByNames(graph,
-                                "realtime.av.start_barrier",
-                                "video_packet",
-                                "realtime.video.rtp.mux",
-                                "packet") != nullptr);
-    EXPECT_TRUE(ctx,
-                findEdgeByNames(graph,
-                                "realtime.av.start_barrier",
-                                "audio_packet",
-                                "realtime.audio.rtp.mux",
-                                "packet") != nullptr);
-    EXPECT_TRUE(ctx,
-                findEdgeByNames(graph,
-                                "realtime.audio.input",
-                                "packet",
-                                "realtime.av.start_barrier",
-                                "audio_packet") == nullptr);
-    const MediaNode* packetStartGate = findNodeByName(graph, "realtime.video.transcode.packet_start_gate");
-    EXPECT_TRUE(ctx, packetStartGate != nullptr);
-    if (packetStartGate) {
-        EXPECT_EQ(ctx, packetStartGate->kind, MediaNodeKind::PacketStartGate);
-        EXPECT_EQ(ctx, packetStartGate->options.value("packet_start_gate.require_key_frame"), std::string("1"));
-    }
-    EXPECT_TRUE(ctx,
-                findEdgeByNames(graph,
-                                "realtime.video.input",
-                                "packet",
-                                "realtime.video.transcode.packet_start_gate",
-                                "packet") != nullptr);
-    EXPECT_TRUE(ctx,
-                findEdgeByNames(graph,
-                                "realtime.video.transcode.packet_start_gate",
-                                "packet",
+                                "realtime.av_sync.startup.release_extractor",
+                                "video",
                                 "realtime.video.transcode.decode",
+                                "packet") != nullptr);
+    EXPECT_TRUE(ctx,
+                findEdgeByNames(graph,
+                                "realtime.av_sync.startup.release_extractor",
+                                "audio",
+                                "realtime.audio.encode.decode",
                                 "packet") != nullptr);
 }
 
@@ -4106,9 +4126,35 @@ void testUrlAndMpegTsPurePlanApisRequirePreparedPreflight(TestContext& ctx)
 
 } // namespace
 
-int main()
+int main(int argc, char** argv)
 {
     TestContext ctx;
+
+    if (argc == 2 &&
+        std::string_view(argv[1]) == "--task5-av-sync-input") {
+        testSynchronizedRtpGraphAssemblesProtocolNeutralInputSegment(ctx);
+        testSynchronizedInputGraphCompilerRemainsFailClosedUntilOutputAssembly(
+            ctx);
+        testSynchronizedMpegTsSegmentUsesSharedProtocolNeutralStartupChain(ctx);
+        testSynchronizedInputSegmentRejectsMissingProtocolSourcePort(ctx);
+        testVideoOnlyRealtimeInputKeepsLegacyPacketStartGateOutsideSyncSegment(
+            ctx);
+        testRawRtpMatchingAudioPlansSynchronizedFrameTranscode(ctx);
+        testBuildPlansRawRtpAudioVideoGraph(ctx);
+        testSeparateRtpAudioVideoUsesSynchronizedInputRelease(ctx);
+        if (ctx.failures != 0) {
+            std::cerr << ctx.failures
+                      << " Task 5 A/V sync input expectation(s) failed\n";
+            return 1;
+        }
+        std::cout << "Task 5 A/V sync input tests passed\n";
+        return 0;
+    }
+    if (argc != 1) {
+        std::cerr << "usage: media_transcode_integration_tests.exe "
+                     "[--task5-av-sync-input]\n";
+        return 2;
+    }
 
     testPreparedRealtimeInputIsMoveOnlyAndSourceBecomesEmpty(ctx);
     testPreparedRealtimeScannerInvokesInjectedOpenerOnce(ctx);
@@ -4207,7 +4253,7 @@ int main()
     testDropNonKeyFrameRejectsKeyFrameWhenNoNonKeyCanBeDropped(ctx);
     testDropNonKeyFramePushWaitsToPreserveKeyFrames(ctx);
     testRealtimeMuxEdgesUseStreamSpecificPolicies(ctx);
-    testSeparateRtpAudioVideoLeavesLegacyStartBarrierInert(ctx);
+    testSeparateRtpAudioVideoUsesSynchronizedInputRelease(ctx);
     testStartBarrierKeepsLatestPreOpenPacket(ctx);
     testPacketStartGateOpensOnKeyFrame(ctx);
     testBuildPlansMpegTsUdpMuxedOutputGraph(ctx);

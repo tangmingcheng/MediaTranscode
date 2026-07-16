@@ -8,6 +8,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlanValidator.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncComponentBoundsPlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeEdgePolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestValidator.h"
 #include "internal/graph/planner/realtime/MediaRealtimeTsInputPlanValidator.h"
@@ -199,45 +200,6 @@ MediaVideoTranscodeParameters planRealtimeVideoParameters(const MediaVideoTransc
     return ::media::Result<MediaAudioPipelinePlannerOptions>::success(std::move(plannerOptions));
 }
 
-
-MediaEdgePolicy planRealtimeQueuePolicy(std::size_t capacity,
-                                        MediaQueueOverflowPolicy overflowPolicy,
-                                        MediaQueueOrderingPolicy orderingPolicy = MediaQueueOrderingPolicy::Timestamp)
-{
-    MediaEdgePolicy policy;
-    policy.queuePolicy.mode = MediaQueueMode::SpscRing;
-    policy.queuePolicy.overflowPolicy = overflowPolicy;
-    policy.queuePolicy.orderingPolicy = orderingPolicy;
-    policy.queuePolicy.capacity = capacity;
-    policy.queuePolicy.bounded = true;
-    policy.queuePolicy.collectMetrics = true;
-    policy.queuePolicy.backpressurePolicy.mode = MediaBackpressureMode::Adaptive;
-    policy.queuePolicy.backpressurePolicy.lowWatermark = capacity / 2;
-    policy.queuePolicy.backpressurePolicy.highWatermark = capacity > 0 ? capacity - 1 : 0;
-    policy.queuePolicy.backpressurePolicy.criticalWatermark = capacity;
-    policy.queuePolicy.backpressurePolicy.realtimePriority = true;
-    policy.backpressurePolicy = policy.queuePolicy.backpressurePolicy;
-    return policy;
-}
-
-MediaRealtimeEdgePolicySet planEdgePolicies(const MediaGraphQueueParameters& queues)
-{
-    MediaRealtimeEdgePolicySet policies;
-    policies.metadata = planRealtimeQueuePolicy(queues.metadata,
-                                               MediaQueueOverflowPolicy::BlockProducer,
-                                               MediaQueueOrderingPolicy::Fifo);
-    policies.packet = planRealtimeQueuePolicy(queues.packet, MediaQueueOverflowPolicy::DropOldest);
-    policies.videoPacket = planRealtimeQueuePolicy(queues.packet, MediaQueueOverflowPolicy::DropNonKeyFrame);
-    policies.audioPacket = planRealtimeQueuePolicy(queues.packet, MediaQueueOverflowPolicy::DropOldest);
-    policies.synchronizedPacket = planRealtimeQueuePolicy(
-        queues.packet, MediaQueueOverflowPolicy::BlockProducer,
-        MediaQueueOrderingPolicy::Fifo);
-    policies.frame = planRealtimeQueuePolicy(queues.frame, MediaQueueOverflowPolicy::DropOldest);
-    policies.mux = planRealtimeQueuePolicy(queues.mux, MediaQueueOverflowPolicy::DropOldest);
-    policies.videoMux = planRealtimeQueuePolicy(queues.mux, MediaQueueOverflowPolicy::DropNonKeyFrame);
-    policies.audioMux = planRealtimeQueuePolicy(queues.mux, MediaQueueOverflowPolicy::DropOldest);
-    return policies;
-}
 
 MediaThreadingPolicy planThreadingPolicy() noexcept
 {
@@ -455,7 +417,8 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
     plan.audioPlan = std::move(audioPlan);
     plan.videoParameters = std::move(videoParameters);
     plan.queues = options.parameters.queues;
-    plan.edgePolicies = planEdgePolicies(options.parameters.queues);
+    plan.edgePolicies = MediaRealtimeEdgePolicyPlanner::plan(
+        options.parameters.queues);
     plan.threadingPolicy = planThreadingPolicy();
     plan.videoInputStartRequiresKeyFrame = MediaRealtimeRequestClassifier::unreliablePacketBoundary(options);
     MediaRealtimeInputPlanner::applyNodePlans(options, rawInput ? &*rawInput : nullptr, plan);
