@@ -4,17 +4,20 @@
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/nodes/demux/MpegTsDemuxNode.h"
 #include "internal/graph/nodes/sync/MediaCanonicalInputNode.h"
+#include "internal/graph/protocol/mpegts/MediaTsInitialAcquiringPacketBuffer.h"
 #include "internal/graph/runtime/buffer/FFmpegPacketBuffer.h"
 #include "internal/graph/runtime/buffer/MediaSourceClockStateBuffer.h"
 #include "internal/graph/runtime/buffer/MediaTsPreparedInputBuffer.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegPacketPayloadFootprint.h"
 
 extern "C" {
 #include <libavutil/avutil.h>
 }
 
 #include <deque>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -34,6 +37,23 @@ MediaTsRuntimeBinding runtimeBinding()
         MediaTsPacketOriginPolicy::PerStreamPesCarry,
         MediaTsRuntimeStreamBinding{kVideoStream, 0x201},
         MediaTsRuntimeStreamBinding{kAudioStream, 0x202}, 0x101, 32};
+}
+
+::media::ffmpeg::PacketPtr retainedPacket(int payloadBytes,
+                                          std::size_t sideDataBytes)
+{
+    auto packet = ::media::ffmpeg::makePacket();
+    if (!packet || av_new_packet(packet.get(), payloadBytes) < 0) return {};
+    if (sideDataBytes > 0 &&
+        !av_packet_new_side_data(
+            packet.get(), AV_PKT_DATA_NEW_EXTRADATA, sideDataBytes)) {
+        return {};
+    }
+    packet->pts = 1;
+    packet->dts = 1;
+    packet->duration = 1;
+    packet->time_base = AVRational{1, 90'000};
+    return packet;
 }
 
 MediaTsProgramInventorySnapshot inventory()
@@ -807,6 +827,84 @@ void testInitialAcquiringRetentionFailsClosedAndReplaysExactlyOnce(TestContext& 
     }
 }
 
+void testInitialAcquiringRetentionAccountsCompletePacketFootprint(TestContext& ctx)
+{
+    AVPacket missingSideDataArray{};
+    missingSideDataArray.side_data_elems = 1;
+    EXPECT_FALSE(ctx, ffmpegPacketPayloadFootprintBytes(
+        missingSideDataArray).has_value());
+
+    const MediaTsInitialPacketRetentionLimit audioLimit{8, 64, 32};
+    {
+        auto buffer = MediaTsInitialAcquiringPacketBuffer::create(
+            MediaTsInitialPacketRetentionLimit{8, 64, 8}, audioLimit);
+        EXPECT_TRUE(ctx, buffer);
+        auto packet = retainedPacket(3, 6);
+        EXPECT_TRUE(ctx, packet != nullptr);
+        if (buffer && packet) {
+            EXPECT_FALSE(ctx, buffer.value().retain(
+                std::move(packet), MediaStreamKind::Video));
+        }
+    }
+    {
+        auto buffer = MediaTsInitialAcquiringPacketBuffer::create(
+            MediaTsInitialPacketRetentionLimit{8, 9, 8}, audioLimit);
+        EXPECT_TRUE(ctx, buffer);
+        if (buffer) {
+            EXPECT_TRUE(ctx, buffer.value().retain(
+                retainedPacket(2, 3), MediaStreamKind::Video));
+            EXPECT_FALSE(ctx, buffer.value().retain(
+                retainedPacket(2, 3), MediaStreamKind::Video));
+        }
+    }
+    {
+        auto buffer = MediaTsInitialAcquiringPacketBuffer::create(
+            MediaTsInitialPacketRetentionLimit{8, 5, 5}, audioLimit);
+        EXPECT_TRUE(ctx, buffer);
+        if (buffer) {
+            EXPECT_TRUE(ctx, buffer.value().retain(
+                retainedPacket(2, 3), MediaStreamKind::Video));
+            EXPECT_FALSE(ctx, buffer.value().retain(
+                retainedPacket(1, 0), MediaStreamKind::Video));
+        }
+    }
+    {
+        auto buffer = MediaTsInitialAcquiringPacketBuffer::create(
+            MediaTsInitialPacketRetentionLimit{8, 64, 32}, audioLimit);
+        auto packet = retainedPacket(1, 0);
+        EXPECT_TRUE(ctx, buffer && packet);
+        if (buffer && packet) {
+            packet->side_data_elems = -1;
+            EXPECT_FALSE(ctx, buffer.value().retain(
+                std::move(packet), MediaStreamKind::Video));
+        }
+    }
+    {
+        auto buffer = MediaTsInitialAcquiringPacketBuffer::create(
+            MediaTsInitialPacketRetentionLimit{8, 64, 32}, audioLimit);
+        auto packet = retainedPacket(1, 1);
+        EXPECT_TRUE(ctx, buffer && packet);
+        if (buffer && packet) {
+            av_freep(&packet->side_data[0].data);
+            packet->side_data[0].size = 7;
+            EXPECT_FALSE(ctx, buffer.value().retain(
+                std::move(packet), MediaStreamKind::Video));
+        }
+    }
+    {
+        auto buffer = MediaTsInitialAcquiringPacketBuffer::create(
+            MediaTsInitialPacketRetentionLimit{8, 64, 32}, audioLimit);
+        auto packet = retainedPacket(1, 1);
+        EXPECT_TRUE(ctx, buffer && packet);
+        if (buffer && packet) {
+            packet->side_data[0].size =
+                std::numeric_limits<std::size_t>::max();
+            EXPECT_FALSE(ctx, buffer.value().retain(
+                std::move(packet), MediaStreamKind::Video));
+        }
+    }
+}
+
 } // namespace
 
 void runMpegTsDemuxNodeTests(TestContext& ctx)
@@ -821,5 +919,6 @@ void runMpegTsDemuxNodeTests(TestContext& ctx)
     testPesInvalidityDoesNotInventSourceGeneration(ctx);
     testPacketAndSessionFailures(ctx);
     testInitialAcquiringRetentionFailsClosedAndReplaysExactlyOnce(ctx);
+    testInitialAcquiringRetentionAccountsCompletePacketFootprint(ctx);
     testCancelledReadAndSessionTimelineFailurePropagation(ctx);
 }

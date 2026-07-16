@@ -1,4 +1,5 @@
 #include "internal/graph/protocol/mpegts/MediaTsInitialAcquiringPacketBuffer.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegPacketPayloadFootprint.h"
 
 extern "C" {
 #include <libavutil/avutil.h>
@@ -42,13 +43,17 @@ MediaTsInitialAcquiringPacketBuffer::create(
         (packet->pts == AV_NOPTS_VALUE && packet->dts == AV_NOPTS_VALUE) ||
         packet->duration <= 0 ||
         packet->time_base.num <= 0 || packet->time_base.den <= 0 ||
-        packet->size < 0 ||
         (streamKind != MediaStreamKind::Video &&
          streamKind != MediaStreamKind::Audio)) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "MPEG-TS acquiring packet lacks replayable timing evidence"));
     }
-    const auto bytes = static_cast<std::uint64_t>(packet->size);
+    const auto footprint = ffmpegPacketPayloadFootprintBytes(*packet);
+    if (!footprint) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "MPEG-TS acquiring packet has invalid payload footprint"));
+    }
+    const auto bytes = *footprint;
     auto& usage = streamKind == MediaStreamKind::Video
         ? m_videoUsage : m_audioUsage;
     const auto& limit = streamKind == MediaStreamKind::Video

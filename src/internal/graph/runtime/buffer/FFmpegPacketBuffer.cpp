@@ -1,7 +1,7 @@
 #include "internal/graph/runtime/buffer/FFmpegPacketBuffer.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegPacketPayloadFootprint.h"
 
 #include <utility>
-#include <limits>
 
 namespace media::ffmpeg::graph {
 
@@ -29,27 +29,9 @@ MediaBufferType FFmpegPacketBuffer::type() const noexcept
 
 std::optional<std::uint64_t> FFmpegPacketBuffer::payloadFootprintBytes() const noexcept
 {
-    if (!m_packet || m_packet->size < 0 ||
-        (m_packet->size > 0 && !m_packet->data) ||
-        m_packet->side_data_elems < 0 ||
-        (m_packet->side_data_elems > 0 && !m_packet->side_data)) {
-        return std::nullopt;
-    }
-    std::uint64_t bytes = static_cast<std::uint64_t>(m_packet->size);
-    for (int index = 0; index < m_packet->side_data_elems; ++index) {
-        if (m_packet->side_data[index].size > 0 &&
-            !m_packet->side_data[index].data) {
-            return std::nullopt;
-        }
-        const auto sideBytes = static_cast<std::uint64_t>(
-            m_packet->side_data[index].size);
-        if (sideBytes > std::numeric_limits<std::uint64_t>::max() - bytes) {
-            return std::nullopt;
-        }
-        bytes += sideBytes;
-    }
-    return bytes == 0 ? std::nullopt
-                      : std::optional<std::uint64_t>(bytes);
+    return m_packet
+        ? ffmpegPacketPayloadFootprintBytes(*m_packet)
+        : std::nullopt;
 }
 
 AVPacket* FFmpegPacketBuffer::packet() noexcept
