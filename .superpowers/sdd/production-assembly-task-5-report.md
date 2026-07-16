@@ -42,12 +42,12 @@ port was silently created by the segment; the test exited with one failed
 expectation. Replacing interface creation with validate-only behavior made the
 same test GREEN. Exact edge types, capacities, FIFO ordering, blocking
 backpressure, group identifiers, protocol variants, video-only isolation, and
-compiler fail-closed behavior are covered. Independent mutations of every
-previously under-validated synchronized-packet policy field formed the policy
-validation RED; exact comparison with the single planner product made all
-mutations GREEN. A video-only graph-validation RED exposed duplicate legacy
-port ownership, which was removed by limiting explicit source-port ownership
-to synchronized assembly.
+compiler fail-closed behavior are covered. Eleven representative mutations
+across the previously under-validated synchronized-packet policy formed the
+policy validation RED; exact structural comparison with the single planner
+product made all mutations GREEN. A video-only graph-validation RED exposed
+duplicate legacy port ownership, which was removed by limiting explicit
+source-port ownership to synchronized assembly.
 
 ## Test Results
 
@@ -73,7 +73,7 @@ Opus/scheduled-RTP planner expectations:
 - `testRawRtpPlansOpusAudioInput`: one-channel request plan.
 - `testRawRtpPlansOpusAudioInput`: two-channel request plan.
 
-Both failed plans report `NotInitialized: scheduled RTP packetization does
+All three failed plan expectations report `NotInitialized: scheduled RTP packetization does
 not publish audio batch timing`. No Task 5 structure, policy, endpoint, or
 legacy-isolation expectation failed.
 
