@@ -2,7 +2,7 @@
 
 #include "internal/graph/protocol/mpegts/MediaTsProgramInventory.h"
 #include "internal/graph/protocol/mpegts/MediaTsPublicProgramSnapshot.h"
-#include "internal/graph/protocol/mpegts/MediaTsPreflightDurationProbe.h"
+#include "internal/graph/protocol/mpegts/MediaTsPacketDurationEvidence.h"
 
 #include <optional>
 

@@ -77,6 +77,7 @@ private:
     ::media::Status buildStreamSnapshots();
     ::media::Result<MediaTsReadFrameEnvelope> readFrameFromSource();
     ::media::Result<MediaTsPacketProvenance> provenanceFor(const AVPacket& packet);
+    ::media::ErrorInfo terminateDurationProbe(::media::ErrorInfo error);
 
     FFmpegAvioInterruptState m_interruptState;
     std::unique_ptr<EvidenceObserver> m_evidenceObserver;

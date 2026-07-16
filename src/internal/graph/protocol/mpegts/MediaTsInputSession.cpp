@@ -304,7 +304,7 @@ MediaTsInputSession::~MediaTsInputSession()
     }
     {
         std::lock_guard lock(m_sessionMutex);
-        if (m_observedAvio) {
+        if (!m_finalError && m_observedAvio) {
             const auto observedStatus = m_observedAvio->status();
             m_finalError = observedStatus
                 ? std::optional<::media::ErrorInfo>(::media::ErrorInfo::cancelled(
@@ -326,6 +326,10 @@ MediaTsInputSession::~MediaTsInputSession()
 {
     {
         std::lock_guard lock(m_sessionMutex);
+        if (m_finalError) {
+            return ::media::Result<MediaTsReadFrameEnvelope>::failure(
+                *m_finalError);
+        }
         if (m_closing || m_closed || !m_formatContext) {
             return ::media::Result<MediaTsReadFrameEnvelope>::failure(
                 ::media::ErrorInfo::cancelled("MPEG-TS input session is closed"));
@@ -340,7 +344,12 @@ MediaTsInputSession::~MediaTsInputSession()
     ReadLease guard(*this);
 
     if (m_durationProbe && !m_durationProbe->replayEmpty()) {
-        return m_durationProbe->popReplay();
+        auto replay = m_durationProbe->popReplay();
+        if (!replay) {
+            return ::media::Result<MediaTsReadFrameEnvelope>::failure(
+                terminateDurationProbe(replay.error()));
+        }
+        return replay;
     }
     m_durationProbe.reset();
     return readFrameFromSource();
@@ -351,9 +360,18 @@ MediaTsInputSession::probeSelectedPacketDurations(std::size_t frameLimit)
 {
     {
         std::lock_guard lock(m_sessionMutex);
+        if (m_finalError) {
+            return ::media::Result<MediaTsSelectedPacketDurationEvidence>::failure(
+                *m_finalError);
+        }
         if (m_closing || m_closed || !m_formatContext) {
             return ::media::Result<MediaTsSelectedPacketDurationEvidence>::failure(
                 ::media::ErrorInfo::cancelled("MPEG-TS input session is closed"));
+        }
+        if (frameLimit == 0) {
+            return ::media::Result<MediaTsSelectedPacketDurationEvidence>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "MPEG-TS duration preflight frame limit must be positive"));
         }
         if (m_activeReads != 0 || m_durationProbe ||
             !m_runtimeContract.originBinding) {
@@ -361,48 +379,57 @@ MediaTsInputSession::probeSelectedPacketDurations(std::size_t frameLimit)
                 ::media::ErrorInfo::invalidArgument(
                     "MPEG-TS duration preflight requires one configured unread session"));
         }
+        const auto& binding = *m_runtimeContract.originBinding;
+        const FFmpegInputStreamSnapshot* video = nullptr;
+        const FFmpegInputStreamSnapshot* audio = nullptr;
+        for (const auto& stream : m_streamSnapshots) {
+            if (stream.index == binding.video.streamIndex) video = &stream;
+            if (stream.index == binding.audio.streamIndex) audio = &stream;
+        }
+        if (!video || !audio) {
+            return ::media::Result<MediaTsSelectedPacketDurationEvidence>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "MPEG-TS duration preflight selected stream snapshots are absent"));
+        }
+        auto created = MediaTsPreflightDurationProbe::create(
+            binding.video, video->time.timeBase,
+            binding.audio, audio->time.timeBase,
+            frameLimit);
+        if (!created) {
+            return ::media::Result<MediaTsSelectedPacketDurationEvidence>::failure(
+                created.error());
+        }
+        m_durationProbe.emplace(std::move(created).value());
         ++m_activeReads;
     }
     ReadLease guard(*this);
 
-    const auto& binding = *m_runtimeContract.originBinding;
-    const FFmpegInputStreamSnapshot* video = nullptr;
-    const FFmpegInputStreamSnapshot* audio = nullptr;
-    for (const auto& stream : m_streamSnapshots) {
-        if (stream.index == binding.video.streamIndex) video = &stream;
-        if (stream.index == binding.audio.streamIndex) audio = &stream;
-    }
-    if (!video || !audio) {
-        return ::media::Result<MediaTsSelectedPacketDurationEvidence>::failure(
-            ::media::ErrorInfo::notInitialized(
-                "MPEG-TS duration preflight selected stream snapshots are absent"));
-    }
-    auto probe = MediaTsPreflightDurationProbe::create(
-        binding.video, video->time.timeBase,
-        binding.audio, audio->time.timeBase,
-        frameLimit);
-    if (!probe) {
-        return ::media::Result<MediaTsSelectedPacketDurationEvidence>::failure(
-            probe.error());
-    }
     for (;;) {
         auto source = readFrameFromSource();
         if (!source) {
             return ::media::Result<MediaTsSelectedPacketDurationEvidence>::failure(
-                source.error());
+                terminateDurationProbe(source.error()));
         }
-        auto observed = probe.value().buffer(std::move(source).value());
+        auto observed = m_durationProbe->buffer(std::move(source).value());
         if (!observed) {
             return ::media::Result<MediaTsSelectedPacketDurationEvidence>::failure(
-                observed.error());
+                terminateDurationProbe(observed.error()));
         }
         if (observed.value()) {
             const auto evidence = *observed.value();
-            m_durationProbe.emplace(std::move(probe).value());
             return ::media::Result<MediaTsSelectedPacketDurationEvidence>::success(
                 evidence);
         }
     }
+}
+
+::media::ErrorInfo MediaTsInputSession::terminateDurationProbe(
+    ::media::ErrorInfo error)
+{
+    std::lock_guard lock(m_sessionMutex);
+    if (!m_finalError) m_finalError = std::move(error);
+    m_durationProbe.reset();
+    return *m_finalError;
 }
 
 ::media::Result<MediaTsReadFrameEnvelope>

@@ -1,7 +1,7 @@
 #pragma once
 
+#include "internal/graph/protocol/mpegts/MediaTsPacketDurationEvidence.h"
 #include "internal/graph/time/MediaRunningTime.h"
-#include "internal/graph/protocol/mpegts/MediaTsPreflightDurationProbe.h"
 
 #include <cstddef>
 #include <cstdint>

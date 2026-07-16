@@ -326,6 +326,12 @@ public:
         return m_changed.wait_for(
             lock, std::chrono::seconds(5), [this] { return m_blocked; });
     }
+    void failBlockedRead()
+    {
+        std::lock_guard lock(m_mutex);
+        m_failed = true;
+        m_changed.notify_all();
+    }
     std::size_t readCount()
     {
         std::lock_guard lock(m_mutex);
@@ -347,7 +353,10 @@ private:
         }
         self.m_blocked = true;
         self.m_changed.notify_all();
-        self.m_changed.wait(lock, [&self] { return self.m_interrupted; });
+        self.m_changed.wait(lock, [&self] {
+            return self.m_interrupted || self.m_failed;
+        });
+        if (self.m_failed) return AVERROR(EIO);
         return self.m_interrupt.callback(self.m_interrupt.opaque)
             ? self.m_interruptResult : AVERROR(EIO);
     }
@@ -358,9 +367,34 @@ private:
     std::condition_variable m_changed;
     bool m_blocked = false;
     bool m_interrupted = false;
+    bool m_failed = false;
     std::size_t m_readCount = 0;
     int m_interruptResult = AVERROR_EXIT;
 };
+
+void expectSameError(TestContext& ctx,
+                     const ::media::ErrorInfo& expected,
+                     const ::media::ErrorInfo& actual)
+{
+    EXPECT_EQ(ctx, actual.code, expected.code);
+    EXPECT_EQ(ctx, actual.nativeCode, expected.nativeCode);
+    EXPECT_EQ(ctx, actual.message, expected.message);
+}
+
+void expectDurationProbeTerminal(TestContext& ctx,
+                                 MediaTsInputSession& session,
+                                 const ::media::ErrorInfo& expected)
+{
+    auto read = session.readFrame();
+    EXPECT_FALSE(ctx, read);
+    if (!read) expectSameError(ctx, expected, read.error());
+    auto status = session.status();
+    EXPECT_FALSE(ctx, status);
+    if (!status) expectSameError(ctx, expected, status.error());
+    auto repeated = session.probeSelectedPacketDurations(32);
+    EXPECT_FALSE(ctx, repeated);
+    if (!repeated) expectSameError(ctx, expected, repeated.error());
+}
 
 class ReentrantCloseObserver final : public FFmpegObservedByteSink {
 public:
@@ -734,9 +768,90 @@ void testSessionDurationProbeFailsClosedWithoutPositiveSelectedEvidence(
     auto configured = configureRuntimeBindingForTest(*session.value(), 32);
     EXPECT_TRUE(ctx, configured);
     if (!configured) return;
-    EXPECT_FALSE(ctx, session.value()->probeSelectedPacketDurations(32));
+    const auto readsBeforeInvalidLimit = opener.readCount();
+    auto invalidLimit = session.value()->probeSelectedPacketDurations(0);
+    EXPECT_FALSE(ctx, invalidLimit);
+    if (!invalidLimit) {
+        EXPECT_EQ(ctx, invalidLimit.error().code,
+                  ::media::ErrorCode::InvalidArgument);
+    }
+    EXPECT_EQ(ctx, opener.readCount(), readsBeforeInvalidLimit);
+    EXPECT_TRUE(ctx, session.value()->status());
+    auto failed = session.value()->probeSelectedPacketDurations(32);
+    EXPECT_FALSE(ctx, failed);
+    if (!failed) {
+        const auto readsAfterFailure = opener.readCount();
+        expectDurationProbeTerminal(ctx, *session.value(), failed.error());
+        EXPECT_EQ(ctx, opener.readCount(), readsAfterFailure);
+    }
     session.value().reset();
     EXPECT_EQ(ctx, opener.closeCount(), std::size_t{1});
+}
+
+void testSessionDurationProbeFrameLimitIsTerminal(TestContext& ctx)
+{
+    FragmentedOpener opener(validMpegTsBytes(8, false, true));
+    MediaTsInputSessionOptions options;
+    options.protocolUrl = "test://duration-frame-limit";
+    options.avioBufferBytes = 64;
+    options.packetStride = 188;
+    options.evidenceCapacity = 64;
+    options.pesProvenanceCapacity = 64;
+    options.maximumPositionRegressionBytes = 188 * 16;
+    auto session = MediaTsInputSession::open(options, opener);
+    EXPECT_TRUE(ctx, session);
+    if (!session) return;
+    auto configured = configureRuntimeBindingForTest(*session.value(), 64);
+    EXPECT_TRUE(ctx, configured);
+    if (!configured) return;
+    auto failed = session.value()->probeSelectedPacketDurations(1);
+    EXPECT_FALSE(ctx, failed);
+    if (!failed) {
+        const auto readsAfterFailure = opener.readCount();
+        expectDurationProbeTerminal(ctx, *session.value(), failed.error());
+        EXPECT_EQ(ctx, opener.readCount(), readsAfterFailure);
+    }
+    session.value().reset();
+    EXPECT_EQ(ctx, opener.closeCount(), std::size_t{1});
+}
+
+void testSessionDurationProbeBackendFailureIsTerminal(TestContext& ctx)
+{
+    BlockingByteOpener opener(validMpegTsBytes(64), AVERROR(EIO));
+    AVDictionary* demuxOptions = nullptr;
+    av_dict_set(&demuxOptions, "probesize", "512", 0);
+    av_dict_set(&demuxOptions, "analyzeduration", "0", 0);
+    MediaTsInputSessionOptions options;
+    options.protocolUrl = "test://duration-backend-failure";
+    options.demuxOptions = demuxOptions;
+    options.avioBufferBytes = 64;
+    options.packetStride = 188;
+    options.evidenceCapacity = 128;
+    options.pesProvenanceCapacity = 128;
+    options.maximumPositionRegressionBytes = 188 * 64;
+    auto session = MediaTsInputSession::open(options, opener);
+    av_dict_free(&demuxOptions);
+    EXPECT_TRUE(ctx, session);
+    if (!session) return;
+    auto configured = configureRuntimeBindingForTest(*session.value(), 128);
+    EXPECT_TRUE(ctx, configured);
+    if (!configured) return;
+    ::media::Result<MediaTsSelectedPacketDurationEvidence> failed =
+        ::media::Result<MediaTsSelectedPacketDurationEvidence>::success({});
+    std::thread probe([&] {
+        failed = session.value()->probeSelectedPacketDurations(256);
+    });
+    EXPECT_TRUE(ctx, opener.waitUntilBlocked());
+    opener.failBlockedRead();
+    probe.join();
+    EXPECT_FALSE(ctx, failed);
+    if (!failed) {
+        const auto readsAfterFailure = opener.readCount();
+        expectDurationProbeTerminal(ctx, *session.value(), failed.error());
+        EXPECT_EQ(ctx, opener.readCount(), readsAfterFailure);
+    }
+    session.value().reset();
+    EXPECT_EQ(ctx, opener.closeCount, std::size_t{1});
 }
 
 void testSessionRejectsUnsupportedAndIncompleteInput(TestContext& ctx)
@@ -1012,6 +1127,8 @@ void runMpegTsInputSessionTests(TestContext& ctx)
     testSessionPublishesParserContinuityEvidence(ctx);
     testSessionReplaysProbeContinuityAcrossSelectedProgram(ctx);
     testSessionDurationProbeFailsClosedWithoutPositiveSelectedEvidence(ctx);
+    testSessionDurationProbeFrameLimitIsTerminal(ctx);
+    testSessionDurationProbeBackendFailureIsTerminal(ctx);
     testSessionRejectsUnsupportedAndIncompleteInput(ctx);
     testPreparedDestructionBeforeTransferClosesOnce(ctx);
     testSessionCloseRejectsNewReads(ctx);
