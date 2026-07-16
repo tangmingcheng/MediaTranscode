@@ -1,18 +1,95 @@
 #include "common/TestAssert.h"
 
 #include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
+#include "internal/graph/planner/MediaPipelineCapabilityScanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncAssemblyPlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
+#include "internal/graph/protocol/mpegts/MediaTsPreflightDurationProbe.h"
 
 #include <cstdint>
 #include <string>
+#include <type_traits>
 #include <variant>
 
 using namespace media::ffmpeg::graph;
 using media_transcode::test::TestContext;
 
 namespace {
+
+MediaTsReadFrameEnvelope durationEnvelope(int streamIndex,
+                                          std::int64_t duration)
+{
+    auto packet = media::ffmpeg::makePacket();
+    packet->stream_index = streamIndex;
+    packet->duration = duration;
+    return MediaTsReadFrameEnvelope{
+        MediaTsReadFrameState::Frame, std::move(packet), {}};
+}
+
+MediaTsPreflightDurationProbe completeDurationProbe(std::size_t frameLimit)
+{
+    auto probe = MediaTsPreflightDurationProbe::create(
+        MediaTsRuntimeStreamBinding{3, 703}, MediaRational{1, 90'000},
+        MediaTsRuntimeStreamBinding{5, 705}, MediaRational{1, 48'000},
+        frameLimit);
+    return std::move(probe).value();
+}
+
+void testTsDurationProbeOwnsExactEvidenceAndLosslessReplay(TestContext& ctx)
+{
+    static_assert(!std::is_copy_constructible_v<MediaTsPreflightDurationProbe>);
+    static_assert(!std::is_copy_assignable_v<MediaTsPreflightDurationProbe>);
+    static_assert(std::is_move_constructible_v<MediaTsPreflightDurationProbe>);
+
+    auto probe = completeDurationProbe(4);
+    auto unrelated = probe.buffer(durationEnvelope(9, 17));
+    EXPECT_TRUE(ctx, unrelated);
+    EXPECT_FALSE(ctx, unrelated.value().has_value());
+    auto audio = probe.buffer(durationEnvelope(5, 1'024));
+    EXPECT_TRUE(ctx, audio);
+    EXPECT_FALSE(ctx, audio.value().has_value());
+    auto video = probe.buffer(durationEnvelope(3, 3'003));
+    EXPECT_TRUE(ctx, video);
+    EXPECT_TRUE(ctx, video.value().has_value());
+    if (!video || !video.value()) return;
+    EXPECT_EQ(ctx, video.value()->video.streamIndex, 3);
+    EXPECT_EQ(ctx, video.value()->video.elementaryPid, std::uint16_t{703});
+    EXPECT_EQ(ctx, video.value()->video.packetDuration, std::int64_t{3'003});
+    EXPECT_EQ(ctx, video.value()->video.timeBase.num, 1);
+    EXPECT_EQ(ctx, video.value()->video.timeBase.den, 90'000);
+    EXPECT_EQ(ctx, video.value()->audio.streamIndex, 5);
+    EXPECT_EQ(ctx, video.value()->audio.elementaryPid, std::uint16_t{705});
+    EXPECT_EQ(ctx, video.value()->audio.packetDuration, std::int64_t{1'024});
+    EXPECT_EQ(ctx, video.value()->audio.timeBase.num, 1);
+    EXPECT_EQ(ctx, video.value()->audio.timeBase.den, 48'000);
+
+    for (const int expected : {9, 5, 3}) {
+        auto replay = probe.popReplay();
+        EXPECT_TRUE(ctx, replay);
+        if (replay) EXPECT_EQ(ctx, replay.value().packet->stream_index, expected);
+    }
+    EXPECT_FALSE(ctx, probe.popReplay());
+}
+
+void testTsDurationProbeRejectsMissingAndNonPositiveEvidence(TestContext& ctx)
+{
+    auto zeroVideo = completeDurationProbe(2);
+    EXPECT_FALSE(ctx, zeroVideo.buffer(durationEnvelope(3, 0)));
+    auto negativeVideo = completeDurationProbe(2);
+    EXPECT_FALSE(ctx, negativeVideo.buffer(durationEnvelope(3, -1)));
+    auto zeroAudio = completeDurationProbe(2);
+    EXPECT_FALSE(ctx, zeroAudio.buffer(durationEnvelope(5, 0)));
+    auto negativeAudio = completeDurationProbe(2);
+    EXPECT_FALSE(ctx, negativeAudio.buffer(durationEnvelope(5, -1)));
+
+    auto missingAudio = completeDurationProbe(2);
+    EXPECT_TRUE(ctx, missingAudio.buffer(durationEnvelope(9, 1)));
+    EXPECT_FALSE(ctx, missingAudio.buffer(durationEnvelope(3, 3'003)));
+    auto missingVideo = completeDurationProbe(2);
+    EXPECT_TRUE(ctx, missingVideo.buffer(durationEnvelope(9, 1)));
+    EXPECT_FALSE(ctx, missingVideo.buffer(durationEnvelope(5, 1'024)));
+}
 
 MediaRealtimeRtpTranscodeRequest completeProductionRtpRequest()
 {
@@ -61,6 +138,51 @@ MediaRealtimeRtpTranscodeRequest completeProductionRtpRequest()
     request.avSyncStartup.maximumGap =
         MediaRunningTime::fromNanoseconds(40'000'000);
     return request;
+}
+
+MediaRealtimeRtpTranscodeRequest completeProductionTsRequest()
+{
+    auto request = completeProductionRtpRequest();
+    request.input.type = RealtimeInputType::MpegTsUdp;
+    request.input.streamLayout = RealtimeInputStreamLayout::MuxedTransportStream;
+    request.input.url = "udp://127.0.0.1:5000";
+    request.output.streamLayout = RealtimeOutputStreamLayout::MuxedTransportStream;
+    request.output.url = "udp://127.0.0.1:7000";
+    return request;
+}
+
+MediaRealtimeInputStreamInfo completeProductionTsStreams()
+{
+    MediaRealtimeInputStreamInfo streams;
+    streams.video.streamIndex = 3;
+    streams.video.codecName = "h264";
+    streams.video.width = 1920;
+    streams.video.height = 1080;
+    streams.video.bitrateBitsPerSecond = 8'000'000;
+    streams.video.frameRate = {30'000, 1'001};
+    streams.hasAudio = true;
+    streams.audio.streamIndex = 5;
+    streams.audio.codecName = "aac";
+    streams.audio.sampleRate = 48'000;
+    streams.audio.channels = 2;
+    streams.audio.channelLayout = "stereo";
+    streams.audio.sampleFormat = "fltp";
+    streams.audio.profile = MediaAudioProfile::knownAacLow();
+    streams.audio.bitrateBitsPerSecond = 320'000;
+    streams.audio.maximumAccessUnitSamples = 1'024;
+    streams.audio.selectedDecoder = MediaSelectedAudioDecoder{
+        "aac", "fltp", "stereo", 48'000, 48'000, 2, 0, 1'024};
+    return streams;
+}
+
+MediaTsSelectedProgramPlan completeProductionTsSelection()
+{
+    MediaTsSelectedProgramPlan selected{7, 777, 703, 705, 701};
+    selected.videoPacketDuration = MediaTsPacketDurationEvidence{
+        3, 703, 3'003, {1, 90'000}};
+    selected.audioPacketDuration = MediaTsPacketDurationEvidence{
+        5, 705, 1'024, {1, 48'000}};
+    return selected;
 }
 
 void expectInvalid(TestContext& ctx, const MediaRealtimeRtpTranscodePlan& plan)
@@ -195,33 +317,12 @@ void testAssemblyRejectsEveryInvalidContractField(TestContext& ctx)
 
 void testCompleteMpegTsAssemblyProduct(TestContext& ctx)
 {
-    auto outerResult = MediaRealtimeRtpTranscodePlanner::plan(
-        completeProductionRtpRequest());
-    EXPECT_TRUE(ctx, outerResult);
-    if (!outerResult) return;
-    auto outer = std::move(outerResult).value();
-    outer.inputType = RealtimeInputType::MpegTsUdp;
-    outer.inputLayout = RealtimeInputStreamLayout::MuxedTransportStream;
-    outer.outputLayout = RealtimeOutputStreamLayout::MuxedTransportStream;
-    outer.muxedOutput.url = "udp://127.0.0.1:7000";
-
-    auto request = completeProductionRtpRequest();
-    request.input.type = RealtimeInputType::MpegTsUdp;
-    request.input.streamLayout = RealtimeInputStreamLayout::MuxedTransportStream;
-    request.input.url = "udp://127.0.0.1:5000";
-    request.output.streamLayout = RealtimeOutputStreamLayout::MuxedTransportStream;
-    request.output.url = outer.muxedOutput.url;
-    const MediaTsSelectedProgramPlan selected{7, 777, 703, 705, 701};
-    const MediaProjectMpegTsResolvedPipelineFacts resolved{
-        outer.videoPlan.outputCodecName, *outer.audioPlan.resolvedOutput};
-    auto synchronization = MediaAvSyncPlanner::plan(request, &selected, &resolved);
-    EXPECT_TRUE(ctx, synchronization);
-    if (!synchronization) return;
-    auto runtime = MediaRealtimeAvSyncRuntimePlanner::plan(
-        outer, std::move(synchronization).value());
-    EXPECT_TRUE(ctx, runtime);
-    if (!runtime) return;
-    outer.avSyncRuntime = std::move(runtime).value();
+    auto planned = MediaRealtimeRtpTranscodePlanner::planPreparedInput(
+        completeProductionTsRequest(), completeProductionTsStreams(),
+        completeProductionTsSelection());
+    EXPECT_TRUE(ctx, planned);
+    if (!planned) return;
+    auto outer = std::move(planned).value();
     EXPECT_TRUE(ctx, MediaRealtimeRtpTranscodePlanner::validatePlannedProduct(outer));
     const auto& assembly = outer.avSyncRuntime->assembly;
     EXPECT_TRUE(ctx, std::holds_alternative<MediaMpegTsInputClockAssemblyPlan>(
@@ -256,6 +357,7 @@ void testCompleteMpegTsAssemblyProduct(TestContext& ctx)
                          .requirePositiveDuration);
 
     const auto valid = assembly;
+    const auto validTsInput = *outer.input.mpegTs;
     std::get<MediaPacketDurationPlan>(
         outer.avSyncRuntime->assembly.video.duration).requirePositiveDuration = false;
     expectInvalid(ctx, outer);
@@ -263,6 +365,60 @@ void testCompleteMpegTsAssemblyProduct(TestContext& ctx)
     std::get<MediaPacketDurationPlan>(
         outer.avSyncRuntime->assembly.audio.duration).requirePositiveDuration = false;
     expectInvalid(ctx, outer);
+    outer.avSyncRuntime->assembly = valid;
+    outer.input.mpegTs->videoPacketDuration.reset();
+    expectInvalid(ctx, outer);
+    *outer.input.mpegTs = validTsInput;
+    outer.input.mpegTs->audioPacketDuration->packetDuration = 0;
+    expectInvalid(ctx, outer);
+    *outer.input.mpegTs = validTsInput;
+    outer.input.mpegTs->videoPacketDuration->elementaryPid = 704;
+    expectInvalid(ctx, outer);
+    *outer.input.mpegTs = validTsInput;
+    outer.input.mpegTs->audioPacketDuration->timeBase.den = 0;
+    expectInvalid(ctx, outer);
+}
+
+void testMpegTsPreparedPlanningRejectsInvalidDurationEvidence(TestContext& ctx)
+{
+    const auto request = completeProductionTsRequest();
+    const auto streams = completeProductionTsStreams();
+    const auto valid = completeProductionTsSelection();
+    const auto reject = [&](MediaTsSelectedProgramPlan selected) {
+        EXPECT_FALSE(ctx, MediaRealtimeRtpTranscodePlanner::planPreparedInput(
+                              request, streams, selected));
+    };
+
+    auto selected = valid;
+    selected.videoPacketDuration.reset();
+    reject(selected);
+    selected = valid;
+    selected.audioPacketDuration.reset();
+    reject(selected);
+    selected = valid;
+    selected.videoPacketDuration->packetDuration = 0;
+    reject(selected);
+    selected = valid;
+    selected.videoPacketDuration->packetDuration = -1;
+    reject(selected);
+    selected = valid;
+    selected.audioPacketDuration->packetDuration = 0;
+    reject(selected);
+    selected = valid;
+    selected.audioPacketDuration->packetDuration = -1;
+    reject(selected);
+    selected = valid;
+    selected.videoPacketDuration->streamIndex = 4;
+    reject(selected);
+    selected = valid;
+    selected.audioPacketDuration->elementaryPid = 706;
+    reject(selected);
+    selected = valid;
+    selected.videoPacketDuration->timeBase.num = 0;
+    reject(selected);
+    selected = valid;
+    selected.audioPacketDuration->timeBase.den = -1;
+    reject(selected);
 }
 
 void testUnsupportedTopologyAndMissingSynchronizedAudioFailClosed(TestContext& ctx)
@@ -281,8 +437,11 @@ void testUnsupportedTopologyAndMissingSynchronizedAudioFailClosed(TestContext& c
 
 void runAvSyncProductionPlanTests(TestContext& ctx)
 {
+    testTsDurationProbeOwnsExactEvidenceAndLosslessReplay(ctx);
+    testTsDurationProbeRejectsMissingAndNonPositiveEvidence(ctx);
     testCompleteSeparateRtpAssemblyProduct(ctx);
     testAssemblyRejectsEveryInvalidContractField(ctx);
     testCompleteMpegTsAssemblyProduct(ctx);
+    testMpegTsPreparedPlanningRejectsInvalidDurationEvidence(ctx);
     testUnsupportedTopologyAndMissingSynchronizedAudioFailClosed(ctx);
 }

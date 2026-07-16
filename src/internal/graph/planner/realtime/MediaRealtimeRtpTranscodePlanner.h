@@ -67,6 +67,8 @@ struct MediaRealtimeTsInputPlan final {
     int timestampTimeBaseDenominator = 0;
     std::uint64_t initialSourceGeneration = 0;
     std::uint64_t initialRawTransportGeneration = 0;
+    std::optional<MediaTsPacketDurationEvidence> videoPacketDuration;
+    std::optional<MediaTsPacketDurationEvidence> audioPacketDuration;
 
     static ::media::Result<MediaRealtimeTsInputPlan> create(
         std::size_t packetSize,
@@ -175,6 +177,10 @@ public:
     static ::media::Result<MediaRealtimeTranscodePreflight> preflight(
         const MediaRealtimeRtpTranscodeRequest& request,
         const MediaRealtimePreflightIo& io);
+    static ::media::Result<MediaRealtimeRtpTranscodePlan> planPreparedInput(
+        const MediaRealtimeRtpTranscodeRequest& request,
+        const MediaRealtimeInputStreamInfo& input,
+        const MediaTsSelectedProgramPlan& selectedTsProgram);
     static ::media::Status validateRealtimeRequestNoIo(
         const MediaRealtimeRtpTranscodeRequest& request);
     static ::media::Status validatePlannedProduct(

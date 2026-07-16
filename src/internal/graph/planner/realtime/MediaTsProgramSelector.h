@@ -2,6 +2,9 @@
 
 #include "internal/graph/protocol/mpegts/MediaTsProgramInventory.h"
 #include "internal/graph/protocol/mpegts/MediaTsPublicProgramSnapshot.h"
+#include "internal/graph/protocol/mpegts/MediaTsPreflightDurationProbe.h"
+
+#include <optional>
 
 namespace media::ffmpeg::graph {
 
@@ -11,6 +14,8 @@ struct MediaTsSelectedProgramPlan final {
     int videoPid = 0;
     int audioPid = 0;
     int pcrPid = 0;
+    std::optional<MediaTsPacketDurationEvidence> videoPacketDuration;
+    std::optional<MediaTsPacketDurationEvidence> audioPacketDuration;
 };
 
 class MediaTsProgramSelector final {

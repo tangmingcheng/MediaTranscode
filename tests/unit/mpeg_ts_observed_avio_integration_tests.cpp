@@ -431,6 +431,25 @@ void testProductionBuilderRejectsUnassembledSynchronizedGraph(
         integrationRequest(inputPort, outputPort));
     EXPECT_TRUE(ctx, preflight);
     if (!preflight) return;
+    const auto& planned = preflight.value().plan;
+    EXPECT_TRUE(ctx, planned.input.mpegTs.has_value());
+    EXPECT_TRUE(ctx, planned.avSyncRuntime.has_value());
+    if (!planned.input.mpegTs || !planned.avSyncRuntime) return;
+    EXPECT_TRUE(ctx, planned.input.mpegTs->videoPacketDuration.has_value());
+    EXPECT_TRUE(ctx, planned.input.mpegTs->audioPacketDuration.has_value());
+    if (!planned.input.mpegTs->videoPacketDuration ||
+        !planned.input.mpegTs->audioPacketDuration) return;
+    EXPECT_TRUE(ctx,
+                planned.input.mpegTs->videoPacketDuration->packetDuration > 0);
+    EXPECT_TRUE(ctx,
+                planned.input.mpegTs->audioPacketDuration->packetDuration > 0);
+    EXPECT_TRUE(ctx, std::holds_alternative<MediaPacketDurationPlan>(
+                         planned.avSyncRuntime->assembly.video.duration));
+    EXPECT_TRUE(ctx, std::holds_alternative<MediaPacketDurationPlan>(
+                         planned.avSyncRuntime->assembly.audio.duration));
+    EXPECT_TRUE(ctx,
+                MediaRealtimeRtpTranscodePlanner::validatePlannedProduct(
+                    planned));
     auto executable = MediaRealtimeRtpTranscodeGraphBuilder::buildExecutable(
         std::move(preflight).value());
     EXPECT_FALSE(ctx, executable);

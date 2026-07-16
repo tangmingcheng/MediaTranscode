@@ -115,6 +115,16 @@ constexpr std::uint64_t TsMaximumPacketPositionRegressionBytes = 1024 * 1024;
     if (auto configured = session->configureRuntimeBinding(runtimeBinding); !configured) {
         return ::media::Result<MediaPreparedRealtimeInputScan>::failure(configured.error());
     }
+    const std::size_t durationProbeFrameLimit = static_cast<std::size_t>(
+        probeBytes / TsPacketSize);
+    auto durationEvidence = session->probeSelectedPacketDurations(
+        durationProbeFrameLimit);
+    if (!durationEvidence) {
+        return ::media::Result<MediaPreparedRealtimeInputScan>::failure(
+            durationEvidence.error());
+    }
+    selected.value().videoPacketDuration = durationEvidence.value().video;
+    selected.value().audioPacketDuration = durationEvidence.value().audio;
     MediaPreparedRealtimeInputScan result;
     result.streams.video.streamIndex = video->index;
     result.streams.video.codecName = video->format.codec.codecName;

@@ -3,6 +3,20 @@
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 
 namespace media::ffmpeg::graph {
+namespace {
+
+bool validPacketDurationEvidence(
+    const MediaTsPacketDurationEvidence& evidence,
+    int streamIndex,
+    int elementaryPid) noexcept
+{
+    return evidence.streamIndex == streamIndex &&
+        evidence.elementaryPid == elementaryPid &&
+        evidence.packetDuration > 0 && evidence.timeBase.num > 0 &&
+        evidence.timeBase.den > 0;
+}
+
+} // namespace
 
 ::media::Result<MediaRealtimeAvSyncPlanningFacts>
 MediaRealtimeAvSyncPlanningFactsResolver::resolve(
@@ -62,6 +76,18 @@ MediaRealtimeAvSyncPlanningFactsResolver::resolve(
         if (!plan.audioPlan.selectedDecoder ||
             plan.audioPlan.selectedDecoder->inputSampleRate <= 0 ||
             !synchronization.ts || !synchronization.ts->outputMux ||
+            !synchronization.ts->videoPid || !synchronization.ts->audioPid ||
+            !plan.input.mpegTs ||
+            !plan.input.mpegTs->videoPacketDuration ||
+            !plan.input.mpegTs->audioPacketDuration ||
+            !validPacketDurationEvidence(
+                *plan.input.mpegTs->videoPacketDuration,
+                plan.videoPlan.sourceStreamIndex,
+                *synchronization.ts->videoPid) ||
+            !validPacketDurationEvidence(
+                *plan.input.mpegTs->audioPacketDuration,
+                plan.audioPlan.sourceStreamIndex,
+                *synchronization.ts->audioPid) ||
             synchronization.ts->outputMux->parameters()
                     .maximumAudioAccessUnitSamples <= 0) {
             return ::media::Result<MediaRealtimeAvSyncPlanningFacts>::failure(
@@ -70,6 +96,10 @@ MediaRealtimeAvSyncPlanningFactsResolver::resolve(
         }
         facts.inputAudioSampleRate =
             plan.audioPlan.selectedDecoder->inputSampleRate;
+        facts.inputVideoPacketDuration =
+            plan.input.mpegTs->videoPacketDuration;
+        facts.inputAudioPacketDuration =
+            plan.input.mpegTs->audioPacketDuration;
         facts.protocolBatchSamples = synchronization.ts->outputMux->parameters()
                                          .maximumAudioAccessUnitSamples;
     } else {

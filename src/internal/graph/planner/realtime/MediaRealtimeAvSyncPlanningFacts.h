@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/time/MediaRunningTime.h"
+#include "internal/graph/protocol/mpegts/MediaTsPreflightDurationProbe.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -15,6 +16,8 @@ struct MediaRealtimeAvSyncPlanningFacts final {
     std::optional<int> inputVideoClockRate;
     std::optional<int> inputAudioSampleRate;
     std::optional<std::uint32_t> inputAudioSamplesPerAccessUnit;
+    std::optional<MediaTsPacketDurationEvidence> inputVideoPacketDuration;
+    std::optional<MediaTsPacketDurationEvidence> inputAudioPacketDuration;
     std::optional<int> outputSampleRate;
     std::optional<std::int64_t> decoderDelaySamples;
     std::optional<std::int64_t> encoderLookaheadSamples;

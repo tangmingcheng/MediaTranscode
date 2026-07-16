@@ -717,6 +717,28 @@ void testSessionReplaysProbeContinuityAcrossSelectedProgram(TestContext& ctx)
     EXPECT_TRUE(ctx, sawAudioReacquire);
 }
 
+void testSessionDurationProbeFailsClosedWithoutPositiveSelectedEvidence(
+    TestContext& ctx)
+{
+    FragmentedOpener opener(validMpegTsBytes(0, false, true));
+    MediaTsInputSessionOptions options;
+    options.protocolUrl = "test://duration-evidence";
+    options.avioBufferBytes = 64;
+    options.packetStride = 188;
+    options.evidenceCapacity = 32;
+    options.pesProvenanceCapacity = 32;
+    options.maximumPositionRegressionBytes = 188 * 8;
+    auto session = MediaTsInputSession::open(options, opener);
+    EXPECT_TRUE(ctx, session);
+    if (!session) return;
+    auto configured = configureRuntimeBindingForTest(*session.value(), 32);
+    EXPECT_TRUE(ctx, configured);
+    if (!configured) return;
+    EXPECT_FALSE(ctx, session.value()->probeSelectedPacketDurations(32));
+    session.value().reset();
+    EXPECT_EQ(ctx, opener.closeCount(), std::size_t{1});
+}
+
 void testSessionRejectsUnsupportedAndIncompleteInput(TestContext& ctx)
 {
     FragmentedOpener opener(validMpegTsBytes());
@@ -989,6 +1011,7 @@ void runMpegTsInputSessionTests(TestContext& ctx)
     testSessionProbeAndPreparedTransfer(ctx);
     testSessionPublishesParserContinuityEvidence(ctx);
     testSessionReplaysProbeContinuityAcrossSelectedProgram(ctx);
+    testSessionDurationProbeFailsClosedWithoutPositiveSelectedEvidence(ctx);
     testSessionRejectsUnsupportedAndIncompleteInput(ctx);
     testPreparedDestructionBeforeTransferClosesOnce(ctx);
     testSessionCloseRejectsNewReads(ctx);

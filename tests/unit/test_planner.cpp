@@ -1120,6 +1120,39 @@ void testRealtimePlannerProducesCompleteTsAvSyncRuntimeProduct(TestContext& ctx)
     outer.outputLayout = RealtimeOutputStreamLayout::MuxedTransportStream;
     outer.muxedOutput.url = "udp://127.0.0.1:7000";
 
+    constexpr std::uint64_t MaximumPacketPositionRegressionBytes = 188;
+    auto evidenceCapacity = MediaRealtimeTsInputPlan::minimumEvidenceCapacity(
+        188, static_cast<std::uint64_t>(outer.input.probeSizeBytes),
+        MaximumPacketPositionRegressionBytes);
+    EXPECT_TRUE(ctx, evidenceCapacity);
+    if (!evidenceCapacity) return;
+    auto tsInput = MediaRealtimeTsInputPlan::create(
+        188, static_cast<std::uint64_t>(outer.input.probeSizeBytes),
+        MaximumPacketPositionRegressionBytes, evidenceCapacity.value(), 2);
+    EXPECT_TRUE(ctx, tsInput);
+    if (!tsInput) return;
+    tsInput.value().programNumber = selectedTsProgram().programNumber;
+    tsInput.value().programMapPid = selectedTsProgram().programMapPid;
+    tsInput.value().videoPid = selectedTsProgram().videoPid;
+    tsInput.value().audioPid = selectedTsProgram().audioPid;
+    tsInput.value().pcrPid = selectedTsProgram().pcrPid;
+    tsInput.value().pcrInterval27Mhz = 540'000;
+    tsInput.value().maximumPcrJitter27Mhz = 135'000;
+    tsInput.value().maximumPcrGap27Mhz = 2'700'000;
+    tsInput.value().projectionCapacity =
+        tsInput.value().evidenceTimelineCapacity;
+    tsInput.value().timestampTimeBaseNumerator = 1;
+    tsInput.value().timestampTimeBaseDenominator = 90'000;
+    tsInput.value().videoPacketDuration = MediaTsPacketDurationEvidence{
+        outer.videoPlan.sourceStreamIndex,
+        static_cast<std::uint16_t>(selectedTsProgram().videoPid),
+        3'003, MediaRational{1, 90'000}};
+    tsInput.value().audioPacketDuration = MediaTsPacketDurationEvidence{
+        outer.audioPlan.sourceStreamIndex,
+        static_cast<std::uint16_t>(selectedTsProgram().audioPid),
+        1'024, MediaRational{1, 48'000}};
+    outer.input.mpegTs = std::move(tsInput).value();
+
     const auto resolvedOutput = validTsResolvedFacts();
     auto synchronization = MediaAvSyncPlanner::plan(
         avSyncTsRequest(), &selectedTsProgram(), &resolvedOutput);

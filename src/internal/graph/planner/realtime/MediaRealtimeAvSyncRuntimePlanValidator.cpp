@@ -382,7 +382,22 @@ namespace media::ffmpeg::graph {
             runtime.planningFacts.inputVideoClockRate ||
             runtime.planningFacts.inputAudioSamplesPerAccessUnit ||
             !runtime.planningFacts.inputAudioSampleRate ||
-            *runtime.planningFacts.inputAudioSampleRate <= 0) {
+            *runtime.planningFacts.inputAudioSampleRate <= 0 ||
+            !outer.input.mpegTs ||
+            !outer.input.mpegTs->videoPacketDuration ||
+            !outer.input.mpegTs->audioPacketDuration ||
+            !runtime.planningFacts.inputVideoPacketDuration ||
+            !runtime.planningFacts.inputAudioPacketDuration ||
+            runtime.planningFacts.inputVideoPacketDuration !=
+                outer.input.mpegTs->videoPacketDuration ||
+            runtime.planningFacts.inputAudioPacketDuration !=
+                outer.input.mpegTs->audioPacketDuration ||
+            runtime.planningFacts.inputVideoPacketDuration->packetDuration <= 0 ||
+            runtime.planningFacts.inputAudioPacketDuration->packetDuration <= 0 ||
+            runtime.planningFacts.inputVideoPacketDuration->timeBase.num <= 0 ||
+            runtime.planningFacts.inputVideoPacketDuration->timeBase.den <= 0 ||
+            runtime.planningFacts.inputAudioPacketDuration->timeBase.num <= 0 ||
+            runtime.planningFacts.inputAudioPacketDuration->timeBase.den <= 0) {
             return invalid("MPEG-TS topology and adapter");
         }
         const auto& output = std::get<MediaProjectMpegTsRuntimeOutputPlan>(

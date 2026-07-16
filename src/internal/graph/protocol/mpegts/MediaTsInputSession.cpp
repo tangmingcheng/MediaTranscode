@@ -339,6 +339,76 @@ MediaTsInputSession::~MediaTsInputSession()
     }
     ReadLease guard(*this);
 
+    if (m_durationProbe && !m_durationProbe->replayEmpty()) {
+        return m_durationProbe->popReplay();
+    }
+    m_durationProbe.reset();
+    return readFrameFromSource();
+}
+
+::media::Result<MediaTsSelectedPacketDurationEvidence>
+MediaTsInputSession::probeSelectedPacketDurations(std::size_t frameLimit)
+{
+    {
+        std::lock_guard lock(m_sessionMutex);
+        if (m_closing || m_closed || !m_formatContext) {
+            return ::media::Result<MediaTsSelectedPacketDurationEvidence>::failure(
+                ::media::ErrorInfo::cancelled("MPEG-TS input session is closed"));
+        }
+        if (m_activeReads != 0 || m_durationProbe ||
+            !m_runtimeContract.originBinding) {
+            return ::media::Result<MediaTsSelectedPacketDurationEvidence>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "MPEG-TS duration preflight requires one configured unread session"));
+        }
+        ++m_activeReads;
+    }
+    ReadLease guard(*this);
+
+    const auto& binding = *m_runtimeContract.originBinding;
+    const FFmpegInputStreamSnapshot* video = nullptr;
+    const FFmpegInputStreamSnapshot* audio = nullptr;
+    for (const auto& stream : m_streamSnapshots) {
+        if (stream.index == binding.video.streamIndex) video = &stream;
+        if (stream.index == binding.audio.streamIndex) audio = &stream;
+    }
+    if (!video || !audio) {
+        return ::media::Result<MediaTsSelectedPacketDurationEvidence>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "MPEG-TS duration preflight selected stream snapshots are absent"));
+    }
+    auto probe = MediaTsPreflightDurationProbe::create(
+        binding.video, video->time.timeBase,
+        binding.audio, audio->time.timeBase,
+        frameLimit);
+    if (!probe) {
+        return ::media::Result<MediaTsSelectedPacketDurationEvidence>::failure(
+            probe.error());
+    }
+    for (;;) {
+        auto source = readFrameFromSource();
+        if (!source) {
+            return ::media::Result<MediaTsSelectedPacketDurationEvidence>::failure(
+                source.error());
+        }
+        auto observed = probe.value().buffer(std::move(source).value());
+        if (!observed) {
+            return ::media::Result<MediaTsSelectedPacketDurationEvidence>::failure(
+                observed.error());
+        }
+        if (observed.value()) {
+            const auto evidence = *observed.value();
+            m_durationProbe.emplace(std::move(probe).value());
+            return ::media::Result<MediaTsSelectedPacketDurationEvidence>::success(
+                evidence);
+        }
+    }
+}
+
+::media::Result<MediaTsReadFrameEnvelope>
+MediaTsInputSession::readFrameFromSource()
+{
+
     auto packet = ::media::ffmpeg::makePacket();
     if (!packet) {
         return ::media::Result<MediaTsReadFrameEnvelope>::failure(

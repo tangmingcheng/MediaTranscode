@@ -4,6 +4,7 @@
 #include "internal/graph/protocol/mpegts/MediaTsDemuxSession.h"
 #include "internal/graph/protocol/mpegts/MediaTsPublicProgramSnapshot.h"
 #include "internal/graph/protocol/mpegts/MediaTsPesProvenanceTimeline.h"
+#include "internal/graph/protocol/mpegts/MediaTsPreflightDurationProbe.h"
 #include "internal/graph/protocol/mpegts/MediaTsReturnedPesCursor.h"
 #include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegObservedReadAvio.h"
@@ -48,6 +49,8 @@ public:
     MediaTsInputSession& operator=(MediaTsInputSession&&) = delete;
 
     ::media::Result<MediaTsReadFrameEnvelope> readFrame() override;
+    ::media::Result<MediaTsSelectedPacketDurationEvidence>
+    probeSelectedPacketDurations(std::size_t frameLimit);
     ::media::Status configureRuntimeBinding(const MediaTsRuntimeBinding& binding);
     ::media::Status close() noexcept override;
     void cancel() noexcept override { m_interruptState.cancel(); }
@@ -72,6 +75,7 @@ private:
         const MediaTsInputSessionOptions& options,
         FFmpegProtocolAvioOpener* opener);
     ::media::Status buildStreamSnapshots();
+    ::media::Result<MediaTsReadFrameEnvelope> readFrameFromSource();
     ::media::Result<MediaTsPacketProvenance> provenanceFor(const AVPacket& packet);
 
     FFmpegAvioInterruptState m_interruptState;
@@ -88,6 +92,7 @@ private:
     std::optional<::media::ErrorInfo> m_finalError;
     MediaTsInputRuntimeContract m_runtimeContract{};
     std::unique_ptr<MediaTsReturnedPesCursor> m_returnedPesCursor;
+    std::optional<MediaTsPreflightDurationProbe> m_durationProbe;
     bool m_runtimeBindingConfigured = false;
 };
 

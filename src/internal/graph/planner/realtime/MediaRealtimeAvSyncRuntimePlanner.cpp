@@ -74,7 +74,15 @@ namespace {
             outer.outputLayout !=
                 RealtimeOutputStreamLayout::MuxedTransportStream ||
             !synchronization.ts || !facts.inputAudioSampleRate ||
-            *facts.inputAudioSampleRate <= 0) {
+            *facts.inputAudioSampleRate <= 0 ||
+            !facts.inputVideoPacketDuration ||
+            facts.inputVideoPacketDuration->packetDuration <= 0 ||
+            facts.inputVideoPacketDuration->timeBase.num <= 0 ||
+            facts.inputVideoPacketDuration->timeBase.den <= 0 ||
+            !facts.inputAudioPacketDuration ||
+            facts.inputAudioPacketDuration->packetDuration <= 0 ||
+            facts.inputAudioPacketDuration->timeBase.num <= 0 ||
+            facts.inputAudioPacketDuration->timeBase.den <= 0) {
             return ::media::Result<MediaRealtimeAvSyncAssemblyPlan>::failure(
                 ::media::ErrorInfo::notInitialized(
                     "MPEG-TS production assembly facts are incomplete"));

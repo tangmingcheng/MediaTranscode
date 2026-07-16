@@ -470,6 +470,26 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
             capacity.value(), MediaRealtimeRequestClassifier::audioRequested(options) ? 2 : 1);
         if (!ts) return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(ts.error());
         plan.input.mpegTs = std::move(ts).value();
+        if (selectedTsProgram) {
+            auto& selected = *plan.input.mpegTs;
+            selected.programNumber = selectedTsProgram->programNumber;
+            selected.programMapPid = selectedTsProgram->programMapPid;
+            selected.videoPid = selectedTsProgram->videoPid;
+            selected.audioPid = selectedTsProgram->audioPid;
+            selected.pcrPid = selectedTsProgram->pcrPid;
+            selected.videoPacketDuration =
+                selectedTsProgram->videoPacketDuration;
+            selected.audioPacketDuration =
+                selectedTsProgram->audioPacketDuration;
+            selected.pcrInterval27Mhz = 540'000;
+            selected.maximumPcrJitter27Mhz = 135'000;
+            selected.maximumPcrGap27Mhz = 2'700'000;
+            selected.projectionCapacity = selected.evidenceTimelineCapacity;
+            selected.timestampTimeBaseNumerator = 1;
+            selected.timestampTimeBaseDenominator = 90'000;
+            selected.initialSourceGeneration = 0;
+            selected.initialRawTransportGeneration = 0;
+        }
     }
     if (auto outputStatus = MediaRealtimeOutputPolicyPlanner::apply(options, outputUrls.value(), plan);
         !outputStatus) {
@@ -527,22 +547,6 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
         plan.audioMux.startupDelayMs = 0;
         plan.avStartBarrier = {};
     }
-    if (plan.input.mpegTs && selectedTsProgram) {
-        auto& ts = *plan.input.mpegTs;
-        ts.programNumber = selectedTsProgram->programNumber;
-        ts.programMapPid = selectedTsProgram->programMapPid;
-        ts.videoPid = selectedTsProgram->videoPid;
-        ts.audioPid = selectedTsProgram->audioPid;
-        ts.pcrPid = selectedTsProgram->pcrPid;
-        ts.pcrInterval27Mhz = 540'000;
-        ts.maximumPcrJitter27Mhz = 135'000;
-        ts.maximumPcrGap27Mhz = 2'700'000;
-        ts.projectionCapacity = ts.evidenceTimelineCapacity;
-        ts.timestampTimeBaseNumerator = 1;
-        ts.timestampTimeBaseDenominator = 90'000;
-        ts.initialSourceGeneration = 0;
-        ts.initialRawTransportGeneration = 0;
-    }
     if (auto status = MediaRealtimeTsInputPlanValidator::validate(plan.inputType, plan.input);
         !status) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(status.error());
@@ -552,6 +556,15 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
             status.error());
     }
     return ::media::Result<MediaRealtimeRtpTranscodePlan>::success(std::move(plan));
+}
+
+::media::Result<MediaRealtimeRtpTranscodePlan>
+MediaRealtimeRtpTranscodePlanner::planPreparedInput(
+    const MediaRealtimeRtpTranscodeRequest& request,
+    const MediaRealtimeInputStreamInfo& input,
+    const MediaTsSelectedProgramPlan& selectedTsProgram)
+{
+    return planWithInput(request, &input, &selectedTsProgram);
 }
 
 ::media::Result<MediaRealtimeTranscodePreflight> MediaRealtimeRtpTranscodePlanner::preflight(
@@ -595,9 +608,9 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
         return ::media::Result<MediaRealtimeTranscodePreflight>::failure(scanned.error());
     }
     MediaPreparedRealtimeInputScan scan = std::move(scanned).value();
-    auto planned = planWithInput(
-        request, &scan.streams,
-        scan.selectedTsProgram ? &*scan.selectedTsProgram : nullptr);
+    auto planned = scan.selectedTsProgram
+        ? planPreparedInput(request, scan.streams, *scan.selectedTsProgram)
+        : planWithInput(request, &scan.streams, nullptr);
     if (!planned) {
         return ::media::Result<MediaRealtimeTranscodePreflight>::failure(planned.error());
     }
