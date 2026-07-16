@@ -1143,6 +1143,7 @@ void testRealtimePlannerProducesCompleteTsAvSyncRuntimeProduct(TestContext& ctx)
         tsInput.value().evidenceTimelineCapacity;
     tsInput.value().timestampTimeBaseNumerator = 1;
     tsInput.value().timestampTimeBaseDenominator = 90'000;
+    tsInput.value().initialSourceGeneration = MediaFirstLockedSourceGeneration;
     tsInput.value().videoPacketDuration = MediaTsPacketDurationEvidence{
         outer.videoPlan.sourceStreamIndex,
         static_cast<std::uint16_t>(selectedTsProgram().videoPid),

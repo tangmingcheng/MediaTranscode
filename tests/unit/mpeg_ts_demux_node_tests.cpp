@@ -4,6 +4,7 @@
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/nodes/demux/MpegTsDemuxNode.h"
 #include "internal/graph/runtime/buffer/FFmpegPacketBuffer.h"
+#include "internal/graph/runtime/buffer/MediaSourceClockStateBuffer.h"
 #include "internal/graph/runtime/buffer/MediaTsPreparedInputBuffer.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
@@ -183,25 +184,35 @@ public:
 
 struct NodeFixture final {
     MediaGraph graph;
-    MediaNodeId source, demux, videoSink, audioSink;
+    MediaNodeId source, demux, videoSink, audioSink, clockSink;
     MediaGraphExecutionContext execution;
 
-    explicit NodeFixture(bool options = true)
+    explicit NodeFixture(bool options = true, bool clockOutput = false)
     {
         const auto queue = MediaGraphBuildSupport::blockingQueuePolicy(16);
         source = graph.addNode(MediaNodeKind::DebugDump, "test.source");
         demux = graph.addNode(MediaNodeKind::MpegTsDemux, "test.demux");
         videoSink = graph.addNode(MediaNodeKind::DebugDump, "test.video");
         audioSink = graph.addNode(MediaNodeKind::DebugDump, "test.audio");
+        clockSink = graph.addNode(MediaNodeKind::DebugDump, "test.clock");
         graph.addOutputPort(source, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext);
         graph.addInputPort(demux, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext);
         graph.addOutputPort(demux, "video", MediaStreamKind::Video, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet);
         graph.addOutputPort(demux, "audio", MediaStreamKind::Audio, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet);
+        if (clockOutput) {
+            graph.addOutputPort(demux, "clock", MediaStreamKind::Metadata,
+                                MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+            graph.addInputPort(clockSink, "clock", MediaStreamKind::Metadata,
+                               MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+        }
         graph.addInputPort(videoSink, "video", MediaStreamKind::Video, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet);
         graph.addInputPort(audioSink, "audio", MediaStreamKind::Audio, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet);
         graph.connect(source, "format", demux, "format", "format", queue);
         graph.connect(demux, "video", videoSink, "video", "video", queue);
         graph.connect(demux, "audio", audioSink, "audio", "audio", queue);
+        if (clockOutput) {
+            graph.connect(demux, "clock", clockSink, "clock", "clock", queue);
+        }
         if (options) setOptions();
     }
     void setOptions(std::size_t projectionCapacity = 32, const std::string& skipped = {})
@@ -226,6 +237,7 @@ struct NodeFixture final {
     MediaChannel* input() { return execution.findInputChannel(demux, "format"); }
     MediaChannel* video() { return execution.findOutputChannel(demux, "video"); }
     MediaChannel* audio() { return execution.findOutputChannel(demux, "audio"); }
+    MediaChannel* clock() { return execution.findOutputChannel(demux, "clock"); }
 };
 
 MediaBufferRef prepared(std::unique_ptr<MediaTsDemuxSession> session)
@@ -345,6 +357,39 @@ void testFramesRollbackAndLifecycle(TestContext& ctx)
     EXPECT_TRUE(ctx, stoppedNode.process(stopped.execution));
     EXPECT_TRUE(ctx, stoppedNode.stop(stopped.execution));
     EXPECT_EQ(ctx, stopStats->cancelCalls, 0); EXPECT_EQ(ctx, stopStats->closeCalls, 1);
+}
+
+void testPublishesSelectedProgramClockStateBeforeTimedPacket(TestContext& ctx)
+{
+    NodeFixture fixture(true, true);
+    fixture.graph.setNodeOption(
+        fixture.demux, "mpegts.initial_source_generation", "7");
+    EXPECT_TRUE(ctx, fixture.compile());
+    auto session = std::make_unique<ScriptedTsSession>();
+    session->evidenceTimeline = {evidence(100, 0), evidence(200, 2'700'000)};
+    session->frames.push_back(
+        {MediaTsReadFrameState::Frame, kVideoStream, 200, 90'000, 89'000,
+         {1, 90'000}});
+    EXPECT_TRUE(ctx, fixture.input()->push(prepared(std::move(session))));
+    MpegTsDemuxNode node(fixture.demux);
+    EXPECT_TRUE(ctx, node.process(fixture.execution));
+    MediaBufferRef stateOwner;
+    EXPECT_TRUE(ctx, fixture.clock()->tryPop(stateOwner));
+    const auto* state = dynamic_cast<const MediaSourceClockStateBuffer*>(
+        stateOwner.get());
+    EXPECT_TRUE(ctx, state != nullptr);
+    if (state) {
+        EXPECT_EQ(ctx, state->readiness(), MediaSourceClockReadiness::Locked);
+        EXPECT_EQ(ctx, state->generation(), std::uint64_t{7});
+    }
+    EXPECT_EQ(ctx, fixture.video()->size(), std::size_t{0});
+    EXPECT_TRUE(ctx, node.process(fixture.execution));
+    MediaBufferRef packetOwner;
+    const auto* packet = popPacket(*fixture.video(), packetOwner);
+    EXPECT_TRUE(ctx, packet != nullptr && packet->sourceTiming());
+    if (packet && packet->sourceTiming()) {
+        EXPECT_EQ(ctx, packet->sourceTiming()->generation, state->generation());
+    }
 }
 
 void testNegativePtsDtsMapAs33BitValues(TestContext& ctx)
@@ -586,6 +631,7 @@ void runMpegTsDemuxNodeTests(TestContext& ctx)
     testBindingFailures(ctx);
     testDuplicateTransferAndRuntimeContract(ctx);
     testFramesRollbackAndLifecycle(ctx);
+    testPublishesSelectedProgramClockStateBeforeTimedPacket(ctx);
     testNegativePtsDtsMapAs33BitValues(ctx);
     testIncrementalReacquireAndRollback(ctx);
     testProjectionIsTheOnlySourceGenerationAuthority(ctx);

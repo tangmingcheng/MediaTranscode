@@ -248,6 +248,13 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
     media_transcode_register_test(
         media_transcode_canonical_lineage_tests "node;deterministic")
 
+    add_executable(media_transcode_av_sync_canonical_input_tests
+        tests/unit/av_sync_canonical_input_tests.cpp
+    )
+    media_transcode_configure_test(media_transcode_av_sync_canonical_input_tests)
+    media_transcode_register_test(
+        media_transcode_av_sync_canonical_input_tests "node;deterministic")
+
     add_executable(media_transcode_video_codec_lineage_tests
         tests/unit/video_codec_lineage_tests.cpp
     )

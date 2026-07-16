@@ -75,7 +75,8 @@ enum class MediaNodeKind {
     AvBoundReleaseExtractor = 49,
     AudioStartupTrim = 50,
     RtpPacketClockBinder = 51,
-    RtpClockSnapshotFanout = 52
+    RtpClockSnapshotFanout = 52,
+    InitialLockedPacketGate = 53
 };
 
 } // namespace media::ffmpeg::graph

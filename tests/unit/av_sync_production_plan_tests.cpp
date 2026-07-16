@@ -358,6 +358,8 @@ void testCompleteMpegTsAssemblyProduct(TestContext& ctx)
 
     const auto valid = assembly;
     const auto validTsInput = *outer.input.mpegTs;
+    EXPECT_EQ(ctx, validTsInput.initialSourceGeneration,
+              MediaFirstLockedSourceGeneration);
     std::get<MediaPacketDurationPlan>(
         outer.avSyncRuntime->assembly.video.duration).requirePositiveDuration = false;
     expectInvalid(ctx, outer);
@@ -376,6 +378,9 @@ void testCompleteMpegTsAssemblyProduct(TestContext& ctx)
     expectInvalid(ctx, outer);
     *outer.input.mpegTs = validTsInput;
     outer.input.mpegTs->audioPacketDuration->timeBase.den = 0;
+    expectInvalid(ctx, outer);
+    *outer.input.mpegTs = validTsInput;
+    ++outer.input.mpegTs->initialSourceGeneration;
     expectInvalid(ctx, outer);
 }
 

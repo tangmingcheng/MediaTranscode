@@ -8,6 +8,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <string>
 
 namespace media::ffmpeg::graph {
 
@@ -46,6 +47,8 @@ private:
     std::uint64_t m_initialSourceGeneration = 0;
     StreamClock m_videoClock;
     StreamClock m_audioClock;
+    MediaBufferRef m_pendingPacket;
+    std::string m_pendingPacketPort;
     bool m_eofSent = false;
     std::atomic_bool m_aborted{false};
 };

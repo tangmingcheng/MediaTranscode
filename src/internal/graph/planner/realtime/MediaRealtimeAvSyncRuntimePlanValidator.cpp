@@ -384,6 +384,8 @@ namespace media::ffmpeg::graph {
             !runtime.planningFacts.inputAudioSampleRate ||
             *runtime.planningFacts.inputAudioSampleRate <= 0 ||
             !outer.input.mpegTs ||
+            outer.input.mpegTs->initialSourceGeneration !=
+                MediaFirstLockedSourceGeneration ||
             !outer.input.mpegTs->videoPacketDuration ||
             !outer.input.mpegTs->audioPacketDuration ||
             !runtime.planningFacts.inputVideoPacketDuration ||

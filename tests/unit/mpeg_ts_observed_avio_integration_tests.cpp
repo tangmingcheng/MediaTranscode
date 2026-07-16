@@ -437,6 +437,7 @@ void testProductionBuilderRejectsUnassembledSynchronizedGraph(
     if (!planned.input.mpegTs || !planned.avSyncRuntime) return;
     EXPECT_TRUE(ctx, planned.input.mpegTs->videoPacketDuration.has_value());
     EXPECT_TRUE(ctx, planned.input.mpegTs->audioPacketDuration.has_value());
+    EXPECT_TRUE(ctx, planned.input.mpegTs->initialSourceGeneration > 0);
     if (!planned.input.mpegTs->videoPacketDuration ||
         !planned.input.mpegTs->audioPacketDuration) return;
     EXPECT_TRUE(ctx,

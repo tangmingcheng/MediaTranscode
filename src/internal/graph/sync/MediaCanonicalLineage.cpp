@@ -28,11 +28,27 @@ createMediaCanonicalLineage(const MediaMappedTimestamp& mapped,
             ::media::ErrorInfo::invalidArgument(
                 "Canonical lineage requires mapped protocol duration"));
     }
+    return createMediaCanonicalLineage(
+        mapped.presentationTime(), mapped.decodeTime(), *mapped.duration(),
+        decodeOrder, mapped.sourceIdentity(), sourceSequence,
+        mapped.confidence(), mapped.generation());
+}
+
+::media::Result<std::shared_ptr<const MediaCanonicalLineage>>
+createMediaCanonicalLineage(
+    MediaRunningTime presentation,
+    std::optional<MediaRunningTime> decode,
+    MediaRunningTime duration,
+    MediaDecodeOrderMode decodeOrder,
+    std::string sourceIdentity,
+    MediaSourceAccessUnitSequence sourceSequence,
+    MediaTimeMappingConfidence mappingConfidence,
+    std::uint64_t generation)
+{
     auto lineage = std::make_shared<const MediaCanonicalLineage>(
-        MediaCanonicalLineage{mapped.presentationTime(), mapped.decodeTime(),
-                              *mapped.duration(), decodeOrder,
-                              mapped.sourceIdentity(), sourceSequence,
-                              mapped.confidence(), mapped.generation()});
+        MediaCanonicalLineage{presentation, decode, duration, decodeOrder,
+                              std::move(sourceIdentity), sourceSequence,
+                              mappingConfidence, generation});
     if (auto valid = validateMediaCanonicalLineage(*lineage); !valid) {
         return ::media::Result<std::shared_ptr<const MediaCanonicalLineage>>::failure(
             valid.error());

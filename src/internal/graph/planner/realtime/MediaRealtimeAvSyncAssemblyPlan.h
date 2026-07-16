@@ -15,6 +15,8 @@ enum class MediaInitialGenerationPolicy : std::uint8_t {
     FirstLockedOnlyFailOnChange
 };
 
+inline constexpr std::uint64_t MediaFirstLockedSourceGeneration = 1;
+
 enum class MediaClockEvidencePolicy : std::uint8_t {
     RequireLockedFailOnDegradedOrReacquire
 };

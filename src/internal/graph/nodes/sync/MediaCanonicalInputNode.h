@@ -1,11 +1,11 @@
 #pragma once
 
+#include "internal/graph/model/MediaPacketSourceTiming.h"
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
-#include "internal/graph/time/MediaCanonicalTimeMapper.h"
 
-#include <memory>
 #include <optional>
+#include <string>
 
 namespace media::ffmpeg::graph {
 
@@ -18,10 +18,11 @@ public:
 
     static ::media::Result<std::shared_ptr<MediaCanonicalAccessUnitBuffer>>
     canonicalize(MediaBufferRef encodedAccessUnit,
-                 const MediaCanonicalSourceTimestamp& protocolTimestamp,
-                 const MediaCanonicalTimeMapper& mapper,
+                 const MediaPacketSourceTiming& protocolTiming,
+                 MediaRunningTime duration,
                  MediaScheduledStream stream,
                  MediaDecodeOrderMode decodeOrder,
+                 std::string sourceIdentity,
                  MediaSourceAccessUnitSequence sourceSequence);
 
 protected:
@@ -29,14 +30,21 @@ protected:
         MediaGraphExecutionContext& context) override;
 
 private:
+    enum class DurationSource {
+        Packet,
+        AudioSamples
+    };
+
     ::media::Status configure(MediaGraphExecutionContext& context);
+    ::media::Result<MediaRunningTime> durationFor(
+        const MediaBufferRef& packet) const;
+    ::media::Result<std::uint32_t> audioSampleCountFor(
+        const MediaBufferRef& packet) const;
     void resetState() noexcept;
-    std::unique_ptr<MediaCanonicalTimeMapper> m_mapper;
     std::optional<MediaScheduledStream> m_stream;
     std::optional<MediaDecodeOrderMode> m_decodeOrder;
-    std::optional<MediaRunningTime> m_duration;
+    std::optional<DurationSource> m_durationSource;
     std::string m_sourceIdentity;
-    std::uint64_t m_generation = 0;
     std::uint64_t m_nextSequence = 1;
     int m_audioSampleRate = 0;
     std::uint32_t m_audioSampleCount = 0;

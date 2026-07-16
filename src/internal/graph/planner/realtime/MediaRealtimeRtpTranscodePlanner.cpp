@@ -487,7 +487,7 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
             selected.projectionCapacity = selected.evidenceTimelineCapacity;
             selected.timestampTimeBaseNumerator = 1;
             selected.timestampTimeBaseDenominator = 90'000;
-            selected.initialSourceGeneration = 0;
+            selected.initialSourceGeneration = MediaFirstLockedSourceGeneration;
             selected.initialRawTransportGeneration = 0;
         }
     }

@@ -35,6 +35,8 @@ MediaBufferRef packet(MediaStreamKind stream)
 {
     auto value = ::media::ffmpeg::makePacket();
     av_new_packet(value.get(), 16);
+    value->duration = 40;
+    value->time_base = AVRational{1, 1'000'000'000};
     return FFmpegBufferFactory::wrapPacket(std::move(value), stream, std::nullopt).value();
 }
 
@@ -44,6 +46,8 @@ MediaBufferRef timedPacket(MediaStreamKind stream,
 {
     auto value = ::media::ffmpeg::makePacket();
     av_new_packet(value.get(), 16);
+    value->duration = 40;
+    value->time_base = AVRational{1, 1'000'000'000};
     return FFmpegBufferFactory::wrapPacket(
         std::move(value), stream,
         MediaPacketSourceTiming{presentation, presentation,
@@ -70,22 +74,23 @@ void testValidatedRtpAndTsEvidenceMapsExactly(TestContext& ctx)
         "rtp-video-ssrc-123", 7});
     EXPECT_TRUE(ctx, rtpMapper);
     if (rtpMapper) {
-        auto canonical = MediaCanonicalInputNode::canonicalize(
-            packet(MediaStreamKind::Video),
-            MediaCanonicalSourceTimestamp(ns(5'900), ns(5'800), ns(40), 7,
-                                          "rtp-video-ssrc-123",
-                                          MediaTimeMappingConfidence::Locked),
-            rtpMapper.value(), MediaScheduledStream::Video,
-            MediaDecodeOrderMode::ReorderedRequiresDecodeTime,
-            MediaSourceAccessUnitSequence(1));
+        auto mapped = rtpMapper.value().map(MediaCanonicalSourceTimestamp(
+            ns(5'900), ns(5'800), ns(40), 7, "rtp-video-ssrc-123",
+            MediaTimeMappingConfidence::Locked));
+        EXPECT_TRUE(ctx, mapped);
+        auto canonical = mapped ? createMediaCanonicalLineage(
+            mapped.value(), MediaDecodeOrderMode::ReorderedRequiresDecodeTime,
+            MediaSourceAccessUnitSequence(1))
+            : ::media::Result<std::shared_ptr<const MediaCanonicalLineage>>::failure(
+                  ::media::ErrorInfo::invalidArgument("mapping failed"));
         EXPECT_TRUE(ctx, canonical);
         if (canonical) {
-            EXPECT_EQ(ctx, canonical.value()->lineage()->presentation, ns(20'900));
-            EXPECT_EQ(ctx, canonical.value()->lineage()->decode,
+            EXPECT_EQ(ctx, canonical.value()->presentation, ns(20'900));
+            EXPECT_EQ(ctx, canonical.value()->decode,
                       std::optional<MediaRunningTime>(ns(20'800)));
-            EXPECT_EQ(ctx, canonical.value()->lineage()->sourceIdentity,
+            EXPECT_EQ(ctx, canonical.value()->sourceIdentity,
                       std::string("rtp-video-ssrc-123"));
-            EXPECT_EQ(ctx, canonical.value()->lineage()->mappingConfidence,
+            EXPECT_EQ(ctx, canonical.value()->mappingConfidence,
                       MediaTimeMappingConfidence::Locked);
         }
     }
@@ -95,20 +100,21 @@ void testValidatedRtpAndTsEvidenceMapsExactly(TestContext& ctx)
         "mpegts-program-1-pid-256", 11});
     EXPECT_TRUE(ctx, tsMapper);
     if (tsMapper) {
-        auto canonical = MediaCanonicalInputNode::canonicalize(
-            packet(MediaStreamKind::Video),
-            MediaCanonicalSourceTimestamp(ns(28'000), ns(27'500), ns(40), 11,
-                                          "mpegts-program-1-pid-256",
-                                          MediaTimeMappingConfidence::Locked),
-            tsMapper.value(), MediaScheduledStream::Video,
-            MediaDecodeOrderMode::ReorderedRequiresDecodeTime,
-            MediaSourceAccessUnitSequence(3));
+        auto mapped = tsMapper.value().map(MediaCanonicalSourceTimestamp(
+            ns(28'000), ns(27'500), ns(40), 11,
+            "mpegts-program-1-pid-256", MediaTimeMappingConfidence::Locked));
+        EXPECT_TRUE(ctx, mapped);
+        auto canonical = mapped ? createMediaCanonicalLineage(
+            mapped.value(), MediaDecodeOrderMode::ReorderedRequiresDecodeTime,
+            MediaSourceAccessUnitSequence(3))
+            : ::media::Result<std::shared_ptr<const MediaCanonicalLineage>>::failure(
+                  ::media::ErrorInfo::invalidArgument("mapping failed"));
         EXPECT_TRUE(ctx, canonical);
         if (canonical) {
-            EXPECT_EQ(ctx, canonical.value()->lineage()->presentation, ns(51'000));
-            EXPECT_EQ(ctx, canonical.value()->lineage()->decode,
+            EXPECT_EQ(ctx, canonical.value()->presentation, ns(51'000));
+            EXPECT_EQ(ctx, canonical.value()->decode,
                       std::optional<MediaRunningTime>(ns(50'500)));
-            EXPECT_EQ(ctx, canonical.value()->lineage()->generation,
+            EXPECT_EQ(ctx, canonical.value()->generation,
                       static_cast<std::uint64_t>(11));
         }
     }
@@ -123,11 +129,10 @@ void testCanonicalInputRejectsMissingProtocolTime(TestContext& ctx)
     if (!mapper) return;
     auto missing = MediaCanonicalInputNode::canonicalize(
         packet(MediaStreamKind::Audio),
-        MediaCanonicalSourceTimestamp(std::nullopt, std::nullopt, ns(20), 7,
-                                      "rtp-audio",
-                                      MediaTimeMappingConfidence::Locked),
-        mapper.value(), MediaScheduledStream::Audio,
-        MediaDecodeOrderMode::PresentationOrderNoReorder,
+        MediaPacketSourceTiming{std::nullopt, std::nullopt,
+                                MediaSourceClockReadiness::Locked, 7},
+        ns(20), MediaScheduledStream::Audio,
+        MediaDecodeOrderMode::PresentationOrderNoReorder, "rtp-audio",
         MediaSourceAccessUnitSequence(1));
     EXPECT_FALSE(ctx, missing);
 }
@@ -286,12 +291,8 @@ void testGenerationStateRetainsHistoryAndPurgesOnlyByProtocol(TestContext& ctx)
 void setCanonicalInputOptions(MediaGraph& graph, MediaNodeId node)
 {
     graph.setNodeOption(node, "canonical_input.stream", "video");
-    graph.setNodeOption(node, "canonical_input.topology", "separate_rtp");
     graph.setNodeOption(node, "canonical_input.source_identity", "rtp-video");
-    graph.setNodeOption(node, "canonical_input.source_epoch_ns", "1000");
-    graph.setNodeOption(node, "canonical_input.running_epoch_ns", "2000");
-    graph.setNodeOption(node, "canonical_input.generation", "7");
-    graph.setNodeOption(node, "canonical_input.duration_ns", "40");
+    graph.setNodeOption(node, "canonical_input.duration_source", "packet");
     graph.setNodeOption(node, "canonical_input.decode_order", "reordered");
 }
 
