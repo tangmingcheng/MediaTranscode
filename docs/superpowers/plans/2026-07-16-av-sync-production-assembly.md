@@ -313,8 +313,11 @@ Run canonical/node tests and MPEG-TS observed-AVIO integration. Commit as `feat:
 - Modify: `src/internal/graph/nodes/sync/MediaPlaybackEpochBinderNode.cpp`
 - Create: `src/internal/graph/runtime/buffer/MediaPlaybackEpochActivatedBuffer.h`
 - Create: `src/internal/graph/runtime/buffer/MediaPlaybackEpochActivatedBuffer.cpp`
-- Create: `src/internal/graph/nodes/sync/MediaPlaybackEpochActivatedFanoutNode.h`
-- Create: `src/internal/graph/nodes/sync/MediaPlaybackEpochActivatedFanoutNode.cpp`
+- Create: `src/internal/graph/runtime/buffer/MediaActivatedStartupReleaseBuffer.h`
+- Create: `src/internal/graph/runtime/buffer/MediaActivatedStartupReleaseBuffer.cpp`
+- Create: `src/internal/graph/nodes/sync/MediaActivatedStartupReleaseSequencerNode.h`
+- Create: `src/internal/graph/nodes/sync/MediaActivatedStartupReleaseSequencerNode.cpp`
+- Modify: `src/internal/graph/runtime/MediaGraphRuntimeLifecycleExecutor.cpp`
 - Create: `src/internal/graph/nodes/sync/MediaRtpSourceClockStateAdapterNode.h`
 - Create: `src/internal/graph/nodes/sync/MediaRtpSourceClockStateAdapterNode.cpp`
 - Create: `src/internal/graph/nodes/sync/MediaAvStartupClockNode.h`
@@ -330,14 +333,20 @@ Run canonical/node tests and MPEG-TS observed-AVIO integration. Commit as `feat:
 
 ```text
 coordinator.release
-  -> playback_epoch_binder.activate_once_and_forward
+  -> playback_epoch_binder.activate_once_and_wrap
+  -> activation_release_sequencer.atomic_event_then_release
   -> bound_release_extractor.atomic_split
 ```
 
-The binder retains a release if either output is blocked. Once activation
-succeeds it must never activate that release again. It first publishes one
-typed epoch-activated event, then forwards the same release to the extractor;
-retry state records each committed output independently. The RTP adapter maps
+The binder retains a release until its single typed transaction output can
+accept it. It activates once, then publishes one immutable transaction envelope
+containing the epoch-activated event and the same compound release. The
+activation-release sequencer owns all event fanout targets plus the compound
+release target. It preflights every target before committing anything, then
+publishes the same immutable epoch event to every planned target and finally
+publishes the release in the same process call. Target readiness is independent,
+but visibility is one transaction; partial prefix commit across `WouldBlock` is
+forbidden. The RTP adapter maps
 the immutable locked group snapshot to the same generic source-clock state that
 TS demux publishes. The startup-clock node consumes that generic state, reads
 the registered group master clock at the planned interval, and produces
@@ -345,18 +354,26 @@ coordinator ticks without polling or reinterpreting protocol readiness.
 Scheduler `start()` accepts Registered, and first media
 processing/configuration requires Active.
 
-The epoch-activated event passes through one typed fanout. Its planned outputs
+The activation-release sequencer is the one typed fanout. Its planned outputs
 are exactly the video RTP sender, audio RTP sender, and (for MPEG-TS) mux-plan
 source required by the selected adapter. Each output receives the same immutable
 epoch/generation object before released media can reach the scheduler. This is
 the only sender/mux initialization happens-before; no output node reads a
 planner-static generation or invents an NTP epoch.
 
+Graph stop and abort are terminal for one runtime incarnation. After workers are
+quiesced, the lifecycle owner clears all channels so a partially retained
+transaction cannot survive teardown. Restart uses a freshly compiled runtime,
+fresh channels, and a newly issued activation capability; node-local stop/start
+tests must not simulate a production lifecycle that the runtime does not expose.
+
 - [ ] **Step 1: Write RED activation/lifecycle tests**
 
 Prove activation happens before epoch-event and release visibility, activation
-occurs exactly once across repeated `WouldBlock` on either output, the epoch
-event precedes release forwarding, abort clears retained release, scheduler
+occurs exactly once, every output target independently blocks the whole
+transaction with zero prefix visibility, the epoch event precedes release
+forwarding, terminal stop/abort clears retained transactions and graph channels,
+scheduler
 waits while Registered, scheduler configures once after Active, and media
 cannot dispatch before activation.
 
