@@ -1283,7 +1283,7 @@ void testNodeFailsClosedWithoutCommonCanonicalEnvelope(TestContext& ctx)
     EXPECT_TRUE(ctx, runtime.value()->start(execution));
     EXPECT_TRUE(ctx, execution.findInputChannel(coordinator, "video")->push(
         makeMediaBufferRef<MediaRtpClockGroupBuffer>(MediaRtpClockGroupSnapshot{
-            MediaRtpClockGroupState::Acquiring, 0, {}, std::nullopt, std::nullopt})));
+            MediaRtpClockGroupState::Acquiring, 0, std::nullopt})));
     EXPECT_FALSE(ctx, runtime.value()->process(execution));
     runtime.value()->abort(execution);
 }

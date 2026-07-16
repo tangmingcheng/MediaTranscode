@@ -193,8 +193,14 @@ void testGroupRequiresExactCommonIdentityAndCurrentEvidence(TestContext& ctx)
                                        calibration(audioEvidence, 48'000)));
     auto ready = validator.snapshot(120);
     EXPECT_EQ(ctx, ready.state, MediaRtpClockGroupState::Locked);
-    EXPECT_EQ(ctx, ready.cname, std::vector<std::uint8_t>({'c','a','m','e','r','a'}));
-    EXPECT_TRUE(ctx, ready.video.has_value() && ready.audio.has_value());
+    EXPECT_TRUE(ctx, ready.locked.has_value());
+    if (ready.locked) {
+        EXPECT_EQ(ctx, ready.locked->cname,
+                  std::vector<std::uint8_t>({'c','a','m','e','r','a'}));
+        EXPECT_EQ(ctx, ready.locked->commonSourceEpoch,
+                  ready.locked->video.actualSenderReportSourceTime);
+    }
+    EXPECT_TRUE(ctx, ready.groupGeneration > 0);
 
     const auto oldGroupGeneration = ready.groupGeneration;
     const auto changedGeneration = evidence(11, 101, 0, 99'000, "camera", 200, 3);
@@ -204,6 +210,7 @@ void testGroupRequiresExactCommonIdentityAndCurrentEvidence(TestContext& ctx)
     auto isolated = validator.snapshot(200);
     EXPECT_EQ(ctx, isolated.state, MediaRtpClockGroupState::Acquiring);
     EXPECT_TRUE(ctx, isolated.groupGeneration > oldGroupGeneration);
+    EXPECT_FALSE(ctx, isolated.locked.has_value());
 }
 
 void testGroupRejectsMismatchSkewAndHasNoFallback(TestContext& ctx)
@@ -241,7 +248,7 @@ void testGroupRejectsMismatchSkewAndHasNoFallback(TestContext& ctx)
 
     auto missing = makeValidator();
     EXPECT_EQ(ctx, missing.snapshot(999 * Second).state, MediaRtpClockGroupState::Acquiring);
-    EXPECT_TRUE(ctx, missing.snapshot(999 * Second).cname.empty());
+    EXPECT_FALSE(ctx, missing.snapshot(999 * Second).locked.has_value());
 }
 
 void testGroupDegradesExpiresAndInvalidatesOnIngressDiscontinuity(TestContext& ctx)

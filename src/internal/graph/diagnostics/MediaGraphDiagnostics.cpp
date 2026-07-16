@@ -126,6 +126,8 @@ const char* mediaGraphDiagnosticNodeKindName(MediaNodeKind kind) noexcept
     case MediaNodeKind::AvPacketStartBarrier: return "AvPacketStartBarrier";
     case MediaNodeKind::PacketStartGate: return "PacketStartGate";
     case MediaNodeKind::RtpClockGroup: return "RtpClockGroup";
+    case MediaNodeKind::RtpPacketClockBinder: return "RtpPacketClockBinder";
+    case MediaNodeKind::RtpClockSnapshotFanout: return "RtpClockSnapshotFanout";
     case MediaNodeKind::AvStartupCoordinator: return "AvStartupCoordinator";
     case MediaNodeKind::AvOutputScheduler: return "AvOutputScheduler";
     case MediaNodeKind::PlaybackEpochBinder: return "PlaybackEpochBinder";

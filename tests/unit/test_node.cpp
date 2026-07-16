@@ -1329,10 +1329,13 @@ void testRtpClockGroupRejectsStaleCrossPortEvidence(TestContext& ctx)
     if (!boundedFairnessSnapshots.empty()) {
         const auto& locked = boundedFairnessSnapshots.back();
         EXPECT_EQ(ctx, locked.state, MediaRtpClockGroupState::Locked);
-        EXPECT_TRUE(ctx, locked.video.has_value());
-        EXPECT_TRUE(ctx, locked.audio.has_value());
-        if (locked.video) EXPECT_EQ(ctx, locked.video->generation, static_cast<std::uint64_t>(8));
-        if (locked.audio) EXPECT_EQ(ctx, locked.audio->generation, static_cast<std::uint64_t>(3));
+        EXPECT_TRUE(ctx, locked.locked.has_value());
+        if (locked.locked) {
+            EXPECT_EQ(ctx, locked.locked->video.generation,
+                      static_cast<std::uint64_t>(8));
+            EXPECT_EQ(ctx, locked.locked->audio.generation,
+                      static_cast<std::uint64_t>(3));
+        }
     }
     EXPECT_TRUE(ctx, node.stop(execution));
     execution.reset();

@@ -73,7 +73,9 @@ enum class MediaNodeKind {
     PlaybackEpochBinder = 47,
     CanonicalInput = 48,
     AvBoundReleaseExtractor = 49,
-    AudioStartupTrim = 50
+    AudioStartupTrim = 50,
+    RtpPacketClockBinder = 51,
+    RtpClockSnapshotFanout = 52
 };
 
 } // namespace media::ffmpeg::graph

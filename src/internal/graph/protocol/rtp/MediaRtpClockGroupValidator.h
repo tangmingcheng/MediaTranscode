@@ -25,12 +25,17 @@ struct MediaRtpClockGroupValidatorConfig final {
     std::int64_t audioCnameTimeoutNs;
 };
 
+struct MediaRtpLockedClockGroup final {
+    MediaRunningTime commonSourceEpoch;
+    std::vector<std::uint8_t> cname;
+    MediaRtpSourceClockCalibration video;
+    MediaRtpSourceClockCalibration audio;
+};
+
 struct MediaRtpClockGroupSnapshot final {
     MediaRtpClockGroupState state;
     std::uint64_t groupGeneration;
-    std::vector<std::uint8_t> cname;
-    std::optional<MediaRtpSourceClockCalibration> video;
-    std::optional<MediaRtpSourceClockCalibration> audio;
+    std::optional<MediaRtpLockedClockGroup> locked;
 };
 
 class MediaRtpClockGroupValidator final {
@@ -56,8 +61,10 @@ private:
     MediaRtpClockGroupValidatorConfig m_config;
     std::optional<StreamState> m_video;
     std::optional<StreamState> m_audio;
+    std::optional<MediaRunningTime> m_commonSourceEpoch;
     std::uint64_t m_groupGeneration = 0;
     bool m_reacquireRequired = false;
+    bool m_everLocked = false;
 };
 
 } // namespace media::ffmpeg::graph

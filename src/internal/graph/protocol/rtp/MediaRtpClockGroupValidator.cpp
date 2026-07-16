@@ -91,8 +91,6 @@ MediaRtpClockGroupSnapshot MediaRtpClockGroupValidator::snapshot(
         m_reacquireRequired ? MediaRtpClockGroupState::ReacquireRequired
                             : MediaRtpClockGroupState::Acquiring,
         m_groupGeneration,
-        {},
-        std::nullopt,
         std::nullopt};
     if (m_reacquireRequired || !m_video || !m_audio) return result;
 
@@ -122,13 +120,27 @@ MediaRtpClockGroupSnapshot MediaRtpClockGroupValidator::snapshot(
                            *audioAge > m_config.senderReportTimeoutNs
         ? MediaRtpClockGroupState::Degraded
         : MediaRtpClockGroupState::Locked;
-    result.cname = m_video->evidence.cname;
-    result.video = m_video->calibration;
-    result.audio = m_audio->calibration;
-    result.video->confidence = result.state == MediaRtpClockGroupState::Degraded
-        ? MediaRtpSourceClockConfidence::Degraded
-        : MediaRtpSourceClockConfidence::Locked;
-    result.audio->confidence = result.video->confidence;
+    if (result.state != MediaRtpClockGroupState::Locked) return result;
+    if (!m_everLocked) {
+        ++m_groupGeneration;
+        m_everLocked = true;
+    }
+    result.groupGeneration = m_groupGeneration;
+    MediaRtpSourceClockCalibration video = m_video->calibration;
+    MediaRtpSourceClockCalibration audio = m_audio->calibration;
+    video.confidence = MediaRtpSourceClockConfidence::Locked;
+    audio.confidence = MediaRtpSourceClockConfidence::Locked;
+    if (!m_commonSourceEpoch) {
+        m_commonSourceEpoch =
+            video.actualSenderReportSourceTime < audio.actualSenderReportSourceTime
+            ? video.actualSenderReportSourceTime
+            : audio.actualSenderReportSourceTime;
+    }
+    result.locked = MediaRtpLockedClockGroup{
+        *m_commonSourceEpoch,
+        m_video->evidence.cname,
+        std::move(video),
+        std::move(audio)};
     return result;
 }
 
@@ -142,6 +154,7 @@ void MediaRtpClockGroupValidator::clear(bool requireReacquisition) noexcept
     ++m_groupGeneration;
     m_video.reset();
     m_audio.reset();
+    m_commonSourceEpoch.reset();
     m_reacquireRequired = requireReacquisition;
 }
 

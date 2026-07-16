@@ -34,6 +34,8 @@
 #include "internal/graph/nodes/route/FrameRouteNode.h"
 #include "internal/graph/nodes/split/PacketFanoutNode.h"
 #include "internal/graph/nodes/sync/MediaRtpClockGroupNode.h"
+#include "internal/graph/nodes/sync/MediaRtpPacketClockBinderNode.h"
+#include "internal/graph/nodes/sync/MediaRtpClockSnapshotFanoutNode.h"
 #include "internal/graph/nodes/sync/MediaAvStartupCoordinatorNode.h"
 #include "internal/graph/nodes/sync/MediaAvStartupCoordinatorNodePreparation.h"
 #include "internal/graph/nodes/sync/MediaAvOutputSchedulerNode.h"
@@ -225,6 +227,12 @@ template <typename Node>
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<PacketStartGateNode>(node.id));
     case MediaNodeKind::RtpClockGroup:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<MediaRtpClockGroupNode>(node.id));
+    case MediaNodeKind::RtpPacketClockBinder:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+            std::make_unique<MediaRtpPacketClockBinderNode>(node.id));
+    case MediaNodeKind::RtpClockSnapshotFanout:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+            std::make_unique<MediaRtpClockSnapshotFanoutNode>(node.id));
     case MediaNodeKind::AvStartupCoordinator: {
         auto prepared = prepareMediaAvStartupCoordinatorNode(node);
         if (!prepared) {
@@ -336,6 +344,8 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::AvPacketStartBarrier:
     case MediaNodeKind::PacketStartGate:
     case MediaNodeKind::RtpClockGroup:
+    case MediaNodeKind::RtpPacketClockBinder:
+    case MediaNodeKind::RtpClockSnapshotFanout:
     case MediaNodeKind::AvStartupCoordinator:
     case MediaNodeKind::AvOutputScheduler:
     case MediaNodeKind::PlaybackEpochBinder:
