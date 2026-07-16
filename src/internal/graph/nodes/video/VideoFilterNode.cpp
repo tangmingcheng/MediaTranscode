@@ -21,6 +21,53 @@ extern "C" {
 #include <utility>
 
 namespace media::ffmpeg::graph {
+
+VideoFilterLineageState::VideoFilterLineageState(
+    std::shared_ptr<MediaCodecLineageRegistry> registry) noexcept
+    : MediaVideoLineageState(std::move(registry))
+{
+}
+
+void VideoFilterLineageState::resetFilterGraph() noexcept
+{
+    filterGraph.reset();
+    bufferSrcContext = nullptr;
+    bufferSinkContext = nullptr;
+    inputTimeBase = AVRational{0, 1};
+    sinkTimeBase = AVRational{0, 1};
+    lastSubmittedPts = AV_NOPTS_VALUE;
+    graphInitialized = false;
+    flushed = false;
+    filterEof = false;
+}
+
+void VideoFilterLineageState::clearOwnedLineage(
+    const MediaAvGenerationPurge&) noexcept
+{
+    clearLineageStorage();
+}
+
+void VideoFilterLineageState::clearLineageStorage() noexcept
+{
+    resetFilterGraph();
+    terminals.reset();
+    eofEmitted = false;
+    terminalBuffer.reset();
+    terminalPending = false;
+    terminalIsEof = false;
+    pendingFrame.reset();
+    pendingLineage.reset();
+    lineageGenerations.clear();
+}
+
+void VideoFilterLineageState::resetForLifecycle() noexcept
+{
+    auto lineageLock = lock();
+    clearLineageStorage();
+    encoderConfig.reset();
+    encoderContext = nullptr;
+    resetGenerationLifecycle();
+}
 namespace {
 
 bool rationalKnown(AVRational rational) noexcept
@@ -88,6 +135,7 @@ void filterLog(MediaGraphDiagnosticLevel level, const std::string& message)
 
 VideoFilterNode::VideoFilterNode(MediaNodeId nodeId)
     : FFmpegNodeRuntime(nodeId, staticKind(), "VideoFilterNode")
+    , m_lineageState(std::make_shared<VideoFilterLineageState>(nullptr))
 {
 }
 
@@ -96,6 +144,8 @@ VideoFilterNode::VideoFilterNode(
     std::shared_ptr<MediaCodecLineageRegistry> lineageRegistry)
     : FFmpegNodeRuntime(nodeId, staticKind(), "VideoFilterNode")
     , m_lineageRegistry(std::move(lineageRegistry))
+    , m_lineageState(std::make_shared<VideoFilterLineageState>(
+          m_lineageRegistry))
 {
 }
 
@@ -112,15 +162,15 @@ std::string_view VideoFilterNode::generationPurgeIdentity() noexcept
 std::shared_ptr<MediaAvGenerationPurgeTarget>
 VideoFilterNode::generationPurgeTarget() const noexcept
 {
-    return m_lineageRegistry;
+    return m_lineageState->synchronized() ? m_lineageState : nullptr;
 }
 
 bool VideoFilterNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) const noexcept
 {
-    if (!m_lineageRegistry || !buffer || buffer->streamKind() != MediaStreamKind::Video ||
-        buffer->isEof() || buffer->isFlush()) return true;
     const auto lineage = FFmpegFrameView::canonicalLineage(buffer);
-    return lineage && m_lineageRegistry->retainedOutputIsCurrent(*lineage);
+    return m_lineageState->pendingOutputIsCurrent(
+        buffer, lineage ? std::optional<std::uint64_t>(lineage->generation)
+                        : std::nullopt);
 }
 
 ::media::Status VideoFilterNode::start(MediaGraphExecutionContext& context) { resetRuntimeState(); return FFmpegNodeRuntime::start(context); }
@@ -128,27 +178,25 @@ bool VideoFilterNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) const
 void VideoFilterNode::abort(MediaGraphExecutionContext& context) noexcept { FFmpegNodeRuntime::abort(context); resetRuntimeState(); }
 void VideoFilterNode::resetRuntimeState() noexcept
 {
-    resetFilterGraph(); m_encoderConfig.reset(); m_encoderContext = nullptr; m_terminals.reset(); m_eofEmitted = false;
-    m_terminalBuffer.reset(); m_terminalPending = false; m_terminalIsEof = false;
-    m_pendingFrame.reset(); m_pendingLineage.reset();
-    m_lineageGenerations.clear();
+    m_lineageState->resetForLifecycle();
 }
 
 ::media::Result<MediaNodeProcessResult> VideoFilterNode::onProcess(MediaGraphExecutionContext& context)
 {
-    if (m_terminalPending) {
+    auto lineageLock = m_lineageState->lock();
+    if (m_lineageState->terminalPending) {
         return continueTerminal(context);
     }
     bool producedPendingFrame = false;
     auto pendingDrain = drainFrames(context, &producedPendingFrame);
     if (!pendingDrain) return processProgress(std::move(pendingDrain));
     if (producedPendingFrame) return processProgress();
-    if (m_pendingFrame) return processProgress(submitPendingFrame(context));
-    if (m_terminals.finished()) {
+    if (m_lineageState->pendingFrame) return processProgress(submitPendingFrame(context));
+    if (m_lineageState->terminals.finished()) {
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
     }
 
-    if (!m_encoderContext) {
+    if (!m_lineageState->encoderContext) {
         auto codecInput = tryPopInputOptional(context, "codec");
         if (!codecInput) {
             return ::media::Result<MediaNodeProcessResult>::failure(codecInput.error());
@@ -170,7 +218,7 @@ void VideoFilterNode::resetRuntimeState() noexcept
     if (!frameInput.value()) {
         MediaChannel* frameChannel = context.findInputChannel(nodeId(), "frame");
         if (frameChannel && frameChannel->closed()) {
-            m_terminals.markClosed("frame");
+            m_lineageState->terminals.markClosed("frame");
             return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
         }
         bool produced = false;
@@ -185,12 +233,12 @@ void VideoFilterNode::resetRuntimeState() noexcept
     MediaBufferRef frameBuffer = *frameInput.value();
     if (frameBuffer->isEof() || frameBuffer->isFlush()) {
         const bool eof = frameBuffer->isEof();
-        if (eof && m_eofEmitted) {
+        if (eof && m_lineageState->eofEmitted) {
             return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
         }
-        m_terminalBuffer = frameBuffer;
-        m_terminalPending = true;
-        m_terminalIsEof = eof;
+        m_lineageState->terminalBuffer = frameBuffer;
+        m_lineageState->terminalPending = true;
+        m_lineageState->terminalIsEof = eof;
         return continueTerminal(context);
     }
 
@@ -208,23 +256,28 @@ void VideoFilterNode::resetRuntimeState() noexcept
     if (!flushStatus) return processProgress(std::move(flushStatus));
     auto drainStatus = drainFrames(context);
     if (!drainStatus) return processProgress(std::move(drainStatus));
-    if (!m_filterEof) return processProgress();
+    if (!m_lineageState->filterEof) return processProgress();
     if (m_lineageRegistry) {
-        for (const auto generation : m_lineageGenerations) {
+        for (const auto generation : m_lineageState->lineageGenerations) {
             auto finished = m_lineageRegistry->finishGeneration(generation);
             if (!finished) return processProgress(std::move(finished));
         }
-        m_lineageGenerations.clear();
+        m_lineageState->lineageGenerations.clear();
     }
 
-    const bool eof = m_terminalIsEof;
-    MediaBufferRef terminal = std::move(m_terminalBuffer);
-    m_terminalPending = false;
-    m_terminalIsEof = false;
-    if (!eof) resetFilterGraph();
+    const bool eof = m_lineageState->terminalIsEof;
+    MediaBufferRef terminal = std::move(m_lineageState->terminalBuffer);
+    m_lineageState->terminalPending = false;
+    m_lineageState->terminalIsEof = false;
+    if (!eof) m_lineageState->resetFilterGraph();
     if (eof) {
-        m_terminals.markEof("frame");
-        m_eofEmitted = true;
+        m_lineageState->terminals.markEof("frame");
+        m_lineageState->eofEmitted = true;
+    }
+    if (auto freshness = m_lineageState->authorizeRetainedControl(terminal);
+        !freshness) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            freshness.error());
     }
     auto emitStatus = emitOutput(context, "frame", terminal);
     return eof ? processFinished(std::move(emitStatus))
@@ -250,8 +303,8 @@ void VideoFilterNode::resetRuntimeState() noexcept
             ::media::ErrorInfo::invalidArgument("VideoFilterNode requires encoder pix_fmt"));
     }
 
-    m_encoderConfig = buffer;
-    m_encoderContext = codecContext;
+    m_lineageState->encoderConfig = buffer;
+    m_lineageState->encoderContext = codecContext;
 
     filterLog(MediaGraphDiagnosticLevel::State,
               std::string("bind_encoder codec_tb=") + rationalText(codecContext->time_base) +
@@ -273,7 +326,7 @@ void VideoFilterNode::resetRuntimeState() noexcept
             ::media::ErrorInfo::invalidArgument("VideoFilterNode expected first frame"));
     }
 
-    if (!m_encoderContext) {
+    if (!m_lineageState->encoderContext) {
         return ::media::Status::failure(
             ::media::ErrorInfo::notInitialized("VideoFilterNode encoder context is not bound"));
     }
@@ -284,7 +337,8 @@ void VideoFilterNode::resetRuntimeState() noexcept
             ::media::ErrorInfo::invalidArgument("VideoFilterNode requires input frame time_base"));
     }
 
-    const AVRational inputFrameRate = chooseInputFrameRate(firstFrameBuffer, m_encoderContext->framerate);
+    const AVRational inputFrameRate = chooseInputFrameRate(
+        firstFrameBuffer, m_lineageState->encoderContext->framerate);
     if (!rationalKnown(inputFrameRate)) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("VideoFilterNode cannot resolve input frame rate; upstream must provide frame rate or encoder framerate"));
@@ -301,30 +355,31 @@ void VideoFilterNode::resetRuntimeState() noexcept
 
     auto graphResult = VideoFilterGraphBuilder::build(request);
     if (!graphResult) {
-        resetFilterGraph();
+        m_lineageState->resetFilterGraph();
         return ::media::Status::failure(graphResult.error());
     }
 
     VideoFilterGraphBuildResult built = std::move(graphResult).value();
-    resetFilterGraph();
-    m_filterGraph = std::move(built.graph);
-    m_bufferSrcContext = built.bufferSource;
-    m_bufferSinkContext = built.bufferSink;
-    m_inputTimeBase = request.inputTimeBase;
-    m_sinkTimeBase = built.sinkTimeBase;
-    m_graphInitialized = true;
-    m_flushed = false;
+    m_lineageState->resetFilterGraph();
+    m_lineageState->filterGraph = std::move(built.graph);
+    m_lineageState->bufferSrcContext = built.bufferSource;
+    m_lineageState->bufferSinkContext = built.bufferSink;
+    m_lineageState->inputTimeBase = request.inputTimeBase;
+    m_lineageState->sinkTimeBase = built.sinkTimeBase;
+    m_lineageState->graphInitialized = true;
+    m_lineageState->flushed = false;
 
     const AVPixelFormat inputFormat = static_cast<AVPixelFormat>(firstFrame->format);
     std::ostringstream out;
-    out << "initialize input_tb=" << rationalText(m_inputTimeBase)
+    out << "initialize input_tb=" << rationalText(m_lineageState->inputTimeBase)
         << " input_fps=" << rationalText(inputFrameRate)
-        << " sink_tb=" << rationalText(m_sinkTimeBase)
-        << " encoder_tb=" << rationalText(m_encoderContext->time_base)
+        << " sink_tb=" << rationalText(m_lineageState->sinkTimeBase)
+        << " encoder_tb=" << rationalText(m_lineageState->encoderContext->time_base)
         << " input_fmt=" << pixelFormatName(inputFormat)
-        << " encoder_fmt=" << pixelFormatName(m_encoderContext->pix_fmt)
+        << " encoder_fmt=" << pixelFormatName(m_lineageState->encoderContext->pix_fmt)
         << " input_size=" << firstFrame->width << "x" << firstFrame->height
-        << " encoder_size=" << m_encoderContext->width << "x" << m_encoderContext->height
+        << " encoder_size=" << m_lineageState->encoderContext->width << "x"
+        << m_lineageState->encoderContext->height
         << " hardware_source=" << (built.hardwareSource ? "true" : "false")
         << " planner_filter=" << built.plannerFilter
         << " desc=" << built.filterDescription;
@@ -335,7 +390,20 @@ void VideoFilterNode::resetRuntimeState() noexcept
 
 ::media::Status VideoFilterNode::sendFrame(MediaGraphExecutionContext& context, const MediaBufferRef& buffer)
 {
-    if (!m_graphInitialized) {
+    std::shared_ptr<const MediaCanonicalLineage> pendingLineage;
+    if (m_lineageRegistry) {
+        pendingLineage = FFmpegFrameView::canonicalLineage(buffer);
+        if (!pendingLineage) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "VideoFilterNode requires canonical frame lineage"));
+        }
+        if (auto status = m_lineageState->validateObservation(
+                pendingLineage->generation); !status) {
+            return status;
+        }
+    }
+    if (!m_lineageState->graphInitialized) {
         auto initStatus = initializeGraph(context, buffer);
         if (!initStatus) {
             return initStatus;
@@ -348,78 +416,81 @@ void VideoFilterNode::resetRuntimeState() noexcept
             ::media::ErrorInfo::invalidArgument("VideoFilterNode expected frame buffer"));
     }
 
-    m_pendingFrame.reset(av_frame_clone(frame));
-    if (!m_pendingFrame) {
+    ::media::ffmpeg::FramePtr pendingFrame(av_frame_clone(frame));
+    if (!pendingFrame) {
         return ::media::Status::failure(
             ::media::ErrorInfo::allocationFailed("VideoFilterNode failed to clone input frame"));
     }
     if (m_lineageRegistry) {
-        m_pendingLineage = FFmpegFrameView::canonicalLineage(buffer);
-        if (!m_pendingLineage) {
-            return ::media::Status::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "VideoFilterNode requires canonical frame lineage"));
+        if (auto status = m_lineageState->observe(pendingLineage->generation);
+            !status) {
+            return status;
         }
     }
+    m_lineageState->pendingFrame = std::move(pendingFrame);
+    m_lineageState->pendingLineage = std::move(pendingLineage);
     return submitPendingFrame(context);
 }
 
 ::media::Status VideoFilterNode::attachPendingLineage()
 {
     if (!m_lineageRegistry) return ::media::Status::success();
-    if (!m_pendingFrame || !m_pendingLineage || m_pendingFrame->opaque_ref) {
+    if (!m_lineageState->pendingFrame || !m_lineageState->pendingLineage ||
+        m_lineageState->pendingFrame->opaque_ref) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument(
                 "VideoFilterNode requires one unowned pending frame lineage"));
     }
-    auto token = m_lineageRegistry->submit(m_pendingLineage);
+    auto token = m_lineageRegistry->submit(m_lineageState->pendingLineage);
     if (!token) return ::media::Status::failure(token.error());
     auto opaque = makeMediaFfmpegLineageOpaque(std::move(token).value());
     if (!opaque) return ::media::Status::failure(opaque.error());
-    m_pendingFrame->opaque_ref = opaque.value();
-    m_lineageGenerations.insert(m_pendingLineage->generation);
-    m_pendingLineage.reset();
+    m_lineageState->pendingFrame->opaque_ref = opaque.value();
+    m_lineageState->lineageGenerations.insert(
+        m_lineageState->pendingLineage->generation);
+    m_lineageState->pendingLineage.reset();
     return ::media::Status::success();
 }
 
 ::media::Status VideoFilterNode::submitPendingFrame(
     MediaGraphExecutionContext& context)
 {
-    if (m_lineageRegistry && !m_pendingFrame->opaque_ref) {
+    if (m_lineageRegistry && !m_lineageState->pendingFrame->opaque_ref) {
         auto attached = attachPendingLineage();
         if (!attached) return attached;
     }
 
-    const int ret = av_buffersrc_add_frame_flags(m_bufferSrcContext,
-                                                 m_pendingFrame.get(),
+    const int ret = av_buffersrc_add_frame_flags(m_lineageState->bufferSrcContext,
+                                                 m_lineageState->pendingFrame.get(),
                                                  AV_BUFFERSRC_FLAG_KEEP_REF);
     if (ret < 0) {
         return FFmpegGraphError::statusFromCode(ret, "av_buffersrc_add_frame_flags(video)");
     }
-    m_pendingFrame.reset();
+    m_lineageState->pendingFrame.reset();
 
     return drainFrames(context);
 }
 
 ::media::Status VideoFilterNode::flushGraph(MediaGraphExecutionContext& context)
 {
-    if (!m_graphInitialized || m_flushed) {
+    if (!m_lineageState->graphInitialized || m_lineageState->flushed) {
         return ::media::Status::success();
     }
 
-    const int ret = av_buffersrc_add_frame_flags(m_bufferSrcContext, nullptr, 0);
+    const int ret = av_buffersrc_add_frame_flags(
+        m_lineageState->bufferSrcContext, nullptr, 0);
     if (ret < 0) {
         return FFmpegGraphError::statusFromCode(ret, "av_buffersrc_add_frame_flags(video flush)");
     }
 
-    m_flushed = true;
+    m_lineageState->flushed = true;
     return drainFrames(context);
 }
 
 ::media::Status VideoFilterNode::drainFrames(MediaGraphExecutionContext& context, bool* produced)
 {
     if (produced) *produced = false;
-    if (!m_graphInitialized) {
+    if (!m_lineageState->graphInitialized) {
         return ::media::Status::success();
     }
 
@@ -430,12 +501,13 @@ void VideoFilterNode::resetRuntimeState() noexcept
                 ::media::ErrorInfo::allocationFailed("VideoFilterNode failed: av_frame_alloc returned null"));
         }
 
-        const int ret = av_buffersink_get_frame(m_bufferSinkContext, frame.get());
+        const int ret = av_buffersink_get_frame(
+            m_lineageState->bufferSinkContext, frame.get());
         if (ret == AVERROR(EAGAIN)) {
             return ::media::Status::success();
         }
         if (ret == AVERROR_EOF) {
-            m_filterEof = true;
+            m_lineageState->filterEof = true;
             return ::media::Status::success();
         }
 
@@ -472,7 +544,9 @@ void VideoFilterNode::resetRuntimeState() noexcept
     }
 
     MediaTimeDescriptor timeDescriptor;
-    timeDescriptor.timeBase = MediaRational{ m_encoderContext->time_base.num, m_encoderContext->time_base.den };
+    timeDescriptor.timeBase = MediaRational{
+        m_lineageState->encoderContext->time_base.num,
+        m_lineageState->encoderContext->time_base.den};
     buffer.value()->setTimeDescriptor(timeDescriptor);
 
     AVFrame* outputFrame = FFmpegFrameView::writableFrame(buffer.value());
@@ -491,7 +565,7 @@ void VideoFilterNode::resetRuntimeState() noexcept
 
 ::media::Status VideoFilterNode::rescaleAndValidateFrame(AVFrame* frame) noexcept
 {
-    if (!frame || !m_encoderContext) {
+    if (!frame || !m_lineageState->encoderContext) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("VideoFilterNode filtered frame is invalid"));
     }
@@ -503,24 +577,25 @@ void VideoFilterNode::resetRuntimeState() noexcept
 
     const int64_t ptsIn = frame->pts;
     auto rescaledPts = rescaleStrictlyIncreasingTimestamp(frame->pts,
-                                                          m_sinkTimeBase,
-                                                          m_encoderContext->time_base,
-                                                          m_lastSubmittedPts);
+                                                          m_lineageState->sinkTimeBase,
+                                                          m_lineageState->encoderContext->time_base,
+                                                          m_lineageState->lastSubmittedPts);
     if (!rescaledPts) {
         return ::media::Status::failure(rescaledPts.error());
     }
 
     frame->pts = rescaledPts.value();
 
-    m_lastSubmittedPts = frame->pts;
+    m_lineageState->lastSubmittedPts = frame->pts;
 
     auto decision = mediaGraphDiagnosticSample(MediaGraphDiagnosticLevel::Flow,
                                                "video_filter.frame");
     if (decision.shouldLog) {
         std::ostringstream out;
         out << "frame seq=" << decision.sequence
-            << " sink_tb=" << rationalText(m_sinkTimeBase)
-            << " encoder_tb=" << rationalText(m_encoderContext->time_base)
+            << " sink_tb=" << rationalText(m_lineageState->sinkTimeBase)
+            << " encoder_tb=" << rationalText(
+                   m_lineageState->encoderContext->time_base)
             << " pts_in=" << ptsIn
             << " pts_out=" << frame->pts
             << " fmt=" << pixelFormatName(static_cast<AVPixelFormat>(frame->format))
@@ -529,19 +604,6 @@ void VideoFilterNode::resetRuntimeState() noexcept
     }
 
     return ::media::Status::success();
-}
-
-void VideoFilterNode::resetFilterGraph() noexcept
-{
-    m_filterGraph.reset();
-    m_bufferSrcContext = nullptr;
-    m_bufferSinkContext = nullptr;
-    m_inputTimeBase = AVRational{ 0, 1 };
-    m_sinkTimeBase = AVRational{ 0, 1 };
-    m_lastSubmittedPts = AV_NOPTS_VALUE;
-    m_graphInitialized = false;
-    m_flushed = false;
-    m_filterEof = false;
 }
 
 } // namespace media::ffmpeg::graph

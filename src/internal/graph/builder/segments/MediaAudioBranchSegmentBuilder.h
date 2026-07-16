@@ -5,6 +5,7 @@
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/sync/MediaAudioCorrection.h"
+#include "internal/graph/sync/lineage/MediaAudioLineageExecutionMode.h"
 #include "media_transcode/Result.h"
 
 #include <cstddef>
@@ -30,6 +31,8 @@ struct MediaAudioBranchSegmentOptions {
     std::string muxPacketPort = "packet";
     std::optional<bool> normalizeInputPackets;
     std::optional<MediaAudioCorrectionExecutionMode> correctionMode;
+    std::optional<MediaAudioLineageExecutionMode> lineageMode;
+    std::optional<std::size_t> lineageCapacity;
     std::optional<std::uint64_t> correctionGeneration;
     std::optional<std::size_t> correctionLookaheadWindows;
     MediaNodeId correctionSourceNode = MediaNodeId::invalid();

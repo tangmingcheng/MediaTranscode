@@ -4,6 +4,7 @@
 #include "internal/graph/builder/MediaAudioPlanOptionApplier.h"
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
 #include "internal/graph/builder/segments/MediaAudioEncodeBranchNodes.h"
+#include "internal/graph/sync/lineage/MediaAudioLineageIdentities.h"
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -43,6 +44,57 @@ constexpr const char* owner = "MediaAudioEncodeBranchBuilder";
     return ::media::Result<void>::success();
 }
 
+::media::Result<void> validateLineageOptions(
+    const MediaAudioEncodeBranchOptions& options)
+{
+    if (!options.lineageMode) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MediaAudioEncodeBranchBuilder requires explicit audio lineage mode"));
+    }
+    if (*options.lineageMode ==
+        MediaAudioLineageExecutionMode::SynchronizedReleasedAudio) {
+        if (!options.lineageCapacity || *options.lineageCapacity == 0) {
+            return ::media::Result<void>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "synchronized audio lineage requires positive planned capacity"));
+        }
+        return ::media::Result<void>::success();
+    }
+    if (*options.lineageMode != MediaAudioLineageExecutionMode::LegacyPlainPacket ||
+        options.lineageCapacity) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "legacy audio lineage rejects synchronized capacity"));
+    }
+    return ::media::Result<void>::success();
+}
+
+::media::Result<void> applyLineageStageOptions(
+    MediaGraph& graph,
+    const MediaAudioEncodeBranchOptions& options,
+    MediaNodeId node,
+    std::string_view identity)
+{
+    if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
+            graph, owner, node, std::string(MediaAudioLineageModeOptionKey),
+            std::string(mediaAudioLineageExecutionModeName(*options.lineageMode)));
+        !status) {
+        return status;
+    }
+    if (*options.lineageMode == MediaAudioLineageExecutionMode::LegacyPlainPacket) {
+        return ::media::Result<void>::success();
+    }
+    if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
+            graph, owner, node, "audio.lineage.identity", std::string(identity));
+        !status) {
+        return status;
+    }
+    return MediaGraphBuildSupport::setNodeOptionChecked(
+        graph, owner, node, "audio.lineage.capacity",
+        std::to_string(*options.lineageCapacity));
+}
+
 ::media::Result<void> applyCorrectionOptions(
     MediaGraph& graph,
     const MediaAudioEncodeBranchOptions& options,
@@ -75,7 +127,8 @@ constexpr const char* owner = "MediaAudioEncodeBranchBuilder";
 
 MediaAudioEncodeBranchNodes addAudioEncodeNodes(MediaGraph& graph,
                                                  const std::string& prefix,
-                                                 bool normalizePackets)
+                                                 bool normalizePackets,
+                                                 MediaAudioLineageExecutionMode lineageMode)
 {
     MediaAudioEncodeBranchNodes nodes;
     if (normalizePackets) {
@@ -83,6 +136,11 @@ MediaAudioEncodeBranchNodes addAudioEncodeNodes(MediaGraph& graph,
     }
     nodes.codecResolver = graph.addNode(MediaNodeKind::AudioCodecResolver, prefix + ".codec_resolver", "Audio codec resolver");
     nodes.decode = graph.addNode(MediaNodeKind::AudioDecode, prefix + ".decode", "Audio decode");
+    if (lineageMode == MediaAudioLineageExecutionMode::SynchronizedReleasedAudio) {
+        nodes.startupTrim = graph.addNode(
+            MediaNodeKind::AudioStartupTrim, prefix + ".startup_trim",
+            "Audio startup trim");
+    }
     nodes.resample = graph.addNode(MediaNodeKind::AudioResample, prefix + ".resample", "Audio resample");
     nodes.encode = graph.addNode(MediaNodeKind::AudioEncode, prefix + ".encode", "Audio encode");
     return nodes;
@@ -109,6 +167,11 @@ MediaAudioEncodeBranchNodes addAudioEncodeNodes(MediaGraph& graph,
     if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph, owner, nodes.decode, "codec", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false); !status) return status;
     if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph, owner, nodes.decode, "packet", MediaStreamKind::Audio, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true); !status) return status;
     if (auto status = MediaGraphBuildSupport::addOutputPortChecked(graph, owner, nodes.decode, "frame", MediaStreamKind::Audio, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true); !status) return status;
+
+    if (nodes.startupTrim.isValid()) {
+        if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph, owner, nodes.startupTrim, "frame", MediaStreamKind::Audio, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true); !status) return status;
+        if (auto status = MediaGraphBuildSupport::addOutputPortChecked(graph, owner, nodes.startupTrim, "frame", MediaStreamKind::Audio, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true); !status) return status;
+    }
 
     if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph, owner, nodes.resample, "codec", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false); !status) return status;
     if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph, owner, nodes.resample, "frame", MediaStreamKind::Audio, MediaEdgeKind::RawFrame, MediaPayloadKind::Frame, true, true); !status) return status;
@@ -142,7 +205,10 @@ MediaAudioEncodeBranchNodes addAudioEncodeNodes(MediaGraph& graph,
         if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.packetSourceNode, options.packetSourcePort, nodes.decode, "packet", options.prefix + ".packet -> decode.packet", policies.audioPacket); !status) return status;
     }
     if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.codecResolver, "encoder", nodes.resample, "codec", options.prefix + ".codec_resolver.encoder -> resample.codec", policies.metadata); !status) return status;
-    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.decode, "frame", nodes.resample, "frame", options.prefix + ".decode.frame -> resample.frame", policies.frame); !status) return status;
+    if (nodes.startupTrim.isValid()) {
+        if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.decode, "frame", nodes.startupTrim, "frame", options.prefix + ".decode.frame -> startup_trim.frame", policies.frame); !status) return status;
+        if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.startupTrim, "frame", nodes.resample, "frame", options.prefix + ".startup_trim.frame -> resample.frame", policies.frame); !status) return status;
+    } else if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.decode, "frame", nodes.resample, "frame", options.prefix + ".decode.frame -> resample.frame", policies.frame); !status) return status;
     if (*options.correctionMode == MediaAudioCorrectionExecutionMode::ExternalCorrectionRequired) {
         if (auto status = MediaGraphBuildSupport::connectChecked(
                 graph, owner, options.correctionSourceNode, options.correctionSourcePort,
@@ -179,11 +245,24 @@ MediaAudioEncodeBranchNodes addAudioEncodeNodes(MediaGraph& graph,
         return ::media::Result<void>::failure(
             ::media::ErrorInfo::invalidArgument("MediaAudioEncodeBranchBuilder requires explicit packet normalization policy"));
     }
+    if (auto status = validateLineageOptions(options); !status) return status;
     if (auto status = validateCorrectionOptions(options); !status) {
         return status;
     }
 
-    const MediaAudioEncodeBranchNodes nodes = addAudioEncodeNodes(graph, options.prefix, *options.normalizePackets);
+    const MediaAudioEncodeBranchNodes nodes = addAudioEncodeNodes(
+        graph, options.prefix, *options.normalizePackets, *options.lineageMode);
+    if (auto status = applyLineageStageOptions(
+            graph, options, nodes.decode, MediaAudioDecodeLineageIdentity); !status) return status;
+    if (auto status = applyLineageStageOptions(
+            graph, options, nodes.resample, MediaAudioResampleLineageIdentity); !status) return status;
+    if (auto status = applyLineageStageOptions(
+            graph, options, nodes.encode, MediaAudioEncodeLineageIdentity); !status) return status;
+    if (nodes.startupTrim.isValid()) {
+        if (auto status = applyLineageStageOptions(
+                graph, options, nodes.startupTrim,
+                MediaAudioStartupTrimLineageIdentity); !status) return status;
+    }
     if (auto status = MediaAudioPlanOptionApplier::applySelectedPlan(
             graph, nodes, options.plan, *options.normalizePackets); !status) return status;
     if (auto status = applyCorrectionOptions(graph, options, nodes.resample); !status) return status;

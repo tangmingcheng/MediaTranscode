@@ -14,6 +14,11 @@ public:
     {
         return avcodec_receive_packet(context, packet);
     }
+
+    void flushBuffers(AVCodecContext* context) noexcept override
+    {
+        avcodec_flush_buffers(context);
+    }
 };
 
 } // namespace

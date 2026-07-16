@@ -139,6 +139,7 @@ bool branchEnabled(const MediaAudioPipelinePlan& plan) noexcept
     audioOptions.muxPacketPort = "packet";
     audioOptions.normalizeInputPackets = true;
     audioOptions.correctionMode = MediaAudioCorrectionExecutionMode::Disabled;
+    audioOptions.lineageMode = MediaAudioLineageExecutionMode::LegacyPlainPacket;
     auto audio = MediaAudioBranchSegmentBuilder::buildIfPlanned(graph, audioOptions);
     if (!audio) {
         return ::media::Result<MediaGraph>::failure(audio.error());

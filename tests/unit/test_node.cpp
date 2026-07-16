@@ -3,6 +3,9 @@
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/nodes/audio/AudioEncodeNode.h"
+#include "internal/graph/nodes/audio/AudioDecodeNode.h"
+#include "internal/graph/nodes/audio/AudioResampleNode.h"
+#include "internal/graph/nodes/audio/MediaAudioStartupTrimNode.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/nodes/audio/AudioEncoderFrameQueue.h"
 #include "internal/graph/nodes/input/MediaRawRtpStreamDescriptorFactory.h"
@@ -16,9 +19,17 @@
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 #include "internal/graph/runtime/buffer/MediaRtpIngressEventBuffer.h"
 #include "internal/graph/runtime/buffer/MediaRtpClockGroupBuffer.h"
+#include "internal/graph/runtime/buffer/MediaBoundCanonicalAudioBuffer.h"
+#include "internal/graph/runtime/buffer/MediaEncodedAudioLineageBuffer.h"
+#include "internal/graph/runtime/buffer/MediaAvReleasedAudioBuffer.h"
+#include "internal/graph/runtime/buffer/MediaDecodedAudioTrimInputBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/runtime/factory/MediaRuntimeNodeFactory.h"
+#include "internal/graph/sync/MediaCanonicalAudioSamplesBuffer.h"
+#include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
+#include "internal/graph/sync/MediaCanonicalLineage.h"
+#include "internal/graph/sync/lineage/MediaAudioLineageIdentities.h"
 
 
 extern "C" {
@@ -876,11 +887,14 @@ public:
     std::deque<int> receiveResults;
     std::vector<int> sentSamples;
     std::vector<int64_t> sentPts;
+    std::vector<const AVFrame*> sentFramePointers;
+    int flushCount = 0;
 
     int sendFrame(AVCodecContext*, const AVFrame* frame) noexcept override
     {
         sentSamples.push_back(frame ? frame->nb_samples : -1);
         sentPts.push_back(frame ? frame->pts : AV_NOPTS_VALUE);
+        sentFramePointers.push_back(frame);
         if (sendResults.empty()) return 0;
         const int result = sendResults.front();
         sendResults.pop_front();
@@ -899,6 +913,12 @@ public:
             packet->duration = 1024;
         }
         return result;
+    }
+
+    void flushBuffers(AVCodecContext*) noexcept override
+    {
+        ++flushCount;
+        receiveResults.clear();
     }
 };
 
@@ -960,7 +980,10 @@ void testAudioEncodeFixedFrameStateMachine(TestContext& ctx)
     auto api = std::make_shared<ScriptedAudioEncoderCodecApi>();
     api->sendResults = {AVERROR(EAGAIN), 0, 0, 0};
     api->receiveResults = {AVERROR(EAGAIN), 0, AVERROR(EAGAIN), AVERROR(EAGAIN), AVERROR_EOF};
-    AudioEncodeNode node(encoder, api);
+    AudioEncodeNode node(
+        encoder, MediaAudioLineageExecutionMode::LegacyPlainPacket,
+        std::make_shared<AudioEncodeLineageState>(
+            MediaAudioLineageExecutionMode::LegacyPlainPacket, 0), api);
     EXPECT_TRUE(ctx, node.process(execution));
 
     auto blockerPacket = ::media::ffmpeg::makePacket();
@@ -1019,6 +1042,71 @@ void testAudioEncodeFixedFrameStateMachine(TestContext& ctx)
     EXPECT_TRUE(ctx, node.process(execution));
     EXPECT_EQ(ctx, api->sentSamples.size(), static_cast<std::size_t>(4));
     EXPECT_FALSE(ctx, packetOutput->tryPop(output));
+}
+
+void testAudioLineageStagesExposeExactStablePurgeTargets(TestContext& ctx)
+{
+    const std::array stages{
+        std::pair{MediaNodeKind::AudioDecode, MediaAudioDecodeLineageIdentity},
+        std::pair{MediaNodeKind::AudioStartupTrim,
+                  MediaAudioStartupTrimLineageIdentity},
+        std::pair{MediaNodeKind::AudioResample, MediaAudioResampleLineageIdentity},
+        std::pair{MediaNodeKind::AudioEncode, MediaAudioEncodeLineageIdentity}};
+
+    const auto targetOf = [](MediaRuntimeNode* runtime) {
+        if (auto* node = dynamic_cast<AudioDecodeNode*>(runtime))
+            return node->generationPurgeTarget();
+        if (auto* node = dynamic_cast<MediaAudioStartupTrimNode*>(runtime))
+            return node->generationPurgeTarget();
+        if (auto* node = dynamic_cast<AudioResampleNode*>(runtime))
+            return node->generationPurgeTarget();
+        if (auto* node = dynamic_cast<AudioEncodeNode*>(runtime))
+            return node->generationPurgeTarget();
+        return std::shared_ptr<MediaAvGenerationPurgeTarget>{};
+    };
+
+    std::uint64_t nodeId = 100;
+    for (const auto& [kind, identity] : stages) {
+        MediaNode missing{
+            MediaNodeId::fromValue(nodeId++), kind, "missing_identity"};
+        missing.options.set(std::string(MediaAudioLineageModeOptionKey),
+                            "synchronized_released_audio");
+        missing.options.set("audio.lineage.capacity", "8");
+        EXPECT_FALSE(ctx, MediaRuntimeNodeFactory::create(missing));
+
+        MediaNode wrong{
+            MediaNodeId::fromValue(nodeId++), kind, "wrong_identity"};
+        wrong.options.set(std::string(MediaAudioLineageModeOptionKey),
+                          "synchronized_released_audio");
+        wrong.options.set("audio.lineage.identity", "wrong_identity");
+        wrong.options.set("audio.lineage.capacity", "8");
+        EXPECT_FALSE(ctx, MediaRuntimeNodeFactory::create(wrong));
+
+        MediaNode planned{
+            MediaNodeId::fromValue(nodeId++), kind, "planned_identity"};
+        planned.options.set(std::string(MediaAudioLineageModeOptionKey),
+                            "synchronized_released_audio");
+        planned.options.set("audio.lineage.identity", std::string(identity));
+        planned.options.set("audio.lineage.capacity", "8");
+        auto runtime = MediaRuntimeNodeFactory::create(planned);
+        EXPECT_TRUE(ctx, runtime);
+        if (!runtime) continue;
+        auto firstTarget = targetOf(runtime.value().get());
+        auto secondTarget = targetOf(runtime.value().get());
+        EXPECT_TRUE(ctx, firstTarget != nullptr);
+        EXPECT_TRUE(ctx, firstTarget == secondTarget);
+        auto state = std::dynamic_pointer_cast<MediaAudioLineageState>(firstTarget);
+        EXPECT_TRUE(ctx, state != nullptr);
+        if (!state) continue;
+        EXPECT_TRUE(ctx, state->observe(7));
+        EXPECT_TRUE(ctx, state->purge(MediaAvGenerationPurge{7, 8, 1}));
+        EXPECT_FALSE(ctx, state->isCurrent(7));
+        EXPECT_TRUE(ctx, state->isCurrent(8));
+        state.reset();
+        secondTarget.reset();
+        firstTarget.reset();
+        runtime.value().reset();
+    }
 }
 
 void testRtpClockGroupRejectsStaleCrossPortEvidence(TestContext& ctx)
@@ -1255,6 +1343,7 @@ void testRtpClockGroupRejectsStaleCrossPortEvidence(TestContext& ctx)
 int main()
 {
     TestContext ctx;
+    testAudioLineageStagesExposeExactStablePurgeTargets(ctx);
 
     testMpegTsOutputClockUsesOneEpoch(ctx);
     testMpegTsOutputClockRejectsInvalidPolicyAndHandlesWrap(ctx);
@@ -1279,7 +1368,8 @@ int main()
     codec->frame_size = 1024;
     av_channel_layout_default(&codec->ch_layout, 2);
 
-    AudioEncoderFrameQueue frameQueue;
+    AudioEncoderFrameQueue frameQueue(
+        MediaAudioLineageExecutionMode::LegacyPlainPacket, 0);
     EXPECT_TRUE(ctx, frameQueue.configure(*codec));
 
     auto makeFrame = [](int samples, int64_t pts) {
@@ -1298,13 +1388,13 @@ int main()
     auto firstInput = makeFrame(1098, 0);
     EXPECT_TRUE(ctx, firstInput != nullptr);
     if (!firstInput) return 1;
-    EXPECT_TRUE(ctx, frameQueue.push(*firstInput));
+    EXPECT_TRUE(ctx, frameQueue.push(*firstInput, {}));
     EXPECT_TRUE(ctx, frameQueue.hasFullFrame());
     auto firstOutput = frameQueue.popFullFrame();
     EXPECT_TRUE(ctx, firstOutput);
     if (firstOutput) {
-        EXPECT_EQ(ctx, firstOutput.value()->nb_samples, 1024);
-        EXPECT_EQ(ctx, firstOutput.value()->pts, static_cast<int64_t>(0));
+        EXPECT_EQ(ctx, firstOutput.value().media->nb_samples, 1024);
+        EXPECT_EQ(ctx, firstOutput.value().media->pts, static_cast<int64_t>(0));
     }
     EXPECT_FALSE(ctx, frameQueue.hasFullFrame());
     EXPECT_EQ(ctx, frameQueue.queuedSamples(), 74);
@@ -1312,50 +1402,52 @@ int main()
     auto secondInput = makeFrame(950, 1098);
     EXPECT_TRUE(ctx, secondInput != nullptr);
     if (!secondInput) return 1;
-    EXPECT_TRUE(ctx, frameQueue.push(*secondInput));
+    EXPECT_TRUE(ctx, frameQueue.push(*secondInput, {}));
     EXPECT_TRUE(ctx, frameQueue.hasFullFrame());
     auto secondOutput = frameQueue.popFullFrame();
     EXPECT_TRUE(ctx, secondOutput);
     if (secondOutput) {
-        EXPECT_EQ(ctx, secondOutput.value()->nb_samples, 1024);
-        EXPECT_EQ(ctx, secondOutput.value()->pts, static_cast<int64_t>(1024));
+        EXPECT_EQ(ctx, secondOutput.value().media->nb_samples, 1024);
+        EXPECT_EQ(ctx, secondOutput.value().media->pts, static_cast<int64_t>(1024));
     }
     EXPECT_EQ(ctx, frameQueue.queuedSamples(), 0);
 
     auto tailInput = makeFrame(100, 2048);
     EXPECT_TRUE(ctx, tailInput != nullptr);
     if (!tailInput) return 1;
-    EXPECT_TRUE(ctx, frameQueue.push(*tailInput));
+    EXPECT_TRUE(ctx, frameQueue.push(*tailInput, {}));
     auto tailOutput = frameQueue.popRemainingFrame();
     EXPECT_TRUE(ctx, tailOutput);
     if (tailOutput) {
-        EXPECT_EQ(ctx, tailOutput.value()->nb_samples, 100);
-        EXPECT_EQ(ctx, tailOutput.value()->pts, static_cast<int64_t>(2048));
+        EXPECT_EQ(ctx, tailOutput.value().media->nb_samples, 100);
+        EXPECT_EQ(ctx, tailOutput.value().media->pts, static_cast<int64_t>(2048));
     }
     EXPECT_EQ(ctx, frameQueue.queuedSamples(), 0);
 
-    AudioEncoderFrameQueue overlapQueue;
+    AudioEncoderFrameQueue overlapQueue(
+        MediaAudioLineageExecutionMode::LegacyPlainPacket, 0);
     EXPECT_TRUE(ctx, overlapQueue.configure(*codec));
     auto overlapFirst = makeFrame(512, 0);
     auto overlapSecond = makeFrame(512, 256);
     EXPECT_TRUE(ctx, overlapFirst != nullptr);
     EXPECT_TRUE(ctx, overlapSecond != nullptr);
     if (overlapFirst && overlapSecond) {
-        EXPECT_TRUE(ctx, overlapQueue.push(*overlapFirst));
-        const auto overlapStatus = overlapQueue.push(*overlapSecond);
+        EXPECT_TRUE(ctx, overlapQueue.push(*overlapFirst, {}));
+        const auto overlapStatus = overlapQueue.push(*overlapSecond, {});
         EXPECT_FALSE(ctx, overlapStatus);
         if (!overlapStatus) EXPECT_EQ(ctx, overlapStatus.error().code, media::ErrorCode::InvalidArgument);
     }
 
-    AudioEncoderFrameQueue gapQueue;
+    AudioEncoderFrameQueue gapQueue(
+        MediaAudioLineageExecutionMode::LegacyPlainPacket, 0);
     EXPECT_TRUE(ctx, gapQueue.configure(*codec));
     auto gapFirst = makeFrame(512, 0);
     auto gapSecond = makeFrame(512, 768);
     EXPECT_TRUE(ctx, gapFirst != nullptr);
     EXPECT_TRUE(ctx, gapSecond != nullptr);
     if (gapFirst && gapSecond) {
-        EXPECT_TRUE(ctx, gapQueue.push(*gapFirst));
-        const auto gapStatus = gapQueue.push(*gapSecond);
+        EXPECT_TRUE(ctx, gapQueue.push(*gapFirst, {}));
+        const auto gapStatus = gapQueue.push(*gapSecond, {});
         EXPECT_FALSE(ctx, gapStatus);
         if (!gapStatus) EXPECT_EQ(ctx, gapStatus.error().code, media::ErrorCode::InvalidArgument);
     }

@@ -72,7 +72,8 @@ enum class MediaNodeKind {
     AvOutputScheduler = 46,
     PlaybackEpochBinder = 47,
     CanonicalInput = 48,
-    AvBoundReleaseExtractor = 49
+    AvBoundReleaseExtractor = 49,
+    AudioStartupTrim = 50
 };
 
 } // namespace media::ffmpeg::graph

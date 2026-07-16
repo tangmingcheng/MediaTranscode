@@ -4,12 +4,43 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/runtime/ffmpeg/MediaVideoEncoderCodecApi.h"
 #include "internal/graph/runtime/lifecycle/MediaInputTerminalTracker.h"
-#include "internal/graph/sync/lineage/MediaCodecLineageRegistry.h"
+#include "internal/graph/sync/lineage/MediaVideoLineageState.h"
 
 #include <set>
 #include <string_view>
 
 namespace media::ffmpeg::graph {
+
+class VideoEncodeLineageState final : public MediaVideoLineageState {
+public:
+    VideoEncodeLineageState(
+        std::shared_ptr<MediaCodecLineageRegistry> registry,
+        std::shared_ptr<MediaVideoEncoderCodecApi> codecApi) noexcept;
+
+    MediaInputTerminalTracker terminals { { "frame" } };
+    bool eofEmitted = false;
+    bool receivePending = false;
+    bool flushPending = false;
+    bool flushIsEof = false;
+    bool flushSent = false;
+    MediaBufferRef flushBuffer;
+    ::media::ffmpeg::FramePtr pendingFrame;
+    std::shared_ptr<const MediaCanonicalLineage> pendingLineage;
+    std::set<std::uint64_t> lineageGenerations;
+
+    void bindCodec(MediaBufferRef owner, AVCodecContext* context) noexcept;
+    void resetCodecBinding() noexcept;
+    void resetForLifecycle() noexcept;
+
+protected:
+    void clearOwnedLineage(const MediaAvGenerationPurge& purge) noexcept override;
+
+private:
+    void clearLineageStorage() noexcept;
+    std::shared_ptr<MediaVideoEncoderCodecApi> m_codecApi;
+    MediaBufferRef m_codecOwner;
+    AVCodecContext* m_codecContext = nullptr;
+};
 
 class VideoEncodeNode final : public FFmpegCodecNodeRuntime {
 public:
@@ -45,18 +76,9 @@ private:
 
 private:
     bool m_encoderConfigEmitted = false;
-    MediaInputTerminalTracker m_terminals { { "frame" } };
-    bool m_eofEmitted = false;
-    bool m_flushPending = false;
-    bool m_receivePending = false;
-    bool m_flushIsEof = false;
-    bool m_flushSent = false;
-    MediaBufferRef m_flushBuffer;
-    ::media::ffmpeg::FramePtr m_pendingFrame;
-    std::shared_ptr<const MediaCanonicalLineage> m_pendingLineage;
     std::shared_ptr<MediaCodecLineageRegistry> m_lineageRegistry;
     std::shared_ptr<MediaVideoEncoderCodecApi> m_codecApi;
-    std::set<std::uint64_t> m_lineageGenerations;
+    std::shared_ptr<VideoEncodeLineageState> m_lineageState;
 };
 
 } // namespace media::ffmpeg::graph

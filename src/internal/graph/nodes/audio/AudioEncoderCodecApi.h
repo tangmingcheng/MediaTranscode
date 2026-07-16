@@ -13,6 +13,7 @@ public:
     virtual ~AudioEncoderCodecApi() = default;
     virtual int sendFrame(AVCodecContext* context, const AVFrame* frame) noexcept = 0;
     virtual int receivePacket(AVCodecContext* context, AVPacket* packet) noexcept = 0;
+    virtual void flushBuffers(AVCodecContext* context) noexcept = 0;
 };
 
 std::shared_ptr<AudioEncoderCodecApi> makeFFmpegAudioEncoderCodecApi();

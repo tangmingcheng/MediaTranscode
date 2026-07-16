@@ -51,17 +51,24 @@ AudioSwrCompensationExecutor::create(MediaAudioCorrectionExecutionMode mode,
         return ::media::Status::failure(::media::ErrorInfo::wouldBlock(
             "audio correction lookahead is full"));
     }
+    const auto effective = command.effectiveOutputSampleIndex();
+    const auto distance = command.compensationDistance();
+    if (effective < 0 || distance <= 0 ||
+        effective > std::numeric_limits<std::int64_t>::max() - distance) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "audio correction command window end overflow"));
+    }
+    const auto plannedEnd = effective + distance;
     if (command.generation() != m_generation || command.sequence() == 0 ||
         command.sequence() <= m_lastSequence ||
-        command.effectiveOutputSampleIndex() < m_lastPlannedEnd ||
+        effective < m_lastPlannedEnd ||
         (m_lastSequence != 0 &&
-         command.effectiveOutputSampleIndex() != m_lastPlannedEnd)) {
+         effective != m_lastPlannedEnd)) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "audio correction command violates generation, sequence, or window ordering"));
     }
     m_lastSequence = command.sequence();
-    m_lastPlannedEnd = command.effectiveOutputSampleIndex() +
-                       command.compensationDistance();
+    m_lastPlannedEnd = plannedEnd;
     m_pending.push_back(command);
     return ::media::Status::success();
 }
@@ -117,6 +124,19 @@ AudioSwrCompensationExecutor::prepare(SwrContext* swr,
     }
     if (m_mode == MediaAudioCorrectionExecutionMode::ExternalCorrectionRequired) {
         m_activeRemaining -= producedSamples;
+        if (m_activeRemaining == 0 && m_active) {
+            const auto delta = static_cast<std::int64_t>(m_active->sampleDelta());
+            if ((delta > 0 &&
+                 m_appliedNetSampleDelta >
+                     std::numeric_limits<std::int64_t>::max() - delta) ||
+                (delta < 0 &&
+                 m_appliedNetSampleDelta <
+                     -std::numeric_limits<std::int64_t>::max() - delta)) {
+                return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                    "audio correction applied sample delta overflow"));
+            }
+            m_appliedNetSampleDelta += delta;
+        }
     }
     return ::media::Status::success();
 }
@@ -135,6 +155,7 @@ AudioSwrCompensationExecutor::prepare(SwrContext* swr,
     m_active.reset();
     m_pending.clear();
     m_activeRemaining = 0;
+    m_appliedNetSampleDelta = 0;
     return ::media::Status::success();
 }
 
@@ -153,8 +174,26 @@ bool AudioSwrCompensationExecutor::requiresNextWindow() const noexcept
            m_activeRemaining == 0;
 }
 
-::media::Status AudioSwrCompensationExecutor::settleTerminal() noexcept
+::media::Status AudioSwrCompensationExecutor::settleTerminal()
 {
+    if (m_mode == MediaAudioCorrectionExecutionMode::ExternalCorrectionRequired &&
+        (m_activeRemaining != 0 || !m_pending.empty())) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "audio correction terminated with unexecuted windows"));
+    }
+    m_active.reset();
+    return ::media::Status::success();
+}
+
+::media::Status AudioSwrCompensationExecutor::settleTerminal(
+    AudioSwrResamplerExhausted)
+{
+    if (m_active && m_activeRemaining > 0 &&
+        m_activeRemaining != m_active->compensationDistance() &&
+        m_active->sampleDelta() != 0) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "audio correction exhaustion cannot prove partial non-zero compensation"));
+    }
     m_active.reset();
     m_pending.clear();
     m_activeRemaining = 0;
@@ -164,6 +203,16 @@ bool AudioSwrCompensationExecutor::requiresNextWindow() const noexcept
 MediaAudioCorrectionExecutionMode AudioSwrCompensationExecutor::mode() const noexcept
 {
     return m_mode;
+}
+
+std::uint64_t AudioSwrCompensationExecutor::generation() const noexcept
+{
+    return m_generation;
+}
+
+std::int64_t AudioSwrCompensationExecutor::outstandingAuthorizedDroppedSamples() const noexcept
+{
+    return m_appliedNetSampleDelta < 0 ? -m_appliedNetSampleDelta : 0;
 }
 
 } // namespace media::ffmpeg::graph

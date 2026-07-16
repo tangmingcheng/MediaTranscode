@@ -5,17 +5,12 @@
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
-#include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 #include "internal/graph/runtime/buffer/MediaAudioCorrectionBuffer.h"
+#include "internal/graph/runtime/buffer/MediaBoundCanonicalAudioBuffer.h"
+#include "internal/graph/sync/MediaCanonicalAudioSamplesBuffer.h"
+#include "internal/graph/sync/lineage/MediaAudioLineageIdentities.h"
+#include "internal/graph/sync/lineage/MediaAudioLineageCapacity.h"
 
-extern "C" {
-#include <libavutil/channel_layout.h>
-#include <libavutil/error.h>
-#include <libavutil/mathematics.h>
-#include <libswresample/swresample.h>
-}
-
-#include <algorithm>
 #include <limits>
 #include <utility>
 
@@ -43,17 +38,32 @@ AVRational sourceTimeBase(const AVFrame* frame, const MediaBufferRef& buffer) no
     return AVRational{ 0, 1 };
 }
 
-#if LIBAVUTIL_VERSION_MAJOR >= 57
-bool sameChannelLayout(const AVChannelLayout& left, const AVChannelLayout& right) noexcept
-{
-    return av_channel_layout_compare(&left, &right) == 0;
-}
-#endif
-
 } // namespace
 
-AudioResampleNode::AudioResampleNode(MediaNodeId nodeId)
+AudioResampleNode::AudioResampleNode(
+    MediaNodeId nodeId,
+    MediaAudioLineageExecutionMode lineageMode,
+    std::shared_ptr<AudioResampleLineageState> lineageState)
     : FFmpegCodecNodeRuntime(nodeId, staticKind(), "AudioResampleNode")
+    , m_lineageState(std::move(lineageState))
+    , m_lineageMapper(m_lineageState)
+    , m_swrSession(m_lineageState)
+    , m_swr(m_lineageState->swr)
+    , m_correctionExecutor(m_lineageState->correctionExecutor)
+    , m_nextOutputPts(m_lineageState->nextOutputPts)
+    , m_outputSampleIndex(m_lineageState->outputSampleIndex)
+    , m_pendingOutputs(m_lineageState->pendingOutputs)
+    , m_pendingInput(m_lineageState->pendingInput)
+    , m_pendingTerminal(m_lineageState->pendingTerminal)
+    , m_drainingEof(m_lineageState->drainingEof)
+    , m_drainingClosedInput(m_lineageState->drainingClosedInput)
+    , m_lifecycleFlushRequested(m_lineageState->lifecycleFlushRequested)
+    , m_preferCorrection(m_lineageState->preferCorrection)
+    , m_lineageMode(lineageMode)
+    , m_activeOrigin(m_lineageState->activeOrigin)
+    , m_outputIntervals(m_lineageState->outputIntervals)
+    , m_sampleProjection(m_lineageState->sampleProjection)
+    , m_lastOutputLineage(m_lineageState->lastOutputLineage)
 {
 }
 
@@ -62,8 +72,29 @@ MediaNodeKind AudioResampleNode::staticKind() noexcept
     return MediaNodeKind::AudioResample;
 }
 
+std::string_view AudioResampleNode::generationPurgeIdentity() noexcept
+{
+    return MediaAudioResampleLineageIdentity;
+}
+
+std::shared_ptr<MediaAvGenerationPurgeTarget>
+AudioResampleNode::generationPurgeTarget() const noexcept
+{
+    return m_lineageState->synchronized() ? m_lineageState : nullptr;
+}
+
+bool AudioResampleNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) const noexcept
+{
+    const auto* bound = dynamic_cast<const MediaBoundCanonicalAudioBuffer*>(buffer.get());
+    return m_lineageState && m_lineageState->pendingOutputIsCurrent(
+        buffer, bound ? std::optional<std::uint64_t>(
+                            bound->audioOrigin().generation)
+                      : std::nullopt);
+}
+
 ::media::Status AudioResampleNode::start(MediaGraphExecutionContext& context)
 {
+    auto lineageLock = m_lineageState->lock();
     resetRuntimeState();
     if (auto status = configureCorrection(context); !status) {
         return status;
@@ -72,6 +103,7 @@ MediaNodeKind AudioResampleNode::staticKind() noexcept
 }
 ::media::Status AudioResampleNode::flush(MediaGraphExecutionContext& context)
 {
+    auto lineageLock = m_lineageState->lock();
     if (!m_correctionExecutor) {
         return ::media::Status::failure(::media::ErrorInfo::notInitialized(
             "AudioResampleNode flush requires started node"));
@@ -84,12 +116,19 @@ MediaNodeKind AudioResampleNode::staticKind() noexcept
 void AudioResampleNode::abort(MediaGraphExecutionContext& context) noexcept { FFmpegCodecNodeRuntime::abort(context); resetRuntimeState(); }
 void AudioResampleNode::resetRuntimeState() noexcept
 {
-    m_swr.reset(); m_correctionExecutor.reset(); m_nextOutputPts = AV_NOPTS_VALUE;
-    m_outputSampleIndex = 0; m_pendingOutputs.clear(); m_pendingInput.reset();
-    m_pendingTerminal.reset(); m_drainingEof = false;
-    m_drainingClosedInput = false; m_terminals.reset();
-    m_lifecycleFlushRequested = false; m_eofEmitted = false;
-    m_preferCorrection = true;
+    auto lineageLock = m_lineageState->lock();
+    m_lineageState->resetForLifecycle();
+}
+
+::media::Status AudioResampleNode::emitTerminal(
+    MediaGraphExecutionContext& context,
+    const MediaBufferRef& terminal)
+{
+    if (auto freshness = m_lineageState->authorizeRetainedControl(terminal);
+        !freshness) {
+        return freshness;
+    }
+    return emitOutput(context, "frame", terminal);
 }
 
 ::media::Result<bool> AudioResampleNode::consumeCorrection(
@@ -177,6 +216,7 @@ void AudioResampleNode::resetRuntimeState() noexcept
 
 ::media::Result<MediaNodeProcessResult> AudioResampleNode::onProcess(MediaGraphExecutionContext& context)
 {
+    auto lineageLock = m_lineageState->lock();
     if (!m_pendingOutputs.empty()) {
         return processProgress(emitNextPending(context));
     }
@@ -186,13 +226,13 @@ void AudioResampleNode::resetRuntimeState() noexcept
             if (auto status = m_correctionExecutor->settleTerminal(); !status) {
                 return ::media::Result<MediaNodeProcessResult>::failure(status.error());
             }
-            m_terminals.markEof("frame");
-            m_eofEmitted = true;
-            return processFinished(emitOutput(context, "frame", terminal));
+            m_lineageState->terminals.markEof("frame");
+            m_lineageState->eofEmitted = true;
+            return processFinished(emitTerminal(context, terminal));
         }
-        return processProgress(emitOutput(context, "frame", terminal));
+        return processProgress(emitTerminal(context, terminal));
     }
-    if (m_terminals.finished()) {
+    if (m_lineageState->terminals.finished()) {
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
     }
     if (m_lifecycleFlushRequested && !m_drainingEof) {
@@ -243,7 +283,7 @@ void AudioResampleNode::resetRuntimeState() noexcept
                 return ::media::Result<MediaNodeProcessResult>::failure(
                     settle.error());
             }
-            m_terminals.markClosed("frame");
+            m_lineageState->terminals.markClosed("frame");
             return ::media::Result<MediaNodeProcessResult>::success(
                 MediaNodeProcessResult::finished());
         }
@@ -257,11 +297,11 @@ void AudioResampleNode::resetRuntimeState() noexcept
             if (auto settle = m_correctionExecutor->settleTerminal(); !settle) {
                 return ::media::Result<MediaNodeProcessResult>::failure(settle.error());
             }
-            m_terminals.markEof("frame");
-            m_eofEmitted = true;
-            return processFinished(emitOutput(context, "frame", terminal));
+            m_lineageState->terminals.markEof("frame");
+            m_lineageState->eofEmitted = true;
+            return processFinished(emitTerminal(context, terminal));
         }
-        return processProgress(emitOutput(context, "frame", terminal));
+        return processProgress(emitTerminal(context, terminal));
     }
 
     auto frameInput = tryPopInputOptional(context, "frame");
@@ -299,7 +339,7 @@ void AudioResampleNode::resetRuntimeState() noexcept
                 return ::media::Result<MediaNodeProcessResult>::failure(
                     settle.error());
             }
-            m_terminals.markClosed("frame");
+            m_lineageState->terminals.markClosed("frame");
             return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
         }
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::waiting());
@@ -307,7 +347,7 @@ void AudioResampleNode::resetRuntimeState() noexcept
 
     const bool eof = frameInput.value()->get()->isEof();
     const bool flush = frameInput.value()->get()->isFlush();
-    if (eof && m_eofEmitted) {
+    if (eof && m_lineageState->eofEmitted) {
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
     }
     if (eof || flush) {
@@ -326,11 +366,11 @@ void AudioResampleNode::resetRuntimeState() noexcept
             if (auto settle = m_correctionExecutor->settleTerminal(); !settle) {
                 return ::media::Result<MediaNodeProcessResult>::failure(settle.error());
             }
-            m_terminals.markEof("frame");
-            m_eofEmitted = true;
-            return processFinished(emitOutput(context, "frame", terminal));
+            m_lineageState->terminals.markEof("frame");
+            m_lineageState->eofEmitted = true;
+            return processFinished(emitTerminal(context, terminal));
         }
-        return processProgress(emitOutput(context, "frame", terminal));
+        return processProgress(emitTerminal(context, terminal));
     }
     m_preferCorrection = true;
     auto processStatus = processFrame(context, *frameInput.value());
@@ -372,83 +412,35 @@ void AudioResampleNode::resetRuntimeState() noexcept
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "AudioResampleNode terminal buffer bypassed boundary state"));
     }
-    if (!FFmpegFrameView::frame(buffer)) {
+    MediaBufferRef media = buffer;
+    const auto* bound = dynamic_cast<const MediaBoundCanonicalAudioBuffer*>(buffer.get());
+    if (m_lineageMode == MediaAudioLineageExecutionMode::SynchronizedReleasedAudio) {
+        if (!bound || !codecContext() ||
+            bound->audioOrigin().outputSampleRate != codecContext()->sample_rate) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "Synchronized AudioResampleNode requires bound audio matching planned output rate"));
+        }
+        const AVFrame* synchronizedFrame = FFmpegFrameView::frame(
+            bound->media()->media());
+        if (!synchronizedFrame) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "Synchronized AudioResampleNode requires an exact audio frame"));
+        }
+        if (auto status = m_lineageMapper.acceptInput(
+                *bound, *synchronizedFrame, codecContext()->sample_rate);
+            !status) {
+            return status;
+        }
+        media = bound->media()->media();
+    } else if (bound) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Legacy AudioResampleNode rejects bound canonical audio"));
+    }
+    if (!FFmpegFrameView::frame(media)) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument("AudioResampleNode expected frame buffer"));
     }
-    m_pendingInput = PendingInput{buffer, false};
+    m_pendingInput = AudioResamplePendingInput{media, false};
     return processPendingInputQuantum(context);
-}
-
-bool AudioResampleNode::frameMatchesEncoder(const AVFrame* frame) const noexcept
-{
-    const AVCodecContext* target = codecContext();
-    if (!frame || !target) {
-        return false;
-    }
-    if (frame->format != target->sample_fmt || frame->sample_rate != target->sample_rate) {
-        return false;
-    }
-#if LIBAVUTIL_VERSION_MAJOR >= 57
-    return sameChannelLayout(frame->ch_layout, target->ch_layout);
-#else
-    const int frameChannels = frame->channels > 0 ? frame->channels : av_get_channel_layout_nb_channels(frame->channel_layout);
-    const int targetChannels = target->channels > 0 ? target->channels : av_get_channel_layout_nb_channels(target->channel_layout);
-    return frameChannels == targetChannels && frame->channel_layout == target->channel_layout;
-#endif
-}
-
-::media::Status AudioResampleNode::ensureSwrInitialized(const AVFrame* inputFrame)
-{
-    if (m_swr) {
-        return ::media::Status::success();
-    }
-    if (!inputFrame || !codecContext()) {
-        return ::media::Status::failure(::media::ErrorInfo::notInitialized("AudioResampleNode requires input frame and encoder context"));
-    }
-    if (inputFrame->sample_rate <= 0 || codecContext()->sample_rate <= 0) {
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument("AudioResampleNode requires known sample rates"));
-    }
-
-#if LIBAVUTIL_VERSION_MAJOR >= 57
-    if (inputFrame->ch_layout.nb_channels <= 0 || codecContext()->ch_layout.nb_channels <= 0) {
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument("AudioResampleNode requires known channel layouts"));
-    }
-    SwrContext* raw = nullptr;
-    const int allocRet = swr_alloc_set_opts2(&raw,
-                                             &codecContext()->ch_layout,
-                                             codecContext()->sample_fmt,
-                                             codecContext()->sample_rate,
-                                             &inputFrame->ch_layout,
-                                             static_cast<AVSampleFormat>(inputFrame->format),
-                                             inputFrame->sample_rate,
-                                             0,
-                                             nullptr);
-    if (allocRet < 0) {
-        return FFmpegGraphError::statusFromCode(allocRet, "swr_alloc_set_opts2(audio)");
-    }
-    m_swr.reset(raw);
-#else
-    const int64_t inputLayout = inputFrame->channel_layout ? inputFrame->channel_layout : av_get_default_channel_layout(inputFrame->channels);
-    const int64_t outputLayout = codecContext()->channel_layout ? codecContext()->channel_layout : av_get_default_channel_layout(codecContext()->channels);
-    if (!inputLayout || !outputLayout) {
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument("AudioResampleNode requires known channel layout"));
-    }
-    m_swr.reset(swr_alloc_set_opts(nullptr,
-                                   outputLayout,
-                                   codecContext()->sample_fmt,
-                                   codecContext()->sample_rate,
-                                   inputLayout,
-                                   static_cast<AVSampleFormat>(inputFrame->format),
-                                   inputFrame->sample_rate,
-                                   0,
-                                   nullptr));
-    if (!m_swr) {
-        return ::media::Status::failure(::media::ErrorInfo::allocationFailed("swr_alloc_set_opts(audio)"));
-    }
-#endif
-
-    const int initRet = swr_init(m_swr.get());
-    return initRet < 0 ? FFmpegGraphError::statusFromCode(initRet, "swr_init(audio)") : ::media::Status::success();
 }
 
 ::media::Status AudioResampleNode::processPendingInputQuantum(
@@ -468,7 +460,8 @@ bool AudioResampleNode::frameMatchesEncoder(const AVFrame* frame) const noexcept
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "AudioResampleNode requires known frame time_base"));
     }
-    if (!m_pendingInput->submitted && frameMatchesEncoder(inputFrame) &&
+    if (!m_pendingInput->submitted && codecContext() &&
+        m_swrSession.frameMatchesTarget(*inputFrame, *codecContext()) &&
         m_correctionExecutor &&
         m_correctionExecutor->mode() == MediaAudioCorrectionExecutionMode::Disabled) {
         auto cloned = FFmpegBufferFactory::cloneFrame(
@@ -480,16 +473,21 @@ bool AudioResampleNode::frameMatchesEncoder(const AVFrame* frame) const noexcept
         }
         return emitNextPending(context);
     }
-    if (auto status = ensureSwrInitialized(inputFrame); !status) return status;
+    if (!codecContext()) {
+        return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+            "AudioResampleNode requires encoder context"));
+    }
+    if (auto status = m_swrSession.ensureInitialized(
+            *inputFrame, *codecContext()); !status) {
+        return status;
+    }
     const int inputSamples = m_pendingInput->submitted ? 0 : inputFrame->nb_samples;
-    m_pendingInput->submitted = true;
-    return convertQuantum(
+    return convertLiveQuantum(
         context,
         const_cast<const uint8_t**>(inputFrame->extended_data),
         inputSamples,
         inputFrame->pts,
-        srcTb,
-        true);
+        srcTb);
 }
 
 ::media::Status AudioResampleNode::processEofDrainQuantum(
@@ -497,22 +495,34 @@ bool AudioResampleNode::frameMatchesEncoder(const AVFrame* frame) const noexcept
 {
     if (!m_swr) {
         m_drainingEof = false;
-        return ::media::Status::success();
+        return settleLineageResidue();
     }
     if (m_correctionExecutor->requiresNextWindow()) {
-        const int preflight = swr_get_out_samples(m_swr.get(), 0);
-        if (preflight < 0) {
-            return FFmpegGraphError::statusFromCode(
-                preflight, "swr_get_out_samples(audio terminal preflight)");
+        if (!m_sampleProjection) {
+            return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+                "AudioResampleNode terminal delay requires sample projection"));
         }
-        if (preflight == 0) {
-            m_drainingEof = false;
-            return ::media::Status::success();
+        auto evidence = m_swrSession.inspectDrainEvidence(
+            m_sampleProjection->sourceSampleRate(),
+            codecContext()->sample_rate);
+        if (!evidence) return ::media::Status::failure(evidence.error());
+        if (evidence.value() == AudioSwrDrainEvidence::NoDelay) {
+            return drainSwrQuantum(context, false);
         }
     }
-    const AVRational dstTb {1, codecContext()->sample_rate};
-    return convertQuantum(
-        context, nullptr, 0, AV_NOPTS_VALUE, dstTb, false);
+    return drainSwrQuantum(context, true);
+}
+
+::media::Status AudioResampleNode::settleLineageResidue()
+{
+    if (m_lineageMode !=
+        MediaAudioLineageExecutionMode::SynchronizedReleasedAudio) {
+        return ::media::Status::success();
+    }
+    const auto authorized = m_correctionExecutor
+        ? m_correctionExecutor->outstandingAuthorizedDroppedSamples()
+        : 0;
+    return m_lineageMapper.settleDroppedSamples(authorized);
 }
 
 ::media::Status AudioResampleNode::stampAndQueue(
@@ -539,90 +549,130 @@ bool AudioResampleNode::frameMatchesEncoder(const AVFrame* frame) const noexcept
     if (!nextPts) {
         return ::media::Status::failure(nextPts.error());
     }
-    m_nextOutputPts = nextPts.value();
-    if (outputFrame->nb_samples < 0 ||
+    if (outputFrame->nb_samples <= 0 ||
         m_outputSampleIndex > std::numeric_limits<std::int64_t>::max() -
                                   outputFrame->nb_samples) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "AudioResampleNode output sample index overflows"));
     }
-    m_outputSampleIndex += outputFrame->nb_samples;
+    const std::int64_t nextOutputSampleIndex =
+        m_outputSampleIndex + outputFrame->nb_samples;
 
     MediaTimeDescriptor timeDescriptor;
     timeDescriptor.timeBase = MediaRational{ dstTb.num, dstTb.den };
     outputBuffer->setTimeDescriptor(timeDescriptor);
     outputBuffer->setTimestamps(outputFrame->pts, outputFrame->pkt_dts, outputFrame->duration);
+    if (m_lineageMode == MediaAudioLineageExecutionMode::SynchronizedReleasedAudio) {
+        auto bound = m_lineageMapper.bindOutput(
+            outputBuffer, outputFrame->nb_samples);
+        if (!bound) return ::media::Status::failure(bound.error());
+        outputBuffer = std::move(bound).value();
+    }
+    m_nextOutputPts = nextPts.value();
+    m_outputSampleIndex = nextOutputSampleIndex;
     m_pendingOutputs.push_back(std::move(outputBuffer));
     return ::media::Status::success();
 }
 
-::media::Status AudioResampleNode::convertQuantum(
+::media::Status AudioResampleNode::convertLiveQuantum(
     MediaGraphExecutionContext& context,
     const uint8_t** inputData,
     int inputSamples,
     std::int64_t inputPts,
-    AVRational srcTb,
-    bool liveInput)
+    AVRational srcTb)
 {
     auto correctionWindow = m_correctionExecutor->prepare(
         m_swr.get(), m_outputSampleIndex);
     if (!correctionWindow) {
         return ::media::Status::failure(correctionWindow.error());
     }
-    const int availableSamples = swr_get_out_samples(m_swr.get(), inputSamples);
-    if (availableSamples < 0) {
-        return FFmpegGraphError::statusFromCode(
-            availableSamples, "swr_get_out_samples(audio)");
+    if (!codecContext()) {
+        return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+            "AudioResampleNode requires encoder context"));
     }
-    const int outSamples = std::min(
-        availableSamples, correctionWindow.value().maximumOutputSamples);
-    if (outSamples <= 0) {
-        if (liveInput) m_pendingInput.reset();
-        else m_drainingEof = false;
+    auto conversion = m_swrSession.convertLive(
+        inputData, inputSamples,
+        correctionWindow.value().maximumOutputSamples,
+        *codecContext());
+    if (!conversion) {
+        return ::media::Status::failure(conversion.error());
+    }
+    auto converted = std::move(conversion).value();
+    if (converted.capacity <= 0) {
         return ::media::Status::success();
     }
-    auto outputFrame = ::media::ffmpeg::makeFrame();
-    if (!outputFrame) {
-        return ::media::Status::failure(::media::ErrorInfo::allocationFailed(
-            "AudioResampleNode failed to allocate output frame"));
+    if (m_pendingInput) {
+        m_pendingInput->submitted = true;
     }
-    outputFrame->format = codecContext()->sample_fmt;
-    outputFrame->sample_rate = codecContext()->sample_rate;
-#if LIBAVUTIL_VERSION_MAJOR >= 57
-    const int layoutRet = av_channel_layout_copy(
-        &outputFrame->ch_layout, &codecContext()->ch_layout);
-    if (layoutRet < 0) {
-        return FFmpegGraphError::statusFromCode(
-            layoutRet, "av_channel_layout_copy(audio resample)");
+    if (converted.produced < converted.capacity) m_pendingInput.reset();
+    if (converted.produced == 0) {
+        return ::media::Status::success();
     }
-#else
-    outputFrame->channel_layout = codecContext()->channel_layout;
-    outputFrame->channels = codecContext()->channels;
-#endif
-    outputFrame->nb_samples = outSamples;
-    const int bufferRet = av_frame_get_buffer(outputFrame.get(), 0);
-    if (bufferRet < 0) {
-        return FFmpegGraphError::statusFromCode(
-            bufferRet, "av_frame_get_buffer(audio resample)");
+    if (auto status = m_correctionExecutor->advance(converted.produced);
+        !status) {
+        return status;
     }
-    const int convertRet = swr_convert(
-        m_swr.get(), outputFrame->data, outSamples,
-        inputData, inputSamples);
-    if (convertRet < 0) {
-        return FFmpegGraphError::statusFromCode(convertRet, "swr_convert(audio)");
-    }
-    if (liveInput) {
-        if (convertRet < outSamples) m_pendingInput.reset();
-    } else {
-        m_drainingEof = convertRet > 0;
-    }
-    if (convertRet == 0) return ::media::Status::success();
-    outputFrame->nb_samples = convertRet;
-    if (auto status = m_correctionExecutor->advance(convertRet); !status) return status;
     auto wrapped = FFmpegBufferFactory::wrapFrame(
-        std::move(outputFrame), MediaStreamKind::Audio);
+        std::move(converted.output), MediaStreamKind::Audio);
     if (!wrapped) return ::media::Status::failure(wrapped.error());
     if (auto status = stampAndQueue(wrapped.value(), inputPts, srcTb); !status) {
+        return status;
+    }
+    return emitNextPending(context);
+}
+
+::media::Status AudioResampleNode::drainSwrQuantum(
+    MediaGraphExecutionContext& context,
+    bool correctionWindowRequired)
+{
+    if (!codecContext()) {
+        return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+            "AudioResampleNode drain requires encoder context"));
+    }
+    int maximumOutputSamples = 1;
+    if (correctionWindowRequired) {
+        auto correctionWindow = m_correctionExecutor->prepare(
+            m_swr.get(), m_outputSampleIndex);
+        if (!correctionWindow) {
+            return ::media::Status::failure(correctionWindow.error());
+        }
+        maximumOutputSamples = correctionWindow.value().maximumOutputSamples;
+    }
+    auto conversion = m_swrSession.drainQuantum(
+        maximumOutputSamples, *codecContext());
+    if (!conversion) {
+        return ::media::Status::failure(conversion.error());
+    }
+    auto converted = std::move(conversion).value();
+    m_drainingEof = converted.produced > 0;
+    if (converted.produced == 0) {
+        if (!converted.exhausted) {
+            return ::media::Status::failure(::media::ErrorInfo::internalError(
+                "AudioResampleNode zero drain lacks exhaustion proof"));
+        }
+        const bool finalDrain = m_drainingClosedInput ||
+            (m_pendingTerminal && m_pendingTerminal->isEof());
+        if (!finalDrain) return ::media::Status::success();
+        if (auto status = m_correctionExecutor->settleTerminal(
+                *converted.exhausted); !status) {
+            return status;
+        }
+        return settleLineageResidue();
+    }
+    if (!correctionWindowRequired) {
+        return ::media::Status::failure(::media::ErrorInfo::internalError(
+            "AudioResampleNode no-delay evidence produced unplanned output"));
+    }
+    if (auto status = m_correctionExecutor->advance(converted.produced);
+        !status) {
+        return status;
+    }
+    auto wrapped = FFmpegBufferFactory::wrapFrame(
+        std::move(converted.output), MediaStreamKind::Audio);
+    if (!wrapped) return ::media::Status::failure(wrapped.error());
+    const AVRational dstTb {1, codecContext()->sample_rate};
+    if (auto status = stampAndQueue(
+            wrapped.value(), AV_NOPTS_VALUE, dstTb); !status) {
         return status;
     }
     return emitNextPending(context);

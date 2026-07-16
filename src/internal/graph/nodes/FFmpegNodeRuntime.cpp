@@ -44,7 +44,7 @@ void FFmpegNodeRuntime::abort(MediaGraphExecutionContext& context) noexcept
             MediaNodeProcessResult::finished());
     }
     if (m_pendingTransfer && !pendingOutputIsCurrent(m_pendingTransfer->buffer)) {
-        m_pendingTransfer.reset();
+        cancelPendingOutputTransfer();
     }
     const bool hadPendingTransfer = m_pendingTransfer.has_value();
     bool waiting = false;
@@ -139,16 +139,22 @@ bool isWildcardPayload(MediaPayloadKind kind) noexcept
     return kind == MediaPayloadKind::Unknown;
 }
 
-bool isBypassControlBuffer(const MediaChannel& channel, const MediaBufferRef& buffer) noexcept
+bool isStreamCompatibleControlBuffer(
+    const MediaChannel& channel,
+    const MediaBufferRef& buffer) noexcept
 {
     if (!buffer ||
-        !channel.policy().queuePolicy.allowFlushControlBypass ||
-        buffer->streamKind() != MediaStreamKind::Control ||
         buffer->payloadKind() != MediaPayloadKind::ControlSignal) {
         return false;
     }
     const auto* control = dynamic_cast<const MediaControlBuffer*>(buffer.get());
     if (!control) {
+        return false;
+    }
+    const auto channelStream = channel.binding().streamKind;
+    if (buffer->streamKind() != MediaStreamKind::Control &&
+        !isWildcardStream(channelStream) &&
+        buffer->streamKind() != channelStream) {
         return false;
     }
     switch (control->controlKind()) {
@@ -164,9 +170,11 @@ bool isBypassControlBuffer(const MediaChannel& channel, const MediaBufferRef& bu
 
 bool isControlBroadcastBuffer(const MediaBufferRef& buffer) noexcept
 {
-    return buffer &&
-        buffer->streamKind() == MediaStreamKind::Control &&
-        buffer->payloadKind() == MediaPayloadKind::ControlSignal;
+    if (!buffer || buffer->payloadKind() != MediaPayloadKind::ControlSignal) {
+        return false;
+    }
+    const auto* control = dynamic_cast<const MediaControlBuffer*>(buffer.get());
+    return control && control->controlKind() != MediaControlBufferKind::Unknown;
 }
 
 ::media::Status validateChannelBufferType(const MediaChannel& channel,
@@ -178,7 +186,7 @@ bool isControlBroadcastBuffer(const MediaBufferRef& buffer) noexcept
             ::media::ErrorInfo::invalidArgument(std::string(action) + " failed: buffer is null"));
     }
 
-    if (isBypassControlBuffer(channel, buffer)) {
+    if (isStreamCompatibleControlBuffer(channel, buffer)) {
         return ::media::Status::success();
     }
 

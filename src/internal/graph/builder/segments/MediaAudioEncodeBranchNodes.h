@@ -8,6 +8,7 @@ struct MediaAudioEncodeBranchNodes {
     MediaNodeId packetNormalize = MediaNodeId::invalid();
     MediaNodeId codecResolver = MediaNodeId::invalid();
     MediaNodeId decode = MediaNodeId::invalid();
+    MediaNodeId startupTrim = MediaNodeId::invalid();
     MediaNodeId resample = MediaNodeId::invalid();
     MediaNodeId encode = MediaNodeId::invalid();
 };

@@ -4,7 +4,7 @@
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 #include "internal/graph/runtime/lifecycle/MediaInputTerminalTracker.h"
-#include "internal/graph/sync/lineage/MediaCodecLineageRegistry.h"
+#include "internal/graph/sync/lineage/MediaVideoLineageState.h"
 
 #include <cstdint>
 #include <set>
@@ -18,6 +18,41 @@ extern "C" {
 }
 
 namespace media::ffmpeg::graph {
+
+class VideoFilterLineageState final : public MediaVideoLineageState {
+public:
+    explicit VideoFilterLineageState(
+        std::shared_ptr<MediaCodecLineageRegistry> registry) noexcept;
+
+    void resetFilterGraph() noexcept;
+    void resetForLifecycle() noexcept;
+
+    MediaBufferRef encoderConfig;
+    AVCodecContext* encoderContext = nullptr;
+    ::media::ffmpeg::FilterGraphPtr filterGraph;
+    AVFilterContext* bufferSrcContext = nullptr;
+    AVFilterContext* bufferSinkContext = nullptr;
+    AVRational inputTimeBase { 0, 1 };
+    AVRational sinkTimeBase { 0, 1 };
+    int64_t lastSubmittedPts = AV_NOPTS_VALUE;
+    bool graphInitialized = false;
+    bool flushed = false;
+    bool filterEof = false;
+    ::media::ffmpeg::FramePtr pendingFrame;
+    std::shared_ptr<const MediaCanonicalLineage> pendingLineage;
+    MediaInputTerminalTracker terminals { { "frame" } };
+    bool eofEmitted = false;
+    MediaBufferRef terminalBuffer;
+    bool terminalPending = false;
+    bool terminalIsEof = false;
+    std::set<std::uint64_t> lineageGenerations;
+
+protected:
+    void clearOwnedLineage(const MediaAvGenerationPurge& purge) noexcept override;
+
+private:
+    void clearLineageStorage() noexcept;
+};
 
 class VideoFilterNode final : public FFmpegNodeRuntime {
 public:
@@ -50,30 +85,11 @@ private:
     ::media::Status emitFrame(MediaGraphExecutionContext& context, ::media::ffmpeg::FramePtr frame);
     ::media::Result<MediaNodeProcessResult> continueTerminal(MediaGraphExecutionContext& context);
     ::media::Status rescaleAndValidateFrame(AVFrame* frame) noexcept;
-    void resetFilterGraph() noexcept;
     void resetRuntimeState() noexcept;
 
 private:
-    MediaBufferRef m_encoderConfig;
-    AVCodecContext* m_encoderContext = nullptr;
-    ::media::ffmpeg::FilterGraphPtr m_filterGraph;
-    AVFilterContext* m_bufferSrcContext = nullptr;
-    AVFilterContext* m_bufferSinkContext = nullptr;
-    AVRational m_inputTimeBase { 0, 1 };
-    AVRational m_sinkTimeBase { 0, 1 };
-    int64_t m_lastSubmittedPts = AV_NOPTS_VALUE;
-    bool m_graphInitialized = false;
-    bool m_flushed = false;
-    bool m_filterEof = false;
-    ::media::ffmpeg::FramePtr m_pendingFrame;
-    std::shared_ptr<const MediaCanonicalLineage> m_pendingLineage;
-    MediaInputTerminalTracker m_terminals { { "frame" } };
-    bool m_eofEmitted = false;
-    MediaBufferRef m_terminalBuffer;
-    bool m_terminalPending = false;
-    bool m_terminalIsEof = false;
     std::shared_ptr<MediaCodecLineageRegistry> m_lineageRegistry;
-    std::set<std::uint64_t> m_lineageGenerations;
+    std::shared_ptr<VideoFilterLineageState> m_lineageState;
 };
 
 } // namespace media::ffmpeg::graph

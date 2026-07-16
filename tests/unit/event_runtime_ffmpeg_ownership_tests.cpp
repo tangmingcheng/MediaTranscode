@@ -17,6 +17,7 @@
 #include "internal/graph/runtime/threading/MediaGraphWorker.h"
 #include "internal/graph/runtime/threading/MediaGraphThreadedExecutor.h"
 #include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
+#include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
 #include "internal/graph/runtime/ffmpeg/MediaVideoDecoderCodecApi.h"
@@ -44,20 +45,24 @@ struct VideoDecodeNodeLifecycleTestAccess {
 
     static void injectInterruptedTerminal(VideoDecodeNode& node, const MediaBufferRef& terminal)
     {
-        node.m_receivePending = true;
-        node.m_flushPending = true;
-        node.m_flushIsEof = true;
-        node.m_flushSent = true;
-        node.m_flushBuffer = terminal;
-        node.m_eofEmitted = true;
-        node.m_terminals.markEof("packet");
+        node.m_lineageState->receivePending = true;
+        node.m_lineageState->flushPending = true;
+        node.m_lineageState->flushIsEof = true;
+        node.m_lineageState->flushSent = true;
+        node.m_lineageState->flushBuffer = terminal;
+        node.m_lineageState->eofEmitted = true;
+        node.m_lineageState->terminals.markEof("packet");
     }
 
     static bool reset(const VideoDecodeNode& node)
     {
-        return !node.hasCodecContext() && !node.m_receivePending && !node.m_flushPending &&
-               !node.m_flushIsEof && !node.m_flushSent && !node.m_flushBuffer &&
-               !node.m_eofEmitted && !node.m_terminals.finished();
+        return !node.hasCodecContext() && !node.m_lineageState->receivePending &&
+               !node.m_lineageState->flushPending &&
+               !node.m_lineageState->flushIsEof &&
+               !node.m_lineageState->flushSent &&
+               !node.m_lineageState->flushBuffer &&
+               !node.m_lineageState->eofEmitted &&
+               !node.m_lineageState->terminals.finished();
     }
 };
 
@@ -71,18 +76,22 @@ struct VideoFilterNodeLifecycleTestAccess {
 
     static void injectInterruptedTerminal(VideoFilterNode& node, const MediaBufferRef& terminal)
     {
-        node.m_terminalBuffer = terminal;
-        node.m_terminalPending = true;
-        node.m_terminalIsEof = true;
-        node.m_flushed = true;
-        node.m_eofEmitted = true;
-        node.m_terminals.markEof("frame");
+        node.m_lineageState->terminalBuffer = terminal;
+        node.m_lineageState->terminalPending = true;
+        node.m_lineageState->terminalIsEof = true;
+        node.m_lineageState->flushed = true;
+        node.m_lineageState->eofEmitted = true;
+        node.m_lineageState->terminals.markEof("frame");
     }
 
     static bool reset(const VideoFilterNode& node)
     {
-        return !node.m_terminalBuffer && !node.m_terminalPending && !node.m_terminalIsEof &&
-               !node.m_flushed && !node.m_eofEmitted && !node.m_terminals.finished();
+        return !node.m_lineageState->terminalBuffer &&
+               !node.m_lineageState->terminalPending &&
+               !node.m_lineageState->terminalIsEof &&
+               !node.m_lineageState->flushed &&
+               !node.m_lineageState->eofEmitted &&
+               !node.m_lineageState->terminals.finished();
     }
 };
 
@@ -99,24 +108,24 @@ struct VideoFrameRateNodeLifecycleTestAccess {
         auto& state = node.m_state->data();
         state.pendingFrames.push_back({buffer, 0});
         state.lastInputFrame = {buffer, 0};
-        node.m_terminalBuffer = buffer;
-        node.m_terminalPending = true;
-        node.m_terminalIsEof = true;
+        state.terminalBuffer = buffer;
+        state.terminalPending = true;
+        state.terminalIsEof = true;
         state.initialized = true;
         state.started = true;
         state.flushed = true;
-        node.m_eofEmitted = true;
-        node.m_terminals.markEof("frame");
+        state.eofEmitted = true;
+        state.terminals.markEof("frame");
     }
 
     static bool reset(const VideoFrameRateNode& node)
     {
         auto guard = node.m_state->lock();
         const auto& state = node.m_state->data();
-        return state.pendingFrames.empty() && !state.lastInputFrame.buffer && !node.m_terminalBuffer &&
-               !node.m_terminalPending && !node.m_terminalIsEof && !state.initialized &&
-               !state.started && !state.flushed && !node.m_eofEmitted &&
-               !node.m_terminals.finished();
+        return state.pendingFrames.empty() && !state.lastInputFrame.buffer &&
+               !state.terminalBuffer && !state.terminalPending &&
+               !state.terminalIsEof && !state.initialized && !state.started &&
+               !state.flushed && !state.eofEmitted && !state.terminals.finished();
     }
 
     static std::size_t pending(const VideoFrameRateNode& node)
@@ -520,6 +529,64 @@ void testFrameRatePurgeClearsPendingHistoryAndRestartsGeneration(TestContext& ct
     EXPECT_TRUE(ctx, node.stop(execution));
 }
 
+void testFrameRatePurgeCancelsRetainedTerminal(TestContext& ctx)
+{
+    for (const bool eof : {false, true}) {
+      for (const bool videoScoped : {false, true}) {
+        auto blocker = makeVideoFrameBuffer(700);
+        auto oldFrame = makeCanonicalVideoFrameBuffer(10, 61);
+        auto nextFrame = makeCanonicalVideoFrameBuffer(20, 62);
+        EXPECT_TRUE(ctx, blocker && oldFrame && nextFrame);
+        if (!blocker || !oldFrame || !nextFrame) return;
+
+        MediaNodeId source;
+        MediaNodeId nodeId;
+        MediaNodeId sink;
+        MediaGraph graph = makeSlowVideoNodeGraph(
+            VideoFrameRateNode::staticKind(), source, nodeId, sink, false);
+        MediaGraphExecutionContext execution;
+        EXPECT_TRUE(ctx, execution.compile(graph));
+        MediaChannel* input = execution.findInputChannel(nodeId, "frame");
+        MediaChannel* output = execution.findInputChannel(sink, "frame");
+        EXPECT_TRUE(ctx, input && output);
+        if (!input || !output) return;
+
+        auto state = std::make_shared<MediaVideoFrameRateState>(true);
+        VideoFrameRateNode node(nodeId, state);
+        EXPECT_TRUE(ctx, node.start(execution));
+        EXPECT_TRUE(ctx, input->push(oldFrame.value()));
+        EXPECT_TRUE(ctx, node.process(execution));
+        MediaBufferRef observed;
+        EXPECT_TRUE(ctx, output->tryPop(observed));
+        observed.reset();
+
+        EXPECT_TRUE(ctx, output->push(blocker.value()));
+        const auto terminal = makeMediaBufferRef<MediaControlBuffer>(
+            eof ? MediaControlBufferKind::Eof
+                : MediaControlBufferKind::Flush);
+        if (videoScoped) terminal->setStreamKind(MediaStreamKind::Video);
+        EXPECT_TRUE(ctx, input->push(terminal));
+        auto retained = node.process(execution);
+        EXPECT_TRUE(ctx, retained &&
+                             retained.value().state !=
+                                 MediaNodeProcessState::Finished);
+        EXPECT_TRUE(ctx, node.generationPurgeTarget()->purge({61, 62, 1}));
+        EXPECT_TRUE(ctx, output->tryPop(observed) &&
+                             observed == blocker.value());
+        observed.reset();
+        EXPECT_TRUE(ctx, node.process(execution));
+        EXPECT_FALSE(ctx, output->tryPop(observed));
+
+        EXPECT_TRUE(ctx, input->push(nextFrame.value()));
+        EXPECT_TRUE(ctx, node.process(execution));
+        EXPECT_TRUE(ctx, output->tryPop(observed));
+        const auto lineage = FFmpegFrameView::canonicalLineage(observed);
+        EXPECT_TRUE(ctx, lineage && lineage->generation == 62);
+        EXPECT_TRUE(ctx, node.stop(execution));
+      }
+    }
+}
+
 } // namespace
 
 void runEventRuntimeFfmpegOwnershipTests(media_transcode::test::TestContext& ctx)
@@ -531,4 +598,5 @@ void runEventRuntimeFfmpegOwnershipTests(media_transcode::test::TestContext& ctx
     testInterruptedFfmpegNodeStateDoesNotLeakAcrossSameInstanceRestart(ctx);
     testVideoInternalPendingDrainsBeforeSustainedUpstream(ctx);
     testFrameRatePurgeClearsPendingHistoryAndRestartsGeneration(ctx);
+    testFrameRatePurgeCancelsRetainedTerminal(ctx);
 }

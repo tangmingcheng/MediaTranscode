@@ -113,19 +113,10 @@ VideoFrameRateNode::generationPurgeTarget() const noexcept
 
 bool VideoFrameRateNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) const noexcept
 {
-    if (!m_state->requiresCanonicalLineage()) {
-        return true;
-    }
     const auto lineage = FFmpegFrameView::canonicalLineage(buffer);
-    if (!lineage) {
-        return false;
-    }
-    auto guard = m_state->lock();
-    const auto& state = m_state->data();
-    if (state.expectedGeneration != 0) {
-        return lineage->generation == state.expectedGeneration;
-    }
-    return state.activeGeneration == 0 || lineage->generation == state.activeGeneration;
+    return m_state->pendingOutputIsCurrent(
+        buffer, lineage ? std::optional<std::uint64_t>(lineage->generation)
+                        : std::nullopt);
 }
 
 ::media::Status VideoFrameRateNode::start(MediaGraphExecutionContext& context)
@@ -153,22 +144,20 @@ void VideoFrameRateNode::abort(MediaGraphExecutionContext& context) noexcept
 void VideoFrameRateNode::resetRuntimeState() noexcept
 {
     m_state->resetLifecycle();
-    m_terminals.reset(); m_eofEmitted = false;
-    m_terminalBuffer.reset(); m_terminalPending = false; m_terminalIsEof = false;
 }
 
 ::media::Result<MediaNodeProcessResult> VideoFrameRateNode::onProcess(MediaGraphExecutionContext& context)
 {
     auto stateGuard = m_state->lock();
     auto& state = m_state->data();
-    if (m_terminalPending) {
+    if (state.terminalPending) {
         return continueTerminal(context);
     }
     const bool hadPendingOutput = !state.pendingFrames.empty();
     auto pendingDrain = drainPending(context);
     if (!pendingDrain) return processProgress(std::move(pendingDrain));
     if (hadPendingOutput) return processProgress();
-    if (m_terminals.finished()) {
+    if (state.terminals.finished()) {
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
     }
 
@@ -179,7 +168,7 @@ void VideoFrameRateNode::resetRuntimeState() noexcept
     if (!input.value()) {
         MediaChannel* frameInput = context.findInputChannel(nodeId(), "frame");
         if (frameInput && frameInput->closed()) {
-            m_terminals.markClosed("frame");
+            state.terminals.markClosed("frame");
             return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
         }
         const bool hadPendingFrames = !state.pendingFrames.empty();
@@ -194,13 +183,13 @@ void VideoFrameRateNode::resetRuntimeState() noexcept
     MediaBufferRef buffer = *input.value();
     if (buffer->isEof() || buffer->isFlush()) {
         const bool eof = buffer->isEof();
-        if (eof && m_eofEmitted) {
+        if (eof && state.eofEmitted) {
             return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
         }
         state.flushed = true;
-        m_terminalBuffer = buffer;
-        m_terminalPending = true;
-        m_terminalIsEof = eof;
+        state.terminalBuffer = buffer;
+        state.terminalPending = true;
+        state.terminalIsEof = eof;
         return continueTerminal(context);
     }
 
@@ -240,13 +229,19 @@ void VideoFrameRateNode::resetRuntimeState() noexcept
 {
     auto drainStatus = drainPending(context);
     if (!drainStatus) return processProgress(std::move(drainStatus));
-    const bool eof = m_terminalIsEof;
-    MediaBufferRef terminal = std::move(m_terminalBuffer);
-    m_terminalPending = false;
-    m_terminalIsEof = false;
+    auto& state = m_state->data();
+    const bool eof = state.terminalIsEof;
+    MediaBufferRef terminal = std::move(state.terminalBuffer);
+    state.terminalPending = false;
+    state.terminalIsEof = false;
     if (eof) {
-        m_terminals.markEof("frame");
-        m_eofEmitted = true;
+        state.terminals.markEof("frame");
+        state.eofEmitted = true;
+    }
+    if (auto freshness = m_state->authorizeRetainedControl(terminal);
+        !freshness) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            freshness.error());
     }
     auto broadcastStatus = broadcastControlToAllOutputs(context, terminal);
     return eof ? processFinished(std::move(broadcastStatus))

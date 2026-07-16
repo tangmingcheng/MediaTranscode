@@ -62,7 +62,7 @@ void MediaAvBoundReleaseExtractorNode::abort(
     m_stagedAudio.reserve(release.audio().size());
     for (const auto& unit : release.audio()) {
         auto staged = MediaAvReleasedAudioBuffer::create(
-            unit.media, unit.trimLeadingSamples);
+            unit.media, unit.trimLeadingSamples, release.audioOrigin());
         if (!staged) {
             m_stagedAudio.clear();
             return ::media::Status::failure(staged.error());

@@ -440,8 +440,9 @@ void testExtractorPreflightsCompoundReleaseWithoutPartialCommit(TestContext& ctx
 
 void testExtractorPreservesAudioTrimAndIdentity(TestContext& ctx)
 {
+    const MediaAudioPlaybackOrigin invalidOrigin{7, ns(100), ns(200), 0, 48'000};
     EXPECT_FALSE(ctx, MediaAvReleasedAudioBuffer::create(
-                          packet(MediaStreamKind::Audio), 321));
+                          packet(MediaStreamKind::Audio), 321, invalidOrigin));
     auto immutable = lineage(MediaScheduledStream::Audio);
     auto encoded = packet(MediaStreamKind::Audio);
     auto canonical = MediaCanonicalAccessUnitBuffer::create(encoded, immutable);
@@ -490,6 +491,7 @@ void testExtractorPreservesAudioTrimAndIdentity(TestContext& ctx)
     EXPECT_TRUE(ctx, typed != nullptr);
     if (typed) {
         EXPECT_EQ(ctx, typed->trimLeadingSamples(), static_cast<std::uint32_t>(321));
+        EXPECT_TRUE(ctx, typed->audioOrigin() == origin);
         EXPECT_TRUE(ctx, typed->media().get() == canonical.value().get());
         const auto* outputCanonical = dynamic_cast<const MediaCanonicalAccessUnitBuffer*>(
             typed->media().get());

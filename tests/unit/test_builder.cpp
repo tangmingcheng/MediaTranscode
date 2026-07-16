@@ -12,6 +12,7 @@
 #include "internal/graph/planner/local/MediaLocalFileOutputPlanner.h"
 
 #include <optional>
+#include <array>
 #include <type_traits>
 
 using namespace media::ffmpeg::graph;
@@ -38,6 +39,7 @@ MediaAudioEncodeBranchOptions audioEncodeOptions(MediaGraph& graph)
         std::nullopt);
     options.plan.resolvedOutput = std::move(resolved).value();
     options.normalizePackets = false;
+    options.lineageMode = MediaAudioLineageExecutionMode::LegacyPlainPacket;
     options.formatSourceNode = graph.addNode(MediaNodeKind::DebugDump, "format_source");
     graph.addOutputPort(options.formatSourceNode, "format", MediaStreamKind::Metadata,
                         MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext);
@@ -65,6 +67,13 @@ const MediaNode* resampleNode(const MediaGraph& graph)
 
 void testAudioCorrectionBuilderContract(TestContext& ctx)
 {
+    MediaGraph missingLineageModeGraph;
+    auto missingLineageMode = audioEncodeOptions(missingLineageModeGraph);
+    missingLineageMode.correctionMode = MediaAudioCorrectionExecutionMode::Disabled;
+    missingLineageMode.lineageMode.reset();
+    EXPECT_FALSE(ctx, MediaAudioEncodeBranchBuilder::build(
+                          missingLineageModeGraph, missingLineageMode));
+
     MediaGraph incompleteGraph;
     auto incomplete = audioEncodeOptions(incompleteGraph);
     incomplete.plan.resolvedOutput.reset();
@@ -126,6 +135,46 @@ void testAudioCorrectionBuilderContract(TestContext& ctx)
     if (resample) {
         EXPECT_TRUE(ctx, disabledGraph.findInputPort(resample->id, "correction") == nullptr);
         EXPECT_EQ(ctx, resample->options.value("audio_correction.mode"), std::string("disabled"));
+    }
+
+    MediaGraph synchronizedGraph;
+    auto synchronized = audioEncodeOptions(synchronizedGraph);
+    synchronized.correctionMode = MediaAudioCorrectionExecutionMode::Disabled;
+    synchronized.lineageMode =
+        MediaAudioLineageExecutionMode::SynchronizedReleasedAudio;
+    MediaGraph missingLineageCapacityGraph;
+    auto missingLineageCapacity = audioEncodeOptions(missingLineageCapacityGraph);
+    missingLineageCapacity.correctionMode = MediaAudioCorrectionExecutionMode::Disabled;
+    missingLineageCapacity.lineageMode =
+        MediaAudioLineageExecutionMode::SynchronizedReleasedAudio;
+    EXPECT_FALSE(ctx, MediaAudioEncodeBranchBuilder::build(
+                          missingLineageCapacityGraph, missingLineageCapacity));
+
+    synchronized.lineageCapacity = 8;
+    EXPECT_TRUE(ctx, MediaAudioEncodeBranchBuilder::build(
+                         synchronizedGraph, synchronized));
+    const auto trim = std::find_if(
+        synchronizedGraph.nodes().begin(), synchronizedGraph.nodes().end(),
+        [](const MediaNode& node) {
+            return node.kind == MediaNodeKind::AudioStartupTrim;
+        });
+    EXPECT_TRUE(ctx, trim != synchronizedGraph.nodes().end());
+    const std::array expectedLineageStages{
+        std::pair{MediaNodeKind::AudioDecode, "audio_decoder_lineage_registry"},
+        std::pair{MediaNodeKind::AudioStartupTrim, "audio_startup_trim_lineage_registry"},
+        std::pair{MediaNodeKind::AudioResample, "audio_resampler_lineage_registry"},
+        std::pair{MediaNodeKind::AudioEncode, "audio_encoder_lineage_registry"}};
+    for (const auto& [kind, identity] : expectedLineageStages) {
+        const auto stage = std::find_if(
+            synchronizedGraph.nodes().begin(), synchronizedGraph.nodes().end(),
+            [kind](const MediaNode& node) { return node.kind == kind; });
+        EXPECT_TRUE(ctx, stage != synchronizedGraph.nodes().end());
+        if (stage != synchronizedGraph.nodes().end()) {
+            EXPECT_EQ(ctx, stage->options.value("audio.lineage.identity"),
+                      std::string(identity));
+            EXPECT_EQ(ctx, stage->options.value("audio.lineage.capacity"),
+                      std::string("8"));
+        }
     }
 }
 

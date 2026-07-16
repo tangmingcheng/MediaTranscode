@@ -4,18 +4,107 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegPacketView.h"
+#include "internal/graph/runtime/buffer/MediaAvReleasedAudioBuffer.h"
+#include "internal/graph/runtime/buffer/MediaDecodedAudioTrimInputBuffer.h"
+#include "internal/graph/nodes/audio/MediaAudioDecodeInputView.h"
+#include "internal/graph/sync/MediaCanonicalAudioSamplesBuffer.h"
+#include "internal/graph/sync/lineage/MediaAudioLineageIdentities.h"
+#include "internal/graph/sync/lineage/MediaAudioLineageCapacity.h"
 
 extern "C" {
 #include <libavutil/error.h>
 }
 
+#include <algorithm>
+#include <limits>
 #include <utility>
 
 namespace media::ffmpeg::graph {
 
-AudioDecodeNode::AudioDecodeNode(MediaNodeId nodeId)
-    : FFmpegCodecNodeRuntime(nodeId, staticKind(), "AudioDecodeNode")
+AudioDecodeLineageState::AudioDecodeLineageState(
+    MediaAudioLineageExecutionMode mode,
+    std::size_t capacity) noexcept
+    : MediaAudioLineageState(
+          mode == MediaAudioLineageExecutionMode::SynchronizedReleasedAudio,
+          capacity)
 {
+}
+
+void AudioDecodeLineageState::clearOwnedLineage(
+    const MediaAvGenerationPurge&) noexcept
+{
+    if (m_codecApi && m_codecContext) {
+        m_codecApi->flushBuffers(m_codecContext);
+    }
+    clearLineageStorage();
+}
+
+void AudioDecodeLineageState::clearLineageStorage() noexcept
+{
+    receivePending = false;
+    pendingPacket.reset();
+    intervals.reset();
+    activeOrigin.reset();
+    startupTrimDirective = 0;
+    startupTrimDirectiveEmitted = false;
+    flushPending = false;
+    flushIsEof = false;
+    flushSent = false;
+    flushBuffer.reset();
+    terminals.reset();
+    eofEmitted = false;
+}
+
+void AudioDecodeLineageState::resetForLifecycle() noexcept
+{
+    clearLineageStorage();
+    resetLifecycleLineage();
+    resetCodecBinding();
+}
+
+void AudioDecodeLineageState::setCodecApi(
+    std::shared_ptr<AudioDecoderCodecApi> codecApi) noexcept
+{
+    m_codecApi = std::move(codecApi);
+}
+
+void AudioDecodeLineageState::bindCodec(
+    MediaBufferRef owner, AVCodecContext* context) noexcept
+{
+    m_codecOwner = std::move(owner);
+    m_codecContext = context;
+}
+
+void AudioDecodeLineageState::resetCodecBinding() noexcept
+{
+    m_codecContext = nullptr;
+    m_codecOwner.reset();
+}
+
+AudioDecodeNode::AudioDecodeNode(
+    MediaNodeId nodeId,
+    MediaAudioLineageExecutionMode lineageMode,
+    std::shared_ptr<AudioDecodeLineageState> lineageState)
+    : AudioDecodeNode(nodeId, lineageMode, std::move(lineageState),
+                      makeFFmpegAudioDecoderCodecApi())
+{
+}
+
+AudioDecodeNode::AudioDecodeNode(
+    MediaNodeId nodeId,
+    MediaAudioLineageExecutionMode lineageMode,
+    std::shared_ptr<AudioDecodeLineageState> lineageState,
+    std::shared_ptr<AudioDecoderCodecApi> codecApi)
+    : FFmpegCodecNodeRuntime(nodeId, staticKind(), "AudioDecodeNode")
+    , m_lineageMode(lineageMode)
+    , m_lineageState(std::move(lineageState))
+    , m_codecApi(std::move(codecApi))
+    , m_flushPending(m_lineageState->flushPending)
+    , m_flushIsEof(m_lineageState->flushIsEof)
+    , m_flushSent(m_lineageState->flushSent)
+    , m_flushBuffer(m_lineageState->flushBuffer)
+{
+    m_lineageState->setCodecApi(m_codecApi);
 }
 
 MediaNodeKind AudioDecodeNode::staticKind() noexcept
@@ -28,20 +117,22 @@ MediaNodeKind AudioDecodeNode::staticKind() noexcept
 void AudioDecodeNode::abort(MediaGraphExecutionContext& context) noexcept { FFmpegCodecNodeRuntime::abort(context); resetRuntimeState(); }
 void AudioDecodeNode::resetRuntimeState() noexcept
 {
-    m_terminals.reset(); m_eofEmitted = false; m_receivePending = false; m_flushPending = false;
-    m_flushIsEof = false; m_flushSent = false; m_flushBuffer.reset();
+    auto lineageLock = m_lineageState->lock();
+    m_lineageState->resetForLifecycle();
 }
 
 ::media::Result<MediaNodeProcessResult> AudioDecodeNode::onProcess(MediaGraphExecutionContext& context)
 {
+    auto lineageLock = m_lineageState->lock();
     if (m_flushPending) return continueFlush(context);
-    if (m_receivePending) {
+    if (m_lineageState->receivePending) {
         auto receiveResult = receiveFrames(context);
         if (!receiveResult) return processProgress(::media::Status::failure(receiveResult.error()));
-        m_receivePending = false;
+        m_lineageState->receivePending = false;
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
     }
-    if (m_terminals.finished()) {
+    if (m_lineageState->pendingPacket) return submitPendingPacket(context);
+    if (m_lineageState->terminals.finished()) {
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
     }
 
@@ -57,6 +148,7 @@ void AudioDecodeNode::resetRuntimeState() noexcept
             return ::media::Result<MediaNodeProcessResult>::failure(
                 ::media::ErrorInfo::invalidArgument("AudioDecodeNode expected codec context on codec input"));
         }
+        m_lineageState->bindCodec(*codecInput.value(), codecContext());
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
     }
 
@@ -67,7 +159,7 @@ void AudioDecodeNode::resetRuntimeState() noexcept
     if (!input.value()) {
         MediaChannel* packetInput = context.findInputChannel(nodeId(), "packet");
         if (packetInput && packetInput->closed()) {
-            m_terminals.markClosed("packet");
+            m_lineageState->terminals.markClosed("packet");
             return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
         }
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::waiting());
@@ -76,23 +168,129 @@ void AudioDecodeNode::resetRuntimeState() noexcept
     const MediaBufferRef& buffer = *input.value();
     if (buffer->isEof() || buffer->isFlush()) {
         const bool eof = buffer->isEof();
-        if (eof && m_eofEmitted) {
+        if (eof && m_lineageState->eofEmitted) {
             return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
         }
         m_flushPending = true; m_flushIsEof = eof; m_flushSent = false; m_flushBuffer = buffer;
         return continueFlush(context);
     }
 
-    AVPacket* packet = FFmpegPacketView::writablePacket(buffer);
-    if (!packet) {
-        return ::media::Result<MediaNodeProcessResult>::failure(
-            ::media::ErrorInfo::invalidArgument("AudioDecodeNode expected packet buffer"));
+    auto resolved = resolveMediaAudioDecodeInput(buffer, m_lineageMode);
+    if (!resolved) {
+        return ::media::Result<MediaNodeProcessResult>::failure(resolved.error());
     }
+    const AVPacket* packet = FFmpegPacketView::packet(resolved.value().packet);
+    ::media::ffmpeg::PacketPtr pendingPacket(av_packet_clone(packet));
+    if (!pendingPacket) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::allocationFailed(
+                "AudioDecodeNode failed to retain packet ownership"));
+    }
+    std::optional<MediaAudioIntervalAccumulator> candidateIntervals;
+    std::optional<MediaAudioPlaybackOrigin> incomingOrigin;
+    std::uint32_t incomingTrim = 0;
+    if (resolved.value().synchronized) {
+        const auto& synchronized = *resolved.value().synchronized;
+        if (!m_lineageState) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "Synchronized AudioDecodeNode requires planned lineage state"));
+        }
+        if (auto status = m_lineageState->validateObservation(
+                synchronized.origin.generation); !status) {
+            return ::media::Result<MediaNodeProcessResult>::failure(status.error());
+        }
+        if (m_lineageState->activeOrigin &&
+            (synchronized.origin != *m_lineageState->activeOrigin ||
+             synchronized.trimLeadingSamples != 0)) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "AudioDecodeNode accepts startup trim exactly once per origin"));
+        }
+        incomingOrigin = synchronized.origin;
+        incomingTrim = synchronized.trimLeadingSamples;
+        if (!codecContext() || codecContext()->sample_rate <= 0) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "AudioDecodeNode requires the source codec sample rate"));
+        }
+        const int sampleRate = codecContext()->sample_rate;
+        const auto begin = av_rescale_q_rnd(
+            synchronized.lineage->presentation.nanoseconds(),
+            AVRational{1, 1'000'000'000}, AVRational{1, sampleRate},
+            AV_ROUND_NEAR_INF);
+        const auto samples = av_rescale_q_rnd(
+            synchronized.lineage->duration.nanoseconds(),
+            AVRational{1, 1'000'000'000}, AVRational{1, sampleRate},
+            AV_ROUND_NEAR_INF);
+        if (begin < 0 || samples <= 0 ||
+            begin > std::numeric_limits<std::int64_t>::max() - samples) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "AudioDecodeNode cannot accept another canonical interval"));
+        }
+        const MediaAudioIntervalFragment incomingFragment{
+            synchronized.lineage, {begin, begin + samples, sampleRate}};
+        MediaAudioLineageCapacity leases(m_lineageState->capacity());
+        if (auto status =
+                m_lineageState->intervals.observeLineageCapacity(leases);
+            !status) {
+            return ::media::Result<MediaNodeProcessResult>::failure(status.error());
+        }
+        if (auto status = leases.observe(incomingFragment.lineage); !status) {
+            return ::media::Result<MediaNodeProcessResult>::failure(status.error());
+        }
+        candidateIntervals = m_lineageState->intervals;
+        if (auto status = candidateIntervals->push(incomingFragment); !status) {
+            return ::media::Result<MediaNodeProcessResult>::failure(status.error());
+        }
+    }
+    if (incomingOrigin) {
+        if (auto status = m_lineageState->observe(incomingOrigin->generation); !status) {
+            return ::media::Result<MediaNodeProcessResult>::failure(status.error());
+        }
+        if (!m_lineageState->activeOrigin) {
+            m_lineageState->activeOrigin = *incomingOrigin;
+            m_lineageState->startupTrimDirective = incomingTrim;
+            m_lineageState->startupTrimDirectiveEmitted = false;
+        }
+        m_lineageState->intervals = std::move(*candidateIntervals);
+    }
+    m_lineageState->pendingPacket = std::move(pendingPacket);
+    return submitPendingPacket(context);
+}
 
-    const int sendRet = avcodec_send_packet(codecContext(), packet);
+std::string_view AudioDecodeNode::generationPurgeIdentity() noexcept
+{
+    return MediaAudioDecodeLineageIdentity;
+}
+
+std::shared_ptr<MediaAvGenerationPurgeTarget>
+AudioDecodeNode::generationPurgeTarget() const noexcept
+{
+    return m_lineageState->synchronized() ? m_lineageState : nullptr;
+}
+
+bool AudioDecodeNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) const noexcept
+{
+    const auto* decoded = dynamic_cast<const MediaDecodedAudioTrimInputBuffer*>(buffer.get());
+    return m_lineageState && m_lineageState->pendingOutputIsCurrent(
+        buffer, decoded ? std::optional<std::uint64_t>(
+                              decoded->audioOrigin().generation)
+                        : std::nullopt);
+}
+
+::media::Result<MediaNodeProcessResult> AudioDecodeNode::submitPendingPacket(
+    MediaGraphExecutionContext& context)
+{
+    const int sendRet = m_codecApi->sendPacket(
+        codecContext(), m_lineageState->pendingPacket.get());
     if (sendRet < 0 && sendRet != AVERROR(EAGAIN)) {
         return ::media::Result<MediaNodeProcessResult>::failure(
             FFmpegGraphError::fromCode(sendRet, "avcodec_send_packet(audio)"));
+    }
+    if (sendRet == 0) {
+        m_lineageState->pendingPacket.reset();
     }
 
     auto receiveStatus = receiveFrames(context);
@@ -111,7 +309,7 @@ void AudioDecodeNode::resetRuntimeState() noexcept
                 ::media::ErrorInfo::allocationFailed("AudioDecodeNode failed: av_frame_alloc returned null"));
         }
 
-        const int ret = avcodec_receive_frame(codecContext(), frame.get());
+        const int ret = m_codecApi->receiveFrame(codecContext(), frame.get());
         if (ret == AVERROR(EAGAIN)) return ::media::Result<bool>::success(false);
         if (ret == AVERROR_EOF) return ::media::Result<bool>::success(true);
 
@@ -119,6 +317,14 @@ void AudioDecodeNode::resetRuntimeState() noexcept
             return ::media::Result<bool>::failure(FFmpegGraphError::fromCode(ret, "avcodec_receive_frame(audio)"));
         }
 
+        const int decodedSamples = frame->nb_samples;
+        const int decodedRate = frame->sample_rate;
+        if (!codecContext() || decodedRate <= 0 ||
+            decodedRate != codecContext()->sample_rate) {
+            return ::media::Result<bool>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "AudioDecodeNode decoded sample rate changed from its source codec"));
+        }
         auto buffer = FFmpegBufferFactory::wrapFrame(std::move(frame), MediaStreamKind::Audio);
         if (!buffer) {
             return ::media::Result<bool>::failure(buffer.error());
@@ -130,9 +336,37 @@ void AudioDecodeNode::resetRuntimeState() noexcept
             buffer.value()->setTimeDescriptor(timeDescriptor);
         }
 
-        auto pushStatus = pushToMatchingOutputs(context, buffer.value(), MediaStreamKind::Audio);
+        MediaBufferRef output = buffer.value();
+        if (m_lineageMode == MediaAudioLineageExecutionMode::SynchronizedReleasedAudio) {
+            if (!m_lineageState->activeOrigin || decodedSamples <= 0 || decodedRate <= 0) {
+                return ::media::Result<bool>::failure(
+                    ::media::ErrorInfo::invalidArgument(
+                        "Synchronized AudioDecodeNode requires an active canonical origin"));
+            }
+            auto fragments = m_lineageState->intervals.take(decodedSamples);
+            if (!fragments) {
+                return ::media::Result<bool>::failure(
+                    ::media::ErrorInfo::invalidArgument(
+                        "AudioDecodeNode decoded samples exceed exact submitted intervals"));
+            }
+            auto canonical = MediaCanonicalAudioSamplesBuffer::create(
+                output, std::move(fragments).value());
+            if (!canonical) return ::media::Result<bool>::failure(canonical.error());
+            const auto trim = m_lineageState->startupTrimDirectiveEmitted
+                ? 0U
+                : m_lineageState->startupTrimDirective;
+            auto decoded = MediaDecodedAudioTrimInputBuffer::create(
+                std::move(canonical).value(), *m_lineageState->activeOrigin,
+                trim);
+            if (!decoded) return ::media::Result<bool>::failure(decoded.error());
+            m_lineageState->startupTrimDirectiveEmitted = true;
+            output = std::move(decoded).value();
+        }
+        auto pushStatus = pushToMatchingOutputs(context, output, MediaStreamKind::Audio);
         if (!pushStatus) {
-            if (pushStatus.error().code == ::media::ErrorCode::WouldBlock && !m_flushPending) m_receivePending = true;
+            if (pushStatus.error().code == ::media::ErrorCode::WouldBlock && !m_flushPending) {
+                m_lineageState->receivePending = true;
+            }
             return ::media::Result<bool>::failure(pushStatus.error());
         }
     }
@@ -141,7 +375,7 @@ void AudioDecodeNode::resetRuntimeState() noexcept
 ::media::Result<MediaNodeProcessResult> AudioDecodeNode::continueFlush(MediaGraphExecutionContext& context)
 {
     if (!m_flushSent) {
-        const int sendRet = avcodec_send_packet(codecContext(), nullptr);
+        const int sendRet = m_codecApi->sendPacket(codecContext(), nullptr);
         if (sendRet == 0 || sendRet == AVERROR_EOF) m_flushSent = true;
         else if (sendRet != AVERROR(EAGAIN)) return ::media::Result<MediaNodeProcessResult>::failure(
             FFmpegGraphError::fromCode(sendRet, "avcodec_send_packet(audio flush)"));
@@ -149,9 +383,21 @@ void AudioDecodeNode::resetRuntimeState() noexcept
     auto drain = receiveFrames(context);
     if (!drain) return processProgress(::media::Status::failure(drain.error()));
     if (!drain.value()) return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
+    if (m_lineageMode == MediaAudioLineageExecutionMode::SynchronizedReleasedAudio &&
+        (!m_lineageState->intervals.finish() ||
+         m_lineageState->pendingPacket)) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "AudioDecodeNode finished with unresolved canonical audio lineage"));
+    }
     const bool eof = m_flushIsEof; MediaBufferRef terminal = std::move(m_flushBuffer);
     m_flushPending = false; m_flushIsEof = false; m_flushSent = false;
-    if (eof) { m_terminals.markEof("packet"); m_eofEmitted = true; }
+    if (eof) { m_lineageState->terminals.markEof("packet"); m_lineageState->eofEmitted = true; }
+    if (auto freshness = m_lineageState->authorizeRetainedControl(terminal);
+        !freshness) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            freshness.error());
+    }
     auto status = broadcastControlToAllOutputs(context, terminal);
     return eof ? processFinished(std::move(status)) : processProgress(std::move(status));
 }

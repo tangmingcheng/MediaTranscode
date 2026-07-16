@@ -6,13 +6,9 @@ namespace media::ffmpeg::graph {
 
 MediaVideoFrameRateState::MediaVideoFrameRateState(
     bool requireCanonicalLineage) noexcept
-    : m_requireCanonicalLineage(requireCanonicalLineage)
+    : MediaVideoLineageState(requireCanonicalLineage, nullptr)
+    , m_requireCanonicalLineage(requireCanonicalLineage)
 {
-}
-
-std::unique_lock<std::recursive_mutex> MediaVideoFrameRateState::lock() const
-{
-    return std::unique_lock<std::recursive_mutex>(m_mutex);
 }
 
 MediaVideoFrameRateState::Data& MediaVideoFrameRateState::data() noexcept
@@ -46,12 +42,22 @@ void MediaVideoFrameRateState::resetTimelineLocked() noexcept
 void MediaVideoFrameRateState::resetLifecycle() noexcept
 {
     auto guard = lock();
+    clearLineageStorage();
+    resetGenerationLifecycle();
+}
+
+void MediaVideoFrameRateState::clearLineageStorage() noexcept
+{
     resetTimelineLocked();
     m_data.lastInputFrame = {};
     m_data.pendingFrames.clear();
     m_data.activeGeneration = 0;
     m_data.expectedGeneration = 0;
-    m_data.lastTransitionSequence = 0;
+    m_data.terminals.reset();
+    m_data.eofEmitted = false;
+    m_data.terminalBuffer.reset();
+    m_data.terminalPending = false;
+    m_data.terminalIsEof = false;
 }
 
 ::media::Status MediaVideoFrameRateState::activateGeneration(
@@ -69,6 +75,9 @@ void MediaVideoFrameRateState::resetLifecycle() noexcept
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "Video frame-rate state rejected stale or skipped generation"));
     }
+    if (auto status = observe(generation); !status) {
+        return status;
+    }
     if (m_data.activeGeneration == 0) {
         m_data.activeGeneration = generation;
         m_data.expectedGeneration = 0;
@@ -76,34 +85,11 @@ void MediaVideoFrameRateState::resetLifecycle() noexcept
     return ::media::Status::success();
 }
 
-::media::Status MediaVideoFrameRateState::purge(
-    const MediaAvGenerationPurge& purge)
+void MediaVideoFrameRateState::clearOwnedLineage(
+    const MediaAvGenerationPurge& purge) noexcept
 {
-    if (purge.oldGeneration == 0 || purge.nextGeneration <= purge.oldGeneration ||
-        purge.transitionSequence == 0) {
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "Video frame-rate purge requires a valid generation transition"));
-    }
-
-    auto guard = lock();
-    if (purge.transitionSequence <= m_data.lastTransitionSequence ||
-        (m_data.activeGeneration != 0 &&
-         m_data.activeGeneration != purge.oldGeneration)) {
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "Video frame-rate purge does not match active generation"));
-    }
-
-    std::erase_if(m_data.pendingFrames, [&](const TaggedFrame& pending) {
-        return pending.generation == purge.oldGeneration;
-    });
-    if (m_data.lastInputFrame.generation == purge.oldGeneration) {
-        m_data.lastInputFrame = {};
-    }
-    resetTimelineLocked();
-    m_data.activeGeneration = 0;
+    clearLineageStorage();
     m_data.expectedGeneration = purge.nextGeneration;
-    m_data.lastTransitionSequence = purge.transitionSequence;
-    return ::media::Status::success();
 }
 
 } // namespace media::ffmpeg::graph

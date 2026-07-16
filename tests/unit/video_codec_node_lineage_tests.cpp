@@ -97,8 +97,16 @@ public:
     {
         if (!packet) { draining = true; return 0; }
         ++sendCalls;
-        if (sendCalls == 1) { firstIdentity = packet; return AVERROR(EAGAIN); }
-        if (sendCalls == 2) CHECK(packet == firstIdentity);
+        if (injectEagain) {
+            injectEagain = false;
+            awaitingRetry = true;
+            firstIdentity = packet;
+            return AVERROR(EAGAIN);
+        }
+        if (awaitingRetry) {
+            CHECK(packet == firstIdentity);
+            awaitingRetry = false;
+        }
         CHECK(!output);
         output = av_buffer_ref(packet->opaque_ref);
         return output ? 0 : AVERROR(ENOMEM);
@@ -119,13 +127,23 @@ public:
         return draining ? AVERROR_EOF : AVERROR(EAGAIN);
     }
 
-    void flushBuffers(AVCodecContext*) override { ++flushCalls; draining = false; }
+    void flushBuffers(AVCodecContext*) override
+    {
+        ++flushCalls;
+        if (awaitingRetry) ++canceledRetries;
+        draining = false;
+        awaitingRetry = false;
+        firstIdentity = nullptr;
+    }
 
     int sendCalls = 0;
     int flushCalls = 0;
+    int canceledRetries = 0;
     const AVPacket* firstIdentity = nullptr;
     AVBufferRef* output = nullptr;
     bool draining = false;
+    bool injectEagain = true;
+    bool awaitingRetry = false;
     std::int64_t outputPts = 0;
 };
 
@@ -138,8 +156,16 @@ public:
     {
         if (!frame) { draining = true; return 0; }
         ++sendCalls;
-        if (sendCalls == 1) { firstIdentity = frame; return AVERROR(EAGAIN); }
-        if (sendCalls == 2) CHECK(frame == firstIdentity);
+        if (injectEagain) {
+            injectEagain = false;
+            awaitingRetry = true;
+            firstIdentity = frame;
+            return AVERROR(EAGAIN);
+        }
+        if (awaitingRetry) {
+            CHECK(frame == firstIdentity);
+            awaitingRetry = false;
+        }
         CHECK(!output);
         output = av_buffer_ref(frame->opaque_ref);
         return output ? 0 : AVERROR(ENOMEM);
@@ -159,13 +185,23 @@ public:
         return draining ? AVERROR_EOF : AVERROR(EAGAIN);
     }
 
-    void flushBuffers(AVCodecContext*) override { ++flushCalls; draining = false; }
+    void flushBuffers(AVCodecContext*) override
+    {
+        ++flushCalls;
+        if (awaitingRetry) ++canceledRetries;
+        draining = false;
+        awaitingRetry = false;
+        firstIdentity = nullptr;
+    }
 
     int sendCalls = 0;
     int flushCalls = 0;
+    int canceledRetries = 0;
     const AVFrame* firstIdentity = nullptr;
     AVBufferRef* output = nullptr;
     bool draining = false;
+    bool injectEagain = true;
+    bool awaitingRetry = false;
     std::int64_t outputPts = 0;
 };
 
@@ -269,6 +305,13 @@ MediaBufferRef makeFlush()
 MediaBufferRef makeEof()
 {
     return makeMediaBufferRef<MediaControlBuffer>(MediaControlBufferKind::Eof);
+}
+
+MediaBufferRef makeTerminal(bool eof, bool videoScoped)
+{
+    auto terminal = eof ? makeEof() : makeFlush();
+    if (videoScoped) terminal->setStreamKind(MediaStreamKind::Video);
+    return terminal;
 }
 
 template <typename View>
@@ -376,7 +419,9 @@ void decoderDropsPurgedRetainedOutputBeforeNextGeneration()
     CHECK(input->push(makeCanonicalPacket(91, 2)));
     auto blocked = node.process(execution);
     CHECK(blocked && blocked.value().state == MediaNodeProcessState::Waiting);
-    CHECK(registry->purge({91, 92, 1}));
+    CHECK(node.generationPurgeTarget()->purge({91, 92, 1}));
+    CHECK(api->flushCalls == 1);
+    CHECK(api->canceledRetries == 1);
 
     MediaBufferRef observed;
     CHECK(output->tryPop(observed));
@@ -423,7 +468,9 @@ void encoderDropsPurgedRetainedOutputBeforeNextGeneration()
     CHECK(input->push(makeCanonicalFrame(93, 2)));
     auto blocked = node.process(execution);
     CHECK(blocked && blocked.value().state == MediaNodeProcessState::Waiting);
-    CHECK(registry->purge({93, 94, 1}));
+    CHECK(node.generationPurgeTarget()->purge({93, 94, 1}));
+    CHECK(api->flushCalls == 1);
+    CHECK(api->canceledRetries == 1);
 
     MediaBufferRef observed;
     CHECK(output->tryPop(observed));
@@ -446,6 +493,208 @@ void encoderDropsPurgedRetainedOutputBeforeNextGeneration()
     av_buffer_unref(&lateOldLease);
     CHECK(static_cast<MediaRuntimeNode&>(node).stop(execution));
     CHECK(registry->finishGeneration(94));
+}
+
+void decoderPurgeCancelsRetainedTerminalAndCodecRetry()
+{
+    for (const bool eof : {false, true}) {
+      for (const bool videoScoped : {false, true}) {
+        auto created = MediaCodecLineageRegistry::create(4);
+        CHECK(created);
+        auto registry = std::make_shared<MediaCodecLineageRegistry>(
+            std::move(created).value());
+        auto api = std::make_shared<ScriptedDecoderApi>(
+            makeOpaque(*registry, makeLineage(101, 1)));
+        auto fixture = makeCodecGraph(true, 1);
+        MediaGraphExecutionContext execution;
+        CHECK(execution.compile(fixture.graph));
+        auto* codec = execution.findInputChannel(fixture.node, "codec");
+        auto* input = execution.findInputChannel(fixture.node, "packet");
+        auto* output = execution.findInputChannel(fixture.sink, "frame");
+        CHECK(codec && input && output);
+        CHECK(codec->push(makeCodecContext()));
+        VideoDecodeNode node(fixture.node, registry, api);
+        CHECK(node.start(execution));
+        CHECK(node.process(execution));
+
+        CHECK(input->push(makeCanonicalPacket(101, 2)));
+        CHECK(node.process(execution));
+        MediaBufferRef observed;
+        CHECK(output->tryPop(observed));
+        observed.reset();
+        CHECK(node.process(execution));
+        CHECK(output->tryPop(observed));
+        observed.reset();
+
+        const auto blocker = makeCanonicalFrame(100, 900);
+        CHECK(output->push(blocker));
+        CHECK(input->push(makeTerminal(eof, videoScoped)));
+        const auto retained = node.process(execution);
+        CHECK(retained && retained.value().state != MediaNodeProcessState::Finished);
+        const int flushCallsBeforePurge = api->flushCalls;
+        CHECK(node.generationPurgeTarget()->purge({101, 102, 1}));
+        CHECK(api->flushCalls == flushCallsBeforePurge + 1);
+        CHECK(output->tryPop(observed) && observed == blocker);
+        observed.reset();
+        CHECK(node.process(execution));
+        CHECK(!output->tryPop(observed));
+
+        CHECK(input->push(makeCanonicalPacket(102, 3)));
+        bool produced = false;
+        for (int attempt = 0; attempt < 6 && !produced; ++attempt) {
+            CHECK(node.process(execution));
+            produced = output->tryPop(observed);
+        }
+        CHECK(produced);
+        const auto lineage = FFmpegFrameView::canonicalLineage(observed);
+        CHECK(lineage && lineage->generation == 102);
+        CHECK(static_cast<MediaRuntimeNode&>(node).stop(execution));
+      }
+    }
+}
+
+void encoderPurgeCancelsRetainedTerminalAndCodecRetry()
+{
+    for (const bool eof : {false, true}) {
+      for (const bool videoScoped : {false, true}) {
+        auto created = MediaCodecLineageRegistry::create(4);
+        CHECK(created);
+        auto registry = std::make_shared<MediaCodecLineageRegistry>(
+            std::move(created).value());
+        auto api = std::make_shared<ScriptedEncoderApi>(
+            makeOpaque(*registry, makeLineage(103, 1)));
+        auto fixture = makeCodecGraph(false, 1);
+        MediaGraphExecutionContext execution;
+        CHECK(execution.compile(fixture.graph));
+        auto* codec = execution.findInputChannel(fixture.node, "codec");
+        auto* input = execution.findInputChannel(fixture.node, "frame");
+        auto* output = execution.findInputChannel(fixture.sink, "packet");
+        CHECK(codec && input && output);
+        CHECK(codec->push(makeCodecContext()));
+        VideoEncodeNode node(fixture.node, registry, api);
+        CHECK(node.start(execution));
+        CHECK(node.process(execution));
+
+        CHECK(input->push(makeCanonicalFrame(103, 2)));
+        CHECK(node.process(execution));
+        MediaBufferRef observed;
+        CHECK(output->tryPop(observed));
+        observed.reset();
+        CHECK(node.process(execution));
+        CHECK(output->tryPop(observed));
+        observed.reset();
+
+        const auto blocker = makeCanonicalPacket(100, 900);
+        CHECK(output->push(blocker));
+        CHECK(input->push(makeTerminal(eof, videoScoped)));
+        const auto retained = node.process(execution);
+        CHECK(retained && retained.value().state != MediaNodeProcessState::Finished);
+        const int flushCallsBeforePurge = api->flushCalls;
+        CHECK(node.generationPurgeTarget()->purge({103, 104, 1}));
+        CHECK(api->flushCalls == flushCallsBeforePurge + 1);
+        CHECK(output->tryPop(observed) && observed == blocker);
+        observed.reset();
+        CHECK(node.process(execution));
+        CHECK(!output->tryPop(observed));
+
+        CHECK(input->push(makeCanonicalFrame(104, 3)));
+        bool produced = false;
+        for (int attempt = 0; attempt < 6 && !produced; ++attempt) {
+            CHECK(node.process(execution));
+            produced = output->tryPop(observed);
+        }
+        CHECK(produced);
+        const auto lineage = FFmpegPacketView::canonicalLineage(observed);
+        CHECK(lineage && lineage->generation == 104);
+        CHECK(static_cast<MediaRuntimeNode&>(node).stop(execution));
+      }
+    }
+}
+
+void videoTerminalFreshnessRejectsAnotherMediaScope()
+{
+    auto created = MediaCodecLineageRegistry::create(1);
+    CHECK(created);
+    auto registry = std::make_shared<MediaCodecLineageRegistry>(
+        std::move(created).value());
+    auto api = std::make_shared<ScriptedDecoderApi>(nullptr);
+    VideoDecodeLineageState state(registry, api);
+    CHECK(state.observe(121));
+    auto audioTerminal = makeEof();
+    audioTerminal->setStreamKind(MediaStreamKind::Audio);
+    CHECK(!state.authorizeRetainedControl(audioTerminal));
+}
+
+void codecPurgeReleasesPendingLeaseCapacityImmediately()
+{
+    {
+        auto created = MediaCodecLineageRegistry::create(1);
+        CHECK(created);
+        auto registry = std::make_shared<MediaCodecLineageRegistry>(
+            std::move(created).value());
+        auto api = std::make_shared<ScriptedDecoderApi>(nullptr);
+        auto fixture = makeCodecGraph(true);
+        MediaGraphExecutionContext execution;
+        CHECK(execution.compile(fixture.graph));
+        auto* codec = execution.findInputChannel(fixture.node, "codec");
+        auto* input = execution.findInputChannel(fixture.node, "packet");
+        auto* output = execution.findInputChannel(fixture.sink, "frame");
+        CHECK(codec && input && output);
+        CHECK(codec->push(makeCodecContext()));
+        VideoDecodeNode node(fixture.node, registry, api);
+        CHECK(node.start(execution));
+        CHECK(node.process(execution));
+        CHECK(input->push(makeCanonicalPacket(131, 1)));
+        CHECK(node.process(execution));
+        CHECK(!registry->submit(makeLineage(132, 99)));
+        CHECK(node.generationPurgeTarget()->purge({131, 132, 1}));
+        CHECK(api->canceledRetries == 1);
+        {
+            auto released = registry->submit(makeLineage(132, 99));
+            CHECK(released);
+        }
+        CHECK(input->push(makeCanonicalPacket(132, 2)));
+        CHECK(node.process(execution));
+        MediaBufferRef observed;
+        CHECK(output->tryPop(observed));
+        const auto lineage = FFmpegFrameView::canonicalLineage(observed);
+        CHECK(lineage && lineage->generation == 132);
+        CHECK(static_cast<MediaRuntimeNode&>(node).stop(execution));
+    }
+    {
+        auto created = MediaCodecLineageRegistry::create(1);
+        CHECK(created);
+        auto registry = std::make_shared<MediaCodecLineageRegistry>(
+            std::move(created).value());
+        auto api = std::make_shared<ScriptedEncoderApi>(nullptr);
+        auto fixture = makeCodecGraph(false);
+        MediaGraphExecutionContext execution;
+        CHECK(execution.compile(fixture.graph));
+        auto* codec = execution.findInputChannel(fixture.node, "codec");
+        auto* input = execution.findInputChannel(fixture.node, "frame");
+        auto* output = execution.findInputChannel(fixture.sink, "packet");
+        CHECK(codec && input && output);
+        CHECK(codec->push(makeCodecContext()));
+        VideoEncodeNode node(fixture.node, registry, api);
+        CHECK(node.start(execution));
+        CHECK(node.process(execution));
+        CHECK(input->push(makeCanonicalFrame(133, 1)));
+        CHECK(node.process(execution));
+        CHECK(!registry->submit(makeLineage(134, 99)));
+        CHECK(node.generationPurgeTarget()->purge({133, 134, 1}));
+        CHECK(api->canceledRetries == 1);
+        {
+            auto released = registry->submit(makeLineage(134, 99));
+            CHECK(released);
+        }
+        CHECK(input->push(makeCanonicalFrame(134, 2)));
+        CHECK(node.process(execution));
+        MediaBufferRef observed;
+        CHECK(output->tryPop(observed));
+        const auto lineage = FFmpegPacketView::canonicalLineage(observed);
+        CHECK(lineage && lineage->generation == 134);
+        CHECK(static_cast<MediaRuntimeNode&>(node).stop(execution));
+    }
 }
 
 void realEncoderPreservesDelayedLineageThroughEofDrain()
@@ -506,6 +755,10 @@ int main()
     scriptedEncoderRetainsOneSubmissionAcrossEagain();
     decoderDropsPurgedRetainedOutputBeforeNextGeneration();
     encoderDropsPurgedRetainedOutputBeforeNextGeneration();
+    decoderPurgeCancelsRetainedTerminalAndCodecRetry();
+    encoderPurgeCancelsRetainedTerminalAndCodecRetry();
+    videoTerminalFreshnessRejectsAnotherMediaScope();
+    codecPurgeReleasesPendingLeaseCapacityImmediately();
     realEncoderPreservesDelayedLineageThroughEofDrain();
     std::cout << "video codec node lineage tests passed\n";
     return 0;

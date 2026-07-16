@@ -12,6 +12,9 @@ struct MediaAudioPlaybackOrigin final {
     MediaRunningTime masterRelease;
     std::int64_t epochOutputSampleIndex;
     int outputSampleRate;
+
+    friend bool operator==(const MediaAudioPlaybackOrigin&,
+                           const MediaAudioPlaybackOrigin&) noexcept = default;
 };
 
 } // namespace media::ffmpeg::graph

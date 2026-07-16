@@ -246,6 +246,34 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
     media_transcode_register_test(
         media_transcode_video_codec_lineage_tests "node;deterministic")
 
+    add_executable(media_transcode_audio_codec_lineage_tests
+        tests/unit/audio_codec_lineage_tests.cpp
+    )
+    media_transcode_configure_test(media_transcode_audio_codec_lineage_tests)
+    media_transcode_register_test(
+        media_transcode_audio_codec_lineage_tests "node;deterministic")
+
+    add_executable(media_transcode_audio_lineage_node_tests
+        tests/unit/audio_lineage_node_tests.cpp
+    )
+    media_transcode_configure_test(media_transcode_audio_lineage_node_tests)
+    media_transcode_register_test(
+        media_transcode_audio_lineage_node_tests "node;deterministic")
+
+    add_executable(media_transcode_audio_startup_trim_node_tests
+        tests/unit/audio_startup_trim_node_tests.cpp
+    )
+    media_transcode_configure_test(media_transcode_audio_startup_trim_node_tests)
+    media_transcode_register_test(
+        media_transcode_audio_startup_trim_node_tests "node;deterministic")
+
+    add_executable(media_transcode_audio_origin_envelope_tests
+        tests/unit/audio_origin_envelope_tests.cpp
+    )
+    media_transcode_configure_test(media_transcode_audio_origin_envelope_tests)
+    media_transcode_register_test(
+        media_transcode_audio_origin_envelope_tests "node;deterministic")
+
     add_executable(media_transcode_video_codec_node_lineage_tests
         tests/unit/video_codec_node_lineage_tests.cpp
     )

@@ -1,52 +1,104 @@
-# Task 6 Report: Atomic common A/V startup
+# Task 12 / Task 6 Report: Audio generation lineage closure
 
 ## Outcome
 
-Implemented a protocol-neutral startup coordinator and runtime node without wiring it into the production RTP or MPEG-TS graph. Production wiring and removal of the legacy barrier remain Task 12 responsibilities.
+The audio and video codec/filter lineage closure is implemented and has passed
+the final deterministic verification described below. Decode, StartupTrim,
+Resample, Encode, VideoDecode, VideoFilter, VideoFrameRate, and VideoEncode each
+own a typed lifecycle-stable purge target. Production graph wiring and human
+playback acceptance remain a separate Task 12 boundary.
 
 ## Delivered
 
-- Explicit startup state machine covering acquisition, priming, armed, release, running, failure, stop, abort, reset, and reacquisition.
-- Planner-owned startup thresholds, explicit per-stream maximum unit size, checked unit/byte capacities, stream identities, maximum gap, and degraded-clock denial. Same-generation media and an explicit master-clock channel are structural coordinator/node invariants rather than configurable policy fields.
-- Three-input runtime node with one pending head per audio, video, and clock input. Arbitration uses a global event-time watermark; equal timestamps use audio, video, then clock.
-- Bounded per-stream input ordering, old-generation rejection, higher-generation purge, and reacquisition gate closure.
-- Keyframe-qualified common-window selection scans later video keyframes and audio candidates, enforces bilateral skew and continuous maximum-gap-bounded preroll coverage, and emits a sample-exact leading-audio trim directive using checked time/sample arithmetic.
-- A single immutable release buffer containing the playback epoch and both initial stream selections. No two-channel partial release is possible.
-- Explicit clock ticks drive startup and keyframe timeouts. The coordinator does not read a system or steady clock.
-- Clock and terminal snapshot barriers freeze media and clock intake without draining future channel capacity. Continuous post-snapshot clock ticks cannot starve queued EOF, while media already in the terminal snapshot can still complete an atomic release first.
-- Startup buffering is split into three internal responsibilities: a `list`-owned arrival store with a signed presentation-key map and persistent per-candidate coverage frontier, an immutable presentation snapshot, and a monotonic window selector. Append incrementally advances reachable intervals and retains unreachable intervals in a signed ordered index so a later bridge can connect them. Coverage never uses units that the selected arrival prefix will purge, supports negative canonical PTS without a zero sentinel, and preserves release arrival order.
-- Selection work is explicitly bounded at the planner and plan-validator capacity of 256. Each candidate/later-unit pair is visited once on append and at most once again when an ordered pending interval becomes reachable, so two full 256-unit streams perform at most `2 * 256^2 = 131,072` cumulative coverage operations. Ordered-index insertion and removal have the same 131,072 mutation bound and `O(C^2 log C)` comparison complexity. The 512-submit reverse-chain regression forces capacity-scale late-bridge promotion in both streams and observes 65,788 cumulative coverage operations and 1,016 ordered mutations, while the last selector attempt visits at most 768 candidates. Checked interval end/expanded-end arithmetic completes before Store mutation.
-- Errors remain typed through the state machine and coordinator and are converted to runtime `ErrorInfo` only at the node boundary. Packet footprint accounting includes FFmpeg packet side data and fails closed for missing main/side-data pointers, malformed metadata, and checked-addition overflow.
-- Runtime factory, node-kind diagnostics, and focused planner/node tests.
-
-## TDD evidence
-
-- Pure coordinator RED: missing coordinator interface.
-- Runtime node RED: missing coordinator node interface.
-- Planner contract RED: missing startup capacity fields (`C2039`).
-- Review RED: missing bounded-selection diagnostics (`C2039`), followed by behavioral RED coverage for terminal-clock starvation, negative PTS, arrival-suffix isolation, and malformed FFmpeg packet metadata. The persistent-coverage review RED then failed on the missing clearly separated last-attempt and cumulative-work fields (`C2039`).
-- Each RED was followed by a focused GREEN build and test run.
+- Immutable vector-valued audio lineage fragments; exact accumulator aggregation, splitting, residue detection, generation continuity, and sample-rate continuity.
+- Typed `AudioDecodeLineageState`, `MediaAudioStartupTrimLineageState`, `AudioResampleLineageState`, and `AudioEncodeLineageState`; no generic variant or callback purge seam.
+- Production decoder and encoder codec adapters are owned by stable state and flushed during generation purge under the lineage lock.
+- Actual capacity-one Decode, StartupTrim, Resample, and Encode purge transitions: retained old output and delayed codec/SWR output are removed; only the next generation emerges once and in order.
+- Decode and Encode capacity checks execute before codec acceptance. Tests verify a second capacity-one input is rejected without increasing codec send count.
+- Non-FIFO `frame_size == 0` Encode EAGAIN retains the exact `AVFrame*`, PTS, and fragment vector until acceptance.
+- Startup trim is consumed exactly once per playback origin and is not re-applied to later fragments.
+- Decode emits the complete startup-trim directive only on the first decoded envelope. StartupTrim owns the remaining count across any number of full frames, validates the first retained sample after exact-frame trimming, rejects repeated directives, and fails terminal input while trim or first-sample validation remains unresolved.
+- Resample uses cumulative checked 44.1 kHz to 48 kHz projection. Source cumulative addition, rescale, projected-start addition, projection extension, Decode interval end, and applied correction accumulation fail closed on overflow.
+- SWR correction authorization is based on the checked net delta of fully applied windows. Pure-negative, pure-positive, positive-to-negative net-zero, and negative-to-positive net-zero cases are covered. Terminal residue must exactly match the outstanding net authorized drop; under- and over-authorization fail.
+- Correction window-end arithmetic is checked before enqueue. External correction terminal settlement rejects pending or partially executed windows instead of discarding them.
+- SWR EOF completion treats `swr_get_out_samples(0)` only as a capacity upper bound. `swr_get_delay` classifies the pre-drain state as `NoDelay` or `MayProduce`, but neither classification proves exhaustion. Only a positive-capacity `swr_convert(..., nullptr, 0)` returning zero creates typed `AudioSwrResamplerExhausted` evidence. A partially executed non-zero compensation window fails closed at exhaustion because exact application cannot be proven; a zero-delta tail may settle. Mid-stream Flush retains active and pending correction windows.
+- Synchronized Resample verifies that the checked sum of immutable input fragments exactly equals `AVFrame::nb_samples` before mutating generation or SWR state.
+- Decode and Resample preserve exact multi-fragment envelopes; Encode FIFO splitting preserves fragment ownership and payload association.
+- Retained generic Control EOF is generation-bound in Decode, StartupTrim,
+  Resample, and Encode. Purge cancels the base pending-finish transfer, clears
+  typed terminal/eof state, leaves outputs open, and accepts next-generation
+  media.
+- Encoder codec metadata is generation-invariant planned configuration; an
+  exact retained codec-context buffer drains once after output backpressure.
+- Resample responsibilities are separated into typed lineage state,
+  transactional lineage mapper, and RAII SWR session. Node code retains only
+  correction/terminal orchestration, timestamps, and output commit.
+- Decode, Encode, and Resample lifecycle reset and generation purge reuse one
+  typed-state storage reset path with explicit codec/SWR differences.
+- Task-specific node tests were removed from the monolithic node suite and
+  retained in focused audio lineage, startup-trim, resample, and codec targets.
 
 ## Verification
 
-Commands executed:
+The following test commands were run against the final clean rebuild. The
+clean rebuild itself completed successfully; build commands are intentionally
+omitted from this report.
 
 ```powershell
-ctest --test-dir out/build/x64-debug -L deterministic --output-on-failure
+ctest --preset deterministic --output-on-failure
 ```
 
-Result: 6/6 passed in 4.06 seconds (core, planner, builder, runtime, node, tier contract). The node tier completed in 0.18 seconds.
+Result: 18/18 passed, 100%, 19.12 seconds.
 
 ```powershell
-ctest --test-dir out/build/x64-debug -L integration --output-on-failure
+ctest --test-dir out\build\x64-debug-deterministic -R "media_transcode_(runtime_tests|av_generation_transition_tests|audio_lineage_node_tests|audio_startup_trim_node_tests|video_codec_node_lineage_tests|video_filter_node_lineage_tests)" --repeat until-fail:20 --output-on-failure
 ```
 
-Result: 3/3 passed in 142.80 seconds. Realtime integration passed in 81.68 seconds; MPEG-TS integration passed in 15.45 seconds; crafted UDP fault integration passed in 45.67 seconds.
+Result: six generation/lifecycle targets each passed 20 consecutive runs,
+100%, 14.20 seconds.
 
-The final verification followed a complete clean rebuild: 276 stale outputs were removed and all 277 targets rebuilt successfully. An immediate repeat build reported `ninja: no work to do`, confirming the clean rebuild was complete. This prevented stale class-layout symbols from masking runtime results.
+Focused executables also exited with code 0:
 
-## Deferred integration boundary
+```powershell
+out\build\x64-debug\media_transcode_audio_lineage_node_tests.exe
+out\build\x64-debug\media_transcode_audio_codec_lineage_tests.exe
+out\build\x64-debug\media_transcode_audio_startup_trim_node_tests.exe
+out\build\x64-debug\media_transcode_audio_origin_envelope_tests.exe
+out\build\x64-debug\media_transcode_node_tests.exe
+out\build\x64-debug\media_transcode_builder_tests.exe
+out\build\x64-debug\media_transcode_runtime_tests.exe
+out\build\x64-debug\media_transcode_video_codec_node_lineage_tests.exe
+out\build\x64-debug\media_transcode_video_filter_node_lineage_tests.exe
+```
 
-- Raw RTP packets still lack the complete common canonical media envelope required by this node. The coordinator fails closed instead of interpreting RTP clock-group data.
-- Task 12 must serialize this planner contract, connect the common canonical media and master-clock inputs, apply the audio trim directive at the unique decoded-audio execution point, replace the synchronized-path legacy barrier, and retain the video-only packet gate.
-- Real RTP and MPEG-TS playback validation is therefore not claimed by Task 6 alone.
+The first test discovery immediately after the deterministic clean rebuild saw
+17 executables as temporarily unavailable while the build output was still
+becoming visible. The same preset rerun after process completion passed 18/18;
+the transient discovery result is retained here and is not reported as a pass.
+
+During clean video verification, CDB identified an access violation caused by
+reading and moving the same `shared_ptr` in delegating-constructor arguments.
+The state now moves the registry first and derives synchronization from the
+stored member. The clean rebuilt video codec lineage target and all regressions
+above pass with that correction.
+
+Independent review then found that StartupTrim lifecycle restart cleared only
+retained-control freshness. A regression first reproduced the stale origin and
+trim state after stop. `resetForLifecycle()` now clears owned trim state and
+base generation state through one state-owner method used by start, stop, and
+abort. Both stop-to-start and abort-to-start regressions pass in the repeated
+suite above.
+
+The final independent read-only review reported PASS with zero Critical,
+Important, or Minor findings for the lifecycle correction.
+
+## Remaining boundary
+
+If a node has already delivered part of a multi-output batch downstream when a generation transition occurs, local purge cannot retract that accepted output. The Task 11 downstream queue purge/atomic generation transition remains the required system boundary for removing already-enqueued stale output. This task does not claim RTP or MPEG-TS human playback acceptance; that belongs to the final Task 12 production wiring and playback gate.
+
+`MediaQueuePolicy::allowFlushControlBypass` currently has no production queue
+consumer and therefore does not reserve capacity or authorize dropping media.
+Task 6 deliberately does not invent those semantics; the field name remains
+queue-policy debt. Audio-scoped terminal broadcast is valid only when every
+output is Audio. Nodes with mixed output streams must use a generic Control
+terminal so stream compatibility remains explicit.

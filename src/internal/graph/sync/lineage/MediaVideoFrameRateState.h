@@ -1,7 +1,8 @@
 #pragma once
 
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
-#include "internal/graph/sync/MediaAvGenerationPurgeTarget.h"
+#include "internal/graph/runtime/lifecycle/MediaInputTerminalTracker.h"
+#include "internal/graph/sync/lineage/MediaVideoLineageState.h"
 
 #include <cstdint>
 #include <deque>
@@ -15,7 +16,7 @@ extern "C" {
 
 namespace media::ffmpeg::graph {
 
-class MediaVideoFrameRateState final : public MediaAvGenerationPurgeTarget {
+class MediaVideoFrameRateState final : public MediaVideoLineageState {
 public:
     struct TaggedFrame final {
         MediaBufferRef buffer;
@@ -36,25 +37,28 @@ public:
         std::deque<TaggedFrame> pendingFrames;
         std::uint64_t activeGeneration = 0;
         std::uint64_t expectedGeneration = 0;
-        std::uint64_t lastTransitionSequence = 0;
+        MediaInputTerminalTracker terminals { { "frame" } };
+        bool eofEmitted = false;
+        MediaBufferRef terminalBuffer;
+        bool terminalPending = false;
+        bool terminalIsEof = false;
     };
 
     explicit MediaVideoFrameRateState(bool requireCanonicalLineage) noexcept;
 
-    [[nodiscard]] std::unique_lock<std::recursive_mutex> lock() const;
     [[nodiscard]] Data& data() noexcept;
     [[nodiscard]] const Data& data() const noexcept;
     [[nodiscard]] bool requiresCanonicalLineage() const noexcept;
 
     void resetLifecycle() noexcept;
     ::media::Status activateGeneration(std::uint64_t generation);
-    ::media::Status purge(const MediaAvGenerationPurge& purge) override;
 
 private:
     void resetTimelineLocked() noexcept;
+    void clearLineageStorage() noexcept;
+    void clearOwnedLineage(const MediaAvGenerationPurge& purge) noexcept override;
 
     bool m_requireCanonicalLineage;
-    mutable std::recursive_mutex m_mutex;
     Data m_data;
 };
 

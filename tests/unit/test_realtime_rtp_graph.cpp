@@ -1119,7 +1119,10 @@ void testAudioDecodeWaitsForCodecMetadataBeforePackets(TestContext& ctx)
     EXPECT_TRUE(ctx, packet);
     if (!packet) return;
     EXPECT_TRUE(ctx, packetInput->push(packet.value()));
-    AudioDecodeNode node(decoder);
+    AudioDecodeNode node(
+        decoder, MediaAudioLineageExecutionMode::LegacyPlainPacket,
+        std::make_shared<AudioDecodeLineageState>(
+            MediaAudioLineageExecutionMode::LegacyPlainPacket, 0));
     auto result = node.process(execution);
     EXPECT_TRUE(ctx, result);
     if (result) EXPECT_EQ(ctx, result.value().state, MediaNodeProcessState::Waiting);
@@ -1152,7 +1155,10 @@ void testAudioEncodeWaitsForCodecMetadataBeforeFrames(TestContext& ctx)
     EXPECT_TRUE(ctx, frameBuffer);
     if (!frameBuffer) return;
     EXPECT_TRUE(ctx, frameInput->push(frameBuffer.value()));
-    AudioEncodeNode node(encoder);
+    AudioEncodeNode node(
+        encoder, MediaAudioLineageExecutionMode::LegacyPlainPacket,
+        std::make_shared<AudioEncodeLineageState>(
+            MediaAudioLineageExecutionMode::LegacyPlainPacket, 0));
     auto result = node.process(execution);
     EXPECT_TRUE(ctx, result);
     if (result) EXPECT_EQ(ctx, result.value().state, MediaNodeProcessState::Waiting);
@@ -3208,7 +3214,10 @@ void testAudioResampleNodeClampsBackwardClonedFrameTimestamps(TestContext& ctx)
         return;
     }
 
-    AudioResampleNode node(resampleId);
+    AudioResampleNode node(
+        resampleId, MediaAudioLineageExecutionMode::LegacyPlainPacket,
+        std::make_shared<AudioResampleLineageState>(
+            MediaAudioLineageExecutionMode::LegacyPlainPacket, 0));
     auto codec = makeTestAudioCodecContext(44100, AV_SAMPLE_FMT_FLTP, 2);
     EXPECT_TRUE(ctx, codec != nullptr);
     if (!codec) {
@@ -3282,7 +3291,10 @@ void testAudioResampleNodeNormalizesResampledFrameTimestamps(TestContext& ctx)
         return;
     }
 
-    AudioResampleNode node(resampleId);
+    AudioResampleNode node(
+        resampleId, MediaAudioLineageExecutionMode::LegacyPlainPacket,
+        std::make_shared<AudioResampleLineageState>(
+            MediaAudioLineageExecutionMode::LegacyPlainPacket, 0));
     auto codec = makeTestAudioCodecContext(44100, AV_SAMPLE_FMT_FLTP, 2);
     EXPECT_TRUE(ctx, codec != nullptr);
     if (!codec) {
@@ -3351,7 +3363,10 @@ void testAudioResampleNodeRejectsMissingFramePts(TestContext& ctx)
         return;
     }
 
-    AudioResampleNode node(resampleId);
+    AudioResampleNode node(
+        resampleId, MediaAudioLineageExecutionMode::LegacyPlainPacket,
+        std::make_shared<AudioResampleLineageState>(
+            MediaAudioLineageExecutionMode::LegacyPlainPacket, 0));
     auto codec = makeTestAudioCodecContext(44100, AV_SAMPLE_FMT_FLTP, 2);
     EXPECT_TRUE(ctx, codec != nullptr);
     if (!codec) {

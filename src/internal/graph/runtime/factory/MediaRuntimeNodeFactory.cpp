@@ -4,6 +4,9 @@
 #include "internal/graph/nodes/audio/AudioDecodeNode.h"
 #include "internal/graph/nodes/audio/AudioEncodeNode.h"
 #include "internal/graph/nodes/audio/AudioResampleNode.h"
+#include "internal/graph/nodes/audio/MediaAudioStartupTrimNode.h"
+#include "internal/graph/sync/lineage/MediaAudioLineageExecutionMode.h"
+#include "internal/graph/sync/lineage/MediaAudioLineageStagePreparation.h"
 #include "internal/graph/nodes/control/ControlSignalNode.h"
 #include "internal/graph/nodes/debug/DebugDumpNode.h"
 #include "internal/graph/nodes/debug/TraceProbeNode.h"
@@ -86,6 +89,76 @@ template <typename Node>
         std::make_unique<VideoFrameRateNode>(node.id));
 }
 
+::media::Result<MediaAudioLineageExecutionMode> requireAudioLineageMode(
+    const MediaNode& node)
+{
+    if (!node.options.has(std::string(MediaAudioLineageModeOptionKey))) {
+        return ::media::Result<MediaAudioLineageExecutionMode>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Audio runtime stage requires explicit audio lineage mode"));
+    }
+    const std::string mode = node.options.value(
+        std::string(MediaAudioLineageModeOptionKey));
+    if (mode == mediaAudioLineageExecutionModeName(
+                    MediaAudioLineageExecutionMode::LegacyPlainPacket)) {
+        return ::media::Result<MediaAudioLineageExecutionMode>::success(
+            MediaAudioLineageExecutionMode::LegacyPlainPacket);
+    }
+    if (mode == mediaAudioLineageExecutionModeName(
+                    MediaAudioLineageExecutionMode::SynchronizedReleasedAudio)) {
+        return ::media::Result<MediaAudioLineageExecutionMode>::success(
+            MediaAudioLineageExecutionMode::SynchronizedReleasedAudio);
+    }
+    return ::media::Result<MediaAudioLineageExecutionMode>::failure(
+        ::media::ErrorInfo::invalidArgument(
+            "Audio runtime stage rejects unknown audio lineage mode"));
+}
+
+template <typename Node>
+::media::Result<std::unique_ptr<MediaRuntimeNode>> createAudioLineageStage(
+    const MediaNode& node)
+{
+    auto mode = requireAudioLineageMode(node);
+    if (!mode) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(mode.error());
+    }
+    auto prepared = prepareMediaAudioLineageStage(
+        node, Node::generationPurgeIdentity());
+    if (!prepared) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            prepared.error());
+    }
+    return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+        std::make_unique<Node>(
+            node.id, mode.value(),
+            std::make_shared<typename Node::LineageState>(
+                mode.value(), prepared.value().capacity)));
+}
+
+::media::Result<std::unique_ptr<MediaRuntimeNode>> createAudioStartupTrimStage(
+    const MediaNode& node)
+{
+    auto mode = requireAudioLineageMode(node);
+    if (!mode || mode.value() !=
+            MediaAudioLineageExecutionMode::SynchronizedReleasedAudio) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            mode ? ::media::ErrorInfo::invalidArgument(
+                       "Audio startup trim requires synchronized audio lineage mode")
+                 : mode.error());
+    }
+    auto prepared = prepareMediaAudioLineageStage(
+        node, MediaAudioStartupTrimNode::generationPurgeIdentity());
+    if (!prepared) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            prepared.error());
+    }
+    return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+        std::make_unique<MediaAudioStartupTrimNode>(
+            node.id,
+            std::make_shared<MediaAudioStartupTrimNode::LineageState>(
+                mode.value(), prepared.value().capacity)));
+}
+
 } // namespace
 
 ::media::Result<std::unique_ptr<MediaRuntimeNode>> MediaRuntimeNodeFactory::create(const MediaNode& node)
@@ -135,11 +208,13 @@ template <typename Node>
     case MediaNodeKind::AudioCodecResolver:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<AudioCodecResolverNode>(node.id));
     case MediaNodeKind::AudioDecode:
-        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<AudioDecodeNode>(node.id));
+        return createAudioLineageStage<AudioDecodeNode>(node);
+    case MediaNodeKind::AudioStartupTrim:
+        return createAudioStartupTrimStage(node);
     case MediaNodeKind::AudioResample:
-        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<AudioResampleNode>(node.id));
+        return createAudioLineageStage<AudioResampleNode>(node);
     case MediaNodeKind::AudioEncode:
-        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<AudioEncodeNode>(node.id));
+        return createAudioLineageStage<AudioEncodeNode>(node);
     case MediaNodeKind::PacketSourceConfig:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<PacketSourceConfigNode>(node.id));
     case MediaNodeKind::PacketNormalize:

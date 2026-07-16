@@ -1,16 +1,23 @@
 #include "common/TestAssert.h"
 
 #include "internal/graph/nodes/audio/AudioSwrCompensationExecutor.h"
+#include "internal/graph/nodes/audio/AudioResampleLineageState.h"
+#include "internal/graph/nodes/audio/AudioResampleSwrSession.h"
 #include "internal/graph/runtime/buffer/MediaAudioCorrectionBuffer.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/sync/MediaAudioCorrectionQuantizer.h"
 #include "internal/graph/sync/MediaAudioDriftServo.h"
 
 extern "C" {
+#include <libavcodec/avcodec.h>
 #include <libavutil/frame.h>
 #include <libswresample/swresample.h>
 }
 
 #include <algorithm>
+#include <limits>
+#include <memory>
+#include <optional>
 
 using namespace media::ffmpeg::graph;
 using media_transcode::test::TestContext;
@@ -372,6 +379,195 @@ void testFilterTailRequiresARegularContiguousLookahead(TestContext& ctx)
     swr_free(&swr);
 }
 
+void testOutstandingDropAuthorizationTracksAppliedNetDelta(TestContext& ctx)
+{
+    const auto run = [&](std::initializer_list<int> deltas,
+                         std::int64_t expectedOutstanding) {
+        auto executorResult = AudioSwrCompensationExecutor::create(
+            MediaAudioCorrectionExecutionMode::ExternalCorrectionRequired,
+            41, 2);
+        EXPECT_TRUE(ctx, executorResult);
+        if (!executorResult) return;
+        auto executor = std::move(executorResult).value();
+
+        SwrContext* swr = nullptr;
+        AVChannelLayout stereo = AV_CHANNEL_LAYOUT_STEREO;
+        EXPECT_EQ(ctx, swr_alloc_set_opts2(
+            &swr, &stereo, AV_SAMPLE_FMT_FLTP, 48'000,
+            &stereo, AV_SAMPLE_FMT_FLTP, 48'000, 0, nullptr), 0);
+        EXPECT_TRUE(ctx, swr != nullptr);
+        if (!swr) return;
+        EXPECT_EQ(ctx, swr_init(swr), 0);
+
+        std::uint64_t sequence = 1;
+        std::int64_t outputIndex = 0;
+        for (const int delta : deltas) {
+            constexpr int distance = 1'000;
+            auto correction = command(
+                41, sequence++, outputIndex, delta, distance, ctx);
+            EXPECT_EQ(ctx, correction.sampleDelta(), delta);
+            EXPECT_TRUE(ctx, executor.enqueue(correction));
+            auto window = executor.prepare(swr, outputIndex);
+            EXPECT_TRUE(ctx, window);
+            if (!window) break;
+            EXPECT_TRUE(ctx, executor.advance(distance));
+            outputIndex += distance;
+        }
+        EXPECT_EQ(ctx, executor.outstandingAuthorizedDroppedSamples(),
+                  expectedOutstanding);
+        swr_free(&swr);
+    };
+
+    run({-1}, 1);
+    run({1}, 0);
+    run({1, -1}, 0);
+    run({-1, 1}, 0);
+}
+
+void testOverflowAndIncompleteTerminalCorrectionFailClosed(TestContext& ctx)
+{
+    auto overflowQuantizer = MediaAudioCorrectionQuantizer::create(
+        MediaRunningTime::fromNanoseconds(1'000'000),
+        MediaRunningTime::fromNanoseconds(500'000), 1'000'000);
+    EXPECT_TRUE(ctx, overflowQuantizer);
+    if (!overflowQuantizer) return;
+    auto overflow = std::move(overflowQuantizer).value().schedule(
+        51, 1, std::numeric_limits<std::int64_t>::max() - 999, 0,
+        MediaAudioCorrectionTelemetry{
+            MediaRunningTime::fromNanoseconds(0), 0, 0, false});
+    EXPECT_FALSE(ctx, overflow && overflow.value());
+
+    const auto makeSwr = [&]() {
+        SwrContext* swr = nullptr;
+        AVChannelLayout stereo = AV_CHANNEL_LAYOUT_STEREO;
+        EXPECT_EQ(ctx, swr_alloc_set_opts2(
+            &swr, &stereo, AV_SAMPLE_FMT_FLTP, 48'000,
+            &stereo, AV_SAMPLE_FMT_FLTP, 48'000, 0, nullptr), 0);
+        EXPECT_TRUE(ctx, swr != nullptr);
+        if (swr) EXPECT_EQ(ctx, swr_init(swr), 0);
+        return swr;
+    };
+
+    auto pending = AudioSwrCompensationExecutor::create(
+        MediaAudioCorrectionExecutionMode::ExternalCorrectionRequired, 52, 2);
+    EXPECT_TRUE(ctx, pending);
+    if (pending) {
+        EXPECT_TRUE(ctx, pending.value().enqueue(command(52, 1, 0, 0, 1'000, ctx)));
+        EXPECT_FALSE(ctx, pending.value().settleTerminal());
+    }
+
+    auto incomplete = AudioSwrCompensationExecutor::create(
+        MediaAudioCorrectionExecutionMode::ExternalCorrectionRequired, 53, 2);
+    EXPECT_TRUE(ctx, incomplete);
+    SwrContext* incompleteSwr = makeSwr();
+    if (incomplete && incompleteSwr) {
+        EXPECT_TRUE(ctx, incomplete.value().enqueue(command(53, 1, 0, 0, 1'000, ctx)));
+        EXPECT_TRUE(ctx, incomplete.value().prepare(incompleteSwr, 0));
+        EXPECT_TRUE(ctx, incomplete.value().advance(500));
+        EXPECT_FALSE(ctx, incomplete.value().settleTerminal());
+    }
+    swr_free(&incompleteSwr);
+
+    auto complete = AudioSwrCompensationExecutor::create(
+        MediaAudioCorrectionExecutionMode::ExternalCorrectionRequired, 54, 2);
+    EXPECT_TRUE(ctx, complete);
+    SwrContext* completeSwr = makeSwr();
+    if (complete && completeSwr) {
+        EXPECT_TRUE(ctx, complete.value().enqueue(command(54, 1, 0, 0, 1'000, ctx)));
+        EXPECT_TRUE(ctx, complete.value().prepare(completeSwr, 0));
+        EXPECT_TRUE(ctx, complete.value().advance(1'000));
+        EXPECT_TRUE(ctx, complete.value().settleTerminal());
+    }
+    swr_free(&completeSwr);
+}
+
+std::optional<bool> settlePartiallyExecutedWindowAtExhaustion(
+    int sampleDelta,
+    TestContext& ctx)
+{
+    auto state = std::make_shared<AudioResampleLineageState>(
+        MediaAudioLineageExecutionMode::LegacyPlainPacket, 0);
+    AudioResampleSwrSession session(state);
+    auto input = ::media::ffmpeg::makeFrame();
+    auto target = ::media::ffmpeg::makeCodecContext(nullptr);
+    EXPECT_TRUE(ctx, input && target);
+    if (!input || !target) return std::nullopt;
+    input->format = AV_SAMPLE_FMT_FLTP;
+    input->sample_rate = 48'000;
+    input->nb_samples = 1'024;
+    av_channel_layout_default(&input->ch_layout, 2);
+    EXPECT_EQ(ctx, av_frame_get_buffer(input.get(), 0), 0);
+    target->sample_fmt = AV_SAMPLE_FMT_FLTP;
+    target->sample_rate = 48'000;
+    av_channel_layout_default(&target->ch_layout, 2);
+    EXPECT_TRUE(ctx, session.ensureInitialized(*input, *target));
+
+    auto executorResult = AudioSwrCompensationExecutor::create(
+        MediaAudioCorrectionExecutionMode::ExternalCorrectionRequired, 61, 2);
+    EXPECT_TRUE(ctx, executorResult);
+    if (!executorResult) return std::nullopt;
+    auto executor = std::move(executorResult).value();
+    auto correction = command(61, 1, 0, sampleDelta, 4'096, ctx);
+    EXPECT_EQ(ctx, correction.sampleDelta(), sampleDelta);
+    EXPECT_TRUE(ctx, executor.enqueue(correction));
+    auto window = executor.prepare(state->swr.get(), 0);
+    EXPECT_TRUE(ctx, window);
+    if (!window) return std::nullopt;
+
+    auto live = session.convertLive(
+        const_cast<const uint8_t**>(input->extended_data), input->nb_samples,
+        window.value().maximumOutputSamples, *target);
+    EXPECT_TRUE(ctx, live && live.value().produced > 0);
+    if (!live || live.value().produced <= 0) return std::nullopt;
+    EXPECT_TRUE(ctx, executor.advance(live.value().produced));
+
+    bool observedTailOutput = false;
+    bool observedExhaustion = false;
+    std::optional<bool> settlementSucceeded;
+    for (int step = 0; step < 8 && !observedExhaustion; ++step) {
+        auto activeWindow = executor.prepare(
+            state->swr.get(), live.value().produced);
+        EXPECT_TRUE(ctx, activeWindow);
+        if (!activeWindow) break;
+        auto drain = session.drainQuantum(
+            activeWindow.value().maximumOutputSamples, *target);
+        EXPECT_TRUE(ctx, drain);
+        if (!drain) break;
+        if (drain.value().produced > 0) {
+            observedTailOutput = true;
+            EXPECT_TRUE(ctx, executor.advance(drain.value().produced));
+        }
+        if (drain.value().exhausted) {
+            settlementSucceeded = static_cast<bool>(
+                executor.settleTerminal(*drain.value().exhausted));
+            observedExhaustion = true;
+        }
+    }
+    EXPECT_TRUE(ctx, observedTailOutput);
+    EXPECT_TRUE(ctx, observedExhaustion);
+    EXPECT_TRUE(ctx, settlementSucceeded.has_value());
+    if (!settlementSucceeded) return std::nullopt;
+    if (*settlementSucceeded) {
+        EXPECT_TRUE(ctx, executor.settleTerminal());
+    } else {
+        EXPECT_FALSE(ctx, executor.settleTerminal());
+    }
+    return settlementSucceeded;
+}
+
+void testExhaustionSettlesPartiallyExecutedZeroDeltaWindow(TestContext& ctx)
+{
+    auto settled = settlePartiallyExecutedWindowAtExhaustion(0, ctx);
+    EXPECT_TRUE(ctx, settled && *settled);
+}
+
+void testExhaustionRejectsUnprovenPartialNonZeroWindow(TestContext& ctx)
+{
+    auto settled = settlePartiallyExecutedWindowAtExhaustion(-1, ctx);
+    EXPECT_TRUE(ctx, settled.has_value());
+    EXPECT_FALSE(ctx, settled && *settled);
+}
+
 } // namespace
 
 void runAudioSwrCompensationExecutorTests(TestContext& ctx)
@@ -383,4 +579,8 @@ void runAudioSwrCompensationExecutorTests(TestContext& ctx)
     testNonZeroAndVariableRateBoundaries(ctx);
     testServoPublishesNextWindowBeforeExecutorBoundary(ctx);
     testFilterTailRequiresARegularContiguousLookahead(ctx);
+    testOutstandingDropAuthorizationTracksAppliedNetDelta(ctx);
+    testOverflowAndIncompleteTerminalCorrectionFailClosed(ctx);
+    testExhaustionSettlesPartiallyExecutedZeroDeltaWindow(ctx);
+    testExhaustionRejectsUnprovenPartialNonZeroWindow(ctx);
 }

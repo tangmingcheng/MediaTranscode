@@ -467,6 +467,7 @@ bool separateRtpOutput(const MediaRealtimeRtpTranscodePlan& plan) noexcept
         if (isolateRawRtpAudio) audioOptions.packetSourcePort = "packet";
         audioOptions.normalizeInputPackets = plan.audioPacketNormalizationRequired;
         audioOptions.correctionMode = MediaAudioCorrectionExecutionMode::Disabled;
+        audioOptions.lineageMode = MediaAudioLineageExecutionMode::LegacyPlainPacket;
         audioOptions.muxNode = avStartBarrier.isValid() ? avStartBarrier : audioMux;
         audioOptions.muxCodecPort = avStartBarrier.isValid() ? "audio_codec" : "codec";
         audioOptions.muxPacketPort = avStartBarrier.isValid() ? "audio_packet" : "packet";

@@ -1,4 +1,5 @@
 #include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlanner.h"
+#include "internal/graph/sync/lineage/MediaAudioLineageIdentities.h"
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -11,10 +12,10 @@ std::vector<std::string> canonicalLineageChildren()
         "video_frame_rate",
         "video_filter",
         "video_encode",
-        "audio_decoder_lineage_registry",
-        "audio_startup_trim_lineage_registry",
-        "audio_resampler_lineage_registry",
-        "audio_encoder_lineage_registry"
+        std::string(MediaAudioDecodeLineageIdentity),
+        std::string(MediaAudioStartupTrimLineageIdentity),
+        std::string(MediaAudioResampleLineageIdentity),
+        std::string(MediaAudioEncodeLineageIdentity)
     };
 }
 

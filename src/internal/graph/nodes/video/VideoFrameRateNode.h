@@ -58,11 +58,6 @@ private:
     void resetRuntimeState() noexcept;
 
 private:
-    MediaInputTerminalTracker m_terminals { { "frame" } };
-    bool m_eofEmitted = false;
-    MediaBufferRef m_terminalBuffer;
-    bool m_terminalPending = false;
-    bool m_terminalIsEof = false;
     std::shared_ptr<MediaVideoFrameRateState> m_state;
     bool m_exposesGenerationPurgeTarget = false;
 };
