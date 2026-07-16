@@ -3,6 +3,10 @@
 #include <optional>
 #include <string>
 
+namespace media::ffmpeg::graph {
+class MediaGraph;
+}
+
 namespace media::ffmpeg::graph::build_week {
 
 enum class BuildWeekCommand {
@@ -29,6 +33,8 @@ struct BuildWeekCliOptions {
 
 BuildWeekCliOptions parseBuildWeekCliOptions(int argc, char** argv);
 std::string buildWeekUsage();
+std::string formatBuildWeekGraph(const MediaGraph& graph);
+std::string formatBuildWeekPlan(const MediaGraph& graph);
 int runBuildWeekCli(int argc, char** argv);
 
 } // namespace media::ffmpeg::graph::build_week
