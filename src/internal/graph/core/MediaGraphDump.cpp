@@ -42,6 +42,7 @@ const char* toString(MediaNodeKind kind)
     case MediaNodeKind::ActivatedStartupReleaseSequencer: return "ActivatedStartupReleaseSequencer";
     case MediaNodeKind::RtpSourceClockStateAdapter: return "RtpSourceClockStateAdapter";
     case MediaNodeKind::AvStartupClock: return "AvStartupClock";
+    case MediaNodeKind::SourceClockStateFanout: return "SourceClockStateFanout";
     case MediaNodeKind::AvBoundReleaseExtractor: return "AvBoundReleaseExtractor";
     case MediaNodeKind::PacketMerge: return "PacketMerge";
     case MediaNodeKind::FileMux: return "FileMux";

@@ -5,6 +5,7 @@
 #include "internal/graph/builder/local/LocalFileTranscodeGraphBuilder.h"
 #include "internal/graph/builder/realtime/MediaRealtimeRtpTranscodeGraphBuilder.h"
 #include "internal/graph/builder/realtime/MediaRealtimeOptionApplier.h"
+#include "internal/graph/builder/segments/MediaRealtimeAvSyncInputSegmentBuilder.h"
 #include "internal/graph/core/MediaGraphValidation.h"
 #include "internal/graph/model/MediaNodeKind.h"
 #include "internal/graph/model/RealtimeStreamLayout.h"
@@ -1651,6 +1652,441 @@ void testRawRtpAudioVideoGraphUsesIsolatedInputs(TestContext& ctx)
     EXPECT_TRUE(ctx, audioInput != nullptr);
     if (videoInput) EXPECT_TRUE(ctx, videoInput->options.value("input.sdp").empty());
     if (audioInput) EXPECT_TRUE(ctx, audioInput->options.value("input.sdp").empty());
+}
+
+MediaRealtimeInputStreamInfo deterministicMpegTsStreams()
+{
+    MediaRealtimeInputStreamInfo streams;
+    streams.video.streamIndex = 3;
+    streams.video.codecName = "h264";
+    streams.video.width = 1920;
+    streams.video.height = 1080;
+    streams.video.bitrateBitsPerSecond = 8'000'000;
+    streams.video.frameRate = {30'000, 1'001};
+    streams.hasAudio = true;
+    streams.audio.streamIndex = 5;
+    streams.audio.codecName = "aac";
+    streams.audio.sampleRate = 48'000;
+    streams.audio.channels = 2;
+    streams.audio.channelLayout = "stereo";
+    streams.audio.sampleFormat = "fltp";
+    streams.audio.profile = MediaAudioProfile::knownAacLow();
+    streams.audio.bitrateBitsPerSecond = 320'000;
+    streams.audio.maximumAccessUnitSamples = 1'024;
+    streams.audio.selectedDecoder = MediaSelectedAudioDecoder{
+        "aac", "fltp", "stereo", 48'000, 48'000, 2, 0, 1'024};
+    return streams;
+}
+
+MediaTsSelectedProgramPlan deterministicMpegTsSelection()
+{
+    MediaTsSelectedProgramPlan selected{7, 777, 703, 705, 701};
+    selected.videoPacketDuration = MediaTsPacketDurationEvidence{
+        3, 703, 3'003, {1, 90'000}};
+    selected.audioPacketDuration = MediaTsPacketDurationEvidence{
+        5, 705, 1'024, {1, 48'000}};
+    return selected;
+}
+
+void testSynchronizedRtpGraphAssemblesProtocolNeutralInputSegment(
+    TestContext& ctx)
+{
+    auto planned = MediaRealtimeRtpTranscodePlanner::plan(
+        validRawRtpAudioVideoOptions());
+    EXPECT_TRUE(ctx, planned);
+    if (!planned || !planned.value().avSyncRuntime) return;
+    const std::string group = planned.value().avSyncRuntime->groupKey.value();
+    const std::size_t metadataCapacity = planned.value().avSyncRuntime->
+        edgePolicies.metadata.queuePolicy.capacity;
+    const std::size_t packetCapacity = planned.value().avSyncRuntime->
+        edgePolicies.synchronizedPacket.queuePolicy.capacity;
+
+    const auto graphResult = MediaRealtimeRtpTranscodeGraphBuilder::build(
+        std::move(planned).value());
+    EXPECT_TRUE(ctx, graphResult);
+    if (!graphResult) {
+        std::cerr << graphResult.error().describe() << '\n';
+        return;
+    }
+    const MediaGraph& graph = graphResult.value();
+
+    const MediaNode* snapshot = findNodeByName(
+        graph, "realtime.av_sync.rtp.clock_snapshot");
+    const MediaNode* sourceClock = findNodeByName(
+        graph, "realtime.av_sync.source_clock");
+    const MediaNode* rtpAdapter = findNodeByName(
+        graph, "realtime.av_sync.rtp.source_clock_adapter");
+    const MediaNode* videoBinder = findNodeByName(
+        graph, "realtime.av_sync.video.protocol_binder");
+    const MediaNode* audioBinder = findNodeByName(
+        graph, "realtime.av_sync.audio.protocol_binder");
+    const MediaNode* videoCanonical = findNodeByName(
+        graph, "realtime.av_sync.video.canonical_input");
+    const MediaNode* audioCanonical = findNodeByName(
+        graph, "realtime.av_sync.audio.canonical_input");
+    const MediaNode* coordinator = findNodeByName(
+        graph, "realtime.av_sync.startup.coordinator");
+    const MediaNode* startupClock = findNodeByName(
+        graph, "realtime.av_sync.startup.clock");
+    const MediaNode* binder = findNodeByName(
+        graph, "realtime.av_sync.startup.epoch_binder");
+    const MediaNode* sequencer = findNodeByName(
+        graph, "realtime.av_sync.startup.activation_sequencer");
+    const MediaNode* extractor = findNodeByName(
+        graph, "realtime.av_sync.startup.release_extractor");
+
+    EXPECT_TRUE(ctx, snapshot != nullptr);
+    EXPECT_TRUE(ctx, sourceClock != nullptr);
+    EXPECT_TRUE(ctx, rtpAdapter != nullptr);
+    EXPECT_TRUE(ctx, videoBinder != nullptr);
+    EXPECT_TRUE(ctx, audioBinder != nullptr);
+    EXPECT_TRUE(ctx, videoCanonical != nullptr);
+    EXPECT_TRUE(ctx, audioCanonical != nullptr);
+    EXPECT_TRUE(ctx, coordinator != nullptr);
+    EXPECT_TRUE(ctx, startupClock != nullptr);
+    EXPECT_TRUE(ctx, binder != nullptr);
+    EXPECT_TRUE(ctx, sequencer != nullptr);
+    EXPECT_TRUE(ctx, extractor != nullptr);
+    if (!snapshot || !sourceClock || !rtpAdapter || !videoBinder || !audioBinder ||
+        !videoCanonical || !audioCanonical || !coordinator || !startupClock ||
+        !binder || !sequencer || !extractor) {
+        return;
+    }
+
+    EXPECT_EQ(ctx, snapshot->kind, MediaNodeKind::RtpClockSnapshotFanout);
+    EXPECT_EQ(ctx, sourceClock->kind, MediaNodeKind::SourceClockStateFanout);
+    EXPECT_EQ(ctx, rtpAdapter->kind,
+              MediaNodeKind::RtpSourceClockStateAdapter);
+    EXPECT_EQ(ctx, videoBinder->kind, MediaNodeKind::RtpPacketClockBinder);
+    EXPECT_EQ(ctx, audioBinder->kind, MediaNodeKind::RtpPacketClockBinder);
+    EXPECT_EQ(ctx, videoCanonical->kind, MediaNodeKind::CanonicalInput);
+    EXPECT_EQ(ctx, audioCanonical->kind, MediaNodeKind::CanonicalInput);
+    EXPECT_EQ(ctx, coordinator->kind, MediaNodeKind::AvStartupCoordinator);
+    EXPECT_EQ(ctx, startupClock->kind, MediaNodeKind::AvStartupClock);
+    EXPECT_EQ(ctx, binder->kind, MediaNodeKind::PlaybackEpochBinder);
+    EXPECT_EQ(ctx, sequencer->kind,
+              MediaNodeKind::ActivatedStartupReleaseSequencer);
+    EXPECT_EQ(ctx, extractor->kind, MediaNodeKind::AvBoundReleaseExtractor);
+
+    EXPECT_EQ(ctx, videoBinder->options.value("rtp_clock_binder.sync_group"),
+              group);
+    EXPECT_EQ(ctx, audioBinder->options.value("rtp_clock_binder.sync_group"),
+              group);
+    EXPECT_EQ(ctx, coordinator->options.value("av_startup.sync_group"), group);
+    EXPECT_EQ(ctx, startupClock->options.value("av_startup_clock.sync_group"),
+              group);
+    EXPECT_EQ(ctx,
+              binder->options.value("playback_epoch_binder.sync_group"), group);
+    EXPECT_EQ(ctx, sequencer->options.value(
+                       "activated_startup_release_sequencer.sync_group"),
+              group);
+
+    const auto expectEdge = [&](const char* from,
+                                const char* fromPort,
+                                const char* to,
+                                const char* toPort,
+                                MediaStreamKind stream,
+                                MediaEdgeKind kind,
+                                MediaPayloadKind payload,
+                                std::size_t capacity) {
+        const MediaEdge* edge = findEdgeByNames(
+            graph, from, fromPort, to, toPort);
+        EXPECT_TRUE(ctx, edge != nullptr);
+        if (!edge) return;
+        EXPECT_EQ(ctx, edge->streamKind, stream);
+        EXPECT_EQ(ctx, edge->edgeKind, kind);
+        EXPECT_EQ(ctx, edge->payloadKind, payload);
+        EXPECT_EQ(ctx, edge->policy.queuePolicy.capacity, capacity);
+        EXPECT_EQ(ctx, edge->policy.queuePolicy.overflowPolicy,
+                  MediaQueueOverflowPolicy::BlockProducer);
+    };
+
+    expectEdge("realtime.rtp.clock_group", "clock_group",
+               "realtime.av_sync.rtp.clock_snapshot", "clock",
+               MediaStreamKind::Metadata, MediaEdgeKind::Event,
+               MediaPayloadKind::GraphEvent,
+               metadataCapacity);
+    expectEdge("realtime.av_sync.rtp.clock_snapshot", "video",
+               "realtime.av_sync.video.protocol_binder", "clock",
+               MediaStreamKind::Metadata, MediaEdgeKind::Event,
+               MediaPayloadKind::GraphEvent,
+               metadataCapacity);
+    expectEdge("realtime.av_sync.rtp.clock_snapshot", "audio",
+               "realtime.av_sync.audio.protocol_binder", "clock",
+               MediaStreamKind::Metadata, MediaEdgeKind::Event,
+               MediaPayloadKind::GraphEvent,
+               metadataCapacity);
+    expectEdge("realtime.av_sync.rtp.clock_snapshot", "startup",
+               "realtime.av_sync.rtp.source_clock_adapter", "clock",
+               MediaStreamKind::Metadata, MediaEdgeKind::Event,
+               MediaPayloadKind::GraphEvent, metadataCapacity);
+    expectEdge("realtime.av_sync.rtp.source_clock_adapter", "state",
+               "realtime.av_sync.source_clock", "clock",
+               MediaStreamKind::Metadata, MediaEdgeKind::Event,
+               MediaPayloadKind::GraphEvent, metadataCapacity);
+    expectEdge("realtime.video.input", "packet",
+               "realtime.av_sync.video.protocol_binder", "packet",
+               MediaStreamKind::Video, MediaEdgeKind::InputPacket,
+               MediaPayloadKind::Packet, packetCapacity);
+    expectEdge("realtime.audio.input", "packet",
+               "realtime.av_sync.audio.protocol_binder", "packet",
+               MediaStreamKind::Audio, MediaEdgeKind::InputPacket,
+               MediaPayloadKind::Packet, packetCapacity);
+    expectEdge("realtime.av_sync.video.protocol_binder", "packet",
+               "realtime.av_sync.video.canonical_input", "in",
+               MediaStreamKind::Video, MediaEdgeKind::InputPacket,
+               MediaPayloadKind::Packet, packetCapacity);
+    expectEdge("realtime.av_sync.audio.protocol_binder", "packet",
+               "realtime.av_sync.audio.canonical_input", "in",
+               MediaStreamKind::Audio, MediaEdgeKind::InputPacket,
+               MediaPayloadKind::Packet, packetCapacity);
+    expectEdge("realtime.av_sync.video.canonical_input", "out",
+               "realtime.av_sync.startup.coordinator", "video",
+               MediaStreamKind::Metadata, MediaEdgeKind::Event,
+               MediaPayloadKind::GraphEvent, metadataCapacity);
+    expectEdge("realtime.av_sync.audio.canonical_input", "out",
+               "realtime.av_sync.startup.coordinator", "audio",
+               MediaStreamKind::Metadata, MediaEdgeKind::Event,
+               MediaPayloadKind::GraphEvent, metadataCapacity);
+    expectEdge("realtime.av_sync.source_clock", "startup",
+               "realtime.av_sync.startup.clock", "clock",
+               MediaStreamKind::Metadata, MediaEdgeKind::Event,
+               MediaPayloadKind::GraphEvent,
+               metadataCapacity);
+    expectEdge("realtime.av_sync.startup.clock", "tick",
+               "realtime.av_sync.startup.coordinator", "clock",
+               MediaStreamKind::Metadata, MediaEdgeKind::Event,
+               MediaPayloadKind::GraphEvent, metadataCapacity);
+    expectEdge("realtime.av_sync.startup.coordinator", "release",
+               "realtime.av_sync.startup.epoch_binder", "release",
+               MediaStreamKind::Metadata, MediaEdgeKind::Event,
+               MediaPayloadKind::GraphEvent,
+               metadataCapacity);
+    expectEdge("realtime.av_sync.startup.epoch_binder", "transaction",
+               "realtime.av_sync.startup.activation_sequencer", "transaction",
+               MediaStreamKind::Metadata, MediaEdgeKind::Event,
+               MediaPayloadKind::GraphEvent,
+               metadataCapacity);
+    expectEdge("realtime.av_sync.startup.activation_sequencer", "bound_release",
+               "realtime.av_sync.startup.release_extractor", "in",
+               MediaStreamKind::Metadata, MediaEdgeKind::Event,
+               MediaPayloadKind::GraphEvent,
+               metadataCapacity);
+
+    std::size_t coordinatorReleaseConsumers = 0;
+    for (const MediaEdge& edge : graph.edges()) {
+        if (edge.from.nodeId == coordinator->id &&
+            graph.findPort(edge.from.portId)->name == "release") {
+            ++coordinatorReleaseConsumers;
+        }
+    }
+    EXPECT_EQ(ctx, coordinatorReleaseConsumers, static_cast<std::size_t>(1));
+    EXPECT_EQ(ctx,
+              countNodesByKind(graph, MediaNodeKind::AvPacketStartBarrier),
+              static_cast<std::size_t>(0));
+    EXPECT_TRUE(ctx, graph.findOutputPort(extractor->id, "video") != nullptr);
+    EXPECT_TRUE(ctx, graph.findOutputPort(extractor->id, "audio") != nullptr);
+    const MediaPort* activated = graph.findOutputPort(sequencer->id, "activated");
+    EXPECT_TRUE(ctx, activated != nullptr);
+    if (activated) {
+        EXPECT_EQ(ctx, activated->streamKind, MediaStreamKind::Metadata);
+        EXPECT_EQ(ctx, activated->edgeKind, MediaEdgeKind::Event);
+        EXPECT_EQ(ctx, activated->payloadKind, MediaPayloadKind::GraphEvent);
+    }
+    std::size_t activatedConsumers = 0;
+    for (const MediaEdge& edge : graph.edges()) {
+        if (edge.from.nodeId == sequencer->id &&
+            graph.findPort(edge.from.portId)->name == "activated") {
+            ++activatedConsumers;
+        }
+    }
+    EXPECT_EQ(ctx, activatedConsumers, static_cast<std::size_t>(0));
+    EXPECT_FALSE(ctx, videoBinder->options.has("initial_locked_gate.generation"));
+    EXPECT_FALSE(ctx, audioBinder->options.has("initial_locked_gate.generation"));
+}
+
+void testSynchronizedInputGraphCompilerRemainsFailClosedUntilOutputAssembly(
+    TestContext& ctx)
+{
+    auto planned = MediaRealtimeRtpTranscodePlanner::plan(
+        validRawRtpAudioVideoOptions());
+    EXPECT_TRUE(ctx, planned);
+    if (!planned || !planned.value().avSyncRuntime) return;
+    auto graph = MediaRealtimeRtpTranscodeGraphBuilder::build(
+        std::move(planned).value());
+    EXPECT_TRUE(ctx, graph);
+    if (!graph) return;
+    auto bindingPlan = MediaRealtimeRtpTranscodePlanner::plan(
+        validRawRtpAudioVideoOptions());
+    EXPECT_TRUE(ctx, bindingPlan);
+    if (!bindingPlan || !bindingPlan.value().avSyncRuntime) return;
+    const auto& runtimePlan = *bindingPlan.value().avSyncRuntime;
+
+    MediaRealtimeExecutableGraph executable;
+    executable.graph = std::move(graph).value();
+    executable.avSyncBinding = MediaAvSyncRuntimeBinding{
+        runtimePlan.groupKey,
+        runtimePlan.synchronization,
+        runtimePlan.transition};
+    MediaGraphRuntime runtime;
+    auto compiled = runtime.compile(std::move(executable));
+    EXPECT_FALSE(ctx, compiled);
+    if (!compiled) {
+        EXPECT_EQ(ctx, compiled.error().code,
+                  ::media::ErrorCode::NotInitialized);
+        expectTextContains(
+            ctx, compiled.error().describe(),
+            "requires exactly one scheduler, binder, and activation release sequencer");
+    }
+}
+
+void testSynchronizedMpegTsSegmentUsesSharedProtocolNeutralStartupChain(
+    TestContext& ctx)
+{
+    auto planned = MediaRealtimeRtpTranscodePlanner::planPreparedInput(
+        validMpegTsUdpOptions(), deterministicMpegTsStreams(),
+        deterministicMpegTsSelection());
+    EXPECT_TRUE(ctx, planned);
+    if (!planned || !planned.value().avSyncRuntime) return;
+    auto outer = std::move(planned).value();
+    const std::size_t metadataCapacity = outer.avSyncRuntime->
+        edgePolicies.metadata.queuePolicy.capacity;
+    const std::size_t packetCapacity = outer.avSyncRuntime->
+        edgePolicies.synchronizedPacket.queuePolicy.capacity;
+
+    MediaGraph graph;
+    const MediaNodeId demux = graph.addNode(
+        MediaNodeKind::MpegTsDemux, "test.ts.demux");
+    graph.addOutputPort(demux, "video", MediaStreamKind::Video,
+                        MediaEdgeKind::InputPacket, MediaPayloadKind::Packet,
+                        false, true);
+    graph.addOutputPort(demux, "audio", MediaStreamKind::Audio,
+                        MediaEdgeKind::InputPacket, MediaPayloadKind::Packet,
+                        false, true);
+    graph.addOutputPort(demux, "clock", MediaStreamKind::Metadata,
+                        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent,
+                        false, true);
+    MediaRealtimeAvSyncInputSegmentOptions options;
+    options.prefix = "test.ts.av_sync";
+    options.sources.videoPacket = MediaEndpoint{demux, "video"};
+    options.sources.audioPacket = MediaEndpoint{demux, "audio"};
+    options.sources.protocolClock = MediaEndpoint{demux, "clock"};
+    auto segment = MediaRealtimeAvSyncInputSegmentBuilder::build(
+        graph, options, *outer.avSyncRuntime);
+    EXPECT_TRUE(ctx, segment);
+    if (!segment) {
+        std::cerr << segment.error().describe() << '\n';
+        return;
+    }
+
+    const MediaNode* sourceClock = findNodeByName(
+        graph, "test.ts.av_sync.source_clock");
+    const MediaNode* videoGate = findNodeByName(
+        graph, "test.ts.av_sync.video.protocol_binder");
+    const MediaNode* audioGate = findNodeByName(
+        graph, "test.ts.av_sync.audio.protocol_binder");
+    EXPECT_TRUE(ctx, sourceClock != nullptr);
+    EXPECT_TRUE(ctx, videoGate != nullptr);
+    EXPECT_TRUE(ctx, audioGate != nullptr);
+    if (!sourceClock || !videoGate || !audioGate) return;
+    EXPECT_EQ(ctx, sourceClock->kind, MediaNodeKind::SourceClockStateFanout);
+    EXPECT_EQ(ctx, videoGate->kind, MediaNodeKind::InitialLockedPacketGate);
+    EXPECT_EQ(ctx, audioGate->kind, MediaNodeKind::InitialLockedPacketGate);
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::RtpClockSnapshotFanout),
+              static_cast<std::size_t>(0));
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::RtpPacketClockBinder),
+              static_cast<std::size_t>(0));
+    EXPECT_EQ(ctx,
+              countNodesByKind(graph, MediaNodeKind::RtpSourceClockStateAdapter),
+              static_cast<std::size_t>(0));
+    const auto expectEdge = [&](const char* from,
+                                const char* fromPort,
+                                const char* to,
+                                const char* toPort,
+                                std::size_t capacity) {
+        const MediaEdge* edge = findEdgeByNames(
+            graph, from, fromPort, to, toPort);
+        EXPECT_TRUE(ctx, edge != nullptr);
+        if (!edge) return;
+        EXPECT_EQ(ctx, edge->policy.queuePolicy.capacity, capacity);
+        EXPECT_EQ(ctx, edge->policy.queuePolicy.overflowPolicy,
+                  MediaQueueOverflowPolicy::BlockProducer);
+        EXPECT_EQ(ctx, edge->policy.queuePolicy.orderingPolicy,
+                  MediaQueueOrderingPolicy::Fifo);
+    };
+    expectEdge("test.ts.demux", "clock", "test.ts.av_sync.source_clock",
+               "clock", metadataCapacity);
+    expectEdge("test.ts.av_sync.source_clock", "video",
+               "test.ts.av_sync.video.protocol_binder", "clock",
+               metadataCapacity);
+    expectEdge("test.ts.av_sync.source_clock", "audio",
+               "test.ts.av_sync.audio.protocol_binder", "clock",
+               metadataCapacity);
+    expectEdge("test.ts.av_sync.source_clock", "startup",
+               "test.ts.av_sync.startup.clock", "clock",
+               metadataCapacity);
+    expectEdge("test.ts.demux", "video",
+               "test.ts.av_sync.video.protocol_binder", "packet",
+               packetCapacity);
+    expectEdge("test.ts.demux", "audio",
+               "test.ts.av_sync.audio.protocol_binder", "packet",
+               packetCapacity);
+    EXPECT_EQ(ctx, videoGate->options.value("initial_locked_gate.sync_group"),
+              outer.avSyncRuntime->groupKey.value());
+    EXPECT_EQ(ctx, audioGate->options.value("initial_locked_gate.sync_group"),
+              outer.avSyncRuntime->groupKey.value());
+    EXPECT_FALSE(ctx, videoGate->options.has("initial_locked_gate.generation"));
+    EXPECT_FALSE(ctx, audioGate->options.has("initial_locked_gate.generation"));
+    EXPECT_TRUE(ctx, segment.value().releasedVideo.valid());
+    EXPECT_TRUE(ctx, segment.value().releasedAudio.valid());
+    EXPECT_TRUE(ctx, segment.value().activatedRelease.valid());
+}
+
+void testSynchronizedInputSegmentRejectsMissingProtocolSourcePort(
+    TestContext& ctx)
+{
+    auto planned = MediaRealtimeRtpTranscodePlanner::planPreparedInput(
+        validMpegTsUdpOptions(), deterministicMpegTsStreams(),
+        deterministicMpegTsSelection());
+    EXPECT_TRUE(ctx, planned);
+    if (!planned || !planned.value().avSyncRuntime) return;
+
+    MediaGraph graph;
+    const MediaNodeId demux = graph.addNode(
+        MediaNodeKind::MpegTsDemux, "test.ts.incomplete_demux");
+    MediaRealtimeAvSyncInputSegmentOptions options;
+    options.prefix = "test.ts.incomplete_av_sync";
+    options.sources.videoPacket = MediaEndpoint{demux, "video"};
+    options.sources.audioPacket = MediaEndpoint{demux, "audio"};
+    options.sources.protocolClock = MediaEndpoint{demux, "clock"};
+    auto segment = MediaRealtimeAvSyncInputSegmentBuilder::build(
+        graph, options, *planned.value().avSyncRuntime);
+    EXPECT_FALSE(ctx, segment);
+    if (!segment) {
+        EXPECT_EQ(ctx, segment.error().code,
+                  ::media::ErrorCode::InvalidArgument);
+        expectTextContains(
+            ctx, segment.error().describe(),
+            "source endpoint does not exist");
+    }
+}
+
+void testVideoOnlyRealtimeInputKeepsLegacyPacketStartGateOutsideSyncSegment(
+    TestContext& ctx)
+{
+    const auto graphResult = MediaRealtimeRtpTranscodeGraphBuilder::build(
+        validRawRtpOptions());
+    EXPECT_TRUE(ctx, graphResult);
+    if (!graphResult) return;
+    const MediaGraph& graph = graphResult.value();
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::PacketStartGate),
+              static_cast<std::size_t>(1));
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::AvStartupCoordinator),
+              static_cast<std::size_t>(0));
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::PlaybackEpochBinder),
+              static_cast<std::size_t>(0));
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::CanonicalInput),
+              static_cast<std::size_t>(0));
 }
 
 void testSeparateRtpH264OutputRequestsGlobalHeader(TestContext& ctx)
@@ -3618,6 +4054,9 @@ void testMpegTsPreflightKeepsTaggedInputAndBuilderRejectsUnassembledSync(TestCon
     EXPECT_FALSE(ctx, executable);
     if (!executable) {
         EXPECT_EQ(ctx, executable.error().code, media::ErrorCode::Unsupported);
+        expectTextContains(
+            ctx, executable.error().describe(),
+            "synchronized realtime execution requires scheduled A/V production adapters");
     }
 }
 
@@ -3715,6 +4154,11 @@ int main()
     testRawRtpPlansAudioVideoInput(ctx);
     testRealtimePlanEmbedsValidatedAvSyncContract(ctx);
     testRawRtpAudioVideoGraphUsesIsolatedInputs(ctx);
+    testSynchronizedRtpGraphAssemblesProtocolNeutralInputSegment(ctx);
+    testSynchronizedInputGraphCompilerRemainsFailClosedUntilOutputAssembly(ctx);
+    testSynchronizedMpegTsSegmentUsesSharedProtocolNeutralStartupChain(ctx);
+    testSynchronizedInputSegmentRejectsMissingProtocolSourcePort(ctx);
+    testVideoOnlyRealtimeInputKeepsLegacyPacketStartGateOutsideSyncSegment(ctx);
     testSeparateRtpH264OutputRequestsGlobalHeader(ctx);
     testSeparateRtpInheritedH264OutputRequestsGlobalHeader(ctx);
     testEncoderContextBuilderAppliesGlobalHeaderOption(ctx);

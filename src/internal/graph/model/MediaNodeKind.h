@@ -80,7 +80,8 @@ enum class MediaNodeKind {
     ReservedNodeKind54 = 54,
     RtpSourceClockStateAdapter = 55,
     AvStartupClock = 56,
-    ActivatedStartupReleaseSequencer = 57
+    ActivatedStartupReleaseSequencer = 57,
+    SourceClockStateFanout = 58
 };
 
 } // namespace media::ffmpeg::graph

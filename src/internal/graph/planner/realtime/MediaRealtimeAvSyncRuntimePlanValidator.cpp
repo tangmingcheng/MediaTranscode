@@ -122,11 +122,19 @@ namespace media::ffmpeg::graph {
         !validEdge(runtime.edgePolicies.packet, runtime.queues.packet) ||
         !validEdge(runtime.edgePolicies.videoPacket, runtime.queues.packet) ||
         !validEdge(runtime.edgePolicies.audioPacket, runtime.queues.packet) ||
+        !validEdge(runtime.edgePolicies.synchronizedPacket,
+                   runtime.queues.packet) ||
         !validEdge(runtime.edgePolicies.frame, runtime.queues.frame) ||
         !validEdge(runtime.edgePolicies.mux, runtime.queues.mux) ||
         !validEdge(runtime.edgePolicies.videoMux, runtime.queues.mux) ||
         !validEdge(runtime.edgePolicies.audioMux, runtime.queues.mux)) {
         return invalid("edge-policy product");
+    }
+    if (runtime.edgePolicies.synchronizedPacket.queuePolicy.overflowPolicy !=
+            MediaQueueOverflowPolicy::BlockProducer ||
+        runtime.edgePolicies.synchronizedPacket.queuePolicy.orderingPolicy !=
+            MediaQueueOrderingPolicy::Fifo) {
+        return invalid("synchronized packet edge policy");
     }
     if (runtime.threadingPolicy.mode != MediaThreadingMode::PerNodeWorker ||
         runtime.threadingPolicy.priority != MediaThreadPriority::High ||

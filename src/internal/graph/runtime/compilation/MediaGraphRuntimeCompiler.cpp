@@ -89,6 +89,12 @@ public:
                 "av_startup_clock.sync_group";
             constexpr std::string_view SequencerGroupKey =
                 "activated_startup_release_sequencer.sync_group";
+            constexpr std::string_view RtpBinderGroupKey =
+                "rtp_clock_binder.sync_group";
+            constexpr std::string_view InitialGateGroupKey =
+                "initial_locked_gate.sync_group";
+            constexpr std::string_view CoordinatorGroupKey =
+                "av_startup.sync_group";
             if (!key.ends_with(SyncGroupSuffix)) continue;
             const bool schedulerConsumer =
                 node.kind == MediaNodeKind::AvOutputScheduler &&
@@ -102,8 +108,19 @@ public:
             const bool sequencerConsumer =
                 node.kind == MediaNodeKind::ActivatedStartupReleaseSequencer &&
                 key == SequencerGroupKey;
+            const bool rtpBinderConsumer =
+                node.kind == MediaNodeKind::RtpPacketClockBinder &&
+                key == RtpBinderGroupKey;
+            const bool initialGateConsumer =
+                node.kind == MediaNodeKind::InitialLockedPacketGate &&
+                key == InitialGateGroupKey;
+            const bool coordinatorConsumer =
+                node.kind == MediaNodeKind::AvStartupCoordinator &&
+                key == CoordinatorGroupKey;
             if (!schedulerConsumer && !binderConsumer &&
-                !startupClockConsumer && !sequencerConsumer) {
+                !startupClockConsumer && !sequencerConsumer &&
+                !rtpBinderConsumer && !initialGateConsumer &&
+                !coordinatorConsumer) {
                 return ::media::Status::failure(
                     ::media::ErrorInfo::invalidArgument(
                         "MediaGraphRuntime found an unsupported A/V sync group consumer"));

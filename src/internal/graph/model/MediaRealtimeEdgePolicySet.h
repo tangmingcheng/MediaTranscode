@@ -10,6 +10,7 @@ struct MediaRealtimeEdgePolicySet {
     MediaEdgePolicy packet;
     MediaEdgePolicy videoPacket;
     MediaEdgePolicy audioPacket;
+    MediaEdgePolicy synchronizedPacket;
     MediaEdgePolicy frame;
     MediaEdgePolicy mux;
     MediaEdgePolicy videoMux;

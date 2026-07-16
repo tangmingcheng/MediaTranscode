@@ -229,6 +229,9 @@ MediaRealtimeEdgePolicySet planEdgePolicies(const MediaGraphQueueParameters& que
     policies.packet = planRealtimeQueuePolicy(queues.packet, MediaQueueOverflowPolicy::DropOldest);
     policies.videoPacket = planRealtimeQueuePolicy(queues.packet, MediaQueueOverflowPolicy::DropNonKeyFrame);
     policies.audioPacket = planRealtimeQueuePolicy(queues.packet, MediaQueueOverflowPolicy::DropOldest);
+    policies.synchronizedPacket = planRealtimeQueuePolicy(
+        queues.packet, MediaQueueOverflowPolicy::BlockProducer,
+        MediaQueueOrderingPolicy::Fifo);
     policies.frame = planRealtimeQueuePolicy(queues.frame, MediaQueueOverflowPolicy::DropOldest);
     policies.mux = planRealtimeQueuePolicy(queues.mux, MediaQueueOverflowPolicy::DropOldest);
     policies.videoMux = planRealtimeQueuePolicy(queues.mux, MediaQueueOverflowPolicy::DropNonKeyFrame);

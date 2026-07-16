@@ -491,6 +491,14 @@ void testRealtimeAvSyncRuntimeProductRejectsIndependentMutations(TestContext& ct
     ++runtime.edgePolicies.audioPacket.queuePolicy.capacity;
     expectInvalid();
     --runtime.edgePolicies.audioPacket.queuePolicy.capacity;
+    ++runtime.edgePolicies.synchronizedPacket.queuePolicy.capacity;
+    expectInvalid();
+    --runtime.edgePolicies.synchronizedPacket.queuePolicy.capacity;
+    runtime.edgePolicies.synchronizedPacket.queuePolicy.overflowPolicy =
+        MediaQueueOverflowPolicy::DropOldest;
+    expectInvalid();
+    runtime.edgePolicies.synchronizedPacket.queuePolicy.overflowPolicy =
+        MediaQueueOverflowPolicy::BlockProducer;
     ++runtime.edgePolicies.frame.queuePolicy.capacity;
     expectInvalid();
     --runtime.edgePolicies.frame.queuePolicy.capacity;

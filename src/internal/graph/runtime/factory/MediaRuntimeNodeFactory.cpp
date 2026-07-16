@@ -46,6 +46,7 @@
 #include "internal/graph/nodes/sync/MediaAvStartupClockNode.h"
 #include "internal/graph/nodes/sync/MediaActivatedStartupReleaseSequencerNode.h"
 #include "internal/graph/nodes/sync/MediaRtpSourceClockStateAdapterNode.h"
+#include "internal/graph/nodes/sync/MediaSourceClockStateFanoutNode.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/nodes/video/HardwareTransferNode.h"
 #include "internal/graph/nodes/video/VideoDecodeNode.h"
@@ -300,6 +301,9 @@ template <typename Node>
     case MediaNodeKind::AvStartupClock:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::make_unique<MediaAvStartupClockNode>(node.id));
+    case MediaNodeKind::SourceClockStateFanout:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+            std::make_unique<MediaSourceClockStateFanoutNode>(node.id));
     case MediaNodeKind::PacketMerge:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<PacketMergeNode>(node.id));
     case MediaNodeKind::FileMux:
@@ -393,6 +397,7 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::ActivatedStartupReleaseSequencer:
     case MediaNodeKind::RtpSourceClockStateAdapter:
     case MediaNodeKind::AvStartupClock:
+    case MediaNodeKind::SourceClockStateFanout:
     case MediaNodeKind::PacketMerge:
     case MediaNodeKind::FileMux:
     case MediaNodeKind::RtpMux:
