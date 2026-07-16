@@ -2,54 +2,52 @@
 
 ## Scope
 
-Task 4 completes activation-before-release and registered-master-clock startup.
-The packet gate and atomic A/V packet release remain owned by Task 6.
+Task 4 commits playback-epoch activation and startup-release visibility as one
+ordered transaction. Task 3 remains readiness-only; packet gating and atomic
+A/V packet release remain owned by Task 6.
 
 ## Implementation
 
-- `MediaPlaybackEpochBinderNode` retains one release, activates the initial
-  playback epoch once, commits the immutable typed activation event, and then
-  forwards the same release. Activation-event and release commits are tracked
-  independently across `WouldBlock`; stop and abort clear retained state.
-- `MediaPlaybackEpochActivatedFanoutNode` forwards the same immutable typed
-  activation event through the runtime's retained multi-output transfer.
-- `MediaRtpSourceClockStateAdapterNode` maps RTP group readiness and generation
-  into the protocol-neutral source-clock state published by MPEG-TS input.
-- `MediaAvStartupClockNode` accepts only planner-provided group and interval
-  options, consumes generic source-clock readiness, reads the registered group
-  master clock, and returns `DeadlineWait` between ticks.
-- `MediaAvOutputSchedulerNode` may start while the group is registered and
-  awaiting its epoch. It leaves queued media untouched until the group becomes
-  Active, then creates its controller exactly once from the activated epoch.
-  The controller factory is an explicit dependency, so the once-only behavior
-  is verified without exposing private scheduler state.
-- Runtime compilation accepts only the scheduler, epoch binder, and startup
-  clock as typed `.sync_group` consumers. Activation authority remains issued
-  by the compiler to the single bound epoch binder.
+- `MediaPlaybackEpochBinderNode` validates and retains one typed release, then
+  emits one blocking `MediaStartupReleaseTransactionBuffer`. It owns no
+  activation authority and publishes no activation or bound-release output.
+- `MediaActivatedStartupReleaseSequencerNode` is the sole owner of the
+  compiler-issued move-only activation capability. It preflights every
+  `activated` target and the single `bound_release` target before activation.
+- A full target returns `Waiting` while the group remains `AwaitingEpoch`, with
+  no transaction output visible. Closed, aborted, mismatched, or invalid
+  targets fail terminally before activation.
+- Initial release activates once, publishes the same immutable activation-event
+  reference to every target, and then publishes the original release reference.
+  Active-epoch pass-through reuses the matching event without reactivation.
+- Runtime stop, abort, and threaded-failure teardown clear channel payloads
+  before closing or aborting channels. Sequencer-owned pending references are
+  also cleared by its lifecycle methods.
+- The legacy activation fanout node was removed. Node-kind value 54 remains
+  reserved, and the sequencer was appended as value 57.
+- Compiler validation requires exactly one scheduler, binder, and sequencer for
+  a synchronized graph, with matching planner-provided group options. Generic
+  factory creation cannot construct the authority-bearing sequencer.
 
-## TDD Evidence
+## TDD and Debugging Evidence
 
-The resumed reviewer-fix cycle captured two compile-time RED results before the
-implementation was changed:
+The first compile-time RED failed because the new sequencer header did not yet
+exist. Focused tests then drove target-capacity preflight, one-time activation,
+pointer identity, pass-through, mismatch, close/abort, teardown, and fresh
+runtime behavior.
 
-- `av_output_scheduler_tests.cpp:1368` failed with C2661 because the scheduler
-  did not yet accept an observable controller-factory dependency.
-- `av_playback_epoch_binder_tests.cpp:38-39` failed both static assertions
-  because the direct `publishInitial` and `publishNext` activation APIs were
-  still public.
-
-An initial GREEN runtime run then exposed a process-exit hang. Marker-based
-localization proved all runtime tests had completed and the hang was in static
-destruction: `startFixture` retained runtimes in a function-static vector.
-Replacing that hidden process-lifetime retention with fixture-owned RAII fixed
-the hang; the direct runtime executable and the repeated CTest runs now exit
-normally. All final GREEN commands below were run against the clean VS2026
-rebuild.
+An incremental debug run later terminated in the sequencer deleting destructor.
+A captured dump and CDB stack showed an invalid free caused by stale object
+layout: `/showIncludes` had been removed, so an older factory object allocated
+the previous class size after the header changed. The runtime clear-channel
+path was not the cause. A VS2026 clean-first all-target rebuild removed 391 old
+artifacts and completed 474 actions with exit code 0. `/showIncludes` remained
+absent before and after the rebuild.
 
 ## Test Results
 
-`/showIncludes` count was zero before and after the full clean rebuild. The
-rebuild completed all 473 build actions successfully.
+The three focused executables were first run directly. Each exited with code 0
+and no CRT error dialog.
 
 ```powershell
 ctest --test-dir out/build/x64-debug -C Debug --output-on-failure -R "media_transcode_(runtime|av_playback_epoch_binder|av_sync_production_release)_tests"
@@ -61,8 +59,7 @@ Result: PASS, 3/3.
 ctest --test-dir out/build/x64-debug -C Debug --output-on-failure --repeat until-fail:20 -R "media_transcode_(runtime|av_playback_epoch_binder|av_sync_production_release)_tests"
 ```
 
-Result: PASS, all three runtime/lifecycle executables completed 20 consecutive
-runs (60/60 process executions).
+Result: PASS, 60/60 process executions.
 
 ```powershell
 ctest --test-dir out/build/x64-debug -C Debug --output-on-failure -L node
@@ -74,35 +71,34 @@ Result: PASS, 12/12.
 ctest --test-dir out/build/x64-debug -C Debug --output-on-failure -L deterministic
 ```
 
-Result: PASS, 21/21 in 39.21 seconds.
+Result: PASS, 21/21 in 39.06 seconds.
 
 ```powershell
 ctest --test-dir out/build/x64-debug -C Debug --output-on-failure -L integration
 ```
 
-Result: 5/6 PASS. `media_transcode_integration_tests` failed three existing
-Opus planner expectations because scheduled RTP packetization does not publish
-audio batch timing (`test_realtime_rtp_graph.cpp:1816`, `:1957`, and `:1970`).
-The failing test and planner files have no Task 4 diff from baseline `d4f6068`;
-the five protocol integration executables passed. This is a pre-existing
-planner/test-contract issue and is not hidden or changed by Task 4.
+Result: 5/6 PASS. Both RTP loopback tests and all three MPEG-TS integration
+tests passed. `media_transcode_integration_tests` retained three existing Opus
+planner expectation failures. The failing test and planner code are outside
+this Task 4 change.
 
 ## Self-review
 
-- Binder state has one owner and one reset path per terminal lifecycle action.
-- Epoch activation is reachable only through the typed release input; the
-  binder exposes no direct initial or next-generation activation API.
-- Activation, activation-event commit, and bound-release commit are distinct;
-  a retry cannot reactivate or duplicate an already committed output.
-- Stop/restart is covered both after activation-before-event-commit and after
-  event-commit-before-release-commit; neither retained output leaks or repeats.
-- No protocol node interprets planner policy or invents group, interval,
-  generation, epoch, or clock values.
-- No polling, sleeps, or `steady_clock` calls were added to runtime nodes.
-- All Task 4 text is UTF-8 without BOM and uses CRLF line endings.
+- Activation authority has one runtime owner and cannot be constructed through
+  the generic factory.
+- No target can observe a successful transaction prefix due only to planned
+  backpressure; all targets are checked before activation.
+- The transaction and fanout preserve shared buffer references without payload
+  copies.
+- Planner-provided group identity is mandatory in compiler and factory paths;
+  downstream nodes add no fallback or default.
+- Stop and abort discard queued and retained transactions; a separately
+  compiled fresh runtime starts in `AwaitingEpoch` and activates normally.
+- Source, test, and build references to the removed fanout are zero.
 
 ## Remaining Concern
 
-The integration-label Opus expectations must be reconciled with the stricter
-planner-owned audio batch-timing contract in a separate scoped task. It does
-not invalidate Task 4 focused, lifecycle, node, or deterministic evidence.
+Preflight and commit cannot roll back if a channel is concurrently closed after
+preflight. That abnormal race is terminal and fail-closed by design, but it is
+not a general multi-channel rollback transaction. The separate Opus planner
+expectation mismatch remains for a later scoped task.

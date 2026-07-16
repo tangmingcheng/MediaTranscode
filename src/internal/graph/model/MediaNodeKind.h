@@ -77,9 +77,10 @@ enum class MediaNodeKind {
     RtpPacketClockBinder = 51,
     RtpClockSnapshotFanout = 52,
     InitialLockedPacketGate = 53,
-    PlaybackEpochActivatedFanout = 54,
+    ReservedNodeKind54 = 54,
     RtpSourceClockStateAdapter = 55,
-    AvStartupClock = 56
+    AvStartupClock = 56,
+    ActivatedStartupReleaseSequencer = 57
 };
 
 } // namespace media::ffmpeg::graph

@@ -55,10 +55,16 @@ MediaGraph graphWithGroupReference(const std::optional<std::string>& group)
         MediaNodeKind::AvOutputScheduler, "scheduler");
     const auto binder = graph.addNode(
         MediaNodeKind::PlaybackEpochBinder, "epoch-binder");
+    const auto sequencer = graph.addNode(
+        MediaNodeKind::ActivatedStartupReleaseSequencer,
+        "activation-release-sequencer");
     graph.addNode(MediaNodeKind::Finalize, "sink");
     if (group) {
         graph.setNodeOption(node, "av_scheduler.sync_group", *group);
         graph.setNodeOption(binder, "playback_epoch_binder.sync_group", *group);
+        graph.setNodeOption(
+            sequencer,
+            "activated_startup_release_sequencer.sync_group", *group);
     }
     return graph;
 }

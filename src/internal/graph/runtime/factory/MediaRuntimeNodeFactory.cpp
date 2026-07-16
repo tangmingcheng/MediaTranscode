@@ -44,7 +44,7 @@
 #include "internal/graph/nodes/sync/MediaInitialLockedPacketGateNode.h"
 #include "internal/graph/nodes/sync/MediaAvBoundReleaseExtractorNode.h"
 #include "internal/graph/nodes/sync/MediaAvStartupClockNode.h"
-#include "internal/graph/nodes/sync/MediaPlaybackEpochActivatedFanoutNode.h"
+#include "internal/graph/nodes/sync/MediaActivatedStartupReleaseSequencerNode.h"
 #include "internal/graph/nodes/sync/MediaRtpSourceClockStateAdapterNode.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/nodes/video/HardwareTransferNode.h"
@@ -58,6 +58,24 @@
 
 namespace media::ffmpeg::graph {
 namespace {
+
+::media::Result<MediaAvSyncGroupKey> requiredSyncGroup(
+    const MediaNode& node,
+    const char* nodeName,
+    const char* optionName)
+{
+    auto group = requiredNodeOption(&node.options, nodeName, optionName);
+    if (!group) {
+        return ::media::Result<MediaAvSyncGroupKey>::failure(group.error());
+    }
+    MediaAvSyncGroupKey groupKey(std::move(group).value());
+    if (!groupKey.valid()) {
+        return ::media::Result<MediaAvSyncGroupKey>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                std::string(nodeName) + " requires a valid planned sync group"));
+    }
+    return ::media::Result<MediaAvSyncGroupKey>::success(std::move(groupKey));
+}
 
 template <typename Node>
 ::media::Result<std::unique_ptr<MediaRuntimeNode>> createVideoLineageStage(
@@ -251,9 +269,18 @@ template <typename Node>
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::make_unique<MediaAvOutputSchedulerNode>(node.id));
     case MediaNodeKind::PlaybackEpochBinder:
-        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
-            ::media::ErrorInfo::notInitialized(
-                "PlaybackEpochBinder requires compiler-issued activation authority"));
+    {
+        auto group = requiredSyncGroup(
+            node, "MediaPlaybackEpochBinderNode",
+            "playback_epoch_binder.sync_group");
+        if (!group) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                group.error());
+        }
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+            std::make_unique<MediaPlaybackEpochBinderNode>(
+                node.id, std::move(group).value()));
+    }
     case MediaNodeKind::CanonicalInput:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::make_unique<MediaCanonicalInputNode>(node.id));
@@ -263,9 +290,10 @@ template <typename Node>
     case MediaNodeKind::AvBoundReleaseExtractor:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::make_unique<MediaAvBoundReleaseExtractorNode>(node.id));
-    case MediaNodeKind::PlaybackEpochActivatedFanout:
-        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
-            std::make_unique<MediaPlaybackEpochActivatedFanoutNode>(node.id));
+    case MediaNodeKind::ActivatedStartupReleaseSequencer:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "Activation release sequencer requires compiler-issued activation authority"));
     case MediaNodeKind::RtpSourceClockStateAdapter:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::make_unique<MediaRtpSourceClockStateAdapterNode>(node.id));
@@ -307,31 +335,25 @@ template <typename Node>
 }
 
 ::media::Result<std::unique_ptr<MediaRuntimeNode>>
-MediaRuntimeNodeFactory::createPlaybackEpochBinder(
+MediaRuntimeNodeFactory::createActivatedStartupReleaseSequencer(
     const MediaNode& node,
     MediaPlaybackEpochActivationCapability capability)
 {
-    if (node.kind != MediaNodeKind::PlaybackEpochBinder) {
+    if (node.kind != MediaNodeKind::ActivatedStartupReleaseSequencer) {
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "Playback epoch binder factory requires the binder node kind"));
+                "Activation release sequencer factory requires the sequencer node kind"));
     }
-    auto group = requiredNodeOption(
-        &node.options, "MediaPlaybackEpochBinderNode",
-        "playback_epoch_binder.sync_group");
+    auto group = requiredSyncGroup(
+        node, "MediaActivatedStartupReleaseSequencerNode",
+        "activated_startup_release_sequencer.sync_group");
     if (!group) {
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
             group.error());
     }
-    MediaAvSyncGroupKey groupKey(std::move(group).value());
-    if (!groupKey.valid()) {
-        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "Playback epoch binder requires a valid planned sync group"));
-    }
     return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
-        std::make_unique<MediaPlaybackEpochBinderNode>(
-            node.id, std::move(groupKey), std::move(capability)));
+        std::make_unique<MediaActivatedStartupReleaseSequencerNode>(
+            node.id, std::move(group).value(), std::move(capability)));
 }
 
 bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
@@ -368,7 +390,7 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::CanonicalInput:
     case MediaNodeKind::InitialLockedPacketGate:
     case MediaNodeKind::AvBoundReleaseExtractor:
-    case MediaNodeKind::PlaybackEpochActivatedFanout:
+    case MediaNodeKind::ActivatedStartupReleaseSequencer:
     case MediaNodeKind::RtpSourceClockStateAdapter:
     case MediaNodeKind::AvStartupClock:
     case MediaNodeKind::PacketMerge:

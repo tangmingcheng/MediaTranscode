@@ -54,8 +54,10 @@ public:
     std::unordered_set<std::uint64_t> bindingIds;
     std::size_t schedulerCount = 0;
     std::size_t binderCount = 0;
+    std::size_t sequencerCount = 0;
     std::size_t schedulerReferenceCount = 0;
     std::size_t binderReferenceCount = 0;
+    std::size_t sequencerReferenceCount = 0;
     for (const auto& binding : executable.inputBindings) {
         if (!binding.nodeId.isValid() || !binding.prepared.valid() ||
             !bindingIds.insert(binding.nodeId.value).second) {
@@ -71,6 +73,8 @@ public:
     for (const MediaNode& node : executable.graph.nodes()) {
         if (node.kind == MediaNodeKind::AvOutputScheduler) ++schedulerCount;
         if (node.kind == MediaNodeKind::PlaybackEpochBinder) ++binderCount;
+        if (node.kind == MediaNodeKind::ActivatedStartupReleaseSequencer)
+            ++sequencerCount;
         if (node.kind == MediaNodeKind::RealtimeInput && !bindingIds.contains(node.id.value)) {
             return ::media::Status::failure(
                 ::media::ErrorInfo::notInitialized("MediaGraphRuntime missing prepared RealtimeInput binding"));
@@ -83,6 +87,8 @@ public:
                 "playback_epoch_binder.sync_group";
             constexpr std::string_view StartupClockGroupKey =
                 "av_startup_clock.sync_group";
+            constexpr std::string_view SequencerGroupKey =
+                "activated_startup_release_sequencer.sync_group";
             if (!key.ends_with(SyncGroupSuffix)) continue;
             const bool schedulerConsumer =
                 node.kind == MediaNodeKind::AvOutputScheduler &&
@@ -93,14 +99,18 @@ public:
             const bool startupClockConsumer =
                 node.kind == MediaNodeKind::AvStartupClock &&
                 key == StartupClockGroupKey;
+            const bool sequencerConsumer =
+                node.kind == MediaNodeKind::ActivatedStartupReleaseSequencer &&
+                key == SequencerGroupKey;
             if (!schedulerConsumer && !binderConsumer &&
-                !startupClockConsumer) {
+                !startupClockConsumer && !sequencerConsumer) {
                 return ::media::Status::failure(
                     ::media::ErrorInfo::invalidArgument(
                         "MediaGraphRuntime found an unsupported A/V sync group consumer"));
             }
             if (schedulerConsumer) ++schedulerReferenceCount;
             if (binderConsumer) ++binderReferenceCount;
+            if (sequencerConsumer) ++sequencerReferenceCount;
             if (value.empty() || !executable.avSyncBinding) {
                 return ::media::Status::failure(
                     ::media::ErrorInfo::notInitialized(
@@ -123,13 +133,15 @@ public:
                 executable.avSyncBinding->plan); !status) {
             return status;
         }
-        if (schedulerCount != 1 || binderCount != 1 ||
-            schedulerReferenceCount != 1 || binderReferenceCount != 1) {
+        if (schedulerCount != 1 || binderCount != 1 || sequencerCount != 1 ||
+            schedulerReferenceCount != 1 || binderReferenceCount != 1 ||
+            sequencerReferenceCount != 1) {
             return ::media::Status::failure(
                 ::media::ErrorInfo::notInitialized(
-                    "MediaGraphRuntime A/V sync binding requires exactly one scheduler and one playback epoch binder"));
+                    "MediaGraphRuntime A/V sync binding requires exactly one scheduler, binder, and activation release sequencer"));
         }
-    } else if (schedulerCount != 0 || binderCount != 0) {
+    } else if (schedulerCount != 0 || binderCount != 0 ||
+               sequencerCount != 0) {
         return ::media::Status::failure(::media::ErrorInfo::notInitialized(
             "Synchronized runtime nodes require an A/V sync binding"));
     }
@@ -222,28 +234,29 @@ public:
     }
     std::vector<std::unique_ptr<MediaRuntimeNode>> preparedNodes;
     preparedNodes.reserve(context.graph()->nodes().size());
-    const MediaNode* binder = nullptr;
+    const MediaNode* sequencer = nullptr;
     for (const MediaNode& node : context.graph()->nodes()) {
-        if (node.kind == MediaNodeKind::PlaybackEpochBinder) {
-            binder = &node;
+        if (node.kind == MediaNodeKind::ActivatedStartupReleaseSequencer) {
+            sequencer = &node;
             break;
         }
     }
-    if (binder) {
+    if (sequencer) {
         if (!playbackEpochActivationCapability) {
             return ::media::Status::failure(::media::ErrorInfo::notInitialized(
-                "Playback epoch binder is missing compiler-issued activation authority"));
+                "Activation release sequencer is missing compiler-issued activation authority"));
         }
-        if (scheduler.findNode(binder->id)) {
+        if (scheduler.findNode(sequencer->id)) {
             return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-                "Playback epoch binder runtime node is already registered"));
+                "Activation release sequencer runtime node is already registered"));
         }
     } else if (playbackEpochActivationCapability) {
         return ::media::Status::failure(::media::ErrorInfo::notInitialized(
-            "Compiler-issued activation authority has no playback epoch binder"));
+            "Compiler-issued activation authority has no activation release sequencer"));
     }
     for (const MediaNode& node : context.graph()->nodes()) {
-        if (node.kind == MediaNodeKind::PlaybackEpochBinder) continue;
+        if (node.kind == MediaNodeKind::ActivatedStartupReleaseSequencer)
+            continue;
         if (scheduler.findNode(node.id)) continue;
         if (!MediaRuntimeNodeFactory::supported(node.kind)) {
             return ::media::Status::failure(::media::ErrorInfo::unsupported(
@@ -261,9 +274,10 @@ public:
                                     " kind=" + mediaGraphDiagnosticNodeKindName(node.kind));
         preparedNodes.push_back(std::move(runtimeNode).value());
     }
-    if (binder && !scheduler.findNode(binder->id)) {
-        auto runtimeNode = MediaRuntimeNodeFactory::createPlaybackEpochBinder(
-            *binder, std::move(*playbackEpochActivationCapability));
+    if (sequencer && !scheduler.findNode(sequencer->id)) {
+        auto runtimeNode =
+            MediaRuntimeNodeFactory::createActivatedStartupReleaseSequencer(
+                *sequencer, std::move(*playbackEpochActivationCapability));
         if (!runtimeNode) {
             return ::media::Status::failure(runtimeNode.error());
         }
@@ -271,7 +285,7 @@ public:
     }
     auto registered = scheduler.registerNodes(std::move(preparedNodes));
     if (!registered) return registered;
-    if (binder) playbackEpochActivationCapability.reset();
+    if (sequencer) playbackEpochActivationCapability.reset();
     return ::media::Status::success();
 }
 

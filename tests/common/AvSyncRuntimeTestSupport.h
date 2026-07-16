@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/nodes/sync/MediaPlaybackEpochBinderNode.h"
+#include "internal/graph/nodes/sync/MediaActivatedStartupReleaseSequencerNode.h"
 #include "internal/graph/runtime/MediaGraphRuntime.h"
 #include "internal/graph/runtime/buffer/MediaAvStartupEnvelopeBuffer.h"
 #include "internal/graph/runtime/compilation/MediaAvSyncRuntimeBootstrap.h"
@@ -18,6 +19,15 @@ inline void addPlaybackEpochReleaseBoundary(
     using namespace ::media::ffmpeg::graph;
     const auto source = graph.addNode(MediaNodeKind::DebugDump,
                                       "test.epoch.release.source");
+    const auto sequencer = graph.addNode(
+        MediaNodeKind::ActivatedStartupReleaseSequencer,
+        "test.epoch.release.sequencer");
+    const MediaNode* binder = graph.findNode(binderId);
+    const std::string group = binder
+        ? binder->options.value("playback_epoch_binder.sync_group")
+        : std::string{};
+    graph.setNodeOption(
+        sequencer, "activated_startup_release_sequencer.sync_group", group);
     const auto activatedSink = graph.addNode(
         MediaNodeKind::DebugDump, "test.epoch.activated.sink");
     const auto releaseSink = graph.addNode(
@@ -26,9 +36,13 @@ inline void addPlaybackEpochReleaseBoundary(
                         MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
     graph.addInputPort(binderId, "release", MediaStreamKind::Metadata,
                        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
-    graph.addOutputPort(binderId, "activated", MediaStreamKind::Metadata,
+    graph.addOutputPort(binderId, "transaction", MediaStreamKind::Metadata,
                         MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
-    graph.addOutputPort(binderId, "bound_release", MediaStreamKind::Metadata,
+    graph.addInputPort(sequencer, "transaction", MediaStreamKind::Metadata,
+                       MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+    graph.addOutputPort(sequencer, "activated", MediaStreamKind::Metadata,
+                        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+    graph.addOutputPort(sequencer, "bound_release", MediaStreamKind::Metadata,
                         MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
     graph.addInputPort(activatedSink, "activated", MediaStreamKind::Metadata,
                        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
@@ -37,9 +51,11 @@ inline void addPlaybackEpochReleaseBoundary(
     const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(2);
     graph.connect(source, "release", binderId, "release",
                   "test epoch release", policy);
-    graph.connect(binderId, "activated", activatedSink, "activated",
+    graph.connect(binderId, "transaction", sequencer, "transaction",
+                  "test release transaction", policy);
+    graph.connect(sequencer, "activated", activatedSink, "activated",
                   "test epoch activated", policy);
-    graph.connect(binderId, "bound_release", releaseSink, "release",
+    graph.connect(sequencer, "bound_release", releaseSink, "release",
                   "test bound release", policy);
 }
 
@@ -54,7 +70,18 @@ inline bool activateInitialThroughRelease(
     auto* binder = dynamic_cast<MediaPlaybackEpochBinderNode*>(
         runtime.scheduler().findNode(binderId));
     auto* input = runtime.context().findInputChannel(binderId, "release");
-    if (!binder || !input) return false;
+    MediaActivatedStartupReleaseSequencerNode* sequencer = nullptr;
+    if (const MediaGraph* graph = runtime.graph()) {
+        for (const MediaNode& node : graph->nodes()) {
+            if (node.kind == MediaNodeKind::ActivatedStartupReleaseSequencer) {
+                sequencer = dynamic_cast<
+                    MediaActivatedStartupReleaseSequencerNode*>(
+                        runtime.scheduler().findNode(node.id));
+                break;
+            }
+        }
+    }
+    if (!binder || !sequencer || !input) return false;
     const auto payload = [] {
         return makeMediaBufferRef<MediaAvStartupClockBuffer>(
             MediaRunningTime::fromNanoseconds(0));
@@ -67,8 +94,13 @@ inline bool activateInitialThroughRelease(
         {{payload(), 0}}, {{payload(), 0}});
     if (!release || !input->push(release.value())) return false;
     const auto processed = binder->process(runtime.context());
-    return processed &&
-           processed.value().state == MediaNodeProcessState::Progress;
+    if (!processed ||
+        processed.value().state != MediaNodeProcessState::Progress) {
+        return false;
+    }
+    const auto sequenced = sequencer->process(runtime.context());
+    return sequenced &&
+           sequenced.value().state == MediaNodeProcessState::Progress;
 }
 
 class FixedAvSyncClockSource final

@@ -137,6 +137,8 @@ std::string activity(const ChannelActivitySnapshot& snapshot)
 {
     if (runtime.m_state != MediaGraphRuntimeState::ThreadedRunning || !runtime.m_threadedExecutor.failed()) return ::media::Status::success();
     runtime.m_threadedExecutor.abort(runtime.m_context, runtime.m_scheduler);
+    (void)MediaGraphLifecycle::clearChannels(runtime.m_context);
+    MediaGraphLifecycle::abortChannels(runtime.m_context);
     runtime.m_context.shutdownAvSyncGroups();
     runtime.m_playbackEpochActivationCapability.reset();
     runtime.m_state = MediaGraphRuntimeState::Aborted;
@@ -152,6 +154,7 @@ std::string activity(const ChannelActivitySnapshot& snapshot)
     auto schedulerStatus = runtime.m_state == MediaGraphRuntimeState::ThreadedRunning
         ? runtime.m_threadedExecutor.stop(runtime.m_context, runtime.m_scheduler)
         : runtime.m_scheduler.stop(runtime.m_context);
+    auto clearStatus = MediaGraphLifecycle::clearChannels(runtime.m_context);
     auto closeStatus = MediaGraphLifecycle::closeChannels(runtime.m_context);
     runtime.m_context.shutdownAvSyncGroups();
     runtime.m_playbackEpochActivationCapability.reset();
@@ -162,6 +165,7 @@ std::string activity(const ChannelActivitySnapshot& snapshot)
         }
         return schedulerStatus;
     }
+    if (!clearStatus) return clearStatus;
     if (!closeStatus) return closeStatus;
     runtime.m_state = MediaGraphRuntimeState::Stopped;
     mediaGraphDiagnosticLog(runtime.diagnosticsEnabled(), MediaGraphDiagnosticPhase::RuntimeLifecycle, "stop.done state=Stopped");
@@ -173,6 +177,7 @@ void MediaGraphRuntimeLifecycleExecutor::abort(MediaGraphRuntime& runtime) noexc
     mediaGraphDiagnosticLog(runtime.diagnosticsEnabled(), MediaGraphDiagnosticPhase::RuntimeLifecycle, "abort.begin");
     if (runtime.m_state == MediaGraphRuntimeState::ThreadedRunning) runtime.m_threadedExecutor.abort(runtime.m_context, runtime.m_scheduler);
     else runtime.m_scheduler.abort(runtime.m_context);
+    (void)MediaGraphLifecycle::clearChannels(runtime.m_context);
     MediaGraphLifecycle::abortChannels(runtime.m_context);
     runtime.m_context.shutdownAvSyncGroups();
     runtime.m_playbackEpochActivationCapability.reset();

@@ -39,7 +39,7 @@ const char* toString(MediaNodeKind kind)
     case MediaNodeKind::PlaybackEpochBinder: return "PlaybackEpochBinder";
     case MediaNodeKind::CanonicalInput: return "CanonicalInput";
     case MediaNodeKind::InitialLockedPacketGate: return "InitialLockedPacketGate";
-    case MediaNodeKind::PlaybackEpochActivatedFanout: return "PlaybackEpochActivatedFanout";
+    case MediaNodeKind::ActivatedStartupReleaseSequencer: return "ActivatedStartupReleaseSequencer";
     case MediaNodeKind::RtpSourceClockStateAdapter: return "RtpSourceClockStateAdapter";
     case MediaNodeKind::AvStartupClock: return "AvStartupClock";
     case MediaNodeKind::AvBoundReleaseExtractor: return "AvBoundReleaseExtractor";

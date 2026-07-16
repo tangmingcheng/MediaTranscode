@@ -17,7 +17,7 @@ public:
         const MediaNode& node,
         MediaPreparedRealtimeInputBinding* binding);
     static ::media::Result<std::unique_ptr<MediaRuntimeNode>>
-    createPlaybackEpochBinder(
+    createActivatedStartupReleaseSequencer(
         const MediaNode& node,
         MediaPlaybackEpochActivationCapability capability);
     static bool supported(MediaNodeKind kind) noexcept;

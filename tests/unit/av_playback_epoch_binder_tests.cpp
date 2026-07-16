@@ -1,4 +1,5 @@
 #include "common/TestAssert.h"
+#include "common/AvSyncRuntimeTestSupport.h"
 
 #include "internal/graph/core/MediaGraphDump.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
@@ -122,7 +123,7 @@ MediaAvGenerationTransitionPlan transitionPlan()
 struct BinderExecutable final {
     MediaRealtimeExecutableGraph executable;
     MediaNodeId binder;
-    MediaNodeId source;
+    MediaNodeId sequencer;
 };
 
 BinderExecutable makeExecutable(std::string binderGroup = "binder-group")
@@ -132,44 +133,19 @@ BinderExecutable makeExecutable(std::string binderGroup = "binder-group")
         MediaNodeKind::AvOutputScheduler, "scheduler");
     fixture.binder = fixture.executable.graph.addNode(
         MediaNodeKind::PlaybackEpochBinder, "binder");
-    fixture.source = fixture.executable.graph.addNode(
-        MediaNodeKind::DebugDump, "release-source");
-    const auto activatedSink = fixture.executable.graph.addNode(
-        MediaNodeKind::DebugDump, "activated-sink");
-    const auto releaseSink = fixture.executable.graph.addNode(
-        MediaNodeKind::DebugDump, "bound-release-sink");
     fixture.executable.graph.setNodeOption(
         scheduler, "av_scheduler.sync_group", "binder-group");
     fixture.executable.graph.setNodeOption(
         fixture.binder, "playback_epoch_binder.sync_group",
         std::move(binderGroup));
-    fixture.executable.graph.addOutputPort(
-        fixture.source, "release", MediaStreamKind::Metadata,
-        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
-    fixture.executable.graph.addInputPort(
-        fixture.binder, "release", MediaStreamKind::Metadata,
-        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
-    fixture.executable.graph.addOutputPort(
-        fixture.binder, "activated", MediaStreamKind::Metadata,
-        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
-    fixture.executable.graph.addOutputPort(
-        fixture.binder, "bound_release", MediaStreamKind::Metadata,
-        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
-    fixture.executable.graph.addInputPort(
-        activatedSink, "in", MediaStreamKind::Metadata,
-        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
-    fixture.executable.graph.addInputPort(
-        releaseSink, "in", MediaStreamKind::Metadata,
-        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
-    fixture.executable.graph.connect(
-        fixture.source, "release", fixture.binder, "release", "epoch release",
-        MediaGraphBuildSupport::blockingQueuePolicy(4));
-    fixture.executable.graph.connect(
-        fixture.binder, "activated", activatedSink, "in", "epoch activated",
-        MediaGraphBuildSupport::blockingQueuePolicy(4));
-    fixture.executable.graph.connect(
-        fixture.binder, "bound_release", releaseSink, "in", "bound release",
-        MediaGraphBuildSupport::blockingQueuePolicy(4));
+    media_transcode::test::addPlaybackEpochReleaseBoundary(
+        fixture.executable.graph, fixture.binder);
+    for (const MediaNode& node : fixture.executable.graph.nodes()) {
+        if (node.kind == MediaNodeKind::ActivatedStartupReleaseSequencer) {
+            fixture.sequencer = node.id;
+            break;
+        }
+    }
     fixture.executable.avSyncBinding.emplace(MediaAvSyncRuntimeBinding{
         MediaAvSyncGroupKey("binder-group"), completePlan(),
         transitionPlan()});
@@ -179,7 +155,8 @@ BinderExecutable makeExecutable(std::string binderGroup = "binder-group")
 MediaPlaybackEpoch epoch(std::uint64_t generation);
 MediaAudioPlaybackOrigin origin(std::uint64_t generation);
 
-void testBinderActivatesInitialOnlyAndRejectsGroupMismatch(TestContext& ctx)
+void testReleasePipelineActivatesInitialOnlyAndRejectsBinderGroupMismatch(
+    TestContext& ctx)
 {
     auto fixture = makeExecutable();
     MediaGraphRuntime runtime;
@@ -197,8 +174,9 @@ void testBinderActivatesInitialOnlyAndRejectsGroupMismatch(TestContext& ctx)
         MediaAvStartupReleaseKind::InitialAtomicRelease,
         epoch(1), origin(1), {{payload(), 0}}, {{payload(), 0}});
     EXPECT_TRUE(ctx, initial);
-    EXPECT_TRUE(ctx, input->push(initial.value()));
-    EXPECT_TRUE(ctx, binder->process(runtime.context()));
+    EXPECT_TRUE(ctx, media_transcode::test::activateInitialThroughRelease(
+        runtime, fixture.binder, MediaAvSyncGroupKey("binder-group"),
+        epoch(1)));
     const auto activated = group->epochTransitionSnapshot();
     EXPECT_EQ(ctx, activated.readiness, MediaAvGenerationReadiness::Locked);
 
@@ -209,6 +187,11 @@ void testBinderActivatesInitialOnlyAndRejectsGroupMismatch(TestContext& ctx)
     EXPECT_TRUE(ctx, active);
     EXPECT_TRUE(ctx, input->push(active.value()));
     EXPECT_TRUE(ctx, binder->process(runtime.context()));
+    auto* sequencer = dynamic_cast<MediaActivatedStartupReleaseSequencerNode*>(
+        runtime.scheduler().findNode(fixture.sequencer));
+    EXPECT_TRUE(ctx, sequencer != nullptr);
+    if (!sequencer) return;
+    EXPECT_TRUE(ctx, sequencer->process(runtime.context()));
     const auto afterPassThrough = group->epochTransitionSnapshot();
     EXPECT_EQ(ctx, afterPassThrough.playbackEpoch, activated.playbackEpoch);
     EXPECT_EQ(ctx, afterPassThrough.readiness, MediaAvGenerationReadiness::Locked);
@@ -248,7 +231,7 @@ void testBinderKindIsAppendOnlyAndObservable(TestContext& ctx)
               std::string("PlaybackEpochBinder"));
 }
 
-void testCompilerIssuesOneCapabilityToOneBinder(TestContext& ctx)
+void testCompilerIssuesOneCapabilityToOneSequencer(TestContext& ctx)
 {
     auto fixture = makeExecutable();
     MediaGraphRuntime runtime;
@@ -257,11 +240,13 @@ void testCompilerIssuesOneCapabilityToOneBinder(TestContext& ctx)
 
     auto* binder = dynamic_cast<MediaPlaybackEpochBinderNode*>(
         runtime.scheduler().findNode(fixture.binder));
-    EXPECT_TRUE(ctx, binder != nullptr);
+    auto* sequencer = dynamic_cast<MediaActivatedStartupReleaseSequencerNode*>(
+        runtime.scheduler().findNode(fixture.sequencer));
+    EXPECT_TRUE(ctx, binder != nullptr && sequencer != nullptr);
     auto group = runtime.context().findAvSyncGroup(
         MediaAvSyncGroupKey("binder-group"));
     EXPECT_TRUE(ctx, group != nullptr);
-    if (!binder || !group) return;
+    if (!binder || !sequencer || !group) return;
 
     EXPECT_EQ(ctx, binder->groupKey(), MediaAvSyncGroupKey("binder-group"));
     auto* input = runtime.context().findInputChannel(fixture.binder, "release");
@@ -275,8 +260,9 @@ void testCompilerIssuesOneCapabilityToOneBinder(TestContext& ctx)
         MediaAvStartupReleaseKind::InitialAtomicRelease,
         epoch(1), origin(1), {{payload(), 0}}, {{payload(), 0}});
     EXPECT_TRUE(ctx, release);
-    EXPECT_TRUE(ctx, input->push(release.value()));
-    EXPECT_TRUE(ctx, binder->process(runtime.context()));
+    EXPECT_TRUE(ctx, media_transcode::test::activateInitialThroughRelease(
+        runtime, fixture.binder, MediaAvSyncGroupKey("binder-group"),
+        epoch(1)));
     auto initial = group->epochTransitionSnapshot();
     EXPECT_EQ(ctx, initial.readiness, MediaAvGenerationReadiness::Locked);
     EXPECT_TRUE(ctx, initial.playbackEpoch &&
@@ -286,7 +272,8 @@ void testCompilerIssuesOneCapabilityToOneBinder(TestContext& ctx)
     EXPECT_TRUE(ctx, initial.outputPermitted);
 
     EXPECT_TRUE(ctx, input->push(release.value()));
-    EXPECT_FALSE(ctx, binder->process(runtime.context()));
+    EXPECT_TRUE(ctx, binder->process(runtime.context()));
+    EXPECT_FALSE(ctx, sequencer->process(runtime.context()));
 }
 
 void testCompilerRejectsMissingDuplicateAndMismatchedBinder(TestContext& ctx)
@@ -356,7 +343,7 @@ void testDefaultRegistrationFailureDoesNotPartiallyPublishBinder(
     MediaGraphRuntime runtime;
     EXPECT_TRUE(ctx, runtime.compile(std::move(fixture.executable)));
     EXPECT_TRUE(ctx, runtime.registerRuntimeNode(
-                         std::make_unique<OccupiedRuntimeNode>(fixture.binder)));
+                         std::make_unique<OccupiedRuntimeNode>(fixture.sequencer)));
     EXPECT_FALSE(ctx, runtime.registerDefaultRuntimeNodes());
     EXPECT_TRUE(ctx, runtime.scheduler().findNode(MediaNodeId{1}) == nullptr);
 }
@@ -399,12 +386,12 @@ int main()
 {
     TestContext ctx;
     testBinderKindIsAppendOnlyAndObservable(ctx);
-    testCompilerIssuesOneCapabilityToOneBinder(ctx);
+    testCompilerIssuesOneCapabilityToOneSequencer(ctx);
     testCompilerRejectsMissingDuplicateAndMismatchedBinder(ctx);
     testCompileRollbackPreservesActiveRuntimeForBinderCardinalityErrors(ctx);
     testDefaultRegistrationFailureDoesNotPartiallyPublishBinder(ctx);
     testRejectedSchedulerBatchPreservesPublishedState(ctx);
     testLifecyclePoisonsIssuedAuthority(ctx);
-    testBinderActivatesInitialOnlyAndRejectsGroupMismatch(ctx);
+    testReleasePipelineActivatesInitialOnlyAndRejectsBinderGroupMismatch(ctx);
     return ctx.failures == 0 ? 0 : 1;
 }
