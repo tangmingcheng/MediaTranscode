@@ -122,33 +122,20 @@ private:
 
 struct BinderFixture final {
     MediaRealtimeExecutableGraph executable;
+    MediaNodeId scheduler;
     MediaNodeId binder;
     MediaNodeId source;
     MediaNodeId sequencer;
     MediaNodeId firstActivatedSink;
     MediaNodeId secondActivatedSink;
     MediaNodeId releaseSink;
+    std::string firstActivatedPort = "in";
 };
 
-class WaitingNode final : public MediaRuntimeNode {
-public:
-    explicit WaitingNode(MediaNodeId id) : m_id(id) {}
-    MediaNodeId nodeId() const noexcept override { return m_id; }
-    ::media::Result<MediaNodeProcessResult> process(
-        MediaGraphExecutionContext&) override
-    {
-        return ::media::Result<MediaNodeProcessResult>::success(
-            MediaNodeProcessResult::waiting());
-    }
-
-private:
-    MediaNodeId m_id;
-};
-
-BinderFixture binderFixture()
+BinderFixture binderFixture(bool threadedLifecycleTarget = false)
 {
     BinderFixture fixture;
-    const auto scheduler = fixture.executable.graph.addNode(
+    fixture.scheduler = fixture.executable.graph.addNode(
         MediaNodeKind::AvOutputScheduler, "scheduler");
     fixture.binder = fixture.executable.graph.addNode(
         MediaNodeKind::PlaybackEpochBinder, "binder");
@@ -156,14 +143,17 @@ BinderFixture binderFixture()
         MediaNodeKind::DebugDump, "source");
     fixture.sequencer = fixture.executable.graph.addNode(
         MediaNodeKind::ActivatedStartupReleaseSequencer, "sequencer");
-    fixture.firstActivatedSink = fixture.executable.graph.addNode(
-        MediaNodeKind::DebugDump, "first-activated-sink");
+    fixture.firstActivatedSink = threadedLifecycleTarget
+        ? fixture.scheduler
+        : fixture.executable.graph.addNode(
+              MediaNodeKind::DebugDump, "first-activated-sink");
+    if (threadedLifecycleTarget) fixture.firstActivatedPort = "video";
     fixture.secondActivatedSink = fixture.executable.graph.addNode(
         MediaNodeKind::DebugDump, "second-activated-sink");
     fixture.releaseSink = fixture.executable.graph.addNode(
         MediaNodeKind::DebugDump, "release-sink");
     fixture.executable.graph.setNodeOption(
-        scheduler, "av_scheduler.sync_group", "task4-group");
+        fixture.scheduler, "av_scheduler.sync_group", "task4-group");
     fixture.executable.graph.setNodeOption(
         fixture.binder, "playback_epoch_binder.sync_group", "task4-group");
     fixture.executable.graph.setNodeOption(
@@ -181,17 +171,27 @@ BinderFixture binderFixture()
     fixture.executable.graph.addInputPort(
         fixture.sequencer, "transaction", MediaStreamKind::Metadata,
         MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+    const auto activatedStream = threadedLifecycleTarget
+        ? MediaStreamKind::Video
+        : MediaStreamKind::Metadata;
     fixture.executable.graph.addOutputPort(
-        fixture.sequencer, "activated", MediaStreamKind::Metadata,
+        fixture.sequencer, "activated", activatedStream,
         MediaEdgeKind::Event, MediaPayloadKind::GraphEvent, true, true);
     fixture.executable.graph.addOutputPort(
         fixture.sequencer, "bound_release", MediaStreamKind::Metadata,
         MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+    if (!threadedLifecycleTarget) {
+        fixture.executable.graph.addInputPort(
+            fixture.firstActivatedSink, fixture.firstActivatedPort,
+            activatedStream, MediaEdgeKind::Event,
+            MediaPayloadKind::GraphEvent);
+    } else {
+        fixture.executable.graph.addInputPort(
+            fixture.scheduler, "video", MediaStreamKind::Video,
+            MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+    }
     fixture.executable.graph.addInputPort(
-        fixture.firstActivatedSink, "in", MediaStreamKind::Metadata,
-        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
-    fixture.executable.graph.addInputPort(
-        fixture.secondActivatedSink, "in", MediaStreamKind::Metadata,
+        fixture.secondActivatedSink, "in", activatedStream,
         MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
     fixture.executable.graph.addInputPort(
         fixture.releaseSink, "in", MediaStreamKind::Metadata,
@@ -203,13 +203,38 @@ BinderFixture binderFixture()
         fixture.binder, "transaction", fixture.sequencer, "transaction",
         "transaction", one);
     fixture.executable.graph.connect(
-        fixture.sequencer, "activated", fixture.firstActivatedSink, "in",
+        fixture.sequencer, "activated", fixture.firstActivatedSink,
+        fixture.firstActivatedPort,
         "first-activated", one);
     fixture.executable.graph.connect(
         fixture.sequencer, "activated", fixture.secondActivatedSink, "in",
         "second-activated", one);
     fixture.executable.graph.connect(
         fixture.sequencer, "bound_release", fixture.releaseSink, "in", "bound", one);
+    if (threadedLifecycleTarget) {
+        const auto audioSource = fixture.executable.graph.addNode(
+            MediaNodeKind::DebugDump, "scheduler-audio-source");
+        const auto schedulerSink = fixture.executable.graph.addNode(
+            MediaNodeKind::DebugDump, "scheduler-output-sink");
+        fixture.executable.graph.addInputPort(
+            fixture.scheduler, "audio", MediaStreamKind::Audio,
+            MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+        fixture.executable.graph.addOutputPort(
+            audioSource, "audio", MediaStreamKind::Audio,
+            MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+        fixture.executable.graph.addOutputPort(
+            fixture.scheduler, "out", MediaStreamKind::Video,
+            MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+        fixture.executable.graph.addInputPort(
+            schedulerSink, "in", MediaStreamKind::Video,
+            MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+        fixture.executable.graph.connect(
+            audioSource, "audio", fixture.scheduler, "audio",
+            "scheduler-audio", one);
+        fixture.executable.graph.connect(
+            fixture.scheduler, "out", schedulerSink, "in",
+            "scheduler-output", one);
+    }
     fixture.executable.avSyncBinding.emplace(MediaAvSyncRuntimeBinding{
         MediaAvSyncGroupKey("task4-group"), completePlan(), transitionPlan()});
     return fixture;
@@ -294,10 +319,11 @@ struct RuntimeFixture final {
     MediaChannel* boundRelease = nullptr;
 };
 
-std::unique_ptr<RuntimeFixture> startFixture(TestContext& ctx)
+std::unique_ptr<RuntimeFixture> startFixture(
+    TestContext& ctx, bool threadedLifecycleTarget = false)
 {
     auto fixture = std::make_unique<RuntimeFixture>();
-    fixture->model = binderFixture();
+    fixture->model = binderFixture(threadedLifecycleTarget);
     EXPECT_TRUE(ctx, fixture->runtime.compile(std::move(fixture->model.executable)));
     EXPECT_TRUE(ctx, fixture->runtime.registerDefaultRuntimeNodes());
     fixture->binder = dynamic_cast<MediaPlaybackEpochBinderNode*>(
@@ -312,7 +338,8 @@ std::unique_ptr<RuntimeFixture> startFixture(TestContext& ctx)
     fixture->transaction = fixture->runtime.context().findInputChannel(
         fixture->model.sequencer, "transaction");
     fixture->firstEvent = fixture->runtime.context().findInputChannel(
-        fixture->model.firstActivatedSink, "in");
+        fixture->model.firstActivatedSink,
+        fixture->model.firstActivatedPort);
     fixture->secondEvent = fixture->runtime.context().findInputChannel(
         fixture->model.secondActivatedSink, "in");
     fixture->boundRelease = fixture->runtime.context().findInputChannel(
@@ -322,6 +349,57 @@ std::unique_ptr<RuntimeFixture> startFixture(TestContext& ctx)
                          fixture->firstEvent && fixture->secondEvent &&
                          fixture->boundRelease);
     return fixture;
+}
+
+void testOpenEmptyRequiredInputsRemainWaiting(TestContext& ctx)
+{
+    auto fixture = startFixture(ctx);
+    if (!fixture->binder || !fixture->sequencer) return;
+    const auto binder = fixture->binder->process(fixture->runtime.context());
+    const auto sequencer = fixture->sequencer->process(
+        fixture->runtime.context());
+    EXPECT_TRUE(ctx, binder &&
+                         binder.value().state == MediaNodeProcessState::Waiting);
+    EXPECT_TRUE(ctx, sequencer &&
+                         sequencer.value().state == MediaNodeProcessState::Waiting);
+}
+
+void testRequiredInputTerminalStateFailsPermanently(TestContext& ctx)
+{
+    const auto verify = [&](bool binderInput, bool abort) {
+        auto fixture = startFixture(ctx);
+        auto* channel = binderInput ? fixture->releaseInput
+                                    : fixture->transaction;
+        if (!fixture->binder || !fixture->sequencer || !channel) return;
+        if (abort) channel->abort();
+        else channel->close();
+        auto first = binderInput
+            ? fixture->binder->process(fixture->runtime.context())
+            : fixture->sequencer->process(fixture->runtime.context());
+        EXPECT_FALSE(ctx, first);
+        if (first) return;
+        const std::string expected = std::string(
+            binderInput ? "Playback epoch binder" :
+                          "Activation release sequencer") +
+            (abort
+                 ? " required input aborted before a buffer was available: "
+                 : " required input closed before a buffer was available: ") +
+            (binderInput ? "release" : "transaction");
+        EXPECT_EQ(ctx, first.error().code, ::media::ErrorCode::Cancelled);
+        EXPECT_EQ(ctx, first.error().message, expected);
+        auto repeated = binderInput
+            ? fixture->binder->process(fixture->runtime.context())
+            : fixture->sequencer->process(fixture->runtime.context());
+        EXPECT_FALSE(ctx, repeated);
+        if (!repeated) {
+            EXPECT_EQ(ctx, repeated.error().code, first.error().code);
+            EXPECT_EQ(ctx, repeated.error().message, first.error().message);
+        }
+    };
+    verify(true, false);
+    verify(true, true);
+    verify(false, false);
+    verify(false, true);
 }
 
 void testBinderWaitsForTransactionCapacityBeforeActivation(TestContext& ctx)
@@ -494,74 +572,48 @@ void testGenerationMismatchAndAbortedTargetFailClosed(TestContext& ctx)
     }
 }
 
-void testGraphStopAndAbortClearQueuedTransactions(TestContext& ctx)
+void testThreadedStopAndAbortDiscardRetainedReleaseTransaction(
+    TestContext& ctx)
 {
     const auto run = [&](bool abort) {
-        MediaGraph graph;
-        const auto source = graph.addNode(MediaNodeKind::DebugDump, "source");
-        const auto sink = graph.addNode(MediaNodeKind::DebugDump, "sink");
-        graph.addOutputPort(source, "out", MediaStreamKind::Metadata,
-                            MediaEdgeKind::Event,
-                            MediaPayloadKind::GraphEvent);
-        graph.addInputPort(sink, "in", MediaStreamKind::Metadata,
-                           MediaEdgeKind::Event,
-                           MediaPayloadKind::GraphEvent);
-        graph.connect(source, "out", sink, "in", "queued",
-                      MediaGraphBuildSupport::blockingQueuePolicy(2));
-        MediaGraphRuntime runtime;
-        EXPECT_TRUE(ctx, runtime.compile(std::move(graph)));
-        EXPECT_TRUE(ctx, runtime.registerRuntimeNode(
-            std::make_unique<WaitingNode>(source)));
-        EXPECT_TRUE(ctx, runtime.registerRuntimeNode(
-            std::make_unique<WaitingNode>(sink)));
-        MediaChannel* channel = runtime.context().findInputChannel(sink, "in");
-        EXPECT_TRUE(ctx, channel != nullptr);
-        if (!channel) return;
-        EXPECT_TRUE(ctx, channel->push(
-            makeMediaBufferRef<MediaAvStartupClockBuffer>(ms(0))));
-        EXPECT_TRUE(ctx, runtime.startThreaded());
-        if (abort) {
-            runtime.abort();
-        } else {
-            EXPECT_TRUE(ctx, runtime.stop());
-        }
-        EXPECT_EQ(ctx, channel->size(), static_cast<std::size_t>(0));
+        auto fixture = startFixture(ctx, true);
+        if (!fixture->binder || !fixture->sequencer ||
+            !fixture->releaseInput || !fixture->firstEvent) return;
+        auto filler = makeMediaBufferRef<MediaAvStartupClockBuffer>(ms(0));
+        EXPECT_TRUE(ctx, fixture->firstEvent->push(filler));
+        filler.reset();
+        auto retained = release(ctx);
+        MediaBufferWeakRef retainedWeak = retained;
+        EXPECT_TRUE(ctx, fixture->releaseInput->push(retained));
+        retained.reset();
+        EXPECT_TRUE(ctx, fixture->binder->process(fixture->runtime.context()));
+        auto waiting = fixture->sequencer->process(
+            fixture->runtime.context());
+        EXPECT_TRUE(ctx, waiting &&
+                             waiting.value().state ==
+                                 MediaNodeProcessState::Waiting);
+        EXPECT_FALSE(ctx, retainedWeak.expired());
+        EXPECT_EQ(ctx, fixture->group->lifecycleState(),
+                  MediaAvSyncGroupRuntime::LifecycleState::AwaitingEpoch);
+        EXPECT_TRUE(ctx, fixture->runtime.startThreaded());
+        if (abort) fixture->runtime.abort();
+        else EXPECT_TRUE(ctx, fixture->runtime.stop());
+        EXPECT_EQ(ctx, fixture->runtime.state(),
+                  abort ? MediaGraphRuntimeState::Aborted
+                        : MediaGraphRuntimeState::Stopped);
+        EXPECT_EQ(ctx,
+                  fixture->runtime.threadedExecutor().metrics().activeWorkers,
+                  static_cast<std::size_t>(0));
+        EXPECT_TRUE(ctx, retainedWeak.expired());
+        EXPECT_EQ(ctx, fixture->releaseInput->size(), static_cast<std::size_t>(0));
+        EXPECT_EQ(ctx, fixture->transaction->size(), static_cast<std::size_t>(0));
+        EXPECT_EQ(ctx, fixture->firstEvent->size(), static_cast<std::size_t>(0));
+        EXPECT_EQ(ctx, fixture->secondEvent->size(), static_cast<std::size_t>(0));
+        EXPECT_EQ(ctx, fixture->boundRelease->size(), static_cast<std::size_t>(0));
+        EXPECT_FALSE(ctx, fixture->runtime.startThreaded());
     };
     run(false);
     run(true);
-}
-
-void testAbortDiscardsPendingReleaseTransactionAndFreshRuntimeStartsClean(
-    TestContext& ctx)
-{
-    auto pending = startFixture(ctx);
-    if (!pending->binder || !pending->sequencer || !pending->releaseInput)
-        return;
-    EXPECT_TRUE(ctx, pending->firstEvent->push(
-        makeMediaBufferRef<MediaAvStartupClockBuffer>(ms(0))));
-    EXPECT_TRUE(ctx, pending->releaseInput->push(release(ctx)));
-    EXPECT_TRUE(ctx, pending->binder->process(pending->runtime.context()));
-    auto waiting = pending->sequencer->process(pending->runtime.context());
-    EXPECT_TRUE(ctx, waiting &&
-                         waiting.value().state == MediaNodeProcessState::Waiting);
-    EXPECT_EQ(ctx, pending->group->lifecycleState(),
-              MediaAvSyncGroupRuntime::LifecycleState::AwaitingEpoch);
-    pending->runtime.abort();
-    EXPECT_EQ(ctx, pending->releaseInput->size(), static_cast<std::size_t>(0));
-    EXPECT_EQ(ctx, pending->transaction->size(), static_cast<std::size_t>(0));
-    EXPECT_EQ(ctx, pending->firstEvent->size(), static_cast<std::size_t>(0));
-    EXPECT_EQ(ctx, pending->secondEvent->size(), static_cast<std::size_t>(0));
-    EXPECT_EQ(ctx, pending->boundRelease->size(), static_cast<std::size_t>(0));
-
-    auto fresh = startFixture(ctx);
-    if (!fresh->binder || !fresh->sequencer || !fresh->releaseInput) return;
-    EXPECT_EQ(ctx, fresh->group->lifecycleState(),
-              MediaAvSyncGroupRuntime::LifecycleState::AwaitingEpoch);
-    EXPECT_TRUE(ctx, fresh->releaseInput->push(release(ctx)));
-    EXPECT_TRUE(ctx, fresh->binder->process(fresh->runtime.context()));
-    EXPECT_TRUE(ctx, fresh->sequencer->process(fresh->runtime.context()));
-    EXPECT_EQ(ctx, fresh->group->lifecycleState(),
-              MediaAvSyncGroupRuntime::LifecycleState::Active);
 }
 
 void testTaskFourFactorySurfaceIsComplete(TestContext& ctx)
@@ -685,14 +737,15 @@ int main()
     testTaskFourRuntimeKindsAreAppendOnly(ctx);
     testActivatedEventIsCompleteAndImmutable(ctx);
     testActivationReleaseTransactionPreservesReferences(ctx);
+    testOpenEmptyRequiredInputsRemainWaiting(ctx);
+    testRequiredInputTerminalStateFailsPermanently(ctx);
     testBinderWaitsForTransactionCapacityBeforeActivation(ctx);
     testSequencerCommitsOneEventToAllTargetsBeforeRelease(ctx);
     testEveryBlockedSequencerTargetPreventsPrefixVisibility(ctx);
     testActivePassThroughDoesNotReactivate(ctx);
     testClosedSequencerTargetFailsBeforeActivation(ctx);
     testGenerationMismatchAndAbortedTargetFailClosed(ctx);
-    testGraphStopAndAbortClearQueuedTransactions(ctx);
-    testAbortDiscardsPendingReleaseTransactionAndFreshRuntimeStartsClean(ctx);
+    testThreadedStopAndAbortDiscardRetainedReleaseTransaction(ctx);
     testTaskFourFactorySurfaceIsComplete(ctx);
     testRtpAdapterPublishesGenericLockedState(ctx);
     testStartupClockUsesRegisteredMasterDeadline(ctx);

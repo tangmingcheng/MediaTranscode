@@ -4,6 +4,7 @@
 #include "internal/graph/runtime/buffer/MediaPlaybackEpochActivatedBuffer.h"
 #include "internal/graph/runtime/buffer/MediaStartupReleaseTransactionBuffer.h"
 #include "internal/graph/runtime/channel/MediaChannel.h"
+#include "internal/graph/runtime/channel/MediaRequiredInputReader.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 
 #include <utility>
@@ -110,20 +111,20 @@ MediaActivatedStartupReleaseSequencerNode::process(
 {
     if (m_terminalFailure) {
         return ::media::Result<MediaNodeProcessResult>::failure(
-            ::media::ErrorInfo::cancelled(
-                "Activation release sequencer is terminally failed"));
+            *m_terminalFailure);
     }
     if (!m_pendingTransaction) {
-        MediaChannel* input = context.findInputChannel(nodeId(), "transaction");
+        auto input = tryReadRequiredInput(
+            context.findInputChannel(nodeId(), "transaction"),
+            "Activation release sequencer", "transaction");
         if (!input) {
-            return failTerminal(
-                ::media::ErrorInfo::notInitialized(
-                    "Activation release sequencer requires a transaction input"));
+            return failTerminal(input.error());
         }
-        if (!input->tryPop(m_pendingTransaction)) {
+        if (!input.value()) {
             return ::media::Result<MediaNodeProcessResult>::success(
                 MediaNodeProcessResult::waiting());
         }
+        m_pendingTransaction = std::move(*input.value());
     }
     const auto* transaction =
         dynamic_cast<const MediaStartupReleaseTransactionBuffer*>(
@@ -211,8 +212,9 @@ MediaActivatedStartupReleaseSequencerNode::process(
 MediaActivatedStartupReleaseSequencerNode::failTerminal(
     ::media::ErrorInfo error)
 {
-    m_terminalFailure = true;
-    return ::media::Result<MediaNodeProcessResult>::failure(std::move(error));
+    if (!m_terminalFailure) m_terminalFailure = std::move(error);
+    return ::media::Result<MediaNodeProcessResult>::failure(
+        *m_terminalFailure);
 }
 
 ::media::Status MediaActivatedStartupReleaseSequencerNode::stop(
@@ -220,7 +222,10 @@ MediaActivatedStartupReleaseSequencerNode::failTerminal(
 {
     m_pendingTransaction.reset();
     m_activatedEvent.reset();
-    m_terminalFailure = true;
+    if (!m_terminalFailure) {
+        m_terminalFailure = ::media::ErrorInfo::cancelled(
+            "Activation release sequencer was stopped");
+    }
     return MediaRuntimeNode::stop(context);
 }
 
@@ -229,7 +234,10 @@ void MediaActivatedStartupReleaseSequencerNode::abort(
 {
     m_pendingTransaction.reset();
     m_activatedEvent.reset();
-    m_terminalFailure = true;
+    if (!m_terminalFailure) {
+        m_terminalFailure = ::media::ErrorInfo::cancelled(
+            "Activation release sequencer was aborted");
+    }
     MediaRuntimeNode::abort(context);
 }
 

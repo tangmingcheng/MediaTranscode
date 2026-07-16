@@ -5,6 +5,8 @@
 #include "internal/graph/model/MediaNodeKind.h"
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
 
+#include <optional>
+
 namespace media::ffmpeg::graph {
 
 class MediaPlaybackEpochBinderNode final : public MediaRuntimeNode {
@@ -23,9 +25,13 @@ public:
     const MediaAvSyncGroupKey& groupKey() const noexcept;
 
 private:
+    ::media::Result<MediaNodeProcessResult> failTerminal(
+        ::media::ErrorInfo error);
+
     MediaNodeId m_nodeId;
     MediaAvSyncGroupKey m_groupKey;
     MediaBufferRef m_pendingRelease;
+    std::optional<::media::ErrorInfo> m_terminalFailure;
 };
 
 } // namespace media::ffmpeg::graph

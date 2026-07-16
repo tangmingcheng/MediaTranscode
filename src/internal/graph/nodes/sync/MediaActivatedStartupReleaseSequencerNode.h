@@ -6,6 +6,8 @@
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
 #include "internal/graph/sync/MediaPlaybackEpochActivationCapability.h"
 
+#include <optional>
+
 namespace media::ffmpeg::graph {
 
 class MediaActivatedStartupReleaseSequencerNode final : public MediaRuntimeNode {
@@ -33,7 +35,7 @@ private:
     MediaPlaybackEpochActivationCapability m_capability;
     MediaBufferRef m_pendingTransaction;
     MediaBufferRef m_activatedEvent;
-    bool m_terminalFailure = false;
+    std::optional<::media::ErrorInfo> m_terminalFailure;
 };
 
 } // namespace media::ffmpeg::graph
