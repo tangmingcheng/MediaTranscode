@@ -107,36 +107,46 @@ MediaCanonicalInputNode::canonicalize(
         if (!durationSource) return ::media::Status::failure(durationSource.error());
         return ::media::Status::failure(order.error());
     }
-    if (stream.value() == "video") m_stream.emplace(MediaScheduledStream::Video);
-    else if (stream.value() == "audio") m_stream.emplace(MediaScheduledStream::Audio);
+    MediaScheduledStream configuredStream;
+    if (stream.value() == "video") configuredStream = MediaScheduledStream::Video;
+    else if (stream.value() == "audio") configuredStream = MediaScheduledStream::Audio;
     else return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
         "Canonical input rejects unknown planned stream"));
+    MediaDecodeOrderMode configuredOrder;
     if (order.value() == "reordered")
-        m_decodeOrder.emplace(MediaDecodeOrderMode::ReorderedRequiresDecodeTime);
+        configuredOrder = MediaDecodeOrderMode::ReorderedRequiresDecodeTime;
     else if (order.value() == "presentation")
-        m_decodeOrder.emplace(MediaDecodeOrderMode::PresentationOrderNoReorder);
+        configuredOrder = MediaDecodeOrderMode::PresentationOrderNoReorder;
     else return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
         "Canonical input rejects unknown planned decode order"));
-    m_sourceIdentity = std::move(identity).value();
+    DurationSource configuredDurationSource;
+    std::uint32_t configuredSampleCount = 0;
     if (durationSource.value() == "packet") {
-        m_durationSource = DurationSource::Packet;
+        configuredDurationSource = DurationSource::Packet;
     } else if (durationSource.value() == "audio_samples" &&
-               *m_stream == MediaScheduledStream::Audio) {
-        m_durationSource = DurationSource::AudioSamples;
+               configuredStream == MediaScheduledStream::Audio) {
+        configuredDurationSource = DurationSource::AudioSamples;
         auto sampleCount = requiredPositiveIntNodeOption(
             options, "MediaCanonicalInputNode", "canonical_input.audio_sample_count");
         if (!sampleCount) return ::media::Status::failure(sampleCount.error());
-        m_audioSampleCount = static_cast<std::uint32_t>(sampleCount.value());
+        configuredSampleCount = static_cast<std::uint32_t>(sampleCount.value());
     } else {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "Canonical input rejects unknown planned duration source"));
     }
-    if (*m_stream == MediaScheduledStream::Audio) {
+    int configuredSampleRate = 0;
+    if (configuredStream == MediaScheduledStream::Audio) {
         auto sampleRate = requiredPositiveIntNodeOption(
             options, "MediaCanonicalInputNode", "canonical_input.audio_sample_rate");
         if (!sampleRate) return ::media::Status::failure(sampleRate.error());
-        m_audioSampleRate = sampleRate.value();
+        configuredSampleRate = sampleRate.value();
     }
+    m_stream.emplace(configuredStream);
+    m_decodeOrder.emplace(configuredOrder);
+    m_durationSource.emplace(configuredDurationSource);
+    m_sourceIdentity = std::move(identity).value();
+    m_audioSampleRate = configuredSampleRate;
+    m_audioSampleCount = configuredSampleCount;
     return ::media::Status::success();
 }
 

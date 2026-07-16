@@ -2,6 +2,7 @@
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/protocol/mpegts/MediaTsClockProjection.h"
+#include "internal/graph/protocol/mpegts/MediaTsInitialAcquiringPacketBuffer.h"
 #include "internal/graph/protocol/mpegts/MediaTsSourceClockMapper.h"
 #include "internal/graph/protocol/mpegts/MediaTsDemuxSession.h"
 
@@ -36,6 +37,14 @@ private:
         StreamClock& clock);
     ::media::Result<MediaTsClockProjectionCheckpoint> sourceClockCheckpoint(
         std::uint64_t packetPosition);
+    ::media::Status enqueueLockedPacket(
+        ::media::ffmpeg::PacketPtr packet, MediaStreamKind streamKind,
+        const MediaTsClockProjectionCheckpoint& checkpoint);
+    ::media::Status prepareFirstLockedBatch(
+        ::media::ffmpeg::PacketPtr packet, MediaStreamKind streamKind,
+        const MediaTsClockProjectionCheckpoint& checkpoint);
+    ::media::Result<MediaNodeProcessResult> emitReadyPacket(
+        MediaGraphExecutionContext& context);
     ::media::Status emitEof(MediaGraphExecutionContext& context);
     void reset() noexcept;
 
@@ -47,8 +56,8 @@ private:
     std::uint64_t m_initialSourceGeneration = 0;
     StreamClock m_videoClock;
     StreamClock m_audioClock;
-    MediaBufferRef m_pendingPacket;
-    std::string m_pendingPacketPort;
+    std::optional<MediaTsInitialAcquiringPacketBuffer> m_acquiringPackets;
+    bool m_initialClockLocked = false;
     bool m_eofSent = false;
     std::atomic_bool m_aborted{false};
 };

@@ -51,12 +51,6 @@ MediaInitialLockedPacketGateNode::onProcess(MediaGraphExecutionContext& context)
     if (clock.value()) {
         return processProgress(acceptClock(*clock.value()));
     }
-    if (m_lockedGeneration && !m_acquiringPackets.empty()) {
-        MediaBufferRef packet = std::move(m_acquiringPackets.front());
-        m_acquiringPackets.pop_front();
-        return processProgress(emitValidatedPacket(context, std::move(packet)));
-    }
-
     auto packet = tryPopInputOptional(context, "packet");
     if (!packet) {
         return ::media::Result<MediaNodeProcessResult>::failure(packet.error());
@@ -75,15 +69,15 @@ MediaInitialLockedPacketGateNode::onProcess(MediaGraphExecutionContext& context)
             "Initial locked packet gate rejects discontinuity flush"));
     }
     if (input->isEof()) {
-        if (!m_lockedGeneration || !m_acquiringPackets.empty()) {
+        if (!m_lockedGeneration) {
             return processProgress(invalid(
                 "Initial locked packet gate cannot finish before initial lock"));
         }
         return processFinished(emitOutput(context, "packet", input));
     }
-    if (!m_lockedGeneration) {
-        return processProgress(bufferPacket(std::move(input)));
-    }
+    if (!m_lockedGeneration)
+        return processProgress(invalid(
+            "Initial locked packet gate rejects packet before clock lock"));
     return processProgress(emitValidatedPacket(context, std::move(input)));
 }
 
@@ -95,9 +89,6 @@ MediaInitialLockedPacketGateNode::onProcess(MediaGraphExecutionContext& context)
     auto stream = requiredStreamKindNodeOption(
         options, "MediaInitialLockedPacketGateNode",
         "initial_locked_gate.stream");
-    auto capacity = requiredPositiveIntNodeOption(
-        options, "MediaInitialLockedPacketGateNode",
-        "initial_locked_gate.acquiring_capacity");
     auto timeout = requiredPositiveInt64NodeOption(
         options, "MediaInitialLockedPacketGateNode",
         "initial_locked_gate.acquiring_timeout_ns");
@@ -105,11 +96,9 @@ MediaInitialLockedPacketGateNode::onProcess(MediaGraphExecutionContext& context)
         options, "MediaInitialLockedPacketGateNode",
         "initial_locked_gate.sync_group");
     if (!stream) return ::media::Status::failure(stream.error());
-    if (!capacity) return ::media::Status::failure(capacity.error());
     if (!timeout) return ::media::Status::failure(timeout.error());
     if (!group) return ::media::Status::failure(group.error());
     m_streamKind = stream.value();
-    m_acquiringCapacity = static_cast<std::size_t>(capacity.value());
     auto deadline = MediaInitialClockAcquisitionDeadline::create(
         MediaRunningTime::fromNanoseconds(timeout.value()));
     if (!deadline) return ::media::Status::failure(deadline.error());
@@ -139,12 +128,17 @@ MediaInitialLockedPacketGateNode::onProcess(MediaGraphExecutionContext& context)
     if (hasFlag(state->flags(), MediaBufferFlag::Discontinuity)) {
         return invalid("Initial locked packet gate rejects clock discontinuity");
     }
-    if (state->readiness() == MediaSourceClockReadiness::Acquiring ||
-        (state->readiness() == MediaSourceClockReadiness::Locked &&
-         state->generation() == 0)) {
-        return m_lockedGeneration
-            ? invalid("Initial locked packet gate rejects reacquisition")
-            : ::media::Status::success();
+    if (state->readiness() == MediaSourceClockReadiness::Acquiring) {
+        if (m_lockedGeneration) {
+            return invalid("Initial locked packet gate rejects reacquisition");
+        }
+        auto now = m_syncGroup->clock()->now();
+        if (!now) return ::media::Status::failure(now.error());
+        return m_acquisitionDeadline->establish(now.value());
+    }
+    if (state->readiness() == MediaSourceClockReadiness::Locked &&
+        state->generation() == 0) {
+        return invalid("Initial locked packet gate requires nonzero locked generation");
     }
     if (state->readiness() != MediaSourceClockReadiness::Locked) {
         return invalid("Initial locked packet gate rejects degraded or reacquire evidence");
@@ -154,31 +148,6 @@ MediaInitialLockedPacketGateNode::onProcess(MediaGraphExecutionContext& context)
     }
     m_lockedGeneration = state->generation();
     m_acquisitionDeadline->clear();
-    return ::media::Status::success();
-}
-
-::media::Status MediaInitialLockedPacketGateNode::bufferPacket(
-    MediaBufferRef buffer)
-{
-    const auto* packet = dynamic_cast<const FFmpegPacketBuffer*>(buffer.get());
-    if (!packet || !packet->sourceTiming() ||
-        packet->streamKind() != m_streamKind ||
-        packet->sourceTiming()->readiness != MediaSourceClockReadiness::Locked ||
-        packet->sourceTiming()->generation == 0 ||
-        hasFlag(packet->flags(), MediaBufferFlag::Discontinuity)) {
-        return invalid("Initial locked packet gate requires locked normalized packet timing");
-    }
-    if (!m_acquisitionDeadline->deadline()) {
-        auto now = m_syncGroup->clock()->now();
-        if (!now) return ::media::Status::failure(now.error());
-        if (auto status = m_acquisitionDeadline->establish(now.value()); !status) {
-            return status;
-        }
-    }
-    if (m_acquiringPackets.size() >= m_acquiringCapacity) {
-        return invalid("Initial locked packet gate acquiring capacity exhausted");
-    }
-    m_acquiringPackets.push_back(std::move(buffer));
     return ::media::Status::success();
 }
 
@@ -213,13 +182,11 @@ void MediaInitialLockedPacketGateNode::abort(
 
 void MediaInitialLockedPacketGateNode::resetState() noexcept
 {
-    m_acquiringPackets.clear();
     m_lockedGeneration.reset();
     m_syncGroupKey.reset();
     m_syncGroup.reset();
     m_acquisitionDeadline.reset();
     m_streamKind = MediaStreamKind::Unknown;
-    m_acquiringCapacity = 0;
     m_configured = false;
 }
 

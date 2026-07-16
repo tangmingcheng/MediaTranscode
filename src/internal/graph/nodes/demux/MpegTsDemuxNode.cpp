@@ -32,6 +32,26 @@ std::optional<std::uint64_t> packetTimestamp(std::int64_t value)
     return static_cast<std::uint64_t>(normalized < 0 ? normalized + modulus : normalized);
 }
 
+::media::Result<MediaBufferRef> wrapTimedPacket(
+    ::media::ffmpeg::PacketPtr packet,
+    MediaStreamKind streamKind,
+    MediaPacketSourceTiming timing)
+{
+    auto buffer = FFmpegBufferFactory::wrapPacket(
+        std::move(packet), streamKind, std::move(timing));
+    if (!buffer) return ::media::Result<MediaBufferRef>::failure(buffer.error());
+    const auto* wrapped = dynamic_cast<const FFmpegPacketBuffer*>(buffer.value().get());
+    if (!wrapped || !wrapped->packet()) {
+        return ::media::Result<MediaBufferRef>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MpegTsDemuxNode lost wrapped packet ownership"));
+    }
+    buffer.value()->setTimeDescriptor(MediaTimeDescriptor{
+        MediaRational{wrapped->packet()->time_base.num,
+                      wrapped->packet()->time_base.den}});
+    return buffer;
+}
+
 } // namespace
 
 void MpegTsDemuxNode::StreamClock::discardBefore(std::uint64_t generation)
@@ -84,11 +104,25 @@ MediaNodeKind MpegTsDemuxNode::staticKind() noexcept
     auto denominator = requiredPositiveIntNodeOption(options, "MpegTsDemuxNode", "mpegts.timestamp_time_base_den");
     auto sourceGeneration = requiredGeneration(options, "mpegts.initial_source_generation");
     auto rawGeneration = requiredGeneration(options, "mpegts.initial_raw_generation");
+    auto videoPacketCapacity = requiredPositiveIntNodeOption(
+        options, "MpegTsDemuxNode", "mpegts.initial_acquiring_video_packet_capacity");
+    auto audioPacketCapacity = requiredPositiveIntNodeOption(
+        options, "MpegTsDemuxNode", "mpegts.initial_acquiring_audio_packet_capacity");
+    auto videoByteCapacity = requiredPositiveInt64NodeOption(
+        options, "MpegTsDemuxNode", "mpegts.initial_acquiring_video_byte_capacity");
+    auto audioByteCapacity = requiredPositiveInt64NodeOption(
+        options, "MpegTsDemuxNode", "mpegts.initial_acquiring_audio_byte_capacity");
+    auto maximumVideoPacketBytes = requiredPositiveInt64NodeOption(
+        options, "MpegTsDemuxNode", "mpegts.maximum_acquiring_video_packet_bytes");
+    auto maximumAudioPacketBytes = requiredPositiveInt64NodeOption(
+        options, "MpegTsDemuxNode", "mpegts.maximum_acquiring_audio_packet_bytes");
     if (!program || !pmt || !video || !audio || !pcr || !interval || !jitter || !gap ||
         !packetStride || !evidenceCapacity || !capacity || !regression || !provenanceCapacity ||
         !originPolicyValue ||
         !numerator || !denominator || !sourceGeneration ||
-        !rawGeneration) {
+        !rawGeneration || !videoPacketCapacity || !audioPacketCapacity ||
+        !videoByteCapacity || !audioByteCapacity ||
+        !maximumVideoPacketBytes || !maximumAudioPacketBytes) {
         const ::media::ErrorInfo* error = nullptr;
         if (!program) error = &program.error(); else if (!pmt) error = &pmt.error();
         else if (!video) error = &video.error(); else if (!audio) error = &audio.error();
@@ -99,7 +133,14 @@ MediaNodeKind MpegTsDemuxNode::staticKind() noexcept
         else if (!provenanceCapacity) error = &provenanceCapacity.error();
         else if (!originPolicyValue) error = &originPolicyValue.error();
         else if (!numerator) error = &numerator.error(); else if (!denominator) error = &denominator.error();
-        else if (!sourceGeneration) error = &sourceGeneration.error(); else error = &rawGeneration.error();
+        else if (!sourceGeneration) error = &sourceGeneration.error();
+        else if (!rawGeneration) error = &rawGeneration.error();
+        else if (!videoPacketCapacity) error = &videoPacketCapacity.error();
+        else if (!audioPacketCapacity) error = &audioPacketCapacity.error();
+        else if (!videoByteCapacity) error = &videoByteCapacity.error();
+        else if (!audioByteCapacity) error = &audioByteCapacity.error();
+        else if (!maximumVideoPacketBytes) error = &maximumVideoPacketBytes.error();
+        else error = &maximumAudioPacketBytes.error();
         return ::media::Status::failure(*error);
     }
     if (numerator.value() != 1 || denominator.value() != 90'000) {
@@ -161,6 +202,17 @@ MediaNodeKind MpegTsDemuxNode::staticKind() noexcept
     if (auto status = projection.value().replay(preflight.value()); !status) return status;
     m_policy = policy;
     m_initialSourceGeneration = sourceGeneration.value();
+    auto retention = MediaTsInitialAcquiringPacketBuffer::create(
+        MediaTsInitialPacketRetentionLimit{
+            static_cast<std::size_t>(videoPacketCapacity.value()),
+            static_cast<std::uint64_t>(videoByteCapacity.value()),
+            static_cast<std::uint64_t>(maximumVideoPacketBytes.value())},
+        MediaTsInitialPacketRetentionLimit{
+            static_cast<std::size_t>(audioPacketCapacity.value()),
+            static_cast<std::uint64_t>(audioByteCapacity.value()),
+            static_cast<std::uint64_t>(maximumAudioPacketBytes.value())});
+    if (!retention) return ::media::Status::failure(retention.error());
+    m_acquiringPackets.emplace(std::move(retention).value());
     m_projection = std::move(projection).value();
     m_session = std::move(session).value();
     return ::media::Status::success();
@@ -209,6 +261,66 @@ MpegTsDemuxNode::sourceClockCheckpoint(std::uint64_t packetPosition)
     return m_projection->atOrBefore(packetPosition);
 }
 
+::media::Status MpegTsDemuxNode::enqueueLockedPacket(
+    ::media::ffmpeg::PacketPtr packet,
+    MediaStreamKind streamKind,
+    const MediaTsClockProjectionCheckpoint& checkpoint)
+{
+    auto timing = timingFor(
+        *packet, checkpoint,
+        streamKind == MediaStreamKind::Video ? m_videoClock : m_audioClock);
+    if (!timing) return ::media::Status::failure(timing.error());
+    auto buffer = wrapTimedPacket(std::move(packet), streamKind, timing.value());
+    if (!buffer) return ::media::Status::failure(buffer.error());
+    return m_acquiringPackets->stageSingleReplay(
+        std::move(buffer).value(), streamKind);
+}
+
+::media::Status MpegTsDemuxNode::prepareFirstLockedBatch(
+    ::media::ffmpeg::PacketPtr packet,
+    MediaStreamKind streamKind,
+    const MediaTsClockProjectionCheckpoint& checkpoint)
+{
+    StreamClock videoClock = m_videoClock;
+    StreamClock audioClock = m_audioClock;
+    auto stage = m_acquiringPackets->stageReplay(
+        *packet, streamKind,
+        [&](const AVPacket& source,
+            MediaStreamKind kind) -> ::media::Result<MediaBufferRef> {
+        auto timing = timingFor(
+            source, checkpoint,
+            kind == MediaStreamKind::Video ? videoClock : audioClock);
+        if (!timing) return ::media::Result<MediaBufferRef>::failure(timing.error());
+        ::media::ffmpeg::PacketPtr clone(av_packet_clone(&source));
+        if (!clone) {
+            return ::media::Result<MediaBufferRef>::failure(::media::ErrorInfo::allocationFailed(
+                "MpegTsDemuxNode failed to clone retained acquiring packet"));
+        }
+        auto buffer = wrapTimedPacket(std::move(clone), kind, timing.value());
+        if (!buffer) return ::media::Result<MediaBufferRef>::failure(buffer.error());
+        return ::media::Result<MediaBufferRef>::success(std::move(buffer).value());
+    });
+    if (!stage) return stage;
+    m_videoClock = std::move(videoClock);
+    m_audioClock = std::move(audioClock);
+    m_initialClockLocked = true;
+    return ::media::Status::success();
+}
+
+::media::Result<MediaNodeProcessResult> MpegTsDemuxNode::emitReadyPacket(
+    MediaGraphExecutionContext& context)
+{
+    const auto& ready = m_acquiringPackets->nextReplay();
+    auto status = emitOutput(
+        context,
+        ready.streamKind == MediaStreamKind::Video ? "video" : "audio",
+        ready.buffer);
+    if (status || retainsPendingOutput(ready.buffer)) {
+        m_acquiringPackets->popReplay();
+    }
+    return processProgress(status);
+}
+
 ::media::Status MpegTsDemuxNode::rejectDuplicateBinding(MediaGraphExecutionContext& context)
 {
     auto input = tryPopFirstInputOptional(context);
@@ -227,16 +339,19 @@ MpegTsDemuxNode::sourceClockCheckpoint(std::uint64_t packetPosition)
         return processProgress(status);
     }
     if (m_eofSent) return processFinished();
-    if (m_pendingPacket) {
-        MediaBufferRef packet = std::move(m_pendingPacket);
-        std::string port = std::move(m_pendingPacketPort);
-        return processProgress(emitOutput(context, port, packet));
-    }
+    if (m_acquiringPackets->hasReplay()) return emitReadyPacket(context);
     auto read = m_session->readFrame();
     if (!read) return ::media::Result<MediaNodeProcessResult>::failure(read.error());
     auto envelope = std::move(read).value();
     if (envelope.state == MediaTsReadFrameState::Waiting) return processWaiting();
-    if (envelope.state == MediaTsReadFrameState::EndOfStream) return processFinished(emitEof(context));
+    if (envelope.state == MediaTsReadFrameState::EndOfStream) {
+        if (m_acquiringPackets && !m_acquiringPackets->empty()) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "MpegTsDemuxNode reached EOF before initial clock lock"));
+        }
+        return processFinished(emitEof(context));
+    }
     if (!envelope.packet) return ::media::Result<MediaNodeProcessResult>::failure(
         ::media::ErrorInfo::invalidArgument("MpegTsDemuxNode frame envelope requires a packet"));
     auto packet = std::move(envelope.packet);
@@ -244,9 +359,7 @@ MpegTsDemuxNode::sourceClockCheckpoint(std::uint64_t packetPosition)
     const bool audio = packet->stream_index == m_audioStreamIndex;
     if (!video && !audio) return ::media::Result<MediaNodeProcessResult>::failure(
         ::media::ErrorInfo::invalidArgument("MpegTsDemuxNode packet stream/PID mismatch"));
-    MediaPacketSourceTiming packetTiming{
-        std::nullopt, std::nullopt, MediaSourceClockReadiness::Acquiring,
-        m_initialSourceGeneration};
+    const auto streamKind = video ? MediaStreamKind::Video : MediaStreamKind::Audio;
     if (envelope.provenance.readiness == MediaSourceClockReadiness::Acquiring) {
         if (envelope.provenance.evidenceByteOffset ||
             envelope.provenance.originByteOffset) {
@@ -254,61 +367,73 @@ MpegTsDemuxNode::sourceClockCheckpoint(std::uint64_t packetPosition)
                 ::media::ErrorInfo::invalidArgument(
                     "MpegTsDemuxNode acquiring provenance cannot identify a PES"));
         }
-    } else {
-        if (!envelope.provenance.evidenceByteOffset) {
-            return ::media::Result<MediaNodeProcessResult>::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "MpegTsDemuxNode resolved PES provenance requires evidence"));
+        if (auto status = m_acquiringPackets->retain(
+                std::move(packet), streamKind); !status) {
+            return processProgress(status);
         }
-        auto checkpoint = sourceClockCheckpoint(*envelope.provenance.evidenceByteOffset);
-        if (!checkpoint) return ::media::Result<MediaNodeProcessResult>::failure(checkpoint.error());
-        packetTiming.generation = checkpoint.value().generation;
-        if (envelope.provenance.readiness ==
-            MediaSourceClockReadiness::ReacquireRequired) {
-            if (envelope.provenance.originByteOffset) {
-                return ::media::Result<MediaNodeProcessResult>::failure(
-                    ::media::ErrorInfo::invalidArgument(
-                        "MpegTsDemuxNode invalid PES provenance cannot carry an origin"));
-            }
-            packetTiming.readiness = MediaSourceClockReadiness::ReacquireRequired;
-        } else {
-            if (!envelope.provenance.originByteOffset ||
-                *envelope.provenance.originByteOffset !=
-                    *envelope.provenance.evidenceByteOffset) {
-                return ::media::Result<MediaNodeProcessResult>::failure(
-                    ::media::ErrorInfo::invalidArgument(
-                        "MpegTsDemuxNode locked PES provenance requires its exact origin"));
-            }
-            auto timing = timingFor(
-                *packet, checkpoint.value(), video ? m_videoClock : m_audioClock);
-            if (!timing) {
-                return ::media::Result<MediaNodeProcessResult>::failure(timing.error());
-            }
-            packetTiming = timing.value();
+        MediaBufferRef state = makeMediaBufferRef<MediaSourceClockStateBuffer>(
+            MediaSourceClockReadiness::Acquiring,
+            m_initialSourceGeneration, false);
+        if (context.findOutputChannel(nodeId(), "clock")) {
+            return processProgress(emitOutput(context, "clock", state));
         }
+        return processProgress();
     }
-    const auto streamKind = video ? MediaStreamKind::Video : MediaStreamKind::Audio;
-    auto buffer = FFmpegBufferFactory::wrapPacket(std::move(packet), streamKind, packetTiming);
-    if (!buffer) return ::media::Result<MediaNodeProcessResult>::failure(buffer.error());
-    const auto* wrapped = dynamic_cast<const FFmpegPacketBuffer*>(buffer.value().get());
-    if (!wrapped || !wrapped->packet()) {
+    if (!envelope.provenance.evidenceByteOffset) {
         return ::media::Result<MediaNodeProcessResult>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "MpegTsDemuxNode lost wrapped packet ownership"));
+                "MpegTsDemuxNode resolved PES provenance requires evidence"));
     }
-    buffer.value()->setTimeDescriptor(MediaTimeDescriptor{
-        MediaRational{wrapped->packet()->time_base.num,
-                      wrapped->packet()->time_base.den}});
+    auto checkpoint = sourceClockCheckpoint(
+        *envelope.provenance.evidenceByteOffset);
+    if (!checkpoint) {
+        return ::media::Result<MediaNodeProcessResult>::failure(checkpoint.error());
+    }
+    if (envelope.provenance.readiness ==
+        MediaSourceClockReadiness::ReacquireRequired) {
+        if (envelope.provenance.originByteOffset) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "MpegTsDemuxNode invalid PES provenance cannot carry an origin"));
+        }
+        MediaPacketSourceTiming timing{
+            std::nullopt, std::nullopt,
+            MediaSourceClockReadiness::ReacquireRequired,
+            checkpoint.value().generation};
+        auto buffer = wrapTimedPacket(std::move(packet), streamKind, timing);
+        if (!buffer) {
+            return ::media::Result<MediaNodeProcessResult>::failure(buffer.error());
+        }
+        if (auto status = m_acquiringPackets->stageSingleReplay(
+                std::move(buffer).value(), streamKind); !status) {
+            return processProgress(status);
+        }
+        MediaBufferRef state = makeMediaBufferRef<MediaSourceClockStateBuffer>(
+            MediaSourceClockReadiness::ReacquireRequired,
+            checkpoint.value().generation, true);
+        if (context.findOutputChannel(nodeId(), "clock")) {
+            return processProgress(emitOutput(context, "clock", state));
+        }
+        return emitReadyPacket(context);
+    }
+    if (!envelope.provenance.originByteOffset ||
+        *envelope.provenance.originByteOffset !=
+            *envelope.provenance.evidenceByteOffset ||
+        checkpoint.value().readiness != MediaSourceClockReadiness::Locked) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MpegTsDemuxNode locked PES provenance requires locked exact origin"));
+    }
+    ::media::Status prepared = m_initialClockLocked
+        ? enqueueLockedPacket(std::move(packet), streamKind, checkpoint.value())
+        : prepareFirstLockedBatch(std::move(packet), streamKind, checkpoint.value());
+    if (!prepared) return processProgress(prepared);
     MediaBufferRef state = makeMediaBufferRef<MediaSourceClockStateBuffer>(
-        packetTiming.readiness, packetTiming.generation,
-        packetTiming.readiness == MediaSourceClockReadiness::ReacquireRequired);
+        MediaSourceClockReadiness::Locked, checkpoint.value().generation, false);
     if (context.findOutputChannel(nodeId(), "clock")) {
-        m_pendingPacket = buffer.value();
-        m_pendingPacketPort = video ? "video" : "audio";
         return processProgress(emitOutput(context, "clock", state));
     }
-    return processProgress(emitOutput(
-        context, video ? "video" : "audio", buffer.value()));
+    return emitReadyPacket(context);
 }
 
 ::media::Status MpegTsDemuxNode::emitEof(MediaGraphExecutionContext& context)
@@ -326,7 +451,8 @@ void MpegTsDemuxNode::reset() noexcept
     m_videoStreamIndex = -1; m_audioStreamIndex = -1;
     m_initialSourceGeneration = 0;
     m_videoClock = {}; m_audioClock = {};
-    m_pendingPacket.reset(); m_pendingPacketPort.clear();
+    m_acquiringPackets.reset();
+    m_initialClockLocked = false;
     m_eofSent = false; m_aborted = false;
 }
 

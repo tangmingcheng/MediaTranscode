@@ -114,6 +114,18 @@ const char* boolOption(bool value) noexcept
     if (auto s = set("mpegts.packet_stride", plan.packetSize); !s) return s;
     if (auto s = set("mpegts.evidence_timeline_capacity", plan.evidenceTimelineCapacity); !s) return s;
     if (auto s = set("mpegts.projection_capacity", plan.projectionCapacity); !s) return s;
+    if (auto s = set("mpegts.initial_acquiring_video_packet_capacity",
+                     plan.initialAcquiringVideoPacketCapacity); !s) return s;
+    if (auto s = set("mpegts.initial_acquiring_audio_packet_capacity",
+                     plan.initialAcquiringAudioPacketCapacity); !s) return s;
+    if (auto s = set("mpegts.initial_acquiring_video_byte_capacity",
+                     plan.initialAcquiringVideoByteCapacity); !s) return s;
+    if (auto s = set("mpegts.initial_acquiring_audio_byte_capacity",
+                     plan.initialAcquiringAudioByteCapacity); !s) return s;
+    if (auto s = set("mpegts.maximum_acquiring_video_packet_bytes",
+                     plan.maximumAcquiringVideoPacketBytes); !s) return s;
+    if (auto s = set("mpegts.maximum_acquiring_audio_packet_bytes",
+                     plan.maximumAcquiringAudioPacketBytes); !s) return s;
     if (auto s = set("mpegts.maximum_position_regression_bytes", plan.maximumPacketPositionRegressionBytes); !s) return s;
     if (auto s = set("mpegts.pes_provenance_capacity", plan.pesProvenanceCapacity); !s) return s;
     if (auto s = set("mpegts.packet_origin_policy",

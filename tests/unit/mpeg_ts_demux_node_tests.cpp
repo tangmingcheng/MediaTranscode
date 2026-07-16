@@ -3,6 +3,7 @@
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/nodes/demux/MpegTsDemuxNode.h"
+#include "internal/graph/nodes/sync/MediaCanonicalInputNode.h"
 #include "internal/graph/runtime/buffer/FFmpegPacketBuffer.h"
 #include "internal/graph/runtime/buffer/MediaSourceClockStateBuffer.h"
 #include "internal/graph/runtime/buffer/MediaTsPreparedInputBuffer.h"
@@ -78,6 +79,8 @@ struct ScriptedFrame final {
     std::int64_t dts = AV_NOPTS_VALUE;
     AVRational timeBase{1, 90'000};
     MediaSourceClockReadiness readiness = MediaSourceClockReadiness::Locked;
+    std::int64_t duration = 3'600;
+    int packetBytes = 1;
 };
 
 class ScriptedTsSession final : public MediaTsDemuxSession {
@@ -121,10 +124,16 @@ public:
         envelope.state = frame.state;
         if (frame.state == MediaTsReadFrameState::Frame) {
             envelope.packet = ::media::ffmpeg::makePacket();
+            if (av_new_packet(envelope.packet.get(), frame.packetBytes) < 0) {
+                return ::media::Result<MediaTsReadFrameEnvelope>::failure(
+                    ::media::ErrorInfo::allocationFailed(
+                        "scripted packet allocation failed"));
+            }
             envelope.packet->stream_index = frame.streamIndex;
             envelope.packet->pos = frame.position;
             envelope.packet->pts = frame.pts;
             envelope.packet->dts = frame.dts;
+            envelope.packet->duration = frame.duration;
             envelope.packet->time_base = frame.timeBase;
             if (frame.readiness == MediaSourceClockReadiness::Locked) {
                 envelope.provenance = MediaTsPacketProvenance{
@@ -224,6 +233,12 @@ struct NodeFixture final {
             {"mpegts.maximum_pcr_jitter_27mhz", "2700"}, {"mpegts.maximum_pcr_gap_27mhz", "8100000"},
             {"mpegts.packet_stride", "188"}, {"mpegts.evidence_timeline_capacity", "32"},
             {"mpegts.projection_capacity", std::to_string(projectionCapacity)},
+            {"mpegts.initial_acquiring_video_packet_capacity", "8"},
+            {"mpegts.initial_acquiring_audio_packet_capacity", "8"},
+            {"mpegts.initial_acquiring_video_byte_capacity", "8388608"},
+            {"mpegts.initial_acquiring_audio_byte_capacity", "1048576"},
+            {"mpegts.maximum_acquiring_video_packet_bytes", "1048576"},
+            {"mpegts.maximum_acquiring_audio_packet_bytes", "131072"},
             {"mpegts.maximum_position_regression_bytes", "4096"},
             {"mpegts.pes_provenance_capacity", "32"},
             {"mpegts.packet_origin_policy", "0"},
@@ -600,21 +615,73 @@ void testPacketAndSessionFailures(TestContext& ctx)
         MpegTsDemuxNode node(fixture.demux); EXPECT_FALSE(ctx, node.process(fixture.execution));
     }
 
-    NodeFixture acquiring; EXPECT_TRUE(ctx, acquiring.compile());
+    NodeFixture acquiring(true, true);
+    acquiring.graph.setNodeOption(
+        acquiring.demux, "mpegts.initial_source_generation", "7");
+    EXPECT_TRUE(ctx, acquiring.compile());
     auto acquiringSession = std::make_unique<ScriptedTsSession>();
-    acquiringSession->frames.push_back({MediaTsReadFrameState::Frame,
-        kVideoStream, -1, 0, 0, {1, 90'000}, MediaSourceClockReadiness::Acquiring});
+    acquiringSession->evidenceTimeline = {
+        evidence(100, 0), evidence(200, 2'700'000)};
+    acquiringSession->frames = {
+        {MediaTsReadFrameState::Frame, kVideoStream, -1, 45'000, 44'000,
+         {1, 90'000}, MediaSourceClockReadiness::Acquiring},
+        {MediaTsReadFrameState::Frame, kAudioStream, -1, 60'000, 59'000,
+         {1, 90'000}, MediaSourceClockReadiness::Acquiring},
+        {MediaTsReadFrameState::Frame, kVideoStream, 200, 90'000, 89'000,
+         {1, 90'000}, MediaSourceClockReadiness::Locked}};
     EXPECT_TRUE(ctx, acquiring.input()->push(prepared(std::move(acquiringSession))));
     MpegTsDemuxNode acquiringNode(acquiring.demux);
     EXPECT_TRUE(ctx, acquiringNode.process(acquiring.execution));
-    MediaBufferRef acquiringOwner;
-    const auto* acquiringPacket = popPacket(*acquiring.video(), acquiringOwner);
-    EXPECT_TRUE(ctx, acquiringPacket != nullptr);
-    if (acquiringPacket && acquiringPacket->sourceTiming()) {
-        EXPECT_EQ(ctx, acquiringPacket->sourceTiming()->readiness,
+    MediaBufferRef acquiringStateOwner;
+    EXPECT_TRUE(ctx, acquiring.clock()->tryPop(acquiringStateOwner));
+    const auto* acquiringState =
+        dynamic_cast<const MediaSourceClockStateBuffer*>(acquiringStateOwner.get());
+    EXPECT_TRUE(ctx, acquiringState != nullptr);
+    if (acquiringState) {
+        EXPECT_EQ(ctx, acquiringState->readiness(),
                   MediaSourceClockReadiness::Acquiring);
-        EXPECT_FALSE(ctx, acquiringPacket->sourceTiming()->presentationNs.has_value());
-        EXPECT_FALSE(ctx, acquiringPacket->sourceTiming()->decodeNs.has_value());
+    }
+    EXPECT_EQ(ctx, acquiring.video()->size(), std::size_t{0});
+
+    EXPECT_TRUE(ctx, acquiringNode.process(acquiring.execution));
+    MediaBufferRef secondAcquiringStateOwner;
+    EXPECT_TRUE(ctx, acquiring.clock()->tryPop(secondAcquiringStateOwner));
+    EXPECT_EQ(ctx, acquiring.video()->size(), std::size_t{0});
+    EXPECT_EQ(ctx, acquiring.audio()->size(), std::size_t{0});
+
+    EXPECT_TRUE(ctx, acquiringNode.process(acquiring.execution));
+    MediaBufferRef lockedStateOwner;
+    EXPECT_TRUE(ctx, acquiring.clock()->tryPop(lockedStateOwner));
+    const auto* lockedState =
+        dynamic_cast<const MediaSourceClockStateBuffer*>(lockedStateOwner.get());
+    EXPECT_TRUE(ctx, lockedState != nullptr);
+    if (lockedState) {
+        EXPECT_EQ(ctx, lockedState->readiness(), MediaSourceClockReadiness::Locked);
+        EXPECT_EQ(ctx, lockedState->generation(), std::uint64_t{7});
+    }
+    EXPECT_EQ(ctx, acquiring.video()->size(), std::size_t{0});
+
+    struct ExpectedReplay final {
+        MediaChannel* channel;
+        std::int64_t pts;
+    };
+    const std::vector<ExpectedReplay> expectedReplay{
+        {acquiring.video(), 45'000},
+        {acquiring.audio(), 60'000},
+        {acquiring.video(), 90'000}};
+    for (const auto& expected : expectedReplay) {
+        EXPECT_TRUE(ctx, acquiringNode.process(acquiring.execution));
+        MediaBufferRef owner;
+        const auto* packet = popPacket(*expected.channel, owner);
+        EXPECT_TRUE(ctx, packet != nullptr && packet->sourceTiming());
+        if (packet && packet->sourceTiming()) {
+            EXPECT_EQ(ctx, packet->sourceTiming()->readiness,
+                      MediaSourceClockReadiness::Locked);
+            EXPECT_EQ(ctx, packet->sourceTiming()->generation, std::uint64_t{7});
+            EXPECT_TRUE(ctx, packet->sourceTiming()->presentationNs.has_value());
+            EXPECT_EQ(ctx, packet->packet()->pts, expected.pts);
+            EXPECT_TRUE(ctx, packet->packet()->duration > 0);
+        }
     }
 
     NodeFixture overflow; overflow.setOptions(2); EXPECT_TRUE(ctx, overflow.compile());
@@ -622,6 +689,122 @@ void testPacketAndSessionFailures(TestContext& ctx)
     session->evidenceTimeline = {evidence(100, 0), evidence(200, 2'700'000), evidence(300, 5'400'000)};
     EXPECT_TRUE(ctx, overflow.input()->push(prepared(std::move(session))));
     MpegTsDemuxNode overflowNode(overflow.demux); EXPECT_FALSE(ctx, overflowNode.process(overflow.execution));
+}
+
+void testInitialAcquiringRetentionFailsClosedAndReplaysExactlyOnce(TestContext& ctx)
+{
+    {
+        NodeFixture capacity;
+        capacity.graph.setNodeOption(
+            capacity.demux,
+            "mpegts.initial_acquiring_video_packet_capacity", "1");
+        EXPECT_TRUE(ctx, capacity.compile());
+        auto session = std::make_unique<ScriptedTsSession>();
+        session->frames = {
+            {MediaTsReadFrameState::Frame, kVideoStream, -1, 1, 1,
+             {1, 90'000}, MediaSourceClockReadiness::Acquiring},
+            {MediaTsReadFrameState::Frame, kVideoStream, -1, 2, 2,
+             {1, 90'000}, MediaSourceClockReadiness::Acquiring}};
+        EXPECT_TRUE(ctx, capacity.input()->push(prepared(std::move(session))));
+        MpegTsDemuxNode node(capacity.demux);
+        EXPECT_TRUE(ctx, node.process(capacity.execution));
+        EXPECT_FALSE(ctx, node.process(capacity.execution));
+    }
+    {
+        NodeFixture bytes;
+        bytes.graph.setNodeOption(
+            bytes.demux, "mpegts.initial_acquiring_video_byte_capacity", "1");
+        bytes.graph.setNodeOption(
+            bytes.demux, "mpegts.maximum_acquiring_video_packet_bytes", "1");
+        EXPECT_TRUE(ctx, bytes.compile());
+        auto session = std::make_unique<ScriptedTsSession>();
+        ScriptedFrame oversized{
+            MediaTsReadFrameState::Frame, kVideoStream, -1, 1, 1,
+            {1, 90'000}, MediaSourceClockReadiness::Acquiring};
+        oversized.packetBytes = 2;
+        session->frames.push_back(oversized);
+        EXPECT_TRUE(ctx, bytes.input()->push(prepared(std::move(session))));
+        MpegTsDemuxNode node(bytes.demux);
+        EXPECT_FALSE(ctx, node.process(bytes.execution));
+    }
+    {
+        NodeFixture eof;
+        EXPECT_TRUE(ctx, eof.compile());
+        auto session = std::make_unique<ScriptedTsSession>();
+        session->frames = {
+            {MediaTsReadFrameState::Frame, kVideoStream, -1, 1, 1,
+             {1, 90'000}, MediaSourceClockReadiness::Acquiring},
+            {MediaTsReadFrameState::EndOfStream}};
+        EXPECT_TRUE(ctx, eof.input()->push(prepared(std::move(session))));
+        MpegTsDemuxNode node(eof.demux);
+        EXPECT_TRUE(ctx, node.process(eof.execution));
+        EXPECT_FALSE(ctx, node.process(eof.execution));
+    }
+    {
+        NodeFixture blocked(true, true);
+        blocked.graph.setNodeOption(
+            blocked.demux, "mpegts.initial_source_generation", "7");
+        EXPECT_TRUE(ctx, blocked.compile());
+        auto session = std::make_unique<ScriptedTsSession>();
+        session->evidenceTimeline = {
+            evidence(100, 0), evidence(200, 2'700'000)};
+        session->frames = {
+            {MediaTsReadFrameState::Frame, kVideoStream, -1, 45'000, 44'000,
+             {1, 90'000}, MediaSourceClockReadiness::Acquiring},
+            {MediaTsReadFrameState::Frame, kVideoStream, 200, 90'000, 89'000,
+             {1, 90'000}, MediaSourceClockReadiness::Locked}};
+        EXPECT_TRUE(ctx, blocked.input()->push(prepared(std::move(session))));
+        MpegTsDemuxNode node(blocked.demux);
+        EXPECT_TRUE(ctx, node.process(blocked.execution));
+        MediaBufferRef state;
+        EXPECT_TRUE(ctx, blocked.clock()->tryPop(state));
+        EXPECT_TRUE(ctx, node.process(blocked.execution));
+        EXPECT_TRUE(ctx, blocked.clock()->tryPop(state));
+
+        auto raw = ::media::ffmpeg::makePacket();
+        auto dummy = FFmpegBufferFactory::wrapPacket(
+            std::move(raw), MediaStreamKind::Video, std::nullopt);
+        EXPECT_TRUE(ctx, dummy);
+        constexpr std::size_t OutputCapacity = 16;
+        for (std::size_t index = 0; index < OutputCapacity; ++index) {
+            EXPECT_TRUE(ctx, blocked.video()->push(dummy.value()));
+        }
+        auto wouldBlock = node.process(blocked.execution);
+        EXPECT_TRUE(ctx, wouldBlock);
+        if (wouldBlock) {
+            EXPECT_EQ(ctx, wouldBlock.value().state,
+                      MediaNodeProcessState::Waiting);
+        }
+        MediaBufferRef discarded;
+        EXPECT_TRUE(ctx, blocked.video()->tryPop(discarded));
+        EXPECT_TRUE(ctx, node.process(blocked.execution));
+        std::size_t retainedCopies = 0;
+        while (blocked.video()->tryPop(discarded)) {
+            const auto* packet = dynamic_cast<const FFmpegPacketBuffer*>(discarded.get());
+            if (packet && packet->packet()->pts == 45'000) ++retainedCopies;
+        }
+        EXPECT_EQ(ctx, retainedCopies, std::size_t{1});
+        EXPECT_TRUE(ctx, node.process(blocked.execution));
+        MediaBufferRef current;
+        const auto* currentPacket = popPacket(*blocked.video(), current);
+        EXPECT_TRUE(ctx, currentPacket != nullptr);
+        if (currentPacket) {
+            EXPECT_EQ(ctx, currentPacket->packet()->pts, std::int64_t{90'000});
+            auto duration = MediaRunningTime::checkedFromTicks(3'600, 1, 90'000);
+            EXPECT_TRUE(ctx, duration);
+            if (duration && currentPacket->sourceTiming()) {
+                auto canonical = MediaCanonicalInputNode::canonicalize(
+                    current, *currentPacket->sourceTiming(), duration.value(),
+                    MediaScheduledStream::Video,
+                    MediaDecodeOrderMode::ReorderedRequiresDecodeTime,
+                    "mpeg-ts-boundary", MediaSourceAccessUnitSequence(1));
+                EXPECT_TRUE(ctx, canonical);
+                if (canonical) {
+                    EXPECT_EQ(ctx, canonical.value()->generation(), std::uint64_t{7});
+                }
+            }
+        }
+    }
 }
 
 } // namespace
@@ -637,5 +820,6 @@ void runMpegTsDemuxNodeTests(TestContext& ctx)
     testProjectionIsTheOnlySourceGenerationAuthority(ctx);
     testPesInvalidityDoesNotInventSourceGeneration(ctx);
     testPacketAndSessionFailures(ctx);
+    testInitialAcquiringRetentionFailsClosedAndReplaysExactlyOnce(ctx);
     testCancelledReadAndSessionTimelineFailurePropagation(ctx);
 }

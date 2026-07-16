@@ -23,7 +23,18 @@ namespace media::ffmpeg::graph {
         plan.programMapPid <= 0 || plan.videoPid <= 0 || plan.audioPid <= 0 ||
         plan.pcrPid <= 0 || plan.pcrInterval27Mhz <= 0 ||
         plan.maximumPcrJitter27Mhz <= 0 || plan.maximumPcrGap27Mhz <= 0 ||
-        plan.projectionCapacity == 0 || plan.timestampTimeBaseNumerator != 1 ||
+        plan.projectionCapacity == 0 ||
+        plan.initialAcquiringVideoPacketCapacity == 0 ||
+        plan.initialAcquiringAudioPacketCapacity == 0 ||
+        plan.initialAcquiringVideoByteCapacity == 0 ||
+        plan.initialAcquiringAudioByteCapacity == 0 ||
+        plan.maximumAcquiringVideoPacketBytes == 0 ||
+        plan.maximumAcquiringAudioPacketBytes == 0 ||
+        plan.maximumAcquiringVideoPacketBytes >
+            plan.initialAcquiringVideoByteCapacity ||
+        plan.maximumAcquiringAudioPacketBytes >
+            plan.initialAcquiringAudioByteCapacity ||
+        plan.timestampTimeBaseNumerator != 1 ||
         plan.timestampTimeBaseDenominator != 90'000) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "invalid complete MPEG-TS input plan"));

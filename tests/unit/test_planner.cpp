@@ -151,6 +151,12 @@ void testTsInputPlanValidatorRejectsEveryMutation(TestContext& ctx)
     valid.maximumPcrJitter27Mhz = 135'000;
     valid.maximumPcrGap27Mhz = 2'700'000;
     valid.projectionCapacity = valid.evidenceTimelineCapacity;
+    valid.initialAcquiringVideoPacketCapacity = 8;
+    valid.initialAcquiringAudioPacketCapacity = 8;
+    valid.initialAcquiringVideoByteCapacity = 8 * 1024 * 1024;
+    valid.initialAcquiringAudioByteCapacity = 1024 * 1024;
+    valid.maximumAcquiringVideoPacketBytes = 1024 * 1024;
+    valid.maximumAcquiringAudioPacketBytes = 128 * 1024;
     valid.timestampTimeBaseNumerator = 1;
     valid.timestampTimeBaseDenominator = 90'000;
     MediaRealtimeRtpInputNodePlan input{};
@@ -173,6 +179,20 @@ void testTsInputPlanValidatorRejectsEveryMutation(TestContext& ctx)
     mutated([](auto& plan) { plan.evidenceTimelineCapacity = 34; });
     mutated([](auto& plan) { plan.maximumPacketPositionRegressionBytes = 0; });
     mutated([](auto& plan) { plan.pesProvenanceCapacity = 0; });
+    mutated([](auto& plan) { plan.initialAcquiringVideoPacketCapacity = 0; });
+    mutated([](auto& plan) { plan.initialAcquiringAudioPacketCapacity = 0; });
+    mutated([](auto& plan) { plan.initialAcquiringVideoByteCapacity = 0; });
+    mutated([](auto& plan) { plan.initialAcquiringAudioByteCapacity = 0; });
+    mutated([](auto& plan) { plan.maximumAcquiringVideoPacketBytes = 0; });
+    mutated([](auto& plan) { plan.maximumAcquiringAudioPacketBytes = 0; });
+    mutated([](auto& plan) {
+        plan.maximumAcquiringVideoPacketBytes =
+            plan.initialAcquiringVideoByteCapacity + 1;
+    });
+    mutated([](auto& plan) {
+        plan.maximumAcquiringAudioPacketBytes =
+            plan.initialAcquiringAudioByteCapacity + 1;
+    });
     mutated([](auto& plan) {
         plan.packetOriginPolicy = static_cast<MediaTsPacketOriginPolicy>(99);
     });

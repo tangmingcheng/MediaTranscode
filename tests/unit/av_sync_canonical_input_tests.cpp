@@ -182,7 +182,7 @@ struct GateHarness final {
     std::shared_ptr<TestMasterClock> clock = std::make_shared<TestMasterClock>(0);
     std::unique_ptr<MediaInitialLockedPacketGateNode> runtime;
 
-    GateHarness(std::size_t capacity = 2, std::int64_t timeoutNs = 100)
+    explicit GateHarness(std::int64_t timeoutNs = 100)
     {
         const auto packetSource = graph.addNode(MediaNodeKind::DebugDump, "packet-source");
         const auto clockSource = graph.addNode(MediaNodeKind::DebugDump, "clock-source");
@@ -205,8 +205,6 @@ struct GateHarness final {
         graph.connect(clockSource, "out", gate, "clock", "clock", queue);
         graph.connect(gate, "packet", sink, "in", "output", queue);
         graph.setNodeOption(gate, "initial_locked_gate.stream", "video");
-        graph.setNodeOption(gate, "initial_locked_gate.acquiring_capacity",
-                            std::to_string(capacity));
         graph.setNodeOption(gate, "initial_locked_gate.acquiring_timeout_ns",
                             std::to_string(timeoutNs));
         graph.setNodeOption(gate, "initial_locked_gate.sync_group", "ts-gate-group");
@@ -235,18 +233,20 @@ void typedClockStateIsImmutableAndDiagnostic()
     assert(hasFlag(discontinuity.flags(), MediaBufferFlag::Discontinuity));
 }
 
-void firstLockedGenerationReleasesBoundedAcquiringPackets()
+void gateRequiresLockedClockBeforeLockedPackets()
 {
     GateHarness harness;
+    assert(harness.clockInput()->push(makeMediaBufferRef<MediaSourceClockStateBuffer>(
+        MediaSourceClockReadiness::Acquiring, 0, false)));
+    assert(harness.runtime->process(harness.execution));
+    assert(harness.clockInput()->push(makeMediaBufferRef<MediaSourceClockStateBuffer>(
+        MediaSourceClockReadiness::Locked, 7, false)));
+    assert(harness.runtime->process(harness.execution));
+
     auto packet = timedPacket(MediaStreamKind::Video,
                               MediaSourceClockReadiness::Locked, 7,
                               1'000, 3'600, AVRational{1, 90'000});
     assert(harness.packetInput()->push(packet));
-    assert(harness.runtime->process(harness.execution));
-    assert(harness.output()->size() == 0);
-    assert(harness.clockInput()->push(makeMediaBufferRef<MediaSourceClockStateBuffer>(
-        MediaSourceClockReadiness::Locked, 7, false)));
-    assert(harness.runtime->process(harness.execution));
     assert(harness.runtime->process(harness.execution));
     MediaBufferRef released;
     assert(harness.output()->tryPop(released));
@@ -257,26 +257,19 @@ void firstLockedGenerationReleasesBoundedAcquiringPackets()
     assert(!harness.runtime->process(harness.execution));
 }
 
-void gateRejectsCapacityTimeoutAndInvalidEvidence()
+void gateRejectsPacketsBeforeLockAndInvalidEvidence()
 {
     {
-        GateHarness harness(1, 100);
+        GateHarness harness;
         assert(harness.packetInput()->push(timedPacket(
             MediaStreamKind::Video, MediaSourceClockReadiness::Locked, 7,
             1'000, 3'600, AVRational{1, 90'000})));
-        assert(harness.runtime->process(harness.execution));
-        assert(harness.packetInput()->push(timedPacket(
-            MediaStreamKind::Video, MediaSourceClockReadiness::Locked, 7,
-            2'000, 3'600, AVRational{1, 90'000})));
         assert(!harness.runtime->process(harness.execution));
     }
     {
-        GateHarness harness(2, 100);
-        assert(harness.packetInput()->push(timedPacket(
-            MediaStreamKind::Video, MediaSourceClockReadiness::Locked, 7,
-            1'000, 3'600, AVRational{1, 90'000})));
-        assert(harness.runtime->process(harness.execution));
-        harness.clock->set(100);
+        GateHarness harness;
+        assert(harness.clockInput()->push(makeMediaBufferRef<MediaSourceClockStateBuffer>(
+            MediaSourceClockReadiness::Locked, 0, false)));
         assert(!harness.runtime->process(harness.execution));
     }
     for (const auto readiness : {MediaSourceClockReadiness::Degraded,
@@ -303,10 +296,9 @@ void gateRejectsCapacityTimeoutAndInvalidEvidence()
 void gateDeadlinePreflightPrecedesAllQueuedEvidence()
 {
     {
-        GateHarness idle(2, 100);
-        assert(idle.packetInput()->push(timedPacket(
-            MediaStreamKind::Video, MediaSourceClockReadiness::Locked, 7,
-            1'000, 3'600, AVRational{1, 90'000})));
+        GateHarness idle(100);
+        assert(idle.clockInput()->push(makeMediaBufferRef<MediaSourceClockStateBuffer>(
+            MediaSourceClockReadiness::Acquiring, 0, false)));
         assert(idle.runtime->process(idle.execution));
         auto waiting = idle.runtime->process(idle.execution);
         assert(waiting && waiting.value().deadlineWait);
@@ -316,10 +308,10 @@ void gateDeadlinePreflightPrecedesAllQueuedEvidence()
                MediaRunningTime::fromNanoseconds(100));
     }
     {
-        GateHarness lateLocked(2, 100);
-        assert(lateLocked.packetInput()->push(timedPacket(
-            MediaStreamKind::Video, MediaSourceClockReadiness::Locked, 7,
-            1'000, 3'600, AVRational{1, 90'000})));
+        GateHarness lateLocked(100);
+        assert(lateLocked.clockInput()->push(
+            makeMediaBufferRef<MediaSourceClockStateBuffer>(
+                MediaSourceClockReadiness::Acquiring, 0, false)));
         assert(lateLocked.runtime->process(lateLocked.execution));
         assert(lateLocked.clockInput()->push(
             makeMediaBufferRef<MediaSourceClockStateBuffer>(
@@ -328,10 +320,10 @@ void gateDeadlinePreflightPrecedesAllQueuedEvidence()
         assert(!lateLocked.runtime->process(lateLocked.execution));
     }
     {
-        GateHarness acquiring(2, 100);
-        assert(acquiring.packetInput()->push(timedPacket(
-            MediaStreamKind::Video, MediaSourceClockReadiness::Locked, 7,
-            1'000, 3'600, AVRational{1, 90'000})));
+        GateHarness acquiring(100);
+        assert(acquiring.clockInput()->push(
+            makeMediaBufferRef<MediaSourceClockStateBuffer>(
+                MediaSourceClockReadiness::Acquiring, 0, false)));
         assert(acquiring.runtime->process(acquiring.execution));
         assert(acquiring.clockInput()->push(
             makeMediaBufferRef<MediaSourceClockStateBuffer>(
@@ -452,6 +444,7 @@ void canonicalInputUsesExactAudioSampleSpanAndRejectsInvalidTiming()
     CanonicalHarness invalidSampleRate(
         MediaStreamKind::Audio, "audio_samples", 0, 960);
     assert(!invalidSampleRate.runtime->process(invalidSampleRate.execution));
+    assert(!invalidSampleRate.runtime->process(invalidSampleRate.execution));
     CanonicalHarness invalidSampleCount(
         MediaStreamKind::Audio, "audio_samples", 48'000, 0);
     assert(!invalidSampleCount.runtime->process(invalidSampleCount.execution));
@@ -495,8 +488,8 @@ int main()
 {
     initialClockAcquisitionDeadlineIsOneShotAndExact();
     typedClockStateIsImmutableAndDiagnostic();
-    firstLockedGenerationReleasesBoundedAcquiringPackets();
-    gateRejectsCapacityTimeoutAndInvalidEvidence();
+    gateRequiresLockedClockBeforeLockedPackets();
+    gateRejectsPacketsBeforeLockAndInvalidEvidence();
     gateDeadlinePreflightPrecedesAllQueuedEvidence();
     canonicalInputUsesRuntimeGenerationAndRtpTsPacketDuration();
     canonicalInputUsesExactAudioSampleSpanAndRejectsInvalidTiming();

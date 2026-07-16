@@ -63,6 +63,12 @@ struct MediaRealtimeTsInputPlan final {
     std::int64_t maximumPcrJitter27Mhz = 0;
     std::int64_t maximumPcrGap27Mhz = 0;
     std::size_t projectionCapacity = 0;
+    std::size_t initialAcquiringVideoPacketCapacity = 0;
+    std::size_t initialAcquiringAudioPacketCapacity = 0;
+    std::uint64_t initialAcquiringVideoByteCapacity = 0;
+    std::uint64_t initialAcquiringAudioByteCapacity = 0;
+    std::uint64_t maximumAcquiringVideoPacketBytes = 0;
+    std::uint64_t maximumAcquiringAudioPacketBytes = 0;
     int timestampTimeBaseNumerator = 0;
     int timestampTimeBaseDenominator = 0;
     std::uint64_t initialSourceGeneration = 0;

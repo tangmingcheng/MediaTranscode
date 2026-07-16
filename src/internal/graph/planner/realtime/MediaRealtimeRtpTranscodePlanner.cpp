@@ -513,6 +513,24 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
         if (!avSync) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(avSync.error());
         }
+        if (plan.input.mpegTs) {
+            const auto& startup = avSync.value().startup;
+            if (!startup.videoCapacity || !startup.audioCapacity ||
+                !startup.videoByteCapacity || !startup.audioByteCapacity ||
+                !startup.maximumVideoUnitBytes ||
+                !startup.maximumAudioUnitBytes) {
+                return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                    ::media::ErrorInfo::notInitialized(
+                        "MPEG-TS acquiring retention requires complete planner startup bounds"));
+            }
+            auto& ts = *plan.input.mpegTs;
+            ts.initialAcquiringVideoPacketCapacity = *startup.videoCapacity;
+            ts.initialAcquiringAudioPacketCapacity = *startup.audioCapacity;
+            ts.initialAcquiringVideoByteCapacity = *startup.videoByteCapacity;
+            ts.initialAcquiringAudioByteCapacity = *startup.audioByteCapacity;
+            ts.maximumAcquiringVideoPacketBytes = *startup.maximumVideoUnitBytes;
+            ts.maximumAcquiringAudioPacketBytes = *startup.maximumAudioUnitBytes;
+        }
         auto componentBounds =
             MediaRealtimeAvSyncComponentBoundsPlanner::plan(plan);
         if (!componentBounds) {
