@@ -313,8 +313,8 @@ Run canonical/node tests and MPEG-TS observed-AVIO integration. Commit as `feat:
 - Modify: `src/internal/graph/nodes/sync/MediaPlaybackEpochBinderNode.cpp`
 - Create: `src/internal/graph/runtime/buffer/MediaPlaybackEpochActivatedBuffer.h`
 - Create: `src/internal/graph/runtime/buffer/MediaPlaybackEpochActivatedBuffer.cpp`
-- Create: `src/internal/graph/runtime/buffer/MediaActivatedStartupReleaseBuffer.h`
-- Create: `src/internal/graph/runtime/buffer/MediaActivatedStartupReleaseBuffer.cpp`
+- Create: `src/internal/graph/runtime/buffer/MediaStartupReleaseTransactionBuffer.h`
+- Create: `src/internal/graph/runtime/buffer/MediaStartupReleaseTransactionBuffer.cpp`
 - Create: `src/internal/graph/nodes/sync/MediaActivatedStartupReleaseSequencerNode.h`
 - Create: `src/internal/graph/nodes/sync/MediaActivatedStartupReleaseSequencerNode.cpp`
 - Modify: `src/internal/graph/runtime/MediaGraphRuntimeLifecycleExecutor.cpp`
@@ -333,20 +333,23 @@ Run canonical/node tests and MPEG-TS observed-AVIO integration. Commit as `feat:
 
 ```text
 coordinator.release
-  -> playback_epoch_binder.activate_once_and_wrap
-  -> activation_release_sequencer.atomic_event_then_release
+  -> playback_epoch_binder.wrap_pending_transaction
+  -> activation_release_sequencer.preflight_activate_atomic_event_then_release
   -> bound_release_extractor.atomic_split
 ```
 
 The binder retains a release until its single typed transaction output can
-accept it. It activates once, then publishes one immutable transaction envelope
-containing the epoch-activated event and the same compound release. The
-activation-release sequencer owns all event fanout targets plus the compound
-release target. It preflights every target before committing anything, then
-publishes the same immutable epoch event to every planned target and finally
-publishes the release in the same process call. Target readiness is independent,
-but visibility is one transaction; partial prefix commit across `WouldBlock` is
-forbidden. The RTP adapter maps
+accept it, then publishes one immutable pending transaction containing the same
+compound release and exact group/generation facts. It does not activate the
+group. The activation-release sequencer is the sole holder of the compiler-issued
+activation capability and owns all event fanout targets plus the compound release
+target. It preflights every target before activation or output. While any target
+is blocked the group remains Registered and every output remains empty. Once all
+targets are ready it activates exactly once, constructs the immutable epoch event,
+publishes that same event to every planned target, and finally publishes the
+release in the same process call. Target readiness is independent, but visibility
+is one transaction; partial prefix commit across `WouldBlock` is forbidden. The
+RTP adapter maps
 the immutable locked group snapshot to the same generic source-clock state that
 TS demux publishes. The startup-clock node consumes that generic state, reads
 the registered group master clock at the planned interval, and produces
@@ -379,7 +382,9 @@ cannot dispatch before activation.
 
 - [ ] **Step 2: Implement nodes without exposing activation capability elsewhere**
 
-Keep the move-only activation capability compiler-issued only to the one bound binder. Do not add public registry activation methods.
+Keep the move-only activation capability compiler-issued only to the one bound
+activation-release sequencer. The binder has no activation capability. Do not
+add public registry activation methods.
 
 - [ ] **Step 3: Run GREEN, 20x lifecycle repetition, review, commit, and push**
 
