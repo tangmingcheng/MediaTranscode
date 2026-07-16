@@ -32,6 +32,7 @@ protected:
 private:
     enum class Input { Video, Audio };
     ::media::Status configure(MediaGraphExecutionContext& context);
+    ::media::Status configureActiveScheduling();
     ::media::Status preflightInputAbort(
         MediaGraphExecutionContext& context) noexcept;
     ::media::Result<bool> fillHead(MediaGraphExecutionContext& context,

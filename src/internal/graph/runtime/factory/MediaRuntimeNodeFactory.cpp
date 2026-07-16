@@ -43,6 +43,9 @@
 #include "internal/graph/nodes/sync/MediaCanonicalInputNode.h"
 #include "internal/graph/nodes/sync/MediaInitialLockedPacketGateNode.h"
 #include "internal/graph/nodes/sync/MediaAvBoundReleaseExtractorNode.h"
+#include "internal/graph/nodes/sync/MediaAvStartupClockNode.h"
+#include "internal/graph/nodes/sync/MediaPlaybackEpochActivatedFanoutNode.h"
+#include "internal/graph/nodes/sync/MediaRtpSourceClockStateAdapterNode.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/nodes/video/HardwareTransferNode.h"
 #include "internal/graph/nodes/video/VideoDecodeNode.h"
@@ -260,6 +263,15 @@ template <typename Node>
     case MediaNodeKind::AvBoundReleaseExtractor:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::make_unique<MediaAvBoundReleaseExtractorNode>(node.id));
+    case MediaNodeKind::PlaybackEpochActivatedFanout:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+            std::make_unique<MediaPlaybackEpochActivatedFanoutNode>(node.id));
+    case MediaNodeKind::RtpSourceClockStateAdapter:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+            std::make_unique<MediaRtpSourceClockStateAdapterNode>(node.id));
+    case MediaNodeKind::AvStartupClock:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+            std::make_unique<MediaAvStartupClockNode>(node.id));
     case MediaNodeKind::PacketMerge:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<PacketMergeNode>(node.id));
     case MediaNodeKind::FileMux:
@@ -356,6 +368,9 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::CanonicalInput:
     case MediaNodeKind::InitialLockedPacketGate:
     case MediaNodeKind::AvBoundReleaseExtractor:
+    case MediaNodeKind::PlaybackEpochActivatedFanout:
+    case MediaNodeKind::RtpSourceClockStateAdapter:
+    case MediaNodeKind::AvStartupClock:
     case MediaNodeKind::PacketMerge:
     case MediaNodeKind::FileMux:
     case MediaNodeKind::RtpMux:

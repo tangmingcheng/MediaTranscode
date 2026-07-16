@@ -119,6 +119,10 @@ BinderExecutable makeExecutable(std::string binderGroup = "binder-group")
         MediaNodeKind::PlaybackEpochBinder, "binder");
     fixture.source = fixture.executable.graph.addNode(
         MediaNodeKind::DebugDump, "release-source");
+    const auto activatedSink = fixture.executable.graph.addNode(
+        MediaNodeKind::DebugDump, "activated-sink");
+    const auto releaseSink = fixture.executable.graph.addNode(
+        MediaNodeKind::DebugDump, "bound-release-sink");
     fixture.executable.graph.setNodeOption(
         scheduler, "av_scheduler.sync_group", "binder-group");
     fixture.executable.graph.setNodeOption(
@@ -130,8 +134,26 @@ BinderExecutable makeExecutable(std::string binderGroup = "binder-group")
     fixture.executable.graph.addInputPort(
         fixture.binder, "release", MediaStreamKind::Metadata,
         MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+    fixture.executable.graph.addOutputPort(
+        fixture.binder, "activated", MediaStreamKind::Metadata,
+        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+    fixture.executable.graph.addOutputPort(
+        fixture.binder, "bound_release", MediaStreamKind::Metadata,
+        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+    fixture.executable.graph.addInputPort(
+        activatedSink, "in", MediaStreamKind::Metadata,
+        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+    fixture.executable.graph.addInputPort(
+        releaseSink, "in", MediaStreamKind::Metadata,
+        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
     fixture.executable.graph.connect(
         fixture.source, "release", fixture.binder, "release", "epoch release",
+        MediaGraphBuildSupport::blockingQueuePolicy(4));
+    fixture.executable.graph.connect(
+        fixture.binder, "activated", activatedSink, "in", "epoch activated",
+        MediaGraphBuildSupport::blockingQueuePolicy(4));
+    fixture.executable.graph.connect(
+        fixture.binder, "bound_release", releaseSink, "in", "bound release",
         MediaGraphBuildSupport::blockingQueuePolicy(4));
     fixture.executable.avSyncBinding.emplace(MediaAvSyncRuntimeBinding{
         MediaAvSyncGroupKey("binder-group"), completePlan(),

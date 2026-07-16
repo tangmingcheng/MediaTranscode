@@ -40,20 +40,6 @@ MediaNodeKind MediaAvOutputSchedulerNode::staticKind() noexcept
     if (!m_group) return ::media::Status::failure(
         ::media::ErrorInfo::notInitialized(
             "MediaAvOutputSchedulerNode requires a registered sync group"));
-    auto epoch = m_group->playbackEpoch();
-    if (!epoch) return ::media::Status::failure(epoch.error());
-    if (m_group->lifecycleState() !=
-        MediaAvSyncGroupRuntime::LifecycleState::Active) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::notInitialized(
-                "MediaAvOutputSchedulerNode requires an active sync group"));
-    }
-    auto controller = MediaVideoSyncController::create(
-        m_group->plan(), epoch.value().generation);
-    if (!controller) return ::media::Status::failure(
-        controller.error().toErrorInfo());
-    m_videoController = std::make_unique<MediaVideoSyncController>(
-        std::move(controller).value());
     if (context.inputChannels(nodeId()).size() != 2 ||
         !context.findInputChannel(nodeId(), "video") ||
         !context.findInputChannel(nodeId(), "audio")) {
@@ -72,6 +58,26 @@ MediaNodeKind MediaAvOutputSchedulerNode::staticKind() noexcept
     return ::media::Status::success();
 }
 
+::media::Status MediaAvOutputSchedulerNode::configureActiveScheduling()
+{
+    if (m_videoController) return ::media::Status::success();
+    if (!m_group || m_group->lifecycleState() !=
+            MediaAvSyncGroupRuntime::LifecycleState::Active) {
+        return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+            "MediaAvOutputSchedulerNode requires an active sync group"));
+    }
+    auto epoch = m_group->playbackEpoch();
+    if (!epoch) return ::media::Status::failure(epoch.error());
+    auto controller = MediaVideoSyncController::create(
+        m_group->plan(), epoch.value().generation);
+    if (!controller) {
+        return ::media::Status::failure(controller.error().toErrorInfo());
+    }
+    m_videoController = std::make_unique<MediaVideoSyncController>(
+        std::move(controller).value());
+    return ::media::Status::success();
+}
+
 ::media::Result<MediaNodeProcessResult> MediaAvOutputSchedulerNode::process(
     MediaGraphExecutionContext& context)
 {
@@ -79,6 +85,20 @@ MediaNodeKind MediaAvOutputSchedulerNode::staticKind() noexcept
     if (!abortStatus) {
         return ::media::Result<MediaNodeProcessResult>::failure(
             abortStatus.error());
+    }
+    if (!m_group) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "A/V scheduler has no registered sync group"));
+    }
+    if (m_group->lifecycleState() ==
+        MediaAvSyncGroupRuntime::LifecycleState::AwaitingEpoch) {
+        return ::media::Result<MediaNodeProcessResult>::success(
+            MediaNodeProcessResult::waiting());
+    }
+    if (auto configured = configureActiveScheduling(); !configured) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            configured.error());
     }
     return FFmpegNodeRuntime::process(context);
 }

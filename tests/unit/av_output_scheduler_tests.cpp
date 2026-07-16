@@ -1310,6 +1310,42 @@ void testFactoryCreatesAvOutputScheduler(TestContext& ctx)
               std::string("AvOutputScheduler"));
 }
 
+void testRegisteredSchedulerWaitsForEpochActivation(TestContext& ctx)
+{
+    auto f = graphWithScheduler();
+    auto clock = std::make_shared<TestMasterClock>(ms(100));
+    auto runtime = std::make_unique<MediaGraphRuntime>(
+        std::make_shared<TestAvSyncClockSource>(clock));
+    MediaRealtimeExecutableGraph executable;
+    executable.graph = std::move(f.graph);
+    executable.avSyncBinding.emplace(MediaAvSyncRuntimeBinding{
+        MediaAvSyncGroupKey("matrix-group"), completePlan(),
+        schedulerTransitionPlan()});
+    EXPECT_TRUE(ctx, runtime->compile(std::move(executable)));
+    EXPECT_TRUE(ctx, runtime->registerDefaultRuntimeNodes());
+    auto* scheduler = dynamic_cast<MediaAvOutputSchedulerNode*>(
+        runtime->scheduler().findNode(f.scheduler));
+    auto* binder = dynamic_cast<MediaPlaybackEpochBinderNode*>(
+        runtime->scheduler().findNode(f.binder));
+    EXPECT_TRUE(ctx, scheduler && binder);
+    if (!scheduler || !binder) return;
+    EXPECT_TRUE(ctx, scheduler->start(runtime->context()));
+    auto* video = runtime->context().findInputChannel(f.scheduler, "video");
+    EXPECT_TRUE(ctx, video->push(
+        unit(ctx, MediaScheduledStream::Video, 100, 100, 1, 1, true)));
+    auto registered = scheduler->process(runtime->context());
+    EXPECT_TRUE(ctx, registered &&
+                         registered.value().state == MediaNodeProcessState::Waiting);
+    EXPECT_EQ(ctx, video->size(), static_cast<std::size_t>(1));
+    EXPECT_TRUE(ctx, binder->publishInitial(
+        {ms(0), ms(0), 1}, {1, ms(0), ms(0), 0, 48'000}));
+    auto active = scheduler->process(runtime->context());
+    EXPECT_TRUE(ctx, active &&
+                         active.value().state == MediaNodeProcessState::Waiting);
+    EXPECT_EQ(ctx, video->size(), static_cast<std::size_t>(0));
+    EXPECT_TRUE(ctx, scheduler->stop(runtime->context()));
+}
+
 } // namespace
 
 void runAvOutputSchedulerTests(media_transcode::test::TestContext& ctx)
@@ -1338,4 +1374,5 @@ void runAvOutputSchedulerTests(media_transcode::test::TestContext& ctx)
     testUnknownControlIsRejectedWithoutFlush(ctx);
     testFutureGenerationFlushAbortAndConfigurationFailures(ctx);
     testFactoryCreatesAvOutputScheduler(ctx);
+    testRegisteredSchedulerWaitsForEpochActivation(ctx);
 }

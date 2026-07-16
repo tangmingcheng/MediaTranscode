@@ -234,6 +234,13 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
     media_transcode_register_test(
         media_transcode_av_playback_epoch_binder_tests "runtime;deterministic")
 
+    add_executable(media_transcode_av_sync_production_release_tests
+        tests/unit/av_sync_production_release_tests.cpp
+    )
+    media_transcode_configure_test(media_transcode_av_sync_production_release_tests)
+    media_transcode_register_test(
+        media_transcode_av_sync_production_release_tests "node;deterministic")
+
     add_executable(media_transcode_rtp_packet_clock_binder_tests
         tests/unit/rtp_packet_clock_binder_tests.cpp
     )

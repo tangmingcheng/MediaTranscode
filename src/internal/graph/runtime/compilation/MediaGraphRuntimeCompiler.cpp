@@ -81,6 +81,8 @@ public:
                 "av_scheduler.sync_group";
             constexpr std::string_view BinderGroupKey =
                 "playback_epoch_binder.sync_group";
+            constexpr std::string_view StartupClockGroupKey =
+                "av_startup_clock.sync_group";
             if (!key.ends_with(SyncGroupSuffix)) continue;
             const bool schedulerConsumer =
                 node.kind == MediaNodeKind::AvOutputScheduler &&
@@ -88,7 +90,11 @@ public:
             const bool binderConsumer =
                 node.kind == MediaNodeKind::PlaybackEpochBinder &&
                 key == BinderGroupKey;
-            if (!schedulerConsumer && !binderConsumer) {
+            const bool startupClockConsumer =
+                node.kind == MediaNodeKind::AvStartupClock &&
+                key == StartupClockGroupKey;
+            if (!schedulerConsumer && !binderConsumer &&
+                !startupClockConsumer) {
                 return ::media::Status::failure(
                     ::media::ErrorInfo::invalidArgument(
                         "MediaGraphRuntime found an unsupported A/V sync group consumer"));
