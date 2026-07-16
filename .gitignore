@@ -117,3 +117,6 @@ CTestTestfile.cmake
 
 # GitHub specific
 .idea/
+
+# Track only prebuilt Windows libraries under repository-root 3rds.
+!/3rds/**/*.lib
