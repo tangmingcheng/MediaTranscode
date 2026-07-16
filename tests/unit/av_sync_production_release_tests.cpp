@@ -351,6 +351,80 @@ void testBinderAbortDropsRetainedRelease(TestContext& ctx)
     EXPECT_EQ(ctx, bound->size(), static_cast<std::size_t>(0));
 }
 
+void testBinderStopDropsActivatedButUncommittedEvent(TestContext& ctx)
+{
+    auto fixture = binderFixture();
+    MediaGraphRuntime runtime;
+    EXPECT_TRUE(ctx, runtime.compile(std::move(fixture.executable)));
+    EXPECT_TRUE(ctx, runtime.registerDefaultRuntimeNodes());
+    auto* binder = dynamic_cast<MediaPlaybackEpochBinderNode*>(
+        runtime.scheduler().findNode(fixture.binder));
+    auto* input = runtime.context().findInputChannel(fixture.binder, "release");
+    auto* activated = runtime.context().findInputChannel(
+        fixture.activatedSink, "in");
+    auto* bound = runtime.context().findInputChannel(fixture.releaseSink, "in");
+    auto group = runtime.context().findAvSyncGroup(
+        MediaAvSyncGroupKey("task4-group"));
+    EXPECT_TRUE(ctx, binder && input && activated && bound && group);
+    if (!binder || !input || !activated || !bound || !group) return;
+
+    EXPECT_TRUE(ctx, activated->push(
+        makeMediaBufferRef<MediaAvStartupClockBuffer>(ms(0))));
+    EXPECT_TRUE(ctx, input->push(release(ctx)));
+    auto blocked = binder->process(runtime.context());
+    EXPECT_TRUE(ctx, blocked &&
+                         blocked.value().state == MediaNodeProcessState::Waiting);
+    EXPECT_EQ(ctx, group->lifecycleState(),
+              MediaAvSyncGroupRuntime::LifecycleState::Active);
+    EXPECT_TRUE(ctx, binder->stop(runtime.context()));
+    EXPECT_TRUE(ctx, binder->start(runtime.context()));
+
+    MediaBufferRef filler;
+    EXPECT_TRUE(ctx, activated->tryPop(filler));
+    auto idle = binder->process(runtime.context());
+    EXPECT_TRUE(ctx, idle &&
+                         idle.value().state == MediaNodeProcessState::Waiting);
+    EXPECT_EQ(ctx, activated->size(), static_cast<std::size_t>(0));
+    EXPECT_EQ(ctx, bound->size(), static_cast<std::size_t>(0));
+}
+
+void testBinderStopDropsEventCommittedReleasePending(TestContext& ctx)
+{
+    auto fixture = binderFixture();
+    MediaGraphRuntime runtime;
+    EXPECT_TRUE(ctx, runtime.compile(std::move(fixture.executable)));
+    EXPECT_TRUE(ctx, runtime.registerDefaultRuntimeNodes());
+    auto* binder = dynamic_cast<MediaPlaybackEpochBinderNode*>(
+        runtime.scheduler().findNode(fixture.binder));
+    auto* input = runtime.context().findInputChannel(fixture.binder, "release");
+    auto* activated = runtime.context().findInputChannel(
+        fixture.activatedSink, "in");
+    auto* bound = runtime.context().findInputChannel(fixture.releaseSink, "in");
+    EXPECT_TRUE(ctx, binder && input && activated && bound);
+    if (!binder || !input || !activated || !bound) return;
+
+    EXPECT_TRUE(ctx, bound->push(
+        makeMediaBufferRef<MediaAvStartupClockBuffer>(ms(0))));
+    EXPECT_TRUE(ctx, input->push(release(ctx)));
+    auto blocked = binder->process(runtime.context());
+    EXPECT_TRUE(ctx, blocked &&
+                         blocked.value().state == MediaNodeProcessState::Waiting);
+    MediaBufferRef event;
+    EXPECT_TRUE(ctx, activated->tryPop(event));
+    EXPECT_TRUE(ctx, dynamic_cast<const MediaPlaybackEpochActivatedBuffer*>(
+                         event.get()) != nullptr);
+
+    EXPECT_TRUE(ctx, binder->stop(runtime.context()));
+    EXPECT_TRUE(ctx, binder->start(runtime.context()));
+    MediaBufferRef filler;
+    EXPECT_TRUE(ctx, bound->tryPop(filler));
+    auto idle = binder->process(runtime.context());
+    EXPECT_TRUE(ctx, idle &&
+                         idle.value().state == MediaNodeProcessState::Waiting);
+    EXPECT_EQ(ctx, activated->size(), static_cast<std::size_t>(0));
+    EXPECT_EQ(ctx, bound->size(), static_cast<std::size_t>(0));
+}
+
 void testRtpAdapterPublishesGenericLockedState(TestContext& ctx)
 {
     MediaGraph graph;
@@ -458,6 +532,8 @@ int main()
     testActivatedEventIsCompleteAndImmutable(ctx);
     testBinderActivatesOnceAndCommitsEventBeforeRelease(ctx);
     testBinderAbortDropsRetainedRelease(ctx);
+    testBinderStopDropsActivatedButUncommittedEvent(ctx);
+    testBinderStopDropsEventCommittedReleasePending(ctx);
     testActivatedFanoutPreservesOneImmutableEvent(ctx);
     testTaskFourFactorySurfaceIsComplete(ctx);
     testRtpAdapterPublishesGenericLockedState(ctx);

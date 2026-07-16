@@ -166,20 +166,4 @@ const MediaAvSyncGroupKey& MediaPlaybackEpochBinderNode::groupKey() const noexce
     return m_groupKey;
 }
 
-::media::Status MediaPlaybackEpochBinderNode::publishInitial(
-    MediaPlaybackEpoch epoch,
-    MediaAudioPlaybackOrigin audioOrigin)
-{
-    return m_capability.activateInitial(epoch, audioOrigin);
-}
-
-::media::Status MediaPlaybackEpochBinderNode::publishNext(
-    MediaPlaybackEpoch epoch,
-    MediaAudioPlaybackOrigin audioOrigin,
-    std::uint64_t completedTransitionSequence)
-{
-    return m_capability.activateNext(epoch, audioOrigin,
-                                     completedTransitionSequence);
-}
-
 } // namespace media::ffmpeg::graph

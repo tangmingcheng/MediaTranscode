@@ -23,6 +23,21 @@ namespace {
 using media_transcode::test::TestContext;
 using namespace media::ffmpeg::graph;
 
+template <typename T>
+concept HasDirectInitialEpochActivation = requires(
+    T& value, MediaPlaybackEpoch epoch, MediaAudioPlaybackOrigin origin) {
+    value.publishInitial(epoch, origin);
+};
+
+template <typename T>
+concept HasDirectNextEpochActivation = requires(
+    T& value, MediaPlaybackEpoch epoch, MediaAudioPlaybackOrigin origin) {
+    value.publishNext(epoch, origin, std::uint64_t{1});
+};
+
+static_assert(!HasDirectInitialEpochActivation<MediaPlaybackEpochBinderNode>);
+static_assert(!HasDirectNextEpochActivation<MediaPlaybackEpochBinderNode>);
+
 static_assert(std::move_constructible<MediaPlaybackEpochActivationCapability>);
 static_assert(std::is_move_assignable_v<MediaPlaybackEpochActivationCapability>);
 static_assert(!std::copy_constructible<MediaPlaybackEpochActivationCapability>);
@@ -249,8 +264,19 @@ void testCompilerIssuesOneCapabilityToOneBinder(TestContext& ctx)
     if (!binder || !group) return;
 
     EXPECT_EQ(ctx, binder->groupKey(), MediaAvSyncGroupKey("binder-group"));
-    EXPECT_TRUE(ctx, binder->publishInitial(epoch(1), origin(1)));
-    EXPECT_FALSE(ctx, binder->publishInitial(epoch(1), origin(1)));
+    auto* input = runtime.context().findInputChannel(fixture.binder, "release");
+    EXPECT_TRUE(ctx, input != nullptr);
+    if (!input) return;
+    const auto payload = [] {
+        return makeMediaBufferRef<MediaAvStartupClockBuffer>(ms(1));
+    };
+    auto release = MediaAvStartupReleaseBuffer::create(
+        MediaAvSyncGroupKey("binder-group"),
+        MediaAvStartupReleaseKind::InitialAtomicRelease,
+        epoch(1), origin(1), {{payload(), 0}}, {{payload(), 0}});
+    EXPECT_TRUE(ctx, release);
+    EXPECT_TRUE(ctx, input->push(release.value()));
+    EXPECT_TRUE(ctx, binder->process(runtime.context()));
     auto initial = group->epochTransitionSnapshot();
     EXPECT_EQ(ctx, initial.readiness, MediaAvGenerationReadiness::Locked);
     EXPECT_TRUE(ctx, initial.playbackEpoch &&
@@ -259,35 +285,8 @@ void testCompilerIssuesOneCapabilityToOneBinder(TestContext& ctx)
                          initial.audioOrigin->generation == 1);
     EXPECT_TRUE(ctx, initial.outputPermitted);
 
-    auto purge = group->beginEpochReacquisition(1, 2);
-    EXPECT_TRUE(ctx, purge);
-    if (!purge) return;
-    auto revoked = group->epochTransitionSnapshot();
-    EXPECT_EQ(ctx, revoked.readiness, MediaAvGenerationReadiness::Reacquire);
-    EXPECT_FALSE(ctx, revoked.outputPermitted);
-    EXPECT_TRUE(ctx, group->pollEpochReacquisitionTimeout());
-    bool complete = false;
-    for (const auto& participant : transitionPlan().participants) {
-        auto acknowledged = group->acknowledgeEpochReacquisition(
-            MediaAvGenerationAcknowledgement{
-                participant.participant, purge.value().transitionSequence,
-                ::media::Status::success()});
-        EXPECT_TRUE(ctx, acknowledged);
-        if (acknowledged) complete = acknowledged.value();
-    }
-    EXPECT_TRUE(ctx, complete);
-    EXPECT_FALSE(ctx, binder->publishNext(
-                          epoch(2), origin(2),
-                          purge.value().transitionSequence + 1));
-    EXPECT_TRUE(ctx, binder->publishNext(
-                         epoch(2), origin(2),
-                         purge.value().transitionSequence));
-    auto next = group->epochTransitionSnapshot();
-    EXPECT_EQ(ctx, next.readiness, MediaAvGenerationReadiness::Locked);
-    EXPECT_TRUE(ctx, next.playbackEpoch &&
-                         next.playbackEpoch->generation == 2);
-    EXPECT_TRUE(ctx, next.audioOrigin && next.audioOrigin->generation == 2);
-    EXPECT_TRUE(ctx, next.outputPermitted);
+    EXPECT_TRUE(ctx, input->push(release.value()));
+    EXPECT_FALSE(ctx, binder->process(runtime.context()));
 }
 
 void testCompilerRejectsMissingDuplicateAndMismatchedBinder(TestContext& ctx)
@@ -377,51 +376,6 @@ void testRejectedSchedulerBatchPreservesPublishedState(TestContext& ctx)
     EXPECT_TRUE(ctx, scheduler.findNode(MediaNodeId{81}) == nullptr);
 }
 
-void testSatisfiedFutureRequestCanBeReplacedByStrictCurrentGenerationEvent(
-    TestContext& ctx)
-{
-    const auto verifyReplacement = [&](MediaAvReacquisitionReason reason) {
-        auto fixture = makeExecutable();
-        MediaGraphRuntime runtime;
-        EXPECT_TRUE(ctx, runtime.compile(std::move(fixture.executable)));
-        EXPECT_TRUE(ctx, runtime.registerDefaultRuntimeNodes());
-        auto* binder = dynamic_cast<MediaPlaybackEpochBinderNode*>(
-            runtime.scheduler().findNode(fixture.binder));
-        auto group = runtime.context().findAvSyncGroup(
-            MediaAvSyncGroupKey("binder-group"));
-        EXPECT_TRUE(ctx, binder != nullptr && group != nullptr);
-        if (!binder || !group) return;
-
-        EXPECT_TRUE(ctx, binder->publishInitial(epoch(1), origin(1)));
-        auto future = group->observeGeneration(3);
-        EXPECT_TRUE(ctx, future && future.value() ==
-            MediaAvSyncGroupRuntime::GenerationDisposition::
-                ReacquisitionRequired);
-        auto purge = group->beginEpochReacquisition(1, 3);
-        EXPECT_TRUE(ctx, purge);
-        if (!purge) return;
-        for (const auto& participant : transitionPlan().participants) {
-            EXPECT_TRUE(ctx, group->acknowledgeEpochReacquisition({
-                participant.participant, purge.value().transitionSequence,
-                ::media::Status::success()}));
-        }
-        EXPECT_TRUE(ctx, binder->publishNext(
-            epoch(3), origin(3), purge.value().transitionSequence));
-        EXPECT_FALSE(ctx, group->reacquisitionRequest());
-
-        EXPECT_TRUE(ctx, group->requestReacquisition({3, reason}));
-        const auto replacement = group->reacquisitionRequest();
-        EXPECT_TRUE(ctx, replacement && replacement->observedGeneration == 3 &&
-                             replacement->reason == reason);
-        EXPECT_EQ(ctx, group->lifecycleState(),
-                  MediaAvSyncGroupRuntime::LifecycleState::
-                      ReacquisitionRequired);
-    };
-
-    verifyReplacement(MediaAvReacquisitionReason::Flush);
-    verifyReplacement(MediaAvReacquisitionReason::HardDiscontinuity);
-}
-
 void testLifecyclePoisonsIssuedAuthority(TestContext& ctx)
 {
     auto fixture = makeExecutable();
@@ -450,7 +404,6 @@ int main()
     testCompileRollbackPreservesActiveRuntimeForBinderCardinalityErrors(ctx);
     testDefaultRegistrationFailureDoesNotPartiallyPublishBinder(ctx);
     testRejectedSchedulerBatchPreservesPublishedState(ctx);
-    testSatisfiedFutureRequestCanBeReplacedByStrictCurrentGenerationEvent(ctx);
     testLifecyclePoisonsIssuedAuthority(ctx);
     testBinderActivatesInitialOnlyAndRejectsGroupMismatch(ctx);
     return ctx.failures == 0 ? 0 : 1;

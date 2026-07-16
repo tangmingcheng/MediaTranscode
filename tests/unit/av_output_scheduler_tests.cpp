@@ -1,5 +1,6 @@
 #include "common/TestAssert.h"
 #include "common/GraphRuntimeTestSupport.h"
+#include "common/AvSyncRuntimeTestSupport.h"
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
 #include "internal/graph/core/MediaGraphDump.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
@@ -131,6 +132,9 @@ struct SchedulerFixture final {
     MediaNodeId scheduler;
     MediaNodeId binder;
     MediaNodeId sink;
+    // The fixture is declared before the moved execution context, so this
+    // owner keeps the compiled graph alive until that context is destroyed.
+    std::unique_ptr<MediaGraphRuntime> runtimeOwner;
 };
 
 SchedulerFixture graphWithScheduler(bool option = true,
@@ -166,6 +170,10 @@ SchedulerFixture graphWithScheduler(bool option = true,
     f.graph.connect(f.video, "packet", f.scheduler, "video", "video", inputPolicy);
     f.graph.connect(f.audio, "packet", f.scheduler, "audio", "audio", inputPolicy);
     f.graph.connect(f.scheduler, "scheduled", f.sink, "scheduled", "scheduled", outputPolicy);
+    if (option) {
+        media_transcode::test::addPlaybackEpochReleaseBoundary(
+            f.graph, f.binder);
+    }
     return f;
 }
 
@@ -250,7 +258,6 @@ bool startFixture(TestContext& ctx, SchedulerFixture& f,
                   const std::shared_ptr<MediaMasterClock>& clock,
                   MediaPlaybackEpoch epoch)
 {
-    static std::vector<std::unique_ptr<MediaGraphRuntime>> runtimes;
     auto runtime = std::make_unique<MediaGraphRuntime>(
         std::make_shared<TestAvSyncClockSource>(clock));
     MediaRealtimeExecutableGraph executable;
@@ -262,15 +269,12 @@ bool startFixture(TestContext& ctx, SchedulerFixture& f,
         !runtime->registerDefaultRuntimeNodes()) {
         return false;
     }
-    auto* binder = dynamic_cast<MediaPlaybackEpochBinderNode*>(
-        runtime->scheduler().findNode(f.binder));
-    if (!binder || !binder->publishInitial(
-            epoch, {epoch.generation, epoch.sourceStart,
-                    epoch.masterRelease, 0, 48'000})) {
+    if (!media_transcode::test::activateInitialThroughRelease(
+            *runtime, f.binder, MediaAvSyncGroupKey("matrix-group"), epoch)) {
         return false;
     }
     execution = std::move(runtime->context());
-    runtimes.push_back(std::move(runtime));
+    f.runtimeOwner = std::move(runtime);
     return true;
 }
 
@@ -1325,10 +1329,8 @@ void testRegisteredSchedulerWaitsForEpochActivation(TestContext& ctx)
     EXPECT_TRUE(ctx, runtime->registerDefaultRuntimeNodes());
     auto* scheduler = dynamic_cast<MediaAvOutputSchedulerNode*>(
         runtime->scheduler().findNode(f.scheduler));
-    auto* binder = dynamic_cast<MediaPlaybackEpochBinderNode*>(
-        runtime->scheduler().findNode(f.binder));
-    EXPECT_TRUE(ctx, scheduler && binder);
-    if (!scheduler || !binder) return;
+    EXPECT_TRUE(ctx, scheduler != nullptr);
+    if (!scheduler) return;
     EXPECT_TRUE(ctx, scheduler->start(runtime->context()));
     auto* video = runtime->context().findInputChannel(f.scheduler, "video");
     EXPECT_TRUE(ctx, video->push(
@@ -1337,13 +1339,50 @@ void testRegisteredSchedulerWaitsForEpochActivation(TestContext& ctx)
     EXPECT_TRUE(ctx, registered &&
                          registered.value().state == MediaNodeProcessState::Waiting);
     EXPECT_EQ(ctx, video->size(), static_cast<std::size_t>(1));
-    EXPECT_TRUE(ctx, binder->publishInitial(
-        {ms(0), ms(0), 1}, {1, ms(0), ms(0), 0, 48'000}));
+    EXPECT_TRUE(ctx, media_transcode::test::activateInitialThroughRelease(
+        *runtime, f.binder, MediaAvSyncGroupKey("matrix-group"),
+        {ms(0), ms(0), 1}));
     auto active = scheduler->process(runtime->context());
     EXPECT_TRUE(ctx, active &&
                          active.value().state == MediaNodeProcessState::Waiting);
     EXPECT_EQ(ctx, video->size(), static_cast<std::size_t>(0));
     EXPECT_TRUE(ctx, scheduler->stop(runtime->context()));
+}
+
+void testActiveSchedulerConfiguresControllerOnce(TestContext& ctx)
+{
+    auto f = graphWithScheduler();
+    auto clock = std::make_shared<TestMasterClock>(ms(100));
+    auto runtime = std::make_unique<MediaGraphRuntime>(
+        std::make_shared<TestAvSyncClockSource>(clock));
+    MediaRealtimeExecutableGraph executable;
+    executable.graph = std::move(f.graph);
+    executable.avSyncBinding.emplace(MediaAvSyncRuntimeBinding{
+        MediaAvSyncGroupKey("matrix-group"), completePlan(),
+        schedulerTransitionPlan()});
+    EXPECT_TRUE(ctx, runtime->compile(std::move(executable)));
+    EXPECT_TRUE(ctx, runtime->registerDefaultRuntimeNodes());
+    EXPECT_TRUE(ctx, media_transcode::test::activateInitialThroughRelease(
+        *runtime, f.binder, MediaAvSyncGroupKey("matrix-group"),
+        {ms(0), ms(0), 1}));
+
+    int configurations = 0;
+    MediaAvOutputSchedulerNode scheduler(
+        f.scheduler,
+        [&configurations](const MediaAvSyncPlan& plan,
+                          std::uint64_t generation) {
+            ++configurations;
+            return MediaVideoSyncController::create(plan, generation);
+        });
+    EXPECT_TRUE(ctx, scheduler.start(runtime->context()));
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        auto processed = scheduler.process(runtime->context());
+        EXPECT_TRUE(ctx, processed &&
+                             processed.value().state ==
+                                 MediaNodeProcessState::Waiting);
+    }
+    EXPECT_EQ(ctx, configurations, 1);
+    EXPECT_TRUE(ctx, scheduler.stop(runtime->context()));
 }
 
 } // namespace
@@ -1375,4 +1414,5 @@ void runAvOutputSchedulerTests(media_transcode::test::TestContext& ctx)
     testFutureGenerationFlushAbortAndConfigurationFailures(ctx);
     testFactoryCreatesAvOutputScheduler(ctx);
     testRegisteredSchedulerWaitsForEpochActivation(ctx);
+    testActiveSchedulerConfiguresControllerOnce(ctx);
 }

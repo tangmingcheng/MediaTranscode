@@ -23,11 +23,6 @@ public:
     void abort(MediaGraphExecutionContext& context) noexcept override;
 
     const MediaAvSyncGroupKey& groupKey() const noexcept;
-    ::media::Status publishInitial(MediaPlaybackEpoch epoch,
-                                   MediaAudioPlaybackOrigin audioOrigin);
-    ::media::Status publishNext(MediaPlaybackEpoch epoch,
-                                MediaAudioPlaybackOrigin audioOrigin,
-                                std::uint64_t completedTransitionSequence);
 
 private:
     MediaNodeId m_nodeId;

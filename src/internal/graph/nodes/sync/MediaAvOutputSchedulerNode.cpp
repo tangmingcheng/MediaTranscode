@@ -11,7 +11,19 @@
 
 namespace media::ffmpeg::graph {
 MediaAvOutputSchedulerNode::MediaAvOutputSchedulerNode(MediaNodeId nodeId)
+    : MediaAvOutputSchedulerNode(
+          nodeId,
+          [](const MediaAvSyncPlan& plan, std::uint64_t generation) {
+              return MediaVideoSyncController::create(plan, generation);
+          })
+{
+}
+
+MediaAvOutputSchedulerNode::MediaAvOutputSchedulerNode(
+    MediaNodeId nodeId,
+    VideoControllerFactory controllerFactory)
     : FFmpegNodeRuntime(nodeId, staticKind(), "MediaAvOutputSchedulerNode")
+    , m_videoControllerFactory(std::move(controllerFactory))
 {
 }
 
@@ -61,6 +73,10 @@ MediaNodeKind MediaAvOutputSchedulerNode::staticKind() noexcept
 ::media::Status MediaAvOutputSchedulerNode::configureActiveScheduling()
 {
     if (m_videoController) return ::media::Status::success();
+    if (!m_videoControllerFactory) {
+        return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+            "MediaAvOutputSchedulerNode requires a video controller factory"));
+    }
     if (!m_group || m_group->lifecycleState() !=
             MediaAvSyncGroupRuntime::LifecycleState::Active) {
         return ::media::Status::failure(::media::ErrorInfo::notInitialized(
@@ -68,7 +84,7 @@ MediaNodeKind MediaAvOutputSchedulerNode::staticKind() noexcept
     }
     auto epoch = m_group->playbackEpoch();
     if (!epoch) return ::media::Status::failure(epoch.error());
-    auto controller = MediaVideoSyncController::create(
+    auto controller = m_videoControllerFactory(
         m_group->plan(), epoch.value().generation);
     if (!controller) {
         return ::media::Status::failure(controller.error().toErrorInfo());

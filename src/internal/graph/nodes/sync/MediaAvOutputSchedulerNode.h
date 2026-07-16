@@ -9,6 +9,7 @@
 
 #include <memory>
 #include <optional>
+#include <functional>
 
 namespace media::ffmpeg::graph {
 
@@ -16,7 +17,13 @@ class MediaAvSyncGroupRuntime;
 
 class MediaAvOutputSchedulerNode final : public FFmpegNodeRuntime {
 public:
+    using VideoControllerFactory = std::function<
+        MediaAvSyncResult<MediaVideoSyncController>(
+            const MediaAvSyncPlan&, std::uint64_t)>;
+
     explicit MediaAvOutputSchedulerNode(MediaNodeId nodeId);
+    MediaAvOutputSchedulerNode(MediaNodeId nodeId,
+                               VideoControllerFactory controllerFactory);
     static MediaNodeKind staticKind() noexcept;
     ::media::Status start(MediaGraphExecutionContext& context) override;
     ::media::Result<MediaNodeProcessResult> process(
@@ -58,6 +65,7 @@ private:
 
     std::optional<MediaAvSyncGroupKey> m_groupKey;
     std::shared_ptr<MediaAvSyncGroupRuntime> m_group;
+    VideoControllerFactory m_videoControllerFactory;
     std::unique_ptr<MediaVideoSyncController> m_videoController;
     std::optional<MediaAvSchedulerHead> m_videoHead;
     std::optional<MediaAvSchedulerHead> m_audioHead;
