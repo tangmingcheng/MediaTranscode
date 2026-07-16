@@ -199,7 +199,9 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
     media_transcode_configure_test(media_transcode_core_tests)
     media_transcode_register_test(media_transcode_core_tests "core;deterministic")
 
-    add_executable(media_transcode_planner_tests tests/unit/test_planner.cpp)
+    add_executable(media_transcode_planner_tests
+        tests/unit/test_planner.cpp
+        tests/unit/av_sync_production_plan_tests.cpp)
     media_transcode_configure_test(media_transcode_planner_tests)
     media_transcode_register_test(media_transcode_planner_tests "planner;deterministic")
 

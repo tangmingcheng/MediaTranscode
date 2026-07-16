@@ -44,6 +44,8 @@ extern "C" {
 using namespace media::ffmpeg::graph;
 using media_transcode::test::TestContext;
 
+void runAvSyncProductionPlanTests(TestContext& ctx);
+
 namespace {
 
 FFmpegInputProgramSnapshot publicProgram(int number,
@@ -1113,6 +1115,7 @@ void testRealtimePlannerProducesCompleteTsAvSyncRuntimeProduct(TestContext& ctx)
     EXPECT_TRUE(ctx, outerResult);
     if (!outerResult) return;
     auto outer = std::move(outerResult).value();
+    outer.inputType = RealtimeInputType::MpegTsUdp;
     outer.inputLayout = RealtimeInputStreamLayout::MuxedTransportStream;
     outer.outputLayout = RealtimeOutputStreamLayout::MuxedTransportStream;
     outer.muxedOutput.url = "udp://127.0.0.1:7000";
@@ -2059,6 +2062,7 @@ int main()
     testAacAdtsDecoderCapabilityDoesNotRequireContainerExtradata(ctx);
     testOpusRtpDecoderCapabilityUsesPlannedProtocolBound(ctx);
     testRealtimeAvSyncRuntimeProductRejectsIndependentMutations(ctx);
+    runAvSyncProductionPlanTests(ctx);
     testRawRtpInputPlannerProducesCompleteTransportPolicy(ctx);
     testAvSyncPlannerBuildsCompleteTsContract(ctx);
     testAvSyncPlannerRejectsSeparateRtpToTs(ctx);

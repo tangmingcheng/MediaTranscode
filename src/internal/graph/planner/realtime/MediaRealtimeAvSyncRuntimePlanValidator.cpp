@@ -41,6 +41,51 @@ namespace media::ffmpeg::graph {
     if (!selectedFacts || selectedFacts.value() != runtime.planningFacts) {
         return invalid("selected planning facts");
     }
+    const auto& assembly = runtime.assembly;
+    if (assembly.generationPolicy !=
+            MediaInitialGenerationPolicy::FirstLockedOnlyFailOnChange ||
+        assembly.evidencePolicy !=
+            MediaClockEvidencePolicy::RequireLockedFailOnDegradedOrReacquire ||
+        assembly.video.sourceIdentity.empty() ||
+        assembly.audio.sourceIdentity.empty() ||
+        !runtime.synchronization.startup.videoIdentity ||
+        !runtime.synchronization.startup.audioIdentity ||
+        assembly.video.sourceIdentity !=
+            *runtime.synchronization.startup.videoIdentity ||
+        assembly.audio.sourceIdentity !=
+            *runtime.synchronization.startup.audioIdentity ||
+        runtime.planningFacts.inputVideoIdentity !=
+            runtime.synchronization.startup.videoIdentity ||
+        runtime.planningFacts.inputAudioIdentity !=
+            runtime.synchronization.startup.audioIdentity ||
+        assembly.video.decodeOrder !=
+            MediaDecodeOrderMode::ReorderedRequiresDecodeTime ||
+        assembly.audio.decodeOrder !=
+            MediaDecodeOrderMode::PresentationOrderNoReorder ||
+        !runtime.synchronization.startup.videoCapacity ||
+        !runtime.synchronization.startup.audioCapacity ||
+        assembly.video.acquiringCapacity == 0 ||
+        assembly.audio.acquiringCapacity == 0 ||
+        assembly.video.acquiringCapacity !=
+            *runtime.synchronization.startup.videoCapacity ||
+        assembly.audio.acquiringCapacity !=
+            *runtime.synchronization.startup.audioCapacity ||
+        !runtime.synchronization.startup.maximumWaitNs ||
+        assembly.video.acquiringTimeout <=
+            MediaRunningTime::fromNanoseconds(0) ||
+        assembly.audio.acquiringTimeout <=
+            MediaRunningTime::fromNanoseconds(0) ||
+        assembly.video.acquiringTimeout !=
+            *runtime.synchronization.startup.maximumWaitNs ||
+        assembly.audio.acquiringTimeout !=
+            *runtime.synchronization.startup.maximumWaitNs ||
+        !runtime.synchronization.audioServo.minimumUpdateIntervalNs ||
+        assembly.startupClockInterval <=
+            MediaRunningTime::fromNanoseconds(0) ||
+        assembly.startupClockInterval !=
+            *runtime.synchronization.audioServo.minimumUpdateIntervalNs) {
+        return invalid("production assembly common contract");
+    }
     auto expectedCorrection = MediaAudioCorrectionReachabilityPlanner::plan(
         runtime.synchronization, runtime.planningFacts);
     if (!expectedCorrection ||
@@ -174,8 +219,48 @@ namespace media::ffmpeg::graph {
             runtime.outputAdapter !=
                 MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp ||
             !std::holds_alternative<MediaSeparateRtpOutputRuntimePlan>(
-                runtime.protocolOutput) || !runtime.synchronization.rtp) {
+                runtime.protocolOutput) || !runtime.synchronization.rtp ||
+            !std::holds_alternative<MediaRtpInputClockAssemblyPlan>(
+                assembly.inputClock) ||
+            std::get<MediaRtpInputClockAssemblyPlan>(assembly.inputClock)
+                    .commonEpochPolicy !=
+                MediaRtpCommonEpochPolicy::
+                    EarliestLockedSenderReportSourceTime ||
+            !std::holds_alternative<MediaRtpTimestampDeltaDurationPlan>(
+                assembly.video.duration) ||
+            !std::holds_alternative<MediaPlannedAudioSamplesDurationPlan>(
+                assembly.audio.duration)) {
             return invalid("RTP topology and adapter");
+        }
+        const auto& videoDuration =
+            std::get<MediaRtpTimestampDeltaDurationPlan>(
+                assembly.video.duration);
+        const auto& audioDuration =
+            std::get<MediaPlannedAudioSamplesDurationPlan>(
+                assembly.audio.duration);
+        if (!runtime.planningFacts.inputVideoClockRate ||
+            videoDuration.clockRate <= 0 ||
+            videoDuration.clockRate !=
+                *runtime.planningFacts.inputVideoClockRate ||
+            !runtime.synchronization.rtp->videoInput.clockRate ||
+            videoDuration.clockRate !=
+                *runtime.synchronization.rtp->videoInput.clockRate ||
+            videoDuration.terminalPolicy !=
+                MediaTerminalDurationPolicy::RepeatLastObservedPositiveDelta ||
+            !runtime.planningFacts.inputAudioSampleRate ||
+            audioDuration.sampleRate <= 0 ||
+            audioDuration.sampleRate !=
+                *runtime.planningFacts.inputAudioSampleRate ||
+            !runtime.synchronization.rtp->audioInput.clockRate ||
+            audioDuration.sampleRate !=
+                *runtime.synchronization.rtp->audioInput.clockRate ||
+            !runtime.planningFacts.inputAudioSamplesPerAccessUnit ||
+            audioDuration.samplesPerAccessUnit == 0 ||
+            audioDuration.samplesPerAccessUnit !=
+                *runtime.planningFacts.inputAudioSamplesPerAccessUnit ||
+            (outer.videoPlan.inputCodecName != "h264" &&
+             outer.videoPlan.inputCodecName != "hevc")) {
+            return invalid("RTP production assembly duration");
         }
         const auto& output =
             std::get<MediaSeparateRtpOutputRuntimePlan>(runtime.protocolOutput);
@@ -276,13 +361,28 @@ namespace media::ffmpeg::graph {
         }
     } else if (*runtime.synchronization.topology ==
                MediaAvSyncTopology::MpegTsToMpegTs) {
-        if (outer.inputLayout !=
+        if (outer.inputType != RealtimeInputType::MpegTsUdp ||
+            outer.inputLayout !=
                 RealtimeInputStreamLayout::MuxedTransportStream ||
             outer.outputLayout !=
                 RealtimeOutputStreamLayout::MuxedTransportStream ||
             runtime.outputAdapter != MediaAvSyncOutputAdapterKind::ProjectMpegTs ||
             !std::holds_alternative<MediaProjectMpegTsRuntimeOutputPlan>(
-                runtime.protocolOutput)) {
+                runtime.protocolOutput) ||
+            !std::holds_alternative<MediaMpegTsInputClockAssemblyPlan>(
+                assembly.inputClock) ||
+            !std::holds_alternative<MediaPacketDurationPlan>(
+                assembly.video.duration) ||
+            !std::holds_alternative<MediaPacketDurationPlan>(
+                assembly.audio.duration) ||
+            !std::get<MediaPacketDurationPlan>(assembly.video.duration)
+                 .requirePositiveDuration ||
+            !std::get<MediaPacketDurationPlan>(assembly.audio.duration)
+                 .requirePositiveDuration ||
+            runtime.planningFacts.inputVideoClockRate ||
+            runtime.planningFacts.inputAudioSamplesPerAccessUnit ||
+            !runtime.planningFacts.inputAudioSampleRate ||
+            *runtime.planningFacts.inputAudioSampleRate <= 0) {
             return invalid("MPEG-TS topology and adapter");
         }
         const auto& output = std::get<MediaProjectMpegTsRuntimeOutputPlan>(

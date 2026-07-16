@@ -9,6 +9,7 @@
 #include "internal/graph/planner/avsync/MediaAvSyncPlan.h"
 #include "internal/graph/planner/avsync/MediaAvSyncOutputAdapterKind.h"
 #include "internal/graph/planner/realtime/MediaProjectMpegTsOutputPlan.h"
+#include "internal/graph/planner/realtime/MediaRealtimeAvSyncAssemblyPlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncPlanningFacts.h"
 #include "internal/graph/planner/realtime/MediaScheduledRtpOutputPlan.h"
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
@@ -48,6 +49,7 @@ struct MediaProjectMpegTsRuntimeOutputPlan final {
 struct MediaRealtimeAvSyncRuntimePlan final {
     MediaAvSyncGroupKey groupKey;
     MediaAvSyncPlan synchronization;
+    MediaRealtimeAvSyncAssemblyPlan assembly;
     MediaAvSyncOutputAdapterKind outputAdapter;
     std::variant<MediaSeparateRtpOutputRuntimePlan,
                  MediaProjectMpegTsRuntimeOutputPlan> protocolOutput;

@@ -13,6 +13,101 @@
 namespace media::ffmpeg::graph {
 namespace {
 
+::media::Result<MediaRealtimeAvSyncAssemblyPlan> planAssembly(
+    const MediaRealtimeRtpTranscodePlan& outer,
+    const MediaAvSyncPlan& synchronization,
+    const MediaRealtimeAvSyncPlanningFacts& facts)
+{
+    if (!outer.audioPlan.enabled || !synchronization.topology ||
+        !synchronization.startup.videoIdentity ||
+        synchronization.startup.videoIdentity->empty() ||
+        !synchronization.startup.audioIdentity ||
+        synchronization.startup.audioIdentity->empty() ||
+        !synchronization.startup.videoCapacity ||
+        *synchronization.startup.videoCapacity == 0 ||
+        !synchronization.startup.audioCapacity ||
+        *synchronization.startup.audioCapacity == 0 ||
+        !synchronization.startup.maximumWaitNs ||
+        *synchronization.startup.maximumWaitNs <=
+            MediaRunningTime::fromNanoseconds(0) ||
+        !synchronization.audioServo.minimumUpdateIntervalNs ||
+        *synchronization.audioServo.minimumUpdateIntervalNs <=
+            MediaRunningTime::fromNanoseconds(0) ||
+        facts.inputVideoIdentity != synchronization.startup.videoIdentity ||
+        facts.inputAudioIdentity != synchronization.startup.audioIdentity) {
+        return ::media::Result<MediaRealtimeAvSyncAssemblyPlan>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "A/V production assembly requires complete startup and source facts"));
+    }
+
+    MediaAvSyncInputClockPlan inputClock;
+    MediaCanonicalVideoDurationPlan videoDuration;
+    MediaCanonicalAudioDurationPlan audioDuration;
+    if (*synchronization.topology ==
+        MediaAvSyncTopology::SeparateRtpToSeparateRtp) {
+        if (outer.inputLayout != RealtimeInputStreamLayout::SeparateStreams ||
+            outer.outputLayout != RealtimeOutputStreamLayout::SeparateStreams ||
+            !synchronization.rtp || !facts.inputVideoClockRate ||
+            *facts.inputVideoClockRate <= 0 || !facts.inputAudioSampleRate ||
+            *facts.inputAudioSampleRate <= 0 ||
+            !facts.inputAudioSamplesPerAccessUnit ||
+            *facts.inputAudioSamplesPerAccessUnit == 0 ||
+            (outer.videoPlan.inputCodecName != "h264" &&
+             outer.videoPlan.inputCodecName != "hevc")) {
+            return ::media::Result<MediaRealtimeAvSyncAssemblyPlan>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "separate RTP production assembly facts are incomplete"));
+        }
+        inputClock.emplace<MediaRtpInputClockAssemblyPlan>(
+            MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime);
+        videoDuration.emplace<MediaRtpTimestampDeltaDurationPlan>(
+            *facts.inputVideoClockRate,
+            MediaTerminalDurationPolicy::RepeatLastObservedPositiveDelta);
+        audioDuration.emplace<MediaPlannedAudioSamplesDurationPlan>(
+            *facts.inputAudioSampleRate,
+            *facts.inputAudioSamplesPerAccessUnit);
+    } else if (*synchronization.topology ==
+               MediaAvSyncTopology::MpegTsToMpegTs) {
+        if (outer.inputType != RealtimeInputType::MpegTsUdp ||
+            outer.inputLayout !=
+                RealtimeInputStreamLayout::MuxedTransportStream ||
+            outer.outputLayout !=
+                RealtimeOutputStreamLayout::MuxedTransportStream ||
+            !synchronization.ts || !facts.inputAudioSampleRate ||
+            *facts.inputAudioSampleRate <= 0) {
+            return ::media::Result<MediaRealtimeAvSyncAssemblyPlan>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "MPEG-TS production assembly facts are incomplete"));
+        }
+        inputClock.emplace<MediaMpegTsInputClockAssemblyPlan>();
+        videoDuration.emplace<MediaPacketDurationPlan>(true);
+        audioDuration.emplace<MediaPacketDurationPlan>(true);
+    } else {
+        return ::media::Result<MediaRealtimeAvSyncAssemblyPlan>::failure(
+            ::media::ErrorInfo::unsupported(
+                "A/V production assembly topology is unsupported"));
+    }
+
+    return ::media::Result<MediaRealtimeAvSyncAssemblyPlan>::success(
+        MediaRealtimeAvSyncAssemblyPlan{
+            std::move(inputClock),
+            MediaInitialGenerationPolicy::FirstLockedOnlyFailOnChange,
+            MediaClockEvidencePolicy::RequireLockedFailOnDegradedOrReacquire,
+            MediaCanonicalVideoAssemblyPlan{
+                *synchronization.startup.videoIdentity,
+                std::move(videoDuration),
+                MediaDecodeOrderMode::ReorderedRequiresDecodeTime,
+                *synchronization.startup.videoCapacity,
+                *synchronization.startup.maximumWaitNs},
+            MediaCanonicalAudioAssemblyPlan{
+                *synchronization.startup.audioIdentity,
+                std::move(audioDuration),
+                MediaDecodeOrderMode::PresentationOrderNoReorder,
+                *synchronization.startup.audioCapacity,
+                *synchronization.startup.maximumWaitNs},
+            *synchronization.audioServo.minimumUpdateIntervalNs});
+}
+
 ::media::Result<MediaScheduledRtpOutputPlan> scheduledRtpOutput(
     MediaScheduledStream stream,
     MediaRealtimeRtpOutputNodePlan& legacyOutput,
@@ -73,6 +168,11 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
         !status) {
         return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
             status.error());
+    }
+    auto assembly = planAssembly(outer, synchronization, facts.value());
+    if (!assembly) {
+        return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
+            assembly.error());
     }
 
     MediaAvSyncOutputAdapterKind adapter;
@@ -149,6 +249,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
         MediaRealtimeAvSyncRuntimePlan{
             MediaAvSyncGroupKey("realtime.av"),
             std::move(synchronization),
+            std::move(assembly).value(),
             adapter,
             std::move(*protocolOutput),
             outer.queues,

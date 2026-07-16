@@ -29,6 +29,8 @@ MediaRealtimeAvSyncPlanningFactsResolver::resolve(
     }
 
     MediaRealtimeAvSyncPlanningFacts facts;
+    facts.inputVideoIdentity = synchronization.startup.videoIdentity;
+    facts.inputAudioIdentity = synchronization.startup.audioIdentity;
     facts.outputSampleRate = output.sampleRate();
     facts.decoderDelaySamples = bounds.decoderDelaySamples;
     facts.encoderLookaheadSamples = output.encoderDelaySamples();
@@ -38,23 +40,36 @@ MediaRealtimeAvSyncPlanningFactsResolver::resolve(
     facts.schedulerQueueSamples = bounds.schedulerQueueSamples;
     if (synchronization.topology ==
         MediaAvSyncTopology::SeparateRtpToSeparateRtp) {
-        if (!plan.videoOutput.scheduledPacketization ||
+        if (!synchronization.rtp ||
+            !synchronization.rtp->videoInput.clockRate ||
+            !synchronization.rtp->audioInput.clockRate ||
+            !plan.audioInput.rtpDepacketizer ||
+            plan.audioInput.rtpDepacketizer->accessUnitDurationRtpTicks <= 0 ||
+            !plan.videoOutput.scheduledPacketization ||
             !plan.audioOutput.scheduledPacketization ||
             !plan.audioOutput.scheduledPacketization->maximumAccessUnitSamples()) {
             return ::media::Result<MediaRealtimeAvSyncPlanningFacts>::failure(
                 ::media::ErrorInfo::notInitialized(
                     "scheduled RTP packetization does not publish audio batch timing"));
         }
+        facts.inputVideoClockRate = *synchronization.rtp->videoInput.clockRate;
+        facts.inputAudioSampleRate = *synchronization.rtp->audioInput.clockRate;
+        facts.inputAudioSamplesPerAccessUnit = static_cast<std::uint32_t>(
+            plan.audioInput.rtpDepacketizer->accessUnitDurationRtpTicks);
         facts.protocolBatchSamples =
             *plan.audioOutput.scheduledPacketization->maximumAccessUnitSamples();
     } else if (synchronization.topology == MediaAvSyncTopology::MpegTsToMpegTs) {
-        if (!synchronization.ts || !synchronization.ts->outputMux ||
+        if (!plan.audioPlan.selectedDecoder ||
+            plan.audioPlan.selectedDecoder->inputSampleRate <= 0 ||
+            !synchronization.ts || !synchronization.ts->outputMux ||
             synchronization.ts->outputMux->parameters()
                     .maximumAudioAccessUnitSamples <= 0) {
             return ::media::Result<MediaRealtimeAvSyncPlanningFacts>::failure(
                 ::media::ErrorInfo::notInitialized(
                     "MPEG-TS mux selection does not publish audio batch timing"));
         }
+        facts.inputAudioSampleRate =
+            plan.audioPlan.selectedDecoder->inputSampleRate;
         facts.protocolBatchSamples = synchronization.ts->outputMux->parameters()
                                          .maximumAudioAccessUnitSamples;
     } else {
