@@ -374,8 +374,21 @@ void acquiringDeadlineUsesRegisteredMasterClock()
         makeMediaBufferRef<MediaRtpClockGroupBuffer>(lockedSnapshot())));
     lockAtDeadline.masterClock->set(
         MediaRunningTime::fromNanoseconds(1'000'000'000));
-    processSucceeds(lockAtDeadlineNode, lockAtDeadline.execution);
-    processSucceeds(lockAtDeadlineNode, lockAtDeadline.execution);
+    assert(!lockAtDeadlineNode.process(lockAtDeadline.execution));
+
+    BinderFixture acquiringAtDeadline(MediaStreamKind::Audio);
+    MediaRtpPacketClockBinderNode acquiringAtDeadlineNode(
+        acquiringAtDeadline.binder);
+    assert(acquiringAtDeadline.packetInput()->push(
+        packet(MediaStreamKind::Audio, 48'000, 480)));
+    processSucceeds(acquiringAtDeadlineNode, acquiringAtDeadline.execution);
+    assert(acquiringAtDeadline.clockInput()->push(
+        makeMediaBufferRef<MediaRtpClockGroupBuffer>(
+            MediaRtpClockGroupSnapshot{
+                MediaRtpClockGroupState::Acquiring, 0, std::nullopt})));
+    acquiringAtDeadline.masterClock->set(
+        MediaRunningTime::fromNanoseconds(1'000'000'000));
+    assert(!acquiringAtDeadlineNode.process(acquiringAtDeadline.execution));
 
     BinderFixture locked(MediaStreamKind::Audio);
     MediaRtpPacketClockBinderNode lockedNode(locked.binder);

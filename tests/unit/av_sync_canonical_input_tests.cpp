@@ -12,6 +12,7 @@
 #include "internal/graph/runtime/factory/MediaRuntimeNodeFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/sync/MediaAvEpochTransitionService.h"
+#include "internal/graph/sync/startup/MediaInitialClockAcquisitionDeadline.h"
 #include "internal/graph/time/MediaMasterClock.h"
 #include "internal/graph/time/MediaSharedNtpEpoch.h"
 
@@ -25,6 +26,7 @@ extern "C" {
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <memory>
 #include <optional>
 
@@ -41,6 +43,36 @@ using namespace media::ffmpeg::graph;
     } while (false)
 
 namespace {
+
+void initialClockAcquisitionDeadlineIsOneShotAndExact()
+{
+    auto created = MediaInitialClockAcquisitionDeadline::create(
+        MediaRunningTime::fromNanoseconds(100));
+    assert(created);
+    auto deadline = std::move(created).value();
+    assert(!deadline.deadline());
+    assert(deadline.establish(MediaRunningTime::fromNanoseconds(5)));
+    assert(deadline.deadline() ==
+           std::optional<MediaRunningTime>(
+               MediaRunningTime::fromNanoseconds(105)));
+    assert(deadline.establish(MediaRunningTime::fromNanoseconds(10)));
+    assert(deadline.deadline() ==
+           std::optional<MediaRunningTime>(
+               MediaRunningTime::fromNanoseconds(105)));
+    assert(deadline.preflight(MediaRunningTime::fromNanoseconds(104)));
+    assert(!deadline.preflight(MediaRunningTime::fromNanoseconds(105)));
+    deadline.clear();
+    assert(!deadline.deadline());
+    assert(deadline.preflight(MediaRunningTime::fromNanoseconds(105)));
+
+    assert(!MediaInitialClockAcquisitionDeadline::create(
+        MediaRunningTime::fromNanoseconds(0)));
+    auto overflow = MediaInitialClockAcquisitionDeadline::create(
+        MediaRunningTime::fromNanoseconds(100));
+    assert(overflow);
+    assert(!overflow.value().establish(MediaRunningTime::fromNanoseconds(
+        std::numeric_limits<std::int64_t>::max() - 99)));
+}
 
 class TestMasterClock final : public MediaMasterClock {
 public:
@@ -268,6 +300,52 @@ void gateRejectsCapacityTimeoutAndInvalidEvidence()
     }
 }
 
+void gateDeadlinePreflightPrecedesAllQueuedEvidence()
+{
+    {
+        GateHarness idle(2, 100);
+        assert(idle.packetInput()->push(timedPacket(
+            MediaStreamKind::Video, MediaSourceClockReadiness::Locked, 7,
+            1'000, 3'600, AVRational{1, 90'000})));
+        assert(idle.runtime->process(idle.execution));
+        auto waiting = idle.runtime->process(idle.execution);
+        assert(waiting && waiting.value().deadlineWait);
+        assert(waiting.value().deadlineWait->syncGroup ==
+               MediaAvSyncGroupKey("ts-gate-group"));
+        assert(waiting.value().deadlineWait->masterDeadline ==
+               MediaRunningTime::fromNanoseconds(100));
+    }
+    {
+        GateHarness lateLocked(2, 100);
+        assert(lateLocked.packetInput()->push(timedPacket(
+            MediaStreamKind::Video, MediaSourceClockReadiness::Locked, 7,
+            1'000, 3'600, AVRational{1, 90'000})));
+        assert(lateLocked.runtime->process(lateLocked.execution));
+        assert(lateLocked.clockInput()->push(
+            makeMediaBufferRef<MediaSourceClockStateBuffer>(
+                MediaSourceClockReadiness::Locked, 7, false)));
+        lateLocked.clock->set(100);
+        assert(!lateLocked.runtime->process(lateLocked.execution));
+    }
+    {
+        GateHarness acquiring(2, 100);
+        assert(acquiring.packetInput()->push(timedPacket(
+            MediaStreamKind::Video, MediaSourceClockReadiness::Locked, 7,
+            1'000, 3'600, AVRational{1, 90'000})));
+        assert(acquiring.runtime->process(acquiring.execution));
+        assert(acquiring.clockInput()->push(
+            makeMediaBufferRef<MediaSourceClockStateBuffer>(
+                MediaSourceClockReadiness::Acquiring, 0, false)));
+        acquiring.clock->set(99);
+        assert(acquiring.runtime->process(acquiring.execution));
+        assert(acquiring.clockInput()->push(
+            makeMediaBufferRef<MediaSourceClockStateBuffer>(
+                MediaSourceClockReadiness::Acquiring, 0, false)));
+        acquiring.clock->set(100);
+        assert(!acquiring.runtime->process(acquiring.execution));
+    }
+}
+
 struct CanonicalHarness final {
     MediaGraph graph;
     MediaNodeId node;
@@ -415,9 +493,11 @@ void nodeKindFactoryAndDiagnosticsAreComplete()
 
 int main()
 {
+    initialClockAcquisitionDeadlineIsOneShotAndExact();
     typedClockStateIsImmutableAndDiagnostic();
     firstLockedGenerationReleasesBoundedAcquiringPackets();
     gateRejectsCapacityTimeoutAndInvalidEvidence();
+    gateDeadlinePreflightPrecedesAllQueuedEvidence();
     canonicalInputUsesRuntimeGenerationAndRtpTsPacketDuration();
     canonicalInputUsesExactAudioSampleSpanAndRejectsInvalidTiming();
     nodeKindFactoryAndDiagnosticsAreComplete();

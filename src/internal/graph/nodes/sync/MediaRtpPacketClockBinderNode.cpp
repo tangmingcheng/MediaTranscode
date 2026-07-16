@@ -39,6 +39,15 @@ MediaNodeKind MediaRtpPacketClockBinderNode::staticKind() noexcept
     MediaGraphExecutionContext& context)
 {
     if (auto status = configure(context); !status) return processProgress(status);
+    if (m_acquisitionDeadline->deadline()) {
+        auto now = m_syncGroup->clock()->now();
+        if (!now) {
+            return ::media::Result<MediaNodeProcessResult>::failure(now.error());
+        }
+        if (auto status = m_acquisitionDeadline->preflight(now.value()); !status) {
+            return processProgress(status);
+        }
+    }
     if (m_pendingTerminal) {
         MediaBufferRef terminal = std::move(m_pendingTerminal);
         return terminal->isEof()
@@ -54,10 +63,6 @@ MediaNodeKind MediaRtpPacketClockBinderNode::staticKind() noexcept
         return processProgress(acceptClock(*clock.value()));
     }
 
-    if (auto status = checkAcquiringDeadline(); !status) {
-        return processProgress(status);
-    }
-
     if (m_lockedSnapshot && !m_acquiringPackets.empty()) {
         MediaBufferRef buffered = std::move(m_acquiringPackets.front());
         m_acquiringPackets.pop_front();
@@ -69,10 +74,10 @@ MediaNodeKind MediaRtpPacketClockBinderNode::staticKind() noexcept
         return ::media::Result<MediaNodeProcessResult>::failure(packet.error());
     }
     if (!packet.value()) {
-        if (m_acquiringDeadline) {
+        if (m_acquisitionDeadline->deadline()) {
             return ::media::Result<MediaNodeProcessResult>::success(
                 MediaNodeProcessResult::waitingUntil(
-                    *m_syncGroupKey, *m_acquiringDeadline));
+                    *m_syncGroupKey, *m_acquisitionDeadline->deadline()));
         }
         return processWaiting();
     }
@@ -111,7 +116,10 @@ MediaNodeKind MediaRtpPacketClockBinderNode::staticKind() noexcept
         ? MediaScheduledStream::Video
         : MediaScheduledStream::Audio;
     m_acquiringCapacity = static_cast<std::size_t>(capacity.value());
-    m_acquiringTimeoutNs = timeout.value();
+    auto deadline = MediaInitialClockAcquisitionDeadline::create(
+        MediaRunningTime::fromNanoseconds(timeout.value()));
+    if (!deadline) return ::media::Status::failure(deadline.error());
+    m_acquisitionDeadline.emplace(std::move(deadline).value());
     m_syncGroupKey.emplace(std::move(groupName).value());
     m_syncGroup = context.findAvSyncGroup(*m_syncGroupKey);
     if (!m_syncGroup || !m_syncGroup->clock()) {
@@ -166,37 +174,19 @@ MediaNodeKind MediaRtpPacketClockBinderNode::staticKind() noexcept
     }
     m_lockedGeneration = snapshot.groupGeneration;
     m_lockedSnapshot = snapshot;
-    m_acquiringDeadline.reset();
-    return ::media::Status::success();
-}
-
-::media::Status MediaRtpPacketClockBinderNode::checkAcquiringDeadline() const
-{
-    if (!m_acquiringDeadline || m_lockedSnapshot) {
-        return ::media::Status::success();
-    }
-    auto now = m_syncGroup->clock()->now();
-    if (!now) return ::media::Status::failure(now.error());
-    if (now.value() >= *m_acquiringDeadline) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::cancelled(
-                "RTP packet binder acquiring master deadline expired"));
-    }
+    m_acquisitionDeadline->clear();
     return ::media::Status::success();
 }
 
 ::media::Status MediaRtpPacketClockBinderNode::bufferAcquiring(
     MediaBufferRef buffer)
 {
-    if (!m_acquiringDeadline) {
+    if (!m_acquisitionDeadline->deadline()) {
         auto now = m_syncGroup->clock()->now();
         if (!now) return ::media::Status::failure(now.error());
-        if (now.value().nanoseconds() >
-            std::numeric_limits<std::int64_t>::max() - m_acquiringTimeoutNs) {
-            return invalid("RTP packet binder acquiring deadline overflows master time");
+        if (auto status = m_acquisitionDeadline->establish(now.value()); !status) {
+            return status;
         }
-        m_acquiringDeadline = MediaRunningTime::fromNanoseconds(
-            now.value().nanoseconds() + m_acquiringTimeoutNs);
     }
     if (m_acquiringPackets.size() >= m_acquiringCapacity) {
         return invalid("RTP packet binder acquiring capacity exhausted");
@@ -337,7 +327,7 @@ void MediaRtpPacketClockBinderNode::resetState() noexcept
     m_acquiringPackets.clear();
     m_syncGroupKey.reset();
     m_syncGroup.reset();
-    m_acquiringDeadline.reset();
+    m_acquisitionDeadline.reset();
     m_videoLookahead.reset();
     m_videoLookaheadTimestamp.reset();
     m_lastPositiveVideoDelta.reset();
@@ -345,7 +335,6 @@ void MediaRtpPacketClockBinderNode::resetState() noexcept
     m_streamKind = MediaStreamKind::Unknown;
     m_scheduledStream = MediaScheduledStream::Video;
     m_acquiringCapacity = 0;
-    m_acquiringTimeoutNs = 0;
     m_durationClockRate = 0;
     m_configured = false;
 }

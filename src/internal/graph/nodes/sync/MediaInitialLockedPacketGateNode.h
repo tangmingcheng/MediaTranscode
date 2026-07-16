@@ -2,6 +2,7 @@
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
+#include "internal/graph/sync/startup/MediaInitialClockAcquisitionDeadline.h"
 #include "internal/graph/time/MediaRunningTime.h"
 
 #include <cstddef>
@@ -28,7 +29,6 @@ protected:
 private:
     ::media::Status configure(MediaGraphExecutionContext& context);
     ::media::Status acceptClock(const MediaBufferRef& buffer);
-    ::media::Status checkAcquiringDeadline() const;
     ::media::Status bufferPacket(MediaBufferRef buffer);
     ::media::Status emitValidatedPacket(MediaGraphExecutionContext& context,
                                         MediaBufferRef buffer);
@@ -38,10 +38,9 @@ private:
     std::optional<std::uint64_t> m_lockedGeneration;
     std::optional<MediaAvSyncGroupKey> m_syncGroupKey;
     std::shared_ptr<MediaAvSyncGroupRuntime> m_syncGroup;
-    std::optional<MediaRunningTime> m_acquiringDeadline;
+    std::optional<MediaInitialClockAcquisitionDeadline> m_acquisitionDeadline;
     MediaStreamKind m_streamKind = MediaStreamKind::Unknown;
     std::size_t m_acquiringCapacity = 0;
-    std::int64_t m_acquiringTimeoutNs = 0;
     bool m_configured = false;
 };
 
