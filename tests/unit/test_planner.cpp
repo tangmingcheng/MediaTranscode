@@ -253,6 +253,50 @@ MediaRealtimeRtpTranscodeRequest completeAvSyncRtpRequest()
     return request;
 }
 
+void testPlannedProductAndRuntimeRejectSynchronizedAudioPacketCopy(
+    TestContext& ctx)
+{
+    auto outerResult = MediaRealtimeRtpTranscodePlanner::plan(
+        completeAvSyncRtpRequest());
+    EXPECT_TRUE(ctx, outerResult);
+    if (!outerResult || !outerResult.value().avSyncRuntime) return;
+
+    MediaInputAudioStreamInfo source;
+    source.streamIndex = 1;
+    source.codecName = "aac";
+    source.profile = MediaAudioProfile::knownAacLow();
+    source.sampleRate = 48'000;
+    source.channels = 2;
+    source.channelLayout = "stereo";
+    source.sampleFormat = "fltp";
+    source.bitrateBitsPerSecond = 320'000;
+    source.maximumAccessUnitSamples = 1024;
+    MediaAudioPipelinePlannerOptions copyOptions(true);
+    copyOptions.requestedCodecName = "aac";
+    auto copy = MediaAudioPipelinePlanner::planKnownAudio(source, copyOptions);
+    EXPECT_TRUE(ctx, copy);
+    if (!copy) return;
+    EXPECT_EQ(ctx, copy.value().branchMode, MediaBranchMode::CopyPacket);
+
+    auto outer = std::move(outerResult).value();
+    outer.audioPlan = std::move(copy).value();
+    auto validation =
+        MediaRealtimeRtpTranscodePlanner::validatePlannedProduct(outer);
+    EXPECT_FALSE(ctx, validation);
+    if (!validation) {
+        EXPECT_EQ(ctx, validation.error().code, ::media::ErrorCode::Unsupported);
+    }
+
+    auto synchronization = outer.avSyncRuntime->synchronization;
+    outer.avSyncRuntime.reset();
+    auto runtime = MediaRealtimeAvSyncRuntimePlanner::plan(
+        outer, std::move(synchronization));
+    EXPECT_FALSE(ctx, runtime);
+    if (!runtime) {
+        EXPECT_EQ(ctx, runtime.error().code, ::media::ErrorCode::Unsupported);
+    }
+}
+
 void testRealtimePlannerProducesCompleteAvSyncRuntimeProduct(TestContext& ctx)
 {
     const auto planned = MediaRealtimeRtpTranscodePlanner::plan(
@@ -317,7 +361,8 @@ void testRealtimePlannerProducesCompleteAvSyncRuntimeProduct(TestContext& ctx)
                   "audio_decoder_lineage_registry",
                   "audio_startup_trim_lineage_registry",
                   "audio_resampler_lineage_registry",
-                  "audio_encoder_lineage_registry"}));
+                  "audio_encoder_lineage_registry",
+                  "audio_encoded_canonicalizer"}));
     EXPECT_EQ(ctx, runtime.transition.participants[1].requiredChildren,
               (std::vector<std::string>{
                   "audio_correction_generation_state"}));
@@ -2159,6 +2204,7 @@ int main()
     testTsEvidenceCapacityCoversProbeRollbackAndPredecessor(ctx);
     testAvSyncPlannerBuildsCompleteRtpContract(ctx);
     testRealtimePlannerProducesCompleteAvSyncRuntimeProduct(ctx);
+    testPlannedProductAndRuntimeRejectSynchronizedAudioPacketCopy(ctx);
     testDecoderDelayUsesSelectedOutputSampleDomain(ctx);
     testRealtimePlannerProducesCompleteTsAvSyncRuntimeProduct(ctx);
     testSelectedResamplerPublishesSteadyStateBound(ctx);

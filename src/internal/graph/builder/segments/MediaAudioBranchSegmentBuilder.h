@@ -5,6 +5,8 @@
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/sync/MediaAudioCorrection.h"
+#include "internal/graph/sync/MediaAvSyncGroupKey.h"
+#include "internal/graph/builder/MediaEndpoint.h"
 #include "internal/graph/sync/lineage/MediaAudioLineageExecutionMode.h"
 #include "media_transcode/Result.h"
 
@@ -26,23 +28,26 @@ struct MediaAudioBranchSegmentOptions {
     MediaNodeId packetSourceNode = MediaNodeId::invalid();
     std::string packetSourcePort = "audio";
 
-    MediaNodeId muxNode = MediaNodeId::invalid();
-    std::string muxCodecPort = "codec";
-    std::string muxPacketPort = "packet";
     std::optional<bool> normalizeInputPackets;
     std::optional<MediaAudioCorrectionExecutionMode> correctionMode;
     std::optional<MediaAudioLineageExecutionMode> lineageMode;
     std::optional<std::size_t> lineageCapacity;
     std::optional<std::uint64_t> correctionGeneration;
     std::optional<std::size_t> correctionLookaheadWindows;
-    MediaNodeId correctionSourceNode = MediaNodeId::invalid();
-    std::string correctionSourcePort;
+    std::optional<MediaAvSyncGroupKey> syncGroup;
+};
+
+struct MediaAudioBranchSegmentResult final {
+    bool built = false;
+    MediaEndpoint codec;
+    MediaEndpoint packet;
 };
 
 class MediaAudioBranchSegmentBuilder final {
 public:
-    static ::media::Result<bool> buildIfPlanned(MediaGraph& graph,
-                                                const MediaAudioBranchSegmentOptions& options);
+    static ::media::Result<MediaAudioBranchSegmentResult> buildIfPlanned(
+        MediaGraph& graph,
+        const MediaAudioBranchSegmentOptions& options);
 
 private:
     MediaAudioBranchSegmentBuilder() = default;

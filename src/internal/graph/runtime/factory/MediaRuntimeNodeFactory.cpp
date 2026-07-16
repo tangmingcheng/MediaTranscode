@@ -47,6 +47,8 @@
 #include "internal/graph/nodes/sync/MediaActivatedStartupReleaseSequencerNode.h"
 #include "internal/graph/nodes/sync/MediaRtpSourceClockStateAdapterNode.h"
 #include "internal/graph/nodes/sync/MediaSourceClockStateFanoutNode.h"
+#include "internal/graph/nodes/sync/MediaAudioDriftControllerNode.h"
+#include "internal/graph/nodes/sync/MediaEncodedAudioCanonicalizerNode.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/nodes/video/HardwareTransferNode.h"
 #include "internal/graph/nodes/video/VideoDecodeNode.h"
@@ -304,6 +306,22 @@ template <typename Node>
     case MediaNodeKind::SourceClockStateFanout:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::make_unique<MediaSourceClockStateFanoutNode>(node.id));
+    case MediaNodeKind::AudioDriftController:
+    {
+        auto group = requiredSyncGroup(
+            node, "MediaAudioDriftControllerNode",
+            "audio_drift_controller.sync_group");
+        if (!group) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                group.error());
+        }
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+            std::make_unique<MediaAudioDriftControllerNode>(
+                node.id, std::move(group).value()));
+    }
+    case MediaNodeKind::EncodedAudioCanonicalizer:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+            std::make_unique<MediaEncodedAudioCanonicalizerNode>(node.id));
     case MediaNodeKind::PacketMerge:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<PacketMergeNode>(node.id));
     case MediaNodeKind::FileMux:
@@ -398,6 +416,8 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::RtpSourceClockStateAdapter:
     case MediaNodeKind::AvStartupClock:
     case MediaNodeKind::SourceClockStateFanout:
+    case MediaNodeKind::AudioDriftController:
+    case MediaNodeKind::EncodedAudioCanonicalizer:
     case MediaNodeKind::PacketMerge:
     case MediaNodeKind::FileMux:
     case MediaNodeKind::RtpMux:

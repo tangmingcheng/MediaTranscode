@@ -51,6 +51,17 @@ public:
 
 ::media::Status MediaGraphRuntimeCompiler::validateBindings(const MediaRealtimeExecutableGraph& executable)
 {
+    constexpr std::string_view SyncGroupSuffix = ".sync_group";
+    constexpr std::string_view SchedulerGroupKey = "av_scheduler.sync_group";
+    constexpr std::string_view BinderGroupKey = "playback_epoch_binder.sync_group";
+    constexpr std::string_view StartupClockGroupKey = "av_startup_clock.sync_group";
+    constexpr std::string_view SequencerGroupKey =
+        "activated_startup_release_sequencer.sync_group";
+    constexpr std::string_view RtpBinderGroupKey = "rtp_clock_binder.sync_group";
+    constexpr std::string_view InitialGateGroupKey = "initial_locked_gate.sync_group";
+    constexpr std::string_view CoordinatorGroupKey = "av_startup.sync_group";
+    constexpr std::string_view AudioDriftControllerGroupKey =
+        "audio_drift_controller.sync_group";
     std::unordered_set<std::uint64_t> bindingIds;
     std::size_t schedulerCount = 0;
     std::size_t binderCount = 0;
@@ -79,22 +90,13 @@ public:
             return ::media::Status::failure(
                 ::media::ErrorInfo::notInitialized("MediaGraphRuntime missing prepared RealtimeInput binding"));
         }
+        if (node.kind == MediaNodeKind::AudioDriftController &&
+            !node.options.has(std::string(AudioDriftControllerGroupKey))) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "MediaGraphRuntime audio drift controller requires its planned sync group"));
+        }
         for (const auto& [key, value] : node.options.values()) {
-            constexpr std::string_view SyncGroupSuffix = ".sync_group";
-            constexpr std::string_view SchedulerGroupKey =
-                "av_scheduler.sync_group";
-            constexpr std::string_view BinderGroupKey =
-                "playback_epoch_binder.sync_group";
-            constexpr std::string_view StartupClockGroupKey =
-                "av_startup_clock.sync_group";
-            constexpr std::string_view SequencerGroupKey =
-                "activated_startup_release_sequencer.sync_group";
-            constexpr std::string_view RtpBinderGroupKey =
-                "rtp_clock_binder.sync_group";
-            constexpr std::string_view InitialGateGroupKey =
-                "initial_locked_gate.sync_group";
-            constexpr std::string_view CoordinatorGroupKey =
-                "av_startup.sync_group";
             if (!key.ends_with(SyncGroupSuffix)) continue;
             const bool schedulerConsumer =
                 node.kind == MediaNodeKind::AvOutputScheduler &&
@@ -117,10 +119,13 @@ public:
             const bool coordinatorConsumer =
                 node.kind == MediaNodeKind::AvStartupCoordinator &&
                 key == CoordinatorGroupKey;
+            const bool audioDriftControllerConsumer =
+                node.kind == MediaNodeKind::AudioDriftController &&
+                key == AudioDriftControllerGroupKey;
             if (!schedulerConsumer && !binderConsumer &&
                 !startupClockConsumer && !sequencerConsumer &&
                 !rtpBinderConsumer && !initialGateConsumer &&
-                !coordinatorConsumer) {
+                !coordinatorConsumer && !audioDriftControllerConsumer) {
                 return ::media::Status::failure(
                     ::media::ErrorInfo::invalidArgument(
                         "MediaGraphRuntime found an unsupported A/V sync group consumer"));

@@ -152,6 +152,11 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
     MediaRealtimeRtpTranscodePlan& outer,
     MediaAvSyncPlan synchronization)
 {
+    if (outer.audioPlan.branchMode != MediaBranchMode::TranscodeFrame) {
+        return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
+            ::media::ErrorInfo::unsupported(
+                "Synchronized runtime planning rejects audio packet copy"));
+    }
     auto facts = MediaRealtimeAvSyncPlanningFactsResolver::resolve(
         outer, synchronization);
     if (!facts) {

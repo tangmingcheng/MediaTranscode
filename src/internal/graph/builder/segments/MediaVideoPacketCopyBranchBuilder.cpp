@@ -1,6 +1,7 @@
 #include "internal/graph/builder/segments/MediaVideoPacketCopyBranchBuilder.h"
 
 #include "internal/graph/builder/MediaPacketCopyBranchBuilder.h"
+#include "internal/graph/builder/MediaGraphBuildSupport.h"
 
 namespace media::ffmpeg::graph {
 
@@ -29,13 +30,23 @@ namespace media::ffmpeg::graph {
     branchOptions.formatSourcePort = options.formatSourcePort;
     branchOptions.packetSourceNode = options.packetSourceNode;
     branchOptions.packetSourcePort = options.packetSourcePort;
-    branchOptions.muxNode = options.muxNode;
-    branchOptions.muxCodecPort = options.muxCodecPort;
-    branchOptions.muxPacketPort = options.muxPacketPort;
     branchOptions.normalizePackets = options.normalizePackets;
     branchOptions.queues = options.queues;
     branchOptions.edgePolicies = options.edgePolicies;
-    return MediaPacketCopyBranchBuilder::build(graph, branchOptions);
+    auto branch = MediaPacketCopyBranchBuilder::build(graph, branchOptions);
+    if (!branch) return ::media::Result<void>::failure(branch.error());
+    if (auto status = MediaGraphBuildSupport::connectChecked(
+            graph, "MediaVideoPacketCopyBranchBuilder",
+            branch.value().codec.node, branch.value().codec.port,
+            options.muxNode, options.muxCodecPort,
+            options.prefix + ".codec -> mux.codec",
+            options.edgePolicies.metadata); !status) return status;
+    return MediaGraphBuildSupport::connectChecked(
+        graph, "MediaVideoPacketCopyBranchBuilder",
+        branch.value().packet.node, branch.value().packet.port,
+        options.muxNode, options.muxPacketPort,
+        options.prefix + ".packet -> mux.packet",
+        options.edgePolicies.videoMux);
 }
 
 } // namespace media::ffmpeg::graph

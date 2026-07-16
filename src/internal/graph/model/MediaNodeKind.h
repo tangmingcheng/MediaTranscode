@@ -81,7 +81,9 @@ enum class MediaNodeKind {
     RtpSourceClockStateAdapter = 55,
     AvStartupClock = 56,
     ActivatedStartupReleaseSequencer = 57,
-    SourceClockStateFanout = 58
+    SourceClockStateFanout = 58,
+    AudioDriftController = 59,
+    EncodedAudioCanonicalizer = 60
 };
 
 } // namespace media::ffmpeg::graph

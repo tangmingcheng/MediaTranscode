@@ -27,6 +27,11 @@ namespace media::ffmpeg::graph {
         if (outer.audioPlan.enabled) return invalid("required runtime product is absent");
         return ::media::Status::success();
     }
+    if (outer.audioPlan.branchMode != MediaBranchMode::TranscodeFrame) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::unsupported(
+                "Synchronized runtime product rejects audio packet copy"));
+    }
     const auto& runtime = *outer.avSyncRuntime;
     if (runtime.groupKey.value() != "realtime.av" ||
         !MediaAvSyncPlanValidator::validate(runtime.synchronization)) {

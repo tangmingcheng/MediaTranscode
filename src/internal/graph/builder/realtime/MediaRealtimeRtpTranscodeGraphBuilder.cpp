@@ -547,18 +547,50 @@ bool separateRtpOutput(const MediaRealtimeRtpTranscodePlan& plan) noexcept
         audioOptions.packetSourceNode = audioPacketSourceNode;
         audioOptions.packetSourcePort = audioPacketSourcePort;
         audioOptions.normalizeInputPackets = plan.audioPacketNormalizationRequired;
-        audioOptions.correctionMode = MediaAudioCorrectionExecutionMode::Disabled;
-        audioOptions.lineageMode = MediaAudioLineageExecutionMode::LegacyPlainPacket;
-        audioOptions.muxNode = avStartBarrier.isValid() ? avStartBarrier : audioMux;
-        audioOptions.muxCodecPort = avStartBarrier.isValid() ? "audio_codec" : "codec";
-        audioOptions.muxPacketPort = avStartBarrier.isValid() ? "audio_packet" : "packet";
+        if (plan.avSyncRuntime) {
+            audioOptions.correctionMode =
+                MediaAudioCorrectionExecutionMode::ExternalCorrectionRequired;
+            audioOptions.lineageMode =
+                MediaAudioLineageExecutionMode::SynchronizedReleasedAudio;
+            audioOptions.lineageCapacity = plan.avSyncRuntime->queues.frame;
+            audioOptions.correctionGeneration = MediaFirstLockedSourceGeneration;
+            audioOptions.correctionLookaheadWindows =
+                plan.avSyncRuntime->synchronization.audioServo
+                    .correctionLookaheadWindows;
+            audioOptions.syncGroup = plan.avSyncRuntime->groupKey;
+        } else {
+            audioOptions.correctionMode =
+                MediaAudioCorrectionExecutionMode::Disabled;
+            audioOptions.lineageMode =
+                MediaAudioLineageExecutionMode::LegacyPlainPacket;
+        }
         auto audio = MediaAudioBranchSegmentBuilder::buildIfPlanned(graph, audioOptions);
         if (!audio) {
             return ::media::Result<MediaGraph>::failure(audio.error());
         }
-        if (!audio.value()) {
+        if (!audio.value().built) {
             return ::media::Result<MediaGraph>::failure(
                 ::media::ErrorInfo::unsupported("MediaRealtimeRtpTranscodeGraphBuilder no audio branch was built"));
+        }
+        const MediaNodeId audioTarget = avStartBarrier.isValid()
+            ? avStartBarrier : audioMux;
+        const std::string audioCodecPort = avStartBarrier.isValid()
+            ? "audio_codec" : "codec";
+        const std::string audioPacketPort = avStartBarrier.isValid()
+            ? "audio_packet" : "packet";
+        if (auto status = MediaGraphBuildSupport::connectChecked(
+                graph, owner, audio.value().codec.node,
+                audio.value().codec.port, audioTarget, audioCodecPort,
+                "realtime.audio.codec -> output.codec",
+                plan.edgePolicies.metadata); !status) {
+            return ::media::Result<MediaGraph>::failure(status.error());
+        }
+        if (auto status = MediaGraphBuildSupport::connectChecked(
+                graph, owner, audio.value().packet.node,
+                audio.value().packet.port, audioTarget, audioPacketPort,
+                "realtime.audio.packet -> output.packet",
+                plan.edgePolicies.audioMux); !status) {
+            return ::media::Result<MediaGraph>::failure(status.error());
         }
     }
 

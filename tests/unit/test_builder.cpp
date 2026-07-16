@@ -12,6 +12,7 @@
 #include "internal/graph/planner/local/MediaLocalFileOutputPlanner.h"
 
 #include <optional>
+#include <algorithm>
 #include <array>
 #include <type_traits>
 
@@ -46,11 +47,6 @@ MediaAudioEncodeBranchOptions audioEncodeOptions(MediaGraph& graph)
     options.packetSourceNode = graph.addNode(MediaNodeKind::DebugDump, "packet_source");
     graph.addOutputPort(options.packetSourceNode, "audio", MediaStreamKind::Audio,
                         MediaEdgeKind::InputPacket, MediaPayloadKind::Packet);
-    options.muxNode = graph.addNode(MediaNodeKind::DebugDump, "mux");
-    graph.addInputPort(options.muxNode, "codec", MediaStreamKind::Audio,
-                       MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext);
-    graph.addInputPort(options.muxNode, "packet", MediaStreamKind::Audio,
-                       MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
     options.edgePolicies = MediaGraphBuildSupport::blockingEdgePolicySet(options.queues);
     return options;
 }
@@ -84,6 +80,9 @@ void testAudioCorrectionBuilderContract(TestContext& ctx)
     MediaGraph missingSourceGraph;
     auto missingSource = audioEncodeOptions(missingSourceGraph);
     missingSource.correctionMode = MediaAudioCorrectionExecutionMode::ExternalCorrectionRequired;
+    missingSource.lineageMode =
+        MediaAudioLineageExecutionMode::SynchronizedReleasedAudio;
+    missingSource.lineageCapacity = 8;
     missingSource.correctionGeneration = 4;
     missingSource.correctionLookaheadWindows = 2;
     EXPECT_FALSE(ctx, MediaAudioEncodeBranchBuilder::build(missingSourceGraph, missingSource));
@@ -102,13 +101,10 @@ void testAudioCorrectionBuilderContract(TestContext& ctx)
         MediaAudioCorrectionExecutionMode::ExternalCorrectionRequired;
     external.correctionGeneration = 4;
     external.correctionLookaheadWindows = 2;
-    external.correctionSourceNode = externalGraph.addNode(
-        MediaNodeKind::DebugDump, "correction_source");
-    external.correctionSourcePort = "correction";
-    externalGraph.addOutputPort(
-        external.correctionSourceNode, external.correctionSourcePort,
-        MediaStreamKind::Audio, MediaEdgeKind::Event,
-        MediaPayloadKind::GraphEvent);
+    external.lineageMode =
+        MediaAudioLineageExecutionMode::SynchronizedReleasedAudio;
+    external.lineageCapacity = 8;
+    external.syncGroup = MediaAvSyncGroupKey("builder.audio");
     EXPECT_TRUE(ctx, MediaAudioEncodeBranchBuilder::build(externalGraph, external));
     const MediaNode* externalResample = resampleNode(externalGraph);
     EXPECT_TRUE(ctx, externalResample != nullptr);
@@ -151,14 +147,28 @@ void testAudioCorrectionBuilderContract(TestContext& ctx)
                           missingLineageCapacityGraph, missingLineageCapacity));
 
     synchronized.lineageCapacity = 8;
-    EXPECT_TRUE(ctx, MediaAudioEncodeBranchBuilder::build(
-                         synchronizedGraph, synchronized));
+    EXPECT_FALSE(ctx, MediaAudioEncodeBranchBuilder::build(
+                          synchronizedGraph, synchronized));
+
+    MediaGraph productionGraph;
+    auto production = audioEncodeOptions(productionGraph);
+    production.correctionMode =
+        MediaAudioCorrectionExecutionMode::ExternalCorrectionRequired;
+    production.correctionGeneration = 1;
+    production.correctionLookaheadWindows = 2;
+    production.lineageMode =
+        MediaAudioLineageExecutionMode::SynchronizedReleasedAudio;
+    production.lineageCapacity = 8;
+    production.syncGroup = MediaAvSyncGroupKey("builder.audio");
+    auto productionResult =
+        MediaAudioEncodeBranchBuilder::build(productionGraph, production);
+    EXPECT_TRUE(ctx, productionResult);
     const auto trim = std::find_if(
-        synchronizedGraph.nodes().begin(), synchronizedGraph.nodes().end(),
+        productionGraph.nodes().begin(), productionGraph.nodes().end(),
         [](const MediaNode& node) {
             return node.kind == MediaNodeKind::AudioStartupTrim;
         });
-    EXPECT_TRUE(ctx, trim != synchronizedGraph.nodes().end());
+    EXPECT_TRUE(ctx, trim != productionGraph.nodes().end());
     const std::array expectedLineageStages{
         std::pair{MediaNodeKind::AudioDecode, "audio_decoder_lineage_registry"},
         std::pair{MediaNodeKind::AudioStartupTrim, "audio_startup_trim_lineage_registry"},
@@ -166,16 +176,176 @@ void testAudioCorrectionBuilderContract(TestContext& ctx)
         std::pair{MediaNodeKind::AudioEncode, "audio_encoder_lineage_registry"}};
     for (const auto& [kind, identity] : expectedLineageStages) {
         const auto stage = std::find_if(
-            synchronizedGraph.nodes().begin(), synchronizedGraph.nodes().end(),
+            productionGraph.nodes().begin(), productionGraph.nodes().end(),
             [kind](const MediaNode& node) { return node.kind == kind; });
-        EXPECT_TRUE(ctx, stage != synchronizedGraph.nodes().end());
-        if (stage != synchronizedGraph.nodes().end()) {
+        EXPECT_TRUE(ctx, stage != productionGraph.nodes().end());
+        if (stage != productionGraph.nodes().end()) {
             EXPECT_EQ(ctx, stage->options.value("audio.lineage.identity"),
                       std::string(identity));
             EXPECT_EQ(ctx, stage->options.value("audio.lineage.capacity"),
                       std::string("8"));
         }
     }
+    const auto drift = std::find_if(
+        productionGraph.nodes().begin(), productionGraph.nodes().end(),
+        [](const MediaNode& node) {
+            return node.kind == MediaNodeKind::AudioDriftController;
+        });
+    const auto canonicalizer = std::find_if(
+        productionGraph.nodes().begin(), productionGraph.nodes().end(),
+        [](const MediaNode& node) {
+            return node.kind == MediaNodeKind::EncodedAudioCanonicalizer;
+        });
+    EXPECT_TRUE(ctx, drift != productionGraph.nodes().end());
+    EXPECT_TRUE(ctx, canonicalizer != productionGraph.nodes().end());
+    if (drift != productionGraph.nodes().end()) {
+        EXPECT_EQ(ctx, drift->options.value("audio_drift_controller.sync_group"),
+                  std::string("builder.audio"));
+    }
+    if (drift != productionGraph.nodes().end() &&
+        canonicalizer != productionGraph.nodes().end()) {
+        const auto hasEdge = [&](MediaNodeKind from, MediaNodeKind to) {
+            const auto fromNode = std::find_if(
+                productionGraph.nodes().begin(), productionGraph.nodes().end(),
+                [from](const MediaNode& node) { return node.kind == from; });
+            const auto toNode = std::find_if(
+                productionGraph.nodes().begin(), productionGraph.nodes().end(),
+                [to](const MediaNode& node) { return node.kind == to; });
+            return fromNode != productionGraph.nodes().end() &&
+                toNode != productionGraph.nodes().end() &&
+                std::any_of(
+                    productionGraph.edges().begin(), productionGraph.edges().end(),
+                    [&](const MediaEdge& edge) {
+                        return edge.from.nodeId == fromNode->id &&
+                            edge.to.nodeId == toNode->id;
+                    });
+        };
+        EXPECT_TRUE(ctx, hasEdge(
+                             MediaNodeKind::AudioStartupTrim,
+                             MediaNodeKind::AudioDriftController));
+        EXPECT_TRUE(ctx, hasEdge(
+                             MediaNodeKind::AudioDriftController,
+                             MediaNodeKind::AudioResample));
+        EXPECT_TRUE(ctx, hasEdge(
+                             MediaNodeKind::AudioEncode,
+                             MediaNodeKind::EncodedAudioCanonicalizer));
+        EXPECT_FALSE(ctx, hasEdge(
+                              MediaNodeKind::AvOutputScheduler,
+                              MediaNodeKind::AudioResample));
+    }
+    if (productionResult) {
+        const MediaNode* canonicalPacket =
+            productionGraph.findNode(productionResult.value().packet.node);
+        EXPECT_TRUE(ctx, canonicalPacket != nullptr);
+        if (canonicalPacket) {
+            EXPECT_EQ(ctx, canonicalPacket->kind,
+                      MediaNodeKind::EncodedAudioCanonicalizer);
+        }
+        EXPECT_EQ(ctx, productionResult.value().packet.port,
+                  std::string("canonical"));
+    }
+}
+
+void testSynchronizedAudioPacketCopyIsUnsupported(TestContext& ctx)
+{
+    MediaGraph graph;
+    MediaAudioBranchSegmentOptions options;
+    options.plan.enabled = true;
+    options.plan.branchMode = MediaBranchMode::CopyPacket;
+    options.plan.sourceStreamIndex = 1;
+    options.normalizeInputPackets = false;
+    options.correctionMode =
+        MediaAudioCorrectionExecutionMode::ExternalCorrectionRequired;
+    options.lineageMode =
+        MediaAudioLineageExecutionMode::SynchronizedReleasedAudio;
+    options.lineageCapacity = 8;
+    options.correctionGeneration = 1;
+    options.correctionLookaheadWindows = 2;
+    options.syncGroup = MediaAvSyncGroupKey("builder.audio.copy");
+    auto result = MediaAudioBranchSegmentBuilder::buildIfPlanned(graph, options);
+    EXPECT_FALSE(ctx, result);
+    if (!result) {
+        EXPECT_EQ(ctx, result.error().code, ::media::ErrorCode::Unsupported);
+    }
+}
+
+void testTypedPacketCopyEndpointsPreserveOwnerBoundaries(TestContext& ctx)
+{
+    MediaGraph genericGraph;
+    const MediaNodeId formatSource = genericGraph.addNode(
+        MediaNodeKind::DebugDump, "generic.format");
+    genericGraph.addOutputPort(
+        formatSource, "format", MediaStreamKind::Metadata,
+        MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext);
+    const MediaNodeId packetSource = genericGraph.addNode(
+        MediaNodeKind::DebugDump, "generic.packet");
+    const MediaNodeId unrelatedMux = genericGraph.addNode(
+        MediaNodeKind::DebugDump, "generic.unrelated_mux");
+
+    MediaPacketCopyBranchOptions generic;
+    generic.prefix = "generic.audio.copy";
+    generic.streamKind = MediaStreamKind::Audio;
+    generic.sourceStreamIndex = 1;
+    generic.formatSourceNode = formatSource;
+    generic.formatSourcePort = "format";
+    generic.packetSourceNode = packetSource;
+    generic.packetSourcePort = "audio";
+    generic.normalizePackets = false;
+    generic.queues.metadata = 1;
+    generic.queues.packet = 1;
+    generic.edgePolicies =
+        MediaGraphBuildSupport::blockingEdgePolicySet(generic.queues);
+    auto genericResult = MediaPacketCopyBranchBuilder::build(
+        genericGraph, generic);
+    EXPECT_TRUE(ctx, genericResult);
+    EXPECT_FALSE(ctx, std::any_of(
+                          genericGraph.edges().begin(), genericGraph.edges().end(),
+                          [unrelatedMux](const MediaEdge& edge) {
+                              return edge.to.nodeId == unrelatedMux;
+                          }));
+
+    MediaGraph videoGraph;
+    const MediaNodeId videoFormat = videoGraph.addNode(
+        MediaNodeKind::DebugDump, "video.format");
+    videoGraph.addOutputPort(
+        videoFormat, "format", MediaStreamKind::Metadata,
+        MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext);
+    const MediaNodeId videoPacket = videoGraph.addNode(
+        MediaNodeKind::DebugDump, "video.packet");
+    const MediaNodeId videoMux = videoGraph.addNode(
+        MediaNodeKind::DebugDump, "video.mux");
+    videoGraph.addInputPort(
+        videoMux, "codec", MediaStreamKind::Video, MediaEdgeKind::Metadata,
+        MediaPayloadKind::CodecParameters);
+    videoGraph.addInputPort(
+        videoMux, "packet", MediaStreamKind::Video,
+        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+
+    MediaVideoPacketCopyBranchOptions video;
+    video.prefix = "video.copy";
+    video.plan.enabled = true;
+    video.plan.branchMode = MediaBranchMode::CopyPacket;
+    video.plan.sourceStreamIndex = 0;
+    video.formatSourceNode = videoFormat;
+    video.formatSourcePort = "format";
+    video.packetSourceNode = videoPacket;
+    video.packetSourcePort = "video";
+    video.muxNode = videoMux;
+    video.muxCodecPort = "codec";
+    video.muxPacketPort = "packet";
+    video.normalizePackets = false;
+    video.queues.metadata = 1;
+    video.queues.packet = 1;
+    video.queues.mux = 1;
+    video.edgePolicies =
+        MediaGraphBuildSupport::blockingEdgePolicySet(video.queues);
+    EXPECT_TRUE(ctx, MediaVideoPacketCopyBranchBuilder::build(videoGraph, video));
+    const auto muxEdges = std::count_if(
+        videoGraph.edges().begin(), videoGraph.edges().end(),
+        [videoMux](const MediaEdge& edge) {
+            return edge.to.nodeId == videoMux;
+        });
+    EXPECT_EQ(ctx, muxEdges, std::size_t{2});
 }
 
 void testFileMuxSessionKindIsExplicit(TestContext& ctx)
@@ -365,6 +535,8 @@ int main()
     EXPECT_FALSE(ctx, audioEncode.correctionMode.has_value());
     EXPECT_FALSE(ctx, audioEncode.correctionGeneration.has_value());
     testAudioCorrectionBuilderContract(ctx);
+    testSynchronizedAudioPacketCopyIsUnsupported(ctx);
+    testTypedPacketCopyEndpointsPreserveOwnerBoundaries(ctx);
     testFileMuxSessionKindIsExplicit(ctx);
     testLocalOutputPlannerOwnsMuxSessionDecision(ctx);
     testMuxSessionKindOptionMappingFailsClosed(ctx);

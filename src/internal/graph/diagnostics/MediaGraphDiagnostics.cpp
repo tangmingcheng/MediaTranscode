@@ -137,6 +137,8 @@ const char* mediaGraphDiagnosticNodeKindName(MediaNodeKind kind) noexcept
     case MediaNodeKind::RtpSourceClockStateAdapter: return "RtpSourceClockStateAdapter";
     case MediaNodeKind::AvStartupClock: return "AvStartupClock";
     case MediaNodeKind::SourceClockStateFanout: return "SourceClockStateFanout";
+    case MediaNodeKind::AudioDriftController: return "AudioDriftController";
+    case MediaNodeKind::EncodedAudioCanonicalizer: return "EncodedAudioCanonicalizer";
     case MediaNodeKind::AvBoundReleaseExtractor: return "AvBoundReleaseExtractor";
     case MediaNodeKind::PacketMerge: return "PacketMerge";
     case MediaNodeKind::FileMux: return "FileMux";

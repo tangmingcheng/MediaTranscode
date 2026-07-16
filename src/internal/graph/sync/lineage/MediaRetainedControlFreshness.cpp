@@ -23,6 +23,9 @@ bool isExactTerminalControl(
     if (control->controlKind() == MediaControlBufferKind::Flush) {
         return buffer->isFlush() && !buffer->isEof();
     }
+    if (control->controlKind() == MediaControlBufferKind::Abort) {
+        return !buffer->isFlush() && !buffer->isEof();
+    }
     return false;
 }
 

@@ -15,7 +15,8 @@ std::vector<std::string> canonicalLineageChildren()
         std::string(MediaAudioDecodeLineageIdentity),
         std::string(MediaAudioStartupTrimLineageIdentity),
         std::string(MediaAudioResampleLineageIdentity),
-        std::string(MediaAudioEncodeLineageIdentity)
+        std::string(MediaAudioEncodeLineageIdentity),
+        std::string(MediaEncodedAudioCanonicalizerLineageIdentity)
     };
 }
 
@@ -33,7 +34,7 @@ MediaAvGenerationTransitionPlan MediaAvGenerationTransitionPlanner::plan(
         canonicalLineageChildren()});
     transition.participants.push_back({
         MediaAvGenerationParticipant::AudioCorrection,
-        {"audio_correction_generation_state"}});
+        {std::string(MediaAudioCorrectionGenerationIdentity)}});
     transition.participants.push_back({
         MediaAvGenerationParticipant::Scheduler,
         {"scheduler_generation_state"}});
