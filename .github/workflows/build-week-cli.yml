@@ -44,13 +44,22 @@ jobs:
           fi
           exit "$status"
 
+      - name: Test
+        shell: bash
+        run: |
+          set +e
+          ctest --test-dir out/build/ci --output-on-failure \
+            > out/build/ci/test.log 2>&1
+          status=$?
+          cat out/build/ci/test.log
+          exit "$status"
+
       - name: Upload build diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: build-week-build-log
-          path: out/build/ci/build.log
+          path: |
+            out/build/ci/build.log
+            out/build/ci/test.log
           if-no-files-found: ignore
-
-      - name: Test
-        run: ctest --test-dir out/build/ci --output-on-failure
