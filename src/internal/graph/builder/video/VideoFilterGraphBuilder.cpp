@@ -5,6 +5,7 @@
 extern "C" {
 #include <libavfilter/buffersink.h>
 #include <libavfilter/buffersrc.h>
+#include <libavfilter/version_major.h>
 #include <libavutil/avstring.h>
 #include <libavutil/mem.h>
 }
@@ -113,8 +114,10 @@ std::string buildFilterDescription(const MediaNodeOptions* options)
     parameters->time_base = timeBase;
     parameters->sample_aspect_ratio = pixelAspect;
     parameters->frame_rate = frameRate;
+#if LIBAVFILTER_VERSION_MAJOR >= 10
     parameters->color_space = firstFrame->colorspace;
     parameters->color_range = firstFrame->color_range;
+#endif
 
     if (hardwareSource) {
         parameters->hw_frames_ctx = av_buffer_ref(firstFrame->hw_frames_ctx);

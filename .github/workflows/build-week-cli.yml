@@ -1,0 +1,65 @@
+name: Build Week CLI
+
+on:
+  push:
+    branches:
+      - openai-build-week/demo-cli
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            cmake ninja-build g++ pkg-config ffmpeg \
+            libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev \
+            libswscale-dev libswresample-dev
+
+      - name: Configure
+        run: cmake -S . -B out/build/ci -G Ninja -DMEDIA_TRANSCODE_BUILD_TESTS=ON
+
+      - name: Build
+        shell: bash
+        run: |
+          set +e
+          cmake --build out/build/ci --target \
+            media_transcode_build_week_cli \
+            media_transcode_build_week_cli_tests \
+            media_transcode_event_runtime_tests \
+            media_transcode_realtime_graph_tests \
+            > out/build/ci/build.log 2>&1
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "Build failed; showing the final diagnostics."
+            tail -n 160 out/build/ci/build.log
+          else
+            cat out/build/ci/build.log
+          fi
+          exit "$status"
+
+      - name: Test
+        shell: bash
+        run: |
+          set +e
+          ctest --test-dir out/build/ci --output-on-failure \
+            > out/build/ci/test.log 2>&1
+          status=$?
+          cat out/build/ci/test.log
+          exit "$status"
+
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-week-build-log
+          path: |
+            out/build/ci/build.log
+            out/build/ci/test.log
+          if-no-files-found: ignore

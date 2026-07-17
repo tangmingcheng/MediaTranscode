@@ -6,6 +6,7 @@
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
 
+#include <algorithm>
 #include <sstream>
 #include <utility>
 

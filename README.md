@@ -2,6 +2,18 @@
 
 MediaTranscode is a C++20 and FFmpeg-backed media transcode framework centered on the graph DAG architecture.
 
+## OpenAI Build Week branch
+
+The evaluator-facing CLI on `openai-build-week/demo-cli` reduces the project to three commands:
+
+```powershell
+out\build\x64-debug\media_transcode_build_week_cli.exe inspect --input out\build\x64-debug\test.mp4
+out\build\x64-debug\media_transcode_build_week_cli.exe demo --input out\build\x64-debug\test.mp4
+out\build\x64-debug\media_transcode_build_week_cli.exe live --input rtsp://YOUR_STREAM --duration 15
+```
+
+See `BUILD_WEEK.md` for the judge walkthrough. This branch is intentionally isolated and is not intended to merge into `master`.
+
 The active code path is the graph runtime:
 
 ```text
