@@ -18,7 +18,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-            cmake ninja-build g++ pkg-config \
+            cmake ninja-build g++ pkg-config ffmpeg \
             libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev \
             libswscale-dev libswresample-dev
 
