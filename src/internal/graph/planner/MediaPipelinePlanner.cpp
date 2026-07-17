@@ -6,6 +6,7 @@
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
 
+#include <algorithm>
 #include <sstream>
 #include <utility>
 
@@ -38,137 +39,88 @@ void logSelectedPlan(const MediaPipelinePlannerOptions& options,
     out << "branch_mode=" << mediaBranchModeName(plan.branchMode)
         << " selected_chain=" << selected.label
         << " score=" << selected.score
-        << " source_stream=" << plan.sourceStreamIndex
-        << " decoder=" << stageDisplayName(selected.decoder)
-        << " filter=" << stageDisplayName(selected.filter)
-        << " encoder=" << stageDisplayName(selected.encoder)
-        << " encoder_pix_fmt=" << emptyAsNone(selected.encoder.pixelFormat)
-        << " encoder_hw_frames_fmt=" << emptyAsNone(selected.encoder.hardwareFramesFormat)
-        << " encoder_surface_fmt=" << emptyAsNone(selected.encoder.surfacePixelFormat)
-        << " backend=" << mediaHardwareDeviceKindName(selected.decoder.deviceKind)
-        << " zero_copy=" << (selected.zeroCopy ? "true" : "false");
+        << " decoder=" << emptyAsNone(stageDisplayName(selected.decoder))
+        << " transfer=" << emptyAsNone(stageDisplayName(selected.transfer))
+        << " filter=" << emptyAsNone(stageDisplayName(selected.filter))
+        << " encoder=" << emptyAsNone(stageDisplayName(selected.encoder))
+        << " zero_copy=" << (selected.zeroCopy ? "true" : "false")
+        << " all_hardware=" << (selected.allHardware ? "true" : "false");
 
     mediaGraphDiagnosticLog(options.diagnosticLogEnabled,
-                            MediaGraphDiagnosticPhase::PlannerSelect,
+                            MediaGraphDiagnosticPhase::Planner,
                             out.str());
-}
-
-void logCopyPlan(const MediaPipelinePlannerOptions& options,
-                 const MediaPipelinePlan& plan)
-{
-    std::ostringstream out;
-    out << "branch_mode=" << mediaBranchModeName(plan.branchMode)
-        << " source_stream=" << plan.sourceStreamIndex
-        << " codec=" << plan.inputCodecName
-        << " reason=" << plan.reason;
-
-    mediaGraphDiagnosticLog(options.diagnosticLogEnabled,
-                            MediaGraphDiagnosticPhase::PlannerSelect,
-                            out.str());
-}
-
-::media::Status validateCommonPlannerOptions(const MediaPipelinePlannerOptions& options,
-                                             const std::string& context)
-{
-    if (options.targetWidth < 0 || options.targetHeight < 0) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument(context + " requires non-negative target dimensions"));
-    }
-    if ((options.targetWidth > 0) != (options.targetHeight > 0)) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument(context + " requires target width and height together"));
-    }
-    if (options.preferredHardware.empty()) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument(context + " requires explicit hardware preference"));
-    }
-    if (!options.preferGpu && options.preferredHardware != "software") {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument(context + " requires software hardware preference when GPU is disabled"));
-    }
-    if (!options.preferGpu && !options.enableSoftwareChain) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument(context + " requires software chain when GPU is disabled"));
-    }
-    return ::media::Status::success();
-}
-
-::media::Status validateRealtimePlannerOptions(const MediaPipelinePlannerOptions& options,
-                                               const std::string& context)
-{
-    auto common = validateCommonPlannerOptions(options, context);
-    if (!common) {
-        return common;
-    }
-    if (options.openTimeoutMs <= 0 ||
-        options.readTimeoutMs <= 0 ||
-        options.analyzeDurationUs <= 0 ||
-        options.probeSizeBytes <= 0) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument(context + " requires explicit positive realtime input options"));
-    }
-    return ::media::Status::success();
 }
 
 ::media::Result<MediaPipelinePlan> buildVideoTranscodePlan(
-    const MediaInputVideoStreamInfo& inputInfo,
-    std::string inputPath,
+    const MediaInputVideoStreamInfo& source,
+    std::string outputCodec,
     MediaPipelinePlannerOptions options)
 {
+    if (!source.valid()) {
+        return ::media::Result<MediaPipelinePlan>::failure(
+            ::media::ErrorInfo::invalidArgument("MediaPipelinePlanner requires valid input video stream info"));
+    }
+
+    outputCodec = normalizeCodecName(outputCodec);
+    if (outputCodec.empty()) {
+        return ::media::Result<MediaPipelinePlan>::failure(
+            ::media::ErrorInfo::invalidArgument("MediaPipelinePlanner requires output codec"));
+    }
+
     MediaPipelinePlan plan;
-    plan.inputPath = std::move(inputPath);
-    plan.outputPath = std::move(options.outputPath);
-    plan.diagnosticLogEnabled = options.diagnosticLogEnabled;
-    plan.filterRequired = options.filterRequired;
-
     plan.enabled = true;
-    plan.sourceStreamIndex = inputInfo.streamIndex;
-    plan.inputCodecName = canonicalCodecName(inputInfo.codecName);
-    plan.outputCodecName = canonicalCodecName(options.outputCodecName.empty() ? plan.inputCodecName : options.outputCodecName);
+    plan.branchMode = MediaBranchMode::Transcode;
+    plan.inputCodecName = normalizeCodecName(source.codecName);
+    plan.outputCodecName = std::move(outputCodec);
+    plan.inputPixelFormat = source.pixelFormat;
+    plan.inputWidth = source.width;
+    plan.inputHeight = source.height;
+    plan.inputStreamIndex = source.streamIndex;
+    plan.inputFrameRate = source.frameRate;
+    plan.inputTimeBase = source.timeBase;
+    plan.inputBitrateKbps = source.bitrateKbps;
 
-    const bool resizeRequested = options.targetWidth > 0 || options.targetHeight > 0;
-    const bool canCopyPackets = options.allowPacketCopy &&
-        !resizeRequested &&
-        !options.filterRequired &&
-        plan.inputCodecName == plan.outputCodecName;
-    plan.branchMode = canCopyPackets ? MediaBranchMode::CopyPacket : MediaBranchMode::TranscodeFrame;
-    plan.reason = canCopyPackets ? "copy_packet" : "transcode_frame";
-
-    {
-        std::ostringstream out;
-        out << "input=" << redactUrlUserInfo(plan.inputPath)
-            << " branch_mode=" << mediaBranchModeName(plan.branchMode)
-            << " source_stream=" << plan.sourceStreamIndex
-            << " input_codec=" << plan.inputCodecName
-            << " output_codec=" << plan.outputCodecName;
-        mediaGraphDiagnosticLog(options.diagnosticLogEnabled,
-                                MediaGraphDiagnosticPhase::PlannerInput,
-                                out.str());
+    if (plan.inputCodecName.empty()) {
+        return ::media::Result<MediaPipelinePlan>::failure(
+            ::media::ErrorInfo::invalidArgument("MediaPipelinePlanner requires input codec"));
     }
 
-    if (plan.branchMode == MediaBranchMode::CopyPacket) {
-        logCopyPlan(options, plan);
-        return ::media::Result<MediaPipelinePlan>::success(std::move(plan));
+    MediaPipelineCapabilityScanner scanner;
+    auto candidates = scanner.scanVideoTranscodeCandidates(source, plan.outputCodecName, options);
+    if (!candidates) {
+        return ::media::Result<MediaPipelinePlan>::failure(candidates.error());
     }
-
-    auto candidates = MediaPipelineCapabilityScanner::enumerateVideoTranscodeCandidates(
-        plan.inputCodecName,
-        plan.outputCodecName,
-        options);
-    plan.candidates = MediaPipelineScorer::scoreAndSortChains(std::move(candidates), options);
+    plan.candidates = std::move(candidates).value();
 
     if (plan.candidates.empty()) {
         return ::media::Result<MediaPipelinePlan>::failure(
-            ::media::ErrorInfo::unsupported("no media pipeline candidates were generated"));
+            ::media::ErrorInfo::unsupported("MediaPipelinePlanner found no usable video pipeline"));
     }
 
-    auto selected = std::find_if(plan.candidates.begin(), plan.candidates.end(), [&](const MediaPipelineChainPlan& chain) {
-        return !options.requireRuntimeAvailability || chain.available;
+    for (MediaPipelineChainPlan& candidate : plan.candidates) {
+        MediaPipelineScorer::score(candidate, options);
+    }
+
+    std::sort(plan.candidates.begin(), plan.candidates.end(), [](const MediaPipelineChainPlan& lhs,
+                                                                const MediaPipelineChainPlan& rhs) {
+        if (lhs.score != rhs.score) {
+            return lhs.score > rhs.score;
+        }
+        if (lhs.allHardware != rhs.allHardware) {
+            return lhs.allHardware;
+        }
+        if (lhs.zeroCopy != rhs.zeroCopy) {
+            return lhs.zeroCopy;
+        }
+        return lhs.label < rhs.label;
     });
 
+    auto selected = std::find_if(plan.candidates.begin(), plan.candidates.end(), [&](const MediaPipelineChainPlan& chain) {
+        return !options.requireAllHardware || chain.allHardware;
+    });
     if (selected == plan.candidates.end()) {
         return ::media::Result<MediaPipelinePlan>::failure(
-            ::media::ErrorInfo::hardwareUnavailable("no available decoder/filter/encoder chain found"));
+            ::media::ErrorInfo::unsupported("MediaPipelinePlanner found no all-hardware pipeline"));
     }
 
     plan.selected = *selected;
@@ -178,119 +130,81 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
 
 } // namespace
 
-const char* mediaPipelineStageRoleName(MediaPipelineStageRole role) noexcept
+::media::Result<MediaPipelinePlan> MediaPipelinePlanner::planVideoTranscode(
+    const MediaInputVideoStreamInfo& source,
+    std::string outputCodec,
+    MediaPipelinePlannerOptions options)
 {
-    switch (role) {
-    case MediaPipelineStageRole::Decoder:
-        return "decoder";
-    case MediaPipelineStageRole::Filter:
-        return "filter";
-    case MediaPipelineStageRole::Encoder:
-        return "encoder";
-    }
-    return "unknown";
-}
-
-const char* mediaHardwareDeviceKindName(MediaHardwareDeviceKind kind) noexcept
-{
-    switch (kind) {
-    case MediaHardwareDeviceKind::Unknown:
-        return "unknown";
-    case MediaHardwareDeviceKind::None:
-        return "software";
-    case MediaHardwareDeviceKind::D3D11VA:
-        return "d3d11va";
-    case MediaHardwareDeviceKind::QSV:
-        return "qsv";
-    case MediaHardwareDeviceKind::CUDA:
-        return "cuda";
-    case MediaHardwareDeviceKind::VAAPI:
-        return "vaapi";
-    case MediaHardwareDeviceKind::DRMPrime:
-        return "drm_prime";
-    case MediaHardwareDeviceKind::RKMPP:
-        return "rkmpp";
-    case MediaHardwareDeviceKind::VideoToolbox:
-        return "videotoolbox";
-    case MediaHardwareDeviceKind::MediaCodec:
-        return "mediacodec";
-    }
-    return "unknown";
-}
-
-const char* mediaHardwareFrameKindName(MediaHardwareFrameKind kind) noexcept
-{
-    switch (kind) {
-    case MediaHardwareFrameKind::Unknown:
-        return "unknown";
-    case MediaHardwareFrameKind::Software:
-        return "software";
-    case MediaHardwareFrameKind::Hardware:
-        return "hardware";
-    case MediaHardwareFrameKind::HardwareMapped:
-        return "hardware_mapped";
-    }
-    return "unknown";
+    return buildVideoTranscodePlan(source, std::move(outputCodec), std::move(options));
 }
 
 ::media::Result<MediaPipelinePlan> MediaPipelinePlanner::planVideoTranscodeFile(
-    const std::string& inputPath,
-    MediaPipelinePlannerOptions options)
-{
-    if (inputPath.empty()) {
-        return ::media::Result<MediaPipelinePlan>::failure(
-            ::media::ErrorInfo::invalidArgument("planVideoTranscodeFile requires input path"));
-    }
-    auto optionsStatus = validateCommonPlannerOptions(options, "planVideoTranscodeFile");
-    if (!optionsStatus) {
-        return ::media::Result<MediaPipelinePlan>::failure(optionsStatus.error());
-    }
-
-    auto inputInfo = MediaPipelineCapabilityScanner::detectInputVideoStreamInfo(inputPath);
-    if (!inputInfo) {
-        return ::media::Result<MediaPipelinePlan>::failure(inputInfo.error());
-    }
-    return buildVideoTranscodePlan(inputInfo.value(), inputPath, std::move(options));
-}
-
-::media::Result<MediaPipelinePlan> MediaPipelinePlanner::planVideoTranscodeRealtimeUrl(
     const std::string& inputUrl,
     MediaPipelinePlannerOptions options)
 {
-    if (inputUrl.empty()) {
-        return ::media::Result<MediaPipelinePlan>::failure(
-            ::media::ErrorInfo::invalidArgument("planVideoTranscodeRealtimeUrl requires input URL"));
+    auto source = probeInputVideoStream(inputUrl, options);
+    if (!source) {
+        return ::media::Result<MediaPipelinePlan>::failure(source.error());
     }
-    auto optionsStatus = validateRealtimePlannerOptions(options, "planVideoTranscodeRealtimeUrl");
-    if (!optionsStatus) {
-        return ::media::Result<MediaPipelinePlan>::failure(optionsStatus.error());
-    }
-
-    auto inputInfo = MediaPipelineCapabilityScanner::detectRealtimeVideoStreamInfo(inputUrl, options);
-    if (!inputInfo) {
-        return ::media::Result<MediaPipelinePlan>::failure(inputInfo.error());
-    }
-    return buildVideoTranscodePlan(inputInfo.value(), inputUrl, std::move(options));
+    return buildVideoTranscodePlan(source.value(), options.outputCodecName, std::move(options));
 }
 
-::media::Result<MediaPipelinePlan> MediaPipelinePlanner::planVideoTranscodeKnownInput(
-    MediaInputVideoStreamInfo inputInfo,
-    const std::string& inputUrl,
+::media::Result<MediaPipelinePlan> MediaPipelinePlanner::planVideoPacketCopy(
+    const MediaInputVideoStreamInfo& source,
     MediaPipelinePlannerOptions options)
 {
-    if (inputUrl.empty()) {
+    if (!source.valid()) {
         return ::media::Result<MediaPipelinePlan>::failure(
-            ::media::ErrorInfo::invalidArgument("planVideoTranscodeKnownInput requires input URL"));
+            ::media::ErrorInfo::invalidArgument("MediaPipelinePlanner requires valid input video stream info"));
     }
-    if (inputInfo.streamIndex < 0 || inputInfo.codecName.empty()) {
-        return ::media::Result<MediaPipelinePlan>::failure(
-            ::media::ErrorInfo::invalidArgument("planVideoTranscodeKnownInput requires stream index and codec"));
-    }
-    auto optionsStatus = validateCommonPlannerOptions(options, "planVideoTranscodeKnownInput");
-    if (!optionsStatus) {
-        return ::media::Result<MediaPipelinePlan>::failure(optionsStatus.error());
-    }
-    return buildVideoTranscodePlan(std::move(inputInfo), inputUrl, std::move(options));
+
+    MediaPipelinePlan plan;
+    plan.enabled = true;
+    plan.branchMode = MediaBranchMode::PacketCopy;
+    plan.inputCodecName = normalizeCodecName(source.codecName);
+    plan.outputCodecName = plan.inputCodecName;
+    plan.inputPixelFormat = source.pixelFormat;
+    plan.inputWidth = source.width;
+    plan.inputHeight = source.height;
+    plan.inputStreamIndex = source.streamIndex;
+    plan.inputFrameRate = source.frameRate;
+    plan.inputTimeBase = source.timeBase;
+    plan.inputBitrateKbps = source.bitrateKbps;
+
+    MediaPipelineChainPlan selected;
+    selected.label = "packet-copy";
+    selected.score = 1000;
+    selected.zeroCopy = true;
+    selected.allHardware = false;
+    plan.selected = selected;
+    plan.candidates.push_back(selected);
+    logSelectedPlan(options, plan);
+    return ::media::Result<MediaPipelinePlan>::success(std::move(plan));
+}
+
+::media::Result<MediaPipelinePlan> MediaPipelinePlanner::planVideoDrop(
+    const MediaInputVideoStreamInfo& source,
+    MediaPipelinePlannerOptions options)
+{
+    MediaPipelinePlan plan;
+    plan.enabled = false;
+    plan.branchMode = MediaBranchMode::Drop;
+    plan.inputCodecName = normalizeCodecName(source.codecName);
+    plan.inputPixelFormat = source.pixelFormat;
+    plan.inputWidth = source.width;
+    plan.inputHeight = source.height;
+    plan.inputStreamIndex = source.streamIndex;
+    plan.inputFrameRate = source.frameRate;
+    plan.inputTimeBase = source.timeBase;
+    plan.inputBitrateKbps = source.bitrateKbps;
+
+    MediaPipelineChainPlan selected;
+    selected.label = "drop";
+    selected.score = 0;
+    plan.selected = selected;
+    plan.candidates.push_back(selected);
+    logSelectedPlan(options, plan);
+    return ::media::Result<MediaPipelinePlan>::success(std::move(plan));
 }
 
 } // namespace media::ffmpeg::graph
