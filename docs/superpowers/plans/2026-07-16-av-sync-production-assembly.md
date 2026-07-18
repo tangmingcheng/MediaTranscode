@@ -504,17 +504,20 @@ implementation and Task 6 evidence were pushed through `64c3a67`.
 
 The segment accepts canonical encoded video and audio endpoints, creates exactly one scheduler bound to the runtime sync group, then creates one router. The router validates the scheduled stream discriminator and commits each immutable unit to exactly one output edge. It preflights capacity and does not partially route or clone payload unnecessarily.
 
-- [ ] **Step 1: Write RED scheduling/router tests**
+- [x] **Step 1: Write RED scheduling/router tests**
 
 Cover interleaved A/V ordering, identical dispatch epochs, blocked video/audio output, invalid stream discriminator, EOF ordering, Active-state requirement, and no duplicate/drop on retry.
 
-- [ ] **Step 2: Implement and register**
+- [x] **Step 2: Implement and register**
 
 Do not add stream-specific schedulers or pacing clocks.
 
-- [ ] **Step 3: Run GREEN, review, commit, and push**
+- [x] **Step 3: Run GREEN, review, commit, and push**
 
 Commit as `feat: share av output scheduler`.
+
+GREEN, independent review, commit `77cb296`, and push to
+`codex/quality-priority-improvements` are complete.
 
 ---
 
