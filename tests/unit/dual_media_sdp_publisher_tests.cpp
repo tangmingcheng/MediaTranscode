@@ -259,6 +259,60 @@ void testPublisherPreservesPreviousSdpAcrossAtomicStageFailures(
     }
 }
 
+void testPublisherFlushDiscardsPartialGeneration(TestContext& ctx)
+{
+    auto state = std::make_shared<AtomicReplaceState>();
+    auto fixture = publisherFixture(ctx, state, 2);
+    if (!fixture) return;
+    auto partial = description(MediaScheduledStream::Video, 1, 1);
+    EXPECT_TRUE(ctx, partial);
+    if (!partial) return;
+    EXPECT_TRUE(ctx, fixture->execution.findInputChannel(
+                         fixture->publisher, "video")
+                         ->push(std::move(partial).value()));
+    auto retained = fixture->node->process(fixture->execution);
+    EXPECT_TRUE(ctx, retained &&
+                         retained.value().state ==
+                             MediaNodeProcessState::Progress);
+    EXPECT_EQ(ctx, state->beginCalls, 0);
+
+    EXPECT_TRUE(ctx, fixture->node->flush(fixture->execution));
+    if (!pushDescriptions(ctx, *fixture, 2, 2)) return;
+    auto published = fixture->node->process(fixture->execution);
+    EXPECT_TRUE(ctx, published &&
+                         published.value().state ==
+                             MediaNodeProcessState::Finished);
+    EXPECT_EQ(ctx, state->beginCalls, 1);
+    EXPECT_TRUE(ctx, state->content.find(
+                         " 2 IN IP4 127.0.0.1\r\n") !=
+                         std::string::npos);
+    EXPECT_TRUE(ctx, fixture->node->stop(fixture->execution));
+}
+
+void testPublisherFlushStartsGenerationAfterFinished(TestContext& ctx)
+{
+    auto state = std::make_shared<AtomicReplaceState>();
+    auto fixture = publisherFixture(ctx, state, 2);
+    if (!fixture || !pushDescriptions(ctx, *fixture, 1, 1)) return;
+    auto first = fixture->node->process(fixture->execution);
+    EXPECT_TRUE(ctx, first &&
+                         first.value().state ==
+                             MediaNodeProcessState::Finished);
+
+    EXPECT_TRUE(ctx, fixture->node->flush(fixture->execution));
+    if (!pushDescriptions(ctx, *fixture, 2, 2)) return;
+    auto second = fixture->node->process(fixture->execution);
+    EXPECT_TRUE(ctx, second &&
+                         second.value().state ==
+                             MediaNodeProcessState::Finished);
+    EXPECT_EQ(ctx, state->beginCalls, 2);
+    EXPECT_EQ(ctx, state->replaceCalls, 2);
+    EXPECT_TRUE(ctx, state->content.find(
+                         " 2 IN IP4 127.0.0.1\r\n") !=
+                         std::string::npos);
+    EXPECT_TRUE(ctx, fixture->node->stop(fixture->execution));
+}
+
 } // namespace
 
 void runDualMediaSdpPublisherTests(TestContext& ctx)
@@ -266,6 +320,8 @@ void runDualMediaSdpPublisherTests(TestContext& ctx)
     testPublisherRejectsQueuedDuplicateBeforeAtomicReplace(ctx);
     testPublisherCommitsCompleteSdpAndRepublishesNextGeneration(ctx);
     testPublisherPreservesPreviousSdpAcrossAtomicStageFailures(ctx);
+    testPublisherFlushDiscardsPartialGeneration(ctx);
+    testPublisherFlushStartsGenerationAfterFinished(ctx);
 }
 
 } // namespace media_transcode::test::scheduled_rtp_output

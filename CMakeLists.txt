@@ -423,6 +423,7 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
             tests/unit/scheduled_rtp_output_decode_integration_tests.cpp
             tests/unit/fixtures/ScheduledRtpDecodeReceiver.cpp
             tests/unit/fixtures/ScheduledRtpDecodeSampleFixture.cpp
+            tests/unit/fixtures/ScheduledRtpOutputIntegrationRuntime.cpp
             tests/unit/fixtures/MediaTsSampleStreamConfigFixture.cpp
         )
         media_transcode_configure_test(

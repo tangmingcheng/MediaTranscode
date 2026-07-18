@@ -228,11 +228,15 @@ ScheduledRtpDecodeReceiver::start(
     const std::filesystem::path& log)
 {
 #if defined(_WIN32)
-    if (!std::filesystem::exists(ffmpeg) ||
-        !std::filesystem::exists(sdp)) {
+    auto executable = preflightExecutable(ffmpeg);
+    if (!executable) {
         return ::media::Result<ScheduledRtpDecodeReceiver>::failure(
-            ::media::ErrorInfo::unsupported(
-                "scheduled RTP decode receiver executable or SDP is unavailable"));
+            executable.error());
+    }
+    auto generatedSdp = validateGeneratedSdp(sdp);
+    if (!generatedSdp) {
+        return ::media::Result<ScheduledRtpDecodeReceiver>::failure(
+            generatedSdp.error());
     }
     SECURITY_ATTRIBUTES security{};
     security.nLength = sizeof(security);
@@ -298,6 +302,29 @@ ScheduledRtpDecodeReceiver::start(
         ::media::ErrorInfo::unsupported(
             "scheduled RTP decode child process is Windows-only"));
 #endif
+}
+
+::media::Status ScheduledRtpDecodeReceiver::preflightExecutable(
+    const std::filesystem::path& ffmpeg)
+{
+    std::error_code filesystemError;
+    if (!std::filesystem::is_regular_file(ffmpeg, filesystemError)) {
+        return ::media::Status::failure(::media::ErrorInfo::unsupported(
+            "scheduled RTP decode receiver executable is unavailable"));
+    }
+    return ::media::Status::success();
+}
+
+::media::Status ScheduledRtpDecodeReceiver::validateGeneratedSdp(
+    const std::filesystem::path& sdp)
+{
+    std::error_code filesystemError;
+    if (!std::filesystem::is_regular_file(sdp, filesystemError)) {
+        return ::media::Status::failure(::media::ErrorInfo::ioFailure(
+            "scheduled RTP decode generated SDP is unavailable",
+            filesystemError.value()));
+    }
+    return ::media::Status::success();
 }
 
 ::media::Status ScheduledRtpDecodeReceiver::waitUntilPortsBound(

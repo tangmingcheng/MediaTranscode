@@ -14,6 +14,11 @@ class ScheduledRtpDecodeReceiver final {
 public:
     static ::media::Result<std::uint16_t> findAvailableIpv4PortBlock();
 
+    static ::media::Status preflightExecutable(
+        const std::filesystem::path& ffmpeg);
+    static ::media::Status validateGeneratedSdp(
+        const std::filesystem::path& sdp);
+
     static ::media::Result<ScheduledRtpDecodeReceiver> start(
         const std::filesystem::path& ffmpeg,
         const std::filesystem::path& sdp,

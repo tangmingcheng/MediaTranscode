@@ -205,6 +205,14 @@ void MediaDualMediaSdpPublisherNode::resetState() noexcept
     return FFmpegNodeRuntime::stop(context);
 }
 
+::media::Status MediaDualMediaSdpPublisherNode::flush(
+    MediaGraphExecutionContext& context)
+{
+    cancelPendingOutputTransfer();
+    resetState();
+    return FFmpegNodeRuntime::flush(context);
+}
+
 void MediaDualMediaSdpPublisherNode::abort(
     MediaGraphExecutionContext& context) noexcept
 {

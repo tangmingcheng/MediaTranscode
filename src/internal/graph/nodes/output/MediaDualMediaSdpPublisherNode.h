@@ -21,6 +21,7 @@ public:
 
     static MediaNodeKind staticKind() noexcept;
     ::media::Status start(MediaGraphExecutionContext& context) override;
+    ::media::Status flush(MediaGraphExecutionContext& context) override;
     ::media::Status stop(MediaGraphExecutionContext& context) override;
     void abort(MediaGraphExecutionContext& context) noexcept override;
 
