@@ -1,9 +1,8 @@
 #include "unit/fixtures/ScheduledRtpOutputNodeTestSupport.h"
+#include "unit/fixtures/ScheduledRtpOutputIntegrationGraph.h"
 
 #include "common/GraphRuntimeTestSupport.h"
 
-#include "internal/graph/builder/MediaGraphBuildSupport.h"
-#include "internal/graph/builder/segments/MediaScheduledRtpOutputSegmentBuilder.h"
 #include "internal/graph/core/MediaGraphValidation.h"
 #include "internal/graph/nodes/output/MediaDualMediaSdpPublisherNode.h"
 #include "internal/graph/nodes/output/MediaScheduledRtpSenderNode.h"
@@ -11,6 +10,7 @@
 #include "internal/graph/runtime/factory/MediaRuntimeNodeFactory.h"
 
 #include <memory>
+#include <algorithm>
 #include <utility>
 
 namespace media_transcode::test::scheduled_rtp_output {
@@ -27,49 +27,71 @@ void testProductionNodeKinds(TestContext& ctx)
               MediaNodeKind::DualMediaSdpPublisher);
 }
 
+void testIntegrationGraphUsesSingleProductionSchedulingPath(TestContext& ctx)
+{
+    auto outer = MediaRealtimeRtpTranscodePlanner::plan(completeRequest());
+    EXPECT_TRUE(ctx, outer && outer.value().avSyncRuntime);
+    if (!outer || !outer.value().avSyncRuntime) return;
+    auto built = ScheduledRtpOutputIntegrationGraphBuilder::build(
+        *outer.value().avSyncRuntime);
+    EXPECT_TRUE(ctx, built);
+    if (!built) return;
+
+    const auto& fixture = built.value();
+    const auto countKind = [&](MediaNodeKind kind) {
+        return std::count_if(
+            fixture.graph.nodes().begin(), fixture.graph.nodes().end(),
+            [&](const MediaNode& node) { return node.kind == kind; });
+    };
+    EXPECT_EQ(ctx, countKind(MediaNodeKind::AvOutputScheduler), 1u);
+    EXPECT_EQ(ctx, countKind(MediaNodeKind::ScheduledOutputRouter), 1u);
+
+    const MediaPort* routerVideo =
+        fixture.graph.findOutputPort(fixture.router, "video");
+    const MediaPort* routerAudio =
+        fixture.graph.findOutputPort(fixture.router, "audio");
+    const MediaPort* videoScheduled =
+        fixture.graph.findInputPort(fixture.videoSender, "scheduled");
+    const MediaPort* audioScheduled =
+        fixture.graph.findInputPort(fixture.audioSender, "scheduled");
+    EXPECT_TRUE(ctx, routerVideo && routerAudio && videoScheduled &&
+                         audioScheduled);
+    if (!routerVideo || !routerAudio || !videoScheduled || !audioScheduled) {
+        return;
+    }
+    const auto countExactEdge = [&](MediaPortId from, MediaPortId to) {
+        return std::count_if(
+            fixture.graph.edges().begin(), fixture.graph.edges().end(),
+            [&](const MediaEdge& edge) {
+                return edge.from.portId == from && edge.to.portId == to;
+            });
+    };
+    const auto countIncoming = [&](MediaPortId to) {
+        return std::count_if(
+            fixture.graph.edges().begin(), fixture.graph.edges().end(),
+            [&](const MediaEdge& edge) { return edge.to.portId == to; });
+    };
+    EXPECT_EQ(ctx, countExactEdge(routerVideo->id, videoScheduled->id), 1u);
+    EXPECT_EQ(ctx, countExactEdge(routerAudio->id, audioScheduled->id), 1u);
+    EXPECT_EQ(ctx, countIncoming(videoScheduled->id), 1u);
+    EXPECT_EQ(ctx, countIncoming(audioScheduled->id), 1u);
+}
+
 void testBuilderAndCompilerInjectExactRegisteredGroup(TestContext& ctx)
 {
     auto outer = MediaRealtimeRtpTranscodePlanner::plan(completeRequest());
     EXPECT_TRUE(ctx, outer && outer.value().avSyncRuntime);
     if (!outer || !outer.value().avSyncRuntime) return;
     auto runtimePlan = std::move(*outer.value().avSyncRuntime);
-    MediaGraph graph;
-    const MediaNodeId epoch = graph.addNode(MediaNodeKind::DebugDump, "epoch");
-    const MediaNodeId videoCodec = graph.addNode(
-        MediaNodeKind::DebugDump, "video-codec");
-    const MediaNodeId audioCodec = graph.addNode(
-        MediaNodeKind::DebugDump, "audio-codec");
-    const MediaNodeId videoScheduled = graph.addNode(
-        MediaNodeKind::DebugDump, "video-scheduled");
-    const MediaNodeId audioScheduled = graph.addNode(
-        MediaNodeKind::DebugDump, "audio-scheduled");
-    graph.addOutputPort(
-        epoch, "activated", MediaStreamKind::Metadata,
-        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent, true, true);
-    graph.addOutputPort(
-        videoCodec, "codec", MediaStreamKind::Video,
-        MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false);
-    graph.addOutputPort(
-        audioCodec, "codec", MediaStreamKind::Audio,
-        MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, false);
-    graph.addOutputPort(
-        videoScheduled, "scheduled", MediaStreamKind::Video,
-        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, false);
-    graph.addOutputPort(
-        audioScheduled, "scheduled", MediaStreamKind::Audio,
-        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, false);
-    auto built = MediaScheduledRtpOutputSegmentBuilder::build(
-        graph,
-        MediaScheduledRtpOutputSegmentOptions{
-            "task8", {epoch, "activated"}, {videoCodec, "codec"},
-            {audioCodec, "codec"}, {videoScheduled, "scheduled"},
-            {audioScheduled, "scheduled"}},
-        runtimePlan);
+    auto built = ScheduledRtpOutputIntegrationGraphBuilder::build(runtimePlan);
     EXPECT_TRUE(ctx, built);
     if (!built) return;
-    EXPECT_TRUE(ctx, MediaGraphValidation::validate(graph).ok());
-    const MediaNode* videoSender = graph.findNode(built.value().videoSender);
-    const MediaNode* audioSender = graph.findNode(built.value().audioSender);
+    auto& fixture = built.value();
+    EXPECT_TRUE(ctx, MediaGraphValidation::validate(fixture.graph).ok());
+    const MediaNode* videoSender =
+        fixture.graph.findNode(fixture.videoSender);
+    const MediaNode* audioSender =
+        fixture.graph.findNode(fixture.audioSender);
     EXPECT_TRUE(ctx, videoSender && audioSender);
     if (!videoSender || !audioSender) return;
     auto decodedVideo = MediaScheduledRtpSenderNodePlanCodec::decode(
@@ -89,55 +111,11 @@ void testBuilderAndCompilerInjectExactRegisteredGroup(TestContext& ctx)
     }
     EXPECT_FALSE(ctx, MediaRuntimeNodeFactory::create(*videoSender));
 
-    const MediaNodeId schedulerVideo = graph.addNode(
-        MediaNodeKind::DebugDump, "scheduler-video");
-    const MediaNodeId schedulerAudio = graph.addNode(
-        MediaNodeKind::DebugDump, "scheduler-audio");
-    const MediaNodeId scheduler = graph.addNode(
-        MediaNodeKind::AvOutputScheduler, "scheduler");
-    const MediaNodeId binder = graph.addNode(
-        MediaNodeKind::PlaybackEpochBinder, "binder");
-    const MediaNodeId schedulerSink = graph.addNode(
-        MediaNodeKind::DebugDump, "scheduler-sink");
-    graph.setNodeOption(
-        scheduler, "av_scheduler.sync_group", runtimePlan.groupKey.value());
-    graph.setNodeOption(
-        binder, "playback_epoch_binder.sync_group", runtimePlan.groupKey.value());
-    graph.addOutputPort(
-        schedulerVideo, "packet", MediaStreamKind::Video,
-        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
-    graph.addOutputPort(
-        schedulerAudio, "packet", MediaStreamKind::Audio,
-        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
-    graph.addInputPort(
-        scheduler, "video", MediaStreamKind::Video,
-        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
-    graph.addInputPort(
-        scheduler, "audio", MediaStreamKind::Audio,
-        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
-    graph.addOutputPort(
-        scheduler, "scheduled", MediaStreamKind::Any,
-        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
-    graph.addInputPort(
-        schedulerSink, "scheduled", MediaStreamKind::Any,
-        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
-    const auto schedulerPolicy = MediaGraphBuildSupport::blockingQueuePolicy(8);
-    graph.connect(
-        schedulerVideo, "packet", scheduler, "video", "video",
-        schedulerPolicy);
-    graph.connect(
-        schedulerAudio, "packet", scheduler, "audio", "audio",
-        schedulerPolicy);
-    graph.connect(
-        scheduler, "scheduled", schedulerSink, "scheduled", "scheduled",
-        schedulerPolicy);
-    addPlaybackEpochReleaseBoundary(graph, binder);
-
     auto clock = std::make_shared<TestMasterClock>(milliseconds(0));
     MediaGraphRuntime runtime(
         std::make_shared<FixedAvSyncClockSource>(clock));
     MediaRealtimeExecutableGraph executable;
-    executable.graph = std::move(graph);
+    executable.graph = std::move(fixture.graph);
     executable.avSyncBinding.emplace(MediaAvSyncRuntimeBinding{
         runtimePlan.groupKey, runtimePlan.synchronization,
         runtimePlan.transition});
@@ -147,10 +125,10 @@ void testBuilderAndCompilerInjectExactRegisteredGroup(TestContext& ctx)
     EXPECT_TRUE(ctx, exactGroup != nullptr);
     EXPECT_TRUE(ctx, dynamic_cast<MediaScheduledRtpSenderNode*>(
                          runtime.scheduler().findNode(
-                             built.value().videoSender)) != nullptr);
+                             fixture.videoSender)) != nullptr);
     EXPECT_TRUE(ctx, dynamic_cast<MediaScheduledRtpSenderNode*>(
                          runtime.scheduler().findNode(
-                             built.value().audioSender)) != nullptr);
+                             fixture.audioSender)) != nullptr);
 }
 
 } // namespace
@@ -158,6 +136,7 @@ void testBuilderAndCompilerInjectExactRegisteredGroup(TestContext& ctx)
 void runScheduledRtpOutputAssemblyTests(TestContext& ctx)
 {
     testProductionNodeKinds(ctx);
+    testIntegrationGraphUsesSingleProductionSchedulingPath(ctx);
     testBuilderAndCompilerInjectExactRegisteredGroup(ctx);
 }
 

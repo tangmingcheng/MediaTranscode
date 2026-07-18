@@ -190,6 +190,25 @@ ScheduledRtpDecodeReceiver::~ScheduledRtpDecodeReceiver()
     stop();
 }
 
+::media::Status ScheduledRtpDecodeReceiver::preflightPlatformApis()
+{
+#if defined(_WIN32)
+    auto winsock = WinsockScope::create();
+    if (!winsock) return ::media::Status::failure(winsock.error());
+    ULONG size = 0;
+    const DWORD queried = GetExtendedUdpTable(
+        nullptr, &size, FALSE, AF_INET, UDP_TABLE_OWNER_PID, 0);
+    if (queried != ERROR_INSUFFICIENT_BUFFER || size == 0) {
+        return ::media::Status::failure(::media::ErrorInfo::unsupported(
+            "scheduled RTP decode Windows UDP readiness API is unavailable"));
+    }
+    return ::media::Status::success();
+#else
+    return ::media::Status::failure(::media::ErrorInfo::unsupported(
+        "scheduled RTP decode Windows process and UDP APIs are unavailable"));
+#endif
+}
+
 ::media::Result<std::uint16_t>
 ScheduledRtpDecodeReceiver::findAvailableIpv4PortBlock()
 {

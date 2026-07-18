@@ -1,4 +1,5 @@
 #include "unit/fixtures/ScheduledRtpDecodeReceiver.h"
+#include "unit/fixtures/ScheduledRtpDecodePrerequisites.h"
 #include "unit/fixtures/ScheduledRtpDecodeSampleFixture.h"
 #include "unit/fixtures/ScheduledRtpOutputIntegrationRuntime.h"
 
@@ -8,7 +9,6 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <string>
 
@@ -22,6 +22,7 @@ namespace {
 
 using namespace media::ffmpeg::graph;
 using media_transcode::test::ScheduledRtpDecodeReceiver;
+using media_transcode::test::ScheduledRtpDecodePrerequisites;
 using media_transcode::test::ScheduledRtpDecodeSampleFixture;
 using media_transcode::test::ScheduledRtpOutputIntegrationRuntime;
 using media_transcode::test::scheduledRtpFrameMd5HasData;
@@ -44,8 +45,6 @@ public:
         m_audio = directory /
             ("scheduled_rtp_decode_audio_" + suffix + ".framemd5");
         m_log = directory / ("scheduled_rtp_decode_" + suffix + ".log");
-        m_dependency = directory /
-            ("scheduled_rtp_decode_dependency_" + suffix + ".exe");
     }
 
     TemporaryArtifacts(const TemporaryArtifacts&) = delete;
@@ -58,31 +57,19 @@ public:
         std::filesystem::remove(m_video, ignored);
         std::filesystem::remove(m_audio, ignored);
         std::filesystem::remove(m_log, ignored);
-        std::filesystem::remove(m_dependency, ignored);
     }
 
     const std::filesystem::path& sdp() const noexcept { return m_sdp; }
     const std::filesystem::path& video() const noexcept { return m_video; }
     const std::filesystem::path& audio() const noexcept { return m_audio; }
     const std::filesystem::path& log() const noexcept { return m_log; }
-    const std::filesystem::path& dependency() const noexcept
-    {
-        return m_dependency;
-    }
 
 private:
     std::filesystem::path m_sdp;
     std::filesystem::path m_video;
     std::filesystem::path m_audio;
     std::filesystem::path m_log;
-    std::filesystem::path m_dependency;
 };
-
-int failureExit(const ::media::ErrorInfo& error)
-{
-    std::cerr << error.describe() << '\n';
-    return error.code == ::media::ErrorCode::Unsupported ? 77 : 1;
-}
 
 std::filesystem::path samplePath()
 {
@@ -106,36 +93,21 @@ std::filesystem::path ffmpegPath()
     return "ffmpeg";
 }
 
-::media::Status verifyReceiverInputClassification(
-    const TemporaryArtifacts& artifacts)
+::media::Status verifyExitClassification()
 {
-    {
-        std::ofstream dependency(artifacts.dependency(), std::ios::binary);
-        dependency << "classification-only";
-        if (!dependency) {
-            return ::media::Status::failure(::media::ErrorInfo::ioFailure(
-                "scheduled RTP decode could not create classification dependency",
-                -1));
-        }
-    }
-    const auto missingExecutable =
-        ScheduledRtpDecodeReceiver::preflightExecutable(
-            artifacts.dependency().string() + ".missing");
+    auto missingExecutable = ScheduledRtpDecodeReceiver::preflightExecutable(
+        ffmpegPath().string() + ".missing");
     if (missingExecutable ||
-        missingExecutable.error().code != ::media::ErrorCode::Unsupported) {
+        ScheduledRtpDecodePrerequisites::externalFailureExit(
+            missingExecutable.error()) != 77) {
         return ::media::Status::failure(::media::ErrorInfo::internalError(
-            "missing receiver executable must be an unsupported prerequisite"));
+            "missing external FFmpeg must map to prerequisite skip 77"));
     }
-    const auto availableExecutable =
-        ScheduledRtpDecodeReceiver::preflightExecutable(
-            artifacts.dependency());
-    if (!availableExecutable) return availableExecutable;
-    const auto missingGeneratedSdp =
-        ScheduledRtpDecodeReceiver::validateGeneratedSdp(artifacts.sdp());
-    if (missingGeneratedSdp ||
-        missingGeneratedSdp.error().code != ::media::ErrorCode::IoFailure) {
+    const auto injected = ::media::ErrorInfo::unsupported(
+        "injected post-preflight planner failure");
+    if (ScheduledRtpDecodePrerequisites::pipelineFailureExit(injected) != 1) {
         return ::media::Status::failure(::media::ErrorInfo::internalError(
-            "missing generated SDP must be a test I/O failure"));
+            "post-preflight Unsupported must map to test failure 1"));
     }
     return ::media::Status::success();
 }
@@ -197,44 +169,64 @@ MediaRealtimeRtpTranscodeRequest request(
 
 int main()
 {
-#if !defined(_WIN32)
-    return 77;
-#else
+    auto classified = verifyExitClassification();
+    if (!classified) {
+        return ScheduledRtpDecodePrerequisites::pipelineFailureExit(
+            classified.error());
+    }
+    auto prerequisites = ScheduledRtpDecodePrerequisites::check(
+        ffmpegPath(), samplePath());
+    if (!prerequisites) {
+        return ScheduledRtpDecodePrerequisites::externalFailureExit(
+            prerequisites.error());
+    }
     TemporaryArtifacts artifacts;
-    auto classified = verifyReceiverInputClassification(artifacts);
-    if (!classified) return failureExit(classified.error());
-    auto receiverDependency =
-        ScheduledRtpDecodeReceiver::preflightExecutable(ffmpegPath());
-    if (!receiverDependency) return failureExit(receiverDependency.error());
     auto portBlock = ScheduledRtpDecodeReceiver::findAvailableIpv4PortBlock();
-    if (!portBlock) return failureExit(portBlock.error());
+    if (!portBlock) {
+        return ScheduledRtpDecodePrerequisites::pipelineFailureExit(
+            portBlock.error());
+    }
     auto planned = MediaRealtimeRtpTranscodePlanner::plan(
         request(portBlock.value(), artifacts.sdp()));
-    if (!planned) return failureExit(planned.error());
+    if (!planned) {
+        return ScheduledRtpDecodePrerequisites::pipelineFailureExit(
+            planned.error());
+    }
     if (!planned.value().avSyncRuntime) {
-        return failureExit(::media::ErrorInfo::notInitialized(
-            "scheduled RTP decode plan has no A/V sync runtime"));
+        return ScheduledRtpDecodePrerequisites::pipelineFailureExit(
+            ::media::ErrorInfo::notInitialized(
+                "scheduled RTP decode plan has no A/V sync runtime"));
     }
     auto* output = std::get_if<MediaSeparateRtpOutputRuntimePlan>(
         &planned.value().avSyncRuntime->protocolOutput);
     if (!output) {
-        return failureExit(::media::ErrorInfo::notInitialized(
-            "scheduled RTP decode plan has no separate RTP output"));
+        return ScheduledRtpDecodePrerequisites::pipelineFailureExit(
+            ::media::ErrorInfo::notInitialized(
+                "scheduled RTP decode plan has no separate RTP output"));
     }
     auto sample = ScheduledRtpDecodeSampleFixture::load(
         samplePath(), output->video.packetization,
         output->audio.packetization);
-    if (!sample) return failureExit(sample.error());
+    if (!sample) {
+        return ScheduledRtpDecodePrerequisites::pipelineFailureExit(
+            sample.error());
+    }
     auto senders = ScheduledRtpOutputIntegrationRuntime::openSendersAndPublish(
         *planned.value().avSyncRuntime,
         sample.value().videoCodecContext(),
         sample.value().audioCodecContext());
-    if (!senders) return failureExit(senders.error());
+    if (!senders) {
+        return ScheduledRtpDecodePrerequisites::pipelineFailureExit(
+            senders.error());
+    }
 
     auto receiver = ScheduledRtpDecodeReceiver::start(
         ffmpegPath(), artifacts.sdp(), artifacts.video(), artifacts.audio(),
         artifacts.log());
-    if (!receiver) return failureExit(receiver.error());
+    if (!receiver) {
+        return ScheduledRtpDecodePrerequisites::pipelineFailureExit(
+            receiver.error());
+    }
     const std::array<std::uint16_t, 4> receiverPorts{
         portBlock.value(),
         static_cast<std::uint16_t>(portBlock.value() + 1),
@@ -273,5 +265,4 @@ int main()
     std::cout << "generated-SDP decode passed: video framemd5 and audio "
                  "framemd5 contain decoded frames\n";
     return 0;
-#endif
 }

@@ -386,6 +386,7 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
         tests/unit/dual_media_sdp_publisher_tests.cpp
         tests/unit/scheduled_rtp_output_assembly_tests.cpp
         tests/unit/fixtures/ScheduledRtpOutputNodeTestSupport.cpp
+        tests/unit/fixtures/ScheduledRtpOutputIntegrationGraph.cpp
     )
     media_transcode_configure_test(media_transcode_scheduled_rtp_output_node_tests)
     media_transcode_register_test(
@@ -421,8 +422,10 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
 
         add_executable(media_transcode_scheduled_rtp_output_decode_integration_tests
             tests/unit/scheduled_rtp_output_decode_integration_tests.cpp
+            tests/unit/fixtures/ScheduledRtpDecodePrerequisites.cpp
             tests/unit/fixtures/ScheduledRtpDecodeReceiver.cpp
             tests/unit/fixtures/ScheduledRtpDecodeSampleFixture.cpp
+            tests/unit/fixtures/ScheduledRtpOutputIntegrationGraph.cpp
             tests/unit/fixtures/ScheduledRtpOutputIntegrationRuntime.cpp
             tests/unit/fixtures/MediaTsSampleStreamConfigFixture.cpp
         )

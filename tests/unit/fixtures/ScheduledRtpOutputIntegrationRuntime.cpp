@@ -2,20 +2,22 @@
 
 #include "common/AvSyncRuntimeTestSupport.h"
 #include "unit/fixtures/ScheduledRtpDecodeSampleFixture.h"
+#include "unit/fixtures/ScheduledRtpOutputIntegrationGraph.h"
 
-#include "internal/graph/builder/MediaGraphBuildSupport.h"
-#include "internal/graph/builder/segments/MediaScheduledRtpOutputSegmentBuilder.h"
 #include "internal/graph/nodes/output/MediaDualMediaSdpPublisherNode.h"
 #include "internal/graph/nodes/output/MediaRtpSenderDescriptionBuffer.h"
 #include "internal/graph/nodes/output/MediaScheduledRtpSenderNode.h"
+#include "internal/graph/nodes/sync/MediaAvOutputSchedulerNode.h"
+#include "internal/graph/nodes/sync/MediaScheduledOutputRouterNode.h"
 #include "internal/graph/runtime/buffer/MediaPlaybackEpochActivatedBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
-#include "internal/graph/sync/MediaScheduledAccessUnit.h"
+#include "internal/graph/sync/MediaCanonicalLineage.h"
 #include "internal/graph/time/MediaMasterClock.h"
 
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <memory>
-#include <optional>
 #include <string>
 #include <thread>
 #include <utility>
@@ -47,114 +49,9 @@ private:
     std::chrono::steady_clock::time_point m_started;
 };
 
-struct IntegrationGraph final {
-    MediaGraph graph;
-    MediaNodeId binder;
-    MediaNodeId videoSender;
-    MediaNodeId audioSender;
-    MediaNodeId publisher;
-};
-
 ::media::ErrorInfo harnessError(std::string message)
 {
     return ::media::ErrorInfo::internalError(std::move(message));
-}
-
-MediaEndpoint addSource(
-    MediaGraph& graph,
-    const char* name,
-    const char* port,
-    MediaStreamKind stream,
-    MediaEdgeKind edge,
-    MediaPayloadKind payload,
-    bool multiple = false)
-{
-    const MediaNodeId node = graph.addNode(MediaNodeKind::DebugDump, name);
-    graph.addOutputPort(
-        node, port, stream, edge, payload, true, multiple);
-    return {node, port};
-}
-
-::media::Result<IntegrationGraph> buildIntegrationGraph(
-    const MediaRealtimeAvSyncRuntimePlan& plan)
-{
-    IntegrationGraph fixture;
-    const MediaEndpoint epoch = addSource(
-        fixture.graph, "decode-epoch", "activated",
-        MediaStreamKind::Metadata, MediaEdgeKind::Event,
-        MediaPayloadKind::GraphEvent, true);
-    const MediaEndpoint videoCodec = addSource(
-        fixture.graph, "decode-video-codec", "codec",
-        MediaStreamKind::Video, MediaEdgeKind::Metadata,
-        MediaPayloadKind::CodecContext);
-    const MediaEndpoint audioCodec = addSource(
-        fixture.graph, "decode-audio-codec", "codec",
-        MediaStreamKind::Audio, MediaEdgeKind::Metadata,
-        MediaPayloadKind::CodecContext);
-    const MediaEndpoint scheduledVideo = addSource(
-        fixture.graph, "decode-video-scheduled", "scheduled",
-        MediaStreamKind::Video, MediaEdgeKind::EncodedPacket,
-        MediaPayloadKind::Packet);
-    const MediaEndpoint scheduledAudio = addSource(
-        fixture.graph, "decode-audio-scheduled", "scheduled",
-        MediaStreamKind::Audio, MediaEdgeKind::EncodedPacket,
-        MediaPayloadKind::Packet);
-
-    const MediaNodeId schedulerVideo = fixture.graph.addNode(
-        MediaNodeKind::DebugDump, "decode-scheduler-video");
-    const MediaNodeId schedulerAudio = fixture.graph.addNode(
-        MediaNodeKind::DebugDump, "decode-scheduler-audio");
-    const MediaNodeId scheduler = fixture.graph.addNode(
-        MediaNodeKind::AvOutputScheduler, "decode-scheduler");
-    fixture.binder = fixture.graph.addNode(
-        MediaNodeKind::PlaybackEpochBinder, "decode-binder");
-    const MediaNodeId schedulerSink = fixture.graph.addNode(
-        MediaNodeKind::DebugDump, "decode-scheduler-sink");
-    fixture.graph.setNodeOption(
-        scheduler, "av_scheduler.sync_group", plan.groupKey.value());
-    fixture.graph.setNodeOption(
-        fixture.binder, "playback_epoch_binder.sync_group",
-        plan.groupKey.value());
-    fixture.graph.addOutputPort(
-        schedulerVideo, "packet", MediaStreamKind::Video,
-        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
-    fixture.graph.addOutputPort(
-        schedulerAudio, "packet", MediaStreamKind::Audio,
-        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
-    fixture.graph.addInputPort(
-        scheduler, "video", MediaStreamKind::Video,
-        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
-    fixture.graph.addInputPort(
-        scheduler, "audio", MediaStreamKind::Audio,
-        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
-    fixture.graph.addOutputPort(
-        scheduler, "scheduled", MediaStreamKind::Any,
-        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
-    fixture.graph.addInputPort(
-        schedulerSink, "scheduled", MediaStreamKind::Any,
-        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
-    const auto queue = MediaGraphBuildSupport::blockingQueuePolicy(8);
-    fixture.graph.connect(
-        schedulerVideo, "packet", scheduler, "video", "decode-video", queue);
-    fixture.graph.connect(
-        schedulerAudio, "packet", scheduler, "audio", "decode-audio", queue);
-    fixture.graph.connect(
-        scheduler, "scheduled", schedulerSink, "scheduled",
-        "decode-scheduled", queue);
-    addPlaybackEpochReleaseBoundary(fixture.graph, fixture.binder);
-
-    auto output = MediaScheduledRtpOutputSegmentBuilder::build(
-        fixture.graph,
-        {"decode-output", epoch, videoCodec, audioCodec,
-         scheduledVideo, scheduledAudio},
-        plan);
-    if (!output) {
-        return ::media::Result<IntegrationGraph>::failure(output.error());
-    }
-    fixture.videoSender = output.value().videoSender;
-    fixture.audioSender = output.value().audioSender;
-    fixture.publisher = output.value().sdpPublisher;
-    return ::media::Result<IntegrationGraph>::success(std::move(fixture));
 }
 
 ::media::Status pushActivationAndCodecs(
@@ -163,11 +60,12 @@ MediaEndpoint addSource(
     MediaNodeId audioSender,
     const MediaAvSyncGroupKey& groupKey,
     AVCodecContext& videoCodec,
-    AVCodecContext& audioCodec)
+    AVCodecContext& audioCodec,
+    const MediaPlaybackEpoch& epoch)
 {
-    const MediaPlaybackEpoch epoch{milliseconds(0), milliseconds(0), 1};
     const MediaAudioPlaybackOrigin audioOrigin{
-        1, milliseconds(0), milliseconds(0), 0, audioCodec.sample_rate};
+        epoch.generation, epoch.sourceStart, epoch.masterRelease, 0,
+        audioCodec.sample_rate};
     auto videoActivation = MediaPlaybackEpochActivatedBuffer::create(
         groupKey, epoch, audioOrigin);
     auto audioActivation = MediaPlaybackEpochActivatedBuffer::create(
@@ -199,6 +97,48 @@ MediaEndpoint addSource(
     return ::media::Status::success();
 }
 
+::media::Result<MediaBufferRef> canonicalAccessUnit(
+    const ScheduledRtpDecodeAccessUnit& unit,
+    MediaRunningTime senderLead,
+    std::uint64_t sequence)
+{
+    auto packet = FFmpegBufferFactory::clonePacket(
+        unit.packet.get(),
+        unit.stream == MediaScheduledStream::Video
+            ? MediaStreamKind::Video : MediaStreamKind::Audio);
+    if (!packet) return ::media::Result<MediaBufferRef>::failure(packet.error());
+    auto dispatch = unit.presentationOnMaster.checkedSubtract(senderLead);
+    if (!dispatch) {
+        return ::media::Result<MediaBufferRef>::failure(dispatch.error());
+    }
+    auto lineage = createMediaCanonicalLineage(
+        unit.presentationOnMaster, dispatch.value(), milliseconds(1),
+        MediaDecodeOrderMode::ReorderedRequiresDecodeTime,
+        unit.stream == MediaScheduledStream::Video
+            ? "scheduled-rtp-decode.video" : "scheduled-rtp-decode.audio",
+        MediaSourceAccessUnitSequence(sequence),
+        MediaTimeMappingConfidence::Locked, 1);
+    if (!lineage) {
+        return ::media::Result<MediaBufferRef>::failure(lineage.error());
+    }
+    return MediaCanonicalAccessUnitBuffer::create(
+        std::move(packet).value(), std::move(lineage).value());
+}
+
+::media::Status waitForNodeDeadline(
+    const MediaMasterClock& clock,
+    const MediaNodeProcessResult::DeadlineWait& wait)
+{
+    auto now = clock.now();
+    if (!now) return ::media::Status::failure(now.error());
+    if (wait.masterDeadline <= now.value()) return ::media::Status::success();
+    auto remaining = wait.masterDeadline.checkedSubtract(now.value());
+    if (!remaining) return ::media::Status::failure(remaining.error());
+    std::this_thread::sleep_for(
+        std::chrono::nanoseconds(remaining.value().nanoseconds()));
+    return ::media::Status::success();
+}
+
 ::media::Status verifyAndRestoreDescription(
     MediaGraphExecutionContext& context,
     MediaNodeId publisher,
@@ -225,11 +165,17 @@ MediaEndpoint addSource(
 
 ScheduledRtpOutputIntegrationRuntime::ScheduledRtpOutputIntegrationRuntime(
     std::unique_ptr<MediaGraphRuntime> runtime,
+    std::shared_ptr<MediaMasterClock> clock,
+    MediaNodeId scheduler,
+    MediaNodeId router,
     MediaNodeId videoSender,
     MediaNodeId audioSender,
     MediaRunningTime videoLead,
     MediaRunningTime audioLead) noexcept
     : m_runtime(std::move(runtime)),
+      m_clock(std::move(clock)),
+      m_scheduler(scheduler),
+      m_router(router),
       m_videoSender(videoSender),
       m_audioSender(audioSender),
       m_videoLead(videoLead),
@@ -263,7 +209,7 @@ ScheduledRtpOutputIntegrationRuntime::openSendersAndPublish(
         return RuntimeResult::failure(harnessError(
             "scheduled RTP decode requires a separate RTP output plan"));
     }
-    auto graph = buildIntegrationGraph(plan);
+    auto graph = ScheduledRtpOutputIntegrationGraphBuilder::build(plan);
     if (!graph) return RuntimeResult::failure(graph.error());
     auto clock = std::make_shared<RealtimeIntegrationClock>();
     auto runtime = std::make_unique<MediaGraphRuntime>(
@@ -279,7 +225,11 @@ ScheduledRtpOutputIntegrationRuntime::openSendersAndPublish(
         !registered) {
         return RuntimeResult::failure(registered.error());
     }
-    const MediaPlaybackEpoch epoch{milliseconds(0), milliseconds(0), 1};
+    auto now = clock->now();
+    if (!now) return RuntimeResult::failure(now.error());
+    auto release = now.value().checkedAdd(milliseconds(2'000));
+    if (!release) return RuntimeResult::failure(release.error());
+    const MediaPlaybackEpoch epoch{milliseconds(0), release.value(), 1};
     if (!activateInitialThroughRelease(
             *runtime, graph.value().binder, plan.groupKey, epoch,
             audioCodec.sample_rate)) {
@@ -290,13 +240,23 @@ ScheduledRtpOutputIntegrationRuntime::openSendersAndPublish(
         runtime->scheduler().findNode(graph.value().videoSender));
     auto* audio = dynamic_cast<MediaScheduledRtpSenderNode*>(
         runtime->scheduler().findNode(graph.value().audioSender));
+    auto* scheduler = dynamic_cast<MediaAvOutputSchedulerNode*>(
+        runtime->scheduler().findNode(graph.value().scheduler));
+    auto* router = dynamic_cast<MediaScheduledOutputRouterNode*>(
+        runtime->scheduler().findNode(graph.value().router));
     auto* publisher = dynamic_cast<MediaDualMediaSdpPublisherNode*>(
         runtime->scheduler().findNode(graph.value().publisher));
-    if (!video || !audio || !publisher) {
+    if (!video || !audio || !scheduler || !router || !publisher) {
         return RuntimeResult::failure(harnessError(
             "scheduled RTP decode did not receive production runtime nodes"));
     }
     auto& context = runtime->context();
+    if (auto started = scheduler->start(context); !started) {
+        return RuntimeResult::failure(started.error());
+    }
+    if (auto started = router->start(context); !started) {
+        return RuntimeResult::failure(started.error());
+    }
     if (auto started = video->start(context); !started) {
         return RuntimeResult::failure(started.error());
     }
@@ -305,7 +265,7 @@ ScheduledRtpOutputIntegrationRuntime::openSendersAndPublish(
     }
     if (auto queued = pushActivationAndCodecs(
             context, graph.value().videoSender, graph.value().audioSender,
-            plan.groupKey, videoCodec, audioCodec); !queued) {
+            plan.groupKey, videoCodec, audioCodec, epoch); !queued) {
         return RuntimeResult::failure(queued.error());
     }
     auto videoOpened = video->process(context);
@@ -336,7 +296,8 @@ ScheduledRtpOutputIntegrationRuntime::openSendersAndPublish(
                              "scheduled RTP decode publisher did not finish"));
     }
     return RuntimeResult::success(ScheduledRtpOutputIntegrationRuntime(
-        std::move(runtime), graph.value().videoSender,
+        std::move(runtime), std::move(clock), graph.value().scheduler,
+        graph.value().router, graph.value().videoSender,
         graph.value().audioSender, separate->video.senderLead,
         separate->audio.senderLead));
 }
@@ -344,59 +305,84 @@ ScheduledRtpOutputIntegrationRuntime::openSendersAndPublish(
 ::media::Status ScheduledRtpOutputIntegrationRuntime::sendAccessUnits(
     const ScheduledRtpDecodeSampleFixture& sample)
 {
+    auto* scheduler = dynamic_cast<MediaAvOutputSchedulerNode*>(
+        m_runtime->scheduler().findNode(m_scheduler));
+    auto* router = dynamic_cast<MediaScheduledOutputRouterNode*>(
+        m_runtime->scheduler().findNode(m_router));
     auto* video = dynamic_cast<MediaScheduledRtpSenderNode*>(
         m_runtime->scheduler().findNode(m_videoSender));
     auto* audio = dynamic_cast<MediaScheduledRtpSenderNode*>(
         m_runtime->scheduler().findNode(m_audioSender));
-    if (!video || !audio) {
+    if (!scheduler || !router || !video || !audio || !m_clock) {
         return ::media::Status::failure(harnessError(
             "scheduled RTP decode lost its sender nodes"));
     }
-    const auto started = std::chrono::steady_clock::now();
+    MediaChannel* videoInput =
+        m_runtime->context().findInputChannel(m_scheduler, "video");
+    MediaChannel* audioInput =
+        m_runtime->context().findInputChannel(m_scheduler, "audio");
+    if (!videoInput || !audioInput) {
+        return ::media::Status::failure(harnessError(
+            "scheduled RTP decode lost its canonical scheduler inputs"));
+    }
     std::uint64_t sequence = 1;
     for (const auto& unit : sample.accessUnits()) {
-        std::this_thread::sleep_until(
-            started + std::chrono::nanoseconds(
-                unit.dispatchOffset.nanoseconds()));
         const bool isVideo = unit.stream == MediaScheduledStream::Video;
-        const MediaNodeId senderId = isVideo ? m_videoSender : m_audioSender;
-        MediaScheduledRtpSenderNode* sender = isVideo ? video : audio;
         const MediaRunningTime lead = isVideo ? m_videoLead : m_audioLead;
-        auto packet = FFmpegBufferFactory::clonePacket(
-            unit.packet.get(),
-            isVideo ? MediaStreamKind::Video : MediaStreamKind::Audio);
-        if (!packet) return ::media::Status::failure(packet.error());
-        auto dispatch = unit.presentationOnMaster.checkedSubtract(lead);
-        if (!dispatch) return ::media::Status::failure(dispatch.error());
-        auto scheduled = MediaScheduledAccessUnit::create({
-            std::move(packet).value(), unit.stream,
-            unit.presentationOnMaster, dispatch.value(),
-            unit.presentationOnMaster, dispatch.value(), milliseconds(1), 1,
-            MediaSourceAccessUnitSequence(sequence++), std::nullopt,
-            std::nullopt,
-            isVideo
-                ? std::optional<MediaVideoSyncDecisionKind>(
-                      MediaVideoSyncDecisionKind::Display)
-                : std::nullopt});
-        if (!scheduled) return ::media::Status::failure(scheduled.error());
-        MediaChannel* input =
-            m_runtime->context().findInputChannel(senderId, "scheduled");
-        if (!input || !input->push(std::move(scheduled).value())) {
+        auto canonical = canonicalAccessUnit(unit, lead, sequence++);
+        if (!canonical) return ::media::Status::failure(canonical.error());
+        MediaChannel* input = isVideo ? videoInput : audioInput;
+        if (!input->push(std::move(canonical).value())) {
             return ::media::Status::failure(harnessError(
-                "scheduled RTP decode could not queue an access unit"));
-        }
-        for (int attempt = 0; input->size() != 0 && attempt != 3; ++attempt) {
-            auto processed = sender->process(m_runtime->context());
-            if (!processed) {
-                return ::media::Status::failure(processed.error());
-            }
-        }
-        if (input->size() != 0) {
-            return ::media::Status::failure(harnessError(
-                "scheduled RTP sender did not consume its access unit"));
+                "scheduled RTP decode could not queue a canonical access unit"));
         }
     }
-    return ::media::Status::success();
+    videoInput->close();
+    audioInput->close();
+
+    bool videoFinished = false;
+    bool audioFinished = false;
+    constexpr std::size_t maximumSteps = 50'000;
+    for (std::size_t step = 0; step < maximumSteps; ++step) {
+        std::array<::media::Result<MediaNodeProcessResult>, 4> processed{
+            scheduler->process(m_runtime->context()),
+            router->process(m_runtime->context()),
+            video->process(m_runtime->context()),
+            audio->process(m_runtime->context())};
+        for (const auto& result : processed) {
+            if (!result) return ::media::Status::failure(result.error());
+        }
+        videoFinished = videoFinished ||
+            processed[2].value().state == MediaNodeProcessState::Finished;
+        audioFinished = audioFinished ||
+            processed[3].value().state == MediaNodeProcessState::Finished;
+        if (videoFinished && audioFinished) {
+            return ::media::Status::success();
+        }
+
+        const bool progressed = std::any_of(
+            processed.begin(), processed.end(), [](const auto& result) {
+                return result.value().state == MediaNodeProcessState::Progress;
+            });
+        if (progressed) continue;
+        const MediaNodeProcessResult::DeadlineWait* earliest = nullptr;
+        for (const auto& result : processed) {
+            if (!result.value().deadlineWait) continue;
+            if (!earliest || result.value().deadlineWait->masterDeadline <
+                                 earliest->masterDeadline) {
+                earliest = &*result.value().deadlineWait;
+            }
+        }
+        if (!earliest) {
+            return ::media::Status::failure(harnessError(
+                "scheduled RTP decode runtime stalled without a node deadline"));
+        }
+        if (auto waited = waitForNodeDeadline(*m_clock, *earliest); !waited) {
+            return waited;
+        }
+    }
+    return ::media::Status::failure(harnessError(
+        "scheduled RTP decode runtime exceeded its process-step budget"));
 }
 
 } // namespace media_transcode::test

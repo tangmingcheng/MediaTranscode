@@ -12,6 +12,7 @@ namespace media_transcode::test {
 
 class ScheduledRtpDecodeReceiver final {
 public:
+    static ::media::Status preflightPlatformApis();
     static ::media::Result<std::uint16_t> findAvailableIpv4PortBlock();
 
     static ::media::Status preflightExecutable(
