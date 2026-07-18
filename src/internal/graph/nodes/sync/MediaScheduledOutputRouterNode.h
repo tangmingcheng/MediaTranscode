@@ -18,6 +18,7 @@ protected:
         MediaGraphExecutionContext& context) override;
 
 private:
+    enum class Mode : std::uint8_t { SplitAv, SerializedAv };
     ::media::Status configureTopology(
         MediaGraphExecutionContext& context) const;
     ::media::Result<MediaNodeProcessResult> routeScheduledUnit(
@@ -28,6 +29,7 @@ private:
     void resetState() noexcept;
 
     MediaBufferRef m_pending;
+    Mode m_mode = Mode::SplitAv;
 };
 
 } // namespace media::ffmpeg::graph

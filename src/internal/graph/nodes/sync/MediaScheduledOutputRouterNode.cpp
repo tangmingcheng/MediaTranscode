@@ -1,6 +1,7 @@
 #include "internal/graph/nodes/sync/MediaScheduledOutputRouterNode.h"
 
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
+#include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/runtime/channel/MediaAtomicOutputTransaction.h"
 #include "internal/graph/sync/MediaScheduledAccessUnit.h"
 
@@ -25,6 +26,14 @@ MediaNodeKind MediaScheduledOutputRouterNode::staticKind() noexcept
     MediaGraphExecutionContext& context)
 {
     resetState();
+    auto mode = requiredNodeOption(
+        nodeOptions(context), "MediaScheduledOutputRouterNode",
+        "scheduled_output_router.mode");
+    if (!mode) return ::media::Status::failure(mode.error());
+    if (mode.value() == "split_av") m_mode = Mode::SplitAv;
+    else if (mode.value() == "serialized_av") m_mode = Mode::SerializedAv;
+    else return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+        "Scheduled output router mode must be split_av or serialized_av"));
     auto configured = configureTopology(context);
     return configured ? FFmpegNodeRuntime::start(context) : configured;
 }
@@ -39,6 +48,15 @@ MediaNodeKind MediaScheduledOutputRouterNode::staticKind() noexcept
                 "Scheduled output router requires exactly one scheduled input"));
     }
     auto outputs = context.outputChannels(nodeId());
+    if (m_mode == Mode::SerializedAv) {
+        MediaChannel* serialized = context.findOutputChannel(
+            nodeId(), "serialized");
+        if (outputs.size() != 1 || !serialized) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "Serialized scheduled output router requires one serialized output"));
+        }
+        return ::media::Status::success();
+    }
     MediaChannel* video = context.findOutputChannel(nodeId(), "video");
     MediaChannel* audio = context.findOutputChannel(nodeId(), "audio");
     if (outputs.size() != 2 || !video || !audio || video == audio) {
@@ -95,15 +113,15 @@ MediaScheduledOutputRouterNode::routeScheduledUnit(
             ::media::ErrorInfo::invalidArgument(
                 "Scheduled output router requires a typed scheduled unit"));
     }
-    const char* port = nullptr;
+    const char* port = m_mode == Mode::SerializedAv ? "serialized" : nullptr;
     MediaStreamKind expectedStream = MediaStreamKind::Unknown;
     switch (unit->stream()) {
     case MediaScheduledStream::Video:
-        port = "video";
+        if (m_mode == Mode::SplitAv) port = "video";
         expectedStream = MediaStreamKind::Video;
         break;
     case MediaScheduledStream::Audio:
-        port = "audio";
+        if (m_mode == Mode::SplitAv) port = "audio";
         expectedStream = MediaStreamKind::Audio;
         break;
     default:
@@ -158,6 +176,22 @@ MediaScheduledOutputRouterNode::routeControl(
         return ::media::Result<MediaNodeProcessResult>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "Scheduled output router rejects an unknown control kind"));
+    }
+    if (m_mode == Mode::SerializedAv) {
+        MediaChannel* output = context.findOutputChannel(nodeId(), "serialized");
+        switch (output->pushOutcome(m_pending)) {
+        case MediaQueuePushOutcome::Accepted:
+            m_pending.reset();
+            return processFinished();
+        case MediaQueuePushOutcome::WouldBlock:
+            return processWaiting();
+        case MediaQueuePushOutcome::Closed:
+        case MediaQueuePushOutcome::Aborted:
+        case MediaQueuePushOutcome::Dropped:
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                ::media::ErrorInfo::cancelled(
+                    "Serialized scheduled output router terminal was rejected"));
+        }
     }
     MediaChannel* video = context.findOutputChannel(nodeId(), "video");
     MediaChannel* audio = context.findOutputChannel(nodeId(), "audio");

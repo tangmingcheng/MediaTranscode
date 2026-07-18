@@ -48,7 +48,8 @@ constexpr std::string_view Owner = "MediaRealtimeAvSchedulerSegmentBuilder";
 ::media::Result<void> addPorts(
     MediaGraph& graph,
     MediaNodeId scheduler,
-    MediaNodeId router)
+    MediaNodeId router,
+    MediaAvSyncOutputAdapterKind outputAdapter)
 {
     using namespace MediaGraphBuildSupport;
     if (auto status = addInputPortChecked(
@@ -67,6 +68,11 @@ constexpr std::string_view Owner = "MediaRealtimeAvSchedulerSegmentBuilder";
             graph, Owner, router, "scheduled", MediaStreamKind::Any,
             MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true,
             false); !status) return status;
+    if (outputAdapter == MediaAvSyncOutputAdapterKind::ProjectMpegTs) {
+        return addOutputPortChecked(
+            graph, Owner, router, "serialized", MediaStreamKind::Any,
+            MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, false);
+    }
     if (auto status = addOutputPortChecked(
             graph, Owner, router, "video", MediaStreamKind::Video,
             MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true,
@@ -74,6 +80,38 @@ constexpr std::string_view Owner = "MediaRealtimeAvSchedulerSegmentBuilder";
     return addOutputPortChecked(
         graph, Owner, router, "audio", MediaStreamKind::Audio,
         MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, false);
+}
+
+::media::Result<MediaRunningTime> transportLead(
+    const MediaRealtimeAvSyncRuntimePlan& plan)
+{
+    if (plan.outputAdapter == MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp) {
+        const auto* output = std::get_if<MediaSeparateRtpOutputRuntimePlan>(
+            &plan.protocolOutput);
+        if (!output) {
+            return ::media::Result<MediaRunningTime>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Separate RTP scheduler requires a separate RTP output plan"));
+        }
+        if (output->video.senderLead.nanoseconds() <= 0 ||
+            output->audio.senderLead.nanoseconds() <= 0 ||
+            output->video.senderLead != output->audio.senderLead) {
+            return ::media::Result<MediaRunningTime>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Separate RTP scheduler requires matching positive planner-owned sender leads"));
+        }
+        return ::media::Result<MediaRunningTime>::success(
+            output->video.senderLead);
+    }
+    const auto* output = std::get_if<MediaProjectMpegTsRuntimeOutputPlan>(
+        &plan.protocolOutput);
+    if (!output) {
+        return ::media::Result<MediaRunningTime>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Project MPEG-TS scheduler requires a project MPEG-TS output plan"));
+    }
+    return ::media::Result<MediaRunningTime>::success(
+        output->protocol.muxPlan().transportDecodeLead());
 }
 
 } // namespace
@@ -131,7 +169,28 @@ MediaRealtimeAvSchedulerSegmentBuilder::build(
         return ::media::Result<MediaRealtimeAvSchedulerSegmentResult>::failure(
             status.error());
     }
-    if (auto status = addPorts(graph, scheduler, router); !status) {
+    auto lead = transportLead(plan);
+    if (!lead) {
+        return ::media::Result<MediaRealtimeAvSchedulerSegmentResult>::failure(
+            lead.error());
+    }
+    if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
+            graph, Owner, scheduler, "av_scheduler.transport_lead_ns",
+            std::to_string(lead.value().nanoseconds())); !status) {
+        return ::media::Result<MediaRealtimeAvSchedulerSegmentResult>::failure(
+            status.error());
+    }
+    const char* routerMode =
+        plan.outputAdapter == MediaAvSyncOutputAdapterKind::ProjectMpegTs
+        ? "serialized_av" : "split_av";
+    if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
+            graph, Owner, router, "scheduled_output_router.mode", routerMode);
+        !status) {
+        return ::media::Result<MediaRealtimeAvSchedulerSegmentResult>::failure(
+            status.error());
+    }
+    if (auto status = addPorts(
+            graph, scheduler, router, plan.outputAdapter); !status) {
         return ::media::Result<MediaRealtimeAvSchedulerSegmentResult>::failure(
             status.error());
     }
@@ -156,9 +215,15 @@ MediaRealtimeAvSchedulerSegmentBuilder::build(
         return ::media::Result<MediaRealtimeAvSchedulerSegmentResult>::failure(
             status.error());
     }
+    MediaRealtimeAvSchedulerSegmentResult result;
+    if (plan.outputAdapter == MediaAvSyncOutputAdapterKind::ProjectMpegTs) {
+        result.serialized = MediaEndpoint{router, "serialized"};
+    } else {
+        result.video = MediaEndpoint{router, "video"};
+        result.audio = MediaEndpoint{router, "audio"};
+    }
     return ::media::Result<MediaRealtimeAvSchedulerSegmentResult>::success(
-        MediaRealtimeAvSchedulerSegmentResult{
-            MediaEndpoint{router, "video"}, MediaEndpoint{router, "audio"}});
+        std::move(result));
 }
 
 } // namespace media::ffmpeg::graph

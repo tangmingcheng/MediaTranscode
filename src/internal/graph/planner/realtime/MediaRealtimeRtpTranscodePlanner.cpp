@@ -3,6 +3,7 @@
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/planner/MediaPipelineCapabilityScanner.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
+#include "internal/graph/planner/capability/MediaSelectedEncoderPacketLayoutResolver.h"
 #include "internal/graph/planner/realtime/MediaRealtimeInputPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeOutputPolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlanner.h"
@@ -469,8 +470,16 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
                 ::media::ErrorInfo::notInitialized(
                     "Project MPEG-TS output requires resolved audio format facts"));
         }
+        auto videoPacketLayout =
+            MediaSelectedEncoderPacketLayoutResolver::resolve(plan.videoPlan);
+        if (!videoPacketLayout) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                videoPacketLayout.error());
+        }
         resolvedTsFacts.emplace(MediaProjectMpegTsResolvedPipelineFacts{
-            plan.videoPlan.outputCodecName, *plan.audioPlan.resolvedOutput});
+            plan.videoPlan.outputCodecName,
+            std::move(videoPacketLayout).value(),
+            *plan.audioPlan.resolvedOutput});
     }
     if (MediaRealtimeRequestClassifier::audioRequested(options)) {
         auto avSync = MediaAvSyncPlanner::plan(

@@ -9,6 +9,7 @@ MediaAvScheduledOutputBuilder::canonicalVideo(
     const MediaAvSchedulerHead& head,
     MediaRunningTime presentationOnMaster,
     MediaRunningTime dispatchOnMaster,
+    MediaRunningTime emitOnMaster,
     MediaVideoSyncDecisionKind decision)
 {
     const auto* unit = head.canonical();
@@ -30,7 +31,8 @@ MediaAvScheduledOutputBuilder::canonicalVideo(
     MediaScheduledAccessUnitParameters parameters{
         unit->media(), MediaScheduledStream::Video,
         unit->canonicalPresentation(), canonicalDispatch.value(),
-        presentationOnMaster, dispatchOnMaster, unit->canonicalDuration(),
+        presentationOnMaster, dispatchOnMaster, emitOnMaster,
+        unit->canonicalDuration(),
         unit->generation(), unit->sourceSequence(), std::nullopt, std::nullopt,
         decision};
     auto output = MediaScheduledAccessUnit::create(std::move(parameters));
@@ -50,6 +52,7 @@ MediaAvScheduledOutputBuilder::repeatedVideo(
     MediaSourceAccessUnitSequence lastDisplayedSequence,
     MediaRunningTime presentationOnMaster,
     MediaRunningTime dispatchOnMaster,
+    MediaRunningTime emitOnMaster,
     MediaVideoSyncDecisionKind decision)
 {
     if (!lastDisplayedVideo) {
@@ -64,7 +67,8 @@ MediaAvScheduledOutputBuilder::repeatedVideo(
     MediaScheduledAccessUnitParameters parameters{
         std::move(media).value(), MediaScheduledStream::Video,
         repeat.canonicalPresentation(), repeat.canonicalPresentation(),
-        presentationOnMaster, dispatchOnMaster, repeat.canonicalDuration(),
+        presentationOnMaster, dispatchOnMaster, emitOnMaster,
+        repeat.canonicalDuration(),
         repeat.generation(), lastDisplayedSequence, lastDisplayedSequence,
         repeat.requestId(), decision};
     auto output = MediaScheduledAccessUnit::create(std::move(parameters));
@@ -78,7 +82,8 @@ MediaAvScheduledOutputBuilder::repeatedVideo(
 ::media::Result<MediaBufferRef> MediaAvScheduledOutputBuilder::audio(
     const MediaCanonicalAccessUnitBuffer& unit,
     MediaRunningTime presentationOnMaster,
-    MediaRunningTime dispatchOnMaster)
+    MediaRunningTime dispatchOnMaster,
+    MediaRunningTime emitOnMaster)
 {
     auto canonicalDispatch = unit.canonicalDispatch();
     if (!canonicalDispatch) return ::media::Result<MediaBufferRef>::failure(
@@ -86,7 +91,8 @@ MediaAvScheduledOutputBuilder::repeatedVideo(
     return MediaScheduledAccessUnit::create(MediaScheduledAccessUnitParameters{
         unit.media(), MediaScheduledStream::Audio,
         unit.canonicalPresentation(), canonicalDispatch.value(),
-        presentationOnMaster, dispatchOnMaster, unit.canonicalDuration(),
+        presentationOnMaster, dispatchOnMaster, emitOnMaster,
+        unit.canonicalDuration(),
         unit.generation(), unit.sourceSequence(), std::nullopt, std::nullopt,
         std::nullopt});
 }

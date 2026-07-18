@@ -64,6 +64,7 @@ private:
     void resetState() noexcept;
 
     std::optional<MediaAvSyncGroupKey> m_groupKey;
+    MediaRunningTime m_transportLead = MediaRunningTime::fromNanoseconds(0);
     std::shared_ptr<MediaAvSyncGroupRuntime> m_group;
     VideoControllerFactory m_videoControllerFactory;
     std::unique_ptr<MediaVideoSyncController> m_videoController;

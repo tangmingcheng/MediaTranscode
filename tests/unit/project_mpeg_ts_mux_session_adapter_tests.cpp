@@ -24,6 +24,7 @@ extern "C" {
 #include <cstring>
 #include <memory>
 #include <span>
+#include <string>
 #include <vector>
 
 using namespace media::ffmpeg::graph;
@@ -316,7 +317,7 @@ void rejectsMissingDuplicateAndWrongBindings(TestContext& ctx)
                           fixture.context, codecParameters(MediaStreamKind::Video)));
 }
 
-void pollUsesClockAndPublishesExactDeadline(TestContext& ctx)
+void pollUsesPlannerOwnedTransportDeadlines(TestContext& ctx)
 {
     Fixture fixture;
     if (!fixture.activate(ctx)) return;
@@ -324,26 +325,77 @@ void pollUsesClockAndPublishesExactDeadline(TestContext& ctx)
     ProjectMpegTsMuxSessionAdapter adapter;
     bindComplete(adapter, fixture, sink, ctx, false);
 
-    fixture.clock->nowValue = fixture.epoch.masterRelease;
+    const auto bytesAfterActivation = sink->bytes.size();
+    fixture.clock->nowValue = ms(999);
+    auto waiting = adapter.poll(fixture.context);
+    EXPECT_TRUE(ctx, waiting);
+    if (waiting) {
+        EXPECT_FALSE(ctx, waiting.value().progressed);
+        EXPECT_TRUE(ctx, waiting.value().nextWait.has_value());
+        if (waiting.value().nextWait) {
+            EXPECT_EQ(ctx, waiting.value().nextWait->syncGroup, fixture.group);
+            EXPECT_EQ(ctx, waiting.value().nextWait->masterDeadline, ms(1'000));
+        }
+    }
+    EXPECT_EQ(ctx, sink->bytes.size(), bytesAfterActivation);
+
+    fixture.clock->nowValue = ms(1'000);
     auto due = adapter.poll(fixture.context);
     EXPECT_TRUE(ctx, due);
     if (due) {
         EXPECT_TRUE(ctx, due.value().progressed);
         EXPECT_TRUE(ctx, due.value().nextWait.has_value());
         if (due.value().nextWait) {
-            EXPECT_EQ(ctx, due.value().nextWait->syncGroup, fixture.group);
             EXPECT_EQ(ctx, due.value().nextWait->masterDeadline, ms(1'020));
         }
     }
-    const auto bytesAfterPcr = sink->bytes.size();
-    fixture.clock->nowValue = ms(1'010);
-    auto early = adapter.poll(fixture.context);
-    EXPECT_TRUE(ctx, early);
-    if (early) {
-        EXPECT_FALSE(ctx, early.value().progressed);
-        EXPECT_EQ(ctx, early.value().nextWait->masterDeadline, ms(1'020));
+    EXPECT_EQ(ctx, sink->bytes.size(), bytesAfterActivation + 3 * 188);
+
+    fixture.clock->nowValue = ms(10'000);
+    auto firstCatchUp = adapter.poll(fixture.context);
+    EXPECT_TRUE(ctx, firstCatchUp);
+    if (firstCatchUp) {
+        EXPECT_TRUE(ctx, firstCatchUp.value().progressed);
+        EXPECT_EQ(ctx, firstCatchUp.value().nextWait->masterDeadline, ms(1'040));
     }
-    EXPECT_EQ(ctx, sink->bytes.size(), bytesAfterPcr);
+    const auto afterFirstCatchUp = sink->bytes.size();
+    auto secondCatchUp = adapter.poll(fixture.context);
+    EXPECT_TRUE(ctx, secondCatchUp);
+    if (secondCatchUp) {
+        EXPECT_TRUE(ctx, secondCatchUp.value().progressed);
+        EXPECT_EQ(ctx, secondCatchUp.value().nextWait->masterDeadline, ms(1'060));
+    }
+    EXPECT_EQ(ctx, sink->bytes.size(), afterFirstCatchUp + 188);
+}
+
+void insufficientEpochLeadFailsBeforeSessionActivation(TestContext& ctx)
+{
+    Fixture fixture;
+    fixture.epoch = MediaPlaybackEpoch{ms(0), ms(50), 7};
+    fixture.clock->nowValue = fixture.epoch.masterRelease;
+    if (!fixture.activate(ctx)) return;
+
+    auto sink = std::make_shared<SinkState>();
+    ProjectMpegTsMuxSessionAdapter adapter;
+    EXPECT_TRUE(ctx, adapter.bindResource(
+                         fixture.context, fixture.planBuffer()));
+    EXPECT_TRUE(ctx, adapter.bindStreamConfig(
+                         fixture.context,
+                         codecParameters(MediaStreamKind::Video)));
+    EXPECT_TRUE(ctx, adapter.bindStreamConfig(
+                         fixture.context,
+                         codecParameters(MediaStreamKind::Audio)));
+    auto activated = adapter.bindResource(
+        fixture.context, fixture.sinkBuffer(sink));
+    EXPECT_FALSE(ctx, activated);
+    if (!activated) {
+        EXPECT_TRUE(ctx, activated.error().message.find(
+                             "insufficient transport decode lead") !=
+                             std::string::npos);
+    }
+    EXPECT_FALSE(ctx, adapter.bindingsReady());
+    EXPECT_EQ(ctx, sink->bytes.size(), std::size_t{0});
+    EXPECT_EQ(ctx, sink->closes, std::size_t{1});
 }
 
 void writeChecksTypeGenerationLeadAndActiveEpoch(TestContext& ctx)
@@ -373,10 +425,10 @@ void writeChecksTypeGenerationLeadAndActiveEpoch(TestContext& ctx)
     bindComplete(active, fixture, activeSink, ctx, false);
     EXPECT_TRUE(ctx, active.write(
                          fixture.context,
-                         accessUnit(MediaScheduledStream::Video, 7, ms(1'020))));
+                         accessUnit(MediaScheduledStream::Video, 7, ms(900))));
     EXPECT_TRUE(ctx, active.write(
                          fixture.context,
-                         accessUnit(MediaScheduledStream::Audio, 7, ms(1'040))));
+                         accessUnit(MediaScheduledStream::Audio, 7, ms(920))));
 
     fixture.context.findAvSyncGroup(fixture.group)->markAborted();
     auto epochFailure = active.poll(fixture.context);
@@ -411,7 +463,8 @@ void runProjectMpegTsMuxSessionAdapterTests(TestContext& ctx)
     factoryRequiresBothStreams(ctx);
     acquiringPollAndBindingOrder(ctx);
     rejectsMissingDuplicateAndWrongBindings(ctx);
-    pollUsesClockAndPublishesExactDeadline(ctx);
+    pollUsesPlannerOwnedTransportDeadlines(ctx);
+    insufficientEpochLeadFailsBeforeSessionActivation(ctx);
     writeChecksTypeGenerationLeadAndActiveEpoch(ctx);
     finishAndAbortCloseExactlyOnce(ctx);
 }

@@ -3,12 +3,15 @@
 #include "internal/graph/nodes/mux/CloseOnceOutputByteSink.h"
 #include "internal/graph/nodes/mux/MediaTsFfmpegStreamConfigMaterializer.h"
 #include "internal/graph/protocol/mpegts/MediaTsMuxSession.h"
+#include "internal/graph/protocol/mpegts/MediaTsTransportEmissionOrigin.h"
 #include "internal/graph/runtime/buffer/FFmpegCodecParametersBuffer.h"
+#include "internal/graph/runtime/buffer/FFmpegCodecContextBuffer.h"
 #include "internal/graph/runtime/buffer/MediaOutputByteSinkBuffer.h"
 #include "internal/graph/runtime/buffer/MediaTsAccessUnitBuffer.h"
 #include "internal/graph/runtime/buffer/MediaTsMuxRuntimePlanBuffer.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 #include "internal/graph/runtime/io/MediaOutputByteSink.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegCodecParametersMaterializer.h"
 
 #include <utility>
 
@@ -18,6 +21,32 @@ namespace {
 ::media::ErrorInfo invalid(const char* message)
 {
     return ::media::ErrorInfo::invalidArgument(message);
+}
+
+::media::Result<MediaBufferRef> codecParameters(const MediaBufferRef& buffer)
+{
+    if (const auto* parameters =
+            dynamic_cast<const FFmpegCodecParametersBuffer*>(buffer.get());
+        parameters && parameters->parameters()) {
+        return ::media::Result<MediaBufferRef>::success(buffer);
+    }
+    const auto* context = dynamic_cast<const FFmpegCodecContextBuffer*>(
+        buffer.get());
+    if (!context || !context->context()) {
+        return ::media::Result<MediaBufferRef>::failure(invalid(
+            "project MPEG-TS mux session requires FFmpeg codec context or parameters"));
+    }
+    auto parameters = FFmpegCodecParametersMaterializer::fromContext(
+        *context->context());
+    if (!parameters) {
+        return ::media::Result<MediaBufferRef>::failure(
+            parameters.error());
+    }
+    auto materialized = makeMediaBufferRef<FFmpegCodecParametersBuffer>(
+        std::move(parameters).value());
+    materialized->setStreamKind(buffer->streamKind());
+    materialized->setPayloadKind(MediaPayloadKind::CodecParameters);
+    return ::media::Result<MediaBufferRef>::success(std::move(materialized));
 }
 
 } // namespace
@@ -99,26 +128,22 @@ ProjectMpegTsMuxSessionAdapter::~ProjectMpegTsMuxSessionAdapter()
         return fail(invalid(
             "project MPEG-TS mux session received a late stream configuration"));
     }
-    const auto* parameters = dynamic_cast<const FFmpegCodecParametersBuffer*>(
-        buffer.get());
-    if (!parameters || !parameters->parameters()) {
-        return fail(invalid(
-            "project MPEG-TS mux session requires FFmpeg codec parameters"));
-    }
+    auto parameters = codecParameters(buffer);
+    if (!parameters) return fail(parameters.error());
     switch (buffer->streamKind()) {
     case MediaStreamKind::Video:
         if (m_videoConfig) {
             return fail(invalid(
                 "project MPEG-TS mux session received duplicate video configuration"));
         }
-        m_videoConfig = buffer;
+        m_videoConfig = std::move(parameters).value();
         break;
     case MediaStreamKind::Audio:
         if (m_audioConfig) {
             return fail(invalid(
                 "project MPEG-TS mux session received duplicate audio configuration"));
         }
-        m_audioConfig = buffer;
+        m_audioConfig = std::move(parameters).value();
         break;
     default:
         return fail(invalid(
@@ -136,6 +161,8 @@ ProjectMpegTsMuxSessionAdapter::~ProjectMpegTsMuxSessionAdapter()
     }
     auto binding = validateExecutionBinding(context);
     if (!binding) return fail(binding.error());
+    auto emissionOrigin = mediaTsTransportEmissionOrigin(*m_plan, *m_epoch);
+    if (!emissionOrigin) return fail(emissionOrigin.error());
 
     const auto* videoBuffer = dynamic_cast<const FFmpegCodecParametersBuffer*>(
         m_videoConfig.get());
@@ -153,9 +180,8 @@ ProjectMpegTsMuxSessionAdapter::~ProjectMpegTsMuxSessionAdapter()
         std::move(m_sink)});
     if (!session) return fail(session.error());
     m_session = std::move(session).value();
-    auto started = m_session->start(m_epoch->masterRelease);
+    auto started = m_session->start(emissionOrigin.value());
     if (!started) return fail(started.error());
-    m_nextDeadline = m_epoch->masterRelease;
     m_videoConfig.reset();
     m_audioConfig.reset();
     m_state = State::Active;
@@ -239,7 +265,6 @@ ProjectMpegTsMuxSessionAdapter::~ProjectMpegTsMuxSessionAdapter()
     if (!view) return fail(view.error());
     auto written = m_session->writeAccessUnit(view.value());
     if (!written) return fail(written.error());
-    m_nextDeadline = written.value().nextDeadline;
     return ::media::Status::success();
 }
 
@@ -261,7 +286,7 @@ ProjectMpegTsMuxSessionAdapter::poll(MediaGraphExecutionContext& context)
         return ::media::Result<MediaMuxSessionPollResult>::success(
             {false, std::nullopt});
     }
-    if (m_state != State::Active || !m_session || !m_nextDeadline || !m_group) {
+    if (m_state != State::Active || !m_session || !m_group) {
         auto status = fail(::media::ErrorInfo::notInitialized(
             "project MPEG-TS mux session cannot poll outside its active state"));
         return ::media::Result<MediaMuxSessionPollResult>::failure(status.error());
@@ -271,26 +296,26 @@ ProjectMpegTsMuxSessionAdapter::poll(MediaGraphExecutionContext& context)
         auto status = fail(binding.error());
         return ::media::Result<MediaMuxSessionPollResult>::failure(status.error());
     }
-    auto group = context.findAvSyncGroup(*m_group);
-    auto now = group->clock()->now();
+    auto runtime = context.findAvSyncGroup(*m_group);
+    auto now = runtime->clock()->now();
     if (!now) {
         auto status = fail(now.error());
         return ::media::Result<MediaMuxSessionPollResult>::failure(status.error());
     }
-    if (now.value() < *m_nextDeadline) {
-        return ::media::Result<MediaMuxSessionPollResult>::success(
-            {false, MediaNodeProcessResult::DeadlineWait{*m_group,
-                                                         *m_nextDeadline}});
-    }
-    auto advanced = m_session->advanceThrough(now.value());
-    if (!advanced) {
-        auto status = fail(advanced.error());
+    auto polled = m_session->poll(now.value());
+    if (!polled) {
+        auto status = fail(polled.error());
         return ::media::Result<MediaMuxSessionPollResult>::failure(status.error());
     }
-    m_nextDeadline = advanced.value().nextDeadline;
-    return ::media::Result<MediaMuxSessionPollResult>::success(
-        {advanced.value().packetsWritten != 0,
-         MediaNodeProcessResult::DeadlineWait{*m_group, *m_nextDeadline}});
+    return ::media::Result<MediaMuxSessionPollResult>::success({
+        polled.value().packetsWritten != 0,
+        MediaNodeProcessResult::DeadlineWait{
+            *m_group, polled.value().nextDeadline}});
+}
+
+bool ProjectMpegTsMuxSessionAdapter::bindingsReady() const noexcept
+{
+    return m_state == State::Active && m_session && !m_failure;
 }
 
 ::media::Status ProjectMpegTsMuxSessionAdapter::flush(

@@ -324,7 +324,7 @@ FakePacketizerFactory::create(
     return MediaScheduledAccessUnit::create(
         MediaScheduledAccessUnitParameters{
             std::move(packet).value(), stream, presentation, dispatch.value(),
-            presentation, dispatch.value(), milliseconds(10), 1,
+            presentation, dispatch.value(), dispatch.value(), milliseconds(10), 1,
             MediaSourceAccessUnitSequence(sequence), std::nullopt,
             std::nullopt,
             stream == MediaScheduledStream::Video

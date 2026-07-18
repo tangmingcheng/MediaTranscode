@@ -372,73 +372,19 @@ void testAssemblyRejectsEveryInvalidContractField(TestContext& ctx)
     expectInvalid(ctx, plan);
 }
 
-void testCompleteMpegTsAssemblyProduct(TestContext& ctx)
+void testMpegTsProductionPlanningRequiresAuthoritativeEncoderPacketLayout(
+    TestContext& ctx)
 {
     auto planned = MediaRealtimeRtpTranscodePlanner::planPreparedInput(
         completeProductionTsRequest(), completeProductionTsStreams(),
         completeProductionTsSelection());
-    EXPECT_TRUE(ctx, planned);
-    if (!planned) return;
-    auto outer = std::move(planned).value();
-    EXPECT_TRUE(ctx, MediaRealtimeRtpTranscodePlanner::validatePlannedProduct(outer));
-    const auto& assembly = outer.avSyncRuntime->assembly;
-    EXPECT_TRUE(ctx, std::holds_alternative<MediaMpegTsInputClockAssemblyPlan>(
-                         assembly.inputClock));
-    EXPECT_EQ(ctx, assembly.generationPolicy,
-              MediaInitialGenerationPolicy::FirstLockedOnlyFailOnChange);
-    EXPECT_EQ(ctx, assembly.evidencePolicy,
-              MediaClockEvidencePolicy::RequireLockedFailOnDegradedOrReacquire);
-    EXPECT_EQ(ctx, assembly.video.sourceIdentity,
-              std::string("production-assembly.pid.703"));
-    EXPECT_EQ(ctx, assembly.audio.sourceIdentity,
-              std::string("production-assembly.pid.705"));
-    EXPECT_EQ(ctx, assembly.video.decodeOrder,
-              MediaDecodeOrderMode::ReorderedRequiresDecodeTime);
-    EXPECT_EQ(ctx, assembly.audio.decodeOrder,
-              MediaDecodeOrderMode::PresentationOrderNoReorder);
-    EXPECT_EQ(ctx, assembly.video.acquiringCapacity, std::size_t{4});
-    EXPECT_EQ(ctx, assembly.audio.acquiringCapacity, std::size_t{4});
-    EXPECT_TRUE(ctx, assembly.video.acquiringTimeout >
-                         MediaRunningTime::fromNanoseconds(0));
-    EXPECT_TRUE(ctx, assembly.audio.acquiringTimeout >
-                         MediaRunningTime::fromNanoseconds(0));
-    EXPECT_TRUE(ctx, assembly.startupClockInterval >
-                         MediaRunningTime::fromNanoseconds(0));
-    EXPECT_TRUE(ctx, std::holds_alternative<MediaPacketDurationPlan>(
-                         assembly.video.duration));
-    EXPECT_TRUE(ctx, std::holds_alternative<MediaPacketDurationPlan>(
-                         assembly.audio.duration));
-    EXPECT_TRUE(ctx, std::get<MediaPacketDurationPlan>(assembly.video.duration)
-                         .requirePositiveDuration);
-    EXPECT_TRUE(ctx, std::get<MediaPacketDurationPlan>(assembly.audio.duration)
-                         .requirePositiveDuration);
-
-    const auto valid = assembly;
-    const auto validTsInput = *outer.input.mpegTs;
-    EXPECT_EQ(ctx, validTsInput.initialSourceGeneration,
-              MediaFirstLockedSourceGeneration);
-    std::get<MediaPacketDurationPlan>(
-        outer.avSyncRuntime->assembly.video.duration).requirePositiveDuration = false;
-    expectInvalid(ctx, outer);
-    outer.avSyncRuntime->assembly = valid;
-    std::get<MediaPacketDurationPlan>(
-        outer.avSyncRuntime->assembly.audio.duration).requirePositiveDuration = false;
-    expectInvalid(ctx, outer);
-    outer.avSyncRuntime->assembly = valid;
-    outer.input.mpegTs->videoPacketDuration.reset();
-    expectInvalid(ctx, outer);
-    *outer.input.mpegTs = validTsInput;
-    outer.input.mpegTs->audioPacketDuration->packetDuration = 0;
-    expectInvalid(ctx, outer);
-    *outer.input.mpegTs = validTsInput;
-    outer.input.mpegTs->videoPacketDuration->elementaryPid = 704;
-    expectInvalid(ctx, outer);
-    *outer.input.mpegTs = validTsInput;
-    outer.input.mpegTs->audioPacketDuration->timeBase.den = 0;
-    expectInvalid(ctx, outer);
-    *outer.input.mpegTs = validTsInput;
-    ++outer.input.mpegTs->initialSourceGeneration;
-    expectInvalid(ctx, outer);
+    EXPECT_FALSE(ctx, planned);
+    if (!planned) {
+        EXPECT_EQ(ctx, planned.error().code, ::media::ErrorCode::Unsupported);
+        EXPECT_TRUE(ctx, planned.error().message.find(
+                             "authoritative encoded packet layout") !=
+                             std::string::npos);
+    }
 }
 
 void testMpegTsPreparedPlanningRejectsInvalidDurationEvidence(TestContext& ctx)
@@ -504,7 +450,7 @@ void runAvSyncProductionPlanTests(TestContext& ctx)
     testCompleteSeparateRtpAssemblyProduct(ctx);
     testSeparateRtpSdpIdentityIsPlannerOwnedAndValidated(ctx);
     testAssemblyRejectsEveryInvalidContractField(ctx);
-    testCompleteMpegTsAssemblyProduct(ctx);
+    testMpegTsProductionPlanningRequiresAuthoritativeEncoderPacketLayout(ctx);
     testMpegTsPreparedPlanningRejectsInvalidDurationEvidence(ctx);
     testUnsupportedTopologyAndMissingSynchronizedAudioFailClosed(ctx);
 }

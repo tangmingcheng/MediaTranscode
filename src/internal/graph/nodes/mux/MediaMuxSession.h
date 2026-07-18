@@ -27,6 +27,7 @@ public:
                                   const MediaBufferRef& buffer) = 0;
     virtual ::media::Result<MediaMuxSessionPollResult> poll(
         MediaGraphExecutionContext& context) = 0;
+    virtual bool bindingsReady() const noexcept = 0;
     virtual ::media::Status flush(MediaGraphExecutionContext& context) = 0;
     virtual ::media::Status finish(MediaGraphExecutionContext& context) = 0;
     virtual void abort() noexcept = 0;

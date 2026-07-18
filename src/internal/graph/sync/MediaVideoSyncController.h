@@ -13,7 +13,7 @@ namespace media::ffmpeg::graph {
 struct MediaVideoFrameMeasurement final {
     MediaRunningTime dispatchOnMaster;
     MediaRunningTime targetPresentationOnMaster;
-    MediaRunningTime masterNow;
+    MediaRunningTime decisionHorizonOnMaster;
     std::uint64_t generation = 0;
     std::uint64_t sequence = 0;
     bool keyFrame = false;
@@ -23,7 +23,7 @@ struct MediaVideoRepeatRequest final {
     MediaRunningTime repeatDispatchOnMaster;
     MediaRunningTime repeatPresentationOnMaster;
     MediaRunningTime lastEmittedPresentationOnMaster;
-    MediaRunningTime masterNow;
+    MediaRunningTime decisionHorizonOnMaster;
     std::uint64_t generation = 0;
     std::uint64_t sequence = 0;
 };

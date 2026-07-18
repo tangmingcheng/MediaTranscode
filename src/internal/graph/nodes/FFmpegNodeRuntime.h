@@ -7,7 +7,9 @@
 #include "media_transcode/Result.h"
 
 #include <optional>
+#include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace media::ffmpeg::graph {
@@ -48,6 +50,9 @@ protected:
     ::media::Result<MediaBufferRef> tryPopFirstInput(MediaGraphExecutionContext& context);
     ::media::Result<std::optional<MediaBufferRef>> tryPopFirstInputOptional(MediaGraphExecutionContext& context);
     ::media::Result<std::optional<PoppedChannelBuffer>> tryPopFirstInputWithChannelOptional(MediaGraphExecutionContext& context);
+    ::media::Result<std::optional<PoppedChannelBuffer>> tryPopFirstInputWithChannelOptional(
+        MediaGraphExecutionContext& context,
+        std::span<const std::string_view> eligiblePortNames);
     ::media::Result<std::optional<MediaBufferRef>> tryPopInputOptional(MediaGraphExecutionContext& context,
                                                                         const std::string& portName);
 

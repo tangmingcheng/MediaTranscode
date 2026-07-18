@@ -51,6 +51,7 @@ static_assert(std::constructible_from<
     MediaRunningTime,
     MediaRunningTime,
     MediaRunningTime,
+    MediaRunningTime,
     std::uint64_t,
     MediaSourceAccessUnitSequence,
     std::optional<MediaSourceAccessUnitSequence>,
@@ -140,7 +141,9 @@ struct SchedulerFixture final {
 SchedulerFixture graphWithScheduler(bool option = true,
                                     MediaQueueOverflowPolicy overflow =
                                         MediaQueueOverflowPolicy::BlockProducer,
-                                    std::size_t outputCapacity = 8)
+                                    std::size_t outputCapacity = 8,
+                                    MediaRunningTime transportLead = ms(0),
+                                    bool includeTransportLead = true)
 {
     SchedulerFixture f;
     f.video = f.graph.addNode(MediaNodeKind::Demux, "video");
@@ -150,6 +153,9 @@ SchedulerFixture graphWithScheduler(bool option = true,
     f.sink = f.graph.addNode(MediaNodeKind::RtpOutput, "sink");
     if (option) f.graph.setNodeOption(
         f.scheduler, "av_scheduler.sync_group", "matrix-group");
+    if (option && includeTransportLead) f.graph.setNodeOption(
+        f.scheduler, "av_scheduler.transport_lead_ns",
+        std::to_string(transportLead.nanoseconds()));
     if (option) f.graph.setNodeOption(
         f.binder, "playback_epoch_binder.sync_group", "matrix-group");
     f.graph.addOutputPort(f.video, "packet", MediaStreamKind::Video,
@@ -367,6 +373,38 @@ void testDispatchOrderingPrecedesPresentationDecision(TestContext& ctx)
     EXPECT_EQ(ctx, audio.size(), static_cast<std::size_t>(1));
     if (audio.size() == 1) {
         EXPECT_EQ(ctx, audio.front(), MediaScheduledStream::Audio);
+    }
+    EXPECT_TRUE(ctx, scheduler.stop(execution));
+}
+
+void testTransportLeadChangesOnlyEmissionTime(TestContext& ctx)
+{
+    auto f = graphWithScheduler(
+        true, MediaQueueOverflowPolicy::BlockProducer, 8, ms(20));
+    MediaGraphExecutionContext execution;
+    auto clock = std::make_shared<TestMasterClock>(ms(80));
+    EXPECT_TRUE(ctx, startFixture(ctx, f, execution, clock, {ms(0), ms(0), 1}));
+    MediaAvOutputSchedulerNode scheduler(f.scheduler);
+    EXPECT_TRUE(ctx, scheduler.start(execution));
+    execution.findInputChannel(f.scheduler, "video")->close();
+    EXPECT_TRUE(ctx, execution.findInputChannel(f.scheduler, "audio")->push(
+        unit(ctx, MediaScheduledStream::Audio, 100, 100, 1, 1)));
+
+    auto released = scheduler.process(execution);
+    EXPECT_TRUE(ctx, released &&
+        released.value().state == MediaNodeProcessState::Progress);
+    MediaBufferRef output;
+    EXPECT_TRUE(ctx, execution.findInputChannel(f.sink, "scheduled")
+                         ->tryPop(output));
+    const auto* scheduled = dynamic_cast<const MediaScheduledAccessUnit*>(
+        output.get());
+    EXPECT_TRUE(ctx, scheduled != nullptr);
+    if (scheduled) {
+        EXPECT_EQ(ctx, scheduled->canonicalPresentation(), ms(100));
+        EXPECT_EQ(ctx, scheduled->canonicalDispatch(), ms(100));
+        EXPECT_EQ(ctx, scheduled->presentationOnMaster(), ms(100));
+        EXPECT_EQ(ctx, scheduled->dispatchOnMaster(), ms(100));
+        EXPECT_EQ(ctx, scheduled->emitOnMaster(), ms(80));
     }
     EXPECT_TRUE(ctx, scheduler.stop(execution));
 }
@@ -970,7 +1008,7 @@ void testScheduledAccessUnitRejectsNonOutputDecisions(TestContext& ctx)
         auto result = MediaScheduledAccessUnit::create(
             MediaScheduledAccessUnitParameters{
                 packet.value(), MediaScheduledStream::Video,
-                ms(1), ms(1), ms(1), ms(1), ms(10), 1,
+                ms(1), ms(1), ms(1), ms(1), ms(1), ms(10), 1,
                 MediaSourceAccessUnitSequence(1), std::nullopt,
                 std::nullopt, decision});
         EXPECT_FALSE(ctx, result);
@@ -979,7 +1017,7 @@ void testScheduledAccessUnitRejectsNonOutputDecisions(TestContext& ctx)
     auto mismatchedSource = MediaScheduledAccessUnit::create(
         MediaScheduledAccessUnitParameters{
             packet.value(), MediaScheduledStream::Video,
-            ms(2), ms(2), ms(2), ms(2), ms(10), 1,
+            ms(2), ms(2), ms(2), ms(2), ms(2), ms(10), 1,
             MediaSourceAccessUnitSequence(1),
             MediaSourceAccessUnitSequence(2),
             MediaVideoRepeatRequestId(1),
@@ -989,7 +1027,7 @@ void testScheduledAccessUnitRejectsNonOutputDecisions(TestContext& ctx)
     auto displayWithRepeatIdentity = MediaScheduledAccessUnit::create(
         MediaScheduledAccessUnitParameters{
             packet.value(), MediaScheduledStream::Video,
-            ms(2), ms(2), ms(2), ms(2), ms(10), 1,
+            ms(2), ms(2), ms(2), ms(2), ms(2), ms(10), 1,
             MediaSourceAccessUnitSequence(1),
             MediaSourceAccessUnitSequence(1),
             MediaVideoRepeatRequestId(1),
@@ -1015,7 +1053,7 @@ void testAccessUnitFactoriesRejectNonPacketMedia(TestContext& ctx)
     auto scheduledFrame = MediaScheduledAccessUnit::create(
         MediaScheduledAccessUnitParameters{
             videoFrame.value(), MediaScheduledStream::Video,
-            ms(1), ms(1), ms(1), ms(1), ms(10), 1,
+            ms(1), ms(1), ms(1), ms(1), ms(1), ms(10), 1,
             MediaSourceAccessUnitSequence(1), std::nullopt,
             std::nullopt, MediaVideoSyncDecisionKind::Display});
     EXPECT_FALSE(ctx, scheduledFrame);
@@ -1035,7 +1073,7 @@ void testAccessUnitFactoriesRejectNonPacketMedia(TestContext& ctx)
     auto scheduledNullPacket = MediaScheduledAccessUnit::create(
         MediaScheduledAccessUnitParameters{
             nullPacket, MediaScheduledStream::Video,
-            ms(1), ms(1), ms(1), ms(1), ms(10), 1,
+            ms(1), ms(1), ms(1), ms(1), ms(1), ms(10), 1,
             MediaSourceAccessUnitSequence(1), std::nullopt,
             std::nullopt, MediaVideoSyncDecisionKind::Display});
     EXPECT_FALSE(ctx, scheduledNullPacket);
@@ -1280,6 +1318,25 @@ void testFutureGenerationFlushAbortAndConfigurationFailures(TestContext& ctx)
     MediaAvOutputSchedulerNode missingOptionNode(missingOption.scheduler);
     EXPECT_FALSE(ctx, missingOptionNode.start(missingOptionExecution));
 
+    auto missingTransportLead = graphWithScheduler(
+        true, MediaQueueOverflowPolicy::BlockProducer, 8, ms(0), false);
+    MediaGraphExecutionContext missingTransportLeadExecution;
+    EXPECT_TRUE(ctx, startFixture(
+        ctx, missingTransportLead, missingTransportLeadExecution, clock,
+        {ms(0), ms(0), 1}));
+    MediaAvOutputSchedulerNode missingTransportLeadNode(
+        missingTransportLead.scheduler);
+    const auto missingTransportLeadStatus = missingTransportLeadNode.start(
+        missingTransportLeadExecution);
+    EXPECT_FALSE(ctx, missingTransportLeadStatus);
+    if (!missingTransportLeadStatus) {
+        EXPECT_EQ(ctx, missingTransportLeadStatus.error().code,
+                  ::media::ErrorCode::InvalidArgument);
+        EXPECT_TRUE(ctx, missingTransportLeadStatus.error().message.find(
+                             "av_scheduler.transport_lead_ns") !=
+                             std::string::npos);
+    }
+
     auto missingGroup = graphWithScheduler();
     MediaGraphExecutionContext missingGroupExecution;
     EXPECT_TRUE(ctx, missingGroupExecution.compile(missingGroup.graph));
@@ -1394,6 +1451,7 @@ void runAvOutputSchedulerTests(media_transcode::test::TestContext& ctx)
     testRegistryMoveKeepsSourceAndTargetUsable(ctx);
     testDtsOrderingMappingAndEqualTimeRoundRobin(ctx);
     testDispatchOrderingPrecedesPresentationDecision(ctx);
+    testTransportLeadChangesOnlyEmissionTime(ctx);
     testEqualTimeRoundRobinAcrossConsecutivePairs(ctx);
     testRealDeadlineExpiresWithoutNotificationAndStopAbortInterrupt(ctx);
     testSparseStreamWaitsThenSingleEofAllowsOtherToContinue(ctx);

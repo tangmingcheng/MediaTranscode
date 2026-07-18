@@ -65,7 +65,7 @@ const char* boolOption(bool value) noexcept
         : MediaPayloadKind::OutputByteSink;
     const MediaPayloadKind codecPayload = ffmpegPair
         ? MediaPayloadKind::Unknown
-        : MediaPayloadKind::CodecParameters;
+        : MediaPayloadKind::CodecContext;
     const MediaPayloadKind packetPayload = ffmpegPair
         ? MediaPayloadKind::Packet
         : MediaPayloadKind::TsAccessUnit;

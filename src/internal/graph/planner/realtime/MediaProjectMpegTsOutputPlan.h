@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/graph/model/MediaEncodedPacketLayout.h"
 #include "internal/graph/planner/audio/MediaResolvedAudioOutputPlan.h"
 #include "internal/graph/protocol/mpegts/MediaTsMuxPlan.h"
 #include "media_transcode/Result.h"
@@ -12,6 +13,7 @@ class MediaProjectMpegTsOutputPlan final {
 public:
     static ::media::Result<MediaProjectMpegTsOutputPlan> create(
         const std::string& videoCodecName,
+        const MediaEncodedPacketLayout& videoPacketLayout,
         const MediaResolvedAudioOutputPlan& audioOutput,
         MediaRunningTime transportDecodeLead);
     static ::media::Result<MediaProjectMpegTsOutputPlan> accept(

@@ -86,7 +86,9 @@ enum class MediaNodeKind {
     EncodedAudioCanonicalizer = 60,
     ScheduledOutputRouter = 61,
     ScheduledRtpSender = 62,
-    DualMediaSdpPublisher = 63
+    DualMediaSdpPublisher = 63,
+    ProjectMpegTsPlanSource = 64,
+    ScheduledTsAccessUnitAdapter = 65
 };
 
 } // namespace media::ffmpeg::graph

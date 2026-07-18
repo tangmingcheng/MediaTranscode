@@ -8,6 +8,7 @@
 #include "internal/graph/planner/MediaGraphPlanningPolicy.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
+#include "internal/graph/planner/capability/MediaSelectedEncoderPacketLayoutResolver.h"
 #include "internal/graph/planner/realtime/MediaRealtimePlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncPlanningFactsResolver.h"
@@ -1219,7 +1220,9 @@ void testOpusRtpDecoderCapabilityUsesPlannedProtocolBound(TestContext& ctx)
 MediaProjectMpegTsResolvedPipelineFacts validTsResolvedFacts()
 {
     auto audio = resolvedAacOutput(MediaAudioProfile::knownAacLow());
-    return MediaProjectMpegTsResolvedPipelineFacts{"h264", std::move(audio)};
+    return MediaProjectMpegTsResolvedPipelineFacts{
+        "h264", MediaEncodedPacketLayout::lengthPrefixed(4).value(),
+        std::move(audio)};
 }
 
 void testRealtimePlannerProducesCompleteTsAvSyncRuntimeProduct(TestContext& ctx)
@@ -1407,8 +1410,11 @@ void testTsResolvedOutputSupportMatrix(TestContext& ctx)
 {
     const auto audio = resolvedAacOutput(MediaAudioProfile::knownAacLow());
     const auto nonDefaultLead = MediaRunningTime::fromNanoseconds(37'000'000);
+    const auto lengthPrefixed = MediaEncodedPacketLayout::lengthPrefixed(4);
+    EXPECT_TRUE(ctx, lengthPrefixed);
+    if (!lengthPrefixed) return;
     const auto valid = MediaProjectMpegTsOutputPlan::create(
-        "h264", audio, nonDefaultLead);
+        "h264", lengthPrefixed.value(), audio, nonDefaultLead);
     EXPECT_TRUE(ctx, valid);
     if (valid) {
         EXPECT_EQ(ctx, valid.value().audioSampleRate(), 48'000);
@@ -1419,11 +1425,63 @@ void testTsResolvedOutputSupportMatrix(TestContext& ctx)
         EXPECT_EQ(ctx, valid.value().muxPlan().parameters().aac.channelConfiguration,
                   std::uint8_t{2});
         EXPECT_EQ(ctx, valid.value().muxPlan().transportDecodeLead(), nonDefaultLead);
+        EXPECT_EQ(ctx, valid.value().muxPlan().parameters().h264InputLayout,
+                  MediaTsH264InputLayout::LengthPrefixed);
+        EXPECT_EQ(ctx, valid.value().muxPlan().parameters().h264NalLengthBytes,
+                  std::uint8_t{4});
     }
+    const auto startCode = MediaProjectMpegTsOutputPlan::create(
+        "h264", MediaEncodedPacketLayout::startCodeDelimited(), audio,
+        nonDefaultLead);
+    EXPECT_TRUE(ctx, startCode);
+    if (startCode) {
+        EXPECT_EQ(ctx, startCode.value().muxPlan().parameters().h264InputLayout,
+                  MediaTsH264InputLayout::AnnexB);
+    }
+    const auto unsupportedWidth = MediaEncodedPacketLayout::lengthPrefixed(8);
+    EXPECT_TRUE(ctx, unsupportedWidth);
+    if (unsupportedWidth) {
+        const auto rejected = MediaProjectMpegTsOutputPlan::create(
+            "h264", unsupportedWidth.value(), audio, nonDefaultLead);
+        EXPECT_FALSE(ctx, rejected);
+        if (!rejected) {
+            EXPECT_EQ(ctx, rejected.error().code,
+                      ::media::ErrorCode::Unsupported);
+        }
+    }
+    EXPECT_FALSE(ctx, MediaEncodedPacketLayout::lengthPrefixed(0));
     EXPECT_FALSE(ctx, MediaProjectMpegTsOutputPlan::create(
-        "hevc", audio, nonDefaultLead));
+        "hevc", lengthPrefixed.value(), audio, nonDefaultLead));
     EXPECT_FALSE(ctx, MediaProjectMpegTsOutputPlan::create(
-        "h264", resolvedAacOutput(MediaAudioProfile::unknown()), nonDefaultLead));
+        "h264", lengthPrefixed.value(),
+        resolvedAacOutput(MediaAudioProfile::unknown()), nonDefaultLead));
+}
+
+void testProjectTsRequiresSelectedEncoderPacketLayoutFact(TestContext& ctx)
+{
+    MediaPipelinePlan plan;
+    plan.branchMode = MediaBranchMode::TranscodeFrame;
+    plan.selected.encoder.ffmpegName = "h264_nvenc";
+    const auto missing =
+        MediaSelectedEncoderPacketLayoutResolver::resolve(plan);
+    EXPECT_FALSE(ctx, missing);
+    if (!missing) {
+        EXPECT_EQ(ctx, missing.error().code, ::media::ErrorCode::Unsupported);
+    }
+
+    plan.selected.encoder.encodedPacketLayout =
+        MediaEncodedPacketLayout::startCodeDelimited();
+    const auto explicitLayout =
+        MediaSelectedEncoderPacketLayoutResolver::resolve(plan);
+    EXPECT_TRUE(ctx, explicitLayout);
+    if (explicitLayout) {
+        EXPECT_EQ(ctx, explicitLayout.value().kind(),
+                  MediaEncodedPacketLayoutKind::StartCodeDelimited);
+    }
+
+    plan.branchMode = MediaBranchMode::CopyPacket;
+    EXPECT_FALSE(ctx,
+                 MediaSelectedEncoderPacketLayoutResolver::resolve(plan));
 }
 
 MediaTsMuxPlanParameters validTsMuxPlanParameters()
@@ -2196,6 +2254,7 @@ int main()
     testTsInputPlanValidatorRejectsEveryMutation(ctx);
     testTsMuxPlanRejectsEveryInvalidField(ctx);
     testTsResolvedOutputSupportMatrix(ctx);
+    testProjectTsRequiresSelectedEncoderPacketLayoutFact(ctx);
     testResolvedAudioPlannerMatrix(ctx);
     testAudioEncoderTargetIdentityValidator(ctx);
     testProjectTsOutputRequiresExplicitUdpEndpoint(ctx);

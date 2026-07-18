@@ -5,6 +5,7 @@
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 
+#include <algorithm>
 #include <sstream>
 #include <utility>
 
@@ -357,6 +358,14 @@ std::string FFmpegNodeRuntime::nodeOption(MediaGraphExecutionContext& context,
 ::media::Result<std::optional<FFmpegNodeRuntime::PoppedChannelBuffer>>
 FFmpegNodeRuntime::tryPopFirstInputWithChannelOptional(MediaGraphExecutionContext& context)
 {
+    return tryPopFirstInputWithChannelOptional(context, {});
+}
+
+::media::Result<std::optional<FFmpegNodeRuntime::PoppedChannelBuffer>>
+FFmpegNodeRuntime::tryPopFirstInputWithChannelOptional(
+    MediaGraphExecutionContext& context,
+    std::span<const std::string_view> eligiblePortNames)
+{
     const auto& channels = context.inputChannels(nodeId());
     if (channels.empty()) return ::media::Result<std::optional<PoppedChannelBuffer>>::success(std::nullopt);
     const std::size_t start = m_nextInputIndex % channels.size();
@@ -364,6 +373,17 @@ FFmpegNodeRuntime::tryPopFirstInputWithChannelOptional(MediaGraphExecutionContex
         const std::size_t index = (start + offset) % channels.size();
         MediaChannel* channel = channels[index];
         if (!channel) continue;
+        if (!eligiblePortNames.empty()) {
+            const MediaGraph* graph = context.graph();
+            const MediaPort* port = graph
+                ? graph->findPort(channel->binding().to.portId)
+                : nullptr;
+            if (!port || std::find(
+                    eligiblePortNames.begin(), eligiblePortNames.end(),
+                    std::string_view(port->name)) == eligiblePortNames.end()) {
+                continue;
+            }
+        }
         MediaBufferRef buffer;
         if (!channel->tryPop(buffer)) continue;
         auto typeStatus = validateChannelBufferType(*channel, buffer, "tryPopFirstInputWithChannel");

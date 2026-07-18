@@ -19,6 +19,7 @@ struct MediaScheduledAccessUnitParameters final {
         MediaRunningTime canonicalDispatch,
         MediaRunningTime presentationOnMaster,
         MediaRunningTime dispatchOnMaster,
+        MediaRunningTime emitOnMaster,
         MediaRunningTime canonicalDuration,
         std::uint64_t generation,
         MediaSourceAccessUnitSequence sourceSequence,
@@ -32,6 +33,7 @@ struct MediaScheduledAccessUnitParameters final {
     MediaRunningTime canonicalDispatch;
     MediaRunningTime presentationOnMaster;
     MediaRunningTime dispatchOnMaster;
+    MediaRunningTime emitOnMaster;
     MediaRunningTime canonicalDuration;
     std::uint64_t generation;
     MediaSourceAccessUnitSequence sourceSequence;
@@ -51,6 +53,7 @@ public:
     MediaRunningTime canonicalDispatch() const noexcept { return m_canonicalDispatch; }
     MediaRunningTime presentationOnMaster() const noexcept { return m_presentationOnMaster; }
     MediaRunningTime dispatchOnMaster() const noexcept { return m_dispatchOnMaster; }
+    MediaRunningTime emitOnMaster() const noexcept { return m_emitOnMaster; }
     MediaRunningTime canonicalDuration() const noexcept { return m_canonicalDuration; }
     std::uint64_t generation() const noexcept { return m_generation; }
     MediaSourceAccessUnitSequence sourceSequence() const noexcept { return m_sourceSequence; }
@@ -75,6 +78,7 @@ private:
     MediaRunningTime m_canonicalDispatch;
     MediaRunningTime m_presentationOnMaster;
     MediaRunningTime m_dispatchOnMaster;
+    MediaRunningTime m_emitOnMaster;
     MediaRunningTime m_canonicalDuration;
     std::uint64_t m_generation;
     MediaSourceAccessUnitSequence m_sourceSequence;

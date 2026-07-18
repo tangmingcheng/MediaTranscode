@@ -1,11 +1,13 @@
 #pragma once
 
 #include "internal/graph/model/MediaGraphTypes.h"
+#include "internal/graph/model/MediaEncodedPacketLayout.h"
 #include "internal/graph/model/MediaHardwareDescriptor.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "media_transcode/Result.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -34,6 +36,7 @@ struct MediaPipelineStagePlan {
     bool available = false;
     int score = 0;
     std::string availabilityReason;
+    std::optional<MediaEncodedPacketLayout> encodedPacketLayout;
 };
 
 struct MediaPipelineChainPlan {

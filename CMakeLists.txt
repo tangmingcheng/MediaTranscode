@@ -392,6 +392,15 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
     media_transcode_register_test(
         media_transcode_scheduled_rtp_output_node_tests "node;builder;deterministic")
 
+    add_executable(media_transcode_scheduled_mpeg_ts_output_node_tests
+        tests/unit/scheduled_mpeg_ts_output_node_tests.cpp
+    )
+    media_transcode_configure_test(
+        media_transcode_scheduled_mpeg_ts_output_node_tests)
+    media_transcode_register_test(
+        media_transcode_scheduled_mpeg_ts_output_node_tests
+        "node;builder;deterministic")
+
     add_test(NAME media_transcode_test_tier_contract
         COMMAND ${CMAKE_COMMAND}
             -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
@@ -473,12 +482,24 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
 
         add_executable(media_transcode_mpeg_ts_output_decode_integration_tests
             tests/unit/mpeg_ts_output_decode_integration_tests.cpp
+            tests/unit/fixtures/MpegTsOutputArtifactVerifier.cpp
+            tests/unit/fixtures/ScheduledMpegTsDecodeSamplePreparer.cpp
+            tests/unit/fixtures/ScheduledMpegTsDecodeSampleFixture.cpp
+            tests/unit/fixtures/ScheduledMpegTsOutputIntegrationRuntime.cpp
+            tests/unit/fixtures/ScheduledRtpDecodePrerequisites.cpp
+            tests/unit/fixtures/ScheduledRtpDecodeReceiver.cpp
+            tests/unit/fixtures/MediaTsPesTimestampInspector.cpp
             tests/unit/fixtures/MediaTsSampleStreamConfigFixture.cpp
         )
         media_transcode_configure_test(media_transcode_mpeg_ts_output_decode_integration_tests)
         target_compile_definitions(media_transcode_mpeg_ts_output_decode_integration_tests PRIVATE
             MEDIA_TRANSCODE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
         )
+        if(WIN32)
+            target_link_libraries(
+                media_transcode_mpeg_ts_output_decode_integration_tests
+                PRIVATE iphlpapi ws2_32)
+        endif()
         media_transcode_register_test(
             media_transcode_mpeg_ts_output_decode_integration_tests "integration")
         set_tests_properties(media_transcode_mpeg_ts_output_decode_integration_tests PROPERTIES

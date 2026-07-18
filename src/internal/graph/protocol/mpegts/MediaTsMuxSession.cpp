@@ -4,9 +4,10 @@
 #include "internal/graph/protocol/mpegts/MediaTsH264AccessUnitFramer.h"
 #include "internal/graph/protocol/mpegts/MediaTsPesSerializer.h"
 #include "internal/graph/protocol/mpegts/MediaTsPsiSerializer.h"
+#include "internal/graph/protocol/mpegts/MediaTsTransportEmissionOrigin.h"
 
-#include <string>
 #include <limits>
+#include <string>
 #include <utility>
 
 namespace media::ffmpeg::graph {
@@ -142,8 +143,11 @@ MediaTsMuxSession::advanceFailure(::media::ErrorInfo error)
 ::media::Status MediaTsMuxSession::start(MediaRunningTime emitOnMaster)
 {
     if (m_state != State::Created) return stateFailure("start");
-    if (emitOnMaster != m_epoch.masterRelease) {
-        return poison(invalid("MPEG-TS mux session start must equal its playback epoch"));
+    auto origin = mediaTsTransportEmissionOrigin(m_plan, m_epoch);
+    if (!origin) return poison(origin.error());
+    if (emitOnMaster != origin.value()) {
+        return poison(invalid(
+            "MPEG-TS mux session start must equal its planned transport emission origin"));
     }
     auto nextPsi = emitOnMaster.checkedAdd(m_plan.parameters().psiRepeatInterval);
     if (!nextPsi) return poison(nextPsi.error());
@@ -153,6 +157,37 @@ MediaTsMuxSession::advanceFailure(::media::ErrorInfo error)
     if (!tables) return ::media::Status::failure(tables.error());
     m_state = State::Open;
     return ::media::Status::success();
+}
+
+::media::Result<MediaTsMuxSession::AdvanceResult> MediaTsMuxSession::poll(
+    MediaRunningTime masterNow)
+{
+    if (m_state != State::Open) {
+        if (m_state == State::Created) {
+            auto failure = advanceFailure(invalid(
+                "MPEG-TS mux session cannot poll before start"));
+            return ::media::Result<AdvanceResult>::failure(failure.error());
+        }
+        return ::media::Result<AdvanceResult>::failure(
+            m_failure ? *m_failure : invalid("MPEG-TS mux session is not open"));
+    }
+
+    const MediaRunningTime deadline =
+        m_nextPcr < m_nextPsi ? m_nextPcr : m_nextPsi;
+    if (masterNow < deadline) {
+        return ::media::Result<AdvanceResult>::success(
+            AdvanceResult{deadline, 0});
+    }
+
+    // Poll advances exactly one transport deadline. The caller may poll again
+    // to catch up, preserving the planned PCR cadence without turning transport
+    // maintenance into a second access-unit pacing authority.
+    auto advanced = advanceThrough(deadline);
+    if (!advanced) {
+        return ::media::Result<AdvanceResult>::failure(advanced.error());
+    }
+    return ::media::Result<AdvanceResult>::success(AdvanceResult{
+        advanced.value().nextDeadline, advanced.value().packetsWritten});
 }
 
 ::media::Result<MediaTsMuxSession::AdvanceResult> MediaTsMuxSession::advanceThrough(

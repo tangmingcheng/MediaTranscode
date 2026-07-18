@@ -4,8 +4,11 @@
 #include "internal/graph/nodes/mux/MediaMuxSessionFactory.h"
 #include "internal/graph/runtime/lifecycle/MediaInputTerminalTracker.h"
 
+#include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
+#include <unordered_map>
 
 namespace media::ffmpeg::graph {
 
@@ -25,8 +28,22 @@ protected:
     ::media::Status stop(MediaGraphExecutionContext& context) override;
 
 private:
+    enum class Phase : std::uint8_t {
+        AcquiringBindings,
+        Streaming
+    };
+
     ::media::Status ensureSession(MediaGraphExecutionContext& context);
-    ::media::Status bindCompletionInputs(MediaGraphExecutionContext& context);
+    struct BindingInputState final {
+        std::string portName;
+        bool satisfied = false;
+    };
+
+    ::media::Status bindInputTracking(MediaGraphExecutionContext& context);
+    ::media::Status validateAcquiringBindingChannels(
+        MediaGraphExecutionContext& context);
+    bool isUnsatisfiedBindingChannel(const MediaChannel& channel) const noexcept;
+    bool allBindingChannelsSatisfied() const noexcept;
     void observeClosedInputs(MediaGraphExecutionContext& context);
     ::media::Status handleBuffer(MediaGraphExecutionContext& context,
                                  const PoppedChannelBuffer& input);
@@ -44,7 +61,9 @@ private:
     std::unique_ptr<MediaMuxSessionFactory> m_sessionFactory;
     std::unique_ptr<MediaMuxSession> m_session;
     std::unique_ptr<MediaInputTerminalTracker> m_completion;
+    std::unordered_map<std::uint32_t, BindingInputState> m_bindingInputs;
     std::optional<::media::ErrorInfo> m_terminalFailure;
+    Phase m_phase = Phase::AcquiringBindings;
     bool m_abortForwarded = false;
 };
 

@@ -13,6 +13,7 @@ MediaScheduledAccessUnitParameters::MediaScheduledAccessUnitParameters(
     MediaRunningTime canonicalDispatchValue,
     MediaRunningTime presentationOnMasterValue,
     MediaRunningTime dispatchOnMasterValue,
+    MediaRunningTime emitOnMasterValue,
     MediaRunningTime canonicalDurationValue,
     std::uint64_t generationValue,
     MediaSourceAccessUnitSequence sourceSequenceValue,
@@ -24,6 +25,7 @@ MediaScheduledAccessUnitParameters::MediaScheduledAccessUnitParameters(
       canonicalDispatch(canonicalDispatchValue),
       presentationOnMaster(presentationOnMasterValue),
       dispatchOnMaster(dispatchOnMasterValue),
+      emitOnMaster(emitOnMasterValue),
       canonicalDuration(canonicalDurationValue), generation(generationValue),
       sourceSequence(sourceSequenceValue), repeatedFrom(repeatedFromValue),
       repeatRequestId(repeatRequestIdValue), videoDecision(videoDecisionValue)
@@ -82,6 +84,7 @@ MediaScheduledAccessUnit::MediaScheduledAccessUnit(
       m_canonicalDispatch(parameters.canonicalDispatch),
       m_presentationOnMaster(parameters.presentationOnMaster),
       m_dispatchOnMaster(parameters.dispatchOnMaster),
+      m_emitOnMaster(parameters.emitOnMaster),
       m_canonicalDuration(parameters.canonicalDuration),
       m_generation(parameters.generation),
       m_sourceSequence(parameters.sourceSequence),

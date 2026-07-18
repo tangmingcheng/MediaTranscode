@@ -2,11 +2,23 @@
 
 #include "internal/graph/core/MediaGraph.h"
 
+#include <algorithm>
+#include <array>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 namespace media::ffmpeg::graph {
+namespace {
+
+bool isBindingPort(std::string_view name) noexcept
+{
+    return name == "plan" || name == "resource" || name == "codec";
+}
+
+} // namespace
 
 FileMuxNode::FileMuxNode(MediaNodeId nodeId)
     : FileMuxNode(nodeId, std::make_unique<ExplicitMediaMuxSessionFactory>())
@@ -32,14 +44,22 @@ MediaNodeKind FileMuxNode::staticKind() noexcept
     if (m_terminalFailure) return terminalResult();
     auto session = ensureSession(context);
     if (!session) return terminalResult();
-    auto completion = bindCompletionInputs(context);
+    auto completion = bindInputTracking(context);
     if (!completion) return terminalResult();
+    if (m_phase == Phase::AcquiringBindings) {
+        auto bindings = validateAcquiringBindingChannels(context);
+        if (!bindings) return terminalResult();
+    }
     observeClosedInputs(context);
 
     auto ready = finishIfReady(context);
     if (!ready || ready.value().state == MediaNodeProcessState::Finished) return ready;
 
-    auto input = tryPopFirstInputWithChannelOptional(context);
+    static constexpr std::array<std::string_view, 3> bindingPorts{
+        "plan", "resource", "codec"};
+    auto input = m_phase == Phase::AcquiringBindings
+        ? tryPopFirstInputWithChannelOptional(context, bindingPorts)
+        : tryPopFirstInputWithChannelOptional(context);
     if (!input) {
         remember(::media::Status::failure(input.error()));
         return terminalResult();
@@ -48,10 +68,22 @@ MediaNodeKind FileMuxNode::staticKind() noexcept
         observeClosedInputs(context);
         ready = finishIfReady(context);
         if (!ready || ready.value().state == MediaNodeProcessState::Finished) return ready;
-        return pollOrWait(context);
+        return m_phase == Phase::AcquiringBindings
+            ? processWaiting()
+            : pollOrWait(context);
     }
 
     MediaBufferRef buffer = input.value()->buffer;
+    if (buffer->isEof() &&
+        isUnsatisfiedBindingChannel(*input.value()->channel)) {
+        const auto& state = m_bindingInputs.at(
+            input.value()->channel->id().value);
+        remember(::media::Status::failure(
+            ::media::ErrorInfo::notInitialized(
+                "FileMuxNode required " + state.portName +
+                " binding channel reached EOF before a binding payload was accepted")));
+        return terminalResult();
+    }
     if (buffer->isEof()) {
         if (input.value()->channel->binding().edgeKind == MediaEdgeKind::EncodedPacket) {
             m_completion->markEof(std::to_string(input.value()->channel->id().value));
@@ -60,6 +92,10 @@ MediaNodeKind FileMuxNode::staticKind() noexcept
     }
     auto handled = handleBuffer(context, *input.value());
     if (!handled) return terminalResult();
+    if (m_phase == Phase::AcquiringBindings &&
+        allBindingChannelsSatisfied() && m_session->bindingsReady()) {
+        m_phase = Phase::Streaming;
+    }
     auto forwarded = remember(forwardIfOutputsExist(context, buffer));
     return forwarded ? processProgress() : terminalResult();
 }
@@ -121,32 +157,91 @@ void FileMuxNode::abort(MediaGraphExecutionContext& context) noexcept
     return ::media::Status::success();
 }
 
-::media::Status FileMuxNode::bindCompletionInputs(MediaGraphExecutionContext& context)
+::media::Status FileMuxNode::bindInputTracking(
+    MediaGraphExecutionContext& context)
 {
     if (m_completion) return ::media::Status::success();
+    const MediaGraph* graph = context.graph();
+    if (!graph) {
+        return remember(::media::Status::failure(
+            ::media::ErrorInfo::notInitialized(
+                "FileMuxNode input tracking requires its compiled graph")));
+    }
     std::vector<std::string> inputs;
-    bool hasEncodedPacketInput = false;
+    std::unordered_map<std::uint32_t, BindingInputState> bindingInputs;
     for (MediaChannel* channel : context.inputChannels(nodeId())) {
         if (channel) {
-            inputs.push_back(std::to_string(channel->id().value));
-            hasEncodedPacketInput = hasEncodedPacketInput ||
-                channel->binding().edgeKind == MediaEdgeKind::EncodedPacket;
+            if (channel->binding().edgeKind == MediaEdgeKind::EncodedPacket) {
+                inputs.push_back(std::to_string(channel->id().value));
+            }
+            const MediaPort* port = graph->findPort(
+                channel->binding().to.portId);
+            if (!port) {
+                return remember(::media::Status::failure(
+                    ::media::ErrorInfo::notInitialized(
+                        "FileMuxNode input tracking cannot resolve a target port")));
+            }
+            if (isBindingPort(port->name)) {
+                bindingInputs.emplace(
+                    channel->id().value,
+                    BindingInputState{port->name, false});
+            }
         }
     }
-    if (!hasEncodedPacketInput) {
+    if (inputs.empty()) {
         return remember(::media::Status::failure(
             ::media::ErrorInfo::notInitialized(
                 "FileMuxNode requires an encoded packet input")));
     }
     m_completion = std::make_unique<MediaInputTerminalTracker>(std::move(inputs));
+    m_bindingInputs = std::move(bindingInputs);
     return ::media::Status::success();
+}
+
+::media::Status FileMuxNode::validateAcquiringBindingChannels(
+    MediaGraphExecutionContext& context)
+{
+    for (MediaChannel* channel : context.inputChannels(nodeId())) {
+        if (!channel) continue;
+        const auto found = m_bindingInputs.find(channel->id().value);
+        if (found == m_bindingInputs.end() || found->second.satisfied) continue;
+        if (channel->aborted()) {
+            return remember(::media::Status::failure(
+                ::media::ErrorInfo::cancelled(
+                    "FileMuxNode required " + found->second.portName +
+                    " binding channel aborted before a binding payload was accepted")));
+        }
+        if (channel->closed() && channel->size() == 0) {
+            return remember(::media::Status::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "FileMuxNode required " + found->second.portName +
+                    " binding channel closed before a binding payload was accepted")));
+        }
+    }
+    return ::media::Status::success();
+}
+
+bool FileMuxNode::isUnsatisfiedBindingChannel(
+    const MediaChannel& channel) const noexcept
+{
+    const auto found = m_bindingInputs.find(channel.id().value);
+    return found != m_bindingInputs.end() && !found->second.satisfied;
+}
+
+bool FileMuxNode::allBindingChannelsSatisfied() const noexcept
+{
+    return std::all_of(
+        m_bindingInputs.begin(), m_bindingInputs.end(),
+        [](const auto& entry) { return entry.second.satisfied; });
 }
 
 void FileMuxNode::observeClosedInputs(MediaGraphExecutionContext& context)
 {
     if (!m_completion) return;
     for (MediaChannel* channel : context.inputChannels(nodeId())) {
-        if (channel && channel->closed() && channel->size() == 0) {
+        if (channel &&
+            channel->binding().edgeKind == MediaEdgeKind::EncodedPacket &&
+            channel->closed() && channel->size() == 0) {
             m_completion->markClosed(std::to_string(channel->id().value));
         }
     }
@@ -168,25 +263,39 @@ void FileMuxNode::observeClosedInputs(MediaGraphExecutionContext& context)
     if (input.buffer->isFlush()) {
         return remember(m_session->flush(context));
     }
-    if (port->name == "resource" || port->name == "plan") {
-        return remember(m_session->bindResource(context, input.buffer));
+    auto status = [&]() -> ::media::Status {
+        if (port->name == "resource" || port->name == "plan") {
+            return m_session->bindResource(context, input.buffer);
+        }
+        if (port->name == "codec") {
+            return m_session->bindStreamConfig(context, input.buffer);
+        }
+        if (port->name == "packet") {
+            return m_session->write(context, input.buffer);
+        }
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "FileMuxNode received input on unknown port"));
+    }();
+    status = remember(std::move(status));
+    if (status && isBindingPort(port->name)) {
+        const auto binding = m_bindingInputs.find(input.channel->id().value);
+        if (binding == m_bindingInputs.end()) {
+            return remember(::media::Status::failure(
+                ::media::ErrorInfo::internalError(
+                    "FileMuxNode accepted an untracked binding channel")));
+        }
+        binding->second.satisfied = true;
     }
-    if (port->name == "codec") {
-        return remember(m_session->bindStreamConfig(context, input.buffer));
-    }
-    if (port->name == "packet") {
-        return remember(m_session->write(context, input.buffer));
-    }
-    return remember(::media::Status::failure(
-        ::media::ErrorInfo::invalidArgument(
-            "FileMuxNode received input on unknown port")));
+    return status;
 }
 
 ::media::Result<MediaNodeProcessResult> FileMuxNode::finishIfReady(
     MediaGraphExecutionContext& context,
     const MediaBufferRef& terminalBuffer)
 {
-    if (!m_completion || !m_completion->finished()) {
+    if (m_phase != Phase::Streaming ||
+        !m_completion || !m_completion->finished()) {
         if (terminalBuffer) {
             auto forwarded = remember(forwardIfOutputsExist(context, terminalBuffer));
             if (!forwarded) return terminalResult();
@@ -252,7 +361,9 @@ void FileMuxNode::releaseSession() noexcept
 {
     m_session.reset();
     m_completion.reset();
+    m_bindingInputs.clear();
     m_terminalFailure.reset();
+    m_phase = Phase::AcquiringBindings;
     m_abortForwarded = false;
 }
 

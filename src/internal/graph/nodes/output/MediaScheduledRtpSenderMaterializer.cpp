@@ -5,7 +5,7 @@
 #include "internal/graph/protocol/sdp/MediaAacLatmSdpCodecDescriptionFactory.h"
 #include "internal/graph/protocol/sdp/MediaH264SdpCodecDescriptionFactory.h"
 #include "internal/graph/protocol/sdp/MediaRtpSdpSessionIdentityMaterializer.h"
-#include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegCodecParametersMaterializer.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 
 extern "C" {
@@ -94,20 +94,7 @@ ParametersResult materializeCodecParameters(
             ::media::ErrorInfo::invalidArgument(
                 "Runtime video RTP packetization rejects audio sample limits"));
     }
-    auto parameters = ::media::ffmpeg::makeCodecParameters();
-    if (!parameters) {
-        return ParametersResult::failure(
-            ::media::ErrorInfo::allocationFailed(
-                "scheduled RTP codec parameters"));
-    }
-    const int copied = avcodec_parameters_from_context(
-        parameters.get(), &context);
-    if (copied < 0) {
-        return ParametersResult::failure(
-            ::media::ErrorInfo::ffmpegFailure(
-                "avcodec_parameters_from_context(scheduled RTP)", copied));
-    }
-    return ParametersResult::success(std::move(parameters));
+    return FFmpegCodecParametersMaterializer::fromContext(context);
 }
 
 ::media::Result<MediaRtpSdpMediaDescription> materializeMediaDescription(

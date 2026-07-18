@@ -228,7 +228,8 @@ std::uint32_t stableIdentity(const std::string& value) noexcept
                 "MPEG-TS output requires planner-owned startup output lead"));
     }
     auto resolvedOutput = MediaProjectMpegTsOutputPlan::create(
-        resolvedFacts.videoCodecName, resolvedFacts.audioOutput,
+        resolvedFacts.videoCodecName, resolvedFacts.videoPacketLayout,
+        resolvedFacts.audioOutput,
         *plan.startup.outputLeadNs);
     if (!resolvedOutput) {
         return ::media::Result<MediaAvSyncPlan>::failure(resolvedOutput.error());

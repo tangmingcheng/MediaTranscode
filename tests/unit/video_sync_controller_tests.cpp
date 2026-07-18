@@ -68,7 +68,7 @@ MediaVideoFrameMeasurement measurement(
 MediaVideoRepeatRequest repeatRequest(
     std::int64_t repeatPresentationMs,
     std::int64_t lastEmittedPresentationMs,
-    std::int64_t masterNowMs,
+    std::int64_t decisionHorizonMs,
     std::uint64_t sequence,
     std::uint64_t generation = 1) noexcept
 {
@@ -76,7 +76,7 @@ MediaVideoRepeatRequest repeatRequest(
         ms(repeatPresentationMs),
         ms(repeatPresentationMs),
         ms(lastEmittedPresentationMs),
-        ms(masterNowMs),
+        ms(decisionHorizonMs),
         generation,
         sequence};
 }
@@ -451,7 +451,7 @@ void testHoldDoesNotConsumeFrameBeforeDeadlineReevaluation(TestContext& ctx)
     }
 
     auto beforeDeadline = heldFrame;
-    beforeDeadline.masterNow = MediaRunningTime::fromNanoseconds(
+    beforeDeadline.decisionHorizonOnMaster = MediaRunningTime::fromNanoseconds(
         ms(10'080).nanoseconds() - 1);
     auto stillHeld = controller.update(beforeDeadline);
     EXPECT_TRUE(ctx, stillHeld);
@@ -468,7 +468,7 @@ void testHoldDoesNotConsumeFrameBeforeDeadlineReevaluation(TestContext& ctx)
     EXPECT_FALSE(ctx, controller.update(changedKeyFrame));
 
     auto dueFrame = heldFrame;
-    dueFrame.masterNow = ms(10'080);
+    dueFrame.decisionHorizonOnMaster = ms(10'080);
     auto display = controller.update(dueFrame);
     EXPECT_TRUE(ctx, display);
     if (display) {

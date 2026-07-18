@@ -240,6 +240,89 @@ void testBootstrapRejectsIncompleteBindings(TestContext& ctx)
     EXPECT_FALSE(ctx,
                  MediaGraphRuntimeCompiler::validateBindings(
                      wrongSchedulerKey));
+
+    auto scheduledTsAdapter = executableWith(completeRtpPlan());
+    const auto adapterId = scheduledTsAdapter.graph.addNode(
+        MediaNodeKind::ScheduledTsAccessUnitAdapter, "scheduled-ts-adapter");
+    scheduledTsAdapter.graph.setNodeOption(
+        adapterId, "scheduled_ts_adapter.sync_group", "realtime.av");
+    EXPECT_TRUE(ctx,
+                MediaGraphRuntimeCompiler::validateBindings(
+                    scheduledTsAdapter));
+
+    auto wrongKindExactKey = executableWith(completeRtpPlan());
+    const auto wrongKindId = wrongKindExactKey.graph.addNode(
+        MediaNodeKind::Demux, "wrong-kind-scheduled-ts-adapter");
+    wrongKindExactKey.graph.setNodeOption(
+        wrongKindId, "scheduled_ts_adapter.sync_group", "realtime.av");
+    EXPECT_FALSE(ctx,
+                 MediaGraphRuntimeCompiler::validateBindings(
+                     wrongKindExactKey));
+
+    auto rightKindWrongKey = executableWith(completeRtpPlan());
+    const auto wrongKeyId = rightKindWrongKey.graph.addNode(
+        MediaNodeKind::ScheduledTsAccessUnitAdapter,
+        "wrong-key-scheduled-ts-adapter");
+    rightKindWrongKey.graph.setNodeOption(
+        wrongKeyId, "runtime.sync_group", "realtime.av");
+    EXPECT_FALSE(ctx,
+                 MediaGraphRuntimeCompiler::validateBindings(
+                     rightKindWrongKey));
+
+    auto scheduledTsGroupMismatch = executableWith(completeRtpPlan());
+    const auto mismatchId = scheduledTsGroupMismatch.graph.addNode(
+        MediaNodeKind::ScheduledTsAccessUnitAdapter,
+        "mismatched-scheduled-ts-adapter");
+    scheduledTsGroupMismatch.graph.setNodeOption(
+        mismatchId, "scheduled_ts_adapter.sync_group", "another.group");
+    EXPECT_FALSE(ctx,
+                 MediaGraphRuntimeCompiler::validateBindings(
+                     scheduledTsGroupMismatch));
+
+    auto projectTsPlanSource = executableWith(completeRtpPlan());
+    const auto planSourceId = projectTsPlanSource.graph.addNode(
+        MediaNodeKind::ProjectMpegTsPlanSource, "project-ts-plan-source");
+    const auto pairedAdapterId = projectTsPlanSource.graph.addNode(
+        MediaNodeKind::ScheduledTsAccessUnitAdapter,
+        "project-ts-scheduled-adapter");
+    projectTsPlanSource.graph.setNodeOption(
+        planSourceId, "project_mpeg_ts_plan.sync_group", "realtime.av");
+    projectTsPlanSource.graph.setNodeOption(
+        pairedAdapterId, "scheduled_ts_adapter.sync_group", "realtime.av");
+    EXPECT_TRUE(ctx,
+                MediaGraphRuntimeCompiler::validateBindings(
+                    projectTsPlanSource));
+
+    auto planSourceWrongKind = executableWith(completeRtpPlan());
+    const auto planSourceWrongKindId = planSourceWrongKind.graph.addNode(
+        MediaNodeKind::Demux, "wrong-kind-project-ts-plan-source");
+    planSourceWrongKind.graph.setNodeOption(
+        planSourceWrongKindId, "project_mpeg_ts_plan.sync_group",
+        "realtime.av");
+    EXPECT_FALSE(ctx,
+                 MediaGraphRuntimeCompiler::validateBindings(
+                     planSourceWrongKind));
+
+    auto planSourceWrongKey = executableWith(completeRtpPlan());
+    const auto planSourceWrongKeyId = planSourceWrongKey.graph.addNode(
+        MediaNodeKind::ProjectMpegTsPlanSource,
+        "wrong-key-project-ts-plan-source");
+    planSourceWrongKey.graph.setNodeOption(
+        planSourceWrongKeyId, "runtime.sync_group", "realtime.av");
+    EXPECT_FALSE(ctx,
+                 MediaGraphRuntimeCompiler::validateBindings(
+                     planSourceWrongKey));
+
+    auto planSourceGroupMismatch = executableWith(completeRtpPlan());
+    const auto planSourceMismatchId = planSourceGroupMismatch.graph.addNode(
+        MediaNodeKind::ProjectMpegTsPlanSource,
+        "mismatched-project-ts-plan-source");
+    planSourceGroupMismatch.graph.setNodeOption(
+        planSourceMismatchId, "project_mpeg_ts_plan.sync_group",
+        "another.group");
+    EXPECT_FALSE(ctx,
+                 MediaGraphRuntimeCompiler::validateBindings(
+                     planSourceGroupMismatch));
 }
 
 void testBootstrapCapturesOneClockAndOneRtpEpoch(TestContext& ctx)

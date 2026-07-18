@@ -158,6 +158,8 @@ BinderFixture binderFixture(bool threadedLifecycleTarget = false)
     fixture.executable.graph.setNodeOption(
         fixture.scheduler, "av_scheduler.sync_group", "task4-group");
     fixture.executable.graph.setNodeOption(
+        fixture.scheduler, "av_scheduler.transport_lead_ns", "0");
+    fixture.executable.graph.setNodeOption(
         fixture.binder, "playback_epoch_binder.sync_group", "task4-group");
     fixture.executable.graph.setNodeOption(
         fixture.sequencer,

@@ -119,6 +119,44 @@ void testValidAacLcMatchesPlanAndParameters(TestContext& ctx)
               static_cast<std::uint8_t>(2));
 }
 
+void testNativeFfmpegNoSbrAscDialectIsAccepted(TestContext& ctx)
+{
+    auto parameters = audioParameters({0x11, 0x90, 0x56, 0xE5, 0x00});
+    auto materialized = MediaTsFfmpegStreamConfigMaterializer::audio(
+        plan(), *parameters);
+    EXPECT_TRUE(ctx, materialized);
+    if (!materialized) return;
+    EXPECT_EQ(ctx, materialized.value().audioObjectType(),
+              static_cast<std::uint8_t>(2));
+    EXPECT_EQ(ctx, materialized.value().samplingFrequencyIndex(),
+              static_cast<std::uint8_t>(3));
+    EXPECT_EQ(ctx, materialized.value().channelConfiguration(),
+              static_cast<std::uint8_t>(2));
+}
+
+void testInvalidFfmpegAscDialectsAreRejected(TestContext& ctx)
+{
+    for (const auto& bytes : {
+             std::vector<std::uint8_t>{0x11, 0x90, 0x56},
+             std::vector<std::uint8_t>{0x11, 0x90, 0x56, 0xE5},
+             std::vector<std::uint8_t>{0x11, 0x90, 0x57, 0xE5, 0x00},
+             std::vector<std::uint8_t>{0x11, 0x90, 0x56, 0xE5, 0x80},
+             std::vector<std::uint8_t>{0x11, 0x90, 0x56, 0xE5, 0x01},
+             std::vector<std::uint8_t>{0x11, 0x90, 0x56, 0xE5, 0x00, 0x00}}) {
+        auto parameters = ::media::ffmpeg::makeCodecParameters();
+        parameters->codec_type = AVMEDIA_TYPE_AUDIO;
+        parameters->codec_id = AV_CODEC_ID_AAC;
+        parameters->sample_rate = 48'000;
+        parameters->ch_layout = AV_CHANNEL_LAYOUT_STEREO;
+        parameters->extradata = static_cast<std::uint8_t*>(
+            av_mallocz(bytes.size() + AV_INPUT_BUFFER_PADDING_SIZE));
+        parameters->extradata_size = static_cast<int>(bytes.size());
+        std::copy(bytes.begin(), bytes.end(), parameters->extradata);
+        EXPECT_FALSE(ctx, MediaTsFfmpegStreamConfigMaterializer::audio(
+            plan(), *parameters));
+    }
+}
+
 void testMalformedAndIncompleteVideoConfigIsRejected(TestContext& ctx)
 {
     auto truncated = videoParameters({1, 0x64, 0, 0x1F, 0xFF, 0xE1, 0, 4, 0x67});
@@ -219,6 +257,8 @@ void runMpegTsFfmpegConfigMaterializerTests(TestContext& ctx)
     testValidAvccIsCopied(ctx);
     testValidAnnexBIsCopied(ctx);
     testValidAacLcMatchesPlanAndParameters(ctx);
+    testNativeFfmpegNoSbrAscDialectIsAccepted(ctx);
+    testInvalidFfmpegAscDialectsAreRejected(ctx);
     testMalformedAndIncompleteVideoConfigIsRejected(ctx);
     testVideoLayoutAndNalWidthAreNeverInferred(ctx);
     testWrongCodecsAreRejected(ctx);

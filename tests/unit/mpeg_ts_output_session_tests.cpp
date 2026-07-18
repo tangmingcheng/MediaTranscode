@@ -144,8 +144,8 @@ MediaTsMuxSession::Binding binding(RecordingByteSink*& observation)
 {
     return bindingAt(
         observation,
-        MediaPlaybackEpoch{MediaRunningTime::fromNanoseconds(0),
-                           MediaRunningTime::fromNanoseconds(0), 9});
+        MediaPlaybackEpoch{MediaRunningTime::fromNanoseconds(100'000'000),
+                           MediaRunningTime::fromNanoseconds(100'000'000), 9});
 }
 
 std::uint16_t packetPid(const std::vector<std::uint8_t>& bytes,
@@ -169,7 +169,7 @@ void lifecycleAndDeadlines(TestContext& ctx)
     if (advanced) {
         EXPECT_EQ(ctx, advanced.value().nextDeadline,
                   MediaRunningTime::fromNanoseconds(120'000'000));
-        EXPECT_EQ(ctx, advanced.value().packetsWritten, std::size_t{8});
+        EXPECT_EQ(ctx, advanced.value().packetsWritten, std::size_t{3});
     }
     const std::size_t packetCount = sink->storage.size() / 188;
     EXPECT_TRUE(ctx, packetCount >= 3);
@@ -196,6 +196,66 @@ void lifecycleAndDeadlines(TestContext& ctx)
     EXPECT_TRUE(ctx, duplicate->start(MediaRunningTime::fromNanoseconds(0)));
     EXPECT_FALSE(ctx, duplicate->start(MediaRunningTime::fromNanoseconds(0)));
     EXPECT_FALSE(ctx, duplicate->advanceThrough(MediaRunningTime::fromNanoseconds(0)));
+}
+
+void pollAdvancesTransportDeadlinesWithoutMedia(TestContext& ctx)
+{
+    RecordingByteSink* sink = nullptr;
+    auto session = MediaTsMuxSession::create(binding(sink)).value();
+    EXPECT_TRUE(ctx, session->start(MediaRunningTime::fromNanoseconds(0)));
+    const auto initialBytes = sink->storage.size();
+
+    auto before = session->poll(MediaRunningTime::fromNanoseconds(99'000'000));
+    EXPECT_TRUE(ctx, before);
+    if (before) {
+        EXPECT_EQ(ctx, before.value().packetsWritten, std::size_t{0});
+        EXPECT_EQ(ctx, before.value().nextDeadline,
+                  MediaRunningTime::fromNanoseconds(100'000'000));
+    }
+    EXPECT_EQ(ctx, sink->storage.size(), initialBytes);
+
+    auto due = session->poll(MediaRunningTime::fromNanoseconds(100'000'000));
+    EXPECT_TRUE(ctx, due);
+    if (due) {
+        EXPECT_EQ(ctx, due.value().packetsWritten, std::size_t{3});
+        EXPECT_EQ(ctx, due.value().nextDeadline,
+                  MediaRunningTime::fromNanoseconds(120'000'000));
+    }
+    EXPECT_EQ(ctx, sink->storage.size(), initialBytes + 3 * 188);
+
+    auto firstCatchUp = session->poll(
+        MediaRunningTime::fromNanoseconds(500'000'000));
+    EXPECT_TRUE(ctx, firstCatchUp);
+    if (firstCatchUp) {
+        EXPECT_EQ(ctx, firstCatchUp.value().packetsWritten, std::size_t{1});
+        EXPECT_EQ(ctx, firstCatchUp.value().nextDeadline,
+                  MediaRunningTime::fromNanoseconds(140'000'000));
+    }
+    const auto afterFirstCatchUp = sink->storage.size();
+    auto secondCatchUp = session->poll(
+        MediaRunningTime::fromNanoseconds(500'000'000));
+    EXPECT_TRUE(ctx, secondCatchUp);
+    if (secondCatchUp) {
+        EXPECT_EQ(ctx, secondCatchUp.value().packetsWritten, std::size_t{1});
+        EXPECT_EQ(ctx, secondCatchUp.value().nextDeadline,
+                  MediaRunningTime::fromNanoseconds(160'000'000));
+    }
+    EXPECT_EQ(ctx, sink->storage.size(), afterFirstCatchUp + 188);
+
+    EXPECT_TRUE(ctx, session->finish());
+    EXPECT_FALSE(ctx, session->poll(
+                          MediaRunningTime::fromNanoseconds(500'000'000)));
+
+    RecordingByteSink* abortedSink = nullptr;
+    auto aborted = MediaTsMuxSession::create(binding(abortedSink)).value();
+    EXPECT_TRUE(ctx, aborted->start(MediaRunningTime::fromNanoseconds(0)));
+    aborted->abort();
+    auto abortedPoll = aborted->poll(
+        MediaRunningTime::fromNanoseconds(100'000'000));
+    EXPECT_FALSE(ctx, abortedPoll);
+    if (!abortedPoll) {
+        EXPECT_EQ(ctx, abortedPoll.error().code, ::media::ErrorCode::Cancelled);
+    }
 }
 
 void accessUnitsAndPoison(TestContext& ctx)
@@ -290,8 +350,8 @@ void accessUnitBackingStorageMayExpireAfterWrite(TestContext& ctx)
         {0, 0, 0, 1, 0x67, 0x42}, {0, 0, 0, 1, 0x68, 0xCE}).value();
     auto session = MediaTsMuxSession::create(MediaTsMuxSession::Binding{
         plan(MediaTsH264InputLayout::AnnexB, MediaTsParameterSetPolicy::Never),
-        MediaPlaybackEpoch{MediaRunningTime::fromNanoseconds(0),
-                           MediaRunningTime::fromNanoseconds(0), 9},
+        MediaPlaybackEpoch{MediaRunningTime::fromNanoseconds(100'000'000),
+                           MediaRunningTime::fromNanoseconds(100'000'000), 9},
         std::move(video), MediaTsMaterializedAudioConfig::create(2, 3, 2).value(),
         std::move(ownedSink)}).value();
     EXPECT_TRUE(ctx, session->start(MediaRunningTime::fromNanoseconds(0)));
@@ -313,6 +373,7 @@ void accessUnitBackingStorageMayExpireAfterWrite(TestContext& ctx)
     EXPECT_TRUE(ctx, parser);
     if (!parser) return;
     EXPECT_TRUE(ctx, parser.value()->push(sink->storage));
+    EXPECT_TRUE(ctx, parser.value()->finish());
     const std::array<std::uint8_t, 8> expectedAnnexB{
         0, 0, 0, 1, 0x41, 0xA1, 0xB2, 0xC3};
     EXPECT_TRUE(ctx, std::search(collector.bytes.begin(), collector.bytes.end(),
@@ -425,7 +486,12 @@ void deadlineAndTerminalSemantics(TestContext& ctx)
         overflowSink,
         MediaPlaybackEpoch{MediaRunningTime::fromNanoseconds(0),
                            nearMaximum, 9})).value();
-    EXPECT_TRUE(ctx, overflow->start(nearMaximum));
+    const auto overflowOrigin = nearMaximum.checkedSubtract(
+        MediaRunningTime::fromNanoseconds(100'000'000));
+    EXPECT_TRUE(ctx, overflowOrigin);
+    if (!overflowOrigin) return;
+    EXPECT_TRUE(ctx, overflow->start(overflowOrigin.value()));
+    EXPECT_TRUE(ctx, overflow->advanceThrough(nearMaximum));
     EXPECT_FALSE(ctx, overflow->advanceThrough(MediaRunningTime::fromNanoseconds(
         std::numeric_limits<std::int64_t>::max())));
     const std::size_t overflowPackets = overflowSink->storage.size() / 188;
@@ -549,6 +615,74 @@ void commitAndFramerFailuresAreTerminal(TestContext& ctx)
     }
 }
 
+void transportOriginAnchorsInitialPsiWithoutMovingPcr(TestContext& ctx)
+{
+    RecordingByteSink* sink = nullptr;
+    auto session = MediaTsMuxSession::create(bindingAt(
+        sink, MediaPlaybackEpoch{
+                  MediaRunningTime::fromNanoseconds(0),
+                  MediaRunningTime::fromNanoseconds(200'000'000), 9})).value();
+    const auto origin = MediaRunningTime::fromNanoseconds(100'000'000);
+    EXPECT_TRUE(ctx, session->start(origin));
+    EXPECT_EQ(ctx, sink->storage.size(), std::size_t{376});
+
+    const std::array<std::uint8_t, 7> video{0, 0, 0, 3, 0x65, 1, 2};
+    auto first = session->writeAccessUnit(MediaTsAccessUnitView{
+        video, MediaScheduledStream::Video, 9,
+        MediaRunningTime::fromNanoseconds(220'000'000),
+        MediaRunningTime::fromNanoseconds(200'000'000), origin, true});
+    EXPECT_TRUE(ctx, first);
+    if (first) {
+        EXPECT_EQ(ctx, first.value().nextDeadline,
+                  MediaRunningTime::fromNanoseconds(200'000'000));
+    }
+    const std::size_t afterFirstAccessUnit = sink->storage.size();
+    auto beforeDeadline = session->advanceThrough(
+        MediaRunningTime::fromNanoseconds(199'000'000));
+    EXPECT_TRUE(ctx, beforeDeadline);
+    if (beforeDeadline) {
+        EXPECT_EQ(ctx, beforeDeadline.value().packetsWritten, std::size_t{0});
+        EXPECT_EQ(ctx, beforeDeadline.value().nextDeadline,
+                  MediaRunningTime::fromNanoseconds(200'000'000));
+    }
+    EXPECT_EQ(ctx, sink->storage.size(), afterFirstAccessUnit);
+
+    auto atDeadline = session->advanceThrough(
+        MediaRunningTime::fromNanoseconds(200'000'000));
+    EXPECT_TRUE(ctx, atDeadline);
+    if (atDeadline) {
+        EXPECT_EQ(ctx, atDeadline.value().packetsWritten, std::size_t{3});
+        EXPECT_EQ(ctx, atDeadline.value().nextDeadline,
+                  MediaRunningTime::fromNanoseconds(220'000'000));
+    }
+    EXPECT_TRUE(ctx, session->finish());
+
+    MediaTsPesTimestampInspector inspector;
+    auto parser = MediaTsPacketParser::create(188, inspector, nullptr);
+    EXPECT_TRUE(ctx, parser);
+    if (!parser) return;
+    EXPECT_TRUE(ctx, parser.value()->push(sink->storage));
+    EXPECT_TRUE(ctx, parser.value()->finish());
+    EXPECT_EQ(ctx, inspector.timestamps().size(), std::size_t{1});
+    if (inspector.timestamps().size() == 1) {
+        EXPECT_EQ(ctx, inspector.timestamps().front().pts, std::uint64_t{1'800});
+        EXPECT_EQ(ctx, inspector.timestamps().front().dts, std::uint64_t{0});
+    }
+    EXPECT_EQ(ctx, inspector.pcrValues().size(), std::size_t{1});
+    if (inspector.pcrValues().size() == 1) {
+        EXPECT_EQ(ctx, inspector.pcrValues().front(), std::uint64_t{0});
+    }
+
+    RecordingByteSink* wrongSink = nullptr;
+    auto wrong = MediaTsMuxSession::create(bindingAt(
+        wrongSink, MediaPlaybackEpoch{
+                       MediaRunningTime::fromNanoseconds(0),
+                       MediaRunningTime::fromNanoseconds(200'000'000), 9})).value();
+    EXPECT_FALSE(ctx, wrong->start(
+                          MediaRunningTime::fromNanoseconds(100'000'001)));
+    EXPECT_EQ(ctx, wrongSink->storage.size(), std::size_t{0});
+}
+
 void sessionTimestampsWrapOnTheWire(TestContext& ctx)
 {
     constexpr std::int64_t wrapTicks = std::int64_t{1} << 33;
@@ -556,10 +690,15 @@ void sessionTimestampsWrapOnTheWire(TestContext& ctx)
         wrapTicks - 9'900, 1, 90'000);
     EXPECT_TRUE(ctx, sourceStart);
     if (!sourceStart) return;
+    auto shiftedSourceStart = sourceStart.value().checkedAdd(
+        MediaRunningTime::fromNanoseconds(100'000'000));
+    EXPECT_TRUE(ctx, shiftedSourceStart);
+    if (!shiftedSourceStart) return;
     RecordingByteSink* sink = nullptr;
     auto session = MediaTsMuxSession::create(bindingAt(
-        sink, MediaPlaybackEpoch{sourceStart.value(),
-                                 MediaRunningTime::fromNanoseconds(0), 9})).value();
+        sink, MediaPlaybackEpoch{shiftedSourceStart.value(),
+                                 MediaRunningTime::fromNanoseconds(100'000'000),
+                                 9})).value();
     EXPECT_TRUE(ctx, session->start(MediaRunningTime::fromNanoseconds(0)));
     const std::array<std::uint8_t, 7> video{0, 0, 0, 3, 0x65, 1, 2};
     EXPECT_TRUE(ctx, session->writeAccessUnit(MediaTsAccessUnitView{
@@ -581,6 +720,7 @@ void sessionTimestampsWrapOnTheWire(TestContext& ctx)
     EXPECT_TRUE(ctx, parser);
     if (!parser) return;
     EXPECT_TRUE(ctx, parser.value()->push(sink->storage));
+    EXPECT_TRUE(ctx, parser.value()->finish());
     EXPECT_EQ(ctx, inspector.timestamps().size(), std::size_t{2});
     if (inspector.timestamps().size() == 2) {
         EXPECT_EQ(ctx, inspector.timestamps()[0].dts,
@@ -597,6 +737,7 @@ void sessionTimestampsWrapOnTheWire(TestContext& ctx)
 void runMpegTsOutputSessionTests(TestContext& ctx)
 {
     lifecycleAndDeadlines(ctx);
+    pollAdvancesTransportDeadlinesWithoutMedia(ctx);
     accessUnitsAndPoison(ctx);
     accessUnitBackingStorageMayExpireAfterWrite(ctx);
     sinkFailureIsTerminal(ctx);
@@ -604,5 +745,6 @@ void runMpegTsOutputSessionTests(TestContext& ctx)
     deadlineAndTerminalSemantics(ctx);
     secondBatchShortWritePoisonsSession(ctx);
     commitAndFramerFailuresAreTerminal(ctx);
+    transportOriginAnchorsInitialPsiWithoutMovingPcr(ctx);
     sessionTimestampsWrapOnTheWire(ctx);
 }

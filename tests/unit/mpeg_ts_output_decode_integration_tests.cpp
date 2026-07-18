@@ -1,328 +1,336 @@
-#include "internal/graph/protocol/mpegts/MediaTsMuxSession.h"
-#include "internal/graph/runtime/io/MediaOutputByteSink.h"
-#include "fixtures/MediaTsSampleStreamConfigFixture.h"
+#include "unit/fixtures/MpegTsOutputArtifactVerifier.h"
+#include "unit/fixtures/ScheduledMpegTsDecodeSamplePreparer.h"
+#include "unit/fixtures/ScheduledMpegTsDecodeSampleFixture.h"
+#include "unit/fixtures/ScheduledMpegTsOutputIntegrationRuntime.h"
+#include "unit/fixtures/ScheduledRtpDecodePrerequisites.h"
+#include "unit/fixtures/ScheduledRtpDecodeReceiver.h"
 
-extern "C" {
-#include <libavcodec/avcodec.h>
-#include <libavformat/avformat.h>
-#include <libavutil/avutil.h>
-}
+#include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/audio/MediaResolvedAudioOutputPlan.h"
+#include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlanner.h"
+#include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
+#include "internal/graph/planner/realtime/MediaProjectMpegTsResolvedPipelineFacts.h"
+#include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodeRequest.h"
 
-#include <algorithm>
+#include <array>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
-#include <memory>
-#include <vector>
+#include <string>
+#include <utility>
 
-using namespace media::ffmpeg::graph;
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
 
 namespace {
 
-struct FormatCloser { void operator()(AVFormatContext* value) const { avformat_close_input(&value); } };
-struct CodecCloser { void operator()(AVCodecContext* value) const { avcodec_free_context(&value); } };
-struct FrameCloser { void operator()(AVFrame* value) const { av_frame_free(&value); } };
-using FormatPtr = std::unique_ptr<AVFormatContext, FormatCloser>;
-using CodecPtr = std::unique_ptr<AVCodecContext, CodecCloser>;
-using FramePtr = std::unique_ptr<AVFrame, FrameCloser>;
+using namespace media::ffmpeg::graph;
+using media_transcode::test::MpegTsOutputArtifactVerifier;
+using media_transcode::test::ScheduledMpegTsDecodeSamplePreparer;
+using media_transcode::test::ScheduledMpegTsDecodeSampleFixture;
+using media_transcode::test::ScheduledMpegTsOutputIntegrationRuntime;
+using media_transcode::test::ScheduledRtpDecodePrerequisites;
+using media_transcode::test::ScheduledRtpDecodeReceiver;
 
-class FileByteSink final : public MediaOutputByteSink {
+constexpr MediaRunningTime milliseconds(std::int64_t value) noexcept
+{
+    return MediaRunningTime::fromNanoseconds(value * 1'000'000);
+}
+
+class TemporaryOutput final {
 public:
-    explicit FileByteSink(const std::filesystem::path& path)
-        : m_file(path, std::ios::binary | std::ios::trunc) {}
-    bool open() const noexcept { return m_file.is_open(); }
-    ::media::Result<std::size_t> write(std::span<const std::uint8_t> bytes) override
+    TemporaryOutput()
+        : m_path(std::filesystem::temp_directory_path() /
+                 ("scheduled_project_mpeg_ts_" + std::to_string(
+                     std::chrono::steady_clock::now()
+                         .time_since_epoch().count()) + ".ts"))
     {
-        m_file.write(reinterpret_cast<const char*>(bytes.data()),
-                     static_cast<std::streamsize>(bytes.size()));
-        return m_file ? ::media::Result<std::size_t>::success(bytes.size())
-                      : ::media::Result<std::size_t>::failure(
-                            ::media::ErrorInfo::ioFailure("TS integration file write failed"));
     }
-    ::media::Status flush() override
+
+    ~TemporaryOutput()
     {
-        m_file.flush();
-        return m_file ? ::media::Status::success()
-                      : ::media::Status::failure(
-                            ::media::ErrorInfo::ioFailure("TS integration file flush failed"));
+        std::error_code ignored;
+        std::filesystem::remove(m_path, ignored);
     }
-    ::media::Status close() override
-    {
-        if (m_closed) return ::media::Status::success();
-        m_file.close();
-        m_closed = true;
-        return m_file.fail() ? ::media::Status::failure(
-            ::media::ErrorInfo::ioFailure("TS integration file close failed"))
-            : ::media::Status::success();
-    }
+
+    const std::filesystem::path& path() const noexcept { return m_path; }
+
 private:
-    std::ofstream m_file;
-    bool m_closed = false;
+    std::filesystem::path m_path;
 };
 
-struct TemporaryFile final {
-    std::filesystem::path path;
-    ~TemporaryFile() { std::error_code ignored; std::filesystem::remove(path, ignored); }
-};
-
-struct InputUnit final {
-    std::vector<std::uint8_t> bytes;
-    MediaScheduledStream stream;
-    std::int64_t ptsNs;
-    std::int64_t dtsNs;
-    bool randomAccess;
-};
-
-int firstStreamIndex(const AVFormatContext& input, AVMediaType type)
+std::filesystem::path samplePath()
 {
-    for (unsigned int index = 0; index < input.nb_streams; ++index) {
-        if (input.streams[index]->codecpar->codec_type == type) {
-            return static_cast<int>(index);
-        }
+    return std::filesystem::path(MEDIA_TRANSCODE_SOURCE_DIR) /
+        "tests/samples/sample_h264_aac_2560x1440.mp4";
+}
+
+std::filesystem::path ffmpegPath()
+{
+#if defined(_WIN32)
+    std::array<wchar_t, 32'768> module{};
+    const DWORD length = GetModuleFileNameW(
+        nullptr, module.data(), static_cast<DWORD>(module.size()));
+    if (length > 0 && length < module.size()) {
+        return std::filesystem::path(std::wstring(module.data(), length))
+            .parent_path() / "ffmpeg.exe";
     }
-    return -1;
+#endif
+    return "ffmpeg";
 }
 
-MediaTsMuxPlan makePlan(std::uint8_t nalLengthBytes, int frequencyIndex, int channels)
+::media::Status verifyExitClassification()
 {
-    return MediaTsMuxPlan::create(MediaTsMuxPlanParameters{
-        1, 1, 0, 0x100, 0x101, 0x102, 0x101, 0,
-        MediaRunningTime::fromNanoseconds(100'000'000), 0x1B, 0x0F,
-        MediaTsH264InputLayout::LengthPrefixed, nalLengthBytes,
-        MediaTsParameterSetPolicy::BeforeRandomAccess,
-        MediaTsAacAdtsPlan{0, 2, static_cast<std::uint8_t>(frequencyIndex),
-                           static_cast<std::uint8_t>(channels)},
-        MediaTsOutputClockPolicy{MediaRunningTime::fromNanoseconds(20'000'000),
-                                 MediaRunningTime::fromNanoseconds(100'000'000),
-                                 MediaRunningTime::fromNanoseconds(5'000'000), 1, 90'000},
-        MediaRunningTime::fromNanoseconds(100'000'000), 188,
-        MediaTsContinuitySeeds{0, 0, 0, 0}, 7,
-        MediaTsOutputTransportKind::Udp, 1024}).value();
-}
-
-struct DecoderOpenResult final {
-    CodecPtr context;
-    bool unsupported;
-};
-
-DecoderOpenResult openDecoder(const AVStream& stream)
-{
-    const AVCodec* codec = avcodec_find_decoder(stream.codecpar->codec_id);
-    if (!codec) return {{}, true};
-    CodecPtr context(avcodec_alloc_context3(codec));
-    if (!context || avcodec_parameters_to_context(context.get(), stream.codecpar) < 0 ||
-        avcodec_open2(context.get(), codec, nullptr) < 0) return {{}, false};
-    return {std::move(context), false};
-}
-
-bool receiveDecodedFrames(AVCodecContext& decoder,
-                          AVFrame& frame,
-                          bool& decoded,
-                          bool flushing)
-{
-    while (true) {
-        const int received = avcodec_receive_frame(&decoder, &frame);
-        if (received == AVERROR_EOF) return true;
-        if (received == AVERROR(EAGAIN)) return !flushing;
-        if (received < 0) return false;
-        decoded = true;
-        av_frame_unref(&frame);
+    auto missingExecutable = ScheduledRtpDecodeReceiver::preflightExecutable(
+        ffmpegPath().string() + ".missing");
+    if (missingExecutable ||
+        ScheduledRtpDecodePrerequisites::externalFailureExit(
+            missingExecutable.error()) != 77) {
+        return ::media::Status::failure(::media::ErrorInfo::internalError(
+            "missing external FFmpeg must map to prerequisite skip 77"));
     }
+    const auto injected = ::media::ErrorInfo::unsupported(
+        "injected post-preflight planner failure");
+    if (ScheduledRtpDecodePrerequisites::pipelineFailureExit(injected) != 1) {
+        return ::media::Status::failure(::media::ErrorInfo::internalError(
+            "post-preflight Unsupported must map to test failure 1"));
+    }
+    return ::media::Status::success();
 }
 
-bool submitPacket(AVCodecContext& decoder,
-                  const AVPacket& packet,
-                  AVFrame& frame,
-                  bool& decoded)
+MediaTsSelectedProgramPlan selectedTsProgram()
 {
-    int sent = avcodec_send_packet(&decoder, &packet);
-    if (sent == AVERROR(EAGAIN)) {
-        if (!receiveDecodedFrames(decoder, frame, decoded, false)) return false;
-        sent = avcodec_send_packet(&decoder, &packet);
-    }
-    return sent >= 0 && receiveDecodedFrames(decoder, frame, decoded, false);
+    MediaTsSelectedProgramPlan selected{1, 0x100, 0x101, 0x102, 0x101};
+    selected.videoPacketDuration = MediaTsPacketDurationEvidence{
+        0, 0x101, 3'000, {1, 90'000}};
+    selected.audioPacketDuration = MediaTsPacketDurationEvidence{
+        1, 0x102, 1'024, {1, 48'000}};
+    return selected;
 }
 
-bool flushDecoder(AVCodecContext& decoder, AVFrame& frame, bool& decoded)
+::media::Result<MediaProjectMpegTsResolvedPipelineFacts>
+resolvedPipelineFacts()
 {
-    const int sent = avcodec_send_packet(&decoder, nullptr);
-    return (sent >= 0 || sent == AVERROR_EOF) &&
-           receiveDecodedFrames(decoder, frame, decoded, true);
+    const MediaResolvedAudioSource source{
+        "aac", MediaAudioProfile::knownAacLow(), 48'000, 2,
+        "stereo", "fltp", 128'000};
+    const MediaResolvedAudioRequest request;
+    auto target = MediaResolvedAudioTargetDecision::create(source, request, {});
+    if (!target) {
+        return ::media::Result<MediaProjectMpegTsResolvedPipelineFacts>::failure(
+            target.error());
+    }
+    auto audio = MediaResolvedAudioOutputPlan::create(
+        target.value(), std::nullopt, 1'024);
+    if (!audio) {
+        return ::media::Result<MediaProjectMpegTsResolvedPipelineFacts>::failure(
+            audio.error());
+    }
+    return ::media::Result<MediaProjectMpegTsResolvedPipelineFacts>::success(
+        MediaProjectMpegTsResolvedPipelineFacts{
+            "h264", MediaEncodedPacketLayout::lengthPrefixed(4).value(),
+            std::move(audio).value()});
 }
 
-bool decodeBoth(const std::filesystem::path& path, bool& decoderUnavailable)
+::media::Result<MediaAvSyncPlan> synchronizationPlan()
 {
-    AVFormatContext* raw = nullptr;
-    if (avformat_open_input(&raw, path.string().c_str(), nullptr, nullptr) < 0) return false;
-    FormatPtr input(raw);
-    if (avformat_find_stream_info(input.get(), nullptr) < 0) return false;
-    const int videoIndex = firstStreamIndex(*input, AVMEDIA_TYPE_VIDEO);
-    const int audioIndex = firstStreamIndex(*input, AVMEDIA_TYPE_AUDIO);
-    if (videoIndex < 0 || audioIndex < 0) return false;
-    auto videoOpen = openDecoder(*input->streams[videoIndex]);
-    auto audioOpen = openDecoder(*input->streams[audioIndex]);
-    if (videoOpen.unsupported || audioOpen.unsupported) {
-        decoderUnavailable = true;
-        return false;
+    MediaRealtimeRtpTranscodeRequest request;
+    request.mediaId = "scheduled-ts-decode";
+    request.input.type = RealtimeInputType::MpegTsUdp;
+    request.input.streamLayout = RealtimeInputStreamLayout::MuxedTransportStream;
+    request.input.url = "udp://127.0.0.1:5000";
+    request.output.streamLayout =
+        RealtimeOutputStreamLayout::MuxedTransportStream;
+    request.output.url = "udp://127.0.0.1:7000";
+    request.parameters.execution.includeAudio = true;
+    request.parameters.audio.sampleRate = 48'000;
+    request.parameters.queues.packet = 256;
+    request.avSyncStartup.maximumVideoUnitBytes = 4 * 1024 * 1024;
+    request.avSyncStartup.maximumAudioUnitBytes = 1024 * 1024;
+    request.avSyncStartup.maximumGap = milliseconds(40);
+    const auto selected = selectedTsProgram();
+    auto facts = resolvedPipelineFacts();
+    if (!facts) {
+        return ::media::Result<MediaAvSyncPlan>::failure(facts.error());
     }
-    if (!videoOpen.context || !audioOpen.context) return false;
-    auto video = std::move(videoOpen.context);
-    auto audio = std::move(audioOpen.context);
-    FramePtr frame(av_frame_alloc());
-    if (!frame) return false;
-    bool videoFrame = false;
-    bool audioFrame = false;
-    AVPacket packet{};
-    int readResult = 0;
-    while ((readResult = av_read_frame(input.get(), &packet)) >= 0) {
-        AVCodecContext* decoder = packet.stream_index == videoIndex ? video.get()
-            : packet.stream_index == audioIndex ? audio.get() : nullptr;
-        if (decoder) {
-            bool& decoded = packet.stream_index == videoIndex ? videoFrame : audioFrame;
-            if (!submitPacket(*decoder, packet, *frame, decoded)) {
-                av_packet_unref(&packet);
-                return false;
-            }
-        }
-        av_packet_unref(&packet);
+    auto planned = MediaAvSyncPlanner::plan(
+        request, &selected, &facts.value());
+    if (!planned) {
+        return ::media::Result<MediaAvSyncPlan>::failure(planned.error());
     }
-    if (readResult != AVERROR_EOF) return false;
-    if (!flushDecoder(*video, *frame, videoFrame) ||
-        !flushDecoder(*audio, *frame, audioFrame)) return false;
-    return videoFrame && audioFrame;
+    auto result = std::move(planned).value();
+    if (!result.topology ||
+        *result.topology != MediaAvSyncTopology::MpegTsToMpegTs ||
+        !result.ts || !result.ts->outputMux) {
+        return ::media::Result<MediaAvSyncPlan>::failure(
+            ::media::ErrorInfo::internalError(
+                "scheduled TS decode fixture requires complete MpegTsToMpegTs output"));
+    }
+    result.audioServo.commandLeadNs = milliseconds(1'500);
+    result.audioServo.compensationWindowNs = milliseconds(2'000);
+    result.audioServo.frequencyFilterTimeConstantNs = milliseconds(5'000);
+    return ::media::Result<MediaAvSyncPlan>::success(std::move(result));
+}
+
+::media::Result<MediaRealtimeAvSyncRuntimePlan> runtimePlan(
+    const std::filesystem::path& output,
+    MediaAvSyncPlan synchronization)
+{
+    MediaGraphQueueParameters queues;
+    queues.metadata = 8;
+    queues.packet = 512;
+    queues.frame = 128;
+    queues.mux = 512;
+    MediaRealtimeAvSyncAssemblyPlan assembly{
+        MediaMpegTsInputClockAssemblyPlan{},
+        MediaInitialGenerationPolicy::FirstLockedOnlyFailOnChange,
+        MediaClockEvidencePolicy::RequireLockedFailOnDegradedOrReacquire,
+        {"video", MediaPacketDurationPlan{true},
+         MediaDecodeOrderMode::ReorderedRequiresDecodeTime, 4,
+         milliseconds(1'000)},
+        {"audio", MediaPacketDurationPlan{true},
+         MediaDecodeOrderMode::PresentationOrderNoReorder, 4,
+         milliseconds(1'000)},
+        milliseconds(20)};
+    if (!synchronization.ts || !synchronization.ts->outputMux) {
+        return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
+            ::media::ErrorInfo::internalError(
+                "scheduled TS runtime requires planner-owned output mux"));
+    }
+    auto outputPlan = MediaProjectMpegTsOutputPlan::accept(
+        48'000, *synchronization.ts->outputMux);
+    if (!outputPlan) {
+        return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
+            outputPlan.error());
+    }
+    return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::success(
+        MediaRealtimeAvSyncRuntimePlan{
+        MediaAvSyncGroupKey("scheduled-ts-decode"), std::move(synchronization),
+        std::move(assembly), MediaAvSyncOutputAdapterKind::ProjectMpegTs,
+        MediaProjectMpegTsRuntimeOutputPlan{
+            output.string(), MediaOutputResourceKind::ByteSink,
+            MediaMuxSessionKind::ProjectMpegTs,
+            std::move(outputPlan).value()},
+        queues, MediaGraphBuildSupport::blockingEdgePolicySet(queues), {},
+        MediaAvGenerationTransitionPlanner::plan(
+            MediaAvSyncOutputAdapterKind::ProjectMpegTs,
+            milliseconds(1'000), milliseconds(500)),
+        {}, {}});
+}
+
+::media::Status verifySampleExtractorContract(
+    const std::filesystem::path& path,
+    const MediaTsMuxPlan& plan)
+{
+    auto annexBParameters = plan.parameters();
+    annexBParameters.h264InputLayout = MediaTsH264InputLayout::AnnexB;
+    auto annexBPlan = MediaTsMuxPlan::create(std::move(annexBParameters));
+    if (!annexBPlan) return ::media::Status::failure(annexBPlan.error());
+    auto unsupported = ScheduledMpegTsDecodeSampleFixture::load(
+        path, annexBPlan.value());
+    if (unsupported ||
+        unsupported.error().code != ::media::ErrorCode::Unsupported) {
+        return ::media::Status::failure(::media::ErrorInfo::internalError(
+            "scheduled MPEG-TS extractor must reject a non-length-prefixed planner layout"));
+    }
+
+    auto mismatchedParameters = plan.parameters();
+    mismatchedParameters.h264NalLengthBytes = 3;
+    auto mismatchedPlan = MediaTsMuxPlan::create(
+        std::move(mismatchedParameters));
+    if (!mismatchedPlan) {
+        return ::media::Status::failure(mismatchedPlan.error());
+    }
+    auto mismatched = ScheduledMpegTsDecodeSampleFixture::load(
+        path, mismatchedPlan.value());
+    if (mismatched ||
+        mismatched.error().code != ::media::ErrorCode::InvalidArgument) {
+        return ::media::Status::failure(::media::ErrorInfo::internalError(
+            "scheduled MPEG-TS extractor must enforce the planner-declared NAL length"));
+    }
+    return ::media::Status::success();
 }
 
 } // namespace
 
 int main()
 {
-    const std::filesystem::path sample =
-        std::filesystem::path(MEDIA_TRANSCODE_SOURCE_DIR) /
-        "tests/samples/sample_h264_aac_2560x1440.mp4";
-    if (!std::filesystem::exists(sample)) return 77;
-    AVFormatContext* raw = nullptr;
-    if (avformat_open_input(&raw, sample.string().c_str(), nullptr, nullptr) < 0) return 1;
-    FormatPtr input(raw);
-    if (avformat_find_stream_info(input.get(), nullptr) < 0) return 1;
-    const int videoIndex = firstStreamIndex(*input, AVMEDIA_TYPE_VIDEO);
-    const int audioIndex = firstStreamIndex(*input, AVMEDIA_TYPE_AUDIO);
-    if (videoIndex < 0 || audioIndex < 0) return 1;
-    const auto& videoParameters = *input->streams[videoIndex]->codecpar;
-    const auto& audioParameters = *input->streams[audioIndex]->codecpar;
-    if (videoParameters.codec_id != AV_CODEC_ID_H264 ||
-        audioParameters.codec_id != AV_CODEC_ID_AAC) return 1;
-    auto avccConfig = media_transcode::test::MediaTsSampleStreamConfigFixture::parseAvcc(
-        std::span<const std::uint8_t>(
-            videoParameters.extradata,
-            static_cast<std::size_t>(videoParameters.extradata_size)));
-    auto frequencyIndex =
-        media_transcode::test::MediaTsSampleStreamConfigFixture::aacSamplingFrequencyIndex(
-            audioParameters.sample_rate);
-#if LIBAVUTIL_VERSION_MAJOR >= 57
-    const int channels = audioParameters.ch_layout.nb_channels;
-#else
-    const int channels = audioParameters.channels;
-#endif
-    if (!avccConfig || !frequencyIndex || channels < 1 || channels > 7) return 1;
-
-    std::vector<InputUnit> units;
-    AVPacket packet{};
-    int readResult = 0;
-    while (units.size() < 240 &&
-           (readResult = av_read_frame(input.get(), &packet)) >= 0) {
-        if ((packet.stream_index == videoIndex || packet.stream_index == audioIndex) &&
-            packet.pts != AV_NOPTS_VALUE && packet.dts != AV_NOPTS_VALUE && packet.size > 0) {
-            const auto timeBase = input->streams[packet.stream_index]->time_base;
-            auto pts = MediaRunningTime::checkedFromTicks(
-                packet.pts, timeBase.num, timeBase.den);
-            auto dts = MediaRunningTime::checkedFromTicks(
-                packet.dts, timeBase.num, timeBase.den);
-            if (!pts || !dts) {
-                av_packet_unref(&packet);
-                return 1;
-            }
-            units.push_back(InputUnit{
-                std::vector<std::uint8_t>(packet.data, packet.data + packet.size),
-                packet.stream_index == videoIndex ? MediaScheduledStream::Video
-                                                  : MediaScheduledStream::Audio,
-                pts.value().nanoseconds(), dts.value().nanoseconds(),
-                packet.stream_index == videoIndex && (packet.flags & AV_PKT_FLAG_KEY) != 0});
-        }
-        av_packet_unref(&packet);
+    auto classified = verifyExitClassification();
+    if (!classified) {
+        return ScheduledRtpDecodePrerequisites::pipelineFailureExit(
+            classified.error());
     }
-    if (units.size() < 240 && readResult != AVERROR_EOF) return 1;
-    if (units.empty() ||
-        std::none_of(units.begin(), units.end(), [](const auto& unit) {
-            return unit.stream == MediaScheduledStream::Video; }) ||
-        std::none_of(units.begin(), units.end(), [](const auto& unit) {
-            return unit.stream == MediaScheduledStream::Audio; })) return 1;
-    const auto firstKeyframe = std::find_if(
-        units.begin(), units.end(), [](const auto& unit) {
-            return unit.stream == MediaScheduledStream::Video && unit.randomAccess;
-        });
-    if (firstKeyframe == units.end()) return 1;
-    const std::int64_t keyframeDts = firstKeyframe->dtsNs;
-    std::erase_if(units, [keyframeDts](const auto& unit) {
-        return unit.dtsNs < keyframeDts;
-    });
-    if (std::none_of(units.begin(), units.end(), [](const auto& unit) {
-            return unit.stream == MediaScheduledStream::Audio;
-        })) return 1;
-    std::stable_sort(units.begin(), units.end(), [](const auto& lhs, const auto& rhs) {
-        return lhs.dtsNs < rhs.dtsNs;
-    });
-    const std::int64_t firstDts = units.front().dtsNs;
-    TemporaryFile output{
-        std::filesystem::temp_directory_path() /
-        ("media_transcode_project_ts_" + std::to_string(
-            std::chrono::steady_clock::now().time_since_epoch().count()) + ".ts")};
-    auto sink = std::make_unique<FileByteSink>(output.path);
-    if (!sink->open()) return 1;
-    auto sampleVideoConfig = std::move(avccConfig).value();
-    auto muxPlan = makePlan(
-        sampleVideoConfig.nalLengthBytes, frequencyIndex.value(), channels);
-    auto videoConfig = MediaTsMaterializedVideoConfig::create(
-        MediaTsH264InputLayout::LengthPrefixed,
-        sampleVideoConfig.nalLengthBytes,
-        std::move(sampleVideoConfig.sequenceParameterSet),
-        std::move(sampleVideoConfig.pictureParameterSet));
-    auto audioConfig = MediaTsMaterializedAudioConfig::create(
-        2, frequencyIndex.value(),
-        static_cast<std::uint8_t>(channels));
-    if (!videoConfig || !audioConfig) return 1;
-    auto session = MediaTsMuxSession::create(MediaTsMuxSession::Binding{
-        muxPlan,
-        MediaPlaybackEpoch{MediaRunningTime::fromNanoseconds(0),
-                           MediaRunningTime::fromNanoseconds(0), 1},
-        std::move(videoConfig).value(),
-        std::move(audioConfig).value(),
-        std::move(sink)});
-    if (!session || !session.value()->start(MediaRunningTime::fromNanoseconds(0))) return 1;
-    for (const auto& unit : units) {
-        auto dispatchDelta = MediaRunningTime::fromNanoseconds(unit.dtsNs).checkedSubtract(
-            MediaRunningTime::fromNanoseconds(firstDts));
-        auto presentationDelta = MediaRunningTime::fromNanoseconds(unit.ptsNs).checkedSubtract(
-            MediaRunningTime::fromNanoseconds(firstDts));
-        if (!dispatchDelta || !presentationDelta) return 1;
-        auto dispatch = dispatchDelta.value().checkedAdd(
-            MediaRunningTime::fromNanoseconds(200'000'000));
-        auto presentation = presentationDelta.value().checkedAdd(
-            MediaRunningTime::fromNanoseconds(200'000'000));
-        auto emission = dispatchDelta.value().checkedAdd(
-            MediaRunningTime::fromNanoseconds(100'000'000));
-        if (!dispatch || !presentation || !emission) return 1;
-        if (!session.value()->writeAccessUnit(MediaTsAccessUnitView{
-                unit.bytes, unit.stream, 1, presentation.value(), dispatch.value(),
-                emission.value(), unit.randomAccess})) return 1;
+    std::cerr << "[scheduled-ts] checking prerequisites\n";
+    auto prerequisites = ScheduledRtpDecodePrerequisites::check(
+        ffmpegPath(), samplePath());
+    if (!prerequisites) {
+        return ScheduledRtpDecodePrerequisites::externalFailureExit(
+            prerequisites.error());
     }
-    if (!session.value()->finish()) return 1;
-    bool decoderUnavailable = false;
-    const bool decoded = decodeBoth(output.path, decoderUnavailable);
-    if (decoderUnavailable) return 77;
-    if (!decoded) {
-        std::cerr << "project-owned MPEG-TS decode probe did not decode both streams\n";
-        return 1;
+    std::cerr << "[scheduled-ts] preparing 48 kHz AAC-LC sample\n";
+    auto prepared = ScheduledMpegTsDecodeSamplePreparer::prepare(
+        ffmpegPath(), samplePath());
+    if (!prepared) {
+        return ScheduledRtpDecodePrerequisites::pipelineFailureExit(
+            prepared.error());
     }
+    std::cerr << "[scheduled-ts] loading H264/AAC sample access units\n";
+    TemporaryOutput output;
+    auto synchronization = synchronizationPlan();
+    if (!synchronization) {
+        return ScheduledRtpDecodePrerequisites::pipelineFailureExit(
+            synchronization.error());
+    }
+    const MediaTsMuxPlan transport =
+        *synchronization.value().ts->outputMux;
+    if (auto contract = verifySampleExtractorContract(
+            prepared.value().path(), transport); !contract) {
+        return ScheduledRtpDecodePrerequisites::pipelineFailureExit(
+            contract.error());
+    }
+    auto sample = ScheduledMpegTsDecodeSampleFixture::load(
+        prepared.value().path(), transport);
+    if (!sample) {
+        return ScheduledRtpDecodePrerequisites::pipelineFailureExit(
+            sample.error());
+    }
+    auto fixture = std::move(sample).value();
+    const MediaPlaybackEpoch epoch{
+        milliseconds(10'000), milliseconds(2'000), 1};
+    auto plan = runtimePlan(
+        output.path(), std::move(synchronization).value());
+    if (!plan) {
+        return ScheduledRtpDecodePrerequisites::pipelineFailureExit(
+            plan.error());
+    }
+    std::cerr << "[scheduled-ts] driving production scheduled output graph\n";
+    auto written = ScheduledMpegTsOutputIntegrationRuntime::write(
+        plan.value(), epoch, fixture);
+    if (!written) {
+        return ScheduledRtpDecodePrerequisites::pipelineFailureExit(
+            written.error());
+    }
+    std::error_code sizeError;
+    const auto outputBytes = std::filesystem::file_size(
+        output.path(), sizeError);
+    std::cerr << "[scheduled-ts] artifact path=" << output.path().string()
+              << " bytes="
+              << (sizeError ? std::string("unavailable:") + sizeError.message()
+                            : std::to_string(outputBytes))
+              << '\n';
+    std::cerr << "[scheduled-ts] verifying MPEG-TS artifact and decoding EOF\n";
+    auto verified = MpegTsOutputArtifactVerifier::verify(
+        output.path(), transport, epoch, fixture);
+    if (!verified) {
+        return ScheduledRtpDecodePrerequisites::pipelineFailureExit(
+            verified.error());
+    }
+    std::cout << "scheduled project MPEG-TS production path passed: "
+                 "H264/AAC decode, PAT/PMT/PIDs, continuity, PCR, and epoch "
+                 "PTS/DTS verified\n";
     return 0;
 }

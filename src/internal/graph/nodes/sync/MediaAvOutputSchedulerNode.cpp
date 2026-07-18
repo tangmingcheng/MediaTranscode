@@ -48,6 +48,11 @@ MediaNodeKind MediaAvOutputSchedulerNode::staticKind() noexcept
         "av_scheduler.sync_group");
     if (!groupName) return ::media::Status::failure(groupName.error());
     m_groupKey.emplace(std::move(groupName).value());
+    auto transportLead = requiredNonNegativeIntNodeOption(
+        nodeOptions(context), "MediaAvOutputSchedulerNode",
+        "av_scheduler.transport_lead_ns");
+    if (!transportLead) return ::media::Status::failure(transportLead.error());
+    m_transportLead = MediaRunningTime::fromNanoseconds(transportLead.value());
     m_group = context.findAvSyncGroup(*m_groupKey);
     if (!m_group) return ::media::Status::failure(
         ::media::ErrorInfo::notInitialized(
@@ -404,6 +409,11 @@ MediaAvOutputSchedulerNode::processSelected(
 {
     auto now = m_group->clock()->now();
     if (!now) return ::media::Result<MediaNodeProcessResult>::failure(now.error());
+    auto decisionHorizon = now.value().checkedAdd(m_transportLead);
+    if (!decisionHorizon) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            decisionHorizon.error());
+    }
     auto target = m_group->mapCanonicalToMaster(m_videoHead->canonicalPresentation());
     if (!target) return ::media::Result<MediaNodeProcessResult>::failure(target.error());
     auto canonicalDispatch = m_videoHead->canonicalDispatchTime();
@@ -414,6 +424,10 @@ MediaAvOutputSchedulerNode::processSelected(
     auto dispatch = m_group->mapCanonicalToMaster(canonicalDispatch.value());
     if (!dispatch) {
         return ::media::Result<MediaNodeProcessResult>::failure(dispatch.error());
+    }
+    auto emit = dispatch.value().checkedSubtract(m_transportLead);
+    if (!emit) {
+        return ::media::Result<MediaNodeProcessResult>::failure(emit.error());
     }
     auto epoch = m_group->playbackEpoch();
     if (!epoch) return ::media::Result<MediaNodeProcessResult>::failure(epoch.error());
@@ -460,9 +474,11 @@ MediaAvOutputSchedulerNode::processSelected(
               dispatch.value(),
               target.value(),
               *m_lastDisplayedVideoMasterTime,
-              now.value(), epoch.value().generation, controllerSequence})
+              decisionHorizon.value(), epoch.value().generation,
+              controllerSequence})
         : m_videoController->update(MediaVideoFrameMeasurement{
-              dispatch.value(), target.value(), now.value(), epoch.value().generation,
+              dispatch.value(), target.value(), decisionHorizon.value(),
+              epoch.value().generation,
               controllerSequence,
               m_videoHead->canonical()->media()->isKeyFrame()});
     if (!decision) return ::media::Result<MediaNodeProcessResult>::failure(
@@ -473,9 +489,14 @@ MediaAvOutputSchedulerNode::processSelected(
                 ::media::ErrorInfo::internalError("Hold decision has no deadline"));
         }
         m_heldControllerSequence = controllerSequence;
+        auto recheck = decision.value().recheckAtMasterTime()->checkedSubtract(
+            m_transportLead);
+        if (!recheck) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                recheck.error());
+        }
         return ::media::Result<MediaNodeProcessResult>::success(
-            MediaNodeProcessResult::waitingUntil(
-                *m_groupKey, *decision.value().recheckAtMasterTime()));
+            MediaNodeProcessResult::waitingUntil(*m_groupKey, recheck.value()));
     }
     m_heldControllerSequence.reset();
     const auto kind = decision.value().kind();
@@ -502,9 +523,10 @@ MediaAvOutputSchedulerNode::processSelected(
     auto prepared = repeat
         ? MediaAvScheduledOutputBuilder::repeatedVideo(
               *repeat, m_lastDisplayedVideoClone,
-              *m_lastDisplayedVideoSequence, target.value(), dispatch.value(), kind)
+              *m_lastDisplayedVideoSequence, target.value(), dispatch.value(),
+              emit.value(), kind)
         : MediaAvScheduledOutputBuilder::canonicalVideo(
-              *m_videoHead, target.value(), dispatch.value(), kind);
+              *m_videoHead, target.value(), dispatch.value(), emit.value(), kind);
     if (!prepared) {
         return ::media::Result<MediaNodeProcessResult>::failure(prepared.error());
     }
@@ -549,11 +571,15 @@ MediaAvOutputSchedulerNode::processSelected(
     if (!dispatch) {
         return ::media::Result<MediaNodeProcessResult>::failure(dispatch.error());
     }
+    auto emit = dispatch.value().checkedSubtract(m_transportLead);
+    if (!emit) {
+        return ::media::Result<MediaNodeProcessResult>::failure(emit.error());
+    }
     auto now = m_group->clock()->now();
     if (!now) return ::media::Result<MediaNodeProcessResult>::failure(now.error());
-    if (dispatch.value() > now.value()) {
+    if (emit.value() > now.value()) {
         return ::media::Result<MediaNodeProcessResult>::success(
-            MediaNodeProcessResult::waitingUntil(*m_groupKey, dispatch.value()));
+            MediaNodeProcessResult::waitingUntil(*m_groupKey, emit.value()));
     }
     auto epoch = m_group->playbackEpoch();
     if (!epoch) {
@@ -561,7 +587,7 @@ MediaAvOutputSchedulerNode::processSelected(
             epoch.error());
     }
     auto output = MediaAvScheduledOutputBuilder::audio(
-        *unit, target.value(), dispatch.value());
+        *unit, target.value(), dispatch.value(), emit.value());
     if (!output) {
         return ::media::Result<MediaNodeProcessResult>::failure(output.error());
     }

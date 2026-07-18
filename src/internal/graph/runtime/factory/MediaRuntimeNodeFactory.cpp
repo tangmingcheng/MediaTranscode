@@ -30,6 +30,9 @@
 #include "internal/graph/nodes/output/MediaDualMediaSdpPublisherNode.h"
 #include "internal/graph/nodes/output/MediaScheduledRtpSenderNode.h"
 #include "internal/graph/nodes/output/MediaScheduledRtpSenderNodePlanCodec.h"
+#include "internal/graph/nodes/output/MediaProjectMpegTsPlanSourceNode.h"
+#include "internal/graph/nodes/output/MediaProjectMpegTsPlanSourceNodePlanCodec.h"
+#include "internal/graph/nodes/output/MediaScheduledTsAccessUnitAdapterNode.h"
 #include "internal/graph/nodes/packet/AvPacketStartBarrierNode.h"
 #include "internal/graph/nodes/packet/PacketNormalizeNode.h"
 #include "internal/graph/nodes/packet/PacketSourceConfigNode.h"
@@ -335,6 +338,31 @@ template <typename Node>
     case MediaNodeKind::ScheduledOutputRouter:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::make_unique<MediaScheduledOutputRouterNode>(node.id));
+    case MediaNodeKind::ProjectMpegTsPlanSource:
+    {
+        auto decoded = MediaProjectMpegTsPlanSourceNodePlanCodec::decode(node);
+        if (!decoded) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                decoded.error());
+        }
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+            std::make_unique<MediaProjectMpegTsPlanSourceNode>(
+                node.id, std::move(decoded.value().groupKey),
+                std::move(decoded.value().muxPlan)));
+    }
+    case MediaNodeKind::ScheduledTsAccessUnitAdapter:
+    {
+        auto group = requiredSyncGroup(
+            node, "MediaScheduledTsAccessUnitAdapterNode",
+            "scheduled_ts_adapter.sync_group");
+        if (!group) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                group.error());
+        }
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+            std::make_unique<MediaScheduledTsAccessUnitAdapterNode>(
+                node.id, std::move(group).value()));
+    }
     case MediaNodeKind::PacketMerge:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<PacketMergeNode>(node.id));
     case MediaNodeKind::FileMux:
@@ -510,6 +538,8 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::AudioDriftController:
     case MediaNodeKind::EncodedAudioCanonicalizer:
     case MediaNodeKind::ScheduledOutputRouter:
+    case MediaNodeKind::ProjectMpegTsPlanSource:
+    case MediaNodeKind::ScheduledTsAccessUnitAdapter:
     case MediaNodeKind::PacketMerge:
     case MediaNodeKind::FileMux:
     case MediaNodeKind::RtpMux:

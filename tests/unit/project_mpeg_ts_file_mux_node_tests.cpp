@@ -190,7 +190,7 @@ struct ProjectFileMuxHarness final {
     MediaNodeId videoPacketSource;
     MediaNodeId audioPacketSource;
     MediaAvSyncGroupKey group{"project-file-mux-group"};
-    MediaPlaybackEpoch epoch{ms(0), ms(1'000), 7};
+    MediaPlaybackEpoch epoch{ms(120), ms(1'000), 7};
     std::shared_ptr<ManualClock> clock =
         std::make_shared<ManualClock>(epoch.masterRelease);
     std::shared_ptr<SinkState> sink = std::make_shared<SinkState>();
@@ -379,14 +379,38 @@ const std::vector<std::uint8_t>& expectedMuxBytes()
         "47010120b710000007087e00ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
         "474102309f00ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff000001c000128080052100016271fff14c80015ffc010203";
     static const std::vector<std::uint8_t> bytes = [] {
-        std::vector<std::uint8_t> decoded;
-        decoded.reserve(fixedHex.size() / 2);
+        std::vector<std::uint8_t> reference;
+        reference.reserve(fixedHex.size() / 2);
         for (std::size_t index = 0; index < fixedHex.size(); index += 2) {
-            decoded.push_back(static_cast<std::uint8_t>(
+            reference.push_back(static_cast<std::uint8_t>(
                 (hexNibble(fixedHex[index]) << 4) |
                 hexNibble(fixedHex[index + 1])));
         }
-        return decoded;
+        // Scheduled A/Us are emitted before masterRelease. The explicit flush
+        // at 1050 ms then services exactly one due transport deadline, adding
+        // repeated PSI and the PCR anchored at masterRelease.
+        static constexpr std::array<std::size_t, 4> ExpectedPacketIndexes{
+            0, 1, 4, 6};
+        std::vector<std::uint8_t> expected;
+        expected.reserve(7 * 188);
+        const auto appendPacket = [&](std::size_t packetIndex) {
+            const auto first = reference.begin() + packetIndex * 188;
+            expected.insert(expected.end(), first, first + 188);
+        };
+        for (const std::size_t packetIndex : ExpectedPacketIndexes) {
+            appendPacket(packetIndex);
+        }
+        appendPacket(0);
+        expected[4 * 188 + 3] = 0x31;
+        appendPacket(1);
+        expected[5 * 188 + 3] = 0x31;
+        appendPacket(5);
+        static constexpr std::array<std::uint8_t, 6> MasterReleasePcr{
+            0x00, 0x00, 0x15, 0x18, 0x7e, 0x00};
+        for (std::size_t index = 0; index < MasterReleasePcr.size(); ++index) {
+            expected[6 * 188 + 6 + index] = MasterReleasePcr[index];
+        }
+        return expected;
     }();
     return bytes;
 }
@@ -398,28 +422,16 @@ void realNodeProducesExactBytesAndLifecycle(TestContext& ctx)
     bindInAsynchronousOrder(harness, ctx);
     EXPECT_EQ(ctx, harness.sink->bytes.size(), std::size_t{376});
 
-    auto due = harness.runtime->process(harness.execution);
-    EXPECT_TRUE(ctx, due);
-    if (due) EXPECT_EQ(ctx, due.value().state, MediaNodeProcessState::Progress);
-    harness.clock->value = ms(1'010);
-    auto waiting = harness.runtime->process(harness.execution);
-    EXPECT_TRUE(ctx, waiting);
-    if (waiting) {
-        EXPECT_EQ(ctx, waiting.value().state, MediaNodeProcessState::Waiting);
-        EXPECT_TRUE(ctx, waiting.value().deadlineWait.has_value());
-        if (waiting.value().deadlineWait) {
-            EXPECT_EQ(ctx, waiting.value().deadlineWait->syncGroup, harness.group);
-            EXPECT_EQ(ctx, waiting.value().deadlineWait->masterDeadline, ms(1'020));
-        }
-    }
-
+    // Production execution queues scheduled access units before the mux is
+    // polled for transport-only deadlines. Advancing transport maintenance
+    // first would intentionally make these earlier emissions invalid.
     EXPECT_TRUE(ctx, harness.push(
                          harness.videoPacketSource,
-                         accessUnit(MediaScheduledStream::Video, 7, ms(1'020))));
+                         accessUnit(MediaScheduledStream::Video, 7, ms(900))));
     processOne(harness, ctx);
     EXPECT_TRUE(ctx, harness.push(
                          harness.audioPacketSource,
-                         accessUnit(MediaScheduledStream::Audio, 7, ms(1'040))));
+                         accessUnit(MediaScheduledStream::Audio, 7, ms(920))));
     processOne(harness, ctx);
     harness.clock->value = ms(1'050);
     auto flush = FFmpegBufferFactory::makeFlush(MediaStreamKind::Control);
@@ -459,7 +471,7 @@ void realNodeProducesExactBytesAndLifecycle(TestContext& ctx)
     EXPECT_EQ(ctx, harness.sink->bytes, expectedMuxBytes());
 }
 
-void packetBeforeCompleteBindingIsTerminal(TestContext& ctx)
+void packetWaitsForCompleteBinding(TestContext& ctx)
 {
     ProjectFileMuxHarness harness;
     if (!harness.initialize(ctx)) return;
@@ -475,8 +487,13 @@ void packetBeforeCompleteBindingIsTerminal(TestContext& ctx)
     EXPECT_TRUE(ctx, harness.push(
                          harness.videoPacketSource,
                          accessUnit(MediaScheduledStream::Video, 7, ms(1'020))));
-    const auto failure = harness.runtime->process(harness.execution);
-    EXPECT_FALSE(ctx, failure);
+    const auto waiting = harness.runtime->process(harness.execution);
+    EXPECT_TRUE(ctx, waiting);
+    if (waiting) {
+        EXPECT_EQ(ctx, waiting.value().state, MediaNodeProcessState::Waiting);
+    }
+    EXPECT_EQ(ctx, harness.channel(harness.videoPacketSource)->size(),
+              std::size_t{1});
     EXPECT_EQ(ctx, harness.sink->bytes, before);
     EXPECT_TRUE(ctx, harness.sink->bytes.empty());
     harness.runtime->abort(harness.execution);
@@ -550,7 +567,7 @@ void abortClosesRealProjectSinkOnce(TestContext& ctx)
 void runProjectMpegTsFileMuxNodeTests(TestContext& ctx)
 {
     realNodeProducesExactBytesAndLifecycle(ctx);
-    packetBeforeCompleteBindingIsTerminal(ctx);
+    packetWaitsForCompleteBinding(ctx);
     invalidPacketContractsDoNotWritePes(ctx);
     duplicateAndWrongBindingsDoNotWritePes(ctx);
     abortClosesRealProjectSinkOnce(ctx);

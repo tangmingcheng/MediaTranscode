@@ -27,6 +27,7 @@ public:
                           const MediaBufferRef& buffer) override;
     ::media::Result<MediaMuxSessionPollResult> poll(
         MediaGraphExecutionContext& context) override;
+    bool bindingsReady() const noexcept override;
     ::media::Status flush(MediaGraphExecutionContext& context) override;
     ::media::Status finish(MediaGraphExecutionContext& context) override;
     void abort() noexcept override;
@@ -53,7 +54,6 @@ private:
     MediaBufferRef m_videoConfig;
     MediaBufferRef m_audioConfig;
     std::unique_ptr<MediaTsMuxSession> m_session;
-    std::optional<MediaRunningTime> m_nextDeadline;
     std::optional<::media::ErrorInfo> m_failure;
     bool m_resourcesClosed = false;
 };

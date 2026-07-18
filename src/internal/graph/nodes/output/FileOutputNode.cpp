@@ -83,13 +83,12 @@ MediaNodeKind FileOutputNode::staticKind() noexcept
         m_resource = std::move(resource).value();
     }
     auto pushStatus = pushToAllOutputs(context, m_resource);
-    if (!pushStatus) {
+    if (!pushStatus && pushStatus.error().code != ::media::ErrorCode::WouldBlock) {
         return processProgress(pushStatus);
     }
-
     m_resource.reset();
     m_emitted = true;
-    return processProgress();
+    return processProgress(std::move(pushStatus));
 }
 
 ::media::Result<MediaBufferRef> FileOutputNode::createResource(

@@ -22,11 +22,11 @@ public:
         MediaRunningTime nextDeadline;
         std::size_t packetsWritten;
     };
-
     static ::media::Result<std::unique_ptr<MediaTsMuxSession>> create(Binding binding);
     ~MediaTsMuxSession();
 
     ::media::Status start(MediaRunningTime emitOnMaster);
+    ::media::Result<AdvanceResult> poll(MediaRunningTime masterNow);
     ::media::Result<AdvanceResult> advanceThrough(MediaRunningTime emitOnMaster);
     ::media::Result<AdvanceResult> writeAccessUnit(
         const MediaTsAccessUnitView& unit);

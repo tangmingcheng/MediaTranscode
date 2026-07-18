@@ -17,6 +17,7 @@ public:
         const MediaAvSchedulerHead& head,
         MediaRunningTime presentationOnMaster,
         MediaRunningTime dispatchOnMaster,
+        MediaRunningTime emitOnMaster,
         MediaVideoSyncDecisionKind decision);
     static ::media::Result<MediaPreparedScheduledOutput> repeatedVideo(
         const MediaVideoRepeatRequestBuffer& repeat,
@@ -24,11 +25,13 @@ public:
         MediaSourceAccessUnitSequence lastDisplayedSequence,
         MediaRunningTime presentationOnMaster,
         MediaRunningTime dispatchOnMaster,
+        MediaRunningTime emitOnMaster,
         MediaVideoSyncDecisionKind decision);
     static ::media::Result<MediaBufferRef> audio(
         const MediaCanonicalAccessUnitBuffer& unit,
         MediaRunningTime presentationOnMaster,
-        MediaRunningTime dispatchOnMaster);
+        MediaRunningTime dispatchOnMaster,
+        MediaRunningTime emitOnMaster);
 };
 
 } // namespace media::ffmpeg::graph

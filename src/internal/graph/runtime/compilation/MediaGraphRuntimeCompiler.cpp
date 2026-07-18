@@ -65,16 +65,24 @@ public:
         "audio_drift_controller.sync_group";
     constexpr std::string_view ScheduledRtpSenderGroupKey =
         "scheduled_rtp.sync_group";
+    constexpr std::string_view ScheduledTsAdapterGroupKey =
+        "scheduled_ts_adapter.sync_group";
+    constexpr std::string_view ProjectMpegTsPlanGroupKey =
+        "project_mpeg_ts_plan.sync_group";
     std::unordered_set<std::uint64_t> bindingIds;
     std::size_t schedulerCount = 0;
     std::size_t binderCount = 0;
     std::size_t sequencerCount = 0;
     std::size_t scheduledRtpSenderCount = 0;
+    std::size_t scheduledTsAdapterCount = 0;
+    std::size_t projectMpegTsPlanSourceCount = 0;
     std::size_t dualMediaSdpPublisherCount = 0;
     std::size_t schedulerReferenceCount = 0;
     std::size_t binderReferenceCount = 0;
     std::size_t sequencerReferenceCount = 0;
     std::size_t scheduledRtpSenderReferenceCount = 0;
+    std::size_t scheduledTsAdapterReferenceCount = 0;
+    std::size_t projectMpegTsPlanSourceReferenceCount = 0;
     for (const auto& binding : executable.inputBindings) {
         if (!binding.nodeId.isValid() || !binding.prepared.valid() ||
             !bindingIds.insert(binding.nodeId.value).second) {
@@ -94,6 +102,10 @@ public:
             ++sequencerCount;
         if (node.kind == MediaNodeKind::ScheduledRtpSender)
             ++scheduledRtpSenderCount;
+        if (node.kind == MediaNodeKind::ScheduledTsAccessUnitAdapter)
+            ++scheduledTsAdapterCount;
+        if (node.kind == MediaNodeKind::ProjectMpegTsPlanSource)
+            ++projectMpegTsPlanSourceCount;
         if (node.kind == MediaNodeKind::DualMediaSdpPublisher)
             ++dualMediaSdpPublisherCount;
         if (node.kind == MediaNodeKind::RealtimeInput && !bindingIds.contains(node.id.value)) {
@@ -135,11 +147,19 @@ public:
             const bool scheduledRtpSenderConsumer =
                 node.kind == MediaNodeKind::ScheduledRtpSender &&
                 key == ScheduledRtpSenderGroupKey;
+            const bool scheduledTsAdapterConsumer =
+                node.kind == MediaNodeKind::ScheduledTsAccessUnitAdapter &&
+                key == ScheduledTsAdapterGroupKey;
+            const bool projectMpegTsPlanSourceConsumer =
+                node.kind == MediaNodeKind::ProjectMpegTsPlanSource &&
+                key == ProjectMpegTsPlanGroupKey;
             if (!schedulerConsumer && !binderConsumer &&
                 !startupClockConsumer && !sequencerConsumer &&
                 !rtpBinderConsumer && !initialGateConsumer &&
                 !coordinatorConsumer && !audioDriftControllerConsumer &&
-                !scheduledRtpSenderConsumer) {
+                !scheduledRtpSenderConsumer &&
+                !scheduledTsAdapterConsumer &&
+                !projectMpegTsPlanSourceConsumer) {
                 return ::media::Status::failure(
                     ::media::ErrorInfo::invalidArgument(
                         "MediaGraphRuntime found an unsupported A/V sync group consumer"));
@@ -149,6 +169,10 @@ public:
             if (sequencerConsumer) ++sequencerReferenceCount;
             if (scheduledRtpSenderConsumer)
                 ++scheduledRtpSenderReferenceCount;
+            if (scheduledTsAdapterConsumer)
+                ++scheduledTsAdapterReferenceCount;
+            if (projectMpegTsPlanSourceConsumer)
+                ++projectMpegTsPlanSourceReferenceCount;
             if (value.empty() || !executable.avSyncBinding) {
                 return ::media::Status::failure(
                     ::media::ErrorInfo::notInitialized(
@@ -188,9 +212,22 @@ public:
                 ::media::ErrorInfo::notInitialized(
                     "MediaGraphRuntime scheduled RTP output requires exactly two injected senders and one SDP publisher"));
         }
+        if (scheduledTsAdapterReferenceCount != scheduledTsAdapterCount) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "MediaGraphRuntime scheduled MPEG-TS adapters require their exact planned sync group"));
+        }
+        if (projectMpegTsPlanSourceReferenceCount !=
+            projectMpegTsPlanSourceCount) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "MediaGraphRuntime project MPEG-TS plan sources require their exact planned sync group"));
+        }
     } else if (schedulerCount != 0 || binderCount != 0 ||
                sequencerCount != 0 || scheduledRtpSenderCount != 0 ||
-               dualMediaSdpPublisherCount != 0) {
+               dualMediaSdpPublisherCount != 0 ||
+               scheduledTsAdapterCount != 0 ||
+               projectMpegTsPlanSourceCount != 0) {
         return ::media::Status::failure(::media::ErrorInfo::notInitialized(
             "Synchronized runtime nodes require an A/V sync binding"));
     }

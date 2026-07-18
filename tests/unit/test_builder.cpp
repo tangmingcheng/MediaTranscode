@@ -431,7 +431,7 @@ void testFileMuxSessionKindIsExplicit(TestContext& ctx)
         EXPECT_TRUE(ctx, packet != nullptr);
         if (resource) EXPECT_EQ(ctx, resource->payloadKind, MediaPayloadKind::OutputByteSink);
         if (planPort) EXPECT_EQ(ctx, planPort->payloadKind, MediaPayloadKind::TsMuxRuntimePlan);
-        if (codec) EXPECT_EQ(ctx, codec->payloadKind, MediaPayloadKind::CodecParameters);
+        if (codec) EXPECT_EQ(ctx, codec->payloadKind, MediaPayloadKind::CodecContext);
         if (packet) EXPECT_EQ(ctx, packet->payloadKind, MediaPayloadKind::TsAccessUnit);
     }
 }

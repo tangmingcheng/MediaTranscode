@@ -85,7 +85,7 @@ MediaAvSyncResult<MediaVideoSyncDecision> MediaVideoSyncController::updateFrame(
     }
 
     auto presentationPhase = measurement.targetPresentationOnMaster.checkedSubtract(
-        measurement.masterNow);
+        measurement.decisionHorizonOnMaster);
     if (!presentationPhase) {
         return MediaAvSyncResult<MediaVideoSyncDecision>::failure(
             error(MediaAvSyncErrorCode::TimeOverflow,
@@ -95,7 +95,7 @@ MediaAvSyncResult<MediaVideoSyncDecision> MediaVideoSyncController::updateFrame(
                   presentationPhase.error().message.c_str()));
     }
     auto dispatchPhase = measurement.dispatchOnMaster.checkedSubtract(
-        measurement.masterNow);
+        measurement.decisionHorizonOnMaster);
     if (!dispatchPhase) {
         return MediaAvSyncResult<MediaVideoSyncDecision>::failure(
             error(MediaAvSyncErrorCode::TimeOverflow,
@@ -205,7 +205,7 @@ MediaAvSyncResult<MediaVideoSyncDecision> MediaVideoSyncController::updateRepeat
 
 
     auto presentationPhase = request.repeatPresentationOnMaster.checkedSubtract(
-        request.masterNow);
+        request.decisionHorizonOnMaster);
     if (!presentationPhase) {
         return MediaAvSyncResult<MediaVideoSyncDecision>::failure(
             error(MediaAvSyncErrorCode::TimeOverflow,
@@ -215,7 +215,7 @@ MediaAvSyncResult<MediaVideoSyncDecision> MediaVideoSyncController::updateRepeat
                   presentationPhase.error().message.c_str()));
     }
     auto dispatchPhase = request.repeatDispatchOnMaster.checkedSubtract(
-        request.masterNow);
+        request.decisionHorizonOnMaster);
     if (!dispatchPhase) {
         return MediaAvSyncResult<MediaVideoSyncDecision>::failure(
             error(MediaAvSyncErrorCode::TimeOverflow,

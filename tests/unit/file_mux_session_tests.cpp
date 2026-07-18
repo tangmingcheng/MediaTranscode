@@ -37,13 +37,20 @@ public:
     ::media::Status bindResource(MediaGraphExecutionContext&, const MediaBufferRef&) override
     {
         m_trace->calls.emplace_back("resource");
+        m_resourceBound = true;
         return ::media::Status::success();
     }
 
     ::media::Status bindStreamConfig(MediaGraphExecutionContext&, const MediaBufferRef&) override
     {
         m_trace->calls.emplace_back("config");
+        m_configBound = true;
         return ::media::Status::success();
+    }
+
+    bool bindingsReady() const noexcept override
+    {
+        return m_resourceBound && m_configBound;
     }
 
     ::media::Status write(MediaGraphExecutionContext&, const MediaBufferRef&) override
@@ -79,6 +86,8 @@ public:
 
 private:
     std::shared_ptr<SessionTrace> m_trace;
+    bool m_resourceBound = false;
+    bool m_configBound = false;
 };
 
 class TraceMuxSessionFactory final : public MediaMuxSessionFactory {
@@ -164,6 +173,17 @@ struct FileMuxHarness final {
         execution.findInputChannel(mux, port)->close();
     }
 };
+
+bool bindRequiredInputs(FileMuxHarness& harness, TestContext& ctx)
+{
+    EXPECT_TRUE(ctx, harness.push(
+        "resource", testBuffer(MediaStreamKind::Metadata)));
+    EXPECT_TRUE(ctx, harness.runtime->process(harness.execution));
+    EXPECT_TRUE(ctx, harness.push(
+        "codec", testBuffer(MediaStreamKind::Video)));
+    EXPECT_TRUE(ctx, harness.runtime->process(harness.execution));
+    return harness.trace->calls.size() >= 3;
+}
 
 void testFactoryFailsClosed(TestContext& ctx)
 {
@@ -348,13 +368,15 @@ void testNodeMapsPollResult(TestContext& ctx)
 {
     FileMuxHarness harness;
     if (!harness.initialize(ctx)) return;
-    harness.trace->pollResult.progressed = true;
+    if (!bindRequiredInputs(harness, ctx)) return;
+    const MediaAvSyncGroupKey group("mux-group");
+    const MediaRunningTime deadline = MediaRunningTime::fromNanoseconds(1234);
+    harness.trace->pollResult = {
+        true, MediaNodeProcessResult::DeadlineWait{group, deadline}};
     auto progress = harness.runtime->process(harness.execution);
     EXPECT_TRUE(ctx, progress);
     if (progress) EXPECT_EQ(ctx, progress.value().state, MediaNodeProcessState::Progress);
 
-    const MediaAvSyncGroupKey group("mux-group");
-    const MediaRunningTime deadline = MediaRunningTime::fromNanoseconds(1234);
     harness.trace->pollResult = {false, MediaNodeProcessResult::DeadlineWait{group, deadline}};
     auto waiting = harness.runtime->process(harness.execution);
     EXPECT_TRUE(ctx, waiting);
@@ -368,29 +390,24 @@ void testNodeMapsPollResult(TestContext& ctx)
     }
 }
 
-void testNodeDefersFinishUntilMetadataInputsClose(TestContext& ctx)
+void testNodeFinishesOnPacketEofWhileBindingsRemainOpen(TestContext& ctx)
 {
     FileMuxHarness harness;
     if (!harness.initialize(ctx)) return;
+    if (!bindRequiredInputs(harness, ctx)) return;
     auto eof = FFmpegBufferFactory::makeEof(MediaStreamKind::Control);
     EXPECT_TRUE(ctx, eof);
     if (!eof) return;
     EXPECT_TRUE(ctx, harness.push("packet", std::move(eof).value()));
-    auto packetFinished = harness.runtime->process(harness.execution);
-    EXPECT_TRUE(ctx, packetFinished);
-    if (packetFinished) {
-        EXPECT_EQ(ctx, packetFinished.value().state, MediaNodeProcessState::Progress);
+    auto finished = harness.runtime->process(harness.execution);
+    EXPECT_TRUE(ctx, finished);
+    if (finished) {
+        EXPECT_EQ(ctx, finished.value().state, MediaNodeProcessState::Finished);
     }
-    EXPECT_TRUE(ctx, harness.trace->calls.empty() ||
-        harness.trace->calls.back() != "finish");
-
-    harness.close("resource");
-    harness.close("codec");
-    auto allFinished = harness.runtime->process(harness.execution);
-    EXPECT_TRUE(ctx, allFinished);
-    if (allFinished) {
-        EXPECT_EQ(ctx, allFinished.value().state, MediaNodeProcessState::Finished);
-    }
+    EXPECT_FALSE(ctx, harness.execution.findInputChannel(
+                          harness.mux, "resource")->closed());
+    EXPECT_FALSE(ctx, harness.execution.findInputChannel(
+                          harness.mux, "codec")->closed());
     EXPECT_EQ(ctx, harness.trace->calls.back(), std::string("finish"));
 }
 
@@ -398,6 +415,7 @@ void testNodePreservesFirstFailureAndAbortsOnce(TestContext& ctx)
 {
     FileMuxHarness harness;
     if (!harness.initialize(ctx)) return;
+    if (!bindRequiredInputs(harness, ctx)) return;
     harness.trace->writeFailure = ::media::ErrorInfo::ioFailure("first write failure");
     EXPECT_TRUE(ctx, harness.push("packet", testBuffer(MediaStreamKind::Video)));
     auto first = harness.runtime->process(harness.execution);
@@ -413,6 +431,57 @@ void testNodePreservesFirstFailureAndAbortsOnce(TestContext& ctx)
     EXPECT_EQ(ctx, aborts, static_cast<std::size_t>(1));
 }
 
+void testNodeRejectsBindingEofBeforePayload(TestContext& ctx)
+{
+    FileMuxHarness harness;
+    if (!harness.initialize(ctx)) return;
+    auto eof = FFmpegBufferFactory::makeEof(MediaStreamKind::Metadata);
+    EXPECT_TRUE(ctx, eof);
+    if (!eof) return;
+    EXPECT_TRUE(ctx, harness.push("resource", std::move(eof).value()));
+    auto result = harness.runtime->process(harness.execution);
+    EXPECT_FALSE(ctx, result);
+    if (!result) {
+        EXPECT_TRUE(ctx, result.error().message.find(
+                             "resource binding channel reached EOF") !=
+                             std::string::npos);
+    }
+}
+
+void testNodeRejectsClosedBindingBeforePayload(TestContext& ctx)
+{
+    FileMuxHarness harness;
+    if (!harness.initialize(ctx)) return;
+    harness.close("codec");
+    auto result = harness.runtime->process(harness.execution);
+    EXPECT_FALSE(ctx, result);
+    if (!result) {
+        EXPECT_TRUE(ctx, result.error().message.find(
+                             "codec binding channel closed") !=
+                             std::string::npos);
+    }
+}
+
+void testNodeAcceptsBindingCloseAfterSuccessfulPayload(TestContext& ctx)
+{
+    FileMuxHarness harness;
+    if (!harness.initialize(ctx)) return;
+    EXPECT_TRUE(ctx, harness.push(
+        "resource", testBuffer(MediaStreamKind::Metadata)));
+    EXPECT_TRUE(ctx, harness.runtime->process(harness.execution));
+    harness.close("resource");
+    auto waiting = harness.runtime->process(harness.execution);
+    EXPECT_TRUE(ctx, waiting);
+    if (waiting) {
+        EXPECT_EQ(ctx, waiting.value().state, MediaNodeProcessState::Waiting);
+    }
+    EXPECT_TRUE(ctx, harness.push(
+        "codec", testBuffer(MediaStreamKind::Video)));
+    EXPECT_TRUE(ctx, harness.runtime->process(harness.execution));
+    const std::vector<std::string> expected{"create", "resource", "config"};
+    EXPECT_EQ(ctx, harness.trace->calls, expected);
+}
+
 } // namespace
 
 void runFileMuxSessionTests(TestContext& ctx)
@@ -424,6 +493,9 @@ void runFileMuxSessionTests(TestContext& ctx)
     testFfmpegSessionRejectsUnplannedStreamBeforeContextMutation(ctx);
     testNodeDelegatesLifecycleInOrder(ctx);
     testNodeMapsPollResult(ctx);
-    testNodeDefersFinishUntilMetadataInputsClose(ctx);
+    testNodeFinishesOnPacketEofWhileBindingsRemainOpen(ctx);
     testNodePreservesFirstFailureAndAbortsOnce(ctx);
+    testNodeRejectsBindingEofBeforePayload(ctx);
+    testNodeRejectsClosedBindingBeforePayload(ctx);
+    testNodeAcceptsBindingCloseAfterSuccessfulPayload(ctx);
 }

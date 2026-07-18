@@ -5,9 +5,43 @@
 #include <utility>
 
 namespace media::ffmpeg::graph {
+namespace {
+
+struct H264MuxInputContract final {
+    MediaTsH264InputLayout layout;
+    std::uint8_t lengthFieldBytes;
+};
+
+::media::Result<H264MuxInputContract> h264MuxInputContract(
+    const MediaEncodedPacketLayout& packetLayout)
+{
+    if (packetLayout.kind() ==
+        MediaEncodedPacketLayoutKind::StartCodeDelimited) {
+        return ::media::Result<H264MuxInputContract>::success(
+            H264MuxInputContract{MediaTsH264InputLayout::AnnexB, 4});
+    }
+    if (packetLayout.kind() !=
+        MediaEncodedPacketLayoutKind::LengthPrefixed) {
+        return ::media::Result<H264MuxInputContract>::failure(
+            ::media::ErrorInfo::unsupported(
+                "Project MPEG-TS output does not support the resolved encoded packet layout"));
+    }
+    const auto lengthFieldBytes = packetLayout.lengthFieldBytes();
+    if (!lengthFieldBytes || *lengthFieldBytes > 4) {
+        return ::media::Result<H264MuxInputContract>::failure(
+            ::media::ErrorInfo::unsupported(
+                "Project MPEG-TS H.264 output supports length-field widths from one through four bytes"));
+    }
+    return ::media::Result<H264MuxInputContract>::success(
+        H264MuxInputContract{
+            MediaTsH264InputLayout::LengthPrefixed, *lengthFieldBytes});
+}
+
+} // namespace
 
 ::media::Result<MediaProjectMpegTsOutputPlan> MediaProjectMpegTsOutputPlan::create(
     const std::string& videoCodecName,
+    const MediaEncodedPacketLayout& videoPacketLayout,
     const MediaResolvedAudioOutputPlan& audioOutput,
     MediaRunningTime transportDecodeLead)
 {
@@ -20,10 +54,15 @@ namespace media::ffmpeg::graph {
             ::media::ErrorInfo::unsupported(
                 "Project MPEG-TS output requires resolved H.264 and known AAC-LC 48 kHz stereo output"));
     }
+    auto videoInput = h264MuxInputContract(videoPacketLayout);
+    if (!videoInput) {
+        return ::media::Result<MediaProjectMpegTsOutputPlan>::failure(
+            videoInput.error());
+    }
     auto mux = MediaTsMuxPlan::create(MediaTsMuxPlanParameters{
         1, 1, 0x0000, 0x0100, 0x0101, 0x0102, 0x0101, 0,
         MediaRunningTime::fromNanoseconds(100'000'000), 0x1B, 0x0F,
-        MediaTsH264InputLayout::LengthPrefixed, 4,
+        videoInput.value().layout, videoInput.value().lengthFieldBytes,
         MediaTsParameterSetPolicy::BeforeRandomAccess,
         MediaTsAacAdtsPlan{0, 2, 3, 2},
         MediaTsOutputClockPolicy{

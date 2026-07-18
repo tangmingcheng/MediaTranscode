@@ -131,7 +131,7 @@ MediaBufferRef scheduledUnit(
     auto created = MediaScheduledAccessUnit::create(
         MediaScheduledAccessUnitParameters{
             std::move(packet).value(), stream, ms(dispatchMs), ms(dispatchMs),
-            ms(dispatchMs), ms(dispatchMs), ms(10), 1,
+            ms(dispatchMs), ms(dispatchMs), ms(dispatchMs), ms(10), 1,
             MediaSourceAccessUnitSequence(sequence), std::nullopt,
             std::nullopt,
             stream == MediaScheduledStream::Video
@@ -149,7 +149,7 @@ MediaBufferRef invalidDiscriminatorUnit(TestContext& ctx)
     auto created = MediaScheduledAccessUnit::create(
         MediaScheduledAccessUnitParameters{
             std::move(packet).value(), static_cast<MediaScheduledStream>(255),
-            ms(1), ms(1), ms(1), ms(1), ms(10), 1,
+            ms(1), ms(1), ms(1), ms(1), ms(1), ms(10), 1,
             MediaSourceAccessUnitSequence(1), std::nullopt, std::nullopt,
             std::nullopt});
     EXPECT_TRUE(ctx, created);
@@ -174,6 +174,8 @@ RouterFixture routerFixture(
     fixture.source = fixture.graph.addNode(MediaNodeKind::DebugDump, "source");
     fixture.router = fixture.graph.addNode(
         MediaNodeKind::ScheduledOutputRouter, "router");
+    fixture.graph.setNodeOption(
+        fixture.router, "scheduled_output_router.mode", "split_av");
     fixture.videoSink = fixture.graph.addNode(
         MediaNodeKind::DebugDump, "video-sink");
     fixture.audioSink = fixture.graph.addNode(
@@ -205,6 +207,38 @@ RouterFixture routerFixture(
     fixture.graph.connect(
         fixture.router, "audio", fixture.audioSink, "audio", "audio",
         MediaGraphBuildSupport::blockingQueuePolicy(audioCapacity));
+    EXPECT_TRUE(ctx, fixture.execution.compile(fixture.graph));
+    return fixture;
+}
+
+RouterFixture serializedRouterFixture(TestContext& ctx, std::size_t capacity = 4)
+{
+    RouterFixture fixture;
+    fixture.source = fixture.graph.addNode(MediaNodeKind::DebugDump, "source");
+    fixture.router = fixture.graph.addNode(
+        MediaNodeKind::ScheduledOutputRouter, "serialized-router");
+    fixture.videoSink = fixture.graph.addNode(
+        MediaNodeKind::DebugDump, "serialized-sink");
+    fixture.graph.setNodeOption(
+        fixture.router, "scheduled_output_router.mode", "serialized_av");
+    fixture.graph.addOutputPort(
+        fixture.source, "scheduled", MediaStreamKind::Any,
+        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+    fixture.graph.addInputPort(
+        fixture.router, "scheduled", MediaStreamKind::Any,
+        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+    fixture.graph.addOutputPort(
+        fixture.router, "serialized", MediaStreamKind::Any,
+        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+    fixture.graph.addInputPort(
+        fixture.videoSink, "serialized", MediaStreamKind::Any,
+        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+    fixture.graph.connect(
+        fixture.source, "scheduled", fixture.router, "scheduled", "scheduled",
+        MediaGraphBuildSupport::blockingQueuePolicy(8));
+    fixture.graph.connect(
+        fixture.router, "serialized", fixture.videoSink, "serialized",
+        "serialized", MediaGraphBuildSupport::blockingQueuePolicy(capacity));
     EXPECT_TRUE(ctx, fixture.execution.compile(fixture.graph));
     return fixture;
 }
@@ -294,11 +328,49 @@ void testSegmentBuildsOneSharedSchedulerAndOneRouter(TestContext& ctx)
     if (scheduler) {
         EXPECT_EQ(ctx, scheduler->options.value("av_scheduler.sync_group"),
                   plan->groupKey.value());
+        const auto& rtp = std::get<MediaSeparateRtpOutputRuntimePlan>(
+            plan->protocolOutput);
+        EXPECT_EQ(ctx, rtp.video.senderLead, rtp.audio.senderLead);
+        EXPECT_EQ(ctx,
+                  scheduler->options.value("av_scheduler.transport_lead_ns"),
+                  std::to_string(rtp.video.senderLead.nanoseconds()));
     }
     EXPECT_EQ(ctx, graph.edges().size(), static_cast<std::size_t>(3));
     for (const MediaEdge& edge : graph.edges()) {
         EXPECT_EQ(ctx, edge.policy, plan->edgePolicies.synchronizedPacket);
     }
+
+    const auto rejectsInvalidRtpLead = [&](MediaRunningTime videoLead,
+                                           MediaRunningTime audioLead) {
+        auto candidate = MediaRealtimeRtpTranscodePlanner::plan(
+            completeRequest());
+        EXPECT_TRUE(ctx, candidate && candidate.value().avSyncRuntime);
+        if (!candidate || !candidate.value().avSyncRuntime) return;
+        auto& runtimePlan = *candidate.value().avSyncRuntime;
+        auto& rtp = std::get<MediaSeparateRtpOutputRuntimePlan>(
+            runtimePlan.protocolOutput);
+        rtp.video.senderLead = videoLead;
+        rtp.audio.senderLead = audioLead;
+        MediaGraph invalidGraph;
+        const auto invalidVideo = invalidGraph.addNode(
+            MediaNodeKind::DebugDump, "invalid-video");
+        const auto invalidAudio = invalidGraph.addNode(
+            MediaNodeKind::DebugDump, "invalid-audio");
+        invalidGraph.addOutputPort(
+            invalidVideo, "canonical", MediaStreamKind::Video,
+            MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+        invalidGraph.addOutputPort(
+            invalidAudio, "canonical", MediaStreamKind::Audio,
+            MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+        EXPECT_FALSE(ctx, MediaRealtimeAvSchedulerSegmentBuilder::build(
+            invalidGraph,
+            MediaRealtimeAvSchedulerSegmentOptions{
+                "invalid-lead", {invalidVideo, "canonical"},
+                {invalidAudio, "canonical"}},
+            runtimePlan));
+    };
+    rejectsInvalidRtpLead(ms(0), ms(0));
+    rejectsInvalidRtpLead(ms(100), ms(101));
 
     MediaRealtimeAvSchedulerSegmentOptions missing{
         "task7-missing", {}, {audio, "canonical"}};
@@ -420,6 +492,31 @@ void testInterleavedUnitsAndIdenticalDispatchEpochsRouteExactlyOnce(
     if (video && audio) {
         EXPECT_EQ(ctx, video->dispatchOnMaster(), audio->dispatchOnMaster());
     }
+    EXPECT_TRUE(ctx, router.stop(fixture.execution));
+}
+
+void testSerializedRouterPreservesGlobalAvOrder(TestContext& ctx)
+{
+    auto fixture = serializedRouterFixture(ctx);
+    MediaScheduledOutputRouterNode router(fixture.router);
+    EXPECT_TRUE(ctx, router.start(fixture.execution));
+    const std::vector<MediaBufferRef> units{
+        scheduledUnit(ctx, MediaScheduledStream::Video, 1, 100),
+        scheduledUnit(ctx, MediaScheduledStream::Audio, 1, 101),
+        scheduledUnit(ctx, MediaScheduledStream::Video, 2, 102)};
+    auto* input = routerInput(fixture);
+    auto* output = fixture.execution.findInputChannel(
+        fixture.videoSink, "serialized");
+    for (const auto& unit : units) {
+        EXPECT_TRUE(ctx, input->push(unit));
+        expectProcessState(ctx, router, fixture, MediaNodeProcessState::Progress);
+    }
+    for (const auto& expected : units) {
+        MediaBufferRef actual;
+        EXPECT_TRUE(ctx, output->tryPop(actual));
+        EXPECT_EQ(ctx, actual, expected);
+    }
+    EXPECT_EQ(ctx, output->size(), static_cast<std::size_t>(0));
     EXPECT_TRUE(ctx, router.stop(fixture.execution));
 }
 
@@ -692,6 +789,7 @@ int main()
     TestContext ctx;
     testSegmentBuildsOneSharedSchedulerAndOneRouter(ctx);
     testInterleavedUnitsAndIdenticalDispatchEpochsRouteExactlyOnce(ctx);
+    testSerializedRouterPreservesGlobalAvOrder(ctx);
     testBlockedMediaOutputRetriesWithoutDuplicateDropOrCrossRoute(
         ctx, MediaScheduledStream::Video);
     testBlockedMediaOutputRetriesWithoutDuplicateDropOrCrossRoute(

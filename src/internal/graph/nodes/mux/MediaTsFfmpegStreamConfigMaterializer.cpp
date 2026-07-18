@@ -1,5 +1,7 @@
 #include "internal/graph/nodes/mux/MediaTsFfmpegStreamConfigMaterializer.h"
 
+#include "internal/graph/nodes/mux/MediaFfmpegAacAscDialectMaterializer.h"
+
 #include "internal/graph/protocol/codec/MediaAacAudioSpecificConfigParser.h"
 
 extern "C" {
@@ -261,7 +263,13 @@ MediaTsFfmpegStreamConfigMaterializer::audio(
         return ::media::Result<MediaTsMaterializedAudioConfig>::failure(
             bytes.error());
     }
-    auto asc = parseMediaAacAudioSpecificConfig(bytes.value());
+    auto canonicalAsc = MediaFfmpegAacAscDialectMaterializer::canonicalize(
+        bytes.value());
+    if (!canonicalAsc) {
+        return ::media::Result<MediaTsMaterializedAudioConfig>::failure(
+            canonicalAsc.error());
+    }
+    auto asc = parseMediaAacAudioSpecificConfig(canonicalAsc.value());
     if (!asc) {
         return ::media::Result<MediaTsMaterializedAudioConfig>::failure(
             asc.error());

@@ -173,6 +173,11 @@ FFmpegFileMuxSession::~FFmpegFileMuxSession()
     return ::media::Result<MediaMuxSessionPollResult>::success({false, std::nullopt});
 }
 
+bool FFmpegFileMuxSession::bindingsReady() const noexcept
+{
+    return m_headerWritten && !m_terminalFailure;
+}
+
 ::media::Status FFmpegFileMuxSession::flush(MediaGraphExecutionContext&)
 {
     if (m_terminalFailure) return terminalStatus();
