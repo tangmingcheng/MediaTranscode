@@ -463,11 +463,11 @@ validates exact contiguous fragments plus `MediaAudioPlaybackOrigin`, then
 emits one `MediaCanonicalAccessUnitBuffer` with checked presentation, duration,
 generation, and its own monotonic encoded sequence.
 
-- [ ] **Step 1: Write RED control/canonicalization tests**
+- [x] **Step 1: Write RED control/canonicalization tests**
 
 Cover zero/slew corrections, policy bounds, command-before-audio ordering, output backpressure, fragment gaps/overlaps, delayed encoder packets, multi-fragment packets, EOF tail, generation mismatch, and abort/reset.
 
-- [ ] **Step 2: Implement the acyclic downstream correction path**
+- [x] **Step 2: Implement the acyclic downstream correction path**
 
 No scheduler-to-resampler graph edge is allowed. Do not derive encoded
 timestamps from codec packet PTS. Remove synchronized `Disabled` correction and
@@ -476,13 +476,16 @@ synchronized modes. Do not add a `transcodeAudio` parameter: audio transcoding
 continues to be selected naturally by comparing planned target parameters with
 the resolved input parameters.
 
-- [ ] **Step 3: Run GREEN and lineage lifecycle stress**
+- [x] **Step 3: Run GREEN and lineage lifecycle stress**
 
 Run audio lineage/control/node targets and repeat lifecycle tests 20 times.
 
 - [ ] **Step 4: Review, commit, and push**
 
 Commit as `feat: wire synchronized audio correction`.
+
+Progress: implementation and independent review completed in `7c4cf86`; push is
+pending with the production-assembly branch delivery.
 
 ---
 
