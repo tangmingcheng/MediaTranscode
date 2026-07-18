@@ -5,6 +5,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncPlanningFactsResolver.h"
 #include "internal/graph/planner/realtime/MediaAudioCorrectionReachabilityPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
+#include "internal/graph/protocol/sdp/MediaRtpSdpDescription.h"
 
 #include <optional>
 #include <utility>
@@ -145,6 +146,40 @@ namespace {
             senderReportInterval});
 }
 
+::media::Result<MediaSeparateRtpSdpRuntimePlan> scheduledSdp(
+    const MediaRealtimeRtpTranscodePlan& outer,
+    const MediaScheduledRtpOutputPlan& video,
+    const MediaScheduledRtpOutputPlan& audio)
+{
+    const auto& videoRtp = video.transport.remoteRtpEndpoint();
+    const auto& audioRtp = audio.transport.remoteRtpEndpoint();
+    if (outer.sdp.path.empty() || outer.sdp.mediaId.empty() ||
+        videoRtp.addressFamily() != audioRtp.addressFamily() ||
+        videoRtp.numericAddress() != audioRtp.numericAddress() ||
+        video.cname.empty() || video.cname != audio.cname) {
+        return ::media::Result<MediaSeparateRtpSdpRuntimePlan>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "scheduled RTP SDP requires one complete planner-owned identity"));
+    }
+    auto identityValidation = MediaSdpSessionIdentity::create(
+        outer.sdp.mediaId, 0, 0, outer.sdp.mediaId,
+        videoRtp.addressFamily(), videoRtp.numericAddress(), video.cname);
+    if (!identityValidation) {
+        return ::media::Result<MediaSeparateRtpSdpRuntimePlan>::failure(
+            identityValidation.error());
+    }
+    return ::media::Result<MediaSeparateRtpSdpRuntimePlan>::success(
+        MediaSeparateRtpSdpRuntimePlan{
+            outer.sdp.path,
+            outer.sdp.mediaId,
+            outer.sdp.mediaId,
+            videoRtp.addressFamily(),
+            videoRtp.numericAddress(),
+            video.cname,
+            MediaRtpSdpSessionIdPolicy::SharedNtpEpoch,
+            MediaRtpSdpSessionVersionPolicy::ActivePlaybackGeneration});
+}
+
 } // namespace
 
 ::media::Result<MediaRealtimeAvSyncRuntimePlan>
@@ -217,12 +252,18 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
                 video ? audio.error() : video.error());
         }
+        auto sdp = scheduledSdp(
+            outer, video.value(), audio.value());
+        if (!sdp) {
+            return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
+                sdp.error());
+        }
         adapter = MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp;
         protocolOutput.emplace(std::in_place_type<MediaSeparateRtpOutputRuntimePlan>,
             MediaSeparateRtpOutputRuntimePlan{
                 std::move(video).value(),
                 std::move(audio).value(),
-                outer.sdp.path});
+                std::move(sdp).value()});
     } else if (*synchronization.topology ==
                MediaAvSyncTopology::MpegTsToMpegTs) {
         if (synchronization.rtp || !synchronization.ts ||

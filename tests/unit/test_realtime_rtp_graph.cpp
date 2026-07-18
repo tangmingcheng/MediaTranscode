@@ -377,6 +377,7 @@ private:
 MediaRealtimeRtpTranscodeRequest validRealtimeOptions()
 {
     MediaRealtimeRtpTranscodeRequest options;
+    options.mediaId = "realtime-test";
     options.input.type = RealtimeInputType::Url;
     options.input.streamLayout = RealtimeInputStreamLayout::SessionDescribed;
     options.input.url = sampleVideoPath();
@@ -2260,7 +2261,7 @@ void testRawRtpVideoPacketCopySkipsContainerNormalization(TestContext& ctx)
     EXPECT_EQ(ctx, countNodesByKind(graphResult.value(), MediaNodeKind::PacketNormalize), static_cast<std::size_t>(0));
 }
 
-void testRawRtpRejectsUnsupportedOpusOutputAndPlansOpusInputToAac(TestContext& ctx)
+void testRawRtpRejectsUnsupportedOpusOutputAndUnboundedOpusInputTiming(TestContext& ctx)
 {
     MediaRealtimeRtpTranscodeRequest options = validRawRtpAudioVideoOptions();
     options.parameters.audio.codecName = "opus";
@@ -2279,24 +2280,13 @@ void testRawRtpRejectsUnsupportedOpusOutputAndPlansOpusInputToAac(TestContext& c
     opusInput.input.audioRtp.clockRate = 48000;
     opusInput.input.audioRtp.channels = 2;
     opusInput.input.audioRtp.fmtp.clear();
-    auto opusPlan = MediaRealtimeRtpTranscodePlanner::plan(opusInput);
-    EXPECT_TRUE(ctx, opusPlan);
-    if (!opusPlan) std::cerr << opusPlan.error().describe() << '\n';
-    if (opusPlan) {
-        EXPECT_EQ(ctx, opusPlan.value().audioPlan.branchMode, MediaBranchMode::TranscodeFrame);
-        EXPECT_FALSE(ctx, opusPlan.value().audioPacketNormalizationRequired);
-        auto opusGraph = MediaRealtimeRtpTranscodeGraphBuilder::build(std::move(opusPlan).value());
-        EXPECT_TRUE(ctx, opusGraph);
-        if (opusGraph) {
-            const MediaNode* rawAudioInput = findNodeByName(opusGraph.value(), "realtime.audio.input");
-            EXPECT_TRUE(ctx, rawAudioInput != nullptr);
-            if (rawAudioInput) {
-                EXPECT_TRUE(ctx, rawAudioInput->options.has("rtp.fmtp"));
-                EXPECT_TRUE(ctx, rawAudioInput->options.value("rtp.fmtp").empty());
-            }
-            EXPECT_TRUE(ctx, findNodeByName(opusGraph.value(), "realtime.audio.encode.packet_normalize") == nullptr);
-            EXPECT_EQ(ctx, countNodesByKind(opusGraph.value(), MediaNodeKind::PacketNormalize), static_cast<std::size_t>(0));
-        }
+    const auto opusPlan = MediaRealtimeRtpTranscodePlanner::plan(opusInput);
+    EXPECT_FALSE(ctx, opusPlan);
+    if (!opusPlan) {
+        EXPECT_EQ(ctx, opusPlan.error().code, media::ErrorCode::NotInitialized);
+        EXPECT_EQ(ctx,
+                  opusPlan.error().message,
+                  std::string("scheduled RTP packetization does not publish audio batch timing"));
     }
 }
 
@@ -2407,7 +2397,7 @@ void testRealtimeResizeScoresFilterStage(TestContext& ctx)
     EXPECT_EQ(ctx, plan.value().videoPlan.selected.score, 900);
 }
 
-void testRawRtpPlansOpusAudioInput(TestContext& ctx)
+void testSynchronizedRawRtpRejectsOpusWithoutPlannedAccessUnitDuration(TestContext& ctx)
 {
     const auto request = [](int channels) {
         MediaRealtimeRtpTranscodeRequest options = validRawRtpAudioVideoOptions();
@@ -2421,7 +2411,14 @@ void testRawRtpPlansOpusAudioInput(TestContext& ctx)
         return options;
     };
 
-    EXPECT_TRUE(ctx, MediaRealtimeRtpTranscodePlanner::plan(request(1)));
+    const auto monoPlan = MediaRealtimeRtpTranscodePlanner::plan(request(1));
+    EXPECT_FALSE(ctx, monoPlan);
+    if (!monoPlan) {
+        EXPECT_EQ(ctx, monoPlan.error().code, media::ErrorCode::NotInitialized);
+        EXPECT_EQ(ctx,
+                  monoPlan.error().message,
+                  std::string("scheduled RTP packetization does not publish audio batch timing"));
+    }
     const auto missingChannels = MediaRealtimeRtpTranscodePlanner::plan(request(0));
     EXPECT_FALSE(ctx, missingChannels);
     if (!missingChannels) {
@@ -2433,21 +2430,13 @@ void testRawRtpPlansOpusAudioInput(TestContext& ctx)
         EXPECT_EQ(ctx, unsupportedChannels.error().code, media::ErrorCode::InvalidArgument);
     }
 
-    const auto plan = MediaRealtimeRtpTranscodePlanner::plan(request(2));
-    EXPECT_TRUE(ctx, plan);
-    if (!plan) {
-        std::cerr << plan.error().describe() << '\n';
-        return;
-    }
-
-    EXPECT_TRUE(ctx, plan.value().audioPlan.enabled);
-    EXPECT_EQ(ctx, plan.value().audioPlan.sourceCodecName, std::string("opus"));
-    EXPECT_TRUE(ctx, plan.value().input.sdpText.empty());
-    EXPECT_TRUE(ctx, plan.value().audioInput.sdpText.empty());
-    EXPECT_TRUE(ctx, plan.value().audioInput.rtpDepacketizer.has_value());
-    if (plan.value().audioInput.rtpDepacketizer) {
-        EXPECT_EQ(ctx, plan.value().audioInput.rtpDepacketizer->codecName, std::string("opus"));
-        EXPECT_EQ(ctx, plan.value().audioInput.rtpDepacketizer->clockRate, 48000);
+    const auto stereoPlan = MediaRealtimeRtpTranscodePlanner::plan(request(2));
+    EXPECT_FALSE(ctx, stereoPlan);
+    if (!stereoPlan) {
+        EXPECT_EQ(ctx, stereoPlan.error().code, media::ErrorCode::NotInitialized);
+        EXPECT_EQ(ctx,
+                  stereoPlan.error().message,
+                  std::string("scheduled RTP packetization does not publish audio batch timing"));
     }
 }
 
@@ -4211,7 +4200,7 @@ int main(int argc, char** argv)
     testRawRtpInheritsSourceCodecsWhenTranscodeCodecsAreOmitted(ctx);
     testRawRtpMatchingAudioPlansSynchronizedFrameTranscode(ctx);
     testRawRtpVideoPacketCopySkipsContainerNormalization(ctx);
-    testRawRtpRejectsUnsupportedOpusOutputAndPlansOpusInputToAac(ctx);
+    testRawRtpRejectsUnsupportedOpusOutputAndUnboundedOpusInputTiming(ctx);
     testScheduledRtpPacketizationRejectsUnsupportedCodecAsUnsupported(ctx);
     testRealtimePlanOwnsThreadingPolicy(ctx);
     testRawRtpRejectsMissingVideoBitrate(ctx);
@@ -4220,7 +4209,7 @@ int main(int argc, char** argv)
     testRawRtpRejectsUnknownSourceCodecWhenCodecIsNotExplicit(ctx);
     testRealtimeNoResizeDoesNotScoreFilterStage(ctx);
     testRealtimeResizeScoresFilterStage(ctx);
-    testRawRtpPlansOpusAudioInput(ctx);
+    testSynchronizedRawRtpRejectsOpusWithoutPlannedAccessUnitDuration(ctx);
     testValidationRejectsOddRtpPort(ctx);
     testValidationRejectsAudioRtpPortOverflow(ctx);
     testRealtimeNoAudioProbeDoesNotRequestAudio(ctx);

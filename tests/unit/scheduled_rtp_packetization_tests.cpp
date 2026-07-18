@@ -220,6 +220,70 @@ std::uint16_t readU16(std::span<const std::uint8_t> bytes, std::size_t offset)
         static_cast<std::uint16_t>(bytes[offset + 1]));
 }
 
+std::vector<std::vector<std::uint8_t>> reconstructH264Nals(
+    TestContext& ctx,
+    const std::vector<std::vector<std::uint8_t>>& datagrams)
+{
+    std::vector<std::vector<std::uint8_t>> nals;
+    EXPECT_TRUE(ctx, !datagrams.empty());
+    if (datagrams.empty()) return nals;
+    const std::uint32_t timestamp = readU32(datagrams.front(), 4);
+    std::uint16_t sequence = readU16(datagrams.front(), 2);
+    bool fuActive = false;
+    for (const auto& datagram : datagrams) {
+        EXPECT_TRUE(ctx, datagram.size() > static_cast<std::size_t>(12));
+        if (datagram.size() <= 12) return {};
+        EXPECT_EQ(ctx, readU32(datagram, 4), timestamp);
+        EXPECT_EQ(ctx, readU16(datagram, 2), sequence++);
+        const std::span<const std::uint8_t> payload(
+            datagram.data() + 12, datagram.size() - 12);
+        const std::uint8_t type = payload[0] & 0x1Fu;
+        if (type >= 1 && type <= 23) {
+            EXPECT_FALSE(ctx, fuActive);
+            nals.emplace_back(payload.begin(), payload.end());
+        } else if (type == 24) {
+            EXPECT_FALSE(ctx, fuActive);
+            std::size_t offset = 1;
+            while (offset < payload.size()) {
+                EXPECT_TRUE(ctx, offset + 2 <= payload.size());
+                if (offset + 2 > payload.size()) return {};
+                const std::size_t size = readU16(payload, offset);
+                offset += 2;
+                EXPECT_TRUE(ctx, size > 0 && size <= payload.size() - offset);
+                if (size == 0 || size > payload.size() - offset) return {};
+                nals.emplace_back(
+                    payload.begin() + static_cast<std::ptrdiff_t>(offset),
+                    payload.begin() + static_cast<std::ptrdiff_t>(offset + size));
+                offset += size;
+            }
+        } else if (type == 28) {
+            EXPECT_TRUE(ctx, payload.size() >= static_cast<std::size_t>(3));
+            if (payload.size() < 3) return {};
+            const bool start = (payload[1] & 0x80u) != 0;
+            const bool end = (payload[1] & 0x40u) != 0;
+            if (start) {
+                EXPECT_FALSE(ctx, fuActive);
+                nals.emplace_back();
+                nals.back().push_back(static_cast<std::uint8_t>(
+                    (payload[0] & 0xE0u) | (payload[1] & 0x1Fu)));
+                fuActive = true;
+            } else {
+                EXPECT_TRUE(ctx, fuActive);
+                if (!fuActive) return {};
+            }
+            nals.back().insert(
+                nals.back().end(), payload.begin() + 2, payload.end());
+            if (end) fuActive = false;
+        } else {
+            EXPECT_TRUE(ctx, false);
+            return {};
+        }
+    }
+    EXPECT_FALSE(ctx, fuActive);
+    EXPECT_TRUE(ctx, (datagrams.back()[1] & 0x80u) != 0);
+    return nals;
+}
+
 void expectH264FuA(TestContext& ctx,
                    const std::vector<std::vector<std::uint8_t>>& datagrams,
                    std::span<const std::uint8_t> expectedNal)
@@ -228,7 +292,6 @@ void expectH264FuA(TestContext& ctx,
     EXPECT_TRUE(ctx, !expectedNal.empty());
     if (datagrams.size() <= 1 || expectedNal.empty()) return;
 
-    std::vector<std::uint8_t> reconstructed;
     const std::uint16_t firstSequence = readU16(datagrams.front(), 2);
     for (std::size_t index = 0; index < datagrams.size(); ++index) {
         const auto& datagram = datagrams[index];
@@ -243,15 +306,14 @@ void expectH264FuA(TestContext& ctx,
                   index + 1 == datagrams.size());
         EXPECT_EQ(ctx, readU16(datagram, 2),
                   static_cast<std::uint16_t>(firstSequence + index));
-        if (index == 0) {
-            reconstructed.push_back(static_cast<std::uint8_t>(
-                (fuIndicator & 0xE0u) | (fuHeader & 0x1Fu)));
-        }
-        reconstructed.insert(
-            reconstructed.end(), datagram.begin() + 14, datagram.end());
     }
-    EXPECT_EQ(ctx, reconstructed,
-              std::vector<std::uint8_t>(expectedNal.begin(), expectedNal.end()));
+    const auto reconstructed = reconstructH264Nals(ctx, datagrams);
+    EXPECT_EQ(ctx, reconstructed.size(), static_cast<std::size_t>(1));
+    if (!reconstructed.empty()) {
+        EXPECT_EQ(ctx, reconstructed.front(),
+                  std::vector<std::uint8_t>(
+                      expectedNal.begin(), expectedNal.end()));
+    }
 }
 
 ::media::ffmpeg::CodecParametersPtr makeH264Parameters()
@@ -262,6 +324,24 @@ void expectH264FuA(TestContext& ctx,
     parameters->codec_id = AV_CODEC_ID_H264;
     parameters->width = 1920;
     parameters->height = 1080;
+    return parameters;
+}
+
+::media::ffmpeg::CodecParametersPtr makeH264AvccParameters()
+{
+    auto parameters = makeH264Parameters();
+    if (!parameters) return {};
+    const std::array<std::uint8_t, 36> avcc{
+        1, 0x4D, 0x40, 0x32, 0xFF, 0xE1, 0, 21,
+        0x67, 0x4D, 0x40, 0x32, 0x95, 0x90, 0x02, 0x80,
+        0x0B, 0x5B, 0x01, 0x10, 0, 0, 0x3E, 0x80,
+        0, 0x0E, 0xA6, 0x08, 0x40,
+        1, 0, 4, 0x68, 0xEB, 0x8F, 0x20};
+    parameters->extradata = static_cast<std::uint8_t*>(av_mallocz(
+        avcc.size() + AV_INPUT_BUFFER_PADDING_SIZE));
+    if (!parameters->extradata) return {};
+    std::copy(avcc.begin(), avcc.end(), parameters->extradata);
+    parameters->extradata_size = static_cast<int>(avcc.size());
     return parameters;
 }
 
@@ -470,6 +550,75 @@ void testScheduledMuxRealPacketization(TestContext& ctx)
     }
 }
 
+void testScheduledMuxNormalizesAvccForExplicitAnnexB(TestContext& ctx)
+{
+    auto h264 = makeH264AvccParameters();
+    EXPECT_TRUE(ctx, h264 != nullptr);
+    if (!h264) return;
+    auto config = ScheduledRtpMuxStreamConfig::create(
+        MediaStreamKind::Video, *h264, AVRational{1, 90'000},
+        MediaScheduledRtpPacketizationMode::H264AnnexB,
+        96, 0x0A0B0C0Du, 256);
+    EXPECT_TRUE(ctx, config);
+    if (!config) return;
+
+    std::vector<std::vector<std::uint8_t>> datagrams;
+    ScheduledRtpMuxFfmpegSession session(
+        [&datagrams](std::span<const std::uint8_t> bytes, std::size_t) {
+            datagrams.emplace_back(bytes.begin(), bytes.end());
+            return ::media::Status::success();
+        });
+    EXPECT_TRUE(ctx, session.configure(std::move(config.value())));
+    EXPECT_TRUE(ctx, session.open());
+
+    auto lengthPrefixed = ::media::ffmpeg::makePacket();
+    EXPECT_TRUE(ctx, lengthPrefixed != nullptr);
+    if (!lengthPrefixed) return;
+    EXPECT_TRUE(ctx, av_new_packet(lengthPrefixed.get(), 6) >= 0);
+    if (!lengthPrefixed->data) return;
+    const std::array<std::uint8_t, 6> avccAccessUnit{
+        0, 0, 0, 2, 0x65, 0x55};
+    std::copy(
+        avccAccessUnit.begin(), avccAccessUnit.end(), lengthPrefixed->data);
+    const auto timestamp = mappedTimestamp(ctx, 100u, 1'000'000'000);
+    const auto rejected = session.writeAccessUnit(*lengthPrefixed, timestamp);
+    EXPECT_FALSE(ctx, rejected);
+    if (!rejected) {
+        EXPECT_EQ(ctx, rejected.error().code, ::media::ErrorCode::InvalidArgument);
+    }
+    EXPECT_TRUE(ctx, datagrams.empty());
+
+    std::vector<std::vector<std::uint8_t>> expected{
+        {0x09, 0xF0},
+        {0x67, 0x4D, 0x40, 0x32, 0x95, 0x90, 0x02, 0x80,
+         0x0B, 0x5B, 0x01, 0x10, 0, 0, 0x3E, 0x80,
+         0, 0x0E, 0xA6, 0x08, 0x40},
+        {0x68, 0xEB, 0x8F, 0x20},
+        std::vector<std::uint8_t>(1'000, 0x55)};
+    expected.back()[0] = 0x65;
+    std::size_t packetBytes = 0;
+    for (const auto& nal : expected) packetBytes += 4 + nal.size();
+    auto packet = ::media::ffmpeg::makePacket();
+    EXPECT_TRUE(ctx, packet != nullptr);
+    if (!packet) return;
+    EXPECT_TRUE(ctx, av_new_packet(packet.get(), static_cast<int>(packetBytes)) >= 0);
+    if (!packet->data) return;
+    std::size_t offset = 0;
+    for (const auto& nal : expected) {
+        packet->data[offset++] = 0;
+        packet->data[offset++] = 0;
+        packet->data[offset++] = 0;
+        packet->data[offset++] = 1;
+        std::copy(nal.begin(), nal.end(), packet->data + offset);
+        offset += nal.size();
+    }
+    packet->pts = packet->dts = 0;
+    packet->flags = AV_PKT_FLAG_KEY;
+    EXPECT_TRUE(ctx, session.writeAccessUnit(*packet, timestamp));
+    EXPECT_EQ(ctx, reconstructH264Nals(ctx, datagrams), expected);
+    EXPECT_TRUE(ctx, session.writeTrailer());
+}
+
 void testScheduledMuxPropagatesSinkFailure(TestContext& ctx)
 {
     auto h264 = makeH264Parameters();
@@ -563,5 +712,6 @@ void runScheduledRtpPacketizationTests(TestContext& ctx)
     testDatagramWriteAvioLifecycleAndFailure(ctx);
     testRtpDatagramRewritePreservesStructure(ctx);
     testScheduledMuxRealPacketization(ctx);
+    testScheduledMuxNormalizesAvccForExplicitAnnexB(ctx);
     testScheduledMuxPropagatesSinkFailure(ctx);
 }

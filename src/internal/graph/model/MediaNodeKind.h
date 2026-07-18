@@ -84,7 +84,9 @@ enum class MediaNodeKind {
     SourceClockStateFanout = 58,
     AudioDriftController = 59,
     EncodedAudioCanonicalizer = 60,
-    ScheduledOutputRouter = 61
+    ScheduledOutputRouter = 61,
+    ScheduledRtpSender = 62,
+    DualMediaSdpPublisher = 63
 };
 
 } // namespace media::ffmpeg::graph

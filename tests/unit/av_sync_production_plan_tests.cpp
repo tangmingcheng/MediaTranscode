@@ -240,6 +240,63 @@ void testCompleteSeparateRtpAssemblyProduct(TestContext& ctx)
         std::get<MediaPlannedAudioSamplesDurationPlan>(assembly.audio.duration);
     EXPECT_EQ(ctx, audioDuration.sampleRate, 48'000);
     EXPECT_EQ(ctx, audioDuration.samplesPerAccessUnit, std::uint32_t{1024});
+
+    const auto& output =
+        std::get<MediaSeparateRtpOutputRuntimePlan>(runtime.protocolOutput);
+    EXPECT_EQ(ctx, output.sdp.path,
+              std::string("production-assembly.sdp"));
+    EXPECT_EQ(ctx, output.sdp.originUsername,
+              std::string("production-assembly"));
+    EXPECT_EQ(ctx, output.sdp.sessionName,
+              std::string("production-assembly"));
+    EXPECT_EQ(ctx, output.sdp.originAddressFamily,
+              MediaIpAddressFamily::Ipv4);
+    EXPECT_EQ(ctx, output.sdp.originNumericAddress,
+              std::string("127.0.0.1"));
+    EXPECT_EQ(ctx, output.sdp.cname,
+              output.video.cname);
+    EXPECT_EQ(ctx, output.sdp.cname,
+              output.audio.cname);
+    EXPECT_EQ(ctx, output.sdp.sessionIdPolicy,
+              MediaRtpSdpSessionIdPolicy::SharedNtpEpoch);
+    EXPECT_EQ(ctx, output.sdp.sessionVersionPolicy,
+              MediaRtpSdpSessionVersionPolicy::ActivePlaybackGeneration);
+}
+
+void testSeparateRtpSdpIdentityIsPlannerOwnedAndValidated(TestContext& ctx)
+{
+    auto invalidRequest = completeProductionRtpRequest();
+    invalidRequest.mediaId = "invalid media id";
+    EXPECT_FALSE(ctx, MediaRealtimeRtpTranscodePlanner::plan(invalidRequest));
+
+    auto planned = MediaRealtimeRtpTranscodePlanner::plan(
+        completeProductionRtpRequest());
+    EXPECT_TRUE(ctx, planned);
+    if (!planned || !planned.value().avSyncRuntime) return;
+    auto plan = std::move(planned).value();
+    auto& output = std::get<MediaSeparateRtpOutputRuntimePlan>(
+        plan.avSyncRuntime->protocolOutput);
+    const auto valid = output.sdp;
+
+    output.sdp.originUsername.clear();
+    expectInvalid(ctx, plan);
+    output.sdp = valid;
+    output.sdp.sessionName.clear();
+    expectInvalid(ctx, plan);
+    output.sdp = valid;
+    output.sdp.originNumericAddress = "127.0.0.2";
+    expectInvalid(ctx, plan);
+    output.sdp = valid;
+    output.sdp.cname = "different-cname";
+    expectInvalid(ctx, plan);
+    output.sdp = valid;
+    output.sdp.sessionIdPolicy =
+        static_cast<MediaRtpSdpSessionIdPolicy>(255);
+    expectInvalid(ctx, plan);
+    output.sdp = valid;
+    output.sdp.sessionVersionPolicy =
+        static_cast<MediaRtpSdpSessionVersionPolicy>(255);
+    expectInvalid(ctx, plan);
 }
 
 void testAssemblyRejectsEveryInvalidContractField(TestContext& ctx)
@@ -445,6 +502,7 @@ void runAvSyncProductionPlanTests(TestContext& ctx)
     testTsDurationProbeOwnsExactEvidenceAndLosslessReplay(ctx);
     testTsDurationProbeRejectsMissingAndNonPositiveEvidence(ctx);
     testCompleteSeparateRtpAssemblyProduct(ctx);
+    testSeparateRtpSdpIdentityIsPlannerOwnedAndValidated(ctx);
     testAssemblyRejectsEveryInvalidContractField(ctx);
     testCompleteMpegTsAssemblyProduct(ctx);
     testMpegTsPreparedPlanningRejectsInvalidDurationEvidence(ctx);

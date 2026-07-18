@@ -27,6 +27,9 @@
 #include "internal/graph/nodes/output/FileOutputNode.h"
 #include "internal/graph/nodes/output/RtpOutputNode.h"
 #include "internal/graph/nodes/output/SdpWriterNode.h"
+#include "internal/graph/nodes/output/MediaDualMediaSdpPublisherNode.h"
+#include "internal/graph/nodes/output/MediaScheduledRtpSenderNode.h"
+#include "internal/graph/nodes/output/MediaScheduledRtpSenderNodePlanCodec.h"
 #include "internal/graph/nodes/packet/AvPacketStartBarrierNode.h"
 #include "internal/graph/nodes/packet/PacketNormalizeNode.h"
 #include "internal/graph/nodes/packet/PacketSourceConfigNode.h"
@@ -59,6 +62,12 @@
 #include "internal/graph/nodes/video/VideoTimestampNode.h"
 #include "internal/graph/sync/lineage/MediaVideoLineageStagePreparation.h"
 #include "internal/graph/sync/lineage/MediaVideoFrameRateState.h"
+#include "internal/graph/nodes/mux/ScheduledRtpMuxFfmpegSessionFactory.h"
+#include "internal/graph/runtime/filesystem/MediaWin32AtomicFileReplacePort.h"
+#include "internal/graph/runtime/network/MediaSocketRuntime.h"
+#include "internal/graph/runtime/network/MediaUdpDatagramSenderSocket.h"
+
+#include <new>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -338,6 +347,34 @@ template <typename Node>
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<RtpOutputNode>(node.id));
     case MediaNodeKind::SdpWriter:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<SdpWriterNode>(node.id));
+    case MediaNodeKind::ScheduledRtpSender:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "Scheduled RTP sender requires compiler-injected sync-group runtime"));
+    case MediaNodeKind::DualMediaSdpPublisher:
+    {
+        auto path = requiredNodeOption(
+            &node.options, "MediaDualMediaSdpPublisherNode", "sdp.path");
+        if (!path) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                path.error());
+        }
+        try {
+            auto publisher = MediaDualMediaSdpPublisherNode::create(
+                node.id, std::move(path).value(),
+                std::make_unique<MediaWin32AtomicFileReplacePort>());
+            if (!publisher) {
+                return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                    publisher.error());
+            }
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+                std::move(publisher).value());
+        } catch (const std::bad_alloc&) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                ::media::ErrorInfo::allocationFailed(
+                    "Dual-media SDP publisher dependencies"));
+        }
+    }
     case MediaNodeKind::EofBarrier:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<EofBarrierNode>(node.id));
     case MediaNodeKind::Flush:
@@ -380,6 +417,56 @@ MediaRuntimeNodeFactory::createActivatedStartupReleaseSequencer(
     return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
         std::make_unique<MediaActivatedStartupReleaseSequencerNode>(
             node.id, std::move(group).value(), std::move(capability)));
+}
+
+::media::Result<std::unique_ptr<MediaRuntimeNode>>
+MediaRuntimeNodeFactory::createScheduledRtpSender(
+    const MediaNode& node,
+    std::shared_ptr<MediaAvSyncGroupRuntime> syncGroup)
+{
+    if (node.kind != MediaNodeKind::ScheduledRtpSender) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Scheduled RTP sender factory requires the sender node kind"));
+    }
+    auto decoded = MediaScheduledRtpSenderNodePlanCodec::decode(node);
+    if (!decoded) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            decoded.error());
+    }
+    if (!syncGroup || syncGroup->key() != decoded.value().groupKey) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "Scheduled RTP sender requires the exact registered sync-group runtime"));
+    }
+    auto socketRuntime = MediaSocketRuntime::create();
+    if (!socketRuntime) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            socketRuntime.error());
+    }
+    try {
+        MediaScheduledRtpSenderNodeDependencies dependencies{
+            std::move(syncGroup),
+            std::make_unique<MediaUdpDatagramSenderSocketFactory>(
+                std::move(socketRuntime).value()),
+            std::make_unique<ScheduledRtpMuxFfmpegSessionFactory>()};
+        auto created = MediaScheduledRtpSenderNode::create(
+            node.id,
+            std::move(decoded.value().groupKey),
+            std::move(decoded.value().output),
+            std::move(decoded.value().sdp),
+            std::move(dependencies));
+        if (!created) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                created.error());
+        }
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+            std::move(created).value());
+    } catch (const std::bad_alloc&) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            ::media::ErrorInfo::allocationFailed(
+                "Scheduled RTP sender production dependencies"));
+    }
 }
 
 bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
@@ -429,6 +516,8 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::FileOutput:
     case MediaNodeKind::RtpOutput:
     case MediaNodeKind::SdpWriter:
+    case MediaNodeKind::ScheduledRtpSender:
+    case MediaNodeKind::DualMediaSdpPublisher:
     case MediaNodeKind::EofBarrier:
     case MediaNodeKind::Flush:
     case MediaNodeKind::Finalize:

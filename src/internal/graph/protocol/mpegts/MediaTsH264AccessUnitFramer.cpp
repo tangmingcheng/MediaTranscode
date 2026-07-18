@@ -1,5 +1,7 @@
 #include "internal/graph/protocol/mpegts/MediaTsH264AccessUnitFramer.h"
 
+#include "internal/graph/protocol/codec/MediaH264AnnexBAccessUnitValidator.h"
+
 #include <algorithm>
 #include <limits>
 
@@ -10,30 +12,6 @@ namespace {
 {
     return ::media::Result<MediaTsFramedAccessUnit>::failure(
         ::media::ErrorInfo::invalidArgument(message));
-}
-
-bool beginsWithStartCode(std::span<const std::uint8_t> bytes,
-                         std::size_t& prefixSize) noexcept
-{
-    if (bytes.size() >= 4 && bytes[0] == 0 && bytes[1] == 0 &&
-        bytes[2] == 0 && bytes[3] == 1) {
-        prefixSize = 4;
-        return true;
-    }
-    if (bytes.size() >= 3 && bytes[0] == 0 && bytes[1] == 0 && bytes[2] == 1) {
-        prefixSize = 3;
-        return true;
-    }
-    return false;
-}
-
-bool validAnnexBAccessUnit(std::span<const std::uint8_t> bytes) noexcept
-{
-    std::size_t prefixSize = 0;
-    if (!beginsWithStartCode(bytes, prefixSize) || bytes.size() == prefixSize) {
-        return false;
-    }
-    return (bytes[prefixSize] & 0x80) == 0;
 }
 
 bool checkedAdd(std::size_t left, std::size_t right, std::size_t& output) noexcept
@@ -163,9 +141,8 @@ std::span<const std::uint8_t> MediaTsFramedAccessUnit::bytes() const noexcept
     }
 
     if (parameters.h264InputLayout == MediaTsH264InputLayout::AnnexB) {
-        if (!validAnnexBAccessUnit(payload)) {
-            return invalid("MPEG-TS H.264 Annex-B access unit is malformed");
-        }
+        auto valid = MediaH264AnnexBAccessUnitValidator::validate(payload);
+        if (!valid) return invalid("MPEG-TS H.264 Annex-B access unit is malformed");
         if (!inject) {
             return ::media::Result<MediaTsFramedAccessUnit>::success(
                 MediaTsFramedAccessUnit::borrowed(payload));

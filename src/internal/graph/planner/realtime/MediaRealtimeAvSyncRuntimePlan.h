@@ -20,6 +20,25 @@
 
 namespace media::ffmpeg::graph {
 
+enum class MediaRtpSdpSessionIdPolicy {
+    SharedNtpEpoch
+};
+
+enum class MediaRtpSdpSessionVersionPolicy {
+    ActivePlaybackGeneration
+};
+
+struct MediaSeparateRtpSdpRuntimePlan final {
+    std::string path;
+    std::string originUsername;
+    std::string sessionName;
+    MediaIpAddressFamily originAddressFamily;
+    std::string originNumericAddress;
+    std::string cname;
+    MediaRtpSdpSessionIdPolicy sessionIdPolicy;
+    MediaRtpSdpSessionVersionPolicy sessionVersionPolicy;
+};
+
 struct MediaAudioCorrectionReachabilityPlan final {
     int outputSampleRate;
     std::int64_t epochOutputSampleIndex;
@@ -36,7 +55,7 @@ struct MediaAudioCorrectionReachabilityPlan final {
 struct MediaSeparateRtpOutputRuntimePlan final {
     MediaScheduledRtpOutputPlan video;
     MediaScheduledRtpOutputPlan audio;
-    std::string sdpPath;
+    MediaSeparateRtpSdpRuntimePlan sdp;
 };
 
 struct MediaProjectMpegTsRuntimeOutputPlan final {

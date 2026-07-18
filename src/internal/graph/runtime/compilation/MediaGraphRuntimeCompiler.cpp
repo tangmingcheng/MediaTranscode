@@ -5,6 +5,7 @@
 #include "internal/graph/runtime/factory/MediaRuntimeNodeFactory.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
+#include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 
 #include <chrono>
 #include <string>
@@ -62,13 +63,18 @@ public:
     constexpr std::string_view CoordinatorGroupKey = "av_startup.sync_group";
     constexpr std::string_view AudioDriftControllerGroupKey =
         "audio_drift_controller.sync_group";
+    constexpr std::string_view ScheduledRtpSenderGroupKey =
+        "scheduled_rtp.sync_group";
     std::unordered_set<std::uint64_t> bindingIds;
     std::size_t schedulerCount = 0;
     std::size_t binderCount = 0;
     std::size_t sequencerCount = 0;
+    std::size_t scheduledRtpSenderCount = 0;
+    std::size_t dualMediaSdpPublisherCount = 0;
     std::size_t schedulerReferenceCount = 0;
     std::size_t binderReferenceCount = 0;
     std::size_t sequencerReferenceCount = 0;
+    std::size_t scheduledRtpSenderReferenceCount = 0;
     for (const auto& binding : executable.inputBindings) {
         if (!binding.nodeId.isValid() || !binding.prepared.valid() ||
             !bindingIds.insert(binding.nodeId.value).second) {
@@ -86,6 +92,10 @@ public:
         if (node.kind == MediaNodeKind::PlaybackEpochBinder) ++binderCount;
         if (node.kind == MediaNodeKind::ActivatedStartupReleaseSequencer)
             ++sequencerCount;
+        if (node.kind == MediaNodeKind::ScheduledRtpSender)
+            ++scheduledRtpSenderCount;
+        if (node.kind == MediaNodeKind::DualMediaSdpPublisher)
+            ++dualMediaSdpPublisherCount;
         if (node.kind == MediaNodeKind::RealtimeInput && !bindingIds.contains(node.id.value)) {
             return ::media::Status::failure(
                 ::media::ErrorInfo::notInitialized("MediaGraphRuntime missing prepared RealtimeInput binding"));
@@ -122,10 +132,14 @@ public:
             const bool audioDriftControllerConsumer =
                 node.kind == MediaNodeKind::AudioDriftController &&
                 key == AudioDriftControllerGroupKey;
+            const bool scheduledRtpSenderConsumer =
+                node.kind == MediaNodeKind::ScheduledRtpSender &&
+                key == ScheduledRtpSenderGroupKey;
             if (!schedulerConsumer && !binderConsumer &&
                 !startupClockConsumer && !sequencerConsumer &&
                 !rtpBinderConsumer && !initialGateConsumer &&
-                !coordinatorConsumer && !audioDriftControllerConsumer) {
+                !coordinatorConsumer && !audioDriftControllerConsumer &&
+                !scheduledRtpSenderConsumer) {
                 return ::media::Status::failure(
                     ::media::ErrorInfo::invalidArgument(
                         "MediaGraphRuntime found an unsupported A/V sync group consumer"));
@@ -133,6 +147,8 @@ public:
             if (schedulerConsumer) ++schedulerReferenceCount;
             if (binderConsumer) ++binderReferenceCount;
             if (sequencerConsumer) ++sequencerReferenceCount;
+            if (scheduledRtpSenderConsumer)
+                ++scheduledRtpSenderReferenceCount;
             if (value.empty() || !executable.avSyncBinding) {
                 return ::media::Status::failure(
                     ::media::ErrorInfo::notInitialized(
@@ -162,8 +178,19 @@ public:
                 ::media::ErrorInfo::notInitialized(
                     "MediaGraphRuntime A/V sync binding requires exactly one scheduler, binder, and activation release sequencer"));
         }
+        const bool hasScheduledRtpOutput = scheduledRtpSenderCount != 0 ||
+            dualMediaSdpPublisherCount != 0;
+        if (hasScheduledRtpOutput &&
+            (scheduledRtpSenderCount != 2 ||
+             scheduledRtpSenderReferenceCount != 2 ||
+             dualMediaSdpPublisherCount != 1)) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "MediaGraphRuntime scheduled RTP output requires exactly two injected senders and one SDP publisher"));
+        }
     } else if (schedulerCount != 0 || binderCount != 0 ||
-               sequencerCount != 0) {
+               sequencerCount != 0 || scheduledRtpSenderCount != 0 ||
+               dualMediaSdpPublisherCount != 0) {
         return ::media::Status::failure(::media::ErrorInfo::notInitialized(
             "Synchronized runtime nodes require an A/V sync binding"));
     }
@@ -257,11 +284,13 @@ public:
     std::vector<std::unique_ptr<MediaRuntimeNode>> preparedNodes;
     preparedNodes.reserve(context.graph()->nodes().size());
     const MediaNode* sequencer = nullptr;
+    std::vector<const MediaNode*> scheduledRtpSenders;
     for (const MediaNode& node : context.graph()->nodes()) {
         if (node.kind == MediaNodeKind::ActivatedStartupReleaseSequencer) {
             sequencer = &node;
-            break;
         }
+        if (node.kind == MediaNodeKind::ScheduledRtpSender)
+            scheduledRtpSenders.push_back(&node);
     }
     if (sequencer) {
         if (!playbackEpochActivationCapability) {
@@ -276,8 +305,35 @@ public:
         return ::media::Status::failure(::media::ErrorInfo::notInitialized(
             "Compiler-issued activation authority has no activation release sequencer"));
     }
+    std::shared_ptr<MediaAvSyncGroupRuntime> scheduledRtpGroup;
+    for (const MediaNode* sender : scheduledRtpSenders) {
+        if (!sender) {
+            return ::media::Status::failure(::media::ErrorInfo::internalError(
+                "Scheduled RTP sender registration lost its planned node"));
+        }
+        if (scheduler.findNode(sender->id)) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "Scheduled RTP sender runtime node is already registered without compiler injection"));
+        }
+        auto groupText = requiredNodeOption(
+            &sender->options, "MediaScheduledRtpSenderNode",
+            "scheduled_rtp.sync_group");
+        if (!groupText) return ::media::Status::failure(groupText.error());
+        MediaAvSyncGroupKey groupKey(std::move(groupText).value());
+        auto exactGroup = context.findAvSyncGroup(groupKey);
+        if (!exactGroup || exactGroup->key() != groupKey) {
+            return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+                "Scheduled RTP sender compiler injection cannot find its exact registered sync group"));
+        }
+        if (scheduledRtpGroup && scheduledRtpGroup != exactGroup) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "Scheduled RTP senders do not share the exact registered sync-group runtime"));
+        }
+        scheduledRtpGroup = std::move(exactGroup);
+    }
     for (const MediaNode& node : context.graph()->nodes()) {
-        if (node.kind == MediaNodeKind::ActivatedStartupReleaseSequencer)
+        if (node.kind == MediaNodeKind::ActivatedStartupReleaseSequencer ||
+            node.kind == MediaNodeKind::ScheduledRtpSender)
             continue;
         if (scheduler.findNode(node.id)) continue;
         if (!MediaRuntimeNodeFactory::supported(node.kind)) {
@@ -294,6 +350,14 @@ public:
                                 "register node=" + std::to_string(node.id.value) +
                                     " name=" + node.name +
                                     " kind=" + mediaGraphDiagnosticNodeKindName(node.kind));
+        preparedNodes.push_back(std::move(runtimeNode).value());
+    }
+    for (const MediaNode* sender : scheduledRtpSenders) {
+        auto runtimeNode = MediaRuntimeNodeFactory::createScheduledRtpSender(
+            *sender, scheduledRtpGroup);
+        if (!runtimeNode) {
+            return ::media::Status::failure(runtimeNode.error());
+        }
         preparedNodes.push_back(std::move(runtimeNode).value());
     }
     if (sequencer && !scheduler.findNode(sequencer->id)) {

@@ -4,6 +4,7 @@
 #include "internal/graph/runtime/MediaRuntimeNode.h"
 #include "internal/graph/runtime/factory/MediaRuntimeNodeBinding.h"
 #include "internal/graph/sync/MediaPlaybackEpochActivationCapability.h"
+#include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
 #include "media_transcode/Result.h"
 
 #include <memory>
@@ -20,6 +21,10 @@ public:
     createActivatedStartupReleaseSequencer(
         const MediaNode& node,
         MediaPlaybackEpochActivationCapability capability);
+    static ::media::Result<std::unique_ptr<MediaRuntimeNode>>
+    createScheduledRtpSender(
+        const MediaNode& node,
+        std::shared_ptr<MediaAvSyncGroupRuntime> syncGroup);
     static bool supported(MediaNodeKind kind) noexcept;
 };
 

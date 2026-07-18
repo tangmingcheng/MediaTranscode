@@ -7,6 +7,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncComponentBoundsPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeEdgePolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncPlanningFactsResolver.h"
+#include "internal/graph/protocol/sdp/MediaRtpSdpDescription.h"
 
 #include <cstdint>
 #include <limits>
@@ -253,6 +254,10 @@ namespace media::ffmpeg::graph {
         }
         const auto& output =
             std::get<MediaSeparateRtpOutputRuntimePlan>(runtime.protocolOutput);
+        auto sdpIdentity = MediaSdpSessionIdentity::create(
+            output.sdp.originUsername, 0, 0, output.sdp.sessionName,
+            output.sdp.originAddressFamily,
+            output.sdp.originNumericAddress, output.sdp.cname);
         const auto samePacketization = [](const auto& left, const auto& right) {
             return left.streamKind() == right.streamKind() &&
                 left.codecName() == right.codecName() &&
@@ -323,7 +328,14 @@ namespace media::ffmpeg::graph {
                 candidate.senderReportInterval ==
                     *runtime.synchronization.rtp->output.senderReportIntervalNs;
         };
-        if (output.sdpPath.empty() || output.sdpPath != outer.sdp.path ||
+        if (!sdpIdentity || output.sdp.path.empty() ||
+            output.sdp.path != outer.sdp.path ||
+            output.sdp.originUsername != outer.sdp.mediaId ||
+            output.sdp.sessionName != outer.sdp.mediaId ||
+            output.sdp.sessionIdPolicy !=
+                MediaRtpSdpSessionIdPolicy::SharedNtpEpoch ||
+            output.sdp.sessionVersionPolicy !=
+                MediaRtpSdpSessionVersionPolicy::ActivePlaybackGeneration ||
             !outer.videoOutput.scheduledPacketization ||
             !outer.audioOutput.scheduledPacketization ||
             outer.videoPlan.outputCodecName.empty() ||
@@ -342,6 +354,14 @@ namespace media::ffmpeg::graph {
                       MediaScheduledRtpPacketizationMode::AacLatm) ||
             output.video.transport.addressFamily() !=
                 output.audio.transport.addressFamily() ||
+            output.sdp.originAddressFamily !=
+                output.video.transport.addressFamily() ||
+            output.sdp.originNumericAddress !=
+                output.video.transport.remoteRtpEndpoint().numericAddress() ||
+            output.sdp.originNumericAddress !=
+                output.audio.transport.remoteRtpEndpoint().numericAddress() ||
+            output.sdp.cname != output.video.cname ||
+            output.sdp.cname != output.audio.cname ||
             output.video.transport.remoteRtpEndpoint().numericAddress() !=
                 output.audio.transport.remoteRtpEndpoint().numericAddress() ||
             output.audio.transport.remoteRtpEndpoint().port() !=

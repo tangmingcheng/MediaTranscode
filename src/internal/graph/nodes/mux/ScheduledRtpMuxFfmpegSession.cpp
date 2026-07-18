@@ -2,6 +2,7 @@
 
 #include "internal/graph/nodes/mux/ScheduledRtpMuxFfmpegOptions.h"
 
+#include "internal/graph/protocol/codec/MediaH264AnnexBAccessUnitValidator.h"
 #include "internal/graph/protocol/rtp/MediaRtpDatagramRewriter.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 
@@ -162,6 +163,13 @@ ScheduledRtpMuxFfmpegSession::~ScheduledRtpMuxFfmpegSession()
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument(
                 "scheduled RTP mux requires an open session and non-empty access unit"));
+    }
+    if (m_config->packetizationMode() ==
+        MediaScheduledRtpPacketizationMode::H264AnnexB) {
+        auto valid = MediaH264AnnexBAccessUnitValidator::validate(
+            std::span<const std::uint8_t>(
+                packet.data, static_cast<std::size_t>(packet.size)));
+        if (!valid) return valid;
     }
     auto copy = ::media::ffmpeg::makePacket();
     if (!copy) {

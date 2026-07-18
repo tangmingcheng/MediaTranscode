@@ -705,9 +705,9 @@ void testRealtimeAvSyncRuntimeProductRejectsIndependentMutations(TestContext& ct
         MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp;
     auto& rtp = std::get<MediaSeparateRtpOutputRuntimePlan>(
         runtime.protocolOutput);
-    rtp.sdpPath.clear();
+    rtp.sdp.path.clear();
     expectInvalid();
-    rtp.sdpPath = outer.sdp.path;
+    rtp.sdp.path = outer.sdp.path;
     const auto originalVideoPacketization = rtp.video.packetization;
     rtp.video.stream = MediaScheduledStream::Audio;
     expectInvalid();
