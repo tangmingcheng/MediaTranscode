@@ -77,6 +77,7 @@ public:
         MediaTsIncrementalPacketSink* incrementalSink);
 
     ::media::Status push(std::span<const uint8_t> bytes);
+    ::media::Status finish();
     std::size_t retainedByteCount() const noexcept { return m_carrySize; }
     uint64_t copiedPacketByteCount() const noexcept { return m_copiedPacketBytes; }
 
@@ -107,6 +108,8 @@ private:
     uint64_t m_nextInputOffset = 0;
     uint64_t m_copiedPacketBytes = 0;
     bool m_strideLocked = false;
+    bool m_finished = false;
+    std::optional<::media::ErrorInfo> m_finishFailure;
     std::optional<ParsedPacketEvidence> m_publishedEvidence;
     std::unordered_map<uint16_t, ContinuityState> m_continuity;
 };

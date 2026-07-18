@@ -201,6 +201,12 @@ public:
         return m_timeline.observePacketPosition(packetPosition);
     }
 
+    ::media::Status finish()
+    {
+        std::lock_guard lock(m_mutex);
+        return m_parser->finish();
+    }
+
     ::media::Status configureRuntimeBinding(const MediaTsRuntimeBinding& binding)
     {
         std::lock_guard lock(m_mutex);
@@ -466,6 +472,11 @@ MediaTsInputSession::readFrameFromSource()
             MediaTsReadFrameEnvelope{MediaTsReadFrameState::Waiting});
     }
     if (result == AVERROR_EOF) {
+        auto finished = m_evidenceObserver->finish();
+        if (!finished) {
+            return ::media::Result<MediaTsReadFrameEnvelope>::failure(
+                finished.error());
+        }
         return ::media::Result<MediaTsReadFrameEnvelope>::success(
             MediaTsReadFrameEnvelope{MediaTsReadFrameState::EndOfStream});
     }

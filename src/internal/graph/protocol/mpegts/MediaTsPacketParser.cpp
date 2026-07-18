@@ -35,6 +35,9 @@ MediaTsPacketParser::MediaTsPacketParser(MediaTsPacketSink& sink,
 
 ::media::Status MediaTsPacketParser::push(std::span<const uint8_t> bytes)
 {
+    if (m_finished) {
+        return invalidPacket("MPEG-TS parser cannot accept bytes after finish");
+    }
     if (bytes.size() > std::numeric_limits<uint64_t>::max() - m_nextInputOffset) {
         return invalidPacket("MPEG-TS absolute input offset overflow");
     }
@@ -160,6 +163,29 @@ MediaTsPacketParser::MediaTsPacketParser(MediaTsPacketSink& sink,
             return ::media::Status::success();
         }
     }
+}
+
+::media::Status MediaTsPacketParser::finish()
+{
+    if (m_finishFailure) {
+        return ::media::Status::failure(*m_finishFailure);
+    }
+    if (m_finished) return ::media::Status::success();
+    m_finished = true;
+    if (m_carrySize == 0) return ::media::Status::success();
+    if (m_carrySize != m_carry.size() || m_carry[0] != 0x47) {
+        m_finishFailure = ::media::ErrorInfo::invalidArgument(
+            "MPEG-TS parser finished with a truncated or unframed packet");
+        return ::media::Status::failure(*m_finishFailure);
+    }
+    auto status = parsePacket(m_carry, m_carryOffset);
+    if (!status) {
+        m_finishFailure = status.error();
+        return ::media::Status::failure(*m_finishFailure);
+    }
+    m_carrySize = 0;
+    m_publishedEvidence.reset();
+    return ::media::Status::success();
 }
 
 ::media::Status MediaTsPacketParser::publishIncrementalEvidence(

@@ -616,6 +616,50 @@ void testEveryPacketRequiresNextStrideConfirmation(TestContext& ctx)
     EXPECT_EQ(ctx, largeSink.packetCount, PacketCount - 1);
     EXPECT_TRUE(ctx, largeParser.value()->retainedByteCount() <= 188);
     EXPECT_EQ(ctx, largeParser.value()->copiedPacketByteCount(), static_cast<uint64_t>(0));
+    EXPECT_TRUE(ctx, largeParser.value()->finish());
+    EXPECT_EQ(ctx, largeSink.packetCount, PacketCount);
+    EXPECT_EQ(ctx, largeParser.value()->retainedByteCount(), std::size_t{0});
+    EXPECT_TRUE(ctx, largeParser.value()->finish());
+    EXPECT_FALSE(ctx, largeParser.value()->push(first));
+
+    RecordingPacketSink singleSink;
+    auto singleParser = MediaTsPacketParser::create(188, singleSink, nullptr);
+    EXPECT_TRUE(ctx, singleParser);
+    EXPECT_TRUE(ctx, singleParser.value()->push(first));
+    EXPECT_TRUE(ctx, singleSink.packets.empty());
+    EXPECT_TRUE(ctx, singleParser.value()->finish());
+    EXPECT_EQ(ctx, singleSink.packets.size(), std::size_t{1});
+
+    std::vector<std::string> terminalOrder;
+    OrderedPacketSink terminalPacketSink(terminalOrder);
+    RecordingPrefixSink terminalPrefixSink(&terminalOrder);
+    auto terminalParser = MediaTsPacketParser::create(
+        188, terminalPacketSink, &terminalPrefixSink);
+    EXPECT_TRUE(ctx, terminalParser);
+    const auto samePidSecond = payloadPacket(
+        0x150, 1, false, std::array<uint8_t, 1>{2});
+    const std::array terminalPackets{first, samePidSecond};
+    EXPECT_TRUE(ctx, terminalParser.value()->push(packets(terminalPackets)));
+    EXPECT_TRUE(ctx, terminalParser.value()->finish());
+    const std::vector<std::string> expectedTerminalOrder{
+        "evidence", "prefix", "packet",
+        "evidence", "prefix", "packet"};
+    EXPECT_EQ(ctx, terminalOrder, expectedTerminalOrder);
+    EXPECT_EQ(ctx, terminalPrefixSink.evidence.size(), std::size_t{2});
+    EXPECT_EQ(ctx, terminalPrefixSink.packets.size(), std::size_t{2});
+
+    RecordingPacketSink truncatedSink;
+    auto truncatedParser = MediaTsPacketParser::create(188, truncatedSink, nullptr);
+    EXPECT_TRUE(ctx, truncatedParser);
+    EXPECT_TRUE(ctx, truncatedParser.value()->push(
+                         std::span(first).first(first.size() - 1)));
+    auto truncated = truncatedParser.value()->finish();
+    auto repeated = truncatedParser.value()->finish();
+    EXPECT_FALSE(ctx, truncated);
+    EXPECT_FALSE(ctx, repeated);
+    if (!truncated && !repeated) {
+        EXPECT_EQ(ctx, repeated.error().message, truncated.error().message);
+    }
 }
 
 void testCompleteAdaptationStructureValidation(TestContext& ctx)
