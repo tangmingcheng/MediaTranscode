@@ -618,19 +618,19 @@ dispatch/presentation time. `MediaAvOutputSchedulerNode` remains the sole media
 pacing authority; TS packet cadence is transport serialization, not a second
 media clock.
 
-- [ ] **Step 1: Write RED plan/adapter tests**
+- [x] **Step 1: Write RED plan/adapter tests**
 
 Cover plan-before-media ordering, both streams, PTS/DTS/PCR derivation from playback epoch, codec config, backpressure, EOF, abort/reset, generation mismatch, and absence of FFmpeg mux fallback.
 
-- [ ] **Step 2: Implement and integrate with the existing project mux**
+- [x] **Step 2: Implement and integrate with the existing project mux**
 
 Do not infer timestamps from input PCR jitter or codec packet PTS. Do not create a second pacing authority inside the mux.
 
-- [ ] **Step 3: Run GREEN and decode integration**
+- [x] **Step 3: Run GREEN and decode integration**
 
 Verify continuity counters, program/PIDs, PCR cadence, and decodable H.264/AAC output.
 
-- [ ] **Step 4: Review, commit, and push**
+- [x] **Step 4: Review, commit, and push**
 
 Commit as `feat: mux scheduled project mpeg ts output`.
 
