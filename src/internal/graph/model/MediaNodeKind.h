@@ -83,7 +83,8 @@ enum class MediaNodeKind {
     ActivatedStartupReleaseSequencer = 57,
     SourceClockStateFanout = 58,
     AudioDriftController = 59,
-    EncodedAudioCanonicalizer = 60
+    EncodedAudioCanonicalizer = 60,
+    ScheduledOutputRouter = 61
 };
 
 } // namespace media::ffmpeg::graph

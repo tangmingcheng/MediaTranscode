@@ -49,6 +49,7 @@
 #include "internal/graph/nodes/sync/MediaSourceClockStateFanoutNode.h"
 #include "internal/graph/nodes/sync/MediaAudioDriftControllerNode.h"
 #include "internal/graph/nodes/sync/MediaEncodedAudioCanonicalizerNode.h"
+#include "internal/graph/nodes/sync/MediaScheduledOutputRouterNode.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/nodes/video/HardwareTransferNode.h"
 #include "internal/graph/nodes/video/VideoDecodeNode.h"
@@ -322,6 +323,9 @@ template <typename Node>
     case MediaNodeKind::EncodedAudioCanonicalizer:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::make_unique<MediaEncodedAudioCanonicalizerNode>(node.id));
+    case MediaNodeKind::ScheduledOutputRouter:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+            std::make_unique<MediaScheduledOutputRouterNode>(node.id));
     case MediaNodeKind::PacketMerge:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<PacketMergeNode>(node.id));
     case MediaNodeKind::FileMux:
@@ -418,6 +422,7 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::SourceClockStateFanout:
     case MediaNodeKind::AudioDriftController:
     case MediaNodeKind::EncodedAudioCanonicalizer:
+    case MediaNodeKind::ScheduledOutputRouter:
     case MediaNodeKind::PacketMerge:
     case MediaNodeKind::FileMux:
     case MediaNodeKind::RtpMux:

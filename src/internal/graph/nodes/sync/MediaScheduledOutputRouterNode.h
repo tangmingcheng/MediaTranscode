@@ -1,16 +1,13 @@
 #pragma once
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
-
-#include <vector>
+#include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 
 namespace media::ffmpeg::graph {
 
-class MediaAvStartupReleaseBuffer;
-
-class MediaAvBoundReleaseExtractorNode final : public FFmpegNodeRuntime {
+class MediaScheduledOutputRouterNode final : public FFmpegNodeRuntime {
 public:
-    explicit MediaAvBoundReleaseExtractorNode(MediaNodeId nodeId);
+    explicit MediaScheduledOutputRouterNode(MediaNodeId nodeId);
     static MediaNodeKind staticKind() noexcept;
     ::media::Status start(MediaGraphExecutionContext& context) override;
     ::media::Status stop(MediaGraphExecutionContext& context) override;
@@ -21,13 +18,16 @@ protected:
         MediaGraphExecutionContext& context) override;
 
 private:
-    ::media::Status commit(MediaGraphExecutionContext& context);
-    ::media::Status stageRelease(const MediaAvStartupReleaseBuffer& release);
+    ::media::Status configureTopology(
+        MediaGraphExecutionContext& context) const;
+    ::media::Result<MediaNodeProcessResult> routeScheduledUnit(
+        MediaGraphExecutionContext& context);
+    ::media::Result<MediaNodeProcessResult> routeControl(
+        MediaGraphExecutionContext& context,
+        MediaControlBufferKind kind);
     void resetState() noexcept;
+
     MediaBufferRef m_pending;
-    std::vector<MediaBufferRef> m_stagedVideo;
-    std::vector<MediaBufferRef> m_stagedAudio;
-    bool m_releaseStaged = false;
 };
 
 } // namespace media::ffmpeg::graph

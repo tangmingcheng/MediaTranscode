@@ -9,10 +9,14 @@
 #include "media_transcode/Result.h"
 
 #include <memory>
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
 
 namespace media::ffmpeg::graph {
 
 class MediaNodeWakeup;
+class MediaAtomicOutputTransaction;
 
 class MediaChannel final {
 public:
@@ -48,6 +52,13 @@ public:
     void setProducerWakeup(MediaNodeWakeup& wakeup) noexcept;
 
 private:
+    friend class MediaAtomicOutputTransaction;
+
+    MediaQueuePushOutcome pushOutcomeLocked(
+        MediaBufferRef buffer,
+        bool publishAccepted = true);
+    void publishAcceptedMutation() noexcept;
+    void signalMutationWaiters() noexcept;
     void refreshQueueMetrics();
 
 private:
@@ -62,6 +73,12 @@ private:
     MediaChannelMetrics m_metrics;
     MediaNodeWakeup* m_consumerWakeup = nullptr;
     MediaNodeWakeup* m_producerWakeup = nullptr;
+    mutable std::mutex m_mutationMutex;
+    std::condition_variable m_mutationChanged;
+    std::atomic_uint64_t m_mutationSequence{0};
+    std::atomic_uint64_t m_externalBlockedPushes{0};
+    std::atomic_size_t m_externalBlockedProducers{0};
+    std::atomic_size_t m_externalBlockedConsumers{0};
 };
 
 } // namespace media::ffmpeg::graph

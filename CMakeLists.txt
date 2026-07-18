@@ -269,6 +269,20 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
     media_transcode_register_test(
         media_transcode_av_sync_audio_control_tests "node;deterministic")
 
+    add_executable(media_transcode_av_sync_scheduled_output_tests
+        tests/unit/av_sync_scheduled_output_tests.cpp
+    )
+    media_transcode_configure_test(media_transcode_av_sync_scheduled_output_tests)
+    media_transcode_register_test(
+        media_transcode_av_sync_scheduled_output_tests "node;builder;deterministic")
+
+    add_executable(media_transcode_channel_atomic_output_tests
+        tests/unit/media_channel_atomic_output_tests.cpp
+    )
+    media_transcode_configure_test(media_transcode_channel_atomic_output_tests)
+    media_transcode_register_test(
+        media_transcode_channel_atomic_output_tests "runtime;deterministic")
+
     add_executable(media_transcode_video_codec_lineage_tests
         tests/unit/video_codec_lineage_tests.cpp
     )

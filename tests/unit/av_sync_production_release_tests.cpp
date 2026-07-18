@@ -1,6 +1,7 @@
 #include "common/TestAssert.h"
 
 #include "internal/graph/nodes/sync/MediaAvStartupClockNode.h"
+#include "internal/graph/nodes/sync/MediaAvBoundReleaseExtractorNode.h"
 #include "internal/graph/nodes/sync/MediaActivatedStartupReleaseSequencerNode.h"
 #include "internal/graph/nodes/sync/MediaRtpSourceClockStateAdapterNode.h"
 #include "internal/graph/nodes/sync/MediaPlaybackEpochBinderNode.h"
@@ -1031,6 +1032,82 @@ void testStartupClockFailsClosedBeforeLockAndOnMissingTerminal(TestContext& ctx)
     verify(3);
 }
 
+void testBoundReleaseAtomicOutputPolicyMigrationIsExplicit(TestContext& ctx)
+{
+    const auto verify = [&](MediaEdgePolicy outputPolicy, bool accepted) {
+        MediaGraph graph;
+        const auto source = graph.addNode(MediaNodeKind::DebugDump, "source");
+        const auto extractor = graph.addNode(
+            MediaNodeKind::AvBoundReleaseExtractor, "extractor");
+        const auto video = graph.addNode(MediaNodeKind::DebugDump, "video");
+        const auto audio = graph.addNode(MediaNodeKind::DebugDump, "audio");
+        graph.addOutputPort(source, "release", MediaStreamKind::Metadata,
+                            MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+        graph.addInputPort(extractor, "in", MediaStreamKind::Metadata,
+                           MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+        graph.addOutputPort(extractor, "video", MediaStreamKind::Video,
+                            MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+        graph.addOutputPort(extractor, "audio", MediaStreamKind::Audio,
+                            MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+        graph.addInputPort(video, "in", MediaStreamKind::Video,
+                           MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+        graph.addInputPort(audio, "in", MediaStreamKind::Audio,
+                           MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+        EXPECT_TRUE(ctx, graph.connect(
+                             source, "release", extractor, "in", "release",
+                             MediaGraphBuildSupport::blockingQueuePolicy(1)));
+        EXPECT_TRUE(ctx, graph.connect(
+                             extractor, "video", video, "in", "video",
+                             outputPolicy));
+        EXPECT_TRUE(ctx, graph.connect(
+                             extractor, "audio", audio, "in", "audio",
+                             outputPolicy));
+        MediaGraphExecutionContext execution;
+        EXPECT_TRUE(ctx, execution.compile(graph));
+        MediaAvBoundReleaseExtractorNode node(extractor);
+        const auto started = node.start(execution);
+        if (accepted) {
+            EXPECT_TRUE(ctx, started);
+            auto eof = makeMediaBufferRef<MediaControlBuffer>(
+                MediaControlBufferKind::Eof);
+            EXPECT_TRUE(ctx, execution.findInputChannel(extractor, "in")->push(eof));
+            const auto result = node.process(execution);
+            EXPECT_TRUE(ctx, result && result.value().state ==
+                                          MediaNodeProcessState::Finished);
+            EXPECT_EQ(ctx, execution.findInputChannel(video, "in")->size(),
+                      static_cast<std::size_t>(1));
+            EXPECT_EQ(ctx, execution.findInputChannel(audio, "in")->size(),
+                      static_cast<std::size_t>(1));
+        } else {
+            EXPECT_FALSE(ctx, started);
+            if (!started) {
+                EXPECT_EQ(ctx, started.error().code,
+                          ::media::ErrorCode::InvalidArgument);
+            }
+            EXPECT_EQ(ctx, execution.findInputChannel(extractor, "in")->size(),
+                      static_cast<std::size_t>(0));
+            EXPECT_EQ(ctx, execution.findInputChannel(video, "in")->size(),
+                      static_cast<std::size_t>(0));
+            EXPECT_EQ(ctx, execution.findInputChannel(audio, "in")->size(),
+                      static_cast<std::size_t>(0));
+        }
+    };
+
+    const auto exact = MediaGraphBuildSupport::blockingQueuePolicy(1);
+    verify(exact, true);
+    auto dropping = exact;
+    dropping.queuePolicy.overflowPolicy =
+        MediaQueueOverflowPolicy::DropNewest;
+    verify(dropping, false);
+    auto reordered = exact;
+    reordered.queuePolicy.orderingPolicy =
+        MediaQueueOrderingPolicy::Timestamp;
+    verify(reordered, false);
+    auto notPreserved = exact;
+    notPreserved.queuePolicy.preserveOrdering = false;
+    verify(notPreserved, false);
+}
+
 } // namespace
 
 int main()
@@ -1058,5 +1135,6 @@ int main()
     testRtpAdapterPropagatesTypedControlsAndFailsClosed(ctx);
     testStartupClockUsesRegisteredMasterDeadline(ctx);
     testStartupClockFailsClosedBeforeLockAndOnMissingTerminal(ctx);
+    testBoundReleaseAtomicOutputPolicyMigrationIsExplicit(ctx);
     return ctx.failures == 0 ? 0 : 1;
 }
