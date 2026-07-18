@@ -555,11 +555,11 @@ must match the planner descriptor. The sender emits an opened description only
 after epoch, transport, and codec configuration are valid. SDP publication
 waits for both descriptions and writes one dual-media SDP transactionally.
 
-- [ ] **Step 1: Write RED sender/SDP tests**
+- [x] **Step 1: Write RED sender/SDP tests**
 
 Cover video/audio packetization, shared NTP epoch/common CNAME, distinct SSRC/ports, periodic SR, open rollback, blocked writes, EOF/abort/reset, missing codec config, duplicate description, and atomic SDP replacement.
 
-- [ ] **Step 2: Implement RAII nodes and output segment**
+- [x] **Step 2: Implement RAII nodes and output segment**
 
 Reuse `ScheduledRtpSenderSession` and its existing
 `ScheduledRtpMuxFfmpegSessionFactory`. The FFmpeg session is strictly a
@@ -569,13 +569,18 @@ The shared scheduler selects AU dispatch time, and `ScheduledRtpSenderSession`
 maps the planned timestamp and owns transport/RTCP. Do not create graph-level
 `RtpMuxNode` or `RtpOutputNode`, and do not invoke FFmpeg mux pacing.
 
-- [ ] **Step 3: Run GREEN and loopback integration**
+- [x] **Step 3: Run GREEN and loopback integration**
 
 Run unit targets and RTP transport integration. Decode both elementary outputs using the generated SDP.
 
-- [ ] **Step 4: Review, commit, and push**
+- [x] **Step 4: Review, commit, and push**
 
 Commit as `feat: send scheduled separate rtp output`.
+
+Implementation commits `d142558`, `8ebfa7d`, and `9ffa1ac` complete the
+production sender/SDP path. Clean verification, the ten-target matrix, real
+receiver-first dual-media SDP decode, and independent review all passed. The
+commits are ready to push to `codex/quality-priority-improvements`.
 
 ---
 
