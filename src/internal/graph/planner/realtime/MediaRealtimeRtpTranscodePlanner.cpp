@@ -331,12 +331,25 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
     }
     MediaAudioPipelinePlannerOptions audioOptions = std::move(audioOptionsResult).value();
 
+    std::optional<MediaAvSyncPlan> plannedRawRtpAvSync;
+    if (MediaRealtimeRequestClassifier::rawRtpInput(options) &&
+        MediaRealtimeRequestClassifier::audioRequested(options)) {
+        auto avSync = MediaAvSyncPlanner::plan(options);
+        if (!avSync) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                avSync.error());
+        }
+        plannedRawRtpAvSync.emplace(std::move(avSync).value());
+    }
+
     std::optional<MediaRealtimeRawInputPlan> rawInput;
     MediaPipelinePlan videoPlan;
     MediaAudioPipelinePlan audioPlan;
     MediaVideoTranscodeParameters videoParameters;
     if (MediaRealtimeRequestClassifier::rawRtpInput(options)) {
-        auto raw = MediaRealtimeInputPlanner::planRawRtp(options);
+        auto raw = MediaRealtimeInputPlanner::planRawRtp(
+            options,
+            plannedRawRtpAvSync ? &*plannedRawRtpAvSync : nullptr);
         if (!raw) return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(raw.error());
         rawInput.emplace(std::move(raw).value());
 
@@ -485,9 +498,12 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
             *plan.audioPlan.resolvedOutput});
     }
     if (MediaRealtimeRequestClassifier::audioRequested(options)) {
-        auto avSync = MediaAvSyncPlanner::plan(
-            options, selectedTsProgram,
-            resolvedTsFacts ? &*resolvedTsFacts : nullptr);
+        auto avSync = plannedRawRtpAvSync
+            ? ::media::Result<MediaAvSyncPlan>::success(
+                  std::move(*plannedRawRtpAvSync))
+            : MediaAvSyncPlanner::plan(
+                  options, selectedTsProgram,
+                  resolvedTsFacts ? &*resolvedTsFacts : nullptr);
         if (!avSync) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(avSync.error());
         }

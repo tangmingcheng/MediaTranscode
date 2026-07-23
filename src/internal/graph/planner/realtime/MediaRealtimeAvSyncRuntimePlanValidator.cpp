@@ -206,6 +206,37 @@ namespace media::ffmpeg::graph {
 
     if (*runtime.synchronization.topology ==
         MediaAvSyncTopology::SeparateRtpToSeparateRtp) {
+        const auto& rtpInputPolicy = runtime.synchronization.rtp->input;
+        const bool requireCname =
+            rtpInputPolicy.streamAssociationMode ==
+            MediaAvSyncRtpStreamAssociationMode::CommonCname;
+        constexpr std::int64_t Millisecond = 1'000'000;
+        const bool transportPolicyMatches =
+            outer.input.rtpTransport && outer.audioInput.rtpTransport &&
+            rtpInputPolicy.requireSenderReports &&
+            rtpInputPolicy.rtcpCompositionMode &&
+            rtpInputPolicy.senderReportTimeoutNs &&
+            rtpInputPolicy.identityEvidenceTimeoutNs &&
+            rtpInputPolicy.senderReportTimeoutNs->nanoseconds() % Millisecond == 0 &&
+            rtpInputPolicy.identityEvidenceTimeoutNs->nanoseconds() % Millisecond == 0 &&
+            outer.input.rtpTransport->requireSenderReports ==
+                *rtpInputPolicy.requireSenderReports &&
+            outer.audioInput.rtpTransport->requireSenderReports ==
+                *rtpInputPolicy.requireSenderReports &&
+            outer.input.rtpTransport->requireCname == requireCname &&
+            outer.audioInput.rtpTransport->requireCname == requireCname &&
+            outer.input.rtpTransport->senderReportTimeoutMs ==
+                rtpInputPolicy.senderReportTimeoutNs->nanoseconds() / Millisecond &&
+            outer.audioInput.rtpTransport->senderReportTimeoutMs ==
+                rtpInputPolicy.senderReportTimeoutNs->nanoseconds() / Millisecond &&
+            outer.input.rtpTransport->cnameTimeoutMs ==
+                rtpInputPolicy.identityEvidenceTimeoutNs->nanoseconds() / Millisecond &&
+            outer.audioInput.rtpTransport->cnameTimeoutMs ==
+                rtpInputPolicy.identityEvidenceTimeoutNs->nanoseconds() / Millisecond &&
+            outer.input.rtpTransport->rtcpCompositionMode ==
+                rtpInputPolicy.rtcpCompositionMode &&
+            outer.audioInput.rtpTransport->rtcpCompositionMode ==
+                rtpInputPolicy.rtcpCompositionMode;
         if (outer.inputLayout != RealtimeInputStreamLayout::SeparateStreams ||
             outer.outputLayout != RealtimeOutputStreamLayout::SeparateStreams ||
             runtime.outputAdapter !=
@@ -221,7 +252,8 @@ namespace media::ffmpeg::graph {
             !std::holds_alternative<MediaRtpTimestampDeltaDurationPlan>(
                 assembly.video.duration) ||
             !std::holds_alternative<MediaPlannedAudioSamplesDurationPlan>(
-                assembly.audio.duration)) {
+                assembly.audio.duration) ||
+            !transportPolicyMatches) {
             return invalid("RTP topology and adapter");
         }
         const auto& videoDuration =

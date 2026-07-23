@@ -462,6 +462,15 @@ void testRealtimeAvSyncRuntimeProductRejectsIndependentMutations(TestContext& ct
     expectInvalid();
     outer.audioPacketNormalizationRequired = false;
 
+    outer.input.rtpTransport->requireCname = true;
+    expectInvalid();
+    outer.input.rtpTransport->requireCname = false;
+    outer.audioInput.rtpTransport->rtcpCompositionMode =
+        MediaRtcpCompositionMode::StrictCompoundRfc3550;
+    expectInvalid();
+    outer.audioInput.rtpTransport->rtcpCompositionMode =
+        MediaRtcpCompositionMode::ReducedSizeRfc5506;
+
     const auto selectedPlanningFacts = runtime.planningFacts;
     runtime.planningFacts.outputSampleRate.reset();
     expectInvalid();
@@ -1953,7 +1962,8 @@ void testProjectTsOutputRequiresExplicitUdpEndpoint(TestContext& ctx)
 
 void testAvSyncPlannerBuildsCompleteRtpContract(TestContext& ctx)
 {
-    const auto result = MediaAvSyncPlanner::plan(avSyncRtpRequest());
+    const auto request = avSyncRtpRequest();
+    const auto result = MediaAvSyncPlanner::plan(request);
     EXPECT_TRUE(ctx, result);
     if (!result) return;
 
@@ -1964,7 +1974,12 @@ void testAvSyncPlannerBuildsCompleteRtpContract(TestContext& ctx)
     EXPECT_EQ(ctx, *plan.canonicalTimeBaseDenominator, 1000000000);
     EXPECT_EQ(ctx, *plan.rtp->videoInput.clockRate, 90000);
     EXPECT_EQ(ctx, *plan.rtp->audioInput.clockRate, 48000);
-    EXPECT_TRUE(ctx, *plan.rtp->input.requireCommonCname);
+    EXPECT_EQ(ctx, plan.rtp->input.streamAssociationMode,
+              MediaAvSyncRtpStreamAssociationMode::PlannedStreamPair);
+    EXPECT_EQ(ctx, plan.rtp->input.rtcpCompositionMode,
+              MediaRtcpCompositionMode::ReducedSizeRfc5506);
+    EXPECT_EQ(ctx, plan.rtp->input.identityEvidenceTimeoutNs->nanoseconds(),
+              9'000'000'000LL);
     EXPECT_TRUE(ctx, *plan.rtp->input.requireSenderReports);
     EXPECT_EQ(ctx, plan.rtp->input.senderReportTimeoutNs->nanoseconds(),
               7'000'000'000LL);
@@ -1982,6 +1997,26 @@ void testAvSyncPlannerBuildsCompleteRtpContract(TestContext& ctx)
     EXPECT_FALSE(ctx, plan.audioServo.frequencyFilterTimeConstantNs.has_value());
     EXPECT_TRUE(ctx, MediaAvSyncPlanValidator::validatePolicy(plan));
     EXPECT_FALSE(ctx, MediaAvSyncPlanValidator::validate(plan));
+
+    const auto rawRequest = completeAvSyncRtpRequest();
+    const auto rawSynchronization = MediaAvSyncPlanner::plan(rawRequest);
+    EXPECT_TRUE(ctx, rawSynchronization);
+    if (!rawSynchronization) return;
+    const auto raw = MediaRealtimeInputPlanner::planRawRtp(
+        rawRequest, &rawSynchronization.value());
+    EXPECT_TRUE(ctx, raw);
+    if (raw && raw.value().audioTransport) {
+        for (const auto* transport : {
+                 &raw.value().videoTransport,
+                 &*raw.value().audioTransport}) {
+            EXPECT_TRUE(ctx, transport->requireSenderReports);
+            EXPECT_FALSE(ctx, transport->requireCname);
+            EXPECT_EQ(ctx, transport->senderReportTimeoutMs, 7'000);
+            EXPECT_EQ(ctx, transport->cnameTimeoutMs, 9'000);
+            EXPECT_EQ(ctx, transport->rtcpCompositionMode,
+                      MediaRtcpCompositionMode::ReducedSizeRfc5506);
+        }
+    }
 
     auto excessiveCapacity = avSyncRtpRequest();
     excessiveCapacity.parameters.queues.packet = 257;
@@ -2008,7 +2043,7 @@ void testRawRtpInputPlannerProducesCompleteTransportPolicy(TestContext& ctx)
         "packetization-mode=1;sprop-parameter-sets=Z01AMpWQAoALWwEQAAA+gAAOpghA,aOuPIA==;profile-level-id=4D4032";
     request.parameters.execution.includeAudio = false;
 
-    const auto raw = MediaRealtimeInputPlanner::planRawRtp(request);
+    const auto raw = MediaRealtimeInputPlanner::planRawRtp(request, nullptr);
     EXPECT_TRUE(ctx, raw);
     if (!raw) return;
     MediaRealtimeRtpTranscodePlan plan;
@@ -2035,7 +2070,7 @@ void testRawRtpInputPlannerProducesCompleteTransportPolicy(TestContext& ctx)
 
     auto ipv6Request = request;
     ipv6Request.input.videoRtp.url = "rtp://[::1]:5004";
-    const auto ipv6Raw = MediaRealtimeInputPlanner::planRawRtp(ipv6Request);
+    const auto ipv6Raw = MediaRealtimeInputPlanner::planRawRtp(ipv6Request, nullptr);
     EXPECT_TRUE(ctx, ipv6Raw);
     if (ipv6Raw) {
         EXPECT_EQ(ctx, ipv6Raw.value().videoTransport.addressFamily, MediaIpAddressFamily::Ipv6);
@@ -2046,28 +2081,28 @@ void testRawRtpInputPlannerProducesCompleteTransportPolicy(TestContext& ctx)
 
     auto multicastV4 = request;
     multicastV4.input.videoRtp.url = "rtp://239.1.2.3:5004";
-    EXPECT_FALSE(ctx, MediaRealtimeInputPlanner::planRawRtp(multicastV4));
+    EXPECT_FALSE(ctx, MediaRealtimeInputPlanner::planRawRtp(multicastV4, nullptr));
     auto zeroNetwork = request;
     zeroNetwork.input.videoRtp.url = "rtp://0.1.2.3:5004";
-    EXPECT_FALSE(ctx, MediaRealtimeInputPlanner::planRawRtp(zeroNetwork));
+    EXPECT_FALSE(ctx, MediaRealtimeInputPlanner::planRawRtp(zeroNetwork, nullptr));
     auto reservedHigh = request;
     reservedHigh.input.videoRtp.url = "rtp://240.0.0.1:5004";
-    EXPECT_FALSE(ctx, MediaRealtimeInputPlanner::planRawRtp(reservedHigh));
+    EXPECT_FALSE(ctx, MediaRealtimeInputPlanner::planRawRtp(reservedHigh, nullptr));
     auto reserved255 = request;
     reserved255.input.videoRtp.url = "rtp://255.0.0.1:5004";
-    EXPECT_FALSE(ctx, MediaRealtimeInputPlanner::planRawRtp(reserved255));
+    EXPECT_FALSE(ctx, MediaRealtimeInputPlanner::planRawRtp(reserved255, nullptr));
     auto loopback = request;
     loopback.input.videoRtp.url = "rtp://127.0.0.1:5004";
-    EXPECT_TRUE(ctx, MediaRealtimeInputPlanner::planRawRtp(loopback));
+    EXPECT_TRUE(ctx, MediaRealtimeInputPlanner::planRawRtp(loopback, nullptr));
     auto multicastV6 = request;
     multicastV6.input.videoRtp.url = "rtp://[ff02::1]:5004";
-    EXPECT_FALSE(ctx, MediaRealtimeInputPlanner::planRawRtp(multicastV6));
+    EXPECT_FALSE(ctx, MediaRealtimeInputPlanner::planRawRtp(multicastV6, nullptr));
     auto hostname = request;
     hostname.input.videoRtp.url = "rtp://localhost:5004";
-    EXPECT_FALSE(ctx, MediaRealtimeInputPlanner::planRawRtp(hostname));
+    EXPECT_FALSE(ctx, MediaRealtimeInputPlanner::planRawRtp(hostname, nullptr));
     auto familyMismatch = request;
     familyMismatch.input.videoRtp.url = "rtp://[127.0.0.1]:5004";
-    EXPECT_FALSE(ctx, MediaRealtimeInputPlanner::planRawRtp(familyMismatch));
+    EXPECT_FALSE(ctx, MediaRealtimeInputPlanner::planRawRtp(familyMismatch, nullptr));
 }
 
 void testAvSyncPlannerBuildsCompleteTsContract(TestContext& ctx)
@@ -2216,7 +2251,14 @@ void testAvSyncValidatorRejectsMissingAndInconsistentFields(TestContext& ctx)
     EXPECT_MISSING(rtp->audioInput.identity);
     EXPECT_MISSING(rtp->audioInput.payloadType);
     EXPECT_MISSING(rtp->audioInput.clockRate);
-    EXPECT_MISSING(rtp->input.requireCommonCname);
+    {
+        MediaAvSyncPlan missing = complete;
+        missing.rtp->input.streamAssociationMode =
+            MediaAvSyncRtpStreamAssociationMode::Unknown;
+        expectInvalid(std::move(missing));
+    }
+    EXPECT_MISSING(rtp->input.rtcpCompositionMode);
+    EXPECT_MISSING(rtp->input.identityEvidenceTimeoutNs);
     EXPECT_MISSING(rtp->input.requireSenderReports);
     EXPECT_MISSING(rtp->input.senderReportTimeoutNs);
     EXPECT_MISSING(rtp->input.maximumExtrapolationNs);

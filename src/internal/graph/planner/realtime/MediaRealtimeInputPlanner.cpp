@@ -1,6 +1,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeInputPlanner.h"
 
 #include "internal/graph/planner/MediaRtpClockLivenessPolicy.h"
+#include "internal/graph/planner/avsync/MediaAvSyncPlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpCodecDescriptor.h"
 #include "internal/graph/planner/realtime/MediaTsProgramSelector.h"
@@ -35,6 +36,84 @@ constexpr std::size_t RtpReorderWindowPackets = 64;
 constexpr int RtpMaximumReorderDelayMs = 100;
 constexpr std::size_t TsPacketSize = 188;
 constexpr std::uint64_t TsMaximumPacketPositionRegressionBytes = 1024 * 1024;
+constexpr std::int64_t Millisecond = 1'000'000;
+
+struct MediaRtpInputClockTransportPolicy final {
+    bool requireSenderReports;
+    bool requireCname;
+    int senderReportTimeoutMs;
+    int identityEvidenceTimeoutMs;
+    MediaRtcpCompositionMode rtcpCompositionMode;
+};
+
+::media::Result<int> wholeMilliseconds(
+    const std::optional<MediaRunningTime>& duration,
+    const char* field)
+{
+    if (!duration || duration->nanoseconds() <= 0 ||
+        (duration->nanoseconds() % Millisecond) != 0 ||
+        duration->nanoseconds() / Millisecond >
+            (std::numeric_limits<int>::max)()) {
+        return ::media::Result<int>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                std::string("Raw RTP A/V sync requires millisecond-aligned ") +
+                field));
+    }
+    return ::media::Result<int>::success(
+        static_cast<int>(duration->nanoseconds() / Millisecond));
+}
+
+::media::Result<MediaRtpInputClockTransportPolicy> clockTransportPolicy(
+    const MediaAvSyncPlan* avSync)
+{
+    if (!avSync) {
+        return ::media::Result<MediaRtpInputClockTransportPolicy>::success({
+            true,
+            false,
+            MediaRtpClockLivenessPolicy::SenderReportTimeoutMs,
+            MediaRtpClockLivenessPolicy::CnameTimeoutMs,
+            MediaRtcpCompositionMode::ReducedSizeRfc5506});
+    }
+    if (!avSync->rtp || !avSync->rtp->input.requireSenderReports ||
+        !avSync->rtp->input.rtcpCompositionMode) {
+        return ::media::Result<MediaRtpInputClockTransportPolicy>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "Raw RTP A/V sync requires a complete planner-owned RTCP policy"));
+    }
+    const auto senderReportTimeout = wholeMilliseconds(
+        avSync->rtp->input.senderReportTimeoutNs,
+        "sender report timeout");
+    if (!senderReportTimeout) {
+        return ::media::Result<MediaRtpInputClockTransportPolicy>::failure(
+            senderReportTimeout.error());
+    }
+    const auto identityEvidenceTimeout = wholeMilliseconds(
+        avSync->rtp->input.identityEvidenceTimeoutNs,
+        "identity evidence timeout");
+    if (!identityEvidenceTimeout) {
+        return ::media::Result<MediaRtpInputClockTransportPolicy>::failure(
+            identityEvidenceTimeout.error());
+    }
+    bool requireCname = false;
+    switch (avSync->rtp->input.streamAssociationMode) {
+    case MediaAvSyncRtpStreamAssociationMode::CommonCname:
+        requireCname = true;
+        break;
+    case MediaAvSyncRtpStreamAssociationMode::PlannedStreamPair:
+        requireCname = false;
+        break;
+    case MediaAvSyncRtpStreamAssociationMode::Unknown:
+        return ::media::Result<MediaRtpInputClockTransportPolicy>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "Raw RTP A/V sync stream association mode is missing"));
+    }
+    return ::media::Result<MediaRtpInputClockTransportPolicy>::success({
+        *avSync->rtp->input.requireSenderReports,
+        requireCname,
+        senderReportTimeout.value(),
+        identityEvidenceTimeout.value(),
+        *avSync->rtp->input.rtcpCompositionMode});
+}
 
 ::media::Result<MediaPreparedRealtimeInputScan> prepareMpegTs(
     const MediaRealtimeRtpTranscodeRequest& request,
@@ -221,7 +300,8 @@ MediaRealtimeRtpTransportPlan transportPlan(
     const MediaRtpUrlEndpoint& endpoint,
     const MediaRealtimeRtpInputMetadata& metadata,
     const MediaRealtimeRtpCodecDescriptor& descriptor,
-    int cancellableReadTimeoutMs)
+    int cancellableReadTimeoutMs,
+    const MediaRtpInputClockTransportPolicy& clockPolicy)
 {
     const bool ipv6 = endpoint.host.find(':') != std::string::npos;
     return MediaRealtimeRtpTransportPlan{
@@ -236,11 +316,11 @@ MediaRealtimeRtpTransportPlan transportPlan(
         RtpReorderWindowPackets,
         RtpMaximumReorderDelayMs,
         cancellableReadTimeoutMs,
-        true,
-        false,
-        MediaRtpClockLivenessPolicy::SenderReportTimeoutMs,
-        MediaRtpClockLivenessPolicy::CnameTimeoutMs,
-        MediaRtcpCompositionMode::ReducedSizeRfc5506
+        clockPolicy.requireSenderReports,
+        clockPolicy.requireCname,
+        clockPolicy.senderReportTimeoutMs,
+        clockPolicy.identityEvidenceTimeoutMs,
+        clockPolicy.rtcpCompositionMode
     };
 }
 
@@ -284,12 +364,18 @@ void fillNodePlan(
 } // namespace
 
 ::media::Result<MediaRealtimeRawInputPlan> MediaRealtimeInputPlanner::planRawRtp(
-    const MediaRealtimeRtpTranscodeRequest& request)
+    const MediaRealtimeRtpTranscodeRequest& request,
+    const MediaAvSyncPlan* avSync)
 {
     if (!request.input.readTimeoutMs || *request.input.readTimeoutMs <= 0) {
         return ::media::Result<MediaRealtimeRawInputPlan>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "Raw RTP input requires an explicit positive read timeout"));
+    }
+    auto selectedClockPolicy = clockTransportPolicy(avSync);
+    if (!selectedClockPolicy) {
+        return ::media::Result<MediaRealtimeRawInputPlan>::failure(
+            selectedClockPolicy.error());
     }
     auto videoDescriptor = MediaRealtimeRtpCodecRegistry::describe(MediaStreamKind::Video, request.input.videoRtp);
     if (!videoDescriptor) return ::media::Result<MediaRealtimeRawInputPlan>::failure(videoDescriptor.error());
@@ -303,7 +389,7 @@ void fillNodePlan(
     result.video.codecName = videoDescriptor.value().codecName;
     result.videoTransport = transportPlan(
         videoEndpoint.value(), request.input.videoRtp, videoDescriptor.value(),
-        *request.input.readTimeoutMs);
+        *request.input.readTimeoutMs, selectedClockPolicy.value());
     result.videoDepacketizer = depacketizerPlan(MediaStreamKind::Video, request.input.videoRtp, videoDescriptor.value());
     if (auto status = MediaRtpDepacketizerFactory::validate(result.videoDepacketizer); !status) {
         return ::media::Result<MediaRealtimeRawInputPlan>::failure(status.error());
@@ -372,7 +458,7 @@ void fillNodePlan(
         result.audio = std::move(audio);
         result.audioTransport = transportPlan(
             audioEndpoint.value(), request.input.audioRtp, audioDescriptor.value(),
-            *request.input.readTimeoutMs);
+            *request.input.readTimeoutMs, selectedClockPolicy.value());
         result.audioDepacketizer = depacketizerPlan(MediaStreamKind::Audio, request.input.audioRtp, audioDescriptor.value());
         if (auto status = MediaRtpDepacketizerFactory::validate(*result.audioDepacketizer); !status) {
             return ::media::Result<MediaRealtimeRawInputPlan>::failure(status.error());

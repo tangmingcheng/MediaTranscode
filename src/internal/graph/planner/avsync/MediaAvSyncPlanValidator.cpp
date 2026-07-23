@@ -242,10 +242,17 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
     if (!validRtpInputStream(rtp.videoInput) || !validRtpInputStream(rtp.audioInput) ||
         rtp.input.commonEpochPolicy !=
             MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime ||
-        !rtp.input.requireCommonCname || !*rtp.input.requireCommonCname ||
+        rtp.input.streamAssociationMode !=
+            MediaAvSyncRtpStreamAssociationMode::PlannedStreamPair ||
+        !rtp.input.rtcpCompositionMode ||
+        *rtp.input.rtcpCompositionMode !=
+            MediaRtcpCompositionMode::ReducedSizeRfc5506 ||
+        !positive(rtp.input.identityEvidenceTimeoutNs) ||
         !rtp.input.requireSenderReports || !*rtp.input.requireSenderReports ||
         !positive(rtp.input.senderReportTimeoutNs) ||
         !positive(rtp.input.maximumExtrapolationNs) ||
+        *rtp.input.identityEvidenceTimeoutNs !=
+            *rtp.input.maximumExtrapolationNs ||
         !positive(rtp.input.maximumInterStreamClockOffsetSkewNs) ||
         !rtp.input.maximumSenderClockRateErrorPpm ||
         *rtp.input.maximumSenderClockRateErrorPpm <= 0 ||
@@ -255,7 +262,7 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
         *rtp.input.maximumExtrapolationNs >= *plan.recovery.reacquisitionTimeoutNs ||
         *rtp.input.maximumInterStreamClockOffsetSkewNs >=
             *plan.recovery.hardDiscontinuityThresholdNs) {
-        return invalid("RTP input identities, CNAME, or sender report policy");
+        return invalid("RTP input association, RTCP, or sender report policy");
     }
     if (!validRtpOutputStream(rtp.videoOutput) ||
         !validRtpOutputStream(rtp.audioOutput) ||

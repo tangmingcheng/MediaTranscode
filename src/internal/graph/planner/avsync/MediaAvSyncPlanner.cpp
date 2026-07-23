@@ -164,7 +164,13 @@ std::uint32_t stableIdentity(const std::string& value) noexcept
     plan.startup.audioIdentity = *plan.rtp->audioInput.identity;
     plan.rtp->audioInput.payloadType = *request.input.audioRtp.payloadType;
     plan.rtp->audioInput.clockRate = *request.input.audioRtp.clockRate;
-    plan.rtp->input.requireCommonCname = true;
+    plan.rtp->input.streamAssociationMode =
+        MediaAvSyncRtpStreamAssociationMode::PlannedStreamPair;
+    plan.rtp->input.rtcpCompositionMode =
+        MediaRtcpCompositionMode::ReducedSizeRfc5506;
+    plan.rtp->input.identityEvidenceTimeoutNs = runningTime(
+        static_cast<std::int64_t>(MediaRtpClockLivenessPolicy::CnameTimeoutMs) *
+        Millisecond);
     plan.rtp->input.commonEpochPolicy =
         MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime;
     plan.rtp->input.requireSenderReports = true;

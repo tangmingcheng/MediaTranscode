@@ -234,9 +234,6 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
     MediaNodeId videoInput,
     MediaNodeId audioInput,
     const MediaAvSyncPlan& avSync,
-    bool requireMatchingCname,
-    std::int64_t videoCnameTimeoutNs,
-    std::int64_t audioCnameTimeoutNs,
     const MediaRealtimeEdgePolicySet& edgePolicies)
 {
     if (!avSync.rtp || !avSync.rtp->videoInput.clockRate || !avSync.rtp->audioInput.clockRate ||
@@ -244,12 +241,19 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
         !avSync.rtp->input.maximumInterStreamClockOffsetSkewNs ||
         !avSync.rtp->input.maximumSenderClockRateErrorPpm ||
         !avSync.rtp->input.maximumSenderClockResidualNs ||
+        !avSync.rtp->input.identityEvidenceTimeoutNs ||
         !mediaRtpCommonEpochPolicyOptionValue(
             avSync.rtp->input.commonEpochPolicy) ||
-        videoCnameTimeoutNs <= 0 || audioCnameTimeoutNs <= 0) {
+        avSync.rtp->input.streamAssociationMode ==
+            MediaAvSyncRtpStreamAssociationMode::Unknown) {
         return ::media::Result<MediaNodeId>::failure(
             ::media::ErrorInfo::invalidArgument("RTP clock group requires a complete planner-owned A/V sync plan"));
     }
+    const bool requireMatchingCname =
+        avSync.rtp->input.streamAssociationMode ==
+        MediaAvSyncRtpStreamAssociationMode::CommonCname;
+    const std::int64_t identityEvidenceTimeoutNs =
+        avSync.rtp->input.identityEvidenceTimeoutNs->nanoseconds();
     const MediaNodeId group = graph.addNode(MediaNodeKind::RtpClockGroup,
                                             "realtime.rtp.clock_group",
                                             "Realtime RTP source clock group");
@@ -273,8 +277,8 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
         return ::media::Result<MediaNodeId>::failure(status.error());
     }
     if (auto status = set("rtp_clock_group.maximum_sender_clock_residual_ns", std::to_string(avSync.rtp->input.maximumSenderClockResidualNs->nanoseconds())); !status) return ::media::Result<MediaNodeId>::failure(status.error());
-    if (auto status = set("rtp_clock_group.video_cname_timeout_ns", std::to_string(videoCnameTimeoutNs)); !status) return ::media::Result<MediaNodeId>::failure(status.error());
-    if (auto status = set("rtp_clock_group.audio_cname_timeout_ns", std::to_string(audioCnameTimeoutNs)); !status) return ::media::Result<MediaNodeId>::failure(status.error());
+    if (auto status = set("rtp_clock_group.video_cname_timeout_ns", std::to_string(identityEvidenceTimeoutNs)); !status) return ::media::Result<MediaNodeId>::failure(status.error());
+    if (auto status = set("rtp_clock_group.audio_cname_timeout_ns", std::to_string(identityEvidenceTimeoutNs)); !status) return ::media::Result<MediaNodeId>::failure(status.error());
     if (auto status = set("rtp_clock_group.require_matching_cname",
                           requireMatchingCname ? "true" : "false"); !status) {
         return ::media::Result<MediaNodeId>::failure(status.error());
@@ -478,12 +482,6 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
                                            videoInputChain.value().input,
                                            audioInputChain.input,
                                            plan.avSyncRuntime->synchronization,
-                                           plan.input.rtpTransport->requireCname &&
-                                               plan.audioInput.rtpTransport->requireCname,
-                                           static_cast<std::int64_t>(
-                                               plan.input.rtpTransport->cnameTimeoutMs) * 1'000'000,
-                                           static_cast<std::int64_t>(
-                                               plan.audioInput.rtpTransport->cnameTimeoutMs) * 1'000'000,
                                            plan.edgePolicies);
         if (!clockGroup) return ::media::Result<MediaGraph>::failure(clockGroup.error());
         protocolClockNode = clockGroup.value();

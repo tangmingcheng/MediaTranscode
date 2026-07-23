@@ -5,7 +5,7 @@
 | Dimension | Weight | Score | Evidence summary |
 |---|---:|---:|---|
 | Architecture and DAG model | 15 | 13 | Explicit graph, topology, validation, descriptors, and documented planner/builder/runtime layering. Several optimizer, distributed, and GPU areas remain framework-level. |
-| Planner decision ownership | 12 | 11 | Planner ranks hardware-only candidates by default, validates the complete selected chain lazily, and permits software only when explicitly disabled. The realtime planner remains large. |
+| Planner decision ownership | 12 | 11 | Planner ranks hardware-only candidates by default, validates the complete selected chain lazily, permits software only when explicitly disabled, and owns RTP stream-association/RTCP policy consumed by transport and clock-group construction. The realtime planner remains large. |
 | Scheduling and concurrency | 13 | 10 | The graph-level A/V scheduler, first-worker-failure preservation, bounded CLI startup, channels, wakeups, and lifecycle abstractions are covered. Long-running race evidence remains limited. |
 | Node responsibility and decoupling | 12 | 8 | Capability-oriented node and segment structure is clear. Several planner, mux, codec, and runtime files exceed 400-700 lines and still combine multiple concerns. |
 | RAII and resource safety | 10 | 10 | FFmpeg resources, including hardware device/frame capability probes, buffers, sessions, and workers use explicit ownership and RAII cleanup. |

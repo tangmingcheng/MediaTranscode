@@ -10,6 +10,8 @@
 
 namespace media::ffmpeg::graph {
 
+struct MediaAvSyncPlan;
+
 struct MediaRealtimeRawInputPlan final {
     std::string videoUrl;
     std::string videoSdp;
@@ -26,7 +28,8 @@ struct MediaRealtimeRawInputPlan final {
 class MediaRealtimeInputPlanner final {
 public:
     static ::media::Result<MediaRealtimeRawInputPlan> planRawRtp(
-        const MediaRealtimeRtpTranscodeRequest& request);
+        const MediaRealtimeRtpTranscodeRequest& request,
+        const MediaAvSyncPlan* avSync);
     static void applyNodePlans(
         const MediaRealtimeRtpTranscodeRequest& request,
         const MediaRealtimeRawInputPlan* raw,

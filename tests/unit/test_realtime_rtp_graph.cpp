@@ -844,19 +844,19 @@ void testRawRtpPublicPlannerRequiresPositiveReadTimeout(TestContext& ctx)
 {
     auto missing = validRawRtpOptions();
     missing.input.readTimeoutMs.reset();
-    auto missingPlan = MediaRealtimeInputPlanner::planRawRtp(missing);
+    auto missingPlan = MediaRealtimeInputPlanner::planRawRtp(missing, nullptr);
     EXPECT_FALSE(ctx, missingPlan);
     if (!missingPlan) EXPECT_EQ(ctx, missingPlan.error().code, media::ErrorCode::InvalidArgument);
 
     auto zero = validRawRtpOptions();
     zero.input.readTimeoutMs = 0;
-    auto zeroPlan = MediaRealtimeInputPlanner::planRawRtp(zero);
+    auto zeroPlan = MediaRealtimeInputPlanner::planRawRtp(zero, nullptr);
     EXPECT_FALSE(ctx, zeroPlan);
     if (!zeroPlan) EXPECT_EQ(ctx, zeroPlan.error().code, media::ErrorCode::InvalidArgument);
 
     auto negative = validRawRtpOptions();
     negative.input.readTimeoutMs = -1;
-    auto negativePlan = MediaRealtimeInputPlanner::planRawRtp(negative);
+    auto negativePlan = MediaRealtimeInputPlanner::planRawRtp(negative, nullptr);
     EXPECT_FALSE(ctx, negativePlan);
     if (!negativePlan) EXPECT_EQ(ctx, negativePlan.error().code, media::ErrorCode::InvalidArgument);
 }
@@ -2891,6 +2891,7 @@ void testBuildPlansRawRtpAudioVideoGraph(TestContext& ctx)
         EXPECT_EQ(ctx, clockGroup->options.value("rtp_clock_group.maximum_sender_clock_residual_ns"), std::string("250000000"));
         EXPECT_EQ(ctx, clockGroup->options.value("rtp_clock_group.video_cname_timeout_ns"), std::string("9000000000"));
         EXPECT_EQ(ctx, clockGroup->options.value("rtp_clock_group.audio_cname_timeout_ns"), std::string("9000000000"));
+        EXPECT_EQ(ctx, clockGroup->options.value("rtp_clock_group.require_matching_cname"), std::string("false"));
         EXPECT_EQ(ctx, clockGroup->options.value("rtp_clock_group.maximum_sender_clock_rate_error_ppm"), std::string("1000"));
     }
     EXPECT_TRUE(ctx, findEdgeByNames(graph, "realtime.video.input", "clock",
