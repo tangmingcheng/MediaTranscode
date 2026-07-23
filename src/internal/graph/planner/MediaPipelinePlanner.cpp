@@ -175,26 +175,30 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
     }
 
     MediaHardwareCapabilityProbe hardwareProbe;
-    auto selected = MediaPipelinePlanner::selectRankedCandidate(
-        plan.candidates, options, hardwareProbe);
+    auto selected = MediaPipelinePlanner::selectHighestRankedCandidate(
+        plan.candidates, options);
     if (!selected) {
         return ::media::Result<MediaPipelinePlan>::failure(selected.error());
     }
 
     plan.selected = plan.candidates.at(selected.value());
+    auto preflight = MediaPipelinePlanner::preflightSelectedCandidate(
+        plan.selected, options, hardwareProbe);
+    if (!preflight) {
+        return ::media::Result<MediaPipelinePlan>::failure(preflight.error());
+    }
     logSelectedPlan(options, plan);
     return ::media::Result<MediaPipelinePlan>::success(std::move(plan));
 }
 
 } // namespace
 
-::media::Result<std::size_t> MediaPipelinePlanner::selectRankedCandidate(
-    std::vector<MediaPipelineChainPlan>& candidates,
-    const MediaPipelinePlannerOptions& options,
-    MediaHardwareCapabilityProbe& hardwareProbe)
+::media::Result<std::size_t> MediaPipelinePlanner::selectHighestRankedCandidate(
+    const std::vector<MediaPipelineChainPlan>& candidates,
+    const MediaPipelinePlannerOptions& options)
 {
     for (std::size_t index = 0; index < candidates.size(); ++index) {
-        MediaPipelineChainPlan& candidate = candidates[index];
+        const MediaPipelineChainPlan& candidate = candidates[index];
         if (!candidate.available) {
             continue;
         }
@@ -210,18 +214,25 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
             continue;
         }
 
-        auto validation = hardwareProbe.validate(candidate, options);
-        if (validation) {
-            return ::media::Result<std::size_t>::success(index);
-        }
-        candidate = MediaPipelineScorer::scoreChain(std::move(candidate), options);
+        return ::media::Result<std::size_t>::success(index);
     }
 
     return ::media::Result<std::size_t>::failure(
         ::media::ErrorInfo::hardwareUnavailable(
             options.disableHardware
                 ? "no available explicit software decoder/filter/encoder chain found"
-                : "no runtime-valid hardware decoder/filter/encoder chain found"));
+                : "no structurally available hardware decoder/filter/encoder chain found"));
+}
+
+::media::Status MediaPipelinePlanner::preflightSelectedCandidate(
+    MediaPipelineChainPlan& selected,
+    const MediaPipelinePlannerOptions& options,
+    MediaHardwareCapabilityProbe& hardwareProbe)
+{
+    if (options.disableHardware) {
+        return ::media::Status::success();
+    }
+    return hardwareProbe.validate(selected, options);
 }
 
 const char* mediaPipelineStageRoleName(MediaPipelineStageRole role) noexcept

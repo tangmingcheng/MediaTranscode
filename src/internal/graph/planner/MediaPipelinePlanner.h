@@ -133,8 +133,12 @@ public:
         const std::string& inputUrl,
         MediaPipelinePlannerOptions options);
 
-    static ::media::Result<std::size_t> selectRankedCandidate(
-        std::vector<MediaPipelineChainPlan>& candidates,
+    static ::media::Result<std::size_t> selectHighestRankedCandidate(
+        const std::vector<MediaPipelineChainPlan>& candidates,
+        const MediaPipelinePlannerOptions& options);
+
+    static ::media::Status preflightSelectedCandidate(
+        MediaPipelineChainPlan& selected,
         const MediaPipelinePlannerOptions& options,
         MediaHardwareCapabilityProbe& hardwareProbe);
 

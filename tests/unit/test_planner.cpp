@@ -1734,8 +1734,7 @@ void testHardwareProbeValidatesCompleteChainOncePerCandidate(TestContext& ctx)
     EXPECT_EQ(ctx, chainValidations, 1);
 }
 
-void testPlannerContinuesAfterHighestRankedHardwareChainCannotOpenEncoder(
-    TestContext& ctx)
+void testPlannerPreflightsOnlyHighestRankedHardwareChain(TestContext& ctx)
 {
     MediaPipelinePlannerOptions options(false, true, false, true);
     options.preferredHardware = "auto";
@@ -1745,11 +1744,9 @@ void testPlannerContinuesAfterHighestRankedHardwareChainCannotOpenEncoder(
             const MediaPipelinePlannerOptions&)
         {
             attempted.push_back(candidate.label);
-            const bool available = candidate.label == "qsv";
             return MediaHardwareCapability{
-                available,
-                available ? "test decoder/filter/encoder chain negotiated"
-                          : "test encoder open failed"};
+                false,
+                "test encoder open failed"};
         });
 
     auto candidates = MediaPipelineScorer::scoreAndSortChains(
@@ -1759,16 +1756,19 @@ void testPlannerContinuesAfterHighestRankedHardwareChainCannotOpenEncoder(
                                     "d3d11va", 10)},
         options);
     const auto selected =
-        MediaPipelinePlanner::selectRankedCandidate(candidates, options, probe);
+        MediaPipelinePlanner::selectHighestRankedCandidate(candidates, options);
 
     EXPECT_TRUE(ctx, selected);
+    MediaPipelineChainPlan selectedChain;
     if (selected) {
-        EXPECT_EQ(ctx, candidates.at(selected.value()).label, std::string("qsv"));
+        selectedChain = candidates.at(selected.value());
+        EXPECT_EQ(ctx, selectedChain.label, std::string("cuda"));
+        EXPECT_FALSE(ctx, MediaPipelinePlanner::preflightSelectedCandidate(
+                              selectedChain, options, probe));
     }
-    EXPECT_EQ(ctx, attempted.size(), std::size_t{2});
-    if (attempted.size() == 2) {
+    EXPECT_EQ(ctx, attempted.size(), std::size_t{1});
+    if (attempted.size() == 1) {
         EXPECT_EQ(ctx, attempted.at(0), std::string("cuda"));
-        EXPECT_EQ(ctx, attempted.at(1), std::string("qsv"));
     }
 }
 
@@ -1795,11 +1795,18 @@ void testPlannerRejectsImplicitSoftwareFallbackWhenHardwareFails(TestContext& ct
          std::move(software)},
         options);
     const auto selected =
-        MediaPipelinePlanner::selectRankedCandidate(candidates, options, probe);
+        MediaPipelinePlanner::selectHighestRankedCandidate(candidates, options);
 
-    EXPECT_FALSE(ctx, selected);
-    if (!selected) {
-        EXPECT_EQ(ctx, selected.error().code, ::media::ErrorCode::HardwareUnavailable);
+    EXPECT_TRUE(ctx, selected);
+    if (selected) {
+        MediaPipelineChainPlan selectedChain = candidates.at(selected.value());
+        EXPECT_EQ(ctx, selectedChain.label, std::string("cuda"));
+        const auto preflight = MediaPipelinePlanner::preflightSelectedCandidate(
+            selectedChain, options, probe);
+        EXPECT_FALSE(ctx, preflight);
+        if (!preflight) {
+            EXPECT_EQ(ctx, preflight.error().code, ::media::ErrorCode::HardwareUnavailable);
+        }
     }
     EXPECT_EQ(ctx, deviceCreations, 1);
 }
@@ -1825,11 +1832,14 @@ void testPlannerUsesSoftwareOnlyWhenHardwareIsExplicitlyDisabled(TestContext& ct
     auto candidates =
         MediaPipelineScorer::scoreAndSortChains({std::move(software)}, options);
     const auto selected =
-        MediaPipelinePlanner::selectRankedCandidate(candidates, options, probe);
+        MediaPipelinePlanner::selectHighestRankedCandidate(candidates, options);
 
     EXPECT_TRUE(ctx, selected);
     if (selected) {
-        EXPECT_EQ(ctx, candidates.at(selected.value()).label, std::string("software"));
+        MediaPipelineChainPlan selectedChain = candidates.at(selected.value());
+        EXPECT_EQ(ctx, selectedChain.label, std::string("software"));
+        EXPECT_TRUE(ctx, MediaPipelinePlanner::preflightSelectedCandidate(
+                             selectedChain, options, probe));
     }
     EXPECT_EQ(ctx, deviceCreations, 0);
 }
@@ -2697,7 +2707,7 @@ int main()
     testVideoCapabilityScannerHonorsDisableHardwareDecision(ctx);
     testPipelineScorerConsumesPriorityAndUsesStableTieBreaker(ctx);
     testHardwareProbeValidatesCompleteChainOncePerCandidate(ctx);
-    testPlannerContinuesAfterHighestRankedHardwareChainCannotOpenEncoder(ctx);
+    testPlannerPreflightsOnlyHighestRankedHardwareChain(ctx);
     testPlannerRejectsImplicitSoftwareFallbackWhenHardwareFails(ctx);
     testPlannerUsesSoftwareOnlyWhenHardwareIsExplicitlyDisabled(ctx);
     testProjectTsPlannerConsumesPublishedLayoutOrRejectsUnknownEncoder(ctx);
