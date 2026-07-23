@@ -94,22 +94,15 @@ struct MediaRtpInputClockTransportPolicy final {
         return ::media::Result<MediaRtpInputClockTransportPolicy>::failure(
             identityEvidenceTimeout.error());
     }
-    bool requireCname = false;
-    switch (avSync->rtp->input.streamAssociationMode) {
-    case MediaAvSyncRtpStreamAssociationMode::CommonCname:
-        requireCname = true;
-        break;
-    case MediaAvSyncRtpStreamAssociationMode::PlannedStreamPair:
-        requireCname = false;
-        break;
-    case MediaAvSyncRtpStreamAssociationMode::Unknown:
+    if (avSync->rtp->input.streamAssociationMode !=
+        MediaAvSyncRtpStreamAssociationMode::PlannedStreamPair) {
         return ::media::Result<MediaRtpInputClockTransportPolicy>::failure(
             ::media::ErrorInfo::notInitialized(
                 "Raw RTP A/V sync stream association mode is missing"));
     }
     return ::media::Result<MediaRtpInputClockTransportPolicy>::success({
         *avSync->rtp->input.requireSenderReports,
-        requireCname,
+        false,
         senderReportTimeout.value(),
         identityEvidenceTimeout.value(),
         *avSync->rtp->input.rtcpCompositionMode});
@@ -371,6 +364,11 @@ void fillNodePlan(
         return ::media::Result<MediaRealtimeRawInputPlan>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "Raw RTP input requires an explicit positive read timeout"));
+    }
+    if (MediaRealtimeRequestClassifier::audioRequested(request) && !avSync) {
+        return ::media::Result<MediaRealtimeRawInputPlan>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Raw RTP A/V input requires an explicit synchronization plan"));
     }
     auto selectedClockPolicy = clockTransportPolicy(avSync);
     if (!selectedClockPolicy) {

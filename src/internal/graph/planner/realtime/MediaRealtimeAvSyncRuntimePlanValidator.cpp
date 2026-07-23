@@ -207,9 +207,6 @@ namespace media::ffmpeg::graph {
     if (*runtime.synchronization.topology ==
         MediaAvSyncTopology::SeparateRtpToSeparateRtp) {
         const auto& rtpInputPolicy = runtime.synchronization.rtp->input;
-        const bool requireCname =
-            rtpInputPolicy.streamAssociationMode ==
-            MediaAvSyncRtpStreamAssociationMode::CommonCname;
         constexpr std::int64_t Millisecond = 1'000'000;
         const bool transportPolicyMatches =
             outer.input.rtpTransport && outer.audioInput.rtpTransport &&
@@ -217,14 +214,26 @@ namespace media::ffmpeg::graph {
             rtpInputPolicy.rtcpCompositionMode &&
             rtpInputPolicy.senderReportTimeoutNs &&
             rtpInputPolicy.identityEvidenceTimeoutNs &&
+            runtime.synchronization.rtp->videoInput.payloadType &&
+            runtime.synchronization.rtp->videoInput.clockRate &&
+            runtime.synchronization.rtp->audioInput.payloadType &&
+            runtime.synchronization.rtp->audioInput.clockRate &&
             rtpInputPolicy.senderReportTimeoutNs->nanoseconds() % Millisecond == 0 &&
             rtpInputPolicy.identityEvidenceTimeoutNs->nanoseconds() % Millisecond == 0 &&
+            outer.input.rtpTransport->payloadType ==
+                *runtime.synchronization.rtp->videoInput.payloadType &&
+            outer.input.rtpTransport->clockRate ==
+                *runtime.synchronization.rtp->videoInput.clockRate &&
+            outer.audioInput.rtpTransport->payloadType ==
+                *runtime.synchronization.rtp->audioInput.payloadType &&
+            outer.audioInput.rtpTransport->clockRate ==
+                *runtime.synchronization.rtp->audioInput.clockRate &&
             outer.input.rtpTransport->requireSenderReports ==
                 *rtpInputPolicy.requireSenderReports &&
             outer.audioInput.rtpTransport->requireSenderReports ==
                 *rtpInputPolicy.requireSenderReports &&
-            outer.input.rtpTransport->requireCname == requireCname &&
-            outer.audioInput.rtpTransport->requireCname == requireCname &&
+            !outer.input.rtpTransport->requireCname &&
+            !outer.audioInput.rtpTransport->requireCname &&
             outer.input.rtpTransport->senderReportTimeoutMs ==
                 rtpInputPolicy.senderReportTimeoutNs->nanoseconds() / Millisecond &&
             outer.audioInput.rtpTransport->senderReportTimeoutMs ==

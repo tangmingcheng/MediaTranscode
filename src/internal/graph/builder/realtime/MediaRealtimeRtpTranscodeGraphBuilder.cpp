@@ -244,14 +244,11 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
         !avSync.rtp->input.identityEvidenceTimeoutNs ||
         !mediaRtpCommonEpochPolicyOptionValue(
             avSync.rtp->input.commonEpochPolicy) ||
-        avSync.rtp->input.streamAssociationMode ==
-            MediaAvSyncRtpStreamAssociationMode::Unknown) {
+        avSync.rtp->input.streamAssociationMode !=
+            MediaAvSyncRtpStreamAssociationMode::PlannedStreamPair) {
         return ::media::Result<MediaNodeId>::failure(
             ::media::ErrorInfo::invalidArgument("RTP clock group requires a complete planner-owned A/V sync plan"));
     }
-    const bool requireMatchingCname =
-        avSync.rtp->input.streamAssociationMode ==
-        MediaAvSyncRtpStreamAssociationMode::CommonCname;
     const std::int64_t identityEvidenceTimeoutNs =
         avSync.rtp->input.identityEvidenceTimeoutNs->nanoseconds();
     const MediaNodeId group = graph.addNode(MediaNodeKind::RtpClockGroup,
@@ -280,7 +277,7 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
     if (auto status = set("rtp_clock_group.video_cname_timeout_ns", std::to_string(identityEvidenceTimeoutNs)); !status) return ::media::Result<MediaNodeId>::failure(status.error());
     if (auto status = set("rtp_clock_group.audio_cname_timeout_ns", std::to_string(identityEvidenceTimeoutNs)); !status) return ::media::Result<MediaNodeId>::failure(status.error());
     if (auto status = set("rtp_clock_group.require_matching_cname",
-                          requireMatchingCname ? "true" : "false"); !status) {
+                          "false"); !status) {
         return ::media::Result<MediaNodeId>::failure(status.error());
     }
     if (auto status = set("rtp_clock_group.maximum_sender_clock_rate_error_ppm", std::to_string(*avSync.rtp->input.maximumSenderClockRateErrorPpm)); !status) return ::media::Result<MediaNodeId>::failure(status.error());

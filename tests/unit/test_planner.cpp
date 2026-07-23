@@ -470,6 +470,12 @@ void testRealtimeAvSyncRuntimeProductRejectsIndependentMutations(TestContext& ct
     expectInvalid();
     outer.audioInput.rtpTransport->rtcpCompositionMode =
         MediaRtcpCompositionMode::ReducedSizeRfc5506;
+    ++outer.input.rtpTransport->clockRate;
+    expectInvalid();
+    --outer.input.rtpTransport->clockRate;
+    ++outer.audioInput.rtpTransport->payloadType;
+    expectInvalid();
+    --outer.audioInput.rtpTransport->payloadType;
 
     const auto selectedPlanningFacts = runtime.planningFacts;
     runtime.planningFacts.outputSampleRate.reset();
@@ -2042,6 +2048,15 @@ void testRawRtpInputPlannerProducesCompleteTransportPolicy(TestContext& ctx)
     request.input.videoRtp.fmtp =
         "packetization-mode=1;sprop-parameter-sets=Z01AMpWQAoALWwEQAAA+gAAOpghA,aOuPIA==;profile-level-id=4D4032";
     request.parameters.execution.includeAudio = false;
+
+    auto missingAvSync = completeAvSyncRtpRequest();
+    const auto missingAvSyncResult =
+        MediaRealtimeInputPlanner::planRawRtp(missingAvSync, nullptr);
+    EXPECT_FALSE(ctx, missingAvSyncResult);
+    if (!missingAvSyncResult) {
+        EXPECT_EQ(ctx, missingAvSyncResult.error().code,
+                  ::media::ErrorCode::InvalidArgument);
+    }
 
     const auto raw = MediaRealtimeInputPlanner::planRawRtp(request, nullptr);
     EXPECT_TRUE(ctx, raw);

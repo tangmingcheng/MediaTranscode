@@ -96,8 +96,7 @@ struct MediaAvSyncRtpInputStreamPlan {
 
 enum class MediaAvSyncRtpStreamAssociationMode : std::uint8_t {
     Unknown = 0,
-    CommonCname = 1,
-    PlannedStreamPair = 2
+    PlannedStreamPair = 1
 };
 
 struct MediaAvSyncRtpInputPolicy {
