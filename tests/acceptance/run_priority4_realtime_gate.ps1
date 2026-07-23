@@ -26,6 +26,7 @@ $receiverLog = Join-Path $ExecutableDirectory "$name.receiver.log"
 $captureExtension = if ($Mode -eq 'rtp') { 'ts' } else { 'mkv' }
 $capture = Join-Path $ExecutableDirectory "$name.capture.$captureExtension"
 $sdp = Join-Path $ExecutableDirectory "$name.sdp"
+$receiverSdp = Join-Path $ExecutableDirectory "$name.receiver.sdp"
 $captureSeconds = [Math]::Max(1, $DurationSeconds - 10)
 $receiverLogLevel = if ($Diagnostics) { 'verbose' } else { 'warning' }
 $logicalProcessors = [Environment]::ProcessorCount
@@ -54,6 +55,22 @@ function Stop-GateProcess([Diagnostics.Process]$Process) {
     }
 }
 
+function Wait-GateRuntimeStart([Diagnostics.Process]$Process, [string]$LogPath) {
+    $deadline = [DateTime]::UtcNow.AddSeconds(30)
+    while (-not $Process.HasExited -and [DateTime]::UtcNow -lt $deadline) {
+        if ((Test-Path $LogPath) -and
+            (Select-String -LiteralPath $LogPath -SimpleMatch 'start.done state=ThreadedRunning' -Quiet)) {
+            return
+        }
+        Start-Sleep -Milliseconds 100
+        $Process.Refresh()
+    }
+    if ($Process.HasExited) {
+        throw "realtime CLI exited before its RTP runtime started: $LogPath"
+    }
+    throw "realtime CLI did not start its RTP runtime before timeout: $LogPath"
+}
+
 function PacketPts([string]$Selector, [switch]$First) {
     $values = & $ffprobe -v error -select_streams $Selector -show_entries packet=pts_time -of default=nw=1:nk=1 $capture
     if ($LASTEXITCODE -ne 0) { throw "packet timestamp probe failed for $Selector" }
@@ -64,15 +81,15 @@ function PacketPts([string]$Selector, [switch]$First) {
 }
 
 try {
-    Remove-Item $cliLog,($cliLog+'.err'),($cliLog+'.warmup'),($cliLog+'.warmup.err'),$senderLog,($senderLog+'.err'),($senderLog+'.warmup'),($senderLog+'.warmup.err'),$receiverLog,($receiverLog+'.err'),$capture,$sdp -Force -ErrorAction SilentlyContinue
+    Remove-Item $cliLog,($cliLog+'.err'),($cliLog+'.warmup'),($cliLog+'.warmup.err'),$senderLog,($senderLog+'.err'),($senderLog+'.warmup'),($senderLog+'.warmup.err'),$receiverLog,($receiverLog+'.err'),$capture,$sdp,$receiverSdp -Force -ErrorAction SilentlyContinue
     $common = @(
         '--media-id',"$name-gate",
         '--metadata-queue','1','--packet-queue','256','--frame-queue','128','--mux-queue','256',
         '--open-timeout-ms','5000','--read-timeout-ms','5000','--analyze-duration-us','1000000','--probe-size','1048576',
-        '--video-codec','h264','--width','1280','--height','720','--bitrate','2000',
+        '--video-codec','h264','--width','1280','--height','720','--fps','30','--bitrate','2000',
         '--audio-codec','aac','--sample-rate','48000','--audio-bitrate','128',
         '--startup-max-video-unit-bytes','4194304','--startup-max-audio-unit-bytes','1048576','--startup-max-gap-ms','40',
-        '--max-duration',"$DurationSeconds",'--progress-timeout-ms','5000','--poll-interval-ms','250'
+        '--max-duration',"$DurationSeconds",'--progress-timeout-ms','5000','--first-output-timeout-ms','30000','--poll-interval-ms','250'
     )
     if (-not $Diagnostics) { $common += '--quiet-graph' }
     if ($DisableHw) { $common += '--disable-hw' }
@@ -87,17 +104,18 @@ try {
             '--rtp-host','127.0.0.1','--rtp-port',"$OutputPort",'--sdp',$sdp,'--packet-size','1200'
         ) + $common
         $warmupCli = Start-GateProcess $cli $cliArguments ($cliLog + '.warmup')
-        Start-Sleep -Milliseconds 750
+        Wait-GateRuntimeStart $warmupCli ($cliLog + '.warmup')
         $warmupSender = Start-GateProcess $ffmpeg @('-hide_banner','-loglevel','warning','-readrate','1','-readrate_catchup','1','-stream_loop','-1','-i',$InputPath,'-map','0:v:0','-c:v','copy','-an','-f','rtp','-payload_type','96',"rtp://127.0.0.1:$($InputPort)?pkt_size=1200",'-map','0:a:0','-c:a','copy','-vn','-f','rtp','-payload_type','97',"rtp://127.0.0.1:$($InputPort+2)?pkt_size=1200") ($senderLog + '.warmup')
         $deadline = [DateTime]::UtcNow.AddSeconds(30)
         while (-not (Test-Path $sdp) -and -not $warmupCli.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
         if (-not (Test-Path $sdp)) { throw 'RTP output SDP was not created' }
+        Copy-Item -LiteralPath $sdp -Destination $receiverSdp
         Stop-GateProcess $warmupSender
         Stop-GateProcess $warmupCli
-        $receiver = Start-GateProcess $ffmpeg @('-hide_banner','-loglevel',$receiverLogLevel,'-protocol_whitelist','file,udp,rtp','-analyzeduration','15000000','-probesize','5000000','-i',$sdp,'-t',"$captureSeconds",'-map','0:v:0','-map','0:a:0','-c','copy','-f','mpegts',$capture) $receiverLog
+        $receiver = Start-GateProcess $ffmpeg @('-hide_banner','-loglevel',$receiverLogLevel,'-protocol_whitelist','file,udp,rtp','-analyzeduration','15000000','-probesize','5000000','-i',$receiverSdp,'-t',"$captureSeconds",'-map','0:v:0','-map','0:a:0','-c','copy','-f','mpegts',$capture) $receiverLog
         Start-Sleep -Milliseconds 750
         $cliProcess = Start-GateProcess $cli $cliArguments $cliLog
-        Start-Sleep -Milliseconds 750
+        Wait-GateRuntimeStart $cliProcess $cliLog
         $sender = Start-GateProcess $ffmpeg @('-hide_banner','-loglevel','warning','-readrate','1','-readrate_catchup','1','-stream_loop','-1','-i',$InputPath,'-map','0:v:0','-c:v','copy','-an','-f','rtp','-payload_type','96',"rtp://127.0.0.1:$($InputPort)?pkt_size=1200",'-map','0:a:0','-c:a','copy','-vn','-f','rtp','-payload_type','97',"rtp://127.0.0.1:$($InputPort+2)?pkt_size=1200") $senderLog
     } else {
         $receiver = Start-GateProcess $ffmpeg @('-hide_banner','-loglevel',$receiverLogLevel,'-i',"udp://127.0.0.1:$($OutputPort)?fifo_size=1000000&overrun_nonfatal=1",'-t',"$captureSeconds",'-map','0:v:0','-map','0:a:0','-c','copy',$capture) $receiverLog

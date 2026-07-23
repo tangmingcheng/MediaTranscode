@@ -37,6 +37,7 @@ const MediaThreadingPolicy& MediaGraphThreadedExecutor::policy() const noexcept
     MediaGraphWorkerConfig workerConfig;
     const auto runtimeNodes = scheduler.orderedRuntimeNodes(context);
     m_workers.clear();
+    m_failureRecorder.clear();
     m_workers.reserve(runtimeNodes.size());
 
     // Construct every worker before any worker thread is allowed to run. Worker
@@ -47,7 +48,8 @@ const MediaThreadingPolicy& MediaGraphThreadedExecutor::policy() const noexcept
             continue;
         }
 
-        m_workers.push_back(std::make_unique<MediaGraphWorker>(*node, context, workerConfig));
+        m_workers.push_back(std::make_unique<MediaGraphWorker>(
+            *node, context, m_failureRecorder, workerConfig));
     }
 
     for (auto& worker : m_workers) {
@@ -94,6 +96,9 @@ const MediaThreadingPolicy& MediaGraphThreadedExecutor::policy() const noexcept
     if (metrics().workerErrors != 0) {
         scheduler.abort(context);
         m_state = MediaGraphThreadedExecutorState::Aborted;
+        if (auto failure = primaryFailure()) {
+            return ::media::Status::failure(failure->error);
+        }
         return ::media::Status::failure(
             ::media::ErrorInfo::internalError(
                 "MediaGraphThreadedExecutor stop harvested a worker failure; executor aborted"));
@@ -134,6 +139,7 @@ void MediaGraphThreadedExecutor::abort(MediaGraphExecutionContext& context,
 void MediaGraphThreadedExecutor::clear()
 {
     m_workers.clear();
+    m_failureRecorder.clear();
     {
         std::lock_guard<std::mutex> lock(m_metricsMutex);
         m_metrics = {};
@@ -153,7 +159,13 @@ bool MediaGraphThreadedExecutor::running() const noexcept
 
 bool MediaGraphThreadedExecutor::failed() const noexcept
 {
-    return metrics().workerErrors != 0;
+    return m_failureRecorder.hasFailure();
+}
+
+std::optional<MediaGraphWorkerFailure>
+MediaGraphThreadedExecutor::primaryFailure() const
+{
+    return m_failureRecorder.primaryFailure();
 }
 
 MediaGraphRuntimeMetrics MediaGraphThreadedExecutor::metrics() const noexcept

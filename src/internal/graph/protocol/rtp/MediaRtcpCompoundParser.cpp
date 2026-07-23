@@ -127,7 +127,8 @@ PacketResult parsePacket(std::span<const uint8_t> bytes, uint8_t count, uint8_t 
 ::media::Result<std::vector<MediaRtcpPacket>> MediaRtcpCompoundParser::parse(
     std::span<const uint8_t> datagram, const MediaRtcpCompoundPolicy& policy)
 {
-    if (policy.mode != MediaRtcpCompositionMode::StrictCompoundRfc3550) {
+    if (policy.mode != MediaRtcpCompositionMode::StrictCompoundRfc3550 &&
+        policy.mode != MediaRtcpCompositionMode::ReducedSizeRfc5506) {
         return compoundError("Unsupported RTCP composition mode");
     }
     if (datagram.empty()) return compoundError("RTCP compound datagram is empty");
@@ -162,11 +163,18 @@ PacketResult parsePacket(std::span<const uint8_t> bytes, uint8_t count, uint8_t 
         packets.push_back(std::move(packet.value()));
         offset += packetSize;
     }
-    if (packets.front().kind != MediaRtcpPacketKind::SenderReport &&
-        packets.front().kind != MediaRtcpPacketKind::ReceiverReport) {
+    const bool beginsWithReport =
+        packets.front().kind == MediaRtcpPacketKind::SenderReport ||
+        packets.front().kind == MediaRtcpPacketKind::ReceiverReport;
+    if (policy.mode == MediaRtcpCompositionMode::StrictCompoundRfc3550 &&
+        !beginsWithReport) {
         return compoundError("Strict RTCP compound packet must begin with SR or RR");
     }
     if (policy.requireCname) {
+        if (!beginsWithReport) {
+            return compoundError(
+                "RTCP CNAME validation requires a leading SR or RR");
+        }
         const uint32_t source = packets.front().kind == MediaRtcpPacketKind::SenderReport
             ? packets.front().senderReport->ssrc
             : *packets.front().receiverReportSsrc;

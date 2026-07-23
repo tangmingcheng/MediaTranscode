@@ -234,6 +234,7 @@ void validatorKeepsOneCommonEpochForAGroupGeneration()
         MediaRtpClockGroupValidatorConfig{
             3'000'000'000LL, 5'000'000'000LL, 50'000'000,
             5'000'000'000LL, 5'000'000'000LL,
+            true,
             MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime});
     assert(validator);
     auto group = std::move(validator).value();
@@ -511,6 +512,7 @@ void validatorMayRelockButBinderRejectsTheNewGroupGeneration()
         MediaRtpClockGroupValidatorConfig{
             3'000'000'000LL, 5'000'000'000LL, 50'000'000,
             5'000'000'000LL, 5'000'000'000LL,
+            true,
             MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime});
     assert(validator);
     auto group = std::move(validator).value();

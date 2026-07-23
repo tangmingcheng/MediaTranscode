@@ -8,7 +8,8 @@
 namespace media::ffmpeg::graph {
 
 enum class MediaRtcpCompositionMode {
-    StrictCompoundRfc3550
+    StrictCompoundRfc3550,
+    ReducedSizeRfc5506
 };
 
 struct MediaRtcpCompoundPolicy final {

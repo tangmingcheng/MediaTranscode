@@ -136,12 +136,16 @@ std::string activity(const ChannelActivitySnapshot& snapshot)
 ::media::Status MediaGraphRuntimeLifecycleExecutor::synchronizeThreadedState(MediaGraphRuntime& runtime)
 {
     if (runtime.m_state != MediaGraphRuntimeState::ThreadedRunning || !runtime.m_threadedExecutor.failed()) return ::media::Status::success();
+    const auto primaryFailure = runtime.m_threadedExecutor.primaryFailure();
     runtime.m_threadedExecutor.abort(runtime.m_context, runtime.m_scheduler);
     (void)MediaGraphLifecycle::clearChannels(runtime.m_context);
     MediaGraphLifecycle::abortChannels(runtime.m_context);
     runtime.m_context.shutdownAvSyncGroups();
     runtime.m_playbackEpochActivationCapability.reset();
     runtime.m_state = MediaGraphRuntimeState::Aborted;
+    if (primaryFailure) {
+        return ::media::Status::failure(primaryFailure->error);
+    }
     return ::media::Status::failure(::media::ErrorInfo::internalError("MediaGraphRuntime threaded worker failed; runtime aborted"));
 }
 

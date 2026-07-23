@@ -3,9 +3,10 @@
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 
-#include <string>
 #include <algorithm>
 #include <chrono>
+#include <string>
+#include <utility>
 
 namespace media::ffmpeg::graph {
 
@@ -15,6 +16,19 @@ MediaGraphWorker::MediaGraphWorker(MediaRuntimeNode& node,
     : m_node(node)
     , m_context(context)
     , m_wakeup(context.nodeWakeup(node.nodeId()))
+    , m_failureRecorder(&m_localFailureRecorder)
+    , m_config(config)
+{
+}
+
+MediaGraphWorker::MediaGraphWorker(MediaRuntimeNode& node,
+                                   MediaGraphExecutionContext& context,
+                                   MediaGraphWorkerFailureRecorder& failureRecorder,
+                                   MediaGraphWorkerConfig config)
+    : m_node(node)
+    , m_context(context)
+    , m_wakeup(context.nodeWakeup(node.nodeId()))
+    , m_failureRecorder(&failureRecorder)
     , m_config(config)
 {
 }
@@ -84,6 +98,26 @@ const MediaGraphWorkerMetrics& MediaGraphWorker::metrics() const noexcept
     return m_metrics;
 }
 
+void MediaGraphWorker::recordFailure(::media::ErrorInfo error)
+{
+    const MediaGraph* graph = m_context.graph();
+    const MediaNode* node = graph ? graph->findNode(m_node.nodeId()) : nullptr;
+    const MediaNodeKind nodeKind = node ? node->kind : MediaNodeKind::Unknown;
+    const std::string nodeName = node
+        ? (!node->diagnosticName.empty() ? node->diagnosticName : node->name)
+        : std::string{};
+    const ::media::ErrorInfo diagnosticError = error;
+    (void)m_failureRecorder->recordFirst(
+        MediaGraphWorkerFailure{ m_node.nodeId(), nodeKind, nodeName, std::move(error) });
+    mediaGraphDiagnosticLog(
+        MediaGraphDiagnosticLevel::State,
+        MediaGraphDiagnosticPhase::RuntimeNode,
+        "worker.failed node=" + std::to_string(m_node.nodeId().value) +
+            " kind=" + mediaGraphDiagnosticNodeKindName(nodeKind) +
+            " name=" + nodeName +
+            " error=" + diagnosticError.describe());
+}
+
 void MediaGraphWorker::run()
 {
     m_running = true;
@@ -103,15 +137,7 @@ void MediaGraphWorker::run()
         }
 
         if (!result) {
-            const MediaGraph* graph = m_context.graph();
-            const MediaNode* node = graph ? graph->findNode(m_node.nodeId()) : nullptr;
-            mediaGraphDiagnosticLog(
-                MediaGraphDiagnosticLevel::State,
-                MediaGraphDiagnosticPhase::RuntimeNode,
-                "worker.failed node=" + std::to_string(m_node.nodeId().value) +
-                    " kind=" + mediaGraphDiagnosticNodeKindName(
-                        node ? node->kind : MediaNodeKind::Unknown) +
-                    " error=" + result.error().describe());
+            recordFailure(result.error());
             ++m_metrics.errors;
             ++consecutiveErrors;
             if (consecutiveErrors >= m_config.maxConsecutiveErrors) {
@@ -136,18 +162,22 @@ void MediaGraphWorker::run()
                 const auto& deadlineWait = *result.value().deadlineWait;
                 auto group = m_context.findAvSyncGroup(deadlineWait.syncGroup);
                 if (!group) {
+                    recordFailure(::media::ErrorInfo::notInitialized(
+                        "MediaGraphWorker deadline wait requires a registered A/V sync group"));
                     ++m_metrics.errors;
                     m_aborted = true;
                     break;
                 }
                 auto now = group->clock()->now();
                 if (!now) {
+                    recordFailure(now.error());
                     ++m_metrics.errors;
                     m_aborted = true;
                     break;
                 }
                 auto remaining = deadlineWait.masterDeadline.checkedSubtract(now.value());
                 if (!remaining) {
+                    recordFailure(remaining.error());
                     ++m_metrics.errors;
                     m_aborted = true;
                     break;

@@ -43,7 +43,7 @@ MediaRtpSourceClockMapper mapper(int clockRate = 90'000,
 {
     auto created = MediaRtpSourceClockMapper::create(
         MediaRtpSourceClockMapperConfig{
-            clockRate, 3 * Second, 5 * Second, 250'000'000, 1'000},
+            clockRate, true, 3 * Second, 5 * Second, 250'000'000, 1'000},
         generation);
     return std::move(created).value();
 }
@@ -168,9 +168,14 @@ void testIdentityAndGenerationChangesRequireReacquisition(TestContext& ctx)
 }
 
 MediaRtpSourceClockCalibration calibration(const MediaRtcpClockEvidence& value,
-                                           int clockRate)
+                                           int clockRate,
+                                           bool requireCname = true)
 {
-    auto streamMapper = mapper(clockRate, value.generation);
+    auto created = MediaRtpSourceClockMapper::create(
+        MediaRtpSourceClockMapperConfig{
+            clockRate, requireCname, 3 * Second, 5 * Second, 250'000'000, 1'000},
+        value.generation);
+    auto streamMapper = std::move(created).value();
     streamMapper.observeSenderReport(value);
     return streamMapper.calibration(value.senderReportObservedAtNs).value();
 }
@@ -180,6 +185,7 @@ void testGroupRequiresExactCommonIdentityAndCurrentEvidence(TestContext& ctx)
     auto validatorResult = MediaRtpClockGroupValidator::create(
         MediaRtpClockGroupValidatorConfig{3 * Second, 5 * Second, 50'000'000,
                                           5 * Second, 5 * Second,
+                                          true,
                                           MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime});
     EXPECT_TRUE(ctx, validatorResult);
     if (!validatorResult) return;
@@ -217,12 +223,41 @@ void testGroupRequiresExactCommonIdentityAndCurrentEvidence(TestContext& ctx)
     EXPECT_FALSE(ctx, isolated.locked.has_value());
 }
 
+void testGroupLocksWithoutCnameWhenPlannerPolicyAllows(TestContext& ctx)
+{
+    auto validatorResult = MediaRtpClockGroupValidator::create(
+        MediaRtpClockGroupValidatorConfig{
+            3 * Second, 5 * Second, 50'000'000,
+            5 * Second, 5 * Second, false,
+            MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime});
+    EXPECT_TRUE(ctx, validatorResult);
+    if (!validatorResult) return;
+    auto validator = std::move(validatorResult).value();
+
+    const auto videoEvidence = evidence(11, 100, 0, 9'000, "", 100, 2);
+    const auto audioEvidence = evidence(22, 100, 0, 4'800, "", 110, 7);
+    EXPECT_TRUE(ctx, validator.observe(
+        MediaStreamKind::Video, videoEvidence,
+        calibration(videoEvidence, 90'000, false)));
+    EXPECT_TRUE(ctx, validator.observe(
+        MediaStreamKind::Audio, audioEvidence,
+        calibration(audioEvidence, 48'000, false)));
+
+    const auto ready = validator.snapshot(120);
+    EXPECT_EQ(ctx, ready.state, MediaRtpClockGroupState::Locked);
+    EXPECT_TRUE(ctx, ready.locked.has_value());
+    if (ready.locked) {
+        EXPECT_TRUE(ctx, ready.locked->cname.empty());
+    }
+}
+
 void testGroupRejectsMismatchSkewAndHasNoFallback(TestContext& ctx)
 {
     auto makeValidator = [] {
         return MediaRtpClockGroupValidator::create(
             MediaRtpClockGroupValidatorConfig{3 * Second, 5 * Second, 50'000'000,
                                               5 * Second, 5 * Second,
+                                              true,
                                               MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime}).value();
     };
     const auto video = evidence(11, 100, 0, 0, "camera-a", 0, 1);
@@ -261,6 +296,7 @@ void testGroupDegradesExpiresAndInvalidatesOnIngressDiscontinuity(TestContext& c
     auto validator = MediaRtpClockGroupValidator::create(
         MediaRtpClockGroupValidatorConfig{3 * Second, 5 * Second, 50'000'000,
                                           5 * Second, 5 * Second,
+                                          true,
                                           MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime}).value();
     const auto video = evidence(11, 100, 0, 0, "camera", 0, 1);
     const auto audio = evidence(22, 100, 0, 0, "camera", 0, 1);
@@ -282,6 +318,7 @@ void testInitialAcquisitionNeverPublishesDegradedForStaggeredEvidence(
     auto validator = MediaRtpClockGroupValidator::create(
         MediaRtpClockGroupValidatorConfig{3 * Second, 5 * Second, 50'000'000,
                                           5 * Second, 5 * Second,
+                                          true,
                                           MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime}).value();
     const auto earlyVideo = evidence(11, 100, 0, 0, "camera", 0, 1);
     const auto lateAudio = evidence(
@@ -315,6 +352,7 @@ void testInitialAcquisitionComparesSourceToObservationOffsets(TestContext& ctx)
         return MediaRtpClockGroupValidator::create(
             MediaRtpClockGroupValidatorConfig{
                 7 * Second, 9 * Second, 50'000'000, 9 * Second, 9 * Second,
+                true,
                 MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime})
             .value();
     };
@@ -360,6 +398,7 @@ void testActiveGenerationCommitsIndependentPeriodicSenderReports(TestContext& ct
     auto validator = MediaRtpClockGroupValidator::create(
         MediaRtpClockGroupValidatorConfig{7 * Second, 9 * Second, 50'000'000,
                                           9 * Second, 9 * Second,
+                                          true,
                                           MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime}).value();
     const auto initialVideo = evidence(11, 100, 0, 0, "camera", 0, 1);
     const auto initialAudio = evidence(
@@ -469,6 +508,7 @@ void testCnameFreshnessExpiresGroupAndCapsReceiveDeadline(TestContext& ctx)
     auto validator = MediaRtpClockGroupValidator::create(
         MediaRtpClockGroupValidatorConfig{3 * Second, 5 * Second, 50'000'000,
                                           4 * Second, 4 * Second,
+                                          true,
                                           MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime}).value();
     auto video = evidence(11, 100, 0, 0, "camera", 4 * Second, 1);
     auto audio = evidence(22, 100, 0, 0, "camera", 4 * Second, 1);
@@ -534,6 +574,7 @@ void runRtpSourceClockTests(TestContext& ctx)
     testTimeoutDegradesThenExpiresAndReacquires(ctx);
     testIdentityAndGenerationChangesRequireReacquisition(ctx);
     testGroupRequiresExactCommonIdentityAndCurrentEvidence(ctx);
+    testGroupLocksWithoutCnameWhenPlannerPolicyAllows(ctx);
     testGroupRejectsMismatchSkewAndHasNoFallback(ctx);
     testGroupDegradesExpiresAndInvalidatesOnIngressDiscontinuity(ctx);
     testInitialAcquisitionNeverPublishesDegradedForStaggeredEvidence(ctx);

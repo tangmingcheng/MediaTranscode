@@ -32,7 +32,6 @@ std::string MediaGraphRuntimeReport::summary() const
 
 MediaGraphRuntimeReport MediaGraphRuntimeReporter::capture(MediaGraphRuntime& runtime)
 {
-    (void)runtime.synchronizeThreadedState();
     return capture(static_cast<const MediaGraphRuntime&>(runtime));
 }
 

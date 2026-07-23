@@ -106,6 +106,7 @@ const char* mediaGraphDiagnosticNodeKindName(MediaNodeKind kind) noexcept
     switch (kind) {
     case MediaNodeKind::FileInput: return "FileInput";
     case MediaNodeKind::RealtimeInput: return "RealtimeInput";
+    case MediaNodeKind::RawRtpInput: return "RawRtpInput";
     case MediaNodeKind::Demux: return "Demux";
     case MediaNodeKind::MpegTsDemux: return "MpegTsDemux";
     case MediaNodeKind::StreamSplit: return "StreamSplit";

@@ -211,7 +211,7 @@ MediaPipelineStagePlan makeCodecStage(MediaPipelineStageRole role,
     stage.frameKind = hardware ? MediaHardwareFrameKind::Hardware : MediaHardwareFrameKind::Software;
     stage.hardware = hardware;
     stage.zeroCopy = zeroCopy;
-    stage.score = priority;
+    stage.priority = priority;
     if (stage.role == MediaPipelineStageRole::Encoder) {
         stage.encodedPacketLayout =
             MediaEncoderPacketLayoutCapabilityProvider::find(stage.ffmpegName);
@@ -245,7 +245,7 @@ MediaPipelineStagePlan makeFilterStage(std::string componentName,
     stage.frameKind = hardware ? MediaHardwareFrameKind::Hardware : MediaHardwareFrameKind::Software;
     stage.hardware = hardware;
     stage.zeroCopy = zeroCopy;
-    stage.score = priority;
+    stage.priority = priority;
 
     const bool filterOk = filterExists(stage.filterName);
     stage.available = filterOk;
@@ -256,9 +256,7 @@ MediaPipelineStagePlan makeFilterStage(std::string componentName,
 MediaPipelineChainPlan makeRawChain(std::string label,
                                     MediaPipelineStagePlan decoder,
                                     MediaPipelineStagePlan filter,
-                                    MediaPipelineStagePlan encoder,
-                                    MediaHardwareCapabilityProbe& hardwareProbe,
-                                    const MediaPipelinePlannerOptions& options)
+                                    MediaPipelineStagePlan encoder)
 {
     MediaPipelineChainPlan chain;
     chain.label = std::move(label);
@@ -266,13 +264,6 @@ MediaPipelineChainPlan makeRawChain(std::string label,
     chain.filter = std::move(filter);
     chain.encoder = std::move(encoder);
 
-    if (!chain.decoder.available || !chain.filter.available || !chain.encoder.available) {
-        return chain;
-    }
-
-    hardwareProbe.apply(chain.decoder, options);
-    hardwareProbe.apply(chain.filter, options);
-    hardwareProbe.apply(chain.encoder, options);
     return chain;
 }
 
@@ -284,14 +275,13 @@ std::vector<MediaPipelineChainPlan> MediaVideoCapabilityScanner::enumerateTransc
 {
     const std::string inputCodec = canonicalCodecName(inputCodecName);
     const std::string outputCodec = canonicalCodecName(outputCodecName);
-    static MediaHardwareCapabilityProbe hardwareProbe;
     std::vector<MediaPipelineChainPlan> chains;
 
     auto add = [&](std::string label, MediaPipelineStagePlan decoder, MediaPipelineStagePlan filter,
                    MediaPipelineStagePlan encoder)
     {
         chains.push_back(makeRawChain(std::move(label), std::move(decoder), std::move(filter),
-                                      std::move(encoder), hardwareProbe, options));
+                                      std::move(encoder)));
     };
 
     if (!options.disableHardware)
@@ -364,6 +354,7 @@ std::vector<MediaPipelineChainPlan> MediaVideoCapabilityScanner::enumerateTransc
                            MediaHardwareDeviceKind::VideoToolbox, true, true, 80));
     }
 
+    if (options.disableHardware)
     {
         add("software",
             makeCodecStage(MediaPipelineStageRole::Decoder, "software decoder", inputCodec,

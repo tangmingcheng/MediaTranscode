@@ -10,6 +10,7 @@
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
 #include "internal/graph/planner/capability/MediaEncoderPacketLayoutCapabilityProvider.h"
+#include "internal/graph/planner/capability/MediaHardwareCapabilityProbe.h"
 #include "internal/graph/planner/capability/MediaSelectedEncoderPacketLayoutResolver.h"
 #include "internal/graph/planner/capability/MediaVideoCapabilityScanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimePlanner.h"
@@ -1540,7 +1541,7 @@ void testEncoderPacketLayoutCapabilityIsExactAndFailClosed(TestContext& ctx)
 
 void testVideoCapabilityScannerPublishesOnlyProvenEncoderLayout(TestContext& ctx)
 {
-    MediaPipelinePlannerOptions options(false, true, false, false, true);
+    MediaPipelinePlannerOptions options(false, true, false, true);
     options.preferredHardware = "cuda";
     const auto candidates =
         MediaVideoCapabilityScanner::enumerateTranscodeCandidates("h264", "h264", options);
@@ -1565,7 +1566,16 @@ void testVideoCapabilityScannerPublishesOnlyProvenEncoderLayout(TestContext& ctx
         }
     }
 
-    const auto* libx264 = findEncoder("libx264");
+    MediaPipelinePlannerOptions softwareOptions(false, true, true, true);
+    softwareOptions.preferredHardware = "software";
+    const auto softwareCandidates =
+        MediaVideoCapabilityScanner::enumerateTranscodeCandidates("h264", "h264", softwareOptions);
+    const auto softwareEncoder = std::find_if(
+        softwareCandidates.begin(), softwareCandidates.end(),
+        [](const auto& chain) { return chain.encoder.ffmpegName == "libx264"; });
+    const auto* libx264 = softwareEncoder == softwareCandidates.end()
+                             ? nullptr
+                             : &softwareEncoder->encoder;
     EXPECT_TRUE(ctx, libx264 != nullptr);
     if (libx264)
         EXPECT_TRUE(ctx, libx264->encodedPacketLayout.has_value());
@@ -1578,7 +1588,7 @@ void testVideoCapabilityScannerPublishesOnlyProvenEncoderLayout(TestContext& ctx
 
 void testVideoCapabilityScannerHonorsDisableHardwareDecision(TestContext& ctx)
 {
-    MediaPipelinePlannerOptions softwareOnly(false, true, true, false, true);
+    MediaPipelinePlannerOptions softwareOnly(false, true, true, true);
     softwareOnly.preferredHardware = "software";
     const auto softwareCandidates =
         MediaVideoCapabilityScanner::enumerateTranscodeCandidates("h264", "h264", softwareOnly);
@@ -1591,7 +1601,7 @@ void testVideoCapabilityScannerHonorsDisableHardwareDecision(TestContext& ctx)
                                             !chain.encoder.hardware;
                                  }));
 
-    MediaPipelinePlannerOptions hardwareEnabled(false, true, false, false, true);
+    MediaPipelinePlannerOptions hardwareEnabled(false, true, false, true);
     hardwareEnabled.preferredHardware = "auto";
     const auto completeCandidates =
         MediaVideoCapabilityScanner::enumerateTranscodeCandidates("h264", "h264", hardwareEnabled);
@@ -1612,7 +1622,7 @@ void testVideoCapabilityScannerHonorsDisableHardwareDecision(TestContext& ctx)
                                      return chain.decoder.hardware || chain.filter.hardware ||
                                             chain.encoder.hardware;
                                  }));
-    EXPECT_TRUE(ctx, std::any_of(completeCandidates.begin(), completeCandidates.end(),
+    EXPECT_TRUE(ctx, std::none_of(completeCandidates.begin(), completeCandidates.end(),
                                  [](const auto& chain)
                                  {
                                      return !chain.decoder.hardware && !chain.filter.hardware &&
@@ -1642,6 +1652,171 @@ void testVideoCapabilityScannerHonorsDisableHardwareDecision(TestContext& ctx)
         EXPECT_EQ(ctx, scored.front().label, std::string("hardware"));
         EXPECT_TRUE(ctx, scored.front().score > scored.back().score);
     }
+}
+
+MediaPipelineChainPlan makeAvailableHardwareChain(std::string label,
+                                                  MediaHardwareDeviceKind deviceKind,
+                                                  std::string hwaccelName,
+                                                  int declaredPriority)
+{
+    MediaPipelineChainPlan chain;
+    chain.label = std::move(label);
+    chain.decoder.available = true;
+    chain.decoder.hardware = true;
+    chain.decoder.zeroCopy = true;
+    chain.decoder.deviceKind = deviceKind;
+    chain.decoder.hwaccelName = hwaccelName;
+    chain.decoder.priority = declaredPriority;
+    chain.filter = chain.decoder;
+    chain.filter.role = MediaPipelineStageRole::Filter;
+    chain.encoder = chain.decoder;
+    chain.encoder.role = MediaPipelineStageRole::Encoder;
+    return chain;
+}
+
+void testPipelineScorerConsumesPriorityAndUsesStableTieBreaker(TestContext& ctx)
+{
+    MediaPipelinePlannerOptions options(false, true, false, true);
+    options.preferredHardware = "auto";
+
+    auto lowerPriority = makeAvailableHardwareChain(
+        "z-lower", MediaHardwareDeviceKind::CUDA, "cuda", 10);
+    auto higherPriority = makeAvailableHardwareChain(
+        "m-higher", MediaHardwareDeviceKind::QSV, "qsv", 20);
+    auto alphabeticalTie = makeAvailableHardwareChain(
+        "a-higher", MediaHardwareDeviceKind::D3D11VA, "d3d11va", 20);
+
+    const auto scored = MediaPipelineScorer::scoreAndSortChains(
+        {std::move(lowerPriority), std::move(higherPriority), std::move(alphabeticalTie)},
+        options);
+
+    EXPECT_EQ(ctx, scored.at(0).label, std::string("a-higher"));
+    EXPECT_EQ(ctx, scored.at(1).label, std::string("m-higher"));
+    EXPECT_EQ(ctx, scored.at(2).label, std::string("z-lower"));
+    EXPECT_TRUE(ctx, scored.at(0).score > scored.at(2).score);
+}
+
+void testHardwareProbeValidatesCompleteChainOncePerCandidate(TestContext& ctx)
+{
+    int chainValidations = 0;
+    MediaHardwareCapabilityProbe probe(
+        [&](const MediaPipelineChainPlan& candidate,
+            const MediaPipelinePlannerOptions& candidateOptions)
+        {
+            ++chainValidations;
+            EXPECT_EQ(ctx, candidate.label, std::string("cuda"));
+            EXPECT_EQ(ctx, candidate.decoder.deviceKind, MediaHardwareDeviceKind::CUDA);
+            EXPECT_EQ(ctx, candidate.decoder.hwaccelName, std::string("cuda"));
+            EXPECT_TRUE(ctx, candidateOptions.filterRequired);
+            return MediaHardwareCapability{true, "test chain negotiated"};
+        });
+    MediaPipelinePlannerOptions options(false, true, false, true);
+    options.preferredHardware = "auto";
+    auto chain = makeAvailableHardwareChain(
+        "cuda", MediaHardwareDeviceKind::CUDA, "cuda", 10);
+
+    EXPECT_TRUE(ctx, probe.validate(chain, options));
+    EXPECT_EQ(ctx, chainValidations, 1);
+}
+
+void testPlannerContinuesAfterHighestRankedHardwareChainCannotOpenEncoder(
+    TestContext& ctx)
+{
+    MediaPipelinePlannerOptions options(false, true, false, true);
+    options.preferredHardware = "auto";
+    std::vector<std::string> attempted;
+    MediaHardwareCapabilityProbe probe(
+        [&](const MediaPipelineChainPlan& candidate,
+            const MediaPipelinePlannerOptions&)
+        {
+            attempted.push_back(candidate.label);
+            const bool available = candidate.label == "qsv";
+            return MediaHardwareCapability{
+                available,
+                available ? "test decoder/filter/encoder chain negotiated"
+                          : "test encoder open failed"};
+        });
+
+    auto candidates = MediaPipelineScorer::scoreAndSortChains(
+        {makeAvailableHardwareChain("qsv", MediaHardwareDeviceKind::QSV, "qsv", 20),
+         makeAvailableHardwareChain("cuda", MediaHardwareDeviceKind::CUDA, "cuda", 30),
+         makeAvailableHardwareChain("d3d11va", MediaHardwareDeviceKind::D3D11VA,
+                                    "d3d11va", 10)},
+        options);
+    const auto selected =
+        MediaPipelinePlanner::selectRankedCandidate(candidates, options, probe);
+
+    EXPECT_TRUE(ctx, selected);
+    if (selected) {
+        EXPECT_EQ(ctx, candidates.at(selected.value()).label, std::string("qsv"));
+    }
+    EXPECT_EQ(ctx, attempted.size(), std::size_t{2});
+    if (attempted.size() == 2) {
+        EXPECT_EQ(ctx, attempted.at(0), std::string("cuda"));
+        EXPECT_EQ(ctx, attempted.at(1), std::string("qsv"));
+    }
+}
+
+void testPlannerRejectsImplicitSoftwareFallbackWhenHardwareFails(TestContext& ctx)
+{
+    MediaPipelinePlannerOptions options(false, true, false, true);
+    options.preferredHardware = "auto";
+    int deviceCreations = 0;
+    MediaHardwareCapabilityProbe probe(
+        [&](const MediaPipelineChainPlan&,
+            const MediaPipelinePlannerOptions&)
+        {
+            ++deviceCreations;
+            return MediaHardwareCapability{false, "test chain unavailable"};
+        });
+
+    MediaPipelineChainPlan software;
+    software.label = "software";
+    software.decoder.available = true;
+    software.filter.available = true;
+    software.encoder.available = true;
+    auto candidates = MediaPipelineScorer::scoreAndSortChains(
+        {makeAvailableHardwareChain("cuda", MediaHardwareDeviceKind::CUDA, "cuda", 30),
+         std::move(software)},
+        options);
+    const auto selected =
+        MediaPipelinePlanner::selectRankedCandidate(candidates, options, probe);
+
+    EXPECT_FALSE(ctx, selected);
+    if (!selected) {
+        EXPECT_EQ(ctx, selected.error().code, ::media::ErrorCode::HardwareUnavailable);
+    }
+    EXPECT_EQ(ctx, deviceCreations, 1);
+}
+
+void testPlannerUsesSoftwareOnlyWhenHardwareIsExplicitlyDisabled(TestContext& ctx)
+{
+    MediaPipelinePlannerOptions options(false, true, true, true);
+    options.preferredHardware = "software";
+    int deviceCreations = 0;
+    MediaHardwareCapabilityProbe probe(
+        [&](const MediaPipelineChainPlan&,
+            const MediaPipelinePlannerOptions&)
+        {
+            ++deviceCreations;
+            return MediaHardwareCapability{true, "unexpected chain validation"};
+        });
+
+    MediaPipelineChainPlan software;
+    software.label = "software";
+    software.decoder.available = true;
+    software.filter.available = true;
+    software.encoder.available = true;
+    auto candidates =
+        MediaPipelineScorer::scoreAndSortChains({std::move(software)}, options);
+    const auto selected =
+        MediaPipelinePlanner::selectRankedCandidate(candidates, options, probe);
+
+    EXPECT_TRUE(ctx, selected);
+    if (selected) {
+        EXPECT_EQ(ctx, candidates.at(selected.value()).label, std::string("software"));
+    }
+    EXPECT_EQ(ctx, deviceCreations, 0);
 }
 
 void testProjectTsPlannerConsumesPublishedLayoutOrRejectsUnknownEncoder(TestContext& ctx)
@@ -1853,10 +2028,10 @@ void testRawRtpInputPlannerProducesCompleteTransportPolicy(TestContext& ctx)
     EXPECT_EQ(ctx, transport.maximumReorderDelayMs, 100);
     EXPECT_EQ(ctx, transport.cancellableReadTimeoutMs, 2'500);
     EXPECT_TRUE(ctx, transport.requireSenderReports);
-    EXPECT_TRUE(ctx, transport.requireCname);
+    EXPECT_FALSE(ctx, transport.requireCname);
     EXPECT_EQ(ctx, transport.senderReportTimeoutMs, 7'000);
     EXPECT_EQ(ctx, transport.cnameTimeoutMs, 9'000);
-    EXPECT_EQ(ctx, transport.rtcpCompositionMode, MediaRtcpCompositionMode::StrictCompoundRfc3550);
+    EXPECT_EQ(ctx, transport.rtcpCompositionMode, MediaRtcpCompositionMode::ReducedSizeRfc5506);
 
     auto ipv6Request = request;
     ipv6Request.input.videoRtp.url = "rtp://[::1]:5004";
@@ -2463,6 +2638,11 @@ int main()
     testEncoderPacketLayoutCapabilityIsExactAndFailClosed(ctx);
     testVideoCapabilityScannerPublishesOnlyProvenEncoderLayout(ctx);
     testVideoCapabilityScannerHonorsDisableHardwareDecision(ctx);
+    testPipelineScorerConsumesPriorityAndUsesStableTieBreaker(ctx);
+    testHardwareProbeValidatesCompleteChainOncePerCandidate(ctx);
+    testPlannerContinuesAfterHighestRankedHardwareChainCannotOpenEncoder(ctx);
+    testPlannerRejectsImplicitSoftwareFallbackWhenHardwareFails(ctx);
+    testPlannerUsesSoftwareOnlyWhenHardwareIsExplicitlyDisabled(ctx);
     testProjectTsPlannerConsumesPublishedLayoutOrRejectsUnknownEncoder(ctx);
     testResolvedAudioPlannerMatrix(ctx);
     testAudioEncoderTargetIdentityValidator(ctx);

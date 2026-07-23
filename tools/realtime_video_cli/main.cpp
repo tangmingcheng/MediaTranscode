@@ -2,6 +2,8 @@
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 #include "internal/graph/runtime/MediaGraphRuntime.h"
 #include "internal/graph/runtime/diagnostics/MediaGraphRuntimeReport.h"
+#include "internal/graph/runtime/lifecycle/MediaRealtimeProgressTracker.h"
+#include "internal/graph/runtime/lifecycle/MediaRealtimeRuntimeCompletion.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
 #include "../common/GraphCliSupport.h"
 #include "../common/VideoCliTranscodeOptions.h"
@@ -28,6 +30,7 @@ namespace {
 struct RealtimeVideoRuntimeOptions {
     int maxDurationSeconds = 15;
     int progressTimeoutMs = 5000;
+    int firstOutputTimeoutMs = 30000;
     int pollIntervalMs = 250;
 };
 
@@ -105,6 +108,7 @@ void rejectUnknownRealtimeArgs(int argc, char** argv)
         "--output",
         "--max-duration",
         "--progress-timeout-ms",
+        "--first-output-timeout-ms",
         "--poll-interval-ms",
         "--startup-max-video-unit-bytes",
         "--startup-max-audio-unit-bytes",
@@ -204,13 +208,18 @@ RealtimeVideoRuntimeOptions parseRuntimeOptions(int argc, char** argv)
     if (auto progressTimeoutMs = optionalIntArg(argc, argv, "--progress-timeout-ms")) {
         options.progressTimeoutMs = *progressTimeoutMs;
     }
+    if (auto firstOutputTimeoutMs = optionalIntArg(argc, argv, "--first-output-timeout-ms")) {
+        options.firstOutputTimeoutMs = *firstOutputTimeoutMs;
+    }
     if (auto pollIntervalMs = optionalIntArg(argc, argv, "--poll-interval-ms")) {
         options.pollIntervalMs = *pollIntervalMs;
     }
     if (options.maxDurationSeconds <= 0 ||
         options.progressTimeoutMs <= 0 ||
+        options.firstOutputTimeoutMs <= 0 ||
         options.pollIntervalMs <= 0) {
-        throw std::invalid_argument("runtime duration, progress timeout, and poll interval must be positive");
+        throw std::invalid_argument(
+            "runtime duration, progress timeout, first-output timeout, and poll interval must be positive");
     }
     return options;
 }
@@ -221,8 +230,9 @@ RealtimeVideoRuntimeOptions parseRuntimeOptions(int argc, char** argv)
     using Clock = std::chrono::steady_clock;
     const auto startedAt = Clock::now();
     auto lastProgressAt = startedAt;
-    uint64_t lastEncodedPacketsPushed = 0;
-    bool observedProgress = false;
+    MediaRealtimeProgressTracker progressTracker;
+    const auto firstOutputStartupDeadline =
+        std::chrono::milliseconds(options.firstOutputTimeoutMs);
     const auto workerStartupGrace = std::chrono::milliseconds(
         std::min(options.progressTimeoutMs, std::max(options.pollIntervalMs * 2, 1000)));
 
@@ -244,8 +254,12 @@ RealtimeVideoRuntimeOptions parseRuntimeOptions(int argc, char** argv)
         std::cout << "[CLI] " << report.summary() << '\n';
 
         if (report.metrics.workerErrors > 0) {
-            return ::media::Status::failure(
-                ::media::ErrorInfo::ffmpegFailure("realtime runtime reported worker errors"));
+            auto workerFailure = runtime.synchronizeThreadedState();
+            if (!workerFailure) {
+                return workerFailure;
+            }
+            return ::media::Status::failure(::media::ErrorInfo::internalError(
+                "realtime runtime reported worker errors without a preserved primary failure"));
         }
         const auto now = Clock::now();
         if (report.metrics.activeWorkers == 0 &&
@@ -253,15 +267,28 @@ RealtimeVideoRuntimeOptions parseRuntimeOptions(int argc, char** argv)
             return ::media::Status::failure(
                 ::media::ErrorInfo::notInitialized("realtime runtime has no active workers"));
         }
-        if (report.metrics.encodedPacketsPushed > lastEncodedPacketsPushed) {
-            lastEncodedPacketsPushed = report.metrics.encodedPacketsPushed;
+        auto progress = progressTracker.observe(
+            report.metrics.workerProgress,
+            report.metrics.encodedPacketsPushed);
+        if (!progress) {
+            return ::media::Status::failure(progress.error());
+        }
+        if (progress.value()) {
             lastProgressAt = Clock::now();
-            observedProgress = true;
         }
 
+        const auto elapsedMs =
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - startedAt);
         const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - startedAt).count();
         const auto idleMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastProgressAt).count();
-        if (observedProgress && elapsed >= options.maxDurationSeconds) {
+        if (progressTracker.firstOutputDeadlineExpired(
+                elapsedMs, firstOutputStartupDeadline)) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "realtime runtime produced no encoded output before startup deadline"));
+        }
+        if (progressTracker.outputStarted() &&
+            elapsed >= options.maxDurationSeconds) {
             return ::media::Status::success();
         }
         if (idleMs >= options.progressTimeoutMs) {
@@ -338,16 +365,13 @@ int runRealtimeVideoCli(int argc, char** argv)
         return failStatus("start realtime video runtime", startStatus);
     }
 
-    auto waitStatus = waitForRealtimeProgress(runtime, runtimeOptions);
-    auto stopStatus = runtime.stop();
-    if (!stopStatus) {
-        return failStatus("stop realtime video runtime", stopStatus);
-    }
+    const auto waitStatus = waitForRealtimeProgress(runtime, runtimeOptions);
+    const auto completion = MediaRealtimeRuntimeCompletion::complete(runtime, waitStatus);
     const MediaGraphRuntimeReport finalReport = MediaGraphRuntimeReporter::capture(runtime);
     std::cout << "[CLI] final " << finalReport.summary() << '\n';
     runtime.reset();
-    if (!waitStatus) {
-        return failStatus("realtime video runtime progress", waitStatus);
+    if (!completion.status) {
+        return failStatus("realtime video runtime", completion.status);
     }
 
     std::cout << "[CLI] realtime video validation stopped successfully\n";

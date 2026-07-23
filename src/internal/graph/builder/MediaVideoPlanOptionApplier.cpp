@@ -41,7 +41,7 @@ const char* boolOption(bool value) noexcept
     if (auto status = setOption(graph, nodeId, prefix + ".surface_pixel_format", stage.surfacePixelFormat); !status) return status;
     if (auto status = setOption(graph, nodeId, prefix + ".hardware", boolOption(stage.hardware)); !status) return status;
     if (auto status = setOption(graph, nodeId, prefix + ".zero_copy", boolOption(stage.zeroCopy)); !status) return status;
-    return setOption(graph, nodeId, prefix + ".score", std::to_string(stage.score));
+    return setOption(graph, nodeId, prefix + ".priority", std::to_string(stage.priority));
 }
 
 ::media::Result<void> setChainOptions(MediaGraph& graph,

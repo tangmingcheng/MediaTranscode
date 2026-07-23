@@ -18,6 +18,7 @@ enum class MediaRtpSourceClockConfidence {
 
 struct MediaRtpSourceClockMapperConfig final {
     int clockRate;
+    bool requireCname;
     std::int64_t senderReportTimeoutNs;
     std::int64_t maximumExtrapolationNs;
     std::int64_t maximumResidualNs;

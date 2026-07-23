@@ -91,8 +91,8 @@ MediaH264RtpDepacketizer::MediaH264RtpDepacketizer(MediaRtpDepacketizerConfig co
             appendNal(m_accessUnit, &nalHeader, 1);
             m_keyFrame = m_keyFrame || fragmentedType == 5;
         } else if (!m_fragmentOpen) {
-            return ::media::Result<MediaRtpDepacketizerResult>::failure(
-                ::media::ErrorInfo::invalidArgument("H264 FU-A continuation has no valid start"));
+            discontinuity(MediaRtpDiscontinuityReason::SequenceGap);
+            return ::media::Result<MediaRtpDepacketizerResult>::success({});
         }
         const uint8_t nalHeader = static_cast<uint8_t>((packet.payload[0] & 0xe0) | fragmentedType);
         if (!m_fragmentNalHeader || *m_fragmentNalHeader != nalHeader) {

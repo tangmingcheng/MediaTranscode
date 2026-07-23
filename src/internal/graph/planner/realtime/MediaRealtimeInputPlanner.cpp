@@ -237,10 +237,10 @@ MediaRealtimeRtpTransportPlan transportPlan(
         RtpMaximumReorderDelayMs,
         cancellableReadTimeoutMs,
         true,
-        true,
+        false,
         MediaRtpClockLivenessPolicy::SenderReportTimeoutMs,
         MediaRtpClockLivenessPolicy::CnameTimeoutMs,
-        MediaRtcpCompositionMode::StrictCompoundRfc3550
+        MediaRtcpCompositionMode::ReducedSizeRfc5506
     };
 }
 

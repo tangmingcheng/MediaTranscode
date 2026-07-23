@@ -188,7 +188,7 @@ void MediaRtcpSenderReportTracker::invalidate() noexcept
         }
         if (cname) break;
     }
-    if (!cname) return ::media::Status::success();
+    if (!cname && m_config.requireCname) return ::media::Status::success();
     if (m_pendingSource && m_pendingSource->senderReport.ssrc == report->ssrc &&
         ntpLess(report->ntp, m_pendingSource->senderReport.ntp)) {
         invalidate();
@@ -201,7 +201,8 @@ void MediaRtcpSenderReportTracker::invalidate() noexcept
         return invalidEvidence(
             "Pending RTCP sender report changed RTP timestamp at the same NTP instant");
     }
-    m_pendingSource = PendingRtcpSource{*report, *cname, observedAtNs};
+    m_pendingSource = PendingRtcpSource{
+        *report, cname ? *cname : std::vector<uint8_t>{}, observedAtNs};
     return ::media::Status::success();
 }
 
@@ -221,6 +222,9 @@ void MediaRtcpSenderReportTracker::invalidate() noexcept
     m_senderReport = report;
     m_lastAcceptedNtp = report.ntp;
     m_senderReportObservedAtNs = observedAtNs;
+    if (!m_config.requireCname) {
+        m_cnameObservedAtNs = observedAtNs;
+    }
     m_evidenceUpdatePending = true;
     return ::media::Status::success();
 }

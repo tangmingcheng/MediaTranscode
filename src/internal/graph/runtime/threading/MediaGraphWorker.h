@@ -3,6 +3,7 @@
 #include "internal/graph/core/MediaNodeId.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 #include "internal/graph/runtime/MediaRuntimeNode.h"
+#include "internal/graph/runtime/threading/MediaGraphWorkerFailure.h"
 #include "media_transcode/Result.h"
 
 #include <atomic>
@@ -29,6 +30,10 @@ public:
     MediaGraphWorker(MediaRuntimeNode& node,
                      MediaGraphExecutionContext& context,
                      MediaGraphWorkerConfig config = {});
+    MediaGraphWorker(MediaRuntimeNode& node,
+                     MediaGraphExecutionContext& context,
+                     MediaGraphWorkerFailureRecorder& failureRecorder,
+                     MediaGraphWorkerConfig config = {});
     ~MediaGraphWorker();
 
     MediaGraphWorker(const MediaGraphWorker&) = delete;
@@ -47,12 +52,15 @@ public:
     const MediaGraphWorkerMetrics& metrics() const noexcept;
 
 private:
+    void recordFailure(::media::ErrorInfo error);
     void run();
 
 private:
     MediaRuntimeNode& m_node;
     MediaGraphExecutionContext& m_context;
     MediaNodeWakeup& m_wakeup;
+    MediaGraphWorkerFailureRecorder m_localFailureRecorder;
+    MediaGraphWorkerFailureRecorder* m_failureRecorder = nullptr;
     MediaGraphWorkerConfig m_config;
     std::thread m_thread;
     std::atomic_bool m_running{ false };

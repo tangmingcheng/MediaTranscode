@@ -24,6 +24,7 @@ struct MediaRtpClockGroupValidatorConfig final {
     std::int64_t maximumInterStreamClockOffsetSkewNs;
     std::int64_t videoCnameTimeoutNs;
     std::int64_t audioCnameTimeoutNs;
+    bool requireMatchingCname;
     MediaRtpCommonEpochPolicy commonEpochPolicy;
 };
 

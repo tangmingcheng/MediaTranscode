@@ -104,7 +104,7 @@ For RTP, `AcquiringClock` requires media packets, valid SR mappings, and a commo
 
 Before release:
 
-- video before the common start is discarded;
+- video presentation before the common start is suppressed, while the minimum keyframe-led decode preroll required to decode the first presented frame is retained;
 - audio is sample-accurately trimmed to the common start;
 - both streams buffer the planner-defined preroll;
 - one `MediaPlaybackEpoch` containing source start, master release time, and generation is published atomically.

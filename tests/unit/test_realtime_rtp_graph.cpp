@@ -1263,7 +1263,7 @@ void testPlannerRejectsUnresolvedBehaviorOptions(TestContext& ctx)
     input.height = 1080;
 
     MediaPipelinePlannerOptions missingHardwarePreference(
-        false, false, false, true, false);
+        false, false, false, false);
     const auto missingHardware = MediaPipelinePlanner::planVideoTranscodeKnownInput(
         input,
         "rtp://127.0.0.1:5004",
@@ -1274,7 +1274,7 @@ void testPlannerRejectsUnresolvedBehaviorOptions(TestContext& ctx)
     }
 
     MediaPipelinePlannerOptions missingRealtimeOptions(
-        false, false, false, true, false);
+        false, false, false, false);
     missingRealtimeOptions.preferredHardware = "auto";
     const auto missingRealtime = MediaPipelinePlanner::planVideoTranscodeRealtimeUrl(
         "rtsp://127.0.0.1/live",
@@ -2608,7 +2608,7 @@ void testRealtimeNoResizeDoesNotScoreFilterStage(TestContext& ctx)
         return;
     }
 
-    EXPECT_EQ(ctx, plan.value().videoPlan.selected.score, 600);
+    EXPECT_EQ(ctx, plan.value().videoPlan.selected.score, 660);
 }
 
 void testRealtimeResizeScoresFilterStage(TestContext& ctx)
@@ -2624,7 +2624,7 @@ void testRealtimeResizeScoresFilterStage(TestContext& ctx)
         return;
     }
 
-    EXPECT_EQ(ctx, plan.value().videoPlan.selected.score, 900);
+    EXPECT_EQ(ctx, plan.value().videoPlan.selected.score, 990);
 }
 
 void testSynchronizedRawRtpRejectsOpusWithoutPlannedAccessUnitDuration(TestContext& ctx)
@@ -4027,7 +4027,7 @@ MediaPreparedRealtimeInput makePreparedInputForBinding(TestContext& ctx)
 void testPreparedRealtimeScannerInvokesInjectedOpenerOnce(TestContext& ctx)
 {
     int openCount = 0;
-    MediaPipelinePlannerOptions options(false, false, true, false, false);
+    MediaPipelinePlannerOptions options(false, false, true, false);
     auto scanned = MediaPipelineCapabilityScanner::prepareRealtimeInput(
         sampleVideoPath(), options, false,
         [&openCount](const std::string& url, AVDictionary** inputOptions)

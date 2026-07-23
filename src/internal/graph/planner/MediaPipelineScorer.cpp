@@ -92,6 +92,16 @@ int availableStageSemanticScore(const MediaPipelineStagePlan& stage,
     return kMixedHardwareStageScore;
 }
 
+int declaredStagePriority(const MediaPipelineChainPlan& chain,
+                          const MediaPipelinePlannerOptions& options) noexcept
+{
+    int priority = chain.decoder.priority + chain.encoder.priority;
+    if (options.filterRequired) {
+        priority += chain.filter.priority;
+    }
+    return priority;
+}
+
 std::string unavailableReason(const MediaPipelineChainPlan& chain,
                               const MediaPipelinePlannerOptions& options)
 {
@@ -124,24 +134,21 @@ std::string unavailableReason(const MediaPipelineChainPlan& chain,
 std::string availableReason(const MediaPipelineChainPlan& chain,
                             const MediaPipelinePlannerOptions& options)
 {
-    const char* scoreText = options.filterRequired ? "1000+1000+1000" : "1000+1000";
-    const char* sameDeviceScoreText = options.filterRequired ? "900+900+900" : "900+900";
-    const char* transferScoreText = options.filterRequired ? "800+800+800" : "800+800";
-    const char* softwareScoreText = options.filterRequired ? "300+300+300" : "300+300";
+    const std::string scoreText = std::to_string(chain.score);
 
     if (chain.allHardware && chain.sameHardwareDevice && chain.zeroCopy) {
-        return std::string("full hardware zero-copy chain; score=") + scoreText;
+        return "full hardware zero-copy chain; score=" + scoreText;
     }
     if (chain.allHardware && chain.sameHardwareDevice) {
-        return std::string("full hardware same-device chain; score=") + sameDeviceScoreText;
+        return "full hardware same-device chain; score=" + scoreText;
     }
     if (chain.allHardware) {
-        return std::string("full hardware chain with transfer risk; score=") + transferScoreText;
+        return "full hardware chain with transfer risk; score=" + scoreText;
     }
     if (chain.decoder.hardware || chain.encoder.hardware || (options.filterRequired && chain.filter.hardware)) {
         return options.filterRequired ? "mixed hardware/software chain" : "mixed hardware/software chain; filter stage not required";
     }
-    return std::string("explicit software chain; score=") + softwareScoreText;
+    return "explicit software chain; score=" + scoreText;
 }
 
 void logCandidate(const MediaPipelinePlannerOptions& options,
@@ -206,7 +213,8 @@ MediaPipelineChainPlan MediaPipelineScorer::scoreChain(MediaPipelineChainPlan ch
                      (!options.filterRequired || chain.filter.zeroCopy);
 
     chain.score = availableStageSemanticScore(chain.decoder, chain) +
-                  availableStageSemanticScore(chain.encoder, chain);
+                  availableStageSemanticScore(chain.encoder, chain) +
+                  declaredStagePriority(chain, options);
     if (options.filterRequired) {
         chain.score += availableStageSemanticScore(chain.filter, chain);
     }
@@ -227,9 +235,13 @@ std::vector<MediaPipelineChainPlan> MediaPipelineScorer::scoreAndSortChains(
         chain = scoreChain(std::move(chain), options);
     }
 
-    std::sort(chains.begin(), chains.end(), [](const MediaPipelineChainPlan& a, const MediaPipelineChainPlan& b) {
-        return a.score > b.score;
-    });
+    std::sort(chains.begin(), chains.end(),
+              [](const MediaPipelineChainPlan& a, const MediaPipelineChainPlan& b) {
+                  if (a.score != b.score) {
+                      return a.score > b.score;
+                  }
+                  return a.label < b.label;
+              });
 
     for (const MediaPipelineChainPlan& chain : chains) {
         logCandidate(options, chain);

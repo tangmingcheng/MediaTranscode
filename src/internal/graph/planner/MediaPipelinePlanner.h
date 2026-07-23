@@ -6,12 +6,15 @@
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "media_transcode/Result.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace media::ffmpeg::graph {
+
+class MediaHardwareCapabilityProbe;
 
 enum class MediaPipelineStageRole {
     Decoder,
@@ -34,7 +37,7 @@ struct MediaPipelineStagePlan {
     bool hardware = false;
     bool zeroCopy = false;
     bool available = false;
-    int score = 0;
+    int priority = 0;
     std::string availabilityReason;
     std::optional<MediaEncodedPacketLayout> encodedPacketLayout;
 };
@@ -58,12 +61,10 @@ struct MediaPipelinePlannerOptions {
     MediaPipelinePlannerOptions(bool allowPacketCopy,
                                 bool filterRequired,
                                 bool disableHardware,
-                                bool requireRuntimeAvailability,
                                 bool lowLatency) noexcept
         : allowPacketCopy(allowPacketCopy),
           filterRequired(filterRequired),
           disableHardware(disableHardware),
-          requireRuntimeAvailability(requireRuntimeAvailability),
           lowLatency(lowLatency)
     {
     }
@@ -72,11 +73,13 @@ struct MediaPipelinePlannerOptions {
     std::string outputPath;
     std::string outputCodecName;
     std::string preferredHardware;
+    int probeWidth = 0;
+    int probeHeight = 0;
+    MediaRational probeFrameRate;
     int targetWidth = 0;
     int targetHeight = 0;
     bool filterRequired;
     bool disableHardware;
-    bool requireRuntimeAvailability;
     bool diagnosticLogEnabled = false;
     std::string rtspTransport;
     int openTimeoutMs = 0;
@@ -129,6 +132,11 @@ public:
         MediaInputVideoStreamInfo inputInfo,
         const std::string& inputUrl,
         MediaPipelinePlannerOptions options);
+
+    static ::media::Result<std::size_t> selectRankedCandidate(
+        std::vector<MediaPipelineChainPlan>& candidates,
+        const MediaPipelinePlannerOptions& options,
+        MediaHardwareCapabilityProbe& hardwareProbe);
 
 private:
     MediaPipelinePlanner() = default;

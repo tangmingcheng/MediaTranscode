@@ -5,6 +5,7 @@
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
 #include "internal/graph/core/MediaGraph.h"
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/nodes/mux/MediaMuxCompletionState.h"
 #include "internal/graph/nodes/merge/PacketMergeNode.h"
 #include "internal/graph/nodes/demux/DemuxNode.h"
@@ -12,6 +13,8 @@
 #include "internal/graph/runtime/MediaRuntimeNode.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 #include "internal/graph/runtime/lifecycle/MediaInputTerminalTracker.h"
+#include "internal/graph/runtime/lifecycle/MediaRealtimeProgressTracker.h"
+#include "internal/graph/runtime/lifecycle/MediaRealtimeRuntimeCompletion.h"
 #include "internal/graph/runtime/queue/MediaSpscRingQueue.h"
 #include "internal/graph/runtime/queue/MediaBlockingQueue.h"
 #include "internal/graph/runtime/threading/MediaGraphWorker.h"
@@ -155,6 +158,35 @@ public:
     std::atomic_uint64_t calls{ 0 };
 private:
     MediaNodeId m_id;
+};
+
+class ReleasedFailureNode final : public MediaRuntimeNode {
+public:
+    ReleasedFailureNode(MediaNodeId id,
+                        DeterministicGate& entered,
+                        DeterministicGate& release,
+                        ::media::ErrorInfo failure)
+        : m_id(id)
+        , m_entered(entered)
+        , m_release(release)
+        , m_failure(std::move(failure))
+    {
+    }
+
+    MediaNodeId nodeId() const noexcept override { return m_id; }
+
+    ::media::Result<MediaNodeProcessResult> process(MediaGraphExecutionContext&) override
+    {
+        m_entered.arrive();
+        (void)m_release.waitUntilOpen();
+        return ::media::Result<MediaNodeProcessResult>::failure(m_failure);
+    }
+
+private:
+    MediaNodeId m_id;
+    DeterministicGate& m_entered;
+    DeterministicGate& m_release;
+    ::media::ErrorInfo m_failure;
 };
 
 class BarrierWaitingNode final : public MediaRuntimeNode {
@@ -692,7 +724,17 @@ void testWorkerFailurePropagatesIntoRuntimeReportAndResetClearsIt(TestContext& c
     EXPECT_TRUE(ctx, runtime.startThreaded());
     EXPECT_TRUE(ctx, waitUntil([&] { return runtime.threadedExecutor().metrics().workerErrors == 1; }));
     EXPECT_EQ(ctx, runtime.state(), MediaGraphRuntimeState::ThreadedRunning);
-    EXPECT_FALSE(ctx, runtime.synchronizeThreadedState());
+    const MediaGraphRuntimeReport observedFailure =
+        MediaGraphRuntimeReporter::capture(runtime);
+    EXPECT_EQ(ctx, observedFailure.metrics.workerErrors, static_cast<std::uint64_t>(1));
+    EXPECT_EQ(ctx, runtime.state(), MediaGraphRuntimeState::ThreadedRunning);
+    EXPECT_TRUE(ctx, runtime.threadedExecutor().primaryFailure().has_value());
+    const auto synchronized = runtime.synchronizeThreadedState();
+    EXPECT_FALSE(ctx, synchronized);
+    if (!synchronized) {
+        EXPECT_EQ(ctx, synchronized.error().code, ::media::ErrorCode::InternalError);
+        EXPECT_EQ(ctx, synchronized.error().message, std::string("deterministic runtime fault"));
+    }
     EXPECT_EQ(ctx, runtime.state(), MediaGraphRuntimeState::Aborted);
     EXPECT_EQ(ctx, runtime.threadedExecutor().state(), MediaGraphThreadedExecutorState::Aborted);
     EXPECT_FALSE(ctx, runtime.compiled());
@@ -705,6 +747,182 @@ void testWorkerFailurePropagatesIntoRuntimeReportAndResetClearsIt(TestContext& c
     const MediaGraphRuntimeReport resetReport = MediaGraphRuntimeReporter::capture(runtime);
     EXPECT_EQ(ctx, resetReport.metrics.workerErrors, static_cast<std::uint64_t>(0));
     EXPECT_EQ(ctx, resetReport.metrics.errorCount, static_cast<std::uint64_t>(0));
+    EXPECT_FALSE(ctx, runtime.threadedExecutor().failed());
+    EXPECT_FALSE(ctx, runtime.threadedExecutor().primaryFailure().has_value());
+}
+
+void testFirstWorkerFailureSurvivesLaterPeerFailure(TestContext& ctx)
+{
+    DeterministicGate primaryEntered;
+    DeterministicGate primaryRelease;
+    DeterministicGate secondaryEntered;
+    DeterministicGate secondaryRelease;
+
+    MediaGraph graph;
+    const MediaNodeId primaryId = graph.addNode(MediaNodeKind::Demux, "primary.failure");
+    const MediaNodeId secondaryId = graph.addNode(MediaNodeKind::PacketMerge, "abort.cascade");
+    MediaGraphRuntime runtime;
+    EXPECT_TRUE(ctx, runtime.compile(std::move(graph)));
+    EXPECT_TRUE(ctx, runtime.registerRuntimeNode(std::make_unique<ReleasedFailureNode>(
+        primaryId, primaryEntered, primaryRelease,
+        ::media::ErrorInfo::ioFailure("primary RTP receive failure", -1234))));
+    EXPECT_TRUE(ctx, runtime.registerRuntimeNode(std::make_unique<ReleasedFailureNode>(
+        secondaryId, secondaryEntered, secondaryRelease,
+        ::media::ErrorInfo::internalError("FFmpegNodeRuntime output channel aborted"))));
+    EXPECT_TRUE(ctx, runtime.startThreaded());
+    EXPECT_TRUE(ctx, primaryEntered.waitForArrivals(1));
+    EXPECT_TRUE(ctx, secondaryEntered.waitForArrivals(1));
+
+    primaryRelease.open();
+    EXPECT_TRUE(ctx, waitUntil([&] {
+        return runtime.threadedExecutor().metrics().workerErrors == 1;
+    }));
+    const auto primaryFailure = runtime.threadedExecutor().primaryFailure();
+    EXPECT_TRUE(ctx, primaryFailure.has_value());
+    if (primaryFailure) {
+        EXPECT_EQ(ctx, primaryFailure->nodeId, primaryId);
+        EXPECT_EQ(ctx, primaryFailure->nodeKind, MediaNodeKind::Demux);
+        EXPECT_EQ(ctx, primaryFailure->nodeName, std::string("primary.failure"));
+        EXPECT_EQ(ctx, primaryFailure->error.code, ::media::ErrorCode::IoFailure);
+    }
+    secondaryRelease.open();
+    EXPECT_TRUE(ctx, waitUntil([&] {
+        return runtime.threadedExecutor().metrics().workerErrors == 2;
+    }));
+
+    const auto synchronized = runtime.synchronizeThreadedState();
+    EXPECT_FALSE(ctx, synchronized);
+    if (!synchronized) {
+        EXPECT_EQ(ctx, synchronized.error().code, ::media::ErrorCode::IoFailure);
+        EXPECT_EQ(ctx, synchronized.error().nativeCode, -1234);
+        EXPECT_EQ(ctx, synchronized.error().message, std::string("primary RTP receive failure"));
+    }
+}
+
+void testRealtimeCompletionDoesNotStopAbortedRuntimeOrMaskWaitFailure(TestContext& ctx)
+{
+    MediaGraph graph;
+    const MediaNodeId nodeId = graph.addNode(MediaNodeKind::PacketMerge, "completion.abort");
+    MediaGraphRuntime runtime;
+    EXPECT_TRUE(ctx, runtime.compile(std::move(graph)));
+    EXPECT_TRUE(ctx, runtime.registerRuntimeNode(std::make_unique<DeterministicRuntimeFaultNode>(
+        nodeId, std::initializer_list<RuntimeFaultStep>{ RuntimeFaultStep::Failure })));
+    EXPECT_TRUE(ctx, runtime.startThreaded());
+    EXPECT_TRUE(ctx, waitUntil([&] { return runtime.threadedExecutor().failed(); }));
+    const auto waitStatus = runtime.synchronizeThreadedState();
+    EXPECT_FALSE(ctx, waitStatus);
+
+    const auto outcome = MediaRealtimeRuntimeCompletion::complete(runtime, waitStatus);
+    EXPECT_FALSE(ctx, outcome.stopAttempted);
+    EXPECT_FALSE(ctx, outcome.status);
+    if (!outcome.status) {
+        EXPECT_EQ(ctx, outcome.status.error().message, std::string("deterministic runtime fault"));
+    }
+}
+
+void testRealtimeCompletionStopsRunningRuntimeAndKeepsWaitFailure(TestContext& ctx)
+{
+    MediaGraph graph;
+    const MediaNodeId nodeId = graph.addNode(MediaNodeKind::PacketMerge, "completion.wait");
+    MediaGraphRuntime runtime;
+    EXPECT_TRUE(ctx, runtime.compile(std::move(graph)));
+    EXPECT_TRUE(ctx, runtime.registerRuntimeNode(std::make_unique<WaitingTestNode>(nodeId)));
+    EXPECT_TRUE(ctx, runtime.startThreaded());
+    const auto waitStatus = ::media::Status::failure(
+        ::media::ErrorInfo::notInitialized("realtime progress timeout"));
+
+    const auto outcome = MediaRealtimeRuntimeCompletion::complete(runtime, waitStatus);
+    EXPECT_TRUE(ctx, outcome.stopAttempted);
+    EXPECT_FALSE(ctx, outcome.status);
+    if (!outcome.status) {
+        EXPECT_EQ(ctx, outcome.status.error().message, std::string("realtime progress timeout"));
+    }
+    EXPECT_EQ(ctx, runtime.state(), MediaGraphRuntimeState::Stopped);
+}
+
+void testRealtimeCompletionPrefersWorkerFailureCapturedWhileStopping(TestContext& ctx)
+{
+    MediaGraph graph;
+    const MediaNodeId nodeId =
+        graph.addNode(MediaNodeKind::PacketMerge, "completion.stop.racing.fault");
+    MediaGraphRuntime runtime;
+    EXPECT_TRUE(ctx, runtime.compile(std::move(graph)));
+    auto node = std::make_unique<StopRacingFaultNode>(nodeId);
+    StopRacingFaultNode* view = node.get();
+    EXPECT_TRUE(ctx, runtime.registerRuntimeNode(std::move(node)));
+    EXPECT_TRUE(ctx, runtime.startThreaded());
+    EXPECT_TRUE(ctx, waitUntil([&] { return view->entered.load(); }));
+    const auto waitStatus = ::media::Status::failure(
+        ::media::ErrorInfo::notInitialized("realtime progress timeout"));
+
+    const auto outcome = MediaRealtimeRuntimeCompletion::complete(runtime, waitStatus);
+    EXPECT_TRUE(ctx, outcome.stopAttempted);
+    EXPECT_FALSE(ctx, outcome.status);
+    if (!outcome.status) {
+        EXPECT_EQ(ctx, outcome.status.error().code, ::media::ErrorCode::IoFailure);
+        EXPECT_EQ(ctx, outcome.status.error().message,
+                  std::string("deterministic fault racing with stop"));
+    }
+    EXPECT_EQ(ctx, runtime.state(), MediaGraphRuntimeState::Aborted);
+}
+
+void testRealtimeCompletionStopsRunningRuntimeAfterSuccessfulWait(TestContext& ctx)
+{
+    MediaGraph graph;
+    const MediaNodeId nodeId = graph.addNode(MediaNodeKind::PacketMerge, "completion.success");
+    MediaGraphRuntime runtime;
+    EXPECT_TRUE(ctx, runtime.compile(std::move(graph)));
+    EXPECT_TRUE(ctx, runtime.registerRuntimeNode(std::make_unique<WaitingTestNode>(nodeId)));
+    EXPECT_TRUE(ctx, runtime.startThreaded());
+
+    const auto outcome = MediaRealtimeRuntimeCompletion::complete(
+        runtime, ::media::Status::success());
+    EXPECT_TRUE(ctx, outcome.stopAttempted);
+    EXPECT_TRUE(ctx, outcome.status);
+    EXPECT_EQ(ctx, runtime.state(), MediaGraphRuntimeState::Stopped);
+}
+
+void testRealtimeProgressTracksStartupThenRequiresEncodedOutput(TestContext& ctx)
+{
+    MediaRealtimeProgressTracker tracker;
+    auto initial = tracker.observe(0, 0);
+    auto startup = tracker.observe(10, 0);
+    auto startupContinues = tracker.observe(20, 0);
+    EXPECT_TRUE(ctx, initial && !initial.value());
+    EXPECT_TRUE(ctx, startup && startup.value());
+    EXPECT_TRUE(ctx, startupContinues && startupContinues.value());
+    EXPECT_FALSE(ctx, tracker.outputStarted());
+
+    auto firstOutput = tracker.observe(21, 1);
+    auto workerOnlyAfterOutput = tracker.observe(30, 1);
+    auto nextOutput = tracker.observe(31, 2);
+    EXPECT_TRUE(ctx, firstOutput && firstOutput.value());
+    EXPECT_TRUE(ctx, tracker.outputStarted());
+    EXPECT_TRUE(ctx, workerOnlyAfterOutput && !workerOnlyAfterOutput.value());
+    EXPECT_TRUE(ctx, nextOutput && nextOutput.value());
+    EXPECT_FALSE(ctx, tracker.observe(30, 2));
+    EXPECT_FALSE(ctx, tracker.observe(31, 1));
+}
+
+void testRealtimeProgressFirstOutputUsesAbsoluteStartupDeadline(TestContext& ctx)
+{
+    using namespace std::chrono_literals;
+
+    MediaRealtimeProgressTracker tracker;
+    EXPECT_FALSE(ctx, tracker.firstOutputDeadlineExpired(4999ms, 5000ms));
+    EXPECT_TRUE(ctx, tracker.observe(10, 0));
+    EXPECT_TRUE(ctx, tracker.observe(20, 0));
+    EXPECT_TRUE(ctx, tracker.firstOutputDeadlineExpired(5000ms, 5000ms));
+
+    EXPECT_TRUE(ctx, tracker.observe(21, 1));
+    EXPECT_FALSE(ctx, tracker.firstOutputDeadlineExpired(6000ms, 5000ms));
+}
+
+void testRawRtpInputDiagnosticKindName(TestContext& ctx)
+{
+    EXPECT_EQ(ctx,
+              std::string(mediaGraphDiagnosticNodeKindName(MediaNodeKind::RawRtpInput)),
+              std::string("RawRtpInput"));
 }
 
 void testNormalStopInterruptionDoesNotBecomeWorkerFailure(TestContext& ctx)
@@ -774,6 +992,8 @@ void runEventRuntimeThreadingQueueTests(media_transcode::test::TestContext& ctx)
     testSpscAbortReleasesBlockedProducerAndConsumer(ctx);
     testSpscCloseDeterministicallyReleasesBlockedEndpoints(ctx);
     testRuntimeMetricsCarriesAcceptanceSamples(ctx);
+    testRealtimeProgressTracksStartupThenRequiresEncodedOutput(ctx);
+    testRealtimeProgressFirstOutputUsesAbsoluteStartupDeadline(ctx);
     testAcceptanceCollectorUsesInjectedClockForFiveSecondStall(ctx);
     testAcceptanceCollectorExcludesBaselineAndPropagatesPlatformFailure(ctx);
     testRuntimeLifecycleTransitionMatrix(ctx);
@@ -782,6 +1002,12 @@ void runEventRuntimeThreadingQueueTests(media_transcode::test::TestContext& ctx)
     testRuntimeReportKeepsGraphQueueHighWatermarkAcrossCaptures(ctx);
     testRuntimeReportAggregatesQueueDrops(ctx);
     testWorkerFailurePropagatesIntoRuntimeReportAndResetClearsIt(ctx);
+    testFirstWorkerFailureSurvivesLaterPeerFailure(ctx);
+    testRealtimeCompletionDoesNotStopAbortedRuntimeOrMaskWaitFailure(ctx);
+    testRealtimeCompletionStopsRunningRuntimeAndKeepsWaitFailure(ctx);
+    testRealtimeCompletionPrefersWorkerFailureCapturedWhileStopping(ctx);
+    testRealtimeCompletionStopsRunningRuntimeAfterSuccessfulWait(ctx);
+    testRawRtpInputDiagnosticKindName(ctx);
     testNormalStopInterruptionDoesNotBecomeWorkerFailure(ctx);
     testDemuxReadFailureClassificationPreservesCausality(ctx);
     testRealFailureRacingWithStopIsHarvestedAsAbort(ctx);

@@ -1,9 +1,8 @@
 #pragma once
 #include "internal/graph/planner/MediaPipelinePlanner.h"
 
+#include <functional>
 #include <string>
-#include <mutex>
-#include <unordered_map>
 namespace media::ffmpeg::graph {
 struct MediaHardwareCapability {
     bool available = false;
@@ -11,14 +10,20 @@ struct MediaHardwareCapability {
 };
 class MediaHardwareCapabilityProbe final {
 public:
+    using ChainValidator = std::function<MediaHardwareCapability(
+        const MediaPipelineChainPlan&, const MediaPipelinePlannerOptions&)>;
+
+    MediaHardwareCapabilityProbe();
+    explicit MediaHardwareCapabilityProbe(ChainValidator chainValidator);
+
     static bool decoderExists(const std::string& name) noexcept;
     static bool encoderExists(const std::string& name) noexcept;
     static bool filterExists(const std::string& name) noexcept;
-    void apply(MediaPipelineStagePlan& stage,
-               const MediaPipelinePlannerOptions& options);
+
+    ::media::Status validate(MediaPipelineChainPlan& chain,
+                             const MediaPipelinePlannerOptions& options) const;
 
 private:
-    std::unordered_map<std::string, MediaHardwareCapability> m_cache;
-    std::mutex m_mutex;
+    ChainValidator m_chainValidator;
 };
 }

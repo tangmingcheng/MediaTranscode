@@ -528,6 +528,12 @@ auto parseRtcp(std::span<const uint8_t> bytes, bool requireCname)
         MediaRtcpCompositionMode::StrictCompoundRfc3550, requireCname});
 }
 
+auto parseReducedSizeRtcp(std::span<const uint8_t> bytes)
+{
+    return MediaRtcpCompoundParser::parse(bytes, MediaRtcpCompoundPolicy{
+        MediaRtcpCompositionMode::ReducedSizeRfc5506, false});
+}
+
 void testRtpPacketParserStrictHeader(TestContext& ctx)
 {
     const std::vector<uint8_t> bytes{
@@ -571,6 +577,11 @@ void testRtpPacketParserStrictHeader(TestContext& ctx)
 void testRtcpCompoundParserStrictPackets(TestContext& ctx)
 {
     const uint32_t sender = 0x10203040;
+    const auto reducedSenderReport =
+        senderReport(sender, 0x11223344, 0x55667788, 0x90ABCDEF);
+    EXPECT_TRUE(ctx, parseReducedSizeRtcp(reducedSenderReport));
+    EXPECT_FALSE(ctx, parseRtcp(reducedSenderReport, true));
+
     auto compound = senderReport(sender, 0x11223344, 0x55667788, 0x90ABCDEF);
     const std::array descriptionChunks{
         SdesChunkInput{sender, {{1, "camera-a"}}},
@@ -803,6 +814,23 @@ void testRtcpEvidenceUpdateIsOrderIndependentAndConsumedOnce(TestContext& ctx)
     auto observedConsumed = rtpFirst.takeEvidenceUpdate(110);
     EXPECT_TRUE(ctx, observedConsumed);
     if (observedConsumed) EXPECT_FALSE(ctx, observedConsumed.value().has_value());
+
+    const MediaRtcpSenderReportTrackerConfig reducedConfig{
+        true, false, 10'000, 10'000};
+    const auto reducedReport = parseReducedSizeRtcp(
+        senderReport(source, 11, 0, 1'800));
+    EXPECT_TRUE(ctx, reducedReport);
+    if (!reducedReport) return;
+    MediaRtcpSenderReportTracker reducedFirst(reducedConfig);
+    EXPECT_TRUE(ctx, reducedFirst.observe(reducedReport.value(), 200));
+    reducedFirst.observeMedia(source, 210);
+    auto reducedEvidence = reducedFirst.takeEvidenceUpdate(210);
+    EXPECT_TRUE(ctx, reducedEvidence);
+    if (reducedEvidence && reducedEvidence.value()) {
+        EXPECT_TRUE(ctx, reducedEvidence.value()->cname.empty());
+        EXPECT_EQ(ctx, reducedEvidence.value()->senderReportObservedAtNs,
+                  static_cast<std::int64_t>(200));
+    }
 }
 
 void testPendingRtcpEvidenceRequiresMatchingMediaAndIsCleared(TestContext& ctx)
@@ -1228,6 +1256,7 @@ void testRtpClockGroupRejectsStaleCrossPortEvidence(TestContext& ctx)
     graph.setNodeOption(group, "rtp_clock_group.maximum_sender_clock_residual_ns", "250000000");
     graph.setNodeOption(group, "rtp_clock_group.video_cname_timeout_ns", "5000000000");
     graph.setNodeOption(group, "rtp_clock_group.audio_cname_timeout_ns", "5000000000");
+    graph.setNodeOption(group, "rtp_clock_group.require_matching_cname", "true");
     graph.setNodeOption(group, "rtp_clock_group.maximum_sender_clock_rate_error_ppm", "1000");
     graph.setNodeOption(
         group, "rtp_clock_group.common_epoch_policy",

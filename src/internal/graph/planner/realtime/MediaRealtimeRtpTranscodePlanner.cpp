@@ -64,7 +64,6 @@ namespace {
 
 constexpr int RealtimeNoBidirectionalFrames = 0;
 constexpr int RealtimeDefaultGopFrames = 30;
-constexpr bool RealtimeRequiresRuntimeAvailability = true;
 
 std::string planPreferredHardware(const MediaTranscodeExecutionParameters& execution)
 {
@@ -121,12 +120,18 @@ MediaVideoTranscodeParameters planRealtimeVideoParameters(const MediaVideoTransc
     MediaPipelinePlannerOptions plannerOptions(false,
                                                video.resizeRequested(),
                                                options.parameters.execution.disableHardware,
-                                               RealtimeRequiresRuntimeAvailability,
                                                *options.input.lowLatency);
     plannerOptions.outputPath = outputUrl;
     plannerOptions.outputCodecName = video.codecName;
     plannerOptions.targetWidth = video.width.value_or(0);
     plannerOptions.targetHeight = video.height.value_or(0);
+    plannerOptions.probeWidth = plannerOptions.targetWidth;
+    plannerOptions.probeHeight = plannerOptions.targetHeight;
+    if (video.frameRate.complete() && video.frameRate.numerator &&
+        video.frameRate.denominator) {
+        plannerOptions.probeFrameRate = MediaRational{
+            *video.frameRate.numerator, *video.frameRate.denominator};
+    }
     plannerOptions.preferredHardware = planPreferredHardware(options.parameters.execution);
     plannerOptions.diagnosticLogEnabled = options.parameters.execution.diagnosticLogEnabled;
     plannerOptions.rtspTransport = options.input.rtspTransport;

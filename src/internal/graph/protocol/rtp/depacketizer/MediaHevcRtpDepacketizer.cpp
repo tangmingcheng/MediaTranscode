@@ -87,8 +87,10 @@ MediaHevcRtpDepacketizer::MediaHevcRtpDepacketizer(MediaRtpDepacketizerConfig co
                 (static_cast<uint16_t>(header[0]) << 8) | header[1]);
             appendNal(m_accessUnit, header, 2);
             m_keyFrame = m_keyFrame || keyType(fragmentedType);
-        } else if (!m_fragmentOpen) return ::media::Result<MediaRtpDepacketizerResult>::failure(
-            ::media::ErrorInfo::invalidArgument("HEVC FU continuation has no valid start"));
+        } else if (!m_fragmentOpen) {
+            discontinuity(MediaRtpDiscontinuityReason::SequenceGap);
+            return ::media::Result<MediaRtpDepacketizerResult>::success({});
+        }
         const uint8_t reconstructedFirst = static_cast<uint8_t>(
             (packet.payload[0] & 0x81) | (fragmentedType << 1));
         const uint16_t reconstructedHeader = static_cast<uint16_t>(

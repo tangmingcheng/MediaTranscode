@@ -79,14 +79,16 @@ MediaRtpSourceClockMapper::MediaRtpSourceClockMapper(
         return ::media::Status::failure(
             invalid("RTP source clock evidence observation times must be non-negative"));
     }
-    if (evidence.generation != m_generation || evidence.cname.empty() ||
+    if (evidence.generation != m_generation ||
+        (m_config.requireCname && evidence.cname.empty()) ||
         evidence.observedMediaSsrc != evidence.senderReportSsrc ||
         evidence.observedMediaSsrc != evidence.cnameSsrc) {
         invalidate();
         return ::media::Status::failure(invalid("RTP sender report generation or CNAME is invalid"));
     }
     if (m_calibration &&
-        (evidence.observedMediaSsrc != m_calibration->ssrc || evidence.cname != m_calibration->cname)) {
+        (evidence.observedMediaSsrc != m_calibration->ssrc ||
+         (m_config.requireCname && evidence.cname != m_calibration->cname))) {
         invalidate();
         return ::media::Status::failure(invalid("RTP sender identity changed"));
     }

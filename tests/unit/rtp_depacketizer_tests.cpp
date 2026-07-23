@@ -106,7 +106,12 @@ void testH264(TestContext& ctx)
     EXPECT_FALSE(ctx, created.value()->push(packet(5, 36000, true, {25, 0, 1, 0x61})));
     EXPECT_FALSE(ctx, created.value()->push(packet(6, 36000, true, {28, 0x45})));
     created.value()->discontinuity(MediaRtpDiscontinuityReason::SequenceGap);
-    EXPECT_FALSE(ctx, created.value()->push(packet(8, 45000, true, {28, 0x45, 1})));
+    auto orphanedFuContinuation = created.value()->push(
+        packet(8, 45000, true, {28, 0x45, 1}));
+    EXPECT_TRUE(ctx, orphanedFuContinuation);
+    if (orphanedFuContinuation) {
+        EXPECT_TRUE(ctx, orphanedFuContinuation.value().accessUnits.empty());
+    }
     auto recovered = created.value()->push(packet(9, 54000, true, {0x65, 3}));
     EXPECT_TRUE(ctx, recovered);
     EXPECT_EQ(ctx, recovered.value().accessUnits.size(), static_cast<std::size_t>(1));
@@ -228,6 +233,14 @@ void testHevc(TestContext& ctx)
     EXPECT_FALSE(ctx, created.value()->push(packet(8, 540, true, {0x26, 0, 2})));
     EXPECT_FALSE(ctx, created.value()->push(packet(9, 630, true, {0x60, 1, 0, 2, 0x02, 0})));
     EXPECT_FALSE(ctx, created.value()->push(packet(10, 720, true, {0x62, 1, 0xB1, 1})));
+
+    created.value()->discontinuity(MediaRtpDiscontinuityReason::SequenceGap);
+    auto orphanedFuContinuation = created.value()->push(
+        packet(11, 810, true, {0x62, 1, 0x53, 1}));
+    EXPECT_TRUE(ctx, orphanedFuContinuation);
+    if (orphanedFuContinuation) {
+        EXPECT_TRUE(ctx, orphanedFuContinuation.value().accessUnits.empty());
+    }
 
     EXPECT_FALSE(ctx, MediaRtpDepacketizerFactory::create(config(
         "hevc", "sprop-vps=QAEMAf//AWAAAAMAsAAAAwAAAwB4;sprop-sps=QgEBAWAAAAMAsAAAAwAAAwB4oAPAgBDlja5JMvA=;sprop-pps=RAHBcrRiQA==;sprop-max-don-diff=1")));

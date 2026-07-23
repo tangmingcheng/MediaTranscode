@@ -234,6 +234,7 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
     MediaNodeId videoInput,
     MediaNodeId audioInput,
     const MediaAvSyncPlan& avSync,
+    bool requireMatchingCname,
     std::int64_t videoCnameTimeoutNs,
     std::int64_t audioCnameTimeoutNs,
     const MediaRealtimeEdgePolicySet& edgePolicies)
@@ -274,6 +275,10 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
     if (auto status = set("rtp_clock_group.maximum_sender_clock_residual_ns", std::to_string(avSync.rtp->input.maximumSenderClockResidualNs->nanoseconds())); !status) return ::media::Result<MediaNodeId>::failure(status.error());
     if (auto status = set("rtp_clock_group.video_cname_timeout_ns", std::to_string(videoCnameTimeoutNs)); !status) return ::media::Result<MediaNodeId>::failure(status.error());
     if (auto status = set("rtp_clock_group.audio_cname_timeout_ns", std::to_string(audioCnameTimeoutNs)); !status) return ::media::Result<MediaNodeId>::failure(status.error());
+    if (auto status = set("rtp_clock_group.require_matching_cname",
+                          requireMatchingCname ? "true" : "false"); !status) {
+        return ::media::Result<MediaNodeId>::failure(status.error());
+    }
     if (auto status = set("rtp_clock_group.maximum_sender_clock_rate_error_ppm", std::to_string(*avSync.rtp->input.maximumSenderClockRateErrorPpm)); !status) return ::media::Result<MediaNodeId>::failure(status.error());
     if (auto status = set(
             "rtp_clock_group.common_epoch_policy",
@@ -473,6 +478,8 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
                                            videoInputChain.value().input,
                                            audioInputChain.input,
                                            plan.avSyncRuntime->synchronization,
+                                           plan.input.rtpTransport->requireCname &&
+                                               plan.audioInput.rtpTransport->requireCname,
                                            static_cast<std::int64_t>(
                                                plan.input.rtpTransport->cnameTimeoutMs) * 1'000'000,
                                            static_cast<std::int64_t>(

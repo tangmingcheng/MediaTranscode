@@ -8,6 +8,8 @@ namespace media::ffmpeg::graph {
     switch (mode) {
     case MediaRtcpCompositionMode::StrictCompoundRfc3550:
         return ::media::Result<std::string>::success("strict_compound_rfc3550");
+    case MediaRtcpCompositionMode::ReducedSizeRfc5506:
+        return ::media::Result<std::string>::success("reduced_size_rfc5506");
     }
     return ::media::Result<std::string>::failure(
         ::media::ErrorInfo::invalidArgument("unsupported planned RTCP composition mode"));
@@ -19,6 +21,10 @@ namespace media::ffmpeg::graph {
     if (value == "strict_compound_rfc3550") {
         return ::media::Result<MediaRtcpCompositionMode>::success(
             MediaRtcpCompositionMode::StrictCompoundRfc3550);
+    }
+    if (value == "reduced_size_rfc5506") {
+        return ::media::Result<MediaRtcpCompositionMode>::success(
+            MediaRtcpCompositionMode::ReducedSizeRfc5506);
     }
     return ::media::Result<MediaRtcpCompositionMode>::failure(
         ::media::ErrorInfo::invalidArgument("unsupported planned RTCP composition mode option"));

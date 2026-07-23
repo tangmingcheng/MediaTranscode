@@ -63,12 +63,18 @@ bool encodeOptionsRequested(const MediaVideoTranscodeParameters& video) noexcept
     MediaPipelinePlannerOptions plannerOptions(!video.resizeRequested() && !encodeOptionsRequested(video),
                                                video.resizeRequested(),
                                                parameters.execution.disableHardware,
-                                               true,
                                                false);
     plannerOptions.outputPath = options.outputUrl;
     plannerOptions.outputCodecName = video.codecName;
     plannerOptions.targetWidth = video.width.value_or(0);
     plannerOptions.targetHeight = video.height.value_or(0);
+    plannerOptions.probeWidth = plannerOptions.targetWidth;
+    plannerOptions.probeHeight = plannerOptions.targetHeight;
+    if (video.frameRate.complete() && video.frameRate.numerator &&
+        video.frameRate.denominator) {
+        plannerOptions.probeFrameRate = MediaRational{
+            *video.frameRate.numerator, *video.frameRate.denominator};
+    }
     plannerOptions.preferredHardware =
         plannerOptions.disableHardware ? "software" : "auto";
     plannerOptions.diagnosticLogEnabled = parameters.execution.diagnosticLogEnabled;

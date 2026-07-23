@@ -3,6 +3,7 @@
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/planner/MediaPipelineCapabilityScanner.h"
 #include "internal/graph/planner/MediaPipelineScorer.h"
+#include "internal/graph/planner/capability/MediaHardwareCapabilityProbe.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
 
@@ -27,6 +28,13 @@ std::string stageDisplayName(const MediaPipelineStagePlan& stage)
 std::string emptyAsNone(const std::string& value)
 {
     return value.empty() ? std::string("none") : value;
+}
+
+bool isSoftwareChain(const MediaPipelineChainPlan& chain,
+                     const MediaPipelinePlannerOptions& options) noexcept
+{
+    return !chain.decoder.hardware && !chain.encoder.hardware &&
+           (!options.filterRequired || !chain.filter.hardware);
 }
 
 void logSelectedPlan(const MediaPipelinePlannerOptions& options,
@@ -122,6 +130,13 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
     plan.sourceStreamIndex = inputInfo.streamIndex;
     plan.inputCodecName = canonicalCodecName(inputInfo.codecName);
     plan.outputCodecName = canonicalCodecName(options.outputCodecName.empty() ? plan.inputCodecName : options.outputCodecName);
+    if (inputInfo.width > 0 && inputInfo.height > 0) {
+        options.probeWidth = inputInfo.width;
+        options.probeHeight = inputInfo.height;
+    }
+    if (inputInfo.frameRate.isKnown()) {
+        options.probeFrameRate = inputInfo.frameRate;
+    }
 
     const bool resizeRequested = options.targetWidth > 0 || options.targetHeight > 0;
     const bool canCopyPackets = options.allowPacketCopy &&
@@ -159,21 +174,55 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
             ::media::ErrorInfo::unsupported("no media pipeline candidates were generated"));
     }
 
-    auto selected = std::find_if(plan.candidates.begin(), plan.candidates.end(), [&](const MediaPipelineChainPlan& chain) {
-        return !options.requireRuntimeAvailability || chain.available;
-    });
-
-    if (selected == plan.candidates.end()) {
-        return ::media::Result<MediaPipelinePlan>::failure(
-            ::media::ErrorInfo::hardwareUnavailable("no available decoder/filter/encoder chain found"));
+    MediaHardwareCapabilityProbe hardwareProbe;
+    auto selected = MediaPipelinePlanner::selectRankedCandidate(
+        plan.candidates, options, hardwareProbe);
+    if (!selected) {
+        return ::media::Result<MediaPipelinePlan>::failure(selected.error());
     }
 
-    plan.selected = *selected;
+    plan.selected = plan.candidates.at(selected.value());
     logSelectedPlan(options, plan);
     return ::media::Result<MediaPipelinePlan>::success(std::move(plan));
 }
 
 } // namespace
+
+::media::Result<std::size_t> MediaPipelinePlanner::selectRankedCandidate(
+    std::vector<MediaPipelineChainPlan>& candidates,
+    const MediaPipelinePlannerOptions& options,
+    MediaHardwareCapabilityProbe& hardwareProbe)
+{
+    for (std::size_t index = 0; index < candidates.size(); ++index) {
+        MediaPipelineChainPlan& candidate = candidates[index];
+        if (!candidate.available) {
+            continue;
+        }
+
+        if (options.disableHardware) {
+            if (isSoftwareChain(candidate, options)) {
+                return ::media::Result<std::size_t>::success(index);
+            }
+            continue;
+        }
+
+        if (!candidate.allHardware) {
+            continue;
+        }
+
+        auto validation = hardwareProbe.validate(candidate, options);
+        if (validation) {
+            return ::media::Result<std::size_t>::success(index);
+        }
+        candidate = MediaPipelineScorer::scoreChain(std::move(candidate), options);
+    }
+
+    return ::media::Result<std::size_t>::failure(
+        ::media::ErrorInfo::hardwareUnavailable(
+            options.disableHardware
+                ? "no available explicit software decoder/filter/encoder chain found"
+                : "no runtime-valid hardware decoder/filter/encoder chain found"));
+}
 
 const char* mediaPipelineStageRoleName(MediaPipelineStageRole role) noexcept
 {

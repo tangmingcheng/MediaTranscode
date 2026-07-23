@@ -111,19 +111,40 @@ void testRtpClockMappingRatesWrapAndFailures(TestContext& ctx)
     auto audioExact = audio.value().map(MediaRunningTime::fromNanoseconds(Second + 1'000));
     EXPECT_TRUE(ctx, videoExact && videoWrap && audioExact);
     if (videoExact) {
-        EXPECT_EQ(ctx, videoExact.value().extendedTicks(), 4'295'057'040ULL);
+        EXPECT_EQ(ctx, videoExact.value().extendedTicks(), 8'590'024'336ULL);
         EXPECT_EQ(ctx, videoExact.value().wire(), 89'744u);
     }
     if (videoWrap) {
-        EXPECT_EQ(ctx, videoWrap.value().extendedTicks(), 4'295'147'040ULL);
+        EXPECT_EQ(ctx, videoWrap.value().extendedTicks(), 8'590'114'336ULL);
         EXPECT_EQ(ctx, videoWrap.value().wire(), 179'744u);
     }
     if (audioExact) {
-        EXPECT_EQ(ctx, audioExact.value().extendedTicks(), 48'000);
+        EXPECT_EQ(ctx, audioExact.value().extendedTicks(), 4'295'015'296ULL);
         EXPECT_EQ(ctx, audioExact.value().wire(), 48'000u);
     }
 
-    EXPECT_FALSE(ctx, video.value().map(MediaRunningTime::fromNanoseconds(999)));
+    auto videoPreroll = video.value().map(
+        MediaRunningTime::fromNanoseconds(1'000 - 1'000'000));
+    EXPECT_TRUE(ctx, videoPreroll);
+    if (videoPreroll) {
+        EXPECT_EQ(ctx, videoPreroll.value().extendedTicks(),
+                  0x1FFFFFF00ULL - 90ULL);
+        EXPECT_EQ(ctx, videoPreroll.value().wire(), 0xFFFFFF00u - 90u);
+    }
+    auto wrappedPreroll = MediaRtpOutputClockMapper::create(
+        90'000, 0u, MediaRunningTime::fromNanoseconds(1'000));
+    EXPECT_TRUE(ctx, wrappedPreroll);
+    if (wrappedPreroll) {
+        auto mapped = wrappedPreroll.value().map(
+            MediaRunningTime::fromNanoseconds(1'000 - 40'000'000));
+        EXPECT_TRUE(ctx, mapped);
+        if (mapped) {
+            EXPECT_EQ(ctx, mapped.value().extendedTicks(),
+                      (std::uint64_t{1} << 32) - 3'600);
+            EXPECT_EQ(ctx, mapped.value().wire(),
+                      std::numeric_limits<std::uint32_t>::max() - 3'599);
+        }
+    }
     EXPECT_FALSE(ctx, MediaRtpOutputClockMapper::create(
         0, 0, MediaRunningTime::fromNanoseconds(0)));
     auto overflow = MediaRtpOutputClockMapper::create(

@@ -84,7 +84,8 @@ MediaRtpClockGroupValidator::MediaRtpClockGroupValidator(
     MediaRtpSourceClockCalibration calibration)
 {
     if ((streamKind != MediaStreamKind::Video && streamKind != MediaStreamKind::Audio) ||
-        evidence.cname.empty() || evidence.senderReportObservedAtNs < 0 ||
+        (m_config.requireMatchingCname && evidence.cname.empty()) ||
+        evidence.senderReportObservedAtNs < 0 ||
         evidence.cnameObservedAtNs < 0 || !matchingCalibration(evidence, calibration)) {
         clear(true);
         return invalid("RTP clock group evidence identity is invalid");
@@ -97,7 +98,8 @@ MediaRtpClockGroupValidator::MediaRtpClockGroupValidator(
             streamKind == MediaStreamKind::Video ? *m_video : *m_audio;
         if (observed.evidence.observedMediaSsrc !=
                 committed.evidence.observedMediaSsrc ||
-            observed.evidence.cname != committed.evidence.cname ||
+            (m_config.requireMatchingCname &&
+             observed.evidence.cname != committed.evidence.cname) ||
             observed.evidence.generation != committed.evidence.generation) {
             clear(true);
             return invalid(
@@ -121,7 +123,8 @@ MediaRtpClockGroupValidator::MediaRtpClockGroupValidator(
         m_reacquireRequired = false;
         return ::media::Status::success();
     }
-    if (m_video->evidence.cname != m_audio->evidence.cname) {
+    if (m_config.requireMatchingCname &&
+        m_video->evidence.cname != m_audio->evidence.cname) {
         clear(true);
         return invalid("RTP clock group CNAME values do not match exactly");
     }
@@ -166,8 +169,10 @@ MediaRtpClockGroupSnapshot MediaRtpClockGroupValidator::snapshot(
         if (observedAtNs < stream.evidence.cnameObservedAtNs) return std::nullopt;
         return observedAtNs - stream.evidence.cnameObservedAtNs;
     };
-    const auto videoCnameAge = cnameAge(*m_video);
-    const auto audioCnameAge = cnameAge(*m_audio);
+    const auto videoCnameAge = m_config.requireMatchingCname
+        ? cnameAge(*m_video) : std::optional<std::int64_t>(0);
+    const auto audioCnameAge = m_config.requireMatchingCname
+        ? cnameAge(*m_audio) : std::optional<std::int64_t>(0);
     if (!videoAge || !audioAge || *videoAge > m_config.maximumExtrapolationNs ||
         *audioAge > m_config.maximumExtrapolationNs || !videoCnameAge || !audioCnameAge ||
         *videoCnameAge > m_config.videoCnameTimeoutNs ||
@@ -230,7 +235,8 @@ bool MediaRtpClockGroupValidator::initialCandidateIsFresh(
     }
     return observedAtNs - stream.evidence.senderReportObservedAtNs <=
                m_config.senderReportTimeoutNs &&
-           observedAtNs - stream.evidence.cnameObservedAtNs <= cnameTimeoutNs;
+           (!m_config.requireMatchingCname ||
+            observedAtNs - stream.evidence.cnameObservedAtNs <= cnameTimeoutNs);
 }
 
 void MediaRtpClockGroupValidator::invalidate() noexcept
