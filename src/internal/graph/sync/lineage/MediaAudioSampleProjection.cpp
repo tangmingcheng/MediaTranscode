@@ -9,10 +9,21 @@ extern "C" {
 namespace media::ffmpeg::graph {
 namespace {
 
-::media::Result<std::int64_t> checkedPositiveAdd(
+::media::Result<std::int64_t> checkedNonNegativeAccumulate(
     std::int64_t left, std::int64_t right, const char* message)
 {
     if (left < 0 || right <= 0 ||
+        left > std::numeric_limits<std::int64_t>::max() - right) {
+        return ::media::Result<std::int64_t>::failure(
+            ::media::ErrorInfo::invalidArgument(message));
+    }
+    return ::media::Result<std::int64_t>::success(left + right);
+}
+
+::media::Result<std::int64_t> checkedForwardAdd(
+    std::int64_t left, std::int64_t right, const char* message)
+{
+    if (right <= 0 ||
         left > std::numeric_limits<std::int64_t>::max() - right) {
         return ::media::Result<std::int64_t>::failure(
             ::media::ErrorInfo::invalidArgument(message));
@@ -26,10 +37,10 @@ namespace {
 MediaAudioSampleProjection::create(
     std::int64_t outputStart, int sourceSampleRate, int outputSampleRate)
 {
-    if (outputStart < 0 || sourceSampleRate <= 0 || outputSampleRate <= 0) {
+    if (sourceSampleRate <= 0 || outputSampleRate <= 0) {
         return ::media::Result<MediaAudioSampleProjection>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "Audio sample projection requires non-negative output start and positive rates"));
+                "Audio sample projection requires positive rates"));
     }
     return ::media::Result<MediaAudioSampleProjection>::success(
         MediaAudioSampleProjection(
@@ -39,7 +50,7 @@ MediaAudioSampleProjection::create(
 ::media::Result<MediaCanonicalAudioSampleInterval>
 MediaAudioSampleProjection::append(std::int64_t sourceSamples)
 {
-    auto cumulative = checkedPositiveAdd(
+    auto cumulative = checkedNonNegativeAccumulate(
         m_sourceSamples, sourceSamples,
         "Audio sample projection source accumulation overflows");
     if (!cumulative) {
@@ -54,7 +65,7 @@ MediaAudioSampleProjection::append(std::int64_t sourceSamples)
             ::media::ErrorInfo::invalidArgument(
                 "Audio sample projection rate conversion overflows"));
     }
-    auto end = checkedPositiveAdd(
+    auto end = checkedForwardAdd(
         m_outputStart, projected,
         "Audio sample projection output boundary overflows");
     if (!end || end.value() <= m_outputEnd) {
@@ -73,7 +84,7 @@ MediaAudioSampleProjection::append(std::int64_t sourceSamples)
 ::media::Result<MediaCanonicalAudioSampleInterval>
 MediaAudioSampleProjection::extend(std::int64_t outputSamples)
 {
-    auto end = checkedPositiveAdd(
+    auto end = checkedForwardAdd(
         m_outputEnd, outputSamples,
         "Audio sample projection correction extension overflows");
     if (!end) {

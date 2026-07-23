@@ -1,9 +1,11 @@
 #include "internal/graph/builder/segments/MediaRealtimeAvSyncInputSegmentBuilder.h"
 
+#include "internal/graph/builder/MediaGraphBuildSupport.h"
 #include "internal/graph/builder/segments/MediaRealtimeAvSyncInputGraphSupport.h"
 #include "internal/graph/builder/segments/MediaRealtimeAvSyncNodeConfigurator.h"
 #include "internal/graph/builder/segments/MediaRealtimeAvSyncProtocolInputBuilder.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
+#include "internal/graph/model/MediaAtomicOutputPolicyContract.h"
 
 #include <string_view>
 #include <utility>
@@ -13,6 +15,7 @@ namespace media::ffmpeg::graph {
 namespace {
 
 using Support = MediaRealtimeAvSyncInputGraphSupport;
+constexpr std::string_view Owner = "MediaRealtimeAvSyncInputSegmentBuilder";
 
 struct SharedNodes final {
     MediaNodeId sourceClock;
@@ -70,7 +73,11 @@ struct SharedNodes final {
 ::media::Result<void> addSharedPorts(
     MediaGraph& graph,
     const SharedNodes& nodes,
-    bool mpegTs)
+    bool mpegTs,
+    int videoStreamIndex,
+    int audioStreamIndex,
+    MediaEdgeKind videoEdgeKind,
+    MediaEdgeKind audioEdgeKind)
 {
     if (auto status = Support::addInput(
             graph, nodes.sourceClock, "clock", MediaStreamKind::Metadata,
@@ -128,6 +135,11 @@ struct SharedNodes final {
             MediaEdgeKind::Event, MediaPayloadKind::GraphEvent); !status) {
         return status;
     }
+    if (auto status = Support::addOutput(
+            graph, nodes.epochBinder, "preparation", MediaStreamKind::Metadata,
+            MediaEdgeKind::Event, MediaPayloadKind::GraphEvent); !status) {
+        return status;
+    }
     if (auto status = Support::addInput(
             graph, nodes.activationSequencer, "transaction",
             MediaStreamKind::Metadata, MediaEdgeKind::Event,
@@ -141,17 +153,28 @@ struct SharedNodes final {
             MediaStreamKind::Metadata, MediaEdgeKind::Event,
             MediaPayloadKind::GraphEvent); !status) return status;
     if (auto status = Support::addInput(
-            graph, nodes.releaseExtractor, "in", MediaStreamKind::Metadata,
+            graph, nodes.releaseExtractor, "preparation", MediaStreamKind::Metadata,
             MediaEdgeKind::Event, MediaPayloadKind::GraphEvent); !status) {
         return status;
     }
-    if (auto status = Support::addOutput(
-            graph, nodes.releaseExtractor, "video", MediaStreamKind::Video,
-            MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, false, true);
+    if (auto status = Support::addInput(
+            graph, nodes.releaseExtractor, "bound_release", MediaStreamKind::Metadata,
+            MediaEdgeKind::Event, MediaPayloadKind::GraphEvent); !status) {
+        return status;
+    }
+    if (auto status = MediaGraphBuildSupport::addOutputPortWithFormatDescriptorChecked(
+            graph, Owner, nodes.releaseExtractor, "video",
+            MediaStreamKind::Video, videoEdgeKind,
+            MediaPayloadKind::Packet, false, true,
+            MediaGraphBuildSupport::streamIndexDescriptor(
+                MediaStreamKind::Video, videoStreamIndex));
         !status) return status;
-    return Support::addOutput(
-        graph, nodes.releaseExtractor, "audio", MediaStreamKind::Audio,
-        MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, false, true);
+    return MediaGraphBuildSupport::addOutputPortWithFormatDescriptorChecked(
+        graph, Owner, nodes.releaseExtractor, "audio",
+        MediaStreamKind::Audio, audioEdgeKind,
+        MediaPayloadKind::Packet, false, true,
+        MediaGraphBuildSupport::streamIndexDescriptor(
+            MediaStreamKind::Audio, audioStreamIndex));
 }
 
 ::media::Result<void> configureSharedNodes(
@@ -240,9 +263,14 @@ struct SharedNodes final {
             nodes.activationSequencer, "transaction",
             "epoch transaction -> activation sequencer", metadata);
         !status) return status;
+    if (auto status = Support::connect(
+            graph, nodes.epochBinder, "preparation",
+            nodes.releaseExtractor, "preparation",
+            "epoch transaction -> video preparation extractor", metadata);
+        !status) return status;
     return Support::connect(
         graph, nodes.activationSequencer, "bound_release",
-        nodes.releaseExtractor, "in",
+        nodes.releaseExtractor, "bound_release",
         "activated release -> atomic extractor", metadata);
 }
 
@@ -256,11 +284,23 @@ MediaRealtimeAvSyncInputSegmentBuilder::build(
 {
     if (options.prefix.empty() || !options.sources.videoPacket.valid() ||
         !options.sources.audioPacket.valid() ||
-        !options.sources.protocolClock.valid() || !plan.groupKey.valid() ||
+        !options.sources.protocolClock.valid() ||
+        options.releasedVideoStreamIndex < 0 ||
+        options.releasedAudioStreamIndex < 0 ||
+        (options.releasedVideoEdgeKind != MediaEdgeKind::InputPacket &&
+         options.releasedVideoEdgeKind != MediaEdgeKind::EncodedPacket) ||
+        options.releasedAudioEdgeKind != MediaEdgeKind::InputPacket ||
+        !plan.groupKey.valid() ||
         !MediaAvSyncPlanValidator::validate(plan.synchronization)) {
         return ::media::Result<MediaRealtimeAvSyncInputEndpoints>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "Synchronized input segment requires complete planned inputs"));
+    }
+    if (!MediaAtomicOutputPolicyContract::accepts(
+            plan.edgePolicies.synchronizedPacket)) {
+        return ::media::Result<MediaRealtimeAvSyncInputEndpoints>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Synchronized input release requires a complete planned atomic output policy"));
     }
     auto protocol = MediaRealtimeAvSyncProtocolInputBuilder::build(
         graph, options, plan);
@@ -275,7 +315,12 @@ MediaRealtimeAvSyncInputSegmentBuilder::build(
     }
     const bool mpegTs = std::holds_alternative<
         MediaMpegTsInputClockAssemblyPlan>(plan.assembly.inputClock);
-    if (auto status = addSharedPorts(graph, nodes.value(), mpegTs); !status) {
+    if (auto status = addSharedPorts(
+            graph, nodes.value(), mpegTs,
+            options.releasedVideoStreamIndex,
+            options.releasedAudioStreamIndex,
+            options.releasedVideoEdgeKind,
+            options.releasedAudioEdgeKind); !status) {
         return ::media::Result<MediaRealtimeAvSyncInputEndpoints>::failure(
             status.error());
     }

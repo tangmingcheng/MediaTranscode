@@ -58,13 +58,13 @@ std::string defaultPacketSourcePort(MediaStreamKind streamKind)
 
 } // namespace
 
-::media::Result<MediaPacketCopyBranchResult>
+::media::Result<MediaEncodedBranchEndpoints>
 MediaPacketCopyBranchBuilder::build(
     MediaGraph& graph,
     const MediaPacketCopyBranchOptions& options)
 {
     if (auto status = validateOptions(options); !status) {
-        return ::media::Result<MediaPacketCopyBranchResult>::failure(
+        return ::media::Result<MediaEncodedBranchEndpoints>::failure(
             status.error());
     }
 
@@ -73,8 +73,18 @@ MediaPacketCopyBranchBuilder::build(
         ? defaultPacketSourcePort(options.streamKind)
         : options.packetSourcePort;
     if (packetSourcePort.empty()) {
-        return ::media::Result<MediaPacketCopyBranchResult>::failure(
+        return ::media::Result<MediaEncodedBranchEndpoints>::failure(
             ::media::ErrorInfo::invalidArgument("MediaPacketCopyBranchBuilder requires packet source port"));
+    }
+    const MediaEdgeKind packetSourceEdgeKind = *options.normalizePackets
+        ? MediaEdgeKind::InputPacket
+        : MediaEdgeKind::EncodedPacket;
+    if (auto status = MediaGraphBuildSupport::requirePacketOutputEndpoint(
+            graph, owner,
+            MediaEndpoint{options.packetSourceNode, packetSourcePort},
+            options.streamKind, packetSourceEdgeKind,
+            options.sourceStreamIndex); !status) {
+        return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     }
 
     const MediaNodeId sourceConfig = graph.addNode(MediaNodeKind::PacketSourceConfig,
@@ -89,7 +99,7 @@ MediaPacketCopyBranchBuilder::build(
                                                                      sourceConfig,
                                                                      options.streamKind,
                                                                      options.sourceStreamIndex); !status) {
-        return ::media::Result<MediaPacketCopyBranchResult>::failure(status.error());
+        return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     }
     if (*options.normalizePackets) {
         if (auto status = MediaGraphBuildSupport::setPacketNormalizeOptions(graph,
@@ -98,7 +108,7 @@ MediaPacketCopyBranchBuilder::build(
                                                                         options.streamKind,
                                                                         options.sourceStreamIndex,
                                                                         options.monotonicPacketTimestamps); !status) {
-            return ::media::Result<MediaPacketCopyBranchResult>::failure(status.error());
+            return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
         }
     }
 
@@ -110,7 +120,7 @@ MediaPacketCopyBranchBuilder::build(
                                                                   MediaEdgeKind::Metadata,
                                                                   MediaPayloadKind::FormatContext,
                                                                   true,
-                                                                  false); !status) return ::media::Result<MediaPacketCopyBranchResult>::failure(status.error());
+                                                                  false); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     if (auto status = MediaGraphBuildSupport::addOutputPortChecked(graph,
                                                                    owner,
                                                                    sourceConfig,
@@ -119,7 +129,7 @@ MediaPacketCopyBranchBuilder::build(
                                                                    MediaEdgeKind::Metadata,
                                                                    MediaPayloadKind::CodecParameters,
                                                                    true,
-                                                                   false); !status) return ::media::Result<MediaPacketCopyBranchResult>::failure(status.error());
+                                                                   false); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     if (*options.normalizePackets) {
         if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph,
                                                                   owner,
@@ -129,20 +139,8 @@ MediaPacketCopyBranchBuilder::build(
                                                                   MediaEdgeKind::Metadata,
                                                                   MediaPayloadKind::FormatContext,
                                                                   true,
-                                                                  false); !status) return ::media::Result<MediaPacketCopyBranchResult>::failure(status.error());
+                                                                  false); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     }
-
-    const MediaPortId packetSource = graph.addOutputPort(options.packetSourceNode,
-                                                         packetSourcePort,
-                                                         options.streamKind,
-                                                         *options.normalizePackets ? MediaEdgeKind::InputPacket : MediaEdgeKind::EncodedPacket,
-                                                         MediaPayloadKind::Packet,
-                                                         false,
-                                                         true);
-    if (auto status = MediaGraphBuildSupport::requirePort(packetSource, owner, packetSourcePort); !status) return ::media::Result<MediaPacketCopyBranchResult>::failure(status.error());
-    graph.setPortFormatDescriptor(packetSource,
-                                  MediaGraphBuildSupport::streamIndexDescriptor(options.streamKind,
-                                                                                options.sourceStreamIndex));
 
     if (*options.normalizePackets) {
         if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph,
@@ -153,7 +151,7 @@ MediaPacketCopyBranchBuilder::build(
                                                                   MediaEdgeKind::InputPacket,
                                                                   MediaPayloadKind::Packet,
                                                                   true,
-                                                                  true); !status) return ::media::Result<MediaPacketCopyBranchResult>::failure(status.error());
+                                                                  true); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
         if (auto status = MediaGraphBuildSupport::addOutputPortChecked(graph,
                                                                    owner,
                                                                    packetNormalize,
@@ -162,20 +160,20 @@ MediaPacketCopyBranchBuilder::build(
                                                                    MediaEdgeKind::EncodedPacket,
                                                                    MediaPayloadKind::Packet,
                                                                    true,
-                                                                  true); !status) return ::media::Result<MediaPacketCopyBranchResult>::failure(status.error());
+                                                                  true); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     }
 
     const MediaRealtimeEdgePolicySet& policies = options.edgePolicies;
     const MediaEdgePolicy& packetPolicy = policies.packetPolicy(options.streamKind);
-    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.formatSourceNode, options.formatSourcePort, sourceConfig, "format", prefix + ".format -> source_config.format", policies.metadata); !status) return ::media::Result<MediaPacketCopyBranchResult>::failure(status.error());
+    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.formatSourceNode, options.formatSourcePort, sourceConfig, "format", prefix + ".format -> source_config.format", policies.metadata); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     if (!*options.normalizePackets) {
-        return ::media::Result<MediaPacketCopyBranchResult>::success({
+        return ::media::Result<MediaEncodedBranchEndpoints>::success({
             {sourceConfig, "codec"},
             {options.packetSourceNode, packetSourcePort}});
     }
-    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.formatSourceNode, options.formatSourcePort, packetNormalize, "format", prefix + ".format -> normalize.format", policies.metadata); !status) return ::media::Result<MediaPacketCopyBranchResult>::failure(status.error());
-    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.packetSourceNode, packetSourcePort, packetNormalize, "packet", prefix + ".packet -> normalize.packet", packetPolicy); !status) return ::media::Result<MediaPacketCopyBranchResult>::failure(status.error());
-    return ::media::Result<MediaPacketCopyBranchResult>::success({
+    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.formatSourceNode, options.formatSourcePort, packetNormalize, "format", prefix + ".format -> normalize.format", policies.metadata); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
+    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.packetSourceNode, packetSourcePort, packetNormalize, "packet", prefix + ".packet -> normalize.packet", packetPolicy); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
+    return ::media::Result<MediaEncodedBranchEndpoints>::success({
         {sourceConfig, "codec"}, {packetNormalize, "packet"}});
 }
 

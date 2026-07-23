@@ -247,11 +247,12 @@ CodecGraphFixture makeCodecGraph(bool decode, std::size_t outputCapacity = 4)
     return fixture;
 }
 
-MediaBufferRef makeCodecContext()
+MediaBufferRef makeCodecContext(AVRational packetTimeBase = {1, 90'000})
 {
     auto context = ::media::ffmpeg::makeCodecContext(nullptr);
     CHECK(context);
     context->time_base = {1, 25};
+    context->pkt_timebase = packetTimeBase;
     context->framerate = {25, 1};
     context->pix_fmt = AV_PIX_FMT_YUV420P;
     context->width = 16;
@@ -343,6 +344,13 @@ void scriptedDecoderRetainsOneSubmissionAcrossEagain()
     MediaBufferRef observed;
     CHECK(output->tryPop(observed));
     checkSequence(observed, 1, FFmpegFrameView::canonicalLineage);
+    CHECK(observed->timeDescriptor().timeBase.num == 1);
+    CHECK(observed->timeDescriptor().timeBase.den == 90'000);
+    const auto* firstCanonical =
+        dynamic_cast<const MediaCanonicalVideoFrameBuffer*>(observed.get());
+    CHECK(firstCanonical);
+    CHECK(firstCanonical->media()->timeDescriptor().timeBase.num == 1);
+    CHECK(firstCanonical->media()->timeDescriptor().timeBase.den == 90'000);
     CHECK(node.process(execution));
     CHECK(output->tryPop(observed));
     checkSequence(observed, 2, FFmpegFrameView::canonicalLineage);
@@ -357,6 +365,31 @@ void scriptedDecoderRetainsOneSubmissionAcrossEagain()
     checkSequence(observed, 3, FFmpegFrameView::canonicalLineage);
     CHECK(static_cast<MediaRuntimeNode&>(node).stop(execution));
     CHECK(registry->finishGeneration(71));
+}
+
+void synchronizedDecoderRejectsMissingPacketTimeBaseAtProducer()
+{
+    auto created = MediaCodecLineageRegistry::create(2);
+    CHECK(created);
+    auto registry = std::make_shared<MediaCodecLineageRegistry>(
+        std::move(created).value());
+    auto api = std::make_shared<ScriptedDecoderApi>(
+        makeOpaque(*registry, makeLineage(75, 1)));
+    auto fixture = makeCodecGraph(true);
+    MediaGraphExecutionContext execution;
+    CHECK(execution.compile(fixture.graph));
+    auto* codec = execution.findInputChannel(fixture.node, "codec");
+    auto* input = execution.findInputChannel(fixture.node, "packet");
+    CHECK(codec && input);
+    CHECK(codec->push(makeCodecContext({0, 1})));
+    CHECK(input->push(makeCanonicalPacket(75, 2)));
+    VideoDecodeNode node(fixture.node, registry, api);
+    CHECK(node.start(execution));
+    CHECK(node.process(execution));
+    const auto result = node.process(execution);
+    CHECK(!result);
+    CHECK(result.error().code == ::media::ErrorCode::NotInitialized);
+    node.abort(execution);
 }
 
 void scriptedEncoderRetainsOneSubmissionAcrossEagain()
@@ -752,6 +785,7 @@ void realEncoderPreservesDelayedLineageThroughEofDrain()
 int main()
 {
     scriptedDecoderRetainsOneSubmissionAcrossEagain();
+    synchronizedDecoderRejectsMissingPacketTimeBaseAtProducer();
     scriptedEncoderRetainsOneSubmissionAcrossEagain();
     decoderDropsPurgedRetainedOutputBeforeNextGeneration();
     encoderDropsPurgedRetainedOutputBeforeNextGeneration();

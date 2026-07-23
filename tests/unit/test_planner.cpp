@@ -6,9 +6,12 @@
 #include "internal/graph/planner/MediaGraphDeploymentPlanner.h"
 #include "internal/graph/planner/MediaGraphMeshPlanner.h"
 #include "internal/graph/planner/MediaGraphPlanningPolicy.h"
+#include "internal/graph/planner/MediaPipelineScorer.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
+#include "internal/graph/planner/capability/MediaEncoderPacketLayoutCapabilityProvider.h"
 #include "internal/graph/planner/capability/MediaSelectedEncoderPacketLayoutResolver.h"
+#include "internal/graph/planner/capability/MediaVideoCapabilityScanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimePlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncPlanningFactsResolver.h"
@@ -41,6 +44,9 @@ extern "C" {
 #include <libavutil/channel_layout.h>
 #include <libavutil/samplefmt.h>
 }
+
+#include <algorithm>
+#include <string_view>
 
 using namespace media::ffmpeg::graph;
 using media_transcode::test::TestContext;
@@ -342,6 +348,20 @@ void testRealtimePlannerProducesCompleteAvSyncRuntimeProduct(TestContext& ctx)
               MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp);
     EXPECT_EQ(ctx, runtime.audioCorrection.epochOutputSampleIndex,
               std::int64_t{0});
+    EXPECT_EQ(ctx,
+              runtime.edgePolicies.audioDriftTransaction.queuePolicy.capacity,
+              runtime.queues.frame);
+    EXPECT_EQ(ctx,
+              runtime.edgePolicies.audioDriftTransaction.queuePolicy
+                  .overflowPolicy,
+              MediaQueueOverflowPolicy::BlockProducer);
+    EXPECT_EQ(ctx,
+              runtime.edgePolicies.audioDriftTransaction.queuePolicy
+                  .orderingPolicy,
+              MediaQueueOrderingPolicy::Fifo);
+    EXPECT_TRUE(ctx,
+                runtime.edgePolicies.audioDriftTransaction.queuePolicy
+                    .preserveOrdering);
     EXPECT_TRUE(ctx,
                 runtime.audioCorrection.commandLeadSamples >
                     runtime.audioCorrection.worstCaseInFlightSamples +
@@ -433,6 +453,13 @@ void testRealtimeAvSyncRuntimeProductRejectsIndependentMutations(TestContext& ct
     expectInvalid();
     outer.audioPlan.selectedResampler->maximumOutputBlockSamples =
         selectedResamplerBlock;
+
+    outer.videoPacketCopyNormalizationRequired = true;
+    expectInvalid();
+    outer.videoPacketCopyNormalizationRequired = false;
+    outer.audioPacketNormalizationRequired = true;
+    expectInvalid();
+    outer.audioPacketNormalizationRequired = false;
 
     const auto selectedPlanningFacts = runtime.planningFacts;
     runtime.planningFacts.outputSampleRate.reset();
@@ -540,6 +567,9 @@ void testRealtimeAvSyncRuntimeProductRejectsIndependentMutations(TestContext& ct
     ++runtime.edgePolicies.synchronizedPacket.queuePolicy.capacity;
     expectInvalid();
     --runtime.edgePolicies.synchronizedPacket.queuePolicy.capacity;
+    ++runtime.edgePolicies.audioDriftTransaction.queuePolicy.capacity;
+    expectInvalid();
+    --runtime.edgePolicies.audioDriftTransaction.queuePolicy.capacity;
     runtime.edgePolicies.synchronizedPacket.queuePolicy.overflowPolicy =
         MediaQueueOverflowPolicy::DropOldest;
     expectInvalid();
@@ -586,9 +616,12 @@ void testRealtimeAvSyncRuntimeProductRejectsIndependentMutations(TestContext& ct
     expectSynchronizedPacketMutationInvalid([](MediaEdgePolicy& policy) {
         policy.bufferPolicy.ownership = MediaBufferOwnership::MoveOnly;
     });
-    ++runtime.edgePolicies.frame.queuePolicy.capacity;
+    ++runtime.edgePolicies.videoFrame.queuePolicy.capacity;
     expectInvalid();
-    --runtime.edgePolicies.frame.queuePolicy.capacity;
+    --runtime.edgePolicies.videoFrame.queuePolicy.capacity;
+    ++runtime.edgePolicies.audioFrame.queuePolicy.capacity;
+    expectInvalid();
+    --runtime.edgePolicies.audioFrame.queuePolicy.capacity;
     ++runtime.edgePolicies.mux.queuePolicy.capacity;
     expectInvalid();
     --runtime.edgePolicies.mux.queuePolicy.capacity;
@@ -1484,6 +1517,169 @@ void testProjectTsRequiresSelectedEncoderPacketLayoutFact(TestContext& ctx)
                  MediaSelectedEncoderPacketLayoutResolver::resolve(plan));
 }
 
+void testEncoderPacketLayoutCapabilityIsExactAndFailClosed(TestContext& ctx)
+{
+    for (const std::string_view encoderName : {
+             "h264_nvenc", "libx264", "libx264rgb"}) {
+        const auto layout =
+            MediaEncoderPacketLayoutCapabilityProvider::find(encoderName);
+        EXPECT_TRUE(ctx, layout.has_value());
+        if (layout) {
+            EXPECT_EQ(ctx, layout->kind(),
+                      MediaEncodedPacketLayoutKind::StartCodeDelimited);
+            EXPECT_FALSE(ctx, layout->lengthFieldBytes().has_value());
+        }
+    }
+
+    for (const std::string_view encoderName : {
+             "h264_nvenc_alias", "H264_nvenc", "libx264-custom", "h264_qsv"}) {
+        EXPECT_FALSE(
+            ctx, MediaEncoderPacketLayoutCapabilityProvider::find(encoderName));
+    }
+}
+
+void testVideoCapabilityScannerPublishesOnlyProvenEncoderLayout(TestContext& ctx)
+{
+    MediaPipelinePlannerOptions options(false, true, false, false, true);
+    options.preferredHardware = "cuda";
+    const auto candidates =
+        MediaVideoCapabilityScanner::enumerateTranscodeCandidates("h264", "h264", options);
+
+    const auto findEncoder = [&](std::string_view ffmpegName) -> const MediaPipelineStagePlan*
+    {
+        const auto candidate =
+            std::find_if(candidates.begin(), candidates.end(),
+                         [&](const auto& chain) { return chain.encoder.ffmpegName == ffmpegName; });
+        return candidate == candidates.end() ? nullptr : &candidate->encoder;
+    };
+
+    const auto* nvenc = findEncoder("h264_nvenc");
+    EXPECT_TRUE(ctx, nvenc != nullptr);
+    if (nvenc)
+    {
+        EXPECT_TRUE(ctx, nvenc->encodedPacketLayout.has_value());
+        if (nvenc->encodedPacketLayout)
+        {
+            EXPECT_EQ(ctx, nvenc->encodedPacketLayout->kind(),
+                      MediaEncodedPacketLayoutKind::StartCodeDelimited);
+        }
+    }
+
+    const auto* libx264 = findEncoder("libx264");
+    EXPECT_TRUE(ctx, libx264 != nullptr);
+    if (libx264)
+        EXPECT_TRUE(ctx, libx264->encodedPacketLayout.has_value());
+
+    const auto* qsv = findEncoder("h264_qsv");
+    EXPECT_TRUE(ctx, qsv != nullptr);
+    if (qsv)
+        EXPECT_FALSE(ctx, qsv->encodedPacketLayout.has_value());
+}
+
+void testVideoCapabilityScannerHonorsDisableHardwareDecision(TestContext& ctx)
+{
+    MediaPipelinePlannerOptions softwareOnly(false, true, true, false, true);
+    softwareOnly.preferredHardware = "software";
+    const auto softwareCandidates =
+        MediaVideoCapabilityScanner::enumerateTranscodeCandidates("h264", "h264", softwareOnly);
+
+    EXPECT_FALSE(ctx, softwareCandidates.empty());
+    EXPECT_TRUE(ctx, std::all_of(softwareCandidates.begin(), softwareCandidates.end(),
+                                 [](const auto& chain)
+                                 {
+                                     return !chain.decoder.hardware && !chain.filter.hardware &&
+                                            !chain.encoder.hardware;
+                                 }));
+
+    MediaPipelinePlannerOptions hardwareEnabled(false, true, false, false, true);
+    hardwareEnabled.preferredHardware = "auto";
+    const auto completeCandidates =
+        MediaVideoCapabilityScanner::enumerateTranscodeCandidates("h264", "h264", hardwareEnabled);
+
+    const auto cuda = std::find_if(
+        completeCandidates.begin(), completeCandidates.end(),
+        [](const auto& chain) { return chain.label == "cuda-nvenc"; });
+    EXPECT_TRUE(ctx, cuda != completeCandidates.end());
+    if (cuda != completeCandidates.end()) {
+        EXPECT_EQ(ctx, cuda->decoder.ffmpegName, std::string("h264"));
+        EXPECT_TRUE(ctx, cuda->decoder.hardware);
+        EXPECT_EQ(ctx, cuda->decoder.hwaccelName, std::string("cuda"));
+    }
+
+    EXPECT_TRUE(ctx, std::any_of(completeCandidates.begin(), completeCandidates.end(),
+                                 [](const auto& chain)
+                                 {
+                                     return chain.decoder.hardware || chain.filter.hardware ||
+                                            chain.encoder.hardware;
+                                 }));
+    EXPECT_TRUE(ctx, std::any_of(completeCandidates.begin(), completeCandidates.end(),
+                                 [](const auto& chain)
+                                 {
+                                     return !chain.decoder.hardware && !chain.filter.hardware &&
+                                            !chain.encoder.hardware;
+                                 }));
+
+    MediaPipelineChainPlan hardware;
+    hardware.label = "hardware";
+    hardware.decoder.available = true;
+    hardware.decoder.hardware = true;
+    hardware.decoder.zeroCopy = true;
+    hardware.decoder.deviceKind = MediaHardwareDeviceKind::CUDA;
+    hardware.filter = hardware.decoder;
+    hardware.encoder = hardware.decoder;
+
+    MediaPipelineChainPlan software;
+    software.label = "software";
+    software.decoder.available = true;
+    software.filter.available = true;
+    software.encoder.available = true;
+
+    const auto scored = MediaPipelineScorer::scoreAndSortChains(
+        {std::move(software), std::move(hardware)}, hardwareEnabled);
+    EXPECT_FALSE(ctx, scored.empty());
+    if (!scored.empty())
+    {
+        EXPECT_EQ(ctx, scored.front().label, std::string("hardware"));
+        EXPECT_TRUE(ctx, scored.front().score > scored.back().score);
+    }
+}
+
+void testProjectTsPlannerConsumesPublishedLayoutOrRejectsUnknownEncoder(TestContext& ctx)
+{
+    MediaPipelinePlan videoPlan;
+    videoPlan.branchMode = MediaBranchMode::TranscodeFrame;
+    videoPlan.outputCodecName = "h264";
+    videoPlan.selected.encoder.ffmpegName = "h264_nvenc";
+    videoPlan.selected.encoder.encodedPacketLayout =
+        MediaEncoderPacketLayoutCapabilityProvider::find("h264_nvenc");
+
+    const auto published = MediaSelectedEncoderPacketLayoutResolver::resolve(videoPlan);
+    EXPECT_TRUE(ctx, published);
+    if (published)
+    {
+        const auto tsPlan = MediaProjectMpegTsOutputPlan::create(
+            videoPlan.outputCodecName, published.value(),
+            resolvedAacOutput(MediaAudioProfile::knownAacLow()),
+            MediaRunningTime::fromNanoseconds(100'000'000));
+        EXPECT_TRUE(ctx, tsPlan);
+        if (tsPlan)
+        {
+            EXPECT_EQ(ctx, tsPlan.value().muxPlan().parameters().h264InputLayout,
+                      MediaTsH264InputLayout::AnnexB);
+        }
+    }
+
+    videoPlan.selected.encoder.ffmpegName = "h264_qsv";
+    videoPlan.selected.encoder.encodedPacketLayout =
+        MediaEncoderPacketLayoutCapabilityProvider::find("h264_qsv");
+    const auto rejected = MediaSelectedEncoderPacketLayoutResolver::resolve(videoPlan);
+    EXPECT_FALSE(ctx, rejected);
+    if (!rejected)
+    {
+        EXPECT_EQ(ctx, rejected.error().code, ::media::ErrorCode::Unsupported);
+    }
+}
+
 MediaTsMuxPlanParameters validTsMuxPlanParameters()
 {
     return MediaTsMuxPlanParameters{
@@ -1595,6 +1791,10 @@ void testAvSyncPlannerBuildsCompleteRtpContract(TestContext& ctx)
     EXPECT_EQ(ctx, *plan.rtp->audioInput.clockRate, 48000);
     EXPECT_TRUE(ctx, *plan.rtp->input.requireCommonCname);
     EXPECT_TRUE(ctx, *plan.rtp->input.requireSenderReports);
+    EXPECT_EQ(ctx, plan.rtp->input.senderReportTimeoutNs->nanoseconds(),
+              7'000'000'000LL);
+    EXPECT_EQ(ctx, plan.rtp->input.maximumExtrapolationNs->nanoseconds(),
+              9'000'000'000LL);
     EXPECT_EQ(ctx, *plan.rtp->input.maximumSenderClockRateErrorPpm, 1000);
     EXPECT_EQ(ctx, plan.rtp->input.maximumSenderClockResidualNs->nanoseconds(),
               250'000'000);
@@ -1654,8 +1854,8 @@ void testRawRtpInputPlannerProducesCompleteTransportPolicy(TestContext& ctx)
     EXPECT_EQ(ctx, transport.cancellableReadTimeoutMs, 2'500);
     EXPECT_TRUE(ctx, transport.requireSenderReports);
     EXPECT_TRUE(ctx, transport.requireCname);
-    EXPECT_EQ(ctx, transport.senderReportTimeoutMs, 3'000);
-    EXPECT_EQ(ctx, transport.cnameTimeoutMs, 5'000);
+    EXPECT_EQ(ctx, transport.senderReportTimeoutMs, 7'000);
+    EXPECT_EQ(ctx, transport.cnameTimeoutMs, 9'000);
     EXPECT_EQ(ctx, transport.rtcpCompositionMode, MediaRtcpCompositionMode::StrictCompoundRfc3550);
 
     auto ipv6Request = request;
@@ -1845,7 +2045,7 @@ void testAvSyncValidatorRejectsMissingAndInconsistentFields(TestContext& ctx)
     EXPECT_MISSING(rtp->input.requireSenderReports);
     EXPECT_MISSING(rtp->input.senderReportTimeoutNs);
     EXPECT_MISSING(rtp->input.maximumExtrapolationNs);
-    EXPECT_MISSING(rtp->input.maximumSenderReportSkewNs);
+    EXPECT_MISSING(rtp->input.maximumInterStreamClockOffsetSkewNs);
     EXPECT_MISSING(rtp->input.maximumSenderClockRateErrorPpm);
     EXPECT_MISSING(rtp->input.maximumSenderClockResidualNs);
     EXPECT_MISSING(rtp->videoOutput.identity);
@@ -2028,8 +2228,13 @@ void testAvSyncValidatorRejectsIsolatedNumericAndOrderingInvariants(TestContext&
     rejectRtp("RTP SR interval before timeout", [](auto& p) { p.rtp->output.senderReportIntervalNs = *p.rtp->input.senderReportTimeoutNs; });
     rejectRtp("RTP timeout within extrapolation", [](auto& p) { p.rtp->input.senderReportTimeoutNs = *p.rtp->input.maximumExtrapolationNs; });
     rejectRtp("RTP extrapolation before reacquire", [](auto& p) { p.rtp->input.maximumExtrapolationNs = *p.recovery.reacquisitionTimeoutNs; });
-    rejectRtp("RTP SR skew positive", [](auto& p) { p.rtp->input.maximumSenderReportSkewNs = avSyncTime(0); });
-    rejectRtp("RTP SR skew below hard discontinuity", [](auto& p) { p.rtp->input.maximumSenderReportSkewNs = *p.recovery.hardDiscontinuityThresholdNs; });
+    rejectRtp("RTP clock offset skew positive", [](auto& p) {
+        p.rtp->input.maximumInterStreamClockOffsetSkewNs = avSyncTime(0);
+    });
+    rejectRtp("RTP clock offset skew below hard discontinuity", [](auto& p) {
+        p.rtp->input.maximumInterStreamClockOffsetSkewNs =
+            *p.recovery.hardDiscontinuityThresholdNs;
+    });
     rejectRtp("RTP sender clock rate error positive", [](auto& p) { p.rtp->input.maximumSenderClockRateErrorPpm = 0; });
     rejectRtp("RTP sender clock residual positive", [](auto& p) { p.rtp->input.maximumSenderClockResidualNs = avSyncTime(0); });
 
@@ -2255,6 +2460,10 @@ int main()
     testTsMuxPlanRejectsEveryInvalidField(ctx);
     testTsResolvedOutputSupportMatrix(ctx);
     testProjectTsRequiresSelectedEncoderPacketLayoutFact(ctx);
+    testEncoderPacketLayoutCapabilityIsExactAndFailClosed(ctx);
+    testVideoCapabilityScannerPublishesOnlyProvenEncoderLayout(ctx);
+    testVideoCapabilityScannerHonorsDisableHardwareDecision(ctx);
+    testProjectTsPlannerConsumesPublishedLayoutOrRejectsUnknownEncoder(ctx);
     testResolvedAudioPlannerMatrix(ctx);
     testAudioEncoderTargetIdentityValidator(ctx);
     testProjectTsOutputRequiresExplicitUdpEndpoint(ctx);

@@ -1,4 +1,5 @@
 #include "internal/graph/sync/MediaAvStartupCoordinator.h"
+#include "internal/graph/sync/MediaAudioSampleGrid.h"
 #include "internal/graph/sync/startup/MediaAvStartupCoverageIndex.h"
 #include "internal/graph/sync/startup/MediaAvStartupLimits.h"
 #include "internal/graph/sync/startup/MediaAvStartupStreamStore.h"
@@ -13,33 +14,19 @@ namespace {
 
 constexpr MediaRunningTime Zero = MediaRunningTime::fromNanoseconds(0);
 
-::media::Result<std::uint32_t> trimSamples(MediaRunningTime trimTime,
-                                           const MediaAvAudioSampleSpan& span)
+::media::Result<std::uint32_t> trimSamples(
+    MediaRunningTime packetStart,
+    MediaRunningTime epochSourceStart,
+    const MediaAvAudioSampleSpan& span)
 {
-    constexpr std::uint64_t NanosecondsPerSecond = 1'000'000'000ULL;
-    const auto nanoseconds = static_cast<std::uint64_t>(trimTime.nanoseconds());
-    const auto seconds = nanoseconds / NanosecondsPerSecond;
-    const auto remainder = nanoseconds % NanosecondsPerSecond;
-    if (seconds > std::numeric_limits<std::uint64_t>::max() / span.sampleRate) {
+    auto grid = MediaAudioSampleGrid::create(
+        static_cast<int>(span.sampleRate));
+    if (!grid) {
         return ::media::Result<std::uint32_t>::failure(
-            ::media::ErrorInfo::invalidArgument("Audio trim sample count overflow"));
+            grid.error());
     }
-    const auto wholeSamples = seconds * span.sampleRate;
-    const auto fractionalProduct = remainder * span.sampleRate;
-    const auto fractionalSamples = fractionalProduct / NanosecondsPerSecond +
-        (fractionalProduct % NanosecondsPerSecond == 0 ? 0 : 1);
-    if (wholeSamples > std::numeric_limits<std::uint64_t>::max() - fractionalSamples) {
-        return ::media::Result<std::uint32_t>::failure(
-            ::media::ErrorInfo::invalidArgument("Audio trim sample count overflow"));
-    }
-    const auto samples = wholeSamples + fractionalSamples;
-    if (samples > span.sampleCount ||
-        samples > std::numeric_limits<std::uint32_t>::max()) {
-        return ::media::Result<std::uint32_t>::failure(
-            ::media::ErrorInfo::invalidArgument("Audio trim is not representable"));
-    }
-    return ::media::Result<std::uint32_t>::success(
-        static_cast<std::uint32_t>(samples));
+    return grid.value().trimLeadingSamples(
+        packetStart, epochSourceStart, span.sampleCount);
 }
 
 MediaAvStartupUnitId unitId(const MediaAvStartupAccessUnit& unit) noexcept
@@ -396,7 +383,9 @@ MediaAvStartupCoordinator::tryRelease(MediaRunningTime observedAt)
         return MediaAvSyncResult<MediaAvStartupDecision>::failure(
             failed.error());
     }
-    auto trim = trimSamples(audioTrimTime.value(), *window.audio->audio);
+    auto trim = trimSamples(*window.audio->presentationTime,
+                            window.sourceStart,
+                            *window.audio->audio);
     if (!trim) {
         auto failed = markFailed(MediaAvSyncErrorCode::AudioTrimLimitExceeded,
                                  trim.error().message);

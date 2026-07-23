@@ -8,6 +8,7 @@
 
 #include <set>
 #include <string_view>
+#include <optional>
 
 namespace media::ffmpeg::graph {
 
@@ -76,6 +77,10 @@ private:
 
 private:
     bool m_encoderConfigEmitted = false;
+    bool m_firstFrameDiagnosticEmitted = false;
+    bool m_firstSubmitDiagnosticEmitted = false;
+    bool m_firstPacketDiagnosticEmitted = false;
+    std::optional<bool> m_sendWouldBlock;
     std::shared_ptr<MediaCodecLineageRegistry> m_lineageRegistry;
     std::shared_ptr<MediaVideoEncoderCodecApi> m_codecApi;
     std::shared_ptr<VideoEncodeLineageState> m_lineageState;

@@ -31,13 +31,22 @@ void MediaRtcpSenderReportTracker::observeMedia(uint32_t ssrc, int64_t observedA
 {
     if (m_mediaSsrc && *m_mediaSsrc != ssrc) {
         invalidate();
-    } else if (!m_mediaSsrc && m_senderReport && m_senderReport->ssrc != ssrc) {
-        m_senderReport.reset();
-        m_lastAcceptedNtp.reset();
-        m_senderReportObservedAtNs = 0;
     }
     m_mediaSsrc = ssrc;
-    (void)observedAtNs;
+    if (!m_pendingSource) return;
+    if (m_pendingSource->senderReport.ssrc != ssrc) {
+        m_pendingSource.reset();
+        return;
+    }
+    m_senderReport = m_pendingSource->senderReport;
+    m_lastAcceptedNtp = m_senderReport->ntp;
+    m_cname = std::move(m_pendingSource->cname);
+    m_senderReportObservedAtNs = m_pendingSource->observedAtNs;
+    m_cnameObservedAtNs = m_pendingSource->observedAtNs;
+    m_pendingSource.reset();
+    if (observedAtNs >= m_senderReportObservedAtNs) {
+        m_evidenceUpdatePending = true;
+    }
 }
 
 void MediaRtcpSenderReportTracker::observeContinuityLoss() noexcept
@@ -48,6 +57,9 @@ void MediaRtcpSenderReportTracker::observeContinuityLoss() noexcept
 ::media::Status MediaRtcpSenderReportTracker::observe(
     const std::vector<MediaRtcpPacket>& packets, int64_t observedAtNs)
 {
+    if (!m_mediaSsrc) {
+        return observePendingSource(packets, observedAtNs);
+    }
     for (const MediaRtcpPacket& packet : packets) {
         if (packet.kind == MediaRtcpPacketKind::SenderReport && packet.senderReport) {
             if (auto status = observeSenderReport(*packet.senderReport, observedAtNs); !status) return status;
@@ -100,6 +112,27 @@ void MediaRtcpSenderReportTracker::observeContinuityLoss() noexcept
         m_senderReportObservedAtNs, m_cnameObservedAtNs, m_generation});
 }
 
+::media::Result<std::optional<MediaRtcpClockEvidence>>
+MediaRtcpSenderReportTracker::takeEvidenceUpdate(int64_t observedAtNs)
+{
+    if (!m_evidenceUpdatePending) {
+        return ::media::Result<std::optional<MediaRtcpClockEvidence>>::success(
+            std::nullopt);
+    }
+    auto current = evidence(observedAtNs);
+    if (!current) {
+        if (current.error().code == ::media::ErrorCode::NotInitialized) {
+            return ::media::Result<std::optional<MediaRtcpClockEvidence>>::success(
+                std::nullopt);
+        }
+        return ::media::Result<std::optional<MediaRtcpClockEvidence>>::failure(
+            current.error());
+    }
+    m_evidenceUpdatePending = false;
+    return ::media::Result<std::optional<MediaRtcpClockEvidence>>::success(
+        std::move(current).value());
+}
+
 uint64_t MediaRtcpSenderReportTracker::generation() const noexcept
 {
     return m_generation;
@@ -114,11 +147,62 @@ void MediaRtcpSenderReportTracker::invalidate() noexcept
 {
     ++m_generation;
     m_mediaSsrc.reset();
+    m_pendingSource.reset();
     m_senderReport.reset();
     m_cname.clear();
     m_lastAcceptedNtp.reset();
     m_senderReportObservedAtNs = 0;
     m_cnameObservedAtNs = 0;
+    m_evidenceUpdatePending = false;
+}
+
+::media::Status MediaRtcpSenderReportTracker::observePendingSource(
+    const std::vector<MediaRtcpPacket>& packets,
+    int64_t observedAtNs)
+{
+    const MediaRtcpSenderReport* report = nullptr;
+    for (const MediaRtcpPacket& packet : packets) {
+        if (packet.kind == MediaRtcpPacketKind::SenderReport &&
+            packet.senderReport) {
+            report = &*packet.senderReport;
+            break;
+        }
+    }
+    if (!report) return ::media::Status::success();
+
+    const std::vector<uint8_t>* cname = nullptr;
+    for (const MediaRtcpPacket& packet : packets) {
+        if (packet.kind != MediaRtcpPacketKind::SourceDescription) continue;
+        for (const MediaRtcpSdesChunk& chunk : packet.sdesChunks) {
+            if (chunk.ssrc != report->ssrc) continue;
+            const auto item = std::find_if(
+                chunk.items.begin(), chunk.items.end(),
+                [](const MediaRtcpSdesItem& value) { return value.type == 1; });
+            if (item == chunk.items.end()) continue;
+            if (item->value.empty()) {
+                invalidate();
+                return invalidEvidence("RTCP CNAME must not be empty");
+            }
+            cname = &item->value;
+            break;
+        }
+        if (cname) break;
+    }
+    if (!cname) return ::media::Status::success();
+    if (m_pendingSource && m_pendingSource->senderReport.ssrc == report->ssrc &&
+        ntpLess(report->ntp, m_pendingSource->senderReport.ntp)) {
+        invalidate();
+        return invalidEvidence("Pending RTCP sender report NTP timestamp regressed");
+    }
+    if (m_pendingSource && m_pendingSource->senderReport.ssrc == report->ssrc &&
+        m_pendingSource->senderReport.ntp == report->ntp &&
+        m_pendingSource->senderReport.rtpTimestamp != report->rtpTimestamp) {
+        invalidate();
+        return invalidEvidence(
+            "Pending RTCP sender report changed RTP timestamp at the same NTP instant");
+    }
+    m_pendingSource = PendingRtcpSource{*report, *cname, observedAtNs};
+    return ::media::Status::success();
 }
 
 ::media::Status MediaRtcpSenderReportTracker::observeSenderReport(
@@ -137,6 +221,7 @@ void MediaRtcpSenderReportTracker::invalidate() noexcept
     m_senderReport = report;
     m_lastAcceptedNtp = report.ntp;
     m_senderReportObservedAtNs = observedAtNs;
+    m_evidenceUpdatePending = true;
     return ::media::Status::success();
 }
 
@@ -158,6 +243,7 @@ void MediaRtcpSenderReportTracker::invalidate() noexcept
     }
     m_cname = cname->value;
     m_cnameObservedAtNs = observedAtNs;
+    m_evidenceUpdatePending = true;
     return ::media::Status::success();
 }
 

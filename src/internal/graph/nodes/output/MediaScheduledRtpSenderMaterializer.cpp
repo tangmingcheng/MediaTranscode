@@ -2,11 +2,10 @@
 
 #include "internal/graph/nodes/mux/ScheduledRtpMuxStreamConfig.h"
 #include "internal/graph/nodes/output/MediaRtpSenderDescriptionBuffer.h"
+#include "internal/graph/nodes/output/MediaScheduledRtpCodecParametersMaterializer.h"
 #include "internal/graph/protocol/sdp/MediaAacLatmSdpCodecDescriptionFactory.h"
 #include "internal/graph/protocol/sdp/MediaH264SdpCodecDescriptionFactory.h"
 #include "internal/graph/protocol/sdp/MediaRtpSdpSessionIdentityMaterializer.h"
-#include "internal/graph/runtime/ffmpeg/FFmpegCodecParametersMaterializer.h"
-#include "internal/graph/utils/MediaCodecNameUtils.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -19,9 +18,6 @@ extern "C" {
 
 namespace media::ffmpeg::graph {
 namespace {
-
-using ParametersResult =
-    ::media::Result<::media::ffmpeg::CodecParametersPtr>;
 
 ::media::Result<MediaRtpUdpLocalPortPolicy> cloneLocalPortPolicy(
     const MediaRtpUdpLocalPortPolicy& source)
@@ -59,42 +55,6 @@ using ParametersResult =
         source.remoteRtcpEndpoint().port(),
         std::move(localPolicy).value(), source.sendBufferBytes(),
         source.maximumDatagramBytes(), source.ioBehavior());
-}
-
-ParametersResult materializeCodecParameters(
-    const AVCodecContext& context,
-    const MediaScheduledRtpPacketizationPlan& packetization)
-{
-    const auto expectedType = packetization.streamKind() ==
-            MediaStreamKind::Video
-        ? AVMEDIA_TYPE_VIDEO
-        : AVMEDIA_TYPE_AUDIO;
-    const std::string codecName = canonicalCodecName(
-        avcodec_get_name(context.codec_id));
-    const AVRational expectedTimeBase{
-        packetization.streamTimeBaseNumerator(),
-        packetization.streamTimeBaseDenominator()};
-    if (context.codec_type != expectedType ||
-        codecName != packetization.codecName() ||
-        av_cmp_q(context.time_base, expectedTimeBase) != 0) {
-        return ParametersResult::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "Runtime encoder metadata does not match planned RTP packetization"));
-    }
-    if (packetization.streamKind() == MediaStreamKind::Audio) {
-        if (!packetization.maximumAccessUnitSamples() ||
-            context.sample_rate != packetization.streamTimeBaseDenominator() ||
-            context.frame_size != *packetization.maximumAccessUnitSamples()) {
-            return ParametersResult::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "Runtime audio encoder metadata does not match planned RTP access units"));
-        }
-    } else if (packetization.maximumAccessUnitSamples()) {
-        return ParametersResult::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "Runtime video RTP packetization rejects audio sample limits"));
-    }
-    return FFmpegCodecParametersMaterializer::fromContext(context);
 }
 
 ::media::Result<MediaRtpSdpMediaDescription> materializeMediaDescription(
@@ -251,7 +211,7 @@ MediaScheduledRtpSenderMaterializer::materialize(
     const MediaSharedNtpEpoch& sharedNtpEpoch,
     const MediaPlaybackEpoch& playbackEpoch)
 {
-    auto parameters = materializeCodecParameters(
+    auto parameters = MediaScheduledRtpCodecParametersMaterializer::materialize(
         codecContext, outputPlan.packetization);
     if (!parameters) {
         return ::media::Result<

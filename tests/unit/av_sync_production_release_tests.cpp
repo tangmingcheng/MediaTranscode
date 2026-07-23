@@ -21,6 +21,10 @@
 #include "internal/graph/runtime/buffer/MediaSourceClockStateBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/sync/startup/MediaAvStartupVideoPreparationCapability.h"
+#include "internal/graph/sync/startup/MediaAvStartupVideoPreparationState.h"
+#include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
+#include "internal/graph/sync/MediaCanonicalLineage.h"
 
 #include <chrono>
 #include <atomic>
@@ -132,10 +136,13 @@ struct BinderFixture final {
     MediaNodeId firstActivatedSink;
     MediaNodeId secondActivatedSink;
     MediaNodeId releaseSink;
+    MediaNodeId preparationSink = MediaNodeId::invalid();
+    std::shared_ptr<MediaAvStartupVideoPreparationState> preparationState;
     std::string firstActivatedPort = "in";
 };
 
-BinderFixture binderFixture(bool threadedLifecycleTarget = false)
+BinderFixture binderFixture(bool threadedLifecycleTarget = false,
+                            bool preactivation = false)
 {
     BinderFixture fixture;
     fixture.scheduler = fixture.executable.graph.addNode(
@@ -155,6 +162,13 @@ BinderFixture binderFixture(bool threadedLifecycleTarget = false)
         MediaNodeKind::DebugDump, "second-activated-sink");
     fixture.releaseSink = fixture.executable.graph.addNode(
         MediaNodeKind::DebugDump, "release-sink");
+    if (preactivation) {
+        fixture.preparationSink = fixture.executable.graph.addNode(
+            MediaNodeKind::DebugDump, "preparation-sink");
+        auto state = MediaAvStartupVideoPreparationState::create(
+            MediaAvSyncGroupKey("task4-group"));
+        if (state) fixture.preparationState = std::move(state).value();
+    }
     fixture.executable.graph.setNodeOption(
         fixture.scheduler, "av_scheduler.sync_group", "task4-group");
     fixture.executable.graph.setNodeOption(
@@ -164,6 +178,9 @@ BinderFixture binderFixture(bool threadedLifecycleTarget = false)
     fixture.executable.graph.setNodeOption(
         fixture.sequencer,
         "activated_startup_release_sequencer.sync_group", "task4-group");
+    fixture.executable.graph.setNodeOption(
+        fixture.sequencer,
+        "activated_startup_release_sequencer.output_lead_ns", "100000000");
     fixture.executable.graph.addOutputPort(
         fixture.source, "release", MediaStreamKind::Metadata,
         MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
@@ -173,6 +190,14 @@ BinderFixture binderFixture(bool threadedLifecycleTarget = false)
     fixture.executable.graph.addOutputPort(
         fixture.binder, "transaction", MediaStreamKind::Metadata,
         MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+    if (preactivation) {
+        fixture.executable.graph.addOutputPort(
+            fixture.binder, "preparation", MediaStreamKind::Metadata,
+            MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+        fixture.executable.graph.addInputPort(
+            fixture.preparationSink, "in", MediaStreamKind::Metadata,
+            MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+    }
     fixture.executable.graph.addInputPort(
         fixture.sequencer, "transaction", MediaStreamKind::Metadata,
         MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
@@ -207,6 +232,11 @@ BinderFixture binderFixture(bool threadedLifecycleTarget = false)
     fixture.executable.graph.connect(
         fixture.binder, "transaction", fixture.sequencer, "transaction",
         "transaction", one);
+    if (preactivation) {
+        fixture.executable.graph.connect(
+            fixture.binder, "preparation", fixture.preparationSink, "in",
+            "preparation", one);
+    }
     fixture.executable.graph.connect(
         fixture.sequencer, "activated", fixture.firstActivatedSink,
         fixture.firstActivatedPort,
@@ -241,7 +271,9 @@ BinderFixture binderFixture(bool threadedLifecycleTarget = false)
             "scheduler-output", one);
     }
     fixture.executable.avSyncBinding.emplace(MediaAvSyncRuntimeBinding{
-        MediaAvSyncGroupKey("task4-group"), completePlan(), transitionPlan()});
+        MediaAvSyncGroupKey("task4-group"), completePlan(), transitionPlan(),
+        MediaAvSyncBindingAssemblyMode::ComponentCore,
+        fixture.preparationState});
     return fixture;
 }
 
@@ -314,6 +346,189 @@ void testActivationReleaseTransactionPreservesReferences(TestContext& ctx)
     }
 }
 
+void testPreparationPrefixIsNotReleasedTwiceAfterActivation(TestContext& ctx)
+{
+    MediaGraph graph;
+    const auto preparationSource = graph.addNode(
+        MediaNodeKind::DebugDump, "preparation-source");
+    const auto boundSource = graph.addNode(MediaNodeKind::DebugDump, "bound-source");
+    const auto extractorId = graph.addNode(
+        MediaNodeKind::AvBoundReleaseExtractor, "extractor");
+    const auto videoSink = graph.addNode(MediaNodeKind::DebugDump, "video-sink");
+    const auto audioSink = graph.addNode(MediaNodeKind::DebugDump, "audio-sink");
+    graph.addOutputPort(preparationSource, "out", MediaStreamKind::Metadata,
+                        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+    graph.addOutputPort(boundSource, "out", MediaStreamKind::Metadata,
+                        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+    graph.addInputPort(extractorId, "preparation", MediaStreamKind::Metadata,
+                       MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+    graph.addInputPort(extractorId, "bound_release", MediaStreamKind::Metadata,
+                       MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+    graph.addOutputPort(extractorId, "video", MediaStreamKind::Video,
+                        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+    graph.addOutputPort(extractorId, "audio", MediaStreamKind::Audio,
+                        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+    graph.addInputPort(videoSink, "in", MediaStreamKind::Video,
+                       MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+    graph.addInputPort(audioSink, "in", MediaStreamKind::Audio,
+                       MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(8);
+    const auto videoPolicy = MediaGraphBuildSupport::blockingQueuePolicy(1);
+    graph.connect(preparationSource, "out", extractorId, "preparation",
+                  "preparation", policy);
+    graph.connect(boundSource, "out", extractorId, "bound_release",
+                  "bound", policy);
+    graph.connect(extractorId, "video", videoSink, "in", "video", videoPolicy);
+    graph.connect(extractorId, "audio", audioSink, "in", "audio", policy);
+    MediaGraphExecutionContext execution;
+    EXPECT_TRUE(ctx, execution.compile(graph));
+
+    auto state = MediaAvStartupVideoPreparationState::create(
+        MediaAvSyncGroupKey("task4-group"));
+    EXPECT_TRUE(ctx, state);
+    if (!state) return;
+    auto feed = MediaAvStartupVideoPreparationCapability::issue(
+        state.value(), MediaAvStartupVideoPreparationRole::ExtractorFeed);
+    EXPECT_TRUE(ctx, feed);
+    if (!feed) return;
+    MediaAvBoundReleaseExtractorNode extractor(
+        extractorId, std::move(feed).value());
+    EXPECT_TRUE(ctx, extractor.start(execution));
+
+    const auto unit = [] { return makeMediaBufferRef<MediaAvStartupClockBuffer>(ms(1)); };
+    const MediaBufferRef video0 = unit();
+    const MediaBufferRef video1 = unit();
+    const MediaBufferRef video2 = unit();
+    auto packet = ::media::ffmpeg::makePacket();
+    EXPECT_TRUE(ctx, packet != nullptr);
+    if (!packet) return;
+    packet->size = 1;
+    auto rawAudio = FFmpegBufferFactory::wrapPacket(
+        std::move(packet), MediaStreamKind::Audio, std::nullopt);
+    EXPECT_TRUE(ctx, rawAudio);
+    if (!rawAudio) return;
+    auto audioLineage = std::make_shared<const MediaCanonicalLineage>(
+        MediaCanonicalLineage{
+            ms(10), std::nullopt, ms(10),
+            MediaDecodeOrderMode::PresentationOrderNoReorder,
+            "preparation-audio", MediaSourceAccessUnitSequence(1),
+            MediaTimeMappingConfidence::Locked, epoch().generation});
+    auto canonicalAudio = MediaCanonicalAccessUnitBuffer::create(
+        rawAudio.value(), std::move(audioLineage));
+    EXPECT_TRUE(ctx, canonicalAudio);
+    if (!canonicalAudio) return;
+    const MediaBufferRef audio0 = std::move(canonicalAudio).value();
+    auto releaseResult = MediaAvStartupReleaseBuffer::create(
+        MediaAvSyncGroupKey("task4-group"),
+        MediaAvStartupReleaseKind::InitialAtomicRelease,
+        epoch(), origin(),
+        {{video0, 0}, {video1, 0}, {video2, 0}}, {{audio0, 0}});
+    EXPECT_TRUE(ctx, releaseResult);
+    if (!releaseResult) return;
+    auto transactionResult = MediaStartupReleaseTransactionBuffer::create(
+        releaseResult.value());
+    EXPECT_TRUE(ctx, transactionResult);
+    if (!transactionResult) return;
+    auto* preparationInput = execution.findInputChannel(
+        extractorId, "preparation");
+    auto* boundInput = execution.findInputChannel(extractorId, "bound_release");
+    auto* videoOutput = execution.findInputChannel(videoSink, "in");
+    auto* audioOutput = execution.findInputChannel(audioSink, "in");
+    EXPECT_TRUE(ctx, preparationInput && boundInput && videoOutput && audioOutput);
+    if (!preparationInput || !boundInput || !videoOutput || !audioOutput) return;
+    EXPECT_TRUE(ctx, preparationInput->push(transactionResult.value()));
+    EXPECT_TRUE(ctx, extractor.process(execution));
+    MediaBufferRef observed;
+    EXPECT_TRUE(ctx, videoOutput->tryPop(observed));
+    EXPECT_TRUE(ctx, observed == video0);
+    EXPECT_FALSE(ctx, audioOutput->tryPop(observed));
+    const auto* transaction = dynamic_cast<const MediaStartupReleaseTransactionBuffer*>(
+        transactionResult.value().get());
+    EXPECT_TRUE(ctx, transaction != nullptr);
+    if (!transaction) return;
+    const std::span<const MediaBufferRef> noPreparedOutputs;
+    const std::array<MediaAtomicOutputBatch, 1> readinessBatches{
+        MediaAtomicOutputBatch{videoOutput, noPreparedOutputs}};
+    auto filterReservation = MediaReservedOutputTransaction::reserve(
+        "Extractor prefix race filter readiness", readinessBatches);
+    EXPECT_TRUE(ctx, filterReservation && filterReservation.value());
+    if (!filterReservation || !filterReservation.value()) return;
+
+    const MediaBufferRef backpressure = unit();
+    EXPECT_TRUE(ctx, videoOutput->push(backpressure));
+    const auto blocked = extractor.process(execution);
+    EXPECT_TRUE(ctx, blocked &&
+                         blocked.value().state == MediaNodeProcessState::Waiting);
+    EXPECT_EQ(ctx, state.value()->snapshot().committedVideoUnits,
+              std::size_t{1});
+    EXPECT_TRUE(ctx, state.value()->markFilterReady(
+                         epoch().generation, transaction->releaseIdentity(),
+                         filterReservation.value()->handle()));
+    EXPECT_TRUE(ctx, videoOutput->tryPop(observed));
+    EXPECT_TRUE(ctx, observed == backpressure);
+    EXPECT_TRUE(ctx, extractor.process(execution));
+    EXPECT_TRUE(ctx, videoOutput->tryPop(observed));
+    EXPECT_TRUE(ctx, observed == video1);
+    EXPECT_FALSE(ctx, videoOutput->tryPop(observed));
+    EXPECT_EQ(ctx, state.value()->snapshot().committedVideoUnits,
+              std::size_t{2});
+    EXPECT_TRUE(ctx, extractor.process(execution));
+    EXPECT_TRUE(ctx, state.value()->snapshot().extractorOutputsReserved);
+    EXPECT_TRUE(ctx, state.value()->authorizeRelease(
+                         epoch().generation, transaction->releaseIdentity(),
+                         [] { return ::media::Status::success(); }));
+    EXPECT_TRUE(ctx, extractor.process(execution));
+    EXPECT_TRUE(ctx, videoOutput->tryPop(observed));
+    EXPECT_TRUE(ctx, observed == video2);
+    EXPECT_FALSE(ctx, videoOutput->tryPop(observed));
+    EXPECT_TRUE(ctx, audioOutput->tryPop(observed));
+    EXPECT_FALSE(ctx, audioOutput->tryPop(observed));
+    EXPECT_TRUE(ctx, boundInput->push(transactionResult.value()));
+    EXPECT_TRUE(ctx, extractor.process(execution));
+    EXPECT_FALSE(ctx, videoOutput->tryPop(observed));
+    EXPECT_FALSE(ctx, audioOutput->tryPop(observed));
+
+    auto activeRelease = MediaAvStartupReleaseBuffer::create(
+        MediaAvSyncGroupKey("task4-group"),
+        MediaAvStartupReleaseKind::ActiveEpochPassThrough,
+        epoch(), origin(), {{video0, 0}}, {{audio0, 0}});
+    EXPECT_TRUE(ctx, activeRelease);
+    if (!activeRelease) return;
+    auto activeTransaction = MediaStartupReleaseTransactionBuffer::create(
+        activeRelease.value());
+    EXPECT_TRUE(ctx, activeTransaction);
+    if (!activeTransaction) return;
+    EXPECT_TRUE(ctx, boundInput->push(activeTransaction.value()));
+    EXPECT_TRUE(ctx, extractor.process(execution));
+    EXPECT_TRUE(ctx, videoOutput->tryPop(observed));
+    EXPECT_TRUE(ctx, observed == video0);
+    EXPECT_FALSE(ctx, videoOutput->tryPop(observed));
+    EXPECT_TRUE(ctx, audioOutput->tryPop(observed));
+    EXPECT_FALSE(ctx, audioOutput->tryPop(observed));
+
+    const auto flush = makeMediaBufferRef<MediaControlBuffer>(
+        MediaControlBufferKind::Flush);
+    EXPECT_TRUE(ctx, boundInput->push(flush));
+    EXPECT_TRUE(ctx, extractor.process(execution));
+    EXPECT_TRUE(ctx, videoOutput->tryPop(observed));
+    EXPECT_TRUE(ctx, observed == flush);
+    EXPECT_TRUE(ctx, audioOutput->tryPop(observed));
+    EXPECT_TRUE(ctx, observed == flush);
+
+    const auto eof = makeMediaBufferRef<MediaControlBuffer>(
+        MediaControlBufferKind::Eof);
+    EXPECT_TRUE(ctx, boundInput->push(eof));
+    const auto finished = extractor.process(execution);
+    EXPECT_TRUE(ctx, finished &&
+                         finished.value().state ==
+                             MediaNodeProcessState::Finished);
+    EXPECT_TRUE(ctx, videoOutput->tryPop(observed));
+    EXPECT_TRUE(ctx, observed == eof);
+    EXPECT_TRUE(ctx, audioOutput->tryPop(observed));
+    EXPECT_TRUE(ctx, observed == eof);
+    EXPECT_TRUE(ctx, extractor.stop(execution));
+}
+
 struct RuntimeFixture final {
     BinderFixture model;
     MediaGraphRuntime runtime;
@@ -325,13 +540,18 @@ struct RuntimeFixture final {
     MediaChannel* firstEvent = nullptr;
     MediaChannel* secondEvent = nullptr;
     MediaChannel* boundRelease = nullptr;
+    MediaChannel* preparation = nullptr;
+    std::shared_ptr<MediaAvStartupVideoPreparationState> preparationState;
 };
 
 std::unique_ptr<RuntimeFixture> startFixture(
-    TestContext& ctx, bool threadedLifecycleTarget = false)
+    TestContext& ctx,
+    bool threadedLifecycleTarget = false,
+    bool preactivation = false)
 {
     auto fixture = std::make_unique<RuntimeFixture>();
-    fixture->model = binderFixture(threadedLifecycleTarget);
+    fixture->model = binderFixture(threadedLifecycleTarget, preactivation);
+    fixture->preparationState = fixture->model.preparationState;
     EXPECT_TRUE(ctx, fixture->runtime.compile(std::move(fixture->model.executable)));
     EXPECT_TRUE(ctx, fixture->runtime.registerDefaultRuntimeNodes());
     fixture->binder = dynamic_cast<MediaPlaybackEpochBinderNode*>(
@@ -352,11 +572,74 @@ std::unique_ptr<RuntimeFixture> startFixture(
         fixture->model.secondActivatedSink, "in");
     fixture->boundRelease = fixture->runtime.context().findInputChannel(
         fixture->model.releaseSink, "in");
+    if (fixture->model.preparationSink.isValid()) {
+        fixture->preparation = fixture->runtime.context().findInputChannel(
+            fixture->model.preparationSink, "in");
+    }
     EXPECT_TRUE(ctx, fixture->binder && fixture->sequencer && fixture->group &&
                          fixture->releaseInput && fixture->transaction &&
                          fixture->firstEvent && fixture->secondEvent &&
                          fixture->boundRelease);
     return fixture;
+}
+
+void testInitialActivationWaitsForVideoFilterPreparation(TestContext& ctx)
+{
+    auto fixture = startFixture(ctx, false, true);
+    EXPECT_TRUE(ctx, fixture->preparationState && fixture->preparation);
+    if (!fixture->preparationState || !fixture->preparation ||
+        !fixture->binder || !fixture->sequencer) return;
+    auto initial = release(ctx);
+    EXPECT_TRUE(ctx, fixture->releaseInput->push(initial));
+    EXPECT_TRUE(ctx, fixture->binder->process(fixture->runtime.context()));
+    auto waiting = fixture->sequencer->process(fixture->runtime.context());
+    EXPECT_TRUE(ctx, waiting &&
+                         waiting.value().state == MediaNodeProcessState::Waiting);
+    EXPECT_EQ(ctx, fixture->group->lifecycleState(),
+              MediaAvSyncGroupRuntime::LifecycleState::AwaitingEpoch);
+    MediaBufferRef preparation;
+    EXPECT_TRUE(ctx, fixture->preparation->tryPop(preparation));
+    const auto* transaction = dynamic_cast<const MediaStartupReleaseTransactionBuffer*>(
+        preparation.get());
+    EXPECT_TRUE(ctx, transaction != nullptr);
+    if (!transaction) return;
+    EXPECT_TRUE(ctx, fixture->preparationState->begin(
+                         epoch().generation, transaction->releaseIdentity(), 1));
+    const std::span<const MediaBufferRef> noOutputs;
+    const std::array<MediaAtomicOutputBatch, 1> reservationBatches{
+        MediaAtomicOutputBatch{fixture->preparation, noOutputs}};
+    auto filterReservation = MediaReservedOutputTransaction::reserve(
+        "Sequencer filter readiness", reservationBatches);
+    auto extractorReservation = MediaReservedOutputTransaction::reserve(
+        "Sequencer extractor readiness", reservationBatches);
+    EXPECT_TRUE(ctx, filterReservation && filterReservation.value() &&
+                         extractorReservation && extractorReservation.value());
+    if (!filterReservation || !filterReservation.value() ||
+        !extractorReservation || !extractorReservation.value()) return;
+    EXPECT_TRUE(ctx, fixture->preparationState->markFilterReady(
+                         epoch().generation, transaction->releaseIdentity(),
+                         filterReservation.value()->handle()));
+    EXPECT_TRUE(ctx, fixture->preparationState->registerExtractorOutputs(
+                         epoch().generation, transaction->releaseIdentity(),
+                         extractorReservation.value()->handle()));
+    const auto anchored = fixture->sequencer->process(
+        fixture->runtime.context());
+    EXPECT_TRUE(ctx, anchored &&
+                         anchored.value().state == MediaNodeProcessState::Waiting);
+    const auto anchor = fixture->preparationState->snapshot();
+    EXPECT_TRUE(ctx, anchor.anchoredEpoch.has_value());
+    EXPECT_TRUE(ctx, anchor.anchoredAudioOrigin.has_value());
+    if (!anchor.anchoredEpoch || !anchor.anchoredAudioOrigin) return;
+    EXPECT_TRUE(ctx, anchor.anchoredEpoch->masterRelease > epoch().masterRelease);
+    EXPECT_EQ(ctx, anchor.anchoredAudioOrigin->masterRelease,
+              anchor.anchoredEpoch->masterRelease);
+    EXPECT_TRUE(ctx, fixture->preparationState->acknowledgeExtractorReanchor(
+                         epoch().generation, transaction->releaseIdentity()));
+    EXPECT_TRUE(ctx, fixture->sequencer->process(fixture->runtime.context()));
+    EXPECT_EQ(ctx, fixture->group->lifecycleState(),
+              MediaAvSyncGroupRuntime::LifecycleState::Active);
+    EXPECT_EQ(ctx, fixture->preparationState->snapshot().phase,
+              MediaAvStartupVideoPreparationPhase::ReleaseCommitted);
 }
 
 void testOpenEmptyRequiredInputsRemainWaiting(TestContext& ctx)
@@ -556,23 +839,28 @@ void testActivePassThroughDoesNotReactivate(TestContext& ctx)
     EXPECT_TRUE(ctx, fixture->secondEvent->tryPop(ignored));
     EXPECT_TRUE(ctx, fixture->boundRelease->tryPop(ignored));
 
-    const auto payload = makeMediaBufferRef<MediaAvStartupClockBuffer>(ms(2));
-    auto passThrough = MediaAvStartupReleaseBuffer::create(
-        MediaAvSyncGroupKey("task4-group"),
-        MediaAvStartupReleaseKind::ActiveEpochPassThrough,
-        epoch(), origin(), {{payload, 0}}, {});
-    EXPECT_TRUE(ctx, passThrough);
-    EXPECT_TRUE(ctx, fixture->releaseInput->push(passThrough.value()));
-    EXPECT_TRUE(ctx, fixture->binder->process(fixture->runtime.context()));
-    EXPECT_TRUE(ctx, fixture->sequencer->process(fixture->runtime.context()));
-    MediaBufferRef first;
-    MediaBufferRef second;
-    MediaBufferRef forwarded;
-    EXPECT_TRUE(ctx, fixture->firstEvent->tryPop(first));
-    EXPECT_TRUE(ctx, fixture->secondEvent->tryPop(second));
-    EXPECT_TRUE(ctx, fixture->boundRelease->tryPop(forwarded));
-    EXPECT_TRUE(ctx, first == second);
-    EXPECT_TRUE(ctx, forwarded == passThrough.value());
+    for (std::int64_t time = 2; time <= 3; ++time) {
+        const auto payload = makeMediaBufferRef<MediaAvStartupClockBuffer>(
+            ms(time));
+        auto passThrough = MediaAvStartupReleaseBuffer::create(
+            MediaAvSyncGroupKey("task4-group"),
+            MediaAvStartupReleaseKind::ActiveEpochPassThrough,
+            epoch(), origin(), {{payload, 0}}, {});
+        EXPECT_TRUE(ctx, passThrough);
+        if (!passThrough) return;
+        EXPECT_TRUE(ctx, fixture->releaseInput->push(passThrough.value()));
+        EXPECT_TRUE(ctx, fixture->binder->process(fixture->runtime.context()));
+        EXPECT_TRUE(ctx, fixture->sequencer->process(fixture->runtime.context()));
+        MediaBufferRef forwarded;
+        EXPECT_TRUE(ctx, fixture->boundRelease->tryPop(forwarded));
+        EXPECT_TRUE(ctx, forwarded == passThrough.value());
+        EXPECT_EQ(ctx, fixture->firstEvent->size(), static_cast<std::size_t>(0));
+        EXPECT_EQ(ctx, fixture->secondEvent->size(), static_cast<std::size_t>(0));
+        EXPECT_EQ(ctx, fixture->firstEvent->metrics().pushed,
+                  static_cast<std::uint64_t>(1));
+        EXPECT_EQ(ctx, fixture->secondEvent->metrics().pushed,
+                  static_cast<std::uint64_t>(1));
+    }
 }
 
 void testClosedSequencerTargetFailsBeforeActivation(TestContext& ctx)
@@ -727,6 +1015,32 @@ void testRtpAdapterPublishesGenericLockedState(TestContext& ctx)
         output.get());
     EXPECT_TRUE(ctx, state &&
                          state->readiness() == MediaSourceClockReadiness::Locked &&
+                         state->generation() == 1);
+
+    MediaRtpLockedClockGroup repeatedLocked{
+        ms(10), {'c'}, calibration, calibration};
+    auto repeatedSnapshot = makeMediaBufferRef<MediaRtpClockGroupBuffer>(
+        MediaRtpClockGroupSnapshot{
+            MediaRtpClockGroupState::Locked, 1,
+            std::move(repeatedLocked)});
+    EXPECT_TRUE(ctx, execution.findInputChannel(adapter, "clock")->push(
+                         repeatedSnapshot));
+    const auto repeated = node.process(execution);
+    EXPECT_TRUE(ctx, repeated &&
+                         repeated.value().state == MediaNodeProcessState::Progress);
+    EXPECT_EQ(ctx, execution.findInputChannel(sink, "state")->size(),
+              std::size_t{0});
+
+    auto degradedSnapshot = makeMediaBufferRef<MediaRtpClockGroupBuffer>(
+        MediaRtpClockGroupSnapshot{
+            MediaRtpClockGroupState::Degraded, 1, std::nullopt});
+    EXPECT_TRUE(ctx, execution.findInputChannel(adapter, "clock")->push(
+                         degradedSnapshot));
+    EXPECT_TRUE(ctx, node.process(execution));
+    EXPECT_TRUE(ctx, execution.findInputChannel(sink, "state")->tryPop(output));
+    state = dynamic_cast<const MediaSourceClockStateBuffer*>(output.get());
+    EXPECT_TRUE(ctx, state &&
+                         state->readiness() == MediaSourceClockReadiness::Degraded &&
                          state->generation() == 1);
 }
 
@@ -1118,8 +1432,10 @@ int main()
     testTaskFourRuntimeKindsAreAppendOnly(ctx);
     testActivatedEventIsCompleteAndImmutable(ctx);
     testActivationReleaseTransactionPreservesReferences(ctx);
+    testPreparationPrefixIsNotReleasedTwiceAfterActivation(ctx);
     testControlTransactionPreservesExactReference(ctx);
     testOpenEmptyRequiredInputsRemainWaiting(ctx);
+    testInitialActivationWaitsForVideoFilterPreparation(ctx);
     testRequiredInputTerminalStateFailsPermanently(ctx);
     testEofTraversesBinderAndSequencerWithoutEpochActivation(ctx);
     testEofReleaseIsAtomicAcrossBackpressure(ctx);

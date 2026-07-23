@@ -4,6 +4,7 @@
 #include "internal/graph/builder/MediaAudioPlanOptionApplier.h"
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
 #include "internal/graph/builder/segments/MediaAudioEncodeBranchNodes.h"
+#include "internal/graph/model/MediaAtomicOutputPolicyContract.h"
 #include "internal/graph/sync/lineage/MediaAudioLineageIdentities.h"
 
 namespace media::ffmpeg::graph {
@@ -165,10 +166,6 @@ MediaAudioEncodeBranchNodes addAudioEncodeNodes(MediaGraph& graph,
                                       const MediaAudioEncodeBranchOptions& options,
                                       const MediaAudioEncodeBranchNodes& nodes)
 {
-    const MediaPortId audioPort = graph.addOutputPort(options.packetSourceNode, options.packetSourcePort, MediaStreamKind::Audio, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, false, true);
-    if (auto status = MediaGraphBuildSupport::requirePort(audioPort, owner, options.packetSourcePort); !status) return status;
-    graph.setPortFormatDescriptor(audioPort, MediaGraphBuildSupport::streamIndexDescriptor(MediaStreamKind::Audio, options.plan.sourceStreamIndex));
-
     if (*options.normalizePackets) {
         if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph, owner, nodes.packetNormalize, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext, true, false); !status) return status;
         if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph, owner, nodes.packetNormalize, "packet", MediaStreamKind::Audio, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true); !status) return status;
@@ -242,19 +239,19 @@ MediaAudioEncodeBranchNodes addAudioEncodeNodes(MediaGraph& graph,
     }
     if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.codecResolver, "encoder", nodes.resample, "codec", options.prefix + ".codec_resolver.encoder -> resample.codec", policies.metadata); !status) return status;
     if (nodes.startupTrim.isValid()) {
-        if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.decode, "frame", nodes.startupTrim, "frame", options.prefix + ".decode.frame -> startup_trim.frame", policies.frame); !status) return status;
-        if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.startupTrim, "frame", nodes.driftController, "audio", options.prefix + ".startup_trim.frame -> drift_controller.audio", policies.frame); !status) return status;
-        if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.driftController, "audio", nodes.resample, "frame", options.prefix + ".drift_controller.audio -> resample.frame", policies.frame); !status) return status;
-    } else if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.decode, "frame", nodes.resample, "frame", options.prefix + ".decode.frame -> resample.frame", policies.frame); !status) return status;
+        if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.decode, "frame", nodes.startupTrim, "frame", options.prefix + ".decode.frame -> startup_trim.frame", policies.audioFrame); !status) return status;
+        if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.startupTrim, "frame", nodes.driftController, "audio", options.prefix + ".startup_trim.frame -> drift_controller.audio", policies.audioFrame); !status) return status;
+        if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.driftController, "audio", nodes.resample, "frame", options.prefix + ".drift_controller.audio -> resample.frame", policies.audioDriftTransaction); !status) return status;
+    } else if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.decode, "frame", nodes.resample, "frame", options.prefix + ".decode.frame -> resample.frame", policies.audioFrame); !status) return status;
     if (*options.correctionMode == MediaAudioCorrectionExecutionMode::ExternalCorrectionRequired) {
         if (auto status = MediaGraphBuildSupport::connectChecked(
                 graph, owner, nodes.driftController, "correction", nodes.resample,
                 "correction", options.prefix +
                     ".drift_controller.correction -> resample.correction",
-                policies.metadata); !status) return status;
+                policies.audioDriftTransaction); !status) return status;
     }
     if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.codecResolver, "encoder", nodes.encode, "codec", options.prefix + ".codec_resolver.encoder -> encode.codec", policies.metadata); !status) return status;
-    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.resample, "frame", nodes.encode, "frame", options.prefix + ".resample.frame -> encode.frame", policies.frame); !status) return status;
+    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.resample, "frame", nodes.encode, "frame", options.prefix + ".resample.frame -> encode.frame", policies.audioFrame); !status) return status;
     if (nodes.canonicalizer.isValid()) {
         if (auto status = MediaGraphBuildSupport::connectChecked(
                 graph, owner, nodes.encode, "packet", nodes.canonicalizer, "encoded",
@@ -267,62 +264,77 @@ MediaAudioEncodeBranchNodes addAudioEncodeNodes(MediaGraph& graph,
 
 } // namespace
 
-::media::Result<MediaAudioEncodeBranchResult> MediaAudioEncodeBranchBuilder::build(
+::media::Result<MediaEncodedBranchEndpoints> MediaAudioEncodeBranchBuilder::build(
     MediaGraph& graph,
     const MediaAudioEncodeBranchOptions& options)
 {
     if (options.plan.branchMode != MediaBranchMode::TranscodeFrame) {
-        return ::media::Result<MediaAudioEncodeBranchResult>::failure(
+        return ::media::Result<MediaEncodedBranchEndpoints>::failure(
             ::media::ErrorInfo::unsupported("MediaAudioEncodeBranchBuilder requires transcode_frame audio branch"));
     }
     if (options.plan.sourceStreamIndex < 0) {
-        return ::media::Result<MediaAudioEncodeBranchResult>::failure(
+        return ::media::Result<MediaEncodedBranchEndpoints>::failure(
             ::media::ErrorInfo::invalidArgument("MediaAudioEncodeBranchBuilder requires planned audio source stream index"));
     }
     if (!options.plan.resolvedOutput ||
         options.plan.resolvedOutput->branchMode() != MediaBranchMode::TranscodeFrame) {
-        return ::media::Result<MediaAudioEncodeBranchResult>::failure(
+        return ::media::Result<MediaEncodedBranchEndpoints>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "MediaAudioEncodeBranchBuilder requires complete resolved audio output"));
     }
     if (!options.normalizePackets.has_value()) {
-        return ::media::Result<MediaAudioEncodeBranchResult>::failure(
+        return ::media::Result<MediaEncodedBranchEndpoints>::failure(
             ::media::ErrorInfo::invalidArgument("MediaAudioEncodeBranchBuilder requires explicit packet normalization policy"));
     }
+    if (auto status = MediaGraphBuildSupport::requirePacketOutputEndpoint(
+            graph, owner,
+            MediaEndpoint{options.packetSourceNode, options.packetSourcePort},
+            MediaStreamKind::Audio, MediaEdgeKind::InputPacket,
+            options.plan.sourceStreamIndex); !status) {
+        return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
+    }
     if (auto status = validateLineageOptions(options); !status) {
-        return ::media::Result<MediaAudioEncodeBranchResult>::failure(status.error());
+        return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     }
     if (auto status = validateCorrectionOptions(options); !status) {
-        return ::media::Result<MediaAudioEncodeBranchResult>::failure(status.error());
+        return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
+    }
+    if (*options.correctionMode ==
+            MediaAudioCorrectionExecutionMode::ExternalCorrectionRequired &&
+        !MediaAtomicOutputPolicyContract::accepts(
+            options.edgePolicies.audioDriftTransaction)) {
+        return ::media::Result<MediaEncodedBranchEndpoints>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "synchronized audio correction requires a complete planned atomic output policy"));
     }
 
     const MediaAudioEncodeBranchNodes nodes = addAudioEncodeNodes(
         graph, options.prefix, *options.normalizePackets, *options.lineageMode);
     if (auto status = applyLineageStageOptions(
-            graph, options, nodes.decode, MediaAudioDecodeLineageIdentity); !status) return ::media::Result<MediaAudioEncodeBranchResult>::failure(status.error());
+            graph, options, nodes.decode, MediaAudioDecodeLineageIdentity); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     if (auto status = applyLineageStageOptions(
-            graph, options, nodes.resample, MediaAudioResampleLineageIdentity); !status) return ::media::Result<MediaAudioEncodeBranchResult>::failure(status.error());
+            graph, options, nodes.resample, MediaAudioResampleLineageIdentity); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     if (auto status = applyLineageStageOptions(
-            graph, options, nodes.encode, MediaAudioEncodeLineageIdentity); !status) return ::media::Result<MediaAudioEncodeBranchResult>::failure(status.error());
+            graph, options, nodes.encode, MediaAudioEncodeLineageIdentity); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     if (nodes.startupTrim.isValid()) {
         if (auto status = applyLineageStageOptions(
                 graph, options, nodes.startupTrim,
-                MediaAudioStartupTrimLineageIdentity); !status) return ::media::Result<MediaAudioEncodeBranchResult>::failure(status.error());
+                MediaAudioStartupTrimLineageIdentity); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     }
     if (nodes.driftController.isValid()) {
         if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
                 graph, owner, nodes.driftController,
                 "audio_drift_controller.sync_group",
-                options.syncGroup->value()); !status) return ::media::Result<MediaAudioEncodeBranchResult>::failure(status.error());
+                options.syncGroup->value()); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     }
     if (auto status = MediaAudioPlanOptionApplier::applySelectedPlan(
-            graph, nodes, options.plan, *options.normalizePackets); !status) return ::media::Result<MediaAudioEncodeBranchResult>::failure(status.error());
-    if (auto status = applyCorrectionOptions(graph, options, nodes.resample); !status) return ::media::Result<MediaAudioEncodeBranchResult>::failure(status.error());
-    if (auto status = addEncodePorts(graph, options, nodes); !status) return ::media::Result<MediaAudioEncodeBranchResult>::failure(status.error());
+            graph, nodes, options.plan, *options.normalizePackets); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
+    if (auto status = applyCorrectionOptions(graph, options, nodes.resample); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
+    if (auto status = addEncodePorts(graph, options, nodes); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     if (auto status = connectEncodePorts(graph, options, nodes); !status) {
-        return ::media::Result<MediaAudioEncodeBranchResult>::failure(status.error());
+        return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     }
-    return ::media::Result<MediaAudioEncodeBranchResult>::success({
+    return ::media::Result<MediaEncodedBranchEndpoints>::success({
         {nodes.encode, "codec"},
         nodes.canonicalizer.isValid()
             ? MediaEndpoint{nodes.canonicalizer, "canonical"}

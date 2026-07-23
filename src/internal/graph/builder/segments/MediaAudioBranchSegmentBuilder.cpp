@@ -7,7 +7,7 @@
 namespace media::ffmpeg::graph {
 namespace {
 
-::media::Result<MediaAudioBranchSegmentResult> buildPlannedAudioBranch(
+::media::Result<MediaEncodedBranchEndpoints> buildPlannedAudioBranch(
     MediaGraph& graph,
     const MediaAudioBranchSegmentOptions& options)
 {
@@ -17,47 +17,47 @@ namespace {
         auto copy = MediaAudioPacketCopyBranchBuilder::build(
             graph, makeAudioPacketCopyBranchOptions(options));
         if (!copy) {
-            return ::media::Result<MediaAudioBranchSegmentResult>::failure(
+            return ::media::Result<MediaEncodedBranchEndpoints>::failure(
                 copy.error());
         }
-        return ::media::Result<MediaAudioBranchSegmentResult>::success(
-            {true, copy.value().codec, copy.value().packet});
+        return copy;
     }
     case MediaBranchMode::TranscodeFrame:
     {
         auto encode = MediaAudioEncodeBranchBuilder::build(
             graph, makeAudioEncodeBranchOptions(options));
         if (!encode) {
-            return ::media::Result<MediaAudioBranchSegmentResult>::failure(
+            return ::media::Result<MediaEncodedBranchEndpoints>::failure(
                 encode.error());
         }
-        return ::media::Result<MediaAudioBranchSegmentResult>::success(
-            {true, encode.value().codec, encode.value().packet});
+        return encode;
     }
     case MediaBranchMode::Drop:
         break;
     }
 
-    return ::media::Result<MediaAudioBranchSegmentResult>::failure(
+    return ::media::Result<MediaEncodedBranchEndpoints>::failure(
         ::media::ErrorInfo::unsupported("MediaAudioBranchSegmentBuilder unsupported audio branch mode"));
 }
 
 } // namespace
 
-::media::Result<MediaAudioBranchSegmentResult>
-MediaAudioBranchSegmentBuilder::buildIfPlanned(
+::media::Result<MediaEncodedBranchEndpoints>
+MediaAudioBranchSegmentBuilder::build(
     MediaGraph& graph,
     const MediaAudioBranchSegmentOptions& options)
 {
     if (!options.plan.enabled || options.plan.branchMode == MediaBranchMode::Drop) {
-        return ::media::Result<MediaAudioBranchSegmentResult>::success({});
+        return ::media::Result<MediaEncodedBranchEndpoints>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MediaAudioBranchSegmentBuilder requires an enabled audio branch"));
     }
     if (!options.normalizeInputPackets.has_value()) {
-        return ::media::Result<MediaAudioBranchSegmentResult>::failure(
+        return ::media::Result<MediaEncodedBranchEndpoints>::failure(
             ::media::ErrorInfo::invalidArgument("MediaAudioBranchSegmentBuilder requires explicit input packet normalization policy"));
     }
     if (!options.correctionMode || !options.lineageMode) {
-        return ::media::Result<MediaAudioBranchSegmentResult>::failure(
+        return ::media::Result<MediaEncodedBranchEndpoints>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "MediaAudioBranchSegmentBuilder requires explicit correction and lineage modes"));
     }
@@ -68,7 +68,7 @@ MediaAudioBranchSegmentBuilder::buildIfPlanned(
              MediaAudioLineageExecutionMode::LegacyPlainPacket ||
          options.lineageCapacity || options.correctionGeneration ||
          options.correctionLookaheadWindows || options.syncGroup)) {
-        return ::media::Result<MediaAudioBranchSegmentResult>::failure(
+        return ::media::Result<MediaEncodedBranchEndpoints>::failure(
             ::media::ErrorInfo::unsupported(
                 "synchronized audio packet copy is unsupported"));
     }
@@ -77,7 +77,7 @@ MediaAudioBranchSegmentBuilder::buildIfPlanned(
         !options.packetSourceNode.isValid() || options.packetSourcePort.empty() ||
         options.queues.metadata == 0 || options.queues.packet == 0 ||
         options.queues.frame == 0) {
-        return ::media::Result<MediaAudioBranchSegmentResult>::failure(
+        return ::media::Result<MediaEncodedBranchEndpoints>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "MediaAudioBranchSegmentBuilder requires planned source endpoints and queues"));
     }

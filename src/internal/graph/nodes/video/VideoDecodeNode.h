@@ -77,6 +77,9 @@ private:
     std::shared_ptr<MediaCodecLineageRegistry> m_lineageRegistry;
     std::shared_ptr<MediaVideoDecoderCodecApi> m_codecApi;
     std::shared_ptr<VideoDecodeLineageState> m_lineageState;
+    bool m_firstPacketDiagnosticEmitted = false;
+    bool m_firstSubmitDiagnosticEmitted = false;
+    bool m_firstFrameDiagnosticEmitted = false;
 };
 
 } // namespace media::ffmpeg::graph

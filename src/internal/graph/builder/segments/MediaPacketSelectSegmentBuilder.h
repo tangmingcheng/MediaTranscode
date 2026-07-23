@@ -1,13 +1,20 @@
 #pragma once
 
 #include "internal/graph/core/MediaGraph.h"
+#include "internal/graph/builder/MediaEndpoint.h"
 #include "internal/graph/model/MediaRealtimeEdgePolicySet.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "media_transcode/Result.h"
 
 #include <string>
+#include <optional>
 
 namespace media::ffmpeg::graph {
+
+struct PacketSelectOutputPlan final {
+    int sourceStreamIndex = invalidMediaStreamIndex;
+    MediaEdgeKind edgeKind = MediaEdgeKind::Unknown;
+};
 
 struct PacketSelectSegmentOptions {
     std::string prefix = "packet.select";
@@ -15,11 +22,15 @@ struct PacketSelectSegmentOptions {
     std::string formatSourcePort = "format";
     MediaGraphQueueParameters queues;
     MediaRealtimeEdgePolicySet edgePolicies;
+    std::optional<PacketSelectOutputPlan> videoOutput;
+    std::optional<PacketSelectOutputPlan> audioOutput;
 };
 
 struct PacketSelectSegment {
     MediaNodeId demux = MediaNodeId::invalid();
     MediaNodeId split = MediaNodeId::invalid();
+    std::optional<MediaEndpoint> videoPacket;
+    std::optional<MediaEndpoint> audioPacket;
 };
 
 class MediaPacketSelectSegmentBuilder final {

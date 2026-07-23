@@ -60,6 +60,8 @@ private:
         const MediaBufferRef& output,
         MediaAvSchedulerPendingCommit commit);
     MediaNodeProcessResult applyCommit(MediaAvSchedulerPendingCommit commit);
+    void logFirstMediaHead(Input input);
+    void logMissingMediaWait();
     void clearSchedulingState() noexcept;
     void resetState() noexcept;
 
@@ -80,6 +82,9 @@ private:
     bool m_videoEof = false;
     bool m_audioEof = false;
     bool m_nextEqualTimeVideo = false;
+    bool m_firstVideoHeadDiagnosticEmitted = false;
+    bool m_firstAudioHeadDiagnosticEmitted = false;
+    std::optional<Input> m_missingMediaWait;
 };
 
 } // namespace media::ffmpeg::graph

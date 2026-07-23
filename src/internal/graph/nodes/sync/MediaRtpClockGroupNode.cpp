@@ -98,7 +98,9 @@ MediaNodeKind MediaRtpClockGroupNode::staticKind() noexcept
     auto audioRate = requiredPositiveIntNodeOption(options, "MediaRtpClockGroupNode", "rtp_clock_group.audio_clock_rate");
     auto timeout = requiredPositiveInt64NodeOption(options, "MediaRtpClockGroupNode", "rtp_clock_group.sender_report_timeout_ns");
     auto extrapolation = requiredPositiveInt64NodeOption(options, "MediaRtpClockGroupNode", "rtp_clock_group.maximum_extrapolation_ns");
-    auto skew = requiredPositiveInt64NodeOption(options, "MediaRtpClockGroupNode", "rtp_clock_group.maximum_inter_stream_skew_ns");
+    auto clockOffsetSkew = requiredPositiveInt64NodeOption(
+        options, "MediaRtpClockGroupNode",
+        "rtp_clock_group.maximum_inter_stream_clock_offset_skew_ns");
     auto residual = requiredPositiveInt64NodeOption(options, "MediaRtpClockGroupNode", "rtp_clock_group.maximum_sender_clock_residual_ns");
     auto videoCnameTimeout = requiredPositiveInt64NodeOption(options, "MediaRtpClockGroupNode", "rtp_clock_group.video_cname_timeout_ns");
     auto audioCnameTimeout = requiredPositiveInt64NodeOption(options, "MediaRtpClockGroupNode", "rtp_clock_group.audio_cname_timeout_ns");
@@ -106,14 +108,17 @@ MediaNodeKind MediaRtpClockGroupNode::staticKind() noexcept
     auto commonEpochPolicyValue = requiredNodeOption(
         options, "MediaRtpClockGroupNode",
         "rtp_clock_group.common_epoch_policy");
-    if (!videoRate || !audioRate || !timeout || !extrapolation || !skew || !residual ||
+    if (!videoRate || !audioRate || !timeout || !extrapolation ||
+        !clockOffsetSkew || !residual ||
         !videoCnameTimeout || !audioCnameTimeout || !maximumRateError ||
         !commonEpochPolicyValue) {
         if (!videoRate) return ::media::Status::failure(videoRate.error());
         if (!audioRate) return ::media::Status::failure(audioRate.error());
         if (!timeout) return ::media::Status::failure(timeout.error());
         if (!extrapolation) return ::media::Status::failure(extrapolation.error());
-        if (!skew) return ::media::Status::failure(skew.error());
+        if (!clockOffsetSkew) {
+            return ::media::Status::failure(clockOffsetSkew.error());
+        }
         if (!residual) return ::media::Status::failure(residual.error());
         if (!videoCnameTimeout) return ::media::Status::failure(videoCnameTimeout.error());
         if (!audioCnameTimeout) return ::media::Status::failure(audioCnameTimeout.error());
@@ -130,7 +135,7 @@ MediaNodeKind MediaRtpClockGroupNode::staticKind() noexcept
     m_audioConfig = {audioRate.value(), timeout.value(), extrapolation.value(),
                      residual.value(), maximumRateError.value()};
     auto validator = MediaRtpClockGroupValidator::create(
-        {timeout.value(), extrapolation.value(), skew.value(),
+        {timeout.value(), extrapolation.value(), clockOffsetSkew.value(),
          videoCnameTimeout.value(), audioCnameTimeout.value(),
          commonEpochPolicy.value()});
     if (!validator) return ::media::Status::failure(validator.error());

@@ -217,7 +217,8 @@ ScheduledRtpOutputIntegrationRuntime::openSendersAndPublish(
     MediaRealtimeExecutableGraph executable;
     executable.graph = std::move(graph.value().graph);
     executable.avSyncBinding.emplace(MediaAvSyncRuntimeBinding{
-        plan.groupKey, plan.synchronization, plan.transition});
+        plan.groupKey, plan.synchronization, plan.transition,
+        MediaAvSyncBindingAssemblyMode::ProductionProtocolOutput});
     if (auto compiled = runtime->compile(std::move(executable)); !compiled) {
         return RuntimeResult::failure(compiled.error());
     }

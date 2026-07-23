@@ -5,6 +5,7 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegPacketView.h"
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/sync/MediaCanonicalVideoFrameBuffer.h"
 #include "internal/graph/sync/lineage/MediaFfmpegLineageToken.h"
 
@@ -13,6 +14,7 @@ extern "C" {
 }
 
 #include <utility>
+#include <sstream>
 
 namespace media::ffmpeg::graph {
 
@@ -128,6 +130,9 @@ bool VideoDecodeNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) const
 void VideoDecodeNode::abort(MediaGraphExecutionContext& context) noexcept { FFmpegCodecNodeRuntime::abort(context); resetRuntimeState(); }
 void VideoDecodeNode::resetRuntimeState() noexcept
 {
+    m_firstPacketDiagnosticEmitted = false;
+    m_firstSubmitDiagnosticEmitted = false;
+    m_firstFrameDiagnosticEmitted = false;
     m_lineageState->resetForLifecycle();
 }
 
@@ -214,6 +219,20 @@ void VideoDecodeNode::resetRuntimeState() noexcept
         return ::media::Result<MediaNodeProcessResult>::failure(
             ::media::ErrorInfo::invalidArgument("VideoDecodeNode expected packet buffer"));
     }
+    if (!m_firstPacketDiagnosticEmitted) {
+        std::ostringstream out;
+        out << "video_decode_trace stage=first_packet pts=" << packet->pts
+            << " dts=" << packet->dts
+            << " size=" << packet->size;
+        if (const auto lineage = FFmpegPacketView::canonicalLineage(buffer)) {
+            out << " generation=" << lineage->generation
+                << " sequence=" << lineage->sourceSequence.value();
+        }
+        mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+                                MediaGraphDiagnosticPhase::RuntimeNode,
+                                out.str());
+        m_firstPacketDiagnosticEmitted = true;
+    }
     ::media::ffmpeg::PacketPtr pendingPacket(av_packet_clone(packet));
     if (!pendingPacket) {
         return ::media::Result<MediaNodeProcessResult>::failure(
@@ -252,6 +271,15 @@ void VideoDecodeNode::resetRuntimeState() noexcept
     }
     const int sendRet = m_codecApi->sendPacket(
         codecContext(), m_lineageState->pendingPacket.get());
+    if (!m_firstSubmitDiagnosticEmitted) {
+        mediaGraphDiagnosticLog(
+            MediaGraphDiagnosticLevel::State,
+            MediaGraphDiagnosticPhase::RuntimeNode,
+            std::string("video_decode_trace stage=first_submit result=") +
+                (sendRet == 0 ? "accepted" :
+                 sendRet == AVERROR(EAGAIN) ? "would_block" : "failed"));
+        m_firstSubmitDiagnosticEmitted = true;
+    }
     if (sendRet < 0 && sendRet != AVERROR(EAGAIN)) {
         return ::media::Result<MediaNodeProcessResult>::failure(
             FFmpegGraphError::fromCode(sendRet, "avcodec_send_packet(video)"));
@@ -281,6 +309,16 @@ void VideoDecodeNode::resetRuntimeState() noexcept
         if (ret < 0) {
             return ::media::Result<bool>::failure(FFmpegGraphError::fromCode(ret, "avcodec_receive_frame(video)"));
         }
+        if (!m_firstFrameDiagnosticEmitted) {
+            std::ostringstream out;
+            out << "video_decode_trace stage=first_frame pts=" << frame->pts
+                << " format=" << frame->format
+                << " size=" << frame->width << 'x' << frame->height;
+            mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+                                    MediaGraphDiagnosticPhase::RuntimeNode,
+                                    out.str());
+            m_firstFrameDiagnosticEmitted = true;
+        }
 
         std::shared_ptr<const MediaCanonicalLineage> lineage;
         if (m_lineageRegistry) {
@@ -297,6 +335,17 @@ void VideoDecodeNode::resetRuntimeState() noexcept
 
         MediaBufferRef output = buffer.value();
         if (lineage) {
+            if (!codecContext() || codecContext()->pkt_timebase.num <= 0 ||
+                codecContext()->pkt_timebase.den <= 0) {
+                return ::media::Result<bool>::failure(
+                    ::media::ErrorInfo::notInitialized(
+                        "Synchronized VideoDecodeNode requires decoder packet time base"));
+            }
+            MediaTimeDescriptor timeDescriptor;
+            timeDescriptor.timeBase = MediaRational{
+                codecContext()->pkt_timebase.num,
+                codecContext()->pkt_timebase.den};
+            output->setTimeDescriptor(timeDescriptor);
             auto canonical = MediaCanonicalVideoFrameBuffer::create(output, std::move(lineage));
             if (!canonical) return ::media::Result<bool>::failure(canonical.error());
             output = std::move(canonical).value();

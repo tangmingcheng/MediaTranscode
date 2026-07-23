@@ -13,6 +13,7 @@ extern "C" {
 }
 
 #include <charconv>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -144,6 +145,8 @@ void VideoFrameRateNode::abort(MediaGraphExecutionContext& context) noexcept
 void VideoFrameRateNode::resetRuntimeState() noexcept
 {
     m_state->resetLifecycle();
+    m_firstInputDiagnosticEmitted = false;
+    m_firstOutputDiagnosticEmitted = false;
 }
 
 ::media::Result<MediaNodeProcessResult> VideoFrameRateNode::onProcess(MediaGraphExecutionContext& context)
@@ -181,6 +184,12 @@ void VideoFrameRateNode::resetRuntimeState() noexcept
     }
 
     MediaBufferRef buffer = *input.value();
+    if (!m_firstInputDiagnosticEmitted) {
+        frameRateLog(MediaGraphDiagnosticLevel::State,
+                     "trace stage=first_input " +
+                         mediaGraphDiagnosticDescribeBuffer(buffer));
+        m_firstInputDiagnosticEmitted = true;
+    }
     if (buffer->isEof() || buffer->isFlush()) {
         const bool eof = buffer->isEof();
         if (eof && state.eofEmitted) {
@@ -332,7 +341,9 @@ void VideoFrameRateNode::resetRuntimeState() noexcept
 
     int64_t queued = 0;
     while (true) {
-        const int64_t targetPts = targetPtsForIndex(state.nextOutputIndex);
+        auto target = targetPtsForIndex(state.nextOutputIndex);
+        if (!target) return ::media::Status::failure(target.error());
+        const int64_t targetPts = target.value();
         if (targetPts > currentPts) {
             break;
         }
@@ -351,6 +362,11 @@ void VideoFrameRateNode::resetRuntimeState() noexcept
             return queueStatus;
         }
 
+        if (state.nextOutputIndex == std::numeric_limits<int64_t>::max()) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "VideoFrameRateNode output index overflow"));
+        }
         ++state.nextOutputIndex;
         ++queued;
     }
@@ -385,6 +401,12 @@ void VideoFrameRateNode::resetRuntimeState() noexcept
                 state.pendingFrames.pop_front();
             }
             return emitStatus;
+        }
+        if (!m_firstOutputDiagnosticEmitted) {
+            frameRateLog(MediaGraphDiagnosticLevel::State,
+                         "trace stage=first_output " +
+                             mediaGraphDiagnosticDescribeBuffer(pendingFrame));
+            m_firstOutputDiagnosticEmitted = true;
         }
         state.pendingFrames.pop_front();
     }
@@ -443,10 +465,25 @@ void VideoFrameRateNode::resetRuntimeState() noexcept
     return ::media::Status::success();
 }
 
-int64_t VideoFrameRateNode::targetPtsForIndex(int64_t index) const noexcept
+::media::Result<int64_t> VideoFrameRateNode::targetPtsForIndex(
+    int64_t index) const noexcept
 {
     const auto& state = m_state->data();
-    return av_rescale_q(index, state.targetFramePeriod, state.inputTimeBase);
+    if (index < 0) {
+        return ::media::Result<int64_t>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "VideoFrameRateNode output index is negative"));
+    }
+    const int64_t offset = av_rescale_q(
+        index, state.targetFramePeriod, state.inputTimeBase);
+    if (offset < 0 ||
+        (offset > 0 && state.startPts >
+            std::numeric_limits<int64_t>::max() - offset)) {
+        return ::media::Result<int64_t>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "VideoFrameRateNode target pts overflow"));
+    }
+    return ::media::Result<int64_t>::success(state.startPts + offset);
 }
 
 int64_t VideoFrameRateNode::targetFrameDuration() const noexcept

@@ -78,6 +78,10 @@ private:
 
 private:
     bool m_encoderConfigEmitted = false;
+    bool m_queuedFrameBeforeCodecTraced = false;
+    bool m_codecBoundTraced = false;
+    bool m_firstFrameTraced = false;
+    bool m_firstPacketTraced = false;
     std::shared_ptr<AudioEncodeLineageState> m_lineageState;
     bool& m_receivePending;
     bool& m_flushPending;

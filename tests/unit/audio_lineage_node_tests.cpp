@@ -10,6 +10,7 @@
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
+#include "internal/graph/sync/MediaAudioSampleGrid.h"
 #include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
 #include "internal/graph/sync/MediaCanonicalAudioSamplesBuffer.h"
 #include "internal/graph/sync/MediaCanonicalLineage.h"
@@ -109,11 +110,11 @@ public:
     void flushBuffers(AVCodecContext*) noexcept override {}
 };
 
-MediaBufferRef makeReleasedPacket(
+MediaBufferRef makeReleasedPacketWithTiming(
     std::uint64_t generation,
     std::uint64_t sequence,
-    int sourceRate,
-    int samples)
+    MediaRunningTime presentation,
+    MediaRunningTime duration)
 {
     auto packet = ::media::ffmpeg::makePacket();
     CHECK(packet && av_new_packet(packet.get(), 1) == 0);
@@ -123,12 +124,10 @@ MediaBufferRef makeReleasedPacket(
     auto wrapped = FFmpegBufferFactory::wrapPacket(
         std::move(packet), MediaStreamKind::Audio, std::nullopt);
     CHECK(wrapped);
-    auto duration = MediaRunningTime::checkedFromTicks(samples, 1, sourceRate);
-    CHECK(duration);
     auto lineage = std::make_shared<const MediaCanonicalLineage>(
         MediaCanonicalLineage{
-            MediaRunningTime::fromNanoseconds(0), std::nullopt,
-            duration.value(), MediaDecodeOrderMode::PresentationOrderNoReorder,
+            presentation, std::nullopt, duration,
+            MediaDecodeOrderMode::PresentationOrderNoReorder,
             "audio-lineage-node", MediaSourceAccessUnitSequence(sequence),
             MediaTimeMappingConfidence::Locked, generation});
     auto canonical = MediaCanonicalAccessUnitBuffer::create(
@@ -140,6 +139,19 @@ MediaBufferRef makeReleasedPacket(
          MediaRunningTime::fromNanoseconds(0), 0, 48'000});
     CHECK(released);
     return std::move(released).value();
+}
+
+MediaBufferRef makeReleasedPacket(
+    std::uint64_t generation,
+    std::uint64_t sequence,
+    int sourceRate,
+    int samples)
+{
+    auto duration = MediaRunningTime::checkedFromTicks(samples, 1, sourceRate);
+    CHECK(duration);
+    return makeReleasedPacketWithTiming(
+        generation, sequence, MediaRunningTime::fromNanoseconds(0),
+        duration.value());
 }
 
 MediaBufferRef makeDecodedFrame(std::uint64_t generation,
@@ -362,6 +374,84 @@ void decoderRetryAnd44100To48000Chain()
     resampleNode.abort(execution);
     trimNode.abort(execution);
     decodeNode.abort(execution);
+}
+
+void decoderUsesAbsoluteSampleGridAcrossFractionalPacketDurations()
+{
+    MediaGraph graph;
+    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(4);
+    const auto codecSource = graph.addNode(
+        MediaNodeKind::DebugDump, "fractional.codec");
+    const auto packetSource = graph.addNode(
+        MediaNodeKind::DebugDump, "fractional.packet");
+    const auto decode = graph.addNode(
+        MediaNodeKind::AudioDecode, "fractional.decode");
+    const auto sink = graph.addNode(
+        MediaNodeKind::DebugDump, "fractional.sink");
+    graph.addOutputPort(codecSource, "codec", MediaStreamKind::Audio,
+                        MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext);
+    graph.addOutputPort(packetSource, "packet", MediaStreamKind::Audio,
+                        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+    graph.addInputPort(decode, "codec", MediaStreamKind::Audio,
+                       MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext);
+    graph.addInputPort(decode, "packet", MediaStreamKind::Audio,
+                       MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+    graph.addOutputPort(decode, "frame", MediaStreamKind::Audio,
+                        MediaEdgeKind::SoftwareFrame, MediaPayloadKind::Frame);
+    graph.addInputPort(sink, "frame", MediaStreamKind::Audio,
+                       MediaEdgeKind::SoftwareFrame, MediaPayloadKind::Frame);
+    CHECK(graph.connect(codecSource, "codec", decode, "codec",
+                        "fractional.codec", policy));
+    CHECK(graph.connect(packetSource, "packet", decode, "packet",
+                        "fractional.packet", policy));
+    CHECK(graph.connect(decode, "frame", sink, "frame",
+                        "fractional.output", policy));
+
+    MediaGraphExecutionContext execution;
+    CHECK(execution.compile(graph));
+    auto codec = makeAudioCodec(48'000);
+    CHECK(codec && execution.findInputChannel(decode, "codec")->push(
+                       codec.value()));
+    auto state = std::make_shared<AudioDecodeLineageState>(
+        MediaAudioLineageExecutionMode::SynchronizedReleasedAudio, 2);
+    auto api = std::make_shared<ScriptedAudioDecoderCodecApi>();
+    AudioDecodeNode node(
+        decode, MediaAudioLineageExecutionMode::SynchronizedReleasedAudio,
+        state, api);
+    CHECK(node.start(execution));
+    CHECK(node.process(execution));
+
+    constexpr std::int64_t SourcePacketSamples = 1'024;
+    constexpr std::int64_t SourceSampleRate = 44'100;
+    auto duration = MediaRunningTime::checkedFromTicks(
+        SourcePacketSamples, 1, SourceSampleRate);
+    CHECK(duration);
+    for (std::int64_t index = 0; index < 2; ++index) {
+        auto presentation = MediaRunningTime::checkedFromTicks(
+            index * SourcePacketSamples, 1, SourceSampleRate);
+        CHECK(presentation);
+        CHECK(execution.findInputChannel(decode, "packet")->push(
+            makeReleasedPacketWithTiming(
+                7, static_cast<std::uint64_t>(index + 1),
+                presentation.value(), duration.value())));
+        api->sendResults = {0};
+        api->receiveResults = {AVERROR(EAGAIN)};
+        CHECK(node.process(execution));
+    }
+
+    auto absoluteEnd = MediaRunningTime::checkedFromTicks(
+        2 * SourcePacketSamples, 1, SourceSampleRate);
+    auto grid = MediaAudioSampleGrid::create(48'000);
+    CHECK(absoluteEnd && grid);
+    auto expectedEnd = grid.value().nearestSample(absoluteEnd.value());
+    auto independentlyRoundedPacket = grid.value().nearestSample(
+        duration.value());
+    CHECK(expectedEnd && independentlyRoundedPacket);
+    CHECK(expectedEnd.value() == 2'229);
+    CHECK(independentlyRoundedPacket.value() == 1'115);
+    CHECK(2 * independentlyRoundedPacket.value() != expectedEnd.value());
+    CHECK(state->intervals.queuedSamples() == expectedEnd.value());
+    node.abort(execution);
 }
 
 void decoderPurgeDropsEagainPacketBeforeRetry()
@@ -802,6 +892,7 @@ void encoderDropsRetainedEofAndContinuesNextGeneration()
 int main()
 {
     decoderRetryAnd44100To48000Chain();
+    decoderUsesAbsoluteSampleGridAcrossFractionalPacketDurations();
     decoderPurgeDropsEagainPacketBeforeRetry();
     retainedControlFreshnessIsExactAndGenerationBound();
     startupTrimDropsRetainedEofAndContinuesNextGeneration();

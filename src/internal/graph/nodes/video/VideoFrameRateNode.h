@@ -49,7 +49,7 @@ private:
         std::shared_ptr<const MediaCanonicalLineage> lineage);
     ::media::Status rememberLastInputFrame(const MediaBufferRef& buffer);
 
-    int64_t targetPtsForIndex(int64_t outputIndex) const noexcept;
+    ::media::Result<int64_t> targetPtsForIndex(int64_t outputIndex) const noexcept;
     int64_t targetFrameDuration() const noexcept;
     const AVFrame* chooseSourceFrameForTarget(const AVFrame* currentFrame,
                                               int64_t currentPts,
@@ -60,6 +60,8 @@ private:
 private:
     std::shared_ptr<MediaVideoFrameRateState> m_state;
     bool m_exposesGenerationPurgeTarget = false;
+    bool m_firstInputDiagnosticEmitted = false;
+    bool m_firstOutputDiagnosticEmitted = false;
 };
 
 } // namespace media::ffmpeg::graph

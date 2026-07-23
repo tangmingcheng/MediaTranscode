@@ -270,7 +270,8 @@ bool startFixture(TestContext& ctx, SchedulerFixture& f,
     executable.graph = std::move(f.graph);
     executable.avSyncBinding.emplace(MediaAvSyncRuntimeBinding{
         MediaAvSyncGroupKey("matrix-group"), completePlan(),
-        schedulerTransitionPlan()});
+        schedulerTransitionPlan(),
+        MediaAvSyncBindingAssemblyMode::ComponentCore});
     if (!runtime->compile(std::move(executable)) ||
         !runtime->registerDefaultRuntimeNodes()) {
         return false;
@@ -1381,7 +1382,8 @@ void testRegisteredSchedulerWaitsForEpochActivation(TestContext& ctx)
     executable.graph = std::move(f.graph);
     executable.avSyncBinding.emplace(MediaAvSyncRuntimeBinding{
         MediaAvSyncGroupKey("matrix-group"), completePlan(),
-        schedulerTransitionPlan()});
+        schedulerTransitionPlan(),
+        MediaAvSyncBindingAssemblyMode::ComponentCore});
     EXPECT_TRUE(ctx, runtime->compile(std::move(executable)));
     EXPECT_TRUE(ctx, runtime->registerDefaultRuntimeNodes());
     auto* scheduler = dynamic_cast<MediaAvOutputSchedulerNode*>(
@@ -1416,7 +1418,8 @@ void testActiveSchedulerConfiguresControllerOnce(TestContext& ctx)
     executable.graph = std::move(f.graph);
     executable.avSyncBinding.emplace(MediaAvSyncRuntimeBinding{
         MediaAvSyncGroupKey("matrix-group"), completePlan(),
-        schedulerTransitionPlan()});
+        schedulerTransitionPlan(),
+        MediaAvSyncBindingAssemblyMode::ComponentCore});
     EXPECT_TRUE(ctx, runtime->compile(std::move(executable)));
     EXPECT_TRUE(ctx, runtime->registerDefaultRuntimeNodes());
     EXPECT_TRUE(ctx, media_transcode::test::activateInitialThroughRelease(

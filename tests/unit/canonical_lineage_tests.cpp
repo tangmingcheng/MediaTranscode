@@ -11,6 +11,7 @@
 #include "internal/graph/runtime/buffer/MediaAvReleasedAudioBuffer.h"
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
+#include "internal/graph/runtime/buffer/HardwareFrameBuffer.h"
 #include "internal/graph/sync/MediaCanonicalAudioSamplesBuffer.h"
 #include "internal/graph/sync/MediaCanonicalVideoFrameBuffer.h"
 #include "internal/graph/sync/startup/MediaAvStartupGenerationState.h"
@@ -21,6 +22,8 @@ extern "C" {
 #include <libavcodec/packet.h>
 #include <libavutil/frame.h>
 }
+
+#include <limits>
 
 using namespace media::ffmpeg::graph;
 using media_transcode::test::TestContext;
@@ -48,12 +51,15 @@ MediaBufferRef timedPacket(MediaStreamKind stream,
     auto value = ::media::ffmpeg::makePacket();
     av_new_packet(value.get(), 16);
     value->duration = 40;
-    value->time_base = AVRational{1, 1'000'000'000};
-    return FFmpegBufferFactory::wrapPacket(
+    value->time_base = AVRational{1, 90'000};
+    auto wrapped = FFmpegBufferFactory::wrapPacket(
         std::move(value), stream,
         MediaPacketSourceTiming{presentation, presentation,
                                 MediaSourceClockReadiness::Locked,
                                 generation}).value();
+    wrapped->setTimeDescriptor(
+        MediaTimeDescriptor{MediaRational{1, 90'000}});
+    return wrapped;
 }
 
 std::shared_ptr<const MediaCanonicalLineage> lineage(
@@ -158,6 +164,23 @@ void testLineageAndPayloadIdentitySurviveWrappers(TestContext& ctx)
     frame->height = 16;
     auto frameBuffer = FFmpegBufferFactory::wrapFrame(
         std::move(frame), MediaStreamKind::Video).value();
+    MediaFormatDescriptor format;
+    format.streamKind = MediaStreamKind::Video;
+    format.video.size = {16, 16};
+    format.video.pixelFormat = "yuv420p";
+    MediaTimeDescriptor time;
+    time.timeBase = {1, 90'000};
+    time.frameRate = {30, 1};
+    MediaHardwareDescriptor hardware;
+    hardware.deviceKind = MediaHardwareDeviceKind::CUDA;
+    hardware.frameKind = MediaHardwareFrameKind::Hardware;
+    hardware.deviceName = "cuda-test";
+    frameBuffer->setFormatDescriptor(format);
+    frameBuffer->setTimeDescriptor(time);
+    frameBuffer->setHardwareDescriptor(hardware);
+    frameBuffer->setTimestamps(9'000, 8'000, 3'000);
+    frameBuffer->setFlags(MediaBufferFlag::KeyFrame |
+                          MediaBufferFlag::HardwareBacked);
     auto wrappedFrame = MediaCanonicalVideoFrameBuffer::create(
         frameBuffer, canonicalUnit->lineage());
     EXPECT_TRUE(ctx, wrappedFrame);
@@ -168,8 +191,36 @@ void testLineageAndPayloadIdentitySurviveWrappers(TestContext& ctx)
         if (typed) {
             EXPECT_TRUE(ctx, typed->media().get() == frameBuffer.get());
             EXPECT_TRUE(ctx, typed->lineage().get() == immutable.get());
+            EXPECT_EQ(ctx, typed->formatDescriptor().video.size.width, 16);
+            EXPECT_EQ(ctx, typed->formatDescriptor().video.pixelFormat,
+                      std::string("yuv420p"));
+            EXPECT_EQ(ctx, typed->timeDescriptor().timeBase.num, 1);
+            EXPECT_EQ(ctx, typed->timeDescriptor().timeBase.den, 90'000);
+            EXPECT_EQ(ctx, typed->timeDescriptor().frameRate.num, 30);
+            EXPECT_EQ(ctx, typed->timeDescriptor().frameRate.den, 1);
+            EXPECT_EQ(ctx, typed->hardwareDescriptor().deviceKind,
+                      MediaHardwareDeviceKind::CUDA);
+            EXPECT_EQ(ctx, typed->hardwareDescriptor().deviceName,
+                      std::string("cuda-test"));
+            EXPECT_EQ(ctx, typed->pts(), static_cast<MediaTimeValue>(9'000));
+            EXPECT_EQ(ctx, typed->dts(), static_cast<MediaTimeValue>(8'000));
+            EXPECT_EQ(ctx, typed->duration(), static_cast<MediaDuration>(3'000));
+            EXPECT_TRUE(ctx, typed->isKeyFrame());
+            EXPECT_TRUE(ctx, typed->isHardwareBacked());
         }
     }
+
+    auto hardwareFrame = ::media::ffmpeg::makeFrame();
+    hardwareFrame->format = AV_PIX_FMT_CUDA;
+    hardwareFrame->width = 16;
+    hardwareFrame->height = 16;
+    auto hardwareFrameBuffer = makeMediaBufferRef<HardwareFrameBuffer>(
+        std::move(hardwareFrame), hardware);
+    hardwareFrameBuffer->setStreamKind(MediaStreamKind::Video);
+    hardwareFrameBuffer->setPayloadKind(MediaPayloadKind::Frame);
+    auto wrappedHardwareFrame = MediaCanonicalVideoFrameBuffer::create(
+        hardwareFrameBuffer, canonicalUnit->lineage());
+    EXPECT_TRUE(ctx, wrappedHardwareFrame);
 
     auto samples = ::media::ffmpeg::makeFrame();
     samples->format = AV_SAMPLE_FMT_FLTP;
@@ -177,6 +228,25 @@ void testLineageAndPayloadIdentitySurviveWrappers(TestContext& ctx)
     samples->nb_samples = 960;
     auto samplesBuffer = FFmpegBufferFactory::wrapFrame(
         std::move(samples), MediaStreamKind::Audio).value();
+    auto signedSamples = MediaCanonicalAudioSamplesBuffer::create(
+        samplesBuffer, immutable, {-400, 560, 48'000});
+    EXPECT_TRUE(ctx, signedSamples);
+    if (signedSamples) {
+        const auto* typed = dynamic_cast<const MediaCanonicalAudioSamplesBuffer*>(
+            signedSamples.value().get());
+        EXPECT_TRUE(ctx, typed != nullptr);
+        if (typed) {
+            EXPECT_EQ(ctx, typed->interval().begin,
+                      static_cast<std::int64_t>(-400));
+            EXPECT_EQ(ctx, typed->interval().end,
+                      static_cast<std::int64_t>(560));
+        }
+    }
+    auto overflowedSamples = MediaCanonicalAudioSamplesBuffer::create(
+        samplesBuffer, immutable,
+        {std::numeric_limits<std::int64_t>::min(),
+         std::numeric_limits<std::int64_t>::max(), 48'000});
+    EXPECT_FALSE(ctx, overflowedSamples);
     auto wrappedSamples = MediaCanonicalAudioSamplesBuffer::create(
         samplesBuffer, canonicalUnit->lineage(),
         MediaCanonicalAudioSampleInterval{0, 960, 48'000});
@@ -308,10 +378,15 @@ struct CanonicalInputHarness final {
         const auto source = graph.addNode(MediaNodeKind::DebugDump, "source");
         node = graph.addNode(MediaNodeKind::CanonicalInput, "canonical");
         const auto sink = graph.addNode(MediaNodeKind::DebugDump, "sink");
-        graph.addOutputPort(source, "out", MediaStreamKind::Video,
-                            MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
-        graph.addInputPort(node, "in", MediaStreamKind::Video,
-                           MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+        const auto sourceOutput = graph.addOutputPort(
+            source, "out", MediaStreamKind::Video,
+            MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+        const auto canonicalInput = graph.addInputPort(
+            node, "in", MediaStreamKind::Video,
+            MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+        const MediaTimeDescriptor packetTime{MediaRational{1, 90'000}};
+        graph.setPortTimeDescriptor(sourceOutput, packetTime);
+        graph.setPortTimeDescriptor(canonicalInput, packetTime);
         graph.addOutputPort(node, "out", MediaStreamKind::Metadata,
                             MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
         graph.addInputPort(sink, "in", MediaStreamKind::Metadata,

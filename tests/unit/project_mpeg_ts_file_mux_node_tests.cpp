@@ -259,7 +259,8 @@ struct ProjectFileMuxHarness final {
                 group, avSyncPlan(),
                 MediaAvGenerationTransitionPlanner::plan(
                     MediaAvSyncOutputAdapterKind::ProjectMpegTs,
-                    ms(1'000), ms(500))},
+                    ms(1'000), ms(500)),
+                MediaAvSyncBindingAssemblyMode::ComponentCore},
             clock, epoch, binder, execution, graphRuntime));
         EXPECT_EQ(ctx, channel(planSource)->binding().payloadKind,
                   MediaPayloadKind::TsMuxRuntimePlan);
@@ -433,7 +434,7 @@ void realNodeProducesExactBytesAndLifecycle(TestContext& ctx)
                          harness.audioPacketSource,
                          accessUnit(MediaScheduledStream::Audio, 7, ms(920))));
     processOne(harness, ctx);
-    harness.clock->value = ms(1'050);
+    harness.clock->value = ms(1'150);
     auto flush = FFmpegBufferFactory::makeFlush(MediaStreamKind::Control);
     EXPECT_TRUE(ctx, flush);
     if (flush) {

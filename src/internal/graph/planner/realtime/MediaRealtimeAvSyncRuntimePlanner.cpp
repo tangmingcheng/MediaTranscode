@@ -76,6 +76,8 @@ namespace {
                 RealtimeOutputStreamLayout::MuxedTransportStream ||
             !synchronization.ts || !facts.inputAudioSampleRate ||
             *facts.inputAudioSampleRate <= 0 ||
+            !facts.inputAudioSamplesPerAccessUnit ||
+            *facts.inputAudioSamplesPerAccessUnit == 0 ||
             !facts.inputVideoPacketDuration ||
             facts.inputVideoPacketDuration->packetDuration <= 0 ||
             facts.inputVideoPacketDuration->timeBase.num <= 0 ||
@@ -90,7 +92,9 @@ namespace {
         }
         inputClock.emplace<MediaMpegTsInputClockAssemblyPlan>();
         videoDuration.emplace<MediaPacketDurationPlan>(true);
-        audioDuration.emplace<MediaPacketDurationPlan>(true);
+        audioDuration.emplace<MediaPlannedAudioSamplesDurationPlan>(
+            *facts.inputAudioSampleRate,
+            *facts.inputAudioSamplesPerAccessUnit);
     } else {
         return ::media::Result<MediaRealtimeAvSyncAssemblyPlan>::failure(
             ::media::ErrorInfo::unsupported(
@@ -281,6 +285,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
                 accepted.error());
         }
         adapter = MediaAvSyncOutputAdapterKind::ProjectMpegTs;
+        outer.videoParameters.globalHeader = true;
         outer.muxedOutput.outputResourceKind = MediaOutputResourceKind::ByteSink;
         outer.muxedOutput.muxSessionKind = MediaMuxSessionKind::ProjectMpegTs;
         protocolOutput.emplace(std::in_place_type<MediaProjectMpegTsRuntimeOutputPlan>,

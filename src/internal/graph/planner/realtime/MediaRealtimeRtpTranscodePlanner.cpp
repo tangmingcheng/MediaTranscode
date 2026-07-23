@@ -35,6 +35,14 @@ namespace {
         return ::media::Status::failure(::media::ErrorInfo::notInitialized(
             "scheduled RTP packetization requires complete selected protocol facts"));
     }
+    auto videoPacketLayout =
+        MediaSelectedEncoderPacketLayoutResolver::require(
+            plan.videoPlan,
+            MediaEncodedPacketLayoutKind::StartCodeDelimited,
+            "scheduled RTP H264 packetization");
+    if (!videoPacketLayout) {
+        return ::media::Status::failure(videoPacketLayout.error());
+    }
     auto video = MediaScheduledRtpPacketizationPlan::create(
         MediaStreamKind::Video, plan.videoPlan.outputCodecName, 1,
         *synchronization.rtp->videoOutput.clockRate,
@@ -57,19 +65,10 @@ namespace {
 constexpr int RealtimeNoBidirectionalFrames = 0;
 constexpr int RealtimeDefaultGopFrames = 30;
 constexpr bool RealtimeRequiresRuntimeAvailability = true;
-bool planGpuPreference(const MediaTranscodeExecutionParameters& execution) noexcept
-{
-    return !execution.disableHardware;
-}
-
-bool planSoftwareChain(const MediaTranscodeExecutionParameters& execution) noexcept
-{
-    return execution.disableHardware;
-}
 
 std::string planPreferredHardware(const MediaTranscodeExecutionParameters& execution)
 {
-    return planGpuPreference(execution) ? "auto" : "software";
+    return execution.disableHardware ? "software" : "auto";
 }
 
 MediaVideoTranscodeParameters planRealtimeVideoParameters(const MediaVideoTranscodeParameters& requested)
@@ -121,8 +120,7 @@ MediaVideoTranscodeParameters planRealtimeVideoParameters(const MediaVideoTransc
     }
     MediaPipelinePlannerOptions plannerOptions(false,
                                                video.resizeRequested(),
-                                               planGpuPreference(options.parameters.execution),
-                                               planSoftwareChain(options.parameters.execution),
+                                               options.parameters.execution.disableHardware,
                                                RealtimeRequiresRuntimeAvailability,
                                                *options.input.lowLatency);
     plannerOptions.outputPath = outputUrl;
@@ -528,6 +526,8 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
                 runtime.error());
         }
         plan.avSyncRuntime = std::move(runtime).value();
+        plan.audioPacketNormalizationRequired = false;
+        plan.videoPacketCopyNormalizationRequired = false;
         plan.videoOutput.writePacingEnabled = false;
         plan.videoOutput.writePacingBytesPerSecond = 0;
         plan.videoOutput.writePacingBurstBytes = 0;

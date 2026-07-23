@@ -82,13 +82,10 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument(context + " requires explicit hardware preference"));
     }
-    if (!options.preferGpu && options.preferredHardware != "software") {
+    if (options.disableHardware &&
+        options.preferredHardware != "software") {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument(context + " requires software hardware preference when GPU is disabled"));
-    }
-    if (!options.preferGpu && !options.enableSoftwareChain) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument(context + " requires software chain when GPU is disabled"));
     }
     return ::media::Status::success();
 }

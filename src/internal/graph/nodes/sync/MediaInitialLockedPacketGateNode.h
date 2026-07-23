@@ -27,6 +27,7 @@ protected:
 private:
     ::media::Status configure(MediaGraphExecutionContext& context);
     ::media::Status acceptClock(const MediaBufferRef& buffer);
+    ::media::Status retainPendingPacket(MediaBufferRef buffer);
     ::media::Status emitValidatedPacket(MediaGraphExecutionContext& context,
                                         MediaBufferRef buffer);
     void resetState() noexcept;
@@ -35,6 +36,7 @@ private:
     std::optional<MediaAvSyncGroupKey> m_syncGroupKey;
     std::shared_ptr<MediaAvSyncGroupRuntime> m_syncGroup;
     std::optional<MediaInitialClockAcquisitionDeadline> m_acquisitionDeadline;
+    MediaBufferRef m_pendingPacket;
     MediaStreamKind m_streamKind = MediaStreamKind::Unknown;
     bool m_configured = false;
 };

@@ -6,6 +6,7 @@
 
 #include <deque>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace media::ffmpeg::graph {
@@ -30,7 +31,7 @@ public:
         MediaAudioLineageCapacity& capacity) const;
 
 private:
-    ::media::Status fail(const char* message);
+    ::media::Status fail(std::string message);
     std::deque<MediaAudioIntervalFragment> m_fragments;
     std::uint64_t m_generation = 0;
     int m_sampleRate = 0;

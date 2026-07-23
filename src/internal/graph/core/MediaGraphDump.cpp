@@ -29,7 +29,6 @@ const char* toString(MediaNodeKind kind)
     case MediaNodeKind::AudioEncode: return "AudioEncode";
     case MediaNodeKind::PacketSourceConfig: return "PacketSourceConfig";
     case MediaNodeKind::PacketNormalize: return "PacketNormalize";
-    case MediaNodeKind::AvPacketStartBarrier: return "AvPacketStartBarrier";
     case MediaNodeKind::PacketStartGate: return "PacketStartGate";
     case MediaNodeKind::RtpClockGroup: return "RtpClockGroup";
     case MediaNodeKind::RtpPacketClockBinder: return "RtpPacketClockBinder";

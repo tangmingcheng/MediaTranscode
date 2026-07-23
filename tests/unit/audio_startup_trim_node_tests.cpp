@@ -84,6 +84,30 @@ void zeroAndPartialTrimProveEpochSourceStart()
     assert(partial.apply(frame(480, 480, 3, 7), 0));
 }
 
+void nonAlignedEpochSelectsTheFirstAudioSampleAtOrAfterIt()
+{
+    const auto nonAlignedEpoch = MediaRunningTime::fromNanoseconds(5'000'001);
+    const MediaAudioPlaybackOrigin origin{
+        7, nonAlignedEpoch, sampleTime(0), 0, 48'000};
+    MediaAudioStartupTrimNode trim(
+        MediaNodeId::fromValue(45), origin,
+        std::make_shared<MediaAudioStartupTrimLineageState>(
+            MediaAudioLineageExecutionMode::SynchronizedReleasedAudio, 8));
+
+    auto output = trim.apply(frame(0, 480, 45, 7), 241);
+    assert(output && output.value());
+    const auto* canonical =
+        dynamic_cast<const MediaCanonicalAudioSamplesBuffer*>(
+            output.value().get());
+    assert(canonical && canonical->interval().begin == 241);
+
+    MediaAudioStartupTrimNode beforeEpoch(
+        MediaNodeId::fromValue(46), origin,
+        std::make_shared<MediaAudioStartupTrimLineageState>(
+            MediaAudioLineageExecutionMode::SynchronizedReleasedAudio, 8));
+    assert(!beforeEpoch.apply(frame(0, 480, 46, 7), 240));
+}
+
 void typedTrimInputBecomesBoundOutputWithoutTrimMetadata()
 {
     const MediaAudioPlaybackOrigin origin{7, sampleTime(240), sampleTime(0), 300, 48'000};
@@ -418,6 +442,7 @@ void stopStartClearsOwnedTrimAndGenerationState()
 int main()
 {
     zeroAndPartialTrimProveEpochSourceStart();
+    nonAlignedEpochSelectsTheFirstAudioSampleAtOrAfterIt();
     fullFrameTrimRequiresTheNextSampleToBeTheEpochStart();
     spanningTrimAndGenerationMismatchPreservePayloadOwnership();
     typedTrimInputBecomesBoundOutputWithoutTrimMetadata();

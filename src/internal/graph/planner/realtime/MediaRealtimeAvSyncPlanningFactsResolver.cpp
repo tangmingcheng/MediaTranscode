@@ -2,6 +2,8 @@
 
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 
+#include <limits>
+
 namespace media::ffmpeg::graph {
 namespace {
 
@@ -75,6 +77,9 @@ MediaRealtimeAvSyncPlanningFactsResolver::resolve(
     } else if (synchronization.topology == MediaAvSyncTopology::MpegTsToMpegTs) {
         if (!plan.audioPlan.selectedDecoder ||
             plan.audioPlan.selectedDecoder->inputSampleRate <= 0 ||
+            plan.audioPlan.selectedDecoder->maximumOutputBlockInputSamples <= 0 ||
+            plan.audioPlan.selectedDecoder->maximumOutputBlockInputSamples >
+                std::numeric_limits<std::uint32_t>::max() ||
             !synchronization.ts || !synchronization.ts->outputMux ||
             !synchronization.ts->videoPid || !synchronization.ts->audioPid ||
             !plan.input.mpegTs ||
@@ -96,6 +101,8 @@ MediaRealtimeAvSyncPlanningFactsResolver::resolve(
         }
         facts.inputAudioSampleRate =
             plan.audioPlan.selectedDecoder->inputSampleRate;
+        facts.inputAudioSamplesPerAccessUnit = static_cast<std::uint32_t>(
+            plan.audioPlan.selectedDecoder->maximumOutputBlockInputSamples);
         facts.inputVideoPacketDuration =
             plan.input.mpegTs->videoPacketDuration;
         facts.inputAudioPacketDuration =

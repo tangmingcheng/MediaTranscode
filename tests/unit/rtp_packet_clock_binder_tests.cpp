@@ -563,6 +563,8 @@ void videoDurationUsesLookaheadAndOnlyExplicitTerminalReuse()
     MediaBufferRef firstOwner;
     const auto* first = popPacket(*fixture.output(), firstOwner);
     assert(first && first->packet()->duration == 3'000);
+    assert(first->timeDescriptor().timeBase.num == 1);
+    assert(first->timeDescriptor().timeBase.den == 90'000);
 
     auto eof = FFmpegBufferFactory::makeEof(MediaStreamKind::Video);
     assert(eof && fixture.packetInput()->push(eof.value()));
@@ -570,6 +572,8 @@ void videoDurationUsesLookaheadAndOnlyExplicitTerminalReuse()
     MediaBufferRef lastOwner;
     const auto* last = popPacket(*fixture.output(), lastOwner);
     assert(last && last->packet()->duration == 3'000);
+    assert(last->timeDescriptor().timeBase.num == 1);
+    assert(last->timeDescriptor().timeBase.den == 90'000);
     processSucceeds(node, fixture.execution);
     MediaBufferRef terminal;
     assert(fixture.output()->tryPop(terminal) && terminal->isEof());

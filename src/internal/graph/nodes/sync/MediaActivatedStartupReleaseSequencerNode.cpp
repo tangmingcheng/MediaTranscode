@@ -5,9 +5,12 @@
 #include "internal/graph/runtime/buffer/MediaStartupReleaseTransactionBuffer.h"
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/channel/MediaChannel.h"
+#include "internal/graph/runtime/channel/MediaAtomicOutputTransaction.h"
 #include "internal/graph/runtime/channel/MediaRequiredInputReader.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 
+#include <array>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -42,57 +45,21 @@ namespace {
         std::move(channels));
 }
 
-::media::Result<bool> preflight(const std::vector<MediaChannel*>& channels)
-{
-    for (const MediaChannel* channel : channels) {
-        if (channel->policy().queuePolicy.overflowPolicy !=
-            MediaQueueOverflowPolicy::BlockProducer) {
-            return ::media::Result<bool>::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "Activation release sequencer requires blocking outputs"));
-        }
-        if (channel->aborted()) {
-            return ::media::Result<bool>::failure(
-                ::media::ErrorInfo::cancelled(
-                    "Activation release sequencer output is aborted"));
-        }
-        if (channel->closed()) {
-            return ::media::Result<bool>::failure(
-                ::media::ErrorInfo::cancelled(
-                    "Activation release sequencer output is closed"));
-        }
-        if (channel->size() >= channel->capacity()) {
-            return ::media::Result<bool>::success(false);
-        }
-    }
-    return ::media::Result<bool>::success(true);
-}
-
-::media::Status commit(MediaChannel& channel, const MediaBufferRef& buffer)
-{
-    const auto outcome = channel.pushOutcome(buffer);
-    if (outcome == MediaQueuePushOutcome::Accepted) {
-        return ::media::Status::success();
-    }
-    return ::media::Status::failure(
-        outcome == MediaQueuePushOutcome::Closed ||
-                outcome == MediaQueuePushOutcome::Aborted
-            ? ::media::ErrorInfo::cancelled(
-                  "Activation release sequencer output closed during commit")
-            : ::media::ErrorInfo::internalError(
-                  "Activation release sequencer preflight invariant failed"));
-}
-
 } // namespace
 
 MediaActivatedStartupReleaseSequencerNode::
     MediaActivatedStartupReleaseSequencerNode(
         MediaNodeId nodeId,
         MediaAvSyncGroupKey groupKey,
-        MediaPlaybackEpochActivationCapability capability)
+        MediaPlaybackEpochActivationCapability capability,
+        MediaRunningTime outputLead,
+        std::optional<MediaAvStartupVideoPreparationCapability>
+            preparationCapability)
     : m_nodeId(nodeId)
     , m_groupKey(std::move(groupKey))
     , m_capability(std::move(capability))
+    , m_outputLead(outputLead)
+    , m_preparationCapability(std::move(preparationCapability))
 {
 }
 
@@ -145,15 +112,6 @@ MediaActivatedStartupReleaseSequencerNode::process(
             ::media::ErrorInfo::invalidArgument(
                 "Activation release sequencer requires one release target"));
     }
-    auto releaseReady = preflight(releaseChannels.value());
-    if (!releaseReady) {
-        return failTerminal(releaseReady.error());
-    }
-    if (!releaseReady.value()) {
-        return ::media::Result<MediaNodeProcessResult>::success(
-            MediaNodeProcessResult::waiting());
-    }
-
     if (transaction->transactionKind() ==
         MediaStartupReleaseTransactionKind::Control) {
         const auto* control = transaction->control();
@@ -161,10 +119,17 @@ MediaActivatedStartupReleaseSequencerNode::process(
             return failTerminal(::media::ErrorInfo::invalidArgument(
                 "Activation release sequencer rejects an invalid control transaction"));
         }
-        if (auto status = commit(*releaseChannels.value().front(),
-                                 transaction->payload()); !status) {
+        const std::array<MediaAtomicOutputBatch, 1> batches{
+            MediaAtomicOutputBatch{
+                releaseChannels.value().front(),
+                std::span(&transaction->payload(), 1)}};
+        auto atomic = MediaAtomicOutputTransaction::acquire(
+            "Activation release sequencer", batches);
+        if (!atomic) return failTerminal(atomic.error());
+        if (!atomic.value()) return ::media::Result<MediaNodeProcessResult>::success(
+            MediaNodeProcessResult::waiting());
+        if (auto status = atomic.value()->commit(); !status)
             return failTerminal(status.error());
-        }
         const bool finished =
             control->controlKind() == MediaControlBufferKind::Eof ||
             control->controlKind() == MediaControlBufferKind::Abort;
@@ -184,15 +149,8 @@ MediaActivatedStartupReleaseSequencerNode::process(
     if (!eventChannels) {
         return failTerminal(eventChannels.error());
     }
-    auto eventReady = preflight(eventChannels.value());
-    if (!eventReady) {
-        return failTerminal(eventReady.error());
-    }
-    if (!eventReady.value()) {
-        return ::media::Result<MediaNodeProcessResult>::success(
-            MediaNodeProcessResult::waiting());
-    }
-
+    MediaBufferRef eventForCommit = m_activatedEvent;
+    bool activateInitial = false;
     switch (release->releaseKind()) {
     case MediaAvStartupReleaseKind::InitialAtomicRelease: {
         if (m_activatedEvent) {
@@ -200,42 +158,140 @@ MediaActivatedStartupReleaseSequencerNode::process(
                 ::media::ErrorInfo::invalidArgument(
                     "Activation release sequencer rejects duplicate initial activation"));
         }
+        if (m_preparationCapability) {
+            const auto preparation = m_preparationCapability->snapshot();
+            if (preparation.phase ==
+                    MediaAvStartupVideoPreparationPhase::Feeding ||
+                preparation.phase ==
+                    MediaAvStartupVideoPreparationPhase::Awaiting) {
+                return ::media::Result<MediaNodeProcessResult>::success(
+                    MediaNodeProcessResult::waiting());
+            }
+            if (preparation.phase !=
+                    MediaAvStartupVideoPreparationPhase::FilterReady ||
+                preparation.generation != release->epoch().generation ||
+                preparation.releaseIdentity != transaction->releaseIdentity()) {
+                return failTerminal(::media::ErrorInfo::invalidArgument(
+                    "Activation release sequencer rejects mismatched video preparation"));
+            }
+            if (!preparation.filterOutputReserved ||
+                !preparation.extractorOutputsReserved) {
+                return ::media::Result<MediaNodeProcessResult>::success(
+                    MediaNodeProcessResult::waiting());
+            }
+            if (!preparation.anchoredEpoch) {
+                auto group = context.findAvSyncGroup(m_groupKey);
+                if (!group || group->key() != m_groupKey || !group->clock()) {
+                    return failTerminal(::media::ErrorInfo::notInitialized(
+                        "Activation release sequencer requires its exact master clock"));
+                }
+                auto now = group->clock()->now();
+                if (!now) return failTerminal(now.error());
+                auto masterRelease = now.value().checkedAdd(m_outputLead);
+                if (!masterRelease) return failTerminal(masterRelease.error());
+                MediaPlaybackEpoch anchoredEpoch = release->epoch();
+                anchoredEpoch.masterRelease = masterRelease.value();
+                MediaAudioPlaybackOrigin anchoredOrigin = release->audioOrigin();
+                anchoredOrigin.masterRelease = masterRelease.value();
+                auto reanchored =
+                    MediaStartupReleaseTransactionBuffer::reanchor(
+                        *transaction, anchoredEpoch, anchoredOrigin);
+                if (!reanchored) return failTerminal(reanchored.error());
+                if (auto published = m_preparationCapability->publishInitialAnchor(
+                        anchoredEpoch.generation,
+                        transaction->releaseIdentity(), anchoredEpoch,
+                        anchoredOrigin); !published) {
+                    return failTerminal(published.error());
+                }
+                m_reanchoredTransaction = std::move(reanchored).value();
+                return ::media::Result<MediaNodeProcessResult>::success(
+                    MediaNodeProcessResult::waiting());
+            }
+            if (!preparation.anchoredAudioOrigin ||
+                !preparation.extractorOutputsReanchored) {
+                return ::media::Result<MediaNodeProcessResult>::success(
+                    MediaNodeProcessResult::waiting());
+            }
+        }
+        const auto* activationTransaction = m_preparationCapability
+            ? dynamic_cast<const MediaStartupReleaseTransactionBuffer*>(
+                  m_reanchoredTransaction.get())
+            : transaction;
+        const auto* activationRelease = activationTransaction
+            ? activationTransaction->release() : nullptr;
+        if (!activationRelease) {
+            return failTerminal(::media::ErrorInfo::invalidArgument(
+                "Activation release sequencer lost its anchored initial release"));
+        }
         auto event = MediaPlaybackEpochActivatedBuffer::create(
-            m_groupKey, release->epoch(), release->audioOrigin());
+            m_groupKey, activationRelease->epoch(),
+            activationRelease->audioOrigin());
         if (!event) {
             return failTerminal(event.error());
         }
-        if (auto activated = m_capability.activateInitial(
-                release->epoch(), release->audioOrigin()); !activated) {
-            return failTerminal(activated.error());
-        }
-        m_activatedEvent = std::move(event).value();
+        eventForCommit = std::move(event).value();
+        activateInitial = true;
         break;
     }
     case MediaAvStartupReleaseKind::ActiveEpochPassThrough: {
         const auto* event = dynamic_cast<const MediaPlaybackEpochActivatedBuffer*>(
             m_activatedEvent.get());
         if (!event || event->groupKey() != release->groupKey() ||
-            event->epoch() != release->epoch() ||
-            event->audioOrigin() != release->audioOrigin()) {
+            event->epoch().generation != release->epoch().generation ||
+            event->epoch().sourceStart != release->epoch().sourceStart) {
             return failTerminal(
                 ::media::ErrorInfo::invalidArgument(
                     "Activation release sequencer rejects pass-through before matching activation"));
+        }
+        if (m_preparationCapability) {
+            auto reanchored = MediaStartupReleaseTransactionBuffer::reanchor(
+                *transaction, event->epoch(), event->audioOrigin());
+            if (!reanchored) return failTerminal(reanchored.error());
+            m_reanchoredTransaction = std::move(reanchored).value();
         }
         break;
     }
     }
 
-    for (MediaChannel* channel : eventChannels.value()) {
-        if (auto status = commit(*channel, m_activatedEvent); !status) {
-            return failTerminal(status.error());
+    const MediaBufferRef& bound = m_preparationCapability
+        ? m_reanchoredTransaction : transaction->payload();
+    std::vector<MediaAtomicOutputBatch> batches;
+    batches.reserve((activateInitial ? eventChannels.value().size() : 0) + 1);
+    if (activateInitial) {
+        for (MediaChannel* channel : eventChannels.value()) {
+            batches.push_back({channel, std::span(&eventForCommit, 1)});
         }
     }
-    if (auto status = commit(*releaseChannels.value().front(),
-                             transaction->payload()); !status) {
-        return failTerminal(status.error());
+    batches.push_back({releaseChannels.value().front(),
+                       std::span(&bound, 1)});
+    auto atomic = MediaAtomicOutputTransaction::acquire(
+        "Activation release sequencer", batches);
+    if (!atomic) return failTerminal(atomic.error());
+    if (!atomic.value()) return ::media::Result<MediaNodeProcessResult>::success(
+        MediaNodeProcessResult::waiting());
+    if (activateInitial) {
+        if (m_preparationCapability) {
+            if (auto committed = m_preparationCapability->authorizeRelease(
+                    release->epoch().generation,
+                    transaction->releaseIdentity(), [&] {
+                        return m_capability.activateInitial(
+                            dynamic_cast<const MediaStartupReleaseTransactionBuffer*>(
+                                m_reanchoredTransaction.get())->release()->epoch(),
+                            dynamic_cast<const MediaStartupReleaseTransactionBuffer*>(
+                                m_reanchoredTransaction.get())->release()->audioOrigin());
+                    }); !committed) {
+                return failTerminal(committed.error());
+            }
+        } else if (auto activated = m_capability.activateInitial(
+                       release->epoch(), release->audioOrigin()); !activated) {
+            return failTerminal(activated.error());
+        }
+        m_activatedEvent = eventForCommit;
     }
+    if (auto committed = atomic.value()->commit(); !committed)
+        return failTerminal(committed.error());
     m_pendingTransaction.reset();
+    m_reanchoredTransaction.reset();
     return ::media::Result<MediaNodeProcessResult>::success(
         MediaNodeProcessResult::progress());
 }
@@ -252,8 +308,10 @@ MediaActivatedStartupReleaseSequencerNode::failTerminal(
 ::media::Status MediaActivatedStartupReleaseSequencerNode::stop(
     MediaGraphExecutionContext& context)
 {
+    if (m_preparationCapability) m_preparationCapability->cancel();
     m_pendingTransaction.reset();
     m_activatedEvent.reset();
+    m_reanchoredTransaction.reset();
     if (!m_terminalFailure) {
         m_terminalFailure = ::media::ErrorInfo::cancelled(
             "Activation release sequencer was stopped");
@@ -264,8 +322,10 @@ MediaActivatedStartupReleaseSequencerNode::failTerminal(
 void MediaActivatedStartupReleaseSequencerNode::abort(
     MediaGraphExecutionContext& context) noexcept
 {
+    if (m_preparationCapability) m_preparationCapability->cancel();
     m_pendingTransaction.reset();
     m_activatedEvent.reset();
+    m_reanchoredTransaction.reset();
     if (!m_terminalFailure) {
         m_terminalFailure = ::media::ErrorInfo::cancelled(
             "Activation release sequencer was aborted");

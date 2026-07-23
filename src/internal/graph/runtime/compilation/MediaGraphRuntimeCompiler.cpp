@@ -1,4 +1,5 @@
 #include "internal/graph/runtime/compilation/MediaGraphRuntimeCompiler.h"
+#include "internal/graph/sync/startup/MediaAvStartupVideoPreparationState.h"
 
 #include "internal/graph/runtime/MediaGraphRuntime.h"
 #include "internal/graph/runtime/compilation/MediaAvSyncRuntimeBootstrap.h"
@@ -48,6 +49,21 @@ public:
     }
 };
 
+bool isLegacyProductionAvSyncAuthority(MediaNodeKind kind) noexcept
+{
+    switch (kind) {
+    case MediaNodeKind::RtpMux:
+    case MediaNodeKind::RtpOutput:
+    case MediaNodeKind::SdpWriter:
+    case MediaNodeKind::PacketNormalize:
+    case MediaNodeKind::VideoTimestamp:
+    case MediaNodeKind::PacketStartGate:
+        return true;
+    default:
+        return false;
+    }
+}
+
 } // namespace
 
 ::media::Status MediaGraphRuntimeCompiler::validateBindings(const MediaRealtimeExecutableGraph& executable)
@@ -83,6 +99,7 @@ public:
     std::size_t scheduledRtpSenderReferenceCount = 0;
     std::size_t scheduledTsAdapterReferenceCount = 0;
     std::size_t projectMpegTsPlanSourceReferenceCount = 0;
+    std::size_t legacyProductionAuthorityCount = 0;
     for (const auto& binding : executable.inputBindings) {
         if (!binding.nodeId.isValid() || !binding.prepared.valid() ||
             !bindingIds.insert(binding.nodeId.value).second) {
@@ -108,6 +125,8 @@ public:
             ++projectMpegTsPlanSourceCount;
         if (node.kind == MediaNodeKind::DualMediaSdpPublisher)
             ++dualMediaSdpPublisherCount;
+        if (isLegacyProductionAvSyncAuthority(node.kind))
+            ++legacyProductionAuthorityCount;
         if (node.kind == MediaNodeKind::RealtimeInput && !bindingIds.contains(node.id.value)) {
             return ::media::Status::failure(
                 ::media::ErrorInfo::notInitialized("MediaGraphRuntime missing prepared RealtimeInput binding"));
@@ -202,26 +221,68 @@ public:
                 ::media::ErrorInfo::notInitialized(
                     "MediaGraphRuntime A/V sync binding requires exactly one scheduler, binder, and activation release sequencer"));
         }
-        const bool hasScheduledRtpOutput = scheduledRtpSenderCount != 0 ||
-            dualMediaSdpPublisherCount != 0;
-        if (hasScheduledRtpOutput &&
-            (scheduledRtpSenderCount != 2 ||
-             scheduledRtpSenderReferenceCount != 2 ||
-             dualMediaSdpPublisherCount != 1)) {
+        const bool hasProtocolOutputAuthority =
+            scheduledRtpSenderCount != 0 ||
+            scheduledRtpSenderReferenceCount != 0 ||
+            dualMediaSdpPublisherCount != 0 ||
+            scheduledTsAdapterCount != 0 ||
+            scheduledTsAdapterReferenceCount != 0 ||
+            projectMpegTsPlanSourceCount != 0 ||
+            projectMpegTsPlanSourceReferenceCount != 0;
+        if (executable.avSyncBinding->assemblyMode ==
+            MediaAvSyncBindingAssemblyMode::ComponentCore) {
+            if (hasProtocolOutputAuthority) {
+                return ::media::Status::failure(
+                    ::media::ErrorInfo::invalidArgument(
+                        "MediaGraphRuntime component A/V sync assembly rejects protocol output authorities"));
+            }
+        } else if (executable.avSyncBinding->assemblyMode !=
+                   MediaAvSyncBindingAssemblyMode::ProductionProtocolOutput) {
             return ::media::Status::failure(
-                ::media::ErrorInfo::notInitialized(
-                    "MediaGraphRuntime scheduled RTP output requires exactly two injected senders and one SDP publisher"));
-        }
-        if (scheduledTsAdapterReferenceCount != scheduledTsAdapterCount) {
+                ::media::ErrorInfo::invalidArgument(
+                    "MediaGraphRuntime A/V sync binding has an invalid assembly mode"));
+        } else if (legacyProductionAuthorityCount != 0) {
             return ::media::Status::failure(
-                ::media::ErrorInfo::notInitialized(
-                    "MediaGraphRuntime scheduled MPEG-TS adapters require their exact planned sync group"));
-        }
-        if (projectMpegTsPlanSourceReferenceCount !=
-            projectMpegTsPlanSourceCount) {
+                ::media::ErrorInfo::invalidArgument(
+                    "MediaGraphRuntime production A/V sync assembly rejects legacy output, timestamp, and startup authorities"));
+        } else if (*executable.avSyncBinding->plan.topology ==
+                   MediaAvSyncTopology::SeparateRtpToSeparateRtp) {
+            if (scheduledRtpSenderCount != 2 ||
+                scheduledRtpSenderReferenceCount != 2 ||
+                dualMediaSdpPublisherCount != 1) {
+                return ::media::Status::failure(
+                    ::media::ErrorInfo::notInitialized(
+                        "MediaGraphRuntime separate RTP topology requires exactly two injected senders and one SDP publisher"));
+            }
+            if (scheduledTsAdapterCount != 0 ||
+                scheduledTsAdapterReferenceCount != 0 ||
+                projectMpegTsPlanSourceCount != 0 ||
+                projectMpegTsPlanSourceReferenceCount != 0) {
+                return ::media::Status::failure(
+                    ::media::ErrorInfo::invalidArgument(
+                        "MediaGraphRuntime separate RTP topology rejects MPEG-TS output authorities"));
+            }
+        } else if (*executable.avSyncBinding->plan.topology ==
+                   MediaAvSyncTopology::MpegTsToMpegTs) {
+            if (scheduledTsAdapterCount != 1 ||
+                scheduledTsAdapterReferenceCount != 1 ||
+                projectMpegTsPlanSourceCount != 1 ||
+                projectMpegTsPlanSourceReferenceCount != 1) {
+                return ::media::Status::failure(
+                    ::media::ErrorInfo::notInitialized(
+                        "MediaGraphRuntime MPEG-TS topology requires exactly one scheduled adapter and one plan source"));
+            }
+            if (scheduledRtpSenderCount != 0 ||
+                scheduledRtpSenderReferenceCount != 0 ||
+                dualMediaSdpPublisherCount != 0) {
+                return ::media::Status::failure(
+                    ::media::ErrorInfo::invalidArgument(
+                        "MediaGraphRuntime MPEG-TS topology rejects RTP output authorities"));
+            }
+        } else {
             return ::media::Status::failure(
-                ::media::ErrorInfo::notInitialized(
-                    "MediaGraphRuntime project MPEG-TS plan sources require their exact planned sync group"));
+                ::media::ErrorInfo::unsupported(
+                    "MediaGraphRuntime A/V sync topology is unsupported"));
         }
     } else if (schedulerCount != 0 || binderCount != 0 ||
                sequencerCount != 0 || scheduledRtpSenderCount != 0 ||
@@ -240,6 +301,8 @@ public:
     std::vector<MediaPreparedRealtimeInputBinding>& activeBindings,
     std::optional<MediaPlaybackEpochActivationCapability>&
         playbackEpochActivationCapability,
+    std::shared_ptr<MediaAvStartupVideoPreparationState>&
+        videoPreparationState,
     const std::shared_ptr<MediaAvSyncClockSource>& avSyncClockSource,
     MediaGraphExecutionContext& context,
     MediaGraphScheduler& scheduler,
@@ -265,6 +328,7 @@ public:
         return compiled;
     }
     std::optional<MediaPlaybackEpochActivationCapability> preparedCapability;
+    std::shared_ptr<MediaAvStartupVideoPreparationState> preparedVideoPreparation;
     if (executable.avSyncBinding) {
         ProductionAvSyncClockSource productionClockSource;
         MediaAvSyncClockSource& clockSource = avSyncClockSource
@@ -283,6 +347,22 @@ public:
             return ::media::Status::failure(registered.error());
         }
         preparedCapability.emplace(std::move(registered).value());
+        const bool preparationPlanned = executable.graph.findOutputPort(
+            [&]() {
+                for (const auto& node : executable.graph.nodes())
+                    if (node.kind == MediaNodeKind::PlaybackEpochBinder)
+                        return node.id;
+                return MediaNodeId::invalid();
+            }(), "preparation") != nullptr;
+        if (executable.avSyncBinding->videoPreparationState) {
+            preparedVideoPreparation =
+                executable.avSyncBinding->videoPreparationState;
+        } else if (preparationPlanned) {
+            auto created = MediaAvStartupVideoPreparationState::create(
+                executable.avSyncBinding->groupKey);
+            if (!created) return ::media::Status::failure(created.error());
+            preparedVideoPreparation = std::move(created).value();
+        }
     }
     const std::vector<MediaNodeId> oldExecutionOrder = context.executionOrder();
     context.shutdownAvSyncGroups();
@@ -293,6 +373,7 @@ public:
     context = std::move(preparedContext);
     activeBindings = std::move(executable.inputBindings);
     playbackEpochActivationCapability = std::move(preparedCapability);
+    videoPreparationState = std::move(preparedVideoPreparation);
     acceptanceCollector.reset();
     queueHighWatermark = 0;
     state = MediaGraphRuntimeState::Compiled;
@@ -312,7 +393,9 @@ public:
     MediaGraphScheduler& scheduler,
     std::vector<MediaPreparedRealtimeInputBinding>& inputBindings,
     std::optional<MediaPlaybackEpochActivationCapability>&
-        playbackEpochActivationCapability)
+        playbackEpochActivationCapability,
+    const std::shared_ptr<MediaAvStartupVideoPreparationState>&
+        videoPreparationState)
 {
     if (!context.compiled() || !context.graph()) {
         return ::media::Status::failure(
@@ -321,13 +404,36 @@ public:
     std::vector<std::unique_ptr<MediaRuntimeNode>> preparedNodes;
     preparedNodes.reserve(context.graph()->nodes().size());
     const MediaNode* sequencer = nullptr;
+    const MediaNode* videoFilter = nullptr;
+    const MediaNode* releaseExtractor = nullptr;
     std::vector<const MediaNode*> scheduledRtpSenders;
     for (const MediaNode& node : context.graph()->nodes()) {
         if (node.kind == MediaNodeKind::ActivatedStartupReleaseSequencer) {
             sequencer = &node;
         }
+        if (node.kind == MediaNodeKind::VideoFilter) videoFilter = &node;
+        if (node.kind == MediaNodeKind::AvBoundReleaseExtractor)
+            releaseExtractor = &node;
         if (node.kind == MediaNodeKind::ScheduledRtpSender)
             scheduledRtpSenders.push_back(&node);
+    }
+    if (videoPreparationState) {
+        if (!sequencer) {
+            return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+                "Video preparation state requires a sequencer node"));
+        }
+        if (auto bound = videoPreparationState->bindSequencerWakeup(
+                context.sharedNodeWakeup(sequencer->id)); !bound) return bound;
+        if (videoFilter) {
+            if (auto bound = videoPreparationState->bindFilterWakeup(
+                    context.sharedNodeWakeup(videoFilter->id)); !bound)
+                return bound;
+        }
+        if (releaseExtractor) {
+            if (auto bound = videoPreparationState->bindExtractorWakeup(
+                    context.sharedNodeWakeup(releaseExtractor->id)); !bound)
+                return bound;
+        }
     }
     if (sequencer) {
         if (!playbackEpochActivationCapability) {
@@ -381,7 +487,8 @@ public:
         for (auto& candidate : inputBindings) {
             if (candidate.nodeId == node.id) { binding = &candidate; break; }
         }
-        auto runtimeNode = MediaRuntimeNodeFactory::create(node, binding);
+        auto runtimeNode = MediaRuntimeNodeFactory::create(
+            node, binding, videoPreparationState);
         if (!runtimeNode) return ::media::Status::failure(runtimeNode.error());
         mediaGraphDiagnosticLog(context.diagnosticsEnabled(), MediaGraphDiagnosticPhase::RuntimeNode,
                                 "register node=" + std::to_string(node.id.value) +
@@ -400,7 +507,8 @@ public:
     if (sequencer && !scheduler.findNode(sequencer->id)) {
         auto runtimeNode =
             MediaRuntimeNodeFactory::createActivatedStartupReleaseSequencer(
-                *sequencer, std::move(*playbackEpochActivationCapability));
+                *sequencer, std::move(*playbackEpochActivationCapability),
+                videoPreparationState);
         if (!runtimeNode) {
             return ::media::Status::failure(runtimeNode.error());
         }

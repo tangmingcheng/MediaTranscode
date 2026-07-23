@@ -281,7 +281,8 @@ MediaAvSyncResult<MediaAudioServoDecision> MediaAudioDriftServo::update(
 
     if (!m_initialized) {
         m_initialized = true;
-        m_lastObservedAtNs = measurement.observedAt.nanoseconds();
+        m_lastSourceEndOnMasterNs =
+            measurement.sourceEndOnMaster.nanoseconds();
         m_lastRawPhaseNs = measurement.phaseError.nanoseconds();
         m_filteredPhaseNs = measurement.phaseError.nanoseconds();
         m_recovering = magnitude(m_filteredPhaseNs) >=
@@ -291,14 +292,14 @@ MediaAvSyncResult<MediaAudioServoDecision> MediaAudioDriftServo::update(
         return publishWindowIfDue(measurement, 0);
     }
 
-    const auto elapsedResult = measurement.observedAt.checkedSubtract(
-        MediaRunningTime::fromNanoseconds(m_lastObservedAtNs));
+    const auto elapsedResult = measurement.sourceEndOnMaster.checkedSubtract(
+        MediaRunningTime::fromNanoseconds(m_lastSourceEndOnMasterNs));
     if (!elapsedResult || elapsedResult.value().nanoseconds() <= 0) {
         return MediaAvSyncResult<MediaAudioServoDecision>::failure(
             error(MediaAvSyncErrorCode::InvalidAudioServoMeasurement,
                   "update",
                   &measurement,
-                  "measurement time must increase monotonically"));
+                  "canonical source end must increase monotonically"));
     }
     const std::int64_t elapsedNs = elapsedResult.value().nanoseconds();
     if (elapsedNs < m_policy.minimumUpdateIntervalNs) {
@@ -349,7 +350,7 @@ MediaAvSyncResult<MediaAudioServoDecision> MediaAudioDriftServo::update(
         return MediaAvSyncResult<MediaAudioServoDecision>::failure(
             error(MediaAvSyncErrorCode::InvalidAudioServoMeasurement,
                   "update", &measurement,
-                  "output sample index advanced beyond elapsed-time bound"));
+                  "output sample index advanced beyond canonical source elapsed-time bound"));
     }
     return processCurrent(measurement, elapsedNs);
 }
@@ -465,7 +466,7 @@ MediaAvSyncResult<MediaAudioServoDecision> MediaAudioDriftServo::processCurrent(
         static_cast<std::int64_t>(m_lastStretchPpm) - slew,
         static_cast<std::int64_t>(m_lastStretchPpm) + slew));
 
-    m_lastObservedAtNs = measurement.observedAt.nanoseconds();
+    m_lastSourceEndOnMasterNs = measurement.sourceEndOnMaster.nanoseconds();
     m_lastRawPhaseNs = measurement.phaseError.nanoseconds();
     m_lastSequence = measurement.sequence;
     m_lastEffectiveOutputSampleIndex = measurement.effectiveOutputSampleIndex;
@@ -538,7 +539,7 @@ void MediaAudioDriftServo::clearControlState() noexcept
 {
     m_initialized = false;
     m_recovering = false;
-    m_lastObservedAtNs = 0;
+    m_lastSourceEndOnMasterNs = 0;
     m_lastRawPhaseNs = 0;
     m_filteredPhaseNs = 0;
     m_filteredFrequencyPpm = 0;

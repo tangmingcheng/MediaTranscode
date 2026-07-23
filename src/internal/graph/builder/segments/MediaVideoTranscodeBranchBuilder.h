@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/core/MediaGraph.h"
+#include "internal/graph/builder/MediaEncodedBranchEndpoints.h"
 #include "internal/graph/model/MediaRealtimeEdgePolicySet.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/planner/MediaPipelinePlanner.h"
@@ -26,15 +27,13 @@ struct MediaVideoTranscodeBranchOptions {
     MediaNodeId packetSourceNode = MediaNodeId::invalid();
     std::string packetSourcePort = "video";
 
-    MediaNodeId muxNode = MediaNodeId::invalid();
-    std::string muxCodecPort = "codec";
-    std::string muxPacketPort = "packet";
 };
 
 class MediaVideoTranscodeBranchBuilder final {
 public:
-    static ::media::Result<void> build(MediaGraph& graph,
-                                       const MediaVideoTranscodeBranchOptions& options);
+    static ::media::Result<MediaEncodedBranchEndpoints> build(
+        MediaGraph& graph,
+        const MediaVideoTranscodeBranchOptions& options);
 
 private:
     MediaVideoTranscodeBranchBuilder() = default;

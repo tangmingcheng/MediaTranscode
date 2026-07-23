@@ -4,10 +4,14 @@
 #include "internal/graph/runtime/buffer/MediaBoundCanonicalAudioBuffer.h"
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/channel/MediaRequiredInputReader.h"
+#include "internal/graph/runtime/channel/MediaAtomicOutputTransaction.h"
 #include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
 #include "internal/graph/sync/MediaAudioDriftControllerState.h"
 #include "internal/graph/sync/MediaCanonicalAudioSamplesBuffer.h"
 #include "internal/graph/sync/lineage/MediaAudioLineageIdentities.h"
+
+#include <array>
+#include <span>
 
 namespace media::ffmpeg::graph {
 
@@ -62,7 +66,6 @@ MediaAudioDriftControllerNode::measureCanonicalPosition(
     const MediaAudioPlaybackOrigin& origin,
     MediaRunningTime sourceEndOnMaster,
     MediaCanonicalAudioSampleInterval projectedOutput,
-    MediaRunningTime observedAt,
     std::uint64_t sequence)
 {
     if (sequence == 0 || origin.generation == 0 ||
@@ -83,8 +86,9 @@ MediaAudioDriftControllerNode::measureCanonicalPosition(
         return ::media::Result<MediaAudioDriftMeasurement>::failure(phase.error());
     }
     return ::media::Result<MediaAudioDriftMeasurement>::success(
-        MediaAudioDriftMeasurement{phase.value(), observedAt, origin.generation,
-                                   sequence, projectedOutput.begin,
+        MediaAudioDriftMeasurement{phase.value(), sourceEndOnMaster,
+                                   origin.generation, sequence,
+                                   projectedOutput.begin,
                                    origin.outputSampleRate});
 }
 
@@ -163,10 +167,8 @@ bool MediaAudioDriftControllerNode::pendingOutputIsCurrent(
         fragments.back().interval.sampleRate);
     if (!sourceEnd) return ::media::Status::failure(sourceEnd.error());
     auto sourceEndMaster = m_group->mapCanonicalToMaster(sourceEnd.value());
-    auto observedAt = m_group->clock()->now();
-    if (!sourceEndMaster || !observedAt) {
-        return ::media::Status::failure(
-            !sourceEndMaster ? sourceEndMaster.error() : observedAt.error());
+    if (!sourceEndMaster) {
+        return ::media::Status::failure(sourceEndMaster.error());
     }
 
     auto candidateProjection = m_state->projection;
@@ -193,7 +195,7 @@ bool MediaAudioDriftControllerNode::pendingOutputIsCurrent(
     }
     auto measurement = measureCanonicalPosition(
         bound->audioOrigin(), sourceEndMaster.value(), projected,
-        observedAt.value(), m_state->nextSequence);
+        m_state->nextSequence);
     if (!measurement) return ::media::Status::failure(measurement.error());
 
     auto candidateServo = m_state->servo;
@@ -239,51 +241,38 @@ bool MediaAudioDriftControllerNode::pendingOutputIsCurrent(
     return ::media::Status::success();
 }
 
-::media::Result<bool> MediaAudioDriftControllerNode::outputsReady(
-    MediaGraphExecutionContext& context) const
-{
-    MediaChannel* audio = context.findOutputChannel(nodeId(), "audio");
-    MediaChannel* correction = context.findOutputChannel(nodeId(), "correction");
-    if (!audio || !correction || audio->closed() || correction->closed() ||
-        audio->aborted() || correction->aborted()) {
-        return ::media::Result<bool>::failure(::media::ErrorInfo::cancelled(
-            "Audio drift controller output is unavailable"));
-    }
-    if (audio->policy().queuePolicy.overflowPolicy !=
-            MediaQueueOverflowPolicy::BlockProducer ||
-        correction->policy().queuePolicy.overflowPolicy !=
-            MediaQueueOverflowPolicy::BlockProducer) {
-        return ::media::Result<bool>::failure(::media::ErrorInfo::invalidArgument(
-            "Audio drift controller requires blocking transactional outputs"));
-    }
-    return ::media::Result<bool>::success(
-        audio->size() < audio->capacity() &&
-        (!m_state->pending->correction ||
-         correction->size() < correction->capacity()));
-}
-
-::media::Status MediaAudioDriftControllerNode::commit(
+::media::Result<bool> MediaAudioDriftControllerNode::commitIfReady(
     MediaGraphExecutionContext& context)
 {
     MediaChannel* audio = context.findOutputChannel(nodeId(), "audio");
     MediaChannel* correction = context.findOutputChannel(nodeId(), "correction");
-    if (m_state->pending->correction &&
-        correction->pushOutcome(m_state->pending->correction) !=
-            MediaQueuePushOutcome::Accepted) {
-        return ::media::Status::failure(::media::ErrorInfo::internalError(
-            "Audio correction commit diverged after preflight"));
+    if (!audio || !correction) {
+        return ::media::Result<bool>::failure(::media::ErrorInfo::notInitialized(
+            "Audio drift controller requires explicit transactional outputs"));
     }
-    if (audio->pushOutcome(m_state->pending->audio) !=
-        MediaQueuePushOutcome::Accepted) {
-        return ::media::Status::failure(::media::ErrorInfo::internalError(
-            "Audio media commit diverged after preflight"));
+    const std::array<MediaBufferRef, 1> audioValues{m_state->pending->audio};
+    const std::span<const MediaBufferRef> correctionValues =
+        m_state->pending->correction
+        ? std::span<const MediaBufferRef>(&m_state->pending->correction, 1)
+        : std::span<const MediaBufferRef>{};
+    const std::array<MediaAtomicOutputBatch, 2> batches{
+        MediaAtomicOutputBatch{correction, correctionValues},
+        MediaAtomicOutputBatch{audio, audioValues}};
+    auto acquired = MediaAtomicOutputTransaction::acquire(
+        "Audio drift controller", batches);
+    if (!acquired) {
+        return ::media::Result<bool>::failure(acquired.error());
+    }
+    if (!acquired.value()) return ::media::Result<bool>::success(false);
+    if (auto committed = acquired.value()->commit(); !committed) {
+        return ::media::Result<bool>::failure(committed.error());
     }
     m_state->servo = std::move(m_state->pending->servo);
     m_state->projection = std::move(m_state->pending->projection);
     m_state->origin = m_state->pending->origin;
     m_state->nextSequence = m_state->pending->nextSequence;
     m_state->pending.reset();
-    return ::media::Status::success();
+    return ::media::Result<bool>::success(true);
 }
 
 ::media::Result<MediaNodeProcessResult>
@@ -321,10 +310,12 @@ MediaAudioDriftControllerNode::onProcess(MediaGraphExecutionContext& context)
             return ::media::Result<MediaNodeProcessResult>::failure(staged.error());
         }
     }
-    auto ready = outputsReady(context);
-    if (!ready) return ::media::Result<MediaNodeProcessResult>::failure(ready.error());
-    if (!ready.value()) return processWaiting();
-    return processProgress(commit(context));
+    auto committed = commitIfReady(context);
+    if (!committed) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            committed.error());
+    }
+    return committed.value() ? processProgress() : processWaiting();
 }
 
 } // namespace media::ffmpeg::graph

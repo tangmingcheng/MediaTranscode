@@ -19,10 +19,19 @@ MediaNodeKind MediaRtpSourceClockStateAdapterNode::staticKind() noexcept
     return MediaNodeKind::RtpSourceClockStateAdapter;
 }
 
+::media::Status MediaRtpSourceClockStateAdapterNode::start(
+    MediaGraphExecutionContext& context)
+{
+    resetState();
+    return FFmpegNodeRuntime::start(context);
+}
+
 ::media::Result<MediaNodeProcessResult>
 MediaRtpSourceClockStateAdapterNode::onProcess(
     MediaGraphExecutionContext& context)
 {
+    if (m_pendingState) return emitPendingState(context);
+
     auto input = tryReadRequiredInput(
         context.findInputChannel(nodeId(), "clock"),
         "RTP source-clock state adapter", "clock");
@@ -73,9 +82,52 @@ MediaRtpSourceClockStateAdapterNode::onProcess(
         discontinuity = true;
         break;
     }
-    auto adapted = makeMediaBufferRef<MediaSourceClockStateBuffer>(
+    const Projection projection{
+        readiness, snapshot.groupGeneration, discontinuity};
+    if (m_lastEmittedProjection == projection) return processProgress();
+
+    m_pendingProjection = projection;
+    m_pendingState = makeMediaBufferRef<MediaSourceClockStateBuffer>(
         readiness, snapshot.groupGeneration, discontinuity);
-    return processProgress(emitOutput(context, "state", adapted));
+    return emitPendingState(context);
+}
+
+::media::Result<MediaNodeProcessResult>
+MediaRtpSourceClockStateAdapterNode::emitPendingState(
+    MediaGraphExecutionContext& context)
+{
+    auto emitted = emitOutput(context, "state", m_pendingState);
+    if (!emitted) {
+        return emitted.error().code == ::media::ErrorCode::WouldBlock
+            ? processWaiting()
+            : ::media::Result<MediaNodeProcessResult>::failure(
+                  emitted.error());
+    }
+    m_lastEmittedProjection = m_pendingProjection;
+    m_pendingProjection.reset();
+    m_pendingState.reset();
+    return processProgress();
+}
+
+::media::Status MediaRtpSourceClockStateAdapterNode::stop(
+    MediaGraphExecutionContext& context)
+{
+    resetState();
+    return FFmpegNodeRuntime::stop(context);
+}
+
+void MediaRtpSourceClockStateAdapterNode::abort(
+    MediaGraphExecutionContext& context) noexcept
+{
+    resetState();
+    FFmpegNodeRuntime::abort(context);
+}
+
+void MediaRtpSourceClockStateAdapterNode::resetState() noexcept
+{
+    m_lastEmittedProjection.reset();
+    m_pendingProjection.reset();
+    m_pendingState.reset();
 }
 
 } // namespace media::ffmpeg::graph

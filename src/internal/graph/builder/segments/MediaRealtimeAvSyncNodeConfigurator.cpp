@@ -168,7 +168,9 @@ MediaRealtimeAvSyncNodeConfigurator::configureStartupCoordinator(
         startup.videoByteCapacity && startup.audioByteCapacity &&
         startup.maximumVideoUnitBytes && startup.maximumAudioUnitBytes &&
         startup.videoIdentity && startup.audioIdentity &&
-        startup.allowDegradedClock && plan.synchronization.topology;
+        startup.allowDegradedClock && plan.synchronization.topology &&
+        plan.synchronization.audioServo.outputSampleRate &&
+        *plan.synchronization.audioServo.outputSampleRate > 0;
     if (!complete) {
         return ::media::Result<void>::failure(
             ::media::ErrorInfo::invalidArgument(
@@ -200,6 +202,11 @@ MediaRealtimeAvSyncNodeConfigurator::configureStartupCoordinator(
              std::pair{"av_startup.output_lead_ns", *startup.outputLeadNs}}) {
         if (auto status = setTime(key, value); !status) return status;
     }
+    if (auto status = setOption(
+            graph, node, "av_startup.output_audio_sample_rate",
+            std::to_string(
+                *plan.synchronization.audioServo.outputSampleRate));
+        !status) return status;
     for (const auto& [key, value] : {
              std::pair{"av_startup.video_capacity", *startup.videoCapacity},
              std::pair{"av_startup.audio_capacity", *startup.audioCapacity},
@@ -257,9 +264,13 @@ MediaRealtimeAvSyncNodeConfigurator::configureActivationSequencer(
     MediaNodeId node,
     const MediaRealtimeAvSyncRuntimePlan& plan)
 {
-    return setOption(
+    if (auto status = setOption(
         graph, node, "activated_startup_release_sequencer.sync_group",
-        plan.groupKey.value());
+        plan.groupKey.value()); !status) return status;
+    return setOption(
+        graph, node, "activated_startup_release_sequencer.output_lead_ns",
+        std::to_string(
+            plan.synchronization.startup.outputLeadNs->nanoseconds()));
 }
 
 } // namespace media::ffmpeg::graph

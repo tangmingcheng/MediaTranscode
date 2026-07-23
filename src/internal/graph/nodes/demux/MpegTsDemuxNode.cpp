@@ -35,7 +35,8 @@ std::optional<std::uint64_t> packetTimestamp(std::int64_t value)
 ::media::Result<MediaBufferRef> wrapTimedPacket(
     ::media::ffmpeg::PacketPtr packet,
     MediaStreamKind streamKind,
-    MediaPacketSourceTiming timing)
+    MediaPacketSourceTiming timing,
+    MediaRational plannedTimeBase)
 {
     auto buffer = FFmpegBufferFactory::wrapPacket(
         std::move(packet), streamKind, std::move(timing));
@@ -46,9 +47,7 @@ std::optional<std::uint64_t> packetTimestamp(std::int64_t value)
             ::media::ErrorInfo::invalidArgument(
                 "MpegTsDemuxNode lost wrapped packet ownership"));
     }
-    buffer.value()->setTimeDescriptor(MediaTimeDescriptor{
-        MediaRational{wrapped->packet()->time_base.num,
-                      wrapped->packet()->time_base.den}});
+    buffer.value()->setTimeDescriptor(MediaTimeDescriptor{plannedTimeBase});
     return buffer;
 }
 
@@ -147,6 +146,8 @@ MediaNodeKind MpegTsDemuxNode::staticKind() noexcept
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("MpegTsDemuxNode requires planned 1/90000 packet timestamps"));
     }
+    m_packetTimeBase = MediaRational{
+        numerator.value(), denominator.value()};
     if (originPolicyValue.value() !=
         static_cast<int>(MediaTsPacketOriginPolicy::PerStreamPesCarry)) {
         return ::media::Status::failure(::media::ErrorInfo::unsupported(
@@ -270,7 +271,8 @@ MpegTsDemuxNode::sourceClockCheckpoint(std::uint64_t packetPosition)
         *packet, checkpoint,
         streamKind == MediaStreamKind::Video ? m_videoClock : m_audioClock);
     if (!timing) return ::media::Status::failure(timing.error());
-    auto buffer = wrapTimedPacket(std::move(packet), streamKind, timing.value());
+    auto buffer = wrapTimedPacket(
+        std::move(packet), streamKind, timing.value(), m_packetTimeBase);
     if (!buffer) return ::media::Status::failure(buffer.error());
     return m_acquiringPackets->stageSingleReplay(
         std::move(buffer).value(), streamKind);
@@ -296,7 +298,8 @@ MpegTsDemuxNode::sourceClockCheckpoint(std::uint64_t packetPosition)
             return ::media::Result<MediaBufferRef>::failure(::media::ErrorInfo::allocationFailed(
                 "MpegTsDemuxNode failed to clone retained acquiring packet"));
         }
-        auto buffer = wrapTimedPacket(std::move(clone), kind, timing.value());
+        auto buffer = wrapTimedPacket(
+            std::move(clone), kind, timing.value(), m_packetTimeBase);
         if (!buffer) return ::media::Result<MediaBufferRef>::failure(buffer.error());
         return ::media::Result<MediaBufferRef>::success(std::move(buffer).value());
     });
@@ -360,6 +363,10 @@ MpegTsDemuxNode::sourceClockCheckpoint(std::uint64_t packetPosition)
     if (!video && !audio) return ::media::Result<MediaNodeProcessResult>::failure(
         ::media::ErrorInfo::invalidArgument("MpegTsDemuxNode packet stream/PID mismatch"));
     const auto streamKind = video ? MediaStreamKind::Video : MediaStreamKind::Audio;
+    if (packet->time_base.num <= 0 || packet->time_base.den <= 0) {
+        packet->time_base = AVRational{
+            m_packetTimeBase.num, m_packetTimeBase.den};
+    }
     if (envelope.provenance.readiness == MediaSourceClockReadiness::Acquiring) {
         if (envelope.provenance.evidenceByteOffset ||
             envelope.provenance.originByteOffset) {
@@ -400,7 +407,8 @@ MpegTsDemuxNode::sourceClockCheckpoint(std::uint64_t packetPosition)
             std::nullopt, std::nullopt,
             MediaSourceClockReadiness::ReacquireRequired,
             checkpoint.value().generation};
-        auto buffer = wrapTimedPacket(std::move(packet), streamKind, timing);
+        auto buffer = wrapTimedPacket(
+            std::move(packet), streamKind, timing, m_packetTimeBase);
         if (!buffer) {
             return ::media::Result<MediaNodeProcessResult>::failure(buffer.error());
         }
@@ -448,6 +456,7 @@ void MpegTsDemuxNode::reset() noexcept
 {
     if (m_session) (void)m_session->close();
     m_session.reset(); m_projection.reset(); m_policy.reset();
+    m_packetTimeBase = {};
     m_videoStreamIndex = -1; m_audioStreamIndex = -1;
     m_initialSourceGeneration = 0;
     m_videoClock = {}; m_audioClock = {};

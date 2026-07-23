@@ -94,6 +94,15 @@ MediaQueuePushOutcome MediaChannel::pushOutcomeLocked(
     bool publishAccepted)
 {
     if (!m_queue) return MediaQueuePushOutcome::Closed;
+    if (m_queue->aborted()) return MediaQueuePushOutcome::Aborted;
+    if (m_closeRequested) return MediaQueuePushOutcome::Closed;
+
+    const std::size_t capacity = m_queue->capacity();
+    if (m_reservedCapacity != 0 &&
+        (m_reservedCapacity > capacity ||
+         m_queue->size() >= capacity - m_reservedCapacity)) {
+        return MediaQueuePushOutcome::WouldBlock;
+    }
 
     const MediaQueuePushOutcome outcome = m_queue->pushOutcome(std::move(buffer));
     if (outcome == MediaQueuePushOutcome::Accepted) {
@@ -104,10 +113,36 @@ MediaQueuePushOutcome MediaChannel::pushOutcomeLocked(
     return outcome;
 }
 
+MediaQueuePushOutcome MediaChannel::pushReservedOutcomeLocked(
+    MediaBufferRef buffer)
+{
+    if (!m_queue || m_queue->aborted()) return MediaQueuePushOutcome::Aborted;
+    const MediaQueuePushOutcome outcome = m_queue->pushOutcome(std::move(buffer));
+    if (outcome == MediaQueuePushOutcome::Accepted) {
+        m_metrics.pushed++;
+    }
+    refreshQueueMetrics();
+    return outcome;
+}
+
 void MediaChannel::publishAcceptedMutation() noexcept
 {
     if (m_consumerWakeup) m_consumerWakeup->notify();
     signalMutationWaiters();
+}
+
+void MediaChannel::publishReservedCapacityMutation() noexcept
+{
+    if (m_producerWakeup) m_producerWakeup->notify();
+    signalMutationWaiters();
+}
+
+void MediaChannel::finalizeDeferredCloseLocked() noexcept
+{
+    if (m_closeRequested && m_authorizedCapacity == 0 && m_queue &&
+        !m_queue->closed() && !m_queue->aborted()) {
+        m_queue->close();
+    }
 }
 
 ::media::Status MediaChannel::pop(MediaBufferRef& out)
@@ -166,7 +201,8 @@ bool MediaChannel::tryPop(MediaBufferRef& out)
 void MediaChannel::close()
 {
     std::lock_guard lock(m_mutationMutex);
-    if (m_queue) {
+    m_closeRequested = true;
+    if (m_queue && m_authorizedCapacity == 0) {
         m_queue->close();
     }
     m_metrics.closed++;
@@ -183,6 +219,7 @@ void MediaChannel::close()
 void MediaChannel::abort()
 {
     std::lock_guard lock(m_mutationMutex);
+    m_closeRequested = true;
     if (m_queue) {
         m_queue->abort();
     }
@@ -222,7 +259,8 @@ void MediaChannel::signalMutationWaiters() noexcept
 
 bool MediaChannel::closed() const
 {
-    return !m_queue || m_queue->closed();
+    std::lock_guard lock(m_mutationMutex);
+    return m_closeRequested || !m_queue || m_queue->closed();
 }
 
 bool MediaChannel::aborted() const

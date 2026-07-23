@@ -50,6 +50,7 @@ public:
     std::vector<MediaChannel*> inputChannels(MediaNodeId nodeId);
     std::vector<MediaChannel*> outputChannels(MediaNodeId nodeId);
     MediaNodeWakeup& nodeWakeup(MediaNodeId nodeId);
+    std::shared_ptr<MediaNodeWakeup> sharedNodeWakeup(MediaNodeId nodeId);
     void interruptNodeWakeups() noexcept;
     void shutdownAvSyncGroups() noexcept;
     ::media::Status registerAvSyncGroup(
@@ -69,7 +70,7 @@ private:
     const MediaGraph* m_graph = nullptr;
     MediaChannelRegistry m_channels;
     std::vector<MediaNodeId> m_executionOrder;
-    std::unordered_map<uint32_t, std::unique_ptr<MediaNodeWakeup>> m_nodeWakeups;
+    std::unordered_map<uint32_t, std::shared_ptr<MediaNodeWakeup>> m_nodeWakeups;
     MediaAvSyncGroupRegistry m_avSyncGroups;
     bool m_compiled = false;
     MediaGraphDiagnosticConfig m_diagnosticConfig;

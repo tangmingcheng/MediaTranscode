@@ -31,7 +31,6 @@ public:
         const MediaAudioPlaybackOrigin& origin,
         MediaRunningTime sourceEndOnMaster,
         MediaCanonicalAudioSampleInterval projectedOutput,
-        MediaRunningTime observedAt,
         std::uint64_t sequence);
 
     ::media::Status start(MediaGraphExecutionContext& context) override;
@@ -47,9 +46,7 @@ protected:
 private:
     ::media::Status configure(MediaGraphExecutionContext& context);
     ::media::Status stage(const MediaBufferRef& audio);
-    ::media::Result<bool> outputsReady(
-        MediaGraphExecutionContext& context) const;
-    ::media::Status commit(MediaGraphExecutionContext& context);
+    ::media::Result<bool> commitIfReady(MediaGraphExecutionContext& context);
     void resetState() noexcept;
 
     MediaAvSyncGroupKey m_groupKey;

@@ -1,5 +1,6 @@
 #include "internal/graph/nodes/sync/MediaRtpPacketClockBinderNode.h"
 
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/runtime/buffer/FFmpegPacketBuffer.h"
 #include "internal/graph/runtime/buffer/MediaRtpClockGroupBuffer.h"
@@ -12,6 +13,7 @@ extern "C" {
 }
 
 #include <limits>
+#include <string>
 #include <utility>
 
 namespace media::ffmpeg::graph {
@@ -209,17 +211,17 @@ MediaNodeKind MediaRtpPacketClockBinderNode::staticKind() noexcept
                 "RTP packet binder requires untimed matching packets with raw 32-bit RTP PTS"));
     }
     const MediaTimeDescriptor time = source->timeDescriptor();
-    if (m_streamKind == MediaStreamKind::Video &&
-        (!time.hasKnownTimeBase() || time.timeBase.num != 1 ||
-         time.timeBase.den != m_durationClockRate)) {
-        return ::media::Result<MediaBufferRef>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "RTP video binder packet time base does not match planned clock rate"));
-    }
     const MediaRtpSourceClockCalibration& calibration =
         m_scheduledStream == MediaScheduledStream::Video
         ? m_lockedSnapshot->locked->video
         : m_lockedSnapshot->locked->audio;
+    if (!time.hasKnownTimeBase() || time.timeBase.num != 1 ||
+        (m_streamKind == MediaStreamKind::Video &&
+         time.timeBase.den != m_durationClockRate)) {
+        return ::media::Result<MediaBufferRef>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "RTP packet binder requires the planned packet time base"));
+    }
     auto aligned = m_timestampAligner.align(
         calibration, static_cast<std::uint32_t>(source->packet()->pts));
     if (!aligned) {
@@ -233,9 +235,20 @@ MediaNodeKind MediaRtpPacketClockBinderNode::staticKind() noexcept
     }
     const MediaFormatDescriptor format = source->formatDescriptor();
     const MediaHardwareDescriptor hardware = source->hardwareDescriptor();
+    const bool inputKey = source->isKeyFrame();
     auto wrapped = FFmpegBufferFactory::wrapPacket(
         source->takePacket(), m_streamKind, std::move(timing).value());
     if (!wrapped) return wrapped;
+    if (m_streamKind == MediaStreamKind::Video && inputKey &&
+        !m_keyTraceEmitted) {
+        m_keyTraceEmitted = true;
+        mediaGraphDiagnosticLog(
+            MediaGraphDiagnosticLevel::State,
+            MediaGraphDiagnosticPhase::RuntimeNode,
+            std::string("rtp_key_trace stage=clock_binder input=") +
+                (inputKey ? "1" : "0") + " output=" +
+                (wrapped.value()->isKeyFrame() ? "1" : "0"));
+    }
     wrapped.value()->setFormatDescriptor(format);
     wrapped.value()->setTimeDescriptor(time);
     wrapped.value()->setHardwareDescriptor(hardware);
@@ -337,6 +350,7 @@ void MediaRtpPacketClockBinderNode::resetState() noexcept
     m_acquiringCapacity = 0;
     m_durationClockRate = 0;
     m_configured = false;
+    m_keyTraceEmitted = false;
 }
 
 } // namespace media::ffmpeg::graph

@@ -44,6 +44,7 @@ private:
     std::optional<MediaScheduledStream> m_stream;
     std::optional<MediaDecodeOrderMode> m_decodeOrder;
     std::optional<DurationSource> m_durationSource;
+    bool m_keyTraceEmitted = false;
     std::string m_sourceIdentity;
     std::uint64_t m_nextSequence = 1;
     int m_audioSampleRate = 0;

@@ -21,7 +21,7 @@ enum class MediaRtpClockGroupState {
 struct MediaRtpClockGroupValidatorConfig final {
     std::int64_t senderReportTimeoutNs;
     std::int64_t maximumExtrapolationNs;
-    std::int64_t maximumInterStreamSkewNs;
+    std::int64_t maximumInterStreamClockOffsetSkewNs;
     std::int64_t videoCnameTimeoutNs;
     std::int64_t audioCnameTimeoutNs;
     MediaRtpCommonEpochPolicy commonEpochPolicy;
@@ -52,12 +52,22 @@ public:
     void invalidate() noexcept;
 
 private:
+    enum class Phase {
+        InitialAcquisition,
+        ActiveGeneration
+    };
+
     struct StreamState final {
         MediaRtcpClockEvidence evidence;
         MediaRtpSourceClockCalibration calibration;
     };
 
     explicit MediaRtpClockGroupValidator(MediaRtpClockGroupValidatorConfig config) noexcept;
+    void discardExpiredInitialCandidates(std::int64_t observedAtNs) noexcept;
+    bool initialCandidateIsFresh(
+        const StreamState& stream,
+        std::int64_t observedAtNs,
+        std::int64_t cnameTimeoutNs) const noexcept;
     void clear(bool requireReacquisition) noexcept;
 
     MediaRtpClockGroupValidatorConfig m_config;
@@ -66,7 +76,7 @@ private:
     std::optional<MediaRunningTime> m_commonSourceEpoch;
     std::uint64_t m_groupGeneration = 0;
     bool m_reacquireRequired = false;
-    bool m_everLocked = false;
+    Phase m_phase = Phase::InitialAcquisition;
 };
 
 } // namespace media::ffmpeg::graph

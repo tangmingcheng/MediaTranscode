@@ -37,9 +37,7 @@ MediaCanonicalAudioSamplesBuffer::MediaCanonicalAudioSamplesBuffer(
     int sampleRate = 0;
     std::int64_t expectedBegin = -1;
     for (const auto& fragment : fragments) {
-        if (!fragment.lineage || fragment.interval.begin < 0 ||
-            fragment.interval.end <= fragment.interval.begin ||
-            fragment.interval.sampleRate <= 0) {
+        if (!fragment.lineage || !fragment.interval.sampleCount()) {
             return ::media::Result<MediaBufferRef>::failure(
                 ::media::ErrorInfo::invalidArgument(
                     "Canonical audio samples require valid fragments"));

@@ -42,12 +42,6 @@ bool sameHardwareDevice(const MediaPipelineChainPlan& chain, const MediaPipeline
            chain.decoder.deviceKind != MediaHardwareDeviceKind::Unknown;
 }
 
-bool containsHardwareStage(const MediaPipelineChainPlan& chain, const MediaPipelinePlannerOptions& options) noexcept
-{
-    return chain.decoder.hardware || chain.encoder.hardware ||
-           (options.filterRequired && chain.filter.hardware);
-}
-
 bool hardwareUnavailable(const MediaPipelineStagePlan& stage)
 {
     return stage.hardware && !stage.available &&
@@ -192,10 +186,6 @@ MediaPipelineChainPlan unavailableChain(MediaPipelineChainPlan chain, std::strin
 MediaPipelineChainPlan MediaPipelineScorer::scoreChain(MediaPipelineChainPlan chain,
                                                        const MediaPipelinePlannerOptions& options)
 {
-    if (!options.preferGpu && containsHardwareStage(chain, options)) {
-        return unavailableChain(std::move(chain), "hardware disabled by request");
-    }
-
     chain.available = chain.decoder.available && chain.encoder.available &&
                       (!options.filterRequired || chain.filter.available);
 

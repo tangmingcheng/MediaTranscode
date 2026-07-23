@@ -272,7 +272,8 @@ Node* runtimeNode(MediaGraphRuntime& runtime, MediaNodeId id)
     MediaRealtimeExecutableGraph executable;
     executable.graph = std::move(built.value().graph);
     executable.avSyncBinding.emplace(MediaAvSyncRuntimeBinding{
-        plan.groupKey, plan.synchronization, plan.transition});
+        plan.groupKey, plan.synchronization, plan.transition,
+        MediaAvSyncBindingAssemblyMode::ProductionProtocolOutput});
     if (auto compiled = runtime.compile(std::move(executable)); !compiled) {
         return ::media::Status::failure(compiled.error());
     }

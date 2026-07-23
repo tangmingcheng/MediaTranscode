@@ -8,12 +8,20 @@ MediaCanonicalVideoFrameBuffer::MediaCanonicalVideoFrameBuffer(
 {
     setStreamKind(MediaStreamKind::Video);
     setPayloadKind(MediaPayloadKind::Frame);
+    setFormatDescriptor(m_media->formatDescriptor());
+    setTimeDescriptor(m_media->timeDescriptor());
+    setHardwareDescriptor(m_media->hardwareDescriptor());
+    setTimestamps(m_media->pts(), m_media->dts(), m_media->duration());
+    setFlags(m_media->flags());
 }
 
 ::media::Result<MediaBufferRef> MediaCanonicalVideoFrameBuffer::create(
     MediaBufferRef media, std::shared_ptr<const MediaCanonicalLineage> lineage)
 {
-    if (!media || media->type() != MediaBufferType::Frame ||
+    const bool framePayload = media &&
+        (media->type() == MediaBufferType::Frame ||
+         media->type() == MediaBufferType::HardwareFrame);
+    if (!framePayload ||
         media->streamKind() != MediaStreamKind::Video || !lineage) {
         return ::media::Result<MediaBufferRef>::failure(
             ::media::ErrorInfo::invalidArgument(

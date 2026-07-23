@@ -62,7 +62,6 @@ bool encodeOptionsRequested(const MediaVideoTranscodeParameters& video) noexcept
 
     MediaPipelinePlannerOptions plannerOptions(!video.resizeRequested() && !encodeOptionsRequested(video),
                                                video.resizeRequested(),
-                                               !parameters.execution.disableHardware,
                                                parameters.execution.disableHardware,
                                                true,
                                                false);
@@ -70,7 +69,8 @@ bool encodeOptionsRequested(const MediaVideoTranscodeParameters& video) noexcept
     plannerOptions.outputCodecName = video.codecName;
     plannerOptions.targetWidth = video.width.value_or(0);
     plannerOptions.targetHeight = video.height.value_or(0);
-    plannerOptions.preferredHardware = plannerOptions.preferGpu ? "auto" : "software";
+    plannerOptions.preferredHardware =
+        plannerOptions.disableHardware ? "software" : "auto";
     plannerOptions.diagnosticLogEnabled = parameters.execution.diagnosticLogEnabled;
     return ::media::Result<MediaPipelinePlannerOptions>::success(std::move(plannerOptions));
 }

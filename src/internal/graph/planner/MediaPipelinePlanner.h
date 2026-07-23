@@ -57,14 +57,12 @@ struct MediaPipelinePlannerOptions {
 
     MediaPipelinePlannerOptions(bool allowPacketCopy,
                                 bool filterRequired,
-                                bool preferGpu,
-                                bool enableSoftwareChain,
+                                bool disableHardware,
                                 bool requireRuntimeAvailability,
                                 bool lowLatency) noexcept
         : allowPacketCopy(allowPacketCopy),
           filterRequired(filterRequired),
-          preferGpu(preferGpu),
-          enableSoftwareChain(enableSoftwareChain),
+          disableHardware(disableHardware),
           requireRuntimeAvailability(requireRuntimeAvailability),
           lowLatency(lowLatency)
     {
@@ -77,8 +75,7 @@ struct MediaPipelinePlannerOptions {
     int targetWidth = 0;
     int targetHeight = 0;
     bool filterRequired;
-    bool preferGpu;
-    bool enableSoftwareChain;
+    bool disableHardware;
     bool requireRuntimeAvailability;
     bool diagnosticLogEnabled = false;
     std::string rtspTransport;

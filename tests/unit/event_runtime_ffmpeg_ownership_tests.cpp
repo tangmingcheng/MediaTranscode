@@ -25,7 +25,10 @@
 #include "internal/graph/sync/MediaCanonicalVideoFrameBuffer.h"
 #include "internal/graph/sync/MediaCanonicalLineage.h"
 #include "internal/graph/sync/lineage/MediaVideoFrameRateState.h"
+#include "internal/graph/sync/startup/MediaAvStartupVideoPreparationCapability.h"
+#include "internal/graph/sync/startup/MediaAvStartupVideoPreparationState.h"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <iostream>
@@ -92,6 +95,22 @@ struct VideoFilterNodeLifecycleTestAccess {
                !node.m_lineageState->flushed &&
                !node.m_lineageState->eofEmitted &&
                !node.m_lineageState->terminals.finished();
+    }
+
+    static ::media::Status retainPrepared(
+        VideoFilterNode& node,
+        MediaBufferRef buffer,
+        std::uint64_t generation,
+        std::uint64_t releaseIdentity)
+    {
+        return node.retainPreparedOutput(
+            std::move(buffer), generation, releaseIdentity);
+    }
+
+    static bool hasPrepared(const VideoFilterNode& node)
+    {
+        return static_cast<bool>(node.m_preparedOutput) ||
+            node.m_preparedReservation.has_value();
     }
 };
 
@@ -490,6 +509,148 @@ void testVideoInternalPendingDrainsBeforeSustainedUpstream(TestContext& ctx)
     EXPECT_TRUE(ctx, filter.stop(filterExecution));
 }
 
+void testVideoFilterRetainsFirstPreparedFrameUntilEpochActivation(
+    TestContext& ctx)
+{
+    auto state = MediaAvStartupVideoPreparationState::create(
+        MediaAvSyncGroupKey("filter-preparation"));
+    EXPECT_TRUE(ctx, state);
+    if (!state) return;
+    auto filterCapability = MediaAvStartupVideoPreparationCapability::issue(
+        state.value(), MediaAvStartupVideoPreparationRole::FilterReadiness);
+    auto sequencerCapability = MediaAvStartupVideoPreparationCapability::issue(
+        state.value(), MediaAvStartupVideoPreparationRole::SequencerActivation);
+    auto extractorCapability = MediaAvStartupVideoPreparationCapability::issue(
+        state.value(), MediaAvStartupVideoPreparationRole::ExtractorFeed);
+    EXPECT_TRUE(ctx, filterCapability && sequencerCapability &&
+                         extractorCapability);
+    if (!filterCapability || !sequencerCapability || !extractorCapability)
+        return;
+    EXPECT_TRUE(ctx, state.value()->begin(5, 99, 1));
+
+    MediaNodeId source;
+    MediaNodeId nodeId;
+    MediaNodeId sink;
+    MediaGraph graph = makeSlowVideoNodeGraph(
+        VideoFilterNode::staticKind(), source, nodeId, sink, true);
+    MediaGraphExecutionContext execution;
+    EXPECT_TRUE(ctx, execution.compile(graph));
+    MediaChannel* output = execution.findInputChannel(sink, "frame");
+    EXPECT_TRUE(ctx, output != nullptr);
+    if (!output) return;
+
+    VideoFilterNode filter(nodeId, nullptr, std::move(filterCapability).value());
+    EXPECT_TRUE(ctx, filter.start(execution));
+    auto prepared = makeVideoFrameBuffer(1234);
+    EXPECT_TRUE(ctx, prepared);
+    if (!prepared) return;
+    EXPECT_TRUE(ctx, VideoFilterNodeLifecycleTestAccess::retainPrepared(
+                         filter, prepared.value(), 5, 99));
+    EXPECT_TRUE(ctx, VideoFilterNodeLifecycleTestAccess::hasPrepared(filter));
+    MediaBufferRef observed;
+    EXPECT_FALSE(ctx, output->tryPop(observed));
+    EXPECT_TRUE(ctx, filter.process(execution));
+    const std::span<const MediaBufferRef> noOutputs;
+    const std::array<MediaAtomicOutputBatch, 1> batches{
+        MediaAtomicOutputBatch{output, noOutputs}};
+    auto extractorReservation = MediaReservedOutputTransaction::reserve(
+        "Video filter ownership extractor readiness", batches);
+    EXPECT_TRUE(ctx, extractorReservation && extractorReservation.value());
+    if (!extractorReservation || !extractorReservation.value()) return;
+    EXPECT_TRUE(ctx, extractorCapability.value().registerExtractorOutputs(
+                         5, 99, extractorReservation.value()->handle()));
+    EXPECT_TRUE(ctx, sequencerCapability.value().authorizeRelease(
+                         5, 99, [] { return ::media::Status::success(); }));
+    EXPECT_TRUE(ctx, filter.process(execution));
+    EXPECT_TRUE(ctx, output->tryPop(observed));
+    EXPECT_TRUE(ctx, observed == prepared.value());
+    EXPECT_FALSE(ctx, VideoFilterNodeLifecycleTestAccess::hasPrepared(filter));
+    EXPECT_TRUE(ctx, filter.stop(execution));
+}
+
+void testVideoFilterPreparationStateClearsOnStopAndAbort(TestContext& ctx)
+{
+    const auto run = [&](bool abort) {
+        auto state = MediaAvStartupVideoPreparationState::create(
+            MediaAvSyncGroupKey(abort ? "filter-abort" : "filter-stop"));
+        EXPECT_TRUE(ctx, state);
+        if (!state) return;
+        auto capability = MediaAvStartupVideoPreparationCapability::issue(
+            state.value(), MediaAvStartupVideoPreparationRole::FilterReadiness);
+        EXPECT_TRUE(ctx, capability && state.value()->begin(3, 17, 1));
+        if (!capability) return;
+        MediaGraphExecutionContext execution;
+        VideoFilterNode filter(
+            MediaNodeId{880}, nullptr, std::move(capability).value());
+        EXPECT_TRUE(ctx, filter.start(execution));
+        auto prepared = makeVideoFrameBuffer(88);
+        EXPECT_TRUE(ctx, prepared);
+        if (!prepared) return;
+        EXPECT_TRUE(ctx, VideoFilterNodeLifecycleTestAccess::retainPrepared(
+                             filter, prepared.value(), 3, 17));
+        if (abort) filter.abort(execution);
+        else EXPECT_TRUE(ctx, filter.stop(execution));
+        EXPECT_FALSE(ctx, VideoFilterNodeLifecycleTestAccess::hasPrepared(filter));
+        EXPECT_EQ(ctx, state.value()->snapshot().phase,
+                  MediaAvStartupVideoPreparationPhase::Cancelled);
+    };
+    run(false);
+    run(true);
+}
+
+void testFrameRatePreservesNonZeroTimelineOrigin(TestContext& ctx)
+{
+    struct Case final {
+        std::int64_t pts;
+        int timeBaseDenominator;
+        int fps;
+    };
+    for (const Case testCase : {
+             Case{5, 25, 25},
+             Case{1'751'158'773, 90'000, 30}}) {
+        MediaNodeId source;
+        MediaNodeId nodeId;
+        MediaNodeId sink;
+        MediaGraph graph = makeSlowVideoNodeGraph(
+            VideoFrameRateNode::staticKind(), source, nodeId, sink, false);
+        MediaNode* nodePlan = graph.findNode(nodeId);
+        EXPECT_TRUE(ctx, nodePlan != nullptr);
+        if (!nodePlan) return;
+        nodePlan->options.set("video.fps.num", std::to_string(testCase.fps));
+        nodePlan->options.set("video.fps.den", "1");
+
+        MediaGraphExecutionContext execution;
+        EXPECT_TRUE(ctx, execution.compile(graph));
+        MediaChannel* input = execution.findInputChannel(nodeId, "frame");
+        MediaChannel* output = execution.findInputChannel(sink, "frame");
+        EXPECT_TRUE(ctx, input && output);
+        if (!input || !output) return;
+
+        auto first = makeVideoFrameBuffer(testCase.pts);
+        EXPECT_TRUE(ctx, first);
+        if (!first) return;
+        AVFrame* firstFrame = FFmpegFrameView::writableFrame(first.value());
+        EXPECT_TRUE(ctx, firstFrame != nullptr);
+        if (!firstFrame) return;
+        EXPECT_EQ(ctx, av_frame_get_buffer(firstFrame, 32), 0);
+        MediaTimeDescriptor time;
+        time.timeBase = MediaRational{1, testCase.timeBaseDenominator};
+        first.value()->setTimeDescriptor(time);
+        EXPECT_TRUE(ctx, input->push(first.value()));
+
+        VideoFrameRateNode frameRate(nodeId);
+        EXPECT_TRUE(ctx, frameRate.start(execution));
+        EXPECT_TRUE(ctx, frameRate.process(execution));
+
+        MediaBufferRef observed;
+        EXPECT_TRUE(ctx, output->tryPop(observed));
+        EXPECT_TRUE(ctx, observed && observed->pts() == testCase.pts);
+        EXPECT_EQ(ctx, VideoFrameRateNodeLifecycleTestAccess::pending(frameRate),
+                  static_cast<std::size_t>(0));
+        EXPECT_TRUE(ctx, frameRate.stop(execution));
+    }
+}
+
 void testFrameRatePurgeClearsPendingHistoryAndRestartsGeneration(TestContext& ctx)
 {
     auto filler = makeVideoFrameBuffer(700);
@@ -597,6 +758,9 @@ void runEventRuntimeFfmpegOwnershipTests(media_transcode::test::TestContext& ctx
     testInputMetadataConsumersDoNotReadRuntimeStreams(ctx);
     testInterruptedFfmpegNodeStateDoesNotLeakAcrossSameInstanceRestart(ctx);
     testVideoInternalPendingDrainsBeforeSustainedUpstream(ctx);
+    testVideoFilterRetainsFirstPreparedFrameUntilEpochActivation(ctx);
+    testVideoFilterPreparationStateClearsOnStopAndAbort(ctx);
+    testFrameRatePreservesNonZeroTimelineOrigin(ctx);
     testFrameRatePurgeClearsPendingHistoryAndRestartsGeneration(ctx);
     testFrameRatePurgeCancelsRetainedTerminal(ctx);
 }

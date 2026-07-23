@@ -1,6 +1,5 @@
 #include "internal/graph/builder/segments/MediaVideoBranchSegmentBuilder.h"
 
-#include "internal/graph/builder/segments/MediaBranchEndpointValidator.h"
 #include "internal/graph/builder/segments/MediaVideoBranchOptionsMapper.h"
 #include "internal/graph/builder/segments/MediaVideoPacketCopyBranchBuilder.h"
 #include "internal/graph/builder/segments/MediaVideoTranscodeBranchBuilder.h"
@@ -8,10 +7,9 @@
 namespace media::ffmpeg::graph {
 namespace {
 
-constexpr const char* owner = "MediaVideoBranchSegmentBuilder";
-
-::media::Result<void> buildPlannedVideoBranch(MediaGraph& graph,
-                                              const MediaVideoBranchSegmentOptions& options)
+::media::Result<MediaEncodedBranchEndpoints> buildPlannedVideoBranch(
+    MediaGraph& graph,
+    const MediaVideoBranchSegmentOptions& options)
 {
     switch (options.plan.branchMode) {
     case MediaBranchMode::CopyPacket:
@@ -22,28 +20,23 @@ constexpr const char* owner = "MediaVideoBranchSegmentBuilder";
         break;
     }
 
-    return ::media::Result<void>::failure(
+    return ::media::Result<MediaEncodedBranchEndpoints>::failure(
         ::media::ErrorInfo::unsupported("MediaVideoBranchSegmentBuilder unsupported video branch mode"));
 }
 
 } // namespace
 
-::media::Result<bool> MediaVideoBranchSegmentBuilder::buildIfPlanned(
+::media::Result<MediaEncodedBranchEndpoints> MediaVideoBranchSegmentBuilder::build(
     MediaGraph& graph,
     const MediaVideoBranchSegmentOptions& options)
 {
     if (!options.plan.enabled || options.plan.branchMode == MediaBranchMode::Drop) {
-        return ::media::Result<bool>::success(false);
+        return ::media::Result<MediaEncodedBranchEndpoints>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MediaVideoBranchSegmentBuilder requires an enabled video branch"));
     }
 
-    if (auto status = validateMediaBranchEndpoints(owner, makeVideoBranchEndpointSet(options)); !status) {
-        return ::media::Result<bool>::failure(status.error());
-    }
-
-    if (auto status = buildPlannedVideoBranch(graph, options); !status) {
-        return ::media::Result<bool>::failure(status.error());
-    }
-    return ::media::Result<bool>::success(true);
+    return buildPlannedVideoBranch(graph, options);
 }
 
 } // namespace media::ffmpeg::graph

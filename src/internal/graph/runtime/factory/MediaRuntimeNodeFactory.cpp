@@ -33,7 +33,6 @@
 #include "internal/graph/nodes/output/MediaProjectMpegTsPlanSourceNode.h"
 #include "internal/graph/nodes/output/MediaProjectMpegTsPlanSourceNodePlanCodec.h"
 #include "internal/graph/nodes/output/MediaScheduledTsAccessUnitAdapterNode.h"
-#include "internal/graph/nodes/packet/AvPacketStartBarrierNode.h"
 #include "internal/graph/nodes/packet/PacketNormalizeNode.h"
 #include "internal/graph/nodes/packet/PacketSourceConfigNode.h"
 #include "internal/graph/nodes/packet/PacketStartGateNode.h"
@@ -203,12 +202,21 @@ template <typename Node>
 
 ::media::Result<std::unique_ptr<MediaRuntimeNode>> MediaRuntimeNodeFactory::create(const MediaNode& node)
 {
-    return create(node, nullptr);
+    return create(node, nullptr, nullptr);
 }
 
 ::media::Result<std::unique_ptr<MediaRuntimeNode>> MediaRuntimeNodeFactory::create(
     const MediaNode& node,
     MediaPreparedRealtimeInputBinding* binding)
+{
+    return create(node, binding, nullptr);
+}
+
+::media::Result<std::unique_ptr<MediaRuntimeNode>> MediaRuntimeNodeFactory::create(
+    const MediaNode& node,
+    MediaPreparedRealtimeInputBinding* binding,
+    const std::shared_ptr<MediaAvStartupVideoPreparationState>&
+        videoPreparationState)
 {
     switch (node.kind) {
     case MediaNodeKind::FileInput:
@@ -242,7 +250,30 @@ template <typename Node>
     case MediaNodeKind::VideoFrameRate:
         return createVideoFrameRateStage(node);
     case MediaNodeKind::VideoFilter:
-        return createVideoLineageStage<VideoFilterNode>(node);
+    {
+        auto prepared = prepareMediaVideoLineageStage(
+            node, VideoFilterNode::generationPurgeIdentity());
+        if (!prepared) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                prepared.error());
+        }
+        if (!videoPreparationState) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+                std::make_unique<VideoFilterNode>(
+                    node.id, std::move(prepared).value()));
+        }
+        auto capability = MediaAvStartupVideoPreparationCapability::issue(
+            videoPreparationState,
+            MediaAvStartupVideoPreparationRole::FilterReadiness);
+        if (!capability) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                capability.error());
+        }
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+            std::make_unique<VideoFilterNode>(
+                node.id, std::move(prepared).value(),
+                std::move(capability).value()));
+    }
     case MediaNodeKind::VideoEncode:
         return createVideoLineageStage<VideoEncodeNode>(node);
     case MediaNodeKind::AudioCodecResolver:
@@ -259,8 +290,6 @@ template <typename Node>
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<PacketSourceConfigNode>(node.id));
     case MediaNodeKind::PacketNormalize:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<PacketNormalizeNode>(node.id));
-    case MediaNodeKind::AvPacketStartBarrier:
-        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<AvPacketStartBarrierNode>(node.id));
     case MediaNodeKind::PacketStartGate:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<PacketStartGateNode>(node.id));
     case MediaNodeKind::RtpClockGroup:
@@ -304,6 +333,18 @@ template <typename Node>
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::make_unique<MediaInitialLockedPacketGateNode>(node.id));
     case MediaNodeKind::AvBoundReleaseExtractor:
+        if (videoPreparationState) {
+            auto capability = MediaAvStartupVideoPreparationCapability::issue(
+                videoPreparationState,
+                MediaAvStartupVideoPreparationRole::ExtractorFeed);
+            if (!capability) {
+                return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                    capability.error());
+            }
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+                std::make_unique<MediaAvBoundReleaseExtractorNode>(
+                    node.id, std::move(capability).value()));
+        }
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::make_unique<MediaAvBoundReleaseExtractorNode>(node.id));
     case MediaNodeKind::ActivatedStartupReleaseSequencer:
@@ -428,7 +469,9 @@ template <typename Node>
 ::media::Result<std::unique_ptr<MediaRuntimeNode>>
 MediaRuntimeNodeFactory::createActivatedStartupReleaseSequencer(
     const MediaNode& node,
-    MediaPlaybackEpochActivationCapability capability)
+    MediaPlaybackEpochActivationCapability capability,
+    const std::shared_ptr<MediaAvStartupVideoPreparationState>&
+        videoPreparationState)
 {
     if (node.kind != MediaNodeKind::ActivatedStartupReleaseSequencer) {
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
@@ -442,9 +485,29 @@ MediaRuntimeNodeFactory::createActivatedStartupReleaseSequencer(
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
             group.error());
     }
+    auto outputLead = requiredPositiveInt64NodeOption(
+        &node.options, "MediaActivatedStartupReleaseSequencerNode",
+        "activated_startup_release_sequencer.output_lead_ns");
+    if (!outputLead) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            outputLead.error());
+    }
+    std::optional<MediaAvStartupVideoPreparationCapability> preparation;
+    if (videoPreparationState) {
+        auto issued = MediaAvStartupVideoPreparationCapability::issue(
+            videoPreparationState,
+            MediaAvStartupVideoPreparationRole::SequencerActivation);
+        if (!issued) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                issued.error());
+        }
+        preparation.emplace(std::move(issued).value());
+    }
     return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
         std::make_unique<MediaActivatedStartupReleaseSequencerNode>(
-            node.id, std::move(group).value(), std::move(capability)));
+            node.id, std::move(group).value(), std::move(capability),
+            MediaRunningTime::fromNanoseconds(outputLead.value()),
+            std::move(preparation)));
 }
 
 ::media::Result<std::unique_ptr<MediaRuntimeNode>>
@@ -516,11 +579,11 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::VideoEncode:
     case MediaNodeKind::AudioCodecResolver:
     case MediaNodeKind::AudioDecode:
+    case MediaNodeKind::AudioStartupTrim:
     case MediaNodeKind::AudioResample:
     case MediaNodeKind::AudioEncode:
     case MediaNodeKind::PacketSourceConfig:
     case MediaNodeKind::PacketNormalize:
-    case MediaNodeKind::AvPacketStartBarrier:
     case MediaNodeKind::PacketStartGate:
     case MediaNodeKind::RtpClockGroup:
     case MediaNodeKind::RtpPacketClockBinder:

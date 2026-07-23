@@ -16,6 +16,8 @@ extern "C" {
 #include <libavutil/pixdesc.h>
 }
 
+#include <array>
+#include <chrono>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -149,6 +151,18 @@ VideoFilterNode::VideoFilterNode(
 {
 }
 
+VideoFilterNode::VideoFilterNode(
+    MediaNodeId nodeId,
+    std::shared_ptr<MediaCodecLineageRegistry> lineageRegistry,
+    MediaAvStartupVideoPreparationCapability preparationCapability)
+    : FFmpegNodeRuntime(nodeId, staticKind(), "VideoFilterNode")
+    , m_lineageRegistry(std::move(lineageRegistry))
+    , m_lineageState(std::make_shared<VideoFilterLineageState>(
+          m_lineageRegistry))
+    , m_preparationCapability(std::move(preparationCapability))
+{
+}
+
 MediaNodeKind VideoFilterNode::staticKind() noexcept
 {
     return MediaNodeKind::VideoFilter;
@@ -174,15 +188,56 @@ bool VideoFilterNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) const
 }
 
 ::media::Status VideoFilterNode::start(MediaGraphExecutionContext& context) { resetRuntimeState(); return FFmpegNodeRuntime::start(context); }
-::media::Status VideoFilterNode::stop(MediaGraphExecutionContext& context) { auto status = FFmpegNodeRuntime::stop(context); resetRuntimeState(); return status; }
-void VideoFilterNode::abort(MediaGraphExecutionContext& context) noexcept { FFmpegNodeRuntime::abort(context); resetRuntimeState(); }
+::media::Status VideoFilterNode::stop(MediaGraphExecutionContext& context) { if (m_preparationCapability) m_preparationCapability->cancel(); auto status = FFmpegNodeRuntime::stop(context); resetRuntimeState(); return status; }
+void VideoFilterNode::abort(MediaGraphExecutionContext& context) noexcept { if (m_preparationCapability) m_preparationCapability->cancel(); FFmpegNodeRuntime::abort(context); resetRuntimeState(); }
 void VideoFilterNode::resetRuntimeState() noexcept
 {
     m_lineageState->resetForLifecycle();
+    m_preparedOutput.reset();
+    m_preparedReservation.reset();
+    m_preparedGeneration = 0;
+    m_preparedReleaseIdentity = 0;
+    m_preparedNeedsReady = false;
+    m_preparationFeedArmed = false;
+    m_firstInputDiagnosticEmitted = false;
+    m_firstOutputDiagnosticEmitted = false;
 }
 
 ::media::Result<MediaNodeProcessResult> VideoFilterNode::onProcess(MediaGraphExecutionContext& context)
 {
+    if (m_preparationCapability) {
+        if (m_preparedNeedsReady) {
+            if (auto ready = markPreparedReadyOutsideLineageLock(context); !ready) {
+                if (ready.error().code == ::media::ErrorCode::WouldBlock)
+                    return processWaiting();
+                return ::media::Result<MediaNodeProcessResult>::failure(
+                    ready.error());
+            }
+            return processWaiting();
+        }
+        const auto preparation = m_preparationCapability->snapshot();
+        if (m_preparedReservation) {
+            if (preparation.phase ==
+                    MediaAvStartupVideoPreparationPhase::Cancelled) {
+                return ::media::Result<MediaNodeProcessResult>::failure(
+                    ::media::ErrorInfo::cancelled(
+                        "VideoFilterNode preparation was cancelled"));
+            }
+            if (preparation.phase !=
+                    MediaAvStartupVideoPreparationPhase::ReleaseCommitted) {
+                return processWaiting();
+            }
+            if (auto committed = m_preparedReservation->commit(); !committed)
+                return ::media::Result<MediaNodeProcessResult>::failure(
+                    committed.error());
+            m_preparedReservation.reset();
+            return processProgress();
+        }
+        m_preparationFeedArmed = preparation.phase ==
+            MediaAvStartupVideoPreparationPhase::Feeding;
+        m_preparedGeneration = preparation.generation;
+        m_preparedReleaseIdentity = preparation.releaseIdentity;
+    }
     auto lineageLock = m_lineageState->lock();
     if (m_lineageState->terminalPending) {
         return continueTerminal(context);
@@ -190,6 +245,16 @@ void VideoFilterNode::resetRuntimeState() noexcept
     bool producedPendingFrame = false;
     auto pendingDrain = drainFrames(context, &producedPendingFrame);
     if (!pendingDrain) return processProgress(std::move(pendingDrain));
+    if (m_preparedNeedsReady) {
+        lineageLock.unlock();
+        if (auto ready = markPreparedReadyOutsideLineageLock(context); !ready) {
+            if (ready.error().code == ::media::ErrorCode::WouldBlock)
+                return processWaiting();
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                ready.error());
+        }
+        return processWaiting();
+    }
     if (producedPendingFrame) return processProgress();
     if (m_lineageState->pendingFrame) return processProgress(submitPendingFrame(context));
     if (m_lineageState->terminals.finished()) {
@@ -231,6 +296,12 @@ void VideoFilterNode::resetRuntimeState() noexcept
     }
 
     MediaBufferRef frameBuffer = *frameInput.value();
+    if (!m_firstInputDiagnosticEmitted) {
+        filterLog(MediaGraphDiagnosticLevel::State,
+                  "trace stage=first_input " +
+                      mediaGraphDiagnosticDescribeBuffer(frameBuffer));
+        m_firstInputDiagnosticEmitted = true;
+    }
     if (frameBuffer->isEof() || frameBuffer->isFlush()) {
         const bool eof = frameBuffer->isEof();
         if (eof && m_lineageState->eofEmitted) {
@@ -245,6 +316,16 @@ void VideoFilterNode::resetRuntimeState() noexcept
     auto sendStatus = sendFrame(context, frameBuffer);
     if (!sendStatus) {
         return ::media::Result<MediaNodeProcessResult>::failure(sendStatus.error());
+    }
+    if (m_preparedNeedsReady) {
+        lineageLock.unlock();
+        if (auto ready = markPreparedReadyOutsideLineageLock(context); !ready) {
+            if (ready.error().code == ::media::ErrorCode::WouldBlock)
+                return processWaiting();
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                ready.error());
+        }
+        return processWaiting();
     }
     return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
 }
@@ -353,7 +434,16 @@ void VideoFilterNode::resetRuntimeState() noexcept
     request.inputFrameRate = inputFrameRate;
     request.sampleAspectRatio = pixelAspect;
 
+    filterLog(MediaGraphDiagnosticLevel::State,
+              "trace stage=initialize_begin input_fmt=" +
+                  pixelFormatName(static_cast<AVPixelFormat>(firstFrame->format)) +
+                  " input_size=" + std::to_string(firstFrame->width) + "x" +
+                  std::to_string(firstFrame->height));
+    const auto initializeStartedAt = std::chrono::steady_clock::now();
     auto graphResult = VideoFilterGraphBuilder::build(request);
+    const auto initializeElapsed = std::chrono::duration_cast<
+        std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - initializeStartedAt);
     if (!graphResult) {
         m_lineageState->resetFilterGraph();
         return ::media::Status::failure(graphResult.error());
@@ -382,7 +472,8 @@ void VideoFilterNode::resetRuntimeState() noexcept
         << m_lineageState->encoderContext->height
         << " hardware_source=" << (built.hardwareSource ? "true" : "false")
         << " planner_filter=" << built.plannerFilter
-        << " desc=" << built.filterDescription;
+        << " desc=" << built.filterDescription
+        << " initialize_elapsed_ms=" << initializeElapsed.count();
     filterLog(MediaGraphDiagnosticLevel::State, out.str());
 
     return ::media::Status::success();
@@ -525,6 +616,7 @@ void VideoFilterNode::resetRuntimeState() noexcept
             return emitStatus;
         }
         if (produced) *produced = true;
+        if (m_preparedOutput) return ::media::Status::success();
     }
 }
 
@@ -560,7 +652,74 @@ void VideoFilterNode::resetRuntimeState() noexcept
         if (!canonical) return ::media::Status::failure(canonical.error());
         output = std::move(canonical).value();
     }
-    return emitOutput(context, "frame", output);
+    if (m_preparationCapability && m_preparationFeedArmed &&
+        !m_preparedOutput) {
+        const auto outputLineage = FFmpegFrameView::canonicalLineage(output);
+        if (!outputLineage ||
+            outputLineage->generation != m_preparedGeneration) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "VideoFilterNode rejects preparation generation mismatch"));
+        }
+        m_preparedOutput = output;
+        m_preparedNeedsReady = true;
+        return ::media::Status::success();
+    }
+    auto status = emitOutput(context, "frame", output);
+    if (status && !m_firstOutputDiagnosticEmitted) {
+        filterLog(MediaGraphDiagnosticLevel::State,
+                  "trace stage=first_output " +
+                      mediaGraphDiagnosticDescribeBuffer(output));
+        m_firstOutputDiagnosticEmitted = true;
+    }
+    return status;
+}
+
+::media::Status VideoFilterNode::retainPreparedOutput(
+    MediaBufferRef output,
+    std::uint64_t generation,
+    std::uint64_t releaseIdentity)
+{
+    if (!m_preparationCapability || !output || m_preparedOutput) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "VideoFilterNode cannot retain prepared output"));
+    }
+    m_preparedOutput = std::move(output);
+    m_preparedGeneration = generation;
+    m_preparedReleaseIdentity = releaseIdentity;
+    m_preparedNeedsReady = true;
+    return ::media::Status::success();
+}
+
+::media::Status VideoFilterNode::markPreparedReadyOutsideLineageLock(
+    MediaGraphExecutionContext& context)
+{
+    if (!m_preparationCapability || !m_preparedOutput ||
+        !m_preparedNeedsReady) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "VideoFilterNode has no prepared output readiness to publish"));
+    }
+    const std::array<MediaAtomicOutputBatch, 1> batches{
+        MediaAtomicOutputBatch{
+            context.findOutputChannel(nodeId(), "frame"),
+            std::span(&m_preparedOutput, 1)}};
+    auto reservation = MediaReservedOutputTransaction::reserve(
+        "VideoFilterNode prepared frame", batches);
+    if (!reservation) return ::media::Status::failure(reservation.error());
+    if (!reservation.value()) {
+        return ::media::Status::failure(::media::ErrorInfo::wouldBlock(
+            "VideoFilterNode prepared output is full"));
+    }
+    m_preparedReservation.emplace(std::move(*reservation.value()));
+    m_preparedOutput.reset();
+    auto ready = m_preparationCapability->markFilterReady(
+        m_preparedGeneration, m_preparedReleaseIdentity,
+        m_preparedReservation->handle());
+    if (ready) {
+        m_preparedNeedsReady = false;
+    } else {
+        m_preparedReservation.reset();
+    }
+    return ready;
 }
 
 ::media::Status VideoFilterNode::rescaleAndValidateFrame(AVFrame* frame) noexcept

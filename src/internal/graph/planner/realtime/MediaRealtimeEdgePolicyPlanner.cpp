@@ -27,6 +27,16 @@ MediaEdgePolicy planQueuePolicy(
     return policy;
 }
 
+MediaEdgePolicy planAtomicOutputPolicy(std::size_t capacity)
+{
+    MediaEdgePolicy policy = planQueuePolicy(
+        capacity, MediaQueueOverflowPolicy::BlockProducer,
+        MediaQueueOrderingPolicy::Fifo);
+    policy.queuePolicy.bounded = true;
+    policy.queuePolicy.preserveOrdering = true;
+    return policy;
+}
+
 } // namespace
 
 MediaRealtimeEdgePolicySet MediaRealtimeEdgePolicyPlanner::plan(
@@ -42,11 +52,16 @@ MediaRealtimeEdgePolicySet MediaRealtimeEdgePolicyPlanner::plan(
         queues.packet, MediaQueueOverflowPolicy::DropNonKeyFrame);
     policies.audioPacket = planQueuePolicy(
         queues.packet, MediaQueueOverflowPolicy::DropOldest);
-    policies.synchronizedPacket = planQueuePolicy(
-        queues.packet, MediaQueueOverflowPolicy::BlockProducer,
+    policies.synchronizedPacket = planAtomicOutputPolicy(queues.packet);
+    policies.audioDriftTransaction = planQueuePolicy(
+        queues.frame, MediaQueueOverflowPolicy::BlockProducer,
         MediaQueueOrderingPolicy::Fifo);
-    policies.frame = planQueuePolicy(
+    policies.videoFrame = planQueuePolicy(
         queues.frame, MediaQueueOverflowPolicy::DropOldest);
+    policies.preparedVideoFrame = planAtomicOutputPolicy(queues.frame);
+    policies.audioFrame = planQueuePolicy(
+        queues.frame, MediaQueueOverflowPolicy::BlockProducer,
+        MediaQueueOrderingPolicy::Fifo);
     policies.mux = planQueuePolicy(
         queues.mux, MediaQueueOverflowPolicy::DropOldest);
     policies.videoMux = planQueuePolicy(

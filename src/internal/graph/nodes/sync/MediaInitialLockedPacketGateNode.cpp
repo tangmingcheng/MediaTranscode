@@ -51,6 +51,19 @@ MediaInitialLockedPacketGateNode::onProcess(MediaGraphExecutionContext& context)
     if (clock.value()) {
         return processProgress(acceptClock(*clock.value()));
     }
+    if (m_pendingPacket) {
+        if (!m_lockedGeneration) {
+            if (m_acquisitionDeadline->deadline()) {
+                return ::media::Result<MediaNodeProcessResult>::success(
+                    MediaNodeProcessResult::waitingUntil(
+                        *m_syncGroupKey, *m_acquisitionDeadline->deadline()));
+            }
+            return processWaiting();
+        }
+        MediaBufferRef pending = std::move(m_pendingPacket);
+        return processProgress(
+            emitValidatedPacket(context, std::move(pending)));
+    }
     auto packet = tryPopInputOptional(context, "packet");
     if (!packet) {
         return ::media::Result<MediaNodeProcessResult>::failure(packet.error());
@@ -75,9 +88,17 @@ MediaInitialLockedPacketGateNode::onProcess(MediaGraphExecutionContext& context)
         }
         return processFinished(emitOutput(context, "packet", input));
     }
-    if (!m_lockedGeneration)
-        return processProgress(invalid(
-            "Initial locked packet gate rejects packet before clock lock"));
+    if (!m_lockedGeneration) {
+        if (auto status = retainPendingPacket(std::move(input)); !status) {
+            return processProgress(status);
+        }
+        if (m_acquisitionDeadline->deadline()) {
+            return ::media::Result<MediaNodeProcessResult>::success(
+                MediaNodeProcessResult::waitingUntil(
+                    *m_syncGroupKey, *m_acquisitionDeadline->deadline()));
+        }
+        return processWaiting();
+    }
     return processProgress(emitValidatedPacket(context, std::move(input)));
 }
 
@@ -166,6 +187,22 @@ MediaInitialLockedPacketGateNode::onProcess(MediaGraphExecutionContext& context)
     return emitOutput(context, "packet", buffer);
 }
 
+::media::Status MediaInitialLockedPacketGateNode::retainPendingPacket(
+    MediaBufferRef buffer)
+{
+    const auto* packet = dynamic_cast<const FFmpegPacketBuffer*>(buffer.get());
+    if (m_pendingPacket || !packet || !packet->sourceTiming() ||
+        packet->streamKind() != m_streamKind ||
+        packet->sourceTiming()->readiness != MediaSourceClockReadiness::Locked ||
+        packet->sourceTiming()->generation == 0 ||
+        hasFlag(packet->flags(), MediaBufferFlag::Discontinuity)) {
+        return invalid(
+            "Initial locked packet gate rejects pending packet clock evidence");
+    }
+    m_pendingPacket = std::move(buffer);
+    return ::media::Status::success();
+}
+
 ::media::Status MediaInitialLockedPacketGateNode::stop(
     MediaGraphExecutionContext& context)
 {
@@ -186,6 +223,7 @@ void MediaInitialLockedPacketGateNode::resetState() noexcept
     m_syncGroupKey.reset();
     m_syncGroup.reset();
     m_acquisitionDeadline.reset();
+    m_pendingPacket.reset();
     m_streamKind = MediaStreamKind::Unknown;
     m_configured = false;
 }

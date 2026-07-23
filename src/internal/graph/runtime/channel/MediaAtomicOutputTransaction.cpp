@@ -1,6 +1,7 @@
 #include "internal/graph/runtime/channel/MediaAtomicOutputTransaction.h"
 
 #include "internal/graph/runtime/channel/MediaChannel.h"
+#include "internal/graph/model/MediaAtomicOutputPolicyContract.h"
 
 #include <algorithm>
 #include <unordered_map>
@@ -79,16 +80,14 @@ MediaAtomicOutputTransaction::acquire(
             return AcquireResult::failure(::media::ErrorInfo::cancelled(
                 ownerName + " output is closed"));
         }
-        const auto& policy = channel->m_policy.queuePolicy;
-        if (!policy.bounded || policy.capacity == 0 ||
-            policy.overflowPolicy != MediaQueueOverflowPolicy::BlockProducer ||
-            policy.orderingPolicy != MediaQueueOrderingPolicy::Fifo ||
-            !policy.preserveOrdering) {
+        if (!MediaAtomicOutputPolicyContract::accepts(channel->m_policy)) {
             return AcquireResult::failure(invalidContract(ownerName));
         }
         const std::size_t capacity = channel->m_queue->capacity();
         const std::size_t count = required[channel];
-        if (count > capacity || channel->m_queue->size() > capacity - count) {
+        if (count > capacity || channel->m_reservedCapacity > capacity - count ||
+            channel->m_queue->size() >
+                capacity - count - channel->m_reservedCapacity) {
             return AcquireResult::success(std::nullopt);
         }
     }

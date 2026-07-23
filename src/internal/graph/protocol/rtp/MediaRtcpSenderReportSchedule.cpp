@@ -1,14 +1,15 @@
 #include "internal/graph/protocol/rtp/MediaRtcpSenderReportSchedule.h"
 
 #include <limits>
+#include <string>
 #include <utility>
 
 namespace media::ffmpeg::graph {
 namespace {
 
-::media::ErrorInfo invalidSchedule(const char* message)
+::media::ErrorInfo invalidSchedule(std::string message)
 {
-    return ::media::ErrorInfo::invalidArgument(message);
+    return ::media::ErrorInfo::invalidArgument(std::move(message));
 }
 
 bool validDeadline(MediaRunningTime value) noexcept
@@ -70,7 +71,13 @@ MediaRtcpSenderReportSchedule::create(
         maximumLateness.nanoseconds() < 0 || generation == 0) {
         return ::media::Result<MediaRtcpSenderReportSchedule>::failure(
             invalidSchedule(
-                "RTCP sender report schedule parameters are incomplete"));
+                "RTCP sender report schedule parameters are incomplete: "
+                "initial_deadline_ns=" +
+                std::to_string(initialDeadline.nanoseconds()) +
+                " interval_ns=" + std::to_string(interval.nanoseconds()) +
+                " maximum_lateness_ns=" +
+                std::to_string(maximumLateness.nanoseconds()) +
+                " generation=" + std::to_string(generation)));
     }
     return ::media::Result<MediaRtcpSenderReportSchedule>::success(
         MediaRtcpSenderReportSchedule(

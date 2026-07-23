@@ -5,8 +5,11 @@
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 #include "internal/graph/runtime/lifecycle/MediaInputTerminalTracker.h"
 #include "internal/graph/sync/lineage/MediaVideoLineageState.h"
+#include "internal/graph/sync/startup/MediaAvStartupVideoPreparationCapability.h"
+#include "internal/graph/runtime/channel/MediaReservedOutputTransaction.h"
 
 #include <cstdint>
+#include <optional>
 #include <set>
 #include <string_view>
 
@@ -60,6 +63,10 @@ public:
     VideoFilterNode(
         MediaNodeId nodeId,
         std::shared_ptr<MediaCodecLineageRegistry> lineageRegistry);
+    VideoFilterNode(
+        MediaNodeId nodeId,
+        std::shared_ptr<MediaCodecLineageRegistry> lineageRegistry,
+        MediaAvStartupVideoPreparationCapability preparationCapability);
     static MediaNodeKind staticKind() noexcept;
     static std::string_view generationPurgeIdentity() noexcept;
     std::shared_ptr<MediaAvGenerationPurgeTarget>
@@ -85,11 +92,27 @@ private:
     ::media::Status emitFrame(MediaGraphExecutionContext& context, ::media::ffmpeg::FramePtr frame);
     ::media::Result<MediaNodeProcessResult> continueTerminal(MediaGraphExecutionContext& context);
     ::media::Status rescaleAndValidateFrame(AVFrame* frame) noexcept;
+    ::media::Status retainPreparedOutput(
+        MediaBufferRef output,
+        std::uint64_t generation,
+        std::uint64_t releaseIdentity);
+    ::media::Status markPreparedReadyOutsideLineageLock(
+        MediaGraphExecutionContext& context);
     void resetRuntimeState() noexcept;
 
 private:
     std::shared_ptr<MediaCodecLineageRegistry> m_lineageRegistry;
     std::shared_ptr<VideoFilterLineageState> m_lineageState;
+    std::optional<MediaAvStartupVideoPreparationCapability>
+        m_preparationCapability;
+    MediaBufferRef m_preparedOutput;
+    std::optional<MediaReservedOutputTransaction> m_preparedReservation;
+    std::uint64_t m_preparedGeneration = 0;
+    std::uint64_t m_preparedReleaseIdentity = 0;
+    bool m_preparedNeedsReady = false;
+    bool m_preparationFeedArmed = false;
+    bool m_firstInputDiagnosticEmitted = false;
+    bool m_firstOutputDiagnosticEmitted = false;
 };
 
 } // namespace media::ffmpeg::graph

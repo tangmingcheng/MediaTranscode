@@ -128,16 +128,13 @@ void driftMeasurementUsesActiveEpochAndCanonicalAudioEnd()
 {
     const MediaAudioPlaybackOrigin origin{7, ms(100), ms(500), 4'800, 48'000};
     auto measurement = MediaAudioDriftControllerNode::measureCanonicalPosition(
-        origin, ms(515), {4'800, 5'280, 48'000}, ms(505), 1);
+        origin, ms(515), {4'800, 5'280, 48'000}, 1);
     assert(measurement);
     assert(measurement.value().generation == 7);
     assert(measurement.value().sequence == 1);
     assert(measurement.value().effectiveOutputSampleIndex == 4'800);
     assert(measurement.value().phaseError == ms(5));
-    auto delayed = MediaAudioDriftControllerNode::measureCanonicalPosition(
-        origin, ms(515), {4'800, 5'280, 48'000}, ms(5'000), 1);
-    assert(delayed);
-    assert(delayed.value().phaseError == measurement.value().phaseError);
+    assert(measurement.value().sourceEndOnMaster == ms(515));
 }
 
 class TestMasterClock final : public MediaMasterClock {
@@ -147,7 +144,6 @@ public:
     {
         return ::media::Result<MediaRunningTime>::success(m_now);
     }
-    void set(MediaRunningTime now) noexcept { m_now = now; }
 private:
     MediaRunningTime m_now;
 };
@@ -235,7 +231,9 @@ void controllerRetainsAtomicCorrectionBeforeAudioAcrossBackpressure()
     std::unique_ptr<MediaGraphRuntime> runtime;
     const MediaPlaybackEpoch epoch{ms(100), ms(500), 1};
     assert(media_transcode::test::compileAndActivateAvSyncRuntime(
-        std::move(graph), {MediaAvSyncGroupKey("task6-group"), plan, transition},
+        std::move(graph),
+        {MediaAvSyncGroupKey("task6-group"), plan, transition,
+         MediaAvSyncBindingAssemblyMode::ComponentCore},
         clock, epoch, binder, execution, runtime));
     auto* node = dynamic_cast<MediaAudioDriftControllerNode*>(
         runtime->scheduler().findNode(controller));
@@ -279,7 +277,7 @@ void controllerRetainsAtomicCorrectionBeforeAudioAcrossBackpressure()
     assert(forwardedFlush == flush);
 
     auto second = boundAudio(480, 960, origin, 2);
-    clock->set(ms(506));
+    assert(clock->now().value() == ms(505));
     assert(execution.findOutputChannel(controller, "audio")->push(second));
     assert(execution.findInputChannel(controller, "audio")->push(second));
     const auto secondBlocked = node->process(execution);
@@ -438,7 +436,8 @@ void audioControlNodesHonorAbortAndRequiredInputTermination()
             {MediaAvSyncGroupKey("terminal-group"), completePlan(),
              MediaAvGenerationTransitionPlanner::plan(
                  MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp,
-                 ms(1'000), ms(1'000))},
+                 ms(1'000), ms(1'000)),
+             MediaAvSyncBindingAssemblyMode::ComponentCore},
             clock, {ms(100), ms(500), 1}, binder, execution, runtime));
         auto* node = dynamic_cast<MediaAudioDriftControllerNode*>(
             runtime->scheduler().findNode(controller));
@@ -573,7 +572,8 @@ void generationPurgeCancelsBackpressuredAudioControls()
             {MediaAvSyncGroupKey("purge-group"), completePlan(),
              MediaAvGenerationTransitionPlanner::plan(
                  MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp,
-                 ms(1'000), ms(1'000))},
+                 ms(1'000), ms(1'000)),
+             MediaAvSyncBindingAssemblyMode::ComponentCore},
             std::make_shared<TestMasterClock>(ms(500)),
             {ms(100), ms(500), 1}, binder, execution, runtime));
         auto* node = dynamic_cast<MediaAudioDriftControllerNode*>(
@@ -712,7 +712,8 @@ void synchronizedAudioControlsRequireObservedGeneration()
             {MediaAvSyncGroupKey("pre-media"), completePlan(),
              MediaAvGenerationTransitionPlanner::plan(
                  MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp,
-                 ms(1'000), ms(1'000))},
+                 ms(1'000), ms(1'000)),
+             MediaAvSyncBindingAssemblyMode::ComponentCore},
             std::make_shared<TestMasterClock>(ms(500)),
             {ms(100), ms(500), 1}, binder, execution, runtime));
         auto* node = dynamic_cast<MediaAudioDriftControllerNode*>(

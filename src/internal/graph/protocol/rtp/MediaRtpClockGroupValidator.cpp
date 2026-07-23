@@ -1,6 +1,7 @@
 #include "internal/graph/protocol/rtp/MediaRtpClockGroupValidator.h"
 
-#include <cstdlib>
+#include <limits>
+#include <optional>
 #include <utility>
 
 namespace media::ffmpeg::graph {
@@ -23,6 +24,34 @@ bool matchingCalibration(const MediaRtcpClockEvidence& evidence,
            evidence.senderReportObservedAtNs == calibration.senderReportObservedAtNs;
 }
 
+std::optional<std::int64_t> checkedSubtract(std::int64_t lhs,
+                                            std::int64_t rhs) noexcept
+{
+    if ((rhs > 0 && lhs < std::numeric_limits<std::int64_t>::min() + rhs) ||
+        (rhs < 0 && lhs > std::numeric_limits<std::int64_t>::max() + rhs)) {
+        return std::nullopt;
+    }
+    return lhs - rhs;
+}
+
+std::optional<std::int64_t> initialAcquisitionClockOffsetSkew(
+    const MediaRtcpClockEvidence& videoEvidence,
+    const MediaRtpSourceClockCalibration& videoCalibration,
+    const MediaRtcpClockEvidence& audioEvidence,
+    const MediaRtpSourceClockCalibration& audioCalibration) noexcept
+{
+    const auto videoOffset = checkedSubtract(
+        videoCalibration.actualSenderReportSourceTime.nanoseconds(),
+        videoEvidence.senderReportObservedAtNs);
+    const auto audioOffset = checkedSubtract(
+        audioCalibration.actualSenderReportSourceTime.nanoseconds(),
+        audioEvidence.senderReportObservedAtNs);
+    if (!videoOffset || !audioOffset) return std::nullopt;
+    return *videoOffset >= *audioOffset
+        ? checkedSubtract(*videoOffset, *audioOffset)
+        : checkedSubtract(*audioOffset, *videoOffset);
+}
+
 } // namespace
 
 ::media::Result<MediaRtpClockGroupValidator> MediaRtpClockGroupValidator::create(
@@ -30,7 +59,8 @@ bool matchingCalibration(const MediaRtcpClockEvidence& evidence,
 {
     if (config.senderReportTimeoutNs <= 0 ||
         config.maximumExtrapolationNs <= config.senderReportTimeoutNs ||
-        config.maximumInterStreamSkewNs <= 0 || config.videoCnameTimeoutNs <= 0 ||
+        config.maximumInterStreamClockOffsetSkewNs <= 0 ||
+        config.videoCnameTimeoutNs <= 0 ||
         config.audioCnameTimeoutNs <= 0 ||
         config.commonEpochPolicy !=
             MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime) {
@@ -60,12 +90,32 @@ MediaRtpClockGroupValidator::MediaRtpClockGroupValidator(
         return invalid("RTP clock group evidence identity is invalid");
     }
 
+    StreamState observed{evidence, std::move(calibration)};
+    if (m_phase == Phase::ActiveGeneration && m_video && m_audio &&
+        !m_reacquireRequired) {
+        const StreamState& committed =
+            streamKind == MediaStreamKind::Video ? *m_video : *m_audio;
+        if (observed.evidence.observedMediaSsrc !=
+                committed.evidence.observedMediaSsrc ||
+            observed.evidence.cname != committed.evidence.cname ||
+            observed.evidence.generation != committed.evidence.generation) {
+            clear(true);
+            return invalid(
+                "RTP clock group active stream identity or generation changed");
+        }
+
+        std::optional<StreamState>& target =
+            streamKind == MediaStreamKind::Video ? m_video : m_audio;
+        target = std::move(observed);
+        return ::media::Status::success();
+    }
+
     std::optional<StreamState>& target =
         streamKind == MediaStreamKind::Video ? m_video : m_audio;
     if (target && target->evidence.generation != evidence.generation) {
         clear(false);
     }
-    target = StreamState{evidence, std::move(calibration)};
+    target = std::move(observed);
 
     if (!m_video || !m_audio) {
         m_reacquireRequired = false;
@@ -75,12 +125,18 @@ MediaRtpClockGroupValidator::MediaRtpClockGroupValidator(
         clear(true);
         return invalid("RTP clock group CNAME values do not match exactly");
     }
-    const std::int64_t skew = std::llabs(
-        m_video->calibration.actualSenderReportSourceTime.nanoseconds() -
-        m_audio->calibration.actualSenderReportSourceTime.nanoseconds());
-    if (skew > m_config.maximumInterStreamSkewNs) {
+    const auto skew = initialAcquisitionClockOffsetSkew(
+        m_video->evidence, m_video->calibration,
+        m_audio->evidence, m_audio->calibration);
+    if (!skew) {
         clear(true);
-        return invalid("RTP clock group sender report skew exceeds planner threshold");
+        return invalid(
+            "RTP clock group sender report clock-offset arithmetic is not representable");
+    }
+    if (*skew > m_config.maximumInterStreamClockOffsetSkewNs) {
+        clear(true);
+        return invalid(
+            "RTP clock group sender report clock-offset skew exceeds planner threshold");
     }
     m_reacquireRequired = false;
     return ::media::Status::success();
@@ -94,6 +150,10 @@ MediaRtpClockGroupSnapshot MediaRtpClockGroupValidator::snapshot(
                             : MediaRtpClockGroupState::Acquiring,
         m_groupGeneration,
         std::nullopt};
+    if (m_phase == Phase::InitialAcquisition && !m_reacquireRequired) {
+        discardExpiredInitialCandidates(observedAtNs);
+        result.groupGeneration = 0;
+    }
     if (m_reacquireRequired || !m_video || !m_audio) return result;
 
     const auto age = [observedAtNs](const StreamState& stream) -> std::optional<std::int64_t> {
@@ -123,9 +183,9 @@ MediaRtpClockGroupSnapshot MediaRtpClockGroupValidator::snapshot(
         ? MediaRtpClockGroupState::Degraded
         : MediaRtpClockGroupState::Locked;
     if (result.state != MediaRtpClockGroupState::Locked) return result;
-    if (!m_everLocked) {
+    if (m_phase == Phase::InitialAcquisition) {
         ++m_groupGeneration;
-        m_everLocked = true;
+        m_phase = Phase::ActiveGeneration;
     }
     result.groupGeneration = m_groupGeneration;
     MediaRtpSourceClockCalibration video = m_video->calibration;
@@ -144,6 +204,33 @@ MediaRtpClockGroupSnapshot MediaRtpClockGroupValidator::snapshot(
         std::move(video),
         std::move(audio)};
     return result;
+}
+
+void MediaRtpClockGroupValidator::discardExpiredInitialCandidates(
+    std::int64_t observedAtNs) noexcept
+{
+    if (m_video && !initialCandidateIsFresh(
+                       *m_video, observedAtNs, m_config.videoCnameTimeoutNs)) {
+        m_video.reset();
+    }
+    if (m_audio && !initialCandidateIsFresh(
+                       *m_audio, observedAtNs, m_config.audioCnameTimeoutNs)) {
+        m_audio.reset();
+    }
+}
+
+bool MediaRtpClockGroupValidator::initialCandidateIsFresh(
+    const StreamState& stream,
+    std::int64_t observedAtNs,
+    std::int64_t cnameTimeoutNs) const noexcept
+{
+    if (observedAtNs < stream.evidence.senderReportObservedAtNs ||
+        observedAtNs < stream.evidence.cnameObservedAtNs) {
+        return false;
+    }
+    return observedAtNs - stream.evidence.senderReportObservedAtNs <=
+               m_config.senderReportTimeoutNs &&
+           observedAtNs - stream.evidence.cnameObservedAtNs <= cnameTimeoutNs;
 }
 
 void MediaRtpClockGroupValidator::invalidate() noexcept

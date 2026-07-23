@@ -1,6 +1,7 @@
 #include "internal/graph/nodes/sync/MediaAvStartupCoordinatorNode.h"
 
 #include "internal/graph/nodes/sync/MediaAvStartupCoordinatorNodePreparation.h"
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/runtime/buffer/MediaAvStartupEnvelopeBuffer.h"
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/sync/startup/MediaAvStartupGenerationState.h"
@@ -25,6 +26,7 @@ MediaAvStartupCoordinatorNode::MediaAvStartupCoordinatorNode(
     : FFmpegNodeRuntime(nodeId, staticKind(), "MediaAvStartupCoordinatorNode")
     , m_coordinator(std::move(preparation.m_coordinator))
     , m_generationState(std::move(preparation.m_generationState))
+    , m_outputAudioSampleRate(preparation.m_outputAudioSampleRate)
 {
 }
 
@@ -47,6 +49,7 @@ MediaAvStartupCoordinatorNode::generationPurgeTarget() const noexcept
 ::media::Result<MediaNodeProcessResult> MediaAvStartupCoordinatorNode::onProcess(
     MediaGraphExecutionContext& context)
 {
+    bool activatedClockBarrier = false;
     if (m_deferredTerminalError) {
         auto error = std::move(*m_deferredTerminalError);
         m_deferredTerminalError.reset();
@@ -67,6 +70,12 @@ MediaAvStartupCoordinatorNode::generationPurgeTarget() const noexcept
         auto audio = fillPendingMedia(context, "audio", m_pendingAudio);
         if (!audio) return ::media::Result<MediaNodeProcessResult>::failure(audio.error());
     } else {
+        if (!m_clockBarrierSnapshotSealed) {
+            if (auto status = sealClockBarrier(context); !status) {
+                return ::media::Result<MediaNodeProcessResult>::failure(
+                    status.error());
+            }
+        }
         auto video = fillSnapshotBarrierMedia(context, "video", m_pendingVideo,
                                               m_videoClockBarrierRemaining);
         if (!video) return ::media::Result<MediaNodeProcessResult>::failure(video.error());
@@ -82,6 +91,7 @@ MediaAvStartupCoordinatorNode::generationPurgeTarget() const noexcept
         if (auto status = activateClockBarrier(context); !status) {
             return ::media::Result<MediaNodeProcessResult>::failure(status.error());
         }
+        activatedClockBarrier = true;
     }
     if (!m_terminalBarrierActive &&
         (hasTerminalHead(m_pendingVideo) || hasTerminalHead(m_pendingAudio))) {
@@ -89,6 +99,7 @@ MediaAvStartupCoordinatorNode::generationPurgeTarget() const noexcept
             return ::media::Result<MediaNodeProcessResult>::failure(status.error());
         }
     }
+    if (activatedClockBarrier) return processProgress();
     auto selected = selectPending();
     if (!selected) return ::media::Result<MediaNodeProcessResult>::failure(selected.error());
     if (!selected.value()) return processWaiting();
@@ -163,6 +174,17 @@ MediaAvStartupCoordinatorNode::generationPurgeTarget() const noexcept
 ::media::Status MediaAvStartupCoordinatorNode::activateClockBarrier(
     MediaGraphExecutionContext& context)
 {
+    (void)context;
+    m_videoClockBarrierRemaining = 0;
+    m_audioClockBarrierRemaining = 0;
+    m_clockBarrierSnapshotSealed = false;
+    m_clockBarrierActive = true;
+    return ::media::Status::success();
+}
+
+::media::Status MediaAvStartupCoordinatorNode::sealClockBarrier(
+    MediaGraphExecutionContext& context)
+{
     const auto snapshotSize = [&](const char* portName) -> ::media::Result<std::size_t> {
         MediaChannel* channel = context.findInputChannel(nodeId(), portName);
         if (!channel) {
@@ -178,7 +200,7 @@ MediaAvStartupCoordinatorNode::generationPurgeTarget() const noexcept
     if (!audio) return ::media::Status::failure(audio.error());
     m_videoClockBarrierRemaining = video.value();
     m_audioClockBarrierRemaining = audio.value();
-    m_clockBarrierActive = true;
+    m_clockBarrierSnapshotSealed = true;
     return ::media::Status::success();
 }
 
@@ -242,7 +264,13 @@ MediaAvStartupCoordinatorNode::selectPending() const
                 "MediaAvStartupCoordinatorNode video input requires a common canonical envelope"));
         consider(PendingInput::Video, m_pendingVideo.front(), envelope->observedAt());
     }
-    if (m_pendingClock) {
+    const bool clockBarrierMediaDrained =
+        !m_clockBarrierActive ||
+        (m_clockBarrierSnapshotSealed &&
+         m_pendingVideo.empty() && m_pendingAudio.empty() &&
+         m_videoClockBarrierRemaining == 0 &&
+         m_audioClockBarrierRemaining == 0);
+    if (m_pendingClock && clockBarrierMediaDrained) {
         const auto* tick = dynamic_cast<const MediaAvStartupClockBuffer*>(m_pendingClock.get());
         if (!tick) return ::media::Result<std::optional<PendingInput>>::failure(
             ::media::ErrorInfo::invalidArgument(
@@ -267,9 +295,17 @@ MediaAvStartupCoordinatorNode::selectPending() const
     m_lastClock = tick->masterNow();
     m_pendingClock.reset();
     m_clockBarrierActive = false;
+    m_clockBarrierSnapshotSealed = false;
     m_videoClockBarrierRemaining = 0;
     m_audioClockBarrierRemaining = 0;
     auto status = m_coordinator->poll(*m_lastClock);
+    if (!status) {
+        mediaGraphDiagnosticLog(
+            MediaGraphDiagnosticLevel::State,
+            MediaGraphDiagnosticPhase::RuntimeNode,
+            std::string("av_startup_trace stage=clock_poll status=failed error=") +
+                status.error().toErrorInfo().message);
+    }
     return status ? processProgress()
                    : ::media::Result<MediaNodeProcessResult>::failure(
                          status.error().toErrorInfo());
@@ -309,6 +345,16 @@ MediaAvStartupCoordinatorNode::selectPending() const
     }
     lastObservedAt = envelope->observedAt();
     const MediaAvStartupUnitId id{unit.stream, unit.generation, unit.sequence};
+    if (unit.stream == MediaAvStartupStream::Video && unit.keyFrame &&
+        !m_keyTraceEmitted) {
+        m_keyTraceEmitted = true;
+        mediaGraphDiagnosticLog(
+            MediaGraphDiagnosticLevel::State,
+            MediaGraphDiagnosticPhase::RuntimeNode,
+            std::string("av_startup_trace stage=coordinator_key sequence=") +
+                std::to_string(unit.sequence) + " generation=" +
+                std::to_string(unit.generation));
+    }
     if (unit.readiness == MediaSourceClockReadiness::Locked &&
         m_generationState) {
         auto stored = m_generationState->store(
@@ -382,7 +428,7 @@ MediaAvStartupCoordinatorNode::prepareOutput(
         *epoch,
         MediaAudioPlaybackOrigin{epoch->generation, epoch->sourceStart,
                                  epoch->masterRelease, 0,
-                                 *m_generationState->audioSampleRate()},
+                                 m_outputAudioSampleRate},
         std::move(video), std::move(audio));
     if (!release) {
         return ::media::Result<std::optional<MediaBufferRef>>::failure(
@@ -488,6 +534,7 @@ void MediaAvStartupCoordinatorNode::clearTransientState() noexcept
     m_pendingAudio.clear();
     m_pendingClock.reset();
     m_clockBarrierActive = false;
+    m_clockBarrierSnapshotSealed = false;
     m_videoClockBarrierRemaining = 0;
     m_audioClockBarrierRemaining = 0;
     m_terminalBarrierActive = false;
@@ -498,6 +545,7 @@ void MediaAvStartupCoordinatorNode::clearTransientState() noexcept
     m_lastAudioObservedAt.reset();
     m_lastClock.reset();
     m_terminalControlCommitted = false;
+    m_keyTraceEmitted = false;
     m_deferredTerminalError.reset();
 }
 

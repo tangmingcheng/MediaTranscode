@@ -400,7 +400,8 @@ void testSegmentBuildsOneSharedSchedulerAndOneRouter(TestContext& ctx)
     consumedOnly.queues.frame = 0;
     consumedOnly.queues.mux = 0;
     consumedOnly.edgePolicies.metadata.queuePolicy.capacity = 0;
-    consumedOnly.edgePolicies.frame.queuePolicy.capacity = 0;
+    consumedOnly.edgePolicies.videoFrame.queuePolicy.capacity = 0;
+    consumedOnly.edgePolicies.audioFrame.queuePolicy.capacity = 0;
     consumedOnly.edgePolicies.mux.queuePolicy.capacity = 0;
     MediaGraph consumedGraph;
     const auto consumedVideo = consumedGraph.addNode(
@@ -696,8 +697,9 @@ void testActiveSharedSchedulerRoutesEqualEpochWithoutDuplicateRetry(
     std::unique_ptr<MediaGraphRuntime> runtime;
     EXPECT_TRUE(ctx, media_transcode::test::compileAndActivateAvSyncRuntime(
                          std::move(graph),
-                         {plan->groupKey, plan->synchronization,
-                          plan->transition},
+                          {plan->groupKey, plan->synchronization,
+                           plan->transition,
+                           MediaAvSyncBindingAssemblyMode::ComponentCore},
                          std::make_shared<FixedMasterClock>(ms(0)),
                          MediaPlaybackEpoch{ms(0), ms(0), 1}, binder,
                          execution, runtime));

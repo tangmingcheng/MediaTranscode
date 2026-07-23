@@ -3,10 +3,34 @@
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/buffer/MediaStartupReleaseTransactionBuffer.h"
 #include "internal/graph/runtime/channel/MediaChannel.h"
+#include "internal/graph/runtime/channel/MediaAtomicOutputTransaction.h"
 #include "internal/graph/runtime/channel/MediaRequiredInputReader.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 
+#include <array>
+#include <vector>
+
 namespace media::ffmpeg::graph {
+namespace {
+
+std::vector<MediaChannel*> channelsForPort(
+    MediaGraphExecutionContext& context,
+    MediaNodeId nodeId,
+    const char* portName)
+{
+    const MediaGraph* graph = context.graph();
+    const MediaPort* port = graph ? graph->findOutputPort(nodeId, portName)
+                                  : nullptr;
+    std::vector<MediaChannel*> channels;
+    if (!port) return channels;
+    for (MediaChannel* channel : context.outputChannels(nodeId)) {
+        if (channel && channel->binding().from.portId == port->id)
+            channels.push_back(channel);
+    }
+    return channels;
+}
+
+} // namespace
 
 MediaPlaybackEpochBinderNode::MediaPlaybackEpochBinderNode(
     MediaNodeId nodeId,
@@ -64,48 +88,45 @@ MediaPlaybackEpochBinderNode::process(MediaGraphExecutionContext& context)
             return failTerminal(status.error());
         }
     }
-    MediaChannel* output = context.findOutputChannel(nodeId(), "transaction");
-    if (!output) {
+    auto transactionOutputs = channelsForPort(context, nodeId(), "transaction");
+    if (transactionOutputs.empty()) {
         return failTerminal(::media::ErrorInfo::notInitialized(
             "Playback epoch binder requires a transaction output"));
     }
-    if (output->policy().queuePolicy.overflowPolicy !=
-        MediaQueueOverflowPolicy::BlockProducer) {
-        return failTerminal(::media::ErrorInfo::invalidArgument(
-            "Playback epoch binder requires a blocking transaction output"));
+    if (!m_pendingTransaction) {
+        auto transaction = release
+            ? MediaStartupReleaseTransactionBuffer::create(m_pendingRelease)
+            : MediaStartupReleaseTransactionBuffer::createControl(m_pendingRelease);
+        if (!transaction) return failTerminal(transaction.error());
+        m_pendingTransaction = std::move(transaction).value();
     }
-    if (output->closed() || output->aborted()) {
-        return failTerminal(::media::ErrorInfo::cancelled(
-            "Playback epoch binder transaction output is closed"));
-    }
-    if (output->size() >= output->capacity()) {
+
+    const bool initial = release && release->releaseKind() ==
+        MediaAvStartupReleaseKind::InitialAtomicRelease;
+    auto preparationOutputs = initial
+        ? channelsForPort(context, nodeId(), "preparation")
+        : std::vector<MediaChannel*>{};
+    std::vector<MediaAtomicOutputBatch> batches;
+    batches.reserve(transactionOutputs.size() + preparationOutputs.size());
+    const std::span<const MediaBufferRef> one(&m_pendingTransaction, 1);
+    for (MediaChannel* channel : transactionOutputs)
+        batches.push_back({channel, one});
+    for (MediaChannel* channel : preparationOutputs)
+        batches.push_back({channel, one});
+    auto atomic = MediaAtomicOutputTransaction::acquire(
+        "Playback epoch binder", batches);
+    if (!atomic) return failTerminal(atomic.error());
+    if (!atomic.value()) {
         return ::media::Result<MediaNodeProcessResult>::success(
             MediaNodeProcessResult::waiting());
     }
-    auto transaction = release
-        ? MediaStartupReleaseTransactionBuffer::create(m_pendingRelease)
-        : MediaStartupReleaseTransactionBuffer::createControl(m_pendingRelease);
-    if (!transaction) {
-        return failTerminal(transaction.error());
-    }
-    const auto outcome = output->pushOutcome(std::move(transaction).value());
-    if (outcome == MediaQueuePushOutcome::WouldBlock) {
-        return ::media::Result<MediaNodeProcessResult>::success(
-            MediaNodeProcessResult::waiting());
-    }
-    if (outcome != MediaQueuePushOutcome::Accepted) {
-        return failTerminal(
-            outcome == MediaQueuePushOutcome::Closed ||
-                    outcome == MediaQueuePushOutcome::Aborted
-                ? ::media::ErrorInfo::cancelled(
-                      "Playback epoch binder transaction output terminated during commit")
-                : ::media::ErrorInfo::internalError(
-                      "Playback epoch binder transaction commit failed"));
-    }
+    if (auto committed = atomic.value()->commit(); !committed)
+        return failTerminal(committed.error());
     const bool finished = control &&
         (control->controlKind() == MediaControlBufferKind::Eof ||
          control->controlKind() == MediaControlBufferKind::Abort);
     m_pendingRelease.reset();
+    m_pendingTransaction.reset();
     return ::media::Result<MediaNodeProcessResult>::success(
         finished ? MediaNodeProcessResult::finished()
                  : MediaNodeProcessResult::progress());
@@ -123,6 +144,7 @@ MediaPlaybackEpochBinderNode::failTerminal(::media::ErrorInfo error)
     MediaGraphExecutionContext& context)
 {
     m_pendingRelease.reset();
+    m_pendingTransaction.reset();
     if (!m_terminalFailure) {
         m_terminalFailure = ::media::ErrorInfo::cancelled(
             "Playback epoch binder was stopped");
@@ -134,6 +156,7 @@ void MediaPlaybackEpochBinderNode::abort(
     MediaGraphExecutionContext& context) noexcept
 {
     m_pendingRelease.reset();
+    m_pendingTransaction.reset();
     if (!m_terminalFailure) {
         m_terminalFailure = ::media::ErrorInfo::cancelled(
             "Playback epoch binder was aborted");

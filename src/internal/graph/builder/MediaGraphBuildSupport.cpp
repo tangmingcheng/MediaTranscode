@@ -51,8 +51,14 @@ MediaRealtimeEdgePolicySet blockingEdgePolicySet(const MediaGraphQueueParameters
     policies.packet = blockingQueuePolicy(queues.packet);
     policies.videoPacket = blockingQueuePolicy(queues.packet);
     policies.audioPacket = blockingQueuePolicy(queues.packet);
-    policies.frame = blockingQueuePolicy(queues.frame);
+    policies.synchronizedPacket = blockingQueuePolicy(queues.packet);
+    policies.audioDriftTransaction = blockingQueuePolicy(queues.frame);
+    policies.videoFrame = blockingQueuePolicy(queues.frame);
+    policies.preparedVideoFrame = blockingQueuePolicy(queues.frame);
+    policies.audioFrame = blockingQueuePolicy(queues.frame);
     policies.mux = blockingQueuePolicy(queues.mux);
+    policies.videoMux = blockingQueuePolicy(queues.mux);
+    policies.audioMux = blockingQueuePolicy(queues.mux);
     return policies;
 }
 
@@ -152,6 +158,32 @@ MediaFormatDescriptor streamIndexDescriptor(MediaStreamKind streamKind, int stre
     return ::media::Result<void>::success();
 }
 
+::media::Result<void> requirePacketOutputEndpoint(
+    const MediaGraph& graph,
+    std::string_view owner,
+    const MediaEndpoint& endpoint,
+    MediaStreamKind streamKind,
+    MediaEdgeKind edgeKind,
+    int sourceStreamIndex)
+{
+    if (!endpoint.valid() || sourceStreamIndex < 0) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                ownedMessage(owner, "consume packet output endpoint", "invalid endpoint contract")));
+    }
+
+    const MediaPort* port = graph.findOutputPort(endpoint.node, endpoint.port);
+    if (!port || port->streamKind != streamKind || port->edgeKind != edgeKind ||
+        port->payloadKind != MediaPayloadKind::Packet ||
+        port->format.streamKind != streamKind ||
+        port->format.streamIndex != sourceStreamIndex) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                ownedMessage(owner, "consume packet output endpoint", endpoint.port)));
+    }
+    return ::media::Result<void>::success();
+}
+
 ::media::Result<void> addInputPortChecked(MediaGraph& graph,
                                           std::string_view owner,
                                           MediaNodeId nodeId,
@@ -194,6 +226,33 @@ MediaFormatDescriptor streamIndexDescriptor(MediaStreamKind streamKind, int stre
                                            multiple),
                        owner,
                        portName);
+}
+
+::media::Result<void> addOutputPortWithFormatDescriptorChecked(
+    MediaGraph& graph,
+    std::string_view owner,
+    MediaNodeId nodeId,
+    std::string name,
+    MediaStreamKind streamKind,
+    MediaEdgeKind edgeKind,
+    MediaPayloadKind payloadKind,
+    bool required,
+    bool multiple,
+    MediaFormatDescriptor descriptor)
+{
+    const std::string portName = name;
+    const MediaPortId port = graph.addOutputPort(
+        nodeId, std::move(name), streamKind, edgeKind, payloadKind,
+        required, multiple);
+    if (auto status = requirePort(port, owner, portName); !status) {
+        return status;
+    }
+    if (!graph.setPortFormatDescriptor(port, std::move(descriptor))) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::internalError(
+                ownedMessage(owner, "set output port format", portName)));
+    }
+    return ::media::Result<void>::success();
 }
 
 ::media::Result<void> connectChecked(MediaGraph& graph,

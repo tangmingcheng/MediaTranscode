@@ -5,7 +5,7 @@
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "media_transcode/Result.h"
-#include "internal/graph/builder/MediaPacketCopyBranchBuilder.h"
+#include "internal/graph/builder/MediaEncodedBranchEndpoints.h"
 
 #include <optional>
 #include <string>
@@ -29,7 +29,7 @@ struct MediaAudioPacketCopyBranchOptions {
 
 class MediaAudioPacketCopyBranchBuilder final {
 public:
-    static ::media::Result<MediaPacketCopyBranchResult> build(
+    static ::media::Result<MediaEncodedBranchEndpoints> build(
         MediaGraph& graph,
         const MediaAudioPacketCopyBranchOptions& options);
 

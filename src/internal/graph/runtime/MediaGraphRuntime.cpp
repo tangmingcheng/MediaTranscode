@@ -53,6 +53,7 @@ bool MediaGraphRuntime::diagnosticsEnabled() const noexcept
     return MediaGraphRuntimeCompiler::compile(
         std::move(executable), m_graph, m_inputBindings,
         m_playbackEpochActivationCapability,
+        m_videoPreparationState,
         m_avSyncClockSource,
         m_context, m_scheduler, m_threadedExecutor, m_acceptanceCollector,
         m_queueHighWatermark, m_state);
@@ -67,7 +68,7 @@ bool MediaGraphRuntime::diagnosticsEnabled() const noexcept
 {
     return MediaGraphRuntimeCompiler::registerDefaults(
         m_context, m_scheduler, m_inputBindings,
-        m_playbackEpochActivationCapability);
+        m_playbackEpochActivationCapability, m_videoPreparationState);
 }
 
 void MediaGraphRuntime::setThreadingPolicy(MediaThreadingPolicy policy) noexcept

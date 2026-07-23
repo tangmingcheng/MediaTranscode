@@ -1,5 +1,6 @@
 #include "internal/graph/nodes/sync/MediaCanonicalInputNode.h"
 
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/runtime/buffer/FFmpegPacketBuffer.h"
 #include "internal/graph/runtime/buffer/MediaAvStartupEnvelopeBuffer.h"
@@ -13,6 +14,7 @@ extern "C" {
 
 #include <limits>
 #include <numeric>
+#include <string>
 
 namespace media::ffmpeg::graph {
 
@@ -41,6 +43,7 @@ void MediaCanonicalInputNode::resetState() noexcept
     m_stream.reset();
     m_decodeOrder.reset();
     m_durationSource.reset();
+    m_keyTraceEmitted = false;
     m_sourceIdentity.clear();
     m_nextSequence = 1;
     m_audioSampleRate = 0;
@@ -182,12 +185,13 @@ MediaCanonicalInputNode::canonicalize(
             ::media::ErrorInfo::invalidArgument(
                 "Canonical packet duration requires positive runtime evidence"));
     }
-    AVRational timeBase = packet->packet()->time_base;
-    if (timeBase.num <= 0 || timeBase.den <= 0) {
+    const MediaTimeDescriptor& time = buffer->timeDescriptor();
+    if (!time.hasKnownTimeBase()) {
         return ::media::Result<MediaRunningTime>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "Canonical packet duration requires runtime time base"));
     }
+    const AVRational timeBase{time.timeBase.num, time.timeBase.den};
     const auto nanoseconds = av_rescale_q_rnd(
         packet->packet()->duration, timeBase, AVRational{1, 1'000'000'000},
         static_cast<AVRounding>(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
@@ -207,18 +211,17 @@ MediaCanonicalInputNode::canonicalize(
         return ::media::Result<std::uint32_t>::success(m_audioSampleCount);
     }
     const auto* packet = dynamic_cast<const FFmpegPacketBuffer*>(buffer.get());
+    const MediaTimeDescriptor& time = buffer->timeDescriptor();
     if (!packet || !packet->packet() || packet->packet()->duration <= 0 ||
-        packet->packet()->time_base.num <= 0 ||
-        packet->packet()->time_base.den <= 0 || m_audioSampleRate <= 0) {
+        !time.hasKnownTimeBase() || m_audioSampleRate <= 0) {
         return ::media::Result<std::uint32_t>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "Canonical audio packet sample span requires runtime evidence"));
     }
     const auto duration = packet->packet()->duration;
-    auto denominator =
-        static_cast<std::int64_t>(packet->packet()->time_base.den);
+    auto denominator = static_cast<std::int64_t>(time.timeBase.den);
     auto numerator =
-        static_cast<std::int64_t>(packet->packet()->time_base.num) *
+        static_cast<std::int64_t>(time.timeBase.num) *
         static_cast<std::int64_t>(m_audioSampleRate);
     if (numerator <= 0) {
         return ::media::Result<std::uint32_t>::failure(
@@ -307,12 +310,24 @@ MediaCanonicalInputNode::canonicalize(
                                                  : MediaAvStartupStream::Audio,
         m_sourceIdentity, m_nextSequence, 0, canonical.value()->canonicalPresentation(),
         canonical.value()->canonicalDuration(), MediaSourceClockReadiness::Locked,
-        timing.generation, canonical.value()->media()->isKeyFrame(),
+        timing.generation,
+        *m_stream == MediaScheduledStream::Video &&
+            canonical.value()->media()->isKeyFrame(),
         *m_stream == MediaScheduledStream::Audio
             ? std::optional<MediaAvAudioSampleSpan>(
                   MediaAvAudioSampleSpan{static_cast<std::uint32_t>(m_audioSampleRate),
                                          *audioSampleCount})
             : std::nullopt};
+    if (*m_stream == MediaScheduledStream::Video && unit.keyFrame &&
+        !m_keyTraceEmitted) {
+        m_keyTraceEmitted = true;
+        mediaGraphDiagnosticLog(
+            MediaGraphDiagnosticLevel::State,
+            MediaGraphDiagnosticPhase::RuntimeNode,
+            std::string("rtp_key_trace stage=canonical_input media=") +
+                (canonical.value()->media()->isKeyFrame() ? "1" : "0") +
+                " startup_unit=" + (unit.keyFrame ? "1" : "0"));
+    }
     auto envelope = MediaAvStartupEnvelopeBuffer::create(
         canonical.value(), std::move(unit), canonical.value()->canonicalPresentation());
     if (!envelope)

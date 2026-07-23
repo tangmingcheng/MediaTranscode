@@ -31,6 +31,7 @@ private:
     MediaNodeId m_nodeId;
     MediaAvSyncGroupKey m_groupKey;
     MediaBufferRef m_pendingRelease;
+    MediaBufferRef m_pendingTransaction;
     std::optional<::media::ErrorInfo> m_terminalFailure;
 };
 

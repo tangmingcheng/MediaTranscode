@@ -6,7 +6,7 @@
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/sync/MediaAudioCorrection.h"
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
-#include "internal/graph/builder/MediaEndpoint.h"
+#include "internal/graph/builder/MediaEncodedBranchEndpoints.h"
 #include "internal/graph/sync/lineage/MediaAudioLineageExecutionMode.h"
 #include "media_transcode/Result.h"
 
@@ -37,14 +37,9 @@ struct MediaAudioEncodeBranchOptions {
     std::optional<MediaAvSyncGroupKey> syncGroup;
 };
 
-struct MediaAudioEncodeBranchResult final {
-    MediaEndpoint codec;
-    MediaEndpoint packet;
-};
-
 class MediaAudioEncodeBranchBuilder final {
 public:
-    static ::media::Result<MediaAudioEncodeBranchResult> build(
+    static ::media::Result<MediaEncodedBranchEndpoints> build(
         MediaGraph& graph,
         const MediaAudioEncodeBranchOptions& options);
 

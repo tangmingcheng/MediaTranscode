@@ -6,8 +6,14 @@
 #include "internal/graph/runtime/compilation/MediaGraphRuntimeCompiler.h"
 #include "internal/graph/runtime/compilation/MediaAvSyncRuntimeBootstrap.h"
 #include "internal/graph/runtime/factory/MediaAvSyncRuntimeBinding.h"
+#include "internal/graph/sync/startup/MediaAvStartupVideoPreparationCapability.h"
+#include "internal/graph/sync/startup/MediaAvStartupVideoPreparationState.h"
+#include "internal/graph/runtime/threading/MediaNodeWakeup.h"
+#include "internal/graph/runtime/channel/MediaChannel.h"
+#include "internal/graph/builder/MediaGraphBuildSupport.h"
 
 #include <chrono>
+#include <array>
 #include <atomic>
 #include <memory>
 #include <optional>
@@ -21,6 +27,32 @@ using namespace media::ffmpeg::graph;
 constexpr MediaRunningTime ms(std::int64_t value) noexcept
 {
     return MediaRunningTime::fromNanoseconds(value * 1'000'000);
+}
+
+std::unique_ptr<MediaChannel> makePreparationReservationChannel(
+    std::uint32_t identity)
+{
+    MediaEdge edge;
+    edge.id = MediaEdgeId{identity};
+    edge.from = {MediaNodeId{identity}, MediaPortId{1}};
+    edge.to = {MediaNodeId{identity + 100}, MediaPortId{1}};
+    edge.streamKind = MediaStreamKind::Video;
+    edge.edgeKind = MediaEdgeKind::SoftwareFrame;
+    edge.payloadKind = MediaPayloadKind::Frame;
+    edge.policy = MediaGraphBuildSupport::blockingQueuePolicy(1);
+    return std::make_unique<MediaChannel>(MediaChannelId{identity}, edge);
+}
+
+std::optional<MediaReservedOutputTransaction> reservePreparationCoordination(
+    MediaChannel& channel)
+{
+    const std::span<const MediaBufferRef> noBuffers;
+    const std::array<MediaAtomicOutputBatch, 1> batches{
+        MediaAtomicOutputBatch{&channel, noBuffers}};
+    auto reserved = MediaReservedOutputTransaction::reserve(
+        "Video preparation state test", batches);
+    if (!reserved || !reserved.value()) return std::nullopt;
+    return std::move(*reserved.value());
 }
 
 MediaAvSyncPlan completeRtpPlan()
@@ -48,6 +80,30 @@ MediaAvSyncPlan completeRtpPlan()
     return plan;
 }
 
+MediaAvSyncPlan completeTsPlan()
+{
+    auto plan = completeRtpPlan();
+    plan.topology = MediaAvSyncTopology::MpegTsToMpegTs;
+    plan.sourceClockMode = MediaAvSyncSourceClockMode::MpegTsPcr;
+    plan.rtp.reset();
+    plan.ts.emplace();
+    plan.ts->programNumber = 1;
+    plan.ts->programMapPid = 0x100;
+    plan.ts->videoPid = 0x101;
+    plan.ts->audioPid = 0x102;
+    plan.ts->pcrPid = 0x101;
+    auto mux = MediaTsMuxPlan::create(MediaTsMuxPlanParameters{
+        1, 1, 0x0000, 0x0100, 0x0101, 0x0102, 0x0101, 0,
+        ms(100), 0x1B, 0x0F, MediaTsH264InputLayout::LengthPrefixed,
+        4, MediaTsParameterSetPolicy::BeforeRandomAccess,
+        MediaTsAacAdtsPlan{0, 2, 3, 2},
+        MediaTsOutputClockPolicy{ms(20), ms(100), ms(5), 1, 90'000},
+        ms(500), 188, MediaTsContinuitySeeds{0, 0, 0, 0}, 7,
+        MediaTsOutputTransportKind::Udp, 1024});
+    plan.ts->outputMux = std::move(mux).value();
+    return plan;
+}
+
 MediaGraph graphWithGroupReference(const std::optional<std::string>& group)
 {
     MediaGraph graph;
@@ -65,6 +121,52 @@ MediaGraph graphWithGroupReference(const std::optional<std::string>& group)
         graph.setNodeOption(
             sequencer,
             "activated_startup_release_sequencer.sync_group", *group);
+        graph.setNodeOption(
+            sequencer,
+            "activated_startup_release_sequencer.output_lead_ns",
+            "100000000");
+    }
+    return graph;
+}
+
+MediaGraph graphWithRtpOutputReference(
+    const std::optional<std::string>& group,
+    std::size_t senderCount = 2,
+    bool includePublisher = true,
+    bool includeSenderGroups = true)
+{
+    MediaGraph graph = graphWithGroupReference(group);
+    for (std::size_t index = 0; index < senderCount; ++index) {
+        const auto sender = graph.addNode(
+            MediaNodeKind::ScheduledRtpSender,
+            "scheduled-rtp-sender-" + std::to_string(index));
+        if (group && includeSenderGroups) {
+            graph.setNodeOption(
+                sender, "scheduled_rtp.sync_group", *group);
+        }
+    }
+    if (includePublisher) {
+        graph.addNode(MediaNodeKind::DualMediaSdpPublisher,
+                      "dual-media-sdp-publisher");
+    }
+    return graph;
+}
+
+MediaGraph graphWithTsOutputReference(
+    const std::optional<std::string>& group)
+{
+    MediaGraph graph = graphWithGroupReference(group);
+    const auto adapter = graph.addNode(
+        MediaNodeKind::ScheduledTsAccessUnitAdapter,
+        "scheduled-ts-adapter");
+    const auto source = graph.addNode(
+        MediaNodeKind::ProjectMpegTsPlanSource,
+        "project-mpeg-ts-plan-source");
+    if (group) {
+        graph.setNodeOption(
+            adapter, "scheduled_ts_adapter.sync_group", *group);
+        graph.setNodeOption(
+            source, "project_mpeg_ts_plan.sync_group", *group);
     }
     return graph;
 }
@@ -92,10 +194,11 @@ MediaRealtimeExecutableGraph executableWith(
     std::optional<std::string> nodeGroup = std::string("realtime.av"))
 {
     MediaRealtimeExecutableGraph executable;
-    executable.graph = graphWithGroupReference(nodeGroup);
+    executable.graph = graphWithRtpOutputReference(nodeGroup);
     executable.avSyncBinding.emplace(MediaAvSyncRuntimeBinding{
         MediaAvSyncGroupKey(std::move(bindingGroup)), std::move(plan),
-        completeTransitionPlan()});
+        completeTransitionPlan(),
+        MediaAvSyncBindingAssemblyMode::ProductionProtocolOutput});
     return executable;
 }
 
@@ -224,6 +327,105 @@ void testBootstrapRejectsIncompleteBindings(TestContext& ctx)
     auto matching = executableWith(completeRtpPlan());
     EXPECT_TRUE(ctx, MediaGraphRuntimeCompiler::validateBindings(matching));
 
+    for (const MediaNodeKind legacyAuthority : {
+             MediaNodeKind::RtpMux,
+             MediaNodeKind::RtpOutput,
+             MediaNodeKind::SdpWriter,
+             MediaNodeKind::PacketNormalize,
+             MediaNodeKind::VideoTimestamp,
+             MediaNodeKind::PacketStartGate}) {
+        auto legacyProduction = executableWith(completeRtpPlan());
+        legacyProduction.graph.addNode(
+            legacyAuthority, "legacy-production-authority");
+        const auto rejected =
+            MediaGraphRuntimeCompiler::validateBindings(legacyProduction);
+        EXPECT_FALSE(ctx, rejected);
+        if (!rejected) {
+            EXPECT_TRUE(
+                ctx,
+                rejected.error().message.find(
+                    "rejects legacy output, timestamp, and startup authorities") !=
+                    std::string::npos);
+        }
+    }
+
+    MediaRealtimeExecutableGraph missingProtocolOutput;
+    missingProtocolOutput.graph = graphWithGroupReference(
+        std::string("realtime.av"));
+    missingProtocolOutput.avSyncBinding.emplace(MediaAvSyncRuntimeBinding{
+        MediaAvSyncGroupKey("realtime.av"), completeRtpPlan(),
+        completeTransitionPlan(),
+        MediaAvSyncBindingAssemblyMode::ProductionProtocolOutput});
+    EXPECT_FALSE(
+        ctx,
+        MediaGraphRuntimeCompiler::validateBindings(missingProtocolOutput));
+
+    MediaRealtimeExecutableGraph missingRtpPublisher;
+    missingRtpPublisher.graph = graphWithRtpOutputReference(
+        std::string("realtime.av"), 2, false);
+    missingRtpPublisher.avSyncBinding.emplace(MediaAvSyncRuntimeBinding{
+        MediaAvSyncGroupKey("realtime.av"), completeRtpPlan(),
+        completeTransitionPlan(),
+        MediaAvSyncBindingAssemblyMode::ProductionProtocolOutput});
+    EXPECT_FALSE(
+        ctx,
+        MediaGraphRuntimeCompiler::validateBindings(missingRtpPublisher));
+
+    MediaRealtimeExecutableGraph missingRtpSenderGroups;
+    missingRtpSenderGroups.graph = graphWithRtpOutputReference(
+        std::string("realtime.av"), 2, true, false);
+    missingRtpSenderGroups.avSyncBinding.emplace(MediaAvSyncRuntimeBinding{
+        MediaAvSyncGroupKey("realtime.av"), completeRtpPlan(),
+        completeTransitionPlan(),
+        MediaAvSyncBindingAssemblyMode::ProductionProtocolOutput});
+    EXPECT_FALSE(
+        ctx,
+        MediaGraphRuntimeCompiler::validateBindings(missingRtpSenderGroups));
+
+    MediaRealtimeExecutableGraph duplicateRtpSender;
+    duplicateRtpSender.graph = graphWithRtpOutputReference(
+        std::string("realtime.av"), 3, true);
+    duplicateRtpSender.avSyncBinding.emplace(MediaAvSyncRuntimeBinding{
+        MediaAvSyncGroupKey("realtime.av"), completeRtpPlan(),
+        completeTransitionPlan(),
+        MediaAvSyncBindingAssemblyMode::ProductionProtocolOutput});
+
+    MediaRealtimeExecutableGraph componentCore;
+    componentCore.graph = graphWithGroupReference(std::string("realtime.av"));
+    componentCore.avSyncBinding.emplace(MediaAvSyncRuntimeBinding{
+        MediaAvSyncGroupKey("realtime.av"), completeRtpPlan(),
+        completeTransitionPlan(),
+        MediaAvSyncBindingAssemblyMode::ComponentCore});
+    EXPECT_TRUE(ctx,
+                MediaGraphRuntimeCompiler::validateBindings(componentCore));
+
+    MediaRealtimeExecutableGraph invalidAssemblyMode;
+    invalidAssemblyMode.graph = graphWithGroupReference(
+        std::string("realtime.av"));
+    invalidAssemblyMode.avSyncBinding.emplace(MediaAvSyncRuntimeBinding{
+        MediaAvSyncGroupKey("realtime.av"), completeRtpPlan(),
+        completeTransitionPlan(),
+        static_cast<MediaAvSyncBindingAssemblyMode>(255)});
+    EXPECT_FALSE(
+        ctx,
+        MediaGraphRuntimeCompiler::validateBindings(invalidAssemblyMode));
+
+    MediaRealtimeExecutableGraph componentWithProtocolOutput;
+    componentWithProtocolOutput.graph = graphWithRtpOutputReference(
+        std::string("realtime.av"));
+    componentWithProtocolOutput.avSyncBinding.emplace(
+        MediaAvSyncRuntimeBinding{
+            MediaAvSyncGroupKey("realtime.av"), completeRtpPlan(),
+            completeTransitionPlan(),
+            MediaAvSyncBindingAssemblyMode::ComponentCore});
+    EXPECT_FALSE(
+        ctx,
+        MediaGraphRuntimeCompiler::validateBindings(
+            componentWithProtocolOutput));
+    EXPECT_FALSE(
+        ctx,
+        MediaGraphRuntimeCompiler::validateBindings(duplicateRtpSender));
+
     auto demuxSuffix = executableWith(completeRtpPlan());
     demuxSuffix.graph = graphWithInvalidGroupReference(
         MediaNodeKind::Demux, "runtime.sync_group");
@@ -246,7 +448,7 @@ void testBootstrapRejectsIncompleteBindings(TestContext& ctx)
         MediaNodeKind::ScheduledTsAccessUnitAdapter, "scheduled-ts-adapter");
     scheduledTsAdapter.graph.setNodeOption(
         adapterId, "scheduled_ts_adapter.sync_group", "realtime.av");
-    EXPECT_TRUE(ctx,
+    EXPECT_FALSE(ctx,
                 MediaGraphRuntimeCompiler::validateBindings(
                     scheduledTsAdapter));
 
@@ -289,9 +491,42 @@ void testBootstrapRejectsIncompleteBindings(TestContext& ctx)
         planSourceId, "project_mpeg_ts_plan.sync_group", "realtime.av");
     projectTsPlanSource.graph.setNodeOption(
         pairedAdapterId, "scheduled_ts_adapter.sync_group", "realtime.av");
-    EXPECT_TRUE(ctx,
+    EXPECT_FALSE(ctx,
                 MediaGraphRuntimeCompiler::validateBindings(
                     projectTsPlanSource));
+
+    MediaRealtimeExecutableGraph matchingTs;
+    matchingTs.graph = graphWithTsOutputReference(
+        std::string("realtime.av"));
+    matchingTs.avSyncBinding.emplace(MediaAvSyncRuntimeBinding{
+        MediaAvSyncGroupKey("realtime.av"), completeTsPlan(),
+        completeTransitionPlan(MediaAvSyncOutputAdapterKind::ProjectMpegTs),
+        MediaAvSyncBindingAssemblyMode::ProductionProtocolOutput});
+    EXPECT_TRUE(ctx,
+                MediaGraphRuntimeCompiler::validateBindings(matchingTs));
+
+    MediaRealtimeExecutableGraph tsWithLegacyTimestamp;
+    tsWithLegacyTimestamp.graph = graphWithTsOutputReference(
+        std::string("realtime.av"));
+    tsWithLegacyTimestamp.graph.addNode(
+        MediaNodeKind::VideoTimestamp, "legacy-ts-timestamp-authority");
+    tsWithLegacyTimestamp.avSyncBinding.emplace(MediaAvSyncRuntimeBinding{
+        MediaAvSyncGroupKey("realtime.av"), completeTsPlan(),
+        completeTransitionPlan(MediaAvSyncOutputAdapterKind::ProjectMpegTs),
+        MediaAvSyncBindingAssemblyMode::ProductionProtocolOutput});
+    EXPECT_FALSE(
+        ctx,
+        MediaGraphRuntimeCompiler::validateBindings(tsWithLegacyTimestamp));
+
+    MediaRealtimeExecutableGraph tsWithRtpOutput;
+    tsWithRtpOutput.graph = graphWithRtpOutputReference(
+        std::string("realtime.av"));
+    tsWithRtpOutput.avSyncBinding.emplace(MediaAvSyncRuntimeBinding{
+        MediaAvSyncGroupKey("realtime.av"), completeTsPlan(),
+        completeTransitionPlan(MediaAvSyncOutputAdapterKind::ProjectMpegTs),
+        MediaAvSyncBindingAssemblyMode::ProductionProtocolOutput});
+    EXPECT_FALSE(ctx,
+                 MediaGraphRuntimeCompiler::validateBindings(tsWithRtpOutput));
 
     auto planSourceWrongKind = executableWith(completeRtpPlan());
     const auto planSourceWrongKindId = planSourceWrongKind.graph.addNode(
@@ -329,7 +564,8 @@ void testBootstrapCapturesOneClockAndOneRtpEpoch(TestContext& ctx)
 {
     const MediaAvSyncRuntimeBinding binding{
         MediaAvSyncGroupKey("realtime.av"), completeRtpPlan(),
-        completeTransitionPlan()};
+        completeTransitionPlan(),
+        MediaAvSyncBindingAssemblyMode::ProductionProtocolOutput};
     auto source = std::make_shared<DeterministicClockSource>();
     auto clocks = MediaAvSyncRuntimeBootstrap::createClocks(binding, *source);
     EXPECT_TRUE(ctx, clocks);
@@ -342,7 +578,8 @@ void testBootstrapCapturesOneClockAndOneRtpEpoch(TestContext& ctx)
 
     MediaGraphRuntime runtime(source);
     MediaRealtimeExecutableGraph executable;
-    executable.graph = graphWithGroupReference(std::string("realtime.av"));
+    executable.graph = graphWithRtpOutputReference(
+        std::string("realtime.av"));
     executable.avSyncBinding.emplace(binding);
     EXPECT_TRUE(ctx, runtime.compile(std::move(executable)));
     EXPECT_EQ(ctx, source->captures, 2);
@@ -371,31 +608,10 @@ void testBootstrapCapturesOneClockAndOneRtpEpoch(TestContext& ctx)
 
 void testTsClockCaptureDoesNotCreateNtpEpoch(TestContext& ctx)
 {
-    auto tsPlan = completeRtpPlan();
-    tsPlan.topology = MediaAvSyncTopology::MpegTsToMpegTs;
-    tsPlan.sourceClockMode = MediaAvSyncSourceClockMode::MpegTsPcr;
-    tsPlan.rtp.reset();
-    tsPlan.ts.emplace();
-    tsPlan.ts->programNumber = 1;
-    tsPlan.ts->programMapPid = 0x100;
-    tsPlan.ts->videoPid = 0x101;
-    tsPlan.ts->audioPid = 0x102;
-    tsPlan.ts->pcrPid = 0x101;
-    auto mux = MediaTsMuxPlan::create(MediaTsMuxPlanParameters{
-        1, 1, 0x0000, 0x0100, 0x0101, 0x0102, 0x0101, 0,
-        ms(100), 0x1B, 0x0F, MediaTsH264InputLayout::LengthPrefixed,
-        4, MediaTsParameterSetPolicy::BeforeRandomAccess,
-        MediaTsAacAdtsPlan{0, 2, 3, 2},
-        MediaTsOutputClockPolicy{ms(20), ms(100), ms(5), 1, 90'000},
-        ms(500), 188, MediaTsContinuitySeeds{0, 0, 0, 0}, 7,
-        MediaTsOutputTransportKind::Udp, 1024});
-    EXPECT_TRUE(ctx, mux);
-    if (!mux) return;
-    tsPlan.ts->outputMux = std::move(mux).value();
-
     const MediaAvSyncRuntimeBinding binding{
-        MediaAvSyncGroupKey("realtime.av"), std::move(tsPlan),
-        completeTransitionPlan(MediaAvSyncOutputAdapterKind::ProjectMpegTs)};
+        MediaAvSyncGroupKey("realtime.av"), completeTsPlan(),
+        completeTransitionPlan(MediaAvSyncOutputAdapterKind::ProjectMpegTs),
+        MediaAvSyncBindingAssemblyMode::ProductionProtocolOutput};
     DeterministicClockSource source;
     auto clocks = MediaAvSyncRuntimeBootstrap::createClocks(binding, source);
     EXPECT_TRUE(ctx, clocks);
@@ -479,6 +695,129 @@ void testRuntimeRollbackAndLifecycleCleanup(TestContext& ctx)
     expectThreadedLifecycleCleanup(ctx, ThreadedLifecycle::Stop);
 }
 
+void testVideoPreparationStateEnforcesStrictTransitions(TestContext& ctx)
+{
+    auto state = MediaAvStartupVideoPreparationState::create(
+        MediaAvSyncGroupKey("preparation-state"));
+    EXPECT_TRUE(ctx, state);
+    if (!state) return;
+
+    constexpr std::uint64_t generation = 7;
+    constexpr std::uint64_t releaseIdentity = 41;
+    EXPECT_EQ(ctx, state.value()->snapshot().phase,
+              MediaAvStartupVideoPreparationPhase::Awaiting);
+    EXPECT_FALSE(ctx, state.value()->authorizeRelease(
+                          generation, releaseIdentity,
+                          [] { return ::media::Status::success(); }));
+    EXPECT_TRUE(ctx, state.value()->begin(
+                         generation, releaseIdentity, 3));
+    EXPECT_FALSE(ctx, state.value()->begin(
+                          generation, releaseIdentity, 3));
+    auto first = state.value()->reserveNextVideoUnit(
+        generation, releaseIdentity);
+    EXPECT_TRUE(ctx, first &&
+                         first.value().kind ==
+                             MediaAvStartupVideoReservationKind::Reserved &&
+                         first.value().index && *first.value().index == 0);
+    auto sameReservation = state.value()->reserveNextVideoUnit(
+        generation, releaseIdentity);
+    EXPECT_TRUE(ctx, sameReservation &&
+                         sameReservation.value().kind ==
+                             MediaAvStartupVideoReservationKind::Reserved &&
+                         sameReservation.value().index &&
+                         *sameReservation.value().index == 0);
+    auto filterChannel = makePreparationReservationChannel(901);
+    auto extractorChannel = makePreparationReservationChannel(902);
+    auto filterReservation = reservePreparationCoordination(*filterChannel);
+    auto extractorReservation = reservePreparationCoordination(*extractorChannel);
+    EXPECT_TRUE(ctx, filterReservation && extractorReservation);
+    if (!filterReservation || !extractorReservation) return;
+    EXPECT_FALSE(ctx, state.value()->markFilterReady(
+                          generation + 1, releaseIdentity,
+                          filterReservation->handle()));
+    EXPECT_TRUE(ctx, state.value()->markFilterReady(
+                         generation, releaseIdentity,
+                         filterReservation->handle()));
+    EXPECT_TRUE(ctx, state.value()->commitVideoUnit(
+                         generation, releaseIdentity, 0));
+    auto afterReady = state.value()->reserveNextVideoUnit(
+        generation, releaseIdentity);
+    EXPECT_TRUE(ctx, afterReady &&
+                         afterReady.value().kind ==
+                             MediaAvStartupVideoReservationKind::NoReservation &&
+                         !afterReady.value().index);
+    EXPECT_EQ(ctx, state.value()->snapshot().committedVideoUnits,
+              std::size_t{1});
+    EXPECT_TRUE(ctx, state.value()->registerExtractorOutputs(
+                         generation, releaseIdentity,
+                         extractorReservation->handle()));
+    EXPECT_TRUE(ctx, state.value()->authorizeRelease(
+                         generation, releaseIdentity,
+                         [] { return ::media::Status::success(); }));
+    EXPECT_EQ(ctx, state.value()->snapshot().phase,
+              MediaAvStartupVideoPreparationPhase::ReleaseCommitted);
+}
+
+void testVideoPreparationStateNotifiesWaitingPeersAfterUnlock(
+    TestContext& ctx)
+{
+    auto state = MediaAvStartupVideoPreparationState::create(
+        MediaAvSyncGroupKey("preparation-wakeup"));
+    EXPECT_TRUE(ctx, state);
+    if (!state) return;
+    auto sequencerWakeup = std::make_shared<MediaNodeWakeup>();
+    auto filterWakeup = std::make_shared<MediaNodeWakeup>();
+    auto extractorWakeup = std::make_shared<MediaNodeWakeup>();
+    EXPECT_TRUE(ctx, state.value()->bindSequencerWakeup(sequencerWakeup));
+    EXPECT_TRUE(ctx, state.value()->bindFilterWakeup(filterWakeup));
+    EXPECT_TRUE(ctx, state.value()->bindExtractorWakeup(extractorWakeup));
+    const auto sequencerSequence = sequencerWakeup->sequence();
+    const auto filterSequence = filterWakeup->sequence();
+    const auto extractorSequence = extractorWakeup->sequence();
+    EXPECT_TRUE(ctx, state.value()->begin(11, 55, 1));
+    auto filterChannel = makePreparationReservationChannel(903);
+    auto extractorChannel = makePreparationReservationChannel(904);
+    auto filterReservation = reservePreparationCoordination(*filterChannel);
+    auto extractorReservation = reservePreparationCoordination(*extractorChannel);
+    EXPECT_TRUE(ctx, filterReservation && extractorReservation);
+    if (!filterReservation || !extractorReservation) return;
+    EXPECT_TRUE(ctx, state.value()->markFilterReady(
+                         11, 55, filterReservation->handle()));
+    EXPECT_TRUE(ctx, sequencerWakeup->sequence() > sequencerSequence);
+    EXPECT_TRUE(ctx, state.value()->registerExtractorOutputs(
+                         11, 55, extractorReservation->handle()));
+    EXPECT_TRUE(ctx, state.value()->authorizeRelease(
+                         11, 55, [] { return ::media::Status::success(); }));
+    EXPECT_TRUE(ctx, filterWakeup->sequence() > filterSequence);
+    EXPECT_TRUE(ctx, extractorWakeup->sequence() > extractorSequence);
+}
+
+void testVideoPreparationCapabilitiesShareOneStateAndCancelTerminally(
+    TestContext& ctx)
+{
+    auto state = MediaAvStartupVideoPreparationState::create(
+        MediaAvSyncGroupKey("preparation-capabilities"));
+    EXPECT_TRUE(ctx, state);
+    if (!state) return;
+    auto extractor = MediaAvStartupVideoPreparationCapability::issue(
+        state.value(), MediaAvStartupVideoPreparationRole::ExtractorFeed);
+    auto filter = MediaAvStartupVideoPreparationCapability::issue(
+        state.value(), MediaAvStartupVideoPreparationRole::FilterReadiness);
+    auto sequencer = MediaAvStartupVideoPreparationCapability::issue(
+        state.value(), MediaAvStartupVideoPreparationRole::SequencerActivation);
+    EXPECT_TRUE(ctx, extractor && filter && sequencer);
+    if (!extractor || !filter || !sequencer) return;
+    EXPECT_TRUE(ctx, extractor.value().stateIdentity() ==
+                         filter.value().stateIdentity());
+    EXPECT_TRUE(ctx, filter.value().stateIdentity() ==
+                         sequencer.value().stateIdentity());
+    EXPECT_TRUE(ctx, extractor.value().begin(9, 77, 1));
+    EXPECT_TRUE(ctx, extractor.value().cancel());
+    EXPECT_FALSE(ctx, filter.value().markFilterReady(9, 77, {}));
+    EXPECT_FALSE(ctx, sequencer.value().authorizeRelease(
+                          9, 77, [] { return ::media::Status::success(); }));
+}
+
 } // namespace
 
 void runAvSyncRuntimeBootstrapTests(
@@ -488,4 +827,7 @@ void runAvSyncRuntimeBootstrapTests(
     testBootstrapCapturesOneClockAndOneRtpEpoch(ctx);
     testTsClockCaptureDoesNotCreateNtpEpoch(ctx);
     testRuntimeRollbackAndLifecycleCleanup(ctx);
+    testVideoPreparationStateEnforcesStrictTransitions(ctx);
+    testVideoPreparationCapabilitiesShareOneStateAndCancelTerminally(ctx);
+    testVideoPreparationStateNotifiesWaitingPeersAfterUnlock(ctx);
 }

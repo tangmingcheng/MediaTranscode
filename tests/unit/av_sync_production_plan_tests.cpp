@@ -5,6 +5,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncAssemblyPlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
+#include "internal/graph/model/MediaAtomicOutputPolicyContract.h"
 #include "internal/graph/protocol/mpegts/MediaTsPreflightDurationProbe.h"
 
 #include <cstdint>
@@ -199,6 +200,23 @@ void testCompleteSeparateRtpAssemblyProduct(TestContext& ctx)
 
     const auto& runtime = *result.value().avSyncRuntime;
     const auto& assembly = runtime.assembly;
+    EXPECT_EQ(ctx, runtime.edgePolicies.videoFrame.queuePolicy.capacity,
+              std::size_t{4});
+    EXPECT_EQ(ctx,
+              runtime.edgePolicies.videoFrame.queuePolicy.overflowPolicy,
+              MediaQueueOverflowPolicy::DropOldest);
+    EXPECT_TRUE(ctx, MediaAtomicOutputPolicyContract::accepts(
+                         runtime.edgePolicies.preparedVideoFrame));
+    EXPECT_TRUE(ctx, MediaAtomicOutputPolicyContract::accepts(
+                         runtime.edgePolicies.synchronizedPacket));
+    EXPECT_EQ(ctx, runtime.edgePolicies.audioFrame.queuePolicy.capacity,
+              std::size_t{4});
+    EXPECT_EQ(ctx,
+              runtime.edgePolicies.audioFrame.queuePolicy.orderingPolicy,
+              MediaQueueOrderingPolicy::Fifo);
+    EXPECT_EQ(ctx,
+              runtime.edgePolicies.audioFrame.queuePolicy.overflowPolicy,
+              MediaQueueOverflowPolicy::BlockProducer);
     EXPECT_TRUE(ctx, std::holds_alternative<MediaRtpInputClockAssemblyPlan>(
                          assembly.inputClock));
     EXPECT_EQ(ctx,
@@ -372,18 +390,36 @@ void testAssemblyRejectsEveryInvalidContractField(TestContext& ctx)
     expectInvalid(ctx, plan);
 }
 
-void testMpegTsProductionPlanningRequiresAuthoritativeEncoderPacketLayout(
+void testMpegTsProductionPlanningConsumesAuthoritativeEncoderPacketLayout(
     TestContext& ctx)
 {
     auto planned = MediaRealtimeRtpTranscodePlanner::planPreparedInput(
         completeProductionTsRequest(), completeProductionTsStreams(),
         completeProductionTsSelection());
-    EXPECT_FALSE(ctx, planned);
-    if (!planned) {
-        EXPECT_EQ(ctx, planned.error().code, ::media::ErrorCode::Unsupported);
-        EXPECT_TRUE(ctx, planned.error().message.find(
-                             "authoritative encoded packet layout") !=
-                             std::string::npos);
+    EXPECT_TRUE(ctx, planned);
+    if (!planned || !planned.value().avSyncRuntime) return;
+    EXPECT_EQ(ctx, planned.value().avSyncRuntime->outputAdapter,
+              MediaAvSyncOutputAdapterKind::ProjectMpegTs);
+    EXPECT_TRUE(ctx, planned.value().videoParameters.globalHeader.has_value());
+    if (planned.value().videoParameters.globalHeader) {
+        EXPECT_TRUE(ctx, *planned.value().videoParameters.globalHeader);
+    }
+    const auto& runtime = *planned.value().avSyncRuntime;
+    EXPECT_TRUE(ctx,
+                std::holds_alternative<MediaPlannedAudioSamplesDurationPlan>(
+                    runtime.assembly.audio.duration));
+    if (const auto* duration =
+            std::get_if<MediaPlannedAudioSamplesDurationPlan>(
+                &runtime.assembly.audio.duration)) {
+        EXPECT_EQ(ctx, duration->sampleRate, 48'000);
+        EXPECT_EQ(ctx, duration->samplesPerAccessUnit, std::uint32_t{1'024});
+    }
+    const auto* output = std::get_if<MediaProjectMpegTsRuntimeOutputPlan>(
+        &runtime.protocolOutput);
+    EXPECT_TRUE(ctx, output != nullptr);
+    if (output) {
+        EXPECT_EQ(ctx, output->protocol.muxPlan().parameters().h264InputLayout,
+                  MediaTsH264InputLayout::AnnexB);
     }
 }
 
@@ -450,7 +486,7 @@ void runAvSyncProductionPlanTests(TestContext& ctx)
     testCompleteSeparateRtpAssemblyProduct(ctx);
     testSeparateRtpSdpIdentityIsPlannerOwnedAndValidated(ctx);
     testAssemblyRejectsEveryInvalidContractField(ctx);
-    testMpegTsProductionPlanningRequiresAuthoritativeEncoderPacketLayout(ctx);
+    testMpegTsProductionPlanningConsumesAuthoritativeEncoderPacketLayout(ctx);
     testMpegTsPreparedPlanningRejectsInvalidDurationEvidence(ctx);
     testUnsupportedTopologyAndMissingSynchronizedAudioFailClosed(ctx);
 }

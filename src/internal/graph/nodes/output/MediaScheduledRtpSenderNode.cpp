@@ -272,7 +272,7 @@ MediaScheduledRtpSenderNode::processScheduledInput(
             "Scheduled RTP sender rejects a mismatched scheduled access unit"));
     }
     auto actualLead = scheduled->presentationOnMaster().checkedSubtract(
-        scheduled->dispatchOnMaster());
+        scheduled->emitOnMaster());
     if (!actualLead || actualLead.value() != m_outputPlan.senderLead) {
         return failTerminal(actualLead
             ? ::media::ErrorInfo::invalidArgument(

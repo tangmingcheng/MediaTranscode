@@ -25,6 +25,8 @@ $valid = [pscustomobject][ordered]@{
     worker_errors = 0
     runtime_errors = 0
     stalled_intervals = 0
+    av_start_offset_ms = 10
+    av_end_drift_ms = 20
     av_drift_ms = 20
 }
 Assert-Equal $true (Test-Priority5RealtimeReport -Report $valid -Hardware $true) 'valid realtime report'
@@ -55,5 +57,13 @@ Assert-Equal 'local_hw,local_sw,mpegts_hw,mpegts_sw,rtp_hw,rtp_sw' (($config.sce
 Assert-Equal 900 ($config.scenarios | Where-Object name -eq 'local_hw').stability_seconds 'local stability duration'
 Assert-Equal 1800 ($config.scenarios | Where-Object name -eq 'rtp_hw').stability_seconds 'RTP stability duration'
 Assert-Equal 1800 ($config.scenarios | Where-Object name -eq 'mpegts_hw').stability_seconds 'MPEG-TS stability duration'
+
+$realtimeGate = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'run_priority4_realtime_gate.ps1') -Raw
+Assert-Equal $true ($realtimeGate.Contains("'-analyzeduration','15000000','-probesize','5000000'")) `
+    'RTP receiver must wait for codec parameters before opening capture output'
+Assert-Equal $true ($realtimeGate.Contains("'-readrate','1','-readrate_catchup','1'")) `
+    'realtime sender must not inject catch-up bursts into queue-drop acceptance'
+Assert-Equal $true ($realtimeGate.Contains("'-c','copy','-f','mpegts',$capture")) `
+    'RTP receiver capture must not require video dimensions before first packet'
 
 Write-Output 'priority5 reporting tests passed'

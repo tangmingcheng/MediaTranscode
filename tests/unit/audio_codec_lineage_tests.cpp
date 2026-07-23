@@ -1,6 +1,7 @@
 #include "internal/graph/sync/MediaCanonicalLineage.h"
 #include "internal/graph/sync/lineage/MediaAudioIntervalAccumulator.h"
 #include "internal/graph/sync/lineage/MediaAudioSampleProjection.h"
+#include "internal/graph/sync/MediaAudioSampleGrid.h"
 #include "internal/graph/nodes/audio/AudioEncoderFrameQueue.h"
 #include "internal/graph/sync/lineage/MediaAudioLineageExecutionMode.h"
 #include "internal/graph/sync/lineage/MediaAudioLineageCapacity.h"
@@ -22,6 +23,27 @@ namespace {
 MediaRunningTime ns(std::int64_t value)
 {
     return MediaRunningTime::fromNanoseconds(value);
+}
+
+void epochQuantizationUsesOneAbsoluteAudioSampleGrid()
+{
+    auto grid = MediaAudioSampleGrid::create(48'000);
+    assert(grid);
+    if (!grid) return;
+
+    const auto nonAlignedEpoch = ns(5'000'001);
+    auto packetStart = grid.value().nearestSample(ns(0));
+    auto epochSample = grid.value().firstSampleAtOrAfter(nonAlignedEpoch);
+    auto trim = grid.value().trimLeadingSamples(ns(0), nonAlignedEpoch, 480);
+    assert(packetStart && packetStart.value() == 0);
+    assert(epochSample && epochSample.value() == 241);
+    assert(trim && trim.value() == 241);
+
+    auto negativeSubSample = grid.value().firstSampleAtOrAfter(ns(-1));
+    auto negativeBeyondOneSample =
+        grid.value().firstSampleAtOrAfter(ns(-20'834));
+    assert(negativeSubSample && negativeSubSample.value() == 0);
+    assert(negativeBeyondOneSample && negativeBeyondOneSample.value() == -1);
 }
 
 std::shared_ptr<const MediaCanonicalLineage> lineage(
@@ -62,6 +84,33 @@ void aggregationAndSplitPreserveExactImmutableLineage()
     assert(tail.value()[0].interval.begin == 600);
     assert(tail.value()[0].interval.end == 960);
     assert(accumulator.finish());
+}
+
+void signedCanonicalSourceIntervalsCrossZeroExactly()
+{
+    MediaAudioIntervalAccumulator accumulator;
+    auto preroll = lineage(8, 1);
+    auto continuation = lineage(8, 2);
+    assert(accumulator.push({preroll, {-400, 624, 44'100}}));
+    assert(accumulator.push({continuation, {624, 1'648, 44'100}}));
+
+    auto crossing = accumulator.take(1'024);
+    assert(crossing && crossing.value().size() == 1);
+    assert(crossing.value().front().lineage == preroll);
+    assert(crossing.value().front().interval.begin == -400);
+    assert(crossing.value().front().interval.end == 624);
+
+    auto tail = accumulator.take(1'024);
+    assert(tail && tail.value().size() == 1);
+    assert(tail.value().front().lineage == continuation);
+    assert(tail.value().front().interval.begin == 624);
+    assert(tail.value().front().interval.end == 1'648);
+    assert(accumulator.finish());
+
+    MediaAudioIntervalAccumulator overflow;
+    assert(!overflow.push(
+        {lineage(8, 3), {std::numeric_limits<std::int64_t>::min(),
+                         std::numeric_limits<std::int64_t>::max(), 44'100}}));
 }
 
 void invalidContinuityGenerationAndResidueAreTerminal()
@@ -259,14 +308,33 @@ void sampleProjectionIsCumulativeAndFailsClosedOnEveryOverflow()
     assert(!extensionOverflow.value().extend(1));
 }
 
+void sampleProjectionAdvancesFromNegativeCanonicalOrigin()
+{
+    auto projection = MediaAudioSampleProjection::create(-2'048, 48'000, 48'000);
+    assert(projection);
+
+    auto first = projection.value().append(1'024);
+    assert(first);
+    assert(first.value().begin == -2'048);
+    assert(first.value().end == -1'024);
+
+    auto second = projection.value().append(1'024);
+    assert(second);
+    assert(second.value().begin == -1'024);
+    assert(second.value().end == 0);
+}
+
 } // namespace
 
 int main()
 {
+    epochQuantizationUsesOneAbsoluteAudioSampleGrid();
     aggregationAndSplitPreserveExactImmutableLineage();
+    signedCanonicalSourceIntervalsCrossZeroExactly();
     invalidContinuityGenerationAndResidueAreTerminal();
     drainedAccumulatorRetainsContinuityAuthorityUntilReset();
     droppedResidueRequiresExactAppliedCorrectionAuthorization();
+    sampleProjectionAdvancesFromNegativeCanonicalOrigin();
     sampleCountBoundaryNeverWraps();
     encoderFifoSplitsExactIntervalsWithPayload();
     uniqueLineageCapacityDeduplicatesSplitIntervals();

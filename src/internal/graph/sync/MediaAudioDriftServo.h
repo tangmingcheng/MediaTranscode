@@ -11,7 +11,7 @@ namespace media::ffmpeg::graph {
 
 struct MediaAudioDriftMeasurement final {
     MediaRunningTime phaseError;
-    MediaRunningTime observedAt;
+    MediaRunningTime sourceEndOnMaster;
     std::uint64_t generation = 0;
     std::uint64_t sequence = 0;
     std::int64_t effectiveOutputSampleIndex = 0;
@@ -84,7 +84,7 @@ private:
     std::uint64_t m_generation = 0;
     bool m_initialized = false;
     bool m_recovering = false;
-    std::int64_t m_lastObservedAtNs = 0;
+    std::int64_t m_lastSourceEndOnMasterNs = 0;
     std::int64_t m_lastRawPhaseNs = 0;
     std::int64_t m_filteredPhaseNs = 0;
     int m_filteredFrequencyPpm = 0;

@@ -148,7 +148,7 @@ BinderExecutable makeExecutable(std::string binderGroup = "binder-group")
     }
     fixture.executable.avSyncBinding.emplace(MediaAvSyncRuntimeBinding{
         MediaAvSyncGroupKey("binder-group"), completePlan(),
-        transitionPlan()});
+        transitionPlan(), MediaAvSyncBindingAssemblyMode::ComponentCore});
     return fixture;
 }
 

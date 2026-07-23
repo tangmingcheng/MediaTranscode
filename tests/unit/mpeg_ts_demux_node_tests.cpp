@@ -618,6 +618,32 @@ void testCancelledReadAndSessionTimelineFailurePropagation(TestContext& ctx)
     }
 }
 
+void testPlannerTimeBaseMaterializesWhenFfmpegPacketOmitsIt(TestContext& ctx)
+{
+    NodeFixture fixture;
+    EXPECT_TRUE(ctx, fixture.compile());
+    auto session = std::make_unique<ScriptedTsSession>();
+    session->evidenceTimeline = {
+        evidence(100, 0), evidence(200, 2'700'000)};
+    session->frames = {{
+        MediaTsReadFrameState::Frame, kVideoStream, 200,
+        90'000, 89'000, {0, 1}, MediaSourceClockReadiness::Locked}};
+    EXPECT_TRUE(ctx, fixture.input()->push(prepared(std::move(session))));
+
+    MpegTsDemuxNode node(fixture.demux);
+    EXPECT_TRUE(ctx, node.process(fixture.execution));
+
+    MediaBufferRef owner;
+    const auto* packet = popPacket(*fixture.video(), owner);
+    EXPECT_TRUE(ctx, packet != nullptr);
+    if (packet) {
+        EXPECT_EQ(ctx, owner->timeDescriptor().timeBase.num, 1);
+        EXPECT_EQ(ctx, owner->timeDescriptor().timeBase.den, 90'000);
+        EXPECT_EQ(ctx, packet->packet()->time_base.num, 1);
+        EXPECT_EQ(ctx, packet->packet()->time_base.den, 90'000);
+    }
+}
+
 void testPacketAndSessionFailures(TestContext& ctx)
 {
     for (int failure = 0; failure < 4; ++failure) {
@@ -921,4 +947,5 @@ void runMpegTsDemuxNodeTests(TestContext& ctx)
     testInitialAcquiringRetentionFailsClosedAndReplaysExactlyOnce(ctx);
     testInitialAcquiringRetentionAccountsCompletePacketFootprint(ctx);
     testCancelledReadAndSessionTimelineFailurePropagation(ctx);
+    testPlannerTimeBaseMaterializesWhenFfmpegPacketOmitsIt(ctx);
 }

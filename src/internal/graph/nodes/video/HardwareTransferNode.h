@@ -19,6 +19,8 @@ protected:
     ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context) override;
 
 private:
+    ::media::Status emitTracedOutput(MediaGraphExecutionContext& context,
+                                     const MediaBufferRef& buffer);
     ::media::Status transferOrForward(MediaGraphExecutionContext& context, const MediaBufferRef& buffer);
     ::media::Status downloadHardwareFrame(MediaGraphExecutionContext& context,
                                           const MediaBufferRef& buffer,
@@ -26,6 +28,8 @@ private:
 
     MediaInputTerminalTracker m_terminals { { "frame" } };
     bool m_eofEmitted = false;
+    bool m_firstInputDiagnosticEmitted = false;
+    bool m_firstOutputDiagnosticEmitted = false;
 };
 
 } // namespace media::ffmpeg::graph

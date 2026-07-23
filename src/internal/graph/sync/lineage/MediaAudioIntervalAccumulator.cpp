@@ -3,14 +3,16 @@
 
 #include <algorithm>
 #include <limits>
+#include <sstream>
 #include <utility>
 
 namespace media::ffmpeg::graph {
 
-::media::Status MediaAudioIntervalAccumulator::fail(const char* message)
+::media::Status MediaAudioIntervalAccumulator::fail(std::string message)
 {
     m_terminalFailure = true;
-    return ::media::Status::failure(::media::ErrorInfo::invalidArgument(message));
+    return ::media::Status::failure(
+        ::media::ErrorInfo::invalidArgument(std::move(message)));
 }
 
 ::media::Status MediaAudioIntervalAccumulator::push(
@@ -20,9 +22,8 @@ namespace media::ffmpeg::graph {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "Audio interval accumulator is terminal"));
     }
-    if (!fragment.lineage || fragment.interval.begin < 0 ||
-        fragment.interval.end <= fragment.interval.begin ||
-        fragment.interval.sampleRate <= 0 ||
+    const auto fragmentSamples = fragment.interval.sampleCount();
+    if (!fragment.lineage || !fragmentSamples ||
         !validateMediaCanonicalLineage(*fragment.lineage)) {
         return fail("Audio interval accumulator requires a valid lineage interval");
     }
@@ -34,10 +35,20 @@ namespace media::ffmpeg::graph {
         if (fragment.lineage->generation != m_generation ||
             fragment.interval.sampleRate != m_sampleRate ||
             m_expectedNextBegin != fragment.interval.begin) {
-            return fail("Audio interval accumulator requires contiguous same-generation intervals");
+            std::ostringstream message;
+            message
+                << "Audio interval accumulator requires contiguous same-generation intervals"
+                << " expected_generation=" << m_generation
+                << " actual_generation=" << fragment.lineage->generation
+                << " expected_sample_rate=" << m_sampleRate
+                << " actual_sample_rate=" << fragment.interval.sampleRate
+                << " expected_begin=" << m_expectedNextBegin
+                << " actual_begin=" << fragment.interval.begin
+                << " actual_end=" << fragment.interval.end;
+            return fail(message.str());
         }
     }
-    const auto addedSamples = fragment.interval.end - fragment.interval.begin;
+    const auto addedSamples = *fragmentSamples;
     if (addedSamples >
         std::numeric_limits<std::int64_t>::max() - m_queuedSamples) {
         return fail("Audio interval accumulator sample count overflow");

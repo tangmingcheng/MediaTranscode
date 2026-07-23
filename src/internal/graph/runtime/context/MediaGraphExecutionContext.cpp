@@ -218,11 +218,17 @@ std::vector<MediaChannel*> MediaGraphExecutionContext::outputChannels(MediaNodeI
 
 MediaNodeWakeup& MediaGraphExecutionContext::nodeWakeup(MediaNodeId nodeId)
 {
+    return *sharedNodeWakeup(nodeId);
+}
+
+std::shared_ptr<MediaNodeWakeup>
+MediaGraphExecutionContext::sharedNodeWakeup(MediaNodeId nodeId)
+{
     auto& wakeup = m_nodeWakeups[nodeId.value];
     if (!wakeup) {
-        wakeup = std::make_unique<MediaNodeWakeup>();
+        wakeup = std::make_shared<MediaNodeWakeup>();
     }
-    return *wakeup;
+    return wakeup;
 }
 
 void MediaGraphExecutionContext::interruptNodeWakeups() noexcept

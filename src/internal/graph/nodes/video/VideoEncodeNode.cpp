@@ -204,6 +204,10 @@ void VideoEncodeNode::abort(MediaGraphExecutionContext& context) noexcept { FFmp
 void VideoEncodeNode::resetRuntimeState() noexcept
 {
     m_encoderConfigEmitted = false;
+    m_firstFrameDiagnosticEmitted = false;
+    m_firstSubmitDiagnosticEmitted = false;
+    m_firstPacketDiagnosticEmitted = false;
+    m_sendWouldBlock.reset();
     m_lineageState->resetForLifecycle();
 }
 
@@ -333,6 +337,18 @@ void VideoEncodeNode::resetRuntimeState() noexcept
     }
     AVFrame* frame = m_lineageState->pendingFrame.get();
 
+    if (!m_firstFrameDiagnosticEmitted) {
+        std::ostringstream out;
+        out << "first_frame pts=" << frame->pts;
+        if (m_lineageState->pendingLineage) {
+            out << " generation=" << m_lineageState->pendingLineage->generation;
+        } else {
+            out << " generation=attached";
+        }
+        encodeLog(MediaGraphDiagnosticLevel::State, out.str());
+        m_firstFrameDiagnosticEmitted = true;
+    }
+
     auto decision = mediaGraphDiagnosticSample(MediaGraphDiagnosticLevel::Flow,
                                                "video_encode.frame");
     if (decision.shouldLog) {
@@ -353,6 +369,20 @@ void VideoEncodeNode::resetRuntimeState() noexcept
             ::media::ErrorInfo::notInitialized("VideoEncodeNode codec API is missing"));
     }
     const int sendRet = m_codecApi->sendFrame(codecContext(), frame);
+    const bool sendWouldBlock = sendRet == AVERROR(EAGAIN);
+    if (!m_firstSubmitDiagnosticEmitted) {
+        encodeLog(MediaGraphDiagnosticLevel::State,
+                  std::string("first_submit result=") +
+                      (sendRet == 0 ? "accepted" :
+                       sendWouldBlock ? "would_block" : "failed"));
+        m_firstSubmitDiagnosticEmitted = true;
+    }
+    if (m_sendWouldBlock && *m_sendWouldBlock != sendWouldBlock) {
+        encodeLog(MediaGraphDiagnosticLevel::State,
+                  std::string("submit_transition state=") +
+                      (sendWouldBlock ? "would_block" : "accepted"));
+    }
+    m_sendWouldBlock = sendWouldBlock;
     if (sendRet < 0 && sendRet != AVERROR(EAGAIN)) {
         return ::media::Result<MediaNodeProcessResult>::failure(
             FFmpegGraphError::fromCode(sendRet, "avcodec_send_frame(video)"));
@@ -419,6 +449,16 @@ void VideoEncodeNode::resetRuntimeState() noexcept
         if (ret < 0) {
             return ::media::Result<bool>::failure(
                 FFmpegGraphError::fromCode(ret, "avcodec_receive_packet(video)"));
+        }
+
+        if (!m_firstPacketDiagnosticEmitted) {
+            std::ostringstream out;
+            out << "first_packet pts=" << packet->pts
+                << " dts=" << packet->dts
+                << " duration=" << packet->duration
+                << " size=" << packet->size;
+            encodeLog(MediaGraphDiagnosticLevel::State, out.str());
+            m_firstPacketDiagnosticEmitted = true;
         }
 
         auto decision = mediaGraphDiagnosticSample(MediaGraphDiagnosticLevel::Flow,

@@ -18,17 +18,20 @@ public:
     static MediaNodeKind staticKind() noexcept;
 
 protected:
+    ::media::Status start(MediaGraphExecutionContext& context) override;
     ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context) override;
     ::media::Status stop(MediaGraphExecutionContext& context) override;
     void abort(MediaGraphExecutionContext& context) noexcept override;
 
 private:
-    ::media::Status initialize(MediaGraphExecutionContext& context);
+    ::media::Status prepareReceiver(MediaGraphExecutionContext& context);
     ::media::Status processRtp(MediaGraphExecutionContext& context, MediaRtpUdpDatagram datagram);
     ::media::Status processRtcp(MediaGraphExecutionContext& context, MediaRtpUdpDatagram datagram);
     ::media::Status processReordered(MediaGraphExecutionContext& context,
                                      MediaRtpReorderResult reordered,
                                      std::uint64_t generationBeforeObservation);
+    ::media::Status queueClockEvidence(MediaGraphExecutionContext& context,
+                                       std::int64_t observedAtNs);
     ::media::Status queueClockTransition(MediaGraphExecutionContext& context,
                                          std::int64_t observedAtNs);
     void resetState() noexcept;
@@ -45,6 +48,7 @@ private:
     std::deque<std::pair<std::string, MediaBufferRef>> m_events;
     bool m_initialized = false;
     bool m_formatEmitted = false;
+    bool m_keyTraceEmitted = false;
     bool m_requireCname = false;
     std::optional<MediaRtcpCompositionMode> m_rtcpCompositionMode;
     int m_cancellableReadTimeoutMs = 0;

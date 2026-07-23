@@ -77,6 +77,7 @@ void rejectUnknownRealtimeArgs(int argc, char** argv)
 {
     std::vector<std::string> valueArgs = commonVideoTranscodeValueArgs();
     const std::vector<std::string> realtimeValueArgs {
+        "--media-id",
         "--input-type",
         "--input-layout",
         "--output-layout",
@@ -176,6 +177,7 @@ MediaRealtimeRtpTranscodeRequest parseRealtimeOptions(int argc, char** argv)
     rejectUnknownRealtimeArgs(argc, argv);
 
     MediaRealtimeRtpTranscodeRequest options;
+    options.mediaId = requiredArg(argc, argv, "--media-id");
     parseRealtimeInputOptions(argc, argv, options.input);
     parseRealtimeOutputOptions(argc, argv, options.output);
     parseCommonVideoTranscodeOptions(argc, argv, options.parameters);
@@ -263,6 +265,16 @@ RealtimeVideoRuntimeOptions parseRuntimeOptions(int argc, char** argv)
             return ::media::Status::success();
         }
         if (idleMs >= options.progressTimeoutMs) {
+            for (const auto& decision : report.backpressure.decisions) {
+                if (decision.kind == MediaBackpressureDecisionKind::QueueFull ||
+                    decision.kind ==
+                        MediaBackpressureDecisionKind::AboveCriticalWatermark) {
+                    std::cerr << "[CLI] stalled edge=" << decision.edgeId.value
+                              << " queued=" << decision.queueSize
+                              << " capacity=" << decision.capacity
+                              << " reason=" << decision.message << '\n';
+                }
+            }
             return ::media::Status::failure(
                 ::media::ErrorInfo::notInitialized("realtime runtime made no progress before timeout"));
         }
@@ -280,7 +292,7 @@ int runRealtimeVideoCli(int argc, char** argv)
 
     const bool helpRequested = hasArg(argc, argv, "--help") || hasArg(argc, argv, "-h");
     if (argc < 5 || helpRequested) {
-        std::cout << "Usage: media_transcode_realtime_video_cli --input-type rtsp|rtp|mpegts-udp --input-layout session|separate|mpegts --output-layout separate|mpegts --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --startup-max-video-unit-bytes 4194304 --startup-max-audio-unit-bytes 1048576 --startup-max-gap-ms 40 --max-duration 15 [options]\n";
+        std::cout << "Usage: media_transcode_realtime_video_cli --media-id ID --input-type rtsp|rtp|mpegts-udp --input-layout session|separate|mpegts --output-layout separate|mpegts --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --startup-max-video-unit-bytes 4194304 --startup-max-audio-unit-bytes 1048576 --startup-max-gap-ms 40 --max-duration 15 [options]\n";
         return helpRequested ? 0 : 2;
     }
 

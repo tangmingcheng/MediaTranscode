@@ -1,5 +1,6 @@
 #include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
 
+#include "internal/graph/planner/MediaRtpClockLivenessPolicy.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
 #include "internal/graph/sync/startup/MediaAvStartupLimits.h"
@@ -167,9 +168,16 @@ std::uint32_t stableIdentity(const std::string& value) noexcept
     plan.rtp->input.commonEpochPolicy =
         MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime;
     plan.rtp->input.requireSenderReports = true;
-    plan.rtp->input.senderReportTimeoutNs = runningTime(3 * Second);
-    plan.rtp->input.maximumExtrapolationNs = runningTime(5 * Second);
-    plan.rtp->input.maximumSenderReportSkewNs = runningTime(50 * Millisecond);
+    plan.rtp->input.senderReportTimeoutNs = runningTime(
+        static_cast<std::int64_t>(
+            MediaRtpClockLivenessPolicy::SenderReportTimeoutMs) *
+        Millisecond);
+    plan.rtp->input.maximumExtrapolationNs = runningTime(
+        static_cast<std::int64_t>(
+            MediaRtpClockLivenessPolicy::MaximumExtrapolationMs) *
+        Millisecond);
+    plan.rtp->input.maximumInterStreamClockOffsetSkewNs =
+        runningTime(50 * Millisecond);
     plan.rtp->input.maximumSenderClockRateErrorPpm = 1'000;
     plan.rtp->input.maximumSenderClockResidualNs = runningTime(250 * Millisecond);
 

@@ -18,6 +18,10 @@ struct MediaRealtimeAvSyncInputSources final {
 struct MediaRealtimeAvSyncInputSegmentOptions final {
     std::string prefix;
     MediaRealtimeAvSyncInputSources sources;
+    int releasedVideoStreamIndex = invalidMediaStreamIndex;
+    int releasedAudioStreamIndex = invalidMediaStreamIndex;
+    MediaEdgeKind releasedVideoEdgeKind = MediaEdgeKind::Unknown;
+    MediaEdgeKind releasedAudioEdgeKind = MediaEdgeKind::Unknown;
 };
 
 class MediaRealtimeAvSyncInputSegmentBuilder final {

@@ -246,14 +246,15 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
         !rtp.input.requireSenderReports || !*rtp.input.requireSenderReports ||
         !positive(rtp.input.senderReportTimeoutNs) ||
         !positive(rtp.input.maximumExtrapolationNs) ||
-        !positive(rtp.input.maximumSenderReportSkewNs) ||
+        !positive(rtp.input.maximumInterStreamClockOffsetSkewNs) ||
         !rtp.input.maximumSenderClockRateErrorPpm ||
         *rtp.input.maximumSenderClockRateErrorPpm <= 0 ||
         *rtp.input.maximumSenderClockRateErrorPpm >= 1'000'000 ||
         !positive(rtp.input.maximumSenderClockResidualNs) ||
         *rtp.input.senderReportTimeoutNs >= *rtp.input.maximumExtrapolationNs ||
         *rtp.input.maximumExtrapolationNs >= *plan.recovery.reacquisitionTimeoutNs ||
-        *rtp.input.maximumSenderReportSkewNs >= *plan.recovery.hardDiscontinuityThresholdNs) {
+        *rtp.input.maximumInterStreamClockOffsetSkewNs >=
+            *plan.recovery.hardDiscontinuityThresholdNs) {
         return invalid("RTP input identities, CNAME, or sender report policy");
     }
     if (!validRtpOutputStream(rtp.videoOutput) ||

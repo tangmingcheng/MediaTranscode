@@ -17,6 +17,7 @@ namespace media::ffmpeg::graph {
 
 class MediaNodeWakeup;
 class MediaAtomicOutputTransaction;
+class MediaReservedOutputTransaction;
 
 class MediaChannel final {
 public:
@@ -53,11 +54,15 @@ public:
 
 private:
     friend class MediaAtomicOutputTransaction;
+    friend class MediaReservedOutputTransaction;
 
     MediaQueuePushOutcome pushOutcomeLocked(
         MediaBufferRef buffer,
         bool publishAccepted = true);
+    MediaQueuePushOutcome pushReservedOutcomeLocked(MediaBufferRef buffer);
     void publishAcceptedMutation() noexcept;
+    void publishReservedCapacityMutation() noexcept;
+    void finalizeDeferredCloseLocked() noexcept;
     void signalMutationWaiters() noexcept;
     void refreshQueueMetrics();
 
@@ -79,6 +84,9 @@ private:
     std::atomic_uint64_t m_externalBlockedPushes{0};
     std::atomic_size_t m_externalBlockedProducers{0};
     std::atomic_size_t m_externalBlockedConsumers{0};
+    std::size_t m_reservedCapacity = 0;
+    std::size_t m_authorizedCapacity = 0;
+    bool m_closeRequested = false;
 };
 
 } // namespace media::ffmpeg::graph

@@ -28,6 +28,9 @@ inline void addPlaybackEpochReleaseBoundary(
         : std::string{};
     graph.setNodeOption(
         sequencer, "activated_startup_release_sequencer.sync_group", group);
+    graph.setNodeOption(
+        sequencer, "activated_startup_release_sequencer.output_lead_ns",
+        "100000000");
     const auto activatedSink = graph.addNode(
         MediaNodeKind::DebugDump, "test.epoch.activated.sink");
     const auto releaseSink = graph.addNode(
@@ -147,6 +150,10 @@ inline bool compileAndActivateAvSyncRuntime(
     int audioSampleRate = 48'000)
 {
     using namespace ::media::ffmpeg::graph;
+    if (binding.assemblyMode !=
+        MediaAvSyncBindingAssemblyMode::ComponentCore) {
+        return false;
+    }
     auto runtime = std::make_unique<MediaGraphRuntime>(
         std::make_shared<FixedAvSyncClockSource>(std::move(clock)));
     MediaRealtimeExecutableGraph executable;

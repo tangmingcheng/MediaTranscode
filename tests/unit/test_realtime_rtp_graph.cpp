@@ -8,8 +8,8 @@
 #include "internal/graph/builder/segments/MediaRealtimeAvSyncInputSegmentBuilder.h"
 #include "internal/graph/core/MediaGraphValidation.h"
 #include "internal/graph/model/MediaNodeKind.h"
+#include "internal/graph/model/MediaAtomicOutputPolicyContract.h"
 #include "internal/graph/model/RealtimeStreamLayout.h"
-#include "internal/graph/nodes/packet/AvPacketStartBarrierNode.h"
 #include "internal/graph/nodes/packet/PacketStartGateNode.h"
 #include "internal/graph/nodes/mux/RtpMuxStateMachine.h"
 #include "internal/graph/nodes/audio/AudioMonotonicTimestamp.h"
@@ -23,6 +23,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeOutputPolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaPreparedRealtimeInput.h"
 #include "internal/graph/planner/MediaPipelineCapabilityScanner.h"
+#include "internal/graph/planner/capability/MediaSelectedEncoderPacketLayoutResolver.h"
 #include "internal/graph/runtime/MediaGraphRuntime.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
@@ -769,6 +770,26 @@ void expectTextNotContains(TestContext& ctx, const std::string& text, const std:
     EXPECT_FALSE(ctx, text.find(needle) != std::string::npos);
 }
 
+void expectPacketOutputContract(TestContext& ctx,
+                                const MediaGraph& graph,
+                                const MediaNode* producer,
+                                const char* portName,
+                                MediaStreamKind streamKind,
+                                MediaEdgeKind edgeKind,
+                                int streamIndex)
+{
+    EXPECT_TRUE(ctx, producer != nullptr);
+    if (!producer) return;
+    const MediaPort* port = graph.findOutputPort(producer->id, portName);
+    EXPECT_TRUE(ctx, port != nullptr);
+    if (!port) return;
+    EXPECT_EQ(ctx, port->streamKind, streamKind);
+    EXPECT_EQ(ctx, port->edgeKind, edgeKind);
+    EXPECT_EQ(ctx, port->payloadKind, MediaPayloadKind::Packet);
+    EXPECT_EQ(ctx, port->format.streamKind, streamKind);
+    EXPECT_EQ(ctx, port->format.streamIndex, streamIndex);
+}
+
 MediaRealtimeRtpTranscodeRequest validRawRtpOptions()
 {
     MediaRealtimeRtpTranscodeRequest options = validRealtimeOptions();
@@ -1241,7 +1262,8 @@ void testPlannerRejectsUnresolvedBehaviorOptions(TestContext& ctx)
     input.width = 1920;
     input.height = 1080;
 
-    MediaPipelinePlannerOptions missingHardwarePreference(false, false, true, true, true, false);
+    MediaPipelinePlannerOptions missingHardwarePreference(
+        false, false, false, true, false);
     const auto missingHardware = MediaPipelinePlanner::planVideoTranscodeKnownInput(
         input,
         "rtp://127.0.0.1:5004",
@@ -1251,7 +1273,8 @@ void testPlannerRejectsUnresolvedBehaviorOptions(TestContext& ctx)
         EXPECT_EQ(ctx, missingHardware.error().code, media::ErrorCode::InvalidArgument);
     }
 
-    MediaPipelinePlannerOptions missingRealtimeOptions(false, false, true, true, true, false);
+    MediaPipelinePlannerOptions missingRealtimeOptions(
+        false, false, false, true, false);
     missingRealtimeOptions.preferredHardware = "auto";
     const auto missingRealtime = MediaPipelinePlanner::planVideoTranscodeRealtimeUrl(
         "rtsp://127.0.0.1/live",
@@ -1702,6 +1725,8 @@ void testSynchronizedRtpGraphAssemblesProtocolNeutralInputSegment(
         edgePolicies.metadata.queuePolicy.capacity;
     const std::size_t packetCapacity = planned.value().avSyncRuntime->
         edgePolicies.synchronizedPacket.queuePolicy.capacity;
+    const int videoStreamIndex = planned.value().videoPlan.sourceStreamIndex;
+    const int audioStreamIndex = planned.value().audioPlan.sourceStreamIndex;
 
     const auto graphResult = MediaRealtimeRtpTranscodeGraphBuilder::build(
         std::move(planned).value());
@@ -1711,6 +1736,14 @@ void testSynchronizedRtpGraphAssemblesProtocolNeutralInputSegment(
         return;
     }
     const MediaGraph& graph = graphResult.value();
+    expectPacketOutputContract(
+        ctx, graph, findNodeByName(graph, "realtime.video.input"),
+        "packet", MediaStreamKind::Video, MediaEdgeKind::InputPacket,
+        videoStreamIndex);
+    expectPacketOutputContract(
+        ctx, graph, findNodeByName(graph, "realtime.audio.input"),
+        "packet", MediaStreamKind::Audio, MediaEdgeKind::InputPacket,
+        audioStreamIndex);
 
     const MediaNode* snapshot = findNodeByName(
         graph, "realtime.av_sync.rtp.clock_snapshot");
@@ -1869,8 +1902,13 @@ void testSynchronizedRtpGraphAssemblesProtocolNeutralInputSegment(
                MediaStreamKind::Metadata, MediaEdgeKind::Event,
                MediaPayloadKind::GraphEvent,
                metadataCapacity);
+    expectEdge("realtime.av_sync.startup.epoch_binder", "preparation",
+               "realtime.av_sync.startup.release_extractor", "preparation",
+               MediaStreamKind::Metadata, MediaEdgeKind::Event,
+               MediaPayloadKind::GraphEvent,
+               metadataCapacity);
     expectEdge("realtime.av_sync.startup.activation_sequencer", "bound_release",
-               "realtime.av_sync.startup.release_extractor", "in",
+               "realtime.av_sync.startup.release_extractor", "bound_release",
                MediaStreamKind::Metadata, MediaEdgeKind::Event,
                MediaPayloadKind::GraphEvent,
                metadataCapacity);
@@ -1883,9 +1921,6 @@ void testSynchronizedRtpGraphAssemblesProtocolNeutralInputSegment(
         }
     }
     EXPECT_EQ(ctx, coordinatorReleaseConsumers, static_cast<std::size_t>(1));
-    EXPECT_EQ(ctx,
-              countNodesByKind(graph, MediaNodeKind::AvPacketStartBarrier),
-              static_cast<std::size_t>(0));
     EXPECT_TRUE(ctx, graph.findOutputPort(extractor->id, "video") != nullptr);
     EXPECT_TRUE(ctx, graph.findOutputPort(extractor->id, "audio") != nullptr);
     const MediaPort* activated = graph.findOutputPort(sequencer->id, "activated");
@@ -1902,44 +1937,128 @@ void testSynchronizedRtpGraphAssemblesProtocolNeutralInputSegment(
             ++activatedConsumers;
         }
     }
-    EXPECT_EQ(ctx, activatedConsumers, static_cast<std::size_t>(0));
+    EXPECT_EQ(ctx, activatedConsumers, static_cast<std::size_t>(2));
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::AvOutputScheduler),
+              static_cast<std::size_t>(1));
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::ScheduledOutputRouter),
+              static_cast<std::size_t>(1));
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::ScheduledRtpSender),
+              static_cast<std::size_t>(2));
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::DualMediaSdpPublisher),
+              static_cast<std::size_t>(1));
+    for (const MediaNodeKind forbidden : {
+             MediaNodeKind::RtpMux,
+             MediaNodeKind::RtpOutput,
+             MediaNodeKind::SdpWriter,
+             MediaNodeKind::PacketNormalize,
+             MediaNodeKind::VideoTimestamp}) {
+        EXPECT_EQ(ctx, countNodesByKind(graph, forbidden),
+                  static_cast<std::size_t>(0));
+    }
+    const MediaEdge* videoSchedule = findEdgeBetweenKinds(
+        graph, MediaNodeKind::VideoEncode, MediaNodeKind::AvOutputScheduler,
+        MediaEdgeKind::EncodedPacket);
+    const MediaEdge* audioSchedule = findEdgeBetweenKinds(
+        graph, MediaNodeKind::EncodedAudioCanonicalizer,
+        MediaNodeKind::AvOutputScheduler,
+        MediaEdgeKind::EncodedPacket);
+    EXPECT_TRUE(ctx, videoSchedule != nullptr);
+    EXPECT_TRUE(ctx, audioSchedule != nullptr);
+    if (videoSchedule) {
+        EXPECT_EQ(ctx, videoSchedule->streamKind, MediaStreamKind::Video);
+        EXPECT_EQ(ctx, videoSchedule->payloadKind, MediaPayloadKind::Packet);
+    }
+    if (audioSchedule) {
+        EXPECT_EQ(ctx, audioSchedule->streamKind, MediaStreamKind::Audio);
+        EXPECT_EQ(ctx, audioSchedule->payloadKind, MediaPayloadKind::Packet);
+    }
+    EXPECT_TRUE(ctx,
+                findEdgeByNames(
+                    graph,
+                    "realtime.video.transcode.encode", "codec",
+                    "realtime.av_sync.rtp_output.video.sender", "codec") !=
+                    nullptr);
+    EXPECT_TRUE(ctx,
+                findEdgeByNames(
+                    graph,
+                    "realtime.audio.encode.encode", "codec",
+                    "realtime.av_sync.rtp_output.audio.sender", "codec") !=
+                    nullptr);
     EXPECT_FALSE(ctx, videoBinder->options.has("initial_locked_gate.generation"));
     EXPECT_FALSE(ctx, audioBinder->options.has("initial_locked_gate.generation"));
 }
 
-void testSynchronizedInputGraphCompilerRemainsFailClosedUntilOutputAssembly(
+void testScheduledRtpRequiresAuthoritativeAnnexBEncoderLayout(TestContext& ctx)
+{
+    MediaPipelinePlan plan;
+    plan.branchMode = MediaBranchMode::TranscodeFrame;
+    plan.selected.encoder.ffmpegName = "test_h264";
+
+    EXPECT_FALSE(ctx,
+                 MediaSelectedEncoderPacketLayoutResolver::require(
+                     plan, MediaEncodedPacketLayoutKind::StartCodeDelimited,
+                     "scheduled RTP"));
+    auto lengthPrefixed = MediaEncodedPacketLayout::lengthPrefixed(4);
+    EXPECT_TRUE(ctx, lengthPrefixed);
+    if (!lengthPrefixed) return;
+    plan.selected.encoder.encodedPacketLayout = lengthPrefixed.value();
+    EXPECT_FALSE(ctx,
+                 MediaSelectedEncoderPacketLayoutResolver::require(
+                     plan, MediaEncodedPacketLayoutKind::StartCodeDelimited,
+                     "scheduled RTP"));
+    plan.selected.encoder.encodedPacketLayout =
+        MediaEncodedPacketLayout::startCodeDelimited();
+    EXPECT_TRUE(ctx,
+                MediaSelectedEncoderPacketLayoutResolver::require(
+                    plan, MediaEncodedPacketLayoutKind::StartCodeDelimited,
+                    "scheduled RTP"));
+}
+
+void testSynchronizedRtpExecutableOwnsCompleteProductionAssembly(
     TestContext& ctx)
 {
     auto planned = MediaRealtimeRtpTranscodePlanner::plan(
         validRawRtpAudioVideoOptions());
     EXPECT_TRUE(ctx, planned);
     if (!planned || !planned.value().avSyncRuntime) return;
-    auto graph = MediaRealtimeRtpTranscodeGraphBuilder::build(
-        std::move(planned).value());
-    EXPECT_TRUE(ctx, graph);
-    if (!graph) return;
-    auto bindingPlan = MediaRealtimeRtpTranscodePlanner::plan(
-        validRawRtpAudioVideoOptions());
-    EXPECT_TRUE(ctx, bindingPlan);
-    if (!bindingPlan || !bindingPlan.value().avSyncRuntime) return;
-    const auto& runtimePlan = *bindingPlan.value().avSyncRuntime;
-
-    MediaRealtimeExecutableGraph executable;
-    executable.graph = std::move(graph).value();
-    executable.avSyncBinding = MediaAvSyncRuntimeBinding{
-        runtimePlan.groupKey,
-        runtimePlan.synchronization,
-        runtimePlan.transition};
-    MediaGraphRuntime runtime;
-    auto compiled = runtime.compile(std::move(executable));
-    EXPECT_FALSE(ctx, compiled);
-    if (!compiled) {
-        EXPECT_EQ(ctx, compiled.error().code,
-                  ::media::ErrorCode::NotInitialized);
-        expectTextContains(
-            ctx, compiled.error().describe(),
-            "requires exactly one scheduler, binder, and activation release sequencer");
+    const MediaAvSyncGroupKey expectedGroup =
+        planned.value().avSyncRuntime->groupKey;
+    MediaRealtimeTranscodePreflight preflight{
+        std::move(planned).value(), std::nullopt};
+    auto executable = MediaRealtimeRtpTranscodeGraphBuilder::buildExecutable(
+        std::move(preflight));
+    EXPECT_TRUE(ctx, executable);
+    if (!executable) {
+        std::cerr << executable.error().describe() << '\n';
+        return;
     }
+    EXPECT_TRUE(ctx, executable.value().avSyncBinding.has_value());
+    if (executable.value().avSyncBinding) {
+        EXPECT_EQ(ctx, executable.value().avSyncBinding->groupKey.value(),
+                  expectedGroup.value());
+    }
+    const MediaGraphValidationReport validation =
+        MediaGraphValidation::validate(executable.value().graph);
+    EXPECT_TRUE(ctx, validation.ok());
+    if (!validation.ok()) {
+        for (const auto& issue : validation.issues) {
+            std::cerr << "production RTP graph validation issue: "
+                      << issue.message << " node=" << issue.nodeId.value
+                      << " port=" << issue.portId.value
+                      << " edge=" << issue.edgeId.value << '\n';
+        }
+        for (const auto& node : executable.value().graph.nodes()) {
+            if (node.id.value != 15) continue;
+            std::cerr << "production RTP invalid node: " << node.name << '\n';
+            for (const auto& port : node.outputPorts) {
+                std::cerr << "  output port=" << port.id.value
+                          << " name=" << port.name << '\n';
+            }
+        }
+    }
+    MediaGraphRuntime runtime;
+    auto compiled = runtime.compile(std::move(executable).value());
+    EXPECT_TRUE(ctx, compiled);
 }
 
 void testSynchronizedMpegTsSegmentUsesSharedProtocolNeutralStartupChain(
@@ -1973,6 +2092,10 @@ void testSynchronizedMpegTsSegmentUsesSharedProtocolNeutralStartupChain(
     options.sources.videoPacket = MediaEndpoint{demux, "video"};
     options.sources.audioPacket = MediaEndpoint{demux, "audio"};
     options.sources.protocolClock = MediaEndpoint{demux, "clock"};
+    options.releasedVideoStreamIndex = outer.videoPlan.sourceStreamIndex;
+    options.releasedAudioStreamIndex = outer.audioPlan.sourceStreamIndex;
+    options.releasedVideoEdgeKind = MediaEdgeKind::InputPacket;
+    options.releasedAudioEdgeKind = MediaEdgeKind::InputPacket;
     auto segment = MediaRealtimeAvSyncInputSegmentBuilder::build(
         graph, options, *outer.avSyncRuntime);
     EXPECT_TRUE(ctx, segment);
@@ -2056,6 +2179,84 @@ void testSynchronizedMpegTsSegmentUsesSharedProtocolNeutralStartupChain(
               std::string("activated"));
 }
 
+void testSynchronizedMpegTsGraphOwnsCompleteProductionAssembly(
+    TestContext& ctx)
+{
+    auto planned = MediaRealtimeRtpTranscodePlanner::planPreparedInput(
+        validMpegTsUdpOptions(), deterministicMpegTsStreams(),
+        deterministicMpegTsSelection());
+    EXPECT_TRUE(ctx, planned);
+    if (!planned || !planned.value().avSyncRuntime) {
+        if (!planned) std::cerr << planned.error().describe() << '\n';
+        return;
+    }
+    auto graphResult = MediaRealtimeRtpTranscodeGraphBuilder::build(
+        std::move(planned).value());
+    EXPECT_TRUE(ctx, graphResult);
+    if (!graphResult) {
+        std::cerr << graphResult.error().describe() << '\n';
+        return;
+    }
+    const MediaGraph& graph = graphResult.value();
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::AvOutputScheduler),
+              static_cast<std::size_t>(1));
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::ScheduledOutputRouter),
+              static_cast<std::size_t>(1));
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::ProjectMpegTsPlanSource),
+              static_cast<std::size_t>(1));
+    EXPECT_EQ(ctx,
+              countNodesByKind(graph,
+                               MediaNodeKind::ScheduledTsAccessUnitAdapter),
+              static_cast<std::size_t>(1));
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::FileMux),
+              static_cast<std::size_t>(1));
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::FileOutput),
+              static_cast<std::size_t>(1));
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::ScheduledRtpSender),
+              static_cast<std::size_t>(0));
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::DualMediaSdpPublisher),
+              static_cast<std::size_t>(0));
+    for (const MediaNodeKind forbidden : {
+             MediaNodeKind::RtpMux,
+             MediaNodeKind::RtpOutput,
+             MediaNodeKind::SdpWriter,
+             MediaNodeKind::PacketNormalize,
+             MediaNodeKind::VideoTimestamp}) {
+        EXPECT_EQ(ctx, countNodesByKind(graph, forbidden),
+                  static_cast<std::size_t>(0));
+    }
+    EXPECT_TRUE(ctx, findEdgeBetweenKinds(
+                         graph, MediaNodeKind::VideoEncode,
+                         MediaNodeKind::AvOutputScheduler,
+                         MediaEdgeKind::EncodedPacket) != nullptr);
+    EXPECT_TRUE(ctx, findEdgeBetweenKinds(
+                         graph, MediaNodeKind::EncodedAudioCanonicalizer,
+                         MediaNodeKind::AvOutputScheduler,
+                         MediaEdgeKind::EncodedPacket) != nullptr);
+    EXPECT_TRUE(ctx, findEdgeBetweenKinds(
+                         graph, MediaNodeKind::ScheduledOutputRouter,
+                         MediaNodeKind::ScheduledTsAccessUnitAdapter,
+                         MediaEdgeKind::EncodedPacket) != nullptr);
+    EXPECT_TRUE(ctx, findEdgeBetweenKinds(
+                         graph, MediaNodeKind::ScheduledTsAccessUnitAdapter,
+                         MediaNodeKind::FileMux,
+                         MediaEdgeKind::EncodedPacket) != nullptr);
+    const MediaNode* sequencer = findNodeByKind(
+        graph, MediaNodeKind::ActivatedStartupReleaseSequencer);
+    EXPECT_TRUE(ctx, sequencer != nullptr);
+    if (sequencer) {
+        std::size_t activatedConsumers = 0;
+        for (const MediaEdge& edge : graph.edges()) {
+            const MediaPort* from = graph.findPort(edge.from.portId);
+            if (edge.from.nodeId == sequencer->id && from &&
+                from->name == "activated") {
+                ++activatedConsumers;
+            }
+        }
+        EXPECT_EQ(ctx, activatedConsumers, static_cast<std::size_t>(1));
+    }
+}
+
 void testSynchronizedInputSegmentRejectsMissingProtocolSourcePort(
     TestContext& ctx)
 {
@@ -2073,6 +2274,10 @@ void testSynchronizedInputSegmentRejectsMissingProtocolSourcePort(
     options.sources.videoPacket = MediaEndpoint{demux, "video"};
     options.sources.audioPacket = MediaEndpoint{demux, "audio"};
     options.sources.protocolClock = MediaEndpoint{demux, "clock"};
+    options.releasedVideoStreamIndex = planned.value().videoPlan.sourceStreamIndex;
+    options.releasedAudioStreamIndex = planned.value().audioPlan.sourceStreamIndex;
+    options.releasedVideoEdgeKind = MediaEdgeKind::InputPacket;
+    options.releasedAudioEdgeKind = MediaEdgeKind::InputPacket;
     auto segment = MediaRealtimeAvSyncInputSegmentBuilder::build(
         graph, options, *planned.value().avSyncRuntime);
     EXPECT_FALSE(ctx, segment);
@@ -2259,6 +2464,31 @@ void testRawRtpVideoPacketCopySkipsContainerNormalization(TestContext& ctx)
     }
     EXPECT_TRUE(ctx, findNodeByName(graphResult.value(), "realtime.video.copy.normalize") == nullptr);
     EXPECT_EQ(ctx, countNodesByKind(graphResult.value(), MediaNodeKind::PacketNormalize), static_cast<std::size_t>(0));
+    expectPacketOutputContract(
+        ctx, graphResult.value(),
+        findNodeByKind(graphResult.value(), MediaNodeKind::RawRtpInput),
+        "packet", MediaStreamKind::Video, MediaEdgeKind::EncodedPacket, 0);
+}
+
+void testSynchronizedRawRtpRejectsIncompleteMutatedVideoCopyPlan(
+    TestContext& ctx)
+{
+    auto planned = MediaRealtimeRtpTranscodePlanner::plan(
+        validRawRtpAudioVideoOptions());
+    EXPECT_TRUE(ctx, planned);
+    if (!planned || !planned.value().avSyncRuntime) return;
+
+    planned.value().videoPlan.branchMode = MediaBranchMode::CopyPacket;
+    planned.value().videoPlan.enabled = true;
+    planned.value().videoPacketCopyNormalizationRequired = false;
+
+    auto graphResult = MediaRealtimeRtpTranscodeGraphBuilder::build(
+        std::move(planned).value());
+    EXPECT_FALSE(ctx, graphResult);
+    if (!graphResult) {
+        EXPECT_EQ(ctx, graphResult.error().code,
+                  media::ErrorCode::InvalidArgument);
+    }
 }
 
 void testRawRtpRejectsUnsupportedOpusOutputAndUnboundedOpusInputTiming(TestContext& ctx)
@@ -2541,6 +2771,9 @@ void testBuildPlansVideoStreamAndSoftwareExecution(TestContext& ctx)
     EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::RtpMux) != nullptr);
     EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::RtpOutput) != nullptr);
     EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::SdpWriter) != nullptr);
+    expectPacketOutputContract(
+        ctx, graph, findNodeByKind(graph, MediaNodeKind::StreamSplit),
+        "video", MediaStreamKind::Video, MediaEdgeKind::InputPacket, 0);
 
     const MediaNode* encode = findNodeByKind(graph, MediaNodeKind::VideoEncode);
     EXPECT_TRUE(ctx, encode != nullptr);
@@ -2584,6 +2817,9 @@ void testBuildPlansRawRtpH264Graph(TestContext& ctx)
     EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::RtpMux) != nullptr);
     EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::RtpOutput) != nullptr);
     EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::SdpWriter) != nullptr);
+    expectPacketOutputContract(
+        ctx, graph, findNodeByKind(graph, MediaNodeKind::RawRtpInput),
+        "packet", MediaStreamKind::Video, MediaEdgeKind::InputPacket, 0);
     const MediaNode* timestampNode = findNodeByKind(graph, MediaNodeKind::VideoTimestamp);
     EXPECT_TRUE(ctx, timestampNode != nullptr);
     if (timestampNode) {
@@ -2614,8 +2850,14 @@ void testBuildPlansRawRtpAudioVideoGraph(TestContext& ctx)
     EXPECT_TRUE(ctx, findNodeByKind(graph, MediaNodeKind::VideoTimestamp) == nullptr);
     EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::AudioDecode), static_cast<std::size_t>(1));
     EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::AudioEncode), static_cast<std::size_t>(1));
-    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::RtpOutput), static_cast<std::size_t>(2));
-    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::RtpMux), static_cast<std::size_t>(2));
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::RtpOutput),
+              static_cast<std::size_t>(0));
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::RtpMux),
+              static_cast<std::size_t>(0));
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::ScheduledRtpSender),
+              static_cast<std::size_t>(2));
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::AvOutputScheduler),
+              static_cast<std::size_t>(1));
     const MediaNode* videoDecode = findNodeByName(
         graph, "realtime.video.transcode.decode");
     const MediaNode* videoFrameRate = findNodeByName(
@@ -2639,12 +2881,16 @@ void testBuildPlansRawRtpAudioVideoGraph(TestContext& ctx)
         EXPECT_TRUE(ctx, graph.findOutputPort(clockGroup->id, "clock_group") != nullptr);
         EXPECT_EQ(ctx, clockGroup->options.value("rtp_clock_group.video_clock_rate"), std::string("90000"));
         EXPECT_EQ(ctx, clockGroup->options.value("rtp_clock_group.audio_clock_rate"), std::string("48000"));
-        EXPECT_EQ(ctx, clockGroup->options.value("rtp_clock_group.sender_report_timeout_ns"), std::string("3000000000"));
-        EXPECT_EQ(ctx, clockGroup->options.value("rtp_clock_group.maximum_extrapolation_ns"), std::string("5000000000"));
-        EXPECT_EQ(ctx, clockGroup->options.value("rtp_clock_group.maximum_inter_stream_skew_ns"), std::string("50000000"));
+        EXPECT_EQ(ctx, clockGroup->options.value("rtp_clock_group.sender_report_timeout_ns"), std::string("7000000000"));
+        EXPECT_EQ(ctx, clockGroup->options.value("rtp_clock_group.maximum_extrapolation_ns"), std::string("9000000000"));
+        EXPECT_EQ(
+            ctx,
+            clockGroup->options.value(
+                "rtp_clock_group.maximum_inter_stream_clock_offset_skew_ns"),
+            std::string("50000000"));
         EXPECT_EQ(ctx, clockGroup->options.value("rtp_clock_group.maximum_sender_clock_residual_ns"), std::string("250000000"));
-        EXPECT_EQ(ctx, clockGroup->options.value("rtp_clock_group.video_cname_timeout_ns"), std::string("5000000000"));
-        EXPECT_EQ(ctx, clockGroup->options.value("rtp_clock_group.audio_cname_timeout_ns"), std::string("5000000000"));
+        EXPECT_EQ(ctx, clockGroup->options.value("rtp_clock_group.video_cname_timeout_ns"), std::string("9000000000"));
+        EXPECT_EQ(ctx, clockGroup->options.value("rtp_clock_group.audio_cname_timeout_ns"), std::string("9000000000"));
         EXPECT_EQ(ctx, clockGroup->options.value("rtp_clock_group.maximum_sender_clock_rate_error_ppm"), std::string("1000"));
     }
     EXPECT_TRUE(ctx, findEdgeByNames(graph, "realtime.video.input", "clock",
@@ -2660,9 +2906,9 @@ void testBuildPlansRawRtpAudioVideoGraph(TestContext& ctx)
     EXPECT_TRUE(ctx, videoIngress != nullptr && audioIngress != nullptr);
     if (videoIngress && audioIngress) {
         EXPECT_EQ(ctx, videoIngress->options.value("rtcp.maximum_extrapolation_ns"),
-                  std::string("5000000000"));
+                  std::string("9000000000"));
         EXPECT_EQ(ctx, audioIngress->options.value("rtcp.maximum_extrapolation_ns"),
-                  std::string("5000000000"));
+                  std::string("9000000000"));
     }
     EXPECT_TRUE(ctx,
                 findEdgeByNames(
@@ -2698,6 +2944,13 @@ void testRealtimeRtpDataPathUsesPlannedNonBlockingQueues(TestContext& ctx)
 void testRealtimeCliAppliesPlannerThreadingPolicy(TestContext& ctx)
 {
     const std::string cliSource = repositoryFile("tools/realtime_video_cli/main.cpp");
+    expectTextContains(ctx, cliSource, "\"--media-id\"");
+    expectTextContains(
+        ctx, cliSource,
+        "options.mediaId = requiredArg(argc, argv, \"--media-id\")");
+    expectTextContains(
+        ctx, cliSource,
+        "media_transcode_realtime_video_cli --media-id ID");
     expectTextContains(ctx, cliSource, "MediaRealtimeRtpTranscodePlanner::preflight(options)");
     expectTextContains(ctx, cliSource, "MediaRealtimeRtpTranscodeGraphBuilder::buildExecutable(std::move(preflight))");
     expectTextContains(ctx, cliSource, "runtime.setThreadingPolicy(threadingPolicy)");
@@ -2777,7 +3030,7 @@ void testRealtimeWorkerUsesEventDrivenWait(TestContext& ctx)
     EXPECT_TRUE(ctx, workerSource.find("std::this_thread::yield") == std::string::npos);
 }
 
-void testSynchronizedRtpMuxLeavesLegacyPacingInert(TestContext& ctx)
+void testSynchronizedRtpGraphExcludesLegacyMuxPacingAuthority(TestContext& ctx)
 {
     MediaRealtimeRtpTranscodeRequest options = validRawRtpAudioVideoOptions();
     auto plan = MediaRealtimeRtpTranscodePlanner::plan(options);
@@ -2800,31 +3053,13 @@ void testSynchronizedRtpMuxLeavesLegacyPacingInert(TestContext& ctx)
     }
 
     const MediaGraph& graph = graphResult.value();
-    const MediaNode* videoMux = findNodeByName(graph, "realtime.video.rtp.mux");
-    const MediaNode* audioMux = findNodeByName(graph, "realtime.audio.rtp.mux");
-    EXPECT_TRUE(ctx, videoMux != nullptr);
-    EXPECT_TRUE(ctx, audioMux != nullptr);
-    if (videoMux && audioMux) {
-        EXPECT_FALSE(ctx, videoMux->options.has("av_sync.sync_group"));
-        EXPECT_FALSE(ctx, audioMux->options.has("av_sync.sync_group"));
-        EXPECT_EQ(ctx, videoMux->options.value("rtp.pacing.enabled"), std::string("0"));
-        EXPECT_EQ(ctx, audioMux->options.value("rtp.pacing.enabled"), std::string("0"));
-        EXPECT_EQ(ctx, videoMux->options.value("rtp.packet_timestamps.monotonic"), std::string("1"));
-        EXPECT_EQ(ctx, audioMux->options.value("rtp.packet_timestamps.monotonic"), std::string("1"));
-        EXPECT_EQ(ctx, videoMux->options.value("rtp.startup_delay_ms"), std::string("0"));
-        EXPECT_EQ(ctx, audioMux->options.value("rtp.startup_delay_ms"), std::string("0"));
-    }
-
-    const std::string muxSource = repositoryFile("src/internal/graph/nodes/mux/RtpMuxNode.cpp");
-    const std::string protocolSource = repositoryFile("src/internal/graph/nodes/mux/RtpMuxProtocolIo.cpp");
-    expectTextContains(ctx, muxSource, "m_session.pacingClock().waitUntil");
-    expectTextContains(ctx, muxSource, "normalizePacketTimestamps");
-    expectTextContains(ctx, muxSource, "startPacingSessionIfNeeded");
-    expectTextContains(ctx, muxSource, "rtp_mux.pacing_session_started");
-    expectTextContains(ctx, protocolSource, "av_interleaved_write_frame");
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::RtpMux),
+              static_cast<std::size_t>(0));
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::AvOutputScheduler),
+              static_cast<std::size_t>(1));
 }
 
-void testSynchronizedRtpOutputLeavesLegacyWritePacingInert(TestContext& ctx)
+void testSynchronizedRtpGraphExcludesLegacyWritePacingAuthority(TestContext& ctx)
 {
     MediaRealtimeRtpTranscodeRequest options = validRawRtpAudioVideoOptions();
     auto plan = MediaRealtimeRtpTranscodePlanner::plan(options);
@@ -2848,27 +3083,10 @@ void testSynchronizedRtpOutputLeavesLegacyWritePacingInert(TestContext& ctx)
     }
 
     const MediaGraph& graph = graphResult.value();
-    const MediaNode* videoOutput = findNodeByName(graph, "realtime.video.rtp.output");
-    const MediaNode* audioOutput = findNodeByName(graph, "realtime.audio.rtp.output");
-    EXPECT_TRUE(ctx, videoOutput != nullptr);
-    EXPECT_TRUE(ctx, audioOutput != nullptr);
-    if (videoOutput && audioOutput) {
-        EXPECT_EQ(ctx, videoOutput->options.value("rtp.write_pacing.enabled"), std::string("0"));
-        EXPECT_EQ(ctx, audioOutput->options.value("rtp.write_pacing.enabled"), std::string("0"));
-        EXPECT_EQ(ctx, videoOutput->options.value("rtp.write_pacing.bytes_per_second"), std::string("0"));
-        EXPECT_EQ(ctx, audioOutput->options.value("rtp.write_pacing.bytes_per_second"), std::string("0"));
-        EXPECT_EQ(ctx, videoOutput->options.value("rtp.write_pacing.burst_bytes"), std::string("0"));
-        EXPECT_EQ(ctx, audioOutput->options.value("rtp.write_pacing.burst_bytes"), std::string("0"));
-    }
-
-    const std::string outputSource = repositoryFile("src/internal/graph/nodes/output/RtpOutputNode.cpp");
-    expectTextContains(ctx, outputSource, "openPacedWriteAvio");
-    expectTextContains(ctx, outputSource, "rtp.write_pacing.bytes_per_second");
-
-    const std::string pacedAvioSource = repositoryFile("src/internal/graph/runtime/ffmpeg/FFmpegPacedAvio.cpp");
-    expectTextContains(ctx, pacedAvioSource, "pacedWritePacket");
-    expectTextContains(ctx, pacedAvioSource, "resetPacedWriteAvio");
-    expectTextContains(ctx, pacedAvioSource, "std::this_thread::sleep_until");
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::RtpOutput),
+              static_cast<std::size_t>(0));
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::ScheduledRtpSender),
+              static_cast<std::size_t>(2));
 }
 
 void testRealtimePlannerOwnsShortGopForRtpKeyFrameRecovery(TestContext& ctx)
@@ -3070,7 +3288,7 @@ void testDropNonKeyFramePushWaitsToPreserveKeyFrames(TestContext& ctx)
     exercise(blocking);
 }
 
-void testRealtimeMuxEdgesUseStreamSpecificPolicies(TestContext& ctx)
+void testSynchronizedSchedulerEdgesUseSharedBlockingPolicy(TestContext& ctx)
 {
     const auto graphResult = MediaRealtimeRtpTranscodeGraphBuilder::build(validRawRtpAudioVideoOptions());
     EXPECT_TRUE(ctx, graphResult);
@@ -3079,23 +3297,27 @@ void testRealtimeMuxEdgesUseStreamSpecificPolicies(TestContext& ctx)
     }
 
     const MediaGraph& graph = graphResult.value();
-    const MediaEdge* videoMuxEdge = findInputEdgeToNode(
+    const MediaEdge* videoSchedulerEdge = findInputEdgeToNode(
         graph,
-        "realtime.video.rtp.mux",
-        "packet",
+        "realtime.av_sync.output.scheduler",
+        "video",
         MediaStreamKind::Video,
         MediaEdgeKind::EncodedPacket);
-    const MediaEdge* audioMuxEdge = findInputEdgeToNodeWithPayload(
+    const MediaEdge* audioSchedulerEdge = findInputEdgeToNodeWithPayload(
         graph,
-        "realtime.audio.rtp.mux",
-        "packet",
+        "realtime.av_sync.output.scheduler",
+        "audio",
         MediaStreamKind::Audio,
         MediaPayloadKind::Packet);
-    EXPECT_TRUE(ctx, videoMuxEdge != nullptr);
-    EXPECT_TRUE(ctx, audioMuxEdge != nullptr);
-    if (videoMuxEdge && audioMuxEdge) {
-        EXPECT_EQ(ctx, videoMuxEdge->policy.queuePolicy.overflowPolicy, MediaQueueOverflowPolicy::DropNonKeyFrame);
-        EXPECT_EQ(ctx, audioMuxEdge->policy.queuePolicy.overflowPolicy, MediaQueueOverflowPolicy::DropOldest);
+    EXPECT_TRUE(ctx, videoSchedulerEdge != nullptr);
+    EXPECT_TRUE(ctx, audioSchedulerEdge != nullptr);
+    if (videoSchedulerEdge && audioSchedulerEdge) {
+        EXPECT_EQ(ctx, videoSchedulerEdge->policy.queuePolicy.overflowPolicy,
+                  MediaQueueOverflowPolicy::BlockProducer);
+        EXPECT_EQ(ctx, audioSchedulerEdge->policy.queuePolicy.overflowPolicy,
+                  MediaQueueOverflowPolicy::BlockProducer);
+        EXPECT_EQ(ctx, videoSchedulerEdge->policy.queuePolicy.capacity,
+                  audioSchedulerEdge->policy.queuePolicy.capacity);
     }
 }
 
@@ -3136,148 +3358,64 @@ void testSeparateRtpAudioVideoUsesSynchronizedInputRelease(TestContext& ctx)
                 findNodeByName(
                     graph, "realtime.av_sync.startup.release_extractor") !=
                     nullptr);
-    EXPECT_TRUE(ctx,
-                findEdgeByNames(graph,
-                                "realtime.av_sync.startup.release_extractor",
-                                "video",
-                                "realtime.video.transcode.decode",
-                                "packet") != nullptr);
-    EXPECT_TRUE(ctx,
-                findEdgeByNames(graph,
-                                "realtime.av_sync.startup.release_extractor",
-                                "audio",
-                                "realtime.audio.encode.decode",
-                                "packet") != nullptr);
+    const MediaEdge* releasedVideo = findEdgeByNames(
+        graph, "realtime.av_sync.startup.release_extractor", "video",
+        "realtime.video.transcode.decode", "packet");
+    const MediaEdge* releasedAudio = findEdgeByNames(
+        graph, "realtime.av_sync.startup.release_extractor", "audio",
+        "realtime.audio.encode.decode", "packet");
+    EXPECT_TRUE(ctx, releasedVideo != nullptr);
+    EXPECT_TRUE(ctx, releasedAudio != nullptr);
+    for (const MediaEdge* released : {releasedVideo, releasedAudio}) {
+        if (released == nullptr) continue;
+        EXPECT_TRUE(ctx, released->policy.queuePolicy.bounded);
+        EXPECT_EQ(ctx, released->policy.queuePolicy.orderingPolicy,
+                  MediaQueueOrderingPolicy::Fifo);
+        EXPECT_EQ(ctx, released->policy.queuePolicy.overflowPolicy,
+                  MediaQueueOverflowPolicy::BlockProducer);
+    }
 }
 
-void testStartBarrierKeepsLatestPreOpenPacket(TestContext& ctx)
+void testSynchronizedFramePoliciesAreStreamSpecific(TestContext& ctx)
 {
-    MediaGraph graph;
-    const MediaEdgePolicy policy = MediaGraphBuildSupport::blockingQueuePolicy(8);
+    auto plan = MediaRealtimeRtpTranscodePlanner::plan(
+        validRawRtpAudioVideoOptions());
+    EXPECT_TRUE(ctx, plan);
+    if (!plan) return;
+    const std::size_t plannedFrameCapacity = plan.value().queues.frame;
+    auto graph = MediaRealtimeRtpTranscodeGraphBuilder::build(
+        std::move(plan).value());
+    EXPECT_TRUE(ctx, graph);
+    if (!graph) return;
 
-    const MediaNodeId videoCodecSource = graph.addNode(MediaNodeKind::DebugDump, "test.video_codec_source");
-    const MediaNodeId videoPacketSource = graph.addNode(MediaNodeKind::DebugDump, "test.video_packet_source");
-    const MediaNodeId audioCodecSource = graph.addNode(MediaNodeKind::DebugDump, "test.audio_codec_source");
-    const MediaNodeId audioPacketSource = graph.addNode(MediaNodeKind::DebugDump, "test.audio_packet_source");
-    const MediaNodeId barrier = graph.addNode(MediaNodeKind::AvPacketStartBarrier, "test.av_start_barrier");
-    const MediaNodeId videoCodecSink = graph.addNode(MediaNodeKind::DebugDump, "test.video_codec_sink");
-    const MediaNodeId videoPacketSink = graph.addNode(MediaNodeKind::DebugDump, "test.video_packet_sink");
-    const MediaNodeId audioCodecSink = graph.addNode(MediaNodeKind::DebugDump, "test.audio_codec_sink");
-    const MediaNodeId audioPacketSink = graph.addNode(MediaNodeKind::DebugDump, "test.audio_packet_sink");
+    const MediaEdge* videoFrame = findEdgeByNames(
+        graph.value(), "realtime.video.transcode.decode", "frame",
+        "realtime.video.transcode.hwtransfer", "frame");
+    const MediaEdge* audioFrame = findEdgeByNames(
+        graph.value(), "realtime.audio.encode.decode", "frame",
+        "realtime.audio.encode.startup_trim", "frame");
+    const MediaEdge* preparedVideoFrame = findEdgeByNames(
+        graph.value(), "realtime.video.transcode.filter", "frame",
+        "realtime.video.transcode.encode", "frame");
+    EXPECT_TRUE(ctx, videoFrame != nullptr);
+    EXPECT_TRUE(ctx, audioFrame != nullptr);
+    EXPECT_TRUE(ctx, preparedVideoFrame != nullptr);
+    if (!videoFrame || !audioFrame || !preparedVideoFrame) return;
 
-    graph.setNodeOption(barrier, "av_start_barrier.expect_video", "1");
-    graph.setNodeOption(barrier, "av_start_barrier.expect_audio", "1");
-    graph.setNodeOption(barrier, "av_start_barrier.require_video_key_frame", "1");
-
-    graph.addOutputPort(videoCodecSource, "codec", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::Unknown);
-    graph.addOutputPort(videoPacketSource, "packet", MediaStreamKind::Video, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
-    graph.addOutputPort(audioCodecSource, "codec", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::Unknown);
-    graph.addOutputPort(audioPacketSource, "packet", MediaStreamKind::Audio, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
-
-    graph.addInputPort(barrier, "video_codec", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::Unknown);
-    graph.addInputPort(barrier, "video_packet", MediaStreamKind::Video, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
-    graph.addInputPort(barrier, "audio_codec", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::Unknown);
-    graph.addInputPort(barrier, "audio_packet", MediaStreamKind::Audio, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
-    graph.addOutputPort(barrier, "video_codec", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::Unknown);
-    graph.addOutputPort(barrier, "video_packet", MediaStreamKind::Video, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
-    graph.addOutputPort(barrier, "audio_codec", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::Unknown);
-    graph.addOutputPort(barrier, "audio_packet", MediaStreamKind::Audio, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
-
-    graph.addInputPort(videoCodecSink, "codec", MediaStreamKind::Video, MediaEdgeKind::Metadata, MediaPayloadKind::Unknown);
-    graph.addInputPort(videoPacketSink, "packet", MediaStreamKind::Video, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
-    graph.addInputPort(audioCodecSink, "codec", MediaStreamKind::Audio, MediaEdgeKind::Metadata, MediaPayloadKind::Unknown);
-    graph.addInputPort(audioPacketSink, "packet", MediaStreamKind::Audio, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
-
-    graph.connect(videoCodecSource, "codec", barrier, "video_codec", "test.video_codec -> barrier", policy);
-    graph.connect(videoPacketSource, "packet", barrier, "video_packet", "test.video_packet -> barrier", policy);
-    graph.connect(audioCodecSource, "codec", barrier, "audio_codec", "test.audio_codec -> barrier", policy);
-    graph.connect(audioPacketSource, "packet", barrier, "audio_packet", "test.audio_packet -> barrier", policy);
-    graph.connect(barrier, "video_codec", videoCodecSink, "codec", "test.barrier -> video_codec", policy);
-    graph.connect(barrier, "video_packet", videoPacketSink, "packet", "test.barrier -> video_packet", policy);
-    graph.connect(barrier, "audio_codec", audioCodecSink, "codec", "test.barrier -> audio_codec", policy);
-    graph.connect(barrier, "audio_packet", audioPacketSink, "packet", "test.barrier -> audio_packet", policy);
-
-    MediaGraphExecutionContext execution;
-    const auto compileStatus = execution.compile(graph);
-    EXPECT_TRUE(ctx, compileStatus);
-    if (!compileStatus) {
-        std::cerr << compileStatus.error().describe() << '\n';
-        return;
-    }
-
-    AvPacketStartBarrierNode node(barrier);
-    MediaChannel* audioInput = execution.findInputChannel(barrier, "audio_packet");
-    MediaChannel* videoInput = execution.findInputChannel(barrier, "video_packet");
-    MediaChannel* audioOutput = execution.findOutputChannel(barrier, "audio_packet");
-    MediaChannel* videoOutput = execution.findOutputChannel(barrier, "video_packet");
-    EXPECT_TRUE(ctx, audioInput != nullptr);
-    EXPECT_TRUE(ctx, videoInput != nullptr);
-    EXPECT_TRUE(ctx, audioOutput != nullptr);
-    EXPECT_TRUE(ctx, videoOutput != nullptr);
-    if (!audioInput || !videoInput || !audioOutput || !videoOutput) {
-        return;
-    }
-
-    auto earlyAudio = makePacketBuffer(true, 100, MediaStreamKind::Audio);
-    auto latestAudio = makePacketBuffer(true, 200, MediaStreamKind::Audio);
-    auto deltaVideo = makePacketBuffer(false, 250, MediaStreamKind::Video);
-    auto firstVideo = makePacketBuffer(true, 300, MediaStreamKind::Video);
-    EXPECT_TRUE(ctx, earlyAudio);
-    EXPECT_TRUE(ctx, latestAudio);
-    EXPECT_TRUE(ctx, deltaVideo);
-    EXPECT_TRUE(ctx, firstVideo);
-    if (!earlyAudio || !latestAudio || !deltaVideo || !firstVideo) {
-        return;
-    }
-
-    EXPECT_TRUE(ctx, audioInput->push(earlyAudio.value()));
-    auto earlyResult = node.process(execution);
-    EXPECT_TRUE(ctx, earlyResult);
-    if (earlyResult) EXPECT_EQ(ctx, earlyResult.value().state, MediaNodeProcessState::Progress);
-    MediaBufferRef output;
-    EXPECT_FALSE(ctx, audioOutput->tryPop(output));
-
-    EXPECT_TRUE(ctx, audioInput->push(latestAudio.value()));
-    auto latestResult = node.process(execution);
-    EXPECT_TRUE(ctx, latestResult);
-    if (latestResult) EXPECT_EQ(ctx, latestResult.value().state, MediaNodeProcessState::Progress);
-    EXPECT_FALSE(ctx, audioOutput->tryPop(output));
-
-    EXPECT_TRUE(ctx, videoInput->push(deltaVideo.value()));
-    auto deltaResult = node.process(execution);
-    EXPECT_TRUE(ctx, deltaResult);
-    if (deltaResult) EXPECT_EQ(ctx, deltaResult.value().state, MediaNodeProcessState::Progress);
-    EXPECT_FALSE(ctx, videoOutput->tryPop(output));
-    EXPECT_FALSE(ctx, audioOutput->tryPop(output));
-
-    EXPECT_TRUE(ctx, videoInput->push(firstVideo.value()));
-    EXPECT_TRUE(ctx, node.process(execution));
-
-    EXPECT_TRUE(ctx, videoOutput->tryPop(output));
-    if (output) {
-        EXPECT_EQ(ctx, output->pts(), static_cast<MediaTimeValue>(300));
-    }
-    EXPECT_TRUE(ctx, audioOutput->tryPop(output));
-    if (output) {
-        EXPECT_EQ(ctx, output->pts(), static_cast<MediaTimeValue>(200));
-    }
-
-    auto queuedVideo1 = makePacketBuffer(true, 400, MediaStreamKind::Video);
-    auto queuedVideo2 = makePacketBuffer(true, 500, MediaStreamKind::Video);
-    auto queuedVideo3 = makePacketBuffer(true, 600, MediaStreamKind::Video);
-    EXPECT_TRUE(ctx, queuedVideo1 && queuedVideo2 && queuedVideo3);
-    if (queuedVideo1 && queuedVideo2 && queuedVideo3) {
-        EXPECT_TRUE(ctx, videoInput->push(queuedVideo1.value()));
-        EXPECT_TRUE(ctx, videoInput->push(queuedVideo2.value()));
-        EXPECT_TRUE(ctx, videoInput->push(queuedVideo3.value()));
-        MediaGraphWorker worker(node, execution);
-        EXPECT_TRUE(ctx, worker.start());
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        EXPECT_EQ(ctx, videoInput->size(), static_cast<std::size_t>(0));
-        EXPECT_TRUE(ctx, worker.metrics().progress.load() >= static_cast<std::uint64_t>(3));
-        worker.requestStop();
-        worker.join();
-    }
+    EXPECT_TRUE(ctx, videoFrame->policy.queuePolicy.bounded);
+    EXPECT_EQ(ctx, videoFrame->policy.queuePolicy.capacity,
+              plannedFrameCapacity);
+    EXPECT_EQ(ctx, videoFrame->policy.queuePolicy.overflowPolicy,
+              MediaQueueOverflowPolicy::DropOldest);
+    EXPECT_TRUE(ctx, audioFrame->policy.queuePolicy.bounded);
+    EXPECT_EQ(ctx, audioFrame->policy.queuePolicy.capacity,
+              plannedFrameCapacity);
+    EXPECT_EQ(ctx, audioFrame->policy.queuePolicy.orderingPolicy,
+              MediaQueueOrderingPolicy::Fifo);
+    EXPECT_EQ(ctx, audioFrame->policy.queuePolicy.overflowPolicy,
+              MediaQueueOverflowPolicy::BlockProducer);
+    EXPECT_TRUE(ctx, MediaAtomicOutputPolicyContract::accepts(
+                         preparedVideoFrame->policy));
 }
 
 void testPacketStartGateOpensOnKeyFrame(TestContext& ctx)
@@ -3370,9 +3508,18 @@ void testBuildPlansMpegTsUdpMuxedOutputGraph(TestContext& ctx)
 
     const auto graphResult = MediaRealtimeRtpTranscodeGraphBuilder::build(
         std::move(planResult).value());
-    EXPECT_FALSE(ctx, graphResult);
-    if (!graphResult) {
-        EXPECT_EQ(ctx, graphResult.error().code, media::ErrorCode::Unsupported);
+    EXPECT_TRUE(ctx, graphResult);
+    if (graphResult) {
+        EXPECT_EQ(ctx,
+                  countNodesByKind(graphResult.value(),
+                                   MediaNodeKind::AvOutputScheduler),
+                  static_cast<std::size_t>(1));
+        EXPECT_EQ(ctx,
+                  countNodesByKind(graphResult.value(), MediaNodeKind::FileMux),
+                  static_cast<std::size_t>(1));
+        EXPECT_EQ(ctx,
+                  countNodesByKind(graphResult.value(), MediaNodeKind::RtpMux),
+                  static_cast<std::size_t>(0));
     }
 }
 
@@ -3880,7 +4027,7 @@ MediaPreparedRealtimeInput makePreparedInputForBinding(TestContext& ctx)
 void testPreparedRealtimeScannerInvokesInjectedOpenerOnce(TestContext& ctx)
 {
     int openCount = 0;
-    MediaPipelinePlannerOptions options(false, false, false, true, false, false);
+    MediaPipelinePlannerOptions options(false, false, true, false, false);
     auto scanned = MediaPipelineCapabilityScanner::prepareRealtimeInput(
         sampleVideoPath(), options, false,
         [&openCount](const std::string& url, AVDictionary** inputOptions)
@@ -4030,7 +4177,7 @@ void testEmptyGenericOpenerIsRejected(TestContext& ctx)
     if (!preflight) EXPECT_EQ(ctx, preflight.error().code, ::media::ErrorCode::InvalidArgument);
 }
 
-void testMpegTsPreflightKeepsTaggedInputAndBuilderRejectsUnassembledSync(TestContext& ctx)
+void testMpegTsPreflightBuildsTaggedSynchronizedExecutable(TestContext& ctx)
 {
     auto source = LocalMpegTsUdpSource::start();
     EXPECT_TRUE(ctx, source);
@@ -4060,32 +4207,20 @@ void testMpegTsPreflightKeepsTaggedInputAndBuilderRejectsUnassembledSync(TestCon
     }
     auto executable = MediaRealtimeRtpTranscodeGraphBuilder::buildExecutable(
         std::move(preflight).value());
-    EXPECT_FALSE(ctx, executable);
+    EXPECT_TRUE(ctx, executable);
     if (!executable) {
-        EXPECT_EQ(ctx, executable.error().code, media::ErrorCode::Unsupported);
-        expectTextContains(
-            ctx, executable.error().describe(),
-            "synchronized realtime execution requires scheduled A/V production adapters");
+        std::cerr << executable.error().describe() << '\n';
+        return;
     }
-}
-
-void testSynchronizedBuildExecutableRejectsMissingProductionAssembly(
-    TestContext& ctx)
-{
-    auto plan = MediaRealtimeRtpTranscodePlanner::plan(
-        validRawRtpAudioVideoOptions());
-    EXPECT_TRUE(ctx, plan);
-    if (!plan) return;
-    EXPECT_TRUE(ctx, plan.value().avSyncRuntime.has_value());
-
-    MediaRealtimeTranscodePreflight preflight{
-        std::move(plan).value(), std::nullopt};
-    auto executable = MediaRealtimeRtpTranscodeGraphBuilder::buildExecutable(
-        std::move(preflight));
-    EXPECT_FALSE(ctx, executable);
-    if (!executable) {
-        EXPECT_EQ(ctx, executable.error().code, media::ErrorCode::Unsupported);
+    EXPECT_TRUE(ctx, executable.value().avSyncBinding.has_value());
+    EXPECT_EQ(ctx, executable.value().inputBindings.size(),
+              static_cast<std::size_t>(1));
+    if (!executable.value().inputBindings.empty()) {
+        EXPECT_EQ(ctx, executable.value().inputBindings.front().expectedKind,
+                  MediaPreparedRealtimeInputKind::MpegTs);
     }
+    MediaGraphRuntime runtime;
+    EXPECT_TRUE(ctx, runtime.compile(std::move(executable).value()));
 }
 
 void testMpegTsPreflightPropagatesSessionOpenFailure(TestContext& ctx)
@@ -4120,11 +4255,16 @@ int main(int argc, char** argv)
     TestContext ctx;
 
     if (argc == 2 &&
+        std::string_view(argv[1]) == "--task10-frame-policies") {
+        testSynchronizedFramePoliciesAreStreamSpecific(ctx);
+        return ctx.failures == 0 ? 0 : 1;
+    }
+    if (argc == 2 &&
         std::string_view(argv[1]) == "--task5-av-sync-input") {
         testSynchronizedRtpGraphAssemblesProtocolNeutralInputSegment(ctx);
-        testSynchronizedInputGraphCompilerRemainsFailClosedUntilOutputAssembly(
-            ctx);
+        testSynchronizedRtpExecutableOwnsCompleteProductionAssembly(ctx);
         testSynchronizedMpegTsSegmentUsesSharedProtocolNeutralStartupChain(ctx);
+        testSynchronizedMpegTsGraphOwnsCompleteProductionAssembly(ctx);
         testSynchronizedInputSegmentRejectsMissingProtocolSourcePort(ctx);
         testVideoOnlyRealtimeInputKeepsLegacyPacketStartGateOutsideSyncSegment(
             ctx);
@@ -4141,7 +4281,7 @@ int main(int argc, char** argv)
     }
     if (argc != 1) {
         std::cerr << "usage: media_transcode_integration_tests.exe "
-                     "[--task5-av-sync-input]\n";
+                     "[--task5-av-sync-input|--task10-frame-policies]\n";
         return 2;
     }
 
@@ -4153,8 +4293,7 @@ int main(int argc, char** argv)
     testRuntimeRejectsWrongPreparedBindingKindBeforeEmission(ctx);
     testInvalidPreflightDoesNotInvokeOpener(ctx);
     testEmptyGenericOpenerIsRejected(ctx);
-    testMpegTsPreflightKeepsTaggedInputAndBuilderRejectsUnassembledSync(ctx);
-    testSynchronizedBuildExecutableRejectsMissingProductionAssembly(ctx);
+    testMpegTsPreflightBuildsTaggedSynchronizedExecutable(ctx);
     testMpegTsPreflightPropagatesSessionOpenFailure(ctx);
     testUrlAndMpegTsPurePlanApisRequirePreparedPreflight(ctx);
     testValidationRejectsMissingInput(ctx);
@@ -4190,8 +4329,9 @@ int main(int argc, char** argv)
     testRealtimePlanEmbedsValidatedAvSyncContract(ctx);
     testRawRtpAudioVideoGraphUsesIsolatedInputs(ctx);
     testSynchronizedRtpGraphAssemblesProtocolNeutralInputSegment(ctx);
-    testSynchronizedInputGraphCompilerRemainsFailClosedUntilOutputAssembly(ctx);
+    testSynchronizedRtpExecutableOwnsCompleteProductionAssembly(ctx);
     testSynchronizedMpegTsSegmentUsesSharedProtocolNeutralStartupChain(ctx);
+    testSynchronizedMpegTsGraphOwnsCompleteProductionAssembly(ctx);
     testSynchronizedInputSegmentRejectsMissingProtocolSourcePort(ctx);
     testVideoOnlyRealtimeInputKeepsLegacyPacketStartGateOutsideSyncSegment(ctx);
     testSeparateRtpH264OutputRequestsGlobalHeader(ctx);
@@ -4200,8 +4340,10 @@ int main(int argc, char** argv)
     testRawRtpInheritsSourceCodecsWhenTranscodeCodecsAreOmitted(ctx);
     testRawRtpMatchingAudioPlansSynchronizedFrameTranscode(ctx);
     testRawRtpVideoPacketCopySkipsContainerNormalization(ctx);
+    testSynchronizedRawRtpRejectsIncompleteMutatedVideoCopyPlan(ctx);
     testRawRtpRejectsUnsupportedOpusOutputAndUnboundedOpusInputTiming(ctx);
     testScheduledRtpPacketizationRejectsUnsupportedCodecAsUnsupported(ctx);
+    testScheduledRtpRequiresAuthoritativeAnnexBEncoderLayout(ctx);
     testRealtimePlanOwnsThreadingPolicy(ctx);
     testRawRtpRejectsMissingVideoBitrate(ctx);
     testRawRtpRejectsZeroVideoBitrate(ctx);
@@ -4233,17 +4375,17 @@ int main(int argc, char** argv)
     testSdpWriterOrdersSeparateRtpContextsByMediaType(ctx);
     testGraphFixedSleepsAreClassified(ctx);
     testRealtimeWorkerUsesEventDrivenWait(ctx);
-    testSynchronizedRtpMuxLeavesLegacyPacingInert(ctx);
-    testSynchronizedRtpOutputLeavesLegacyWritePacingInert(ctx);
+    testSynchronizedRtpGraphExcludesLegacyMuxPacingAuthority(ctx);
+    testSynchronizedRtpGraphExcludesLegacyWritePacingAuthority(ctx);
     testRealtimePlannerOwnsShortGopForRtpKeyFrameRecovery(ctx);
     testPacketKeyFrameFlagMapsToMediaBuffer(ctx);
     testRealtimeQueueDropPoliciesAreNormalBackpressure(ctx);
     testDropNonKeyFramePreservesQueuedKeyFrames(ctx);
     testDropNonKeyFrameRejectsKeyFrameWhenNoNonKeyCanBeDropped(ctx);
     testDropNonKeyFramePushWaitsToPreserveKeyFrames(ctx);
-    testRealtimeMuxEdgesUseStreamSpecificPolicies(ctx);
+    testSynchronizedSchedulerEdgesUseSharedBlockingPolicy(ctx);
     testSeparateRtpAudioVideoUsesSynchronizedInputRelease(ctx);
-    testStartBarrierKeepsLatestPreOpenPacket(ctx);
+    testSynchronizedFramePoliciesAreStreamSpecific(ctx);
     testPacketStartGateOpensOnKeyFrame(ctx);
     testBuildPlansMpegTsUdpMuxedOutputGraph(ctx);
     testRealtimeBuilderDoesNotOwnPlannerDecisions(ctx);

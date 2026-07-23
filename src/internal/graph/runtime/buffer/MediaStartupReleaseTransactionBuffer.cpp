@@ -2,8 +2,14 @@
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 
 #include <utility>
+#include <atomic>
 
 namespace media::ffmpeg::graph {
+namespace {
+
+std::atomic_uint64_t nextReleaseIdentity{1};
+
+} // namespace
 
 ::media::Result<MediaBufferRef> MediaStartupReleaseTransactionBuffer::create(
     MediaBufferRef release)
@@ -26,7 +32,32 @@ namespace media::ffmpeg::graph {
     return ::media::Result<MediaBufferRef>::success(MediaBufferRef(
         new MediaStartupReleaseTransactionBuffer(
             MediaStartupReleaseTransactionKind::Release,
-            std::move(release))));
+            std::move(release), nextReleaseIdentity.fetch_add(
+                1, std::memory_order_relaxed))));
+}
+
+::media::Result<MediaBufferRef>
+MediaStartupReleaseTransactionBuffer::reanchor(
+    const MediaStartupReleaseTransactionBuffer& transaction,
+    MediaPlaybackEpoch epoch,
+    MediaAudioPlaybackOrigin audioOrigin)
+{
+    const auto* release = transaction.release();
+    if (!release || transaction.releaseIdentity() == 0 ||
+        epoch.sourceStart != release->epoch().sourceStart ||
+        epoch.generation != release->epoch().generation) {
+        return ::media::Result<MediaBufferRef>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Release reanchor requires the same source epoch and identity"));
+    }
+    auto rebound = MediaAvStartupReleaseBuffer::create(
+        release->groupKey(), release->releaseKind(), epoch, audioOrigin,
+        release->video(), release->audio());
+    if (!rebound) return rebound;
+    return ::media::Result<MediaBufferRef>::success(MediaBufferRef(
+        new MediaStartupReleaseTransactionBuffer(
+            MediaStartupReleaseTransactionKind::Release,
+            std::move(rebound).value(), transaction.releaseIdentity())));
 }
 
 ::media::Result<MediaBufferRef>
@@ -41,14 +72,16 @@ MediaStartupReleaseTransactionBuffer::createControl(MediaBufferRef control)
     return ::media::Result<MediaBufferRef>::success(MediaBufferRef(
         new MediaStartupReleaseTransactionBuffer(
             MediaStartupReleaseTransactionKind::Control,
-            std::move(control))));
+            std::move(control), 0)));
 }
 
 MediaStartupReleaseTransactionBuffer::MediaStartupReleaseTransactionBuffer(
     MediaStartupReleaseTransactionKind transactionKind,
-    MediaBufferRef payload)
+    MediaBufferRef payload,
+    std::uint64_t releaseIdentity)
     : m_transactionKind(transactionKind)
     , m_payload(std::move(payload))
+    , m_releaseIdentity(releaseIdentity)
 {
     setStreamKind(MediaStreamKind::Metadata);
     setPayloadKind(MediaPayloadKind::GraphEvent);
@@ -85,6 +118,12 @@ MediaStartupReleaseTransactionBuffer::control() const noexcept
     return m_transactionKind == MediaStartupReleaseTransactionKind::Control
         ? dynamic_cast<const MediaControlBuffer*>(m_payload.get())
         : nullptr;
+}
+
+std::uint64_t
+MediaStartupReleaseTransactionBuffer::releaseIdentity() const noexcept
+{
+    return m_releaseIdentity;
 }
 
 } // namespace media::ffmpeg::graph

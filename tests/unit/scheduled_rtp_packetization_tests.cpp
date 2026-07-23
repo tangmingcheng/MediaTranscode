@@ -1,6 +1,9 @@
 #include "common/TestAssert.h"
 
 #include "internal/graph/nodes/mux/ScheduledRtpMuxFfmpegSession.h"
+#include "internal/graph/nodes/output/MediaScheduledRtpCodecParametersMaterializer.h"
+#include "internal/graph/planner/realtime/MediaScheduledRtpPacketizationPlan.h"
+#include "internal/graph/protocol/sdp/MediaAacLatmSdpCodecDescriptionFactory.h"
 #include "internal/graph/protocol/rtp/MediaRtpDatagramRewriter.h"
 #include "internal/graph/protocol/rtp/MediaRtpOutputClockMapper.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegDatagramWriteAvio.h"
@@ -8,12 +11,14 @@
 
 extern "C" {
 #include <libavcodec/codec_par.h>
+#include <libavcodec/avcodec.h>
 #include <libavcodec/packet.h>
 #include <libavformat/avio.h>
 #include <libavutil/mem.h>
 }
 
 #include <array>
+#include <algorithm>
 #include <cstdint>
 #include <span>
 #include <string>
@@ -25,6 +30,109 @@ using namespace media::ffmpeg::graph;
 using media_transcode::test::TestContext;
 
 namespace {
+
+::media::ffmpeg::CodecContextPtr materializerContext(
+    MediaStreamKind stream,
+    AVRational timeBase,
+    std::span<const std::uint8_t> extradata)
+{
+    auto context = ::media::ffmpeg::makeCodecContext(nullptr);
+    if (!context) return {};
+    const bool video = stream == MediaStreamKind::Video;
+    context->codec_type = video ? AVMEDIA_TYPE_VIDEO : AVMEDIA_TYPE_AUDIO;
+    context->codec_id = video ? AV_CODEC_ID_H264 : AV_CODEC_ID_AAC;
+    context->time_base = timeBase;
+    context->extradata = static_cast<std::uint8_t*>(
+        av_mallocz(extradata.size() + AV_INPUT_BUFFER_PADDING_SIZE));
+    if (!context->extradata) return {};
+    std::copy(extradata.begin(), extradata.end(), context->extradata);
+    context->extradata_size = static_cast<int>(extradata.size());
+    if (video) {
+        context->width = 1920;
+        context->height = 1080;
+    } else {
+        context->sample_rate = 48'000;
+        context->frame_size = 1024;
+        av_channel_layout_default(&context->ch_layout, 2);
+    }
+    return context;
+}
+
+void testScheduledRtpCodecParametersSeparateEncoderAndRtpTimeBases(
+    TestContext& ctx)
+{
+    const std::array<std::uint8_t, 8> annexB{
+        0, 0, 0, 1, 0x67, 0x64, 0, 0x1f};
+    auto context = materializerContext(
+        MediaStreamKind::Video, AVRational{1, 30}, annexB);
+    auto plan = MediaScheduledRtpPacketizationPlan::create(
+        MediaStreamKind::Video, "h264", 1, 90'000, 96, 1200);
+    EXPECT_TRUE(ctx, context != nullptr && plan);
+    if (!context || !plan) return;
+    auto parameters = MediaScheduledRtpCodecParametersMaterializer::materialize(
+        *context, plan.value());
+    EXPECT_TRUE(ctx, parameters);
+    if (parameters) {
+        EXPECT_EQ(ctx, parameters.value()->codec_id, AV_CODEC_ID_H264);
+    }
+
+    context->codec_id = AV_CODEC_ID_HEVC;
+    EXPECT_FALSE(ctx,
+                 MediaScheduledRtpCodecParametersMaterializer::materialize(
+                     *context, plan.value()));
+    context->codec_id = AV_CODEC_ID_H264;
+    context->time_base = AVRational{0, 1};
+    EXPECT_FALSE(ctx,
+                 MediaScheduledRtpCodecParametersMaterializer::materialize(
+                     *context, plan.value()));
+}
+
+void testScheduledRtpCodecParametersCanonicalizeNativeAacAsc(
+    TestContext& ctx)
+{
+    const std::array<std::uint8_t, 5> nativeAsc{
+        0x11, 0x90, 0x56, 0xE5, 0x00};
+    auto context = materializerContext(
+        MediaStreamKind::Audio, AVRational{1, 48'000}, nativeAsc);
+    auto plan = MediaScheduledRtpPacketizationPlan::create(
+        MediaStreamKind::Audio, "aac", 1, 48'000, 97, 1200, 1024);
+    EXPECT_TRUE(ctx, context != nullptr && plan);
+    if (!context || !plan) return;
+    auto parameters = MediaScheduledRtpCodecParametersMaterializer::materialize(
+        *context, plan.value());
+    EXPECT_TRUE(ctx, parameters);
+    if (parameters) {
+        EXPECT_EQ(ctx, parameters.value()->extradata_size, 2);
+        EXPECT_EQ(ctx, parameters.value()->extradata[0],
+                  static_cast<std::uint8_t>(0x11));
+        EXPECT_EQ(ctx, parameters.value()->extradata[1],
+                  static_cast<std::uint8_t>(0x90));
+        EXPECT_TRUE(ctx,
+                    MediaAacLatmSdpCodecDescriptionFactory::create(
+                        *parameters.value()));
+        EXPECT_TRUE(ctx,
+                    ScheduledRtpMuxStreamConfig::create(
+                        MediaStreamKind::Audio, *parameters.value(),
+                        AVRational{1, 48'000},
+                        MediaScheduledRtpPacketizationMode::AacLatm,
+                        97, 0x10203040u, 1200));
+    }
+
+    context->extradata[4] = 0x80;
+    EXPECT_FALSE(ctx,
+                 MediaScheduledRtpCodecParametersMaterializer::materialize(
+                     *context, plan.value()));
+    context->extradata[4] = 0x00;
+    context->sample_rate = 44'100;
+    EXPECT_FALSE(ctx,
+                 MediaScheduledRtpCodecParametersMaterializer::materialize(
+                     *context, plan.value()));
+    context->sample_rate = 48'000;
+    context->frame_size = 960;
+    EXPECT_FALSE(ctx,
+                 MediaScheduledRtpCodecParametersMaterializer::materialize(
+                     *context, plan.value()));
+}
 
 static_assert(!std::is_default_constructible_v<FFmpegDatagramWriteAvioConfig>);
 static_assert(!std::is_default_constructible_v<MediaRtpDatagramRewriteParameters>);
@@ -709,6 +817,8 @@ void testScheduledMuxPropagatesSinkFailure(TestContext& ctx)
 
 void runScheduledRtpPacketizationTests(TestContext& ctx)
 {
+    testScheduledRtpCodecParametersSeparateEncoderAndRtpTimeBases(ctx);
+    testScheduledRtpCodecParametersCanonicalizeNativeAacAsc(ctx);
     testDatagramWriteAvioLifecycleAndFailure(ctx);
     testRtpDatagramRewritePreservesStructure(ctx);
     testScheduledMuxRealPacketization(ctx);

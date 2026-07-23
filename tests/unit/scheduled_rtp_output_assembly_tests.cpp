@@ -118,7 +118,8 @@ void testBuilderAndCompilerInjectExactRegisteredGroup(TestContext& ctx)
     executable.graph = std::move(fixture.graph);
     executable.avSyncBinding.emplace(MediaAvSyncRuntimeBinding{
         runtimePlan.groupKey, runtimePlan.synchronization,
-        runtimePlan.transition});
+        runtimePlan.transition,
+        MediaAvSyncBindingAssemblyMode::ProductionProtocolOutput});
     EXPECT_TRUE(ctx, runtime.compile(std::move(executable)));
     EXPECT_TRUE(ctx, runtime.registerDefaultRuntimeNodes());
     auto exactGroup = runtime.context().findAvSyncGroup(runtimePlan.groupKey);

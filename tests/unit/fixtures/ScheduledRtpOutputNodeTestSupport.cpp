@@ -173,7 +173,8 @@ ActiveGroupFixture activeGroup(
     MediaRealtimeExecutableGraph executable;
     executable.graph = std::move(graph);
     executable.avSyncBinding.emplace(MediaAvSyncRuntimeBinding{
-        plan.groupKey, plan.synchronization, plan.transition});
+        plan.groupKey, plan.synchronization, plan.transition,
+        MediaAvSyncBindingAssemblyMode::ComponentCore});
     EXPECT_TRUE(ctx, runtime->compile(std::move(executable)));
     EXPECT_TRUE(ctx, runtime->registerDefaultRuntimeNodes());
     EXPECT_TRUE(ctx, activateInitialThroughRelease(
@@ -323,8 +324,8 @@ FakePacketizerFactory::create(
     }
     return MediaScheduledAccessUnit::create(
         MediaScheduledAccessUnitParameters{
-            std::move(packet).value(), stream, presentation, dispatch.value(),
-            presentation, dispatch.value(), dispatch.value(), milliseconds(10), 1,
+            std::move(packet).value(), stream, presentation, presentation,
+            presentation, presentation, dispatch.value(), milliseconds(10), 1,
             MediaSourceAccessUnitSequence(sequence), std::nullopt,
             std::nullopt,
             stream == MediaScheduledStream::Video

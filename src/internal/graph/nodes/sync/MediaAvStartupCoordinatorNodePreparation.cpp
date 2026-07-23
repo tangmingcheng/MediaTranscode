@@ -43,9 +43,11 @@ bool validEventPort(const MediaPort* port, MediaPortDirection direction) noexcep
 
 MediaAvStartupCoordinatorNodePreparation::MediaAvStartupCoordinatorNodePreparation(
     std::unique_ptr<MediaAvStartupCoordinator> coordinator,
-    std::shared_ptr<MediaAvStartupGenerationState> generationState)
+    std::shared_ptr<MediaAvStartupGenerationState> generationState,
+    int outputAudioSampleRate)
     : m_coordinator(std::move(coordinator))
     , m_generationState(std::move(generationState))
+    , m_outputAudioSampleRate(outputAudioSampleRate)
 {
 }
 
@@ -82,6 +84,9 @@ prepareMediaAvStartupCoordinatorNode(const MediaNode& node)
                                                "av_startup.maximum_gap_ns");
     auto lead = requiredPositiveInt64NodeOption(options, "MediaAvStartupCoordinatorNode",
                                                 "av_startup.output_lead_ns");
+    auto outputAudioSampleRate = requiredPositiveIntNodeOption(
+        options, "MediaAvStartupCoordinatorNode",
+        "av_startup.output_audio_sample_rate");
     auto videoCapacity = requiredCapacity(options, "av_startup.video_capacity");
     auto audioCapacity = requiredCapacity(options, "av_startup.audio_capacity");
     auto videoBytes = requiredPositiveInt64NodeOption(
@@ -111,6 +116,7 @@ prepareMediaAvStartupCoordinatorNode(const MediaNode& node)
     if (!skew) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(skew.error());
     if (!gap) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(gap.error());
     if (!lead) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(lead.error());
+    if (!outputAudioSampleRate) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(outputAudioSampleRate.error());
     if (!videoCapacity) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(videoCapacity.error());
     if (!audioCapacity) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(audioCapacity.error());
     if (!videoBytes) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(videoBytes.error());
@@ -165,7 +171,8 @@ prepareMediaAvStartupCoordinatorNode(const MediaNode& node)
     return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::success(
         MediaAvStartupCoordinatorNodePreparation(
             std::make_unique<MediaAvStartupCoordinator>(std::move(created).value()),
-            std::make_shared<MediaAvStartupGenerationState>(std::move(groupKey))));
+            std::make_shared<MediaAvStartupGenerationState>(std::move(groupKey)),
+            outputAudioSampleRate.value()));
 }
 
 } // namespace media::ffmpeg::graph

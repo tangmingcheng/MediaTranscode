@@ -187,7 +187,9 @@ namespace media::ffmpeg::graph {
             *runtime.synchronization.audioServo.outputSampleRate) {
         return invalid("audio correction reachability");
     }
-    if (outer.videoOutput.writePacingEnabled ||
+    if (outer.videoPacketCopyNormalizationRequired ||
+        outer.audioPacketNormalizationRequired ||
+        outer.videoOutput.writePacingEnabled ||
         outer.videoOutput.writePacingBytesPerSecond != 0 ||
         outer.videoOutput.writePacingBurstBytes != 0 ||
         outer.audioOutput.writePacingEnabled ||
@@ -199,7 +201,7 @@ namespace media::ffmpeg::graph {
         outer.audioMux.startupDelayMs != 0 ||
         outer.avStartBarrier.expectVideo || outer.avStartBarrier.expectAudio ||
         outer.avStartBarrier.requireVideoKeyFrame) {
-        return invalid("legacy pacing or barrier authority");
+        return invalid("legacy normalization, pacing, or barrier authority");
     }
 
     if (*runtime.synchronization.topology ==
@@ -376,22 +378,34 @@ namespace media::ffmpeg::graph {
             outer.outputLayout !=
                 RealtimeOutputStreamLayout::MuxedTransportStream ||
             runtime.outputAdapter != MediaAvSyncOutputAdapterKind::ProjectMpegTs ||
+            !outer.videoParameters.globalHeader ||
+            !*outer.videoParameters.globalHeader ||
             !std::holds_alternative<MediaProjectMpegTsRuntimeOutputPlan>(
                 runtime.protocolOutput) ||
             !std::holds_alternative<MediaMpegTsInputClockAssemblyPlan>(
                 assembly.inputClock) ||
             !std::holds_alternative<MediaPacketDurationPlan>(
                 assembly.video.duration) ||
-            !std::holds_alternative<MediaPacketDurationPlan>(
+            !std::holds_alternative<MediaPlannedAudioSamplesDurationPlan>(
                 assembly.audio.duration) ||
             !std::get<MediaPacketDurationPlan>(assembly.video.duration)
                  .requirePositiveDuration ||
-            !std::get<MediaPacketDurationPlan>(assembly.audio.duration)
-                 .requirePositiveDuration ||
             runtime.planningFacts.inputVideoClockRate ||
-            runtime.planningFacts.inputAudioSamplesPerAccessUnit ||
             !runtime.planningFacts.inputAudioSampleRate ||
             *runtime.planningFacts.inputAudioSampleRate <= 0 ||
+            !runtime.planningFacts.inputAudioSamplesPerAccessUnit ||
+            *runtime.planningFacts.inputAudioSamplesPerAccessUnit == 0 ||
+            !outer.audioPlan.selectedDecoder ||
+            outer.audioPlan.selectedDecoder->inputSampleRate !=
+                *runtime.planningFacts.inputAudioSampleRate ||
+            outer.audioPlan.selectedDecoder->maximumOutputBlockInputSamples !=
+                *runtime.planningFacts.inputAudioSamplesPerAccessUnit ||
+            std::get<MediaPlannedAudioSamplesDurationPlan>(
+                assembly.audio.duration).sampleRate !=
+                *runtime.planningFacts.inputAudioSampleRate ||
+            std::get<MediaPlannedAudioSamplesDurationPlan>(
+                assembly.audio.duration).samplesPerAccessUnit !=
+                *runtime.planningFacts.inputAudioSamplesPerAccessUnit ||
             !outer.input.mpegTs ||
             outer.input.mpegTs->initialSourceGeneration !=
                 MediaFirstLockedSourceGeneration ||

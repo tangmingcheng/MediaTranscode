@@ -1,6 +1,7 @@
 #include "internal/graph/nodes/audio/AudioEncodeNode.h"
 
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
@@ -168,6 +169,10 @@ void AudioEncodeNode::resetRuntimeState() noexcept
 {
     auto lineageLock = m_lineageState->lock();
     m_encoderConfigEmitted = false;
+    m_queuedFrameBeforeCodecTraced = false;
+    m_codecBoundTraced = false;
+    m_firstFrameTraced = false;
+    m_firstPacketTraced = false;
     m_lineageState->resetForLifecycle();
 }
 
@@ -189,6 +194,16 @@ void AudioEncodeNode::resetRuntimeState() noexcept
     }
 
     if (!hasCodecContext()) {
+        auto* frameInput = context.findInputChannel(nodeId(), "frame");
+        if (!m_queuedFrameBeforeCodecTraced && frameInput &&
+            frameInput->size() != 0) {
+            m_queuedFrameBeforeCodecTraced = true;
+            mediaGraphDiagnosticLog(
+                MediaGraphDiagnosticLevel::State,
+                MediaGraphDiagnosticPhase::RuntimeNode,
+                std::string("audio_encode_trace stage=frame_waiting_for_codec queued=") +
+                    std::to_string(frameInput->size()));
+        }
         auto codecInput = tryPopInputOptional(context, "codec");
         if (!codecInput) {
             return ::media::Result<MediaNodeProcessResult>::failure(codecInput.error());
@@ -201,6 +216,13 @@ void AudioEncodeNode::resetRuntimeState() noexcept
                 ::media::ErrorInfo::invalidArgument("AudioEncodeNode expected codec context on codec input"));
         }
         m_lineageState->bindCodec(*codecInput.value(), codecContext());
+        if (!m_codecBoundTraced) {
+            m_codecBoundTraced = true;
+            mediaGraphDiagnosticLog(
+                MediaGraphDiagnosticLevel::State,
+                MediaGraphDiagnosticPhase::RuntimeNode,
+                "audio_encode_trace stage=codec_bound");
+        }
         if (codecContext()->frame_size > 0) {
             auto queueStatus = m_frameQueue.configure(*codecContext());
             if (!queueStatus) {
@@ -250,6 +272,13 @@ void AudioEncodeNode::resetRuntimeState() noexcept
     }
 
     MediaBufferRef media = buffer;
+    if (!m_firstFrameTraced) {
+        m_firstFrameTraced = true;
+        mediaGraphDiagnosticLog(
+            MediaGraphDiagnosticLevel::State,
+            MediaGraphDiagnosticPhase::RuntimeNode,
+            "audio_encode_trace stage=first_frame");
+    }
     std::vector<MediaAudioIntervalFragment> fragments;
     std::optional<MediaAudioPlaybackOrigin> incomingOrigin;
     const auto* bound = dynamic_cast<const MediaBoundCanonicalAudioBuffer*>(buffer.get());
@@ -385,6 +414,10 @@ void AudioEncodeNode::resetRuntimeState() noexcept
         return status;
     }
     m_encoderConfigEmitted = true;
+    mediaGraphDiagnosticLog(
+        MediaGraphDiagnosticLevel::State,
+        MediaGraphDiagnosticPhase::RuntimeNode,
+        "audio_encode_trace stage=encoder_config_emitted");
     return ::media::Status::success();
 }
 
@@ -426,6 +459,13 @@ void AudioEncodeNode::resetRuntimeState() noexcept
             m_submittedFragments.pop_front();
             if (!encoded) return ::media::Result<bool>::failure(encoded.error());
             output = std::move(encoded).value();
+        }
+        if (!m_firstPacketTraced) {
+            m_firstPacketTraced = true;
+            mediaGraphDiagnosticLog(
+                MediaGraphDiagnosticLevel::State,
+                MediaGraphDiagnosticPhase::RuntimeNode,
+                "audio_encode_trace stage=first_packet");
         }
         auto pushStatus = emitOutput(context, "packet", output);
         if (!pushStatus) {

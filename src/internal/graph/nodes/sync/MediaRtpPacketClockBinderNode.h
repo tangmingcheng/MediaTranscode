@@ -55,6 +55,7 @@ private:
     std::size_t m_acquiringCapacity = 0;
     int m_durationClockRate = 0;
     bool m_configured = false;
+    bool m_keyTraceEmitted = false;
 };
 
 } // namespace media::ffmpeg::graph

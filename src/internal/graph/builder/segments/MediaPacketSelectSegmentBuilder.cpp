@@ -3,6 +3,40 @@
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
 
 namespace media::ffmpeg::graph {
+namespace {
+
+::media::Result<void> addPlannedOutput(
+    MediaGraph& graph,
+    MediaNodeId split,
+    const char* name,
+    MediaStreamKind streamKind,
+    const PacketSelectOutputPlan& plan)
+{
+    constexpr const char* owner = "MediaPacketSelectSegmentBuilder";
+    if (plan.sourceStreamIndex < 0 ||
+        (plan.edgeKind != MediaEdgeKind::InputPacket &&
+         plan.edgeKind != MediaEdgeKind::EncodedPacket)) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MediaPacketSelectSegmentBuilder requires complete output plans"));
+    }
+    const MediaPortId port = graph.addOutputPort(
+        split, name, streamKind, plan.edgeKind, MediaPayloadKind::Packet,
+        false, true);
+    if (auto status = MediaGraphBuildSupport::requirePort(port, owner, name); !status) {
+        return status;
+    }
+    if (!graph.setPortFormatDescriptor(
+            port, MediaGraphBuildSupport::streamIndexDescriptor(
+                      streamKind, plan.sourceStreamIndex))) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::internalError(
+                "MediaPacketSelectSegmentBuilder failed to set output descriptor"));
+    }
+    return ::media::Result<void>::success();
+}
+
+} // namespace
 
 ::media::Result<PacketSelectSegment> MediaPacketSelectSegmentBuilder::buildDemuxStreamSplit(
     MediaGraph& graph,
@@ -16,6 +50,11 @@ namespace media::ffmpeg::graph {
     if (options.queues.metadata == 0 || options.queues.packet == 0) {
         return ::media::Result<PacketSelectSegment>::failure(
             ::media::ErrorInfo::invalidArgument("MediaPacketSelectSegmentBuilder queue capacities must be greater than 0"));
+    }
+    if (!options.videoOutput && !options.audioOutput) {
+        return ::media::Result<PacketSelectSegment>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MediaPacketSelectSegmentBuilder requires at least one explicit output plan"));
     }
 
     PacketSelectSegment segment;
@@ -36,6 +75,22 @@ namespace media::ffmpeg::graph {
                                                                   true,
                                                                   false); !status) {
         return ::media::Result<PacketSelectSegment>::failure(status.error());
+    }
+    if (options.videoOutput) {
+        if (auto status = addPlannedOutput(
+                graph, segment.split, "video", MediaStreamKind::Video,
+                *options.videoOutput); !status) {
+            return ::media::Result<PacketSelectSegment>::failure(status.error());
+        }
+        segment.videoPacket = MediaEndpoint{segment.split, "video"};
+    }
+    if (options.audioOutput) {
+        if (auto status = addPlannedOutput(
+                graph, segment.split, "audio", MediaStreamKind::Audio,
+                *options.audioOutput); !status) {
+            return ::media::Result<PacketSelectSegment>::failure(status.error());
+        }
+        segment.audioPacket = MediaEndpoint{segment.split, "audio"};
     }
     if (auto status = MediaGraphBuildSupport::addOutputPortChecked(graph,
                                                                    owner,

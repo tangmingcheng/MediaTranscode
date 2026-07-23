@@ -55,6 +55,8 @@ private:
     MediaBufferRef m_audioConfig;
     std::unique_ptr<MediaTsMuxSession> m_session;
     std::optional<::media::ErrorInfo> m_failure;
+    std::optional<MediaRunningTime> m_nextTransportDeadline;
+    bool m_mediaTimelineStarted = false;
     bool m_resourcesClosed = false;
 };
 

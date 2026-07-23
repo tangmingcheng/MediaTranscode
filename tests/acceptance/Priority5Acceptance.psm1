@@ -36,7 +36,8 @@ function Test-Priority5RealtimeReport {
         'status','scenario','machine','encoding_path','duration_seconds',
         'average_cli_cpu_percent','p95_cli_cpu_percent','peak_working_set_bytes',
         'peak_thread_count','queue_high_watermark','max_progress_gap_ms',
-        'dropped_buffers','worker_errors','runtime_errors','stalled_intervals','av_drift_ms'
+        'dropped_buffers','worker_errors','runtime_errors','stalled_intervals',
+        'av_start_offset_ms','av_end_drift_ms','av_drift_ms'
     )
     foreach ($name in $required) { Assert-ReportField -Report $Report -Name $name }
     if ($Report.status -ne 'pass') { throw 'priority5 report status is not pass' }

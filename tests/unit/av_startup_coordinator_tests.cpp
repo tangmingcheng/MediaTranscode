@@ -191,6 +191,33 @@ void testAudioFirstReleasesAtVideoKeyFrameAndTrimsSamples(TestContext& ctx)
               static_cast<std::uint32_t>(1'920));
 }
 
+void testStartupTrimUsesTheAbsoluteEpochSampleGrid(TestContext& ctx)
+{
+    auto config = startupConfig();
+    config.preroll = ns(10);
+    config.maximumAudioTrim = ns(10);
+    config.maximumInitialSkew = ns(10);
+    config.maximumGap = ns(1);
+    auto coordinator = MediaAvStartupCoordinator::create(config);
+    EXPECT_TRUE(ctx, coordinator);
+    if (!coordinator) return;
+
+    auto videoUnit = video(1, 5, true);
+    videoUnit.presentationTime =
+        MediaRunningTime::fromNanoseconds(5'000'001);
+    expectNoRelease(ctx, coordinator.value().submit(
+                             std::move(videoUnit), ns(0)));
+    auto released = coordinator.value().submit(
+        audio(2, 0, 20, 960), ns(1));
+    EXPECT_TRUE(ctx, released && released.value().release);
+    if (!released || !released.value().release) return;
+    EXPECT_EQ(ctx, released.value().release->epoch.sourceStart,
+              MediaRunningTime::fromNanoseconds(5'000'001));
+    EXPECT_EQ(ctx,
+              released.value().release->audio.front().trimLeadingSamples,
+              static_cast<std::uint32_t>(241));
+}
+
 void testVideoFirstWaitsForCommonWindowAndReleasesOnce(TestContext& ctx)
 {
     auto coordinator = MediaAvStartupCoordinator::create(startupConfig());
@@ -811,6 +838,7 @@ void setNodePolicy(MediaGraph& graph, MediaNodeId node)
     graph.setNodeOption(node, "av_startup.maximum_initial_skew_ns", "40000000");
     graph.setNodeOption(node, "av_startup.maximum_gap_ns", "80000000");
     graph.setNodeOption(node, "av_startup.output_lead_ns", "60000000");
+    graph.setNodeOption(node, "av_startup.output_audio_sample_rate", "48000");
     graph.setNodeOption(node, "av_startup.video_capacity", "16");
     graph.setNodeOption(node, "av_startup.audio_capacity", "32");
     graph.setNodeOption(node, "av_startup.video_byte_capacity", "1600");
@@ -830,9 +858,9 @@ struct StartupNodeHarness final {
     MediaAvStartupCoordinatorNode* coordinatorRuntime = nullptr;
     std::shared_ptr<MediaAvStartupGenerationState> generationState;
 
-    bool initialize(TestContext& ctx)
+    bool initialize(TestContext& ctx, std::size_t edgeCapacity = 64)
     {
-        const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(64);
+        const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(edgeCapacity);
         const auto videoSource = graph.addNode(MediaNodeKind::DebugDump, "startup.video");
         const auto audioSource = graph.addNode(MediaNodeKind::DebugDump, "startup.audio");
         const auto clockSource = graph.addNode(MediaNodeKind::DebugDump, "startup.clock");
@@ -971,6 +999,18 @@ void testNodeWaitsWithoutClockOrMedia(TestContext& ctx)
     }
 }
 
+void testNodeReportsProgressWhenActivatingClockBarrier(TestContext& ctx)
+{
+    StartupNodeHarness harness;
+    if (!harness.initialize(ctx)) return;
+    EXPECT_TRUE(ctx, harness.tick(10'000));
+    auto activated = harness.runtime->process(harness.execution);
+    EXPECT_TRUE(ctx, activated);
+    if (activated) {
+        EXPECT_EQ(ctx, activated.value().state, MediaNodeProcessState::Progress);
+    }
+}
+
 void testNodeProcessesDeadlineMediaBeforeEqualClockTick(TestContext& ctx)
 {
     StartupNodeHarness harness;
@@ -984,27 +1024,38 @@ void testNodeProcessesDeadlineMediaBeforeEqualClockTick(TestContext& ctx)
     EXPECT_TRUE(ctx, harness.push("video", video(5, 80, false), 10'000));
     EXPECT_TRUE(ctx, harness.tick(10'000));
     auto* output = harness.execution.findOutputChannel(harness.coordinator, "release");
-    for (int index = 0; index < 4; ++index) {
+    for (int index = 0; index < 5; ++index) {
         EXPECT_TRUE(ctx, harness.runtime->process(harness.execution));
     }
     EXPECT_EQ(ctx, output->size(), static_cast<std::size_t>(1));
     EXPECT_TRUE(ctx, harness.runtime->process(harness.execution));
 }
 
-void testNodeDoesNotLetFutureMediaStarveDeadlineClock(TestContext& ctx)
+void testNodeDrainsCapacityOneMediaSnapshotBeforeDeadlineClock(TestContext& ctx)
 {
     StartupNodeHarness harness;
-    if (!harness.initialize(ctx)) return;
+    if (!harness.initialize(ctx, 1)) return;
     EXPECT_TRUE(ctx, harness.push("video", video(1, 0, false, 7,
         MediaSourceClockReadiness::Acquiring), 0));
     EXPECT_TRUE(ctx, harness.runtime->process(harness.execution));
+    EXPECT_TRUE(ctx, harness.tick(10'000));
+    auto barrierActivated = harness.runtime->process(harness.execution);
+    EXPECT_TRUE(ctx, barrierActivated);
+    if (!barrierActivated) return;
     EXPECT_TRUE(ctx, harness.push("audio", audio(2, 0, 200, 9'600), 10'001));
     EXPECT_TRUE(ctx, harness.push("video", video(3, 0, true), 10'001));
-    EXPECT_TRUE(ctx, harness.tick(10'000));
-    EXPECT_FALSE(ctx, harness.runtime->process(harness.execution));
+    auto audioProcessed = harness.runtime->process(harness.execution);
+    EXPECT_TRUE(ctx, audioProcessed);
+    if (!audioProcessed) return;
+    auto videoProcessed = harness.runtime->process(harness.execution);
+    EXPECT_TRUE(ctx, videoProcessed);
+    if (!videoProcessed) return;
+    const MediaAvStartupUnitId keyFrame{
+        MediaAvStartupStream::Video, 7, 3};
+    EXPECT_TRUE(ctx, harness.generationState->take(keyFrame));
 }
 
-void testNodeClockBarrierLeavesFutureCapacityInChannel(TestContext& ctx)
+void testNodeClockBarrierDrainsSnapshotWithoutTakingFutureMedia(TestContext& ctx)
 {
     StartupNodeHarness harness;
     if (!harness.initialize(ctx)) return;
@@ -1015,13 +1066,13 @@ void testNodeClockBarrierLeavesFutureCapacityInChannel(TestContext& ctx)
         EXPECT_TRUE(ctx, harness.push("video", video(sequence, 0, true), 10'001));
     }
     EXPECT_TRUE(ctx, harness.tick(10'000));
-    auto timedOut = harness.runtime->process(harness.execution);
-    EXPECT_FALSE(ctx, timedOut);
-    if (!timedOut) {
-        EXPECT_TRUE(ctx, timedOut.error().message.find(
-            "detail=startup timeout") != std::string::npos);
-        EXPECT_TRUE(ctx, timedOut.error().message.find(
-            "capacity") == std::string::npos);
+    auto mediaProcessed = harness.runtime->process(harness.execution);
+    EXPECT_TRUE(ctx, mediaProcessed);
+    auto* videoInput = harness.execution.findInputChannel(
+        harness.coordinator, "video");
+    EXPECT_TRUE(ctx, videoInput != nullptr);
+    if (videoInput) {
+        EXPECT_EQ(ctx, videoInput->size(), static_cast<std::size_t>(63));
     }
 }
 
@@ -1116,6 +1167,8 @@ void testNodePublishesOneImmutablePairedEnvelope(TestContext& ctx)
     graph.connect(clockSource, "out", coordinator, "clock", "startup clock", policy);
     graph.connect(coordinator, "release", sink, "in", "atomic release", policy);
     setNodePolicy(graph, coordinator);
+    graph.setNodeOption(
+        coordinator, "av_startup.output_audio_sample_rate", "44100");
 
     MediaGraphExecutionContext execution;
     EXPECT_TRUE(ctx, execution.compile(graph));
@@ -1159,6 +1212,7 @@ void testNodePublishesOneImmutablePairedEnvelope(TestContext& ctx)
         EXPECT_EQ(ctx, release->releaseKind(),
                   MediaAvStartupReleaseKind::InitialAtomicRelease);
         EXPECT_EQ(ctx, release->epoch().generation, static_cast<std::uint64_t>(7));
+        EXPECT_EQ(ctx, release->audioOrigin().outputSampleRate, 44'100);
         EXPECT_TRUE(ctx, !release->video().empty());
         EXPECT_TRUE(ctx, !release->audio().empty());
         EXPECT_EQ(ctx, release->audio().front().trimLeadingSamples,
@@ -1294,6 +1348,7 @@ void runAvStartupCoordinatorTests(TestContext& ctx)
 {
     testStateMachineRejectsIllegalTransitions(ctx);
     testAudioFirstReleasesAtVideoKeyFrameAndTrimsSamples(ctx);
+    testStartupTrimUsesTheAbsoluteEpochSampleGrid(ctx);
     testVideoFirstWaitsForCommonWindowAndReleasesOnce(ctx);
     testRequiresLockedSameGenerationAndPurgesOldPackets(ctx);
     testReacquireClosesGateUntilBothStreamsRelock(ctx);
@@ -1318,9 +1373,10 @@ void runAvStartupCoordinatorTests(TestContext& ctx)
     testFactoryRejectsIncompleteStartupConfiguration(ctx);
     testGenerationTargetIdentitySurvivesLifecycleCleanup(ctx);
     testNodeWaitsWithoutClockOrMedia(ctx);
+    testNodeReportsProgressWhenActivatingClockBarrier(ctx);
     testNodeProcessesDeadlineMediaBeforeEqualClockTick(ctx);
-    testNodeDoesNotLetFutureMediaStarveDeadlineClock(ctx);
-    testNodeClockBarrierLeavesFutureCapacityInChannel(ctx);
+    testNodeDrainsCapacityOneMediaSnapshotBeforeDeadlineClock(ctx);
+    testNodeClockBarrierDrainsSnapshotWithoutTakingFutureMedia(ctx);
     testNodeProcessesQueuedReleaseMediaBeforeTerminalControl(ctx);
     testNodeFreezesNewIntakeWhileDrainingClockWatermark(ctx);
     testNodeRejectsPerStreamEventTimeRegression(ctx);

@@ -5,6 +5,7 @@
 #include "internal/graph/runtime/factory/MediaRuntimeNodeBinding.h"
 #include "internal/graph/sync/MediaPlaybackEpochActivationCapability.h"
 #include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
+#include "internal/graph/sync/startup/MediaAvStartupVideoPreparationCapability.h"
 #include "media_transcode/Result.h"
 
 #include <memory>
@@ -17,10 +18,17 @@ public:
     static ::media::Result<std::unique_ptr<MediaRuntimeNode>> create(
         const MediaNode& node,
         MediaPreparedRealtimeInputBinding* binding);
+    static ::media::Result<std::unique_ptr<MediaRuntimeNode>> create(
+        const MediaNode& node,
+        MediaPreparedRealtimeInputBinding* binding,
+        const std::shared_ptr<MediaAvStartupVideoPreparationState>&
+            videoPreparationState);
     static ::media::Result<std::unique_ptr<MediaRuntimeNode>>
     createActivatedStartupReleaseSequencer(
         const MediaNode& node,
-        MediaPlaybackEpochActivationCapability capability);
+        MediaPlaybackEpochActivationCapability capability,
+        const std::shared_ptr<MediaAvStartupVideoPreparationState>&
+            videoPreparationState);
     static ::media::Result<std::unique_ptr<MediaRuntimeNode>>
     createScheduledRtpSender(
         const MediaNode& node,

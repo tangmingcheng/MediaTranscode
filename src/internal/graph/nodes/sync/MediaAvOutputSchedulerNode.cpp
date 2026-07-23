@@ -1,6 +1,7 @@
 #include "internal/graph/nodes/sync/MediaAvOutputSchedulerNode.h"
 
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/nodes/sync/MediaAvScheduledOutputBuilder.h"
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
@@ -8,6 +9,7 @@
 #include "internal/graph/sync/MediaVideoRepeatRequestBuffer.h"
 
 #include <limits>
+#include <sstream>
 
 namespace media::ffmpeg::graph {
 MediaAvOutputSchedulerNode::MediaAvOutputSchedulerNode(MediaNodeId nodeId)
@@ -194,6 +196,7 @@ MediaNodeKind MediaAvOutputSchedulerNode::staticKind() noexcept
     }
     auto selected = selectMediaHead();
     if (!selected) return ::media::Result<MediaNodeProcessResult>::failure(selected.error());
+    if (!selected.value()) logMissingMediaWait();
     return selected.value() ? processSelected(context, *selected.value())
                             : processWaiting();
 }
@@ -227,7 +230,95 @@ MediaNodeKind MediaAvOutputSchedulerNode::staticKind() noexcept
             ? MediaScheduledStream::Video : MediaScheduledStream::Audio);
     if (!parsed) return ::media::Result<bool>::failure(parsed.error());
     head = std::move(parsed).value();
+    if (head->kind() != MediaAvSchedulerHeadKind::Control) {
+        logFirstMediaHead(input);
+    }
     return ::media::Result<bool>::success(true);
+}
+
+void MediaAvOutputSchedulerNode::logFirstMediaHead(Input input)
+{
+    auto& emitted = input == Input::Video
+        ? m_firstVideoHeadDiagnosticEmitted
+        : m_firstAudioHeadDiagnosticEmitted;
+    if (emitted || !m_group) return;
+    const auto& head = input == Input::Video ? m_videoHead : m_audioHead;
+    if (!head || head->kind() == MediaAvSchedulerHeadKind::Control) return;
+
+    const auto dispatch = head->canonicalDispatchTime();
+    const auto targetMaster = m_group->mapCanonicalToMaster(
+        head->canonicalPresentation());
+    const auto now = m_group->clock()->now();
+    std::ostringstream out;
+    out << "av_scheduler_trace stage=first_"
+        << (input == Input::Video ? "video" : "audio")
+        << "_head generation=" << head->generation()
+        << " canonical_target_ns=" << head->canonicalPresentation().nanoseconds()
+        << " canonical_dispatch_ns="
+        << (dispatch ? std::to_string(dispatch.value().nanoseconds()) : "error")
+        << " target_master_ns="
+        << (targetMaster ? std::to_string(targetMaster.value().nanoseconds()) : "error");
+    if (dispatch) {
+        const auto dispatchMaster = m_group->mapCanonicalToMaster(dispatch.value());
+        out << " dispatch_master_ns="
+            << (dispatchMaster
+                    ? std::to_string(dispatchMaster.value().nanoseconds())
+                    : "error");
+    } else {
+        out << " dispatch_master_ns=error";
+    }
+    out << " now_ns="
+        << (now ? std::to_string(now.value().nanoseconds()) : "error");
+    mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+                            MediaGraphDiagnosticPhase::RuntimeNode,
+                            out.str());
+    emitted = true;
+}
+
+void MediaAvOutputSchedulerNode::logMissingMediaWait()
+{
+    if (!m_group) return;
+    const std::optional<Input> missing =
+        !m_videoHead && !m_videoEof ? std::optional<Input>(Input::Video) :
+        !m_audioHead && !m_audioEof ? std::optional<Input>(Input::Audio) :
+        std::nullopt;
+    if (!missing || m_missingMediaWait == missing) return;
+
+    const auto& present = *missing == Input::Video ? m_audioHead : m_videoHead;
+    const auto now = m_group->clock()->now();
+    std::ostringstream out;
+    out << "av_scheduler_trace stage=missing_media_wait missing="
+        << (*missing == Input::Video ? "video" : "audio")
+        << " deadline_ns=none now_ns="
+        << (now ? std::to_string(now.value().nanoseconds()) : "error");
+    if (present && present->kind() != MediaAvSchedulerHeadKind::Control) {
+        const auto dispatch = present->canonicalDispatchTime();
+        const auto targetMaster = m_group->mapCanonicalToMaster(
+            present->canonicalPresentation());
+        out << " present_generation=" << present->generation()
+            << " present_canonical_target_ns="
+            << present->canonicalPresentation().nanoseconds()
+            << " present_canonical_dispatch_ns="
+            << (dispatch ? std::to_string(dispatch.value().nanoseconds()) : "error")
+            << " present_target_master_ns="
+            << (targetMaster
+                    ? std::to_string(targetMaster.value().nanoseconds())
+                    : "error");
+        if (dispatch) {
+            const auto dispatchMaster = m_group->mapCanonicalToMaster(
+                dispatch.value());
+            out << " present_dispatch_master_ns="
+                << (dispatchMaster
+                        ? std::to_string(dispatchMaster.value().nanoseconds())
+                        : "error");
+        } else {
+            out << " present_dispatch_master_ns=error";
+        }
+    }
+    mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+                            MediaGraphDiagnosticPhase::RuntimeNode,
+                            out.str());
+    m_missingMediaWait = missing;
 }
 
 ::media::Result<std::optional<MediaAvOutputSchedulerNode::Input>>
@@ -753,6 +844,9 @@ void MediaAvOutputSchedulerNode::clearSchedulingState() noexcept
     m_videoEof = false;
     m_audioEof = false;
     m_nextEqualTimeVideo = false;
+    m_firstVideoHeadDiagnosticEmitted = false;
+    m_firstAudioHeadDiagnosticEmitted = false;
+    m_missingMediaWait.reset();
 }
 
 } // namespace media::ffmpeg::graph

@@ -54,6 +54,7 @@ void runScheduledRtpPacketizationTests(TestContext& ctx);
 void runScheduledRtpSenderTests(TestContext& ctx);
 void runMediaRtpUdpSenderTransportTests(TestContext& ctx);
 void runMediaRtpUdpSenderCompositionTests(TestContext& ctx);
+void runRawRtpInputLifecycleTests(TestContext& ctx);
 void runMpegTsPacketTests(TestContext& ctx);
 void runMpegTsPesProvenanceTimelineTests(TestContext& ctx);
 void runMpegTsClockTests(TestContext& ctx);
@@ -760,6 +761,76 @@ void testRtcpEvidenceScopesCnameValidationToActiveSsrc(TestContext& ctx)
     EXPECT_FALSE(ctx, emptyActive.evidence(2));
 }
 
+void testRtcpEvidenceUpdateIsOrderIndependentAndConsumedOnce(TestContext& ctx)
+{
+    const MediaRtcpSenderReportTrackerConfig config{true, true, 10'000, 10'000};
+    constexpr uint32_t source = 0x10203040;
+    const auto compound = parseRtcp(
+        compoundWithSdes(source, 10, 900, "camera-a"), true);
+    EXPECT_TRUE(ctx, compound);
+    if (!compound) return;
+
+    MediaRtcpSenderReportTracker rtcpFirst(config);
+    EXPECT_TRUE(ctx, rtcpFirst.observe(compound.value(), 100));
+    auto beforeMedia = rtcpFirst.takeEvidenceUpdate(100);
+    EXPECT_TRUE(ctx, beforeMedia);
+    if (beforeMedia) EXPECT_FALSE(ctx, beforeMedia.value().has_value());
+    rtcpFirst.observeMedia(source, 110);
+    auto promoted = rtcpFirst.takeEvidenceUpdate(110);
+    EXPECT_TRUE(ctx, promoted);
+    if (promoted) {
+        EXPECT_TRUE(ctx, promoted.value().has_value());
+        if (promoted.value()) {
+            EXPECT_EQ(ctx, promoted.value()->observedMediaSsrc, source);
+            EXPECT_EQ(ctx, promoted.value()->cname,
+                      std::vector<uint8_t>({'c','a','m','e','r','a','-','a'}));
+        }
+    }
+    auto consumed = rtcpFirst.takeEvidenceUpdate(110);
+    EXPECT_TRUE(ctx, consumed);
+    if (consumed) EXPECT_FALSE(ctx, consumed.value().has_value());
+    rtcpFirst.observeMedia(source, 120);
+    auto repeatedMedia = rtcpFirst.takeEvidenceUpdate(120);
+    EXPECT_TRUE(ctx, repeatedMedia);
+    if (repeatedMedia) EXPECT_FALSE(ctx, repeatedMedia.value().has_value());
+
+    MediaRtcpSenderReportTracker rtpFirst(config);
+    rtpFirst.observeMedia(source, 100);
+    EXPECT_TRUE(ctx, rtpFirst.observe(compound.value(), 110));
+    auto observed = rtpFirst.takeEvidenceUpdate(110);
+    EXPECT_TRUE(ctx, observed);
+    if (observed) EXPECT_TRUE(ctx, observed.value().has_value());
+    auto observedConsumed = rtpFirst.takeEvidenceUpdate(110);
+    EXPECT_TRUE(ctx, observedConsumed);
+    if (observedConsumed) EXPECT_FALSE(ctx, observedConsumed.value().has_value());
+}
+
+void testPendingRtcpEvidenceRequiresMatchingMediaAndIsCleared(TestContext& ctx)
+{
+    const MediaRtcpSenderReportTrackerConfig config{true, true, 10'000, 10'000};
+    constexpr uint32_t pendingSource = 0x10203040;
+    constexpr uint32_t mediaSource = 0x50607080;
+    const auto compound = parseRtcp(
+        compoundWithSdes(pendingSource, 10, 900, "camera-a"), true);
+    EXPECT_TRUE(ctx, compound);
+    if (!compound) return;
+
+    MediaRtcpSenderReportTracker mismatch(config);
+    EXPECT_TRUE(ctx, mismatch.observe(compound.value(), 100));
+    mismatch.observeMedia(mediaSource, 110);
+    auto mismatched = mismatch.takeEvidenceUpdate(110);
+    EXPECT_TRUE(ctx, mismatched);
+    if (mismatched) EXPECT_FALSE(ctx, mismatched.value().has_value());
+
+    MediaRtcpSenderReportTracker cleared(config);
+    EXPECT_TRUE(ctx, cleared.observe(compound.value(), 100));
+    cleared.observeContinuityLoss();
+    cleared.observeMedia(pendingSource, 110);
+    auto afterClear = cleared.takeEvidenceUpdate(110);
+    EXPECT_TRUE(ctx, afterClear);
+    if (afterClear) EXPECT_FALSE(ctx, afterClear.value().has_value());
+}
+
 void testRawRtpOpusDescriptorAcceptsOnlyMappingFamilyZeroChannels(TestContext& ctx)
 {
     const auto create = [](int channels) {
@@ -1150,7 +1221,10 @@ void testRtpClockGroupRejectsStaleCrossPortEvidence(TestContext& ctx)
     graph.setNodeOption(group, "rtp_clock_group.audio_clock_rate", "48000");
     graph.setNodeOption(group, "rtp_clock_group.sender_report_timeout_ns", "3000000000");
     graph.setNodeOption(group, "rtp_clock_group.maximum_extrapolation_ns", "5000000000");
-    graph.setNodeOption(group, "rtp_clock_group.maximum_inter_stream_skew_ns", "50000000");
+    graph.setNodeOption(
+        group,
+        "rtp_clock_group.maximum_inter_stream_clock_offset_skew_ns",
+        "50000000");
     graph.setNodeOption(group, "rtp_clock_group.maximum_sender_clock_residual_ns", "250000000");
     graph.setNodeOption(group, "rtp_clock_group.video_cname_timeout_ns", "5000000000");
     graph.setNodeOption(group, "rtp_clock_group.audio_cname_timeout_ns", "5000000000");
@@ -1344,6 +1418,19 @@ void testRtpClockGroupRejectsStaleCrossPortEvidence(TestContext& ctx)
     execution.reset();
 }
 
+void testReservedNodeKind41FailsClosedInRuntimeFactory(TestContext& ctx)
+{
+    EXPECT_EQ(ctx, static_cast<int>(MediaNodeKind::ReservedNodeKind41), 41);
+    EXPECT_FALSE(ctx,
+                 MediaRuntimeNodeFactory::supported(
+                     MediaNodeKind::ReservedNodeKind41));
+
+    const MediaNode reserved{MediaNodeId{41},
+                             MediaNodeKind::ReservedNodeKind41,
+                             "reserved.node_kind_41"};
+    EXPECT_FALSE(ctx, MediaRuntimeNodeFactory::create(reserved));
+}
+
 } // namespace
 
 int main()
@@ -1462,6 +1549,8 @@ int main()
     testRtcpCompoundParserStrictPackets(ctx);
     testRtcpEvidenceRequiresSameSsrcAndExpires(ctx);
     testRtcpEvidenceScopesCnameValidationToActiveSsrc(ctx);
+    testRtcpEvidenceUpdateIsOrderIndependentAndConsumedOnce(ctx);
+    testPendingRtcpEvidenceRequiresMatchingMediaAndIsCleared(ctx);
     testRtcpEvidenceRejectsIdentityAndClockDiscontinuities(ctx);
     testRawRtpOpusDescriptorAcceptsOnlyMappingFamilyZeroChannels(ctx);
     testRtpIngressClockLifecycleEventsAreStructured(ctx);
@@ -1472,6 +1561,7 @@ int main()
     runScheduledRtpSenderTests(ctx);
     runMediaRtpUdpSenderTransportTests(ctx);
     runMediaRtpUdpSenderCompositionTests(ctx);
+    runRawRtpInputLifecycleTests(ctx);
     runMpegTsPacketTests(ctx);
     runMpegTsPesProvenanceTimelineTests(ctx);
     runMpegTsClockTests(ctx);
@@ -1493,7 +1583,10 @@ int main()
     runFileOutputResourceTests(ctx);
     testAudioEncodeFixedFrameStateMachine(ctx);
     testRtpClockGroupRejectsStaleCrossPortEvidence(ctx);
+    testReservedNodeKind41FailsClosedInRuntimeFactory(ctx);
     EXPECT_TRUE(ctx, MediaRuntimeNodeFactory::supported(MediaNodeKind::CanonicalInput));
+    EXPECT_TRUE(ctx, MediaRuntimeNodeFactory::supported(
+                         MediaNodeKind::AudioStartupTrim));
     EXPECT_TRUE(ctx, MediaRuntimeNodeFactory::supported(
                          MediaNodeKind::AvBoundReleaseExtractor));
     return ctx.failures == 0 ? 0 : 1;

@@ -1,5 +1,6 @@
 #include "internal/graph/nodes/input/RawRtpInputNode.h"
 
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/nodes/input/MediaRawRtpStreamDescriptorFactory.h"
 #include "internal/graph/protocol/rtp/MediaRtcpCompoundParser.h"
@@ -10,6 +11,7 @@
 
 #include <chrono>
 #include <algorithm>
+#include <string>
 #include <utility>
 
 namespace media::ffmpeg::graph {
@@ -33,10 +35,30 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     return MediaNodeKind::RawRtpInput;
 }
 
+::media::Status RawRtpInputNode::start(MediaGraphExecutionContext& context)
+{
+    if (m_initialized) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "RawRtpInputNode start requires a stopped receiver"));
+    }
+    if (auto status = FFmpegNodeRuntime::start(context); !status) {
+        return status;
+    }
+    auto status = prepareReceiver(context);
+    if (!status) {
+        resetState();
+        FFmpegNodeRuntime::abort(context);
+    }
+    return status;
+}
+
 ::media::Result<MediaNodeProcessResult> RawRtpInputNode::onProcess(MediaGraphExecutionContext& context)
 {
     if (!m_initialized) {
-        if (auto status = initialize(context); !status) return processProgress(status);
+        return processProgress(::media::Status::failure(
+            ::media::ErrorInfo::notInitialized(
+                "RawRtpInputNode process requires receiver readiness from start")));
     }
     if (!m_formatEmitted) {
         m_formatEmitted = true;
@@ -133,7 +155,7 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     return processProgress(emitOutput(context, "packet", packet));
 }
 
-::media::Status RawRtpInputNode::initialize(MediaGraphExecutionContext& context)
+::media::Status RawRtpInputNode::prepareReceiver(MediaGraphExecutionContext& context)
 {
     const MediaNodeOptions* options = nodeOptions(context);
     auto family = requiredNodeOption(options, "RawRtpInputNode", "rtp.address_family");
@@ -230,7 +252,11 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     auto parsed = MediaRtpPacketParser::parse(datagram.bytes);
     if (!parsed) return ::media::Status::failure(parsed.error());
     const std::uint64_t generationBeforeObservation = m_clockTracker->generation();
-    m_clockTracker->observeMedia(parsed.value().ssrc, steadyNowNs());
+    const std::int64_t observedAtNs = steadyNowNs();
+    m_clockTracker->observeMedia(parsed.value().ssrc, observedAtNs);
+    if (auto status = queueClockEvidence(context, observedAtNs); !status) {
+        return status;
+    }
     auto reordered = m_reorder->push(std::move(parsed).value(), std::chrono::steady_clock::now());
     if (!reordered) return ::media::Status::failure(reordered.error());
     return processReordered(context, std::move(reordered).value(),
@@ -261,8 +287,21 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
         auto depacketized = m_depacketizer->push(packet);
         if (!depacketized) return ::media::Status::failure(depacketized.error());
         for (MediaRtpAccessUnit& unit : depacketized.value().accessUnits) {
+            const bool depacketizedKey =
+                (unit.packet->flags & AV_PKT_FLAG_KEY) != 0;
             auto buffer = FFmpegBufferFactory::wrapPacket(std::move(unit.packet), m_config.streamKind, std::nullopt);
             if (!buffer) return ::media::Status::failure(buffer.error());
+            if (m_config.streamKind == MediaStreamKind::Video &&
+                depacketizedKey && !m_keyTraceEmitted) {
+                m_keyTraceEmitted = true;
+                mediaGraphDiagnosticLog(
+                    MediaGraphDiagnosticLevel::State,
+                    MediaGraphDiagnosticPhase::RuntimeNode,
+                    std::string("rtp_key_trace stage=raw_rtp depacketized=") +
+                        (depacketizedKey ? "1" : "0") +
+                        " wrapped=" +
+                        (buffer.value()->isKeyFrame() ? "1" : "0"));
+            }
             buffer.value()->setTimeDescriptor(MediaTimeDescriptor{unit.timeBase});
             MediaFormatDescriptor format;
             format.streamKind = m_config.streamKind;
@@ -300,20 +339,31 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
         }
         return ::media::Status::success();
     }
-    auto evidence = m_clockTracker->evidence(observedAtNs);
-    if (evidence && context.findOutputChannel(nodeId(), "clock")) {
-        if (m_clockSchedule) {
-            if (auto scheduleStatus = m_clockSchedule->observeEvidence(
-                    evidence.value().senderReportObservedAtNs,
-                    evidence.value().cnameObservedAtNs); !scheduleStatus) {
-                return scheduleStatus;
-            }
-        }
-        m_events.emplace_back(
-            "clock",
-            makeMediaBufferRef<MediaRtpIngressEventBuffer>(
-                std::move(evidence).value(), nextIngressSequence()));
+    return queueClockEvidence(context, observedAtNs);
+}
+
+::media::Status RawRtpInputNode::queueClockEvidence(
+    MediaGraphExecutionContext& context,
+    std::int64_t observedAtNs)
+{
+    if (!context.findOutputChannel(nodeId(), "clock")) {
+        return ::media::Status::success();
     }
+    auto update = m_clockTracker->takeEvidenceUpdate(observedAtNs);
+    if (!update) return ::media::Status::failure(update.error());
+    if (!update.value()) return ::media::Status::success();
+    const MediaRtcpClockEvidence& evidence = *update.value();
+    if (m_clockSchedule) {
+        if (auto status = m_clockSchedule->observeEvidence(
+                evidence.senderReportObservedAtNs,
+                evidence.cnameObservedAtNs); !status) {
+            return status;
+        }
+    }
+    m_events.emplace_back(
+        "clock",
+        makeMediaBufferRef<MediaRtpIngressEventBuffer>(
+            std::move(*update.value()), nextIngressSequence()));
     return ::media::Status::success();
 }
 
@@ -357,11 +407,13 @@ void RawRtpInputNode::resetState() noexcept
     m_depacketizer.reset();
     m_clockTracker.reset();
     m_clockSchedule.reset();
+    m_config = {};
     m_streamSnapshot.reset();
     m_packets.clear();
     m_events.clear();
     m_initialized = false;
     m_formatEmitted = false;
+    m_keyTraceEmitted = false;
     m_requireCname = false;
     m_rtcpCompositionMode.reset();
     m_cancellableReadTimeoutMs = 0;

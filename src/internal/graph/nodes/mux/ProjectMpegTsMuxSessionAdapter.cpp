@@ -265,6 +265,8 @@ ProjectMpegTsMuxSessionAdapter::~ProjectMpegTsMuxSessionAdapter()
     if (!view) return fail(view.error());
     auto written = m_session->writeAccessUnit(view.value());
     if (!written) return fail(written.error());
+    m_nextTransportDeadline = written.value().nextDeadline;
+    m_mediaTimelineStarted = true;
     return ::media::Status::success();
 }
 
@@ -296,21 +298,49 @@ ProjectMpegTsMuxSessionAdapter::poll(MediaGraphExecutionContext& context)
         auto status = fail(binding.error());
         return ::media::Result<MediaMuxSessionPollResult>::failure(status.error());
     }
+    if (!m_mediaTimelineStarted) {
+        return ::media::Result<MediaMuxSessionPollResult>::success(
+            {false, std::nullopt});
+    }
+    if (!m_plan || !m_nextTransportDeadline) {
+        auto status = fail(::media::ErrorInfo::notInitialized(
+            "project MPEG-TS mux session has no transport poll deadline"));
+        return ::media::Result<MediaMuxSessionPollResult>::failure(status.error());
+    }
     auto runtime = context.findAvSyncGroup(*m_group);
     auto now = runtime->clock()->now();
     if (!now) {
         auto status = fail(now.error());
         return ::media::Result<MediaMuxSessionPollResult>::failure(status.error());
     }
+    auto safeDeadline = m_nextTransportDeadline->checkedAdd(
+        m_plan->transportDecodeLead());
+    if (!safeDeadline) {
+        auto status = fail(safeDeadline.error());
+        return ::media::Result<MediaMuxSessionPollResult>::failure(status.error());
+    }
+    if (now.value() < safeDeadline.value()) {
+        return ::media::Result<MediaMuxSessionPollResult>::success({
+            false,
+            MediaNodeProcessResult::DeadlineWait{
+                *m_group, safeDeadline.value()}});
+    }
     auto polled = m_session->poll(now.value());
     if (!polled) {
         auto status = fail(polled.error());
         return ::media::Result<MediaMuxSessionPollResult>::failure(status.error());
     }
+    m_nextTransportDeadline = polled.value().nextDeadline;
+    auto nextSafeDeadline = m_nextTransportDeadline->checkedAdd(
+        m_plan->transportDecodeLead());
+    if (!nextSafeDeadline) {
+        auto status = fail(nextSafeDeadline.error());
+        return ::media::Result<MediaMuxSessionPollResult>::failure(status.error());
+    }
     return ::media::Result<MediaMuxSessionPollResult>::success({
         polled.value().packetsWritten != 0,
         MediaNodeProcessResult::DeadlineWait{
-            *m_group, polled.value().nextDeadline}});
+            *m_group, nextSafeDeadline.value()}});
 }
 
 bool ProjectMpegTsMuxSessionAdapter::bindingsReady() const noexcept

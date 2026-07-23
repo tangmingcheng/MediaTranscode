@@ -11,7 +11,10 @@ struct MediaRealtimeEdgePolicySet {
     MediaEdgePolicy videoPacket;
     MediaEdgePolicy audioPacket;
     MediaEdgePolicy synchronizedPacket;
-    MediaEdgePolicy frame;
+    MediaEdgePolicy audioDriftTransaction;
+    MediaEdgePolicy videoFrame;
+    MediaEdgePolicy preparedVideoFrame;
+    MediaEdgePolicy audioFrame;
     MediaEdgePolicy mux;
     MediaEdgePolicy videoMux;
     MediaEdgePolicy audioMux;
@@ -28,6 +31,7 @@ struct MediaRealtimeEdgePolicySet {
     {
         return streamKind == MediaStreamKind::Audio ? audioMux : videoMux;
     }
+
 };
 
 } // namespace media::ffmpeg::graph

@@ -22,6 +22,7 @@ namespace media::ffmpeg::graph {
 enum class MediaGraphRuntimeState;
 class MediaGraphRuntime;
 class MediaAvSyncClockSource;
+class MediaAvStartupVideoPreparationState;
 
 class MediaGraphRuntimeCompiler final {
 public:
@@ -36,6 +37,8 @@ private:
         std::vector<MediaPreparedRealtimeInputBinding>& activeBindings,
         std::optional<MediaPlaybackEpochActivationCapability>&
             playbackEpochActivationCapability,
+        std::shared_ptr<MediaAvStartupVideoPreparationState>&
+            videoPreparationState,
         const std::shared_ptr<MediaAvSyncClockSource>& avSyncClockSource,
         MediaGraphExecutionContext& context,
         MediaGraphScheduler& scheduler,
@@ -50,7 +53,9 @@ private:
         MediaGraphScheduler& scheduler,
         std::vector<MediaPreparedRealtimeInputBinding>& inputBindings,
         std::optional<MediaPlaybackEpochActivationCapability>&
-            playbackEpochActivationCapability);
+            playbackEpochActivationCapability,
+        const std::shared_ptr<MediaAvStartupVideoPreparationState>&
+            videoPreparationState);
 
     MediaGraphRuntimeCompiler() = delete;
 };

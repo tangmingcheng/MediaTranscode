@@ -258,15 +258,32 @@ void gateRequiresLockedClockBeforeLockedPackets()
     assert(!harness.runtime->process(harness.execution));
 }
 
+void gateRetainsEarlyPacketUntilMatchingClockLock()
+{
+    GateHarness harness;
+    auto packet = timedPacket(
+        MediaStreamKind::Video, MediaSourceClockReadiness::Locked, 7,
+        1'000, 3'600, AVRational{1, 90'000});
+    assert(harness.packetInput()->push(packet));
+
+    const auto waiting = harness.runtime->process(harness.execution);
+    assert(waiting && waiting.value().state == MediaNodeProcessState::Waiting);
+    assert(harness.packetInput()->size() == 0);
+    assert(harness.output()->size() == 0);
+
+    assert(harness.clockInput()->push(
+        makeMediaBufferRef<MediaSourceClockStateBuffer>(
+            MediaSourceClockReadiness::Locked, 7, false)));
+    assert(harness.runtime->process(harness.execution));
+    assert(harness.runtime->process(harness.execution));
+
+    MediaBufferRef released;
+    assert(harness.output()->tryPop(released));
+    assert(released.get() == packet.get());
+}
+
 void gateRejectsPacketsBeforeLockAndInvalidEvidence()
 {
-    {
-        GateHarness harness;
-        assert(harness.packetInput()->push(timedPacket(
-            MediaStreamKind::Video, MediaSourceClockReadiness::Locked, 7,
-            1'000, 3'600, AVRational{1, 90'000})));
-        assert(!harness.runtime->process(harness.execution));
-    }
     {
         GateHarness harness;
         assert(harness.clockInput()->push(makeMediaBufferRef<MediaSourceClockStateBuffer>(
@@ -429,11 +446,16 @@ void canonicalInputUsesRuntimeGenerationAndRtpTsPacketDuration()
 void canonicalInputUsesExactAudioSampleSpanAndRejectsInvalidTiming()
 {
     CanonicalHarness harness(MediaStreamKind::Audio, "audio_samples", 48'000, 960);
+    auto keyFlaggedAudio = timedPacket(
+        MediaStreamKind::Audio, MediaSourceClockReadiness::Locked,
+        9, 2'000, 0, AVRational{1, 48'000});
+    auto* ffmpegAudio = dynamic_cast<FFmpegPacketBuffer*>(keyFlaggedAudio.get());
+    assert(ffmpegAudio && ffmpegAudio->packet());
+    ffmpegAudio->packet()->flags |= AV_PKT_FLAG_KEY;
+    keyFlaggedAudio->addFlags(MediaBufferFlag::KeyFrame);
     MediaBufferRef owner;
     const auto* envelope = canonicalizeOne(
-        harness,
-        timedPacket(MediaStreamKind::Audio, MediaSourceClockReadiness::Locked,
-                    9, 2'000, 0, AVRational{1, 48'000}),
+        harness, std::move(keyFlaggedAudio),
         owner);
     assert(envelope);
     assert(envelope->unit().generation == 9);
@@ -441,6 +463,7 @@ void canonicalInputUsesExactAudioSampleSpanAndRejectsInvalidTiming()
     assert(envelope->unit().audio);
     assert(envelope->unit().audio->sampleRate == 48'000);
     assert(envelope->unit().audio->sampleCount == 960);
+    assert(!envelope->unit().keyFrame);
 
     CanonicalHarness invalidSampleRate(
         MediaStreamKind::Audio, "audio_samples", 0, 960);
@@ -464,11 +487,20 @@ void canonicalInputUsesExactAudioSampleSpanAndRejectsInvalidTiming()
     auto packet = timedPacket(MediaStreamKind::Video,
                               MediaSourceClockReadiness::Locked, 7,
                               1'000, 3'600, AVRational{1, 90'000});
-    auto* ffmpegPacket = dynamic_cast<FFmpegPacketBuffer*>(packet.get());
-    assert(ffmpegPacket);
-    ffmpegPacket->packet()->time_base = AVRational{0, 1};
+    packet->setTimeDescriptor(MediaTimeDescriptor{});
     assert(noRuntimeTimeBase.input()->push(std::move(packet)));
     assert(!noRuntimeTimeBase.runtime->process(noRuntimeTimeBase.execution));
+
+    CanonicalHarness graphTimeBaseAuthority(MediaStreamKind::Video, "packet");
+    auto graphTimedPacket = timedPacket(
+        MediaStreamKind::Video, MediaSourceClockReadiness::Locked, 7,
+        1'000, 3'600, AVRational{1, 90'000});
+    auto* ffmpegPacket = dynamic_cast<FFmpegPacketBuffer*>(graphTimedPacket.get());
+    assert(ffmpegPacket && ffmpegPacket->packet());
+    ffmpegPacket->packet()->time_base = AVRational{0, 1};
+    MediaBufferRef graphTimedOwner;
+    assert(canonicalizeOne(
+        graphTimeBaseAuthority, std::move(graphTimedPacket), graphTimedOwner));
 }
 
 void canonicalInputPropagatesTerminalWithoutInventingMedia()
@@ -533,6 +565,7 @@ int main()
     initialClockAcquisitionDeadlineIsOneShotAndExact();
     typedClockStateIsImmutableAndDiagnostic();
     gateRequiresLockedClockBeforeLockedPackets();
+    gateRetainsEarlyPacketUntilMatchingClockLock();
     gateRejectsPacketsBeforeLockAndInvalidEvidence();
     gateDeadlinePreflightPrecedesAllQueuedEvidence();
     canonicalInputUsesRuntimeGenerationAndRtpTsPacketDuration();

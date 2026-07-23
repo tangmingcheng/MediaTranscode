@@ -1,5 +1,6 @@
 #include "internal/graph/planner/realtime/MediaRealtimeInputPlanner.h"
 
+#include "internal/graph/planner/MediaRtpClockLivenessPolicy.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpCodecDescriptor.h"
 #include "internal/graph/planner/realtime/MediaTsProgramSelector.h"
@@ -32,8 +33,6 @@ constexpr int RtpReceiveBufferBytes = 4 * 1024 * 1024;
 constexpr int RtpMaximumDatagramBytes = 65'535;
 constexpr std::size_t RtpReorderWindowPackets = 64;
 constexpr int RtpMaximumReorderDelayMs = 100;
-constexpr int RtcpSenderReportTimeoutMs = 3'000;
-constexpr int RtcpCnameTimeoutMs = 5'000;
 constexpr std::size_t TsPacketSize = 188;
 constexpr std::uint64_t TsMaximumPacketPositionRegressionBytes = 1024 * 1024;
 
@@ -239,8 +238,8 @@ MediaRealtimeRtpTransportPlan transportPlan(
         cancellableReadTimeoutMs,
         true,
         true,
-        RtcpSenderReportTimeoutMs,
-        RtcpCnameTimeoutMs,
+        MediaRtpClockLivenessPolicy::SenderReportTimeoutMs,
+        MediaRtpClockLivenessPolicy::CnameTimeoutMs,
         MediaRtcpCompositionMode::StrictCompoundRfc3550
     };
 }

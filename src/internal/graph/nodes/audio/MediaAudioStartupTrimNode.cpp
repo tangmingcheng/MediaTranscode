@@ -6,6 +6,7 @@
 #include "internal/graph/runtime/buffer/MediaBoundCanonicalAudioBuffer.h"
 #include "internal/graph/runtime/buffer/MediaDecodedAudioTrimInputBuffer.h"
 #include "internal/graph/sync/MediaCanonicalAudioSamplesBuffer.h"
+#include "internal/graph/sync/MediaAudioSampleGrid.h"
 
 extern "C" {
 #include <libavutil/frame.h>
@@ -15,11 +16,15 @@ extern "C" {
 namespace media::ffmpeg::graph {
 namespace {
 
-::media::Result<MediaRunningTime> intervalStartTime(
-    const MediaCanonicalAudioSampleInterval& interval)
+::media::Result<std::int64_t> epochSourceSample(
+    const MediaAudioPlaybackOrigin& origin,
+    int sourceSampleRate)
 {
-    return MediaRunningTime::checkedFromTicks(
-        interval.begin, 1, interval.sampleRate);
+    auto grid = MediaAudioSampleGrid::create(sourceSampleRate);
+    if (!grid) {
+        return ::media::Result<std::int64_t>::failure(grid.error());
+    }
+    return grid.value().firstSampleAtOrAfter(origin.sourceStart);
 }
 
 } // namespace
@@ -131,12 +136,14 @@ void MediaAudioStartupTrimNode::abort(
             ::media::ErrorInfo::invalidArgument(
                 "Audio startup trim requires canonical audio from the active generation"));
     }
-    auto start = intervalStartTime(canonical->interval());
-    if (!start || (verifySourceStart &&
-                   start.value() != m_lineageState->origin->sourceStart)) {
+    auto epochSample = epochSourceSample(
+        *m_lineageState->origin, canonical->interval().sampleRate);
+    if (!epochSample ||
+        (verifySourceStart &&
+         canonical->interval().begin != epochSample.value())) {
         return ::media::Result<MediaBufferRef>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "Audio startup trim first output sample must equal epoch sourceStart"));
+                "Audio startup trim first output sample must equal the epoch sample-grid boundary"));
     }
     return ::media::Result<MediaBufferRef>::success(frame);
 }

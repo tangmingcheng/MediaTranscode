@@ -91,16 +91,19 @@ void testRejectsInvalidSenderReportMovement(TestContext& ctx)
     auto invalidSlope = mapper();
     EXPECT_TRUE(ctx, invalidSlope.observeSenderReport(evidence(1, 20, 0, 100, "c", 0, 4)));
     EXPECT_FALSE(ctx, invalidSlope.observeSenderReport(evidence(1, 21, 0, 100, "c", 1, 4)));
+    EXPECT_FALSE(ctx, invalidSlope.calibration(1));
 
     auto excessiveResidual = mapper();
     EXPECT_TRUE(ctx, excessiveResidual.observeSenderReport(evidence(1, 20, 0, 0, "c", 0, 4)));
     EXPECT_FALSE(ctx, excessiveResidual.observeSenderReport(
         evidence(1, 22, 0, 90'000, "c", 1, 4)));
+    EXPECT_FALSE(ctx, excessiveResidual.calibration(1));
 
     auto excessiveRate = mapper();
     EXPECT_TRUE(ctx, excessiveRate.observeSenderReport(evidence(1, 20, 0, 0, "c", 0, 4)));
     EXPECT_FALSE(ctx, excessiveRate.observeSenderReport(
         evidence(1, 20, 429'496'729, 1, "c", 1, 4)));
+    EXPECT_FALSE(ctx, excessiveRate.calibration(1));
 
     auto negativeSrAge = evidence(1, 20, 0, 0, "c", -1, 4);
     auto negativeSrMapper = mapper();
@@ -205,11 +208,11 @@ void testGroupRequiresExactCommonIdentityAndCurrentEvidence(TestContext& ctx)
 
     const auto oldGroupGeneration = ready.groupGeneration;
     const auto changedGeneration = evidence(11, 101, 0, 99'000, "camera", 200, 3);
-    EXPECT_TRUE(ctx, validator.observe(MediaStreamKind::Video,
-                                       changedGeneration,
-                                       calibration(changedGeneration, 90'000)));
+    EXPECT_FALSE(ctx, validator.observe(MediaStreamKind::Video,
+                                        changedGeneration,
+                                        calibration(changedGeneration, 90'000)));
     auto isolated = validator.snapshot(200);
-    EXPECT_EQ(ctx, isolated.state, MediaRtpClockGroupState::Acquiring);
+    EXPECT_EQ(ctx, isolated.state, MediaRtpClockGroupState::ReacquireRequired);
     EXPECT_TRUE(ctx, isolated.groupGeneration > oldGroupGeneration);
     EXPECT_FALSE(ctx, isolated.locked.has_value());
 }
@@ -263,11 +266,164 @@ void testGroupDegradesExpiresAndInvalidatesOnIngressDiscontinuity(TestContext& c
     const auto audio = evidence(22, 100, 0, 0, "camera", 0, 1);
     EXPECT_TRUE(ctx, validator.observe(MediaStreamKind::Video, video, calibration(video, 90'000)));
     EXPECT_TRUE(ctx, validator.observe(MediaStreamKind::Audio, audio, calibration(audio, 48'000)));
+    const auto locked = validator.snapshot(0);
+    EXPECT_EQ(ctx, locked.state, MediaRtpClockGroupState::Locked);
+    EXPECT_TRUE(ctx, locked.groupGeneration > 0);
     EXPECT_EQ(ctx, validator.snapshot(3 * Second + 1).state, MediaRtpClockGroupState::Degraded);
     EXPECT_EQ(ctx, validator.snapshot(5 * Second + 1).state, MediaRtpClockGroupState::ReacquireRequired);
     const auto generation = validator.snapshot(5 * Second + 1).groupGeneration;
     validator.invalidate();
     EXPECT_TRUE(ctx, validator.snapshot(0).groupGeneration > generation);
+}
+
+void testInitialAcquisitionNeverPublishesDegradedForStaggeredEvidence(
+    TestContext& ctx)
+{
+    auto validator = MediaRtpClockGroupValidator::create(
+        MediaRtpClockGroupValidatorConfig{3 * Second, 5 * Second, 50'000'000,
+                                          5 * Second, 5 * Second,
+                                          MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime}).value();
+    const auto earlyVideo = evidence(11, 100, 0, 0, "camera", 0, 1);
+    const auto lateAudio = evidence(
+        22, 103, 0, 0, "camera", 3 * Second + 1, 1);
+    EXPECT_TRUE(ctx, validator.observe(
+                         MediaStreamKind::Video, earlyVideo,
+                         calibration(earlyVideo, 90'000)));
+    EXPECT_TRUE(ctx, validator.observe(
+                         MediaStreamKind::Audio, lateAudio,
+                         calibration(lateAudio, 48'000)));
+
+    const auto stillAcquiring = validator.snapshot(3 * Second + 1);
+    EXPECT_EQ(ctx, stillAcquiring.state, MediaRtpClockGroupState::Acquiring);
+    EXPECT_EQ(ctx, stillAcquiring.groupGeneration, static_cast<std::uint64_t>(0));
+    EXPECT_FALSE(ctx, stillAcquiring.locked.has_value());
+
+    const auto refreshedVideo = evidence(
+        11, 103, 0, 0, "camera", 3 * Second + 2, 1);
+    EXPECT_TRUE(ctx, validator.observe(
+                         MediaStreamKind::Video, refreshedVideo,
+                         calibration(refreshedVideo, 90'000)));
+    const auto firstLock = validator.snapshot(3 * Second + 2);
+    EXPECT_EQ(ctx, firstLock.state, MediaRtpClockGroupState::Locked);
+    EXPECT_EQ(ctx, firstLock.groupGeneration, static_cast<std::uint64_t>(1));
+    EXPECT_TRUE(ctx, firstLock.locked.has_value());
+}
+
+void testInitialAcquisitionComparesSourceToObservationOffsets(TestContext& ctx)
+{
+    const auto makeValidator = [] {
+        return MediaRtpClockGroupValidator::create(
+            MediaRtpClockGroupValidatorConfig{
+                7 * Second, 9 * Second, 50'000'000, 9 * Second, 9 * Second,
+                MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime})
+            .value();
+    };
+    constexpr std::int64_t VideoObservedAtNs = 16'865'582'497'700;
+    constexpr std::int64_t AudioObservedAtNs = 16'865'772'588'400;
+    const auto video = evidence(
+        0xaa4b50d1u, 0xee06d47au, 0xaa3d70a3u, 0x0e8bbbc1u,
+        "av-sync-production-input", VideoObservedAtNs, 0);
+    const auto audio = evidence(
+        0x980d6a91u, 0xee06d47au, 0xdae147aeu, 0x6832956du,
+        "av-sync-production-input", AudioObservedAtNs, 0);
+
+    auto synchronized = makeValidator();
+    EXPECT_TRUE(ctx, synchronized.observe(
+                         MediaStreamKind::Video, video,
+                         calibration(video, 90'000)));
+    EXPECT_TRUE(ctx, synchronized.observe(
+                         MediaStreamKind::Audio, audio,
+                         calibration(audio, 48'000)));
+    const auto locked = synchronized.snapshot(AudioObservedAtNs);
+    EXPECT_EQ(ctx, locked.state, MediaRtpClockGroupState::Locked);
+    EXPECT_TRUE(ctx, locked.locked.has_value());
+
+    auto offsetMismatch = makeValidator();
+    auto mismatchedAudio = audio;
+    mismatchedAudio.senderReportObservedAtNs =
+        VideoObservedAtNs + 120'000'000;
+    mismatchedAudio.cnameObservedAtNs =
+        mismatchedAudio.senderReportObservedAtNs;
+    EXPECT_TRUE(ctx, offsetMismatch.observe(
+                         MediaStreamKind::Video, video,
+                         calibration(video, 90'000)));
+    EXPECT_FALSE(ctx, offsetMismatch.observe(
+                          MediaStreamKind::Audio, mismatchedAudio,
+                          calibration(mismatchedAudio, 48'000)));
+    EXPECT_EQ(ctx, offsetMismatch.snapshot(
+                       mismatchedAudio.senderReportObservedAtNs).state,
+              MediaRtpClockGroupState::ReacquireRequired);
+}
+
+void testActiveGenerationCommitsIndependentPeriodicSenderReports(TestContext& ctx)
+{
+    auto validator = MediaRtpClockGroupValidator::create(
+        MediaRtpClockGroupValidatorConfig{7 * Second, 9 * Second, 50'000'000,
+                                          9 * Second, 9 * Second,
+                                          MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime}).value();
+    const auto initialVideo = evidence(11, 100, 0, 0, "camera", 0, 1);
+    const auto initialAudio = evidence(
+        22, 100, 4'294'967, 0, "camera", 1'000'000, 1);
+    EXPECT_TRUE(ctx, validator.observe(
+                         MediaStreamKind::Video, initialVideo,
+                         calibration(initialVideo, 90'000)));
+    EXPECT_TRUE(ctx, validator.observe(
+                         MediaStreamKind::Audio, initialAudio,
+                         calibration(initialAudio, 44'100)));
+    const auto initialLock = validator.snapshot(1'000'000);
+    EXPECT_EQ(ctx, initialLock.state, MediaRtpClockGroupState::Locked);
+    EXPECT_TRUE(ctx, initialLock.groupGeneration > 0);
+    EXPECT_TRUE(ctx, initialLock.locked.has_value());
+    if (!initialLock.locked) return;
+    const auto commonSourceEpoch = initialLock.locked->commonSourceEpoch;
+    const auto committedAudioSourceTime =
+        initialLock.locked->audio.actualSenderReportSourceTime;
+
+    const auto periodicVideo = evidence(
+        11, 105, 47'244'640, 450'990, "camera",
+        5 * Second + 11'000'000, 1);
+    const auto periodicVideoCalibration = calibration(periodicVideo, 90'000);
+    EXPECT_TRUE(ctx, validator.observe(
+                         MediaStreamKind::Video, periodicVideo,
+                         periodicVideoCalibration));
+    const auto videoRefreshed = validator.snapshot(
+        5 * Second + 11'000'000);
+    EXPECT_EQ(ctx, videoRefreshed.state, MediaRtpClockGroupState::Locked);
+    EXPECT_EQ(ctx, videoRefreshed.groupGeneration, initialLock.groupGeneration);
+    EXPECT_TRUE(ctx, videoRefreshed.locked.has_value());
+    if (videoRefreshed.locked) {
+        EXPECT_EQ(ctx, videoRefreshed.locked->commonSourceEpoch,
+                  commonSourceEpoch);
+        EXPECT_EQ(ctx,
+                  videoRefreshed.locked->video.actualSenderReportSourceTime,
+                  periodicVideoCalibration.actualSenderReportSourceTime);
+        EXPECT_EQ(ctx,
+                  videoRefreshed.locked->audio.actualSenderReportSourceTime,
+                  committedAudioSourceTime);
+    }
+
+    const auto periodicAudio = evidence(
+        22, 105, 979'252'543, 230'511, "camera",
+        5 * Second + 228'000'000, 1);
+    const auto periodicAudioCalibration = calibration(periodicAudio, 44'100);
+    EXPECT_TRUE(ctx, validator.observe(
+                         MediaStreamKind::Audio, periodicAudio,
+                         periodicAudioCalibration));
+    const auto bothRefreshed = validator.snapshot(
+        5 * Second + 228'000'000);
+    EXPECT_EQ(ctx, bothRefreshed.state, MediaRtpClockGroupState::Locked);
+    EXPECT_EQ(ctx, bothRefreshed.groupGeneration, initialLock.groupGeneration);
+    EXPECT_TRUE(ctx, bothRefreshed.locked.has_value());
+    if (bothRefreshed.locked) {
+        EXPECT_EQ(ctx, bothRefreshed.locked->commonSourceEpoch,
+                  commonSourceEpoch);
+        EXPECT_EQ(ctx,
+                  bothRefreshed.locked->video.actualSenderReportSourceTime,
+                  periodicVideoCalibration.actualSenderReportSourceTime);
+        EXPECT_EQ(ctx,
+                  bothRefreshed.locked->audio.actualSenderReportSourceTime,
+                  periodicAudioCalibration.actualSenderReportSourceTime);
+    }
 }
 
 void testClockObservationDeadlinesCapLongTransportWait(TestContext& ctx)
@@ -380,6 +536,9 @@ void runRtpSourceClockTests(TestContext& ctx)
     testGroupRequiresExactCommonIdentityAndCurrentEvidence(ctx);
     testGroupRejectsMismatchSkewAndHasNoFallback(ctx);
     testGroupDegradesExpiresAndInvalidatesOnIngressDiscontinuity(ctx);
+    testInitialAcquisitionNeverPublishesDegradedForStaggeredEvidence(ctx);
+    testInitialAcquisitionComparesSourceToObservationOffsets(ctx);
+    testActiveGenerationCommitsIndependentPeriodicSenderReports(ctx);
     testClockObservationDeadlinesCapLongTransportWait(ctx);
     testCnameFreshnessExpiresGroupAndCapsReceiveDeadline(ctx);
     testClockObservationDeadlineArithmeticSaturates(ctx);

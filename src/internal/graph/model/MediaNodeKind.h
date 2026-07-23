@@ -64,7 +64,7 @@ enum class MediaNodeKind {
     PacketSourceConfig = 38,
     PacketNormalize = 39,
     RawRtpInput = 40,
-    AvPacketStartBarrier = 41,
+    ReservedNodeKind41 = 41,
     PacketStartGate = 42,
     RtpClockGroup = 43,
     MpegTsDemux = 44,

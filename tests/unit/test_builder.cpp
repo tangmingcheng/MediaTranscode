@@ -39,14 +39,19 @@ MediaAudioEncodeBranchOptions audioEncodeOptions(MediaGraph& graph)
             {MediaAudioProfile::knownAacLow().ffmpegProfileId()}, 1024, 0}},
         std::nullopt);
     options.plan.resolvedOutput = std::move(resolved).value();
+    options.queues = MediaGraphQueueParameters{2, 4, 3, 4};
     options.normalizePackets = false;
     options.lineageMode = MediaAudioLineageExecutionMode::LegacyPlainPacket;
     options.formatSourceNode = graph.addNode(MediaNodeKind::DebugDump, "format_source");
     graph.addOutputPort(options.formatSourceNode, "format", MediaStreamKind::Metadata,
                         MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext);
     options.packetSourceNode = graph.addNode(MediaNodeKind::DebugDump, "packet_source");
-    graph.addOutputPort(options.packetSourceNode, "audio", MediaStreamKind::Audio,
-                        MediaEdgeKind::InputPacket, MediaPayloadKind::Packet);
+    const MediaPortId packetSourcePort = graph.addOutputPort(
+        options.packetSourceNode, "audio", MediaStreamKind::Audio,
+        MediaEdgeKind::InputPacket, MediaPayloadKind::Packet);
+    graph.setPortFormatDescriptor(
+        packetSourcePort,
+        MediaGraphBuildSupport::streamIndexDescriptor(MediaStreamKind::Audio, 1));
     options.edgePolicies = MediaGraphBuildSupport::blockingEdgePolicySet(options.queues);
     return options;
 }
@@ -150,6 +155,22 @@ void testAudioCorrectionBuilderContract(TestContext& ctx)
     EXPECT_FALSE(ctx, MediaAudioEncodeBranchBuilder::build(
                           synchronizedGraph, synchronized));
 
+    MediaGraph invalidTransactionGraph;
+    auto invalidTransaction = audioEncodeOptions(invalidTransactionGraph);
+    invalidTransaction.correctionMode =
+        MediaAudioCorrectionExecutionMode::ExternalCorrectionRequired;
+    invalidTransaction.correctionGeneration = 1;
+    invalidTransaction.correctionLookaheadWindows = 2;
+    invalidTransaction.lineageMode =
+        MediaAudioLineageExecutionMode::SynchronizedReleasedAudio;
+    invalidTransaction.lineageCapacity = 8;
+    invalidTransaction.syncGroup = MediaAvSyncGroupKey("builder.audio");
+    invalidTransaction.edgePolicies.audioDriftTransaction.queuePolicy
+        .orderingPolicy = MediaQueueOrderingPolicy::Timestamp;
+    EXPECT_FALSE(ctx, MediaAudioEncodeBranchBuilder::build(
+                          invalidTransactionGraph, invalidTransaction));
+    EXPECT_TRUE(ctx, resampleNode(invalidTransactionGraph) == nullptr);
+
     MediaGraph productionGraph;
     auto production = audioEncodeOptions(productionGraph);
     production.correctionMode =
@@ -201,6 +222,21 @@ void testAudioCorrectionBuilderContract(TestContext& ctx)
     if (drift != productionGraph.nodes().end()) {
         EXPECT_EQ(ctx, drift->options.value("audio_drift_controller.sync_group"),
                   std::string("builder.audio"));
+        const auto transactionalPolicy =
+            production.edgePolicies.audioDriftTransaction;
+        const auto transactionEdges = std::count_if(
+            productionGraph.edges().begin(), productionGraph.edges().end(),
+            [&](const MediaEdge& edge) {
+                if (edge.from.nodeId != drift->id) return false;
+                EXPECT_EQ(ctx, edge.policy, transactionalPolicy);
+                EXPECT_EQ(ctx, edge.policy.queuePolicy.overflowPolicy,
+                          MediaQueueOverflowPolicy::BlockProducer);
+                EXPECT_EQ(ctx, edge.policy.queuePolicy.orderingPolicy,
+                          MediaQueueOrderingPolicy::Fifo);
+                EXPECT_TRUE(ctx, edge.policy.queuePolicy.preserveOrdering);
+                return true;
+            });
+        EXPECT_EQ(ctx, transactionEdges, std::size_t{2});
     }
     if (drift != productionGraph.nodes().end() &&
         canonicalizer != productionGraph.nodes().end()) {
@@ -262,7 +298,7 @@ void testSynchronizedAudioPacketCopyIsUnsupported(TestContext& ctx)
     options.correctionGeneration = 1;
     options.correctionLookaheadWindows = 2;
     options.syncGroup = MediaAvSyncGroupKey("builder.audio.copy");
-    auto result = MediaAudioBranchSegmentBuilder::buildIfPlanned(graph, options);
+    auto result = MediaAudioBranchSegmentBuilder::build(graph, options);
     EXPECT_FALSE(ctx, result);
     if (!result) {
         EXPECT_EQ(ctx, result.error().code, ::media::ErrorCode::Unsupported);
@@ -279,6 +315,12 @@ void testTypedPacketCopyEndpointsPreserveOwnerBoundaries(TestContext& ctx)
         MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext);
     const MediaNodeId packetSource = genericGraph.addNode(
         MediaNodeKind::DebugDump, "generic.packet");
+    const MediaPortId genericPacketPort = genericGraph.addOutputPort(
+        packetSource, "audio", MediaStreamKind::Audio,
+        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+    genericGraph.setPortFormatDescriptor(
+        genericPacketPort,
+        MediaGraphBuildSupport::streamIndexDescriptor(MediaStreamKind::Audio, 1));
     const MediaNodeId unrelatedMux = genericGraph.addNode(
         MediaNodeKind::DebugDump, "generic.unrelated_mux");
 
@@ -312,6 +354,12 @@ void testTypedPacketCopyEndpointsPreserveOwnerBoundaries(TestContext& ctx)
         MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext);
     const MediaNodeId videoPacket = videoGraph.addNode(
         MediaNodeKind::DebugDump, "video.packet");
+    const MediaPortId videoPacketPort = videoGraph.addOutputPort(
+        videoPacket, "video", MediaStreamKind::Video,
+        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+    videoGraph.setPortFormatDescriptor(
+        videoPacketPort,
+        MediaGraphBuildSupport::streamIndexDescriptor(MediaStreamKind::Video, 0));
     const MediaNodeId videoMux = videoGraph.addNode(
         MediaNodeKind::DebugDump, "video.mux");
     videoGraph.addInputPort(
@@ -330,22 +378,24 @@ void testTypedPacketCopyEndpointsPreserveOwnerBoundaries(TestContext& ctx)
     video.formatSourcePort = "format";
     video.packetSourceNode = videoPacket;
     video.packetSourcePort = "video";
-    video.muxNode = videoMux;
-    video.muxCodecPort = "codec";
-    video.muxPacketPort = "packet";
     video.normalizePackets = false;
     video.queues.metadata = 1;
     video.queues.packet = 1;
     video.queues.mux = 1;
     video.edgePolicies =
         MediaGraphBuildSupport::blockingEdgePolicySet(video.queues);
-    EXPECT_TRUE(ctx, MediaVideoPacketCopyBranchBuilder::build(videoGraph, video));
+    auto videoResult = MediaVideoPacketCopyBranchBuilder::build(videoGraph, video);
+    EXPECT_TRUE(ctx, videoResult);
+    if (videoResult) {
+        EXPECT_TRUE(ctx, videoResult.value().codec.valid());
+        EXPECT_TRUE(ctx, videoResult.value().packet.valid());
+    }
     const auto muxEdges = std::count_if(
         videoGraph.edges().begin(), videoGraph.edges().end(),
         [videoMux](const MediaEdge& edge) {
             return edge.to.nodeId == videoMux;
         });
-    EXPECT_EQ(ctx, muxEdges, std::size_t{2});
+    EXPECT_EQ(ctx, muxEdges, std::size_t{0});
 }
 
 void testFileMuxSessionKindIsExplicit(TestContext& ctx)

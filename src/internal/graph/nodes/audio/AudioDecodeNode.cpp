@@ -8,6 +8,7 @@
 #include "internal/graph/runtime/buffer/MediaDecodedAudioTrimInputBuffer.h"
 #include "internal/graph/nodes/audio/MediaAudioDecodeInputView.h"
 #include "internal/graph/sync/MediaCanonicalAudioSamplesBuffer.h"
+#include "internal/graph/sync/MediaAudioSampleGrid.h"
 #include "internal/graph/sync/lineage/MediaAudioLineageIdentities.h"
 #include "internal/graph/sync/lineage/MediaAudioLineageCapacity.h"
 
@@ -44,6 +45,7 @@ void AudioDecodeLineageState::clearLineageStorage() noexcept
     receivePending = false;
     pendingPacket.reset();
     intervals.reset();
+    intervalProjection.reset();
     activeOrigin.reset();
     startupTrimDirective = 0;
     startupTrimDirectiveEmitted = false;
@@ -187,6 +189,7 @@ void AudioDecodeNode::resetRuntimeState() noexcept
                 "AudioDecodeNode failed to retain packet ownership"));
     }
     std::optional<MediaAudioIntervalAccumulator> candidateIntervals;
+    std::optional<MediaAudioSampleProjection> candidateProjection;
     std::optional<MediaAudioPlaybackOrigin> incomingOrigin;
     std::uint32_t incomingTrim = 0;
     if (resolved.value().synchronized) {
@@ -215,22 +218,36 @@ void AudioDecodeNode::resetRuntimeState() noexcept
                     "AudioDecodeNode requires the source codec sample rate"));
         }
         const int sampleRate = codecContext()->sample_rate;
-        const auto begin = av_rescale_q_rnd(
-            synchronized.lineage->presentation.nanoseconds(),
-            AVRational{1, 1'000'000'000}, AVRational{1, sampleRate},
-            AV_ROUND_NEAR_INF);
-        const auto samples = av_rescale_q_rnd(
-            synchronized.lineage->duration.nanoseconds(),
-            AVRational{1, 1'000'000'000}, AVRational{1, sampleRate},
-            AV_ROUND_NEAR_INF);
-        if (begin < 0 || samples <= 0 ||
-            begin > std::numeric_limits<std::int64_t>::max() - samples) {
+        auto grid = MediaAudioSampleGrid::create(sampleRate);
+        auto begin = grid
+            ? grid.value().nearestSample(
+                  synchronized.lineage->presentation)
+            : ::media::Result<std::int64_t>::failure(grid.error());
+        auto samples = grid
+            ? grid.value().nearestSample(synchronized.lineage->duration)
+            : ::media::Result<std::int64_t>::failure(grid.error());
+        if (!begin || !samples || samples.value() <= 0) {
             return ::media::Result<MediaNodeProcessResult>::failure(
                 ::media::ErrorInfo::invalidArgument(
-                    "AudioDecodeNode cannot accept another canonical interval"));
+                    "AudioDecodeNode cannot represent the canonical source interval"));
+        }
+        candidateProjection = m_lineageState->intervalProjection;
+        if (!candidateProjection) {
+            auto projection = MediaAudioSampleProjection::create(
+                begin.value(), sampleRate, sampleRate);
+            if (!projection) {
+                return ::media::Result<MediaNodeProcessResult>::failure(
+                    projection.error());
+            }
+            candidateProjection.emplace(std::move(projection).value());
+        }
+        auto projected = candidateProjection->append(samples.value());
+        if (!projected) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                projected.error());
         }
         const MediaAudioIntervalFragment incomingFragment{
-            synchronized.lineage, {begin, begin + samples, sampleRate}};
+            synchronized.lineage, projected.value()};
         MediaAudioLineageCapacity leases(m_lineageState->capacity());
         if (auto status =
                 m_lineageState->intervals.observeLineageCapacity(leases);
@@ -255,6 +272,7 @@ void AudioDecodeNode::resetRuntimeState() noexcept
             m_lineageState->startupTrimDirectiveEmitted = false;
         }
         m_lineageState->intervals = std::move(*candidateIntervals);
+        m_lineageState->intervalProjection = std::move(candidateProjection);
     }
     m_lineageState->pendingPacket = std::move(pendingPacket);
     return submitPendingPacket(context);
