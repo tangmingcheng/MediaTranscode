@@ -8,7 +8,6 @@
 #include "internal/graph/runtime/buffer/MediaDecodedAudioTrimInputBuffer.h"
 #include "internal/graph/nodes/audio/MediaAudioDecodeInputView.h"
 #include "internal/graph/sync/MediaCanonicalAudioSamplesBuffer.h"
-#include "internal/graph/sync/MediaAudioSampleGrid.h"
 #include "internal/graph/sync/lineage/MediaAudioLineageIdentities.h"
 #include "internal/graph/sync/lineage/MediaAudioLineageCapacity.h"
 
@@ -215,26 +214,15 @@ void AudioDecodeNode::resetRuntimeState() noexcept
                 ::media::ErrorInfo::notInitialized(
                     "AudioDecodeNode requires the source codec sample rate"));
         }
-        const int sampleRate = codecContext()->sample_rate;
-        auto grid = MediaAudioSampleGrid::create(sampleRate);
-        auto begin = grid
-            ? grid.value().nearestSample(
-                  synchronized.lineage->presentation)
-            : ::media::Result<std::int64_t>::failure(grid.error());
-        auto absoluteEnd = synchronized.lineage->presentation.checkedAdd(
-            synchronized.lineage->duration);
-        auto end = grid && absoluteEnd
-            ? grid.value().nearestSample(absoluteEnd.value())
-            : ::media::Result<std::int64_t>::failure(
-                  grid ? absoluteEnd.error() : grid.error());
-        if (!begin || !end || end.value() <= begin.value()) {
+        const auto& sourceInterval = synchronized.sourceInterval;
+        if (sourceInterval.sampleRate != codecContext()->sample_rate) {
             return ::media::Result<MediaNodeProcessResult>::failure(
                 ::media::ErrorInfo::invalidArgument(
-                    "AudioDecodeNode cannot represent the canonical source interval"));
+                    "AudioDecodeNode source interval sample rate conflicts with codec"));
         }
         const MediaAudioIntervalFragment incomingFragment{
             synchronized.lineage,
-            {begin.value(), end.value(), sampleRate}};
+            sourceInterval};
         MediaAudioLineageCapacity leases(m_lineageState->capacity());
         if (auto status =
                 m_lineageState->intervals.observeLineageCapacity(leases);

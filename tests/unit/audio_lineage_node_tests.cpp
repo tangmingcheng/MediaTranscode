@@ -2,6 +2,7 @@
 #include "internal/graph/nodes/audio/AudioDecodeNode.h"
 #include "internal/graph/nodes/audio/AudioEncodeNode.h"
 #include "internal/graph/nodes/audio/AudioResampleNode.h"
+#include "internal/graph/nodes/audio/MediaAudioDecodeInputView.h"
 #include "internal/graph/nodes/audio/MediaAudioStartupTrimNode.h"
 #include "internal/graph/runtime/buffer/MediaAvReleasedAudioBuffer.h"
 #include "internal/graph/runtime/buffer/MediaBoundCanonicalAudioBuffer.h"
@@ -382,7 +383,58 @@ void decoderRetryAnd44100To48000Chain()
     decodeNode.abort(execution);
 }
 
-void decoderUsesAbsoluteSampleGridAcrossFractionalPacketDurations()
+void decodeInputPreservesExactUpstreamSampleInterval()
+{
+    constexpr MediaCanonicalAudioSampleInterval Expected{
+        426'929, 427'953, 44'100};
+    auto presentation = MediaRunningTime::checkedFromTicks(
+        Expected.begin + 1, 1, Expected.sampleRate);
+    auto duration = MediaRunningTime::checkedFromTicks(
+        Expected.end - Expected.begin, 1, Expected.sampleRate);
+    auto grid = MediaAudioSampleGrid::create(Expected.sampleRate);
+    auto quantizedPresentation = grid
+        ? grid.value().nearestSample(presentation.value())
+        : ::media::Result<std::int64_t>::failure(grid.error());
+    CHECK(presentation && duration && quantizedPresentation);
+    CHECK(quantizedPresentation.value() == Expected.begin + 1);
+    auto released = makeReleasedPacketWithTiming(
+        7, 1, presentation.value(), duration.value(), Expected.sampleRate,
+        Expected.begin, static_cast<int>(Expected.end - Expected.begin));
+
+    auto view = resolveMediaAudioDecodeInput(
+        released, MediaAudioLineageExecutionMode::SynchronizedReleasedAudio);
+
+    CHECK(view);
+    CHECK(view.value().synchronized);
+    CHECK(view.value().synchronized->sourceInterval.begin == Expected.begin);
+    CHECK(view.value().synchronized->sourceInterval.end == Expected.end);
+    CHECK(view.value().synchronized->sourceInterval.sampleRate ==
+          Expected.sampleRate);
+}
+
+void canonicalAudioSeamRejectsMissingOrInvalidExactInterval()
+{
+    auto packet = ::media::ffmpeg::makePacket();
+    CHECK(packet && av_new_packet(packet.get(), 1) == 0);
+    auto wrapped = FFmpegBufferFactory::wrapPacket(
+        std::move(packet), MediaStreamKind::Audio, std::nullopt);
+    CHECK(wrapped);
+    auto immutable = std::make_shared<const MediaCanonicalLineage>(
+        MediaCanonicalLineage{
+            MediaRunningTime::fromNanoseconds(0), std::nullopt,
+            MediaRunningTime::fromNanoseconds(1),
+            MediaDecodeOrderMode::PresentationOrderNoReorder,
+            "audio-lineage-seam", MediaSourceAccessUnitSequence(1),
+            MediaTimeMappingConfidence::Locked, 7});
+
+    CHECK(!MediaCanonicalAccessUnitBuffer::create(
+        wrapped.value(), immutable, std::nullopt));
+    CHECK(!MediaCanonicalAccessUnitBuffer::create(
+        wrapped.value(), immutable,
+        MediaCanonicalAudioSampleInterval{10, 10, 44'100}));
+}
+
+void decoderRejectsSourceIntervalRateConflict()
 {
     MediaGraph graph;
     const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(4);
@@ -432,32 +484,12 @@ void decoderUsesAbsoluteSampleGridAcrossFractionalPacketDurations()
     auto duration = MediaRunningTime::checkedFromTicks(
         SourcePacketSamples, 1, SourceSampleRate);
     CHECK(duration);
-    for (std::int64_t index = 0; index < 2; ++index) {
-        auto presentation = MediaRunningTime::checkedFromTicks(
-            index * SourcePacketSamples, 1, SourceSampleRate);
-        CHECK(presentation);
-        CHECK(execution.findInputChannel(decode, "packet")->push(
-            makeReleasedPacketWithTiming(
-                7, static_cast<std::uint64_t>(index + 1),
-                presentation.value(), duration.value(), SourceSampleRate,
-                index * SourcePacketSamples, SourcePacketSamples)));
-        api->sendResults = {0};
-        api->receiveResults = {AVERROR(EAGAIN)};
-        CHECK(node.process(execution));
-    }
-
-    auto absoluteEnd = MediaRunningTime::checkedFromTicks(
-        2 * SourcePacketSamples, 1, SourceSampleRate);
-    auto grid = MediaAudioSampleGrid::create(48'000);
-    CHECK(absoluteEnd && grid);
-    auto expectedEnd = grid.value().nearestSample(absoluteEnd.value());
-    auto independentlyRoundedPacket = grid.value().nearestSample(
-        duration.value());
-    CHECK(expectedEnd && independentlyRoundedPacket);
-    CHECK(expectedEnd.value() == 2'229);
-    CHECK(independentlyRoundedPacket.value() == 1'115);
-    CHECK(2 * independentlyRoundedPacket.value() != expectedEnd.value());
-    CHECK(state->intervals.queuedSamples() == expectedEnd.value());
+    CHECK(execution.findInputChannel(decode, "packet")->push(
+        makeReleasedPacketWithTiming(
+            7, 1, MediaRunningTime::fromNanoseconds(0), duration.value(),
+            SourceSampleRate, 0, SourcePacketSamples)));
+    CHECK(!node.process(execution));
+    CHECK(state->intervals.queuedSamples() == 0);
     node.abort(execution);
 }
 
@@ -899,7 +931,9 @@ void encoderDropsRetainedEofAndContinuesNextGeneration()
 int main()
 {
     decoderRetryAnd44100To48000Chain();
-    decoderUsesAbsoluteSampleGridAcrossFractionalPacketDurations();
+    decodeInputPreservesExactUpstreamSampleInterval();
+    canonicalAudioSeamRejectsMissingOrInvalidExactInterval();
+    decoderRejectsSourceIntervalRateConflict();
     decoderPurgeDropsEagainPacketBeforeRetry();
     retainedControlFreshnessIsExactAndGenerationBound();
     startupTrimDropsRetainedEofAndContinuesNextGeneration();

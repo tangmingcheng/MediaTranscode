@@ -113,7 +113,7 @@ void signedCanonicalSourceIntervalsCrossZeroExactly()
                          std::numeric_limits<std::int64_t>::max(), 44'100}}));
 }
 
-void invalidContinuityGenerationAndResidueAreTerminal()
+void invalidContinuityRateGenerationAndResidueAreTerminal()
 {
     MediaAudioIntervalAccumulator gap;
     assert(gap.push({lineage(9, 1), {0, 480, 48'000}}));
@@ -126,6 +126,10 @@ void invalidContinuityGenerationAndResidueAreTerminal()
     MediaAudioIntervalAccumulator generation;
     assert(generation.push({lineage(9, 1), {0, 480, 48'000}}));
     assert(!generation.push({lineage(10, 2), {480, 960, 48'000}}));
+
+    MediaAudioIntervalAccumulator rate;
+    assert(rate.push({lineage(9, 1), {0, 480, 48'000}}));
+    assert(!rate.push({lineage(9, 2), {480, 960, 44'100}}));
 
     MediaAudioIntervalAccumulator residue;
     assert(residue.push({lineage(9, 1), {0, 480, 48'000}}));
@@ -331,7 +335,7 @@ int main()
     epochQuantizationUsesOneAbsoluteAudioSampleGrid();
     aggregationAndSplitPreserveExactImmutableLineage();
     signedCanonicalSourceIntervalsCrossZeroExactly();
-    invalidContinuityGenerationAndResidueAreTerminal();
+    invalidContinuityRateGenerationAndResidueAreTerminal();
     drainedAccumulatorRetainsContinuityAuthorityUntilReset();
     droppedResidueRequiresExactAppliedCorrectionAuthorization();
     sampleProjectionAdvancesFromNegativeCanonicalOrigin();

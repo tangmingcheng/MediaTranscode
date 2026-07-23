@@ -20,7 +20,9 @@ namespace media::ffmpeg::graph {
             MediaAudioDecodeInputView{
                 released->media(),
                 MediaSynchronizedAudioDecodeInput{
-                    released->media()->lineage(), released->audioOrigin(),
+                    released->media()->lineage(),
+                    *released->media()->audioSampleInterval(),
+                    released->audioOrigin(),
                     released->trimLeadingSamples()}});
     }
     if (mode != MediaAudioLineageExecutionMode::LegacyPlainPacket || released ||
