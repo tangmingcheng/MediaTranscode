@@ -584,12 +584,13 @@ MediaAvOutputSchedulerNode::processSelected(
               target.value(),
               *m_lastDisplayedVideoMasterTime,
               decisionHorizon.value(), epoch.value().generation,
-              controllerSequence})
+              controllerSequence, now.value()})
         : m_videoController->update(MediaVideoFrameMeasurement{
               dispatch.value(), target.value(), decisionHorizon.value(),
               epoch.value().generation,
               controllerSequence,
-              m_videoHead->canonical()->media()->isKeyFrame()});
+              m_videoHead->canonical()->media()->isKeyFrame(),
+              now.value()});
     if (!decision) return ::media::Result<MediaNodeProcessResult>::failure(
         decision.error().toErrorInfo());
     if (decision.value().kind() == MediaVideoSyncDecisionKind::Hold) {

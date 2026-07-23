@@ -62,7 +62,8 @@ MediaVideoFrameMeasurement measurement(
         ms(presentationMs - phaseErrorMs),
         generation,
         sequence,
-        keyFrame};
+        keyFrame,
+        ms(presentationMs - phaseErrorMs)};
 }
 
 MediaVideoRepeatRequest repeatRequest(
@@ -78,7 +79,8 @@ MediaVideoRepeatRequest repeatRequest(
         ms(lastEmittedPresentationMs),
         ms(decisionHorizonMs),
         generation,
-        sequence};
+        sequence,
+        ms(decisionHorizonMs)};
 }
 
 MediaAvSyncResult<MediaVideoSyncController> makeController(
@@ -129,6 +131,19 @@ void testEarlyHoldAndDisplayWindowsKeepPresentationTime(TestContext& ctx)
     EXPECT_TRUE(ctx, lastLate);
     if (!lastLate) return;
     EXPECT_EQ(ctx, lastLate.value().kind(), MediaVideoSyncDecisionKind::DisplayLate);
+
+    auto transportLeadCreated = makeController(ctx);
+    if (!transportLeadCreated) return;
+    auto transportLeadController =
+        std::move(transportLeadCreated).value();
+    auto onTimeWithTransportLead =
+        transportLeadController.update(MediaVideoFrameMeasurement{
+            ms(2'000), ms(2'000), ms(2'100), 1, 1, false, ms(2'000)});
+    EXPECT_TRUE(ctx, onTimeWithTransportLead);
+    if (!onTimeWithTransportLead) return;
+    EXPECT_EQ(ctx, onTimeWithTransportLead.value().kind(),
+              MediaVideoSyncDecisionKind::Display);
+    EXPECT_EQ(ctx, onTimeWithTransportLead.value().phaseError(), ms(0));
 }
 
 void testRecoverableLateNonKeyFrameDropsAtBoundary(TestContext& ctx)
@@ -163,6 +178,19 @@ void testRepeatOnlyAuthorizesExplicitCadenceRecovery(TestContext& ctx)
     EXPECT_EQ(ctx, repeat.value().kind(),
               MediaVideoSyncDecisionKind::RepeatPreviousFrame);
     EXPECT_EQ(ctx, repeat.value().presentationOnMaster(), ms(3'020));
+
+    auto transportLeadCreated = makeController(ctx, true);
+    if (!transportLeadCreated) return;
+    auto transportLeadController =
+        std::move(transportLeadCreated).value();
+    auto repeatOnTimeWithTransportLead =
+        transportLeadController.update(MediaVideoRepeatRequest{
+            ms(2'000), ms(2'000), ms(1'980), ms(2'100), 1, 1, ms(2'000)});
+    EXPECT_TRUE(ctx, repeatOnTimeWithTransportLead);
+    if (!repeatOnTimeWithTransportLead) return;
+    EXPECT_EQ(ctx, repeatOnTimeWithTransportLead.value().kind(),
+              MediaVideoSyncDecisionKind::RepeatPreviousFrame);
+    EXPECT_EQ(ctx, repeatOnTimeWithTransportLead.value().phaseError(), ms(0));
 
     auto unavailableCreated = makeController(ctx, true);
     if (!unavailableCreated) return;
@@ -328,7 +356,7 @@ void testHardDiscontinuityAndGenerationIsolation(TestContext& ctx)
     if (!decodeLeadCreated) return;
     auto decodeLeadController = std::move(decodeLeadCreated).value();
     auto decodeLead = decodeLeadController.update(MediaVideoFrameMeasurement{
-        ms(6'000), ms(6'100), ms(6'000), 1, 1, true});
+        ms(6'000), ms(6'100), ms(6'000), 1, 1, true, ms(6'000)});
     EXPECT_TRUE(ctx, decodeLead);
     if (decodeLead) {
         EXPECT_EQ(ctx, decodeLead.value().kind(),
@@ -357,14 +385,16 @@ void testHardDiscontinuityAndGenerationIsolation(TestContext& ctx)
         MediaRunningTime::fromNanoseconds(-1),
         2,
         2,
-        false};
+        false,
+        MediaRunningTime::fromNanoseconds(-1)};
     MediaVideoRepeatRequest futureOverflow{
         MediaRunningTime::fromNanoseconds(0),
         MediaRunningTime::fromNanoseconds(std::numeric_limits<std::int64_t>::max()),
         MediaRunningTime::fromNanoseconds(0),
         MediaRunningTime::fromNanoseconds(-1),
         4,
-        2};
+        2,
+        MediaRunningTime::fromNanoseconds(-1)};
     auto staleOverflowDecision = controller.update(staleOverflow);
     auto futureOverflowDecision = controller.update(futureOverflow);
     EXPECT_TRUE(ctx, staleOverflowDecision && futureOverflowDecision);
@@ -409,7 +439,8 @@ void testMeasurementPolicyAndResetContracts(TestContext& ctx)
         MediaRunningTime::fromNanoseconds(0),
         MediaRunningTime::fromNanoseconds(std::numeric_limits<std::int64_t>::max()),
         MediaRunningTime::fromNanoseconds(-1),
-        1, 2, false};
+        1, 2, false,
+        MediaRunningTime::fromNanoseconds(-1)};
     auto overflowDecision = controller.update(overflow);
     EXPECT_FALSE(ctx, overflowDecision);
     if (!overflowDecision) {
@@ -423,7 +454,8 @@ void testMeasurementPolicyAndResetContracts(TestContext& ctx)
         MediaRunningTime::fromNanoseconds(0),
         MediaRunningTime::fromNanoseconds(-1),
         1,
-        3};
+        3,
+        MediaRunningTime::fromNanoseconds(-1)};
     auto repeatOverflowDecision = controller.update(repeatOverflow);
     EXPECT_FALSE(ctx, repeatOverflowDecision);
     if (!repeatOverflowDecision) {
@@ -478,6 +510,7 @@ void testHoldDoesNotConsumeFrameBeforeDeadlineReevaluation(TestContext& ctx)
     auto beforeDeadline = heldFrame;
     beforeDeadline.decisionHorizonOnMaster = MediaRunningTime::fromNanoseconds(
         ms(10'080).nanoseconds() - 1);
+    beforeDeadline.observedAtMaster = beforeDeadline.decisionHorizonOnMaster;
     auto stillHeld = controller.update(beforeDeadline);
     EXPECT_TRUE(ctx, stillHeld);
     if (stillHeld) {
@@ -494,6 +527,7 @@ void testHoldDoesNotConsumeFrameBeforeDeadlineReevaluation(TestContext& ctx)
 
     auto dueFrame = heldFrame;
     dueFrame.decisionHorizonOnMaster = ms(10'080);
+    dueFrame.observedAtMaster = dueFrame.decisionHorizonOnMaster;
     auto display = controller.update(dueFrame);
     EXPECT_TRUE(ctx, display);
     if (display) {

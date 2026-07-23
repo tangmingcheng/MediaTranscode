@@ -17,6 +17,7 @@ struct MediaVideoFrameMeasurement final {
     std::uint64_t generation = 0;
     std::uint64_t sequence = 0;
     bool keyFrame = false;
+    MediaRunningTime observedAtMaster;
 };
 
 struct MediaVideoRepeatRequest final {
@@ -26,6 +27,7 @@ struct MediaVideoRepeatRequest final {
     MediaRunningTime decisionHorizonOnMaster;
     std::uint64_t generation = 0;
     std::uint64_t sequence = 0;
+    MediaRunningTime observedAtMaster;
 };
 
 using MediaVideoSyncMeasurement =

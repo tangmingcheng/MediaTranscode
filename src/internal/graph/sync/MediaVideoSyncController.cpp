@@ -83,9 +83,18 @@ MediaAvSyncResult<MediaVideoSyncDecision> MediaVideoSyncController::updateFrame(
     if (auto status = validateFrameIdentity(measurement); !status) {
         return MediaAvSyncResult<MediaVideoSyncDecision>::failure(status.error());
     }
+    if (measurement.observedAtMaster >
+        measurement.decisionHorizonOnMaster) {
+        return MediaAvSyncResult<MediaVideoSyncDecision>::failure(
+            error(MediaAvSyncErrorCode::InvalidVideoSyncMeasurement,
+                  "measure_frame",
+                  measurement.generation,
+                  measurement.targetPresentationOnMaster,
+                  "video observation exceeds its decision horizon"));
+    }
 
     auto presentationPhase = measurement.targetPresentationOnMaster.checkedSubtract(
-        measurement.decisionHorizonOnMaster);
+        measurement.observedAtMaster);
     if (!presentationPhase) {
         return MediaAvSyncResult<MediaVideoSyncDecision>::failure(
             error(MediaAvSyncErrorCode::TimeOverflow,
@@ -203,10 +212,17 @@ MediaAvSyncResult<MediaVideoSyncDecision> MediaVideoSyncController::updateRepeat
                   request.repeatPresentationOnMaster,
                   "video sync sequence must be positive"));
     }
-
+    if (request.observedAtMaster > request.decisionHorizonOnMaster) {
+        return MediaAvSyncResult<MediaVideoSyncDecision>::failure(
+            error(MediaAvSyncErrorCode::InvalidVideoSyncMeasurement,
+                  "measure_repeat",
+                  request.generation,
+                  request.repeatPresentationOnMaster,
+                  "video repeat observation exceeds its decision horizon"));
+    }
 
     auto presentationPhase = request.repeatPresentationOnMaster.checkedSubtract(
-        request.decisionHorizonOnMaster);
+        request.observedAtMaster);
     if (!presentationPhase) {
         return MediaAvSyncResult<MediaVideoSyncDecision>::failure(
             error(MediaAvSyncErrorCode::TimeOverflow,
