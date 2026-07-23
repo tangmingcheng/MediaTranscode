@@ -56,6 +56,10 @@ MediaCanonicalAudioSourceTimeline::append(
     std::uint64_t generation,
     std::uint64_t sequence)
 {
+    if (generation == 0) {
+        return invalidTimeline(
+            "Canonical audio source timeline requires a non-zero generation");
+    }
     if (sampleCount == 0) {
         return invalidTimeline(
             "Canonical audio source timeline requires a non-zero sample count");

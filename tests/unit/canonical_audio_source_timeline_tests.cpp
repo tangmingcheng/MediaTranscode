@@ -44,6 +44,7 @@ void rejectsInvalidTimelineContract()
     const auto anchor = MediaRunningTime::fromNanoseconds(123'456'789);
     assert(!timeline.append(anchor, 0, 7, 1));
     assert(!timeline.append(anchor, 1'024, 7, 0));
+    assert(!timeline.append(anchor, 1'024, 0, 1));
     assert(timeline.append(anchor, 1'024, 7, 1));
     assert(!timeline.append(anchor, 1'024, 7, 3));
     assert(!timeline.append(anchor, 1'024, 7, 1));
