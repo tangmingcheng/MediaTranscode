@@ -114,7 +114,8 @@ MediaAvSyncResult<MediaVideoSyncDecision> MediaVideoSyncController::updateFrame(
             decision(MediaVideoSyncDecisionKind::Reacquire,
                      measurement.targetPresentationOnMaster,
                      presentationPhase.value(),
-                     measurement.sequence));
+                     measurement.sequence,
+                     MediaVideoReacquisitionCause::HardPhaseError));
     }
     if (dispatchPhase.value().nanoseconds() > m_policy.earlyHoldThresholdNs) {
         auto recheckAt = measurement.dispatchOnMaster.checkedSubtract(
@@ -246,7 +247,8 @@ MediaAvSyncResult<MediaVideoSyncDecision> MediaVideoSyncController::updateRepeat
             decision(MediaVideoSyncDecisionKind::Reacquire,
                      request.repeatPresentationOnMaster,
                      presentationPhase.value(),
-                     request.sequence));
+                     request.sequence,
+                     MediaVideoReacquisitionCause::HardPhaseError));
     }
     if (dispatchPhase.value().nanoseconds() > m_policy.earlyHoldThresholdNs) {
         auto recheckAt = request.repeatDispatchOnMaster.checkedSubtract(
@@ -300,7 +302,8 @@ MediaVideoSyncController::recoveryDecision(
             decision(MediaVideoSyncDecisionKind::Reacquire,
                      presentationOnMaster,
                      phaseError,
-                     sequence));
+                     sequence,
+                     MediaVideoReacquisitionCause::RecoveryBudgetExhausted));
     }
     ++m_consecutiveRecoveryActions;
     return MediaAvSyncResult<MediaVideoSyncDecision>::success(
@@ -320,7 +323,12 @@ MediaVideoSyncController::isolatedGenerationDecision(
     return MediaAvSyncResult<MediaVideoSyncDecision>::success(
         MediaVideoSyncDecision(
             kind, presentationOnMaster, phaseError,
-            observedGeneration, sequence, m_consecutiveRecoveryActions));
+            observedGeneration, sequence, m_consecutiveRecoveryActions,
+            std::nullopt,
+            kind == MediaVideoSyncDecisionKind::Reacquire
+                ? std::optional<MediaVideoReacquisitionCause>{
+                      MediaVideoReacquisitionCause::GenerationMismatch}
+                : std::optional<MediaVideoReacquisitionCause>{}));
 }
 
 MediaAvSyncStatus MediaVideoSyncController::validateSequence(
@@ -401,11 +409,13 @@ MediaVideoSyncDecision MediaVideoSyncController::decision(
     MediaVideoSyncDecisionKind kind,
     MediaRunningTime presentationOnMaster,
     MediaRunningTime phaseError,
-    std::uint64_t sequence) const noexcept
+    std::uint64_t sequence,
+    std::optional<MediaVideoReacquisitionCause> reacquisitionCause) const noexcept
 {
     return MediaVideoSyncDecision(
         kind, presentationOnMaster, phaseError,
-        m_generation, sequence, m_consecutiveRecoveryActions);
+        m_generation, sequence, m_consecutiveRecoveryActions,
+        std::nullopt, reacquisitionCause);
 }
 
 } // namespace media::ffmpeg::graph

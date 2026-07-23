@@ -80,7 +80,10 @@ private:
     MediaVideoSyncDecision decision(MediaVideoSyncDecisionKind kind,
                                     MediaRunningTime presentationOnMaster,
                                     MediaRunningTime phaseError,
-                                    std::uint64_t sequence) const noexcept;
+                                    std::uint64_t sequence,
+                                    std::optional<MediaVideoReacquisitionCause>
+                                        reacquisitionCause =
+                                            std::nullopt) const noexcept;
 
     MediaAvSyncTopology m_topology;
     Policy m_policy;

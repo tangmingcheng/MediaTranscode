@@ -21,6 +21,12 @@ enum class MediaVideoSyncDecisionKind : std::uint8_t {
     DropOldGeneration = 8
 };
 
+enum class MediaVideoReacquisitionCause : std::uint8_t {
+    HardPhaseError = 0,
+    RecoveryBudgetExhausted = 1,
+    GenerationMismatch = 2
+};
+
 class MediaVideoSyncDecision final {
 public:
     MediaVideoSyncDecisionKind kind() const noexcept { return m_kind; }
@@ -39,6 +45,11 @@ public:
     {
         return m_recheckAtMasterTime;
     }
+    const std::optional<MediaVideoReacquisitionCause>&
+    reacquisitionCause() const noexcept
+    {
+        return m_reacquisitionCause;
+    }
 
 private:
     friend class MediaVideoSyncController;
@@ -49,7 +60,9 @@ private:
                            std::uint64_t generation,
                            std::uint64_t sequence,
                            int consecutiveRecoveryActions,
-                           std::optional<MediaRunningTime> recheckAtMasterTime = std::nullopt) noexcept
+                           std::optional<MediaRunningTime> recheckAtMasterTime = std::nullopt,
+                           std::optional<MediaVideoReacquisitionCause>
+                               reacquisitionCause = std::nullopt) noexcept
         : m_kind(kind)
         , m_presentationOnMaster(presentationOnMaster)
         , m_phaseError(phaseError)
@@ -57,6 +70,7 @@ private:
         , m_sequence(sequence)
         , m_consecutiveRecoveryActions(consecutiveRecoveryActions)
         , m_recheckAtMasterTime(recheckAtMasterTime)
+        , m_reacquisitionCause(reacquisitionCause)
     {
     }
 
@@ -67,6 +81,7 @@ private:
     std::uint64_t m_sequence = 0;
     int m_consecutiveRecoveryActions = 0;
     std::optional<MediaRunningTime> m_recheckAtMasterTime;
+    std::optional<MediaVideoReacquisitionCause> m_reacquisitionCause;
 };
 
 } // namespace media::ffmpeg::graph

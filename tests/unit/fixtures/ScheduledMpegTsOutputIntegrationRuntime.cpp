@@ -4,6 +4,7 @@
 #include "unit/fixtures/ScheduledMpegTsDecodeSampleFixture.h"
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/builder/segments/MediaRealtimeAvSyncNodeConfigurator.h"
 #include "internal/graph/builder/segments/MediaRealtimeAvSchedulerSegmentBuilder.h"
 #include "internal/graph/builder/segments/MediaScheduledMpegTsOutputSegmentBuilder.h"
 #include "internal/graph/nodes/mux/FileMuxNode.h"
@@ -116,15 +117,16 @@ MediaEndpoint addSource(MediaGraph& graph,
         "scheduled-ts.epoch.sequencer");
     const MediaNodeId releaseSource = result.graph.addNode(
         MediaNodeKind::DebugDump, "scheduled-ts.epoch.release");
-    if (!result.graph.setNodeOption(
-            result.binder, "playback_epoch_binder.sync_group",
-            plan.groupKey.value()) ||
-        !result.graph.setNodeOption(
-            result.sequencer,
-            "activated_startup_release_sequencer.sync_group",
-            plan.groupKey.value())) {
+    auto binderConfigured =
+        MediaRealtimeAvSyncNodeConfigurator::configurePlaybackEpochBinder(
+            result.graph, result.binder, plan);
+    auto sequencerConfigured =
+        MediaRealtimeAvSyncNodeConfigurator::configureActivationSequencer(
+            result.graph, result.sequencer, plan);
+    if (!binderConfigured || !sequencerConfigured) {
         return ::media::Result<IntegrationGraph>::failure(
-            integrationError("scheduled TS graph could not configure epoch authority"));
+            !binderConfigured ? binderConfigured.error()
+                              : sequencerConfigured.error());
     }
     result.graph.addOutputPort(
         releaseSource, "release", MediaStreamKind::Metadata,

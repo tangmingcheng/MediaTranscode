@@ -419,7 +419,7 @@ void testProductionUdpSessionPublishesMappedProgramClock(TestContext& ctx,
     EXPECT_TRUE(ctx, session->close());
 }
 
-void testProductionBuilderRejectsUnassembledSynchronizedGraph(
+void testProductionBuilderBuildsAssembledSynchronizedGraph(
     TestContext& ctx,
     std::uint16_t inputPort,
     std::uint16_t outputPort)
@@ -446,16 +446,40 @@ void testProductionBuilderRejectsUnassembledSynchronizedGraph(
                 planned.input.mpegTs->audioPacketDuration->packetDuration > 0);
     EXPECT_TRUE(ctx, std::holds_alternative<MediaPacketDurationPlan>(
                          planned.avSyncRuntime->assembly.video.duration));
-    EXPECT_TRUE(ctx, std::holds_alternative<MediaPacketDurationPlan>(
+    EXPECT_TRUE(ctx, std::holds_alternative<MediaPlannedAudioSamplesDurationPlan>(
                          planned.avSyncRuntime->assembly.audio.duration));
+    if (std::holds_alternative<MediaPlannedAudioSamplesDurationPlan>(
+            planned.avSyncRuntime->assembly.audio.duration)) {
+        const auto& audioDuration =
+            std::get<MediaPlannedAudioSamplesDurationPlan>(
+                planned.avSyncRuntime->assembly.audio.duration);
+        EXPECT_TRUE(ctx,
+                    planned.avSyncRuntime->planningFacts.inputAudioSampleRate);
+        EXPECT_TRUE(
+            ctx,
+            planned.avSyncRuntime->planningFacts
+                .inputAudioSamplesPerAccessUnit);
+        if (planned.avSyncRuntime->planningFacts.inputAudioSampleRate) {
+            EXPECT_EQ(
+                ctx, audioDuration.sampleRate,
+                *planned.avSyncRuntime->planningFacts.inputAudioSampleRate);
+        }
+        if (planned.avSyncRuntime->planningFacts
+                .inputAudioSamplesPerAccessUnit) {
+            EXPECT_EQ(
+                ctx, audioDuration.samplesPerAccessUnit,
+                *planned.avSyncRuntime->planningFacts
+                     .inputAudioSamplesPerAccessUnit);
+        }
+    }
     EXPECT_TRUE(ctx,
                 MediaRealtimeRtpTranscodePlanner::validatePlannedProduct(
                     planned));
     auto executable = MediaRealtimeRtpTranscodeGraphBuilder::buildExecutable(
         std::move(preflight).value());
-    EXPECT_FALSE(ctx, executable);
-    if (!executable) {
-        EXPECT_EQ(ctx, executable.error().code, media::ErrorCode::Unsupported);
+    EXPECT_TRUE(ctx, executable);
+    if (executable) {
+        EXPECT_TRUE(ctx, executable.value().avSyncBinding.has_value());
     }
     sender.value().stop();
 }
@@ -489,7 +513,7 @@ int main()
     const auto basePort = integrationBasePort();
     testProductionUdpSessionPublishesMappedProgramClock(ctx, basePort,
                                                         static_cast<std::uint16_t>(basePort + 1));
-    testProductionBuilderRejectsUnassembledSynchronizedGraph(
+    testProductionBuilderBuildsAssembledSynchronizedGraph(
         ctx, static_cast<std::uint16_t>(basePort + 2),
         static_cast<std::uint16_t>(basePort + 3));
     testProductionInvalidProvenanceBindingFailsClosed(

@@ -209,6 +209,11 @@ void testRepeatOnlyAuthorizesExplicitCadenceRecovery(TestContext& ctx)
     EXPECT_TRUE(ctx, hard);
     if (!hard) return;
     EXPECT_EQ(ctx, hard.value().kind(), MediaVideoSyncDecisionKind::Reacquire);
+    EXPECT_TRUE(ctx, hard.value().reacquisitionCause().has_value());
+    if (hard.value().reacquisitionCause()) {
+        EXPECT_EQ(ctx, *hard.value().reacquisitionCause(),
+                  MediaVideoReacquisitionCause::HardPhaseError);
+    }
 
     auto limitedCreated = makeController(ctx, true);
     if (!limitedCreated) return;
@@ -223,6 +228,11 @@ void testRepeatOnlyAuthorizesExplicitCadenceRecovery(TestContext& ctx)
     EXPECT_EQ(ctx, second.value().kind(),
               MediaVideoSyncDecisionKind::RepeatPreviousFrame);
     EXPECT_EQ(ctx, third.value().kind(), MediaVideoSyncDecisionKind::Reacquire);
+    EXPECT_TRUE(ctx, third.value().reacquisitionCause().has_value());
+    if (third.value().reacquisitionCause()) {
+        EXPECT_EQ(ctx, *third.value().reacquisitionCause(),
+                  MediaVideoReacquisitionCause::RecoveryBudgetExhausted);
+    }
 }
 
 void testKeyFramesAreProtectedBelowHardDiscontinuity(TestContext& ctx)
@@ -267,6 +277,11 @@ void testRecoveryCountResetRulesAndLimit(TestContext& ctx)
     EXPECT_EQ(ctx, third.value().consecutiveRecoveryActions(), 2);
     EXPECT_EQ(ctx, fourth.value().kind(), MediaVideoSyncDecisionKind::Reacquire);
     EXPECT_EQ(ctx, fourth.value().consecutiveRecoveryActions(), 0);
+    EXPECT_TRUE(ctx, fourth.value().reacquisitionCause().has_value());
+    if (fourth.value().reacquisitionCause()) {
+        EXPECT_EQ(ctx, *fourth.value().reacquisitionCause(),
+                  MediaVideoReacquisitionCause::RecoveryBudgetExhausted);
+    }
 
     auto afterLimit = controller.update(measurement(5'280, -80, 8));
     EXPECT_TRUE(ctx, afterLimit);
@@ -292,6 +307,11 @@ void testHardDiscontinuityAndGenerationIsolation(TestContext& ctx)
     EXPECT_TRUE(ctx, hardLate);
     if (!hardLate) return;
     EXPECT_EQ(ctx, hardLate.value().kind(), MediaVideoSyncDecisionKind::Reacquire);
+    EXPECT_TRUE(ctx, hardLate.value().reacquisitionCause().has_value());
+    if (hardLate.value().reacquisitionCause()) {
+        EXPECT_EQ(ctx, *hardLate.value().reacquisitionCause(),
+                  MediaVideoReacquisitionCause::HardPhaseError);
+    }
     auto afterHard = controller.update(measurement(6'040, -80, 2));
     EXPECT_TRUE(ctx, afterHard);
     if (!afterHard) return;
@@ -325,6 +345,11 @@ void testHardDiscontinuityAndGenerationIsolation(TestContext& ctx)
     EXPECT_EQ(ctx, old.value().consecutiveRecoveryActions(), 1);
     EXPECT_EQ(ctx, future.value().kind(), MediaVideoSyncDecisionKind::Reacquire);
     EXPECT_EQ(ctx, future.value().consecutiveRecoveryActions(), 1);
+    EXPECT_TRUE(ctx, future.value().reacquisitionCause().has_value());
+    if (future.value().reacquisitionCause()) {
+        EXPECT_EQ(ctx, *future.value().reacquisitionCause(),
+                  MediaVideoReacquisitionCause::GenerationMismatch);
+    }
 
     MediaVideoFrameMeasurement staleOverflow{
         MediaRunningTime::fromNanoseconds(0),

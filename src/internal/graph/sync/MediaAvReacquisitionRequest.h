@@ -7,7 +7,8 @@ namespace media::ffmpeg::graph {
 enum class MediaAvReacquisitionReason {
     FutureGeneration,
     HardDiscontinuity,
-    Flush
+    Flush,
+    RecoveryBudgetExhausted
 };
 
 struct MediaAvReacquisitionRequest final {

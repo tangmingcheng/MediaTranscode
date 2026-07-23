@@ -12,6 +12,24 @@
 #include <sstream>
 
 namespace media::ffmpeg::graph {
+namespace {
+
+const char* reacquisitionCauseName(
+    MediaVideoReacquisitionCause cause) noexcept
+{
+    switch (cause) {
+    case MediaVideoReacquisitionCause::HardPhaseError:
+        return "hard_phase_error";
+    case MediaVideoReacquisitionCause::RecoveryBudgetExhausted:
+        return "recovery_budget_exhausted";
+    case MediaVideoReacquisitionCause::GenerationMismatch:
+        return "generation_mismatch";
+    }
+    return "unknown";
+}
+
+} // namespace
+
 MediaAvOutputSchedulerNode::MediaAvOutputSchedulerNode(MediaNodeId nodeId)
     : MediaAvOutputSchedulerNode(
           nodeId,
@@ -599,16 +617,60 @@ MediaAvOutputSchedulerNode::processSelected(
         return processProgress();
     }
     if (kind == MediaVideoSyncDecisionKind::Reacquire) {
+        if (!decision.value().reacquisitionCause()) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                ::media::ErrorInfo::internalError(
+                    "Video reacquisition decision has no typed cause"));
+        }
+        const MediaVideoReacquisitionCause cause =
+            *decision.value().reacquisitionCause();
+        const MediaChannel* videoInput =
+            context.findInputChannel(nodeId(), "video");
+        const MediaChannel* audioInput =
+            context.findInputChannel(nodeId(), "audio");
+        mediaGraphDiagnosticLog(
+            MediaGraphDiagnosticLevel::State,
+            MediaGraphDiagnosticPhase::RuntimeNode,
+            "av_scheduler_trace stage=reacquire cause=" +
+                std::string(reacquisitionCauseName(cause)) +
+                " generation=" +
+                std::to_string(decision.value().generation()) +
+                " sequence=" +
+                std::to_string(decision.value().sequence()) +
+                " target_master_ns=" +
+                std::to_string(target.value().nanoseconds()) +
+                " dispatch_master_ns=" +
+                std::to_string(dispatch.value().nanoseconds()) +
+                " decision_horizon_ns=" +
+                std::to_string(decisionHorizon.value().nanoseconds()) +
+                " phase_error_ns=" +
+                std::to_string(decision.value().phaseError().nanoseconds()) +
+                " recovery_actions=" +
+                std::to_string(
+                    decision.value().consecutiveRecoveryActions()) +
+                " video_queued=" +
+                std::to_string(videoInput ? videoInput->size() : 0) +
+                " audio_queued=" +
+                std::to_string(audioInput ? audioInput->size() : 0));
+        const MediaAvReacquisitionReason reason =
+            cause == MediaVideoReacquisitionCause::RecoveryBudgetExhausted
+            ? MediaAvReacquisitionReason::RecoveryBudgetExhausted
+            : cause == MediaVideoReacquisitionCause::GenerationMismatch
+            ? MediaAvReacquisitionReason::FutureGeneration
+            : MediaAvReacquisitionReason::HardDiscontinuity;
         auto requested = m_group->requestReacquisition(MediaAvReacquisitionRequest{
-            epoch.value().generation,
-            MediaAvReacquisitionReason::HardDiscontinuity});
+            cause == MediaVideoReacquisitionCause::GenerationMismatch
+                ? decision.value().generation()
+                : epoch.value().generation,
+            reason});
         if (!requested) {
             return ::media::Result<MediaNodeProcessResult>::failure(
                 requested.error());
         }
         return ::media::Result<MediaNodeProcessResult>::failure(
             ::media::ErrorInfo::cancelled(
-                "A/V scheduler requires explicit clock reacquisition"));
+                std::string("A/V scheduler requires explicit clock reacquisition: ") +
+                reacquisitionCauseName(cause)));
     }
 
     auto prepared = repeat

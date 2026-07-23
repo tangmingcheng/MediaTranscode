@@ -99,7 +99,6 @@ private:
 
 ::media::Result<MediaBufferRef> canonicalAccessUnit(
     const ScheduledRtpDecodeAccessUnit& unit,
-    MediaRunningTime senderLead,
     std::uint64_t sequence)
 {
     auto packet = FFmpegBufferFactory::clonePacket(
@@ -107,12 +106,8 @@ private:
         unit.stream == MediaScheduledStream::Video
             ? MediaStreamKind::Video : MediaStreamKind::Audio);
     if (!packet) return ::media::Result<MediaBufferRef>::failure(packet.error());
-    auto dispatch = unit.presentationOnMaster.checkedSubtract(senderLead);
-    if (!dispatch) {
-        return ::media::Result<MediaBufferRef>::failure(dispatch.error());
-    }
     auto lineage = createMediaCanonicalLineage(
-        unit.presentationOnMaster, dispatch.value(), milliseconds(1),
+        unit.presentationOnMaster, unit.dispatchOffset, milliseconds(1),
         MediaDecodeOrderMode::ReorderedRequiresDecodeTime,
         unit.stream == MediaScheduledStream::Video
             ? "scheduled-rtp-decode.video" : "scheduled-rtp-decode.audio",
@@ -169,17 +164,13 @@ ScheduledRtpOutputIntegrationRuntime::ScheduledRtpOutputIntegrationRuntime(
     MediaNodeId scheduler,
     MediaNodeId router,
     MediaNodeId videoSender,
-    MediaNodeId audioSender,
-    MediaRunningTime videoLead,
-    MediaRunningTime audioLead) noexcept
+    MediaNodeId audioSender) noexcept
     : m_runtime(std::move(runtime)),
       m_clock(std::move(clock)),
       m_scheduler(scheduler),
       m_router(router),
       m_videoSender(videoSender),
-      m_audioSender(audioSender),
-      m_videoLead(videoLead),
-      m_audioLead(audioLead)
+      m_audioSender(audioSender)
 {
 }
 
@@ -299,8 +290,7 @@ ScheduledRtpOutputIntegrationRuntime::openSendersAndPublish(
     return RuntimeResult::success(ScheduledRtpOutputIntegrationRuntime(
         std::move(runtime), std::move(clock), graph.value().scheduler,
         graph.value().router, graph.value().videoSender,
-        graph.value().audioSender, separate->video.senderLead,
-        separate->audio.senderLead));
+        graph.value().audioSender));
 }
 
 ::media::Status ScheduledRtpOutputIntegrationRuntime::sendAccessUnits(
@@ -329,8 +319,7 @@ ScheduledRtpOutputIntegrationRuntime::openSendersAndPublish(
     std::uint64_t sequence = 1;
     for (const auto& unit : sample.accessUnits()) {
         const bool isVideo = unit.stream == MediaScheduledStream::Video;
-        const MediaRunningTime lead = isVideo ? m_videoLead : m_audioLead;
-        auto canonical = canonicalAccessUnit(unit, lead, sequence++);
+        auto canonical = canonicalAccessUnit(unit, sequence++);
         if (!canonical) return ::media::Status::failure(canonical.error());
         MediaChannel* input = isVideo ? videoInput : audioInput;
         if (!input->push(std::move(canonical).value())) {
