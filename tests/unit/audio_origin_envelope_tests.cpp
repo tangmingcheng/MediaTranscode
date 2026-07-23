@@ -47,7 +47,9 @@ MediaBufferRef canonicalPacket()
     auto raw = FFmpegBufferFactory::wrapPacket(
         std::move(packet), MediaStreamKind::Audio, std::nullopt);
     assert(raw);
-    auto canonical = MediaCanonicalAccessUnitBuffer::create(raw.value(), lineage());
+    auto canonical = MediaCanonicalAccessUnitBuffer::create(
+        raw.value(), lineage(),
+        MediaCanonicalAudioSampleInterval{0, 480, 48'000});
     assert(canonical);
     return std::move(canonical).value();
 }

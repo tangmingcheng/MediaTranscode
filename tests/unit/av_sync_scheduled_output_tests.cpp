@@ -446,7 +446,14 @@ MediaBufferRef canonicalUnit(
             MediaSourceAccessUnitSequence(sequence),
             MediaTimeMappingConfidence::Locked, 1});
     auto created = MediaCanonicalAccessUnitBuffer::create(
-        std::move(packet).value(), std::move(lineage));
+        std::move(packet).value(), std::move(lineage),
+        stream == MediaScheduledStream::Audio
+            ? std::optional<MediaCanonicalAudioSampleInterval>(
+                  MediaCanonicalAudioSampleInterval{
+                      static_cast<std::int64_t>(sequence - 1) * 480,
+                      static_cast<std::int64_t>(sequence) * 480,
+                      48'000})
+            : std::nullopt);
     EXPECT_TRUE(ctx, created);
     return created ? std::move(created).value() : MediaBufferRef{};
 }

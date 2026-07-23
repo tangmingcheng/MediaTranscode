@@ -40,7 +40,9 @@ private:
         ::media::ffmpeg::graph::MediaNodeId scheduler,
         ::media::ffmpeg::graph::MediaNodeId router,
         ::media::ffmpeg::graph::MediaNodeId videoSender,
-        ::media::ffmpeg::graph::MediaNodeId audioSender) noexcept;
+        ::media::ffmpeg::graph::MediaNodeId audioSender,
+        int audioSampleRate,
+        int audioFrameSamples) noexcept;
 
     std::unique_ptr<::media::ffmpeg::graph::MediaGraphRuntime> m_runtime;
     std::shared_ptr<::media::ffmpeg::graph::MediaMasterClock> m_clock;
@@ -48,6 +50,8 @@ private:
     ::media::ffmpeg::graph::MediaNodeId m_router;
     ::media::ffmpeg::graph::MediaNodeId m_videoSender;
     ::media::ffmpeg::graph::MediaNodeId m_audioSender;
+    int m_audioSampleRate;
+    int m_audioFrameSamples;
 };
 
 } // namespace media_transcode::test

@@ -7,8 +7,12 @@ namespace media::ffmpeg::graph {
 
 MediaCanonicalAccessUnitBuffer::MediaCanonicalAccessUnitBuffer(
     MediaBufferRef media, MediaScheduledStream stream,
-    std::shared_ptr<const MediaCanonicalLineage> lineage)
-    : m_media(std::move(media)), m_stream(stream), m_lineage(std::move(lineage))
+    std::shared_ptr<const MediaCanonicalLineage> lineage,
+    std::optional<MediaCanonicalAudioSampleInterval> audioInterval)
+    : m_media(std::move(media))
+    , m_stream(stream)
+    , m_lineage(std::move(lineage))
+    , m_audioInterval(std::move(audioInterval))
 {
     setPayloadKind(MediaPayloadKind::Packet);
     setStreamKind(stream == MediaScheduledStream::Video
@@ -16,7 +20,8 @@ MediaCanonicalAccessUnitBuffer::MediaCanonicalAccessUnitBuffer(
 }
 
 ::media::Result<MediaBufferRef> MediaCanonicalAccessUnitBuffer::create(
-    MediaBufferRef media, std::shared_ptr<const MediaCanonicalLineage> lineage)
+    MediaBufferRef media, std::shared_ptr<const MediaCanonicalLineage> lineage,
+    std::optional<MediaCanonicalAudioSampleInterval> audioInterval)
 {
     if (!media || !lineage) {
         return ::media::Result<MediaBufferRef>::failure(
@@ -35,11 +40,23 @@ MediaCanonicalAccessUnitBuffer::MediaCanonicalAccessUnitBuffer(
             ::media::ErrorInfo::invalidArgument(
                 "Canonical access unit media contract is incomplete"));
     }
+    const bool audio = media->streamKind() == MediaStreamKind::Audio;
+    if (audio != audioInterval.has_value()) {
+        return ::media::Result<MediaBufferRef>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Canonical audio media requires exact sample lineage"));
+    }
+    if (audioInterval && !audioInterval->sampleCount()) {
+        return ::media::Result<MediaBufferRef>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Canonical audio media rejects an invalid sample interval"));
+    }
     if (auto valid = validateMediaCanonicalLineage(*lineage); !valid)
         return ::media::Result<MediaBufferRef>::failure(valid.error());
     return ::media::Result<MediaBufferRef>::success(
         MediaBufferRef(new MediaCanonicalAccessUnitBuffer(
-            std::move(media), stream, std::move(lineage))));
+            std::move(media), stream, std::move(lineage),
+            std::move(audioInterval))));
 }
 
 MediaBufferType MediaCanonicalAccessUnitBuffer::type() const noexcept

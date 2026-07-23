@@ -99,7 +99,8 @@ private:
 
 ::media::Result<MediaBufferRef> canonicalAccessUnit(
     const ScheduledRtpDecodeAccessUnit& unit,
-    std::uint64_t sequence)
+    std::uint64_t sequence,
+    std::optional<MediaCanonicalAudioSampleInterval> audioInterval)
 {
     auto packet = FFmpegBufferFactory::clonePacket(
         unit.packet.get(),
@@ -117,7 +118,8 @@ private:
         return ::media::Result<MediaBufferRef>::failure(lineage.error());
     }
     return MediaCanonicalAccessUnitBuffer::create(
-        std::move(packet).value(), std::move(lineage).value());
+        std::move(packet).value(), std::move(lineage).value(),
+        std::move(audioInterval));
 }
 
 ::media::Status waitForNodeDeadline(
@@ -164,13 +166,17 @@ ScheduledRtpOutputIntegrationRuntime::ScheduledRtpOutputIntegrationRuntime(
     MediaNodeId scheduler,
     MediaNodeId router,
     MediaNodeId videoSender,
-    MediaNodeId audioSender) noexcept
+    MediaNodeId audioSender,
+    int audioSampleRate,
+    int audioFrameSamples) noexcept
     : m_runtime(std::move(runtime)),
       m_clock(std::move(clock)),
       m_scheduler(scheduler),
       m_router(router),
       m_videoSender(videoSender),
-      m_audioSender(audioSender)
+      m_audioSender(audioSender),
+      m_audioSampleRate(audioSampleRate),
+      m_audioFrameSamples(audioFrameSamples)
 {
 }
 
@@ -290,7 +296,8 @@ ScheduledRtpOutputIntegrationRuntime::openSendersAndPublish(
     return RuntimeResult::success(ScheduledRtpOutputIntegrationRuntime(
         std::move(runtime), std::move(clock), graph.value().scheduler,
         graph.value().router, graph.value().videoSender,
-        graph.value().audioSender));
+        graph.value().audioSender, audioCodec.sample_rate,
+        audioCodec.frame_size));
 }
 
 ::media::Status ScheduledRtpOutputIntegrationRuntime::sendAccessUnits(
@@ -316,11 +323,25 @@ ScheduledRtpOutputIntegrationRuntime::openSendersAndPublish(
         return ::media::Status::failure(harnessError(
             "scheduled RTP decode lost its canonical scheduler inputs"));
     }
+    if (m_audioSampleRate <= 0 || m_audioFrameSamples <= 0) {
+        return ::media::Status::failure(harnessError(
+            "scheduled RTP sample lacks exact audio frame facts"));
+    }
     std::uint64_t sequence = 1;
+    std::int64_t nextAudioSample = 0;
     for (const auto& unit : sample.accessUnits()) {
         const bool isVideo = unit.stream == MediaScheduledStream::Video;
-        auto canonical = canonicalAccessUnit(unit, sequence++);
+        std::optional<MediaCanonicalAudioSampleInterval> audioInterval;
+        if (!isVideo) {
+            audioInterval = MediaCanonicalAudioSampleInterval{
+                nextAudioSample,
+                nextAudioSample + m_audioFrameSamples,
+                m_audioSampleRate};
+        }
+        auto canonical =
+            canonicalAccessUnit(unit, sequence++, audioInterval);
         if (!canonical) return ::media::Status::failure(canonical.error());
+        if (audioInterval) nextAudioSample = audioInterval->end;
         MediaChannel* input = isVideo ? videoInput : audioInput;
         if (!input->push(std::move(canonical).value())) {
             return ::media::Status::failure(harnessError(

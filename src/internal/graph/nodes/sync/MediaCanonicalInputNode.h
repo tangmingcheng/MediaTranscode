@@ -3,6 +3,7 @@
 #include "internal/graph/model/MediaPacketSourceTiming.h"
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
+#include "internal/graph/sync/lineage/MediaCanonicalAudioSourceTimeline.h"
 
 #include <optional>
 #include <string>
@@ -23,7 +24,8 @@ public:
                  MediaScheduledStream stream,
                  MediaDecodeOrderMode decodeOrder,
                  std::string sourceIdentity,
-                 MediaSourceAccessUnitSequence sourceSequence);
+                 MediaSourceAccessUnitSequence sourceSequence,
+                 std::optional<MediaCanonicalAudioSampleInterval> audioInterval);
 
 protected:
     ::media::Result<MediaNodeProcessResult> onProcess(
@@ -49,6 +51,7 @@ private:
     std::uint64_t m_nextSequence = 1;
     int m_audioSampleRate = 0;
     std::uint32_t m_audioSampleCount = 0;
+    std::optional<MediaCanonicalAudioSourceTimeline> m_audioTimeline;
 };
 
 } // namespace media::ffmpeg::graph

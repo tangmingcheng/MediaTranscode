@@ -201,7 +201,15 @@ MediaBufferRef unit(TestContext& ctx, MediaScheduledStream stream,
         stream == MediaScheduledStream::Video ? "scheduler-video" : "scheduler-audio",
         MediaSourceAccessUnitSequence(sequence), MediaTimeMappingConfidence::Locked,
         generation});
-    auto result = MediaCanonicalAccessUnitBuffer::create(packet.value(), lineage);
+    const auto audioBegin =
+        static_cast<std::int64_t>(sequence - 1) * 480;
+    auto result = MediaCanonicalAccessUnitBuffer::create(
+        packet.value(), lineage,
+        stream == MediaScheduledStream::Audio
+            ? std::optional<MediaCanonicalAudioSampleInterval>(
+                  MediaCanonicalAudioSampleInterval{
+                      audioBegin, audioBegin + 480, 48'000})
+            : std::nullopt);
     EXPECT_TRUE(ctx, result);
     return result ? std::move(result).value() : MediaBufferRef{};
 }
@@ -664,7 +672,8 @@ void testDtsOrderingMappingAndEqualTimeRoundRobin(TestContext& ctx)
         media.value(), std::make_shared<const MediaCanonicalLineage>(
             MediaCanonicalLineage{ms(10), std::nullopt, ms(10),
                 MediaDecodeOrderMode::ReorderedRequiresDecodeTime, "scheduler-video",
-                MediaSourceAccessUnitSequence(9), MediaTimeMappingConfidence::Locked, 1}));
+                MediaSourceAccessUnitSequence(9), MediaTimeMappingConfidence::Locked, 1}),
+        std::nullopt);
     EXPECT_FALSE(ctx, invalid);
 }
 
@@ -935,7 +944,8 @@ void testRealPacketRepeatIdentityAndOwnership(TestContext& ctx)
         packet.value(), std::make_shared<const MediaCanonicalLineage>(
             MediaCanonicalLineage{ms(100), ms(100), ms(10),
                 MediaDecodeOrderMode::ReorderedRequiresDecodeTime, "scheduler-video",
-                MediaSourceAccessUnitSequence(41), MediaTimeMappingConfidence::Locked, 1}));
+                MediaSourceAccessUnitSequence(41), MediaTimeMappingConfidence::Locked, 1}),
+        std::nullopt);
     EXPECT_TRUE(ctx, canonical);
     EXPECT_TRUE(ctx, execution.findInputChannel(f.scheduler, "video")->push(
         canonical.value()));
@@ -1045,7 +1055,8 @@ void testAccessUnitFactoriesRejectNonPacketMedia(TestContext& ctx)
         audioFrame.value(), std::make_shared<const MediaCanonicalLineage>(
             MediaCanonicalLineage{ms(1), ms(1), ms(10),
                 MediaDecodeOrderMode::PresentationOrderNoReorder, "scheduler-audio",
-                MediaSourceAccessUnitSequence(1), MediaTimeMappingConfidence::Locked, 1}));
+                MediaSourceAccessUnitSequence(1), MediaTimeMappingConfidence::Locked, 1}),
+        MediaCanonicalAudioSampleInterval{0, 480, 48'000});
     EXPECT_FALSE(ctx, canonicalFrame);
 
     auto videoFrame = FFmpegBufferFactory::wrapFrame(
@@ -1067,7 +1078,8 @@ void testAccessUnitFactoriesRejectNonPacketMedia(TestContext& ctx)
         nullPacket, std::make_shared<const MediaCanonicalLineage>(
             MediaCanonicalLineage{ms(1), ms(1), ms(10),
                 MediaDecodeOrderMode::PresentationOrderNoReorder, "scheduler-audio",
-                MediaSourceAccessUnitSequence(1), MediaTimeMappingConfidence::Locked, 1}));
+                MediaSourceAccessUnitSequence(1), MediaTimeMappingConfidence::Locked, 1}),
+        MediaCanonicalAudioSampleInterval{0, 480, 48'000});
     EXPECT_FALSE(ctx, canonicalNullPacket);
 
     nullPacket->setStreamKind(MediaStreamKind::Video);

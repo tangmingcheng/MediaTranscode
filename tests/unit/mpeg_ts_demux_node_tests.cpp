@@ -843,7 +843,8 @@ void testInitialAcquiringRetentionFailsClosedAndReplaysExactlyOnce(TestContext& 
                     current, *currentPacket->sourceTiming(), duration.value(),
                     MediaScheduledStream::Video,
                     MediaDecodeOrderMode::ReorderedRequiresDecodeTime,
-                    "mpeg-ts-boundary", MediaSourceAccessUnitSequence(1));
+                    "mpeg-ts-boundary", MediaSourceAccessUnitSequence(1),
+                    std::nullopt);
                 EXPECT_TRUE(ctx, canonical);
                 if (canonical) {
                     EXPECT_EQ(ctx, canonical.value()->generation(), std::uint64_t{7});

@@ -494,7 +494,8 @@ void VideoEncodeNode::resetRuntimeState() noexcept
 
         MediaBufferRef output = buffer.value();
         if (lineage) {
-            auto canonical = MediaCanonicalAccessUnitBuffer::create(output, std::move(lineage));
+            auto canonical = MediaCanonicalAccessUnitBuffer::create(
+                output, std::move(lineage), std::nullopt);
             if (!canonical) return ::media::Result<bool>::failure(canonical.error());
             output = std::move(canonical).value();
         }

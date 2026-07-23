@@ -414,7 +414,8 @@ void testPreparationPrefixIsNotReleasedTwiceAfterActivation(TestContext& ctx)
             "preparation-audio", MediaSourceAccessUnitSequence(1),
             MediaTimeMappingConfidence::Locked, epoch().generation});
     auto canonicalAudio = MediaCanonicalAccessUnitBuffer::create(
-        rawAudio.value(), std::move(audioLineage));
+        rawAudio.value(), std::move(audioLineage),
+        MediaCanonicalAudioSampleInterval{0, 480, 48'000});
     EXPECT_TRUE(ctx, canonicalAudio);
     if (!canonicalAudio) return;
     const MediaBufferRef audio0 = std::move(canonicalAudio).value();

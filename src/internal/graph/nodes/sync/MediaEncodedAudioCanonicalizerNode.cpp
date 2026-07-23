@@ -80,7 +80,9 @@ MediaEncodedAudioCanonicalizerNode::canonicalize(
             lineage.error());
     }
     auto canonical = MediaCanonicalAccessUnitBuffer::create(
-        input->media(), std::move(lineage).value());
+        input->media(), std::move(lineage).value(),
+        MediaCanonicalAudioSampleInterval{
+            begin, end, origin.outputSampleRate});
     if (!canonical) {
         return ::media::Result<std::shared_ptr<MediaCanonicalAccessUnitBuffer>>::failure(
             canonical.error());

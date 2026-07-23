@@ -62,7 +62,7 @@ MediaBufferRef makeCanonicalPacket(std::uint64_t generation, std::uint64_t seque
     time.timeBase = {1, 25};
     wrapped.value()->setTimeDescriptor(time);
     auto canonical = MediaCanonicalAccessUnitBuffer::create(
-        wrapped.value(), makeLineage(generation, sequence));
+        wrapped.value(), makeLineage(generation, sequence), std::nullopt);
     CHECK(canonical);
     return std::move(canonical).value();
 }

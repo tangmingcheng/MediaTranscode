@@ -202,7 +202,8 @@ MediaEndpoint addSource(MediaGraph& graph,
 ::media::Result<MediaBufferRef> canonicalAccessUnit(
     const ScheduledMpegTsDecodeAccessUnit& unit,
     const MediaPlaybackEpoch& epoch,
-    std::uint64_t sequence)
+    std::uint64_t sequence,
+    std::optional<MediaCanonicalAudioSampleInterval> audioInterval)
 {
     auto packet = FFmpegBufferFactory::clonePacket(
         unit.packet.get(), unit.stream == MediaScheduledStream::Video
@@ -227,7 +228,8 @@ MediaEndpoint addSource(MediaGraph& graph,
         return ::media::Result<MediaBufferRef>::failure(lineage.error());
     }
     return MediaCanonicalAccessUnitBuffer::create(
-        std::move(packet).value(), std::move(lineage).value());
+        std::move(packet).value(), std::move(lineage).value(),
+        std::move(audioInterval));
 }
 
 ::media::Status waitForDeadline(
@@ -352,6 +354,7 @@ Node* runtimeNode(MediaGraphRuntime& runtime, MediaNodeId id)
     }
     bool muxFinished = false;
     std::size_t sourceIndex = 0;
+    std::int64_t nextAudioSample = 0;
     MediaBufferRef pendingSource;
     bool inputsClosed = false;
     constexpr std::size_t maximumSteps = 100'000;
@@ -368,10 +371,28 @@ Node* runtimeNode(MediaGraphRuntime& runtime, MediaNodeId id)
         if (sourceIndex < sample.accessUnits().size()) {
             const auto& unit = sample.accessUnits()[sourceIndex];
             if (!pendingSource) {
+                std::optional<MediaCanonicalAudioSampleInterval> audioInterval;
+                if (unit.stream == MediaScheduledStream::Audio) {
+                    const int sampleRate =
+                        sample.audioCodecContext().sample_rate;
+                    const int sampleCount =
+                        sample.audioCodecContext().frame_size;
+                    if (sampleRate <= 0 || sampleCount <= 0) {
+                        return ::media::Status::failure(integrationError(
+                            "scheduled TS sample lacks exact audio frame facts"));
+                    }
+                    audioInterval = MediaCanonicalAudioSampleInterval{
+                        nextAudioSample,
+                        nextAudioSample + sampleCount,
+                        sampleRate};
+                }
                 auto canonical = canonicalAccessUnit(
-                    unit, epoch, sourceIndex + 1);
+                    unit, epoch, sourceIndex + 1, audioInterval);
                 if (!canonical) {
                     return ::media::Status::failure(canonical.error());
+                }
+                if (audioInterval) {
+                    nextAudioSample = audioInterval->end;
                 }
                 pendingSource = std::move(canonical).value();
             }

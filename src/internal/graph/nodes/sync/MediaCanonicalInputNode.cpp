@@ -48,6 +48,7 @@ void MediaCanonicalInputNode::resetState() noexcept
     m_nextSequence = 1;
     m_audioSampleRate = 0;
     m_audioSampleCount = 0;
+    m_audioTimeline.reset();
 }
 
 ::media::Result<std::shared_ptr<MediaCanonicalAccessUnitBuffer>>
@@ -58,7 +59,8 @@ MediaCanonicalInputNode::canonicalize(
     MediaScheduledStream stream,
     MediaDecodeOrderMode decodeOrder,
     std::string sourceIdentity,
-    MediaSourceAccessUnitSequence sourceSequence)
+    MediaSourceAccessUnitSequence sourceSequence,
+    std::optional<MediaCanonicalAudioSampleInterval> audioInterval)
 {
     const auto expected = stream == MediaScheduledStream::Video
         ? MediaStreamKind::Video : MediaStreamKind::Audio;
@@ -83,7 +85,8 @@ MediaCanonicalInputNode::canonicalize(
             lineage.error());
     }
     auto created = MediaCanonicalAccessUnitBuffer::create(
-        std::move(encodedAccessUnit), std::move(lineage).value());
+        std::move(encodedAccessUnit), std::move(lineage).value(),
+        std::move(audioInterval));
     if (!created) {
         return ::media::Result<std::shared_ptr<MediaCanonicalAccessUnitBuffer>>::failure(
             created.error());
@@ -140,11 +143,16 @@ MediaCanonicalInputNode::canonicalize(
             "Canonical input rejects unknown planned duration source"));
     }
     int configuredSampleRate = 0;
+    std::optional<MediaCanonicalAudioSourceTimeline> configuredAudioTimeline;
     if (configuredStream == MediaScheduledStream::Audio) {
         auto sampleRate = requiredPositiveIntNodeOption(
             options, "MediaCanonicalInputNode", "canonical_input.audio_sample_rate");
         if (!sampleRate) return ::media::Status::failure(sampleRate.error());
         configuredSampleRate = sampleRate.value();
+        auto timeline =
+            MediaCanonicalAudioSourceTimeline::create(configuredSampleRate);
+        if (!timeline) return ::media::Status::failure(timeline.error());
+        configuredAudioTimeline.emplace(std::move(timeline).value());
     }
     m_stream.emplace(configuredStream);
     m_decodeOrder.emplace(configuredOrder);
@@ -152,6 +160,7 @@ MediaCanonicalInputNode::canonicalize(
     m_sourceIdentity = std::move(identity).value();
     m_audioSampleRate = configuredSampleRate;
     m_audioSampleCount = configuredSampleCount;
+    m_audioTimeline = std::move(configuredAudioTimeline);
     return ::media::Status::success();
 }
 
@@ -283,10 +292,10 @@ MediaCanonicalInputNode::canonicalize(
                 "Canonical input requires validated packet source timing"));
     const auto& timing = *packet->sourceTiming();
     if (timing.readiness != MediaSourceClockReadiness::Locked ||
-        timing.generation == 0)
+        timing.generation == 0 || !timing.presentationNs)
         return ::media::Result<MediaNodeProcessResult>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "Canonical input requires locked nonzero-generation clock evidence"));
+                "Canonical input requires locked nonzero-generation clock evidence with presentation time"));
     auto duration = durationFor(*input.value());
     if (!duration) {
         return ::media::Result<MediaNodeProcessResult>::failure(duration.error());
@@ -300,9 +309,25 @@ MediaCanonicalInputNode::canonicalize(
         audioSampleCount = samples.value();
     }
     const auto sequence = MediaSourceAccessUnitSequence(m_nextSequence);
+    std::optional<MediaCanonicalAudioSampleInterval> audioInterval;
+    if (*m_stream == MediaScheduledStream::Audio) {
+        if (!m_audioTimeline || !audioSampleCount) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                ::media::ErrorInfo::internalError(
+                    "Canonical audio input timeline is not configured"));
+        }
+        auto appended = m_audioTimeline->append(
+            MediaRunningTime::fromNanoseconds(*timing.presentationNs),
+            *audioSampleCount, timing.generation, m_nextSequence);
+        if (!appended) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                appended.error());
+        }
+        audioInterval = std::move(appended).value();
+    }
     auto canonical = canonicalize(*input.value(), timing, duration.value(),
                                   *m_stream, *m_decodeOrder, m_sourceIdentity,
-                                  sequence);
+                                  sequence, std::move(audioInterval));
     if (!canonical)
         return ::media::Result<MediaNodeProcessResult>::failure(canonical.error());
     MediaAvStartupAccessUnit unit{

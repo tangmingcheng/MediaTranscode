@@ -114,7 +114,10 @@ MediaBufferRef makeReleasedPacketWithTiming(
     std::uint64_t generation,
     std::uint64_t sequence,
     MediaRunningTime presentation,
-    MediaRunningTime duration)
+    MediaRunningTime duration,
+    int sourceRate,
+    std::int64_t sampleBegin,
+    int sampleCount)
 {
     auto packet = ::media::ffmpeg::makePacket();
     CHECK(packet && av_new_packet(packet.get(), 1) == 0);
@@ -131,7 +134,9 @@ MediaBufferRef makeReleasedPacketWithTiming(
             "audio-lineage-node", MediaSourceAccessUnitSequence(sequence),
             MediaTimeMappingConfidence::Locked, generation});
     auto canonical = MediaCanonicalAccessUnitBuffer::create(
-        wrapped.value(), lineage);
+        wrapped.value(), lineage,
+        MediaCanonicalAudioSampleInterval{
+            sampleBegin, sampleBegin + sampleCount, sourceRate});
     CHECK(canonical);
     auto released = MediaAvReleasedAudioBuffer::create(
         canonical.value(), 0,
@@ -151,7 +156,8 @@ MediaBufferRef makeReleasedPacket(
     CHECK(duration);
     return makeReleasedPacketWithTiming(
         generation, sequence, MediaRunningTime::fromNanoseconds(0),
-        duration.value());
+        duration.value(), sourceRate,
+        static_cast<std::int64_t>(sequence - 1) * samples, samples);
 }
 
 MediaBufferRef makeDecodedFrame(std::uint64_t generation,
@@ -433,7 +439,8 @@ void decoderUsesAbsoluteSampleGridAcrossFractionalPacketDurations()
         CHECK(execution.findInputChannel(decode, "packet")->push(
             makeReleasedPacketWithTiming(
                 7, static_cast<std::uint64_t>(index + 1),
-                presentation.value(), duration.value())));
+                presentation.value(), duration.value(), SourceSampleRate,
+                index * SourcePacketSamples, SourcePacketSamples)));
         api->sendResults = {0};
         api->receiveResults = {AVERROR(EAGAIN)};
         CHECK(node.process(execution));

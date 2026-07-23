@@ -2,6 +2,7 @@
 
 #include "internal/graph/runtime/buffer/MediaBuffer.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
+#include "internal/graph/sync/MediaCanonicalAudioSampleInterval.h"
 #include "internal/graph/time/MediaRunningTime.h"
 #include "media_transcode/Result.h"
 
@@ -34,7 +35,8 @@ class MediaCanonicalAccessUnitBuffer final : public MediaBuffer {
 public:
     static ::media::Result<MediaBufferRef> create(
         MediaBufferRef media,
-        std::shared_ptr<const MediaCanonicalLineage> lineage);
+        std::shared_ptr<const MediaCanonicalLineage> lineage,
+        std::optional<MediaCanonicalAudioSampleInterval> audioInterval);
 
     MediaBufferType type() const noexcept override;
     std::optional<std::uint64_t> payloadFootprintBytes() const noexcept override;
@@ -49,15 +51,22 @@ public:
     MediaSourceAccessUnitSequence sourceSequence() const noexcept;
     const std::shared_ptr<const MediaCanonicalLineage>& lineage() const noexcept
     { return m_lineage; }
+    const std::optional<MediaCanonicalAudioSampleInterval>&
+    audioSampleInterval() const noexcept
+    {
+        return m_audioInterval;
+    }
 
 private:
     MediaCanonicalAccessUnitBuffer(
         MediaBufferRef media,
         MediaScheduledStream stream,
-        std::shared_ptr<const MediaCanonicalLineage> lineage);
+        std::shared_ptr<const MediaCanonicalLineage> lineage,
+        std::optional<MediaCanonicalAudioSampleInterval> audioInterval);
     MediaBufferRef m_media;
     MediaScheduledStream m_stream;
     std::shared_ptr<const MediaCanonicalLineage> m_lineage;
+    std::optional<MediaCanonicalAudioSampleInterval> m_audioInterval;
 };
 
 } // namespace media::ffmpeg::graph

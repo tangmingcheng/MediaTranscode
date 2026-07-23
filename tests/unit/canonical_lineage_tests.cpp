@@ -12,6 +12,7 @@
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/buffer/HardwareFrameBuffer.h"
+#include "internal/graph/sync/MediaCanonicalAudioSampleInterval.h"
 #include "internal/graph/sync/MediaCanonicalAudioSamplesBuffer.h"
 #include "internal/graph/sync/MediaCanonicalVideoFrameBuffer.h"
 #include "internal/graph/sync/startup/MediaAvStartupGenerationState.h"
@@ -140,15 +141,74 @@ void testCanonicalInputRejectsMissingProtocolTime(TestContext& ctx)
                                 MediaSourceClockReadiness::Locked, 7},
         ns(20), MediaScheduledStream::Audio,
         MediaDecodeOrderMode::PresentationOrderNoReorder, "rtp-audio",
-        MediaSourceAccessUnitSequence(1));
+        MediaSourceAccessUnitSequence(1),
+        MediaCanonicalAudioSampleInterval{0, 1, 48'000});
     EXPECT_FALSE(ctx, missing);
+}
+
+void testCanonicalAccessUnitRequiresExactAudioInterval(TestContext& ctx)
+{
+    auto audioPacket = packet(MediaStreamKind::Audio);
+    auto videoPacket = packet(MediaStreamKind::Video);
+    auto audioLineage = lineage(MediaScheduledStream::Audio);
+    auto videoLineage = lineage(MediaScheduledStream::Video);
+
+    EXPECT_FALSE(ctx, MediaCanonicalAccessUnitBuffer::create(
+                          audioPacket, audioLineage, std::nullopt));
+    EXPECT_FALSE(ctx, MediaCanonicalAccessUnitBuffer::create(
+                          videoPacket, videoLineage,
+                          MediaCanonicalAudioSampleInterval{0, 1'024, 48'000}));
+    EXPECT_FALSE(ctx, MediaCanonicalAccessUnitBuffer::create(
+                          audioPacket, audioLineage,
+                          MediaCanonicalAudioSampleInterval{1'024, 1'024, 48'000}));
+    EXPECT_FALSE(ctx, MediaCanonicalAccessUnitBuffer::create(
+                          audioPacket, audioLineage,
+                          MediaCanonicalAudioSampleInterval{0, 1'024, 0}));
+
+    auto audio = MediaCanonicalAccessUnitBuffer::create(
+        audioPacket, audioLineage,
+        MediaCanonicalAudioSampleInterval{5'444, 6'468, 44'100});
+    EXPECT_TRUE(ctx, audio);
+    if (audio) {
+        const auto* canonical =
+            dynamic_cast<const MediaCanonicalAccessUnitBuffer*>(
+                audio.value().get());
+        EXPECT_TRUE(ctx, canonical != nullptr);
+        if (canonical) {
+            EXPECT_TRUE(ctx, canonical->audioSampleInterval().has_value());
+            if (canonical->audioSampleInterval()) {
+                EXPECT_EQ(
+                    ctx, canonical->audioSampleInterval()->begin,
+                    static_cast<std::int64_t>(5'444));
+                EXPECT_EQ(
+                    ctx, canonical->audioSampleInterval()->end,
+                    static_cast<std::int64_t>(6'468));
+                EXPECT_EQ(
+                    ctx, canonical->audioSampleInterval()->sampleRate, 44'100);
+            }
+        }
+    }
+
+    auto video = MediaCanonicalAccessUnitBuffer::create(
+        videoPacket, videoLineage, std::nullopt);
+    EXPECT_TRUE(ctx, video);
+    if (video) {
+        const auto* canonical =
+            dynamic_cast<const MediaCanonicalAccessUnitBuffer*>(
+                video.value().get());
+        EXPECT_TRUE(ctx, canonical != nullptr);
+        if (canonical) {
+            EXPECT_FALSE(ctx, canonical->audioSampleInterval().has_value());
+        }
+    }
 }
 
 void testLineageAndPayloadIdentitySurviveWrappers(TestContext& ctx)
 {
     auto encoded = packet(MediaStreamKind::Video);
     auto immutable = lineage(MediaScheduledStream::Video);
-    auto canonical = MediaCanonicalAccessUnitBuffer::create(encoded, immutable);
+    auto canonical = MediaCanonicalAccessUnitBuffer::create(
+        encoded, immutable, std::nullopt);
     EXPECT_TRUE(ctx, canonical);
     if (!canonical) return;
     const auto* canonicalUnit = dynamic_cast<const MediaCanonicalAccessUnitBuffer*>(
@@ -489,7 +549,8 @@ void testExtractorPreflightsCompoundReleaseWithoutPartialCommit(TestContext& ctx
     if (!video || !audio) return;
     EXPECT_TRUE(ctx, audio->push(packet(MediaStreamKind::Audio)));
     auto canonicalAudio = MediaCanonicalAccessUnitBuffer::create(
-        packet(MediaStreamKind::Audio), lineage(MediaScheduledStream::Audio, 2));
+        packet(MediaStreamKind::Audio), lineage(MediaScheduledStream::Audio, 2),
+        MediaCanonicalAudioSampleInterval{0, 480, 48'000});
     EXPECT_TRUE(ctx, canonicalAudio);
     if (!canonicalAudio) return;
     const MediaPlaybackEpoch epoch{ns(100), ns(200), 7};
@@ -522,7 +583,9 @@ void testExtractorPreservesAudioTrimAndIdentity(TestContext& ctx)
                           packet(MediaStreamKind::Audio), 321, invalidOrigin));
     auto immutable = lineage(MediaScheduledStream::Audio);
     auto encoded = packet(MediaStreamKind::Audio);
-    auto canonical = MediaCanonicalAccessUnitBuffer::create(encoded, immutable);
+    auto canonical = MediaCanonicalAccessUnitBuffer::create(
+        encoded, immutable,
+        MediaCanonicalAudioSampleInterval{0, 480, 48'000});
     EXPECT_TRUE(ctx, canonical);
     if (!canonical) return;
     MediaGraph graph;
@@ -707,6 +770,7 @@ int main()
     TestContext ctx;
     testValidatedRtpAndTsEvidenceMapsExactly(ctx);
     testCanonicalInputRejectsMissingProtocolTime(ctx);
+    testCanonicalAccessUnitRequiresExactAudioInterval(ctx);
     testLineageAndPayloadIdentitySurviveWrappers(ctx);
     testReleaseContractRejectsWrongShape(ctx);
     testGenerationStateRejectsDuplicateAndGroupMismatch(ctx);

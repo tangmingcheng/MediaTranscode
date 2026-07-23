@@ -266,7 +266,8 @@ void packetViewUnwrapsCanonicalPayloadWithoutCopy()
     assert(wrapped);
     MediaBufferRef raw = wrapped.value();
     auto expectedLineage = lineage(9, 1);
-    auto canonical = MediaCanonicalAccessUnitBuffer::create(raw, expectedLineage);
+    auto canonical = MediaCanonicalAccessUnitBuffer::create(
+        raw, expectedLineage, std::nullopt);
     assert(canonical);
     assert(FFmpegPacketView::packet(canonical.value()) == identity);
     assert(FFmpegPacketView::writablePacket(canonical.value()) == identity);
