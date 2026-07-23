@@ -363,7 +363,8 @@ struct CanonicalHarness final {
     std::unique_ptr<MediaCanonicalInputNode> runtime;
 
     CanonicalHarness(MediaStreamKind stream, const char* durationSource,
-                     int sampleRate = 0, int sampleCount = 0)
+                     int sampleRate = 0,
+                     std::optional<int> sampleCount = std::nullopt)
     {
         const auto source = graph.addNode(MediaNodeKind::DebugDump, "source");
         node = graph.addNode(MediaNodeKind::CanonicalInput, "canonical");
@@ -389,8 +390,10 @@ struct CanonicalHarness final {
         if (sampleRate > 0) {
             graph.setNodeOption(node, "canonical_input.audio_sample_rate",
                                 std::to_string(sampleRate));
+        }
+        if (sampleCount) {
             graph.setNodeOption(node, "canonical_input.audio_sample_count",
-                                std::to_string(sampleCount));
+                                std::to_string(*sampleCount));
         }
         assert(execution.compile(graph));
         runtime = std::make_unique<MediaCanonicalInputNode>(node);
@@ -415,6 +418,21 @@ const MediaCanonicalAccessUnitBuffer* canonicalAccessUnit(
 {
     return dynamic_cast<const MediaCanonicalAccessUnitBuffer*>(
         envelope.media().get());
+}
+
+void canonicalInputRejectsPacketDerivedAudioSampleCount()
+{
+    CanonicalHarness harness(
+        MediaStreamKind::Audio, "packet", 48'000);
+    assert(harness.input()->push(timedPacket(
+        MediaStreamKind::Audio, MediaSourceClockReadiness::Locked,
+        11, 2'000, 1'024, AVRational{1, 48'000})));
+    assert(!harness.runtime->process(harness.execution));
+
+    CanonicalHarness missingSampleCount(
+        MediaStreamKind::Audio, "audio_samples", 48'000);
+    assert(!missingSampleCount.runtime->process(
+        missingSampleCount.execution));
 }
 
 void canonicalInputKeepsExactAudioIntervalsAcrossClockRefreshes()
@@ -484,7 +502,7 @@ void canonicalInputKeepsExactAudioIntervalsAcrossClockRefreshes()
     assert(canonical->audioSampleInterval()->begin == *previousEnd);
 }
 
-void canonicalInputUsesRuntimeGenerationAndRtpTsPacketDuration()
+void canonicalInputUsesRuntimeGenerationAndPlannedAudioDuration()
 {
     CanonicalHarness rtp(MediaStreamKind::Video, "packet");
     MediaBufferRef owner;
@@ -499,7 +517,8 @@ void canonicalInputUsesRuntimeGenerationAndRtpTsPacketDuration()
     assert(envelope->unit().presentationTime->nanoseconds() == 1'000);
     assert(envelope->unit().duration.nanoseconds() == 40'000'000);
 
-    CanonicalHarness mpegTs(MediaStreamKind::Audio, "packet", 48'000);
+    CanonicalHarness mpegTs(
+        MediaStreamKind::Audio, "audio_samples", 48'000, 1'024);
     MediaBufferRef tsOwner;
     const auto* tsEnvelope = canonicalizeOne(
         mpegTs,
@@ -510,11 +529,6 @@ void canonicalInputUsesRuntimeGenerationAndRtpTsPacketDuration()
     assert(tsEnvelope->unit().generation == 11);
     assert(tsEnvelope->unit().duration.nanoseconds() == 21'333'333);
 
-    CanonicalHarness inexactAudio(MediaStreamKind::Audio, "packet", 48'000);
-    assert(inexactAudio.input()->push(timedPacket(
-        MediaStreamKind::Audio, MediaSourceClockReadiness::Locked,
-        11, 3'000, 1, AVRational{1, 90'000})));
-    assert(!inexactAudio.runtime->process(inexactAudio.execution));
 }
 
 void canonicalInputUsesExactAudioSampleSpanAndRejectsInvalidTiming()
@@ -642,8 +656,9 @@ int main()
     gateRetainsEarlyPacketUntilMatchingClockLock();
     gateRejectsPacketsBeforeLockAndInvalidEvidence();
     gateDeadlinePreflightPrecedesAllQueuedEvidence();
+    canonicalInputRejectsPacketDerivedAudioSampleCount();
     canonicalInputKeepsExactAudioIntervalsAcrossClockRefreshes();
-    canonicalInputUsesRuntimeGenerationAndRtpTsPacketDuration();
+    canonicalInputUsesRuntimeGenerationAndPlannedAudioDuration();
     canonicalInputUsesExactAudioSampleSpanAndRejectsInvalidTiming();
     canonicalInputPropagatesTerminalWithoutInventingMedia();
     canonicalInputPropagatesExplicitAbortAndFailsClosedOnMissingTerminal();

@@ -132,24 +132,9 @@ MediaRealtimeAvSyncNodeConfigurator::configureCanonicalInput(
             graph, node, "canonical_input.audio_sample_rate",
             std::to_string(samples->sampleRate));
     }
-    if (!std::holds_alternative<MediaPacketDurationPlan>(
-            assembly.audio.duration)) {
-        return ::media::Result<void>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "Canonical audio input requires a planned duration source"));
-    }
-    if (!plan.planningFacts.inputAudioSampleRate ||
-        *plan.planningFacts.inputAudioSampleRate <= 0) {
-        return ::media::Result<void>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "Canonical MPEG-TS audio requires the planned input sample rate"));
-    }
-    if (auto status = setOption(
-            graph, node, "canonical_input.duration_source", "packet");
-        !status) return status;
-    return setOption(
-        graph, node, "canonical_input.audio_sample_rate",
-        std::to_string(*plan.planningFacts.inputAudioSampleRate));
+    return ::media::Result<void>::failure(
+        ::media::ErrorInfo::invalidArgument(
+            "Canonical audio input requires planner-provided sample duration"));
 }
 
 ::media::Result<void>

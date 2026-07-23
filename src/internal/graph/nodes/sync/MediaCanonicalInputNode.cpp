@@ -13,7 +13,6 @@ extern "C" {
 }
 
 #include <limits>
-#include <numeric>
 #include <string>
 
 namespace media::ffmpeg::graph {
@@ -42,7 +41,6 @@ void MediaCanonicalInputNode::resetState() noexcept
 {
     m_stream.reset();
     m_decodeOrder.reset();
-    m_durationSource.reset();
     m_keyTraceEmitted = false;
     m_sourceIdentity.clear();
     m_nextSequence = 1;
@@ -127,20 +125,25 @@ MediaCanonicalInputNode::canonicalize(
         configuredOrder = MediaDecodeOrderMode::PresentationOrderNoReorder;
     else return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
         "Canonical input rejects unknown planned decode order"));
-    DurationSource configuredDurationSource;
     std::uint32_t configuredSampleCount = 0;
-    if (durationSource.value() == "packet") {
-        configuredDurationSource = DurationSource::Packet;
-    } else if (durationSource.value() == "audio_samples" &&
-               configuredStream == MediaScheduledStream::Audio) {
-        configuredDurationSource = DurationSource::AudioSamples;
-        auto sampleCount = requiredPositiveIntNodeOption(
-            options, "MediaCanonicalInputNode", "canonical_input.audio_sample_count");
-        if (!sampleCount) return ::media::Status::failure(sampleCount.error());
-        configuredSampleCount = static_cast<std::uint32_t>(sampleCount.value());
+    if (configuredStream == MediaScheduledStream::Video) {
+        if (durationSource.value() != "packet") {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Canonical video input requires planned packet duration"));
+        }
     } else {
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "Canonical input rejects unknown planned duration source"));
+        if (durationSource.value() != "audio_samples") {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Canonical audio input requires planner-provided sample duration"));
+        }
+        auto sampleCount = requiredPositiveIntNodeOption(
+            options, "MediaCanonicalInputNode",
+            "canonical_input.audio_sample_count");
+        if (!sampleCount) return ::media::Status::failure(sampleCount.error());
+        configuredSampleCount =
+            static_cast<std::uint32_t>(sampleCount.value());
     }
     int configuredSampleRate = 0;
     std::optional<MediaCanonicalAudioSourceTimeline> configuredAudioTimeline;
@@ -156,7 +159,6 @@ MediaCanonicalInputNode::canonicalize(
     }
     m_stream.emplace(configuredStream);
     m_decodeOrder.emplace(configuredOrder);
-    m_durationSource.emplace(configuredDurationSource);
     m_sourceIdentity = std::move(identity).value();
     m_audioSampleRate = configuredSampleRate;
     m_audioSampleCount = configuredSampleCount;
@@ -167,7 +169,7 @@ MediaCanonicalInputNode::canonicalize(
 ::media::Result<MediaRunningTime> MediaCanonicalInputNode::durationFor(
     const MediaBufferRef& buffer) const
 {
-    if (*m_durationSource == DurationSource::AudioSamples) {
+    if (*m_stream == MediaScheduledStream::Audio) {
         const auto whole = m_audioSampleCount / static_cast<std::uint32_t>(m_audioSampleRate);
         const auto remainder = m_audioSampleCount % static_cast<std::uint32_t>(m_audioSampleRate);
         if (whole > static_cast<std::uint64_t>(
@@ -213,55 +215,6 @@ MediaCanonicalInputNode::canonicalize(
         MediaRunningTime::fromNanoseconds(nanoseconds));
 }
 
-::media::Result<std::uint32_t> MediaCanonicalInputNode::audioSampleCountFor(
-    const MediaBufferRef& buffer) const
-{
-    if (*m_durationSource == DurationSource::AudioSamples) {
-        return ::media::Result<std::uint32_t>::success(m_audioSampleCount);
-    }
-    const auto* packet = dynamic_cast<const FFmpegPacketBuffer*>(buffer.get());
-    const MediaTimeDescriptor& time = buffer->timeDescriptor();
-    if (!packet || !packet->packet() || packet->packet()->duration <= 0 ||
-        !time.hasKnownTimeBase() || m_audioSampleRate <= 0) {
-        return ::media::Result<std::uint32_t>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "Canonical audio packet sample span requires runtime evidence"));
-    }
-    const auto duration = packet->packet()->duration;
-    auto denominator = static_cast<std::int64_t>(time.timeBase.den);
-    auto numerator =
-        static_cast<std::int64_t>(time.timeBase.num) *
-        static_cast<std::int64_t>(m_audioSampleRate);
-    if (numerator <= 0) {
-        return ::media::Result<std::uint32_t>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "Canonical audio packet sample span overflows"));
-    }
-    const auto divisor = std::gcd(numerator, denominator);
-    numerator /= divisor;
-    denominator /= divisor;
-    if (duration % denominator != 0) {
-        return ::media::Result<std::uint32_t>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "Canonical audio packet sample span must be exact"));
-    }
-    const auto units = duration / denominator;
-    if (units > std::numeric_limits<std::int64_t>::max() / numerator) {
-        return ::media::Result<std::uint32_t>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "Canonical audio packet sample span overflows"));
-    }
-    const auto samples = units * numerator;
-    if (samples <= 0 ||
-        samples > std::numeric_limits<std::uint32_t>::max()) {
-        return ::media::Result<std::uint32_t>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "Canonical audio packet sample span is not representable"));
-    }
-    return ::media::Result<std::uint32_t>::success(
-        static_cast<std::uint32_t>(samples));
-}
-
 ::media::Result<MediaNodeProcessResult> MediaCanonicalInputNode::onProcess(
     MediaGraphExecutionContext& context)
 {
@@ -300,25 +253,17 @@ MediaCanonicalInputNode::canonicalize(
     if (!duration) {
         return ::media::Result<MediaNodeProcessResult>::failure(duration.error());
     }
-    std::optional<std::uint32_t> audioSampleCount;
-    if (*m_stream == MediaScheduledStream::Audio) {
-        auto samples = audioSampleCountFor(*input.value());
-        if (!samples) {
-            return ::media::Result<MediaNodeProcessResult>::failure(samples.error());
-        }
-        audioSampleCount = samples.value();
-    }
     const auto sequence = MediaSourceAccessUnitSequence(m_nextSequence);
     std::optional<MediaCanonicalAudioSampleInterval> audioInterval;
     if (*m_stream == MediaScheduledStream::Audio) {
-        if (!m_audioTimeline || !audioSampleCount) {
+        if (!m_audioTimeline) {
             return ::media::Result<MediaNodeProcessResult>::failure(
                 ::media::ErrorInfo::internalError(
                     "Canonical audio input timeline is not configured"));
         }
         auto appended = m_audioTimeline->append(
             MediaRunningTime::fromNanoseconds(*timing.presentationNs),
-            *audioSampleCount, timing.generation, m_nextSequence);
+            m_audioSampleCount, timing.generation, m_nextSequence);
         if (!appended) {
             return ::media::Result<MediaNodeProcessResult>::failure(
                 appended.error());
@@ -341,7 +286,7 @@ MediaCanonicalInputNode::canonicalize(
         *m_stream == MediaScheduledStream::Audio
             ? std::optional<MediaAvAudioSampleSpan>(
                   MediaAvAudioSampleSpan{static_cast<std::uint32_t>(m_audioSampleRate),
-                                         *audioSampleCount})
+                                         m_audioSampleCount})
             : std::nullopt};
     if (*m_stream == MediaScheduledStream::Video && unit.keyFrame &&
         !m_keyTraceEmitted) {
