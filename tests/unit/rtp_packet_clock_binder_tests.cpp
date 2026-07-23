@@ -423,10 +423,15 @@ void acquiringDeadlineUsesRegisteredMasterClock()
 
 void validatorRequiresExplicitSupportedCommonEpochPolicy()
 {
-    MediaRtpClockGroupValidatorConfig config{
-        3'000'000'000LL, 5'000'000'000LL, 50'000'000,
-        5'000'000'000LL, 5'000'000'000LL,
-        MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime};
+    MediaRtpClockGroupValidatorConfig config{};
+    config.senderReportTimeoutNs = 3'000'000'000LL;
+    config.maximumExtrapolationNs = 5'000'000'000LL;
+    config.maximumInterStreamClockOffsetSkewNs = 50'000'000;
+    config.videoCnameTimeoutNs = 5'000'000'000LL;
+    config.audioCnameTimeoutNs = 5'000'000'000LL;
+    config.requireMatchingCname = true;
+    config.commonEpochPolicy =
+        MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime;
     assert(MediaRtpClockGroupValidator::create(config));
     config.commonEpochPolicy = MediaRtpCommonEpochPolicy::Unknown;
     assert(!MediaRtpClockGroupValidator::create(config));

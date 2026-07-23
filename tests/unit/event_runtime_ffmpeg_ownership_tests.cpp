@@ -559,6 +559,15 @@ void testVideoFilterRetainsFirstPreparedFrameUntilEpochActivation(
     if (!extractorReservation || !extractorReservation.value()) return;
     EXPECT_TRUE(ctx, extractorCapability.value().registerExtractorOutputs(
                          5, 99, extractorReservation.value()->handle()));
+    const MediaPlaybackEpoch anchoredEpoch{
+        MediaRunningTime::fromNanoseconds(10),
+        MediaRunningTime::fromNanoseconds(20), 5};
+    const MediaAudioPlaybackOrigin anchoredOrigin{
+        5, anchoredEpoch.sourceStart, anchoredEpoch.masterRelease,
+        0, 48'000};
+    EXPECT_TRUE(ctx, state.value()->publishInitialAnchor(
+                         5, 99, anchoredEpoch, anchoredOrigin));
+    EXPECT_TRUE(ctx, state.value()->acknowledgeExtractorReanchor(5, 99));
     EXPECT_TRUE(ctx, sequencerCapability.value().authorizeRelease(
                          5, 99, [] { return ::media::Status::success(); }));
     EXPECT_TRUE(ctx, filter.process(execution));

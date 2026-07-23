@@ -474,6 +474,11 @@ void testPreparationPrefixIsNotReleasedTwiceAfterActivation(TestContext& ctx)
               std::size_t{2});
     EXPECT_TRUE(ctx, extractor.process(execution));
     EXPECT_TRUE(ctx, state.value()->snapshot().extractorOutputsReserved);
+    EXPECT_TRUE(ctx, state.value()->publishInitialAnchor(
+                         epoch().generation, transaction->releaseIdentity(),
+                         epoch(), origin()));
+    EXPECT_TRUE(ctx, state.value()->acknowledgeExtractorReanchor(
+                         epoch().generation, transaction->releaseIdentity()));
     EXPECT_TRUE(ctx, state.value()->authorizeRelease(
                          epoch().generation, transaction->releaseIdentity(),
                          [] { return ::media::Status::success(); }));

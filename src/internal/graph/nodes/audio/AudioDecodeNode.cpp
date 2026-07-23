@@ -45,7 +45,6 @@ void AudioDecodeLineageState::clearLineageStorage() noexcept
     receivePending = false;
     pendingPacket.reset();
     intervals.reset();
-    intervalProjection.reset();
     activeOrigin.reset();
     startupTrimDirective = 0;
     startupTrimDirectiveEmitted = false;
@@ -189,7 +188,6 @@ void AudioDecodeNode::resetRuntimeState() noexcept
                 "AudioDecodeNode failed to retain packet ownership"));
     }
     std::optional<MediaAudioIntervalAccumulator> candidateIntervals;
-    std::optional<MediaAudioSampleProjection> candidateProjection;
     std::optional<MediaAudioPlaybackOrigin> incomingOrigin;
     std::uint32_t incomingTrim = 0;
     if (resolved.value().synchronized) {
@@ -223,31 +221,20 @@ void AudioDecodeNode::resetRuntimeState() noexcept
             ? grid.value().nearestSample(
                   synchronized.lineage->presentation)
             : ::media::Result<std::int64_t>::failure(grid.error());
-        auto samples = grid
-            ? grid.value().nearestSample(synchronized.lineage->duration)
-            : ::media::Result<std::int64_t>::failure(grid.error());
-        if (!begin || !samples || samples.value() <= 0) {
+        auto absoluteEnd = synchronized.lineage->presentation.checkedAdd(
+            synchronized.lineage->duration);
+        auto end = grid && absoluteEnd
+            ? grid.value().nearestSample(absoluteEnd.value())
+            : ::media::Result<std::int64_t>::failure(
+                  grid ? absoluteEnd.error() : grid.error());
+        if (!begin || !end || end.value() <= begin.value()) {
             return ::media::Result<MediaNodeProcessResult>::failure(
                 ::media::ErrorInfo::invalidArgument(
                     "AudioDecodeNode cannot represent the canonical source interval"));
         }
-        candidateProjection = m_lineageState->intervalProjection;
-        if (!candidateProjection) {
-            auto projection = MediaAudioSampleProjection::create(
-                begin.value(), sampleRate, sampleRate);
-            if (!projection) {
-                return ::media::Result<MediaNodeProcessResult>::failure(
-                    projection.error());
-            }
-            candidateProjection.emplace(std::move(projection).value());
-        }
-        auto projected = candidateProjection->append(samples.value());
-        if (!projected) {
-            return ::media::Result<MediaNodeProcessResult>::failure(
-                projected.error());
-        }
         const MediaAudioIntervalFragment incomingFragment{
-            synchronized.lineage, projected.value()};
+            synchronized.lineage,
+            {begin.value(), end.value(), sampleRate}};
         MediaAudioLineageCapacity leases(m_lineageState->capacity());
         if (auto status =
                 m_lineageState->intervals.observeLineageCapacity(leases);
@@ -272,7 +259,6 @@ void AudioDecodeNode::resetRuntimeState() noexcept
             m_lineageState->startupTrimDirectiveEmitted = false;
         }
         m_lineageState->intervals = std::move(*candidateIntervals);
-        m_lineageState->intervalProjection = std::move(candidateProjection);
     }
     m_lineageState->pendingPacket = std::move(pendingPacket);
     return submitPendingPacket(context);

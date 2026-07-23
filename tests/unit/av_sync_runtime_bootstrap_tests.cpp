@@ -751,6 +751,17 @@ void testVideoPreparationStateEnforcesStrictTransitions(TestContext& ctx)
     EXPECT_TRUE(ctx, state.value()->registerExtractorOutputs(
                          generation, releaseIdentity,
                          extractorReservation->handle()));
+    const MediaPlaybackEpoch anchoredEpoch{
+        MediaRunningTime::fromNanoseconds(10),
+        MediaRunningTime::fromNanoseconds(20), generation};
+    const MediaAudioPlaybackOrigin anchoredOrigin{
+        generation, anchoredEpoch.sourceStart, anchoredEpoch.masterRelease,
+        0, 48'000};
+    EXPECT_TRUE(ctx, state.value()->publishInitialAnchor(
+                         generation, releaseIdentity,
+                         anchoredEpoch, anchoredOrigin));
+    EXPECT_TRUE(ctx, state.value()->acknowledgeExtractorReanchor(
+                         generation, releaseIdentity));
     EXPECT_TRUE(ctx, state.value()->authorizeRelease(
                          generation, releaseIdentity,
                          [] { return ::media::Status::success(); }));
@@ -786,6 +797,15 @@ void testVideoPreparationStateNotifiesWaitingPeersAfterUnlock(
     EXPECT_TRUE(ctx, sequencerWakeup->sequence() > sequencerSequence);
     EXPECT_TRUE(ctx, state.value()->registerExtractorOutputs(
                          11, 55, extractorReservation->handle()));
+    const MediaPlaybackEpoch anchoredEpoch{
+        MediaRunningTime::fromNanoseconds(10),
+        MediaRunningTime::fromNanoseconds(20), 11};
+    const MediaAudioPlaybackOrigin anchoredOrigin{
+        11, anchoredEpoch.sourceStart, anchoredEpoch.masterRelease,
+        0, 48'000};
+    EXPECT_TRUE(ctx, state.value()->publishInitialAnchor(
+                         11, 55, anchoredEpoch, anchoredOrigin));
+    EXPECT_TRUE(ctx, state.value()->acknowledgeExtractorReanchor(11, 55));
     EXPECT_TRUE(ctx, state.value()->authorizeRelease(
                          11, 55, [] { return ::media::Status::success(); }));
     EXPECT_TRUE(ctx, filterWakeup->sequence() > filterSequence);

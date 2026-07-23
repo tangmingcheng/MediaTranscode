@@ -9,7 +9,6 @@
 #include "internal/graph/sync/lineage/MediaAudioLineageExecutionMode.h"
 #include "internal/graph/sync/lineage/MediaAudioLineageState.h"
 #include "internal/graph/sync/lineage/MediaAudioIntervalAccumulator.h"
-#include "internal/graph/sync/lineage/MediaAudioSampleProjection.h"
 
 #include <deque>
 #include <optional>
@@ -24,7 +23,6 @@ public:
     bool receivePending = false;
     ::media::ffmpeg::PacketPtr pendingPacket;
     MediaAudioIntervalAccumulator intervals;
-    std::optional<MediaAudioSampleProjection> intervalProjection;
     std::optional<MediaAudioPlaybackOrigin> activeOrigin;
     std::uint32_t startupTrimDirective = 0;
     bool startupTrimDirectiveEmitted = false;
