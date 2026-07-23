@@ -190,7 +190,6 @@ MediaRealtimeRtpTranscodeRequest baseRequest(std::string mediaId)
     request.parameters.video.preset = "ultrafast";
     request.parameters.video.tune = "zerolatency";
     request.parameters.audio.codecName = "aac";
-    request.parameters.audio.sampleRate = 44'100;
     request.parameters.audio.bitrateKbps = 320;
     request.parameters.audio.channels = 2;
     request.parameters.queues.metadata = 8;
@@ -213,6 +212,7 @@ MediaRealtimeRtpTranscodeRequest rtpRequest(
     std::string mediaId)
 {
     auto request = baseRequest(std::move(mediaId));
+    request.parameters.audio.sampleRate = 44'100;
     request.input.type = RealtimeInputType::RtpPort;
     request.input.streamLayout = RealtimeInputStreamLayout::SeparateStreams;
     request.input.videoRtp.url =
@@ -247,6 +247,7 @@ MediaRealtimeRtpTranscodeRequest tsRequest(
     std::string mediaId)
 {
     auto request = baseRequest(std::move(mediaId));
+    request.parameters.audio.sampleRate = 48'000;
     request.input.type = RealtimeInputType::MpegTsUdp;
     request.input.streamLayout =
         RealtimeInputStreamLayout::MuxedTransportStream;
