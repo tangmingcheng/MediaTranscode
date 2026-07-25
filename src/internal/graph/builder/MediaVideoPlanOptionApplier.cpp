@@ -4,6 +4,7 @@
 
 #include <array>
 #include <string>
+#include <vector>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -40,7 +41,7 @@ const char* boolOption(bool value) noexcept
     if (auto status = setOption(graph, nodeId, prefix + ".surface_pixel_format", stage.surfacePixelFormat); !status) return status;
     if (auto status = setOption(graph, nodeId, prefix + ".hardware", boolOption(stage.hardware)); !status) return status;
     if (auto status = setOption(graph, nodeId, prefix + ".zero_copy", boolOption(stage.zeroCopy)); !status) return status;
-    return setOption(graph, nodeId, prefix + ".score", std::to_string(stage.score));
+    return setOption(graph, nodeId, prefix + ".priority", std::to_string(stage.priority));
 }
 
 ::media::Result<void> setChainOptions(MediaGraph& graph,
@@ -102,15 +103,17 @@ std::string transferDirectionForPlan(const MediaPipelineChainPlan& chain)
     }
 
     const MediaPipelineChainPlan& chain = plan.selected;
-    const std::array<MediaNodeId, 7> plannedNodes {
+    std::vector<MediaNodeId> plannedNodes {
         nodes.codecResolver,
         nodes.videoDecode,
         nodes.hardwareTransfer,
-        nodes.videoTimestamp,
         nodes.videoFrameRate,
         nodes.videoFilter,
         nodes.videoEncode,
     };
+    if (nodes.videoTimestamp.isValid()) {
+        plannedNodes.push_back(nodes.videoTimestamp);
+    }
 
     for (MediaNodeId nodeId : plannedNodes) {
         if (auto status = setFullPlanOptions(graph, nodeId, plan); !status) return status;
@@ -128,7 +131,9 @@ std::string transferDirectionForPlan(const MediaPipelineChainPlan& chain)
     if (auto status = setOption(graph, nodes.videoFilter, MediaTranscodeOptionKey::PlannedFilter, chain.filter.filterName); !status) return status;
     if (auto status = setOption(graph, nodes.videoFilter, "filter.name", chain.filter.filterName); !status) return status;
     if (auto status = setOption(graph, nodes.videoFilter, "filter.hwaccel", chain.filter.hwaccelName); !status) return status;
-    if (auto status = setOption(graph, nodes.videoTimestamp, MediaTranscodeOptionKey::VideoSynthesizeMissingTimestamps, boolOption(plan.synthesizeMissingTimestamps)); !status) return status;
+    if (nodes.videoTimestamp.isValid()) {
+        if (auto status = setOption(graph, nodes.videoTimestamp, MediaTranscodeOptionKey::VideoSynthesizeMissingTimestamps, boolOption(plan.synthesizeMissingTimestamps)); !status) return status;
+    }
     return setOption(graph, nodes.videoEncode, MediaTranscodeOptionKey::PlannedEncoder, chain.encoder.ffmpegName);
 }
 

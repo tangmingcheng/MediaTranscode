@@ -2,6 +2,7 @@
 
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/model/RealtimeStreamLayout.h"
+#include "internal/graph/time/MediaRunningTime.h"
 
 #include <cstddef>
 #include <optional>
@@ -15,6 +16,7 @@ struct MediaRealtimeRtpInputMetadata {
     std::optional<int> payloadType;
     std::optional<int> clockRate;
     std::optional<int> channels;
+    std::optional<int> bitrateKbps;
     std::string fmtp;
 };
 
@@ -42,10 +44,17 @@ struct MediaRealtimeOutputConfig {
     std::optional<int> packetSize;
 };
 
+struct MediaRealtimeAvSyncStartupConfig {
+    std::optional<std::size_t> maximumVideoUnitBytes;
+    std::optional<std::size_t> maximumAudioUnitBytes;
+    std::optional<MediaRunningTime> maximumGap;
+};
+
 struct MediaRealtimeRtpTranscodeRequest {
     MediaRealtimeInputConfig input;
     MediaRealtimeOutputConfig output;
     MediaTranscodeParameterSet parameters;
+    MediaRealtimeAvSyncStartupConfig avSyncStartup;
     std::string mediaId;
 };
 

@@ -19,9 +19,9 @@ struct MediaGraphPlanningPolicy {
     MediaThreadingPolicy threadingPolicy;
     MediaZeroCopyPolicy zeroCopyPolicy;
 
-    bool enableDistributedExecution = true;
-    bool enableGpuPlanning = true;
-    bool enableMeshPlanning = true;
+    bool enableDistributedExecution = false;
+    bool enableGpuPlanning = false;
+    bool enableMeshPlanning = false;
     bool keepSourceAndSinkOnEdge = true;
 };
 

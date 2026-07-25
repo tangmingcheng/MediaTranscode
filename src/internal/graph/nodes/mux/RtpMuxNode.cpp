@@ -1,4 +1,5 @@
 #include "internal/graph/nodes/mux/RtpMuxNode.h"
+#include "internal/graph/nodes/mux/RtpMuxProtocolIo.h"
 
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
@@ -83,7 +84,7 @@ MediaNodeKind RtpMuxNode::staticKind() noexcept
     if (!configured) {
         return processProgress(configured);
     }
-    if (m_completion.readyForTrailer()) {
+    if (m_state.readyForTrailer()) {
         auto pending = writePendingPacketsIfReady();
         if (!pending) return processProgress(pending);
         auto trailer = writeTrailerIfNeeded();
@@ -100,10 +101,10 @@ MediaNodeKind RtpMuxNode::staticKind() noexcept
             allClosed = allClosed && channel->closed() && channel->size() == 0;
             if (channel->closed() && channel->size() == 0 &&
                 channel->binding().edgeKind == MediaEdgeKind::EncodedPacket) {
-                m_completion.markInputClosed(std::to_string(channel->id().value));
+                m_state.markInputClosed(std::to_string(channel->id().value));
             }
         }
-        if (allClosed && m_completion.readyForTrailer()) {
+        if (allClosed && m_state.readyForTrailer()) {
             auto pending = writePendingPacketsIfReady();
             if (!pending) return processProgress(pending);
             auto trailer = writeTrailerIfNeeded();
@@ -134,8 +135,8 @@ MediaNodeKind RtpMuxNode::staticKind() noexcept
     }
 
     if (buffer->isEof()) {
-        m_completion.markInputEof(std::to_string(input.value()->channel->id().value));
-        if (!m_completion.readyForTrailer()) return processProgress();
+        m_state.markInputEof(std::to_string(input.value()->channel->id().value));
+        if (!m_state.readyForTrailer()) return processProgress();
         auto pending = writePendingPacketsIfReady();
         if (!pending) return processProgress(pending);
         auto trailer = writeTrailerIfNeeded();
@@ -164,14 +165,16 @@ MediaNodeKind RtpMuxNode::staticKind() noexcept
         releaseRuntimeViews();
         return pending;
     }
-    auto trailer = writeTrailerIfNeeded();
-    if (!trailer) {
-        releaseRuntimeViews();
-        return trailer;
+    if (m_state.readyForTrailer()) {
+        auto trailer = writeTrailerIfNeeded();
+        if (!trailer) {
+            releaseRuntimeViews();
+            return trailer;
+        }
     }
     mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
                             MediaGraphDiagnosticPhase::RuntimeNode,
-                            "rtp_mux.stop packets_written=" + std::to_string(m_packetsWritten));
+                            "rtp_mux.stop packets_written=" + std::to_string(m_session.packetsWritten()));
     auto stopped = FFmpegNodeRuntime::stop(context);
     releaseRuntimeViews();
     return stopped;
@@ -179,7 +182,7 @@ MediaNodeKind RtpMuxNode::staticKind() noexcept
 
 ::media::Status RtpMuxNode::configureExpectations(MediaGraphExecutionContext& context)
 {
-    if (m_expectationsBound) {
+    if (m_state.expectationsBound()) {
         return ::media::Status::success();
     }
     auto video = requiredBoolNodeOption(nodeOptions(context), "RtpMuxNode", MediaTranscodeOptionKey::MuxExpectVideo);
@@ -194,16 +197,13 @@ MediaNodeKind RtpMuxNode::staticKind() noexcept
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("RtpMuxNode requires exactly one media stream kind"));
     }
-    m_expectVideo = video.value();
-    m_expectAudio = audio.value();
     std::vector<std::string> terminalInputs;
     for (MediaChannel* channel : context.inputChannels(nodeId())) {
         if (channel && channel->binding().edgeKind == MediaEdgeKind::EncodedPacket) {
             terminalInputs.push_back(std::to_string(channel->id().value));
         }
     }
-    m_completion.setExpectedConfigKeys({expectedStreamName()});
-    m_completion.setExpectedTerminalChannels(std::move(terminalInputs));
+    m_state.setExpectedInputs({expectedStreamName()}, std::move(terminalInputs));
 
     auto pacing = requiredBoolNodeOption(nodeOptions(context), "RtpMuxNode", "rtp.pacing.enabled");
     if (!pacing) {
@@ -212,8 +212,8 @@ MediaNodeKind RtpMuxNode::staticKind() noexcept
     MediaLatencyPolicy pacingPolicy;
     pacingPolicy.mode = MediaLatencyMode::Realtime;
     pacingPolicy.enablePacing = pacing.value();
-    m_pacingClock.setPolicy(pacingPolicy);
-    m_pacingClock.reset();
+    m_session.pacingClock().setPolicy(pacingPolicy);
+    m_session.pacingClock().reset();
 
     auto monotonicPacketTimestamps = requiredBoolNodeOption(nodeOptions(context),
                                                            "RtpMuxNode",
@@ -221,7 +221,6 @@ MediaNodeKind RtpMuxNode::staticKind() noexcept
     if (!monotonicPacketTimestamps) {
         return ::media::Status::failure(monotonicPacketTimestamps.error());
     }
-    m_monotonicPacketTimestamps = monotonicPacketTimestamps.value();
 
     auto startupDelayMs = requiredNonNegativeIntNodeOption(nodeOptions(context),
                                                           "RtpMuxNode",
@@ -229,31 +228,16 @@ MediaNodeKind RtpMuxNode::staticKind() noexcept
     if (!startupDelayMs) {
         return ::media::Status::failure(startupDelayMs.error());
     }
-    m_startupDelayMs = startupDelayMs.value();
-    m_startupDelayElapsed = m_startupDelayMs == 0;
-
-    m_expectationsBound = true;
-    return ::media::Status::success();
+    return m_state.bindExpectations(video.value(), audio.value(),
+                                    monotonicPacketTimestamps.value(), startupDelayMs.value());
 }
 
 bool RtpMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
 {
-    auto* contextBuffer = dynamic_cast<FFmpegFormatContextBuffer*>(buffer.get());
-    if (!contextBuffer || !contextBuffer->context()) {
-        return false;
-    }
-    if (contextBuffer->ownership() == FFmpegFormatContextOwnership::Output) {
-        m_outputContextOwner = contextBuffer->takeOutputContext();
-        m_outputContext = m_outputContextOwner.get();
-    } else {
-        m_outputContextOwner.reset();
-        m_outputContext = contextBuffer->context();
-    }
-    m_headerWritten = false;
-    m_trailerWritten = false;
-    m_formatEmitted = false;
-    m_streamIndex = invalidMediaStreamIndex;
-    return m_outputContext != nullptr;
+    if (!m_state.bindOutput()) return false;
+    if (m_session.bindOutput(buffer)) return true;
+    m_state.cancelOutputBinding();
+    return false;
 }
 
 ::media::Status RtpMuxNode::tryBindStreamConfig(const MediaBufferRef& buffer)
@@ -263,11 +247,11 @@ bool RtpMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
     if (!accepted) {
         return ::media::Status::success();
     }
-    if (m_headerWritten) {
+    if (m_state.headerWritten()) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("RtpMuxNode received late stream config"));
     }
-    if (!m_outputContext) {
+    if (!m_session.context()) {
         m_pendingStreamConfigs.push_back(buffer);
         return ::media::Status::success();
     }
@@ -277,7 +261,7 @@ bool RtpMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
 
 ::media::Status RtpMuxNode::registerPendingStreamConfigs()
 {
-    if (!m_outputContext || m_pendingStreamConfigs.empty()) {
+    if (!m_session.context() || m_pendingStreamConfigs.empty()) {
         return ::media::Status::success();
     }
     auto pending = std::move(m_pendingStreamConfigs);
@@ -293,120 +277,56 @@ bool RtpMuxNode::tryBindOutputContext(const MediaBufferRef& buffer) noexcept
 
 ::media::Status RtpMuxNode::registerStreamFromConfig(const MediaBufferRef& buffer)
 {
-    if (!m_outputContext) {
+    if (!m_session.context()) {
         m_pendingStreamConfigs.push_back(buffer);
         return ::media::Status::success();
     }
     if (dynamic_cast<FFmpegCodecContextBuffer*>(buffer.get())) {
-        return registerStreamFromCodecContext(buffer);
+        auto registered = m_session.registerStreamConfig(buffer, expectedStreamKind());
+        if (registered) m_state.markConfigReady(expectedStreamName());
+        return registered;
     }
     if (dynamic_cast<FFmpegCodecParametersBuffer*>(buffer.get())) {
-        return registerStreamFromCodecParameters(buffer);
+        auto registered = m_session.registerStreamConfig(buffer, expectedStreamKind());
+        if (registered) m_state.markConfigReady(expectedStreamName());
+        return registered;
     }
     return ::media::Status::failure(
         ::media::ErrorInfo::invalidArgument("RtpMuxNode expected stream config"));
 }
 
-::media::Status RtpMuxNode::registerStreamFromCodecContext(const MediaBufferRef& buffer)
-{
-    if (m_streamIndex != invalidMediaStreamIndex) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("RtpMuxNode received duplicate stream config"));
-    }
-
-    auto* codecBuffer = dynamic_cast<FFmpegCodecContextBuffer*>(buffer.get());
-    AVCodecContext* codec = codecBuffer ? codecBuffer->context() : nullptr;
-    const AVMediaType expectedType = m_expectAudio ? AVMEDIA_TYPE_AUDIO : AVMEDIA_TYPE_VIDEO;
-    if (!m_outputContext || !codec || codec->codec_type != expectedType || !known(codec->time_base)) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("RtpMuxNode requires matching encoder context and time_base"));
-    }
-
-    AVStream* stream = avformat_new_stream(m_outputContext, nullptr);
-    if (!stream) {
-        return ::media::Status::failure(::media::ErrorInfo::allocationFailed("avformat_new_stream(rtp)"));
-    }
-
-    const int ret = avcodec_parameters_from_context(stream->codecpar, codec);
-    if (ret < 0) {
-        return FFmpegGraphError::statusFromCode(ret, "avcodec_parameters_from_context(rtp)");
-    }
-    stream->codecpar->codec_tag = 0;
-    stream->time_base = codec->time_base;
-    stream->avg_frame_rate = codec->framerate;
-    stream->r_frame_rate = codec->framerate;
-    m_streamIndex = stream->index;
-    m_completion.markConfigReady(expectedStreamName());
-    return ::media::Status::success();
-}
-
-::media::Status RtpMuxNode::registerStreamFromCodecParameters(const MediaBufferRef& buffer)
-{
-    if (m_streamIndex != invalidMediaStreamIndex) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("RtpMuxNode received duplicate stream config"));
-    }
-
-    auto* paramsBuffer = dynamic_cast<FFmpegCodecParametersBuffer*>(buffer.get());
-    const AVCodecParameters* params = paramsBuffer ? paramsBuffer->parameters() : nullptr;
-    const AVMediaType expectedType = m_expectAudio ? AVMEDIA_TYPE_AUDIO : AVMEDIA_TYPE_VIDEO;
-    if (!m_outputContext || !params || params->codec_type != expectedType || !buffer->timeDescriptor().timeBase.isKnown()) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("RtpMuxNode requires matching codec parameters and time_base"));
-    }
-
-    AVStream* stream = avformat_new_stream(m_outputContext, nullptr);
-    if (!stream) {
-        return ::media::Status::failure(::media::ErrorInfo::allocationFailed("avformat_new_stream(rtp)"));
-    }
-
-    const int ret = avcodec_parameters_copy(stream->codecpar, params);
-    if (ret < 0) {
-        return FFmpegGraphError::statusFromCode(ret, "avcodec_parameters_copy(rtp)");
-    }
-    stream->codecpar->codec_tag = 0;
-    stream->time_base = toAVRational(buffer->timeDescriptor().timeBase);
-    m_streamIndex = stream->index;
-    m_completion.markConfigReady(expectedStreamName());
-    return ::media::Status::success();
-}
-
 MediaStreamKind RtpMuxNode::expectedStreamKind() const noexcept
 {
-    return m_expectAudio ? MediaStreamKind::Audio : MediaStreamKind::Video;
+    return m_state.expectAudio() ? MediaStreamKind::Audio : MediaStreamKind::Video;
 }
 
 const char* RtpMuxNode::expectedStreamName() const noexcept
 {
-    return m_expectAudio ? "audio" : "video";
+    return m_state.expectAudio() ? "audio" : "video";
 }
 
 ::media::Status RtpMuxNode::writeHeaderIfNeeded()
 {
-    if (!m_outputContext || m_headerWritten) {
+    if (!m_session.context() || m_state.headerWritten()) {
         return ::media::Status::success();
     }
-    if (m_outputContext->nb_streams == 0 || !expectedStreamsRegistered()) {
+    if (m_session.context()->nb_streams == 0 || !expectedStreamsRegistered()) {
         return ::media::Status::success();
     }
-    const int ret = avformat_write_header(m_outputContext, nullptr);
-    if (ret < 0) {
-        return FFmpegGraphError::statusFromCode(ret, "avformat_write_header(rtp)");
-    }
-    m_headerWritten = true;
-    m_completion.markHeaderWritten();
-    return ::media::Status::success();
+    auto written = RtpMuxProtocolIo::writeHeader(*m_session.context());
+    if (!written) return written;
+    return m_state.markHeaderWritten();
 }
 
 ::media::Status RtpMuxNode::writePendingPacketsIfReady()
 {
     auto header = writeHeaderIfNeeded();
-    if (!header || !m_headerWritten || m_pendingPackets.empty()) {
+    if (!header || !m_state.headerWritten() || m_pendingPackets.empty()) {
         return header;
     }
     auto pending = std::move(m_pendingPackets);
     m_pendingPackets.clear();
-    m_completion.setPendingPackets(0);
+    m_state.setPendingPackets(0);
     for (const auto& buffer : pending) {
         auto status = writePacketNow(buffer);
         if (!status) {
@@ -418,31 +338,31 @@ const char* RtpMuxNode::expectedStreamName() const noexcept
 
 ::media::Status RtpMuxNode::startPacingSessionIfNeeded()
 {
-    if (m_pacingSessionStarted) {
+    if (m_state.pacingSessionStarted()) {
         return ::media::Status::success();
     }
 
-    if (!m_startupDelayElapsed) {
+    if (!m_state.startupDelayElapsed()) {
         if (m_startupReadyAt.time_since_epoch().count() == 0) {
             m_startupReadyAt = std::chrono::steady_clock::now() +
-                std::chrono::milliseconds(m_startupDelayMs);
+                std::chrono::milliseconds(m_state.startupDelayMs());
         }
         const auto now = std::chrono::steady_clock::now();
         if (m_startupReadyAt > now) {
             std::this_thread::sleep_until(m_startupReadyAt);
         }
-        m_startupDelayElapsed = true;
+        if (auto elapsed = m_state.markStartupDelayElapsed(); !elapsed) return elapsed;
         mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
                                 MediaGraphDiagnosticPhase::RuntimeNode,
                                 std::string("rtp_mux.startup_delay_elapsed stream=") + expectedStreamName() +
-                                    " delay_ms=" + std::to_string(m_startupDelayMs));
+                                    " delay_ms=" + std::to_string(m_state.startupDelayMs()));
     }
 
-    m_pacingClock.reset();
-    if (m_outputContext && m_outputContext->pb) {
-        ::media::ffmpeg::resetPacedWriteAvio(m_outputContext->pb);
+    m_session.pacingClock().reset();
+    if (m_session.context() && m_session.context()->pb) {
+        ::media::ffmpeg::resetPacedWriteAvio(m_session.context()->pb);
     }
-    m_pacingSessionStarted = true;
+    if (auto started = m_state.markPacingSessionStarted(); !started) return started;
     mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
                             MediaGraphDiagnosticPhase::RuntimeNode,
                             std::string("rtp_mux.pacing_session_started stream=") + expectedStreamName());
@@ -455,9 +375,9 @@ const char* RtpMuxNode::expectedStreamName() const noexcept
     if (!header) {
         return header;
     }
-    if (!m_headerWritten) {
+    if (!m_state.headerWritten()) {
         m_pendingPackets.push_back(buffer);
-        m_completion.setPendingPackets(m_pendingPackets.size());
+        m_state.setPendingPackets(m_pendingPackets.size());
         return ::media::Status::success();
     }
     auto pending = writePendingPacketsIfReady();
@@ -467,7 +387,7 @@ const char* RtpMuxNode::expectedStreamName() const noexcept
 ::media::Status RtpMuxNode::writePacketNow(const MediaBufferRef& buffer)
 {
     const AVPacket* source = FFmpegPacketView::packet(buffer);
-    if (!m_outputContext || !source || m_streamIndex == invalidMediaStreamIndex) {
+    if (!m_session.context() || !source || m_session.streamIndex() == invalidMediaStreamIndex) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("RtpMuxNode requires output context, stream, and packet"));
     }
@@ -475,12 +395,12 @@ const char* RtpMuxNode::expectedStreamName() const noexcept
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("RtpMuxNode packet stream kind does not match configured mux"));
     }
-    if (m_streamIndex >= static_cast<int>(m_outputContext->nb_streams)) {
+    if (m_session.streamIndex() >= static_cast<int>(m_session.context()->nb_streams)) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("RtpMuxNode packet stream is not registered"));
     }
 
-    AVStream* muxStream = m_outputContext->streams[m_streamIndex];
+    AVStream* muxStream = m_session.context()->streams[m_session.streamIndex()];
     const AVRational srcTb = packetTimeBase(buffer);
     const AVRational muxTb = muxStream ? muxStream->time_base : AVRational{ 0, 1 };
     if (!known(srcTb) || !known(muxTb)) {
@@ -497,8 +417,8 @@ const char* RtpMuxNode::expectedStreamName() const noexcept
         return FFmpegGraphError::statusFromCode(refRet, "av_packet_ref(rtp)");
     }
     av_packet_rescale_ts(packet.get(), srcTb, muxTb);
-    packet->stream_index = m_streamIndex;
-    if (auto status = normalizePacketTimestamps(*packet); !status) {
+    packet->stream_index = m_session.streamIndex();
+    if (auto status = m_session.normalizePacketTimestamps(*packet, m_state.monotonicPacketTimestamps()); !status) {
         return status;
     }
 
@@ -510,17 +430,15 @@ const char* RtpMuxNode::expectedStreamName() const noexcept
     if (auto pacingSession = startPacingSessionIfNeeded(); !pacingSession) {
         return pacingSession;
     }
-    auto paced = m_pacingClock.waitUntil(pacingTimestamp, MediaRational{ muxTb.num, muxTb.den });
+    auto paced = m_session.pacingClock().waitUntil(pacingTimestamp, MediaRational{ muxTb.num, muxTb.den });
     if (!paced) {
         return paced;
     }
 
-    const int writeRet = av_interleaved_write_frame(m_outputContext, packet.get());
-    if (writeRet < 0) {
-        return FFmpegGraphError::statusFromCode(writeRet, "av_interleaved_write_frame(rtp)");
-    }
-    ++m_packetsWritten;
-    if (m_packetsWritten == 1) {
+    auto written = RtpMuxProtocolIo::writePacket(*m_session.context(), *packet);
+    if (!written) return written;
+    ++m_session.packetsWritten();
+    if (m_session.packetsWritten() == 1) {
         mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
                                 MediaGraphDiagnosticPhase::RuntimeNode,
                                 std::string("rtp_mux.first_packet_written stream=") + expectedStreamName());
@@ -528,70 +446,20 @@ const char* RtpMuxNode::expectedStreamName() const noexcept
     return ::media::Status::success();
 }
 
-::media::Status RtpMuxNode::normalizePacketTimestamps(AVPacket& packet)
-{
-    if (!m_monotonicPacketTimestamps) {
-        return ::media::Status::success();
-    }
-
-    if (packet.dts == AV_NOPTS_VALUE && packet.pts == AV_NOPTS_VALUE) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("RtpMuxNode monotonic RTP timestamps require dts or pts"));
-    }
-
-    int64_t shift = 0;
-    if (m_nextPacketDts != AV_NOPTS_VALUE) {
-        if (packet.dts != AV_NOPTS_VALUE && packet.dts < m_nextPacketDts) {
-            shift = std::max(shift, m_nextPacketDts - packet.dts);
-        }
-        if (packet.pts != AV_NOPTS_VALUE && packet.pts < m_nextPacketDts) {
-            shift = std::max(shift, m_nextPacketDts - packet.pts);
-        }
-    }
-    if (shift > 0) {
-        if (packet.pts != AV_NOPTS_VALUE) {
-            if (packet.pts > std::numeric_limits<int64_t>::max() - shift) {
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::invalidArgument("RtpMuxNode packet pts overflow"));
-            }
-            packet.pts += shift;
-        }
-        if (packet.dts != AV_NOPTS_VALUE) {
-            if (packet.dts > std::numeric_limits<int64_t>::max() - shift) {
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::invalidArgument("RtpMuxNode packet dts overflow"));
-            }
-            packet.dts += shift;
-        }
-    }
-
-    int64_t normalizedDts = packet.dts != AV_NOPTS_VALUE ? packet.dts : packet.pts;
-    if (packet.pts != AV_NOPTS_VALUE && packet.pts > normalizedDts) {
-        normalizedDts = packet.pts;
-    }
-    const int64_t duration = packet.duration > 0 ? packet.duration : 1;
-    if (normalizedDts > std::numeric_limits<int64_t>::max() - duration) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("RtpMuxNode packet timestamp cannot advance past int64 max"));
-    }
-    m_nextPacketDts = normalizedDts + duration;
-    return ::media::Status::success();
-}
-
 ::media::Status RtpMuxNode::emitFormatIfReady(MediaGraphExecutionContext& context)
 {
-    if (m_formatEmitted || outputChannels(context).empty()) {
+    if (m_state.formatEmitted() || outputChannels(context).empty()) {
         return ::media::Status::success();
     }
     auto header = writeHeaderIfNeeded();
     if (!header) {
         return header;
     }
-    if (!m_headerWritten) {
+    if (!m_state.headerWritten()) {
         return ::media::Status::success();
     }
 
-    auto buffer = makeSdpFormatSnapshot();
+    auto buffer = m_session.makeSdpFormatSnapshot();
     if (!buffer) {
         return ::media::Status::failure(buffer.error());
     }
@@ -599,103 +467,31 @@ const char* RtpMuxNode::expectedStreamName() const noexcept
     if (!pushed) {
         return pushed;
     }
-    m_formatEmitted = true;
-    return ::media::Status::success();
-}
-
-::media::Result<MediaBufferRef> RtpMuxNode::makeSdpFormatSnapshot() const
-{
-    if (!m_outputContext || m_streamIndex == invalidMediaStreamIndex) {
-        return ::media::Result<MediaBufferRef>::failure(
-            ::media::ErrorInfo::invalidArgument("RtpMuxNode requires output context and stream before SDP snapshot"));
-    }
-
-    AVFormatContext* raw = nullptr;
-    const char* url = (m_outputContext->url && m_outputContext->url[0] != '\0')
-        ? m_outputContext->url
-        : nullptr;
-    const int allocRet = avformat_alloc_output_context2(&raw, nullptr, "rtp", url);
-    if (allocRet < 0 || !raw) {
-        return ::media::Result<MediaBufferRef>::failure(
-            FFmpegGraphError::fromCode(allocRet < 0 ? allocRet : AVERROR_UNKNOWN,
-                                       "avformat_alloc_output_context2(rtp sdp snapshot)"));
-    }
-
-    ::media::ffmpeg::OutputFormatContextPtr snapshot(raw);
-    snapshot->packet_size = m_outputContext->packet_size;
-
-    for (unsigned int i = 0; i < m_outputContext->nb_streams; ++i) {
-        const AVStream* source = m_outputContext->streams[i];
-        if (!source || !source->codecpar) {
-            return ::media::Result<MediaBufferRef>::failure(
-                ::media::ErrorInfo::invalidArgument("RtpMuxNode SDP snapshot source stream is invalid"));
-        }
-
-        AVStream* target = avformat_new_stream(snapshot.get(), nullptr);
-        if (!target) {
-            return ::media::Result<MediaBufferRef>::failure(
-                ::media::ErrorInfo::allocationFailed("avformat_new_stream(rtp sdp snapshot)"));
-        }
-
-        const int copyRet = avcodec_parameters_copy(target->codecpar, source->codecpar);
-        if (copyRet < 0) {
-            return ::media::Result<MediaBufferRef>::failure(
-                FFmpegGraphError::fromCode(copyRet, "avcodec_parameters_copy(rtp sdp snapshot)"));
-        }
-
-        target->codecpar->codec_tag = 0;
-        target->id = source->id;
-        target->time_base = source->time_base;
-        target->avg_frame_rate = source->avg_frame_rate;
-        target->r_frame_rate = source->r_frame_rate;
-        target->start_time = source->start_time;
-        target->duration = source->duration;
-    }
-
-    return FFmpegBufferFactory::wrapOutputFormatContext(std::move(snapshot));
+    return m_state.markFormatEmitted();
 }
 
 ::media::Status RtpMuxNode::writeTrailerIfNeeded()
 {
-    if (!m_outputContext || !m_headerWritten || m_trailerWritten) {
+    if (!m_session.context() || !m_state.headerWritten() || m_state.trailerWritten()) {
         return ::media::Status::success();
     }
-    const int ret = av_write_trailer(m_outputContext);
-    if (ret < 0) {
-        return FFmpegGraphError::statusFromCode(ret, "av_write_trailer(rtp)");
-    }
-    m_trailerWritten = true;
-    m_completion.markTrailerWritten();
-    return ::media::Status::success();
+    auto written = RtpMuxProtocolIo::writeTrailer(*m_session.context());
+    if (!written) return written;
+    return m_state.markTrailerWritten();
 }
 
 void RtpMuxNode::releaseRuntimeViews() noexcept
 {
     m_pendingStreamConfigs.clear();
     m_pendingPackets.clear();
-    m_completion.reset();
-    m_outputContext = nullptr;
-    m_outputContextOwner.reset();
-    m_headerWritten = false;
-    m_trailerWritten = false;
-    m_formatEmitted = false;
-    m_expectationsBound = false;
-    m_expectVideo = false;
-    m_expectAudio = false;
-    m_monotonicPacketTimestamps = false;
-    m_startupDelayElapsed = false;
-    m_pacingSessionStarted = false;
-    m_streamIndex = invalidMediaStreamIndex;
-    m_startupDelayMs = 0;
-    m_nextPacketDts = AV_NOPTS_VALUE;
-    m_packetsWritten = 0;
+    m_state.reset();
+    m_session.reset();
     m_startupReadyAt = {};
-    m_pacingClock.reset();
 }
 
 bool RtpMuxNode::expectedStreamsRegistered() const noexcept
 {
-    return (!m_expectVideo && !m_expectAudio) || m_streamIndex != invalidMediaStreamIndex;
+    return (!m_state.expectVideo() && !m_state.expectAudio()) || m_session.streamIndex() != invalidMediaStreamIndex;
 }
 
 } // namespace media::ffmpeg::graph

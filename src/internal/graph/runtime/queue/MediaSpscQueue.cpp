@@ -17,9 +17,9 @@ MediaSpscQueue::MediaSpscQueue(MediaQueuePolicy policy)
     return m_queue.push(std::move(buffer));
 }
 
-bool MediaSpscQueue::tryPush(MediaBufferRef buffer)
+MediaQueuePushOutcome MediaSpscQueue::pushOutcome(MediaBufferRef buffer)
 {
-    return m_queue.tryPush(std::move(buffer));
+    return m_queue.pushOutcome(std::move(buffer));
 }
 
 ::media::Status MediaSpscQueue::pop(MediaBufferRef& out)

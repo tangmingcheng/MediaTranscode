@@ -13,7 +13,7 @@ public:
     explicit MediaBlockingQueue(MediaQueuePolicy policy = {});
 
     ::media::Status push(MediaBufferRef buffer) override;
-    bool tryPush(MediaBufferRef buffer) override;
+    MediaQueuePushOutcome pushOutcome(MediaBufferRef buffer) override;
     ::media::Status pop(MediaBufferRef& out) override;
     bool tryPop(MediaBufferRef& out) override;
 

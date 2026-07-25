@@ -16,16 +16,9 @@ const char* MediaRedundantTransferEliminationPass::name() const noexcept
         return ::media::Status::success();
     }
 
-    std::size_t hardwareTransferNodes = 0;
-    for (const auto& node : graph.nodes()) {
-        if (node.kind == MediaNodeKind::HardwareTransfer) {
-            ++hardwareTransferNodes;
-        }
-    }
-
-    report.info(name(), "hardware transfer nodes detected=" + std::to_string(hardwareTransferNodes));
-    report.info(name(), "rewrite deferred until zero-copy capability probing is connected");
-    return ::media::Status::success();
+    return ::media::Status::failure(
+        ::media::ErrorInfo::unsupported(
+            "MediaRedundantTransferEliminationPass is unsupported: graph rewrite is not implemented"));
 }
 
 } // namespace media::ffmpeg::graph

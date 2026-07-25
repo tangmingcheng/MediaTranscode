@@ -1,59 +1,70 @@
 #pragma once
 
-#include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
-#include "internal/graph/runtime/buffer/MediaBufferRef.h"
-#include "internal/graph/nodes/mux/MediaMuxCompletionState.h"
+#include "internal/graph/nodes/mux/MediaMuxSessionFactory.h"
+#include "internal/graph/runtime/lifecycle/MediaInputTerminalTracker.h"
 
-#include <vector>
-
-extern "C" {
-#include <libavformat/avformat.h>
-}
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <string>
+#include <unordered_map>
 
 namespace media::ffmpeg::graph {
 
 class FileMuxNode final : public FFmpegNodeRuntime {
 public:
     explicit FileMuxNode(MediaNodeId nodeId);
+    FileMuxNode(MediaNodeId nodeId,
+                std::unique_ptr<MediaMuxSessionFactory> sessionFactory);
     static MediaNodeKind staticKind() noexcept;
 
+    void abort(MediaGraphExecutionContext& context) noexcept override;
+
 protected:
-    ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context) override;
+    ::media::Result<MediaNodeProcessResult> onProcess(
+        MediaGraphExecutionContext& context) override;
     ::media::Status flush(MediaGraphExecutionContext& context) override;
     ::media::Status stop(MediaGraphExecutionContext& context) override;
 
 private:
-    ::media::Status bindMuxExpectations(MediaGraphExecutionContext& context);
-    bool tryBindOutputContext(const MediaBufferRef& buffer) noexcept;
-    ::media::Status tryBindStreamConfig(const MediaBufferRef& buffer);
-    ::media::Status registerPendingStreamConfigs();
-    ::media::Status registerStreamFromConfig(const MediaBufferRef& buffer);
-    ::media::Status registerStreamFromCodecContext(const MediaBufferRef& buffer);
-    ::media::Status registerStreamFromCodecParameters(const MediaBufferRef& buffer);
-    ::media::Status writeHeaderIfNeeded();
-    ::media::Status writePendingPacketsIfReady();
-    ::media::Status writePacket(const MediaBufferRef& buffer);
-    ::media::Status writePacketNow(const MediaBufferRef& buffer);
-    ::media::Status writeTrailerIfNeeded();
-    void releaseRuntimeViews() noexcept;
-    bool expectedStreamsRegistered() const noexcept;
-    ::media::Status forwardIfOutputsExist(MediaGraphExecutionContext& context, const MediaBufferRef& buffer);
+    enum class Phase : std::uint8_t {
+        AcquiringBindings,
+        Streaming
+    };
 
-private:
-    ::media::ffmpeg::OutputFormatContextPtr m_outputContextOwner;
-    AVFormatContext* m_outputContext = nullptr;
-    bool m_headerWritten = false;
-    bool m_trailerWritten = false;
-    bool m_expectationsBound = false;
-    bool m_expectVideo = false;
-    bool m_expectAudio = false;
-    std::size_t m_eofInputs = 0;
-    MediaMuxCompletionState m_completion;
-    int m_videoStreamIndex = invalidMediaStreamIndex;
-    int m_audioStreamIndex = invalidMediaStreamIndex;
-    std::vector<MediaBufferRef> m_pendingStreamConfigs;
-    std::vector<MediaBufferRef> m_pendingPackets;
+    ::media::Status ensureSession(MediaGraphExecutionContext& context);
+    struct BindingInputState final {
+        std::string portName;
+        bool satisfied = false;
+    };
+
+    ::media::Status bindInputTracking(MediaGraphExecutionContext& context);
+    ::media::Status validateAcquiringBindingChannels(
+        MediaGraphExecutionContext& context);
+    bool isUnsatisfiedBindingChannel(const MediaChannel& channel) const noexcept;
+    bool allBindingChannelsSatisfied() const noexcept;
+    void observeClosedInputs(MediaGraphExecutionContext& context);
+    ::media::Status handleBuffer(MediaGraphExecutionContext& context,
+                                 const PoppedChannelBuffer& input);
+    ::media::Result<MediaNodeProcessResult> finishIfReady(
+        MediaGraphExecutionContext& context,
+        const MediaBufferRef& terminalBuffer = {});
+    ::media::Result<MediaNodeProcessResult> pollOrWait(
+        MediaGraphExecutionContext& context);
+    ::media::Status remember(::media::Status status);
+    ::media::Result<MediaNodeProcessResult> terminalResult() const;
+    ::media::Status forwardIfOutputsExist(MediaGraphExecutionContext& context,
+                                          const MediaBufferRef& buffer);
+    void releaseSession() noexcept;
+
+    std::unique_ptr<MediaMuxSessionFactory> m_sessionFactory;
+    std::unique_ptr<MediaMuxSession> m_session;
+    std::unique_ptr<MediaInputTerminalTracker> m_completion;
+    std::unordered_map<std::uint32_t, BindingInputState> m_bindingInputs;
+    std::optional<::media::ErrorInfo> m_terminalFailure;
+    Phase m_phase = Phase::AcquiringBindings;
+    bool m_abortForwarded = false;
 };
 
 } // namespace media::ffmpeg::graph

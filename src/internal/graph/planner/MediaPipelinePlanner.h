@@ -1,15 +1,20 @@
 #pragma once
 
 #include "internal/graph/model/MediaGraphTypes.h"
+#include "internal/graph/model/MediaEncodedPacketLayout.h"
 #include "internal/graph/model/MediaHardwareDescriptor.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "media_transcode/Result.h"
 
+#include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace media::ffmpeg::graph {
+
+class MediaHardwareCapabilityProbe;
 
 enum class MediaPipelineStageRole {
     Decoder,
@@ -32,8 +37,9 @@ struct MediaPipelineStagePlan {
     bool hardware = false;
     bool zeroCopy = false;
     bool available = false;
-    int score = 0;
+    int priority = 0;
     std::string availabilityReason;
+    std::optional<MediaEncodedPacketLayout> encodedPacketLayout;
 };
 
 struct MediaPipelineChainPlan {
@@ -54,15 +60,11 @@ struct MediaPipelinePlannerOptions {
 
     MediaPipelinePlannerOptions(bool allowPacketCopy,
                                 bool filterRequired,
-                                bool preferGpu,
-                                bool enableSoftwareChain,
-                                bool requireRuntimeAvailability,
+                                bool disableHardware,
                                 bool lowLatency) noexcept
         : allowPacketCopy(allowPacketCopy),
           filterRequired(filterRequired),
-          preferGpu(preferGpu),
-          enableSoftwareChain(enableSoftwareChain),
-          requireRuntimeAvailability(requireRuntimeAvailability),
+          disableHardware(disableHardware),
           lowLatency(lowLatency)
     {
     }
@@ -71,12 +73,13 @@ struct MediaPipelinePlannerOptions {
     std::string outputPath;
     std::string outputCodecName;
     std::string preferredHardware;
+    int probeWidth = 0;
+    int probeHeight = 0;
+    MediaRational probeFrameRate;
     int targetWidth = 0;
     int targetHeight = 0;
     bool filterRequired;
-    bool preferGpu;
-    bool enableSoftwareChain;
-    bool requireRuntimeAvailability;
+    bool disableHardware;
     bool diagnosticLogEnabled = false;
     std::string rtspTransport;
     int openTimeoutMs = 0;
@@ -129,6 +132,15 @@ public:
         MediaInputVideoStreamInfo inputInfo,
         const std::string& inputUrl,
         MediaPipelinePlannerOptions options);
+
+    static ::media::Result<std::size_t> selectHighestRankedCandidate(
+        const std::vector<MediaPipelineChainPlan>& candidates,
+        const MediaPipelinePlannerOptions& options);
+
+    static ::media::Status preflightSelectedCandidate(
+        MediaPipelineChainPlan& selected,
+        const MediaPipelinePlannerOptions& options,
+        MediaHardwareCapabilityProbe& hardwareProbe);
 
 private:
     MediaPipelinePlanner() = default;

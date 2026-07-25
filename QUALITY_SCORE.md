@@ -1,27 +1,27 @@
 # MediaTranscode Quality Score
 
-> Scope: the complete project, evaluated against an industrial DAG media transcoding engine standard. Updated 2026-07-10.
+> Scope: the complete project, evaluated against an industrial DAG media transcoding engine standard. Updated 2026-07-23.
 
 | Dimension | Weight | Score | Evidence summary |
 |---|---:|---:|---|
 | Architecture and DAG model | 15 | 13 | Explicit graph, topology, validation, descriptors, and documented planner/builder/runtime layering. Several optimizer, distributed, and GPU areas remain framework-level. |
-| Planner decision ownership | 12 | 10 | Planner selects policy, builders materialize it, and nodes require explicit options. The realtime planner remains large and combines several planning concerns. |
-| Scheduling and concurrency | 13 | 9 | Worker, channel, queue, wakeup, backpressure, and lifecycle abstractions are present. Stress, race, and long-running lifecycle evidence remains limited. |
+| Planner decision ownership | 12 | 11 | Planner ranks hardware-only candidates by default, validates the complete selected chain lazily, permits software only when explicitly disabled, and owns RTP stream-association/RTCP policy consumed by transport and clock-group construction. The realtime planner remains large. |
+| Scheduling and concurrency | 13 | 10 | The graph-level A/V scheduler, first-worker-failure preservation, bounded CLI startup, channels, wakeups, and lifecycle abstractions are covered. Long-running race evidence remains limited. |
 | Node responsibility and decoupling | 12 | 8 | Capability-oriented node and segment structure is clear. Several planner, mux, codec, and runtime files exceed 400-700 lines and still combine multiple concerns. |
-| RAII and resource safety | 10 | 9 | FFmpeg resources, buffers, sessions, and workers generally have explicit ownership and RAII cleanup. Network cancellation and callback lifetime remain risk areas. |
+| RAII and resource safety | 10 | 10 | FFmpeg resources, including hardware device/frame capability probes, buffers, sessions, and workers use explicit ownership and RAII cleanup. |
 | Performance and resource efficiency | 10 | 6 | SPSC, buffer pools, zero-copy, hardware paths, pacing, and profiling exist. Advanced optimizer and executor modules are not yet mature production optimizations. |
-| Error model and failure boundaries | 8 | 7 | `Result`, `Status`, graph validation, and required options produce explicit failures. Some deferred optimization paths still report success without applying an optimization. |
-| Tests and verification | 10 | 5 | Realtime graph coverage is broad, but tests are concentrated in one large executable and hardware/integration coverage is not a default matrix. |
+| Error model and failure boundaries | 8 | 8 | `Result`, `Status`, planner validation, required options, and primary worker failure propagation preserve actionable causes through runtime and CLI boundaries. |
+| Tests and verification | 10 | 6 | Planner, node, Task 5 A/V sync, runtime lifecycle, and live hardware RTP paths are exercised. Nine known runtime baseline assertions and the receiver audio-remux gate remain unresolved. |
 | Maintainability and documentation | 10 | 6 | Architecture and naming provide good navigation. Large source/test files and partially implemented advanced modules increase long-term maintenance cost. |
-| **Total** | **100** | **73** | **B: sound architecture foundation, with important runtime validation and implementation-maturity gaps before industrial production maturity.** |
+| **Total** | **100** | **78** | **B+: the new A/V synchronization and hardware-first runtime paths are closed for subjective use, with objective drift, reacquisition, and long-run gates still required.** |
 
 ## Primary Project Risks
 
-1. Concurrent stop, abort, close, wakeup, queue pressure, and long-running behavior lack a systematic stress and race-validation matrix.
-2. Tests are concentrated in one realtime target rather than independent core, planner, runtime, node, integration, hardware, and performance suites.
-3. Large realtime planner, RTP mux, capability scanner, codec resolver, and FFmpeg runtime files are accumulating responsibilities.
-4. Optimizer, GPU, and distributed modules can imply capabilities beyond their current execution maturity.
-5. CPU, active-thread count, queue high-water mark, latency, drops, memory, and long-duration stability are not yet continuous regression gates.
+1. Objective post-write A/V drift percentiles and long-run drift slope are not yet measured continuously.
+2. Clock discontinuity currently reports explicit reacquisition requirements but does not complete automatic group re-lock.
+3. Nine existing runtime-test assertions and the RTP receiver's AAC-to-TS remux capture contract remain unresolved.
+4. Concurrent stop, abort, queue pressure, and long-duration behavior still lack a systematic stress matrix.
+5. Large realtime planner, capability probe, mux, codec resolver, and runtime files need later responsibility-focused decomposition.
 
 ## Priority Improvements
 

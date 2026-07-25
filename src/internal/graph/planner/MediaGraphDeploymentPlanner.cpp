@@ -19,6 +19,18 @@ namespace media::ffmpeg::graph {
             ::media::ErrorInfo::invalidArgument("MediaGraphDeploymentPlanner failed: topology is empty"));
     }
 
+    if (policy.enableDistributedExecution) {
+        return ::media::Result<MediaGraphDeploymentPlannerResult>::failure(
+            ::media::ErrorInfo::unsupported(
+                "MediaGraphDeploymentPlanner distributed execution is unsupported"));
+    }
+
+    if (topology.size() != 1) {
+        return ::media::Result<MediaGraphDeploymentPlannerResult>::failure(
+            ::media::ErrorInfo::unsupported(
+                "MediaGraphDeploymentPlanner requires a single-node topology when distributed execution is disabled"));
+    }
+
     MediaGraphDeploymentPlannerResult result;
     std::size_t roundRobinIndex = 0;
 

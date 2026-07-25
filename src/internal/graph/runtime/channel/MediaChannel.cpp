@@ -44,33 +44,105 @@ const MediaChannelBinding& MediaChannel::binding() const noexcept
         return ::media::Status::failure(
             ::media::ErrorInfo::notInitialized("MediaChannel push failed: queue is null"));
     }
+    if (!buffer) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MediaChannel push failed: buffer is null"));
+    }
 
-    auto status = m_queue->push(std::move(buffer));
-    if (status) {
-        m_metrics.pushed++;
-        if (m_consumerWakeup) {
-            m_consumerWakeup->notify();
+    std::unique_lock lock(m_mutationMutex);
+    for (;;) {
+        const std::uint64_t sequence = m_mutationSequence.load(
+            std::memory_order_acquire);
+        switch (pushOutcomeLocked(buffer)) {
+        case MediaQueuePushOutcome::Accepted:
+            return ::media::Status::success();
+        case MediaQueuePushOutcome::Dropped:
+            m_metrics.pushed++;
+            if (m_consumerWakeup) m_consumerWakeup->notify();
+            refreshQueueMetrics();
+            return ::media::Status::success();
+        case MediaQueuePushOutcome::Closed:
+            return ::media::Status::failure(::media::ErrorInfo::cancelled(
+                "MediaChannel push interrupted: queue closed"));
+        case MediaQueuePushOutcome::Aborted:
+            return ::media::Status::failure(::media::ErrorInfo::internalError(
+                "MediaChannel push failed: queue aborted"));
+        case MediaQueuePushOutcome::WouldBlock:
+            m_externalBlockedPushes.fetch_add(1, std::memory_order_relaxed);
+            m_externalBlockedProducers.fetch_add(1, std::memory_order_release);
+            refreshQueueMetrics();
+            m_mutationChanged.wait(lock, [&] {
+                return m_mutationSequence.load(std::memory_order_acquire) !=
+                    sequence;
+            });
+            m_externalBlockedProducers.fetch_sub(1, std::memory_order_release);
+            refreshQueueMetrics();
+            break;
         }
     }
-    refreshQueueMetrics();
-    return status;
 }
 
-bool MediaChannel::tryPush(MediaBufferRef buffer)
+MediaQueuePushOutcome MediaChannel::pushOutcome(MediaBufferRef buffer)
 {
-    if (!m_queue) {
-        return false;
+    std::lock_guard lock(m_mutationMutex);
+    return pushOutcomeLocked(std::move(buffer));
+}
+
+MediaQueuePushOutcome MediaChannel::pushOutcomeLocked(
+    MediaBufferRef buffer,
+    bool publishAccepted)
+{
+    if (!m_queue) return MediaQueuePushOutcome::Closed;
+    if (m_queue->aborted()) return MediaQueuePushOutcome::Aborted;
+    if (m_closeRequested) return MediaQueuePushOutcome::Closed;
+
+    const std::size_t capacity = m_queue->capacity();
+    if (m_reservedCapacity != 0 &&
+        (m_reservedCapacity > capacity ||
+         m_queue->size() >= capacity - m_reservedCapacity)) {
+        return MediaQueuePushOutcome::WouldBlock;
     }
 
-    const bool ok = m_queue->tryPush(std::move(buffer));
-    if (ok) {
+    const MediaQueuePushOutcome outcome = m_queue->pushOutcome(std::move(buffer));
+    if (outcome == MediaQueuePushOutcome::Accepted) {
         m_metrics.pushed++;
-        if (m_consumerWakeup) {
-            m_consumerWakeup->notify();
-        }
+        if (publishAccepted) publishAcceptedMutation();
     }
     refreshQueueMetrics();
-    return ok;
+    return outcome;
+}
+
+MediaQueuePushOutcome MediaChannel::pushReservedOutcomeLocked(
+    MediaBufferRef buffer)
+{
+    if (!m_queue || m_queue->aborted()) return MediaQueuePushOutcome::Aborted;
+    const MediaQueuePushOutcome outcome = m_queue->pushOutcome(std::move(buffer));
+    if (outcome == MediaQueuePushOutcome::Accepted) {
+        m_metrics.pushed++;
+    }
+    refreshQueueMetrics();
+    return outcome;
+}
+
+void MediaChannel::publishAcceptedMutation() noexcept
+{
+    if (m_consumerWakeup) m_consumerWakeup->notify();
+    signalMutationWaiters();
+}
+
+void MediaChannel::publishReservedCapacityMutation() noexcept
+{
+    if (m_producerWakeup) m_producerWakeup->notify();
+    signalMutationWaiters();
+}
+
+void MediaChannel::finalizeDeferredCloseLocked() noexcept
+{
+    if (m_closeRequested && m_authorizedCapacity == 0 && m_queue &&
+        !m_queue->closed() && !m_queue->aborted()) {
+        m_queue->close();
+    }
 }
 
 ::media::Status MediaChannel::pop(MediaBufferRef& out)
@@ -80,9 +152,28 @@ bool MediaChannel::tryPush(MediaBufferRef buffer)
             ::media::ErrorInfo::notInitialized("MediaChannel pop failed: queue is null"));
     }
 
+    bool externalWait = false;
+    {
+        std::lock_guard lock(m_mutationMutex);
+        externalWait = m_policy.queuePolicy.mode != MediaQueueMode::SpscRing &&
+            m_queue->size() == 0 && !m_queue->closed() &&
+            !m_queue->aborted();
+        if (externalWait) {
+            m_externalBlockedConsumers.fetch_add(
+                1, std::memory_order_release);
+            refreshQueueMetrics();
+        }
+    }
     auto status = m_queue->pop(out);
+    std::lock_guard lock(m_mutationMutex);
+    if (externalWait) {
+        m_externalBlockedConsumers.fetch_sub(
+            1, std::memory_order_release);
+    }
     if (status) {
         m_metrics.popped++;
+        if (m_producerWakeup) m_producerWakeup->notify();
+        signalMutationWaiters();
     }
     refreshQueueMetrics();
     return status;
@@ -90,6 +181,7 @@ bool MediaChannel::tryPush(MediaBufferRef buffer)
 
 bool MediaChannel::tryPop(MediaBufferRef& out)
 {
+    std::lock_guard lock(m_mutationMutex);
     if (!m_queue) {
         return false;
     }
@@ -97,25 +189,37 @@ bool MediaChannel::tryPop(MediaBufferRef& out)
     const bool ok = m_queue->tryPop(out);
     if (ok) {
         m_metrics.popped++;
+        if (m_producerWakeup) {
+            m_producerWakeup->notify();
+        }
     }
+    if (ok) signalMutationWaiters();
     refreshQueueMetrics();
     return ok;
 }
 
 void MediaChannel::close()
 {
-    if (m_queue) {
+    std::lock_guard lock(m_mutationMutex);
+    m_closeRequested = true;
+    if (m_queue && m_authorizedCapacity == 0) {
         m_queue->close();
     }
     m_metrics.closed++;
     if (m_consumerWakeup) {
         m_consumerWakeup->notify();
     }
+    if (m_producerWakeup) {
+        m_producerWakeup->notify();
+    }
     refreshQueueMetrics();
+    signalMutationWaiters();
 }
 
 void MediaChannel::abort()
 {
+    std::lock_guard lock(m_mutationMutex);
+    m_closeRequested = true;
     if (m_queue) {
         m_queue->abort();
     }
@@ -123,11 +227,16 @@ void MediaChannel::abort()
     if (m_consumerWakeup) {
         m_consumerWakeup->notify();
     }
+    if (m_producerWakeup) {
+        m_producerWakeup->notify();
+    }
     refreshQueueMetrics();
+    signalMutationWaiters();
 }
 
 void MediaChannel::clear()
 {
+    std::lock_guard lock(m_mutationMutex);
     if (m_queue) {
         m_queue->clear();
     }
@@ -135,12 +244,23 @@ void MediaChannel::clear()
     if (m_consumerWakeup) {
         m_consumerWakeup->notify();
     }
+    if (m_producerWakeup) {
+        m_producerWakeup->notify();
+    }
     refreshQueueMetrics();
+    signalMutationWaiters();
+}
+
+void MediaChannel::signalMutationWaiters() noexcept
+{
+    m_mutationSequence.fetch_add(1, std::memory_order_release);
+    m_mutationChanged.notify_all();
 }
 
 bool MediaChannel::closed() const
 {
-    return !m_queue || m_queue->closed();
+    std::lock_guard lock(m_mutationMutex);
+    return m_closeRequested || !m_queue || m_queue->closed();
 }
 
 bool MediaChannel::aborted() const
@@ -150,6 +270,7 @@ bool MediaChannel::aborted() const
 
 std::size_t MediaChannel::size() const
 {
+    std::lock_guard lock(m_mutationMutex);
     return m_queue ? m_queue->size() : 0;
 }
 
@@ -188,10 +309,21 @@ void MediaChannel::setConsumerWakeup(MediaNodeWakeup& wakeup) noexcept
     m_consumerWakeup = &wakeup;
 }
 
+void MediaChannel::setProducerWakeup(MediaNodeWakeup& wakeup) noexcept
+{
+    m_producerWakeup = &wakeup;
+}
+
 void MediaChannel::refreshQueueMetrics()
 {
     if (m_queue) {
         m_metrics.queue = m_queue->metrics();
+        m_metrics.queue.blockedPushes.fetch_add(
+            m_externalBlockedPushes.load(std::memory_order_relaxed));
+        m_metrics.queue.blockedProducers.fetch_add(
+            m_externalBlockedProducers.load(std::memory_order_acquire));
+        m_metrics.queue.blockedConsumers.fetch_add(
+            m_externalBlockedConsumers.load(std::memory_order_acquire));
     }
 }
 

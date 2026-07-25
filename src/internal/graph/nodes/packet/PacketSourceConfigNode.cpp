@@ -3,8 +3,9 @@
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
-#include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
+#include "internal/graph/runtime/buffer/FFmpegInputSnapshotBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
+#include "internal/graph/runtime/buffer/FFmpegCodecParametersBuffer.h"
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -37,13 +38,13 @@ MediaNodeKind PacketSourceConfigNode::staticKind() noexcept
 
 ::media::Status PacketSourceConfigNode::stop(MediaGraphExecutionContext& context)
 {
-    releaseFormatContext();
+    releaseInputSnapshots();
     return FFmpegNodeRuntime::stop(context);
 }
 
 void PacketSourceConfigNode::abort(MediaGraphExecutionContext& context) noexcept
 {
-    releaseFormatContext();
+    releaseInputSnapshots();
     FFmpegNodeRuntime::abort(context);
 }
 
@@ -53,12 +54,12 @@ void PacketSourceConfigNode::abort(MediaGraphExecutionContext& context) noexcept
         return processFinished();
     }
 
-    if (!m_formatContextOwner) {
-        auto bindStatus = bindFormatContext(context);
+    if (!m_inputSnapshotOwner) {
+        auto bindStatus = bindInputSnapshots(context);
         if (!bindStatus) {
             return processProgress(bindStatus);
         }
-        if (!m_formatContextOwner) {
+        if (!m_inputSnapshotOwner) {
             return processWaiting();
         }
     }
@@ -73,16 +74,16 @@ void PacketSourceConfigNode::abort(MediaGraphExecutionContext& context) noexcept
     return processFinished(emitSourceConfig(context));
 }
 
-void PacketSourceConfigNode::releaseFormatContext() noexcept
+void PacketSourceConfigNode::releaseInputSnapshots() noexcept
 {
-    m_formatContextOwner.reset();
+    m_inputSnapshotOwner.reset();
     m_sourceStream = nullptr;
     m_streamKind = MediaStreamKind::Unknown;
     m_sourceStreamIndex = invalidMediaStreamIndex;
     m_emitted = false;
 }
 
-::media::Status PacketSourceConfigNode::bindFormatContext(MediaGraphExecutionContext& context)
+::media::Status PacketSourceConfigNode::bindInputSnapshots(MediaGraphExecutionContext& context)
 {
     auto input = tryPopInputOptional(context, "format");
     if (!input) {
@@ -93,14 +94,14 @@ void PacketSourceConfigNode::releaseFormatContext() noexcept
     }
 
     MediaBufferRef buffer = *input.value();
-    auto* formatBuffer = dynamic_cast<FFmpegFormatContextBuffer*>(buffer.get());
+    auto* formatBuffer = dynamic_cast<FFmpegInputSnapshotBuffer*>(buffer.get());
     if (!formatBuffer || !formatBuffer->inputSnapshotComplete()) {
         return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("PacketSourceConfigNode expected FFmpegFormatContextBuffer"));
+            ::media::ErrorInfo::invalidArgument("PacketSourceConfigNode expected complete input snapshots"));
     }
 
-    m_formatContextOwner = std::move(buffer);
-    packetSourceConfigLog(MediaGraphDiagnosticLevel::State, "bind_format_context");
+    m_inputSnapshotOwner = std::move(buffer);
+    packetSourceConfigLog(MediaGraphDiagnosticLevel::State, "bind_input_snapshots");
     return ::media::Status::success();
 }
 
@@ -119,13 +120,13 @@ void PacketSourceConfigNode::releaseFormatContext() noexcept
         return ::media::Status::failure(streamIndex.error());
     }
 
-    if (!m_formatContextOwner) {
+    if (!m_inputSnapshotOwner) {
         return ::media::Status::failure(
             ::media::ErrorInfo::notInitialized("PacketSourceConfigNode requires format context before source stream binding"));
     }
 
     const int index = streamIndex.value();
-    const auto* formatBuffer = dynamic_cast<const FFmpegFormatContextBuffer*>(m_formatContextOwner.get());
+    const auto* formatBuffer = dynamic_cast<const FFmpegInputSnapshotBuffer*>(m_inputSnapshotOwner.get());
     m_sourceStream = formatBuffer ? formatBuffer->inputStreamSnapshot(index) : nullptr;
     if (!m_sourceStream || m_sourceStream->streamKind != streamKind.value()) {
         return ::media::Status::failure(
@@ -159,10 +160,16 @@ void PacketSourceConfigNode::releaseFormatContext() noexcept
     }
 
     std::ostringstream out;
+    const auto* parametersBuffer = dynamic_cast<const FFmpegCodecParametersBuffer*>(buffer.value().get());
+    const AVCodecParameters* parameters = parametersBuffer ? parametersBuffer->parameters() : nullptr;
+    if (!parameters) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::notInitialized("PacketSourceConfigNode cloned codec parameters are unavailable"));
+    }
     out << "emit_source_config stream=" << mediaGraphDiagnosticStreamKindName(m_streamKind)
         << " index=" << m_sourceStreamIndex
         << " time_base=" << m_sourceStream->time.timeBase.num << "/" << m_sourceStream->time.timeBase.den
-        << " codec_id=" << m_sourceStream->codecParameters->codec_id;
+        << " codec_id=" << parameters->codec_id;
     packetSourceConfigLog(MediaGraphDiagnosticLevel::State, out.str());
 
     auto emitStatus = emitOutput(context, "codec", buffer.value());

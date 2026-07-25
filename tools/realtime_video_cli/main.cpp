@@ -2,6 +2,8 @@
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 #include "internal/graph/runtime/MediaGraphRuntime.h"
 #include "internal/graph/runtime/diagnostics/MediaGraphRuntimeReport.h"
+#include "internal/graph/runtime/lifecycle/MediaRealtimeProgressTracker.h"
+#include "internal/graph/runtime/lifecycle/MediaRealtimeRuntimeCompletion.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
 #include "../common/GraphCliSupport.h"
 #include "../common/VideoCliTranscodeOptions.h"
@@ -28,6 +30,7 @@ namespace {
 struct RealtimeVideoRuntimeOptions {
     int maxDurationSeconds = 15;
     int progressTimeoutMs = 5000;
+    int firstOutputTimeoutMs = 30000;
     int pollIntervalMs = 250;
 };
 
@@ -77,6 +80,7 @@ void rejectUnknownRealtimeArgs(int argc, char** argv)
 {
     std::vector<std::string> valueArgs = commonVideoTranscodeValueArgs();
     const std::vector<std::string> realtimeValueArgs {
+        "--media-id",
         "--input-type",
         "--input-layout",
         "--output-layout",
@@ -104,7 +108,11 @@ void rejectUnknownRealtimeArgs(int argc, char** argv)
         "--output",
         "--max-duration",
         "--progress-timeout-ms",
+        "--first-output-timeout-ms",
         "--poll-interval-ms",
+        "--startup-max-video-unit-bytes",
+        "--startup-max-audio-unit-bytes",
+        "--startup-max-gap-ms",
     };
     valueArgs.insert(valueArgs.end(), realtimeValueArgs.begin(), realtimeValueArgs.end());
 
@@ -173,10 +181,23 @@ MediaRealtimeRtpTranscodeRequest parseRealtimeOptions(int argc, char** argv)
     rejectUnknownRealtimeArgs(argc, argv);
 
     MediaRealtimeRtpTranscodeRequest options;
+    options.mediaId = requiredArg(argc, argv, "--media-id");
     parseRealtimeInputOptions(argc, argv, options.input);
     parseRealtimeOutputOptions(argc, argv, options.output);
     parseCommonVideoTranscodeOptions(argc, argv, options.parameters);
     parseAudioRtpOptionsIfNeeded(argc, argv, options);
+    if (options.parameters.execution.includeAudio) {
+        options.avSyncStartup.maximumVideoUnitBytes = requiredSizeArg(
+            argc, argv, "--startup-max-video-unit-bytes");
+        options.avSyncStartup.maximumAudioUnitBytes = requiredSizeArg(
+            argc, argv, "--startup-max-audio-unit-bytes");
+        const int maximumGapMs = requiredIntArg(argc, argv, "--startup-max-gap-ms");
+        if (maximumGapMs <= 0) {
+            throw std::invalid_argument("startup maximum gap must be positive");
+        }
+        options.avSyncStartup.maximumGap = MediaRunningTime::fromNanoseconds(
+            static_cast<std::int64_t>(maximumGapMs) * 1'000'000);
+    }
     return options;
 }
 
@@ -187,13 +208,18 @@ RealtimeVideoRuntimeOptions parseRuntimeOptions(int argc, char** argv)
     if (auto progressTimeoutMs = optionalIntArg(argc, argv, "--progress-timeout-ms")) {
         options.progressTimeoutMs = *progressTimeoutMs;
     }
+    if (auto firstOutputTimeoutMs = optionalIntArg(argc, argv, "--first-output-timeout-ms")) {
+        options.firstOutputTimeoutMs = *firstOutputTimeoutMs;
+    }
     if (auto pollIntervalMs = optionalIntArg(argc, argv, "--poll-interval-ms")) {
         options.pollIntervalMs = *pollIntervalMs;
     }
     if (options.maxDurationSeconds <= 0 ||
         options.progressTimeoutMs <= 0 ||
+        options.firstOutputTimeoutMs <= 0 ||
         options.pollIntervalMs <= 0) {
-        throw std::invalid_argument("runtime duration, progress timeout, and poll interval must be positive");
+        throw std::invalid_argument(
+            "runtime duration, progress timeout, first-output timeout, and poll interval must be positive");
     }
     return options;
 }
@@ -204,18 +230,38 @@ RealtimeVideoRuntimeOptions parseRuntimeOptions(int argc, char** argv)
     using Clock = std::chrono::steady_clock;
     const auto startedAt = Clock::now();
     auto lastProgressAt = startedAt;
-    uint64_t lastEncodedPacketsPushed = 0;
-    bool observedProgress = false;
+    MediaRealtimeProgressTracker progressTracker;
+    const auto firstOutputStartupDeadline =
+        std::chrono::milliseconds(options.firstOutputTimeoutMs);
+    const auto maximumOutputDuration =
+        std::chrono::seconds(options.maxDurationSeconds);
     const auto workerStartupGrace = std::chrono::milliseconds(
         std::min(options.progressTimeoutMs, std::max(options.pollIntervalMs * 2, 1000)));
 
-    while (runtime.threadedRunning()) {
+    while (true) {
+        auto lifecycleStatus = runtime.synchronizeThreadedState();
+        if (!lifecycleStatus) {
+            return lifecycleStatus;
+        }
+        if (!runtime.threadedRunning()) {
+            break;
+        }
+        const MediaGraphRuntimeReport progressReport = MediaGraphRuntimeReporter::capture(runtime);
+        auto sampleStatus = runtime.acceptanceCollector().sample(
+            progressReport.metrics.encodedPacketsPushed);
+        if (!sampleStatus) {
+            return sampleStatus;
+        }
         const MediaGraphRuntimeReport report = MediaGraphRuntimeReporter::capture(runtime);
         std::cout << "[CLI] " << report.summary() << '\n';
 
         if (report.metrics.workerErrors > 0) {
-            return ::media::Status::failure(
-                ::media::ErrorInfo::ffmpegFailure("realtime runtime reported worker errors"));
+            auto workerFailure = runtime.synchronizeThreadedState();
+            if (!workerFailure) {
+                return workerFailure;
+            }
+            return ::media::Status::failure(::media::ErrorInfo::internalError(
+                "realtime runtime reported worker errors without a preserved primary failure"));
         }
         const auto now = Clock::now();
         if (report.metrics.activeWorkers == 0 &&
@@ -223,18 +269,41 @@ RealtimeVideoRuntimeOptions parseRuntimeOptions(int argc, char** argv)
             return ::media::Status::failure(
                 ::media::ErrorInfo::notInitialized("realtime runtime has no active workers"));
         }
-        if (report.metrics.encodedPacketsPushed > lastEncodedPacketsPushed) {
-            lastEncodedPacketsPushed = report.metrics.encodedPacketsPushed;
+        const auto elapsedMs =
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - startedAt);
+        auto progress = progressTracker.observe(
+            report.metrics.workerProgress,
+            report.metrics.encodedPacketsPushed,
+            elapsedMs);
+        if (!progress) {
+            return ::media::Status::failure(progress.error());
+        }
+        if (progress.value()) {
             lastProgressAt = Clock::now();
-            observedProgress = true;
         }
 
-        const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - startedAt).count();
         const auto idleMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastProgressAt).count();
-        if (observedProgress && elapsed >= options.maxDurationSeconds) {
+        if (progressTracker.firstOutputDeadlineExpired(
+                elapsedMs, firstOutputStartupDeadline)) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "realtime runtime produced no encoded output before startup deadline"));
+        }
+        if (progressTracker.maximumOutputDurationExpired(
+                elapsedMs, maximumOutputDuration)) {
             return ::media::Status::success();
         }
         if (idleMs >= options.progressTimeoutMs) {
+            for (const auto& decision : report.backpressure.decisions) {
+                if (decision.kind == MediaBackpressureDecisionKind::QueueFull ||
+                    decision.kind ==
+                        MediaBackpressureDecisionKind::AboveCriticalWatermark) {
+                    std::cerr << "[CLI] stalled edge=" << decision.edgeId.value
+                              << " queued=" << decision.queueSize
+                              << " capacity=" << decision.capacity
+                              << " reason=" << decision.message << '\n';
+                }
+            }
             return ::media::Status::failure(
                 ::media::ErrorInfo::notInitialized("realtime runtime made no progress before timeout"));
         }
@@ -252,7 +321,7 @@ int runRealtimeVideoCli(int argc, char** argv)
 
     const bool helpRequested = hasArg(argc, argv, "--help") || hasArg(argc, argv, "-h");
     if (argc < 5 || helpRequested) {
-        std::cout << "Usage: media_transcode_realtime_video_cli --input-type rtsp|rtp|mpegts-udp --input-layout session|separate|mpegts --output-layout separate|mpegts --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --max-duration 15 [options]\n";
+        std::cout << "Usage: media_transcode_realtime_video_cli --media-id ID --input-type rtsp|rtp|mpegts-udp --input-layout session|separate|mpegts --output-layout separate|mpegts --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --startup-max-video-unit-bytes 4194304 --startup-max-audio-unit-bytes 1048576 --startup-max-gap-ms 40 --max-duration 15 [options]\n";
         return helpRequested ? 0 : 2;
     }
 
@@ -265,26 +334,27 @@ int runRealtimeVideoCli(int argc, char** argv)
               << " hw=" << (options.parameters.execution.disableHardware ? "disabled" : "auto")
               << '\n';
 
-    auto planResult = MediaRealtimeRtpTranscodePlanner::plan(options);
-    if (!planResult) {
-        return failResult("realtime video graph plan", planResult);
+    auto preflightResult = MediaRealtimeRtpTranscodePlanner::preflight(options);
+    if (!preflightResult) {
+        return failResult("realtime video graph preflight", preflightResult);
     }
-    MediaRealtimeRtpTranscodePlan plan = std::move(planResult).value();
+    MediaRealtimeTranscodePreflight preflight = std::move(preflightResult).value();
+    const MediaThreadingPolicy threadingPolicy = preflight.plan.threadingPolicy;
 
-    auto graphResult = MediaRealtimeRtpTranscodeGraphBuilder::build(plan);
-    if (!graphResult) {
-        return failResult("realtime video graph build", graphResult);
+    auto executableResult = MediaRealtimeRtpTranscodeGraphBuilder::buildExecutable(std::move(preflight));
+    if (!executableResult) {
+        return failResult("realtime video executable graph build", executableResult);
     }
-    MediaGraph graph = std::move(graphResult).value();
-    auto summaryStatus = printRealtimePlanSummary(graph);
+    MediaRealtimeExecutableGraph executable = std::move(executableResult).value();
+    auto summaryStatus = printRealtimePlanSummary(executable.graph);
     if (!summaryStatus) {
         return failStatus("print realtime video plan summary", summaryStatus);
     }
 
     MediaGraphRuntime runtime;
     runtime.setDiagnosticsEnabled(options.parameters.execution.diagnosticLogEnabled);
-    runtime.setThreadingPolicy(plan.threadingPolicy);
-    auto compileStatus = runtime.compile(std::move(graph));
+    runtime.setThreadingPolicy(threadingPolicy);
+    auto compileStatus = runtime.compile(std::move(executable));
     if (!compileStatus) {
         return failStatus("compile realtime video graph", compileStatus);
     }
@@ -297,16 +367,13 @@ int runRealtimeVideoCli(int argc, char** argv)
         return failStatus("start realtime video runtime", startStatus);
     }
 
-    auto waitStatus = waitForRealtimeProgress(runtime, runtimeOptions);
-    auto stopStatus = runtime.stop();
-    if (!stopStatus) {
-        return failStatus("stop realtime video runtime", stopStatus);
-    }
+    const auto waitStatus = waitForRealtimeProgress(runtime, runtimeOptions);
+    const auto completion = MediaRealtimeRuntimeCompletion::complete(runtime, waitStatus);
     const MediaGraphRuntimeReport finalReport = MediaGraphRuntimeReporter::capture(runtime);
     std::cout << "[CLI] final " << finalReport.summary() << '\n';
     runtime.reset();
-    if (!waitStatus) {
-        return failStatus("realtime video runtime progress", waitStatus);
+    if (!completion.status) {
+        return failStatus("realtime video runtime", completion.status);
     }
 
     std::cout << "[CLI] realtime video validation stopped successfully\n";

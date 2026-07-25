@@ -64,8 +64,31 @@ enum class MediaNodeKind {
     PacketSourceConfig = 38,
     PacketNormalize = 39,
     RawRtpInput = 40,
-    AvPacketStartBarrier = 41,
-    PacketStartGate = 42
+    ReservedNodeKind41 = 41,
+    PacketStartGate = 42,
+    RtpClockGroup = 43,
+    MpegTsDemux = 44,
+    AvStartupCoordinator = 45,
+    AvOutputScheduler = 46,
+    PlaybackEpochBinder = 47,
+    CanonicalInput = 48,
+    AvBoundReleaseExtractor = 49,
+    AudioStartupTrim = 50,
+    RtpPacketClockBinder = 51,
+    RtpClockSnapshotFanout = 52,
+    InitialLockedPacketGate = 53,
+    ReservedNodeKind54 = 54,
+    RtpSourceClockStateAdapter = 55,
+    AvStartupClock = 56,
+    ActivatedStartupReleaseSequencer = 57,
+    SourceClockStateFanout = 58,
+    AudioDriftController = 59,
+    EncodedAudioCanonicalizer = 60,
+    ScheduledOutputRouter = 61,
+    ScheduledRtpSender = 62,
+    DualMediaSdpPublisher = 63,
+    ProjectMpegTsPlanSource = 64,
+    ScheduledTsAccessUnitAdapter = 65
 };
 
 } // namespace media::ffmpeg::graph

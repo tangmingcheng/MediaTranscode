@@ -1,8 +1,10 @@
 #pragma once
 
 #include <condition_variable>
+#include <chrono>
 #include <cstdint>
 #include <mutex>
+#include <optional>
 
 namespace media::ffmpeg::graph {
 
@@ -12,7 +14,13 @@ public:
 
     Sequence sequence() const noexcept;
     void notify() noexcept;
-    bool waitForChange(Sequence observedSequence);
+    enum class WaitOutcome {
+        Notified,
+        Deadline,
+        Interrupted
+    };
+    WaitOutcome wait(Sequence observedSequence,
+                     std::optional<std::chrono::nanoseconds> timeout = std::nullopt);
     void interrupt() noexcept;
     void reset() noexcept;
 

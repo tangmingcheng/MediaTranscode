@@ -149,6 +149,8 @@ inline constexpr char PlannedFilter[] = "filter";
 
 inline constexpr char MuxExpectVideo[] = "mux.expect_video";
 inline constexpr char MuxExpectAudio[] = "mux.expect_audio";
+inline constexpr char MuxSessionKind[] = "mux.session_kind";
+inline constexpr char OutputResourceKind[] = "output.resource_kind";
 
 inline constexpr char PacketSourceStreamIndex[] = "packet.source_stream_index";
 inline constexpr char PacketStreamKind[] = "packet.stream_kind";
@@ -183,9 +185,11 @@ inline constexpr char AudioMaxBitrateKbps[] = "audio.bitrate.max_kbps";
 inline constexpr char AudioBufferSizeKbits[] = "audio.rc.buffer_size.kbits";
 inline constexpr char AudioSampleRate[] = "audio.sample_rate";
 inline constexpr char AudioChannels[] = "audio.channels";
+inline constexpr char AudioChannelLayout[] = "audio.channel_layout";
+inline constexpr char AudioSampleFormat[] = "audio.sample_format";
 inline constexpr char AudioQuality[] = "audio.quality";
 inline constexpr char AudioPreset[] = "audio.preset";
-inline constexpr char AudioProfile[] = "audio.profile";
+inline constexpr char AudioProfileId[] = "audio.profile.ffmpeg_id";
 } // namespace MediaTranscodeOptionKey
 
 } // namespace media::ffmpeg::graph

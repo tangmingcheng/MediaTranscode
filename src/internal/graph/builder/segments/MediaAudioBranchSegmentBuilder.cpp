@@ -3,47 +3,86 @@
 #include "internal/graph/builder/segments/MediaAudioBranchOptionsMapper.h"
 #include "internal/graph/builder/segments/MediaAudioEncodeBranchBuilder.h"
 #include "internal/graph/builder/segments/MediaAudioPacketCopyBranchBuilder.h"
-#include "internal/graph/builder/segments/MediaBranchEndpointValidator.h"
 
 namespace media::ffmpeg::graph {
 namespace {
 
-constexpr const char* owner = "MediaAudioBranchSegmentBuilder";
-
-::media::Result<void> buildPlannedAudioBranch(MediaGraph& graph,
-                                              const MediaAudioBranchSegmentOptions& options)
+::media::Result<MediaEncodedBranchEndpoints> buildPlannedAudioBranch(
+    MediaGraph& graph,
+    const MediaAudioBranchSegmentOptions& options)
 {
     switch (options.plan.branchMode) {
     case MediaBranchMode::CopyPacket:
-        return MediaAudioPacketCopyBranchBuilder::build(graph, makeAudioPacketCopyBranchOptions(options));
+    {
+        auto copy = MediaAudioPacketCopyBranchBuilder::build(
+            graph, makeAudioPacketCopyBranchOptions(options));
+        if (!copy) {
+            return ::media::Result<MediaEncodedBranchEndpoints>::failure(
+                copy.error());
+        }
+        return copy;
+    }
     case MediaBranchMode::TranscodeFrame:
-        return MediaAudioEncodeBranchBuilder::build(graph, makeAudioEncodeBranchOptions(options));
+    {
+        auto encode = MediaAudioEncodeBranchBuilder::build(
+            graph, makeAudioEncodeBranchOptions(options));
+        if (!encode) {
+            return ::media::Result<MediaEncodedBranchEndpoints>::failure(
+                encode.error());
+        }
+        return encode;
+    }
     case MediaBranchMode::Drop:
         break;
     }
 
-    return ::media::Result<void>::failure(
+    return ::media::Result<MediaEncodedBranchEndpoints>::failure(
         ::media::ErrorInfo::unsupported("MediaAudioBranchSegmentBuilder unsupported audio branch mode"));
 }
 
 } // namespace
 
-::media::Result<bool> MediaAudioBranchSegmentBuilder::buildIfPlanned(
+::media::Result<MediaEncodedBranchEndpoints>
+MediaAudioBranchSegmentBuilder::build(
     MediaGraph& graph,
     const MediaAudioBranchSegmentOptions& options)
 {
     if (!options.plan.enabled || options.plan.branchMode == MediaBranchMode::Drop) {
-        return ::media::Result<bool>::success(false);
+        return ::media::Result<MediaEncodedBranchEndpoints>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MediaAudioBranchSegmentBuilder requires an enabled audio branch"));
+    }
+    if (!options.normalizeInputPackets.has_value()) {
+        return ::media::Result<MediaEncodedBranchEndpoints>::failure(
+            ::media::ErrorInfo::invalidArgument("MediaAudioBranchSegmentBuilder requires explicit input packet normalization policy"));
+    }
+    if (!options.correctionMode || !options.lineageMode) {
+        return ::media::Result<MediaEncodedBranchEndpoints>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MediaAudioBranchSegmentBuilder requires explicit correction and lineage modes"));
+    }
+    if (options.plan.branchMode == MediaBranchMode::CopyPacket &&
+        (*options.correctionMode !=
+             MediaAudioCorrectionExecutionMode::Disabled ||
+         *options.lineageMode !=
+             MediaAudioLineageExecutionMode::LegacyPlainPacket ||
+         options.lineageCapacity || options.correctionGeneration ||
+         options.correctionLookaheadWindows || options.syncGroup)) {
+        return ::media::Result<MediaEncodedBranchEndpoints>::failure(
+            ::media::ErrorInfo::unsupported(
+                "synchronized audio packet copy is unsupported"));
     }
 
-    if (auto status = validateMediaBranchEndpoints(owner, makeAudioBranchEndpointSet(options)); !status) {
-        return ::media::Result<bool>::failure(status.error());
+    if (!options.formatSourceNode.isValid() || options.formatSourcePort.empty() ||
+        !options.packetSourceNode.isValid() || options.packetSourcePort.empty() ||
+        options.queues.metadata == 0 || options.queues.packet == 0 ||
+        options.queues.frame == 0) {
+        return ::media::Result<MediaEncodedBranchEndpoints>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MediaAudioBranchSegmentBuilder requires planned source endpoints and queues"));
     }
 
-    if (auto status = buildPlannedAudioBranch(graph, options); !status) {
-        return ::media::Result<bool>::failure(status.error());
-    }
-    return ::media::Result<bool>::success(true);
+    return buildPlannedAudioBranch(graph, options);
 }
 
 } // namespace media::ffmpeg::graph

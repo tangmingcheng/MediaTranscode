@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/graph/model/MediaGraphCapability.h"
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/model/MediaGraphOptimizationPolicy.h"
 #include "internal/graph/runtime/optimizer/MediaGraphOptimizationPass.h"
@@ -18,6 +19,11 @@ struct MediaGraphOptimizerResult {
 
 class MediaGraphOptimizer final {
 public:
+    static constexpr MediaCapabilityMaturity capabilityMaturity() noexcept
+    {
+        return mediaGraphCapabilityMaturity(MediaGraphCapability::GraphOptimization);
+    }
+
     MediaGraphOptimizer();
 
     void addPass(std::unique_ptr<MediaGraphOptimizationPass> pass);

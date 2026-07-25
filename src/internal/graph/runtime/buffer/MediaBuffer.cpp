@@ -4,6 +4,11 @@
 
 namespace media::ffmpeg::graph {
 
+std::optional<std::uint64_t> MediaBuffer::payloadFootprintBytes() const noexcept
+{
+    return std::nullopt;
+}
+
 MediaBufferFlag operator|(MediaBufferFlag lhs, MediaBufferFlag rhs) noexcept
 {
     return static_cast<MediaBufferFlag>(

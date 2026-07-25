@@ -6,13 +6,23 @@
 #include "internal/graph/runtime/scheduler/MediaGraphScheduler.h"
 #include "internal/graph/runtime/threading/MediaGraphThreadedExecutor.h"
 #include "internal/graph/runtime/MediaRuntimeNode.h"
+#include "internal/graph/runtime/diagnostics/MediaRuntimeAcceptanceCollector.h"
+#include "internal/graph/runtime/factory/MediaRealtimeExecutableGraph.h"
+#include "internal/graph/sync/MediaPlaybackEpochActivationCapability.h"
 #include "media_transcode/Result.h"
 
 #include <cstddef>
+#include <atomic>
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <vector>
 
 namespace media::ffmpeg::graph {
+
+class MediaGraphRuntimeLifecycleExecutor;
+class MediaAvSyncClockSource;
+class MediaAvStartupVideoPreparationState;
 
 enum class MediaGraphRuntimeState {
     Empty,
@@ -38,6 +48,8 @@ struct MediaGraphRunResult {
 class MediaGraphRuntime final {
 public:
     MediaGraphRuntime() = default;
+    explicit MediaGraphRuntime(
+        std::shared_ptr<MediaAvSyncClockSource> avSyncClockSource);
 
     MediaGraphRuntime(const MediaGraphRuntime&) = delete;
     MediaGraphRuntime& operator=(const MediaGraphRuntime&) = delete;
@@ -46,6 +58,7 @@ public:
     bool diagnosticsEnabled() const noexcept;
 
     ::media::Status compile(MediaGraph graph);
+    ::media::Status compile(MediaRealtimeExecutableGraph executable);
     ::media::Status registerRuntimeNode(std::unique_ptr<MediaRuntimeNode> node);
     ::media::Status registerDefaultRuntimeNodes();
 
@@ -54,6 +67,7 @@ public:
 
     ::media::Result<MediaGraphRunResult> run();
     ::media::Status startThreaded();
+    ::media::Status synchronizeThreadedState();
     ::media::Status flush();
     ::media::Status stop();
     void abort() noexcept;
@@ -74,14 +88,28 @@ public:
     const MediaGraphThreadedExecutor& threadedExecutor() const noexcept;
 
     const MediaGraph* graph() const noexcept;
+    MediaRuntimeAcceptanceCollector& acceptanceCollector() noexcept;
+    const MediaRuntimeAcceptanceCollector& acceptanceCollector() const noexcept;
+    std::size_t observeQueueHighWatermark(std::size_t queued) const noexcept;
 
 private:
+    friend class MediaGraphRuntimeLifecycleExecutor;
+    ::media::Status compileTransaction(MediaRealtimeExecutableGraph executable);
+
     MediaGraph m_graph;
     MediaGraphExecutionContext m_context;
     MediaGraphScheduler m_scheduler;
     MediaGraphThreadedExecutor m_threadedExecutor;
     MediaThreadingPolicy m_threadingPolicy;
     MediaGraphRuntimeState m_state = MediaGraphRuntimeState::Empty;
+    MediaRuntimeAcceptanceCollector m_acceptanceCollector;
+    mutable std::atomic_size_t m_queueHighWatermark{ 0 };
+    std::vector<MediaPreparedRealtimeInputBinding> m_inputBindings;
+    std::optional<MediaPlaybackEpochActivationCapability>
+        m_playbackEpochActivationCapability;
+    std::shared_ptr<MediaAvStartupVideoPreparationState>
+        m_videoPreparationState;
+    std::shared_ptr<MediaAvSyncClockSource> m_avSyncClockSource;
 };
 
 } // namespace media::ffmpeg::graph

@@ -20,7 +20,10 @@ enum class MediaPayloadKind {
 
     ControlSignal,
     GraphEvent,
-    DiagnosticRecord
+    DiagnosticRecord,
+    OutputByteSink,
+    TsMuxRuntimePlan,
+    TsAccessUnit
 };
 
 } // namespace media::ffmpeg::graph

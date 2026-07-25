@@ -4,6 +4,7 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
+#include "internal/graph/sync/MediaCanonicalVideoFrameBuffer.h"
 
 extern "C" {
 #include <libavutil/hwcontext.h>
@@ -66,12 +67,18 @@ MediaNodeKind HardwareTransferNode::staticKind() noexcept
     }
 
     const MediaBufferRef& buffer = *input.value();
+    if (!m_firstInputDiagnosticEmitted) {
+        transferLog(MediaGraphDiagnosticLevel::State,
+                    "trace stage=first_input " +
+                        mediaGraphDiagnosticDescribeBuffer(buffer));
+        m_firstInputDiagnosticEmitted = true;
+    }
     if (buffer->isEof() || buffer->isFlush()) {
         const bool eof = buffer->isEof();
         if (eof && m_eofEmitted) {
             return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
         }
-        auto emitStatus = emitOutput(context, "frame", buffer);
+        auto emitStatus = emitTracedOutput(context, buffer);
         if (!emitStatus) {
             return ::media::Result<MediaNodeProcessResult>::failure(emitStatus.error());
         }
@@ -88,6 +95,19 @@ MediaNodeKind HardwareTransferNode::staticKind() noexcept
         return ::media::Result<MediaNodeProcessResult>::failure(transferStatus.error());
     }
     return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
+}
+
+::media::Status HardwareTransferNode::emitTracedOutput(
+    MediaGraphExecutionContext& context, const MediaBufferRef& buffer)
+{
+    auto status = emitOutput(context, "frame", buffer);
+    if (status && !m_firstOutputDiagnosticEmitted) {
+        transferLog(MediaGraphDiagnosticLevel::State,
+                    "trace stage=first_output " +
+                        mediaGraphDiagnosticDescribeBuffer(buffer));
+        m_firstOutputDiagnosticEmitted = true;
+    }
+    return status;
 }
 
 ::media::Status HardwareTransferNode::transferOrForward(MediaGraphExecutionContext& context,
@@ -114,7 +134,7 @@ MediaNodeKind HardwareTransferNode::staticKind() noexcept
                 << " size=" << sourceFrame->width << "x" << sourceFrame->height;
             transferLog(MediaGraphDiagnosticLevel::Flow, out.str());
         }
-        return emitOutput(context, "frame", buffer);
+        return emitTracedOutput(context, buffer);
     }
 
     if (direction == "download") {
@@ -178,7 +198,14 @@ MediaNodeKind HardwareTransferNode::staticKind() noexcept
         transferLog(MediaGraphDiagnosticLevel::Flow, out.str());
     }
 
-    return emitOutput(context, "frame", output.value());
+    MediaBufferRef transferred = output.value();
+    if (auto lineage = FFmpegFrameView::canonicalLineage(buffer)) {
+        auto canonical = MediaCanonicalVideoFrameBuffer::create(
+            transferred, std::move(lineage));
+        if (!canonical) return ::media::Status::failure(canonical.error());
+        transferred = std::move(canonical).value();
+    }
+    return emitTracedOutput(context, transferred);
 }
 
 } // namespace media::ffmpeg::graph

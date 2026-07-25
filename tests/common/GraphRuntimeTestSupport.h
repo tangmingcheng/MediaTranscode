@@ -23,7 +23,8 @@ inline ::media::Result<::media::ffmpeg::graph::MediaBufferRef> makePacketBuffer(
     packet->pts = pts;
     packet->dts = pts;
     packet->duration = 1;
-    return ::media::ffmpeg::graph::FFmpegBufferFactory::wrapPacket(std::move(packet), streamKind);
+    return ::media::ffmpeg::graph::FFmpegBufferFactory::wrapPacket(
+        std::move(packet), streamKind, std::nullopt);
 }
 
 } // namespace media_transcode::test

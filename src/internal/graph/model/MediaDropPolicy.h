@@ -32,6 +32,8 @@ struct MediaDropPolicy {
     bool preserveAudioContinuity = true;
     bool emitDropDiagnostics = true;
 
+    constexpr bool operator==(const MediaDropPolicy&) const noexcept = default;
+
     constexpr bool enabled() const noexcept
     {
         return mode != MediaDropMode::None;

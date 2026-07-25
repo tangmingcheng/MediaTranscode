@@ -4,6 +4,8 @@
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
+#include "internal/graph/sync/MediaCanonicalVideoFrameBuffer.h"
+#include "internal/graph/sync/lineage/MediaVideoLineageDerivation.h"
 
 extern "C" {
 #include <libavutil/avutil.h>
@@ -11,6 +13,7 @@ extern "C" {
 }
 
 #include <charconv>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -80,6 +83,16 @@ void frameRateLog(MediaGraphDiagnosticLevel level, const std::string& message)
 
 VideoFrameRateNode::VideoFrameRateNode(MediaNodeId nodeId)
     : FFmpegNodeRuntime(nodeId, staticKind(), "VideoFrameRateNode")
+    , m_state(std::make_shared<MediaVideoFrameRateState>(false))
+{
+}
+
+VideoFrameRateNode::VideoFrameRateNode(
+    MediaNodeId nodeId,
+    std::shared_ptr<MediaVideoFrameRateState> state)
+    : FFmpegNodeRuntime(nodeId, staticKind(), "VideoFrameRateNode")
+    , m_state(std::move(state))
+    , m_exposesGenerationPurgeTarget(true)
 {
 }
 
@@ -88,9 +101,66 @@ MediaNodeKind VideoFrameRateNode::staticKind() noexcept
     return MediaNodeKind::VideoFrameRate;
 }
 
+std::string_view VideoFrameRateNode::generationPurgeIdentity() noexcept
+{
+    return "video_frame_rate";
+}
+
+std::shared_ptr<MediaAvGenerationPurgeTarget>
+VideoFrameRateNode::generationPurgeTarget() const noexcept
+{
+    return m_exposesGenerationPurgeTarget ? m_state : nullptr;
+}
+
+bool VideoFrameRateNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) const noexcept
+{
+    const auto lineage = FFmpegFrameView::canonicalLineage(buffer);
+    return m_state->pendingOutputIsCurrent(
+        buffer, lineage ? std::optional<std::uint64_t>(lineage->generation)
+                        : std::nullopt);
+}
+
+::media::Status VideoFrameRateNode::start(MediaGraphExecutionContext& context)
+{
+    auto guard = m_state->lock();
+    resetRuntimeState();
+    return FFmpegNodeRuntime::start(context);
+}
+
+::media::Status VideoFrameRateNode::stop(MediaGraphExecutionContext& context)
+{
+    auto guard = m_state->lock();
+    auto status = FFmpegNodeRuntime::stop(context);
+    resetRuntimeState();
+    return status;
+}
+
+void VideoFrameRateNode::abort(MediaGraphExecutionContext& context) noexcept
+{
+    auto guard = m_state->lock();
+    FFmpegNodeRuntime::abort(context);
+    resetRuntimeState();
+}
+
+void VideoFrameRateNode::resetRuntimeState() noexcept
+{
+    m_state->resetLifecycle();
+    m_firstInputDiagnosticEmitted = false;
+    m_firstOutputDiagnosticEmitted = false;
+}
+
 ::media::Result<MediaNodeProcessResult> VideoFrameRateNode::onProcess(MediaGraphExecutionContext& context)
 {
-    if (m_terminals.finished()) {
+    auto stateGuard = m_state->lock();
+    auto& state = m_state->data();
+    if (state.terminalPending) {
+        return continueTerminal(context);
+    }
+    const bool hadPendingOutput = !state.pendingFrames.empty();
+    auto pendingDrain = drainPending(context);
+    if (!pendingDrain) return processProgress(std::move(pendingDrain));
+    if (hadPendingOutput) return processProgress();
+    if (state.terminals.finished()) {
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
     }
 
@@ -101,10 +171,10 @@ MediaNodeKind VideoFrameRateNode::staticKind() noexcept
     if (!input.value()) {
         MediaChannel* frameInput = context.findInputChannel(nodeId(), "frame");
         if (frameInput && frameInput->closed()) {
-            m_terminals.markClosed("frame");
+            state.terminals.markClosed("frame");
             return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
         }
-        const bool hadPendingFrames = !m_pendingFrames.empty();
+        const bool hadPendingFrames = !state.pendingFrames.empty();
         auto drainStatus = drainPending(context);
         if (!drainStatus) {
             return ::media::Result<MediaNodeProcessResult>::failure(drainStatus.error());
@@ -114,29 +184,37 @@ MediaNodeKind VideoFrameRateNode::staticKind() noexcept
     }
 
     MediaBufferRef buffer = *input.value();
+    if (!m_firstInputDiagnosticEmitted) {
+        frameRateLog(MediaGraphDiagnosticLevel::State,
+                     "trace stage=first_input " +
+                         mediaGraphDiagnosticDescribeBuffer(buffer));
+        m_firstInputDiagnosticEmitted = true;
+    }
     if (buffer->isEof() || buffer->isFlush()) {
         const bool eof = buffer->isEof();
-        if (eof && m_eofEmitted) {
+        if (eof && state.eofEmitted) {
             return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::finished());
         }
-        m_flushed = true;
-        auto drainStatus = drainPending(context);
-        if (!drainStatus) {
-            return ::media::Result<MediaNodeProcessResult>::failure(drainStatus.error());
-        }
-        auto broadcastStatus = broadcastControlToAllOutputs(context, buffer);
-        if (!broadcastStatus) {
-            return ::media::Result<MediaNodeProcessResult>::failure(broadcastStatus.error());
-        }
-        if (eof) {
-            m_terminals.markEof("frame");
-            m_eofEmitted = true;
-        }
-        return ::media::Result<MediaNodeProcessResult>::success(
-            eof ? MediaNodeProcessResult::finished() : MediaNodeProcessResult::progress());
+        state.flushed = true;
+        state.terminalBuffer = buffer;
+        state.terminalPending = true;
+        state.terminalIsEof = eof;
+        return continueTerminal(context);
     }
 
-    if (!m_initialized) {
+    auto lineage = FFmpegFrameView::canonicalLineage(buffer);
+    if (m_state->requiresCanonicalLineage() && !lineage) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "VideoFrameRateNode requires canonical lineage"));
+    }
+    if (lineage) {
+        if (auto status = m_state->activateGeneration(lineage->generation); !status) {
+            return ::media::Result<MediaNodeProcessResult>::failure(status.error());
+        }
+    }
+
+    if (!state.initialized) {
         auto initStatus = initializeFromFirstFrame(context, buffer);
         if (!initStatus) {
             return ::media::Result<MediaNodeProcessResult>::failure(initStatus.error());
@@ -155,9 +233,34 @@ MediaNodeKind VideoFrameRateNode::staticKind() noexcept
     return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
 }
 
+::media::Result<MediaNodeProcessResult> VideoFrameRateNode::continueTerminal(
+    MediaGraphExecutionContext& context)
+{
+    auto drainStatus = drainPending(context);
+    if (!drainStatus) return processProgress(std::move(drainStatus));
+    auto& state = m_state->data();
+    const bool eof = state.terminalIsEof;
+    MediaBufferRef terminal = std::move(state.terminalBuffer);
+    state.terminalPending = false;
+    state.terminalIsEof = false;
+    if (eof) {
+        state.terminals.markEof("frame");
+        state.eofEmitted = true;
+    }
+    if (auto freshness = m_state->authorizeRetainedControl(terminal);
+        !freshness) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            freshness.error());
+    }
+    auto broadcastStatus = broadcastControlToAllOutputs(context, terminal);
+    return eof ? processFinished(std::move(broadcastStatus))
+               : processProgress(std::move(broadcastStatus));
+}
+
 ::media::Status VideoFrameRateNode::initializeFromFirstFrame(MediaGraphExecutionContext& context,
                                                              const MediaBufferRef& buffer)
 {
+    auto& state = m_state->data();
     const MediaRational inputTimeBase = buffer ? buffer->timeDescriptor().timeBase : MediaRational{};
     if (!inputTimeBase.isKnown()) {
         return ::media::Status::failure(
@@ -181,12 +284,12 @@ MediaNodeKind VideoFrameRateNode::staticKind() noexcept
             ::media::ErrorInfo::invalidArgument("VideoFrameRateNode target fps is invalid"));
     }
 
-    m_inputTimeBase = toAVRational(inputTimeBase);
-    m_targetFramePeriod = fpsNum > 0 ? AVRational{ fpsDen, fpsNum } : AVRational{ 0, 1 };
-    m_initialized = true;
+    state.inputTimeBase = toAVRational(inputTimeBase);
+    state.targetFramePeriod = fpsNum > 0 ? AVRational{ fpsDen, fpsNum } : AVRational{ 0, 1 };
+    state.initialized = true;
 
     std::ostringstream out;
-    out << "initialize input_tb=" << rationalText(m_inputTimeBase)
+    out << "initialize input_tb=" << rationalText(state.inputTimeBase)
         << " target_fps=" << (fpsNum > 0 ? std::to_string(fpsNum) + "/" + std::to_string(fpsDen) : std::string("passthrough"))
         << " mode=" << (enabled() ? "control" : "passthrough");
     frameRateLog(MediaGraphDiagnosticLevel::State, out.str());
@@ -195,12 +298,13 @@ MediaNodeKind VideoFrameRateNode::staticKind() noexcept
 
 ::media::Status VideoFrameRateNode::sendFrame(MediaGraphExecutionContext&, const MediaBufferRef& buffer)
 {
-    if (!m_initialized) {
+    auto& state = m_state->data();
+    if (!state.initialized) {
         return ::media::Status::failure(
             ::media::ErrorInfo::notInitialized("VideoFrameRateNode is not initialized"));
     }
 
-    if (m_flushed) {
+    if (state.flushed) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("VideoFrameRateNode received frame after flush"));
     }
@@ -217,25 +321,29 @@ MediaNodeKind VideoFrameRateNode::staticKind() noexcept
     }
 
     if (!enabled()) {
-        m_pendingFrames.push_back(buffer);
+        auto lineage = FFmpegFrameView::canonicalLineage(buffer);
+        state.pendingFrames.push_back(
+            {buffer, lineage ? lineage->generation : 0});
         return ::media::Status::success();
     }
 
     const int64_t currentPts = frame->pts;
-    if (!m_started) {
-        m_started = true;
-        m_startPts = currentPts;
-        m_nextOutputIndex = 0;
-    } else if (currentPts < m_lastInputPts) {
+    if (!state.started) {
+        state.started = true;
+        state.startPts = currentPts;
+        state.nextOutputIndex = 0;
+    } else if (currentPts < state.lastInputPts) {
         std::ostringstream out;
         out << "VideoFrameRateNode input pts moved backwards current=" << currentPts
-            << " last=" << m_lastInputPts;
+            << " last=" << state.lastInputPts;
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(out.str()));
     }
 
     int64_t queued = 0;
     while (true) {
-        const int64_t targetPts = targetPtsForIndex(m_nextOutputIndex);
+        auto target = targetPtsForIndex(state.nextOutputIndex);
+        if (!target) return ::media::Status::failure(target.error());
+        const int64_t targetPts = target.value();
         if (targetPts > currentPts) {
             break;
         }
@@ -245,12 +353,21 @@ MediaNodeKind VideoFrameRateNode::staticKind() noexcept
             sourceFrame = frame;
         }
 
-        auto queueStatus = queueFrameReference(sourceFrame, targetPts);
+        auto selectedLineage = sourceFrame == frame
+            ? FFmpegFrameView::canonicalLineage(buffer)
+            : FFmpegFrameView::canonicalLineage(state.lastInputFrame.buffer);
+        auto queueStatus = queueFrameReference(sourceFrame, targetPts,
+                                                std::move(selectedLineage));
         if (!queueStatus) {
             return queueStatus;
         }
 
-        ++m_nextOutputIndex;
+        if (state.nextOutputIndex == std::numeric_limits<int64_t>::max()) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "VideoFrameRateNode output index overflow"));
+        }
+        ++state.nextOutputIndex;
         ++queued;
     }
 
@@ -266,7 +383,7 @@ MediaNodeKind VideoFrameRateNode::staticKind() noexcept
         out << "send_frame seq=" << decision.sequence
             << " input_pts=" << currentPts
             << " queued=" << queued
-            << " next_index=" << m_nextOutputIndex;
+            << " next_index=" << state.nextOutputIndex;
         frameRateLog(MediaGraphDiagnosticLevel::Flow, out.str());
     }
 
@@ -275,27 +392,39 @@ MediaNodeKind VideoFrameRateNode::staticKind() noexcept
 
 ::media::Status VideoFrameRateNode::drainPending(MediaGraphExecutionContext& context)
 {
-    while (!m_pendingFrames.empty()) {
-        MediaBufferRef frame = std::move(m_pendingFrames.front());
-        m_pendingFrames.pop_front();
-
-        auto emitStatus = emitOutput(context, "frame", frame);
+    auto& state = m_state->data();
+    while (!state.pendingFrames.empty()) {
+        const MediaBufferRef pendingFrame = state.pendingFrames.front().buffer;
+        auto emitStatus = emitOutput(context, "frame", pendingFrame);
         if (!emitStatus) {
+            if (retainsPendingOutput(pendingFrame)) {
+                state.pendingFrames.pop_front();
+            }
             return emitStatus;
         }
+        if (!m_firstOutputDiagnosticEmitted) {
+            frameRateLog(MediaGraphDiagnosticLevel::State,
+                         "trace stage=first_output " +
+                             mediaGraphDiagnosticDescribeBuffer(pendingFrame));
+            m_firstOutputDiagnosticEmitted = true;
+        }
+        state.pendingFrames.pop_front();
     }
 
     return ::media::Status::success();
 }
 
-::media::Status VideoFrameRateNode::queueFrameReference(const AVFrame* sourceFrame, int64_t outputPts)
+::media::Status VideoFrameRateNode::queueFrameReference(
+    const AVFrame* sourceFrame, int64_t outputPts,
+    std::shared_ptr<const MediaCanonicalLineage> lineage)
 {
+    auto& state = m_state->data();
     if (!sourceFrame) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("VideoFrameRateNode source frame is null"));
     }
 
-    if (m_lastOutputPts != AV_NOPTS_VALUE && outputPts <= m_lastOutputPts) {
+    if (state.lastOutputPts != AV_NOPTS_VALUE && outputPts <= state.lastOutputPts) {
         return ::media::Status::success();
     }
 
@@ -314,19 +443,47 @@ MediaNodeKind VideoFrameRateNode::staticKind() noexcept
     outputFrame->duration = targetFrameDuration();
 
     MediaTimeDescriptor timeDescriptor;
-    timeDescriptor.timeBase = toMediaRational(m_inputTimeBase);
-    timeDescriptor.frameRate = enabled() ? MediaRational{ m_targetFramePeriod.den, m_targetFramePeriod.num }
+    timeDescriptor.timeBase = toMediaRational(state.inputTimeBase);
+    timeDescriptor.frameRate = enabled() ? MediaRational{ state.targetFramePeriod.den, state.targetFramePeriod.num }
                                          : MediaRational{};
     cloned.value()->setTimeDescriptor(timeDescriptor);
     cloned.value()->setTimestamps(outputFrame->pts, outputFrame->pkt_dts, outputFrame->duration);
-    m_pendingFrames.push_back(cloned.value());
-    m_lastOutputPts = outputPts;
+    MediaBufferRef output = cloned.value();
+    if (lineage) {
+        auto derived = deriveMediaVideoLineage(
+            *lineage, sourceFrame->pts, outputPts, outputFrame->duration,
+            toMediaRational(state.inputTimeBase));
+        if (!derived) return ::media::Status::failure(derived.error());
+        auto canonical = MediaCanonicalVideoFrameBuffer::create(
+            output, std::move(derived).value());
+        if (!canonical) return ::media::Status::failure(canonical.error());
+        output = std::move(canonical).value();
+    }
+    state.pendingFrames.push_back(
+        {std::move(output), lineage ? lineage->generation : 0});
+    state.lastOutputPts = outputPts;
     return ::media::Status::success();
 }
 
-int64_t VideoFrameRateNode::targetPtsForIndex(int64_t index) const noexcept
+::media::Result<int64_t> VideoFrameRateNode::targetPtsForIndex(
+    int64_t index) const noexcept
 {
-    return av_rescale_q(index, m_targetFramePeriod, m_inputTimeBase);
+    const auto& state = m_state->data();
+    if (index < 0) {
+        return ::media::Result<int64_t>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "VideoFrameRateNode output index is negative"));
+    }
+    const int64_t offset = av_rescale_q(
+        index, state.targetFramePeriod, state.inputTimeBase);
+    if (offset < 0 ||
+        (offset > 0 && state.startPts >
+            std::numeric_limits<int64_t>::max() - offset)) {
+        return ::media::Result<int64_t>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "VideoFrameRateNode target pts overflow"));
+    }
+    return ::media::Result<int64_t>::success(state.startPts + offset);
 }
 
 int64_t VideoFrameRateNode::targetFrameDuration() const noexcept
@@ -334,28 +491,32 @@ int64_t VideoFrameRateNode::targetFrameDuration() const noexcept
     if (!enabled()) {
         return 0;
     }
-    return av_rescale_q(1, m_targetFramePeriod, m_inputTimeBase);
+    const auto& state = m_state->data();
+    return av_rescale_q(1, state.targetFramePeriod, state.inputTimeBase);
 }
 
 bool VideoFrameRateNode::enabled() const noexcept
 {
-    return rationalKnown(m_targetFramePeriod);
+    return rationalKnown(m_state->data().targetFramePeriod);
 }
 
 const AVFrame* VideoFrameRateNode::chooseSourceFrameForTarget(const AVFrame* frame, int64_t currentPts, int64_t targetPts) const noexcept
 {
-    const AVFrame* previousFrame = FFmpegFrameView::frame(m_lastInputFrame);
-    if (!previousFrame || m_lastInputPts == AV_NOPTS_VALUE) {
+    const auto& state = m_state->data();
+    const AVFrame* previousFrame = FFmpegFrameView::frame(
+        state.lastInputFrame.buffer);
+    if (!previousFrame || state.lastInputPts == AV_NOPTS_VALUE) {
         return frame;
     }
 
-    const int64_t previousDistance = absoluteDistance(targetPts, m_lastInputPts);
+    const int64_t previousDistance = absoluteDistance(targetPts, state.lastInputPts);
     const int64_t currentDistance = absoluteDistance(currentPts, targetPts);
     return previousDistance <= currentDistance ? previousFrame : frame;
 }
 
 ::media::Status VideoFrameRateNode::rememberLastInputFrame(const MediaBufferRef& buffer)
 {
+    auto& state = m_state->data();
     const AVFrame* frame = FFmpegFrameView::frame(buffer);
     if (!frame) {
         return ::media::Status::failure(
@@ -367,8 +528,16 @@ const AVFrame* VideoFrameRateNode::chooseSourceFrameForTarget(const AVFrame* fra
         return ::media::Status::failure(cloned.error());
     }
 
-    m_lastInputFrame = cloned.value();
-    m_lastInputPts = frame->pts;
+    MediaBufferRef remembered = cloned.value();
+    if (auto lineage = FFmpegFrameView::canonicalLineage(buffer)) {
+        auto canonical = MediaCanonicalVideoFrameBuffer::create(remembered, std::move(lineage));
+        if (!canonical) return ::media::Status::failure(canonical.error());
+        remembered = std::move(canonical).value();
+    }
+    auto lineage = FFmpegFrameView::canonicalLineage(buffer);
+    state.lastInputFrame = {
+        std::move(remembered), lineage ? lineage->generation : 0};
+    state.lastInputPts = frame->pts;
     return ::media::Status::success();
 }
 

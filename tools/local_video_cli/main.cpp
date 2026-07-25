@@ -1,5 +1,6 @@
 #include "internal/graph/builder/local/LocalFileTranscodeGraphBuilder.h"
 #include "internal/graph/runtime/MediaGraphRuntime.h"
+#include "internal/graph/runtime/diagnostics/MediaGraphRuntimeReport.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
 #include "../common/GraphCliSupport.h"
 #include "../common/VideoCliTranscodeOptions.h"
@@ -96,6 +97,8 @@ int runLocalVideoCli(int argc, char** argv)
     }
 
     const auto& result = runResult.value();
+    const MediaGraphRuntimeReport report = MediaGraphRuntimeReporter::capture(runtime);
+    std::cout << "[CLI] final " << report.summary() << '\n';
     std::cout << "[CLI] done: iterations=" << result.iterations
               << " total_pushed=" << result.totalPushed
               << " total_popped=" << result.totalPopped

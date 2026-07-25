@@ -15,15 +15,15 @@ struct MediaRealtimePlannerOptions {
     std::string workerNodeId;
     std::string host;
     std::string zone;
-    int basePort;
+    int basePort = 0;
 
-    int64_t targetLatencyUs;
-    int64_t maxLatencyUs;
+    int64_t targetLatencyUs = 0;
+    int64_t maxLatencyUs = 0;
 
-    bool enableGpuPlanning;
-    bool enableMeshPlanning;
-    bool preferZeroCopy;
-    bool enableNodeFusion;
+    bool enableGpuPlanning = false;
+    bool enableMeshPlanning = false;
+    bool preferZeroCopy = false;
+    bool enableNodeFusion = false;
 };
 
 struct MediaRealtimePlannerResult {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/graph/builder/MediaEndpoint.h"
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/model/MediaRealtimeEdgePolicySet.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
@@ -41,6 +42,14 @@ MediaFormatDescriptor streamIndexDescriptor(MediaStreamKind streamKind, int stre
 ::media::Result<void> requireEdge(MediaEdgeId edgeId,
                                   std::string_view owner,
                                   std::string_view name);
+
+::media::Result<void> requirePacketOutputEndpoint(
+    const MediaGraph& graph,
+    std::string_view owner,
+    const MediaEndpoint& endpoint,
+    MediaStreamKind streamKind,
+    MediaEdgeKind edgeKind,
+    int sourceStreamIndex);
 
 ::media::Result<void> addInputPortChecked(MediaGraph& graph,
                                           std::string_view owner,

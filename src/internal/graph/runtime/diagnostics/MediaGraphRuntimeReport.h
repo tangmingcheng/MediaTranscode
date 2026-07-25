@@ -18,6 +18,7 @@ struct MediaGraphRuntimeReport {
 
 class MediaGraphRuntimeReporter final {
 public:
+    static MediaGraphRuntimeReport capture(MediaGraphRuntime& runtime);
     static MediaGraphRuntimeReport capture(const MediaGraphRuntime& runtime);
 };
 

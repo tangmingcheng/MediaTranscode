@@ -1,0 +1,43 @@
+#include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
+
+namespace media::ffmpeg::graph {
+
+bool MediaRealtimeRequestClassifier::audioRequested(const MediaRealtimeRtpTranscodeRequest& request) noexcept
+{
+    return request.parameters.execution.includeAudio;
+}
+
+bool MediaRealtimeRequestClassifier::realtimeUrlInput(const MediaRealtimeRtpTranscodeRequest& request) noexcept
+{
+    return request.input.type == RealtimeInputType::Url &&
+           request.input.streamLayout == RealtimeInputStreamLayout::SessionDescribed;
+}
+
+bool MediaRealtimeRequestClassifier::rawRtpInput(const MediaRealtimeRtpTranscodeRequest& request) noexcept
+{
+    return request.input.type == RealtimeInputType::RtpPort &&
+           request.input.streamLayout == RealtimeInputStreamLayout::SeparateStreams;
+}
+
+bool MediaRealtimeRequestClassifier::mpegTsUdpInput(const MediaRealtimeRtpTranscodeRequest& request) noexcept
+{
+    return request.input.type == RealtimeInputType::MpegTsUdp &&
+           request.input.streamLayout == RealtimeInputStreamLayout::MuxedTransportStream;
+}
+
+bool MediaRealtimeRequestClassifier::unreliablePacketBoundary(const MediaRealtimeRtpTranscodeRequest& request) noexcept
+{
+    return rawRtpInput(request) || mpegTsUdpInput(request);
+}
+
+bool MediaRealtimeRequestClassifier::separateRtpOutput(const MediaRealtimeRtpTranscodeRequest& request) noexcept
+{
+    return request.output.streamLayout == RealtimeOutputStreamLayout::SeparateStreams;
+}
+
+bool MediaRealtimeRequestClassifier::muxedTransportOutput(const MediaRealtimeRtpTranscodeRequest& request) noexcept
+{
+    return request.output.streamLayout == RealtimeOutputStreamLayout::MuxedTransportStream;
+}
+
+} // namespace media::ffmpeg::graph

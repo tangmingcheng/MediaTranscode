@@ -6,7 +6,7 @@
 namespace media::ffmpeg::graph {
 
 struct FFmpegInputStreamSnapshot;
-class FFmpegFormatContextBuffer;
+class FFmpegInputSnapshotBuffer;
 
 class AudioCodecResolverNode final : public FFmpegNodeRuntime {
 public:
@@ -18,11 +18,10 @@ protected:
 
 private:
     ::media::Result<const FFmpegInputStreamSnapshot*> resolveSourceStream(MediaGraphExecutionContext& context,
-                                                                          const FFmpegFormatContextBuffer& format) const;
+                                                                          const FFmpegInputSnapshotBuffer& format) const;
     ::media::Result<::media::ffmpeg::CodecContextPtr> buildDecoderContext(const FFmpegInputStreamSnapshot& stream) const;
     ::media::Result<::media::ffmpeg::CodecContextPtr> buildEncoderContext(MediaGraphExecutionContext& context,
-                                                                           const FFmpegInputStreamSnapshot& stream,
-                                                                           const AVCodecContext* decoderContext) const;
+                                                                           const FFmpegInputStreamSnapshot& stream) const;
     ::media::Status emitCodecContext(MediaGraphExecutionContext& context,
                                       const char* portName,
                                       ::media::ffmpeg::CodecContextPtr codecContext);

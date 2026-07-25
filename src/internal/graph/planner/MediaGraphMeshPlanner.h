@@ -23,9 +23,6 @@ public:
         const MediaGraphDeploymentPlan& deploymentPlan,
         const MediaGraphPlanningPolicy& policy = {});
 
-private:
-    static MediaMeshRouteKind routeKindFor(const MediaGraphDeploymentAssignment& from,
-                                           const MediaGraphDeploymentAssignment& to) noexcept;
 };
 
 } // namespace media::ffmpeg::graph

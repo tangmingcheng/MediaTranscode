@@ -39,25 +39,15 @@ void MediaGraphOptimizer::clearPasses()
     MediaGraphOptimizationReport report;
 
     if (!policy.enabled()) {
-        report.info("optimizer", "optimization disabled");
+        report.info("optimizer", "no graph optimization requested");
         return ::media::Result<MediaGraphOptimizerResult>::success(
             MediaGraphOptimizerResult{ std::move(graph), std::move(report) });
     }
 
-    for (const auto& pass : m_passes) {
-        if (!pass) {
-            continue;
-        }
+    return ::media::Result<MediaGraphOptimizerResult>::failure(
+        ::media::ErrorInfo::unsupported(
+            "MediaGraphOptimizer is unsupported: no optimizer pass currently applies an executable graph rewrite"));
 
-        auto status = pass->run(graph, policy, report);
-        if (!status) {
-            report.error(pass->name(), status.error().describe());
-            return ::media::Result<MediaGraphOptimizerResult>::failure(status.error());
-        }
-    }
-
-    return ::media::Result<MediaGraphOptimizerResult>::success(
-        MediaGraphOptimizerResult{ std::move(graph), std::move(report) });
 }
 
 } // namespace media::ffmpeg::graph

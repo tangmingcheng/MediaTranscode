@@ -1,37 +1,62 @@
-# Realtime Event-Driven Runtime Plan
+# QUALITY_SCORE Priority Improvements Plan
 
 ## Goal
 
-Eliminate realtime audio/video DAG busy waiting without fixed sleeps or node-specific polling, while preserving planner-owned topology, capacity, overflow, and codec decisions.
-
-## Confirmed Root Causes
-
-- Per-node workers retried immediately when nodes had no input, and SPSC blocking operations used yield loops.
-- Concurrent runtime nodes originally shared mutable input `AVFormatContext` / `AVStream` state after probing.
+Implement the five `QUALITY_SCORE.md` priority improvements in order, with each phase independently reviewed and gated by deterministic tests plus local, separate-RTP, and MPEG-TS audio/video validation.
 
 ## Tasks
 
-- [x] Make every runtime node return `Progress`, `Waiting`, or `Finished` directly; keep errors as `Result` failures.
-- [x] Add per-node sequence-based wakeups with targeted channel `push`, `close`, `abort`, and `clear` notification.
-- [x] Make workers continue on progress, block without lost wakeups on waiting, and exit on finished.
-- [x] Replace SPSC blocking spin loops with condition-variable waits and deterministic lifecycle notifications.
-- [x] Add multi-input terminal tracking and exact mux config/terminal completion state.
-- [x] Add lifecycle-reset round-robin input arbitration so continuously busy inputs cannot starve later channels.
-- [x] Remove realtime idle sleep/spin planner parameters.
-- [x] Construct all workers before starting any thread, then start them in a second stage.
-- [x] Publish immutable per-stream FFmpeg snapshots after input probing, including deep-copied codec parameters, format, time, index, and stream kind.
-- [x] Make Demux the exclusive owner and mutable consumer of the input format context; downstream metadata and packet nodes consume snapshots only.
-- [x] Run event-runtime tests, realtime graph tests, CTest, hardware A/V smoke, and software A/V comparison smoke.
-- [x] Update the project-wide `QUALITY_SCORE.md` from an industrial DAG-engine review.
-- [x] Complete final implementation review closure.
-- [x] Commit, push, and create PR #20.
-- [x] Complete independent review of the final PR head with a PASS verdict.
-- [x] Perform 60-second VLC subjective playback validation with human observation.
+- [x] Priority 1: Add deterministic concurrency stress, fault injection, lifecycle coverage, fairness tests, and acceptance metrics collection.
+- [x] Priority 2: Split oversized planner, mux, capability scanner, and runtime responsibilities.
+- [x] Priority 3: Separate core, planner, builder, runtime, node, integration, hardware, and performance test tiers.
+- [x] Priority 4: Reject or explicitly mark incomplete optimizer, GPU, and distributed execution capabilities.
+- [ ] Priority 5: Establish repeatable performance and stability baselines and update `QUALITY_SCORE.md` from evidence.
+- [ ] Run final local, separate-RTP, and MPEG-TS hardware/software acceptance, including stability and VLC review.
+- [ ] Complete whole-branch review, push, create PR, and obtain independent PASS review.
 
-## Acceptance Evidence
+## Priority 1 Evidence
 
-- Event-runtime and realtime graph test executables pass; CTest passes 2/2.
-- Hardware CUDA/NVENC 60-second smoke on the final implementation: 0.58% whole-machine CPU, 1.281 CPU seconds, 1663 frames, `drop_frames=0`, `workerErrors=0`.
-- Software 60-second smoke: 16.8% whole-machine CPU and 36.953 CPU seconds; scheduler idle spinning is absent and codec cost remains measurable.
-- `git diff --check` passes; modified text files remain UTF-8 with CRLF line endings.
-- VLC subjective playback completed: the observer reported smooth video, normal audio, and no perceptible A/V drift.
+- Event-runtime tests passed 20 consecutive runs with zero failures.
+- Realtime graph regression passed.
+- Runtime lifecycle state matrix, worker failure harvesting, deterministic queue waiter release, scripted fault sequences, and concurrent multi-input fairness are covered.
+- Windows process/system CPU, working set, thread count, sampled queue high-water mark, progress stalls, and errors are exposed through a thread-safe acceptance collector and runtime report.
+- Independent task review verdict: PASS.
+
+## Priority 2 Evidence
+
+- Capability scanning is separated into input, video, audio, and hardware probes behind the scanner facade.
+- Realtime planning is separated into request validation, request classification, input planning, and output policy while the planner remains the decision owner.
+- RTP muxing is separated into FFmpeg session ownership, protocol I/O, and state-machine components.
+- Runtime compilation/registration and lifecycle execution are separated behind the runtime facade.
+- A clean rebuild completed before verification; all CTest targets passed and the event-runtime target passed 20 consecutive runs.
+- Local MP4, separate RTP, and MPEG-TS UDP H264/AAC hardware/software 60-second gates passed.
+- Audio and video were both transcoded by explicit target parameters; no test-only transcode switch was added.
+- Independent review findings were addressed: audio RTP pacing has no bitrate fallback, RTP mux state transitions are constrained, capability stream inspection moved out of the facade, and audio decode waits for codec metadata.
+- Fourth independent Priority 2 review verdict: PASS.
+
+## Priority 3 Evidence
+
+- Core, planner, builder, runtime, and node tests are independent deterministic targets and labels.
+- Integration, hardware, and performance targets require explicit CMake options and have dedicated presets and CI jobs.
+- Unsupported hardware exits with code 77 and is reported by CTest as skipped; CUDA device creation passed on the validation host.
+- A clean rebuild completed before the final 9/9 CTest pass.
+- Local MP4, separate RTP, and MPEG-TS UDP H264/AAC hardware/software 60-second gates passed; audio transcode was naturally selected from the 44.1 kHz target difference.
+- A discovered audio-encoder startup race is covered: frames remain queued until required codec metadata is bound.
+
+## Priority 4 Evidence
+
+- A single capability-maturity matrix marks CUDA/NVENC transcode stable and graph optimization, generic GPU execution, and distributed execution unsupported.
+- Planner, optimizer passes, GPU executor, remote executor, mesh planner, and multi-node deployment now reject unsupported requests instead of reporting deferred or simulated success.
+- Default policies no longer enable incomplete optimizer, GPU, mesh, or distributed paths.
+- AAC-bound audio is explicitly reframed to the encoder frame size after resampling; 44.1 kHz to 48 kHz audio/video transcode passed for local, separate RTP, and MPEG-TS paths.
+- Deterministic audio-encoder tests cover send-side EAGAIN retry, output backpressure, partial EOF framing, flush, and single terminal propagation.
+- Clean deterministic, integration, hardware, and performance tiers passed. FFmpeg runtime binaries were copied beside each executable without CMake changes.
+- Repeatable PowerShell gates record exact commands, per-loop/full decode, stream integrity, actual CUDA/NVENC selection, runtime queue-drop/error/stall metrics, average/P95 CLI CPU, and final A/V drift.
+- Sixty-second local hardware/software loops and realtime hardware/software gates passed. Final realtime average CPU was 1.57%/5.88% for RTP and 1.51%/5.49% for MPEG-TS (hardware/software respectively); final A/V drift stayed between 7 ms and 24 ms.
+
+## Global Constraints
+
+- Planner remains the only decision owner; runtime nodes do not add defaults or fallback behavior.
+- Local and realtime CLIs remain separate.
+- Modified text files use UTF-8 and CRLF.
+- Existing unrelated working-tree files are excluded from all commits.

@@ -9,10 +9,15 @@
 #include "media_transcode/Result.h"
 
 #include <memory>
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
 
 namespace media::ffmpeg::graph {
 
 class MediaNodeWakeup;
+class MediaAtomicOutputTransaction;
+class MediaReservedOutputTransaction;
 
 class MediaChannel final {
 public:
@@ -26,7 +31,7 @@ public:
     const MediaChannelBinding& binding() const noexcept;
 
     ::media::Status push(MediaBufferRef buffer);
-    bool tryPush(MediaBufferRef buffer);
+    MediaQueuePushOutcome pushOutcome(MediaBufferRef buffer);
     ::media::Status pop(MediaBufferRef& out);
     bool tryPop(MediaBufferRef& out);
 
@@ -45,8 +50,20 @@ public:
     const MediaHardwareDescriptor& hardwareDescriptor() const noexcept;
     const MediaChannelMetrics& metrics() const noexcept;
     void setConsumerWakeup(MediaNodeWakeup& wakeup) noexcept;
+    void setProducerWakeup(MediaNodeWakeup& wakeup) noexcept;
 
 private:
+    friend class MediaAtomicOutputTransaction;
+    friend class MediaReservedOutputTransaction;
+
+    MediaQueuePushOutcome pushOutcomeLocked(
+        MediaBufferRef buffer,
+        bool publishAccepted = true);
+    MediaQueuePushOutcome pushReservedOutcomeLocked(MediaBufferRef buffer);
+    void publishAcceptedMutation() noexcept;
+    void publishReservedCapacityMutation() noexcept;
+    void finalizeDeferredCloseLocked() noexcept;
+    void signalMutationWaiters() noexcept;
     void refreshQueueMetrics();
 
 private:
@@ -60,6 +77,16 @@ private:
     std::unique_ptr<MediaQueue> m_queue;
     MediaChannelMetrics m_metrics;
     MediaNodeWakeup* m_consumerWakeup = nullptr;
+    MediaNodeWakeup* m_producerWakeup = nullptr;
+    mutable std::mutex m_mutationMutex;
+    std::condition_variable m_mutationChanged;
+    std::atomic_uint64_t m_mutationSequence{0};
+    std::atomic_uint64_t m_externalBlockedPushes{0};
+    std::atomic_size_t m_externalBlockedProducers{0};
+    std::atomic_size_t m_externalBlockedConsumers{0};
+    std::size_t m_reservedCapacity = 0;
+    std::size_t m_authorizedCapacity = 0;
+    bool m_closeRequested = false;
 };
 
 } // namespace media::ffmpeg::graph

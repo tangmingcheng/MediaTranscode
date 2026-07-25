@@ -1,0 +1,52 @@
+name: Test tiers
+
+env:
+  FFMPEG_RELEASE_TAG: "autobuild-2026-07-14-13-19"
+  FFMPEG_ASSET_NAME: "ffmpeg-n8.1.2-22-g94138f6973-win64-gpl-shared-8.1.zip"
+  FFMPEG_SHA256: "3cd74234a1c9acf2546143bcc68b3ffe84e16f32e3be32f5096d61844739b17d"
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  deterministic:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Validate FFmpeg SDK pin contract
+        shell: pwsh
+        run: tests/ci/test_prepare_ffmpeg_sdk_contract.ps1
+      - name: Prepare pinned FFmpeg 8.1 shared SDK
+        shell: pwsh
+        run: .github/scripts/prepare-ffmpeg-sdk.ps1
+      - run: cmake --preset x64-debug-deterministic
+      - run: cmake --build --preset deterministic --clean-first
+      - run: Copy-Item "3rds/ffmpeg/bin/*.dll" out/build/x64-debug-deterministic
+      - run: Copy-Item "3rds/ffmpeg/bin/ffmpeg.exe" out/build/x64-debug-deterministic
+      - run: ctest --preset deterministic
+
+  explicit-tiers:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        tier: [integration, hardware, performance]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Prepare pinned FFmpeg 8.1 shared SDK
+        shell: pwsh
+        run: .github/scripts/prepare-ffmpeg-sdk.ps1
+      - run: cmake --preset x64-debug-${{ matrix.tier }}
+      - run: cmake --build --preset ${{ matrix.tier }} --clean-first
+      - run: Copy-Item "3rds/ffmpeg/bin/*.dll" "out/build/x64-debug-${{ matrix.tier }}"
+      - run: Copy-Item "3rds/ffmpeg/bin/ffmpeg.exe" "out/build/x64-debug-${{ matrix.tier }}"
+      - run: ctest --preset ${{ matrix.tier }}
+      - if: matrix.tier == 'performance'
+        name: Validate Priority 5 report contract
+        shell: pwsh
+        run: tests/acceptance/test_priority5_reporting.ps1

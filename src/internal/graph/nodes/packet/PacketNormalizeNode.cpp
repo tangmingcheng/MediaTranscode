@@ -3,7 +3,7 @@
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
-#include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
+#include "internal/graph/runtime/buffer/FFmpegInputSnapshotBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegDescriptorMapper.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegPacketView.h"
@@ -42,24 +42,24 @@ MediaNodeKind PacketNormalizeNode::staticKind() noexcept
 
 ::media::Status PacketNormalizeNode::stop(MediaGraphExecutionContext& context)
 {
-    releaseFormatContext();
+    releaseInputSnapshots();
     return FFmpegNodeRuntime::stop(context);
 }
 
 void PacketNormalizeNode::abort(MediaGraphExecutionContext& context) noexcept
 {
-    releaseFormatContext();
+    releaseInputSnapshots();
     FFmpegNodeRuntime::abort(context);
 }
 
 ::media::Result<MediaNodeProcessResult> PacketNormalizeNode::onProcess(MediaGraphExecutionContext& context)
 {
-    if (!m_formatContextOwner) {
-        auto bindStatus = bindFormatContext(context);
+    if (!m_inputSnapshotOwner) {
+        auto bindStatus = bindInputSnapshots(context);
         if (!bindStatus) {
             return processProgress(bindStatus);
         }
-        if (!m_formatContextOwner) {
+        if (!m_inputSnapshotOwner) {
             return processWaiting();
         }
     }
@@ -93,9 +93,9 @@ void PacketNormalizeNode::abort(MediaGraphExecutionContext& context) noexcept
     return processProgress(emitOutput(context, "packet", normalized.value()));
 }
 
-void PacketNormalizeNode::releaseFormatContext() noexcept
+void PacketNormalizeNode::releaseInputSnapshots() noexcept
 {
-    m_formatContextOwner.reset();
+    m_inputSnapshotOwner.reset();
     m_sourceStream = nullptr;
     m_streamKind = MediaStreamKind::Unknown;
     m_sourceStreamIndex = invalidMediaStreamIndex;
@@ -103,7 +103,7 @@ void PacketNormalizeNode::releaseFormatContext() noexcept
     m_nextPacketDts = invalidMediaTimeValue;
 }
 
-::media::Status PacketNormalizeNode::bindFormatContext(MediaGraphExecutionContext& context)
+::media::Status PacketNormalizeNode::bindInputSnapshots(MediaGraphExecutionContext& context)
 {
     auto formatInput = tryPopInputOptional(context, "format");
     if (!formatInput) {
@@ -114,14 +114,14 @@ void PacketNormalizeNode::releaseFormatContext() noexcept
     }
 
     MediaBufferRef input = *formatInput.value();
-    auto* formatBuffer = dynamic_cast<FFmpegFormatContextBuffer*>(input.get());
+    auto* formatBuffer = dynamic_cast<FFmpegInputSnapshotBuffer*>(input.get());
     if (!formatBuffer || !formatBuffer->inputSnapshotComplete()) {
         return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("PacketNormalizeNode expected FFmpegFormatContextBuffer"));
+            ::media::ErrorInfo::invalidArgument("PacketNormalizeNode expected complete input snapshots"));
     }
 
-    m_formatContextOwner = std::move(input);
-    packetNormalizeLog(MediaGraphDiagnosticLevel::State, "bind_format_context");
+    m_inputSnapshotOwner = std::move(input);
+    packetNormalizeLog(MediaGraphDiagnosticLevel::State, "bind_input_snapshots");
     return ::media::Status::success();
 }
 
@@ -140,13 +140,13 @@ void PacketNormalizeNode::releaseFormatContext() noexcept
         return ::media::Status::failure(streamIndex.error());
     }
 
-    if (!m_formatContextOwner) {
+    if (!m_inputSnapshotOwner) {
         return ::media::Status::failure(
             ::media::ErrorInfo::notInitialized("PacketNormalizeNode requires format context before source stream binding"));
     }
 
     const int index = streamIndex.value();
-    const auto* formatBuffer = dynamic_cast<const FFmpegFormatContextBuffer*>(m_formatContextOwner.get());
+    const auto* formatBuffer = dynamic_cast<const FFmpegInputSnapshotBuffer*>(m_inputSnapshotOwner.get());
     m_sourceStream = formatBuffer ? formatBuffer->inputStreamSnapshot(index) : nullptr;
     if (!m_sourceStream || m_sourceStream->streamKind != streamKind.value()) {
         return ::media::Status::failure(

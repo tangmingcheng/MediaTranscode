@@ -10,6 +10,11 @@
 
 namespace media::ffmpeg::graph {
 
+MediaGraphExecutionContext::~MediaGraphExecutionContext()
+{
+    shutdownAvSyncGroups();
+}
+
 ::media::Status MediaGraphExecutionContext::compile(const MediaGraph& graph)
 {
     const MediaGraphDiagnosticConfig diagnosticConfig = m_diagnosticConfig;
@@ -62,12 +67,18 @@ namespace media::ffmpeg::graph {
 
 void MediaGraphExecutionContext::reset()
 {
+    shutdownAvSyncGroups();
     m_graph = nullptr;
     m_channels.clear();
     m_executionOrder.clear();
     m_nodeWakeups.clear();
     m_compiled = false;
     mediaGraphDiagnosticSetGlobalConfig(m_diagnosticConfig);
+}
+
+void MediaGraphExecutionContext::rebindCompiledGraph(const MediaGraph& graph) noexcept
+{
+    if (m_compiled) m_graph = &graph;
 }
 
 void MediaGraphExecutionContext::setDiagnosticsEnabled(bool enabled) noexcept
@@ -207,11 +218,17 @@ std::vector<MediaChannel*> MediaGraphExecutionContext::outputChannels(MediaNodeI
 
 MediaNodeWakeup& MediaGraphExecutionContext::nodeWakeup(MediaNodeId nodeId)
 {
+    return *sharedNodeWakeup(nodeId);
+}
+
+std::shared_ptr<MediaNodeWakeup>
+MediaGraphExecutionContext::sharedNodeWakeup(MediaNodeId nodeId)
+{
     auto& wakeup = m_nodeWakeups[nodeId.value];
     if (!wakeup) {
-        wakeup = std::make_unique<MediaNodeWakeup>();
+        wakeup = std::make_shared<MediaNodeWakeup>();
     }
-    return *wakeup;
+    return wakeup;
 }
 
 void MediaGraphExecutionContext::interruptNodeWakeups() noexcept
@@ -224,6 +241,31 @@ void MediaGraphExecutionContext::interruptNodeWakeups() noexcept
     }
 }
 
+void MediaGraphExecutionContext::shutdownAvSyncGroups() noexcept
+{
+    interruptNodeWakeups();
+    m_avSyncGroups.clear();
+}
+
+::media::Status MediaGraphExecutionContext::registerAvSyncGroup(
+    MediaAvSyncGroupKey key,
+    MediaAvSyncPlan plan,
+    std::shared_ptr<MediaMasterClock> clock,
+    std::shared_ptr<const MediaSharedNtpEpoch> sharedNtpEpoch,
+    std::shared_ptr<MediaAvEpochTransitionService> transitionService)
+{
+    return m_avSyncGroups.registerGroup(
+        std::move(key), std::move(plan), std::move(clock),
+        std::move(sharedNtpEpoch), std::move(transitionService));
+}
+
+std::shared_ptr<MediaAvSyncGroupRuntime>
+MediaGraphExecutionContext::findAvSyncGroup(
+    const MediaAvSyncGroupKey& key) const noexcept
+{
+    return m_avSyncGroups.find(key);
+}
+
 ::media::Status MediaGraphExecutionContext::buildChannels(const MediaGraph& graph)
 {
     for (const auto& edge : graph.edges()) {
@@ -234,6 +276,7 @@ void MediaGraphExecutionContext::interruptNodeWakeups() noexcept
 
         if (MediaChannel* channel = result.value()) {
             channel->setConsumerWakeup(nodeWakeup(edge.to.nodeId));
+            channel->setProducerWakeup(nodeWakeup(edge.from.nodeId));
             mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
                                     MediaGraphDiagnosticPhase::RuntimeChannel,
                                     std::string("create ") + mediaGraphDiagnosticDescribeChannel(*channel));

@@ -41,6 +41,8 @@ struct MediaBufferPolicy {
     bool allowHardwareFrames = true;
     bool allowSoftwareTransfer = true;
 
+    constexpr bool operator==(const MediaBufferPolicy&) const noexcept = default;
+
     constexpr bool usesPool() const noexcept
     {
         return poolMode != MediaBufferPoolMode::None;

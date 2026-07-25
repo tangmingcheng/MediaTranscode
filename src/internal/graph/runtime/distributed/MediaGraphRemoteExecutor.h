@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/graph/model/MediaGraphCapability.h"
 #include "internal/graph/runtime/distributed/MediaGraphDeploymentPlan.h"
 #include "media_transcode/Result.h"
 
@@ -15,6 +16,11 @@ enum class MediaGraphRemoteExecutorState {
 
 class MediaGraphRemoteExecutor final {
 public:
+    static constexpr MediaCapabilityMaturity capabilityMaturity() noexcept
+    {
+        return mediaGraphCapabilityMaturity(MediaGraphCapability::DistributedExecution);
+    }
+
     ::media::Status deploy(MediaGraphDeploymentPlan plan);
     ::media::Status start();
     ::media::Status stop();

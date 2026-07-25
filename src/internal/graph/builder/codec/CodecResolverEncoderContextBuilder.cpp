@@ -4,6 +4,8 @@
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/nodes/metadata/CodecResolverHardwareFrames.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
+#include "internal/graph/runtime/ffmpeg/MediaFfmpegCopyOpaqueCapability.h"
+#include "internal/graph/sync/lineage/MediaVideoLineageCopyOpaqueOption.h"
 
 #include <charconv>
 #include <cstdint>
@@ -264,6 +266,23 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
     encoderContext->color_primaries = params->color_primaries;
     encoderContext->color_trc = params->color_trc;
     encoderContext->colorspace = params->color_space;
+    auto copyOpaque = parseMediaVideoLineageCopyOpaqueOption(options);
+    if (!copyOpaque) {
+        return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
+            copyOpaque.error());
+    }
+    if (copyOpaque.value()) {
+#if defined(AV_CODEC_FLAG_COPY_OPAQUE)
+        if (auto status = requireMediaFfmpegCopyOpaqueCapability(); !status) {
+            return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
+                status.error());
+        }
+        encoderContext->flags |= AV_CODEC_FLAG_COPY_OPAQUE;
+#else
+        return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
+            requireMediaFfmpegCopyOpaqueCapability().error());
+#endif
+    }
 
     auto globalHeader = boolOption(options, MediaTranscodeOptionKey::VideoGlobalHeader);
     if (!globalHeader) {

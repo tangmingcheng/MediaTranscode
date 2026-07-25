@@ -1,7 +1,7 @@
 #pragma once
 
-#include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
+#include "internal/graph/runtime/buffer/MediaBufferRef.h"
 
 namespace media::ffmpeg::graph {
 
@@ -14,11 +14,12 @@ protected:
     ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context) override;
 
 private:
-    ::media::Status openOutput(MediaGraphExecutionContext& context);
+    ::media::Result<MediaBufferRef> createResource(
+        MediaGraphExecutionContext& context);
 
 private:
     bool m_emitted = false;
-    ::media::ffmpeg::OutputFormatContextPtr m_context;
+    MediaBufferRef m_resource;
 };
 
 } // namespace media::ffmpeg::graph

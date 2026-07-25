@@ -17,6 +17,8 @@ struct MediaMemoryBudget {
     bool enforceHardLimit = false;
     bool allowDynamicGrowth = true;
 
+    constexpr bool operator==(const MediaMemoryBudget&) const noexcept = default;
+
     constexpr bool hasByteLimit() const noexcept
     {
         return maxBytes > 0;

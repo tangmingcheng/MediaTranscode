@@ -9,6 +9,7 @@
 #include "internal/graph/builder/segments/MediaVideoBranchSegmentBuilder.h"
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/planner/MediaPipelinePlanner.h"
+#include "internal/graph/planner/local/MediaLocalFileOutputPlanner.h"
 
 #include <utility>
 
@@ -80,6 +81,12 @@ bool branchEnabled(const MediaAudioPipelinePlan& plan) noexcept
     }
     MediaAudioPipelinePlan audioPlan = std::move(plannedAudio).value();
 
+    auto outputPlan = MediaLocalFileOutputPlanner::plan(
+        options.outputUrl, options.outputFormat);
+    if (!outputPlan) {
+        return ::media::Result<MediaGraph>::failure(outputPlan.error());
+    }
+
     const MediaGraphQueueParameters& queues = options.parameters.queues;
     const MediaRealtimeEdgePolicySet edgePolicies = MediaGraphBuildSupport::blockingEdgePolicySet(queues);
 
@@ -99,6 +106,12 @@ bool branchEnabled(const MediaAudioPipelinePlan& plan) noexcept
     packetSelectOptions.formatSourcePort = input.value().formatPort;
     packetSelectOptions.queues = queues;
     packetSelectOptions.edgePolicies = edgePolicies;
+    packetSelectOptions.videoOutput = PacketSelectOutputPlan{
+        videoPlan.sourceStreamIndex, MediaEdgeKind::InputPacket};
+    if (branchEnabled(audioPlan)) {
+        packetSelectOptions.audioOutput = PacketSelectOutputPlan{
+            audioPlan.sourceStreamIndex, MediaEdgeKind::InputPacket};
+    }
     auto packetSelect = MediaPacketSelectSegmentBuilder::buildDemuxStreamSplit(graph, packetSelectOptions);
     if (!packetSelect) {
         return ::media::Result<MediaGraph>::failure(packetSelect.error());
@@ -106,32 +119,51 @@ bool branchEnabled(const MediaAudioPipelinePlan& plan) noexcept
 
     FileOutputSegmentOptions outputOptions;
     outputOptions.prefix = "local.file";
-    outputOptions.outputUrl = options.outputUrl;
-    outputOptions.outputFormat = options.outputFormat;
+    outputOptions.outputUrl = outputPlan.value().url;
+    outputOptions.outputFormat = outputPlan.value().format;
+    outputOptions.outputResourceKind = outputPlan.value().outputResourceKind;
     outputOptions.expectVideo = branchEnabled(videoPlan);
     outputOptions.expectAudio = branchEnabled(audioPlan);
+    outputOptions.muxSessionKind = outputPlan.value().muxSessionKind;
     outputOptions.queues = queues;
     auto output = MediaOutputSegmentBuilder::buildFileMuxOutput(graph, outputOptions);
     if (!output) {
         return ::media::Result<MediaGraph>::failure(output.error());
     }
 
-    MediaAudioBranchSegmentOptions audioOptions;
-    audioOptions.prefix = "local.audio";
-    audioOptions.plan = std::move(audioPlan);
-    audioOptions.parameters = options.parameters.audio;
-    audioOptions.queues = queues;
-    audioOptions.edgePolicies = edgePolicies;
-    audioOptions.formatSourceNode = input.value().input;
-    audioOptions.formatSourcePort = input.value().formatPort;
-    audioOptions.packetSourceNode = packetSelect.value().split;
-    audioOptions.packetSourcePort = "audio";
-    audioOptions.muxNode = output.value().mux;
-    audioOptions.muxCodecPort = "codec";
-    audioOptions.muxPacketPort = "packet";
-    auto audio = MediaAudioBranchSegmentBuilder::buildIfPlanned(graph, audioOptions);
-    if (!audio) {
-        return ::media::Result<MediaGraph>::failure(audio.error());
+    if (branchEnabled(audioPlan)) {
+        MediaAudioBranchSegmentOptions audioOptions;
+        audioOptions.prefix = "local.audio";
+        audioOptions.plan = std::move(audioPlan);
+        audioOptions.queues = queues;
+        audioOptions.edgePolicies = edgePolicies;
+        audioOptions.formatSourceNode = input.value().input;
+        audioOptions.formatSourcePort = input.value().formatPort;
+        audioOptions.packetSourceNode = packetSelect.value().audioPacket->node;
+        audioOptions.packetSourcePort = packetSelect.value().audioPacket->port;
+        audioOptions.normalizeInputPackets = true;
+        audioOptions.correctionMode = MediaAudioCorrectionExecutionMode::Disabled;
+        audioOptions.lineageMode = MediaAudioLineageExecutionMode::LegacyPlainPacket;
+        auto audio = MediaAudioBranchSegmentBuilder::build(graph, audioOptions);
+        if (!audio) {
+            return ::media::Result<MediaGraph>::failure(audio.error());
+        }
+        if (auto status = MediaGraphBuildSupport::connectChecked(
+                graph, "LocalFileTranscodeGraphBuilder",
+                audio.value().codec.node, audio.value().codec.port,
+                output.value().mux, "codec",
+                "local.audio.codec -> mux.codec", edgePolicies.metadata);
+            !status) {
+            return ::media::Result<MediaGraph>::failure(status.error());
+        }
+        if (auto status = MediaGraphBuildSupport::connectChecked(
+                graph, "LocalFileTranscodeGraphBuilder",
+                audio.value().packet.node, audio.value().packet.port,
+                output.value().mux, "packet",
+                "local.audio.packet -> mux.packet", edgePolicies.audioMux);
+            !status) {
+            return ::media::Result<MediaGraph>::failure(status.error());
+        }
     }
 
     MediaVideoBranchSegmentOptions videoOptions;
@@ -142,19 +174,29 @@ bool branchEnabled(const MediaAudioPipelinePlan& plan) noexcept
     videoOptions.edgePolicies = edgePolicies;
     videoOptions.formatSourceNode = input.value().input;
     videoOptions.formatSourcePort = input.value().formatPort;
-    videoOptions.packetSourceNode = packetSelect.value().split;
-    videoOptions.packetSourcePort = "video";
-    videoOptions.muxNode = output.value().mux;
-    videoOptions.muxCodecPort = "codec";
-    videoOptions.muxPacketPort = "packet";
-    auto video = MediaVideoBranchSegmentBuilder::buildIfPlanned(graph, videoOptions);
+    videoOptions.packetSourceNode = packetSelect.value().videoPacket->node;
+    videoOptions.packetSourcePort = packetSelect.value().videoPacket->port;
+    videoOptions.normalizePacketCopy = true;
+    auto video = MediaVideoBranchSegmentBuilder::build(graph, videoOptions);
     if (!video) {
         return ::media::Result<MediaGraph>::failure(video.error());
     }
 
-    if (!video.value()) {
-        return ::media::Result<MediaGraph>::failure(
-            ::media::ErrorInfo::unsupported("LocalFileTranscodeGraphBuilder requires planned video branch"));
+    if (auto status = MediaGraphBuildSupport::connectChecked(
+            graph, "LocalFileTranscodeGraphBuilder",
+            video.value().codec.node, video.value().codec.port,
+            output.value().mux, "codec",
+            "local.video.codec -> mux.codec", edgePolicies.metadata);
+        !status) {
+        return ::media::Result<MediaGraph>::failure(status.error());
+    }
+    if (auto status = MediaGraphBuildSupport::connectChecked(
+            graph, "LocalFileTranscodeGraphBuilder",
+            video.value().packet.node, video.value().packet.port,
+            output.value().mux, "packet",
+            "local.video.packet -> mux.packet", edgePolicies.videoMux);
+        !status) {
+        return ::media::Result<MediaGraph>::failure(status.error());
     }
 
     return ::media::Result<MediaGraph>::success(std::move(graph));

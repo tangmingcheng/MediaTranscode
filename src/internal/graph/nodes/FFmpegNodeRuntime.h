@@ -7,7 +7,9 @@
 #include "media_transcode/Result.h"
 
 #include <optional>
+#include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace media::ffmpeg::graph {
@@ -24,8 +26,16 @@ public:
     ::media::Status start(MediaGraphExecutionContext& context) override;
     ::media::Status stop(MediaGraphExecutionContext& context) override;
     void abort(MediaGraphExecutionContext& context) noexcept override;
+    ::media::Result<MediaNodeProcessResult> process(MediaGraphExecutionContext& context) override;
 
 protected:
+    bool canFinishProcess() const noexcept override;
+    ::media::Result<MediaNodeProcessResult> processProgress(::media::Status status = ::media::Status::success());
+    ::media::Result<MediaNodeProcessResult> processFinished(::media::Status status = ::media::Status::success());
+    std::size_t pendingOutputBufferCount() const noexcept;
+    bool retainsPendingOutput(const MediaBufferRef& buffer) const noexcept;
+    void cancelPendingOutputTransfer() noexcept;
+    virtual bool pendingOutputIsCurrent(const MediaBufferRef& buffer) const noexcept;
     struct PoppedChannelBuffer {
         MediaChannel* channel = nullptr;
         MediaBufferRef buffer;
@@ -40,6 +50,9 @@ protected:
     ::media::Result<MediaBufferRef> tryPopFirstInput(MediaGraphExecutionContext& context);
     ::media::Result<std::optional<MediaBufferRef>> tryPopFirstInputOptional(MediaGraphExecutionContext& context);
     ::media::Result<std::optional<PoppedChannelBuffer>> tryPopFirstInputWithChannelOptional(MediaGraphExecutionContext& context);
+    ::media::Result<std::optional<PoppedChannelBuffer>> tryPopFirstInputWithChannelOptional(
+        MediaGraphExecutionContext& context,
+        std::span<const std::string_view> eligiblePortNames);
     ::media::Result<std::optional<MediaBufferRef>> tryPopInputOptional(MediaGraphExecutionContext& context,
                                                                         const std::string& portName);
 
@@ -59,7 +72,20 @@ protected:
     std::vector<MediaChannel*> outputChannels(MediaGraphExecutionContext& context);
 
 private:
+    struct PendingTransfer {
+        MediaBufferRef buffer;
+        std::vector<MediaChannel*> channels;
+        std::size_t nextChannel = 0;
+    };
+    ::media::Status transferOrDefer(MediaGraphExecutionContext& context,
+                                    const std::vector<MediaChannel*>& channels,
+                                    const MediaBufferRef& buffer,
+                                    const char* action);
+    ::media::Status drainPendingTransfers(MediaGraphExecutionContext& context, bool& waiting);
     std::size_t m_nextInputIndex = 0;
+    std::optional<PendingTransfer> m_pendingTransfer;
+    bool m_finishPending = false;
+    bool m_finished = false;
 };
 
 #define MEDIA_FFMPEG_GRAPH_DECLARE_FFMPEG_NODE(ClassName) \

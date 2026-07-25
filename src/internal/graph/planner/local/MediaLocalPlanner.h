@@ -16,8 +16,8 @@ struct MediaLocalPlannerOptions {
     std::string zone = "local";
     int port = 19000;
 
-    bool enableGpuPlanning = true;
-    bool enableMeshPlanning = true;
+    bool enableGpuPlanning = false;
+    bool enableMeshPlanning = false;
     bool preferZeroCopy = true;
 };
 

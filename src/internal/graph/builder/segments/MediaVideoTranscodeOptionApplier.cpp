@@ -150,6 +150,7 @@ constexpr const char* owner = "MediaVideoTranscodeOptionApplier";
     };
 
     for (MediaNodeId nodeId : videoOptionNodes) {
+        if (!nodeId.isValid()) continue;
         if (auto status = applyUserVideoOptionsToNode(graph, nodeId, video); !status) return status;
     }
     return ::media::Result<void>::success();

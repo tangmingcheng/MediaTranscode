@@ -2,6 +2,9 @@
 
 #include "internal/graph/model/MediaGraphTypes.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
+#include "internal/graph/planner/audio/MediaResolvedAudioOutputPlan.h"
+#include "internal/graph/planner/audio/capability/MediaAudioDecoderCapabilityProvider.h"
+#include "internal/graph/planner/audio/capability/MediaAudioResamplerCapabilityProvider.h"
 #include "media_transcode/Result.h"
 
 #include <optional>
@@ -29,6 +32,7 @@ struct MediaAudioPipelinePlannerOptions {
     std::optional<int> requestedQuality;
     std::string requestedPreset;
     std::string requestedProfile;
+    MediaAudioOutputRequirement outputRequirement;
     bool diagnosticLogEnabled = false;
 };
 
@@ -37,11 +41,11 @@ struct MediaAudioPipelinePlan {
     MediaBranchMode branchMode = MediaBranchMode::Drop;
     int sourceStreamIndex = invalidMediaStreamIndex;
     std::string sourceCodecName;
-    std::string targetCodecName;
-    std::string targetEncoderName;
-    bool followsSourceParameters = false;
+    std::optional<MediaResolvedAudioOutputPlan> resolvedOutput;
     bool monotonicPacketTimestamps = false;
     std::string reason;
+    std::optional<MediaSelectedAudioDecoder> selectedDecoder;
+    std::optional<MediaSelectedAudioResampler> selectedResampler;
 };
 
 struct MediaInputAudioStreamInfo {
@@ -49,6 +53,12 @@ struct MediaInputAudioStreamInfo {
     std::string codecName;
     int sampleRate = 0;
     int channels = 0;
+    std::string channelLayout;
+    std::string sampleFormat;
+    MediaAudioProfile profile = MediaAudioProfile::unknown();
+    int64_t bitrateBitsPerSecond = 0;
+    std::optional<int> maximumAccessUnitSamples;
+    std::optional<MediaSelectedAudioDecoder> selectedDecoder;
 };
 
 class MediaAudioPipelinePlanner final {
@@ -57,7 +67,7 @@ public:
         const std::string& inputPath,
         const MediaAudioPipelinePlannerOptions& options);
 
-    static ::media::Result<MediaAudioPipelinePlan> planKnownAudioTranscode(
+    static ::media::Result<MediaAudioPipelinePlan> planKnownAudio(
         MediaInputAudioStreamInfo inputInfo,
         const MediaAudioPipelinePlannerOptions& options);
 

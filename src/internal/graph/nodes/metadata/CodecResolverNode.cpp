@@ -3,9 +3,11 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/builder/codec/CodecResolverEncoderContextBuilder.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
-#include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
+#include "internal/graph/runtime/buffer/FFmpegInputSnapshotBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
+#include "internal/graph/runtime/ffmpeg/MediaFfmpegCopyOpaqueCapability.h"
+#include "internal/graph/sync/lineage/MediaVideoLineageCopyOpaqueOption.h"
 
 #include <sstream>
 #include <string>
@@ -135,10 +137,10 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
         return processWaiting();
     }
 
-    auto* formatBuffer = dynamic_cast<FFmpegFormatContextBuffer*>(input.value()->get());
+    auto* formatBuffer = dynamic_cast<FFmpegInputSnapshotBuffer*>(input.value()->get());
     if (!formatBuffer || !formatBuffer->inputSnapshotComplete()) {
         return ::media::Result<MediaNodeProcessResult>::failure(
-            ::media::ErrorInfo::invalidArgument("CodecResolverNode expected FFmpegFormatContextBuffer"));
+            ::media::ErrorInfo::invalidArgument("CodecResolverNode expected complete input snapshots"));
     }
 
     const FFmpegInputStreamSnapshot* stream = nullptr;
@@ -166,6 +168,8 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
 
 ::media::Status CodecResolverNode::resolveDecoder(MediaGraphExecutionContext& context, const FFmpegInputStreamSnapshot& stream)
 {
+    auto codecParameters = stream.cloneCodecParameters();
+    if (!codecParameters) return ::media::Status::failure(codecParameters.error());
     const MediaNodeOptions* options = nodeOptions(context);
     const std::string plannedDecoder = optionValue(options, "decoder");
     const bool hardwarePlanned = truthyOption(options, "pipeline.hardware");
@@ -175,13 +179,13 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
     if (!plannedDecoder.empty() && plannedDecoder != "auto") {
         decoder = avcodec_find_decoder_by_name(plannedDecoder.c_str());
     } else {
-        decoder = avcodec_find_decoder(stream.codecParameters->codec_id);
+        decoder = avcodec_find_decoder(codecParameters.value()->codec_id);
     }
 
     if (!decoder) {
         return ::media::Status::failure(
             ::media::ErrorInfo::unsupported("CodecResolverNode failed: video decoder not found: " +
-                                           (!plannedDecoder.empty() ? plannedDecoder : std::string(avcodec_get_name(stream.codecParameters->codec_id)))));
+                                           (!plannedDecoder.empty() ? plannedDecoder : std::string(avcodec_get_name(codecParameters.value()->codec_id)))));
     }
 
     auto decoderContext = ::media::ffmpeg::makeCodecContext(decoder);
@@ -190,12 +194,26 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
             ::media::ErrorInfo::allocationFailed("CodecResolverNode failed: avcodec_alloc_context3(decoder) returned null"));
     }
 
-    const int copyRet = avcodec_parameters_to_context(decoderContext.get(), stream.codecParameters.get());
+    const int copyRet = avcodec_parameters_to_context(decoderContext.get(), codecParameters.value().get());
     if (copyRet < 0) {
         return FFmpegGraphError::statusFromCode(copyRet, "avcodec_parameters_to_context(video decoder)");
     }
 
     decoderContext->pkt_timebase = AVRational{ stream.time.timeBase.num, stream.time.timeBase.den };
+    auto copyOpaque = parseMediaVideoLineageCopyOpaqueOption(options);
+    if (!copyOpaque) {
+        return ::media::Status::failure(copyOpaque.error());
+    }
+    if (copyOpaque.value()) {
+#if defined(AV_CODEC_FLAG_COPY_OPAQUE)
+        if (auto status = requireMediaFfmpegCopyOpaqueCapability(); !status) {
+            return status;
+        }
+        decoderContext->flags |= AV_CODEC_FLAG_COPY_OPAQUE;
+#else
+        return requireMediaFfmpegCopyOpaqueCapability();
+#endif
+    }
 
     m_decoderHardwareDevice.reset();
     m_decoderHardwarePixelFormat = AV_PIX_FMT_NONE;
@@ -274,8 +292,11 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
 {
     const MediaNodeOptions* options = nodeOptions(context);
 
+    auto codecParameters = stream.cloneCodecParameters();
+    if (!codecParameters) return ::media::Status::failure(codecParameters.error());
+
     CodecResolverEncoderContextBuildRequest request;
-    request.codecParameters = stream.codecParameters.get();
+    request.codecParameters = codecParameters.value().get();
     request.sourceFormat = stream.format;
     request.sourceTime = stream.time;
     request.options = options;

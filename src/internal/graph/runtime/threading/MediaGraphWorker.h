@@ -3,6 +3,7 @@
 #include "internal/graph/core/MediaNodeId.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 #include "internal/graph/runtime/MediaRuntimeNode.h"
+#include "internal/graph/runtime/threading/MediaGraphWorkerFailure.h"
 #include "media_transcode/Result.h"
 
 #include <atomic>
@@ -20,6 +21,7 @@ struct MediaGraphWorkerMetrics {
     std::atomic_uint64_t progress{ 0 };
     std::atomic_uint64_t waits{ 0 };
     std::atomic_uint64_t wakeups{ 0 };
+    std::atomic_uint64_t deadlines{ 0 };
     std::atomic_uint64_t errors{ 0 };
 };
 
@@ -27,6 +29,10 @@ class MediaGraphWorker final {
 public:
     MediaGraphWorker(MediaRuntimeNode& node,
                      MediaGraphExecutionContext& context,
+                     MediaGraphWorkerConfig config = {});
+    MediaGraphWorker(MediaRuntimeNode& node,
+                     MediaGraphExecutionContext& context,
+                     MediaGraphWorkerFailureRecorder& failureRecorder,
                      MediaGraphWorkerConfig config = {});
     ~MediaGraphWorker();
 
@@ -46,12 +52,15 @@ public:
     const MediaGraphWorkerMetrics& metrics() const noexcept;
 
 private:
+    void recordFailure(::media::ErrorInfo error);
     void run();
 
 private:
     MediaRuntimeNode& m_node;
     MediaGraphExecutionContext& m_context;
     MediaNodeWakeup& m_wakeup;
+    MediaGraphWorkerFailureRecorder m_localFailureRecorder;
+    MediaGraphWorkerFailureRecorder* m_failureRecorder = nullptr;
     MediaGraphWorkerConfig m_config;
     std::thread m_thread;
     std::atomic_bool m_running{ false };

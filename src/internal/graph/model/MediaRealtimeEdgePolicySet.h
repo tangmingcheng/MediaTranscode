@@ -10,10 +10,17 @@ struct MediaRealtimeEdgePolicySet {
     MediaEdgePolicy packet;
     MediaEdgePolicy videoPacket;
     MediaEdgePolicy audioPacket;
-    MediaEdgePolicy frame;
+    MediaEdgePolicy synchronizedPacket;
+    MediaEdgePolicy audioDriftTransaction;
+    MediaEdgePolicy videoFrame;
+    MediaEdgePolicy preparedVideoFrame;
+    MediaEdgePolicy audioFrame;
     MediaEdgePolicy mux;
     MediaEdgePolicy videoMux;
     MediaEdgePolicy audioMux;
+
+    constexpr bool operator==(
+        const MediaRealtimeEdgePolicySet&) const noexcept = default;
 
     const MediaEdgePolicy& packetPolicy(MediaStreamKind streamKind) const noexcept
     {
@@ -24,6 +31,7 @@ struct MediaRealtimeEdgePolicySet {
     {
         return streamKind == MediaStreamKind::Audio ? audioMux : videoMux;
     }
+
 };
 
 } // namespace media::ffmpeg::graph

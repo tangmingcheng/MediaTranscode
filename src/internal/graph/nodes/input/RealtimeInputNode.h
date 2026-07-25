@@ -1,13 +1,14 @@
 #pragma once
 
-#include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
+#include "internal/graph/planner/realtime/MediaPreparedRealtimeInput.h"
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 
 namespace media::ffmpeg::graph {
 
 class RealtimeInputNode final : public FFmpegNodeRuntime {
 public:
-    explicit RealtimeInputNode(MediaNodeId nodeId);
+    RealtimeInputNode(MediaNodeId nodeId, MediaPreparedRealtimeInputKind expectedKind,
+                      MediaPreparedRealtimeInput prepared);
     static MediaNodeKind staticKind() noexcept;
 
 protected:
@@ -16,10 +17,9 @@ protected:
     void abort(MediaGraphExecutionContext& context) noexcept override;
 
 private:
-    ::media::Status openInput(MediaGraphExecutionContext& context);
-
-private:
-    ::media::ffmpeg::InputFormatContextPtr m_context;
+    MediaPreparedRealtimeInputKind m_expectedKind;
+    MediaPreparedRealtimeInput m_prepared;
+    MediaBufferRef m_formatBuffer;
     bool m_formatEmitted = false;
 };
 

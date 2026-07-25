@@ -17,13 +17,22 @@ void MediaNodeWakeup::notify() noexcept
     m_condition.notify_one();
 }
 
-bool MediaNodeWakeup::waitForChange(Sequence observedSequence)
+MediaNodeWakeup::WaitOutcome MediaNodeWakeup::wait(
+    Sequence observedSequence,
+    std::optional<std::chrono::nanoseconds> timeout)
 {
     std::unique_lock<std::mutex> lock(m_mutex);
-    m_condition.wait(lock, [&] {
+    const auto changedPredicate = [&] {
         return m_interrupted || m_sequence != observedSequence;
-    });
-    return !m_interrupted;
+    };
+    bool changed = true;
+    if (timeout) {
+        changed = m_condition.wait_for(lock, *timeout, changedPredicate);
+    } else {
+        m_condition.wait(lock, changedPredicate);
+    }
+    if (m_interrupted) return WaitOutcome::Interrupted;
+    return changed ? WaitOutcome::Notified : WaitOutcome::Deadline;
 }
 
 void MediaNodeWakeup::interrupt() noexcept

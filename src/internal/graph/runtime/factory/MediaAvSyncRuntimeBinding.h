@@ -1,0 +1,27 @@
+#pragma once
+
+#include "internal/graph/planner/avsync/MediaAvSyncPlan.h"
+#include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlan.h"
+#include "internal/graph/sync/MediaAvSyncGroupKey.h"
+
+#include <memory>
+
+namespace media::ffmpeg::graph {
+
+class MediaAvStartupVideoPreparationState;
+
+enum class MediaAvSyncBindingAssemblyMode {
+    ComponentCore,
+    ProductionProtocolOutput
+};
+
+struct MediaAvSyncRuntimeBinding final {
+    MediaAvSyncGroupKey groupKey;
+    MediaAvSyncPlan plan;
+    MediaAvGenerationTransitionPlan transition;
+    MediaAvSyncBindingAssemblyMode assemblyMode;
+    std::shared_ptr<MediaAvStartupVideoPreparationState>
+        videoPreparationState;
+};
+
+} // namespace media::ffmpeg::graph

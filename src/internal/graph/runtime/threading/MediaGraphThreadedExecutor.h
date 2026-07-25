@@ -8,6 +8,7 @@
 #include "media_transcode/Result.h"
 
 #include <memory>
+#include <mutex>
 #include <vector>
 
 namespace media::ffmpeg::graph {
@@ -41,7 +42,9 @@ public:
 
     MediaGraphThreadedExecutorState state() const noexcept;
     bool running() const noexcept;
-    const MediaGraphRuntimeMetrics& metrics() const noexcept;
+    bool failed() const noexcept;
+    std::optional<MediaGraphWorkerFailure> primaryFailure() const;
+    MediaGraphRuntimeMetrics metrics() const noexcept;
 
 private:
     void refreshMetrics() const noexcept;
@@ -50,7 +53,9 @@ private:
     MediaThreadingPolicy m_policy;
     MediaGraphThreadedExecutorState m_state = MediaGraphThreadedExecutorState::Idle;
     std::vector<std::unique_ptr<MediaGraphWorker>> m_workers;
+    MediaGraphWorkerFailureRecorder m_failureRecorder;
     mutable MediaGraphRuntimeMetrics m_metrics;
+    mutable std::mutex m_metricsMutex;
 };
 
 } // namespace media::ffmpeg::graph

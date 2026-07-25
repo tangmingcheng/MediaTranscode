@@ -29,6 +29,8 @@ struct MediaEdgePolicy {
     MediaQueuePolicy queuePolicy;
     MediaBufferPolicy bufferPolicy;
     MediaBackpressurePolicy backpressurePolicy;
+
+    constexpr bool operator==(const MediaEdgePolicy&) const noexcept = default;
 };
 
 struct MediaEdge {
