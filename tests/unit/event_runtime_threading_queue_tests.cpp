@@ -884,24 +884,26 @@ void testRealtimeCompletionStopsRunningRuntimeAfterSuccessfulWait(TestContext& c
 
 void testRealtimeProgressTracksStartupThenRequiresEncodedOutput(TestContext& ctx)
 {
+    using namespace std::chrono_literals;
+
     MediaRealtimeProgressTracker tracker;
-    auto initial = tracker.observe(0, 0);
-    auto startup = tracker.observe(10, 0);
-    auto startupContinues = tracker.observe(20, 0);
+    auto initial = tracker.observe(0, 0, 0ms);
+    auto startup = tracker.observe(10, 0, 1000ms);
+    auto startupContinues = tracker.observe(20, 0, 2000ms);
     EXPECT_TRUE(ctx, initial && !initial.value());
     EXPECT_TRUE(ctx, startup && startup.value());
     EXPECT_TRUE(ctx, startupContinues && startupContinues.value());
     EXPECT_FALSE(ctx, tracker.outputStarted());
 
-    auto firstOutput = tracker.observe(21, 1);
-    auto workerOnlyAfterOutput = tracker.observe(30, 1);
-    auto nextOutput = tracker.observe(31, 2);
+    auto firstOutput = tracker.observe(21, 1, 3000ms);
+    auto workerOnlyAfterOutput = tracker.observe(30, 1, 4000ms);
+    auto nextOutput = tracker.observe(31, 2, 5000ms);
     EXPECT_TRUE(ctx, firstOutput && firstOutput.value());
     EXPECT_TRUE(ctx, tracker.outputStarted());
     EXPECT_TRUE(ctx, workerOnlyAfterOutput && !workerOnlyAfterOutput.value());
     EXPECT_TRUE(ctx, nextOutput && nextOutput.value());
-    EXPECT_FALSE(ctx, tracker.observe(30, 2));
-    EXPECT_FALSE(ctx, tracker.observe(31, 1));
+    EXPECT_FALSE(ctx, tracker.observe(30, 2, 6000ms));
+    EXPECT_FALSE(ctx, tracker.observe(31, 1, 6000ms));
 }
 
 void testRealtimeProgressFirstOutputUsesAbsoluteStartupDeadline(TestContext& ctx)
@@ -910,12 +912,31 @@ void testRealtimeProgressFirstOutputUsesAbsoluteStartupDeadline(TestContext& ctx
 
     MediaRealtimeProgressTracker tracker;
     EXPECT_FALSE(ctx, tracker.firstOutputDeadlineExpired(4999ms, 5000ms));
-    EXPECT_TRUE(ctx, tracker.observe(10, 0));
-    EXPECT_TRUE(ctx, tracker.observe(20, 0));
+    EXPECT_TRUE(ctx, tracker.observe(10, 0, 1000ms));
+    EXPECT_TRUE(ctx, tracker.observe(20, 0, 4000ms));
     EXPECT_TRUE(ctx, tracker.firstOutputDeadlineExpired(5000ms, 5000ms));
 
-    EXPECT_TRUE(ctx, tracker.observe(21, 1));
-    EXPECT_FALSE(ctx, tracker.firstOutputDeadlineExpired(6000ms, 5000ms));
+    EXPECT_TRUE(ctx, tracker.observe(21, 1, 6000ms));
+    EXPECT_TRUE(ctx, tracker.firstOutputDeadlineExpired(6000ms, 5000ms));
+
+    MediaRealtimeProgressTracker onTimeTracker;
+    EXPECT_TRUE(ctx, onTimeTracker.observe(10, 1, 4999ms));
+    EXPECT_FALSE(ctx, onTimeTracker.firstOutputDeadlineExpired(6000ms, 5000ms));
+}
+
+void testRealtimeProgressMaximumDurationStartsAtFirstEncodedOutput(TestContext& ctx)
+{
+    using namespace std::chrono_literals;
+
+    MediaRealtimeProgressTracker tracker;
+    EXPECT_TRUE(ctx, tracker.observe(10, 0, 7000ms));
+    EXPECT_FALSE(ctx, tracker.maximumOutputDurationExpired(7000ms, 5000ms));
+
+    EXPECT_TRUE(ctx, tracker.observe(11, 1, 8000ms));
+    EXPECT_FALSE(ctx, tracker.maximumOutputDurationExpired(12999ms, 5000ms));
+
+    EXPECT_TRUE(ctx, tracker.observe(12, 2, 12000ms));
+    EXPECT_TRUE(ctx, tracker.maximumOutputDurationExpired(13000ms, 5000ms));
 }
 
 void testRawRtpInputDiagnosticKindName(TestContext& ctx)
@@ -994,6 +1015,7 @@ void runEventRuntimeThreadingQueueTests(media_transcode::test::TestContext& ctx)
     testRuntimeMetricsCarriesAcceptanceSamples(ctx);
     testRealtimeProgressTracksStartupThenRequiresEncodedOutput(ctx);
     testRealtimeProgressFirstOutputUsesAbsoluteStartupDeadline(ctx);
+    testRealtimeProgressMaximumDurationStartsAtFirstEncodedOutput(ctx);
     testAcceptanceCollectorUsesInjectedClockForFiveSecondStall(ctx);
     testAcceptanceCollectorExcludesBaselineAndPropagatesPlatformFailure(ctx);
     testRuntimeLifecycleTransitionMatrix(ctx);

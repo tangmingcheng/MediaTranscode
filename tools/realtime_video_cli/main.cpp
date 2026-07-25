@@ -233,6 +233,8 @@ RealtimeVideoRuntimeOptions parseRuntimeOptions(int argc, char** argv)
     MediaRealtimeProgressTracker progressTracker;
     const auto firstOutputStartupDeadline =
         std::chrono::milliseconds(options.firstOutputTimeoutMs);
+    const auto maximumOutputDuration =
+        std::chrono::seconds(options.maxDurationSeconds);
     const auto workerStartupGrace = std::chrono::milliseconds(
         std::min(options.progressTimeoutMs, std::max(options.pollIntervalMs * 2, 1000)));
 
@@ -267,9 +269,12 @@ RealtimeVideoRuntimeOptions parseRuntimeOptions(int argc, char** argv)
             return ::media::Status::failure(
                 ::media::ErrorInfo::notInitialized("realtime runtime has no active workers"));
         }
+        const auto elapsedMs =
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - startedAt);
         auto progress = progressTracker.observe(
             report.metrics.workerProgress,
-            report.metrics.encodedPacketsPushed);
+            report.metrics.encodedPacketsPushed,
+            elapsedMs);
         if (!progress) {
             return ::media::Status::failure(progress.error());
         }
@@ -277,9 +282,6 @@ RealtimeVideoRuntimeOptions parseRuntimeOptions(int argc, char** argv)
             lastProgressAt = Clock::now();
         }
 
-        const auto elapsedMs =
-            std::chrono::duration_cast<std::chrono::milliseconds>(now - startedAt);
-        const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - startedAt).count();
         const auto idleMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastProgressAt).count();
         if (progressTracker.firstOutputDeadlineExpired(
                 elapsedMs, firstOutputStartupDeadline)) {
@@ -287,8 +289,8 @@ RealtimeVideoRuntimeOptions parseRuntimeOptions(int argc, char** argv)
                 ::media::ErrorInfo::notInitialized(
                     "realtime runtime produced no encoded output before startup deadline"));
         }
-        if (progressTracker.outputStarted() &&
-            elapsed >= options.maxDurationSeconds) {
+        if (progressTracker.maximumOutputDurationExpired(
+                elapsedMs, maximumOutputDuration)) {
             return ::media::Status::success();
         }
         if (idleMs >= options.progressTimeoutMs) {
