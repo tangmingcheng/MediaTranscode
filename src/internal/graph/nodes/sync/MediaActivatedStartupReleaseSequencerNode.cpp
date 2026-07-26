@@ -228,7 +228,7 @@ MediaActivatedStartupReleaseSequencerNode::process(
         }
         auto event = MediaPlaybackEpochActivatedBuffer::create(
             m_groupKey, activationRelease->epoch(),
-            activationRelease->audioOrigin());
+            activationRelease->audioOrigin(), std::nullopt);
         if (!event) {
             return failTerminal(event.error());
         }
@@ -318,7 +318,8 @@ MediaActivatedStartupReleaseSequencerNode::process(
                 "Activation release sequencer rejects a mismatched next-epoch transition"));
         }
         auto event = MediaPlaybackEpochActivatedBuffer::create(
-            m_groupKey, release->epoch(), release->audioOrigin());
+            m_groupKey, release->epoch(), release->audioOrigin(),
+            release->completedTransitionSequence());
         if (!event) {
             activationGroup->markAborted();
             return failTerminal(event.error());

@@ -19,6 +19,16 @@ extern "C" {
 namespace media::ffmpeg::graph {
 
 struct MediaAvEpochTransitionServiceTestAccess final {
+    static bool outputPermitMutexLocked(
+        const std::shared_ptr<MediaAvEpochTransitionService>& service)
+    {
+        if (service->m_mutex.try_lock()) {
+            service->m_mutex.unlock();
+            return false;
+        }
+        return true;
+    }
+
     static ::media::Status activateInitial(
         const std::shared_ptr<MediaAvEpochTransitionService>& service,
         const MediaPlaybackEpoch& epoch)
@@ -40,6 +50,17 @@ struct MediaAvEpochTransitionServiceTestAccess final {
             MediaAudioPlaybackOrigin{
                 epoch.generation, epoch.sourceStart, epoch.masterRelease,
                 0, 48'000});
+    }
+};
+
+struct MediaScheduledRtpSenderNodeTestAccess final {
+    static bool generationSessionCleared(
+        const MediaScheduledRtpSenderNode& node) noexcept
+    {
+        return !node.m_sessionState->sender &&
+            !node.m_sessionState->epoch &&
+            !node.m_sessionState->activation &&
+            !node.m_sessionState->description;
     }
 };
 
@@ -112,29 +133,32 @@ void testPermitCloseDropsOldGenerationAndReusesTransport(TestContext& ctx)
         sender->rtp->blockCondition.wait(
             lock, [&sender] { return sender->rtp->sendEntered; });
     }
-    auto purge = transition.value()->beginReacquisition(1, 2);
-    EXPECT_TRUE(ctx, purge);
-    if (!purge) {
-        releasePort(sender->rtp);
-        (void)inFlightCommit.get();
-        return;
-    }
-    std::promise<void> purgeStarted;
-    auto purgeCommit = std::async(
+    EXPECT_TRUE(
+        ctx,
+        MediaAvEpochTransitionServiceTestAccess::outputPermitMutexLocked(
+            transition.value()));
+    std::promise<void> transitionStarted;
+    auto transitionCommit = std::async(
         std::launch::async,
-        [&sender, &purge, &purgeStarted] {
-            purgeStarted.set_value();
-            return sender->node->generationPurgeTarget()->purge(
-                purge.value());
+        [&transition, &transitionStarted] {
+            transitionStarted.set_value();
+            return transition.value()->beginReacquisition(1, 2);
         });
-    purgeStarted.get_future().wait();
+    transitionStarted.get_future().wait();
     EXPECT_EQ(
         ctx,
-        purgeCommit.wait_for(std::chrono::milliseconds(0)),
+        transitionCommit.wait_for(std::chrono::milliseconds(0)),
         std::future_status::timeout);
     releasePort(sender->rtp);
     EXPECT_TRUE(ctx, inFlightCommit.get());
-    EXPECT_TRUE(ctx, purgeCommit.get());
+    auto purge = transitionCommit.get();
+    EXPECT_TRUE(ctx, purge);
+    if (!purge) return;
+    EXPECT_TRUE(ctx, sender->node->generationPurgeTarget()->purge(
+                         purge.value()));
+    EXPECT_TRUE(ctx,
+                MediaScheduledRtpSenderNodeTestAccess::
+                    generationSessionCleared(*sender->node));
     EXPECT_EQ(ctx, sender->rtp->sendCalls, 1);
 
     auto closedGeneration = scheduledUnit(
@@ -162,7 +186,8 @@ void testPermitCloseDropsOldGenerationAndReusesTransport(TestContext& ctx)
                          purge.value().transitionSequence, secondEpoch));
     auto activation = MediaPlaybackEpochActivatedBuffer::create(
         runtimePlan.groupKey, secondEpoch,
-        {2, milliseconds(0), milliseconds(1'000), 0, 48'000});
+        {2, milliseconds(0), milliseconds(1'000), 0, 48'000},
+        purge.value().transitionSequence);
     EXPECT_TRUE(ctx, activation);
     if (!activation) return;
     EXPECT_TRUE(ctx, sender->graph.execution.findInputChannel(
@@ -230,7 +255,8 @@ void testActivationOpensExactPlannedSenders(TestContext& ctx)
     auto activation = MediaPlaybackEpochActivatedBuffer::create(
         runtimePlan.groupKey,
         {milliseconds(0), milliseconds(0), 1},
-        {1, milliseconds(0), milliseconds(0), 0, 48'000});
+        {1, milliseconds(0), milliseconds(0), 0, 48'000},
+        std::nullopt);
     EXPECT_TRUE(ctx, activation);
     auto codec = makeMediaBufferRef<FFmpegCodecContextBuffer>(
         codecContext(MediaScheduledStream::Video));
@@ -300,7 +326,8 @@ void testActivationOpensExactPlannedSenders(TestContext& ctx)
     auto audioActivation = MediaPlaybackEpochActivatedBuffer::create(
         runtimePlan.groupKey,
         {milliseconds(0), milliseconds(0), 1},
-        {1, milliseconds(0), milliseconds(0), 0, 48'000});
+        {1, milliseconds(0), milliseconds(0), 0, 48'000},
+        std::nullopt);
     auto audioCodec = makeMediaBufferRef<FFmpegCodecContextBuffer>(
         codecContext(MediaScheduledStream::Audio));
     EXPECT_TRUE(ctx, audioActivation && audioCodec);
@@ -449,7 +476,8 @@ void testSenderFailureAndLifecycleMatrix(TestContext& ctx)
     auto invalidActivation = MediaPlaybackEpochActivatedBuffer::create(
         runtimePlan.groupKey,
         {milliseconds(0), milliseconds(0), 1},
-        {1, milliseconds(0), milliseconds(0), 0, 48'000});
+        {1, milliseconds(0), milliseconds(0), 0, 48'000},
+        std::nullopt);
     auto invalidContext = codecContext(MediaScheduledStream::Video);
     EXPECT_TRUE(ctx, invalidActivation && invalidContext);
     if (!invalidActivation || !invalidContext) return;

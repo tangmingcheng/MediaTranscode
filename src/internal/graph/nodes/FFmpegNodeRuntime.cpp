@@ -40,6 +40,12 @@ void FFmpegNodeRuntime::abort(MediaGraphExecutionContext& context) noexcept
 
 ::media::Result<MediaNodeProcessResult> FFmpegNodeRuntime::process(MediaGraphExecutionContext& context)
 {
+    return processImpl(context);
+}
+
+::media::Result<MediaNodeProcessResult> FFmpegNodeRuntime::processImpl(
+    MediaGraphExecutionContext& context)
+{
     if (m_finished) {
         return ::media::Result<MediaNodeProcessResult>::success(
             MediaNodeProcessResult::finished());
@@ -129,6 +135,12 @@ FFmpegNodeRuntime::reserveOutputCommit(const MediaBufferRef&) const
     return ::media::Result<
         std::optional<MediaProtocolOutputGenerationCommitReservation>>::
         success(std::nullopt);
+}
+
+::media::Status FFmpegNodeRuntime::commitReservedOutput(
+    const MediaBufferRef&)
+{
+    return ::media::Status::success();
 }
 
 void FFmpegNodeRuntime::cancelPendingOutputTransfer() noexcept
@@ -572,13 +584,15 @@ FFmpegNodeRuntime::tryPopFirstInputWithChannelOptional(
         }
     }
 
-    auto reservation = reserveOutputCommit(buffer);
-    if (!reservation) {
-        if (reservation.error().code == ::media::ErrorCode::Cancelled) {
+    std::optional<MediaProtocolOutputGenerationCommitReservation> reservation;
+    auto reserved = reserveOutputCommit(buffer);
+    if (!reserved) {
+        if (reserved.error().code == ::media::ErrorCode::Cancelled) {
             return ::media::Status::success();
         }
-        return ::media::Status::failure(reservation.error());
+        return ::media::Status::failure(reserved.error());
     }
+    reservation = std::move(reserved).value();
     for (std::size_t index = 0; index < channels.size(); ++index) {
         MediaChannel* channel = channels[index];
         const MediaQueuePushOutcome outcome = channel->pushOutcome(buffer);
@@ -601,7 +615,7 @@ FFmpegNodeRuntime::tryPopFirstInputWithChannelOptional(
         logEdgeTransfer(context, MediaGraphDiagnosticPhase::RuntimeEdge, action,
                         nodeId(), name(), *channel, buffer);
     }
-    return ::media::Status::success();
+    return commitReservedOutput(buffer);
 }
 
 ::media::Status FFmpegNodeRuntime::drainPendingTransfers(MediaGraphExecutionContext& context,
@@ -610,14 +624,17 @@ FFmpegNodeRuntime::tryPopFirstInputWithChannelOptional(
     waiting = false;
     while (m_pendingTransfer) {
         PendingTransfer& transfer = *m_pendingTransfer;
-        auto reservation = reserveOutputCommit(transfer.buffer);
-        if (!reservation) {
-            if (reservation.error().code == ::media::ErrorCode::Cancelled) {
+        std::optional<MediaProtocolOutputGenerationCommitReservation>
+            reservation;
+        auto reserved = reserveOutputCommit(transfer.buffer);
+        if (!reserved) {
+            if (reserved.error().code == ::media::ErrorCode::Cancelled) {
                 m_pendingTransfer.reset();
                 return ::media::Status::success();
             }
-            return ::media::Status::failure(reservation.error());
+            return ::media::Status::failure(reserved.error());
         }
+        reservation = std::move(reserved).value();
         MediaChannel* channel = transfer.channels[transfer.nextChannel];
         const MediaQueuePushOutcome outcome = channel->pushOutcome(transfer.buffer);
         if (outcome == MediaQueuePushOutcome::WouldBlock) {
@@ -638,6 +655,8 @@ FFmpegNodeRuntime::tryPopFirstInputWithChannelOptional(
         }
         ++transfer.nextChannel;
         if (transfer.nextChannel == transfer.channels.size()) {
+            auto committed = commitReservedOutput(transfer.buffer);
+            if (!committed) return committed;
             m_pendingTransfer.reset();
         }
     }

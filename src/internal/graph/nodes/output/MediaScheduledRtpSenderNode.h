@@ -6,10 +6,12 @@
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
 #include "internal/graph/protocol/rtp/MediaRtpUdpSenderTransport.h"
 #include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
+#include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
 
 #include <memory>
 #include <optional>
 #include <string_view>
+#include <atomic>
 
 namespace media::ffmpeg::graph {
 
@@ -21,6 +23,30 @@ struct MediaScheduledRtpSenderNodeDependencies final {
     std::shared_ptr<MediaAvSyncGroupRuntime> syncGroup;
     std::unique_ptr<MediaUdpDatagramSenderPortFactory> transportFactory;
     std::unique_ptr<ScheduledRtpPacketizerFactory> packetizerFactory;
+};
+
+struct MediaScheduledRtpGenerationSessionState final
+    : MediaProtocolOutputGenerationSessionState {
+private:
+    friend class MediaScheduledRtpSenderNode;
+    friend struct MediaScheduledRtpSenderNodeTestAccess;
+
+    void resetForGenerationPurge() noexcept override
+    {
+        sender.reset();
+        activation.reset();
+        description.reset();
+        epoch.reset();
+        descriptionEmitted = false;
+        generation.store(0, std::memory_order_release);
+    }
+
+    MediaBufferRef activation;
+    MediaBufferRef description;
+    std::unique_ptr<ScheduledRtpSenderSession> sender;
+    std::optional<MediaPlaybackEpoch> epoch;
+    bool descriptionEmitted = false;
+    std::atomic<std::uint64_t> generation{0};
 };
 
 class MediaScheduledRtpSenderNode final : public FFmpegNodeRuntime {
@@ -44,6 +70,11 @@ public:
 protected:
     ::media::Result<MediaNodeProcessResult> onProcess(
         MediaGraphExecutionContext& context) override;
+    ::media::Result<
+        std::optional<MediaProtocolOutputGenerationCommitReservation>>
+    reserveOutputCommit(const MediaBufferRef& buffer) const override;
+    ::media::Status commitReservedOutput(
+        const MediaBufferRef& buffer) override;
 
 private:
     friend struct MediaScheduledRtpSenderNodeTestAccess;
@@ -63,10 +94,6 @@ private:
         MediaGraphExecutionContext& context);
     ::media::Result<MediaNodeProcessResult> processScheduledInput(
         MediaGraphExecutionContext& context);
-    ::media::Status validateOutputPermit(
-        std::uint64_t generation) const;
-    ::media::Result<MediaProtocolOutputGenerationCommitReservation>
-    reserveOutputCommit(std::uint64_t generation) const;
     ::media::Result<MediaNodeProcessResult> failTerminal(::media::ErrorInfo error);
     void closeSession() noexcept;
     void resetGenerationSession() noexcept;
@@ -76,15 +103,11 @@ private:
     MediaScheduledRtpOutputPlan m_outputPlan;
     MediaSeparateRtpSdpRuntimePlan m_sdpPlan;
     MediaScheduledRtpSenderNodeDependencies m_dependencies;
+    std::shared_ptr<MediaScheduledRtpGenerationSessionState> m_sessionState;
     std::shared_ptr<MediaProtocolOutputGenerationState> m_generationState;
-    MediaBufferRef m_activation;
     MediaBufferRef m_codec;
-    MediaBufferRef m_description;
     std::unique_ptr<MediaRtpUdpSenderTransport> m_transport;
-    std::unique_ptr<ScheduledRtpSenderSession> m_sender;
-    std::optional<MediaPlaybackEpoch> m_epoch;
     std::optional<::media::ErrorInfo> m_terminalFailure;
-    bool m_descriptionEmitted = false;
 };
 
 } // namespace media::ffmpeg::graph

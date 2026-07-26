@@ -307,6 +307,19 @@ MediaAvSyncGroupRuntime::epochTransitionSnapshot() const noexcept
     return m_transitionService->snapshot();
 }
 
+::media::Result<MediaAvOutputPermitCommitReservation>
+MediaAvSyncGroupRuntime::reserveOutputCommit(
+    std::uint64_t generation) const
+{
+    return m_transitionService->reserveOutputCommit(generation);
+}
+
+::media::Result<MediaAvActivatedOutputPermitReservation>
+MediaAvSyncGroupRuntime::reserveActivatedOutput() const
+{
+    return m_transitionService->reserveActivatedOutput();
+}
+
 MediaAvReacquisitionCoordinator*
 MediaAvSyncGroupRuntime::reacquisitionCoordinator() const noexcept
 {

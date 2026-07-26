@@ -288,10 +288,13 @@ struct ProjectFileMuxHarness final {
                   MediaPayloadKind::TsAccessUnit);
         EXPECT_EQ(ctx, channel(audioPacketSource)->binding().payloadKind,
                   MediaPayloadKind::TsAccessUnit);
+        auto generationSession =
+            std::make_shared<ProjectMpegTsGenerationSessionState>();
         runtime = std::make_unique<FileMuxNode>(
             mux,
             std::make_shared<MediaProtocolOutputGenerationState>(
-                std::string(FileMuxNode::generationPurgeIdentity())));
+                std::string(FileMuxNode::generationPurgeIdentity()),
+                generationSession));
         EXPECT_TRUE(ctx, runtime->start(execution));
         return execution.compiled();
     }
@@ -344,7 +347,7 @@ struct ProjectFileMuxHarness final {
     MediaBufferRef planBuffer() const
     {
         return MediaTsMuxRuntimePlanBuffer::create(
-            muxPlan(), epoch, group).value();
+            muxPlan(), epoch, group, std::nullopt).value();
     }
 
     MediaBufferRef sinkBuffer() const

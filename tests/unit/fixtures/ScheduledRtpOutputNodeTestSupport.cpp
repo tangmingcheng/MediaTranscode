@@ -482,7 +482,8 @@ bool pushActivationAndCodec(
     auto activation = MediaPlaybackEpochActivatedBuffer::create(
         groupKey,
         {milliseconds(0), milliseconds(0), 1},
-        {1, milliseconds(0), milliseconds(0), 0, 48'000});
+        {1, milliseconds(0), milliseconds(0), 0, 48'000},
+        std::nullopt);
     EXPECT_TRUE(ctx, activation);
     if (!activation) return false;
     EXPECT_TRUE(

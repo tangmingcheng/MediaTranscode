@@ -67,9 +67,9 @@ private:
         epoch.generation, epoch.sourceStart, epoch.masterRelease, 0,
         audioCodec.sample_rate};
     auto videoActivation = MediaPlaybackEpochActivatedBuffer::create(
-        groupKey, epoch, audioOrigin);
+        groupKey, epoch, audioOrigin, std::nullopt);
     auto audioActivation = MediaPlaybackEpochActivatedBuffer::create(
-        groupKey, epoch, audioOrigin);
+        groupKey, epoch, audioOrigin, std::nullopt);
     auto videoMetadata = FFmpegBufferFactory::borrowCodecContext(&videoCodec);
     auto audioMetadata = FFmpegBufferFactory::borrowCodecContext(&audioCodec);
     if (!videoActivation || !audioActivation || !videoMetadata ||

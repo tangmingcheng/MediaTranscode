@@ -38,6 +38,10 @@ public:
     }
     ::media::Result<MediaPlaybackEpoch> playbackEpoch() const;
     MediaAvEpochTransitionSnapshot epochTransitionSnapshot() const noexcept;
+    ::media::Result<MediaAvOutputPermitCommitReservation>
+    reserveOutputCommit(std::uint64_t generation) const;
+    ::media::Result<MediaAvActivatedOutputPermitReservation>
+    reserveActivatedOutput() const;
     ::media::Status pollEpochReacquisitionTimeout();
     ::media::Result<GenerationDisposition> observeGeneration(
         std::uint64_t generation);

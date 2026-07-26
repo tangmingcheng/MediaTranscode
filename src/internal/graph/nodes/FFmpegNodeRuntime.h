@@ -40,6 +40,8 @@ protected:
     virtual ::media::Result<
         std::optional<MediaProtocolOutputGenerationCommitReservation>>
     reserveOutputCommit(const MediaBufferRef& buffer) const;
+    virtual ::media::Status commitReservedOutput(
+        const MediaBufferRef& buffer);
     struct PoppedChannelBuffer {
         MediaChannel* channel = nullptr;
         MediaBufferRef buffer;
@@ -86,6 +88,8 @@ private:
                                     const MediaBufferRef& buffer,
                                     const char* action);
     ::media::Status drainPendingTransfers(MediaGraphExecutionContext& context, bool& waiting);
+    ::media::Result<MediaNodeProcessResult> processImpl(
+        MediaGraphExecutionContext& context);
     std::size_t m_nextInputIndex = 0;
     std::optional<PendingTransfer> m_pendingTransfer;
     bool m_finishPending = false;

@@ -29,63 +29,63 @@
 #include <cstdint>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
+
+namespace media::ffmpeg::graph {
+
+struct MediaChannelAtomicOutputTestAccess final {
+    static std::unique_lock<std::mutex> lockMutation(MediaChannel& channel)
+    {
+        return std::unique_lock<std::mutex>(channel.m_mutationMutex);
+    }
+};
+
+struct MediaAvEpochTransitionServiceTestAccess final {
+    static bool outputPermitMutexLocked(
+        const std::shared_ptr<MediaAvEpochTransitionService>& service)
+    {
+        if (service->m_mutex.try_lock()) {
+            service->m_mutex.unlock();
+            return false;
+        }
+        return true;
+    }
+
+    static ::media::Status activateInitial(
+        const std::shared_ptr<MediaAvEpochTransitionService>& service,
+        const MediaPlaybackEpoch& epoch)
+    {
+        return service->activateInitial(
+            epoch,
+            MediaAudioPlaybackOrigin{
+                epoch.generation, epoch.sourceStart, epoch.masterRelease,
+                0, 48'000});
+    }
+
+    static ::media::Status activateNext(
+        const std::shared_ptr<MediaAvEpochTransitionService>& service,
+        std::uint64_t transitionSequence,
+        const MediaPlaybackEpoch& epoch)
+    {
+        return service->activateNextAfter(
+            transitionSequence, epoch,
+            MediaAudioPlaybackOrigin{
+                epoch.generation, epoch.sourceStart, epoch.masterRelease,
+                0, 48'000});
+    }
+};
+
+} // namespace media::ffmpeg::graph
 
 namespace {
 
 using media_transcode::test::TestContext;
 using media_transcode::test::makePacketBuffer;
 using namespace media::ffmpeg::graph;
-
-void testSchedulerGenerationPermitClosesUntilExactActivation(
-    TestContext& ctx)
-{
-    MediaProtocolOutputGenerationState state("scheduler_generation_state");
-    const auto canReserve = [&state](std::uint64_t generation) {
-        return static_cast<bool>(state.reserveCommit(generation));
-    };
-    EXPECT_TRUE(ctx, state.permitActivatedGeneration(1));
-    EXPECT_TRUE(ctx, canReserve(1));
-    EXPECT_TRUE(ctx, state.purge(MediaAvGenerationPurge{1, 2, 1}));
-    EXPECT_FALSE(ctx, canReserve(1));
-    EXPECT_FALSE(ctx, canReserve(2));
-    EXPECT_FALSE(ctx, state.permitActivatedGeneration(3));
-    EXPECT_TRUE(ctx, state.permitActivatedGeneration(2));
-    EXPECT_FALSE(ctx, canReserve(1));
-    EXPECT_TRUE(ctx, canReserve(2));
-}
-
-void testGenerationPurgeWaitsForCommitReservation(TestContext& ctx)
-{
-    MediaProtocolOutputGenerationState state("scheduler_generation_state");
-    EXPECT_TRUE(ctx, state.permitActivatedGeneration(1));
-    auto reservation = state.reserveCommit(1);
-    EXPECT_TRUE(ctx, reservation);
-    if (!reservation) return;
-
-    std::promise<void> purgeStarted;
-    auto purgeFinished = std::async(
-        std::launch::async,
-        [&state, &purgeStarted] {
-            purgeStarted.set_value();
-            return state.purge(MediaAvGenerationPurge{1, 2, 1});
-        });
-    purgeStarted.get_future().wait();
-    EXPECT_EQ(
-        ctx,
-        purgeFinished.wait_for(std::chrono::milliseconds(0)),
-        std::future_status::timeout);
-
-    reservation = ::media::Result<
-        MediaProtocolOutputGenerationCommitReservation>::failure(
-            ::media::ErrorInfo::cancelled("release reservation"));
-    EXPECT_TRUE(ctx, purgeFinished.get());
-    EXPECT_FALSE(ctx, state.reserveCommit(1));
-    EXPECT_TRUE(ctx, state.permitActivatedGeneration(2));
-    EXPECT_TRUE(ctx, state.reserveCommit(2));
-}
 
 class FixedMasterClock final : public MediaMasterClock {
 public:
@@ -103,6 +103,19 @@ private:
 constexpr MediaRunningTime ms(std::int64_t value) noexcept
 {
     return MediaRunningTime::fromNanoseconds(value * 1'000'000);
+}
+
+bool waitForOutputPermitHeld(
+    const std::shared_ptr<MediaAvEpochTransitionService>& service)
+{
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+    while (!MediaAvEpochTransitionServiceTestAccess::
+               outputPermitMutexLocked(service)) {
+        if (std::chrono::steady_clock::now() >= deadline) return false;
+        std::this_thread::yield();
+    }
+    return true;
 }
 
 MediaRealtimeRtpTranscodeRequest completeRequest()
@@ -478,7 +491,8 @@ MediaBufferRef canonicalUnit(
     TestContext& ctx,
     MediaScheduledStream stream,
     std::uint64_t sequence,
-    std::int64_t presentationMs)
+    std::int64_t presentationMs,
+    std::uint64_t generation)
 {
     const MediaStreamKind kind = stream == MediaScheduledStream::Video
         ? MediaStreamKind::Video
@@ -496,7 +510,7 @@ MediaBufferRef canonicalUnit(
                 ? "task7-video"
                 : "task7-audio",
             MediaSourceAccessUnitSequence(sequence),
-            MediaTimeMappingConfidence::Locked, 1});
+            MediaTimeMappingConfidence::Locked, generation});
     auto created = MediaCanonicalAccessUnitBuffer::create(
         std::move(packet).value(), std::move(lineage),
         stream == MediaScheduledStream::Audio
@@ -793,9 +807,9 @@ void testActiveSharedSchedulerRoutesEqualEpochWithoutDuplicateRetry(
                          MediaAvSyncGroupRuntime::LifecycleState::Active);
 
     const auto canonicalVideo = canonicalUnit(
-        ctx, MediaScheduledStream::Video, 1, 0);
+        ctx, MediaScheduledStream::Video, 1, 0, 1);
     const auto canonicalAudio = canonicalUnit(
-        ctx, MediaScheduledStream::Audio, 1, 0);
+        ctx, MediaScheduledStream::Audio, 1, 0, 1);
     EXPECT_TRUE(ctx, execution.findInputChannel(schedulerIt->id, "video")
                          ->push(canonicalVideo));
     EXPECT_TRUE(ctx, execution.findInputChannel(schedulerIt->id, "audio")
@@ -945,10 +959,10 @@ void testPurgedGenerationCannotDrainRetainedSchedulerCommit(TestContext& ctx)
     EXPECT_EQ(ctx, serialized->size(), serializedCapacity);
     EXPECT_TRUE(ctx, execution.findInputChannel(schedulerIt->id, "video")
                          ->push(canonicalUnit(
-                             ctx, MediaScheduledStream::Video, 1, 0)));
+                             ctx, MediaScheduledStream::Video, 1, 0, 1)));
     EXPECT_TRUE(ctx, execution.findInputChannel(schedulerIt->id, "audio")
                          ->push(canonicalUnit(
-                             ctx, MediaScheduledStream::Audio, 1, 0)));
+                             ctx, MediaScheduledStream::Audio, 1, 0, 1)));
     execution.findInputChannel(schedulerIt->id, "video")->close();
     execution.findInputChannel(schedulerIt->id, "audio")->close();
 
@@ -962,10 +976,158 @@ void testPurgedGenerationCannotDrainRetainedSchedulerCommit(TestContext& ctx)
     std::size_t drained = 0;
     while (serialized->tryPop(value)) ++drained;
     EXPECT_EQ(ctx, drained, serializedCapacity);
-    expectProcessState(
-        ctx, *scheduler, execution, MediaNodeProcessState::Progress);
+    auto dropped = scheduler->process(execution);
+    EXPECT_FALSE(ctx, dropped);
     EXPECT_EQ(ctx, serialized->size(), static_cast<std::size_t>(0));
     EXPECT_TRUE(ctx, scheduler->stop(execution));
+}
+
+void testSchedulerPushAndCommitLinearizeGenerationRollover(TestContext& ctx)
+{
+    std::optional<MediaRealtimeRtpTranscodePlan> owner;
+    const auto* plan = completeRuntimePlan(ctx, owner);
+    if (!plan) return;
+
+    MediaGraph graph;
+    const auto video = graph.addNode(MediaNodeKind::DebugDump, "video");
+    const auto audio = graph.addNode(MediaNodeKind::DebugDump, "audio");
+    const auto schedulerId =
+        graph.addNode(MediaNodeKind::AvOutputScheduler, "scheduler");
+    const auto sink = graph.addNode(MediaNodeKind::DebugDump, "sink");
+    graph.setNodeOption(
+        schedulerId, "av_scheduler.sync_group", plan->groupKey.value());
+    graph.setNodeOption(
+        schedulerId, "av_scheduler.transport_lead_ns", "0");
+    graph.addOutputPort(
+        video, "canonical", MediaStreamKind::Video,
+        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+    graph.addOutputPort(
+        audio, "canonical", MediaStreamKind::Audio,
+        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+    graph.addInputPort(
+        schedulerId, "video", MediaStreamKind::Video,
+        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+    graph.addInputPort(
+        schedulerId, "audio", MediaStreamKind::Audio,
+        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+    graph.addOutputPort(
+        schedulerId, "scheduled", MediaStreamKind::Any,
+        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+    graph.addInputPort(
+        sink, "scheduled", MediaStreamKind::Any,
+        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+    const auto inputPolicy = MediaBlockingEdgePolicyPlanner::planQueue(2);
+    graph.connect(
+        video, "canonical", schedulerId, "video", "video", inputPolicy);
+    graph.connect(
+        audio, "canonical", schedulerId, "audio", "audio", inputPolicy);
+    graph.connect(
+        schedulerId, "scheduled", sink, "scheduled", "scheduled",
+        MediaBlockingEdgePolicyPlanner::planAtomicOutput(2));
+
+    MediaGraphExecutionContext execution;
+    EXPECT_TRUE(ctx, execution.compile(graph));
+    if (!execution.compiled()) return;
+    const auto transitionPlan =
+        media_transcode::test::schedulerOnlyComponentTransitionPlan(
+            plan->transition.acknowledgementTimeout,
+            plan->transition.terminalDrainWindow);
+    auto transition = MediaAvEpochTransitionService::create(transitionPlan);
+    auto sharedEpoch = MediaSharedNtpEpoch::create(
+        ms(0), std::chrono::nanoseconds(0));
+    EXPECT_TRUE(ctx, transition && sharedEpoch);
+    if (!transition || !sharedEpoch) return;
+    const MediaPlaybackEpoch firstEpoch{ms(0), ms(0), 1};
+    EXPECT_TRUE(ctx, MediaAvEpochTransitionServiceTestAccess::activateInitial(
+                         transition.value(), firstEpoch));
+    EXPECT_TRUE(ctx, execution.registerAvSyncGroup(
+                         plan->groupKey, plan->synchronization,
+                         std::make_shared<FixedMasterClock>(ms(0)),
+                         std::make_shared<const MediaSharedNtpEpoch>(
+                             std::move(sharedEpoch).value()),
+                         transition.value()));
+
+    MediaAvOutputSchedulerNode scheduler(schedulerId);
+    EXPECT_TRUE(ctx, scheduler.start(execution));
+    auto* videoInput = execution.findInputChannel(schedulerId, "video");
+    auto* audioInput = execution.findInputChannel(schedulerId, "audio");
+    auto* output = execution.findInputChannel(sink, "scheduled");
+    EXPECT_TRUE(ctx, videoInput && audioInput && output);
+    if (!videoInput || !audioInput || !output) return;
+    auto configured = scheduler.process(execution);
+    EXPECT_TRUE(ctx, configured);
+    if (configured) {
+        EXPECT_EQ(ctx, configured.value().state,
+                  MediaNodeProcessState::Waiting);
+    }
+    EXPECT_TRUE(ctx, videoInput->push(canonicalUnit(
+                         ctx, MediaScheduledStream::Video, 1, 0, 1)));
+    EXPECT_TRUE(ctx, audioInput->push(canonicalUnit(
+                         ctx, MediaScheduledStream::Audio, 1, 0, 1)));
+
+    auto channelLock =
+        MediaChannelAtomicOutputTestAccess::lockMutation(*output);
+    std::promise<void> processStarted;
+    auto committing = std::async(
+        std::launch::async,
+        [&scheduler, &execution, &processStarted] {
+            processStarted.set_value();
+            return scheduler.process(execution);
+        });
+    processStarted.get_future().wait();
+    EXPECT_TRUE(ctx, waitForOutputPermitHeld(transition.value()));
+    EXPECT_EQ(ctx,
+              committing.wait_for(std::chrono::milliseconds(0)),
+              std::future_status::timeout);
+    std::promise<void> closingStarted;
+    auto closing = std::async(
+        std::launch::async,
+        [&transition, &closingStarted] {
+            closingStarted.set_value();
+            return transition.value()->beginReacquisition(1, 2);
+        });
+    closingStarted.get_future().wait();
+    EXPECT_EQ(ctx,
+              closing.wait_for(std::chrono::milliseconds(50)),
+              std::future_status::timeout);
+    channelLock.unlock();
+    auto committed = committing.get();
+    EXPECT_TRUE(ctx, committed);
+    if (committed) {
+        EXPECT_EQ(ctx, committed.value().state,
+                  MediaNodeProcessState::Progress);
+    }
+    EXPECT_EQ(ctx, output->size(), std::size_t{1});
+    MediaBufferRef first;
+    EXPECT_TRUE(ctx, output->tryPop(first));
+    auto purge = closing.get();
+    EXPECT_TRUE(ctx, purge);
+    if (!purge) return;
+    EXPECT_TRUE(ctx, scheduler.generationPurgeTarget()->purge(purge.value()));
+
+    EXPECT_TRUE(ctx, transition.value()->acknowledge(
+                         MediaAvGenerationAcknowledgement{
+                             MediaAvGenerationParticipant::Scheduler,
+                             purge.value().transitionSequence,
+                             ::media::Status::success()}));
+    const MediaPlaybackEpoch nextEpoch{ms(0), ms(0), 2};
+    EXPECT_TRUE(ctx, MediaAvEpochTransitionServiceTestAccess::activateNext(
+                         transition.value(),
+                         purge.value().transitionSequence,
+                         nextEpoch));
+    EXPECT_TRUE(ctx, videoInput->push(canonicalUnit(
+                         ctx, MediaScheduledStream::Video, 2, 0, 2)));
+    EXPECT_TRUE(ctx, audioInput->push(canonicalUnit(
+                         ctx, MediaScheduledStream::Audio, 2, 0, 2)));
+    auto next = scheduler.process(execution);
+    EXPECT_TRUE(ctx, next);
+    MediaBufferRef second;
+    EXPECT_TRUE(ctx, output->tryPop(second));
+    const auto* scheduled =
+        dynamic_cast<const MediaScheduledAccessUnit*>(second.get());
+    EXPECT_TRUE(ctx, scheduled != nullptr);
+    if (scheduled) EXPECT_EQ(ctx, scheduled->generation(), std::uint64_t{2});
+    EXPECT_TRUE(ctx, scheduler.stop(execution));
 }
 
 } // namespace
@@ -973,8 +1135,6 @@ void testPurgedGenerationCannotDrainRetainedSchedulerCommit(TestContext& ctx)
 int main()
 {
     TestContext ctx;
-    testSchedulerGenerationPermitClosesUntilExactActivation(ctx);
-    testGenerationPurgeWaitsForCommitReservation(ctx);
     testSegmentBuildsOneSharedSchedulerAndOneRouter(ctx);
     testInterleavedUnitsAndIdenticalDispatchEpochsRouteExactlyOnce(ctx);
     testSerializedRouterPreservesGlobalAvOrder(ctx);
@@ -988,6 +1148,7 @@ int main()
     testBlockedTerminalPreflightsBothOutputsBeforeRetry(ctx);
     testActiveSharedSchedulerRoutesEqualEpochWithoutDuplicateRetry(ctx);
     testPurgedGenerationCannotDrainRetainedSchedulerCommit(ctx);
+    testSchedulerPushAndCommitLinearizeGenerationRollover(ctx);
     if (ctx.failures != 0) return 1;
     std::cout << "A/V scheduled output tests passed\n";
     return 0;

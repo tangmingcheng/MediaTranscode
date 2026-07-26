@@ -440,7 +440,7 @@ void testTaskFourRuntimeKindsAreAppendOnly(TestContext& ctx)
 void testActivatedEventIsCompleteAndImmutable(TestContext& ctx)
 {
     auto created = MediaPlaybackEpochActivatedBuffer::create(
-        MediaAvSyncGroupKey("task4-group"), epoch(), origin());
+        MediaAvSyncGroupKey("task4-group"), epoch(), origin(), std::nullopt);
     EXPECT_TRUE(ctx, created);
     const auto* event = created
         ? dynamic_cast<const MediaPlaybackEpochActivatedBuffer*>(created.value().get())
@@ -452,9 +452,11 @@ void testActivatedEventIsCompleteAndImmutable(TestContext& ctx)
         EXPECT_EQ(ctx, event->audioOrigin(), origin());
     }
     EXPECT_FALSE(ctx, MediaPlaybackEpochActivatedBuffer::create(
-                          MediaAvSyncGroupKey(""), epoch(), origin()));
+                          MediaAvSyncGroupKey(""), epoch(), origin(),
+                          std::nullopt));
     EXPECT_FALSE(ctx, MediaPlaybackEpochActivatedBuffer::create(
-                          MediaAvSyncGroupKey("task4-group"), epoch(2), origin(1)));
+                          MediaAvSyncGroupKey("task4-group"), epoch(2), origin(1),
+                          std::nullopt));
 }
 
 void testActivationReleaseTransactionPreservesReferences(TestContext& ctx)

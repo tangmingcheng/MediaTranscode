@@ -76,9 +76,18 @@ ExplicitMediaMuxSessionFactory::ExplicitMediaMuxSessionFactory(
                 ::media::ErrorInfo::invalidArgument(
                     "project MPEG-TS mux session requires planned video and audio"));
         }
+        auto generationSession = std::dynamic_pointer_cast<
+            ProjectMpegTsGenerationSessionState>(
+                m_generationState->sessionState());
+        if (!generationSession) {
+            return ::media::Result<std::unique_ptr<MediaMuxSession>>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "project MPEG-TS mux session requires its typed generation session"));
+        }
         return ::media::Result<std::unique_ptr<MediaMuxSession>>::success(
             std::make_unique<ProjectMpegTsMuxSessionAdapter>(
-                m_generationState));
+                ProjectMpegTsGenerationAuthority{
+                    m_generationState, std::move(generationSession)}));
     }
     }
     return ::media::Result<std::unique_ptr<MediaMuxSession>>::failure(

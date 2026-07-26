@@ -44,10 +44,40 @@ MediaAvOutputSchedulerNode::MediaAvOutputSchedulerNode(
     MediaNodeId nodeId,
     VideoControllerFactory controllerFactory)
     : FFmpegNodeRuntime(nodeId, staticKind(), "MediaAvOutputSchedulerNode")
-    , m_videoControllerFactory(std::move(controllerFactory))
+    , m_generationSession(
+          std::make_shared<MediaAvSchedulerGenerationState>())
     , m_generationState(
           std::make_shared<MediaProtocolOutputGenerationState>(
-              std::string(generationPurgeIdentity())))
+              std::string(generationPurgeIdentity()),
+              m_generationSession))
+    , m_videoControllerFactory(std::move(controllerFactory))
+    , m_videoController(m_generationSession->videoController)
+    , m_activeGeneration(m_generationSession->activeGeneration)
+    , m_videoHead(m_generationSession->videoHead)
+    , m_audioHead(m_generationSession->audioHead)
+    , m_terminal(m_generationSession->terminal)
+    , m_lastDisplayedVideoClone(
+          m_generationSession->lastDisplayedVideoClone)
+    , m_lastDisplayedVideoSequence(
+          m_generationSession->lastDisplayedVideoSequence)
+    , m_lastDisplayedVideoMasterTime(
+          m_generationSession->lastDisplayedVideoMasterTime)
+    , m_heldControllerSequence(
+          m_generationSession->heldControllerSequence)
+    , m_pendingCommit(m_generationSession->pendingCommit)
+    , m_completedCommitResult(
+          m_generationSession->completedCommitResult)
+    , m_nextControllerSequence(
+          m_generationSession->nextControllerSequence)
+    , m_videoEof(m_generationSession->videoEof)
+    , m_audioEof(m_generationSession->audioEof)
+    , m_nextEqualTimeVideo(
+          m_generationSession->nextEqualTimeVideo)
+    , m_firstVideoHeadDiagnosticEmitted(
+          m_generationSession->firstVideoHeadDiagnosticEmitted)
+    , m_firstAudioHeadDiagnosticEmitted(
+          m_generationSession->firstAudioHeadDiagnosticEmitted)
+    , m_missingMediaWait(m_generationSession->missingMediaWait)
 {
 }
 
@@ -112,24 +142,23 @@ MediaAvOutputSchedulerNode::generationPurgeTarget() const noexcept
         return ::media::Status::failure(::media::ErrorInfo::notInitialized(
             "MediaAvOutputSchedulerNode requires a video controller factory"));
     }
-    if (!m_group || m_group->lifecycleState() !=
-            MediaAvSyncGroupRuntime::LifecycleState::Active) {
+    if (!m_group) {
         return ::media::Status::failure(::media::ErrorInfo::notInitialized(
             "MediaAvOutputSchedulerNode requires an active sync group"));
     }
-    auto epoch = m_group->playbackEpoch();
-    if (!epoch) return ::media::Status::failure(epoch.error());
-    if (auto permitted = m_generationState->permitActivatedGeneration(
-            epoch.value().generation); !permitted) {
-        return permitted;
+    auto activation =
+        m_generationState->permitAuthorityActivation(*m_group);
+    if (!activation) {
+        return ::media::Status::failure(activation.error());
     }
     auto controller = m_videoControllerFactory(
-        m_group->plan(), epoch.value().generation);
+        m_group->plan(), activation.value().epoch.generation);
     if (!controller) {
         return ::media::Status::failure(controller.error().toErrorInfo());
     }
     m_videoController = std::make_unique<MediaVideoSyncController>(
         std::move(controller).value());
+    m_activeGeneration = activation.value().epoch.generation;
     return ::media::Status::success();
 }
 
@@ -184,30 +213,20 @@ MediaAvOutputSchedulerNode::generationPurgeTarget() const noexcept
 ::media::Result<MediaNodeProcessResult> MediaAvOutputSchedulerNode::onProcess(
     MediaGraphExecutionContext& context)
 {
+    if (m_completedCommitResult) {
+        auto completed = *m_completedCommitResult;
+        m_completedCommitResult.reset();
+        return ::media::Result<MediaNodeProcessResult>::success(completed);
+    }
     if (m_pendingCommit) {
-        if (auto permitted = validateCommitGeneration(
-                m_pendingCommit->generation); !permitted) {
-            cancelPendingOutputTransfer();
-            clearSchedulingState();
-            return ::media::Result<MediaNodeProcessResult>::success(
-                MediaNodeProcessResult::waiting());
-        }
-        if (pendingOutputBufferCount() != 0) return processWaiting();
-        auto commit = std::move(*m_pendingCommit);
-        m_pendingCommit.reset();
-        return ::media::Result<MediaNodeProcessResult>::success(
-            applyCommit(std::move(commit)));
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::internalError(
+                "A/V scheduler retained commit lost its output transfer transaction"));
     }
     if (!m_group || !m_videoController) {
         return ::media::Result<MediaNodeProcessResult>::failure(
             ::media::ErrorInfo::notInitialized(
                 "A/V scheduler has no active scheduling state"));
-    }
-    if (m_group->lifecycleState() !=
-        MediaAvSyncGroupRuntime::LifecycleState::Active) {
-        return ::media::Result<MediaNodeProcessResult>::failure(
-            ::media::ErrorInfo::cancelled(
-                "A/V scheduler sync group is not active"));
     }
     auto video = fillHead(context, Input::Video);
     if (!video) return ::media::Result<MediaNodeProcessResult>::failure(video.error());
@@ -448,18 +467,17 @@ MediaAvOutputSchedulerNode::arbitrateControlHeads()
         if (!head || head->kind() == MediaAvSchedulerHeadKind::Control) {
             return ::media::Result<bool>::success(false);
         }
-        auto disposition = m_group->observeGeneration(head->generation());
-        if (!disposition) {
-            return ::media::Result<bool>::failure(disposition.error());
+        if (!m_activeGeneration) {
+            return ::media::Result<bool>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "A/V scheduler generation preflight has no active generation"));
         }
-        if (disposition.value() ==
-            MediaAvSyncGroupRuntime::GenerationDisposition::ReacquisitionRequired) {
+        if (head->generation() > *m_activeGeneration) {
             return ::media::Result<bool>::failure(
                 ::media::ErrorInfo::cancelled(
                     "A/V scheduler requires explicit generation reacquisition"));
         }
-        if (disposition.value() ==
-            MediaAvSyncGroupRuntime::GenerationDisposition::Old) {
+        if (head->generation() < *m_activeGeneration) {
             head.reset();
             if (video) {
                 m_heldControllerSequence.reset();
@@ -559,18 +577,17 @@ MediaAvOutputSchedulerNode::processSelected(
     if (!emit) {
         return ::media::Result<MediaNodeProcessResult>::failure(emit.error());
     }
-    auto epoch = m_group->playbackEpoch();
-    if (!epoch) return ::media::Result<MediaNodeProcessResult>::failure(epoch.error());
-    auto generation = m_group->observeGeneration(m_videoHead->generation());
-    if (!generation) return ::media::Result<MediaNodeProcessResult>::failure(
-        generation.error());
-    if (generation.value() == MediaAvSyncGroupRuntime::GenerationDisposition::Old) {
+    if (!m_activeGeneration) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "Video scheduler has no active generation"));
+    }
+    if (m_videoHead->generation() < *m_activeGeneration) {
         m_videoHead.reset();
         m_heldControllerSequence.reset();
         return processProgress();
     }
-    if (generation.value() ==
-        MediaAvSyncGroupRuntime::GenerationDisposition::ReacquisitionRequired) {
+    if (m_videoHead->generation() > *m_activeGeneration) {
         return ::media::Result<MediaNodeProcessResult>::failure(
             ::media::ErrorInfo::cancelled(
                 "Video scheduler requested explicit generation reacquisition"));
@@ -604,11 +621,11 @@ MediaAvOutputSchedulerNode::processSelected(
               dispatch.value(),
               target.value(),
               *m_lastDisplayedVideoMasterTime,
-              decisionHorizon.value(), epoch.value().generation,
+              decisionHorizon.value(), *m_activeGeneration,
               controllerSequence, now.value()})
         : m_videoController->update(MediaVideoFrameMeasurement{
               dispatch.value(), target.value(), decisionHorizon.value(),
-              epoch.value().generation,
+              *m_activeGeneration,
               controllerSequence,
               m_videoHead->canonical()->media()->isKeyFrame(),
               now.value()});
@@ -680,10 +697,11 @@ MediaAvOutputSchedulerNode::processSelected(
             : cause == MediaVideoReacquisitionCause::GenerationMismatch
             ? MediaAvReacquisitionReason::FutureGeneration
             : MediaAvReacquisitionReason::HardDiscontinuity;
-        auto requested = m_group->requestReacquisition(MediaAvReacquisitionRequest{
+        auto requested = m_group->requestReacquisition(
+            MediaAvReacquisitionRequest{
             cause == MediaVideoReacquisitionCause::GenerationMismatch
                 ? decision.value().generation()
-                : epoch.value().generation,
+                : *m_activeGeneration,
             reason});
         if (!requested) {
             return ::media::Result<MediaNodeProcessResult>::failure(
@@ -722,15 +740,16 @@ MediaAvOutputSchedulerNode::processSelected(
     MediaGraphExecutionContext& context)
 {
     const auto* unit = m_audioHead->canonical();
-    auto generation = m_group->observeGeneration(unit->generation());
-    if (!generation) return ::media::Result<MediaNodeProcessResult>::failure(
-        generation.error());
-    if (generation.value() == MediaAvSyncGroupRuntime::GenerationDisposition::Old) {
+    if (!m_activeGeneration) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "Audio scheduler has no active generation"));
+    }
+    if (unit->generation() < *m_activeGeneration) {
         m_audioHead.reset();
         return processProgress();
     }
-    if (generation.value() ==
-        MediaAvSyncGroupRuntime::GenerationDisposition::ReacquisitionRequired) {
+    if (unit->generation() > *m_activeGeneration) {
         return ::media::Result<MediaNodeProcessResult>::failure(
             ::media::ErrorInfo::cancelled(
                 "Audio scheduler requested explicit generation reacquisition"));
@@ -755,11 +774,6 @@ MediaAvOutputSchedulerNode::processSelected(
     if (emit.value() > now.value()) {
         return ::media::Result<MediaNodeProcessResult>::success(
             MediaNodeProcessResult::waitingUntil(*m_groupKey, emit.value()));
-    }
-    auto epoch = m_group->playbackEpoch();
-    if (!epoch) {
-        return ::media::Result<MediaNodeProcessResult>::failure(
-            epoch.error());
     }
     auto output = MediaAvScheduledOutputBuilder::audio(
         *unit, target.value(), dispatch.value(), emit.value());
@@ -788,13 +802,14 @@ MediaAvOutputSchedulerNode::processTerminal(
         if (control->controlKind() == MediaControlBufferKind::Abort) {
             m_group->markAborted();
         } else if (control->controlKind() == MediaControlBufferKind::Flush) {
-            auto epoch = m_group->playbackEpoch();
-            if (!epoch) {
+            if (!m_activeGeneration) {
                 return ::media::Result<MediaNodeProcessResult>::failure(
-                    epoch.error());
+                    ::media::ErrorInfo::notInitialized(
+                        "A/V scheduler flush has no active generation"));
             }
-            auto requested = m_group->requestReacquisition(MediaAvReacquisitionRequest{
-                epoch.value().generation,
+            auto requested = m_group->requestReacquisition(
+                MediaAvReacquisitionRequest{
+                *m_activeGeneration,
                 MediaAvReacquisitionReason::Flush});
             if (!requested) {
                 return ::media::Result<MediaNodeProcessResult>::failure(
@@ -837,46 +852,26 @@ MediaAvOutputSchedulerNode::emitWithCommit(
     if (const auto* scheduled =
             dynamic_cast<const MediaScheduledAccessUnit*>(output.get())) {
         commit.generation = scheduled->generation();
-    } else if (m_group) {
-        const auto snapshot = m_group->epochTransitionSnapshot();
-        if (snapshot.playbackEpoch) {
-            commit.generation = snapshot.playbackEpoch->generation;
-        }
+    } else {
+        commit.generation = m_activeGeneration;
     }
-    if (auto permitted = validateCommitGeneration(commit.generation);
-        !permitted) {
-        return ::media::Result<MediaNodeProcessResult>::failure(
-            permitted.error());
-    }
+    m_pendingCommit = std::move(commit);
     auto status = emitOutput(context, "scheduled", output);
     if (status) {
-        return ::media::Result<MediaNodeProcessResult>::success(
-            applyCommit(std::move(commit)));
+        if (!m_completedCommitResult) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                ::media::ErrorInfo::internalError(
+                    "A/V scheduler accepted output without committing its generation state"));
+        }
+        auto completed = *m_completedCommitResult;
+        m_completedCommitResult.reset();
+        return ::media::Result<MediaNodeProcessResult>::success(completed);
     }
     if (status.error().code == ::media::ErrorCode::WouldBlock) {
-        m_pendingCommit = std::move(commit);
         return processProgress(std::move(status));
     }
+    m_pendingCommit.reset();
     return ::media::Result<MediaNodeProcessResult>::failure(status.error());
-}
-
-::media::Status MediaAvOutputSchedulerNode::validateCommitGeneration(
-    std::optional<std::uint64_t> generation) const
-{
-    if (!m_group || !generation) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::notInitialized(
-                "A/V scheduler commit requires a planned generation"));
-    }
-    const auto snapshot = m_group->epochTransitionSnapshot();
-    if (snapshot.poisoned || !snapshot.outputPermitted ||
-        !snapshot.playbackEpoch ||
-        snapshot.playbackEpoch->generation != *generation) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::cancelled(
-                "A/V scheduler commit is closed for this generation"));
-    }
-    return ::media::Status::success();
 }
 
 ::media::Result<
@@ -890,19 +885,16 @@ MediaAvOutputSchedulerNode::reserveOutputCommit(
         generation = scheduled->generation();
     } else if (m_pendingCommit && m_pendingCommit->generation) {
         generation = m_pendingCommit->generation;
-    } else if (m_group) {
-        const auto snapshot = m_group->epochTransitionSnapshot();
-        if (snapshot.playbackEpoch) {
-            generation = snapshot.playbackEpoch->generation;
-        }
     }
-    if (auto permitted = validateCommitGeneration(generation); !permitted) {
+    if (!m_group || !generation) {
         return ::media::Result<
             std::optional<
                 MediaProtocolOutputGenerationCommitReservation>>::failure(
-                    permitted.error());
+                    ::media::ErrorInfo::notInitialized(
+                        "A/V scheduler commit requires a planned generation"));
     }
-    auto reservation = m_generationState->reserveCommit(*generation);
+    auto reservation = m_generationState->reserveCommit(
+        *m_group, *generation);
     if (!reservation) {
         return ::media::Result<
             std::optional<
@@ -913,6 +905,20 @@ MediaAvOutputSchedulerNode::reserveOutputCommit(
         std::optional<MediaProtocolOutputGenerationCommitReservation>>::
         success(std::optional<MediaProtocolOutputGenerationCommitReservation>(
             std::move(reservation).value()));
+}
+
+::media::Status MediaAvOutputSchedulerNode::commitReservedOutput(
+    const MediaBufferRef&)
+{
+    if (!m_pendingCommit || !m_pendingCommit->generation) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::internalError(
+                "A/V scheduler output commit has no matching reserved generation transaction"));
+    }
+    m_completedCommitResult =
+        applyCommit(std::move(*m_pendingCommit));
+    m_pendingCommit.reset();
+    return ::media::Status::success();
 }
 
 MediaNodeProcessResult MediaAvOutputSchedulerNode::applyCommit(
@@ -977,7 +983,7 @@ void MediaAvOutputSchedulerNode::abort(
 
 void MediaAvOutputSchedulerNode::resetState() noexcept
 {
-    clearSchedulingState();
+    cancelPendingOutputTransfer();
     m_groupKey.reset();
     m_group.reset();
     m_generationState->resetLifecycle();
@@ -986,6 +992,7 @@ void MediaAvOutputSchedulerNode::resetState() noexcept
 void MediaAvOutputSchedulerNode::clearSchedulingState() noexcept
 {
     m_videoController.reset();
+    m_activeGeneration.reset();
     m_videoHead.reset();
     m_audioHead.reset();
     m_terminal.reset();
@@ -994,6 +1001,7 @@ void MediaAvOutputSchedulerNode::clearSchedulingState() noexcept
     m_lastDisplayedVideoMasterTime.reset();
     m_heldControllerSequence.reset();
     m_pendingCommit.reset();
+    m_completedCommitResult.reset();
     m_nextControllerSequence = 1;
     m_videoEof = false;
     m_audioEof = false;

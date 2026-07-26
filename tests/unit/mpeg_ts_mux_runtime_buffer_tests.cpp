@@ -61,7 +61,7 @@ void runtimePlanBufferIsImmutableAndValidated(TestContext& ctx)
         MediaRunningTime::fromNanoseconds(2'000'000'000),
         MediaRunningTime::fromNanoseconds(3'000'000'000), 17};
     auto created = MediaTsMuxRuntimePlanBuffer::create(
-        muxPlan(), epoch, MediaAvSyncGroupKey("program-a"));
+        muxPlan(), epoch, MediaAvSyncGroupKey("program-a"), std::nullopt);
     EXPECT_TRUE(ctx, created);
     if (created) {
         auto* buffer = dynamic_cast<MediaTsMuxRuntimePlanBuffer*>(created.value().get());
@@ -76,11 +76,12 @@ void runtimePlanBufferIsImmutableAndValidated(TestContext& ctx)
         }
     }
     EXPECT_FALSE(ctx, MediaTsMuxRuntimePlanBuffer::create(
-                          muxPlan(), epoch, MediaAvSyncGroupKey("")));
+                          muxPlan(), epoch, MediaAvSyncGroupKey(""),
+                          std::nullopt));
     EXPECT_FALSE(ctx, MediaTsMuxRuntimePlanBuffer::create(
                           muxPlan(),
                           MediaPlaybackEpoch{epoch.sourceStart, epoch.masterRelease, 0},
-                          MediaAvSyncGroupKey("program-a")));
+                          MediaAvSyncGroupKey("program-a"), std::nullopt));
 }
 
 void accessUnitOwnsPacketAndExposesSynchronousView(TestContext& ctx)

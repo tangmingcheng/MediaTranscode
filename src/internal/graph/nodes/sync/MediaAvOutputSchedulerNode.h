@@ -6,6 +6,7 @@
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
 #include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
 #include "internal/graph/sync/MediaVideoSyncController.h"
+#include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
 
 #include <memory>
 #include <optional>
@@ -16,7 +17,53 @@ namespace media::ffmpeg::graph {
 
 class MediaAvSyncGroupRuntime;
 class MediaAvGenerationPurgeTarget;
-class MediaProtocolOutputGenerationState;
+enum class MediaAvSchedulerInput { Video, Audio };
+
+class MediaAvSchedulerGenerationState final
+    : public MediaProtocolOutputGenerationSessionState {
+private:
+    friend class MediaAvOutputSchedulerNode;
+    void resetForGenerationPurge() noexcept override
+    {
+        videoController.reset();
+        activeGeneration.reset();
+        videoHead.reset();
+        audioHead.reset();
+        terminal.reset();
+        lastDisplayedVideoClone.reset();
+        lastDisplayedVideoSequence.reset();
+        lastDisplayedVideoMasterTime.reset();
+        heldControllerSequence.reset();
+        pendingCommit.reset();
+        completedCommitResult.reset();
+        nextControllerSequence = 1;
+        videoEof = false;
+        audioEof = false;
+        nextEqualTimeVideo = false;
+        firstVideoHeadDiagnosticEmitted = false;
+        firstAudioHeadDiagnosticEmitted = false;
+        missingMediaWait.reset();
+    }
+
+    std::unique_ptr<MediaVideoSyncController> videoController;
+    std::optional<std::uint64_t> activeGeneration;
+    std::optional<MediaAvSchedulerHead> videoHead;
+    std::optional<MediaAvSchedulerHead> audioHead;
+    MediaBufferRef terminal;
+    MediaBufferRef lastDisplayedVideoClone;
+    std::optional<MediaSourceAccessUnitSequence> lastDisplayedVideoSequence;
+    std::optional<MediaRunningTime> lastDisplayedVideoMasterTime;
+    std::optional<std::uint64_t> heldControllerSequence;
+    std::optional<MediaAvSchedulerPendingCommit> pendingCommit;
+    std::optional<MediaNodeProcessResult> completedCommitResult;
+    std::optional<std::uint64_t> nextControllerSequence{1};
+    bool videoEof = false;
+    bool audioEof = false;
+    bool nextEqualTimeVideo = false;
+    bool firstVideoHeadDiagnosticEmitted = false;
+    bool firstAudioHeadDiagnosticEmitted = false;
+    std::optional<MediaAvSchedulerInput> missingMediaWait;
+};
 
 class MediaAvOutputSchedulerNode final : public FFmpegNodeRuntime {
 public:
@@ -47,9 +94,11 @@ protected:
     ::media::Result<
         std::optional<MediaProtocolOutputGenerationCommitReservation>>
     reserveOutputCommit(const MediaBufferRef& buffer) const override;
+    ::media::Status commitReservedOutput(
+        const MediaBufferRef& buffer) override;
 
 private:
-    enum class Input { Video, Audio };
+    using Input = MediaAvSchedulerInput;
     ::media::Status configure(MediaGraphExecutionContext& context);
     ::media::Status configureActiveScheduling();
     ::media::Status preflightInputAbort(
@@ -71,8 +120,6 @@ private:
         MediaGraphExecutionContext& context,
         const MediaBufferRef& output,
         MediaAvSchedulerPendingCommit commit);
-    ::media::Status validateCommitGeneration(
-        std::optional<std::uint64_t> generation) const;
     MediaNodeProcessResult applyCommit(MediaAvSchedulerPendingCommit commit);
     void logFirstMediaHead(Input input);
     void logMissingMediaWait();
@@ -82,24 +129,28 @@ private:
     std::optional<MediaAvSyncGroupKey> m_groupKey;
     MediaRunningTime m_transportLead = MediaRunningTime::fromNanoseconds(0);
     std::shared_ptr<MediaAvSyncGroupRuntime> m_group;
+    std::shared_ptr<MediaAvSchedulerGenerationState> m_generationSession;
     std::shared_ptr<MediaProtocolOutputGenerationState> m_generationState;
     VideoControllerFactory m_videoControllerFactory;
-    std::unique_ptr<MediaVideoSyncController> m_videoController;
-    std::optional<MediaAvSchedulerHead> m_videoHead;
-    std::optional<MediaAvSchedulerHead> m_audioHead;
-    MediaBufferRef m_terminal;
-    MediaBufferRef m_lastDisplayedVideoClone;
-    std::optional<MediaSourceAccessUnitSequence> m_lastDisplayedVideoSequence;
-    std::optional<MediaRunningTime> m_lastDisplayedVideoMasterTime;
-    std::optional<std::uint64_t> m_heldControllerSequence;
-    std::optional<MediaAvSchedulerPendingCommit> m_pendingCommit;
-    std::optional<std::uint64_t> m_nextControllerSequence{1};
-    bool m_videoEof = false;
-    bool m_audioEof = false;
-    bool m_nextEqualTimeVideo = false;
-    bool m_firstVideoHeadDiagnosticEmitted = false;
-    bool m_firstAudioHeadDiagnosticEmitted = false;
-    std::optional<Input> m_missingMediaWait;
+    std::unique_ptr<MediaVideoSyncController>& m_videoController;
+    std::optional<std::uint64_t>& m_activeGeneration;
+    std::optional<MediaAvSchedulerHead>& m_videoHead;
+    std::optional<MediaAvSchedulerHead>& m_audioHead;
+    MediaBufferRef& m_terminal;
+    MediaBufferRef& m_lastDisplayedVideoClone;
+    std::optional<MediaSourceAccessUnitSequence>&
+        m_lastDisplayedVideoSequence;
+    std::optional<MediaRunningTime>& m_lastDisplayedVideoMasterTime;
+    std::optional<std::uint64_t>& m_heldControllerSequence;
+    std::optional<MediaAvSchedulerPendingCommit>& m_pendingCommit;
+    std::optional<MediaNodeProcessResult>& m_completedCommitResult;
+    std::optional<std::uint64_t>& m_nextControllerSequence;
+    bool& m_videoEof;
+    bool& m_audioEof;
+    bool& m_nextEqualTimeVideo;
+    bool& m_firstVideoHeadDiagnosticEmitted;
+    bool& m_firstAudioHeadDiagnosticEmitted;
+    std::optional<Input>& m_missingMediaWait;
 };
 
 } // namespace media::ffmpeg::graph

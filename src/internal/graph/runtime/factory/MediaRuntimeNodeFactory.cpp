@@ -23,6 +23,7 @@
 #include "internal/graph/nodes/metadata/CodecResolverNode.h"
 #include "internal/graph/nodes/metadata/MetadataProbeNode.h"
 #include "internal/graph/nodes/mux/FileMuxNode.h"
+#include "internal/graph/nodes/mux/ProjectMpegTsMuxSessionAdapter.h"
 #include "internal/graph/nodes/mux/RtpMuxNode.h"
 #include "internal/graph/nodes/output/FileOutputNode.h"
 #include "internal/graph/nodes/output/RtpOutputNode.h"
@@ -447,9 +448,12 @@ template <typename Node>
                 kind.error());
         }
         if (kind.value() == MediaMuxSessionKind::ProjectMpegTs) {
+            auto generationSession =
+                std::make_shared<ProjectMpegTsGenerationSessionState>();
             auto generationState =
                 std::make_shared<MediaProtocolOutputGenerationState>(
-                    std::string(FileMuxNode::generationPurgeIdentity()));
+                    std::string(FileMuxNode::generationPurgeIdentity()),
+                    generationSession);
             return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
                 std::make_unique<FileMuxNode>(
                     node.id, std::move(generationState)));

@@ -14,12 +14,38 @@ class MediaAvReacquisitionCoordinator;
 class MediaPlaybackEpochActivationCapability;
 struct MediaAvEpochTransitionServiceTestAccess;
 
+class MediaAvOutputPermitCommitReservation final {
+public:
+    MediaAvOutputPermitCommitReservation(
+        MediaAvOutputPermitCommitReservation&&) noexcept = default;
+    MediaAvOutputPermitCommitReservation& operator=(
+        MediaAvOutputPermitCommitReservation&&) noexcept = default;
+    MediaAvOutputPermitCommitReservation(
+        const MediaAvOutputPermitCommitReservation&) = delete;
+    MediaAvOutputPermitCommitReservation& operator=(
+        const MediaAvOutputPermitCommitReservation&) = delete;
+
+private:
+    friend class MediaAvEpochTransitionService;
+    explicit MediaAvOutputPermitCommitReservation(
+        std::unique_lock<std::mutex> lock) noexcept;
+
+    std::unique_lock<std::mutex> m_lock;
+};
+
+struct MediaAvActivatedOutputPermitReservation final {
+    MediaPlaybackEpoch epoch;
+    std::optional<std::uint64_t> completedTransitionSequence;
+    MediaAvOutputPermitCommitReservation reservation;
+};
+
 struct MediaAvEpochTransitionSnapshot final {
     MediaAvGenerationReadiness readiness;
     std::optional<MediaPlaybackEpoch> playbackEpoch;
     std::optional<MediaAudioPlaybackOrigin> audioOrigin;
     bool outputPermitted;
     bool poisoned;
+    std::optional<std::uint64_t> completedTransitionSequence;
 };
 
 class MediaAvEpochTransitionService final {
@@ -35,6 +61,10 @@ public:
     ::media::Status pollTransitionTimeout(MediaRunningTime elapsedSinceBegin);
     void abort() noexcept;
     MediaAvEpochTransitionSnapshot snapshot() const noexcept;
+    ::media::Result<MediaAvOutputPermitCommitReservation>
+    reserveOutputCommit(std::uint64_t generation) const;
+    ::media::Result<MediaAvActivatedOutputPermitReservation>
+    reserveActivatedOutput() const;
     const MediaAvGenerationTransitionPlan& transitionPlan() const noexcept;
 
 private:
@@ -62,6 +92,7 @@ private:
         MediaAvGenerationReadiness::Acquiring;
     std::optional<MediaPlaybackEpoch> m_epoch;
     std::optional<MediaAudioPlaybackOrigin> m_audioOrigin;
+    std::optional<std::uint64_t> m_completedTransitionSequence;
     std::optional<::media::ErrorInfo> m_firstError;
 };
 

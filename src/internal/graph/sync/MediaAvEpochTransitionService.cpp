@@ -4,6 +4,13 @@
 
 namespace media::ffmpeg::graph {
 
+MediaAvOutputPermitCommitReservation::
+    MediaAvOutputPermitCommitReservation(
+        std::unique_lock<std::mutex> lock) noexcept
+    : m_lock(std::move(lock))
+{
+}
+
 // Activation entry points are intentionally private to the runtime capability.
 
 MediaAvEpochTransitionService::MediaAvEpochTransitionService(
@@ -48,7 +55,7 @@ MediaAvEpochTransitionService::create(MediaAvGenerationTransitionPlan plan)
 {
     auto valid = validateEpochPair(epoch, audioOrigin);
     if (!valid) return valid;
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard lock(m_mutex);
     if (m_firstError) {
         return ::media::Status::failure(*m_firstError);
     }
@@ -61,6 +68,7 @@ MediaAvEpochTransitionService::create(MediaAvGenerationTransitionPlan plan)
     if (!permitted) return permitted;
     m_epoch = epoch;
     m_audioOrigin = audioOrigin;
+    m_completedTransitionSequence.reset();
     m_readiness = MediaAvGenerationReadiness::Locked;
     return ::media::Status::success();
 }
@@ -70,7 +78,7 @@ MediaAvEpochTransitionService::beginReacquisition(
     std::uint64_t oldGeneration,
     std::uint64_t nextGeneration)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard lock(m_mutex);
     if (m_firstError) {
         return ::media::Result<MediaAvGenerationPurge>::failure(
             *m_firstError);
@@ -89,7 +97,7 @@ MediaAvEpochTransitionService::beginReacquisition(
 ::media::Result<bool> MediaAvEpochTransitionService::acknowledge(
     MediaAvGenerationAcknowledgement acknowledgement)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard lock(m_mutex);
     if (m_firstError) {
         return ::media::Result<bool>::failure(*m_firstError);
     }
@@ -113,7 +121,7 @@ MediaAvEpochTransitionService::beginReacquisition(
 ::media::Status MediaAvEpochTransitionService::pollTransitionTimeout(
     MediaRunningTime elapsedSinceBegin)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard lock(m_mutex);
     if (m_firstError) {
         return ::media::Status::failure(*m_firstError);
     }
@@ -135,7 +143,7 @@ MediaAvEpochTransitionService::beginReacquisition(
 {
     auto valid = validateEpochPair(epoch, audioOrigin);
     if (!valid) return failReacquisition(valid.error());
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard lock(m_mutex);
     if (m_firstError) {
         return ::media::Status::failure(*m_firstError);
     }
@@ -149,6 +157,7 @@ MediaAvEpochTransitionService::beginReacquisition(
     if (!published) return failLocked(published.error());
     m_epoch = epoch;
     m_audioOrigin = audioOrigin;
+    m_completedTransitionSequence = completedTransitionSequence;
     m_readiness = MediaAvGenerationReadiness::Locked;
     return ::media::Status::success();
 }
@@ -156,7 +165,7 @@ MediaAvEpochTransitionService::beginReacquisition(
 ::media::Status MediaAvEpochTransitionService::failReacquisition(
     ::media::ErrorInfo error)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard lock(m_mutex);
     return failLocked(std::move(error));
 }
 
@@ -173,7 +182,7 @@ MediaAvEpochTransitionService::beginReacquisition(
 
 void MediaAvEpochTransitionService::abort() noexcept
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard lock(m_mutex);
     m_coordinator.abort();
     m_readiness = MediaAvGenerationReadiness::Reacquire;
 }
@@ -181,14 +190,50 @@ void MediaAvEpochTransitionService::abort() noexcept
 MediaAvEpochTransitionSnapshot
 MediaAvEpochTransitionService::snapshot() const noexcept
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard lock(m_mutex);
     const std::uint64_t generation = m_epoch ? m_epoch->generation : 0;
     return MediaAvEpochTransitionSnapshot{
         m_readiness,
         m_epoch,
         m_audioOrigin,
         m_coordinator.outputPermitted(generation),
-        m_coordinator.poisoned()};
+        m_coordinator.poisoned(),
+        m_completedTransitionSequence};
+}
+
+::media::Result<MediaAvOutputPermitCommitReservation>
+MediaAvEpochTransitionService::reserveOutputCommit(
+    std::uint64_t generation) const
+{
+    std::unique_lock lock(m_mutex);
+    if (m_firstError || m_readiness != MediaAvGenerationReadiness::Locked ||
+        !m_epoch || m_epoch->generation != generation ||
+        !m_coordinator.outputPermitted(generation)) {
+        return ::media::Result<
+            MediaAvOutputPermitCommitReservation>::failure(
+                ::media::ErrorInfo::cancelled(
+                    "A/V output commit requires the exact open generation permit"));
+    }
+    return ::media::Result<MediaAvOutputPermitCommitReservation>::success(
+        MediaAvOutputPermitCommitReservation(std::move(lock)));
+}
+
+::media::Result<MediaAvActivatedOutputPermitReservation>
+MediaAvEpochTransitionService::reserveActivatedOutput() const
+{
+    std::unique_lock lock(m_mutex);
+    if (m_firstError || m_readiness != MediaAvGenerationReadiness::Locked ||
+        !m_epoch || !m_coordinator.outputPermitted(m_epoch->generation)) {
+        return ::media::Result<
+            MediaAvActivatedOutputPermitReservation>::failure(
+                ::media::ErrorInfo::cancelled(
+                    "A/V output activation requires the exact locked generation"));
+    }
+    return ::media::Result<
+        MediaAvActivatedOutputPermitReservation>::success(
+            MediaAvActivatedOutputPermitReservation{
+                *m_epoch, m_completedTransitionSequence,
+                MediaAvOutputPermitCommitReservation(std::move(lock))});
 }
 
 const MediaAvGenerationTransitionPlan&

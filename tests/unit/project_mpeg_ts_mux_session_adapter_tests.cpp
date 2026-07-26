@@ -33,10 +33,14 @@ using media_transcode::test::schedulerOnlyComponentTransitionPlan;
 
 namespace {
 
-std::shared_ptr<MediaProtocolOutputGenerationState> muxGenerationState()
+ProjectMpegTsGenerationAuthority muxGenerationState()
 {
-    return std::make_shared<MediaProtocolOutputGenerationState>(
-        "project_mpegts_mux_generation_state");
+    auto session =
+        std::make_shared<ProjectMpegTsGenerationSessionState>();
+    return {
+        std::make_shared<MediaProtocolOutputGenerationState>(
+            "project_mpegts_mux_generation_state", session),
+        std::move(session)};
 }
 
 MediaRunningTime ms(std::int64_t value)
@@ -169,7 +173,8 @@ struct Fixture final {
 
     MediaBufferRef planBuffer() const
     {
-        return MediaTsMuxRuntimePlanBuffer::create(muxPlan(), epoch, group).value();
+        return MediaTsMuxRuntimePlanBuffer::create(
+            muxPlan(), epoch, group, std::nullopt).value();
     }
 
     MediaBufferRef sinkBuffer(const std::shared_ptr<SinkState>& state) const

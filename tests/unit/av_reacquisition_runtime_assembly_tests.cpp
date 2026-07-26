@@ -27,7 +27,7 @@ struct MediaScheduledRtpSenderNodeTestAccess final {
     {
         node.m_generationState =
             std::make_shared<MediaProtocolOutputGenerationState>(
-                std::move(identity));
+                std::move(identity), node.m_sessionState);
     }
 };
 
