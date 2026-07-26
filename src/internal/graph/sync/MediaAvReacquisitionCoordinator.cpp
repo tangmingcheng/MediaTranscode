@@ -55,11 +55,73 @@ bool MediaAvReacquisitionCoordinator::matchesTransition(
     ::media::ErrorInfo error)
 {
     if (!m_firstError) {
-        m_firstError = std::move(error);
-        (void)m_transitionService->failReacquisition(*m_firstError);
+        auto failed =
+            m_transitionService->failReacquisition(std::move(error));
+        m_firstError = failed.error();
     }
     m_phase = MediaAvReacquisitionPhase::Aborted;
     return ::media::Status::failure(*m_firstError);
+}
+
+::media::Status
+MediaAvReacquisitionCoordinator::validateAndQueueRequest(
+    MediaAvReacquisitionRequest request)
+{
+    const auto active = m_transitionService->snapshot();
+    if (active.poisoned) {
+        return ::media::Status::failure(::media::ErrorInfo::cancelled(
+            "A/V reacquisition requires a live epoch transition service"));
+    }
+    if (active.readiness != MediaAvGenerationReadiness::Locked ||
+        !active.playbackEpoch || request.observedGeneration == 0) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::notInitialized(
+                "A/V reacquisition requires an active locked playback epoch"));
+    }
+
+    const std::uint64_t activeGeneration =
+        active.playbackEpoch->generation;
+    const bool future =
+        request.reason == MediaAvReacquisitionReason::FutureGeneration;
+    if (future && request.observedGeneration <= activeGeneration) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Future-generation reacquisition requires a strictly newer observation"));
+    }
+    if (!future &&
+        (request.observedGeneration != activeGeneration ||
+         activeGeneration == std::numeric_limits<std::uint64_t>::max())) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Same-generation reacquisition requires the active non-exhausted generation"));
+    }
+    if (!m_request ||
+        request.observedGeneration > m_request->observedGeneration) {
+        m_request = request;
+    }
+    return ::media::Status::success();
+}
+
+::media::Status MediaAvReacquisitionCoordinator::observe(
+    MediaAvReacquisitionRequest request)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_firstError) {
+        return ::media::Status::failure(*m_firstError);
+    }
+    if (m_phase == MediaAvReacquisitionPhase::Inactive) {
+        auto queued = validateAndQueueRequest(request);
+        return queued ? queued : failTerminal(queued.error());
+    }
+    const bool plannedNextGeneration =
+        request.reason == MediaAvReacquisitionReason::FutureGeneration &&
+        m_transition &&
+        request.observedGeneration == m_transition->nextGeneration;
+    if (matchesActiveRequest(request) || plannedNextGeneration) {
+        return ::media::Status::success();
+    }
+    return failTerminal(::media::ErrorInfo::invalidArgument(
+        "A/V reacquisition rejects incompatible generation evidence after transition begin"));
 }
 
 ::media::Status MediaAvReacquisitionCoordinator::request(
@@ -77,32 +139,20 @@ bool MediaAvReacquisitionCoordinator::matchesTransition(
             "A/V reacquisition rejects an incompatible request after transition begin"));
     }
 
+    auto queued = validateAndQueueRequest(request);
+    if (!queued) return failTerminal(queued.error());
+    request = *m_request;
     const auto active = m_transitionService->snapshot();
-    if (active.poisoned) {
-        return failTerminal(::media::ErrorInfo::cancelled(
-            "A/V reacquisition requires a live epoch transition service"));
-    }
-    if (active.readiness != MediaAvGenerationReadiness::Locked ||
-        !active.playbackEpoch || request.observedGeneration == 0) {
+    if (active.poisoned ||
+        active.readiness != MediaAvGenerationReadiness::Locked ||
+        !active.playbackEpoch) {
         return failTerminal(::media::ErrorInfo::notInitialized(
-            "A/V reacquisition requires an active locked playback epoch"));
+            "A/V reacquisition lost its active locked playback epoch"));
     }
-
     const std::uint64_t oldGeneration =
         active.playbackEpoch->generation;
     const bool future =
         request.reason == MediaAvReacquisitionReason::FutureGeneration;
-    if (future &&
-        request.observedGeneration <= oldGeneration) {
-        return failTerminal(::media::ErrorInfo::invalidArgument(
-            "Future-generation reacquisition requires a strictly newer observation"));
-    }
-    if (!future &&
-        (request.observedGeneration != oldGeneration ||
-         oldGeneration == std::numeric_limits<std::uint64_t>::max())) {
-        return failTerminal(::media::ErrorInfo::invalidArgument(
-            "Same-generation reacquisition requires the active non-exhausted generation"));
-    }
     const std::uint64_t nextGeneration =
         future ? request.observedGeneration : oldGeneration + 1;
 

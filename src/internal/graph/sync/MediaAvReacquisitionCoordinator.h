@@ -34,6 +34,7 @@ public:
            std::shared_ptr<MediaMasterClock> clock,
            std::vector<MediaAvGenerationParticipantGroup> participants);
 
+    ::media::Status observe(MediaAvReacquisitionRequest request);
     ::media::Status request(MediaAvReacquisitionRequest request);
     ::media::Status pollTimeout();
     MediaAvReacquisitionSnapshot snapshot() const noexcept;
@@ -52,6 +53,8 @@ private:
         std::vector<MediaAvGenerationParticipantGroup> participants);
 
     ::media::Status failTerminal(::media::ErrorInfo error);
+    ::media::Status validateAndQueueRequest(
+        MediaAvReacquisitionRequest request);
     bool matchesActiveRequest(
         const MediaAvReacquisitionRequest& request) const noexcept;
     bool matchesTransition(

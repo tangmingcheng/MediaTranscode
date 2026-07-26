@@ -35,16 +35,17 @@ struct MediaAvEpochTransitionServiceTestAccess final {
 
     static ::media::Status activateNext(
         const std::shared_ptr<MediaAvEpochTransitionService>& service,
-        std::uint64_t generation,
+        std::uint64_t epochGeneration,
+        std::uint64_t audioGeneration,
         std::uint64_t transitionSequence)
     {
         return service->activateNextAfter(
             transitionSequence,
             MediaPlaybackEpoch{MediaRunningTime::fromNanoseconds(30'000'000),
                                MediaRunningTime::fromNanoseconds(40'000'000),
-                               generation},
+                               epochGeneration},
             MediaAudioPlaybackOrigin{
-                generation,
+                audioGeneration,
                 MediaRunningTime::fromNanoseconds(30'000'000),
                 MediaRunningTime::fromNanoseconds(40'000'000),
                 0,
@@ -58,6 +59,23 @@ namespace {
 
 using media_transcode::test::TestContext;
 using namespace media::ffmpeg::graph;
+
+template <typename T>
+concept HasDirectEpochReacquisitionBegin = requires(T& group) {
+    group.beginEpochReacquisition(std::uint64_t{1}, std::uint64_t{2});
+};
+
+template <typename T>
+concept HasDirectEpochReacquisitionAcknowledgement = requires(
+    T& group,
+    MediaAvGenerationAcknowledgement acknowledgement) {
+    group.acknowledgeEpochReacquisition(std::move(acknowledgement));
+};
+
+static_assert(
+    !HasDirectEpochReacquisitionBegin<MediaAvSyncGroupRuntime>);
+static_assert(
+    !HasDirectEpochReacquisitionAcknowledgement<MediaAvSyncGroupRuntime>);
 
 constexpr MediaRunningTime ms(std::int64_t value) noexcept
 {
@@ -362,6 +380,7 @@ void testGroupOwnedReacquisitionPurgesAndClosesOutput(TestContext& ctx)
         MediaAvEpochTransitionServiceTestAccess::activateNext(
             fixture.transition,
             2,
+            2,
             acquiring.transition->transitionSequence));
     EXPECT_TRUE(ctx, fixture.group->markReacquisitionActivated(
                          2, acquiring.transition->transitionSequence));
@@ -386,10 +405,12 @@ void testFutureGenerationAndPreBeginSupersession(TestContext& ctx)
         return;
     }
 
-    EXPECT_EQ(ctx,
-              fixture.group->observeGeneration(2).value(),
-              MediaAvSyncGroupRuntime::GenerationDisposition::
-                  ReacquisitionRequired);
+    const auto firstObservation = fixture.group->observeGeneration(2);
+    EXPECT_TRUE(ctx, firstObservation);
+    if (!firstObservation) return;
+    const auto staleRequest = fixture.group->reacquisitionRequest();
+    EXPECT_TRUE(ctx, staleRequest.has_value());
+    if (!staleRequest) return;
     EXPECT_EQ(ctx,
               fixture.group->observeGeneration(4).value(),
               MediaAvSyncGroupRuntime::GenerationDisposition::
@@ -403,7 +424,7 @@ void testFutureGenerationAndPreBeginSupersession(TestContext& ctx)
     if (!request) return;
     EXPECT_EQ(ctx, request->observedGeneration,
               static_cast<std::uint64_t>(4));
-    EXPECT_TRUE(ctx, fixture.group->requestReacquisition(*request));
+    EXPECT_TRUE(ctx, fixture.group->requestReacquisition(*staleRequest));
     const auto snapshot = fixture.group->reacquisitionSnapshot();
     EXPECT_TRUE(ctx, snapshot.transition.has_value());
     if (snapshot.transition) {
@@ -422,6 +443,7 @@ void testMissingCoordinatorAndIncompatibleRequestAreRejected(
     if (!fixture.group) return;
     EXPECT_FALSE(ctx, fixture.group->requestReacquisition(
                           {1, MediaAvReacquisitionReason::Flush}));
+    EXPECT_FALSE(ctx, fixture.group->pollEpochReacquisitionTimeout());
 
     auto videoTarget = std::make_shared<RecordingPurgeTarget>();
     auto audioTarget = std::make_shared<RecordingPurgeTarget>();
@@ -434,8 +456,7 @@ void testMissingCoordinatorAndIncompatibleRequestAreRejected(
     }
     EXPECT_TRUE(ctx, fixture.group->requestReacquisition(
                          {3, MediaAvReacquisitionReason::FutureGeneration}));
-    const auto incompatible = fixture.group->requestReacquisition(
-        {4, MediaAvReacquisitionReason::FutureGeneration});
+    const auto incompatible = fixture.group->observeGeneration(4);
     EXPECT_FALSE(ctx, incompatible);
     if (incompatible) return;
     EXPECT_EQ(ctx,
@@ -446,6 +467,80 @@ void testMissingCoordinatorAndIncompatibleRequestAreRejected(
     EXPECT_FALSE(ctx, poisoned);
     if (!poisoned) {
         expectSameError(ctx, poisoned.error(), incompatible.error());
+    }
+}
+
+std::optional<MediaAvGenerationPurge> startAcquiringReacquisition(
+    TestContext& ctx,
+    const ActiveGroupFixture& fixture,
+    const MediaAvGenerationTransitionPlan& plan)
+{
+    auto videoTarget = std::make_shared<RecordingPurgeTarget>();
+    auto audioTarget = std::make_shared<RecordingPurgeTarget>();
+    if (!installCoordinator(
+            ctx,
+            fixture,
+            sealedParticipants(
+                ctx, plan, videoTarget, audioTarget))) {
+        return std::nullopt;
+    }
+    EXPECT_TRUE(ctx, fixture.group->requestReacquisition(
+                         {1, MediaAvReacquisitionReason::HardDiscontinuity}));
+    const auto snapshot = fixture.group->reacquisitionSnapshot();
+    EXPECT_EQ(ctx, snapshot.phase, MediaAvReacquisitionPhase::Acquiring);
+    EXPECT_TRUE(ctx, snapshot.transition.has_value());
+    return snapshot.transition;
+}
+
+void testActivationEpochPairMismatchPoisonsFirstError(TestContext& ctx)
+{
+    const auto plan = reacquisitionPlan();
+    auto fixture = makeActiveGroup(ctx, plan);
+    if (!fixture.group) return;
+    const auto purge = startAcquiringReacquisition(ctx, fixture, plan);
+    if (!purge) return;
+    EXPECT_TRUE(ctx, fixture.group->markReacquisitionReadyForActivation(
+                         2, purge->transitionSequence));
+
+    const auto failed =
+        MediaAvEpochTransitionServiceTestAccess::activateNext(
+            fixture.transition, 2, 3, purge->transitionSequence);
+    EXPECT_FALSE(ctx, failed);
+    if (failed) return;
+    EXPECT_TRUE(ctx, fixture.group->epochTransitionSnapshot().poisoned);
+    const auto repeated = fixture.group->markReacquisitionActivated(
+        2, purge->transitionSequence);
+    EXPECT_FALSE(ctx, repeated);
+    if (!repeated) {
+        expectSameError(ctx, repeated.error(), failed.error());
+    }
+}
+
+void testCompletedTransitionSequenceMismatchPoisonsFirstError(
+    TestContext& ctx)
+{
+    const auto plan = reacquisitionPlan();
+    auto fixture = makeActiveGroup(ctx, plan);
+    if (!fixture.group) return;
+    const auto purge = startAcquiringReacquisition(ctx, fixture, plan);
+    if (!purge) return;
+    EXPECT_TRUE(ctx, fixture.group->markReacquisitionReadyForActivation(
+                         2, purge->transitionSequence));
+
+    const auto failed =
+        MediaAvEpochTransitionServiceTestAccess::activateNext(
+            fixture.transition,
+            2,
+            2,
+            purge->transitionSequence + 1);
+    EXPECT_FALSE(ctx, failed);
+    if (failed) return;
+    EXPECT_TRUE(ctx, fixture.group->epochTransitionSnapshot().poisoned);
+    const auto repeated = fixture.group->markReacquisitionActivated(
+        2, purge->transitionSequence);
+    EXPECT_FALSE(ctx, repeated);
+    if (!repeated) {
+        expectSameError(ctx, repeated.error(), failed.error());
     }
 }
 
@@ -565,6 +660,8 @@ int main()
     testGroupOwnedReacquisitionPurgesAndClosesOutput(ctx);
     testFutureGenerationAndPreBeginSupersession(ctx);
     testMissingCoordinatorAndIncompatibleRequestAreRejected(ctx);
+    testActivationEpochPairMismatchPoisonsFirstError(ctx);
+    testCompletedTransitionSequenceMismatchPoisonsFirstError(ctx);
     testPurgeFailurePoisonsWithFirstError(ctx);
     testMissingAcknowledgementTimesOutWithFirstError(ctx);
     testUnplannedAcknowledgementPoisonsWithFirstError(ctx);

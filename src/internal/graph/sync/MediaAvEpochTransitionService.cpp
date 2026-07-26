@@ -134,19 +134,19 @@ MediaAvEpochTransitionService::beginReacquisition(
     MediaAudioPlaybackOrigin audioOrigin)
 {
     auto valid = validateEpochPair(epoch, audioOrigin);
-    if (!valid) return valid;
+    if (!valid) return failReacquisition(valid.error());
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_firstError) {
         return ::media::Status::failure(*m_firstError);
     }
     if (m_readiness != MediaAvGenerationReadiness::Acquiring || !m_epoch ||
         !m_audioOrigin || epoch.generation <= m_epoch->generation) {
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+        return failLocked(::media::ErrorInfo::invalidArgument(
             "Next epoch activation requires a completed newer generation"));
     }
     auto published = m_coordinator.publishCompletedGeneration(
         completedTransitionSequence, epoch.generation);
-    if (!published) return published;
+    if (!published) return failLocked(published.error());
     m_epoch = epoch;
     m_audioOrigin = audioOrigin;
     m_readiness = MediaAvGenerationReadiness::Locked;

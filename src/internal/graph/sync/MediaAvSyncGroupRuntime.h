@@ -36,11 +36,6 @@ public:
     }
     ::media::Result<MediaPlaybackEpoch> playbackEpoch() const;
     MediaAvEpochTransitionSnapshot epochTransitionSnapshot() const noexcept;
-    ::media::Result<MediaAvGenerationPurge> beginEpochReacquisition(
-        std::uint64_t oldGeneration,
-        std::uint64_t nextGeneration);
-    ::media::Result<bool> acknowledgeEpochReacquisition(
-        MediaAvGenerationAcknowledgement acknowledgement);
     ::media::Status pollEpochReacquisitionTimeout();
     ::media::Result<GenerationDisposition> observeGeneration(
         std::uint64_t generation);
@@ -67,6 +62,7 @@ private:
                             std::shared_ptr<MediaMasterClock> clock,
                             std::shared_ptr<const MediaSharedNtpEpoch> sharedNtpEpoch,
                             std::shared_ptr<MediaAvEpochTransitionService> transitionService);
+    MediaAvReacquisitionCoordinator* reacquisitionCoordinator() const noexcept;
 
     MediaAvSyncGroupKey m_key;
     MediaAvSyncPlan m_plan;
@@ -77,7 +73,6 @@ private:
     std::unique_ptr<MediaAvReacquisitionCoordinator>
         m_reacquisitionCoordinator;
     std::optional<MediaAvReacquisitionRequest> m_reacquisitionRequest;
-    std::optional<MediaRunningTime> m_epochReacquisitionBeganAt;
 };
 
 } // namespace media::ffmpeg::graph
