@@ -36,6 +36,7 @@ public:
         const MediaAtomicOutputTransaction&) = delete;
 
     ::media::Status commit();
+    void commitReserved() noexcept;
 
 private:
     struct OwnedBatch final {
@@ -47,6 +48,7 @@ private:
         std::string owner,
         std::vector<OwnedBatch> batches,
         std::vector<std::unique_lock<std::mutex>> locks);
+    bool publishReserved() noexcept;
 
     std::string m_owner;
     std::vector<OwnedBatch> m_batches;

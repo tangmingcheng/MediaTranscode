@@ -4,6 +4,7 @@
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 #include "internal/graph/sync/MediaAvStartupCoordinator.h"
 #include "internal/graph/sync/MediaAudioPlaybackOrigin.h"
+#include "internal/graph/sync/MediaAvStartupReleaseKind.h"
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
 
 #include <optional>
@@ -43,12 +44,6 @@ private:
 struct MediaAvReleasedUnit final {
     MediaBufferRef media;
     std::uint32_t trimLeadingSamples;
-};
-
-enum class MediaAvStartupReleaseKind : std::uint8_t {
-    InitialAtomicRelease = 0,
-    ActiveEpochPassThrough = 1,
-    NextAtomicRelease = 2
 };
 
 class MediaAvStartupReleaseBuffer final : public MediaBuffer {

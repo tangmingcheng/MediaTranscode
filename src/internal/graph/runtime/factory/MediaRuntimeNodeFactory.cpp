@@ -346,7 +346,15 @@ template <typename Node>
     case MediaNodeKind::LockedPacketGate:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::make_unique<MediaLockedPacketGateNode>(node.id));
-    case MediaNodeKind::AvBoundReleaseExtractor:
+    case MediaNodeKind::AvBoundReleaseExtractor: {
+        auto group = requiredSyncGroup(
+            node,
+            "MediaAvBoundReleaseExtractorNode",
+            "av_bound_release_extractor.sync_group");
+        if (!group) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                group.error());
+        }
         if (videoPreparationState) {
             auto capability = MediaAvStartupVideoPreparationCapability::issue(
                 videoPreparationState,
@@ -357,10 +365,14 @@ template <typename Node>
             }
             return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
                 std::make_unique<MediaAvBoundReleaseExtractorNode>(
-                    node.id, std::move(capability).value()));
+                    node.id,
+                    std::move(group).value(),
+                    std::move(capability).value()));
         }
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
-            std::make_unique<MediaAvBoundReleaseExtractorNode>(node.id));
+            std::make_unique<MediaAvBoundReleaseExtractorNode>(
+                node.id, std::move(group).value()));
+    }
     case MediaNodeKind::ActivatedStartupReleaseSequencer:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
             ::media::ErrorInfo::notInitialized(

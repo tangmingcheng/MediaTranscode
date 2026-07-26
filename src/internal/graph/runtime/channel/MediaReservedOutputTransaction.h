@@ -52,7 +52,8 @@ public:
     MediaOutputCapacityReservationHandle handle() const;
     ::media::Status replacePendingBatches(
         std::span<const MediaAtomicOutputBatch> batches);
-    ::media::Status commit();
+    ::media::Status commit(
+        const Authorization& finalAuthorization = {});
     ::media::Status cancel() noexcept;
 
 private:

@@ -46,6 +46,11 @@ public:
         MediaNodeId node,
         const MediaRealtimeAvSyncRuntimePlan& plan);
 
+    static ::media::Result<void> configureBoundReleaseExtractor(
+        MediaGraph& graph,
+        MediaNodeId node,
+        const MediaRealtimeAvSyncRuntimePlan& plan);
+
 private:
     MediaRealtimeAvSyncNodeConfigurator() = delete;
 };

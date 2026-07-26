@@ -258,4 +258,17 @@ MediaRealtimeAvSyncNodeConfigurator::configureActivationSequencer(
             plan.synchronization.startup.outputLeadNs->nanoseconds()));
 }
 
+::media::Result<void>
+MediaRealtimeAvSyncNodeConfigurator::configureBoundReleaseExtractor(
+    MediaGraph& graph,
+    MediaNodeId node,
+    const MediaRealtimeAvSyncRuntimePlan& plan)
+{
+    return setOption(
+        graph,
+        node,
+        "av_bound_release_extractor.sync_group",
+        plan.groupKey.value());
+}
+
 } // namespace media::ffmpeg::graph

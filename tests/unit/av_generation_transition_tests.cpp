@@ -14,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -541,6 +542,11 @@ void testGroupOwnedReacquisitionPurgesAndClosesOutput(TestContext& ctx)
     EXPECT_EQ(ctx,
               fixture.group->reacquisitionSnapshot().phase,
               MediaAvReacquisitionPhase::ReadyForActivation);
+    auto reserved = fixture.group->reserveReacquisitionActivation(
+        2, acquiring.transition->transitionSequence);
+    EXPECT_TRUE(ctx, reserved);
+    if (!reserved) return;
+    auto activation = std::move(reserved).value();
     EXPECT_TRUE(
         ctx,
         MediaAvEpochTransitionServiceTestAccess::activateNext(
@@ -548,12 +554,171 @@ void testGroupOwnedReacquisitionPurgesAndClosesOutput(TestContext& ctx)
             2,
             2,
             acquiring.transition->transitionSequence));
-    EXPECT_TRUE(ctx, fixture.group->markReacquisitionActivated(
-                         2, acquiring.transition->transitionSequence));
+    EXPECT_TRUE(ctx, activation.authorizePublication());
+    activation.completePublished();
     EXPECT_EQ(ctx,
               fixture.group->reacquisitionSnapshot().phase,
               MediaAvReacquisitionPhase::Inactive);
     EXPECT_TRUE(ctx, fixture.group->epochTransitionSnapshot().outputPermitted);
+}
+
+void testAbortBeforeActivationAuthorizationRejectsPublication(TestContext& ctx)
+{
+    using namespace std::chrono_literals;
+    const auto plan = reacquisitionPlan();
+    auto fixture = makeActiveGroup(ctx, plan);
+    if (!fixture.group) return;
+    auto videoTarget = std::make_shared<RecordingPurgeTarget>();
+    auto audioTarget = std::make_shared<RecordingPurgeTarget>();
+    if (!installCoordinator(
+            ctx,
+            fixture,
+            sealedParticipants(ctx, plan, videoTarget, audioTarget))) {
+        return;
+    }
+
+    EXPECT_TRUE(ctx, fixture.group->requestReacquisition(
+                         {1, MediaAvReacquisitionReason::HardDiscontinuity}));
+    const auto acquiring = fixture.group->reacquisitionSnapshot();
+    EXPECT_TRUE(ctx, acquiring.transition.has_value());
+    if (!acquiring.transition) return;
+    EXPECT_TRUE(ctx, fixture.group->markReacquisitionReadyForActivation(
+                         2, acquiring.transition->transitionSequence));
+
+    auto reserved = fixture.group->reserveReacquisitionActivation(
+        2, acquiring.transition->transitionSequence);
+    EXPECT_TRUE(ctx, reserved);
+    if (!reserved) return;
+    auto activation = std::move(reserved).value();
+    EXPECT_TRUE(
+        ctx,
+        MediaAvEpochTransitionServiceTestAccess::activateNext(
+            fixture.transition,
+            2,
+            2,
+            acquiring.transition->transitionSequence));
+
+    auto aborted = std::async(std::launch::async, [&fixture] {
+        fixture.group->markAborted();
+    });
+    for (std::size_t attempt = 0; attempt != 10'000; ++attempt) {
+        if (fixture.group->reacquisitionSnapshot().phase ==
+            MediaAvReacquisitionPhase::Aborted) {
+            break;
+        }
+        std::this_thread::yield();
+    }
+    EXPECT_EQ(ctx,
+              fixture.group->reacquisitionSnapshot().phase,
+              MediaAvReacquisitionPhase::Aborted);
+    EXPECT_FALSE(ctx, activation.authorizePublication());
+    activation.abandon();
+    EXPECT_EQ(ctx, aborted.wait_for(1s), std::future_status::ready);
+    EXPECT_FALSE(ctx, fixture.group->epochTransitionSnapshot().outputPermitted);
+    EXPECT_TRUE(ctx, fixture.group->epochTransitionSnapshot().poisoned);
+}
+
+void testIncompatibleEvidenceBeforeActivationAuthorizationRejectsPublication(
+    TestContext& ctx)
+{
+    using namespace std::chrono_literals;
+    const auto plan = reacquisitionPlan();
+    auto fixture = makeActiveGroup(ctx, plan);
+    if (!fixture.group) return;
+    auto videoTarget = std::make_shared<RecordingPurgeTarget>();
+    auto audioTarget = std::make_shared<RecordingPurgeTarget>();
+    if (!installCoordinator(
+            ctx,
+            fixture,
+            sealedParticipants(ctx, plan, videoTarget, audioTarget))) {
+        return;
+    }
+
+    EXPECT_TRUE(ctx, fixture.group->requestReacquisition(
+                         {1, MediaAvReacquisitionReason::HardDiscontinuity}));
+    const auto acquiring = fixture.group->reacquisitionSnapshot();
+    EXPECT_TRUE(ctx, acquiring.transition.has_value());
+    if (!acquiring.transition) return;
+    EXPECT_TRUE(ctx, fixture.group->markReacquisitionReadyForActivation(
+                         2, acquiring.transition->transitionSequence));
+    auto reserved = fixture.group->reserveReacquisitionActivation(
+        2, acquiring.transition->transitionSequence);
+    EXPECT_TRUE(ctx, reserved);
+    if (!reserved) return;
+    auto activation = std::move(reserved).value();
+    EXPECT_TRUE(
+        ctx,
+        MediaAvEpochTransitionServiceTestAccess::activateNext(
+            fixture.transition,
+            2,
+            2,
+            acquiring.transition->transitionSequence));
+
+    auto incompatible = std::async(std::launch::async, [&fixture] {
+        return fixture.group->observeGeneration(3);
+    });
+    for (std::size_t attempt = 0; attempt != 10'000; ++attempt) {
+        if (fixture.group->reacquisitionSnapshot().phase ==
+            MediaAvReacquisitionPhase::Aborted) {
+            break;
+        }
+        std::this_thread::yield();
+    }
+    EXPECT_EQ(ctx,
+              fixture.group->reacquisitionSnapshot().phase,
+              MediaAvReacquisitionPhase::Aborted);
+    EXPECT_FALSE(ctx, activation.authorizePublication());
+    activation.abandon();
+    EXPECT_EQ(ctx, incompatible.wait_for(1s), std::future_status::ready);
+    EXPECT_FALSE(ctx, incompatible.get());
+    EXPECT_FALSE(ctx, fixture.group->epochTransitionSnapshot().outputPermitted);
+    EXPECT_TRUE(ctx, fixture.group->epochTransitionSnapshot().poisoned);
+}
+
+void testPublicationReservationLinearizesReacquisitionBegin(
+    TestContext& ctx)
+{
+    using namespace std::chrono_literals;
+    const auto plan = reacquisitionPlan();
+    auto fixture = makeActiveGroup(ctx, plan);
+    if (!fixture.group) return;
+    auto videoTarget = std::make_shared<RecordingPurgeTarget>();
+    auto audioTarget = std::make_shared<RecordingPurgeTarget>();
+    if (!installCoordinator(
+            ctx,
+            fixture,
+            sealedParticipants(ctx, plan, videoTarget, audioTarget))) {
+        return;
+    }
+
+    auto publication =
+        fixture.group->reserveStartupReleasePublication(
+            MediaAvStartupReleaseKind::ActiveEpochPassThrough,
+            1,
+            std::nullopt);
+    EXPECT_TRUE(ctx, publication);
+    if (!publication) return;
+    EXPECT_EQ(ctx,
+              publication.value().disposition(),
+              MediaAvStartupReleaseDisposition::Publish);
+    auto reacquisition = std::async(std::launch::async, [&fixture] {
+        return fixture.group->requestReacquisition(
+            {1, MediaAvReacquisitionReason::HardDiscontinuity});
+    });
+    EXPECT_EQ(ctx,
+              reacquisition.wait_for(20ms),
+              std::future_status::timeout);
+    EXPECT_TRUE(ctx, fixture.group->epochTransitionSnapshot().outputPermitted);
+
+    publication.value().completePublished();
+    EXPECT_EQ(ctx,
+              reacquisition.wait_for(1s),
+              std::future_status::ready);
+    EXPECT_TRUE(ctx, reacquisition.get());
+    EXPECT_FALSE(ctx, fixture.group->epochTransitionSnapshot().outputPermitted);
+    EXPECT_EQ(ctx,
+              fixture.group->reacquisitionSnapshot().phase,
+              MediaAvReacquisitionPhase::Acquiring);
 }
 
 void testFutureGenerationAndPreBeginSupersession(TestContext& ctx)
@@ -667,6 +832,11 @@ void testActivationEpochPairMismatchPoisonsFirstError(TestContext& ctx)
     if (!purge) return;
     EXPECT_TRUE(ctx, fixture.group->markReacquisitionReadyForActivation(
                          2, purge->transitionSequence));
+    auto reserved = fixture.group->reserveReacquisitionActivation(
+        2, purge->transitionSequence);
+    EXPECT_TRUE(ctx, reserved);
+    if (!reserved) return;
+    auto activation = std::move(reserved).value();
 
     const auto failed =
         MediaAvEpochTransitionServiceTestAccess::activateNext(
@@ -674,7 +844,8 @@ void testActivationEpochPairMismatchPoisonsFirstError(TestContext& ctx)
     EXPECT_FALSE(ctx, failed);
     if (failed) return;
     EXPECT_TRUE(ctx, fixture.group->epochTransitionSnapshot().poisoned);
-    const auto repeated = fixture.group->markReacquisitionActivated(
+    activation.abandon();
+    const auto repeated = fixture.group->reserveReacquisitionActivation(
         2, purge->transitionSequence);
     EXPECT_FALSE(ctx, repeated);
     if (!repeated) {
@@ -692,6 +863,11 @@ void testCompletedTransitionSequenceMismatchPoisonsFirstError(
     if (!purge) return;
     EXPECT_TRUE(ctx, fixture.group->markReacquisitionReadyForActivation(
                          2, purge->transitionSequence));
+    auto reserved = fixture.group->reserveReacquisitionActivation(
+        2, purge->transitionSequence);
+    EXPECT_TRUE(ctx, reserved);
+    if (!reserved) return;
+    auto activation = std::move(reserved).value();
 
     const auto failed =
         MediaAvEpochTransitionServiceTestAccess::activateNext(
@@ -702,7 +878,8 @@ void testCompletedTransitionSequenceMismatchPoisonsFirstError(
     EXPECT_FALSE(ctx, failed);
     if (failed) return;
     EXPECT_TRUE(ctx, fixture.group->epochTransitionSnapshot().poisoned);
-    const auto repeated = fixture.group->markReacquisitionActivated(
+    activation.abandon();
+    const auto repeated = fixture.group->reserveReacquisitionActivation(
         2, purge->transitionSequence);
     EXPECT_FALSE(ctx, repeated);
     if (!repeated) {
@@ -824,6 +1001,10 @@ int main()
     testParticipantGroupAcknowledgesOnlyCompleteSuccessfulPurge(ctx);
     testCoordinatorRejectsIncompletePlans(ctx);
     testGroupOwnedReacquisitionPurgesAndClosesOutput(ctx);
+    testAbortBeforeActivationAuthorizationRejectsPublication(ctx);
+    testIncompatibleEvidenceBeforeActivationAuthorizationRejectsPublication(
+        ctx);
+    testPublicationReservationLinearizesReacquisitionBegin(ctx);
     testFutureGenerationAndPreBeginSupersession(ctx);
     testMissingCoordinatorAndIncompatibleRequestAreRejected(ctx);
     testActivationEpochPairMismatchPoisonsFirstError(ctx);

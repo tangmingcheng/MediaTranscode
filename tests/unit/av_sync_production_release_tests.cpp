@@ -33,6 +33,20 @@
 #include <memory>
 #include <type_traits>
 
+namespace media::ffmpeg::graph {
+
+struct MediaAvEpochTransitionServiceTestAccess final {
+    static ::media::Status activateInitial(
+        const std::shared_ptr<MediaAvEpochTransitionService>& service,
+        MediaPlaybackEpoch epoch,
+        MediaAudioPlaybackOrigin origin)
+    {
+        return service->activateInitial(std::move(epoch), std::move(origin));
+    }
+};
+
+} // namespace media::ffmpeg::graph
+
 namespace {
 
 using media_transcode::test::TestContext;
@@ -176,6 +190,68 @@ public:
 private:
     std::shared_ptr<TestMasterClock> m_clock;
 };
+
+class NoopGenerationPurgeTarget final : public MediaAvGenerationPurgeTarget {
+public:
+    ::media::Status purge(const MediaAvGenerationPurge&) override
+    {
+        return ::media::Status::success();
+    }
+};
+
+std::shared_ptr<MediaAvSyncGroupRuntime> registerActiveTestGroup(
+    TestContext& ctx,
+    MediaGraphExecutionContext& execution,
+    const MediaAvSyncGroupKey& key)
+{
+    const auto plannedTransition = transitionPlan();
+    auto transition =
+        MediaAvEpochTransitionService::create(plannedTransition);
+    EXPECT_TRUE(ctx, transition);
+    if (!transition) return {};
+    auto ntp = MediaSharedNtpEpoch::create(
+        ms(0), std::chrono::nanoseconds(0));
+    EXPECT_TRUE(ctx, ntp);
+    if (!ntp) return {};
+    auto master = std::make_shared<TestMasterClock>(ms(100));
+    auto sharedNtp = std::make_shared<const MediaSharedNtpEpoch>(
+        std::move(ntp).value());
+    EXPECT_TRUE(ctx, execution.registerAvSyncGroup(
+                         key,
+                         completePlan(),
+                         master,
+                         sharedNtp,
+                         transition.value()));
+    EXPECT_TRUE(
+        ctx,
+        MediaAvEpochTransitionServiceTestAccess::activateInitial(
+            transition.value(), epoch(), origin()));
+    auto group = execution.findAvSyncGroup(key);
+    EXPECT_TRUE(ctx, group);
+    if (!group) return {};
+
+    std::vector<MediaAvGenerationParticipantGroup> participants;
+    auto purgeTarget = std::make_shared<NoopGenerationPurgeTarget>();
+    for (const auto& participantPlan : plannedTransition.participants) {
+        auto participant =
+            MediaAvGenerationParticipantGroup::create(participantPlan);
+        EXPECT_TRUE(ctx, participant);
+        if (!participant) return {};
+        auto value = std::move(participant).value();
+        for (const auto& identity : participantPlan.requiredChildren) {
+            EXPECT_TRUE(ctx, value.registerChild(identity, purgeTarget));
+        }
+        EXPECT_TRUE(ctx, value.seal());
+        participants.push_back(std::move(value));
+    }
+    auto coordinator = MediaAvReacquisitionCoordinator::create(
+        transition.value(), master, std::move(participants));
+    EXPECT_TRUE(ctx, coordinator);
+    if (!coordinator) return {};
+    EXPECT_TRUE(ctx, group->installReacquisitionCoordinator(
+                         std::move(coordinator).value()));
+    return group;
+}
 
 struct BinderFixture final {
     MediaRealtimeExecutableGraph executable;
@@ -511,6 +587,9 @@ void testPreparationPrefixIsNotReleasedTwiceAfterActivation(TestContext& ctx)
     graph.connect(extractorId, "audio", audioSink, "in", "audio", policy);
     MediaGraphExecutionContext execution;
     EXPECT_TRUE(ctx, execution.compile(graph));
+    auto group = registerActiveTestGroup(
+        ctx, execution, MediaAvSyncGroupKey("task4-group"));
+    if (!group) return;
 
     auto state = MediaAvStartupVideoPreparationState::create(
         MediaAvSyncGroupKey("task4-group"));
@@ -521,7 +600,9 @@ void testPreparationPrefixIsNotReleasedTwiceAfterActivation(TestContext& ctx)
     EXPECT_TRUE(ctx, feed);
     if (!feed) return;
     MediaAvBoundReleaseExtractorNode extractor(
-        extractorId, std::move(feed).value());
+        extractorId,
+        MediaAvSyncGroupKey("task4-group"),
+        std::move(feed).value());
     EXPECT_TRUE(ctx, extractor.start(execution));
 
     const auto unit = [] { return makeMediaBufferRef<MediaAvStartupClockBuffer>(ms(1)); };
@@ -642,6 +723,16 @@ void testPreparationPrefixIsNotReleasedTwiceAfterActivation(TestContext& ctx)
     EXPECT_FALSE(ctx, videoOutput->tryPop(observed));
     EXPECT_TRUE(ctx, audioOutput->tryPop(observed));
     EXPECT_FALSE(ctx, audioOutput->tryPop(observed));
+
+    EXPECT_TRUE(ctx, boundInput->push(activeTransaction.value()));
+    EXPECT_TRUE(ctx, group->requestReacquisition(
+                         {2, MediaAvReacquisitionReason::FutureGeneration}));
+    const auto droppedOld = extractor.process(execution);
+    EXPECT_TRUE(ctx, droppedOld &&
+                         droppedOld.value().state ==
+                             MediaNodeProcessState::Progress);
+    EXPECT_EQ(ctx, videoOutput->size(), static_cast<std::size_t>(0));
+    EXPECT_EQ(ctx, audioOutput->size(), static_cast<std::size_t>(0));
 
     const auto flush = makeMediaBufferRef<MediaControlBuffer>(
         MediaControlBufferKind::Flush);
@@ -1218,6 +1309,45 @@ void testActivePassThroughDoesNotReactivate(TestContext& ctx)
         EXPECT_EQ(ctx, fixture->secondEvent->metrics().pushed,
                   static_cast<std::uint64_t>(1));
     }
+}
+
+void testQueuedOldPassThroughIsDroppedAfterReacquisitionPurge(
+    TestContext& ctx)
+{
+    auto fixture = startFixture(ctx);
+    if (!fixture->binder || !fixture->sequencer || !fixture->group ||
+        !fixture->releaseInput) {
+        return;
+    }
+    EXPECT_TRUE(ctx, fixture->releaseInput->push(release(ctx)));
+    EXPECT_TRUE(ctx, fixture->binder->process(fixture->runtime.context()));
+    EXPECT_TRUE(ctx, fixture->sequencer->process(fixture->runtime.context()));
+    MediaBufferRef ignored;
+    EXPECT_TRUE(ctx, fixture->firstEvent->tryPop(ignored));
+    EXPECT_TRUE(ctx, fixture->secondEvent->tryPop(ignored));
+    EXPECT_TRUE(ctx, fixture->boundRelease->tryPop(ignored));
+
+    const auto payload =
+        makeMediaBufferRef<MediaAvStartupClockBuffer>(ms(2));
+    auto oldPassThrough = MediaAvStartupReleaseBuffer::create(
+        MediaAvSyncGroupKey("task4-group"),
+        MediaAvStartupReleaseKind::ActiveEpochPassThrough,
+        epoch(), origin(), {{payload, 0}}, {}, std::nullopt);
+    EXPECT_TRUE(ctx, oldPassThrough);
+    if (!oldPassThrough) return;
+    EXPECT_TRUE(ctx, fixture->releaseInput->push(oldPassThrough.value()));
+    EXPECT_TRUE(ctx, fixture->binder->process(fixture->runtime.context()));
+
+    EXPECT_TRUE(ctx, fixture->group->requestReacquisition(
+                         {2, MediaAvReacquisitionReason::FutureGeneration}));
+    const auto processed =
+        fixture->sequencer->process(fixture->runtime.context());
+    EXPECT_TRUE(ctx, processed &&
+                         processed.value().state ==
+                             MediaNodeProcessState::Progress);
+    EXPECT_EQ(ctx, fixture->firstEvent->size(), static_cast<std::size_t>(0));
+    EXPECT_EQ(ctx, fixture->secondEvent->size(), static_cast<std::size_t>(0));
+    EXPECT_EQ(ctx, fixture->boundRelease->size(), static_cast<std::size_t>(0));
 }
 
 void testNextAtomicReleaseActivatesBeforeAnyOutput(TestContext& ctx)
@@ -1889,7 +2019,8 @@ void testBoundReleaseAtomicOutputPolicyMigrationIsExplicit(TestContext& ctx)
                              outputPolicy));
         MediaGraphExecutionContext execution;
         EXPECT_TRUE(ctx, execution.compile(graph));
-        MediaAvBoundReleaseExtractorNode node(extractor);
+        MediaAvBoundReleaseExtractorNode node(
+            extractor, MediaAvSyncGroupKey("task4-group"));
         const auto started = node.start(execution);
         if (accepted) {
             EXPECT_TRUE(ctx, started);
@@ -1955,6 +2086,7 @@ int main()
     testSequencerCommitsOneEventToAllTargetsBeforeRelease(ctx);
     testEveryBlockedSequencerTargetPreventsPrefixVisibility(ctx);
     testActivePassThroughDoesNotReactivate(ctx);
+    testQueuedOldPassThroughIsDroppedAfterReacquisitionPurge(ctx);
     testNextAtomicReleaseActivatesBeforeAnyOutput(ctx);
     testNextAtomicReleaseRejectsWrongTransitionSequence(ctx);
     testNextAtomicReleaseFailsClosedWhenActivationAuthorityIsPoisoned(ctx);

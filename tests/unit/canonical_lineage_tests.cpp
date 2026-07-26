@@ -2,6 +2,7 @@
 
 #include "internal/graph/nodes/sync/MediaCanonicalInputNode.h"
 #include "internal/graph/nodes/sync/MediaAvBoundReleaseExtractorNode.h"
+#include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
@@ -17,6 +18,9 @@
 #include "internal/graph/sync/MediaCanonicalVideoFrameBuffer.h"
 #include "internal/graph/sync/startup/MediaAvStartupGenerationState.h"
 #include "internal/graph/sync/MediaAvGenerationParticipantGroup.h"
+#include "internal/graph/sync/MediaAvEpochTransitionService.h"
+#include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
+#include "internal/graph/time/MediaSharedNtpEpoch.h"
 #include "internal/graph/time/MediaCanonicalTimeMapper.h"
 
 extern "C" {
@@ -24,7 +28,23 @@ extern "C" {
 #include <libavutil/frame.h>
 }
 
+#include <chrono>
 #include <limits>
+#include <utility>
+
+namespace media::ffmpeg::graph {
+
+struct MediaAvEpochTransitionServiceTestAccess final {
+    static ::media::Status activateInitial(
+        const std::shared_ptr<MediaAvEpochTransitionService>& service,
+        MediaPlaybackEpoch epoch,
+        MediaAudioPlaybackOrigin origin)
+    {
+        return service->activateInitial(std::move(epoch), std::move(origin));
+    }
+};
+
+} // namespace media::ffmpeg::graph
 
 using namespace media::ffmpeg::graph;
 using media_transcode::test::TestContext;
@@ -34,6 +54,72 @@ namespace {
 constexpr MediaRunningTime ns(std::int64_t value) noexcept
 {
     return MediaRunningTime::fromNanoseconds(value);
+}
+
+class FixedMasterClock final : public MediaMasterClock {
+public:
+    ::media::Result<MediaRunningTime> now() const noexcept override
+    {
+        return ::media::Result<MediaRunningTime>::success(ns(1'000));
+    }
+};
+
+MediaAvSyncPlan extractorTestPlan()
+{
+    MediaRealtimeRtpTranscodeRequest request;
+    request.mediaId = "canonical-lineage-extractor";
+    request.input.type = RealtimeInputType::RtpPort;
+    request.input.streamLayout =
+        RealtimeInputStreamLayout::SeparateStreams;
+    request.input.videoRtp.payloadType = 96;
+    request.input.videoRtp.clockRate = 90'000;
+    request.input.audioRtp.payloadType = 97;
+    request.input.audioRtp.clockRate = 48'000;
+    request.output.streamLayout =
+        RealtimeOutputStreamLayout::SeparateStreams;
+    request.parameters.execution.includeAudio = true;
+    request.parameters.audio.sampleRate = 48'000;
+    request.parameters.queues.packet = 8;
+    request.avSyncStartup.maximumVideoUnitBytes = 1024;
+    request.avSyncStartup.maximumAudioUnitBytes = 1024;
+    request.avSyncStartup.maximumGap = ns(1'000);
+    auto plan = std::move(MediaAvSyncPlanner::plan(request)).value();
+    plan.audioServo.commandLeadNs = ns(1'500'000'000);
+    plan.audioServo.compensationWindowNs = ns(2'000'000'000);
+    plan.audioServo.frequencyFilterTimeConstantNs = ns(5'000'000'000);
+    return plan;
+}
+
+bool registerActiveExtractorGroup(
+    TestContext& ctx,
+    MediaGraphExecutionContext& execution,
+    MediaAvSyncGroupKey key,
+    MediaPlaybackEpoch epoch,
+    MediaAudioPlaybackOrigin origin)
+{
+    auto transition = MediaAvEpochTransitionService::create(
+        MediaAvGenerationTransitionPlan{
+            {{MediaAvGenerationParticipant::Scheduler, {"scheduler"}}},
+            ns(1'000),
+            ns(500)});
+    EXPECT_TRUE(ctx, transition);
+    if (!transition) return false;
+    auto ntp = MediaSharedNtpEpoch::create(
+        ns(0), std::chrono::nanoseconds(0));
+    EXPECT_TRUE(ctx, ntp);
+    if (!ntp) return false;
+    EXPECT_TRUE(ctx, execution.registerAvSyncGroup(
+                         key,
+                         extractorTestPlan(),
+                         std::make_shared<FixedMasterClock>(),
+                         std::make_shared<const MediaSharedNtpEpoch>(
+                             std::move(ntp).value()),
+                         transition.value()));
+    EXPECT_TRUE(
+        ctx,
+        MediaAvEpochTransitionServiceTestAccess::activateInitial(
+            transition.value(), std::move(epoch), std::move(origin)));
+    return true;
 }
 
 MediaBufferRef packet(MediaStreamKind stream)
@@ -541,7 +627,8 @@ void testExtractorPreflightsCompoundReleaseWithoutPartialCommit(TestContext& ctx
                   MediaGraphBuildSupport::blockingQueuePolicy(1));
     MediaGraphExecutionContext execution;
     EXPECT_TRUE(ctx, execution.compile(graph));
-    MediaAvBoundReleaseExtractorNode node(extractor);
+    MediaAvBoundReleaseExtractorNode node(
+        extractor, MediaAvSyncGroupKey("group-a"));
     EXPECT_TRUE(ctx, node.start(execution));
 
     MediaChannel* video = execution.findOutputChannel(extractor, "video");
@@ -556,6 +643,14 @@ void testExtractorPreflightsCompoundReleaseWithoutPartialCommit(TestContext& ctx
     if (!canonicalAudio) return;
     const MediaPlaybackEpoch epoch{ns(100), ns(200), 7};
     const MediaAudioPlaybackOrigin origin{7, ns(100), ns(200), 0, 48'000};
+    if (!registerActiveExtractorGroup(
+            ctx,
+            execution,
+            MediaAvSyncGroupKey("group-a"),
+            epoch,
+            origin)) {
+        return;
+    }
     auto release = MediaAvStartupReleaseBuffer::create(
         MediaAvSyncGroupKey("group-a"), MediaAvStartupReleaseKind::InitialAtomicRelease,
         epoch, origin, {{packet(MediaStreamKind::Video), 0}},
@@ -614,10 +709,19 @@ void testExtractorPreservesAudioTrimAndIdentity(TestContext& ctx)
                   MediaGraphBuildSupport::blockingQueuePolicy(2));
     MediaGraphExecutionContext execution;
     EXPECT_TRUE(ctx, execution.compile(graph));
-    MediaAvBoundReleaseExtractorNode node(extractor);
+    MediaAvBoundReleaseExtractorNode node(
+        extractor, MediaAvSyncGroupKey("group-a"));
     EXPECT_TRUE(ctx, node.start(execution));
     const MediaPlaybackEpoch epoch{ns(100), ns(200), 7};
     const MediaAudioPlaybackOrigin origin{7, ns(100), ns(200), 0, 48'000};
+    if (!registerActiveExtractorGroup(
+            ctx,
+            execution,
+            MediaAvSyncGroupKey("group-a"),
+            epoch,
+            origin)) {
+        return;
+    }
     auto release = MediaAvStartupReleaseBuffer::create(
         MediaAvSyncGroupKey("group-a"),
         MediaAvStartupReleaseKind::ActiveEpochPassThrough,
@@ -672,7 +776,8 @@ void testExtractorAtomicallyFansOutExactEofReference(TestContext& ctx)
                   MediaGraphBuildSupport::blockingQueuePolicy(1));
     MediaGraphExecutionContext execution;
     EXPECT_TRUE(ctx, execution.compile(graph));
-    MediaAvBoundReleaseExtractorNode node(extractor);
+    MediaAvBoundReleaseExtractorNode node(
+        extractor, MediaAvSyncGroupKey("group-a"));
     EXPECT_TRUE(ctx, node.start(execution));
     auto eof = FFmpegBufferFactory::makeEof(MediaStreamKind::Metadata);
     EXPECT_TRUE(ctx, eof);
@@ -724,7 +829,8 @@ void testExtractorHandlesTypedControlsAndRequiredInputTermination(TestContext& c
         graph.connect(extractor, "audio", audioSink, "in", "audio", policy);
         MediaGraphExecutionContext execution;
         EXPECT_TRUE(ctx, execution.compile(graph));
-        MediaAvBoundReleaseExtractorNode node(extractor);
+        MediaAvBoundReleaseExtractorNode node(
+            extractor, MediaAvSyncGroupKey("group-a"));
         EXPECT_TRUE(ctx, node.start(execution));
         MediaBufferRef control;
         if (kind) {

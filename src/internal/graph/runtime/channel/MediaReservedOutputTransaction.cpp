@@ -291,7 +291,8 @@ MediaReservedOutputTransaction::handle() const
     return ::media::Status::success();
 }
 
-::media::Status MediaReservedOutputTransaction::commit()
+::media::Status MediaReservedOutputTransaction::commit(
+    const Authorization& finalAuthorization)
 {
     if (!m_record) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
@@ -314,6 +315,11 @@ MediaReservedOutputTransaction::handle() const
             m_record->state = MediaOutputCapacityReservationState::Cancelled;
             return ::media::Status::failure(::media::ErrorInfo::cancelled(
                 m_owner + " reservation was aborted"));
+        }
+    }
+    if (finalAuthorization) {
+        if (auto authorized = finalAuthorization(); !authorized) {
+            return authorized;
         }
     }
     for (const auto& batch : m_batches) {

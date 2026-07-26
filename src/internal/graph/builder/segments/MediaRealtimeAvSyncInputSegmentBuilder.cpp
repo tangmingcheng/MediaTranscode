@@ -199,8 +199,14 @@ struct SharedNodes final {
     if (auto status = MediaRealtimeAvSyncNodeConfigurator::
             configurePlaybackEpochBinder(graph, nodes.epochBinder, plan);
         !status) return status;
-    return MediaRealtimeAvSyncNodeConfigurator::configureActivationSequencer(
-        graph, nodes.activationSequencer, plan);
+    if (auto status =
+            MediaRealtimeAvSyncNodeConfigurator::configureActivationSequencer(
+                graph, nodes.activationSequencer, plan);
+        !status) {
+        return status;
+    }
+    return MediaRealtimeAvSyncNodeConfigurator::configureBoundReleaseExtractor(
+        graph, nodes.releaseExtractor, plan);
 }
 
 ::media::Result<void> connectSharedTopology(

@@ -46,9 +46,19 @@ public:
     ::media::Status markReacquisitionReadyForActivation(
         std::uint64_t generation,
         std::uint64_t transitionSequence);
-    ::media::Status markReacquisitionActivated(
+    ::media::Result<MediaAvReacquisitionActivationReservation>
+    reserveReacquisitionActivation(
         std::uint64_t generation,
         std::uint64_t transitionSequence);
+    MediaAvStartupReleaseDisposition classifyStartupRelease(
+        MediaAvStartupReleaseKind kind,
+        std::uint64_t generation,
+        std::optional<std::uint64_t> transitionSequence) const noexcept;
+    ::media::Result<MediaAvStartupReleasePublicationReservation>
+    reserveStartupReleasePublication(
+        MediaAvStartupReleaseKind kind,
+        std::uint64_t generation,
+        std::optional<std::uint64_t> transitionSequence);
     std::optional<MediaAvReacquisitionRequest> reacquisitionRequest() const noexcept;
     void markAborted() noexcept;
     void shutdown() noexcept;
@@ -63,6 +73,10 @@ private:
                             std::shared_ptr<const MediaSharedNtpEpoch> sharedNtpEpoch,
                             std::shared_ptr<MediaAvEpochTransitionService> transitionService);
     MediaAvReacquisitionCoordinator* reacquisitionCoordinator() const noexcept;
+    MediaAvStartupReleaseDisposition classifyBootstrapRelease(
+        MediaAvStartupReleaseKind kind,
+        std::uint64_t generation,
+        std::optional<std::uint64_t> transitionSequence) const noexcept;
 
     MediaAvSyncGroupKey m_key;
     MediaAvSyncPlan m_plan;

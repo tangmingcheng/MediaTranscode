@@ -4,6 +4,7 @@
 #include "internal/graph/model/MediaAtomicOutputPolicyContract.h"
 
 #include <algorithm>
+#include <exception>
 #include <unordered_map>
 
 namespace media::ffmpeg::graph {
@@ -110,13 +111,27 @@ MediaAtomicOutputTransaction::acquire(
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             m_owner + " transaction can only commit once"));
     }
+    if (!publishReserved()) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::internalError(
+                m_owner + " transaction invariant was violated"));
+    }
+    return ::media::Status::success();
+}
+
+void MediaAtomicOutputTransaction::commitReserved() noexcept
+{
+    if (!publishReserved()) std::terminate();
+}
+
+bool MediaAtomicOutputTransaction::publishReserved() noexcept
+{
+    if (m_committed) return false;
     for (const auto& batch : m_batches) {
         for (const auto& buffer : batch.buffers) {
             if (batch.channel->pushOutcomeLocked(buffer, false) !=
                 MediaQueuePushOutcome::Accepted) {
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::internalError(
-                        m_owner + " transaction invariant was violated"));
+                return false;
             }
         }
     }
@@ -131,7 +146,7 @@ MediaAtomicOutputTransaction::acquire(
         }
     }
     m_committed = true;
-    return ::media::Status::success();
+    return true;
 }
 
 } // namespace media::ffmpeg::graph
