@@ -49,6 +49,7 @@ MediaAvGenerationTransitionPlan MediaAvGenerationTransitionPlanner::plan(
         transition.participants.push_back({
             MediaAvGenerationParticipant::ProjectMpegTsOutput,
             {"project_mpegts_output_generation_state",
+             "scheduled_ts_adapter_generation_state",
              "project_mpegts_mux_generation_state"}});
     }
     return transition;

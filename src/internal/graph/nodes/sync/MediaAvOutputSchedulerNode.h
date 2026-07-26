@@ -44,6 +44,9 @@ public:
 protected:
     ::media::Result<MediaNodeProcessResult> onProcess(
         MediaGraphExecutionContext& context) override;
+    ::media::Result<
+        std::optional<MediaProtocolOutputGenerationCommitReservation>>
+    reserveOutputCommit(const MediaBufferRef& buffer) const override;
 
 private:
     enum class Input { Video, Audio };

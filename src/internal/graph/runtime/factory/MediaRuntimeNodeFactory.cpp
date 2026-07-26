@@ -47,6 +47,7 @@
 #include "internal/graph/nodes/sync/MediaPlaybackEpochBinderNode.h"
 #include "internal/graph/nodes/sync/MediaCanonicalInputNode.h"
 #include "internal/graph/nodes/sync/MediaLockedPacketGateNode.h"
+#include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
 #include "internal/graph/nodes/sync/MediaAvBoundReleaseExtractorNode.h"
 #include "internal/graph/nodes/sync/MediaAvStartupClockNode.h"
 #include "internal/graph/nodes/sync/MediaActivatedStartupReleaseSequencerNode.h"
@@ -445,9 +446,16 @@ template <typename Node>
             return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
                 kind.error());
         }
+        if (kind.value() == MediaMuxSessionKind::ProjectMpegTs) {
+            auto generationState =
+                std::make_shared<MediaProtocolOutputGenerationState>(
+                    std::string(FileMuxNode::generationPurgeIdentity()));
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+                std::make_unique<FileMuxNode>(
+                    node.id, std::move(generationState)));
+        }
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
-            std::make_unique<FileMuxNode>(
-                node.id, kind.value() == MediaMuxSessionKind::ProjectMpegTs));
+            std::make_unique<FileMuxNode>(node.id));
     }
     case MediaNodeKind::RtpMux:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<RtpMuxNode>(node.id));
@@ -695,6 +703,13 @@ MediaRuntimeNodeFactory::generationPurgeRegistration(
     }
     if (auto registration =
             fixedGenerationPurgeRegistration<MediaProjectMpegTsPlanSourceNode>(
+                runtime,
+                MediaAvGenerationParticipant::ProjectMpegTsOutput)) {
+        return registration;
+    }
+    if (auto registration =
+            fixedGenerationPurgeRegistration<
+                MediaScheduledTsAccessUnitAdapterNode>(
                 runtime,
                 MediaAvGenerationParticipant::ProjectMpegTsOutput)) {
         return registration;

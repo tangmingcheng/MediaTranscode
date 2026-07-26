@@ -56,6 +56,11 @@ ExplicitMediaMuxSessionFactory::ExplicitMediaMuxSessionFactory(
             std::make_unique<FFmpegFileMuxSession>(video.value(), audio.value()));
     }
     case MediaMuxSessionKind::ProjectMpegTs: {
+        if (!m_generationState) {
+            return ::media::Result<std::unique_ptr<MediaMuxSession>>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "project MPEG-TS mux session requires an injected generation state"));
+        }
         auto video = requiredBoolNodeOption(
             &options, "MediaMuxSessionFactory", MediaTranscodeOptionKey::MuxExpectVideo);
         if (!video) {

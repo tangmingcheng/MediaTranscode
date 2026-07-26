@@ -19,7 +19,9 @@ class MediaProtocolOutputGenerationState;
 class FileMuxNode final : public FFmpegNodeRuntime {
 public:
     explicit FileMuxNode(MediaNodeId nodeId);
-    FileMuxNode(MediaNodeId nodeId, bool projectMpegTsGenerationTarget);
+    FileMuxNode(
+        MediaNodeId nodeId,
+        std::shared_ptr<MediaProtocolOutputGenerationState> generationState);
     FileMuxNode(MediaNodeId nodeId,
                 std::unique_ptr<MediaMuxSessionFactory> sessionFactory);
     static MediaNodeKind staticKind() noexcept;

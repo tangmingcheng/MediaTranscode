@@ -12,6 +12,7 @@
 #include "internal/graph/runtime/buffer/MediaTsMuxRuntimePlanBuffer.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
+#include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
 
 extern "C" {
 #include <libavcodec/codec_par.h>
@@ -31,6 +32,12 @@ using media_transcode::test::TestContext;
 using media_transcode::test::schedulerOnlyComponentTransitionPlan;
 
 namespace {
+
+std::shared_ptr<MediaProtocolOutputGenerationState> muxGenerationState()
+{
+    return std::make_shared<MediaProtocolOutputGenerationState>(
+        "project_mpegts_mux_generation_state");
+}
 
 MediaRunningTime ms(std::int64_t value)
 {
@@ -284,7 +291,7 @@ void acquiringPollAndBindingOrder(TestContext& ctx)
 
     for (bool reverse : {false, true}) {
         auto sink = std::make_shared<SinkState>();
-        ProjectMpegTsMuxSessionAdapter adapter;
+        ProjectMpegTsMuxSessionAdapter adapter(muxGenerationState());
         bindComplete(adapter, fixture, sink, ctx, reverse);
         EXPECT_EQ(ctx, sink->bytes.size(), std::size_t{376});
         adapter.abort();
@@ -329,7 +336,7 @@ void pollUsesPlannerOwnedTransportDeadlines(TestContext& ctx)
     Fixture fixture;
     if (!fixture.activate(ctx)) return;
     auto sink = std::make_shared<SinkState>();
-    ProjectMpegTsMuxSessionAdapter adapter;
+    ProjectMpegTsMuxSessionAdapter adapter(muxGenerationState());
     bindComplete(adapter, fixture, sink, ctx, false);
     EXPECT_TRUE(ctx, adapter.write(
                          fixture.context,
@@ -382,7 +389,7 @@ void pollPreservesTransportLeadForNextAccessUnit(TestContext& ctx)
 {
     Fixture fixture;
     if (!fixture.activate(ctx)) return;
-    ProjectMpegTsMuxSessionAdapter adapter;
+    ProjectMpegTsMuxSessionAdapter adapter(muxGenerationState());
     bindComplete(adapter, fixture, std::make_shared<SinkState>(), ctx, false);
     EXPECT_TRUE(ctx, adapter.write(
                          fixture.context,
@@ -408,7 +415,7 @@ void pollWaitsForFirstScheduledAccessUnit(TestContext& ctx)
     Fixture fixture;
     if (!fixture.activate(ctx)) return;
     auto sink = std::make_shared<SinkState>();
-    ProjectMpegTsMuxSessionAdapter adapter;
+    ProjectMpegTsMuxSessionAdapter adapter(muxGenerationState());
     bindComplete(adapter, fixture, sink, ctx, false);
 
     fixture.clock->nowValue = ms(1'020);
@@ -431,7 +438,7 @@ void insufficientEpochLeadFailsBeforeSessionActivation(TestContext& ctx)
     if (!fixture.activate(ctx)) return;
 
     auto sink = std::make_shared<SinkState>();
-    ProjectMpegTsMuxSessionAdapter adapter;
+    ProjectMpegTsMuxSessionAdapter adapter(muxGenerationState());
     EXPECT_TRUE(ctx, adapter.bindResource(
                          fixture.context, fixture.planBuffer()));
     EXPECT_TRUE(ctx, adapter.bindStreamConfig(
@@ -502,7 +509,7 @@ void finishAndAbortCloseExactlyOnce(TestContext& ctx)
     Fixture fixture;
     if (!fixture.activate(ctx)) return;
     auto sink = std::make_shared<SinkState>();
-    ProjectMpegTsMuxSessionAdapter adapter;
+    ProjectMpegTsMuxSessionAdapter adapter(muxGenerationState());
     bindComplete(adapter, fixture, sink, ctx, true);
     EXPECT_TRUE(ctx, adapter.finish(fixture.context));
     EXPECT_TRUE(ctx, adapter.finish(fixture.context));

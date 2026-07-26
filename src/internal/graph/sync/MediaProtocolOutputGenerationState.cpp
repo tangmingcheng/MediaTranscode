@@ -4,6 +4,13 @@
 
 namespace media::ffmpeg::graph {
 
+MediaProtocolOutputGenerationCommitReservation::
+    MediaProtocolOutputGenerationCommitReservation(
+        std::unique_lock<std::mutex> lock) noexcept
+    : m_lock(std::move(lock))
+{
+}
+
 MediaProtocolOutputGenerationState::MediaProtocolOutputGenerationState(
     std::string plannedIdentity)
     : m_plannedIdentity(std::move(plannedIdentity))
@@ -18,17 +25,15 @@ MediaProtocolOutputGenerationState::plannedIdentity() const noexcept
 
 ::media::Status
 MediaProtocolOutputGenerationState::permitActivatedGeneration(
-    std::uint64_t generation,
-    std::uint64_t transitionSequence)
+    std::uint64_t generation)
 {
     std::lock_guard lock(m_mutex);
     const bool initialActivation =
         !m_permittedGeneration && !m_pendingGeneration &&
-        !m_lastTransitionSequence && transitionSequence == 0;
+        !m_pendingTransitionSequence && !m_lastTransitionSequence;
     const bool plannedRollover =
         m_pendingGeneration && m_pendingTransitionSequence &&
-        *m_pendingGeneration == generation &&
-        *m_pendingTransitionSequence == transitionSequence;
+        *m_pendingGeneration == generation;
     if (m_plannedIdentity.empty() || generation == 0 ||
         (!initialActivation && !plannedRollover)) {
         return ::media::Status::failure(
@@ -41,30 +46,21 @@ MediaProtocolOutputGenerationState::permitActivatedGeneration(
     return ::media::Status::success();
 }
 
-::media::Status
-MediaProtocolOutputGenerationState::validateCommitGeneration(
+::media::Result<MediaProtocolOutputGenerationCommitReservation>
+MediaProtocolOutputGenerationState::reserveCommit(
     std::uint64_t generation) const
 {
-    std::lock_guard lock(m_mutex);
+    std::unique_lock lock(m_mutex);
     if (m_plannedIdentity.empty() || generation == 0 ||
         !m_permittedGeneration || *m_permittedGeneration != generation) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::cancelled(
-                "Protocol output commit requires the exact permitted generation"));
+        return ::media::Result<
+            MediaProtocolOutputGenerationCommitReservation>::failure(
+                ::media::ErrorInfo::cancelled(
+                    "Protocol output commit requires the exact permitted generation"));
     }
-    return ::media::Status::success();
-}
-
-std::optional<std::uint64_t>
-MediaProtocolOutputGenerationState::activationTransitionSequence(
-    std::uint64_t generation) const noexcept
-{
-    std::lock_guard lock(m_mutex);
-    if (!m_pendingGeneration || !m_pendingTransitionSequence ||
-        *m_pendingGeneration != generation) {
-        return std::nullopt;
-    }
-    return m_pendingTransitionSequence;
+    return ::media::Result<
+        MediaProtocolOutputGenerationCommitReservation>::success(
+            MediaProtocolOutputGenerationCommitReservation(std::move(lock)));
 }
 
 ::media::Status MediaProtocolOutputGenerationState::purge(

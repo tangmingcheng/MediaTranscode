@@ -310,7 +310,8 @@ FakePacketizerFactory::create(
 ::media::Result<MediaBufferRef> scheduledUnit(
     MediaScheduledStream stream,
     MediaRunningTime senderLead,
-    std::uint64_t sequence)
+    std::uint64_t sequence,
+    std::uint64_t generation)
 {
     const MediaStreamKind streamKind = stream == MediaScheduledStream::Video
         ? MediaStreamKind::Video
@@ -329,7 +330,8 @@ FakePacketizerFactory::create(
     return MediaScheduledAccessUnit::create(
         MediaScheduledAccessUnitParameters{
             std::move(packet).value(), stream, presentation, presentation,
-            presentation, presentation, dispatch.value(), milliseconds(10), 1,
+            presentation, presentation, dispatch.value(), milliseconds(10),
+            generation,
             MediaSourceAccessUnitSequence(sequence), std::nullopt,
             std::nullopt,
             stream == MediaScheduledStream::Video

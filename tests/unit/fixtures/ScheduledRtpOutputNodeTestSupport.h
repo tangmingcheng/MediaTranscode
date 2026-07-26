@@ -88,7 +88,8 @@ private:
 [[nodiscard]] ::media::Result<MediaBufferRef> scheduledUnit(
     MediaScheduledStream stream,
     MediaRunningTime senderLead,
-    std::uint64_t sequence = 1);
+    std::uint64_t sequence = 1,
+    std::uint64_t generation = 1);
 
 struct SenderGraphFixture final {
     MediaGraph graph;

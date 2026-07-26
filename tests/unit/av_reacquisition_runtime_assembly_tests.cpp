@@ -302,6 +302,8 @@ void productionFactoryRegistrationsSeal(
                 registration->registration.identity ==
                     "project_mpegts_output_generation_state" ||
                 registration->registration.identity ==
+                    "scheduled_ts_adapter_generation_state" ||
+                registration->registration.identity ==
                     "project_mpegts_mux_generation_state");
         }
         EXPECT_TRUE(
@@ -359,7 +361,7 @@ void productionFactoryRegistrationsSeal(
     } else {
         EXPECT_EQ(ctx, rtpVideoRegistrations, std::size_t{0});
         EXPECT_EQ(ctx, rtpAudioRegistrations, std::size_t{0});
-        EXPECT_EQ(ctx, mpegTsRegistrations, std::size_t{2});
+        EXPECT_EQ(ctx, mpegTsRegistrations, std::size_t{3});
     }
 }
 

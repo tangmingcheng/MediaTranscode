@@ -18,7 +18,6 @@ class MediaTsMuxSession;
 
 class ProjectMpegTsMuxSessionAdapter final : public MediaMuxSession {
 public:
-    ProjectMpegTsMuxSessionAdapter();
     explicit ProjectMpegTsMuxSessionAdapter(
         std::shared_ptr<MediaProtocolOutputGenerationState> generationState);
     ~ProjectMpegTsMuxSessionAdapter() override;

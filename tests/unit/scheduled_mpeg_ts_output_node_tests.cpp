@@ -35,6 +35,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 using namespace media::ffmpeg::graph;
@@ -71,6 +72,11 @@ struct MediaAvEpochTransitionServiceTestAccess final {
 
 namespace {
 
+static_assert(
+    !std::is_default_constructible_v<ProjectMpegTsMuxSessionAdapter>);
+static_assert(
+    !std::is_constructible_v<FileMuxNode, MediaNodeId, bool>);
+
 class FixedMasterClock final : public MediaMasterClock {
 public:
     explicit FixedMasterClock(MediaRunningTime now) : m_now(now) {}
@@ -89,14 +95,17 @@ void protocolOutputStatePreservesAuthorityAcrossRollover(TestContext& ctx)
     MediaProtocolOutputGenerationState state(
         "project_mpegts_output_generation_state");
     const auto* stableAuthority = &state;
-    EXPECT_TRUE(ctx, state.permitActivatedGeneration(1, 0));
-    EXPECT_TRUE(ctx, state.validateCommitGeneration(1));
+    const auto canReserve = [&state](std::uint64_t generation) {
+        return static_cast<bool>(state.reserveCommit(generation));
+    };
+    EXPECT_TRUE(ctx, state.permitActivatedGeneration(1));
+    EXPECT_TRUE(ctx, canReserve(1));
     EXPECT_TRUE(ctx, state.purge(MediaAvGenerationPurge{1, 2, 1}));
     EXPECT_EQ(ctx, &state, stableAuthority);
-    EXPECT_FALSE(ctx, state.validateCommitGeneration(1));
-    EXPECT_FALSE(ctx, state.validateCommitGeneration(2));
-    EXPECT_TRUE(ctx, state.permitActivatedGeneration(2, 1));
-    EXPECT_TRUE(ctx, state.validateCommitGeneration(2));
+    EXPECT_FALSE(ctx, canReserve(1));
+    EXPECT_FALSE(ctx, canReserve(2));
+    EXPECT_TRUE(ctx, state.permitActivatedGeneration(2));
+    EXPECT_TRUE(ctx, canReserve(2));
 }
 
 MediaRunningTime ms(std::int64_t value)
@@ -310,9 +319,83 @@ MediaBufferRef muxAccessUnit(MediaScheduledStream stream,
                              ? MediaStreamKind::Video
                              : MediaStreamKind::Audio);
     const auto dispatch = emission.checkedAdd(ms(100)).value();
+    const auto presentation = dispatch.checkedAdd(ms(20)).value();
     return MediaTsAccessUnitBuffer::create(
-        media, stream, generation, dispatch, dispatch, emission,
+        media, stream, generation, presentation, dispatch, emission,
         ms(100)).value();
+}
+
+std::uint16_t transportPid(
+    const std::vector<std::uint8_t>& bytes,
+    std::size_t offset)
+{
+    return static_cast<std::uint16_t>(
+        ((bytes[offset + 1] & 0x1F) << 8) | bytes[offset + 2]);
+}
+
+std::optional<std::uint64_t> firstPcrBase(
+    const std::vector<std::uint8_t>& bytes,
+    std::size_t begin)
+{
+    for (std::size_t offset = begin; offset + 188 <= bytes.size();
+         offset += 188) {
+        const auto control = (bytes[offset + 3] >> 4) & 0x03;
+        if ((control != 2 && control != 3) ||
+            bytes[offset + 4] < 7 ||
+            (bytes[offset + 5] & 0x10) == 0) {
+            continue;
+        }
+        return (static_cast<std::uint64_t>(bytes[offset + 6]) << 25) |
+               (static_cast<std::uint64_t>(bytes[offset + 7]) << 17) |
+               (static_cast<std::uint64_t>(bytes[offset + 8]) << 9) |
+               (static_cast<std::uint64_t>(bytes[offset + 9]) << 1) |
+               (bytes[offset + 10] >> 7);
+    }
+    return std::nullopt;
+}
+
+std::uint64_t decodePesTimestamp(const std::uint8_t* field)
+{
+    return (static_cast<std::uint64_t>((field[0] >> 1) & 0x07) << 30) |
+           (static_cast<std::uint64_t>(field[1]) << 22) |
+           (static_cast<std::uint64_t>(field[2] >> 1) << 15) |
+           (static_cast<std::uint64_t>(field[3]) << 7) |
+           (field[4] >> 1);
+}
+
+struct PesTimestamps final {
+    std::uint64_t pts;
+    std::uint64_t dts;
+};
+
+std::optional<PesTimestamps> firstVideoPesTimestamps(
+    const std::vector<std::uint8_t>& bytes,
+    std::size_t begin,
+    std::uint16_t videoPid)
+{
+    for (std::size_t offset = begin; offset + 188 <= bytes.size();
+         offset += 188) {
+        if (transportPid(bytes, offset) != videoPid ||
+            (bytes[offset + 1] & 0x40) == 0) {
+            continue;
+        }
+        std::size_t payload = offset + 4;
+        const auto control = (bytes[offset + 3] >> 4) & 0x03;
+        if (control == 2 || control == 3) {
+            payload += 1 + bytes[offset + 4];
+        }
+        if (payload + 19 > offset + 188 ||
+            bytes[payload] != 0 || bytes[payload + 1] != 0 ||
+            bytes[payload + 2] != 1) {
+            continue;
+        }
+        const auto flags = (bytes[payload + 7] >> 6) & 0x03;
+        if (flags != 3) continue;
+        return PesTimestamps{
+            decodePesTimestamp(bytes.data() + payload + 9),
+            decodePesTimestamp(bytes.data() + payload + 14)};
+    }
+    return std::nullopt;
 }
 
 class BindingBuffer final : public MediaBuffer {
@@ -788,7 +871,9 @@ void muxGenerationRolloverPreservesSinkAndResetsTransportState(
     auto f = assemblyFixture(ctx);
     if (!f.execution.compiled()) return;
     auto sinkState = std::make_shared<RecordingTsSinkState>();
-    ProjectMpegTsMuxSessionAdapter adapter;
+    ProjectMpegTsMuxSessionAdapter adapter(
+        std::make_shared<MediaProtocolOutputGenerationState>(
+            std::string(FileMuxNode::generationPurgeIdentity())));
     EXPECT_TRUE(ctx, adapter.bindResource(
         f.execution,
         MediaTsMuxRuntimePlanBuffer::create(
@@ -805,11 +890,17 @@ void muxGenerationRolloverPreservesSinkAndResetsTransportState(
         f.execution, MediaBufferRef(std::move(sinkBuffer).value())));
     EXPECT_TRUE(ctx, adapter.write(
         f.execution,
-        muxAccessUnit(MediaScheduledStream::Video, 7, ms(900))));
+        muxAccessUnit(MediaScheduledStream::Video, 7, ms(1'000))));
     EXPECT_TRUE(ctx, !sinkState->bytes.empty());
     if (sinkState->bytes.size() < 188) return;
     const auto firstGenerationPatContinuity =
         sinkState->bytes[3] & std::uint8_t{0x0F};
+    const auto firstGenerationPcr =
+        firstPcrBase(sinkState->bytes, 0);
+    const auto firstGenerationTimestamps = firstVideoPesTimestamps(
+        sinkState->bytes, 0, muxPlan().parameters().videoPid);
+    EXPECT_TRUE(ctx, firstGenerationPcr.has_value());
+    EXPECT_TRUE(ctx, firstGenerationTimestamps.has_value());
 
     const MediaPlaybackEpoch nextEpoch{ms(0), ms(1'000), 8};
     auto purge = f.transitionService->beginReacquisition(7, 8);
@@ -839,17 +930,40 @@ void muxGenerationRolloverPreservesSinkAndResetsTransportState(
             muxPlan(), nextEpoch, f.group).value()));
     EXPECT_TRUE(ctx, adapter.write(
         f.execution,
-        muxAccessUnit(MediaScheduledStream::Video, 8, ms(900))));
+        muxAccessUnit(MediaScheduledStream::Video, 8, ms(1'000))));
     EXPECT_TRUE(ctx, sinkState->bytes.size() >
                          secondGenerationOffset + 188);
     EXPECT_EQ(ctx, sinkState->closes, std::size_t{0});
     if (sinkState->bytes.size() > secondGenerationOffset + 3) {
         EXPECT_EQ(ctx, sinkState->bytes[secondGenerationOffset],
                   std::uint8_t{0x47});
+        EXPECT_EQ(ctx, transportPid(
+                           sinkState->bytes, secondGenerationOffset),
+                  std::uint16_t{0});
         EXPECT_EQ(ctx,
                   sinkState->bytes[secondGenerationOffset + 3] &
                       std::uint8_t{0x0F},
                   firstGenerationPatContinuity);
+    }
+    const auto secondGenerationPcr =
+        firstPcrBase(sinkState->bytes, secondGenerationOffset);
+    const auto secondGenerationTimestamps = firstVideoPesTimestamps(
+        sinkState->bytes, secondGenerationOffset,
+        muxPlan().parameters().videoPid);
+    EXPECT_TRUE(ctx, secondGenerationPcr.has_value());
+    EXPECT_TRUE(ctx, secondGenerationTimestamps.has_value());
+    if (firstGenerationPcr && secondGenerationPcr) {
+        EXPECT_TRUE(ctx, *secondGenerationPcr <= *firstGenerationPcr);
+    }
+    if (firstGenerationTimestamps && secondGenerationTimestamps) {
+        EXPECT_TRUE(
+            ctx,
+            secondGenerationTimestamps->pts <=
+                firstGenerationTimestamps->pts);
+        EXPECT_TRUE(
+            ctx,
+            secondGenerationTimestamps->dts <=
+                firstGenerationTimestamps->dts);
     }
     EXPECT_TRUE(ctx, adapter.finish(f.execution));
     EXPECT_EQ(ctx, sinkState->closes, std::size_t{1});

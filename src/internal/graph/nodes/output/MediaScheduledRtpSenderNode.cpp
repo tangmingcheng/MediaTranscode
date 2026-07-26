@@ -154,10 +154,8 @@ MediaNodeKind MediaScheduledRtpSenderNode::staticKind() noexcept
                        : groupEpoch.error());
     }
     m_epoch = groupEpoch.value();
-    const auto transition = m_generationState->activationTransitionSequence(
-        m_epoch->generation);
     if (auto permitted = m_generationState->permitActivatedGeneration(
-            m_epoch->generation, transition.value_or(0)); !permitted) {
+            m_epoch->generation); !permitted) {
         return ::media::Result<bool>::failure(permitted.error());
     }
     m_activation = std::move(*input.value());
@@ -263,8 +261,18 @@ MediaScheduledRtpSenderNode::processScheduledInput(
     }
     auto now = m_dependencies.syncGroup->clock()->now();
     if (!now) return failTerminal(now.error());
-    auto report = m_sender->dispatchSenderReport(now.value());
+    auto report = [&] {
+        auto reservation = reserveOutputCommit(m_epoch->generation);
+        if (!reservation) {
+            return decltype(m_sender->dispatchSenderReport(now.value()))::
+                failure(reservation.error());
+        }
+        return m_sender->dispatchSenderReport(now.value());
+    }();
     if (!report) {
+        if (report.error().code == ::media::ErrorCode::Cancelled) {
+            return processWaiting();
+        }
         if (report.error().code == ::media::ErrorCode::WouldBlock) {
             auto retryDeadline = now.value().checkedAdd(
                 m_outputPlan.senderReportInterval);
@@ -341,6 +349,8 @@ MediaScheduledRtpSenderNode::processScheduledInput(
         return failTerminal(::media::ErrorInfo::invalidArgument(
             "Scheduled RTP access unit has no packet payload"));
     }
+    auto reservation = reserveOutputCommit(scheduled->generation());
+    if (!reservation) return processWaiting();
     auto sent = m_sender->sendAccessUnit(
         *packet, scheduled->presentationOnMaster());
     if (!sent) return failTerminal(sent.error());
@@ -408,7 +418,19 @@ MediaScheduledRtpSenderNode::processScheduledInput(
             ::media::ErrorInfo::cancelled(
                 "Scheduled RTP output permit is closed for this generation"));
     }
-    return m_generationState->validateCommitGeneration(generation);
+    return ::media::Status::success();
+}
+
+::media::Result<MediaProtocolOutputGenerationCommitReservation>
+MediaScheduledRtpSenderNode::reserveOutputCommit(
+    std::uint64_t generation) const
+{
+    if (auto permitted = validateOutputPermit(generation); !permitted) {
+        return ::media::Result<
+            MediaProtocolOutputGenerationCommitReservation>::failure(
+                permitted.error());
+    }
+    return m_generationState->reserveCommit(generation);
 }
 
 ::media::Result<MediaNodeProcessResult>

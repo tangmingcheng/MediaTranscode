@@ -5,6 +5,7 @@
 #include "internal/graph/runtime/buffer/MediaTsMuxRuntimePlanBuffer.h"
 #include "internal/graph/sync/MediaScheduledAccessUnit.h"
 #include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
+#include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
 
 namespace media::ffmpeg::graph {
 
@@ -13,12 +14,21 @@ MediaScheduledTsAccessUnitAdapterNode::MediaScheduledTsAccessUnitAdapterNode(
     : FFmpegNodeRuntime(nodeId, staticKind(),
                         "MediaScheduledTsAccessUnitAdapterNode"),
       m_group(std::move(group))
+      , m_generationState(
+            std::make_shared<MediaProtocolOutputGenerationState>(
+                std::string(generationPurgeIdentity())))
 {
 }
 
 MediaNodeKind MediaScheduledTsAccessUnitAdapterNode::staticKind() noexcept
 {
     return MediaNodeKind::ScheduledTsAccessUnitAdapter;
+}
+
+std::shared_ptr<MediaAvGenerationPurgeTarget>
+MediaScheduledTsAccessUnitAdapterNode::generationPurgeTarget() const noexcept
+{
+    return m_generationState;
 }
 
 ::media::Status MediaScheduledTsAccessUnitAdapterNode::start(
@@ -82,6 +92,12 @@ MediaScheduledTsAccessUnitAdapterNode::onProcess(
         }
         m_epoch = plan->epoch();
         m_transportLead = plan->plan().transportDecodeLead();
+        if (auto permitted = m_generationState->permitActivatedGeneration(
+                m_epoch->generation);
+            !permitted) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                permitted.error());
+        }
         return processProgress();
     }
     auto input = tryPopInputOptional(context, "scheduled");
@@ -92,6 +108,7 @@ MediaScheduledTsAccessUnitAdapterNode::onProcess(
     if (const auto* control = dynamic_cast<const MediaControlBuffer*>(
             input.value()->get())) {
         if (control->controlKind() == MediaControlBufferKind::Flush) {
+            m_pendingCommitGeneration = m_epoch->generation;
             auto forwarded = emitOutput(context, "packet", *input.value());
             if (forwarded ||
                 forwarded.error().code == ::media::ErrorCode::WouldBlock) {
@@ -102,6 +119,7 @@ MediaScheduledTsAccessUnitAdapterNode::onProcess(
                              : processProgress(std::move(forwarded));
         }
         if (control->controlKind() == MediaControlBufferKind::Eof) {
+            m_pendingCommitGeneration = m_epoch->generation;
             return processFinished(
                 emitOutput(context, "packet", *input.value()));
         }
@@ -146,6 +164,7 @@ MediaScheduledTsAccessUnitAdapterNode::onProcess(
     if (!output) {
         return ::media::Result<MediaNodeProcessResult>::failure(output.error());
     }
+    m_pendingCommitGeneration = scheduled->generation();
     return processProgress(emitOutput(context, "packet", output.value()));
 }
 
@@ -167,6 +186,49 @@ MediaScheduledTsAccessUnitAdapterNode::validateOutputPermit(
                 "Scheduled TS output permit is closed for this generation"));
     }
     return ::media::Status::success();
+}
+
+::media::Result<
+    std::optional<MediaProtocolOutputGenerationCommitReservation>>
+MediaScheduledTsAccessUnitAdapterNode::reserveOutputCommit(
+    const MediaBufferRef& buffer) const
+{
+    std::optional<std::uint64_t> generation = m_pendingCommitGeneration;
+    if (const auto* accessUnit =
+            dynamic_cast<const MediaTsAccessUnitBuffer*>(buffer.get())) {
+        auto view = accessUnit->view();
+        if (!view) {
+            return ::media::Result<
+                std::optional<
+                    MediaProtocolOutputGenerationCommitReservation>>::failure(
+                        view.error());
+        }
+        generation = view.value().generation;
+    }
+    if (!generation) {
+        return ::media::Result<
+            std::optional<
+                MediaProtocolOutputGenerationCommitReservation>>::failure(
+                    ::media::ErrorInfo::notInitialized(
+                        "Scheduled TS commit requires an exact generation"));
+    }
+    if (auto permitted = validateOutputPermit(*generation); !permitted) {
+        return ::media::Result<
+            std::optional<
+                MediaProtocolOutputGenerationCommitReservation>>::failure(
+                    permitted.error());
+    }
+    auto reservation = m_generationState->reserveCommit(*generation);
+    if (!reservation) {
+        return ::media::Result<
+            std::optional<
+                MediaProtocolOutputGenerationCommitReservation>>::failure(
+                    reservation.error());
+    }
+    return ::media::Result<
+        std::optional<MediaProtocolOutputGenerationCommitReservation>>::
+        success(std::optional<MediaProtocolOutputGenerationCommitReservation>(
+            std::move(reservation).value()));
 }
 
 ::media::Status MediaScheduledTsAccessUnitAdapterNode::flush(
@@ -194,8 +256,10 @@ void MediaScheduledTsAccessUnitAdapterNode::resetState() noexcept
 {
     cancelPendingOutputTransfer();
     m_syncGroup.reset();
+    m_generationState->resetLifecycle();
     m_epoch.reset();
     m_transportLead.reset();
+    m_pendingCommitGeneration.reset();
 }
 
 } // namespace media::ffmpeg::graph

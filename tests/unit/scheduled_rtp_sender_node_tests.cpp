@@ -4,13 +4,46 @@
 #include "internal/graph/runtime/buffer/FFmpegCodecContextBuffer.h"
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/buffer/MediaPlaybackEpochActivatedBuffer.h"
+#include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlanner.h"
+#include "internal/graph/sync/MediaAvEpochTransitionService.h"
+#include "internal/graph/time/MediaSharedNtpEpoch.h"
 
 extern "C" {
 #include <libavutil/mem.h>
 }
 
 #include <memory>
+#include <future>
 #include <utility>
+
+namespace media::ffmpeg::graph {
+
+struct MediaAvEpochTransitionServiceTestAccess final {
+    static ::media::Status activateInitial(
+        const std::shared_ptr<MediaAvEpochTransitionService>& service,
+        const MediaPlaybackEpoch& epoch)
+    {
+        return service->activateInitial(
+            epoch,
+            MediaAudioPlaybackOrigin{
+                epoch.generation, epoch.sourceStart, epoch.masterRelease,
+                0, 48'000});
+    }
+
+    static ::media::Status activateNext(
+        const std::shared_ptr<MediaAvEpochTransitionService>& service,
+        std::uint64_t transitionSequence,
+        const MediaPlaybackEpoch& epoch)
+    {
+        return service->activateNextAfter(
+            transitionSequence, epoch,
+            MediaAudioPlaybackOrigin{
+                epoch.generation, epoch.sourceStart, epoch.masterRelease,
+                0, 48'000});
+    }
+};
+
+} // namespace media::ffmpeg::graph
 
 namespace media_transcode::test::scheduled_rtp_output {
 
@@ -18,6 +51,138 @@ using namespace media::ffmpeg::graph;
 using namespace rtp_udp;
 
 namespace {
+
+void testPermitCloseDropsOldGenerationAndReusesTransport(TestContext& ctx)
+{
+    auto outer = MediaRealtimeRtpTranscodePlanner::plan(completeRequest());
+    EXPECT_TRUE(ctx, outer && outer.value().avSyncRuntime);
+    if (!outer || !outer.value().avSyncRuntime) return;
+    auto runtimePlan = std::move(*outer.value().avSyncRuntime);
+    auto transitionPlan = MediaAvGenerationTransitionPlanner::plan(
+        MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp,
+        milliseconds(1'000), milliseconds(1'000));
+    auto transition = MediaAvEpochTransitionService::create(transitionPlan);
+    auto sharedNtp = MediaSharedNtpEpoch::create(
+        milliseconds(0), std::chrono::seconds(1'700'000'000));
+    auto clock = std::make_shared<TestMasterClock>(milliseconds(0));
+    EXPECT_TRUE(ctx, transition && sharedNtp);
+    if (!transition || !sharedNtp) return;
+    auto group = MediaAvSyncGroupRuntime::create(
+        runtimePlan.groupKey, runtimePlan.synchronization, clock,
+        std::make_shared<const MediaSharedNtpEpoch>(
+            std::move(sharedNtp).value()),
+        transition.value());
+    EXPECT_TRUE(ctx, group);
+    if (!group) return;
+    const MediaPlaybackEpoch firstEpoch{
+        milliseconds(0), milliseconds(0), 1};
+    EXPECT_TRUE(ctx, MediaAvEpochTransitionServiceTestAccess::activateInitial(
+                         transition.value(), firstEpoch));
+    auto sender = senderCase(
+        ctx, runtimePlan, group.value(), MediaScheduledStream::Video,
+        false, 40'000);
+    if (!sender ||
+        !pushActivationAndCodec(
+            ctx, *sender, runtimePlan.groupKey, true)) {
+        return;
+    }
+    EXPECT_TRUE(ctx, sender->node->process(sender->graph.execution));
+    EXPECT_TRUE(ctx, sender->node->process(sender->graph.execution));
+    const int initialOpenCalls = sender->rtp->openCalls;
+
+    auto inFlight = scheduledUnit(
+        MediaScheduledStream::Video, sender->senderLead, 10, 1);
+    EXPECT_TRUE(ctx, inFlight);
+    if (!inFlight) return;
+    EXPECT_TRUE(ctx, sender->graph.execution.findInputChannel(
+                         sender->graph.sender, "scheduled")
+                         ->push(std::move(inFlight).value()));
+    {
+        std::lock_guard lock(sender->rtp->blockMutex);
+        sender->rtp->releaseSend = false;
+        sender->rtp->sendEntered = false;
+    }
+    auto inFlightCommit = std::async(
+        std::launch::async,
+        [&sender] {
+            return sender->node->process(sender->graph.execution);
+        });
+    {
+        std::unique_lock lock(sender->rtp->blockMutex);
+        sender->rtp->blockCondition.wait(
+            lock, [&sender] { return sender->rtp->sendEntered; });
+    }
+    auto purge = transition.value()->beginReacquisition(1, 2);
+    EXPECT_TRUE(ctx, purge);
+    if (!purge) {
+        releasePort(sender->rtp);
+        (void)inFlightCommit.get();
+        return;
+    }
+    std::promise<void> purgeStarted;
+    auto purgeCommit = std::async(
+        std::launch::async,
+        [&sender, &purge, &purgeStarted] {
+            purgeStarted.set_value();
+            return sender->node->generationPurgeTarget()->purge(
+                purge.value());
+        });
+    purgeStarted.get_future().wait();
+    EXPECT_EQ(
+        ctx,
+        purgeCommit.wait_for(std::chrono::milliseconds(0)),
+        std::future_status::timeout);
+    releasePort(sender->rtp);
+    EXPECT_TRUE(ctx, inFlightCommit.get());
+    EXPECT_TRUE(ctx, purgeCommit.get());
+    EXPECT_EQ(ctx, sender->rtp->sendCalls, 1);
+
+    auto closedGeneration = scheduledUnit(
+        MediaScheduledStream::Video, sender->senderLead, 11, 1);
+    EXPECT_TRUE(ctx, closedGeneration);
+    if (!closedGeneration) return;
+    EXPECT_TRUE(ctx, sender->graph.execution.findInputChannel(
+                         sender->graph.sender, "scheduled")
+                         ->push(std::move(closedGeneration).value()));
+    EXPECT_TRUE(ctx, sender->node->process(sender->graph.execution));
+    EXPECT_EQ(ctx, sender->rtp->sendCalls, 1);
+
+    for (const auto& participant :
+         transition.value()->transitionPlan().participants) {
+        EXPECT_TRUE(ctx, transition.value()->acknowledge(
+                             MediaAvGenerationAcknowledgement{
+                                 participant.participant,
+                                 purge.value().transitionSequence,
+                                 ::media::Status::success()}));
+    }
+    const MediaPlaybackEpoch secondEpoch{
+        milliseconds(0), milliseconds(1'000), 2};
+    EXPECT_TRUE(ctx, MediaAvEpochTransitionServiceTestAccess::activateNext(
+                         transition.value(),
+                         purge.value().transitionSequence, secondEpoch));
+    auto activation = MediaPlaybackEpochActivatedBuffer::create(
+        runtimePlan.groupKey, secondEpoch,
+        {2, milliseconds(0), milliseconds(1'000), 0, 48'000});
+    EXPECT_TRUE(ctx, activation);
+    if (!activation) return;
+    EXPECT_TRUE(ctx, sender->graph.execution.findInputChannel(
+                         sender->graph.sender, "epoch")
+                         ->push(std::move(activation).value()));
+    EXPECT_TRUE(ctx, sender->node->process(sender->graph.execution));
+    EXPECT_TRUE(ctx, sender->node->process(sender->graph.execution));
+    EXPECT_TRUE(ctx, sender->node->process(sender->graph.execution));
+    auto current = scheduledUnit(
+        MediaScheduledStream::Video, sender->senderLead, 12, 2);
+    EXPECT_TRUE(ctx, current);
+    if (!current) return;
+    EXPECT_TRUE(ctx, sender->graph.execution.findInputChannel(
+                         sender->graph.sender, "scheduled")
+                         ->push(std::move(current).value()));
+    EXPECT_TRUE(ctx, sender->node->process(sender->graph.execution));
+    EXPECT_EQ(ctx, sender->rtp->openCalls, initialOpenCalls);
+    EXPECT_EQ(ctx, sender->rtp->sendCalls, 2);
+    EXPECT_TRUE(ctx, sender->node->stop(sender->graph.execution));
+}
 
 void testActivationOpensExactPlannedSenders(TestContext& ctx)
 {
@@ -419,6 +584,7 @@ void testSenderFailureAndLifecycleMatrix(TestContext& ctx)
 
 void runScheduledRtpSenderNodeTests(TestContext& ctx)
 {
+    testPermitCloseDropsOldGenerationAndReusesTransport(ctx);
     testActivationOpensExactPlannedSenders(ctx);
     testSenderFailureAndLifecycleMatrix(ctx);
 }

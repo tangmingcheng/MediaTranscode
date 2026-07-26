@@ -22,17 +22,16 @@ bool isBindingPort(std::string_view name) noexcept
 } // namespace
 
 FileMuxNode::FileMuxNode(MediaNodeId nodeId)
-    : FileMuxNode(nodeId, false)
+    : FFmpegNodeRuntime(nodeId, staticKind(), "FileMuxNode")
+    , m_sessionFactory(std::make_unique<ExplicitMediaMuxSessionFactory>())
 {
 }
 
 FileMuxNode::FileMuxNode(
-    MediaNodeId nodeId, bool projectMpegTsGenerationTarget)
+    MediaNodeId nodeId,
+    std::shared_ptr<MediaProtocolOutputGenerationState> generationState)
     : FFmpegNodeRuntime(nodeId, staticKind(), "FileMuxNode")
-    , m_generationState(projectMpegTsGenerationTarget
-          ? std::make_shared<MediaProtocolOutputGenerationState>(
-                std::string(generationPurgeIdentity()))
-          : nullptr)
+    , m_generationState(std::move(generationState))
     , m_sessionFactory(std::make_unique<ExplicitMediaMuxSessionFactory>(
           m_generationState))
 {

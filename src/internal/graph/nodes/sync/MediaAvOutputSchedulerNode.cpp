@@ -119,10 +119,8 @@ MediaAvOutputSchedulerNode::generationPurgeTarget() const noexcept
     }
     auto epoch = m_group->playbackEpoch();
     if (!epoch) return ::media::Status::failure(epoch.error());
-    const auto transition = m_generationState->activationTransitionSequence(
-        epoch.value().generation);
     if (auto permitted = m_generationState->permitActivatedGeneration(
-            epoch.value().generation, transition.value_or(0)); !permitted) {
+            epoch.value().generation); !permitted) {
         return permitted;
     }
     auto controller = m_videoControllerFactory(
@@ -878,7 +876,43 @@ MediaAvOutputSchedulerNode::emitWithCommit(
             ::media::ErrorInfo::cancelled(
                 "A/V scheduler commit is closed for this generation"));
     }
-    return m_generationState->validateCommitGeneration(*generation);
+    return ::media::Status::success();
+}
+
+::media::Result<
+    std::optional<MediaProtocolOutputGenerationCommitReservation>>
+MediaAvOutputSchedulerNode::reserveOutputCommit(
+    const MediaBufferRef& buffer) const
+{
+    std::optional<std::uint64_t> generation;
+    if (const auto* scheduled =
+            dynamic_cast<const MediaScheduledAccessUnit*>(buffer.get())) {
+        generation = scheduled->generation();
+    } else if (m_pendingCommit && m_pendingCommit->generation) {
+        generation = m_pendingCommit->generation;
+    } else if (m_group) {
+        const auto snapshot = m_group->epochTransitionSnapshot();
+        if (snapshot.playbackEpoch) {
+            generation = snapshot.playbackEpoch->generation;
+        }
+    }
+    if (auto permitted = validateCommitGeneration(generation); !permitted) {
+        return ::media::Result<
+            std::optional<
+                MediaProtocolOutputGenerationCommitReservation>>::failure(
+                    permitted.error());
+    }
+    auto reservation = m_generationState->reserveCommit(*generation);
+    if (!reservation) {
+        return ::media::Result<
+            std::optional<
+                MediaProtocolOutputGenerationCommitReservation>>::failure(
+                    reservation.error());
+    }
+    return ::media::Result<
+        std::optional<MediaProtocolOutputGenerationCommitReservation>>::
+        success(std::optional<MediaProtocolOutputGenerationCommitReservation>(
+            std::move(reservation).value()));
 }
 
 MediaNodeProcessResult MediaAvOutputSchedulerNode::applyCommit(

@@ -72,13 +72,6 @@ private:
 
 } // namespace
 
-ProjectMpegTsMuxSessionAdapter::ProjectMpegTsMuxSessionAdapter()
-    : ProjectMpegTsMuxSessionAdapter(
-          std::make_shared<MediaProtocolOutputGenerationState>(
-              "project_mpegts_mux_generation_state"))
-{
-}
-
 ProjectMpegTsMuxSessionAdapter::ProjectMpegTsMuxSessionAdapter(
     std::shared_ptr<MediaProtocolOutputGenerationState> generationState)
     : m_generationState(std::move(generationState))
@@ -234,6 +227,9 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
         std::make_unique<GenerationBorrowedByteSink>(*m_sink)});
     if (!session) return fail(session.error());
     m_session = std::move(session).value();
+    auto reservation =
+        m_generationState->reserveCommit(m_epoch->generation);
+    if (!reservation) return fail(reservation.error());
     auto started = m_session->start(emissionOrigin.value());
     if (!started) return fail(started.error());
     m_state = State::Active;
@@ -266,12 +262,10 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
         return ::media::Status::failure(invalid(
             "project MPEG-TS mux session playback epoch does not match its runtime plan"));
     }
-    if (!m_generationState ||
-        !m_generationState->validateCommitGeneration(
-            m_epoch->generation)) {
+    if (!m_generationState) {
         return ::media::Status::failure(
-            ::media::ErrorInfo::cancelled(
-                "project MPEG-TS mux output permit is closed"));
+            ::media::ErrorInfo::notInitialized(
+                "project MPEG-TS mux generation state is missing"));
     }
     if (!group->clock()) {
         return ::media::Status::failure(
@@ -334,6 +328,9 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
     if (!binding) return fail(binding.error());
     auto unit = validateAccessUnit(buffer);
     if (!unit) return fail(unit.error());
+    auto reservation =
+        m_generationState->reserveCommit(view.value().generation);
+    if (!reservation) return ::media::Status::success();
     auto written = m_session->writeAccessUnit(view.value());
     if (!written) return fail(written.error());
     m_nextTransportDeadline = written.value().nextDeadline;
@@ -400,6 +397,12 @@ ProjectMpegTsMuxSessionAdapter::poll(MediaGraphExecutionContext& context)
             MediaNodeProcessResult::DeadlineWait{
                 *m_group, safeDeadline.value()}});
     }
+    auto reservation =
+        m_generationState->reserveCommit(m_epoch->generation);
+    if (!reservation) {
+        return ::media::Result<MediaMuxSessionPollResult>::success(
+            {false, std::nullopt});
+    }
     auto polled = m_session->poll(now.value());
     if (!polled) {
         auto status = fail(polled.error());
@@ -446,6 +449,9 @@ bool ProjectMpegTsMuxSessionAdapter::bindingsReady() const noexcept
     }
     auto binding = validateExecutionBinding(context);
     if (!binding) return fail(binding.error());
+    auto reservation =
+        m_generationState->reserveCommit(m_epoch->generation);
+    if (!reservation) return fail(reservation.error());
     auto status = m_session->finish();
     if (!status) return fail(status.error());
     auto sinkStatus = m_sink->close();
@@ -497,18 +503,13 @@ ProjectMpegTsMuxSessionAdapter::permitRuntimePlanGeneration(
             ::media::ErrorInfo::notInitialized(
                 "project MPEG-TS mux generation state is missing"));
     }
-    const auto transition =
-        m_generationState->activationTransitionSequence(generation);
-    return m_generationState->permitActivatedGeneration(
-        generation, transition.value_or(0));
+    return m_generationState->permitActivatedGeneration(generation);
 }
 
 bool ProjectMpegTsMuxSessionAdapter::outputPermitted(
     MediaGraphExecutionContext& context) const noexcept
 {
-    if (!m_group || !m_epoch || !m_generationState ||
-        !m_generationState->validateCommitGeneration(
-            m_epoch->generation)) {
+    if (!m_group || !m_epoch || !m_generationState) {
         return false;
     }
     auto group = context.findAvSyncGroup(*m_group);

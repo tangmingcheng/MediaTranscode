@@ -122,6 +122,15 @@ bool FFmpegNodeRuntime::pendingOutputIsCurrent(const MediaBufferRef&) const noex
     return true;
 }
 
+::media::Result<
+    std::optional<MediaProtocolOutputGenerationCommitReservation>>
+FFmpegNodeRuntime::reserveOutputCommit(const MediaBufferRef&) const
+{
+    return ::media::Result<
+        std::optional<MediaProtocolOutputGenerationCommitReservation>>::
+        success(std::nullopt);
+}
+
 void FFmpegNodeRuntime::cancelPendingOutputTransfer() noexcept
 {
     m_pendingTransfer.reset();
@@ -563,6 +572,13 @@ FFmpegNodeRuntime::tryPopFirstInputWithChannelOptional(
         }
     }
 
+    auto reservation = reserveOutputCommit(buffer);
+    if (!reservation) {
+        if (reservation.error().code == ::media::ErrorCode::Cancelled) {
+            return ::media::Status::success();
+        }
+        return ::media::Status::failure(reservation.error());
+    }
     for (std::size_t index = 0; index < channels.size(); ++index) {
         MediaChannel* channel = channels[index];
         const MediaQueuePushOutcome outcome = channel->pushOutcome(buffer);
@@ -594,6 +610,14 @@ FFmpegNodeRuntime::tryPopFirstInputWithChannelOptional(
     waiting = false;
     while (m_pendingTransfer) {
         PendingTransfer& transfer = *m_pendingTransfer;
+        auto reservation = reserveOutputCommit(transfer.buffer);
+        if (!reservation) {
+            if (reservation.error().code == ::media::ErrorCode::Cancelled) {
+                m_pendingTransfer.reset();
+                return ::media::Status::success();
+            }
+            return ::media::Status::failure(reservation.error());
+        }
         MediaChannel* channel = transfer.channels[transfer.nextChannel];
         const MediaQueuePushOutcome outcome = channel->pushOutcome(transfer.buffer);
         if (outcome == MediaQueuePushOutcome::WouldBlock) {

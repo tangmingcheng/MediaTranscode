@@ -16,13 +16,16 @@ int main()
     media_transcode::test::TestContext ctx;
     MediaProtocolOutputGenerationState generationState(
         "rtp_video_output_generation_state");
-    EXPECT_TRUE(ctx, generationState.permitActivatedGeneration(1, 0));
-    EXPECT_TRUE(ctx, generationState.validateCommitGeneration(1));
+    const auto canReserve = [&generationState](std::uint64_t generation) {
+        return static_cast<bool>(generationState.reserveCommit(generation));
+    };
+    EXPECT_TRUE(ctx, generationState.permitActivatedGeneration(1));
+    EXPECT_TRUE(ctx, canReserve(1));
     EXPECT_TRUE(ctx, generationState.purge(MediaAvGenerationPurge{1, 2, 1}));
-    EXPECT_FALSE(ctx, generationState.validateCommitGeneration(1));
-    EXPECT_FALSE(ctx, generationState.validateCommitGeneration(2));
-    EXPECT_TRUE(ctx, generationState.permitActivatedGeneration(2, 1));
-    EXPECT_TRUE(ctx, generationState.validateCommitGeneration(2));
+    EXPECT_FALSE(ctx, canReserve(1));
+    EXPECT_FALSE(ctx, canReserve(2));
+    EXPECT_TRUE(ctx, generationState.permitActivatedGeneration(2));
+    EXPECT_TRUE(ctx, canReserve(2));
     media_transcode::test::scheduled_rtp_output::
         runScheduledRtpSenderNodeTests(ctx);
     media_transcode::test::scheduled_rtp_output::

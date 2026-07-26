@@ -15,6 +15,7 @@
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
+#include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
 
 extern "C" {
 #include <libavcodec/codec_par.h>
@@ -287,7 +288,10 @@ struct ProjectFileMuxHarness final {
                   MediaPayloadKind::TsAccessUnit);
         EXPECT_EQ(ctx, channel(audioPacketSource)->binding().payloadKind,
                   MediaPayloadKind::TsAccessUnit);
-        runtime = std::make_unique<FileMuxNode>(mux);
+        runtime = std::make_unique<FileMuxNode>(
+            mux,
+            std::make_shared<MediaProtocolOutputGenerationState>(
+                std::string(FileMuxNode::generationPurgeIdentity())));
         EXPECT_TRUE(ctx, runtime->start(execution));
         return execution.compiled();
     }
