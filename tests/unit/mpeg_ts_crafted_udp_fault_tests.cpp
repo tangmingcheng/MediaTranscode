@@ -27,8 +27,6 @@ MediaTsProgramClockPolicy clockPolicy(const CraftedTsProgramIdentity& identity)
         identity.pcrPid,
         identity.videoPid,
         identity.audioPid,
-        kPcrInterval27Mhz,
-        1'000,
         kPcrInterval27Mhz * 3};
 }
 

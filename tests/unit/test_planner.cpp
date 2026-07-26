@@ -155,8 +155,6 @@ void testTsInputPlanValidatorRejectsEveryMutation(TestContext& ctx)
     valid.videoPid = 703;
     valid.audioPid = 705;
     valid.pcrPid = 701;
-    valid.pcrInterval27Mhz = 540'000;
-    valid.maximumPcrJitter27Mhz = 135'000;
     valid.maximumPcrGap27Mhz = 2'700'000;
     valid.projectionCapacity = valid.evidenceTimelineCapacity;
     valid.initialAcquiringVideoPacketCapacity = 8;
@@ -187,6 +185,7 @@ void testTsInputPlanValidatorRejectsEveryMutation(TestContext& ctx)
     mutated([](auto& plan) { plan.evidenceTimelineCapacity = 34; });
     mutated([](auto& plan) { plan.maximumPacketPositionRegressionBytes = 0; });
     mutated([](auto& plan) { plan.pesProvenanceCapacity = 0; });
+    mutated([](auto& plan) { plan.maximumPcrGap27Mhz = 0; });
     mutated([](auto& plan) { plan.initialAcquiringVideoPacketCapacity = 0; });
     mutated([](auto& plan) { plan.initialAcquiringAudioPacketCapacity = 0; });
     mutated([](auto& plan) { plan.initialAcquiringVideoByteCapacity = 0; });
@@ -1302,8 +1301,6 @@ void testRealtimePlannerProducesCompleteTsAvSyncRuntimeProduct(TestContext& ctx)
     tsInput.value().videoPid = selectedTsProgram().videoPid;
     tsInput.value().audioPid = selectedTsProgram().audioPid;
     tsInput.value().pcrPid = selectedTsProgram().pcrPid;
-    tsInput.value().pcrInterval27Mhz = 540'000;
-    tsInput.value().maximumPcrJitter27Mhz = 135'000;
     tsInput.value().maximumPcrGap27Mhz = 2'700'000;
     tsInput.value().projectionCapacity =
         tsInput.value().evidenceTimelineCapacity;

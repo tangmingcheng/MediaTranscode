@@ -15,8 +15,6 @@ struct MediaTsProgramClockPolicy final {
     std::uint16_t pcrPid = 0;
     std::uint16_t videoPid = 0;
     std::uint16_t audioPid = 0;
-    std::int64_t pcrInterval27Mhz = 0;
-    std::int64_t maximumJitter27Mhz = 0;
     std::int64_t maximumGap27Mhz = 0;
 };
 

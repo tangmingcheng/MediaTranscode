@@ -249,8 +249,7 @@ struct NodeFixture final {
         const std::vector<std::pair<std::string, std::string>> values{
             {"mpegts.program_number", "1"}, {"mpegts.pmt_pid", "256"},
             {"mpegts.video_pid", "513"}, {"mpegts.audio_pid", "514"},
-            {"mpegts.pcr_pid", "257"}, {"mpegts.pcr_interval_27mhz", "2700000"},
-            {"mpegts.maximum_pcr_jitter_27mhz", "2700"}, {"mpegts.maximum_pcr_gap_27mhz", "8100000"},
+            {"mpegts.pcr_pid", "257"}, {"mpegts.maximum_pcr_gap_27mhz", "8100000"},
             {"mpegts.packet_stride", "188"}, {"mpegts.evidence_timeline_capacity", "32"},
             {"mpegts.projection_capacity", std::to_string(projectionCapacity)},
             {"mpegts.initial_acquiring_video_packet_capacity", "8"},
@@ -297,7 +296,10 @@ void testBindingFailures(TestContext& ctx)
     EXPECT_TRUE(ctx, wrong.input()->push(eof.value()));
     MpegTsDemuxNode wrongNode(wrong.demux); EXPECT_FALSE(ctx, wrongNode.process(wrong.execution));
 
-    for (const auto* missingKey : {"mpegts.packet_stride", "mpegts.evidence_timeline_capacity"}) {
+    for (const auto* missingKey : {
+             "mpegts.maximum_pcr_gap_27mhz",
+             "mpegts.packet_stride",
+             "mpegts.evidence_timeline_capacity"}) {
         NodeFixture fixture(false); fixture.setOptions(32, missingKey);
         EXPECT_TRUE(ctx, fixture.compile());
         EXPECT_TRUE(ctx, fixture.input()->push(prepared(std::make_unique<ScriptedTsSession>())));

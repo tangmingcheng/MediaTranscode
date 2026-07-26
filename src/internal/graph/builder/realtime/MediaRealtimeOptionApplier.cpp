@@ -108,8 +108,6 @@ const char* boolOption(bool value) noexcept
     if (auto s = set("mpegts.video_pid", plan.videoPid); !s) return s;
     if (auto s = set("mpegts.audio_pid", plan.audioPid); !s) return s;
     if (auto s = set("mpegts.pcr_pid", plan.pcrPid); !s) return s;
-    if (auto s = set("mpegts.pcr_interval_27mhz", plan.pcrInterval27Mhz); !s) return s;
-    if (auto s = set("mpegts.maximum_pcr_jitter_27mhz", plan.maximumPcrJitter27Mhz); !s) return s;
     if (auto s = set("mpegts.maximum_pcr_gap_27mhz", plan.maximumPcrGap27Mhz); !s) return s;
     if (auto s = set("mpegts.packet_stride", plan.packetSize); !s) return s;
     if (auto s = set("mpegts.evidence_timeline_capacity", plan.evidenceTimelineCapacity); !s) return s;

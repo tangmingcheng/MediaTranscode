@@ -88,8 +88,6 @@ MediaNodeKind MpegTsDemuxNode::staticKind() noexcept
     auto video = requiredPositiveIntNodeOption(options, "MpegTsDemuxNode", "mpegts.video_pid");
     auto audio = requiredPositiveIntNodeOption(options, "MpegTsDemuxNode", "mpegts.audio_pid");
     auto pcr = requiredPositiveIntNodeOption(options, "MpegTsDemuxNode", "mpegts.pcr_pid");
-    auto interval = requiredPositiveInt64NodeOption(options, "MpegTsDemuxNode", "mpegts.pcr_interval_27mhz");
-    auto jitter = requiredPositiveInt64NodeOption(options, "MpegTsDemuxNode", "mpegts.maximum_pcr_jitter_27mhz");
     auto gap = requiredPositiveInt64NodeOption(options, "MpegTsDemuxNode", "mpegts.maximum_pcr_gap_27mhz");
     auto packetStride = requiredPositiveIntNodeOption(options, "MpegTsDemuxNode", "mpegts.packet_stride");
     auto evidenceCapacity = requiredPositiveIntNodeOption(options, "MpegTsDemuxNode", "mpegts.evidence_timeline_capacity");
@@ -115,7 +113,7 @@ MediaNodeKind MpegTsDemuxNode::staticKind() noexcept
         options, "MpegTsDemuxNode", "mpegts.maximum_acquiring_video_packet_bytes");
     auto maximumAudioPacketBytes = requiredPositiveInt64NodeOption(
         options, "MpegTsDemuxNode", "mpegts.maximum_acquiring_audio_packet_bytes");
-    if (!program || !pmt || !video || !audio || !pcr || !interval || !jitter || !gap ||
+    if (!program || !pmt || !video || !audio || !pcr || !gap ||
         !packetStride || !evidenceCapacity || !capacity || !regression || !provenanceCapacity ||
         !originPolicyValue ||
         !numerator || !denominator || !sourceGeneration ||
@@ -125,8 +123,7 @@ MediaNodeKind MpegTsDemuxNode::staticKind() noexcept
         const ::media::ErrorInfo* error = nullptr;
         if (!program) error = &program.error(); else if (!pmt) error = &pmt.error();
         else if (!video) error = &video.error(); else if (!audio) error = &audio.error();
-        else if (!pcr) error = &pcr.error(); else if (!interval) error = &interval.error();
-        else if (!jitter) error = &jitter.error(); else if (!gap) error = &gap.error();
+        else if (!pcr) error = &pcr.error(); else if (!gap) error = &gap.error();
         else if (!packetStride) error = &packetStride.error(); else if (!evidenceCapacity) error = &evidenceCapacity.error();
         else if (!capacity) error = &capacity.error(); else if (!regression) error = &regression.error();
         else if (!provenanceCapacity) error = &provenanceCapacity.error();
@@ -158,7 +155,7 @@ MediaNodeKind MpegTsDemuxNode::staticKind() noexcept
     MediaTsProgramClockPolicy policy{
         static_cast<std::uint16_t>(program.value()), static_cast<std::uint16_t>(pmt.value()),
         static_cast<std::uint16_t>(pcr.value()), static_cast<std::uint16_t>(video.value()),
-        static_cast<std::uint16_t>(audio.value()), interval.value(), jitter.value(), gap.value()};
+        static_cast<std::uint16_t>(audio.value()), gap.value()};
     auto projection = MediaTsClockProjection::create(
         policy, static_cast<std::size_t>(capacity.value()),
         static_cast<std::uint64_t>(regression.value()), sourceGeneration.value(), rawGeneration.value());

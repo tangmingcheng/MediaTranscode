@@ -19,13 +19,6 @@ bool validPid(std::uint16_t pid) noexcept
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("MPEG-TS PCR gap or regression violates policy"));
     }
-    const std::int64_t remainder = delta % policy.pcrInterval27Mhz;
-    const std::int64_t residual = std::min(
-        remainder, policy.pcrInterval27Mhz - remainder);
-    if (residual > policy.maximumJitter27Mhz) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("MPEG-TS PCR jitter violates planned interval"));
-    }
     return ::media::Status::success();
 }
 
@@ -47,10 +40,7 @@ MediaTsProgramClockTracker::MediaTsProgramClockTracker(
 {
     if (policy.programNumber == 0 || !validPid(policy.pmtPid) ||
         !validPid(policy.pcrPid) || !validPid(policy.videoPid) ||
-        !validPid(policy.audioPid) || policy.pcrInterval27Mhz <= 0 ||
-        policy.maximumJitter27Mhz < 0 ||
-        policy.maximumJitter27Mhz > policy.pcrInterval27Mhz / 2 ||
-        policy.maximumGap27Mhz < policy.pcrInterval27Mhz) {
+        !validPid(policy.audioPid) || policy.maximumGap27Mhz <= 0) {
         return ::media::Result<MediaTsProgramClockTracker>::failure(
             ::media::ErrorInfo::invalidArgument("Invalid immutable MPEG-TS PCR policy"));
     }

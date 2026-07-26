@@ -464,8 +464,6 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
                 selectedTsProgram->videoPacketDuration;
             selected.audioPacketDuration =
                 selectedTsProgram->audioPacketDuration;
-            selected.pcrInterval27Mhz = 540'000;
-            selected.maximumPcrJitter27Mhz = 135'000;
             selected.maximumPcrGap27Mhz = 2'700'000;
             selected.projectionCapacity = selected.evidenceTimelineCapacity;
             selected.timestampTimeBaseNumerator = 1;

@@ -57,8 +57,6 @@ MediaTsProgramClockPolicy clockPolicy()
         .pcrPid = 0x101,
         .videoPid = 0x201,
         .audioPid = 0x202,
-        .pcrInterval27Mhz = 2'700'000,
-        .maximumJitter27Mhz = 2'700,
         .maximumGap27Mhz = 8'100'000};
 }
 
@@ -346,6 +344,10 @@ void testProgramClockTracker(TestContext& ctx)
     EXPECT_TRUE(ctx, tracker.observe(pcr(9'801'000, 564)));
     EXPECT_FALSE(ctx, tracker.observe(pcr(20'601'000, 752)));
 
+    auto invalidPolicy = clockPolicy();
+    invalidPolicy.maximumGap27Mhz = 0;
+    EXPECT_FALSE(ctx, MediaTsProgramClockTracker::create(invalidPolicy, 1));
+
     auto identity = MediaTsProgramClockTracker::create(clockPolicy(), 1);
     EXPECT_TRUE(ctx, identity);
     if (!identity) return;
@@ -420,6 +422,24 @@ void testProgramClockTracker(TestContext& ctx)
     EXPECT_TRUE(ctx, exhausted.value().observe(pcr(0, 0)));
     EXPECT_FALSE(ctx, exhausted.value().observePcrContinuityLoss(0x101));
     EXPECT_EQ(ctx, exhausted.value().generation(), std::numeric_limits<std::uint64_t>::max());
+}
+
+void testProgramClockTrackerAcceptsIrregularCadenceWithinMaximumGap(TestContext& ctx)
+{
+    auto policy = clockPolicy();
+    policy.maximumGap27Mhz = 2'700'000;
+    auto created = MediaTsProgramClockTracker::create(policy, 1);
+    EXPECT_TRUE(ctx, created);
+    if (!created) return;
+    auto tracker = std::move(created.value());
+
+    EXPECT_TRUE(ctx, tracker.observe(pcr(10'000'000, 0)));
+    EXPECT_TRUE(ctx, tracker.observe(pcr(12'700'000, 188))); // 100 ms
+    const auto irregular = tracker.observe(pcr(15'117'400, 376)); // 89.533333 ms
+    if (!irregular) std::cerr << irregular.error().message << '\n';
+    EXPECT_TRUE(ctx, irregular);
+    EXPECT_TRUE(ctx, tracker.observe(pcr(16'017'400, 564))); // 33.333333 ms
+    EXPECT_TRUE(ctx, tracker.observe(pcr(17'817'400, 752))); // 66.666667 ms
 }
 
 void testSourceClockMapper(TestContext& ctx)
@@ -531,5 +551,6 @@ void runMpegTsClockTests(TestContext& ctx)
     testEarlyEvidenceAndCompletedPsiReplayRemainDistinct(ctx);
     testEvidenceOrderedRangeAndClockProjection(ctx);
     testProgramClockTracker(ctx);
+    testProgramClockTrackerAcceptsIrregularCadenceWithinMaximumGap(ctx);
     testSourceClockMapper(ctx);
 }
