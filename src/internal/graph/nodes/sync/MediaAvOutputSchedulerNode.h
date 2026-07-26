@@ -68,6 +68,8 @@ private:
         MediaGraphExecutionContext& context,
         const MediaBufferRef& output,
         MediaAvSchedulerPendingCommit commit);
+    ::media::Status validateCommitGeneration(
+        std::optional<std::uint64_t> generation) const;
     MediaNodeProcessResult applyCommit(MediaAvSchedulerPendingCommit commit);
     void logFirstMediaHead(Input input);
     void logMissingMediaWait();

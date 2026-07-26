@@ -174,7 +174,10 @@ ActiveGroupFixture activeGroup(
     MediaRealtimeExecutableGraph executable;
     executable.graph = std::move(graph);
     executable.avSyncBinding.emplace(MediaAvSyncRuntimeBinding{
-        plan.groupKey, plan.synchronization, plan.transition,
+        plan.groupKey, plan.synchronization,
+        schedulerOnlyComponentTransitionPlan(
+            plan.transition.acknowledgementTimeout,
+            plan.transition.terminalDrainWindow),
         MediaAvSyncBindingAssemblyMode::ComponentCore});
     EXPECT_TRUE(ctx, runtime->compile(std::move(executable)));
     EXPECT_TRUE(ctx, runtime->registerDefaultRuntimeNodes());

@@ -22,6 +22,12 @@ namespace {
 
 } // namespace
 
+ExplicitMediaMuxSessionFactory::ExplicitMediaMuxSessionFactory(
+    std::shared_ptr<MediaProtocolOutputGenerationState> generationState)
+    : m_generationState(std::move(generationState))
+{
+}
+
 ::media::Result<std::unique_ptr<MediaMuxSession>> ExplicitMediaMuxSessionFactory::create(
     const MediaNodeOptions& options) const
 {
@@ -66,7 +72,8 @@ namespace {
                     "project MPEG-TS mux session requires planned video and audio"));
         }
         return ::media::Result<std::unique_ptr<MediaMuxSession>>::success(
-            std::make_unique<ProjectMpegTsMuxSessionAdapter>());
+            std::make_unique<ProjectMpegTsMuxSessionAdapter>(
+                m_generationState));
     }
     }
     return ::media::Result<std::unique_ptr<MediaMuxSession>>::failure(

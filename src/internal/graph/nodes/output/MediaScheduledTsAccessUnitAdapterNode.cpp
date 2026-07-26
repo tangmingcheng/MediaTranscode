@@ -4,6 +4,7 @@
 #include "internal/graph/runtime/buffer/MediaTsAccessUnitBuffer.h"
 #include "internal/graph/runtime/buffer/MediaTsMuxRuntimePlanBuffer.h"
 #include "internal/graph/sync/MediaScheduledAccessUnit.h"
+#include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
 
 namespace media::ffmpeg::graph {
 
@@ -27,9 +28,10 @@ MediaNodeKind MediaScheduledTsAccessUnitAdapterNode::staticKind() noexcept
     auto* plan = context.findInputChannel(nodeId(), "plan");
     auto* scheduled = context.findInputChannel(nodeId(), "scheduled");
     auto* packet = context.findOutputChannel(nodeId(), "packet");
+    m_syncGroup = context.findAvSyncGroup(m_group);
     if (!m_group.valid() || context.inputChannels(nodeId()).size() != 2 ||
         context.outputChannels(nodeId()).size() != 1 || !plan ||
-        !scheduled || !packet ||
+        !scheduled || !packet || !m_syncGroup ||
         packet->policy().queuePolicy.overflowPolicy !=
             MediaQueueOverflowPolicy::BlockProducer) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
@@ -42,6 +44,27 @@ MediaNodeKind MediaScheduledTsAccessUnitAdapterNode::staticKind() noexcept
 MediaScheduledTsAccessUnitAdapterNode::onProcess(
     MediaGraphExecutionContext& context)
 {
+    if (!m_syncGroup) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "Scheduled TS adapter requires its registered sync group"));
+    }
+    const auto snapshot = m_syncGroup->epochTransitionSnapshot();
+    if (snapshot.poisoned) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::cancelled(
+                "Scheduled TS adapter output authority is poisoned"));
+    }
+    if (!snapshot.outputPermitted || !snapshot.playbackEpoch) {
+        cancelPendingOutputTransfer();
+        return processWaiting();
+    }
+    if (m_epoch &&
+        m_epoch->generation != snapshot.playbackEpoch->generation) {
+        cancelPendingOutputTransfer();
+        m_epoch.reset();
+        m_transportLead.reset();
+    }
     if (!m_epoch) {
         auto planInput = tryPopInputOptional(context, "plan");
         if (!planInput) {
@@ -51,7 +74,8 @@ MediaScheduledTsAccessUnitAdapterNode::onProcess(
         if (!planInput.value()) return processWaiting();
         const auto* plan = dynamic_cast<const MediaTsMuxRuntimePlanBuffer*>(
             planInput.value()->get());
-        if (!plan || plan->group() != m_group) {
+        if (!plan || plan->group() != m_group ||
+            plan->epoch() != *snapshot.playbackEpoch) {
             return ::media::Result<MediaNodeProcessResult>::failure(
                 ::media::ErrorInfo::invalidArgument(
                     "Scheduled TS adapter rejects mismatched runtime plan"));
@@ -90,10 +114,22 @@ MediaScheduledTsAccessUnitAdapterNode::onProcess(
     }
     const auto* scheduled = dynamic_cast<const MediaScheduledAccessUnit*>(
         input.value()->get());
-    if (!scheduled || scheduled->generation() != m_epoch->generation) {
+    if (!scheduled) {
         return ::media::Result<MediaNodeProcessResult>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "Scheduled TS adapter rejects generation mismatch"));
+    }
+    if (scheduled->generation() != m_epoch->generation) {
+        if (scheduled->generation() < m_epoch->generation) {
+            return processProgress();
+        }
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Scheduled TS adapter rejects future generation"));
+    }
+    if (auto permitted = validateOutputPermit(scheduled->generation());
+        !permitted) {
+        return processWaiting();
     }
     auto lead = scheduled->dispatchOnMaster().checkedSubtract(
         scheduled->emitOnMaster());
@@ -111,6 +147,26 @@ MediaScheduledTsAccessUnitAdapterNode::onProcess(
         return ::media::Result<MediaNodeProcessResult>::failure(output.error());
     }
     return processProgress(emitOutput(context, "packet", output.value()));
+}
+
+::media::Status
+MediaScheduledTsAccessUnitAdapterNode::validateOutputPermit(
+    std::uint64_t generation) const
+{
+    if (!m_syncGroup) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::notInitialized(
+                "Scheduled TS adapter has no output authority"));
+    }
+    const auto snapshot = m_syncGroup->epochTransitionSnapshot();
+    if (snapshot.poisoned || !snapshot.outputPermitted ||
+        !snapshot.playbackEpoch ||
+        snapshot.playbackEpoch->generation != generation) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::cancelled(
+                "Scheduled TS output permit is closed for this generation"));
+    }
+    return ::media::Status::success();
 }
 
 ::media::Status MediaScheduledTsAccessUnitAdapterNode::flush(
@@ -137,6 +193,7 @@ void MediaScheduledTsAccessUnitAdapterNode::abort(
 void MediaScheduledTsAccessUnitAdapterNode::resetState() noexcept
 {
     cancelPendingOutputTransfer();
+    m_syncGroup.reset();
     m_epoch.reset();
     m_transportLead.reset();
 }

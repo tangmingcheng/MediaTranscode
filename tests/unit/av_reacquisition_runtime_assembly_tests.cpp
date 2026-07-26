@@ -297,9 +297,12 @@ void productionFactoryRegistrationsSeal(
         } else if (registration->participant ==
                    MediaAvGenerationParticipant::ProjectMpegTsOutput) {
             ++mpegTsRegistrations;
-            EXPECT_EQ(
-                ctx, registration->registration.identity,
-                std::string("project_mpegts_output_generation_state"));
+            EXPECT_TRUE(
+                ctx,
+                registration->registration.identity ==
+                    "project_mpegts_output_generation_state" ||
+                registration->registration.identity ==
+                    "project_mpegts_mux_generation_state");
         }
         EXPECT_TRUE(
             ctx,
@@ -356,7 +359,7 @@ void productionFactoryRegistrationsSeal(
     } else {
         EXPECT_EQ(ctx, rtpVideoRegistrations, std::size_t{0});
         EXPECT_EQ(ctx, rtpAudioRegistrations, std::size_t{0});
-        EXPECT_EQ(ctx, mpegTsRegistrations, std::size_t{1});
+        EXPECT_EQ(ctx, mpegTsRegistrations, std::size_t{2});
     }
 }
 

@@ -8,16 +8,27 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 namespace media::ffmpeg::graph {
 
+class MediaAvGenerationPurgeTarget;
+class MediaProtocolOutputGenerationState;
+
 class FileMuxNode final : public FFmpegNodeRuntime {
 public:
     explicit FileMuxNode(MediaNodeId nodeId);
+    FileMuxNode(MediaNodeId nodeId, bool projectMpegTsGenerationTarget);
     FileMuxNode(MediaNodeId nodeId,
                 std::unique_ptr<MediaMuxSessionFactory> sessionFactory);
     static MediaNodeKind staticKind() noexcept;
+    static constexpr std::string_view generationPurgeIdentity() noexcept
+    {
+        return "project_mpegts_mux_generation_state";
+    }
+    std::shared_ptr<MediaAvGenerationPurgeTarget>
+    generationPurgeTarget() const noexcept;
 
     void abort(MediaGraphExecutionContext& context) noexcept override;
 
@@ -58,6 +69,7 @@ private:
                                           const MediaBufferRef& buffer);
     void releaseSession() noexcept;
 
+    std::shared_ptr<MediaProtocolOutputGenerationState> m_generationState;
     std::unique_ptr<MediaMuxSessionFactory> m_sessionFactory;
     std::unique_ptr<MediaMuxSession> m_session;
     std::unique_ptr<MediaInputTerminalTracker> m_completion;

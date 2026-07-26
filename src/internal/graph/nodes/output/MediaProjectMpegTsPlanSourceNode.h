@@ -5,11 +5,14 @@
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
 
 #include <memory>
+#include <optional>
+#include <cstdint>
 #include <string_view>
 
 namespace media::ffmpeg::graph {
 
 class MediaAvGenerationPurgeTarget;
+class MediaAvSyncGroupRuntime;
 class MediaProtocolOutputGenerationState;
 
 class MediaProjectMpegTsPlanSourceNode final : public FFmpegNodeRuntime {
@@ -37,8 +40,10 @@ private:
 
     MediaAvSyncGroupKey m_group;
     MediaTsMuxPlan m_plan;
+    std::shared_ptr<MediaAvSyncGroupRuntime> m_syncGroup;
     std::shared_ptr<MediaProtocolOutputGenerationState> m_generationState;
     MediaBufferRef m_pendingPlan;
+    std::optional<std::uint64_t> m_publishedGeneration;
     bool m_published = false;
 };
 

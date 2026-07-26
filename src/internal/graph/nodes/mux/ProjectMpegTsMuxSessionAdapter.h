@@ -12,12 +12,19 @@
 namespace media::ffmpeg::graph {
 
 class MediaOutputByteSink;
+class MediaAvGenerationPurgeTarget;
+class MediaProtocolOutputGenerationState;
 class MediaTsMuxSession;
 
 class ProjectMpegTsMuxSessionAdapter final : public MediaMuxSession {
 public:
     ProjectMpegTsMuxSessionAdapter();
+    explicit ProjectMpegTsMuxSessionAdapter(
+        std::shared_ptr<MediaProtocolOutputGenerationState> generationState);
     ~ProjectMpegTsMuxSessionAdapter() override;
+
+    std::shared_ptr<MediaAvGenerationPurgeTarget>
+    generationPurgeTarget() const noexcept;
 
     ::media::Status bindResource(MediaGraphExecutionContext& context,
                                  const MediaBufferRef& buffer) override;
@@ -42,11 +49,16 @@ private:
     ::media::Status validateExecutionBinding(
         MediaGraphExecutionContext& context) const;
     ::media::Status validateAccessUnit(const MediaBufferRef& buffer) const;
+    ::media::Status permitRuntimePlanGeneration(
+        std::uint64_t generation);
+    bool outputPermitted(MediaGraphExecutionContext& context) const noexcept;
+    void discardGenerationSession() noexcept;
     ::media::Status fail(::media::ErrorInfo error);
     ::media::Status terminalStatus() const;
     void closeOwnedResources() noexcept;
 
     State m_state = State::Acquiring;
+    std::shared_ptr<MediaProtocolOutputGenerationState> m_generationState;
     std::optional<MediaTsMuxPlan> m_plan;
     std::optional<MediaPlaybackEpoch> m_epoch;
     std::optional<MediaAvSyncGroupKey> m_group;

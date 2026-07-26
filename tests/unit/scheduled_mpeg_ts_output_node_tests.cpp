@@ -6,26 +6,98 @@
 #include "internal/graph/builder/segments/MediaScheduledMpegTsOutputSegmentBuilder.h"
 #include "internal/graph/core/MediaGraphValidation.h"
 #include "internal/graph/nodes/mux/FileMuxNode.h"
+#include "internal/graph/nodes/mux/ProjectMpegTsMuxSessionAdapter.h"
 #include "internal/graph/nodes/output/MediaProjectMpegTsPlanSourceNode.h"
 #include "internal/graph/nodes/output/MediaScheduledTsAccessUnitAdapterNode.h"
 #include "internal/graph/nodes/output/MediaProjectMpegTsPlanSourceNodePlanCodec.h"
 #include "internal/graph/runtime/factory/MediaRuntimeNodeFactory.h"
 #include "internal/graph/runtime/buffer/MediaPlaybackEpochActivatedBuffer.h"
+#include "internal/graph/runtime/buffer/FFmpegCodecParametersBuffer.h"
+#include "internal/graph/runtime/buffer/MediaOutputByteSinkBuffer.h"
 #include "internal/graph/runtime/buffer/MediaTsAccessUnitBuffer.h"
 #include "internal/graph/runtime/buffer/MediaTsMuxRuntimePlanBuffer.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
+#include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlanner.h"
+#include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
+#include "internal/graph/planner/realtime/MediaAudioCorrectionReachabilityPlanner.h"
 #include "internal/graph/sync/MediaScheduledAccessUnit.h"
+#include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
+#include "internal/graph/time/MediaMasterClock.h"
+#include "internal/graph/time/MediaSharedNtpEpoch.h"
+#include "internal/graph/runtime/io/MediaOutputByteSink.h"
 
 #include <algorithm>
+#include <array>
+#include <chrono>
+#include <cstring>
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
+#include <vector>
 
 using namespace media::ffmpeg::graph;
 using media_transcode::test::TestContext;
 
+namespace media::ffmpeg::graph {
+
+struct MediaAvEpochTransitionServiceTestAccess final {
+    static ::media::Status activateInitial(
+        const std::shared_ptr<MediaAvEpochTransitionService>& service,
+        const MediaPlaybackEpoch& epoch)
+    {
+        return service->activateInitial(
+            epoch,
+            MediaAudioPlaybackOrigin{
+                epoch.generation, epoch.sourceStart, epoch.masterRelease,
+                0, 48'000});
+    }
+
+    static ::media::Status activateNext(
+        const std::shared_ptr<MediaAvEpochTransitionService>& service,
+        std::uint64_t transitionSequence,
+        const MediaPlaybackEpoch& epoch)
+    {
+        return service->activateNextAfter(
+            transitionSequence, epoch,
+            MediaAudioPlaybackOrigin{
+                epoch.generation, epoch.sourceStart, epoch.masterRelease,
+                0, 48'000});
+    }
+};
+
+} // namespace media::ffmpeg::graph
+
 namespace {
+
+class FixedMasterClock final : public MediaMasterClock {
+public:
+    explicit FixedMasterClock(MediaRunningTime now) : m_now(now) {}
+
+    ::media::Result<MediaRunningTime> now() const noexcept override
+    {
+        return ::media::Result<MediaRunningTime>::success(m_now);
+    }
+
+private:
+    MediaRunningTime m_now;
+};
+
+void protocolOutputStatePreservesAuthorityAcrossRollover(TestContext& ctx)
+{
+    MediaProtocolOutputGenerationState state(
+        "project_mpegts_output_generation_state");
+    const auto* stableAuthority = &state;
+    EXPECT_TRUE(ctx, state.permitActivatedGeneration(1, 0));
+    EXPECT_TRUE(ctx, state.validateCommitGeneration(1));
+    EXPECT_TRUE(ctx, state.purge(MediaAvGenerationPurge{1, 2, 1}));
+    EXPECT_EQ(ctx, &state, stableAuthority);
+    EXPECT_FALSE(ctx, state.validateCommitGeneration(1));
+    EXPECT_FALSE(ctx, state.validateCommitGeneration(2));
+    EXPECT_TRUE(ctx, state.permitActivatedGeneration(2, 1));
+    EXPECT_TRUE(ctx, state.validateCommitGeneration(2));
+}
 
 MediaRunningTime ms(std::int64_t value)
 {
@@ -43,6 +115,70 @@ MediaTsMuxPlan muxPlan()
         MediaTsOutputClockPolicy{ms(20), ms(100), ms(5), 1, 90'000},
         ms(100), 188, MediaTsContinuitySeeds{0, 0, 0, 0}, 7,
         MediaTsOutputTransportKind::Udp, 1024}).value();
+}
+
+MediaRealtimeRtpTranscodeRequest avSyncTsRequest()
+{
+    MediaRealtimeRtpTranscodeRequest request;
+    request.mediaId = "scheduled-mpeg-ts-output-tests";
+    request.input.type = RealtimeInputType::MpegTsUdp;
+    request.input.streamLayout =
+        RealtimeInputStreamLayout::MuxedTransportStream;
+    request.output.streamLayout =
+        RealtimeOutputStreamLayout::MuxedTransportStream;
+    request.parameters.execution.includeAudio = true;
+    request.parameters.audio.sampleRate = 48'000;
+    request.parameters.queues.packet = 64;
+    request.avSyncStartup.maximumVideoUnitBytes = 4 * 1024 * 1024;
+    request.avSyncStartup.maximumAudioUnitBytes = 1024 * 1024;
+    request.avSyncStartup.maximumGap = ms(40);
+    return request;
+}
+
+MediaTsSelectedProgramPlan selectedTsProgram()
+{
+    return MediaTsSelectedProgramPlan{7, 777, 703, 705, 701};
+}
+
+MediaProjectMpegTsResolvedPipelineFacts validTsResolvedFacts()
+{
+    MediaResolvedAudioSource source{
+        "aac", MediaAudioProfile::knownAacLow(), 48'000, 2,
+        "stereo", "fltp", 128'000};
+    MediaResolvedAudioRequest request;
+    auto target = MediaResolvedAudioTargetDecision::create(source, request, {});
+    auto audio = MediaResolvedAudioOutputPlan::create(
+        target.value(), std::nullopt, 1'024);
+    return MediaProjectMpegTsResolvedPipelineFacts{
+        "h264", MediaEncodedPacketLayout::lengthPrefixed(4).value(),
+        std::move(audio).value()};
+}
+
+MediaAvSyncPlan avSyncPlan()
+{
+    const auto selected = selectedTsProgram();
+    const auto resolved = validTsResolvedFacts();
+    auto plan = MediaAvSyncPlanner::plan(
+        avSyncTsRequest(), &selected, &resolved).value();
+    MediaRealtimeAvSyncPlanningFacts facts;
+    facts.outputSampleRate = 48'000;
+    facts.decoderDelaySamples = 0;
+    facts.encoderLookaheadSamples = 0;
+    facts.decodeQueueSamples = 1'024;
+    facts.resampleQueueSamples = 1'024;
+    facts.encodeQueueSamples = 1'024;
+    facts.schedulerQueueSamples = 1'024;
+    facts.protocolBatchSamples = 1'024;
+    facts.mailboxDeliveryMarginSamples = 1'024;
+    facts.maximumResamplerOutputBlockSamples = 1'024;
+    facts.mailboxCapacity = 1;
+    const auto correction =
+        MediaAudioCorrectionReachabilityPlanner::plan(plan, facts).value();
+    plan.audioServo.commandLeadNs = correction.commandLead;
+    plan.audioServo.compensationWindowNs = correction.compensationWindow;
+    plan.audioServo.frequencyFilterTimeConstantNs =
+        correction.frequencyFilterTimeConstant;
+    return plan;
 }
 
 MediaBufferRef activation(const MediaAvSyncGroupKey& group,
@@ -90,6 +226,93 @@ MediaBufferRef scheduled(TestContext& ctx,
                 : std::nullopt});
     EXPECT_TRUE(ctx, created);
     return created ? std::move(created).value() : MediaBufferRef{};
+}
+
+struct RecordingTsSinkState final {
+    std::vector<std::uint8_t> bytes;
+    std::size_t closes = 0;
+};
+
+class RecordingTsSink final : public MediaOutputByteSink {
+public:
+    explicit RecordingTsSink(std::shared_ptr<RecordingTsSinkState> state)
+        : m_state(std::move(state))
+    {
+    }
+
+    ::media::Result<std::size_t> write(
+        std::span<const std::uint8_t> bytes) override
+    {
+        m_state->bytes.insert(m_state->bytes.end(), bytes.begin(), bytes.end());
+        return ::media::Result<std::size_t>::success(bytes.size());
+    }
+
+    ::media::Status flush() override { return ::media::Status::success(); }
+    ::media::Status close() override
+    {
+        ++m_state->closes;
+        return ::media::Status::success();
+    }
+
+private:
+    std::shared_ptr<RecordingTsSinkState> m_state;
+};
+
+MediaBufferRef muxCodecParameters(MediaStreamKind kind)
+{
+    auto parameters = ::media::ffmpeg::makeCodecParameters();
+    if (kind == MediaStreamKind::Video) {
+        static constexpr std::array<std::uint8_t, 17> avcc{
+            1, 0x42, 0, 0x1E, 0xFF, 0xE1, 0, 4, 0x67, 0x42, 0, 0x1E,
+            1, 0, 2, 0x68, 0xCE};
+        parameters->codec_type = AVMEDIA_TYPE_VIDEO;
+        parameters->codec_id = AV_CODEC_ID_H264;
+        parameters->extradata = static_cast<std::uint8_t*>(
+            av_mallocz(avcc.size() + AV_INPUT_BUFFER_PADDING_SIZE));
+        parameters->extradata_size = static_cast<int>(avcc.size());
+        std::memcpy(parameters->extradata, avcc.data(), avcc.size());
+    } else {
+        static constexpr std::array<std::uint8_t, 2> asc{0x11, 0x90};
+        parameters->codec_type = AVMEDIA_TYPE_AUDIO;
+        parameters->codec_id = AV_CODEC_ID_AAC;
+        parameters->sample_rate = 48'000;
+        parameters->ch_layout = AV_CHANNEL_LAYOUT_STEREO;
+        parameters->extradata = static_cast<std::uint8_t*>(
+            av_mallocz(asc.size() + AV_INPUT_BUFFER_PADDING_SIZE));
+        parameters->extradata_size = static_cast<int>(asc.size());
+        std::memcpy(parameters->extradata, asc.data(), asc.size());
+    }
+    auto buffer = makeMediaBufferRef<FFmpegCodecParametersBuffer>(
+        std::move(parameters));
+    buffer->setStreamKind(kind);
+    return buffer;
+}
+
+MediaBufferRef muxAccessUnit(MediaScheduledStream stream,
+                             std::uint64_t generation,
+                             MediaRunningTime emission)
+{
+    auto packet = ::media::ffmpeg::makePacket();
+    av_new_packet(packet.get(),
+                  stream == MediaScheduledStream::Video ? 7 : 3);
+    if (stream == MediaScheduledStream::Video) {
+        const std::array<std::uint8_t, 7> payload{
+            0, 0, 0, 3, 0x65, 1, 2};
+        std::memcpy(packet->data, payload.data(), payload.size());
+        packet->flags |= AV_PKT_FLAG_KEY;
+    } else {
+        const std::array<std::uint8_t, 3> payload{1, 2, 3};
+        std::memcpy(packet->data, payload.data(), payload.size());
+    }
+    auto media = std::make_shared<FFmpegPacketBuffer>(
+        std::move(packet), std::nullopt);
+    media->setStreamKind(stream == MediaScheduledStream::Video
+                             ? MediaStreamKind::Video
+                             : MediaStreamKind::Audio);
+    const auto dispatch = emission.checkedAdd(ms(100)).value();
+    return MediaTsAccessUnitBuffer::create(
+        media, stream, generation, dispatch, dispatch, emission,
+        ms(100)).value();
 }
 
 class BindingBuffer final : public MediaBuffer {
@@ -221,6 +444,7 @@ struct AssemblyFixture final {
     MediaGraphExecutionContext execution;
     MediaAvSyncGroupKey group{"task9-group"};
     MediaPlaybackEpoch epoch{ms(0), ms(1'000), 7};
+    std::shared_ptr<MediaAvEpochTransitionService> transitionService;
 };
 
 AssemblyFixture assemblyFixture(TestContext& ctx)
@@ -303,6 +527,20 @@ AssemblyFixture assemblyFixture(TestContext& ctx)
                   << compiled.error().message << '\n';
     }
     EXPECT_TRUE(ctx, compiled);
+    if (!compiled) return f;
+    auto transitionPlan = MediaAvGenerationTransitionPlanner::plan(
+        MediaAvSyncOutputAdapterKind::ProjectMpegTs, ms(1'000), ms(1'000));
+    auto transition =
+        MediaAvEpochTransitionService::create(transitionPlan);
+    EXPECT_TRUE(ctx, transition);
+    if (!transition) return f;
+    f.transitionService = transition.value();
+    EXPECT_TRUE(ctx, f.execution.registerAvSyncGroup(
+        f.group, avSyncPlan(), std::make_shared<FixedMasterClock>(ms(0)),
+        std::shared_ptr<const MediaSharedNtpEpoch>{},
+        f.transitionService));
+    EXPECT_TRUE(ctx, MediaAvEpochTransitionServiceTestAccess::activateInitial(
+        f.transitionService, f.epoch));
     return f;
 }
 
@@ -460,13 +698,14 @@ void planFanoutBackpressurePublishesExactlyOnce(TestContext& ctx)
     EXPECT_FALSE(ctx, muxPlanChannel->closed());
     EXPECT_FALSE(ctx, adapterPlanChannel->closed());
 
-    auto finished = source.process(f.execution);
-    EXPECT_TRUE(ctx, finished);
-    if (finished) {
-        EXPECT_EQ(ctx, finished.value().state, MediaNodeProcessState::Finished);
+    auto awaitingNextGeneration = source.process(f.execution);
+    EXPECT_TRUE(ctx, awaitingNextGeneration);
+    if (awaitingNextGeneration) {
+        EXPECT_EQ(ctx, awaitingNextGeneration.value().state,
+                  MediaNodeProcessState::Waiting);
     }
-    EXPECT_TRUE(ctx, muxPlanChannel->closed());
-    EXPECT_TRUE(ctx, adapterPlanChannel->closed());
+    EXPECT_FALSE(ctx, muxPlanChannel->closed());
+    EXPECT_FALSE(ctx, adapterPlanChannel->closed());
     EXPECT_EQ(ctx, muxPlanChannel->size(), std::size_t{1});
     EXPECT_EQ(ctx, adapterPlanChannel->size(), std::size_t{1});
 
@@ -478,6 +717,36 @@ void planFanoutBackpressurePublishesExactlyOnce(TestContext& ctx)
     EXPECT_TRUE(ctx, muxPublished != occupied);
     EXPECT_EQ(ctx, muxPlanChannel->size(), std::size_t{0});
     EXPECT_EQ(ctx, adapterPlanChannel->size(), std::size_t{0});
+
+    const MediaPlaybackEpoch nextEpoch{ms(2'000), ms(3'000), 8};
+    auto purge = f.transitionService->beginReacquisition(
+        f.epoch.generation, nextEpoch.generation);
+    EXPECT_TRUE(ctx, purge);
+    if (!purge) {
+        source.abort(f.execution);
+        return;
+    }
+    EXPECT_TRUE(ctx, source.generationPurgeTarget()->purge(purge.value()));
+    for (const auto& participant :
+         f.transitionService->transitionPlan().participants) {
+        EXPECT_TRUE(ctx, f.transitionService->acknowledge(
+            MediaAvGenerationAcknowledgement{
+                participant.participant, purge.value().transitionSequence,
+                ::media::Status::success()}));
+    }
+    EXPECT_TRUE(ctx, MediaAvEpochTransitionServiceTestAccess::activateNext(
+        f.transitionService, purge.value().transitionSequence, nextEpoch));
+    EXPECT_TRUE(ctx, epoch->push(activation(f.group, nextEpoch)));
+    auto republished = source.process(f.execution);
+    EXPECT_TRUE(ctx, republished);
+    if (republished) {
+        EXPECT_EQ(ctx, republished.value().state,
+                  MediaNodeProcessState::Progress);
+    }
+    EXPECT_EQ(ctx, muxPlanChannel->size(), std::size_t{1});
+    EXPECT_EQ(ctx, adapterPlanChannel->size(), std::size_t{1});
+    EXPECT_FALSE(ctx, muxPlanChannel->closed());
+    EXPECT_FALSE(ctx, adapterPlanChannel->closed());
     source.abort(f.execution);
 }
 
@@ -511,6 +780,79 @@ void planSourceRejectsDuplicateActivationQueuedBeforeCommit(TestContext& ctx)
     }
     EXPECT_FALSE(ctx, muxPlanChannel->closed());
     source.abort(f.execution);
+}
+
+void muxGenerationRolloverPreservesSinkAndResetsTransportState(
+    TestContext& ctx)
+{
+    auto f = assemblyFixture(ctx);
+    if (!f.execution.compiled()) return;
+    auto sinkState = std::make_shared<RecordingTsSinkState>();
+    ProjectMpegTsMuxSessionAdapter adapter;
+    EXPECT_TRUE(ctx, adapter.bindResource(
+        f.execution,
+        MediaTsMuxRuntimePlanBuffer::create(
+            muxPlan(), f.epoch, f.group).value()));
+    EXPECT_TRUE(ctx, adapter.bindStreamConfig(
+        f.execution, muxCodecParameters(MediaStreamKind::Video)));
+    EXPECT_TRUE(ctx, adapter.bindStreamConfig(
+        f.execution, muxCodecParameters(MediaStreamKind::Audio)));
+    auto sinkBuffer = MediaOutputByteSinkBuffer::create(
+        std::make_unique<RecordingTsSink>(sinkState));
+    EXPECT_TRUE(ctx, sinkBuffer);
+    if (!sinkBuffer) return;
+    EXPECT_TRUE(ctx, adapter.bindResource(
+        f.execution, MediaBufferRef(std::move(sinkBuffer).value())));
+    EXPECT_TRUE(ctx, adapter.write(
+        f.execution,
+        muxAccessUnit(MediaScheduledStream::Video, 7, ms(900))));
+    EXPECT_TRUE(ctx, !sinkState->bytes.empty());
+    if (sinkState->bytes.size() < 188) return;
+    const auto firstGenerationPatContinuity =
+        sinkState->bytes[3] & std::uint8_t{0x0F};
+
+    const MediaPlaybackEpoch nextEpoch{ms(0), ms(1'000), 8};
+    auto purge = f.transitionService->beginReacquisition(7, 8);
+    EXPECT_TRUE(ctx, purge);
+    if (!purge) return;
+    EXPECT_TRUE(ctx,
+                adapter.generationPurgeTarget()->purge(purge.value()));
+    const auto bytesBeforeClosedPermitWrite = sinkState->bytes.size();
+    EXPECT_TRUE(ctx, adapter.write(
+        f.execution,
+        muxAccessUnit(MediaScheduledStream::Video, 7, ms(920))));
+    EXPECT_EQ(ctx, sinkState->bytes.size(), bytesBeforeClosedPermitWrite);
+    for (const auto& participant :
+         f.transitionService->transitionPlan().participants) {
+        EXPECT_TRUE(ctx, f.transitionService->acknowledge(
+            MediaAvGenerationAcknowledgement{
+                participant.participant, purge.value().transitionSequence,
+                ::media::Status::success()}));
+    }
+    EXPECT_TRUE(ctx, MediaAvEpochTransitionServiceTestAccess::activateNext(
+        f.transitionService, purge.value().transitionSequence, nextEpoch));
+
+    const auto secondGenerationOffset = sinkState->bytes.size();
+    EXPECT_TRUE(ctx, adapter.bindResource(
+        f.execution,
+        MediaTsMuxRuntimePlanBuffer::create(
+            muxPlan(), nextEpoch, f.group).value()));
+    EXPECT_TRUE(ctx, adapter.write(
+        f.execution,
+        muxAccessUnit(MediaScheduledStream::Video, 8, ms(900))));
+    EXPECT_TRUE(ctx, sinkState->bytes.size() >
+                         secondGenerationOffset + 188);
+    EXPECT_EQ(ctx, sinkState->closes, std::size_t{0});
+    if (sinkState->bytes.size() > secondGenerationOffset + 3) {
+        EXPECT_EQ(ctx, sinkState->bytes[secondGenerationOffset],
+                  std::uint8_t{0x47});
+        EXPECT_EQ(ctx,
+                  sinkState->bytes[secondGenerationOffset + 3] &
+                      std::uint8_t{0x0F},
+                  firstGenerationPatContinuity);
+    }
+    EXPECT_TRUE(ctx, adapter.finish(f.execution));
+    EXPECT_EQ(ctx, sinkState->closes, std::size_t{1});
 }
 
 void adapterBackpressureTransfersOneAccessUnit(TestContext& ctx)
@@ -646,10 +988,12 @@ void segmentBuildsCompleteAcyclicTopology(TestContext& ctx)
 int main()
 {
     TestContext ctx;
+    protocolOutputStatePreservesAuthorityAcrossRollover(ctx);
     muxBindingsReadinessPrecedesMedia(ctx);
     generationMismatchFailsAfterMuxReadiness(ctx);
     planFanoutBackpressurePublishesExactlyOnce(ctx);
     planSourceRejectsDuplicateActivationQueuedBeforeCommit(ctx);
+    muxGenerationRolloverPreservesSinkAndResetsTransportState(ctx);
     adapterBackpressureTransfersOneAccessUnit(ctx);
     segmentBuildsCompleteAcyclicTopology(ctx);
     if (ctx.failures != 0) return 1;

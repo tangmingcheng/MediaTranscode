@@ -16,6 +16,7 @@
 #include "internal/graph/time/MediaMappedTimestamp.h"
 #include "internal/graph/sync/MediaAvEpochTransitionService.h"
 #include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
+#include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
 #include "internal/graph/sync/MediaScheduledAccessUnit.h"
 #include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
 #include "internal/graph/sync/MediaCanonicalLineage.h"
@@ -36,6 +37,21 @@ namespace {
 using media_transcode::test::TestContext;
 using media_transcode::test::makePacketBuffer;
 using namespace media::ffmpeg::graph;
+
+void testSchedulerGenerationPermitClosesUntilExactActivation(
+    TestContext& ctx)
+{
+    MediaProtocolOutputGenerationState state("scheduler_generation_state");
+    EXPECT_TRUE(ctx, state.permitActivatedGeneration(1, 0));
+    EXPECT_TRUE(ctx, state.validateCommitGeneration(1));
+    EXPECT_TRUE(ctx, state.purge(MediaAvGenerationPurge{1, 2, 1}));
+    EXPECT_FALSE(ctx, state.validateCommitGeneration(1));
+    EXPECT_FALSE(ctx, state.validateCommitGeneration(2));
+    EXPECT_FALSE(ctx, state.permitActivatedGeneration(2, 2));
+    EXPECT_TRUE(ctx, state.permitActivatedGeneration(2, 1));
+    EXPECT_FALSE(ctx, state.validateCommitGeneration(1));
+    EXPECT_TRUE(ctx, state.validateCommitGeneration(2));
+}
 
 class FixedMasterClock final : public MediaMasterClock {
 public:
@@ -204,10 +220,10 @@ RouterFixture routerFixture(
         MediaBlockingEdgePolicyPlanner::planQueue(8));
     fixture.graph.connect(
         fixture.router, "video", fixture.videoSink, "video", "video",
-        MediaBlockingEdgePolicyPlanner::planQueue(videoCapacity));
+        MediaBlockingEdgePolicyPlanner::planAtomicOutput(videoCapacity));
     fixture.graph.connect(
         fixture.router, "audio", fixture.audioSink, "audio", "audio",
-        MediaBlockingEdgePolicyPlanner::planQueue(audioCapacity));
+        MediaBlockingEdgePolicyPlanner::planAtomicOutput(audioCapacity));
     EXPECT_TRUE(ctx, fixture.execution.compile(fixture.graph));
     return fixture;
 }
@@ -239,7 +255,8 @@ RouterFixture serializedRouterFixture(TestContext& ctx, std::size_t capacity = 4
         MediaBlockingEdgePolicyPlanner::planQueue(8));
     fixture.graph.connect(
         fixture.router, "serialized", fixture.videoSink, "serialized",
-        "serialized", MediaBlockingEdgePolicyPlanner::planQueue(capacity));
+        "serialized",
+        MediaBlockingEdgePolicyPlanner::planAtomicOutput(capacity));
     EXPECT_TRUE(ctx, fixture.execution.compile(fixture.graph));
     return fixture;
 }
@@ -696,17 +713,20 @@ void testActiveSharedSchedulerRoutesEqualEpochWithoutDuplicateRetry(
     graph.connect(
         built.value().video.node, built.value().video.port,
         videoSink, "video", "video sink",
-        MediaBlockingEdgePolicyPlanner::planQueue(1));
+        MediaBlockingEdgePolicyPlanner::planAtomicOutput(1));
     graph.connect(
         built.value().audio.node, built.value().audio.port,
         audioSink, "audio", "audio sink",
-        MediaBlockingEdgePolicyPlanner::planQueue(1));
+        MediaBlockingEdgePolicyPlanner::planAtomicOutput(1));
     MediaGraphExecutionContext execution;
     std::unique_ptr<MediaGraphRuntime> runtime;
     EXPECT_TRUE(ctx, media_transcode::test::compileAndActivateAvSyncRuntime(
                          std::move(graph),
                           {plan->groupKey, plan->synchronization,
-                           plan->transition,
+                           media_transcode::test::
+                               schedulerOnlyComponentTransitionPlan(
+                                   plan->transition.acknowledgementTimeout,
+                                   plan->transition.terminalDrainWindow),
                            MediaAvSyncBindingAssemblyMode::ComponentCore},
                          std::make_shared<FixedMasterClock>(ms(0)),
                          MediaPlaybackEpoch{ms(0), ms(0), 1}, binder,
@@ -797,6 +817,7 @@ void testActiveSharedSchedulerRoutesEqualEpochWithoutDuplicateRetry(
 int main()
 {
     TestContext ctx;
+    testSchedulerGenerationPermitClosesUntilExactActivation(ctx);
     testSegmentBuildsOneSharedSchedulerAndOneRouter(ctx);
     testInterleavedUnitsAndIdenticalDispatchEpochsRouteExactlyOnce(ctx);
     testSerializedRouterPreservesGlobalAvOrder(ctx);

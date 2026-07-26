@@ -63,8 +63,11 @@ private:
         MediaGraphExecutionContext& context);
     ::media::Result<MediaNodeProcessResult> processScheduledInput(
         MediaGraphExecutionContext& context);
+    ::media::Status validateOutputPermit(
+        std::uint64_t generation) const;
     ::media::Result<MediaNodeProcessResult> failTerminal(::media::ErrorInfo error);
     void closeSession() noexcept;
+    void resetGenerationSession() noexcept;
     void resetGenerationState() noexcept;
 
     MediaAvSyncGroupKey m_plannedGroupKey;

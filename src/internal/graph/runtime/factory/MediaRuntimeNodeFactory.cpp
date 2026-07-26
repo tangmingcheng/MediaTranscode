@@ -432,8 +432,23 @@ template <typename Node>
     }
     case MediaNodeKind::PacketMerge:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<PacketMergeNode>(node.id));
-    case MediaNodeKind::FileMux:
-        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<FileMuxNode>(node.id));
+    case MediaNodeKind::FileMux: {
+        auto kindValue = requiredNodeOption(
+            &node.options, "MediaRuntimeNodeFactory",
+            MediaTranscodeOptionKey::MuxSessionKind);
+        if (!kindValue) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                kindValue.error());
+        }
+        auto kind = parseMediaMuxSessionKindOption(kindValue.value());
+        if (!kind) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                kind.error());
+        }
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+            std::make_unique<FileMuxNode>(
+                node.id, kind.value() == MediaMuxSessionKind::ProjectMpegTs));
+    }
     case MediaNodeKind::RtpMux:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<RtpMuxNode>(node.id));
     case MediaNodeKind::FileOutput:
@@ -683,6 +698,15 @@ MediaRuntimeNodeFactory::generationPurgeRegistration(
                 runtime,
                 MediaAvGenerationParticipant::ProjectMpegTsOutput)) {
         return registration;
+    }
+    if (auto* mux = dynamic_cast<FileMuxNode*>(&runtime)) {
+        auto target = mux->generationPurgeTarget();
+        if (target) {
+            return MediaRuntimeGenerationPurgeRegistration{
+                MediaAvGenerationParticipant::ProjectMpegTsOutput,
+                {std::string(FileMuxNode::generationPurgeIdentity()),
+                 std::move(target)}};
+        }
     }
     return std::nullopt;
 }

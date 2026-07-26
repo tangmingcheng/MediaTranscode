@@ -5,6 +5,7 @@
 #include "internal/graph/time/MediaRunningTime.h"
 
 #include <optional>
+#include <cstdint>
 
 namespace media::ffmpeg::graph {
 
@@ -16,6 +17,7 @@ struct MediaAvSchedulerPendingCommit final {
     std::optional<MediaSourceAccessUnitSequence> displayedVideoSequence;
     std::optional<MediaRunningTime> displayedVideoMasterTime;
     bool terminalFinishes = false;
+    std::optional<std::uint64_t> generation;
 };
 
 } // namespace media::ffmpeg::graph

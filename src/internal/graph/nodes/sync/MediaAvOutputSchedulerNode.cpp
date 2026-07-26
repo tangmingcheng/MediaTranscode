@@ -119,9 +119,11 @@ MediaAvOutputSchedulerNode::generationPurgeTarget() const noexcept
     }
     auto epoch = m_group->playbackEpoch();
     if (!epoch) return ::media::Status::failure(epoch.error());
-    if (auto observed = m_generationState->observe(
-            epoch.value().generation); !observed) {
-        return observed;
+    const auto transition = m_generationState->activationTransitionSequence(
+        epoch.value().generation);
+    if (auto permitted = m_generationState->permitActivatedGeneration(
+            epoch.value().generation, transition.value_or(0)); !permitted) {
+        return permitted;
     }
     auto controller = m_videoControllerFactory(
         m_group->plan(), epoch.value().generation);
@@ -185,6 +187,13 @@ MediaAvOutputSchedulerNode::generationPurgeTarget() const noexcept
     MediaGraphExecutionContext& context)
 {
     if (m_pendingCommit) {
+        if (auto permitted = validateCommitGeneration(
+                m_pendingCommit->generation); !permitted) {
+            cancelPendingOutputTransfer();
+            clearSchedulingState();
+            return ::media::Result<MediaNodeProcessResult>::success(
+                MediaNodeProcessResult::waiting());
+        }
         if (pendingOutputBufferCount() != 0) return processWaiting();
         auto commit = std::move(*m_pendingCommit);
         m_pendingCommit.reset();
@@ -827,6 +836,20 @@ MediaAvOutputSchedulerNode::emitWithCommit(
     const MediaBufferRef& output,
     MediaAvSchedulerPendingCommit commit)
 {
+    if (const auto* scheduled =
+            dynamic_cast<const MediaScheduledAccessUnit*>(output.get())) {
+        commit.generation = scheduled->generation();
+    } else if (m_group) {
+        const auto snapshot = m_group->epochTransitionSnapshot();
+        if (snapshot.playbackEpoch) {
+            commit.generation = snapshot.playbackEpoch->generation;
+        }
+    }
+    if (auto permitted = validateCommitGeneration(commit.generation);
+        !permitted) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            permitted.error());
+    }
     auto status = emitOutput(context, "scheduled", output);
     if (status) {
         return ::media::Result<MediaNodeProcessResult>::success(
@@ -837,6 +860,25 @@ MediaAvOutputSchedulerNode::emitWithCommit(
         return processProgress(std::move(status));
     }
     return ::media::Result<MediaNodeProcessResult>::failure(status.error());
+}
+
+::media::Status MediaAvOutputSchedulerNode::validateCommitGeneration(
+    std::optional<std::uint64_t> generation) const
+{
+    if (!m_group || !generation) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::notInitialized(
+                "A/V scheduler commit requires a planned generation"));
+    }
+    const auto snapshot = m_group->epochTransitionSnapshot();
+    if (snapshot.poisoned || !snapshot.outputPermitted ||
+        !snapshot.playbackEpoch ||
+        snapshot.playbackEpoch->generation != *generation) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::cancelled(
+                "A/V scheduler commit is closed for this generation"));
+    }
+    return m_generationState->validateCommitGeneration(*generation);
 }
 
 MediaNodeProcessResult MediaAvOutputSchedulerNode::applyCommit(

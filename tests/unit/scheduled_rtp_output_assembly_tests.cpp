@@ -19,6 +19,22 @@ using namespace media::ffmpeg::graph;
 
 namespace {
 
+MediaAvGenerationTransitionPlan protocolOutputTransitionPlan(
+    const MediaAvGenerationTransitionPlan& planned)
+{
+    return MediaAvGenerationTransitionPlan{
+        {
+            {MediaAvGenerationParticipant::Scheduler,
+             {"scheduler_generation_state"}},
+            {MediaAvGenerationParticipant::RtpVideoOutput,
+             {"rtp_video_output_generation_state"}},
+            {MediaAvGenerationParticipant::RtpAudioOutput,
+             {"rtp_audio_output_generation_state"}},
+        },
+        planned.acknowledgementTimeout,
+        planned.terminalDrainWindow};
+}
+
 void testProductionNodeKinds(TestContext& ctx)
 {
     EXPECT_EQ(ctx, MediaScheduledRtpSenderNode::staticKind(),
@@ -118,7 +134,7 @@ void testBuilderAndCompilerInjectExactRegisteredGroup(TestContext& ctx)
     executable.graph = std::move(fixture.graph);
     executable.avSyncBinding.emplace(MediaAvSyncRuntimeBinding{
         runtimePlan.groupKey, runtimePlan.synchronization,
-        runtimePlan.transition,
+        protocolOutputTransitionPlan(runtimePlan.transition),
         MediaAvSyncBindingAssemblyMode::ProductionProtocolOutput});
     EXPECT_TRUE(ctx, runtime.compile(std::move(executable)));
     EXPECT_TRUE(ctx, runtime.registerDefaultRuntimeNodes());

@@ -3,6 +3,7 @@
 #include "internal/graph/runtime/buffer/MediaPlaybackEpochActivatedBuffer.h"
 #include "internal/graph/runtime/buffer/MediaTsMuxRuntimePlanBuffer.h"
 #include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
+#include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
 
 namespace media::ffmpeg::graph {
 
@@ -35,6 +36,7 @@ MediaProjectMpegTsPlanSourceNode::generationPurgeTarget() const noexcept
     resetState();
     auto* epoch = context.findInputChannel(nodeId(), "epoch");
     auto* plan = context.findOutputChannel(nodeId(), "plan");
+    m_syncGroup = context.findAvSyncGroup(m_group);
     const MediaGraph* graph = context.graph();
     const MediaNode* node = graph ? graph->findNode(nodeId()) : nullptr;
     const auto outputs = context.outputChannels(nodeId());
@@ -47,6 +49,7 @@ MediaProjectMpegTsPlanSourceNode::generationPurgeTarget() const noexcept
     if (!m_group.valid() || context.inputChannels(nodeId()).size() != 1 ||
         !node || node->outputPorts.size() != 1 ||
         node->outputPorts.front().name != "plan" || !epoch || !plan ||
+        !m_syncGroup ||
         !blockingPlanOutputs) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "Project MPEG-TS plan source requires exact epoch and plan ports"));
@@ -58,38 +61,63 @@ MediaProjectMpegTsPlanSourceNode::generationPurgeTarget() const noexcept
 MediaProjectMpegTsPlanSourceNode::onProcess(
     MediaGraphExecutionContext& context)
 {
+    MediaBufferRef activationInput;
     if (m_published) {
         auto duplicate = tryPopInputOptional(context, "epoch");
         if (!duplicate) {
             return ::media::Result<MediaNodeProcessResult>::failure(
                 duplicate.error());
         }
-        if (duplicate.value()) {
+        if (!duplicate.value()) return processWaiting();
+        activationInput = std::move(*duplicate.value());
+        const auto* activated =
+            dynamic_cast<const MediaPlaybackEpochActivatedBuffer*>(
+                activationInput.get());
+        if (!activated || activated->groupKey() != m_group ||
+            (m_publishedGeneration &&
+             *m_publishedGeneration == activated->epoch().generation)) {
             return ::media::Result<MediaNodeProcessResult>::failure(
                 ::media::ErrorInfo::invalidArgument(
                     "Project MPEG-TS plan source rejects duplicate activation"));
         }
-        return processFinished();
+        m_published = false;
     }
     if (!m_pendingPlan) {
-        auto input = tryPopInputOptional(context, "epoch");
-        if (!input) {
-            return ::media::Result<MediaNodeProcessResult>::failure(
-                input.error());
+        if (!activationInput) {
+            auto input = tryPopInputOptional(context, "epoch");
+            if (!input) {
+                return ::media::Result<MediaNodeProcessResult>::failure(
+                    input.error());
+            }
+            if (!input.value()) return processWaiting();
+            activationInput = std::move(*input.value());
         }
-        if (!input.value()) return processWaiting();
         const auto* activated =
             dynamic_cast<const MediaPlaybackEpochActivatedBuffer*>(
-                input.value()->get());
+                activationInput.get());
         if (!activated || activated->groupKey() != m_group) {
             return ::media::Result<MediaNodeProcessResult>::failure(
                 ::media::ErrorInfo::invalidArgument(
                     "Project MPEG-TS plan source rejects mismatched activation"));
         }
-        if (auto observed = m_generationState->observe(
-                activated->epoch().generation); !observed) {
+        const auto snapshot = m_syncGroup->epochTransitionSnapshot();
+        if (snapshot.poisoned || !snapshot.outputPermitted ||
+            !snapshot.playbackEpoch ||
+            *snapshot.playbackEpoch != activated->epoch()) {
             return ::media::Result<MediaNodeProcessResult>::failure(
-                observed.error());
+                ::media::ErrorInfo::cancelled(
+                    "Project MPEG-TS plan source output permit is closed"));
+        }
+        const auto transition =
+            m_generationState->activationTransitionSequence(
+                activated->epoch().generation);
+        if (auto permitted =
+                m_generationState->permitActivatedGeneration(
+                    activated->epoch().generation,
+                    transition.value_or(0));
+            !permitted) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                permitted.error());
         }
         auto created = MediaTsMuxRuntimePlanBuffer::create(
             m_plan, activated->epoch(), m_group);
@@ -98,6 +126,19 @@ MediaProjectMpegTsPlanSourceNode::onProcess(
                 created.error());
         }
         m_pendingPlan = std::move(created).value();
+        m_publishedGeneration = activated->epoch().generation;
+    }
+    const auto snapshot = m_syncGroup->epochTransitionSnapshot();
+    if (!m_publishedGeneration || snapshot.poisoned ||
+        !snapshot.outputPermitted || !snapshot.playbackEpoch ||
+        snapshot.playbackEpoch->generation != *m_publishedGeneration) {
+        m_pendingPlan.reset();
+        return processWaiting();
+    }
+    if (auto permitted = m_generationState->validateCommitGeneration(
+            *m_publishedGeneration); !permitted) {
+        m_pendingPlan.reset();
+        return processWaiting();
     }
     auto committed = emitOutput(context, "plan", m_pendingPlan);
     m_pendingPlan.reset();
@@ -123,7 +164,9 @@ void MediaProjectMpegTsPlanSourceNode::abort(
 void MediaProjectMpegTsPlanSourceNode::resetState() noexcept
 {
     m_pendingPlan.reset();
+    m_publishedGeneration.reset();
     m_published = false;
+    m_syncGroup.reset();
     m_generationState->resetLifecycle();
 }
 
