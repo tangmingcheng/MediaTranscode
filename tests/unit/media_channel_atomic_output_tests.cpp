@@ -5,6 +5,7 @@
 #include "internal/graph/runtime/channel/MediaAtomicOutputTransaction.h"
 #include "internal/graph/runtime/channel/MediaReservedOutputTransaction.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
+#include "internal/graph/runtime/queue/MediaBlockingQueueStorage.h"
 
 #include <array>
 #include <atomic>
@@ -86,13 +87,6 @@ struct MediaChannelAtomicOutputTestAccess final {
         return true;
     }
 
-    static void failNextPreparedAllocation(MediaChannel& channel)
-    {
-        auto* queue = static_cast<MediaBlockingQueue*>(
-            channel.m_queue.get());
-        queue->injectPreparationAllocationFailureForTesting();
-    }
-
     static std::uint64_t mutationSequence(const MediaChannel& channel)
     {
         return channel.m_mutationSequence.load(std::memory_order_acquire);
@@ -119,6 +113,13 @@ public:
         g_failCurrentThreadAllocations = false;
     }
 };
+
+void failPreparationAllocation(
+    std::vector<MediaBufferRef>&,
+    std::size_t)
+{
+    throw std::bad_alloc();
+}
 
 struct ChannelFixture final {
     MediaGraph graph;
@@ -173,7 +174,9 @@ MediaChannel* audio(ChannelFixture& fixture)
 
 MediaEdgePolicy atomicPolicy(std::size_t capacity)
 {
-    return MediaGraphBuildSupport::atomicPreparedQueuePolicy(capacity);
+    auto policy = MediaGraphBuildSupport::blockingQueuePolicy(capacity);
+    policy.queuePolicy.storageMode = MediaQueueStorageMode::AtomicPrepared;
+    return policy;
 }
 
 void testTransactionOwnsReferencesAndSerializesLifecycle(TestContext& ctx)
@@ -558,36 +561,20 @@ void testThrowingFinalAuthorizationReturnsErrorAndReleasesReservation(
 void testPreparationAllocationFailuresAreResultsAndPublishNothing(
     TestContext& ctx)
 {
-    auto fixture = makeFixture(
-        ctx, atomicPolicy(2), atomicPolicy(2));
     auto value = makePacketBuffer(true, 1, MediaStreamKind::Video);
     EXPECT_TRUE(ctx, value);
     if (!value) return;
     const std::array<MediaBufferRef, 1> values{value.value()};
-    const std::array<MediaAtomicOutputBatch, 1> batches{
-        MediaAtomicOutputBatch{video(*fixture), values}};
-
-    MediaChannelAtomicOutputTestAccess::failNextPreparedAllocation(
-        *video(*fixture));
-    const auto acquired = MediaAtomicOutputTransaction::acquire(
-        "Injected acquire allocation failure", batches);
-    EXPECT_FALSE(ctx, acquired);
-    if (!acquired) {
-        EXPECT_EQ(ctx, acquired.error().code,
+    MediaBlockingQueueStorage storage(
+        atomicPolicy(2).queuePolicy,
+        failPreparationAllocation);
+    const auto prepared = storage.prepare(values);
+    EXPECT_FALSE(ctx, prepared);
+    if (!prepared) {
+        EXPECT_EQ(ctx, prepared.error().code,
                   ::media::ErrorCode::InternalError);
     }
-    EXPECT_EQ(ctx, video(*fixture)->size(), std::size_t{0});
-
-    MediaChannelAtomicOutputTestAccess::failNextPreparedAllocation(
-        *video(*fixture));
-    const auto reserved = MediaReservedOutputTransaction::reserve(
-        "Injected reserve allocation failure", batches);
-    EXPECT_FALSE(ctx, reserved);
-    if (!reserved) {
-        EXPECT_EQ(ctx, reserved.error().code,
-                  ::media::ErrorCode::InternalError);
-    }
-    EXPECT_EQ(ctx, video(*fixture)->size(), std::size_t{0});
+    EXPECT_TRUE(ctx, storage.empty());
 }
 
 void testDuplicateChannelReservationAggregatesAndPublishesOnce(

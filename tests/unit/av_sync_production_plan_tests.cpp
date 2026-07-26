@@ -207,8 +207,12 @@ void testCompleteSeparateRtpAssemblyProduct(TestContext& ctx)
               MediaQueueOverflowPolicy::DropOldest);
     EXPECT_TRUE(ctx, MediaAtomicOutputPolicyContract::accepts(
                          runtime.edgePolicies.preparedVideoFrame));
+    EXPECT_FALSE(ctx, MediaAtomicOutputPolicyContract::accepts(
+                          runtime.edgePolicies.synchronizedPacket));
     EXPECT_TRUE(ctx, MediaAtomicOutputPolicyContract::accepts(
-                         runtime.edgePolicies.synchronizedPacket));
+                         runtime.edgePolicies.atomicVideoPacket));
+    EXPECT_TRUE(ctx, MediaAtomicOutputPolicyContract::accepts(
+                         runtime.edgePolicies.atomicAudioPacket));
     EXPECT_EQ(ctx, runtime.edgePolicies.audioFrame.queuePolicy.capacity,
               std::size_t{4});
     EXPECT_EQ(ctx,

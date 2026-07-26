@@ -13,8 +13,6 @@
 namespace media::ffmpeg::graph::MediaGraphBuildSupport {
 
 MediaEdgePolicy blockingQueuePolicy(std::size_t capacity) noexcept;
-MediaEdgePolicy atomicPreparedQueuePolicy(std::size_t capacity) noexcept;
-MediaRealtimeEdgePolicySet blockingEdgePolicySet(const MediaGraphQueueParameters& queues) noexcept;
 MediaFormatDescriptor streamIndexDescriptor(MediaStreamKind streamKind, int streamIndex) noexcept;
 
 ::media::Result<void> setNodeOptionChecked(MediaGraph& graph,

@@ -13,6 +13,10 @@ namespace media::ffmpeg::graph {
 
 class MediaBlockingQueueStorage final {
 public:
+    using PreparationAllocator = void (*) (
+        std::vector<MediaBufferRef>& buffers,
+        std::size_t capacity);
+
     class PreparedPush final {
     public:
         PreparedPush() = default;
@@ -30,7 +34,12 @@ public:
         std::vector<MediaBufferRef> m_buffers;
     };
 
-    explicit MediaBlockingQueueStorage(const MediaQueuePolicy& policy);
+    MediaBlockingQueueStorage(const MediaQueuePolicy& policy,
+                              PreparationAllocator preparationAllocator);
+
+    static void reserveWithDefaultAllocator(
+        std::vector<MediaBufferRef>& buffers,
+        std::size_t capacity);
 
     bool valid() const noexcept;
     bool supportsPreparedPush() const noexcept;
@@ -47,13 +56,13 @@ public:
     ::media::Result<PreparedPush> prepare(
         std::span<const MediaBufferRef> buffers) const;
     void publish(PreparedPush& prepared) noexcept;
-    static void injectPreparationAllocationFailureForTesting() noexcept;
 
 private:
     std::size_t ringIndex(std::size_t offset) const noexcept;
     void pushBackPrepared(MediaBufferRef buffer) noexcept;
 
     MediaQueueStorageMode m_mode = MediaQueueStorageMode::Unknown;
+    PreparationAllocator m_preparationAllocator = nullptr;
     std::deque<MediaBufferRef> m_deque;
     std::vector<MediaBufferRef> m_ring;
     std::size_t m_ringHead = 0;

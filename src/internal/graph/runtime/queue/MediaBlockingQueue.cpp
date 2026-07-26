@@ -38,16 +38,9 @@ void MediaBlockingQueue::notifyPreparedPublished() noexcept
     m_notEmpty.notify_all();
 }
 
-void MediaBlockingQueue::
-    injectPreparationAllocationFailureForTesting() noexcept
-{
-    MediaBlockingQueueStorage::
-        injectPreparationAllocationFailureForTesting();
-}
-
 MediaBlockingQueue::MediaBlockingQueue(MediaQueuePolicy policy)
     : m_policy(std::move(policy))
-    , m_storage(m_policy)
+    , m_storage(m_policy, MediaBlockingQueueStorage::reserveWithDefaultAllocator)
 {
 }
 

@@ -45,7 +45,6 @@ private:
         std::span<const MediaBufferRef> buffers) const;
     void publishPreparedLocked(PreparedPush& prepared) noexcept;
     void notifyPreparedPublished() noexcept;
-    void injectPreparationAllocationFailureForTesting() noexcept;
     bool fullLocked() const;
     ::media::Status handleOverflowLocked(const MediaBufferRef& incoming);
     void updateSizeMetricsLocked();

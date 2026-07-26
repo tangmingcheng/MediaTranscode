@@ -45,38 +45,6 @@ MediaEdgePolicy blockingQueuePolicy(std::size_t capacity) noexcept
     return policy;
 }
 
-MediaEdgePolicy atomicPreparedQueuePolicy(std::size_t capacity) noexcept
-{
-    MediaEdgePolicy policy = blockingQueuePolicy(capacity);
-    policy.queuePolicy.storageMode = MediaQueueStorageMode::AtomicPrepared;
-    return policy;
-}
-
-MediaRealtimeEdgePolicySet blockingEdgePolicySet(const MediaGraphQueueParameters& queues) noexcept
-{
-    MediaRealtimeEdgePolicySet policies;
-    policies.metadata = blockingQueuePolicy(queues.metadata);
-    policies.packet = blockingQueuePolicy(queues.packet);
-    policies.videoPacket = blockingQueuePolicy(queues.packet);
-    policies.audioPacket = blockingQueuePolicy(queues.packet);
-    policies.synchronizedPacket = blockingQueuePolicy(queues.packet);
-    policies.audioDriftTransaction = blockingQueuePolicy(queues.frame);
-    policies.videoFrame = blockingQueuePolicy(queues.frame);
-    policies.preparedVideoFrame = blockingQueuePolicy(queues.frame);
-    policies.audioFrame = blockingQueuePolicy(queues.frame);
-    policies.mux = blockingQueuePolicy(queues.mux);
-    policies.videoMux = blockingQueuePolicy(queues.mux);
-    policies.audioMux = blockingQueuePolicy(queues.mux);
-    policies.atomicMetadata = atomicPreparedQueuePolicy(queues.metadata);
-    policies.atomicVideoPacket = atomicPreparedQueuePolicy(queues.packet);
-    policies.atomicAudioPacket = atomicPreparedQueuePolicy(queues.packet);
-    policies.audioDriftTransaction =
-        atomicPreparedQueuePolicy(queues.frame);
-    policies.preparedVideoFrame =
-        atomicPreparedQueuePolicy(queues.frame);
-    return policies;
-}
-
 MediaFormatDescriptor streamIndexDescriptor(MediaStreamKind streamKind, int streamIndex) noexcept
 {
     MediaFormatDescriptor descriptor;

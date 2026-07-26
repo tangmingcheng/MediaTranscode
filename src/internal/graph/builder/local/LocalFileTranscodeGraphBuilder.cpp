@@ -1,5 +1,7 @@
 #include "internal/graph/builder/local/LocalFileTranscodeGraphBuilder.h"
 
+#include "internal/graph/planner/realtime/MediaRealtimeEdgePolicyPlanner.h"
+
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
 #include "internal/graph/builder/local/LocalFilePlannerRequestBuilder.h"
 #include "internal/graph/builder/segments/MediaAudioBranchSegmentBuilder.h"
@@ -88,7 +90,8 @@ bool branchEnabled(const MediaAudioPipelinePlan& plan) noexcept
     }
 
     const MediaGraphQueueParameters& queues = options.parameters.queues;
-    const MediaRealtimeEdgePolicySet edgePolicies = MediaGraphBuildSupport::blockingEdgePolicySet(queues);
+    const MediaRealtimeEdgePolicySet edgePolicies =
+        MediaRealtimeEdgePolicyPlanner::plan(queues);
 
     MediaGraph graph;
 

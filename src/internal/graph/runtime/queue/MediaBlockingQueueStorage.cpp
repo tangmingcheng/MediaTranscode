@@ -5,11 +5,6 @@
 #include <utility>
 
 namespace media::ffmpeg::graph {
-namespace {
-
-thread_local bool g_failNextPreparationAllocationForTesting = false;
-
-} // namespace
 
 std::size_t MediaBlockingQueueStorage::PreparedPush::size() const noexcept
 {
@@ -37,9 +32,15 @@ std::size_t MediaBlockingQueueStorage::PreparedPush::size() const noexcept
 }
 
 MediaBlockingQueueStorage::MediaBlockingQueueStorage(
-    const MediaQueuePolicy& policy)
+    const MediaQueuePolicy& policy,
+    PreparationAllocator preparationAllocator)
     : m_mode(policy.storageMode)
+    , m_preparationAllocator(preparationAllocator)
 {
+    if (m_preparationAllocator == nullptr) {
+        throw std::invalid_argument(
+            "Blocking queue storage requires a preparation allocator");
+    }
     if (m_mode == MediaQueueStorageMode::AtomicPrepared) {
         if (!policy.isBoundedQueue()) {
             throw std::invalid_argument(
@@ -52,6 +53,13 @@ MediaBlockingQueueStorage::MediaBlockingQueueStorage(
         throw std::invalid_argument(
             "Blocking queue storage mode must be planner-configured");
     }
+}
+
+void MediaBlockingQueueStorage::reserveWithDefaultAllocator(
+    std::vector<MediaBufferRef>& buffers,
+    std::size_t capacity)
+{
+    buffers.reserve(capacity);
 }
 
 bool MediaBlockingQueueStorage::valid() const noexcept
@@ -152,12 +160,8 @@ MediaBlockingQueueStorage::prepare(
                 "Atomic output requires planner-configured prepared storage"));
     }
     try {
-        if (g_failNextPreparationAllocationForTesting) {
-            g_failNextPreparationAllocationForTesting = false;
-            throw std::bad_alloc();
-        }
         PreparedPush prepared;
-        prepared.m_buffers.reserve(buffers.size());
+        m_preparationAllocator(prepared.m_buffers, buffers.size());
         for (const auto& buffer : buffers) {
             if (!buffer) {
                 return ::media::Result<PreparedPush>::failure(
@@ -180,12 +184,6 @@ void MediaBlockingQueueStorage::publish(PreparedPush& prepared) noexcept
         pushBackPrepared(std::move(buffer));
     }
     prepared.m_buffers.clear();
-}
-
-void MediaBlockingQueueStorage::
-    injectPreparationAllocationFailureForTesting() noexcept
-{
-    g_failNextPreparationAllocationForTesting = true;
 }
 
 std::size_t MediaBlockingQueueStorage::ringIndex(
