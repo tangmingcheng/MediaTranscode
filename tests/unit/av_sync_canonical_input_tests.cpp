@@ -2,6 +2,7 @@
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/core/MediaGraphDump.h"
 #include "internal/graph/nodes/sync/MediaCanonicalInputNode.h"
+#include "internal/graph/nodes/sync/MediaLockedPacketGateClassification.h"
 #include "internal/graph/nodes/sync/MediaLockedPacketGateNode.h"
 #include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlanner.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
@@ -328,6 +329,81 @@ void gateRequiresLockedClockBeforeLockedPackets()
     assert(harness.output()->tryPop(released));
     assert(released.get() == packet.get());
 
+}
+
+void gateClassificationExposesExactGenerationDispositions()
+{
+    const MediaAvEpochTransitionSnapshot activeEpoch{
+        MediaAvGenerationReadiness::Locked,
+        MediaPlaybackEpoch{
+            MediaRunningTime::fromNanoseconds(0),
+            MediaRunningTime::fromNanoseconds(0),
+            7},
+        MediaAudioPlaybackOrigin{
+            7,
+            MediaRunningTime::fromNanoseconds(0),
+            MediaRunningTime::fromNanoseconds(0),
+            0,
+            48'000},
+        true,
+        false};
+    const MediaAvReacquisitionSnapshot inactive{
+        MediaAvReacquisitionPhase::Inactive,
+        std::nullopt,
+        std::nullopt};
+    const MediaAvReacquisitionSnapshot transition{
+        MediaAvReacquisitionPhase::Acquiring,
+        MediaAvGenerationPurge{7, 8, 1},
+        MediaAvReacquisitionReason::HardDiscontinuity};
+
+    const auto pass = classifyLockedPacketGateGeneration(
+        inactive, activeEpoch, 7);
+    assert(pass);
+    assert(pass.value() == MediaLockedPacketGateDisposition::Pass);
+    const auto old = classifyLockedPacketGateGeneration(
+        transition, activeEpoch, 7);
+    assert(old);
+    assert(old.value() ==
+           MediaLockedPacketGateDisposition::DropOldGeneration);
+    const auto next = classifyLockedPacketGateGeneration(
+        transition, activeEpoch, 8);
+    assert(next);
+    assert(next.value() ==
+           MediaLockedPacketGateDisposition::WithholdForReacquisition);
+    assert(!classifyLockedPacketGateGeneration(
+        transition, activeEpoch, 9));
+}
+
+void lateSiblingGateWithholdsThePlannedNextGeneration()
+{
+    GateHarness harness;
+    assert(harness.syncGroup.group->requestReacquisition(
+        {7, MediaAvReacquisitionReason::HardDiscontinuity}));
+    const auto transition =
+        harness.syncGroup.group->reacquisitionSnapshot();
+    assert(transition.phase == MediaAvReacquisitionPhase::Acquiring);
+    assert(transition.transition);
+
+    assert(harness.clockInput()->push(
+        makeMediaBufferRef<MediaSourceClockStateBuffer>(
+            MediaSourceClockReadiness::Locked,
+            transition.transition->nextGeneration,
+            false)));
+    assert(harness.runtime->process(harness.execution));
+    assert(harness.packetInput()->push(timedPacket(
+        MediaStreamKind::Video,
+        MediaSourceClockReadiness::Locked,
+        transition.transition->nextGeneration,
+        2'000,
+        3'600,
+        AVRational{1, 90'000})));
+    const auto withheld = harness.runtime->process(harness.execution);
+    assert(withheld);
+    const auto waiting = harness.runtime->process(harness.execution);
+    assert(waiting &&
+           waiting.value().state == MediaNodeProcessState::Waiting);
+    assert(harness.packetInput()->size() == 0);
+    assert(harness.output()->size() == 0);
 }
 
 void gateWithholdsOnePlannedReacquisitionAndClassifiesGenerations()
@@ -865,6 +941,8 @@ int main()
     initialClockAcquisitionDeadlineIsOneShotAndExact();
     typedClockStateIsImmutableAndDiagnostic();
     gateRequiresLockedClockBeforeLockedPackets();
+    gateClassificationExposesExactGenerationDispositions();
+    lateSiblingGateWithholdsThePlannedNextGeneration();
     gateWithholdsOnePlannedReacquisitionAndClassifiesGenerations();
     gateDropsOldPacketsAndRetainsOnlyThePlannedNextGeneration();
     gateKeepsMalformedAndUnplannedEvidenceTerminal();

@@ -52,7 +52,7 @@ private:
         std::shared_ptr<MediaMasterClock> clock,
         std::vector<MediaAvGenerationParticipantGroup> participants);
 
-    ::media::Status failTerminal(::media::ErrorInfo error);
+    ::media::Status failTerminalLocked(::media::ErrorInfo error);
     ::media::Status validateAndQueueRequest(
         MediaAvReacquisitionRequest request);
     bool matchesActiveRequest(
@@ -69,6 +69,7 @@ private:
         MediaAvReacquisitionPhase::Inactive;
     std::optional<MediaAvReacquisitionRequest> m_request;
     std::optional<MediaAvGenerationPurge> m_transition;
+    std::optional<std::uint64_t> m_inFlightTransitionSequence;
     std::optional<MediaRunningTime> m_beganAt;
     std::optional<::media::ErrorInfo> m_firstError;
 };

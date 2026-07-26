@@ -51,7 +51,7 @@ bool MediaAvReacquisitionCoordinator::matchesTransition(
         m_transition->transitionSequence == transitionSequence;
 }
 
-::media::Status MediaAvReacquisitionCoordinator::failTerminal(
+::media::Status MediaAvReacquisitionCoordinator::failTerminalLocked(
     ::media::ErrorInfo error)
 {
     if (!m_firstError) {
@@ -60,6 +60,7 @@ bool MediaAvReacquisitionCoordinator::matchesTransition(
         m_firstError = failed.error();
     }
     m_phase = MediaAvReacquisitionPhase::Aborted;
+    m_inFlightTransitionSequence.reset();
     return ::media::Status::failure(*m_firstError);
 }
 
@@ -111,7 +112,7 @@ MediaAvReacquisitionCoordinator::validateAndQueueRequest(
     }
     if (m_phase == MediaAvReacquisitionPhase::Inactive) {
         auto queued = validateAndQueueRequest(request);
-        return queued ? queued : failTerminal(queued.error());
+        return queued ? queued : failTerminalLocked(queued.error());
     }
     const bool plannedNextGeneration =
         request.reason == MediaAvReacquisitionReason::FutureGeneration &&
@@ -120,81 +121,98 @@ MediaAvReacquisitionCoordinator::validateAndQueueRequest(
     if (matchesActiveRequest(request) || plannedNextGeneration) {
         return ::media::Status::success();
     }
-    return failTerminal(::media::ErrorInfo::invalidArgument(
+    return failTerminalLocked(::media::ErrorInfo::invalidArgument(
         "A/V reacquisition rejects incompatible generation evidence after transition begin"));
 }
 
 ::media::Status MediaAvReacquisitionCoordinator::request(
     MediaAvReacquisitionRequest request)
 {
+    MediaAvGenerationPurge purgeWork{};
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_firstError) {
+            return ::media::Status::failure(*m_firstError);
+        }
+        if (m_phase != MediaAvReacquisitionPhase::Inactive) {
+            if (matchesActiveRequest(request)) {
+                return ::media::Status::success();
+            }
+            return failTerminalLocked(::media::ErrorInfo::invalidArgument(
+                "A/V reacquisition rejects an incompatible request after transition begin"));
+        }
+
+        auto queued = validateAndQueueRequest(request);
+        if (!queued) return failTerminalLocked(queued.error());
+        request = *m_request;
+        const auto active = m_transitionService->snapshot();
+        if (active.poisoned ||
+            active.readiness != MediaAvGenerationReadiness::Locked ||
+            !active.playbackEpoch) {
+            return failTerminalLocked(::media::ErrorInfo::notInitialized(
+                "A/V reacquisition lost its active locked playback epoch"));
+        }
+        const std::uint64_t oldGeneration =
+            active.playbackEpoch->generation;
+        const bool future =
+            request.reason == MediaAvReacquisitionReason::FutureGeneration;
+        const std::uint64_t nextGeneration =
+            future ? request.observedGeneration : oldGeneration + 1;
+
+        auto beganAt = m_clock->now();
+        if (!beganAt) return failTerminalLocked(beganAt.error());
+        auto purge = m_transitionService->beginReacquisition(
+            oldGeneration, nextGeneration);
+        if (!purge) return failTerminalLocked(purge.error());
+
+        m_request = request;
+        m_transition = purge.value();
+        m_inFlightTransitionSequence =
+            purge.value().transitionSequence;
+        m_beganAt = beganAt.value();
+        m_phase = MediaAvReacquisitionPhase::Purging;
+        purgeWork = purge.value();
+    }
+
+    std::vector<::media::Result<MediaAvGenerationAcknowledgement>>
+        purgeResults;
+    purgeResults.reserve(m_participants.size());
+    for (auto& participant : m_participants) {
+        purgeResults.push_back(participant.purgeAll(purgeWork));
+    }
+
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_firstError) {
         return ::media::Status::failure(*m_firstError);
     }
-    if (m_phase != MediaAvReacquisitionPhase::Inactive) {
-        if (matchesActiveRequest(request)) {
-            return ::media::Status::success();
+    if (m_phase != MediaAvReacquisitionPhase::Purging ||
+        !m_transition ||
+        !m_inFlightTransitionSequence ||
+        *m_inFlightTransitionSequence != purgeWork.transitionSequence ||
+        m_transition->transitionSequence != purgeWork.transitionSequence) {
+        return failTerminalLocked(::media::ErrorInfo::internalError(
+            "A/V reacquisition lost its in-flight purge transaction"));
+    }
+
+    for (const auto& purgeResult : purgeResults) {
+        if (!purgeResult) {
+            return failTerminalLocked(purgeResult.error());
         }
-        return failTerminal(::media::ErrorInfo::invalidArgument(
-            "A/V reacquisition rejects an incompatible request after transition begin"));
     }
 
-    auto queued = validateAndQueueRequest(request);
-    if (!queued) return failTerminal(queued.error());
-    request = *m_request;
-    const auto active = m_transitionService->snapshot();
-    if (active.poisoned ||
-        active.readiness != MediaAvGenerationReadiness::Locked ||
-        !active.playbackEpoch) {
-        return failTerminal(::media::ErrorInfo::notInitialized(
-            "A/V reacquisition lost its active locked playback epoch"));
-    }
-    const std::uint64_t oldGeneration =
-        active.playbackEpoch->generation;
-    const bool future =
-        request.reason == MediaAvReacquisitionReason::FutureGeneration;
-    const std::uint64_t nextGeneration =
-        future ? request.observedGeneration : oldGeneration + 1;
-
-    auto beganAt = m_clock->now();
-    if (!beganAt) return failTerminal(beganAt.error());
-    auto purge = m_transitionService->beginReacquisition(
-        oldGeneration, nextGeneration);
-    if (!purge) return failTerminal(purge.error());
-
-    m_request = request;
-    m_transition = purge.value();
-    m_beganAt = beganAt.value();
-    m_phase = MediaAvReacquisitionPhase::Purging;
-
-    std::optional<::media::ErrorInfo> firstPurgeFailure;
     bool complete = false;
-    for (auto& participant : m_participants) {
-        auto acknowledgement = participant.purgeAll(*m_transition);
-        if (!acknowledgement) {
-            if (!firstPurgeFailure) {
-                firstPurgeFailure = acknowledgement.error();
-                (void)m_transitionService->failReacquisition(
-                    *firstPurgeFailure);
-            }
-            continue;
-        }
+    for (auto& purgeResult : purgeResults) {
         auto acknowledged = m_transitionService->acknowledge(
-            std::move(acknowledgement).value());
+            std::move(purgeResult).value());
         if (!acknowledged) {
-            if (!firstPurgeFailure) {
-                firstPurgeFailure = acknowledged.error();
-            }
-            continue;
+            return failTerminalLocked(acknowledged.error());
         }
         complete = acknowledged.value();
-    }
-    if (firstPurgeFailure) {
-        return failTerminal(std::move(*firstPurgeFailure));
     }
     if (complete) {
         m_phase = MediaAvReacquisitionPhase::Acquiring;
         m_beganAt.reset();
+        m_inFlightTransitionSequence.reset();
     }
     return ::media::Status::success();
 }
@@ -211,12 +229,12 @@ MediaAvReacquisitionCoordinator::validateAndQueueRequest(
             "A/V reacquisition has no incomplete purge to poll"));
     }
     auto now = m_clock->now();
-    if (!now) return failTerminal(now.error());
+    if (!now) return failTerminalLocked(now.error());
     auto elapsed = now.value().checkedSubtract(*m_beganAt);
-    if (!elapsed) return failTerminal(elapsed.error());
+    if (!elapsed) return failTerminalLocked(elapsed.error());
     auto status =
         m_transitionService->pollTransitionTimeout(elapsed.value());
-    return status ? status : failTerminal(status.error());
+    return status ? status : failTerminalLocked(status.error());
 }
 
 MediaAvReacquisitionSnapshot
@@ -242,7 +260,7 @@ MediaAvReacquisitionCoordinator::markReadyForActivation(
     }
     if (m_phase != MediaAvReacquisitionPhase::Acquiring ||
         !matchesTransition(generation, transitionSequence)) {
-        return failTerminal(::media::ErrorInfo::invalidArgument(
+        return failTerminalLocked(::media::ErrorInfo::invalidArgument(
             "A/V reacquisition readiness requires the acquiring transition"));
     }
     m_phase = MediaAvReacquisitionPhase::ReadyForActivation;
@@ -265,12 +283,13 @@ MediaAvReacquisitionCoordinator::markReadyForActivation(
         !active.playbackEpoch ||
         active.playbackEpoch->generation != generation ||
         !active.outputPermitted) {
-        return failTerminal(::media::ErrorInfo::invalidArgument(
+        return failTerminalLocked(::media::ErrorInfo::invalidArgument(
             "A/V reacquisition activation requires the published matching epoch"));
     }
     m_phase = MediaAvReacquisitionPhase::Inactive;
     m_request.reset();
     m_transition.reset();
+    m_inFlightTransitionSequence.reset();
     m_beganAt.reset();
     return ::media::Status::success();
 }
@@ -284,6 +303,7 @@ void MediaAvReacquisitionCoordinator::abort() noexcept
     }
     m_transitionService->abort();
     m_phase = MediaAvReacquisitionPhase::Aborted;
+    m_inFlightTransitionSequence.reset();
 }
 
 } // namespace media::ffmpeg::graph

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
-#include "internal/graph/sync/MediaAvSyncError.h"
+#include "internal/graph/nodes/sync/MediaLockedPacketGateClassification.h"
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
 #include "internal/graph/sync/startup/MediaInitialClockAcquisitionDeadline.h"
 #include "internal/graph/time/MediaRunningTime.h"
@@ -30,8 +30,7 @@ private:
     ::media::Result<MediaLockedPacketGateDisposition> acceptClock(
         const MediaBufferRef& buffer);
     ::media::Result<MediaLockedPacketGateDisposition>
-    classifyLockedGeneration(std::uint64_t generation,
-                             bool mayRequestReacquisition);
+    classifyLockedGeneration(std::uint64_t generation);
     ::media::Result<MediaLockedPacketGateDisposition> classifyPacket(
         const MediaBufferRef& buffer);
     ::media::Result<std::uint64_t> packetGeneration(

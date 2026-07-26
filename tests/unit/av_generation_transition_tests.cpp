@@ -9,7 +9,10 @@
 #include "internal/graph/time/MediaMasterClock.h"
 
 #include <chrono>
+#include <condition_variable>
+#include <future>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -118,6 +121,49 @@ public:
 
 private:
     std::optional<::media::ErrorInfo> m_failure;
+};
+
+class BlockingPurgeTarget final : public MediaAvGenerationPurgeTarget {
+public:
+    explicit BlockingPurgeTarget(
+        std::optional<::media::ErrorInfo> failure = std::nullopt)
+        : m_failure(std::move(failure))
+        , m_entered(m_enteredPromise.get_future().share())
+    {
+    }
+
+    ::media::Status purge(const MediaAvGenerationPurge&) override
+    {
+        m_enteredPromise.set_value();
+        std::unique_lock<std::mutex> lock(m_mutex);
+        m_releasedCondition.wait(lock, [this] { return m_released; });
+        return m_failure
+            ? ::media::Status::failure(*m_failure)
+            : ::media::Status::success();
+    }
+
+    bool waitUntilEntered() const
+    {
+        return m_entered.wait_for(std::chrono::seconds(1)) ==
+            std::future_status::ready;
+    }
+
+    void release()
+    {
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_released = true;
+        }
+        m_releasedCondition.notify_all();
+    }
+
+private:
+    std::optional<::media::ErrorInfo> m_failure;
+    std::promise<void> m_enteredPromise;
+    std::shared_future<void> m_entered;
+    std::mutex m_mutex;
+    std::condition_variable m_releasedCondition;
+    bool m_released = false;
 };
 
 void testParticipantGroupRequiresExactSealedChildSet(TestContext& ctx)
@@ -282,7 +328,7 @@ ActiveGroupFixture makeActiveGroup(
 std::optional<MediaAvGenerationParticipantGroup> sealedParticipant(
     TestContext& ctx,
     const MediaAvGenerationParticipantPlan& plan,
-    const std::shared_ptr<RecordingPurgeTarget>& target)
+    std::shared_ptr<MediaAvGenerationPurgeTarget> target)
 {
     auto created = MediaAvGenerationParticipantGroup::create(plan);
     EXPECT_TRUE(ctx, created);
@@ -292,6 +338,126 @@ std::optional<MediaAvGenerationParticipantGroup> sealedParticipant(
                          plan.requiredChildren.front(), target));
     EXPECT_TRUE(ctx, participant.seal());
     return participant;
+}
+
+bool installCoordinator(
+    TestContext& ctx,
+    const ActiveGroupFixture& fixture,
+    std::vector<MediaAvGenerationParticipantGroup> participants);
+void expectSameError(
+    TestContext& ctx,
+    const ::media::ErrorInfo& actual,
+    const ::media::ErrorInfo& expected);
+
+void testCoordinatorDoesNotHoldLockAcrossPurgeCallbacks(TestContext& ctx)
+{
+    using namespace std::chrono_literals;
+    const auto plan = reacquisitionPlan();
+    auto fixture = makeActiveGroup(ctx, plan);
+    if (!fixture.group) return;
+    auto blockingTarget = std::make_shared<BlockingPurgeTarget>();
+    auto audioTarget = std::make_shared<RecordingPurgeTarget>();
+    std::vector<MediaAvGenerationParticipantGroup> participants;
+    auto video = sealedParticipant(
+        ctx, plan.participants[0], blockingTarget);
+    auto audio = sealedParticipant(
+        ctx, plan.participants[1], audioTarget);
+    if (!video || !audio) return;
+    participants.push_back(std::move(*video));
+    participants.push_back(std::move(*audio));
+    if (!installCoordinator(ctx, fixture, std::move(participants))) return;
+
+    auto request = std::async(std::launch::async, [&fixture] {
+        return fixture.group->requestReacquisition(
+            {1, MediaAvReacquisitionReason::HardDiscontinuity});
+    });
+    const bool entered = blockingTarget->waitUntilEntered();
+    EXPECT_TRUE(ctx, entered);
+    if (!entered) {
+        blockingTarget->release();
+        (void)request.get();
+        return;
+    }
+    auto snapshot = std::async(std::launch::async, [&fixture] {
+        return fixture.group->reacquisitionSnapshot();
+    });
+    const auto snapshotReadiness = snapshot.wait_for(1s);
+    EXPECT_EQ(ctx, snapshotReadiness, std::future_status::ready);
+    blockingTarget->release();
+
+    const auto duringPurge = snapshot.get();
+    EXPECT_EQ(ctx, duringPurge.phase, MediaAvReacquisitionPhase::Purging);
+    EXPECT_TRUE(ctx, duringPurge.transition.has_value());
+    EXPECT_TRUE(ctx, request.get());
+    EXPECT_EQ(ctx,
+              fixture.group->reacquisitionSnapshot().phase,
+              MediaAvReacquisitionPhase::Acquiring);
+}
+
+void testConcurrentIncompatibleRequestPreservesFirstError(
+    TestContext& ctx)
+{
+    using namespace std::chrono_literals;
+    const auto plan = reacquisitionPlan();
+    auto fixture = makeActiveGroup(ctx, plan);
+    if (!fixture.group) return;
+    const auto laterPurgeFailure =
+        ::media::ErrorInfo::internalError("later purge callback failure");
+    auto blockingTarget =
+        std::make_shared<BlockingPurgeTarget>(laterPurgeFailure);
+    auto audioTarget = std::make_shared<RecordingPurgeTarget>();
+    std::vector<MediaAvGenerationParticipantGroup> participants;
+    auto video = sealedParticipant(
+        ctx, plan.participants[0], blockingTarget);
+    auto audio = sealedParticipant(
+        ctx, plan.participants[1], audioTarget);
+    if (!video || !audio) return;
+    participants.push_back(std::move(*video));
+    participants.push_back(std::move(*audio));
+    if (!installCoordinator(ctx, fixture, std::move(participants))) return;
+
+    auto first = std::async(std::launch::async, [&fixture] {
+        return fixture.group->requestReacquisition(
+            {1, MediaAvReacquisitionReason::HardDiscontinuity});
+    });
+    const bool entered = blockingTarget->waitUntilEntered();
+    EXPECT_TRUE(ctx, entered);
+    if (!entered) {
+        blockingTarget->release();
+        (void)first.get();
+        return;
+    }
+    auto incompatible = std::async(std::launch::async, [&fixture] {
+        return fixture.group->requestReacquisition(
+            {1, MediaAvReacquisitionReason::Flush});
+    });
+    const auto incompatibleReadiness = incompatible.wait_for(1s);
+    EXPECT_EQ(ctx, incompatibleReadiness, std::future_status::ready);
+    blockingTarget->release();
+
+    const auto rejected = incompatible.get();
+    EXPECT_FALSE(ctx, rejected);
+    const auto initial = first.get();
+    EXPECT_FALSE(ctx, initial);
+    if (!rejected && !initial) {
+        const auto& expected = rejected.error();
+        EXPECT_EQ(
+            ctx,
+            expected.message,
+            std::string(
+                "A/V reacquisition rejects an incompatible request after transition begin"));
+        expectSameError(ctx, initial.error(), expected);
+        EXPECT_TRUE(ctx, expected.message != laterPurgeFailure.message);
+        const auto repeated = fixture.group->requestReacquisition(
+            {1, MediaAvReacquisitionReason::HardDiscontinuity});
+        EXPECT_FALSE(ctx, repeated);
+        if (!repeated) {
+            expectSameError(ctx, repeated.error(), expected);
+        }
+    }
+    EXPECT_EQ(ctx,
+              fixture.group->reacquisitionSnapshot().phase,
+              MediaAvReacquisitionPhase::Aborted);
 }
 
 std::vector<MediaAvGenerationParticipantGroup> sealedParticipants(
@@ -665,5 +831,7 @@ int main()
     testPurgeFailurePoisonsWithFirstError(ctx);
     testMissingAcknowledgementTimesOutWithFirstError(ctx);
     testUnplannedAcknowledgementPoisonsWithFirstError(ctx);
+    testCoordinatorDoesNotHoldLockAcrossPurgeCallbacks(ctx);
+    testConcurrentIncompatibleRequestPreservesFirstError(ctx);
     return ctx.failures == 0 ? 0 : 1;
 }

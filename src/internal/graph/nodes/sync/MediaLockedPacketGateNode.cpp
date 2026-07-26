@@ -14,16 +14,9 @@ namespace {
 using GateDispositionResult =
     ::media::Result<MediaLockedPacketGateDisposition>;
 
-GateDispositionResult invalidDisposition(const char* message)
+::media::ErrorInfo invalidGateEvidence(const char* message)
 {
-    return GateDispositionResult::failure(
-        ::media::ErrorInfo::invalidArgument(message));
-}
-
-::media::Status invalid(const char* message)
-{
-    return ::media::Status::failure(
-        ::media::ErrorInfo::invalidArgument(message));
+    return ::media::ErrorInfo::invalidArgument(message);
 }
 
 bool transitionActive(MediaAvReacquisitionPhase phase) noexcept
@@ -31,26 +24,6 @@ bool transitionActive(MediaAvReacquisitionPhase phase) noexcept
     return phase == MediaAvReacquisitionPhase::Purging ||
         phase == MediaAvReacquisitionPhase::Acquiring ||
         phase == MediaAvReacquisitionPhase::ReadyForActivation;
-}
-
-GateDispositionResult classifyActiveTransition(
-    const MediaAvReacquisitionSnapshot& snapshot,
-    std::uint64_t generation)
-{
-    if (!transitionActive(snapshot.phase) || !snapshot.transition) {
-        return invalidDisposition(
-            "Locked packet gate requires a complete active transition");
-    }
-    if (generation == snapshot.transition->oldGeneration) {
-        return GateDispositionResult::success(
-            MediaLockedPacketGateDisposition::DropOldGeneration);
-    }
-    if (generation == snapshot.transition->nextGeneration) {
-        return GateDispositionResult::success(
-            MediaLockedPacketGateDisposition::WithholdForReacquisition);
-    }
-    return invalidDisposition(
-        "Locked packet gate rejects an unplanned transition generation");
 }
 
 } // namespace
@@ -91,7 +64,9 @@ MediaLockedPacketGateNode::onProcess(MediaGraphExecutionContext& context)
                   ::media::Status::failure(disposition.error()));
     }
     if (m_pendingPacket) {
-        if (!m_lockedGeneration) {
+        if (!m_lockedGeneration &&
+            m_syncGroup->reacquisitionSnapshot().phase ==
+                MediaAvReacquisitionPhase::Inactive) {
             if (m_acquisitionDeadline->deadline()) {
                 return ::media::Result<MediaNodeProcessResult>::success(
                     MediaNodeProcessResult::waitingUntil(
@@ -130,17 +105,24 @@ MediaLockedPacketGateNode::onProcess(MediaGraphExecutionContext& context)
     }
     MediaBufferRef input = std::move(*packet.value());
     if (input->isFlush()) {
-        return processProgress(invalid(
-            "Locked packet gate rejects discontinuity flush"));
+        return processProgress(::media::Status::failure(
+            invalidGateEvidence(
+                "Locked packet gate rejects discontinuity flush")));
     }
     if (input->isEof()) {
         if (!m_lockedGeneration) {
-            return processProgress(invalid(
-                "Locked packet gate cannot finish before initial lock"));
+            return processProgress(::media::Status::failure(
+                invalidGateEvidence(
+                    "Locked packet gate cannot finish before initial lock")));
         }
         return processFinished(emitOutput(context, "packet", input));
     }
     if (!m_lockedGeneration) {
+        const auto snapshot = m_syncGroup->reacquisitionSnapshot();
+        if (snapshot.phase != MediaAvReacquisitionPhase::Inactive) {
+            return processProgress(
+                processPacket(context, std::move(input)));
+        }
         auto generation = packetGeneration(input);
         if (!generation) {
             return processProgress(
@@ -198,14 +180,16 @@ MediaLockedPacketGateNode::acceptClock(const MediaBufferRef& buffer)
         return m_lockedGeneration
             ? GateDispositionResult::success(
                   MediaLockedPacketGateDisposition::Pass)
-            : invalidDisposition(
-                  "Locked packet gate clock ended before lock");
+            : GateDispositionResult::failure(
+                  invalidGateEvidence(
+                      "Locked packet gate clock ended before lock"));
     }
     const auto* state =
         dynamic_cast<const MediaSourceClockStateBuffer*>(buffer.get());
     if (!state) {
-        return invalidDisposition(
-            "Locked packet gate requires source clock state");
+        return GateDispositionResult::failure(
+            invalidGateEvidence(
+                "Locked packet gate requires source clock state"));
     }
 
     const bool discontinuity =
@@ -216,8 +200,9 @@ MediaLockedPacketGateNode::acceptClock(const MediaBufferRef& buffer)
                 MediaSourceClockReadiness::ReacquireRequired ||
             state->generation() == 0 ||
             state->generation() != *m_lockedGeneration) {
-            return invalidDisposition(
-                "Locked packet gate rejects malformed discontinuity evidence");
+            return GateDispositionResult::failure(
+                invalidGateEvidence(
+                    "Locked packet gate rejects malformed discontinuity evidence"));
         }
         const auto snapshot = m_syncGroup->reacquisitionSnapshot();
         if (transitionActive(snapshot.phase)) {
@@ -225,24 +210,27 @@ MediaLockedPacketGateNode::acceptClock(const MediaBufferRef& buffer)
                 snapshot.transition->oldGeneration != state->generation() ||
                 snapshot.reason !=
                     MediaAvReacquisitionReason::HardDiscontinuity) {
-                return invalidDisposition(
-                    "Locked packet gate rejects incompatible discontinuity evidence");
+                return GateDispositionResult::failure(
+                    invalidGateEvidence(
+                        "Locked packet gate rejects incompatible discontinuity evidence"));
             }
             return GateDispositionResult::success(
                 MediaLockedPacketGateDisposition::WithholdForReacquisition);
         }
         if (snapshot.phase != MediaAvReacquisitionPhase::Inactive ||
             snapshot.transition) {
-            return invalidDisposition(
-                "Locked packet gate rejects discontinuity outside a live group");
+            return GateDispositionResult::failure(
+                invalidGateEvidence(
+                    "Locked packet gate rejects discontinuity outside a live group"));
         }
         auto observed = m_syncGroup->observeGeneration(state->generation());
         if (!observed ||
             observed.value() !=
                 MediaAvSyncGroupRuntime::GenerationDisposition::Current) {
             return observed
-                ? invalidDisposition(
-                      "Locked packet gate discontinuity requires the active generation")
+                ? GateDispositionResult::failure(
+                      invalidGateEvidence(
+                          "Locked packet gate discontinuity requires the active generation"))
                 : GateDispositionResult::failure(observed.error());
         }
         auto requested = m_syncGroup->requestReacquisition(
@@ -258,19 +246,45 @@ MediaLockedPacketGateNode::acceptClock(const MediaBufferRef& buffer)
             !requestedSnapshot.transition ||
             requestedSnapshot.transition->oldGeneration !=
                 state->generation()) {
-            return invalidDisposition(
-                "Locked packet gate requires the requested group transition");
+            return GateDispositionResult::failure(
+                invalidGateEvidence(
+                    "Locked packet gate requires the requested group transition"));
         }
         return GateDispositionResult::success(
             MediaLockedPacketGateDisposition::WithholdForReacquisition);
     }
     if (state->readiness() ==
         MediaSourceClockReadiness::ReacquireRequired) {
-        return invalidDisposition(
-            "Locked packet gate rejects unmarked reacquisition evidence");
+        return GateDispositionResult::failure(
+            invalidGateEvidence(
+                "Locked packet gate rejects unmarked reacquisition evidence"));
     }
     if (state->readiness() == MediaSourceClockReadiness::Acquiring) {
-        if (!m_lockedGeneration) {
+        const auto snapshot = m_syncGroup->reacquisitionSnapshot();
+        if (transitionActive(snapshot.phase)) {
+            if ((snapshot.phase !=
+                     MediaAvReacquisitionPhase::Acquiring &&
+                 snapshot.phase !=
+                     MediaAvReacquisitionPhase::ReadyForActivation) ||
+                !snapshot.transition ||
+                state->generation() !=
+                    snapshot.transition->nextGeneration) {
+                return GateDispositionResult::failure(
+                    invalidGateEvidence(
+                        "Locked packet gate rejects acquiring evidence without the active transition"));
+            }
+            return GateDispositionResult::success(
+                MediaLockedPacketGateDisposition::
+                    WithholdForReacquisition);
+        }
+        if (snapshot.phase != MediaAvReacquisitionPhase::Inactive ||
+            snapshot.transition ||
+            m_lockedGeneration) {
+            return GateDispositionResult::failure(
+                invalidGateEvidence(
+                    "Locked packet gate rejects acquiring evidence without the active transition"));
+        }
+        {
             auto now = m_syncGroup->clock()->now();
             if (!now) return GateDispositionResult::failure(now.error());
             auto established =
@@ -281,103 +295,31 @@ MediaLockedPacketGateNode::acceptClock(const MediaBufferRef& buffer)
                           WithholdForReacquisition)
                 : GateDispositionResult::failure(established.error());
         }
-        const auto snapshot = m_syncGroup->reacquisitionSnapshot();
-        if ((snapshot.phase != MediaAvReacquisitionPhase::Acquiring &&
-             snapshot.phase !=
-                 MediaAvReacquisitionPhase::ReadyForActivation) ||
-            !snapshot.transition ||
-            state->generation() !=
-                snapshot.transition->nextGeneration) {
-            return invalidDisposition(
-                "Locked packet gate rejects acquiring evidence without the active transition");
-        }
-        return GateDispositionResult::success(
-            MediaLockedPacketGateDisposition::WithholdForReacquisition);
     }
     if (state->readiness() != MediaSourceClockReadiness::Locked) {
-        return invalidDisposition(
-            "Locked packet gate rejects degraded clock evidence");
+        return GateDispositionResult::failure(
+            invalidGateEvidence(
+                "Locked packet gate rejects degraded clock evidence"));
     }
-    if (state->generation() == 0) {
-        return invalidDisposition(
-            "Locked packet gate requires nonzero locked generation");
-    }
-    if (!m_lockedGeneration) {
+    auto disposition =
+        classifyLockedGeneration(state->generation());
+    if (disposition &&
+        disposition.value() ==
+            MediaLockedPacketGateDisposition::Pass) {
         m_lockedGeneration = state->generation();
         m_acquisitionDeadline->clear();
-        return GateDispositionResult::success(
-            MediaLockedPacketGateDisposition::Pass);
     }
-    return classifyLockedGeneration(state->generation(), true);
+    return disposition;
 }
 
 ::media::Result<MediaLockedPacketGateDisposition>
 MediaLockedPacketGateNode::classifyLockedGeneration(
-    std::uint64_t generation,
-    bool mayRequestReacquisition)
+    std::uint64_t generation)
 {
-    if (generation == 0 || !m_lockedGeneration) {
-        return invalidDisposition(
-            "Locked packet gate requires an active nonzero generation");
-    }
-    const auto snapshot = m_syncGroup->reacquisitionSnapshot();
-    if (transitionActive(snapshot.phase)) {
-        return classifyActiveTransition(snapshot, generation);
-    }
-    if (snapshot.phase != MediaAvReacquisitionPhase::Inactive ||
-        snapshot.transition) {
-        return invalidDisposition(
-            "Locked packet gate rejects generation evidence outside a live group");
-    }
-    if (generation < *m_lockedGeneration) {
-        return invalidDisposition(
-            "Locked packet gate rejects generation regression");
-    }
-    if (generation == *m_lockedGeneration) {
-        const auto epoch = m_syncGroup->epochTransitionSnapshot();
-        if (!epoch.playbackEpoch) {
-            return GateDispositionResult::success(
-                MediaLockedPacketGateDisposition::Pass);
-        }
-        auto observed = m_syncGroup->observeGeneration(generation);
-        if (!observed) {
-            return GateDispositionResult::failure(observed.error());
-        }
-        if (observed.value() ==
-            MediaAvSyncGroupRuntime::GenerationDisposition::Current) {
-            return GateDispositionResult::success(
-                MediaLockedPacketGateDisposition::Pass);
-        }
-        const auto concurrentSnapshot =
-            m_syncGroup->reacquisitionSnapshot();
-        return transitionActive(concurrentSnapshot.phase)
-            ? classifyActiveTransition(concurrentSnapshot, generation)
-            : invalidDisposition(
-                  "Locked packet gate rejects non-current active generation");
-    }
-    if (!mayRequestReacquisition) {
-        return invalidDisposition(
-            "Locked packet gate rejects future packet generation without a transition");
-    }
-    auto observed = m_syncGroup->observeGeneration(generation);
-    if (!observed) {
-        return GateDispositionResult::failure(observed.error());
-    }
-    if (observed.value() !=
-        MediaAvSyncGroupRuntime::GenerationDisposition::
-            ReacquisitionRequired) {
-        return invalidDisposition(
-            "Locked packet gate rejects an unexpected future generation");
-    }
-    auto requested = m_syncGroup->requestReacquisition(
-        MediaAvReacquisitionRequest{
-            generation,
-            MediaAvReacquisitionReason::FutureGeneration});
-    if (!requested) {
-        return GateDispositionResult::failure(requested.error());
-    }
-    return classifyActiveTransition(
-        m_syncGroup->reacquisitionSnapshot(), generation);
+    return classifyLockedPacketGateGeneration(
+        m_syncGroup->reacquisitionSnapshot(),
+        m_syncGroup->epochTransitionSnapshot(),
+        generation);
 }
 
 ::media::Result<std::uint64_t>
@@ -404,7 +346,7 @@ MediaLockedPacketGateNode::classifyPacket(const MediaBufferRef& buffer)
 {
     auto generation = packetGeneration(buffer);
     return generation
-        ? classifyLockedGeneration(generation.value(), false)
+        ? classifyLockedGeneration(generation.value())
         : GateDispositionResult::failure(generation.error());
 }
 
@@ -424,15 +366,18 @@ MediaLockedPacketGateNode::classifyPacket(const MediaBufferRef& buffer)
     case MediaLockedPacketGateDisposition::DropOldGeneration:
         return ::media::Status::success();
     }
-    return invalid("Locked packet gate rejects unknown disposition");
+    return ::media::Status::failure(
+        invalidGateEvidence(
+            "Locked packet gate rejects unknown disposition"));
 }
 
 ::media::Status MediaLockedPacketGateNode::retainPendingPacket(
     MediaBufferRef buffer)
 {
     if (m_pendingPacket || !buffer) {
-        return invalid(
-            "Locked packet gate retains at most one pending packet");
+        return ::media::Status::failure(
+            invalidGateEvidence(
+                "Locked packet gate retains at most one pending packet"));
     }
     m_pendingPacket = std::move(buffer);
     return ::media::Status::success();
