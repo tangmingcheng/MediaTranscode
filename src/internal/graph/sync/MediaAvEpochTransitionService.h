@@ -10,7 +10,9 @@
 
 namespace media::ffmpeg::graph {
 
+class MediaAvReacquisitionCoordinator;
 class MediaPlaybackEpochActivationCapability;
+struct MediaAvEpochTransitionServiceTestAccess;
 
 struct MediaAvEpochTransitionSnapshot final {
     MediaAvGenerationReadiness readiness;
@@ -35,7 +37,9 @@ public:
     MediaAvEpochTransitionSnapshot snapshot() const noexcept;
 
 private:
+    friend class MediaAvReacquisitionCoordinator;
     friend class MediaPlaybackEpochActivationCapability;
+    friend struct MediaAvEpochTransitionServiceTestAccess;
     ::media::Status activateInitial(
         MediaPlaybackEpoch epoch,
         MediaAudioPlaybackOrigin audioOrigin);
@@ -48,6 +52,8 @@ private:
     static ::media::Status validateEpochPair(
         const MediaPlaybackEpoch& epoch,
         const MediaAudioPlaybackOrigin& audioOrigin);
+    ::media::Status failReacquisition(::media::ErrorInfo error);
+    ::media::Status failLocked(::media::ErrorInfo error);
 
     mutable std::mutex m_mutex;
     MediaAvGenerationTransitionCoordinator m_coordinator;
@@ -55,6 +61,7 @@ private:
         MediaAvGenerationReadiness::Acquiring;
     std::optional<MediaPlaybackEpoch> m_epoch;
     std::optional<MediaAudioPlaybackOrigin> m_audioOrigin;
+    std::optional<::media::ErrorInfo> m_firstError;
 };
 
 } // namespace media::ffmpeg::graph

@@ -49,6 +49,9 @@ MediaAvEpochTransitionService::create(MediaAvGenerationTransitionPlan plan)
     auto valid = validateEpochPair(epoch, audioOrigin);
     if (!valid) return valid;
     std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_firstError) {
+        return ::media::Status::failure(*m_firstError);
+    }
     if (m_epoch || m_audioOrigin ||
         m_readiness != MediaAvGenerationReadiness::Acquiring) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
@@ -68,6 +71,10 @@ MediaAvEpochTransitionService::beginReacquisition(
     std::uint64_t nextGeneration)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_firstError) {
+        return ::media::Result<MediaAvGenerationPurge>::failure(
+            *m_firstError);
+    }
     if (m_readiness != MediaAvGenerationReadiness::Locked) {
         return ::media::Result<MediaAvGenerationPurge>::failure(
             ::media::ErrorInfo::invalidArgument(
@@ -83,6 +90,9 @@ MediaAvEpochTransitionService::beginReacquisition(
     MediaAvGenerationAcknowledgement acknowledgement)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_firstError) {
+        return ::media::Result<bool>::failure(*m_firstError);
+    }
     if (m_readiness != MediaAvGenerationReadiness::Reacquire) {
         return ::media::Result<bool>::failure(
             ::media::ErrorInfo::invalidArgument(
@@ -90,7 +100,10 @@ MediaAvEpochTransitionService::beginReacquisition(
     }
     auto acknowledged = m_coordinator.acknowledge(
         std::move(acknowledgement));
-    if (!acknowledged) return acknowledged;
+    if (!acknowledged) {
+        auto failed = failLocked(acknowledged.error());
+        return ::media::Result<bool>::failure(failed.error());
+    }
     if (acknowledged.value()) {
         m_readiness = MediaAvGenerationReadiness::Acquiring;
     }
@@ -101,11 +114,18 @@ MediaAvEpochTransitionService::beginReacquisition(
     MediaRunningTime elapsedSinceBegin)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_firstError) {
+        return ::media::Status::failure(*m_firstError);
+    }
     if (m_readiness != MediaAvGenerationReadiness::Reacquire) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "Generation timeout polling requires reacquisition"));
     }
-    return m_coordinator.checkTimeout(elapsedSinceBegin);
+    auto status = m_coordinator.checkTimeout(elapsedSinceBegin);
+    if (!status) {
+        return failLocked(status.error());
+    }
+    return status;
 }
 
 ::media::Status MediaAvEpochTransitionService::activateNextAfter(
@@ -116,6 +136,9 @@ MediaAvEpochTransitionService::beginReacquisition(
     auto valid = validateEpochPair(epoch, audioOrigin);
     if (!valid) return valid;
     std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_firstError) {
+        return ::media::Status::failure(*m_firstError);
+    }
     if (m_readiness != MediaAvGenerationReadiness::Acquiring || !m_epoch ||
         !m_audioOrigin || epoch.generation <= m_epoch->generation) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
@@ -128,6 +151,24 @@ MediaAvEpochTransitionService::beginReacquisition(
     m_audioOrigin = audioOrigin;
     m_readiness = MediaAvGenerationReadiness::Locked;
     return ::media::Status::success();
+}
+
+::media::Status MediaAvEpochTransitionService::failReacquisition(
+    ::media::ErrorInfo error)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return failLocked(std::move(error));
+}
+
+::media::Status MediaAvEpochTransitionService::failLocked(
+    ::media::ErrorInfo error)
+{
+    if (!m_firstError) {
+        m_firstError = std::move(error);
+    }
+    m_coordinator.abort();
+    m_readiness = MediaAvGenerationReadiness::Reacquire;
+    return ::media::Status::failure(*m_firstError);
 }
 
 void MediaAvEpochTransitionService::abort() noexcept

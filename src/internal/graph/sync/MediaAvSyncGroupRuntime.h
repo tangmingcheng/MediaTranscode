@@ -1,13 +1,14 @@
 #pragma once
 
 #include "internal/graph/planner/avsync/MediaAvSyncPlan.h"
-#include "internal/graph/sync/MediaAvSyncGroupKey.h"
+#include "internal/graph/sync/MediaAvEpochTransitionService.h"
+#include "internal/graph/sync/MediaAvReacquisitionCoordinator.h"
 #include "internal/graph/sync/MediaAvReacquisitionRequest.h"
+#include "internal/graph/sync/MediaAvSyncGroupKey.h"
 #include "internal/graph/sync/MediaPlaybackEpoch.h"
 #include "internal/graph/time/MediaMasterClock.h"
 #include "internal/graph/time/MediaSharedNtpEpoch.h"
 #include "internal/graph/time/MediaSteadyMasterClock.h"
-#include "internal/graph/sync/MediaAvEpochTransitionService.h"
 
 #include <memory>
 #include <mutex>
@@ -44,6 +45,15 @@ public:
     ::media::Result<GenerationDisposition> observeGeneration(
         std::uint64_t generation);
     ::media::Status requestReacquisition(MediaAvReacquisitionRequest request) noexcept;
+    ::media::Status installReacquisitionCoordinator(
+        std::unique_ptr<MediaAvReacquisitionCoordinator> coordinator);
+    MediaAvReacquisitionSnapshot reacquisitionSnapshot() const noexcept;
+    ::media::Status markReacquisitionReadyForActivation(
+        std::uint64_t generation,
+        std::uint64_t transitionSequence);
+    ::media::Status markReacquisitionActivated(
+        std::uint64_t generation,
+        std::uint64_t transitionSequence);
     std::optional<MediaAvReacquisitionRequest> reacquisitionRequest() const noexcept;
     void markAborted() noexcept;
     void shutdown() noexcept;
@@ -64,6 +74,8 @@ private:
     std::shared_ptr<const MediaSharedNtpEpoch> m_sharedNtpEpoch;
     std::shared_ptr<MediaAvEpochTransitionService> m_transitionService;
     mutable std::mutex m_epochMutex;
+    std::unique_ptr<MediaAvReacquisitionCoordinator>
+        m_reacquisitionCoordinator;
     std::optional<MediaAvReacquisitionRequest> m_reacquisitionRequest;
     std::optional<MediaRunningTime> m_epochReacquisitionBeganAt;
 };
