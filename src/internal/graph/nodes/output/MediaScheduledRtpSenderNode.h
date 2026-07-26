@@ -15,6 +15,7 @@ namespace media::ffmpeg::graph {
 
 class MediaAvGenerationPurgeTarget;
 class MediaProtocolOutputGenerationState;
+struct MediaScheduledRtpSenderNodeTestAccess;
 
 struct MediaScheduledRtpSenderNodeDependencies final {
     std::shared_ptr<MediaAvSyncGroupRuntime> syncGroup;
@@ -45,6 +46,8 @@ protected:
         MediaGraphExecutionContext& context) override;
 
 private:
+    friend struct MediaScheduledRtpSenderNodeTestAccess;
+
     MediaScheduledRtpSenderNode(
         MediaNodeId nodeId,
         MediaAvSyncGroupKey plannedGroupKey,

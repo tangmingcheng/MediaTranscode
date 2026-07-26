@@ -654,13 +654,17 @@ MediaRuntimeNodeFactory::generationPurgeRegistration(
     if (auto* sender =
             dynamic_cast<MediaScheduledRtpSenderNode*>(&runtime)) {
         const std::string identity(sender->generationPurgeIdentity());
-        const auto participant =
-            identity == "rtp_video_output_generation_state"
-            ? MediaAvGenerationParticipant::RtpVideoOutput
-            : MediaAvGenerationParticipant::RtpAudioOutput;
-        return MediaRuntimeGenerationPurgeRegistration{
-            participant,
-            {identity, sender->generationPurgeTarget()}};
+        if (identity == "rtp_video_output_generation_state") {
+            return MediaRuntimeGenerationPurgeRegistration{
+                MediaAvGenerationParticipant::RtpVideoOutput,
+                {identity, sender->generationPurgeTarget()}};
+        }
+        if (identity == "rtp_audio_output_generation_state") {
+            return MediaRuntimeGenerationPurgeRegistration{
+                MediaAvGenerationParticipant::RtpAudioOutput,
+                {identity, sender->generationPurgeTarget()}};
+        }
+        return std::nullopt;
     }
     if (auto registration =
             fixedGenerationPurgeRegistration<MediaProjectMpegTsPlanSourceNode>(
