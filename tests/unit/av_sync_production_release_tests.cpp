@@ -353,25 +353,28 @@ BinderFixture binderFixture(bool threadedLifecycleTarget = false,
         fixture.releaseSink, "in", MediaStreamKind::Metadata,
         MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
     const auto one = MediaGraphBuildSupport::blockingQueuePolicy(1);
+    const auto atomicOne =
+        MediaGraphBuildSupport::atomicPreparedQueuePolicy(1);
     fixture.executable.graph.connect(
         fixture.source, "release", fixture.binder, "release", "release", one);
     fixture.executable.graph.connect(
         fixture.binder, "transaction", fixture.sequencer, "transaction",
-        "transaction", one);
+        "transaction", atomicOne);
     if (preactivation) {
         fixture.executable.graph.connect(
             fixture.binder, "preparation", fixture.preparationSink, "in",
-            "preparation", one);
+            "preparation", atomicOne);
     }
     fixture.executable.graph.connect(
         fixture.sequencer, "activated", fixture.firstActivatedSink,
         fixture.firstActivatedPort,
-        "first-activated", one);
+        "first-activated", atomicOne);
     fixture.executable.graph.connect(
         fixture.sequencer, "activated", fixture.secondActivatedSink, "in",
-        "second-activated", one);
+        "second-activated", atomicOne);
     fixture.executable.graph.connect(
-        fixture.sequencer, "bound_release", fixture.releaseSink, "in", "bound", one);
+        fixture.sequencer, "bound_release", fixture.releaseSink, "in",
+        "bound", atomicOne);
     if (threadedLifecycleTarget) {
         const auto audioSource = fixture.executable.graph.addNode(
             MediaNodeKind::DebugDump, "scheduler-audio-source");
@@ -578,13 +581,16 @@ void testPreparationPrefixIsNotReleasedTwiceAfterActivation(TestContext& ctx)
     graph.addInputPort(audioSink, "in", MediaStreamKind::Audio,
                        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
     const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(8);
-    const auto videoPolicy = MediaGraphBuildSupport::blockingQueuePolicy(1);
+    const auto videoPolicy =
+        MediaGraphBuildSupport::atomicPreparedQueuePolicy(1);
+    const auto audioPolicy =
+        MediaGraphBuildSupport::atomicPreparedQueuePolicy(8);
     graph.connect(preparationSource, "out", extractorId, "preparation",
                   "preparation", policy);
     graph.connect(boundSource, "out", extractorId, "bound_release",
                   "bound", policy);
     graph.connect(extractorId, "video", videoSink, "in", "video", videoPolicy);
-    graph.connect(extractorId, "audio", audioSink, "in", "audio", policy);
+    graph.connect(extractorId, "audio", audioSink, "in", "audio", audioPolicy);
     MediaGraphExecutionContext execution;
     EXPECT_TRUE(ctx, execution.compile(graph));
     auto group = registerActiveTestGroup(
@@ -880,6 +886,8 @@ void testCoordinatorReacquiresAndActivatesOneAtomicNextEpoch(
     graph.addInputPort(releaseSink, "in", MediaStreamKind::Metadata,
                        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
     const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(8);
+    const auto atomicPolicy =
+        MediaGraphBuildSupport::atomicPreparedQueuePolicy(8);
     EXPECT_TRUE(ctx, graph.connect(
                          videoSource, "out", coordinator, "video",
                          "video", policy));
@@ -894,13 +902,13 @@ void testCoordinatorReacquiresAndActivatesOneAtomicNextEpoch(
                          "release", policy));
     EXPECT_TRUE(ctx, graph.connect(
                          binder, "transaction", sequencer, "transaction",
-                         "transaction", policy));
+                         "transaction", atomicPolicy));
     EXPECT_TRUE(ctx, graph.connect(
                          sequencer, "activated", activatedSink, "in",
-                         "activated", policy));
+                         "activated", atomicPolicy));
     EXPECT_TRUE(ctx, graph.connect(
                          sequencer, "bound_release", releaseSink, "in",
-                         "bound-release", policy));
+                         "bound-release", atomicPolicy));
     executable.avSyncBinding.emplace(MediaAvSyncRuntimeBinding{
         MediaAvSyncGroupKey("task4-group"),
         completePlan(),
@@ -2049,8 +2057,10 @@ void testBoundReleaseAtomicOutputPolicyMigrationIsExplicit(TestContext& ctx)
         }
     };
 
-    const auto exact = MediaGraphBuildSupport::blockingQueuePolicy(1);
+    const auto exact =
+        MediaGraphBuildSupport::atomicPreparedQueuePolicy(1);
     verify(exact, true);
+    verify(MediaGraphBuildSupport::blockingQueuePolicy(1), false);
     auto dropping = exact;
     dropping.queuePolicy.overflowPolicy =
         MediaQueueOverflowPolicy::DropNewest;

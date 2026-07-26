@@ -11,6 +11,7 @@ MediaEdgePolicy planQueuePolicy(
 {
     MediaEdgePolicy policy;
     policy.queuePolicy.mode = MediaQueueMode::SpscRing;
+    policy.queuePolicy.storageMode = MediaQueueStorageMode::Deque;
     policy.queuePolicy.overflowPolicy = overflowPolicy;
     policy.queuePolicy.orderingPolicy = orderingPolicy;
     policy.queuePolicy.capacity = capacity;
@@ -32,6 +33,8 @@ MediaEdgePolicy planAtomicOutputPolicy(std::size_t capacity)
     MediaEdgePolicy policy = planQueuePolicy(
         capacity, MediaQueueOverflowPolicy::BlockProducer,
         MediaQueueOrderingPolicy::Fifo);
+    policy.queuePolicy.mode = MediaQueueMode::Blocking;
+    policy.queuePolicy.storageMode = MediaQueueStorageMode::AtomicPrepared;
     policy.queuePolicy.bounded = true;
     policy.queuePolicy.preserveOrdering = true;
     return policy;
@@ -52,10 +55,10 @@ MediaRealtimeEdgePolicySet MediaRealtimeEdgePolicyPlanner::plan(
         queues.packet, MediaQueueOverflowPolicy::DropNonKeyFrame);
     policies.audioPacket = planQueuePolicy(
         queues.packet, MediaQueueOverflowPolicy::DropOldest);
-    policies.synchronizedPacket = planAtomicOutputPolicy(queues.packet);
-    policies.audioDriftTransaction = planQueuePolicy(
-        queues.frame, MediaQueueOverflowPolicy::BlockProducer,
+    policies.synchronizedPacket = planQueuePolicy(
+        queues.packet, MediaQueueOverflowPolicy::BlockProducer,
         MediaQueueOrderingPolicy::Fifo);
+    policies.audioDriftTransaction = planAtomicOutputPolicy(queues.frame);
     policies.videoFrame = planQueuePolicy(
         queues.frame, MediaQueueOverflowPolicy::DropOldest);
     policies.preparedVideoFrame = planAtomicOutputPolicy(queues.frame);
@@ -68,6 +71,9 @@ MediaRealtimeEdgePolicySet MediaRealtimeEdgePolicyPlanner::plan(
         queues.mux, MediaQueueOverflowPolicy::DropNonKeyFrame);
     policies.audioMux = planQueuePolicy(
         queues.mux, MediaQueueOverflowPolicy::DropOldest);
+    policies.atomicMetadata = planAtomicOutputPolicy(queues.metadata);
+    policies.atomicVideoPacket = planAtomicOutputPolicy(queues.packet);
+    policies.atomicAudioPacket = planAtomicOutputPolicy(queues.packet);
     return policies;
 }
 

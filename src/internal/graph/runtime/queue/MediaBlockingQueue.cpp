@@ -2,8 +2,6 @@
 
 #include "internal/graph/runtime/buffer/MediaBuffer.h"
 
-#include <new>
-
 namespace media::ffmpeg::graph {
 namespace {
 
@@ -23,29 +21,14 @@ bool overflowPolicyDropsIncoming(const MediaQueuePolicy& policy, const MediaBuff
 MediaBlockingQueue::preparePush(
     std::span<const MediaBufferRef> buffers) const
 {
-    PreparedPush prepared;
-    try {
-        for (const auto& buffer : buffers) {
-            if (!buffer) {
-                return ::media::Result<PreparedPush>::failure(
-                    ::media::ErrorInfo::invalidArgument(
-                        "MediaBlockingQueue preparation rejects null buffers"));
-            }
-            prepared.nodes.push_back(buffer);
-        }
-    } catch (const std::bad_alloc&) {
-        return ::media::Result<PreparedPush>::failure(
-            ::media::ErrorInfo::internalError(
-                "MediaBlockingQueue could not allocate prepared output slots"));
-    }
-    return ::media::Result<PreparedPush>::success(std::move(prepared));
+    return m_storage.prepare(buffers);
 }
 
 void MediaBlockingQueue::publishPreparedLocked(
     PreparedPush& prepared) noexcept
 {
-    const std::size_t count = prepared.nodes.size();
-    m_queue.splice(m_queue.end(), prepared.nodes);
+    const std::size_t count = prepared.size();
+    m_storage.publish(prepared);
     m_metrics.pushed.fetch_add(count, std::memory_order_relaxed);
     updateSizeMetricsLocked();
 }
@@ -55,12 +38,17 @@ void MediaBlockingQueue::notifyPreparedPublished() noexcept
     m_notEmpty.notify_all();
 }
 
+void MediaBlockingQueue::
+    injectPreparationAllocationFailureForTesting() noexcept
+{
+    MediaBlockingQueueStorage::
+        injectPreparationAllocationFailureForTesting();
+}
+
 MediaBlockingQueue::MediaBlockingQueue(MediaQueuePolicy policy)
     : m_policy(std::move(policy))
+    , m_storage(m_policy)
 {
-    if (m_policy.mode == MediaQueueMode::Unknown) {
-        m_policy.mode = MediaQueueMode::Blocking;
-    }
 }
 
 ::media::Status MediaBlockingQueue::push(MediaBufferRef buffer)
@@ -122,7 +110,7 @@ MediaBlockingQueue::MediaBlockingQueue(MediaQueuePolicy policy)
             ::media::ErrorInfo::internalError("MediaBlockingQueue push failed: queue full"));
     }
 
-    m_queue.push_back(std::move(buffer));
+    m_storage.pushBack(std::move(buffer));
     m_metrics.pushed++;
     updateSizeMetricsLocked();
     lock.unlock();
@@ -156,9 +144,10 @@ MediaQueuePushOutcome MediaBlockingQueue::pushOutcome(MediaBufferRef buffer)
                 m_metrics.dropped++;
                 return MediaQueuePushOutcome::Dropped;
             }
-            for (auto it = m_queue.begin(); it != m_queue.end(); ++it) {
-                if (*it && !(*it)->isKeyFrame()) {
-                    m_queue.erase(it);
+            for (std::size_t index = 0; index < m_storage.size(); ++index) {
+                const auto& queued = m_storage.at(index);
+                if (queued && !queued->isKeyFrame()) {
+                    m_storage.erase(index);
                     m_metrics.dropped++;
                     updateSizeMetricsLocked();
                     break;
@@ -169,7 +158,7 @@ MediaQueuePushOutcome MediaBlockingQueue::pushOutcome(MediaBufferRef buffer)
             }
             break;
         case MediaQueueOverflowPolicy::DropOldest:
-            m_queue.pop_front();
+            m_storage.popFront();
             m_metrics.dropped++;
             updateSizeMetricsLocked();
             break;
@@ -186,7 +175,7 @@ MediaQueuePushOutcome MediaBlockingQueue::pushOutcome(MediaBufferRef buffer)
         }
     }
 
-    m_queue.push_back(std::move(buffer));
+    m_storage.pushBack(std::move(buffer));
     m_metrics.pushed++;
     updateSizeMetricsLocked();
     m_notEmpty.notify_one();
@@ -196,7 +185,7 @@ MediaQueuePushOutcome MediaBlockingQueue::pushOutcome(MediaBufferRef buffer)
 ::media::Status MediaBlockingQueue::pop(MediaBufferRef& out)
 {
     std::unique_lock lock(m_mutex);
-    m_notEmpty.wait(lock, [&] { return !m_queue.empty() || m_closed || m_aborted; });
+    m_notEmpty.wait(lock, [&] { return !m_storage.empty() || m_closed || m_aborted; });
 
     if (m_aborted) {
         m_metrics.failedPops++;
@@ -204,14 +193,14 @@ MediaQueuePushOutcome MediaBlockingQueue::pushOutcome(MediaBufferRef buffer)
             ::media::ErrorInfo::internalError("MediaBlockingQueue pop failed: queue aborted"));
     }
 
-    if (m_queue.empty()) {
+    if (m_storage.empty()) {
         m_metrics.failedPops++;
         return ::media::Status::failure(
             ::media::ErrorInfo::cancelled("MediaBlockingQueue pop interrupted: queue closed and empty"));
     }
 
-    out = std::move(m_queue.front());
-    m_queue.pop_front();
+    out = std::move(m_storage.front());
+    m_storage.popFront();
     m_metrics.popped++;
     updateSizeMetricsLocked();
     lock.unlock();
@@ -222,12 +211,12 @@ MediaQueuePushOutcome MediaBlockingQueue::pushOutcome(MediaBufferRef buffer)
 bool MediaBlockingQueue::tryPop(MediaBufferRef& out)
 {
     std::lock_guard lock(m_mutex);
-    if (m_queue.empty()) {
+    if (m_storage.empty()) {
         return false;
     }
 
-    out = std::move(m_queue.front());
-    m_queue.pop_front();
+    out = std::move(m_storage.front());
+    m_storage.popFront();
     m_metrics.popped++;
     updateSizeMetricsLocked();
     m_notFull.notify_one();
@@ -254,7 +243,7 @@ void MediaBlockingQueue::abort()
 void MediaBlockingQueue::clear()
 {
     std::lock_guard lock(m_mutex);
-    m_queue.clear();
+    m_storage.clear();
     updateSizeMetricsLocked();
     m_notFull.notify_all();
 }
@@ -274,7 +263,7 @@ bool MediaBlockingQueue::aborted() const
 std::size_t MediaBlockingQueue::size() const
 {
     std::lock_guard lock(m_mutex);
-    return m_queue.size();
+    return m_storage.size();
 }
 
 std::size_t MediaBlockingQueue::capacity() const
@@ -294,7 +283,7 @@ const MediaQueueMetrics& MediaBlockingQueue::metrics() const noexcept
 
 bool MediaBlockingQueue::fullLocked() const
 {
-    return m_policy.isBoundedQueue() && m_queue.size() >= m_policy.capacity;
+    return m_policy.isBoundedQueue() && m_storage.size() >= m_policy.capacity;
 }
 
 ::media::Status MediaBlockingQueue::handleOverflowLocked(const MediaBufferRef& incoming)
@@ -305,8 +294,8 @@ bool MediaBlockingQueue::fullLocked() const
         return ::media::Status::success();
 
     case MediaQueueOverflowPolicy::DropOldest:
-        if (!m_queue.empty()) {
-            m_queue.pop_front();
+        if (!m_storage.empty()) {
+            m_storage.popFront();
             m_metrics.dropped++;
             updateSizeMetricsLocked();
         }
@@ -317,9 +306,10 @@ bool MediaBlockingQueue::fullLocked() const
             m_metrics.dropped++;
             return ::media::Status::success();
         }
-        for (auto it = m_queue.begin(); it != m_queue.end(); ++it) {
-            if (*it && !(*it)->isKeyFrame()) {
-                m_queue.erase(it);
+        for (std::size_t index = 0; index < m_storage.size(); ++index) {
+            const auto& queued = m_storage.at(index);
+            if (queued && !queued->isKeyFrame()) {
+                m_storage.erase(index);
                 m_metrics.dropped++;
                 updateSizeMetricsLocked();
                 return ::media::Status::success();
@@ -344,7 +334,7 @@ bool MediaBlockingQueue::fullLocked() const
 
 void MediaBlockingQueue::updateSizeMetricsLocked()
 {
-    m_metrics.currentSize = m_queue.size();
+    m_metrics.currentSize = m_storage.size();
     const std::size_t current = m_metrics.currentSize.load();
     if (current > m_metrics.peakSize.load()) {
         m_metrics.peakSize = current;

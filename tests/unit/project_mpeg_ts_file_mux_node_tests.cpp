@@ -2,6 +2,7 @@
 #include "common/AvSyncRuntimeTestSupport.h"
 
 #include "internal/graph/core/MediaGraph.h"
+#include "internal/graph/builder/MediaGraphBuildSupport.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/nodes/mux/FileMuxNode.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
@@ -306,10 +307,7 @@ struct ProjectFileMuxHarness final {
                  const char* targetPort,
                  const char* edgeName)
     {
-        MediaEdgePolicy policy;
-        policy.queuePolicy.bounded = true;
-        policy.queuePolicy.capacity = 8;
-        policy.queuePolicy.allowFlushControlBypass = true;
+        const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(8);
         graph.connect(source, sourcePort, mux, targetPort, edgeName, policy);
     }
 

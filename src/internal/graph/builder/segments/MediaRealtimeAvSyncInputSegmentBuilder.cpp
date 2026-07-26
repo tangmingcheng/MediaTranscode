@@ -218,6 +218,7 @@ struct SharedNodes final {
 {
     const auto& metadata = plan.edgePolicies.metadata;
     const auto& packet = plan.edgePolicies.synchronizedPacket;
+    const auto& atomicMetadata = plan.edgePolicies.atomicMetadata;
     if (auto status = Support::connect(
             graph, protocol.sourceClock, nodes.sourceClock, "clock",
             "protocol clock -> source clock fanout", metadata); !status) {
@@ -267,17 +268,18 @@ struct SharedNodes final {
     if (auto status = Support::connect(
             graph, nodes.epochBinder, "transaction",
             nodes.activationSequencer, "transaction",
-            "epoch transaction -> activation sequencer", metadata);
+            "epoch transaction -> activation sequencer", atomicMetadata);
         !status) return status;
     if (auto status = Support::connect(
             graph, nodes.epochBinder, "preparation",
             nodes.releaseExtractor, "preparation",
-            "epoch transaction -> video preparation extractor", metadata);
+            "epoch transaction -> video preparation extractor",
+            atomicMetadata);
         !status) return status;
     return Support::connect(
         graph, nodes.activationSequencer, "bound_release",
         nodes.releaseExtractor, "bound_release",
-        "activated release -> atomic extractor", metadata);
+        "activated release -> atomic extractor", atomicMetadata);
 }
 
 } // namespace
@@ -303,7 +305,11 @@ MediaRealtimeAvSyncInputSegmentBuilder::build(
                 "Synchronized input segment requires complete planned inputs"));
     }
     if (!MediaAtomicOutputPolicyContract::accepts(
-            plan.edgePolicies.synchronizedPacket)) {
+            plan.edgePolicies.atomicMetadata) ||
+        !MediaAtomicOutputPolicyContract::accepts(
+            plan.edgePolicies.atomicVideoPacket) ||
+        !MediaAtomicOutputPolicyContract::accepts(
+            plan.edgePolicies.atomicAudioPacket)) {
         return ::media::Result<MediaRealtimeAvSyncInputEndpoints>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "Synchronized input release requires a complete planned atomic output policy"));

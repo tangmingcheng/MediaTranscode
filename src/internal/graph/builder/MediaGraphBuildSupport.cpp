@@ -35,12 +35,20 @@ MediaEdgePolicy blockingQueuePolicy(std::size_t capacity) noexcept
 {
     MediaEdgePolicy policy;
     policy.queuePolicy.mode = MediaQueueMode::Blocking;
+    policy.queuePolicy.storageMode = MediaQueueStorageMode::Deque;
     policy.queuePolicy.bounded = true;
     policy.queuePolicy.capacity = capacity;
     policy.queuePolicy.overflowPolicy = MediaQueueOverflowPolicy::BlockProducer;
     policy.queuePolicy.preserveOrdering = true;
     policy.queuePolicy.allowFlushControlBypass = true;
     policy.queuePolicy.collectMetrics = true;
+    return policy;
+}
+
+MediaEdgePolicy atomicPreparedQueuePolicy(std::size_t capacity) noexcept
+{
+    MediaEdgePolicy policy = blockingQueuePolicy(capacity);
+    policy.queuePolicy.storageMode = MediaQueueStorageMode::AtomicPrepared;
     return policy;
 }
 
@@ -59,6 +67,13 @@ MediaRealtimeEdgePolicySet blockingEdgePolicySet(const MediaGraphQueueParameters
     policies.mux = blockingQueuePolicy(queues.mux);
     policies.videoMux = blockingQueuePolicy(queues.mux);
     policies.audioMux = blockingQueuePolicy(queues.mux);
+    policies.atomicMetadata = atomicPreparedQueuePolicy(queues.metadata);
+    policies.atomicVideoPacket = atomicPreparedQueuePolicy(queues.packet);
+    policies.atomicAudioPacket = atomicPreparedQueuePolicy(queues.packet);
+    policies.audioDriftTransaction =
+        atomicPreparedQueuePolicy(queues.frame);
+    policies.preparedVideoFrame =
+        atomicPreparedQueuePolicy(queues.frame);
     return policies;
 }
 

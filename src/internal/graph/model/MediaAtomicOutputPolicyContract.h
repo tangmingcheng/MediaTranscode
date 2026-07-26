@@ -10,6 +10,7 @@ public:
     {
         const auto& queue = policy.queuePolicy;
         return queue.bounded && queue.capacity > 0 &&
+            queue.storageMode == MediaQueueStorageMode::AtomicPrepared &&
             queue.overflowPolicy == MediaQueueOverflowPolicy::BlockProducer &&
             queue.orderingPolicy == MediaQueueOrderingPolicy::Fifo &&
             queue.preserveOrdering;

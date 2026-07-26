@@ -4,6 +4,7 @@
 #include "internal/graph/nodes/output/MediaScheduledRtpSenderNode.h"
 #include "internal/graph/planner/MediaPipelineCapabilityScanner.h"
 #include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 #include "internal/graph/planner/realtime/MediaTsProgramSelector.h"
 #include "internal/graph/runtime/MediaGraphRuntime.h"
@@ -397,6 +398,38 @@ void productionMissingTargetAbortsBeforeCompiled(TestContext& ctx)
     EXPECT_FALSE(ctx, runtime.startThreaded());
 }
 
+void synchronizedVideoPacketCopyIsRejectedByPlanner(TestContext& ctx)
+{
+    auto planned = MediaRealtimeRtpTranscodePlanner::plan(
+        productionRequest(
+            MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp));
+    EXPECT_TRUE(ctx, planned);
+    if (!planned || !planned.value().avSyncRuntime) return;
+
+    auto outer = std::move(planned).value();
+    outer.videoPlan.branchMode = MediaBranchMode::CopyPacket;
+    outer.videoPlan.enabled = true;
+    outer.videoPacketCopyNormalizationRequired = false;
+
+    const auto validation =
+        MediaRealtimeRtpTranscodePlanner::validatePlannedProduct(outer);
+    EXPECT_FALSE(ctx, validation);
+    if (!validation) {
+        EXPECT_EQ(ctx, validation.error().code,
+                  ::media::ErrorCode::Unsupported);
+    }
+
+    auto synchronization = outer.avSyncRuntime->synchronization;
+    outer.avSyncRuntime.reset();
+    auto runtime = MediaRealtimeAvSyncRuntimePlanner::plan(
+        outer, std::move(synchronization));
+    EXPECT_FALSE(ctx, runtime);
+    if (!runtime) {
+        EXPECT_EQ(ctx, runtime.error().code,
+                  ::media::ErrorCode::Unsupported);
+    }
+}
+
 void exactPlannerProductSeals(TestContext& ctx)
 {
     const auto plan = separateRtpPlan();
@@ -518,6 +551,7 @@ int main()
     productionFactoryRegistrationsSeal(
         ctx, MediaAvSyncOutputAdapterKind::ProjectMpegTs);
     productionMissingTargetAbortsBeforeCompiled(ctx);
+    synchronizedVideoPacketCopyIsRejectedByPlanner(ctx);
     exactPlannerProductSeals(ctx);
     missingRegistrationIsRejected(ctx);
     duplicateRegistrationIsRejected(ctx);

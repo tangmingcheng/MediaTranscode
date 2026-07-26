@@ -33,6 +33,11 @@ namespace media::ffmpeg::graph {
             ::media::ErrorInfo::unsupported(
                 "Synchronized runtime product rejects audio packet copy"));
     }
+    if (outer.videoPlan.branchMode != MediaBranchMode::TranscodeFrame) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::unsupported(
+                "Synchronized runtime product rejects video packet copy"));
+    }
     const auto& runtime = *outer.avSyncRuntime;
     if (runtime.groupKey.value() != "realtime.av" ||
         !MediaAvSyncPlanValidator::validate(runtime.synchronization)) {

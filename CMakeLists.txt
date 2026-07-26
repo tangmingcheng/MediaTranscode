@@ -2,6 +2,11 @@ cmake_minimum_required(VERSION 3.21.1)
 
 project(MediaTranscode LANGUAGES CXX)
 
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+set(CMAKE_DEPFILE_FLAGS_CXX "")
+set(CMAKE_CXX_DEPFILE_FORMAT "")
+set(CMAKE_CXX_SCANDEP_SOURCE "")
+
 set(TARGET_CORE "media_transcode_core")
 set(TARGET_LOCAL_VIDEO_CLI "media_transcode_local_video_cli")
 set(TARGET_REALTIME_VIDEO_CLI "media_transcode_realtime_video_cli")

@@ -66,14 +66,16 @@ inline void addPlaybackEpochReleaseBoundary(
     graph.addInputPort(releaseSink, "release", MediaStreamKind::Metadata,
                        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
     const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(2);
+    const auto atomicPolicy =
+        MediaGraphBuildSupport::atomicPreparedQueuePolicy(2);
     graph.connect(source, "release", binderId, "release",
                   "test epoch release", policy);
     graph.connect(binderId, "transaction", sequencer, "transaction",
-                  "test release transaction", policy);
+                  "test release transaction", atomicPolicy);
     graph.connect(sequencer, "activated", activatedSink, "activated",
-                  "test epoch activated", policy);
+                  "test epoch activated", atomicPolicy);
     graph.connect(sequencer, "bound_release", releaseSink, "release",
-                  "test bound release", policy);
+                  "test bound release", atomicPolicy);
 }
 
 inline bool activateInitialThroughRelease(

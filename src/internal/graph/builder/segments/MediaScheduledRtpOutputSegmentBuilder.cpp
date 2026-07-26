@@ -152,7 +152,8 @@ MediaScheduledRtpOutputSegmentBuilder::build(
     for (MediaNodeId sender : {video, audio}) {
         auto connected = connect(
             options.epochActivated, sender, "epoch",
-            "playback epoch -> scheduled RTP sender", plan.edgePolicies.metadata);
+            "playback epoch -> scheduled RTP sender",
+            plan.edgePolicies.atomicMetadata);
         if (!connected) return SegmentResult::failure(connected.error());
     }
     for (const auto& [from, to, port, label, policy] : {
@@ -164,10 +165,10 @@ MediaScheduledRtpOutputSegmentBuilder::build(
                         plan.edgePolicies.metadata},
              std::tuple{options.scheduledVideo, video, "scheduled",
                         "scheduled video -> RTP sender",
-                        plan.edgePolicies.synchronizedPacket},
+                        plan.edgePolicies.atomicVideoPacket},
              std::tuple{options.scheduledAudio, audio, "scheduled",
                         "scheduled audio -> RTP sender",
-                        plan.edgePolicies.synchronizedPacket}}) {
+                        plan.edgePolicies.atomicAudioPacket}}) {
         auto connected = connect(from, to, port, label, policy);
         if (!connected) return SegmentResult::failure(connected.error());
     }

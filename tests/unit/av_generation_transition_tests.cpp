@@ -71,6 +71,12 @@ struct MediaAvReacquisitionCoordinatorTestAccess final {
                 return coordinator->m_activationWaiters != 0;
             });
     }
+
+    static std::weak_ptr<MediaAvReacquisitionCoordinator> coordinator(
+        const MediaAvSyncGroupRuntime& group)
+    {
+        return group.m_reacquisitionCoordinator;
+    }
 };
 
 } // namespace media::ffmpeg::graph
@@ -517,6 +523,73 @@ void expectSameError(
     EXPECT_EQ(ctx, actual.code, expected.code);
     EXPECT_EQ(ctx, actual.nativeCode, expected.nativeCode);
     EXPECT_EQ(ctx, actual.message, expected.message);
+}
+
+std::optional<MediaAvReacquisitionActivationReservation>
+reserveReadyActivation(
+    TestContext& ctx,
+    ActiveGroupFixture& fixture)
+{
+    const auto plan = reacquisitionPlan();
+    auto videoTarget = std::make_shared<RecordingPurgeTarget>();
+    auto audioTarget = std::make_shared<RecordingPurgeTarget>();
+    if (!installCoordinator(
+            ctx,
+            fixture,
+            sealedParticipants(ctx, plan, videoTarget, audioTarget))) {
+        return std::nullopt;
+    }
+    if (!fixture.group->requestReacquisition(
+            {1, MediaAvReacquisitionReason::HardDiscontinuity})) {
+        return std::nullopt;
+    }
+    const auto acquiring = fixture.group->reacquisitionSnapshot();
+    if (!acquiring.transition ||
+        !fixture.group->markReacquisitionReadyForActivation(
+            2, acquiring.transition->transitionSequence)) {
+        return std::nullopt;
+    }
+    auto reserved = fixture.group->reserveReacquisitionActivation(
+        2, acquiring.transition->transitionSequence);
+    if (!reserved) return std::nullopt;
+    return std::move(reserved).value();
+}
+
+void testActivationReservationOwnsCoordinatorLifetime(TestContext& ctx)
+{
+    auto fixture = makeActiveGroup(ctx, reacquisitionPlan());
+    if (!fixture.group) return;
+    auto activation = reserveReadyActivation(ctx, fixture);
+    EXPECT_TRUE(ctx, activation.has_value());
+    if (!activation) return;
+    auto coordinator =
+        MediaAvReacquisitionCoordinatorTestAccess::coordinator(
+            *fixture.group);
+    fixture.group.reset();
+    EXPECT_FALSE(ctx, coordinator.expired());
+    activation->abandon();
+    EXPECT_TRUE(ctx, coordinator.expired());
+}
+
+void testActivationReservationMoveAssignmentAndDestructorAbandon(
+    TestContext& ctx)
+{
+    auto firstFixture = makeActiveGroup(ctx, reacquisitionPlan());
+    auto secondFixture = makeActiveGroup(ctx, reacquisitionPlan());
+    if (!firstFixture.group || !secondFixture.group) return;
+    auto first = reserveReadyActivation(ctx, firstFixture);
+    auto second = reserveReadyActivation(ctx, secondFixture);
+    EXPECT_TRUE(ctx, first.has_value() && second.has_value());
+    if (!first || !second) return;
+
+    *first = std::move(*second);
+    EXPECT_EQ(ctx,
+              firstFixture.group->reacquisitionSnapshot().phase,
+              MediaAvReacquisitionPhase::Aborted);
+    first.reset();
+    EXPECT_EQ(ctx,
+              secondFixture.group->reacquisitionSnapshot().phase,
+              MediaAvReacquisitionPhase::Aborted);
 }
 
 void testGroupOwnedReacquisitionPurgesAndClosesOutput(TestContext& ctx)
@@ -1094,6 +1167,8 @@ int main()
     testParticipantGroupRequiresExactSealedChildSet(ctx);
     testParticipantGroupAcknowledgesOnlyCompleteSuccessfulPurge(ctx);
     testCoordinatorRejectsIncompletePlans(ctx);
+    testActivationReservationOwnsCoordinatorLifetime(ctx);
+    testActivationReservationMoveAssignmentAndDestructorAbandon(ctx);
     testGroupOwnedReacquisitionPurgesAndClosesOutput(ctx);
     testAbortBeforeActivationAuthorizationRejectsPublication(ctx);
     testIncompatibleEvidenceBeforeActivationAuthorizationRejectsPublication(

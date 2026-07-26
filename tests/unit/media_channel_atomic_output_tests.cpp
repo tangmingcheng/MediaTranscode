@@ -9,23 +9,21 @@
 #include <array>
 #include <atomic>
 #include <barrier>
-#include <chrono>
 #include <cstdlib>
 #include <future>
 #include <iostream>
 #include <memory>
 #include <new>
+#include <stdexcept>
 #include <thread>
 
 namespace {
-std::atomic_bool g_failAllocations{false};
+thread_local bool g_failCurrentThreadAllocations = false;
 }
 
 void* operator new(std::size_t size)
 {
-    if (g_failAllocations.load(std::memory_order_acquire)) {
-        throw std::bad_alloc();
-    }
+    if (g_failCurrentThreadAllocations) throw std::bad_alloc();
     if (void* allocation = std::malloc(size)) return allocation;
     throw std::bad_alloc();
 }
@@ -60,22 +58,44 @@ namespace media::ffmpeg::graph {
 struct MediaChannelAtomicOutputTestAccess final {
     static bool waitForBlockedProducer(MediaChannel& channel)
     {
-        std::unique_lock<std::mutex> lock(channel.m_mutationMutex);
-        return channel.m_waitStateChanged.wait_for(
-            lock, std::chrono::seconds(1), [&channel] {
-                return channel.m_externalBlockedProducers.load(
-                           std::memory_order_acquire) != 0;
-            });
+        while (channel.m_externalBlockedProducers.load(
+                   std::memory_order_acquire) == 0) {
+            channel.m_externalBlockedProducers.wait(
+                0, std::memory_order_acquire);
+        }
+        return true;
     }
 
     static bool waitForBlockedConsumer(MediaChannel& channel)
     {
-        std::unique_lock<std::mutex> lock(channel.m_mutationMutex);
-        return channel.m_waitStateChanged.wait_for(
-            lock, std::chrono::seconds(1), [&channel] {
-                return channel.m_externalBlockedConsumers.load(
-                           std::memory_order_acquire) != 0;
-            });
+        while (channel.m_externalBlockedConsumers.load(
+                   std::memory_order_acquire) == 0) {
+            channel.m_externalBlockedConsumers.wait(
+                0, std::memory_order_acquire);
+        }
+        return true;
+    }
+
+    static bool waitForBlockedLifecycleMutation(MediaChannel& channel)
+    {
+        while (channel.m_externalLifecycleMutations.load(
+                   std::memory_order_acquire) == 0) {
+            channel.m_externalLifecycleMutations.wait(
+                0, std::memory_order_acquire);
+        }
+        return true;
+    }
+
+    static void failNextPreparedAllocation(MediaChannel& channel)
+    {
+        auto* queue = static_cast<MediaBlockingQueue*>(
+            channel.m_queue.get());
+        queue->injectPreparationAllocationFailureForTesting();
+    }
+
+    static std::uint64_t mutationSequence(const MediaChannel& channel)
+    {
+        return channel.m_mutationSequence.load(std::memory_order_acquire);
     }
 };
 
@@ -86,6 +106,19 @@ namespace {
 using media_transcode::test::TestContext;
 using media_transcode::test::makePacketBuffer;
 using namespace media::ffmpeg::graph;
+
+class CurrentThreadAllocationFailureScope final {
+public:
+    CurrentThreadAllocationFailureScope() noexcept
+    {
+        g_failCurrentThreadAllocations = true;
+    }
+
+    ~CurrentThreadAllocationFailureScope()
+    {
+        g_failCurrentThreadAllocations = false;
+    }
+};
 
 struct ChannelFixture final {
     MediaGraph graph;
@@ -138,12 +171,16 @@ MediaChannel* audio(ChannelFixture& fixture)
     return fixture.execution.findInputChannel(fixture.audioSink, "in");
 }
 
+MediaEdgePolicy atomicPolicy(std::size_t capacity)
+{
+    return MediaGraphBuildSupport::atomicPreparedQueuePolicy(capacity);
+}
+
 void testTransactionOwnsReferencesAndSerializesLifecycle(TestContext& ctx)
 {
     const auto verify = [&](bool abortOutput) {
         auto fixture = makeFixture(
-            ctx, MediaGraphBuildSupport::blockingQueuePolicy(2),
-            MediaGraphBuildSupport::blockingQueuePolicy(2));
+            ctx, atomicPolicy(2), atomicPolicy(2));
         auto terminal = makeMediaBufferRef<MediaControlBuffer>(
             MediaControlBufferKind::Eof);
         MediaAtomicOutputTransaction::AcquireResult acquired = [&] {
@@ -160,15 +197,16 @@ void testTransactionOwnsReferencesAndSerializesLifecycle(TestContext& ctx)
         terminal.reset();
 
         std::barrier boundary(2);
-        std::promise<void> workerStarted;
         std::thread lifecycle([&] {
             boundary.arrive_and_wait();
-            workerStarted.set_value();
             if (abortOutput) audio(*fixture)->abort();
             else audio(*fixture)->close();
         });
         boundary.arrive_and_wait();
-        workerStarted.get_future().wait();
+        EXPECT_TRUE(
+            ctx,
+            MediaChannelAtomicOutputTestAccess::
+                waitForBlockedLifecycleMutation(*audio(*fixture)));
         EXPECT_TRUE(ctx, acquired.value()->commit());
         acquired.value().reset();
         lifecycle.join();
@@ -181,8 +219,7 @@ void testTransactionOwnsReferencesAndSerializesLifecycle(TestContext& ctx)
         EXPECT_TRUE(ctx, retainedVideo && retainedVideo == retainedAudio);
 
         auto before = makeFixture(
-            ctx, MediaGraphBuildSupport::blockingQueuePolicy(2),
-            MediaGraphBuildSupport::blockingQueuePolicy(2));
+            ctx, atomicPolicy(2), atomicPolicy(2));
         if (abortOutput) audio(*before)->abort();
         else audio(*before)->close();
         auto beforeTerminal = makeMediaBufferRef<MediaControlBuffer>(
@@ -204,8 +241,7 @@ void testTransactionOwnsReferencesAndSerializesLifecycle(TestContext& ctx)
 void testConsumersCannotObservePartialAtomicCommit(TestContext& ctx)
 {
     auto fixture = makeFixture(
-        ctx, MediaGraphBuildSupport::blockingQueuePolicy(2),
-        MediaGraphBuildSupport::blockingQueuePolicy(2));
+        ctx, atomicPolicy(2), atomicPolicy(2));
     auto terminal = makeMediaBufferRef<MediaControlBuffer>(
         MediaControlBufferKind::Eof);
     std::array<MediaBufferRef, 1> videoValues{terminal};
@@ -250,11 +286,11 @@ void testConsumersCannotObservePartialAtomicCommit(TestContext& ctx)
 
 void testEmptyTransactionalBatchStillRequiresCompletePolicy(TestContext& ctx)
 {
-    auto invalidPolicy = MediaGraphBuildSupport::blockingQueuePolicy(1);
+    auto invalidPolicy = atomicPolicy(1);
     invalidPolicy.queuePolicy.orderingPolicy =
         MediaQueueOrderingPolicy::Timestamp;
     auto fixture = makeFixture(
-        ctx, MediaGraphBuildSupport::blockingQueuePolicy(1), invalidPolicy);
+        ctx, atomicPolicy(1), invalidPolicy);
     auto terminal = makeMediaBufferRef<MediaControlBuffer>(
         MediaControlBufferKind::Flush);
     const std::array<MediaBufferRef, 1> videoValues{terminal};
@@ -272,8 +308,7 @@ void testEmptyTransactionalBatchStillRequiresCompletePolicy(TestContext& ctx)
 void testBlockingConsumersReturnOnlyAfterAtomicPublish(TestContext& ctx)
 {
     auto fixture = makeFixture(
-        ctx, MediaGraphBuildSupport::blockingQueuePolicy(2),
-        MediaGraphBuildSupport::blockingQueuePolicy(2));
+        ctx, atomicPolicy(2), atomicPolicy(2));
     auto terminal = makeMediaBufferRef<MediaControlBuffer>(
         MediaControlBufferKind::Eof);
     ::media::Status videoStatus = ::media::Status::failure(
@@ -402,37 +437,11 @@ void testChannelPushPreservesNullDropAndLifecycleContracts(TestContext& ctx)
               static_cast<std::size_t>(0));
 }
 
-void testReservedPublishPerformsNoAllocation(TestContext& ctx)
-{
-    auto fixture = makeFixture(
-        ctx, MediaGraphBuildSupport::blockingQueuePolicy(2),
-        MediaGraphBuildSupport::blockingQueuePolicy(2));
-    auto terminal = makeMediaBufferRef<MediaControlBuffer>(
-        MediaControlBufferKind::Eof);
-    std::array<MediaBufferRef, 1> videoValues{terminal};
-    std::array<MediaBufferRef, 1> audioValues{terminal};
-    const std::array<MediaAtomicOutputBatch, 2> batches{
-        MediaAtomicOutputBatch{video(*fixture), videoValues},
-        MediaAtomicOutputBatch{audio(*fixture), audioValues}};
-    auto acquired = MediaAtomicOutputTransaction::acquire(
-        "Allocation-free atomic publish", batches);
-    EXPECT_TRUE(ctx, acquired && acquired.value().has_value());
-    if (!acquired || !acquired.value()) return;
-
-    g_failAllocations.store(true, std::memory_order_release);
-    acquired.value()->commitReserved();
-    g_failAllocations.store(false, std::memory_order_release);
-
-    EXPECT_EQ(ctx, video(*fixture)->size(), std::size_t{1});
-    EXPECT_EQ(ctx, audio(*fixture)->size(), std::size_t{1});
-}
-
 void testCapacityReservationPreventsOrdinaryPushAndCancelReleasesCapacity(
     TestContext& ctx)
 {
     auto fixture = makeFixture(
-        ctx, MediaGraphBuildSupport::blockingQueuePolicy(1),
-        MediaGraphBuildSupport::blockingQueuePolicy(1));
+        ctx, atomicPolicy(1), atomicPolicy(1));
     auto reserved = makePacketBuffer(true, 1, MediaStreamKind::Video);
     auto competing = makePacketBuffer(true, 2, MediaStreamKind::Video);
     EXPECT_TRUE(ctx, reserved && competing);
@@ -458,8 +467,7 @@ void testAuthorizedReservationSurvivesCloseButAbortTerminatesIt(
 {
     const auto verify = [&](bool abortOutput) {
         auto fixture = makeFixture(
-            ctx, MediaGraphBuildSupport::blockingQueuePolicy(1),
-            MediaGraphBuildSupport::blockingQueuePolicy(1));
+            ctx, atomicPolicy(1), atomicPolicy(1));
         auto reserved = makePacketBuffer(true, 1, MediaStreamKind::Video);
         EXPECT_TRUE(ctx, reserved);
         if (!reserved) return;
@@ -486,6 +494,145 @@ void testAuthorizedReservationSurvivesCloseButAbortTerminatesIt(
     verify(true);
 }
 
+void testReservedPublishPerformsNoAllocation(TestContext& ctx)
+{
+    auto fixture = makeFixture(
+        ctx, atomicPolicy(2), atomicPolicy(2));
+    auto terminal = makeMediaBufferRef<MediaControlBuffer>(
+        MediaControlBufferKind::Eof);
+    std::array<MediaBufferRef, 1> videoValues{terminal};
+    std::array<MediaBufferRef, 1> audioValues{terminal};
+    const std::array<MediaAtomicOutputBatch, 2> batches{
+        MediaAtomicOutputBatch{video(*fixture), videoValues},
+        MediaAtomicOutputBatch{audio(*fixture), audioValues}};
+    auto acquired = MediaAtomicOutputTransaction::acquire(
+        "Allocation-free atomic publish", batches);
+    EXPECT_TRUE(ctx, acquired && acquired.value().has_value());
+    if (!acquired || !acquired.value()) return;
+
+    {
+        CurrentThreadAllocationFailureScope allocationFailure;
+        acquired.value()->commitReserved();
+    }
+
+    EXPECT_EQ(ctx, video(*fixture)->size(), std::size_t{1});
+    EXPECT_EQ(ctx, audio(*fixture)->size(), std::size_t{1});
+}
+
+void testThrowingFinalAuthorizationReturnsErrorAndReleasesReservation(
+    TestContext& ctx)
+{
+    auto fixture = makeFixture(
+        ctx, atomicPolicy(1), atomicPolicy(1));
+    auto reserved = makePacketBuffer(true, 1, MediaStreamKind::Video);
+    auto competing = makePacketBuffer(true, 2, MediaStreamKind::Video);
+    EXPECT_TRUE(ctx, reserved && competing);
+    if (!reserved || !competing) return;
+
+    const std::array<MediaBufferRef, 1> values{reserved.value()};
+    const std::array<MediaAtomicOutputBatch, 1> batches{
+        MediaAtomicOutputBatch{video(*fixture), values}};
+    auto reservation = MediaReservedOutputTransaction::reserve(
+        "Throwing final authorization", batches);
+    EXPECT_TRUE(ctx, reservation && reservation.value().has_value());
+    if (!reservation || !reservation.value()) return;
+    const std::array<MediaOutputCapacityReservationHandle, 1> handles{
+        reservation.value()->handle()};
+    EXPECT_TRUE(ctx, MediaReservedOutputTransaction::authorize(
+                         handles, [] { return ::media::Status::success(); }));
+
+    const auto committed = reservation.value()->commit([]() -> ::media::Status {
+        throw std::runtime_error("injected final authorization failure");
+    });
+    EXPECT_FALSE(ctx, committed);
+    if (!committed) {
+        EXPECT_EQ(ctx, committed.error().code,
+                  ::media::ErrorCode::InternalError);
+    }
+    EXPECT_EQ(ctx, video(*fixture)->size(), std::size_t{0});
+    reservation.value().reset();
+    EXPECT_EQ(ctx, video(*fixture)->pushOutcome(competing.value()),
+              MediaQueuePushOutcome::Accepted);
+}
+
+void testPreparationAllocationFailuresAreResultsAndPublishNothing(
+    TestContext& ctx)
+{
+    auto fixture = makeFixture(
+        ctx, atomicPolicy(2), atomicPolicy(2));
+    auto value = makePacketBuffer(true, 1, MediaStreamKind::Video);
+    EXPECT_TRUE(ctx, value);
+    if (!value) return;
+    const std::array<MediaBufferRef, 1> values{value.value()};
+    const std::array<MediaAtomicOutputBatch, 1> batches{
+        MediaAtomicOutputBatch{video(*fixture), values}};
+
+    MediaChannelAtomicOutputTestAccess::failNextPreparedAllocation(
+        *video(*fixture));
+    const auto acquired = MediaAtomicOutputTransaction::acquire(
+        "Injected acquire allocation failure", batches);
+    EXPECT_FALSE(ctx, acquired);
+    if (!acquired) {
+        EXPECT_EQ(ctx, acquired.error().code,
+                  ::media::ErrorCode::InternalError);
+    }
+    EXPECT_EQ(ctx, video(*fixture)->size(), std::size_t{0});
+
+    MediaChannelAtomicOutputTestAccess::failNextPreparedAllocation(
+        *video(*fixture));
+    const auto reserved = MediaReservedOutputTransaction::reserve(
+        "Injected reserve allocation failure", batches);
+    EXPECT_FALSE(ctx, reserved);
+    if (!reserved) {
+        EXPECT_EQ(ctx, reserved.error().code,
+                  ::media::ErrorCode::InternalError);
+    }
+    EXPECT_EQ(ctx, video(*fixture)->size(), std::size_t{0});
+}
+
+void testDuplicateChannelReservationAggregatesAndPublishesOnce(
+    TestContext& ctx)
+{
+    auto fixture = makeFixture(
+        ctx, atomicPolicy(2), atomicPolicy(2));
+    auto first = makePacketBuffer(true, 1, MediaStreamKind::Video);
+    auto second = makePacketBuffer(true, 2, MediaStreamKind::Video);
+    auto competing = makePacketBuffer(true, 3, MediaStreamKind::Video);
+    EXPECT_TRUE(ctx, first && second && competing);
+    if (!first || !second || !competing) return;
+
+    const std::array<MediaBufferRef, 1> firstValues{first.value()};
+    const std::array<MediaBufferRef, 1> secondValues{second.value()};
+    const std::array<MediaAtomicOutputBatch, 2> batches{
+        MediaAtomicOutputBatch{video(*fixture), firstValues},
+        MediaAtomicOutputBatch{video(*fixture), secondValues}};
+    auto reservation = MediaReservedOutputTransaction::reserve(
+        "Duplicate channel aggregation", batches);
+    EXPECT_TRUE(ctx, reservation && reservation.value().has_value());
+    if (!reservation || !reservation.value()) return;
+    EXPECT_EQ(ctx, video(*fixture)->pushOutcome(competing.value()),
+              MediaQueuePushOutcome::WouldBlock);
+
+    const std::array<MediaOutputCapacityReservationHandle, 1> handles{
+        reservation.value()->handle()};
+    EXPECT_TRUE(ctx, MediaReservedOutputTransaction::authorize(
+                         handles, [] { return ::media::Status::success(); }));
+    const std::uint64_t before =
+        MediaChannelAtomicOutputTestAccess::mutationSequence(*video(*fixture));
+    EXPECT_TRUE(ctx, reservation.value()->commit());
+    const std::uint64_t after =
+        MediaChannelAtomicOutputTestAccess::mutationSequence(*video(*fixture));
+    EXPECT_EQ(ctx, after, before + 1);
+    EXPECT_EQ(ctx, video(*fixture)->size(), std::size_t{2});
+
+    MediaBufferRef firstPopped;
+    MediaBufferRef secondPopped;
+    EXPECT_TRUE(ctx, video(*fixture)->tryPop(firstPopped));
+    EXPECT_TRUE(ctx, video(*fixture)->tryPop(secondPopped));
+    EXPECT_TRUE(ctx, firstPopped == first.value());
+    EXPECT_TRUE(ctx, secondPopped == second.value());
+}
+
 } // namespace
 
 int main()
@@ -499,6 +646,9 @@ int main()
     testChannelPushPreservesNullDropAndLifecycleContracts(ctx);
     testCapacityReservationPreventsOrdinaryPushAndCancelReleasesCapacity(ctx);
     testAuthorizedReservationSurvivesCloseButAbortTerminatesIt(ctx);
+    testThrowingFinalAuthorizationReturnsErrorAndReleasesReservation(ctx);
+    testPreparationAllocationFailuresAreResultsAndPublishNothing(ctx);
+    testDuplicateChannelReservationAggregatesAndPublishesOnce(ctx);
     if (ctx.failures != 0) return 1;
     std::cout << "Media channel atomic output tests passed\n";
     return 0;

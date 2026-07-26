@@ -37,6 +37,7 @@ MediaAtomicOutputTransaction::acquire(
     const char* owner,
     std::span<const MediaAtomicOutputBatch> batches)
 {
+    try {
     const std::string ownerName = owner ? owner : "Atomic output transaction";
     if (batches.empty()) {
         return AcquireResult::failure(::media::ErrorInfo::invalidArgument(
@@ -105,7 +106,7 @@ MediaAtomicOutputTransaction::acquire(
         const std::size_t capacity = queue->m_policy.capacity;
         const std::size_t count = required[channel];
         if (count > capacity || channel->m_reservedCapacity > capacity - count ||
-            queue->m_queue.size() >
+            queue->m_storage.size() >
                 capacity - count - channel->m_reservedCapacity) {
             return AcquireResult::success(std::nullopt);
         }
@@ -117,6 +118,10 @@ MediaAtomicOutputTransaction::acquire(
         std::move(channels),
         std::move(channelLocks),
         std::move(queueLocks)));
+    } catch (const std::bad_alloc&) {
+        return AcquireResult::failure(::media::ErrorInfo::internalError(
+            "Atomic output transaction allocation failed"));
+    }
 }
 
 ::media::Status MediaAtomicOutputTransaction::commit()
@@ -138,7 +143,7 @@ void MediaAtomicOutputTransaction::publishPrepared() noexcept
 {
     if (m_committed) return;
     for (auto& batch : m_batches) {
-        const std::size_t count = batch.prepared.nodes.size();
+        const std::size_t count = batch.prepared.size();
         batch.queue->publishPreparedLocked(batch.prepared);
         batch.channel->m_metrics.pushed.fetch_add(
             count, std::memory_order_relaxed);

@@ -82,11 +82,11 @@ private:
     MediaNodeWakeup* m_producerWakeup = nullptr;
     mutable std::mutex m_mutationMutex;
     std::condition_variable m_mutationChanged;
-    std::condition_variable m_waitStateChanged;
     std::atomic_uint64_t m_mutationSequence{0};
     std::atomic_uint64_t m_externalBlockedPushes{0};
     std::atomic_size_t m_externalBlockedProducers{0};
     std::atomic_size_t m_externalBlockedConsumers{0};
+    std::atomic_size_t m_externalLifecycleMutations{0};
     std::size_t m_reservedCapacity = 0;
     std::size_t m_authorizedCapacity = 0;
     bool m_closeRequested = false;

@@ -5,7 +5,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <exception>
 #include <mutex>
+#include <new>
 #include <unordered_map>
 #include <utility>
 
@@ -34,6 +36,41 @@ struct MediaOutputCapacityReservationRecord final {
 namespace {
 
 std::atomic_uint64_t g_nextReservationIdentity{1};
+
+class MediaReservedOutputLockScope final {
+public:
+    MediaReservedOutputLockScope(
+        std::vector<std::unique_lock<std::mutex>>& channelLocks,
+        std::vector<std::unique_lock<std::mutex>>& queueLocks) noexcept
+        : m_channelLocks(channelLocks)
+        , m_queueLocks(queueLocks)
+    {
+    }
+
+    MediaReservedOutputLockScope(
+        const MediaReservedOutputLockScope&) = delete;
+    MediaReservedOutputLockScope& operator=(
+        const MediaReservedOutputLockScope&) = delete;
+
+    ~MediaReservedOutputLockScope()
+    {
+        unlock();
+    }
+
+    void unlock() noexcept
+    {
+        for (auto& lock : m_queueLocks) {
+            if (lock.owns_lock()) lock.unlock();
+        }
+        for (auto& lock : m_channelLocks) {
+            if (lock.owns_lock()) lock.unlock();
+        }
+    }
+
+private:
+    std::vector<std::unique_lock<std::mutex>>& m_channelLocks;
+    std::vector<std::unique_lock<std::mutex>>& m_queueLocks;
+};
 
 std::vector<MediaChannel*> sortedChannels(
     const std::vector<MediaOutputCapacityReservationRecord::ChannelCount>& counts)
@@ -132,7 +169,8 @@ MediaReservedOutputTransaction::reserve(
     const char* owner,
     std::span<const MediaAtomicOutputBatch> batches)
 {
-    const std::string ownerName = owner ? owner : "Reserved output transaction";
+    try {
+    std::string ownerName = owner ? owner : "Reserved output transaction";
     if (batches.empty()) {
         return ReserveResult::failure(::media::ErrorInfo::invalidArgument(
             ownerName + " requires explicit output batches"));
@@ -174,7 +212,7 @@ MediaReservedOutputTransaction::reserve(
                       return lhs.channel->id() < rhs.channel->id();
                   return std::less<MediaChannel*>{}(lhs.channel, rhs.channel);
               });
-    const auto channels = sortedChannels(record->channels);
+    auto channels = sortedChannels(record->channels);
     auto locks = lockChannels(channels);
     for (const auto& item : record->channels) {
         MediaChannel* channel = item.channel;
@@ -197,16 +235,21 @@ MediaReservedOutputTransaction::reserve(
     }
     std::vector<std::unique_lock<std::mutex>> channelLocks(channels.size());
     std::vector<std::unique_lock<std::mutex>> queueLocks(channels.size());
-    for (const auto& item : record->channels) {
-        item.channel->m_reservedCapacity += item.count;
-    }
-    return ReserveResult::success(MediaReservedOutputTransaction(
-        ownerName,
+    MediaReservedOutputTransaction transaction(
+        std::move(ownerName),
         std::move(ownedBatches),
-        channels,
+        std::move(channels),
         std::move(channelLocks),
         std::move(queueLocks),
-        std::move(record)));
+        std::move(record));
+    for (const auto& item : transaction.m_record->channels) {
+        item.channel->m_reservedCapacity += item.count;
+    }
+    return ReserveResult::success(std::move(transaction));
+    } catch (const std::bad_alloc&) {
+        return ReserveResult::failure(::media::ErrorInfo::internalError(
+            "Reserved output transaction allocation failed"));
+    }
 }
 
 MediaOutputCapacityReservationHandle
@@ -231,7 +274,7 @@ MediaReservedOutputTransaction::handle() const
         const auto& batch = batches[index];
         auto& reserved = m_batches[index];
         if (batch.channel != reserved.channel ||
-            batch.buffers.size() != reserved.prepared.nodes.size()) {
+            batch.buffers.size() != reserved.prepared.size()) {
             return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
                 m_owner + " replacement changed reserved capacity"));
         }
@@ -244,9 +287,9 @@ MediaReservedOutputTransaction::handle() const
         }
     }
     for (std::size_t index = 0; index < batches.size(); ++index) {
-        auto prepared = m_batches[index].prepared.nodes.begin();
-        for (const auto& buffer : batches[index].buffers) {
-            *prepared++ = buffer;
+        if (auto replaced = m_batches[index].prepared.replace(
+                batches[index].buffers); !replaced) {
+            return replaced;
         }
     }
     return ::media::Status::success();
@@ -325,47 +368,47 @@ MediaReservedOutputTransaction::handle() const
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             m_owner + " reservation is not authorized"));
     }
-    for (std::size_t index = 0; index < m_channels.size(); ++index) {
-        m_channelLocks[index] =
-            std::unique_lock<std::mutex>(
+    MediaReservedOutputLockScope outputLocks(
+        m_channelLocks, m_queueLocks);
+    try {
+        for (std::size_t index = 0; index < m_channels.size(); ++index) {
+            m_channelLocks[index] = std::unique_lock<std::mutex>(
                 m_channels[index]->m_mutationMutex);
-    }
-    for (std::size_t index = 0; index < m_channels.size(); ++index) {
-        auto* queue = static_cast<MediaBlockingQueue*>(
-            m_channels[index]->m_queue.get());
-        m_queueLocks[index] =
-            std::unique_lock<std::mutex>(queue->m_mutex);
-    }
-    const auto unlockOutputs = [this]() noexcept {
-        for (auto& lock : m_queueLocks) {
-            if (lock.owns_lock()) lock.unlock();
         }
-        for (auto& lock : m_channelLocks) {
-            if (lock.owns_lock()) lock.unlock();
+        for (std::size_t index = 0; index < m_channels.size(); ++index) {
+            auto* queue = static_cast<MediaBlockingQueue*>(
+                m_channels[index]->m_queue.get());
+            m_queueLocks[index] =
+                std::unique_lock<std::mutex>(queue->m_mutex);
         }
-    };
-    for (const auto& item : m_record->channels) {
-        auto* queue = static_cast<MediaBlockingQueue*>(
-            item.channel->m_queue.get());
-        if (queue->m_aborted) {
+        for (const auto& item : m_record->channels) {
+            auto* queue = static_cast<MediaBlockingQueue*>(
+                item.channel->m_queue.get());
+            if (!queue->m_aborted) continue;
             for (const auto& release : m_record->channels) {
                 release.channel->m_reservedCapacity -= release.count;
                 release.channel->m_authorizedCapacity -= release.count;
             }
             m_record->state = MediaOutputCapacityReservationState::Cancelled;
-            unlockOutputs();
             return ::media::Status::failure(::media::ErrorInfo::cancelled(
                 m_owner + " reservation was aborted"));
         }
-    }
-    if (finalAuthorization) {
-        if (auto authorized = finalAuthorization(); !authorized) {
-            unlockOutputs();
-            return authorized;
+        if (finalAuthorization) {
+            if (auto authorized = finalAuthorization(); !authorized) {
+                return authorized;
+            }
         }
+    } catch (const std::exception& exception) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::internalError(
+                m_owner + " commit threw: " + exception.what()));
+    } catch (...) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::internalError(
+                m_owner + " commit threw"));
     }
     for (auto& batch : m_batches) {
-        const std::size_t count = batch.prepared.nodes.size();
+        const std::size_t count = batch.prepared.size();
         batch.queue->publishPreparedLocked(batch.prepared);
         batch.channel->m_metrics.pushed.fetch_add(
             count, std::memory_order_relaxed);
@@ -383,7 +426,7 @@ MediaReservedOutputTransaction::handle() const
     }
     m_record->state = MediaOutputCapacityReservationState::Committed;
     recordLock.unlock();
-    unlockOutputs();
+    outputLocks.unlock();
     for (MediaChannel* channel : m_channels) {
         auto* queue = static_cast<MediaBlockingQueue*>(
             channel->m_queue.get());

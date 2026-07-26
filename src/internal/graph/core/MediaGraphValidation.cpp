@@ -111,6 +111,17 @@ void validateEdgePolicy(MediaGraphValidationReport& report, const MediaEdge& edg
                  edge.id);
     }
 
+    if (queuePolicy.mode != MediaQueueMode::SpscRing &&
+        queuePolicy.storageMode == MediaQueueStorageMode::Unknown) {
+        addIssue(report,
+                 MediaGraphValidationSeverity::Error,
+                 MediaGraphErrorCode::InvalidPolicy,
+                 "Blocking edge queue storage mode is unknown",
+                 MediaNodeId::invalid(),
+                 MediaPortId::invalid(),
+                 edge.id);
+    }
+
     if (queuePolicy.bounded && queuePolicy.mode != MediaQueueMode::Direct && queuePolicy.capacity == 0) {
         addIssue(report,
                  MediaGraphValidationSeverity::Error,

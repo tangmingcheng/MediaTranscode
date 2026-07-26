@@ -654,9 +654,9 @@ void testExtractorPreflightsCompoundReleaseWithoutPartialCommit(TestContext& ctx
     graph.connect(source, "out", extractor, "in", "release",
                   MediaGraphBuildSupport::blockingQueuePolicy(2));
     graph.connect(extractor, "video", videoSink, "in", "video",
-                  MediaGraphBuildSupport::blockingQueuePolicy(1));
+                  MediaGraphBuildSupport::atomicPreparedQueuePolicy(1));
     graph.connect(extractor, "audio", audioSink, "in", "audio",
-                  MediaGraphBuildSupport::blockingQueuePolicy(1));
+                  MediaGraphBuildSupport::atomicPreparedQueuePolicy(1));
     MediaGraphExecutionContext execution;
     EXPECT_TRUE(ctx, execution.compile(graph));
     MediaAvBoundReleaseExtractorNode node(
@@ -736,9 +736,9 @@ void testExtractorPreservesAudioTrimAndIdentity(TestContext& ctx)
     graph.connect(source, "out", extractor, "in", "release",
                   MediaGraphBuildSupport::blockingQueuePolicy(2));
     graph.connect(extractor, "video", videoSink, "in", "video",
-                  MediaGraphBuildSupport::blockingQueuePolicy(2));
+                  MediaGraphBuildSupport::atomicPreparedQueuePolicy(2));
     graph.connect(extractor, "audio", audioSink, "in", "audio",
-                  MediaGraphBuildSupport::blockingQueuePolicy(2));
+                  MediaGraphBuildSupport::atomicPreparedQueuePolicy(2));
     MediaGraphExecutionContext execution;
     EXPECT_TRUE(ctx, execution.compile(graph));
     MediaAvBoundReleaseExtractorNode node(
@@ -803,9 +803,9 @@ void testExtractorAtomicallyFansOutExactEofReference(TestContext& ctx)
     graph.connect(source, "out", extractor, "in", "release",
                   MediaGraphBuildSupport::blockingQueuePolicy(2));
     graph.connect(extractor, "video", videoSink, "in", "video",
-                  MediaGraphBuildSupport::blockingQueuePolicy(1));
+                  MediaGraphBuildSupport::atomicPreparedQueuePolicy(1));
     graph.connect(extractor, "audio", audioSink, "in", "audio",
-                  MediaGraphBuildSupport::blockingQueuePolicy(1));
+                  MediaGraphBuildSupport::atomicPreparedQueuePolicy(1));
     MediaGraphExecutionContext execution;
     EXPECT_TRUE(ctx, execution.compile(graph));
     MediaAvBoundReleaseExtractorNode node(
@@ -856,9 +856,13 @@ void testExtractorHandlesTypedControlsAndRequiredInputTermination(TestContext& c
         graph.addInputPort(audioSink, "in", MediaStreamKind::Audio,
                            MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
         const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(1);
+        const auto atomicPolicy =
+            MediaGraphBuildSupport::atomicPreparedQueuePolicy(1);
         graph.connect(source, "out", extractor, "in", "release", policy);
-        graph.connect(extractor, "video", videoSink, "in", "video", policy);
-        graph.connect(extractor, "audio", audioSink, "in", "audio", policy);
+        graph.connect(
+            extractor, "video", videoSink, "in", "video", atomicPolicy);
+        graph.connect(
+            extractor, "audio", audioSink, "in", "audio", atomicPolicy);
         MediaGraphExecutionContext execution;
         EXPECT_TRUE(ctx, execution.compile(graph));
         MediaAvBoundReleaseExtractorNode node(

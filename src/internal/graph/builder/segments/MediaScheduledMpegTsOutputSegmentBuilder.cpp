@@ -126,7 +126,8 @@ MediaScheduledMpegTsOutputSegmentBuilder::build(
     };
     for (const auto& [from, to, port, label, policy] : {
              std::tuple{options.epochActivated, planSource, "epoch",
-                        "playback epoch -> MPEG-TS plan", plan.edgePolicies.metadata},
+                        "playback epoch -> MPEG-TS plan",
+                        plan.edgePolicies.atomicMetadata},
              std::tuple{options.videoCodec, base.value().mux, "codec",
                         "video codec -> MPEG-TS mux", plan.edgePolicies.metadata},
              std::tuple{options.audioCodec, base.value().mux, "codec",
