@@ -2,6 +2,7 @@
 
 #include "internal/graph/nodes/sync/MediaPlaybackEpochBinderNode.h"
 #include "internal/graph/nodes/sync/MediaActivatedStartupReleaseSequencerNode.h"
+#include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlan.h"
 #include "internal/graph/runtime/MediaGraphRuntime.h"
 #include "internal/graph/runtime/buffer/MediaAvStartupEnvelopeBuffer.h"
 #include "internal/graph/runtime/compilation/MediaAvSyncRuntimeBootstrap.h"
@@ -11,6 +12,19 @@
 #include <memory>
 
 namespace media_transcode::test {
+
+inline ::media::ffmpeg::graph::MediaAvGenerationTransitionPlan
+schedulerOnlyComponentTransitionPlan(
+    ::media::ffmpeg::graph::MediaRunningTime acknowledgementTimeout,
+    ::media::ffmpeg::graph::MediaRunningTime terminalDrainWindow)
+{
+    using namespace ::media::ffmpeg::graph;
+    return MediaAvGenerationTransitionPlan{
+        {{MediaAvGenerationParticipant::Scheduler,
+          {"scheduler_generation_state"}}},
+        acknowledgementTimeout,
+        terminalDrainWindow};
+}
 
 inline void addPlaybackEpochReleaseBoundary(
     ::media::ffmpeg::graph::MediaGraph& graph,

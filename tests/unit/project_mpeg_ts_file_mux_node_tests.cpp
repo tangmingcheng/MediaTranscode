@@ -5,7 +5,6 @@
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/nodes/mux/FileMuxNode.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
-#include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 #include "internal/graph/runtime/buffer/FFmpegCodecParametersBuffer.h"
 #include "internal/graph/runtime/buffer/MediaOutputByteSinkBuffer.h"
@@ -30,6 +29,7 @@ extern "C" {
 
 using namespace media::ffmpeg::graph;
 using media_transcode::test::TestContext;
+using media_transcode::test::schedulerOnlyComponentTransitionPlan;
 
 namespace {
 
@@ -253,15 +253,26 @@ struct ProjectFileMuxHarness final {
         connect(videoPacketSource, "packet", "packet", "video.packet.edge");
         connect(audioPacketSource, "packet", "packet", "audio.packet.edge");
 
-        EXPECT_TRUE(ctx, media_transcode::test::compileAndActivateAvSyncRuntime(
-            std::move(graph),
-            MediaAvSyncRuntimeBinding{
-                group, avSyncPlan(),
-                MediaAvGenerationTransitionPlanner::plan(
-                    MediaAvSyncOutputAdapterKind::ProjectMpegTs,
-                    ms(1'000), ms(500)),
-                MediaAvSyncBindingAssemblyMode::ComponentCore},
-            clock, epoch, binder, execution, graphRuntime));
+        const bool activated =
+            media_transcode::test::compileAndActivateAvSyncRuntime(
+                std::move(graph),
+                MediaAvSyncRuntimeBinding{
+                    group, avSyncPlan(),
+                    schedulerOnlyComponentTransitionPlan(ms(1'000), ms(500)),
+                    MediaAvSyncBindingAssemblyMode::ComponentCore},
+                clock, epoch, binder, execution, graphRuntime);
+        EXPECT_TRUE(ctx, activated);
+        EXPECT_TRUE(ctx, graphRuntime && graphRuntime->compiled());
+        const auto activeGroup = execution.findAvSyncGroup(group);
+        EXPECT_TRUE(ctx, activeGroup &&
+                             activeGroup->lifecycleState() ==
+                                 MediaAvSyncGroupRuntime::LifecycleState::Active);
+        if (!activated || !graphRuntime || !graphRuntime->compiled() ||
+            !activeGroup ||
+            activeGroup->lifecycleState() !=
+                MediaAvSyncGroupRuntime::LifecycleState::Active) {
+            return false;
+        }
         EXPECT_EQ(ctx, channel(planSource)->binding().payloadKind,
                   MediaPayloadKind::TsMuxRuntimePlan);
         EXPECT_EQ(ctx, channel(sinkSource)->binding().payloadKind,

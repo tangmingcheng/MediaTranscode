@@ -5,7 +5,6 @@
 #include "internal/graph/nodes/mux/MediaMuxSessionFactory.h"
 #include "internal/graph/nodes/mux/ProjectMpegTsMuxSessionAdapter.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
-#include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 #include "internal/graph/runtime/buffer/FFmpegCodecParametersBuffer.h"
 #include "internal/graph/runtime/buffer/MediaOutputByteSinkBuffer.h"
@@ -29,6 +28,7 @@ extern "C" {
 
 using namespace media::ffmpeg::graph;
 using media_transcode::test::TestContext;
+using media_transcode::test::schedulerOnlyComponentTransitionPlan;
 
 namespace {
 
@@ -145,13 +145,19 @@ struct Fixture final {
                 std::move(graph),
                 MediaAvSyncRuntimeBinding{
                     group, avSyncPlan(),
-                    MediaAvGenerationTransitionPlanner::plan(
-                        MediaAvSyncOutputAdapterKind::ProjectMpegTs,
-                        ms(1'000), ms(500)),
+                    schedulerOnlyComponentTransitionPlan(ms(1'000), ms(500)),
                     MediaAvSyncBindingAssemblyMode::ComponentCore},
                 clock, epoch, binder, context, graphRuntime);
         EXPECT_TRUE(ctx, activated);
-        return activated;
+        EXPECT_TRUE(ctx, graphRuntime && graphRuntime->compiled());
+        const auto activeGroup = context.findAvSyncGroup(group);
+        EXPECT_TRUE(ctx, activeGroup &&
+                             activeGroup->lifecycleState() ==
+                                 MediaAvSyncGroupRuntime::LifecycleState::Active);
+        return activated && graphRuntime && graphRuntime->compiled() &&
+               activeGroup &&
+               activeGroup->lifecycleState() ==
+                   MediaAvSyncGroupRuntime::LifecycleState::Active;
     }
 
     MediaBufferRef planBuffer() const
