@@ -223,9 +223,11 @@ void registeredNodeKindsHaveStableDiagnosticNames()
     MediaGraph graph;
     graph.addNode(MediaNodeKind::RtpPacketClockBinder, "binder");
     graph.addNode(MediaNodeKind::RtpClockSnapshotFanout, "fanout");
+    graph.addNode(MediaNodeKind::LockedPacketGate, "locked-packet-gate");
     const auto dump = MediaGraphDump::toText(graph);
     assert(dump.find("RtpPacketClockBinder") != std::string::npos);
     assert(dump.find("RtpClockSnapshotFanout") != std::string::npos);
+    assert(dump.find("LockedPacketGate") != std::string::npos);
 }
 
 void validatorKeepsOneCommonEpochForAGroupGeneration()

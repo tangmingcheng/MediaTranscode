@@ -44,6 +44,12 @@ enum class MediaAvSyncErrorState {
     VideoSync
 };
 
+enum class MediaLockedPacketGateDisposition : std::uint8_t {
+    Pass = 0,
+    WithholdForReacquisition = 1,
+    DropOldGeneration = 2
+};
+
 class MediaAvSyncError final {
 public:
     MediaAvSyncError(MediaAvSyncErrorCode code,

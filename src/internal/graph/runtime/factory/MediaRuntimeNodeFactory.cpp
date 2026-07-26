@@ -46,7 +46,7 @@
 #include "internal/graph/nodes/sync/MediaAvOutputSchedulerNode.h"
 #include "internal/graph/nodes/sync/MediaPlaybackEpochBinderNode.h"
 #include "internal/graph/nodes/sync/MediaCanonicalInputNode.h"
-#include "internal/graph/nodes/sync/MediaInitialLockedPacketGateNode.h"
+#include "internal/graph/nodes/sync/MediaLockedPacketGateNode.h"
 #include "internal/graph/nodes/sync/MediaAvBoundReleaseExtractorNode.h"
 #include "internal/graph/nodes/sync/MediaAvStartupClockNode.h"
 #include "internal/graph/nodes/sync/MediaActivatedStartupReleaseSequencerNode.h"
@@ -343,9 +343,9 @@ template <typename Node>
     case MediaNodeKind::CanonicalInput:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::make_unique<MediaCanonicalInputNode>(node.id));
-    case MediaNodeKind::InitialLockedPacketGate:
+    case MediaNodeKind::LockedPacketGate:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
-            std::make_unique<MediaInitialLockedPacketGateNode>(node.id));
+            std::make_unique<MediaLockedPacketGateNode>(node.id));
     case MediaNodeKind::AvBoundReleaseExtractor:
         if (videoPreparationState) {
             auto capability = MediaAvStartupVideoPreparationCapability::issue(
@@ -707,7 +707,7 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::AvOutputScheduler:
     case MediaNodeKind::PlaybackEpochBinder:
     case MediaNodeKind::CanonicalInput:
-    case MediaNodeKind::InitialLockedPacketGate:
+    case MediaNodeKind::LockedPacketGate:
     case MediaNodeKind::AvBoundReleaseExtractor:
     case MediaNodeKind::ActivatedStartupReleaseSequencer:
     case MediaNodeKind::RtpSourceClockStateAdapter:

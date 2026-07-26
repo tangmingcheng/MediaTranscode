@@ -14,7 +14,7 @@ public:
         MediaStreamKind stream,
         const MediaRealtimeAvSyncRuntimePlan& plan);
 
-    static ::media::Result<void> configureInitialLockedPacketGate(
+    static ::media::Result<void> configureLockedPacketGate(
         MediaGraph& graph,
         MediaNodeId node,
         MediaStreamKind stream,

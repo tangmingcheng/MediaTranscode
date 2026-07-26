@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
+#include "internal/graph/sync/MediaAvSyncError.h"
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
 #include "internal/graph/sync/startup/MediaInitialClockAcquisitionDeadline.h"
 #include "internal/graph/time/MediaRunningTime.h"
@@ -13,9 +14,9 @@ namespace media::ffmpeg::graph {
 
 class MediaAvSyncGroupRuntime;
 
-class MediaInitialLockedPacketGateNode final : public FFmpegNodeRuntime {
+class MediaLockedPacketGateNode final : public FFmpegNodeRuntime {
 public:
-    explicit MediaInitialLockedPacketGateNode(MediaNodeId nodeId);
+    explicit MediaLockedPacketGateNode(MediaNodeId nodeId);
     static MediaNodeKind staticKind() noexcept;
     ::media::Status stop(MediaGraphExecutionContext& context) override;
     void abort(MediaGraphExecutionContext& context) noexcept override;
@@ -26,10 +27,18 @@ protected:
 
 private:
     ::media::Status configure(MediaGraphExecutionContext& context);
-    ::media::Status acceptClock(const MediaBufferRef& buffer);
+    ::media::Result<MediaLockedPacketGateDisposition> acceptClock(
+        const MediaBufferRef& buffer);
+    ::media::Result<MediaLockedPacketGateDisposition>
+    classifyLockedGeneration(std::uint64_t generation,
+                             bool mayRequestReacquisition);
+    ::media::Result<MediaLockedPacketGateDisposition> classifyPacket(
+        const MediaBufferRef& buffer);
+    ::media::Result<std::uint64_t> packetGeneration(
+        const MediaBufferRef& buffer) const;
+    ::media::Status processPacket(MediaGraphExecutionContext& context,
+                                  MediaBufferRef buffer);
     ::media::Status retainPendingPacket(MediaBufferRef buffer);
-    ::media::Status emitValidatedPacket(MediaGraphExecutionContext& context,
-                                        MediaBufferRef buffer);
     void resetState() noexcept;
 
     std::optional<std::uint64_t> m_lockedGeneration;

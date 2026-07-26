@@ -2,7 +2,7 @@
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/core/MediaGraphDump.h"
 #include "internal/graph/nodes/sync/MediaCanonicalInputNode.h"
-#include "internal/graph/nodes/sync/MediaInitialLockedPacketGateNode.h"
+#include "internal/graph/nodes/sync/MediaLockedPacketGateNode.h"
 #include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlanner.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
 #include "internal/graph/runtime/buffer/FFmpegPacketBuffer.h"
@@ -13,6 +13,8 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/sync/MediaAvEpochTransitionService.h"
+#include "internal/graph/sync/MediaAvGenerationParticipantGroup.h"
+#include "internal/graph/sync/MediaAvReacquisitionCoordinator.h"
 #include "internal/graph/sync/startup/MediaInitialClockAcquisitionDeadline.h"
 #include "internal/graph/time/MediaMasterClock.h"
 #include "internal/graph/time/MediaSharedNtpEpoch.h"
@@ -30,8 +32,32 @@ extern "C" {
 #include <limits>
 #include <memory>
 #include <optional>
+#include <vector>
 
 using namespace media::ffmpeg::graph;
+
+namespace media::ffmpeg::graph {
+
+struct MediaAvEpochTransitionServiceTestAccess final {
+    static ::media::Status activateInitial(
+        const std::shared_ptr<MediaAvEpochTransitionService>& service,
+        std::uint64_t generation)
+    {
+        return service->activateInitial(
+            MediaPlaybackEpoch{
+                MediaRunningTime::fromNanoseconds(0),
+                MediaRunningTime::fromNanoseconds(0),
+                generation},
+            MediaAudioPlaybackOrigin{
+                generation,
+                MediaRunningTime::fromNanoseconds(0),
+                MediaRunningTime::fromNanoseconds(0),
+                0,
+                48'000});
+    }
+};
+
+} // namespace media::ffmpeg::graph
 
 #undef assert
 #define assert(condition)                                                        \
@@ -91,6 +117,17 @@ private:
     std::atomic<std::int64_t> m_now;
 };
 
+class RecordingPurgeTarget final : public MediaAvGenerationPurgeTarget {
+public:
+    ::media::Status purge(const MediaAvGenerationPurge&) override
+    {
+        ++calls;
+        return ::media::Status::success();
+    }
+
+    std::size_t calls = 0;
+};
+
 MediaAvSyncPlan completeAvSyncPlan()
 {
     MediaRealtimeRtpTranscodeRequest request;
@@ -117,8 +154,15 @@ MediaAvSyncPlan completeAvSyncPlan()
     return plan;
 }
 
-void registerSyncGroup(MediaGraphExecutionContext& execution,
-                       const std::shared_ptr<TestMasterClock>& clock)
+struct RegisteredSyncGroup final {
+    std::shared_ptr<MediaAvSyncGroupRuntime> group;
+    std::shared_ptr<RecordingPurgeTarget> purgeTarget;
+    std::size_t purgesPerRequest = 0;
+};
+
+RegisteredSyncGroup registerSyncGroup(
+    MediaGraphExecutionContext& execution,
+    const std::shared_ptr<TestMasterClock>& clock)
 {
     auto epoch = MediaSharedNtpEpoch::create(
         MediaRunningTime::fromNanoseconds(0), std::chrono::nanoseconds(0));
@@ -127,12 +171,42 @@ void registerSyncGroup(MediaGraphExecutionContext& execution,
         MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp,
         MediaRunningTime::fromNanoseconds(1'000'000'000),
         MediaRunningTime::fromNanoseconds(1'000'000'000));
-    auto service = MediaAvEpochTransitionService::create(std::move(transition));
+    const auto transitionPlan = std::move(transition);
+    auto service = MediaAvEpochTransitionService::create(transitionPlan);
     assert(service);
+    auto transitionService = std::move(service).value();
     assert(execution.registerAvSyncGroup(
         MediaAvSyncGroupKey("ts-gate-group"), completeAvSyncPlan(), clock,
         std::make_shared<MediaSharedNtpEpoch>(std::move(epoch).value()),
-        std::move(service).value()));
+        transitionService));
+    auto group = execution.findAvSyncGroup(
+        MediaAvSyncGroupKey("ts-gate-group"));
+    assert(group);
+    assert(MediaAvEpochTransitionServiceTestAccess::activateInitial(
+        transitionService, 7));
+
+    auto target = std::make_shared<RecordingPurgeTarget>();
+    std::vector<MediaAvGenerationParticipantGroup> participants;
+    std::size_t purgesPerRequest = 0;
+    for (const auto& participantPlan : transitionPlan.participants) {
+        auto participant =
+            MediaAvGenerationParticipantGroup::create(participantPlan);
+        assert(participant);
+        auto sealed = std::move(participant).value();
+        for (const auto& identity : participantPlan.requiredChildren) {
+            assert(sealed.registerChild(identity, target));
+            ++purgesPerRequest;
+        }
+        assert(sealed.seal());
+        participants.push_back(std::move(sealed));
+    }
+    auto coordinator = MediaAvReacquisitionCoordinator::create(
+        transitionService, clock, std::move(participants));
+    assert(coordinator);
+    assert(group->installReacquisitionCoordinator(
+        std::move(coordinator).value()));
+    return RegisteredSyncGroup{
+        std::move(group), std::move(target), purgesPerRequest};
 }
 
 MediaBufferRef timedPacket(MediaStreamKind stream,
@@ -181,13 +255,14 @@ struct GateHarness final {
     MediaNodeId gate;
     MediaGraphExecutionContext execution;
     std::shared_ptr<TestMasterClock> clock = std::make_shared<TestMasterClock>(0);
-    std::unique_ptr<MediaInitialLockedPacketGateNode> runtime;
+    RegisteredSyncGroup syncGroup;
+    std::unique_ptr<MediaLockedPacketGateNode> runtime;
 
     explicit GateHarness(std::int64_t timeoutNs = 100)
     {
         const auto packetSource = graph.addNode(MediaNodeKind::DebugDump, "packet-source");
         const auto clockSource = graph.addNode(MediaNodeKind::DebugDump, "clock-source");
-        gate = graph.addNode(MediaNodeKind::InitialLockedPacketGate, "initial-lock");
+        gate = graph.addNode(MediaNodeKind::LockedPacketGate, "locked-packet");
         const auto sink = graph.addNode(MediaNodeKind::DebugDump, "sink");
         const auto queue = MediaGraphBuildSupport::blockingQueuePolicy(8);
         graph.addOutputPort(packetSource, "out", MediaStreamKind::Video,
@@ -205,13 +280,13 @@ struct GateHarness final {
         graph.connect(packetSource, "out", gate, "packet", "packet", queue);
         graph.connect(clockSource, "out", gate, "clock", "clock", queue);
         graph.connect(gate, "packet", sink, "in", "output", queue);
-        graph.setNodeOption(gate, "initial_locked_gate.stream", "video");
-        graph.setNodeOption(gate, "initial_locked_gate.acquiring_timeout_ns",
+        graph.setNodeOption(gate, "locked_packet_gate.stream", "video");
+        graph.setNodeOption(gate, "locked_packet_gate.acquiring_timeout_ns",
                             std::to_string(timeoutNs));
-        graph.setNodeOption(gate, "initial_locked_gate.sync_group", "ts-gate-group");
+        graph.setNodeOption(gate, "locked_packet_gate.sync_group", "ts-gate-group");
         assert(execution.compile(graph));
-        registerSyncGroup(execution, clock);
-        runtime = std::make_unique<MediaInitialLockedPacketGateNode>(gate);
+        syncGroup = registerSyncGroup(execution, clock);
+        runtime = std::make_unique<MediaLockedPacketGateNode>(gate);
         assert(runtime->start(execution));
     }
 
@@ -253,9 +328,146 @@ void gateRequiresLockedClockBeforeLockedPackets()
     assert(harness.output()->tryPop(released));
     assert(released.get() == packet.get());
 
-    assert(harness.clockInput()->push(makeMediaBufferRef<MediaSourceClockStateBuffer>(
-        MediaSourceClockReadiness::Locked, 8, false)));
+}
+
+void gateWithholdsOnePlannedReacquisitionAndClassifiesGenerations()
+{
+    GateHarness harness;
+    assert(harness.clockInput()->push(
+        makeMediaBufferRef<MediaSourceClockStateBuffer>(
+            MediaSourceClockReadiness::Locked, 7, false)));
+    assert(harness.runtime->process(harness.execution));
+
+    assert(harness.clockInput()->push(
+        makeMediaBufferRef<MediaSourceClockStateBuffer>(
+            MediaSourceClockReadiness::ReacquireRequired, 7, true)));
+    const auto discontinuity = harness.runtime->process(harness.execution);
+    if (!discontinuity) {
+        assert(discontinuity.error().message !=
+               "Initial locked packet gate rejects clock discontinuity");
+    }
+    assert(discontinuity);
+
+    const auto request = harness.syncGroup.group->reacquisitionRequest();
+    assert(request == std::optional<MediaAvReacquisitionRequest>(
+                          MediaAvReacquisitionRequest{
+                              7,
+                              MediaAvReacquisitionReason::HardDiscontinuity}));
+    const auto transition =
+        harness.syncGroup.group->reacquisitionSnapshot();
+    assert(transition.phase == MediaAvReacquisitionPhase::Acquiring);
+    assert(transition.transition);
+    assert(transition.transition->oldGeneration == 7);
+    assert(transition.transition->nextGeneration == 8);
+    assert(harness.syncGroup.purgeTarget->calls ==
+           harness.syncGroup.purgesPerRequest);
+
+    assert(harness.clockInput()->push(
+        makeMediaBufferRef<MediaSourceClockStateBuffer>(
+            MediaSourceClockReadiness::ReacquireRequired, 7, true)));
+    assert(harness.runtime->process(harness.execution));
+    assert(harness.syncGroup.purgeTarget->calls ==
+           harness.syncGroup.purgesPerRequest);
+
+    assert(harness.clockInput()->push(
+        makeMediaBufferRef<MediaSourceClockStateBuffer>(
+            MediaSourceClockReadiness::Acquiring, 8, false)));
+    assert(harness.runtime->process(harness.execution));
+    assert(harness.clockInput()->push(
+        makeMediaBufferRef<MediaSourceClockStateBuffer>(
+            MediaSourceClockReadiness::Locked, 7, false)));
+    assert(harness.runtime->process(harness.execution));
+    assert(harness.clockInput()->push(
+        makeMediaBufferRef<MediaSourceClockStateBuffer>(
+            MediaSourceClockReadiness::Locked, 8, false)));
+    assert(harness.runtime->process(harness.execution));
+    assert(harness.clockInput()->push(
+        makeMediaBufferRef<MediaSourceClockStateBuffer>(
+            MediaSourceClockReadiness::Locked, 9, false)));
     assert(!harness.runtime->process(harness.execution));
+}
+
+void gateDropsOldPacketsAndRetainsOnlyThePlannedNextGeneration()
+{
+    {
+        GateHarness harness;
+        assert(harness.clockInput()->push(
+            makeMediaBufferRef<MediaSourceClockStateBuffer>(
+                MediaSourceClockReadiness::Locked, 7, false)));
+        assert(harness.runtime->process(harness.execution));
+        assert(harness.clockInput()->push(
+            makeMediaBufferRef<MediaSourceClockStateBuffer>(
+                MediaSourceClockReadiness::ReacquireRequired, 7, true)));
+        assert(harness.runtime->process(harness.execution));
+        assert(harness.packetInput()->push(timedPacket(
+            MediaStreamKind::Video, MediaSourceClockReadiness::Locked, 7,
+            1'000, 3'600, AVRational{1, 90'000})));
+        assert(harness.runtime->process(harness.execution));
+        assert(harness.output()->size() == 0);
+        assert(harness.packetInput()->size() == 0);
+    }
+    {
+        GateHarness harness;
+        assert(harness.clockInput()->push(
+            makeMediaBufferRef<MediaSourceClockStateBuffer>(
+                MediaSourceClockReadiness::Locked, 7, false)));
+        assert(harness.runtime->process(harness.execution));
+        assert(harness.clockInput()->push(
+            makeMediaBufferRef<MediaSourceClockStateBuffer>(
+                MediaSourceClockReadiness::ReacquireRequired, 7, true)));
+        assert(harness.runtime->process(harness.execution));
+        assert(harness.packetInput()->push(timedPacket(
+            MediaStreamKind::Video, MediaSourceClockReadiness::Locked, 8,
+            2'000, 3'600, AVRational{1, 90'000})));
+        assert(harness.runtime->process(harness.execution));
+        assert(harness.output()->size() == 0);
+        assert(harness.packetInput()->size() == 0);
+        assert(harness.packetInput()->push(timedPacket(
+            MediaStreamKind::Video, MediaSourceClockReadiness::Locked, 8,
+            3'000, 3'600, AVRational{1, 90'000})));
+        const auto bounded = harness.runtime->process(harness.execution);
+        assert(bounded &&
+               bounded.value().state == MediaNodeProcessState::Waiting);
+        assert(harness.packetInput()->size() == 1);
+    }
+}
+
+void gateKeepsMalformedAndUnplannedEvidenceTerminal()
+{
+    {
+        GateHarness harness;
+        assert(harness.clockInput()->push(
+            makeMediaBufferRef<MediaSourceClockStateBuffer>(
+                MediaSourceClockReadiness::Locked, 7, false)));
+        assert(harness.runtime->process(harness.execution));
+        assert(harness.clockInput()->push(
+            makeMediaBufferRef<MediaSourceClockStateBuffer>(
+                MediaSourceClockReadiness::Acquiring, 8, false)));
+        assert(!harness.runtime->process(harness.execution));
+    }
+    for (const auto generation : {std::uint64_t{0}, std::uint64_t{6}}) {
+        GateHarness harness;
+        assert(harness.clockInput()->push(
+            makeMediaBufferRef<MediaSourceClockStateBuffer>(
+                MediaSourceClockReadiness::Locked, 7, false)));
+        assert(harness.runtime->process(harness.execution));
+        assert(harness.clockInput()->push(
+            makeMediaBufferRef<MediaSourceClockStateBuffer>(
+                MediaSourceClockReadiness::Locked, generation, false)));
+        assert(!harness.runtime->process(harness.execution));
+    }
+    {
+        GateHarness harness;
+        assert(harness.clockInput()->push(
+            makeMediaBufferRef<MediaSourceClockStateBuffer>(
+                MediaSourceClockReadiness::Locked, 7, false)));
+        assert(harness.runtime->process(harness.execution));
+        assert(harness.clockInput()->push(
+            makeMediaBufferRef<MediaSourceClockStateBuffer>(
+                MediaSourceClockReadiness::Locked, 7, true)));
+        assert(!harness.runtime->process(harness.execution));
+        assert(!harness.syncGroup.group->reacquisitionRequest());
+    }
 }
 
 void gateRetainsEarlyPacketUntilMatchingClockLock()
@@ -637,9 +849,9 @@ void canonicalInputPropagatesExplicitAbortAndFailsClosedOnMissingTerminal()
 void nodeKindFactoryAndDiagnosticsAreComplete()
 {
     MediaGraph graph;
-    const auto node = graph.addNode(MediaNodeKind::InitialLockedPacketGate, "gate");
-    assert(MediaGraphDump::toText(graph).find("InitialLockedPacketGate") != std::string::npos);
-    assert(MediaRuntimeNodeFactory::supported(MediaNodeKind::InitialLockedPacketGate));
+    const auto node = graph.addNode(MediaNodeKind::LockedPacketGate, "gate");
+    assert(MediaGraphDump::toText(graph).find("LockedPacketGate") != std::string::npos);
+    assert(MediaRuntimeNodeFactory::supported(MediaNodeKind::LockedPacketGate));
     const auto* model = graph.findNode(node);
     assert(model);
     auto runtime = MediaRuntimeNodeFactory::create(*model);
@@ -653,6 +865,9 @@ int main()
     initialClockAcquisitionDeadlineIsOneShotAndExact();
     typedClockStateIsImmutableAndDiagnostic();
     gateRequiresLockedClockBeforeLockedPackets();
+    gateWithholdsOnePlannedReacquisitionAndClassifiesGenerations();
+    gateDropsOldPacketsAndRetainsOnlyThePlannedNextGeneration();
+    gateKeepsMalformedAndUnplannedEvidenceTerminal();
     gateRetainsEarlyPacketUntilMatchingClockLock();
     gateRejectsPacketsBeforeLockAndInvalidEvidence();
     gateDeadlinePreflightPrecedesAllQueuedEvidence();

@@ -1984,8 +1984,8 @@ void testSynchronizedRtpGraphAssemblesProtocolNeutralInputSegment(
                     "realtime.audio.encode.encode", "codec",
                     "realtime.av_sync.rtp_output.audio.sender", "codec") !=
                     nullptr);
-    EXPECT_FALSE(ctx, videoBinder->options.has("initial_locked_gate.generation"));
-    EXPECT_FALSE(ctx, audioBinder->options.has("initial_locked_gate.generation"));
+    EXPECT_FALSE(ctx, videoBinder->options.has("locked_packet_gate.generation"));
+    EXPECT_FALSE(ctx, audioBinder->options.has("locked_packet_gate.generation"));
 }
 
 void testScheduledRtpRequiresAuthoritativeAnnexBEncoderLayout(TestContext& ctx)
@@ -2123,8 +2123,8 @@ void testSynchronizedMpegTsSegmentUsesSharedProtocolNeutralStartupChain(
         return;
     }
     EXPECT_EQ(ctx, sourceClock->kind, MediaNodeKind::SourceClockStateFanout);
-    EXPECT_EQ(ctx, videoGate->kind, MediaNodeKind::InitialLockedPacketGate);
-    EXPECT_EQ(ctx, audioGate->kind, MediaNodeKind::InitialLockedPacketGate);
+    EXPECT_EQ(ctx, videoGate->kind, MediaNodeKind::LockedPacketGate);
+    EXPECT_EQ(ctx, audioGate->kind, MediaNodeKind::LockedPacketGate);
     EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::RtpClockSnapshotFanout),
               static_cast<std::size_t>(0));
     EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::RtpPacketClockBinder),
@@ -2164,12 +2164,12 @@ void testSynchronizedMpegTsSegmentUsesSharedProtocolNeutralStartupChain(
     expectEdge("test.ts.demux", "audio",
                "test.ts.av_sync.audio.protocol_binder", "packet",
                packetCapacity);
-    EXPECT_EQ(ctx, videoGate->options.value("initial_locked_gate.sync_group"),
+    EXPECT_EQ(ctx, videoGate->options.value("locked_packet_gate.sync_group"),
               outer.avSyncRuntime->groupKey.value());
-    EXPECT_EQ(ctx, audioGate->options.value("initial_locked_gate.sync_group"),
+    EXPECT_EQ(ctx, audioGate->options.value("locked_packet_gate.sync_group"),
               outer.avSyncRuntime->groupKey.value());
-    EXPECT_FALSE(ctx, videoGate->options.has("initial_locked_gate.generation"));
-    EXPECT_FALSE(ctx, audioGate->options.has("initial_locked_gate.generation"));
+    EXPECT_FALSE(ctx, videoGate->options.has("locked_packet_gate.generation"));
+    EXPECT_FALSE(ctx, audioGate->options.has("locked_packet_gate.generation"));
     EXPECT_EQ(ctx, segment.value().releasedVideo.node, extractor->id);
     EXPECT_EQ(ctx, segment.value().releasedVideo.port, std::string("video"));
     EXPECT_EQ(ctx, segment.value().releasedAudio.node, extractor->id);

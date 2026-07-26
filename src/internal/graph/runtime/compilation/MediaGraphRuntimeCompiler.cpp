@@ -76,7 +76,8 @@ bool isLegacyProductionAvSyncAuthority(MediaNodeKind kind) noexcept
     constexpr std::string_view SequencerGroupKey =
         "activated_startup_release_sequencer.sync_group";
     constexpr std::string_view RtpBinderGroupKey = "rtp_clock_binder.sync_group";
-    constexpr std::string_view InitialGateGroupKey = "initial_locked_gate.sync_group";
+    constexpr std::string_view LockedPacketGateGroupKey =
+        "locked_packet_gate.sync_group";
     constexpr std::string_view CoordinatorGroupKey = "av_startup.sync_group";
     constexpr std::string_view AudioDriftControllerGroupKey =
         "audio_drift_controller.sync_group";
@@ -155,9 +156,9 @@ bool isLegacyProductionAvSyncAuthority(MediaNodeKind kind) noexcept
             const bool rtpBinderConsumer =
                 node.kind == MediaNodeKind::RtpPacketClockBinder &&
                 key == RtpBinderGroupKey;
-            const bool initialGateConsumer =
-                node.kind == MediaNodeKind::InitialLockedPacketGate &&
-                key == InitialGateGroupKey;
+            const bool lockedPacketGateConsumer =
+                node.kind == MediaNodeKind::LockedPacketGate &&
+                key == LockedPacketGateGroupKey;
             const bool coordinatorConsumer =
                 node.kind == MediaNodeKind::AvStartupCoordinator &&
                 key == CoordinatorGroupKey;
@@ -175,7 +176,7 @@ bool isLegacyProductionAvSyncAuthority(MediaNodeKind kind) noexcept
                 key == ProjectMpegTsPlanGroupKey;
             if (!schedulerConsumer && !binderConsumer &&
                 !startupClockConsumer && !sequencerConsumer &&
-                !rtpBinderConsumer && !initialGateConsumer &&
+                !rtpBinderConsumer && !lockedPacketGateConsumer &&
                 !coordinatorConsumer && !audioDriftControllerConsumer &&
                 !scheduledRtpSenderConsumer &&
                 !scheduledTsAdapterConsumer &&

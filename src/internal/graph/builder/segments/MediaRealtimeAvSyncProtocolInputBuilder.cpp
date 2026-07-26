@@ -167,11 +167,13 @@ using Support = MediaRealtimeAvSyncInputGraphSupport;
     const MediaRealtimeAvSyncRuntimePlan& plan)
 {
     auto videoResult = Support::addNode(
-        graph, MediaNodeKind::InitialLockedPacketGate,
-        options.prefix + ".video.protocol_binder", "MPEG-TS video lock gate");
+        graph, MediaNodeKind::LockedPacketGate,
+        options.prefix + ".video.protocol_binder",
+        "MPEG-TS video locked-packet gate");
     auto audioResult = Support::addNode(
-        graph, MediaNodeKind::InitialLockedPacketGate,
-        options.prefix + ".audio.protocol_binder", "MPEG-TS audio lock gate");
+        graph, MediaNodeKind::LockedPacketGate,
+        options.prefix + ".audio.protocol_binder",
+        "MPEG-TS audio locked-packet gate");
     if (!videoResult || !audioResult) {
         return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::
             failure(!videoResult ? videoResult.error() : audioResult.error());
@@ -202,7 +204,7 @@ using Support = MediaRealtimeAvSyncInputGraphSupport;
                 failure(status.error());
         }
         if (auto status = MediaRealtimeAvSyncNodeConfigurator::
-                configureInitialLockedPacketGate(graph, node, stream, plan);
+                configureLockedPacketGate(graph, node, stream, plan);
             !status) {
             return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::
                 failure(status.error());
@@ -211,13 +213,13 @@ using Support = MediaRealtimeAvSyncInputGraphSupport;
     const auto& packet = plan.edgePolicies.synchronizedPacket;
     if (auto status = Support::connect(
             graph, options.sources.videoPacket, video, "packet",
-            "MPEG-TS video -> lock gate", packet); !status) {
+            "MPEG-TS video -> locked-packet gate", packet); !status) {
         return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::
             failure(status.error());
     }
     if (auto status = Support::connect(
             graph, options.sources.audioPacket, audio, "packet",
-            "MPEG-TS audio -> lock gate", packet); !status) {
+            "MPEG-TS audio -> locked-packet gate", packet); !status) {
         return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::
             failure(status.error());
     }

@@ -69,7 +69,7 @@ MediaRealtimeAvSyncNodeConfigurator::configureRtpPacketClockBinder(
 }
 
 ::media::Result<void>
-MediaRealtimeAvSyncNodeConfigurator::configureInitialLockedPacketGate(
+MediaRealtimeAvSyncNodeConfigurator::configureLockedPacketGate(
     MediaGraph& graph,
     MediaNodeId node,
     MediaStreamKind stream,
@@ -80,15 +80,15 @@ MediaRealtimeAvSyncNodeConfigurator::configureInitialLockedPacketGate(
         ? plan.assembly.video.acquiringTimeout
         : plan.assembly.audio.acquiringTimeout;
     if (auto status = setOption(
-            graph, node, "initial_locked_gate.stream",
+            graph, node, "locked_packet_gate.stream",
             isVideo ? "video" : "audio"); !status) return status;
     if (auto status = setOption(
-            graph, node, "initial_locked_gate.acquiring_timeout_ns",
+            graph, node, "locked_packet_gate.acquiring_timeout_ns",
             std::to_string(acquiringTimeout.nanoseconds())); !status) {
         return status;
     }
     return setOption(
-        graph, node, "initial_locked_gate.sync_group",
+        graph, node, "locked_packet_gate.sync_group",
         plan.groupKey.value());
 }
 
