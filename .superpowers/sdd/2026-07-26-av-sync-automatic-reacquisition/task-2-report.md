@@ -122,3 +122,59 @@ No production runtime executable or long-duration test was started.
 - The MPEG-TS participant boundary is exposed by the project plan source in
   this task. Sharing that state with the scheduled TS adapter belongs with the
   protocol rollover work, so no duplicate planned identity was invented here.
+
+## Continuation: Runtime Readiness Lifecycle
+
+The post-commit review found that an A/V compile still reported `Compiled`
+before default runtime registration had sealed the planner-exact participant
+set. The continuation appends `DefaultRegistrationPending` after all existing
+runtime states and applies this lifecycle:
+
+- only an executable with an A/V sync binding compiles to
+  `DefaultRegistrationPending`;
+- `run()` and `startThreaded()` reject that state;
+- successful default registration transitions it to `Compiled`;
+- failed default registration preserves the original exact-assembly error,
+  performs runtime abort cleanup, and transitions to `Aborted`;
+- non-A/V graphs and custom runtime-node registration retain their existing
+  direct-to-`Compiled` lifecycle.
+
+The existing threaded cleanup fixture intentionally bypassed default A/V
+assembly. It now compiles a non-A/V single-node graph, registers its custom
+runtime node unchanged, and registers a real sync group directly in the
+execution context so stop, abort, and reset still verify group cleanup without
+starting unrelated production media nodes.
+
+### Continuation RED
+
+The first continuation build linked both targets. The participant-assembly
+test exited `0`, while `media_transcode_runtime_tests.exe` exited `1` with 14
+expectation failures in the cleanup fixture. Starting the newly registered
+production A/V nodes without media input failed during threaded startup. This
+confirmed that the cleanup fixture, not the exact participant boundary, needed
+to be isolated from default production assembly.
+
+### Continuation GREEN
+
+Build command:
+
+```powershell
+cmd /d /s /c '"D:\VisualStudio2026\VC\Auxiliary\Build\vcvars64.bat" >nul && cmake --build out\build\x64-debug --clean-first --target media_transcode_av_reacquisition_runtime_assembly_tests media_transcode_runtime_tests'
+```
+
+Before each compilation, `/showIncludes` was removed from
+`out/build/x64-debug/CMakeFiles/rules.ninja` and its absence was verified.
+
+Test commands and results:
+
+```powershell
+out/build/x64-debug/media_transcode_av_reacquisition_runtime_assembly_tests.exe
+# exit 0
+
+out/build/x64-debug/media_transcode_runtime_tests.exe
+# exit 0; event runtime tests passed
+```
+
+The missing-target test additionally verifies that the returned error remains
+`InvalidArgument` with the exact participant-seal message after abort cleanup.
+No long-running or production media test was executed.

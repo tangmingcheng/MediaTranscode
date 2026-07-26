@@ -313,6 +313,8 @@ bool isLegacyProductionAvSyncAuthority(MediaNodeKind kind) noexcept
     MediaGraphRuntimeState& state)
 {
     mediaGraphDiagnosticLog(context.diagnosticsEnabled(), MediaGraphDiagnosticPhase::RuntimeLifecycle, "compile.begin");
+    const bool requiresDefaultRegistration =
+        executable.avSyncBinding.has_value();
     if (auto valid = validateBindings(executable); !valid) {
         mediaGraphDiagnosticLog(
             context.diagnosticsEnabled(),
@@ -377,8 +379,15 @@ bool isLegacyProductionAvSyncAuthority(MediaNodeKind kind) noexcept
     videoPreparationState = std::move(preparedVideoPreparation);
     acceptanceCollector.reset();
     queueHighWatermark = 0;
-    state = MediaGraphRuntimeState::Compiled;
-    mediaGraphDiagnosticLog(context.diagnosticsEnabled(), MediaGraphDiagnosticPhase::RuntimeLifecycle, "compile.done state=Compiled");
+    state = requiresDefaultRegistration
+        ? MediaGraphRuntimeState::DefaultRegistrationPending
+        : MediaGraphRuntimeState::Compiled;
+    mediaGraphDiagnosticLog(
+        context.diagnosticsEnabled(),
+        MediaGraphDiagnosticPhase::RuntimeLifecycle,
+        requiresDefaultRegistration
+            ? "compile.done state=DefaultRegistrationPending"
+            : "compile.done state=Compiled");
     return ::media::Status::success();
 }
 

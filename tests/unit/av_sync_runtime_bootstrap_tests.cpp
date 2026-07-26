@@ -179,6 +179,15 @@ MediaAvGenerationTransitionPlan completeTransitionPlan(
         adapter, ms(1'000), ms(500));
 }
 
+MediaAvGenerationTransitionPlan schedulerOnlyTransitionPlan()
+{
+    return MediaAvGenerationTransitionPlan{
+        {{MediaAvGenerationParticipant::Scheduler,
+          {"scheduler_generation_state"}}},
+        ms(1'000),
+        ms(500)};
+}
+
 MediaGraph graphWithInvalidGroupReference(MediaNodeKind kind,
                                           std::string key)
 {
@@ -199,6 +208,19 @@ MediaRealtimeExecutableGraph executableWith(
         MediaAvSyncGroupKey(std::move(bindingGroup)), std::move(plan),
         completeTransitionPlan(),
         MediaAvSyncBindingAssemblyMode::ProductionProtocolOutput});
+    return executable;
+}
+
+MediaRealtimeExecutableGraph componentExecutableWith(
+    MediaAvGenerationTransitionPlan transition)
+{
+    MediaRealtimeExecutableGraph executable;
+    executable.graph = graphWithGroupReference(
+        std::string("realtime.av"));
+    executable.avSyncBinding.emplace(MediaAvSyncRuntimeBinding{
+        MediaAvSyncGroupKey("realtime.av"), completeRtpPlan(),
+        std::move(transition),
+        MediaAvSyncBindingAssemblyMode::ComponentCore});
     return executable;
 }
 
@@ -625,15 +647,34 @@ void expectThreadedLifecycleCleanup(TestContext& ctx,
                                     ThreadedLifecycle lifecycle)
 {
     MediaGraphRuntime runtime;
-    EXPECT_TRUE(ctx, runtime.compile(executableWith(completeRtpPlan())));
+    MediaGraph graph;
+    const auto lifecycleTarget = graph.addNode(
+        MediaNodeKind::Finalize, "lifecycle-target");
+    EXPECT_TRUE(ctx, runtime.compile(std::move(graph)));
+    EXPECT_EQ(ctx, runtime.state(), MediaGraphRuntimeState::Compiled);
+
+    auto transitionService = MediaAvEpochTransitionService::create(
+        schedulerOnlyTransitionPlan());
+    EXPECT_TRUE(ctx, transitionService);
+    if (!transitionService) return;
+    DeterministicClockSource clockSource;
+    auto clocks = clockSource.capture(true);
+    EXPECT_TRUE(ctx, clocks);
+    if (!clocks) return;
+    const MediaAvSyncGroupKey groupKey("realtime.av");
+    EXPECT_TRUE(ctx, runtime.context().registerAvSyncGroup(
+                         groupKey, completeRtpPlan(),
+                         clocks.value().masterClock,
+                         clocks.value().sharedNtpEpoch,
+                         transitionService.value()));
     auto group = runtime.context().findAvSyncGroup(
-        MediaAvSyncGroupKey("realtime.av"));
+        groupKey);
     EXPECT_TRUE(ctx, group != nullptr);
     auto nodeState = std::make_shared<DeadlineNodeState>();
     EXPECT_TRUE(ctx, runtime.registerRuntimeNode(
                          std::make_unique<DeadlineRuntimeNode>(
-                             runtime.graph()->nodes().front().id,
-                             MediaAvSyncGroupKey("realtime.av"),
+                             lifecycleTarget,
+                             groupKey,
                              nodeState)));
     EXPECT_TRUE(ctx, runtime.startThreaded());
     EXPECT_TRUE(ctx, waitForDeadlineWait(runtime, *nodeState));
@@ -655,8 +696,7 @@ void expectThreadedLifecycleCleanup(TestContext& ctx,
               lifecycle != ThreadedLifecycle::Stop);
     EXPECT_TRUE(ctx, group && group->lifecycleState() ==
         MediaAvSyncGroupRuntime::LifecycleState::Aborted);
-    EXPECT_TRUE(ctx, runtime.context().findAvSyncGroup(
-        MediaAvSyncGroupKey("realtime.av")) == nullptr);
+    EXPECT_TRUE(ctx, runtime.context().findAvSyncGroup(groupKey) == nullptr);
 }
 
 void testRuntimeRollbackAndLifecycleCleanup(TestContext& ctx)
@@ -693,6 +733,56 @@ void testRuntimeRollbackAndLifecycleCleanup(TestContext& ctx)
         MediaAvSyncGroupKey("realtime.av")) == nullptr);
 
     expectThreadedLifecycleCleanup(ctx, ThreadedLifecycle::Stop);
+}
+
+void testDefaultRegistrationGatesAvSyncRuntimeReadiness(TestContext& ctx)
+{
+    MediaGraphRuntime complete;
+    EXPECT_TRUE(ctx, complete.compile(componentExecutableWith(
+                         schedulerOnlyTransitionPlan())));
+    EXPECT_EQ(ctx, complete.state(),
+              MediaGraphRuntimeState::DefaultRegistrationPending);
+    EXPECT_FALSE(ctx, complete.compiled());
+    EXPECT_FALSE(ctx, complete.run());
+    EXPECT_FALSE(ctx, complete.startThreaded());
+    EXPECT_EQ(ctx, complete.state(),
+              MediaGraphRuntimeState::DefaultRegistrationPending);
+    EXPECT_TRUE(ctx, complete.registerDefaultRuntimeNodes());
+    EXPECT_EQ(ctx, complete.state(), MediaGraphRuntimeState::Compiled);
+    EXPECT_TRUE(ctx, complete.compiled());
+
+    auto missingPlan = schedulerOnlyTransitionPlan();
+    missingPlan.participants.front().requiredChildren.push_back(
+        "missing_scheduler_generation_state");
+    MediaGraphRuntime missing;
+    EXPECT_TRUE(ctx, missing.compile(componentExecutableWith(
+                         std::move(missingPlan))));
+    EXPECT_EQ(ctx, missing.state(),
+              MediaGraphRuntimeState::DefaultRegistrationPending);
+    EXPECT_FALSE(ctx, missing.compiled());
+    EXPECT_FALSE(ctx, missing.run());
+    EXPECT_FALSE(ctx, missing.startThreaded());
+    auto group = missing.context().findAvSyncGroup(
+        MediaAvSyncGroupKey("realtime.av"));
+    EXPECT_TRUE(ctx, group != nullptr);
+    const auto registered = missing.registerDefaultRuntimeNodes();
+    EXPECT_FALSE(ctx, registered);
+    if (!registered) {
+        EXPECT_EQ(ctx, registered.error().code,
+                  ::media::ErrorCode::InvalidArgument);
+        EXPECT_EQ(
+            ctx, registered.error().message,
+            std::string(
+                "Generation participant can seal exactly once with its complete child set"));
+    }
+    EXPECT_EQ(ctx, missing.state(), MediaGraphRuntimeState::Aborted);
+    EXPECT_FALSE(ctx, missing.compiled());
+    EXPECT_FALSE(ctx, missing.run());
+    EXPECT_FALSE(ctx, missing.startThreaded());
+    EXPECT_TRUE(ctx, group && group->lifecycleState() ==
+                         MediaAvSyncGroupRuntime::LifecycleState::Aborted);
+    EXPECT_TRUE(ctx, missing.context().findAvSyncGroup(
+                         MediaAvSyncGroupKey("realtime.av")) == nullptr);
 }
 
 void testVideoPreparationStateEnforcesStrictTransitions(TestContext& ctx)
@@ -847,6 +937,7 @@ void runAvSyncRuntimeBootstrapTests(
     testBootstrapCapturesOneClockAndOneRtpEpoch(ctx);
     testTsClockCaptureDoesNotCreateNtpEpoch(ctx);
     testRuntimeRollbackAndLifecycleCleanup(ctx);
+    testDefaultRegistrationGatesAvSyncRuntimeReadiness(ctx);
     testVideoPreparationStateEnforcesStrictTransitions(ctx);
     testVideoPreparationCapabilitiesShareOneStateAndCancelTerminally(ctx);
     testVideoPreparationStateNotifiesWaitingPeersAfterUnlock(ctx);
