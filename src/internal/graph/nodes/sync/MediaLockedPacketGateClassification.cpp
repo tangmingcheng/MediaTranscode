@@ -47,8 +47,12 @@ classifyLockedPacketGateGeneration(
             reacquisition.transition->nextGeneration) {
             return ::media::Result<
                 MediaLockedPacketGateDisposition>::success(
-                MediaLockedPacketGateDisposition::
-                    WithholdForReacquisition);
+                reacquisition.phase ==
+                        MediaAvReacquisitionPhase::Purging
+                    ? MediaLockedPacketGateDisposition::
+                          WithholdForReacquisition
+                    : MediaLockedPacketGateDisposition::
+                          PassToReacquisition);
         }
         return invalidClassification(
             "Locked packet gate rejects an unplanned transition generation");

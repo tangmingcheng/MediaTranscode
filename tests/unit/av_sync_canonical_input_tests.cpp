@@ -351,7 +351,11 @@ void gateClassificationExposesExactGenerationDispositions()
         MediaAvReacquisitionPhase::Inactive,
         std::nullopt,
         std::nullopt};
-    const MediaAvReacquisitionSnapshot transition{
+    const MediaAvReacquisitionSnapshot purging{
+        MediaAvReacquisitionPhase::Purging,
+        MediaAvGenerationPurge{7, 8, 1},
+        MediaAvReacquisitionReason::HardDiscontinuity};
+    const MediaAvReacquisitionSnapshot acquiring{
         MediaAvReacquisitionPhase::Acquiring,
         MediaAvGenerationPurge{7, 8, 1},
         MediaAvReacquisitionReason::HardDiscontinuity};
@@ -361,20 +365,25 @@ void gateClassificationExposesExactGenerationDispositions()
     assert(pass);
     assert(pass.value() == MediaLockedPacketGateDisposition::Pass);
     const auto old = classifyLockedPacketGateGeneration(
-        transition, activeEpoch, 7);
+        acquiring, activeEpoch, 7);
     assert(old);
     assert(old.value() ==
            MediaLockedPacketGateDisposition::DropOldGeneration);
+    const auto withheld = classifyLockedPacketGateGeneration(
+        purging, activeEpoch, 8);
+    assert(withheld);
+    assert(withheld.value() ==
+           MediaLockedPacketGateDisposition::WithholdForReacquisition);
     const auto next = classifyLockedPacketGateGeneration(
-        transition, activeEpoch, 8);
+        acquiring, activeEpoch, 8);
     assert(next);
     assert(next.value() ==
-           MediaLockedPacketGateDisposition::WithholdForReacquisition);
+           MediaLockedPacketGateDisposition::PassToReacquisition);
     assert(!classifyLockedPacketGateGeneration(
-        transition, activeEpoch, 9));
+        acquiring, activeEpoch, 9));
 }
 
-void lateSiblingGateWithholdsThePlannedNextGeneration()
+void lateSiblingGatePassesThePlannedNextGenerationToAcquisition()
 {
     GateHarness harness;
     assert(harness.syncGroup.group->requestReacquisition(
@@ -397,13 +406,10 @@ void lateSiblingGateWithholdsThePlannedNextGeneration()
         2'000,
         3'600,
         AVRational{1, 90'000})));
-    const auto withheld = harness.runtime->process(harness.execution);
-    assert(withheld);
-    const auto waiting = harness.runtime->process(harness.execution);
-    assert(waiting &&
-           waiting.value().state == MediaNodeProcessState::Waiting);
+    const auto passed = harness.runtime->process(harness.execution);
+    assert(passed);
     assert(harness.packetInput()->size() == 0);
-    assert(harness.output()->size() == 0);
+    assert(harness.output()->size() == 1);
 }
 
 void gateWithholdsOnePlannedReacquisitionAndClassifiesGenerations()
@@ -463,7 +469,7 @@ void gateWithholdsOnePlannedReacquisitionAndClassifiesGenerations()
     assert(!harness.runtime->process(harness.execution));
 }
 
-void gateDropsOldPacketsAndRetainsOnlyThePlannedNextGeneration()
+void gateDropsOldPacketsAndPassesOnlyThePlannedNextGeneration()
 {
     {
         GateHarness harness;
@@ -496,15 +502,14 @@ void gateDropsOldPacketsAndRetainsOnlyThePlannedNextGeneration()
             MediaStreamKind::Video, MediaSourceClockReadiness::Locked, 8,
             2'000, 3'600, AVRational{1, 90'000})));
         assert(harness.runtime->process(harness.execution));
-        assert(harness.output()->size() == 0);
+        assert(harness.output()->size() == 1);
         assert(harness.packetInput()->size() == 0);
         assert(harness.packetInput()->push(timedPacket(
             MediaStreamKind::Video, MediaSourceClockReadiness::Locked, 8,
             3'000, 3'600, AVRational{1, 90'000})));
-        const auto bounded = harness.runtime->process(harness.execution);
-        assert(bounded &&
-               bounded.value().state == MediaNodeProcessState::Waiting);
-        assert(harness.packetInput()->size() == 1);
+        assert(harness.runtime->process(harness.execution));
+        assert(harness.output()->size() == 2);
+        assert(harness.packetInput()->size() == 0);
     }
 }
 
@@ -942,9 +947,9 @@ int main()
     typedClockStateIsImmutableAndDiagnostic();
     gateRequiresLockedClockBeforeLockedPackets();
     gateClassificationExposesExactGenerationDispositions();
-    lateSiblingGateWithholdsThePlannedNextGeneration();
+    lateSiblingGatePassesThePlannedNextGenerationToAcquisition();
     gateWithholdsOnePlannedReacquisitionAndClassifiesGenerations();
-    gateDropsOldPacketsAndRetainsOnlyThePlannedNextGeneration();
+    gateDropsOldPacketsAndPassesOnlyThePlannedNextGeneration();
     gateKeepsMalformedAndUnplannedEvidenceTerminal();
     gateRetainsEarlyPacketUntilMatchingClockLock();
     gateRejectsPacketsBeforeLockAndInvalidEvidence();

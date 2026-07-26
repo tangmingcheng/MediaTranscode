@@ -6,6 +6,8 @@
 #include "internal/graph/sync/MediaAudioPlaybackOrigin.h"
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
 
+#include <optional>
+
 namespace media::ffmpeg::graph {
 
 class MediaAvStartupEnvelopeBuffer final : public MediaBuffer {
@@ -45,7 +47,8 @@ struct MediaAvReleasedUnit final {
 
 enum class MediaAvStartupReleaseKind : std::uint8_t {
     InitialAtomicRelease = 0,
-    ActiveEpochPassThrough = 1
+    ActiveEpochPassThrough = 1,
+    NextAtomicRelease = 2
 };
 
 class MediaAvStartupReleaseBuffer final : public MediaBuffer {
@@ -58,7 +61,8 @@ public:
         MediaPlaybackEpoch epoch,
         MediaAudioPlaybackOrigin audioOrigin,
         std::vector<MediaAvReleasedUnit> video,
-        std::vector<MediaAvReleasedUnit> audio);
+        std::vector<MediaAvReleasedUnit> audio,
+        std::optional<std::uint64_t> completedTransitionSequence);
 
     MediaBufferType type() const noexcept override;
     const MediaAvSyncGroupKey& groupKey() const noexcept;
@@ -67,6 +71,8 @@ public:
     const MediaAudioPlaybackOrigin& audioOrigin() const noexcept;
     const std::vector<MediaAvReleasedUnit>& video() const noexcept;
     const std::vector<MediaAvReleasedUnit>& audio() const noexcept;
+    const std::optional<std::uint64_t>&
+    completedTransitionSequence() const noexcept;
 
 private:
     MediaAvStartupReleaseBuffer(MediaAvSyncGroupKey groupKey,
@@ -74,13 +80,16 @@ private:
                                 MediaPlaybackEpoch epoch,
                                 MediaAudioPlaybackOrigin audioOrigin,
                                 std::vector<MediaAvReleasedUnit> video,
-                                std::vector<MediaAvReleasedUnit> audio);
+                                std::vector<MediaAvReleasedUnit> audio,
+                                std::optional<std::uint64_t>
+                                    completedTransitionSequence);
     MediaAvSyncGroupKey m_groupKey;
     MediaAvStartupReleaseKind m_releaseKind;
     MediaPlaybackEpoch m_epoch;
     MediaAudioPlaybackOrigin m_audioOrigin;
     std::vector<MediaAvReleasedUnit> m_video;
     std::vector<MediaAvReleasedUnit> m_audio;
+    std::optional<std::uint64_t> m_completedTransitionSequence;
 };
 
 } // namespace media::ffmpeg::graph

@@ -115,8 +115,7 @@ MediaAvSyncPlan completePlan()
 
 MediaAvGenerationTransitionPlan transitionPlan()
 {
-    return MediaAvGenerationTransitionPlanner::plan(
-        MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp,
+    return media_transcode::test::schedulerOnlyComponentTransitionPlan(
         ms(1'000), ms(500));
 }
 
@@ -172,7 +171,8 @@ void testReleasePipelineActivatesInitialOnlyAndRejectsBinderGroupMismatch(
     auto initial = MediaAvStartupReleaseBuffer::create(
         MediaAvSyncGroupKey("binder-group"),
         MediaAvStartupReleaseKind::InitialAtomicRelease,
-        epoch(1), origin(1), {{payload(), 0}}, {{payload(), 0}});
+        epoch(1), origin(1), {{payload(), 0}}, {{payload(), 0}},
+        std::nullopt);
     EXPECT_TRUE(ctx, initial);
     EXPECT_TRUE(ctx, media_transcode::test::activateInitialThroughRelease(
         runtime, fixture.binder, MediaAvSyncGroupKey("binder-group"),
@@ -183,7 +183,7 @@ void testReleasePipelineActivatesInitialOnlyAndRejectsBinderGroupMismatch(
     auto active = MediaAvStartupReleaseBuffer::create(
         MediaAvSyncGroupKey("binder-group"),
         MediaAvStartupReleaseKind::ActiveEpochPassThrough,
-        epoch(1), origin(1), {{payload(), 0}}, {});
+        epoch(1), origin(1), {{payload(), 0}}, {}, std::nullopt);
     EXPECT_TRUE(ctx, active);
     EXPECT_TRUE(ctx, input->push(active.value()));
     EXPECT_TRUE(ctx, binder->process(runtime.context()));
@@ -199,7 +199,7 @@ void testReleasePipelineActivatesInitialOnlyAndRejectsBinderGroupMismatch(
     auto mismatch = MediaAvStartupReleaseBuffer::create(
         MediaAvSyncGroupKey("other-group"),
         MediaAvStartupReleaseKind::ActiveEpochPassThrough,
-        epoch(1), origin(1), {}, {{payload(), 0}});
+        epoch(1), origin(1), {}, {{payload(), 0}}, std::nullopt);
     EXPECT_TRUE(ctx, mismatch);
     EXPECT_TRUE(ctx, input->push(mismatch.value()));
     EXPECT_FALSE(ctx, binder->process(runtime.context()));
@@ -258,7 +258,8 @@ void testCompilerIssuesOneCapabilityToOneSequencer(TestContext& ctx)
     auto release = MediaAvStartupReleaseBuffer::create(
         MediaAvSyncGroupKey("binder-group"),
         MediaAvStartupReleaseKind::InitialAtomicRelease,
-        epoch(1), origin(1), {{payload(), 0}}, {{payload(), 0}});
+        epoch(1), origin(1), {{payload(), 0}}, {{payload(), 0}},
+        std::nullopt);
     EXPECT_TRUE(ctx, release);
     EXPECT_TRUE(ctx, media_transcode::test::activateInitialThroughRelease(
         runtime, fixture.binder, MediaAvSyncGroupKey("binder-group"),

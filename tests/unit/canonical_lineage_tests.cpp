@@ -330,23 +330,24 @@ void testReleaseContractRejectsWrongShape(TestContext& ctx)
     std::vector<MediaAvReleasedUnit> audio{{packet(MediaStreamKind::Audio), 0}};
     auto initial = MediaAvStartupReleaseBuffer::create(
         MediaAvSyncGroupKey("group-a"), MediaAvStartupReleaseKind::InitialAtomicRelease,
-        epoch, origin, video, audio);
+        epoch, origin, video, audio, std::nullopt);
     EXPECT_TRUE(ctx, initial);
     auto missingAudio = MediaAvStartupReleaseBuffer::create(
         MediaAvSyncGroupKey("group-a"), MediaAvStartupReleaseKind::InitialAtomicRelease,
-        epoch, origin, video, {});
+        epoch, origin, video, {}, std::nullopt);
     EXPECT_FALSE(ctx, missingAudio);
     auto activeVideo = MediaAvStartupReleaseBuffer::create(
         MediaAvSyncGroupKey("group-a"), MediaAvStartupReleaseKind::ActiveEpochPassThrough,
-        epoch, origin, video, {});
+        epoch, origin, video, {}, std::nullopt);
     EXPECT_TRUE(ctx, activeVideo);
     auto emptyActive = MediaAvStartupReleaseBuffer::create(
         MediaAvSyncGroupKey("group-a"), MediaAvStartupReleaseKind::ActiveEpochPassThrough,
-        epoch, origin, {}, {});
+        epoch, origin, {}, {}, std::nullopt);
     EXPECT_FALSE(ctx, emptyActive);
     auto unknown = MediaAvStartupReleaseBuffer::create(
         MediaAvSyncGroupKey("group-a"),
-        static_cast<MediaAvStartupReleaseKind>(255), epoch, origin, video, audio);
+        static_cast<MediaAvStartupReleaseKind>(255), epoch, origin, video,
+        audio, std::nullopt);
     EXPECT_FALSE(ctx, unknown);
     EXPECT_FALSE(ctx, MediaAvStartupReleaseBuffer::validateReleaseKind(
                           static_cast<MediaAvStartupReleaseKind>(255)));
@@ -558,7 +559,7 @@ void testExtractorPreflightsCompoundReleaseWithoutPartialCommit(TestContext& ctx
     auto release = MediaAvStartupReleaseBuffer::create(
         MediaAvSyncGroupKey("group-a"), MediaAvStartupReleaseKind::InitialAtomicRelease,
         epoch, origin, {{packet(MediaStreamKind::Video), 0}},
-        {{canonicalAudio.value(), 0}});
+        {{canonicalAudio.value(), 0}}, std::nullopt);
     EXPECT_TRUE(ctx, release);
     if (!release) return;
     EXPECT_TRUE(ctx, execution.findInputChannel(extractor, "in")->push(
@@ -620,7 +621,7 @@ void testExtractorPreservesAudioTrimAndIdentity(TestContext& ctx)
     auto release = MediaAvStartupReleaseBuffer::create(
         MediaAvSyncGroupKey("group-a"),
         MediaAvStartupReleaseKind::ActiveEpochPassThrough,
-        epoch, origin, {}, {{canonical.value(), 321}});
+        epoch, origin, {}, {{canonical.value(), 321}}, std::nullopt);
     EXPECT_TRUE(ctx, release);
     if (!release) return;
     EXPECT_TRUE(ctx, execution.findInputChannel(extractor, "in")->push(release.value()));

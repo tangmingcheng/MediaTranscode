@@ -12,7 +12,8 @@ struct MediaAvReacquisitionSnapshot;
 enum class MediaLockedPacketGateDisposition : std::uint8_t {
     Pass = 0,
     WithholdForReacquisition = 1,
-    DropOldGeneration = 2
+    DropOldGeneration = 2,
+    PassToReacquisition = 3
 };
 
 ::media::Result<MediaLockedPacketGateDisposition>

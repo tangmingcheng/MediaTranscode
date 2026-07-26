@@ -1222,6 +1222,37 @@ void testNodePublishesOneImmutablePairedEnvelope(TestContext& ctx)
     EXPECT_TRUE(ctx, runtime.value()->stop(execution));
 }
 
+void testNodeDropsOldEnvelopeAfterAcknowledgedGenerationPurge(
+    TestContext& ctx)
+{
+    StartupNodeHarness harness;
+    if (!harness.initialize(ctx)) return;
+    EXPECT_TRUE(ctx, harness.push("audio", audio(1, 0, 200, 9'600), 0));
+    EXPECT_TRUE(ctx, harness.push("video", video(2, 0, true), 1));
+    EXPECT_TRUE(ctx, harness.push("video", video(3, 40, false), 2));
+    EXPECT_TRUE(ctx, harness.push("video", video(4, 80, false), 3));
+    MediaChannel* output = harness.execution.findOutputChannel(
+        harness.coordinator, "release");
+    EXPECT_TRUE(ctx, output != nullptr);
+    if (!output) return;
+    for (int index = 0; index < 8 && output->size() == 0; ++index) {
+        EXPECT_TRUE(ctx, harness.runtime->process(harness.execution));
+    }
+    MediaBufferRef initial;
+    EXPECT_TRUE(ctx, output->tryPop(initial));
+    EXPECT_TRUE(ctx, harness.generationState->purge(
+                         MediaAvGenerationPurge{7, 8, 1}));
+
+    EXPECT_TRUE(ctx, harness.push(
+                         "audio", audio(10, 0, 200, 9'600, 8), 4));
+    EXPECT_TRUE(ctx, harness.runtime->process(harness.execution));
+    EXPECT_TRUE(ctx, harness.push(
+                         "video", video(100, 120, false, 7), 5));
+    const auto dropped = harness.runtime->process(harness.execution);
+    EXPECT_TRUE(ctx, dropped);
+    EXPECT_EQ(ctx, output->size(), static_cast<std::size_t>(0));
+}
+
 void testNodeFinishesAfterOneBackpressuredTerminalControl(TestContext& ctx)
 {
     StartupNodeHarness harness;
@@ -1381,6 +1412,7 @@ void runAvStartupCoordinatorTests(TestContext& ctx)
     testNodeFreezesNewIntakeWhileDrainingClockWatermark(ctx);
     testNodeRejectsPerStreamEventTimeRegression(ctx);
     testNodePublishesOneImmutablePairedEnvelope(ctx);
+    testNodeDropsOldEnvelopeAfterAcknowledgedGenerationPurge(ctx);
     testNodeFinishesAfterOneBackpressuredTerminalControl(ctx);
     testNodeTerminalSnapshotCannotBeStarvedByContinuousClock(ctx);
     testNodeFailsClosedWithoutCommonCanonicalEnvelope(ctx);

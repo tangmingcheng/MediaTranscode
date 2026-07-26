@@ -108,7 +108,7 @@ inline bool activateInitialThroughRelease(
         epoch,
         {epoch.generation, epoch.sourceStart, epoch.masterRelease, 0,
          audioSampleRate},
-        {{payload(), 0}}, {{payload(), 0}});
+        {{payload(), 0}}, {{payload(), 0}}, std::nullopt);
     if (!release || !input->push(release.value())) return false;
     const auto processed = binder->process(runtime.context());
     if (!processed ||

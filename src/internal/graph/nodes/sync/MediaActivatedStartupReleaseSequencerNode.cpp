@@ -8,6 +8,7 @@
 #include "internal/graph/runtime/channel/MediaAtomicOutputTransaction.h"
 #include "internal/graph/runtime/channel/MediaRequiredInputReader.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
+#include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
 
 #include <array>
 #include <span>
@@ -151,6 +152,8 @@ MediaActivatedStartupReleaseSequencerNode::process(
     }
     MediaBufferRef eventForCommit = m_activatedEvent;
     bool activateInitial = false;
+    bool activateNext = false;
+    std::shared_ptr<MediaAvSyncGroupRuntime> activationGroup;
     switch (release->releaseKind()) {
     case MediaAvStartupReleaseKind::InitialAtomicRelease: {
         if (m_activatedEvent) {
@@ -251,13 +254,61 @@ MediaActivatedStartupReleaseSequencerNode::process(
         }
         break;
     }
+    case MediaAvStartupReleaseKind::NextAtomicRelease: {
+        if (!release->completedTransitionSequence()) {
+            return failTerminal(::media::ErrorInfo::invalidArgument(
+                "Activation release sequencer requires a completed transition sequence"));
+        }
+        activationGroup = context.findAvSyncGroup(m_groupKey);
+        const auto reacquisition = activationGroup
+            ? activationGroup->reacquisitionSnapshot()
+            : MediaAvReacquisitionSnapshot{
+                  MediaAvReacquisitionPhase::Inactive,
+                  std::nullopt,
+                  std::nullopt};
+        const auto transition = activationGroup
+            ? activationGroup->epochTransitionSnapshot()
+            : MediaAvEpochTransitionSnapshot{
+                  MediaAvGenerationReadiness::Acquiring,
+                  std::nullopt,
+                  std::nullopt,
+                  false,
+                  true};
+        if (!activationGroup ||
+            reacquisition.phase !=
+                MediaAvReacquisitionPhase::ReadyForActivation ||
+            !reacquisition.transition ||
+            reacquisition.transition->nextGeneration !=
+                release->epoch().generation ||
+            reacquisition.transition->transitionSequence !=
+                *release->completedTransitionSequence() ||
+            transition.poisoned ||
+            transition.readiness !=
+                MediaAvGenerationReadiness::Acquiring ||
+            transition.outputPermitted) {
+            if (activationGroup) activationGroup->markAborted();
+            return failTerminal(::media::ErrorInfo::invalidArgument(
+                "Activation release sequencer rejects a mismatched next-epoch transition"));
+        }
+        auto event = MediaPlaybackEpochActivatedBuffer::create(
+            m_groupKey, release->epoch(), release->audioOrigin());
+        if (!event) {
+            activationGroup->markAborted();
+            return failTerminal(event.error());
+        }
+        eventForCommit = std::move(event).value();
+        activateNext = true;
+        break;
+    }
     }
 
-    const MediaBufferRef& bound = m_preparationCapability
+    const MediaBufferRef& bound = m_reanchoredTransaction
         ? m_reanchoredTransaction : transaction->payload();
     std::vector<MediaAtomicOutputBatch> batches;
-    batches.reserve((activateInitial ? eventChannels.value().size() : 0) + 1);
-    if (activateInitial) {
+    const bool publishesActivation = activateInitial || activateNext;
+    batches.reserve(
+        (publishesActivation ? eventChannels.value().size() : 0) + 1);
+    if (publishesActivation) {
         for (MediaChannel* channel : eventChannels.value()) {
             batches.push_back({channel, std::span(&eventForCommit, 1)});
         }
@@ -287,9 +338,27 @@ MediaActivatedStartupReleaseSequencerNode::process(
             return failTerminal(activated.error());
         }
         m_activatedEvent = eventForCommit;
+    } else if (activateNext) {
+        if (auto activated = m_capability.activateNext(
+                release->epoch(), release->audioOrigin(),
+                *release->completedTransitionSequence()); !activated) {
+            activationGroup->markAborted();
+            return failTerminal(activated.error());
+        }
+        m_activatedEvent = eventForCommit;
     }
-    if (auto committed = atomic.value()->commit(); !committed)
+    if (auto committed = atomic.value()->commit(); !committed) {
+        if (activationGroup) activationGroup->markAborted();
         return failTerminal(committed.error());
+    }
+    if (activateNext) {
+        if (auto activated = activationGroup->markReacquisitionActivated(
+                release->epoch().generation,
+                *release->completedTransitionSequence()); !activated) {
+            activationGroup->markAborted();
+            return failTerminal(activated.error());
+        }
+    }
     m_pendingTransaction.reset();
     m_reanchoredTransaction.reset();
     return ::media::Result<MediaNodeProcessResult>::success(

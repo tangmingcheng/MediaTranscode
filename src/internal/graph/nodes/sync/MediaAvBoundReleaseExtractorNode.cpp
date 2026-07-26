@@ -78,6 +78,7 @@ void MediaAvBoundReleaseExtractorNode::resetState() noexcept
     m_initialOutputReservation.reset();
     m_firstReleaseDiagnosticEmitted = false;
     m_firstCommitDiagnosticEmitted = false;
+    m_activeGeneration.reset();
 }
 
 ::media::Status MediaAvBoundReleaseExtractorNode::stageRelease(
@@ -461,24 +462,33 @@ MediaAvBoundReleaseExtractorNode::processBoundRelease(
             ::media::ErrorInfo::invalidArgument(
                 "A/V bound release extractor bound input requires a release transaction"));
     }
-    const auto snapshot = m_preparationCapability->snapshot();
-    if (snapshot.phase != MediaAvStartupVideoPreparationPhase::ReleaseCommitted ||
-        snapshot.generation != release->epoch().generation) {
-        return ::media::Result<MediaNodeProcessResult>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "A/V bound release extractor rejects mismatched bound release"));
-    }
     std::size_t firstVideoIndex = 0;
     if (release->releaseKind() ==
         MediaAvStartupReleaseKind::InitialAtomicRelease) {
-        if (snapshot.releaseIdentity != transaction->releaseIdentity()) {
+        const auto snapshot = m_preparationCapability->snapshot();
+        if (snapshot.phase !=
+                MediaAvStartupVideoPreparationPhase::ReleaseCommitted ||
+            snapshot.generation != release->epoch().generation ||
+            snapshot.releaseIdentity != transaction->releaseIdentity()) {
             return ::media::Result<MediaNodeProcessResult>::failure(
                 ::media::ErrorInfo::invalidArgument(
                     "A/V bound release extractor rejects mismatched initial release identity"));
         }
+        m_activeGeneration = release->epoch().generation;
         m_pending.reset();
         m_preparationTransaction.reset();
         return processProgress();
+    }
+    if (!m_activeGeneration ||
+        (release->releaseKind() ==
+             MediaAvStartupReleaseKind::ActiveEpochPassThrough &&
+         release->epoch().generation != *m_activeGeneration) ||
+        (release->releaseKind() ==
+             MediaAvStartupReleaseKind::NextAtomicRelease &&
+         release->epoch().generation <= *m_activeGeneration)) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "A/V bound release extractor rejects an unbound playback generation"));
     }
     if (!m_releaseStaged) {
         if (auto status = stageRelease(
@@ -494,11 +504,17 @@ MediaAvBoundReleaseExtractorNode::processBoundRelease(
             : ::media::Result<MediaNodeProcessResult>::failure(
                   committed.error());
     }
+    const auto committedReleaseKind = release->releaseKind();
+    const auto committedGeneration = release->epoch().generation;
     m_pending.reset();
     m_preparationTransaction.reset();
     m_stagedVideo.clear();
     m_stagedAudio.clear();
     m_releaseStaged = false;
+    if (committedReleaseKind ==
+        MediaAvStartupReleaseKind::NextAtomicRelease) {
+        m_activeGeneration = committedGeneration;
+    }
     return processProgress();
 }
 

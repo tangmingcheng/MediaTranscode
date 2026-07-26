@@ -304,8 +304,10 @@ MediaLockedPacketGateNode::acceptClock(const MediaBufferRef& buffer)
     auto disposition =
         classifyLockedGeneration(state->generation());
     if (disposition &&
-        disposition.value() ==
-            MediaLockedPacketGateDisposition::Pass) {
+        (disposition.value() ==
+             MediaLockedPacketGateDisposition::Pass ||
+         disposition.value() ==
+             MediaLockedPacketGateDisposition::PassToReacquisition)) {
         m_lockedGeneration = state->generation();
         m_acquisitionDeadline->clear();
     }
@@ -360,6 +362,7 @@ MediaLockedPacketGateNode::classifyPacket(const MediaBufferRef& buffer)
     }
     switch (disposition.value()) {
     case MediaLockedPacketGateDisposition::Pass:
+    case MediaLockedPacketGateDisposition::PassToReacquisition:
         return emitOutput(context, "packet", buffer);
     case MediaLockedPacketGateDisposition::WithholdForReacquisition:
         return retainPendingPacket(std::move(buffer));

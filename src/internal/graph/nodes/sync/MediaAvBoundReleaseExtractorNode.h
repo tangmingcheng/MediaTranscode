@@ -47,6 +47,7 @@ private:
     std::optional<MediaReservedOutputTransaction> m_initialOutputReservation;
     bool m_firstReleaseDiagnosticEmitted = false;
     bool m_firstCommitDiagnosticEmitted = false;
+    std::optional<std::uint64_t> m_activeGeneration;
     std::optional<MediaAvStartupVideoPreparationCapability>
         m_preparationCapability;
 };
