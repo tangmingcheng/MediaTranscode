@@ -16,6 +16,8 @@
 
 namespace media::ffmpeg::graph {
 
+struct MediaAvReacquisitionCoordinatorTestAccess;
+
 class MediaAvSyncGroupRuntime final {
 public:
     enum class GenerationDisposition { Old, Current, ReacquisitionRequired };
@@ -41,7 +43,7 @@ public:
         std::uint64_t generation);
     ::media::Status requestReacquisition(MediaAvReacquisitionRequest request) noexcept;
     ::media::Status installReacquisitionCoordinator(
-        std::unique_ptr<MediaAvReacquisitionCoordinator> coordinator);
+        std::shared_ptr<MediaAvReacquisitionCoordinator> coordinator);
     MediaAvReacquisitionSnapshot reacquisitionSnapshot() const noexcept;
     ::media::Status markReacquisitionReadyForActivation(
         std::uint64_t generation,
@@ -50,7 +52,7 @@ public:
     reserveReacquisitionActivation(
         std::uint64_t generation,
         std::uint64_t transitionSequence);
-    MediaAvStartupReleaseDisposition classifyStartupRelease(
+    ::media::Result<MediaAvStartupReleaseDisposition> classifyStartupRelease(
         MediaAvStartupReleaseKind kind,
         std::uint64_t generation,
         std::optional<std::uint64_t> transitionSequence) const noexcept;
@@ -67,24 +69,21 @@ public:
         MediaRunningTime canonicalTime) const noexcept;
 
 private:
+    friend struct MediaAvReacquisitionCoordinatorTestAccess;
+
     MediaAvSyncGroupRuntime(MediaAvSyncGroupKey key,
                             MediaAvSyncPlan plan,
                             std::shared_ptr<MediaMasterClock> clock,
                             std::shared_ptr<const MediaSharedNtpEpoch> sharedNtpEpoch,
                             std::shared_ptr<MediaAvEpochTransitionService> transitionService);
     MediaAvReacquisitionCoordinator* reacquisitionCoordinator() const noexcept;
-    MediaAvStartupReleaseDisposition classifyBootstrapRelease(
-        MediaAvStartupReleaseKind kind,
-        std::uint64_t generation,
-        std::optional<std::uint64_t> transitionSequence) const noexcept;
-
     MediaAvSyncGroupKey m_key;
     MediaAvSyncPlan m_plan;
     std::shared_ptr<MediaMasterClock> m_clock;
     std::shared_ptr<const MediaSharedNtpEpoch> m_sharedNtpEpoch;
     std::shared_ptr<MediaAvEpochTransitionService> m_transitionService;
     mutable std::mutex m_epochMutex;
-    std::unique_ptr<MediaAvReacquisitionCoordinator>
+    std::shared_ptr<MediaAvReacquisitionCoordinator>
         m_reacquisitionCoordinator;
     std::optional<MediaAvReacquisitionRequest> m_reacquisitionRequest;
 };

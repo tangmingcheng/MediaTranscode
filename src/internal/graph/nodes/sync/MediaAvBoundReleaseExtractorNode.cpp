@@ -163,11 +163,10 @@ MediaAvBoundReleaseExtractorNode::classifyRelease(
             ::media::ErrorInfo::notInitialized(
                 "A/V bound release extractor requires its planned sync group"));
     }
-    return ::media::Result<MediaAvStartupReleaseDisposition>::success(
-        group->classifyStartupRelease(
-            release.releaseKind(),
-            release.epoch().generation,
-            release.completedTransitionSequence()));
+    return group->classifyStartupRelease(
+        release.releaseKind(),
+        release.epoch().generation,
+        release.completedTransitionSequence());
 }
 
 ::media::Result<MediaAvStartupReleaseDisposition>

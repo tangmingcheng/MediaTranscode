@@ -2,6 +2,8 @@
 
 #include "internal/graph/runtime/buffer/MediaBuffer.h"
 
+#include <new>
+
 namespace media::ffmpeg::graph {
 namespace {
 
@@ -16,6 +18,42 @@ bool overflowPolicyDropsIncoming(const MediaQueuePolicy& policy, const MediaBuff
 }
 
 } // namespace
+
+::media::Result<MediaBlockingQueue::PreparedPush>
+MediaBlockingQueue::preparePush(
+    std::span<const MediaBufferRef> buffers) const
+{
+    PreparedPush prepared;
+    try {
+        for (const auto& buffer : buffers) {
+            if (!buffer) {
+                return ::media::Result<PreparedPush>::failure(
+                    ::media::ErrorInfo::invalidArgument(
+                        "MediaBlockingQueue preparation rejects null buffers"));
+            }
+            prepared.nodes.push_back(buffer);
+        }
+    } catch (const std::bad_alloc&) {
+        return ::media::Result<PreparedPush>::failure(
+            ::media::ErrorInfo::internalError(
+                "MediaBlockingQueue could not allocate prepared output slots"));
+    }
+    return ::media::Result<PreparedPush>::success(std::move(prepared));
+}
+
+void MediaBlockingQueue::publishPreparedLocked(
+    PreparedPush& prepared) noexcept
+{
+    const std::size_t count = prepared.nodes.size();
+    m_queue.splice(m_queue.end(), prepared.nodes);
+    m_metrics.pushed.fetch_add(count, std::memory_order_relaxed);
+    updateSizeMetricsLocked();
+}
+
+void MediaBlockingQueue::notifyPreparedPublished() noexcept
+{
+    m_notEmpty.notify_all();
+}
 
 MediaBlockingQueue::MediaBlockingQueue(MediaQueuePolicy policy)
     : m_policy(std::move(policy))

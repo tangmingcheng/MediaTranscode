@@ -147,7 +147,7 @@ MediaAvSyncGroupRuntime::observeGeneration(std::uint64_t generation)
 }
 
 ::media::Status MediaAvSyncGroupRuntime::installReacquisitionCoordinator(
-    std::unique_ptr<MediaAvReacquisitionCoordinator> coordinator)
+    std::shared_ptr<MediaAvReacquisitionCoordinator> coordinator)
 {
     if (!coordinator) {
         return ::media::Status::failure(
@@ -204,37 +204,23 @@ MediaAvSyncGroupRuntime::reserveReacquisitionActivation(
                   "A/V sync group has no reacquisition coordinator"));
 }
 
-MediaAvStartupReleaseDisposition
+::media::Result<MediaAvStartupReleaseDisposition>
 MediaAvSyncGroupRuntime::classifyStartupRelease(
     MediaAvStartupReleaseKind kind,
     std::uint64_t generation,
     std::optional<std::uint64_t> transitionSequence) const noexcept
 {
     auto* coordinator = reacquisitionCoordinator();
-    if (coordinator) {
-        return coordinator->classifyRelease(
-            kind, generation, transitionSequence);
+    if (!coordinator) {
+        return ::media::Result<
+            MediaAvStartupReleaseDisposition>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "A/V sync group has no planned reacquisition coordinator"));
     }
-    return classifyBootstrapRelease(kind, generation, transitionSequence);
-}
-
-MediaAvStartupReleaseDisposition
-MediaAvSyncGroupRuntime::classifyBootstrapRelease(
-    MediaAvStartupReleaseKind kind,
-    std::uint64_t generation,
-    std::optional<std::uint64_t> transitionSequence) const noexcept
-{
-    const auto active = m_transitionService->snapshot();
-    if (active.poisoned ||
-        active.readiness != MediaAvGenerationReadiness::Locked ||
-        !active.playbackEpoch ||
-        !active.outputPermitted ||
-        generation != active.playbackEpoch->generation ||
-        kind == MediaAvStartupReleaseKind::NextAtomicRelease ||
-        transitionSequence) {
-        return MediaAvStartupReleaseDisposition::Reject;
-    }
-    return MediaAvStartupReleaseDisposition::Publish;
+    return ::media::Result<
+        MediaAvStartupReleaseDisposition>::success(
+        coordinator->classifyRelease(
+            kind, generation, transitionSequence));
 }
 
 ::media::Result<MediaAvStartupReleasePublicationReservation>
@@ -243,24 +229,21 @@ MediaAvSyncGroupRuntime::reserveStartupReleasePublication(
     std::uint64_t generation,
     std::optional<std::uint64_t> transitionSequence)
 {
-    std::unique_lock<std::mutex> groupLock(m_epochMutex);
-    auto* coordinator = m_reacquisitionCoordinator.get();
-    if (coordinator) {
-        groupLock.unlock();
-        return ::media::Result<
-            MediaAvStartupReleasePublicationReservation>::success(
-            coordinator->reserveReleasePublication(
-                kind, generation, transitionSequence));
+    std::shared_ptr<MediaAvReacquisitionCoordinator> coordinator;
+    {
+        std::lock_guard<std::mutex> groupLock(m_epochMutex);
+        coordinator = m_reacquisitionCoordinator;
     }
-    const auto disposition =
-        classifyBootstrapRelease(kind, generation, transitionSequence);
-    if (disposition != MediaAvStartupReleaseDisposition::Publish) {
-        groupLock.unlock();
+    if (!coordinator) {
+        return ::media::Result<
+            MediaAvStartupReleasePublicationReservation>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "A/V sync group has no planned reacquisition coordinator"));
     }
     return ::media::Result<
         MediaAvStartupReleasePublicationReservation>::success(
-        MediaAvStartupReleasePublicationReservation(
-            disposition, std::move(groupLock)));
+        coordinator->reserveReleasePublication(
+            kind, generation, transitionSequence));
 }
 
 std::optional<MediaAvReacquisitionRequest>

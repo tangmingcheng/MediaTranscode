@@ -19,6 +19,7 @@
 #include "internal/graph/sync/startup/MediaAvStartupGenerationState.h"
 #include "internal/graph/sync/MediaAvGenerationParticipantGroup.h"
 #include "internal/graph/sync/MediaAvEpochTransitionService.h"
+#include "internal/graph/sync/MediaAvReacquisitionCoordinator.h"
 #include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
 #include "internal/graph/time/MediaSharedNtpEpoch.h"
 #include "internal/graph/time/MediaCanonicalTimeMapper.h"
@@ -31,6 +32,7 @@ extern "C" {
 #include <chrono>
 #include <limits>
 #include <utility>
+#include <vector>
 
 namespace media::ffmpeg::graph {
 
@@ -61,6 +63,16 @@ public:
     ::media::Result<MediaRunningTime> now() const noexcept override
     {
         return ::media::Result<MediaRunningTime>::success(ns(1'000));
+    }
+};
+
+class ExtractorTestPurgeTarget final
+    : public MediaAvGenerationPurgeTarget {
+public:
+    ::media::Status purge(
+        const MediaAvGenerationPurge&) override
+    {
+        return ::media::Status::success();
     }
 };
 
@@ -108,13 +120,33 @@ bool registerActiveExtractorGroup(
         ns(0), std::chrono::nanoseconds(0));
     EXPECT_TRUE(ctx, ntp);
     if (!ntp) return false;
+    auto clock = std::make_shared<FixedMasterClock>();
     EXPECT_TRUE(ctx, execution.registerAvSyncGroup(
                          key,
                          extractorTestPlan(),
-                         std::make_shared<FixedMasterClock>(),
+                         clock,
                          std::make_shared<const MediaSharedNtpEpoch>(
                              std::move(ntp).value()),
                          transition.value()));
+    auto participant = MediaAvGenerationParticipantGroup::create(
+        {MediaAvGenerationParticipant::Scheduler, {"scheduler"}});
+    EXPECT_TRUE(ctx, participant);
+    if (!participant) return false;
+    auto scheduler = std::make_shared<ExtractorTestPurgeTarget>();
+    EXPECT_TRUE(ctx, participant.value().registerChild(
+                         "scheduler", scheduler));
+    EXPECT_TRUE(ctx, participant.value().seal());
+    std::vector<MediaAvGenerationParticipantGroup> participants;
+    participants.push_back(std::move(participant).value());
+    auto coordinator = MediaAvReacquisitionCoordinator::create(
+        transition.value(), clock, std::move(participants));
+    EXPECT_TRUE(ctx, coordinator);
+    if (!coordinator) return false;
+    auto group = execution.findAvSyncGroup(key);
+    EXPECT_TRUE(ctx, group != nullptr);
+    if (!group) return false;
+    EXPECT_TRUE(ctx, group->installReacquisitionCoordinator(
+                         std::move(coordinator).value()));
     EXPECT_TRUE(
         ctx,
         MediaAvEpochTransitionServiceTestAccess::activateInitial(

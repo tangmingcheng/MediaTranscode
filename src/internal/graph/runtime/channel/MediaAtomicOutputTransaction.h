@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
+#include "internal/graph/runtime/queue/MediaBlockingQueue.h"
 #include "media_transcode/Result.h"
 
 #include <mutex>
@@ -41,18 +42,23 @@ public:
 private:
     struct OwnedBatch final {
         MediaChannel* channel = nullptr;
-        std::vector<MediaBufferRef> buffers;
+        MediaBlockingQueue* queue = nullptr;
+        MediaBlockingQueue::PreparedPush prepared;
     };
 
     MediaAtomicOutputTransaction(
         std::string owner,
         std::vector<OwnedBatch> batches,
-        std::vector<std::unique_lock<std::mutex>> locks);
-    bool publishReserved() noexcept;
+        std::vector<MediaChannel*> channels,
+        std::vector<std::unique_lock<std::mutex>> channelLocks,
+        std::vector<std::unique_lock<std::mutex>> queueLocks);
+    void publishPrepared() noexcept;
 
     std::string m_owner;
     std::vector<OwnedBatch> m_batches;
-    std::vector<std::unique_lock<std::mutex>> m_locks;
+    std::vector<MediaChannel*> m_channels;
+    std::vector<std::unique_lock<std::mutex>> m_channelLocks;
+    std::vector<std::unique_lock<std::mutex>> m_queueLocks;
     bool m_committed = false;
 };
 

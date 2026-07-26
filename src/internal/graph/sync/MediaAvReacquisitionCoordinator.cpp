@@ -8,9 +8,11 @@ namespace media::ffmpeg::graph {
 
 MediaAvStartupReleasePublicationReservation::
     MediaAvStartupReleasePublicationReservation(
+        std::shared_ptr<MediaAvReacquisitionCoordinator> owner,
         MediaAvStartupReleaseDisposition disposition,
         std::unique_lock<std::mutex> publicationLock) noexcept
-    : m_disposition(disposition)
+    : m_owner(std::move(owner))
+    , m_disposition(disposition)
     , m_publicationLock(std::move(publicationLock))
 {
 }
@@ -18,7 +20,8 @@ MediaAvStartupReleasePublicationReservation::
 MediaAvStartupReleasePublicationReservation::
     MediaAvStartupReleasePublicationReservation(
         MediaAvStartupReleasePublicationReservation&& other) noexcept
-    : m_disposition(other.m_disposition)
+    : m_owner(std::move(other.m_owner))
+    , m_disposition(other.m_disposition)
     , m_publicationLock(std::move(other.m_publicationLock))
 {
     other.m_disposition = MediaAvStartupReleaseDisposition::Reject;
@@ -29,8 +32,11 @@ MediaAvStartupReleasePublicationReservation::operator=(
     MediaAvStartupReleasePublicationReservation&& other) noexcept
 {
     if (this == &other) return *this;
+    if (m_publicationLock.owns_lock()) m_publicationLock.unlock();
+    m_owner.reset();
     m_disposition = other.m_disposition;
     m_publicationLock = std::move(other.m_publicationLock);
+    m_owner = std::move(other.m_owner);
     other.m_disposition = MediaAvStartupReleaseDisposition::Reject;
     return *this;
 }
@@ -44,15 +50,16 @@ MediaAvStartupReleasePublicationReservation::disposition() const noexcept
 void MediaAvStartupReleasePublicationReservation::completePublished() noexcept
 {
     if (m_publicationLock.owns_lock()) m_publicationLock.unlock();
+    m_owner.reset();
 }
 
 MediaAvReacquisitionActivationReservation::
     MediaAvReacquisitionActivationReservation(
-        MediaAvReacquisitionCoordinator* owner,
+        std::shared_ptr<MediaAvReacquisitionCoordinator> owner,
         std::uint64_t generation,
         std::uint64_t transitionSequence,
         std::unique_lock<std::mutex> activationLock) noexcept
-    : m_owner(owner)
+    : m_owner(std::move(owner))
     , m_generation(generation)
     , m_transitionSequence(transitionSequence)
     , m_activationLock(std::move(activationLock))
@@ -62,11 +69,12 @@ MediaAvReacquisitionActivationReservation::
 MediaAvReacquisitionActivationReservation::
     MediaAvReacquisitionActivationReservation(
         MediaAvReacquisitionActivationReservation&& other) noexcept
-    : m_owner(std::exchange(other.m_owner, nullptr))
+    : m_owner(std::move(other.m_owner))
     , m_generation(other.m_generation)
     , m_transitionSequence(other.m_transitionSequence)
     , m_activationLock(std::move(other.m_activationLock))
     , m_authorized(other.m_authorized)
+    , m_finalized(other.m_finalized)
     , m_completed(other.m_completed)
 {
 }
@@ -77,11 +85,12 @@ MediaAvReacquisitionActivationReservation::operator=(
 {
     if (this == &other) return *this;
     abandon();
-    m_owner = std::exchange(other.m_owner, nullptr);
+    m_owner = std::move(other.m_owner);
     m_generation = other.m_generation;
     m_transitionSequence = other.m_transitionSequence;
     m_activationLock = std::move(other.m_activationLock);
     m_authorized = other.m_authorized;
+    m_finalized = other.m_finalized;
     m_completed = other.m_completed;
     return *this;
 }
@@ -101,9 +110,22 @@ MediaAvReacquisitionActivationReservation::authorizePublication()
               "A/V reacquisition activation reservation is inactive"));
 }
 
+::media::Status
+MediaAvReacquisitionActivationReservation::finalizePublication()
+{
+    return m_owner
+        ? m_owner->finalizePublication(*this)
+        : ::media::Status::failure(::media::ErrorInfo::cancelled(
+              "A/V reacquisition activation reservation is inactive"));
+}
+
 void MediaAvReacquisitionActivationReservation::completePublished() noexcept
 {
-    if (m_owner) m_owner->completePublished(*this);
+    if (m_owner && m_finalized) {
+        m_owner->releasePublished(*this);
+    } else {
+        abandon();
+    }
 }
 
 void MediaAvReacquisitionActivationReservation::abandon() noexcept
@@ -121,7 +143,7 @@ MediaAvReacquisitionCoordinator::MediaAvReacquisitionCoordinator(
 {
 }
 
-::media::Result<std::unique_ptr<MediaAvReacquisitionCoordinator>>
+::media::Result<std::shared_ptr<MediaAvReacquisitionCoordinator>>
 MediaAvReacquisitionCoordinator::create(
     std::shared_ptr<MediaAvEpochTransitionService> transition,
     std::shared_ptr<MediaMasterClock> clock,
@@ -129,17 +151,34 @@ MediaAvReacquisitionCoordinator::create(
 {
     if (!transition || !clock || participants.empty()) {
         return ::media::Result<
-            std::unique_ptr<MediaAvReacquisitionCoordinator>>::failure(
+            std::shared_ptr<MediaAvReacquisitionCoordinator>>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "A/V reacquisition coordinator requires transition, clock, and participants"));
     }
     return ::media::Result<
-        std::unique_ptr<MediaAvReacquisitionCoordinator>>::success(
-        std::unique_ptr<MediaAvReacquisitionCoordinator>(
+        std::shared_ptr<MediaAvReacquisitionCoordinator>>::success(
+        std::shared_ptr<MediaAvReacquisitionCoordinator>(
             new MediaAvReacquisitionCoordinator(
                 std::move(transition),
                 std::move(clock),
                 std::move(participants))));
+}
+
+std::unique_lock<std::mutex>
+MediaAvReacquisitionCoordinator::acquireActivationArbitration()
+{
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        ++m_activationWaiters;
+        m_activationWaitChanged.notify_all();
+    }
+    std::unique_lock<std::mutex> activationLock(m_activationMutex);
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        --m_activationWaiters;
+        m_activationWaitChanged.notify_all();
+    }
+    return activationLock;
 }
 
 bool MediaAvReacquisitionCoordinator::matchesActiveRequest(
@@ -212,24 +251,23 @@ MediaAvReacquisitionCoordinator::validateAndQueueRequest(
 ::media::Status MediaAvReacquisitionCoordinator::observe(
     MediaAvReacquisitionRequest request)
 {
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        if (m_firstError) {
-            return ::media::Status::failure(*m_firstError);
-        }
-        if (m_phase == MediaAvReacquisitionPhase::Inactive) {
-            auto queued = validateAndQueueRequest(request);
-            return queued ? queued : failTerminalLocked(queued.error());
-        }
-        const bool plannedNextGeneration =
-            request.reason == MediaAvReacquisitionReason::FutureGeneration &&
-            m_transition &&
-            request.observedGeneration == m_transition->nextGeneration;
-        if (matchesActiveRequest(request) || plannedNextGeneration) {
-            return ::media::Status::success();
-        }
+    auto activationLock = acquireActivationArbitration();
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_firstError) {
+        return ::media::Status::failure(*m_firstError);
     }
-    return rejectIncompatibleEvidence(
+    if (m_phase == MediaAvReacquisitionPhase::Inactive) {
+        auto queued = validateAndQueueRequest(request);
+        return queued ? queued : failTerminalLocked(queued.error());
+    }
+    const bool plannedNextGeneration =
+        request.reason == MediaAvReacquisitionReason::FutureGeneration &&
+        m_transition &&
+        request.observedGeneration == m_transition->nextGeneration;
+    if (matchesActiveRequest(request) || plannedNextGeneration) {
+        return ::media::Status::success();
+    }
+    return failTerminalLocked(
         ::media::ErrorInfo::invalidArgument(
             "A/V reacquisition rejects incompatible generation evidence after transition begin"));
 }
@@ -255,7 +293,7 @@ MediaAvReacquisitionCoordinator::validateAndQueueRequest(
     }
 
     {
-        std::unique_lock<std::mutex> publicationLock(m_activationMutex);
+        auto publicationLock = acquireActivationArbitration();
         std::lock_guard<std::mutex> stateLock(m_mutex);
         if (m_firstError) {
             return ::media::Status::failure(*m_firstError);
@@ -344,6 +382,7 @@ MediaAvReacquisitionCoordinator::validateAndQueueRequest(
 
 ::media::Status MediaAvReacquisitionCoordinator::pollTimeout()
 {
+    auto activationLock = acquireActivationArbitration();
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_firstError) {
         return ::media::Status::failure(*m_firstError);
@@ -437,7 +476,7 @@ MediaAvReacquisitionCoordinator::reserveReleasePublication(
     std::uint64_t generation,
     std::optional<std::uint64_t> transitionSequence)
 {
-    std::unique_lock<std::mutex> publicationLock(m_activationMutex);
+    auto publicationLock = acquireActivationArbitration();
     MediaAvStartupReleaseDisposition disposition;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -448,7 +487,7 @@ MediaAvReacquisitionCoordinator::reserveReleasePublication(
         publicationLock.unlock();
     }
     return MediaAvStartupReleasePublicationReservation(
-        disposition, std::move(publicationLock));
+        shared_from_this(), disposition, std::move(publicationLock));
 }
 
 ::media::Status
@@ -456,6 +495,7 @@ MediaAvReacquisitionCoordinator::markReadyForActivation(
     std::uint64_t generation,
     std::uint64_t transitionSequence)
 {
+    auto activationLock = acquireActivationArbitration();
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_firstError) {
         return ::media::Status::failure(*m_firstError);
@@ -473,17 +513,8 @@ MediaAvReacquisitionCoordinator::markReadyForActivation(
 MediaAvReacquisitionCoordinator::rejectIncompatibleEvidence(
     ::media::ErrorInfo error)
 {
-    std::unique_lock<std::mutex> stateLock(m_mutex);
-    if (m_firstError) {
-        return ::media::Status::failure(*m_firstError);
-    }
-    if (m_phase != MediaAvReacquisitionPhase::Publishing) {
-        return failTerminalLocked(std::move(error));
-    }
-    stateLock.unlock();
-
-    std::unique_lock<std::mutex> activationLock(m_activationMutex);
-    stateLock.lock();
+    auto activationLock = acquireActivationArbitration();
+    std::lock_guard<std::mutex> stateLock(m_mutex);
     if (m_firstError) {
         return ::media::Status::failure(*m_firstError);
     }
@@ -495,7 +526,7 @@ MediaAvReacquisitionCoordinator::reserveActivation(
     std::uint64_t generation,
     std::uint64_t transitionSequence)
 {
-    std::unique_lock<std::mutex> activationLock(m_activationMutex);
+    auto activationLock = acquireActivationArbitration();
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_firstError) {
         return ::media::Result<
@@ -515,7 +546,7 @@ MediaAvReacquisitionCoordinator::reserveActivation(
     return ::media::Result<
         MediaAvReacquisitionActivationReservation>::success(
         MediaAvReacquisitionActivationReservation(
-            this,
+            shared_from_this(),
             generation,
             transitionSequence,
             std::move(activationLock)));
@@ -529,7 +560,7 @@ MediaAvReacquisitionCoordinator::reserveActivation(
         return ::media::Status::failure(*m_firstError);
     }
     const auto active = m_transitionService->snapshot();
-    if (reservation.m_owner != this ||
+    if (reservation.m_owner.get() != this ||
         reservation.m_authorized ||
         reservation.m_completed ||
         m_phase != MediaAvReacquisitionPhase::Activating ||
@@ -549,34 +580,42 @@ MediaAvReacquisitionCoordinator::reserveActivation(
     return ::media::Status::success();
 }
 
-void MediaAvReacquisitionCoordinator::completePublished(
-    MediaAvReacquisitionActivationReservation& reservation) noexcept
+::media::Status MediaAvReacquisitionCoordinator::finalizePublication(
+    MediaAvReacquisitionActivationReservation& reservation)
 {
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        if (reservation.m_owner == this &&
-            reservation.m_authorized &&
-            !reservation.m_completed &&
-            m_phase == MediaAvReacquisitionPhase::Publishing &&
-            matchesTransition(
+        if (reservation.m_owner.get() != this ||
+            !reservation.m_authorized ||
+            reservation.m_finalized ||
+            reservation.m_completed ||
+            m_phase != MediaAvReacquisitionPhase::Publishing ||
+            !matchesTransition(
                 reservation.m_generation,
                 reservation.m_transitionSequence)) {
-            m_phase = MediaAvReacquisitionPhase::Inactive;
-            m_lastPublishedTransitionSequence =
-                reservation.m_transitionSequence;
-            m_request.reset();
-            m_transition.reset();
-            m_inFlightTransitionSequence.reset();
-            m_beganAt.reset();
-            reservation.m_completed = true;
-        } else {
-            std::terminate();
+            return failTerminalLocked(::media::ErrorInfo::invalidArgument(
+                "A/V reacquisition finalization requires the publishing reserved epoch"));
         }
+        m_phase = MediaAvReacquisitionPhase::Inactive;
+        m_lastPublishedTransitionSequence =
+            reservation.m_transitionSequence;
+        m_request.reset();
+        m_transition.reset();
+        m_inFlightTransitionSequence.reset();
+        m_beganAt.reset();
+        reservation.m_finalized = true;
     }
-    reservation.m_owner = nullptr;
+    return ::media::Status::success();
+}
+
+void MediaAvReacquisitionCoordinator::releasePublished(
+    MediaAvReacquisitionActivationReservation& reservation) noexcept
+{
+    reservation.m_completed = true;
     if (reservation.m_activationLock.owns_lock()) {
         reservation.m_activationLock.unlock();
     }
+    reservation.m_owner.reset();
 }
 
 void MediaAvReacquisitionCoordinator::abandon(
@@ -591,35 +630,15 @@ void MediaAvReacquisitionCoordinator::abandon(
                     : "A/V reacquisition activation reservation was abandoned"));
         }
     }
-    reservation.m_owner = nullptr;
     if (reservation.m_activationLock.owns_lock()) {
         reservation.m_activationLock.unlock();
     }
+    reservation.m_owner.reset();
 }
 
 void MediaAvReacquisitionCoordinator::abort() noexcept
 {
-    bool waitsForActivation = false;
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        waitsForActivation =
-            m_phase == MediaAvReacquisitionPhase::Activating ||
-            m_phase == MediaAvReacquisitionPhase::Publishing;
-        if (m_phase != MediaAvReacquisitionPhase::Publishing) {
-            if (!m_firstError) {
-                m_firstError = ::media::ErrorInfo::cancelled(
-                    "A/V reacquisition coordinator was aborted");
-            }
-            m_phase = MediaAvReacquisitionPhase::Aborted;
-            m_inFlightTransitionSequence.reset();
-        }
-        if (!waitsForActivation) {
-            m_transitionService->abort();
-            return;
-        }
-    }
-
-    std::unique_lock<std::mutex> activationLock(m_activationMutex);
+    auto activationLock = acquireActivationArbitration();
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!m_firstError) {
         m_firstError = ::media::ErrorInfo::cancelled(

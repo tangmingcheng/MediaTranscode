@@ -57,6 +57,22 @@ struct MediaAvEpochTransitionServiceTestAccess final {
     }
 };
 
+struct MediaAvReacquisitionCoordinatorTestAccess final {
+    static bool waitForActivationArbitrationWaiter(
+        const MediaAvSyncGroupRuntime& group)
+    {
+        const auto coordinator = group.m_reacquisitionCoordinator;
+        if (!coordinator) return false;
+        std::unique_lock<std::mutex> lock(coordinator->m_mutex);
+        return coordinator->m_activationWaitChanged.wait_for(
+            lock,
+            std::chrono::seconds(1),
+            [&coordinator] {
+                return coordinator->m_activationWaiters != 0;
+            });
+    }
+};
+
 } // namespace media::ffmpeg::graph
 
 namespace {
@@ -555,6 +571,7 @@ void testGroupOwnedReacquisitionPurgesAndClosesOutput(TestContext& ctx)
             2,
             acquiring.transition->transitionSequence));
     EXPECT_TRUE(ctx, activation.authorizePublication());
+    EXPECT_TRUE(ctx, activation.finalizePublication());
     activation.completePublished();
     EXPECT_EQ(ctx,
               fixture.group->reacquisitionSnapshot().phase,
@@ -598,22 +615,23 @@ void testAbortBeforeActivationAuthorizationRejectsPublication(TestContext& ctx)
             2,
             acquiring.transition->transitionSequence));
 
-    auto aborted = std::async(std::launch::async, [&fixture] {
+    std::promise<void> workerStarted;
+    auto aborted = std::async(std::launch::async, [&fixture, &workerStarted] {
+        workerStarted.set_value();
         fixture.group->markAborted();
     });
-    for (std::size_t attempt = 0; attempt != 10'000; ++attempt) {
-        if (fixture.group->reacquisitionSnapshot().phase ==
-            MediaAvReacquisitionPhase::Aborted) {
-            break;
-        }
-        std::this_thread::yield();
-    }
-    EXPECT_EQ(ctx,
-              fixture.group->reacquisitionSnapshot().phase,
-              MediaAvReacquisitionPhase::Aborted);
-    EXPECT_FALSE(ctx, activation.authorizePublication());
+    workerStarted.get_future().wait();
+    EXPECT_TRUE(
+        ctx,
+        MediaAvReacquisitionCoordinatorTestAccess::
+            waitForActivationArbitrationWaiter(*fixture.group));
+    EXPECT_EQ(ctx, fixture.group->reacquisitionSnapshot().phase,
+              MediaAvReacquisitionPhase::Activating);
     activation.abandon();
     EXPECT_EQ(ctx, aborted.wait_for(1s), std::future_status::ready);
+    EXPECT_FALSE(ctx, activation.authorizePublication());
+    EXPECT_EQ(ctx, fixture.group->reacquisitionSnapshot().phase,
+              MediaAvReacquisitionPhase::Aborted);
     EXPECT_FALSE(ctx, fixture.group->epochTransitionSnapshot().outputPermitted);
     EXPECT_TRUE(ctx, fixture.group->epochTransitionSnapshot().poisoned);
 }
@@ -654,23 +672,31 @@ void testIncompatibleEvidenceBeforeActivationAuthorizationRejectsPublication(
             2,
             acquiring.transition->transitionSequence));
 
-    auto incompatible = std::async(std::launch::async, [&fixture] {
+    std::promise<void> workerStarted;
+    auto incompatible = std::async(std::launch::async, [&fixture, &workerStarted] {
+        workerStarted.set_value();
         return fixture.group->observeGeneration(3);
     });
-    for (std::size_t attempt = 0; attempt != 10'000; ++attempt) {
-        if (fixture.group->reacquisitionSnapshot().phase ==
-            MediaAvReacquisitionPhase::Aborted) {
-            break;
-        }
-        std::this_thread::yield();
-    }
-    EXPECT_EQ(ctx,
-              fixture.group->reacquisitionSnapshot().phase,
-              MediaAvReacquisitionPhase::Aborted);
-    EXPECT_FALSE(ctx, activation.authorizePublication());
+    workerStarted.get_future().wait();
+    EXPECT_TRUE(
+        ctx,
+        MediaAvReacquisitionCoordinatorTestAccess::
+            waitForActivationArbitrationWaiter(*fixture.group));
+    EXPECT_EQ(ctx, fixture.group->reacquisitionSnapshot().phase,
+              MediaAvReacquisitionPhase::Activating);
     activation.abandon();
     EXPECT_EQ(ctx, incompatible.wait_for(1s), std::future_status::ready);
-    EXPECT_FALSE(ctx, incompatible.get());
+    const auto incompatibleResult = incompatible.get();
+    EXPECT_FALSE(ctx, incompatibleResult);
+    EXPECT_EQ(ctx, fixture.group->reacquisitionSnapshot().phase,
+              MediaAvReacquisitionPhase::Aborted);
+    EXPECT_FALSE(ctx, activation.authorizePublication());
+    const auto repeated = fixture.group->reserveReacquisitionActivation(
+        2, acquiring.transition->transitionSequence);
+    EXPECT_FALSE(ctx, repeated);
+    if (!incompatibleResult && !repeated) {
+        expectSameError(ctx, repeated.error(), incompatibleResult.error());
+    }
     EXPECT_FALSE(ctx, fixture.group->epochTransitionSnapshot().outputPermitted);
     EXPECT_TRUE(ctx, fixture.group->epochTransitionSnapshot().poisoned);
 }
@@ -701,13 +727,17 @@ void testPublicationReservationLinearizesReacquisitionBegin(
     EXPECT_EQ(ctx,
               publication.value().disposition(),
               MediaAvStartupReleaseDisposition::Publish);
-    auto reacquisition = std::async(std::launch::async, [&fixture] {
+    std::promise<void> workerStarted;
+    auto reacquisition = std::async(std::launch::async, [&fixture, &workerStarted] {
+        workerStarted.set_value();
         return fixture.group->requestReacquisition(
             {1, MediaAvReacquisitionReason::HardDiscontinuity});
     });
-    EXPECT_EQ(ctx,
-              reacquisition.wait_for(20ms),
-              std::future_status::timeout);
+    workerStarted.get_future().wait();
+    EXPECT_TRUE(
+        ctx,
+        MediaAvReacquisitionCoordinatorTestAccess::
+            waitForActivationArbitrationWaiter(*fixture.group));
     EXPECT_TRUE(ctx, fixture.group->epochTransitionSnapshot().outputPermitted);
 
     publication.value().completePublished();
@@ -719,6 +749,70 @@ void testPublicationReservationLinearizesReacquisitionBegin(
     EXPECT_EQ(ctx,
               fixture.group->reacquisitionSnapshot().phase,
               MediaAvReacquisitionPhase::Acquiring);
+}
+
+void testReadinessMutationCannotCrossPublishing(TestContext& ctx)
+{
+    using namespace std::chrono_literals;
+    const auto plan = reacquisitionPlan();
+    auto fixture = makeActiveGroup(ctx, plan);
+    if (!fixture.group) return;
+    auto videoTarget = std::make_shared<RecordingPurgeTarget>();
+    auto audioTarget = std::make_shared<RecordingPurgeTarget>();
+    if (!installCoordinator(
+            ctx,
+            fixture,
+            sealedParticipants(ctx, plan, videoTarget, audioTarget))) {
+        return;
+    }
+
+    EXPECT_TRUE(ctx, fixture.group->requestReacquisition(
+                         {1, MediaAvReacquisitionReason::HardDiscontinuity}));
+    const auto acquiring = fixture.group->reacquisitionSnapshot();
+    EXPECT_TRUE(ctx, acquiring.transition.has_value());
+    if (!acquiring.transition) return;
+    EXPECT_TRUE(ctx, fixture.group->markReacquisitionReadyForActivation(
+                         2, acquiring.transition->transitionSequence));
+    auto reserved = fixture.group->reserveReacquisitionActivation(
+        2, acquiring.transition->transitionSequence);
+    EXPECT_TRUE(ctx, reserved);
+    if (!reserved) return;
+    auto activation = std::move(reserved).value();
+    EXPECT_TRUE(
+        ctx,
+        MediaAvEpochTransitionServiceTestAccess::activateNext(
+            fixture.transition,
+            2,
+            2,
+            acquiring.transition->transitionSequence));
+    EXPECT_TRUE(ctx, activation.authorizePublication());
+    EXPECT_TRUE(ctx, activation.finalizePublication());
+    EXPECT_EQ(ctx, fixture.group->reacquisitionSnapshot().phase,
+              MediaAvReacquisitionPhase::Inactive);
+
+    std::promise<void> workerStarted;
+    auto readiness = std::async(
+        std::launch::async,
+        [&fixture, &workerStarted, sequence =
+             acquiring.transition->transitionSequence] {
+            workerStarted.set_value();
+            return fixture.group->markReacquisitionReadyForActivation(
+                2, sequence);
+        });
+    workerStarted.get_future().wait();
+    EXPECT_TRUE(
+        ctx,
+        MediaAvReacquisitionCoordinatorTestAccess::
+            waitForActivationArbitrationWaiter(*fixture.group));
+    EXPECT_EQ(ctx, fixture.group->reacquisitionSnapshot().phase,
+              MediaAvReacquisitionPhase::Inactive);
+
+    activation.completePublished();
+    EXPECT_EQ(ctx, readiness.wait_for(1s), std::future_status::ready);
+    const auto failed = readiness.get();
+    EXPECT_FALSE(ctx, failed);
+    EXPECT_EQ(ctx, fixture.group->reacquisitionSnapshot().phase,
+              MediaAvReacquisitionPhase::Aborted);
 }
 
 void testFutureGenerationAndPreBeginSupersession(TestContext& ctx)
@@ -1005,6 +1099,7 @@ int main()
     testIncompatibleEvidenceBeforeActivationAuthorizationRejectsPublication(
         ctx);
     testPublicationReservationLinearizesReacquisitionBegin(ctx);
+    testReadinessMutationCannotCrossPublishing(ctx);
     testFutureGenerationAndPreBeginSupersession(ctx);
     testMissingCoordinatorAndIncompatibleRequestAreRejected(ctx);
     testActivationEpochPairMismatchPoisonsFirstError(ctx);

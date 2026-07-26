@@ -18,6 +18,7 @@ namespace media::ffmpeg::graph {
 class MediaNodeWakeup;
 class MediaAtomicOutputTransaction;
 class MediaReservedOutputTransaction;
+struct MediaChannelAtomicOutputTestAccess;
 
 class MediaChannel final {
 public:
@@ -55,6 +56,7 @@ public:
 private:
     friend class MediaAtomicOutputTransaction;
     friend class MediaReservedOutputTransaction;
+    friend struct MediaChannelAtomicOutputTestAccess;
 
     MediaQueuePushOutcome pushOutcomeLocked(
         MediaBufferRef buffer,
@@ -64,7 +66,7 @@ private:
     void publishReservedCapacityMutation() noexcept;
     void finalizeDeferredCloseLocked() noexcept;
     void signalMutationWaiters() noexcept;
-    void refreshQueueMetrics();
+    void refreshQueueMetrics() noexcept;
 
 private:
     MediaChannelId m_id;
@@ -80,6 +82,7 @@ private:
     MediaNodeWakeup* m_producerWakeup = nullptr;
     mutable std::mutex m_mutationMutex;
     std::condition_variable m_mutationChanged;
+    std::condition_variable m_waitStateChanged;
     std::atomic_uint64_t m_mutationSequence{0};
     std::atomic_uint64_t m_externalBlockedPushes{0};
     std::atomic_size_t m_externalBlockedProducers{0};

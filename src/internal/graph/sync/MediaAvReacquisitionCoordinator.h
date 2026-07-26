@@ -7,6 +7,7 @@
 #include "internal/graph/time/MediaMasterClock.h"
 
 #include <cstdint>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -16,6 +17,7 @@ namespace media::ffmpeg::graph {
 
 class MediaAvReacquisitionCoordinator;
 class MediaAvSyncGroupRuntime;
+struct MediaAvReacquisitionCoordinatorTestAccess;
 
 class MediaAvStartupReleasePublicationReservation final {
 public:
@@ -37,9 +39,11 @@ private:
     friend class MediaAvSyncGroupRuntime;
 
     MediaAvStartupReleasePublicationReservation(
+        std::shared_ptr<MediaAvReacquisitionCoordinator> owner,
         MediaAvStartupReleaseDisposition disposition,
         std::unique_lock<std::mutex> publicationLock) noexcept;
 
+    std::shared_ptr<MediaAvReacquisitionCoordinator> m_owner;
     MediaAvStartupReleaseDisposition m_disposition =
         MediaAvStartupReleaseDisposition::Reject;
     std::unique_lock<std::mutex> m_publicationLock;
@@ -58,6 +62,7 @@ public:
     ~MediaAvReacquisitionActivationReservation();
 
     ::media::Status authorizePublication();
+    ::media::Status finalizePublication();
     void completePublished() noexcept;
     void abandon() noexcept;
 
@@ -65,16 +70,17 @@ private:
     friend class MediaAvReacquisitionCoordinator;
 
     MediaAvReacquisitionActivationReservation(
-        MediaAvReacquisitionCoordinator* owner,
+        std::shared_ptr<MediaAvReacquisitionCoordinator> owner,
         std::uint64_t generation,
         std::uint64_t transitionSequence,
         std::unique_lock<std::mutex> activationLock) noexcept;
 
-    MediaAvReacquisitionCoordinator* m_owner = nullptr;
+    std::shared_ptr<MediaAvReacquisitionCoordinator> m_owner;
     std::uint64_t m_generation = 0;
     std::uint64_t m_transitionSequence = 0;
     std::unique_lock<std::mutex> m_activationLock;
     bool m_authorized = false;
+    bool m_finalized = false;
     bool m_completed = false;
 };
 
@@ -94,9 +100,10 @@ struct MediaAvReacquisitionSnapshot final {
     std::optional<MediaAvReacquisitionReason> reason;
 };
 
-class MediaAvReacquisitionCoordinator final {
+class MediaAvReacquisitionCoordinator final
+    : public std::enable_shared_from_this<MediaAvReacquisitionCoordinator> {
 public:
-    static ::media::Result<std::unique_ptr<MediaAvReacquisitionCoordinator>>
+    static ::media::Result<std::shared_ptr<MediaAvReacquisitionCoordinator>>
     create(std::shared_ptr<MediaAvEpochTransitionService> transition,
            std::shared_ptr<MediaMasterClock> clock,
            std::vector<MediaAvGenerationParticipantGroup> participants);
@@ -124,6 +131,7 @@ public:
 
 private:
     friend class MediaAvReacquisitionActivationReservation;
+    friend struct MediaAvReacquisitionCoordinatorTestAccess;
 
     MediaAvReacquisitionCoordinator(
         std::shared_ptr<MediaAvEpochTransitionService> transition,
@@ -135,6 +143,7 @@ private:
         MediaAvReacquisitionRequest request);
     ::media::Status rejectIncompatibleEvidence(
         ::media::ErrorInfo error);
+    std::unique_lock<std::mutex> acquireActivationArbitration();
     bool matchesActiveRequest(
         const MediaAvReacquisitionRequest& request) const noexcept;
     bool matchesTransition(
@@ -146,13 +155,17 @@ private:
         std::optional<std::uint64_t> transitionSequence) const noexcept;
     ::media::Status authorizePublication(
         MediaAvReacquisitionActivationReservation& reservation);
-    void completePublished(
+    ::media::Status finalizePublication(
+        MediaAvReacquisitionActivationReservation& reservation);
+    void releasePublished(
         MediaAvReacquisitionActivationReservation& reservation) noexcept;
     void abandon(
         MediaAvReacquisitionActivationReservation& reservation) noexcept;
 
     mutable std::mutex m_activationMutex;
     mutable std::mutex m_mutex;
+    mutable std::condition_variable m_activationWaitChanged;
+    std::size_t m_activationWaiters = 0;
     std::shared_ptr<MediaAvEpochTransitionService> m_transitionService;
     std::shared_ptr<MediaMasterClock> m_clock;
     std::vector<MediaAvGenerationParticipantGroup> m_participants;

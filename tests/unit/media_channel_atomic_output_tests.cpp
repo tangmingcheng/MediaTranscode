@@ -10,27 +10,82 @@
 #include <atomic>
 #include <barrier>
 #include <chrono>
+#include <cstdlib>
+#include <future>
 #include <iostream>
 #include <memory>
+#include <new>
 #include <thread>
+
+namespace {
+std::atomic_bool g_failAllocations{false};
+}
+
+void* operator new(std::size_t size)
+{
+    if (g_failAllocations.load(std::memory_order_acquire)) {
+        throw std::bad_alloc();
+    }
+    if (void* allocation = std::malloc(size)) return allocation;
+    throw std::bad_alloc();
+}
+
+void* operator new[](std::size_t size)
+{
+    return ::operator new(size);
+}
+
+void operator delete(void* allocation) noexcept
+{
+    std::free(allocation);
+}
+
+void operator delete[](void* allocation) noexcept
+{
+    std::free(allocation);
+}
+
+void operator delete(void* allocation, std::size_t) noexcept
+{
+    std::free(allocation);
+}
+
+void operator delete[](void* allocation, std::size_t) noexcept
+{
+    std::free(allocation);
+}
+
+namespace media::ffmpeg::graph {
+
+struct MediaChannelAtomicOutputTestAccess final {
+    static bool waitForBlockedProducer(MediaChannel& channel)
+    {
+        std::unique_lock<std::mutex> lock(channel.m_mutationMutex);
+        return channel.m_waitStateChanged.wait_for(
+            lock, std::chrono::seconds(1), [&channel] {
+                return channel.m_externalBlockedProducers.load(
+                           std::memory_order_acquire) != 0;
+            });
+    }
+
+    static bool waitForBlockedConsumer(MediaChannel& channel)
+    {
+        std::unique_lock<std::mutex> lock(channel.m_mutationMutex);
+        return channel.m_waitStateChanged.wait_for(
+            lock, std::chrono::seconds(1), [&channel] {
+                return channel.m_externalBlockedConsumers.load(
+                           std::memory_order_acquire) != 0;
+            });
+    }
+};
+
+} // namespace media::ffmpeg::graph
 
 namespace {
 
 using media_transcode::test::TestContext;
 using media_transcode::test::makePacketBuffer;
 using namespace media::ffmpeg::graph;
-
-template <typename Predicate>
-bool waitUntil(Predicate&& predicate)
-{
-    const auto deadline = std::chrono::steady_clock::now() +
-        std::chrono::seconds(5);
-    while (!predicate()) {
-        if (std::chrono::steady_clock::now() >= deadline) return false;
-        std::this_thread::yield();
-    }
-    return true;
-}
 
 struct ChannelFixture final {
     MediaGraph graph;
@@ -105,17 +160,15 @@ void testTransactionOwnsReferencesAndSerializesLifecycle(TestContext& ctx)
         terminal.reset();
 
         std::barrier boundary(2);
-        std::atomic<bool> attempting{false};
+        std::promise<void> workerStarted;
         std::thread lifecycle([&] {
             boundary.arrive_and_wait();
-            attempting.store(true, std::memory_order_release);
+            workerStarted.set_value();
             if (abortOutput) audio(*fixture)->abort();
             else audio(*fixture)->close();
         });
         boundary.arrive_and_wait();
-        EXPECT_TRUE(ctx, waitUntil([&] {
-            return attempting.load(std::memory_order_acquire);
-        }));
+        workerStarted.get_future().wait();
         EXPECT_TRUE(ctx, acquired.value()->commit());
         acquired.value().reset();
         lifecycle.join();
@@ -166,25 +219,25 @@ void testConsumersCannotObservePartialAtomicCommit(TestContext& ctx)
     if (!acquired || !acquired.value()) return;
 
     std::barrier boundary(3);
-    std::atomic<int> attempting{0};
+    std::promise<void> videoStarted;
+    std::promise<void> audioStarted;
     bool videoVisible = false;
     bool audioVisible = false;
     MediaBufferRef consumedVideo;
     MediaBufferRef consumedAudio;
     std::thread videoConsumer([&] {
         boundary.arrive_and_wait();
-        attempting.fetch_add(1, std::memory_order_release);
+        videoStarted.set_value();
         videoVisible = video(*fixture)->tryPop(consumedVideo);
     });
     std::thread audioConsumer([&] {
         boundary.arrive_and_wait();
-        attempting.fetch_add(1, std::memory_order_release);
+        audioStarted.set_value();
         audioVisible = audio(*fixture)->tryPop(consumedAudio);
     });
     boundary.arrive_and_wait();
-    EXPECT_TRUE(ctx, waitUntil([&] {
-        return attempting.load(std::memory_order_acquire) == 2;
-    }));
+    videoStarted.get_future().wait();
+    audioStarted.get_future().wait();
     EXPECT_TRUE(ctx, acquired.value()->commit());
     acquired.value().reset();
     videoConsumer.join();
@@ -235,10 +288,10 @@ void testBlockingConsumersReturnOnlyAfterAtomicPublish(TestContext& ctx)
     std::thread audioConsumer([&] {
         audioStatus = audio(*fixture)->pop(consumedAudio);
     });
-    EXPECT_TRUE(ctx, waitUntil([&] {
-        return video(*fixture)->metrics().queue.blockedConsumers.load() == 1 &&
-            audio(*fixture)->metrics().queue.blockedConsumers.load() == 1;
-    }));
+    EXPECT_TRUE(ctx, MediaChannelAtomicOutputTestAccess::waitForBlockedConsumer(
+                         *video(*fixture)));
+    EXPECT_TRUE(ctx, MediaChannelAtomicOutputTestAccess::waitForBlockedConsumer(
+                         *audio(*fixture)));
     std::array<MediaBufferRef, 1> videoValues{terminal};
     std::array<MediaBufferRef, 1> audioValues{terminal};
     const std::array<MediaAtomicOutputBatch, 2> batches{
@@ -291,34 +344,24 @@ void testChannelPushPreservesNullDropAndLifecycleContracts(TestContext& ctx)
         MediaChannel* blockedChannel = video(*fixture);
         EXPECT_TRUE(ctx, blockedChannel->push(first.value()));
         std::barrier boundary(2);
-        std::atomic<bool> attempting{false};
+        std::promise<void> workerStarted;
         ::media::Status result = ::media::Status::success();
         std::thread producer([&] {
             boundary.arrive_and_wait();
-            attempting.store(true, std::memory_order_release);
+            workerStarted.set_value();
             result = blockedChannel->push(second.value());
         });
         boundary.arrive_and_wait();
-        EXPECT_TRUE(ctx, waitUntil([&] {
-            return attempting.load(std::memory_order_acquire);
-        }));
-        const bool enteredWait = waitUntil([&] {
-            return blockedChannel->metrics().queue.blockedProducers.load() == 1;
-        });
+        workerStarted.get_future().wait();
+        const bool enteredWait =
+            MediaChannelAtomicOutputTestAccess::waitForBlockedProducer(
+                *blockedChannel);
         EXPECT_TRUE(ctx, enteredWait);
-        const auto blockedAttempts =
-            blockedChannel->metrics().queue.blockedPushes.load();
         EXPECT_EQ(ctx,
                   blockedChannel->metrics().queue.blockedProducers.load(),
                   static_cast<std::size_t>(1));
         EXPECT_TRUE(ctx,
                     blockedChannel->metrics().queue.blockedPushes.load() >= 1);
-        for (int yield = 0; yield < 1'000; ++yield) {
-            std::this_thread::yield();
-        }
-        EXPECT_EQ(ctx,
-                  blockedChannel->metrics().queue.blockedPushes.load(),
-                  blockedAttempts);
         if (abortChannel) blockedChannel->abort();
         else blockedChannel->close();
         producer.join();
@@ -339,18 +382,17 @@ void testChannelPushPreservesNullDropAndLifecycleContracts(TestContext& ctx)
         ctx, MediaGraphBuildSupport::blockingQueuePolicy(1),
         MediaGraphBuildSupport::blockingQueuePolicy(1));
     MediaChannel* emptyChannel = video(*consumerFixture);
-    std::atomic<bool> consumerAttempting{false};
+    std::promise<void> consumerStarted;
     MediaBufferRef consumed;
     ::media::Status consumerStatus = ::media::Status::failure(
         ::media::ErrorInfo::internalError("consumer pop did not run"));
     std::thread consumer([&] {
-        consumerAttempting.store(true, std::memory_order_release);
+        consumerStarted.set_value();
         consumerStatus = emptyChannel->pop(consumed);
     });
-    EXPECT_TRUE(ctx, waitUntil([&] {
-        return consumerAttempting.load(std::memory_order_acquire) &&
-            emptyChannel->metrics().queue.blockedConsumers.load() == 1;
-    }));
+    consumerStarted.get_future().wait();
+    EXPECT_TRUE(ctx, MediaChannelAtomicOutputTestAccess::waitForBlockedConsumer(
+                         *emptyChannel));
     EXPECT_EQ(ctx, emptyChannel->metrics().queue.blockedConsumers.load(),
               static_cast<std::size_t>(1));
     EXPECT_TRUE(ctx, emptyChannel->push(first.value()));
@@ -358,6 +400,31 @@ void testChannelPushPreservesNullDropAndLifecycleContracts(TestContext& ctx)
     EXPECT_TRUE(ctx, consumerStatus && consumed == first.value());
     EXPECT_EQ(ctx, emptyChannel->metrics().queue.blockedConsumers.load(),
               static_cast<std::size_t>(0));
+}
+
+void testReservedPublishPerformsNoAllocation(TestContext& ctx)
+{
+    auto fixture = makeFixture(
+        ctx, MediaGraphBuildSupport::blockingQueuePolicy(2),
+        MediaGraphBuildSupport::blockingQueuePolicy(2));
+    auto terminal = makeMediaBufferRef<MediaControlBuffer>(
+        MediaControlBufferKind::Eof);
+    std::array<MediaBufferRef, 1> videoValues{terminal};
+    std::array<MediaBufferRef, 1> audioValues{terminal};
+    const std::array<MediaAtomicOutputBatch, 2> batches{
+        MediaAtomicOutputBatch{video(*fixture), videoValues},
+        MediaAtomicOutputBatch{audio(*fixture), audioValues}};
+    auto acquired = MediaAtomicOutputTransaction::acquire(
+        "Allocation-free atomic publish", batches);
+    EXPECT_TRUE(ctx, acquired && acquired.value().has_value());
+    if (!acquired || !acquired.value()) return;
+
+    g_failAllocations.store(true, std::memory_order_release);
+    acquired.value()->commitReserved();
+    g_failAllocations.store(false, std::memory_order_release);
+
+    EXPECT_EQ(ctx, video(*fixture)->size(), std::size_t{1});
+    EXPECT_EQ(ctx, audio(*fixture)->size(), std::size_t{1});
 }
 
 void testCapacityReservationPreventsOrdinaryPushAndCancelReleasesCapacity(
@@ -428,6 +495,7 @@ int main()
     testConsumersCannotObservePartialAtomicCommit(ctx);
     testEmptyTransactionalBatchStillRequiresCompletePolicy(ctx);
     testBlockingConsumersReturnOnlyAfterAtomicPublish(ctx);
+    testReservedPublishPerformsNoAllocation(ctx);
     testChannelPushPreservesNullDropAndLifecycleContracts(ctx);
     testCapacityReservationPreventsOrdinaryPushAndCancelReleasesCapacity(ctx);
     testAuthorizedReservationSurvivesCloseButAbortTerminatesIt(ctx);

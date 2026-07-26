@@ -72,12 +72,14 @@ const MediaChannelBinding& MediaChannel::binding() const noexcept
             m_externalBlockedPushes.fetch_add(1, std::memory_order_relaxed);
             m_externalBlockedProducers.fetch_add(1, std::memory_order_release);
             refreshQueueMetrics();
+            m_waitStateChanged.notify_all();
             m_mutationChanged.wait(lock, [&] {
                 return m_mutationSequence.load(std::memory_order_acquire) !=
                     sequence;
             });
             m_externalBlockedProducers.fetch_sub(1, std::memory_order_release);
             refreshQueueMetrics();
+            m_waitStateChanged.notify_all();
             break;
         }
     }
@@ -162,6 +164,7 @@ void MediaChannel::finalizeDeferredCloseLocked() noexcept
             m_externalBlockedConsumers.fetch_add(
                 1, std::memory_order_release);
             refreshQueueMetrics();
+            m_waitStateChanged.notify_all();
         }
     }
     auto status = m_queue->pop(out);
@@ -169,6 +172,7 @@ void MediaChannel::finalizeDeferredCloseLocked() noexcept
     if (externalWait) {
         m_externalBlockedConsumers.fetch_sub(
             1, std::memory_order_release);
+        m_waitStateChanged.notify_all();
     }
     if (status) {
         m_metrics.popped++;
@@ -314,7 +318,7 @@ void MediaChannel::setProducerWakeup(MediaNodeWakeup& wakeup) noexcept
     m_producerWakeup = &wakeup;
 }
 
-void MediaChannel::refreshQueueMetrics()
+void MediaChannel::refreshQueueMetrics() noexcept
 {
     if (m_queue) {
         m_metrics.queue = m_queue->metrics();

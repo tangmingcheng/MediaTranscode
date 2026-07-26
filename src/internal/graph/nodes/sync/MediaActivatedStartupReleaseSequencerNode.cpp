@@ -246,17 +246,21 @@ MediaActivatedStartupReleaseSequencerNode::process(
             release->releaseKind(),
             release->epoch().generation,
             release->completedTransitionSequence());
-        if (disposition == MediaAvStartupReleaseDisposition::DropOld) {
+        if (!disposition) return failTerminal(disposition.error());
+        if (disposition.value() ==
+            MediaAvStartupReleaseDisposition::DropOld) {
             m_pendingTransaction.reset();
             m_reanchoredTransaction.reset();
             return ::media::Result<MediaNodeProcessResult>::success(
                 MediaNodeProcessResult::progress());
         }
-        if (disposition == MediaAvStartupReleaseDisposition::Withhold) {
+        if (disposition.value() ==
+            MediaAvStartupReleaseDisposition::Withhold) {
             return ::media::Result<MediaNodeProcessResult>::success(
                 MediaNodeProcessResult::waiting());
         }
-        if (disposition == MediaAvStartupReleaseDisposition::Reject) {
+        if (disposition.value() ==
+            MediaAvStartupReleaseDisposition::Reject) {
             return failTerminal(::media::ErrorInfo::invalidArgument(
                 "Activation release sequencer rejects a release outside the live playback epoch"));
         }
@@ -429,6 +433,12 @@ MediaActivatedStartupReleaseSequencerNode::process(
             !authorized) {
             activationReservation->abandon();
             return failTerminal(authorized.error());
+        }
+        if (auto finalized =
+                activationReservation->finalizePublication();
+            !finalized) {
+            activationReservation->abandon();
+            return failTerminal(finalized.error());
         }
         m_activatedEvent = eventForCommit;
     }
