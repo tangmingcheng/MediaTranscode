@@ -60,4 +60,22 @@ MediaAvSyncRuntimeBootstrap::registerGroupAndIssueActivationCapability(
         MediaPlaybackEpochActivationCapability(service));
 }
 
+::media::Result<MediaAvReacquisitionAssemblyDependencies>
+MediaAvSyncRuntimeBootstrap::reacquisitionAssemblyDependencies(
+    const MediaPlaybackEpochActivationCapability& capability,
+    const std::shared_ptr<MediaAvSyncGroupRuntime>& group)
+{
+    auto transition = capability.m_transition.lock();
+    if (!transition || !group || !group->clock()) {
+        return ::media::Result<
+            MediaAvReacquisitionAssemblyDependencies>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "A/V reacquisition assembly requires the registered transition and master clock"));
+    }
+    return ::media::Result<
+        MediaAvReacquisitionAssemblyDependencies>::success(
+        MediaAvReacquisitionAssemblyDependencies{
+            std::move(transition), group->clock()});
+}
+
 } // namespace media::ffmpeg::graph

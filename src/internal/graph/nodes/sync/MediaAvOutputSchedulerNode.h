@@ -10,10 +10,13 @@
 #include <memory>
 #include <optional>
 #include <functional>
+#include <string_view>
 
 namespace media::ffmpeg::graph {
 
 class MediaAvSyncGroupRuntime;
+class MediaAvGenerationPurgeTarget;
+class MediaProtocolOutputGenerationState;
 
 class MediaAvOutputSchedulerNode final : public FFmpegNodeRuntime {
 public:
@@ -25,6 +28,12 @@ public:
     MediaAvOutputSchedulerNode(MediaNodeId nodeId,
                                VideoControllerFactory controllerFactory);
     static MediaNodeKind staticKind() noexcept;
+    static constexpr std::string_view generationPurgeIdentity() noexcept
+    {
+        return "scheduler_generation_state";
+    }
+    std::shared_ptr<MediaAvGenerationPurgeTarget>
+    generationPurgeTarget() const noexcept;
     ::media::Status start(MediaGraphExecutionContext& context) override;
     ::media::Result<MediaNodeProcessResult> process(
         MediaGraphExecutionContext& context) override;
@@ -68,6 +77,7 @@ private:
     std::optional<MediaAvSyncGroupKey> m_groupKey;
     MediaRunningTime m_transportLead = MediaRunningTime::fromNanoseconds(0);
     std::shared_ptr<MediaAvSyncGroupRuntime> m_group;
+    std::shared_ptr<MediaProtocolOutputGenerationState> m_generationState;
     VideoControllerFactory m_videoControllerFactory;
     std::unique_ptr<MediaVideoSyncController> m_videoController;
     std::optional<MediaAvSchedulerHead> m_videoHead;

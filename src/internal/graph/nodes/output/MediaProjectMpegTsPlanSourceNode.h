@@ -4,7 +4,13 @@
 #include "internal/graph/protocol/mpegts/MediaTsMuxPlan.h"
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
 
+#include <memory>
+#include <string_view>
+
 namespace media::ffmpeg::graph {
+
+class MediaAvGenerationPurgeTarget;
+class MediaProtocolOutputGenerationState;
 
 class MediaProjectMpegTsPlanSourceNode final : public FFmpegNodeRuntime {
 public:
@@ -12,6 +18,12 @@ public:
                                      MediaAvSyncGroupKey group,
                                      MediaTsMuxPlan plan);
     static MediaNodeKind staticKind() noexcept;
+    static constexpr std::string_view generationPurgeIdentity() noexcept
+    {
+        return "project_mpegts_output_generation_state";
+    }
+    std::shared_ptr<MediaAvGenerationPurgeTarget>
+    generationPurgeTarget() const noexcept;
     ::media::Status start(MediaGraphExecutionContext& context) override;
     ::media::Status stop(MediaGraphExecutionContext& context) override;
     void abort(MediaGraphExecutionContext& context) noexcept override;
@@ -25,6 +37,7 @@ private:
 
     MediaAvSyncGroupKey m_group;
     MediaTsMuxPlan m_plan;
+    std::shared_ptr<MediaProtocolOutputGenerationState> m_generationState;
     MediaBufferRef m_pendingPlan;
     bool m_published = false;
 };

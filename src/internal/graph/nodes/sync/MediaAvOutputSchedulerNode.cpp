@@ -5,6 +5,7 @@
 #include "internal/graph/nodes/sync/MediaAvScheduledOutputBuilder.h"
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
+#include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
 #include "internal/graph/sync/MediaScheduledAccessUnit.h"
 #include "internal/graph/sync/MediaVideoRepeatRequestBuffer.h"
 
@@ -44,12 +45,21 @@ MediaAvOutputSchedulerNode::MediaAvOutputSchedulerNode(
     VideoControllerFactory controllerFactory)
     : FFmpegNodeRuntime(nodeId, staticKind(), "MediaAvOutputSchedulerNode")
     , m_videoControllerFactory(std::move(controllerFactory))
+    , m_generationState(
+          std::make_shared<MediaProtocolOutputGenerationState>(
+              std::string(generationPurgeIdentity())))
 {
 }
 
 MediaNodeKind MediaAvOutputSchedulerNode::staticKind() noexcept
 {
     return MediaNodeKind::AvOutputScheduler;
+}
+
+std::shared_ptr<MediaAvGenerationPurgeTarget>
+MediaAvOutputSchedulerNode::generationPurgeTarget() const noexcept
+{
+    return m_generationState;
 }
 
 ::media::Status MediaAvOutputSchedulerNode::start(
@@ -109,6 +119,10 @@ MediaNodeKind MediaAvOutputSchedulerNode::staticKind() noexcept
     }
     auto epoch = m_group->playbackEpoch();
     if (!epoch) return ::media::Status::failure(epoch.error());
+    if (auto observed = m_generationState->observe(
+            epoch.value().generation); !observed) {
+        return observed;
+    }
     auto controller = m_videoControllerFactory(
         m_group->plan(), epoch.value().generation);
     if (!controller) {
@@ -890,6 +904,7 @@ void MediaAvOutputSchedulerNode::resetState() noexcept
     clearSchedulingState();
     m_groupKey.reset();
     m_group.reset();
+    m_generationState->resetLifecycle();
 }
 
 void MediaAvOutputSchedulerNode::clearSchedulingState() noexcept

@@ -191,4 +191,10 @@ MediaAvEpochTransitionService::snapshot() const noexcept
         m_coordinator.poisoned()};
 }
 
+const MediaAvGenerationTransitionPlan&
+MediaAvEpochTransitionService::transitionPlan() const noexcept
+{
+    return m_coordinator.m_plan;
+}
+
 } // namespace media::ffmpeg::graph

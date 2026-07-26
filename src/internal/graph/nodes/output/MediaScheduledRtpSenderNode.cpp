@@ -1,4 +1,5 @@
 #include "internal/graph/nodes/output/MediaScheduledRtpSenderNode.h"
+#include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
 
 #include "internal/graph/nodes/output/MediaScheduledRtpOpenTransaction.h"
 #include "internal/graph/nodes/output/MediaScheduledRtpSenderMaterializer.h"
@@ -28,8 +29,24 @@ MediaScheduledRtpSenderNode::MediaScheduledRtpSenderNode(
       m_plannedGroupKey(std::move(plannedGroupKey)),
       m_outputPlan(std::move(outputPlan)),
       m_sdpPlan(std::move(sdpPlan)),
-      m_dependencies(std::move(dependencies))
+      m_dependencies(std::move(dependencies)),
+      m_generationState(std::make_shared<MediaProtocolOutputGenerationState>(
+          m_outputPlan.stream == MediaScheduledStream::Video
+              ? "rtp_video_output_generation_state"
+              : "rtp_audio_output_generation_state"))
 {
+}
+
+std::string_view
+MediaScheduledRtpSenderNode::generationPurgeIdentity() const noexcept
+{
+    return m_generationState->plannedIdentity();
+}
+
+std::shared_ptr<MediaAvGenerationPurgeTarget>
+MediaScheduledRtpSenderNode::generationPurgeTarget() const noexcept
+{
+    return m_generationState;
 }
 
 ::media::Result<std::unique_ptr<MediaScheduledRtpSenderNode>>
@@ -137,6 +154,10 @@ MediaNodeKind MediaScheduledRtpSenderNode::staticKind() noexcept
                        : groupEpoch.error());
     }
     m_epoch = groupEpoch.value();
+    if (auto observed = m_generationState->observe(
+            m_epoch->generation); !observed) {
+        return ::media::Result<bool>::failure(observed.error());
+    }
     m_activation = std::move(*input.value());
     return ::media::Result<bool>::success(true);
 }
@@ -357,6 +378,7 @@ void MediaScheduledRtpSenderNode::resetGenerationState() noexcept
     m_description.reset();
     m_epoch.reset();
     m_descriptionEmitted = false;
+    m_generationState->resetLifecycle();
 }
 
 ::media::Status MediaScheduledRtpSenderNode::flush(

@@ -262,9 +262,11 @@ private:
 
 MediaAvGenerationTransitionPlan schedulerTransitionPlan()
 {
-    return MediaAvGenerationTransitionPlanner::plan(
-        MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp,
-        ms(1'000), ms(500));
+    return MediaAvGenerationTransitionPlan{
+        {{MediaAvGenerationParticipant::Scheduler,
+          {"scheduler_generation_state"}}},
+        ms(1'000),
+        ms(500)};
 }
 
 bool startFixture(TestContext& ctx, SchedulerFixture& f,

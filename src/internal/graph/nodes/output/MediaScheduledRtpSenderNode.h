@@ -9,8 +9,12 @@
 
 #include <memory>
 #include <optional>
+#include <string_view>
 
 namespace media::ffmpeg::graph {
+
+class MediaAvGenerationPurgeTarget;
+class MediaProtocolOutputGenerationState;
 
 struct MediaScheduledRtpSenderNodeDependencies final {
     std::shared_ptr<MediaAvSyncGroupRuntime> syncGroup;
@@ -28,6 +32,9 @@ public:
         MediaScheduledRtpSenderNodeDependencies dependencies);
 
     static MediaNodeKind staticKind() noexcept;
+    std::string_view generationPurgeIdentity() const noexcept;
+    std::shared_ptr<MediaAvGenerationPurgeTarget>
+    generationPurgeTarget() const noexcept;
     ::media::Status start(MediaGraphExecutionContext& context) override;
     ::media::Status flush(MediaGraphExecutionContext& context) override;
     ::media::Status stop(MediaGraphExecutionContext& context) override;
@@ -61,6 +68,7 @@ private:
     MediaScheduledRtpOutputPlan m_outputPlan;
     MediaSeparateRtpSdpRuntimePlan m_sdpPlan;
     MediaScheduledRtpSenderNodeDependencies m_dependencies;
+    std::shared_ptr<MediaProtocolOutputGenerationState> m_generationState;
     MediaBufferRef m_activation;
     MediaBufferRef m_codec;
     MediaBufferRef m_description;

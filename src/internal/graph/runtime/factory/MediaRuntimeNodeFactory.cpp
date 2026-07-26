@@ -74,6 +74,20 @@
 namespace media::ffmpeg::graph {
 namespace {
 
+template <typename Node>
+std::optional<MediaRuntimeGenerationPurgeRegistration>
+fixedGenerationPurgeRegistration(
+    MediaRuntimeNode& runtime,
+    MediaAvGenerationParticipant participant)
+{
+    auto* node = dynamic_cast<Node*>(&runtime);
+    if (!node) return std::nullopt;
+    return MediaRuntimeGenerationPurgeRegistration{
+        participant,
+        {std::string(Node::generationPurgeIdentity()),
+         node->generationPurgeTarget()}};
+}
+
 ::media::Result<MediaAvSyncGroupKey> requiredSyncGroup(
     const MediaNode& node,
     const char* nodeName,
@@ -558,6 +572,103 @@ MediaRuntimeNodeFactory::createScheduledRtpSender(
             ::media::ErrorInfo::allocationFailed(
                 "Scheduled RTP sender production dependencies"));
     }
+}
+
+std::optional<MediaRuntimeGenerationPurgeRegistration>
+MediaRuntimeNodeFactory::generationPurgeRegistration(
+    MediaRuntimeNode& runtime)
+{
+    if (auto registration =
+            fixedGenerationPurgeRegistration<MediaAvStartupCoordinatorNode>(
+                runtime,
+                MediaAvGenerationParticipant::CanonicalLineage)) {
+        return registration;
+    }
+    if (auto registration =
+            fixedGenerationPurgeRegistration<VideoDecodeNode>(
+                runtime,
+                MediaAvGenerationParticipant::CanonicalLineage)) {
+        return registration;
+    }
+    if (auto registration =
+            fixedGenerationPurgeRegistration<VideoFrameRateNode>(
+                runtime,
+                MediaAvGenerationParticipant::CanonicalLineage)) {
+        return registration;
+    }
+    if (auto registration =
+            fixedGenerationPurgeRegistration<VideoFilterNode>(
+                runtime,
+                MediaAvGenerationParticipant::CanonicalLineage)) {
+        return registration;
+    }
+    if (auto registration =
+            fixedGenerationPurgeRegistration<VideoEncodeNode>(
+                runtime,
+                MediaAvGenerationParticipant::CanonicalLineage)) {
+        return registration;
+    }
+    if (auto registration =
+            fixedGenerationPurgeRegistration<AudioDecodeNode>(
+                runtime,
+                MediaAvGenerationParticipant::CanonicalLineage)) {
+        return registration;
+    }
+    if (auto registration =
+            fixedGenerationPurgeRegistration<MediaAudioStartupTrimNode>(
+                runtime,
+                MediaAvGenerationParticipant::CanonicalLineage)) {
+        return registration;
+    }
+    if (auto registration =
+            fixedGenerationPurgeRegistration<AudioResampleNode>(
+                runtime,
+                MediaAvGenerationParticipant::CanonicalLineage)) {
+        return registration;
+    }
+    if (auto registration =
+            fixedGenerationPurgeRegistration<AudioEncodeNode>(
+                runtime,
+                MediaAvGenerationParticipant::CanonicalLineage)) {
+        return registration;
+    }
+    if (auto registration =
+            fixedGenerationPurgeRegistration<
+                MediaEncodedAudioCanonicalizerNode>(
+                runtime,
+                MediaAvGenerationParticipant::CanonicalLineage)) {
+        return registration;
+    }
+    if (auto registration =
+            fixedGenerationPurgeRegistration<MediaAudioDriftControllerNode>(
+                runtime,
+                MediaAvGenerationParticipant::AudioCorrection)) {
+        return registration;
+    }
+    if (auto registration =
+            fixedGenerationPurgeRegistration<MediaAvOutputSchedulerNode>(
+                runtime,
+                MediaAvGenerationParticipant::Scheduler)) {
+        return registration;
+    }
+    if (auto* sender =
+            dynamic_cast<MediaScheduledRtpSenderNode*>(&runtime)) {
+        const std::string identity(sender->generationPurgeIdentity());
+        const auto participant =
+            identity == "rtp_video_output_generation_state"
+            ? MediaAvGenerationParticipant::RtpVideoOutput
+            : MediaAvGenerationParticipant::RtpAudioOutput;
+        return MediaRuntimeGenerationPurgeRegistration{
+            participant,
+            {identity, sender->generationPurgeTarget()}};
+    }
+    if (auto registration =
+            fixedGenerationPurgeRegistration<MediaProjectMpegTsPlanSourceNode>(
+                runtime,
+                MediaAvGenerationParticipant::ProjectMpegTsOutput)) {
+        return registration;
+    }
+    return std::nullopt;
 }
 
 bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept

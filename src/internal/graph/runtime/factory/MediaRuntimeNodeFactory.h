@@ -3,14 +3,21 @@
 #include "internal/graph/core/MediaNode.h"
 #include "internal/graph/runtime/MediaRuntimeNode.h"
 #include "internal/graph/runtime/factory/MediaRuntimeNodeBinding.h"
+#include "internal/graph/runtime/compilation/MediaAvGenerationParticipantAssembler.h"
 #include "internal/graph/sync/MediaPlaybackEpochActivationCapability.h"
 #include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
 #include "internal/graph/sync/startup/MediaAvStartupVideoPreparationCapability.h"
 #include "media_transcode/Result.h"
 
 #include <memory>
+#include <optional>
 
 namespace media::ffmpeg::graph {
+
+struct MediaRuntimeGenerationPurgeRegistration final {
+    MediaAvGenerationParticipant participant;
+    MediaAvGenerationPurgeRegistration registration;
+};
 
 class MediaRuntimeNodeFactory final {
 public:
@@ -33,6 +40,8 @@ public:
     createScheduledRtpSender(
         const MediaNode& node,
         std::shared_ptr<MediaAvSyncGroupRuntime> syncGroup);
+    static std::optional<MediaRuntimeGenerationPurgeRegistration>
+    generationPurgeRegistration(MediaRuntimeNode& node);
     static bool supported(MediaNodeKind kind) noexcept;
 };
 

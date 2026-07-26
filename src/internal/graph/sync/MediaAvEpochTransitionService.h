@@ -35,6 +35,7 @@ public:
     ::media::Status pollTransitionTimeout(MediaRunningTime elapsedSinceBegin);
     void abort() noexcept;
     MediaAvEpochTransitionSnapshot snapshot() const noexcept;
+    const MediaAvGenerationTransitionPlan& transitionPlan() const noexcept;
 
 private:
     friend class MediaAvReacquisitionCoordinator;

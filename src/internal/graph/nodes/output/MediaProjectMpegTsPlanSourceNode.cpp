@@ -2,6 +2,7 @@
 
 #include "internal/graph/runtime/buffer/MediaPlaybackEpochActivatedBuffer.h"
 #include "internal/graph/runtime/buffer/MediaTsMuxRuntimePlanBuffer.h"
+#include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
 
 namespace media::ffmpeg::graph {
 
@@ -9,13 +10,23 @@ MediaProjectMpegTsPlanSourceNode::MediaProjectMpegTsPlanSourceNode(
     MediaNodeId nodeId, MediaAvSyncGroupKey group, MediaTsMuxPlan plan)
     : FFmpegNodeRuntime(nodeId, staticKind(),
                         "MediaProjectMpegTsPlanSourceNode"),
-      m_group(std::move(group)), m_plan(std::move(plan))
+      m_group(std::move(group)),
+      m_plan(std::move(plan)),
+      m_generationState(
+          std::make_shared<MediaProtocolOutputGenerationState>(
+              std::string(generationPurgeIdentity())))
 {
 }
 
 MediaNodeKind MediaProjectMpegTsPlanSourceNode::staticKind() noexcept
 {
     return MediaNodeKind::ProjectMpegTsPlanSource;
+}
+
+std::shared_ptr<MediaAvGenerationPurgeTarget>
+MediaProjectMpegTsPlanSourceNode::generationPurgeTarget() const noexcept
+{
+    return m_generationState;
 }
 
 ::media::Status MediaProjectMpegTsPlanSourceNode::start(
@@ -75,6 +86,11 @@ MediaProjectMpegTsPlanSourceNode::onProcess(
                 ::media::ErrorInfo::invalidArgument(
                     "Project MPEG-TS plan source rejects mismatched activation"));
         }
+        if (auto observed = m_generationState->observe(
+                activated->epoch().generation); !observed) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                observed.error());
+        }
         auto created = MediaTsMuxRuntimePlanBuffer::create(
             m_plan, activated->epoch(), m_group);
         if (!created) {
@@ -108,6 +124,7 @@ void MediaProjectMpegTsPlanSourceNode::resetState() noexcept
 {
     m_pendingPlan.reset();
     m_published = false;
+    m_generationState->resetLifecycle();
 }
 
 } // namespace media::ffmpeg::graph
