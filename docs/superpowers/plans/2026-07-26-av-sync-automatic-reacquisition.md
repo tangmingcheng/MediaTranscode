@@ -199,6 +199,16 @@ git push origin codex/quality-priority-improvements
 - Modify: `src/internal/graph/runtime/compilation/MediaGraphRuntimeCompiler.cpp`
 - Modify: `src/internal/graph/runtime/compilation/MediaAvSyncRuntimeBootstrap.h`
 - Modify: `src/internal/graph/runtime/compilation/MediaAvSyncRuntimeBootstrap.cpp`
+- Create: `src/internal/graph/sync/MediaProtocolOutputGenerationState.h`
+- Create: `src/internal/graph/sync/MediaProtocolOutputGenerationState.cpp`
+- Modify: `src/internal/graph/nodes/sync/MediaAvOutputSchedulerNode.h`
+- Modify: `src/internal/graph/nodes/sync/MediaAvOutputSchedulerNode.cpp`
+- Modify: `src/internal/graph/nodes/output/MediaScheduledRtpSenderNode.h`
+- Modify: `src/internal/graph/nodes/output/MediaScheduledRtpSenderNode.cpp`
+- Modify: `src/internal/graph/nodes/output/MediaScheduledTsAccessUnitAdapterNode.h`
+- Modify: `src/internal/graph/nodes/output/MediaScheduledTsAccessUnitAdapterNode.cpp`
+- Modify: `src/internal/graph/nodes/output/MediaProjectMpegTsPlanSourceNode.h`
+- Modify: `src/internal/graph/nodes/output/MediaProjectMpegTsPlanSourceNode.cpp`
 - Modify: `CMakeLists.txt`
 - Create test: `tests/unit/av_reacquisition_runtime_assembly_tests.cpp`
 
@@ -258,6 +268,13 @@ moving nodes into `MediaGraphScheduler`.
 Bootstrap must pass the existing transition service and master clock by owned
 shared lifetime. No compiler path may synthesize a participant or identity.
 
+Create the scheduler and protocol output generation-state objects in this task
+so the complete planner-declared set can seal. Each target must expose its
+stable planned identity and implement strict old/next generation validation.
+Keep UDP socket, byte-sink, and mux resource ownership outside these purge
+targets. Task 5 will complete and verify protocol-specific rollover semantics;
+Task 2 must already provide the complete compilable participant boundary.
+
 - [ ] **Step 4: Run GREEN**
 
 Use one clean-first build with both targets:
@@ -284,6 +301,16 @@ git add CMakeLists.txt `
   src/internal/graph/runtime/compilation/MediaAvSyncRuntimeBootstrap.cpp `
   src/internal/graph/runtime/factory/MediaRuntimeNodeFactory.h `
   src/internal/graph/runtime/factory/MediaRuntimeNodeFactory.cpp `
+  src/internal/graph/sync/MediaProtocolOutputGenerationState.h `
+  src/internal/graph/sync/MediaProtocolOutputGenerationState.cpp `
+  src/internal/graph/nodes/sync/MediaAvOutputSchedulerNode.h `
+  src/internal/graph/nodes/sync/MediaAvOutputSchedulerNode.cpp `
+  src/internal/graph/nodes/output/MediaScheduledRtpSenderNode.h `
+  src/internal/graph/nodes/output/MediaScheduledRtpSenderNode.cpp `
+  src/internal/graph/nodes/output/MediaScheduledTsAccessUnitAdapterNode.h `
+  src/internal/graph/nodes/output/MediaScheduledTsAccessUnitAdapterNode.cpp `
+  src/internal/graph/nodes/output/MediaProjectMpegTsPlanSourceNode.h `
+  src/internal/graph/nodes/output/MediaProjectMpegTsPlanSourceNode.cpp `
   tests/unit/av_reacquisition_runtime_assembly_tests.cpp
 git commit -m "feat: assemble planned A/V purge participants"
 git push origin codex/quality-priority-improvements
@@ -509,8 +536,8 @@ git push origin codex/quality-priority-improvements
 ### Task 5: Protocol Output Generation Rollover
 
 **Files:**
-- Create: `src/internal/graph/sync/MediaProtocolOutputGenerationState.h`
-- Create: `src/internal/graph/sync/MediaProtocolOutputGenerationState.cpp`
+- Modify: `src/internal/graph/sync/MediaProtocolOutputGenerationState.h`
+- Modify: `src/internal/graph/sync/MediaProtocolOutputGenerationState.cpp`
 - Modify: `src/internal/graph/nodes/sync/MediaAvOutputSchedulerNode.h`
 - Modify: `src/internal/graph/nodes/sync/MediaAvOutputSchedulerNode.cpp`
 - Modify: `src/internal/graph/nodes/output/MediaScheduledRtpSenderNode.h`
@@ -554,7 +581,7 @@ state survives purge.
 
 - [ ] **Step 3: Implement planned output targets**
 
-Use focused state objects per participant:
+Complete the focused state objects introduced by Task 2:
 
 ```cpp
 class MediaProtocolOutputGenerationState final
