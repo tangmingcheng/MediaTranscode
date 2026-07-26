@@ -2,6 +2,7 @@
 #include "common/GraphRuntimeTestSupport.h"
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 #include "internal/graph/builder/local/LocalFileTranscodeGraphBuilder.h"
 #include "internal/graph/builder/realtime/MediaRealtimeRtpTranscodeGraphBuilder.h"
 #include "internal/graph/builder/realtime/MediaRealtimeOptionApplier.h"
@@ -702,7 +703,7 @@ MediaNodeId addAudioResampleHarnessGraph(MediaGraph& graph)
     graph.addOutputPort(resample, "frame", MediaStreamKind::Audio, MediaEdgeKind::SoftwareFrame, MediaPayloadKind::Frame, true, true);
     graph.addInputPort(sink, "frame", MediaStreamKind::Audio, MediaEdgeKind::SoftwareFrame, MediaPayloadKind::Frame, true, true);
 
-    const MediaEdgePolicy policy = MediaGraphBuildSupport::blockingQueuePolicy(8);
+    const MediaEdgePolicy policy = MediaBlockingEdgePolicyPlanner::planQueue(8);
     graph.connect(codecSource, "codec", resample, "codec", "test.codec -> resample.codec", policy);
     graph.connect(frameSource, "frame", resample, "frame", "test.frame -> resample.frame", policy);
     graph.connect(resample, "frame", sink, "frame", "test.resample.frame -> sink.frame", policy);
@@ -1119,7 +1120,7 @@ void testRtpMuxStateMachineRejectsIllegalTransitions(TestContext& ctx)
 void testAudioDecodeWaitsForCodecMetadataBeforePackets(TestContext& ctx)
 {
     MediaGraph graph;
-    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(4);
+    const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(4);
     const MediaNodeId codecSource = graph.addNode(MediaNodeKind::DebugDump, "test.audio.codec_source");
     const MediaNodeId packetSource = graph.addNode(MediaNodeKind::DebugDump, "test.audio.packet_source");
     const MediaNodeId decoder = graph.addNode(MediaNodeKind::AudioDecode, "test.audio.decoder");
@@ -1156,7 +1157,7 @@ void testAudioDecodeWaitsForCodecMetadataBeforePackets(TestContext& ctx)
 void testAudioEncodeWaitsForCodecMetadataBeforeFrames(TestContext& ctx)
 {
     MediaGraph graph;
-    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(4);
+    const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(4);
     const MediaNodeId codecSource = graph.addNode(MediaNodeKind::DebugDump, "test.audio.encoder_codec_source");
     const MediaNodeId frameSource = graph.addNode(MediaNodeKind::DebugDump, "test.audio.encoder_frame_source");
     const MediaNodeId encoder = graph.addNode(MediaNodeKind::AudioEncode, "test.audio.encoder");
@@ -3422,7 +3423,7 @@ void testSynchronizedFramePoliciesAreStreamSpecific(TestContext& ctx)
 void testPacketStartGateOpensOnKeyFrame(TestContext& ctx)
 {
     MediaGraph graph;
-    const MediaEdgePolicy policy = MediaGraphBuildSupport::blockingQueuePolicy(4);
+    const MediaEdgePolicy policy = MediaBlockingEdgePolicyPlanner::planQueue(4);
 
     const MediaNodeId source = graph.addNode(MediaNodeKind::DebugDump, "test.packet_source");
     const MediaNodeId gate = graph.addNode(MediaNodeKind::PacketStartGate, "test.packet_start_gate");

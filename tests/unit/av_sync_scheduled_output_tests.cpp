@@ -2,6 +2,7 @@
 #include "common/AvSyncRuntimeTestSupport.h"
 #include "common/TestAssert.h"
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 #include "internal/graph/builder/segments/MediaRealtimeAvSchedulerSegmentBuilder.h"
 #include "internal/graph/nodes/sync/MediaAvOutputSchedulerNode.h"
 #include "internal/graph/nodes/sync/MediaScheduledOutputRouterNode.h"
@@ -200,13 +201,13 @@ RouterFixture routerFixture(
         MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
     fixture.graph.connect(
         fixture.source, "scheduled", fixture.router, "scheduled", "scheduled",
-        MediaGraphBuildSupport::blockingQueuePolicy(8));
+        MediaBlockingEdgePolicyPlanner::planQueue(8));
     fixture.graph.connect(
         fixture.router, "video", fixture.videoSink, "video", "video",
-        MediaGraphBuildSupport::blockingQueuePolicy(videoCapacity));
+        MediaBlockingEdgePolicyPlanner::planQueue(videoCapacity));
     fixture.graph.connect(
         fixture.router, "audio", fixture.audioSink, "audio", "audio",
-        MediaGraphBuildSupport::blockingQueuePolicy(audioCapacity));
+        MediaBlockingEdgePolicyPlanner::planQueue(audioCapacity));
     EXPECT_TRUE(ctx, fixture.execution.compile(fixture.graph));
     return fixture;
 }
@@ -235,10 +236,10 @@ RouterFixture serializedRouterFixture(TestContext& ctx, std::size_t capacity = 4
         MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
     fixture.graph.connect(
         fixture.source, "scheduled", fixture.router, "scheduled", "scheduled",
-        MediaGraphBuildSupport::blockingQueuePolicy(8));
+        MediaBlockingEdgePolicyPlanner::planQueue(8));
     fixture.graph.connect(
         fixture.router, "serialized", fixture.videoSink, "serialized",
-        "serialized", MediaGraphBuildSupport::blockingQueuePolicy(capacity));
+        "serialized", MediaBlockingEdgePolicyPlanner::planQueue(capacity));
     EXPECT_TRUE(ctx, fixture.execution.compile(fixture.graph));
     return fixture;
 }
@@ -695,11 +696,11 @@ void testActiveSharedSchedulerRoutesEqualEpochWithoutDuplicateRetry(
     graph.connect(
         built.value().video.node, built.value().video.port,
         videoSink, "video", "video sink",
-        MediaGraphBuildSupport::blockingQueuePolicy(1));
+        MediaBlockingEdgePolicyPlanner::planQueue(1));
     graph.connect(
         built.value().audio.node, built.value().audio.port,
         audioSink, "audio", "audio sink",
-        MediaGraphBuildSupport::blockingQueuePolicy(1));
+        MediaBlockingEdgePolicyPlanner::planQueue(1));
     MediaGraphExecutionContext execution;
     std::unique_ptr<MediaGraphRuntime> runtime;
     EXPECT_TRUE(ctx, media_transcode::test::compileAndActivateAvSyncRuntime(

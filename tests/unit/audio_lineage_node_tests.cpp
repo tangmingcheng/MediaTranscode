@@ -1,4 +1,5 @@
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 #include "internal/graph/nodes/audio/AudioDecodeNode.h"
 #include "internal/graph/nodes/audio/AudioEncodeNode.h"
 #include "internal/graph/nodes/audio/AudioResampleNode.h"
@@ -247,7 +248,7 @@ MediaBufferRef makeBoundFrame(std::uint64_t generation,
 void decoderRetryAnd44100To48000Chain()
 {
     MediaGraph graph;
-    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(4);
+    const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(4);
     const auto decodeCodecSource = graph.addNode(MediaNodeKind::DebugDump, "audio.decode.codec");
     const auto resampleCodecSource = graph.addNode(MediaNodeKind::DebugDump, "audio.resample.codec");
     const auto packetSource = graph.addNode(MediaNodeKind::DebugDump, "audio.packet");
@@ -437,7 +438,7 @@ void canonicalAudioSeamRejectsMissingOrInvalidExactInterval()
 void decoderRejectsSourceIntervalRateConflict()
 {
     MediaGraph graph;
-    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(4);
+    const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(4);
     const auto codecSource = graph.addNode(
         MediaNodeKind::DebugDump, "fractional.codec");
     const auto packetSource = graph.addNode(
@@ -496,7 +497,7 @@ void decoderRejectsSourceIntervalRateConflict()
 void decoderPurgeDropsEagainPacketBeforeRetry()
 {
     MediaGraph graph;
-    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(1);
+    const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(1);
     const auto codecSource = graph.addNode(MediaNodeKind::DebugDump, "purge.codec");
     const auto packetSource = graph.addNode(MediaNodeKind::DebugDump, "purge.packet");
     const auto decode = graph.addNode(MediaNodeKind::AudioDecode, "purge.decode");
@@ -608,7 +609,7 @@ void retainedControlFreshnessIsExactAndGenerationBound()
 void startupTrimDropsRetainedEofAndContinuesNextGeneration()
 {
     MediaGraph graph;
-    auto policy = MediaGraphBuildSupport::blockingQueuePolicy(1);
+    auto policy = MediaBlockingEdgePolicyPlanner::planQueue(1);
     policy.queuePolicy.allowFlushControlBypass = false;
     const auto source = graph.addNode(MediaNodeKind::DebugDump, "startup.source");
     const auto trim = graph.addNode(MediaNodeKind::AudioStartupTrim, "startup.trim");
@@ -659,7 +660,7 @@ void startupTrimDropsRetainedEofAndContinuesNextGeneration()
 void encoderCodecConfigSurvivesOutputBackpressureExactlyOnce()
 {
     MediaGraph graph;
-    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(1);
+    const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(1);
     const auto codecSource = graph.addNode(
         MediaNodeKind::DebugDump, "encoder-config.codec-source");
     const auto frameSource = graph.addNode(
@@ -727,7 +728,7 @@ void encoderCodecConfigSurvivesOutputBackpressureExactlyOnce()
 void resampleDropsRetainedEofAndContinuesNextGeneration()
 {
     MediaGraph graph;
-    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(1);
+    const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(1);
     const auto codecSource = graph.addNode(
         MediaNodeKind::DebugDump, "resample-retained.codec");
     const auto frameSource = graph.addNode(
@@ -820,7 +821,7 @@ void resampleMapperFailureDoesNotConsumeLineage()
 void encoderDropsRetainedEofAndContinuesNextGeneration()
 {
     MediaGraph graph;
-    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(1);
+    const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(1);
     const auto codecSource = graph.addNode(
         MediaNodeKind::DebugDump, "encode-retained.codec");
     const auto frameSource = graph.addNode(

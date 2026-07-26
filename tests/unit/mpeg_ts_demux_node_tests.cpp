@@ -1,6 +1,7 @@
 #include "common/TestAssert.h"
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/nodes/demux/MpegTsDemuxNode.h"
 #include "internal/graph/nodes/sync/MediaCanonicalInputNode.h"
@@ -218,7 +219,7 @@ struct NodeFixture final {
 
     explicit NodeFixture(bool options = true, bool clockOutput = false)
     {
-        const auto queue = MediaGraphBuildSupport::blockingQueuePolicy(16);
+        const auto queue = MediaBlockingEdgePolicyPlanner::planQueue(16);
         source = graph.addNode(MediaNodeKind::DebugDump, "test.source");
         demux = graph.addNode(MediaNodeKind::MpegTsDemux, "test.demux");
         videoSink = graph.addNode(MediaNodeKind::DebugDump, "test.video");

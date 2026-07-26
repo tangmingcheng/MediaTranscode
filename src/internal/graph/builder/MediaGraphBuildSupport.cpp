@@ -31,20 +31,6 @@ std::string ownedMessage(std::string_view owner, std::string_view action, std::s
 
 } // namespace
 
-MediaEdgePolicy blockingQueuePolicy(std::size_t capacity) noexcept
-{
-    MediaEdgePolicy policy;
-    policy.queuePolicy.mode = MediaQueueMode::Blocking;
-    policy.queuePolicy.storageMode = MediaQueueStorageMode::Deque;
-    policy.queuePolicy.bounded = true;
-    policy.queuePolicy.capacity = capacity;
-    policy.queuePolicy.overflowPolicy = MediaQueueOverflowPolicy::BlockProducer;
-    policy.queuePolicy.preserveOrdering = true;
-    policy.queuePolicy.allowFlushControlBypass = true;
-    policy.queuePolicy.collectMetrics = true;
-    return policy;
-}
-
 MediaFormatDescriptor streamIndexDescriptor(MediaStreamKind streamKind, int streamIndex) noexcept
 {
     MediaFormatDescriptor descriptor;

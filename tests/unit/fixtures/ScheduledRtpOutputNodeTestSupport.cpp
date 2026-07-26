@@ -3,6 +3,7 @@
 #include "common/GraphRuntimeTestSupport.h"
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 #include "internal/graph/nodes/output/MediaScheduledRtpSenderNodePlanCodec.h"
 #include "internal/graph/protocol/sdp/MediaAacLatmSdpCodecDescriptionFactory.h"
 #include "internal/graph/protocol/sdp/MediaH264SdpCodecDescriptionFactory.h"
@@ -163,7 +164,7 @@ ActiveGroupFixture activeGroup(
     graph.addInputPort(
         sink, "scheduled", MediaStreamKind::Any,
         MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
-    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(8);
+    const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(8);
     graph.connect(video, "packet", scheduler, "video", "video", policy);
     graph.connect(audio, "packet", scheduler, "audio", "audio", policy);
     graph.connect(
@@ -376,9 +377,9 @@ SenderGraphFixture senderGraph(
     fixture.graph.addInputPort(
         fixture.descriptionSink, "description", MediaStreamKind::Metadata,
         MediaEdgeKind::Event, MediaPayloadKind::GraphEvent, true, false);
-    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(8);
+    const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(8);
     const auto descriptionPolicy =
-        MediaGraphBuildSupport::blockingQueuePolicy(descriptionCapacity);
+        MediaBlockingEdgePolicyPlanner::planQueue(descriptionCapacity);
     fixture.graph.connect(
         fixture.epochSource, "epoch", fixture.sender, "epoch", "epoch",
         policy);

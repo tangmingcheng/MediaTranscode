@@ -2,6 +2,7 @@
 #include "common/TestAssert.h"
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 #include "internal/graph/builder/segments/MediaScheduledMpegTsOutputSegmentBuilder.h"
 #include "internal/graph/core/MediaGraphValidation.h"
 #include "internal/graph/nodes/mux/FileMuxNode.h"
@@ -280,8 +281,8 @@ AssemblyFixture assemblyFixture(TestContext& ctx)
                           MediaEdgeKind::EncodedPacket,
                           MediaPayloadKind::TsAccessUnit);
 
-    const auto metadata = MediaGraphBuildSupport::blockingQueuePolicy(1);
-    const auto packet = MediaGraphBuildSupport::blockingQueuePolicy(4);
+    const auto metadata = MediaBlockingEdgePolicyPlanner::planQueue(1);
+    const auto packet = MediaBlockingEdgePolicyPlanner::planQueue(4);
     f.graph.connect(f.epochSource, "epoch", f.planSource, "epoch", "epoch",
                     metadata);
     f.graph.connect(f.planSource, "plan", f.mux, "plan", "mux plan", metadata);
@@ -606,7 +607,7 @@ void segmentBuildsCompleteAcyclicTopology(TestContext& ctx)
             "udp://127.0.0.1:7000", MediaOutputResourceKind::ByteSink,
             MediaMuxSessionKind::ProjectMpegTs,
             MediaProjectMpegTsOutputPlan::accept(48'000, muxPlan()).value()},
-        queues, MediaGraphBuildSupport::blockingEdgePolicySet(queues),
+        queues, MediaBlockingEdgePolicyPlanner::plan(queues),
         {}, {{}, ms(1'000), ms(500)}, {}, {}};
     auto built = MediaScheduledMpegTsOutputSegmentBuilder::build(
         graph,

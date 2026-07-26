@@ -2,6 +2,7 @@
 #include "common/GraphRuntimeTestSupport.h"
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/nodes/mux/MediaMuxCompletionState.h"
 #include "internal/graph/nodes/merge/PacketMergeNode.h"
@@ -145,7 +146,7 @@ MediaGraph makePendingOutputGraph(MediaNodeId& sourceId,
                         MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
     graph.addInputPort(firstSinkId, "packet", MediaStreamKind::Video,
                        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
-    auto queuePolicy = MediaGraphBuildSupport::blockingQueuePolicy(1);
+    auto queuePolicy = MediaBlockingEdgePolicyPlanner::planQueue(1);
     queuePolicy.queuePolicy.overflowPolicy = overflowPolicy;
     graph.connect(sourceId, "packet", firstSinkId, "packet", "pending first", queuePolicy);
     if (secondSinkId) {
@@ -153,7 +154,7 @@ MediaGraph makePendingOutputGraph(MediaNodeId& sourceId,
         graph.addInputPort(*secondSinkId, "packet", MediaStreamKind::Video,
                            MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
         graph.connect(sourceId, "packet", *secondSinkId, "packet", "pending second",
-                      MediaGraphBuildSupport::blockingQueuePolicy(1));
+                      MediaBlockingEdgePolicyPlanner::planQueue(1));
     }
     return graph;
 }
@@ -381,7 +382,7 @@ MediaGraph makeFinishedNodeGraph(MediaNodeId& sourceId, MediaNodeId& sinkId)
     graph.addInputPort(sinkId, "event", MediaStreamKind::Control,
                        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent, true, true);
     graph.connect(sourceId, "event", sinkId, "event", "finished event",
-                  MediaGraphBuildSupport::blockingQueuePolicy(1));
+                  MediaBlockingEdgePolicyPlanner::planQueue(1));
     return graph;
 }
 
@@ -496,7 +497,7 @@ void testPacketMergeWaitsForEveryInputTerminal(TestContext& ctx)
     graph.addInputPort(mergeId, "b", MediaStreamKind::Video, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
     graph.addOutputPort(mergeId, "packet", MediaStreamKind::Video, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
     graph.addInputPort(sink, "packet", MediaStreamKind::Video, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
-    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(8);
+    const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(8);
     graph.connect(sourceA, "packet", mergeId, "a", "merge a", policy);
     graph.connect(sourceB, "packet", mergeId, "b", "merge b", policy);
     graph.connect(mergeId, "packet", sink, "packet", "merged", policy);
@@ -575,7 +576,7 @@ void testPacketMergeSameInstanceRestartsWithoutTerminalState(TestContext& ctx)
         graph.addInputPort(mergeId, "b", MediaStreamKind::Video, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
         graph.addOutputPort(mergeId, "packet", MediaStreamKind::Video, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
         graph.addInputPort(sinkId, "packet", MediaStreamKind::Video, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
-        const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(8);
+        const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(8);
         graph.connect(sourceA, "packet", mergeId, "a", "restart a", policy);
         graph.connect(sourceB, "packet", mergeId, "b", "restart b", policy);
         graph.connect(mergeId, "packet", sinkId, "packet", "restart merged", policy);

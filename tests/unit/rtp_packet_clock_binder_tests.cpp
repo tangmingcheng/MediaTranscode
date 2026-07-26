@@ -1,4 +1,5 @@
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/core/MediaGraphDump.h"
 #include "internal/graph/nodes/sync/MediaRtpClockSnapshotFanoutNode.h"
@@ -317,11 +318,11 @@ struct BinderFixture final {
         graph.addInputPort(sink, "packet", stream,
                            MediaEdgeKind::InputPacket, MediaPayloadKind::Packet);
         assert(graph.connect(packetSource, "packet", binder, "packet", "packet.in",
-                             MediaGraphBuildSupport::blockingQueuePolicy(8)));
+                             MediaBlockingEdgePolicyPlanner::planQueue(8)));
         assert(graph.connect(clockSource, "clock", binder, "clock", "clock.in",
-                             MediaGraphBuildSupport::blockingQueuePolicy(8)));
+                             MediaBlockingEdgePolicyPlanner::planQueue(8)));
         assert(graph.connect(binder, "packet", sink, "packet", "packet.out",
-                             MediaGraphBuildSupport::blockingQueuePolicy(outputCapacity)));
+                             MediaBlockingEdgePolicyPlanner::planQueue(outputCapacity)));
         assert(graph.setNodeOption(binder, "rtp_clock_binder.stream",
                                    stream == MediaStreamKind::Video ? "video" : "audio"));
         assert(graph.setNodeOption(binder, "rtp_clock_binder.acquiring_capacity",
@@ -645,7 +646,7 @@ void fanoutPublishesTheSameImmutableSnapshotBuffer()
                         MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
     graph.addInputPort(fanout, "clock", MediaStreamKind::Metadata,
                        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
-    const auto queue = MediaGraphBuildSupport::blockingQueuePolicy(2);
+    const auto queue = MediaBlockingEdgePolicyPlanner::planQueue(2);
     assert(graph.connect(source, "clock", fanout, "clock", "clock.in", queue));
     std::vector<MediaNodeId> sinks;
     for (const char* name : {"video", "audio", "startup"}) {

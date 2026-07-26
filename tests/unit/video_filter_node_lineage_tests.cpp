@@ -1,4 +1,5 @@
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/nodes/video/VideoFilterNode.h"
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
@@ -55,11 +56,11 @@ FilterGraphFixture makeFilterGraph(
     fixture.graph.addInputPort(fixture.node, "codec", MediaStreamKind::Metadata,
                                MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, true);
     fixture.graph.connect(frameSource, "frame", fixture.node, "frame", "filter input",
-                          MediaGraphBuildSupport::blockingQueuePolicy(8));
+                          MediaBlockingEdgePolicyPlanner::planQueue(8));
     fixture.graph.connect(codecSource, "codec", fixture.node, "codec", "filter codec",
-                          MediaGraphBuildSupport::blockingQueuePolicy(1));
+                          MediaBlockingEdgePolicyPlanner::planQueue(1));
     fixture.graph.connect(fixture.node, "frame", fixture.sink, "frame", "filter output",
-                          MediaGraphBuildSupport::blockingQueuePolicy(outputCapacity));
+                          MediaBlockingEdgePolicyPlanner::planQueue(outputCapacity));
     return fixture;
 }
 

@@ -1,5 +1,6 @@
 #include "internal/graph/nodes/audio/MediaAudioStartupTrimNode.h"
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
@@ -210,7 +211,7 @@ void retainedOldOutputIsDroppedBeforeNextGenerationRestart()
                         MediaEdgeKind::SoftwareFrame, MediaPayloadKind::Frame);
     graph.addInputPort(sink, "frame", MediaStreamKind::Audio,
                        MediaEdgeKind::SoftwareFrame, MediaPayloadKind::Frame);
-    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(1);
+    const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(1);
     assert(graph.connect(source, "frame", trimId, "frame", "trim.input", policy));
     assert(graph.connect(trimId, "frame", sink, "frame", "trim.output", policy));
 
@@ -341,7 +342,7 @@ void terminalBeforeFirstRetainedSampleFailsClosed()
                         MediaEdgeKind::SoftwareFrame, MediaPayloadKind::Unknown);
     graph.addInputPort(sink, "frame", MediaStreamKind::Audio,
                        MediaEdgeKind::SoftwareFrame, MediaPayloadKind::Unknown);
-    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(2);
+    const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(2);
     assert(graph.connect(source, "frame", trimId, "frame", "terminal.input", policy));
     assert(graph.connect(trimId, "frame", sink, "frame", "terminal.output", policy));
 

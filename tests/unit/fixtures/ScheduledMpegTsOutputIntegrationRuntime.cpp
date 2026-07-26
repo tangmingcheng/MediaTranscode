@@ -4,6 +4,7 @@
 #include "unit/fixtures/ScheduledMpegTsDecodeSampleFixture.h"
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 #include "internal/graph/builder/segments/MediaRealtimeAvSyncNodeConfigurator.h"
 #include "internal/graph/builder/segments/MediaRealtimeAvSchedulerSegmentBuilder.h"
 #include "internal/graph/builder/segments/MediaScheduledMpegTsOutputSegmentBuilder.h"
@@ -151,7 +152,7 @@ MediaEndpoint addSource(MediaGraph& graph,
     result.graph.addInputPort(
         releaseSink, "release", MediaStreamKind::Metadata,
         MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
-    const auto eventPolicy = MediaGraphBuildSupport::blockingQueuePolicy(2);
+    const auto eventPolicy = MediaBlockingEdgePolicyPlanner::planQueue(2);
     if (!result.graph.connect(releaseSource, "release", result.binder,
                               "release", "release -> binder", eventPolicy) ||
         !result.graph.connect(result.binder, "transaction", result.sequencer,

@@ -4,6 +4,7 @@
 #include "common/DeterministicRuntimeFault.h"
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/nodes/mux/MediaMuxCompletionState.h"
@@ -377,7 +378,7 @@ void testChannelsWakeOnlyTheirConsumersAndAnyInputWakes(TestContext& ctx)
     graph.addInputPort(consumerA, "a", MediaStreamKind::Video, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
     graph.addInputPort(consumerA, "b", MediaStreamKind::Video, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
     graph.addInputPort(consumerB, "packet", MediaStreamKind::Video, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
-    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(4);
+    const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(4);
     graph.connect(sourceA, "packet", consumerA, "a", "wake a", policy);
     graph.connect(sourceB, "packet", consumerA, "b", "wake b", policy);
     graph.connect(sourceB, "packet", consumerB, "packet", "wake other", policy);
@@ -692,7 +693,7 @@ void testRuntimeReportAggregatesQueueDrops(TestContext& ctx)
     const MediaNodeId sink = graph.addNode(MediaNodeKind::PacketMerge, "drop.sink");
     graph.addOutputPort(source, "packet", MediaStreamKind::Video, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
     graph.addInputPort(sink, "packet", MediaStreamKind::Video, MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
-    MediaEdgePolicy edgePolicy = MediaGraphBuildSupport::blockingQueuePolicy(1);
+    MediaEdgePolicy edgePolicy = MediaBlockingEdgePolicyPlanner::planQueue(1);
     edgePolicy.queuePolicy.overflowPolicy = MediaQueueOverflowPolicy::DropNewest;
     graph.connect(source, "packet", sink, "packet", "drop.edge", edgePolicy);
 

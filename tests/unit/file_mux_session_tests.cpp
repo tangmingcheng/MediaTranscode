@@ -2,6 +2,7 @@
 
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/nodes/mux/FileMuxNode.h"
 #include "internal/graph/nodes/mux/FFmpegFileMuxSession.h"
@@ -150,7 +151,7 @@ struct FileMuxHarness final {
                            MediaEdgeKind::Metadata, MediaPayloadKind::Unknown, true, true);
         graph.addInputPort(mux, "packet", MediaStreamKind::Any,
                            MediaEdgeKind::EncodedPacket, MediaPayloadKind::Unknown, true, true);
-        const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(8);
+        const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(8);
         graph.connect(resourceSource, "out", mux, "resource", "resource", policy);
         graph.connect(configSource, "out", mux, "codec", "config", policy);
         graph.connect(packetSource, "out", mux, "packet", "packet", policy);

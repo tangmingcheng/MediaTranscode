@@ -1,6 +1,7 @@
 #include "internal/graph/nodes/sync/MediaAudioDriftControllerNode.h"
 #include "internal/graph/nodes/sync/MediaEncodedAudioCanonicalizerNode.h"
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 #include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlanner.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
 #include "internal/graph/runtime/MediaGraphRuntime.h"
@@ -216,8 +217,8 @@ void controllerRetainsAtomicCorrectionBeforeAudioAcrossBackpressure()
                        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
     graph.addInputPort(audioSink, "audio", MediaStreamKind::Audio,
                        MediaEdgeKind::RawFrame, MediaPayloadKind::Frame);
-    auto inputPolicy = MediaGraphBuildSupport::blockingQueuePolicy(2);
-    auto outputPolicy = MediaGraphBuildSupport::blockingQueuePolicy(1);
+    auto inputPolicy = MediaBlockingEdgePolicyPlanner::planQueue(2);
+    auto outputPolicy = MediaBlockingEdgePolicyPlanner::planQueue(1);
     assert(graph.connect(source, "audio", controller, "audio", "audio", inputPolicy));
     assert(graph.connect(controller, "correction", correctionSink, "correction",
                          "correction", outputPolicy));
@@ -320,9 +321,9 @@ void canonicalizerCommitsContinuityOnlyAfterOutputAndPurgesGeneration()
     graph.addInputPort(sink, "canonical", MediaStreamKind::Audio,
                        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
     assert(graph.connect(source, "encoded", canonicalizer, "encoded", "encoded",
-                         MediaGraphBuildSupport::blockingQueuePolicy(2)));
+                         MediaBlockingEdgePolicyPlanner::planQueue(2)));
     assert(graph.connect(canonicalizer, "canonical", sink, "canonical", "canonical",
-                         MediaGraphBuildSupport::blockingQueuePolicy(1)));
+                         MediaBlockingEdgePolicyPlanner::planQueue(1)));
     MediaGraphExecutionContext execution;
     assert(execution.compile(graph));
     MediaEncodedAudioCanonicalizerNode node(canonicalizer);
@@ -423,7 +424,7 @@ void audioControlNodesHonorAbortAndRequiredInputTermination()
                            MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
         graph.addInputPort(audioSink, "audio", MediaStreamKind::Audio,
                            MediaEdgeKind::RawFrame, MediaPayloadKind::Frame);
-        const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(2);
+        const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(2);
         assert(graph.connect(source, "audio", controller, "audio", "audio", policy));
         assert(graph.connect(controller, "correction", correctionSink, "correction",
                              "correction", policy));
@@ -484,7 +485,7 @@ void audioControlNodesHonorAbortAndRequiredInputTermination()
                             MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
         graph.addInputPort(sink, "canonical", MediaStreamKind::Audio,
                            MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
-        const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(2);
+        const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(2);
         assert(graph.connect(source, "encoded", canonicalizer, "encoded", "encoded",
                              policy));
         assert(graph.connect(canonicalizer, "canonical", sink, "canonical",
@@ -559,8 +560,8 @@ void generationPurgeCancelsBackpressuredAudioControls()
                            MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
         graph.addInputPort(audioSink, "audio", MediaStreamKind::Audio,
                            MediaEdgeKind::RawFrame, MediaPayloadKind::Frame);
-        const auto inputPolicy = MediaGraphBuildSupport::blockingQueuePolicy(2);
-        const auto outputPolicy = MediaGraphBuildSupport::blockingQueuePolicy(1);
+        const auto inputPolicy = MediaBlockingEdgePolicyPlanner::planQueue(2);
+        const auto outputPolicy = MediaBlockingEdgePolicyPlanner::planQueue(1);
         assert(graph.connect(source, "audio", controller, "audio", "audio", inputPolicy));
         assert(graph.connect(controller, "correction", correctionSink, "correction",
                              "correction", outputPolicy));
@@ -620,9 +621,9 @@ void generationPurgeCancelsBackpressuredAudioControls()
         graph.addInputPort(sink, "canonical", MediaStreamKind::Audio,
                            MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
         assert(graph.connect(source, "encoded", canonicalizer, "encoded", "encoded",
-                             MediaGraphBuildSupport::blockingQueuePolicy(2)));
+                             MediaBlockingEdgePolicyPlanner::planQueue(2)));
         assert(graph.connect(canonicalizer, "canonical", sink, "canonical", "canonical",
-                             MediaGraphBuildSupport::blockingQueuePolicy(1)));
+                             MediaBlockingEdgePolicyPlanner::planQueue(1)));
         MediaGraphExecutionContext execution;
         assert(execution.compile(graph));
         MediaEncodedAudioCanonicalizerNode node(canonicalizer);
@@ -700,7 +701,7 @@ void synchronizedAudioControlsRequireObservedGeneration()
                            MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
         graph.addInputPort(audio, "audio", MediaStreamKind::Audio,
                            MediaEdgeKind::RawFrame, MediaPayloadKind::Frame);
-        const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(1);
+        const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(1);
         assert(graph.connect(source, "audio", controller, "audio", "audio", policy));
         assert(graph.connect(controller, "correction", correction, "correction",
                              "correction", policy));
@@ -739,7 +740,7 @@ void synchronizedAudioControlsRequireObservedGeneration()
                             MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
         graph.addInputPort(sink, "canonical", MediaStreamKind::Audio,
                            MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
-        const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(1);
+        const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(1);
         assert(graph.connect(source, "encoded", canonicalizer, "encoded", "encoded",
                              policy));
         assert(graph.connect(canonicalizer, "canonical", sink, "canonical",

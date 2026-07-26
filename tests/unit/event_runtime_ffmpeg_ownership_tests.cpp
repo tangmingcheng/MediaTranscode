@@ -2,6 +2,7 @@
 #include "common/GraphRuntimeTestSupport.h"
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/nodes/mux/MediaMuxCompletionState.h"
 #include "internal/graph/nodes/merge/PacketMergeNode.h"
@@ -323,9 +324,9 @@ void testDemuxSameInstanceReleasesAndRebindsInputContext(TestContext& ctx)
         graph.addOutputPort(demuxId, "audio", MediaStreamKind::Audio, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true);
         graph.addInputPort(sink, "video", MediaStreamKind::Video, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true);
         graph.addInputPort(sink, "audio", MediaStreamKind::Audio, MediaEdgeKind::InputPacket, MediaPayloadKind::Packet, true, true);
-        graph.connect(source, "format", demuxId, "format", "demux lifecycle", MediaGraphBuildSupport::blockingQueuePolicy(2));
-        graph.connect(demuxId, "video", sink, "video", "demux video", MediaGraphBuildSupport::blockingQueuePolicy(2));
-        graph.connect(demuxId, "audio", sink, "audio", "demux audio", MediaGraphBuildSupport::blockingQueuePolicy(2));
+        graph.connect(source, "format", demuxId, "format", "demux lifecycle", MediaBlockingEdgePolicyPlanner::planQueue(2));
+        graph.connect(demuxId, "video", sink, "video", "demux video", MediaBlockingEdgePolicyPlanner::planQueue(2));
+        graph.connect(demuxId, "audio", sink, "audio", "demux audio", MediaBlockingEdgePolicyPlanner::planQueue(2));
         MediaGraphExecutionContext execution;
         EXPECT_TRUE(ctx, execution.compile(graph));
 
@@ -434,12 +435,12 @@ MediaGraph makeSlowVideoNodeGraph(MediaNodeKind kind,
         graph.addInputPort(nodeId, "codec", MediaStreamKind::Metadata,
                            MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, true);
         graph.connect(codecSource, "codec", nodeId, "codec", "slow codec metadata",
-                      MediaGraphBuildSupport::blockingQueuePolicy(1));
+                      MediaBlockingEdgePolicyPlanner::planQueue(1));
     }
     graph.connect(source, "frame", nodeId, "frame", "slow upstream",
-                  MediaGraphBuildSupport::blockingQueuePolicy(4));
+                  MediaBlockingEdgePolicyPlanner::planQueue(4));
     graph.connect(nodeId, "frame", sink, "frame", "slow consumer",
-                  MediaGraphBuildSupport::blockingQueuePolicy(1));
+                  MediaBlockingEdgePolicyPlanner::planQueue(1));
     return graph;
 }
 

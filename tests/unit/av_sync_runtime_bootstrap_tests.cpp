@@ -11,6 +11,7 @@
 #include "internal/graph/runtime/threading/MediaNodeWakeup.h"
 #include "internal/graph/runtime/channel/MediaChannel.h"
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 
 #include <chrono>
 #include <array>
@@ -39,7 +40,7 @@ std::unique_ptr<MediaChannel> makePreparationReservationChannel(
     edge.streamKind = MediaStreamKind::Video;
     edge.edgeKind = MediaEdgeKind::SoftwareFrame;
     edge.payloadKind = MediaPayloadKind::Frame;
-    edge.policy = MediaGraphBuildSupport::blockingQueuePolicy(1);
+    edge.policy = MediaBlockingEdgePolicyPlanner::planQueue(1);
     return std::make_unique<MediaChannel>(MediaChannelId{identity}, edge);
 }
 

@@ -1,6 +1,7 @@
 #include "common/GraphRuntimeTestSupport.h"
 #include "common/TestAssert.h"
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/channel/MediaAtomicOutputTransaction.h"
 #include "internal/graph/runtime/channel/MediaReservedOutputTransaction.h"
@@ -174,7 +175,7 @@ MediaChannel* audio(ChannelFixture& fixture)
 
 MediaEdgePolicy atomicPolicy(std::size_t capacity)
 {
-    auto policy = MediaGraphBuildSupport::blockingQueuePolicy(capacity);
+    auto policy = MediaBlockingEdgePolicyPlanner::planQueue(capacity);
     policy.queuePolicy.storageMode = MediaQueueStorageMode::AtomicPrepared;
     return policy;
 }
@@ -355,7 +356,7 @@ void testBlockingConsumersReturnOnlyAfterAtomicPublish(TestContext& ctx)
 
 void testChannelPushPreservesNullDropAndLifecycleContracts(TestContext& ctx)
 {
-    auto dropPolicy = MediaGraphBuildSupport::blockingQueuePolicy(1);
+    auto dropPolicy = MediaBlockingEdgePolicyPlanner::planQueue(1);
     dropPolicy.queuePolicy.overflowPolicy = MediaQueueOverflowPolicy::DropNewest;
     auto dropFixture = makeFixture(ctx, dropPolicy, dropPolicy);
     MediaChannel* channel = video(*dropFixture);
@@ -377,8 +378,8 @@ void testChannelPushPreservesNullDropAndLifecycleContracts(TestContext& ctx)
 
     const auto verifyRelease = [&](bool abortChannel) {
         auto fixture = makeFixture(
-            ctx, MediaGraphBuildSupport::blockingQueuePolicy(1),
-            MediaGraphBuildSupport::blockingQueuePolicy(1));
+            ctx, MediaBlockingEdgePolicyPlanner::planQueue(1),
+            MediaBlockingEdgePolicyPlanner::planQueue(1));
         MediaChannel* blockedChannel = video(*fixture);
         EXPECT_TRUE(ctx, blockedChannel->push(first.value()));
         std::barrier boundary(2);
@@ -417,8 +418,8 @@ void testChannelPushPreservesNullDropAndLifecycleContracts(TestContext& ctx)
     verifyRelease(true);
 
     auto consumerFixture = makeFixture(
-        ctx, MediaGraphBuildSupport::blockingQueuePolicy(1),
-        MediaGraphBuildSupport::blockingQueuePolicy(1));
+        ctx, MediaBlockingEdgePolicyPlanner::planQueue(1),
+        MediaBlockingEdgePolicyPlanner::planQueue(1));
     MediaChannel* emptyChannel = video(*consumerFixture);
     std::promise<void> consumerStarted;
     MediaBufferRef consumed;

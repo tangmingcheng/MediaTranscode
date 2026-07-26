@@ -2,6 +2,7 @@
 #include "common/GraphRuntimeTestSupport.h"
 #include "common/AvSyncRuntimeTestSupport.h"
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 #include "internal/graph/core/MediaGraphDump.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/nodes/sync/MediaAvOutputSchedulerNode.h"
@@ -170,8 +171,8 @@ SchedulerFixture graphWithScheduler(bool option = true,
                           MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
     f.graph.addInputPort(f.sink, "scheduled", MediaStreamKind::Any,
                          MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
-    auto inputPolicy = MediaGraphBuildSupport::blockingQueuePolicy(8);
-    auto outputPolicy = MediaGraphBuildSupport::blockingQueuePolicy(outputCapacity);
+    auto inputPolicy = MediaBlockingEdgePolicyPlanner::planQueue(8);
+    auto outputPolicy = MediaBlockingEdgePolicyPlanner::planQueue(outputCapacity);
     outputPolicy.queuePolicy.overflowPolicy = overflow;
     f.graph.connect(f.video, "packet", f.scheduler, "video", "video", inputPolicy);
     f.graph.connect(f.audio, "packet", f.scheduler, "audio", "audio", inputPolicy);

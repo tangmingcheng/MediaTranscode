@@ -1,4 +1,5 @@
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/nodes/video/VideoDecodeNode.h"
 #include "internal/graph/nodes/video/VideoEncodeNode.h"
@@ -239,11 +240,11 @@ CodecGraphFixture makeCodecGraph(bool decode, std::size_t outputCapacity = 4)
     fixture.graph.addInputPort(fixture.node, "codec", MediaStreamKind::Metadata,
                                MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext, true, true);
     fixture.graph.connect(source, inputName, fixture.node, inputName, "codec input",
-                          MediaGraphBuildSupport::blockingQueuePolicy(4));
+                          MediaBlockingEdgePolicyPlanner::planQueue(4));
     fixture.graph.connect(codecSource, "codec", fixture.node, "codec", "codec context",
-                          MediaGraphBuildSupport::blockingQueuePolicy(1));
+                          MediaBlockingEdgePolicyPlanner::planQueue(1));
     fixture.graph.connect(fixture.node, outputName, fixture.sink, outputName, "codec output",
-                          MediaGraphBuildSupport::blockingQueuePolicy(outputCapacity));
+                          MediaBlockingEdgePolicyPlanner::planQueue(outputCapacity));
     return fixture;
 }
 

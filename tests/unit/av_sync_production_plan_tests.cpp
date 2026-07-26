@@ -1,6 +1,7 @@
 #include "common/TestAssert.h"
 
 #include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
+#include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 #include "internal/graph/planner/MediaPipelineCapabilityScanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncAssemblyPlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlanner.h"
@@ -17,6 +18,49 @@ using namespace media::ffmpeg::graph;
 using media_transcode::test::TestContext;
 
 namespace {
+
+void testBlockingEdgePolicyPlannerPreservesLocalFileSemantics(
+    TestContext& ctx)
+{
+    const MediaGraphQueueParameters queues{2, 3, 4, 5};
+    const auto policies = MediaBlockingEdgePolicyPlanner::plan(queues);
+    const auto expectOrdinary = [&](const MediaEdgePolicy& policy,
+                                    std::size_t capacity) {
+        EXPECT_EQ(ctx, policy.queuePolicy.mode, MediaQueueMode::Blocking);
+        EXPECT_EQ(ctx, policy.queuePolicy.storageMode,
+                  MediaQueueStorageMode::Deque);
+        EXPECT_EQ(ctx, policy.queuePolicy.overflowPolicy,
+                  MediaQueueOverflowPolicy::BlockProducer);
+        EXPECT_EQ(ctx, policy.queuePolicy.orderingPolicy,
+                  MediaQueueOrderingPolicy::Fifo);
+        EXPECT_EQ(ctx, policy.queuePolicy.capacity, capacity);
+        EXPECT_TRUE(ctx, policy.queuePolicy.bounded);
+        EXPECT_TRUE(ctx, policy.queuePolicy.preserveOrdering);
+        EXPECT_TRUE(ctx, policy.queuePolicy.allowFlushControlBypass);
+        EXPECT_TRUE(ctx, policy.queuePolicy.collectMetrics);
+    };
+    expectOrdinary(policies.metadata, queues.metadata);
+    expectOrdinary(policies.packet, queues.packet);
+    expectOrdinary(policies.videoPacket, queues.packet);
+    expectOrdinary(policies.audioPacket, queues.packet);
+    expectOrdinary(policies.synchronizedPacket, queues.packet);
+    expectOrdinary(policies.videoFrame, queues.frame);
+    expectOrdinary(policies.audioFrame, queues.frame);
+    expectOrdinary(policies.mux, queues.mux);
+    expectOrdinary(policies.videoMux, queues.mux);
+    expectOrdinary(policies.audioMux, queues.mux);
+
+    const auto expectAtomic = [&](const MediaEdgePolicy& policy,
+                                  std::size_t capacity) {
+        EXPECT_TRUE(ctx, MediaAtomicOutputPolicyContract::accepts(policy));
+        EXPECT_EQ(ctx, policy.queuePolicy.capacity, capacity);
+    };
+    expectAtomic(policies.atomicMetadata, queues.metadata);
+    expectAtomic(policies.atomicVideoPacket, queues.packet);
+    expectAtomic(policies.atomicAudioPacket, queues.packet);
+    expectAtomic(policies.audioDriftTransaction, queues.frame);
+    expectAtomic(policies.preparedVideoFrame, queues.frame);
+}
 
 MediaTsReadFrameEnvelope durationEnvelope(int streamIndex,
                                           std::int64_t duration)
@@ -485,6 +529,7 @@ void testUnsupportedTopologyAndMissingSynchronizedAudioFailClosed(TestContext& c
 
 void runAvSyncProductionPlanTests(TestContext& ctx)
 {
+    testBlockingEdgePolicyPlannerPreservesLocalFileSemantics(ctx);
     testTsDurationProbeOwnsExactEvidenceAndLosslessReplay(ctx);
     testTsDurationProbeRejectsMissingAndNonPositiveEvidence(ctx);
     testCompleteSeparateRtpAssemblyProduct(ctx);

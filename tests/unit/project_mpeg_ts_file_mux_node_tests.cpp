@@ -3,6 +3,7 @@
 
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/nodes/mux/FileMuxNode.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
@@ -307,7 +308,7 @@ struct ProjectFileMuxHarness final {
                  const char* targetPort,
                  const char* edgeName)
     {
-        const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(8);
+        const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(8);
         graph.connect(source, sourcePort, mux, targetPort, edgeName, policy);
     }
 

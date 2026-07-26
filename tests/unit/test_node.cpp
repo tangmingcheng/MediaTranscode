@@ -1,6 +1,7 @@
 #include "common/TestAssert.h"
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/nodes/audio/AudioEncodeNode.h"
 #include "internal/graph/nodes/audio/AudioDecodeNode.h"
@@ -1037,7 +1038,7 @@ public:
 void testAudioEncodeFixedFrameStateMachine(TestContext& ctx)
 {
     MediaGraph graph;
-    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(1);
+    const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(1);
     const MediaNodeId codecSource = graph.addNode(MediaNodeKind::DebugDump, "test.codec");
     const MediaNodeId frameSource = graph.addNode(MediaNodeKind::DebugDump, "test.frame");
     const MediaNodeId encoder = graph.addNode(MediaNodeKind::AudioEncode, "test.encoder");
@@ -1211,7 +1212,7 @@ void testAudioLineageStagesExposeExactStablePurgeTargets(TestContext& ctx)
 void testRtpClockGroupRejectsStaleCrossPortEvidence(TestContext& ctx)
 {
     MediaGraph graph;
-    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(8);
+    const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(8);
     const MediaNodeId videoClockSource = graph.addNode(MediaNodeKind::DebugDump, "test.video_clock");
     const MediaNodeId videoEventSource = graph.addNode(MediaNodeKind::DebugDump, "test.video_event");
     const MediaNodeId audioClockSource = graph.addNode(MediaNodeKind::DebugDump, "test.audio_clock");

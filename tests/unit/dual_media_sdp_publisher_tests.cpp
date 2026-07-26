@@ -1,6 +1,7 @@
 #include "unit/fixtures/ScheduledRtpOutputNodeTestSupport.h"
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 #include "internal/graph/nodes/output/MediaDualMediaSdpPublisherNode.h"
 
 #include <cstdint>
@@ -136,7 +137,7 @@ std::unique_ptr<PublisherFixture> publisherFixture(
     fixture->graph.addInputPort(
         fixture->publisher, "audio", MediaStreamKind::Metadata,
         MediaEdgeKind::Event, MediaPayloadKind::GraphEvent, true, false);
-    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(capacity);
+    const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(capacity);
     fixture->graph.connect(
         fixture->videoSource, "description", fixture->publisher,
         "video", "video", policy);

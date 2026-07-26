@@ -23,6 +23,7 @@
 #include "internal/graph/runtime/buffer/MediaSourceClockStateBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 #include "internal/graph/sync/startup/MediaAvStartupVideoPreparationCapability.h"
 #include "internal/graph/sync/startup/MediaAvStartupVideoPreparationState.h"
 #include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
@@ -352,9 +353,9 @@ BinderFixture binderFixture(bool threadedLifecycleTarget = false,
     fixture.executable.graph.addInputPort(
         fixture.releaseSink, "in", MediaStreamKind::Metadata,
         MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
-    const auto one = MediaGraphBuildSupport::blockingQueuePolicy(1);
+    const auto one = MediaBlockingEdgePolicyPlanner::planQueue(1);
     const auto atomicOne =
-        MediaGraphBuildSupport::atomicPreparedQueuePolicy(1);
+        MediaBlockingEdgePolicyPlanner::planAtomicOutput(1);
     fixture.executable.graph.connect(
         fixture.source, "release", fixture.binder, "release", "release", one);
     fixture.executable.graph.connect(
@@ -580,11 +581,11 @@ void testPreparationPrefixIsNotReleasedTwiceAfterActivation(TestContext& ctx)
                        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
     graph.addInputPort(audioSink, "in", MediaStreamKind::Audio,
                        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
-    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(8);
+    const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(8);
     const auto videoPolicy =
-        MediaGraphBuildSupport::atomicPreparedQueuePolicy(1);
+        MediaBlockingEdgePolicyPlanner::planAtomicOutput(1);
     const auto audioPolicy =
-        MediaGraphBuildSupport::atomicPreparedQueuePolicy(8);
+        MediaBlockingEdgePolicyPlanner::planAtomicOutput(8);
     graph.connect(preparationSource, "out", extractorId, "preparation",
                   "preparation", policy);
     graph.connect(boundSource, "out", extractorId, "bound_release",
@@ -885,9 +886,9 @@ void testCoordinatorReacquiresAndActivatesOneAtomicNextEpoch(
                        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
     graph.addInputPort(releaseSink, "in", MediaStreamKind::Metadata,
                        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
-    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(8);
+    const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(8);
     const auto atomicPolicy =
-        MediaGraphBuildSupport::atomicPreparedQueuePolicy(8);
+        MediaBlockingEdgePolicyPlanner::planAtomicOutput(8);
     EXPECT_TRUE(ctx, graph.connect(
                          videoSource, "out", coordinator, "video",
                          "video", policy));
@@ -1640,7 +1641,7 @@ void testRtpAdapterPublishesGenericLockedState(TestContext& ctx)
                         MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
     graph.addInputPort(sink, "state", MediaStreamKind::Metadata,
                        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
-    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(2);
+    const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(2);
     graph.connect(source, "clock", adapter, "clock", "clock", policy);
     graph.connect(adapter, "state", sink, "state", "state", policy);
     MediaGraphExecutionContext execution;
@@ -1729,7 +1730,7 @@ void testRtpAdapterPropagatesTerminalWithoutInventingClockState(TestContext& ctx
                         MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
     graph.addInputPort(sink, "state", MediaStreamKind::Metadata,
                        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
-    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(2);
+    const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(2);
     graph.connect(source, "clock", adapter, "clock", "clock", policy);
     graph.connect(adapter, "state", sink, "state", "state", policy);
     MediaGraphExecutionContext execution;
@@ -1790,7 +1791,7 @@ void testRtpAdapterPropagatesTypedControlsAndFailsClosed(TestContext& ctx)
                             MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
         graph.addInputPort(sink, "state", MediaStreamKind::Metadata,
                            MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
-        const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(2);
+        const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(2);
         graph.connect(source, "clock", adapter, "clock", "clock", policy);
         graph.connect(adapter, "state", sink, "state", "state", policy);
         MediaGraphExecutionContext execution;
@@ -1857,7 +1858,7 @@ void testStartupClockUsesRegisteredMasterDeadline(TestContext& ctx)
     fixture.executable.graph.addInputPort(
         sink, "tick", MediaStreamKind::Metadata,
         MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
-    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(2);
+    const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(2);
     fixture.executable.graph.connect(
         source, "state", clockNode, "clock", "state", policy);
     fixture.executable.graph.connect(
@@ -1941,7 +1942,7 @@ void testStartupClockFailsClosedBeforeLockAndOnMissingTerminal(TestContext& ctx)
         fixture.executable.graph.addInputPort(
             sink, "tick", MediaStreamKind::Metadata,
             MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
-        const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(2);
+        const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(2);
         fixture.executable.graph.connect(
             source, "state", clockNode, "clock", "state", policy);
         fixture.executable.graph.connect(
@@ -2018,7 +2019,7 @@ void testBoundReleaseAtomicOutputPolicyMigrationIsExplicit(TestContext& ctx)
                            MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
         EXPECT_TRUE(ctx, graph.connect(
                              source, "release", extractor, "in", "release",
-                             MediaGraphBuildSupport::blockingQueuePolicy(1)));
+                             MediaBlockingEdgePolicyPlanner::planQueue(1)));
         EXPECT_TRUE(ctx, graph.connect(
                              extractor, "video", video, "in", "video",
                              outputPolicy));
@@ -2058,9 +2059,9 @@ void testBoundReleaseAtomicOutputPolicyMigrationIsExplicit(TestContext& ctx)
     };
 
     const auto exact =
-        MediaGraphBuildSupport::atomicPreparedQueuePolicy(1);
+        MediaBlockingEdgePolicyPlanner::planAtomicOutput(1);
     verify(exact, true);
-    verify(MediaGraphBuildSupport::blockingQueuePolicy(1), false);
+    verify(MediaBlockingEdgePolicyPlanner::planQueue(1), false);
     auto dropping = exact;
     dropping.queuePolicy.overflowPolicy =
         MediaQueueOverflowPolicy::DropNewest;

@@ -2,6 +2,7 @@
 
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 #include "internal/graph/model/MediaOutputResourceKind.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/nodes/output/FileOutputNode.h"
@@ -45,7 +46,7 @@ struct OutputHarness final {
                             MediaEdgeKind::Metadata, MediaPayloadKind::Unknown);
         graph.addInputPort(consumer, "resource", MediaStreamKind::Metadata,
                            MediaEdgeKind::Metadata, MediaPayloadKind::Unknown);
-        const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(1);
+        const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(1);
         graph.connect(output, "resource", consumer, "resource", "resource", policy);
         EXPECT_TRUE(ctx, execution.compile(graph));
         return execution.compiled();
@@ -124,7 +125,7 @@ void testByteSinkFanoutBackpressureIsExactlyOnce(TestContext& ctx)
         graph.addInputPort(consumer, "resource", MediaStreamKind::Metadata,
                            MediaEdgeKind::Metadata, MediaPayloadKind::Unknown);
     }
-    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(1);
+    const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(1);
     graph.connect(output, "resource", firstConsumer, "resource", "first", policy);
     graph.connect(output, "resource", secondConsumer, "resource", "second", policy);
     MediaGraphExecutionContext execution;

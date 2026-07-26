@@ -7,6 +7,7 @@
 #include "internal/graph/runtime/buffer/MediaAvStartupEnvelopeBuffer.h"
 #include "internal/graph/runtime/compilation/MediaAvSyncRuntimeBootstrap.h"
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 
 #include <chrono>
 #include <memory>
@@ -65,9 +66,9 @@ inline void addPlaybackEpochReleaseBoundary(
                        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
     graph.addInputPort(releaseSink, "release", MediaStreamKind::Metadata,
                        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
-    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(2);
+    const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(2);
     const auto atomicPolicy =
-        MediaGraphBuildSupport::atomicPreparedQueuePolicy(2);
+        MediaBlockingEdgePolicyPlanner::planAtomicOutput(2);
     graph.connect(source, "release", binderId, "release",
                   "test epoch release", policy);
     graph.connect(binderId, "transaction", sequencer, "transaction",

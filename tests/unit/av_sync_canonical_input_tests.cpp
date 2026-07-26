@@ -1,4 +1,5 @@
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/core/MediaGraphDump.h"
 #include "internal/graph/nodes/sync/MediaCanonicalInputNode.h"
@@ -265,7 +266,7 @@ struct GateHarness final {
         const auto clockSource = graph.addNode(MediaNodeKind::DebugDump, "clock-source");
         gate = graph.addNode(MediaNodeKind::LockedPacketGate, "locked-packet");
         const auto sink = graph.addNode(MediaNodeKind::DebugDump, "sink");
-        const auto queue = MediaGraphBuildSupport::blockingQueuePolicy(8);
+        const auto queue = MediaBlockingEdgePolicyPlanner::planQueue(8);
         graph.addOutputPort(packetSource, "out", MediaStreamKind::Video,
                             MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
         graph.addOutputPort(clockSource, "out", MediaStreamKind::Metadata,
@@ -662,7 +663,7 @@ struct CanonicalHarness final {
         const auto source = graph.addNode(MediaNodeKind::DebugDump, "source");
         node = graph.addNode(MediaNodeKind::CanonicalInput, "canonical");
         const auto sink = graph.addNode(MediaNodeKind::DebugDump, "sink");
-        const auto queue = MediaGraphBuildSupport::blockingQueuePolicy(4);
+        const auto queue = MediaBlockingEdgePolicyPlanner::planQueue(4);
         graph.addOutputPort(source, "out", stream, MediaEdgeKind::EncodedPacket,
                             MediaPayloadKind::Packet);
         graph.addInputPort(node, "in", stream, MediaEdgeKind::EncodedPacket,

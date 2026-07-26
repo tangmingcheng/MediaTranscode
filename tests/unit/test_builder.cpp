@@ -1,6 +1,7 @@
 #include "common/TestAssert.h"
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 #include "internal/graph/builder/MediaPacketCopyBranchBuilder.h"
 #include "internal/graph/builder/segments/MediaVideoBranchSegmentBuilder.h"
 #include "internal/graph/builder/segments/MediaVideoPacketCopyBranchBuilder.h"
@@ -52,7 +53,7 @@ MediaAudioEncodeBranchOptions audioEncodeOptions(MediaGraph& graph)
     graph.setPortFormatDescriptor(
         packetSourcePort,
         MediaGraphBuildSupport::streamIndexDescriptor(MediaStreamKind::Audio, 1));
-    options.edgePolicies = MediaGraphBuildSupport::blockingEdgePolicySet(options.queues);
+    options.edgePolicies = MediaBlockingEdgePolicyPlanner::plan(options.queues);
     return options;
 }
 
@@ -336,7 +337,7 @@ void testTypedPacketCopyEndpointsPreserveOwnerBoundaries(TestContext& ctx)
     generic.queues.metadata = 1;
     generic.queues.packet = 1;
     generic.edgePolicies =
-        MediaGraphBuildSupport::blockingEdgePolicySet(generic.queues);
+        MediaBlockingEdgePolicyPlanner::plan(generic.queues);
     auto genericResult = MediaPacketCopyBranchBuilder::build(
         genericGraph, generic);
     EXPECT_TRUE(ctx, genericResult);
@@ -383,7 +384,7 @@ void testTypedPacketCopyEndpointsPreserveOwnerBoundaries(TestContext& ctx)
     video.queues.packet = 1;
     video.queues.mux = 1;
     video.edgePolicies =
-        MediaGraphBuildSupport::blockingEdgePolicySet(video.queues);
+        MediaBlockingEdgePolicyPlanner::plan(video.queues);
     auto videoResult = MediaVideoPacketCopyBranchBuilder::build(videoGraph, video);
     EXPECT_TRUE(ctx, videoResult);
     if (videoResult) {

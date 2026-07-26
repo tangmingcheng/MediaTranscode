@@ -6,6 +6,7 @@
 #include "unit/fixtures/ScheduledRtpDecodeReceiver.h"
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 #include "internal/graph/planner/audio/MediaResolvedAudioOutputPlan.h"
 #include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlanner.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanner.h"
@@ -215,7 +216,7 @@ resolvedPipelineFacts()
             output.string(), MediaOutputResourceKind::ByteSink,
             MediaMuxSessionKind::ProjectMpegTs,
             std::move(outputPlan).value()},
-        queues, MediaGraphBuildSupport::blockingEdgePolicySet(queues), {},
+        queues, MediaBlockingEdgePolicyPlanner::plan(queues), {},
         MediaAvGenerationTransitionPlanner::plan(
             MediaAvSyncOutputAdapterKind::ProjectMpegTs,
             milliseconds(1'000), milliseconds(500)),

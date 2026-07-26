@@ -5,6 +5,7 @@
 #include "internal/graph/sync/MediaAudioCorrectionQuantizer.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
@@ -174,7 +175,7 @@ void testCorrectionOptionsAreMandatoryAndModeSpecific(TestContext& ctx)
 void testEofDrainSettlesPendingCorrectionTailThroughNode(TestContext& ctx)
 {
     MediaGraph graph;
-    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(4);
+    const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(4);
     const MediaNodeId codecSource = graph.addNode(MediaNodeKind::DebugDump, "codec_source");
     const MediaNodeId frameSource = graph.addNode(MediaNodeKind::DebugDump, "frame_source");
     const MediaNodeId correctionSource = graph.addNode(MediaNodeKind::DebugDump, "correction_source");
@@ -327,9 +328,9 @@ void testEofDrainSettlesPendingCorrectionTailThroughNode(TestContext& ctx)
 void testExternalCorrectionFlushPreservesEpochAndEmitsEofOnce(TestContext& ctx)
 {
     MediaGraph graph;
-    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(8);
-    const auto correctionPolicy = MediaGraphBuildSupport::blockingQueuePolicy(4);
-    const auto outputPolicy = MediaGraphBuildSupport::blockingQueuePolicy(1);
+    const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(8);
+    const auto correctionPolicy = MediaBlockingEdgePolicyPlanner::planQueue(4);
+    const auto outputPolicy = MediaBlockingEdgePolicyPlanner::planQueue(1);
     const MediaNodeId codecSource = graph.addNode(MediaNodeKind::DebugDump, "window.codec_source");
     const MediaNodeId frameSource = graph.addNode(MediaNodeKind::DebugDump, "window.frame_source");
     const MediaNodeId correctionSource = graph.addNode(MediaNodeKind::DebugDump, "window.correction_source");
@@ -598,7 +599,7 @@ void testExternalCorrectionFlushPreservesEpochAndEmitsEofOnce(TestContext& ctx)
 void testCodecMetadataCloseBeforeBindFails(TestContext& ctx)
 {
     MediaGraph graph;
-    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(2);
+    const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(2);
     const MediaNodeId source = graph.addNode(MediaNodeKind::DebugDump, "codec_close.source");
     const MediaNodeId resample = graph.addNode(MediaNodeKind::AudioResample, "codec_close.resample");
     graph.setNodeOption(resample, MediaAudioCorrectionOptionKey::Mode, "disabled");
@@ -624,7 +625,7 @@ void testCodecMetadataCloseBeforeBindFails(TestContext& ctx)
 void testClosedInputDrainsResamplerBeforeFinishing(TestContext& ctx)
 {
     MediaGraph graph;
-    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(8);
+    const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(8);
     const MediaNodeId codecSource = graph.addNode(MediaNodeKind::DebugDump, "close.codec");
     const MediaNodeId frameSource = graph.addNode(MediaNodeKind::DebugDump, "close.frame");
     const MediaNodeId resample = graph.addNode(MediaNodeKind::AudioResample, "close.resample");
@@ -704,7 +705,7 @@ void testClosedInputDrainsResamplerBeforeFinishing(TestContext& ctx)
 void testSynchronizedOriginOwnsFirstOutputSampleIndex(TestContext& ctx)
 {
     MediaGraph graph;
-    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(4);
+    const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(4);
     const auto codecSource = graph.addNode(MediaNodeKind::DebugDump, "sync.codec");
     const auto frameSource = graph.addNode(MediaNodeKind::DebugDump, "sync.frame");
     const auto correctionSource = graph.addNode(MediaNodeKind::DebugDump, "sync.correction");
@@ -816,8 +817,8 @@ void testSynchronizedOriginOwnsFirstOutputSampleIndex(TestContext& ctx)
 void testPurgeDropsRetainedResampleOutputAndRestartsGeneration(TestContext& ctx)
 {
     MediaGraph graph;
-    const auto inputPolicy = MediaGraphBuildSupport::blockingQueuePolicy(4);
-    const auto outputPolicy = MediaGraphBuildSupport::blockingQueuePolicy(1);
+    const auto inputPolicy = MediaBlockingEdgePolicyPlanner::planQueue(4);
+    const auto outputPolicy = MediaBlockingEdgePolicyPlanner::planQueue(1);
     const auto codecSource = graph.addNode(MediaNodeKind::DebugDump, "purge.codec");
     const auto frameSource = graph.addNode(MediaNodeKind::DebugDump, "purge.frame");
     const auto resample = graph.addNode(MediaNodeKind::AudioResample, "purge.resample");
@@ -925,7 +926,7 @@ void testPurgeDropsRetainedResampleOutputAndRestartsGeneration(TestContext& ctx)
 void testSynchronizedFrameRejectsFragmentSampleMismatch(TestContext& ctx)
 {
     MediaGraph graph;
-    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(2);
+    const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(2);
     const auto codecSource = graph.addNode(MediaNodeKind::DebugDump, "mismatch.codec");
     const auto frameSource = graph.addNode(MediaNodeKind::DebugDump, "mismatch.frame");
     const auto resample = graph.addNode(MediaNodeKind::AudioResample, "mismatch.resample");

@@ -3,6 +3,7 @@
 #include "internal/graph/sync/MediaAvStartupCoordinator.h"
 #include "internal/graph/sync/MediaAvSyncStateMachine.h"
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/nodes/sync/MediaAvStartupCoordinatorNode.h"
 #include "internal/graph/runtime/buffer/MediaAvStartupEnvelopeBuffer.h"
@@ -860,7 +861,7 @@ struct StartupNodeHarness final {
 
     bool initialize(TestContext& ctx, std::size_t edgeCapacity = 64)
     {
-        const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(edgeCapacity);
+        const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(edgeCapacity);
         const auto videoSource = graph.addNode(MediaNodeKind::DebugDump, "startup.video");
         const auto audioSource = graph.addNode(MediaNodeKind::DebugDump, "startup.audio");
         const auto clockSource = graph.addNode(MediaNodeKind::DebugDump, "startup.clock");
@@ -1139,7 +1140,7 @@ void testNodeRejectsPerStreamEventTimeRegression(TestContext& ctx)
 void testNodePublishesOneImmutablePairedEnvelope(TestContext& ctx)
 {
     MediaGraph graph;
-    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(16);
+    const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(16);
     const auto videoSource = graph.addNode(MediaNodeKind::DebugDump, "startup.video");
     const auto audioSource = graph.addNode(MediaNodeKind::DebugDump, "startup.audio");
     const auto clockSource = graph.addNode(MediaNodeKind::DebugDump, "startup.clock");
@@ -1333,7 +1334,7 @@ void testNodeTerminalSnapshotCannotBeStarvedByContinuousClock(TestContext& ctx)
 void testNodeFailsClosedWithoutCommonCanonicalEnvelope(TestContext& ctx)
 {
     MediaGraph graph;
-    const auto policy = MediaGraphBuildSupport::blockingQueuePolicy(2);
+    const auto policy = MediaBlockingEdgePolicyPlanner::planQueue(2);
     const auto source = graph.addNode(MediaNodeKind::DebugDump, "startup.source");
     const auto clockSource = graph.addNode(MediaNodeKind::DebugDump, "startup.clock");
     const auto coordinator = graph.addNode(MediaNodeKind::AvStartupCoordinator,
