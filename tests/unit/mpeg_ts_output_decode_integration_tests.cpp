@@ -13,6 +13,7 @@
 #include "internal/graph/planner/realtime/MediaProjectMpegTsResolvedPipelineFacts.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodeRequest.h"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -189,6 +190,7 @@ resolvedPipelineFacts()
     MediaRealtimeAvSyncAssemblyPlan assembly{
         MediaMpegTsInputClockAssemblyPlan{},
         MediaInitialGenerationPolicy::FirstLockedOnlyFailOnChange,
+        MediaFirstLockedSourceGeneration,
         MediaClockEvidencePolicy::RequireLockedFailOnDegradedOrReacquire,
         {"video", MediaPacketDurationPlan{true},
          MediaDecodeOrderMode::ReorderedRequiresDecodeTime, 4,
@@ -208,6 +210,17 @@ resolvedPipelineFacts()
         return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
             outputPlan.error());
     }
+    auto transition = MediaAvGenerationTransitionPlanner::plan(
+        MediaAvSyncOutputAdapterKind::ProjectMpegTs,
+        milliseconds(1'000), milliseconds(500));
+    std::erase_if(
+        transition.participants,
+        [](const MediaAvGenerationParticipantPlan& participant) {
+            return participant.participant !=
+                       MediaAvGenerationParticipant::Scheduler &&
+                participant.participant !=
+                       MediaAvGenerationParticipant::ProjectMpegTsOutput;
+        });
     return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::success(
         MediaRealtimeAvSyncRuntimePlan{
         MediaAvSyncGroupKey("scheduled-ts-decode"), std::move(synchronization),
@@ -217,9 +230,7 @@ resolvedPipelineFacts()
             MediaMuxSessionKind::ProjectMpegTs,
             std::move(outputPlan).value()},
         queues, MediaBlockingEdgePolicyPlanner::plan(queues), {},
-        MediaAvGenerationTransitionPlanner::plan(
-            MediaAvSyncOutputAdapterKind::ProjectMpegTs,
-            milliseconds(1'000), milliseconds(500)),
+        std::move(transition),
         {}, {}});
 }
 

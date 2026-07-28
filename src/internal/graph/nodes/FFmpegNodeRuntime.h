@@ -84,6 +84,7 @@ private:
         MediaBufferRef buffer;
         std::vector<MediaChannel*> channels;
         std::size_t nextChannel = 0;
+        bool atomic = false;
     };
     ::media::Status transferOrDefer(MediaGraphExecutionContext& context,
                                     const std::vector<MediaChannel*>& channels,

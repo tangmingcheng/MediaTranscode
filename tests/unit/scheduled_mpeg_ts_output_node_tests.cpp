@@ -1317,6 +1317,7 @@ void segmentBuildsCompleteAcyclicTopology(TestContext& ctx)
     MediaRealtimeAvSyncAssemblyPlan assembly{
         MediaMpegTsInputClockAssemblyPlan{},
         MediaInitialGenerationPolicy::FirstLockedOnlyFailOnChange,
+        MediaFirstLockedSourceGeneration,
         MediaClockEvidencePolicy::RequireLockedFailOnDegradedOrReacquire,
         {"video", MediaPacketDurationPlan{true},
          MediaDecodeOrderMode::ReorderedRequiresDecodeTime, 4, ms(1'000)},
