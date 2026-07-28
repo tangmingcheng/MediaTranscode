@@ -10,7 +10,7 @@
 - The planner remains the only owner of queue policy.
 - Hardware planning and the selected zero-copy chain remain unchanged.
 - Every production change begins with a focused failing test.
-- Every build uses `--clean-first`, `--parallel 4`, and no `/showIncludes`.
+- Every build uses `--clean-first`, `/m:2`, and `ShowIncludes=false`.
 
 ## Task 1: Enforce per-generation exactly-once canonical input
 
@@ -20,10 +20,10 @@
 - Modify: `src/internal/graph/sync/MediaAvStartupCoordinator.h`
 - Modify: `src/internal/graph/sync/MediaAvStartupCoordinator.cpp`
 
-1. Add a Running-state regression test that completes the initial release and then resubmits a video access unit with the same generation and source sequence at a later observation time. Assert failure with `StartupInvalidTransition`.
-2. Add the equivalent audio assertion and a lower-sequence assertion, while proving the next strictly increasing sequence remains `PassThrough`.
+1. Add a Running-state regression test that completes the initial release and then resubmits a video access unit with the same generation and source sequence at a later observation time. Assert a typed duplicate-or-regressed drop.
+2. Add the equivalent audio assertion and a lower-sequence assertion, while proving the next strictly increasing sequence remains `PassThrough` and the runtime node continues.
 3. Run the focused coordinator test and record RED: current Running state returns `PassThrough` before sequence validation.
-4. Add one persistent last-accepted sequence per stream to the coordinator. Reset both only when advancing/resetting the playback generation. Validate locked same-generation units before Running pass-through and update the ledger only after accepting the unit.
+4. Add one persistent last-accepted sequence per stream to the coordinator. Reset both only when advancing/resetting the playback generation. Validate locked same-generation units before Running pass-through, consume duplicates without publishing them, and update the ledger only after accepting the unit.
 5. Run the focused test and the production release tests.
 
 ## Task 2: Bound realtime in-flight media residency in the planner
@@ -36,7 +36,7 @@
 - Modify: `src/internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.cpp`
 - Modify: `src/internal/graph/planner/realtime/MediaRealtimeEdgePolicyPlanner.cpp`
 
-1. Add a planner regression test with requested capacities `metadata=1`, `packet=256`, `frame=128`, and `mux=256`. Assert the selected realtime product is `1/32/8/32`.
+1. Add a planner regression test with requested capacities `metadata=1`, `packet=256`, `frame=128`, and `mux=256`. Assert the selected realtime product is `1/256/8/32`.
 2. Run the focused planner test and record RED: current planning preserves all oversized requested values.
 3. Add a dedicated queue-capacity planner and have the realtime transcode planner store only its selected product. The edge-policy planner maps that product without further hidden clamping.
 4. Run planner validation and graph-assembly tests. Verify startup limits, component bounds, runtime validation, the selected hardware chain, and both RTP/MPEG-TS topologies consume the same selected capacities.

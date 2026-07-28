@@ -100,7 +100,8 @@ enum class MediaAvStartupDisposition {
     Buffered,
     DroppedNotReady,
     DroppedOldGeneration,
-    PassThrough
+    PassThrough,
+    DroppedDuplicateOrRegressed
 };
 
 struct MediaAvStartupDecision final {

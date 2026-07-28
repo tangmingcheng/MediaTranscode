@@ -5,7 +5,7 @@
 namespace media::ffmpeg::graph {
 namespace {
 
-constexpr std::size_t MaximumRealtimePacketQueueCapacity = 32;
+constexpr std::size_t MaximumRealtimePacketQueueCapacity = 256;
 constexpr std::size_t MaximumRealtimeFrameQueueCapacity = 8;
 constexpr std::size_t MaximumRealtimeMuxQueueCapacity = 32;
 

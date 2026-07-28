@@ -272,7 +272,7 @@ void testRealtimeQueueCapacityIsSelectedOnceByPlanner(TestContext& ctx)
 
     const auto selected = MediaRealtimeQueueCapacityPlanner::plan(requested);
     EXPECT_EQ(ctx, selected.metadata, std::size_t{1});
-    EXPECT_EQ(ctx, selected.packet, std::size_t{32});
+    EXPECT_EQ(ctx, selected.packet, std::size_t{256});
     EXPECT_EQ(ctx, selected.frame, std::size_t{8});
     EXPECT_EQ(ctx, selected.mux, std::size_t{32});
 
@@ -335,8 +335,13 @@ void testPlannedProductAndRuntimeRejectSynchronizedAudioPacketCopy(
 
 void testRealtimePlannerProducesCompleteAvSyncRuntimeProduct(TestContext& ctx)
 {
+    auto request = completeAvSyncRtpRequest();
+    request.parameters.queues.metadata = 1;
+    request.parameters.queues.packet = 256;
+    request.parameters.queues.frame = 128;
+    request.parameters.queues.mux = 256;
     const auto planned = MediaRealtimeRtpTranscodePlanner::plan(
-        completeAvSyncRtpRequest());
+        request);
     EXPECT_TRUE(ctx, planned);
     if (!planned) {
         std::cerr << planned.error().describe() << '\n';
@@ -372,6 +377,26 @@ void testRealtimePlannerProducesCompleteAvSyncRuntimeProduct(TestContext& ctx)
                           44'100, 2, aacLc48kStereo));
     if (!planned.value().avSyncRuntime) return;
     const auto& runtime = *planned.value().avSyncRuntime;
+    EXPECT_EQ(ctx, planned.value().queues.metadata, std::size_t{1});
+    EXPECT_EQ(ctx, planned.value().queues.packet, std::size_t{256});
+    EXPECT_EQ(ctx, planned.value().queues.frame, std::size_t{8});
+    EXPECT_EQ(ctx, planned.value().queues.mux, std::size_t{32});
+    EXPECT_EQ(ctx, runtime.queues.metadata, planned.value().queues.metadata);
+    EXPECT_EQ(ctx, runtime.queues.packet, planned.value().queues.packet);
+    EXPECT_EQ(ctx, runtime.queues.frame, planned.value().queues.frame);
+    EXPECT_EQ(ctx, runtime.queues.mux, planned.value().queues.mux);
+    EXPECT_EQ(ctx, runtime.synchronization.startup.videoCapacity,
+              std::optional<std::size_t>{planned.value().queues.packet});
+    EXPECT_EQ(ctx, runtime.synchronization.startup.audioCapacity,
+              std::optional<std::size_t>{planned.value().queues.packet});
+    EXPECT_EQ(ctx, runtime.synchronization.startup.videoByteCapacity,
+              std::optional<std::uint64_t>{
+                  planned.value().queues.packet *
+                  *request.avSyncStartup.maximumVideoUnitBytes});
+    EXPECT_EQ(ctx, runtime.synchronization.startup.audioByteCapacity,
+              std::optional<std::uint64_t>{
+                  planned.value().queues.packet *
+                  *request.avSyncStartup.maximumAudioUnitBytes});
     EXPECT_EQ(ctx, runtime.groupKey.value(), std::string("realtime.av"));
     EXPECT_EQ(ctx, runtime.outputAdapter,
               MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp);

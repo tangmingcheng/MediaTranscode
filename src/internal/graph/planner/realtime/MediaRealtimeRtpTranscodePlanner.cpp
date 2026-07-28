@@ -335,13 +335,16 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
 }
 
 ::media::Result<MediaRealtimeRtpTranscodePlan> MediaRealtimeRtpTranscodePlanner::planWithInput(
-    const MediaRealtimeRtpTranscodeRequest& options,
+    const MediaRealtimeRtpTranscodeRequest& requestedOptions,
     const MediaRealtimeInputStreamInfo* preparedInput,
     const MediaTsSelectedProgramPlan* selectedTsProgram)
 {
-    if (auto status = validateRealtimeRequestNoIo(options); !status) {
+    if (auto status = validateRealtimeRequestNoIo(requestedOptions); !status) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(status.error());
     }
+    MediaRealtimeRtpTranscodeRequest options = requestedOptions;
+    options.parameters.queues = MediaRealtimeQueueCapacityPlanner::plan(
+        requestedOptions.parameters.queues);
 
     auto outputUrls = MediaRealtimeOutputPolicyPlanner::planUrls(options);
     if (!outputUrls) {
@@ -462,8 +465,7 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
     plan.videoPlan = std::move(videoPlan);
     plan.audioPlan = std::move(audioPlan);
     plan.videoParameters = std::move(videoParameters);
-    plan.queues = MediaRealtimeQueueCapacityPlanner::plan(
-        options.parameters.queues);
+    plan.queues = options.parameters.queues;
     plan.edgePolicies = MediaRealtimeEdgePolicyPlanner::plan(plan.queues);
     plan.threadingPolicy = planThreadingPolicy();
     plan.videoInputStartRequiresKeyFrame = MediaRealtimeRequestClassifier::unreliablePacketBoundary(options);

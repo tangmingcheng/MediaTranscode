@@ -324,9 +324,9 @@ MediaAvSyncResult<MediaAvStartupDecision> MediaAvStartupCoordinator::submit(
         ? m_lastVideoSequence
         : m_lastAudioSequence;
     if (lastSequence && unit.sequence <= *lastSequence) {
-        return MediaAvSyncResult<MediaAvStartupDecision>::failure(startupError(
-            MediaAvSyncErrorCode::StartupInvalidTransition,
-            "submit", &unit, "per-stream sequence regressed or repeated"));
+        return MediaAvSyncResult<MediaAvStartupDecision>::success(
+            {MediaAvStartupDisposition::DroppedDuplicateOrRegressed,
+             std::nullopt, std::move(purged)});
     }
     if (m_state.state() == MediaAvSyncState::Running) {
         lastSequence = unit.sequence;

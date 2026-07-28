@@ -297,7 +297,7 @@ void testVideoFirstWaitsForCommonWindowAndReleasesOnce(TestContext& ctx)
     }
 }
 
-void testRunningRejectsRepeatedOrRegressedPerStreamSequence(TestContext& ctx)
+void testRunningDropsRepeatedOrRegressedPerStreamSequence(TestContext& ctx)
 {
     auto coordinator = MediaAvStartupCoordinator::create(startupConfig());
     EXPECT_TRUE(ctx, coordinator);
@@ -313,18 +313,18 @@ void testRunningRejectsRepeatedOrRegressedPerStreamSequence(TestContext& ctx)
 
     auto repeatedVideo = coordinator.value().submit(
         video(2, 100, false), ns(5));
-    EXPECT_FALSE(ctx, repeatedVideo);
-    if (!repeatedVideo) {
-        expectCode(ctx, repeatedVideo.error(),
-                   MediaAvSyncErrorCode::StartupInvalidTransition);
+    EXPECT_TRUE(ctx, repeatedVideo);
+    if (repeatedVideo) {
+        EXPECT_EQ(ctx, repeatedVideo.value().disposition,
+                  MediaAvStartupDisposition::DroppedDuplicateOrRegressed);
     }
 
     auto regressedAudio = coordinator.value().submit(
         audio(4, 60, 40, 1'920), ns(6));
-    EXPECT_FALSE(ctx, regressedAudio);
-    if (!regressedAudio) {
-        expectCode(ctx, regressedAudio.error(),
-                   MediaAvSyncErrorCode::StartupInvalidTransition);
+    EXPECT_TRUE(ctx, regressedAudio);
+    if (regressedAudio) {
+        EXPECT_EQ(ctx, regressedAudio.value().disposition,
+                  MediaAvStartupDisposition::DroppedDuplicateOrRegressed);
     }
 
     auto nextVideo = coordinator.value().submit(
@@ -1238,6 +1238,53 @@ void testNodeRejectsPerStreamEventTimeRegression(TestContext& ctx)
     EXPECT_FALSE(ctx, harness.runtime->process(harness.execution));
 }
 
+void testNodeDropsRepeatedSequenceAndContinues(TestContext& ctx)
+{
+    StartupNodeHarness harness;
+    if (!harness.initialize(ctx)) return;
+    auto* output = harness.execution.findOutputChannel(
+        harness.coordinator, "release");
+    EXPECT_TRUE(ctx, output != nullptr);
+    if (!output) return;
+
+    EXPECT_TRUE(ctx, harness.tick(4));
+    EXPECT_TRUE(ctx, harness.push(
+        "audio", audio(1, 0, 100, 4'800), 4));
+    EXPECT_TRUE(ctx, harness.push(
+        "audio", audio(2, 100, 100, 4'800), 4));
+    EXPECT_TRUE(ctx, harness.push("video", video(3, 40, true), 4));
+    EXPECT_TRUE(ctx, harness.push("video", video(4, 100, false), 4));
+    EXPECT_TRUE(ctx, harness.push("video", video(5, 150, false), 4));
+    auto* videoInput = harness.execution.findInputChannel(
+        harness.coordinator, "video");
+    auto* audioInput = harness.execution.findInputChannel(
+        harness.coordinator, "audio");
+    auto* clockInput = harness.execution.findInputChannel(
+        harness.coordinator, "clock");
+    EXPECT_TRUE(ctx, videoInput && audioInput && clockInput);
+    if (!videoInput || !audioInput || !clockInput) return;
+    for (int index = 0;
+         index < 16 &&
+         (videoInput->size() + audioInput->size() + clockInput->size()) > 0;
+         ++index) {
+        EXPECT_TRUE(ctx, harness.runtime->process(harness.execution));
+    }
+    const auto baselineOutputs = output->size();
+    EXPECT_TRUE(ctx, baselineOutputs > 0);
+
+    EXPECT_TRUE(ctx, harness.push("video", video(4, 100, false), 5));
+    EXPECT_TRUE(ctx, harness.runtime->process(harness.execution));
+    EXPECT_EQ(ctx, output->size(), baselineOutputs);
+
+    EXPECT_TRUE(ctx, harness.push("video", video(6, 200, false), 6));
+    for (int index = 0;
+         index < 3 && output->size() == baselineOutputs;
+         ++index) {
+        EXPECT_TRUE(ctx, harness.runtime->process(harness.execution));
+    }
+    EXPECT_EQ(ctx, output->size(), baselineOutputs + 1);
+}
+
 void testNodePublishesOneImmutablePairedEnvelope(TestContext& ctx)
 {
     MediaGraph graph;
@@ -1485,7 +1532,7 @@ void runAvStartupCoordinatorTests(TestContext& ctx)
     testStartupTrimUsesAuthoritativeCanonicalSampleSpan(ctx);
     testAuthoritativeSampleSpanHandlesSignedBoundaries(ctx);
     testVideoFirstWaitsForCommonWindowAndReleasesOnce(ctx);
-    testRunningRejectsRepeatedOrRegressedPerStreamSequence(ctx);
+    testRunningDropsRepeatedOrRegressedPerStreamSequence(ctx);
     testRequiresLockedSameGenerationAndPurgesOldPackets(ctx);
     testReacquireClosesGateUntilBothStreamsRelock(ctx);
     testTimeoutEofErrorAndLifecycle(ctx);
@@ -1516,6 +1563,7 @@ void runAvStartupCoordinatorTests(TestContext& ctx)
     testNodeProcessesQueuedReleaseMediaBeforeTerminalControl(ctx);
     testNodeFreezesNewIntakeWhileDrainingClockWatermark(ctx);
     testNodeRejectsPerStreamEventTimeRegression(ctx);
+    testNodeDropsRepeatedSequenceAndContinues(ctx);
     testNodePublishesOneImmutablePairedEnvelope(ctx);
     testNodeDropsOldEnvelopeAfterAcknowledgedGenerationPurge(ctx);
     testNodeFinishesAfterOneBackpressuredTerminalControl(ctx);
