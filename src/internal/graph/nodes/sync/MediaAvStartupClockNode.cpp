@@ -53,6 +53,19 @@ MediaNodeKind MediaAvStartupClockNode::staticKind() noexcept
 ::media::Status MediaAvStartupClockNode::observe(
     const MediaSourceClockStateBuffer& state)
 {
+    const bool discontinuity =
+        hasFlag(state.flags(), MediaBufferFlag::Discontinuity);
+    if (discontinuity) {
+        if (state.readiness() !=
+                MediaSourceClockReadiness::ReacquireRequired ||
+            !m_generation || state.generation() != *m_generation) {
+            return ::media::Status::failure(::media::ErrorInfo::cancelled(
+                "A/V startup clock rejects malformed reacquisition evidence"));
+        }
+        m_generation.reset();
+        m_nextTick.reset();
+        return ::media::Status::success();
+    }
     if (state.readiness() == MediaSourceClockReadiness::Acquiring) {
         if (m_generation) {
             return ::media::Status::failure(::media::ErrorInfo::cancelled(

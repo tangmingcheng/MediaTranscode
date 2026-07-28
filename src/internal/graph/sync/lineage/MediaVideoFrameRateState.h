@@ -16,6 +16,11 @@ extern "C" {
 
 namespace media::ffmpeg::graph {
 
+enum class MediaVideoFrameRateGenerationDisposition {
+    Activate,
+    DropStale
+};
+
 class MediaVideoFrameRateState final : public MediaVideoLineageState {
 public:
     struct TaggedFrame final {
@@ -51,7 +56,8 @@ public:
     [[nodiscard]] bool requiresCanonicalLineage() const noexcept;
 
     void resetLifecycle() noexcept;
-    ::media::Status activateGeneration(std::uint64_t generation);
+    ::media::Result<MediaVideoFrameRateGenerationDisposition>
+    activateGeneration(std::uint64_t generation);
 
 private:
     void resetTimelineLocked() noexcept;

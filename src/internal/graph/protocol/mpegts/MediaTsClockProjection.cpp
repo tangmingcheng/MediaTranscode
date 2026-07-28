@@ -125,11 +125,10 @@ MediaTsClockProjection::MediaTsClockProjection(
             ::media::ErrorInfo::invalidArgument("MPEG-TS clock projection capacity exhausted"));
     }
     if (auto status = validateInventory(evidence.inventory); !status) return status;
-    if (evidence.continuityEvent) {
-        const auto pid = evidence.continuityEvent->pid;
-        ::media::Status continuity = pid == m_policy.pcrPid
-            ? m_tracker.observePcrContinuityLoss(pid)
-            : m_tracker.observeElementaryContinuityLoss(pid);
+    if (evidence.continuityEvent &&
+        evidence.continuityEvent->pid == m_policy.pcrPid) {
+        auto continuity =
+            m_tracker.observePcrContinuityLoss(m_policy.pcrPid);
         if (!continuity) return continuity;
     }
     if (evidence.pcrObservation && evidence.pcrObservation->pid == m_policy.pcrPid) {

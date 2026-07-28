@@ -29,6 +29,15 @@ const char* reacquisitionCauseName(
     return "unknown";
 }
 
+bool reacquisitionInProgress(MediaAvReacquisitionPhase phase) noexcept
+{
+    return phase == MediaAvReacquisitionPhase::Purging ||
+        phase == MediaAvReacquisitionPhase::Acquiring ||
+        phase == MediaAvReacquisitionPhase::ReadyForActivation ||
+        phase == MediaAvReacquisitionPhase::Activating ||
+        phase == MediaAvReacquisitionPhase::Publishing;
+}
+
 } // namespace
 
 MediaAvOutputSchedulerNode::MediaAvOutputSchedulerNode(MediaNodeId nodeId)
@@ -154,6 +163,12 @@ MediaAvOutputSchedulerNode::generationPurgeTarget() const noexcept
     }
     if (m_group->lifecycleState() ==
         MediaAvSyncGroupRuntime::LifecycleState::AwaitingEpoch) {
+        return ::media::Result<MediaNodeProcessResult>::success(
+            MediaNodeProcessResult::waiting());
+    }
+    if (!m_generationData->videoController &&
+        reacquisitionInProgress(
+            m_group->reacquisitionSnapshot().phase)) {
         return ::media::Result<MediaNodeProcessResult>::success(
             MediaNodeProcessResult::waiting());
     }

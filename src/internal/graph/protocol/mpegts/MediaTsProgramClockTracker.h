@@ -70,6 +70,7 @@ private:
     std::optional<MediaRunningTime> m_lastPublishedSourceTime;
     std::optional<MediaTsPcrCalibration> m_calibration;
     bool m_ready = false;
+    bool m_reacquiring = false;
 };
 
 } // namespace media::ffmpeg::graph

@@ -81,6 +81,11 @@ const MediaThreadingPolicy& MediaGraphThreadedExecutor::policy() const noexcept
             worker->requestStop();
         }
     }
+    for (auto& worker : m_workers) {
+        if (worker) {
+            worker->interrupt();
+        }
+    }
 
     auto closeStatus = MediaGraphLifecycle::closeChannels(context);
     if (!closeStatus) {

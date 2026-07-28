@@ -174,6 +174,14 @@ int AudioEncoderFrameQueue::queuedSamples() const noexcept
     return popSamples(queuedSamples());
 }
 
+void AudioEncoderFrameQueue::clearQueuedSamples() noexcept
+{
+    if (m_fifo) av_audio_fifo_reset(m_fifo.get());
+    m_nextPts = AV_NOPTS_VALUE;
+    m_intervals = MediaAudioIntervalAccumulator{};
+    m_terminalFailure = false;
+}
+
 void AudioEncoderFrameQueue::reset() noexcept
 {
     m_fifo.reset();

@@ -199,12 +199,22 @@ MediaProtocolOutputGenerationState::reserveSessionMutation() const
 {
     std::lock_guard lock(m_mutex);
     std::lock_guard sessionLock(m_sessionState->m_mutex);
+    const bool purgePermittedGeneration =
+        m_permittedGeneration &&
+        *m_permittedGeneration == purge.oldGeneration &&
+        !m_pendingGeneration && !m_pendingTransitionSequence;
+    const bool supersedeUnpublishedGeneration =
+        !m_permittedGeneration &&
+        m_pendingGeneration &&
+        *m_pendingGeneration == purge.oldGeneration &&
+        m_pendingTransitionSequence &&
+        m_lastTransitionSequence &&
+        *m_pendingTransitionSequence == *m_lastTransitionSequence;
     if (m_plannedIdentity.empty() || purge.oldGeneration == 0 ||
         purge.nextGeneration <= purge.oldGeneration ||
         purge.transitionSequence == 0 ||
-        !m_permittedGeneration ||
-        *m_permittedGeneration != purge.oldGeneration ||
-        m_pendingGeneration || m_pendingTransitionSequence ||
+        (!purgePermittedGeneration &&
+         !supersedeUnpublishedGeneration) ||
         (m_lastTransitionSequence &&
          purge.transitionSequence <= *m_lastTransitionSequence)) {
         return ::media::Status::failure(

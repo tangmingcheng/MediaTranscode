@@ -331,7 +331,7 @@ MediaActivatedStartupReleaseSequencerNode::process(
     }
 
     const MediaBufferRef& bound = m_reanchoredTransaction
-        ? m_reanchoredTransaction : transaction->payload();
+        ? m_reanchoredTransaction : m_pendingTransaction;
     std::vector<MediaAtomicOutputBatch> batches;
     const bool publishesActivation = activateInitial || activateNext;
     batches.reserve(

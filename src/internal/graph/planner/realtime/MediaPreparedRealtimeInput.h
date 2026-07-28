@@ -39,11 +39,14 @@ public:
         ::media::ffmpeg::InputFormatContextPtr context);
     static ::media::Result<MediaPreparedRealtimeInput> createMpegTs(
         std::unique_ptr<MediaTsInputSession> session);
+    static ::media::Result<MediaPreparedRealtimeInput> createDeferredMpegTs(
+        std::unique_ptr<MediaTsInputSession> preflightSession,
+        MediaTsRuntimeSessionFactory runtimeSessionFactory);
 
     bool valid() const noexcept;
     std::optional<MediaPreparedRealtimeInputKind> kind() const noexcept;
     const FFmpegInputStreamSnapshot* inputStreamSnapshot(int streamIndex) const noexcept;
-    ::media::Result<MediaBufferRef> releaseBuffer() noexcept;
+    ::media::Result<MediaBufferRef> releaseBuffer();
 
 private:
     explicit MediaPreparedRealtimeInput(std::unique_ptr<FFmpegFormatContextBuffer> buffer);

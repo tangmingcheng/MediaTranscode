@@ -54,6 +54,7 @@ protected:
     void clearOwnedLineage(const MediaAvGenerationPurge& purge) noexcept override;
 
 private:
+    void clearGenerationLineage() noexcept;
     void clearLineageStorage() noexcept;
 };
 

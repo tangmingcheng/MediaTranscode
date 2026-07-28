@@ -10,13 +10,44 @@ MediaAudioLineageState::MediaAudioLineageState(
 {
 }
 
-::media::Status MediaAudioLineageState::validateObservation(
+::media::Result<MediaAudioLineageGenerationDisposition>
+MediaAudioLineageState::classifyObservation(
     std::uint64_t generation) const
 {
     std::lock_guard lock(m_mutex);
-    if (generation == 0 || (m_generation != 0 && m_generation != generation)) {
+    if (generation == 0) {
+        return ::media::Result<
+            MediaAudioLineageGenerationDisposition>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Audio lineage state rejects a zero generation"));
+    }
+    if (m_generation == 0 || generation == m_generation) {
+        return ::media::Result<
+            MediaAudioLineageGenerationDisposition>::success(
+            MediaAudioLineageGenerationDisposition::Current);
+    }
+    if (generation < m_generation) {
+        return ::media::Result<
+            MediaAudioLineageGenerationDisposition>::success(
+            MediaAudioLineageGenerationDisposition::DropStale);
+    }
+    return ::media::Result<
+        MediaAudioLineageGenerationDisposition>::failure(
+        ::media::ErrorInfo::invalidArgument(
+            "Audio lineage state rejects an unpurged future generation"));
+}
+
+::media::Status MediaAudioLineageState::validateObservation(
+    std::uint64_t generation) const
+{
+    auto disposition = classifyObservation(generation);
+    if (!disposition) {
+        return ::media::Status::failure(disposition.error());
+    }
+    if (disposition.value() !=
+        MediaAudioLineageGenerationDisposition::Current) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "Audio lineage state rejects an unpurged generation change"));
+            "Audio lineage state rejects a stale generation"));
     }
     return ::media::Status::success();
 }

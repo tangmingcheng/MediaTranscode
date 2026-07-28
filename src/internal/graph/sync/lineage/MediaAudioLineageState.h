@@ -10,6 +10,11 @@
 
 namespace media::ffmpeg::graph {
 
+enum class MediaAudioLineageGenerationDisposition {
+    Current,
+    DropStale
+};
+
 class MediaAudioLineageState : public MediaAvGenerationPurgeTarget {
 public:
     using Lock = std::unique_lock<std::recursive_mutex>;
@@ -17,6 +22,8 @@ public:
     MediaAudioLineageState(bool synchronized, std::size_t capacity) noexcept;
     virtual ~MediaAudioLineageState() = default;
 
+    ::media::Result<MediaAudioLineageGenerationDisposition>
+    classifyObservation(std::uint64_t generation) const;
     ::media::Status validateObservation(std::uint64_t generation) const;
     ::media::Status observe(std::uint64_t generation);
     ::media::Status authorizeRetainedControl(const MediaBufferRef& buffer);

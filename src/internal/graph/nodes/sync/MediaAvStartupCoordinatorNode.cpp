@@ -450,7 +450,7 @@ MediaAvStartupCoordinatorNode::prepareOutput(
     if (!epoch) {
         return ::media::Result<std::optional<MediaBufferRef>>::success(std::nullopt);
     }
-    if (!m_generationState || !m_generationState->audioSampleRate()) {
+    if (!m_generationState || m_outputAudioSampleRate <= 0) {
         return ::media::Result<std::optional<MediaBufferRef>>::failure(
             ::media::ErrorInfo::notInitialized(
                 "A/V startup release requires planned group and audio origin"));

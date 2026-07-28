@@ -246,6 +246,16 @@ void VideoDecodeNode::resetRuntimeState() noexcept
                 ::media::ErrorInfo::invalidArgument(
                     "VideoDecodeNode requires canonical packet lineage"));
         }
+        auto disposition = m_lineageState->classifyObservation(
+            pendingLineage->generation);
+        if (!disposition) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                disposition.error());
+        }
+        if (disposition.value() ==
+            MediaVideoLineageGenerationDisposition::DropStale) {
+            return processProgress();
+        }
         if (auto status = m_lineageState->observe(pendingLineage->generation);
             !status) {
             return ::media::Result<MediaNodeProcessResult>::failure(status.error());

@@ -37,13 +37,18 @@ void AudioEncodeLineageState::clearOwnedLineage(
     if (m_codecApi && m_codecContext) {
         m_codecApi->flushBuffers(m_codecContext);
     }
-    clearLineageStorage();
+    clearLineageStorage(false);
 }
 
-void AudioEncodeLineageState::clearLineageStorage() noexcept
+void AudioEncodeLineageState::clearLineageStorage(
+    bool resetFrameQueue) noexcept
 {
     receivePending = false;
-    frameQueue.reset();
+    if (resetFrameQueue) {
+        frameQueue.reset();
+    } else {
+        frameQueue.clearQueuedSamples();
+    }
     pendingFrame.reset();
     pendingFragments.clear();
     submittedFragments.clear();
@@ -58,7 +63,7 @@ void AudioEncodeLineageState::clearLineageStorage() noexcept
 
 void AudioEncodeLineageState::resetForLifecycle() noexcept
 {
-    clearLineageStorage();
+    clearLineageStorage(true);
     resetLifecycleLineage();
     resetCodecBinding();
 }
