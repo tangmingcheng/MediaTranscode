@@ -124,6 +124,7 @@ MediaRealtimeRtpTranscodeRequest productionRequest(
         request.input.streamLayout =
             RealtimeInputStreamLayout::MuxedTransportStream;
         request.input.url = "udp://127.0.0.1:45008";
+        request.input.mpegTsClock.maximumPcrGap = ms(120);
         request.output.streamLayout =
             RealtimeOutputStreamLayout::MuxedTransportStream;
         request.output.url = "udp://127.0.0.1:46008";
@@ -206,11 +207,14 @@ struct ProductionMpegTsGraph final {
         productionMpegTsStreams(),
         productionMpegTsSelection());
     if (!planned) {
+        std::cerr << "production MPEG-TS planning failed: "
+                  << planned.error().describe() << '\n';
         return ::media::Result<ProductionMpegTsGraph>::failure(
             planned.error());
     }
     auto plan = std::move(planned).value();
     if (!plan.avSyncRuntime) {
+        std::cerr << "production MPEG-TS planning omitted A/V runtime binding\n";
         return ::media::Result<ProductionMpegTsGraph>::failure(
             ::media::ErrorInfo::notInitialized(
                 "production MPEG-TS plan requires A/V runtime binding"));
@@ -219,6 +223,8 @@ struct ProductionMpegTsGraph final {
     auto graph = MediaRealtimeRtpTranscodeGraphBuilder::build(
         std::move(plan));
     if (!graph) {
+        std::cerr << "production MPEG-TS graph assembly failed: "
+                  << graph.error().describe() << '\n';
         return ::media::Result<ProductionMpegTsGraph>::failure(
             graph.error());
     }

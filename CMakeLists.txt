@@ -408,9 +408,7 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
         tests/unit/scheduled_rtp_output_node_tests.cpp
         tests/unit/scheduled_rtp_sender_node_tests.cpp
         tests/unit/dual_media_sdp_publisher_tests.cpp
-        tests/unit/scheduled_rtp_output_assembly_tests.cpp
         tests/unit/fixtures/ScheduledRtpOutputNodeTestSupport.cpp
-        tests/unit/fixtures/ScheduledRtpOutputIntegrationGraph.cpp
     )
     media_transcode_configure_test(media_transcode_scheduled_rtp_output_node_tests)
     media_transcode_register_test(
@@ -453,36 +451,11 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
             SKIP_RETURN_CODE 77
         )
 
-        add_executable(media_transcode_scheduled_rtp_output_decode_integration_tests
-            tests/unit/scheduled_rtp_output_decode_integration_tests.cpp
-            tests/unit/fixtures/ScheduledRtpDecodePrerequisites.cpp
-            tests/unit/fixtures/ScheduledRtpDecodeReceiver.cpp
-            tests/unit/fixtures/ScheduledRtpDecodeSampleFixture.cpp
-            tests/unit/fixtures/ScheduledRtpOutputIntegrationGraph.cpp
-            tests/unit/fixtures/ScheduledRtpOutputIntegrationRuntime.cpp
-            tests/unit/fixtures/MediaTsSampleStreamConfigFixture.cpp
-        )
-        media_transcode_configure_test(
-            media_transcode_scheduled_rtp_output_decode_integration_tests)
-        target_compile_definitions(
-            media_transcode_scheduled_rtp_output_decode_integration_tests PRIVATE
-            MEDIA_TRANSCODE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
-        )
-        if(WIN32)
-            target_link_libraries(
-                media_transcode_scheduled_rtp_output_decode_integration_tests
-                PRIVATE iphlpapi ws2_32)
-        endif()
-        media_transcode_register_test(
-            media_transcode_scheduled_rtp_output_decode_integration_tests
-            "integration")
-        set_tests_properties(
-            media_transcode_scheduled_rtp_output_decode_integration_tests
-            PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 15)
-
         add_executable(media_transcode_av_sync_production_runtime_integration_tests
             tests/unit/av_sync_production_runtime_integration_tests.cpp
             tests/unit/fixtures/AvSyncProductionRuntimeIntegrationSupport.cpp
+            tests/unit/fixtures/MediaTsPesTimestampInspector.cpp
+            tests/unit/fixtures/MpegTsOutputArtifactVerifier.cpp
             tests/unit/fixtures/ScheduledRtpDecodeReceiver.cpp
         )
         media_transcode_configure_test(
@@ -536,32 +509,6 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
             target_link_libraries(media_transcode_mpeg_ts_integration_tests PRIVATE ws2_32)
         endif()
         media_transcode_register_test(media_transcode_mpeg_ts_integration_tests "integration")
-
-        add_executable(media_transcode_mpeg_ts_output_decode_integration_tests
-            tests/unit/mpeg_ts_output_decode_integration_tests.cpp
-            tests/unit/fixtures/MpegTsOutputArtifactVerifier.cpp
-            tests/unit/fixtures/ScheduledMpegTsDecodeSamplePreparer.cpp
-            tests/unit/fixtures/ScheduledMpegTsDecodeSampleFixture.cpp
-            tests/unit/fixtures/ScheduledMpegTsOutputIntegrationRuntime.cpp
-            tests/unit/fixtures/ScheduledRtpDecodePrerequisites.cpp
-            tests/unit/fixtures/ScheduledRtpDecodeReceiver.cpp
-            tests/unit/fixtures/MediaTsPesTimestampInspector.cpp
-            tests/unit/fixtures/MediaTsSampleStreamConfigFixture.cpp
-        )
-        media_transcode_configure_test(media_transcode_mpeg_ts_output_decode_integration_tests)
-        target_compile_definitions(media_transcode_mpeg_ts_output_decode_integration_tests PRIVATE
-            MEDIA_TRANSCODE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
-        )
-        if(WIN32)
-            target_link_libraries(
-                media_transcode_mpeg_ts_output_decode_integration_tests
-                PRIVATE iphlpapi ws2_32)
-        endif()
-        media_transcode_register_test(
-            media_transcode_mpeg_ts_output_decode_integration_tests "integration")
-        set_tests_properties(media_transcode_mpeg_ts_output_decode_integration_tests PROPERTIES
-            SKIP_RETURN_CODE 77
-        )
 
         add_executable(media_transcode_mpeg_ts_crafted_udp_fault_tests
             tests/unit/mpeg_ts_crafted_udp_fault_tests.cpp

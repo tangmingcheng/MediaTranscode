@@ -5,6 +5,7 @@
 #include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 #include "internal/graph/builder/segments/MediaScheduledMpegTsOutputSegmentBuilder.h"
 #include "internal/graph/core/MediaGraphValidation.h"
+#include "internal/graph/model/MediaAtomicOutputPolicyContract.h"
 #include "internal/graph/nodes/mux/FileMuxNode.h"
 #include "internal/graph/nodes/mux/ProjectMpegTsMuxSessionAdapter.h"
 #include "internal/graph/nodes/output/MediaProjectMpegTsPlanSourceNode.h"
@@ -619,12 +620,15 @@ AssemblyFixture assemblyFixture(TestContext& ctx)
                           MediaPayloadKind::TsAccessUnit);
 
     const auto metadata = MediaBlockingEdgePolicyPlanner::planQueue(1);
+    const auto atomicPlan =
+        MediaBlockingEdgePolicyPlanner::planAtomicOutput(1);
     const auto packet = MediaBlockingEdgePolicyPlanner::planQueue(4);
     f.graph.connect(f.epochSource, "epoch", f.planSource, "epoch", "epoch",
                     metadata);
-    f.graph.connect(f.planSource, "plan", f.mux, "plan", "mux plan", metadata);
+    f.graph.connect(
+        f.planSource, "plan", f.mux, "plan", "mux plan", atomicPlan);
     f.graph.connect(f.planSource, "plan", f.adapter, "plan", "adapter plan",
-                    metadata);
+                    atomicPlan);
     f.graph.connect(f.sinkSource, "resource", f.mux, "resource", "mux sink",
                     metadata);
     f.graph.connect(f.videoCodecSource, "codec", f.mux, "codec", "video codec",
@@ -1349,6 +1353,13 @@ void segmentBuildsCompleteAcyclicTopology(TestContext& ctx)
             return edge.from.nodeId == built.value().planSource;
         });
     EXPECT_EQ(ctx, planFanout, std::size_t{2});
+    const auto atomicPlanFanout = std::count_if(
+        graph.edges().begin(), graph.edges().end(),
+        [&](const MediaEdge& edge) {
+            return edge.from.nodeId == built.value().planSource &&
+                MediaAtomicOutputPolicyContract::accepts(edge.policy);
+        });
+    EXPECT_EQ(ctx, atomicPlanFanout, std::size_t{2});
     const MediaNode* planNode = graph.findNode(built.value().planSource);
     const MediaNode* adapterNode = graph.findNode(built.value().adapter);
     EXPECT_TRUE(ctx, planNode != nullptr && adapterNode != nullptr);

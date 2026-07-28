@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iterator>
 #include <set>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <utility>
@@ -468,15 +469,80 @@ void ScheduledRtpDecodeReceiver::stop() noexcept
     m_processId = 0;
 }
 
-bool scheduledRtpFrameMd5HasData(const std::filesystem::path& path)
+::media::Result<ScheduledRtpFrameMd5Timeline>
+readScheduledRtpFrameMd5Timeline(const std::filesystem::path& path)
 {
     std::ifstream input(path);
+    if (!input) {
+        return ::media::Result<ScheduledRtpFrameMd5Timeline>::failure(
+            ::media::ErrorInfo::ioFailure(
+                "scheduled RTP frame timeline is unavailable"));
+    }
+    int timeBaseNumerator = 0;
+    int timeBaseDenominator = 0;
+    std::vector<std::int64_t> presentationTicks;
     std::string line;
     while (std::getline(input, line)) {
         const auto first = line.find_first_not_of(" \t\r\n");
-        if (first != std::string::npos && line[first] != '#') return true;
+        if (first == std::string::npos) continue;
+        if (line.compare(first, 6, "#tb 0:") == 0) {
+            char separator = '\0';
+            std::istringstream timeBase(line.substr(first + 6));
+            timeBase >> timeBaseNumerator >> separator >>
+                timeBaseDenominator;
+            if (!timeBase || separator != '/') {
+                return ::media::Result<
+                    ScheduledRtpFrameMd5Timeline>::failure(
+                    ::media::ErrorInfo::invalidArgument(
+                        "scheduled RTP frame timeline has invalid time base"));
+            }
+            continue;
+        }
+        if (line[first] == '#') continue;
+        std::replace(line.begin(), line.end(), ',', ' ');
+        int streamIndex = -1;
+        std::int64_t dts = 0;
+        std::int64_t pts = 0;
+        std::int64_t duration = 0;
+        std::size_t bytes = 0;
+        std::string checksum;
+        std::istringstream frame(line);
+        frame >> streamIndex >> dts >> pts >> duration >> bytes >> checksum;
+        if (!frame || streamIndex != 0 || duration <= 0 || bytes == 0 ||
+            checksum.empty()) {
+            return ::media::Result<ScheduledRtpFrameMd5Timeline>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "scheduled RTP frame timeline has invalid frame data"));
+        }
+        if (!presentationTicks.empty() &&
+            pts < presentationTicks.back()) {
+            return ::media::Result<ScheduledRtpFrameMd5Timeline>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "scheduled RTP frame timeline regressed"));
+        }
+        presentationTicks.push_back(pts);
     }
-    return false;
+    if (timeBaseNumerator <= 0 || timeBaseDenominator <= 0 ||
+        presentationTicks.empty()) {
+        return ::media::Result<ScheduledRtpFrameMd5Timeline>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "scheduled RTP frame timeline is incomplete"));
+    }
+    std::vector<::media::ffmpeg::graph::MediaRunningTime> presentations;
+    presentations.reserve(presentationTicks.size());
+    for (const auto pts : presentationTicks) {
+        auto presentation =
+            ::media::ffmpeg::graph::MediaRunningTime::checkedFromTicks(
+                pts, timeBaseNumerator, timeBaseDenominator);
+        if (!presentation) {
+            return ::media::Result<
+                ScheduledRtpFrameMd5Timeline>::failure(
+                presentation.error());
+        }
+        presentations.push_back(presentation.value());
+    }
+    return ::media::Result<ScheduledRtpFrameMd5Timeline>::success(
+        ScheduledRtpFrameMd5Timeline{std::move(presentations)});
 }
 
 } // namespace media_transcode::test

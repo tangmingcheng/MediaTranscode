@@ -80,12 +80,22 @@ protected:
     std::vector<MediaChannel*> outputChannels(MediaGraphExecutionContext& context);
 
 private:
+    enum class AtomicTransferResult {
+        NotApplicable,
+        Waiting,
+        Published
+    };
     struct PendingTransfer {
         MediaBufferRef buffer;
         std::vector<MediaChannel*> channels;
         std::size_t nextChannel = 0;
         bool atomic = false;
     };
+    ::media::Result<AtomicTransferResult> publishAtomicOutput(
+        MediaGraphExecutionContext& context,
+        const std::vector<MediaChannel*>& channels,
+        const MediaBufferRef& buffer,
+        const char* action);
     ::media::Status transferOrDefer(MediaGraphExecutionContext& context,
                                     const std::vector<MediaChannel*>& channels,
                                     const MediaBufferRef& buffer,

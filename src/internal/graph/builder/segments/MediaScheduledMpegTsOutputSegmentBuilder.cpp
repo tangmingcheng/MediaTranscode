@@ -140,9 +140,9 @@ MediaScheduledMpegTsOutputSegmentBuilder::build(
     }
     for (const auto& [to, port, label, policy] : {
              std::tuple{base.value().mux, "plan", "MPEG-TS plan -> mux",
-                        plan.edgePolicies.metadata},
+                         plan.edgePolicies.atomicMetadata},
              std::tuple{adapter, "plan", "MPEG-TS plan -> adapter",
-                        plan.edgePolicies.metadata}}) {
+                         plan.edgePolicies.atomicMetadata}}) {
         auto connected = MediaGraphBuildSupport::connectChecked(
             graph, Owner, planSource, "plan", to, port, label, policy);
         if (!connected) return Result::failure(connected.error());

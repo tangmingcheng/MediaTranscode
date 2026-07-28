@@ -1,14 +1,22 @@
 #pragma once
 
+#include "internal/graph/time/MediaRunningTime.h"
 #include "media_transcode/Result.h"
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace media_transcode::test {
+
+struct ScheduledRtpFrameMd5Timeline final {
+    std::vector<::media::ffmpeg::graph::MediaRunningTime> presentations;
+};
 
 class ScheduledRtpDecodeReceiver final {
 public:
@@ -54,6 +62,7 @@ private:
     std::filesystem::path m_log;
 };
 
-bool scheduledRtpFrameMd5HasData(const std::filesystem::path& path);
+::media::Result<ScheduledRtpFrameMd5Timeline>
+readScheduledRtpFrameMd5Timeline(const std::filesystem::path& path);
 
 } // namespace media_transcode::test

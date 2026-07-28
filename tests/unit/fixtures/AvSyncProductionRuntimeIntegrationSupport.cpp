@@ -1,6 +1,8 @@
 #include "unit/fixtures/AvSyncProductionRuntimeIntegrationSupport.h"
 
+#include <algorithm>
 #include <array>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <thread>
@@ -281,6 +283,78 @@ UdpDatagramReceiver::bindLoopback(std::uint16_t port)
     return ::media::Result<std::size_t>::failure(
         ::media::ErrorInfo::unsupported(
             "production integration UDP receiver is Windows-only"));
+#endif
+}
+
+::media::Result<std::size_t> UdpDatagramReceiver::receiveToFile(
+    const std::filesystem::path& output,
+    std::chrono::milliseconds timeout,
+    std::size_t minimumBytes)
+{
+#if defined(_WIN32)
+    if (m_socket == 0 || m_socket == InvalidSocket || output.empty() ||
+        timeout.count() <= 0 || minimumBytes == 0) {
+        return ::media::Result<std::size_t>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "production integration capture inputs are invalid"));
+    }
+    std::ofstream artifact(output, std::ios::binary | std::ios::trunc);
+    if (!artifact) {
+        return ::media::Result<std::size_t>::failure(
+            supportError("production integration capture file could not open"));
+    }
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    std::array<char, 65'536> buffer{};
+    std::size_t captured = 0;
+    while (captured < minimumBytes) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) break;
+        const auto remaining = std::chrono::duration_cast<
+            std::chrono::milliseconds>(deadline - now);
+        const DWORD receiveTimeout = static_cast<DWORD>((std::max)(
+            std::int64_t{1},
+            (std::min)(remaining, std::chrono::milliseconds(250)).count()));
+        if (setsockopt(nativeSocket(m_socket), SOL_SOCKET, SO_RCVTIMEO,
+                       reinterpret_cast<const char*>(&receiveTimeout),
+                       sizeof(receiveTimeout)) == SOCKET_ERROR) {
+            return ::media::Result<std::size_t>::failure(
+                supportError("production integration capture timeout failed",
+                             WSAGetLastError()));
+        }
+        const int received = recvfrom(
+            nativeSocket(m_socket), buffer.data(),
+            static_cast<int>(buffer.size()), 0, nullptr, nullptr);
+        if (received > 0) {
+            artifact.write(buffer.data(), received);
+            if (!artifact) {
+                return ::media::Result<std::size_t>::failure(
+                    supportError(
+                        "production integration capture file write failed"));
+            }
+            captured += static_cast<std::size_t>(received);
+            continue;
+        }
+        const int error = WSAGetLastError();
+        if (error != WSAETIMEDOUT && error != WSAEWOULDBLOCK) {
+            return ::media::Result<std::size_t>::failure(
+                supportError("production integration UDP capture failed",
+                             error));
+        }
+    }
+    artifact.flush();
+    if (!artifact || captured < minimumBytes) {
+        return ::media::Result<std::size_t>::failure(
+            supportError(
+                "production integration UDP capture did not reach minimum size"));
+    }
+    return ::media::Result<std::size_t>::success(captured);
+#else
+    (void)output;
+    (void)timeout;
+    (void)minimumBytes;
+    return ::media::Result<std::size_t>::failure(
+        ::media::ErrorInfo::unsupported(
+            "production integration UDP capture is Windows-only"));
 #endif
 }
 

@@ -1,7 +1,6 @@
 #include "unit/fixtures/MpegTsOutputArtifactVerifier.h"
 
 #include "unit/fixtures/MediaTsPesTimestampInspector.h"
-#include "unit/fixtures/ScheduledMpegTsDecodeSampleFixture.h"
 
 #include "internal/graph/protocol/mpegts/MediaTsPacketParser.h"
 #include "internal/graph/protocol/mpegts/MediaTsPsiSectionAssembler.h"
@@ -257,22 +256,10 @@ private:
     return verifyAdtsConfiguration(bytes, plan);
 }
 
-std::uint64_t ticks90k(MediaRunningTime time)
-{
-    return static_cast<std::uint64_t>(time.nanoseconds()) * 90'000ULL /
-        1'000'000'000ULL;
-}
-
-bool approximately(std::uint64_t left, std::uint64_t right) noexcept
-{
-    return left > right ? left - right <= 1 : right - left <= 1;
-}
-
-::media::Status verifyEpochTimestamps(
+::media::Status verifyProductionTimestamps(
     std::span<const std::uint8_t> bytes,
     const MediaTsMuxPlan& plan,
-    const MediaPlaybackEpoch& epoch,
-    const ScheduledMpegTsDecodeSampleFixture& sample)
+    const MediaAvSyncPlan& avSyncPlan)
 {
     MediaTsPesTimestampInspector inspector;
     auto parser = MediaTsPacketParser::create(
@@ -280,66 +267,83 @@ bool approximately(std::uint64_t left, std::uint64_t right) noexcept
     if (!parser) return ::media::Status::failure(parser.error());
     if (auto parsed = parser.value()->push(bytes); !parsed) return parsed;
     if (auto finished = parser.value()->finish(); !finished) return finished;
-    bool videoMatched = false;
-    bool audioMatched = false;
-    for (const auto& observed : inspector.timestamps()) {
-        for (const auto& unit : sample.accessUnits()) {
-            const std::uint16_t expectedPid =
-                unit.stream == MediaScheduledStream::Video
-                    ? plan.parameters().videoPid : plan.parameters().audioPid;
-            if (observed.pid != expectedPid) continue;
-            auto presentation = epoch.sourceStart.checkedAdd(
-                unit.presentationOnMaster);
-            auto dispatch = epoch.sourceStart.checkedAdd(unit.dispatchOffset);
-            if (!presentation || !dispatch) {
-                return ::media::Status::failure(
-                    !presentation ? presentation.error() : dispatch.error());
+    const auto& timestamps = inspector.timestamps();
+    const auto collectPid = [&](std::uint16_t pid, const char* stream) {
+        std::vector<std::uint64_t> presentationTimes;
+        std::uint64_t previousDts = 0;
+        for (const auto& observed : timestamps) {
+            if (observed.pid != pid) continue;
+            if (!presentationTimes.empty() && observed.dts < previousDts) {
+                return ::media::Result<std::vector<std::uint64_t>>::failure(
+                    invalid(
+                    std::string("production TS ") + stream +
+                    " DTS regressed"));
             }
-            const std::uint64_t expectedPts = ticks90k(presentation.value());
-            const std::uint64_t expectedDts = ticks90k(dispatch.value());
-            if (approximately(observed.pts, expectedPts) &&
-                approximately(observed.dts, expectedDts)) {
-                if (unit.stream == MediaScheduledStream::Video) videoMatched = true;
-                else audioMatched = true;
-                break;
-            }
+            presentationTimes.push_back(observed.pts);
+            previousDts = observed.dts;
         }
+        if (presentationTimes.size() < 2) {
+            return ::media::Result<std::vector<std::uint64_t>>::failure(
+                invalid(
+                  std::string("production TS has no ") + stream +
+                  " PES timeline"));
+        }
+        return ::media::Result<std::vector<std::uint64_t>>::success(
+            std::move(presentationTimes));
+    };
+    auto video = collectPid(plan.parameters().videoPid, "video");
+    auto audio = collectPid(plan.parameters().audioPid, "audio");
+    if (!video || !audio) {
+        return ::media::Status::failure(
+            !video ? video.error() : audio.error());
     }
-    if (!videoMatched || !audioMatched) {
-        const auto firstObserved = [&](std::uint16_t pid) {
-            const auto found = std::find_if(
-                inspector.timestamps().begin(), inspector.timestamps().end(),
-                [pid](const MediaTsObservedPesTimestamp& value) {
-                    return value.pid == pid;
-                });
-            return found == inspector.timestamps().end()
-                ? std::string("missing")
-                : std::to_string(found->pts) + "/" +
-                      std::to_string(found->dts);
-        };
-        const auto firstExpected = [&](MediaScheduledStream stream) {
-            const auto found = std::find_if(
-                sample.accessUnits().begin(), sample.accessUnits().end(),
-                [stream](const ScheduledMpegTsDecodeAccessUnit& unit) {
-                    return unit.stream == stream;
-                });
-            if (found == sample.accessUnits().end()) return std::string("missing");
-            auto presentation = epoch.sourceStart.checkedAdd(
-                found->presentationOnMaster);
-            auto dispatch = epoch.sourceStart.checkedAdd(found->dispatchOffset);
-            if (!presentation || !dispatch) return std::string("invalid");
-            const auto pts = ticks90k(presentation.value());
-            const auto dts = ticks90k(dispatch.value());
-            return std::to_string(pts) + "/" + std::to_string(dts);
-        };
+    if (!avSyncPlan.metrics.maximumStartupSkewNs ||
+        !avSyncPlan.metrics.maximumSteadyP99SkewNs ||
+        avSyncPlan.metrics.maximumStartupSkewNs->nanoseconds() <= 0 ||
+        avSyncPlan.metrics.maximumSteadyP99SkewNs->nanoseconds() <= 0) {
         return ::media::Status::failure(invalid(
-            "scheduled TS A/V PTS/DTS is not derived from the activated epoch; "
-            "video matched=" + std::to_string(videoMatched) +
-            " observed=" + firstObserved(plan.parameters().videoPid) +
-            " expected=" + firstExpected(MediaScheduledStream::Video) +
-            "; audio matched=" + std::to_string(audioMatched) +
-            " observed=" + firstObserved(plan.parameters().audioPid) +
-            " expected=" + firstExpected(MediaScheduledStream::Audio)));
+            "production TS A/V metric thresholds are incomplete"));
+    }
+    constexpr std::uint64_t PtsModulus = std::uint64_t{1} << 33;
+    const auto ptsDistance = [](std::uint64_t left, std::uint64_t right) {
+        const std::uint64_t linear =
+            left > right ? left - right : right - left;
+        return (std::min)(linear, PtsModulus - linear);
+    };
+    const auto durationToPts = [](MediaRunningTime duration) {
+        return static_cast<std::uint64_t>(duration.nanoseconds()) * 90'000ULL /
+            1'000'000'000ULL;
+    };
+    if (ptsDistance(video.value().front(), audio.value().front()) >
+        durationToPts(*avSyncPlan.metrics.maximumStartupSkewNs)) {
+        return ::media::Status::failure(invalid(
+            "production TS decoded A/V startup skew exceeds plan"));
+    }
+    const std::uint64_t maximumSteadySkew =
+        durationToPts(*avSyncPlan.metrics.maximumSteadyP99SkewNs);
+    std::vector<std::uint64_t> steadySkews;
+    for (const auto videoPts : video.value()) {
+        if (videoPts < audio.value().front() ||
+            videoPts > audio.value().back()) {
+            continue;
+        }
+        std::uint64_t nearestAudio = PtsModulus;
+        for (const auto audioPts : audio.value()) {
+            nearestAudio = (std::min)(
+                nearestAudio, ptsDistance(videoPts, audioPts));
+        }
+        steadySkews.push_back(nearestAudio);
+    }
+    if (steadySkews.size() < 2) {
+        return ::media::Status::failure(invalid(
+            "production TS has insufficient overlapping A/V timestamps"));
+    }
+    std::sort(steadySkews.begin(), steadySkews.end());
+    const std::size_t percentileIndex =
+        (steadySkews.size() * 99 + 99) / 100 - 1;
+    if (steadySkews[percentileIndex] > maximumSteadySkew) {
+        return ::media::Status::failure(invalid(
+            "production TS decoded A/V steady P99 skew exceeds plan"));
     }
     return ::media::Status::success();
 }
@@ -475,15 +479,15 @@ bool receiveFrames(AVCodecContext& decoder,
 
 ::media::Status MpegTsOutputArtifactVerifier::verify(
     const std::filesystem::path& path,
-    const MediaTsMuxPlan& plan,
-    const MediaPlaybackEpoch& epoch,
-    const ScheduledMpegTsDecodeSampleFixture& sample)
+    const MediaTsMuxPlan& muxPlan,
+    const MediaAvSyncPlan& avSyncPlan)
 {
     auto bytes = readFile(path);
     if (!bytes) return ::media::Status::failure(bytes.error());
-    auto transport = verifyTransport(bytes.value(), plan);
+    auto transport = verifyTransport(bytes.value(), muxPlan);
     if (!transport) return transport;
-    auto timing = verifyEpochTimestamps(bytes.value(), plan, epoch, sample);
+    auto timing = verifyProductionTimestamps(
+        bytes.value(), muxPlan, avSyncPlan);
     if (!timing) return timing;
     return decodeBoth(path);
 }

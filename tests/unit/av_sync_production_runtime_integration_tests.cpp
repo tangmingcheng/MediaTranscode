@@ -1,4 +1,5 @@
 #include "unit/fixtures/AvSyncProductionRuntimeIntegrationSupport.h"
+#include "unit/fixtures/MpegTsOutputArtifactVerifier.h"
 #include "unit/fixtures/ScheduledRtpDecodeReceiver.h"
 
 #include "common/AvSyncRuntimeTestSupport.h"
@@ -10,16 +11,19 @@
 #include "internal/graph/time/MediaMasterClock.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -33,10 +37,12 @@ namespace {
 using namespace media::ffmpeg::graph;
 using media_transcode::test::FfmpegRealtimeFeeder;
 using media_transcode::test::FixedAvSyncClockSource;
+using media_transcode::test::MpegTsOutputArtifactVerifier;
 using media_transcode::test::PreparedAvFixture;
 using media_transcode::test::ScheduledRtpDecodeReceiver;
 using media_transcode::test::UdpDatagramReceiver;
 using media_transcode::test::findAvailableLoopbackUdpPort;
+using media_transcode::test::readScheduledRtpFrameMd5Timeline;
 
 constexpr int ProductionFixtureVideoWidth = 320;
 constexpr int ProductionFixtureVideoHeight = 180;
@@ -125,6 +131,43 @@ private:
 ::media::ErrorInfo integrationError(std::string message)
 {
     return ::media::ErrorInfo::internalError(std::move(message));
+}
+
+::media::Status waitForGeneratedSdp(
+    const std::filesystem::path& path,
+    std::chrono::milliseconds timeout)
+{
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (auto ready = ScheduledRtpDecodeReceiver::validateGeneratedSdp(path);
+            ready) {
+            return ready;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    }
+    return ::media::Status::failure(integrationError(
+        "production RTP adapter did not publish its planned SDP"));
+}
+
+::media::Result<std::uint16_t> findDistinctRtpPortBlock(
+    std::uint16_t excludedBase)
+{
+    constexpr int MaximumAttempts = 16;
+    const auto overlapsExcluded = [excludedBase](std::uint16_t candidate) {
+        const std::uint32_t candidateEnd =
+            static_cast<std::uint32_t>(candidate) + 3;
+        const std::uint32_t excludedEnd =
+            static_cast<std::uint32_t>(excludedBase) + 3;
+        return candidate <= excludedEnd && excludedBase <= candidateEnd;
+    };
+    for (int attempt = 0; attempt < MaximumAttempts; ++attempt) {
+        auto candidate =
+            ScheduledRtpDecodeReceiver::findAvailableIpv4PortBlock();
+        if (!candidate) return candidate;
+        if (!overlapsExcluded(candidate.value())) return candidate;
+    }
+    return ::media::Result<std::uint16_t>::failure(integrationError(
+        "production RTP integration could not reserve distinct port blocks"));
 }
 
 ::media::Status validateFixtureVideoPlan(
@@ -439,14 +482,20 @@ MediaRealtimeRtpTranscodeRequest tsRequest(
     if (!outputBase) return ::media::Status::failure(outputBase.error());
     TemporaryPath outputSdp(abortPath ? "_rtp_abort.sdp"
                                       : "_rtp_stop.sdp");
-    auto videoReceiver = UdpDatagramReceiver::bindLoopback(outputBase.value());
-    auto audioReceiver = UdpDatagramReceiver::bindLoopback(
-        static_cast<std::uint16_t>(outputBase.value() + 2));
-    if (!videoReceiver || !audioReceiver) {
-        return ::media::Status::failure(
-            !videoReceiver ? videoReceiver.error() : audioReceiver.error());
+    std::optional<UdpDatagramReceiver> videoReceiver;
+    std::optional<UdpDatagramReceiver> audioReceiver;
+    if (abortPath) {
+        auto video = UdpDatagramReceiver::bindLoopback(outputBase.value());
+        auto audio = UdpDatagramReceiver::bindLoopback(
+            static_cast<std::uint16_t>(outputBase.value() + 2));
+        if (!video || !audio) {
+            return ::media::Status::failure(
+                !video ? video.error() : audio.error());
+        }
+        videoReceiver.emplace(std::move(video).value());
+        audioReceiver.emplace(std::move(audio).value());
     }
-    auto inputBase = ScheduledRtpDecodeReceiver::findAvailableIpv4PortBlock();
+    auto inputBase = findDistinctRtpPortBlock(outputBase.value());
     if (!inputBase) return ::media::Status::failure(inputBase.error());
 
     auto request = rtpRequest(
@@ -465,6 +514,14 @@ MediaRealtimeRtpTranscodeRequest tsRequest(
         !validated) {
         return validated;
     }
+    if (!productionPlan.value().avSyncRuntime->synchronization.metrics
+             .maximumSteadyP99SkewNs) {
+        return ::media::Status::failure(integrationError(
+            "production RTP plan is missing its steady P99 skew metric"));
+    }
+    const auto maximumSteadyP99Skew =
+        *productionPlan.value().avSyncRuntime->synchronization.metrics
+             .maximumSteadyP99SkewNs;
     MediaRealtimeTranscodePreflight production{
         std::move(productionPlan).value(), std::nullopt};
     auto runtime = startRuntime(std::move(production), memoryProbe);
@@ -484,24 +541,124 @@ MediaRealtimeRtpTranscodeRequest tsRequest(
         }
         return runMemoryProbe(*runtime.value(), *memoryProbe);
     }
-    auto videoBytes = videoReceiver.value().receiveBytes(
-        std::chrono::seconds(15));
-    auto audioBytes = audioReceiver.value().receiveBytes(
-        std::chrono::seconds(15));
+    if (!abortPath) {
+        // The production SDP is derived from activated codec metadata, so a
+        // receiver necessarily joins after input starts. The planned 30-frame
+        // GOP and SDP codec configuration make this a bounded late-join test.
+        if (auto sdp = waitForGeneratedSdp(
+                outputSdp.path(), std::chrono::seconds(5)); !sdp) {
+            return abortAfterFailure(*runtime.value(), sdp.error());
+        }
+        TemporaryPath videoFrameMd5("_rtp_video.framemd5");
+        TemporaryPath audioFrameMd5("_rtp_audio.framemd5");
+        TemporaryPath receiverLog("_rtp_receiver.log");
+        auto decodeReceiver = ScheduledRtpDecodeReceiver::start(
+            ffmpegPath(), outputSdp.path(), videoFrameMd5.path(),
+            audioFrameMd5.path(), receiverLog.path());
+        if (!decodeReceiver) {
+            return abortAfterFailure(*runtime.value(), decodeReceiver.error());
+        }
+        const std::array<std::uint16_t, 4> outputPorts{
+            outputBase.value(),
+            static_cast<std::uint16_t>(outputBase.value() + 1),
+            static_cast<std::uint16_t>(outputBase.value() + 2),
+            static_cast<std::uint16_t>(outputBase.value() + 3)};
+        if (auto bound = decodeReceiver.value().waitUntilPortsBound(
+                outputPorts, std::chrono::seconds(5)); !bound) {
+            return abortAfterFailure(
+                *runtime.value(),
+                integrationError(bound.error().describe() + "\n" +
+                                 decodeReceiver.value().diagnostics()));
+        }
+        if (auto decoded = decodeReceiver.value().waitForSuccess(
+                std::chrono::seconds(15)); !decoded) {
+            return abortAfterFailure(
+                *runtime.value(),
+                integrationError(decoded.error().describe() + "\n" +
+                                 decodeReceiver.value().diagnostics()));
+        }
+        auto videoTimeline =
+            readScheduledRtpFrameMd5Timeline(videoFrameMd5.path());
+        auto audioTimeline =
+            readScheduledRtpFrameMd5Timeline(audioFrameMd5.path());
+        if (!videoTimeline || !audioTimeline) {
+            return abortAfterFailure(
+                *runtime.value(),
+                !videoTimeline ? videoTimeline.error()
+                               : audioTimeline.error());
+        }
+        const auto& videoPresentations =
+            videoTimeline.value().presentations;
+        const auto& audioPresentations =
+            audioTimeline.value().presentations;
+        if (videoPresentations.size() < 2 ||
+            audioPresentations.size() < 2 ||
+            maximumSteadyP99Skew.nanoseconds() <= 0) {
+            return abortAfterFailure(
+                *runtime.value(),
+                integrationError(
+                    "production RTP output timeline evidence is invalid"));
+        }
+        std::vector<std::uint64_t> steadySkews;
+        for (const auto videoPresentation : videoPresentations) {
+            const auto videoNs = videoPresentation.nanoseconds();
+            if (videoNs < audioPresentations.front().nanoseconds() ||
+                videoNs > audioPresentations.back().nanoseconds()) {
+                continue;
+            }
+            std::uint64_t nearestAudio =
+                (std::numeric_limits<std::uint64_t>::max)();
+            for (const auto audioPresentation : audioPresentations) {
+                const auto audioNs = audioPresentation.nanoseconds();
+                if (videoNs < 0 || audioNs < 0) {
+                    return abortAfterFailure(
+                        *runtime.value(),
+                        integrationError(
+                            "production RTP output has negative timestamps"));
+                }
+                const auto distance = static_cast<std::uint64_t>(
+                    videoNs > audioNs ? videoNs - audioNs
+                                      : audioNs - videoNs);
+                nearestAudio = (std::min)(nearestAudio, distance);
+            }
+            steadySkews.push_back(nearestAudio);
+        }
+        if (steadySkews.size() < 2) {
+            return abortAfterFailure(
+                *runtime.value(),
+                integrationError(
+                    "production RTP has insufficient overlapping A/V timestamps"));
+        }
+        std::sort(steadySkews.begin(), steadySkews.end());
+        const std::size_t percentileIndex =
+            (steadySkews.size() * 99 + 99) / 100 - 1;
+        if (steadySkews[percentileIndex] >
+            static_cast<std::uint64_t>(
+                maximumSteadyP99Skew.nanoseconds())) {
+            return abortAfterFailure(
+                *runtime.value(),
+                integrationError(
+                    "production RTP decoded A/V steady P99 skew exceeds plan"));
+        }
+        // Exercise periodic RTCP clock evidence after proving that both
+        // production payload streams decode.
+        std::this_thread::sleep_for(std::chrono::seconds(12));
+        return stopAndReset(*runtime.value());
+    }
+
+    auto videoBytes = videoReceiver->receiveBytes(std::chrono::seconds(15));
+    auto audioBytes = audioReceiver->receiveBytes(std::chrono::seconds(15));
     if (!videoBytes || !audioBytes || videoBytes.value() == 0 ||
         audioBytes.value() == 0) {
         return abortAfterFailure(
             *runtime.value(),
             !videoBytes ? videoBytes.error()
             : !audioBytes ? audioBytes.error()
-                          : integrationError("RTP adapters emitted empty payloads"));
+                          : integrationError(
+                                "RTP adapters emitted empty payloads"));
     }
-    // Keep the live graph running across at least two FFmpeg RTCP sender-report
-    // refresh intervals. Lifecycle completion must surface any worker failure
-    // caused by periodic clock evidence, not only prove first-packet output.
     std::this_thread::sleep_for(std::chrono::seconds(12));
-    return abortPath ? abortAndReset(*runtime.value())
-                     : stopAndReset(*runtime.value());
+    return abortAndReset(*runtime.value());
 }
 
 ::media::Status runTsLifecycle(
@@ -526,17 +683,40 @@ MediaRealtimeRtpTranscodeRequest tsRequest(
         !validated) {
         return validated;
     }
+    if (!preflight.value().plan.avSyncRuntime ||
+        !preflight.value().plan.avSyncRuntime->synchronization.ts ||
+        !preflight.value().plan.avSyncRuntime->synchronization.ts->outputMux) {
+        return ::media::Status::failure(integrationError(
+            "production TS plan is missing its planned output mux"));
+    }
+    const auto outputMux =
+        *preflight.value().plan.avSyncRuntime->synchronization.ts->outputMux;
+    const auto avSyncPlan =
+        preflight.value().plan.avSyncRuntime->synchronization;
     auto runtime = startRuntime(std::move(preflight).value());
     if (!runtime) return ::media::Status::failure(runtime.error());
-    auto bytes = receiver.value().receiveBytes(std::chrono::seconds(15));
-    if (!bytes || bytes.value() == 0) {
-        return abortAfterFailure(
-            *runtime.value(),
-            bytes ? integrationError("TS adapter emitted an empty datagram")
-                  : bytes.error());
+    if (abortPath) {
+        auto bytes = receiver.value().receiveBytes(std::chrono::seconds(15));
+        if (!bytes || bytes.value() == 0) {
+            return abortAfterFailure(
+                *runtime.value(),
+                bytes ? integrationError("TS adapter emitted an empty datagram")
+                      : bytes.error());
+        }
+        return abortAndReset(*runtime.value());
     }
-    return abortPath ? abortAndReset(*runtime.value())
-                     : stopAndReset(*runtime.value());
+    TemporaryPath outputArtifact("_ts_output.ts");
+    auto captured = receiver.value().receiveToFile(
+        outputArtifact.path(), std::chrono::seconds(15), 512 * 1024);
+    if (!captured) {
+        return abortAfterFailure(*runtime.value(), captured.error());
+    }
+    if (auto verified = MpegTsOutputArtifactVerifier::verify(
+            outputArtifact.path(), outputMux, avSyncPlan); !verified) {
+        return abortAfterFailure(
+            *runtime.value(), verified.error());
+    }
+    return stopAndReset(*runtime.value());
 }
 
 int fail(const char* phase, const ::media::ErrorInfo& error)

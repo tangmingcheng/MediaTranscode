@@ -7,7 +7,6 @@ namespace media_transcode::test::scheduled_rtp_output {
 
 void runScheduledRtpSenderNodeTests(TestContext& ctx);
 void runDualMediaSdpPublisherTests(TestContext& ctx);
-void runScheduledRtpOutputAssemblyTests(TestContext& ctx);
 
 } // namespace media_transcode::test::scheduled_rtp_output
 
@@ -18,7 +17,5 @@ int main()
         runScheduledRtpSenderNodeTests(ctx);
     media_transcode::test::scheduled_rtp_output::
         runDualMediaSdpPublisherTests(ctx);
-    media_transcode::test::scheduled_rtp_output::
-        runScheduledRtpOutputAssemblyTests(ctx);
     return ctx.failures == 0 ? 0 : 1;
 }

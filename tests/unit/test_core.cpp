@@ -2,6 +2,7 @@
 
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/core/MediaGraphValidation.h"
+#include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlan.h"
 #include "internal/graph/sync/MediaAvSyncError.h"
 #include "internal/graph/sync/MediaVideoSyncController.h"
@@ -77,6 +78,44 @@ void testDefaultResultErrorContract(TestContext& ctx)
     EXPECT_FALSE(ctx, voidNormalized);
     EXPECT_EQ(ctx, voidNormalized.error().code, ::media::ErrorCode::InternalError);
     EXPECT_EQ(ctx, voidNormalized.error().message, std::string("unknown error"));
+}
+
+void testMixedAtomicFanoutRejected(TestContext& ctx)
+{
+    MediaGraph graph;
+    const MediaNodeId source = graph.addNode(
+        MediaNodeKind::DebugDump, "mixed-fanout-source");
+    const MediaNodeId firstSink = graph.addNode(
+        MediaNodeKind::DebugDump, "mixed-fanout-first");
+    const MediaNodeId secondSink = graph.addNode(
+        MediaNodeKind::DebugDump, "mixed-fanout-second");
+    graph.addOutputPort(
+        source, "packet", MediaStreamKind::Video,
+        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet, true, true);
+    graph.addInputPort(
+        firstSink, "packet", MediaStreamKind::Video,
+        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+    graph.addInputPort(
+        secondSink, "packet", MediaStreamKind::Video,
+        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
+    EXPECT_TRUE(ctx, graph.connect(
+        source, "packet", firstSink, "packet", "atomic",
+        MediaBlockingEdgePolicyPlanner::planAtomicOutput(2)));
+    EXPECT_TRUE(ctx, graph.connect(
+        source, "packet", secondSink, "packet", "non-atomic",
+        MediaBlockingEdgePolicyPlanner::planQueue(2)));
+
+    const auto validation = MediaGraphValidation::validate(graph);
+    EXPECT_FALSE(ctx, validation.ok());
+    bool foundMixedPolicy = false;
+    for (const auto& issue : validation.issues) {
+        foundMixedPolicy = foundMixedPolicy ||
+            (issue.code == MediaGraphErrorCode::InvalidPolicy &&
+             issue.portId.isValid() &&
+             issue.message ==
+                 "Output fan-out cannot mix atomic and non-atomic policies");
+    }
+    EXPECT_TRUE(ctx, foundMixedPolicy);
 }
 
 void testRunningTimeRationalRescale(TestContext& ctx)
@@ -692,10 +731,13 @@ int main()
                         MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
     graph.addInputPort(sink, "packet", MediaStreamKind::Video,
                        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet);
-    EXPECT_TRUE(ctx, graph.connect(source, "packet", sink, "packet"));
+    EXPECT_TRUE(ctx, graph.connect(
+        source, "packet", sink, "packet", "core",
+        MediaBlockingEdgePolicyPlanner::planQueue(2)));
     EXPECT_EQ(ctx, graph.nodeCount(), static_cast<std::size_t>(2));
     EXPECT_EQ(ctx, graph.edgeCount(), static_cast<std::size_t>(1));
     EXPECT_TRUE(ctx, MediaGraphValidation::validate(graph).ok());
+    testMixedAtomicFanoutRejected(ctx);
     testRunningTimeArithmetic(ctx);
     testDefaultResultErrorContract(ctx);
     testRunningTimeRationalRescale(ctx);

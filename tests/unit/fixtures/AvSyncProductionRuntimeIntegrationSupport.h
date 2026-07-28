@@ -46,6 +46,10 @@ public:
 
     ::media::Result<std::size_t> receiveBytes(
         std::chrono::milliseconds timeout);
+    ::media::Result<std::size_t> receiveToFile(
+        const std::filesystem::path& output,
+        std::chrono::milliseconds timeout,
+        std::size_t minimumBytes);
 
 private:
     explicit UdpDatagramReceiver(std::uintptr_t socket) noexcept;

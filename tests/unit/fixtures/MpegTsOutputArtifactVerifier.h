@@ -1,22 +1,19 @@
 #pragma once
 
+#include "internal/graph/planner/avsync/MediaAvSyncPlan.h"
 #include "internal/graph/protocol/mpegts/MediaTsMuxPlan.h"
-#include "internal/graph/sync/MediaPlaybackEpoch.h"
 #include "media_transcode/Result.h"
 
 #include <filesystem>
 
 namespace media_transcode::test {
 
-class ScheduledMpegTsDecodeSampleFixture;
-
 class MpegTsOutputArtifactVerifier final {
 public:
     static ::media::Status verify(
         const std::filesystem::path& path,
-        const ::media::ffmpeg::graph::MediaTsMuxPlan& plan,
-        const ::media::ffmpeg::graph::MediaPlaybackEpoch& epoch,
-        const ScheduledMpegTsDecodeSampleFixture& sample);
+        const ::media::ffmpeg::graph::MediaTsMuxPlan& muxPlan,
+        const ::media::ffmpeg::graph::MediaAvSyncPlan& avSyncPlan);
 
 private:
     MpegTsOutputArtifactVerifier() = delete;
