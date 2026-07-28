@@ -489,10 +489,12 @@ void testFileMuxSessionKindIsExplicit(TestContext& ctx)
 
 void testLocalOutputPlannerOwnsMuxSessionDecision(TestContext& ctx)
 {
-    EXPECT_FALSE(ctx, MediaLocalFileOutputPlanner::plan({}, "mp4"));
-    auto plan = MediaLocalFileOutputPlanner::plan("output.mp4", "mp4");
+    EXPECT_FALSE(ctx, MediaLocalFileOutputPlanner::plan({}));
+    EXPECT_FALSE(ctx, MediaLocalFileOutputPlanner::plan("output"));
+    auto plan = MediaLocalFileOutputPlanner::plan("output.mp4");
     EXPECT_TRUE(ctx, plan);
     if (plan) {
+        EXPECT_EQ(ctx, plan.value().format, std::string("mp4"));
         EXPECT_TRUE(ctx, plan.value().muxSessionKind.has_value());
         EXPECT_TRUE(ctx, plan.value().outputResourceKind.has_value());
         if (plan.value().muxSessionKind) {

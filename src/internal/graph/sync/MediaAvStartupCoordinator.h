@@ -161,6 +161,8 @@ private:
     MediaAvStartupSelectionWork m_cumulativeSelectionWork;
     bool m_videoLocked = false;
     bool m_audioLocked = false;
+    std::optional<std::uint64_t> m_lastVideoSequence;
+    std::optional<std::uint64_t> m_lastAudioSequence;
     std::uint64_t m_videoBytes = 0;
     std::uint64_t m_audioBytes = 0;
     std::optional<MediaPlaybackEpoch> m_epoch;

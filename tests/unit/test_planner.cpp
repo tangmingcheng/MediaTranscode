@@ -22,6 +22,8 @@
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeInputPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeOutputPolicyPlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeEdgePolicyPlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeQueueCapacityPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeTsInputPlanValidator.h"
 #include "internal/graph/planner/realtime/MediaTsProgramSelector.h"
 #include "internal/graph/protocol/mpegts/MediaTsMuxPlan.h"
@@ -258,6 +260,33 @@ MediaRealtimeRtpTranscodeRequest completeAvSyncRtpRequest()
     request.parameters.queues.frame = 4;
     request.parameters.queues.mux = 4;
     return request;
+}
+
+void testRealtimeQueueCapacityIsSelectedOnceByPlanner(TestContext& ctx)
+{
+    MediaGraphQueueParameters requested;
+    requested.metadata = 1;
+    requested.packet = 256;
+    requested.frame = 128;
+    requested.mux = 256;
+
+    const auto selected = MediaRealtimeQueueCapacityPlanner::plan(requested);
+    EXPECT_EQ(ctx, selected.metadata, std::size_t{1});
+    EXPECT_EQ(ctx, selected.packet, std::size_t{32});
+    EXPECT_EQ(ctx, selected.frame, std::size_t{8});
+    EXPECT_EQ(ctx, selected.mux, std::size_t{32});
+
+    const auto policies = MediaRealtimeEdgePolicyPlanner::plan(selected);
+    EXPECT_EQ(ctx, policies.videoPacket.queuePolicy.capacity,
+              selected.packet);
+    EXPECT_EQ(ctx, policies.videoFrame.queuePolicy.capacity,
+              selected.frame);
+    EXPECT_EQ(ctx, policies.preparedVideoFrame.queuePolicy.capacity,
+              selected.frame);
+    EXPECT_EQ(ctx, policies.audioFrame.queuePolicy.capacity,
+              selected.frame);
+    EXPECT_EQ(ctx, policies.videoMux.queuePolicy.capacity,
+              selected.mux);
 }
 
 void testPlannedProductAndRuntimeRejectSynchronizedAudioPacketCopy(
@@ -2716,6 +2745,7 @@ int main()
     testTsEvidenceCapacityCoversProbeRollbackAndPredecessor(ctx);
     testAvSyncPlannerBuildsCompleteRtpContract(ctx);
     testRealtimePlannerProducesCompleteAvSyncRuntimeProduct(ctx);
+    testRealtimeQueueCapacityIsSelectedOnceByPlanner(ctx);
     testPlannedProductAndRuntimeRejectSynchronizedAudioPacketCopy(ctx);
     testDecoderDelayUsesSelectedOutputSampleDomain(ctx);
     testRealtimePlannerProducesCompleteTsAvSyncRuntimeProduct(ctx);

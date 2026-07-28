@@ -6,6 +6,7 @@
 #include "internal/graph/planner/capability/MediaSelectedEncoderPacketLayoutResolver.h"
 #include "internal/graph/planner/realtime/MediaRealtimeInputPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeOutputPolicyPlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeQueueCapacityPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlanValidator.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncComponentBoundsPlanner.h"
@@ -461,9 +462,9 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
     plan.videoPlan = std::move(videoPlan);
     plan.audioPlan = std::move(audioPlan);
     plan.videoParameters = std::move(videoParameters);
-    plan.queues = options.parameters.queues;
-    plan.edgePolicies = MediaRealtimeEdgePolicyPlanner::plan(
+    plan.queues = MediaRealtimeQueueCapacityPlanner::plan(
         options.parameters.queues);
+    plan.edgePolicies = MediaRealtimeEdgePolicyPlanner::plan(plan.queues);
     plan.threadingPolicy = planThreadingPolicy();
     plan.videoInputStartRequiresKeyFrame = MediaRealtimeRequestClassifier::unreliablePacketBoundary(options);
     MediaRealtimeInputPlanner::applyNodePlans(options, rawInput ? &*rawInput : nullptr, plan);

@@ -297,6 +297,52 @@ void testVideoFirstWaitsForCommonWindowAndReleasesOnce(TestContext& ctx)
     }
 }
 
+void testRunningRejectsRepeatedOrRegressedPerStreamSequence(TestContext& ctx)
+{
+    auto coordinator = MediaAvStartupCoordinator::create(startupConfig());
+    EXPECT_TRUE(ctx, coordinator);
+    if (!coordinator) return;
+
+    expectNoRelease(ctx, coordinator.value().submit(video(1, 0, true), ns(0)));
+    expectNoRelease(ctx, coordinator.value().submit(video(2, 100, false), ns(1)));
+    expectNoRelease(ctx, coordinator.value().submit(audio(3, 20, 40, 1'920), ns(2)));
+    expectNoRelease(ctx, coordinator.value().submit(audio(4, 60, 40, 1'920), ns(3)));
+    auto released = coordinator.value().submit(audio(5, 100, 40, 1'920), ns(4));
+    EXPECT_TRUE(ctx, released && released.value().release);
+    if (!released || !released.value().release) return;
+
+    auto repeatedVideo = coordinator.value().submit(
+        video(2, 100, false), ns(5));
+    EXPECT_FALSE(ctx, repeatedVideo);
+    if (!repeatedVideo) {
+        expectCode(ctx, repeatedVideo.error(),
+                   MediaAvSyncErrorCode::StartupInvalidTransition);
+    }
+
+    auto regressedAudio = coordinator.value().submit(
+        audio(4, 60, 40, 1'920), ns(6));
+    EXPECT_FALSE(ctx, regressedAudio);
+    if (!regressedAudio) {
+        expectCode(ctx, regressedAudio.error(),
+                   MediaAvSyncErrorCode::StartupInvalidTransition);
+    }
+
+    auto nextVideo = coordinator.value().submit(
+        video(6, 140, false), ns(7));
+    EXPECT_TRUE(ctx, nextVideo);
+    if (nextVideo) {
+        EXPECT_EQ(ctx, nextVideo.value().disposition,
+                  MediaAvStartupDisposition::PassThrough);
+    }
+    auto nextAudio = coordinator.value().submit(
+        audio(7, 140, 40, 1'920), ns(8));
+    EXPECT_TRUE(ctx, nextAudio);
+    if (nextAudio) {
+        EXPECT_EQ(ctx, nextAudio.value().disposition,
+                  MediaAvStartupDisposition::PassThrough);
+    }
+}
+
 void testRequiresLockedSameGenerationAndPurgesOldPackets(TestContext& ctx)
 {
     auto coordinator = MediaAvStartupCoordinator::create(startupConfig());
@@ -1439,6 +1485,7 @@ void runAvStartupCoordinatorTests(TestContext& ctx)
     testStartupTrimUsesAuthoritativeCanonicalSampleSpan(ctx);
     testAuthoritativeSampleSpanHandlesSignedBoundaries(ctx);
     testVideoFirstWaitsForCommonWindowAndReleasesOnce(ctx);
+    testRunningRejectsRepeatedOrRegressedPerStreamSequence(ctx);
     testRequiresLockedSameGenerationAndPurgesOldPackets(ctx);
     testReacquireClosesGateUntilBothStreamsRelock(ctx);
     testTimeoutEofErrorAndLifecycle(ctx);

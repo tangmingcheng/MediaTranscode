@@ -34,7 +34,6 @@ void rejectUnknownLocalArgs(int argc, char** argv)
     std::vector<std::string> valueArgs = commonVideoTranscodeValueArgs();
     valueArgs.push_back("--input");
     valueArgs.push_back("--output");
-    valueArgs.push_back("--format");
 
     rejectUnknownArgs(argc,
                       argv,
@@ -49,7 +48,6 @@ LocalFileTranscodeOptions parseOptions(int argc, char** argv)
     LocalFileTranscodeOptions options;
     options.inputUrl = requiredArg(argc, argv, "--input");
     options.outputUrl = requiredArg(argc, argv, "--output");
-    options.outputFormat = argValue(argc, argv, "--format");
     parseCommonVideoTranscodeOptions(argc, argv, options.parameters);
     return options;
 }

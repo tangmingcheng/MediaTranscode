@@ -83,8 +83,7 @@ bool branchEnabled(const MediaAudioPipelinePlan& plan) noexcept
     }
     MediaAudioPipelinePlan audioPlan = std::move(plannedAudio).value();
 
-    auto outputPlan = MediaLocalFileOutputPlanner::plan(
-        options.outputUrl, options.outputFormat);
+    auto outputPlan = MediaLocalFileOutputPlanner::plan(options.outputUrl);
     if (!outputPlan) {
         return ::media::Result<MediaGraph>::failure(outputPlan.error());
     }

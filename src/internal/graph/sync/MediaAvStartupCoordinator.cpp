@@ -257,6 +257,8 @@ MediaAvStartupCoordinator::advanceGeneration(
         return MediaAvSyncResult<std::vector<MediaAvStartupUnitId>>::failure(status.error());
     }
     auto purged = purge();
+    m_lastVideoSequence.reset();
+    m_lastAudioSequence.reset();
     m_acquisitionStartedAt = observedAt;
     return MediaAvSyncResult<std::vector<MediaAvStartupUnitId>>::success(std::move(purged));
 }
@@ -318,7 +320,16 @@ MediaAvSyncResult<MediaAvStartupDecision> MediaAvStartupCoordinator::submit(
             MediaAvSyncErrorCode::StartupInvalidTransition,
             "submit", &unit, "media arrived after end of stream"));
     }
+    auto& lastSequence = unit.stream == MediaAvStartupStream::Video
+        ? m_lastVideoSequence
+        : m_lastAudioSequence;
+    if (lastSequence && unit.sequence <= *lastSequence) {
+        return MediaAvSyncResult<MediaAvStartupDecision>::failure(startupError(
+            MediaAvSyncErrorCode::StartupInvalidTransition,
+            "submit", &unit, "per-stream sequence regressed or repeated"));
+    }
     if (m_state.state() == MediaAvSyncState::Running) {
+        lastSequence = unit.sequence;
         return MediaAvSyncResult<MediaAvStartupDecision>::success(
             {MediaAvStartupDisposition::PassThrough, std::nullopt, std::move(purged)});
     }
@@ -344,12 +355,8 @@ MediaAvSyncResult<MediaAvStartupDecision> MediaAvStartupCoordinator::submit(
                                  "startup buffer capacity exceeded");
         return MediaAvSyncResult<MediaAvStartupDecision>::failure(failed.error());
     }
-    if (!store.empty() && unit.sequence <= store.backSequence()) {
-        return MediaAvSyncResult<MediaAvStartupDecision>::failure(startupError(
-            MediaAvSyncErrorCode::StartupInvalidTransition,
-            "submit", &unit, "per-stream sequence regressed or repeated"));
-    }
     const auto payloadBytes = unit.payloadBytes;
+    const auto sequence = unit.sequence;
     if (unit.stream == MediaAvStartupStream::Video) m_videoLocked = true;
     else m_audioLocked = true;
     auto appended = store.append(std::move(unit));
@@ -363,6 +370,7 @@ MediaAvSyncResult<MediaAvStartupDecision> MediaAvStartupCoordinator::submit(
             MediaAvSyncErrorCode::StartupInvalidTransition,
             "submit", nullptr, "duplicate presentation identity"));
     }
+    lastSequence = sequence;
     bufferedBytes += payloadBytes;
     m_cumulativeSelectionWork.coverageOperations =
         m_video->cumulativeCoverageWork().coverageOperations +
@@ -556,6 +564,8 @@ MediaAvSyncStatus MediaAvStartupCoordinator::reset() noexcept
     m_acquisitionStartedAt.reset();
     m_keyFrameWaitStartedAt.reset();
     m_processedWatermark.reset();
+    m_lastVideoSequence.reset();
+    m_lastAudioSequence.reset();
     return MediaAvSyncStatus::success();
 }
 
