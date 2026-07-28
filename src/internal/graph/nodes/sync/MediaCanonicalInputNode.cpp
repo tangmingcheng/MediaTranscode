@@ -270,6 +270,10 @@ MediaCanonicalInputNode::canonicalize(
         }
         audioInterval = std::move(appended).value();
     }
+    const std::optional<std::int64_t> audioFirstSample =
+        audioInterval
+        ? std::optional<std::int64_t>(audioInterval->begin)
+        : std::nullopt;
     auto canonical = canonicalize(*input.value(), timing, duration.value(),
                                   *m_stream, *m_decodeOrder, m_sourceIdentity,
                                   sequence, std::move(audioInterval));
@@ -285,7 +289,8 @@ MediaCanonicalInputNode::canonicalize(
             canonical.value()->media()->isKeyFrame(),
         *m_stream == MediaScheduledStream::Audio
             ? std::optional<MediaAvAudioSampleSpan>(
-                  MediaAvAudioSampleSpan{static_cast<std::uint32_t>(m_audioSampleRate),
+                  MediaAvAudioSampleSpan{*audioFirstSample,
+                                         static_cast<std::uint32_t>(m_audioSampleRate),
                                          m_audioSampleCount})
             : std::nullopt};
     if (*m_stream == MediaScheduledStream::Video && unit.keyFrame &&

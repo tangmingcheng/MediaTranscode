@@ -973,7 +973,7 @@ void testCoordinatorReacquiresAndActivatesOneAtomicNextEpoch(
                                  MediaSourceClockReadiness::Locked,
                                  generation,
                                  false,
-                                 MediaAvAudioSampleSpan{48'000, 9'600}},
+                                 MediaAvAudioSampleSpan{0, 48'000, 9'600}},
                              ms(observedBase)));
         for (std::uint64_t index = 0; index != 3; ++index) {
             EXPECT_TRUE(ctx, pushEnvelope(

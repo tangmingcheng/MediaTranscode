@@ -87,6 +87,23 @@ MediaRealtimeAvSyncNodeConfigurator::configureLockedPacketGate(
             std::to_string(acquiringTimeout.nanoseconds())); !status) {
         return status;
     }
+    if (plan.assembly.generationPolicy !=
+            MediaInitialGenerationPolicy::FirstLockedOnlyFailOnChange ||
+        plan.assembly.initialGeneration == 0) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Locked packet gate requires the exact planned initial generation policy"));
+    }
+    if (auto status = setOption(
+            graph, node, "locked_packet_gate.initial_generation",
+            std::to_string(plan.assembly.initialGeneration)); !status) {
+        return status;
+    }
+    if (auto status = setOption(
+            graph, node, "locked_packet_gate.initial_generation_policy",
+            "first_locked_only_fail_on_change"); !status) {
+        return status;
+    }
     return setOption(
         graph, node, "locked_packet_gate.sync_group",
         plan.groupKey.value());

@@ -206,6 +206,22 @@ void testPermitCloseDropsOldGenerationAndReusesTransport(TestContext& ctx)
     EXPECT_TRUE(ctx, sender->node->process(sender->graph.execution));
     EXPECT_EQ(ctx, sender->rtp->openCalls, initialOpenCalls);
     EXPECT_EQ(ctx, sender->rtp->sendCalls, 2);
+    auto future = scheduledUnit(
+        MediaScheduledStream::Video, sender->senderLead, 13, 3);
+    EXPECT_TRUE(ctx, future);
+    if (!future) return;
+    EXPECT_TRUE(ctx, sender->graph.execution.findInputChannel(
+                         sender->graph.sender, "scheduled")
+                         ->push(std::move(future).value()));
+    auto rejectedFuture =
+        sender->node->process(sender->graph.execution);
+    EXPECT_FALSE(ctx, rejectedFuture);
+    if (!rejectedFuture) {
+        EXPECT_TRUE(ctx, rejectedFuture.error().message.find(
+                             "future scheduled generation") !=
+                             std::string::npos);
+    }
+    EXPECT_EQ(ctx, sender->rtp->sendCalls, 2);
     EXPECT_TRUE(ctx, sender->node->stop(sender->graph.execution));
 }
 

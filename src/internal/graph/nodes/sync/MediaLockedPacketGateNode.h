@@ -30,9 +30,8 @@ private:
     ::media::Result<MediaLockedPacketGateDisposition> acceptClock(
         const MediaBufferRef& buffer);
     ::media::Result<MediaLockedPacketGateDisposition>
-    classifyLockedGeneration(std::uint64_t generation);
-    ::media::Result<MediaLockedPacketGateDisposition> classifyPacket(
-        const MediaBufferRef& buffer);
+    classifyLockedGeneration(std::uint64_t generation,
+                             bool acceptingInitialClock = false);
     ::media::Result<std::uint64_t> packetGeneration(
         const MediaBufferRef& buffer) const;
     ::media::Status processPacket(MediaGraphExecutionContext& context,
@@ -46,6 +45,7 @@ private:
     std::optional<MediaInitialClockAcquisitionDeadline> m_acquisitionDeadline;
     MediaBufferRef m_pendingPacket;
     MediaStreamKind m_streamKind = MediaStreamKind::Unknown;
+    std::uint64_t m_initialGeneration = 0;
     bool m_configured = false;
 };
 

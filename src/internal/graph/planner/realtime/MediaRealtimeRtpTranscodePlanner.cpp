@@ -150,6 +150,34 @@ MediaVideoTranscodeParameters planRealtimeVideoParameters(const MediaVideoTransc
     return ::media::Status::success();
 }
 
+::media::Result<std::int64_t> planMpegTsMaximumPcrGap27Mhz(
+    const MediaRealtimeRtpTranscodeRequest& request)
+{
+    if (!request.input.mpegTsClock.maximumPcrGap) {
+        return ::media::Result<std::int64_t>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "MPEG-TS maximum PCR gap was not validated"));
+    }
+    constexpr std::int64_t NanosecondsPerMicrosecond = 1'000;
+    constexpr std::int64_t PcrTicksPerMicrosecond = 27;
+    const std::int64_t nanoseconds =
+        request.input.mpegTsClock.maximumPcrGap->nanoseconds();
+    if (nanoseconds <= 0 || nanoseconds % NanosecondsPerMicrosecond != 0) {
+        return ::media::Result<std::int64_t>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MPEG-TS maximum PCR gap must be positive and exactly representable at 27 MHz"));
+    }
+    const std::int64_t microseconds = nanoseconds / NanosecondsPerMicrosecond;
+    if (microseconds > std::numeric_limits<std::int64_t>::max() /
+            PcrTicksPerMicrosecond) {
+        return ::media::Result<std::int64_t>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MPEG-TS maximum PCR gap exceeds the 27 MHz policy range"));
+    }
+    return ::media::Result<std::int64_t>::success(
+        microseconds * PcrTicksPerMicrosecond);
+}
+
 ::media::Result<MediaAudioPipelinePlannerOptions> planAudioPipelineOptions(
     const MediaRealtimeRtpTranscodeRequest& options)
 {
@@ -440,6 +468,11 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
     plan.videoInputStartRequiresKeyFrame = MediaRealtimeRequestClassifier::unreliablePacketBoundary(options);
     MediaRealtimeInputPlanner::applyNodePlans(options, rawInput ? &*rawInput : nullptr, plan);
     if (MediaRealtimeRequestClassifier::mpegTsUdpInput(options)) {
+        auto maximumPcrGap27Mhz = planMpegTsMaximumPcrGap27Mhz(options);
+        if (!maximumPcrGap27Mhz) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                maximumPcrGap27Mhz.error());
+        }
         constexpr std::uint64_t MaximumRegressionBytes = 1024 * 1024;
         constexpr std::uint64_t PacketSize = 188;
         const auto probeBytes = static_cast<std::uint64_t>(*options.input.probeSizeBytes);
@@ -464,7 +497,7 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
                 selectedTsProgram->videoPacketDuration;
             selected.audioPacketDuration =
                 selectedTsProgram->audioPacketDuration;
-            selected.maximumPcrGap27Mhz = 2'700'000;
+            selected.maximumPcrGap27Mhz = maximumPcrGap27Mhz.value();
             selected.projectionCapacity = selected.evidenceTimelineCapacity;
             selected.timestampTimeBaseNumerator = 1;
             selected.timestampTimeBaseDenominator = 90'000;

@@ -73,6 +73,16 @@ namespace {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("MPEG-TS UDP input requires udp:// URL"));
     }
+    if (MediaRealtimeRequestClassifier::mpegTsUdpInput(request)) {
+        if (!request.input.mpegTsClock.maximumPcrGap ||
+            request.input.mpegTsClock.maximumPcrGap->nanoseconds() <= 0) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "MPEG-TS input requires an explicit positive maximum PCR gap"));
+        }
+    } else if (request.input.mpegTsClock.maximumPcrGap) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "maximum PCR gap is valid only for MPEG-TS input"));
+    }
     if (!request.input.openTimeoutMs || !request.input.readTimeoutMs ||
         !request.input.analyzeDurationUs || !request.input.probeSizeBytes || !request.input.lowLatency) {
         return ::media::Status::failure(

@@ -105,6 +105,7 @@ namespace {
         MediaRealtimeAvSyncAssemblyPlan{
             std::move(inputClock),
             MediaInitialGenerationPolicy::FirstLockedOnlyFailOnChange,
+            MediaFirstLockedSourceGeneration,
             MediaClockEvidencePolicy::RequireLockedFailOnDegradedOrReacquire,
             MediaCanonicalVideoAssemblyPlan{
                 *synchronization.startup.videoIdentity,

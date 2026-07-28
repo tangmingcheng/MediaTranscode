@@ -49,6 +49,8 @@ public:
     ::media::Status installReacquisitionCoordinator(
         std::shared_ptr<MediaAvReacquisitionCoordinator> coordinator);
     MediaAvReacquisitionSnapshot reacquisitionSnapshot() const noexcept;
+    ::media::Result<MediaAvGenerationArbitrationReservation>
+    reserveGenerationArbitration() const;
     ::media::Status markReacquisitionReadyForActivation(
         std::uint64_t generation,
         std::uint64_t transitionSequence);

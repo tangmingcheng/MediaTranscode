@@ -86,16 +86,55 @@ void ProjectMpegTsGenerationSessionState::
     plan.reset();
     epoch.reset();
     group.reset();
+    plannedGroup.reset();
     nextTransportDeadline.reset();
+    latestAcceptedEmission.reset();
     mediaTimelineStarted = false;
     generation.store(0, std::memory_order_release);
     state = State::Acquiring;
 }
 
+ProjectMpegTsGenerationAuthority::ProjectMpegTsGenerationAuthority(
+    std::shared_ptr<MediaProtocolOutputGenerationState> generationState,
+    std::shared_ptr<ProjectMpegTsGenerationSessionState> generationSession)
+    : m_generationState(std::move(generationState))
+    , m_generationSession(std::move(generationSession))
+{
+}
+
+::media::Result<ProjectMpegTsGenerationAuthority>
+ProjectMpegTsGenerationAuthority::create(
+    std::shared_ptr<MediaProtocolOutputGenerationState> generationState,
+    std::shared_ptr<ProjectMpegTsGenerationSessionState> generationSession)
+{
+    if (!generationState || !generationSession ||
+        generationState->sessionState().get() != generationSession.get()) {
+        return ::media::Result<ProjectMpegTsGenerationAuthority>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Project MPEG-TS generation authority requires one identical state/session binding"));
+    }
+    return ::media::Result<ProjectMpegTsGenerationAuthority>::success(
+        ProjectMpegTsGenerationAuthority(
+            std::move(generationState), std::move(generationSession)));
+}
+
+const std::shared_ptr<MediaProtocolOutputGenerationState>&
+ProjectMpegTsGenerationAuthority::generationState() const noexcept
+{
+    return m_generationState;
+}
+
+const std::shared_ptr<ProjectMpegTsGenerationSessionState>&
+ProjectMpegTsGenerationAuthority::generationSession() const noexcept
+{
+    return m_generationSession;
+}
+
 ProjectMpegTsMuxSessionAdapter::ProjectMpegTsMuxSessionAdapter(
     ProjectMpegTsGenerationAuthority authority)
-    : m_generationState(std::move(authority.generationState))
-    , m_generationSession(std::move(authority.generationSession))
+    : m_generationState(authority.generationState())
+    , m_generationSession(authority.generationSession())
+    , m_plannedGroup(m_generationSession->plannedGroup)
     , m_state(m_generationSession->state)
     , m_plan(m_generationSession->plan)
     , m_epoch(m_generationSession->epoch)
@@ -103,6 +142,8 @@ ProjectMpegTsMuxSessionAdapter::ProjectMpegTsMuxSessionAdapter(
     , m_session(m_generationSession->session)
     , m_nextTransportDeadline(
           m_generationSession->nextTransportDeadline)
+    , m_latestAcceptedEmission(
+          m_generationSession->latestAcceptedEmission)
     , m_mediaTimelineStarted(
           m_generationSession->mediaTimelineStarted)
     , m_generation(m_generationSession->generation)
@@ -162,7 +203,6 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
         return fail(invalid(
             "project MPEG-TS mux runtime plan sync group is not registered"));
     }
-    m_plannedGroup = runtimePlan->group();
     std::optional<::media::ErrorInfo> activationFailure;
     {
         auto permitted = m_generationState->permitActivatedGeneration(
@@ -173,6 +213,7 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
             activationFailure = invalid(
                 "project MPEG-TS mux session rejects an uncleared runtime generation");
         } else {
+            m_plannedGroup = runtimePlan->group();
             m_plan = runtimePlan->plan();
             m_epoch = runtimePlan->epoch();
             m_group = runtimePlan->group();
@@ -298,6 +339,17 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
     }
     const auto generation = m_generation.load(std::memory_order_acquire);
     if (generation == 0) return ::media::Status::success();
+    auto disposition = m_generationState->classifyGeneration(generation);
+    if (!disposition) return fail(disposition.error());
+    if (disposition.value() ==
+        MediaProtocolOutputGenerationState::GenerationDisposition::Old) {
+        return ::media::Status::success();
+    }
+    if (disposition.value() ==
+        MediaProtocolOutputGenerationState::GenerationDisposition::Future) {
+        return fail(invalid(
+            "Project MPEG-TS activation rejects a future generation"));
+    }
     std::optional<::media::ErrorInfo> failure;
     {
         auto current = m_generationState->reserveCommit(*group, generation);
@@ -395,8 +447,28 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
     }
     auto view = accessUnit->view();
     if (!view) return fail(view.error());
-    if (!m_plannedGroup) return ::media::Status::success();
-    auto group = context.findAvSyncGroup(*m_plannedGroup);
+    auto disposition =
+        m_generationState->classifyGeneration(view.value().generation);
+    if (!disposition) return fail(disposition.error());
+    if (disposition.value() ==
+        MediaProtocolOutputGenerationState::GenerationDisposition::Old) {
+        return ::media::Status::success();
+    }
+    if (disposition.value() ==
+        MediaProtocolOutputGenerationState::GenerationDisposition::Future) {
+        return fail(invalid(
+            "Project MPEG-TS mux session rejects a future access-unit generation"));
+    }
+    std::optional<MediaAvSyncGroupKey> plannedGroup;
+    {
+        auto mutation = m_generationState->reserveSessionMutation();
+        plannedGroup = m_plannedGroup;
+    }
+    if (!plannedGroup) {
+        return fail(::media::ErrorInfo::notInitialized(
+            "Project MPEG-TS write requires active planned generation authority"));
+    }
+    auto group = context.findAvSyncGroup(*plannedGroup);
     if (!group) return fail(::media::ErrorInfo::notInitialized(
         "project MPEG-TS mux session A/V sync group is not registered"));
     std::optional<::media::ErrorInfo> failure;
@@ -404,7 +476,12 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
         auto reservation =
             m_generationState->reserveCommit(
                 *group, view.value().generation);
-        if (!reservation) return ::media::Status::success();
+        if (!reservation) {
+            return reservation.error().code ==
+                    ::media::ErrorCode::Cancelled
+                ? ::media::Status::success()
+                : fail(reservation.error());
+        }
         if (m_failure) {
             failure = *m_failure;
         } else if (m_state != State::Active || !m_session) {
@@ -418,6 +495,7 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
                 failure = written.error();
             } else {
                 m_nextTransportDeadline = written.value().nextDeadline;
+                m_latestAcceptedEmission = view.value().emitOnMaster;
                 m_mediaTimelineStarted = true;
             }
         }
@@ -429,11 +507,16 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
 ::media::Result<MediaMuxSessionPollResult>
 ProjectMpegTsMuxSessionAdapter::poll(MediaGraphExecutionContext& context)
 {
-    if (!m_plannedGroup) {
+    std::optional<MediaAvSyncGroupKey> plannedGroup;
+    {
+        auto mutation = m_generationState->reserveSessionMutation();
+        plannedGroup = m_plannedGroup;
+    }
+    if (!plannedGroup) {
         return ::media::Result<MediaMuxSessionPollResult>::success(
             {false, std::nullopt});
     }
-    auto runtime = context.findAvSyncGroup(*m_plannedGroup);
+    auto runtime = context.findAvSyncGroup(*plannedGroup);
     if (!runtime) {
         return ::media::Result<MediaMuxSessionPollResult>::failure(
             ::media::ErrorInfo::notInitialized(
@@ -444,13 +527,34 @@ ProjectMpegTsMuxSessionAdapter::poll(MediaGraphExecutionContext& context)
         return ::media::Result<MediaMuxSessionPollResult>::success(
             {false, std::nullopt});
     }
+    auto disposition = m_generationState->classifyGeneration(generation);
+    if (!disposition) {
+        auto status = fail(disposition.error());
+        return ::media::Result<MediaMuxSessionPollResult>::failure(
+            status.error());
+    }
+    if (disposition.value() ==
+        MediaProtocolOutputGenerationState::GenerationDisposition::Old) {
+        return ::media::Result<MediaMuxSessionPollResult>::success(
+            {false, std::nullopt});
+    }
+    if (disposition.value() ==
+        MediaProtocolOutputGenerationState::GenerationDisposition::Future) {
+        auto status = fail(invalid(
+            "Project MPEG-TS poll rejects a future generation"));
+        return ::media::Result<MediaMuxSessionPollResult>::failure(
+            status.error());
+    }
     auto pollReserved = [&]()
         -> ::media::Result<MediaMuxSessionPollResult> {
         auto current =
             m_generationState->reserveCommit(*runtime, generation);
         if (!current) {
-            return ::media::Result<MediaMuxSessionPollResult>::success(
-                {false, std::nullopt});
+            return current.error().code == ::media::ErrorCode::Cancelled
+                ? ::media::Result<MediaMuxSessionPollResult>::success(
+                      {false, std::nullopt})
+                : ::media::Result<MediaMuxSessionPollResult>::failure(
+                      current.error());
         }
         if (m_failure) {
             return ::media::Result<MediaMuxSessionPollResult>::failure(
@@ -469,10 +573,15 @@ ProjectMpegTsMuxSessionAdapter::poll(MediaGraphExecutionContext& context)
             return ::media::Result<MediaMuxSessionPollResult>::success(
                 {false, std::nullopt});
         }
-        if (!m_plan || !m_nextTransportDeadline) {
+        if (!m_plan || !m_nextTransportDeadline ||
+            !m_latestAcceptedEmission) {
             return ::media::Result<MediaMuxSessionPollResult>::failure(
                 ::media::ErrorInfo::notInitialized(
-                    "project MPEG-TS mux session has no transport poll deadline"));
+                    "project MPEG-TS mux session has no transport emission watermark"));
+        }
+        if (*m_nextTransportDeadline > *m_latestAcceptedEmission) {
+            return ::media::Result<MediaMuxSessionPollResult>::success(
+                {false, std::nullopt});
         }
         auto now = runtime->clock()->now();
         if (!now) {
@@ -491,7 +600,7 @@ ProjectMpegTsMuxSessionAdapter::poll(MediaGraphExecutionContext& context)
                 MediaNodeProcessResult::DeadlineWait{
                     *m_group, safeDeadline.value()}});
         }
-        auto polled = m_session->poll(now.value());
+        auto polled = m_session->poll(*m_latestAcceptedEmission);
         if (!polled) {
             return ::media::Result<MediaMuxSessionPollResult>::failure(
                 polled.error());
@@ -544,11 +653,16 @@ bool ProjectMpegTsMuxSessionAdapter::bindingsReady() const noexcept
 ::media::Status ProjectMpegTsMuxSessionAdapter::finish(
     MediaGraphExecutionContext& context)
 {
-    if (!m_plannedGroup) {
+    std::optional<MediaAvSyncGroupKey> plannedGroup;
+    {
+        auto mutation = m_generationState->reserveSessionMutation();
+        plannedGroup = m_plannedGroup;
+    }
+    if (!plannedGroup) {
         return fail(::media::ErrorInfo::notInitialized(
             "project MPEG-TS mux session cannot finish before complete binding"));
     }
-    auto group = context.findAvSyncGroup(*m_plannedGroup);
+    auto group = context.findAvSyncGroup(*plannedGroup);
     if (!group) return fail(::media::ErrorInfo::notInitialized(
         "project MPEG-TS mux session A/V sync group is not registered"));
     const auto generation = m_generation.load(std::memory_order_acquire);
@@ -556,10 +670,24 @@ bool ProjectMpegTsMuxSessionAdapter::bindingsReady() const noexcept
         return fail(::media::ErrorInfo::notInitialized(
             "project MPEG-TS mux session has no explicit generation"));
     }
+    auto disposition = m_generationState->classifyGeneration(generation);
+    if (!disposition) return fail(disposition.error());
+    if (disposition.value() !=
+        MediaProtocolOutputGenerationState::GenerationDisposition::Current) {
+        return disposition.value() ==
+                MediaProtocolOutputGenerationState::GenerationDisposition::Old
+            ? ::media::Status::failure(::media::ErrorInfo::cancelled(
+                  "Project MPEG-TS finish drops a closed generation"))
+            : fail(invalid(
+                  "Project MPEG-TS finish rejects a future generation"));
+    }
     std::optional<::media::ErrorInfo> failure;
     {
         auto current = m_generationState->reserveCommit(*group, generation);
         if (!current) {
+            if (current.error().code == ::media::ErrorCode::Cancelled) {
+                return ::media::Status::failure(current.error());
+            }
             failure = current.error();
         } else if (m_failure) {
             failure = *m_failure;

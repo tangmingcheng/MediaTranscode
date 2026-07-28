@@ -483,7 +483,7 @@ void clockAndPacketMayArriveInEitherOrderWithMatchingGeneration()
     assert(packetFirstPacket && packetFirstPacket->sourceTiming());
 }
 
-void acquiringIsBoundedAndEvidenceAndGenerationChangesFailClosed()
+void acquiringIsBoundedAndClockAvailabilityRemainsProtocolEvidence()
 {
     BinderFixture bounded(MediaStreamKind::Audio, 1);
     MediaRtpPacketClockBinderNode boundedNode(bounded.binder);
@@ -498,23 +498,33 @@ void acquiringIsBoundedAndEvidenceAndGenerationChangesFailClosed()
         MediaRtpPacketClockBinderNode node(fixture.binder);
         assert(fixture.clockInput()->push(makeMediaBufferRef<MediaRtpClockGroupBuffer>(
             MediaRtpClockGroupSnapshot{state, 1, std::nullopt})));
-        assert(!node.process(fixture.execution));
+        processSucceeds(node, fixture.execution);
     }
 
-    for (const std::uint64_t changedGeneration : {0ULL, 2ULL}) {
-        BinderFixture fixture(MediaStreamKind::Audio);
-        MediaRtpPacketClockBinderNode node(fixture.binder);
-        assert(fixture.clockInput()->push(
-            makeMediaBufferRef<MediaRtpClockGroupBuffer>(lockedSnapshot(1))));
-        processSucceeds(node, fixture.execution);
-        assert(fixture.clockInput()->push(
-            makeMediaBufferRef<MediaRtpClockGroupBuffer>(
-                lockedSnapshot(changedGeneration))));
-        assert(!node.process(fixture.execution));
-    }
+    BinderFixture malformed(MediaStreamKind::Audio);
+    MediaRtpPacketClockBinderNode malformedNode(malformed.binder);
+    assert(malformed.clockInput()->push(
+        makeMediaBufferRef<MediaRtpClockGroupBuffer>(lockedSnapshot(0))));
+    assert(!malformedNode.process(malformed.execution));
+
+    BinderFixture changed(MediaStreamKind::Audio);
+    MediaRtpPacketClockBinderNode changedNode(changed.binder);
+    assert(changed.clockInput()->push(
+        makeMediaBufferRef<MediaRtpClockGroupBuffer>(lockedSnapshot(1))));
+    processSucceeds(changedNode, changed.execution);
+    assert(changed.clockInput()->push(
+        makeMediaBufferRef<MediaRtpClockGroupBuffer>(lockedSnapshot(2))));
+    processSucceeds(changedNode, changed.execution);
+    assert(changed.packetInput()->push(
+        packet(MediaStreamKind::Audio, 48'480, 480)));
+    processSucceeds(changedNode, changed.execution);
+    MediaBufferRef changedOwner;
+    const auto* changedPacket = popPacket(*changed.output(), changedOwner);
+    assert(changedPacket && changedPacket->sourceTiming());
+    assert(changedPacket->sourceTiming()->generation == 2);
 }
 
-void validatorMayRelockButBinderRejectsTheNewGroupGeneration()
+void validatorRelockFeedsNewGenerationThroughProtocolBinder()
 {
     auto validator = MediaRtpClockGroupValidator::create(
         MediaRtpClockGroupValidatorConfig{
@@ -555,8 +565,22 @@ void validatorMayRelockButBinderRejectsTheNewGroupGeneration()
         makeMediaBufferRef<MediaRtpClockGroupBuffer>(first)));
     processSucceeds(node, fixture.execution);
     assert(fixture.clockInput()->push(
+        makeMediaBufferRef<MediaRtpClockGroupBuffer>(
+            MediaRtpClockGroupSnapshot{
+                MediaRtpClockGroupState::ReacquireRequired,
+                first.groupGeneration,
+                std::nullopt})));
+    processSucceeds(node, fixture.execution);
+    assert(fixture.clockInput()->push(
         makeMediaBufferRef<MediaRtpClockGroupBuffer>(second)));
-    assert(!node.process(fixture.execution));
+    processSucceeds(node, fixture.execution);
+    assert(fixture.packetInput()->push(
+        packet(MediaStreamKind::Audio, 96'480, 480)));
+    processSucceeds(node, fixture.execution);
+    MediaBufferRef owner;
+    const auto* rebound = popPacket(*fixture.output(), owner);
+    assert(rebound && rebound->sourceTiming());
+    assert(rebound->sourceTiming()->generation == second.groupGeneration);
 }
 
 void videoDurationUsesLookaheadAndOnlyExplicitTerminalReuse()
@@ -683,8 +707,8 @@ int main()
     malformedOrUnavailableSnapshotsFailClosed();
     acquiringDeadlineUsesRegisteredMasterClock();
     clockAndPacketMayArriveInEitherOrderWithMatchingGeneration();
-    acquiringIsBoundedAndEvidenceAndGenerationChangesFailClosed();
-    validatorMayRelockButBinderRejectsTheNewGroupGeneration();
+    acquiringIsBoundedAndClockAvailabilityRemainsProtocolEvidence();
+    validatorRelockFeedsNewGenerationThroughProtocolBinder();
     videoDurationUsesLookaheadAndOnlyExplicitTerminalReuse();
     videoDurationClockRateRejectsMismatchedPacketTimeBase();
     outputWouldBlockRetriesWithoutLosingPacketOwnership();

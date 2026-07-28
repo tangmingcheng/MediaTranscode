@@ -161,20 +161,17 @@ MediaNodeKind MediaRtpPacketClockBinderNode::staticKind() noexcept
     if (!discriminated) {
         return invalid("RTP packet binder rejects malformed clock group snapshot");
     }
-    if (snapshot.state == MediaRtpClockGroupState::Acquiring) {
-        if (m_lockedGeneration) {
-            return invalid("RTP packet binder rejects acquiring after locked generation");
-        }
+    if (snapshot.state != MediaRtpClockGroupState::Locked) {
+        if (m_lockedSnapshot) invalidateClockProjection();
         return ::media::Status::success();
     }
-    if (snapshot.state != MediaRtpClockGroupState::Locked ||
-        snapshot.groupGeneration == 0) {
+    if (snapshot.groupGeneration == 0) {
         return invalid("RTP packet binder requires locked clock evidence");
     }
-    if (m_lockedGeneration && *m_lockedGeneration != snapshot.groupGeneration) {
-        return invalid("RTP packet binder rejects stale or future clock generation");
+    if (m_lockedSnapshot &&
+        m_lockedSnapshot->groupGeneration != snapshot.groupGeneration) {
+        invalidateClockProjection();
     }
-    m_lockedGeneration = snapshot.groupGeneration;
     m_lockedSnapshot = snapshot;
     m_acquisitionDeadline->clear();
     return ::media::Status::success();
@@ -333,18 +330,22 @@ void MediaRtpPacketClockBinderNode::abort(
     FFmpegNodeRuntime::abort(context);
 }
 
-void MediaRtpPacketClockBinderNode::resetState() noexcept
+void MediaRtpPacketClockBinderNode::invalidateClockProjection() noexcept
 {
     m_lockedSnapshot.reset();
-    m_lockedGeneration.reset();
-    m_acquiringPackets.clear();
-    m_syncGroupKey.reset();
-    m_syncGroup.reset();
-    m_acquisitionDeadline.reset();
     m_videoLookahead.reset();
     m_videoLookaheadTimestamp.reset();
     m_lastPositiveVideoDelta.reset();
     m_pendingTerminal.reset();
+}
+
+void MediaRtpPacketClockBinderNode::resetState() noexcept
+{
+    invalidateClockProjection();
+    m_acquiringPackets.clear();
+    m_syncGroupKey.reset();
+    m_syncGroup.reset();
+    m_acquisitionDeadline.reset();
     m_streamKind = MediaStreamKind::Unknown;
     m_scheduledStream = MediaScheduledStream::Video;
     m_acquiringCapacity = 0;

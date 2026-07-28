@@ -66,7 +66,14 @@ MediaScheduledTsAccessUnitAdapterNode::onProcess(
             ::media::ErrorInfo::notInitialized(
                 "Scheduled TS adapter requires its registered sync group"));
     }
-    if (!m_epoch) {
+    std::optional<MediaPlaybackEpoch> epoch;
+    std::optional<MediaRunningTime> transportLead;
+    {
+        auto mutation = m_generationState->reserveSessionMutation();
+        epoch = m_epoch;
+        transportLead = m_transportLead;
+    }
+    if (!epoch) {
         auto planInput = tryPopInputOptional(context, "plan");
         if (!planInput) {
             return ::media::Result<MediaNodeProcessResult>::failure(
@@ -80,16 +87,19 @@ MediaScheduledTsAccessUnitAdapterNode::onProcess(
                 ::media::ErrorInfo::invalidArgument(
                     "Scheduled TS adapter rejects mismatched runtime plan"));
         }
-        auto permitted = m_generationState->permitActivatedGeneration(
-            *m_syncGroup,
-            plan->epoch().generation,
-            plan->completedTransitionSequence());
-        if (!permitted) {
-            return ::media::Result<MediaNodeProcessResult>::failure(
-                permitted.error());
+        {
+            auto permitted =
+                m_generationState->permitActivatedGeneration(
+                    *m_syncGroup,
+                    plan->epoch().generation,
+                    plan->completedTransitionSequence());
+            if (!permitted) {
+                return ::media::Result<MediaNodeProcessResult>::failure(
+                    permitted.error());
+            }
+            m_epoch = plan->epoch();
+            m_transportLead = plan->plan().transportDecodeLead();
         }
-        m_epoch = plan->epoch();
-        m_transportLead = plan->plan().transportDecodeLead();
         return processProgress();
     }
     auto input = tryPopInputOptional(context, "scheduled");
@@ -100,13 +110,35 @@ MediaScheduledTsAccessUnitAdapterNode::onProcess(
     if (const auto* control = dynamic_cast<const MediaControlBuffer*>(
             input.value()->get())) {
         if (control->controlKind() == MediaControlBufferKind::Flush) {
-            m_pendingCommitGeneration = m_epoch->generation;
+            {
+                auto reserved = m_generationState->reserveCommit(
+                    *m_syncGroup, epoch->generation);
+                if (!reserved) {
+                    return reserved.error().code ==
+                            ::media::ErrorCode::Cancelled
+                        ? processProgress()
+                        : ::media::Result<MediaNodeProcessResult>::failure(
+                              reserved.error());
+                }
+                m_pendingCommitGeneration = epoch->generation;
+            }
             auto forwarded = emitOutput(context, "packet", *input.value());
             return forwarded ? processProgress()
                              : processProgress(std::move(forwarded));
         }
         if (control->controlKind() == MediaControlBufferKind::Eof) {
-            m_pendingCommitGeneration = m_epoch->generation;
+            {
+                auto reserved = m_generationState->reserveCommit(
+                    *m_syncGroup, epoch->generation);
+                if (!reserved) {
+                    return reserved.error().code ==
+                            ::media::ErrorCode::Cancelled
+                        ? processProgress()
+                        : ::media::Result<MediaNodeProcessResult>::failure(
+                              reserved.error());
+                }
+                m_pendingCommitGeneration = epoch->generation;
+            }
             return processFinished(
                 emitOutput(context, "packet", *input.value()));
         }
@@ -124,8 +156,8 @@ MediaScheduledTsAccessUnitAdapterNode::onProcess(
             ::media::ErrorInfo::invalidArgument(
                 "Scheduled TS adapter rejects generation mismatch"));
     }
-    if (scheduled->generation() != m_epoch->generation) {
-        if (scheduled->generation() < m_epoch->generation) {
+    if (scheduled->generation() != epoch->generation) {
+        if (scheduled->generation() < epoch->generation) {
             return processProgress();
         }
         return ::media::Result<MediaNodeProcessResult>::failure(
@@ -134,7 +166,7 @@ MediaScheduledTsAccessUnitAdapterNode::onProcess(
     }
     auto lead = scheduled->dispatchOnMaster().checkedSubtract(
         scheduled->emitOnMaster());
-    if (!lead || lead.value() != *m_transportLead) {
+    if (!lead || !transportLead || lead.value() != *transportLead) {
         return ::media::Result<MediaNodeProcessResult>::failure(
             lead ? ::media::ErrorInfo::invalidArgument(
                        "Scheduled TS adapter rejects transport lead mismatch")
@@ -143,11 +175,21 @@ MediaScheduledTsAccessUnitAdapterNode::onProcess(
     auto output = MediaTsAccessUnitBuffer::create(
         scheduled->media(), scheduled->stream(), scheduled->generation(),
         scheduled->presentationOnMaster(), scheduled->dispatchOnMaster(),
-        scheduled->emitOnMaster(), *m_transportLead);
+        scheduled->emitOnMaster(), *transportLead);
     if (!output) {
         return ::media::Result<MediaNodeProcessResult>::failure(output.error());
     }
-    m_pendingCommitGeneration = scheduled->generation();
+    {
+        auto reserved = m_generationState->reserveCommit(
+            *m_syncGroup, scheduled->generation());
+        if (!reserved) {
+            return reserved.error().code == ::media::ErrorCode::Cancelled
+                ? processProgress()
+                : ::media::Result<MediaNodeProcessResult>::failure(
+                      reserved.error());
+        }
+        m_pendingCommitGeneration = scheduled->generation();
+    }
     return processProgress(emitOutput(context, "packet", output.value()));
 }
 
@@ -156,7 +198,11 @@ MediaScheduledTsAccessUnitAdapterNode::onProcess(
 MediaScheduledTsAccessUnitAdapterNode::reserveOutputCommit(
     const MediaBufferRef& buffer) const
 {
-    std::optional<std::uint64_t> generation = m_pendingCommitGeneration;
+    std::optional<std::uint64_t> generation;
+    {
+        auto mutation = m_generationState->reserveSessionMutation();
+        generation = m_pendingCommitGeneration;
+    }
     if (const auto* accessUnit =
             dynamic_cast<const MediaTsAccessUnitBuffer*>(buffer.get())) {
         auto view = accessUnit->view();

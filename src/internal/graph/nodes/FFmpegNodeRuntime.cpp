@@ -143,6 +143,12 @@ FFmpegNodeRuntime::reserveOutputCommit(const MediaBufferRef&) const
     return ::media::Status::success();
 }
 
+::media::Status FFmpegNodeRuntime::cancelReservedOutput(
+    const MediaBufferRef&)
+{
+    return ::media::Status::success();
+}
+
 void FFmpegNodeRuntime::cancelPendingOutputTransfer() noexcept
 {
     m_pendingTransfer.reset();
@@ -588,7 +594,7 @@ FFmpegNodeRuntime::tryPopFirstInputWithChannelOptional(
     auto reserved = reserveOutputCommit(buffer);
     if (!reserved) {
         if (reserved.error().code == ::media::ErrorCode::Cancelled) {
-            return ::media::Status::success();
+            return cancelReservedOutput(buffer);
         }
         return ::media::Status::failure(reserved.error());
     }
@@ -629,8 +635,9 @@ FFmpegNodeRuntime::tryPopFirstInputWithChannelOptional(
         auto reserved = reserveOutputCommit(transfer.buffer);
         if (!reserved) {
             if (reserved.error().code == ::media::ErrorCode::Cancelled) {
+                auto cancelled = cancelReservedOutput(transfer.buffer);
                 m_pendingTransfer.reset();
-                return ::media::Status::success();
+                return cancelled;
             }
             return ::media::Status::failure(reserved.error());
         }

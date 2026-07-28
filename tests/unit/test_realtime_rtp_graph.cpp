@@ -820,6 +820,7 @@ MediaRealtimeRtpTranscodeRequest validMpegTsUdpOptions()
     options.output.sdpPath.clear();
     options.parameters.execution.includeAudio = true;
     options.parameters.video.bitrateKbps = 8406;
+    options.input.mpegTsClock.maximumPcrGap = MediaRunningTime::fromNanoseconds(120'000'000);
     return options;
 }
 
@@ -1411,6 +1412,46 @@ void testMpegTsUdpRejectsNonUdpInputUrl(TestContext& ctx)
     }
 }
 
+void testMpegTsUdpRequiresExplicitMaximumPcrGapPolicy(TestContext& ctx)
+{
+    auto request = validMpegTsUdpOptions();
+    request.input.mpegTsClock.maximumPcrGap.reset();
+    const auto status = MediaRealtimeRtpTranscodePlanner::validateRealtimeRequestNoIo(request);
+    EXPECT_FALSE(ctx, status);
+    if (!status) {
+        EXPECT_EQ(ctx, status.error().code, media::ErrorCode::InvalidArgument);
+    }
+}
+
+void testMpegTsPlannerRequiresExactlyRepresentableMaximumPcrGap(TestContext& ctx)
+{
+    auto request = validMpegTsUdpOptions();
+    request.input.mpegTsClock.maximumPcrGap =
+        MediaRunningTime::fromNanoseconds(120'000'001);
+    auto planned = MediaRealtimeRtpTranscodePlanner::planPreparedInput(
+        request, deterministicMpegTsStreams(), deterministicMpegTsSelection());
+    EXPECT_FALSE(ctx, planned);
+    if (!planned) {
+        EXPECT_EQ(ctx, planned.error().code, media::ErrorCode::InvalidArgument);
+    }
+}
+
+void testMpegTsPlannerConvertsLargestRepresentableMaximumPcrGap(TestContext& ctx)
+{
+    constexpr std::int64_t maximumExactNanoseconds =
+        (std::numeric_limits<std::int64_t>::max() / 1'000) * 1'000;
+    auto request = validMpegTsUdpOptions();
+    request.input.mpegTsClock.maximumPcrGap =
+        MediaRunningTime::fromNanoseconds(maximumExactNanoseconds);
+    auto planned = MediaRealtimeRtpTranscodePlanner::planPreparedInput(
+        request, deterministicMpegTsStreams(), deterministicMpegTsSelection());
+    EXPECT_TRUE(ctx, planned);
+    if (planned && planned.value().input.mpegTs) {
+        EXPECT_EQ(ctx, planned.value().input.mpegTs->maximumPcrGap27Mhz,
+                  (maximumExactNanoseconds / 1'000) * 27);
+    }
+}
+
 void testSeparateRtpOutputRejectsSingleOutputUrl(TestContext& ctx)
 {
     MediaRealtimeRtpTranscodeRequest options = validRawRtpOptions();
@@ -1756,6 +1797,10 @@ void testSynchronizedRtpGraphAssemblesProtocolNeutralInputSegment(
         graph, "realtime.av_sync.video.protocol_binder");
     const MediaNode* audioBinder = findNodeByName(
         graph, "realtime.av_sync.audio.protocol_binder");
+    const MediaNode* videoGenerationGate = findNodeByName(
+        graph, "realtime.av_sync.video.generation_gate");
+    const MediaNode* audioGenerationGate = findNodeByName(
+        graph, "realtime.av_sync.audio.generation_gate");
     const MediaNode* videoCanonical = findNodeByName(
         graph, "realtime.av_sync.video.canonical_input");
     const MediaNode* audioCanonical = findNodeByName(
@@ -1776,6 +1821,8 @@ void testSynchronizedRtpGraphAssemblesProtocolNeutralInputSegment(
     EXPECT_TRUE(ctx, rtpAdapter != nullptr);
     EXPECT_TRUE(ctx, videoBinder != nullptr);
     EXPECT_TRUE(ctx, audioBinder != nullptr);
+    EXPECT_TRUE(ctx, videoGenerationGate != nullptr);
+    EXPECT_TRUE(ctx, audioGenerationGate != nullptr);
     EXPECT_TRUE(ctx, videoCanonical != nullptr);
     EXPECT_TRUE(ctx, audioCanonical != nullptr);
     EXPECT_TRUE(ctx, coordinator != nullptr);
@@ -1783,7 +1830,8 @@ void testSynchronizedRtpGraphAssemblesProtocolNeutralInputSegment(
     EXPECT_TRUE(ctx, binder != nullptr);
     EXPECT_TRUE(ctx, sequencer != nullptr);
     EXPECT_TRUE(ctx, extractor != nullptr);
-    if (!snapshot || !sourceClock || !rtpAdapter || !videoBinder || !audioBinder ||
+    if (!snapshot || !sourceClock || !rtpAdapter || !videoBinder ||
+        !audioBinder || !videoGenerationGate || !audioGenerationGate ||
         !videoCanonical || !audioCanonical || !coordinator || !startupClock ||
         !binder || !sequencer || !extractor) {
         return;
@@ -1795,6 +1843,10 @@ void testSynchronizedRtpGraphAssemblesProtocolNeutralInputSegment(
               MediaNodeKind::RtpSourceClockStateAdapter);
     EXPECT_EQ(ctx, videoBinder->kind, MediaNodeKind::RtpPacketClockBinder);
     EXPECT_EQ(ctx, audioBinder->kind, MediaNodeKind::RtpPacketClockBinder);
+    EXPECT_EQ(ctx, videoGenerationGate->kind,
+              MediaNodeKind::LockedPacketGate);
+    EXPECT_EQ(ctx, audioGenerationGate->kind,
+              MediaNodeKind::LockedPacketGate);
     EXPECT_EQ(ctx, videoCanonical->kind, MediaNodeKind::CanonicalInput);
     EXPECT_EQ(ctx, audioCanonical->kind, MediaNodeKind::CanonicalInput);
     EXPECT_EQ(ctx, coordinator->kind, MediaNodeKind::AvStartupCoordinator);
@@ -1807,6 +1859,12 @@ void testSynchronizedRtpGraphAssemblesProtocolNeutralInputSegment(
     EXPECT_EQ(ctx, videoBinder->options.value("rtp_clock_binder.sync_group"),
               group);
     EXPECT_EQ(ctx, audioBinder->options.value("rtp_clock_binder.sync_group"),
+              group);
+    EXPECT_EQ(ctx, videoGenerationGate->options.value(
+                       "locked_packet_gate.sync_group"),
+              group);
+    EXPECT_EQ(ctx, audioGenerationGate->options.value(
+                       "locked_packet_gate.sync_group"),
               group);
     EXPECT_EQ(ctx, coordinator->options.value("av_startup.sync_group"), group);
     EXPECT_EQ(ctx, startupClock->options.value("av_startup_clock.sync_group"),
@@ -1860,6 +1918,14 @@ void testSynchronizedRtpGraphAssemblesProtocolNeutralInputSegment(
                "realtime.av_sync.source_clock", "clock",
                MediaStreamKind::Metadata, MediaEdgeKind::Event,
                MediaPayloadKind::GraphEvent, metadataCapacity);
+    expectEdge("realtime.av_sync.source_clock", "video",
+               "realtime.av_sync.video.generation_gate", "clock",
+               MediaStreamKind::Metadata, MediaEdgeKind::Event,
+               MediaPayloadKind::GraphEvent, metadataCapacity);
+    expectEdge("realtime.av_sync.source_clock", "audio",
+               "realtime.av_sync.audio.generation_gate", "clock",
+               MediaStreamKind::Metadata, MediaEdgeKind::Event,
+               MediaPayloadKind::GraphEvent, metadataCapacity);
     expectEdge("realtime.video.input", "packet",
                "realtime.av_sync.video.protocol_binder", "packet",
                MediaStreamKind::Video, MediaEdgeKind::InputPacket,
@@ -1869,10 +1935,18 @@ void testSynchronizedRtpGraphAssemblesProtocolNeutralInputSegment(
                MediaStreamKind::Audio, MediaEdgeKind::InputPacket,
                MediaPayloadKind::Packet, packetCapacity);
     expectEdge("realtime.av_sync.video.protocol_binder", "packet",
-               "realtime.av_sync.video.canonical_input", "in",
+               "realtime.av_sync.video.generation_gate", "packet",
                MediaStreamKind::Video, MediaEdgeKind::InputPacket,
                MediaPayloadKind::Packet, packetCapacity);
     expectEdge("realtime.av_sync.audio.protocol_binder", "packet",
+               "realtime.av_sync.audio.generation_gate", "packet",
+               MediaStreamKind::Audio, MediaEdgeKind::InputPacket,
+               MediaPayloadKind::Packet, packetCapacity);
+    expectEdge("realtime.av_sync.video.generation_gate", "packet",
+               "realtime.av_sync.video.canonical_input", "in",
+               MediaStreamKind::Video, MediaEdgeKind::InputPacket,
+               MediaPayloadKind::Packet, packetCapacity);
+    expectEdge("realtime.av_sync.audio.generation_gate", "packet",
                "realtime.av_sync.audio.canonical_input", "in",
                MediaStreamKind::Audio, MediaEdgeKind::InputPacket,
                MediaPayloadKind::Packet, packetCapacity);
@@ -1947,6 +2021,8 @@ void testSynchronizedRtpGraphAssemblesProtocolNeutralInputSegment(
               static_cast<std::size_t>(2));
     EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::DualMediaSdpPublisher),
               static_cast<std::size_t>(1));
+    EXPECT_EQ(ctx, countNodesByKind(graph, MediaNodeKind::LockedPacketGate),
+              static_cast<std::size_t>(2));
     for (const MediaNodeKind forbidden : {
              MediaNodeKind::RtpMux,
              MediaNodeKind::RtpOutput,
@@ -1985,8 +2061,10 @@ void testSynchronizedRtpGraphAssemblesProtocolNeutralInputSegment(
                     "realtime.audio.encode.encode", "codec",
                     "realtime.av_sync.rtp_output.audio.sender", "codec") !=
                     nullptr);
-    EXPECT_FALSE(ctx, videoBinder->options.has("locked_packet_gate.generation"));
-    EXPECT_FALSE(ctx, audioBinder->options.has("locked_packet_gate.generation"));
+    EXPECT_FALSE(ctx, videoGenerationGate->options.has(
+                          "locked_packet_gate.generation"));
+    EXPECT_FALSE(ctx, audioGenerationGate->options.has(
+                          "locked_packet_gate.generation"));
 }
 
 void testScheduledRtpRequiresAuthoritativeAnnexBEncoderLayout(TestContext& ctx)
@@ -2108,9 +2186,9 @@ void testSynchronizedMpegTsSegmentUsesSharedProtocolNeutralStartupChain(
     const MediaNode* sourceClock = findNodeByName(
         graph, "test.ts.av_sync.source_clock");
     const MediaNode* videoGate = findNodeByName(
-        graph, "test.ts.av_sync.video.protocol_binder");
+        graph, "test.ts.av_sync.video.generation_gate");
     const MediaNode* audioGate = findNodeByName(
-        graph, "test.ts.av_sync.audio.protocol_binder");
+        graph, "test.ts.av_sync.audio.generation_gate");
     const MediaNode* sequencer = findNodeByName(
         graph, "test.ts.av_sync.startup.activation_sequencer");
     const MediaNode* extractor = findNodeByName(
@@ -2151,19 +2229,19 @@ void testSynchronizedMpegTsSegmentUsesSharedProtocolNeutralStartupChain(
     expectEdge("test.ts.demux", "clock", "test.ts.av_sync.source_clock",
                "clock", metadataCapacity);
     expectEdge("test.ts.av_sync.source_clock", "video",
-               "test.ts.av_sync.video.protocol_binder", "clock",
+               "test.ts.av_sync.video.generation_gate", "clock",
                metadataCapacity);
     expectEdge("test.ts.av_sync.source_clock", "audio",
-               "test.ts.av_sync.audio.protocol_binder", "clock",
+               "test.ts.av_sync.audio.generation_gate", "clock",
                metadataCapacity);
     expectEdge("test.ts.av_sync.source_clock", "startup",
                "test.ts.av_sync.startup.clock", "clock",
                metadataCapacity);
     expectEdge("test.ts.demux", "video",
-               "test.ts.av_sync.video.protocol_binder", "packet",
+               "test.ts.av_sync.video.generation_gate", "packet",
                packetCapacity);
     expectEdge("test.ts.demux", "audio",
-               "test.ts.av_sync.audio.protocol_binder", "packet",
+               "test.ts.av_sync.audio.generation_gate", "packet",
                packetCapacity);
     EXPECT_EQ(ctx, videoGate->options.value("locked_packet_gate.sync_group"),
               outer.avSyncRuntime->groupKey.value());
@@ -3543,6 +3621,7 @@ void testRealtimeBuilderDoesNotOwnPlannerDecisions(TestContext& ctx)
     EXPECT_FALSE(ctx, source.find("preferredHardware") != std::string::npos);
     EXPECT_FALSE(ctx, source.find("outputCodecName") != std::string::npos);
     EXPECT_FALSE(ctx, source.find("bFrames") != std::string::npos);
+    EXPECT_FALSE(ctx, source.find("LegacyPlainPacket") != std::string::npos);
 }
 
 void testPacketNormalizeMonotonicPolicyIncludesPtsAndDts(TestContext& ctx)
@@ -4203,6 +4282,11 @@ void testMpegTsPreflightBuildsTaggedSynchronizedExecutable(TestContext& ctx)
         return;
     }
     EXPECT_TRUE(ctx, preflight.value().prepared.has_value());
+    EXPECT_TRUE(ctx, preflight.value().plan.input.mpegTs.has_value());
+    if (preflight.value().plan.input.mpegTs) {
+        EXPECT_EQ(ctx, preflight.value().plan.input.mpegTs->maximumPcrGap27Mhz,
+                  std::int64_t{3'240'000});
+    }
     if (preflight.value().prepared) {
         EXPECT_EQ(ctx, preflight.value().prepared->kind().value(),
                   MediaPreparedRealtimeInputKind::MpegTs);
@@ -4320,6 +4404,9 @@ int main(int argc, char** argv)
     testExistingRealtimeModesMapToExplicitLayouts(ctx);
     testUnsupportedRealtimeStreamCombinationsFailInPlanner(ctx);
     testMpegTsUdpRejectsNonUdpInputUrl(ctx);
+    testMpegTsUdpRequiresExplicitMaximumPcrGapPolicy(ctx);
+    testMpegTsPlannerRequiresExactlyRepresentableMaximumPcrGap(ctx);
+    testMpegTsPlannerConvertsLargestRepresentableMaximumPcrGap(ctx);
     testSeparateRtpOutputRejectsSingleOutputUrl(ctx);
     testRawRtpMissingMetadataFailsInPlanner(ctx);
     testRawRtpRejectsUnsupportedMetadata(ctx);

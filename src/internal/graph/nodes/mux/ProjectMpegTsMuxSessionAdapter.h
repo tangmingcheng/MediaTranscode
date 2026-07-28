@@ -38,15 +38,34 @@ private:
     std::optional<MediaTsMuxPlan> plan;
     std::optional<MediaPlaybackEpoch> epoch;
     std::optional<MediaAvSyncGroupKey> group;
+    std::optional<MediaAvSyncGroupKey> plannedGroup;
     std::unique_ptr<MediaTsMuxSession> session;
     std::optional<MediaRunningTime> nextTransportDeadline;
+    std::optional<MediaRunningTime> latestAcceptedEmission;
     bool mediaTimelineStarted = false;
     std::atomic<std::uint64_t> generation{0};
 };
 
 struct ProjectMpegTsGenerationAuthority final {
-    std::shared_ptr<MediaProtocolOutputGenerationState> generationState;
-    std::shared_ptr<ProjectMpegTsGenerationSessionState> generationSession;
+    static ::media::Result<ProjectMpegTsGenerationAuthority> create(
+        std::shared_ptr<MediaProtocolOutputGenerationState> generationState,
+        std::shared_ptr<ProjectMpegTsGenerationSessionState>
+            generationSession);
+
+    const std::shared_ptr<MediaProtocolOutputGenerationState>&
+    generationState() const noexcept;
+    const std::shared_ptr<ProjectMpegTsGenerationSessionState>&
+    generationSession() const noexcept;
+
+private:
+    ProjectMpegTsGenerationAuthority(
+        std::shared_ptr<MediaProtocolOutputGenerationState> generationState,
+        std::shared_ptr<ProjectMpegTsGenerationSessionState>
+            generationSession);
+
+    std::shared_ptr<MediaProtocolOutputGenerationState> m_generationState;
+    std::shared_ptr<ProjectMpegTsGenerationSessionState>
+        m_generationSession;
 };
 
 class ProjectMpegTsMuxSessionAdapter final : public MediaMuxSession {
@@ -85,13 +104,14 @@ private:
 
     std::shared_ptr<MediaProtocolOutputGenerationState> m_generationState;
     std::shared_ptr<ProjectMpegTsGenerationSessionState> m_generationSession;
-    std::optional<MediaAvSyncGroupKey> m_plannedGroup;
+    std::optional<MediaAvSyncGroupKey>& m_plannedGroup;
     State& m_state;
     std::optional<MediaTsMuxPlan>& m_plan;
     std::optional<MediaPlaybackEpoch>& m_epoch;
     std::optional<MediaAvSyncGroupKey>& m_group;
     std::unique_ptr<MediaTsMuxSession>& m_session;
     std::optional<MediaRunningTime>& m_nextTransportDeadline;
+    std::optional<MediaRunningTime>& m_latestAcceptedEmission;
     bool& m_mediaTimelineStarted;
     std::atomic<std::uint64_t>& m_generation;
     std::unique_ptr<MediaOutputByteSink> m_sink;

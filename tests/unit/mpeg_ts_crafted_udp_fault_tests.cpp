@@ -17,7 +17,7 @@ using namespace media::ffmpeg::graph::test_fixture;
 
 namespace {
 
-constexpr std::int64_t kPcrInterval27Mhz = 2'700'000;
+constexpr std::int64_t kNominalPcrDelta27Mhz = 2'700'000;
 
 MediaTsProgramClockPolicy clockPolicy(const CraftedTsProgramIdentity& identity)
 {
@@ -27,7 +27,7 @@ MediaTsProgramClockPolicy clockPolicy(const CraftedTsProgramIdentity& identity)
         identity.pcrPid,
         identity.videoPid,
         identity.audioPid,
-        kPcrInterval27Mhz * 3};
+        kNominalPcrDelta27Mhz * 3};
 }
 
 ::media::Result<MediaTsClockProjection> replay(
@@ -65,8 +65,8 @@ void testPcrWrapLocksWithoutGenerationChange(TestContext& ctx, std::uint16_t por
     auto stream = CraftedTsBytes::generate();
     EXPECT_TRUE(ctx, stream);
     if (!stream) return;
-    const auto first = stream.value().pcrModulus() - 2 * kPcrInterval27Mhz;
-    EXPECT_TRUE(ctx, stream.value().rewritePcrSequence(first, kPcrInterval27Mhz));
+    const auto first = stream.value().pcrModulus() - 2 * kNominalPcrDelta27Mhz;
+    EXPECT_TRUE(ctx, stream.value().rewritePcrSequence(first, kNominalPcrDelta27Mhz));
     auto observed = observe(stream.value(), port);
     EXPECT_TRUE(ctx, observed);
     if (!observed) return;
@@ -86,7 +86,7 @@ void testDiscontinuityReacquiresAndRelocks(TestContext& ctx, std::uint16_t port)
     auto stream = CraftedTsBytes::generate();
     EXPECT_TRUE(ctx, stream);
     if (!stream) return;
-    EXPECT_TRUE(ctx, stream.value().rewritePcrSequence(10'000'000, kPcrInterval27Mhz));
+    EXPECT_TRUE(ctx, stream.value().rewritePcrSequence(10'000'000, kNominalPcrDelta27Mhz));
     EXPECT_TRUE(ctx, stream.value().markPcrDiscontinuity(2));
     auto observed = observe(stream.value(), port);
     EXPECT_TRUE(ctx, observed);
@@ -129,7 +129,7 @@ void testPatPmtVersionChangePreservesImmutableIdentity(TestContext& ctx,
     auto stream = CraftedTsBytes::generate();
     EXPECT_TRUE(ctx, stream);
     if (!stream) return;
-    EXPECT_TRUE(ctx, stream.value().rewritePcrSequence(10'000'000, kPcrInterval27Mhz));
+    EXPECT_TRUE(ctx, stream.value().rewritePcrSequence(10'000'000, kNominalPcrDelta27Mhz));
     EXPECT_TRUE(ctx, stream.value().changePatAndPmtVersionAfterFirst(1));
     auto observed = observe(stream.value(), port);
     EXPECT_TRUE(ctx, observed);
@@ -157,7 +157,7 @@ void testPcrPidChangeFailsClosed(TestContext& ctx, std::uint16_t port)
     auto stream = CraftedTsBytes::generate();
     EXPECT_TRUE(ctx, stream);
     if (!stream) return;
-    EXPECT_TRUE(ctx, stream.value().rewritePcrSequence(10'000'000, kPcrInterval27Mhz));
+    EXPECT_TRUE(ctx, stream.value().rewritePcrSequence(10'000'000, kNominalPcrDelta27Mhz));
     EXPECT_TRUE(ctx, stream.value().changePcrPidAfterFirstPmt(
         1, stream.value().identity().audioPid));
     auto observed = observe(stream.value(), port);
@@ -172,9 +172,9 @@ void testExcessivePcrGapFailsClosed(TestContext& ctx, std::uint16_t port)
     auto stream = CraftedTsBytes::generate();
     EXPECT_TRUE(ctx, stream);
     if (!stream) return;
-    EXPECT_TRUE(ctx, stream.value().rewritePcrSequence(10'000'000, kPcrInterval27Mhz));
+    EXPECT_TRUE(ctx, stream.value().rewritePcrSequence(10'000'000, kNominalPcrDelta27Mhz));
     EXPECT_TRUE(ctx, stream.value().rewritePcr(
-        2, 10'000'000 + kPcrInterval27Mhz * 5));
+        2, 10'000'000 + kNominalPcrDelta27Mhz * 5));
     auto observed = observe(stream.value(), port);
     EXPECT_TRUE(ctx, observed);
     if (!observed) return;
@@ -187,9 +187,9 @@ void testPcrRegressionFailsClosed(TestContext& ctx, std::uint16_t port)
     auto stream = CraftedTsBytes::generate();
     EXPECT_TRUE(ctx, stream);
     if (!stream) return;
-    EXPECT_TRUE(ctx, stream.value().rewritePcrSequence(10'000'000, kPcrInterval27Mhz));
+    EXPECT_TRUE(ctx, stream.value().rewritePcrSequence(10'000'000, kNominalPcrDelta27Mhz));
     EXPECT_TRUE(ctx, stream.value().rewritePcr(
-        2, 10'000'000 + kPcrInterval27Mhz / 2));
+        2, 10'000'000 + kNominalPcrDelta27Mhz / 2));
     auto observed = observe(stream.value(), port);
     EXPECT_TRUE(ctx, observed);
     if (!observed) return;

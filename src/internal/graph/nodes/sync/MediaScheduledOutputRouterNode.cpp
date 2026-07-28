@@ -87,6 +87,12 @@ MediaScheduledOutputRouterNode::onProcess(
             MediaChannel* scheduled = context.findInputChannel(
                 nodeId(), "scheduled");
             if (scheduled && scheduled->closed()) {
+                if (m_interrupted) {
+                    return ::media::Result<
+                        MediaNodeProcessResult>::failure(
+                        ::media::ErrorInfo::cancelled(
+                            "Scheduled output router input closed during stop"));
+                }
                 return ::media::Result<MediaNodeProcessResult>::failure(
                     ::media::ErrorInfo::notInitialized(
                         "Scheduled output router input closed without typed terminal"));
@@ -220,6 +226,13 @@ MediaScheduledOutputRouterNode::routeControl(
     return FFmpegNodeRuntime::stop(context);
 }
 
+void MediaScheduledOutputRouterNode::interrupt(
+    MediaGraphExecutionContext& context) noexcept
+{
+    m_interrupted = true;
+    FFmpegNodeRuntime::interrupt(context);
+}
+
 void MediaScheduledOutputRouterNode::abort(
     MediaGraphExecutionContext& context) noexcept
 {
@@ -230,6 +243,7 @@ void MediaScheduledOutputRouterNode::abort(
 void MediaScheduledOutputRouterNode::resetState() noexcept
 {
     m_pending.reset();
+    m_interrupted = false;
 }
 
 } // namespace media::ffmpeg::graph

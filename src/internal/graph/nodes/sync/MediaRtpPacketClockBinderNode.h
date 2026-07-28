@@ -36,12 +36,12 @@ private:
                                       MediaBufferRef terminal);
     ::media::Result<MediaBufferRef> timedPacket(MediaBufferRef buffer,
                                                 std::uint64_t& extendedTimestamp);
+    void invalidateClockProjection() noexcept;
     void resetState() noexcept;
 
     MediaRtpPacketClockProjector m_projector;
     MediaRtpPacketTimestampAligner m_timestampAligner;
     std::optional<MediaRtpClockGroupSnapshot> m_lockedSnapshot;
-    std::optional<std::uint64_t> m_lockedGeneration;
     std::deque<MediaBufferRef> m_acquiringPackets;
     std::optional<MediaAvSyncGroupKey> m_syncGroupKey;
     std::shared_ptr<MediaAvSyncGroupRuntime> m_syncGroup;

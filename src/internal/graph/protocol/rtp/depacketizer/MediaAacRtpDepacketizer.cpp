@@ -57,13 +57,89 @@ MediaAacRtpDepacketizer::MediaAacRtpDepacketizer(MediaRtpDepacketizerConfig conf
     auto headers = parseAuHeaders(packet.payload);
     if (!headers) return ::media::Result<MediaRtpDepacketizerResult>::failure(headers.error());
     const std::size_t payloadOffset = 2 + headers.value().size() * 2;
+    const std::size_t payloadBytes =
+        packet.payload.size() - payloadOffset;
+
+    if (m_fragmentedAccessUnit) {
+        auto& fragmented = *m_fragmentedAccessUnit;
+        const bool consecutive =
+            packet.sequenceNumber ==
+            static_cast<std::uint16_t>(
+                fragmented.lastSequenceNumber + 1);
+        if (headers.value().size() != 1 ||
+            headers.value().front().size != fragmented.expectedSize ||
+            headers.value().front().index != fragmented.index ||
+            packet.timestamp != fragmented.timestamp ||
+            !consecutive ||
+            payloadBytes >
+                fragmented.expectedSize - fragmented.bytes.size()) {
+            m_fragmentedAccessUnit.reset();
+            return ::media::Result<MediaRtpDepacketizerResult>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "AAC MPEG4-GENERIC fragmented AU continuity is invalid"));
+        }
+        fragmented.bytes.insert(
+            fragmented.bytes.end(),
+            packet.payload.begin() + payloadOffset,
+            packet.payload.end());
+        fragmented.lastSequenceNumber = packet.sequenceNumber;
+        if (fragmented.bytes.size() < fragmented.expectedSize) {
+            if (packet.marker) {
+                m_fragmentedAccessUnit.reset();
+                return ::media::Result<
+                    MediaRtpDepacketizerResult>::failure(
+                    ::media::ErrorInfo::invalidArgument(
+                        "AAC MPEG4-GENERIC fragmented AU ended before its planned size"));
+            }
+            return ::media::Result<MediaRtpDepacketizerResult>::success({});
+        }
+        if (!packet.marker) {
+            m_fragmentedAccessUnit.reset();
+            return ::media::Result<MediaRtpDepacketizerResult>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "AAC MPEG4-GENERIC completed fragmented AU requires marker"));
+        }
+        auto unit = makeRtpAccessUnit(
+            std::move(fragmented.bytes),
+            fragmented.timestamp,
+            m_config.clockRate,
+            m_config.accessUnitDurationRtpTicks,
+            true);
+        m_fragmentedAccessUnit.reset();
+        if (!unit) {
+            return ::media::Result<
+                MediaRtpDepacketizerResult>::failure(unit.error());
+        }
+        MediaRtpDepacketizerResult result;
+        result.accessUnits.push_back(std::move(unit).value());
+        return ::media::Result<MediaRtpDepacketizerResult>::success(
+            std::move(result));
+    }
+
     std::size_t totalAuBytes = 0;
     for (const AacAuHeader& header : headers.value()) {
         if (header.size > std::numeric_limits<std::size_t>::max() - totalAuBytes) return ::media::Result<MediaRtpDepacketizerResult>::failure(
             ::media::ErrorInfo::invalidArgument("AAC MPEG4-GENERIC aggregate size overflow"));
         totalAuBytes += header.size;
     }
-    if (payloadOffset > packet.payload.size() || totalAuBytes != packet.payload.size() - payloadOffset) {
+    if (totalAuBytes > payloadBytes) {
+        if (headers.value().size() != 1 || packet.marker ||
+            payloadBytes == 0) {
+            return ::media::Result<MediaRtpDepacketizerResult>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "AAC MPEG4-GENERIC fragmented AU start is invalid"));
+        }
+        m_fragmentedAccessUnit.emplace(FragmentedAccessUnit{
+            headers.value().front().size,
+            headers.value().front().index,
+            packet.timestamp,
+            packet.sequenceNumber,
+            std::vector<std::uint8_t>(
+                packet.payload.begin() + payloadOffset,
+                packet.payload.end())});
+        return ::media::Result<MediaRtpDepacketizerResult>::success({});
+    }
+    if (totalAuBytes != payloadBytes) {
         return ::media::Result<MediaRtpDepacketizerResult>::failure(
             ::media::ErrorInfo::invalidArgument("AAC MPEG4-GENERIC aggregate AU sizes do not partition payload"));
     }
@@ -91,6 +167,7 @@ MediaAacRtpDepacketizer::MediaAacRtpDepacketizer(MediaRtpDepacketizerConfig conf
 
 void MediaAacRtpDepacketizer::discontinuity(MediaRtpDiscontinuityReason) noexcept
 {
+    m_fragmentedAccessUnit.reset();
 }
 
 } // namespace media::ffmpeg::graph

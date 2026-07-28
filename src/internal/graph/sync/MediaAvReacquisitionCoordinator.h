@@ -100,6 +100,42 @@ struct MediaAvReacquisitionSnapshot final {
     std::optional<MediaAvReacquisitionReason> reason;
 };
 
+class MediaAvGenerationArbitrationReservation final {
+public:
+    MediaAvGenerationArbitrationReservation(
+        MediaAvGenerationArbitrationReservation&&) noexcept = default;
+    MediaAvGenerationArbitrationReservation& operator=(
+        MediaAvGenerationArbitrationReservation&&) noexcept = default;
+    MediaAvGenerationArbitrationReservation(
+        const MediaAvGenerationArbitrationReservation&) = delete;
+    MediaAvGenerationArbitrationReservation& operator=(
+        const MediaAvGenerationArbitrationReservation&) = delete;
+    ~MediaAvGenerationArbitrationReservation() = default;
+
+    const MediaAvReacquisitionSnapshot& reacquisition() const noexcept
+    {
+        return m_reacquisition;
+    }
+    const MediaAvEpochTransitionSnapshot& epoch() const noexcept
+    {
+        return m_epoch;
+    }
+
+private:
+    friend class MediaAvReacquisitionCoordinator;
+
+    MediaAvGenerationArbitrationReservation(
+        std::shared_ptr<MediaAvReacquisitionCoordinator> owner,
+        MediaAvReacquisitionSnapshot reacquisition,
+        MediaAvEpochTransitionSnapshot epoch,
+        std::unique_lock<std::mutex> activationLock) noexcept;
+
+    std::shared_ptr<MediaAvReacquisitionCoordinator> m_owner;
+    MediaAvReacquisitionSnapshot m_reacquisition;
+    MediaAvEpochTransitionSnapshot m_epoch;
+    std::unique_lock<std::mutex> m_activationLock;
+};
+
 class MediaAvReacquisitionCoordinator final
     : public std::enable_shared_from_this<MediaAvReacquisitionCoordinator> {
 public:
@@ -112,6 +148,8 @@ public:
     ::media::Status request(MediaAvReacquisitionRequest request);
     ::media::Status pollTimeout();
     MediaAvReacquisitionSnapshot snapshot() const noexcept;
+    MediaAvGenerationArbitrationReservation
+    reserveGenerationArbitration();
     MediaAvStartupReleaseDisposition classifyRelease(
         MediaAvStartupReleaseKind kind,
         std::uint64_t generation,

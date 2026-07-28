@@ -84,10 +84,15 @@ ExplicitMediaMuxSessionFactory::ExplicitMediaMuxSessionFactory(
                 ::media::ErrorInfo::invalidArgument(
                     "project MPEG-TS mux session requires its typed generation session"));
         }
+        auto authority = ProjectMpegTsGenerationAuthority::create(
+            m_generationState, std::move(generationSession));
+        if (!authority) {
+            return ::media::Result<std::unique_ptr<MediaMuxSession>>::failure(
+                authority.error());
+        }
         return ::media::Result<std::unique_ptr<MediaMuxSession>>::success(
             std::make_unique<ProjectMpegTsMuxSessionAdapter>(
-                ProjectMpegTsGenerationAuthority{
-                    m_generationState, std::move(generationSession)}));
+                std::move(authority).value()));
     }
     }
     return ::media::Result<std::unique_ptr<MediaMuxSession>>::failure(

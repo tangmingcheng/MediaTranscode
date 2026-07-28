@@ -20,6 +20,10 @@ struct MediaRealtimeRtpInputMetadata {
     std::string fmtp;
 };
 
+struct MediaRealtimeMpegTsInputClockPolicy {
+    std::optional<MediaRunningTime> maximumPcrGap;
+};
+
 struct MediaRealtimeInputConfig {
     std::optional<RealtimeInputType> type;
     std::optional<RealtimeInputStreamLayout> streamLayout;
@@ -33,6 +37,7 @@ struct MediaRealtimeInputConfig {
     std::optional<int> videoStreamIndex;
     MediaRealtimeRtpInputMetadata videoRtp;
     MediaRealtimeRtpInputMetadata audioRtp;
+    MediaRealtimeMpegTsInputClockPolicy mpegTsClock;
 };
 
 struct MediaRealtimeOutputConfig {

@@ -6,6 +6,19 @@
 
 namespace media::ffmpeg::graph {
 
+MediaAvGenerationArbitrationReservation::
+    MediaAvGenerationArbitrationReservation(
+        std::shared_ptr<MediaAvReacquisitionCoordinator> owner,
+        MediaAvReacquisitionSnapshot reacquisition,
+        MediaAvEpochTransitionSnapshot epoch,
+        std::unique_lock<std::mutex> activationLock) noexcept
+    : m_owner(std::move(owner))
+    , m_reacquisition(std::move(reacquisition))
+    , m_epoch(std::move(epoch))
+    , m_activationLock(std::move(activationLock))
+{
+}
+
 MediaAvStartupReleasePublicationReservation::
     MediaAvStartupReleasePublicationReservation(
         std::shared_ptr<MediaAvReacquisitionCoordinator> owner,
@@ -411,6 +424,24 @@ MediaAvReacquisitionCoordinator::snapshot() const noexcept
         m_request
             ? std::optional<MediaAvReacquisitionReason>(m_request->reason)
             : std::nullopt};
+}
+
+MediaAvGenerationArbitrationReservation
+MediaAvReacquisitionCoordinator::reserveGenerationArbitration()
+{
+    auto activationLock = acquireActivationArbitration();
+    std::lock_guard<std::mutex> lock(m_mutex);
+    MediaAvReacquisitionSnapshot reacquisition{
+        m_phase,
+        m_transition,
+        m_request
+            ? std::optional<MediaAvReacquisitionReason>(m_request->reason)
+            : std::nullopt};
+    return MediaAvGenerationArbitrationReservation(
+        shared_from_this(),
+        std::move(reacquisition),
+        m_transitionService->snapshot(),
+        std::move(activationLock));
 }
 
 MediaAvStartupReleaseDisposition

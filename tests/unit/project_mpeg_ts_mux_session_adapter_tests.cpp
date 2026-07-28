@@ -37,10 +37,34 @@ ProjectMpegTsGenerationAuthority muxGenerationState()
 {
     auto session =
         std::make_shared<ProjectMpegTsGenerationSessionState>();
-    return {
+    auto authority = ProjectMpegTsGenerationAuthority::create(
         std::make_shared<MediaProtocolOutputGenerationState>(
             "project_mpegts_mux_generation_state", session),
-        std::move(session)};
+        std::move(session));
+    return std::move(authority).value();
+}
+
+void authorityRejectsNullAndMismatchedSessionState(TestContext& ctx)
+{
+    auto session =
+        std::make_shared<ProjectMpegTsGenerationSessionState>();
+    EXPECT_FALSE(ctx, ProjectMpegTsGenerationAuthority::create(
+                          nullptr, session));
+    EXPECT_FALSE(ctx, ProjectMpegTsGenerationAuthority::create(
+                          std::make_shared<
+                              MediaProtocolOutputGenerationState>(
+                              "project_mpegts_mux_generation_state",
+                              session),
+                          nullptr));
+
+    auto differentSession =
+        std::make_shared<ProjectMpegTsGenerationSessionState>();
+    EXPECT_FALSE(ctx, ProjectMpegTsGenerationAuthority::create(
+                          std::make_shared<
+                              MediaProtocolOutputGenerationState>(
+                              "project_mpegts_mux_generation_state",
+                              session),
+                          std::move(differentSession)));
 }
 
 MediaRunningTime ms(std::int64_t value)
@@ -286,7 +310,7 @@ void acquiringPollAndBindingOrder(TestContext& ctx)
 {
     Fixture fixture;
     if (!fixture.activate(ctx)) return;
-    ProjectMpegTsMuxSessionAdapter acquiring;
+    ProjectMpegTsMuxSessionAdapter acquiring(muxGenerationState());
     auto waiting = acquiring.poll(fixture.context);
     EXPECT_TRUE(ctx, waiting);
     if (waiting) {
@@ -310,7 +334,7 @@ void rejectsMissingDuplicateAndWrongBindings(TestContext& ctx)
     Fixture fixture;
     if (!fixture.activate(ctx)) return;
     auto sink = std::make_shared<SinkState>();
-    ProjectMpegTsMuxSessionAdapter missing;
+    ProjectMpegTsMuxSessionAdapter missing(muxGenerationState());
     EXPECT_TRUE(ctx, missing.bindResource(fixture.context, fixture.sinkBuffer(sink)));
     auto missingFinish = missing.finish(fixture.context);
     EXPECT_FALSE(ctx, missingFinish);
@@ -321,22 +345,23 @@ void rejectsMissingDuplicateAndWrongBindings(TestContext& ctx)
         EXPECT_EQ(ctx, repeated.error().message, missingFinish.error().message);
     }
 
-    ProjectMpegTsMuxSessionAdapter duplicate;
+    ProjectMpegTsMuxSessionAdapter duplicate(muxGenerationState());
     EXPECT_TRUE(ctx, duplicate.bindResource(fixture.context, fixture.planBuffer()));
     EXPECT_FALSE(ctx, duplicate.bindResource(fixture.context, fixture.planBuffer()));
 
-    ProjectMpegTsMuxSessionAdapter wrong;
+    ProjectMpegTsMuxSessionAdapter wrong(muxGenerationState());
     EXPECT_FALSE(ctx, wrong.bindResource(
                           fixture.context, codecParameters(MediaStreamKind::Video)));
 
-    ProjectMpegTsMuxSessionAdapter duplicateConfig;
+    ProjectMpegTsMuxSessionAdapter duplicateConfig(muxGenerationState());
     EXPECT_TRUE(ctx, duplicateConfig.bindStreamConfig(
                          fixture.context, codecParameters(MediaStreamKind::Video)));
     EXPECT_FALSE(ctx, duplicateConfig.bindStreamConfig(
                           fixture.context, codecParameters(MediaStreamKind::Video)));
 }
 
-void pollUsesPlannerOwnedTransportDeadlines(TestContext& ctx)
+void pollBoundsTransportMaintenanceBySchedulerEmissionWatermark(
+    TestContext& ctx)
 {
     Fixture fixture;
     if (!fixture.activate(ctx)) return;
@@ -348,68 +373,18 @@ void pollUsesPlannerOwnedTransportDeadlines(TestContext& ctx)
                          accessUnit(MediaScheduledStream::Video, 7, ms(900))));
 
     const auto bytesAfterActivation = sink->bytes.size();
-    fixture.clock->nowValue = ms(999);
-    auto waiting = adapter.poll(fixture.context);
-    EXPECT_TRUE(ctx, waiting);
-    if (waiting) {
-        EXPECT_FALSE(ctx, waiting.value().progressed);
-        EXPECT_TRUE(ctx, waiting.value().nextWait.has_value());
-        if (waiting.value().nextWait) {
-            EXPECT_EQ(ctx, waiting.value().nextWait->syncGroup, fixture.group);
-            EXPECT_EQ(ctx, waiting.value().nextWait->masterDeadline, ms(1'100));
-        }
-    }
+    fixture.clock->nowValue = ms(1'100);
+    auto firstIdlePoll = adapter.poll(fixture.context);
+    EXPECT_TRUE(ctx, firstIdlePoll);
+    if (firstIdlePoll) EXPECT_FALSE(ctx, firstIdlePoll.value().progressed);
     EXPECT_EQ(ctx, sink->bytes.size(), bytesAfterActivation);
 
-    fixture.clock->nowValue = ms(1'100);
-    auto due = adapter.poll(fixture.context);
-    EXPECT_TRUE(ctx, due);
-    if (due) {
-        EXPECT_TRUE(ctx, due.value().progressed);
-        EXPECT_TRUE(ctx, due.value().nextWait.has_value());
-        if (due.value().nextWait) {
-            EXPECT_EQ(ctx, due.value().nextWait->masterDeadline, ms(1'120));
-        }
-    }
-    EXPECT_EQ(ctx, sink->bytes.size(), bytesAfterActivation + 3 * 188);
-
     fixture.clock->nowValue = ms(10'000);
-    auto firstCatchUp = adapter.poll(fixture.context);
-    EXPECT_TRUE(ctx, firstCatchUp);
-    if (firstCatchUp) {
-        EXPECT_TRUE(ctx, firstCatchUp.value().progressed);
-        EXPECT_EQ(ctx, firstCatchUp.value().nextWait->masterDeadline, ms(1'140));
-    }
-    const auto afterFirstCatchUp = sink->bytes.size();
-    auto secondCatchUp = adapter.poll(fixture.context);
-    EXPECT_TRUE(ctx, secondCatchUp);
-    if (secondCatchUp) {
-        EXPECT_TRUE(ctx, secondCatchUp.value().progressed);
-        EXPECT_EQ(ctx, secondCatchUp.value().nextWait->masterDeadline, ms(1'160));
-    }
-    EXPECT_EQ(ctx, sink->bytes.size(), afterFirstCatchUp + 188);
-}
+    auto secondIdlePoll = adapter.poll(fixture.context);
+    EXPECT_TRUE(ctx, secondIdlePoll);
+    if (secondIdlePoll) EXPECT_FALSE(ctx, secondIdlePoll.value().progressed);
+    EXPECT_EQ(ctx, sink->bytes.size(), bytesAfterActivation);
 
-void pollPreservesTransportLeadForNextAccessUnit(TestContext& ctx)
-{
-    Fixture fixture;
-    if (!fixture.activate(ctx)) return;
-    ProjectMpegTsMuxSessionAdapter adapter(muxGenerationState());
-    bindComplete(adapter, fixture, std::make_shared<SinkState>(), ctx, false);
-    EXPECT_TRUE(ctx, adapter.write(
-                         fixture.context,
-                         accessUnit(MediaScheduledStream::Video, 7, ms(900))));
-
-    fixture.clock->nowValue = ms(1'000);
-    auto waiting = adapter.poll(fixture.context);
-    EXPECT_TRUE(ctx, waiting);
-    if (waiting) {
-        EXPECT_FALSE(ctx, waiting.value().progressed);
-        EXPECT_TRUE(ctx, waiting.value().nextWait.has_value());
-        if (waiting.value().nextWait) {
-            EXPECT_EQ(ctx, waiting.value().nextWait->masterDeadline, ms(1'100));
-        }
-    }
     EXPECT_TRUE(ctx, adapter.write(
                          fixture.context,
                          accessUnit(MediaScheduledStream::Audio, 7, ms(920))));
@@ -469,25 +444,43 @@ void writeChecksTypeGenerationLeadAndActiveEpoch(TestContext& ctx)
 {
     Fixture fixture;
     if (!fixture.activate(ctx)) return;
+    ProjectMpegTsMuxSessionAdapter missingAuthority(
+        muxGenerationState());
+    auto missing = missingAuthority.write(
+        fixture.context,
+        accessUnit(MediaScheduledStream::Video, 7, ms(1'020)));
+    EXPECT_FALSE(ctx, missing);
+    if (!missing) {
+        EXPECT_TRUE(ctx, missing.error().message.find(
+                             "planned generation authority") !=
+                             std::string::npos);
+    }
+
     auto sink = std::make_shared<SinkState>();
-    ProjectMpegTsMuxSessionAdapter wrongType;
+    ProjectMpegTsMuxSessionAdapter wrongType(muxGenerationState());
     bindComplete(wrongType, fixture, sink, ctx, false);
     EXPECT_FALSE(ctx, wrongType.write(
                           fixture.context, codecParameters(MediaStreamKind::Video)));
 
-    ProjectMpegTsMuxSessionAdapter wrongGeneration;
+    ProjectMpegTsMuxSessionAdapter wrongGeneration(muxGenerationState());
     bindComplete(wrongGeneration, fixture, std::make_shared<SinkState>(), ctx, false);
-    EXPECT_FALSE(ctx, wrongGeneration.write(
-                          fixture.context,
-                          accessUnit(MediaScheduledStream::Video, 8, ms(1'020))));
+    auto futureGeneration = wrongGeneration.write(
+        fixture.context,
+        accessUnit(MediaScheduledStream::Video, 8, ms(1'020)));
+    EXPECT_FALSE(ctx, futureGeneration);
+    if (!futureGeneration) {
+        EXPECT_TRUE(ctx, futureGeneration.error().message.find(
+                             "future access-unit generation") !=
+                             std::string::npos);
+    }
 
-    ProjectMpegTsMuxSessionAdapter wrongLead;
+    ProjectMpegTsMuxSessionAdapter wrongLead(muxGenerationState());
     bindComplete(wrongLead, fixture, std::make_shared<SinkState>(), ctx, false);
     EXPECT_FALSE(ctx, wrongLead.write(
                           fixture.context,
                           accessUnit(MediaScheduledStream::Video, 7, ms(1'020), ms(90))));
 
-    ProjectMpegTsMuxSessionAdapter active;
+    ProjectMpegTsMuxSessionAdapter active(muxGenerationState());
     auto activeSink = std::make_shared<SinkState>();
     bindComplete(active, fixture, activeSink, ctx, false);
     EXPECT_TRUE(ctx, active.write(
@@ -527,12 +520,12 @@ void finishAndAbortCloseExactlyOnce(TestContext& ctx)
 
 void runProjectMpegTsMuxSessionAdapterTests(TestContext& ctx)
 {
+    authorityRejectsNullAndMismatchedSessionState(ctx);
     factoryRequiresBothStreams(ctx);
     acquiringPollAndBindingOrder(ctx);
     rejectsMissingDuplicateAndWrongBindings(ctx);
     pollWaitsForFirstScheduledAccessUnit(ctx);
-    pollPreservesTransportLeadForNextAccessUnit(ctx);
-    pollUsesPlannerOwnedTransportDeadlines(ctx);
+    pollBoundsTransportMaintenanceBySchedulerEmissionWatermark(ctx);
     insufficientEpochLeadFailsBeforeSessionActivation(ctx);
     writeChecksTypeGenerationLeadAndActiveEpoch(ctx);
     finishAndAbortCloseExactlyOnce(ctx);

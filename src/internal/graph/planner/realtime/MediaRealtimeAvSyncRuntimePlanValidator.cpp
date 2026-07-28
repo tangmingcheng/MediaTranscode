@@ -56,6 +56,7 @@ namespace media::ffmpeg::graph {
     const auto& assembly = runtime.assembly;
     if (assembly.generationPolicy !=
             MediaInitialGenerationPolicy::FirstLockedOnlyFailOnChange ||
+        assembly.initialGeneration != MediaFirstLockedSourceGeneration ||
         assembly.evidencePolicy !=
             MediaClockEvidencePolicy::RequireLockedFailOnDegradedOrReacquire ||
         assembly.video.sourceIdentity.empty() ||

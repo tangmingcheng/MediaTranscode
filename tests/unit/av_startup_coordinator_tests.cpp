@@ -133,7 +133,7 @@ MediaAvStartupAccessUnit audio(std::uint64_t sequence,
         .readiness = readiness,
         .generation = generation,
         .keyFrame = false,
-        .audio = MediaAvAudioSampleSpan{48'000, samples}};
+        .audio = MediaAvAudioSampleSpan{pts * 48, 48'000, samples}};
 }
 
 void expectNoRelease(TestContext& ctx,
@@ -217,6 +217,61 @@ void testStartupTrimUsesTheAbsoluteEpochSampleGrid(TestContext& ctx)
     EXPECT_EQ(ctx,
               released.value().release->audio.front().trimLeadingSamples,
               static_cast<std::uint32_t>(241));
+}
+
+void testStartupTrimUsesAuthoritativeCanonicalSampleSpan(TestContext& ctx)
+{
+    auto config = startupConfig();
+    config.preroll = ns(10);
+    config.maximumAudioTrim = ns(10);
+    config.maximumInitialSkew = ns(10);
+    config.maximumGap = ns(1);
+    auto coordinator = MediaAvStartupCoordinator::create(config);
+    EXPECT_TRUE(ctx, coordinator);
+    if (!coordinator) return;
+
+    auto videoUnit = video(1, 5, true);
+    videoUnit.presentationTime =
+        MediaRunningTime::fromNanoseconds(5'000'001);
+    expectNoRelease(ctx, coordinator.value().submit(
+                             std::move(videoUnit), ns(0)));
+    auto audioUnit = audio(2, 0, 20, 960);
+    audioUnit.audio->firstSample = 240;
+    auto released = coordinator.value().submit(
+        std::move(audioUnit), ns(1));
+    EXPECT_TRUE(ctx, released && released.value().release);
+    if (!released || !released.value().release) return;
+    EXPECT_EQ(ctx,
+              released.value().release->audio.front().trimLeadingSamples,
+              static_cast<std::uint32_t>(1));
+}
+
+void testAuthoritativeSampleSpanHandlesSignedBoundaries(TestContext& ctx)
+{
+    const MediaAvAudioSampleSpan negativeSpan{
+        -48'001, 48'000, 960};
+    auto negativeTrim = calculateMediaAvAudioTrimSamples(
+        ns(-1'000), negativeSpan);
+    EXPECT_TRUE(ctx, negativeTrim);
+    if (negativeTrim) {
+        EXPECT_EQ(ctx, negativeTrim.value(), static_cast<std::uint32_t>(1));
+    }
+
+    const MediaAvAudioSampleSpan minimumSpan{
+        std::numeric_limits<std::int64_t>::min(), 48'000, 960};
+    EXPECT_FALSE(ctx, calculateMediaAvAudioTrimSamples(
+                          ns(-1'000), minimumSpan));
+
+    auto overflowCoordinator =
+        MediaAvStartupCoordinator::create(startupConfig());
+    EXPECT_TRUE(ctx, overflowCoordinator);
+    if (!overflowCoordinator) return;
+    auto overflowSpan = audio(2, 0, 20, 960);
+    overflowSpan.audio->firstSample =
+        std::numeric_limits<std::int64_t>::max() - 959;
+    auto rejected = overflowCoordinator.value().submit(
+        std::move(overflowSpan), ns(1));
+    EXPECT_FALSE(ctx, rejected);
 }
 
 void testVideoFirstWaitsForCommonWindowAndReleasesOnce(TestContext& ctx)
@@ -1381,6 +1436,8 @@ void runAvStartupCoordinatorTests(TestContext& ctx)
     testStateMachineRejectsIllegalTransitions(ctx);
     testAudioFirstReleasesAtVideoKeyFrameAndTrimsSamples(ctx);
     testStartupTrimUsesTheAbsoluteEpochSampleGrid(ctx);
+    testStartupTrimUsesAuthoritativeCanonicalSampleSpan(ctx);
+    testAuthoritativeSampleSpanHandlesSignedBoundaries(ctx);
     testVideoFirstWaitsForCommonWindowAndReleasesOnce(ctx);
     testRequiresLockedSameGenerationAndPurgesOldPackets(ctx);
     testReacquireClosesGateUntilBothStreamsRelock(ctx);

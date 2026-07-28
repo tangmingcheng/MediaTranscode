@@ -13,6 +13,8 @@ extern "C" {
 #include <libavutil/samplefmt.h>
 }
 
+#include <string>
+
 namespace media::ffmpeg::graph {
 namespace {
 
@@ -141,9 +143,16 @@ void MediaAudioStartupTrimNode::abort(
     if (!epochSample ||
         (verifySourceStart &&
          canonical->interval().begin != epochSample.value())) {
+        const std::string detail = !epochSample
+            ? epochSample.error().message
+            : " expected=" + std::to_string(epochSample.value()) +
+                  " actual=" +
+                  std::to_string(canonical->interval().begin);
         return ::media::Result<MediaBufferRef>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "Audio startup trim first output sample must equal the epoch sample-grid boundary"));
+                "Audio startup trim first output sample must equal the epoch "
+                "sample-grid boundary:" +
+                detail));
     }
     return ::media::Result<MediaBufferRef>::success(frame);
 }

@@ -79,6 +79,46 @@ struct MediaAvEpochTransitionServiceTestAccess final {
     }
 };
 
+struct MediaAvOutputSchedulerNodeTestAccess final {
+    static std::shared_ptr<const void> generationSessionSnapshot(
+        const MediaAvOutputSchedulerNode& node)
+    {
+        return node.m_generationSession->current();
+    }
+
+    static std::optional<std::uint64_t> pendingGeneration(
+        const MediaAvOutputSchedulerNode& node)
+    {
+        const auto data = node.m_generationSession->current();
+        return data->pendingCommit
+            ? data->pendingCommit->generation
+            : std::nullopt;
+    }
+
+    static std::optional<std::uint64_t> headGeneration(
+        const MediaAvOutputSchedulerNode& node,
+        MediaAvSchedulerInput input)
+    {
+        const auto data = node.m_generationSession->current();
+        const auto& head = input == MediaAvSchedulerInput::Video
+            ? data->videoHead : data->audioHead;
+        return head ? std::optional<std::uint64_t>(head->generation())
+                    : std::nullopt;
+    }
+
+    static ::media::Result<MediaNodeProcessResult> emitAfterPermitClose(
+        MediaAvOutputSchedulerNode& node,
+        MediaGraphExecutionContext& context,
+        const MediaBufferRef& output)
+    {
+        return node.emitWithCommit(
+            context, output,
+            MediaAvSchedulerPendingCommit{
+                MediaAvSchedulerCommitKind::Audio,
+                {}, {}, {}, false});
+    }
+};
+
 } // namespace media::ffmpeg::graph
 
 namespace {
@@ -968,16 +1008,40 @@ void testPurgedGenerationCannotDrainRetainedSchedulerCommit(TestContext& ctx)
 
     expectProcessState(
         ctx, *scheduler, execution, MediaNodeProcessState::Waiting);
+    EXPECT_EQ(
+        ctx,
+        MediaAvOutputSchedulerNodeTestAccess::pendingGeneration(*scheduler),
+        std::optional<std::uint64_t>{1});
+    EXPECT_TRUE(
+        ctx,
+        MediaAvOutputSchedulerNodeTestAccess::headGeneration(
+            *scheduler, MediaAvSchedulerInput::Video) ||
+        MediaAvOutputSchedulerNodeTestAccess::headGeneration(
+            *scheduler, MediaAvSchedulerInput::Audio));
     EXPECT_TRUE(
         ctx,
         scheduler->generationPurgeTarget()->purge(
             MediaAvGenerationPurge{1, 2, 1}));
+    EXPECT_FALSE(
+        ctx,
+        MediaAvOutputSchedulerNodeTestAccess::pendingGeneration(*scheduler));
+    EXPECT_FALSE(
+        ctx,
+        MediaAvOutputSchedulerNodeTestAccess::headGeneration(
+            *scheduler, MediaAvSchedulerInput::Video));
+    EXPECT_FALSE(
+        ctx,
+        MediaAvOutputSchedulerNodeTestAccess::headGeneration(
+            *scheduler, MediaAvSchedulerInput::Audio));
     MediaBufferRef value;
     std::size_t drained = 0;
     while (serialized->tryPop(value)) ++drained;
     EXPECT_EQ(ctx, drained, serializedCapacity);
     auto dropped = scheduler->process(execution);
     EXPECT_FALSE(ctx, dropped);
+    if (!dropped) {
+        EXPECT_TRUE(ctx, dropped.error().code != ::media::ErrorCode::InternalError);
+    }
     EXPECT_EQ(ctx, serialized->size(), static_cast<std::size_t>(0));
     EXPECT_TRUE(ctx, scheduler->stop(execution));
 }
@@ -1103,7 +1167,15 @@ void testSchedulerPushAndCommitLinearizeGenerationRollover(TestContext& ctx)
     auto purge = closing.get();
     EXPECT_TRUE(ctx, purge);
     if (!purge) return;
+    auto inFlightGenerationSession =
+        MediaAvOutputSchedulerNodeTestAccess::generationSessionSnapshot(
+            scheduler);
     EXPECT_TRUE(ctx, scheduler.generationPurgeTarget()->purge(purge.value()));
+    auto purgedGenerationSession =
+        MediaAvOutputSchedulerNodeTestAccess::generationSessionSnapshot(
+            scheduler);
+    EXPECT_TRUE(ctx, inFlightGenerationSession != purgedGenerationSession);
+    EXPECT_TRUE(ctx, inFlightGenerationSession.use_count() > 0);
 
     EXPECT_TRUE(ctx, transition.value()->acknowledge(
                          MediaAvGenerationAcknowledgement{
@@ -1127,6 +1199,19 @@ void testSchedulerPushAndCommitLinearizeGenerationRollover(TestContext& ctx)
         dynamic_cast<const MediaScheduledAccessUnit*>(second.get());
     EXPECT_TRUE(ctx, scheduled != nullptr);
     if (scheduled) EXPECT_EQ(ctx, scheduled->generation(), std::uint64_t{2});
+
+    auto closeFirst = transition.value()->beginReacquisition(2, 3);
+    EXPECT_TRUE(ctx, closeFirst);
+    if (!closeFirst) return;
+    auto cancelled =
+        MediaAvOutputSchedulerNodeTestAccess::emitAfterPermitClose(
+            scheduler, execution, second);
+    EXPECT_TRUE(ctx, cancelled);
+    if (cancelled) {
+        EXPECT_EQ(ctx, cancelled.value().state,
+                  MediaNodeProcessState::Progress);
+    }
+    EXPECT_EQ(ctx, output->size(), std::size_t{0});
     EXPECT_TRUE(ctx, scheduler.stop(execution));
 }
 

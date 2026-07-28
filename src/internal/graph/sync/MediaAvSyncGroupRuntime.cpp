@@ -176,6 +176,20 @@ MediaAvSyncGroupRuntime::reacquisitionSnapshot() const noexcept
               std::nullopt};
 }
 
+::media::Result<MediaAvGenerationArbitrationReservation>
+MediaAvSyncGroupRuntime::reserveGenerationArbitration() const
+{
+    auto* coordinator = reacquisitionCoordinator();
+    return coordinator
+        ? ::media::Result<
+              MediaAvGenerationArbitrationReservation>::success(
+              coordinator->reserveGenerationArbitration())
+        : ::media::Result<
+              MediaAvGenerationArbitrationReservation>::failure(
+              ::media::ErrorInfo::notInitialized(
+                  "A/V sync group requires its planned reacquisition coordinator"));
+}
+
 ::media::Status
 MediaAvSyncGroupRuntime::markReacquisitionReadyForActivation(
     std::uint64_t generation,

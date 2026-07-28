@@ -274,12 +274,30 @@ MediaScheduledRtpSenderNode::processScheduledInput(
     const auto activeGeneration =
         m_sessionState->generation.load(std::memory_order_acquire);
     if (activeGeneration == 0) return processWaiting();
+    auto reportDisposition =
+        m_generationState->classifyGeneration(activeGeneration);
+    if (!reportDisposition) {
+        return failTerminal(reportDisposition.error());
+    }
+    if (reportDisposition.value() !=
+        MediaProtocolOutputGenerationState::GenerationDisposition::Current) {
+        return reportDisposition.value() ==
+                MediaProtocolOutputGenerationState::GenerationDisposition::Old
+            ? processWaiting()
+            : failTerminal(::media::ErrorInfo::invalidArgument(
+                  "Scheduled RTP sender report rejects a future generation"));
+    }
     std::optional<MediaRunningTime> nextReportDeadline;
     std::optional<::media::ErrorInfo> reportFailure;
     {
         auto reportReservation = m_generationState->reserveCommit(
             *m_dependencies.syncGroup, activeGeneration);
-        if (!reportReservation) return processWaiting();
+        if (!reportReservation) {
+            return reportReservation.error().code ==
+                    ::media::ErrorCode::Cancelled
+                ? processWaiting()
+                : failTerminal(reportReservation.error());
+        }
         if (!m_sessionState->epoch ||
             m_sessionState->epoch->generation != activeGeneration ||
             !m_sessionState->sender) {
@@ -357,6 +375,18 @@ MediaScheduledRtpSenderNode::processScheduledInput(
         return failTerminal(::media::ErrorInfo::invalidArgument(
             "Scheduled RTP sender rejects a mismatched scheduled access unit"));
     }
+    auto disposition =
+        m_generationState->classifyGeneration(scheduled->generation());
+    if (!disposition) return failTerminal(disposition.error());
+    if (disposition.value() ==
+        MediaProtocolOutputGenerationState::GenerationDisposition::Old) {
+        return processProgress();
+    }
+    if (disposition.value() ==
+        MediaProtocolOutputGenerationState::GenerationDisposition::Future) {
+        return failTerminal(::media::ErrorInfo::invalidArgument(
+            "Scheduled RTP sender rejects a future scheduled generation"));
+    }
     auto actualLead = scheduled->dispatchOnMaster().checkedSubtract(
         scheduled->emitOnMaster());
     if (!actualLead || actualLead.value() != m_outputPlan.senderLead) {
@@ -374,7 +404,12 @@ MediaScheduledRtpSenderNode::processScheduledInput(
     {
         auto sendReservation = m_generationState->reserveCommit(
             *m_dependencies.syncGroup, scheduled->generation());
-        if (!sendReservation) return processWaiting();
+        if (!sendReservation) {
+            return sendReservation.error().code ==
+                    ::media::ErrorCode::Cancelled
+                ? processProgress()
+                : failTerminal(sendReservation.error());
+        }
         if (!m_sessionState->epoch || !m_sessionState->sender ||
             scheduled->generation() != m_sessionState->epoch->generation) {
             if (scheduled->generation() < activeGeneration) {
@@ -407,12 +442,28 @@ MediaScheduledRtpSenderNode::processScheduledInput(
             ? processProgress()
             : processWaiting();
     }
+    auto disposition =
+        m_generationState->classifyGeneration(activeGeneration);
+    if (!disposition) return failTerminal(disposition.error());
+    if (disposition.value() !=
+        MediaProtocolOutputGenerationState::GenerationDisposition::Current) {
+        return disposition.value() ==
+                MediaProtocolOutputGenerationState::GenerationDisposition::Old
+            ? processWaiting()
+            : failTerminal(::media::ErrorInfo::invalidArgument(
+                  "Scheduled RTP session rejects a future active generation"));
+    }
     bool emitOpenedDescription = false;
     std::optional<::media::ErrorInfo> sessionFailure;
     {
         auto sessionReservation = m_generationState->reserveCommit(
             *m_dependencies.syncGroup, activeGeneration);
-        if (!sessionReservation) return processWaiting();
+        if (!sessionReservation) {
+            return sessionReservation.error().code ==
+                    ::media::ErrorCode::Cancelled
+                ? processWaiting()
+                : failTerminal(sessionReservation.error());
+        }
         if (!m_sessionState->epoch ||
             m_sessionState->epoch->generation != activeGeneration) {
             sessionFailure = ::media::ErrorInfo::internalError(
@@ -457,6 +508,27 @@ MediaScheduledRtpSenderNode::reserveOutputCommit(
                 MediaProtocolOutputGenerationCommitReservation>>::failure(
                     ::media::ErrorInfo::invalidArgument(
                         "Scheduled RTP output commit requires a typed sender description"));
+    }
+    auto disposition =
+        m_generationState->classifyGeneration(description->generation());
+    if (!disposition) {
+        return ::media::Result<
+            std::optional<
+                MediaProtocolOutputGenerationCommitReservation>>::failure(
+                    disposition.error());
+    }
+    if (disposition.value() !=
+        MediaProtocolOutputGenerationState::GenerationDisposition::Current) {
+        return ::media::Result<
+            std::optional<
+                MediaProtocolOutputGenerationCommitReservation>>::failure(
+                    disposition.value() ==
+                            MediaProtocolOutputGenerationState::
+                                GenerationDisposition::Old
+                        ? ::media::ErrorInfo::cancelled(
+                              "Scheduled RTP drops an old sender description")
+                        : ::media::ErrorInfo::invalidArgument(
+                              "Scheduled RTP rejects a future sender description"));
     }
     auto reservation = m_generationState->reserveCommit(
         *m_dependencies.syncGroup, description->generation());

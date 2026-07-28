@@ -108,6 +108,39 @@ MediaProtocolOutputGenerationState::reserveCommit(
                 std::move(sessionLock)));
 }
 
+::media::Result<MediaProtocolOutputGenerationState::GenerationDisposition>
+MediaProtocolOutputGenerationState::classifyGeneration(
+    std::uint64_t generation) const
+{
+    std::lock_guard lock(m_mutex);
+    if (m_plannedIdentity.empty() || generation == 0) {
+        return ::media::Result<GenerationDisposition>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Protocol output generation classification requires exact planned authority"));
+    }
+    if (!m_permittedGeneration && !m_pendingGeneration) {
+        return ::media::Result<GenerationDisposition>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "Protocol output generation classification requires active planned generation authority"));
+    }
+    if (!m_permittedGeneration) {
+        return ::media::Result<GenerationDisposition>::success(
+            generation < *m_pendingGeneration
+                ? GenerationDisposition::Old
+                : GenerationDisposition::Future);
+    }
+    if (generation < *m_permittedGeneration) {
+        return ::media::Result<GenerationDisposition>::success(
+            GenerationDisposition::Old);
+    }
+    if (generation > *m_permittedGeneration) {
+        return ::media::Result<GenerationDisposition>::success(
+            GenerationDisposition::Future);
+    }
+    return ::media::Result<GenerationDisposition>::success(
+        GenerationDisposition::Current);
+}
+
 ::media::Result<MediaProtocolOutputAuthorityActivation>
 MediaProtocolOutputGenerationState::permitAuthorityActivation(
     const MediaAvSyncGroupRuntime& group)
@@ -178,6 +211,8 @@ MediaProtocolOutputGenerationState::reserveSessionMutation() const
             ::media::ErrorInfo::invalidArgument(
                 "Protocol output purge requires exact generations and a fresh transition"));
     }
+    auto prepared = m_sessionState->prepareForGenerationPurge();
+    if (!prepared) return prepared;
     m_permittedGeneration.reset();
     m_pendingGeneration = purge.nextGeneration;
     m_pendingTransitionSequence = purge.transitionSequence;
@@ -186,15 +221,18 @@ MediaProtocolOutputGenerationState::reserveSessionMutation() const
     return ::media::Status::success();
 }
 
-void MediaProtocolOutputGenerationState::resetLifecycle() noexcept
+::media::Status MediaProtocolOutputGenerationState::resetLifecycle()
 {
     std::lock_guard lock(m_mutex);
     std::lock_guard sessionLock(m_sessionState->m_mutex);
+    auto prepared = m_sessionState->prepareForGenerationPurge();
+    if (!prepared) return prepared;
     m_permittedGeneration.reset();
     m_pendingGeneration.reset();
     m_pendingTransitionSequence.reset();
     m_lastTransitionSequence.reset();
     m_sessionState->resetForGenerationPurge();
+    return ::media::Status::success();
 }
 
 } // namespace media::ffmpeg::graph

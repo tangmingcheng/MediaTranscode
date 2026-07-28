@@ -25,6 +25,7 @@ enum class MediaAvStartupStream {
 };
 
 struct MediaAvAudioSampleSpan final {
+    std::int64_t firstSample;
     std::uint32_t sampleRate;
     std::uint32_t sampleCount;
 };
@@ -32,6 +33,10 @@ struct MediaAvAudioSampleSpan final {
 ::media::Status validateMediaAvAudioSampleSpanDuration(
     const MediaAvAudioSampleSpan& span,
     MediaRunningTime duration);
+
+::media::Result<std::uint32_t> calculateMediaAvAudioTrimSamples(
+    MediaRunningTime epochSourceStart,
+    const MediaAvAudioSampleSpan& span);
 
 struct MediaAvStartupUnitId final {
     MediaAvStartupStream stream;

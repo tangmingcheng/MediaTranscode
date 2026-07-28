@@ -70,7 +70,12 @@ MediaProjectMpegTsPlanSourceNode::onProcess(
     MediaGraphExecutionContext& context)
 {
     MediaBufferRef activationInput;
-    if (m_published) {
+    bool published = false;
+    {
+        auto mutation = m_generationState->reserveSessionMutation();
+        published = m_published;
+    }
+    if (published) {
         auto duplicate = tryPopInputOptional(context, "epoch");
         if (!duplicate) {
             return ::media::Result<MediaNodeProcessResult>::failure(
@@ -81,16 +86,31 @@ MediaProjectMpegTsPlanSourceNode::onProcess(
         const auto* activated =
             dynamic_cast<const MediaPlaybackEpochActivatedBuffer*>(
                 activationInput.get());
-        if (!activated || activated->groupKey() != m_group ||
-            (m_publishedGeneration &&
-             *m_publishedGeneration == activated->epoch().generation)) {
+        if (!activated || activated->groupKey() != m_group) {
             return ::media::Result<MediaNodeProcessResult>::failure(
                 ::media::ErrorInfo::invalidArgument(
                     "Project MPEG-TS plan source rejects duplicate activation"));
         }
-        m_published = false;
+        bool duplicateGeneration = false;
+        {
+            auto mutation = m_generationState->reserveSessionMutation();
+            duplicateGeneration =
+                m_publishedGeneration &&
+                *m_publishedGeneration == activated->epoch().generation;
+            if (!duplicateGeneration) m_published = false;
+        }
+        if (duplicateGeneration) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Project MPEG-TS plan source rejects duplicate activation"));
+        }
     }
-    if (!m_pendingPlan) {
+    bool hasPendingPlan = false;
+    {
+        auto mutation = m_generationState->reserveSessionMutation();
+        hasPendingPlan = static_cast<bool>(m_pendingPlan);
+    }
+    if (!hasPendingPlan) {
         if (!activationInput) {
             auto input = tryPopInputOptional(context, "epoch");
             if (!input) {
@@ -108,14 +128,6 @@ MediaProjectMpegTsPlanSourceNode::onProcess(
                 ::media::ErrorInfo::invalidArgument(
                     "Project MPEG-TS plan source rejects mismatched activation"));
         }
-        auto permitted = m_generationState->permitActivatedGeneration(
-            *m_syncGroup,
-            activated->epoch().generation,
-            activated->completedTransitionSequence());
-        if (!permitted) {
-            return ::media::Result<MediaNodeProcessResult>::failure(
-                permitted.error());
-        }
         auto created = MediaTsMuxRuntimePlanBuffer::create(
             m_plan, activated->epoch(), m_group,
             activated->completedTransitionSequence());
@@ -123,13 +135,31 @@ MediaProjectMpegTsPlanSourceNode::onProcess(
             return ::media::Result<MediaNodeProcessResult>::failure(
                 created.error());
         }
-        m_pendingPlan = std::move(created).value();
-        m_publishedGeneration = activated->epoch().generation;
+        {
+            auto permitted =
+                m_generationState->permitActivatedGeneration(
+                    *m_syncGroup,
+                    activated->epoch().generation,
+                    activated->completedTransitionSequence());
+            if (!permitted) {
+                return ::media::Result<MediaNodeProcessResult>::failure(
+                    permitted.error());
+            }
+            m_pendingPlan = std::move(created).value();
+            m_publishedGeneration = activated->epoch().generation;
+        }
     }
-    if (!m_publishedGeneration) {
+    MediaBufferRef pendingPlan;
+    std::optional<std::uint64_t> publishedGeneration;
+    {
+        auto mutation = m_generationState->reserveSessionMutation();
+        pendingPlan = m_pendingPlan;
+        publishedGeneration = m_publishedGeneration;
+    }
+    if (!pendingPlan || !publishedGeneration) {
         return processWaiting();
     }
-    auto committed = emitOutput(context, "plan", m_pendingPlan);
+    auto committed = emitOutput(context, "plan", pendingPlan);
     return committed ? processProgress()
                      : processProgress(std::move(committed));
 }

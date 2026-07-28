@@ -304,13 +304,30 @@ void testAacAndOpus(TestContext& ctx)
             EXPECT_EQ(ctx, second.packet->data[0], static_cast<uint8_t>(0x31));
         }
 
+        auto fragmentedFirst = aac.value()->push(packet(
+            3, 6144, false, {0, 16, 0, 0x30, 1, 2, 3, 4}, 97));
+        EXPECT_TRUE(ctx, fragmentedFirst);
+        if (fragmentedFirst) {
+            EXPECT_TRUE(ctx, fragmentedFirst.value().accessUnits.empty());
+        }
+        auto fragmentedLast = aac.value()->push(packet(
+            4, 6144, true, {0, 16, 0, 0x30, 5, 6}, 97));
+        EXPECT_TRUE(ctx, fragmentedLast);
+        if (fragmentedLast) {
+            EXPECT_EQ(ctx, fragmentedLast.value().accessUnits.size(),
+                      static_cast<std::size_t>(1));
+            EXPECT_EQ(ctx, fragmentedLast.value().accessUnits[0].packet->size, 6);
+            EXPECT_EQ(ctx, fragmentedLast.value().accessUnits[0].packet->data[5],
+                      static_cast<std::uint8_t>(6));
+        }
+
         std::vector<uint8_t> nineAus{0, 144};
         for (int index = 0; index < 9; ++index) {
             nineAus.push_back(0);
             nineAus.push_back(8);
         }
         for (int index = 0; index < 9; ++index) nineAus.push_back(static_cast<uint8_t>(0x40 + index));
-        auto expandedIndexes = aac.value()->push(packet(3, 8192, true, std::move(nineAus), 97));
+        auto expandedIndexes = aac.value()->push(packet(5, 8192, true, std::move(nineAus), 97));
         EXPECT_TRUE(ctx, expandedIndexes);
         if (expandedIndexes) {
             EXPECT_EQ(ctx, expandedIndexes.value().accessUnits.size(), static_cast<std::size_t>(9));
@@ -319,10 +336,10 @@ void testAacAndOpus(TestContext& ctx)
             EXPECT_EQ(ctx, expandedIndexes.value().accessUnits[8].rtpTimestamp, static_cast<uint32_t>(16384));
             EXPECT_EQ(ctx, expandedIndexes.value().accessUnits[8].packet->data[0], static_cast<uint8_t>(0x48));
         }
-        EXPECT_FALSE(ctx, aac.value()->push(packet(2, 2048, true, {0, 15, 0, 0}, 97)));
-        EXPECT_FALSE(ctx, aac.value()->push(packet(4, 2048, true, {0, 16, 0, 0x60, 1}, 97)));
-        EXPECT_FALSE(ctx, aac.value()->push(packet(5, 2048, true, {0, 32, 0, 8, 1}, 97)));
-        EXPECT_FALSE(ctx, aac.value()->push(packet(6, 2048, true, {0, 32, 0, 0x10, 0, 0x18, 1, 2}, 97)));
+        EXPECT_FALSE(ctx, aac.value()->push(packet(6, 2048, true, {0, 15, 0, 0}, 97)));
+        EXPECT_FALSE(ctx, aac.value()->push(packet(7, 2048, true, {0, 16, 0, 0x60, 1}, 97)));
+        EXPECT_FALSE(ctx, aac.value()->push(packet(8, 2048, true, {0, 32, 0, 8, 1}, 97)));
+        EXPECT_FALSE(ctx, aac.value()->push(packet(9, 2048, true, {0, 32, 0, 0x10, 0, 0x18, 1, 2}, 97)));
     }
     EXPECT_FALSE(ctx, MediaRtpDepacketizerFactory::create(config("aac", "mode=AAC-lbr;config=1210;sizeLength=13;indexLength=3;indexDeltaLength=3")));
     EXPECT_FALSE(ctx, MediaRtpDepacketizerFactory::create(config(

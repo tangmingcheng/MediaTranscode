@@ -90,6 +90,7 @@ void rejectUnknownRealtimeArgs(int argc, char** argv)
         "--read-timeout-ms",
         "--analyze-duration-us",
         "--probe-size",
+        "--mpegts-max-pcr-gap-ms",
         "--video-rtp-url",
         "--video-rtp-codec",
         "--video-rtp-payload-type",
@@ -131,6 +132,11 @@ void parseRealtimeInputOptions(int argc, char** argv, MediaRealtimeInputConfig& 
     input.probeSizeBytes = requiredIntArg(argc, argv, "--probe-size");
     input.lowLatency = !hasArg(argc, argv, "--no-low-latency");
 
+    if (*input.type != RealtimeInputType::MpegTsUdp &&
+        hasArg(argc, argv, "--mpegts-max-pcr-gap-ms")) {
+        throw std::invalid_argument("--mpegts-max-pcr-gap-ms is valid only for mpegts-udp input");
+    }
+
     if (*input.type == RealtimeInputType::RtpPort) {
         input.videoRtp.url = requiredArg(argc, argv, "--video-rtp-url");
         input.videoRtp.codecName = requiredArg(argc, argv, "--video-rtp-codec");
@@ -143,7 +149,14 @@ void parseRealtimeInputOptions(int argc, char** argv, MediaRealtimeInputConfig& 
     input.url = requiredArg(argc, argv, "--input");
     if (*input.type == RealtimeInputType::Url) {
         input.rtspTransport = requiredArg(argc, argv, "--rtsp-transport");
+        return;
     }
+    const int maximumPcrGapMs = requiredIntArg(argc, argv, "--mpegts-max-pcr-gap-ms");
+    if (maximumPcrGapMs <= 0) {
+        throw std::invalid_argument("MPEG-TS maximum PCR gap must be positive");
+    }
+    input.mpegTsClock.maximumPcrGap = MediaRunningTime::fromNanoseconds(
+        static_cast<std::int64_t>(maximumPcrGapMs) * 1'000'000);
 }
 
 void parseRealtimeOutputOptions(int argc, char** argv, MediaRealtimeOutputConfig& output)
@@ -321,7 +334,7 @@ int runRealtimeVideoCli(int argc, char** argv)
 
     const bool helpRequested = hasArg(argc, argv, "--help") || hasArg(argc, argv, "-h");
     if (argc < 5 || helpRequested) {
-        std::cout << "Usage: media_transcode_realtime_video_cli --media-id ID --input-type rtsp|rtp|mpegts-udp --input-layout session|separate|mpegts --output-layout separate|mpegts --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --startup-max-video-unit-bytes 4194304 --startup-max-audio-unit-bytes 1048576 --startup-max-gap-ms 40 --max-duration 15 [options]\n";
+        std::cout << "Usage: media_transcode_realtime_video_cli --media-id ID --input-type rtsp|rtp|mpegts-udp --input-layout session|separate|mpegts --output-layout separate|mpegts --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --startup-max-video-unit-bytes 4194304 --startup-max-audio-unit-bytes 1048576 --startup-max-gap-ms 40 --mpegts-max-pcr-gap-ms 120 --max-duration 15 [options]\n";
         return helpRequested ? 0 : 2;
     }
 

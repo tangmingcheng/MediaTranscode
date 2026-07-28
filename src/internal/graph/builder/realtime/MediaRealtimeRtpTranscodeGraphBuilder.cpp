@@ -361,6 +361,11 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
         : MediaNodeKind::RealtimeInput;
     const bool includeAudio = branchEnabled(plan.audioPlan);
     const bool synchronized = plan.avSyncRuntime.has_value();
+    if (includeAudio && !synchronized) {
+        return ::media::Result<MediaGraph>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Realtime A/V graph construction requires the planned synchronization runtime"));
+    }
     const std::optional<PacketSelectOutputPlan> videoPacketOutput{
         packetOutputPlan(plan.videoPlan.sourceStreamIndex,
                          plan.videoPlan.branchMode,
@@ -561,15 +566,14 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
 
     std::optional<MediaEncodedBranchEndpoints> audio;
     if (includeAudio) {
+        const auto& avSyncRuntime = *plan.avSyncRuntime;
         MediaAudioBranchSegmentOptions audioOptions;
         audioOptions.prefix = "realtime.audio";
         audioOptions.plan = std::move(plan.audioPlan);
         audioOptions.queues = plan.queues;
         audioOptions.edgePolicies = plan.edgePolicies;
-        if (plan.avSyncRuntime) {
-            audioOptions.edgePolicies.audioPacket =
-                plan.edgePolicies.synchronizedPacket;
-        }
+        audioOptions.edgePolicies.audioPacket =
+            plan.edgePolicies.synchronizedPacket;
         audioOptions.formatSourceNode = isolateRawRtpAudio
             ? audioInputChain.input
             : videoInputChain.value().input;
@@ -577,23 +581,15 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
         audioOptions.packetSourceNode = audioPacketSourceNode;
         audioOptions.packetSourcePort = audioPacketSourcePort;
         audioOptions.normalizeInputPackets = plan.audioPacketNormalizationRequired;
-        if (plan.avSyncRuntime) {
-            audioOptions.correctionMode =
-                MediaAudioCorrectionExecutionMode::ExternalCorrectionRequired;
-            audioOptions.lineageMode =
-                MediaAudioLineageExecutionMode::SynchronizedReleasedAudio;
-            audioOptions.lineageCapacity = plan.avSyncRuntime->queues.frame;
-            audioOptions.correctionGeneration = MediaFirstLockedSourceGeneration;
-            audioOptions.correctionLookaheadWindows =
-                plan.avSyncRuntime->synchronization.audioServo
-                    .correctionLookaheadWindows;
-            audioOptions.syncGroup = plan.avSyncRuntime->groupKey;
-        } else {
-            audioOptions.correctionMode =
-                MediaAudioCorrectionExecutionMode::Disabled;
-            audioOptions.lineageMode =
-                MediaAudioLineageExecutionMode::LegacyPlainPacket;
-        }
+        audioOptions.correctionMode =
+            MediaAudioCorrectionExecutionMode::ExternalCorrectionRequired;
+        audioOptions.lineageMode =
+            MediaAudioLineageExecutionMode::SynchronizedReleasedAudio;
+        audioOptions.lineageCapacity = avSyncRuntime.queues.frame;
+        audioOptions.correctionGeneration = MediaFirstLockedSourceGeneration;
+        audioOptions.correctionLookaheadWindows =
+            avSyncRuntime.synchronization.audioServo.correctionLookaheadWindows;
+        audioOptions.syncGroup = avSyncRuntime.groupKey;
         auto builtAudio = MediaAudioBranchSegmentBuilder::build(
             graph, audioOptions);
         if (!builtAudio) {

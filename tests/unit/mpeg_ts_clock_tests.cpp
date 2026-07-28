@@ -424,22 +424,23 @@ void testProgramClockTracker(TestContext& ctx)
     EXPECT_EQ(ctx, exhausted.value().generation(), std::numeric_limits<std::uint64_t>::max());
 }
 
-void testProgramClockTrackerAcceptsIrregularCadenceWithinMaximumGap(TestContext& ctx)
+void testProgramClockTrackerEnforcesExplicitMaximumGap(TestContext& ctx)
 {
     auto policy = clockPolicy();
-    policy.maximumGap27Mhz = 2'700'000;
+    policy.maximumGap27Mhz = 3'240'000;
     auto created = MediaTsProgramClockTracker::create(policy, 1);
     EXPECT_TRUE(ctx, created);
     if (!created) return;
     auto tracker = std::move(created.value());
 
     EXPECT_TRUE(ctx, tracker.observe(pcr(10'000'000, 0)));
-    EXPECT_TRUE(ctx, tracker.observe(pcr(12'700'000, 188))); // 100 ms
-    const auto irregular = tracker.observe(pcr(15'117'400, 376)); // 89.533333 ms
-    if (!irregular) std::cerr << irregular.error().message << '\n';
-    EXPECT_TRUE(ctx, irregular);
-    EXPECT_TRUE(ctx, tracker.observe(pcr(16'017'400, 564))); // 33.333333 ms
-    EXPECT_TRUE(ctx, tracker.observe(pcr(17'817'400, 752))); // 66.666667 ms
+    EXPECT_TRUE(ctx, tracker.observe(pcr(12'933'100, 188))); // 108.633333 ms
+
+    auto overLimit = MediaTsProgramClockTracker::create(policy, 1);
+    EXPECT_TRUE(ctx, overLimit);
+    if (!overLimit) return;
+    EXPECT_TRUE(ctx, overLimit.value().observe(pcr(10'000'000, 0)));
+    EXPECT_FALSE(ctx, overLimit.value().observe(pcr(13'240'001, 188)));
 }
 
 void testSourceClockMapper(TestContext& ctx)
@@ -551,6 +552,6 @@ void runMpegTsClockTests(TestContext& ctx)
     testEarlyEvidenceAndCompletedPsiReplayRemainDistinct(ctx);
     testEvidenceOrderedRangeAndClockProjection(ctx);
     testProgramClockTracker(ctx);
-    testProgramClockTrackerAcceptsIrregularCadenceWithinMaximumGap(ctx);
+    testProgramClockTrackerEnforcesExplicitMaximumGap(ctx);
     testSourceClockMapper(ctx);
 }

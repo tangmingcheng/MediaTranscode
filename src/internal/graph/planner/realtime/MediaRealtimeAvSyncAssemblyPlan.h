@@ -91,6 +91,7 @@ struct MediaCanonicalAudioAssemblyPlan final {
 struct MediaRealtimeAvSyncAssemblyPlan final {
     MediaAvSyncInputClockPlan inputClock;
     MediaInitialGenerationPolicy generationPolicy;
+    std::uint64_t initialGeneration;
     MediaClockEvidencePolicy evidencePolicy;
     MediaCanonicalVideoAssemblyPlan video;
     MediaCanonicalAudioAssemblyPlan audio;

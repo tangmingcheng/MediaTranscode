@@ -42,6 +42,8 @@ protected:
     reserveOutputCommit(const MediaBufferRef& buffer) const;
     virtual ::media::Status commitReservedOutput(
         const MediaBufferRef& buffer);
+    virtual ::media::Status cancelReservedOutput(
+        const MediaBufferRef& buffer);
     struct PoppedChannelBuffer {
         MediaChannel* channel = nullptr;
         MediaBufferRef buffer;

@@ -21,6 +21,10 @@ public:
 
 private:
     friend class MediaProtocolOutputGenerationState;
+    virtual ::media::Status prepareForGenerationPurge()
+    {
+        return ::media::Status::success();
+    }
     virtual void resetForGenerationPurge() noexcept = 0;
     mutable std::mutex m_mutex;
 };
@@ -86,6 +90,12 @@ struct MediaProtocolOutputAuthorityActivation final {
 class MediaProtocolOutputGenerationState final
     : public MediaAvGenerationPurgeTarget {
 public:
+    enum class GenerationDisposition {
+        Old,
+        Current,
+        Future
+    };
+
     MediaProtocolOutputGenerationState(
         std::string plannedIdentity,
         std::shared_ptr<MediaProtocolOutputGenerationSessionState>
@@ -104,10 +114,12 @@ public:
     ::media::Result<MediaProtocolOutputGenerationCommitReservation>
     reserveCommit(const MediaAvSyncGroupRuntime& group,
                   std::uint64_t generation) const;
+    ::media::Result<GenerationDisposition>
+    classifyGeneration(std::uint64_t generation) const;
     MediaProtocolOutputGenerationSessionMutationReservation
     reserveSessionMutation() const;
     ::media::Status purge(const MediaAvGenerationPurge& purge) override;
-    void resetLifecycle() noexcept;
+    ::media::Status resetLifecycle();
 
 private:
     mutable std::mutex m_mutex;

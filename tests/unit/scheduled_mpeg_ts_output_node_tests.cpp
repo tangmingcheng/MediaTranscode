@@ -998,11 +998,11 @@ void muxGenerationRolloverPreservesSinkAndResetsTransportState(
     auto generationSession =
         std::make_shared<ProjectMpegTsGenerationSessionState>();
     ProjectMpegTsMuxSessionAdapter adapter(
-        ProjectMpegTsGenerationAuthority{
+        ProjectMpegTsGenerationAuthority::create(
             std::make_shared<MediaProtocolOutputGenerationState>(
                 std::string(FileMuxNode::generationPurgeIdentity()),
                 generationSession),
-            generationSession});
+            generationSession).value());
     EXPECT_TRUE(ctx, adapter.bindResource(
         f.execution,
         MediaTsMuxRuntimePlanBuffer::create(
