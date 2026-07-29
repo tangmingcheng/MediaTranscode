@@ -129,9 +129,9 @@ RTP realtime CLI 使用输入端口 64300/64302、输出端口 64320，并使用
 
 以下命令必须在 PowerShell 中整段执行。它直接启动真实的 realtime CLI、
 FFmpeg 和 VLC，不使用 PowerShell 子进程代替 CLI。CLI 启动 1.5 秒后才开始
-发送 RTP，三进程必须在开始后的 20 秒内同时存在。CLI 最长运行 60 秒，结束后
-只清理本次启动的 FFmpeg/VLC PID，并输出最终 runtime report、持续 A/V 漂移
-记录和旧链路残留检查。
+发送 RTP，三进程必须在开始后的 20 秒内同时存在。CLI 运行 50 秒，脚本总时长
+硬截止为 60 秒。成功或失败都会清理本次启动的三个 PID，并将任何旧链路残留
+判定为失败，同时输出最终 runtime report 和持续 A/V 漂移记录。
 
 ```powershell
 $savedPath = $env:Path
@@ -149,6 +149,21 @@ $ffErr = 'D:\Code\MyCode\MediaTranscode\out\validation\rtp-strict-ffmpeg.stderr.
 New-Item -ItemType Directory -Path $validation -Force | Out-Null
 Remove-Item -LiteralPath $sdpPath,$cliOut,$cliErr,$ffOut,$ffErr `
   -Force -ErrorAction SilentlyContinue
+
+$preexisting = @(
+  Get-Process -ErrorAction SilentlyContinue |
+    Where-Object {
+      $_.ProcessName -in @(
+        'media_transcode_realtime_video_cli',
+        'ffmpeg',
+        'vlc'
+      )
+    }
+)
+if ($preexisting.Count -ne 0) {
+  $preexisting | Select-Object Id,ProcessName,StartTime
+  throw 'Old realtime CLI, FFmpeg or VLC process exists before RTP acceptance'
+}
 
 $cliArgs = @(
   '--media-id','final-rtp',
@@ -181,7 +196,7 @@ $cliArgs = @(
   '--bitrate','4000','--gop','30',
   '--audio-codec','aac','--audio-bitrate','128',
   '--sample-rate','44100','--channels','2',
-  '--max-duration','60',
+  '--max-duration','50',
   '--progress-timeout-ms','5000',
   '--first-output-timeout-ms','10000',
   '--poll-interval-ms','100'
@@ -190,9 +205,12 @@ $cliArgs = @(
 $cli = $null
 $ffmpeg = $null
 $vlc = $null
+$failure = $null
+$startedAt = Get-Date
+$runDeadline = $startedAt.AddSeconds(57)
+$cleanupDeadline = $startedAt.AddSeconds(60)
 
 try {
-$startedAt = Get-Date
 $cli = Start-Process `
   -FilePath 'D:\Code\MyCode\MediaTranscode\out\build\x64-debug\media_transcode_realtime_video_cli.exe' `
   -ArgumentList $cliArgs `
@@ -253,7 +271,8 @@ $visible | Select-Object Id,ProcessName,
   @{Name='PrivateMiB';Expression={[math]::Round($_.PrivateMemorySize64 / 1MB, 2)}},
   CPU,StartTime
 
-while (Get-Process -Id $cli.Id -ErrorAction SilentlyContinue) {
+while ((Get-Process -Id $cli.Id -ErrorAction SilentlyContinue) -and
+       (Get-Date) -lt $runDeadline) {
   $process = Get-Process -Id $cli.Id
   [pscustomobject]@{
     Time = (Get-Date).ToString('HH:mm:ss.fff')
@@ -261,31 +280,62 @@ while (Get-Process -Id $cli.Id -ErrorAction SilentlyContinue) {
     PrivateMiB = [math]::Round($process.PrivateMemorySize64 / 1MB, 2)
     CPU = [math]::Round($process.CPU, 3)
   }
-  Start-Sleep -Seconds 5
+  Start-Sleep -Seconds 2
 }
+
+if (Get-Process -Id $cli.Id -ErrorAction SilentlyContinue) {
+  throw 'realtime CLI exceeded the 57-second run deadline'
+}
+} catch {
+  $failure = $_
 } finally {
-  foreach ($process in @($ffmpeg,$vlc)) {
+  $runIds = @()
+  foreach ($process in @($cli,$ffmpeg,$vlc)) {
     if ($null -ne $process -and
         (Get-Process -Id $process.Id -ErrorAction SilentlyContinue)) {
+      $runIds += $process.Id
       Stop-Process -Id $process.Id -Force
     }
   }
+
+  do {
+    $runResidue = if ($runIds.Count -eq 0) {
+      @()
+    } else {
+      @(Get-Process -Id $runIds -ErrorAction SilentlyContinue)
+    }
+    if ($runResidue.Count -eq 0) {
+      break
+    }
+    Start-Sleep -Milliseconds 100
+  } while ((Get-Date) -lt $cleanupDeadline)
 }
 
-Get-Content -LiteralPath $cliOut -Encoding UTF8 |
-  Select-String -Pattern 'av_drift_trace|final runtime report|stopped successfully'
+if (Test-Path -LiteralPath $cliOut) {
+  Get-Content -LiteralPath $cliOut -Encoding UTF8 |
+    Select-String -Pattern 'av_drift_trace|final runtime report|stopped successfully'
+}
 
 'RESIDUE_BEGIN'
-Get-Process -ErrorAction SilentlyContinue |
-  Where-Object {
+$residue = @(
+  Get-Process -ErrorAction SilentlyContinue |
+    Where-Object {
     $_.ProcessName -in @(
       'media_transcode_realtime_video_cli',
       'ffmpeg',
       'vlc'
     )
-  } |
-  Select-Object Id,ProcessName,StartTime
+    }
+)
+$residue | Select-Object Id,ProcessName,StartTime
 'RESIDUE_END'
+
+if ($residue.Count -ne 0) {
+  $failure = 'RTP acceptance left realtime CLI, FFmpeg or VLC process residue'
+}
+if ($null -ne $failure) {
+  throw $failure
+}
 ```
 
 ## 2026-07-29 最终数据
