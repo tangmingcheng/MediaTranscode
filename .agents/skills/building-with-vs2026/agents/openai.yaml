@@ -1,4 +1,0 @@
-interface:
-  display_name: "Build with VS2026"
-  short_description: "Deterministic VS2026 Debug rebuilds"
-  default_prompt: "Use $building-with-vs2026 to rebuild the x64 Debug tree safely."

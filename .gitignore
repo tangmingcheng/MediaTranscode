@@ -118,5 +118,9 @@ CTestTestfile.cmake
 # GitHub specific
 .idea/
 
+# Local agent tooling
+/.agents/
+/.superpowers/
+
 # Track only prebuilt Windows libraries under repository-root 3rds.
 !/3rds/**/*.lib
