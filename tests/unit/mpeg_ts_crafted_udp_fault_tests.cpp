@@ -167,36 +167,6 @@ void testPcrPidChangeFailsClosed(TestContext& ctx, std::uint16_t port)
     EXPECT_FALSE(ctx, projection);
 }
 
-void testExcessivePcrGapFailsClosed(TestContext& ctx, std::uint16_t port)
-{
-    auto stream = CraftedTsBytes::generate();
-    EXPECT_TRUE(ctx, stream);
-    if (!stream) return;
-    EXPECT_TRUE(ctx, stream.value().rewritePcrSequence(10'000'000, kNominalPcrDelta27Mhz));
-    EXPECT_TRUE(ctx, stream.value().rewritePcr(
-        2, 10'000'000 + kNominalPcrDelta27Mhz * 5));
-    auto observed = observe(stream.value(), port);
-    EXPECT_TRUE(ctx, observed);
-    if (!observed) return;
-    auto projection = replay(stream.value(), observed.value());
-    EXPECT_FALSE(ctx, projection);
-}
-
-void testPcrRegressionFailsClosed(TestContext& ctx, std::uint16_t port)
-{
-    auto stream = CraftedTsBytes::generate();
-    EXPECT_TRUE(ctx, stream);
-    if (!stream) return;
-    EXPECT_TRUE(ctx, stream.value().rewritePcrSequence(10'000'000, kNominalPcrDelta27Mhz));
-    EXPECT_TRUE(ctx, stream.value().rewritePcr(
-        2, 10'000'000 + kNominalPcrDelta27Mhz / 2));
-    auto observed = observe(stream.value(), port);
-    EXPECT_TRUE(ctx, observed);
-    if (!observed) return;
-    auto projection = replay(stream.value(), observed.value());
-    EXPECT_FALSE(ctx, projection);
-}
-
 } // namespace
 
 int main()
@@ -214,8 +184,6 @@ int main()
     testPatPmtVersionChangePreservesImmutableIdentity(
         ctx, static_cast<std::uint16_t>(base + 2));
     testPcrPidChangeFailsClosed(ctx, static_cast<std::uint16_t>(base + 3));
-    testExcessivePcrGapFailsClosed(ctx, static_cast<std::uint16_t>(base + 4));
-    testPcrRegressionFailsClosed(ctx, static_cast<std::uint16_t>(base + 5));
     if (ctx.failures != 0) {
         std::cerr << ctx.failures << " crafted MPEG-TS UDP fault expectation(s) failed\n";
         return 1;

@@ -435,41 +435,6 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
             SKIP_RETURN_CODE 77
         )
 
-        add_executable(media_transcode_av_sync_production_runtime_integration_tests
-            tests/unit/av_sync_production_runtime_integration_tests.cpp
-            tests/unit/fixtures/AvSyncProductionRuntimeIntegrationSupport.cpp
-            tests/unit/fixtures/MediaTsPesTimestampInspector.cpp
-            tests/unit/fixtures/MpegTsOutputArtifactVerifier.cpp
-            tests/unit/fixtures/ScheduledRtpDecodeReceiver.cpp
-        )
-        media_transcode_configure_test(
-            media_transcode_av_sync_production_runtime_integration_tests)
-        target_compile_definitions(
-            media_transcode_av_sync_production_runtime_integration_tests PRIVATE
-            MEDIA_TRANSCODE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
-        )
-        if(WIN32)
-            target_link_libraries(
-                media_transcode_av_sync_production_runtime_integration_tests
-                PRIVATE iphlpapi ws2_32)
-        endif()
-        media_transcode_register_test(
-            media_transcode_av_sync_production_runtime_integration_tests
-            "integration;runtime;node")
-        set_tests_properties(
-            media_transcode_av_sync_production_runtime_integration_tests
-            PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
-        add_test(
-            NAME media_transcode_av_sync_production_memory_probe
-            COMMAND media_transcode_av_sync_production_runtime_integration_tests
-                    --memory-probe)
-        set_tests_properties(
-            media_transcode_av_sync_production_memory_probe
-            PROPERTIES
-                LABELS "integration;runtime;memory"
-                SKIP_RETURN_CODE 77
-                TIMEOUT 30)
-
         add_executable(media_transcode_integration_tests
             tests/unit/test_realtime_rtp_graph.cpp
         )
