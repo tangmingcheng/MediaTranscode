@@ -61,7 +61,7 @@ struct MediaTsSessionOpenSettings final {
     std::uint64_t maximumPositionRegressionBytes = 0;
 };
 
-::media::Result<std::unique_ptr<MediaTsInputSession>> openMpegTsSession(
+::media::Result<std::unique_ptr<MediaTsInputSession>> openMpegTsPreflightSession(
     const MediaTsSessionOpenSettings& settings,
     const MediaTsInputSessionOpener& opener)
 {
@@ -110,7 +110,7 @@ openMpegTsRuntimeSession(
     int pmtPid,
     const MediaTsInputSessionOpener& opener)
 {
-    auto opened = openMpegTsSession(settings, opener);
+    auto opened = openMpegTsPreflightSession(settings, opener);
     if (!opened) {
         return ::media::Result<std::unique_ptr<MediaTsDemuxSession>>::failure(
             opened.error());
@@ -245,7 +245,7 @@ openMpegTsRuntimeSession(
         policy.value().maximumPacketPositionRegressionBytes};
     const MediaTsInputSessionOpener sessionOpener =
         opener ? *opener : MediaTsInputSessionOpener{};
-    auto opened = openMpegTsSession(openSettings, sessionOpener);
+    auto opened = openMpegTsPreflightSession(openSettings, sessionOpener);
     if (!opened) return ::media::Result<MediaPreparedRealtimeInputScan>::failure(opened.error());
     auto session = std::move(opened).value();
 
@@ -588,15 +588,15 @@ void MediaRealtimeInputPlanner::applyNodePlans(
 ::media::Result<MediaPreparedRealtimeInputScan> MediaRealtimeInputPlanner::prepare(
     const MediaRealtimeRtpTranscodeRequest& request,
     const MediaPipelinePlannerOptions& options,
-    const MediaRealtimeInputIo* io)
+    const MediaRealtimePreflightIo* io)
 {
     if (MediaRealtimeRequestClassifier::mpegTsUdpInput(request)) {
-        if (io && !io->openMpegTsSession) {
+        if (io && !io->openMpegTs) {
             return ::media::Result<MediaPreparedRealtimeInputScan>::failure(
                 ::media::ErrorInfo::invalidArgument("MPEG-TS preflight opener is required"));
         }
         return prepareMpegTs(
-            request, io ? &io->openMpegTsSession : nullptr);
+            request, io ? &io->openMpegTs : nullptr);
     }
     return io
         ? MediaPipelineCapabilityScanner::prepareRealtimeInput(

@@ -623,14 +623,14 @@ MediaRealtimeRtpTranscodePlanner::planPreparedInput(
 
 ::media::Result<MediaRealtimeTranscodePreflight> MediaRealtimeRtpTranscodePlanner::preflight(
     const MediaRealtimeRtpTranscodeRequest& request,
-    const MediaRealtimeInputIo& io)
+    const MediaRealtimePreflightIo& io)
 {
     return preflightImpl(request, &io);
 }
 
 ::media::Result<MediaRealtimeTranscodePreflight> MediaRealtimeRtpTranscodePlanner::preflightImpl(
     const MediaRealtimeRtpTranscodeRequest& request,
-    const MediaRealtimeInputIo* io)
+    const MediaRealtimePreflightIo* io)
 {
     if (auto status = validateRealtimeRequestNoIo(request); !status) {
         return ::media::Result<MediaRealtimeTranscodePreflight>::failure(status.error());

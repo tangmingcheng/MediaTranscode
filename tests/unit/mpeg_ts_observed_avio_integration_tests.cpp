@@ -491,8 +491,8 @@ void testProductionInvalidProvenanceBindingFailsClosed(TestContext& ctx,
     auto sender = FfmpegMpegTsUdpSender::start(inputPort);
     EXPECT_TRUE(ctx, sender);
     if (!sender) return;
-    MediaRealtimeInputIo io;
-    io.openMpegTsSession = [&ctx](const MediaTsInputSessionOptions& options)
+    MediaRealtimePreflightIo io;
+    io.openMpegTs = [&ctx](const MediaTsInputSessionOptions& options)
         -> ::media::Result<std::unique_ptr<MediaTsInputSession>> {
         auto invalid = options;
         invalid.pesProvenanceCapacity = 0;

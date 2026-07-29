@@ -1,32 +1,36 @@
 # MediaTranscode Quality Score
 
-> Scope: the complete project, evaluated against an industrial DAG media transcoding engine standard. Updated 2026-07-28.
+> Scope: PR #25 against `master`, evaluated against an industrial DAG media transcoding engine standard. Updated 2026-07-29.
 
 | Dimension | Weight | Score | Evidence summary |
 |---|---:|---:|---|
-| Architecture and DAG model | 15 | 14 | RTP and MPEG-TS use one planned executable DAG and share the complete A/V synchronization path, branching only at the protocol output segment. Invalid output-only test assemblies were removed. |
-| Planner decision ownership | 12 | 11 | Planner ranks hardware-only candidates by default, validates the complete selected chain lazily, permits software only when explicitly disabled, and owns RTP stream-association/RTCP policy consumed by transport and clock-group construction. The realtime planner remains large. |
+| Architecture and DAG model | 15 | 12 | RTP and MPEG-TS share the synchronized input, canonical branches, scheduler, and executable DAG, branching only at the protocol output adapter. The realtime plan still carries a parallel legacy output product. |
+| Planner decision ownership | 12 | 9 | Planner remains the policy authority and rejects incomplete synchronized products, but legacy pacing, transport, packetization, mux, and barrier fields are still populated or explicitly cleared after constructing `avSyncRuntime`. |
 | Scheduling and concurrency | 13 | 11 | Atomic metadata fan-out now prevents partial MPEG-TS session activation; graph validation rejects mixed atomic contracts. Long-running race evidence remains limited. |
-| Node responsibility and decoupling | 12 | 9 | Production assembly remains in the realtime builder and protocol observers no longer reimplement runtime compilation. Several large planner, mux, codec, and runtime files remain. |
+| Node responsibility and decoupling | 12 | 8 | Shared A/V segments are focused, but the realtime builder still assembles both synchronized and legacy output paths and remains oversized. Several large planner, mux, codec, and runtime files remain. |
 | RAII and resource safety | 10 | 10 | FFmpeg resources, including hardware device/frame capability probes, buffers, sessions, and workers use explicit ownership and RAII cleanup. |
 | Performance and resource efficiency | 10 | 6 | SPSC, buffer pools, zero-copy, hardware paths, pacing, and profiling exist. Advanced optimizer and executor modules are not yet mature production optimizations. |
 | Error model and failure boundaries | 8 | 8 | `Result`, `Status`, planner validation, required options, and primary worker failure propagation preserve actionable causes through runtime and CLI boundaries. |
-| Tests and verification | 10 | 7 | Full-production RTP and MPEG-TS integration now observes protocol output, dual-stream decode, planned startup skew, and steady P99 skew. The integration tier is CI-only in the standard local cache, and long-duration objective drift remains outstanding. |
+| Tests and verification | 10 | 5 | Four CI tiers pass, but the only full production RTP/MPEG-TS runtime closure, dual-stream decode, protocol artifact, and memory probe were deleted, as was scheduler commit/rollover linearization coverage. Subjective validation passed; objective long-run drift remains outstanding. |
 | Maintainability and documentation | 10 | 6 | Architecture and naming provide good navigation. Large source/test files and partially implemented advanced modules increase long-term maintenance cost. |
-| **Total** | **100** | **82** | **A-: the new A/V synchronization path has one production assembly and protocol-level decode evidence; objective long-run drift and stress gates remain required.** |
+| **Total** | **100** | **75** | **B: the shared production A/V path is operational, but merge is blocked by the parallel legacy plan product and loss of production-closure CI coverage.** |
+
+## Review Verdict
+
+**Not approved for merge.** Remove the legacy output-plan fields and translation/clearing path; restore resource-bounded CI coverage of the real RTP and MPEG-TS production closure without restoring the 4 GB behavior; restore focused scheduler commit/rollover concurrency coverage.
 
 ## Primary Project Risks
 
-1. Objective post-write A/V drift percentiles and long-run drift slope are not yet measured continuously.
-2. The standard local cache does not compile the production integration target; CI is the current compile/run gate for its protocol observers.
-3. Clock discontinuity and long-duration reacquisition still need a dedicated automatic group re-lock campaign.
-4. Concurrent stop, abort, queue pressure, and 30-60 minute memory behavior still lack a systematic stress matrix.
-5. Large realtime planner, capability probe, mux, codec resolver, and runtime files need later responsibility-focused decomposition.
+1. The realtime plan still transports legacy pacing, packetization, mux, and barrier state beside the canonical A/V runtime plan.
+2. CI no longer closes the production RTP/MPEG-TS path through emitted protocol data and decode/artifact verification.
+3. Scheduler output commit versus generation close no longer has a deterministic linearization regression.
+4. Objective drift, clock discontinuity, concurrent lifecycle, queue pressure, and 30-60 minute memory behavior lack systematic gates.
+5. Large realtime planner, builder, capability probe, mux, codec resolver, and runtime files need responsibility-focused decomposition.
 
 ## Priority Improvements
 
-1. Add concurrency stress and fault-injection coverage for wakeup, full/empty queues, multi-input fairness, and every lifecycle transition.
-2. Split oversized planner, mux, codec, and runtime files by validation, policy, FFmpeg session, protocol I/O, and state-machine responsibility.
-3. Run production protocol integration, hardware, and performance tiers in CI and add 30-60 minute drift/memory gates.
-4. Mark incomplete optimizer, GPU, and distributed capabilities experimental or reject unsupported execution explicitly.
-5. Establish repeatable realtime performance and 30-60 minute stability baselines.
+1. Delete legacy output-plan fields and make the canonical A/V runtime plan the only synchronized production product.
+2. Add resource-bounded production closure tests for RTP decode and MPEG-TS artifact/timestamp validation.
+3. Restore deterministic scheduler commit/rollover linearization coverage.
+4. Add objective drift, discontinuity, concurrent lifecycle, and 30-60 minute memory gates.
+5. Split oversized planner, builder, mux, codec, and runtime files by responsibility.

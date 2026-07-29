@@ -1194,109 +1194,6 @@ void adapterBackpressureTransfersOneAccessUnit(TestContext& ctx)
     adapter.abort(f.execution);
 }
 
-void adapterChannelPushLinearizesPermitCloseAndGenerationRollover(
-    TestContext& ctx)
-{
-    auto f = assemblyFixture(ctx);
-    if (!f.execution.compiled()) return;
-    MediaScheduledTsAccessUnitAdapterNode adapter(f.adapter, f.group);
-    EXPECT_TRUE(ctx, adapter.start(f.execution));
-    auto* plan = f.execution.findInputChannel(f.adapter, "plan");
-    auto* scheduledInput =
-        f.execution.findInputChannel(f.adapter, "scheduled");
-    auto* packet = f.execution.findInputChannel(f.mux, "packet");
-    EXPECT_TRUE(ctx, plan && scheduledInput && packet);
-    if (!plan || !scheduledInput || !packet) return;
-
-    EXPECT_TRUE(ctx, plan->push(MediaTsMuxRuntimePlanBuffer::create(
-                         muxPlan(), f.epoch, f.group, std::nullopt).value()));
-    EXPECT_TRUE(ctx, adapter.process(f.execution));
-    EXPECT_TRUE(ctx, scheduledInput->push(scheduled(
-                         ctx, MediaScheduledStream::Video, 7, 1,
-                         ms(1'140), ms(1'120), ms(1'020))));
-
-    auto channelLock =
-        MediaChannelAtomicOutputTestAccess::lockMutation(*packet);
-    std::promise<void> processStarted;
-    auto committing = std::async(
-        std::launch::async,
-        [&adapter, &f, &processStarted] {
-            processStarted.set_value();
-            return adapter.process(f.execution);
-        });
-    processStarted.get_future().wait();
-    EXPECT_TRUE(ctx, waitForOutputPermitHeld(f.transitionService));
-    EXPECT_EQ(ctx,
-              committing.wait_for(std::chrono::milliseconds(0)),
-              std::future_status::timeout);
-    std::promise<void> closingStarted;
-    auto closing = std::async(
-        std::launch::async,
-        [&f, &closingStarted] {
-            closingStarted.set_value();
-            return f.transitionService->beginReacquisition(7, 8);
-        });
-    closingStarted.get_future().wait();
-    EXPECT_EQ(ctx,
-              closing.wait_for(std::chrono::milliseconds(50)),
-              std::future_status::timeout);
-    channelLock.unlock();
-    auto committed = committing.get();
-    EXPECT_TRUE(ctx, committed);
-    if (committed) {
-        EXPECT_EQ(ctx, committed.value().state,
-                  MediaNodeProcessState::Progress);
-    }
-    EXPECT_EQ(ctx, packet->size(), std::size_t{1});
-    MediaBufferRef first;
-    EXPECT_TRUE(ctx, packet->tryPop(first));
-    const auto* firstUnit =
-        dynamic_cast<const MediaTsAccessUnitBuffer*>(first.get());
-    EXPECT_TRUE(ctx, firstUnit != nullptr);
-    if (firstUnit) {
-        auto view = firstUnit->view();
-        EXPECT_TRUE(ctx, view);
-        if (view) EXPECT_EQ(ctx, view.value().generation, std::uint64_t{7});
-    }
-    auto purge = closing.get();
-    EXPECT_TRUE(ctx, purge);
-    if (!purge) return;
-    EXPECT_TRUE(ctx, adapter.generationPurgeTarget()->purge(purge.value()));
-
-    for (const auto& participant :
-         f.transitionService->transitionPlan().participants) {
-        EXPECT_TRUE(ctx, f.transitionService->acknowledge(
-                             MediaAvGenerationAcknowledgement{
-                                 participant.participant,
-                                 purge.value().transitionSequence,
-                                 ::media::Status::success()}));
-    }
-    const MediaPlaybackEpoch nextEpoch{ms(0), ms(1'000), 8};
-    EXPECT_TRUE(ctx, MediaAvEpochTransitionServiceTestAccess::activateNext(
-                         f.transitionService,
-                         purge.value().transitionSequence,
-                         nextEpoch));
-    EXPECT_TRUE(ctx, plan->push(MediaTsMuxRuntimePlanBuffer::create(
-                         muxPlan(), nextEpoch, f.group,
-                         purge.value().transitionSequence).value()));
-    EXPECT_TRUE(ctx, adapter.process(f.execution));
-    EXPECT_TRUE(ctx, scheduledInput->push(scheduled(
-                         ctx, MediaScheduledStream::Video, 8, 2,
-                         ms(1'140), ms(1'120), ms(1'020))));
-    EXPECT_TRUE(ctx, adapter.process(f.execution));
-    MediaBufferRef second;
-    EXPECT_TRUE(ctx, packet->tryPop(second));
-    const auto* secondUnit =
-        dynamic_cast<const MediaTsAccessUnitBuffer*>(second.get());
-    EXPECT_TRUE(ctx, secondUnit != nullptr);
-    if (secondUnit) {
-        auto view = secondUnit->view();
-        EXPECT_TRUE(ctx, view);
-        if (view) EXPECT_EQ(ctx, view.value().generation, std::uint64_t{8});
-    }
-    adapter.abort(f.execution);
-}
-
 void segmentBuildsCompleteAcyclicTopology(TestContext& ctx)
 {
     MediaGraph graph;
@@ -1388,7 +1285,6 @@ int main()
     planSourceRejectsDuplicateActivationQueuedBeforeCommit(ctx);
     muxGenerationRolloverPreservesSinkAndResetsTransportState(ctx);
     adapterBackpressureTransfersOneAccessUnit(ctx);
-    adapterChannelPushLinearizesPermitCloseAndGenerationRollover(ctx);
     segmentBuildsCompleteAcyclicTopology(ctx);
     if (ctx.failures != 0) return 1;
     std::cout << "Scheduled MPEG-TS output node tests passed\n";

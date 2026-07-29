@@ -1043,6 +1043,14 @@ void testPurgedGenerationCannotDrainRetainedSchedulerCommit(TestContext& ctx)
         EXPECT_TRUE(ctx, dropped.error().code != ::media::ErrorCode::InternalError);
     }
     EXPECT_EQ(ctx, serialized->size(), static_cast<std::size_t>(0));
+    auto commitAfterClose =
+        MediaAvOutputSchedulerNodeTestAccess::emitAfterPermitClose(
+            *scheduler, execution,
+            scheduledUnit(
+                ctx, MediaScheduledStream::Video, 1,
+                static_cast<std::uint64_t>(999)));
+    EXPECT_TRUE(ctx, commitAfterClose);
+    EXPECT_EQ(ctx, serialized->size(), static_cast<std::size_t>(0));
     EXPECT_TRUE(ctx, scheduler->stop(execution));
 }
 

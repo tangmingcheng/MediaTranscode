@@ -180,7 +180,7 @@ public:
         const MediaRealtimeRtpTranscodeRequest& request);
     static ::media::Result<MediaRealtimeTranscodePreflight> preflight(
         const MediaRealtimeRtpTranscodeRequest& request,
-        const MediaRealtimeInputIo& io);
+        const MediaRealtimePreflightIo& io);
     static ::media::Result<MediaRealtimeRtpTranscodePlan> planPreparedInput(
         const MediaRealtimeRtpTranscodeRequest& request,
         const MediaRealtimeInputStreamInfo& input,
@@ -197,7 +197,7 @@ private:
         const MediaTsSelectedProgramPlan* selectedTsProgram = nullptr);
     static ::media::Result<MediaRealtimeTranscodePreflight> preflightImpl(
         const MediaRealtimeRtpTranscodeRequest& request,
-        const MediaRealtimeInputIo* io);
+        const MediaRealtimePreflightIo* io);
     MediaRealtimeRtpTranscodePlanner() = default;
 };
 

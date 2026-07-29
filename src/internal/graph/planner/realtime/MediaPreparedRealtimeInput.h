@@ -18,9 +18,9 @@ using MediaTsInputSessionOpener = std::function<
     ::media::Result<std::unique_ptr<MediaTsInputSession>>(
         const MediaTsInputSessionOptions&)>;
 
-struct MediaRealtimeInputIo final {
+struct MediaRealtimePreflightIo final {
     MediaRealtimeInputOpener openGeneric;
-    MediaTsInputSessionOpener openMpegTsSession;
+    MediaTsInputSessionOpener openMpegTs;
 };
 
 enum class MediaPreparedRealtimeInputKind { Generic, MpegTs };

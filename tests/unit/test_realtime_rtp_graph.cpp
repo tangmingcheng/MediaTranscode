@@ -4093,14 +4093,14 @@ void testInvalidPreflightDoesNotInvokeOpener(TestContext& ctx)
     MediaRealtimeRtpTranscodeRequest invalid = validMpegTsUdpOptions();
     invalid.input.url.clear();
     int openCount = 0;
-    MediaRealtimeInputIo io;
+    MediaRealtimePreflightIo io;
     io.openGeneric = [&openCount](const std::string&, AVDictionary**)
             -> ::media::Result<::media::ffmpeg::InputFormatContextPtr> {
             ++openCount;
             return ::media::Result<::media::ffmpeg::InputFormatContextPtr>::failure(
                 ::media::ErrorInfo::internalError("opener must not run"));
         };
-    io.openMpegTsSession = [&openCount](const MediaTsInputSessionOptions&)
+    io.openMpegTs = [&openCount](const MediaTsInputSessionOptions&)
             -> ::media::Result<std::unique_ptr<MediaTsInputSession>> {
             ++openCount;
             return ::media::Result<std::unique_ptr<MediaTsInputSession>>::failure(
@@ -4130,7 +4130,7 @@ void testRuntimeRejectsWrongPreparedBindingKindBeforeEmission(TestContext& ctx)
 
 void testEmptyGenericOpenerIsRejected(TestContext& ctx)
 {
-    MediaRealtimeInputIo io;
+    MediaRealtimePreflightIo io;
     auto preflight = MediaRealtimeRtpTranscodePlanner::preflight(validRealtimeOptions(), io);
     EXPECT_FALSE(ctx, preflight);
     if (!preflight) EXPECT_EQ(ctx, preflight.error().code, ::media::ErrorCode::InvalidArgument);
@@ -4142,13 +4142,13 @@ void testMpegTsPreflightBuildsTaggedSynchronizedExecutable(TestContext& ctx)
     EXPECT_TRUE(ctx, source);
     if (!source) return;
     int tsOpenCount = 0;
-    MediaRealtimeInputIo io;
+    MediaRealtimePreflightIo io;
     io.openGeneric = [](const std::string&, AVDictionary**)
         -> ::media::Result<::media::ffmpeg::InputFormatContextPtr> {
         return ::media::Result<::media::ffmpeg::InputFormatContextPtr>::failure(
             ::media::ErrorInfo::internalError("generic opener used for MPEG-TS"));
     };
-    io.openMpegTsSession = [&tsOpenCount](const MediaTsInputSessionOptions& options) {
+    io.openMpegTs = [&tsOpenCount](const MediaTsInputSessionOptions& options) {
         ++tsOpenCount;
         return MediaTsInputSession::open(options);
     };
@@ -4190,8 +4190,8 @@ void testMpegTsPreflightBuildsTaggedSynchronizedExecutable(TestContext& ctx)
 void testMpegTsPreflightPropagatesSessionOpenFailure(TestContext& ctx)
 {
     int tsOpenCount = 0;
-    MediaRealtimeInputIo io;
-    io.openMpegTsSession = [&tsOpenCount](const MediaTsInputSessionOptions&)
+    MediaRealtimePreflightIo io;
+    io.openMpegTs = [&tsOpenCount](const MediaTsInputSessionOptions&)
         -> ::media::Result<std::unique_ptr<MediaTsInputSession>> {
         ++tsOpenCount;
         return ::media::Result<std::unique_ptr<MediaTsInputSession>>::failure(
