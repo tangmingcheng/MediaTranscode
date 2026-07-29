@@ -15,6 +15,7 @@
 namespace media::ffmpeg::graph {
 
 class MediaDemuxTimestampClockMapper;
+struct MediaDecodedDemuxPacketClockBinderNodePlan;
 
 struct MediaRuntimeGenerationPurgeRegistration final {
     MediaAvGenerationParticipant participant;
@@ -45,6 +46,7 @@ public:
     static ::media::Result<std::unique_ptr<MediaRuntimeNode>>
     createDemuxPacketClockBinder(
         const MediaNode& node,
+        const MediaDecodedDemuxPacketClockBinderNodePlan& decoded,
         std::shared_ptr<MediaDemuxTimestampClockMapper> mapper,
         std::shared_ptr<MediaAvSyncGroupRuntime> syncGroup);
     static std::optional<MediaRuntimeGenerationPurgeRegistration>

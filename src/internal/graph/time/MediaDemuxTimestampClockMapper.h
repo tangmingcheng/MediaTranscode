@@ -59,23 +59,22 @@ struct MediaDemuxTimestampClockSnapshot final {
     bool transitionPending;
 };
 
+struct MediaDemuxMappedPacketTiming final {
+    MediaMappedTimestamp timestamp;
+};
+
 class MediaDemuxTimestampClockMapper final {
 public:
     static ::media::Result<std::shared_ptr<MediaDemuxTimestampClockMapper>>
     create(MediaDemuxTimestampClockMapperConfig config);
 
-    ::media::Result<MediaMappedTimestamp> map(
+    ::media::Result<MediaDemuxMappedPacketTiming> mapPacket(
         MediaScheduledStream stream,
         std::int64_t pts,
+        std::int64_t dts,
         AVRational timeBase,
         std::int64_t duration,
         std::uint64_t generation);
-
-    ::media::Result<MediaRunningTime> projectDecodeTime(
-        MediaScheduledStream stream,
-        std::int64_t dts,
-        AVRational timeBase,
-        std::uint64_t generation) const;
 
     ::media::Status bindStateChangeNotifiers(
         std::function<void()> videoNotifier,
@@ -94,8 +93,11 @@ public:
 private:
     struct StreamState final {
         std::optional<MediaRunningTime> firstPresentation;
+        std::optional<MediaRunningTime> firstDecode;
         std::optional<MediaRunningTime> firstDuration;
+        std::optional<MediaRunningTime> firstEnd;
         std::optional<MediaRunningTime> latestPresentation;
+        std::optional<MediaRunningTime> latestDecode;
         std::optional<MediaRunningTime> latestDuration;
     };
 
@@ -111,26 +113,28 @@ private:
         noexcept;
     const MediaRational& plannedTimeBase(MediaScheduledStream stream) const
         noexcept;
-    ::media::Status validateMapInput(
+    ::media::Status validatePacketInput(
         MediaScheduledStream stream,
         std::int64_t pts,
+        std::int64_t dts,
         AVRational timeBase,
         std::int64_t duration,
         std::uint64_t generation) const;
-    ::media::Status establishCommonEpoch();
-    ::media::Status validateContinuity(
+    ::media::Status validateCommonWindow(
+        const StreamState (&streams)[2]) const;
+    ::media::Status validateTimelineContinuity(
+        MediaRunningTime current,
+        MediaRunningTime latest,
+        MediaRunningTime latestDuration,
+        const char* field) const;
+    ::media::Result<MediaMappedTimestamp> mapWith(
+        const MediaCanonicalTimeMapper& mapper,
         MediaScheduledStream stream,
         MediaRunningTime presentation,
-        MediaRunningTime duration);
-    ::media::Result<MediaMappedTimestamp> mapLocked(
-        MediaScheduledStream stream,
-        MediaRunningTime presentation,
+        MediaRunningTime decode,
         MediaRunningTime duration,
         std::uint64_t generation) const;
-    ::media::Result<MediaRunningTime> projectLocked(
-        MediaScheduledStream stream,
-        MediaRunningTime sourceTime,
-        std::uint64_t generation) const;
+    void requireReacquisition() noexcept;
     void markStateChanged() noexcept;
     void notifyStateChange() const noexcept;
     void resetForGeneration(std::uint64_t generation) noexcept;

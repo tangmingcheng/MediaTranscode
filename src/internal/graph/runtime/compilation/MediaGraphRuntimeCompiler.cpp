@@ -8,10 +8,10 @@
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
+#include "internal/graph/nodes/sync/MediaDemuxPacketClockBinderNodePlanCodec.h"
 #include "internal/graph/time/MediaDemuxTimestampClockMapper.h"
 
 #include <chrono>
-#include <charconv>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -65,92 +65,6 @@ bool isLegacyProductionAvSyncAuthority(MediaNodeKind kind) noexcept
     default:
         return false;
     }
-}
-
-::media::Result<MediaDemuxTimestampClockMapperConfig>
-demuxMapperConfig(const MediaNode& node)
-{
-    const auto positiveInt = [&](const char* key) {
-        return requiredPositiveIntNodeOption(
-            &node.options, "MediaDemuxPacketClockBinderNode", key);
-    };
-    const auto positiveInt64 = [&](const char* key) {
-        return requiredPositiveInt64NodeOption(
-            &node.options, "MediaDemuxPacketClockBinderNode", key);
-    };
-    auto videoNumerator = positiveInt(
-        "demux_clock_binder.video_time_base_num");
-    auto videoDenominator = positiveInt(
-        "demux_clock_binder.video_time_base_den");
-    auto audioNumerator = positiveInt(
-        "demux_clock_binder.audio_time_base_num");
-    auto audioDenominator = positiveInt(
-        "demux_clock_binder.audio_time_base_den");
-    auto skew = positiveInt64(
-        "demux_clock_binder.first_window_maximum_skew_ns");
-    auto regression = positiveInt64(
-        "demux_clock_binder.timestamp_regression_limit_ns");
-    auto discontinuity = positiveInt64(
-        "demux_clock_binder.discontinuity_threshold_ns");
-    auto generation = positiveInt64(
-        "demux_clock_binder.initial_generation");
-    auto videoIdentity = requiredNodeOption(
-        &node.options, "MediaDemuxPacketClockBinderNode",
-        "demux_clock_binder.video_source_identity");
-    auto audioIdentity = requiredNodeOption(
-        &node.options, "MediaDemuxPacketClockBinderNode",
-        "demux_clock_binder.audio_source_identity");
-    auto targetEpochText = requiredNodeOption(
-        &node.options, "MediaDemuxPacketClockBinderNode",
-        "demux_clock_binder.canonical_target_epoch_ns");
-    if (!videoNumerator || !videoDenominator ||
-        !audioNumerator || !audioDenominator ||
-        !skew || !regression || !discontinuity || !generation ||
-        !videoIdentity || !audioIdentity || !targetEpochText) {
-        const ::media::ErrorInfo& error =
-            !videoNumerator ? videoNumerator.error()
-            : !videoDenominator ? videoDenominator.error()
-            : !audioNumerator ? audioNumerator.error()
-            : !audioDenominator ? audioDenominator.error()
-            : !skew ? skew.error()
-            : !regression ? regression.error()
-            : !discontinuity ? discontinuity.error()
-            : !generation ? generation.error()
-            : !videoIdentity ? videoIdentity.error()
-            : !audioIdentity ? audioIdentity.error()
-            : targetEpochText.error();
-        return ::media::Result<
-            MediaDemuxTimestampClockMapperConfig>::failure(error);
-    }
-    std::int64_t targetEpoch = 0;
-    const std::string& epochText = targetEpochText.value();
-    const auto [epochEnd, epochError] = std::from_chars(
-        epochText.data(), epochText.data() + epochText.size(), targetEpoch);
-    if (epochError != std::errc{} ||
-        epochEnd != epochText.data() + epochText.size()) {
-        return ::media::Result<
-            MediaDemuxTimestampClockMapperConfig>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "Demux timestamp mapper requires an exact canonical target epoch"));
-    }
-    MediaDemuxTimestampClockMapperConfig config{
-        MediaRational{videoNumerator.value(), videoDenominator.value()},
-        MediaRational{audioNumerator.value(), audioDenominator.value()},
-        MediaRunningTime::fromNanoseconds(skew.value()),
-        MediaRunningTime::fromNanoseconds(regression.value()),
-        MediaRunningTime::fromNanoseconds(discontinuity.value()),
-        static_cast<std::uint64_t>(generation.value()),
-        std::move(videoIdentity).value(),
-        std::move(audioIdentity).value(),
-        MediaRunningTime::fromNanoseconds(targetEpoch)};
-    auto validated = MediaDemuxTimestampClockMapper::create(config);
-    if (!validated) {
-        return ::media::Result<
-            MediaDemuxTimestampClockMapperConfig>::failure(
-            validated.error());
-    }
-    return ::media::Result<
-        MediaDemuxTimestampClockMapperConfig>::success(config);
 }
 
 } // namespace
@@ -231,19 +145,29 @@ demuxMapperConfig(const MediaNode& node)
             ++rtpClockBinderCount;
         if (node.kind == MediaNodeKind::DemuxPacketClockBinder) {
             ++demuxClockBinderCount;
-            auto stream = requiredStreamKindNodeOption(
-                &node.options,
-                "MediaDemuxPacketClockBinderNode",
-                "demux_clock_binder.stream");
-            if (!stream) return ::media::Status::failure(stream.error());
-            if (stream.value() == MediaStreamKind::Video) {
-                ++demuxVideoClockBinderCount;
-            } else if (stream.value() == MediaStreamKind::Audio) {
-                ++demuxAudioClockBinderCount;
-            } else {
+            if (!executable.avSyncBinding) {
                 return ::media::Status::failure(
-                    ::media::ErrorInfo::invalidArgument(
-                        "MediaGraphRuntime demux binder stream is unsupported"));
+                    ::media::ErrorInfo::notInitialized(
+                        "Demux binder requires its A/V planner binding"));
+            }
+            auto decoded =
+                MediaDemuxPacketClockBinderNodePlanCodec::decode(node);
+            if (!decoded) {
+                return ::media::Status::failure(decoded.error());
+            }
+            if (auto exact =
+                    MediaDemuxPacketClockBinderNodePlanCodec::
+                        validateAgainstPlanner(
+                            decoded.value(),
+                            executable.avSyncBinding->groupKey,
+                            executable.avSyncBinding->plan);
+                !exact) {
+                return exact;
+            }
+            if (decoded.value().stream == MediaScheduledStream::Video) {
+                ++demuxVideoClockBinderCount;
+            } else {
+                ++demuxAudioClockBinderCount;
             }
         }
         if (node.kind == MediaNodeKind::RealtimeInput && !bindingIds.contains(node.id.value)) {
@@ -669,6 +593,10 @@ demuxMapperConfig(const MediaNode& node)
     std::shared_ptr<MediaAvSyncGroupRuntime> demuxGroup;
     const MediaNode* demuxVideoBinder = nullptr;
     const MediaNode* demuxAudioBinder = nullptr;
+    std::optional<MediaDecodedDemuxPacketClockBinderNodePlan>
+        demuxVideoPlan;
+    std::optional<MediaDecodedDemuxPacketClockBinderNodePlan>
+        demuxAudioPlan;
     if (!demuxClockBinders.empty()) {
         if (demuxClockBinders.size() != 2) {
             return ::media::Status::failure(
@@ -677,57 +605,57 @@ demuxMapperConfig(const MediaNode& node)
         }
         std::optional<MediaDemuxTimestampClockMapperConfig> exactConfig;
         for (const MediaNode* binder : demuxClockBinders) {
-            auto config = demuxMapperConfig(*binder);
-            auto groupText = requiredNodeOption(
-                &binder->options,
-                "MediaDemuxPacketClockBinderNode",
-                "demux_clock_binder.sync_group");
-            auto stream = requiredStreamKindNodeOption(
-                &binder->options,
-                "MediaDemuxPacketClockBinderNode",
-                "demux_clock_binder.stream");
-            if (!config) {
-                return ::media::Status::failure(config.error());
+            auto decoded =
+                MediaDemuxPacketClockBinderNodePlanCodec::decode(*binder);
+            if (!decoded) {
+                return ::media::Status::failure(decoded.error());
             }
-            if (!groupText) {
-                return ::media::Status::failure(groupText.error());
-            }
-            if (!stream) {
-                return ::media::Status::failure(stream.error());
-            }
-            if (exactConfig && *exactConfig != config.value()) {
+            if (exactConfig &&
+                *exactConfig != decoded.value().mapper) {
                 return ::media::Status::failure(
                     ::media::ErrorInfo::invalidArgument(
                         "Demux timestamp binders disagree on the planner clock product"));
             }
-            exactConfig = config.value();
-            MediaAvSyncGroupKey groupKey(std::move(groupText).value());
-            auto exactGroup = context.findAvSyncGroup(groupKey);
-            if (!exactGroup || exactGroup->key() != groupKey ||
+            exactConfig = decoded.value().mapper;
+            auto exactGroup =
+                context.findAvSyncGroup(decoded.value().groupKey);
+            if (!exactGroup ||
+                exactGroup->key() != decoded.value().groupKey ||
                 (demuxGroup && demuxGroup != exactGroup)) {
                 return ::media::Status::failure(
                     ::media::ErrorInfo::notInitialized(
                         "Demux timestamp binders require one exact registered sync group"));
             }
+            if (auto exact =
+                    MediaDemuxPacketClockBinderNodePlanCodec::
+                        validateAgainstPlanner(
+                            decoded.value(), exactGroup->key(),
+                            exactGroup->plan());
+                !exact) {
+                return exact;
+            }
             demuxGroup = std::move(exactGroup);
-            if (stream.value() == MediaStreamKind::Video) {
+            if (decoded.value().stream ==
+                MediaScheduledStream::Video) {
                 if (demuxVideoBinder) {
                     return ::media::Status::failure(
                         ::media::ErrorInfo::invalidArgument(
                             "Demux timestamp runtime rejects duplicate video binders"));
                 }
                 demuxVideoBinder = binder;
-            } else if (stream.value() == MediaStreamKind::Audio) {
+                demuxVideoPlan = std::move(decoded).value();
+            } else {
                 if (demuxAudioBinder) {
                     return ::media::Status::failure(
                         ::media::ErrorInfo::invalidArgument(
                             "Demux timestamp runtime rejects duplicate audio binders"));
                 }
                 demuxAudioBinder = binder;
+                demuxAudioPlan = std::move(decoded).value();
             }
         }
         if (!exactConfig || !demuxVideoBinder || !demuxAudioBinder ||
-            !demuxGroup) {
+            !demuxVideoPlan || !demuxAudioPlan || !demuxGroup) {
             return ::media::Status::failure(
                 ::media::ErrorInfo::notInitialized(
                     "Demux timestamp runtime lost its complete injection facts"));
@@ -775,9 +703,13 @@ demuxMapperConfig(const MediaNode& node)
         preparedNodes.push_back(std::move(runtimeNode).value());
     }
     for (const MediaNode* binder : demuxClockBinders) {
+        const auto& decoded =
+            binder == demuxVideoBinder
+            ? *demuxVideoPlan
+            : *demuxAudioPlan;
         auto runtimeNode =
             MediaRuntimeNodeFactory::createDemuxPacketClockBinder(
-                *binder, demuxMapper, demuxGroup);
+                *binder, decoded, demuxMapper, demuxGroup);
         if (!runtimeNode) {
             return ::media::Status::failure(runtimeNode.error());
         }

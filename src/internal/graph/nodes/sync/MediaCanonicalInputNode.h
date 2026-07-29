@@ -32,6 +32,11 @@ protected:
         MediaGraphExecutionContext& context) override;
 
 private:
+    enum class DurationMode {
+        MappedSourceTiming,
+        RawPacketTimeBase,
+        PlannedAudioSamples
+    };
     ::media::Status configure(MediaGraphExecutionContext& context);
     ::media::Result<MediaRunningTime> durationFor(
         const MediaBufferRef& packet) const;
@@ -46,7 +51,7 @@ private:
     std::uint64_t m_nextSequence = 1;
     int m_audioSampleRate = 0;
     std::uint32_t m_audioSampleCount = 0;
-    bool m_audioDurationFromPacket = false;
+    std::optional<DurationMode> m_durationMode;
     std::optional<MediaCanonicalAudioSourceTimeline> m_audioTimeline;
 };
 

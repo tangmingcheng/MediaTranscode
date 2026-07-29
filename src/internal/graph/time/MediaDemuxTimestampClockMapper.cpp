@@ -1,7 +1,5 @@
 #include "internal/graph/time/MediaDemuxTimestampClockMapper.h"
 
-#include "internal/graph/time/MediaCanonicalTimeMapper.h"
-
 extern "C" {
 #include <libavutil/avutil.h>
 }
@@ -117,18 +115,19 @@ const MediaRational& MediaDemuxTimestampClockMapper::plannedTimeBase(
         : m_config.audioTimeBase;
 }
 
-::media::Status MediaDemuxTimestampClockMapper::validateMapInput(
+::media::Status MediaDemuxTimestampClockMapper::validatePacketInput(
     MediaScheduledStream stream,
     std::int64_t pts,
+    std::int64_t dts,
     AVRational timeBase,
     std::int64_t duration,
     std::uint64_t generation) const
 {
     const MediaRational& planned = plannedTimeBase(stream);
-    if (pts == AV_NOPTS_VALUE || duration <= 0 ||
+    if (pts == AV_NOPTS_VALUE || dts == AV_NOPTS_VALUE || duration <= 0 ||
         timeBase.num != planned.num || timeBase.den != planned.den) {
         return ::media::Status::failure(
-            invalid("Demux timestamp mapper rejects absent timestamps, duration, or unplanned time base"));
+            invalid("Demux timestamp mapper rejects absent packet timing or unplanned time base"));
     }
     if (generation != m_generation) {
         return ::media::Status::failure(
@@ -147,125 +146,88 @@ const MediaRational& MediaDemuxTimestampClockMapper::plannedTimeBase(
     return ::media::Status::success();
 }
 
-::media::Status MediaDemuxTimestampClockMapper::establishCommonEpoch()
+::media::Status MediaDemuxTimestampClockMapper::validateCommonWindow(
+    const StreamState (&streams)[2]) const
 {
-    if (!m_streams[0].firstPresentation ||
-        !m_streams[1].firstPresentation) {
+    if (!streams[0].firstPresentation || !streams[0].firstEnd ||
+        !streams[1].firstPresentation || !streams[1].firstEnd) {
         return ::media::Status::failure(
             ::media::ErrorInfo::notInitialized(
                 "Demux timestamp mapper is acquiring the first common A/V window"));
     }
+    const MediaRunningTime overlapBegin = std::max(
+        *streams[0].firstPresentation,
+        *streams[1].firstPresentation);
+    const MediaRunningTime overlapEnd = std::min(
+        *streams[0].firstEnd,
+        *streams[1].firstEnd);
+    if (overlapBegin >= overlapEnd) {
+        return ::media::Status::failure(
+            invalid("Demux timestamp mapper requires overlapping first packet intervals"));
+    }
     auto skew = positiveDistance(
-        *m_streams[0].firstPresentation,
-        *m_streams[1].firstPresentation,
+        *streams[0].firstPresentation,
+        *streams[1].firstPresentation,
         "first-window skew");
     if (!skew) return ::media::Status::failure(skew.error());
     if (skew.value() > m_config.firstWindowMaximumSkew) {
         return ::media::Status::failure(
             invalid("Demux timestamp mapper rejects excessive first-window A/V skew"));
     }
-
-    const MediaRunningTime sourceEpoch = std::min(
-        *m_streams[0].firstPresentation,
-        *m_streams[1].firstPresentation);
-    auto video = MediaCanonicalTimeMapper::create(
-        MediaCanonicalTimeMapperConfig{
-            sourceEpoch,
-            m_config.canonicalTargetEpoch,
-            MediaAvSyncSourceClockMode::DemuxTimestamps,
-            sourceIdentity(MediaScheduledStream::Video),
-            m_generation});
-    auto audio = MediaCanonicalTimeMapper::create(
-        MediaCanonicalTimeMapperConfig{
-            sourceEpoch,
-            m_config.canonicalTargetEpoch,
-            MediaAvSyncSourceClockMode::DemuxTimestamps,
-            sourceIdentity(MediaScheduledStream::Audio),
-            m_generation});
-    if (!video || !audio) {
-        return ::media::Status::failure(
-            !video ? video.error().toErrorInfo()
-                   : audio.error().toErrorInfo());
-    }
-    m_videoMapper.emplace(std::move(video).value());
-    m_audioMapper.emplace(std::move(audio).value());
-    for (std::size_t index = 0; index < 2; ++index) {
-        m_streams[index].latestPresentation =
-            m_streams[index].firstPresentation;
-        m_streams[index].latestDuration = m_streams[index].firstDuration;
-    }
-    m_readiness = MediaSourceClockReadiness::Locked;
-    markStateChanged();
     return ::media::Status::success();
 }
 
-::media::Status MediaDemuxTimestampClockMapper::validateContinuity(
-    MediaScheduledStream stream,
-    MediaRunningTime presentation,
-    MediaRunningTime duration)
+::media::Status
+MediaDemuxTimestampClockMapper::validateTimelineContinuity(
+    MediaRunningTime current,
+    MediaRunningTime latest,
+    MediaRunningTime latestDuration,
+    const char* field) const
 {
-    StreamState& state = m_streams[streamIndex(stream)];
-    if (!state.latestPresentation || !state.latestDuration) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::internalError(
-                "Demux timestamp mapper lost its locked stream window"));
-    }
-    if (presentation < *state.latestPresentation) {
-        auto regression = state.latestPresentation->checkedSubtract(
-            presentation);
+    if (current < latest) {
+        auto regression = latest.checkedSubtract(current);
         if (!regression) {
             return ::media::Status::failure(regression.error());
         }
-        if (regression.value() > m_config.timestampRegressionLimit) {
-            m_readiness = MediaSourceClockReadiness::ReacquireRequired;
-            markStateChanged();
-            return ::media::Status::failure(
-                ::media::ErrorInfo::wouldBlock(
-                    "Demux timestamp regression requires planned reacquisition"));
-        }
-        return ::media::Status::success();
+        const bool exceedsPlan =
+            regression.value() > m_config.timestampRegressionLimit;
+        return ::media::Status::failure(
+            ::media::ErrorInfo::wouldBlock(
+                std::string("Demux ") + field +
+                (exceedsPlan
+                     ? " regression exceeds the planner limit"
+                     : " regression is forbidden by the strict clock")));
     }
-    if (presentation == *state.latestPresentation) {
-        return ::media::Status::success();
-    }
-    auto expectedNext = state.latestPresentation->checkedAdd(
-        *state.latestDuration);
+    if (current == latest) return ::media::Status::success();
+    auto expectedNext = latest.checkedAdd(latestDuration);
     if (!expectedNext) {
         return ::media::Status::failure(expectedNext.error());
     }
-    if (presentation > expectedNext.value()) {
-        auto gap = presentation.checkedSubtract(expectedNext.value());
+    if (current > expectedNext.value()) {
+        auto gap = current.checkedSubtract(expectedNext.value());
         if (!gap) return ::media::Status::failure(gap.error());
         if (gap.value() > m_config.discontinuityThreshold) {
-            m_readiness = MediaSourceClockReadiness::ReacquireRequired;
-            markStateChanged();
             return ::media::Status::failure(
                 ::media::ErrorInfo::wouldBlock(
-                    "Demux timestamp discontinuity requires planned reacquisition"));
+                    std::string("Demux ") + field +
+                    " discontinuity requires planned reacquisition"));
         }
     }
-    state.latestPresentation = presentation;
-    state.latestDuration = duration;
     return ::media::Status::success();
 }
 
 ::media::Result<MediaMappedTimestamp>
-MediaDemuxTimestampClockMapper::mapLocked(
+MediaDemuxTimestampClockMapper::mapWith(
+    const MediaCanonicalTimeMapper& mapper,
     MediaScheduledStream stream,
     MediaRunningTime presentation,
+    MediaRunningTime decode,
     MediaRunningTime duration,
     std::uint64_t generation) const
 {
-    const auto& mapper = stream == MediaScheduledStream::Video
-        ? m_videoMapper : m_audioMapper;
-    if (!mapper) {
-        return ::media::Result<MediaMappedTimestamp>::failure(
-            ::media::ErrorInfo::notInitialized(
-                "Demux timestamp mapper has no locked canonical projection"));
-    }
-    auto mapped = mapper->map(MediaCanonicalSourceTimestamp(
+    auto mapped = mapper.map(MediaCanonicalSourceTimestamp(
         presentation,
-        std::nullopt,
+        decode,
         duration,
         generation,
         sourceIdentity(stream),
@@ -277,123 +239,187 @@ MediaDemuxTimestampClockMapper::mapLocked(
               mapped.error().toErrorInfo());
 }
 
-::media::Result<MediaMappedTimestamp>
-MediaDemuxTimestampClockMapper::map(
+::media::Result<MediaDemuxMappedPacketTiming>
+MediaDemuxTimestampClockMapper::mapPacket(
     MediaScheduledStream stream,
     std::int64_t pts,
+    std::int64_t dts,
     AVRational timeBase,
     std::int64_t duration,
     std::uint64_t generation)
 {
+    std::unique_lock transaction(m_transactionMutex);
     bool notify = false;
-    ::media::Result<MediaMappedTimestamp> result =
-        ::media::Result<MediaMappedTimestamp>::failure(
+    ::media::Result<MediaDemuxMappedPacketTiming> result =
+        ::media::Result<MediaDemuxMappedPacketTiming>::failure(
             ::media::ErrorInfo::internalError(
-                "Demux timestamp mapper did not produce a result"));
+                "Demux timestamp packet transaction produced no result"));
     {
         std::lock_guard lock(m_mutex);
-        if (auto valid = validateMapInput(
-                stream, pts, timeBase, duration, generation); !valid) {
-            return ::media::Result<MediaMappedTimestamp>::failure(
+        if (auto valid = validatePacketInput(
+                stream, pts, dts, timeBase, duration, generation);
+            !valid) {
+            return ::media::Result<MediaDemuxMappedPacketTiming>::failure(
                 valid.error());
         }
         auto presentation = rescale(pts, timeBase, "PTS");
+        auto decode = rescale(dts, timeBase, "DTS");
         auto mappedDuration = rescale(duration, timeBase, "duration");
-        if (!presentation || !mappedDuration ||
+        if (!presentation || !decode || !mappedDuration ||
             mappedDuration.value() <= MediaRunningTime::fromNanoseconds(0)) {
-            return ::media::Result<MediaMappedTimestamp>::failure(
+            return ::media::Result<MediaDemuxMappedPacketTiming>::failure(
                 !presentation ? presentation.error()
+                : !decode ? decode.error()
                 : !mappedDuration ? mappedDuration.error()
                 : invalid("Demux timestamp mapper requires positive mapped duration"));
         }
+        auto intervalEnd =
+            presentation.value().checkedAdd(mappedDuration.value());
+        if (!intervalEnd) {
+            return ::media::Result<MediaDemuxMappedPacketTiming>::failure(
+                intervalEnd.error());
+        }
 
-        StreamState& state = m_streams[streamIndex(stream)];
+        const std::size_t index = streamIndex(stream);
+        StreamState candidate = m_streams[index];
         if (m_readiness == MediaSourceClockReadiness::Acquiring) {
-            if (!state.firstPresentation) {
-                state.firstPresentation = presentation.value();
-                state.firstDuration = mappedDuration.value();
+            if (!candidate.firstPresentation) {
+                candidate.firstPresentation = presentation.value();
+                candidate.firstDecode = decode.value();
+                candidate.firstDuration = mappedDuration.value();
+                candidate.firstEnd = intervalEnd.value();
+            } else if (*candidate.firstPresentation != presentation.value() ||
+                       *candidate.firstDecode != decode.value() ||
+                       *candidate.firstDuration != mappedDuration.value()) {
+                return ::media::Result<
+                    MediaDemuxMappedPacketTiming>::failure(
+                    invalid("Demux mapper retains exactly one complete first packet per stream"));
+            }
+            StreamState firstWindow[2]{m_streams[0], m_streams[1]};
+            firstWindow[index] = candidate;
+            auto common = validateCommonWindow(firstWindow);
+            if (!common) {
+                if (common.error().code ==
+                    ::media::ErrorCode::NotInitialized) {
+                    m_streams[index] = std::move(candidate);
+                    markStateChanged();
+                    notify = true;
+                }
+                result =
+                    ::media::Result<MediaDemuxMappedPacketTiming>::failure(
+                        common.error());
+            } else {
+                const MediaRunningTime sourceEpoch = std::min(
+                    *firstWindow[0].firstPresentation,
+                    *firstWindow[1].firstPresentation);
+                auto video = MediaCanonicalTimeMapper::create(
+                    MediaCanonicalTimeMapperConfig{
+                        sourceEpoch,
+                        m_config.canonicalTargetEpoch,
+                        MediaAvSyncSourceClockMode::DemuxTimestamps,
+                        sourceIdentity(MediaScheduledStream::Video),
+                        generation});
+                auto audio = MediaCanonicalTimeMapper::create(
+                    MediaCanonicalTimeMapperConfig{
+                        sourceEpoch,
+                        m_config.canonicalTargetEpoch,
+                        MediaAvSyncSourceClockMode::DemuxTimestamps,
+                        sourceIdentity(MediaScheduledStream::Audio),
+                        generation});
+                if (!video || !audio) {
+                    return ::media::Result<
+                        MediaDemuxMappedPacketTiming>::failure(
+                        !video ? video.error().toErrorInfo()
+                               : audio.error().toErrorInfo());
+                }
+                const auto& selected =
+                    stream == MediaScheduledStream::Video
+                    ? video.value()
+                    : audio.value();
+                auto mapped = mapWith(
+                    selected, stream, presentation.value(), decode.value(),
+                    mappedDuration.value(), generation);
+                if (!mapped) {
+                    return ::media::Result<
+                        MediaDemuxMappedPacketTiming>::failure(
+                        mapped.error());
+                }
+                for (StreamState& state : firstWindow) {
+                    state.latestPresentation = state.firstPresentation;
+                    state.latestDecode = state.firstDecode;
+                    state.latestDuration = state.firstDuration;
+                }
+                m_streams[0] = std::move(firstWindow[0]);
+                m_streams[1] = std::move(firstWindow[1]);
+                m_videoMapper.emplace(std::move(video).value());
+                m_audioMapper.emplace(std::move(audio).value());
+                m_readiness = MediaSourceClockReadiness::Locked;
                 markStateChanged();
                 notify = true;
-            } else if (*state.firstPresentation != presentation.value() ||
-                       *state.firstDuration != mappedDuration.value()) {
-                return ::media::Result<MediaMappedTimestamp>::failure(
-                    invalid("Demux timestamp mapper retains exactly one first-window packet per stream"));
-            }
-            auto locked = establishCommonEpoch();
-            if (!locked) {
-                result = ::media::Result<MediaMappedTimestamp>::failure(
-                    locked.error());
-            } else {
-                notify = true;
-                result = mapLocked(
-                    stream, presentation.value(), mappedDuration.value(),
-                    generation);
+                result =
+                    ::media::Result<MediaDemuxMappedPacketTiming>::success(
+                        MediaDemuxMappedPacketTiming{
+                            std::move(mapped).value()});
             }
         } else {
-            auto continuity = validateContinuity(
-                stream, presentation.value(), mappedDuration.value());
-            if (!continuity) {
-                notify =
-                    m_readiness ==
-                    MediaSourceClockReadiness::ReacquireRequired;
-                result = ::media::Result<MediaMappedTimestamp>::failure(
-                    continuity.error());
+            if (!candidate.latestPresentation || !candidate.latestDecode ||
+                !candidate.latestDuration) {
+                return ::media::Result<
+                    MediaDemuxMappedPacketTiming>::failure(
+                    ::media::ErrorInfo::internalError(
+                        "Demux mapper lost its committed stream timeline"));
+            }
+            auto presentationContinuity = validateTimelineContinuity(
+                presentation.value(),
+                *candidate.latestPresentation,
+                *candidate.latestDuration,
+                "PTS");
+            auto decodeContinuity = validateTimelineContinuity(
+                decode.value(),
+                *candidate.latestDecode,
+                *candidate.latestDuration,
+                "DTS");
+            if (!presentationContinuity || !decodeContinuity) {
+                requireReacquisition();
+                notify = true;
+                result =
+                    ::media::Result<MediaDemuxMappedPacketTiming>::failure(
+                        !presentationContinuity
+                        ? presentationContinuity.error()
+                        : decodeContinuity.error());
             } else {
-                result = mapLocked(
-                    stream, presentation.value(), mappedDuration.value(),
-                    generation);
+                const auto& mapper =
+                    stream == MediaScheduledStream::Video
+                    ? m_videoMapper
+                    : m_audioMapper;
+                if (!mapper) {
+                    return ::media::Result<
+                        MediaDemuxMappedPacketTiming>::failure(
+                        ::media::ErrorInfo::internalError(
+                            "Demux mapper has no locked canonical projection"));
+                }
+                auto mapped = mapWith(
+                    *mapper, stream, presentation.value(), decode.value(),
+                    mappedDuration.value(), generation);
+                if (!mapped) {
+                    return ::media::Result<
+                        MediaDemuxMappedPacketTiming>::failure(
+                        mapped.error());
+                }
+                candidate.latestPresentation = presentation.value();
+                candidate.latestDecode = decode.value();
+                candidate.latestDuration = mappedDuration.value();
+                m_streams[index] = std::move(candidate);
+                result =
+                    ::media::Result<MediaDemuxMappedPacketTiming>::success(
+                        MediaDemuxMappedPacketTiming{
+                            std::move(mapped).value()});
             }
         }
     }
+    transaction.unlock();
     if (notify) notifyStateChange();
     return result;
-}
-
-::media::Result<MediaRunningTime>
-MediaDemuxTimestampClockMapper::projectLocked(
-    MediaScheduledStream stream,
-    MediaRunningTime sourceTime,
-    std::uint64_t generation) const
-{
-    const auto& mapper = stream == MediaScheduledStream::Video
-        ? m_videoMapper : m_audioMapper;
-    if (!mapper) {
-        return ::media::Result<MediaRunningTime>::failure(
-            ::media::ErrorInfo::notInitialized(
-                "Demux decode-time projection requires a locked common epoch"));
-    }
-    auto mapped = mapper->map(MediaCanonicalSourceTimestamp(
-        sourceTime,
-        std::nullopt,
-        std::nullopt,
-        generation,
-        sourceIdentity(stream),
-        MediaTimeMappingConfidence::Locked));
-    return mapped
-        ? ::media::Result<MediaRunningTime>::success(
-              mapped.value().presentationTime())
-        : ::media::Result<MediaRunningTime>::failure(
-              mapped.error().toErrorInfo());
-}
-
-::media::Result<MediaRunningTime>
-MediaDemuxTimestampClockMapper::projectDecodeTime(
-    MediaScheduledStream stream,
-    std::int64_t dts,
-    AVRational timeBase,
-    std::uint64_t generation) const
-{
-    std::lock_guard lock(m_mutex);
-    const MediaRational& planned = plannedTimeBase(stream);
-    if (m_readiness != MediaSourceClockReadiness::Locked ||
-        generation != m_generation || dts == AV_NOPTS_VALUE ||
-        timeBase.num != planned.num || timeBase.den != planned.den) {
-        return ::media::Result<MediaRunningTime>::failure(
-            invalid("Demux decode-time projection requires locked planned evidence"));
-    }
-    auto source = rescale(dts, timeBase, "DTS");
-    if (!source) return source;
-    return projectLocked(stream, source.value(), generation);
 }
 
 ::media::Status
@@ -472,15 +498,19 @@ MediaDemuxTimestampClockMapper::snapshot() const noexcept
 
 ::media::Status MediaDemuxTimestampClockMapper::resetLifecycle()
 {
-    {
-        std::lock_guard lock(m_mutex);
-        resetForGeneration(m_config.initialGeneration);
-        m_lastTransitionSequence.reset();
-        m_pendingPurge.reset();
-        m_pendingPurgeParticipants = 0;
-        m_revision = 0;
-    }
+    std::lock_guard lock(m_mutex);
+    resetForGeneration(m_config.initialGeneration);
+    m_lastTransitionSequence.reset();
+    m_pendingPurge.reset();
+    m_pendingPurgeParticipants = 0;
+    m_revision = 0;
     return ::media::Status::success();
+}
+
+void MediaDemuxTimestampClockMapper::requireReacquisition() noexcept
+{
+    m_readiness = MediaSourceClockReadiness::ReacquireRequired;
+    markStateChanged();
 }
 
 void MediaDemuxTimestampClockMapper::markStateChanged() noexcept
