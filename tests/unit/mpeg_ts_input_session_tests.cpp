@@ -643,7 +643,8 @@ void testReentrantCloseFailsWithoutDeadlock(TestContext& ctx)
     EXPECT_FALSE(ctx, observer.closeStatus);
 }
 
-void testSessionProbeAndPreparedTransfer(TestContext& ctx)
+void testPreparedInputClosesPreflightBeforeMaterializingRuntimeSession(
+    TestContext& ctx)
 {
     FragmentedOpener opener(validMpegTsBytes());
     MediaTsInputSessionOptions options;
@@ -670,14 +671,37 @@ void testSessionProbeAndPreparedTransfer(TestContext& ctx)
     if (!session) return;
     EXPECT_EQ(ctx, session.value()->programInventory().programs.size(), std::size_t{1});
     EXPECT_FALSE(ctx, session.value()->streamSnapshots().empty());
-    auto prepared = MediaTsPreparedInputBuffer::create(std::move(session.value()));
+    auto runtimeOpener =
+        std::make_shared<FragmentedOpener>(validMpegTsBytes());
+    auto runtimeOptions = options;
+    runtimeOptions.protocolOptions = nullptr;
+    runtimeOptions.demuxOptions = nullptr;
+    int factoryCalls = 0;
+    auto prepared = MediaTsPreparedInputBuffer::create(
+        std::move(session).value(),
+        [runtimeOpener, runtimeOptions, &factoryCalls]()
+            -> ::media::Result<std::unique_ptr<MediaTsDemuxSession>> {
+            ++factoryCalls;
+            auto opened = MediaTsInputSession::open(
+                runtimeOptions, *runtimeOpener);
+            if (!opened) {
+                return ::media::Result<std::unique_ptr<MediaTsDemuxSession>>::failure(
+                    opened.error());
+            }
+            return ::media::Result<std::unique_ptr<MediaTsDemuxSession>>::success(
+                std::move(opened).value());
+        });
     EXPECT_TRUE(ctx, prepared);
     if (!prepared) return;
+    EXPECT_EQ(ctx, opener.closeCount(), std::size_t{1});
+    EXPECT_EQ(ctx, factoryCalls, 0);
+    EXPECT_TRUE(ctx, prepared.value()->materializeSession());
+    EXPECT_EQ(ctx, factoryCalls, 1);
     auto taken = prepared.value()->takeSession();
     EXPECT_TRUE(ctx, taken);
     EXPECT_FALSE(ctx, prepared.value()->takeSession());
     taken.value().reset();
-    EXPECT_EQ(ctx, opener.closeCount(), std::size_t{1});
+    EXPECT_EQ(ctx, runtimeOpener->closeCount(), std::size_t{1});
 }
 
 void testSessionPublishesParserContinuityEvidence(TestContext& ctx)
@@ -884,7 +908,8 @@ void testSessionRejectsUnsupportedAndIncompleteInput(TestContext& ctx)
     EXPECT_EQ(ctx, failing.closeCount, std::size_t{0});
 }
 
-void testPreparedDestructionBeforeTransferClosesOnce(TestContext& ctx)
+void testPreparedDestructionBeforeMaterializationDoesNotOpenRuntime(
+    TestContext& ctx)
 {
     FragmentedOpener opener(validMpegTsBytes());
     MediaTsInputSessionOptions options;
@@ -896,9 +921,20 @@ void testPreparedDestructionBeforeTransferClosesOnce(TestContext& ctx)
     auto session = MediaTsInputSession::open(options, opener);
     EXPECT_TRUE(ctx, session);
     if (!session) return;
-    auto prepared = MediaTsPreparedInputBuffer::create(std::move(session.value()));
+    int factoryCalls = 0;
+    auto prepared = MediaTsPreparedInputBuffer::create(
+        std::move(session).value(),
+        [&factoryCalls]()
+            -> ::media::Result<std::unique_ptr<MediaTsDemuxSession>> {
+            ++factoryCalls;
+            return ::media::Result<std::unique_ptr<MediaTsDemuxSession>>::failure(
+                ::media::ErrorInfo::internalError(
+                    "destruction test must not materialize a runtime session"));
+        });
     EXPECT_TRUE(ctx, prepared);
+    EXPECT_EQ(ctx, opener.closeCount(), std::size_t{1});
     prepared.value().reset();
+    EXPECT_EQ(ctx, factoryCalls, 0);
     EXPECT_EQ(ctx, opener.closeCount(), std::size_t{1});
 }
 
@@ -1123,14 +1159,14 @@ void runMpegTsInputSessionTests(TestContext& ctx)
     testCheckpointRetainsEveryObservedPcrPid(ctx);
     testEvictedProbeEvidenceCannotConfigureSourceBoundaries(ctx);
     testProbeBoundaryHistoryFiltersNonSelectedPid(ctx);
-    testSessionProbeAndPreparedTransfer(ctx);
+    testPreparedInputClosesPreflightBeforeMaterializingRuntimeSession(ctx);
     testSessionPublishesParserContinuityEvidence(ctx);
     testSessionReplaysProbeContinuityAcrossSelectedProgram(ctx);
     testSessionDurationProbeFailsClosedWithoutPositiveSelectedEvidence(ctx);
     testSessionDurationProbeFrameLimitIsTerminal(ctx);
     testSessionDurationProbeBackendFailureIsTerminal(ctx);
     testSessionRejectsUnsupportedAndIncompleteInput(ctx);
-    testPreparedDestructionBeforeTransferClosesOnce(ctx);
+    testPreparedDestructionBeforeMaterializationDoesNotOpenRuntime(ctx);
     testSessionCloseRejectsNewReads(ctx);
     testFiniteProductionSessionPublishesEndOfStream(ctx);
     testSessionCloseInterruptsBlockedRead(ctx);

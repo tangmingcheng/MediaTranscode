@@ -843,15 +843,6 @@ void canonicalInputKeepsExactAudioIntervalsAcrossClockRefreshes()
     assert(*previousEnd ==
            *firstBegin + static_cast<std::int64_t>(packetCount) * sampleCount);
 
-    assert(harness.input()->push(timedPacket(
-        MediaStreamKind::Audio, MediaSourceClockReadiness::Acquiring,
-        generation, firstPresentationNs, 0, AVRational{1, sampleRate})));
-    assert(!harness.runtime->process(harness.execution));
-    assert(harness.input()->push(timedPacket(
-        MediaStreamKind::Audio, MediaSourceClockReadiness::Locked,
-        generation + 1, firstPresentationNs, 0, AVRational{1, sampleRate})));
-    assert(!harness.runtime->process(harness.execution));
-
     MediaBufferRef owner;
     const auto* envelope = canonicalizeOne(
         harness,

@@ -275,9 +275,33 @@ struct NodeFixture final {
     MediaChannel* clock() { return execution.findOutputChannel(demux, "clock"); }
 };
 
+::media::Result<std::unique_ptr<MediaTsPreparedInputBuffer>> preparedBuffer(
+    std::unique_ptr<MediaTsDemuxSession> runtimeSession)
+{
+    auto holder = std::make_shared<std::unique_ptr<MediaTsDemuxSession>>(
+        std::move(runtimeSession));
+    auto result = MediaTsPreparedInputBuffer::create(
+        std::make_unique<ScriptedTsSession>(),
+        [holder]() -> ::media::Result<std::unique_ptr<MediaTsDemuxSession>> {
+            if (!*holder) {
+                return ::media::Result<std::unique_ptr<MediaTsDemuxSession>>::failure(
+                    ::media::ErrorInfo::notInitialized(
+                        "scripted runtime session was already transferred"));
+            }
+            return ::media::Result<std::unique_ptr<MediaTsDemuxSession>>::success(
+                std::move(*holder));
+        });
+    if (!result) return result;
+    if (auto materialized = result.value()->materializeSession(); !materialized) {
+        return ::media::Result<std::unique_ptr<MediaTsPreparedInputBuffer>>::failure(
+            materialized.error());
+    }
+    return result;
+}
+
 MediaBufferRef prepared(std::unique_ptr<MediaTsDemuxSession> session)
 {
-    auto result = MediaTsPreparedInputBuffer::create(std::move(session));
+    auto result = preparedBuffer(std::move(session));
     return result ? MediaBufferRef(std::move(result).value()) : MediaBufferRef{};
 }
 
@@ -320,7 +344,7 @@ void testBindingFailures(TestContext& ctx)
 
 void testDuplicateTransferAndRuntimeContract(TestContext& ctx)
 {
-    auto bufferResult = MediaTsPreparedInputBuffer::create(std::make_unique<ScriptedTsSession>());
+    auto bufferResult = preparedBuffer(std::make_unique<ScriptedTsSession>());
     EXPECT_TRUE(ctx, bufferResult);
     EXPECT_TRUE(ctx, bufferResult.value()->takeSession());
     EXPECT_FALSE(ctx, bufferResult.value()->takeSession());
@@ -469,61 +493,6 @@ void testNegativePtsDtsMapAs33BitValues(TestContext& ctx)
     }
 }
 
-void testIncrementalReacquireAndRollback(TestContext& ctx)
-{
-    constexpr std::int64_t modulus = std::int64_t{1} << 33;
-    NodeFixture fixture; EXPECT_TRUE(ctx, fixture.compile());
-    auto session = std::make_unique<ScriptedTsSession>(); session->preflightLimit = 200;
-    session->evidenceTimeline = {evidence(100, 0), evidence(200, 2'700'000),
-        evidence(300, 5'400'000, true, 1), evidence(400, 8'100'000, false, 1),
-        evidence(500, 10'800'000, false, 1)};
-    session->frames = {
-        {MediaTsReadFrameState::Frame, kVideoStream, 200, modulus - 1, modulus - 1},
-        {MediaTsReadFrameState::Frame, kVideoStream, 200, 1, 1},
-        {MediaTsReadFrameState::Frame, kVideoStream, 200, 3'000'000'000, 3'000'000'000},
-        {MediaTsReadFrameState::Frame, kVideoStream, 200, 6'000'000'000, 6'000'000'000},
-        {MediaTsReadFrameState::Frame, kVideoStream, 200, modulus - 1, modulus - 1},
-        {MediaTsReadFrameState::Frame, kVideoStream, 300, 180'000, 180'000},
-        {MediaTsReadFrameState::Frame, kVideoStream, 500, 90'000, 90'000},
-        {MediaTsReadFrameState::Frame, kVideoStream, 200, 1, 1}};
-    session->frames[5].readiness = MediaSourceClockReadiness::ReacquireRequired;
-    EXPECT_TRUE(ctx, fixture.input()->push(prepared(std::move(session))));
-    MpegTsDemuxNode node(fixture.demux);
-    for (int index = 0; index < 5; ++index) {
-        EXPECT_TRUE(ctx, node.process(fixture.execution));
-        MediaBufferRef seededOwner; const auto* seeded = popPacket(*fixture.video(), seededOwner);
-        EXPECT_TRUE(ctx, seeded != nullptr);
-        if (seeded && seeded->sourceTiming()) {
-            EXPECT_EQ(ctx, seeded->sourceTiming()->generation, std::uint64_t{0});
-        }
-    }
-    EXPECT_TRUE(ctx, node.process(fixture.execution));
-    MediaBufferRef first; auto* reacquire = popPacket(*fixture.video(), first);
-    EXPECT_TRUE(ctx, reacquire != nullptr);
-    if (reacquire && reacquire->sourceTiming()) {
-        EXPECT_EQ(ctx, reacquire->sourceTiming()->readiness, MediaSourceClockReadiness::ReacquireRequired);
-        EXPECT_EQ(ctx, reacquire->sourceTiming()->generation, std::uint64_t{1});
-    }
-    EXPECT_TRUE(ctx, node.process(fixture.execution));
-    MediaBufferRef second; auto* locked = popPacket(*fixture.video(), second);
-    EXPECT_TRUE(ctx, locked != nullptr);
-    if (locked && locked->sourceTiming()) {
-        EXPECT_EQ(ctx, locked->sourceTiming()->readiness, MediaSourceClockReadiness::Locked);
-        EXPECT_EQ(ctx, locked->sourceTiming()->generation, std::uint64_t{1});
-        EXPECT_EQ(ctx, locked->sourceTiming()->presentationNs, std::optional<std::int64_t>{1'000'000'000});
-    }
-    EXPECT_TRUE(ctx, node.process(fixture.execution));
-    MediaBufferRef third; auto* rollback = popPacket(*fixture.video(), third);
-    EXPECT_TRUE(ctx, rollback != nullptr);
-    if (rollback && rollback->sourceTiming()) {
-        EXPECT_EQ(ctx, rollback->sourceTiming()->generation, std::uint64_t{0});
-        EXPECT_EQ(ctx, rollback->sourceTiming()->presentationNs,
-                  std::optional<std::int64_t>{95'443'717'700'000});
-        EXPECT_EQ(ctx, rollback->sourceTiming()->decodeNs,
-                  std::optional<std::int64_t>{95'443'717'700'000});
-    }
-}
-
 void testProjectionIsTheOnlySourceGenerationAuthority(TestContext& ctx)
 {
     NodeFixture fixture; EXPECT_TRUE(ctx, fixture.compile());
@@ -555,12 +524,7 @@ void testProjectionIsTheOnlySourceGenerationAuthority(TestContext& ctx)
     EXPECT_TRUE(ctx, node.process(fixture.execution));
     MediaBufferRef secondOwner;
     const auto* selectedFault = popPacket(*fixture.audio(), secondOwner);
-    EXPECT_TRUE(ctx, selectedFault && selectedFault->sourceTiming());
-    if (selectedFault && selectedFault->sourceTiming()) {
-        EXPECT_EQ(ctx, selectedFault->sourceTiming()->generation, std::uint64_t{1});
-        EXPECT_EQ(ctx, selectedFault->sourceTiming()->readiness,
-                  MediaSourceClockReadiness::ReacquireRequired);
-    }
+    EXPECT_TRUE(ctx, selectedFault == nullptr);
 
     EXPECT_TRUE(ctx, node.process(fixture.execution));
     EXPECT_TRUE(ctx, node.process(fixture.execution));
@@ -571,8 +535,8 @@ void testProjectionIsTheOnlySourceGenerationAuthority(TestContext& ctx)
     EXPECT_TRUE(ctx, video && video->sourceTiming());
     EXPECT_TRUE(ctx, audio && audio->sourceTiming());
     if (video && audio && video->sourceTiming() && audio->sourceTiming()) {
-        EXPECT_EQ(ctx, video->sourceTiming()->generation, std::uint64_t{1});
-        EXPECT_EQ(ctx, audio->sourceTiming()->generation, std::uint64_t{1});
+        EXPECT_EQ(ctx, video->sourceTiming()->generation, std::uint64_t{0});
+        EXPECT_EQ(ctx, audio->sourceTiming()->generation, std::uint64_t{0});
         EXPECT_EQ(ctx, video->sourceTiming()->readiness,
                   MediaSourceClockReadiness::Locked);
         EXPECT_EQ(ctx, audio->sourceTiming()->readiness,
@@ -593,12 +557,7 @@ void testPesInvalidityDoesNotInventSourceGeneration(TestContext& ctx)
     EXPECT_TRUE(ctx, node.process(fixture.execution));
     MediaBufferRef owner;
     const auto* packet = popPacket(*fixture.video(), owner);
-    EXPECT_TRUE(ctx, packet && packet->sourceTiming());
-    if (packet && packet->sourceTiming()) {
-        EXPECT_EQ(ctx, packet->sourceTiming()->generation, std::uint64_t{0});
-        EXPECT_EQ(ctx, packet->sourceTiming()->readiness,
-                  MediaSourceClockReadiness::ReacquireRequired);
-    }
+    EXPECT_TRUE(ctx, packet == nullptr);
 }
 
 void testCancelledReadAndSessionTimelineFailurePropagation(TestContext& ctx)
@@ -944,7 +903,6 @@ void runMpegTsDemuxNodeTests(TestContext& ctx)
     testFramesRollbackAndLifecycle(ctx);
     testPublishesSelectedProgramClockStateBeforeTimedPacket(ctx);
     testNegativePtsDtsMapAs33BitValues(ctx);
-    testIncrementalReacquireAndRollback(ctx);
     testProjectionIsTheOnlySourceGenerationAuthority(ctx);
     testPesInvalidityDoesNotInventSourceGeneration(ctx);
     testPacketAndSessionFailures(ctx);

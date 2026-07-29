@@ -164,13 +164,13 @@ MediaTsRuntimeBinding runtimeBinding()
         MediaTsRuntimeStreamBinding{1, 0x102}, 0x103, 8};
 }
 
-void testRuntimeBindingDefinesOnlyPlannedSourceClockPids(TestContext& ctx)
+void testRuntimeBindingDefinesSelectedPesBoundaryPids(TestContext& ctx)
 {
     const auto binding = runtimeBinding();
-    EXPECT_TRUE(ctx, binding.isSourceClockPid(binding.video.pid));
-    EXPECT_TRUE(ctx, binding.isSourceClockPid(binding.audio.pid));
-    EXPECT_TRUE(ctx, binding.isSourceClockPid(binding.pcrPid));
-    EXPECT_FALSE(ctx, binding.isSourceClockPid(0x777));
+    EXPECT_TRUE(ctx, binding.requiresSelectedPesBoundary(binding.video.pid));
+    EXPECT_TRUE(ctx, binding.requiresSelectedPesBoundary(binding.audio.pid));
+    EXPECT_TRUE(ctx, binding.requiresSelectedPesBoundary(binding.pcrPid));
+    EXPECT_FALSE(ctx, binding.requiresSelectedPesBoundary(0x777));
 }
 
 void testProgramSourceBoundaryInvalidatesEveryOpenSelectedPes(TestContext& ctx)
@@ -418,7 +418,7 @@ void runMpegTsPesProvenanceTimelineTests(TestContext& ctx)
     testSelectionKeepsKnownInventoryIdempotent(ctx);
     testSafeEvictionRejectsExpiredPesRange(ctx);
     testCapacityFailureDoesNotPartiallyCloseCurrentRange(ctx);
-    testRuntimeBindingDefinesOnlyPlannedSourceClockPids(ctx);
+    testRuntimeBindingDefinesSelectedPesBoundaryPids(ctx);
     testProgramSourceBoundaryInvalidatesEveryOpenSelectedPes(ctx);
     testProgramSourceBoundaryPreservesClosedHistory(ctx);
     testProbeBoundariesRebuildOnlyCrossingSelectedPes(ctx);

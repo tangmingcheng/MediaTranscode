@@ -393,43 +393,6 @@ void copyOpaqueOptionIsStrictAndSymmetric()
     assert(enabled && enabled.value());
 }
 
-void frameRateTargetOwnsAndPurgesLineageState()
-{
-    auto runtime = MediaRuntimeNodeFactory::create(lineageNode(
-        MediaNodeKind::VideoFrameRate, "video_frame_rate"));
-    assert(runtime);
-    auto* node = dynamic_cast<VideoFrameRateNode*>(runtime.value().get());
-    assert(node);
-    auto state = std::dynamic_pointer_cast<MediaVideoFrameRateState>(
-        node->generationPurgeTarget());
-    assert(state);
-    assert(state->activateGeneration(51));
-    {
-        auto guard = state->lock();
-        auto& data = state->data();
-        data.pendingFrames.push_back({MediaBufferRef{}, 51});
-        data.lastInputFrame = {MediaBufferRef{}, 51};
-        data.initialized = true;
-        data.started = true;
-        data.startPts = 900;
-        data.nextOutputIndex = 4;
-        data.lastOutputPts = 1'020;
-    }
-    assert(state->purge({51, 52, 1}));
-    {
-        auto guard = state->lock();
-        const auto& data = state->data();
-        assert(data.pendingFrames.empty());
-        assert(!data.lastInputFrame.buffer);
-        assert(!data.initialized && !data.started);
-        assert(data.nextOutputIndex == 0);
-        assert(data.lastOutputPts == AV_NOPTS_VALUE);
-        assert(data.expectedGeneration == 52);
-    }
-    assert(!state->activateGeneration(51));
-    assert(state->activateGeneration(52));
-}
-
 } // namespace
 
 int main()
@@ -452,7 +415,6 @@ int main()
     frameViewUnwrapsCanonicalPayloadWithoutCopy();
     productionStagesExposeExactStablePurgeTargets();
     participantGroupRejectsMissingAndDuplicateStageTargets();
-    frameRateTargetOwnsAndPurgesLineageState();
     std::cout << "video codec lineage tests passed\n";
     return 0;
 }

@@ -329,7 +329,7 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
     if (!options.input.type || *options.input.type != RealtimeInputType::RtpPort) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
             ::media::ErrorInfo::unsupported(
-                "URL and MPEG-TS realtime input require preflight() to preserve the prepared session"));
+                "URL and MPEG-TS realtime input require preflight() to preserve the prepared input contract"));
     }
     return planWithInput(options, nullptr, nullptr);
 }
@@ -623,14 +623,14 @@ MediaRealtimeRtpTranscodePlanner::planPreparedInput(
 
 ::media::Result<MediaRealtimeTranscodePreflight> MediaRealtimeRtpTranscodePlanner::preflight(
     const MediaRealtimeRtpTranscodeRequest& request,
-    const MediaRealtimePreflightIo& io)
+    const MediaRealtimeInputIo& io)
 {
     return preflightImpl(request, &io);
 }
 
 ::media::Result<MediaRealtimeTranscodePreflight> MediaRealtimeRtpTranscodePlanner::preflightImpl(
     const MediaRealtimeRtpTranscodeRequest& request,
-    const MediaRealtimePreflightIo* io)
+    const MediaRealtimeInputIo* io)
 {
     if (auto status = validateRealtimeRequestNoIo(request); !status) {
         return ::media::Result<MediaRealtimeTranscodePreflight>::failure(status.error());

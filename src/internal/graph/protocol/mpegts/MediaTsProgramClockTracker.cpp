@@ -140,19 +140,6 @@ MediaTsProgramClockTracker::MediaTsProgramClockTracker(
     return ::media::Status::success();
 }
 
-::media::Status MediaTsProgramClockTracker::observeElementaryContinuityLoss(
-    std::uint16_t pid)
-{
-    if (pid != m_policy.videoPid && pid != m_policy.audioPid) {
-        return ::media::Status::success();
-    }
-    MediaTsProgramClockTracker candidate = *this;
-    auto status = candidate.reacquire();
-    if (!status) return status;
-    *this = std::move(candidate);
-    return ::media::Status::success();
-}
-
 ::media::Status MediaTsProgramClockTracker::observeProgramIdentity(
     std::uint16_t programNumber,
     std::uint16_t pmtPid,

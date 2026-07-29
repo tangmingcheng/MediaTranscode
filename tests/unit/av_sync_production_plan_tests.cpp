@@ -10,6 +10,7 @@
 #include "internal/graph/protocol/mpegts/MediaTsPreflightDurationProbe.h"
 
 #include <cstdint>
+#include <iostream>
 #include <string>
 #include <type_traits>
 #include <variant>
@@ -191,6 +192,8 @@ MediaRealtimeRtpTranscodeRequest completeProductionTsRequest()
     request.input.type = RealtimeInputType::MpegTsUdp;
     request.input.streamLayout = RealtimeInputStreamLayout::MuxedTransportStream;
     request.input.url = "udp://127.0.0.1:5000";
+    request.input.mpegTsClock.maximumPcrGap =
+        MediaRunningTime::fromNanoseconds(120'000'000);
     request.output.streamLayout = RealtimeOutputStreamLayout::MuxedTransportStream;
     request.output.url = "udp://127.0.0.1:7000";
     return request;
@@ -444,6 +447,10 @@ void testMpegTsProductionPlanningConsumesAuthoritativeEncoderPacketLayout(
     auto planned = MediaRealtimeRtpTranscodePlanner::planPreparedInput(
         completeProductionTsRequest(), completeProductionTsStreams(),
         completeProductionTsSelection());
+    if (!planned) {
+        std::cerr << "MPEG-TS production planning failed: "
+                  << planned.error().message << '\n';
+    }
     EXPECT_TRUE(ctx, planned);
     if (!planned || !planned.value().avSyncRuntime) return;
     EXPECT_EQ(ctx, planned.value().avSyncRuntime->outputAdapter,

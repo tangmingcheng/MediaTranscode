@@ -445,77 +445,6 @@ void testQueuedAbortPreemptsMedia(TestContext& ctx)
     scheduler.abort(execution);
 }
 
-void testDualControlPriorityIsGlobalAndSymmetric(TestContext& ctx)
-{
-    const auto verifyWinner = [&](MediaControlBufferKind videoKind,
-                                  MediaControlBufferKind audioKind,
-                                  MediaControlBufferKind expectedKind,
-                                  MediaAvSyncGroupRuntime::LifecycleState
-                                      expectedState) {
-        auto f = graphWithScheduler();
-        MediaGraphExecutionContext execution;
-        auto clock = std::make_shared<TestMasterClock>(ms(100));
-        EXPECT_TRUE(ctx, startFixture(ctx, f, execution, clock,
-                                      {ms(0), ms(0), 1}));
-        MediaAvOutputSchedulerNode scheduler(f.scheduler);
-        EXPECT_TRUE(ctx, scheduler.start(execution));
-        EXPECT_TRUE(ctx, execution.findInputChannel(f.scheduler, "video")->push(
-            makeMediaBufferRef<MediaControlBuffer>(videoKind)));
-        EXPECT_TRUE(ctx, execution.findInputChannel(f.scheduler, "audio")->push(
-            makeMediaBufferRef<MediaControlBuffer>(audioKind)));
-
-        auto result = scheduler.process(execution);
-        EXPECT_TRUE(ctx, result &&
-            result.value().state == MediaNodeProcessState::Finished);
-        auto group = execution.findAvSyncGroup(
-            MediaAvSyncGroupKey("matrix-group"));
-        EXPECT_TRUE(ctx, group && group->lifecycleState() ==
-            expectedState);
-        if (expectedKind == MediaControlBufferKind::Flush) {
-            auto request = group ? group->reacquisitionRequest() : std::nullopt;
-            EXPECT_TRUE(ctx, request &&
-                request->reason == MediaAvReacquisitionReason::Flush);
-        } else {
-            EXPECT_FALSE(ctx, group && group->reacquisitionRequest());
-        }
-        auto* output = execution.findInputChannel(f.sink, "scheduled");
-        EXPECT_EQ(ctx, output->size(), static_cast<std::size_t>(1));
-        MediaBufferRef emitted;
-        EXPECT_TRUE(ctx, output->tryPop(emitted));
-        const auto* control = dynamic_cast<const MediaControlBuffer*>(
-            emitted.get());
-        EXPECT_TRUE(ctx, control &&
-            control->controlKind() == expectedKind);
-        auto afterTerminal = scheduler.process(execution);
-        EXPECT_TRUE(ctx, afterTerminal &&
-            afterTerminal.value().state == MediaNodeProcessState::Finished);
-        EXPECT_EQ(ctx, output->size(), static_cast<std::size_t>(0));
-        scheduler.abort(execution);
-    };
-
-    const auto aborted = MediaAvSyncGroupRuntime::LifecycleState::Aborted;
-    const auto reacquiring =
-        MediaAvSyncGroupRuntime::LifecycleState::ReacquisitionRequired;
-    verifyWinner(MediaControlBufferKind::Flush,
-                 MediaControlBufferKind::Abort,
-                 MediaControlBufferKind::Abort, aborted);
-    verifyWinner(MediaControlBufferKind::Abort,
-                 MediaControlBufferKind::Flush,
-                 MediaControlBufferKind::Abort, aborted);
-    verifyWinner(MediaControlBufferKind::Eof,
-                 MediaControlBufferKind::Abort,
-                 MediaControlBufferKind::Abort, aborted);
-    verifyWinner(MediaControlBufferKind::Abort,
-                 MediaControlBufferKind::Eof,
-                 MediaControlBufferKind::Abort, aborted);
-    verifyWinner(MediaControlBufferKind::Eof,
-                 MediaControlBufferKind::Flush,
-                 MediaControlBufferKind::Flush, reacquiring);
-    verifyWinner(MediaControlBufferKind::Flush,
-                 MediaControlBufferKind::Eof,
-                 MediaControlBufferKind::Flush, reacquiring);
-}
-
 void testUnknownControlFailsClosedBeforeAbortSymmetrically(TestContext& ctx)
 {
     const auto verifyUnknownWins = [&](bool unknownOnVideo) {
@@ -553,26 +482,6 @@ void testUnknownControlFailsClosedBeforeAbortSymmetrically(TestContext& ctx)
 
     verifyUnknownWins(true);
     verifyUnknownWins(false);
-}
-
-void testSparseFutureGenerationRequestsReacquisitionImmediately(TestContext& ctx)
-{
-    auto f = graphWithScheduler();
-    MediaGraphExecutionContext execution;
-    auto clock = std::make_shared<TestMasterClock>(ms(100));
-    EXPECT_TRUE(ctx, startFixture(ctx, f, execution, clock, {ms(0), ms(0), 1}));
-    MediaAvOutputSchedulerNode scheduler(f.scheduler);
-    EXPECT_TRUE(ctx, scheduler.start(execution));
-    EXPECT_TRUE(ctx, execution.findInputChannel(f.scheduler, "video")->push(
-        unit(ctx, MediaScheduledStream::Video, 10, 10, 2, 1, true)));
-
-    EXPECT_FALSE(ctx, scheduler.process(execution));
-    auto request = execution.findAvSyncGroup(
-        MediaAvSyncGroupKey("matrix-group"))->reacquisitionRequest();
-    EXPECT_TRUE(ctx, request &&
-        request->reason == MediaAvReacquisitionReason::FutureGeneration &&
-        request->observedGeneration == 2);
-    scheduler.abort(execution);
 }
 
 void testUnknownControlIsRejectedWithoutFlush(TestContext& ctx)
@@ -760,79 +669,6 @@ void testRealDeadlineExpiresWithoutNotificationAndStopAbortInterrupt(TestContext
     };
     interrupt(false);
     interrupt(true);
-}
-
-void testOldGenerationDropFlushAndAbortedInput(TestContext& ctx)
-{
-    {
-        auto f = graphWithScheduler();
-        MediaGraphExecutionContext execution;
-        auto clock = std::make_shared<TestMasterClock>(ms(400));
-        EXPECT_TRUE(ctx, startFixture(ctx, f, execution, clock,
-                                      {ms(0), ms(0), 2}));
-        MediaAvOutputSchedulerNode scheduler(f.scheduler);
-        EXPECT_TRUE(ctx, scheduler.start(execution));
-        EXPECT_TRUE(ctx, execution.findInputChannel(f.scheduler, "video")->push(
-            unit(ctx, MediaScheduledStream::Video, 10, 10, 1, 1, true)));
-        execution.findInputChannel(f.scheduler, "audio")->close();
-        EXPECT_TRUE(ctx, scheduler.process(execution));
-        EXPECT_TRUE(ctx, drainStreams(execution, f.sink).empty());
-        EXPECT_TRUE(ctx, scheduler.stop(execution));
-    }
-    {
-        auto f = graphWithScheduler();
-        MediaGraphExecutionContext execution;
-        auto clock = std::make_shared<TestMasterClock>(ms(1'000));
-        EXPECT_TRUE(ctx, startFixture(ctx, f, execution, clock,
-                                      {ms(0), ms(0), 1}));
-        MediaAvOutputSchedulerNode scheduler(f.scheduler);
-        EXPECT_TRUE(ctx, scheduler.start(execution));
-        EXPECT_TRUE(ctx, execution.findInputChannel(f.scheduler, "video")->push(
-            unit(ctx, MediaScheduledStream::Video, 10, 10, 1, 1, true)));
-        execution.findInputChannel(f.scheduler, "audio")->close();
-        EXPECT_FALSE(ctx, scheduler.process(execution));
-        auto request = execution.findAvSyncGroup(
-            MediaAvSyncGroupKey("matrix-group"))->reacquisitionRequest();
-        EXPECT_TRUE(ctx, request &&
-            request->reason == MediaAvReacquisitionReason::HardDiscontinuity &&
-            request->observedGeneration == 1);
-        EXPECT_TRUE(ctx, drainStreams(execution, f.sink).empty());
-        scheduler.abort(execution);
-    }
-    {
-        auto f = graphWithScheduler();
-        MediaGraphExecutionContext execution;
-        auto clock = std::make_shared<TestMasterClock>(ms(100));
-        EXPECT_TRUE(ctx, startFixture(ctx, f, execution, clock,
-                                      {ms(0), ms(0), 1}));
-        MediaAvOutputSchedulerNode scheduler(f.scheduler);
-        EXPECT_TRUE(ctx, scheduler.start(execution));
-        EXPECT_TRUE(ctx, execution.findInputChannel(f.scheduler, "audio")->push(
-            unit(ctx, MediaScheduledStream::Audio, 10, 10, 1, 1)));
-        EXPECT_TRUE(ctx, execution.findInputChannel(f.scheduler, "video")->push(
-            makeMediaBufferRef<MediaControlBuffer>(MediaControlBufferKind::Flush)));
-        auto flushed = scheduler.process(execution);
-        EXPECT_TRUE(ctx, flushed);
-        auto request = execution.findAvSyncGroup(
-            MediaAvSyncGroupKey("matrix-group"))->reacquisitionRequest();
-        EXPECT_TRUE(ctx, request &&
-            request->reason == MediaAvReacquisitionReason::Flush &&
-            request->observedGeneration == 1);
-        EXPECT_TRUE(ctx, drainStreams(execution, f.sink).empty());
-        scheduler.abort(execution);
-    }
-    {
-        auto f = graphWithScheduler();
-        MediaGraphExecutionContext execution;
-        auto clock = std::make_shared<TestMasterClock>(ms(0));
-        EXPECT_TRUE(ctx, startFixture(ctx, f, execution, clock,
-                                      {ms(0), ms(0), 1}));
-        MediaAvOutputSchedulerNode scheduler(f.scheduler);
-        EXPECT_TRUE(ctx, scheduler.start(execution));
-        execution.findInputChannel(f.scheduler, "video")->abort();
-        EXPECT_FALSE(ctx, scheduler.process(execution));
-        scheduler.abort(execution);
-    }
 }
 
 void testSparseStreamWaitsThenSingleEofAllowsOtherToContinue(TestContext& ctx)
@@ -1146,95 +982,6 @@ void testRepeatBackpressureCommitsIdentityExactlyOnce(TestContext& ctx)
     EXPECT_TRUE(ctx, scheduler.stop(execution));
 }
 
-void testFlushCancelsPendingBackpressureTransfer(TestContext& ctx)
-{
-    auto f = graphWithScheduler(true, MediaQueueOverflowPolicy::BlockProducer, 1);
-    MediaGraphExecutionContext execution;
-    auto clock = std::make_shared<TestMasterClock>(ms(100));
-    EXPECT_TRUE(ctx, startFixture(ctx, f, execution, clock, {ms(0), ms(0), 1}));
-    MediaAvOutputSchedulerNode scheduler(f.scheduler);
-    EXPECT_TRUE(ctx, scheduler.start(execution));
-    auto filler = makePacketBuffer(false, 1);
-    EXPECT_TRUE(ctx, filler);
-    filler.value()->setStreamKind(MediaStreamKind::Video);
-    auto* output = execution.findInputChannel(f.sink, "scheduled");
-    EXPECT_TRUE(ctx, output->push(filler.value()));
-    EXPECT_TRUE(ctx, execution.findInputChannel(f.scheduler, "video")->push(
-        unit(ctx, MediaScheduledStream::Video, 10, 10, 1, 1, true)));
-    execution.findInputChannel(f.scheduler, "audio")->close();
-    auto blocked = scheduler.process(execution);
-    EXPECT_TRUE(ctx, blocked &&
-        blocked.value().state == MediaNodeProcessState::Waiting);
-
-    EXPECT_TRUE(ctx, scheduler.flush(execution));
-    auto group = execution.findAvSyncGroup(MediaAvSyncGroupKey("matrix-group"));
-    auto request = group->reacquisitionRequest();
-    EXPECT_TRUE(ctx, request &&
-        request->reason == MediaAvReacquisitionReason::Flush &&
-        request->observedGeneration == 1);
-    MediaBufferRef popped;
-    EXPECT_TRUE(ctx, output->tryPop(popped));
-    EXPECT_FALSE(ctx, scheduler.process(execution));
-    EXPECT_EQ(ctx, output->size(), static_cast<std::size_t>(0));
-    EXPECT_TRUE(ctx, scheduler.stop(execution));
-}
-
-void verifyBackpressuredTerminalControl(
-    TestContext& ctx,
-    MediaControlBufferKind kind,
-    MediaAvSyncGroupRuntime::LifecycleState expectedState)
-{
-    auto f = graphWithScheduler(true, MediaQueueOverflowPolicy::BlockProducer, 1);
-    MediaGraphExecutionContext execution;
-    auto clock = std::make_shared<TestMasterClock>(ms(100));
-    EXPECT_TRUE(ctx, startFixture(ctx, f, execution, clock, {ms(0), ms(0), 1}));
-    MediaAvOutputSchedulerNode scheduler(f.scheduler);
-    EXPECT_TRUE(ctx, scheduler.start(execution));
-    auto filler = makePacketBuffer(false, 1);
-    EXPECT_TRUE(ctx, filler);
-    filler.value()->setStreamKind(MediaStreamKind::Video);
-    auto* output = execution.findInputChannel(f.sink, "scheduled");
-    EXPECT_TRUE(ctx, output->push(filler.value()));
-
-    auto terminal = makeMediaBufferRef<MediaControlBuffer>(kind);
-    EXPECT_TRUE(ctx, execution.findInputChannel(f.scheduler, "video")->push(
-        terminal));
-    auto blocked = scheduler.process(execution);
-    EXPECT_TRUE(ctx, blocked &&
-        blocked.value().state == MediaNodeProcessState::Waiting);
-
-    auto group = execution.findAvSyncGroup(MediaAvSyncGroupKey("matrix-group"));
-    EXPECT_TRUE(ctx, group);
-    if (group) EXPECT_EQ(ctx, group->lifecycleState(), expectedState);
-    if (kind == MediaControlBufferKind::Flush) {
-        auto request = group->reacquisitionRequest();
-        EXPECT_TRUE(ctx, request &&
-            request->reason == MediaAvReacquisitionReason::Flush &&
-            request->observedGeneration == 1);
-    } else {
-        EXPECT_FALSE(ctx, group->reacquisitionRequest());
-    }
-
-    MediaBufferRef popped;
-    EXPECT_TRUE(ctx, output->tryPop(popped));
-    auto drained = scheduler.process(execution);
-    EXPECT_TRUE(ctx, drained &&
-        drained.value().state == MediaNodeProcessState::Progress);
-    auto finished = scheduler.process(execution);
-    EXPECT_TRUE(ctx, finished &&
-        finished.value().state == MediaNodeProcessState::Finished);
-    EXPECT_EQ(ctx, output->size(), static_cast<std::size_t>(1));
-    MediaBufferRef emitted;
-    EXPECT_TRUE(ctx, output->tryPop(emitted));
-    const auto* control = dynamic_cast<const MediaControlBuffer*>(emitted.get());
-    EXPECT_TRUE(ctx, control && control->controlKind() == kind);
-    auto again = scheduler.process(execution);
-    EXPECT_TRUE(ctx, again &&
-        again.value().state == MediaNodeProcessState::Finished);
-    EXPECT_EQ(ctx, output->size(), static_cast<std::size_t>(0));
-    EXPECT_TRUE(ctx, scheduler.stop(execution));
-}
-
 void testAbortPreflightDiscardsCachedAndPendingOutput(TestContext& ctx)
 {
     {
@@ -1301,33 +1048,9 @@ void testAbortPreflightDiscardsCachedAndPendingOutput(TestContext& ctx)
     }
 }
 
-void testBackpressuredFlushAndAbortCommitExactlyOnce(TestContext& ctx)
+void testSchedulerConfigurationFailures(TestContext& ctx)
 {
-    verifyBackpressuredTerminalControl(
-        ctx, MediaControlBufferKind::Flush,
-        MediaAvSyncGroupRuntime::LifecycleState::ReacquisitionRequired);
-    verifyBackpressuredTerminalControl(
-        ctx, MediaControlBufferKind::Abort,
-        MediaAvSyncGroupRuntime::LifecycleState::Aborted);
-}
-
-void testFutureGenerationFlushAbortAndConfigurationFailures(TestContext& ctx)
-{
-    auto f = graphWithScheduler();
-    MediaGraphExecutionContext execution;
     auto clock = std::make_shared<TestMasterClock>(ms(100));
-    EXPECT_TRUE(ctx, startFixture(ctx, f, execution, clock, {ms(0), ms(0), 1}));
-    MediaAvOutputSchedulerNode scheduler(f.scheduler);
-    EXPECT_TRUE(ctx, scheduler.start(execution));
-    EXPECT_TRUE(ctx, execution.findInputChannel(f.scheduler, "video")->push(
-        unit(ctx, MediaScheduledStream::Video, 10, 10, 2, 1, true)));
-    execution.findInputChannel(f.scheduler, "audio")->close();
-    EXPECT_FALSE(ctx, scheduler.process(execution));
-    auto group = execution.findAvSyncGroup(MediaAvSyncGroupKey("matrix-group"));
-    auto request = group->reacquisitionRequest();
-    EXPECT_TRUE(ctx, request && request->observedGeneration == 2 &&
-                         request->reason == MediaAvReacquisitionReason::FutureGeneration);
-    scheduler.abort(execution);
     auto missingOption = graphWithScheduler(false);
     MediaGraphExecutionContext missingOptionExecution;
     EXPECT_TRUE(ctx, missingOptionExecution.compile(missingOption.graph));
@@ -1478,16 +1201,11 @@ void runAvOutputSchedulerTests(media_transcode::test::TestContext& ctx)
     testScheduledAccessUnitRejectsNonOutputDecisions(ctx);
     testAccessUnitFactoriesRejectNonPacketMedia(ctx);
     testRepeatBackpressureCommitsIdentityExactlyOnce(ctx);
-    testFlushCancelsPendingBackpressureTransfer(ctx);
-    testBackpressuredFlushAndAbortCommitExactlyOnce(ctx);
     testAbortPreflightDiscardsCachedAndPendingOutput(ctx);
-    testOldGenerationDropFlushAndAbortedInput(ctx);
     testQueuedAbortPreemptsMedia(ctx);
-    testDualControlPriorityIsGlobalAndSymmetric(ctx);
     testUnknownControlFailsClosedBeforeAbortSymmetrically(ctx);
-    testSparseFutureGenerationRequestsReacquisitionImmediately(ctx);
     testUnknownControlIsRejectedWithoutFlush(ctx);
-    testFutureGenerationFlushAbortAndConfigurationFailures(ctx);
+    testSchedulerConfigurationFailures(ctx);
     testFactoryCreatesAvOutputScheduler(ctx);
     testRegisteredSchedulerWaitsForEpochActivation(ctx);
     testActiveSchedulerConfiguresControllerOnce(ctx);

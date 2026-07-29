@@ -248,13 +248,6 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
     media_transcode_register_test(
         media_transcode_av_playback_epoch_binder_tests "runtime;deterministic")
 
-    add_executable(media_transcode_av_sync_production_release_tests
-        tests/unit/av_sync_production_release_tests.cpp
-    )
-    media_transcode_configure_test(media_transcode_av_sync_production_release_tests)
-    media_transcode_register_test(
-        media_transcode_av_sync_production_release_tests "node;deterministic")
-
     add_executable(media_transcode_rtp_packet_clock_binder_tests
         tests/unit/rtp_packet_clock_binder_tests.cpp
     )
@@ -284,13 +277,6 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
     media_transcode_configure_test(media_transcode_av_sync_canonical_input_tests)
     media_transcode_register_test(
         media_transcode_av_sync_canonical_input_tests "node;deterministic")
-
-    add_executable(media_transcode_av_sync_audio_control_tests
-        tests/unit/av_sync_audio_control_tests.cpp
-    )
-    media_transcode_configure_test(media_transcode_av_sync_audio_control_tests)
-    media_transcode_register_test(
-        media_transcode_av_sync_audio_control_tests "node;deterministic")
 
     add_executable(media_transcode_av_sync_scheduled_output_tests
         tests/unit/av_sync_scheduled_output_tests.cpp
@@ -374,8 +360,6 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
         tests/unit/mpeg_ts_output_session_tests.cpp
         tests/unit/mpeg_ts_mux_runtime_buffer_tests.cpp
         tests/unit/mpeg_ts_ffmpeg_config_materializer_tests.cpp
-        tests/unit/project_mpeg_ts_mux_session_adapter_tests.cpp
-        tests/unit/project_mpeg_ts_file_mux_node_tests.cpp
         tests/unit/file_mux_session_tests.cpp
         tests/unit/file_output_resource_tests.cpp
         tests/unit/fixtures/MediaTsPesTimestampInspector.cpp

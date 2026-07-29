@@ -52,7 +52,7 @@ function Invoke-DeadlineProcess(
             $combined -match '(?im)(?:/showIncludes|^\s*Note:\s+including\s+file:)') {
             throw 'Compiler include trace was emitted; output suppressed and build rejected.'
         }
-        if (-not $HideOutput) {
+        if (-not $HideOutput -or $process.ExitCode -ne 0) {
             if ($stdout) { Write-Host $stdout -NoNewline }
             if ($stderr) { Write-Host $stderr -NoNewline }
         }

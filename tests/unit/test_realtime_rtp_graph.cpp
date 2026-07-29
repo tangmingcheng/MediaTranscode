@@ -1423,6 +1423,9 @@ void testMpegTsUdpRequiresExplicitMaximumPcrGapPolicy(TestContext& ctx)
     }
 }
 
+MediaRealtimeInputStreamInfo deterministicMpegTsStreams();
+MediaTsSelectedProgramPlan deterministicMpegTsSelection();
+
 void testMpegTsPlannerRequiresExactlyRepresentableMaximumPcrGap(TestContext& ctx)
 {
     auto request = validMpegTsUdpOptions();
@@ -3233,6 +3236,7 @@ void testRealtimeQueueDropPoliciesAreNormalBackpressure(TestContext& ctx)
     }
 
     policy.mode = MediaQueueMode::Blocking;
+    policy.storageMode = MediaQueueStorageMode::Deque;
     MediaBlockingQueue blocking(policy);
     key = makePacketBuffer(true);
     delta = makePacketBuffer(false);
@@ -3305,6 +3309,7 @@ void testDropNonKeyFrameRejectsKeyFrameWhenNoNonKeyCanBeDropped(TestContext& ctx
     }
 
     policy.mode = MediaQueueMode::Blocking;
+    policy.storageMode = MediaQueueStorageMode::Deque;
     MediaBlockingQueue blocking(policy);
     key = makePacketBuffer(true, 1);
     nextKey = makePacketBuffer(true, 2);
@@ -3364,6 +3369,7 @@ void testDropNonKeyFramePushWaitsToPreserveKeyFrames(TestContext& ctx)
     exercise(spsc);
 
     policy.mode = MediaQueueMode::Blocking;
+    policy.storageMode = MediaQueueStorageMode::Deque;
     MediaBlockingQueue blocking(policy);
     exercise(blocking);
 }
@@ -4215,14 +4221,14 @@ void testInvalidPreflightDoesNotInvokeOpener(TestContext& ctx)
     MediaRealtimeRtpTranscodeRequest invalid = validMpegTsUdpOptions();
     invalid.input.url.clear();
     int openCount = 0;
-    MediaRealtimePreflightIo io;
+    MediaRealtimeInputIo io;
     io.openGeneric = [&openCount](const std::string&, AVDictionary**)
             -> ::media::Result<::media::ffmpeg::InputFormatContextPtr> {
             ++openCount;
             return ::media::Result<::media::ffmpeg::InputFormatContextPtr>::failure(
                 ::media::ErrorInfo::internalError("opener must not run"));
         };
-    io.openMpegTs = [&openCount](const MediaTsInputSessionOptions&)
+    io.openMpegTsSession = [&openCount](const MediaTsInputSessionOptions&)
             -> ::media::Result<std::unique_ptr<MediaTsInputSession>> {
             ++openCount;
             return ::media::Result<std::unique_ptr<MediaTsInputSession>>::failure(
@@ -4252,7 +4258,7 @@ void testRuntimeRejectsWrongPreparedBindingKindBeforeEmission(TestContext& ctx)
 
 void testEmptyGenericOpenerIsRejected(TestContext& ctx)
 {
-    MediaRealtimePreflightIo io;
+    MediaRealtimeInputIo io;
     auto preflight = MediaRealtimeRtpTranscodePlanner::preflight(validRealtimeOptions(), io);
     EXPECT_FALSE(ctx, preflight);
     if (!preflight) EXPECT_EQ(ctx, preflight.error().code, ::media::ErrorCode::InvalidArgument);
@@ -4264,13 +4270,13 @@ void testMpegTsPreflightBuildsTaggedSynchronizedExecutable(TestContext& ctx)
     EXPECT_TRUE(ctx, source);
     if (!source) return;
     int tsOpenCount = 0;
-    MediaRealtimePreflightIo io;
+    MediaRealtimeInputIo io;
     io.openGeneric = [](const std::string&, AVDictionary**)
         -> ::media::Result<::media::ffmpeg::InputFormatContextPtr> {
         return ::media::Result<::media::ffmpeg::InputFormatContextPtr>::failure(
             ::media::ErrorInfo::internalError("generic opener used for MPEG-TS"));
     };
-    io.openMpegTs = [&tsOpenCount](const MediaTsInputSessionOptions& options) {
+    io.openMpegTsSession = [&tsOpenCount](const MediaTsInputSessionOptions& options) {
         ++tsOpenCount;
         return MediaTsInputSession::open(options);
     };
@@ -4312,8 +4318,8 @@ void testMpegTsPreflightBuildsTaggedSynchronizedExecutable(TestContext& ctx)
 void testMpegTsPreflightPropagatesSessionOpenFailure(TestContext& ctx)
 {
     int tsOpenCount = 0;
-    MediaRealtimePreflightIo io;
-    io.openMpegTs = [&tsOpenCount](const MediaTsInputSessionOptions&)
+    MediaRealtimeInputIo io;
+    io.openMpegTsSession = [&tsOpenCount](const MediaTsInputSessionOptions&)
         -> ::media::Result<std::unique_ptr<MediaTsInputSession>> {
         ++tsOpenCount;
         return ::media::Result<std::unique_ptr<MediaTsInputSession>>::failure(

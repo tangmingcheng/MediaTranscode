@@ -16,8 +16,6 @@ class MediaTsPreparedInputBuffer final : public MediaBuffer,
                                          public FFmpegInputSnapshotBuffer {
 public:
     static ::media::Result<std::unique_ptr<MediaTsPreparedInputBuffer>> create(
-        std::unique_ptr<MediaTsDemuxSession> session);
-    static ::media::Result<std::unique_ptr<MediaTsPreparedInputBuffer>> createDeferred(
         std::unique_ptr<MediaTsDemuxSession> preflightSession,
         MediaTsRuntimeSessionFactory runtimeSessionFactory);
 
@@ -32,8 +30,6 @@ public:
     ::media::Result<std::unique_ptr<MediaTsDemuxSession>> takeSession();
 
 private:
-    MediaTsPreparedInputBuffer(std::unique_ptr<MediaTsDemuxSession> session,
-                               std::vector<FFmpegInputStreamSnapshot> streamSnapshots);
     MediaTsPreparedInputBuffer(
         std::vector<FFmpegInputStreamSnapshot> streamSnapshots,
         std::vector<FFmpegInputProgramSnapshot> programSnapshots,

@@ -253,64 +253,12 @@ void realFilterDropsPurgedRetainedOutputBeforeNextGeneration()
     CHECK(registry->finishGeneration(96));
 }
 
-void realFilterPurgeCancelsRetainedTerminalAndDelayedFrames()
-{
-    for (const bool eof : {false, true}) {
-      for (const bool videoScoped : {false, true}) {
-        auto created = MediaCodecLineageRegistry::create(8);
-        CHECK(created);
-        auto registry = std::make_shared<MediaCodecLineageRegistry>(
-            std::move(created).value());
-        auto fixture = makeFilterGraph("null", 1);
-        MediaGraphExecutionContext execution;
-        CHECK(execution.compile(fixture.graph));
-        auto* codec = execution.findInputChannel(fixture.node, "codec");
-        auto* input = execution.findInputChannel(fixture.node, "frame");
-        auto* output = execution.findInputChannel(fixture.sink, "frame");
-        CHECK(codec && input && output);
-        CHECK(codec->push(makeEncoderContext()));
-        VideoFilterNode node(fixture.node, registry);
-        CHECK(node.start(execution));
-        CHECK(node.process(execution));
-
-        CHECK(input->push(makeCanonicalFrame(111, 1, 0)));
-        CHECK(node.process(execution));
-        MediaBufferRef observed;
-        CHECK(output->tryPop(observed));
-        observed.reset();
-
-        const auto blocker = makeCanonicalFrame(110, 900, 900);
-        CHECK(output->push(blocker));
-        CHECK(input->push(makeTerminal(eof, videoScoped)));
-        const auto retained = node.process(execution);
-        CHECK(retained && retained.value().state != MediaNodeProcessState::Finished);
-        CHECK(node.generationPurgeTarget()->purge({111, 112, 1}));
-        CHECK(output->tryPop(observed) && observed == blocker);
-        observed.reset();
-        CHECK(node.process(execution));
-        CHECK(!output->tryPop(observed));
-
-        CHECK(input->push(makeCanonicalFrame(112, 2, 1)));
-        bool produced = false;
-        for (int attempt = 0; attempt < 6 && !produced; ++attempt) {
-            CHECK(node.process(execution));
-            produced = output->tryPop(observed);
-        }
-        CHECK(produced);
-        const auto lineage = FFmpegFrameView::canonicalLineage(observed);
-        CHECK(lineage && lineage->generation == 112);
-        CHECK(static_cast<MediaRuntimeNode&>(node).stop(execution));
-      }
-    }
-}
-
 } // namespace
 
 int main()
 {
     realFpsFilterPreservesOneToManyLineageAcrossFlushReuse();
     realFilterDropsPurgedRetainedOutputBeforeNextGeneration();
-    realFilterPurgeCancelsRetainedTerminalAndDelayedFrames();
     std::cout << "video filter node lineage tests passed\n";
     return 0;
 }

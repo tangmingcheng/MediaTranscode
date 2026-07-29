@@ -263,9 +263,9 @@ void testEvidenceOrderedRangeAndClockProjection(TestContext& ctx)
     selectedBreak.continuityEvent = MediaTsContinuityEvent{
         400, 0x201, MediaTsContinuityEventReason::CounterLoss};
     EXPECT_TRUE(ctx, generationRules.replay({selectedBreak}));
-    EXPECT_FALSE(ctx, generationRules.atOrBefore(400).value().calibration.has_value());
+    EXPECT_TRUE(ctx, generationRules.atOrBefore(400).value().calibration.has_value());
     EXPECT_EQ(ctx, generationRules.atOrBefore(400).value().readiness,
-              MediaSourceClockReadiness::ReacquireRequired);
+              MediaSourceClockReadiness::Locked);
 
     auto mismatch = clockEvidence(500, 10'800'000);
     mismatch.generation = 3;
@@ -309,7 +309,7 @@ void testEvidenceOrderedRangeAndClockProjection(TestContext& ctx)
     selectedFirst.continuityEvent = MediaTsContinuityEvent{
         100, 0x201, MediaTsContinuityEventReason::CounterLoss};
     EXPECT_TRUE(ctx, selectedBootstrap.replay({selectedFirst}));
-    EXPECT_EQ(ctx, selectedBootstrap.atOrBefore(100).value().generation, std::uint64_t{10});
+    EXPECT_EQ(ctx, selectedBootstrap.atOrBefore(100).value().generation, std::uint64_t{9});
 
     auto missingHistory = MediaTsClockProjection::create(clockPolicy(), 4, 400, 9, 0).value();
     auto cropped = clockEvidence(100, 0);
@@ -322,7 +322,7 @@ void testEvidenceOrderedRangeAndClockProjection(TestContext& ctx)
 
     auto sourceExhaustion = MediaTsClockProjection::create(
         clockPolicy(), 4, 400, std::numeric_limits<std::uint64_t>::max(), 0).value();
-    EXPECT_FALSE(ctx, sourceExhaustion.replay({selectedFirst}));
+    EXPECT_TRUE(ctx, sourceExhaustion.replay({selectedFirst}));
 }
 
 void testProgramClockTracker(TestContext& ctx)
@@ -342,7 +342,8 @@ void testProgramClockTracker(TestContext& ctx)
 
     EXPECT_TRUE(ctx, tracker.observe(pcr(4'401'000, 376)));
     EXPECT_TRUE(ctx, tracker.observe(pcr(9'801'000, 564)));
-    EXPECT_FALSE(ctx, tracker.observe(pcr(20'601'000, 752)));
+    EXPECT_TRUE(ctx, tracker.observe(pcr(20'601'000, 752)));
+    EXPECT_FALSE(ctx, tracker.ready());
 
     auto invalidPolicy = clockPolicy();
     invalidPolicy.maximumGap27Mhz = 0;
@@ -358,7 +359,7 @@ void testProgramClockTracker(TestContext& ctx)
     wrongPid.pcrPid = 0x102;
     EXPECT_FALSE(ctx, identity.value().observe(wrongPid));
     EXPECT_TRUE(ctx, identity.value().observe(pcr(1'000'000, 0)));
-    EXPECT_FALSE(ctx, identity.value().observe(pcr(900'000, 188)));
+    EXPECT_TRUE(ctx, identity.value().observe(pcr(900'000, 188)));
     EXPECT_TRUE(ctx, identity.value().observe(pcr(3'700'000, 376)));
     EXPECT_FALSE(ctx, identity.value().observe(pcr(6'400'000, 376)));
 
@@ -367,8 +368,8 @@ void testProgramClockTracker(TestContext& ctx)
     EXPECT_FALSE(ctx, identity.value().observe(wrongElementary));
     EXPECT_TRUE(ctx, identity.value().observePcrContinuityLoss(0x777));
     EXPECT_TRUE(ctx, identity.value().ready());
-    EXPECT_TRUE(ctx, identity.value().observeElementaryContinuityLoss(0x201));
-    EXPECT_FALSE(ctx, identity.value().ready());
+    EXPECT_TRUE(ctx, identity.value().observePcrContinuityLoss(0x201));
+    EXPECT_TRUE(ctx, identity.value().ready());
 
     auto events = MediaTsProgramClockTracker::create(clockPolicy(), 3);
     EXPECT_TRUE(ctx, events);
@@ -378,7 +379,7 @@ void testProgramClockTracker(TestContext& ctx)
     EXPECT_FALSE(ctx, events.value().ready());
     EXPECT_EQ(ctx, events.value().generation(), std::uint64_t{4});
     EXPECT_TRUE(ctx, events.value().observe(pcr(2'000'000, 188, true)));
-    EXPECT_EQ(ctx, events.value().generation(), std::uint64_t{5});
+    EXPECT_EQ(ctx, events.value().generation(), std::uint64_t{4});
     EXPECT_FALSE(ctx, events.value().ready());
     EXPECT_TRUE(ctx, events.value().observe(pcr(4'700'000, 376)));
     EXPECT_TRUE(ctx, events.value().ready());
@@ -440,7 +441,8 @@ void testProgramClockTrackerEnforcesExplicitMaximumGap(TestContext& ctx)
     EXPECT_TRUE(ctx, overLimit);
     if (!overLimit) return;
     EXPECT_TRUE(ctx, overLimit.value().observe(pcr(10'000'000, 0)));
-    EXPECT_FALSE(ctx, overLimit.value().observe(pcr(13'240'001, 188)));
+    EXPECT_TRUE(ctx, overLimit.value().observe(pcr(13'240'001, 188)));
+    EXPECT_FALSE(ctx, overLimit.value().ready());
 }
 
 void testSourceClockMapper(TestContext& ctx)

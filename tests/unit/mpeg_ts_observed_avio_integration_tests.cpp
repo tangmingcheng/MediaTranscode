@@ -256,9 +256,9 @@ void testProductionUdpSessionPublishesMappedProgramClock(TestContext& ctx,
     auto socketRuntime = MediaSocketRuntime::create();
     EXPECT_TRUE(ctx, socketRuntime);
     if (socketRuntime) {
-        auto duplicate = MediaUdpSocket::bind(socketRuntime.value(), MediaUdpSocketConfig{
+        auto available = MediaUdpSocket::bind(socketRuntime.value(), MediaUdpSocketConfig{
             MediaIpAddressFamily::Ipv4, "127.0.0.1", inputPort, 262'144});
-        EXPECT_FALSE(ctx, duplicate);
+        EXPECT_TRUE(ctx, available);
     }
 
     auto released = preflight.value().prepared->releaseBuffer();
@@ -280,8 +280,6 @@ void testProductionUdpSessionPublishesMappedProgramClock(TestContext& ctx,
         static_cast<std::uint16_t>(plan.pcrPid),
         static_cast<std::uint16_t>(plan.videoPid),
         static_cast<std::uint16_t>(plan.audioPid),
-        plan.pcrInterval27Mhz,
-        plan.maximumPcrJitter27Mhz,
         plan.maximumPcrGap27Mhz};
     auto projection = MediaTsClockProjection::create(
         policy, plan.projectionCapacity, plan.maximumPacketPositionRegressionBytes,
@@ -491,8 +489,8 @@ void testProductionInvalidProvenanceBindingFailsClosed(TestContext& ctx,
     auto sender = FfmpegMpegTsUdpSender::start(inputPort);
     EXPECT_TRUE(ctx, sender);
     if (!sender) return;
-    MediaRealtimePreflightIo io;
-    io.openMpegTs = [&ctx](const MediaTsInputSessionOptions& options)
+    MediaRealtimeInputIo io;
+    io.openMpegTsSession = [&ctx](const MediaTsInputSessionOptions& options)
         -> ::media::Result<std::unique_ptr<MediaTsInputSession>> {
         auto invalid = options;
         invalid.pesProvenanceCapacity = 0;

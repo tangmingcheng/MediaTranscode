@@ -57,6 +57,9 @@ void verifyPushOutcomes(TestContext& ctx, MediaQueueMode mode)
     policy.capacity = 1;
     policy.bounded = true;
     policy.overflowPolicy = MediaQueueOverflowPolicy::DropNewest;
+    policy.storageMode = mode == MediaQueueMode::Blocking
+        ? MediaQueueStorageMode::Deque
+        : MediaQueueStorageMode::Unknown;
     Queue dropNewest(policy);
     auto first = makePacketBuffer(true, 1);
     auto second = makePacketBuffer(true, 2);

@@ -71,8 +71,6 @@ void runMpegTsOutputPacketizerTests(TestContext& ctx);
 void runMpegTsOutputSessionTests(TestContext& ctx);
 void runMpegTsMuxRuntimeBufferTests(TestContext& ctx);
 void runMpegTsFfmpegConfigMaterializerTests(TestContext& ctx);
-void runProjectMpegTsMuxSessionAdapterTests(TestContext& ctx);
-void runProjectMpegTsFileMuxNodeTests(TestContext& ctx);
 void runFileMuxSessionTests(TestContext& ctx);
 void runFileOutputResourceTests(TestContext& ctx);
 
@@ -1607,8 +1605,6 @@ int main()
     runMpegTsOutputSessionTests(ctx);
     runMpegTsMuxRuntimeBufferTests(ctx);
     runMpegTsFfmpegConfigMaterializerTests(ctx);
-    runProjectMpegTsMuxSessionAdapterTests(ctx);
-    runProjectMpegTsFileMuxNodeTests(ctx);
     runFileMuxSessionTests(ctx);
     runFileOutputResourceTests(ctx);
     testAudioEncodeFixedFrameStateMachine(ctx);

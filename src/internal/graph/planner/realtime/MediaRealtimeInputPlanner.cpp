@@ -327,7 +327,7 @@ openMpegTsRuntimeSession(
     const auto plannedBinding = runtimeBinding;
     const int plannedProgramNumber = selected.value().programNumber;
     const int plannedPmtPid = selected.value().programMapPid;
-    auto prepared = MediaPreparedRealtimeInput::createDeferredMpegTs(
+    auto prepared = MediaPreparedRealtimeInput::createMpegTs(
         std::move(session),
         [openSettings, plannedBinding, plannedProgramNumber, plannedPmtPid,
          sessionOpener]() mutable {
@@ -588,14 +588,15 @@ void MediaRealtimeInputPlanner::applyNodePlans(
 ::media::Result<MediaPreparedRealtimeInputScan> MediaRealtimeInputPlanner::prepare(
     const MediaRealtimeRtpTranscodeRequest& request,
     const MediaPipelinePlannerOptions& options,
-    const MediaRealtimePreflightIo* io)
+    const MediaRealtimeInputIo* io)
 {
     if (MediaRealtimeRequestClassifier::mpegTsUdpInput(request)) {
-        if (io && !io->openMpegTs) {
+        if (io && !io->openMpegTsSession) {
             return ::media::Result<MediaPreparedRealtimeInputScan>::failure(
                 ::media::ErrorInfo::invalidArgument("MPEG-TS preflight opener is required"));
         }
-        return prepareMpegTs(request, io ? &io->openMpegTs : nullptr);
+        return prepareMpegTs(
+            request, io ? &io->openMpegTsSession : nullptr);
     }
     return io
         ? MediaPipelineCapabilityScanner::prepareRealtimeInput(

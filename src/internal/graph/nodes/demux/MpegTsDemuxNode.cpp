@@ -193,7 +193,7 @@ MediaNodeKind MpegTsDemuxNode::staticKind() noexcept
             static_cast<std::size_t>(provenanceCapacity.value()) ||
         runtimeContract.originBinding != expectedBinding) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "MpegTsDemuxNode prepared session violates the planned runtime contract"));
+            "MpegTsDemuxNode materialized runtime session violates the planned contract"));
     }
     auto preflight = session.value()->evidenceSnapshotAfter(std::nullopt);
     if (!preflight) return ::media::Status::failure(preflight.error());
@@ -391,6 +391,10 @@ MpegTsDemuxNode::sourceClockCheckpoint(std::uint64_t packetPosition)
         *envelope.provenance.evidenceByteOffset);
     if (!checkpoint) {
         return ::media::Result<MediaNodeProcessResult>::failure(checkpoint.error());
+    }
+    if (m_lockedProjectionGeneration &&
+        checkpoint.value().generation < *m_lockedProjectionGeneration) {
+        return processProgress();
     }
     const bool invalidPesProvenance =
         envelope.provenance.readiness ==
