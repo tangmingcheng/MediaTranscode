@@ -2,6 +2,7 @@
 
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
+#include "internal/graph/sync/MediaAvSyncSharedNtpEpochRequirement.h"
 
 #include <utility>
 
@@ -22,14 +23,17 @@ MediaAvSyncRuntimeBootstrap::createClocks(
         return ::media::Result<MediaAvSyncClockBundle>::failure(
             status.error());
     }
-    const bool requireSharedNtpEpoch =
-        *binding.plan.sourceClockMode ==
-        MediaAvSyncSourceClockMode::RtpSenderReports;
-    auto clocks = source.capture(requireSharedNtpEpoch);
+    auto requirement =
+        MediaAvSyncSharedNtpEpochRequirement::resolve(binding.plan);
+    if (!requirement) {
+        return ::media::Result<MediaAvSyncClockBundle>::failure(
+            requirement.error());
+    }
+    auto clocks = source.capture(requirement.value());
     if (!clocks) return clocks;
     if (!clocks.value().masterClock ||
         static_cast<bool>(clocks.value().sharedNtpEpoch) !=
-            requireSharedNtpEpoch) {
+            requirement.value()) {
         return ::media::Result<MediaAvSyncClockBundle>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "A/V sync clock source violated the planned clock bundle"));

@@ -1,6 +1,7 @@
 #include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
 
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
+#include "internal/graph/sync/MediaAvSyncSharedNtpEpochRequirement.h"
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -55,12 +56,16 @@ MediaAvSyncGroupRuntime::create(
         return ::media::Result<std::shared_ptr<MediaAvSyncGroupRuntime>>::failure(
             status.error());
     }
-    const bool requiresNtp = *plan.sourceClockMode ==
-        MediaAvSyncSourceClockMode::RtpSenderReports;
-    if (static_cast<bool>(sharedNtpEpoch) != requiresNtp) {
+    auto requirement =
+        MediaAvSyncSharedNtpEpochRequirement::resolve(plan);
+    if (!requirement) {
+        return ::media::Result<std::shared_ptr<MediaAvSyncGroupRuntime>>::failure(
+            requirement.error());
+    }
+    if (static_cast<bool>(sharedNtpEpoch) != requirement.value()) {
         return ::media::Result<std::shared_ptr<MediaAvSyncGroupRuntime>>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "A/V sync group clock bundle does not match its source clock mode"));
+                "A/V sync group clock bundle does not match its output NTP epoch policy"));
     }
     return ::media::Result<std::shared_ptr<MediaAvSyncGroupRuntime>>::success(
         std::shared_ptr<MediaAvSyncGroupRuntime>(new MediaAvSyncGroupRuntime(
