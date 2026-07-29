@@ -98,7 +98,7 @@
 - Extend `MediaAvSyncInputClockPlan` with `MediaDemuxTimestampInputClockAssemblyPlan`.
 - Continue using `MediaAvSyncOutputAdapterKind` independently; no cross-product enum is added.
 
-- [ ] **Step 1: Make the synchronization plan input-clock-specific**
+- [x] **Step 1: Make the synchronization plan input-clock-specific**
 
   Remove the paired topology field and all `RtpToRtp`/`TsToTs` decisions. `MediaAvSyncPlan` contains exactly one source clock mode plus only the matching input protocol facts:
 
@@ -110,23 +110,23 @@
 
   RTP output identity and TS output mux facts move out of input-clock selection and are planned from the output request.
 
-- [ ] **Step 2: Plan output facts from output selection**
+- [x] **Step 2: Plan output facts from output selection**
 
   Resolve Project MPEG-TS codec/layout facts whenever output layout is MPEG-TS, regardless of input. Resolve scheduled elementary RTP packetization only for separate RTP output. The planner rejects missing H.264/AAC-LC 48 kHz stereo facts for both TS transports.
 
-- [ ] **Step 3: Add URL/RTSP demux timestamp planning**
+- [x] **Step 3: Add URL/RTSP demux timestamp planning**
 
   Add a focused plan containing explicit video/audio stream time bases, first-window maximum skew, timestamp regression limit, discontinuity threshold, and initial generation. Values come from prepared input and existing A/V startup/recovery policy; no runtime constants or packet-arrival fallback are allowed.
 
-- [ ] **Step 4: Build assembly variants only from source clock mode**
+- [x] **Step 4: Build assembly variants only from source clock mode**
 
   RTP uses the existing RTP duration plan, TS uses the existing packet-duration plan, and URL/RTSP uses positive prepared packet/frame durations with validated demux PTS/DTS. Output layout must not affect input epoch, duration, or generation decisions.
 
-- [ ] **Step 5: Validate orthogonality**
+- [x] **Step 5: Validate orthogonality**
 
   Update validators so each of the three input clock variants accepts each of the three output variants. Reject mismatched facts, duplicate output authority, incomplete protocol plans, and any old paired-topology dependency.
 
-- [ ] **Step 6: Perform static verification and commit**
+- [x] **Step 6: Perform static verification and commit**
 
   Search for every `MediaAvSyncTopology` use. Remove the type and its file only after no production consumer remains; do not leave an unused compatibility enum. Run `git diff --check`, verify UTF-8/CRLF, update this task, and commit:
 

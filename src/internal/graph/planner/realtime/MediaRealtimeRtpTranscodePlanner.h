@@ -155,6 +155,7 @@ struct MediaRealtimeRtpTranscodePlan {
     RealtimeInputType inputType;
     RealtimeInputStreamLayout inputLayout;
     RealtimeOutputStreamLayout outputLayout;
+    MediaOutputTransportKind outputTransport;
     MediaPipelinePlan videoPlan;
     MediaAudioPipelinePlan audioPlan;
     MediaVideoTranscodeParameters videoParameters;
@@ -197,7 +198,8 @@ private:
     static ::media::Result<MediaRealtimeRtpTranscodePlan> planWithInput(
         const MediaRealtimeRtpTranscodeRequest& request,
         const MediaRealtimeInputStreamInfo* inputInfo,
-        const MediaTsSelectedProgramPlan* selectedTsProgram = nullptr);
+        const MediaTsSelectedProgramPlan* selectedTsProgram = nullptr,
+        const MediaPreparedRealtimeInput* preparedInput = nullptr);
     static ::media::Result<MediaRealtimeTranscodePreflight> preflightImpl(
         const MediaRealtimeRtpTranscodeRequest& request,
         const MediaRealtimePreflightIo* io);

@@ -19,7 +19,7 @@ namespace {
     const MediaAvSyncPlan& synchronization,
     const MediaRealtimeAvSyncPlanningFacts& facts)
 {
-    if (!outer.audioPlan.enabled || !synchronization.topology ||
+    if (!outer.audioPlan.enabled || !synchronization.sourceClockMode ||
         !synchronization.startup.videoIdentity ||
         synchronization.startup.videoIdentity->empty() ||
         !synchronization.startup.audioIdentity ||
@@ -44,11 +44,11 @@ namespace {
     MediaAvSyncInputClockPlan inputClock;
     MediaCanonicalVideoDurationPlan videoDuration;
     MediaCanonicalAudioDurationPlan audioDuration;
-    if (*synchronization.topology ==
-        MediaAvSyncTopology::SeparateRtpToSeparateRtp) {
+    std::uint64_t initialGeneration = MediaFirstLockedSourceGeneration;
+    if (*synchronization.sourceClockMode ==
+        MediaAvSyncSourceClockMode::RtpSenderReports) {
         if (outer.inputLayout != RealtimeInputStreamLayout::SeparateStreams ||
-            outer.outputLayout != RealtimeOutputStreamLayout::SeparateStreams ||
-            !synchronization.rtp || !facts.inputVideoClockRate ||
+            !synchronization.rtpInput || !facts.inputVideoClockRate ||
             *facts.inputVideoClockRate <= 0 || !facts.inputAudioSampleRate ||
             *facts.inputAudioSampleRate <= 0 ||
             !facts.inputAudioSamplesPerAccessUnit ||
@@ -60,21 +60,19 @@ namespace {
                     "separate RTP production assembly facts are incomplete"));
         }
         inputClock.emplace<MediaRtpInputClockAssemblyPlan>(
-            MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime);
+            synchronization.rtpInput->input.commonEpochPolicy);
         videoDuration.emplace<MediaRtpTimestampDeltaDurationPlan>(
             *facts.inputVideoClockRate,
             MediaTerminalDurationPolicy::RepeatLastObservedPositiveDelta);
         audioDuration.emplace<MediaPlannedAudioSamplesDurationPlan>(
             *facts.inputAudioSampleRate,
             *facts.inputAudioSamplesPerAccessUnit);
-    } else if (*synchronization.topology ==
-               MediaAvSyncTopology::MpegTsToMpegTs) {
+    } else if (*synchronization.sourceClockMode ==
+               MediaAvSyncSourceClockMode::MpegTsPcr) {
         if (outer.inputType != RealtimeInputType::MpegTsUdp ||
             outer.inputLayout !=
                 RealtimeInputStreamLayout::MuxedTransportStream ||
-            outer.outputLayout !=
-                RealtimeOutputStreamLayout::MuxedTransportStream ||
-            !synchronization.ts || !facts.inputAudioSampleRate ||
+            !synchronization.mpegTsInput || !facts.inputAudioSampleRate ||
             *facts.inputAudioSampleRate <= 0 ||
             !facts.inputAudioSamplesPerAccessUnit ||
             *facts.inputAudioSamplesPerAccessUnit == 0 ||
@@ -95,17 +93,49 @@ namespace {
         audioDuration.emplace<MediaPlannedAudioSamplesDurationPlan>(
             *facts.inputAudioSampleRate,
             *facts.inputAudioSamplesPerAccessUnit);
+    } else if (*synchronization.sourceClockMode ==
+               MediaAvSyncSourceClockMode::DemuxTimestamps) {
+        if (outer.inputType != RealtimeInputType::Url ||
+            outer.inputLayout !=
+                RealtimeInputStreamLayout::SessionDescribed ||
+            !synchronization.demuxTimestampInput ||
+            !synchronization.demuxTimestampInput->firstWindowMaximumSkewNs ||
+            !synchronization.demuxTimestampInput->timestampRegressionLimitNs ||
+            !synchronization.demuxTimestampInput->discontinuityThresholdNs ||
+            !synchronization.demuxTimestampInput->initialGeneration ||
+            !synchronization.demuxTimestampInput->videoTimeBase.isKnown() ||
+            synchronization.demuxTimestampInput->videoTimeBase.num <= 0 ||
+            synchronization.demuxTimestampInput->videoTimeBase.den <= 0 ||
+            !synchronization.demuxTimestampInput->audioTimeBase.isKnown() ||
+            synchronization.demuxTimestampInput->audioTimeBase.num <= 0 ||
+            synchronization.demuxTimestampInput->audioTimeBase.den <= 0) {
+            return ::media::Result<MediaRealtimeAvSyncAssemblyPlan>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "demux timestamp production assembly facts are incomplete"));
+        }
+        const auto& demux = *synchronization.demuxTimestampInput;
+        initialGeneration = *demux.initialGeneration;
+        inputClock.emplace<MediaDemuxTimestampInputClockAssemblyPlan>(
+            MediaDemuxTimestampInputClockAssemblyPlan{
+                demux.videoTimeBase,
+                demux.audioTimeBase,
+                *demux.firstWindowMaximumSkewNs,
+                *demux.timestampRegressionLimitNs,
+                *demux.discontinuityThresholdNs,
+                initialGeneration});
+        videoDuration.emplace<MediaPacketDurationPlan>(true);
+        audioDuration.emplace<MediaPacketDurationPlan>(true);
     } else {
         return ::media::Result<MediaRealtimeAvSyncAssemblyPlan>::failure(
             ::media::ErrorInfo::unsupported(
-                "A/V production assembly topology is unsupported"));
+                "A/V production input clock mode is unsupported"));
     }
 
     return ::media::Result<MediaRealtimeAvSyncAssemblyPlan>::success(
         MediaRealtimeAvSyncAssemblyPlan{
             std::move(inputClock),
             MediaInitialGenerationPolicy::FirstLockedOnlyFailOnChange,
-            MediaFirstLockedSourceGeneration,
+            initialGeneration,
             MediaClockEvidencePolicy::RequireLockedFailOnDegradedOrReacquire,
             MediaCanonicalVideoAssemblyPlan{
                 *synchronization.startup.videoIdentity,
@@ -212,7 +242,8 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
     auto correction = MediaAudioCorrectionReachabilityPlanner::plan(
         synchronization, facts.value());
     if (!correction || !facts.value().acknowledgementTimeout ||
-        !facts.value().terminalDrainWindow || !synchronization.topology) {
+        !facts.value().terminalDrainWindow ||
+        !synchronization.sourceClockMode) {
         return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
             correction ? ::media::ErrorInfo::notInitialized(
                              "A/V generation transition timing facts are incomplete")
@@ -237,11 +268,12 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
     MediaAvSyncOutputAdapterKind adapter;
     std::optional<std::variant<MediaSeparateRtpOutputRuntimePlan,
                                MediaProjectMpegTsRuntimeOutputPlan>> protocolOutput;
-    if (*synchronization.topology ==
-        MediaAvSyncTopology::SeparateRtpToSeparateRtp) {
-        if (!synchronization.rtp || synchronization.ts ||
+    if (synchronization.rtpOutput) {
+        if (synchronization.projectMpegTsOutput ||
+            outer.outputLayout != RealtimeOutputStreamLayout::SeparateStreams ||
+            outer.outputTransport != MediaOutputTransportKind::RtpAvp ||
             !synchronization.startup.outputLeadNs ||
-            !synchronization.rtp->output.senderReportIntervalNs ||
+            !synchronization.rtpOutput->output.senderReportIntervalNs ||
             output.sdp.path.empty() || !outer.audioPlan.resolvedOutput) {
             return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
                 ::media::ErrorInfo::notInitialized(
@@ -250,15 +282,15 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
         auto video = scheduledRtpOutput(
             MediaScheduledStream::Video,
             output.videoOutput,
-            synchronization.rtp->videoOutput,
+            synchronization.rtpOutput->videoOutput,
             *synchronization.startup.outputLeadNs,
-            *synchronization.rtp->output.senderReportIntervalNs);
+            *synchronization.rtpOutput->output.senderReportIntervalNs);
         auto audio = scheduledRtpOutput(
             MediaScheduledStream::Audio,
             output.audioOutput,
-            synchronization.rtp->audioOutput,
+            synchronization.rtpOutput->audioOutput,
             *synchronization.startup.outputLeadNs,
-            *synchronization.rtp->output.senderReportIntervalNs);
+            *synchronization.rtpOutput->output.senderReportIntervalNs);
         if (!video || !audio) {
             return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
                 video ? audio.error() : video.error());
@@ -275,18 +307,25 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
                 std::move(video).value(),
                 std::move(audio).value(),
                 std::move(sdp).value()});
-    } else if (*synchronization.topology ==
-               MediaAvSyncTopology::MpegTsToMpegTs) {
-        if (synchronization.rtp || !synchronization.ts ||
-            !synchronization.ts->outputMux ||
+    } else if (synchronization.projectMpegTsOutput) {
+        if (synchronization.rtpOutput ||
+            outer.outputLayout !=
+                RealtimeOutputStreamLayout::MuxedTransportStream ||
+            !synchronization.projectMpegTsOutput->outputMux ||
             !facts.value().outputSampleRate || output.muxedOutput.url.empty()) {
             return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
                 ::media::ErrorInfo::notInitialized(
                     "project MPEG-TS synchronization output facts are incomplete"));
         }
+        if (outer.outputTransport !=
+            MediaOutputTransportKind::UdpDatagrams) {
+            return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "MPEG-TS/RTP requires a dedicated planned runtime transport"));
+        }
         auto accepted = MediaProjectMpegTsOutputPlan::accept(
             *facts.value().outputSampleRate,
-            *synchronization.ts->outputMux);
+            *synchronization.projectMpegTsOutput->outputMux);
         if (!accepted) {
             return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
                 accepted.error());
@@ -302,7 +341,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
     } else {
         return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
             ::media::ErrorInfo::unsupported(
-                "A/V runtime plan topology is unsupported"));
+                "A/V runtime output authority is unsupported"));
     }
 
     auto transition = MediaAvGenerationTransitionPlanner::plan(

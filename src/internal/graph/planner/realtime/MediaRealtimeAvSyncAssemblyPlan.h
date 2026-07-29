@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/graph/model/MediaGraphTypes.h"
 #include "internal/graph/protocol/rtp/MediaRtpClockGroupPolicy.h"
 #include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
 #include "internal/graph/time/MediaRunningTime.h"
@@ -36,9 +37,32 @@ struct MediaMpegTsInputClockAssemblyPlan final {
                            const MediaMpegTsInputClockAssemblyPlan&) = default;
 };
 
+struct MediaDemuxTimestampInputClockAssemblyPlan final {
+    MediaRational videoTimeBase;
+    MediaRational audioTimeBase;
+    MediaRunningTime firstWindowMaximumSkew;
+    MediaRunningTime timestampRegressionLimit;
+    MediaRunningTime discontinuityThreshold;
+    std::uint64_t initialGeneration;
+    friend bool operator==(
+        const MediaDemuxTimestampInputClockAssemblyPlan& left,
+        const MediaDemuxTimestampInputClockAssemblyPlan& right)
+    {
+        return left.videoTimeBase.num == right.videoTimeBase.num &&
+            left.videoTimeBase.den == right.videoTimeBase.den &&
+            left.audioTimeBase.num == right.audioTimeBase.num &&
+            left.audioTimeBase.den == right.audioTimeBase.den &&
+            left.firstWindowMaximumSkew == right.firstWindowMaximumSkew &&
+            left.timestampRegressionLimit == right.timestampRegressionLimit &&
+            left.discontinuityThreshold == right.discontinuityThreshold &&
+            left.initialGeneration == right.initialGeneration;
+    }
+};
+
 using MediaAvSyncInputClockPlan =
     std::variant<MediaRtpInputClockAssemblyPlan,
-                 MediaMpegTsInputClockAssemblyPlan>;
+                 MediaMpegTsInputClockAssemblyPlan,
+                 MediaDemuxTimestampInputClockAssemblyPlan>;
 
 struct MediaRtpTimestampDeltaDurationPlan final {
     int clockRate;
