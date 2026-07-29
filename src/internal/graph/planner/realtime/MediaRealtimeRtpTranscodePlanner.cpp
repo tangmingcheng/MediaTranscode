@@ -24,15 +24,16 @@ namespace media::ffmpeg::graph {
 namespace {
 
 ::media::Status planScheduledRtpPacketization(
-    MediaRealtimeRtpTranscodePlan& plan,
+    const MediaRealtimeRtpTranscodePlan& plan,
+    MediaRealtimeOutputPlanningDraft& output,
     const MediaAvSyncPlan& synchronization)
 {
     if (!synchronization.rtp || !synchronization.rtp->videoOutput.clockRate ||
         !synchronization.rtp->videoOutput.payloadType ||
         !synchronization.rtp->audioOutput.clockRate ||
         !synchronization.rtp->audioOutput.payloadType ||
-        !plan.audioPlan.resolvedOutput || plan.videoOutput.packetSize <= 0 ||
-        plan.audioOutput.packetSize <= 0) {
+        !plan.audioPlan.resolvedOutput || output.videoOutput.packetSize <= 0 ||
+        output.audioOutput.packetSize <= 0) {
         return ::media::Status::failure(::media::ErrorInfo::notInitialized(
             "scheduled RTP packetization requires complete selected protocol facts"));
     }
@@ -48,19 +49,30 @@ namespace {
         MediaStreamKind::Video, plan.videoPlan.outputCodecName, 1,
         *synchronization.rtp->videoOutput.clockRate,
         *synchronization.rtp->videoOutput.payloadType,
-        static_cast<std::size_t>(plan.videoOutput.packetSize));
+        static_cast<std::size_t>(output.videoOutput.packetSize));
     auto audio = MediaScheduledRtpPacketizationPlan::create(
         MediaStreamKind::Audio, plan.audioPlan.resolvedOutput->codecName(), 1,
         *synchronization.rtp->audioOutput.clockRate,
         *synchronization.rtp->audioOutput.payloadType,
-        static_cast<std::size_t>(plan.audioOutput.packetSize),
+        static_cast<std::size_t>(output.audioOutput.packetSize),
         plan.audioPlan.resolvedOutput->codecFrameSamples());
     if (!video || !audio) {
         return ::media::Status::failure(video ? audio.error() : video.error());
     }
-    plan.videoOutput.scheduledPacketization = std::move(video).value();
-    plan.audioOutput.scheduledPacketization = std::move(audio).value();
+    output.videoOutput.scheduledPacketization = std::move(video).value();
+    output.audioOutput.scheduledPacketization = std::move(audio).value();
     return ::media::Status::success();
+}
+
+MediaRealtimeSingleStreamOutputPlan singleStreamOutput(
+    MediaRealtimeOutputPlanningDraft output)
+{
+    return MediaRealtimeSingleStreamOutputPlan{
+        output.packetCopyNormalizationRequired,
+        std::move(output.videoOutput),
+        std::move(output.muxedOutput),
+        std::move(output.sdp),
+        std::move(output.singleStreamMux)};
 }
 
 constexpr int RealtimeNoBidirectionalFrames = 0;
@@ -329,7 +341,7 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
     if (!options.input.type || *options.input.type != RealtimeInputType::RtpPort) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
             ::media::ErrorInfo::unsupported(
-                "URL and MPEG-TS realtime input require preflight() to preserve the prepared session"));
+                "URL and MPEG-TS realtime input require preflight() to preserve the prepared input contract"));
     }
     return planWithInput(options, nullptr, nullptr);
 }
@@ -460,8 +472,6 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
     plan.inputType = *options.input.type;
     plan.inputLayout = *options.input.streamLayout;
     plan.outputLayout = *options.output.streamLayout;
-    plan.audioPacketNormalizationRequired = *options.input.type != RealtimeInputType::RtpPort;
-    plan.videoPacketCopyNormalizationRequired = *options.input.type != RealtimeInputType::RtpPort;
     plan.videoPlan = std::move(videoPlan);
     plan.audioPlan = std::move(audioPlan);
     plan.videoParameters = std::move(videoParameters);
@@ -508,7 +518,11 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
             selected.initialRawTransportGeneration = 0;
         }
     }
-    if (auto outputStatus = MediaRealtimeOutputPolicyPlanner::apply(options, outputUrls.value(), plan);
+    MediaRealtimeOutputPlanningDraft output;
+    output.packetCopyNormalizationRequired =
+        *options.input.type != RealtimeInputType::RtpPort;
+    if (auto outputStatus = MediaRealtimeOutputPolicyPlanner::apply(
+            options, outputUrls.value(), plan, output);
         !outputStatus) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(outputStatus.error());
     }
@@ -569,31 +583,20 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
         if (avSync.value().topology ==
             MediaAvSyncTopology::SeparateRtpToSeparateRtp) {
             if (auto status = planScheduledRtpPacketization(
-                    plan, avSync.value()); !status) {
+                    plan, output, avSync.value()); !status) {
                 return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
                     status.error());
             }
         }
         auto runtime = MediaRealtimeAvSyncRuntimePlanner::plan(
-            plan, std::move(avSync).value());
+            plan, output, std::move(avSync).value());
         if (!runtime) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
                 runtime.error());
         }
         plan.avSyncRuntime = std::move(runtime).value();
-        plan.audioPacketNormalizationRequired = false;
-        plan.videoPacketCopyNormalizationRequired = false;
-        plan.videoOutput.writePacingEnabled = false;
-        plan.videoOutput.writePacingBytesPerSecond = 0;
-        plan.videoOutput.writePacingBurstBytes = 0;
-        plan.audioOutput.writePacingEnabled = false;
-        plan.audioOutput.writePacingBytesPerSecond = 0;
-        plan.audioOutput.writePacingBurstBytes = 0;
-        plan.videoMux.pacingPolicy = {};
-        plan.videoMux.startupDelayMs = 0;
-        plan.audioMux.pacingPolicy = {};
-        plan.audioMux.startupDelayMs = 0;
-        plan.avStartBarrier = {};
+    } else {
+        plan.singleStreamOutput.emplace(singleStreamOutput(std::move(output)));
     }
     if (auto status = MediaRealtimeTsInputPlanValidator::validate(plan.inputType, plan.input);
         !status) {

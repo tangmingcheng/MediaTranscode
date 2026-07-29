@@ -10,9 +10,10 @@ namespace media::ffmpeg::graph {
 
 class MediaTsAacAdtsFramer final {
 public:
-    static ::media::Result<std::vector<std::uint8_t>> frame(
+    static ::media::Result<std::span<const std::uint8_t>> frame(
         const MediaTsAacAdtsPlan& plan,
-        std::span<const std::uint8_t> rawPayload);
+        std::span<const std::uint8_t> rawPayload,
+        std::vector<std::uint8_t>& workspace);
 };
 
 } // namespace media::ffmpeg::graph

@@ -38,8 +38,6 @@ public:
     static ::media::Result<MediaPreparedRealtimeInput> create(
         ::media::ffmpeg::InputFormatContextPtr context);
     static ::media::Result<MediaPreparedRealtimeInput> createMpegTs(
-        std::unique_ptr<MediaTsInputSession> session);
-    static ::media::Result<MediaPreparedRealtimeInput> createDeferredMpegTs(
         std::unique_ptr<MediaTsInputSession> preflightSession,
         MediaTsRuntimeSessionFactory runtimeSessionFactory);
 

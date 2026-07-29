@@ -193,7 +193,7 @@ MediaNodeKind MpegTsDemuxNode::staticKind() noexcept
             static_cast<std::size_t>(provenanceCapacity.value()) ||
         runtimeContract.originBinding != expectedBinding) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "MpegTsDemuxNode prepared session violates the planned runtime contract"));
+            "MpegTsDemuxNode materialized runtime session violates the planned contract"));
     }
     auto preflight = session.value()->evidenceSnapshotAfter(std::nullopt);
     if (!preflight) return ::media::Status::failure(preflight.error());

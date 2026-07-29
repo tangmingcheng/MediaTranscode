@@ -11,6 +11,7 @@ struct MediaPipelineAudioSourceProbeResult {
     bool found = false;
     int streamIndex = invalidMediaStreamIndex;
     std::string codecName;
+    int maximumAccessUnitSamples = 0;
     MediaFormatDescriptor descriptor;
 };
 

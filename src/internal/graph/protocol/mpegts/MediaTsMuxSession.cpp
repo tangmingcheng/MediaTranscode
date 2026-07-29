@@ -283,30 +283,23 @@ MediaTsMuxSession::writeAccessUnit(
         m_plan.transportDecodeLead());
     if (!clock) return advanceFailure(clock.error());
 
-    std::span<const std::uint8_t> framedBytes;
-    std::optional<MediaTsFramedAccessUnit> framedVideo;
-    std::vector<std::uint8_t> framedAudio;
-    switch (unit.stream) {
-    case MediaScheduledStream::Video: {
-        auto framed = MediaTsH264AccessUnitFramer::frame(
-            m_plan, m_video, unit.payload, unit.randomAccess);
-        if (!framed) return advanceFailure(framed.error());
-        framedVideo.emplace(std::move(framed).value());
-        framedBytes = framedVideo->bytes();
-        break;
-    }
-    case MediaScheduledStream::Audio: {
-        auto framed = MediaTsAacAdtsFramer::frame(
-            m_plan.parameters().aac, unit.payload);
-        if (!framed) return advanceFailure(framed.error());
-        framedAudio = std::move(framed).value();
-        framedBytes = framedAudio;
-        break;
-    }
-    default:
-        return advanceFailure(
-            invalid("MPEG-TS access unit stream is unsupported"));
-    }
+    auto framed = [&]() -> ::media::Result<std::span<const std::uint8_t>> {
+        switch (unit.stream) {
+        case MediaScheduledStream::Video:
+            return MediaTsH264AccessUnitFramer::frame(
+                m_plan, m_video, unit.payload, unit.randomAccess,
+                m_videoFramingWorkspace);
+        case MediaScheduledStream::Audio:
+            return MediaTsAacAdtsFramer::frame(
+                m_plan.parameters().aac, unit.payload,
+                m_audioFramingWorkspace);
+        default:
+            return ::media::Result<std::span<const std::uint8_t>>::failure(
+                invalid("MPEG-TS access unit stream is unsupported"));
+        }
+    }();
+    if (!framed) return advanceFailure(framed.error());
+    const auto framedBytes = framed.value();
     auto header = MediaTsPesSerializer::header(
         unit.stream, clock.value().clock(), framedBytes.size());
     if (!header) return advanceFailure(header.error());

@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <optional>
+#include <vector>
 
 namespace media::ffmpeg::graph {
 
@@ -60,6 +61,8 @@ private:
     std::optional<MediaRunningTime> m_lastAccessUnitEmission;
     MediaRunningTime m_nextPsi;
     MediaRunningTime m_nextPcr;
+    std::vector<std::uint8_t> m_videoFramingWorkspace;
+    std::vector<std::uint8_t> m_audioFramingWorkspace;
 };
 
 } // namespace media::ffmpeg::graph

@@ -95,7 +95,8 @@ MediaTsTransportPacketBuilder::payload(
     std::uint16_t pid,
     std::uint8_t initialPayloadContinuity,
     std::span<const std::span<const std::uint8_t>> segments,
-    bool randomAccess)
+    bool randomAccess,
+    std::vector<std::array<std::uint8_t, 188>> workspace)
 {
     if (pid >= NullPid || initialPayloadContinuity > 15) {
         return ::media::Result<std::vector<std::array<std::uint8_t, 188>>>::failure(
@@ -107,13 +108,13 @@ MediaTsTransportPacketBuilder::payload(
             logicalBytes.error());
     }
     auto reader = std::move(logicalBytes).value();
-    std::vector<std::array<std::uint8_t, 188>> output;
+    workspace.clear();
     const std::size_t firstCapacity = randomAccess ? 182 : 184;
     const std::size_t remaining = reader.size() > firstCapacity
         ? reader.size() - firstCapacity
         : 0;
     const std::size_t trailingPackets = remaining / 184 + (remaining % 184 != 0);
-    output.reserve(1 + trailingPackets);
+    workspace.reserve(1 + trailingPackets);
     std::size_t offset = 0;
     std::uint8_t nextContinuity = initialPayloadContinuity;
     while (offset < reader.size()) {
@@ -140,10 +141,10 @@ MediaTsTransportPacketBuilder::payload(
             payloadOffset, payloadBytes));
         offset += payloadBytes;
         nextContinuity = static_cast<std::uint8_t>((nextContinuity + 1) & 0x0F);
-        output.push_back(std::move(packet));
+        workspace.push_back(std::move(packet));
     }
     return ::media::Result<std::vector<std::array<std::uint8_t, 188>>>::success(
-        std::move(output));
+        std::move(workspace));
 }
 
 ::media::Result<std::array<std::uint8_t, 188>>

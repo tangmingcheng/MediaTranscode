@@ -123,19 +123,19 @@ MediaLatencyPolicy muxPacing() noexcept
 ::media::Status MediaRealtimeOutputPolicyPlanner::apply(
     const MediaRealtimeRtpTranscodeRequest& request,
     const MediaRealtimeOutputUrls& urls,
-    MediaRealtimeRtpTranscodePlan& plan)
+    MediaRealtimeRtpTranscodePlan& plan,
+    MediaRealtimeOutputPlanningDraft& output)
 {
     if (request.output.streamLayout == RealtimeOutputStreamLayout::MuxedTransportStream) {
-        plan.muxedOutput.url = urls.muxed;
-        plan.muxedOutput.format = urls.muxedFormat;
-        plan.muxedOutput.mediaId = request.mediaId;
-        plan.muxedOutput.outputResourceKind =
+        output.muxedOutput.url = urls.muxed;
+        output.muxedOutput.format = urls.muxedFormat;
+        output.muxedOutput.mediaId = request.mediaId;
+        output.muxedOutput.outputResourceKind =
             MediaOutputResourceKind::FFmpegFormatContext;
-        plan.muxedOutput.muxSessionKind = MediaMuxSessionKind::FFmpegFile;
-        plan.videoMux.expectVideo = true;
-        plan.videoMux.expectAudio = MediaRealtimeRequestClassifier::audioRequested(request);
-        plan.audioMux.expectVideo = false;
-        plan.audioMux.expectAudio = false;
+        output.muxedOutput.muxSessionKind = MediaMuxSessionKind::FFmpegFile;
+        output.singleStreamMux.expectVideo = true;
+        output.singleStreamMux.expectAudio =
+            MediaRealtimeRequestClassifier::audioRequested(request);
         return ::media::Status::success();
     }
 
@@ -146,46 +146,38 @@ MediaLatencyPolicy muxPacing() noexcept
     const std::string codec = canonicalCodecName(plan.videoPlan.outputCodecName);
     if (codec == "h264" || codec == "avc" || codec == "avc1") plan.videoParameters.globalHeader = true;
 
-    plan.videoOutput.url = urls.video;
-    plan.videoOutput.packetSize = *request.output.packetSize;
-    plan.videoOutput.mediaId = request.mediaId;
-    applyPacing(plan.videoOutput, static_cast<int64_t>(*plan.videoParameters.bitrateKbps) * 1000);
+    output.videoOutput.url = urls.video;
+    output.videoOutput.packetSize = *request.output.packetSize;
+    output.videoOutput.mediaId = request.mediaId;
+    applyPacing(output.videoOutput, static_cast<int64_t>(*plan.videoParameters.bitrateKbps) * 1000);
     if (MediaRealtimeRequestClassifier::audioRequested(request)) {
         if (!request.parameters.audio.bitrateKbps || *request.parameters.audio.bitrateKbps <= 0) {
             return ::media::Status::failure(
                 ::media::ErrorInfo::invalidArgument("Realtime RTP audio output requires explicit positive audio bitrate"));
         }
-        plan.audioOutput.url = urls.audio;
-        plan.audioOutput.packetSize = *request.output.packetSize;
-        plan.audioOutput.mediaId = request.mediaId;
-        applyPacing(plan.audioOutput, static_cast<int64_t>(*request.parameters.audio.bitrateKbps) * 1000);
+        output.audioOutput.url = urls.audio;
+        output.audioOutput.packetSize = *request.output.packetSize;
+        output.audioOutput.mediaId = request.mediaId;
+        applyPacing(output.audioOutput, static_cast<int64_t>(*request.parameters.audio.bitrateKbps) * 1000);
         auto videoTransport = scheduledTransport(
-            request.output.host, *request.output.basePort, plan.videoOutput);
+            request.output.host, *request.output.basePort, output.videoOutput);
         auto audioTransport = scheduledTransport(
-            request.output.host, *request.output.basePort + 2, plan.audioOutput);
+            request.output.host, *request.output.basePort + 2, output.audioOutput);
         if (!videoTransport || !audioTransport) {
             return ::media::Status::failure(
                 videoTransport ? audioTransport.error() : videoTransport.error());
         }
-        plan.videoOutput.scheduledTransport = std::move(videoTransport).value();
-        plan.audioOutput.scheduledTransport = std::move(audioTransport).value();
+        output.videoOutput.scheduledTransport = std::move(videoTransport).value();
+        output.audioOutput.scheduledTransport = std::move(audioTransport).value();
     }
-    plan.sdp.path = request.output.sdpPath;
-    plan.sdp.mediaId = request.mediaId;
-    plan.sdp.expectedContexts = MediaRealtimeRequestClassifier::audioRequested(request) ? 2 : 1;
-    plan.videoMux.expectVideo = true;
-    plan.videoMux.expectAudio = false;
-    plan.videoMux.pacingPolicy = muxPacing();
-    plan.videoMux.monotonicPacketTimestamps = true;
-    plan.videoMux.startupDelayMs = RtpSessionStartupDelayMs;
-    plan.audioMux.expectVideo = false;
-    plan.audioMux.expectAudio = MediaRealtimeRequestClassifier::audioRequested(request);
-    plan.audioMux.pacingPolicy = muxPacing();
-    plan.audioMux.monotonicPacketTimestamps = MediaRealtimeRequestClassifier::audioRequested(request);
-    plan.audioMux.startupDelayMs = MediaRealtimeRequestClassifier::audioRequested(request) ? RtpSessionStartupDelayMs : 0;
-    plan.avStartBarrier.expectVideo = true;
-    plan.avStartBarrier.expectAudio = MediaRealtimeRequestClassifier::audioRequested(request);
-    plan.avStartBarrier.requireVideoKeyFrame = MediaRealtimeRequestClassifier::audioRequested(request);
+    output.sdp.path = request.output.sdpPath;
+    output.sdp.mediaId = request.mediaId;
+    output.sdp.expectedContexts = MediaRealtimeRequestClassifier::audioRequested(request) ? 2 : 1;
+    output.singleStreamMux.expectVideo = true;
+    output.singleStreamMux.expectAudio = false;
+    output.singleStreamMux.pacingPolicy = muxPacing();
+    output.singleStreamMux.monotonicPacketTimestamps = true;
+    output.singleStreamMux.startupDelayMs = RtpSessionStartupDelayMs;
     return ::media::Status::success();
 }
 

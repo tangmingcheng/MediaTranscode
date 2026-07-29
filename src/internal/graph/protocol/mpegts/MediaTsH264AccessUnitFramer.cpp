@@ -8,9 +8,9 @@
 namespace media::ffmpeg::graph {
 namespace {
 
-::media::Result<MediaTsFramedAccessUnit> invalid(const char* message)
+::media::Result<std::span<const std::uint8_t>> invalid(const char* message)
 {
-    return ::media::Result<MediaTsFramedAccessUnit>::failure(
+    return ::media::Result<std::span<const std::uint8_t>>::failure(
         ::media::ErrorInfo::invalidArgument(message));
 }
 
@@ -88,39 +88,13 @@ void writeConverted(std::span<const std::uint8_t> payload,
 
 } // namespace
 
-MediaTsFramedAccessUnit::MediaTsFramedAccessUnit(
-    std::variant<std::span<const std::uint8_t>, std::vector<std::uint8_t>> storage)
-    : m_storage(std::move(storage))
-{
-}
-
-MediaTsFramedAccessUnit MediaTsFramedAccessUnit::borrowed(
-    std::span<const std::uint8_t> bytes)
-{
-    return MediaTsFramedAccessUnit(bytes);
-}
-
-MediaTsFramedAccessUnit MediaTsFramedAccessUnit::owned(
-    std::vector<std::uint8_t> bytes)
-{
-    return MediaTsFramedAccessUnit(std::move(bytes));
-}
-
-std::span<const std::uint8_t> MediaTsFramedAccessUnit::bytes() const noexcept
-{
-    if (const auto* borrowed =
-            std::get_if<std::span<const std::uint8_t>>(&m_storage)) {
-        return *borrowed;
-    }
-    const auto& owned = std::get<std::vector<std::uint8_t>>(m_storage);
-    return owned;
-}
-
-::media::Result<MediaTsFramedAccessUnit> MediaTsH264AccessUnitFramer::frame(
+::media::Result<std::span<const std::uint8_t>>
+MediaTsH264AccessUnitFramer::frame(
     const MediaTsMuxPlan& plan,
     const MediaTsMaterializedVideoConfig& config,
     std::span<const std::uint8_t> payload,
-    bool randomAccess)
+    bool randomAccess,
+    std::vector<std::uint8_t>& workspace)
 {
     const auto& parameters = plan.parameters();
     if (config.layout() != parameters.h264InputLayout ||
@@ -144,20 +118,19 @@ std::span<const std::uint8_t> MediaTsFramedAccessUnit::bytes() const noexcept
         auto valid = MediaH264AnnexBAccessUnitValidator::validate(payload);
         if (!valid) return invalid("MPEG-TS H.264 Annex-B access unit is malformed");
         if (!inject) {
-            return ::media::Result<MediaTsFramedAccessUnit>::success(
-                MediaTsFramedAccessUnit::borrowed(payload));
+            workspace.clear();
+            return ::media::Result<std::span<const std::uint8_t>>::success(payload);
         }
         std::size_t totalSize = 0;
         if (!checkedAdd(injectionSize, payload.size(), totalSize)) {
             return invalid("MPEG-TS H.264 framed size overflows");
         }
-        std::vector<std::uint8_t> output(totalSize);
+        workspace.resize(totalSize);
         auto iterator = std::copy(config.spsAnnexB().begin(), config.spsAnnexB().end(),
-                                  output.begin());
+                                  workspace.begin());
         iterator = std::copy(config.ppsAnnexB().begin(), config.ppsAnnexB().end(), iterator);
         std::copy(payload.begin(), payload.end(), iterator);
-        return ::media::Result<MediaTsFramedAccessUnit>::success(
-            MediaTsFramedAccessUnit::owned(std::move(output)));
+        return ::media::Result<std::span<const std::uint8_t>>::success(workspace);
     }
     if (parameters.h264InputLayout != MediaTsH264InputLayout::LengthPrefixed) {
         return invalid("MPEG-TS H.264 input layout is invalid");
@@ -169,16 +142,15 @@ std::span<const std::uint8_t> MediaTsFramedAccessUnit::bytes() const noexcept
     if (!checkedAdd(injectionSize, converted.value(), totalSize)) {
         return invalid("MPEG-TS H.264 framed size overflows");
     }
-    std::vector<std::uint8_t> output(totalSize);
-    auto iterator = output.begin();
+    workspace.resize(totalSize);
+    auto iterator = workspace.begin();
     if (inject) {
         iterator = std::copy(config.spsAnnexB().begin(), config.spsAnnexB().end(), iterator);
         iterator = std::copy(config.ppsAnnexB().begin(), config.ppsAnnexB().end(), iterator);
     }
     writeConverted(payload, parameters.h264NalLengthBytes,
-                   std::span<std::uint8_t>(output).subspan(injectionSize));
-    return ::media::Result<MediaTsFramedAccessUnit>::success(
-        MediaTsFramedAccessUnit::owned(std::move(output)));
+                   std::span<std::uint8_t>(workspace).subspan(injectionSize));
+    return ::media::Result<std::span<const std::uint8_t>>::success(workspace);
 }
 
 } // namespace media::ffmpeg::graph

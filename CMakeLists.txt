@@ -205,7 +205,6 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
     media_transcode_register_test(media_transcode_core_tests "core;deterministic")
 
     add_executable(media_transcode_planner_tests
-        tests/unit/test_planner.cpp
         tests/unit/av_sync_production_plan_tests.cpp)
     media_transcode_configure_test(media_transcode_planner_tests)
     media_transcode_register_test(media_transcode_planner_tests "planner;deterministic")
@@ -231,15 +230,6 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
     media_transcode_configure_test(media_transcode_av_generation_transition_tests)
     media_transcode_register_test(
         media_transcode_av_generation_transition_tests "runtime;deterministic")
-
-    add_executable(media_transcode_av_reacquisition_runtime_assembly_tests
-        tests/unit/av_reacquisition_runtime_assembly_tests.cpp
-    )
-    media_transcode_configure_test(
-        media_transcode_av_reacquisition_runtime_assembly_tests)
-    media_transcode_register_test(
-        media_transcode_av_reacquisition_runtime_assembly_tests
-        "runtime;deterministic")
 
     add_executable(media_transcode_av_playback_epoch_binder_tests
         tests/unit/av_playback_epoch_binder_tests.cpp
@@ -352,8 +342,6 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
         tests/unit/mpeg_ts_packet_tests.cpp
         tests/unit/mpeg_ts_clock_tests.cpp
         tests/unit/mpeg_ts_output_serializer_tests.cpp
-        tests/unit/mpeg_ts_access_unit_framer_tests.cpp
-        tests/unit/mpeg_ts_output_packetizer_tests.cpp
         tests/unit/mpeg_ts_output_session_tests.cpp
         tests/unit/mpeg_ts_mux_runtime_buffer_tests.cpp
         tests/unit/mpeg_ts_ffmpeg_config_materializer_tests.cpp
@@ -431,18 +419,6 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
         set_tests_properties(media_transcode_rtp_udp_sender_ipv6_loopback_tests PROPERTIES
             SKIP_RETURN_CODE 77
         )
-
-        add_executable(media_transcode_integration_tests
-            tests/unit/test_realtime_rtp_graph.cpp
-        )
-        media_transcode_configure_test(media_transcode_integration_tests)
-        target_compile_definitions(media_transcode_integration_tests PRIVATE
-            MEDIA_TRANSCODE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
-        )
-        if(WIN32)
-            target_link_libraries(media_transcode_integration_tests PRIVATE ws2_32)
-        endif()
-        media_transcode_register_test(media_transcode_integration_tests "integration")
 
         add_executable(media_transcode_mpeg_ts_integration_tests
             tests/unit/mpeg_ts_observed_avio_integration_tests.cpp

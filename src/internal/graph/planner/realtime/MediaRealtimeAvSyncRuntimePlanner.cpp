@@ -124,7 +124,7 @@ namespace {
 
 ::media::Result<MediaScheduledRtpOutputPlan> scheduledRtpOutput(
     MediaScheduledStream stream,
-    MediaRealtimeRtpOutputNodePlan& legacyOutput,
+    MediaRealtimeRtpOutputNodePlan& plannedOutput,
     const MediaAvSyncRtpOutputStreamPlan& synchronization,
     MediaRunningTime senderLead,
     MediaRunningTime senderReportInterval)
@@ -132,8 +132,8 @@ namespace {
     if (!synchronization.payloadType || !synchronization.ssrc ||
         !synchronization.baseTimestamp || !synchronization.clockRate ||
         !synchronization.cname || synchronization.cname->empty() ||
-        legacyOutput.packetSize <= 0 || !legacyOutput.scheduledTransport ||
-        !legacyOutput.scheduledPacketization) {
+        plannedOutput.packetSize <= 0 || !plannedOutput.scheduledTransport ||
+        !plannedOutput.scheduledPacketization) {
         return ::media::Result<MediaScheduledRtpOutputPlan>::failure(
             ::media::ErrorInfo::notInitialized(
                 "scheduled RTP output requires complete protocol planning facts"));
@@ -141,8 +141,8 @@ namespace {
     return ::media::Result<MediaScheduledRtpOutputPlan>::success(
         MediaScheduledRtpOutputPlan{
             stream,
-            std::move(*legacyOutput.scheduledTransport),
-            *legacyOutput.scheduledPacketization,
+            std::move(*plannedOutput.scheduledTransport),
+            *plannedOutput.scheduledPacketization,
             *synchronization.ssrc,
             *synchronization.baseTimestamp,
             *synchronization.clockRate,
@@ -152,13 +152,13 @@ namespace {
 }
 
 ::media::Result<MediaSeparateRtpSdpRuntimePlan> scheduledSdp(
-    const MediaRealtimeRtpTranscodePlan& outer,
+    const MediaRealtimeOutputPlanningDraft& output,
     const MediaScheduledRtpOutputPlan& video,
     const MediaScheduledRtpOutputPlan& audio)
 {
     const auto& videoRtp = video.transport.remoteRtpEndpoint();
     const auto& audioRtp = audio.transport.remoteRtpEndpoint();
-    if (outer.sdp.path.empty() || outer.sdp.mediaId.empty() ||
+    if (output.sdp.path.empty() || output.sdp.mediaId.empty() ||
         videoRtp.addressFamily() != audioRtp.addressFamily() ||
         videoRtp.numericAddress() != audioRtp.numericAddress() ||
         video.cname.empty() || video.cname != audio.cname) {
@@ -167,7 +167,7 @@ namespace {
                 "scheduled RTP SDP requires one complete planner-owned identity"));
     }
     auto identityValidation = MediaSdpSessionIdentity::create(
-        outer.sdp.mediaId, 0, 0, outer.sdp.mediaId,
+        output.sdp.mediaId, 0, 0, output.sdp.mediaId,
         videoRtp.addressFamily(), videoRtp.numericAddress(), video.cname);
     if (!identityValidation) {
         return ::media::Result<MediaSeparateRtpSdpRuntimePlan>::failure(
@@ -175,9 +175,9 @@ namespace {
     }
     return ::media::Result<MediaSeparateRtpSdpRuntimePlan>::success(
         MediaSeparateRtpSdpRuntimePlan{
-            outer.sdp.path,
-            outer.sdp.mediaId,
-            outer.sdp.mediaId,
+            output.sdp.path,
+            output.sdp.mediaId,
+            output.sdp.mediaId,
             videoRtp.addressFamily(),
             videoRtp.numericAddress(),
             video.cname,
@@ -190,6 +190,7 @@ namespace {
 ::media::Result<MediaRealtimeAvSyncRuntimePlan>
 MediaRealtimeAvSyncRuntimePlanner::plan(
     MediaRealtimeRtpTranscodePlan& outer,
+    MediaRealtimeOutputPlanningDraft& output,
     MediaAvSyncPlan synchronization)
 {
     if (outer.audioPlan.branchMode != MediaBranchMode::TranscodeFrame) {
@@ -203,7 +204,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
                 "Synchronized runtime planning rejects video packet copy"));
     }
     auto facts = MediaRealtimeAvSyncPlanningFactsResolver::resolve(
-        outer, synchronization);
+        outer, output, synchronization);
     if (!facts) {
         return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
             facts.error());
@@ -241,20 +242,20 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
         if (!synchronization.rtp || synchronization.ts ||
             !synchronization.startup.outputLeadNs ||
             !synchronization.rtp->output.senderReportIntervalNs ||
-            outer.sdp.path.empty() || !outer.audioPlan.resolvedOutput) {
+            output.sdp.path.empty() || !outer.audioPlan.resolvedOutput) {
             return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
                 ::media::ErrorInfo::notInitialized(
                     "separate RTP synchronization output facts are incomplete"));
         }
         auto video = scheduledRtpOutput(
             MediaScheduledStream::Video,
-            outer.videoOutput,
+            output.videoOutput,
             synchronization.rtp->videoOutput,
             *synchronization.startup.outputLeadNs,
             *synchronization.rtp->output.senderReportIntervalNs);
         auto audio = scheduledRtpOutput(
             MediaScheduledStream::Audio,
-            outer.audioOutput,
+            output.audioOutput,
             synchronization.rtp->audioOutput,
             *synchronization.startup.outputLeadNs,
             *synchronization.rtp->output.senderReportIntervalNs);
@@ -263,7 +264,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
                 video ? audio.error() : video.error());
         }
         auto sdp = scheduledSdp(
-            outer, video.value(), audio.value());
+            output, video.value(), audio.value());
         if (!sdp) {
             return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
                 sdp.error());
@@ -278,7 +279,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
                MediaAvSyncTopology::MpegTsToMpegTs) {
         if (synchronization.rtp || !synchronization.ts ||
             !synchronization.ts->outputMux ||
-            !facts.value().outputSampleRate || outer.muxedOutput.url.empty()) {
+            !facts.value().outputSampleRate || output.muxedOutput.url.empty()) {
             return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
                 ::media::ErrorInfo::notInitialized(
                     "project MPEG-TS synchronization output facts are incomplete"));
@@ -292,11 +293,9 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
         }
         adapter = MediaAvSyncOutputAdapterKind::ProjectMpegTs;
         outer.videoParameters.globalHeader = true;
-        outer.muxedOutput.outputResourceKind = MediaOutputResourceKind::ByteSink;
-        outer.muxedOutput.muxSessionKind = MediaMuxSessionKind::ProjectMpegTs;
         protocolOutput.emplace(std::in_place_type<MediaProjectMpegTsRuntimeOutputPlan>,
             MediaProjectMpegTsRuntimeOutputPlan{
-                outer.muxedOutput.url,
+                output.muxedOutput.url,
                 MediaOutputResourceKind::ByteSink,
                 MediaMuxSessionKind::ProjectMpegTs,
                 std::move(accepted).value()});

@@ -29,6 +29,7 @@ struct MediaTsPacketizerControlState final {
     std::array<ContinuityState, 4> continuity;
     std::optional<std::uint64_t> activeCursor;
     std::uint64_t nextCursorIdentity = 1;
+    std::vector<std::array<std::uint8_t, PacketSize>> packetWorkspace;
 };
 
 struct MediaTsPacketCursorState final {
@@ -36,7 +37,7 @@ struct MediaTsPacketCursorState final {
     std::uint64_t identity;
     std::uint64_t nextRevision = 1;
     CursorPidKind pidKind;
-    std::shared_ptr<const std::vector<std::array<std::uint8_t, PacketSize>>> packets;
+    std::shared_ptr<std::vector<std::array<std::uint8_t, PacketSize>>> packets;
     std::uint8_t initialPayloadContinuity;
     bool advancesPayloadContinuity;
     std::size_t committedOffset = 0;
@@ -85,7 +86,8 @@ ContinuityState& continuity(MediaTsPacketizerControlState& state,
             invalid("MPEG-TS cursor identity space is exhausted"));
     }
     auto packets = MediaTsTransportPacketBuilder::payload(
-        pid, continuity(*state, kind).nextPayload, segments, randomAccess);
+        pid, continuity(*state, kind).nextPayload, segments, randomAccess,
+        std::move(state->packetWorkspace));
     if (!packets) {
         return ::media::Result<MediaTsPacketCursor>::failure(packets.error());
     }
@@ -96,7 +98,7 @@ ContinuityState& continuity(MediaTsPacketizerControlState& state,
     cursor->pidKind = kind;
     cursor->initialPayloadContinuity = continuity(*state, kind).nextPayload;
     cursor->advancesPayloadContinuity = true;
-    cursor->packets = std::make_shared<const std::vector<std::array<std::uint8_t, PacketSize>>>(
+    cursor->packets = std::make_shared<std::vector<std::array<std::uint8_t, PacketSize>>>(
         std::move(packets).value());
     ++state->nextCursorIdentity;
     state->activeCursor = identity;
@@ -191,9 +193,14 @@ MediaTsPacketCursor& MediaTsPacketCursor::operator=(
 
 void MediaTsPacketCursor::cancel() noexcept
 {
-    if (m_state && m_state->owner &&
-        m_state->owner->activeCursor == m_state->identity) {
-        m_state->owner->activeCursor.reset();
+    if (m_state && m_state->owner) {
+        if (m_state->packets && m_state->packets.use_count() == 1) {
+            m_state->owner->packetWorkspace =
+                std::move(*m_state->packets);
+        }
+        if (m_state->owner->activeCursor == m_state->identity) {
+            m_state->owner->activeCursor.reset();
+        }
     }
     m_state.reset();
 }
@@ -345,13 +352,13 @@ MediaTsTransportPacketizer::MediaTsTransportPacketizer(
     if (!packet) {
         return ::media::Result<MediaTsPacketCursor>::failure(packet.error());
     }
-    std::vector<std::array<std::uint8_t, PacketSize>> packets;
-    packets.push_back(std::move(packet).value());
+    m_state->packetWorkspace.clear();
+    m_state->packetWorkspace.push_back(std::move(packet).value());
     cursor->initialPayloadContinuity = next;
     cursor->advancesPayloadContinuity = false;
     cursor->packets = std::make_shared<
-        const std::vector<std::array<std::uint8_t, PacketSize>>>(
-            std::move(packets));
+        std::vector<std::array<std::uint8_t, PacketSize>>>(
+            std::move(m_state->packetWorkspace));
     ++m_state->nextCursorIdentity;
     m_state->activeCursor = identity;
     return ::media::Result<MediaTsPacketCursor>::success(

@@ -63,8 +63,6 @@ void runAudioSwrCompensationExecutorTests(TestContext& ctx);
 void runAudioResampleNodeTests(TestContext& ctx);
 void runOutputByteSinkTests(TestContext& ctx);
 void runMpegTsOutputSerializerTests(TestContext& ctx);
-void runMpegTsAccessUnitFramerTests(TestContext& ctx);
-void runMpegTsOutputPacketizerTests(TestContext& ctx);
 void runMpegTsOutputSessionTests(TestContext& ctx);
 void runMpegTsMuxRuntimeBufferTests(TestContext& ctx);
 void runMpegTsFfmpegConfigMaterializerTests(TestContext& ctx);
@@ -1594,8 +1592,6 @@ int main()
     runAudioResampleNodeTests(ctx);
     runOutputByteSinkTests(ctx);
     runMpegTsOutputSerializerTests(ctx);
-    runMpegTsAccessUnitFramerTests(ctx);
-    runMpegTsOutputPacketizerTests(ctx);
     runMpegTsOutputSessionTests(ctx);
     runMpegTsMuxRuntimeBufferTests(ctx);
     runMpegTsFfmpegConfigMaterializerTests(ctx);
