@@ -140,6 +140,9 @@ RTP realtime CLI 使用输入端口 64300/64302、输出端口 64320，并使用
   就绪后再启动 FFmpeg；CLI、FFmpeg、VLC 同时存在，工作集约
   209.86–209.93 MiB，errors/workerErrors/droppedBuffers 均为 0。
   首个音频与视频 canonical/master target 差值均为 0.002 ms。
+- RTP 60 秒严格启动顺序最终验收：CLI、FFmpeg、VLC 同时存在，工作集
+  211.21–211.58 MiB，Private Bytes 549.25–549.61 MiB；
+  errors/workerErrors/droppedBuffers 均为 0。
 - 两条实时链路均无 `reacquire`、`hard_phase_error` 或 drift-controller 错误。
 - 运行期均未触发相位误差恢复。RTP 验收应在 CLI 就绪后再送流，避免把启动端
   过早送入的单包淘汰混入稳定运行验收。
@@ -161,6 +164,15 @@ RTP realtime CLI 使用输入端口 64300/64302、输出端口 64320，并使用
 - recovering 样本为 0，reacquire、hard-phase 和 drift error 均为 0。
 
 这组数据证明在当前 60 秒窗口内相位误差没有持续扩大；它不能替代更长时间的 soak。
+
+### RTP 持续 A/V 漂移数据
+
+严格启动顺序的 60 秒链路共采集 10 个补偿窗口样本，覆盖 57.260 秒：
+
+- raw phase 首值、末值、均值和最大绝对值均为 +0.000156 ms；
+- filtered phase 末值和最大绝对值均为 +0.000156 ms；
+- phase 首尾趋势为 0 ppm，filtered frequency 和 stretch 均为 0 ppm；
+- recovering 样本为 0，reacquire、hard-phase 和 drift error 均为 0。
 
 ## 旧链路残留验收
 
