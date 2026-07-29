@@ -23,8 +23,8 @@ MediaAvSyncRuntimeBootstrap::createClocks(
             status.error());
     }
     const bool requireSharedNtpEpoch =
-        *binding.plan.topology ==
-        MediaAvSyncTopology::SeparateRtpToSeparateRtp;
+        *binding.plan.sourceClockMode ==
+        MediaAvSyncSourceClockMode::RtpSenderReports;
     auto clocks = source.capture(requireSharedNtpEpoch);
     if (!clocks) return clocks;
     if (!clocks.value().masterClock ||

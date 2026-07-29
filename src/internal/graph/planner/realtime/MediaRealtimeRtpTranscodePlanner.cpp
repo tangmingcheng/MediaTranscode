@@ -373,7 +373,7 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
             ::media::ErrorInfo::unsupported(
                 "URL and MPEG-TS realtime input require preflight() to preserve the prepared input contract"));
     }
-    return planWithInput(options, nullptr, nullptr);
+    return planWithInput(options, nullptr, nullptr, nullptr);
 }
 
 ::media::Result<MediaRealtimeRtpTranscodePlan> MediaRealtimeRtpTranscodePlanner::planWithInput(

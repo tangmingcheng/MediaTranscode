@@ -55,12 +55,12 @@ MediaAvSyncGroupRuntime::create(
         return ::media::Result<std::shared_ptr<MediaAvSyncGroupRuntime>>::failure(
             status.error());
     }
-    const bool requiresNtp = *plan.topology ==
-        MediaAvSyncTopology::SeparateRtpToSeparateRtp;
+    const bool requiresNtp = *plan.sourceClockMode ==
+        MediaAvSyncSourceClockMode::RtpSenderReports;
     if (static_cast<bool>(sharedNtpEpoch) != requiresNtp) {
         return ::media::Result<std::shared_ptr<MediaAvSyncGroupRuntime>>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "A/V sync group clock bundle does not match its topology"));
+                "A/V sync group clock bundle does not match its source clock mode"));
     }
     return ::media::Result<std::shared_ptr<MediaAvSyncGroupRuntime>>::success(
         std::shared_ptr<MediaAvSyncGroupRuntime>(new MediaAvSyncGroupRuntime(

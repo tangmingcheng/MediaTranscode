@@ -91,9 +91,15 @@
 - Modify: `src/internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlanner.cpp`
 - Modify: `src/internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlanValidator.cpp`
 - Modify: `src/internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.cpp`
+- Modify: all production builder/runtime/sync consumers of the legacy paired
+  topology type
+- Delete: the legacy paired-topology header under `src/internal/graph/sync`
 
 **Interfaces:**
-- Replace `MediaAvSyncTopology` consumption with `MediaAvSyncSourceClockMode`.
+- Replace every production paired-topology consumer with independent
+  `MediaAvSyncSourceClockMode` input decisions and
+  `MediaAvSyncOutputAdapterKind`/`protocolOutput` output decisions, then delete
+  the old type.
 - Preserve `RtpSenderReports = 0` and `MpegTsPcr = 1`; add `DemuxTimestamps = 2`.
 - Extend `MediaAvSyncInputClockPlan` with `MediaDemuxTimestampInputClockAssemblyPlan`.
 - Continue using `MediaAvSyncOutputAdapterKind` independently; no cross-product enum is added.
@@ -124,11 +130,25 @@
 
 - [x] **Step 5: Validate orthogonality**
 
-  Update validators so each of the three input clock variants accepts each of the three output variants. Reject mismatched facts, duplicate output authority, incomplete protocol plans, and any old paired-topology dependency.
+  Update validators so each of the three input clock variants accepts each of
+  the two currently implemented output authorities: scheduled separate RTP and
+  Project MPEG-TS/UDP. Keep input and output validation independent and retain
+  all concrete RTP transport/packetization/SDP and TS duration consistency
+  checks. Reject mismatched facts, duplicate output authority, incomplete
+  protocol plans, and any old paired-topology dependency. Task 4 extends this
+  matrix with the third MPEG-TS/RTP runtime transport variant.
 
-- [x] **Step 6: Perform static verification and commit**
+- [x] **Step 6: Migrate production consumers, verify, and commit**
 
-  Search for every `MediaAvSyncTopology` use. Remove the type and its file only after no production consumer remains; do not leave an unused compatibility enum. Run `git diff --check`, verify UTF-8/CRLF, update this task, and commit:
+  Migrate every production builder, compiler, runtime bootstrap, coordinator,
+  controller, state-machine, error, mapper, and sync-group consumer. Input
+  configuration may read only source-clock facts; output cardinality may read
+  only output adapter/protocol facts. Delete the legacy paired-topology header
+  without a
+  compatibility field or replacement cross-product enum. Require a whole-tree
+  zero-result search for the old type and enum members, run `git diff --check`,
+  verify UTF-8/CRLF, and execute the mandated clean-first x64 Debug rebuild.
+  Update this task and commit:
 
   ```text
   refactor(avsync): decouple source clock and output protocol
@@ -195,6 +215,8 @@
 - Reuse `MediaOutputTransportKind`; its `UdpDatagrams = 0` value preserves the existing serialized UDP transport value and `RtpAvp = 1` is additive.
 - `MediaProjectMpegTsRuntimeOutputPlan` contains the shared mux plan and a transport variant: `MediaMpegTsUdpOutputPlan` or `MediaMpegTsRtpOutputPlan`.
 - `MediaMpegTsRtpOutputPlan` contains `MediaRtpUdpSenderConfig`, PT 33, 90 kHz, SSRC, base timestamp, CNAME, sender-report interval, maximum datagram bytes, TS packets per payload, and SDP identity.
+- Extend the Task 2 input-clock-by-output-authority validator from the two
+  existing authorities to the third MPEG-TS/RTP runtime transport variant.
 
 - [ ] **Step 1: Extend the TS mux transport contract**
 
@@ -304,9 +326,12 @@
 - Output assembly switches only on `MediaAvSyncOutputAdapterKind`, then the Project MPEG-TS transport variant.
 - Compiler cardinality derives from the output plan, not the input clock.
 
-- [ ] **Step 1: Remove paired-topology graph branching**
+- [ ] **Step 1: Assemble all source-clock graph variants**
 
-  Build RTP, TS, or demux input clock segments independently. Connect every input path to the same startup coordinator, canonical video/audio nodes, drift controller, recovery components, router, and scheduler.
+  With the old topology type already removed by Task 2, build RTP, TS, or demux
+  input clock segments independently. Connect every input path to the same
+  startup coordinator, canonical video/audio nodes, drift controller, recovery
+  components, router, and scheduler.
 
 - [ ] **Step 2: Select exactly one output authority**
 
@@ -328,7 +353,10 @@
 
 - [ ] **Step 5: Perform whole-code review and commit**
 
-  Search for paired topology strings, input-driven output branching, fallback/default protocol facts, duplicate builders, and unused code. Run the mandated clean-first x64 Debug rebuild. Update this task and commit:
+  Prove the deleted paired topology has not been reintroduced; search for
+  input-driven output branching, fallback/default protocol facts, duplicate
+  builders, and unused code. Run the mandated clean-first x64 Debug rebuild.
+  Update this task and commit:
 
   ```text
   feat(realtime): assemble cross-layout output DAGs

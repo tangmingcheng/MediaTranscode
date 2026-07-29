@@ -236,21 +236,23 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
     const MediaAvSyncPlan& avSync,
     const MediaRealtimeEdgePolicySet& edgePolicies)
 {
-    if (!avSync.rtp || !avSync.rtp->videoInput.clockRate || !avSync.rtp->audioInput.clockRate ||
-        !avSync.rtp->input.senderReportTimeoutNs || !avSync.rtp->input.maximumExtrapolationNs ||
-        !avSync.rtp->input.maximumInterStreamClockOffsetSkewNs ||
-        !avSync.rtp->input.maximumSenderClockRateErrorPpm ||
-        !avSync.rtp->input.maximumSenderClockResidualNs ||
-        !avSync.rtp->input.identityEvidenceTimeoutNs ||
+    if (!avSync.rtpInput || !avSync.rtpInput->videoInput.clockRate ||
+        !avSync.rtpInput->audioInput.clockRate ||
+        !avSync.rtpInput->input.senderReportTimeoutNs ||
+        !avSync.rtpInput->input.maximumExtrapolationNs ||
+        !avSync.rtpInput->input.maximumInterStreamClockOffsetSkewNs ||
+        !avSync.rtpInput->input.maximumSenderClockRateErrorPpm ||
+        !avSync.rtpInput->input.maximumSenderClockResidualNs ||
+        !avSync.rtpInput->input.identityEvidenceTimeoutNs ||
         !mediaRtpCommonEpochPolicyOptionValue(
-            avSync.rtp->input.commonEpochPolicy) ||
-        avSync.rtp->input.streamAssociationMode !=
+            avSync.rtpInput->input.commonEpochPolicy) ||
+        avSync.rtpInput->input.streamAssociationMode !=
             MediaAvSyncRtpStreamAssociationMode::PlannedStreamPair) {
         return ::media::Result<MediaNodeId>::failure(
             ::media::ErrorInfo::invalidArgument("RTP clock group requires a complete planner-owned A/V sync plan"));
     }
     const std::int64_t identityEvidenceTimeoutNs =
-        avSync.rtp->input.identityEvidenceTimeoutNs->nanoseconds();
+        avSync.rtpInput->input.identityEvidenceTimeoutNs->nanoseconds();
     const MediaNodeId group = graph.addNode(MediaNodeKind::RtpClockGroup,
                                             "realtime.rtp.clock_group",
                                             "Realtime RTP source clock group");
@@ -261,36 +263,36 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
     const auto set = [&](const char* key, std::string value) {
         return MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, group, key, value);
     };
-    if (auto status = set("rtp_clock_group.video_clock_rate", std::to_string(*avSync.rtp->videoInput.clockRate)); !status) return ::media::Result<MediaNodeId>::failure(status.error());
-    if (auto status = set("rtp_clock_group.audio_clock_rate", std::to_string(*avSync.rtp->audioInput.clockRate)); !status) return ::media::Result<MediaNodeId>::failure(status.error());
-    if (auto status = set("rtp_clock_group.sender_report_timeout_ns", std::to_string(avSync.rtp->input.senderReportTimeoutNs->nanoseconds())); !status) return ::media::Result<MediaNodeId>::failure(status.error());
-    if (auto status = set("rtp_clock_group.maximum_extrapolation_ns", std::to_string(avSync.rtp->input.maximumExtrapolationNs->nanoseconds())); !status) return ::media::Result<MediaNodeId>::failure(status.error());
+    if (auto status = set("rtp_clock_group.video_clock_rate", std::to_string(*avSync.rtpInput->videoInput.clockRate)); !status) return ::media::Result<MediaNodeId>::failure(status.error());
+    if (auto status = set("rtp_clock_group.audio_clock_rate", std::to_string(*avSync.rtpInput->audioInput.clockRate)); !status) return ::media::Result<MediaNodeId>::failure(status.error());
+    if (auto status = set("rtp_clock_group.sender_report_timeout_ns", std::to_string(avSync.rtpInput->input.senderReportTimeoutNs->nanoseconds())); !status) return ::media::Result<MediaNodeId>::failure(status.error());
+    if (auto status = set("rtp_clock_group.maximum_extrapolation_ns", std::to_string(avSync.rtpInput->input.maximumExtrapolationNs->nanoseconds())); !status) return ::media::Result<MediaNodeId>::failure(status.error());
     if (auto status = set(
             "rtp_clock_group.maximum_inter_stream_clock_offset_skew_ns",
-            std::to_string(avSync.rtp->input
+            std::to_string(avSync.rtpInput->input
                                .maximumInterStreamClockOffsetSkewNs
                                ->nanoseconds()));
         !status) {
         return ::media::Result<MediaNodeId>::failure(status.error());
     }
-    if (auto status = set("rtp_clock_group.maximum_sender_clock_residual_ns", std::to_string(avSync.rtp->input.maximumSenderClockResidualNs->nanoseconds())); !status) return ::media::Result<MediaNodeId>::failure(status.error());
+    if (auto status = set("rtp_clock_group.maximum_sender_clock_residual_ns", std::to_string(avSync.rtpInput->input.maximumSenderClockResidualNs->nanoseconds())); !status) return ::media::Result<MediaNodeId>::failure(status.error());
     if (auto status = set("rtp_clock_group.video_cname_timeout_ns", std::to_string(identityEvidenceTimeoutNs)); !status) return ::media::Result<MediaNodeId>::failure(status.error());
     if (auto status = set("rtp_clock_group.audio_cname_timeout_ns", std::to_string(identityEvidenceTimeoutNs)); !status) return ::media::Result<MediaNodeId>::failure(status.error());
     if (auto status = set("rtp_clock_group.require_matching_cname",
                           "false"); !status) {
         return ::media::Result<MediaNodeId>::failure(status.error());
     }
-    if (auto status = set("rtp_clock_group.maximum_sender_clock_rate_error_ppm", std::to_string(*avSync.rtp->input.maximumSenderClockRateErrorPpm)); !status) return ::media::Result<MediaNodeId>::failure(status.error());
+    if (auto status = set("rtp_clock_group.maximum_sender_clock_rate_error_ppm", std::to_string(*avSync.rtpInput->input.maximumSenderClockRateErrorPpm)); !status) return ::media::Result<MediaNodeId>::failure(status.error());
     if (auto status = set(
             "rtp_clock_group.common_epoch_policy",
             mediaRtpCommonEpochPolicyOptionValue(
-                avSync.rtp->input.commonEpochPolicy)); !status) {
+                avSync.rtpInput->input.commonEpochPolicy)); !status) {
         return ::media::Result<MediaNodeId>::failure(status.error());
     }
     for (MediaNodeId input : {videoInput, audioInput}) {
         if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
                 graph, owner, input, "rtcp.maximum_extrapolation_ns",
-                std::to_string(avSync.rtp->input.maximumExtrapolationNs->nanoseconds())); !status) {
+                std::to_string(avSync.rtpInput->input.maximumExtrapolationNs->nanoseconds())); !status) {
             return ::media::Result<MediaNodeId>::failure(status.error());
         }
     }
@@ -671,7 +673,8 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
             runtimePlan.groupKey,
             runtimePlan.synchronization,
             runtimePlan.transition,
-            MediaAvSyncBindingAssemblyMode::ProductionProtocolOutput};
+            MediaAvSyncBindingAssemblyMode::ProductionProtocolOutput,
+            runtimePlan.outputAdapter};
     }
     auto graphResult = build(std::move(preflight.plan));
     if (!graphResult) {

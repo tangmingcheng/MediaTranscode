@@ -53,7 +53,7 @@ private:
         std::int64_t hardDiscontinuityThresholdNs = 0;
     };
 
-    MediaVideoSyncController(MediaAvSyncTopology topology,
+    MediaVideoSyncController(MediaAvSyncSourceClockMode sourceClockMode,
                              Policy policy,
                              std::uint64_t generation) noexcept;
 
@@ -87,7 +87,7 @@ private:
                                         reacquisitionCause =
                                             std::nullopt) const noexcept;
 
-    MediaAvSyncTopology m_topology;
+    MediaAvSyncSourceClockMode m_sourceClockMode;
     Policy m_policy;
     std::uint64_t m_generation = 0;
     std::uint64_t m_lastSequence = 0;

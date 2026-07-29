@@ -239,10 +239,11 @@ bool isLegacyProductionAvSyncAuthority(MediaNodeKind kind) noexcept
             projectMpegTsPlanSourceReferenceCount != 0;
         if (executable.avSyncBinding->assemblyMode ==
             MediaAvSyncBindingAssemblyMode::ComponentCore) {
-            if (hasProtocolOutputAuthority) {
+            if (executable.avSyncBinding->outputAdapter ||
+                hasProtocolOutputAuthority) {
                 return ::media::Status::failure(
                     ::media::ErrorInfo::invalidArgument(
-                        "MediaGraphRuntime component A/V sync assembly rejects protocol output authorities"));
+                        "MediaGraphRuntime component A/V sync assembly rejects output adapter facts and protocol output authorities"));
             }
         } else if (executable.avSyncBinding->assemblyMode !=
                    MediaAvSyncBindingAssemblyMode::ProductionProtocolOutput) {
@@ -253,14 +254,18 @@ bool isLegacyProductionAvSyncAuthority(MediaNodeKind kind) noexcept
             return ::media::Status::failure(
                 ::media::ErrorInfo::invalidArgument(
                     "MediaGraphRuntime production A/V sync assembly rejects legacy output, timestamp, and startup authorities"));
-        } else if (*executable.avSyncBinding->plan.topology ==
-                   MediaAvSyncTopology::SeparateRtpToSeparateRtp) {
+        } else if (!executable.avSyncBinding->outputAdapter) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "MediaGraphRuntime production A/V sync assembly requires a planned output adapter"));
+        } else if (*executable.avSyncBinding->outputAdapter ==
+                   MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp) {
             if (scheduledRtpSenderCount != 2 ||
                 scheduledRtpSenderReferenceCount != 2 ||
                 dualMediaSdpPublisherCount != 1) {
                 return ::media::Status::failure(
                     ::media::ErrorInfo::notInitialized(
-                        "MediaGraphRuntime separate RTP topology requires exactly two injected senders and one SDP publisher"));
+                        "MediaGraphRuntime separate RTP output requires exactly two injected senders and one SDP publisher"));
             }
             if (scheduledTsAdapterCount != 0 ||
                 scheduledTsAdapterReferenceCount != 0 ||
@@ -268,29 +273,29 @@ bool isLegacyProductionAvSyncAuthority(MediaNodeKind kind) noexcept
                 projectMpegTsPlanSourceReferenceCount != 0) {
                 return ::media::Status::failure(
                     ::media::ErrorInfo::invalidArgument(
-                        "MediaGraphRuntime separate RTP topology rejects MPEG-TS output authorities"));
+                        "MediaGraphRuntime separate RTP output rejects MPEG-TS output authorities"));
             }
-        } else if (*executable.avSyncBinding->plan.topology ==
-                   MediaAvSyncTopology::MpegTsToMpegTs) {
+        } else if (*executable.avSyncBinding->outputAdapter ==
+                   MediaAvSyncOutputAdapterKind::ProjectMpegTs) {
             if (scheduledTsAdapterCount != 1 ||
                 scheduledTsAdapterReferenceCount != 1 ||
                 projectMpegTsPlanSourceCount != 1 ||
                 projectMpegTsPlanSourceReferenceCount != 1) {
                 return ::media::Status::failure(
                     ::media::ErrorInfo::notInitialized(
-                        "MediaGraphRuntime MPEG-TS topology requires exactly one scheduled adapter and one plan source"));
+                        "MediaGraphRuntime MPEG-TS output requires exactly one scheduled adapter and one plan source"));
             }
             if (scheduledRtpSenderCount != 0 ||
                 scheduledRtpSenderReferenceCount != 0 ||
                 dualMediaSdpPublisherCount != 0) {
                 return ::media::Status::failure(
                     ::media::ErrorInfo::invalidArgument(
-                        "MediaGraphRuntime MPEG-TS topology rejects RTP output authorities"));
+                        "MediaGraphRuntime MPEG-TS output rejects RTP output authorities"));
             }
         } else {
             return ::media::Status::failure(
                 ::media::ErrorInfo::unsupported(
-                    "MediaGraphRuntime A/V sync topology is unsupported"));
+                    "MediaGraphRuntime A/V sync output adapter is unsupported"));
         }
     } else if (schedulerCount != 0 || binderCount != 0 ||
                sequencerCount != 0 || scheduledRtpSenderCount != 0 ||

@@ -29,7 +29,7 @@ the existing explicit reacquisition/failure behavior.
 
 ## Architecture
 
-Replace the paired `MediaAvSyncTopology` decision with two orthogonal planner
+Replace the paired legacy topology decision with two orthogonal planner
 decisions:
 
 1. An input clock plan selected only from the prepared input.

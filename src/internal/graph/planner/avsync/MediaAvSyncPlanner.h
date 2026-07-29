@@ -15,10 +15,10 @@ public:
         const MediaRealtimeRtpTranscodeRequest& request);
     static ::media::Result<MediaAvSyncPlan> plan(
         const MediaRealtimeRtpTranscodeRequest& request,
-        const MediaTsSelectedProgramPlan* selectedTsProgram = nullptr,
-        const MediaProjectMpegTsResolvedPipelineFacts* resolvedTsFacts = nullptr,
-        const MediaAvSyncPreparedDemuxTimestampFacts* preparedDemuxFacts = nullptr,
-        int resolvedOutputAudioSampleRate = 0);
+        const MediaTsSelectedProgramPlan* selectedTsProgram,
+        const MediaProjectMpegTsResolvedPipelineFacts* resolvedTsFacts,
+        const MediaAvSyncPreparedDemuxTimestampFacts* preparedDemuxFacts,
+        int resolvedOutputAudioSampleRate);
 
 private:
     MediaAvSyncPlanner() = delete;

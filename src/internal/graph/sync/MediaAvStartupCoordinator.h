@@ -3,7 +3,7 @@
 #include "internal/graph/model/MediaPacketSourceTiming.h"
 #include "internal/graph/sync/MediaAvSyncStateMachine.h"
 #include "internal/graph/sync/MediaAvSyncError.h"
-#include "internal/graph/sync/MediaAvSyncTopology.h"
+#include "internal/graph/model/MediaAvSyncSourceClockMode.h"
 #include "internal/graph/sync/MediaPlaybackEpoch.h"
 #include "internal/graph/sync/startup/MediaAvStartupSelectionWork.h"
 
@@ -67,7 +67,7 @@ struct MediaAvStartupConfig final {
     bool requireVideoKeyFrame;
     bool trimAudioToCommonStart;
     bool allowDegradedClock;
-    MediaAvSyncTopology topology;
+    MediaAvSyncSourceClockMode sourceClockMode;
     MediaRunningTime maximumWait;
     MediaRunningTime preroll;
     MediaRunningTime keyFrameWait;

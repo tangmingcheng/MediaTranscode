@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/graph/model/MediaAvSyncSourceClockMode.h"
 #include "internal/graph/model/MediaGraphTypes.h"
 #include "internal/graph/protocol/mpegts/MediaTsMuxPlan.h"
 #include "internal/graph/protocol/rtp/MediaRtcpCompositionPolicy.h"
@@ -12,12 +13,6 @@
 #include <string>
 
 namespace media::ffmpeg::graph {
-
-enum class MediaAvSyncSourceClockMode : std::uint8_t {
-    RtpSenderReports = 0,
-    MpegTsPcr = 1,
-    DemuxTimestamps = 2
-};
 
 enum class MediaAvSyncMasterClockMode : std::uint8_t {
     SteadyMonotonic = 0

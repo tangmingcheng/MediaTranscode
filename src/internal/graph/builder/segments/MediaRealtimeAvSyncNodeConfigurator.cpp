@@ -1,6 +1,7 @@
 #include "internal/graph/builder/segments/MediaRealtimeAvSyncNodeConfigurator.h"
 
 #include "internal/graph/builder/segments/MediaRealtimeAvSyncInputGraphSupport.h"
+#include "internal/graph/nodes/sync/MediaAvSyncSourceClockModeNodeOptionCodec.h"
 
 #include <cstddef>
 #include <string>
@@ -170,7 +171,7 @@ MediaRealtimeAvSyncNodeConfigurator::configureStartupCoordinator(
         startup.videoByteCapacity && startup.audioByteCapacity &&
         startup.maximumVideoUnitBytes && startup.maximumAudioUnitBytes &&
         startup.videoIdentity && startup.audioIdentity &&
-        startup.allowDegradedClock && plan.synchronization.topology &&
+        startup.allowDegradedClock && plan.synchronization.sourceClockMode &&
         plan.synchronization.audioServo.outputSampleRate &&
         *plan.synchronization.audioServo.outputSampleRate > 0;
     if (!complete) {
@@ -228,11 +229,15 @@ MediaRealtimeAvSyncNodeConfigurator::configureStartupCoordinator(
     if (auto status = setOption(
             graph, node, "av_startup.sync_group",
             plan.groupKey.value()); !status) return status;
+    auto sourceClockMode =
+        MediaAvSyncSourceClockModeNodeOptionCodec::encode(
+            *plan.synchronization.sourceClockMode);
+    if (!sourceClockMode) {
+        return ::media::Result<void>::failure(sourceClockMode.error());
+    }
     return setOption(
-        graph, node, "av_startup.topology",
-        *plan.synchronization.topology ==
-                MediaAvSyncTopology::SeparateRtpToSeparateRtp
-            ? "separate_rtp" : "mpegts");
+        graph, node, "av_startup.source_clock_mode",
+        std::move(sourceClockMode).value());
 }
 
 ::media::Result<void>

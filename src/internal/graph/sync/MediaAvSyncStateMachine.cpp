@@ -2,8 +2,9 @@
 
 namespace media::ffmpeg::graph {
 
-MediaAvSyncStateMachine::MediaAvSyncStateMachine(MediaAvSyncTopology topology) noexcept
-    : m_topology(topology)
+MediaAvSyncStateMachine::MediaAvSyncStateMachine(
+    MediaAvSyncSourceClockMode sourceClockMode) noexcept
+    : m_sourceClockMode(sourceClockMode)
 {
 }
 
@@ -87,7 +88,7 @@ MediaAvSyncError MediaAvSyncStateMachine::invalidTransition(
     const auto zero = MediaRunningTime::fromNanoseconds(0);
     return MediaAvSyncError(
         MediaAvSyncErrorCode::StartupInvalidTransition,
-        m_topology,
+        m_sourceClockMode,
         MediaAvSyncErrorState::Startup,
         "state_transition_" + std::to_string(static_cast<int>(event)),
         {}, {}, m_generation, generation, std::nullopt,

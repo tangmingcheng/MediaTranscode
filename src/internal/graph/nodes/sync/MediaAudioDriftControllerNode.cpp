@@ -203,12 +203,13 @@ bool MediaAudioDriftControllerNode::pendingOutputIsCurrent(
     auto candidateServo = m_state->servo;
     if (!candidateServo) {
         const auto& plan = m_group->plan();
-        if (!plan.topology || !plan.recovery.hardDiscontinuityThresholdNs) {
+        if (!plan.sourceClockMode ||
+            !plan.recovery.hardDiscontinuityThresholdNs) {
             return ::media::Status::failure(::media::ErrorInfo::notInitialized(
                 "Audio drift controller requires complete planner servo policy"));
         }
         auto created = MediaAudioDriftServo::create(
-            *plan.topology, plan.audioServo,
+            *plan.sourceClockMode, plan.audioServo,
             *plan.recovery.hardDiscontinuityThresholdNs,
             bound->audioOrigin().generation);
         if (!created) {

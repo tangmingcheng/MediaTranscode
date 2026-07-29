@@ -144,11 +144,12 @@ bool validPolicy(const MediaAvSyncAudioServoPolicy& policy,
 
 } // namespace
 
-MediaAudioDriftServo::MediaAudioDriftServo(MediaAvSyncTopology topology,
+MediaAudioDriftServo::MediaAudioDriftServo(
+    MediaAvSyncSourceClockMode sourceClockMode,
                                            Policy policy,
                                            MediaAudioCorrectionQuantizer quantizer,
                                            std::uint64_t generation) noexcept
-    : m_topology(topology)
+    : m_sourceClockMode(sourceClockMode)
     , m_policy(policy)
     , m_quantizer(std::move(quantizer))
     , m_outputSampleRate(policy.outputSampleRate)
@@ -157,14 +158,14 @@ MediaAudioDriftServo::MediaAudioDriftServo(MediaAvSyncTopology topology,
 }
 
 MediaAvSyncResult<MediaAudioDriftServo> MediaAudioDriftServo::create(
-    MediaAvSyncTopology topology,
+    MediaAvSyncSourceClockMode sourceClockMode,
     const MediaAvSyncAudioServoPolicy& policy,
     MediaRunningTime hardDiscontinuityThreshold,
     std::uint64_t generation)
 {
     if (!validPolicy(policy, hardDiscontinuityThreshold, generation)) {
         return MediaAvSyncResult<MediaAudioDriftServo>::failure(MediaAvSyncError(
-            MediaAvSyncErrorCode::InvalidAudioServoPolicy, topology,
+            MediaAvSyncErrorCode::InvalidAudioServoPolicy, sourceClockMode,
             MediaAvSyncErrorState::AudioServo, "create", "audio", "audio",
             generation, std::nullopt, std::nullopt,
             MediaRunningTime::fromNanoseconds(0),
@@ -179,7 +180,7 @@ MediaAvSyncResult<MediaAudioDriftServo> MediaAudioDriftServo::create(
         *policy.outputSampleRate);
     if (!quantizer) {
         return MediaAvSyncResult<MediaAudioDriftServo>::failure(MediaAvSyncError(
-            MediaAvSyncErrorCode::InvalidAudioServoPolicy, topology,
+            MediaAvSyncErrorCode::InvalidAudioServoPolicy, sourceClockMode,
             MediaAvSyncErrorState::AudioServo, "create", "audio", "audio",
             generation, std::nullopt, std::nullopt,
             MediaRunningTime::fromNanoseconds(0),
@@ -226,7 +227,8 @@ MediaAvSyncResult<MediaAudioDriftServo> MediaAudioDriftServo::create(
     resolved.hardDiscontinuityThresholdNs =
         hardDiscontinuityThreshold.nanoseconds();
     return MediaAvSyncResult<MediaAudioDriftServo>::success(
-        MediaAudioDriftServo(topology, resolved, std::move(quantizer).value(),
+        MediaAudioDriftServo(sourceClockMode, resolved,
+                             std::move(quantizer).value(),
                              generation));
 }
 
@@ -558,7 +560,7 @@ MediaAvSyncError MediaAudioDriftServo::error(
 {
     return MediaAvSyncError(
         code,
-        m_topology,
+        m_sourceClockMode,
         MediaAvSyncErrorState::AudioServo,
         operation,
         "audio",

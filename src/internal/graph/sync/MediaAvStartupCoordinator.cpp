@@ -153,7 +153,7 @@ MediaAvSyncResult<MediaAvStartupCoordinator> MediaAvStartupCoordinator::create(
         const auto zero = MediaRunningTime::fromNanoseconds(0);
         return MediaAvSyncResult<MediaAvStartupCoordinator>::failure(MediaAvSyncError(
             MediaAvSyncErrorCode::StartupInvalidTransition,
-            config.topology,
+            config.sourceClockMode,
             MediaAvSyncErrorState::Startup,
             "create_startup_coordinator",
             config.videoIdentity,
@@ -173,7 +173,7 @@ MediaAvSyncResult<MediaAvStartupCoordinator> MediaAvStartupCoordinator::create(
 
 MediaAvStartupCoordinator::MediaAvStartupCoordinator(MediaAvStartupConfig config)
     : m_config(std::move(config))
-    , m_state(m_config.topology)
+    , m_state(m_config.sourceClockMode)
     , m_video(std::make_unique<MediaAvStartupStreamStore>(m_config.maximumGap))
     , m_audio(std::make_unique<MediaAvStartupStreamStore>(m_config.maximumGap))
 {
@@ -631,7 +631,7 @@ MediaAvSyncError MediaAvStartupCoordinator::startupError(
         : std::string{};
     return MediaAvSyncError(
         code,
-        m_config.topology,
+        m_config.sourceClockMode,
         MediaAvSyncErrorState::Startup,
         std::move(operation),
         expectedIdentity,

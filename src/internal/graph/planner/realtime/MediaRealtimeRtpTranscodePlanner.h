@@ -198,8 +198,8 @@ private:
     static ::media::Result<MediaRealtimeRtpTranscodePlan> planWithInput(
         const MediaRealtimeRtpTranscodeRequest& request,
         const MediaRealtimeInputStreamInfo* inputInfo,
-        const MediaTsSelectedProgramPlan* selectedTsProgram = nullptr,
-        const MediaPreparedRealtimeInput* preparedInput = nullptr);
+        const MediaTsSelectedProgramPlan* selectedTsProgram,
+        const MediaPreparedRealtimeInput* preparedInput);
     static ::media::Result<MediaRealtimeTranscodePreflight> preflightImpl(
         const MediaRealtimeRtpTranscodeRequest& request,
         const MediaRealtimePreflightIo* io);

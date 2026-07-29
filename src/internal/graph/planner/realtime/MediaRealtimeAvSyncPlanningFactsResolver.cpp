@@ -147,6 +147,10 @@ MediaRealtimeAvSyncPlanningFactsResolver::resolve(
                 ::media::ErrorInfo::notInitialized(
                     "scheduled RTP output does not publish audio batch timing"));
         }
+        facts.outputVideoRtpPacketization =
+            plannedOutput.videoOutput.scheduledPacketization;
+        facts.outputAudioRtpPacketization =
+            plannedOutput.audioOutput.scheduledPacketization;
         facts.protocolBatchSamples =
             *plannedOutput.audioOutput.scheduledPacketization
                  ->maximumAccessUnitSamples();

@@ -5,9 +5,10 @@
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 #include "internal/graph/planner/realtime/MediaAudioCorrectionReachabilityPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncComponentBoundsPlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimeInputValidator.h"
+#include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimeOutputValidator.h"
 #include "internal/graph/planner/realtime/MediaRealtimeEdgePolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncPlanningFactsResolver.h"
-#include "internal/graph/protocol/sdp/MediaRtpSdpDescription.h"
 
 #include <cstdint>
 #include <limits>
@@ -74,14 +75,12 @@ namespace media::ffmpeg::graph {
         return invalid("selected component bounds");
     }
     MediaRealtimeOutputPlanningDraft selectedOutput;
-    if (std::holds_alternative<MediaSeparateRtpOutputRuntimePlan>(
-            runtime.protocolOutput)) {
-        const auto& rtp = std::get<MediaSeparateRtpOutputRuntimePlan>(
-            runtime.protocolOutput);
+    if (runtime.planningFacts.outputVideoRtpPacketization &&
+        runtime.planningFacts.outputAudioRtpPacketization) {
         selectedOutput.videoOutput.scheduledPacketization =
-            rtp.video.packetization;
+            runtime.planningFacts.outputVideoRtpPacketization;
         selectedOutput.audioOutput.scheduledPacketization =
-            rtp.audio.packetization;
+            runtime.planningFacts.outputAudioRtpPacketization;
     }
     auto selectedFacts = MediaRealtimeAvSyncPlanningFactsResolver::resolve(
         outer, selectedOutput, runtime.synchronization);
@@ -228,167 +227,17 @@ namespace media::ffmpeg::graph {
             *runtime.synchronization.audioServo.outputSampleRate) {
         return invalid("audio correction reachability");
     }
-    if (!runtime.synchronization.sourceClockMode) {
-        return invalid("source clock mode");
+    if (auto inputStatus =
+            MediaRealtimeAvSyncRuntimeInputValidator::validate(
+                outer, runtime);
+        !inputStatus) {
+        return inputStatus;
     }
-    if (*runtime.synchronization.sourceClockMode ==
-        MediaAvSyncSourceClockMode::RtpSenderReports) {
-        if (!runtime.synchronization.rtpInput ||
-            outer.inputLayout != RealtimeInputStreamLayout::SeparateStreams ||
-            !outer.input.rtpTransport || !outer.audioInput.rtpTransport ||
-            !std::holds_alternative<MediaRtpInputClockAssemblyPlan>(
-                assembly.inputClock) ||
-            !std::holds_alternative<MediaRtpTimestampDeltaDurationPlan>(
-                assembly.video.duration) ||
-            !std::holds_alternative<MediaPlannedAudioSamplesDurationPlan>(
-                assembly.audio.duration)) {
-            return invalid("RTP input clock assembly");
-        }
-        const auto& input = *runtime.synchronization.rtpInput;
-        const auto& videoDuration =
-            std::get<MediaRtpTimestampDeltaDurationPlan>(
-                assembly.video.duration);
-        const auto& audioDuration =
-            std::get<MediaPlannedAudioSamplesDurationPlan>(
-                assembly.audio.duration);
-        if (!input.videoInput.clockRate || !input.audioInput.clockRate ||
-            videoDuration.clockRate != *input.videoInput.clockRate ||
-            audioDuration.sampleRate != *input.audioInput.clockRate ||
-            !runtime.planningFacts.inputAudioSamplesPerAccessUnit ||
-            audioDuration.samplesPerAccessUnit !=
-                *runtime.planningFacts.inputAudioSamplesPerAccessUnit ||
-            std::get<MediaRtpInputClockAssemblyPlan>(assembly.inputClock)
-                    .commonEpochPolicy != input.input.commonEpochPolicy) {
-            return invalid("RTP input duration facts");
-        }
-    } else if (*runtime.synchronization.sourceClockMode ==
-               MediaAvSyncSourceClockMode::MpegTsPcr) {
-        if (!runtime.synchronization.mpegTsInput ||
-            outer.inputType != RealtimeInputType::MpegTsUdp ||
-            outer.inputLayout !=
-                RealtimeInputStreamLayout::MuxedTransportStream ||
-            !std::holds_alternative<MediaMpegTsInputClockAssemblyPlan>(
-                assembly.inputClock) ||
-            !std::holds_alternative<MediaPacketDurationPlan>(
-                assembly.video.duration) ||
-            !std::get<MediaPacketDurationPlan>(assembly.video.duration)
-                 .requirePositiveDuration ||
-            !std::holds_alternative<MediaPlannedAudioSamplesDurationPlan>(
-                assembly.audio.duration) ||
-            !outer.input.mpegTs ||
-            !runtime.planningFacts.inputVideoPacketDuration ||
-            !runtime.planningFacts.inputAudioPacketDuration ||
-            runtime.planningFacts.inputVideoPacketDuration !=
-                outer.input.mpegTs->videoPacketDuration ||
-            runtime.planningFacts.inputAudioPacketDuration !=
-                outer.input.mpegTs->audioPacketDuration) {
-            return invalid("MPEG-TS input clock assembly");
-        }
-    } else if (*runtime.synchronization.sourceClockMode ==
-               MediaAvSyncSourceClockMode::DemuxTimestamps) {
-        if (!runtime.synchronization.demuxTimestampInput ||
-            outer.inputType != RealtimeInputType::Url ||
-            outer.inputLayout !=
-                RealtimeInputStreamLayout::SessionDescribed ||
-            !std::holds_alternative<
-                MediaDemuxTimestampInputClockAssemblyPlan>(
-                    assembly.inputClock) ||
-            !std::holds_alternative<MediaPacketDurationPlan>(
-                assembly.video.duration) ||
-            !std::holds_alternative<MediaPacketDurationPlan>(
-                assembly.audio.duration) ||
-            !std::get<MediaPacketDurationPlan>(assembly.video.duration)
-                 .requirePositiveDuration ||
-            !std::get<MediaPacketDurationPlan>(assembly.audio.duration)
-                 .requirePositiveDuration) {
-            return invalid("demux timestamp input clock assembly");
-        }
-        const auto& input =
-            *runtime.synchronization.demuxTimestampInput;
-        const auto& selected =
-            std::get<MediaDemuxTimestampInputClockAssemblyPlan>(
-                assembly.inputClock);
-        if (!input.firstWindowMaximumSkewNs ||
-            !input.timestampRegressionLimitNs ||
-            !input.discontinuityThresholdNs || !input.initialGeneration ||
-            selected.videoTimeBase.num != input.videoTimeBase.num ||
-            selected.videoTimeBase.den != input.videoTimeBase.den ||
-            selected.audioTimeBase.num != input.audioTimeBase.num ||
-            selected.audioTimeBase.den != input.audioTimeBase.den ||
-            selected.firstWindowMaximumSkew !=
-                *input.firstWindowMaximumSkewNs ||
-            selected.timestampRegressionLimit !=
-                *input.timestampRegressionLimitNs ||
-            selected.discontinuityThreshold !=
-                *input.discontinuityThresholdNs ||
-            selected.initialGeneration != *input.initialGeneration) {
-            return invalid("demux timestamp input policy");
-        }
-    } else {
-        return invalid("source clock mode");
-    }
-
-    if (runtime.synchronization.rtpOutput) {
-        if (runtime.synchronization.projectMpegTsOutput ||
-            outer.outputLayout != RealtimeOutputStreamLayout::SeparateStreams ||
-            outer.outputTransport != MediaOutputTransportKind::RtpAvp ||
-            runtime.outputAdapter !=
-                MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp ||
-            !std::holds_alternative<MediaSeparateRtpOutputRuntimePlan>(
-                runtime.protocolOutput)) {
-            return invalid("separate RTP output authority");
-        }
-        const auto& selected = *runtime.synchronization.rtpOutput;
-        const auto& output =
-            std::get<MediaSeparateRtpOutputRuntimePlan>(
-                runtime.protocolOutput);
-        if (!selected.videoOutput.ssrc ||
-            !selected.videoOutput.baseTimestamp ||
-            !selected.videoOutput.clockRate ||
-            !selected.audioOutput.ssrc ||
-            !selected.audioOutput.baseTimestamp ||
-            !selected.audioOutput.clockRate ||
-            !selected.output.senderReportIntervalNs ||
-            output.sdp.path.empty() ||
-            output.video.ssrc != *selected.videoOutput.ssrc ||
-            output.video.baseTimestamp !=
-                *selected.videoOutput.baseTimestamp ||
-            output.video.clockRate != *selected.videoOutput.clockRate ||
-            output.audio.ssrc != *selected.audioOutput.ssrc ||
-            output.audio.baseTimestamp !=
-                *selected.audioOutput.baseTimestamp ||
-            output.audio.clockRate != *selected.audioOutput.clockRate ||
-            output.video.senderReportInterval !=
-                *selected.output.senderReportIntervalNs ||
-            output.audio.senderReportInterval !=
-                *selected.output.senderReportIntervalNs) {
-            return invalid("separate RTP protocol output");
-        }
-    } else if (runtime.synchronization.projectMpegTsOutput) {
-        if (runtime.synchronization.rtpOutput ||
-            outer.outputLayout !=
-                RealtimeOutputStreamLayout::MuxedTransportStream ||
-            outer.outputTransport != MediaOutputTransportKind::UdpDatagrams ||
-            runtime.outputAdapter != MediaAvSyncOutputAdapterKind::ProjectMpegTs ||
-            !std::holds_alternative<MediaProjectMpegTsRuntimeOutputPlan>(
-                runtime.protocolOutput) ||
-            !runtime.synchronization.projectMpegTsOutput->outputMux) {
-            return invalid("Project MPEG-TS output authority");
-        }
-        const auto& output =
-            std::get<MediaProjectMpegTsRuntimeOutputPlan>(
-                runtime.protocolOutput);
-        if (output.url.empty() ||
-            output.resourceKind != MediaOutputResourceKind::ByteSink ||
-            output.muxSessionKind != MediaMuxSessionKind::ProjectMpegTs ||
-            output.protocol.audioSampleRate() != correction.outputSampleRate ||
-            output.protocol.muxPlan().parameters() !=
-                runtime.synchronization.projectMpegTsOutput->outputMux
-                    ->parameters()) {
-            return invalid("Project MPEG-TS protocol output");
-        }
-    } else {
-        return invalid("output authority");
+    if (auto outputStatus =
+            MediaRealtimeAvSyncRuntimeOutputValidator::validate(
+                outer, runtime);
+        !outputStatus) {
+        return outputStatus;
     }
     return ::media::Status::success();
 }

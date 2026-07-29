@@ -1,6 +1,7 @@
 #include "internal/graph/nodes/sync/MediaAvStartupCoordinatorNodePreparation.h"
 
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
+#include "internal/graph/nodes/sync/MediaAvSyncSourceClockModeNodeOptionCodec.h"
 #include "internal/graph/sync/startup/MediaAvStartupGenerationState.h"
 
 #include <utility>
@@ -101,8 +102,9 @@ prepareMediaAvStartupCoordinatorNode(const MediaNode& node)
         options, "MediaAvStartupCoordinatorNode", "av_startup.video_identity");
     auto audioIdentity = requiredNodeOption(
         options, "MediaAvStartupCoordinatorNode", "av_startup.audio_identity");
-    auto topology = requiredNodeOption(
-        options, "MediaAvStartupCoordinatorNode", "av_startup.topology");
+    auto sourceClockMode = requiredNodeOption(
+        options, "MediaAvStartupCoordinatorNode",
+        "av_startup.source_clock_mode");
     auto group = requiredNodeOption(
         options, "MediaAvStartupCoordinatorNode", "av_startup.sync_group");
 
@@ -125,7 +127,7 @@ prepareMediaAvStartupCoordinatorNode(const MediaNode& node)
     if (!maximumAudioUnitBytes) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(maximumAudioUnitBytes.error());
     if (!videoIdentity) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(videoIdentity.error());
     if (!audioIdentity) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(audioIdentity.error());
-    if (!topology) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(topology.error());
+    if (!sourceClockMode) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(sourceClockMode.error());
     if (!group) return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(group.error());
 
     if (allowDegraded.value()) {
@@ -133,15 +135,12 @@ prepareMediaAvStartupCoordinatorNode(const MediaNode& node)
             ::media::ErrorInfo::unsupported(
                 "Planned degraded clock startup is not supported"));
     }
-    MediaAvSyncTopology topologyValue;
-    if (topology.value() == "separate_rtp") {
-        topologyValue = MediaAvSyncTopology::SeparateRtpToSeparateRtp;
-    } else if (topology.value() == "mpegts") {
-        topologyValue = MediaAvSyncTopology::MpegTsToMpegTs;
-    } else {
+    auto sourceClockModeValue =
+        MediaAvSyncSourceClockModeNodeOptionCodec::decode(
+            sourceClockMode.value());
+    if (!sourceClockModeValue) {
         return ::media::Result<MediaAvStartupCoordinatorNodePreparation>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "MediaAvStartupCoordinatorNode rejects unknown planned topology"));
+            sourceClockModeValue.error());
     }
     MediaAvSyncGroupKey groupKey(std::move(group).value());
     if (!groupKey.valid()) {
@@ -150,7 +149,8 @@ prepareMediaAvStartupCoordinatorNode(const MediaNode& node)
                 "MediaAvStartupCoordinatorNode requires a valid planned sync group"));
     }
     auto created = MediaAvStartupCoordinator::create(MediaAvStartupConfig{
-        requireKey.value(), trimAudio.value(), allowDegraded.value(), topologyValue,
+        requireKey.value(), trimAudio.value(), allowDegraded.value(),
+        sourceClockModeValue.value(),
         MediaRunningTime::fromNanoseconds(wait.value()),
         MediaRunningTime::fromNanoseconds(preroll.value()),
         MediaRunningTime::fromNanoseconds(keyWait.value()),
