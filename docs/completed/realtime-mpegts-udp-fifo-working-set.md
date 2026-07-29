@@ -187,6 +187,11 @@ $cliArgs = @(
   '--poll-interval-ms','100'
 )
 
+$cli = $null
+$ffmpeg = $null
+$vlc = $null
+
+try {
 $startedAt = Get-Date
 $cli = Start-Process `
   -FilePath 'D:\Code\MyCode\MediaTranscode\out\build\x64-debug\media_transcode_realtime_video_cli.exe' `
@@ -258,10 +263,12 @@ while (Get-Process -Id $cli.Id -ErrorAction SilentlyContinue) {
   }
   Start-Sleep -Seconds 5
 }
-
-foreach ($processId in @($ffmpeg.Id,$vlc.Id)) {
-  if (Get-Process -Id $processId -ErrorAction SilentlyContinue) {
-    Stop-Process -Id $processId -Force
+} finally {
+  foreach ($process in @($ffmpeg,$vlc)) {
+    if ($null -ne $process -and
+        (Get-Process -Id $process.Id -ErrorAction SilentlyContinue)) {
+      Stop-Process -Id $process.Id -Force
+    }
   }
 }
 
