@@ -173,23 +173,23 @@
 - `MediaDemuxPacketClockBinderNode` consumes prepared demux packets and emits packets carrying locked canonical presentation time.
 - The segment builder consumes only `MediaDemuxTimestampInputClockAssemblyPlan`.
 
-- [ ] **Step 1: Implement the protocol-neutral mapper**
+- [x] **Step 1: Implement the protocol-neutral mapper**
 
   Establish the source epoch from the first valid common audio/video window. Rescale with checked arithmetic into canonical running time. Reject absent timestamps, invalid time bases, regression, excessive inter-stream startup skew, unexplained discontinuity, and generation changes according to the planner plan.
 
-- [ ] **Step 2: Implement the binder node**
+- [x] **Step 2: Implement the binder node**
 
   Bind packet PTS/DTS and duration to canonical evidence before existing canonical input nodes. The node publishes locked/acquiring/reacquiring state through the same sync-group contract as RTP and TS paths and never synthesizes timestamps.
 
-- [ ] **Step 3: Assemble URL/RTSP input**
+- [x] **Step 3: Assemble URL/RTSP input**
 
   Add only the nodes needed for demux timestamp binding and connect them to the existing startup, canonicalization, drift, recovery, and scheduler segments. Do not duplicate those common segments.
 
-- [ ] **Step 4: Register and compile the new node**
+- [x] **Step 4: Register and compile the new node**
 
   Add stable node-kind serialization, runtime factory creation, sync-group injection, generation purge registration, and exact compiler cardinality checks for one demux clock binder per enabled stream.
 
-- [ ] **Step 5: Perform static verification and commit**
+- [x] **Step 5: Perform static verification and commit**
 
   Inspect the URL/RTSP graph to prove it reaches the same canonical scheduler as RTP and TS. Run the mandated clean-first x64 Debug rebuild through `.agents/skills/building-with-vs2026/scripts/rebuild_debug.ps1`. Update this task and commit:
 

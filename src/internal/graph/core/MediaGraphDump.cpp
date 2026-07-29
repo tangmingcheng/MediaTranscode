@@ -32,6 +32,7 @@ const char* toString(MediaNodeKind kind)
     case MediaNodeKind::PacketStartGate: return "PacketStartGate";
     case MediaNodeKind::RtpClockGroup: return "RtpClockGroup";
     case MediaNodeKind::RtpPacketClockBinder: return "RtpPacketClockBinder";
+    case MediaNodeKind::DemuxPacketClockBinder: return "DemuxPacketClockBinder";
     case MediaNodeKind::RtpClockSnapshotFanout: return "RtpClockSnapshotFanout";
     case MediaNodeKind::AvStartupCoordinator: return "AvStartupCoordinator";
     case MediaNodeKind::AvOutputScheduler: return "AvOutputScheduler";

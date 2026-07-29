@@ -207,7 +207,11 @@ namespace {
             *input.timestampRegressionLimitNs ||
         selected.discontinuityThreshold !=
             *input.discontinuityThresholdNs ||
-        selected.initialGeneration != *input.initialGeneration) {
+        selected.initialGeneration != *input.initialGeneration ||
+        selected.videoSourceIdentity != runtime.assembly.video.sourceIdentity ||
+        selected.audioSourceIdentity != runtime.assembly.audio.sourceIdentity ||
+        selected.canonicalTargetEpoch !=
+            MediaRunningTime::fromNanoseconds(0)) {
         return invalidInput("demux timestamp policy");
     }
     return ::media::Status::success();

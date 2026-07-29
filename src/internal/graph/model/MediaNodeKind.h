@@ -88,7 +88,8 @@ enum class MediaNodeKind {
     ScheduledRtpSender = 62,
     DualMediaSdpPublisher = 63,
     ProjectMpegTsPlanSource = 64,
-    ScheduledTsAccessUnitAdapter = 65
+    ScheduledTsAccessUnitAdapter = 65,
+    DemuxPacketClockBinder = 66
 };
 
 } // namespace media::ffmpeg::graph

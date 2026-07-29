@@ -122,7 +122,10 @@ namespace {
                 *demux.firstWindowMaximumSkewNs,
                 *demux.timestampRegressionLimitNs,
                 *demux.discontinuityThresholdNs,
-                initialGeneration});
+                initialGeneration,
+                *synchronization.startup.videoIdentity,
+                *synchronization.startup.audioIdentity,
+                MediaRunningTime::fromNanoseconds(0)});
         videoDuration.emplace<MediaPacketDurationPlan>(true);
         audioDuration.emplace<MediaPacketDurationPlan>(true);
     } else {
@@ -346,6 +349,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
 
     auto transition = MediaAvGenerationTransitionPlanner::plan(
         adapter,
+        *synchronization.sourceClockMode,
         *facts.value().acknowledgementTimeout,
         *facts.value().terminalDrainWindow);
     return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::success(

@@ -17,6 +17,7 @@
 #include <optional>
 #include <tuple>
 #include <utility>
+#include <variant>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -483,7 +484,11 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
     std::string audioPacketSourcePort = isolateRawRtpAudio ? "packet" : "audio";
     std::optional<MediaRealtimeAvSyncInputEndpoints> synchronizedInput;
     if (plan.avSyncRuntime) {
-        if (!protocolClockNode.isValid()) {
+        const bool demuxTimestampClock =
+            std::holds_alternative<
+                MediaDemuxTimestampInputClockAssemblyPlan>(
+                plan.avSyncRuntime->assembly.inputClock);
+        if (!protocolClockNode.isValid() && !demuxTimestampClock) {
             if (!videoInputChain.value().packetSelect.demux.isValid()) {
                 return ::media::Result<MediaGraph>::failure(
                     ::media::ErrorInfo::notInitialized(
@@ -497,9 +502,11 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
             MediaEndpoint{videoPacketSourceNode, videoPacketSourcePort};
         syncOptions.sources.audioPacket =
             MediaEndpoint{audioPacketSourceNode, audioPacketSourcePort};
-        syncOptions.sources.protocolClock = MediaEndpoint{
-            protocolClockNode,
-            isolateRawRtpAudio ? "clock_group" : "clock"};
+        syncOptions.sources.protocolClock = protocolClockNode.isValid()
+            ? MediaEndpoint{
+                  protocolClockNode,
+                  isolateRawRtpAudio ? "clock_group" : "clock"}
+            : MediaEndpoint{};
         syncOptions.releasedVideoStreamIndex = plan.videoPlan.sourceStreamIndex;
         syncOptions.releasedAudioStreamIndex = plan.audioPlan.sourceStreamIndex;
         syncOptions.releasedVideoEdgeKind =

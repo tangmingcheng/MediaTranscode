@@ -44,6 +44,9 @@ struct MediaDemuxTimestampInputClockAssemblyPlan final {
     MediaRunningTime timestampRegressionLimit;
     MediaRunningTime discontinuityThreshold;
     std::uint64_t initialGeneration;
+    std::string videoSourceIdentity;
+    std::string audioSourceIdentity;
+    MediaRunningTime canonicalTargetEpoch;
     friend bool operator==(
         const MediaDemuxTimestampInputClockAssemblyPlan& left,
         const MediaDemuxTimestampInputClockAssemblyPlan& right)
@@ -55,7 +58,10 @@ struct MediaDemuxTimestampInputClockAssemblyPlan final {
             left.firstWindowMaximumSkew == right.firstWindowMaximumSkew &&
             left.timestampRegressionLimit == right.timestampRegressionLimit &&
             left.discontinuityThreshold == right.discontinuityThreshold &&
-            left.initialGeneration == right.initialGeneration;
+            left.initialGeneration == right.initialGeneration &&
+            left.videoSourceIdentity == right.videoSourceIdentity &&
+            left.audioSourceIdentity == right.audioSourceIdentity &&
+            left.canonicalTargetEpoch == right.canonicalTargetEpoch;
     }
 };
 

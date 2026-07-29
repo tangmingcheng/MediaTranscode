@@ -8,8 +8,10 @@
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
+#include "internal/graph/time/MediaDemuxTimestampClockMapper.h"
 
 #include <chrono>
+#include <charconv>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -65,6 +67,92 @@ bool isLegacyProductionAvSyncAuthority(MediaNodeKind kind) noexcept
     }
 }
 
+::media::Result<MediaDemuxTimestampClockMapperConfig>
+demuxMapperConfig(const MediaNode& node)
+{
+    const auto positiveInt = [&](const char* key) {
+        return requiredPositiveIntNodeOption(
+            &node.options, "MediaDemuxPacketClockBinderNode", key);
+    };
+    const auto positiveInt64 = [&](const char* key) {
+        return requiredPositiveInt64NodeOption(
+            &node.options, "MediaDemuxPacketClockBinderNode", key);
+    };
+    auto videoNumerator = positiveInt(
+        "demux_clock_binder.video_time_base_num");
+    auto videoDenominator = positiveInt(
+        "demux_clock_binder.video_time_base_den");
+    auto audioNumerator = positiveInt(
+        "demux_clock_binder.audio_time_base_num");
+    auto audioDenominator = positiveInt(
+        "demux_clock_binder.audio_time_base_den");
+    auto skew = positiveInt64(
+        "demux_clock_binder.first_window_maximum_skew_ns");
+    auto regression = positiveInt64(
+        "demux_clock_binder.timestamp_regression_limit_ns");
+    auto discontinuity = positiveInt64(
+        "demux_clock_binder.discontinuity_threshold_ns");
+    auto generation = positiveInt64(
+        "demux_clock_binder.initial_generation");
+    auto videoIdentity = requiredNodeOption(
+        &node.options, "MediaDemuxPacketClockBinderNode",
+        "demux_clock_binder.video_source_identity");
+    auto audioIdentity = requiredNodeOption(
+        &node.options, "MediaDemuxPacketClockBinderNode",
+        "demux_clock_binder.audio_source_identity");
+    auto targetEpochText = requiredNodeOption(
+        &node.options, "MediaDemuxPacketClockBinderNode",
+        "demux_clock_binder.canonical_target_epoch_ns");
+    if (!videoNumerator || !videoDenominator ||
+        !audioNumerator || !audioDenominator ||
+        !skew || !regression || !discontinuity || !generation ||
+        !videoIdentity || !audioIdentity || !targetEpochText) {
+        const ::media::ErrorInfo& error =
+            !videoNumerator ? videoNumerator.error()
+            : !videoDenominator ? videoDenominator.error()
+            : !audioNumerator ? audioNumerator.error()
+            : !audioDenominator ? audioDenominator.error()
+            : !skew ? skew.error()
+            : !regression ? regression.error()
+            : !discontinuity ? discontinuity.error()
+            : !generation ? generation.error()
+            : !videoIdentity ? videoIdentity.error()
+            : !audioIdentity ? audioIdentity.error()
+            : targetEpochText.error();
+        return ::media::Result<
+            MediaDemuxTimestampClockMapperConfig>::failure(error);
+    }
+    std::int64_t targetEpoch = 0;
+    const std::string& epochText = targetEpochText.value();
+    const auto [epochEnd, epochError] = std::from_chars(
+        epochText.data(), epochText.data() + epochText.size(), targetEpoch);
+    if (epochError != std::errc{} ||
+        epochEnd != epochText.data() + epochText.size()) {
+        return ::media::Result<
+            MediaDemuxTimestampClockMapperConfig>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Demux timestamp mapper requires an exact canonical target epoch"));
+    }
+    MediaDemuxTimestampClockMapperConfig config{
+        MediaRational{videoNumerator.value(), videoDenominator.value()},
+        MediaRational{audioNumerator.value(), audioDenominator.value()},
+        MediaRunningTime::fromNanoseconds(skew.value()),
+        MediaRunningTime::fromNanoseconds(regression.value()),
+        MediaRunningTime::fromNanoseconds(discontinuity.value()),
+        static_cast<std::uint64_t>(generation.value()),
+        std::move(videoIdentity).value(),
+        std::move(audioIdentity).value(),
+        MediaRunningTime::fromNanoseconds(targetEpoch)};
+    auto validated = MediaDemuxTimestampClockMapper::create(config);
+    if (!validated) {
+        return ::media::Result<
+            MediaDemuxTimestampClockMapperConfig>::failure(
+            validated.error());
+    }
+    return ::media::Result<
+        MediaDemuxTimestampClockMapperConfig>::success(config);
+}
+
 } // namespace
 
 ::media::Status MediaGraphRuntimeCompiler::validateBindings(const MediaRealtimeExecutableGraph& executable)
@@ -78,6 +166,8 @@ bool isLegacyProductionAvSyncAuthority(MediaNodeKind kind) noexcept
     constexpr std::string_view BoundReleaseExtractorGroupKey =
         "av_bound_release_extractor.sync_group";
     constexpr std::string_view RtpBinderGroupKey = "rtp_clock_binder.sync_group";
+    constexpr std::string_view DemuxBinderGroupKey =
+        "demux_clock_binder.sync_group";
     constexpr std::string_view LockedPacketGateGroupKey =
         "locked_packet_gate.sync_group";
     constexpr std::string_view CoordinatorGroupKey = "av_startup.sync_group";
@@ -104,6 +194,12 @@ bool isLegacyProductionAvSyncAuthority(MediaNodeKind kind) noexcept
     std::size_t scheduledTsAdapterReferenceCount = 0;
     std::size_t projectMpegTsPlanSourceReferenceCount = 0;
     std::size_t legacyProductionAuthorityCount = 0;
+    std::size_t rtpClockBinderCount = 0;
+    std::size_t rtpClockBinderReferenceCount = 0;
+    std::size_t demuxClockBinderCount = 0;
+    std::size_t demuxClockBinderReferenceCount = 0;
+    std::size_t demuxVideoClockBinderCount = 0;
+    std::size_t demuxAudioClockBinderCount = 0;
     for (const auto& binding : executable.inputBindings) {
         if (!binding.nodeId.isValid() || !binding.prepared.valid() ||
             !bindingIds.insert(binding.nodeId.value).second) {
@@ -131,6 +227,25 @@ bool isLegacyProductionAvSyncAuthority(MediaNodeKind kind) noexcept
             ++dualMediaSdpPublisherCount;
         if (isLegacyProductionAvSyncAuthority(node.kind))
             ++legacyProductionAuthorityCount;
+        if (node.kind == MediaNodeKind::RtpPacketClockBinder)
+            ++rtpClockBinderCount;
+        if (node.kind == MediaNodeKind::DemuxPacketClockBinder) {
+            ++demuxClockBinderCount;
+            auto stream = requiredStreamKindNodeOption(
+                &node.options,
+                "MediaDemuxPacketClockBinderNode",
+                "demux_clock_binder.stream");
+            if (!stream) return ::media::Status::failure(stream.error());
+            if (stream.value() == MediaStreamKind::Video) {
+                ++demuxVideoClockBinderCount;
+            } else if (stream.value() == MediaStreamKind::Audio) {
+                ++demuxAudioClockBinderCount;
+            } else {
+                return ::media::Status::failure(
+                    ::media::ErrorInfo::invalidArgument(
+                        "MediaGraphRuntime demux binder stream is unsupported"));
+            }
+        }
         if (node.kind == MediaNodeKind::RealtimeInput && !bindingIds.contains(node.id.value)) {
             return ::media::Status::failure(
                 ::media::ErrorInfo::notInitialized("MediaGraphRuntime missing prepared RealtimeInput binding"));
@@ -161,6 +276,9 @@ bool isLegacyProductionAvSyncAuthority(MediaNodeKind kind) noexcept
             const bool rtpBinderConsumer =
                 node.kind == MediaNodeKind::RtpPacketClockBinder &&
                 key == RtpBinderGroupKey;
+            const bool demuxBinderConsumer =
+                node.kind == MediaNodeKind::DemuxPacketClockBinder &&
+                key == DemuxBinderGroupKey;
             const bool lockedPacketGateConsumer =
                 node.kind == MediaNodeKind::LockedPacketGate &&
                 key == LockedPacketGateGroupKey;
@@ -182,7 +300,8 @@ bool isLegacyProductionAvSyncAuthority(MediaNodeKind kind) noexcept
             if (!schedulerConsumer && !binderConsumer &&
                 !startupClockConsumer && !sequencerConsumer &&
                 !boundReleaseExtractorConsumer &&
-                !rtpBinderConsumer && !lockedPacketGateConsumer &&
+                !rtpBinderConsumer && !demuxBinderConsumer &&
+                !lockedPacketGateConsumer &&
                 !coordinatorConsumer && !audioDriftControllerConsumer &&
                 !scheduledRtpSenderConsumer &&
                 !scheduledTsAdapterConsumer &&
@@ -200,6 +319,8 @@ bool isLegacyProductionAvSyncAuthority(MediaNodeKind kind) noexcept
                 ++scheduledTsAdapterReferenceCount;
             if (projectMpegTsPlanSourceConsumer)
                 ++projectMpegTsPlanSourceReferenceCount;
+            if (rtpBinderConsumer) ++rtpClockBinderReferenceCount;
+            if (demuxBinderConsumer) ++demuxClockBinderReferenceCount;
             if (value.empty() || !executable.avSyncBinding) {
                 return ::media::Status::failure(
                     ::media::ErrorInfo::notInitialized(
@@ -228,6 +349,45 @@ bool isLegacyProductionAvSyncAuthority(MediaNodeKind kind) noexcept
             return ::media::Status::failure(
                 ::media::ErrorInfo::notInitialized(
                     "MediaGraphRuntime A/V sync binding requires exactly one scheduler, binder, and activation release sequencer"));
+        }
+        if (!executable.avSyncBinding->plan.sourceClockMode) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "MediaGraphRuntime A/V sync binding requires its planned source clock"));
+        }
+        switch (*executable.avSyncBinding->plan.sourceClockMode) {
+        case MediaAvSyncSourceClockMode::RtpSenderReports:
+            if (rtpClockBinderCount != 2 ||
+                rtpClockBinderReferenceCount != 2 ||
+                demuxClockBinderCount != 0 ||
+                demuxClockBinderReferenceCount != 0) {
+                return ::media::Status::failure(
+                    ::media::ErrorInfo::notInitialized(
+                        "MediaGraphRuntime RTP input requires exactly two RTP binders and no demux binders"));
+            }
+            break;
+        case MediaAvSyncSourceClockMode::MpegTsPcr:
+            if (rtpClockBinderCount != 0 ||
+                rtpClockBinderReferenceCount != 0 ||
+                demuxClockBinderCount != 0 ||
+                demuxClockBinderReferenceCount != 0) {
+                return ::media::Status::failure(
+                    ::media::ErrorInfo::invalidArgument(
+                        "MediaGraphRuntime MPEG-TS input rejects separate packet clock binders"));
+            }
+            break;
+        case MediaAvSyncSourceClockMode::DemuxTimestamps:
+            if (rtpClockBinderCount != 0 ||
+                rtpClockBinderReferenceCount != 0 ||
+                demuxClockBinderCount != 2 ||
+                demuxClockBinderReferenceCount != 2 ||
+                demuxVideoClockBinderCount != 1 ||
+                demuxAudioClockBinderCount != 1) {
+                return ::media::Status::failure(
+                    ::media::ErrorInfo::notInitialized(
+                        "MediaGraphRuntime demux timestamp input requires exactly one binder per A/V stream"));
+            }
+            break;
         }
         const bool hasProtocolOutputAuthority =
             scheduledRtpSenderCount != 0 ||
@@ -301,7 +461,9 @@ bool isLegacyProductionAvSyncAuthority(MediaNodeKind kind) noexcept
                sequencerCount != 0 || scheduledRtpSenderCount != 0 ||
                dualMediaSdpPublisherCount != 0 ||
                scheduledTsAdapterCount != 0 ||
-               projectMpegTsPlanSourceCount != 0) {
+               projectMpegTsPlanSourceCount != 0 ||
+               rtpClockBinderCount != 0 ||
+               demuxClockBinderCount != 0) {
         return ::media::Status::failure(::media::ErrorInfo::notInitialized(
             "Synchronized runtime nodes require an A/V sync binding"));
     }
@@ -430,6 +592,7 @@ bool isLegacyProductionAvSyncAuthority(MediaNodeKind kind) noexcept
     const MediaNode* videoFilter = nullptr;
     const MediaNode* releaseExtractor = nullptr;
     std::vector<const MediaNode*> scheduledRtpSenders;
+    std::vector<const MediaNode*> demuxClockBinders;
     for (const MediaNode& node : context.graph()->nodes()) {
         if (node.kind == MediaNodeKind::ActivatedStartupReleaseSequencer) {
             sequencer = &node;
@@ -442,6 +605,8 @@ bool isLegacyProductionAvSyncAuthority(MediaNodeKind kind) noexcept
             releaseExtractor = &node;
         if (node.kind == MediaNodeKind::ScheduledRtpSender)
             scheduledRtpSenders.push_back(&node);
+        if (node.kind == MediaNodeKind::DemuxPacketClockBinder)
+            demuxClockBinders.push_back(&node);
     }
     if (videoPreparationState) {
         if (!sequencer) {
@@ -500,9 +665,96 @@ bool isLegacyProductionAvSyncAuthority(MediaNodeKind kind) noexcept
         }
         scheduledRtpGroup = std::move(exactGroup);
     }
+    std::shared_ptr<MediaDemuxTimestampClockMapper> demuxMapper;
+    std::shared_ptr<MediaAvSyncGroupRuntime> demuxGroup;
+    const MediaNode* demuxVideoBinder = nullptr;
+    const MediaNode* demuxAudioBinder = nullptr;
+    if (!demuxClockBinders.empty()) {
+        if (demuxClockBinders.size() != 2) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "Demux timestamp runtime requires exactly two binders"));
+        }
+        std::optional<MediaDemuxTimestampClockMapperConfig> exactConfig;
+        for (const MediaNode* binder : demuxClockBinders) {
+            auto config = demuxMapperConfig(*binder);
+            auto groupText = requiredNodeOption(
+                &binder->options,
+                "MediaDemuxPacketClockBinderNode",
+                "demux_clock_binder.sync_group");
+            auto stream = requiredStreamKindNodeOption(
+                &binder->options,
+                "MediaDemuxPacketClockBinderNode",
+                "demux_clock_binder.stream");
+            if (!config) {
+                return ::media::Status::failure(config.error());
+            }
+            if (!groupText) {
+                return ::media::Status::failure(groupText.error());
+            }
+            if (!stream) {
+                return ::media::Status::failure(stream.error());
+            }
+            if (exactConfig && *exactConfig != config.value()) {
+                return ::media::Status::failure(
+                    ::media::ErrorInfo::invalidArgument(
+                        "Demux timestamp binders disagree on the planner clock product"));
+            }
+            exactConfig = config.value();
+            MediaAvSyncGroupKey groupKey(std::move(groupText).value());
+            auto exactGroup = context.findAvSyncGroup(groupKey);
+            if (!exactGroup || exactGroup->key() != groupKey ||
+                (demuxGroup && demuxGroup != exactGroup)) {
+                return ::media::Status::failure(
+                    ::media::ErrorInfo::notInitialized(
+                        "Demux timestamp binders require one exact registered sync group"));
+            }
+            demuxGroup = std::move(exactGroup);
+            if (stream.value() == MediaStreamKind::Video) {
+                if (demuxVideoBinder) {
+                    return ::media::Status::failure(
+                        ::media::ErrorInfo::invalidArgument(
+                            "Demux timestamp runtime rejects duplicate video binders"));
+                }
+                demuxVideoBinder = binder;
+            } else if (stream.value() == MediaStreamKind::Audio) {
+                if (demuxAudioBinder) {
+                    return ::media::Status::failure(
+                        ::media::ErrorInfo::invalidArgument(
+                            "Demux timestamp runtime rejects duplicate audio binders"));
+                }
+                demuxAudioBinder = binder;
+            }
+        }
+        if (!exactConfig || !demuxVideoBinder || !demuxAudioBinder ||
+            !demuxGroup) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "Demux timestamp runtime lost its complete injection facts"));
+        }
+        auto created =
+            MediaDemuxTimestampClockMapper::create(*exactConfig);
+        if (!created) {
+            return ::media::Status::failure(created.error());
+        }
+        demuxMapper = std::move(created).value();
+        const std::weak_ptr<MediaNodeWakeup> videoWakeup =
+            context.sharedNodeWakeup(demuxVideoBinder->id);
+        const std::weak_ptr<MediaNodeWakeup> audioWakeup =
+            context.sharedNodeWakeup(demuxAudioBinder->id);
+        auto bound = demuxMapper->bindStateChangeNotifiers(
+            [videoWakeup]() noexcept {
+                if (auto wakeup = videoWakeup.lock()) wakeup->notify();
+            },
+            [audioWakeup]() noexcept {
+                if (auto wakeup = audioWakeup.lock()) wakeup->notify();
+            });
+        if (!bound) return bound;
+    }
     for (const MediaNode& node : context.graph()->nodes()) {
         if (node.kind == MediaNodeKind::ActivatedStartupReleaseSequencer ||
-            node.kind == MediaNodeKind::ScheduledRtpSender)
+            node.kind == MediaNodeKind::ScheduledRtpSender ||
+            node.kind == MediaNodeKind::DemuxPacketClockBinder)
             continue;
         if (scheduler.findNode(node.id)) continue;
         if (!MediaRuntimeNodeFactory::supported(node.kind)) {
@@ -520,6 +772,15 @@ bool isLegacyProductionAvSyncAuthority(MediaNodeKind kind) noexcept
                                 "register node=" + std::to_string(node.id.value) +
                                     " name=" + node.name +
                                     " kind=" + mediaGraphDiagnosticNodeKindName(node.kind));
+        preparedNodes.push_back(std::move(runtimeNode).value());
+    }
+    for (const MediaNode* binder : demuxClockBinders) {
+        auto runtimeNode =
+            MediaRuntimeNodeFactory::createDemuxPacketClockBinder(
+                *binder, demuxMapper, demuxGroup);
+        if (!runtimeNode) {
+            return ::media::Status::failure(runtimeNode.error());
+        }
         preparedNodes.push_back(std::move(runtimeNode).value());
     }
     for (const MediaNode* sender : scheduledRtpSenders) {

@@ -9,6 +9,7 @@
 
 #include <string_view>
 #include <utility>
+#include <variant>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -337,7 +338,6 @@ MediaRealtimeAvSyncInputSegmentBuilder::build(
 {
     if (options.prefix.empty() || !options.sources.videoPacket.valid() ||
         !options.sources.audioPacket.valid() ||
-        !options.sources.protocolClock.valid() ||
         options.releasedVideoStreamIndex < 0 ||
         options.releasedAudioStreamIndex < 0 ||
         (options.releasedVideoEdgeKind != MediaEdgeKind::InputPacket &&
@@ -357,7 +357,15 @@ MediaRealtimeAvSyncInputSegmentBuilder::build(
             plan.edgePolicies.atomicAudioPacket)) {
         return ::media::Result<MediaRealtimeAvSyncInputEndpoints>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "Synchronized input release requires a complete planned atomic output policy"));
+            "Synchronized input release requires a complete planned atomic output policy"));
+    }
+    const bool demuxClock = std::holds_alternative<
+        MediaDemuxTimestampInputClockAssemblyPlan>(
+        plan.assembly.inputClock);
+    if (!demuxClock && !options.sources.protocolClock.valid()) {
+        return ::media::Result<MediaRealtimeAvSyncInputEndpoints>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Synchronized protocol input requires its planned clock endpoint"));
     }
     auto protocol = MediaRealtimeAvSyncProtocolInputBuilder::build(
         graph, options, plan);

@@ -17,6 +17,7 @@ struct MediaPacketSourceTiming final {
     std::optional<std::int64_t> decodeNs;
     MediaSourceClockReadiness readiness;
     std::uint64_t generation;
+    std::optional<std::int64_t> durationNs = std::nullopt;
 
     bool operator==(const MediaPacketSourceTiming&) const = default;
 };

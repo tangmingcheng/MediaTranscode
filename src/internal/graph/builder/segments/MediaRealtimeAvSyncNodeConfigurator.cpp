@@ -70,6 +70,77 @@ MediaRealtimeAvSyncNodeConfigurator::configureRtpPacketClockBinder(
 }
 
 ::media::Result<void>
+MediaRealtimeAvSyncNodeConfigurator::configureDemuxPacketClockBinder(
+    MediaGraph& graph,
+    MediaNodeId node,
+    MediaStreamKind stream,
+    const MediaAvSyncGroupKey& syncGroup,
+    const MediaDemuxTimestampInputClockAssemblyPlan& plan)
+{
+    const bool video = stream == MediaStreamKind::Video;
+    const MediaRational& timeBase =
+        video ? plan.videoTimeBase : plan.audioTimeBase;
+    if ((!video && stream != MediaStreamKind::Audio) ||
+        !syncGroup.valid() ||
+        plan.videoTimeBase.num <= 0 || plan.videoTimeBase.den <= 0 ||
+        plan.audioTimeBase.num <= 0 || plan.audioTimeBase.den <= 0 ||
+        plan.firstWindowMaximumSkew <=
+            MediaRunningTime::fromNanoseconds(0) ||
+        plan.timestampRegressionLimit <=
+            MediaRunningTime::fromNanoseconds(0) ||
+        plan.discontinuityThreshold <= plan.timestampRegressionLimit ||
+        plan.initialGeneration == 0 ||
+        plan.videoSourceIdentity.empty() ||
+        plan.audioSourceIdentity.empty() ||
+        plan.videoSourceIdentity == plan.audioSourceIdentity) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Demux clock binder requires the complete planner clock policy"));
+    }
+    for (auto [key, value] : {
+             std::pair{"demux_clock_binder.stream",
+                       std::string(video ? "video" : "audio")},
+             std::pair{"demux_clock_binder.sync_group",
+                       syncGroup.value()},
+             std::pair{"demux_clock_binder.time_base_num",
+                       std::to_string(timeBase.num)},
+             std::pair{"demux_clock_binder.time_base_den",
+                       std::to_string(timeBase.den)},
+             std::pair{"demux_clock_binder.video_time_base_num",
+                       std::to_string(plan.videoTimeBase.num)},
+             std::pair{"demux_clock_binder.video_time_base_den",
+                       std::to_string(plan.videoTimeBase.den)},
+             std::pair{"demux_clock_binder.audio_time_base_num",
+                       std::to_string(plan.audioTimeBase.num)},
+             std::pair{"demux_clock_binder.audio_time_base_den",
+                       std::to_string(plan.audioTimeBase.den)},
+             std::pair{"demux_clock_binder.first_window_maximum_skew_ns",
+                       std::to_string(
+                           plan.firstWindowMaximumSkew.nanoseconds())},
+             std::pair{"demux_clock_binder.timestamp_regression_limit_ns",
+                       std::to_string(
+                           plan.timestampRegressionLimit.nanoseconds())},
+             std::pair{"demux_clock_binder.discontinuity_threshold_ns",
+                       std::to_string(
+                           plan.discontinuityThreshold.nanoseconds())},
+              std::pair{"demux_clock_binder.initial_generation",
+                        std::to_string(plan.initialGeneration)},
+              std::pair{"demux_clock_binder.video_source_identity",
+                        plan.videoSourceIdentity},
+              std::pair{"demux_clock_binder.audio_source_identity",
+                        plan.audioSourceIdentity},
+              std::pair{"demux_clock_binder.canonical_target_epoch_ns",
+                        std::to_string(
+                            plan.canonicalTargetEpoch.nanoseconds())}}) {
+        if (auto status = setOption(
+                graph, node, key, std::move(value)); !status) {
+            return status;
+        }
+    }
+    return ::media::Result<void>::success();
+}
+
+::media::Result<void>
 MediaRealtimeAvSyncNodeConfigurator::configureLockedPacketGate(
     MediaGraph& graph,
     MediaNodeId node,
@@ -149,6 +220,26 @@ MediaRealtimeAvSyncNodeConfigurator::configureCanonicalInput(
         return setOption(
             graph, node, "canonical_input.audio_sample_rate",
             std::to_string(samples->sampleRate));
+    }
+    if (const auto* packet =
+            std::get_if<MediaPacketDurationPlan>(
+                &assembly.audio.duration)) {
+        if (!packet->requirePositiveDuration ||
+            !plan.planningFacts.inputAudioSampleRate ||
+            *plan.planningFacts.inputAudioSampleRate <= 0) {
+            return ::media::Result<void>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Canonical packet-duration audio requires its planned sample rate"));
+        }
+        if (auto status = setOption(
+                graph, node, "canonical_input.duration_source",
+                "packet"); !status) {
+            return status;
+        }
+        return setOption(
+            graph, node, "canonical_input.audio_sample_rate",
+            std::to_string(
+                *plan.planningFacts.inputAudioSampleRate));
     }
     return ::media::Result<void>::failure(
         ::media::ErrorInfo::invalidArgument(

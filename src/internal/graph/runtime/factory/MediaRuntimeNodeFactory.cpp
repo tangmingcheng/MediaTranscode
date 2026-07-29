@@ -41,6 +41,7 @@
 #include "internal/graph/nodes/split/PacketFanoutNode.h"
 #include "internal/graph/nodes/sync/MediaRtpClockGroupNode.h"
 #include "internal/graph/nodes/sync/MediaRtpPacketClockBinderNode.h"
+#include "internal/graph/nodes/sync/MediaDemuxPacketClockBinderNode.h"
 #include "internal/graph/nodes/sync/MediaRtpClockSnapshotFanoutNode.h"
 #include "internal/graph/nodes/sync/MediaAvStartupCoordinatorNode.h"
 #include "internal/graph/nodes/sync/MediaAvStartupCoordinatorNodePreparation.h"
@@ -313,6 +314,10 @@ template <typename Node>
     case MediaNodeKind::RtpPacketClockBinder:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::make_unique<MediaRtpPacketClockBinderNode>(node.id));
+    case MediaNodeKind::DemuxPacketClockBinder:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "Demux packet clock binder requires compiler injection"));
     case MediaNodeKind::RtpClockSnapshotFanout:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::make_unique<MediaRtpClockSnapshotFanoutNode>(node.id));
@@ -613,10 +618,86 @@ MediaRuntimeNodeFactory::createScheduledRtpSender(
     }
 }
 
+::media::Result<std::unique_ptr<MediaRuntimeNode>>
+MediaRuntimeNodeFactory::createDemuxPacketClockBinder(
+    const MediaNode& node,
+    std::shared_ptr<MediaDemuxTimestampClockMapper> mapper,
+    std::shared_ptr<MediaAvSyncGroupRuntime> syncGroup)
+{
+    if (node.kind != MediaNodeKind::DemuxPacketClockBinder ||
+        !mapper || !syncGroup || !syncGroup->clock()) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Demux packet clock binder injection requires its exact node, mapper, and sync group"));
+    }
+    auto stream = requiredStreamKindNodeOption(
+        &node.options,
+        "MediaDemuxPacketClockBinderNode",
+        "demux_clock_binder.stream");
+    auto group = requiredSyncGroup(
+        node,
+        "MediaDemuxPacketClockBinderNode",
+        "demux_clock_binder.sync_group");
+    auto numerator = requiredPositiveIntNodeOption(
+        &node.options,
+        "MediaDemuxPacketClockBinderNode",
+        "demux_clock_binder.time_base_num");
+    auto denominator = requiredPositiveIntNodeOption(
+        &node.options,
+        "MediaDemuxPacketClockBinderNode",
+        "demux_clock_binder.time_base_den");
+    if (!stream) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            stream.error());
+    }
+    if (!group) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            group.error());
+    }
+    if (!numerator || !denominator) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            !numerator ? numerator.error() : denominator.error());
+    }
+    if (stream.value() != MediaStreamKind::Video &&
+        stream.value() != MediaStreamKind::Audio) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Demux packet clock binder requires video or audio stream"));
+    }
+    const MediaScheduledStream scheduled =
+        stream.value() == MediaStreamKind::Video
+        ? MediaScheduledStream::Video
+        : MediaScheduledStream::Audio;
+    const MediaRational expected = scheduled == MediaScheduledStream::Video
+        ? mapper->config().videoTimeBase
+        : mapper->config().audioTimeBase;
+    if (group.value() != syncGroup->key() ||
+        numerator.value() != expected.num ||
+        denominator.value() != expected.den) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Demux packet clock binder injection disagrees with the planner product"));
+    }
+    return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+        std::make_unique<MediaDemuxPacketClockBinderNode>(
+            node.id,
+            scheduled,
+            expected,
+            std::move(mapper),
+            std::move(syncGroup)));
+}
+
 std::optional<MediaRuntimeGenerationPurgeRegistration>
 MediaRuntimeNodeFactory::generationPurgeRegistration(
     MediaRuntimeNode& runtime)
 {
+    if (auto* binder =
+            dynamic_cast<MediaDemuxPacketClockBinderNode*>(&runtime)) {
+        return MediaRuntimeGenerationPurgeRegistration{
+            MediaAvGenerationParticipant::CanonicalLineage,
+            {std::string(binder->generationPurgeIdentity()),
+             binder->generationPurgeTarget()}};
+    }
     if (auto registration =
             fixedGenerationPurgeRegistration<MediaAvStartupCoordinatorNode>(
                 runtime,
@@ -757,6 +838,7 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::PacketStartGate:
     case MediaNodeKind::RtpClockGroup:
     case MediaNodeKind::RtpPacketClockBinder:
+    case MediaNodeKind::DemuxPacketClockBinder:
     case MediaNodeKind::RtpClockSnapshotFanout:
     case MediaNodeKind::AvStartupCoordinator:
     case MediaNodeKind::AvOutputScheduler:

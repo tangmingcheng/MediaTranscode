@@ -35,6 +35,8 @@ private:
     ::media::Status configure(MediaGraphExecutionContext& context);
     ::media::Result<MediaRunningTime> durationFor(
         const MediaBufferRef& packet) const;
+    ::media::Result<std::uint32_t> audioSampleCountFor(
+        const MediaBufferRef& packet) const;
     void resetState() noexcept;
     std::optional<MediaScheduledStream> m_stream;
     std::optional<MediaDecodeOrderMode> m_decodeOrder;
@@ -44,6 +46,7 @@ private:
     std::uint64_t m_nextSequence = 1;
     int m_audioSampleRate = 0;
     std::uint32_t m_audioSampleCount = 0;
+    bool m_audioDurationFromPacket = false;
     std::optional<MediaCanonicalAudioSourceTimeline> m_audioTimeline;
 };
 
