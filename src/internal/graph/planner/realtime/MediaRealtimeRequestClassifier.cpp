@@ -40,4 +40,14 @@ bool MediaRealtimeRequestClassifier::muxedTransportOutput(const MediaRealtimeRtp
     return request.output.streamLayout == RealtimeOutputStreamLayout::MuxedTransportStream;
 }
 
+bool MediaRealtimeRequestClassifier::udpOutput(const MediaRealtimeRtpTranscodeRequest& request) noexcept
+{
+    return request.output.transport == MediaOutputTransportKind::UdpDatagrams;
+}
+
+bool MediaRealtimeRequestClassifier::rtpAvpOutput(const MediaRealtimeRtpTranscodeRequest& request) noexcept
+{
+    return request.output.transport == MediaOutputTransportKind::RtpAvp;
+}
+
 } // namespace media::ffmpeg::graph

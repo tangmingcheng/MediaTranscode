@@ -9,24 +9,30 @@ namespace {
 
 ::media::Status validateClassification(const MediaRealtimeRtpTranscodeRequest& request)
 {
-    if (!request.input.type || !request.input.streamLayout || !request.output.streamLayout) {
+    if (!request.input.type || !request.input.streamLayout || !request.output.streamLayout ||
+        !request.output.transport) {
         return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("Realtime input type and input/output stream layouts must be explicit"));
+            ::media::ErrorInfo::invalidArgument(
+                "Realtime input type, input/output stream layouts, and output transport must be explicit"));
     }
-    if (*request.input.type == RealtimeInputType::RtpPort &&
-        *request.input.streamLayout == RealtimeInputStreamLayout::SeparateStreams &&
-        *request.output.streamLayout == RealtimeOutputStreamLayout::MuxedTransportStream) {
+    const bool supportedInput =
+        MediaRealtimeRequestClassifier::realtimeUrlInput(request) ||
+        MediaRealtimeRequestClassifier::rawRtpInput(request) ||
+        MediaRealtimeRequestClassifier::mpegTsUdpInput(request);
+    if (!supportedInput) {
         return ::media::Status::failure(::media::ErrorInfo::unsupported(
-            "Synchronized separate RTP input to MPEG-TS output is not supported"));
+            "Realtime input type and input layout combination is not supported"));
     }
-    const bool supported =
-        (MediaRealtimeRequestClassifier::realtimeUrlInput(request) && MediaRealtimeRequestClassifier::separateRtpOutput(request)) ||
-        (MediaRealtimeRequestClassifier::rawRtpInput(request) && MediaRealtimeRequestClassifier::separateRtpOutput(request)) ||
-        (MediaRealtimeRequestClassifier::mpegTsUdpInput(request) && MediaRealtimeRequestClassifier::muxedTransportOutput(request));
-    return supported
+    const bool supportedOutput =
+        (MediaRealtimeRequestClassifier::separateRtpOutput(request) &&
+         MediaRealtimeRequestClassifier::rtpAvpOutput(request)) ||
+        (MediaRealtimeRequestClassifier::muxedTransportOutput(request) &&
+         (MediaRealtimeRequestClassifier::udpOutput(request) ||
+          MediaRealtimeRequestClassifier::rtpAvpOutput(request)));
+    return supportedOutput
         ? ::media::Status::success()
         : ::media::Status::failure(::media::ErrorInfo::unsupported(
-              "Realtime input type, input layout, and output layout combination is not supported"));
+              "Realtime output layout and transport combination is not supported"));
 }
 
 ::media::Status validateQueues(const MediaGraphQueueParameters& queues)
@@ -48,7 +54,11 @@ namespace {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("Realtime RTP input URL must be explicit"));
     }
-    if (MediaRealtimeRequestClassifier::separateRtpOutput(request)) {
+    if (MediaRealtimeRequestClassifier::rtpAvpOutput(request)) {
+        if (request.output.host.empty() || !request.output.basePort) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument("Realtime RTP output host and base port must be explicit"));
+        }
         if (!request.output.packetSize || *request.output.packetSize <= 0) {
             return ::media::Status::failure(
                 ::media::ErrorInfo::invalidArgument("Realtime RTP output packet size must be explicit and positive"));

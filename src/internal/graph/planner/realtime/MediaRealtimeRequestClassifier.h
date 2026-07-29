@@ -13,6 +13,8 @@ public:
     static bool unreliablePacketBoundary(const MediaRealtimeRtpTranscodeRequest& request) noexcept;
     static bool separateRtpOutput(const MediaRealtimeRtpTranscodeRequest& request) noexcept;
     static bool muxedTransportOutput(const MediaRealtimeRtpTranscodeRequest& request) noexcept;
+    static bool udpOutput(const MediaRealtimeRtpTranscodeRequest& request) noexcept;
+    static bool rtpAvpOutput(const MediaRealtimeRtpTranscodeRequest& request) noexcept;
 
 private:
     MediaRealtimeRequestClassifier() = delete;

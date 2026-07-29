@@ -84,7 +84,12 @@ MediaLatencyPolicy muxPacing() noexcept
     const MediaRealtimeRtpTranscodeRequest& request)
 {
     MediaRealtimeOutputUrls urls;
-    if (request.output.streamLayout == RealtimeOutputStreamLayout::MuxedTransportStream) {
+    if (MediaRealtimeRequestClassifier::udpOutput(request)) {
+        if (!MediaRealtimeRequestClassifier::muxedTransportOutput(request)) {
+            return ::media::Result<MediaRealtimeOutputUrls>::failure(
+                ::media::ErrorInfo::unsupported(
+                    "UDP output supports only MPEG-TS muxed encapsulation"));
+        }
         if (request.output.url.empty()) {
             return ::media::Result<MediaRealtimeOutputUrls>::failure(
                 ::media::ErrorInfo::invalidArgument("MPEG-TS muxed output requires explicit output URL"));
@@ -101,22 +106,40 @@ MediaLatencyPolicy muxPacing() noexcept
         return ::media::Result<MediaRealtimeOutputUrls>::success(std::move(urls));
     }
 
+    if (!MediaRealtimeRequestClassifier::rtpAvpOutput(request)) {
+        return ::media::Result<MediaRealtimeOutputUrls>::failure(
+            ::media::ErrorInfo::invalidArgument("Realtime output transport must be explicit"));
+    }
     if (!request.output.url.empty()) {
         return ::media::Result<MediaRealtimeOutputUrls>::failure(
-            ::media::ErrorInfo::invalidArgument("Realtime RTP separate output requires host/basePort; single output URL is unsupported"));
+            ::media::ErrorInfo::invalidArgument("Realtime RTP output requires host/basePort; single output URL is unsupported"));
     }
     if (request.output.host.empty() || !request.output.basePort) {
         return ::media::Result<MediaRealtimeOutputUrls>::failure(
             ::media::ErrorInfo::invalidArgument("Realtime RTP output host and base port are required"));
     }
     const std::size_t videoPort = *request.output.basePort;
-    const std::size_t audioPort = videoPort + 2;
-    if (!validRtpPort(videoPort) || (MediaRealtimeRequestClassifier::audioRequested(request) && !validRtpPort(audioPort))) {
+    if (!validRtpPort(videoPort)) {
+        return ::media::Result<MediaRealtimeOutputUrls>::failure(
+            ::media::ErrorInfo::invalidArgument("Realtime RTP output ports must be valid even RTP ports"));
+    }
+    const bool audioRequested = MediaRealtimeRequestClassifier::audioRequested(request);
+    if (audioRequested && videoPort > 65532) {
+        return ::media::Result<MediaRealtimeOutputUrls>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Realtime RTP audio output port collides with the video RTP/RTCP pair"));
+    }
+    const std::size_t audioPort = audioRequested ? videoPort + 2 : 0;
+    if (audioRequested && !validRtpPort(audioPort)) {
         return ::media::Result<MediaRealtimeOutputUrls>::failure(
             ::media::ErrorInfo::invalidArgument("Realtime RTP output ports must be valid even RTP ports"));
     }
     urls.video = rtpUrl(request.output.host, videoPort);
-    if (MediaRealtimeRequestClassifier::audioRequested(request)) urls.audio = rtpUrl(request.output.host, audioPort);
+    if (audioRequested) urls.audio = rtpUrl(request.output.host, audioPort);
+    if (MediaRealtimeRequestClassifier::muxedTransportOutput(request)) {
+        urls.muxed = urls.video;
+        urls.muxedFormat = "mpegts";
+    }
     return ::media::Result<MediaRealtimeOutputUrls>::success(std::move(urls));
 }
 

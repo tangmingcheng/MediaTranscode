@@ -39,11 +39,11 @@
 - Add classifier predicates `udpOutput()` and `rtpAvpOutput()`; keep layout predicates limited to separate versus muxed encapsulation.
 - CLI requires `--output-transport udp|rtp`; no implicit transport is accepted.
 
-- [ ] **Step 1: Preserve existing enum values and add the output protocol model**
+- [x] **Step 1: Preserve existing enum values and add the output protocol model**
 
   Give all existing input/output layout enum members explicit numeric values matching their current order. Add the single shared `MediaOutputTransportKind`; Project MPEG-TS planning reuses it instead of defining a second transport enum.
 
-- [ ] **Step 2: Parse the explicit CLI transport**
+- [x] **Step 2: Parse the explicit CLI transport**
 
   Add `requiredRealtimeOutputTransport()`, register `--output-transport`, and populate `request.output.transport`. Keep the accepted combinations exact:
 
@@ -54,7 +54,7 @@
   separate + udp = rejected
   ```
 
-- [ ] **Step 3: Separate input and output validation**
+- [x] **Step 3: Separate input and output validation**
 
   Remove the fixed topology whitelist and validate supported input classification independently from output classification. Preserve every input-specific requirement. Apply output requirements by the selected layout/protocol:
 
@@ -66,7 +66,7 @@
 
   RTP/RTCP uses `basePort` and `basePort + 1`; planner validation rejects overflow, invalid parity, and collisions.
 
-- [ ] **Step 4: Refactor URL planning without compatibility branches**
+- [x] **Step 4: Refactor URL planning without compatibility branches**
 
   `MediaRealtimeOutputPolicyPlanner::planUrls()` produces only endpoint facts valid for the selected transport. It must not infer transport from URL scheme or layout. UDP MPEG-TS retains its UDP URL; both RTP modes use the existing numeric host/base-port path.
 
