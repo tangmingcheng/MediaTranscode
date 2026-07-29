@@ -125,6 +125,162 @@ RTP realtime CLI 使用输入端口 64300/64302、输出端口 64320，并使用
   --no-video-title-show
 ```
 
+### RTP strict-start 一次性验收命令
+
+以下命令必须在 PowerShell 中整段执行。它直接启动真实的 realtime CLI、
+FFmpeg 和 VLC，不使用 PowerShell 子进程代替 CLI。CLI 启动 1.5 秒后才开始
+发送 RTP，三进程必须在开始后的 20 秒内同时存在。CLI 最长运行 60 秒，结束后
+只清理本次启动的 FFmpeg/VLC PID，并输出最终 runtime report、持续 A/V 漂移
+记录和旧链路残留检查。
+
+```powershell
+$savedPath = $env:Path
+[Environment]::SetEnvironmentVariable('PATH', $null, 'Process')
+[Environment]::SetEnvironmentVariable('Path', $null, 'Process')
+[Environment]::SetEnvironmentVariable('Path', $savedPath, 'Process')
+
+$validation = 'D:\Code\MyCode\MediaTranscode\out\validation'
+$sdpPath = 'D:\Code\MyCode\MediaTranscode\out\validation\rtp-output-final.sdp'
+$cliOut = 'D:\Code\MyCode\MediaTranscode\out\validation\rtp-strict-cli.stdout.log'
+$cliErr = 'D:\Code\MyCode\MediaTranscode\out\validation\rtp-strict-cli.stderr.log'
+$ffOut = 'D:\Code\MyCode\MediaTranscode\out\validation\rtp-strict-ffmpeg.stdout.log'
+$ffErr = 'D:\Code\MyCode\MediaTranscode\out\validation\rtp-strict-ffmpeg.stderr.log'
+
+New-Item -ItemType Directory -Path $validation -Force | Out-Null
+Remove-Item -LiteralPath $sdpPath,$cliOut,$cliErr,$ffOut,$ffErr `
+  -Force -ErrorAction SilentlyContinue
+
+$cliArgs = @(
+  '--media-id','final-rtp',
+  '--input-type','rtp','--input-layout','separate',
+  '--output-layout','separate',
+  '--video-rtp-url','rtp://127.0.0.1:64300',
+  '--video-rtp-codec','h264',
+  '--video-rtp-payload-type','96',
+  '--video-rtp-clock-rate','90000',
+  '--video-rtp-fmtp',
+    'packetization-mode=1;sprop-parameter-sets=Z01AMpWQAoALWwEQAAA+gAAOpghA,aOuPIA==;profile-level-id=4D4032',
+  '--audio-rtp-url','rtp://127.0.0.1:64302',
+  '--audio-rtp-codec','aac',
+  '--audio-rtp-payload-type','97',
+  '--audio-rtp-clock-rate','44100',
+  '--audio-rtp-channels','2',
+  '--audio-rtp-fmtp',
+    'profile-level-id=1;mode=AAC-hbr;sizelength=13;indexlength=3;indexdeltalength=3;config=1210',
+  '--rtp-host','127.0.0.1','--rtp-port','64320',
+  '--sdp',$sdpPath,
+  '--packet-size','1200',
+  '--open-timeout-ms','5000','--read-timeout-ms','1000',
+  '--analyze-duration-us','5000000','--probe-size','5000000',
+  '--metadata-queue','1','--packet-queue','256',
+  '--frame-queue','128','--mux-queue','256',
+  '--startup-max-video-unit-bytes','4194304',
+  '--startup-max-audio-unit-bytes','1048576',
+  '--startup-max-gap-ms','40',
+  '--video-codec','h264','--width','1280','--height','720','--fps','30',
+  '--bitrate','4000','--gop','30',
+  '--audio-codec','aac','--audio-bitrate','128',
+  '--sample-rate','44100','--channels','2',
+  '--max-duration','60',
+  '--progress-timeout-ms','5000',
+  '--first-output-timeout-ms','10000',
+  '--poll-interval-ms','100'
+)
+
+$startedAt = Get-Date
+$cli = Start-Process `
+  -FilePath 'D:\Code\MyCode\MediaTranscode\out\build\x64-debug\media_transcode_realtime_video_cli.exe' `
+  -ArgumentList $cliArgs `
+  -RedirectStandardOutput $cliOut `
+  -RedirectStandardError $cliErr `
+  -WindowStyle Hidden -PassThru
+
+Start-Sleep -Milliseconds 1500
+
+$ffArgs = @(
+  '-hide_banner','-loglevel','warning','-re',
+  '-i','D:\Code\MyCode\MediaTranscode\out\validation\avsync-continuous-180s.mp4',
+  '-map','0:v:0','-c:v','copy','-an',
+  '-payload_type','96','-ssrc','11001','-f','rtp',
+  'rtp://127.0.0.1:64300?rtcpport=64301',
+  '-map','0:a:0','-c:a','copy','-vn',
+  '-payload_type','97','-ssrc','11002','-f','rtp',
+  'rtp://127.0.0.1:64302?rtcpport=64303'
+)
+
+$ffmpeg = Start-Process `
+  -FilePath 'D:\mabs\local64\bin-video\ffmpeg.exe' `
+  -ArgumentList $ffArgs `
+  -RedirectStandardOutput $ffOut `
+  -RedirectStandardError $ffErr `
+  -WindowStyle Hidden -PassThru
+
+$sdpDeadline = $startedAt.AddSeconds(15)
+while (-not (Test-Path -LiteralPath $sdpPath)) {
+  if ((Get-Date) -ge $sdpDeadline) {
+    throw "RTP output SDP did not appear within 15 seconds: $sdpPath"
+  }
+  Start-Sleep -Milliseconds 100
+}
+
+$vlc = Start-Process `
+  -FilePath 'D:\VideoLAN\VLC\vlc.exe' `
+  -ArgumentList @($sdpPath,'--no-video-title-show') `
+  -PassThru
+
+$processDeadline = $startedAt.AddSeconds(20)
+do {
+  $visible = @(
+    Get-Process -Id $cli.Id,$ffmpeg.Id,$vlc.Id -ErrorAction SilentlyContinue
+  )
+  if ($visible.Count -eq 3) {
+    break
+  }
+  Start-Sleep -Milliseconds 100
+} while ((Get-Date) -lt $processDeadline)
+
+if ($visible.Count -ne 3) {
+  throw 'realtime CLI, FFmpeg and VLC were not all present within 20 seconds'
+}
+
+$visible | Select-Object Id,ProcessName,
+  @{Name='WorkingSetMiB';Expression={[math]::Round($_.WorkingSet64 / 1MB, 2)}},
+  @{Name='PrivateMiB';Expression={[math]::Round($_.PrivateMemorySize64 / 1MB, 2)}},
+  CPU,StartTime
+
+while (Get-Process -Id $cli.Id -ErrorAction SilentlyContinue) {
+  $process = Get-Process -Id $cli.Id
+  [pscustomobject]@{
+    Time = (Get-Date).ToString('HH:mm:ss.fff')
+    WorkingSetMiB = [math]::Round($process.WorkingSet64 / 1MB, 2)
+    PrivateMiB = [math]::Round($process.PrivateMemorySize64 / 1MB, 2)
+    CPU = [math]::Round($process.CPU, 3)
+  }
+  Start-Sleep -Seconds 5
+}
+
+foreach ($processId in @($ffmpeg.Id,$vlc.Id)) {
+  if (Get-Process -Id $processId -ErrorAction SilentlyContinue) {
+    Stop-Process -Id $processId -Force
+  }
+}
+
+Get-Content -LiteralPath $cliOut -Encoding UTF8 |
+  Select-String -Pattern 'av_drift_trace|final runtime report|stopped successfully'
+
+'RESIDUE_BEGIN'
+Get-Process -ErrorAction SilentlyContinue |
+  Where-Object {
+    $_.ProcessName -in @(
+      'media_transcode_realtime_video_cli',
+      'ffmpeg',
+      'vlc'
+    )
+  } |
+  Select-Object Id,ProcessName,StartTime
+'RESIDUE_END'
+```
+
 ## 2026-07-29 最终数据
 
 - Local CLI：`completed=true`，errors/workerErrors/droppedBuffers 均为 0；
