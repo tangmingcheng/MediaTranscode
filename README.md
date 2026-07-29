@@ -19,19 +19,16 @@ Only the graph architecture and `Result.h` are documented as active project surf
 Use the existing CMake flow:
 
 ```bash
-cmake -S . -B out/build/x64-debug -DMEDIA_TRANSCODE_BUILD_TESTS=ON
+cmake -S . -B out/build/x64-debug
 cmake --build out/build/x64-debug --target media_transcode_core
 cmake --build out/build/x64-debug --target media_transcode_local_video_cli
 cmake --build out/build/x64-debug --target media_transcode_realtime_video_cli
-cmake --build out/build/x64-debug --target media_transcode_realtime_graph_tests
 ```
 
 Useful CMake options:
 
 ```text
 MEDIA_TRANSCODE_BUILD_GRAPH_TOOLS=ON
-MEDIA_TRANSCODE_BUILD_TESTS=ON
-MEDIA_TRANSCODE_TEST_SAMPLES_DIR=<path>
 ```
 
 ## Realtime DAG Path
@@ -71,13 +68,9 @@ out/build/x64-debug/media_transcode_realtime_video_cli.exe --input-type rtp --in
 out/build/x64-debug/media_transcode_realtime_video_cli.exe --input-type mpegts-udp --input-layout mpegts --output-layout mpegts --input udp://0.0.0.0:15000 --output udp://127.0.0.1:15002 --open-timeout-ms 5000 --read-timeout-ms 5000 --analyze-duration-us 500000 --probe-size 524288 --no-audio --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --video-codec h264 --rc auto --max-duration 15
 ```
 
-## Tests
+## Production acceptance
 
-Build and run the active graph test target:
-
-```powershell
-cmake --build out/build/x64-debug --target media_transcode_realtime_graph_tests
-out/build/x64-debug/media_transcode_realtime_graph_tests.exe
-```
-
-`tests/samples/` is reserved for small media fixtures used by graph validation.
+Project acceptance is based on the real local and realtime CLIs, real media streams,
+FFmpeg/VLC observation, runtime memory metrics, and continuous A/V drift telemetry.
+The current absolute-path PowerShell commands and evidence are recorded under
+`docs/completed/`.
