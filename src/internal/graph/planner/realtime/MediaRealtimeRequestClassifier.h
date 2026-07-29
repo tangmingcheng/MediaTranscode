@@ -11,7 +11,7 @@ public:
     static bool rawRtpInput(const MediaRealtimeRtpTranscodeRequest& request) noexcept;
     static bool mpegTsUdpInput(const MediaRealtimeRtpTranscodeRequest& request) noexcept;
     static bool unreliablePacketBoundary(const MediaRealtimeRtpTranscodeRequest& request) noexcept;
-    static bool separateRtpOutput(const MediaRealtimeRtpTranscodeRequest& request) noexcept;
+    static bool separateStreamsOutput(const MediaRealtimeRtpTranscodeRequest& request) noexcept;
     static bool muxedTransportOutput(const MediaRealtimeRtpTranscodeRequest& request) noexcept;
     static bool udpOutput(const MediaRealtimeRtpTranscodeRequest& request) noexcept;
     static bool rtpAvpOutput(const MediaRealtimeRtpTranscodeRequest& request) noexcept;

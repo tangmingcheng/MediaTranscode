@@ -41,7 +41,7 @@
 
 - [x] **Step 1: Preserve existing enum values and add the output protocol model**
 
-  Give all existing input/output layout enum members explicit numeric values matching their current order. Add the single shared `MediaOutputTransportKind`; Project MPEG-TS planning reuses it instead of defining a second transport enum.
+  Give all existing input/output layout enum members explicit numeric values matching their current order. This task establishes `MediaOutputTransportKind` as the single shared enum; Task 4 migrates Project MPEG-TS planning to it and removes the legacy transport enum.
 
 - [x] **Step 2: Parse the explicit CLI transport**
 
@@ -70,7 +70,7 @@
 
   `MediaRealtimeOutputPolicyPlanner::planUrls()` produces only endpoint facts valid for the selected transport. It must not infer transport from URL scheme or layout. UDP MPEG-TS retains its UDP URL; both RTP modes use the existing numeric host/base-port path.
 
-- [ ] **Step 5: Perform static verification and commit**
+- [x] **Step 5: Perform static verification and commit**
 
   Run `git diff --check`, inspect all output classification call sites, verify UTF-8/CRLF, update this task to complete, then commit:
 

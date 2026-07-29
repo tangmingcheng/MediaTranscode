@@ -269,7 +269,7 @@ std::uint32_t stableIdentity(const std::string& value) noexcept
             ::media::ErrorInfo::unsupported("A/V synchronization requires both audio and video"));
     }
     if (MediaRealtimeRequestClassifier::rawRtpInput(request) &&
-        MediaRealtimeRequestClassifier::separateRtpOutput(request)) {
+        MediaRealtimeRequestClassifier::separateStreamsOutput(request)) {
         if (resolvedTsFacts) {
             return ::media::Result<MediaAvSyncPlan>::failure(
                 ::media::ErrorInfo::invalidArgument(

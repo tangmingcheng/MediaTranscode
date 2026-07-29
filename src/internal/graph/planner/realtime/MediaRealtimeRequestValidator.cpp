@@ -24,7 +24,7 @@ namespace {
             "Realtime input type and input layout combination is not supported"));
     }
     const bool supportedOutput =
-        (MediaRealtimeRequestClassifier::separateRtpOutput(request) &&
+        (MediaRealtimeRequestClassifier::separateStreamsOutput(request) &&
          MediaRealtimeRequestClassifier::rtpAvpOutput(request)) ||
         (MediaRealtimeRequestClassifier::muxedTransportOutput(request) &&
          (MediaRealtimeRequestClassifier::udpOutput(request) ||

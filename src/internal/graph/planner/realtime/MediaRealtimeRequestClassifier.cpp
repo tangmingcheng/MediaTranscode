@@ -30,7 +30,7 @@ bool MediaRealtimeRequestClassifier::unreliablePacketBoundary(const MediaRealtim
     return rawRtpInput(request) || mpegTsUdpInput(request);
 }
 
-bool MediaRealtimeRequestClassifier::separateRtpOutput(const MediaRealtimeRtpTranscodeRequest& request) noexcept
+bool MediaRealtimeRequestClassifier::separateStreamsOutput(const MediaRealtimeRtpTranscodeRequest& request) noexcept
 {
     return request.output.streamLayout == RealtimeOutputStreamLayout::SeparateStreams;
 }

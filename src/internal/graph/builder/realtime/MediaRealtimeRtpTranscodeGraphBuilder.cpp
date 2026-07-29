@@ -211,7 +211,7 @@ bool branchEnabled(const MediaAudioPipelinePlan& plan) noexcept
     return plan.enabled && plan.branchMode != MediaBranchMode::Drop;
 }
 
-bool separateRtpOutput(const MediaRealtimeRtpTranscodePlan& plan) noexcept
+bool separateStreamsOutput(const MediaRealtimeRtpTranscodePlan& plan) noexcept
 {
     return plan.outputLayout == RealtimeOutputStreamLayout::SeparateStreams;
 }
@@ -382,7 +382,7 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
         : std::nullopt;
     MediaNodeId videoMux = MediaNodeId::invalid();
 
-    if (singleStreamOutput && separateRtpOutput(plan)) {
+    if (singleStreamOutput && separateStreamsOutput(plan)) {
         const MediaNodeId videoOutput = graph.addNode(MediaNodeKind::RtpOutput,
                                                       "realtime.video.rtp.output",
                                                       "Realtime video RTP output context");
