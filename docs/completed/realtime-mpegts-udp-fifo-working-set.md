@@ -130,7 +130,7 @@ RTP realtime CLI 使用输入端口 64300/64302、输出端口 64320，并使用
 - Local CLI：`completed=true`，errors/workerErrors/droppedBuffers 均为 0；
   H.264 2560×1440、AAC 44100 Hz，完整解码退出码 0。
 - MPEG-TS 60 秒：CLI、FFmpeg、VLC 同时存在；后半段工作集约
-  226.35–227.14 MiB，Private Bytes 约 573.99–574.94 MiB；
+  224.98–225.72 MiB，Private Bytes 约 563.74–564.72 MiB；
   errors/workerErrors/droppedBuffers 均为 0。首个音频、视频
   canonical target 和 master target 分别完全相同，启动差值为 0 ms。
 - RTP 60 秒首次复验：后半段工作集 210.72–210.73 MiB，内存稳定；
@@ -143,6 +143,24 @@ RTP realtime CLI 使用输入端口 64300/64302、输出端口 64320，并使用
 - 两条实时链路均无 `reacquire`、`hard_phase_error` 或 drift-controller 错误。
 - 运行期均未触发相位误差恢复。RTP 验收应在 CLI 就绪后再送流，避免把启动端
   过早送入的单包淘汰混入稳定运行验收。
+
+### MPEG-TS 持续 A/V 漂移数据
+
+`MediaAudioDriftControllerNode` 在 planner 已决定的 compensation window 发布时输出
+`av_drift_trace`，不另设硬编码采样周期。音频 phase 以与视频调度相同的 master clock
+为参考，因此可以直接量化运行期 A/V 相位趋势。
+
+60 秒链路共采集 10 个补偿窗口样本，覆盖 56.842 秒：
+
+- raw phase：首值 -0.010061 ms，末值 +0.001418 ms，均值 +0.000355 ms，
+  最大绝对值 0.010061 ms；
+- filtered phase：首值 -0.010061 ms，末值 -0.000051 ms，均值 -0.001880 ms，
+  最大绝对值 0.010061 ms；
+- phase 首尾趋势：0.202 ppm；
+- filtered frequency 为 -24–0 ppm，实际 stretch 为 -24–0 ppm；
+- recovering 样本为 0，reacquire、hard-phase 和 drift error 均为 0。
+
+这组数据证明在当前 60 秒窗口内相位误差没有持续扩大；它不能替代更长时间的 soak。
 
 ## 旧链路残留验收
 
@@ -166,5 +184,6 @@ rg -n 'videoPacketCopyNormalizationRequired|audioPacketNormalizationRequired|avS
    确认当前 FFmpeg 的 `fifo_size` 语义。
 2. 检查 realtime CLI 的 MPEG-TS 输入 URL，避免把大 FIFO 的逐页工作集提交误判为泄漏。
 3. 使用 `fifo_size=65536` 做不超过 60 秒的真实三进程复测。
-4. 同时检查内存趋势、`reacquire`、`hard_phase_error`、drift-controller 错误和人眼音画。
+4. 汇总 `av_drift_trace` 的样本数、raw/filtered phase 最大绝对值、均值、首尾值和
+   趋势，同时检查 `reacquire`、`hard_phase_error`、drift-controller 错误和人眼音画。
 5. 若降低 FIFO 后仍持续增长，再检查 DAG 队列、包/帧存量及 FFmpeg 内部引用。
