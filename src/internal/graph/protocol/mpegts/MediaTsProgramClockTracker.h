@@ -43,6 +43,7 @@ public:
 
     ::media::Status observe(const MediaTsPcrObservation& observation);
     ::media::Status observePcrContinuityLoss(std::uint16_t pid);
+    ::media::Status observeElementaryContinuityLoss(std::uint16_t pid);
     ::media::Status observeProgramIdentity(std::uint16_t programNumber,
                                            std::uint16_t pmtPid,
                                            std::uint16_t videoPid,

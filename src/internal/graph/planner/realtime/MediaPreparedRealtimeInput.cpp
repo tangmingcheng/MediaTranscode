@@ -28,12 +28,21 @@ MediaPreparedRealtimeInput::MediaPreparedRealtimeInput(
         MediaPreparedRealtimeInput(std::move(buffer).value()));
 }
 
+::media::Result<MediaPreparedRealtimeInput> MediaPreparedRealtimeInput::createMpegTs(
+    std::unique_ptr<MediaTsInputSession> session)
+{
+    auto buffer = MediaTsPreparedInputBuffer::create(std::move(session));
+    if (!buffer) return ::media::Result<MediaPreparedRealtimeInput>::failure(buffer.error());
+    return ::media::Result<MediaPreparedRealtimeInput>::success(
+        MediaPreparedRealtimeInput(std::move(buffer.value())));
+}
+
 ::media::Result<MediaPreparedRealtimeInput>
-MediaPreparedRealtimeInput::createMpegTs(
+MediaPreparedRealtimeInput::createDeferredMpegTs(
     std::unique_ptr<MediaTsInputSession> preflightSession,
     MediaTsRuntimeSessionFactory runtimeSessionFactory)
 {
-    auto buffer = MediaTsPreparedInputBuffer::create(
+    auto buffer = MediaTsPreparedInputBuffer::createDeferred(
         std::move(preflightSession), std::move(runtimeSessionFactory));
     if (!buffer) {
         return ::media::Result<MediaPreparedRealtimeInput>::failure(buffer.error());

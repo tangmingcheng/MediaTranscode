@@ -32,7 +32,7 @@ struct MediaTsRuntimeBinding final {
     MediaTsRuntimeStreamBinding audio;
     std::uint16_t pcrPid = 0;
     std::size_t pesProvenanceCapacity = 0;
-    bool requiresSelectedPesBoundary(std::uint16_t pid) const noexcept
+    bool isSourceClockPid(std::uint16_t pid) const noexcept
     {
         return pid == video.pid || pid == audio.pid || pid == pcrPid;
     }

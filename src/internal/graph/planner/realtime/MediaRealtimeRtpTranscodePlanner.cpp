@@ -329,7 +329,7 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
     if (!options.input.type || *options.input.type != RealtimeInputType::RtpPort) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
             ::media::ErrorInfo::unsupported(
-                "URL and MPEG-TS realtime input require preflight() to preserve the prepared input contract"));
+                "URL and MPEG-TS realtime input require preflight() to preserve the prepared session"));
     }
     return planWithInput(options, nullptr, nullptr);
 }

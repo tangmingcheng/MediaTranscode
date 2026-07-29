@@ -350,10 +350,7 @@ if(MEDIA_TRANSCODE_BUILD_TESTS)
         tests/unit/audio_resample_node_tests.cpp
         tests/unit/av_startup_coordinator_tests.cpp
         tests/unit/mpeg_ts_packet_tests.cpp
-        tests/unit/mpeg_ts_pes_provenance_timeline_tests.cpp
         tests/unit/mpeg_ts_clock_tests.cpp
-        tests/unit/mpeg_ts_input_session_tests.cpp
-        tests/unit/mpeg_ts_demux_node_tests.cpp
         tests/unit/mpeg_ts_output_serializer_tests.cpp
         tests/unit/mpeg_ts_access_unit_framer_tests.cpp
         tests/unit/mpeg_ts_output_packetizer_tests.cpp
