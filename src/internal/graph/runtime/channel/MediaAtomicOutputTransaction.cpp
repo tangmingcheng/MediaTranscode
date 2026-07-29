@@ -4,6 +4,7 @@
 #include "internal/graph/model/MediaAtomicOutputPolicyContract.h"
 
 #include <algorithm>
+#include <new>
 #include <unordered_map>
 
 namespace media::ffmpeg::graph {
@@ -20,10 +21,14 @@ namespace {
 MediaAtomicOutputTransaction::MediaAtomicOutputTransaction(
     std::string owner,
     std::vector<OwnedBatch> batches,
-    std::vector<std::unique_lock<std::mutex>> locks)
+    std::vector<MediaChannel*> channels,
+    std::vector<std::unique_lock<std::mutex>> channelLocks,
+    std::vector<std::unique_lock<std::mutex>> queueLocks)
     : m_owner(std::move(owner))
     , m_batches(std::move(batches))
-    , m_locks(std::move(locks))
+    , m_channels(std::move(channels))
+    , m_channelLocks(std::move(channelLocks))
+    , m_queueLocks(std::move(queueLocks))
 {
 }
 
@@ -32,6 +37,7 @@ MediaAtomicOutputTransaction::acquire(
     const char* owner,
     std::span<const MediaAtomicOutputBatch> batches)
 {
+    try {
     const std::string ownerName = owner ? owner : "Atomic output transaction";
     if (batches.empty()) {
         return AcquireResult::failure(::media::ErrorInfo::invalidArgument(
@@ -56,52 +62,66 @@ MediaAtomicOutputTransaction::acquire(
     channels.erase(std::unique(channels.begin(), channels.end()),
                    channels.end());
 
-    std::vector<std::unique_lock<std::mutex>> locks;
-    locks.reserve(channels.size());
-    for (MediaChannel* channel : channels) {
-        locks.emplace_back(channel->m_mutationMutex);
-    }
-
     std::unordered_map<MediaChannel*, std::size_t> required;
     required.reserve(channels.size());
+    std::vector<OwnedBatch> ownedBatches;
+    ownedBatches.reserve(batches.size());
     for (const auto& batch : batches) {
-        for (const auto& buffer : batch.buffers) {
-            if (!buffer) {
-                return AcquireResult::failure(
-                    ::media::ErrorInfo::invalidArgument(
-                        ownerName + " rejects null output buffers"));
-            }
+        auto* queue = dynamic_cast<MediaBlockingQueue*>(
+            batch.channel->m_queue.get());
+        if (!queue) {
+            return AcquireResult::failure(invalidContract(ownerName));
         }
+        auto prepared = queue->preparePush(batch.buffers);
+        if (!prepared) return AcquireResult::failure(prepared.error());
         required[batch.channel] += batch.buffers.size();
+        ownedBatches.push_back(
+            {batch.channel, queue, std::move(prepared).value()});
     }
+
+    std::vector<std::unique_lock<std::mutex>> channelLocks;
+    channelLocks.reserve(channels.size());
     for (MediaChannel* channel : channels) {
-        if (!channel->m_queue || channel->m_queue->aborted() ||
-            channel->m_queue->closed()) {
+        channelLocks.emplace_back(channel->m_mutationMutex);
+    }
+    std::vector<std::unique_lock<std::mutex>> queueLocks;
+    queueLocks.reserve(channels.size());
+    for (MediaChannel* channel : channels) {
+        auto* queue = static_cast<MediaBlockingQueue*>(
+            channel->m_queue.get());
+        queueLocks.emplace_back(queue->m_mutex);
+    }
+
+    for (MediaChannel* channel : channels) {
+        auto* queue = static_cast<MediaBlockingQueue*>(
+            channel->m_queue.get());
+        if (queue->m_aborted || queue->m_closed ||
+            channel->m_closeRequested) {
             return AcquireResult::failure(::media::ErrorInfo::cancelled(
                 ownerName + " output is closed"));
         }
         if (!MediaAtomicOutputPolicyContract::accepts(channel->m_policy)) {
             return AcquireResult::failure(invalidContract(ownerName));
         }
-        const std::size_t capacity = channel->m_queue->capacity();
+        const std::size_t capacity = queue->m_policy.capacity;
         const std::size_t count = required[channel];
         if (count > capacity || channel->m_reservedCapacity > capacity - count ||
-            channel->m_queue->size() >
+            queue->m_storage.size() >
                 capacity - count - channel->m_reservedCapacity) {
             return AcquireResult::success(std::nullopt);
         }
     }
 
-    std::vector<OwnedBatch> ownedBatches;
-    ownedBatches.reserve(batches.size());
-    for (const auto& batch : batches) {
-        ownedBatches.push_back(OwnedBatch{
-            batch.channel,
-            std::vector<MediaBufferRef>(
-                batch.buffers.begin(), batch.buffers.end())});
-    }
     return AcquireResult::success(MediaAtomicOutputTransaction(
-        ownerName, std::move(ownedBatches), std::move(locks)));
+        ownerName,
+        std::move(ownedBatches),
+        std::move(channels),
+        std::move(channelLocks),
+        std::move(queueLocks)));
+    } catch (const std::bad_alloc&) {
+        return AcquireResult::failure(::media::ErrorInfo::internalError(
+            "Atomic output transaction allocation failed"));
+    }
 }
 
 ::media::Status MediaAtomicOutputTransaction::commit()
@@ -110,28 +130,33 @@ MediaAtomicOutputTransaction::acquire(
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             m_owner + " transaction can only commit once"));
     }
-    for (const auto& batch : m_batches) {
-        for (const auto& buffer : batch.buffers) {
-            if (batch.channel->pushOutcomeLocked(buffer, false) !=
-                MediaQueuePushOutcome::Accepted) {
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::internalError(
-                        m_owner + " transaction invariant was violated"));
-            }
-        }
-    }
-    for (auto& lock : m_locks) lock.unlock();
-    std::vector<MediaChannel*> published;
-    published.reserve(m_batches.size());
-    for (const auto& batch : m_batches) {
-        if (std::find(published.begin(), published.end(), batch.channel) ==
-            published.end()) {
-            batch.channel->publishAcceptedMutation();
-            published.push_back(batch.channel);
-        }
+    publishPrepared();
+    return ::media::Status::success();
+}
+
+void MediaAtomicOutputTransaction::commitReserved() noexcept
+{
+    publishPrepared();
+}
+
+void MediaAtomicOutputTransaction::publishPrepared() noexcept
+{
+    if (m_committed) return;
+    for (auto& batch : m_batches) {
+        const std::size_t count = batch.prepared.size();
+        batch.queue->publishPreparedLocked(batch.prepared);
+        batch.channel->m_metrics.pushed.fetch_add(
+            count, std::memory_order_relaxed);
+        batch.channel->refreshQueueMetrics();
     }
     m_committed = true;
-    return ::media::Status::success();
+    for (auto& lock : m_queueLocks) lock.unlock();
+    for (auto& lock : m_channelLocks) lock.unlock();
+    for (MediaChannel* channel : m_channels) {
+        static_cast<MediaBlockingQueue*>(
+            channel->m_queue.get())->notifyPreparedPublished();
+        channel->publishAcceptedMutation();
+    }
 }
 
 } // namespace media::ffmpeg::graph

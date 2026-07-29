@@ -24,14 +24,44 @@ namespace media::ffmpeg::graph {
             ::media::ErrorInfo::invalidArgument(
                 std::string("Invalid synchronized runtime product: ") + field));
     };
+    if (outer.avSyncRuntime.has_value() ==
+        outer.singleStreamOutput.has_value()) {
+        return invalid("exactly one output product is required");
+    }
     if (!outer.avSyncRuntime) {
-        if (outer.audioPlan.enabled) return invalid("required runtime product is absent");
+        if (outer.audioPlan.enabled) {
+            return invalid("required runtime product is absent");
+        }
+        const auto& output = *outer.singleStreamOutput;
+        if (outer.outputLayout == RealtimeOutputStreamLayout::SeparateStreams) {
+            if (output.rtpOutput.url.empty() ||
+                output.rtpOutput.packetSize <= 0 ||
+                output.sdp.path.empty() || !output.mux.expectVideo ||
+                output.mux.expectAudio) {
+                return invalid("single-stream RTP output");
+            }
+        } else if (outer.outputLayout ==
+                   RealtimeOutputStreamLayout::MuxedTransportStream) {
+            if (output.muxedOutput.url.empty() ||
+                output.muxedOutput.format.empty() ||
+                !output.muxedOutput.muxSessionKind ||
+                !output.mux.expectVideo || output.mux.expectAudio) {
+                return invalid("single-stream muxed output");
+            }
+        } else {
+            return invalid("single-stream output layout");
+        }
         return ::media::Status::success();
     }
     if (outer.audioPlan.branchMode != MediaBranchMode::TranscodeFrame) {
         return ::media::Status::failure(
             ::media::ErrorInfo::unsupported(
                 "Synchronized runtime product rejects audio packet copy"));
+    }
+    if (outer.videoPlan.branchMode != MediaBranchMode::TranscodeFrame) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::unsupported(
+                "Synchronized runtime product rejects video packet copy"));
     }
     const auto& runtime = *outer.avSyncRuntime;
     if (runtime.groupKey.value() != "realtime.av" ||
@@ -43,14 +73,25 @@ namespace media::ffmpeg::graph {
         selectedBounds.value() != *outer.avSyncComponentBounds) {
         return invalid("selected component bounds");
     }
+    MediaRealtimeOutputPlanningDraft selectedOutput;
+    if (std::holds_alternative<MediaSeparateRtpOutputRuntimePlan>(
+            runtime.protocolOutput)) {
+        const auto& rtp = std::get<MediaSeparateRtpOutputRuntimePlan>(
+            runtime.protocolOutput);
+        selectedOutput.videoOutput.scheduledPacketization =
+            rtp.video.packetization;
+        selectedOutput.audioOutput.scheduledPacketization =
+            rtp.audio.packetization;
+    }
     auto selectedFacts = MediaRealtimeAvSyncPlanningFactsResolver::resolve(
-        outer, runtime.synchronization);
+        outer, selectedOutput, runtime.synchronization);
     if (!selectedFacts || selectedFacts.value() != runtime.planningFacts) {
         return invalid("selected planning facts");
     }
     const auto& assembly = runtime.assembly;
     if (assembly.generationPolicy !=
             MediaInitialGenerationPolicy::FirstLockedOnlyFailOnChange ||
+        assembly.initialGeneration != MediaFirstLockedSourceGeneration ||
         assembly.evidencePolicy !=
             MediaClockEvidencePolicy::RequireLockedFailOnDegradedOrReacquire ||
         assembly.video.sourceIdentity.empty() ||
@@ -187,23 +228,6 @@ namespace media::ffmpeg::graph {
             *runtime.synchronization.audioServo.outputSampleRate) {
         return invalid("audio correction reachability");
     }
-    if (outer.videoPacketCopyNormalizationRequired ||
-        outer.audioPacketNormalizationRequired ||
-        outer.videoOutput.writePacingEnabled ||
-        outer.videoOutput.writePacingBytesPerSecond != 0 ||
-        outer.videoOutput.writePacingBurstBytes != 0 ||
-        outer.audioOutput.writePacingEnabled ||
-        outer.audioOutput.writePacingBytesPerSecond != 0 ||
-        outer.audioOutput.writePacingBurstBytes != 0 ||
-        outer.videoMux.pacingPolicy.enablePacing ||
-        outer.videoMux.startupDelayMs != 0 ||
-        outer.audioMux.pacingPolicy.enablePacing ||
-        outer.audioMux.startupDelayMs != 0 ||
-        outer.avStartBarrier.expectVideo || outer.avStartBarrier.expectAudio ||
-        outer.avStartBarrier.requireVideoKeyFrame) {
-        return invalid("legacy normalization, pacing, or barrier authority");
-    }
-
     if (*runtime.synchronization.topology ==
         MediaAvSyncTopology::SeparateRtpToSeparateRtp) {
         const auto& rtpInputPolicy = runtime.synchronization.rtp->input;
@@ -372,26 +396,24 @@ namespace media::ffmpeg::graph {
                     *runtime.synchronization.rtp->output.senderReportIntervalNs;
         };
         if (!sdpIdentity || output.sdp.path.empty() ||
-            output.sdp.path != outer.sdp.path ||
-            output.sdp.originUsername != outer.sdp.mediaId ||
-            output.sdp.sessionName != outer.sdp.mediaId ||
+            output.sdp.originUsername.empty() ||
+            output.sdp.sessionName.empty() ||
+            output.sdp.originUsername != output.sdp.sessionName ||
             output.sdp.sessionIdPolicy !=
                 MediaRtpSdpSessionIdPolicy::SharedNtpEpoch ||
             output.sdp.sessionVersionPolicy !=
                 MediaRtpSdpSessionVersionPolicy::ActivePlaybackGeneration ||
-            !outer.videoOutput.scheduledPacketization ||
-            !outer.audioOutput.scheduledPacketization ||
             outer.videoPlan.outputCodecName.empty() ||
             !outer.audioPlan.resolvedOutput ||
             !validRtp(output.video,
                       runtime.synchronization.rtp->videoOutput,
-                      *outer.videoOutput.scheduledPacketization,
+                      output.video.packetization,
                       outer.videoPlan.outputCodecName,
                       MediaScheduledStream::Video,
                       MediaScheduledRtpPacketizationMode::H264AnnexB) ||
             !validRtp(output.audio,
                       runtime.synchronization.rtp->audioOutput,
-                      *outer.audioOutput.scheduledPacketization,
+                      output.audio.packetization,
                       outer.audioPlan.resolvedOutput->codecName(),
                       MediaScheduledStream::Audio,
                       MediaScheduledRtpPacketizationMode::AacLatm) ||
@@ -468,11 +490,9 @@ namespace media::ffmpeg::graph {
         }
         const auto& output = std::get<MediaProjectMpegTsRuntimeOutputPlan>(
             runtime.protocolOutput);
-        if (output.url.empty() || output.url != outer.muxedOutput.url ||
+        if (output.url.empty() ||
             output.resourceKind != MediaOutputResourceKind::ByteSink ||
-            outer.muxedOutput.outputResourceKind != output.resourceKind ||
             output.muxSessionKind != MediaMuxSessionKind::ProjectMpegTs ||
-            outer.muxedOutput.muxSessionKind != output.muxSessionKind ||
             output.protocol.audioSampleRate() != correction.outputSampleRate ||
             !runtime.synchronization.ts ||
             !runtime.synchronization.ts->outputMux ||

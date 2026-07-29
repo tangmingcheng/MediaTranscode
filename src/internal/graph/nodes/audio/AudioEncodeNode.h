@@ -42,7 +42,7 @@ protected:
     void clearOwnedLineage(const MediaAvGenerationPurge& purge) noexcept override;
 
 private:
-    void clearLineageStorage() noexcept;
+    void clearLineageStorage(bool resetFrameQueue) noexcept;
     std::shared_ptr<AudioEncoderCodecApi> m_codecApi;
     MediaBufferRef m_codecOwner;
     AVCodecContext* m_codecContext = nullptr;

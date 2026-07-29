@@ -60,29 +60,49 @@ void MediaVideoFrameRateState::clearLineageStorage() noexcept
     m_data.terminalIsEof = false;
 }
 
-::media::Status MediaVideoFrameRateState::activateGeneration(
+::media::Result<MediaVideoFrameRateGenerationDisposition>
+MediaVideoFrameRateState::activateGeneration(
     std::uint64_t generation)
 {
     auto guard = lock();
     if (!m_requireCanonicalLineage) {
-        return ::media::Status::success();
+        return ::media::Result<
+            MediaVideoFrameRateGenerationDisposition>::success(
+                MediaVideoFrameRateGenerationDisposition::Activate);
     }
-    if (generation == 0 ||
-        (m_data.expectedGeneration != 0 &&
-         generation != m_data.expectedGeneration) ||
-        (m_data.activeGeneration != 0 &&
-         generation != m_data.activeGeneration)) {
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "Video frame-rate state rejected stale or skipped generation"));
+    if (generation == 0) {
+        return ::media::Result<
+            MediaVideoFrameRateGenerationDisposition>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Video frame-rate state requires a nonzero generation"));
+    }
+    const std::uint64_t requiredGeneration =
+        m_data.expectedGeneration != 0
+        ? m_data.expectedGeneration
+        : m_data.activeGeneration;
+    if (requiredGeneration != 0 && generation < requiredGeneration) {
+        return ::media::Result<
+            MediaVideoFrameRateGenerationDisposition>::success(
+                MediaVideoFrameRateGenerationDisposition::DropStale);
+    }
+    if (requiredGeneration != 0 && generation > requiredGeneration) {
+        return ::media::Result<
+            MediaVideoFrameRateGenerationDisposition>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Video frame-rate state rejected a skipped generation"));
     }
     if (auto status = observe(generation); !status) {
-        return status;
+        return ::media::Result<
+            MediaVideoFrameRateGenerationDisposition>::failure(
+                status.error());
     }
     if (m_data.activeGeneration == 0) {
         m_data.activeGeneration = generation;
         m_data.expectedGeneration = 0;
     }
-    return ::media::Status::success();
+    return ::media::Result<
+        MediaVideoFrameRateGenerationDisposition>::success(
+            MediaVideoFrameRateGenerationDisposition::Activate);
 }
 
 void MediaVideoFrameRateState::clearOwnedLineage(

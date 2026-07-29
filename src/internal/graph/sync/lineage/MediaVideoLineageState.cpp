@@ -33,6 +33,33 @@ MediaVideoLineageState::Lock MediaVideoLineageState::lock() const
     return Lock(m_mutex);
 }
 
+::media::Result<MediaVideoLineageGenerationDisposition>
+MediaVideoLineageState::classifyObservation(
+    std::uint64_t generation) const
+{
+    std::lock_guard lock(m_mutex);
+    if (!m_synchronized || m_generation == 0 ||
+        generation == m_generation) {
+        return generation == 0 && m_synchronized
+            ? ::media::Result<
+                  MediaVideoLineageGenerationDisposition>::failure(
+                  ::media::ErrorInfo::invalidArgument(
+                      "Video lineage state rejects a zero generation"))
+            : ::media::Result<
+                  MediaVideoLineageGenerationDisposition>::success(
+                  MediaVideoLineageGenerationDisposition::Current);
+    }
+    if (generation < m_generation) {
+        return ::media::Result<
+            MediaVideoLineageGenerationDisposition>::success(
+            MediaVideoLineageGenerationDisposition::DropStale);
+    }
+    return ::media::Result<
+        MediaVideoLineageGenerationDisposition>::failure(
+        ::media::ErrorInfo::invalidArgument(
+            "Video lineage state rejects an unpurged future generation"));
+}
+
 ::media::Status MediaVideoLineageState::observe(std::uint64_t generation)
 {
     std::lock_guard lock(m_mutex);
@@ -46,13 +73,14 @@ MediaVideoLineageState::Lock MediaVideoLineageState::lock() const
 ::media::Status MediaVideoLineageState::validateObservation(
     std::uint64_t generation) const
 {
-    std::lock_guard lock(m_mutex);
-    if (!m_synchronized) {
-        return ::media::Status::success();
+    auto disposition = classifyObservation(generation);
+    if (!disposition) {
+        return ::media::Status::failure(disposition.error());
     }
-    if (generation == 0 || (m_generation != 0 && m_generation != generation)) {
+    if (disposition.value() !=
+        MediaVideoLineageGenerationDisposition::Current) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "Video lineage state rejected an unpurged generation change"));
+            "Video lineage state rejects a stale generation"));
     }
     return ::media::Status::success();
 }

@@ -6,6 +6,7 @@
 #include "internal/graph/planner/capability/MediaSelectedEncoderPacketLayoutResolver.h"
 #include "internal/graph/planner/realtime/MediaRealtimeInputPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeOutputPolicyPlanner.h"
+#include "internal/graph/planner/realtime/MediaRealtimeQueueCapacityPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlanValidator.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncComponentBoundsPlanner.h"
@@ -23,15 +24,16 @@ namespace media::ffmpeg::graph {
 namespace {
 
 ::media::Status planScheduledRtpPacketization(
-    MediaRealtimeRtpTranscodePlan& plan,
+    const MediaRealtimeRtpTranscodePlan& plan,
+    MediaRealtimeOutputPlanningDraft& output,
     const MediaAvSyncPlan& synchronization)
 {
     if (!synchronization.rtp || !synchronization.rtp->videoOutput.clockRate ||
         !synchronization.rtp->videoOutput.payloadType ||
         !synchronization.rtp->audioOutput.clockRate ||
         !synchronization.rtp->audioOutput.payloadType ||
-        !plan.audioPlan.resolvedOutput || plan.videoOutput.packetSize <= 0 ||
-        plan.audioOutput.packetSize <= 0) {
+        !plan.audioPlan.resolvedOutput || output.videoOutput.packetSize <= 0 ||
+        output.audioOutput.packetSize <= 0) {
         return ::media::Status::failure(::media::ErrorInfo::notInitialized(
             "scheduled RTP packetization requires complete selected protocol facts"));
     }
@@ -47,19 +49,30 @@ namespace {
         MediaStreamKind::Video, plan.videoPlan.outputCodecName, 1,
         *synchronization.rtp->videoOutput.clockRate,
         *synchronization.rtp->videoOutput.payloadType,
-        static_cast<std::size_t>(plan.videoOutput.packetSize));
+        static_cast<std::size_t>(output.videoOutput.packetSize));
     auto audio = MediaScheduledRtpPacketizationPlan::create(
         MediaStreamKind::Audio, plan.audioPlan.resolvedOutput->codecName(), 1,
         *synchronization.rtp->audioOutput.clockRate,
         *synchronization.rtp->audioOutput.payloadType,
-        static_cast<std::size_t>(plan.audioOutput.packetSize),
+        static_cast<std::size_t>(output.audioOutput.packetSize),
         plan.audioPlan.resolvedOutput->codecFrameSamples());
     if (!video || !audio) {
         return ::media::Status::failure(video ? audio.error() : video.error());
     }
-    plan.videoOutput.scheduledPacketization = std::move(video).value();
-    plan.audioOutput.scheduledPacketization = std::move(audio).value();
+    output.videoOutput.scheduledPacketization = std::move(video).value();
+    output.audioOutput.scheduledPacketization = std::move(audio).value();
     return ::media::Status::success();
+}
+
+MediaRealtimeSingleStreamOutputPlan singleStreamOutput(
+    MediaRealtimeOutputPlanningDraft output)
+{
+    return MediaRealtimeSingleStreamOutputPlan{
+        output.packetCopyNormalizationRequired,
+        std::move(output.videoOutput),
+        std::move(output.muxedOutput),
+        std::move(output.sdp),
+        std::move(output.singleStreamMux)};
 }
 
 constexpr int RealtimeNoBidirectionalFrames = 0;
@@ -148,6 +161,34 @@ MediaVideoTranscodeParameters planRealtimeVideoParameters(const MediaVideoTransc
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(std::string(name) + " must be positive"));
     }
     return ::media::Status::success();
+}
+
+::media::Result<std::int64_t> planMpegTsMaximumPcrGap27Mhz(
+    const MediaRealtimeRtpTranscodeRequest& request)
+{
+    if (!request.input.mpegTsClock.maximumPcrGap) {
+        return ::media::Result<std::int64_t>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "MPEG-TS maximum PCR gap was not validated"));
+    }
+    constexpr std::int64_t NanosecondsPerMicrosecond = 1'000;
+    constexpr std::int64_t PcrTicksPerMicrosecond = 27;
+    const std::int64_t nanoseconds =
+        request.input.mpegTsClock.maximumPcrGap->nanoseconds();
+    if (nanoseconds <= 0 || nanoseconds % NanosecondsPerMicrosecond != 0) {
+        return ::media::Result<std::int64_t>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MPEG-TS maximum PCR gap must be positive and exactly representable at 27 MHz"));
+    }
+    const std::int64_t microseconds = nanoseconds / NanosecondsPerMicrosecond;
+    if (microseconds > std::numeric_limits<std::int64_t>::max() /
+            PcrTicksPerMicrosecond) {
+        return ::media::Result<std::int64_t>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MPEG-TS maximum PCR gap exceeds the 27 MHz policy range"));
+    }
+    return ::media::Result<std::int64_t>::success(
+        microseconds * PcrTicksPerMicrosecond);
 }
 
 ::media::Result<MediaAudioPipelinePlannerOptions> planAudioPipelineOptions(
@@ -300,19 +341,22 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
     if (!options.input.type || *options.input.type != RealtimeInputType::RtpPort) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
             ::media::ErrorInfo::unsupported(
-                "URL and MPEG-TS realtime input require preflight() to preserve the prepared session"));
+                "URL and MPEG-TS realtime input require preflight() to preserve the prepared input contract"));
     }
     return planWithInput(options, nullptr, nullptr);
 }
 
 ::media::Result<MediaRealtimeRtpTranscodePlan> MediaRealtimeRtpTranscodePlanner::planWithInput(
-    const MediaRealtimeRtpTranscodeRequest& options,
+    const MediaRealtimeRtpTranscodeRequest& requestedOptions,
     const MediaRealtimeInputStreamInfo* preparedInput,
     const MediaTsSelectedProgramPlan* selectedTsProgram)
 {
-    if (auto status = validateRealtimeRequestNoIo(options); !status) {
+    if (auto status = validateRealtimeRequestNoIo(requestedOptions); !status) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(status.error());
     }
+    MediaRealtimeRtpTranscodeRequest options = requestedOptions;
+    options.parameters.queues = MediaRealtimeQueueCapacityPlanner::plan(
+        requestedOptions.parameters.queues);
 
     auto outputUrls = MediaRealtimeOutputPolicyPlanner::planUrls(options);
     if (!outputUrls) {
@@ -428,18 +472,20 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
     plan.inputType = *options.input.type;
     plan.inputLayout = *options.input.streamLayout;
     plan.outputLayout = *options.output.streamLayout;
-    plan.audioPacketNormalizationRequired = *options.input.type != RealtimeInputType::RtpPort;
-    plan.videoPacketCopyNormalizationRequired = *options.input.type != RealtimeInputType::RtpPort;
     plan.videoPlan = std::move(videoPlan);
     plan.audioPlan = std::move(audioPlan);
     plan.videoParameters = std::move(videoParameters);
     plan.queues = options.parameters.queues;
-    plan.edgePolicies = MediaRealtimeEdgePolicyPlanner::plan(
-        options.parameters.queues);
+    plan.edgePolicies = MediaRealtimeEdgePolicyPlanner::plan(plan.queues);
     plan.threadingPolicy = planThreadingPolicy();
     plan.videoInputStartRequiresKeyFrame = MediaRealtimeRequestClassifier::unreliablePacketBoundary(options);
     MediaRealtimeInputPlanner::applyNodePlans(options, rawInput ? &*rawInput : nullptr, plan);
     if (MediaRealtimeRequestClassifier::mpegTsUdpInput(options)) {
+        auto maximumPcrGap27Mhz = planMpegTsMaximumPcrGap27Mhz(options);
+        if (!maximumPcrGap27Mhz) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                maximumPcrGap27Mhz.error());
+        }
         constexpr std::uint64_t MaximumRegressionBytes = 1024 * 1024;
         constexpr std::uint64_t PacketSize = 188;
         const auto probeBytes = static_cast<std::uint64_t>(*options.input.probeSizeBytes);
@@ -464,9 +510,7 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
                 selectedTsProgram->videoPacketDuration;
             selected.audioPacketDuration =
                 selectedTsProgram->audioPacketDuration;
-            selected.pcrInterval27Mhz = 540'000;
-            selected.maximumPcrJitter27Mhz = 135'000;
-            selected.maximumPcrGap27Mhz = 2'700'000;
+            selected.maximumPcrGap27Mhz = maximumPcrGap27Mhz.value();
             selected.projectionCapacity = selected.evidenceTimelineCapacity;
             selected.timestampTimeBaseNumerator = 1;
             selected.timestampTimeBaseDenominator = 90'000;
@@ -474,7 +518,11 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
             selected.initialRawTransportGeneration = 0;
         }
     }
-    if (auto outputStatus = MediaRealtimeOutputPolicyPlanner::apply(options, outputUrls.value(), plan);
+    MediaRealtimeOutputPlanningDraft output;
+    output.packetCopyNormalizationRequired =
+        *options.input.type != RealtimeInputType::RtpPort;
+    if (auto outputStatus = MediaRealtimeOutputPolicyPlanner::apply(
+            options, outputUrls.value(), plan, output);
         !outputStatus) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(outputStatus.error());
     }
@@ -535,31 +583,20 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
         if (avSync.value().topology ==
             MediaAvSyncTopology::SeparateRtpToSeparateRtp) {
             if (auto status = planScheduledRtpPacketization(
-                    plan, avSync.value()); !status) {
+                    plan, output, avSync.value()); !status) {
                 return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
                     status.error());
             }
         }
         auto runtime = MediaRealtimeAvSyncRuntimePlanner::plan(
-            plan, std::move(avSync).value());
+            plan, output, std::move(avSync).value());
         if (!runtime) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
                 runtime.error());
         }
         plan.avSyncRuntime = std::move(runtime).value();
-        plan.audioPacketNormalizationRequired = false;
-        plan.videoPacketCopyNormalizationRequired = false;
-        plan.videoOutput.writePacingEnabled = false;
-        plan.videoOutput.writePacingBytesPerSecond = 0;
-        plan.videoOutput.writePacingBurstBytes = 0;
-        plan.audioOutput.writePacingEnabled = false;
-        plan.audioOutput.writePacingBytesPerSecond = 0;
-        plan.audioOutput.writePacingBurstBytes = 0;
-        plan.videoMux.pacingPolicy = {};
-        plan.videoMux.startupDelayMs = 0;
-        plan.audioMux.pacingPolicy = {};
-        plan.audioMux.startupDelayMs = 0;
-        plan.avStartBarrier = {};
+    } else {
+        plan.singleStreamOutput.emplace(singleStreamOutput(std::move(output)));
     }
     if (auto status = MediaRealtimeTsInputPlanValidator::validate(plan.inputType, plan.input);
         !status) {

@@ -1,6 +1,7 @@
 #include "internal/graph/core/MediaGraphValidation.h"
 
 #include "internal/graph/core/MediaGraphTopology.h"
+#include "internal/graph/model/MediaAtomicOutputPolicyContract.h"
 
 #include <unordered_map>
 #include <unordered_set>
@@ -106,6 +107,17 @@ void validateEdgePolicy(MediaGraphValidationReport& report, const MediaEdge& edg
                  MediaGraphValidationSeverity::Error,
                  MediaGraphErrorCode::InvalidPolicy,
                  "Edge queue policy mode is unknown",
+                 MediaNodeId::invalid(),
+                 MediaPortId::invalid(),
+                 edge.id);
+    }
+
+    if (queuePolicy.mode != MediaQueueMode::SpscRing &&
+        queuePolicy.storageMode == MediaQueueStorageMode::Unknown) {
+        addIssue(report,
+                 MediaGraphValidationSeverity::Error,
+                 MediaGraphErrorCode::InvalidPolicy,
+                 "Blocking edge queue storage mode is unknown",
                  MediaNodeId::invalid(),
                  MediaPortId::invalid(),
                  edge.id);
@@ -230,6 +242,7 @@ MediaGraphValidationReport MediaGraphValidation::validate(const MediaGraph& grap
 
     std::unordered_map<uint32_t, int> inputPortUsage;
     std::unordered_map<uint32_t, int> outputPortUsage;
+    std::unordered_map<uint32_t, bool> outputPortAtomicPolicy;
     std::unordered_map<uint32_t, bool> edgeSeen;
 
     for (const auto& edge : edges) {
@@ -315,6 +328,19 @@ MediaGraphValidationReport MediaGraphValidation::validate(const MediaGraph& grap
 
         ++outputPortUsage[fromPort->id.value];
         ++inputPortUsage[toPort->id.value];
+        const bool atomicOutput =
+            MediaAtomicOutputPolicyContract::accepts(edge.policy);
+        auto [atomicPolicy, inserted] = outputPortAtomicPolicy.emplace(
+            fromPort->id.value, atomicOutput);
+        if (!inserted && atomicPolicy->second != atomicOutput) {
+            addIssue(report,
+                     MediaGraphValidationSeverity::Error,
+                     MediaGraphErrorCode::InvalidPolicy,
+                     "Output fan-out cannot mix atomic and non-atomic policies",
+                     edge.from.nodeId,
+                     edge.from.portId,
+                     edge.id);
+        }
 
         if (!toPort->multiple && inputPortUsage[toPort->id.value] > 1) {
             addIssue(report,

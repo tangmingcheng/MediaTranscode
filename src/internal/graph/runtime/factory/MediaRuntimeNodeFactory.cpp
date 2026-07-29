@@ -23,6 +23,7 @@
 #include "internal/graph/nodes/metadata/CodecResolverNode.h"
 #include "internal/graph/nodes/metadata/MetadataProbeNode.h"
 #include "internal/graph/nodes/mux/FileMuxNode.h"
+#include "internal/graph/nodes/mux/ProjectMpegTsMuxSessionAdapter.h"
 #include "internal/graph/nodes/mux/RtpMuxNode.h"
 #include "internal/graph/nodes/output/FileOutputNode.h"
 #include "internal/graph/nodes/output/RtpOutputNode.h"
@@ -46,7 +47,8 @@
 #include "internal/graph/nodes/sync/MediaAvOutputSchedulerNode.h"
 #include "internal/graph/nodes/sync/MediaPlaybackEpochBinderNode.h"
 #include "internal/graph/nodes/sync/MediaCanonicalInputNode.h"
-#include "internal/graph/nodes/sync/MediaInitialLockedPacketGateNode.h"
+#include "internal/graph/nodes/sync/MediaLockedPacketGateNode.h"
+#include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
 #include "internal/graph/nodes/sync/MediaAvBoundReleaseExtractorNode.h"
 #include "internal/graph/nodes/sync/MediaAvStartupClockNode.h"
 #include "internal/graph/nodes/sync/MediaActivatedStartupReleaseSequencerNode.h"
@@ -73,6 +75,20 @@
 
 namespace media::ffmpeg::graph {
 namespace {
+
+template <typename Node>
+std::optional<MediaRuntimeGenerationPurgeRegistration>
+fixedGenerationPurgeRegistration(
+    MediaRuntimeNode& runtime,
+    MediaAvGenerationParticipant participant)
+{
+    auto* node = dynamic_cast<Node*>(&runtime);
+    if (!node) return std::nullopt;
+    return MediaRuntimeGenerationPurgeRegistration{
+        participant,
+        {std::string(Node::generationPurgeIdentity()),
+         node->generationPurgeTarget()}};
+}
 
 ::media::Result<MediaAvSyncGroupKey> requiredSyncGroup(
     const MediaNode& node,
@@ -329,10 +345,18 @@ template <typename Node>
     case MediaNodeKind::CanonicalInput:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::make_unique<MediaCanonicalInputNode>(node.id));
-    case MediaNodeKind::InitialLockedPacketGate:
+    case MediaNodeKind::LockedPacketGate:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
-            std::make_unique<MediaInitialLockedPacketGateNode>(node.id));
-    case MediaNodeKind::AvBoundReleaseExtractor:
+            std::make_unique<MediaLockedPacketGateNode>(node.id));
+    case MediaNodeKind::AvBoundReleaseExtractor: {
+        auto group = requiredSyncGroup(
+            node,
+            "MediaAvBoundReleaseExtractorNode",
+            "av_bound_release_extractor.sync_group");
+        if (!group) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                group.error());
+        }
         if (videoPreparationState) {
             auto capability = MediaAvStartupVideoPreparationCapability::issue(
                 videoPreparationState,
@@ -343,10 +367,14 @@ template <typename Node>
             }
             return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
                 std::make_unique<MediaAvBoundReleaseExtractorNode>(
-                    node.id, std::move(capability).value()));
+                    node.id,
+                    std::move(group).value(),
+                    std::move(capability).value()));
         }
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
-            std::make_unique<MediaAvBoundReleaseExtractorNode>(node.id));
+            std::make_unique<MediaAvBoundReleaseExtractorNode>(
+                node.id, std::move(group).value()));
+    }
     case MediaNodeKind::ActivatedStartupReleaseSequencer:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
             ::media::ErrorInfo::notInitialized(
@@ -406,8 +434,33 @@ template <typename Node>
     }
     case MediaNodeKind::PacketMerge:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<PacketMergeNode>(node.id));
-    case MediaNodeKind::FileMux:
-        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<FileMuxNode>(node.id));
+    case MediaNodeKind::FileMux: {
+        auto kindValue = requiredNodeOption(
+            &node.options, "MediaRuntimeNodeFactory",
+            MediaTranscodeOptionKey::MuxSessionKind);
+        if (!kindValue) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                kindValue.error());
+        }
+        auto kind = parseMediaMuxSessionKindOption(kindValue.value());
+        if (!kind) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                kind.error());
+        }
+        if (kind.value() == MediaMuxSessionKind::ProjectMpegTs) {
+            auto generationSession =
+                std::make_shared<ProjectMpegTsGenerationSessionState>();
+            auto generationState =
+                std::make_shared<MediaProtocolOutputGenerationState>(
+                    std::string(FileMuxNode::generationPurgeIdentity()),
+                    generationSession);
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+                std::make_unique<FileMuxNode>(
+                    node.id, std::move(generationState)));
+        }
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+            std::make_unique<FileMuxNode>(node.id));
+    }
     case MediaNodeKind::RtpMux:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<RtpMuxNode>(node.id));
     case MediaNodeKind::FileOutput:
@@ -560,6 +613,123 @@ MediaRuntimeNodeFactory::createScheduledRtpSender(
     }
 }
 
+std::optional<MediaRuntimeGenerationPurgeRegistration>
+MediaRuntimeNodeFactory::generationPurgeRegistration(
+    MediaRuntimeNode& runtime)
+{
+    if (auto registration =
+            fixedGenerationPurgeRegistration<MediaAvStartupCoordinatorNode>(
+                runtime,
+                MediaAvGenerationParticipant::CanonicalLineage)) {
+        return registration;
+    }
+    if (auto registration =
+            fixedGenerationPurgeRegistration<VideoDecodeNode>(
+                runtime,
+                MediaAvGenerationParticipant::CanonicalLineage)) {
+        return registration;
+    }
+    if (auto registration =
+            fixedGenerationPurgeRegistration<VideoFrameRateNode>(
+                runtime,
+                MediaAvGenerationParticipant::CanonicalLineage)) {
+        return registration;
+    }
+    if (auto registration =
+            fixedGenerationPurgeRegistration<VideoFilterNode>(
+                runtime,
+                MediaAvGenerationParticipant::CanonicalLineage)) {
+        return registration;
+    }
+    if (auto registration =
+            fixedGenerationPurgeRegistration<VideoEncodeNode>(
+                runtime,
+                MediaAvGenerationParticipant::CanonicalLineage)) {
+        return registration;
+    }
+    if (auto registration =
+            fixedGenerationPurgeRegistration<AudioDecodeNode>(
+                runtime,
+                MediaAvGenerationParticipant::CanonicalLineage)) {
+        return registration;
+    }
+    if (auto registration =
+            fixedGenerationPurgeRegistration<MediaAudioStartupTrimNode>(
+                runtime,
+                MediaAvGenerationParticipant::CanonicalLineage)) {
+        return registration;
+    }
+    if (auto registration =
+            fixedGenerationPurgeRegistration<AudioResampleNode>(
+                runtime,
+                MediaAvGenerationParticipant::CanonicalLineage)) {
+        return registration;
+    }
+    if (auto registration =
+            fixedGenerationPurgeRegistration<AudioEncodeNode>(
+                runtime,
+                MediaAvGenerationParticipant::CanonicalLineage)) {
+        return registration;
+    }
+    if (auto registration =
+            fixedGenerationPurgeRegistration<
+                MediaEncodedAudioCanonicalizerNode>(
+                runtime,
+                MediaAvGenerationParticipant::CanonicalLineage)) {
+        return registration;
+    }
+    if (auto registration =
+            fixedGenerationPurgeRegistration<MediaAudioDriftControllerNode>(
+                runtime,
+                MediaAvGenerationParticipant::AudioCorrection)) {
+        return registration;
+    }
+    if (auto registration =
+            fixedGenerationPurgeRegistration<MediaAvOutputSchedulerNode>(
+                runtime,
+                MediaAvGenerationParticipant::Scheduler)) {
+        return registration;
+    }
+    if (auto* sender =
+            dynamic_cast<MediaScheduledRtpSenderNode*>(&runtime)) {
+        const std::string identity(sender->generationPurgeIdentity());
+        if (identity == "rtp_video_output_generation_state") {
+            return MediaRuntimeGenerationPurgeRegistration{
+                MediaAvGenerationParticipant::RtpVideoOutput,
+                {identity, sender->generationPurgeTarget()}};
+        }
+        if (identity == "rtp_audio_output_generation_state") {
+            return MediaRuntimeGenerationPurgeRegistration{
+                MediaAvGenerationParticipant::RtpAudioOutput,
+                {identity, sender->generationPurgeTarget()}};
+        }
+        return std::nullopt;
+    }
+    if (auto registration =
+            fixedGenerationPurgeRegistration<MediaProjectMpegTsPlanSourceNode>(
+                runtime,
+                MediaAvGenerationParticipant::ProjectMpegTsOutput)) {
+        return registration;
+    }
+    if (auto registration =
+            fixedGenerationPurgeRegistration<
+                MediaScheduledTsAccessUnitAdapterNode>(
+                runtime,
+                MediaAvGenerationParticipant::ProjectMpegTsOutput)) {
+        return registration;
+    }
+    if (auto* mux = dynamic_cast<FileMuxNode*>(&runtime)) {
+        auto target = mux->generationPurgeTarget();
+        if (target) {
+            return MediaRuntimeGenerationPurgeRegistration{
+                MediaAvGenerationParticipant::ProjectMpegTsOutput,
+                {std::string(FileMuxNode::generationPurgeIdentity()),
+                 std::move(target)}};
+        }
+    }
+    return std::nullopt;
+}
+
 bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
 {
     switch (kind) {
@@ -592,7 +762,7 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::AvOutputScheduler:
     case MediaNodeKind::PlaybackEpochBinder:
     case MediaNodeKind::CanonicalInput:
-    case MediaNodeKind::InitialLockedPacketGate:
+    case MediaNodeKind::LockedPacketGate:
     case MediaNodeKind::AvBoundReleaseExtractor:
     case MediaNodeKind::ActivatedStartupReleaseSequencer:
     case MediaNodeKind::RtpSourceClockStateAdapter:

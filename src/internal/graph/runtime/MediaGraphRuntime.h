@@ -30,7 +30,8 @@ enum class MediaGraphRuntimeState {
     Running,
     ThreadedRunning,
     Stopped,
-    Aborted
+    Aborted,
+    DefaultRegistrationPending
 };
 
 struct MediaGraphRunResult {

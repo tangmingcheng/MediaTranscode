@@ -152,7 +152,8 @@ public:
         }
         auto assembled = m_assembler->onContinuityEvent(event);
         if (!assembled) return assembled;
-        if (m_runtimeBinding && m_runtimeBinding->isSourceClockPid(event.pid)) {
+        if (m_runtimeBinding &&
+            m_runtimeBinding->requiresSelectedPesBoundary(event.pid)) {
             auto boundary = m_pesProvenance->onSourceClockBoundary(event.byteOffset);
             if (!boundary) return boundary;
         }

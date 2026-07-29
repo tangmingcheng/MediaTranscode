@@ -36,6 +36,7 @@ MediaGraphWorker::MediaGraphWorker(MediaRuntimeNode& node,
 MediaGraphWorker::~MediaGraphWorker()
 {
     requestStop();
+    interrupt();
     join();
 }
 
@@ -55,6 +56,10 @@ void MediaGraphWorker::requestStop() noexcept
 {
     m_stopRequested = true;
     m_wakeup.interrupt();
+}
+
+void MediaGraphWorker::interrupt() noexcept
+{
     m_node.interrupt(m_context);
 }
 

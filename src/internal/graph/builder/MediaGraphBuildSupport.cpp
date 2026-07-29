@@ -31,37 +31,6 @@ std::string ownedMessage(std::string_view owner, std::string_view action, std::s
 
 } // namespace
 
-MediaEdgePolicy blockingQueuePolicy(std::size_t capacity) noexcept
-{
-    MediaEdgePolicy policy;
-    policy.queuePolicy.mode = MediaQueueMode::Blocking;
-    policy.queuePolicy.bounded = true;
-    policy.queuePolicy.capacity = capacity;
-    policy.queuePolicy.overflowPolicy = MediaQueueOverflowPolicy::BlockProducer;
-    policy.queuePolicy.preserveOrdering = true;
-    policy.queuePolicy.allowFlushControlBypass = true;
-    policy.queuePolicy.collectMetrics = true;
-    return policy;
-}
-
-MediaRealtimeEdgePolicySet blockingEdgePolicySet(const MediaGraphQueueParameters& queues) noexcept
-{
-    MediaRealtimeEdgePolicySet policies;
-    policies.metadata = blockingQueuePolicy(queues.metadata);
-    policies.packet = blockingQueuePolicy(queues.packet);
-    policies.videoPacket = blockingQueuePolicy(queues.packet);
-    policies.audioPacket = blockingQueuePolicy(queues.packet);
-    policies.synchronizedPacket = blockingQueuePolicy(queues.packet);
-    policies.audioDriftTransaction = blockingQueuePolicy(queues.frame);
-    policies.videoFrame = blockingQueuePolicy(queues.frame);
-    policies.preparedVideoFrame = blockingQueuePolicy(queues.frame);
-    policies.audioFrame = blockingQueuePolicy(queues.frame);
-    policies.mux = blockingQueuePolicy(queues.mux);
-    policies.videoMux = blockingQueuePolicy(queues.mux);
-    policies.audioMux = blockingQueuePolicy(queues.mux);
-    return policies;
-}
-
 MediaFormatDescriptor streamIndexDescriptor(MediaStreamKind streamKind, int streamIndex) noexcept
 {
     MediaFormatDescriptor descriptor;

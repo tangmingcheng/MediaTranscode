@@ -40,6 +40,7 @@ private:
     std::optional<MediaDecodeOrderMode> m_decodeOrder;
     bool m_keyTraceEmitted = false;
     std::string m_sourceIdentity;
+    std::optional<std::uint64_t> m_generation;
     std::uint64_t m_nextSequence = 1;
     int m_audioSampleRate = 0;
     std::uint32_t m_audioSampleCount = 0;

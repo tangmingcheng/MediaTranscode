@@ -52,7 +52,8 @@ MediaStartupReleaseTransactionBuffer::reanchor(
     }
     auto rebound = MediaAvStartupReleaseBuffer::create(
         release->groupKey(), release->releaseKind(), epoch, audioOrigin,
-        release->video(), release->audio());
+        release->video(), release->audio(),
+        release->completedTransitionSequence());
     if (!rebound) return rebound;
     return ::media::Result<MediaBufferRef>::success(MediaBufferRef(
         new MediaStartupReleaseTransactionBuffer(

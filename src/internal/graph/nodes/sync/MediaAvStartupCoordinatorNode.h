@@ -65,6 +65,7 @@ private:
         PendingInput input,
         const MediaControlBuffer& control);
     ::media::Result<std::optional<MediaBufferRef>> prepareOutput(
+        MediaGraphExecutionContext& context,
         const MediaAvStartupDecision& decision,
         const MediaAvStartupEnvelopeBuffer& envelope);
     void erasePurged(const std::vector<MediaAvStartupUnitId>& purged) noexcept;
@@ -89,6 +90,7 @@ private:
     std::optional<MediaRunningTime> m_lastClock;
     bool m_terminalControlCommitted = false;
     bool m_keyTraceEmitted = false;
+    std::optional<std::uint64_t> m_lastReleasedGeneration;
     std::optional<::media::ErrorInfo> m_deferredTerminalError;
 };
 

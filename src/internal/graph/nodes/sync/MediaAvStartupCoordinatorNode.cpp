@@ -4,6 +4,7 @@
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/runtime/buffer/MediaAvStartupEnvelopeBuffer.h"
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
+#include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
 #include "internal/graph/sync/startup/MediaAvStartupGenerationState.h"
 
 #include <limits>
@@ -344,7 +345,6 @@ MediaAvStartupCoordinatorNode::selectPending() const
                 "MediaAvStartupCoordinatorNode rejects per-stream event-time regression"));
     }
     lastObservedAt = envelope->observedAt();
-    const MediaAvStartupUnitId id{unit.stream, unit.generation, unit.sequence};
     if (unit.stream == MediaAvStartupStream::Video && unit.keyFrame &&
         !m_keyTraceEmitted) {
         m_keyTraceEmitted = true;
@@ -355,22 +355,26 @@ MediaAvStartupCoordinatorNode::selectPending() const
                 std::to_string(unit.sequence) + " generation=" +
                 std::to_string(unit.generation));
     }
-    if (unit.readiness == MediaSourceClockReadiness::Locked &&
+    auto decision = m_coordinator->submit(unit, envelope->observedAt());
+    if (!decision) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            decision.error().toErrorInfo());
+    }
+    const bool retainsPayload =
+        decision.value().release.has_value() ||
+        decision.value().disposition == MediaAvStartupDisposition::Buffered;
+    if (retainsPayload &&
+        unit.readiness == MediaSourceClockReadiness::Locked &&
         m_generationState) {
         auto stored = m_generationState->store(
             m_generationState->groupKey(), unit, envelope->media());
         if (!stored) {
-            return ::media::Result<MediaNodeProcessResult>::failure(stored.error());
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                stored.error());
         }
     }
-    auto decision = m_coordinator->submit(unit, envelope->observedAt());
-    if (!decision) {
-        if (m_generationState) m_generationState->erase(id);
-        return ::media::Result<MediaNodeProcessResult>::failure(
-            decision.error().toErrorInfo());
-    }
     erasePurged(decision.value().purged);
-    auto output = prepareOutput(decision.value(), *envelope);
+    auto output = prepareOutput(context, decision.value(), *envelope);
     if (!output) return ::media::Result<MediaNodeProcessResult>::failure(output.error());
     pending.pop_front();
     if (output.value()) {
@@ -382,14 +386,47 @@ MediaAvStartupCoordinatorNode::selectPending() const
 
 ::media::Result<std::optional<MediaBufferRef>>
 MediaAvStartupCoordinatorNode::prepareOutput(
+    MediaGraphExecutionContext& context,
     const MediaAvStartupDecision& decision,
     const MediaAvStartupEnvelopeBuffer& envelope)
 {
     std::vector<MediaAvReleasedUnit> video;
     std::vector<MediaAvReleasedUnit> audio;
     std::optional<MediaPlaybackEpoch> epoch;
+    MediaAvStartupReleaseKind releaseKind =
+        MediaAvStartupReleaseKind::ActiveEpochPassThrough;
+    std::optional<std::uint64_t> completedTransitionSequence;
     if (decision.release) {
         epoch = decision.release->epoch;
+        if (m_lastReleasedGeneration) {
+            auto group = context.findAvSyncGroup(
+                m_generationState->groupKey());
+            const auto reacquisition = group
+                ? group->reacquisitionSnapshot()
+                : MediaAvReacquisitionSnapshot{
+                      MediaAvReacquisitionPhase::Inactive,
+                      std::nullopt,
+                      std::nullopt};
+            if (!group ||
+                reacquisition.phase !=
+                    MediaAvReacquisitionPhase::Acquiring ||
+                !reacquisition.transition ||
+                reacquisition.transition->oldGeneration !=
+                    *m_lastReleasedGeneration ||
+                reacquisition.transition->nextGeneration !=
+                    epoch->generation) {
+                return ::media::Result<
+                    std::optional<MediaBufferRef>>::failure(
+                    ::media::ErrorInfo::invalidArgument(
+                        "A/V startup next release requires the exact completed group transition"));
+            }
+            releaseKind = MediaAvStartupReleaseKind::NextAtomicRelease;
+            completedTransitionSequence =
+                reacquisition.transition->transitionSequence;
+        } else {
+            releaseKind =
+                MediaAvStartupReleaseKind::InitialAtomicRelease;
+        }
         for (const auto& selected : decision.release->video) {
             auto found = m_generationState->take(selected.id);
             if (!found) return ::media::Result<std::optional<MediaBufferRef>>::failure(found.error());
@@ -409,30 +446,45 @@ MediaAvStartupCoordinatorNode::prepareOutput(
         } else {
             audio.push_back({envelope.media(), 0});
         }
-        m_generationState->erase(MediaAvStartupUnitId{envelope.unit().stream,
-                                                      envelope.unit().generation,
-                                                      envelope.unit().sequence});
     }
     if (!epoch) {
         return ::media::Result<std::optional<MediaBufferRef>>::success(std::nullopt);
     }
-    if (!m_generationState || !m_generationState->audioSampleRate()) {
+    if (!m_generationState || m_outputAudioSampleRate <= 0) {
         return ::media::Result<std::optional<MediaBufferRef>>::failure(
             ::media::ErrorInfo::notInitialized(
                 "A/V startup release requires planned group and audio origin"));
     }
     auto release = MediaAvStartupReleaseBuffer::create(
         m_generationState->groupKey(),
-        decision.release ? MediaAvStartupReleaseKind::InitialAtomicRelease
-                         : MediaAvStartupReleaseKind::ActiveEpochPassThrough,
+        releaseKind,
         *epoch,
         MediaAudioPlaybackOrigin{epoch->generation, epoch->sourceStart,
                                  epoch->masterRelease, 0,
                                  m_outputAudioSampleRate},
-        std::move(video), std::move(audio));
+        std::move(video), std::move(audio),
+        completedTransitionSequence);
     if (!release) {
         return ::media::Result<std::optional<MediaBufferRef>>::failure(
             release.error());
+    }
+    if (releaseKind == MediaAvStartupReleaseKind::NextAtomicRelease) {
+        auto group = context.findAvSyncGroup(
+            m_generationState->groupKey());
+        if (!group) {
+            return ::media::Result<std::optional<MediaBufferRef>>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "A/V startup next release lost its sync group"));
+        }
+        if (auto ready = group->markReacquisitionReadyForActivation(
+                epoch->generation,
+                *completedTransitionSequence); !ready) {
+            return ::media::Result<std::optional<MediaBufferRef>>::failure(
+                ready.error());
+        }
+    }
+    if (decision.release) {
+        m_lastReleasedGeneration = epoch->generation;
     }
     return ::media::Result<std::optional<MediaBufferRef>>::success(
         std::move(release).value());
@@ -546,6 +598,7 @@ void MediaAvStartupCoordinatorNode::clearTransientState() noexcept
     m_lastClock.reset();
     m_terminalControlCommitted = false;
     m_keyTraceEmitted = false;
+    m_lastReleasedGeneration.reset();
     m_deferredTerminalError.reset();
 }
 

@@ -81,6 +81,9 @@ MediaVideoTranscodeBranchNodes addVideoTranscodeNodes(MediaGraph& graph,
                                             const MediaVideoTranscodeBranchNodes& nodes)
 {
     const MediaRealtimeEdgePolicySet& policies = options.edgePolicies;
+    const auto& sourcePacketPolicy = options.canonicalLineageCapacity
+        ? policies.atomicVideoPacket
+        : policies.videoPacket;
     if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.formatSourceNode, options.formatSourcePort, nodes.codecResolver, "format", options.prefix + ".format -> codec_resolver.format", policies.metadata); !status) return status;
     if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.codecResolver, "decoder", nodes.videoDecode, "codec", options.prefix + ".codec_resolver.decoder -> decode.codec", policies.metadata); !status) return status;
     if (nodes.videoTimestamp.isValid()) {
@@ -90,9 +93,9 @@ MediaVideoTranscodeBranchNodes addVideoTranscodeNodes(MediaGraph& graph,
     } else if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.codecResolver, "encoder", nodes.videoFilter, "codec", options.prefix + ".codec_resolver.encoder -> filter.codec", policies.metadata); !status) return status;
     if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.videoFilter, "codec", nodes.videoEncode, "codec", options.prefix + ".filter.codec -> encode.codec", policies.metadata); !status) return status;
     if (options.inputStartRequiresKeyFrame) {
-        if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.packetSourceNode, options.packetSourcePort, nodes.packetStartGate, "packet", options.prefix + ".packet -> packet_start_gate.packet", policies.videoPacket); !status) return status;
+        if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.packetSourceNode, options.packetSourcePort, nodes.packetStartGate, "packet", options.prefix + ".packet -> packet_start_gate.packet", sourcePacketPolicy); !status) return status;
         if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.packetStartGate, "packet", nodes.videoDecode, "packet", options.prefix + ".packet_start_gate.packet -> decode.packet", policies.videoPacket); !status) return status;
-    } else if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.packetSourceNode, options.packetSourcePort, nodes.videoDecode, "packet", options.prefix + ".packet -> decode.packet", policies.videoPacket); !status) {
+    } else if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.packetSourceNode, options.packetSourcePort, nodes.videoDecode, "packet", options.prefix + ".packet -> decode.packet", sourcePacketPolicy); !status) {
         return status;
     }
     if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.videoDecode, "frame", nodes.hardwareTransfer, "frame", options.prefix + ".decode.frame -> hwtransfer.frame", policies.videoFrame); !status) return status;

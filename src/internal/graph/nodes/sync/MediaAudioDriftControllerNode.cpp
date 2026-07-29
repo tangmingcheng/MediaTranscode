@@ -3,6 +3,7 @@
 #include "internal/graph/runtime/buffer/MediaAudioCorrectionBuffer.h"
 #include "internal/graph/runtime/buffer/MediaBoundCanonicalAudioBuffer.h"
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/runtime/channel/MediaRequiredInputReader.h"
 #include "internal/graph/runtime/channel/MediaAtomicOutputTransaction.h"
 #include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
@@ -11,6 +12,7 @@
 #include "internal/graph/sync/lineage/MediaAudioLineageIdentities.h"
 
 #include <array>
+#include <sstream>
 #include <span>
 
 namespace media::ffmpeg::graph {
@@ -220,6 +222,7 @@ bool MediaAudioDriftControllerNode::pendingOutputIsCurrent(
         return ::media::Status::failure(
             decision.error().toErrorInfo());
     }
+    logDriftSample(measurement.value(), decision.value());
     MediaBufferRef correction;
     if (decision.value().kind() == MediaAudioServoDecisionKind::Apply) {
         correction = makeMediaBufferRef<MediaAudioCorrectionBuffer>(
@@ -239,6 +242,36 @@ bool MediaAudioDriftControllerNode::pendingOutputIsCurrent(
         std::move(*candidateProjection), bound->audioOrigin(),
         m_state->nextSequence + 1};
     return ::media::Status::success();
+}
+
+void MediaAudioDriftControllerNode::logDriftSample(
+    const MediaAudioDriftMeasurement& measurement,
+    const MediaAudioServoDecision& decision)
+{
+    if (decision.kind() != MediaAudioServoDecisionKind::Apply ||
+        !decision.command()) {
+        return;
+    }
+    const auto& command = *decision.command();
+    std::ostringstream out;
+    out << "av_drift_trace generation=" << measurement.generation
+        << " sequence=" << measurement.sequence
+        << " source_master_ns=" << measurement.sourceEndOnMaster.nanoseconds()
+        << " raw_phase_ns=" << measurement.phaseError.nanoseconds()
+        << " filtered_phase_ns="
+        << decision.filteredPhaseError().nanoseconds()
+        << " filtered_frequency_ppm=" << decision.filteredFrequencyPpm()
+        << " integral_ppm=" << decision.integralPpm()
+        << " recovering=" << (decision.recovering() ? 1 : 0)
+        << " stretch_ppm=" << command.stretchPpm()
+        << " sample_delta=" << command.sampleDelta()
+        << " compensation_distance=" << command.compensationDistance()
+        << " effective_output_sample_index="
+        << command.effectiveOutputSampleIndex();
+    mediaGraphDiagnosticLog(
+        MediaGraphDiagnosticLevel::State,
+        MediaGraphDiagnosticPhase::RuntimeNode,
+        out.str());
 }
 
 ::media::Result<bool> MediaAudioDriftControllerNode::commitIfReady(

@@ -40,7 +40,7 @@ private:
     ::media::Status enqueueLockedPacket(
         ::media::ffmpeg::PacketPtr packet, MediaStreamKind streamKind,
         const MediaTsClockProjectionCheckpoint& checkpoint);
-    ::media::Status prepareFirstLockedBatch(
+    ::media::Status prepareLockedBatch(
         ::media::ffmpeg::PacketPtr packet, MediaStreamKind streamKind,
         const MediaTsClockProjectionCheckpoint& checkpoint);
     ::media::Result<MediaNodeProcessResult> emitReadyPacket(
@@ -58,7 +58,9 @@ private:
     StreamClock m_videoClock;
     StreamClock m_audioClock;
     std::optional<MediaTsInitialAcquiringPacketBuffer> m_acquiringPackets;
-    bool m_initialClockLocked = false;
+    std::optional<std::uint64_t> m_lockedSourceGeneration;
+    std::optional<std::uint64_t> m_lockedProjectionGeneration;
+    std::optional<std::uint64_t> m_reacquiringSourceGeneration;
     bool m_eofSent = false;
     std::atomic_bool m_aborted{false};
 };

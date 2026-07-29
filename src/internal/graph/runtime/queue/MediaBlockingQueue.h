@@ -1,16 +1,23 @@
 #pragma once
 
+#include "internal/graph/runtime/queue/MediaBlockingQueueStorage.h"
 #include "internal/graph/runtime/queue/MediaQueue.h"
 
 #include <condition_variable>
-#include <deque>
 #include <mutex>
+#include <span>
 
 namespace media::ffmpeg::graph {
 
+class MediaAtomicOutputTransaction;
+class MediaReservedOutputTransaction;
+struct MediaChannelAtomicOutputTestAccess;
+
 class MediaBlockingQueue final : public MediaQueue {
 public:
-    explicit MediaBlockingQueue(MediaQueuePolicy policy = {});
+    using PreparedPush = MediaBlockingQueueStorage::PreparedPush;
+
+    explicit MediaBlockingQueue(MediaQueuePolicy policy);
 
     ::media::Status push(MediaBufferRef buffer) override;
     MediaQueuePushOutcome pushOutcome(MediaBufferRef buffer) override;
@@ -30,6 +37,14 @@ public:
     const MediaQueueMetrics& metrics() const noexcept override;
 
 private:
+    friend class MediaAtomicOutputTransaction;
+    friend class MediaReservedOutputTransaction;
+    friend struct MediaChannelAtomicOutputTestAccess;
+
+    ::media::Result<PreparedPush> preparePush(
+        std::span<const MediaBufferRef> buffers) const;
+    void publishPreparedLocked(PreparedPush& prepared) noexcept;
+    void notifyPreparedPublished() noexcept;
     bool fullLocked() const;
     ::media::Status handleOverflowLocked(const MediaBufferRef& incoming);
     void updateSizeMetricsLocked();
@@ -39,7 +54,7 @@ private:
     mutable std::mutex m_mutex;
     std::condition_variable m_notEmpty;
     std::condition_variable m_notFull;
-    std::deque<MediaBufferRef> m_queue;
+    MediaBlockingQueueStorage m_storage;
     bool m_closed = false;
     bool m_aborted = false;
     MediaQueueMetrics m_metrics;

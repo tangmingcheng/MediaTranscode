@@ -37,12 +37,16 @@ src/internal/graph
 
 完成修改前，应运行当前环境下最强可用验证。
 
+生产核心修改必须由真实 CLI、真实媒体流和生产 DAG 的失败证据驱动。仓库不保留 CI、CTest、unit、integration、acceptance、hardware 或 performance 测试体系，不得新增、恢复或为了自动化测试适配生产核心。
+
+唯一验收标准是 local CLI、realtime CLI 的真实媒体链路、FFmpeg/VLC 进程与画面观察、运行时内部数据、内存趋势和持续 A/V 漂移 telemetry。自动化测试不能替代真实 CLI 验收。
+
 Visual Studio2026 位于D:\VisualStudio2026
 
 ffmpeg相关工具位于D:\mabs\local64\bin-video
 VLC播放器位于D:\VideoLAN\VLC\vlc.exe
 本地视频资源：D:\Code\MyCode\MediaTranscode\out\build\x64-debug\test.mp4
-测试完成报告需要包含执行测试命令、测试结果，无需包含构建编译命令
+验收完成报告需要包含真实 CLI/FFmpeg/VLC 执行命令和结果，无需包含构建编译命令
 
 优先使用已有 CMake 构建目录：
 

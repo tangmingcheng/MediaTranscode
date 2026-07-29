@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <string>
 
 namespace media::ffmpeg::graph {
 
@@ -124,15 +125,18 @@ MediaTsClockProjection::MediaTsClockProjection(
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("MPEG-TS clock projection capacity exhausted"));
     }
-    if (auto status = validateInventory(evidence.inventory); !status) return status;
-    if (evidence.continuityEvent) {
-        const auto pid = evidence.continuityEvent->pid;
-        ::media::Status continuity = pid == m_policy.pcrPid
-            ? m_tracker.observePcrContinuityLoss(pid)
-            : m_tracker.observeElementaryContinuityLoss(pid);
+    const bool inventoryAvailable = !evidence.inventory.programs.empty();
+    if (inventoryAvailable) {
+        if (auto status = validateInventory(evidence.inventory); !status) return status;
+    }
+    if (inventoryAvailable && evidence.continuityEvent &&
+        evidence.continuityEvent->pid == m_policy.pcrPid) {
+        auto continuity =
+            m_tracker.observePcrContinuityLoss(m_policy.pcrPid);
         if (!continuity) return continuity;
     }
-    if (evidence.pcrObservation && evidence.pcrObservation->pid == m_policy.pcrPid) {
+    if (inventoryAvailable && evidence.pcrObservation &&
+        evidence.pcrObservation->pid == m_policy.pcrPid) {
         const auto& raw = *evidence.pcrObservation;
         auto status = m_tracker.observe(MediaTsPcrObservation{
             .byteOffset = raw.byteOffset,
@@ -146,7 +150,7 @@ MediaTsClockProjection::MediaTsClockProjection(
         if (!status) return status;
     }
     std::optional<MediaTsPcrCalibration> calibration;
-    if (m_tracker.ready()) {
+    if (inventoryAvailable && m_tracker.ready()) {
         auto current = m_tracker.calibration();
         if (!current) return ::media::Status::failure(current.error());
         calibration = current.value();
@@ -154,7 +158,9 @@ MediaTsClockProjection::MediaTsClockProjection(
     m_checkpoints.push_back(MediaTsClockProjectionCheckpoint{
         .byteOffset = evidence.byteOffset,
         .calibration = calibration,
-        .readiness = calibration
+        .readiness = !inventoryAvailable
+            ? MediaSourceClockReadiness::Acquiring
+            : calibration
             ? MediaSourceClockReadiness::Locked
             : (m_tracker.generation() == m_initialSourceGeneration
                 ? MediaSourceClockReadiness::Acquiring
@@ -188,8 +194,20 @@ MediaTsClockProjection::MediaTsClockProjection(
         });
     if (program == inventory.programs.end() || program->pmtPid != m_policy.pmtPid ||
         program->pcrPid != m_policy.pcrPid) {
+        std::string actualPrograms;
+        for (const auto& item : inventory.programs) {
+            if (!actualPrograms.empty()) actualPrograms += ';';
+            actualPrograms += "program=" + std::to_string(item.programNumber) +
+                ",pmt=" + std::to_string(item.pmtPid) +
+                ",pcr=" + std::to_string(item.pcrPid);
+        }
         return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("MPEG-TS projection selected program identity mismatch"));
+            ::media::ErrorInfo::invalidArgument(
+                "MPEG-TS projection selected program identity mismatch: expected program=" +
+                std::to_string(m_policy.programNumber) +
+                ",pmt=" + std::to_string(m_policy.pmtPid) +
+                ",pcr=" + std::to_string(m_policy.pcrPid) +
+                "; actual " + actualPrograms));
     }
     const auto hasPid = [program](std::uint16_t pid) {
         return std::any_of(

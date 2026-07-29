@@ -29,10 +29,17 @@ enum class MediaQueueOrderingPolicy {
     Priority
 };
 
+enum class MediaQueueStorageMode {
+    Unknown = 0,
+    Deque = 1,
+    AtomicPrepared = 2
+};
+
 struct MediaQueuePolicy {
     MediaQueueMode mode = MediaQueueMode::Blocking;
     MediaQueueOverflowPolicy overflowPolicy = MediaQueueOverflowPolicy::BlockProducer;
     MediaQueueOrderingPolicy orderingPolicy = MediaQueueOrderingPolicy::Fifo;
+    MediaQueueStorageMode storageMode = MediaQueueStorageMode::Unknown;
 
     std::size_t capacity = 16;
     std::size_t reserveCapacity = 0;

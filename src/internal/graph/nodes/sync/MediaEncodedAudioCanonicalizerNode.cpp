@@ -164,9 +164,15 @@ MediaEncodedAudioCanonicalizerNode::onProcess(
         }
         const auto begin = encoded->fragments().front().interval.begin;
         const auto end = encoded->fragments().back().interval.end;
-        if (auto observed = m_state->validateObservation(
-                encoded->audioOrigin().generation); !observed) {
-            return ::media::Result<MediaNodeProcessResult>::failure(observed.error());
+        auto disposition = m_state->classifyObservation(
+            encoded->audioOrigin().generation);
+        if (!disposition) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                disposition.error());
+        }
+        if (disposition.value() ==
+            MediaAudioLineageGenerationDisposition::DropStale) {
+            return processProgress();
         }
         if (m_state->expectedNextSample &&
             *m_state->expectedNextSample != begin) {

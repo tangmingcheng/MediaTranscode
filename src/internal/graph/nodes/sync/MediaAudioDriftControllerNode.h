@@ -47,6 +47,9 @@ private:
     ::media::Status configure(MediaGraphExecutionContext& context);
     ::media::Status stage(const MediaBufferRef& audio);
     ::media::Result<bool> commitIfReady(MediaGraphExecutionContext& context);
+    static void logDriftSample(
+        const MediaAudioDriftMeasurement& measurement,
+        const MediaAudioServoDecision& decision);
     void resetState() noexcept;
 
     MediaAvSyncGroupKey m_groupKey;

@@ -10,6 +10,7 @@
 #include "internal/graph/protocol/rtp/MediaRtpDepacketizerFactory.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
 
+#include <algorithm>
 #include <sstream>
 #include <limits>
 #include <utility>
@@ -45,6 +46,115 @@ struct MediaRtpInputClockTransportPolicy final {
     int identityEvidenceTimeoutMs;
     MediaRtcpCompositionMode rtcpCompositionMode;
 };
+
+struct MediaTsSessionOpenSettings final {
+    std::string protocolUrl;
+    int openTimeoutMs = 0;
+    int readTimeoutMs = 0;
+    int analyzeDurationUs = 0;
+    int probeSizeBytes = 0;
+    bool lowLatency = false;
+    std::size_t avioBufferBytes = 0;
+    std::size_t packetStride = 0;
+    std::size_t evidenceCapacity = 0;
+    std::size_t pesProvenanceCapacity = 0;
+    std::uint64_t maximumPositionRegressionBytes = 0;
+};
+
+::media::Result<std::unique_ptr<MediaTsInputSession>> openMpegTsPreflightSession(
+    const MediaTsSessionOpenSettings& settings,
+    const MediaTsInputSessionOpener& opener)
+{
+    MediaTsInputSessionOptions options;
+    options.protocolUrl = settings.protocolUrl;
+    AVDictionary* protocolOptions = nullptr;
+    AVDictionary* demuxOptions = nullptr;
+    const auto microseconds = [](int milliseconds) {
+        return std::to_string(static_cast<std::int64_t>(milliseconds) * 1000);
+    };
+    av_dict_set(&protocolOptions, "stimeout",
+                microseconds(settings.openTimeoutMs).c_str(), 0);
+    av_dict_set(&protocolOptions, "rw_timeout",
+                microseconds(settings.readTimeoutMs).c_str(), 0);
+    av_dict_set(&protocolOptions, "timeout",
+                microseconds(settings.readTimeoutMs).c_str(), 0);
+    av_dict_set(&demuxOptions, "analyzeduration",
+                std::to_string(settings.analyzeDurationUs).c_str(), 0);
+    av_dict_set(&demuxOptions, "probesize",
+                std::to_string(settings.probeSizeBytes).c_str(), 0);
+    if (settings.lowLatency) {
+        av_dict_set(&demuxOptions, "fflags", "nobuffer", 0);
+        av_dict_set(&demuxOptions, "flags", "low_delay", 0);
+    }
+    options.protocolOptions = protocolOptions;
+    options.demuxOptions = demuxOptions;
+    options.avioBufferBytes = settings.avioBufferBytes;
+    options.packetStride = settings.packetStride;
+    options.evidenceCapacity = settings.evidenceCapacity;
+    options.pesProvenanceCapacity = settings.pesProvenanceCapacity;
+    options.maximumPositionRegressionBytes =
+        settings.maximumPositionRegressionBytes;
+    auto opened = opener
+        ? opener(options)
+        : MediaTsInputSession::open(options);
+    av_dict_free(&protocolOptions);
+    av_dict_free(&demuxOptions);
+    return opened;
+}
+
+::media::Result<std::unique_ptr<MediaTsDemuxSession>>
+openMpegTsRuntimeSession(
+    const MediaTsSessionOpenSettings& settings,
+    const MediaTsRuntimeBinding& plannedBinding,
+    int programNumber,
+    int pmtPid,
+    const MediaTsInputSessionOpener& opener)
+{
+    auto opened = openMpegTsPreflightSession(settings, opener);
+    if (!opened) {
+        return ::media::Result<std::unique_ptr<MediaTsDemuxSession>>::failure(
+            opened.error());
+    }
+    auto session = std::move(opened).value();
+    const auto& programs = session->programSnapshots();
+    const auto selected = std::find_if(
+        programs.begin(), programs.end(),
+        [programNumber, pmtPid, &plannedBinding](
+            const FFmpegInputProgramSnapshot& program) {
+            return program.programNumber == programNumber &&
+                   program.pmtPid == pmtPid &&
+                   program.pcrPid == plannedBinding.pcrPid;
+        });
+    if (selected == programs.end()) {
+        return ::media::Result<std::unique_ptr<MediaTsDemuxSession>>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MPEG-TS runtime program identity differs from planner preflight"));
+    }
+    MediaTsRuntimeBinding runtimeBinding = plannedBinding;
+    runtimeBinding.video.streamIndex = -1;
+    runtimeBinding.audio.streamIndex = -1;
+    for (const auto& stream : selected->streamBindings) {
+        if (stream.elementaryPid == plannedBinding.video.pid) {
+            runtimeBinding.video.streamIndex = stream.streamIndex;
+        }
+        if (stream.elementaryPid == plannedBinding.audio.pid) {
+            runtimeBinding.audio.streamIndex = stream.streamIndex;
+        }
+    }
+    if (runtimeBinding.video.streamIndex < 0 ||
+        runtimeBinding.audio.streamIndex < 0) {
+        return ::media::Result<std::unique_ptr<MediaTsDemuxSession>>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MPEG-TS runtime stream identity differs from planner preflight"));
+    }
+    if (auto configured = session->configureRuntimeBinding(runtimeBinding);
+        !configured) {
+        return ::media::Result<std::unique_ptr<MediaTsDemuxSession>>::failure(
+            configured.error());
+    }
+    return ::media::Result<std::unique_ptr<MediaTsDemuxSession>>::success(
+        std::move(session));
+}
 
 ::media::Result<int> wholeMilliseconds(
     const std::optional<MediaRunningTime>& duration,
@@ -121,38 +231,21 @@ struct MediaRtpInputClockTransportPolicy final {
         capacity.value(), MediaRealtimeRequestClassifier::audioRequested(request) ? 2 : 1);
     if (!policy) return ::media::Result<MediaPreparedRealtimeInputScan>::failure(policy.error());
 
-    MediaTsInputSessionOptions options;
-    options.protocolUrl = request.input.url;
-    AVDictionary* protocolOptions = nullptr;
-    AVDictionary* demuxOptions = nullptr;
-    const auto microseconds = [](int milliseconds) {
-        return std::to_string(static_cast<std::int64_t>(milliseconds) * 1000);
-    };
-    av_dict_set(&protocolOptions, "stimeout",
-                microseconds(*request.input.openTimeoutMs).c_str(), 0);
-    av_dict_set(&protocolOptions, "rw_timeout",
-                microseconds(*request.input.readTimeoutMs).c_str(), 0);
-    av_dict_set(&protocolOptions, "timeout",
-                microseconds(*request.input.readTimeoutMs).c_str(), 0);
-    av_dict_set(&demuxOptions, "analyzeduration",
-                std::to_string(*request.input.analyzeDurationUs).c_str(), 0);
-    av_dict_set(&demuxOptions, "probesize",
-                std::to_string(*request.input.probeSizeBytes).c_str(), 0);
-    if (*request.input.lowLatency) {
-        av_dict_set(&demuxOptions, "fflags", "nobuffer", 0);
-        av_dict_set(&demuxOptions, "flags", "low_delay", 0);
-    }
-    options.protocolOptions = protocolOptions;
-    options.demuxOptions = demuxOptions;
-    options.avioBufferBytes = policy.value().avioBufferBytes;
-    options.packetStride = policy.value().packetSize;
-    options.evidenceCapacity = policy.value().evidenceTimelineCapacity;
-    options.pesProvenanceCapacity = policy.value().pesProvenanceCapacity;
-    options.maximumPositionRegressionBytes =
-        policy.value().maximumPacketPositionRegressionBytes;
-    auto opened = opener ? (*opener)(options) : MediaTsInputSession::open(options);
-    av_dict_free(&protocolOptions);
-    av_dict_free(&demuxOptions);
+    const MediaTsSessionOpenSettings openSettings{
+        request.input.url,
+        *request.input.openTimeoutMs,
+        *request.input.readTimeoutMs,
+        *request.input.analyzeDurationUs,
+        *request.input.probeSizeBytes,
+        *request.input.lowLatency,
+        policy.value().avioBufferBytes,
+        policy.value().packetSize,
+        policy.value().evidenceTimelineCapacity,
+        policy.value().pesProvenanceCapacity,
+        policy.value().maximumPacketPositionRegressionBytes};
+    const MediaTsInputSessionOpener sessionOpener =
+        opener ? *opener : MediaTsInputSessionOpener{};
+    auto opened = openMpegTsPreflightSession(openSettings, sessionOpener);
     if (!opened) return ::media::Result<MediaPreparedRealtimeInputScan>::failure(opened.error());
     auto session = std::move(opened).value();
 
@@ -231,7 +324,17 @@ struct MediaRtpInputClockTransportPolicy final {
             decoder.value().maximumOutputBlockInputSamples);
         result.streams.audio.selectedDecoder = std::move(decoder).value();
     }
-    auto prepared = MediaPreparedRealtimeInput::createMpegTs(std::move(session));
+    const auto plannedBinding = runtimeBinding;
+    const int plannedProgramNumber = selected.value().programNumber;
+    const int plannedPmtPid = selected.value().programMapPid;
+    auto prepared = MediaPreparedRealtimeInput::createMpegTs(
+        std::move(session),
+        [openSettings, plannedBinding, plannedProgramNumber, plannedPmtPid,
+         sessionOpener]() mutable {
+            return openMpegTsRuntimeSession(
+                openSettings, plannedBinding, plannedProgramNumber,
+                plannedPmtPid, sessionOpener);
+        });
     if (!prepared) return ::media::Result<MediaPreparedRealtimeInputScan>::failure(prepared.error());
     result.prepared = std::move(prepared).value();
     result.selectedTsProgram = selected.value();
@@ -492,7 +595,8 @@ void MediaRealtimeInputPlanner::applyNodePlans(
             return ::media::Result<MediaPreparedRealtimeInputScan>::failure(
                 ::media::ErrorInfo::invalidArgument("MPEG-TS preflight opener is required"));
         }
-        return prepareMpegTs(request, io ? &io->openMpegTs : nullptr);
+        return prepareMpegTs(
+            request, io ? &io->openMpegTs : nullptr);
     }
     return io
         ? MediaPipelineCapabilityScanner::prepareRealtimeInput(

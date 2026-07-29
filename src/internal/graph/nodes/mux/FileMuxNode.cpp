@@ -1,6 +1,7 @@
 #include "internal/graph/nodes/mux/FileMuxNode.h"
 
 #include "internal/graph/core/MediaGraph.h"
+#include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
 
 #include <algorithm>
 #include <array>
@@ -21,7 +22,18 @@ bool isBindingPort(std::string_view name) noexcept
 } // namespace
 
 FileMuxNode::FileMuxNode(MediaNodeId nodeId)
-    : FileMuxNode(nodeId, std::make_unique<ExplicitMediaMuxSessionFactory>())
+    : FFmpegNodeRuntime(nodeId, staticKind(), "FileMuxNode")
+    , m_sessionFactory(std::make_unique<ExplicitMediaMuxSessionFactory>())
+{
+}
+
+FileMuxNode::FileMuxNode(
+    MediaNodeId nodeId,
+    std::shared_ptr<MediaProtocolOutputGenerationState> generationState)
+    : FFmpegNodeRuntime(nodeId, staticKind(), "FileMuxNode")
+    , m_generationState(std::move(generationState))
+    , m_sessionFactory(std::make_unique<ExplicitMediaMuxSessionFactory>(
+          m_generationState))
 {
 }
 
@@ -31,6 +43,12 @@ FileMuxNode::FileMuxNode(
     : FFmpegNodeRuntime(nodeId, staticKind(), "FileMuxNode")
     , m_sessionFactory(std::move(sessionFactory))
 {
+}
+
+std::shared_ptr<MediaAvGenerationPurgeTarget>
+FileMuxNode::generationPurgeTarget() const noexcept
+{
+    return m_generationState;
 }
 
 MediaNodeKind FileMuxNode::staticKind() noexcept

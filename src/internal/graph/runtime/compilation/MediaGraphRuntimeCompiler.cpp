@@ -3,6 +3,7 @@
 
 #include "internal/graph/runtime/MediaGraphRuntime.h"
 #include "internal/graph/runtime/compilation/MediaAvSyncRuntimeBootstrap.h"
+#include "internal/graph/runtime/compilation/MediaAvGenerationParticipantAssembler.h"
 #include "internal/graph/runtime/factory/MediaRuntimeNodeFactory.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
@@ -74,8 +75,11 @@ bool isLegacyProductionAvSyncAuthority(MediaNodeKind kind) noexcept
     constexpr std::string_view StartupClockGroupKey = "av_startup_clock.sync_group";
     constexpr std::string_view SequencerGroupKey =
         "activated_startup_release_sequencer.sync_group";
+    constexpr std::string_view BoundReleaseExtractorGroupKey =
+        "av_bound_release_extractor.sync_group";
     constexpr std::string_view RtpBinderGroupKey = "rtp_clock_binder.sync_group";
-    constexpr std::string_view InitialGateGroupKey = "initial_locked_gate.sync_group";
+    constexpr std::string_view LockedPacketGateGroupKey =
+        "locked_packet_gate.sync_group";
     constexpr std::string_view CoordinatorGroupKey = "av_startup.sync_group";
     constexpr std::string_view AudioDriftControllerGroupKey =
         "audio_drift_controller.sync_group";
@@ -151,12 +155,15 @@ bool isLegacyProductionAvSyncAuthority(MediaNodeKind kind) noexcept
             const bool sequencerConsumer =
                 node.kind == MediaNodeKind::ActivatedStartupReleaseSequencer &&
                 key == SequencerGroupKey;
+            const bool boundReleaseExtractorConsumer =
+                node.kind == MediaNodeKind::AvBoundReleaseExtractor &&
+                key == BoundReleaseExtractorGroupKey;
             const bool rtpBinderConsumer =
                 node.kind == MediaNodeKind::RtpPacketClockBinder &&
                 key == RtpBinderGroupKey;
-            const bool initialGateConsumer =
-                node.kind == MediaNodeKind::InitialLockedPacketGate &&
-                key == InitialGateGroupKey;
+            const bool lockedPacketGateConsumer =
+                node.kind == MediaNodeKind::LockedPacketGate &&
+                key == LockedPacketGateGroupKey;
             const bool coordinatorConsumer =
                 node.kind == MediaNodeKind::AvStartupCoordinator &&
                 key == CoordinatorGroupKey;
@@ -174,7 +181,8 @@ bool isLegacyProductionAvSyncAuthority(MediaNodeKind kind) noexcept
                 key == ProjectMpegTsPlanGroupKey;
             if (!schedulerConsumer && !binderConsumer &&
                 !startupClockConsumer && !sequencerConsumer &&
-                !rtpBinderConsumer && !initialGateConsumer &&
+                !boundReleaseExtractorConsumer &&
+                !rtpBinderConsumer && !lockedPacketGateConsumer &&
                 !coordinatorConsumer && !audioDriftControllerConsumer &&
                 !scheduledRtpSenderConsumer &&
                 !scheduledTsAdapterConsumer &&
@@ -312,6 +320,8 @@ bool isLegacyProductionAvSyncAuthority(MediaNodeKind kind) noexcept
     MediaGraphRuntimeState& state)
 {
     mediaGraphDiagnosticLog(context.diagnosticsEnabled(), MediaGraphDiagnosticPhase::RuntimeLifecycle, "compile.begin");
+    const bool requiresDefaultRegistration =
+        executable.avSyncBinding.has_value();
     if (auto valid = validateBindings(executable); !valid) {
         mediaGraphDiagnosticLog(
             context.diagnosticsEnabled(),
@@ -376,8 +386,15 @@ bool isLegacyProductionAvSyncAuthority(MediaNodeKind kind) noexcept
     videoPreparationState = std::move(preparedVideoPreparation);
     acceptanceCollector.reset();
     queueHighWatermark = 0;
-    state = MediaGraphRuntimeState::Compiled;
-    mediaGraphDiagnosticLog(context.diagnosticsEnabled(), MediaGraphDiagnosticPhase::RuntimeLifecycle, "compile.done state=Compiled");
+    state = requiresDefaultRegistration
+        ? MediaGraphRuntimeState::DefaultRegistrationPending
+        : MediaGraphRuntimeState::Compiled;
+    mediaGraphDiagnosticLog(
+        context.diagnosticsEnabled(),
+        MediaGraphDiagnosticPhase::RuntimeLifecycle,
+        requiresDefaultRegistration
+            ? "compile.done state=DefaultRegistrationPending"
+            : "compile.done state=Compiled");
     return ::media::Status::success();
 }
 
@@ -404,12 +421,16 @@ bool isLegacyProductionAvSyncAuthority(MediaNodeKind kind) noexcept
     std::vector<std::unique_ptr<MediaRuntimeNode>> preparedNodes;
     preparedNodes.reserve(context.graph()->nodes().size());
     const MediaNode* sequencer = nullptr;
+    const MediaNode* avOutputScheduler = nullptr;
     const MediaNode* videoFilter = nullptr;
     const MediaNode* releaseExtractor = nullptr;
     std::vector<const MediaNode*> scheduledRtpSenders;
     for (const MediaNode& node : context.graph()->nodes()) {
         if (node.kind == MediaNodeKind::ActivatedStartupReleaseSequencer) {
             sequencer = &node;
+        }
+        if (node.kind == MediaNodeKind::AvOutputScheduler) {
+            avOutputScheduler = &node;
         }
         if (node.kind == MediaNodeKind::VideoFilter) videoFilter = &node;
         if (node.kind == MediaNodeKind::AvBoundReleaseExtractor)
@@ -504,6 +525,40 @@ bool isLegacyProductionAvSyncAuthority(MediaNodeKind kind) noexcept
         }
         preparedNodes.push_back(std::move(runtimeNode).value());
     }
+    std::shared_ptr<MediaAvSyncGroupRuntime> reacquisitionGroup;
+    std::optional<MediaAvReacquisitionAssemblyDependencies>
+        reacquisitionDependencies;
+    if (playbackEpochActivationCapability) {
+        if (!avOutputScheduler) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "A/V reacquisition assembly requires the planned output scheduler"));
+        }
+        auto groupText = requiredNodeOption(
+            &avOutputScheduler->options,
+            "MediaAvOutputSchedulerNode",
+            "av_scheduler.sync_group");
+        if (!groupText) {
+            return ::media::Status::failure(groupText.error());
+        }
+        MediaAvSyncGroupKey groupKey(std::move(groupText).value());
+        reacquisitionGroup = context.findAvSyncGroup(groupKey);
+        if (!reacquisitionGroup ||
+            reacquisitionGroup->key() != groupKey) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "A/V reacquisition assembly requires the exact registered sync group"));
+        }
+        auto dependencies = MediaAvSyncRuntimeBootstrap::
+            reacquisitionAssemblyDependencies(
+                *playbackEpochActivationCapability,
+                reacquisitionGroup);
+        if (!dependencies) {
+            return ::media::Status::failure(dependencies.error());
+        }
+        reacquisitionDependencies.emplace(
+            std::move(dependencies).value());
+    }
     if (sequencer && !scheduler.findNode(sequencer->id)) {
         auto runtimeNode =
             MediaRuntimeNodeFactory::createActivatedStartupReleaseSequencer(
@@ -513,6 +568,37 @@ bool isLegacyProductionAvSyncAuthority(MediaNodeKind kind) noexcept
             return ::media::Status::failure(runtimeNode.error());
         }
         preparedNodes.push_back(std::move(runtimeNode).value());
+    }
+    if (reacquisitionDependencies) {
+        auto assembler = MediaAvGenerationParticipantAssembler::create(
+            reacquisitionDependencies->transitionService->transitionPlan());
+        if (!assembler) {
+            return ::media::Status::failure(assembler.error());
+        }
+        for (auto& runtimeNode : preparedNodes) {
+            auto registration =
+                MediaRuntimeNodeFactory::generationPurgeRegistration(
+                    *runtimeNode);
+            if (!registration) continue;
+            auto registered = assembler.value().registerTarget(
+                registration->participant,
+                std::move(registration->registration));
+            if (!registered) return registered;
+        }
+        auto participants = assembler.value().seal();
+        if (!participants) {
+            return ::media::Status::failure(participants.error());
+        }
+        auto coordinator = MediaAvReacquisitionCoordinator::create(
+            std::move(reacquisitionDependencies->transitionService),
+            std::move(reacquisitionDependencies->masterClock),
+            std::move(participants).value());
+        if (!coordinator) {
+            return ::media::Status::failure(coordinator.error());
+        }
+        auto installed = reacquisitionGroup->installReacquisitionCoordinator(
+            std::move(coordinator).value());
+        if (!installed) return installed;
     }
     auto registered = scheduler.registerNodes(std::move(preparedNodes));
     if (!registered) return registered;

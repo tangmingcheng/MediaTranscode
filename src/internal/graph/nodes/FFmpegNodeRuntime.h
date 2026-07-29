@@ -4,6 +4,7 @@
 #include "internal/graph/nodes/MediaNodeRuntime.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 #include "internal/graph/runtime/channel/MediaChannel.h"
+#include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
 #include "media_transcode/Result.h"
 
 #include <optional>
@@ -36,6 +37,13 @@ protected:
     bool retainsPendingOutput(const MediaBufferRef& buffer) const noexcept;
     void cancelPendingOutputTransfer() noexcept;
     virtual bool pendingOutputIsCurrent(const MediaBufferRef& buffer) const noexcept;
+    virtual ::media::Result<
+        std::optional<MediaProtocolOutputGenerationCommitReservation>>
+    reserveOutputCommit(const MediaBufferRef& buffer) const;
+    virtual ::media::Status commitReservedOutput(
+        const MediaBufferRef& buffer);
+    virtual ::media::Status cancelReservedOutput(
+        const MediaBufferRef& buffer);
     struct PoppedChannelBuffer {
         MediaChannel* channel = nullptr;
         MediaBufferRef buffer;
@@ -72,16 +80,29 @@ protected:
     std::vector<MediaChannel*> outputChannels(MediaGraphExecutionContext& context);
 
 private:
+    enum class AtomicTransferResult {
+        NotApplicable,
+        Waiting,
+        Published
+    };
     struct PendingTransfer {
         MediaBufferRef buffer;
         std::vector<MediaChannel*> channels;
         std::size_t nextChannel = 0;
+        bool atomic = false;
     };
+    ::media::Result<AtomicTransferResult> publishAtomicOutput(
+        MediaGraphExecutionContext& context,
+        const std::vector<MediaChannel*>& channels,
+        const MediaBufferRef& buffer,
+        const char* action);
     ::media::Status transferOrDefer(MediaGraphExecutionContext& context,
                                     const std::vector<MediaChannel*>& channels,
                                     const MediaBufferRef& buffer,
                                     const char* action);
     ::media::Status drainPendingTransfers(MediaGraphExecutionContext& context, bool& waiting);
+    ::media::Result<MediaNodeProcessResult> processImpl(
+        MediaGraphExecutionContext& context);
     std::size_t m_nextInputIndex = 0;
     std::optional<PendingTransfer> m_pendingTransfer;
     bool m_finishPending = false;

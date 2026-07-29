@@ -14,8 +14,27 @@ namespace {
 
 constexpr MediaRunningTime Zero = MediaRunningTime::fromNanoseconds(0);
 
-::media::Result<std::uint32_t> trimSamples(
-    MediaRunningTime packetStart,
+std::uint64_t nonNegativeSampleDistance(
+    std::int64_t first,
+    std::int64_t last) noexcept
+{
+    if (first >= 0) {
+        return static_cast<std::uint64_t>(last) -
+               static_cast<std::uint64_t>(first);
+    }
+    const auto firstMagnitude =
+        static_cast<std::uint64_t>(-(first + 1)) + 1;
+    if (last < 0) {
+        const auto lastMagnitude =
+            static_cast<std::uint64_t>(-(last + 1)) + 1;
+        return firstMagnitude - lastMagnitude;
+    }
+    return firstMagnitude + static_cast<std::uint64_t>(last);
+}
+
+} // namespace
+
+::media::Result<std::uint32_t> calculateMediaAvAudioTrimSamples(
     MediaRunningTime epochSourceStart,
     const MediaAvAudioSampleSpan& span)
 {
@@ -25,9 +44,28 @@ constexpr MediaRunningTime Zero = MediaRunningTime::fromNanoseconds(0);
         return ::media::Result<std::uint32_t>::failure(
             grid.error());
     }
-    return grid.value().trimLeadingSamples(
-        packetStart, epochSourceStart, span.sampleCount);
+    auto epochSample = grid.value().firstSampleAtOrAfter(epochSourceStart);
+    if (!epochSample) {
+        return ::media::Result<std::uint32_t>::failure(
+            epochSample.error());
+    }
+    if (epochSample.value() < span.firstSample) {
+        return ::media::Result<std::uint32_t>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "A/V startup epoch precedes the authoritative audio sample span"));
+    }
+    const std::uint64_t delta =
+        nonNegativeSampleDistance(span.firstSample, epochSample.value());
+    if (delta > span.sampleCount) {
+        return ::media::Result<std::uint32_t>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "A/V startup epoch exceeds the authoritative audio sample span"));
+    }
+    return ::media::Result<std::uint32_t>::success(
+        static_cast<std::uint32_t>(delta));
 }
+
+namespace {
 
 MediaAvStartupUnitId unitId(const MediaAvStartupAccessUnit& unit) noexcept
 {
@@ -179,6 +217,13 @@ MediaAvSyncStatus MediaAvStartupCoordinator::validateUnit(
         return MediaAvSyncStatus::failure(startupError(
             MediaAvSyncErrorCode::InvalidDuration, "validate_startup_unit", &unit,
             "audio startup unit requires an explicit non-empty sample span"));
+    } else if (
+        unit.audio->firstSample >
+        std::numeric_limits<std::int64_t>::max() -
+            static_cast<std::int64_t>(unit.audio->sampleCount)) {
+        return MediaAvSyncStatus::failure(startupError(
+            MediaAvSyncErrorCode::InvalidDuration, "validate_startup_unit", &unit,
+            "audio startup sample span end is not representable"));
     } else if (auto status = validateMediaAvAudioSampleSpanDuration(
                    *unit.audio, unit.duration); !status) {
         return MediaAvSyncStatus::failure(startupError(
@@ -212,6 +257,8 @@ MediaAvStartupCoordinator::advanceGeneration(
         return MediaAvSyncResult<std::vector<MediaAvStartupUnitId>>::failure(status.error());
     }
     auto purged = purge();
+    m_lastVideoSequence.reset();
+    m_lastAudioSequence.reset();
     m_acquisitionStartedAt = observedAt;
     return MediaAvSyncResult<std::vector<MediaAvStartupUnitId>>::success(std::move(purged));
 }
@@ -273,7 +320,16 @@ MediaAvSyncResult<MediaAvStartupDecision> MediaAvStartupCoordinator::submit(
             MediaAvSyncErrorCode::StartupInvalidTransition,
             "submit", &unit, "media arrived after end of stream"));
     }
+    auto& lastSequence = unit.stream == MediaAvStartupStream::Video
+        ? m_lastVideoSequence
+        : m_lastAudioSequence;
+    if (lastSequence && unit.sequence <= *lastSequence) {
+        return MediaAvSyncResult<MediaAvStartupDecision>::success(
+            {MediaAvStartupDisposition::DroppedDuplicateOrRegressed,
+             std::nullopt, std::move(purged)});
+    }
     if (m_state.state() == MediaAvSyncState::Running) {
+        lastSequence = unit.sequence;
         return MediaAvSyncResult<MediaAvStartupDecision>::success(
             {MediaAvStartupDisposition::PassThrough, std::nullopt, std::move(purged)});
     }
@@ -299,12 +355,8 @@ MediaAvSyncResult<MediaAvStartupDecision> MediaAvStartupCoordinator::submit(
                                  "startup buffer capacity exceeded");
         return MediaAvSyncResult<MediaAvStartupDecision>::failure(failed.error());
     }
-    if (!store.empty() && unit.sequence <= store.backSequence()) {
-        return MediaAvSyncResult<MediaAvStartupDecision>::failure(startupError(
-            MediaAvSyncErrorCode::StartupInvalidTransition,
-            "submit", &unit, "per-stream sequence regressed or repeated"));
-    }
     const auto payloadBytes = unit.payloadBytes;
+    const auto sequence = unit.sequence;
     if (unit.stream == MediaAvStartupStream::Video) m_videoLocked = true;
     else m_audioLocked = true;
     auto appended = store.append(std::move(unit));
@@ -318,6 +370,7 @@ MediaAvSyncResult<MediaAvStartupDecision> MediaAvStartupCoordinator::submit(
             MediaAvSyncErrorCode::StartupInvalidTransition,
             "submit", nullptr, "duplicate presentation identity"));
     }
+    lastSequence = sequence;
     bufferedBytes += payloadBytes;
     m_cumulativeSelectionWork.coverageOperations =
         m_video->cumulativeCoverageWork().coverageOperations +
@@ -383,9 +436,8 @@ MediaAvStartupCoordinator::tryRelease(MediaRunningTime observedAt)
         return MediaAvSyncResult<MediaAvStartupDecision>::failure(
             failed.error());
     }
-    auto trim = trimSamples(*window.audio->presentationTime,
-                            window.sourceStart,
-                            *window.audio->audio);
+    auto trim = calculateMediaAvAudioTrimSamples(
+        window.sourceStart, *window.audio->audio);
     if (!trim) {
         auto failed = markFailed(MediaAvSyncErrorCode::AudioTrimLimitExceeded,
                                  trim.error().message);
@@ -512,6 +564,8 @@ MediaAvSyncStatus MediaAvStartupCoordinator::reset() noexcept
     m_acquisitionStartedAt.reset();
     m_keyFrameWaitStartedAt.reset();
     m_processedWatermark.reset();
+    m_lastVideoSequence.reset();
+    m_lastAudioSequence.reset();
     return MediaAvSyncStatus::success();
 }
 

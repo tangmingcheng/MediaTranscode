@@ -66,9 +66,21 @@ bool MediaGraphRuntime::diagnosticsEnabled() const noexcept
 
 ::media::Status MediaGraphRuntime::registerDefaultRuntimeNodes()
 {
-    return MediaGraphRuntimeCompiler::registerDefaults(
+    auto registered = MediaGraphRuntimeCompiler::registerDefaults(
         m_context, m_scheduler, m_inputBindings,
         m_playbackEpochActivationCapability, m_videoPreparationState);
+    if (!registered) {
+        if (m_state ==
+            MediaGraphRuntimeState::DefaultRegistrationPending) {
+            abort();
+        }
+        return registered;
+    }
+    if (m_state ==
+        MediaGraphRuntimeState::DefaultRegistrationPending) {
+        m_state = MediaGraphRuntimeState::Compiled;
+    }
+    return ::media::Status::success();
 }
 
 void MediaGraphRuntime::setThreadingPolicy(MediaThreadingPolicy policy) noexcept

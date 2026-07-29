@@ -46,12 +46,11 @@ void VideoFilterLineageState::resetFilterGraph() noexcept
 void VideoFilterLineageState::clearOwnedLineage(
     const MediaAvGenerationPurge&) noexcept
 {
-    clearLineageStorage();
+    clearGenerationLineage();
 }
 
-void VideoFilterLineageState::clearLineageStorage() noexcept
+void VideoFilterLineageState::clearGenerationLineage() noexcept
 {
-    resetFilterGraph();
     terminals.reset();
     eofEmitted = false;
     terminalBuffer.reset();
@@ -60,6 +59,13 @@ void VideoFilterLineageState::clearLineageStorage() noexcept
     pendingFrame.reset();
     pendingLineage.reset();
     lineageGenerations.clear();
+    lastSubmittedPts = AV_NOPTS_VALUE;
+}
+
+void VideoFilterLineageState::clearLineageStorage() noexcept
+{
+    resetFilterGraph();
+    clearGenerationLineage();
 }
 
 void VideoFilterLineageState::resetForLifecycle() noexcept
@@ -488,6 +494,15 @@ void VideoFilterNode::resetRuntimeState() noexcept
             return ::media::Status::failure(
                 ::media::ErrorInfo::invalidArgument(
                     "VideoFilterNode requires canonical frame lineage"));
+        }
+        auto disposition = m_lineageState->classifyObservation(
+            pendingLineage->generation);
+        if (!disposition) {
+            return ::media::Status::failure(disposition.error());
+        }
+        if (disposition.value() ==
+            MediaVideoLineageGenerationDisposition::DropStale) {
+            return ::media::Status::success();
         }
         if (auto status = m_lineageState->validateObservation(
                 pendingLineage->generation); !status) {

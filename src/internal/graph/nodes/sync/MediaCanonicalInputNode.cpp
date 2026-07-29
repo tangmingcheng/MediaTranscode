@@ -43,6 +43,7 @@ void MediaCanonicalInputNode::resetState() noexcept
     m_decodeOrder.reset();
     m_keyTraceEmitted = false;
     m_sourceIdentity.clear();
+    m_generation.reset();
     m_nextSequence = 1;
     m_audioSampleRate = 0;
     m_audioSampleCount = 0;
@@ -249,6 +250,20 @@ MediaCanonicalInputNode::canonicalize(
         return ::media::Result<MediaNodeProcessResult>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "Canonical input requires locked nonzero-generation clock evidence with presentation time"));
+    if (m_generation && timing.generation < *m_generation) {
+        return processProgress();
+    }
+    if (m_generation && timing.generation > *m_generation) {
+        if (*m_generation == std::numeric_limits<std::uint64_t>::max() ||
+            timing.generation != *m_generation + 1) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Canonical input rejects a skipped generation"));
+        }
+        m_nextSequence = 1;
+        if (m_audioTimeline) m_audioTimeline->reset();
+    }
+    m_generation = timing.generation;
     auto duration = durationFor(*input.value());
     if (!duration) {
         return ::media::Result<MediaNodeProcessResult>::failure(duration.error());
@@ -270,6 +285,10 @@ MediaCanonicalInputNode::canonicalize(
         }
         audioInterval = std::move(appended).value();
     }
+    const std::optional<std::int64_t> audioFirstSample =
+        audioInterval
+        ? std::optional<std::int64_t>(audioInterval->begin)
+        : std::nullopt;
     auto canonical = canonicalize(*input.value(), timing, duration.value(),
                                   *m_stream, *m_decodeOrder, m_sourceIdentity,
                                   sequence, std::move(audioInterval));
@@ -285,7 +304,8 @@ MediaCanonicalInputNode::canonicalize(
             canonical.value()->media()->isKeyFrame(),
         *m_stream == MediaScheduledStream::Audio
             ? std::optional<MediaAvAudioSampleSpan>(
-                  MediaAvAudioSampleSpan{static_cast<std::uint32_t>(m_audioSampleRate),
+                  MediaAvAudioSampleSpan{*audioFirstSample,
+                                         static_cast<std::uint32_t>(m_audioSampleRate),
                                          m_audioSampleCount})
             : std::nullopt};
     if (*m_stream == MediaScheduledStream::Video && unit.keyFrame &&

@@ -19,8 +19,7 @@ struct MediaLocalFileOutputPlan final {
 class MediaLocalFileOutputPlanner final {
 public:
     static ::media::Result<MediaLocalFileOutputPlan> plan(
-        std::string outputUrl,
-        std::string outputFormat);
+        std::string outputUrl);
 
 private:
     MediaLocalFileOutputPlanner() = delete;

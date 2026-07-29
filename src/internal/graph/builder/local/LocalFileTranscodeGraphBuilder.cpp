@@ -1,5 +1,7 @@
 #include "internal/graph/builder/local/LocalFileTranscodeGraphBuilder.h"
 
+#include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
+
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
 #include "internal/graph/builder/local/LocalFilePlannerRequestBuilder.h"
 #include "internal/graph/builder/segments/MediaAudioBranchSegmentBuilder.h"
@@ -81,14 +83,14 @@ bool branchEnabled(const MediaAudioPipelinePlan& plan) noexcept
     }
     MediaAudioPipelinePlan audioPlan = std::move(plannedAudio).value();
 
-    auto outputPlan = MediaLocalFileOutputPlanner::plan(
-        options.outputUrl, options.outputFormat);
+    auto outputPlan = MediaLocalFileOutputPlanner::plan(options.outputUrl);
     if (!outputPlan) {
         return ::media::Result<MediaGraph>::failure(outputPlan.error());
     }
 
     const MediaGraphQueueParameters& queues = options.parameters.queues;
-    const MediaRealtimeEdgePolicySet edgePolicies = MediaGraphBuildSupport::blockingEdgePolicySet(queues);
+    const MediaRealtimeEdgePolicySet edgePolicies =
+        MediaBlockingEdgePolicyPlanner::plan(queues);
 
     MediaGraph graph;
 

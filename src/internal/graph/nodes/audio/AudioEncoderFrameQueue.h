@@ -37,6 +37,7 @@ public:
     ::media::Result<QueuedFrame> popRemainingFrame();
     ::media::Status finishLineage() const;
 
+    void clearQueuedSamples() noexcept;
     void reset() noexcept;
 
 private:

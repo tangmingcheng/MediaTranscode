@@ -3,6 +3,8 @@
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 
+#include <atomic>
+
 namespace media::ffmpeg::graph {
 
 class MediaScheduledOutputRouterNode final : public FFmpegNodeRuntime {
@@ -11,6 +13,7 @@ public:
     static MediaNodeKind staticKind() noexcept;
     ::media::Status start(MediaGraphExecutionContext& context) override;
     ::media::Status stop(MediaGraphExecutionContext& context) override;
+    void interrupt(MediaGraphExecutionContext& context) noexcept override;
     void abort(MediaGraphExecutionContext& context) noexcept override;
 
 protected:
@@ -30,6 +33,7 @@ private:
 
     MediaBufferRef m_pending;
     Mode m_mode = Mode::SplitAv;
+    std::atomic_bool m_interrupted{false};
 };
 
 } // namespace media::ffmpeg::graph

@@ -15,8 +15,6 @@ struct MediaTsProgramClockPolicy final {
     std::uint16_t pcrPid = 0;
     std::uint16_t videoPid = 0;
     std::uint16_t audioPid = 0;
-    std::int64_t pcrInterval27Mhz = 0;
-    std::int64_t maximumJitter27Mhz = 0;
     std::int64_t maximumGap27Mhz = 0;
 };
 
@@ -45,7 +43,6 @@ public:
 
     ::media::Status observe(const MediaTsPcrObservation& observation);
     ::media::Status observePcrContinuityLoss(std::uint16_t pid);
-    ::media::Status observeElementaryContinuityLoss(std::uint16_t pid);
     ::media::Status observeProgramIdentity(std::uint16_t programNumber,
                                            std::uint16_t pmtPid,
                                            std::uint16_t videoPid,
@@ -72,6 +69,7 @@ private:
     std::optional<MediaRunningTime> m_lastPublishedSourceTime;
     std::optional<MediaTsPcrCalibration> m_calibration;
     bool m_ready = false;
+    bool m_reacquiring = false;
 };
 
 } // namespace media::ffmpeg::graph

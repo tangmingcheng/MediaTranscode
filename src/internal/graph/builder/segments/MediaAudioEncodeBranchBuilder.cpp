@@ -226,16 +226,19 @@ MediaAudioEncodeBranchNodes addAudioEncodeNodes(MediaGraph& graph,
                                           const MediaAudioEncodeBranchNodes& nodes)
 {
     const MediaRealtimeEdgePolicySet& policies = options.edgePolicies;
+    const auto& sourcePacketPolicy = nodes.startupTrim.isValid()
+        ? policies.atomicAudioPacket
+        : policies.audioPacket;
     if (*options.normalizePackets) {
         if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.formatSourceNode, options.formatSourcePort, nodes.packetNormalize, "format", options.prefix + ".format -> packet_normalize.format", policies.metadata); !status) return status;
-        if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.packetSourceNode, options.packetSourcePort, nodes.packetNormalize, "packet", options.prefix + ".packet -> packet_normalize.packet", policies.audioPacket); !status) return status;
+        if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.packetSourceNode, options.packetSourcePort, nodes.packetNormalize, "packet", options.prefix + ".packet -> packet_normalize.packet", sourcePacketPolicy); !status) return status;
     }
     if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.formatSourceNode, options.formatSourcePort, nodes.codecResolver, "format", options.prefix + ".format -> codec_resolver.format", policies.metadata); !status) return status;
     if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.codecResolver, "decoder", nodes.decode, "codec", options.prefix + ".codec_resolver.decoder -> decode.codec", policies.metadata); !status) return status;
     if (*options.normalizePackets) {
         if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.packetNormalize, "packet", nodes.decode, "packet", options.prefix + ".packet_normalize.packet -> decode.packet", policies.audioPacket); !status) return status;
     } else {
-        if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.packetSourceNode, options.packetSourcePort, nodes.decode, "packet", options.prefix + ".packet -> decode.packet", policies.audioPacket); !status) return status;
+        if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.packetSourceNode, options.packetSourcePort, nodes.decode, "packet", options.prefix + ".packet -> decode.packet", sourcePacketPolicy); !status) return status;
     }
     if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.codecResolver, "encoder", nodes.resample, "codec", options.prefix + ".codec_resolver.encoder -> resample.codec", policies.metadata); !status) return status;
     if (nodes.startupTrim.isValid()) {

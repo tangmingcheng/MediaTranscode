@@ -82,13 +82,15 @@ MediaAvStartupReleaseBuffer::MediaAvStartupReleaseBuffer(
     MediaPlaybackEpoch epoch,
     MediaAudioPlaybackOrigin audioOrigin,
     std::vector<MediaAvReleasedUnit> video,
-    std::vector<MediaAvReleasedUnit> audio)
+    std::vector<MediaAvReleasedUnit> audio,
+    std::optional<std::uint64_t> completedTransitionSequence)
     : m_groupKey(std::move(groupKey))
     , m_releaseKind(releaseKind)
     , m_epoch(epoch)
     , m_audioOrigin(audioOrigin)
     , m_video(std::move(video))
     , m_audio(std::move(audio))
+    , m_completedTransitionSequence(completedTransitionSequence)
 {
     setStreamKind(MediaStreamKind::Metadata);
     setPayloadKind(MediaPayloadKind::GraphEvent);
@@ -101,7 +103,8 @@ MediaAvStartupReleaseBuffer::MediaAvStartupReleaseBuffer(
     MediaPlaybackEpoch epoch,
     MediaAudioPlaybackOrigin audioOrigin,
     std::vector<MediaAvReleasedUnit> video,
-    std::vector<MediaAvReleasedUnit> audio)
+    std::vector<MediaAvReleasedUnit> audio,
+    std::optional<std::uint64_t> completedTransitionSequence)
 {
     if (auto status = validateReleaseKind(releaseKind); !status) {
         return ::media::Result<MediaBufferRef>::failure(status.error());
@@ -114,13 +117,22 @@ MediaAvStartupReleaseBuffer::MediaAvStartupReleaseBuffer(
     case MediaAvStartupReleaseKind::ActiveEpochPassThrough:
         shapeValid = !video.empty() || !audio.empty();
         break;
+    case MediaAvStartupReleaseKind::NextAtomicRelease:
+        shapeValid = !video.empty() && !audio.empty();
+        break;
     }
+    const bool transitionSequenceValid =
+        releaseKind == MediaAvStartupReleaseKind::NextAtomicRelease
+        ? completedTransitionSequence.has_value() &&
+              *completedTransitionSequence != 0
+        : !completedTransitionSequence.has_value();
     if (!groupKey.valid() || epoch.generation == 0 ||
         audioOrigin.generation != epoch.generation ||
         audioOrigin.sourceStart != epoch.sourceStart ||
         audioOrigin.masterRelease != epoch.masterRelease ||
         audioOrigin.epochOutputSampleIndex < 0 ||
-        audioOrigin.outputSampleRate <= 0 || !shapeValid) {
+        audioOrigin.outputSampleRate <= 0 || !shapeValid ||
+        !transitionSequenceValid) {
         return ::media::Result<MediaBufferRef>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "A/V startup release contract is incomplete"));
@@ -137,7 +149,8 @@ MediaAvStartupReleaseBuffer::MediaAvStartupReleaseBuffer(
     return ::media::Result<MediaBufferRef>::success(MediaBufferRef(
         new MediaAvStartupReleaseBuffer(
             std::move(groupKey), releaseKind, epoch, audioOrigin,
-            std::move(video), std::move(audio))));
+            std::move(video), std::move(audio),
+            completedTransitionSequence)));
 }
 
 ::media::Status MediaAvStartupReleaseBuffer::validateReleaseKind(
@@ -146,6 +159,7 @@ MediaAvStartupReleaseBuffer::MediaAvStartupReleaseBuffer(
     switch (releaseKind) {
     case MediaAvStartupReleaseKind::InitialAtomicRelease:
     case MediaAvStartupReleaseKind::ActiveEpochPassThrough:
+    case MediaAvStartupReleaseKind::NextAtomicRelease:
         return ::media::Status::success();
     }
     return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
@@ -163,5 +177,10 @@ MediaAvStartupReleaseKind MediaAvStartupReleaseBuffer::releaseKind() const noexc
 const MediaAudioPlaybackOrigin& MediaAvStartupReleaseBuffer::audioOrigin() const noexcept { return m_audioOrigin; }
 const std::vector<MediaAvReleasedUnit>& MediaAvStartupReleaseBuffer::video() const noexcept { return m_video; }
 const std::vector<MediaAvReleasedUnit>& MediaAvStartupReleaseBuffer::audio() const noexcept { return m_audio; }
+const std::optional<std::uint64_t>&
+MediaAvStartupReleaseBuffer::completedTransitionSequence() const noexcept
+{
+    return m_completedTransitionSequence;
+}
 
 } // namespace media::ffmpeg::graph

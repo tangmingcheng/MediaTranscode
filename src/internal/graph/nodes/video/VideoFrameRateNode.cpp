@@ -209,8 +209,15 @@ void VideoFrameRateNode::resetRuntimeState() noexcept
                 "VideoFrameRateNode requires canonical lineage"));
     }
     if (lineage) {
-        if (auto status = m_state->activateGeneration(lineage->generation); !status) {
-            return ::media::Result<MediaNodeProcessResult>::failure(status.error());
+        auto activation =
+            m_state->activateGeneration(lineage->generation);
+        if (!activation) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                activation.error());
+        }
+        if (activation.value() ==
+            MediaVideoFrameRateGenerationDisposition::DropStale) {
+            return processProgress();
         }
     }
 

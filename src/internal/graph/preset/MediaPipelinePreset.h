@@ -15,7 +15,6 @@ enum class MediaPipelinePresetKind {
 struct MediaPipelinePresetOptions {
     std::string inputUrl;
     std::string outputUrl;
-    std::string outputFormat;
     bool includeAudio = true;
     MediaGraphQueueParameters queues;
 };

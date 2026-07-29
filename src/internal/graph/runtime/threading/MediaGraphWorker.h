@@ -41,6 +41,7 @@ public:
 
     ::media::Status start();
     void requestStop() noexcept;
+    void interrupt() noexcept;
     void abort() noexcept;
     void join();
 

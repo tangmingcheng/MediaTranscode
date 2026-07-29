@@ -1,6 +1,8 @@
 #pragma once
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
+#include "internal/graph/sync/MediaAvStartupReleaseKind.h"
+#include "internal/graph/sync/MediaAvSyncGroupKey.h"
 #include "internal/graph/sync/startup/MediaAvStartupVideoPreparationCapability.h"
 #include "internal/graph/runtime/channel/MediaReservedOutputTransaction.h"
 
@@ -13,9 +15,12 @@ class MediaAvStartupReleaseBuffer;
 
 class MediaAvBoundReleaseExtractorNode final : public FFmpegNodeRuntime {
 public:
-    explicit MediaAvBoundReleaseExtractorNode(MediaNodeId nodeId);
     MediaAvBoundReleaseExtractorNode(
         MediaNodeId nodeId,
+        MediaAvSyncGroupKey groupKey);
+    MediaAvBoundReleaseExtractorNode(
+        MediaNodeId nodeId,
+        MediaAvSyncGroupKey groupKey,
         MediaAvStartupVideoPreparationCapability capability);
     static MediaNodeKind staticKind() noexcept;
     ::media::Status start(MediaGraphExecutionContext& context) override;
@@ -27,7 +32,13 @@ protected:
         MediaGraphExecutionContext& context) override;
 
 private:
-    ::media::Status commit(MediaGraphExecutionContext& context);
+    ::media::Result<MediaAvStartupReleaseDisposition> commit(
+        MediaGraphExecutionContext& context,
+        const MediaAvStartupReleaseBuffer& release);
+    ::media::Result<MediaAvStartupReleaseDisposition> classifyRelease(
+        MediaGraphExecutionContext& context,
+        const MediaAvStartupReleaseBuffer& release) const;
+    void discardPendingRelease() noexcept;
     ::media::Status stageRelease(const MediaAvStartupReleaseBuffer& release,
                                  std::size_t firstVideoIndex = 0,
                                  std::optional<MediaAudioPlaybackOrigin>
@@ -47,6 +58,7 @@ private:
     std::optional<MediaReservedOutputTransaction> m_initialOutputReservation;
     bool m_firstReleaseDiagnosticEmitted = false;
     bool m_firstCommitDiagnosticEmitted = false;
+    MediaAvSyncGroupKey m_groupKey;
     std::optional<MediaAvStartupVideoPreparationCapability>
         m_preparationCapability;
 };

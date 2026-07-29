@@ -1,6 +1,7 @@
 #include "internal/graph/builder/segments/MediaOutputSegmentBuilder.h"
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -168,7 +169,7 @@ const char* boolOption(bool value) noexcept
                                                             segment.mux,
                                                             "resource",
                                                             options.prefix + ".output.resource -> mux.resource",
-                                                            MediaGraphBuildSupport::blockingQueuePolicy(options.queues.metadata)); !status) {
+                                                            MediaBlockingEdgePolicyPlanner::planQueue(options.queues.metadata)); !status) {
         return ::media::Result<FileOutputSegment>::failure(status.error());
     }
 

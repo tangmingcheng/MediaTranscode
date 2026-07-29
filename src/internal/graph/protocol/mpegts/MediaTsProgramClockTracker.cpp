@@ -12,21 +12,10 @@ bool validPid(std::uint16_t pid) noexcept
     return pid <= 0x1fff;
 }
 
-::media::Status intervalStatus(std::int64_t delta,
-                               const MediaTsProgramClockPolicy& policy)
+bool requiresReacquisition(std::int64_t delta,
+                           const MediaTsProgramClockPolicy& policy) noexcept
 {
-    if (delta <= 0 || delta > policy.maximumGap27Mhz) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("MPEG-TS PCR gap or regression violates policy"));
-    }
-    const std::int64_t remainder = delta % policy.pcrInterval27Mhz;
-    const std::int64_t residual = std::min(
-        remainder, policy.pcrInterval27Mhz - remainder);
-    if (residual > policy.maximumJitter27Mhz) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("MPEG-TS PCR jitter violates planned interval"));
-    }
-    return ::media::Status::success();
+    return delta <= 0 || delta > policy.maximumGap27Mhz;
 }
 
 } // namespace
@@ -47,10 +36,7 @@ MediaTsProgramClockTracker::MediaTsProgramClockTracker(
 {
     if (policy.programNumber == 0 || !validPid(policy.pmtPid) ||
         !validPid(policy.pcrPid) || !validPid(policy.videoPid) ||
-        !validPid(policy.audioPid) || policy.pcrInterval27Mhz <= 0 ||
-        policy.maximumJitter27Mhz < 0 ||
-        policy.maximumJitter27Mhz > policy.pcrInterval27Mhz / 2 ||
-        policy.maximumGap27Mhz < policy.pcrInterval27Mhz) {
+        !validPid(policy.audioPid) || policy.maximumGap27Mhz <= 0) {
         return ::media::Result<MediaTsProgramClockTracker>::failure(
             ::media::ErrorInfo::invalidArgument("Invalid immutable MPEG-TS PCR policy"));
     }
@@ -89,23 +75,38 @@ MediaTsProgramClockTracker::MediaTsProgramClockTracker(
             ::media::ErrorInfo::invalidArgument("MPEG-TS PCR is outside the 27 MHz counter range"));
     }
     if (observation.discontinuity) {
-        auto status = reacquire();
-        if (!status) return status;
+        if (auto status = reacquire(); !status) return status;
     }
-
     auto raw = MediaProtocolTimestamp::create(
         static_cast<std::int64_t>(observation.pcr27Mhz), 1, 27'000'000);
     if (!raw) return ::media::Status::failure(raw.error());
     auto unwrapped = m_unwrapper.unwrap(raw.value());
     if (unwrapped.status != MediaTimestampUnwrapStatus::Value || !unwrapped.timestamp) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("MPEG-TS PCR regression or unwrap failure"));
+        if (auto status = reacquire(); !status) return status;
+        unwrapped = m_unwrapper.unwrap(raw.value());
+        if (unwrapped.status != MediaTimestampUnwrapStatus::Value ||
+            !unwrapped.timestamp) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "MPEG-TS PCR failed to establish a new clock generation"));
+        }
     }
-    const std::int64_t extended = unwrapped.timestamp->ticks();
+    std::int64_t extended = unwrapped.timestamp->ticks();
+    if (m_previousPcr &&
+        requiresReacquisition(extended - *m_previousPcr, m_policy)) {
+        if (auto status = reacquire(); !status) return status;
+        unwrapped = m_unwrapper.unwrap(raw.value());
+        if (unwrapped.status != MediaTimestampUnwrapStatus::Value ||
+            !unwrapped.timestamp) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "MPEG-TS PCR failed to establish a new clock generation"));
+        }
+        extended = unwrapped.timestamp->ticks();
+    }
     if (m_previousPcr) {
-        auto interval = intervalStatus(extended - *m_previousPcr, m_policy);
-        if (!interval) return interval;
         m_ready = true;
+        m_reacquiring = false;
     }
 
     if (!m_generationPcrAnchor) {
@@ -132,19 +133,6 @@ MediaTsProgramClockTracker::MediaTsProgramClockTracker(
 ::media::Status MediaTsProgramClockTracker::observePcrContinuityLoss(std::uint16_t pid)
 {
     if (pid != m_policy.pcrPid) return ::media::Status::success();
-    MediaTsProgramClockTracker candidate = *this;
-    auto status = candidate.reacquire();
-    if (!status) return status;
-    *this = std::move(candidate);
-    return ::media::Status::success();
-}
-
-::media::Status MediaTsProgramClockTracker::observeElementaryContinuityLoss(
-    std::uint16_t pid)
-{
-    if (pid != m_policy.videoPid && pid != m_policy.audioPid) {
-        return ::media::Status::success();
-    }
     MediaTsProgramClockTracker candidate = *this;
     auto status = candidate.reacquire();
     if (!status) return status;
@@ -179,17 +167,19 @@ MediaTsProgramClockTracker::MediaTsProgramClockTracker(
 
 ::media::Status MediaTsProgramClockTracker::reacquire()
 {
-    if (m_generation == std::numeric_limits<std::uint64_t>::max()) {
+    if (!m_reacquiring &&
+        m_generation == std::numeric_limits<std::uint64_t>::max()) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("MPEG-TS PCR generation exhausted"));
     }
-    ++m_generation;
+    if (!m_reacquiring) ++m_generation;
     m_unwrapper.reset(m_generation);
     m_previousPcr.reset();
     m_generationPcrAnchor.reset();
     m_generationSourceAnchor.reset();
     m_calibration.reset();
     m_ready = false;
+    m_reacquiring = true;
     return ::media::Status::success();
 }
 

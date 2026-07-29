@@ -28,13 +28,18 @@ MediaPreparedRealtimeInput::MediaPreparedRealtimeInput(
         MediaPreparedRealtimeInput(std::move(buffer).value()));
 }
 
-::media::Result<MediaPreparedRealtimeInput> MediaPreparedRealtimeInput::createMpegTs(
-    std::unique_ptr<MediaTsInputSession> session)
+::media::Result<MediaPreparedRealtimeInput>
+MediaPreparedRealtimeInput::createMpegTs(
+    std::unique_ptr<MediaTsInputSession> preflightSession,
+    MediaTsRuntimeSessionFactory runtimeSessionFactory)
 {
-    auto buffer = MediaTsPreparedInputBuffer::create(std::move(session));
-    if (!buffer) return ::media::Result<MediaPreparedRealtimeInput>::failure(buffer.error());
+    auto buffer = MediaTsPreparedInputBuffer::create(
+        std::move(preflightSession), std::move(runtimeSessionFactory));
+    if (!buffer) {
+        return ::media::Result<MediaPreparedRealtimeInput>::failure(buffer.error());
+    }
     return ::media::Result<MediaPreparedRealtimeInput>::success(
-        MediaPreparedRealtimeInput(std::move(buffer.value())));
+        MediaPreparedRealtimeInput(std::move(buffer).value()));
 }
 
 bool MediaPreparedRealtimeInput::valid() const noexcept
@@ -62,10 +67,16 @@ const FFmpegInputStreamSnapshot* MediaPreparedRealtimeInput::inputStreamSnapshot
     return found == snapshots.end() ? nullptr : &*found;
 }
 
-::media::Result<MediaBufferRef> MediaPreparedRealtimeInput::releaseBuffer() noexcept
+::media::Result<MediaBufferRef> MediaPreparedRealtimeInput::releaseBuffer()
 {
     if (m_genericBuffer) return ::media::Result<MediaBufferRef>::success(MediaBufferRef(m_genericBuffer.release()));
-    if (m_tsBuffer) return ::media::Result<MediaBufferRef>::success(MediaBufferRef(m_tsBuffer.release()));
+    if (m_tsBuffer) {
+        if (auto materialized = m_tsBuffer->materializeSession(); !materialized) {
+            return ::media::Result<MediaBufferRef>::failure(materialized.error());
+        }
+        return ::media::Result<MediaBufferRef>::success(
+            MediaBufferRef(m_tsBuffer.release()));
+    }
     return ::media::Result<MediaBufferRef>::failure(
         ::media::ErrorInfo::notInitialized("prepared realtime input was already transferred"));
 }

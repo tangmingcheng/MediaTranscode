@@ -162,68 +162,11 @@ using Support = MediaRealtimeAvSyncInputGraphSupport;
 }
 
 ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints> buildMpegTs(
-    MediaGraph& graph,
-    const MediaRealtimeAvSyncInputSegmentOptions& options,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    const MediaRealtimeAvSyncInputSegmentOptions& options)
 {
-    auto videoResult = Support::addNode(
-        graph, MediaNodeKind::InitialLockedPacketGate,
-        options.prefix + ".video.protocol_binder", "MPEG-TS video lock gate");
-    auto audioResult = Support::addNode(
-        graph, MediaNodeKind::InitialLockedPacketGate,
-        options.prefix + ".audio.protocol_binder", "MPEG-TS audio lock gate");
-    if (!videoResult || !audioResult) {
-        return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::
-            failure(!videoResult ? videoResult.error() : audioResult.error());
-    }
-    const MediaNodeId video = videoResult.value();
-    const MediaNodeId audio = audioResult.value();
-    for (const auto [node, stream] : {
-             std::pair{video, MediaStreamKind::Video},
-             std::pair{audio, MediaStreamKind::Audio}}) {
-        if (auto status = Support::addInput(
-                graph, node, "packet", stream,
-                MediaEdgeKind::InputPacket, MediaPayloadKind::Packet);
-            !status) {
-            return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::
-                failure(status.error());
-        }
-        if (auto status = Support::addInput(
-                graph, node, "clock", MediaStreamKind::Metadata,
-                MediaEdgeKind::Event, MediaPayloadKind::GraphEvent); !status) {
-            return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::
-                failure(status.error());
-        }
-        if (auto status = Support::addOutput(
-                graph, node, "packet", stream,
-                MediaEdgeKind::InputPacket, MediaPayloadKind::Packet);
-            !status) {
-            return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::
-                failure(status.error());
-        }
-        if (auto status = MediaRealtimeAvSyncNodeConfigurator::
-                configureInitialLockedPacketGate(graph, node, stream, plan);
-            !status) {
-            return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::
-                failure(status.error());
-        }
-    }
-    const auto& packet = plan.edgePolicies.synchronizedPacket;
-    if (auto status = Support::connect(
-            graph, options.sources.videoPacket, video, "packet",
-            "MPEG-TS video -> lock gate", packet); !status) {
-        return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::
-            failure(status.error());
-    }
-    if (auto status = Support::connect(
-            graph, options.sources.audioPacket, audio, "packet",
-            "MPEG-TS audio -> lock gate", packet); !status) {
-        return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::
-            failure(status.error());
-    }
     return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::success(
         MediaRealtimeAvSyncProtocolInputEndpoints{
-            MediaEndpoint{video, "packet"}, MediaEndpoint{audio, "packet"},
+            options.sources.videoPacket, options.sources.audioPacket,
             options.sources.protocolClock});
 }
 
@@ -245,7 +188,7 @@ MediaRealtimeAvSyncProtocolInputBuilder::build(
     }
     if (std::holds_alternative<MediaMpegTsInputClockAssemblyPlan>(
             plan.assembly.inputClock)) {
-        return buildMpegTs(graph, options, plan);
+        return buildMpegTs(options);
     }
     return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::failure(
         ::media::ErrorInfo::invalidArgument(

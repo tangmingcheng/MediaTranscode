@@ -59,8 +59,6 @@ struct MediaRealtimeTsInputPlan final {
     int videoPid = 0;
     int audioPid = 0;
     int pcrPid = 0;
-    std::int64_t pcrInterval27Mhz = 0;
-    std::int64_t maximumPcrJitter27Mhz = 0;
     std::int64_t maximumPcrGap27Mhz = 0;
     std::size_t projectionCapacity = 0;
     std::size_t initialAcquiringVideoPacketCapacity = 0;
@@ -136,10 +134,21 @@ struct MediaRealtimeMuxNodePlan {
     int startupDelayMs = 0;
 };
 
-struct MediaRealtimeAvStartBarrierPlan {
-    bool expectVideo = false;
-    bool expectAudio = false;
-    bool requireVideoKeyFrame = false;
+struct MediaRealtimeOutputPlanningDraft final {
+    bool packetCopyNormalizationRequired = false;
+    MediaRealtimeRtpOutputNodePlan videoOutput;
+    MediaRealtimeRtpOutputNodePlan audioOutput;
+    MediaRealtimeMuxedOutputPlan muxedOutput;
+    MediaRealtimeSdpWriterPlan sdp;
+    MediaRealtimeMuxNodePlan singleStreamMux;
+};
+
+struct MediaRealtimeSingleStreamOutputPlan final {
+    bool packetCopyNormalizationRequired = false;
+    MediaRealtimeRtpOutputNodePlan rtpOutput;
+    MediaRealtimeMuxedOutputPlan muxedOutput;
+    MediaRealtimeSdpWriterPlan sdp;
+    MediaRealtimeMuxNodePlan mux;
 };
 
 struct MediaRealtimeRtpTranscodePlan {
@@ -156,15 +165,7 @@ struct MediaRealtimeRtpTranscodePlan {
     MediaRealtimeRtpInputNodePlan input;
     MediaRealtimeRtpInputNodePlan audioInput;
     bool useIsolatedAudioInput = false;
-    bool videoPacketCopyNormalizationRequired;
-    bool audioPacketNormalizationRequired;
-    MediaRealtimeRtpOutputNodePlan videoOutput;
-    MediaRealtimeRtpOutputNodePlan audioOutput;
-    MediaRealtimeMuxedOutputPlan muxedOutput;
-    MediaRealtimeSdpWriterPlan sdp;
-    MediaRealtimeMuxNodePlan videoMux;
-    MediaRealtimeMuxNodePlan audioMux;
-    MediaRealtimeAvStartBarrierPlan avStartBarrier;
+    std::optional<MediaRealtimeSingleStreamOutputPlan> singleStreamOutput;
     std::optional<MediaRealtimeAvSyncComponentBounds> avSyncComponentBounds;
     std::optional<MediaRealtimeAvSyncRuntimePlan> avSyncRuntime;
 };

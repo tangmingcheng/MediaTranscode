@@ -12,6 +12,11 @@
 
 namespace media::ffmpeg::graph {
 
+enum class MediaVideoLineageGenerationDisposition {
+    Current,
+    DropStale
+};
+
 class MediaVideoLineageState : public MediaAvGenerationPurgeTarget {
 public:
     using Lock = std::unique_lock<std::recursive_mutex>;
@@ -26,6 +31,8 @@ public:
     [[nodiscard]] bool synchronized() const noexcept;
     [[nodiscard]] std::shared_ptr<MediaCodecLineageRegistry> registry() const noexcept;
     [[nodiscard]] Lock lock() const;
+    ::media::Result<MediaVideoLineageGenerationDisposition>
+    classifyObservation(std::uint64_t generation) const;
     ::media::Status validateObservation(std::uint64_t generation) const;
     ::media::Status observe(std::uint64_t generation);
     ::media::Status authorizeRetainedControl(const MediaBufferRef& buffer);

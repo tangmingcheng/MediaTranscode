@@ -15,7 +15,8 @@ public:
         std::uint16_t pid,
         std::uint8_t initialPayloadContinuity,
         std::span<const std::span<const std::uint8_t>> segments,
-        bool randomAccess);
+        bool randomAccess,
+        std::vector<std::array<std::uint8_t, 188>> workspace);
 
     static ::media::Result<std::array<std::uint8_t, 188>> pcrOnly(
         std::uint16_t pid,

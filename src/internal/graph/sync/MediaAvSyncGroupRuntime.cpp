@@ -2,8 +2,6 @@
 
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
 
-#include <limits>
-
 namespace media::ffmpeg::graph {
 namespace {
 
@@ -74,7 +72,6 @@ MediaAvSyncGroupRuntime::create(
 MediaAvSyncGroupRuntime::observeGeneration(std::uint64_t generation)
 {
     const auto transition = m_transitionService->snapshot();
-    std::lock_guard<std::mutex> lock(m_epochMutex);
     if (!transition.playbackEpoch || generation == 0) {
         return ::media::Result<GenerationDisposition>::failure(
             ::media::ErrorInfo::notInitialized(
@@ -92,15 +89,31 @@ MediaAvSyncGroupRuntime::observeGeneration(std::uint64_t generation)
     if (generation > transition.playbackEpoch->generation) {
         const MediaAvReacquisitionRequest request{
             generation, MediaAvReacquisitionReason::FutureGeneration};
-        if (!m_reacquisitionRequest ||
-            generation > m_reacquisitionRequest->observedGeneration) {
-            m_reacquisitionRequest = request;
+        auto* coordinator = reacquisitionCoordinator();
+        if (!coordinator) {
+            return ::media::Result<GenerationDisposition>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "A/V sync group requires its planned reacquisition coordinator"));
+        }
+        auto observed = coordinator->observe(request);
+        if (!observed) {
+            return ::media::Result<GenerationDisposition>::failure(
+                observed.error());
+        }
+        {
+            std::lock_guard<std::mutex> lock(m_epochMutex);
+            if (!m_reacquisitionRequest ||
+                generation > m_reacquisitionRequest->observedGeneration) {
+                m_reacquisitionRequest = request;
+            }
         }
         return ::media::Result<GenerationDisposition>::success(
             GenerationDisposition::ReacquisitionRequired);
     }
-    const bool pendingRequest = reacquisitionPending(
-        transition.playbackEpoch, m_reacquisitionRequest);
+    const auto reacquisition = reacquisitionSnapshot();
+    const bool pendingRequest =
+        reacquisition.phase != MediaAvReacquisitionPhase::Inactive ||
+        reacquisition.reason.has_value();
     if (transition.readiness != MediaAvGenerationReadiness::Locked ||
         pendingRequest) {
         return ::media::Result<GenerationDisposition>::success(
@@ -113,41 +126,138 @@ MediaAvSyncGroupRuntime::observeGeneration(std::uint64_t generation)
 ::media::Status MediaAvSyncGroupRuntime::requestReacquisition(
     MediaAvReacquisitionRequest request) noexcept
 {
+    auto* coordinator = reacquisitionCoordinator();
+    if (!coordinator) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::notInitialized(
+                "A/V sync group requires its planned reacquisition coordinator"));
+    }
+    auto status = coordinator->request(request);
+    if (!status) return status;
     const auto transition = m_transitionService->snapshot();
     std::lock_guard<std::mutex> lock(m_epochMutex);
-    if (!transition.playbackEpoch || request.observedGeneration == 0) {
-        return ::media::Status::failure(::media::ErrorInfo::notInitialized(
-            "Reacquisition request requires an active playback epoch"));
-    }
-    if (transition.poisoned) {
-        return ::media::Status::failure(::media::ErrorInfo::cancelled(
-            "Aborted A/V sync group rejects reacquisition requests"));
-    }
-    const bool future = request.reason ==
-        MediaAvReacquisitionReason::FutureGeneration;
-    if (!future &&
-        transition.playbackEpoch->generation ==
-            std::numeric_limits<std::uint64_t>::max()) {
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "Playback generation is exhausted"));
-    }
-    const bool generationValid = future
-        ? request.observedGeneration > transition.playbackEpoch->generation
-        : request.observedGeneration == transition.playbackEpoch->generation;
-    if (!generationValid) {
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "Reacquisition reason does not match the observed generation"));
-    }
-    // The first cause for a generation is authoritative; only evidence of a
-    // strictly newer generation supersedes the observable request.
     if (!m_reacquisitionRequest ||
-        !reacquisitionPending(transition.playbackEpoch,
-                              m_reacquisitionRequest) ||
+        !reacquisitionPending(
+            transition.playbackEpoch, m_reacquisitionRequest) ||
         request.observedGeneration >
             m_reacquisitionRequest->observedGeneration) {
         m_reacquisitionRequest = request;
     }
+    return status;
+}
+
+::media::Status MediaAvSyncGroupRuntime::installReacquisitionCoordinator(
+    std::shared_ptr<MediaAvReacquisitionCoordinator> coordinator)
+{
+    if (!coordinator) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "A/V sync group cannot install a null reacquisition coordinator"));
+    }
+    std::lock_guard<std::mutex> lock(m_epochMutex);
+    if (m_reacquisitionCoordinator) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "A/V sync group installs its reacquisition coordinator exactly once"));
+    }
+    m_reacquisitionCoordinator = std::move(coordinator);
     return ::media::Status::success();
+}
+
+MediaAvReacquisitionSnapshot
+MediaAvSyncGroupRuntime::reacquisitionSnapshot() const noexcept
+{
+    auto* coordinator = reacquisitionCoordinator();
+    return coordinator
+        ? coordinator->snapshot()
+        : MediaAvReacquisitionSnapshot{
+              MediaAvReacquisitionPhase::Inactive,
+              std::nullopt,
+              std::nullopt};
+}
+
+::media::Result<MediaAvGenerationArbitrationReservation>
+MediaAvSyncGroupRuntime::reserveGenerationArbitration() const
+{
+    auto* coordinator = reacquisitionCoordinator();
+    return coordinator
+        ? ::media::Result<
+              MediaAvGenerationArbitrationReservation>::success(
+              coordinator->reserveGenerationArbitration())
+        : ::media::Result<
+              MediaAvGenerationArbitrationReservation>::failure(
+              ::media::ErrorInfo::notInitialized(
+                  "A/V sync group requires its planned reacquisition coordinator"));
+}
+
+::media::Status
+MediaAvSyncGroupRuntime::markReacquisitionReadyForActivation(
+    std::uint64_t generation,
+    std::uint64_t transitionSequence)
+{
+    auto* coordinator = reacquisitionCoordinator();
+    return coordinator
+        ? coordinator->markReadyForActivation(
+              generation, transitionSequence)
+        : ::media::Status::failure(
+              ::media::ErrorInfo::notInitialized(
+                  "A/V sync group has no reacquisition coordinator"));
+}
+
+::media::Result<MediaAvReacquisitionActivationReservation>
+MediaAvSyncGroupRuntime::reserveReacquisitionActivation(
+    std::uint64_t generation,
+    std::uint64_t transitionSequence)
+{
+    auto* coordinator = reacquisitionCoordinator();
+    return coordinator
+        ? coordinator->reserveActivation(generation, transitionSequence)
+        : ::media::Result<
+              MediaAvReacquisitionActivationReservation>::failure(
+              ::media::ErrorInfo::notInitialized(
+                  "A/V sync group has no reacquisition coordinator"));
+}
+
+::media::Result<MediaAvStartupReleaseDisposition>
+MediaAvSyncGroupRuntime::classifyStartupRelease(
+    MediaAvStartupReleaseKind kind,
+    std::uint64_t generation,
+    std::optional<std::uint64_t> transitionSequence) const noexcept
+{
+    auto* coordinator = reacquisitionCoordinator();
+    if (!coordinator) {
+        return ::media::Result<
+            MediaAvStartupReleaseDisposition>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "A/V sync group has no planned reacquisition coordinator"));
+    }
+    return ::media::Result<
+        MediaAvStartupReleaseDisposition>::success(
+        coordinator->classifyRelease(
+            kind, generation, transitionSequence));
+}
+
+::media::Result<MediaAvStartupReleasePublicationReservation>
+MediaAvSyncGroupRuntime::reserveStartupReleasePublication(
+    MediaAvStartupReleaseKind kind,
+    std::uint64_t generation,
+    std::optional<std::uint64_t> transitionSequence)
+{
+    std::shared_ptr<MediaAvReacquisitionCoordinator> coordinator;
+    {
+        std::lock_guard<std::mutex> groupLock(m_epochMutex);
+        coordinator = m_reacquisitionCoordinator;
+    }
+    if (!coordinator) {
+        return ::media::Result<
+            MediaAvStartupReleasePublicationReservation>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "A/V sync group has no planned reacquisition coordinator"));
+    }
+    return ::media::Result<
+        MediaAvStartupReleasePublicationReservation>::success(
+        coordinator->reserveReleasePublication(
+            kind, generation, transitionSequence));
 }
 
 std::optional<MediaAvReacquisitionRequest>
@@ -165,7 +275,12 @@ MediaAvSyncGroupRuntime::reacquisitionRequest() const noexcept
 
 void MediaAvSyncGroupRuntime::markAborted() noexcept
 {
-    m_transitionService->abort();
+    auto* coordinator = reacquisitionCoordinator();
+    if (coordinator) {
+        coordinator->abort();
+    } else {
+        m_transitionService->abort();
+    }
 }
 
 void MediaAvSyncGroupRuntime::shutdown() noexcept
@@ -177,10 +292,11 @@ MediaAvSyncGroupRuntime::LifecycleState
 MediaAvSyncGroupRuntime::lifecycleState() const noexcept
 {
     const auto transition = m_transitionService->snapshot();
-    std::lock_guard<std::mutex> lock(m_epochMutex);
     if (transition.poisoned) return LifecycleState::Aborted;
-    const bool pendingRequest = reacquisitionPending(
-        transition.playbackEpoch, m_reacquisitionRequest);
+    const auto reacquisition = reacquisitionSnapshot();
+    const bool pendingRequest =
+        reacquisition.phase != MediaAvReacquisitionPhase::Inactive ||
+        reacquisition.reason.has_value();
     if (transition.readiness == MediaAvGenerationReadiness::Locked &&
         !pendingRequest) {
         return LifecycleState::Active;
@@ -205,55 +321,32 @@ MediaAvSyncGroupRuntime::epochTransitionSnapshot() const noexcept
     return m_transitionService->snapshot();
 }
 
-::media::Result<MediaAvGenerationPurge>
-MediaAvSyncGroupRuntime::beginEpochReacquisition(
-    std::uint64_t oldGeneration,
-    std::uint64_t nextGeneration)
+::media::Result<MediaAvOutputPermitCommitReservation>
+MediaAvSyncGroupRuntime::reserveOutputCommit(
+    std::uint64_t generation) const
 {
-    auto beganAt = m_clock->now();
-    if (!beganAt) {
-        return ::media::Result<MediaAvGenerationPurge>::failure(
-            beganAt.error());
-    }
-    auto purge = m_transitionService->beginReacquisition(
-        oldGeneration, nextGeneration);
-    if (!purge) return purge;
-    {
-        std::lock_guard<std::mutex> lock(m_epochMutex);
-        m_epochReacquisitionBeganAt = beganAt.value();
-    }
-    return purge;
+    return m_transitionService->reserveOutputCommit(generation);
 }
 
-::media::Result<bool>
-MediaAvSyncGroupRuntime::acknowledgeEpochReacquisition(
-    MediaAvGenerationAcknowledgement acknowledgement)
+::media::Result<MediaAvActivatedOutputPermitReservation>
+MediaAvSyncGroupRuntime::reserveActivatedOutput() const
 {
-    auto acknowledged = m_transitionService->acknowledge(
-        std::move(acknowledgement));
-    if (acknowledged && acknowledged.value()) {
-        std::lock_guard<std::mutex> lock(m_epochMutex);
-        m_epochReacquisitionBeganAt.reset();
-    }
-    return acknowledged;
+    return m_transitionService->reserveActivatedOutput();
+}
+
+MediaAvReacquisitionCoordinator*
+MediaAvSyncGroupRuntime::reacquisitionCoordinator() const noexcept
+{
+    std::lock_guard<std::mutex> lock(m_epochMutex);
+    return m_reacquisitionCoordinator.get();
 }
 
 ::media::Status MediaAvSyncGroupRuntime::pollEpochReacquisitionTimeout()
 {
-    std::optional<MediaRunningTime> beganAt;
-    {
-        std::lock_guard<std::mutex> lock(m_epochMutex);
-        beganAt = m_epochReacquisitionBeganAt;
-    }
-    if (!beganAt) {
-        return ::media::Status::failure(::media::ErrorInfo::notInitialized(
-            "A/V sync group has no active epoch reacquisition timeout"));
-    }
-    auto now = m_clock->now();
-    if (!now) return ::media::Status::failure(now.error());
-    auto elapsed = now.value().checkedSubtract(*beganAt);
-    if (!elapsed) return ::media::Status::failure(elapsed.error());
-    return m_transitionService->pollTransitionTimeout(elapsed.value());
+    auto* coordinator = reacquisitionCoordinator();
+    if (coordinator) return coordinator->pollTimeout();
+    return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+        "A/V sync group has no reacquisition coordinator"));
 }
 
 ::media::Result<MediaRunningTime> MediaAvSyncGroupRuntime::mapCanonicalToMaster(

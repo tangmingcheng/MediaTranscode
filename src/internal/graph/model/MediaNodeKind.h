@@ -76,7 +76,7 @@ enum class MediaNodeKind {
     AudioStartupTrim = 50,
     RtpPacketClockBinder = 51,
     RtpClockSnapshotFanout = 52,
-    InitialLockedPacketGate = 53,
+    LockedPacketGate = 53,
     ReservedNodeKind54 = 54,
     RtpSourceClockStateAdapter = 55,
     AvStartupClock = 56,

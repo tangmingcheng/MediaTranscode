@@ -8,6 +8,7 @@
 #include "internal/graph/runtime/channel/MediaAtomicOutputTransaction.h"
 #include "internal/graph/runtime/channel/MediaRequiredInputReader.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
+#include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
 
 #include <array>
 #include <span>
@@ -151,6 +152,8 @@ MediaActivatedStartupReleaseSequencerNode::process(
     }
     MediaBufferRef eventForCommit = m_activatedEvent;
     bool activateInitial = false;
+    bool activateNext = false;
+    std::shared_ptr<MediaAvSyncGroupRuntime> activationGroup;
     switch (release->releaseKind()) {
     case MediaAvStartupReleaseKind::InitialAtomicRelease: {
         if (m_activatedEvent) {
@@ -225,7 +228,7 @@ MediaActivatedStartupReleaseSequencerNode::process(
         }
         auto event = MediaPlaybackEpochActivatedBuffer::create(
             m_groupKey, activationRelease->epoch(),
-            activationRelease->audioOrigin());
+            activationRelease->audioOrigin(), std::nullopt);
         if (!event) {
             return failTerminal(event.error());
         }
@@ -234,6 +237,33 @@ MediaActivatedStartupReleaseSequencerNode::process(
         break;
     }
     case MediaAvStartupReleaseKind::ActiveEpochPassThrough: {
+        activationGroup = context.findAvSyncGroup(m_groupKey);
+        if (!activationGroup) {
+            return failTerminal(::media::ErrorInfo::notInitialized(
+                "Activation release sequencer requires its A/V sync group"));
+        }
+        const auto disposition = activationGroup->classifyStartupRelease(
+            release->releaseKind(),
+            release->epoch().generation,
+            release->completedTransitionSequence());
+        if (!disposition) return failTerminal(disposition.error());
+        if (disposition.value() ==
+            MediaAvStartupReleaseDisposition::DropOld) {
+            m_pendingTransaction.reset();
+            m_reanchoredTransaction.reset();
+            return ::media::Result<MediaNodeProcessResult>::success(
+                MediaNodeProcessResult::progress());
+        }
+        if (disposition.value() ==
+            MediaAvStartupReleaseDisposition::Withhold) {
+            return ::media::Result<MediaNodeProcessResult>::success(
+                MediaNodeProcessResult::waiting());
+        }
+        if (disposition.value() ==
+            MediaAvStartupReleaseDisposition::Reject) {
+            return failTerminal(::media::ErrorInfo::invalidArgument(
+                "Activation release sequencer rejects a release outside the live playback epoch"));
+        }
         const auto* event = dynamic_cast<const MediaPlaybackEpochActivatedBuffer*>(
             m_activatedEvent.get());
         if (!event || event->groupKey() != release->groupKey() ||
@@ -251,13 +281,62 @@ MediaActivatedStartupReleaseSequencerNode::process(
         }
         break;
     }
+    case MediaAvStartupReleaseKind::NextAtomicRelease: {
+        if (!release->completedTransitionSequence()) {
+            return failTerminal(::media::ErrorInfo::invalidArgument(
+                "Activation release sequencer requires a completed transition sequence"));
+        }
+        activationGroup = context.findAvSyncGroup(m_groupKey);
+        const auto reacquisition = activationGroup
+            ? activationGroup->reacquisitionSnapshot()
+            : MediaAvReacquisitionSnapshot{
+                  MediaAvReacquisitionPhase::Inactive,
+                  std::nullopt,
+                  std::nullopt};
+        const auto transition = activationGroup
+            ? activationGroup->epochTransitionSnapshot()
+            : MediaAvEpochTransitionSnapshot{
+                  MediaAvGenerationReadiness::Acquiring,
+                  std::nullopt,
+                  std::nullopt,
+                  false,
+                  true};
+        if (!activationGroup ||
+            reacquisition.phase !=
+                MediaAvReacquisitionPhase::ReadyForActivation ||
+            !reacquisition.transition ||
+            reacquisition.transition->nextGeneration !=
+                release->epoch().generation ||
+            reacquisition.transition->transitionSequence !=
+                *release->completedTransitionSequence() ||
+            transition.poisoned ||
+            transition.readiness !=
+                MediaAvGenerationReadiness::Acquiring ||
+            transition.outputPermitted) {
+            if (activationGroup) activationGroup->markAborted();
+            return failTerminal(::media::ErrorInfo::invalidArgument(
+                "Activation release sequencer rejects a mismatched next-epoch transition"));
+        }
+        auto event = MediaPlaybackEpochActivatedBuffer::create(
+            m_groupKey, release->epoch(), release->audioOrigin(),
+            release->completedTransitionSequence());
+        if (!event) {
+            activationGroup->markAborted();
+            return failTerminal(event.error());
+        }
+        eventForCommit = std::move(event).value();
+        activateNext = true;
+        break;
+    }
     }
 
-    const MediaBufferRef& bound = m_preparationCapability
-        ? m_reanchoredTransaction : transaction->payload();
+    const MediaBufferRef& bound = m_reanchoredTransaction
+        ? m_reanchoredTransaction : m_pendingTransaction;
     std::vector<MediaAtomicOutputBatch> batches;
-    batches.reserve((activateInitial ? eventChannels.value().size() : 0) + 1);
-    if (activateInitial) {
+    const bool publishesActivation = activateInitial || activateNext;
+    batches.reserve(
+        (publishesActivation ? eventChannels.value().size() : 0) + 1);
+    if (publishesActivation) {
         for (MediaChannel* channel : eventChannels.value()) {
             batches.push_back({channel, std::span(&eventForCommit, 1)});
         }
@@ -269,6 +348,36 @@ MediaActivatedStartupReleaseSequencerNode::process(
     if (!atomic) return failTerminal(atomic.error());
     if (!atomic.value()) return ::media::Result<MediaNodeProcessResult>::success(
         MediaNodeProcessResult::waiting());
+    std::optional<MediaAvReacquisitionActivationReservation>
+        activationReservation;
+    std::optional<MediaAvStartupReleasePublicationReservation>
+        publicationReservation;
+    if (release->releaseKind() ==
+        MediaAvStartupReleaseKind::ActiveEpochPassThrough) {
+        auto reserved = activationGroup->reserveStartupReleasePublication(
+            release->releaseKind(),
+            release->epoch().generation,
+            release->completedTransitionSequence());
+        if (!reserved) return failTerminal(reserved.error());
+        publicationReservation.emplace(std::move(reserved).value());
+        if (publicationReservation->disposition() ==
+            MediaAvStartupReleaseDisposition::DropOld) {
+            m_pendingTransaction.reset();
+            m_reanchoredTransaction.reset();
+            return ::media::Result<MediaNodeProcessResult>::success(
+                MediaNodeProcessResult::progress());
+        }
+        if (publicationReservation->disposition() ==
+            MediaAvStartupReleaseDisposition::Withhold) {
+            return ::media::Result<MediaNodeProcessResult>::success(
+                MediaNodeProcessResult::waiting());
+        }
+        if (publicationReservation->disposition() ==
+            MediaAvStartupReleaseDisposition::Reject) {
+            return failTerminal(::media::ErrorInfo::invalidArgument(
+                "Activation release sequencer lost live playback publication authorization"));
+        }
+    }
     if (activateInitial) {
         if (m_preparationCapability) {
             if (auto committed = m_preparationCapability->authorizeRelease(
@@ -286,10 +395,63 @@ MediaActivatedStartupReleaseSequencerNode::process(
                        release->epoch(), release->audioOrigin()); !activated) {
             return failTerminal(activated.error());
         }
+        activationGroup = context.findAvSyncGroup(m_groupKey);
+        if (!activationGroup) {
+            return failTerminal(::media::ErrorInfo::notInitialized(
+                "Activation release sequencer requires its A/V sync group"));
+        }
+        auto reserved = activationGroup->reserveStartupReleasePublication(
+            release->releaseKind(),
+            release->epoch().generation,
+            release->completedTransitionSequence());
+        if (!reserved) return failTerminal(reserved.error());
+        publicationReservation.emplace(std::move(reserved).value());
+        if (publicationReservation->disposition() !=
+            MediaAvStartupReleaseDisposition::Publish) {
+            activationGroup->markAborted();
+            return failTerminal(::media::ErrorInfo::cancelled(
+                "Activation release sequencer initial epoch lost publication authorization"));
+        }
+        m_activatedEvent = eventForCommit;
+    } else if (activateNext) {
+        auto reserved = activationGroup->reserveReacquisitionActivation(
+            release->epoch().generation,
+            *release->completedTransitionSequence());
+        if (!reserved) {
+            activationGroup->markAborted();
+            return failTerminal(reserved.error());
+        }
+        activationReservation.emplace(std::move(reserved).value());
+        if (auto activated = m_capability.activateNext(
+                release->epoch(), release->audioOrigin(),
+                *release->completedTransitionSequence()); !activated) {
+            activationReservation->abandon();
+            activationGroup->markAborted();
+            return failTerminal(activated.error());
+        }
+        if (auto authorized =
+                activationReservation->authorizePublication();
+            !authorized) {
+            activationReservation->abandon();
+            return failTerminal(authorized.error());
+        }
+        if (auto finalized =
+                activationReservation->finalizePublication();
+            !finalized) {
+            activationReservation->abandon();
+            return failTerminal(finalized.error());
+        }
         m_activatedEvent = eventForCommit;
     }
-    if (auto committed = atomic.value()->commit(); !committed)
+    if (activateNext) {
+        atomic.value()->commitReserved();
+        activationReservation->completePublished();
+    } else if (publicationReservation) {
+        atomic.value()->commitReserved();
+        publicationReservation->completePublished();
+    } else if (auto committed = atomic.value()->commit(); !committed) {
         return failTerminal(committed.error());
+    }
     m_pendingTransaction.reset();
     m_reanchoredTransaction.reset();
     return ::media::Result<MediaNodeProcessResult>::success(

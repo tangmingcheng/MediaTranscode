@@ -105,6 +105,10 @@ MediaResolvedAudioSource resolvedSource(const MediaInputAudioStreamInfo& input)
     input.channelLayout = probe.value().descriptor.audio.channelLayout;
     input.sampleFormat = probe.value().descriptor.audio.sampleFormat;
     input.bitrateBitsPerSecond = probe.value().descriptor.codec.bitrate;
+    if (probe.value().maximumAccessUnitSamples > 0) {
+        input.maximumAccessUnitSamples =
+            probe.value().maximumAccessUnitSamples;
+    }
     return planKnownAudio(std::move(input), options);
 }
 

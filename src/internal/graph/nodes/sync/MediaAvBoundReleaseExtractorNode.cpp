@@ -8,6 +8,7 @@
 #include "internal/graph/runtime/channel/MediaRequiredInputReader.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
+#include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
 
 #include <array>
 #include <span>
@@ -15,13 +16,20 @@
 
 namespace media::ffmpeg::graph {
 
-MediaAvBoundReleaseExtractorNode::MediaAvBoundReleaseExtractorNode(MediaNodeId nodeId)
-    : FFmpegNodeRuntime(nodeId, staticKind(), "MediaAvBoundReleaseExtractorNode") {}
+MediaAvBoundReleaseExtractorNode::MediaAvBoundReleaseExtractorNode(
+    MediaNodeId nodeId,
+    MediaAvSyncGroupKey groupKey)
+    : FFmpegNodeRuntime(nodeId, staticKind(), "MediaAvBoundReleaseExtractorNode")
+    , m_groupKey(std::move(groupKey))
+{
+}
 
 MediaAvBoundReleaseExtractorNode::MediaAvBoundReleaseExtractorNode(
     MediaNodeId nodeId,
+    MediaAvSyncGroupKey groupKey,
     MediaAvStartupVideoPreparationCapability capability)
     : FFmpegNodeRuntime(nodeId, staticKind(), "MediaAvBoundReleaseExtractorNode")
+    , m_groupKey(std::move(groupKey))
     , m_preparationCapability(std::move(capability))
 {
 }
@@ -137,8 +145,34 @@ void MediaAvBoundReleaseExtractorNode::resetState() noexcept
     return ::media::Status::success();
 }
 
-::media::Status MediaAvBoundReleaseExtractorNode::commit(
-    MediaGraphExecutionContext& context)
+::media::Result<MediaAvStartupReleaseDisposition>
+MediaAvBoundReleaseExtractorNode::classifyRelease(
+    MediaGraphExecutionContext& context,
+    const MediaAvStartupReleaseBuffer& release) const
+{
+    if (release.groupKey() != m_groupKey) {
+        return ::media::Result<
+            MediaAvStartupReleaseDisposition>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "A/V bound release extractor rejects a mismatched sync group"));
+    }
+    auto group = context.findAvSyncGroup(m_groupKey);
+    if (!group || group->key() != m_groupKey) {
+        return ::media::Result<
+            MediaAvStartupReleaseDisposition>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "A/V bound release extractor requires its planned sync group"));
+    }
+    return group->classifyStartupRelease(
+        release.releaseKind(),
+        release.epoch().generation,
+        release.completedTransitionSequence());
+}
+
+::media::Result<MediaAvStartupReleaseDisposition>
+MediaAvBoundReleaseExtractorNode::commit(
+    MediaGraphExecutionContext& context,
+    const MediaAvStartupReleaseBuffer& release)
 {
     const std::array<MediaAtomicOutputBatch, 2> batches{
         MediaAtomicOutputBatch{
@@ -147,12 +181,49 @@ void MediaAvBoundReleaseExtractorNode::resetState() noexcept
             context.findOutputChannel(nodeId(), "audio"), m_stagedAudio}};
     auto transaction = MediaAtomicOutputTransaction::acquire(
         "A/V bound release extractor", batches);
-    if (!transaction) return ::media::Status::failure(transaction.error());
-    if (!transaction.value()) {
-        return ::media::Status::failure(::media::ErrorInfo::wouldBlock(
-            "A/V bound release extractor outputs are full"));
+    if (!transaction) {
+        return ::media::Result<
+            MediaAvStartupReleaseDisposition>::failure(
+            transaction.error());
     }
-    return transaction.value()->commit();
+    if (!transaction.value()) {
+        return ::media::Result<
+            MediaAvStartupReleaseDisposition>::failure(
+            ::media::ErrorInfo::wouldBlock(
+                "A/V bound release extractor outputs are full"));
+    }
+    auto group = context.findAvSyncGroup(m_groupKey);
+    if (!group || group->key() != m_groupKey) {
+        return ::media::Result<
+            MediaAvStartupReleaseDisposition>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "A/V bound release extractor requires its planned sync group"));
+    }
+    auto publication = group->reserveStartupReleasePublication(
+        release.releaseKind(),
+        release.epoch().generation,
+        release.completedTransitionSequence());
+    if (!publication) {
+        return ::media::Result<
+            MediaAvStartupReleaseDisposition>::failure(
+            publication.error());
+    }
+    const auto disposition = publication.value().disposition();
+    if (disposition == MediaAvStartupReleaseDisposition::Publish) {
+        transaction.value()->commitReserved();
+        publication.value().completePublished();
+    }
+    return ::media::Result<MediaAvStartupReleaseDisposition>::success(
+        disposition);
+}
+
+void MediaAvBoundReleaseExtractorNode::discardPendingRelease() noexcept
+{
+    m_pending.reset();
+    m_preparationTransaction.reset();
+    m_stagedVideo.clear();
+    m_stagedAudio.clear();
+    m_releaseStaged = false;
 }
 
 ::media::Result<MediaNodeProcessResult>
@@ -175,9 +246,46 @@ MediaAvBoundReleaseExtractorNode::onProcess(MediaGraphExecutionContext& context)
         }
         if (phase == MediaAvStartupVideoPreparationPhase::ReleaseCommitted &&
             m_initialOutputReservation) {
-            if (auto committed = m_initialOutputReservation->commit(); !committed)
+            const auto* transaction = dynamic_cast<
+                const MediaStartupReleaseTransactionBuffer*>(
+                    m_preparationTransaction.get());
+            const auto* release =
+                transaction ? transaction->release() : nullptr;
+            if (!release) {
+                return ::media::Result<MediaNodeProcessResult>::failure(
+                    ::media::ErrorInfo::invalidArgument(
+                        "A/V bound release extractor lost its initial release authorization"));
+            }
+            std::optional<MediaAvStartupReleasePublicationReservation>
+                publication;
+            if (auto committed = m_initialOutputReservation->commit([&] {
+                    auto group = context.findAvSyncGroup(m_groupKey);
+                    if (!group || group->key() != m_groupKey) {
+                        return ::media::Status::failure(
+                            ::media::ErrorInfo::notInitialized(
+                                "A/V bound release extractor requires its planned sync group"));
+                    }
+                    auto reserved =
+                        group->reserveStartupReleasePublication(
+                            release->releaseKind(),
+                            release->epoch().generation,
+                            release->completedTransitionSequence());
+                    if (!reserved) {
+                        return ::media::Status::failure(
+                            reserved.error());
+                    }
+                    publication.emplace(std::move(reserved).value());
+                    return publication->disposition() ==
+                            MediaAvStartupReleaseDisposition::Publish
+                        ? ::media::Status::success()
+                        : ::media::Status::failure(
+                              ::media::ErrorInfo::cancelled(
+                                  "A/V bound release extractor initial release lost live playback authorization"));
+                });
+                !committed)
                 return ::media::Result<MediaNodeProcessResult>::failure(
                     committed.error());
+            publication->completePublished();
             logFirstCommit();
             m_initialOutputReservation.reset();
             m_stagedVideo.clear();
@@ -268,23 +376,49 @@ MediaAvBoundReleaseExtractorNode::onProcess(MediaGraphExecutionContext& context)
             ::media::ErrorInfo::invalidArgument(
                 "A/V bound release extractor requires a startup release"));
     }
+    auto classified = classifyRelease(context, *release);
+    if (!classified) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            classified.error());
+    }
+    if (classified.value() == MediaAvStartupReleaseDisposition::DropOld) {
+        discardPendingRelease();
+        return processProgress();
+    }
+    if (classified.value() == MediaAvStartupReleaseDisposition::Withhold) {
+        return processWaiting();
+    }
+    if (classified.value() == MediaAvStartupReleaseDisposition::Reject) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "A/V bound release extractor rejects a release outside the live playback epoch"));
+    }
     if (!m_releaseStaged) {
         if (auto status = stageRelease(*release); !status) {
             return ::media::Result<MediaNodeProcessResult>::failure(status.error());
         }
     }
-    auto committed = commit(context);
+    auto committed = commit(context, *release);
     if (!committed) {
         if (committed.error().code == ::media::ErrorCode::WouldBlock) {
             return processWaiting();
         }
         return ::media::Result<MediaNodeProcessResult>::failure(committed.error());
     }
+    if (committed.value() == MediaAvStartupReleaseDisposition::DropOld) {
+        discardPendingRelease();
+        return processProgress();
+    }
+    if (committed.value() == MediaAvStartupReleaseDisposition::Withhold) {
+        return processWaiting();
+    }
+    if (committed.value() == MediaAvStartupReleaseDisposition::Reject) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "A/V bound release extractor lost live playback authorization"));
+    }
     logFirstCommit();
-    m_pending.reset();
-    m_stagedVideo.clear();
-    m_stagedAudio.clear();
-    m_releaseStaged = false;
+    discardPendingRelease();
     return processProgress();
 }
 
@@ -461,17 +595,14 @@ MediaAvBoundReleaseExtractorNode::processBoundRelease(
             ::media::ErrorInfo::invalidArgument(
                 "A/V bound release extractor bound input requires a release transaction"));
     }
-    const auto snapshot = m_preparationCapability->snapshot();
-    if (snapshot.phase != MediaAvStartupVideoPreparationPhase::ReleaseCommitted ||
-        snapshot.generation != release->epoch().generation) {
-        return ::media::Result<MediaNodeProcessResult>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "A/V bound release extractor rejects mismatched bound release"));
-    }
     std::size_t firstVideoIndex = 0;
     if (release->releaseKind() ==
         MediaAvStartupReleaseKind::InitialAtomicRelease) {
-        if (snapshot.releaseIdentity != transaction->releaseIdentity()) {
+        const auto snapshot = m_preparationCapability->snapshot();
+        if (snapshot.phase !=
+                MediaAvStartupVideoPreparationPhase::ReleaseCommitted ||
+            snapshot.generation != release->epoch().generation ||
+            snapshot.releaseIdentity != transaction->releaseIdentity()) {
             return ::media::Result<MediaNodeProcessResult>::failure(
                 ::media::ErrorInfo::invalidArgument(
                     "A/V bound release extractor rejects mismatched initial release identity"));
@@ -480,6 +611,23 @@ MediaAvBoundReleaseExtractorNode::processBoundRelease(
         m_preparationTransaction.reset();
         return processProgress();
     }
+    auto classified = classifyRelease(context, *release);
+    if (!classified) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            classified.error());
+    }
+    if (classified.value() == MediaAvStartupReleaseDisposition::DropOld) {
+        discardPendingRelease();
+        return processProgress();
+    }
+    if (classified.value() == MediaAvStartupReleaseDisposition::Withhold) {
+        return processWaiting();
+    }
+    if (classified.value() == MediaAvStartupReleaseDisposition::Reject) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "A/V bound release extractor rejects an unbound playback generation"));
+    }
     if (!m_releaseStaged) {
         if (auto status = stageRelease(
                 *release, firstVideoIndex); !status) {
@@ -487,18 +635,26 @@ MediaAvBoundReleaseExtractorNode::processBoundRelease(
                 status.error());
         }
     }
-    auto committed = commit(context);
+    auto committed = commit(context, *release);
     if (!committed) {
         return committed.error().code == ::media::ErrorCode::WouldBlock
             ? processWaiting()
             : ::media::Result<MediaNodeProcessResult>::failure(
                   committed.error());
     }
-    m_pending.reset();
-    m_preparationTransaction.reset();
-    m_stagedVideo.clear();
-    m_stagedAudio.clear();
-    m_releaseStaged = false;
+    if (committed.value() == MediaAvStartupReleaseDisposition::DropOld) {
+        discardPendingRelease();
+        return processProgress();
+    }
+    if (committed.value() == MediaAvStartupReleaseDisposition::Withhold) {
+        return processWaiting();
+    }
+    if (committed.value() == MediaAvStartupReleaseDisposition::Reject) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "A/V bound release extractor lost live playback authorization"));
+    }
+    discardPendingRelease();
     return processProgress();
 }
 

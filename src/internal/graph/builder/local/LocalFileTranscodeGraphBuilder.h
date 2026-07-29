@@ -11,7 +11,6 @@ namespace media::ffmpeg::graph {
 struct LocalFileTranscodeOptions {
     std::string inputUrl;
     std::string outputUrl;
-    std::string outputFormat;
     MediaTranscodeParameterSet parameters;
 };
 

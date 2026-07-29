@@ -1,5 +1,7 @@
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 
+#include "internal/graph/model/MediaAtomicOutputPolicyContract.h"
+#include "internal/graph/runtime/channel/MediaAtomicOutputTransaction.h"
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
@@ -39,6 +41,12 @@ void FFmpegNodeRuntime::abort(MediaGraphExecutionContext& context) noexcept
 }
 
 ::media::Result<MediaNodeProcessResult> FFmpegNodeRuntime::process(MediaGraphExecutionContext& context)
+{
+    return processImpl(context);
+}
+
+::media::Result<MediaNodeProcessResult> FFmpegNodeRuntime::processImpl(
+    MediaGraphExecutionContext& context)
 {
     if (m_finished) {
         return ::media::Result<MediaNodeProcessResult>::success(
@@ -120,6 +128,27 @@ bool FFmpegNodeRuntime::retainsPendingOutput(const MediaBufferRef& buffer) const
 bool FFmpegNodeRuntime::pendingOutputIsCurrent(const MediaBufferRef&) const noexcept
 {
     return true;
+}
+
+::media::Result<
+    std::optional<MediaProtocolOutputGenerationCommitReservation>>
+FFmpegNodeRuntime::reserveOutputCommit(const MediaBufferRef&) const
+{
+    return ::media::Result<
+        std::optional<MediaProtocolOutputGenerationCommitReservation>>::
+        success(std::nullopt);
+}
+
+::media::Status FFmpegNodeRuntime::commitReservedOutput(
+    const MediaBufferRef&)
+{
+    return ::media::Status::success();
+}
+
+::media::Status FFmpegNodeRuntime::cancelReservedOutput(
+    const MediaBufferRef&)
+{
+    return ::media::Status::success();
 }
 
 void FFmpegNodeRuntime::cancelPendingOutputTransfer() noexcept
@@ -563,6 +592,27 @@ FFmpegNodeRuntime::tryPopFirstInputWithChannelOptional(
         }
     }
 
+    std::optional<MediaProtocolOutputGenerationCommitReservation> reservation;
+    auto reserved = reserveOutputCommit(buffer);
+    if (!reserved) {
+        if (reserved.error().code == ::media::ErrorCode::Cancelled) {
+            return cancelReservedOutput(buffer);
+        }
+        return ::media::Status::failure(reserved.error());
+    }
+    reservation = std::move(reserved).value();
+    auto atomic = publishAtomicOutput(
+        context, channels, buffer, action);
+    if (!atomic) return ::media::Status::failure(atomic.error());
+    if (atomic.value() == AtomicTransferResult::Waiting) {
+        m_pendingTransfer = PendingTransfer{buffer, channels, 0, true};
+        return ::media::Status::failure(
+            ::media::ErrorInfo::wouldBlock(
+                "FFmpegNodeRuntime atomic output would block"));
+    }
+    if (atomic.value() == AtomicTransferResult::Published) {
+        return commitReservedOutput(buffer);
+    }
     for (std::size_t index = 0; index < channels.size(); ++index) {
         MediaChannel* channel = channels[index];
         const MediaQueuePushOutcome outcome = channel->pushOutcome(buffer);
@@ -585,7 +635,57 @@ FFmpegNodeRuntime::tryPopFirstInputWithChannelOptional(
         logEdgeTransfer(context, MediaGraphDiagnosticPhase::RuntimeEdge, action,
                         nodeId(), name(), *channel, buffer);
     }
-    return ::media::Status::success();
+    return commitReservedOutput(buffer);
+}
+
+::media::Result<FFmpegNodeRuntime::AtomicTransferResult>
+FFmpegNodeRuntime::publishAtomicOutput(
+    MediaGraphExecutionContext& context,
+    const std::vector<MediaChannel*>& channels,
+    const MediaBufferRef& buffer,
+    const char* action)
+{
+    const std::size_t atomicCount = std::count_if(
+        channels.begin(), channels.end(), [](const MediaChannel* channel) {
+            return MediaAtomicOutputPolicyContract::accepts(
+                channel->policy());
+        });
+    if (atomicCount == 0) {
+        return ::media::Result<AtomicTransferResult>::success(
+            AtomicTransferResult::NotApplicable);
+    }
+    if (atomicCount != channels.size()) {
+        return ::media::Result<AtomicTransferResult>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "FFmpegNodeRuntime rejects mixed atomic and non-atomic fan-out"));
+    }
+    std::vector<MediaAtomicOutputBatch> batches;
+    batches.reserve(channels.size());
+    for (MediaChannel* channel : channels) {
+        batches.push_back(
+            MediaAtomicOutputBatch{channel, std::span(&buffer, 1)});
+    }
+    auto transaction = MediaAtomicOutputTransaction::acquire(
+        "FFmpegNodeRuntime output", batches);
+    if (!transaction) {
+        return ::media::Result<AtomicTransferResult>::failure(
+            transaction.error());
+    }
+    if (!transaction.value()) {
+        return ::media::Result<AtomicTransferResult>::success(
+            AtomicTransferResult::Waiting);
+    }
+    if (auto committed = transaction.value()->commit(); !committed) {
+        return ::media::Result<AtomicTransferResult>::failure(
+            committed.error());
+    }
+    for (MediaChannel* channel : channels) {
+        logEdgeTransfer(
+            context, MediaGraphDiagnosticPhase::RuntimeEdge, action,
+            nodeId(), name(), *channel, buffer);
+    }
+    return ::media::Result<AtomicTransferResult>::success(
+        AtomicTransferResult::Published);
 }
 
 ::media::Status FFmpegNodeRuntime::drainPendingTransfers(MediaGraphExecutionContext& context,
@@ -594,6 +694,39 @@ FFmpegNodeRuntime::tryPopFirstInputWithChannelOptional(
     waiting = false;
     while (m_pendingTransfer) {
         PendingTransfer& transfer = *m_pendingTransfer;
+        std::optional<MediaProtocolOutputGenerationCommitReservation>
+            reservation;
+        auto reserved = reserveOutputCommit(transfer.buffer);
+        if (!reserved) {
+            if (reserved.error().code == ::media::ErrorCode::Cancelled) {
+                auto cancelled = cancelReservedOutput(transfer.buffer);
+                m_pendingTransfer.reset();
+                return cancelled;
+            }
+            return ::media::Status::failure(reserved.error());
+        }
+        reservation = std::move(reserved).value();
+        if (transfer.atomic) {
+            auto atomic = publishAtomicOutput(
+                context, transfer.channels, transfer.buffer,
+                "pending_emit");
+            if (!atomic) {
+                return ::media::Status::failure(atomic.error());
+            }
+            if (atomic.value() == AtomicTransferResult::Waiting) {
+                waiting = true;
+                return ::media::Status::success();
+            }
+            if (atomic.value() != AtomicTransferResult::Published) {
+                return ::media::Status::failure(
+                    ::media::ErrorInfo::internalError(
+                        "FFmpegNodeRuntime lost its atomic pending contract"));
+            }
+            auto committed = commitReservedOutput(transfer.buffer);
+            if (!committed) return committed;
+            m_pendingTransfer.reset();
+            continue;
+        }
         MediaChannel* channel = transfer.channels[transfer.nextChannel];
         const MediaQueuePushOutcome outcome = channel->pushOutcome(transfer.buffer);
         if (outcome == MediaQueuePushOutcome::WouldBlock) {
@@ -614,6 +747,8 @@ FFmpegNodeRuntime::tryPopFirstInputWithChannelOptional(
         }
         ++transfer.nextChannel;
         if (transfer.nextChannel == transfer.channels.size()) {
+            auto committed = commitReservedOutput(transfer.buffer);
+            if (!committed) return committed;
             m_pendingTransfer.reset();
         }
     }

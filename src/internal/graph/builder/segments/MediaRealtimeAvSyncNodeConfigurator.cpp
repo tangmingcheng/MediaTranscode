@@ -69,7 +69,7 @@ MediaRealtimeAvSyncNodeConfigurator::configureRtpPacketClockBinder(
 }
 
 ::media::Result<void>
-MediaRealtimeAvSyncNodeConfigurator::configureInitialLockedPacketGate(
+MediaRealtimeAvSyncNodeConfigurator::configureLockedPacketGate(
     MediaGraph& graph,
     MediaNodeId node,
     MediaStreamKind stream,
@@ -80,15 +80,32 @@ MediaRealtimeAvSyncNodeConfigurator::configureInitialLockedPacketGate(
         ? plan.assembly.video.acquiringTimeout
         : plan.assembly.audio.acquiringTimeout;
     if (auto status = setOption(
-            graph, node, "initial_locked_gate.stream",
+            graph, node, "locked_packet_gate.stream",
             isVideo ? "video" : "audio"); !status) return status;
     if (auto status = setOption(
-            graph, node, "initial_locked_gate.acquiring_timeout_ns",
+            graph, node, "locked_packet_gate.acquiring_timeout_ns",
             std::to_string(acquiringTimeout.nanoseconds())); !status) {
         return status;
     }
+    if (plan.assembly.generationPolicy !=
+            MediaInitialGenerationPolicy::FirstLockedOnlyFailOnChange ||
+        plan.assembly.initialGeneration == 0) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Locked packet gate requires the exact planned initial generation policy"));
+    }
+    if (auto status = setOption(
+            graph, node, "locked_packet_gate.initial_generation",
+            std::to_string(plan.assembly.initialGeneration)); !status) {
+        return status;
+    }
+    if (auto status = setOption(
+            graph, node, "locked_packet_gate.initial_generation_policy",
+            "first_locked_only_fail_on_change"); !status) {
+        return status;
+    }
     return setOption(
-        graph, node, "initial_locked_gate.sync_group",
+        graph, node, "locked_packet_gate.sync_group",
         plan.groupKey.value());
 }
 
@@ -256,6 +273,19 @@ MediaRealtimeAvSyncNodeConfigurator::configureActivationSequencer(
         graph, node, "activated_startup_release_sequencer.output_lead_ns",
         std::to_string(
             plan.synchronization.startup.outputLeadNs->nanoseconds()));
+}
+
+::media::Result<void>
+MediaRealtimeAvSyncNodeConfigurator::configureBoundReleaseExtractor(
+    MediaGraph& graph,
+    MediaNodeId node,
+    const MediaRealtimeAvSyncRuntimePlan& plan)
+{
+    return setOption(
+        graph,
+        node,
+        "av_bound_release_extractor.sync_group",
+        plan.groupKey.value());
 }
 
 } // namespace media::ffmpeg::graph
