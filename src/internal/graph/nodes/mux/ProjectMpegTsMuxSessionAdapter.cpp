@@ -203,12 +203,12 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
         return fail(invalid(
             "project MPEG-TS mux runtime plan sync group is not registered"));
     }
+    std::optional<::media::ErrorInfo> activationFailure;
     {
         auto permitted = m_generationState->permitActivatedGeneration(
             *group, runtimePlan->epoch().generation,
             runtimePlan->completedTransitionSequence());
         if (!permitted) return fail(permitted.error());
-        std::optional<::media::ErrorInfo> activationFailure;
         if (m_epoch || m_group || m_plan || m_session) {
             activationFailure = invalid(
                 "project MPEG-TS mux session rejects an uncleared runtime generation");
@@ -220,8 +220,8 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
             m_generation.store(
                 runtimePlan->epoch().generation, std::memory_order_release);
         }
-        if (activationFailure) return fail(std::move(*activationFailure));
     }
+    if (activationFailure) return fail(std::move(*activationFailure));
     return tryActivate(context);
 }
 

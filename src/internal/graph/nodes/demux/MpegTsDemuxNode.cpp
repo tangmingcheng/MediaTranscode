@@ -392,10 +392,6 @@ MpegTsDemuxNode::sourceClockCheckpoint(std::uint64_t packetPosition)
     if (!checkpoint) {
         return ::media::Result<MediaNodeProcessResult>::failure(checkpoint.error());
     }
-    if (m_lockedProjectionGeneration &&
-        checkpoint.value().generation < *m_lockedProjectionGeneration) {
-        return processProgress();
-    }
     const bool invalidPesProvenance =
         envelope.provenance.readiness ==
         MediaSourceClockReadiness::ReacquireRequired;
