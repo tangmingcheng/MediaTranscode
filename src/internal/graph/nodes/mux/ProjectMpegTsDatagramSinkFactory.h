@@ -3,6 +3,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
 #include "internal/graph/protocol/mpegts/MediaTsDatagramSink.h"
 #include "internal/graph/protocol/mpegts/MediaTsMuxPlan.h"
+#include "internal/graph/protocol/rtp/MediaMpegTsRtpContinuityState.h"
 #include "internal/graph/sync/MediaPlaybackEpoch.h"
 #include "internal/graph/time/MediaSharedNtpEpoch.h"
 
@@ -22,6 +23,8 @@ public:
         const MediaTsMuxPlan& muxPlan,
         const MediaPlaybackEpoch& epoch,
         const std::shared_ptr<const MediaSharedNtpEpoch>& sharedNtpEpoch,
+        const std::shared_ptr<MediaMpegTsRtpContinuityState>&
+            rtpContinuity,
         MediaOutputByteSink* udpByteSink);
 
 private:

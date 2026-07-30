@@ -1,42 +1,42 @@
 # MediaTranscode Quality Score
 
-> Scope: PR #25 against `master`, evaluated against an industrial DAG media transcoding engine standard. Updated 2026-07-29.
+> Scope: `codex/realtime-cross-layout` against `origin/master` at `3852ca99fb8d2efc5fd164f9464e442165b9f6d5`, including the current tracked and named untracked feature files. Updated 2026-07-30.
 
 | Dimension | Weight | Score | Evidence summary |
 |---|---:|---:|---|
-| Architecture and DAG model | 15 | 15 | The final realtime plan contains exactly one output product: `singleStreamOutput` or `avSyncRuntime`. Synchronized A/V uses canonical input, scheduler, and scheduled RTP or Project MPEG-TS adapters. |
-| Planner decision ownership | 12 | 12 | Planner owns topology, framing, pacing, queue, startup, and stream-bound decisions. Legacy normalization, dual-output/mux, and barrier fields were removed from the final plan. |
-| Scheduling and concurrency | 13 | 12 | Atomic activation, bounded queues, canonical lineage, generation transitions, and scheduler ownership are explicit. Latest MPEG-TS three-process acceptance had no recovering, worker, drop, or runtime errors. |
-| Node responsibility and decoupling | 12 | 9 | Input preparation, A/V planning, scheduling, protocol adapters, and runtime execution are separated. Some realtime builder, mux adapter, capability, and runtime files remain large. |
-| RAII and resource safety | 10 | 10 | FFmpeg contexts, packets, frames, sessions, sockets, buffers, and workers use scoped ownership. Reusable framing and packet workspaces remain session/cursor bounded. |
-| Performance and resource efficiency | 10 | 9 | Hardware paths, bounded queues/pools, reusable workspaces, and runtime telemetry are present. Latest MPEG-TS late working set stayed within 226.05-226.71 MiB with six drift samples over 30 seconds. |
-| Error model and failure boundaries | 8 | 8 | Required planner contracts, immutable runtime identity checks, `Result`/`Status`, compiler guards, and worker failure propagation fail closed with actionable causes. |
-| Tests and verification | 10 | 6 | By user policy, validation is exclusively real local/realtime CLI with FFmpeg/VLC plus internal memory and A/V drift telemetry; all tests and CI were intentionally removed. |
-| Maintainability and documentation | 10 | 7 | Architecture, runtime diagnostics, and production commands remain navigable. Removing automated specifications increases regression-analysis cost, and several production files remain large. |
-| **Total** | **100** | **88** | **B+: current production acceptance passes; the main industrial gap is reliance on manual real-media gates without automated regression coverage.** |
+| Architecture and DAG model | 15 | 15 | Input clock and output transport are orthogonal planner products; all nine layouts converge on one canonical scheduler and exactly one output adapter. |
+| Planner decision ownership | 12 | 12 | Protocol, topology, queue, timing, and transport facts are planner-owned; downstream plan decoding now receives every zero-value policy explicitly. |
+| Scheduling and concurrency | 13 | 11 | Atomic generation/audio commits, bounded queues, persistent RTP sequence/counter state, key-frame restart, and TS discontinuity are explicit. A clean real-media generation-transition gate is still missing. |
+| Node responsibility and decoupling | 12 | 8 | Clock adapters, mux, transport, SDP, validation, and runtime state are separated, but the 790-line MPEG-TS plan codec and several 400-633-line runtime/planner files remain broad. |
+| RAII and resource safety | 10 | 10 | FFmpeg objects, sockets, sessions, packet cursors, commit reservations, and shared continuity state use scoped ownership. |
+| Performance and resource efficiency | 10 | 9 | Accepted paths stayed near 3-6% process CPU with stable late working sets; one URL/RTSP-to-TS/UDP gate recorded 42 bounded drops. |
+| Error model and failure boundaries | 8 | 8 | Invalid and incomplete plans fail closed; runtime generation, transport, and commit identities are checked explicitly. |
+| Tests and verification | 10 | 9 | All nine paths have real CLI/FFmpeg/VLC evidence beyond two minutes. The two post-fix gates ran 136.2 and 155.5 seconds with zero worker/runtime errors or drops. |
+| Maintainability and documentation | 10 | 7 | Architecture, README, plan, completion report, and exact commands are current and consistently encoded; positional option serialization and large files remain costly. |
+| **Total** | **100** | **89** | **B+: implementation, repository standards, and real-media acceptance pass; remaining gaps are non-blocking maintainability and long-soak risks.** |
 
 ## Review Verdict
 
-**PASS under the user-authoritative production acceptance policy.** The tests/CI deletion is intentional and does not block this review. No automated test suite or CI was run.
+**FINAL PASS.** Planner-only ownership, RAII, responsibilities, duplicate semantics, temporary-test cleanup, UTF-8/CRLF hygiene, build, and all nine real-media gates satisfy the delivery contract.
 
 ## Acceptance Evidence
 
-- Clean rebuild succeeded.
-- Local CLI completed 1828/1828 with errors/worker errors/drops at zero; full decode exited 0.
-- MPEG-TS CLI, FFmpeg, and VLC appeared within 9 seconds and ran for 30 seconds; final errors/worker errors/drops were zero.
-- MPEG-TS late working set stayed within 226.05-226.71 MiB; six `av_drift_trace` samples had no recovering state.
-- All three MPEG-TS processes exited without residual processes.
+- Nine real-media input/output paths have CLI logs under `out/acceptance/realtime-cross-layout/`.
+- Post-fix MPEG-TS/UDP to MPEG-TS/RTP: 136.2 seconds, zero worker/runtime errors/drops, 5.475% process CPU, 251,850,752-byte final working set, and no perceptible A/V drift.
+- Post-fix MPEG-TS/UDP to separate RTP: 155.5 seconds, zero worker/runtime errors/drops, 5.236% process CPU, 245,547,008-byte final working set, and no perceptible A/V drift.
+- The other seven gates are configured for 145/170 seconds and each log exceeds 120 seconds.
+- No temporary test source, target, executable, object, symbol, or build directory remains.
+- URL/RTSP to MPEG-TS/UDP completed with zero worker/runtime errors and 42 bounded drops.
 
-## Primary Project Risks
+## Primary Risks
 
-1. Without tests or CI, deterministic concurrency, fault injection, boundary contracts, and platform regressions depend on repeated manual production gates.
-2. The latest MPEG-TS evidence covers 30 seconds with six drift samples; it is not a long soak.
-3. Realtime builder, mux adapter, capability, codec, and runtime files still need responsibility-focused decomposition.
-4. Advanced optimizer, generic GPU execution, and distributed execution remain explicitly unsupported rather than production-ready.
+1. The MPEG-TS plan codec uses many positional integers and string keys, increasing protocol-evolution risk.
+2. URL/RTSP to MPEG-TS/UDP produced 42 bounded drops; longer source-specific observation is advisable.
+3. Manual-only gates provide no deterministic concurrency, fault-injection, or regression safety net.
+4. Long-duration generation-transition and fault-injection coverage remains manual.
 
 ## Priority Improvements
 
-1. Make local, MPEG-TS, and RTP real-media gates repeatable and archive their commands, telemetry, and artifacts.
-2. Extend objective drift, discontinuity, and repeated lifecycle evidence to 30-60 minute soaks.
-3. Split oversized realtime builder, mux adapter, capability, codec, and runtime files by responsibility.
-4. Continue keeping unsupported optimizer/GPU/distributed capabilities fail-closed.
+1. Resolve or formally bound the 42 URL/RTSP-to-MPEG-TS/UDP drops.
+2. Add a longer manual generation-transition/fault-injection gate.
+3. Split the MPEG-TS plan codec and other oversized runtime/planner files by protocol fact group and responsibility.

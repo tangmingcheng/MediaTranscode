@@ -506,8 +506,18 @@ MediaCanonicalInputNode::audioSampleCountFor(
                 (canonical.value()->media()->isKeyFrame() ? "1" : "0") +
                 " startup_unit=" + (unit.keyFrame ? "1" : "0"));
     }
+    if (!m_syncGroup || !m_syncGroup->clock()) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "Canonical input requires the planned sync-group master clock"));
+    }
+    auto observedAt = m_syncGroup->clock()->now();
+    if (!observedAt) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            observedAt.error());
+    }
     auto envelope = MediaAvStartupEnvelopeBuffer::create(
-        canonical.value(), std::move(unit), canonical.value()->canonicalPresentation());
+        canonical.value(), std::move(unit), observedAt.value());
     if (!envelope)
         return ::media::Result<MediaNodeProcessResult>::failure(envelope.error());
     ++m_nextSequence;

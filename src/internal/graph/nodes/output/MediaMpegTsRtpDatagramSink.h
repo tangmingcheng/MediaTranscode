@@ -1,6 +1,5 @@
 #pragma once
 
-#include "internal/graph/nodes/mux/ScheduledRtpSenderConfig.h"
 #include "internal/graph/planner/realtime/MediaMpegTsRtpOutputPlan.h"
 #include "internal/graph/protocol/mpegts/MediaTsDatagramSink.h"
 #include "internal/graph/protocol/rtp/MediaMpegTsRtpPacketizer.h"
@@ -20,6 +19,7 @@ public:
         const MediaMpegTsRtpOutputPlan& plan,
         const MediaPlaybackEpoch& epoch,
         const MediaSharedNtpEpoch& sharedNtpEpoch,
+        std::shared_ptr<MediaMpegTsRtpContinuityState> continuity,
         MediaUdpDatagramSenderPortFactory& portFactory);
     ~MediaMpegTsRtpDatagramSink() noexcept override;
 
@@ -28,6 +28,7 @@ public:
         MediaRunningTime emitOnMaster) override;
     ::media::Status flush() override;
     ::media::Status close() override;
+    void abort() noexcept override;
 
 private:
     MediaMpegTsRtpDatagramSink(
@@ -35,12 +36,14 @@ private:
         MediaMpegTsRtpPacketizer packetizer,
         MediaSharedNtpEpoch ntpEpoch,
         MediaRtcpSenderReportSchedule senderReportSchedule,
-        ScheduledRtpSenderCounters counters,
+        std::shared_ptr<MediaMpegTsRtpContinuityState> continuity,
         std::string cname,
         std::uint32_t ssrc,
         std::uint64_t generation) noexcept;
 
-    ::media::Status dispatchSenderReport(MediaRunningTime now);
+    ::media::Status dispatchSenderReport(
+        MediaRunningTime now,
+        const MediaMpegTsRtpCounterSnapshot& counters);
     ::media::Status sendTerminalReport();
     ::media::Status sendRtcp(
         std::span<const std::uint8_t> datagram) noexcept;
@@ -52,7 +55,7 @@ private:
     MediaMpegTsRtpPacketizer m_packetizer;
     MediaSharedNtpEpoch m_ntpEpoch;
     MediaRtcpSenderReportSchedule m_senderReportSchedule;
-    ScheduledRtpSenderCounters m_counters;
+    std::shared_ptr<MediaMpegTsRtpContinuityState> m_continuity;
     std::string m_cname;
     std::uint32_t m_ssrc;
     std::uint64_t m_generation;

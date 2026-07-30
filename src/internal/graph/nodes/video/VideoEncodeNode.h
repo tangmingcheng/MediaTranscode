@@ -28,6 +28,7 @@ public:
     ::media::ffmpeg::FramePtr pendingFrame;
     std::shared_ptr<const MediaCanonicalLineage> pendingLineage;
     std::set<std::uint64_t> lineageGenerations;
+    bool generationStartPending = true;
 
     void bindCodec(MediaBufferRef owner, AVCodecContext* context) noexcept;
     void resetCodecBinding() noexcept;
@@ -81,6 +82,7 @@ private:
     bool m_firstSubmitDiagnosticEmitted = false;
     bool m_firstPacketDiagnosticEmitted = false;
     std::optional<bool> m_sendWouldBlock;
+    std::optional<bool> m_forceGenerationStartKeyFrame;
     std::shared_ptr<MediaCodecLineageRegistry> m_lineageRegistry;
     std::shared_ptr<MediaVideoEncoderCodecApi> m_codecApi;
     std::shared_ptr<VideoEncodeLineageState> m_lineageState;

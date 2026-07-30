@@ -86,7 +86,7 @@ template <typename Value>
 ::media::Result<Value> parseUnsignedOption(
     const MediaNodeOptions& options,
     const char* key,
-    bool allowZero = false)
+    bool allowZero)
 {
     auto text = requiredNodeOption(&options, Owner, key);
     if (!text) return ::media::Result<Value>::failure(text.error());
@@ -516,9 +516,9 @@ bool sameProtocol(
     auto remoteRtcpAddress = requiredNodeOption(
         &node.options, Owner, RtpKeys[7]);
     auto remoteRtpPort = parseUnsignedOption<std::uint16_t>(
-        node.options, RtpKeys[8]);
+        node.options, RtpKeys[8], false);
     auto remoteRtcpPort = parseUnsignedOption<std::uint16_t>(
-        node.options, RtpKeys[9]);
+        node.options, RtpKeys[9], false);
     auto localPolicy = requiredNodeOption(
         &node.options, Owner, RtpKeys[10]);
     auto localRtpPort = parseUnsignedOption<std::uint16_t>(
@@ -526,9 +526,9 @@ bool sameProtocol(
     auto localRtcpPort = parseUnsignedOption<std::uint16_t>(
         node.options, RtpKeys[12], true);
     auto sendBuffer = parseUnsignedOption<int>(
-        node.options, RtpKeys[13]);
+        node.options, RtpKeys[13], false);
     auto maximumDatagram = parseUnsignedOption<std::size_t>(
-        node.options, RtpKeys[14]);
+        node.options, RtpKeys[14], false);
     auto ioBehavior = requiredNodeOption(
         &node.options, Owner, RtpKeys[15]);
     if (!family || !localAddress || !remoteRtpAddress ||
@@ -568,9 +568,9 @@ bool sameProtocol(
     auto payloadType = parseUnsignedOption<int>(
         node.options, RtpKeys[16], true);
     auto clockRate = parseUnsignedOption<int>(
-        node.options, RtpKeys[17]);
+        node.options, RtpKeys[17], false);
     auto ssrc = parseUnsignedOption<std::uint32_t>(
-        node.options, RtpKeys[18]);
+        node.options, RtpKeys[18], false);
     auto baseTimestamp = parseUnsignedOption<std::uint32_t>(
         node.options, RtpKeys[19], true);
     auto initialSequenceNumber = parseUnsignedOption<std::uint16_t>(
@@ -580,7 +580,7 @@ bool sameProtocol(
     auto reportInterval = requiredPositiveInt64NodeOption(
         &node.options, Owner, RtpKeys[21]);
     auto packetCount = parseUnsignedOption<std::uint8_t>(
-        node.options, RtpKeys[22]);
+        node.options, RtpKeys[22], false);
     auto sdpPath = requiredNodeOption(
         &node.options, Owner, RtpKeys[23]);
     auto originUsername = requiredNodeOption(
@@ -696,7 +696,7 @@ MediaProjectMpegTsPlanSourceNodePlanCodec::decode(const MediaNode& node)
     auto muxText = requiredNodeOption(
         &node.options, Owner, PlanKey);
     auto audioSampleRate = parseUnsignedOption<int>(
-        node.options, AudioSampleRateKey);
+        node.options, AudioSampleRateKey, false);
     auto variant = requiredNodeOption(
         &node.options, Owner, VariantKey);
     auto muxSessionKind = requiredNodeOption(

@@ -27,6 +27,7 @@ enum class CursorPidKind : std::uint8_t { Pat, Pmt, Video, Audio };
 struct MediaTsPacketizerControlState final {
     MediaTsMuxPlan plan;
     std::array<ContinuityState, 4> continuity;
+    std::array<bool, 4> discontinuityPending;
     std::optional<std::uint64_t> activeCursor;
     std::uint64_t nextCursorIdentity = 1;
     std::vector<std::array<std::uint8_t, PacketSize>> packetWorkspace;
@@ -40,11 +41,13 @@ struct MediaTsPacketCursorState final {
     std::shared_ptr<std::vector<std::array<std::uint8_t, PacketSize>>> packets;
     std::uint8_t initialPayloadContinuity;
     bool advancesPayloadContinuity;
+    bool carriesDiscontinuity;
     std::size_t committedOffset = 0;
     struct Pending final {
         std::uint64_t revision;
         std::size_t endOffset;
         std::uint8_t nextPayload;
+        bool clearsDiscontinuity;
     };
     std::optional<Pending> pending;
 };
@@ -63,6 +66,13 @@ ContinuityState& continuity(MediaTsPacketizerControlState& state,
                             CursorPidKind kind) noexcept
 {
     return state.continuity[static_cast<std::size_t>(kind)];
+}
+
+bool& discontinuityPending(
+    MediaTsPacketizerControlState& state,
+    CursorPidKind kind) noexcept
+{
+    return state.discontinuityPending[static_cast<std::size_t>(kind)];
 }
 
 ::media::Result<MediaTsPacketCursor> beginPayload(
@@ -85,9 +95,10 @@ ContinuityState& continuity(MediaTsPacketizerControlState& state,
         return ::media::Result<MediaTsPacketCursor>::failure(
             invalid("MPEG-TS cursor identity space is exhausted"));
     }
+    const bool discontinuity = discontinuityPending(*state, kind);
     auto packets = MediaTsTransportPacketBuilder::payload(
         pid, continuity(*state, kind).nextPayload, segments, randomAccess,
-        std::move(state->packetWorkspace));
+        discontinuity, std::move(state->packetWorkspace));
     if (!packets) {
         return ::media::Result<MediaTsPacketCursor>::failure(packets.error());
     }
@@ -98,6 +109,7 @@ ContinuityState& continuity(MediaTsPacketizerControlState& state,
     cursor->pidKind = kind;
     cursor->initialPayloadContinuity = continuity(*state, kind).nextPayload;
     cursor->advancesPayloadContinuity = true;
+    cursor->carriesDiscontinuity = discontinuity;
     cursor->packets = std::make_shared<std::vector<std::array<std::uint8_t, PacketSize>>>(
         std::move(packets).value());
     ++state->nextCursorIdentity;
@@ -239,7 +251,9 @@ void MediaTsPacketCursor::cancel() noexcept
               (m_state->initialPayloadContinuity + end) & 0x0F)
         : m_state->initialPayloadContinuity;
     m_state->pending = MediaTsPacketCursorState::Pending{
-        revision, end, nextPayload};
+        revision, end, nextPayload,
+        m_state->carriesDiscontinuity &&
+            m_state->committedOffset == 0};
     return ::media::Result<MediaTsPreparedPacketBatch>::success(
         MediaTsPreparedPacketBatch(
             m_state->packets, m_state->committedOffset, count,
@@ -262,6 +276,10 @@ void MediaTsPacketCursor::cancel() noexcept
     }
     continuity(*m_state->owner, m_state->pidKind).nextPayload =
         m_state->pending->nextPayload;
+    if (m_state->pending->clearsDiscontinuity) {
+        discontinuityPending(
+            *m_state->owner, m_state->pidKind) = false;
+    }
     m_state->committedOffset = m_state->pending->endOffset;
     m_state->pending.reset();
     if (finished()) m_state->owner->activeCursor.reset();
@@ -275,12 +293,16 @@ bool MediaTsPacketCursor::finished() const noexcept
 }
 
 ::media::Result<MediaTsTransportPacketizer> MediaTsTransportPacketizer::create(
-    const MediaTsMuxPlan& plan)
+    const MediaTsMuxPlan& plan,
+    bool startsWithDiscontinuity)
 {
     const auto& seeds = plan.parameters().continuity;
     auto state = std::make_shared<MediaTsPacketizerControlState>(
         MediaTsPacketizerControlState{
-            plan, {{{seeds.pat}, {seeds.pmt}, {seeds.video}, {seeds.audio}}}});
+            plan,
+            {{{seeds.pat}, {seeds.pmt}, {seeds.video}, {seeds.audio}}},
+            {startsWithDiscontinuity, startsWithDiscontinuity,
+             startsWithDiscontinuity, startsWithDiscontinuity}});
     return ::media::Result<MediaTsTransportPacketizer>::success(
         MediaTsTransportPacketizer(std::move(state)));
 }
@@ -347,8 +369,11 @@ MediaTsTransportPacketizer::MediaTsTransportPacketizer(
     cursor->identity = identity;
     cursor->pidKind = kind;
     const auto next = continuity(*m_state, kind).nextPayload;
+    cursor->carriesDiscontinuity =
+        discontinuityPending(*m_state, kind);
     auto packet = MediaTsTransportPacketBuilder::pcrOnly(
-        m_state->plan.parameters().pcrPid, next, pcr.wire27Mhz);
+        m_state->plan.parameters().pcrPid, next, pcr.wire27Mhz,
+        cursor->carriesDiscontinuity);
     if (!packet) {
         return ::media::Result<MediaTsPacketCursor>::failure(packet.error());
     }

@@ -110,7 +110,11 @@ constexpr std::int64_t NanosecondsPerSecond = 1'000'000'000;
             synchronization.demuxTimestampInput->videoTimeBase.den <= 0 ||
             !synchronization.demuxTimestampInput->audioTimeBase.isKnown() ||
             synchronization.demuxTimestampInput->audioTimeBase.num <= 0 ||
-            synchronization.demuxTimestampInput->audioTimeBase.den <= 0) {
+            synchronization.demuxTimestampInput->audioTimeBase.den <= 0 ||
+            !facts.inputAudioSampleRate ||
+            *facts.inputAudioSampleRate <= 0 ||
+            !facts.inputAudioSamplesPerAccessUnit ||
+            *facts.inputAudioSamplesPerAccessUnit == 0) {
             return ::media::Result<MediaRealtimeAvSyncAssemblyPlan>::failure(
                 ::media::ErrorInfo::notInitialized(
                     "demux timestamp production assembly facts are incomplete"));
@@ -128,7 +132,9 @@ constexpr std::int64_t NanosecondsPerSecond = 1'000'000'000;
                 *synchronization.startup.audioIdentity,
                 *demux.canonicalTargetEpochNs});
         videoDuration.emplace<MediaPacketDurationPlan>(true);
-        audioDuration.emplace<MediaPacketDurationPlan>(true);
+        audioDuration.emplace<MediaPlannedAudioSamplesDurationPlan>(
+            *facts.inputAudioSampleRate,
+            *facts.inputAudioSamplesPerAccessUnit);
     } else {
         return ::media::Result<MediaRealtimeAvSyncAssemblyPlan>::failure(
             ::media::ErrorInfo::unsupported(

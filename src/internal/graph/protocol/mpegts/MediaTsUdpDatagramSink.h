@@ -20,6 +20,7 @@ public:
         MediaRunningTime emitOnMaster) override;
     ::media::Status flush() override;
     ::media::Status close() override;
+    void abort() noexcept override;
 
 private:
     explicit MediaTsUdpDatagramSink(

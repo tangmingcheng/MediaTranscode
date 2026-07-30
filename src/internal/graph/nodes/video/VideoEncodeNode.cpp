@@ -6,6 +6,7 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegPacketView.h"
+#include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
 #include "internal/graph/sync/lineage/MediaFfmpegLineageToken.h"
 
@@ -63,6 +64,7 @@ void VideoEncodeLineageState::clearLineageStorage() noexcept
     pendingFrame.reset();
     pendingLineage.reset();
     lineageGenerations.clear();
+    generationStartPending = true;
 }
 
 void VideoEncodeLineageState::resetForLifecycle() noexcept
@@ -199,7 +201,20 @@ bool VideoEncodeNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) const
                         : std::nullopt);
 }
 
-::media::Status VideoEncodeNode::start(MediaGraphExecutionContext& context) { resetRuntimeState(); return FFmpegCodecNodeRuntime::start(context); }
+::media::Status VideoEncodeNode::start(MediaGraphExecutionContext& context)
+{
+    resetRuntimeState();
+    if (m_lineageRegistry) {
+        auto forceKeyFrame = requiredBoolNodeOption(
+            nodeOptions(context), "VideoEncodeNode",
+            "video_encode.force_generation_start_key_frame");
+        if (!forceKeyFrame) {
+            return ::media::Status::failure(forceKeyFrame.error());
+        }
+        m_forceGenerationStartKeyFrame = forceKeyFrame.value();
+    }
+    return FFmpegCodecNodeRuntime::start(context);
+}
 void VideoEncodeNode::abort(MediaGraphExecutionContext& context) noexcept { FFmpegCodecNodeRuntime::abort(context); resetRuntimeState(); }
 void VideoEncodeNode::resetRuntimeState() noexcept
 {
@@ -208,6 +223,7 @@ void VideoEncodeNode::resetRuntimeState() noexcept
     m_firstSubmitDiagnosticEmitted = false;
     m_firstPacketDiagnosticEmitted = false;
     m_sendWouldBlock.reset();
+    m_forceGenerationStartKeyFrame.reset();
     m_lineageState->resetForLifecycle();
 }
 
@@ -341,11 +357,30 @@ void VideoEncodeNode::resetRuntimeState() noexcept
 ::media::Result<MediaNodeProcessResult> VideoEncodeNode::submitPendingFrame(
     MediaGraphExecutionContext& context)
 {
+    AVFrame* frame = m_lineageState->pendingFrame.get();
+    if (m_lineageRegistry) {
+        if (!m_forceGenerationStartKeyFrame) {
+            return processProgress(::media::Status::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "VideoEncodeNode requires planner generation-start key-frame policy")));
+        }
+        if (m_lineageState->generationStartPending &&
+            *m_forceGenerationStartKeyFrame) {
+            frame->pict_type = AV_PICTURE_TYPE_I;
+            frame->flags |= AV_FRAME_FLAG_KEY;
+            std::ostringstream out;
+            out << "generation_start_key_frame pts=" << frame->pts;
+            if (m_lineageState->pendingLineage) {
+                out << " generation="
+                    << m_lineageState->pendingLineage->generation;
+            }
+            encodeLog(MediaGraphDiagnosticLevel::State, out.str());
+        }
+    }
     if (m_lineageRegistry && !m_lineageState->pendingFrame->opaque_ref) {
         auto attached = attachPendingLineage();
         if (!attached) return processProgress(std::move(attached));
     }
-    AVFrame* frame = m_lineageState->pendingFrame.get();
 
     if (!m_firstFrameDiagnosticEmitted) {
         std::ostringstream out;
@@ -397,7 +432,10 @@ void VideoEncodeNode::resetRuntimeState() noexcept
         return ::media::Result<MediaNodeProcessResult>::failure(
             FFmpegGraphError::fromCode(sendRet, "avcodec_send_frame(video)"));
     }
-    if (sendRet == 0) m_lineageState->pendingFrame.reset();
+    if (sendRet == 0) {
+        m_lineageState->pendingFrame.reset();
+        m_lineageState->generationStartPending = false;
+    }
 
     auto receiveStatus = receivePackets(context);
     if (!receiveStatus) {

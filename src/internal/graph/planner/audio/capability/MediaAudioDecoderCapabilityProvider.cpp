@@ -112,6 +112,62 @@ namespace {
 } // namespace
 
 ::media::Result<MediaSelectedAudioDecoder>
+MediaAudioDecoderCapabilityProvider::verifyDemuxedStream(
+    const AVCodecParameters& codecParameters)
+{
+    if (codecParameters.codec_type != AVMEDIA_TYPE_AUDIO ||
+        codecParameters.codec_id == AV_CODEC_ID_NONE ||
+        codecParameters.sample_rate <= 0) {
+        return ::media::Result<MediaSelectedAudioDecoder>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "demuxed audio decoder capability request is incomplete"));
+    }
+#if LIBAVUTIL_VERSION_MAJOR >= 57
+    const int channels = codecParameters.ch_layout.nb_channels;
+#else
+    const int channels = codecParameters.channels;
+#endif
+    if (channels <= 0) {
+        return ::media::Result<MediaSelectedAudioDecoder>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "demuxed audio decoder channel layout is incomplete"));
+    }
+
+    std::int64_t maximumAccessUnitSamples = codecParameters.frame_size;
+    if (codecParameters.codec_id == AV_CODEC_ID_AAC) {
+        if (!codecParameters.extradata ||
+            codecParameters.extradata_size <= 0) {
+            return ::media::Result<MediaSelectedAudioDecoder>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "demuxed AAC decoder configuration is missing"));
+        }
+        const std::vector<std::uint8_t> configuration(
+            codecParameters.extradata,
+            codecParameters.extradata + codecParameters.extradata_size);
+        auto parsed = parseAacAudioSpecificConfig(configuration);
+        if (!parsed) {
+            return ::media::Result<MediaSelectedAudioDecoder>::failure(
+                parsed.error());
+        }
+        if (parsed.value().sampleRate != codecParameters.sample_rate ||
+            parsed.value().channels != channels) {
+            return ::media::Result<MediaSelectedAudioDecoder>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "demuxed AAC decoder configuration conflicts with stream parameters"));
+        }
+        maximumAccessUnitSamples = parsed.value().frameSamples;
+    }
+    if (maximumAccessUnitSamples <= 0) {
+        return ::media::Result<MediaSelectedAudioDecoder>::failure(
+            ::media::ErrorInfo::unsupported(
+                "demuxed audio decoder does not publish an access-unit sample bound"));
+    }
+    return verifyOpenedDecoder(
+        codecParameters.codec_id, codecParameters.sample_rate, channels,
+        maximumAccessUnitSamples, &codecParameters, {});
+}
+
+::media::Result<MediaSelectedAudioDecoder>
 MediaAudioDecoderCapabilityProvider::verifyAacAudioSpecificConfig(
     int inputSampleRate, int channels,
     std::span<const std::uint8_t> audioSpecificConfig)

@@ -84,6 +84,9 @@ MediaVideoTranscodeBranchNodes addVideoTranscodeNodes(MediaGraph& graph,
     const auto& sourcePacketPolicy = options.canonicalLineageCapacity
         ? policies.atomicVideoPacket
         : policies.videoPacket;
+    const auto& videoFramePolicy = options.canonicalLineageCapacity
+        ? policies.synchronizedVideoFrame
+        : policies.videoFrame;
     if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.formatSourceNode, options.formatSourcePort, nodes.codecResolver, "format", options.prefix + ".format -> codec_resolver.format", policies.metadata); !status) return status;
     if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.codecResolver, "decoder", nodes.videoDecode, "codec", options.prefix + ".codec_resolver.decoder -> decode.codec", policies.metadata); !status) return status;
     if (nodes.videoTimestamp.isValid()) {
@@ -98,12 +101,12 @@ MediaVideoTranscodeBranchNodes addVideoTranscodeNodes(MediaGraph& graph,
     } else if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.packetSourceNode, options.packetSourcePort, nodes.videoDecode, "packet", options.prefix + ".packet -> decode.packet", sourcePacketPolicy); !status) {
         return status;
     }
-    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.videoDecode, "frame", nodes.hardwareTransfer, "frame", options.prefix + ".decode.frame -> hwtransfer.frame", policies.videoFrame); !status) return status;
+    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.videoDecode, "frame", nodes.hardwareTransfer, "frame", options.prefix + ".decode.frame -> hwtransfer.frame", videoFramePolicy); !status) return status;
     if (nodes.videoTimestamp.isValid()) {
-        if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.hardwareTransfer, "frame", nodes.videoTimestamp, "frame", options.prefix + ".hwtransfer.frame -> timestamp.frame", policies.videoFrame); !status) return status;
-        if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.videoTimestamp, "frame", nodes.videoFrameRate, "frame", options.prefix + ".timestamp.frame -> framerate.frame", policies.videoFrame); !status) return status;
-    } else if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.hardwareTransfer, "frame", nodes.videoFrameRate, "frame", options.prefix + ".hwtransfer.frame -> framerate.frame", policies.videoFrame); !status) return status;
-    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.videoFrameRate, "frame", nodes.videoFilter, "frame", options.prefix + ".framerate.frame -> filter.frame", policies.videoFrame); !status) return status;
+        if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.hardwareTransfer, "frame", nodes.videoTimestamp, "frame", options.prefix + ".hwtransfer.frame -> timestamp.frame", videoFramePolicy); !status) return status;
+        if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.videoTimestamp, "frame", nodes.videoFrameRate, "frame", options.prefix + ".timestamp.frame -> framerate.frame", videoFramePolicy); !status) return status;
+    } else if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.hardwareTransfer, "frame", nodes.videoFrameRate, "frame", options.prefix + ".hwtransfer.frame -> framerate.frame", videoFramePolicy); !status) return status;
+    if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.videoFrameRate, "frame", nodes.videoFilter, "frame", options.prefix + ".framerate.frame -> filter.frame", videoFramePolicy); !status) return status;
     const MediaEdgePolicy& filterOutputPolicy = options.canonicalLineageCapacity
         ? policies.preparedVideoFrame
         : policies.videoFrame;
@@ -133,6 +136,24 @@ MediaVideoTranscodeBranchNodes addVideoTranscodeNodes(MediaGraph& graph,
         return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     }
     if (options.canonicalLineageCapacity) {
+        if (!options.generationStartRequiresKeyFrame) {
+            return ::media::Result<MediaEncodedBranchEndpoints>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Synchronized video branch requires planner generation-start key-frame policy"));
+        }
+        const auto& synchronizedFrames =
+            options.edgePolicies.synchronizedVideoFrame.queuePolicy;
+        if (!synchronizedFrames.bounded ||
+            synchronizedFrames.capacity == 0 ||
+            synchronizedFrames.overflowPolicy !=
+                MediaQueueOverflowPolicy::BlockProducer ||
+            synchronizedFrames.orderingPolicy !=
+                MediaQueueOrderingPolicy::Fifo ||
+            !synchronizedFrames.preserveOrdering) {
+            return ::media::Result<MediaEncodedBranchEndpoints>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Synchronized video branch requires its planned ordered frame policy"));
+        }
         if (!MediaAtomicOutputPolicyContract::accepts(
                 options.edgePolicies.preparedVideoFrame)) {
             return ::media::Result<MediaEncodedBranchEndpoints>::failure(
@@ -163,6 +184,14 @@ MediaVideoTranscodeBranchNodes addVideoTranscodeNodes(MediaGraph& graph,
         for (const auto& [id, identity] : lineageNodes) {
             if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, id, "video.lineage.capacity", capacity); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
             if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, id, "video.lineage.identity", identity); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
+        }
+        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
+                graph, owner, nodes.videoEncode,
+                "video_encode.force_generation_start_key_frame",
+                *options.generationStartRequiresKeyFrame ? "1" : "0");
+            !status) {
+            return ::media::Result<MediaEncodedBranchEndpoints>::failure(
+                status.error());
         }
         if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
                 graph, owner, nodes.codecResolver,

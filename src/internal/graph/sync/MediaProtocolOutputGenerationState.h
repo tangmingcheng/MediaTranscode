@@ -39,6 +39,7 @@ public:
         const MediaProtocolOutputGenerationCommitReservation&) = delete;
     MediaProtocolOutputGenerationCommitReservation& operator=(
         const MediaProtocolOutputGenerationCommitReservation&) = delete;
+    bool startsAfterGenerationTransition() const noexcept;
 
 private:
     friend class MediaProtocolOutputGenerationState;
@@ -46,11 +47,13 @@ private:
     explicit MediaProtocolOutputGenerationCommitReservation(
         MediaAvOutputPermitCommitReservation outputPermit,
         std::unique_lock<std::mutex> stateLock,
-        std::unique_lock<std::mutex> sessionLock) noexcept;
+        std::unique_lock<std::mutex> sessionLock,
+        std::optional<std::uint64_t> completedTransitionSequence) noexcept;
 
     MediaAvOutputPermitCommitReservation m_outputPermit;
     std::unique_lock<std::mutex> m_stateLock;
     std::unique_lock<std::mutex> m_sessionLock;
+    std::optional<std::uint64_t> m_completedTransitionSequence;
 };
 
 class MediaProtocolOutputGenerationSessionMutationReservation final {

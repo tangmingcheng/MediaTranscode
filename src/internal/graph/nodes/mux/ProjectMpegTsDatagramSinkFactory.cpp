@@ -68,13 +68,14 @@ ProjectMpegTsDatagramSinkFactory::create(
     const MediaTsMuxPlan& muxPlan,
     const MediaPlaybackEpoch& epoch,
     const std::shared_ptr<const MediaSharedNtpEpoch>& sharedNtpEpoch,
+    const std::shared_ptr<MediaMpegTsRtpContinuityState>& rtpContinuity,
     MediaOutputByteSink* udpByteSink)
 {
     if (const auto* udp = std::get_if<MediaMpegTsUdpOutputPlan>(
             &outputPlan.transport)) {
         if (muxPlan.parameters().transportKind !=
                 MediaOutputTransportKind::UdpDatagrams ||
-            sharedNtpEpoch || !udpByteSink) {
+            sharedNtpEpoch || rtpContinuity || !udpByteSink) {
             return ::media::Result<
                 std::unique_ptr<MediaTsDatagramSink>>::failure(
                 ::media::ErrorInfo::invalidArgument(
@@ -98,7 +99,7 @@ ProjectMpegTsDatagramSinkFactory::create(
     if (!rtp ||
         muxPlan.parameters().transportKind !=
             MediaOutputTransportKind::RtpAvp ||
-        !sharedNtpEpoch || udpByteSink) {
+        !sharedNtpEpoch || !rtpContinuity || udpByteSink) {
         return ::media::Result<
             std::unique_ptr<MediaTsDatagramSink>>::failure(
             ::media::ErrorInfo::invalidArgument(
@@ -113,7 +114,8 @@ ProjectMpegTsDatagramSinkFactory::create(
     MediaUdpDatagramSenderSocketFactory datagramPortFactory(
         std::move(socketRuntime).value());
     auto created = MediaMpegTsRtpDatagramSink::create(
-        *rtp, epoch, *sharedNtpEpoch, datagramPortFactory);
+        *rtp, epoch, *sharedNtpEpoch, rtpContinuity,
+        datagramPortFactory);
     if (!created) {
         return ::media::Result<
             std::unique_ptr<MediaTsDatagramSink>>::failure(

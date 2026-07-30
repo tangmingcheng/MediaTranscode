@@ -18,6 +18,7 @@ public:
         MediaRunningTime emitOnMaster) = 0;
     virtual ::media::Status flush() = 0;
     virtual ::media::Status close() = 0;
+    virtual void abort() noexcept = 0;
 };
 
 } // namespace media::ffmpeg::graph

@@ -15,6 +15,7 @@ namespace media::ffmpeg::graph {
 class MediaAvSyncGroupRuntime;
 class MediaAudioDriftControllerState;
 class MediaAvGenerationPurgeTarget;
+struct MediaAvActivatedOutputPermitReservation;
 
 class MediaAudioDriftControllerNode final : public FFmpegNodeRuntime {
 public:
@@ -45,7 +46,9 @@ protected:
 
 private:
     ::media::Status configure(MediaGraphExecutionContext& context);
-    ::media::Status stage(const MediaBufferRef& audio);
+    ::media::Status stage(
+        const MediaBufferRef& audio,
+        MediaAvActivatedOutputPermitReservation activated);
     ::media::Result<bool> commitIfReady(MediaGraphExecutionContext& context);
     static void logDriftSample(
         const MediaAudioDriftMeasurement& measurement,

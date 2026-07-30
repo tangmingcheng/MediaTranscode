@@ -18,6 +18,7 @@ public:
         MediaTsMaterializedVideoConfig video;
         MediaTsMaterializedAudioConfig audio;
         std::unique_ptr<MediaTsDatagramSink> sink;
+        bool startsWithDiscontinuity;
     };
     struct AdvanceResult final {
         MediaRunningTime nextDeadline;

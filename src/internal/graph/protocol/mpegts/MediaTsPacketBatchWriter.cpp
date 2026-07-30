@@ -31,7 +31,7 @@ MediaTsPacketBatchWriter::MediaTsPacketBatchWriter(
 
 MediaTsPacketBatchWriter::~MediaTsPacketBatchWriter()
 {
-    closeNoexcept();
+    abort();
 }
 
 ::media::Status MediaTsPacketBatchWriter::firstFailure() const
@@ -112,17 +112,11 @@ MediaTsPacketBatchWriter::~MediaTsPacketBatchWriter()
     return m_failure ? firstFailure() : ::media::Status::success();
 }
 
-void MediaTsPacketBatchWriter::closeNoexcept() noexcept
-{
-    if (m_closed || !m_sink) return;
-    auto status = m_sink->close();
-    m_closed = true;
-    if (!status && !m_failure) m_failure = status.error();
-}
-
 void MediaTsPacketBatchWriter::abort() noexcept
 {
-    closeNoexcept();
+    if (m_closed || !m_sink) return;
+    m_sink->abort();
+    m_closed = true;
 }
 
 } // namespace media::ffmpeg::graph

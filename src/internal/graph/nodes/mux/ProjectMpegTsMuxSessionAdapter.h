@@ -3,6 +3,7 @@
 #include "internal/graph/nodes/mux/MediaMuxSession.h"
 #include "internal/graph/protocol/mpegts/MediaTsMaterializedStreamConfig.h"
 #include "internal/graph/protocol/mpegts/MediaTsMuxPlan.h"
+#include "internal/graph/protocol/rtp/MediaMpegTsRtpContinuityState.h"
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
 #include "internal/graph/sync/MediaPlaybackEpoch.h"
 #include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
@@ -42,6 +43,7 @@ private:
     std::optional<MediaAvSyncGroupKey> group;
     std::optional<MediaAvSyncGroupKey> plannedGroup;
     std::unique_ptr<MediaTsMuxSession> session;
+    std::shared_ptr<MediaMpegTsRtpContinuityState> rtpContinuity;
     std::optional<MediaRunningTime> nextTransportDeadline;
     std::optional<MediaRunningTime> latestAcceptedEmission;
     bool mediaTimelineStarted = false;
@@ -113,6 +115,7 @@ private:
     std::optional<MediaPlaybackEpoch>& m_epoch;
     std::optional<MediaAvSyncGroupKey>& m_group;
     std::unique_ptr<MediaTsMuxSession>& m_session;
+    std::shared_ptr<MediaMpegTsRtpContinuityState>& m_rtpContinuity;
     std::optional<MediaRunningTime>& m_nextTransportDeadline;
     std::optional<MediaRunningTime>& m_latestAcceptedEmission;
     bool& m_mediaTimelineStarted;

@@ -23,6 +23,63 @@ bool sameSession(const MediaSdpSessionIdentity& left,
         left.cname() == right.cname();
 }
 
+bool samePublishedSession(const MediaSdpSessionIdentity& left,
+                          const MediaSdpSessionIdentity& right) noexcept
+{
+    return left.originUsername() == right.originUsername() &&
+        left.sessionId() == right.sessionId() &&
+        left.sessionName() == right.sessionName() &&
+        left.addressFamily() == right.addressFamily() &&
+        left.numericAddress() == right.numericAddress() &&
+        left.cname() == right.cname();
+}
+
+bool sameCodec(const MediaSdpCodecDescription& left,
+               const MediaSdpCodecDescription& right) noexcept
+{
+    if (left.index() != right.index()) return false;
+    if (const auto* leftH264 =
+            std::get_if<MediaH264SdpCodecDescription>(&left)) {
+        const auto& rightH264 =
+            std::get<MediaH264SdpCodecDescription>(right);
+        return leftH264->profileLevelId() == rightH264.profileLevelId() &&
+            leftH264->spropParameterSets() ==
+                rightH264.spropParameterSets() &&
+            leftH264->packetizationMode() ==
+                rightH264.packetizationMode();
+    }
+    const auto& leftAac =
+        std::get<MediaAacLatmSdpCodecDescription>(left);
+    const auto& rightAac =
+        std::get<MediaAacLatmSdpCodecDescription>(right);
+    return leftAac.sampleRate() == rightAac.sampleRate() &&
+        leftAac.channels() == rightAac.channels() &&
+        leftAac.profileLevelId() == rightAac.profileLevelId() &&
+        leftAac.configurationPresent() ==
+            rightAac.configurationPresent() &&
+        leftAac.streamMuxConfigHex() == rightAac.streamMuxConfigHex();
+}
+
+bool sameMedia(const MediaRtpSdpMediaDescription& left,
+               const MediaRtpSdpMediaDescription& right) noexcept
+{
+    const auto& leftIdentity = left.identity();
+    const auto& rightIdentity = right.identity();
+    return leftIdentity.kind() == rightIdentity.kind() &&
+        leftIdentity.addressFamily() == rightIdentity.addressFamily() &&
+        leftIdentity.remoteRtpNumericAddress() ==
+            rightIdentity.remoteRtpNumericAddress() &&
+        leftIdentity.remoteRtcpNumericAddress() ==
+            rightIdentity.remoteRtcpNumericAddress() &&
+        leftIdentity.remoteRtpPort() == rightIdentity.remoteRtpPort() &&
+        leftIdentity.remoteRtcpPort() == rightIdentity.remoteRtcpPort() &&
+        leftIdentity.payloadType() == rightIdentity.payloadType() &&
+        leftIdentity.ssrc() == rightIdentity.ssrc() &&
+        leftIdentity.clockRate() == rightIdentity.clockRate() &&
+        leftIdentity.channels() == rightIdentity.channels() &&
+        sameCodec(left.codec(), right.codec());
+}
+
 } // namespace
 
 MediaDualMediaSdpPublisherNode::MediaDualMediaSdpPublisherNode(
@@ -97,10 +154,10 @@ MediaNodeKind MediaDualMediaSdpPublisherNode::staticKind() noexcept
     if (!input) return ::media::Result<bool>::failure(input.error());
     if (!input.value()) {
         MediaChannel* channel = context.findInputChannel(nodeId(), port);
-        if (channel && (channel->closed() || channel->aborted()) && !destination) {
+        if (channel && channel->aborted()) {
             return ::media::Result<bool>::failure(
-                ::media::ErrorInfo::notInitialized(
-                    "Dual-media SDP publisher lost a required description"));
+                ::media::ErrorInfo::cancelled(
+                    "Dual-media SDP publisher input was aborted"));
         }
         return ::media::Result<bool>::success(false);
     }
@@ -145,13 +202,26 @@ MediaDualMediaSdpPublisherNode::publish()
     auto description = MediaRtpSdpDescription::create(
         video->session(), std::move(media));
     if (!description) return failTerminal(description.error());
-    auto serialized = MediaRtpSdpSerializer::serialize(description.value());
-    if (!serialized) return failTerminal(serialized.error());
-    MediaAtomicUtf8FilePublisher publisher(*m_replacePort);
-    auto published = publisher.publish(m_path, serialized.value());
-    if (!published) return failTerminal(published.error());
+    const bool unchanged =
+        m_publishedSession && m_publishedVideo && m_publishedAudio &&
+        samePublishedSession(*m_publishedSession, video->session()) &&
+        sameMedia(*m_publishedVideo, video->media()) &&
+        sameMedia(*m_publishedAudio, audio->media());
+    if (!unchanged) {
+        auto serialized =
+            MediaRtpSdpSerializer::serialize(description.value());
+        if (!serialized) return failTerminal(serialized.error());
+        MediaAtomicUtf8FilePublisher publisher(*m_replacePort);
+        auto published = publisher.publish(m_path, serialized.value());
+        if (!published) return failTerminal(published.error());
+        m_publishedSession = video->session();
+        m_publishedVideo = video->media();
+        m_publishedAudio = audio->media();
+    }
     m_published = true;
-    return processFinished();
+    m_video.reset();
+    m_audio.reset();
+    return processProgress();
 }
 
 ::media::Result<MediaNodeProcessResult>
@@ -162,7 +232,6 @@ MediaDualMediaSdpPublisherNode::onProcess(
         return ::media::Result<MediaNodeProcessResult>::failure(
             *m_terminalFailure);
     }
-    if (m_published) return processFinished();
     auto video = acquire(
         context, "video", MediaScheduledStream::Video, m_video);
     if (!video) return failTerminal(video.error());
@@ -170,13 +239,23 @@ MediaDualMediaSdpPublisherNode::onProcess(
         context, "audio", MediaScheduledStream::Audio, m_audio);
     if (!audio) return failTerminal(audio.error());
     if (m_video && m_audio) {
-        auto duplicateVideo = acquire(
-            context, "video", MediaScheduledStream::Video, m_video);
-        if (!duplicateVideo) return failTerminal(duplicateVideo.error());
-        auto duplicateAudio = acquire(
-            context, "audio", MediaScheduledStream::Audio, m_audio);
-        if (!duplicateAudio) return failTerminal(duplicateAudio.error());
         return publish();
+    }
+    const MediaChannel* videoChannel =
+        context.findInputChannel(nodeId(), "video");
+    const MediaChannel* audioChannel =
+        context.findInputChannel(nodeId(), "audio");
+    const bool videoClosed = videoChannel && videoChannel->closed();
+    const bool audioClosed = audioChannel && audioChannel->closed();
+    if (videoClosed && audioClosed) {
+        if (m_video || m_audio) {
+            return failTerminal(::media::ErrorInfo::notInitialized(
+                "Dual-media SDP publisher lost one final description"));
+        }
+        return m_published
+            ? processFinished()
+            : failTerminal(::media::ErrorInfo::notInitialized(
+                  "Dual-media SDP publisher received no descriptions"));
     }
     return (video.value() || audio.value()) ? processProgress()
                                             : processWaiting();
@@ -194,6 +273,9 @@ void MediaDualMediaSdpPublisherNode::resetState() noexcept
 {
     m_video.reset();
     m_audio.reset();
+    m_publishedSession.reset();
+    m_publishedVideo.reset();
+    m_publishedAudio.reset();
     m_terminalFailure.reset();
     m_published = false;
 }

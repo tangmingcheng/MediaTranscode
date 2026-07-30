@@ -34,7 +34,6 @@ private:
                              std::unique_ptr<MediaTsPacketCommitter> committer);
     ::media::Status fail(::media::ErrorInfo error);
     ::media::Status firstFailure() const;
-    void closeNoexcept() noexcept;
 
     std::uint8_t m_maximumPacketsPerDatagram;
     std::unique_ptr<MediaTsDatagramSink> m_sink;

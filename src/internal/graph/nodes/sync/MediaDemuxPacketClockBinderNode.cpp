@@ -85,15 +85,16 @@ public:
         return ::media::Status::success();
     }
 
+private:
+    friend class MediaDemuxPacketClockBinderNode;
+
+    std::shared_ptr<MediaDemuxTimestampClockMapper> m_mapper;
+    const MediaScheduledStream m_stream;
     mutable std::mutex mutex;
     MediaBufferRef pendingInput;
     std::optional<std::uint64_t> publishedClockRevision;
     std::uint64_t generation;
     std::optional<std::uint64_t> lastTransitionSequence;
-
-private:
-    std::shared_ptr<MediaDemuxTimestampClockMapper> m_mapper;
-    const MediaScheduledStream m_stream;
 };
 
 MediaDemuxPacketClockBinderNode::MediaDemuxPacketClockBinderNode(

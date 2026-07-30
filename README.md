@@ -33,40 +33,67 @@ MEDIA_TRANSCODE_BUILD_GRAPH_TOOLS=ON
 
 ## Realtime DAG Path
 
-The current realtime path supports URL/RTSP input, explicit raw RTP input with video and optional audio, and MPEG-TS over UDP input:
+The realtime CLI accepts URL/RTSP, separate H.264/AAC RTP, or MPEG-TS/UDP input. Input clock selection and output protocol selection are independent; every A/V input reaches the same canonical scheduler before exactly one output adapter is assembled.
 
 ```text
-RTSP, realtime URL, raw RTP input, or MPEG-TS UDP input
-    -> graph planner
-    -> realtime DAG builder
-    -> graph runtime nodes
-    -> per-media RTP output + aggregated SDP, or MPEG-TS muxed output
+URL/RTSP, separate RTP, or MPEG-TS/UDP input
+    -> planner-owned input clock
+    -> shared A/V startup, drift, recovery, and scheduler
+    -> separate RTP | MPEG-TS/UDP | MPEG-TS/RTP
 ```
 
-Run the realtime video CLI with an RTSP input:
+`--output-layout` and the mandatory `--output-transport` select one of three exact modes:
+
+```text
+--output-layout separate --output-transport rtp  per-media RTP/RTCP plus SDP
+--output-layout mpegts  --output-transport udp  Project MPEG-TS in UDP datagrams
+--output-layout mpegts  --output-transport rtp  Project MPEG-TS over RTP/AVP plus SDP
+```
+
+`separate + udp` is rejected. MPEG-TS/RTP uses the static MP2T payload type 33, a 90 kHz RTP clock, adjacent RTP/RTCP ports, and one generated SDP media description. Open either RTP mode through its generated SDP:
 
 ```powershell
-out/build/x64-debug/media_transcode_realtime_video_cli.exe --input-type rtsp --input-layout session --output-layout separate --input rtsp://... --rtsp-transport tcp --open-timeout-ms 5000 --read-timeout-ms 5000 --analyze-duration-us 500000 --probe-size 524288 --rtp-host 127.0.0.1 --rtp-port 5004 --sdp out/build/x64-debug/realtime-rtp.sdp --packet-size 1200 --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --video-codec h264 --rc auto --audio-codec aac --max-duration 15
+ffplay -protocol_whitelist file,udp,rtp -i out/build/x64-debug/realtime-output.sdp
+ffprobe -protocol_whitelist file,udp,rtp -i out/build/x64-debug/realtime-output.sdp
 ```
 
-Receiver validation can use the generated SDP while the CLI is running:
+Raw RTP input requires explicit video and audio endpoint metadata. The following reusable input/options demonstrate the same A/V input sent first as MPEG-TS/UDP and then as MPEG-TS/RTP:
 
 ```powershell
-ffplay -protocol_whitelist file,udp,rtp -i out/build/x64-debug/realtime-rtp.sdp
-ffprobe -protocol_whitelist file,udp,rtp -i out/build/x64-debug/realtime-rtp.sdp
+$inputRtp = @(
+    '--input-type','rtp','--input-layout','separate',
+    '--video-rtp-url','rtp://127.0.0.1:5004',
+    '--video-rtp-codec','h264','--video-rtp-payload-type','96',
+    '--video-rtp-clock-rate','90000',
+    '--video-rtp-fmtp','packetization-mode=1;sprop-parameter-sets=Z01AMpWQAoALWwEQAAA+gAAOpghA,aOuPIA==;profile-level-id=4D4032',
+    '--audio-rtp-url','rtp://127.0.0.1:5006',
+    '--audio-rtp-codec','aac','--audio-rtp-payload-type','97',
+    '--audio-rtp-clock-rate','44100','--audio-rtp-channels','2',
+    '--audio-rtp-fmtp','profile-level-id=1;mode=AAC-hbr;sizelength=13;indexlength=3;indexdeltalength=3;config=1210',
+    '--open-timeout-ms','5000','--read-timeout-ms','2000',
+    '--analyze-duration-us','5000000','--probe-size','5000000'
+)
+$common = @(
+    '--metadata-queue','1','--packet-queue','256','--frame-queue','128','--mux-queue','256',
+    '--startup-max-video-unit-bytes','4194304',
+    '--startup-max-audio-unit-bytes','1048576','--startup-max-gap-ms','40',
+    '--video-codec','h264','--width','1280','--height','720','--fps','30',
+    '--bitrate','4000','--gop','30','--audio-codec','aac','--audio-bitrate','128',
+    '--sample-rate','48000','--channels','2','--max-duration','120'
+)
+$cli = 'out/build/x64-debug/media_transcode_realtime_video_cli.exe'
+
+& $cli @inputRtp @common --media-id rtp-to-tsudp `
+    --output-layout mpegts --output-transport udp `
+    --output 'udp://127.0.0.1:5010'
+
+& $cli @inputRtp @common --media-id rtp-to-tsrtp `
+    --output-layout mpegts --output-transport rtp `
+    --rtp-host 127.0.0.1 --rtp-port 5020 --packet-size 1328 `
+    --sdp out/build/x64-debug/rtp-to-tsrtp.sdp
 ```
 
-Raw RTP input uses explicit video and optional audio endpoint metadata. Hardware planning, low latency input, and graph diagnostics are enabled by default; use `--disable-hw`, `--no-low-latency`, or `--quiet-graph` only when overriding defaults.
-
-```powershell
-out/build/x64-debug/media_transcode_realtime_video_cli.exe --input-type rtp --input-layout separate --output-layout separate --video-rtp-url rtp://127.0.0.1:5004 --video-rtp-codec h264 --video-rtp-payload-type 96 --video-rtp-clock-rate 90000 --video-rtp-fmtp "packetization-mode=1;sprop-parameter-sets=...;profile-level-id=..." --open-timeout-ms 5000 --read-timeout-ms 5000 --analyze-duration-us 500000 --probe-size 524288 --rtp-host 127.0.0.1 --rtp-port 5008 --sdp out/build/x64-debug/raw-rtp-output.sdp --packet-size 1200 --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --video-codec h264 --rc auto --max-duration 15
-```
-
-`udp://host:port` is accepted for UDP-carried RTP in RTP-port mode. MPEG-TS over UDP uses explicit MPEG-TS classification:
-
-```powershell
-out/build/x64-debug/media_transcode_realtime_video_cli.exe --input-type mpegts-udp --input-layout mpegts --output-layout mpegts --input udp://0.0.0.0:15000 --output udp://127.0.0.1:15002 --open-timeout-ms 5000 --read-timeout-ms 5000 --analyze-duration-us 500000 --probe-size 524288 --no-audio --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --video-codec h264 --rc auto --max-duration 15
-```
+Hardware planning, low-latency input, and graph diagnostics are enabled by default. Use `--disable-hw`, `--no-low-latency`, or `--quiet-graph` only for an explicit override. `udp://host:port` remains valid for UDP-carried RTP input in RTP-port mode; MPEG-TS input uses `--input-type mpegts-udp --input-layout mpegts` and requires an explicit `--mpegts-max-pcr-gap-ms`. A value of `1000` is the verified starting point for FFmpeg `-re` loopback sources; stricter values intentionally make PCR-gap generation reacquisition more sensitive.
 
 ## Production acceptance
 

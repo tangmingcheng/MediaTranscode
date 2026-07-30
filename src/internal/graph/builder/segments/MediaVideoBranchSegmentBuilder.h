@@ -20,6 +20,7 @@ struct MediaVideoBranchSegmentOptions {
     MediaRealtimeEdgePolicySet edgePolicies;
     bool inputStartRequiresKeyFrame = false;
     std::optional<std::size_t> canonicalLineageCapacity;
+    std::optional<bool> generationStartRequiresKeyFrame;
 
     MediaNodeId formatSourceNode = MediaNodeId::invalid();
     std::string formatSourcePort = "format";

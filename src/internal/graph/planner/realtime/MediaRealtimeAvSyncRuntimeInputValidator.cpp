@@ -181,13 +181,29 @@ namespace {
             runtime.assembly.inputClock) ||
         !std::holds_alternative<MediaPacketDurationPlan>(
             runtime.assembly.video.duration) ||
-        !std::holds_alternative<MediaPacketDurationPlan>(
+        !std::holds_alternative<MediaPlannedAudioSamplesDurationPlan>(
             runtime.assembly.audio.duration) ||
         !std::get<MediaPacketDurationPlan>(
             runtime.assembly.video.duration).requirePositiveDuration ||
-        !std::get<MediaPacketDurationPlan>(
-            runtime.assembly.audio.duration).requirePositiveDuration) {
+        !runtime.planningFacts.inputAudioSampleRate ||
+        *runtime.planningFacts.inputAudioSampleRate <= 0 ||
+        !runtime.planningFacts.inputAudioSamplesPerAccessUnit ||
+        *runtime.planningFacts.inputAudioSamplesPerAccessUnit == 0 ||
+        !outer.audioPlan.selectedDecoder ||
+        outer.audioPlan.selectedDecoder->inputSampleRate !=
+            *runtime.planningFacts.inputAudioSampleRate ||
+        outer.audioPlan.selectedDecoder->maximumOutputBlockInputSamples !=
+            *runtime.planningFacts.inputAudioSamplesPerAccessUnit) {
         return invalidInput("demux timestamp clock assembly");
+    }
+    const auto& audioDuration =
+        std::get<MediaPlannedAudioSamplesDurationPlan>(
+            runtime.assembly.audio.duration);
+    if (audioDuration.sampleRate !=
+            *runtime.planningFacts.inputAudioSampleRate ||
+        audioDuration.samplesPerAccessUnit !=
+            *runtime.planningFacts.inputAudioSamplesPerAccessUnit) {
+        return invalidInput("demux timestamp audio duration authority");
     }
     const auto& input =
         *runtime.synchronization.demuxTimestampInput;

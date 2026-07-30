@@ -23,6 +23,8 @@ struct MediaSelectedAudioDecoder final {
 
 class MediaAudioDecoderCapabilityProvider final {
 public:
+    static ::media::Result<MediaSelectedAudioDecoder> verifyDemuxedStream(
+        const AVCodecParameters& codecParameters);
     static ::media::Result<MediaSelectedAudioDecoder> verifyAacAudioSpecificConfig(
         int inputSampleRate, int channels,
         std::span<const std::uint8_t> audioSpecificConfig);

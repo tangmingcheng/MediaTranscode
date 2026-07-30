@@ -55,7 +55,8 @@ bool materializedConfigMatches(const MediaTsMuxSession::Binding& binding) noexce
         binding.plan.clockPolicy(), binding.epoch);
     if (!clock) return ::media::Result<std::unique_ptr<MediaTsMuxSession>>::failure(
         clock.error());
-    auto packetizer = MediaTsTransportPacketizer::create(binding.plan);
+    auto packetizer = MediaTsTransportPacketizer::create(
+        binding.plan, binding.startsWithDiscontinuity);
     if (!packetizer) return ::media::Result<std::unique_ptr<MediaTsMuxSession>>::failure(
         packetizer.error());
     auto tables = MediaTsPsiSerializer::serialize(binding.plan);

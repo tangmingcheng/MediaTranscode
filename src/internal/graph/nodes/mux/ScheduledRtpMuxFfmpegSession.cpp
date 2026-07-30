@@ -13,6 +13,7 @@ extern "C" {
 #include <libavutil/error.h>
 }
 
+#include <limits>
 #include <new>
 #include <utility>
 
@@ -181,7 +182,17 @@ ScheduledRtpMuxFfmpegSession::~ScheduledRtpMuxFfmpegSession()
         return FFmpegGraphError::statusFromCode(
             referenced, "av_packet_ref(scheduled rtp)" );
     }
+    if (timestamp.extendedTicks() >
+        static_cast<std::uint64_t>(
+            std::numeric_limits<std::int64_t>::max())) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Scheduled RTP timestamp exceeds FFmpeg packet time range"));
+    }
     copy->stream_index = 0;
+    copy->pts = static_cast<std::int64_t>(timestamp.extendedTicks());
+    copy->dts = copy->pts;
+    copy->duration = 0;
     m_activeTimestamp = timestamp;
     const int written = av_write_frame(m_context, copy.get());
     m_activeTimestamp.reset();

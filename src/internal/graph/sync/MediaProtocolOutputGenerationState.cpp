@@ -10,11 +10,19 @@ MediaProtocolOutputGenerationCommitReservation::
     MediaProtocolOutputGenerationCommitReservation(
         MediaAvOutputPermitCommitReservation outputPermit,
         std::unique_lock<std::mutex> stateLock,
-        std::unique_lock<std::mutex> sessionLock) noexcept
+        std::unique_lock<std::mutex> sessionLock,
+        std::optional<std::uint64_t> completedTransitionSequence) noexcept
     : m_outputPermit(std::move(outputPermit))
     , m_stateLock(std::move(stateLock))
     , m_sessionLock(std::move(sessionLock))
+    , m_completedTransitionSequence(completedTransitionSequence)
 {
+}
+
+bool MediaProtocolOutputGenerationCommitReservation::
+    startsAfterGenerationTransition() const noexcept
+{
+    return m_completedTransitionSequence.has_value();
 }
 
 MediaProtocolOutputGenerationState::MediaProtocolOutputGenerationState(
@@ -78,7 +86,7 @@ MediaProtocolOutputGenerationState::permitActivatedGeneration(
         MediaProtocolOutputGenerationCommitReservation>::success(
             MediaProtocolOutputGenerationCommitReservation(
                 std::move(outputPermit).value(), std::move(stateLock),
-                std::move(sessionLock)));
+                std::move(sessionLock), transitionSequence));
 }
 
 ::media::Result<MediaProtocolOutputGenerationCommitReservation>
@@ -105,7 +113,7 @@ MediaProtocolOutputGenerationState::reserveCommit(
         MediaProtocolOutputGenerationCommitReservation>::success(
             MediaProtocolOutputGenerationCommitReservation(
                 std::move(outputPermit).value(), std::move(lock),
-                std::move(sessionLock)));
+                std::move(sessionLock), m_lastTransitionSequence));
 }
 
 ::media::Result<MediaProtocolOutputGenerationState::GenerationDisposition>
@@ -182,7 +190,7 @@ MediaProtocolOutputGenerationState::permitAuthorityActivation(
                 epoch,
                 MediaProtocolOutputGenerationCommitReservation(
                     std::move(permit), std::move(stateLock),
-                    std::move(sessionLock))});
+                    std::move(sessionLock), transitionSequence)});
 }
 
 MediaProtocolOutputGenerationSessionMutationReservation

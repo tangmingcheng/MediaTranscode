@@ -15,7 +15,7 @@ MediaTsUdpDatagramSink::MediaTsUdpDatagramSink(
 
 MediaTsUdpDatagramSink::~MediaTsUdpDatagramSink()
 {
-    (void)close();
+    abort();
 }
 
 ::media::Result<std::unique_ptr<MediaTsUdpDatagramSink>>
@@ -109,6 +109,13 @@ MediaTsUdpDatagramSink::create(std::unique_ptr<MediaOutputByteSink> sink)
     auto status = m_sink->close();
     if (!status) fail(status.error());
     return m_failure ? terminalStatus() : ::media::Status::success();
+}
+
+void MediaTsUdpDatagramSink::abort() noexcept
+{
+    if (m_closed) return;
+    m_closed = true;
+    if (m_sink) (void)m_sink->close();
 }
 
 } // namespace media::ffmpeg::graph

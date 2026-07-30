@@ -121,6 +121,7 @@ ProjectMpegTsMuxSessionAdapter::ProjectMpegTsMuxSessionAdapter(
     , m_epoch(m_generationSession->epoch)
     , m_group(m_generationSession->group)
     , m_session(m_generationSession->session)
+    , m_rtpContinuity(m_generationSession->rtpContinuity)
     , m_nextTransportDeadline(
           m_generationSession->nextTransportDeadline)
     , m_latestAcceptedEmission(
@@ -318,6 +319,25 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
     if (!ready) {
         return ::media::Status::success();
     }
+    if (const auto* rtp = std::get_if<MediaMpegTsRtpOutputPlan>(
+            &outputPlan->transport)) {
+        bool continuityMissing = false;
+        {
+            auto mutation =
+                m_generationState->reserveSessionMutation();
+            continuityMissing = !m_rtpContinuity;
+        }
+        if (continuityMissing) {
+            auto continuity = MediaMpegTsRtpContinuityState::create(
+                rtp->initialSequenceNumber());
+            if (!continuity) return fail(continuity.error());
+            auto mutation =
+                m_generationState->reserveSessionMutation();
+            if (!m_rtpContinuity) {
+                m_rtpContinuity = std::move(continuity).value();
+            }
+        }
+    }
     auto group = context.findAvSyncGroup(*plannedGroup);
     if (!group) {
         return fail(::media::ErrorInfo::notInitialized(
@@ -386,7 +406,8 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
                     auto datagramSink =
                         ProjectMpegTsDatagramSinkFactory::create(
                             *m_outputPlan, muxPlan, *m_epoch,
-                            group->sharedNtpEpoch(), m_sink.get());
+                            group->sharedNtpEpoch(), m_rtpContinuity,
+                            m_sink.get());
                     if (!datagramSink) {
                         failure = datagramSink.error();
                     } else {
@@ -395,7 +416,9 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
                                 muxPlan, *m_epoch,
                                 std::move(video).value(),
                                 std::move(audio).value(),
-                                std::move(datagramSink).value()});
+                                std::move(datagramSink).value(),
+                                current.value().
+                                    startsAfterGenerationTransition()});
                         if (!session) {
                             failure = session.error();
                         } else if (auto started =

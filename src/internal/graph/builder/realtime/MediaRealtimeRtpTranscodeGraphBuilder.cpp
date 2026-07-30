@@ -50,7 +50,6 @@ struct RealtimePacketInputChain {
     const std::optional<PacketSelectOutputPlan>& videoOutput,
     const std::optional<PacketSelectOutputPlan>& audioOutput,
     const MediaRealtimeRtpInputNodePlan& inputPlan,
-    const MediaGraphQueueParameters& queues,
     const MediaRealtimeEdgePolicySet& edgePolicies)
 {
     if (!videoOutput && !audioOutput) {
@@ -175,8 +174,10 @@ struct RealtimePacketInputChain {
     packetSelectOptions.prefix = prefix;
     packetSelectOptions.formatSourceNode = input;
     packetSelectOptions.formatSourcePort = "format";
-    packetSelectOptions.queues = queues;
-    packetSelectOptions.edgePolicies = edgePolicies;
+    packetSelectOptions.metadataPolicy = edgePolicies.metadata;
+    packetSelectOptions.packetPolicy = requiresProtocolClock
+        ? edgePolicies.synchronizedPacket
+        : edgePolicies.packet;
     packetSelectOptions.videoOutput = videoOutput;
     packetSelectOptions.audioOutput = audioOutput;
     auto packetSelect = MediaPacketSelectSegmentBuilder::buildDemuxStreamSplit(graph, packetSelectOptions);
@@ -442,7 +443,6 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
                                                            ? std::optional<PacketSelectOutputPlan>{}
                                                            : audioPacketOutput,
                                                        plan.input,
-                                                       plan.queues,
                                                        plan.edgePolicies);
     if (!videoInputChain) {
         return ::media::Result<MediaGraph>::failure(videoInputChain.error());
@@ -459,7 +459,6 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
                                                       std::nullopt,
                                                       audioPacketOutput,
                                                       plan.audioInput,
-                                                      plan.queues,
                                                       plan.edgePolicies);
         if (!audioInput) {
             return ::media::Result<MediaGraph>::failure(audioInput.error());
@@ -564,6 +563,12 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
     videoOptions.inputStartRequiresKeyFrame = synchronizedInput
         ? false : plan.videoInputStartRequiresKeyFrame;
     if (plan.avSyncRuntime) {
+        if (!plan.avSyncRuntime->synchronization.startup
+                 .requireVideoKeyFrame) {
+            return ::media::Result<MediaGraph>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Synchronized realtime video requires planner generation-start key-frame policy"));
+        }
         if (plan.avSyncRuntime->queues.frame == 0) {
             return ::media::Result<MediaGraph>::failure(
                 ::media::ErrorInfo::invalidArgument(
@@ -571,6 +576,9 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
         }
         videoOptions.canonicalLineageCapacity =
             plan.avSyncRuntime->queues.frame;
+        videoOptions.generationStartRequiresKeyFrame =
+            *plan.avSyncRuntime->synchronization.startup
+                 .requireVideoKeyFrame;
     }
     videoOptions.formatSourceNode = videoInputChain.value().input;
     videoOptions.formatSourcePort = "format";

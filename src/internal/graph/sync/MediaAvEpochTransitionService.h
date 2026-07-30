@@ -35,6 +35,7 @@ private:
 
 struct MediaAvActivatedOutputPermitReservation final {
     MediaPlaybackEpoch epoch;
+    MediaAudioPlaybackOrigin audioOrigin;
     std::optional<std::uint64_t> completedTransitionSequence;
     MediaAvOutputPermitCommitReservation reservation;
 };

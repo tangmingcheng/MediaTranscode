@@ -12,7 +12,7 @@ MediaMpegTsRtpDatagramSink::MediaMpegTsRtpDatagramSink(
     MediaMpegTsRtpPacketizer packetizer,
     MediaSharedNtpEpoch ntpEpoch,
     MediaRtcpSenderReportSchedule senderReportSchedule,
-    ScheduledRtpSenderCounters counters,
+    std::shared_ptr<MediaMpegTsRtpContinuityState> continuity,
     std::string cname,
     std::uint32_t ssrc,
     std::uint64_t generation) noexcept
@@ -20,7 +20,7 @@ MediaMpegTsRtpDatagramSink::MediaMpegTsRtpDatagramSink(
       m_packetizer(std::move(packetizer)),
       m_ntpEpoch(ntpEpoch),
       m_senderReportSchedule(std::move(senderReportSchedule)),
-      m_counters(counters),
+      m_continuity(std::move(continuity)),
       m_cname(std::move(cname)),
       m_ssrc(ssrc),
       m_generation(generation)
@@ -29,8 +29,7 @@ MediaMpegTsRtpDatagramSink::MediaMpegTsRtpDatagramSink(
 
 MediaMpegTsRtpDatagramSink::~MediaMpegTsRtpDatagramSink() noexcept
 {
-    m_transport.reset();
-    m_closed = true;
+    abort();
 }
 
 ::media::Result<std::unique_ptr<MediaMpegTsRtpDatagramSink>>
@@ -38,11 +37,12 @@ MediaMpegTsRtpDatagramSink::create(
     const MediaMpegTsRtpOutputPlan& plan,
     const MediaPlaybackEpoch& epoch,
     const MediaSharedNtpEpoch& sharedNtpEpoch,
+    std::shared_ptr<MediaMpegTsRtpContinuityState> continuity,
     MediaUdpDatagramSenderPortFactory& portFactory)
 {
     using SinkResult =
         ::media::Result<std::unique_ptr<MediaMpegTsRtpDatagramSink>>;
-    if (epoch.generation == 0 || plan.cname().empty()) {
+    if (epoch.generation == 0 || plan.cname().empty() || !continuity) {
         return SinkResult::failure(
             ::media::ErrorInfo::invalidArgument(
                 "MP2T RTP sink requires a complete generation and CNAME"));
@@ -60,9 +60,10 @@ MediaMpegTsRtpDatagramSink::create(
     auto packetizer = MediaMpegTsRtpPacketizer::create(
         MediaMpegTsRtpPacketizerConfig{
             plan.payloadType(), plan.clockRate(), plan.ssrc(),
-            plan.baseTimestamp(), plan.initialSequenceNumber(),
+            plan.baseTimestamp(), continuity,
             plan.tsPacketsPerPayload(),
-            plan.maximumDatagramBytes(), epoch.masterRelease});
+            plan.maximumDatagramBytes(),
+            sharedNtpEpoch.masterAtCapture()});
     if (!packetizer) {
         (void)transport.value()->close();
         return SinkResult::failure(packetizer.error());
@@ -80,16 +81,11 @@ MediaMpegTsRtpDatagramSink::create(
         (void)transport.value()->close();
         return SinkResult::failure(reportSchedule.error());
     }
-    auto counters = ScheduledRtpSenderCounters::create(0, 0);
-    if (!counters) {
-        (void)transport.value()->close();
-        return SinkResult::failure(counters.error());
-    }
     auto sink = std::unique_ptr<MediaMpegTsRtpDatagramSink>(
         new (std::nothrow) MediaMpegTsRtpDatagramSink(
             std::move(transport).value(),
             std::move(packetizer).value(), sharedNtpEpoch,
-            std::move(reportSchedule).value(), counters.value(),
+            std::move(reportSchedule).value(), std::move(continuity),
             plan.cname(), plan.ssrc(), epoch.generation));
     if (!sink) {
         return SinkResult::failure(
@@ -113,7 +109,8 @@ MediaMpegTsRtpDatagramSink::create(
 }
 
 ::media::Status MediaMpegTsRtpDatagramSink::dispatchSenderReport(
-    MediaRunningTime now)
+    MediaRunningTime now,
+    const MediaMpegTsRtpCounterSnapshot& counters)
 {
     auto prepared = m_senderReportSchedule.prepare(now, m_generation);
     if (!prepared) return ::media::Status::failure(prepared.error());
@@ -128,7 +125,7 @@ MediaMpegTsRtpDatagramSink::create(
     auto datagram = MediaRtcpSenderReportGenerator::serialize(
         MediaRtcpSenderReportParameters(
             m_ssrc, m_cname, timestamp.value(),
-            m_counters.packetCount(), m_counters.octetCount()));
+            counters.packetCount, counters.octetCount));
     if (!datagram) {
         return ::media::Status::failure(datagram.error());
     }
@@ -175,13 +172,16 @@ MediaMpegTsRtpDatagramSink::create(
         auto status = fail(packet.error());
         return ::media::Result<std::size_t>::failure(status.error());
     }
-    auto counterStatus = m_counters.preflight(
+    auto counterReservation = m_continuity->reservePacket(
         packet.value().payloadOctets());
-    if (!counterStatus) {
-        auto status = fail(counterStatus.error());
+    if (!counterReservation) {
+        auto status = fail(counterReservation.error());
         return ::media::Result<std::size_t>::failure(status.error());
     }
-    auto report = dispatchSenderReport(emitOnMaster);
+    const MediaMpegTsRtpCounterSnapshot counters{
+        counterReservation.value().packetCount(),
+        counterReservation.value().octetCount()};
+    auto report = dispatchSenderReport(emitOnMaster, counters);
     if (!report) {
         auto status = fail(report.error());
         return ::media::Result<std::size_t>::failure(status.error());
@@ -200,7 +200,7 @@ MediaMpegTsRtpDatagramSink::create(
             "MP2T RTP transport threw during datagram delivery"));
         return ::media::Result<std::size_t>::failure(status.error());
     }
-    m_counters.commit(packet.value().payloadOctets());
+    counterReservation.value().commit();
     m_lastEmitOnMaster = emitOnMaster;
     return ::media::Result<std::size_t>::success(
         completeTsPackets.size());
@@ -219,6 +219,7 @@ MediaMpegTsRtpDatagramSink::create(
 ::media::Status MediaMpegTsRtpDatagramSink::sendTerminalReport()
 {
     if (!m_lastEmitOnMaster) return ::media::Status::success();
+    const auto counters = m_continuity->counterSnapshot();
     auto timestamp = MediaRtcpSenderReportGenerator::mapTimestamp(
         *m_lastEmitOnMaster, m_ntpEpoch,
         m_packetizer.clockMapper());
@@ -228,7 +229,7 @@ MediaMpegTsRtpDatagramSink::create(
     auto datagram = MediaRtcpSenderReportGenerator::serializeWithBye(
         MediaRtcpSenderReportParameters(
             m_ssrc, m_cname, timestamp.value(),
-            m_counters.packetCount(), m_counters.octetCount()));
+            counters.packetCount, counters.octetCount));
     if (!datagram) {
         return ::media::Status::failure(datagram.error());
     }
@@ -260,6 +261,12 @@ MediaMpegTsRtpDatagramSink::create(
         m_failure = transportClosed.error();
     }
     return m_failure ? terminalStatus() : ::media::Status::success();
+}
+
+void MediaMpegTsRtpDatagramSink::abort() noexcept
+{
+    if (m_closed) return;
+    (void)closeTransport();
 }
 
 } // namespace media::ffmpeg::graph

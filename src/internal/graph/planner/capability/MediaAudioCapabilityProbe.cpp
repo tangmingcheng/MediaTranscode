@@ -1,5 +1,6 @@
 #include "internal/graph/planner/capability/MediaAudioCapabilityProbe.h"
 
+#include "internal/graph/planner/audio/capability/MediaAudioDecoderCapabilityProvider.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegDescriptorMapper.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 
@@ -9,7 +10,9 @@ extern "C" {
 #include <libavutil/error.h>
 }
 
+#include <limits>
 #include <string>
+#include <string_view>
 
 namespace media::ffmpeg::graph {
 
@@ -50,6 +53,27 @@ namespace media::ffmpeg::graph {
     }
     capability.stream.profile = profile.value();
     capability.stream.bitrateBitsPerSecond = descriptor.codec.bitrate;
+    const bool isMpegTsAac =
+        audioParams->codec_id == AV_CODEC_ID_AAC &&
+        inputContext.iformat &&
+        inputContext.iformat->name &&
+        std::string_view(inputContext.iformat->name) == "mpegts";
+    auto decoder = isMpegTsAac
+        ? MediaAudioDecoderCapabilityProvider::verifyAacAdts(*audioParams)
+        : MediaAudioDecoderCapabilityProvider::verifyDemuxedStream(*audioParams);
+    if (!decoder) {
+        return ::media::Result<MediaAudioCapability>::failure(
+            decoder.error());
+    }
+    if (decoder.value().maximumOutputBlockInputSamples >
+        std::numeric_limits<int>::max()) {
+        return ::media::Result<MediaAudioCapability>::failure(
+            ::media::ErrorInfo::unsupported(
+                "demuxed audio access-unit sample bound exceeds planner capacity"));
+    }
+    capability.stream.maximumAccessUnitSamples = static_cast<int>(
+        decoder.value().maximumOutputBlockInputSamples);
+    capability.stream.selectedDecoder = std::move(decoder).value();
     return ::media::Result<MediaAudioCapability>::success(std::move(capability));
 }
 

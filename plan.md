@@ -381,11 +381,11 @@
 - README documents `--output-transport`.
 - Acceptance evidence contains exact CLI/FFmpeg/VLC commands and results, excluding build commands.
 
-- [ ] **Step 1: Update concise user and architecture documentation**
+- [x] **Step 1: Update concise user and architecture documentation**
 
   Document all three output modes, MP2T PT 33/90 kHz/RTP-RTCP/SDP behavior, independent input/output planning, and examples for RTP input to MPEG-TS/UDP and MPEG-TS/RTP.
 
-- [ ] **Step 2: Run the required build**
+- [x] **Step 2: Run the required build**
 
   Execute only:
 
@@ -397,11 +397,11 @@
 
   Require exit code 0 and both CLI artifacts. A timeout or missing artifact fails acceptance.
 
-- [ ] **Step 3: Establish current same-layout baselines**
+- [x] **Step 3: Establish current same-layout baselines**
 
   Run separate RTP input to separate RTP output and MPEG-TS/UDP input to MPEG-TS/UDP output for 2 minutes each with the real CLI, FFmpeg source/receiver, and VLC. Record startup time, drops, duplicates, worker/decode errors, stalls, generations, discontinuities, A/V skew/drift, CPU, memory trend, and subjective synchronization.
 
-- [ ] **Step 4: Run the remaining seven paths**
+- [x] **Step 4: Run the remaining seven paths**
 
   Run every remaining input/output pair for 2 minutes:
 
@@ -417,15 +417,15 @@
 
   For MP2T, open the generated SDP directly in both VLC and FFmpeg/ffprobe and confirm PT 33, 90 kHz, RTP/RTCP activity, decodable H.264/AAC, and stable A/V.
 
-- [ ] **Step 5: Enforce bounded cleanup and evidence quality**
+- [x] **Step 5: Enforce bounded cleanup and evidence quality**
 
   Ensure every CLI, FFmpeg, ffprobe, and VLC process terminates. Save only concise commands/results in the completion document; temporary captures and scripts remain under `out/` and are not committed.
 
-- [ ] **Step 6: Commission quality scoring**
+- [x] **Step 6: Commission quality scoring**
 
   Dispatch a fresh subagent to review the complete branch against the industrial DAG scoring rubric. Apply evidence-backed score changes to `QUALITY_SCORE.md`, including A/V preservation, clock/output orthogonality, MP2T compliance, ownership, failure semantics, and remaining risks.
 
-- [ ] **Step 7: Commit acceptance and documentation**
+- [x] **Step 7: Commit acceptance and documentation**
 
   Verify UTF-8/CRLF and `git diff --check`, mark all plan tasks complete, and commit:
 
@@ -441,11 +441,11 @@
 - Review: all changes from `origin/master...HEAD`
 - Modify only if findings require fixes.
 
-- [ ] **Step 1: Self-review the entire branch**
+- [x] **Step 1: Self-review the entire branch**
 
   Check every design requirement, output matrix entry, planner authority, RAII owner, node cardinality, close path, failure propagation, enum stability, UTF-8/CRLF file, documentation claim, and acceptance result. Continue fixing and rebuilding until no omission remains.
 
-- [ ] **Step 2: List residual risks and optimization work**
+- [x] **Step 2: List residual risks and optimization work**
 
   Record only evidence-backed remaining risks in the completion document and PR. Do not hide them by reducing validation or adding fallback.
 

@@ -96,6 +96,7 @@ MediaTsTransportPacketBuilder::payload(
     std::uint8_t initialPayloadContinuity,
     std::span<const std::span<const std::uint8_t>> segments,
     bool randomAccess,
+    bool discontinuity,
     std::vector<std::array<std::uint8_t, 188>> workspace)
 {
     if (pid >= NullPid || initialPayloadContinuity > 15) {
@@ -109,7 +110,8 @@ MediaTsTransportPacketBuilder::payload(
     }
     auto reader = std::move(logicalBytes).value();
     workspace.clear();
-    const std::size_t firstCapacity = randomAccess ? 182 : 184;
+    const std::size_t firstCapacity =
+        randomAccess || discontinuity ? 182 : 184;
     const std::size_t remaining = reader.size() > firstCapacity
         ? reader.size() - firstCapacity
         : 0;
@@ -120,11 +122,14 @@ MediaTsTransportPacketBuilder::payload(
     while (offset < reader.size()) {
         const bool first = offset == 0;
         const bool needsRandomAccess = first && randomAccess;
+        const bool needsDiscontinuity = first && discontinuity;
         const std::size_t remaining = reader.size() - offset;
-        const std::size_t payloadBytes = needsRandomAccess
+        const std::size_t payloadBytes =
+            needsRandomAccess || needsDiscontinuity
             ? std::min<std::size_t>(remaining, 182)
             : std::min<std::size_t>(remaining, 184);
-        const bool needsAdaptation = needsRandomAccess || payloadBytes < 184;
+        const bool needsAdaptation =
+            needsRandomAccess || needsDiscontinuity || payloadBytes < 184;
 
         std::array<std::uint8_t, PacketSize> packet;
         writeHeader(packet, pid, first,
@@ -134,7 +139,11 @@ MediaTsTransportPacketBuilder::payload(
         if (needsAdaptation) {
             const std::size_t adaptationLength = 183 - payloadBytes;
             packet[4] = static_cast<std::uint8_t>(adaptationLength);
-            if (adaptationLength != 0) packet[5] = needsRandomAccess ? 0x40 : 0;
+            if (adaptationLength != 0) {
+                packet[5] = static_cast<std::uint8_t>(
+                    (needsRandomAccess ? 0x40 : 0) |
+                    (needsDiscontinuity ? 0x80 : 0));
+            }
             payloadOffset = 5 + adaptationLength;
         }
         reader.copyNext(std::span<std::uint8_t>(packet).subspan(
@@ -151,7 +160,8 @@ MediaTsTransportPacketBuilder::payload(
 MediaTsTransportPacketBuilder::pcrOnly(
     std::uint16_t pid,
     std::uint8_t nextPayloadContinuity,
-    std::uint64_t wire27Mhz)
+    std::uint64_t wire27Mhz,
+    bool discontinuity)
 {
     if (pid >= NullPid || nextPayloadContinuity > 15 ||
         wire27Mhz >= PcrModulus) {
@@ -161,7 +171,8 @@ MediaTsTransportPacketBuilder::pcrOnly(
     std::array<std::uint8_t, PacketSize> packet;
     writeHeader(packet, pid, false, 2, previousPayload(nextPayloadContinuity));
     packet[4] = 183;
-    packet[5] = 0x10;
+    packet[5] = static_cast<std::uint8_t>(
+        0x10 | (discontinuity ? 0x80 : 0));
     const std::uint64_t base = wire27Mhz / 300;
     const std::uint16_t extension = static_cast<std::uint16_t>(wire27Mhz % 300);
     packet[6] = static_cast<std::uint8_t>(base >> 25);

@@ -49,6 +49,7 @@ MediaMpegTsRtpPacketizer::create(MediaMpegTsRtpPacketizerConfig config)
 {
     if (config.payloadType != Mp2tStaticPayloadType ||
         config.clockRate != Mp2tClockRate || config.ssrc == 0 ||
+        !config.continuity ||
         config.maximumTsPackets < 1 || config.maximumTsPackets > 7 ||
         config.maximumDatagramBytes < RtpHeaderBytes + TsPacketBytes ||
         static_cast<std::size_t>(config.maximumTsPackets) >
@@ -70,8 +71,7 @@ MediaMpegTsRtpPacketizer::create(MediaMpegTsRtpPacketizerConfig config)
 MediaMpegTsRtpPacketizer::MediaMpegTsRtpPacketizer(
     MediaMpegTsRtpPacketizerConfig config,
     MediaRtpOutputClockMapper clockMapper) noexcept
-    : m_config(config), m_clockMapper(clockMapper)
-    , m_nextSequenceNumber(config.initialSequenceNumber)
+    : m_config(std::move(config)), m_clockMapper(clockMapper)
 {
 }
 
@@ -107,7 +107,9 @@ MediaMpegTsRtpPacketizer::packetize(
         datagram[0] = 0x80;
         datagram[1] =
             static_cast<std::uint8_t>(m_config.payloadType);
-        writeU16(datagram, 2, m_nextSequenceNumber);
+        const auto emittedSequence =
+            m_config.continuity->takeSequenceNumber();
+        writeU16(datagram, 2, emittedSequence);
         writeU32(datagram, 4, timestamp.value().wire());
         writeU32(datagram, 8, m_config.ssrc);
         std::copy(
@@ -115,9 +117,6 @@ MediaMpegTsRtpPacketizer::packetize(
             datagram.begin() +
                 static_cast<std::ptrdiff_t>(RtpHeaderBytes));
 
-        const std::uint16_t emittedSequence = m_nextSequenceNumber;
-        m_nextSequenceNumber = static_cast<std::uint16_t>(
-            static_cast<std::uint32_t>(m_nextSequenceNumber) + 1);
         m_lastTimestamp = timestamp.value();
         return ::media::Result<MediaMpegTsRtpPacket>::success(
             MediaMpegTsRtpPacket(
