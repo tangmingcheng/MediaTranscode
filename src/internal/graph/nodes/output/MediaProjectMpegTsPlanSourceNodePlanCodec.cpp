@@ -642,7 +642,7 @@ MediaProjectMpegTsPlanSourceNodePlanCodec::decode(const MediaNode& node)
                       "Project MPEG-TS plan source has an invalid group")
                 : mux.error());
     }
-    auto protocol = MediaProjectMpegTsOutputPlan::accept(
+    auto protocol = MediaProjectMpegTsOutputPlan::fromEncodedFacts(
         audioSampleRate.value(), std::move(mux).value());
     if (!protocol) return Result::failure(protocol.error());
 

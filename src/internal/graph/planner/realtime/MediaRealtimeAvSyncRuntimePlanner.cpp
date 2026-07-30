@@ -321,7 +321,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
                 ::media::ErrorInfo::notInitialized(
                     "project MPEG-TS synchronization output facts are incomplete"));
         }
-        auto accepted = MediaProjectMpegTsOutputPlan::accept(
+        auto accepted = MediaProjectMpegTsOutputPlan::fromEncodedFacts(
             *facts.value().outputSampleRate,
             *synchronization.projectMpegTsOutput->outputMux);
         if (!accepted) {

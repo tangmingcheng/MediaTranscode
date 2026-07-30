@@ -18,7 +18,7 @@ public:
         MediaRunningTime transportDecodeLead,
         MediaOutputTransportKind transportKind,
         std::uint8_t maximumPacketsPerDatagram);
-    static ::media::Result<MediaProjectMpegTsOutputPlan> accept(
+    static ::media::Result<MediaProjectMpegTsOutputPlan> fromEncodedFacts(
         int audioSampleRate,
         MediaTsMuxPlan muxPlan);
 
