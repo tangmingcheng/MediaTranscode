@@ -182,7 +182,6 @@ bool validRtpStream(
         !runtime.synchronization.projectMpegTsOutput ||
         outer.outputLayout !=
             RealtimeOutputStreamLayout::MuxedTransportStream ||
-        outer.outputTransport != MediaOutputTransportKind::UdpDatagrams ||
         runtime.outputAdapter != MediaAvSyncOutputAdapterKind::ProjectMpegTs ||
         runtime.planningFacts.outputVideoRtpPacketization ||
         runtime.planningFacts.outputAudioRtpPacketization ||
@@ -196,15 +195,80 @@ bool validRtpStream(
     const auto& output =
         std::get<MediaProjectMpegTsRuntimeOutputPlan>(
             runtime.protocolOutput);
-    if (output.url.empty() ||
-        output.resourceKind != MediaOutputResourceKind::ByteSink ||
-        output.muxSessionKind != MediaMuxSessionKind::ProjectMpegTs ||
-        output.protocol.audioSampleRate() !=
+    const auto& mux = output.protocol.muxPlan().parameters();
+    if (output.protocol.audioSampleRate() !=
             runtime.audioCorrection.outputSampleRate ||
-        output.protocol.muxPlan().parameters() !=
+        mux !=
             runtime.synchronization.projectMpegTsOutput->outputMux
                 ->parameters()) {
         return invalidOutput("Project MPEG-TS protocol facts");
+    }
+    if (outer.outputTransport == MediaOutputTransportKind::UdpDatagrams) {
+        const auto* udp =
+            std::get_if<MediaMpegTsUdpOutputPlan>(&output.transport);
+        if (!udp || mux.transportKind !=
+                        MediaOutputTransportKind::UdpDatagrams ||
+            udp->url.empty() ||
+            udp->resourceKind != MediaOutputResourceKind::ByteSink ||
+            udp->muxSessionKind != MediaMuxSessionKind::ProjectMpegTs) {
+            return invalidOutput("Project MPEG-TS UDP transport facts");
+        }
+        return ::media::Status::success();
+    }
+    if (outer.outputTransport != MediaOutputTransportKind::RtpAvp) {
+        return invalidOutput("Project MPEG-TS transport kind");
+    }
+    const auto* rtp =
+        std::get_if<MediaMpegTsRtpOutputPlan>(&output.transport);
+    if (!rtp || mux.transportKind != MediaOutputTransportKind::RtpAvp) {
+        return invalidOutput("Project MPEG-TS RTP transport variant");
+    }
+    const auto& sender = rtp->transport();
+    const auto& remoteRtp = sender.remoteRtpEndpoint();
+    const auto& remoteRtcp = sender.remoteRtcpEndpoint();
+    auto maximumPackets = MediaTsMuxPlan::maximumPacketsPerRtpDatagram(
+        rtp->maximumDatagramBytes());
+    auto sdpIdentity = MediaSdpSessionIdentity::create(
+        rtp->sdp().originUsername, 0, 0, rtp->sdp().sessionName,
+        rtp->sdp().originAddressFamily,
+        rtp->sdp().originNumericAddress, rtp->sdp().cname);
+    if (!maximumPackets || !sdpIdentity ||
+        rtp->payloadType() != 33 || rtp->clockRate() != 90'000 ||
+        rtp->ssrc() == 0 || rtp->cname().empty() ||
+        rtp->senderReportInterval() <=
+            MediaRunningTime::fromNanoseconds(0) ||
+        !runtime.synchronization.recovery.reacquisitionTimeoutNs ||
+        rtp->senderReportInterval() >=
+            *runtime.synchronization.recovery.reacquisitionTimeoutNs ||
+        rtp->maximumDatagramBytes() != sender.maximumDatagramBytes() ||
+        rtp->maximumDatagramBytes() >
+            static_cast<std::size_t>(
+                (std::numeric_limits<int>::max)() / 2) ||
+        sender.sendBufferBytes() !=
+            static_cast<int>(rtp->maximumDatagramBytes() * 2) ||
+        rtp->tsPacketsPerPayload() != maximumPackets.value() ||
+        mux.maximumPacketsPerDatagram != rtp->tsPacketsPerPayload() ||
+        sender.ioBehavior() !=
+            MediaUdpSenderIoBehavior::NonBlockingRejectOnPressure ||
+        sender.localPortPolicy().kind() !=
+            MediaRtpUdpLocalPortPolicyKind::OsAssignedIndependent ||
+        sender.localPortPolicy().rtpPort() ||
+        sender.localPortPolicy().rtcpPort() ||
+        sender.localNumericAddress() !=
+            (remoteRtp.addressFamily() == MediaIpAddressFamily::Ipv4
+                 ? "0.0.0.0"
+                 : "::") ||
+        remoteRtp.port() == 0 || (remoteRtp.port() % 2) != 0 ||
+        remoteRtcp.port() != remoteRtp.port() + 1 ||
+        remoteRtcp.addressFamily() != remoteRtp.addressFamily() ||
+        remoteRtcp.numericAddress() != remoteRtp.numericAddress() ||
+        rtp->sdp().path.empty() ||
+        rtp->sdp().originUsername.empty() ||
+        rtp->sdp().originUsername != rtp->sdp().sessionName ||
+        rtp->sdp().originAddressFamily != remoteRtp.addressFamily() ||
+        rtp->sdp().originNumericAddress != remoteRtp.numericAddress() ||
+        rtp->sdp().cname != rtp->cname()) {
+        return invalidOutput("Project MPEG-TS RTP protocol facts");
     }
     return ::media::Status::success();
 }

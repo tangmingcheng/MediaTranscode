@@ -3,6 +3,7 @@
 #include "internal/graph/planner/MediaRtpClockLivenessPolicy.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
+#include "internal/graph/planner/realtime/MediaRtpOutputIdentityPlanner.h"
 #include "internal/graph/sync/startup/MediaAvStartupLimits.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 
@@ -19,15 +20,6 @@ constexpr std::int64_t Second = 1'000'000'000;
 constexpr MediaRunningTime runningTime(std::int64_t nanoseconds) noexcept
 {
     return MediaRunningTime::fromNanoseconds(nanoseconds);
-}
-
-std::uint32_t stableIdentity(const std::string& value) noexcept
-{
-    std::uint32_t hash = 2166136261u;
-    for (const unsigned char byte : value) {
-        hash = (hash ^ byte) * 16777619u;
-    }
-    return hash == 0 ? 1u : hash;
 }
 
 ::media::Status planSharedPolicy(MediaAvSyncPlan& plan,
@@ -188,23 +180,27 @@ void planRtpOutput(MediaAvSyncPlan& plan,
         ? std::string("realtime-av-sync")
         : request.mediaId;
     const std::string cname =
-        "mt-" + std::to_string(stableIdentity(groupIdentity)) + "@media-transcode";
+        MediaRtpOutputIdentityPlanner::cname(groupIdentity);
     plan.rtpOutput.emplace();
     plan.rtpOutput->videoOutput.identity = groupIdentity + ".output.video";
     plan.rtpOutput->videoOutput.payloadType = 96;
     plan.rtpOutput->videoOutput.clockRate = 90'000;
     plan.rtpOutput->videoOutput.ssrc =
-        stableIdentity(*plan.rtpOutput->videoOutput.identity);
+        MediaRtpOutputIdentityPlanner::stableNumeric(
+            *plan.rtpOutput->videoOutput.identity);
     plan.rtpOutput->videoOutput.baseTimestamp =
-        stableIdentity(groupIdentity + ".video.timestamp");
+        MediaRtpOutputIdentityPlanner::stableNumeric(
+            groupIdentity + ".video.timestamp");
     plan.rtpOutput->videoOutput.cname = cname;
     plan.rtpOutput->audioOutput.identity = groupIdentity + ".output.audio";
     plan.rtpOutput->audioOutput.payloadType = 97;
     plan.rtpOutput->audioOutput.clockRate = audioOutputRate;
     plan.rtpOutput->audioOutput.ssrc =
-        stableIdentity(*plan.rtpOutput->audioOutput.identity);
+        MediaRtpOutputIdentityPlanner::stableNumeric(
+            *plan.rtpOutput->audioOutput.identity);
     plan.rtpOutput->audioOutput.baseTimestamp =
-        stableIdentity(groupIdentity + ".audio.timestamp");
+        MediaRtpOutputIdentityPlanner::stableNumeric(
+            groupIdentity + ".audio.timestamp");
     plan.rtpOutput->audioOutput.cname = cname;
     plan.rtpOutput->output.useSharedNtpEpoch = true;
     plan.rtpOutput->output.senderReportIntervalNs = runningTime(Second);
@@ -234,6 +230,7 @@ void planTsInput(MediaAvSyncPlan& plan,
 
 ::media::Result<MediaTsMuxPlan> planTsOutput(
     const MediaAvSyncPlan& plan,
+    const MediaRealtimeRtpTranscodeRequest& request,
     const MediaProjectMpegTsResolvedPipelineFacts& resolvedFacts)
 {
     if (!plan.startup.outputLeadNs) {
@@ -241,10 +238,38 @@ void planTsInput(MediaAvSyncPlan& plan,
             ::media::ErrorInfo::notInitialized(
                 "MPEG-TS output requires planner-owned startup output lead"));
     }
+    if (!request.output.transport) {
+        return ::media::Result<MediaTsMuxPlan>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "MPEG-TS output requires an explicit transport"));
+    }
+    std::uint8_t maximumPacketsPerDatagram = 7;
+    if (*request.output.transport == MediaOutputTransportKind::RtpAvp) {
+        if (!request.output.packetSize ||
+            *request.output.packetSize <= 0) {
+            return ::media::Result<MediaTsMuxPlan>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "MPEG-TS RTP output requires an explicit maximum datagram size"));
+        }
+        auto packetCount = MediaTsMuxPlan::maximumPacketsPerRtpDatagram(
+            static_cast<std::size_t>(*request.output.packetSize));
+        if (!packetCount) {
+            return ::media::Result<MediaTsMuxPlan>::failure(
+                packetCount.error());
+        }
+        maximumPacketsPerDatagram = packetCount.value();
+    } else if (*request.output.transport !=
+               MediaOutputTransportKind::UdpDatagrams) {
+        return ::media::Result<MediaTsMuxPlan>::failure(
+            ::media::ErrorInfo::unsupported(
+                "MPEG-TS output transport is unsupported"));
+    }
     auto resolvedOutput = MediaProjectMpegTsOutputPlan::create(
         resolvedFacts.videoCodecName, resolvedFacts.videoPacketLayout,
         resolvedFacts.audioOutput,
-        *plan.startup.outputLeadNs);
+        *plan.startup.outputLeadNs,
+        *request.output.transport,
+        maximumPacketsPerDatagram);
     if (!resolvedOutput) {
         return ::media::Result<MediaTsMuxPlan>::failure(resolvedOutput.error());
     }
@@ -364,7 +389,7 @@ void planTsInput(MediaAvSyncPlan& plan,
                 ::media::ErrorInfo::notInitialized(
                     "Project MPEG-TS output requires resolved H.264/AAC pipeline facts"));
         }
-        auto outputMux = planTsOutput(plan, *resolvedTsFacts);
+        auto outputMux = planTsOutput(plan, request, *resolvedTsFacts);
         if (!outputMux) {
             return ::media::Result<MediaAvSyncPlan>::failure(outputMux.error());
         }

@@ -218,7 +218,7 @@
 - Extend the Task 2 input-clock-by-output-authority validator from the two
   existing authorities to the third MPEG-TS/RTP runtime transport variant.
 
-- [ ] **Step 1: Extend the TS mux transport contract**
+- [x] **Step 1: Extend the TS mux transport contract**
 
   Replace the MPEG-TS-specific transport enum with the shared output transport enum without changing the serialized UDP value. Validate one through seven complete TS packets per emitted batch for both transports. For RTP, calculate:
 
@@ -229,19 +229,19 @@
 
   Reject zero capacity and any plan that would fragment a TS packet.
 
-- [ ] **Step 2: Create the MP2T plan**
+- [x] **Step 2: Create the MP2T plan**
 
   Construct a single RTP/RTCP session with even RTP port and adjacent RTCP port, PT 33, clock rate 90000, planner-owned SSRC/base timestamp/CNAME, explicit SR interval, nonblocking pressure policy, and the confirmed SDP identity.
 
-- [ ] **Step 3: Keep mux facts shared**
+- [x] **Step 3: Keep mux facts shared**
 
   `MediaProjectMpegTsOutputPlan::create()` resolves the same H.264/AAC/PCR/PID/continuity facts for UDP and RTP. Only datagram batching and transport plan differ. No protocol branch may change media timestamps.
 
-- [ ] **Step 4: Encode/decode complete runtime plan facts**
+- [x] **Step 4: Encode/decode complete runtime plan facts**
 
   Update the typed node-plan codec to accept both stable transport enum values and all planner-owned transport facts. Decode must reject missing, out-of-range, or mismatched fields; it must not fill absent fields.
 
-- [ ] **Step 5: Perform static verification and commit**
+- [x] **Step 5: Perform static verification and commit**
 
   Run `git diff --check`, verify plan encode/decode symmetry and UTF-8/CRLF, update this task, and commit:
 

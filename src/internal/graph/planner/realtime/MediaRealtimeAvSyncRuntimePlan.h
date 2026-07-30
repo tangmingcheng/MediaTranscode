@@ -8,6 +8,7 @@
 #include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlan.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlan.h"
 #include "internal/graph/planner/avsync/MediaAvSyncOutputAdapterKind.h"
+#include "internal/graph/planner/realtime/MediaMpegTsRtpOutputPlan.h"
 #include "internal/graph/planner/realtime/MediaProjectMpegTsOutputPlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncAssemblyPlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncPlanningFacts.h"
@@ -58,11 +59,16 @@ struct MediaSeparateRtpOutputRuntimePlan final {
     MediaSeparateRtpSdpRuntimePlan sdp;
 };
 
-struct MediaProjectMpegTsRuntimeOutputPlan final {
+struct MediaMpegTsUdpOutputPlan final {
     std::string url;
     MediaOutputResourceKind resourceKind;
     MediaMuxSessionKind muxSessionKind;
+};
+
+struct MediaProjectMpegTsRuntimeOutputPlan final {
     MediaProjectMpegTsOutputPlan protocol;
+    std::variant<MediaMpegTsUdpOutputPlan,
+                 MediaMpegTsRtpOutputPlan> transport;
 };
 
 struct MediaRealtimeAvSyncRuntimePlan final {

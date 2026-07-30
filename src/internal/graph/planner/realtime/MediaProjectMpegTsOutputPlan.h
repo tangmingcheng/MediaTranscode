@@ -15,7 +15,9 @@ public:
         const std::string& videoCodecName,
         const MediaEncodedPacketLayout& videoPacketLayout,
         const MediaResolvedAudioOutputPlan& audioOutput,
-        MediaRunningTime transportDecodeLead);
+        MediaRunningTime transportDecodeLead,
+        MediaOutputTransportKind transportKind,
+        std::uint8_t maximumPacketsPerDatagram);
     static ::media::Result<MediaProjectMpegTsOutputPlan> accept(
         int audioSampleRate,
         MediaTsMuxPlan muxPlan);

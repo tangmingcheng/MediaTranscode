@@ -69,15 +69,17 @@ MediaScheduledMpegTsOutputSegmentBuilder::build(
     }
     const auto& output =
         std::get<MediaProjectMpegTsRuntimeOutputPlan>(plan.protocolOutput);
-    if (output.resourceKind != MediaOutputResourceKind::ByteSink ||
-        output.muxSessionKind != MediaMuxSessionKind::ProjectMpegTs) {
+    const auto* udp =
+        std::get_if<MediaMpegTsUdpOutputPlan>(&output.transport);
+    if (!udp || udp->resourceKind != MediaOutputResourceKind::ByteSink ||
+        udp->muxSessionKind != MediaMuxSessionKind::ProjectMpegTs) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
-            "Scheduled MPEG-TS output requires planned ByteSink and project mux"));
+            "Scheduled MPEG-TS UDP output requires its planned transport variant"));
     }
     auto base = MediaOutputSegmentBuilder::buildFileMuxOutput(
         graph, FileOutputSegmentOptions{
-            options.prefix, output.url, {}, output.resourceKind, true, true,
-            output.muxSessionKind, plan.queues});
+            options.prefix, udp->url, {}, udp->resourceKind, true, true,
+            udp->muxSessionKind, plan.queues});
     if (!base) return Result::failure(base.error());
     const MediaNodeId planSource = graph.addNode(
         MediaNodeKind::ProjectMpegTsPlanSource,

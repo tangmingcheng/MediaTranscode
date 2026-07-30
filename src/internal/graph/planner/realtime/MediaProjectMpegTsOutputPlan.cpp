@@ -43,7 +43,9 @@ struct H264MuxInputContract final {
     const std::string& videoCodecName,
     const MediaEncodedPacketLayout& videoPacketLayout,
     const MediaResolvedAudioOutputPlan& audioOutput,
-    MediaRunningTime transportDecodeLead)
+    MediaRunningTime transportDecodeLead,
+    MediaOutputTransportKind transportKind,
+    std::uint8_t maximumPacketsPerDatagram)
 {
     if (canonicalCodecName(videoCodecName) != "h264" ||
         audioOutput.codecName() != "aac" ||
@@ -70,8 +72,8 @@ struct H264MuxInputContract final {
             MediaRunningTime::fromNanoseconds(100'000'000),
             MediaRunningTime::fromNanoseconds(5'000'000), 1, 90'000},
         transportDecodeLead, 188,
-        MediaTsContinuitySeeds{0, 0, 0, 0}, 7,
-        MediaTsOutputTransportKind::Udp, audioOutput.codecFrameSamples()});
+        MediaTsContinuitySeeds{0, 0, 0, 0}, maximumPacketsPerDatagram,
+        transportKind, audioOutput.codecFrameSamples()});
     if (!mux) return ::media::Result<MediaProjectMpegTsOutputPlan>::failure(mux.error());
     return ::media::Result<MediaProjectMpegTsOutputPlan>::success(
         MediaProjectMpegTsOutputPlan(audioOutput.sampleRate(), std::move(mux).value()));

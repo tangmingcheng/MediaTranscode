@@ -14,6 +14,8 @@
 namespace media::ffmpeg::graph {
 namespace {
 
+constexpr std::int64_t NanosecondsPerSecond = 1'000'000'000;
+
 ::media::Result<MediaRealtimeAvSyncAssemblyPlan> planAssembly(
     const MediaRealtimeRtpTranscodePlan& outer,
     const MediaAvSyncPlan& synchronization,
@@ -319,12 +321,6 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
                 ::media::ErrorInfo::notInitialized(
                     "project MPEG-TS synchronization output facts are incomplete"));
         }
-        if (outer.outputTransport !=
-            MediaOutputTransportKind::UdpDatagrams) {
-            return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
-                ::media::ErrorInfo::notInitialized(
-                    "MPEG-TS/RTP requires a dedicated planned runtime transport"));
-        }
         auto accepted = MediaProjectMpegTsOutputPlan::accept(
             *facts.value().outputSampleRate,
             *synchronization.projectMpegTsOutput->outputMux);
@@ -332,14 +328,64 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
                 accepted.error());
         }
+        std::optional<std::variant<
+            MediaMpegTsUdpOutputPlan,
+            MediaMpegTsRtpOutputPlan>> transport;
+        if (outer.outputTransport ==
+            MediaOutputTransportKind::UdpDatagrams) {
+            if (output.muxedOutput.rtpTransport ||
+                !output.muxedOutput.sdpPath.empty() ||
+                accepted.value().muxPlan().parameters().transportKind !=
+                    MediaOutputTransportKind::UdpDatagrams) {
+                return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
+                    ::media::ErrorInfo::invalidArgument(
+                        "MPEG-TS UDP output rejects RTP transport facts"));
+            }
+            transport.emplace(
+                std::in_place_type<MediaMpegTsUdpOutputPlan>,
+                MediaMpegTsUdpOutputPlan{
+                    output.muxedOutput.url,
+                    MediaOutputResourceKind::ByteSink,
+                    MediaMuxSessionKind::ProjectMpegTs});
+        } else if (outer.outputTransport ==
+                   MediaOutputTransportKind::RtpAvp) {
+            if (!output.muxedOutput.rtpTransport ||
+                output.muxedOutput.sdpPath.empty() ||
+                output.muxedOutput.mediaId.empty() ||
+                accepted.value().muxPlan().parameters().transportKind !=
+                    MediaOutputTransportKind::RtpAvp) {
+                return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
+                    ::media::ErrorInfo::notInitialized(
+                        "MPEG-TS RTP output requires complete planned transport facts"));
+            }
+            auto rtp = MediaMpegTsRtpOutputPlan::create(
+                std::move(*output.muxedOutput.rtpTransport),
+                output.muxedOutput.sdpPath,
+                output.muxedOutput.mediaId,
+                MediaRunningTime::fromNanoseconds(NanosecondsPerSecond));
+            if (!rtp ||
+                rtp.value().tsPacketsPerPayload() !=
+                    accepted.value().muxPlan().parameters()
+                        .maximumPacketsPerDatagram) {
+                return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
+                    rtp ? ::media::ErrorInfo::invalidArgument(
+                              "MPEG-TS RTP transport batching differs from the mux plan")
+                        : rtp.error());
+            }
+            transport.emplace(
+                std::in_place_type<MediaMpegTsRtpOutputPlan>,
+                std::move(rtp).value());
+        } else {
+            return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
+                ::media::ErrorInfo::unsupported(
+                    "MPEG-TS output transport is unsupported"));
+        }
         adapter = MediaAvSyncOutputAdapterKind::ProjectMpegTs;
         outer.videoParameters.globalHeader = true;
         protocolOutput.emplace(std::in_place_type<MediaProjectMpegTsRuntimeOutputPlan>,
             MediaProjectMpegTsRuntimeOutputPlan{
-                output.muxedOutput.url,
-                MediaOutputResourceKind::ByteSink,
-                MediaMuxSessionKind::ProjectMpegTs,
-                std::move(accepted).value()});
+                std::move(accepted).value(),
+                std::move(*transport)});
     } else {
         return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
             ::media::ErrorInfo::unsupported(

@@ -168,7 +168,7 @@ MediaProjectMpegTsPlanSourceNodePlanCodec::decode(const MediaNode& node)
         f[8] > std::uint64_t{INT64_MAX} || f[18] > std::uint64_t{INT64_MAX} ||
         f[19] > std::uint64_t{INT64_MAX} || f[20] > std::uint64_t{INT64_MAX} ||
         f[23] > std::uint64_t{INT64_MAX} || f[11] > 1 || f[13] > 1 ||
-        f[30] != static_cast<unsigned>(MediaTsOutputTransportKind::Udp)) {
+        f[30] > static_cast<unsigned>(MediaOutputTransportKind::RtpAvp)) {
         return ::media::Result<MediaDecodedProjectMpegTsPlanSourceNodePlan>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "Project MPEG-TS plan source options are out of range"));
@@ -191,7 +191,7 @@ MediaProjectMpegTsPlanSourceNodePlanCodec::decode(const MediaNode& node)
         packetSize.value(),
         MediaTsContinuitySeeds{continuityPat.value(), continuityPmt.value(),
                                continuityVideo.value(), continuityAudio.value()},
-        maxPackets.value(), MediaTsOutputTransportKind::Udp,
+        maxPackets.value(), static_cast<MediaOutputTransportKind>(f[30]),
         maxAudioSamples.value()});
     if (!mux) {
         return ::media::Result<MediaDecodedProjectMpegTsPlanSourceNodePlan>::failure(

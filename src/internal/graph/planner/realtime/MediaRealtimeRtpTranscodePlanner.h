@@ -118,6 +118,8 @@ struct MediaRealtimeMuxedOutputPlan {
     std::string mediaId;
     std::optional<MediaOutputResourceKind> outputResourceKind;
     std::optional<MediaMuxSessionKind> muxSessionKind;
+    std::optional<MediaRtpUdpSenderConfig> rtpTransport;
+    std::string sdpPath;
 };
 
 struct MediaRealtimeSdpWriterPlan {
