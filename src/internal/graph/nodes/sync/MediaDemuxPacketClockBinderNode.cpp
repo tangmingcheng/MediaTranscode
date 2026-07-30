@@ -25,6 +25,18 @@ namespace {
     return ::media::ErrorInfo::invalidArgument(message);
 }
 
+::media::Status requireDemuxTerminalControl(
+    const MediaControlBufferClassification& classification)
+{
+    if (classification.flow != MediaControlBufferFlow::Terminal ||
+        (classification.kind != MediaControlBufferKind::Eof &&
+         classification.kind != MediaControlBufferKind::Abort)) {
+        return ::media::Status::failure(
+            invalid("Demux clock binder requires EOF or Abort terminal control"));
+    }
+    return ::media::Status::success();
+}
+
 } // namespace
 
 class MediaDemuxPacketClockBinderState final
@@ -187,19 +199,24 @@ MediaDemuxPacketClockBinderNode::outputCommitEvidence(
             MediaDemuxTimestampOutputCommitEvidence{
                 state->readiness(), state->generation()});
     }
-    if (const auto* control =
-            dynamic_cast<const MediaControlBuffer*>(buffer.get());
-        control &&
-        (control->controlKind() == MediaControlBufferKind::Eof ||
-         control->controlKind() == MediaControlBufferKind::Abort) &&
-        control->generation()) {
-        return Result::success(
-            MediaDemuxTimestampOutputCommitEvidence{
-                MediaSourceClockReadiness::Locked,
-                *control->generation()});
+    auto classified = classifyMediaControlBuffer(buffer);
+    if (!classified) {
+        return Result::failure(classified.error());
     }
-    return Result::failure(
-        invalid("Demux binder output lacks explicit clock generation evidence"));
+    if (auto terminal =
+            requireDemuxTerminalControl(classified.value());
+        !terminal) {
+        return Result::failure(terminal.error());
+    }
+    const auto generation =
+        classified.value().control->generation();
+    if (!generation) {
+        return Result::failure(
+            invalid("Demux binder terminal output lacks generation evidence"));
+    }
+    return Result::success(
+        MediaDemuxTimestampOutputCommitEvidence{
+            MediaSourceClockReadiness::Locked, *generation});
 }
 
 ::media::Result<MediaOutputCommitReservation>
@@ -352,13 +369,16 @@ MediaDemuxPacketClockBinderNode::processTerminal(
     MediaGraphExecutionContext& context,
     MediaBufferRef terminal)
 {
-    const auto* control =
-        dynamic_cast<const MediaControlBuffer*>(terminal.get());
-    if (!control ||
-        (control->controlKind() != MediaControlBufferKind::Eof &&
-         control->controlKind() != MediaControlBufferKind::Abort)) {
+    auto classified = classifyMediaControlBuffer(terminal);
+    if (!classified) {
         return ::media::Result<MediaNodeProcessResult>::failure(
-            invalid("Demux clock binder rejects flush or unknown terminal control"));
+            classified.error());
+    }
+    if (auto valid =
+            requireDemuxTerminalControl(classified.value());
+        !valid) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            valid.error());
     }
     if (m_state->pendingInput ||
         m_mapper->snapshot().readiness !=
@@ -368,7 +388,7 @@ MediaDemuxPacketClockBinderNode::processTerminal(
     }
     MediaBufferRef generatedTerminal =
         makeMediaBufferRef<MediaControlBuffer>(
-            control->controlKind(), m_state->generation);
+            classified.value().kind, m_state->generation);
     return m_stream == MediaScheduledStream::Video
         ? processFinished(
               broadcastControlToAllOutputs(
