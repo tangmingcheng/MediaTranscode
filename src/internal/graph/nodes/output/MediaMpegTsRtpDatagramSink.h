@@ -21,7 +21,7 @@ public:
         const MediaPlaybackEpoch& epoch,
         const MediaSharedNtpEpoch& sharedNtpEpoch,
         MediaUdpDatagramSenderPortFactory& portFactory);
-    ~MediaMpegTsRtpDatagramSink() override;
+    ~MediaMpegTsRtpDatagramSink() noexcept override;
 
     ::media::Result<std::size_t> write(
         std::span<const std::uint8_t> completeTsPackets,

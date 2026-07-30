@@ -181,6 +181,8 @@ bool validRtpStream(
 {
     if (runtime.synchronization.rtpOutput ||
         !runtime.synchronization.projectMpegTsOutput ||
+        !runtime.synchronization.projectMpegTsOutput
+             ->useSharedNtpEpoch ||
         outer.outputLayout !=
             RealtimeOutputStreamLayout::MuxedTransportStream ||
         runtime.outputAdapter != MediaAvSyncOutputAdapterKind::ProjectMpegTs ||
@@ -208,7 +210,9 @@ bool validRtpStream(
         const auto* udp =
             std::get_if<MediaMpegTsUdpOutputPlan>(&output.transport);
         if (!udp || mux.transportKind !=
-                        MediaOutputTransportKind::UdpDatagrams ||
+                         MediaOutputTransportKind::UdpDatagrams ||
+            *runtime.synchronization.projectMpegTsOutput
+                 ->useSharedNtpEpoch ||
             udp->url.empty() ||
             udp->resourceKind != MediaOutputResourceKind::ByteSink ||
             udp->muxSessionKind != MediaMuxSessionKind::ProjectMpegTs) {
@@ -221,7 +225,9 @@ bool validRtpStream(
     }
     const auto* rtp =
         std::get_if<MediaMpegTsRtpOutputPlan>(&output.transport);
-    if (!rtp || mux.transportKind != MediaOutputTransportKind::RtpAvp) {
+    if (!rtp || mux.transportKind != MediaOutputTransportKind::RtpAvp ||
+        !*runtime.synchronization.projectMpegTsOutput
+              ->useSharedNtpEpoch) {
         return invalidOutput("Project MPEG-TS RTP transport variant");
     }
     const auto& sender = rtp->transport();

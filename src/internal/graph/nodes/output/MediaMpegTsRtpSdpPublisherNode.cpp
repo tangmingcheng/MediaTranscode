@@ -145,6 +145,30 @@ MediaMpegTsRtpSdpPublisherNode::onProcess(
         return failTerminal(::media::ErrorInfo::invalidArgument(
             "MP2T SDP publisher requires an RTP transport plan"));
     }
+    const auto transition = m_syncGroup->epochTransitionSnapshot();
+    if (transition.poisoned) {
+        return failTerminal(::media::ErrorInfo::cancelled(
+            "MP2T SDP publisher sync group was aborted"));
+    }
+    if (transition.playbackEpoch &&
+        transition.playbackEpoch->generation ==
+            runtime->epoch().generation &&
+        *transition.playbackEpoch != runtime->epoch()) {
+        return failTerminal(::media::ErrorInfo::invalidArgument(
+            "MP2T SDP publisher epoch differs from its sync group"));
+    }
+    if (m_lastPublishedGeneration &&
+        runtime->epoch().generation <= *m_lastPublishedGeneration) {
+        return failTerminal(::media::ErrorInfo::invalidArgument(
+            "MP2T SDP publisher requires strictly increasing generations"));
+    }
+    const auto sharedNtpEpoch = m_syncGroup->sharedNtpEpoch();
+    auto description = MediaMpegTsRtpSdpDescription::create(
+        *rtpPlan, *sharedNtpEpoch,
+        runtime->epoch());
+    if (!description) return failTerminal(description.error());
+    auto serialized = description.value().serialize();
+    if (!serialized) return failTerminal(serialized.error());
     auto outputCommit = m_syncGroup->reserveOutputCommit(
         runtime->epoch().generation);
     if (!outputCommit) {
@@ -152,25 +176,6 @@ MediaMpegTsRtpSdpPublisherNode::onProcess(
             ? processProgress()
             : failTerminal(outputCommit.error());
     }
-    auto groupEpoch = m_syncGroup->playbackEpoch();
-    if (!groupEpoch || groupEpoch.value() != runtime->epoch()) {
-        return failTerminal(
-            groupEpoch
-                ? ::media::ErrorInfo::invalidArgument(
-                      "MP2T SDP publisher epoch differs from its sync group")
-                : groupEpoch.error());
-    }
-    if (m_lastPublishedGeneration &&
-        runtime->epoch().generation <= *m_lastPublishedGeneration) {
-        return failTerminal(::media::ErrorInfo::invalidArgument(
-            "MP2T SDP publisher requires strictly increasing generations"));
-    }
-    auto description = MediaMpegTsRtpSdpDescription::create(
-        *rtpPlan, *m_syncGroup->sharedNtpEpoch(),
-        runtime->epoch());
-    if (!description) return failTerminal(description.error());
-    auto serialized = description.value().serialize();
-    if (!serialized) return failTerminal(serialized.error());
     MediaAtomicUtf8FilePublisher publisher(*m_replacePort);
     auto published = publisher.publish(
         description.value().path(), serialized.value());

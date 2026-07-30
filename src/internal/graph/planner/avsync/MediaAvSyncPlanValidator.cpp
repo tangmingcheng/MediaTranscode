@@ -342,8 +342,19 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
 ::media::Status validateProjectMpegTsOutput(const MediaAvSyncPlan& plan)
 {
     if (plan.rtpOutput || !plan.projectMpegTsOutput ||
-        !plan.projectMpegTsOutput->outputMux) {
+        !plan.projectMpegTsOutput->outputMux ||
+        !plan.projectMpegTsOutput->useSharedNtpEpoch) {
         return invalid("Project MPEG-TS output authority");
+    }
+    const auto transport =
+        plan.projectMpegTsOutput->outputMux->parameters().transportKind;
+    const bool requiresSharedNtpEpoch =
+        transport == MediaOutputTransportKind::RtpAvp;
+    if ((transport != MediaOutputTransportKind::UdpDatagrams &&
+         transport != MediaOutputTransportKind::RtpAvp) ||
+        *plan.projectMpegTsOutput->useSharedNtpEpoch !=
+            requiresSharedNtpEpoch) {
+        return invalid("Project MPEG-TS shared NTP epoch policy");
     }
     return ::media::Status::success();
 }

@@ -27,9 +27,10 @@ MediaMpegTsRtpDatagramSink::MediaMpegTsRtpDatagramSink(
 {
 }
 
-MediaMpegTsRtpDatagramSink::~MediaMpegTsRtpDatagramSink()
+MediaMpegTsRtpDatagramSink::~MediaMpegTsRtpDatagramSink() noexcept
 {
-    (void)close();
+    m_transport.reset();
+    m_closed = true;
 }
 
 ::media::Result<std::unique_ptr<MediaMpegTsRtpDatagramSink>>
@@ -236,11 +237,13 @@ MediaMpegTsRtpDatagramSink::create(
 
 ::media::Status MediaMpegTsRtpDatagramSink::closeTransport() noexcept
 {
-    if (!m_transport) return ::media::Status::success();
-    auto closed = m_transport->close();
-    m_transport.reset();
+    if (!m_transport) {
+        m_closed = true;
+        return ::media::Status::success();
+    }
+    auto transport = std::move(m_transport);
     m_closed = true;
-    return closed;
+    return transport->close();
 }
 
 ::media::Status MediaMpegTsRtpDatagramSink::close()

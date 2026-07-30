@@ -1,6 +1,6 @@
 #pragma once
 
-#include "internal/graph/protocol/rtp/MediaRtpUdpSenderConfig.h"
+#include "internal/graph/model/MediaIpAddressFamily.h"
 #include "media_transcode/Result.h"
 
 #include <cstdint>

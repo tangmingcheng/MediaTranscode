@@ -46,9 +46,10 @@ MediaRtpUdpSenderTransport::MediaRtpUdpSenderTransport(
 {
 }
 
-MediaRtpUdpSenderTransport::~MediaRtpUdpSenderTransport()
+MediaRtpUdpSenderTransport::~MediaRtpUdpSenderTransport() noexcept
 {
-    (void)close();
+    m_rtpPort->close();
+    m_rtcpPort->close();
 }
 
 ::media::Result<std::unique_ptr<MediaRtpUdpSenderTransport>>

@@ -163,6 +163,7 @@ struct MediaAvSyncPreparedDemuxTimestampFacts {
 
 struct MediaAvSyncProjectMpegTsOutputPlan {
     std::optional<MediaTsMuxPlan> outputMux;
+    std::optional<bool> useSharedNtpEpoch;
 };
 
 struct MediaAvSyncMetricsPolicy {

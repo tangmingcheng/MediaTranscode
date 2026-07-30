@@ -393,8 +393,12 @@ void planTsInput(MediaAvSyncPlan& plan,
         if (!outputMux) {
             return ::media::Result<MediaAvSyncPlan>::failure(outputMux.error());
         }
+        const bool useSharedNtpEpoch =
+            outputMux.value().parameters().transportKind ==
+            MediaOutputTransportKind::RtpAvp;
         plan.projectMpegTsOutput.emplace();
         plan.projectMpegTsOutput->outputMux = std::move(outputMux).value();
+        plan.projectMpegTsOutput->useSharedNtpEpoch = useSharedNtpEpoch;
     } else {
         return ::media::Result<MediaAvSyncPlan>::failure(
             ::media::ErrorInfo::unsupported(

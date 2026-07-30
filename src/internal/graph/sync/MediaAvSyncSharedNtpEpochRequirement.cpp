@@ -19,7 +19,13 @@ MediaAvSyncSharedNtpEpochRequirement::resolve(
             *plan.rtpOutput->output.useSharedNtpEpoch);
     }
     if (plan.projectMpegTsOutput) {
-        return ::media::Result<bool>::success(false);
+        if (!plan.projectMpegTsOutput->useSharedNtpEpoch) {
+            return ::media::Result<bool>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "Project MPEG-TS output requires an explicit shared NTP epoch policy"));
+        }
+        return ::media::Result<bool>::success(
+            *plan.projectMpegTsOutput->useSharedNtpEpoch);
     }
     return ::media::Result<bool>::failure(
         ::media::ErrorInfo::notInitialized(
