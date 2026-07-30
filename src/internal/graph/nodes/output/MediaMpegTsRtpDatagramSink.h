@@ -46,7 +46,7 @@ private:
         std::span<const std::uint8_t> datagram) noexcept;
     ::media::Status fail(::media::ErrorInfo error) noexcept;
     ::media::Status terminalStatus() const;
-    void closeTransport() noexcept;
+    ::media::Status closeTransport() noexcept;
 
     std::unique_ptr<MediaRtpUdpSenderTransport> m_transport;
     MediaMpegTsRtpPacketizer m_packetizer;

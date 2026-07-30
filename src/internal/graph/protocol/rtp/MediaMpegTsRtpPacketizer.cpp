@@ -55,7 +55,7 @@ MediaMpegTsRtpPacketizer::create(MediaMpegTsRtpPacketizerConfig config)
             (config.maximumDatagramBytes - RtpHeaderBytes) / TsPacketBytes) {
         return ::media::Result<MediaMpegTsRtpPacketizer>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "MP2T RTP packetizer requires complete planner-owned PT 33, 90 kHz, SSRC, and datagram facts"));
+                "MP2T RTP packetizer requires complete planner-owned PT 33, 90 kHz, SSRC, sequence, and datagram facts"));
     }
     auto mapper = MediaRtpOutputClockMapper::create(
         config.clockRate, config.baseTimestamp, config.masterOrigin);
@@ -71,6 +71,7 @@ MediaMpegTsRtpPacketizer::MediaMpegTsRtpPacketizer(
     MediaMpegTsRtpPacketizerConfig config,
     MediaRtpOutputClockMapper clockMapper) noexcept
     : m_config(config), m_clockMapper(clockMapper)
+    , m_nextSequenceNumber(config.initialSequenceNumber)
 {
 }
 

@@ -59,7 +59,8 @@ MediaMpegTsRtpDatagramSink::create(
     auto packetizer = MediaMpegTsRtpPacketizer::create(
         MediaMpegTsRtpPacketizerConfig{
             plan.payloadType(), plan.clockRate(), plan.ssrc(),
-            plan.baseTimestamp(), plan.tsPacketsPerPayload(),
+            plan.baseTimestamp(), plan.initialSequenceNumber(),
+            plan.tsPacketsPerPayload(),
             plan.maximumDatagramBytes(), epoch.masterRelease});
     if (!packetizer) {
         (void)transport.value()->close();
@@ -106,7 +107,7 @@ MediaMpegTsRtpDatagramSink::create(
     ::media::ErrorInfo error) noexcept
 {
     if (!m_failure) m_failure = std::move(error);
-    closeTransport();
+    (void)closeTransport();
     return terminalStatus();
 }
 
@@ -233,12 +234,13 @@ MediaMpegTsRtpDatagramSink::create(
     return sendRtcp(datagram.value());
 }
 
-void MediaMpegTsRtpDatagramSink::closeTransport() noexcept
+::media::Status MediaMpegTsRtpDatagramSink::closeTransport() noexcept
 {
-    if (!m_transport) return;
-    (void)m_transport->close();
+    if (!m_transport) return ::media::Status::success();
+    auto closed = m_transport->close();
     m_transport.reset();
     m_closed = true;
+    return closed;
 }
 
 ::media::Status MediaMpegTsRtpDatagramSink::close()
@@ -250,7 +252,10 @@ void MediaMpegTsRtpDatagramSink::closeTransport() noexcept
         auto terminal = sendTerminalReport();
         if (!terminal && !m_failure) m_failure = terminal.error();
     }
-    closeTransport();
+    auto transportClosed = closeTransport();
+    if (!transportClosed && !m_failure) {
+        m_failure = transportClosed.error();
+    }
     return m_failure ? terminalStatus() : ::media::Status::success();
 }
 

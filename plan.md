@@ -214,7 +214,7 @@
 **Interfaces:**
 - Reuse `MediaOutputTransportKind`; its `UdpDatagrams = 0` value preserves the existing serialized UDP transport value and `RtpAvp = 1` is additive.
 - `MediaProjectMpegTsRuntimeOutputPlan` contains the shared mux plan and a transport variant: `MediaMpegTsUdpOutputPlan` or `MediaMpegTsRtpOutputPlan`.
-- `MediaMpegTsRtpOutputPlan` contains `MediaRtpUdpSenderConfig`, PT 33, 90 kHz, SSRC, base timestamp, CNAME, sender-report interval, maximum datagram bytes, TS packets per payload, and SDP identity.
+- `MediaMpegTsRtpOutputPlan` contains `MediaRtpUdpSenderConfig`, PT 33, 90 kHz, SSRC, base timestamp, initial sequence number, CNAME, sender-report interval, maximum datagram bytes, TS packets per payload, and SDP identity.
 - Extend the Task 2 input-clock-by-output-authority validator from the two
   existing authorities to the third MPEG-TS/RTP runtime transport variant.
 

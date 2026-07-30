@@ -3,6 +3,8 @@
 #include "internal/graph/nodes/output/MediaMpegTsRtpDatagramSink.h"
 #include "internal/graph/protocol/mpegts/MediaTsUdpDatagramSink.h"
 #include "internal/graph/runtime/io/MediaOutputByteSink.h"
+#include "internal/graph/runtime/network/MediaSocketRuntime.h"
+#include "internal/graph/runtime/network/MediaUdpDatagramSenderSocket.h"
 
 #include <utility>
 #include <variant>
@@ -32,27 +34,55 @@ private:
 
 } // namespace
 
+::media::Result<bool>
+ProjectMpegTsDatagramSinkFactory::bindingsReady(
+    const MediaTsMuxPlan& muxPlan,
+    const std::shared_ptr<const MediaSharedNtpEpoch>& sharedNtpEpoch,
+    const MediaOutputByteSink* udpByteSink)
+{
+    switch (muxPlan.parameters().transportKind) {
+    case MediaOutputTransportKind::UdpDatagrams:
+        if (sharedNtpEpoch) {
+            return ::media::Result<bool>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Project MPEG-TS UDP binding rejects an RTP NTP epoch"));
+        }
+        return ::media::Result<bool>::success(udpByteSink != nullptr);
+    case MediaOutputTransportKind::RtpAvp:
+        if (udpByteSink) {
+            return ::media::Result<bool>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Project MPEG-TS RTP binding rejects a UDP byte sink"));
+        }
+        return ::media::Result<bool>::success(
+            static_cast<bool>(sharedNtpEpoch));
+    }
+    return ::media::Result<bool>::failure(
+        ::media::ErrorInfo::invalidArgument(
+            "Project MPEG-TS binding contains an unsupported transport"));
+}
+
 ::media::Result<std::unique_ptr<MediaTsDatagramSink>>
 ProjectMpegTsDatagramSinkFactory::create(
     const MediaProjectMpegTsRuntimeOutputPlan& outputPlan,
+    const MediaTsMuxPlan& muxPlan,
     const MediaPlaybackEpoch& epoch,
-    const MediaSharedNtpEpoch* sharedNtpEpoch,
-    MediaUdpDatagramSenderPortFactory& datagramPortFactory,
+    const std::shared_ptr<const MediaSharedNtpEpoch>& sharedNtpEpoch,
     MediaOutputByteSink* udpByteSink)
 {
-    const auto muxTransport =
-        outputPlan.protocol.muxPlan().parameters().transportKind;
-    if (const auto* rtp = std::get_if<MediaMpegTsRtpOutputPlan>(
+    if (const auto* udp = std::get_if<MediaMpegTsUdpOutputPlan>(
             &outputPlan.transport)) {
-        if (muxTransport != MediaOutputTransportKind::RtpAvp ||
-            !sharedNtpEpoch || udpByteSink) {
+        if (muxPlan.parameters().transportKind !=
+                MediaOutputTransportKind::UdpDatagrams ||
+            sharedNtpEpoch || !udpByteSink) {
             return ::media::Result<
                 std::unique_ptr<MediaTsDatagramSink>>::failure(
                 ::media::ErrorInfo::invalidArgument(
-                    "Project MPEG-TS RTP sink binding differs from its immutable transport plan"));
+                    "Project MPEG-TS UDP sink requires only its exact byte-sink binding"));
         }
-        auto created = MediaMpegTsRtpDatagramSink::create(
-            *rtp, epoch, *sharedNtpEpoch, datagramPortFactory);
+        (void)udp;
+        auto created = MediaTsUdpDatagramSink::create(
+            std::make_unique<GenerationBorrowedByteSink>(*udpByteSink));
         if (!created) {
             return ::media::Result<
                 std::unique_ptr<MediaTsDatagramSink>>::failure(
@@ -62,17 +92,28 @@ ProjectMpegTsDatagramSinkFactory::create(
             std::unique_ptr<MediaTsDatagramSink>>::success(
             std::move(created).value());
     }
-    if (!std::holds_alternative<MediaMpegTsUdpOutputPlan>(
-            outputPlan.transport) ||
-        muxTransport != MediaOutputTransportKind::UdpDatagrams ||
-        !udpByteSink) {
+
+    const auto* rtp = std::get_if<MediaMpegTsRtpOutputPlan>(
+        &outputPlan.transport);
+    if (!rtp ||
+        muxPlan.parameters().transportKind !=
+            MediaOutputTransportKind::RtpAvp ||
+        !sharedNtpEpoch || udpByteSink) {
         return ::media::Result<
             std::unique_ptr<MediaTsDatagramSink>>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "Project MPEG-TS UDP sink binding differs from its immutable transport plan"));
+                "Project MPEG-TS RTP sink requires only shared NTP and its exact transport binding"));
     }
-    auto created = MediaTsUdpDatagramSink::create(
-        std::make_unique<GenerationBorrowedByteSink>(*udpByteSink));
+    auto socketRuntime = MediaSocketRuntime::create();
+    if (!socketRuntime) {
+        return ::media::Result<
+            std::unique_ptr<MediaTsDatagramSink>>::failure(
+            socketRuntime.error());
+    }
+    MediaUdpDatagramSenderSocketFactory datagramPortFactory(
+        std::move(socketRuntime).value());
+    auto created = MediaMpegTsRtpDatagramSink::create(
+        *rtp, epoch, *sharedNtpEpoch, datagramPortFactory);
     if (!created) {
         return ::media::Result<
             std::unique_ptr<MediaTsDatagramSink>>::failure(

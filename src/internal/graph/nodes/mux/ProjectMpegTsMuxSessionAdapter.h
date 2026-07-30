@@ -73,9 +73,7 @@ private:
 class ProjectMpegTsMuxSessionAdapter final : public MediaMuxSession {
 public:
     explicit ProjectMpegTsMuxSessionAdapter(
-        ProjectMpegTsGenerationAuthority authority,
-        std::shared_ptr<MediaUdpDatagramSenderPortFactory>
-            datagramPortFactory);
+        ProjectMpegTsGenerationAuthority authority);
     ~ProjectMpegTsMuxSessionAdapter() override;
 
     std::shared_ptr<MediaAvGenerationPurgeTarget>
@@ -119,8 +117,6 @@ private:
     std::optional<MediaRunningTime>& m_latestAcceptedEmission;
     bool& m_mediaTimelineStarted;
     std::atomic<std::uint64_t>& m_generation;
-    std::shared_ptr<MediaUdpDatagramSenderPortFactory>
-        m_datagramPortFactory;
     std::unique_ptr<MediaOutputByteSink> m_sink;
     MediaBufferRef m_videoConfig;
     MediaBufferRef m_audioConfig;

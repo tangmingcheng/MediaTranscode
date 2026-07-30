@@ -96,7 +96,6 @@ MediaMpegTsRtpSdpPublisherNode::onProcess(
         return ::media::Result<MediaNodeProcessResult>::failure(
             *m_terminalFailure);
     }
-    if (m_published) return processFinished();
     auto input = tryPopInputOptional(context, "plan");
     if (!input) return failTerminal(input.error());
     if (!input.value()) {
@@ -106,27 +105,36 @@ MediaMpegTsRtpSdpPublisherNode::onProcess(
                 "MP2T SDP publisher plan input was aborted"));
         }
         if (channel && channel->closed()) {
-            return failTerminal(::media::ErrorInfo::notInitialized(
-                "MP2T SDP publisher lost its runtime plan"));
+            return m_lastPublishedGeneration
+                ? processFinished()
+                : failTerminal(::media::ErrorInfo::notInitialized(
+                      "MP2T SDP publisher plan input closed before publication"));
         }
         return processWaiting();
     }
     if (const auto* control = dynamic_cast<const MediaControlBuffer*>(
             input.value()->get())) {
-        return failTerminal(
-            control->controlKind() == MediaControlBufferKind::Abort
-                ? ::media::ErrorInfo::cancelled(
-                      "MP2T SDP publisher received abort")
-                : ::media::ErrorInfo::invalidArgument(
-                      "MP2T SDP publisher requires a runtime plan"));
+        switch (control->controlKind()) {
+        case MediaControlBufferKind::Eof:
+            return m_lastPublishedGeneration
+                ? processFinished()
+                : failTerminal(::media::ErrorInfo::notInitialized(
+                      "MP2T SDP publisher reached EOF before publication"));
+        case MediaControlBufferKind::Flush:
+            return processProgress();
+        case MediaControlBufferKind::Abort:
+            return failTerminal(::media::ErrorInfo::cancelled(
+                "MP2T SDP publisher received abort"));
+        default:
+            return failTerminal(::media::ErrorInfo::invalidArgument(
+                "MP2T SDP publisher requires a runtime plan"));
+        }
     }
     const auto* runtime =
         dynamic_cast<const MediaProjectMpegTsRuntimePlanBuffer*>(
             input.value()->get());
     if (!runtime || runtime->group() != m_plannedGroup ||
         m_syncGroup->key() != m_plannedGroup ||
-        m_syncGroup->lifecycleState() !=
-            MediaAvSyncGroupRuntime::LifecycleState::Active ||
         !m_syncGroup->sharedNtpEpoch()) {
         return failTerminal(::media::ErrorInfo::invalidArgument(
             "MP2T SDP publisher runtime authority is incomplete"));
@@ -137,6 +145,13 @@ MediaMpegTsRtpSdpPublisherNode::onProcess(
         return failTerminal(::media::ErrorInfo::invalidArgument(
             "MP2T SDP publisher requires an RTP transport plan"));
     }
+    auto outputCommit = m_syncGroup->reserveOutputCommit(
+        runtime->epoch().generation);
+    if (!outputCommit) {
+        return outputCommit.error().code == ::media::ErrorCode::Cancelled
+            ? processProgress()
+            : failTerminal(outputCommit.error());
+    }
     auto groupEpoch = m_syncGroup->playbackEpoch();
     if (!groupEpoch || groupEpoch.value() != runtime->epoch()) {
         return failTerminal(
@@ -144,6 +159,11 @@ MediaMpegTsRtpSdpPublisherNode::onProcess(
                 ? ::media::ErrorInfo::invalidArgument(
                       "MP2T SDP publisher epoch differs from its sync group")
                 : groupEpoch.error());
+    }
+    if (m_lastPublishedGeneration &&
+        runtime->epoch().generation <= *m_lastPublishedGeneration) {
+        return failTerminal(::media::ErrorInfo::invalidArgument(
+            "MP2T SDP publisher requires strictly increasing generations"));
     }
     auto description = MediaMpegTsRtpSdpDescription::create(
         *rtpPlan, *m_syncGroup->sharedNtpEpoch(),
@@ -155,21 +175,20 @@ MediaMpegTsRtpSdpPublisherNode::onProcess(
     auto published = publisher.publish(
         description.value().path(), serialized.value());
     if (!published) return failTerminal(published.error());
-    m_published = true;
-    return processFinished();
+    m_lastPublishedGeneration = runtime->epoch().generation;
+    return processProgress();
 }
 
 void MediaMpegTsRtpSdpPublisherNode::resetState() noexcept
 {
     m_terminalFailure.reset();
-    m_published = false;
+    m_lastPublishedGeneration.reset();
 }
 
 ::media::Status MediaMpegTsRtpSdpPublisherNode::flush(
     MediaGraphExecutionContext& context)
 {
     cancelPendingOutputTransfer();
-    resetState();
     return FFmpegNodeRuntime::flush(context);
 }
 
@@ -183,7 +202,7 @@ void MediaMpegTsRtpSdpPublisherNode::resetState() noexcept
 void MediaMpegTsRtpSdpPublisherNode::abort(
     MediaGraphExecutionContext& context) noexcept
 {
-    m_published = false;
+    m_lastPublishedGeneration.reset();
     if (!m_terminalFailure) {
         m_terminalFailure = ::media::ErrorInfo::cancelled(
             "MP2T SDP publisher was aborted");

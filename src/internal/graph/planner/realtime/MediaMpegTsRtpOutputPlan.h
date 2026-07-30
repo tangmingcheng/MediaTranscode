@@ -39,6 +39,7 @@ public:
     int clockRate() const noexcept;
     std::uint32_t ssrc() const noexcept;
     std::uint32_t baseTimestamp() const noexcept;
+    std::uint16_t initialSequenceNumber() const noexcept;
     const std::string& cname() const noexcept;
     MediaRunningTime senderReportInterval() const noexcept;
     std::size_t maximumDatagramBytes() const noexcept;
@@ -52,6 +53,7 @@ private:
         int clockRate,
         std::uint32_t ssrc,
         std::uint32_t baseTimestamp,
+        std::uint16_t initialSequenceNumber,
         std::string cname,
         MediaRunningTime senderReportInterval,
         std::size_t maximumDatagramBytes,
@@ -63,6 +65,7 @@ private:
     int m_clockRate;
     std::uint32_t m_ssrc;
     std::uint32_t m_baseTimestamp;
+    std::uint16_t m_initialSequenceNumber;
     std::string m_cname;
     MediaRunningTime m_senderReportInterval;
     std::size_t m_maximumDatagramBytes;

@@ -16,6 +16,7 @@ struct MediaMpegTsRtpPacketizerConfig final {
     int clockRate;
     std::uint32_t ssrc;
     std::uint32_t baseTimestamp;
+    std::uint16_t initialSequenceNumber;
     std::uint8_t maximumTsPackets;
     std::size_t maximumDatagramBytes;
     MediaRunningTime masterOrigin;
@@ -68,7 +69,7 @@ private:
     MediaMpegTsRtpPacketizerConfig m_config;
     MediaRtpOutputClockMapper m_clockMapper;
     std::optional<MediaRtpTimestamp> m_lastTimestamp;
-    std::uint16_t m_nextSequenceNumber = 0;
+    std::uint16_t m_nextSequenceNumber;
 };
 
 } // namespace media::ffmpeg::graph

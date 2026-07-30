@@ -3,6 +3,7 @@
 #include "internal/graph/protocol/MediaUtf8TextValidator.h"
 #include "internal/graph/protocol/rtp/MediaRtcpSdesTextValidator.h"
 #include "internal/graph/protocol/sdp/MediaRtpSdpDescription.h"
+#include "internal/graph/protocol/sdp/MediaSdpWireFormat.h"
 
 #include <utility>
 
@@ -11,23 +12,6 @@ namespace {
 
 constexpr int Mp2tPayloadType = 33;
 constexpr int Mp2tClockRate = 90'000;
-
-const char* addressType(MediaIpAddressFamily family) noexcept
-{
-    switch (family) {
-    case MediaIpAddressFamily::Ipv4:
-        return "IP4";
-    case MediaIpAddressFamily::Ipv6:
-        return "IP6";
-    }
-    return nullptr;
-}
-
-void appendLine(std::string& output, std::string line)
-{
-    output += line;
-    output += "\r\n";
-}
 
 } // namespace
 
@@ -115,39 +99,28 @@ MediaMpegTsRtpSdpDescription::create(
 ::media::Result<std::string>
 MediaMpegTsRtpSdpDescription::serialize() const
 {
-    const char* type = addressType(m_addressFamily);
-    if (!type) {
-        return ::media::Result<std::string>::failure(
-            ::media::ErrorInfo::internalError(
-                "MP2T SDP contains an unsupported address family"));
-    }
     std::string output;
     output.reserve(512);
-    appendLine(output, "v=0");
-    appendLine(
+    auto session = MediaSdpWireFormat::appendSession(
         output,
-        "o=" + m_originUsername + " " +
-            std::to_string(m_sessionId) + " " +
-            std::to_string(m_sessionVersion) + " IN " + type +
-            std::string(" ") + m_numericAddress);
-    appendLine(output, "s=" + m_sessionName);
-    appendLine(output, "t=0 0");
-    appendLine(
+        {m_originUsername, m_sessionId, m_sessionVersion,
+         m_sessionName, m_addressFamily, m_numericAddress});
+    if (!session) {
+        return ::media::Result<std::string>::failure(session.error());
+    }
+    auto media = MediaSdpWireFormat::appendMediaTransport(
         output,
-        "m=video " + std::to_string(m_rtpPort) +
-            " RTP/AVP " + std::to_string(m_payloadType));
-    appendLine(
-        output,
-        "c=IN " + std::string(type) + " " + m_numericAddress);
-    appendLine(
-        output,
-        "a=rtcp:" + std::to_string(m_rtcpPort) +
-            " IN " + type + std::string(" ") + m_numericAddress);
-    appendLine(
+        {"video", m_rtpPort, m_payloadType,
+         m_addressFamily, m_numericAddress, m_rtcpPort,
+         m_addressFamily, m_numericAddress});
+    if (!media) {
+        return ::media::Result<std::string>::failure(media.error());
+    }
+    MediaSdpWireFormat::appendLine(
         output,
         "a=rtpmap:" + std::to_string(m_payloadType) +
             " MP2T/" + std::to_string(m_clockRate));
-    appendLine(
+    MediaSdpWireFormat::appendLine(
         output,
         "a=ssrc:" + std::to_string(m_ssrc) +
             " cname:" + m_cname);

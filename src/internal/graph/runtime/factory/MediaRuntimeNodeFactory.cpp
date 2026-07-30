@@ -461,19 +461,9 @@ template <typename Node>
                 std::make_shared<MediaProtocolOutputGenerationState>(
                     std::string(FileMuxNode::generationPurgeIdentity()),
                     generationSession);
-            auto socketRuntime = MediaSocketRuntime::create();
-            if (!socketRuntime) {
-                return ::media::Result<
-                    std::unique_ptr<MediaRuntimeNode>>::failure(
-                    socketRuntime.error());
-            }
-            auto datagramPortFactory = std::make_shared<
-                MediaUdpDatagramSenderSocketFactory>(
-                std::move(socketRuntime).value());
             return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
                 std::make_unique<FileMuxNode>(
-                    node.id, std::move(generationState),
-                    std::move(datagramPortFactory)));
+                    node.id, std::move(generationState)));
         }
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::make_unique<FileMuxNode>(node.id));

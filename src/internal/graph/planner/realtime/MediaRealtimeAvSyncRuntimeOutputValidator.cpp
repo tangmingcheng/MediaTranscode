@@ -2,6 +2,7 @@
 
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
+#include "internal/graph/planner/realtime/MediaRtpOutputIdentityPlanner.h"
 #include "internal/graph/protocol/sdp/MediaRtpSdpDescription.h"
 
 #include <limits>
@@ -235,6 +236,9 @@ bool validRtpStream(
     if (!maximumPackets || !sdpIdentity ||
         rtp->payloadType() != 33 || rtp->clockRate() != 90'000 ||
         rtp->ssrc() == 0 || rtp->cname().empty() ||
+        rtp->initialSequenceNumber() !=
+            MediaRtpOutputIdentityPlanner::stableSequenceNumber(
+                rtp->sdp().originUsername + ".output.mp2t.sequence") ||
         rtp->senderReportInterval() <=
             MediaRunningTime::fromNanoseconds(0) ||
         !runtime.synchronization.recovery.reacquisitionTimeoutNs ||

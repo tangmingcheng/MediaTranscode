@@ -29,13 +29,11 @@ FileMuxNode::FileMuxNode(MediaNodeId nodeId)
 
 FileMuxNode::FileMuxNode(
     MediaNodeId nodeId,
-    std::shared_ptr<MediaProtocolOutputGenerationState> generationState,
-    std::shared_ptr<MediaUdpDatagramSenderPortFactory>
-        datagramPortFactory)
+    std::shared_ptr<MediaProtocolOutputGenerationState> generationState)
     : FFmpegNodeRuntime(nodeId, staticKind(), "FileMuxNode")
     , m_generationState(std::move(generationState))
     , m_sessionFactory(std::make_unique<ExplicitMediaMuxSessionFactory>(
-          m_generationState, std::move(datagramPortFactory)))
+          m_generationState))
 {
 }
 

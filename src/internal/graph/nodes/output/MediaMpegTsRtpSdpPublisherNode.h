@@ -45,7 +45,7 @@ private:
     std::shared_ptr<MediaAvSyncGroupRuntime> m_syncGroup;
     std::unique_ptr<MediaAtomicFileReplacePort> m_replacePort;
     std::optional<::media::ErrorInfo> m_terminalFailure;
-    bool m_published = false;
+    std::optional<std::uint64_t> m_lastPublishedGeneration;
 };
 
 } // namespace media::ffmpeg::graph

@@ -16,7 +16,6 @@
 #include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
 
 #include <utility>
-#include <variant>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -113,9 +112,7 @@ ProjectMpegTsGenerationAuthority::generationSession() const noexcept
 }
 
 ProjectMpegTsMuxSessionAdapter::ProjectMpegTsMuxSessionAdapter(
-    ProjectMpegTsGenerationAuthority authority,
-    std::shared_ptr<MediaUdpDatagramSenderPortFactory>
-        datagramPortFactory)
+    ProjectMpegTsGenerationAuthority authority)
     : m_generationState(authority.generationState())
     , m_generationSession(authority.generationSession())
     , m_plannedGroup(m_generationSession->plannedGroup)
@@ -131,7 +128,6 @@ ProjectMpegTsMuxSessionAdapter::ProjectMpegTsMuxSessionAdapter(
     , m_mediaTimelineStarted(
           m_generationSession->mediaTimelineStarted)
     , m_generation(m_generationSession->generation)
-    , m_datagramPortFactory(std::move(datagramPortFactory))
 {
 }
 
@@ -185,10 +181,6 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
         return fail(invalid(
             "project MPEG-TS mux session requires a typed runtime plan"));
     }
-    if (!m_datagramPortFactory) {
-        return fail(::media::ErrorInfo::notInitialized(
-            "project MPEG-TS mux session requires its datagram transport factory"));
-    }
     auto group = context.findAvSyncGroup(runtimePlan->group());
     if (!group) {
         return fail(invalid(
@@ -203,12 +195,6 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
         if (m_epoch || m_group || m_outputPlan || m_session) {
             activationFailure = invalid(
                 "project MPEG-TS mux session rejects an uncleared runtime generation");
-        } else if (
-            std::holds_alternative<MediaMpegTsRtpOutputPlan>(
-                runtimePlan->outputPlan().transport) &&
-            m_sink) {
-            activationFailure = invalid(
-                "project MPEG-TS RTP output rejects a UDP byte-sink binding");
         } else {
             m_plannedGroup = runtimePlan->group();
             m_outputPlan = runtimePlan->sharedOutputPlan();
@@ -252,12 +238,6 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
         } else if (m_sink) {
             failure = invalid(
                 "project MPEG-TS mux session received a duplicate output sink");
-        } else if (
-            m_outputPlan &&
-            std::holds_alternative<MediaMpegTsRtpOutputPlan>(
-                m_outputPlan->transport)) {
-            failure = invalid(
-                "project MPEG-TS RTP output rejects a UDP byte sink");
         } else {
             m_sink = std::make_unique<CloseOnceOutputByteSink>(
                 std::move(sink).value());
@@ -326,16 +306,13 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
     MediaGraphExecutionContext& context)
 {
     std::optional<MediaAvSyncGroupKey> plannedGroup;
+    std::shared_ptr<const MediaProjectMpegTsRuntimeOutputPlan> outputPlan;
     bool ready = false;
     {
         auto mutation = m_generationState->reserveSessionMutation();
         plannedGroup = m_plannedGroup;
-        const bool transportReady =
-            m_outputPlan && m_datagramPortFactory &&
-            (std::holds_alternative<MediaMpegTsRtpOutputPlan>(
-                 m_outputPlan->transport) ||
-             m_sink != nullptr);
-        ready = m_plannedGroup && transportReady &&
+        outputPlan = m_outputPlan;
+        ready = m_plannedGroup && m_outputPlan &&
                 m_videoConfig && m_audioConfig;
     }
     if (!ready) {
@@ -345,6 +322,14 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
     if (!group) {
         return fail(::media::ErrorInfo::notInitialized(
             "project MPEG-TS mux session A/V sync group is not registered"));
+    }
+    auto transportReady =
+        ProjectMpegTsDatagramSinkFactory::bindingsReady(
+            outputPlan->protocol.muxPlan(),
+            group->sharedNtpEpoch(), m_sink.get());
+    if (!transportReady) return fail(transportReady.error());
+    if (!transportReady.value()) {
+        return ::media::Status::success();
     }
     const auto generation = m_generation.load(std::memory_order_acquire);
     if (generation == 0) return ::media::Status::success();
@@ -400,9 +385,8 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
                 } else {
                     auto datagramSink =
                         ProjectMpegTsDatagramSinkFactory::create(
-                            *m_outputPlan, *m_epoch,
-                            group->sharedNtpEpoch().get(),
-                            *m_datagramPortFactory, m_sink.get());
+                            *m_outputPlan, muxPlan, *m_epoch,
+                            group->sharedNtpEpoch(), m_sink.get());
                     if (!datagramSink) {
                         failure = datagramSink.error();
                     } else {

@@ -71,6 +71,8 @@ MediaMpegTsRtpOutputPlan::create(
             MediaRtpOutputIdentityPlanner::stableNumeric(outputIdentity),
             MediaRtpOutputIdentityPlanner::stableNumeric(
                 outputIdentity + ".timestamp"),
+            MediaRtpOutputIdentityPlanner::stableSequenceNumber(
+                outputIdentity + ".sequence"),
             cname, senderReportInterval, maximumDatagramBytes,
             packetCount.value(),
             MediaMpegTsRtpSdpPlan{
@@ -84,6 +86,7 @@ MediaMpegTsRtpOutputPlan::MediaMpegTsRtpOutputPlan(
     int clockRate,
     std::uint32_t ssrc,
     std::uint32_t baseTimestamp,
+    std::uint16_t initialSequenceNumber,
     std::string cname,
     MediaRunningTime senderReportInterval,
     std::size_t maximumDatagramBytes,
@@ -94,6 +97,7 @@ MediaMpegTsRtpOutputPlan::MediaMpegTsRtpOutputPlan(
       m_clockRate(clockRate),
       m_ssrc(ssrc),
       m_baseTimestamp(baseTimestamp),
+      m_initialSequenceNumber(initialSequenceNumber),
       m_cname(std::move(cname)),
       m_senderReportInterval(senderReportInterval),
       m_maximumDatagramBytes(maximumDatagramBytes),
@@ -126,6 +130,12 @@ std::uint32_t MediaMpegTsRtpOutputPlan::ssrc() const noexcept
 std::uint32_t MediaMpegTsRtpOutputPlan::baseTimestamp() const noexcept
 {
     return m_baseTimestamp;
+}
+
+std::uint16_t
+MediaMpegTsRtpOutputPlan::initialSequenceNumber() const noexcept
+{
+    return m_initialSequenceNumber;
 }
 
 const std::string& MediaMpegTsRtpOutputPlan::cname() const noexcept

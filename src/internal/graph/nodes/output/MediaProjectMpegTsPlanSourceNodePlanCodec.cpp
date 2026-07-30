@@ -34,7 +34,7 @@ constexpr std::array<const char*, 7> UdpKeys{
     "project_mpeg_ts_plan.transport.udp.resource_kind",
     "project_mpeg_ts_plan.transport.udp.mux_session_kind"};
 
-constexpr std::array<const char*, 29> RtpKeys{
+constexpr std::array<const char*, 30> RtpKeys{
     GroupKey,
     PlanKey,
     AudioSampleRateKey,
@@ -63,7 +63,8 @@ constexpr std::array<const char*, 29> RtpKeys{
     "project_mpeg_ts_plan.transport.rtp.sdp.session_name",
     "project_mpeg_ts_plan.transport.rtp.sdp.origin_address_family",
     "project_mpeg_ts_plan.transport.rtp.sdp.origin_numeric_address",
-    "project_mpeg_ts_plan.transport.rtp.sdp.cname"};
+    "project_mpeg_ts_plan.transport.rtp.sdp.cname",
+    "project_mpeg_ts_plan.transport.rtp.initial_sequence_number"};
 
 template <typename Value>
 ::media::Result<Value> narrow(std::uint64_t value)
@@ -389,7 +390,8 @@ bool exactOptionKeys(
         {RtpKeys[25], rtp.sdp().sessionName},
         {RtpKeys[26], familyName(rtp.sdp().originAddressFamily)},
         {RtpKeys[27], rtp.sdp().originNumericAddress},
-        {RtpKeys[28], rtp.sdp().cname}});
+        {RtpKeys[28], rtp.sdp().cname},
+        {RtpKeys[29], std::to_string(rtp.initialSequenceNumber())}});
 }
 
 ::media::Result<MediaProjectMpegTsRuntimeOutputPlan> decodeUdp(
@@ -508,6 +510,8 @@ bool exactOptionKeys(
         node.options, RtpKeys[18]);
     auto baseTimestamp = parseUnsignedOption<std::uint32_t>(
         node.options, RtpKeys[19], true);
+    auto initialSequenceNumber = parseUnsignedOption<std::uint16_t>(
+        node.options, RtpKeys[29], true);
     auto cname = requiredNodeOption(
         &node.options, Owner, RtpKeys[20]);
     auto reportInterval = requiredPositiveInt64NodeOption(
@@ -526,6 +530,7 @@ bool exactOptionKeys(
     auto sdpCname = requiredNodeOption(
         &node.options, Owner, RtpKeys[28]);
     if (!payloadType || !clockRate || !ssrc || !baseTimestamp ||
+        !initialSequenceNumber ||
         !cname || !reportInterval || !packetCount || !sdpPath ||
         !originUsername || !sessionName || !originFamily ||
         !originAddress || !sdpCname) {
@@ -534,6 +539,7 @@ bool exactOptionKeys(
             !clockRate ? clockRate.error() :
             !ssrc ? ssrc.error() :
             !baseTimestamp ? baseTimestamp.error() :
+            !initialSequenceNumber ? initialSequenceNumber.error() :
             !cname ? cname.error() :
             !reportInterval ? reportInterval.error() :
             !packetCount ? packetCount.error() :
@@ -556,6 +562,8 @@ bool exactOptionKeys(
         clockRate.value() != rtp.value().clockRate() ||
         ssrc.value() != rtp.value().ssrc() ||
         baseTimestamp.value() != rtp.value().baseTimestamp() ||
+        initialSequenceNumber.value() !=
+            rtp.value().initialSequenceNumber() ||
         cname.value() != rtp.value().cname() ||
         packetCount.value() != rtp.value().tsPacketsPerPayload() ||
         packetCount.value() != expectedPackets.value() ||
