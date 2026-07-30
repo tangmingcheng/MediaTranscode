@@ -9,7 +9,6 @@
 
 #include <string_view>
 #include <utility>
-#include <variant>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -255,9 +254,14 @@ struct SharedNodes final {
     const auto& metadata = plan.edgePolicies.metadata;
     const auto& packet = plan.edgePolicies.synchronizedPacket;
     const auto& atomicMetadata = plan.edgePolicies.atomicMetadata;
-    const bool demuxClock = std::holds_alternative<
-        MediaDemuxTimestampInputClockAssemblyPlan>(
-        plan.assembly.inputClock);
+    if (!plan.synchronization.sourceClockMode) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "Shared synchronized input requires its planned source clock mode"));
+    }
+    const bool demuxClock =
+        *plan.synchronization.sourceClockMode ==
+        MediaAvSyncSourceClockMode::DemuxTimestamps;
     const auto& protocolClockPolicy =
         demuxClock ? atomicMetadata : metadata;
     const auto& protocolVideoPolicy =
@@ -371,9 +375,14 @@ MediaRealtimeAvSyncInputSegmentBuilder::build(
             ::media::ErrorInfo::invalidArgument(
             "Synchronized input release requires a complete planned atomic output policy"));
     }
-    const bool demuxClock = std::holds_alternative<
-        MediaDemuxTimestampInputClockAssemblyPlan>(
-        plan.assembly.inputClock);
+    if (!plan.synchronization.sourceClockMode) {
+        return ::media::Result<MediaRealtimeAvSyncInputEndpoints>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "Synchronized input requires its planner-selected source clock mode"));
+    }
+    const bool demuxClock =
+        *plan.synchronization.sourceClockMode ==
+        MediaAvSyncSourceClockMode::DemuxTimestamps;
     if (!demuxClock && !options.sources.protocolClock.valid()) {
         return ::media::Result<MediaRealtimeAvSyncInputEndpoints>::failure(
             ::media::ErrorInfo::invalidArgument(

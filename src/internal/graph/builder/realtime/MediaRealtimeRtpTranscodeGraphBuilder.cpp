@@ -17,7 +17,6 @@
 #include <optional>
 #include <tuple>
 #include <utility>
-#include <variant>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -484,17 +483,38 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
     std::string audioPacketSourcePort = isolateRawRtpAudio ? "packet" : "audio";
     std::optional<MediaRealtimeAvSyncInputEndpoints> synchronizedInput;
     if (plan.avSyncRuntime) {
-        const bool demuxTimestampClock =
-            std::holds_alternative<
-                MediaDemuxTimestampInputClockAssemblyPlan>(
-                plan.avSyncRuntime->assembly.inputClock);
-        if (!protocolClockNode.isValid() && !demuxTimestampClock) {
+        if (!plan.avSyncRuntime->synchronization.sourceClockMode) {
+            return ::media::Result<MediaGraph>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "Synchronized realtime input requires its planned source clock mode"));
+        }
+        switch (*plan.avSyncRuntime->synchronization.sourceClockMode) {
+        case MediaAvSyncSourceClockMode::RtpSenderReports:
+            if (!protocolClockNode.isValid()) {
+                return ::media::Result<MediaGraph>::failure(
+                    ::media::ErrorInfo::notInitialized(
+                        "Synchronized RTP input requires its planned RTP clock group"));
+            }
+            break;
+        case MediaAvSyncSourceClockMode::MpegTsPcr:
             if (!videoInputChain.value().packetSelect.demux.isValid()) {
                 return ::media::Result<MediaGraph>::failure(
                     ::media::ErrorInfo::notInitialized(
                         "Synchronized MPEG-TS input requires a selected-program demux clock"));
             }
             protocolClockNode = videoInputChain.value().packetSelect.demux;
+            break;
+        case MediaAvSyncSourceClockMode::DemuxTimestamps:
+            if (protocolClockNode.isValid()) {
+                return ::media::Result<MediaGraph>::failure(
+                    ::media::ErrorInfo::invalidArgument(
+                        "Demux timestamp input rejects an external protocol clock"));
+            }
+            break;
+        default:
+            return ::media::Result<MediaGraph>::failure(
+                ::media::ErrorInfo::unsupported(
+                    "Synchronized realtime input source clock mode is unsupported"));
         }
         MediaRealtimeAvSyncInputSegmentOptions syncOptions;
         syncOptions.prefix = "realtime.av_sync";

@@ -19,8 +19,9 @@ struct MediaScheduledMpegTsOutputSegmentOptions final {
 struct MediaScheduledMpegTsOutputSegmentResult final {
     MediaNodeId planSource;
     MediaNodeId adapter;
-    MediaNodeId fileOutput;
+    MediaNodeId udpOutput;
     MediaNodeId mux;
+    MediaNodeId rtpSdpPublisher;
 };
 
 class MediaScheduledMpegTsOutputSegmentBuilder final {

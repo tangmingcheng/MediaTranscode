@@ -326,14 +326,14 @@
 - Output assembly switches only on `MediaAvSyncOutputAdapterKind`, then the Project MPEG-TS transport variant.
 - Compiler cardinality derives from the output plan, not the input clock.
 
-- [ ] **Step 1: Assemble all source-clock graph variants**
+- [x] **Step 1: Assemble all source-clock graph variants**
 
   With the old topology type already removed by Task 2, build RTP, TS, or demux
   input clock segments independently. Connect every input path to the same
   startup coordinator, canonical video/audio nodes, drift controller, recovery
   components, router, and scheduler.
 
-- [ ] **Step 2: Select exactly one output authority**
+- [x] **Step 2: Select exactly one output authority**
 
   Assemble exactly one of:
 
@@ -343,15 +343,19 @@
   one scheduled TS adapter + Project TS mux + MP2T RTP sink + MP2T SDP publisher
   ```
 
-- [ ] **Step 3: Make compiler validation plan-driven**
+- [x] **Step 3: Make compiler validation plan-driven**
 
   Validate exact node counts for the selected output authority and reject all other output nodes. Source-clock node counts are validated separately. Register the same generation participants, scheduler, and shared clock for all outputs.
 
-- [ ] **Step 4: Cover video-only production assembly**
+- [x] **Step 4: Defer video-only to an independent stream-set architecture task**
 
-  Ensure the same 3-by-3 request classification reaches the correct single-stream output without instantiating audio drift components. Missing video timestamps or unsupported TS codec/layout facts still fail in planning.
+  Owner ruling: this task delivers the A/V 3-by-3 matrix only. Video-only
+  requires an explicit planner-owned stream-set contract across startup,
+  scheduling, protocol output, and Project MPEG-TS PSI/PES planning, so it is
+  deferred as an independent architecture task. No compatibility path,
+  fallback, fake audio plan, or partial production wiring is introduced here.
 
-- [ ] **Step 5: Perform whole-code review and commit**
+- [x] **Step 5: Perform whole-code review and commit**
 
   Prove the deleted paired topology has not been reintroduced; search for
   input-driven output branching, fallback/default protocol facts, duplicate

@@ -210,26 +210,51 @@ MediaRealtimeAvSyncProtocolInputBuilder::build(
     const MediaRealtimeAvSyncInputSegmentOptions& options,
     const MediaRealtimeAvSyncRuntimePlan& plan)
 {
-    const bool demux = std::holds_alternative<
-        MediaDemuxTimestampInputClockAssemblyPlan>(
-        plan.assembly.inputClock);
+    if (!plan.synchronization.sourceClockMode) {
+        return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::
+            failure(::media::ErrorInfo::notInitialized(
+                "Synchronized input requires its planner-selected source clock mode"));
+    }
+    const MediaAvSyncSourceClockMode sourceClock =
+        *plan.synchronization.sourceClockMode;
+    const bool demux =
+        sourceClock == MediaAvSyncSourceClockMode::DemuxTimestamps;
     if (auto status = validateSources(
             graph, options.sources, !demux); !status) {
         return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::
             failure(status.error());
     }
-    if (std::holds_alternative<MediaRtpInputClockAssemblyPlan>(
-            plan.assembly.inputClock)) {
+    switch (sourceClock) {
+    case MediaAvSyncSourceClockMode::RtpSenderReports:
+        if (!std::holds_alternative<MediaRtpInputClockAssemblyPlan>(
+                plan.assembly.inputClock)) {
+            return ::media::Result<
+                MediaRealtimeAvSyncProtocolInputEndpoints>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "RTP source clock mode conflicts with its planner input product"));
+        }
         return buildRtp(graph, options, plan);
-    }
-    if (std::holds_alternative<MediaMpegTsInputClockAssemblyPlan>(
-            plan.assembly.inputClock)) {
+    case MediaAvSyncSourceClockMode::MpegTsPcr:
+        if (!std::holds_alternative<MediaMpegTsInputClockAssemblyPlan>(
+                plan.assembly.inputClock)) {
+            return ::media::Result<
+                MediaRealtimeAvSyncProtocolInputEndpoints>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "MPEG-TS source clock mode conflicts with its planner input product"));
+        }
         return buildMpegTs(options);
-    }
-    if (const auto* demuxPlan =
+    case MediaAvSyncSourceClockMode::DemuxTimestamps: {
+        const auto* demuxPlan =
             std::get_if<MediaDemuxTimestampInputClockAssemblyPlan>(
-                &plan.assembly.inputClock)) {
+                &plan.assembly.inputClock);
+        if (!demuxPlan) {
+            return ::media::Result<
+                MediaRealtimeAvSyncProtocolInputEndpoints>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Demux source clock mode conflicts with its planner input product"));
+        }
         return buildDemux(graph, options, plan, *demuxPlan);
+    }
     }
     return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::failure(
         ::media::ErrorInfo::invalidArgument(
