@@ -6,7 +6,7 @@ namespace media::ffmpeg::graph {
 
 ::media::Result<MediaTsPacketBatchWriter> MediaTsPacketBatchWriter::create(
     std::uint8_t maximumPacketsPerDatagram,
-    std::unique_ptr<MediaOutputByteSink> sink,
+    std::unique_ptr<MediaTsDatagramSink> sink,
     std::unique_ptr<MediaTsPacketCommitter> committer)
 {
     if (!sink || !committer || maximumPacketsPerDatagram < 1 ||
@@ -21,7 +21,7 @@ namespace media::ffmpeg::graph {
 
 MediaTsPacketBatchWriter::MediaTsPacketBatchWriter(
     std::uint8_t maximumPacketsPerDatagram,
-    std::unique_ptr<MediaOutputByteSink> sink,
+    std::unique_ptr<MediaTsDatagramSink> sink,
     std::unique_ptr<MediaTsPacketCommitter> committer)
     : m_maximumPacketsPerDatagram(maximumPacketsPerDatagram),
       m_sink(std::move(sink)),
@@ -46,7 +46,8 @@ MediaTsPacketBatchWriter::~MediaTsPacketBatchWriter()
 }
 
 ::media::Result<std::size_t> MediaTsPacketBatchWriter::writeCursor(
-    MediaTsPacketCursor& cursor)
+    MediaTsPacketCursor& cursor,
+    MediaRunningTime emitOnMaster)
 {
     if (m_failure) {
         return ::media::Result<std::size_t>::failure(m_failure.value());
@@ -76,7 +77,8 @@ MediaTsPacketBatchWriter::~MediaTsPacketBatchWriter()
             output = std::copy(packet.begin(), packet.end(), output);
         }
         auto written = m_sink->write(
-            std::span<const std::uint8_t>(m_datagram.data(), expected));
+            std::span<const std::uint8_t>(m_datagram.data(), expected),
+            emitOnMaster);
         if (!written) {
             auto status = fail(written.error());
             return ::media::Result<std::size_t>::failure(status.error());

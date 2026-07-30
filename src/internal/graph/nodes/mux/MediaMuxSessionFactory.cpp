@@ -23,8 +23,11 @@ namespace {
 } // namespace
 
 ExplicitMediaMuxSessionFactory::ExplicitMediaMuxSessionFactory(
-    std::shared_ptr<MediaProtocolOutputGenerationState> generationState)
+    std::shared_ptr<MediaProtocolOutputGenerationState> generationState,
+    std::shared_ptr<MediaUdpDatagramSenderPortFactory>
+        datagramPortFactory)
     : m_generationState(std::move(generationState))
+    , m_datagramPortFactory(std::move(datagramPortFactory))
 {
 }
 
@@ -56,10 +59,10 @@ ExplicitMediaMuxSessionFactory::ExplicitMediaMuxSessionFactory(
             std::make_unique<FFmpegFileMuxSession>(video.value(), audio.value()));
     }
     case MediaMuxSessionKind::ProjectMpegTs: {
-        if (!m_generationState) {
+        if (!m_generationState || !m_datagramPortFactory) {
             return ::media::Result<std::unique_ptr<MediaMuxSession>>::failure(
                 ::media::ErrorInfo::notInitialized(
-                    "project MPEG-TS mux session requires an injected generation state"));
+                    "project MPEG-TS mux session requires injected generation and datagram transport factories"));
         }
         auto video = requiredBoolNodeOption(
             &options, "MediaMuxSessionFactory", MediaTranscodeOptionKey::MuxExpectVideo);
@@ -92,7 +95,8 @@ ExplicitMediaMuxSessionFactory::ExplicitMediaMuxSessionFactory(
         }
         return ::media::Result<std::unique_ptr<MediaMuxSession>>::success(
             std::make_unique<ProjectMpegTsMuxSessionAdapter>(
-                std::move(authority).value()));
+                std::move(authority).value(),
+                m_datagramPortFactory));
     }
     }
     return ::media::Result<std::unique_ptr<MediaMuxSession>>::failure(

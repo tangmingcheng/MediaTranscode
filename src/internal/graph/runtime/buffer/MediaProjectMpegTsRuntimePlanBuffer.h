@@ -24,6 +24,8 @@ public:
     MediaBufferType type() const noexcept override;
     const MediaTsMuxPlan& muxPlan() const noexcept;
     const MediaProjectMpegTsRuntimeOutputPlan& outputPlan() const noexcept;
+    const std::shared_ptr<const MediaProjectMpegTsRuntimeOutputPlan>&
+    sharedOutputPlan() const noexcept;
     const MediaPlaybackEpoch& epoch() const noexcept;
     const MediaAvSyncGroupKey& group() const noexcept;
     std::optional<std::uint64_t> completedTransitionSequence() const noexcept;

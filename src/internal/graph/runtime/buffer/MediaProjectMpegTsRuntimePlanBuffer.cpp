@@ -62,6 +62,12 @@ MediaProjectMpegTsRuntimePlanBuffer::outputPlan() const noexcept
     return *m_outputPlan;
 }
 
+const std::shared_ptr<const MediaProjectMpegTsRuntimeOutputPlan>&
+MediaProjectMpegTsRuntimePlanBuffer::sharedOutputPlan() const noexcept
+{
+    return m_outputPlan;
+}
+
 const MediaPlaybackEpoch&
 MediaProjectMpegTsRuntimePlanBuffer::epoch() const noexcept
 {

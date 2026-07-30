@@ -17,6 +17,8 @@ class MediaOutputByteSink;
 class MediaAvGenerationPurgeTarget;
 class MediaProtocolOutputGenerationState;
 class MediaTsMuxSession;
+class MediaUdpDatagramSenderPortFactory;
+struct MediaProjectMpegTsRuntimeOutputPlan;
 
 class ProjectMpegTsGenerationSessionState final
     : public MediaProtocolOutputGenerationSessionState {
@@ -35,7 +37,7 @@ private:
         Poisoned
     };
     State state = State::Acquiring;
-    std::optional<MediaTsMuxPlan> plan;
+    std::shared_ptr<const MediaProjectMpegTsRuntimeOutputPlan> outputPlan;
     std::optional<MediaPlaybackEpoch> epoch;
     std::optional<MediaAvSyncGroupKey> group;
     std::optional<MediaAvSyncGroupKey> plannedGroup;
@@ -71,7 +73,9 @@ private:
 class ProjectMpegTsMuxSessionAdapter final : public MediaMuxSession {
 public:
     explicit ProjectMpegTsMuxSessionAdapter(
-        ProjectMpegTsGenerationAuthority authority);
+        ProjectMpegTsGenerationAuthority authority,
+        std::shared_ptr<MediaUdpDatagramSenderPortFactory>
+            datagramPortFactory);
     ~ProjectMpegTsMuxSessionAdapter() override;
 
     std::shared_ptr<MediaAvGenerationPurgeTarget>
@@ -106,7 +110,8 @@ private:
     std::shared_ptr<ProjectMpegTsGenerationSessionState> m_generationSession;
     std::optional<MediaAvSyncGroupKey>& m_plannedGroup;
     State& m_state;
-    std::optional<MediaTsMuxPlan>& m_plan;
+    std::shared_ptr<const MediaProjectMpegTsRuntimeOutputPlan>&
+        m_outputPlan;
     std::optional<MediaPlaybackEpoch>& m_epoch;
     std::optional<MediaAvSyncGroupKey>& m_group;
     std::unique_ptr<MediaTsMuxSession>& m_session;
@@ -114,6 +119,8 @@ private:
     std::optional<MediaRunningTime>& m_latestAcceptedEmission;
     bool& m_mediaTimelineStarted;
     std::atomic<std::uint64_t>& m_generation;
+    std::shared_ptr<MediaUdpDatagramSenderPortFactory>
+        m_datagramPortFactory;
     std::unique_ptr<MediaOutputByteSink> m_sink;
     MediaBufferRef m_videoConfig;
     MediaBufferRef m_audioConfig;

@@ -269,7 +269,7 @@
 - UDP adapts the existing `MediaOutputByteSink`; RTP uses `MediaMpegTsRtpDatagramSink`.
 - `MediaMpegTsRtpPacketizer::packetize(tsBatch, emitOnMaster)` emits one RTP packet with PT 33 and timestamp `base + rescale(emitOnMaster, 90000)`.
 
-- [ ] **Step 1: Carry canonical emission time to the transport sink**
+- [x] **Step 1: Carry canonical emission time to the transport sink**
 
   Replace the untyped TS batch write boundary with one typed datagram operation:
 
@@ -281,15 +281,15 @@
 
   `MediaTsMuxSession` supplies the already-planned emission time. The UDP adapter ignores no timing decision: it validates ordering and writes the same bytes to the existing sink. The RTP adapter uses the time only for RTP timestamp and SR correspondence, not pacing.
 
-- [ ] **Step 2: Packetize MP2T**
+- [x] **Step 2: Packetize MP2T**
 
   Validate nonempty payload, exact 188-byte alignment, maximum planned packet count, sequence continuity, SSRC, PT 33, and 90 kHz timestamp mapping. Marker remains false for continuous MPEG-TS. No TS parsing, remuxing, or packet fragmentation occurs here.
 
-- [ ] **Step 3: Send RTP and RTCP with existing transport components**
+- [x] **Step 3: Send RTP and RTCP with existing transport components**
 
   Reuse the project UDP sender, RTP sender state, shared NTP epoch, and RTCP sender-report construction. Maintain octet/packet counters, monotonic RTP timestamps, SR RTP/NTP correspondence, generation purge, bounded close, and preserved first failure.
 
-- [ ] **Step 4: Publish MP2T SDP atomically**
+- [x] **Step 4: Publish MP2T SDP atomically**
 
   Generate one media description:
 
@@ -300,7 +300,7 @@
 
   Include the planned connection address, session identity, CNAME/RTCP facts supported by the existing SDP model, UTF-8, and same-directory atomic replacement. Do not reuse the dual elementary-stream SDP formatter through conditionals.
 
-- [ ] **Step 5: Perform static verification and commit**
+- [x] **Step 5: Perform static verification and commit**
 
   Inspect ownership and close paths for RAII, verify no new TS mux or pacing loop exists, run the mandated clean-first x64 Debug rebuild, update this task, and commit:
 

@@ -29,6 +29,7 @@
 #include "internal/graph/nodes/output/RtpOutputNode.h"
 #include "internal/graph/nodes/output/SdpWriterNode.h"
 #include "internal/graph/nodes/output/MediaDualMediaSdpPublisherNode.h"
+#include "internal/graph/nodes/output/MediaMpegTsRtpSdpPublisherNode.h"
 #include "internal/graph/nodes/output/MediaScheduledRtpSenderNode.h"
 #include "internal/graph/nodes/output/MediaScheduledRtpSenderNodePlanCodec.h"
 #include "internal/graph/nodes/output/MediaProjectMpegTsPlanSourceNode.h"
@@ -460,9 +461,19 @@ template <typename Node>
                 std::make_shared<MediaProtocolOutputGenerationState>(
                     std::string(FileMuxNode::generationPurgeIdentity()),
                     generationSession);
+            auto socketRuntime = MediaSocketRuntime::create();
+            if (!socketRuntime) {
+                return ::media::Result<
+                    std::unique_ptr<MediaRuntimeNode>>::failure(
+                    socketRuntime.error());
+            }
+            auto datagramPortFactory = std::make_shared<
+                MediaUdpDatagramSenderSocketFactory>(
+                std::move(socketRuntime).value());
             return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
                 std::make_unique<FileMuxNode>(
-                    node.id, std::move(generationState)));
+                    node.id, std::move(generationState),
+                    std::move(datagramPortFactory)));
         }
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::make_unique<FileMuxNode>(node.id));
@@ -503,6 +514,10 @@ template <typename Node>
                     "Dual-media SDP publisher dependencies"));
         }
     }
+    case MediaNodeKind::MpegTsRtpSdpPublisher:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "MP2T SDP publisher requires compiler-injected sync-group runtime"));
     case MediaNodeKind::EofBarrier:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<EofBarrierNode>(node.id));
     case MediaNodeKind::Flush:
@@ -616,6 +631,46 @@ MediaRuntimeNodeFactory::createScheduledRtpSender(
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
             ::media::ErrorInfo::allocationFailed(
                 "Scheduled RTP sender production dependencies"));
+    }
+}
+
+::media::Result<std::unique_ptr<MediaRuntimeNode>>
+MediaRuntimeNodeFactory::createMpegTsRtpSdpPublisher(
+    const MediaNode& node,
+    std::shared_ptr<MediaAvSyncGroupRuntime> syncGroup)
+{
+    if (node.kind != MediaNodeKind::MpegTsRtpSdpPublisher) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MP2T SDP publisher factory requires its exact node kind"));
+    }
+    auto group = requiredSyncGroup(
+        node, "MediaMpegTsRtpSdpPublisherNode",
+        "mpegts_rtp_sdp.sync_group");
+    if (!group) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            group.error());
+    }
+    if (!syncGroup || syncGroup->key() != group.value()) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "MP2T SDP publisher requires the exact registered sync-group runtime"));
+    }
+    try {
+        auto created = MediaMpegTsRtpSdpPublisherNode::create(
+            node.id, std::move(group).value(), std::move(syncGroup),
+            std::make_unique<MediaWin32AtomicFileReplacePort>());
+        if (!created) {
+            return ::media::Result<
+                std::unique_ptr<MediaRuntimeNode>>::failure(
+                created.error());
+        }
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+            std::move(created).value());
+    } catch (const std::bad_alloc&) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            ::media::ErrorInfo::allocationFailed(
+                "MP2T SDP publisher production dependencies"));
     }
 }
 
@@ -829,6 +884,7 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::SdpWriter:
     case MediaNodeKind::ScheduledRtpSender:
     case MediaNodeKind::DualMediaSdpPublisher:
+    case MediaNodeKind::MpegTsRtpSdpPublisher:
     case MediaNodeKind::EofBarrier:
     case MediaNodeKind::Flush:
     case MediaNodeKind::Finalize:

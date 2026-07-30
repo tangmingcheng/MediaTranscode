@@ -44,6 +44,10 @@ public:
         const MediaNode& node,
         std::shared_ptr<MediaAvSyncGroupRuntime> syncGroup);
     static ::media::Result<std::unique_ptr<MediaRuntimeNode>>
+    createMpegTsRtpSdpPublisher(
+        const MediaNode& node,
+        std::shared_ptr<MediaAvSyncGroupRuntime> syncGroup);
+    static ::media::Result<std::unique_ptr<MediaRuntimeNode>>
     createDemuxPacketClockBinder(
         const MediaNode& node,
         const MediaDecodedDemuxPacketClockBinderNodePlan& decoded,

@@ -9,6 +9,7 @@
 namespace media::ffmpeg::graph {
 
 class MediaProtocolOutputGenerationState;
+class MediaUdpDatagramSenderPortFactory;
 
 class MediaMuxSessionFactory {
 public:
@@ -21,14 +22,18 @@ public:
 class ExplicitMediaMuxSessionFactory final : public MediaMuxSessionFactory {
 public:
     ExplicitMediaMuxSessionFactory() = default;
-    explicit ExplicitMediaMuxSessionFactory(
-        std::shared_ptr<MediaProtocolOutputGenerationState> generationState);
+    ExplicitMediaMuxSessionFactory(
+        std::shared_ptr<MediaProtocolOutputGenerationState> generationState,
+        std::shared_ptr<MediaUdpDatagramSenderPortFactory>
+            datagramPortFactory);
 
     ::media::Result<std::unique_ptr<MediaMuxSession>> create(
         const MediaNodeOptions& options) const override;
 
 private:
     std::shared_ptr<MediaProtocolOutputGenerationState> m_generationState;
+    std::shared_ptr<MediaUdpDatagramSenderPortFactory>
+        m_datagramPortFactory;
 };
 
 } // namespace media::ffmpeg::graph

@@ -17,7 +17,7 @@ public:
         MediaPlaybackEpoch epoch;
         MediaTsMaterializedVideoConfig video;
         MediaTsMaterializedAudioConfig audio;
-        std::unique_ptr<MediaOutputByteSink> sink;
+        std::unique_ptr<MediaTsDatagramSink> sink;
     };
     struct AdvanceResult final {
         MediaRunningTime nextDeadline;
@@ -42,7 +42,8 @@ private:
                       MediaTsTransportPacketizer packetizer,
                       MediaTsProgramTables tables,
                       MediaTsPacketBatchWriter writer) noexcept;
-    ::media::Result<std::size_t> writeTables();
+    ::media::Result<std::size_t> writeTables(
+        MediaRunningTime emitOnMaster);
     ::media::Status poison(::media::ErrorInfo error);
     ::media::Status stateFailure(const char* action);
     ::media::Result<AdvanceResult> advanceFailure(::media::ErrorInfo error);
