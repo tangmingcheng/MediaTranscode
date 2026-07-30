@@ -181,7 +181,7 @@ const char* boolOption(bool value) noexcept
                 "plan",
                 MediaStreamKind::Metadata,
                 MediaEdgeKind::Metadata,
-                MediaPayloadKind::TsMuxRuntimePlan,
+                        MediaPayloadKind::ProjectMpegTsRuntimePlan,
                 true,
                 false); !status) {
             return ::media::Result<FileOutputSegment>::failure(status.error());

@@ -92,7 +92,7 @@ MediaScheduledMpegTsOutputSegmentBuilder::build(
             "Scheduled MPEG-TS output failed to add its nodes"));
     }
     auto encoded = MediaProjectMpegTsPlanSourceNodePlanCodec::apply(
-        graph, planSource, plan.groupKey, output.protocol.muxPlan());
+        graph, planSource, plan.groupKey, output);
     if (!encoded) return Result::failure(encoded.error());
     auto groupSet = MediaGraphBuildSupport::setNodeOptionChecked(
         graph, Owner, adapter, "scheduled_ts_adapter.sync_group",
@@ -106,11 +106,13 @@ MediaScheduledMpegTsOutputSegmentBuilder::build(
         !status) return Result::failure(status.error());
     if (auto status = addOutputPortChecked(
             graph, Owner, planSource, "plan", MediaStreamKind::Metadata,
-            MediaEdgeKind::Metadata, MediaPayloadKind::TsMuxRuntimePlan,
+            MediaEdgeKind::Metadata,
+            MediaPayloadKind::ProjectMpegTsRuntimePlan,
             true, true); !status) return Result::failure(status.error());
     if (auto status = addInputPortChecked(
             graph, Owner, adapter, "plan", MediaStreamKind::Metadata,
-            MediaEdgeKind::Metadata, MediaPayloadKind::TsMuxRuntimePlan,
+            MediaEdgeKind::Metadata,
+            MediaPayloadKind::ProjectMpegTsRuntimePlan,
             true, false); !status) return Result::failure(status.error());
     if (auto status = addInputPortChecked(
             graph, Owner, adapter, "scheduled", MediaStreamKind::Any,

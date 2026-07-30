@@ -23,7 +23,7 @@ enum class MediaBufferType {
     Control,
     Event,
     OutputByteSink,
-    TsMuxRuntimePlan,
+    ProjectMpegTsRuntimePlan,
     TsAccessUnit
 };
 

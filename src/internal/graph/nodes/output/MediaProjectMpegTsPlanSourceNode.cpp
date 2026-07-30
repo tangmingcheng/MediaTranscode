@@ -1,18 +1,21 @@
 #include "internal/graph/nodes/output/MediaProjectMpegTsPlanSourceNode.h"
 
 #include "internal/graph/runtime/buffer/MediaPlaybackEpochActivatedBuffer.h"
-#include "internal/graph/runtime/buffer/MediaTsMuxRuntimePlanBuffer.h"
+#include "internal/graph/runtime/buffer/MediaProjectMpegTsRuntimePlanBuffer.h"
 #include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
 #include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
 
 namespace media::ffmpeg::graph {
 
 MediaProjectMpegTsPlanSourceNode::MediaProjectMpegTsPlanSourceNode(
-    MediaNodeId nodeId, MediaAvSyncGroupKey group, MediaTsMuxPlan plan)
+    MediaNodeId nodeId, MediaAvSyncGroupKey group,
+    MediaProjectMpegTsRuntimeOutputPlan outputPlan)
     : FFmpegNodeRuntime(nodeId, staticKind(),
                         "MediaProjectMpegTsPlanSourceNode"),
       m_group(std::move(group)),
-      m_plan(std::move(plan)),
+      m_outputPlan(
+          std::make_shared<const MediaProjectMpegTsRuntimeOutputPlan>(
+              std::move(outputPlan))),
       m_generationSession(
           std::make_shared<
               MediaProjectMpegTsPlanSourceGenerationState>()),
@@ -128,8 +131,8 @@ MediaProjectMpegTsPlanSourceNode::onProcess(
                 ::media::ErrorInfo::invalidArgument(
                     "Project MPEG-TS plan source rejects mismatched activation"));
         }
-        auto created = MediaTsMuxRuntimePlanBuffer::create(
-            m_plan, activated->epoch(), m_group,
+        auto created = MediaProjectMpegTsRuntimePlanBuffer::create(
+            m_outputPlan, activated->epoch(), m_group,
             activated->completedTransitionSequence());
         if (!created) {
             return ::media::Result<MediaNodeProcessResult>::failure(
@@ -169,7 +172,8 @@ MediaProjectMpegTsPlanSourceNode::reserveOutputCommit(
     const MediaBufferRef& buffer) const
 {
     const auto* plan =
-        dynamic_cast<const MediaTsMuxRuntimePlanBuffer*>(buffer.get());
+        dynamic_cast<const MediaProjectMpegTsRuntimePlanBuffer*>(
+            buffer.get());
     if (!plan || !m_syncGroup) {
         return ::media::Result<MediaOutputCommitReservation>::failure(
                     ::media::ErrorInfo::notInitialized(
@@ -191,7 +195,8 @@ MediaProjectMpegTsPlanSourceNode::reserveOutputCommit(
     const MediaBufferRef& buffer)
 {
     const auto* plan =
-        dynamic_cast<const MediaTsMuxRuntimePlanBuffer*>(buffer.get());
+        dynamic_cast<const MediaProjectMpegTsRuntimePlanBuffer*>(
+            buffer.get());
     if (!plan || !m_pendingPlan || !m_publishedGeneration ||
         plan->epoch().generation != *m_publishedGeneration) {
         return ::media::Status::failure(

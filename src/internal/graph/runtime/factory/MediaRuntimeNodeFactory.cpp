@@ -423,7 +423,7 @@ template <typename Node>
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::make_unique<MediaProjectMpegTsPlanSourceNode>(
                 node.id, std::move(decoded.value().groupKey),
-                std::move(decoded.value().muxPlan)));
+                std::move(decoded.value().outputPlan)));
     }
     case MediaNodeKind::ScheduledTsAccessUnitAdapter:
     {

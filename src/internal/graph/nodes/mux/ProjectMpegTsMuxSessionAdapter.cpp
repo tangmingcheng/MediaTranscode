@@ -8,7 +8,7 @@
 #include "internal/graph/runtime/buffer/FFmpegCodecContextBuffer.h"
 #include "internal/graph/runtime/buffer/MediaOutputByteSinkBuffer.h"
 #include "internal/graph/runtime/buffer/MediaTsAccessUnitBuffer.h"
-#include "internal/graph/runtime/buffer/MediaTsMuxRuntimePlanBuffer.h"
+#include "internal/graph/runtime/buffer/MediaProjectMpegTsRuntimePlanBuffer.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 #include "internal/graph/runtime/io/MediaOutputByteSink.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegCodecParametersMaterializer.h"
@@ -173,7 +173,8 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
         acquiring = m_state == State::Acquiring;
     }
     if (failed) return terminalStatus();
-    if (dynamic_cast<MediaTsMuxRuntimePlanBuffer*>(buffer.get())) {
+    if (dynamic_cast<MediaProjectMpegTsRuntimePlanBuffer*>(
+            buffer.get())) {
         return bindRuntimePlan(context, buffer);
     }
     if (!acquiring) {
@@ -192,8 +193,9 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
     MediaGraphExecutionContext& context,
     const MediaBufferRef& buffer)
 {
-    const auto* runtimePlan = dynamic_cast<const MediaTsMuxRuntimePlanBuffer*>(
-        buffer.get());
+    const auto* runtimePlan =
+        dynamic_cast<const MediaProjectMpegTsRuntimePlanBuffer*>(
+            buffer.get());
     if (!runtimePlan) {
         return fail(invalid(
             "project MPEG-TS mux session requires a typed runtime plan"));
@@ -214,7 +216,7 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
                 "project MPEG-TS mux session rejects an uncleared runtime generation");
         } else {
             m_plannedGroup = runtimePlan->group();
-            m_plan = runtimePlan->plan();
+            m_plan = runtimePlan->muxPlan();
             m_epoch = runtimePlan->epoch();
             m_group = runtimePlan->group();
             m_generation.store(

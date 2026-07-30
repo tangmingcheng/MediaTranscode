@@ -1,7 +1,7 @@
 #pragma once
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
-#include "internal/graph/protocol/mpegts/MediaTsMuxPlan.h"
+#include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
 #include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
 
@@ -34,7 +34,8 @@ class MediaProjectMpegTsPlanSourceNode final : public FFmpegNodeRuntime {
 public:
     MediaProjectMpegTsPlanSourceNode(MediaNodeId nodeId,
                                      MediaAvSyncGroupKey group,
-                                     MediaTsMuxPlan plan);
+                                     MediaProjectMpegTsRuntimeOutputPlan
+                                         outputPlan);
     static MediaNodeKind staticKind() noexcept;
     static constexpr std::string_view generationPurgeIdentity() noexcept
     {
@@ -58,7 +59,7 @@ private:
     void resetState() noexcept;
 
     MediaAvSyncGroupKey m_group;
-    MediaTsMuxPlan m_plan;
+    std::shared_ptr<const MediaProjectMpegTsRuntimeOutputPlan> m_outputPlan;
     std::shared_ptr<MediaAvSyncGroupRuntime> m_syncGroup;
     std::shared_ptr<MediaProjectMpegTsPlanSourceGenerationState>
         m_generationSession;

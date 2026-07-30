@@ -2,7 +2,7 @@
 
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/buffer/MediaTsAccessUnitBuffer.h"
-#include "internal/graph/runtime/buffer/MediaTsMuxRuntimePlanBuffer.h"
+#include "internal/graph/runtime/buffer/MediaProjectMpegTsRuntimePlanBuffer.h"
 #include "internal/graph/sync/MediaScheduledAccessUnit.h"
 #include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
 #include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
@@ -80,8 +80,9 @@ MediaScheduledTsAccessUnitAdapterNode::onProcess(
                 planInput.error());
         }
         if (!planInput.value()) return processWaiting();
-        const auto* plan = dynamic_cast<const MediaTsMuxRuntimePlanBuffer*>(
-            planInput.value()->get());
+        const auto* plan =
+            dynamic_cast<const MediaProjectMpegTsRuntimePlanBuffer*>(
+                planInput.value()->get());
         if (!plan || plan->group() != m_group) {
             return ::media::Result<MediaNodeProcessResult>::failure(
                 ::media::ErrorInfo::invalidArgument(
@@ -98,7 +99,7 @@ MediaScheduledTsAccessUnitAdapterNode::onProcess(
                     permitted.error());
             }
             m_epoch = plan->epoch();
-            m_transportLead = plan->plan().transportDecodeLead();
+            m_transportLead = plan->muxPlan().transportDecodeLead();
         }
         return processProgress();
     }
