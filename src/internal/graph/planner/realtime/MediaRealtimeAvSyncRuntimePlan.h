@@ -67,6 +67,7 @@ struct MediaMpegTsUdpOutputPlan final {
 
 struct MediaProjectMpegTsRuntimeOutputPlan final {
     MediaProjectMpegTsOutputPlan protocol;
+    MediaMuxSessionKind muxSessionKind;
     std::variant<MediaMpegTsUdpOutputPlan,
                  MediaMpegTsRtpOutputPlan> transport;
 };
@@ -85,5 +86,9 @@ struct MediaRealtimeAvSyncRuntimePlan final {
     MediaRealtimeAvSyncPlanningFacts planningFacts;
     MediaAudioCorrectionReachabilityPlan audioCorrection;
 };
+
+::media::Result<MediaProjectMpegTsRuntimeOutputPlan>
+cloneMediaProjectMpegTsRuntimeOutputPlan(
+    const MediaProjectMpegTsRuntimeOutputPlan& source);
 
 } // namespace media::ffmpeg::graph

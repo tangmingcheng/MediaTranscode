@@ -211,6 +211,11 @@ bool branchEnabled(const MediaAudioPipelinePlan& plan) noexcept
     return plan.enabled && plan.branchMode != MediaBranchMode::Drop;
 }
 
+bool branchEnabled(const MediaPipelinePlan& plan) noexcept
+{
+    return plan.enabled && plan.branchMode != MediaBranchMode::Drop;
+}
+
 bool separateStreamsOutput(const MediaRealtimeRtpTranscodePlan& plan) noexcept
 {
     return plan.outputLayout == RealtimeOutputStreamLayout::SeparateStreams;
@@ -650,6 +655,10 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
             outputOptions.videoCodec = video.value().codec;
             outputOptions.audioCodec = audio->codec;
             outputOptions.scheduled = scheduled.value().serialized;
+            outputOptions.expectVideo =
+                branchEnabled(plan.videoPlan);
+            outputOptions.expectAudio =
+                branchEnabled(plan.audioPlan);
             auto output = MediaScheduledMpegTsOutputSegmentBuilder::build(
                 graph, outputOptions, *plan.avSyncRuntime);
             if (!output) {
@@ -696,12 +705,36 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
     std::optional<MediaAvSyncRuntimeBinding> avSyncBinding;
     if (preflight.plan.avSyncRuntime) {
         const auto& runtimePlan = *preflight.plan.avSyncRuntime;
+        std::optional<MediaProjectMpegTsRuntimeOutputPlan>
+            projectMpegTsOutputProduct;
+        if (runtimePlan.outputAdapter ==
+                MediaAvSyncOutputAdapterKind::ProjectMpegTs) {
+            const auto* projectOutput =
+                std::get_if<MediaProjectMpegTsRuntimeOutputPlan>(
+                    &runtimePlan.protocolOutput);
+            if (!projectOutput) {
+                return ::media::Result<
+                    MediaRealtimeExecutableGraph>::failure(
+                    ::media::ErrorInfo::invalidArgument(
+                        "Project MPEG-TS adapter requires its complete runtime output product"));
+            }
+            auto cloned =
+                cloneMediaProjectMpegTsRuntimeOutputPlan(*projectOutput);
+            if (!cloned) {
+                return ::media::Result<
+                    MediaRealtimeExecutableGraph>::failure(
+                    cloned.error());
+            }
+            projectMpegTsOutputProduct =
+                std::move(cloned).value();
+        }
         avSyncBinding = MediaAvSyncRuntimeBinding{
             runtimePlan.groupKey,
             runtimePlan.synchronization,
             runtimePlan.transition,
             MediaAvSyncBindingAssemblyMode::ProductionProtocolOutput,
-            runtimePlan.outputAdapter};
+            runtimePlan.outputAdapter,
+            std::move(projectMpegTsOutputProduct)};
     }
     auto graphResult = build(std::move(preflight.plan));
     if (!graphResult) {

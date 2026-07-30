@@ -14,6 +14,8 @@ struct MediaScheduledMpegTsOutputSegmentOptions final {
     MediaEndpoint videoCodec;
     MediaEndpoint audioCodec;
     MediaEndpoint scheduled;
+    bool expectVideo;
+    bool expectAudio;
 };
 
 struct MediaScheduledMpegTsOutputSegmentResult final {

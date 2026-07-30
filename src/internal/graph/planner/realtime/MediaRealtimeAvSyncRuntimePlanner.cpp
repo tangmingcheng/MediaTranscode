@@ -385,6 +385,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
         protocolOutput.emplace(std::in_place_type<MediaProjectMpegTsRuntimeOutputPlan>,
             MediaProjectMpegTsRuntimeOutputPlan{
                 std::move(accepted).value(),
+                MediaMuxSessionKind::ProjectMpegTs,
                 std::move(*transport)});
     } else {
         return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(

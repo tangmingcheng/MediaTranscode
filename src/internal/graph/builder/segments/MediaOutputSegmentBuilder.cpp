@@ -1,6 +1,7 @@
 #include "internal/graph/builder/segments/MediaOutputSegmentBuilder.h"
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/builder/segments/MediaProjectMpegTsMuxSegmentBuilder.h"
 #include "internal/graph/planner/MediaBlockingEdgePolicyPlanner.h"
 
 namespace media::ffmpeg::graph {
@@ -74,9 +75,26 @@ const char* boolOption(bool value) noexcept
     segment.fileOutput = graph.addNode(MediaNodeKind::FileOutput,
                                        options.prefix + ".output",
                                        "File output segment");
-    segment.mux = graph.addNode(MediaNodeKind::FileMux,
-                                options.prefix + ".mux",
-                                "File mux segment");
+    if (projectPair) {
+        auto mux = MediaProjectMpegTsMuxSegmentBuilder::build(
+            graph,
+            MediaProjectMpegTsMuxSegmentOptions{
+                options.prefix,
+                options.expectVideo,
+                options.expectAudio,
+                *options.muxSessionKind,
+                true});
+        if (!mux) {
+            return ::media::Result<FileOutputSegment>::failure(
+                mux.error());
+        }
+        segment.mux = mux.value();
+    } else {
+        segment.mux = graph.addNode(
+            MediaNodeKind::FileMux,
+            options.prefix + ".mux",
+            "File mux segment");
+    }
 
     if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, segment.fileOutput, "url", options.outputUrl); !status) {
         return ::media::Result<FileOutputSegment>::failure(status.error());
@@ -94,27 +112,28 @@ const char* boolOption(bool value) noexcept
             resourceKind.value()); !status) {
         return ::media::Result<FileOutputSegment>::failure(status.error());
     }
-    if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph,
-                                                                   owner,
-                                                                   segment.mux,
-                                                                   MediaTranscodeOptionKey::MuxExpectVideo,
-                                                                   boolOption(options.expectVideo)); !status) {
-        return ::media::Result<FileOutputSegment>::failure(status.error());
-    }
-    if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
-            graph,
-            owner,
-            segment.mux,
-            MediaTranscodeOptionKey::MuxSessionKind,
-            sessionKind.value()); !status) {
-        return ::media::Result<FileOutputSegment>::failure(status.error());
-    }
-    if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph,
-                                                                   owner,
-                                                                   segment.mux,
-                                                                   MediaTranscodeOptionKey::MuxExpectAudio,
-                                                                   boolOption(options.expectAudio)); !status) {
-        return ::media::Result<FileOutputSegment>::failure(status.error());
+    if (!projectPair) {
+        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
+                graph, owner, segment.mux,
+                MediaTranscodeOptionKey::MuxExpectVideo,
+                boolOption(options.expectVideo)); !status) {
+            return ::media::Result<FileOutputSegment>::failure(
+                status.error());
+        }
+        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
+                graph, owner, segment.mux,
+                MediaTranscodeOptionKey::MuxSessionKind,
+                sessionKind.value()); !status) {
+            return ::media::Result<FileOutputSegment>::failure(
+                status.error());
+        }
+        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
+                graph, owner, segment.mux,
+                MediaTranscodeOptionKey::MuxExpectAudio,
+                boolOption(options.expectAudio)); !status) {
+            return ::media::Result<FileOutputSegment>::failure(
+                status.error());
+        }
     }
 
     if (auto status = MediaGraphBuildSupport::addOutputPortChecked(graph,
@@ -128,7 +147,9 @@ const char* boolOption(bool value) noexcept
                                                                    false); !status) {
         return ::media::Result<FileOutputSegment>::failure(status.error());
     }
-    if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph,
+
+    if (!projectPair) {
+        if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph,
                                                                   owner,
                                                                   segment.mux,
                                                                   "resource",
@@ -137,9 +158,9 @@ const char* boolOption(bool value) noexcept
                                                                   resourcePayload,
                                                                   true,
                                                                   false); !status) {
-        return ::media::Result<FileOutputSegment>::failure(status.error());
-    }
-    if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph,
+            return ::media::Result<FileOutputSegment>::failure(status.error());
+        }
+        if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph,
                                                                   owner,
                                                                   segment.mux,
                                                                   "codec",
@@ -148,9 +169,9 @@ const char* boolOption(bool value) noexcept
                                                                   codecPayload,
                                                                   true,
                                                                   true); !status) {
-        return ::media::Result<FileOutputSegment>::failure(status.error());
-    }
-    if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph,
+            return ::media::Result<FileOutputSegment>::failure(status.error());
+        }
+        if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph,
                                                                   owner,
                                                                   segment.mux,
                                                                   "packet",
@@ -159,7 +180,8 @@ const char* boolOption(bool value) noexcept
                                                                   packetPayload,
                                                                   true,
                                                                   true); !status) {
-        return ::media::Result<FileOutputSegment>::failure(status.error());
+            return ::media::Result<FileOutputSegment>::failure(status.error());
+        }
     }
 
     if (auto status = MediaGraphBuildSupport::connectChecked(graph,
@@ -171,21 +193,6 @@ const char* boolOption(bool value) noexcept
                                                             options.prefix + ".output.resource -> mux.resource",
                                                             MediaBlockingEdgePolicyPlanner::planQueue(options.queues.metadata)); !status) {
         return ::media::Result<FileOutputSegment>::failure(status.error());
-    }
-
-    if (projectPair) {
-        if (auto status = MediaGraphBuildSupport::addInputPortChecked(
-                graph,
-                owner,
-                segment.mux,
-                "plan",
-                MediaStreamKind::Metadata,
-                MediaEdgeKind::Metadata,
-                        MediaPayloadKind::ProjectMpegTsRuntimePlan,
-                true,
-                false); !status) {
-            return ::media::Result<FileOutputSegment>::failure(status.error());
-        }
     }
 
     return ::media::Result<FileOutputSegment>::success(segment);

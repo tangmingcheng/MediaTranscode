@@ -199,7 +199,9 @@ bool validRtpStream(
         std::get<MediaProjectMpegTsRuntimeOutputPlan>(
             runtime.protocolOutput);
     const auto& mux = output.protocol.muxPlan().parameters();
-    if (output.protocol.audioSampleRate() !=
+    if (output.muxSessionKind !=
+            MediaMuxSessionKind::ProjectMpegTs ||
+        output.protocol.audioSampleRate() !=
             runtime.audioCorrection.outputSampleRate ||
         mux !=
             runtime.synchronization.projectMpegTsOutput->outputMux

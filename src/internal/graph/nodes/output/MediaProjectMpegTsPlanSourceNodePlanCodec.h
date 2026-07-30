@@ -20,6 +20,10 @@ public:
                                      outputPlan);
     static ::media::Result<MediaDecodedProjectMpegTsPlanSourceNodePlan> decode(
         const MediaNode& node);
+    static ::media::Status validateAgainstPlanner(
+        const MediaDecodedProjectMpegTsPlanSourceNodePlan& decoded,
+        const MediaAvSyncGroupKey& plannerGroup,
+        const MediaProjectMpegTsRuntimeOutputPlan& plannerProduct);
 
 private:
     MediaProjectMpegTsPlanSourceNodePlanCodec() = delete;

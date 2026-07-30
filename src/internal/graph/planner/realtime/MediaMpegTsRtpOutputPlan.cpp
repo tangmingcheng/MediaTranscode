@@ -106,6 +106,29 @@ MediaMpegTsRtpOutputPlan::MediaMpegTsRtpOutputPlan(
 {
 }
 
+::media::Result<MediaMpegTsRtpOutputPlan>
+MediaMpegTsRtpOutputPlan::clone() const
+{
+    auto transportClone = m_transport.clone();
+    if (!transportClone) {
+        return ::media::Result<MediaMpegTsRtpOutputPlan>::failure(
+            transportClone.error());
+    }
+    return ::media::Result<MediaMpegTsRtpOutputPlan>::success(
+        MediaMpegTsRtpOutputPlan(
+            std::move(transportClone).value(),
+            m_payloadType,
+            m_clockRate,
+            m_ssrc,
+            m_baseTimestamp,
+            m_initialSequenceNumber,
+            m_cname,
+            m_senderReportInterval,
+            m_maximumDatagramBytes,
+            m_tsPacketsPerPayload,
+            m_sdp));
+}
+
 const MediaRtpUdpSenderConfig&
 MediaMpegTsRtpOutputPlan::transport() const noexcept
 {

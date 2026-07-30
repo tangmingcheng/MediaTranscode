@@ -23,18 +23,21 @@ constexpr const char* AudioSampleRateKey =
     "project_mpeg_ts_plan.audio_sample_rate";
 constexpr const char* VariantKey =
     "project_mpeg_ts_plan.transport.variant";
+constexpr const char* MuxSessionKindKey =
+    "project_mpeg_ts_plan.mux_session_kind";
 constexpr std::size_t MuxFieldCount = 32;
 
-constexpr std::array<const char*, 7> UdpKeys{
+constexpr std::array<const char*, 8> UdpKeys{
     GroupKey,
     PlanKey,
     AudioSampleRateKey,
     VariantKey,
     "project_mpeg_ts_plan.transport.udp.url",
     "project_mpeg_ts_plan.transport.udp.resource_kind",
-    "project_mpeg_ts_plan.transport.udp.mux_session_kind"};
+    "project_mpeg_ts_plan.transport.udp.mux_session_kind",
+    MuxSessionKindKey};
 
-constexpr std::array<const char*, 30> RtpKeys{
+constexpr std::array<const char*, 31> RtpKeys{
     GroupKey,
     PlanKey,
     AudioSampleRateKey,
@@ -64,7 +67,8 @@ constexpr std::array<const char*, 30> RtpKeys{
     "project_mpeg_ts_plan.transport.rtp.sdp.origin_address_family",
     "project_mpeg_ts_plan.transport.rtp.sdp.origin_numeric_address",
     "project_mpeg_ts_plan.transport.rtp.sdp.cname",
-    "project_mpeg_ts_plan.transport.rtp.initial_sequence_number"};
+    "project_mpeg_ts_plan.transport.rtp.initial_sequence_number",
+    MuxSessionKindKey};
 
 template <typename Value>
 ::media::Result<Value> narrow(std::uint64_t value)
@@ -304,6 +308,62 @@ bool exactOptionKeys(
     return ::media::Status::success();
 }
 
+bool sameLocalPortPolicy(
+    const MediaRtpUdpLocalPortPolicy& left,
+    const MediaRtpUdpLocalPortPolicy& right) noexcept
+{
+    return left.kind() == right.kind() &&
+        left.rtpPort() == right.rtpPort() &&
+        left.rtcpPort() == right.rtcpPort();
+}
+
+bool sameSenderConfig(
+    const MediaRtpUdpSenderConfig& left,
+    const MediaRtpUdpSenderConfig& right) noexcept
+{
+    return left.addressFamily() == right.addressFamily() &&
+        left.localNumericAddress() == right.localNumericAddress() &&
+        left.remoteRtpEndpoint() == right.remoteRtpEndpoint() &&
+        left.remoteRtcpEndpoint() == right.remoteRtcpEndpoint() &&
+        sameLocalPortPolicy(
+            left.localPortPolicy(), right.localPortPolicy()) &&
+        left.sendBufferBytes() == right.sendBufferBytes() &&
+        left.maximumDatagramBytes() == right.maximumDatagramBytes() &&
+        left.ioBehavior() == right.ioBehavior();
+}
+
+bool sameRtpOutput(
+    const MediaMpegTsRtpOutputPlan& left,
+    const MediaMpegTsRtpOutputPlan& right) noexcept
+{
+    const auto& leftSdp = left.sdp();
+    const auto& rightSdp = right.sdp();
+    return sameSenderConfig(left.transport(), right.transport()) &&
+        left.payloadType() == right.payloadType() &&
+        left.clockRate() == right.clockRate() &&
+        left.ssrc() == right.ssrc() &&
+        left.baseTimestamp() == right.baseTimestamp() &&
+        left.initialSequenceNumber() == right.initialSequenceNumber() &&
+        left.cname() == right.cname() &&
+        left.senderReportInterval() == right.senderReportInterval() &&
+        left.maximumDatagramBytes() == right.maximumDatagramBytes() &&
+        left.tsPacketsPerPayload() == right.tsPacketsPerPayload() &&
+        leftSdp.path == rightSdp.path &&
+        leftSdp.originUsername == rightSdp.originUsername &&
+        leftSdp.sessionName == rightSdp.sessionName &&
+        leftSdp.originAddressFamily == rightSdp.originAddressFamily &&
+        leftSdp.originNumericAddress == rightSdp.originNumericAddress &&
+        leftSdp.cname == rightSdp.cname;
+}
+
+bool sameProtocol(
+    const MediaProjectMpegTsOutputPlan& left,
+    const MediaProjectMpegTsOutputPlan& right) noexcept
+{
+    return left.audioSampleRate() == right.audioSampleRate() &&
+        left.muxPlan().parameters() == right.muxPlan().parameters();
+}
+
 ::media::Status applyUdp(
     MediaGraph& graph,
     MediaNodeId nodeId,
@@ -329,7 +389,8 @@ bool exactOptionKeys(
         {VariantKey, "udp"},
         {UdpKeys[4], udp.url},
         {UdpKeys[5], "byte_sink"},
-        {UdpKeys[6], "project_mpegts"}});
+        {UdpKeys[6], "project_mpegts"},
+        {UdpKeys[7], "project_mpegts"}});
 }
 
 ::media::Status applyRtp(
@@ -391,7 +452,8 @@ bool exactOptionKeys(
         {RtpKeys[26], familyName(rtp.sdp().originAddressFamily)},
         {RtpKeys[27], rtp.sdp().originNumericAddress},
         {RtpKeys[28], rtp.sdp().cname},
-        {RtpKeys[29], std::to_string(rtp.initialSequenceNumber())}});
+        {RtpKeys[29], std::to_string(rtp.initialSequenceNumber())},
+        {RtpKeys[30], "project_mpegts"}});
 }
 
 ::media::Result<MediaProjectMpegTsRuntimeOutputPlan> decodeUdp(
@@ -426,6 +488,7 @@ bool exactOptionKeys(
     }
     return Result::success(MediaProjectMpegTsRuntimeOutputPlan{
         std::move(protocol),
+        MediaMuxSessionKind::ProjectMpegTs,
         std::variant<MediaMpegTsUdpOutputPlan, MediaMpegTsRtpOutputPlan>(
             std::in_place_type<MediaMpegTsUdpOutputPlan>,
             MediaMpegTsUdpOutputPlan{
@@ -582,6 +645,7 @@ bool exactOptionKeys(
     }
     return Result::success(MediaProjectMpegTsRuntimeOutputPlan{
         std::move(protocol),
+        MediaMuxSessionKind::ProjectMpegTs,
         std::variant<MediaMpegTsUdpOutputPlan, MediaMpegTsRtpOutputPlan>(
             std::in_place_type<MediaMpegTsRtpOutputPlan>,
             std::move(rtp).value())});
@@ -635,12 +699,19 @@ MediaProjectMpegTsPlanSourceNodePlanCodec::decode(const MediaNode& node)
         node.options, AudioSampleRateKey);
     auto variant = requiredNodeOption(
         &node.options, Owner, VariantKey);
-    if (!groupText || !muxText || !audioSampleRate || !variant) {
+    auto muxSessionKind = requiredNodeOption(
+        &node.options, Owner, MuxSessionKindKey);
+    if (!groupText || !muxText || !audioSampleRate || !variant ||
+        !muxSessionKind) {
         return Result::failure(
             !groupText ? groupText.error() :
             !muxText ? muxText.error() :
             !audioSampleRate ? audioSampleRate.error() :
-            variant.error());
+            !variant ? variant.error() : muxSessionKind.error());
+    }
+    if (muxSessionKind.value() != "project_mpegts") {
+        return Result::failure(::media::ErrorInfo::invalidArgument(
+            "Project MPEG-TS node plan requires its planned mux session kind"));
     }
     MediaAvSyncGroupKey group(std::move(groupText).value());
     auto mux = decodeMux(muxText.value());
@@ -666,6 +737,54 @@ MediaProjectMpegTsPlanSourceNodePlanCodec::decode(const MediaNode& node)
     return Result::success(
         MediaDecodedProjectMpegTsPlanSourceNodePlan{
             std::move(group), std::move(output).value()});
+}
+
+::media::Status
+MediaProjectMpegTsPlanSourceNodePlanCodec::validateAgainstPlanner(
+    const MediaDecodedProjectMpegTsPlanSourceNodePlan& decoded,
+    const MediaAvSyncGroupKey& plannerGroup,
+    const MediaProjectMpegTsRuntimeOutputPlan& plannerProduct)
+{
+    if (decoded.groupKey != plannerGroup ||
+        !sameProtocol(
+            decoded.outputPlan.protocol, plannerProduct.protocol) ||
+        decoded.outputPlan.muxSessionKind !=
+            plannerProduct.muxSessionKind ||
+        decoded.outputPlan.transport.index() !=
+            plannerProduct.transport.index()) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Project MPEG-TS node plan conflicts with its planner product"));
+    }
+    if (const auto* decodedUdp =
+            std::get_if<MediaMpegTsUdpOutputPlan>(
+                &decoded.outputPlan.transport)) {
+        const auto* plannerUdp =
+            std::get_if<MediaMpegTsUdpOutputPlan>(
+                &plannerProduct.transport);
+        if (!plannerUdp ||
+            decodedUdp->url != plannerUdp->url ||
+            decodedUdp->resourceKind != plannerUdp->resourceKind ||
+            decodedUdp->muxSessionKind != plannerUdp->muxSessionKind) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Project MPEG-TS UDP node plan conflicts with its planner product"));
+        }
+        return ::media::Status::success();
+    }
+    const auto* decodedRtp =
+        std::get_if<MediaMpegTsRtpOutputPlan>(
+            &decoded.outputPlan.transport);
+    const auto* plannerRtp =
+        std::get_if<MediaMpegTsRtpOutputPlan>(
+            &plannerProduct.transport);
+    if (!decodedRtp || !plannerRtp ||
+        !sameRtpOutput(*decodedRtp, *plannerRtp)) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Project MPEG-TS RTP node plan conflicts with its planner product"));
+    }
+    return ::media::Status::success();
 }
 
 } // namespace media::ffmpeg::graph

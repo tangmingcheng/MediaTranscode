@@ -5,17 +5,14 @@
 #include "internal/graph/runtime/compilation/MediaAvSyncRuntimeBootstrap.h"
 #include "internal/graph/runtime/compilation/MediaAvGenerationParticipantAssembler.h"
 #include "internal/graph/runtime/factory/MediaRuntimeNodeFactory.h"
+#include "internal/graph/runtime/validation/MediaAvSyncGraphShapeValidator.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
-#include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
-#include "internal/graph/nodes/output/MediaProjectMpegTsPlanSourceNodePlanCodec.h"
-#include "internal/graph/nodes/sync/MediaAvSyncSourceClockModeNodeOptionCodec.h"
 #include "internal/graph/nodes/sync/MediaDemuxPacketClockBinderNodePlanCodec.h"
 #include "internal/graph/time/MediaDemuxTimestampClockMapper.h"
 
 #include <chrono>
 #include <string>
-#include <string_view>
 #include <unordered_set>
 #include <utility>
 
@@ -54,496 +51,42 @@ public:
     }
 };
 
-bool isLegacyProductionAvSyncAuthority(MediaNodeKind kind) noexcept
-{
-    switch (kind) {
-    case MediaNodeKind::RtpMux:
-    case MediaNodeKind::RtpOutput:
-    case MediaNodeKind::SdpWriter:
-    case MediaNodeKind::PacketNormalize:
-    case MediaNodeKind::VideoTimestamp:
-    case MediaNodeKind::PacketStartGate:
-        return true;
-    default:
-        return false;
-    }
-}
-
 } // namespace
 
-::media::Status MediaGraphRuntimeCompiler::validateBindings(const MediaRealtimeExecutableGraph& executable)
+::media::Status MediaGraphRuntimeCompiler::validateBindings(
+    const MediaRealtimeExecutableGraph& executable)
 {
-    constexpr std::string_view SyncGroupSuffix = ".sync_group";
-    constexpr std::string_view SchedulerGroupKey = "av_scheduler.sync_group";
-    constexpr std::string_view BinderGroupKey = "playback_epoch_binder.sync_group";
-    constexpr std::string_view StartupClockGroupKey = "av_startup_clock.sync_group";
-    constexpr std::string_view SequencerGroupKey =
-        "activated_startup_release_sequencer.sync_group";
-    constexpr std::string_view BoundReleaseExtractorGroupKey =
-        "av_bound_release_extractor.sync_group";
-    constexpr std::string_view RtpBinderGroupKey = "rtp_clock_binder.sync_group";
-    constexpr std::string_view DemuxBinderGroupKey =
-        "demux_clock_binder.sync_group";
-    constexpr std::string_view LockedPacketGateGroupKey =
-        "locked_packet_gate.sync_group";
-    constexpr std::string_view CoordinatorGroupKey = "av_startup.sync_group";
-    constexpr std::string_view AudioDriftControllerGroupKey =
-        "audio_drift_controller.sync_group";
-    constexpr std::string_view ScheduledRtpSenderGroupKey =
-        "scheduled_rtp.sync_group";
-    constexpr std::string_view ScheduledTsAdapterGroupKey =
-        "scheduled_ts_adapter.sync_group";
-    constexpr std::string_view ProjectMpegTsPlanGroupKey =
-        "project_mpeg_ts_plan.sync_group";
-    constexpr std::string_view MpegTsRtpSdpGroupKey =
-        "mpegts_rtp_sdp.sync_group";
     std::unordered_set<std::uint64_t> bindingIds;
-    std::size_t schedulerCount = 0;
-    std::size_t binderCount = 0;
-    std::size_t sequencerCount = 0;
-    std::size_t scheduledRtpSenderCount = 0;
-    std::size_t scheduledTsAdapterCount = 0;
-    std::size_t projectMpegTsPlanSourceCount = 0;
-    std::size_t dualMediaSdpPublisherCount = 0;
-    std::size_t mpegTsRtpSdpPublisherCount = 0;
-    std::size_t projectMpegTsMuxCount = 0;
-    std::size_t udpOutputCount = 0;
-    std::size_t schedulerReferenceCount = 0;
-    std::size_t binderReferenceCount = 0;
-    std::size_t sequencerReferenceCount = 0;
-    std::size_t scheduledRtpSenderReferenceCount = 0;
-    std::size_t scheduledTsAdapterReferenceCount = 0;
-    std::size_t projectMpegTsPlanSourceReferenceCount = 0;
-    std::size_t mpegTsRtpSdpPublisherReferenceCount = 0;
-    std::size_t legacyProductionAuthorityCount = 0;
-    std::size_t rtpClockBinderCount = 0;
-    std::size_t rtpClockBinderReferenceCount = 0;
-    std::size_t rtpClockSnapshotCount = 0;
-    std::size_t rtpSourceClockAdapterCount = 0;
-    std::size_t rtpClockGroupCount = 0;
-    std::size_t mpegTsDemuxCount = 0;
-    std::size_t demuxClockBinderCount = 0;
-    std::size_t demuxClockBinderReferenceCount = 0;
-    std::size_t demuxVideoClockBinderCount = 0;
-    std::size_t demuxAudioClockBinderCount = 0;
     for (const auto& binding : executable.inputBindings) {
         if (!binding.nodeId.isValid() || !binding.prepared.valid() ||
             !bindingIds.insert(binding.nodeId.value).second) {
             return ::media::Status::failure(
-                ::media::ErrorInfo::invalidArgument("MediaGraphRuntime duplicate or invalid prepared input binding"));
+                ::media::ErrorInfo::invalidArgument(
+                    "MediaGraphRuntime duplicate or invalid prepared input binding"));
         }
-        const MediaNode* node = executable.graph.findNode(binding.nodeId);
-        if (!node || node->kind != MediaNodeKind::RealtimeInput) {
+        const MediaNode* node =
+            executable.graph.findNode(binding.nodeId);
+        if (!node ||
+            node->kind != MediaNodeKind::RealtimeInput) {
             return ::media::Status::failure(
-                ::media::ErrorInfo::invalidArgument("MediaGraphRuntime prepared binding target is not RealtimeInput"));
+                ::media::ErrorInfo::invalidArgument(
+                    "MediaGraphRuntime prepared binding target is not RealtimeInput"));
         }
     }
     for (const MediaNode& node : executable.graph.nodes()) {
-        if (node.kind == MediaNodeKind::AvOutputScheduler) ++schedulerCount;
-        if (node.kind == MediaNodeKind::PlaybackEpochBinder) ++binderCount;
-        if (node.kind == MediaNodeKind::ActivatedStartupReleaseSequencer)
-            ++sequencerCount;
-        if (node.kind == MediaNodeKind::ScheduledRtpSender)
-            ++scheduledRtpSenderCount;
-        if (node.kind == MediaNodeKind::ScheduledTsAccessUnitAdapter)
-            ++scheduledTsAdapterCount;
-        if (node.kind == MediaNodeKind::ProjectMpegTsPlanSource)
-            ++projectMpegTsPlanSourceCount;
-        if (node.kind == MediaNodeKind::DualMediaSdpPublisher)
-            ++dualMediaSdpPublisherCount;
-        if (node.kind == MediaNodeKind::MpegTsRtpSdpPublisher)
-            ++mpegTsRtpSdpPublisherCount;
-        if (node.kind == MediaNodeKind::FileMux)
-            ++projectMpegTsMuxCount;
-        if (node.kind == MediaNodeKind::FileOutput)
-            ++udpOutputCount;
-        if (isLegacyProductionAvSyncAuthority(node.kind))
-            ++legacyProductionAuthorityCount;
-        if (node.kind == MediaNodeKind::RtpPacketClockBinder)
-            ++rtpClockBinderCount;
-        if (node.kind == MediaNodeKind::RtpClockSnapshotFanout)
-            ++rtpClockSnapshotCount;
-        if (node.kind == MediaNodeKind::RtpSourceClockStateAdapter)
-            ++rtpSourceClockAdapterCount;
-        if (node.kind == MediaNodeKind::RtpClockGroup)
-            ++rtpClockGroupCount;
-        if (node.kind == MediaNodeKind::MpegTsDemux)
-            ++mpegTsDemuxCount;
-        if (node.kind == MediaNodeKind::ProjectMpegTsPlanSource) {
-            if (!executable.avSyncBinding ||
-                !executable.avSyncBinding->plan.projectMpegTsOutput ||
-                !executable.avSyncBinding->plan.projectMpegTsOutput
-                     ->outputMux) {
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::notInitialized(
-                        "Project MPEG-TS plan source requires its planner output binding"));
-            }
-            auto decoded =
-                MediaProjectMpegTsPlanSourceNodePlanCodec::decode(node);
-            if (!decoded) {
-                return ::media::Status::failure(decoded.error());
-            }
-            if (decoded.value().groupKey !=
-                    executable.avSyncBinding->groupKey ||
-                decoded.value().outputPlan.protocol.muxPlan().parameters()
-                        .transportKind !=
-                    executable.avSyncBinding->plan.projectMpegTsOutput
-                        ->outputMux->parameters().transportKind) {
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::invalidArgument(
-                        "Project MPEG-TS plan source conflicts with its planner transport authority"));
-            }
-        }
-        if (node.kind == MediaNodeKind::DemuxPacketClockBinder) {
-            ++demuxClockBinderCount;
-            if (!executable.avSyncBinding) {
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::notInitialized(
-                        "Demux binder requires its A/V planner binding"));
-            }
-            auto decoded =
-                MediaDemuxPacketClockBinderNodePlanCodec::decode(node);
-            if (!decoded) {
-                return ::media::Status::failure(decoded.error());
-            }
-            if (auto exact =
-                    MediaDemuxPacketClockBinderNodePlanCodec::
-                        validateAgainstPlanner(
-                            decoded.value(),
-                            executable.avSyncBinding->groupKey,
-                            executable.avSyncBinding->plan);
-                !exact) {
-                return exact;
-            }
-            if (decoded.value().stream == MediaScheduledStream::Video) {
-                ++demuxVideoClockBinderCount;
-            } else {
-                ++demuxAudioClockBinderCount;
-            }
-        }
-        if (node.kind == MediaNodeKind::AvStartupCoordinator) {
-            if (!executable.avSyncBinding ||
-                !executable.avSyncBinding->plan.sourceClockMode) {
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::notInitialized(
-                        "A/V startup coordinator requires its planner source clock binding"));
-            }
-            auto encoded = requiredNodeOption(
-                &node.options, "MediaAvStartupCoordinatorNode",
-                "av_startup.source_clock_mode");
-            if (!encoded) {
-                return ::media::Status::failure(encoded.error());
-            }
-            auto decoded =
-                MediaAvSyncSourceClockModeNodeOptionCodec::decode(
-                    encoded.value());
-            if (!decoded) {
-                return ::media::Status::failure(decoded.error());
-            }
-            if (decoded.value() !=
-                *executable.avSyncBinding->plan.sourceClockMode) {
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::invalidArgument(
-                        "A/V startup coordinator source clock conflicts with its planner binding"));
-            }
-        }
-        if (node.kind == MediaNodeKind::RealtimeInput && !bindingIds.contains(node.id.value)) {
-            return ::media::Status::failure(
-                ::media::ErrorInfo::notInitialized("MediaGraphRuntime missing prepared RealtimeInput binding"));
-        }
-        if (node.kind == MediaNodeKind::AudioDriftController &&
-            !node.options.has(std::string(AudioDriftControllerGroupKey))) {
+        if (node.kind == MediaNodeKind::RealtimeInput &&
+            !bindingIds.contains(node.id.value)) {
             return ::media::Status::failure(
                 ::media::ErrorInfo::notInitialized(
-                    "MediaGraphRuntime audio drift controller requires its planned sync group"));
-        }
-        for (const auto& [key, value] : node.options.values()) {
-            if (!key.ends_with(SyncGroupSuffix)) continue;
-            const bool schedulerConsumer =
-                node.kind == MediaNodeKind::AvOutputScheduler &&
-                key == SchedulerGroupKey;
-            const bool binderConsumer =
-                node.kind == MediaNodeKind::PlaybackEpochBinder &&
-                key == BinderGroupKey;
-            const bool startupClockConsumer =
-                node.kind == MediaNodeKind::AvStartupClock &&
-                key == StartupClockGroupKey;
-            const bool sequencerConsumer =
-                node.kind == MediaNodeKind::ActivatedStartupReleaseSequencer &&
-                key == SequencerGroupKey;
-            const bool boundReleaseExtractorConsumer =
-                node.kind == MediaNodeKind::AvBoundReleaseExtractor &&
-                key == BoundReleaseExtractorGroupKey;
-            const bool rtpBinderConsumer =
-                node.kind == MediaNodeKind::RtpPacketClockBinder &&
-                key == RtpBinderGroupKey;
-            const bool demuxBinderConsumer =
-                node.kind == MediaNodeKind::DemuxPacketClockBinder &&
-                key == DemuxBinderGroupKey;
-            const bool lockedPacketGateConsumer =
-                node.kind == MediaNodeKind::LockedPacketGate &&
-                key == LockedPacketGateGroupKey;
-            const bool coordinatorConsumer =
-                node.kind == MediaNodeKind::AvStartupCoordinator &&
-                key == CoordinatorGroupKey;
-            const bool audioDriftControllerConsumer =
-                node.kind == MediaNodeKind::AudioDriftController &&
-                key == AudioDriftControllerGroupKey;
-            const bool scheduledRtpSenderConsumer =
-                node.kind == MediaNodeKind::ScheduledRtpSender &&
-                key == ScheduledRtpSenderGroupKey;
-            const bool scheduledTsAdapterConsumer =
-                node.kind == MediaNodeKind::ScheduledTsAccessUnitAdapter &&
-                key == ScheduledTsAdapterGroupKey;
-            const bool projectMpegTsPlanSourceConsumer =
-                node.kind == MediaNodeKind::ProjectMpegTsPlanSource &&
-                key == ProjectMpegTsPlanGroupKey;
-            const bool mpegTsRtpSdpPublisherConsumer =
-                node.kind == MediaNodeKind::MpegTsRtpSdpPublisher &&
-                key == MpegTsRtpSdpGroupKey;
-            if (!schedulerConsumer && !binderConsumer &&
-                !startupClockConsumer && !sequencerConsumer &&
-                !boundReleaseExtractorConsumer &&
-                !rtpBinderConsumer && !demuxBinderConsumer &&
-                !lockedPacketGateConsumer &&
-                !coordinatorConsumer && !audioDriftControllerConsumer &&
-                !scheduledRtpSenderConsumer &&
-                !scheduledTsAdapterConsumer &&
-                !projectMpegTsPlanSourceConsumer &&
-                !mpegTsRtpSdpPublisherConsumer) {
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::invalidArgument(
-                        "MediaGraphRuntime found an unsupported A/V sync group consumer"));
-            }
-            if (schedulerConsumer) ++schedulerReferenceCount;
-            if (binderConsumer) ++binderReferenceCount;
-            if (sequencerConsumer) ++sequencerReferenceCount;
-            if (scheduledRtpSenderConsumer)
-                ++scheduledRtpSenderReferenceCount;
-            if (scheduledTsAdapterConsumer)
-                ++scheduledTsAdapterReferenceCount;
-            if (projectMpegTsPlanSourceConsumer)
-                ++projectMpegTsPlanSourceReferenceCount;
-            if (mpegTsRtpSdpPublisherConsumer)
-                ++mpegTsRtpSdpPublisherReferenceCount;
-            if (rtpBinderConsumer) ++rtpClockBinderReferenceCount;
-            if (demuxBinderConsumer) ++demuxClockBinderReferenceCount;
-            if (value.empty() || !executable.avSyncBinding) {
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::notInitialized(
-                        "MediaGraphRuntime synchronized node requires an A/V sync binding"));
-            }
-            if (value != executable.avSyncBinding->groupKey.value()) {
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::invalidArgument(
-                        "MediaGraphRuntime synchronized node group does not match its binding"));
-            }
+                    "MediaGraphRuntime missing prepared RealtimeInput binding"));
         }
     }
     if (executable.avSyncBinding) {
-        if (!executable.avSyncBinding->groupKey.valid()) {
-            return ::media::Status::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "MediaGraphRuntime A/V sync binding has an invalid group"));
-        }
-        if (auto status = MediaAvSyncPlanValidator::validate(
-                executable.avSyncBinding->plan); !status) {
-            return status;
-        }
-        if (schedulerCount != 1 || binderCount != 1 || sequencerCount != 1 ||
-            schedulerReferenceCount != 1 || binderReferenceCount != 1 ||
-            sequencerReferenceCount != 1) {
-            return ::media::Status::failure(
-                ::media::ErrorInfo::notInitialized(
-                    "MediaGraphRuntime A/V sync binding requires exactly one scheduler, binder, and activation release sequencer"));
-        }
-        if (!executable.avSyncBinding->plan.sourceClockMode) {
-            return ::media::Status::failure(
-                ::media::ErrorInfo::notInitialized(
-                    "MediaGraphRuntime A/V sync binding requires its planned source clock"));
-        }
-        switch (*executable.avSyncBinding->plan.sourceClockMode) {
-        case MediaAvSyncSourceClockMode::RtpSenderReports:
-            if (rtpClockBinderCount != 2 ||
-                rtpClockBinderReferenceCount != 2 ||
-                rtpClockSnapshotCount != 1 ||
-                rtpSourceClockAdapterCount != 1 ||
-                rtpClockGroupCount != 1 ||
-                mpegTsDemuxCount != 0 ||
-                demuxClockBinderCount != 0 ||
-                demuxClockBinderReferenceCount != 0) {
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::notInitialized(
-                        "MediaGraphRuntime RTP input requires exactly two RTP binders and no demux binders"));
-            }
-            break;
-        case MediaAvSyncSourceClockMode::MpegTsPcr:
-            if (rtpClockBinderCount != 0 ||
-                rtpClockBinderReferenceCount != 0 ||
-                rtpClockSnapshotCount != 0 ||
-                rtpSourceClockAdapterCount != 0 ||
-                rtpClockGroupCount != 0 ||
-                mpegTsDemuxCount != 1 ||
-                demuxClockBinderCount != 0 ||
-                demuxClockBinderReferenceCount != 0) {
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::invalidArgument(
-                        "MediaGraphRuntime MPEG-TS input rejects separate packet clock binders"));
-            }
-            break;
-        case MediaAvSyncSourceClockMode::DemuxTimestamps:
-            if (rtpClockBinderCount != 0 ||
-                rtpClockBinderReferenceCount != 0 ||
-                rtpClockSnapshotCount != 0 ||
-                rtpSourceClockAdapterCount != 0 ||
-                rtpClockGroupCount != 0 ||
-                mpegTsDemuxCount != 0 ||
-                demuxClockBinderCount != 2 ||
-                demuxClockBinderReferenceCount != 2 ||
-                demuxVideoClockBinderCount != 1 ||
-                demuxAudioClockBinderCount != 1) {
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::notInitialized(
-                        "MediaGraphRuntime demux timestamp input requires exactly one binder per A/V stream"));
-            }
-            break;
-        default:
-            return ::media::Status::failure(
-                ::media::ErrorInfo::unsupported(
-                    "MediaGraphRuntime source clock mode is unsupported"));
-        }
-        const bool hasProtocolOutputAuthority =
-            scheduledRtpSenderCount != 0 ||
-            scheduledRtpSenderReferenceCount != 0 ||
-            dualMediaSdpPublisherCount != 0 ||
-            scheduledTsAdapterCount != 0 ||
-            scheduledTsAdapterReferenceCount != 0 ||
-            projectMpegTsPlanSourceCount != 0 ||
-            projectMpegTsPlanSourceReferenceCount != 0 ||
-            mpegTsRtpSdpPublisherCount != 0 ||
-            mpegTsRtpSdpPublisherReferenceCount != 0 ||
-            projectMpegTsMuxCount != 0 ||
-            udpOutputCount != 0;
-        if (executable.avSyncBinding->assemblyMode ==
-            MediaAvSyncBindingAssemblyMode::ComponentCore) {
-            if (executable.avSyncBinding->outputAdapter ||
-                hasProtocolOutputAuthority) {
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::invalidArgument(
-                        "MediaGraphRuntime component A/V sync assembly rejects output adapter facts and protocol output authorities"));
-            }
-        } else if (executable.avSyncBinding->assemblyMode !=
-                   MediaAvSyncBindingAssemblyMode::ProductionProtocolOutput) {
-            return ::media::Status::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "MediaGraphRuntime A/V sync binding has an invalid assembly mode"));
-        } else if (legacyProductionAuthorityCount != 0) {
-            return ::media::Status::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "MediaGraphRuntime production A/V sync assembly rejects legacy output, timestamp, and startup authorities"));
-        } else if (!executable.avSyncBinding->outputAdapter) {
-            return ::media::Status::failure(
-                ::media::ErrorInfo::notInitialized(
-                    "MediaGraphRuntime production A/V sync assembly requires a planned output adapter"));
-        } else if (*executable.avSyncBinding->outputAdapter ==
-                   MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp) {
-            if (!executable.avSyncBinding->plan.rtpOutput ||
-                executable.avSyncBinding->plan.projectMpegTsOutput) {
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::invalidArgument(
-                        "Separate RTP adapter conflicts with its planner output authority"));
-            }
-            if (scheduledRtpSenderCount != 2 ||
-                scheduledRtpSenderReferenceCount != 2 ||
-                dualMediaSdpPublisherCount != 1 ||
-                projectMpegTsMuxCount != 0 ||
-                udpOutputCount != 0) {
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::notInitialized(
-                        "MediaGraphRuntime separate RTP output requires exactly two injected senders and one SDP publisher"));
-            }
-            if (scheduledTsAdapterCount != 0 ||
-                scheduledTsAdapterReferenceCount != 0 ||
-                projectMpegTsPlanSourceCount != 0 ||
-                projectMpegTsPlanSourceReferenceCount != 0 ||
-                mpegTsRtpSdpPublisherCount != 0 ||
-                mpegTsRtpSdpPublisherReferenceCount != 0) {
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::invalidArgument(
-                        "MediaGraphRuntime separate RTP output rejects MPEG-TS output authorities"));
-            }
-        } else if (*executable.avSyncBinding->outputAdapter ==
-                   MediaAvSyncOutputAdapterKind::ProjectMpegTs) {
-            if (executable.avSyncBinding->plan.rtpOutput ||
-                !executable.avSyncBinding->plan.projectMpegTsOutput) {
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::invalidArgument(
-                        "Project MPEG-TS adapter conflicts with its planner output authority"));
-            }
-            if (scheduledTsAdapterCount != 1 ||
-                scheduledTsAdapterReferenceCount != 1 ||
-                projectMpegTsPlanSourceCount != 1 ||
-                projectMpegTsPlanSourceReferenceCount != 1 ||
-                projectMpegTsMuxCount != 1) {
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::notInitialized(
-                        "MediaGraphRuntime MPEG-TS output requires exactly one scheduled adapter and one plan source"));
-            }
-            if (scheduledRtpSenderCount != 0 ||
-                scheduledRtpSenderReferenceCount != 0 ||
-                dualMediaSdpPublisherCount != 0) {
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::invalidArgument(
-                        "MediaGraphRuntime MPEG-TS output rejects RTP output authorities"));
-            }
-            const auto& outputPlan =
-                executable.avSyncBinding->plan.projectMpegTsOutput;
-            if (!outputPlan || !outputPlan->outputMux) {
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::notInitialized(
-                        "MediaGraphRuntime MPEG-TS output requires its planned transport"));
-            }
-            switch (outputPlan->outputMux->parameters().transportKind) {
-            case MediaOutputTransportKind::UdpDatagrams:
-                if (udpOutputCount != 1 ||
-                    mpegTsRtpSdpPublisherCount != 0 ||
-                    mpegTsRtpSdpPublisherReferenceCount != 0) {
-                    return ::media::Status::failure(
-                        ::media::ErrorInfo::invalidArgument(
-                            "MediaGraphRuntime MPEG-TS UDP output requires one UDP sink and rejects MP2T SDP authority"));
-                }
-                break;
-            case MediaOutputTransportKind::RtpAvp:
-                if (udpOutputCount != 0 ||
-                    mpegTsRtpSdpPublisherCount != 1 ||
-                    mpegTsRtpSdpPublisherReferenceCount != 1) {
-                    return ::media::Status::failure(
-                        ::media::ErrorInfo::invalidArgument(
-                            "MediaGraphRuntime MPEG-TS RTP output requires one MP2T SDP publisher and no UDP sink"));
-                }
-                break;
-            default:
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::unsupported(
-                        "MediaGraphRuntime MPEG-TS transport is unsupported"));
-            }
-        } else {
-            return ::media::Status::failure(
-                ::media::ErrorInfo::unsupported(
-                    "MediaGraphRuntime A/V sync output adapter is unsupported"));
-        }
-    } else if (schedulerCount != 0 || binderCount != 0 ||
-               sequencerCount != 0 || scheduledRtpSenderCount != 0 ||
-               dualMediaSdpPublisherCount != 0 ||
-               mpegTsRtpSdpPublisherCount != 0 ||
-               scheduledTsAdapterCount != 0 ||
-               projectMpegTsPlanSourceCount != 0 ||
-               rtpClockBinderCount != 0 ||
-               demuxClockBinderCount != 0) {
-        return ::media::Status::failure(::media::ErrorInfo::notInitialized(
-            "Synchronized runtime nodes require an A/V sync binding"));
+        return MediaAvSyncGraphShapeValidator::validate(
+            executable.graph, *executable.avSyncBinding);
     }
-    return ::media::Status::success();
+    return MediaAvSyncGraphShapeValidator::validateAbsent(
+        executable.graph);
 }
 
 ::media::Status MediaGraphRuntimeCompiler::compile(

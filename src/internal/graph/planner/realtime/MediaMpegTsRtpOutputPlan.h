@@ -34,6 +34,7 @@ public:
     MediaMpegTsRtpOutputPlan& operator=(
         const MediaMpegTsRtpOutputPlan&) = delete;
 
+    ::media::Result<MediaMpegTsRtpOutputPlan> clone() const;
     const MediaRtpUdpSenderConfig& transport() const noexcept;
     int payloadType() const noexcept;
     int clockRate() const noexcept;
