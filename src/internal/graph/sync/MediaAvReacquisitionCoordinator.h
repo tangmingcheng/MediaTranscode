@@ -100,6 +100,29 @@ struct MediaAvReacquisitionSnapshot final {
     std::optional<MediaAvReacquisitionReason> reason;
 };
 
+class MediaAvGenerationPublicationReservation final {
+public:
+    MediaAvGenerationPublicationReservation(
+        MediaAvGenerationPublicationReservation&&) noexcept = default;
+    MediaAvGenerationPublicationReservation& operator=(
+        MediaAvGenerationPublicationReservation&&) noexcept = default;
+    MediaAvGenerationPublicationReservation(
+        const MediaAvGenerationPublicationReservation&) = delete;
+    MediaAvGenerationPublicationReservation& operator=(
+        const MediaAvGenerationPublicationReservation&) = delete;
+    ~MediaAvGenerationPublicationReservation() = default;
+
+private:
+    friend class MediaAvGenerationArbitrationReservation;
+
+    MediaAvGenerationPublicationReservation(
+        std::shared_ptr<MediaAvReacquisitionCoordinator> owner,
+        std::unique_lock<std::mutex> activationLock) noexcept;
+
+    std::shared_ptr<MediaAvReacquisitionCoordinator> m_owner;
+    std::unique_lock<std::mutex> m_activationLock;
+};
+
 class MediaAvGenerationArbitrationReservation final {
 public:
     MediaAvGenerationArbitrationReservation(
@@ -120,6 +143,8 @@ public:
     {
         return m_epoch;
     }
+    MediaAvGenerationPublicationReservation
+    retainPublicationAuthority() && noexcept;
 
 private:
     friend class MediaAvReacquisitionCoordinator;

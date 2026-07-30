@@ -48,6 +48,9 @@ bool validByteCapacity(const std::optional<std::size_t>& units,
 ::media::Status validateShared(const MediaAvSyncPlan& plan, bool finalized)
 {
     if (!plan.sourceClockMode) return invalid("sourceClockMode");
+    if (!plan.controlGenerationPolicy) {
+        return invalid("controlGenerationPolicy");
+    }
     if (!plan.masterClockMode ||
         *plan.masterClockMode != MediaAvSyncMasterClockMode::SteadyMonotonic) {
         return invalid("masterClockMode");
@@ -234,7 +237,9 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
 ::media::Status validateRtpInput(const MediaAvSyncPlan& plan)
 {
     if (!plan.rtpInput || plan.mpegTsInput || plan.demuxTimestampInput ||
-        *plan.sourceClockMode != MediaAvSyncSourceClockMode::RtpSenderReports) {
+        *plan.sourceClockMode != MediaAvSyncSourceClockMode::RtpSenderReports ||
+        *plan.controlGenerationPolicy !=
+            MediaControlGenerationPolicy::OptionalExactWhenPresent) {
         return invalid("RTP input clock contract");
     }
     const auto& rtp = *plan.rtpInput;
@@ -269,7 +274,9 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
 ::media::Status validateTsInput(const MediaAvSyncPlan& plan)
 {
     if (plan.rtpInput || !plan.mpegTsInput || plan.demuxTimestampInput ||
-        *plan.sourceClockMode != MediaAvSyncSourceClockMode::MpegTsPcr) {
+        *plan.sourceClockMode != MediaAvSyncSourceClockMode::MpegTsPcr ||
+        *plan.controlGenerationPolicy !=
+            MediaControlGenerationPolicy::OptionalExactWhenPresent) {
         return invalid("MPEG-TS input clock contract");
     }
     const auto& ts = *plan.mpegTsInput;
@@ -291,7 +298,9 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
 ::media::Status validateDemuxInput(const MediaAvSyncPlan& plan)
 {
     if (plan.rtpInput || plan.mpegTsInput || !plan.demuxTimestampInput ||
-        *plan.sourceClockMode != MediaAvSyncSourceClockMode::DemuxTimestamps) {
+        *plan.sourceClockMode != MediaAvSyncSourceClockMode::DemuxTimestamps ||
+        *plan.controlGenerationPolicy !=
+            MediaControlGenerationPolicy::RequiredExact) {
         return invalid("demux timestamp input clock contract");
     }
     const auto& demux = *plan.demuxTimestampInput;

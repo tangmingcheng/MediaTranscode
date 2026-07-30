@@ -215,6 +215,8 @@ void planTsInput(MediaAvSyncPlan& plan,
                  const MediaTsSelectedProgramPlan& selected)
 {
     plan.sourceClockMode = MediaAvSyncSourceClockMode::MpegTsPcr;
+    plan.controlGenerationPolicy =
+        MediaControlGenerationPolicy::OptionalExactWhenPresent;
     plan.mpegTsInput.emplace();
     plan.mpegTsInput->programNumber = selected.programNumber;
     plan.mpegTsInput->programMapPid = selected.programMapPid;
@@ -286,6 +288,8 @@ void planTsInput(MediaAvSyncPlan& plan,
             return ::media::Result<MediaAvSyncPlan>::failure(rtpInput.error());
         }
         plan.sourceClockMode = MediaAvSyncSourceClockMode::RtpSenderReports;
+        plan.controlGenerationPolicy =
+            MediaControlGenerationPolicy::OptionalExactWhenPresent;
         plan.rtpInput = std::move(rtpInput).value();
         plan.startup.videoIdentity = plan.rtpInput->videoInput.identity;
         plan.startup.audioIdentity = plan.rtpInput->audioInput.identity;
@@ -323,6 +327,8 @@ void planTsInput(MediaAvSyncPlan& plan,
                     "URL A/V input clock requires prepared stream time bases"));
         }
         plan.sourceClockMode = MediaAvSyncSourceClockMode::DemuxTimestamps;
+        plan.controlGenerationPolicy =
+            MediaControlGenerationPolicy::RequiredExact;
         const std::string groupIdentity = request.mediaId.empty()
             ? std::string("realtime-av-sync-demux")
             : request.mediaId;

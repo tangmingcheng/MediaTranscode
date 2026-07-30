@@ -6,6 +6,15 @@
 
 namespace media::ffmpeg::graph {
 
+MediaAvGenerationPublicationReservation::
+    MediaAvGenerationPublicationReservation(
+        std::shared_ptr<MediaAvReacquisitionCoordinator> owner,
+        std::unique_lock<std::mutex> activationLock) noexcept
+    : m_owner(std::move(owner))
+    , m_activationLock(std::move(activationLock))
+{
+}
+
 MediaAvGenerationArbitrationReservation::
     MediaAvGenerationArbitrationReservation(
         std::shared_ptr<MediaAvReacquisitionCoordinator> owner,
@@ -17,6 +26,14 @@ MediaAvGenerationArbitrationReservation::
     , m_epoch(std::move(epoch))
     , m_activationLock(std::move(activationLock))
 {
+}
+
+MediaAvGenerationPublicationReservation
+MediaAvGenerationArbitrationReservation::
+    retainPublicationAuthority() && noexcept
+{
+    return MediaAvGenerationPublicationReservation(
+        std::move(m_owner), std::move(m_activationLock));
 }
 
 MediaAvStartupReleasePublicationReservation::

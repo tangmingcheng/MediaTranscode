@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/model/MediaAvSyncSourceClockMode.h"
+#include "internal/graph/model/MediaControlGenerationPolicy.h"
 #include "internal/graph/model/MediaGraphTypes.h"
 #include "internal/graph/protocol/mpegts/MediaTsMuxPlan.h"
 #include "internal/graph/protocol/rtp/MediaRtcpCompositionPolicy.h"
@@ -181,6 +182,8 @@ struct MediaAvSyncMetricsPolicy {
 
 struct MediaAvSyncPlan {
     std::optional<MediaAvSyncSourceClockMode> sourceClockMode;
+    std::optional<MediaControlGenerationPolicy>
+        controlGenerationPolicy;
     std::optional<MediaAvSyncMasterClockMode> masterClockMode;
     std::optional<int> canonicalTimeBaseNumerator;
     std::optional<int> canonicalTimeBaseDenominator;

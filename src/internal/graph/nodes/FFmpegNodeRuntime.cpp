@@ -17,6 +17,7 @@ namespace media::ffmpeg::graph {
 {
     m_nextInputIndex = 0;
     m_pendingTransfer.reset();
+    m_outputPublicationDropped = false;
     m_finishPending = false;
     m_finished = false;
     return MediaNodeRuntime::start(context);
@@ -26,6 +27,7 @@ namespace media::ffmpeg::graph {
 {
     m_nextInputIndex = 0;
     m_pendingTransfer.reset();
+    m_outputPublicationDropped = false;
     m_finishPending = false;
     m_finished = false;
     return MediaNodeRuntime::stop(context);
@@ -35,6 +37,7 @@ void FFmpegNodeRuntime::abort(MediaGraphExecutionContext& context) noexcept
 {
     m_nextInputIndex = 0;
     m_pendingTransfer.reset();
+    m_outputPublicationDropped = false;
     m_finishPending = false;
     m_finished = false;
     MediaNodeRuntime::abort(context);
@@ -107,6 +110,11 @@ bool FFmpegNodeRuntime::canFinishProcess() const noexcept
 
 ::media::Result<MediaNodeProcessResult> FFmpegNodeRuntime::processProgress(::media::Status status)
 {
+    if (status && std::exchange(
+            m_outputPublicationDropped, false)) {
+        return ::media::Result<MediaNodeProcessResult>::success(
+            MediaNodeProcessResult::progress());
+    }
     if (!status && status.error().code == ::media::ErrorCode::WouldBlock) {
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::waiting());
     }
@@ -115,6 +123,11 @@ bool FFmpegNodeRuntime::canFinishProcess() const noexcept
 
 ::media::Result<MediaNodeProcessResult> FFmpegNodeRuntime::processFinished(::media::Status status)
 {
+    if (status && std::exchange(
+            m_outputPublicationDropped, false)) {
+        return ::media::Result<MediaNodeProcessResult>::success(
+            MediaNodeProcessResult::progress());
+    }
     if (!status && status.error().code == ::media::ErrorCode::WouldBlock) {
         m_finishPending = true;
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
@@ -159,6 +172,7 @@ FFmpegNodeRuntime::reserveOutputCommit(const MediaBufferRef&) const
 void FFmpegNodeRuntime::cancelPendingOutputTransfer() noexcept
 {
     m_pendingTransfer.reset();
+    m_outputPublicationDropped = false;
     m_finishPending = false;
     m_finished = false;
 }
@@ -600,7 +614,11 @@ FFmpegNodeRuntime::tryPopFirstInputWithChannelOptional(
     auto reserved = reserveOutputCommit(buffer);
     if (!reserved) {
         if (reserved.error().code == ::media::ErrorCode::Cancelled) {
-            return cancelReservedOutput(buffer);
+            auto cancelled = cancelReservedOutput(buffer);
+            if (cancelled) {
+                m_outputPublicationDropped = true;
+            }
+            return cancelled;
         }
         return ::media::Status::failure(reserved.error());
     }
@@ -716,7 +734,8 @@ FFmpegNodeRuntime::publishAtomicOutput(
         if (!reserved) {
             if (reserved.error().code == ::media::ErrorCode::Cancelled) {
                 auto cancelled = cancelReservedOutput(transfer.buffer);
-                m_pendingTransfer.reset();
+                if (!cancelled) return cancelled;
+                cancelPendingOutputTransfer();
                 return cancelled;
             }
             return ::media::Status::failure(reserved.error());

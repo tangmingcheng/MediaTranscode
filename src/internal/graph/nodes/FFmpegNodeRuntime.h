@@ -104,6 +104,7 @@ private:
         MediaGraphExecutionContext& context);
     std::size_t m_nextInputIndex = 0;
     std::optional<PendingTransfer> m_pendingTransfer;
+    bool m_outputPublicationDropped = false;
     bool m_finishPending = false;
     bool m_finished = false;
 };

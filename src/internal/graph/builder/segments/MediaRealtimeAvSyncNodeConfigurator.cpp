@@ -1,6 +1,7 @@
 #include "internal/graph/builder/segments/MediaRealtimeAvSyncNodeConfigurator.h"
 
 #include "internal/graph/builder/segments/MediaRealtimeAvSyncInputGraphSupport.h"
+#include "internal/graph/nodes/sync/MediaAvSyncControlGenerationContract.h"
 #include "internal/graph/nodes/sync/MediaDemuxPacketClockBinderNodePlanCodec.h"
 #include "internal/graph/nodes/sync/MediaAvSyncSourceClockModeNodeOptionCodec.h"
 
@@ -131,6 +132,19 @@ MediaRealtimeAvSyncNodeConfigurator::configureLockedPacketGate(
             "first_locked_only_fail_on_change"); !status) {
         return status;
     }
+    if (!plan.synchronization.controlGenerationPolicy) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "Locked packet gate requires planner-selected control generation policy"));
+    }
+    if (auto status = setOption(
+            graph, node,
+            "locked_packet_gate.control_generation_policy",
+            std::string(mediaControlGenerationPolicyOption(
+                *plan.synchronization.controlGenerationPolicy)));
+        !status) {
+        return status;
+    }
     return setOption(
         graph, node, "locked_packet_gate.sync_group",
         plan.groupKey.value());
@@ -153,6 +167,33 @@ MediaRealtimeAvSyncNodeConfigurator::configureCanonicalInput(
     const bool mappedDemuxTiming =
         *plan.synchronization.sourceClockMode ==
         MediaAvSyncSourceClockMode::DemuxTimestamps;
+    if (!plan.synchronization.controlGenerationPolicy) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "Canonical input requires planner-selected control generation policy"));
+    }
+    if (assembly.initialGeneration == 0) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Canonical input requires planned initial generation"));
+    }
+    if (auto status = setOption(
+            graph, node, "canonical_input.initial_generation",
+            std::to_string(assembly.initialGeneration)); !status) {
+        return status;
+    }
+    if (auto status = setOption(
+            graph, node, "canonical_input.control_generation_policy",
+            std::string(mediaControlGenerationPolicyOption(
+                *plan.synchronization.controlGenerationPolicy)));
+        !status) {
+        return status;
+    }
+    if (auto status = setOption(
+            graph, node, "canonical_input.sync_group",
+            plan.groupKey.value()); !status) {
+        return status;
+    }
     if (auto status = setOption(
             graph, node, "canonical_input.stream",
             video ? "video" : "audio"); !status) return status;
