@@ -122,7 +122,7 @@
 
 - [x] **Step 3: Add URL/RTSP demux timestamp planning**
 
-  Add a focused plan containing explicit video/audio stream time bases, first-window maximum skew, timestamp regression limit, discontinuity threshold, and initial generation. Values come from prepared input and existing A/V startup/recovery policy; no runtime constants or packet-arrival fallback are allowed.
+  Add a focused plan containing explicit video/audio stream time bases, first-window maximum skew, discontinuity threshold, initial generation, and canonical target epoch. Values come from prepared input and existing A/V startup/recovery policy; no runtime constants or packet-arrival fallback are allowed. Any PTS/DTS regression requires generation reacquisition, so there is no separate regression-limit parameter.
 
 - [x] **Step 4: Build assembly variants only from source clock mode**
 
@@ -169,7 +169,7 @@
 - Modify: `CMakeLists.txt`
 
 **Interfaces:**
-- `::media::Result<MediaMappedTimestamp> MediaDemuxTimestampClockMapper::map(MediaScheduledStream stream, std::int64_t pts, AVRational timeBase, std::int64_t duration, std::uint64_t generation)` returns the existing canonical mapped-time/clock-evidence contract.
+- `::media::Result<MediaMappedTimestamp> MediaDemuxTimestampClockMapper::mapPacket(MediaScheduledStream stream, std::int64_t pts, std::int64_t dts, AVRational timeBase, std::int64_t duration, std::uint64_t generation)` maps PTS, DTS, and duration as one transaction and returns the existing canonical mapped-time/clock-evidence contract.
 - `MediaDemuxPacketClockBinderNode` consumes prepared demux packets and emits packets carrying locked canonical presentation time.
 - The segment builder consumes only `MediaDemuxTimestampInputClockAssemblyPlan`.
 

@@ -1,10 +1,10 @@
 #pragma once
 
 #include "internal/graph/core/MediaNodeOptions.h"
+#include "internal/graph/nodes/MediaOutputCommitReservation.h"
 #include "internal/graph/nodes/MediaNodeRuntime.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 #include "internal/graph/runtime/channel/MediaChannel.h"
-#include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
 #include "media_transcode/Result.h"
 
 #include <optional>
@@ -37,8 +37,7 @@ protected:
     bool retainsPendingOutput(const MediaBufferRef& buffer) const noexcept;
     void cancelPendingOutputTransfer() noexcept;
     virtual bool pendingOutputIsCurrent(const MediaBufferRef& buffer) const noexcept;
-    virtual ::media::Result<
-        std::optional<MediaProtocolOutputGenerationCommitReservation>>
+    virtual ::media::Result<MediaOutputCommitReservation>
     reserveOutputCommit(const MediaBufferRef& buffer) const;
     virtual ::media::Status commitReservedOutput(
         const MediaBufferRef& buffer);

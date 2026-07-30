@@ -335,9 +335,9 @@ void planTsInput(MediaAvSyncPlan& plan,
                 preparedDemuxFacts->videoTimeBase,
                 preparedDemuxFacts->audioTimeBase,
                 plan.startup.maximumInitialSkewNs,
-                plan.recovery.suspectThresholdNs,
                 plan.recovery.hardDiscontinuityThresholdNs,
-                1});
+                1,
+                MediaRunningTime::fromNanoseconds(0)});
     } else {
         return ::media::Result<MediaAvSyncPlan>::failure(
             ::media::ErrorInfo::unsupported(

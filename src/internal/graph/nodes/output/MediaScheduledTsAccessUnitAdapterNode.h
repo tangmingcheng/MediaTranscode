@@ -47,8 +47,7 @@ public:
 protected:
     ::media::Result<MediaNodeProcessResult> onProcess(
         MediaGraphExecutionContext& context) override;
-    ::media::Result<
-        std::optional<MediaProtocolOutputGenerationCommitReservation>>
+    ::media::Result<MediaOutputCommitReservation>
     reserveOutputCommit(const MediaBufferRef& buffer) const override;
     ::media::Status commitReservedOutput(
         const MediaBufferRef& buffer) override;

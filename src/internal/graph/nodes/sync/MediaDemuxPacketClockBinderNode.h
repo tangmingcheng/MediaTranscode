@@ -5,8 +5,6 @@
 #include "internal/graph/time/MediaDemuxTimestampClockMapper.h"
 
 #include <memory>
-#include <mutex>
-#include <optional>
 #include <string_view>
 
 namespace media::ffmpeg::graph {
@@ -36,17 +34,14 @@ public:
 protected:
     bool pendingOutputIsCurrent(
         const MediaBufferRef& buffer) const noexcept override;
-    ::media::Result<
-        std::optional<MediaProtocolOutputGenerationCommitReservation>>
+    ::media::Result<MediaOutputCommitReservation>
     reserveOutputCommit(const MediaBufferRef& buffer) const override;
-    ::media::Status commitReservedOutput(
-        const MediaBufferRef& buffer) override;
-    ::media::Status cancelReservedOutput(
-        const MediaBufferRef& buffer) override;
     ::media::Result<MediaNodeProcessResult> onProcess(
         MediaGraphExecutionContext& context) override;
 
 private:
+    ::media::Result<MediaDemuxTimestampOutputCommitEvidence>
+    outputCommitEvidence(const MediaBufferRef& buffer) const;
     ::media::Result<MediaBufferRef> timedPacket(
         MediaBufferRef buffer,
         std::uint64_t generation);
@@ -66,8 +61,6 @@ private:
     std::shared_ptr<MediaDemuxTimestampClockMapper> m_mapper;
     std::shared_ptr<MediaAvSyncGroupRuntime> m_syncGroup;
     std::shared_ptr<MediaDemuxPacketClockBinderState> m_state;
-    mutable std::optional<std::unique_lock<std::mutex>>
-        m_outputCommitTransaction;
 };
 
 } // namespace media::ffmpeg::graph

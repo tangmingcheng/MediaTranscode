@@ -299,16 +299,13 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
         demux.videoTimeBase.den <= 0 || !demux.audioTimeBase.isKnown() ||
         demux.audioTimeBase.num <= 0 || demux.audioTimeBase.den <= 0 ||
         !positive(demux.firstWindowMaximumSkewNs) ||
-        !positive(demux.timestampRegressionLimitNs) ||
         !positive(demux.discontinuityThresholdNs) ||
         !positive(demux.initialGeneration) ||
+        !demux.canonicalTargetEpochNs ||
         demux.firstWindowMaximumSkewNs !=
             plan.startup.maximumInitialSkewNs ||
-        demux.timestampRegressionLimitNs != plan.recovery.suspectThresholdNs ||
         demux.discontinuityThresholdNs !=
-            plan.recovery.hardDiscontinuityThresholdNs ||
-        *demux.timestampRegressionLimitNs >=
-            *demux.discontinuityThresholdNs) {
+            plan.recovery.hardDiscontinuityThresholdNs) {
         return invalid("demux timestamp policy");
     }
     return ::media::Status::success();

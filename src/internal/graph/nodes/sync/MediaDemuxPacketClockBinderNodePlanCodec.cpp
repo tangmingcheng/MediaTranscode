@@ -90,7 +90,6 @@ template <typename Integer>
         plan.videoTimeBase,
         plan.audioTimeBase,
         plan.firstWindowMaximumSkew,
-        plan.timestampRegressionLimit,
         plan.discontinuityThreshold,
         plan.initialGeneration,
         plan.videoSourceIdentity,
@@ -121,8 +120,6 @@ template <typename Integer>
              std::to_string(plan.audioTimeBase.den)},
         {"demux_clock_binder.first_window_maximum_skew_ns",
              std::to_string(plan.firstWindowMaximumSkew.nanoseconds())},
-        {"demux_clock_binder.timestamp_regression_limit_ns",
-             std::to_string(plan.timestampRegressionLimit.nanoseconds())},
         {"demux_clock_binder.discontinuity_threshold_ns",
              std::to_string(plan.discontinuityThreshold.nanoseconds())},
         {"demux_clock_binder.initial_generation",
@@ -163,9 +160,6 @@ MediaDemuxPacketClockBinderNodePlanCodec::decode(const MediaNode& node)
     auto skew = parseInteger<std::int64_t>(
         node.options,
         "demux_clock_binder.first_window_maximum_skew_ns", true);
-    auto regression = parseInteger<std::int64_t>(
-        node.options,
-        "demux_clock_binder.timestamp_regression_limit_ns", true);
     auto discontinuity = parseInteger<std::int64_t>(
         node.options,
         "demux_clock_binder.discontinuity_threshold_ns", true);
@@ -181,7 +175,7 @@ MediaDemuxPacketClockBinderNodePlanCodec::decode(const MediaNode& node)
         node.options, "demux_clock_binder.canonical_target_epoch_ns", false);
     if (!stream || !groupText || !streamNum || !streamDen ||
         !videoNum || !videoDen || !audioNum || !audioDen || !skew ||
-        !regression || !discontinuity || !generation || !videoIdentity ||
+        !discontinuity || !generation || !videoIdentity ||
         !audioIdentity || !targetEpoch) {
         const ::media::ErrorInfo error = !stream ? stream.error()
             : !groupText ? groupText.error()
@@ -192,7 +186,6 @@ MediaDemuxPacketClockBinderNodePlanCodec::decode(const MediaNode& node)
             : !audioNum ? audioNum.error()
             : !audioDen ? audioDen.error()
             : !skew ? skew.error()
-            : !regression ? regression.error()
             : !discontinuity ? discontinuity.error()
             : !generation ? generation.error()
             : !videoIdentity ? videoIdentity.error()
@@ -204,7 +197,6 @@ MediaDemuxPacketClockBinderNodePlanCodec::decode(const MediaNode& node)
         MediaRational{videoNum.value(), videoDen.value()},
         MediaRational{audioNum.value(), audioDen.value()},
         MediaRunningTime::fromNanoseconds(skew.value()),
-        MediaRunningTime::fromNanoseconds(regression.value()),
         MediaRunningTime::fromNanoseconds(discontinuity.value()),
         generation.value(),
         std::move(videoIdentity).value(),
@@ -242,9 +234,9 @@ MediaDemuxPacketClockBinderNodePlanCodec::mapperConfigFromPlan(
             MediaAvSyncSourceClockMode::DemuxTimestamps ||
         !plan.demuxTimestampInput ||
         !plan.demuxTimestampInput->firstWindowMaximumSkewNs ||
-        !plan.demuxTimestampInput->timestampRegressionLimitNs ||
         !plan.demuxTimestampInput->discontinuityThresholdNs ||
         !plan.demuxTimestampInput->initialGeneration ||
+        !plan.demuxTimestampInput->canonicalTargetEpochNs ||
         !plan.startup.videoIdentity || !plan.startup.audioIdentity) {
         return Result::failure(::media::ErrorInfo::notInitialized(
             "Demux binder requires the complete A/V planner authority"));
@@ -253,12 +245,11 @@ MediaDemuxPacketClockBinderNodePlanCodec::mapperConfigFromPlan(
         plan.demuxTimestampInput->videoTimeBase,
         plan.demuxTimestampInput->audioTimeBase,
         *plan.demuxTimestampInput->firstWindowMaximumSkewNs,
-        *plan.demuxTimestampInput->timestampRegressionLimitNs,
         *plan.demuxTimestampInput->discontinuityThresholdNs,
         *plan.demuxTimestampInput->initialGeneration,
         *plan.startup.videoIdentity,
         *plan.startup.audioIdentity,
-        MediaRunningTime::fromNanoseconds(0)};
+        *plan.demuxTimestampInput->canonicalTargetEpochNs};
     auto valid = MediaDemuxTimestampClockMapper::create(config);
     return valid
         ? Result::success(std::move(config))

@@ -164,17 +164,14 @@ MediaProjectMpegTsPlanSourceNode::onProcess(
                      : processProgress(std::move(committed));
 }
 
-::media::Result<
-    std::optional<MediaProtocolOutputGenerationCommitReservation>>
+::media::Result<MediaOutputCommitReservation>
 MediaProjectMpegTsPlanSourceNode::reserveOutputCommit(
     const MediaBufferRef& buffer) const
 {
     const auto* plan =
         dynamic_cast<const MediaTsMuxRuntimePlanBuffer*>(buffer.get());
     if (!plan || !m_syncGroup) {
-        return ::media::Result<
-            std::optional<
-                MediaProtocolOutputGenerationCommitReservation>>::failure(
+        return ::media::Result<MediaOutputCommitReservation>::failure(
                     ::media::ErrorInfo::notInitialized(
                         "Project MPEG-TS plan commit requires a runtime plan and sync group"));
     }
@@ -182,14 +179,11 @@ MediaProjectMpegTsPlanSourceNode::reserveOutputCommit(
         m_generationState->reserveCommit(
             *m_syncGroup, plan->epoch().generation);
     if (!reservation) {
-        return ::media::Result<
-            std::optional<
-                MediaProtocolOutputGenerationCommitReservation>>::failure(
+        return ::media::Result<MediaOutputCommitReservation>::failure(
                     reservation.error());
     }
-    return ::media::Result<
-        std::optional<MediaProtocolOutputGenerationCommitReservation>>::
-        success(std::optional<MediaProtocolOutputGenerationCommitReservation>(
+    return ::media::Result<MediaOutputCommitReservation>::success(
+        MediaOutputCommitReservation::hold(
             std::move(reservation).value()));
 }
 

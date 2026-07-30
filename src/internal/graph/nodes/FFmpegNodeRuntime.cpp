@@ -52,7 +52,14 @@ void FFmpegNodeRuntime::abort(MediaGraphExecutionContext& context) noexcept
         return ::media::Result<MediaNodeProcessResult>::success(
             MediaNodeProcessResult::finished());
     }
-    if (m_pendingTransfer && !pendingOutputIsCurrent(m_pendingTransfer->buffer)) {
+    if (m_pendingTransfer &&
+        !pendingOutputIsCurrent(m_pendingTransfer->buffer)) {
+        auto cancelled =
+            cancelReservedOutput(m_pendingTransfer->buffer);
+        if (!cancelled) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                cancelled.error());
+        }
         cancelPendingOutputTransfer();
     }
     const bool hadPendingTransfer = m_pendingTransfer.has_value();
@@ -130,13 +137,11 @@ bool FFmpegNodeRuntime::pendingOutputIsCurrent(const MediaBufferRef&) const noex
     return true;
 }
 
-::media::Result<
-    std::optional<MediaProtocolOutputGenerationCommitReservation>>
+::media::Result<MediaOutputCommitReservation>
 FFmpegNodeRuntime::reserveOutputCommit(const MediaBufferRef&) const
 {
-    return ::media::Result<
-        std::optional<MediaProtocolOutputGenerationCommitReservation>>::
-        success(std::nullopt);
+    return ::media::Result<MediaOutputCommitReservation>::success(
+        MediaOutputCommitReservation{});
 }
 
 ::media::Status FFmpegNodeRuntime::commitReservedOutput(
@@ -592,7 +597,6 @@ FFmpegNodeRuntime::tryPopFirstInputWithChannelOptional(
         }
     }
 
-    std::optional<MediaProtocolOutputGenerationCommitReservation> reservation;
     auto reserved = reserveOutputCommit(buffer);
     if (!reserved) {
         if (reserved.error().code == ::media::ErrorCode::Cancelled) {
@@ -600,7 +604,8 @@ FFmpegNodeRuntime::tryPopFirstInputWithChannelOptional(
         }
         return ::media::Status::failure(reserved.error());
     }
-    reservation = std::move(reserved).value();
+    MediaOutputCommitReservation reservation =
+        std::move(reserved).value();
     auto atomic = publishAtomicOutput(
         context, channels, buffer, action);
     if (!atomic) {
@@ -611,8 +616,6 @@ FFmpegNodeRuntime::tryPopFirstInputWithChannelOptional(
     }
     if (atomic.value() == AtomicTransferResult::Waiting) {
         m_pendingTransfer = PendingTransfer{buffer, channels, 0, true};
-        auto cancelled = cancelReservedOutput(buffer);
-        if (!cancelled) return cancelled;
         return ::media::Status::failure(
             ::media::ErrorInfo::wouldBlock(
                 "FFmpegNodeRuntime atomic output would block"));
@@ -625,8 +628,6 @@ FFmpegNodeRuntime::tryPopFirstInputWithChannelOptional(
         const MediaQueuePushOutcome outcome = channel->pushOutcome(buffer);
         if (outcome == MediaQueuePushOutcome::WouldBlock) {
             m_pendingTransfer = PendingTransfer{ buffer, channels, index };
-            auto cancelled = cancelReservedOutput(buffer);
-            if (!cancelled) return cancelled;
             return ::media::Status::failure(
                 ::media::ErrorInfo::wouldBlock("FFmpegNodeRuntime output channel would block"));
         }
@@ -711,8 +712,6 @@ FFmpegNodeRuntime::publishAtomicOutput(
     waiting = false;
     while (m_pendingTransfer) {
         PendingTransfer& transfer = *m_pendingTransfer;
-        std::optional<MediaProtocolOutputGenerationCommitReservation>
-            reservation;
         auto reserved = reserveOutputCommit(transfer.buffer);
         if (!reserved) {
             if (reserved.error().code == ::media::ErrorCode::Cancelled) {
@@ -722,7 +721,8 @@ FFmpegNodeRuntime::publishAtomicOutput(
             }
             return ::media::Status::failure(reserved.error());
         }
-        reservation = std::move(reserved).value();
+        MediaOutputCommitReservation reservation =
+            std::move(reserved).value();
         if (transfer.atomic) {
             auto atomic = publishAtomicOutput(
                 context, transfer.channels, transfer.buffer,
@@ -735,9 +735,6 @@ FFmpegNodeRuntime::publishAtomicOutput(
                     : cancelled;
             }
             if (atomic.value() == AtomicTransferResult::Waiting) {
-                auto cancelled =
-                    cancelReservedOutput(transfer.buffer);
-                if (!cancelled) return cancelled;
                 waiting = true;
                 return ::media::Status::success();
             }
@@ -758,8 +755,6 @@ FFmpegNodeRuntime::publishAtomicOutput(
         MediaChannel* channel = transfer.channels[transfer.nextChannel];
         const MediaQueuePushOutcome outcome = channel->pushOutcome(transfer.buffer);
         if (outcome == MediaQueuePushOutcome::WouldBlock) {
-            auto cancelled = cancelReservedOutput(transfer.buffer);
-            if (!cancelled) return cancelled;
             waiting = true;
             return ::media::Status::success();
         }

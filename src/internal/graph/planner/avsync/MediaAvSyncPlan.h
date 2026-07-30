@@ -148,9 +148,9 @@ struct MediaAvSyncDemuxTimestampInputPlan {
     MediaRational videoTimeBase;
     MediaRational audioTimeBase;
     std::optional<MediaRunningTime> firstWindowMaximumSkewNs;
-    std::optional<MediaRunningTime> timestampRegressionLimitNs;
     std::optional<MediaRunningTime> discontinuityThresholdNs;
     std::optional<std::uint64_t> initialGeneration;
+    std::optional<MediaRunningTime> canonicalTargetEpochNs;
 };
 
 struct MediaAvSyncPreparedDemuxTimestampFacts {

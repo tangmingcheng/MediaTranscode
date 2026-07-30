@@ -5,6 +5,20 @@ namespace media::ffmpeg::graph {
 MediaControlBuffer::MediaControlBuffer(MediaControlBufferKind kind)
     : m_kind(kind)
 {
+    initialize(kind);
+}
+
+MediaControlBuffer::MediaControlBuffer(
+    MediaControlBufferKind kind,
+    std::uint64_t generation)
+    : m_kind(kind)
+    , m_generation(generation)
+{
+    initialize(kind);
+}
+
+void MediaControlBuffer::initialize(MediaControlBufferKind kind)
+{
     setPayloadKind(MediaPayloadKind::ControlSignal);
     setStreamKind(MediaStreamKind::Control);
 
@@ -23,6 +37,12 @@ MediaBufferType MediaControlBuffer::type() const noexcept
 MediaControlBufferKind MediaControlBuffer::controlKind() const noexcept
 {
     return m_kind;
+}
+
+std::optional<std::uint64_t>
+MediaControlBuffer::generation() const noexcept
+{
+    return m_generation;
 }
 
 } // namespace media::ffmpeg::graph

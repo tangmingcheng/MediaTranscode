@@ -41,7 +41,6 @@ struct MediaDemuxTimestampInputClockAssemblyPlan final {
     MediaRational videoTimeBase;
     MediaRational audioTimeBase;
     MediaRunningTime firstWindowMaximumSkew;
-    MediaRunningTime timestampRegressionLimit;
     MediaRunningTime discontinuityThreshold;
     std::uint64_t initialGeneration;
     std::string videoSourceIdentity;
@@ -56,7 +55,6 @@ struct MediaDemuxTimestampInputClockAssemblyPlan final {
             left.audioTimeBase.num == right.audioTimeBase.num &&
             left.audioTimeBase.den == right.audioTimeBase.den &&
             left.firstWindowMaximumSkew == right.firstWindowMaximumSkew &&
-            left.timestampRegressionLimit == right.timestampRegressionLimit &&
             left.discontinuityThreshold == right.discontinuityThreshold &&
             left.initialGeneration == right.initialGeneration &&
             left.videoSourceIdentity == right.videoSourceIdentity &&

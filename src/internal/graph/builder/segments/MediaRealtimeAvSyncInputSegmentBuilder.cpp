@@ -255,9 +255,19 @@ struct SharedNodes final {
     const auto& metadata = plan.edgePolicies.metadata;
     const auto& packet = plan.edgePolicies.synchronizedPacket;
     const auto& atomicMetadata = plan.edgePolicies.atomicMetadata;
+    const bool demuxClock = std::holds_alternative<
+        MediaDemuxTimestampInputClockAssemblyPlan>(
+        plan.assembly.inputClock);
+    const auto& protocolClockPolicy =
+        demuxClock ? atomicMetadata : metadata;
+    const auto& protocolVideoPolicy =
+        demuxClock ? plan.edgePolicies.atomicVideoPacket : packet;
+    const auto& protocolAudioPolicy =
+        demuxClock ? plan.edgePolicies.atomicAudioPacket : packet;
     if (auto status = Support::connect(
             graph, protocol.sourceClock, nodes.sourceClock, "clock",
-            "protocol clock -> source clock fanout", metadata); !status) {
+            "protocol clock -> source clock fanout",
+            protocolClockPolicy); !status) {
         return status;
     }
     if (auto status = Support::connect(
@@ -270,12 +280,14 @@ struct SharedNodes final {
         !status) return status;
     if (auto status = Support::connect(
             graph, protocol.video, nodes.videoGenerationGate, "packet",
-            "protocol video -> generation gate", packet); !status) {
+            "protocol video -> generation gate",
+            protocolVideoPolicy); !status) {
         return status;
     }
     if (auto status = Support::connect(
             graph, protocol.audio, nodes.audioGenerationGate, "packet",
-            "protocol audio -> generation gate", packet); !status) {
+            "protocol audio -> generation gate",
+            protocolAudioPolicy); !status) {
         return status;
     }
     if (auto status = Support::connect(

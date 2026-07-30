@@ -495,33 +495,26 @@ MediaScheduledRtpSenderNode::processScheduledInput(
     return processScheduledInput(context);
 }
 
-::media::Result<
-    std::optional<MediaProtocolOutputGenerationCommitReservation>>
+::media::Result<MediaOutputCommitReservation>
 MediaScheduledRtpSenderNode::reserveOutputCommit(
     const MediaBufferRef& buffer) const
 {
     const auto* description =
         dynamic_cast<const MediaRtpSenderDescriptionBuffer*>(buffer.get());
     if (!description) {
-        return ::media::Result<
-            std::optional<
-                MediaProtocolOutputGenerationCommitReservation>>::failure(
+        return ::media::Result<MediaOutputCommitReservation>::failure(
                     ::media::ErrorInfo::invalidArgument(
                         "Scheduled RTP output commit requires a typed sender description"));
     }
     auto disposition =
         m_generationState->classifyGeneration(description->generation());
     if (!disposition) {
-        return ::media::Result<
-            std::optional<
-                MediaProtocolOutputGenerationCommitReservation>>::failure(
+        return ::media::Result<MediaOutputCommitReservation>::failure(
                     disposition.error());
     }
     if (disposition.value() !=
         MediaProtocolOutputGenerationState::GenerationDisposition::Current) {
-        return ::media::Result<
-            std::optional<
-                MediaProtocolOutputGenerationCommitReservation>>::failure(
+        return ::media::Result<MediaOutputCommitReservation>::failure(
                     disposition.value() ==
                             MediaProtocolOutputGenerationState::
                                 GenerationDisposition::Old
@@ -533,14 +526,11 @@ MediaScheduledRtpSenderNode::reserveOutputCommit(
     auto reservation = m_generationState->reserveCommit(
         *m_dependencies.syncGroup, description->generation());
     if (!reservation) {
-        return ::media::Result<
-            std::optional<
-                MediaProtocolOutputGenerationCommitReservation>>::failure(
+        return ::media::Result<MediaOutputCommitReservation>::failure(
                     reservation.error());
     }
-    return ::media::Result<
-        std::optional<MediaProtocolOutputGenerationCommitReservation>>::
-        success(std::optional<MediaProtocolOutputGenerationCommitReservation>(
+    return ::media::Result<MediaOutputCommitReservation>::success(
+        MediaOutputCommitReservation::hold(
             std::move(reservation).value()));
 }
 

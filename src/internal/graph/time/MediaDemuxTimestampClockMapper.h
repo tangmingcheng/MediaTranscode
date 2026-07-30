@@ -26,7 +26,6 @@ struct MediaDemuxTimestampClockMapperConfig final {
     MediaRational videoTimeBase;
     MediaRational audioTimeBase;
     MediaRunningTime firstWindowMaximumSkew;
-    MediaRunningTime timestampRegressionLimit;
     MediaRunningTime discontinuityThreshold;
     std::uint64_t initialGeneration;
     std::string videoSourceIdentity;
@@ -42,7 +41,6 @@ struct MediaDemuxTimestampClockMapperConfig final {
             left.audioTimeBase.num == right.audioTimeBase.num &&
             left.audioTimeBase.den == right.audioTimeBase.den &&
             left.firstWindowMaximumSkew == right.firstWindowMaximumSkew &&
-            left.timestampRegressionLimit == right.timestampRegressionLimit &&
             left.discontinuityThreshold == right.discontinuityThreshold &&
             left.initialGeneration == right.initialGeneration &&
             left.videoSourceIdentity == right.videoSourceIdentity &&
@@ -59,8 +57,30 @@ struct MediaDemuxTimestampClockSnapshot final {
     bool transitionPending;
 };
 
-struct MediaDemuxMappedPacketTiming final {
-    MediaMappedTimestamp timestamp;
+struct MediaDemuxTimestampOutputCommitEvidence final {
+    MediaSourceClockReadiness readiness;
+    std::uint64_t generation;
+};
+
+class MediaDemuxTimestampOutputCommitReservation final {
+public:
+    MediaDemuxTimestampOutputCommitReservation(
+        MediaDemuxTimestampOutputCommitReservation&&) noexcept;
+    MediaDemuxTimestampOutputCommitReservation& operator=(
+        MediaDemuxTimestampOutputCommitReservation&&) noexcept;
+    MediaDemuxTimestampOutputCommitReservation(
+        const MediaDemuxTimestampOutputCommitReservation&) = delete;
+    MediaDemuxTimestampOutputCommitReservation& operator=(
+        const MediaDemuxTimestampOutputCommitReservation&) = delete;
+    ~MediaDemuxTimestampOutputCommitReservation();
+
+private:
+    friend class MediaDemuxTimestampClockMapper;
+
+    explicit MediaDemuxTimestampOutputCommitReservation(
+        std::unique_lock<std::mutex> transaction) noexcept;
+
+    std::unique_lock<std::mutex> m_transaction;
 };
 
 class MediaDemuxTimestampClockMapper final {
@@ -68,7 +88,7 @@ public:
     static ::media::Result<std::shared_ptr<MediaDemuxTimestampClockMapper>>
     create(MediaDemuxTimestampClockMapperConfig config);
 
-    ::media::Result<MediaDemuxMappedPacketTiming> mapPacket(
+    ::media::Result<MediaMappedTimestamp> mapPacket(
         MediaScheduledStream stream,
         std::int64_t pts,
         std::int64_t dts,
@@ -80,7 +100,11 @@ public:
         std::function<void()> videoNotifier,
         std::function<void()> audioNotifier);
     MediaDemuxTimestampClockSnapshot snapshot() const noexcept;
-    std::mutex& transactionMutex() noexcept { return m_transactionMutex; }
+    bool outputIsCurrent(
+        MediaDemuxTimestampOutputCommitEvidence evidence) const noexcept;
+    ::media::Result<MediaDemuxTimestampOutputCommitReservation>
+    reserveOutputCommit(
+        MediaDemuxTimestampOutputCommitEvidence evidence);
     ::media::Status purgeParticipant(
         MediaScheduledStream stream,
         const MediaAvGenerationPurge& purge);

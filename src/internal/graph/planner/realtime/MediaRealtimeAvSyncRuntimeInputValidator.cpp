@@ -195,23 +195,21 @@ namespace {
         std::get<MediaDemuxTimestampInputClockAssemblyPlan>(
             runtime.assembly.inputClock);
     if (!input.firstWindowMaximumSkewNs ||
-        !input.timestampRegressionLimitNs ||
         !input.discontinuityThresholdNs || !input.initialGeneration ||
+        !input.canonicalTargetEpochNs ||
         selected.videoTimeBase.num != input.videoTimeBase.num ||
         selected.videoTimeBase.den != input.videoTimeBase.den ||
         selected.audioTimeBase.num != input.audioTimeBase.num ||
         selected.audioTimeBase.den != input.audioTimeBase.den ||
         selected.firstWindowMaximumSkew !=
             *input.firstWindowMaximumSkewNs ||
-        selected.timestampRegressionLimit !=
-            *input.timestampRegressionLimitNs ||
         selected.discontinuityThreshold !=
             *input.discontinuityThresholdNs ||
         selected.initialGeneration != *input.initialGeneration ||
         selected.videoSourceIdentity != runtime.assembly.video.sourceIdentity ||
         selected.audioSourceIdentity != runtime.assembly.audio.sourceIdentity ||
         selected.canonicalTargetEpoch !=
-            MediaRunningTime::fromNanoseconds(0)) {
+            *input.canonicalTargetEpochNs) {
         return invalidInput("demux timestamp policy");
     }
     return ::media::Status::success();

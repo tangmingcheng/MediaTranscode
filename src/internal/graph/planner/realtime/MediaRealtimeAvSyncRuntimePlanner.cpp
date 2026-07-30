@@ -100,9 +100,9 @@ namespace {
                 RealtimeInputStreamLayout::SessionDescribed ||
             !synchronization.demuxTimestampInput ||
             !synchronization.demuxTimestampInput->firstWindowMaximumSkewNs ||
-            !synchronization.demuxTimestampInput->timestampRegressionLimitNs ||
             !synchronization.demuxTimestampInput->discontinuityThresholdNs ||
             !synchronization.demuxTimestampInput->initialGeneration ||
+            !synchronization.demuxTimestampInput->canonicalTargetEpochNs ||
             !synchronization.demuxTimestampInput->videoTimeBase.isKnown() ||
             synchronization.demuxTimestampInput->videoTimeBase.num <= 0 ||
             synchronization.demuxTimestampInput->videoTimeBase.den <= 0 ||
@@ -120,12 +120,11 @@ namespace {
                 demux.videoTimeBase,
                 demux.audioTimeBase,
                 *demux.firstWindowMaximumSkewNs,
-                *demux.timestampRegressionLimitNs,
                 *demux.discontinuityThresholdNs,
                 initialGeneration,
                 *synchronization.startup.videoIdentity,
                 *synchronization.startup.audioIdentity,
-                MediaRunningTime::fromNanoseconds(0)});
+                *demux.canonicalTargetEpochNs});
         videoDuration.emplace<MediaPacketDurationPlan>(true);
         audioDuration.emplace<MediaPacketDurationPlan>(true);
     } else {

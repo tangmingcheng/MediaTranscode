@@ -42,7 +42,6 @@ public:
     ::media::Status purge(const MediaAvGenerationPurge& purge) override
     {
         std::lock_guard lock(mutex);
-        std::lock_guard transaction(m_mapper->transactionMutex());
         if (generation != purge.oldGeneration ||
             purge.nextGeneration <= purge.oldGeneration ||
             purge.transitionSequence == 0 ||
@@ -63,7 +62,6 @@ public:
     ::media::Status resetLifecycle()
     {
         std::lock_guard lock(mutex);
-        std::lock_guard transaction(m_mapper->transactionMutex());
         if (m_stream == MediaScheduledStream::Video) {
             auto reset = m_mapper->resetLifecycle();
             if (!reset) return reset;
@@ -157,79 +155,69 @@ void MediaDemuxPacketClockBinderNode::abort(
 bool MediaDemuxPacketClockBinderNode::pendingOutputIsCurrent(
     const MediaBufferRef& buffer) const noexcept
 {
-    std::lock_guard transaction(m_mapper->transactionMutex());
-    if (!buffer) return false;
-    if (const auto* control =
-            dynamic_cast<const MediaControlBuffer*>(buffer.get())) {
-        return control->controlKind() == MediaControlBufferKind::Eof ||
-            control->controlKind() == MediaControlBufferKind::Abort;
+    auto evidence = outputCommitEvidence(buffer);
+    return evidence &&
+        m_mapper->outputIsCurrent(evidence.value());
+}
+
+::media::Result<MediaDemuxTimestampOutputCommitEvidence>
+MediaDemuxPacketClockBinderNode::outputCommitEvidence(
+    const MediaBufferRef& buffer) const
+{
+    using Result =
+        ::media::Result<MediaDemuxTimestampOutputCommitEvidence>;
+    if (!buffer) {
+        return Result::failure(
+            invalid("Demux binder output evidence requires a buffer"));
     }
-    const auto snapshot = m_mapper->snapshot();
     if (const auto* packet =
             dynamic_cast<const FFmpegPacketBuffer*>(buffer.get())) {
-        return snapshot.readiness == MediaSourceClockReadiness::Locked &&
-            !snapshot.transitionPending &&
-            packet->sourceTiming() &&
-            packet->sourceTiming()->generation == snapshot.generation;
+        if (packet->sourceTiming()) {
+            return Result::success(
+                MediaDemuxTimestampOutputCommitEvidence{
+                    MediaSourceClockReadiness::Locked,
+                    packet->sourceTiming()->generation});
+        }
+        return Result::failure(
+            invalid("Demux binder packet output lacks generation evidence"));
     }
     if (const auto* state =
             dynamic_cast<const MediaSourceClockStateBuffer*>(buffer.get())) {
-        return !snapshot.transitionPending &&
-            state->generation() == snapshot.generation &&
-            state->readiness() == snapshot.readiness;
+        return Result::success(
+            MediaDemuxTimestampOutputCommitEvidence{
+                state->readiness(), state->generation()});
     }
-    return false;
+    if (const auto* control =
+            dynamic_cast<const MediaControlBuffer*>(buffer.get());
+        control &&
+        (control->controlKind() == MediaControlBufferKind::Eof ||
+         control->controlKind() == MediaControlBufferKind::Abort) &&
+        control->generation()) {
+        return Result::success(
+            MediaDemuxTimestampOutputCommitEvidence{
+                MediaSourceClockReadiness::Locked,
+                *control->generation()});
+    }
+    return Result::failure(
+        invalid("Demux binder output lacks explicit clock generation evidence"));
 }
 
-::media::Result<
-    std::optional<MediaProtocolOutputGenerationCommitReservation>>
+::media::Result<MediaOutputCommitReservation>
 MediaDemuxPacketClockBinderNode::reserveOutputCommit(
     const MediaBufferRef& buffer) const
 {
-    using Result = ::media::Result<
-        std::optional<MediaProtocolOutputGenerationCommitReservation>>;
-    if (m_outputCommitTransaction) {
-        return Result::failure(::media::ErrorInfo::internalError(
-            "Demux binder output transaction is already reserved"));
+    auto evidence = outputCommitEvidence(buffer);
+    if (!evidence) {
+        return ::media::Result<MediaOutputCommitReservation>::failure(
+            evidence.error());
     }
-    if (dynamic_cast<const MediaControlBuffer*>(buffer.get())) {
-        return Result::success(std::nullopt);
-    }
-    std::unique_lock transaction(m_mapper->transactionMutex());
-    const auto snapshot = m_mapper->snapshot();
-    bool current = false;
-    if (const auto* packet =
-            dynamic_cast<const FFmpegPacketBuffer*>(buffer.get());
-        packet && packet->sourceTiming()) {
-        current =
-            snapshot.readiness == MediaSourceClockReadiness::Locked &&
-            packet->sourceTiming()->generation == snapshot.generation;
-    } else if (const auto* state =
-                   dynamic_cast<const MediaSourceClockStateBuffer*>(
-                       buffer.get())) {
-        current = state->generation() == snapshot.generation &&
-            state->readiness() == snapshot.readiness;
-    }
-    if (!current || snapshot.transitionPending) {
-        return Result::failure(::media::ErrorInfo::cancelled(
-            "Demux binder rejects stale output at generation commit"));
-    }
-    m_outputCommitTransaction.emplace(std::move(transaction));
-    return Result::success(std::nullopt);
-}
-
-::media::Status MediaDemuxPacketClockBinderNode::commitReservedOutput(
-    const MediaBufferRef&)
-{
-    m_outputCommitTransaction.reset();
-    return ::media::Status::success();
-}
-
-::media::Status MediaDemuxPacketClockBinderNode::cancelReservedOutput(
-    const MediaBufferRef&)
-{
-    m_outputCommitTransaction.reset();
-    return ::media::Status::success();
+    auto reserved = m_mapper->reserveOutputCommit(evidence.value());
+    return reserved
+        ? ::media::Result<MediaOutputCommitReservation>::success(
+              MediaOutputCommitReservation::hold(
+                  std::move(reserved).value()))
+        : ::media::Result<MediaOutputCommitReservation>::failure(
+              reserved.error());
 }
 
 ::media::Result<MediaBufferRef>
@@ -287,7 +275,7 @@ MediaDemuxPacketClockBinderNode::timedPacket(
     if (!mapped) {
         return ::media::Result<MediaBufferRef>::failure(mapped.error());
     }
-    const auto& timestamp = mapped.value().timestamp;
+    const auto& timestamp = mapped.value();
     if (!timestamp.decodeTime() || !timestamp.duration() ||
         timestamp.duration()->nanoseconds() <= 0 ||
         timestamp.generation() != generation ||
@@ -378,10 +366,15 @@ MediaDemuxPacketClockBinderNode::processTerminal(
         return ::media::Result<MediaNodeProcessResult>::failure(
             invalid("Demux clock binder cannot terminate before common clock lock"));
     }
+    MediaBufferRef generatedTerminal =
+        makeMediaBufferRef<MediaControlBuffer>(
+            control->controlKind(), m_state->generation);
     return m_stream == MediaScheduledStream::Video
         ? processFinished(
-              broadcastControlToAllOutputs(context, terminal))
-        : processFinished(emitOutput(context, "packet", terminal));
+              broadcastControlToAllOutputs(
+                  context, generatedTerminal))
+        : processFinished(
+              emitOutput(context, "packet", generatedTerminal));
 }
 
 ::media::Result<MediaNodeProcessResult>

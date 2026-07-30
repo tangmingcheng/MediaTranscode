@@ -36,6 +36,24 @@ namespace {
 
 } // namespace
 
+MediaDemuxTimestampOutputCommitReservation::
+MediaDemuxTimestampOutputCommitReservation(
+    std::unique_lock<std::mutex> transaction) noexcept
+    : m_transaction(std::move(transaction))
+{
+}
+
+MediaDemuxTimestampOutputCommitReservation::
+MediaDemuxTimestampOutputCommitReservation(
+    MediaDemuxTimestampOutputCommitReservation&&) noexcept = default;
+
+MediaDemuxTimestampOutputCommitReservation&
+MediaDemuxTimestampOutputCommitReservation::operator=(
+    MediaDemuxTimestampOutputCommitReservation&&) noexcept = default;
+
+MediaDemuxTimestampOutputCommitReservation::
+~MediaDemuxTimestampOutputCommitReservation() = default;
+
 ::media::Result<std::shared_ptr<MediaDemuxTimestampClockMapper>>
 MediaDemuxTimestampClockMapper::create(
     MediaDemuxTimestampClockMapperConfig config)
@@ -44,10 +62,8 @@ MediaDemuxTimestampClockMapper::create(
         config.audioTimeBase.num <= 0 || config.audioTimeBase.den <= 0 ||
         config.firstWindowMaximumSkew <=
             MediaRunningTime::fromNanoseconds(0) ||
-        config.timestampRegressionLimit <=
-            MediaRunningTime::fromNanoseconds(0) ||
         config.discontinuityThreshold <=
-            config.timestampRegressionLimit ||
+            MediaRunningTime::fromNanoseconds(0) ||
         config.initialGeneration == 0 ||
         config.videoSourceIdentity.empty() ||
         config.audioSourceIdentity.empty() ||
@@ -185,18 +201,10 @@ MediaDemuxTimestampClockMapper::validateTimelineContinuity(
     const char* field) const
 {
     if (current < latest) {
-        auto regression = latest.checkedSubtract(current);
-        if (!regression) {
-            return ::media::Status::failure(regression.error());
-        }
-        const bool exceedsPlan =
-            regression.value() > m_config.timestampRegressionLimit;
         return ::media::Status::failure(
             ::media::ErrorInfo::wouldBlock(
                 std::string("Demux ") + field +
-                (exceedsPlan
-                     ? " regression exceeds the planner limit"
-                     : " regression is forbidden by the strict clock")));
+                " regression is forbidden by the strict clock"));
     }
     if (current == latest) return ::media::Status::success();
     auto expectedNext = latest.checkedAdd(latestDuration);
@@ -239,7 +247,7 @@ MediaDemuxTimestampClockMapper::mapWith(
               mapped.error().toErrorInfo());
 }
 
-::media::Result<MediaDemuxMappedPacketTiming>
+::media::Result<MediaMappedTimestamp>
 MediaDemuxTimestampClockMapper::mapPacket(
     MediaScheduledStream stream,
     std::int64_t pts,
@@ -250,8 +258,8 @@ MediaDemuxTimestampClockMapper::mapPacket(
 {
     std::unique_lock transaction(m_transactionMutex);
     bool notify = false;
-    ::media::Result<MediaDemuxMappedPacketTiming> result =
-        ::media::Result<MediaDemuxMappedPacketTiming>::failure(
+    ::media::Result<MediaMappedTimestamp> result =
+        ::media::Result<MediaMappedTimestamp>::failure(
             ::media::ErrorInfo::internalError(
                 "Demux timestamp packet transaction produced no result"));
     {
@@ -259,7 +267,7 @@ MediaDemuxTimestampClockMapper::mapPacket(
         if (auto valid = validatePacketInput(
                 stream, pts, dts, timeBase, duration, generation);
             !valid) {
-            return ::media::Result<MediaDemuxMappedPacketTiming>::failure(
+            return ::media::Result<MediaMappedTimestamp>::failure(
                 valid.error());
         }
         auto presentation = rescale(pts, timeBase, "PTS");
@@ -267,7 +275,7 @@ MediaDemuxTimestampClockMapper::mapPacket(
         auto mappedDuration = rescale(duration, timeBase, "duration");
         if (!presentation || !decode || !mappedDuration ||
             mappedDuration.value() <= MediaRunningTime::fromNanoseconds(0)) {
-            return ::media::Result<MediaDemuxMappedPacketTiming>::failure(
+            return ::media::Result<MediaMappedTimestamp>::failure(
                 !presentation ? presentation.error()
                 : !decode ? decode.error()
                 : !mappedDuration ? mappedDuration.error()
@@ -276,7 +284,7 @@ MediaDemuxTimestampClockMapper::mapPacket(
         auto intervalEnd =
             presentation.value().checkedAdd(mappedDuration.value());
         if (!intervalEnd) {
-            return ::media::Result<MediaDemuxMappedPacketTiming>::failure(
+            return ::media::Result<MediaMappedTimestamp>::failure(
                 intervalEnd.error());
         }
 
@@ -292,7 +300,7 @@ MediaDemuxTimestampClockMapper::mapPacket(
                        *candidate.firstDecode != decode.value() ||
                        *candidate.firstDuration != mappedDuration.value()) {
                 return ::media::Result<
-                    MediaDemuxMappedPacketTiming>::failure(
+                    MediaMappedTimestamp>::failure(
                     invalid("Demux mapper retains exactly one complete first packet per stream"));
             }
             StreamState firstWindow[2]{m_streams[0], m_streams[1]};
@@ -306,7 +314,7 @@ MediaDemuxTimestampClockMapper::mapPacket(
                     notify = true;
                 }
                 result =
-                    ::media::Result<MediaDemuxMappedPacketTiming>::failure(
+                    ::media::Result<MediaMappedTimestamp>::failure(
                         common.error());
             } else {
                 const MediaRunningTime sourceEpoch = std::min(
@@ -328,7 +336,7 @@ MediaDemuxTimestampClockMapper::mapPacket(
                         generation});
                 if (!video || !audio) {
                     return ::media::Result<
-                        MediaDemuxMappedPacketTiming>::failure(
+                        MediaMappedTimestamp>::failure(
                         !video ? video.error().toErrorInfo()
                                : audio.error().toErrorInfo());
                 }
@@ -341,7 +349,7 @@ MediaDemuxTimestampClockMapper::mapPacket(
                     mappedDuration.value(), generation);
                 if (!mapped) {
                     return ::media::Result<
-                        MediaDemuxMappedPacketTiming>::failure(
+                        MediaMappedTimestamp>::failure(
                         mapped.error());
                 }
                 for (StreamState& state : firstWindow) {
@@ -357,15 +365,14 @@ MediaDemuxTimestampClockMapper::mapPacket(
                 markStateChanged();
                 notify = true;
                 result =
-                    ::media::Result<MediaDemuxMappedPacketTiming>::success(
-                        MediaDemuxMappedPacketTiming{
-                            std::move(mapped).value()});
+                    ::media::Result<MediaMappedTimestamp>::success(
+                        std::move(mapped).value());
             }
         } else {
             if (!candidate.latestPresentation || !candidate.latestDecode ||
                 !candidate.latestDuration) {
                 return ::media::Result<
-                    MediaDemuxMappedPacketTiming>::failure(
+                    MediaMappedTimestamp>::failure(
                     ::media::ErrorInfo::internalError(
                         "Demux mapper lost its committed stream timeline"));
             }
@@ -383,7 +390,7 @@ MediaDemuxTimestampClockMapper::mapPacket(
                 requireReacquisition();
                 notify = true;
                 result =
-                    ::media::Result<MediaDemuxMappedPacketTiming>::failure(
+                    ::media::Result<MediaMappedTimestamp>::failure(
                         !presentationContinuity
                         ? presentationContinuity.error()
                         : decodeContinuity.error());
@@ -394,7 +401,7 @@ MediaDemuxTimestampClockMapper::mapPacket(
                     : m_audioMapper;
                 if (!mapper) {
                     return ::media::Result<
-                        MediaDemuxMappedPacketTiming>::failure(
+                        MediaMappedTimestamp>::failure(
                         ::media::ErrorInfo::internalError(
                             "Demux mapper has no locked canonical projection"));
                 }
@@ -403,7 +410,7 @@ MediaDemuxTimestampClockMapper::mapPacket(
                     mappedDuration.value(), generation);
                 if (!mapped) {
                     return ::media::Result<
-                        MediaDemuxMappedPacketTiming>::failure(
+                        MediaMappedTimestamp>::failure(
                         mapped.error());
                 }
                 candidate.latestPresentation = presentation.value();
@@ -411,9 +418,8 @@ MediaDemuxTimestampClockMapper::mapPacket(
                 candidate.latestDuration = mappedDuration.value();
                 m_streams[index] = std::move(candidate);
                 result =
-                    ::media::Result<MediaDemuxMappedPacketTiming>::success(
-                        MediaDemuxMappedPacketTiming{
-                            std::move(mapped).value()});
+                    ::media::Result<MediaMappedTimestamp>::success(
+                        std::move(mapped).value());
             }
         }
     }
@@ -451,10 +457,42 @@ MediaDemuxTimestampClockMapper::snapshot() const noexcept
         m_pendingPurge.has_value()};
 }
 
+bool MediaDemuxTimestampClockMapper::outputIsCurrent(
+    MediaDemuxTimestampOutputCommitEvidence evidence) const noexcept
+{
+    std::lock_guard lock(m_mutex);
+    return !m_pendingPurge &&
+        evidence.readiness == m_readiness &&
+        evidence.generation == m_generation;
+}
+
+::media::Result<MediaDemuxTimestampOutputCommitReservation>
+MediaDemuxTimestampClockMapper::reserveOutputCommit(
+    MediaDemuxTimestampOutputCommitEvidence evidence)
+{
+    std::unique_lock transaction(m_transactionMutex);
+    {
+        std::lock_guard lock(m_mutex);
+        if (m_pendingPurge ||
+            evidence.readiness != m_readiness ||
+            evidence.generation != m_generation) {
+            return ::media::Result<
+                MediaDemuxTimestampOutputCommitReservation>::failure(
+                ::media::ErrorInfo::cancelled(
+                    "Demux mapper rejects stale generation output"));
+        }
+    }
+    return ::media::Result<
+        MediaDemuxTimestampOutputCommitReservation>::success(
+        MediaDemuxTimestampOutputCommitReservation(
+            std::move(transaction)));
+}
+
 ::media::Status MediaDemuxTimestampClockMapper::purgeParticipant(
     MediaScheduledStream stream,
     const MediaAvGenerationPurge& purge)
 {
+    std::unique_lock transaction(m_transactionMutex);
     {
         std::lock_guard lock(m_mutex);
         if (!m_pendingPurge) {
@@ -492,12 +530,14 @@ MediaDemuxTimestampClockMapper::snapshot() const noexcept
         }
         markStateChanged();
     }
+    transaction.unlock();
     notifyStateChange();
     return ::media::Status::success();
 }
 
 ::media::Status MediaDemuxTimestampClockMapper::resetLifecycle()
 {
+    std::lock_guard transaction(m_transactionMutex);
     std::lock_guard lock(m_mutex);
     resetForGeneration(m_config.initialGeneration);
     m_lastTransitionSequence.reset();

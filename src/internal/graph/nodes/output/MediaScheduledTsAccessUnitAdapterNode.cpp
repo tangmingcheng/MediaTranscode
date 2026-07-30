@@ -193,8 +193,7 @@ MediaScheduledTsAccessUnitAdapterNode::onProcess(
     return processProgress(emitOutput(context, "packet", output.value()));
 }
 
-::media::Result<
-    std::optional<MediaProtocolOutputGenerationCommitReservation>>
+::media::Result<MediaOutputCommitReservation>
 MediaScheduledTsAccessUnitAdapterNode::reserveOutputCommit(
     const MediaBufferRef& buffer) const
 {
@@ -207,31 +206,24 @@ MediaScheduledTsAccessUnitAdapterNode::reserveOutputCommit(
             dynamic_cast<const MediaTsAccessUnitBuffer*>(buffer.get())) {
         auto view = accessUnit->view();
         if (!view) {
-            return ::media::Result<
-                std::optional<
-                    MediaProtocolOutputGenerationCommitReservation>>::failure(
+            return ::media::Result<MediaOutputCommitReservation>::failure(
                         view.error());
         }
         generation = view.value().generation;
     }
     if (!generation) {
-        return ::media::Result<
-            std::optional<
-                MediaProtocolOutputGenerationCommitReservation>>::failure(
+        return ::media::Result<MediaOutputCommitReservation>::failure(
                     ::media::ErrorInfo::notInitialized(
                         "Scheduled TS commit requires an exact generation"));
     }
     auto reservation = m_generationState->reserveCommit(
         *m_syncGroup, *generation);
     if (!reservation) {
-        return ::media::Result<
-            std::optional<
-                MediaProtocolOutputGenerationCommitReservation>>::failure(
+        return ::media::Result<MediaOutputCommitReservation>::failure(
                     reservation.error());
     }
-    return ::media::Result<
-        std::optional<MediaProtocolOutputGenerationCommitReservation>>::
-        success(std::optional<MediaProtocolOutputGenerationCommitReservation>(
+    return ::media::Result<MediaOutputCommitReservation>::success(
+        MediaOutputCommitReservation::hold(
             std::move(reservation).value()));
 }
 
