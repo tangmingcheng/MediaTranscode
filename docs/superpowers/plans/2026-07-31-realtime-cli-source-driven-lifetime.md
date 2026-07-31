@@ -134,7 +134,7 @@ Update README usage, the completion report, main `plan.md`, and
 - runtime error/drop/drift/CPU/memory evidence;
 - remaining streaming-protocol EOF and manual-regression risks.
 
-- [ ] **Step 8: Verify, commit, push, and re-review**
+- [x] **Step 8: Verify, commit, push, and re-review**
 
 Run `git diff --check`, verify every changed text file is UTF-8/CRLF, confirm no
 temporary test/script/dump is tracked or left under `out/`, and rerun the

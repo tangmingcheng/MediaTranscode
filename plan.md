@@ -14,7 +14,7 @@
 - [x] Keep duration ownership out of the planner, graph plan, runtime, nodes, scheduler, mux, and sinks.
 - [x] Validate zero, negative, and omitted direct CLI argument paths; rebuild x64 Debug clean-first.
 - [x] Repeat all nine final-HEAD real-media routes without `--max-duration`, with finite 135+ second sources, FFmpeg/FFprobe receivers, and one VLC observation per route.
-- [ ] Record lifecycle, runtime error/drop/drift/CPU/memory evidence and obtain the final review verdict.
+- [x] Record lifecycle, runtime error/drop/drift/CPU/memory evidence and obtain the final review verdict.
 
 ## Global Constraints
 
@@ -469,6 +469,6 @@
 
   A new agent reviews the PR diff and acceptance evidence against `AGENTS.md`, the approved design, and `QUALITY_SCORE.md`. It reports blocking/nonblocking findings and an explicit pass/fail decision.
 
-- [ ] **Step 6: Close the review loop**
+- [x] **Step 6: Close the review loop**
 
   If review fails, implement findings, repeat required real-media validation in proportion to the affected behavior, push updates, and ask the same reviewer to re-review. Finish only after an explicit pass with no blocking findings.
