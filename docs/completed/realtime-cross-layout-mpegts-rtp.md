@@ -8,6 +8,21 @@
 - MPEG-TS/RTP uses RTP/AVP MP2T payload type 33, a 90 kHz clock, adjacent RTP/RTCP ports, atomic SDP publication, persistent outer RTP continuity, and explicit inner TS discontinuity at a real generation transition.
 - Generation-start video encoding requests a key frame. Audio drift state and output-generation permission are committed atomically.
 
+## Source-Driven CLI Lifetime Follow-Up
+
+`--max-duration` is now optional and remains a realtime CLI-only monitoring
+policy. When omitted, the CLI prints `max_duration=source_driven`, keeps the
+existing startup/progress checks, and stops only when the runtime's lifecycle
+stops or reports an error; no planner, graph plan, runtime node, scheduler,
+mux, or sink receives a duration field. A present value must be positive.
+
+The prior nine final-HEAD commands below are historical fixed-duration
+evidence. Source-driven reacceptance must reuse each exact route with
+`--max-duration <SECONDS>` removed, a finite FFmpeg source of at least 135
+seconds, one VLC observation over two minutes, and the documented FFmpeg or
+FFprobe receiver. Those nine human-observed results are pending and are not
+represented by the earlier fixed-duration rows.
+
 ## Final Post-Fix Gates
 
 The final MPEG-TS/UDP to MPEG-TS/RTP run used these direct PowerShell commands.

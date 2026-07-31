@@ -12,6 +12,7 @@
 #include <chrono>
 #include <exception>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -28,7 +29,7 @@ using namespace media::ffmpeg::graph::cli;
 namespace {
 
 struct RealtimeVideoRuntimeOptions {
-    int maxDurationSeconds = 15;
+    std::optional<int> maxDurationSeconds;
     int progressTimeoutMs = 5000;
     int firstOutputTimeoutMs = 30000;
     int pollIntervalMs = 250;
@@ -231,7 +232,7 @@ MediaRealtimeRtpTranscodeRequest parseRealtimeOptions(int argc, char** argv)
 RealtimeVideoRuntimeOptions parseRuntimeOptions(int argc, char** argv)
 {
     RealtimeVideoRuntimeOptions options;
-    options.maxDurationSeconds = requiredIntArg(argc, argv, "--max-duration");
+    options.maxDurationSeconds = optionalIntArg(argc, argv, "--max-duration");
     if (auto progressTimeoutMs = optionalIntArg(argc, argv, "--progress-timeout-ms")) {
         options.progressTimeoutMs = *progressTimeoutMs;
     }
@@ -241,12 +242,12 @@ RealtimeVideoRuntimeOptions parseRuntimeOptions(int argc, char** argv)
     if (auto pollIntervalMs = optionalIntArg(argc, argv, "--poll-interval-ms")) {
         options.pollIntervalMs = *pollIntervalMs;
     }
-    if (options.maxDurationSeconds <= 0 ||
+    if ((options.maxDurationSeconds && *options.maxDurationSeconds <= 0) ||
         options.progressTimeoutMs <= 0 ||
         options.firstOutputTimeoutMs <= 0 ||
         options.pollIntervalMs <= 0) {
         throw std::invalid_argument(
-            "runtime duration, progress timeout, first-output timeout, and poll interval must be positive");
+            "configured runtime duration, progress timeout, first-output timeout, and poll interval must be positive");
     }
     return options;
 }
@@ -260,8 +261,6 @@ RealtimeVideoRuntimeOptions parseRuntimeOptions(int argc, char** argv)
     MediaRealtimeProgressTracker progressTracker;
     const auto firstOutputStartupDeadline =
         std::chrono::milliseconds(options.firstOutputTimeoutMs);
-    const auto maximumOutputDuration =
-        std::chrono::seconds(options.maxDurationSeconds);
     const auto workerStartupGrace = std::chrono::milliseconds(
         std::min(options.progressTimeoutMs, std::max(options.pollIntervalMs * 2, 1000)));
 
@@ -316,8 +315,9 @@ RealtimeVideoRuntimeOptions parseRuntimeOptions(int argc, char** argv)
                 ::media::ErrorInfo::notInitialized(
                     "realtime runtime produced no encoded output before startup deadline"));
         }
-        if (progressTracker.maximumOutputDurationExpired(
-                elapsedMs, maximumOutputDuration)) {
+        if (options.maxDurationSeconds &&
+            progressTracker.maximumOutputDurationExpired(
+                elapsedMs, std::chrono::seconds(*options.maxDurationSeconds))) {
             return ::media::Status::success();
         }
         if (idleMs >= options.progressTimeoutMs) {
@@ -348,7 +348,7 @@ int runRealtimeVideoCli(int argc, char** argv)
 
     const bool helpRequested = hasArg(argc, argv, "--help") || hasArg(argc, argv, "-h");
     if (argc < 5 || helpRequested) {
-        std::cout << "Usage: media_transcode_realtime_video_cli --media-id ID --input-type rtsp|rtp|mpegts-udp --input-layout session|separate|mpegts --output-layout separate|mpegts --output-transport udp|rtp --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --startup-max-video-unit-bytes 4194304 --startup-max-audio-unit-bytes 1048576 --startup-max-gap-ms 40 --mpegts-max-pcr-gap-ms 1000 --max-duration 15 [options]\n";
+        std::cout << "Usage: media_transcode_realtime_video_cli --media-id ID --input-type rtsp|rtp|mpegts-udp --input-layout session|separate|mpegts --output-layout separate|mpegts --output-transport udp|rtp --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --startup-max-video-unit-bytes 4194304 --startup-max-audio-unit-bytes 1048576 --startup-max-gap-ms 40 --mpegts-max-pcr-gap-ms 1000 [--max-duration SECONDS] [options]\n";
         return helpRequested ? 0 : 2;
     }
 
@@ -357,7 +357,13 @@ int runRealtimeVideoCli(int argc, char** argv)
     std::cout << "[CLI] input_type=" << static_cast<int>(*options.input.type)
               << " input=" << redactUrlUserInfo(options.input.url.empty() ? options.input.videoRtp.url : options.input.url)
               << " audio=" << (options.parameters.execution.includeAudio ? "on" : "off")
-              << " max_duration=" << runtimeOptions.maxDurationSeconds
+              << " max_duration=";
+    if (runtimeOptions.maxDurationSeconds) {
+        std::cout << *runtimeOptions.maxDurationSeconds;
+    } else {
+        std::cout << "source_driven";
+    }
+    std::cout
               << " hw=" << (options.parameters.execution.disableHardware ? "disabled" : "auto")
               << '\n';
 

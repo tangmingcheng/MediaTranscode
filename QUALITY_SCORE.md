@@ -23,6 +23,15 @@ cross-generation outer-RTP continuity. The implementation and evidence now
 address all three; the score and verdict remain provisional until the same
 reviewer confirms the fixes.
 
+## Source-Driven Lifetime Follow-Up
+
+The realtime CLI duration is now optional and confined to CLI monitoring;
+absence creates no deadline or fallback value in the production DAG. The nine
+existing real-media rows predate this policy change and do not prove
+source-driven termination. Their finite-source, two-minute VLC, receiver,
+lifecycle, error/drop/drift/CPU/memory reruns remain required before this
+score or verdict can be treated as final.
+
 ## Acceptance Evidence
 
 - Nine real-media input/output paths have CLI logs under `out/acceptance/realtime-cross-layout/`.

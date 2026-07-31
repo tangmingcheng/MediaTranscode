@@ -57,6 +57,13 @@ ffplay -protocol_whitelist file,udp,rtp -i out/build/x64-debug/realtime-output.s
 ffprobe -protocol_whitelist file,udp,rtp -i out/build/x64-debug/realtime-output.sdp
 ```
 
+`--max-duration SECONDS` is optional realtime CLI monitoring policy. When it is
+present, it must be positive and stops a still-running CLI after that duration.
+When it is absent, startup output, progress, and lifecycle failures retain their
+existing checks, but the CLI has no duration deadline and reports
+`max_duration=source_driven`. This value is not planned or passed into the
+media graph runtime.
+
 Raw RTP input requires explicit video and audio endpoint metadata. The following reusable input/options demonstrate the same A/V input sent first as MPEG-TS/UDP and then as MPEG-TS/RTP:
 
 ```powershell
@@ -79,7 +86,7 @@ $common = @(
     '--startup-max-audio-unit-bytes','1048576','--startup-max-gap-ms','40',
     '--video-codec','h264','--width','1280','--height','720','--fps','30',
     '--bitrate','4000','--gop','30','--audio-codec','aac','--audio-bitrate','128',
-    '--sample-rate','48000','--channels','2','--max-duration','120'
+    '--sample-rate','48000','--channels','2'
 )
 $cli = 'out/build/x64-debug/media_transcode_realtime_video_cli.exe'
 
@@ -92,6 +99,9 @@ $cli = 'out/build/x64-debug/media_transcode_realtime_video_cli.exe'
     --rtp-host 127.0.0.1 --rtp-port 5020 --packet-size 1328 `
     --sdp out/build/x64-debug/rtp-to-tsrtp.sdp
 ```
+
+Add `--max-duration SECONDS` only when the caller wants the explicit CLI stop
+gate; do not use `0`, a sentinel, or a large replacement duration.
 
 Hardware planning, low-latency input, and graph diagnostics are enabled by default. Use `--disable-hw`, `--no-low-latency`, or `--quiet-graph` only for an explicit override. `udp://host:port` remains valid for UDP-carried RTP input in RTP-port mode; MPEG-TS input uses `--input-type mpegts-udp --input-layout mpegts` and requires an explicit `--mpegts-max-pcr-gap-ms`. A value of `1000` is the verified starting point for FFmpeg `-re` loopback sources; stricter values intentionally make PCR-gap generation reacquisition more sensitive.
 

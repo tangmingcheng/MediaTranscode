@@ -8,6 +8,14 @@
 
 **Tech Stack:** C++20, project DAG planner/builder/runtime, project MPEG-TS mux, project RTP/RTCP transport, FFmpeg input and CLI tooling, Visual Studio 2026 bundled CMake/Ninja.
 
+## Source-Driven Realtime CLI Lifetime Follow-Up
+
+- [x] Make `--max-duration` an optional positive realtime CLI monitoring policy.
+- [x] Keep duration ownership out of the planner, graph plan, runtime, nodes, scheduler, mux, and sinks.
+- [x] Validate zero, negative, and omitted direct CLI argument paths; rebuild x64 Debug clean-first.
+- [ ] Repeat all nine final-HEAD real-media routes without `--max-duration`, with finite 135+ second sources, FFmpeg/FFprobe receivers, and one VLC observation per route.
+- [ ] Record lifecycle, runtime error/drop/drift/CPU/memory evidence and obtain the final review verdict.
+
 ## Global Constraints
 
 - Preserve the current RTP-to-RTP and MPEG-TS/UDP-to-MPEG-TS/UDP A/V startup, drift correction, recovery, telemetry, and subjective playback quality.
