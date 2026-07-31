@@ -29,8 +29,6 @@ namespace media::ffmpeg::graph {
         auto mediaWire = MediaSdpWireFormat::appendMediaTransport(
             output,
             {kind, identity.remoteRtpPort(), identity.payloadType(),
-             identity.addressFamily(),
-             identity.remoteRtpNumericAddress(),
              identity.remoteRtcpPort(), identity.addressFamily(),
              identity.remoteRtcpNumericAddress()});
         if (!mediaWire) {

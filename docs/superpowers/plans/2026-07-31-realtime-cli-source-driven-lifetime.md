@@ -36,13 +36,13 @@
 - `waitForRealtimeProgress(MediaGraphRuntime&, const RealtimeVideoRuntimeOptions&)` evaluates the maximum-output-duration condition only when the optional value exists.
 - No production core interface changes.
 
-- [ ] **Step 1: Capture the current failure evidence**
+- [x] **Step 1: Capture the current failure evidence**
 
 Run the realtime CLI without `--max-duration` and retain the local error showing
 `missing required integer argument: --max-duration`. Confirm no VLC is opened
 and no source or CLI process remains.
 
-- [ ] **Step 2: Implement the optional CLI policy**
+- [x] **Step 2: Implement the optional CLI policy**
 
 In `tools/realtime_video_cli/main.cpp`:
 
@@ -72,14 +72,14 @@ if (options.maxDurationSeconds &&
 Print `max_duration=source_driven` when absent and the integer when present.
 Update the usage string so `--max-duration SECONDS` is visibly optional.
 
-- [ ] **Step 3: Verify static ownership boundaries**
+- [x] **Step 3: Verify static ownership boundaries**
 
 Search the whole tracked tree for `maxDurationSeconds`, `max-duration`, and new
 duration fields. Require that the optional duration remains confined to the
 realtime CLI and user documentation. Reject any planner, plan codec, graph,
 runtime node, scheduler, mux, or sink duration addition.
 
-- [ ] **Step 4: Run direct CLI argument validation**
+- [x] **Step 4: Run direct CLI argument validation**
 
 Run three direct commands without creating a test source:
 
@@ -91,7 +91,7 @@ Run three direct commands without creating a test source:
 
 Save only concise results in the completion report.
 
-- [ ] **Step 5: Run the mandated production build**
+- [x] **Step 5: Run the mandated production build**
 
 Execute the repository VS2026 skill command:
 
@@ -102,7 +102,7 @@ Execute the repository VS2026 skill command:
 Require configure/build exit code 0, all targets rebuilt, and both CLI
 executables present.
 
-- [ ] **Step 6: Run source-driven real-media verification**
+- [x] **Step 6: Run source-driven real-media verification**
 
 For each final-HEAD matrix route, use a direct finite FFmpeg source command with
 at least 135 seconds of media and omit `--max-duration` from the CLI. Open one
@@ -121,7 +121,7 @@ SDP output, record the exact command:
 For MPEG-TS/UDP, record the corresponding direct
 `udp://127.0.0.1:54220?fifo_size=65536&overrun_nonfatal=1` receiver command.
 
-- [ ] **Step 7: Update delivery evidence**
+- [x] **Step 7: Update delivery evidence**
 
 Update README usage, the completion report, main `plan.md`, and
 `QUALITY_SCORE.md` with:

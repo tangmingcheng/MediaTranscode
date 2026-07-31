@@ -110,8 +110,7 @@ MediaMpegTsRtpSdpDescription::serialize() const
     }
     auto media = MediaSdpWireFormat::appendMediaTransport(
         output,
-        {"video", m_rtpPort, m_payloadType,
-         m_addressFamily, m_numericAddress, m_rtcpPort,
+        {"video", m_rtpPort, m_payloadType, m_rtcpPort,
          m_addressFamily, m_numericAddress});
     if (!media) {
         return ::media::Result<std::string>::failure(media.error());

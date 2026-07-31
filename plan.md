@@ -13,7 +13,7 @@
 - [x] Make `--max-duration` an optional positive realtime CLI monitoring policy.
 - [x] Keep duration ownership out of the planner, graph plan, runtime, nodes, scheduler, mux, and sinks.
 - [x] Validate zero, negative, and omitted direct CLI argument paths; rebuild x64 Debug clean-first.
-- [ ] Repeat all nine final-HEAD real-media routes without `--max-duration`, with finite 135+ second sources, FFmpeg/FFprobe receivers, and one VLC observation per route.
+- [x] Repeat all nine final-HEAD real-media routes without `--max-duration`, with finite 135+ second sources, FFmpeg/FFprobe receivers, and one VLC observation per route.
 - [ ] Record lifecycle, runtime error/drop/drift/CPU/memory evidence and obtain the final review verdict.
 
 ## Global Constraints

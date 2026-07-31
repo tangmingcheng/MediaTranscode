@@ -16,12 +16,49 @@ existing startup/progress checks, and stops only when the runtime's lifecycle
 stops or reports an error; no planner, graph plan, runtime node, scheduler,
 mux, or sink receives a duration field. A present value must be positive.
 
-The prior nine final-HEAD commands below are historical fixed-duration
-evidence. Source-driven reacceptance must reuse each exact route with
-`--max-duration <SECONDS>` removed, a finite FFmpeg source of at least 135
-seconds, one VLC observation over two minutes, and the documented FFmpeg or
-FFprobe receiver. Those nine human-observed results are pending and are not
-represented by the earlier fixed-duration rows.
+The source-driven rerun reused the nine exact route blocks below with
+`--max-duration <SECONDS>` removed. Each FFmpeg source was finite, and the CLI
+printed `max_duration=source_driven`; source loss, rather than a CLI deadline,
+ended every run. During active playback all nine routes had zero worker errors,
+runtime errors, and drops.
+
+| Input to output | Average process CPU | Final working set | Human result | Source-end lifecycle |
+|---|---:|---:|---|---|
+| separate RTP to separate RTP | 4.63% | 244.7 MB | normal picture, no perceptible A/V drift | finite RTP loss stopped CLI |
+| URL/RTSP to separate RTP | 3.97% | 254.6 MB | normal picture, no perceptible A/V drift | finite HTTP input stopped CLI |
+| URL/RTSP to MPEG-TS/UDP | 4.09% | stable | normal picture, no perceptible A/V drift | `av_read_frame` reported source close |
+| URL/RTSP to MPEG-TS/RTP | 4.37% | 254.1 MB | normal picture, no perceptible A/V drift | source-end flush reported audio correction exhaustion |
+| separate RTP to MPEG-TS/UDP | 4.92% | 243.1 MB | normal picture, no perceptible A/V drift | finite RTP loss stopped CLI |
+| separate RTP to MPEG-TS/RTP | 4.73% | 248.3 MB | normal picture, no perceptible A/V drift | finite RTP loss stopped CLI |
+| MPEG-TS/UDP to separate RTP | 5.41% | 247.8 MB | normal picture, no perceptible A/V drift | input read ended with native `-5` |
+| MPEG-TS/UDP to MPEG-TS/UDP | 5.72% | 247.9 MB | normal picture, no perceptible A/V drift | input read ended with native `-5` |
+| MPEG-TS/UDP to MPEG-TS/RTP | 5.44% | 246.1 MB | normal picture, no perceptible A/V drift | input read ended with native `-5` |
+
+The user observed CPU below 6%, no sustained memory growth, stable pictures,
+and no perceptible A/V drift on every route. The source-end errors above are
+preserved core lifecycle results and are not rewritten as success. The
+URL/RTSP-to-MPEG-TS/RTP flush error and TS/RTP downstream aborts remain cleanup
+quality risks, but occurred only after finite input disappeared.
+
+Final receiver verification exposed that this Windows FFmpeg build rejects
+media-level SDP connection fields with `getnameinfo` while VLC accepts them.
+The shared SDP model now publishes one session-level `c=` address and rejects
+media whose RTP address differs from that planned session connection address.
+The final MP2T SDP remained RFC CRLF and opened directly in both FFmpeg and
+VLC. FFmpeg decoded 20.00 seconds, 578 video frames, and about 3.75 MiB of
+audio at 1.01x, exit code 0:
+
+```powershell
+& 'D:\mabs\local64\bin-video\ffmpeg.exe' -hide_banner -loglevel info -protocol_whitelist 'file,udp,rtp' -i 'D:\Code\MyCode\MediaTranscode\out\acceptance\realtime-cross-layout\formal-tsudp-to-tsrtp\ffmpeg-receiver-20s-output.sdp' -t 20 -map 0:v:0 -map 0:a:0 -f null NUL
+```
+
+The same final shared SDP formatter was verified for separate H.264/AAC RTP.
+FFmpeg decoded 20.00 seconds, 586 video frames, and about 3.75 MiB of audio at
+1.04x, exit code 0:
+
+```powershell
+& 'D:\mabs\local64\bin-video\ffmpeg.exe' -hide_banner -loglevel info -protocol_whitelist 'file,udp,rtp' -i 'D:\Code\MyCode\MediaTranscode\out\acceptance\realtime-cross-layout\formal-rtp-to-rtp\ffmpeg-receiver-session-c-output.sdp' -t 20 -map 0:v:0 -map 0:a:0 -f null NUL
+```
 
 ## Final Post-Fix Gates
 

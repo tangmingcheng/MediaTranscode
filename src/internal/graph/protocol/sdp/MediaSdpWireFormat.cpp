@@ -42,6 +42,10 @@ void MediaSdpWireFormat::appendLine(
             std::to_string(fields.sessionVersion) + " IN " + type +
             " " + std::string(fields.numericAddress));
     appendLine(output, "s=" + std::string(fields.sessionName));
+    appendLine(
+        output,
+        "c=IN " + std::string(type) + " " +
+            std::string(fields.numericAddress));
     appendLine(output, "t=0 0");
     return ::media::Status::success();
 }
@@ -50,9 +54,8 @@ void MediaSdpWireFormat::appendLine(
     std::string& output,
     const MediaSdpWireMediaFields& fields)
 {
-    const char* rtpType = addressType(fields.rtpAddressFamily);
     const char* rtcpType = addressType(fields.rtcpAddressFamily);
-    if (!rtpType || !rtcpType) {
+    if (!rtcpType) {
         return ::media::Status::failure(
             ::media::ErrorInfo::internalError(
                 "SDP media contains an unsupported address family"));
@@ -62,10 +65,6 @@ void MediaSdpWireFormat::appendLine(
         "m=" + std::string(fields.mediaKind) + " " +
             std::to_string(fields.rtpPort) + " RTP/AVP " +
             std::to_string(fields.payloadType));
-    appendLine(
-        output,
-        "c=IN " + std::string(rtpType) + " " +
-            std::string(fields.rtpNumericAddress));
     appendLine(
         output,
         "a=rtcp:" + std::to_string(fields.rtcpPort) +

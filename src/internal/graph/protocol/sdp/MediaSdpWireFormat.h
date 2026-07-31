@@ -22,8 +22,6 @@ struct MediaSdpWireMediaFields final {
     std::string_view mediaKind;
     std::uint16_t rtpPort;
     int payloadType;
-    MediaIpAddressFamily rtpAddressFamily;
-    std::string_view rtpNumericAddress;
     std::uint16_t rtcpPort;
     MediaIpAddressFamily rtcpAddressFamily;
     std::string_view rtcpNumericAddress;

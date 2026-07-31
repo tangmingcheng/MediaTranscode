@@ -27,14 +27,23 @@ reviewer confirms the fixes.
 
 The realtime CLI duration is now optional and confined to CLI monitoring;
 absence creates no deadline or fallback value in the production DAG. The nine
-existing real-media rows predate this policy change and do not prove
-source-driven termination. Their finite-source, two-minute VLC, receiver,
-lifecycle, error/drop/drift/CPU/memory reruns remain required before this
-score or verdict can be treated as final.
+real-media routes were rerun with finite sources and no `--max-duration`.
+During playback every route had zero worker/runtime errors and drops; all
+remained below 6% average process CPU with stable late working sets and no
+perceptible A/V drift. CLI termination followed source loss on every route.
 
 ## Acceptance Evidence
 
-- Nine real-media input/output paths have CLI logs under `out/acceptance/realtime-cross-layout/`.
+- Nine source-driven real-media input/output paths have final CLI logs under
+  `out/acceptance/realtime-cross-layout/`; human observation passed every row.
+- Final MP2T SDP was opened by VLC and directly by FFmpeg. FFmpeg decoded
+  20.00 seconds, 578 video frames, and about 3.75 MiB of audio at 1.01x with
+  exit code 0.
+- Final separate RTP SDP was directly decoded by FFmpeg for 20.00 seconds:
+  586 video frames and about 3.75 MiB of audio at 1.04x, exit code 0.
+- The shared SDP serializer now publishes the connection address at session
+  level and rejects media whose RTP destination differs from that planned
+  session address.
 - Post-fix MPEG-TS/UDP to MPEG-TS/RTP: 136.2 seconds, zero worker/runtime errors/drops, 5.475% process CPU, 251,850,752-byte final working set, and no perceptible A/V drift.
 - Post-fix MPEG-TS/UDP to separate RTP: 155.5 seconds, zero worker/runtime errors/drops, 5.236% process CPU, 245,547,008-byte final working set, and no perceptible A/V drift.
 - The other seven gates are configured for 145/170 seconds and each log exceeds 120 seconds.
@@ -50,6 +59,8 @@ score or verdict can be treated as final.
 2. URL/RTSP to MPEG-TS/UDP produced 42 bounded drops; longer source-specific observation is advisable.
 3. Manual-only gates provide no deterministic concurrency, fault-injection, or regression safety net.
 4. Long-duration generation-transition and fault-injection coverage remains manual.
+5. Finite URL/RTSP and MPEG-TS/UDP source loss is still surfaced as a runtime
+   error; URL/RTSP-to-MPEG-TS/RTP also reports a source-end audio flush error.
 
 ## Priority Improvements
 
