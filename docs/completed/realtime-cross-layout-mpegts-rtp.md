@@ -46,7 +46,10 @@ The shared SDP model now publishes one session-level `c=` address and rejects
 media whose RTP address differs from that planned session connection address.
 The final MP2T SDP remained RFC CRLF and opened directly in both FFmpeg and
 VLC. FFmpeg decoded 20.00 seconds, 578 video frames, and about 3.75 MiB of
-audio at 1.01x, exit code 0:
+audio at 1.01x, exit code 0. Because this receiver joined an already-running
+stream before the next complete parameter-set/key-frame boundary, startup also
+logged 23 `non-existing PPS 0 referenced` lines and 22 `no frame!` lines before
+normal decode began:
 
 ```powershell
 & 'D:\mabs\local64\bin-video\ffmpeg.exe' -hide_banner -loglevel info -protocol_whitelist 'file,udp,rtp' -i 'D:\Code\MyCode\MediaTranscode\out\acceptance\realtime-cross-layout\formal-tsudp-to-tsrtp\ffmpeg-receiver-20s-output.sdp' -t 20 -map 0:v:0 -map 0:a:0 -f null NUL
@@ -58,6 +61,25 @@ FFmpeg decoded 20.00 seconds, 586 video frames, and about 3.75 MiB of audio at
 
 ```powershell
 & 'D:\mabs\local64\bin-video\ffmpeg.exe' -hide_banner -loglevel info -protocol_whitelist 'file,udp,rtp' -i 'D:\Code\MyCode\MediaTranscode\out\acceptance\realtime-cross-layout\formal-rtp-to-rtp\ffmpeg-receiver-session-c-output.sdp' -t 20 -map 0:v:0 -map 0:a:0 -f null NUL
+```
+
+The exact 20-second receiver commands for all six SDP-producing matrix routes
+are retained below. They are replay commands for the corresponding generated
+artifact; the two final post-SDP-fix executions and results are the commands
+above.
+
+```powershell
+& 'D:\mabs\local64\bin-video\ffmpeg.exe' -hide_banner -loglevel info -protocol_whitelist 'file,udp,rtp' -i 'D:\Code\MyCode\MediaTranscode\out\acceptance\realtime-cross-layout\formal-rtp-to-rtp\final-head-output.sdp' -t 20 -map 0:v:0 -map 0:a:0 -f null NUL
+
+& 'D:\mabs\local64\bin-video\ffmpeg.exe' -hide_banner -loglevel info -protocol_whitelist 'file,udp,rtp' -i 'D:\Code\MyCode\MediaTranscode\out\acceptance\realtime-cross-layout\formal-url-to-rtp\final-head-output.sdp' -t 20 -map 0:v:0 -map 0:a:0 -f null NUL
+
+& 'D:\mabs\local64\bin-video\ffmpeg.exe' -hide_banner -loglevel info -protocol_whitelist 'file,udp,rtp' -i 'D:\Code\MyCode\MediaTranscode\out\acceptance\realtime-cross-layout\formal-tsudp-to-rtp\final-head-output.sdp' -t 20 -map 0:v:0 -map 0:a:0 -f null NUL
+
+& 'D:\mabs\local64\bin-video\ffmpeg.exe' -hide_banner -loglevel info -protocol_whitelist 'file,udp,rtp' -i 'D:\Code\MyCode\MediaTranscode\out\acceptance\realtime-cross-layout\formal-rtp-to-tsrtp\final-head-output.sdp' -t 20 -map 0:v:0 -map 0:a:0 -f null NUL
+
+& 'D:\mabs\local64\bin-video\ffmpeg.exe' -hide_banner -loglevel info -protocol_whitelist 'file,udp,rtp' -i 'D:\Code\MyCode\MediaTranscode\out\acceptance\realtime-cross-layout\formal-url-to-tsrtp\final-head-output.sdp' -t 20 -map 0:v:0 -map 0:a:0 -f null NUL
+
+& 'D:\mabs\local64\bin-video\ffmpeg.exe' -hide_banner -loglevel info -protocol_whitelist 'file,udp,rtp' -i 'D:\Code\MyCode\MediaTranscode\out\acceptance\realtime-cross-layout\formal-tsudp-to-tsrtp\final-head-output.sdp' -t 20 -map 0:v:0 -map 0:a:0 -f null NUL
 ```
 
 ## Final Post-Fix Gates

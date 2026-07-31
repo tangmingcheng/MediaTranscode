@@ -457,15 +457,15 @@
 
   Record only evidence-backed remaining risks in the completion document and PR. Do not hide them by reducing validation or adding fallback.
 
-- [ ] **Step 3: Commit and push all fixes**
+- [x] **Step 3: Commit and push all fixes**
 
   Keep every fix on `codex/realtime-cross-layout`, push the final branch, and verify the remote head matches local HEAD.
 
-- [ ] **Step 4: Create the PR**
+- [x] **Step 4: Create the PR**
 
   Create a ready PR to `master` summarizing planner orthogonality, MP2T output, nine real-media paths, A/V regression results, quality score, and residual risks.
 
-- [ ] **Step 5: Dispatch a fresh PR-review agent**
+- [x] **Step 5: Dispatch a fresh PR-review agent**
 
   A new agent reviews the PR diff and acceptance evidence against `AGENTS.md`, the approved design, and `QUALITY_SCORE.md`. It reports blocking/nonblocking findings and an explicit pass/fail decision.
 

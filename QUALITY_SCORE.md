@@ -7,21 +7,21 @@
 | Architecture and DAG model | 15 | 15 | Input clock and output transport are orthogonal planner products; all nine layouts converge on one canonical scheduler and exactly one output adapter. |
 | Planner decision ownership | 12 | 12 | Protocol, topology, queue, timing, and transport facts are planner-owned; downstream plan decoding now receives every zero-value policy explicitly. |
 | Scheduling and concurrency | 13 | 11 | Atomic generation/audio commits, bounded queues, persistent RTP sequence/counter state, key-frame restart, and TS discontinuity are explicit. A clean real-media generation-transition gate is still missing. |
-| Node responsibility and decoupling | 12 | 8 | Clock adapters, mux, transport, SDP, validation, and runtime state are separated, but the 790-line MPEG-TS plan codec and several 400-633-line runtime/planner files remain broad. |
+| Node responsibility and decoupling | 12 | 8 | Clock adapters, mux, transport, SDP, validation, and runtime state are separated, but several scheduler, factory, runtime, mux, builder, and planner files remain 734-1,050 lines. |
 | RAII and resource safety | 10 | 10 | FFmpeg objects, sockets, sessions, packet cursors, commit reservations, and shared continuity state use scoped ownership. |
 | Performance and resource efficiency | 10 | 9 | Accepted paths stayed near 3-6% process CPU with stable late working sets; one URL/RTSP-to-TS/UDP gate recorded 42 bounded drops. |
-| Error model and failure boundaries | 8 | 8 | Invalid and incomplete plans fail closed; runtime generation, transport, and commit identities are checked explicitly. |
+| Error model and failure boundaries | 8 | 7 | Invalid plans fail closed and identities are checked, but finite source loss still produces worker errors, downstream abort cascades, and one URL/RTSP audio-flush/live-lineage failure. |
 | Tests and verification | 10 | 9 | All nine paths have real CLI/FFmpeg/VLC evidence. Post-review reruns cover the exact remote-IP MP2T failure, FFmpeg decode from first output, a 60-second visible gate, and cross-generation continuity telemetry. |
 | Maintainability and documentation | 10 | 7 | Architecture, README, plan, completion report, and exact commands for all nine routes are current; positional option serialization and large files remain costly. |
-| **Total** | **100** | **89** | **Provisional B+: blocking review findings are fixed and awaiting independent re-review.** |
+| **Total** | **100** | **88** | **Provisional B+: active playback is accepted; source-end lifecycle classification and cleanup remain incomplete.** |
 
 ## Review Verdict
 
-**RE-REVIEW PENDING.** The previous independent review found three blockers:
-32-bit RTCP rollover, incomplete exact command evidence, and missing observable
-cross-generation outer-RTP continuity. The implementation and evidence now
-address all three; the score and verdict remain provisional until the same
-reviewer confirms the fixes.
+**QUALITY SCORE REVIEW: 88/100, B+. PR RE-REVIEW PENDING.** The independent
+scoring review confirmed that the previous 32-bit RTCP rollover, exact-command,
+and cross-generation continuity blockers are addressed. It reduced the error
+boundary score by one point because finite source loss still produces runtime
+errors and downstream cleanup cascades.
 
 ## Source-Driven Lifetime Follow-Up
 
@@ -61,9 +61,13 @@ perceptible A/V drift. CLI termination followed source loss on every route.
 4. Long-duration generation-transition and fault-injection coverage remains manual.
 5. Finite URL/RTSP and MPEG-TS/UDP source loss is still surfaced as a runtime
    error; URL/RTSP-to-MPEG-TS/RTP also reports a source-end audio flush error.
+6. A late-joining MP2T FFmpeg receiver logged missing-PPS/no-frame startup
+   errors until the next decodable parameter-set/key-frame boundary.
 
 ## Priority Improvements
 
 1. Resolve or formally bound the 42 URL/RTSP-to-MPEG-TS/UDP drops.
 2. Add a longer manual generation-transition/fault-injection gate.
 3. Split the MPEG-TS plan codec and other oversized runtime/planner files by protocol fact group and responsibility.
+4. Reduce late-join MP2T decode latency by proving parameter-set/key-frame
+   availability at receiver attachment.
