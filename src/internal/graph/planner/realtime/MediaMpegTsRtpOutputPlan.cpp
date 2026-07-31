@@ -40,7 +40,7 @@ MediaMpegTsRtpOutputPlan::create(
         senderReportInterval <= MediaRunningTime::fromNanoseconds(0) ||
         maximumDatagramBytes >
             static_cast<std::size_t>((std::numeric_limits<int>::max)() / 2) ||
-        transport.sendBufferBytes() !=
+        transport.sendBufferBytes() <
             static_cast<int>(maximumDatagramBytes * 2) ||
         rtp.port() == 0 || (rtp.port() % 2) != 0 ||
         rtcp.port() != rtp.port() + 1 ||

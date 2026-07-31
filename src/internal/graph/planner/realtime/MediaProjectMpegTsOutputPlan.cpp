@@ -83,6 +83,9 @@ constexpr MediaTsContinuitySeeds ProjectContinuitySeeds{0, 0, 0, 0};
             ProjectClockTimeBaseNumerator ||
         parameters.clock.timestampTimeBaseDenominator !=
             ProjectClockTimeBaseDenominator ||
+        parameters.startupEmissionPreroll.nanoseconds() <= 0 ||
+        parameters.startupEmissionPreroll >
+            parameters.transportDecodeLead ||
         parameters.packetSize != ProjectPacketSize ||
         parameters.continuity != ProjectContinuitySeeds ||
         parameters.maximumAudioAccessUnitSamples !=
@@ -126,6 +129,7 @@ constexpr MediaTsContinuitySeeds ProjectContinuitySeeds{0, 0, 0, 0};
     const MediaEncodedPacketLayout& videoPacketLayout,
     const MediaResolvedAudioOutputPlan& audioOutput,
     MediaRunningTime transportDecodeLead,
+    MediaRunningTime startupEmissionPreroll,
     MediaOutputTransportKind transportKind,
     std::uint8_t maximumPacketsPerDatagram)
 {
@@ -160,7 +164,8 @@ constexpr MediaTsContinuitySeeds ProjectContinuitySeeds{0, 0, 0, 0};
             MediaRunningTime::fromNanoseconds(ProjectMaximumPcrJitterNs),
             ProjectClockTimeBaseNumerator,
             ProjectClockTimeBaseDenominator},
-        transportDecodeLead, ProjectPacketSize, ProjectContinuitySeeds,
+        transportDecodeLead, startupEmissionPreroll,
+        ProjectPacketSize, ProjectContinuitySeeds,
         maximumPacketsPerDatagram, transportKind,
         audioOutput.codecFrameSamples()});
     if (!mux) return ::media::Result<MediaProjectMpegTsOutputPlan>::failure(mux.error());

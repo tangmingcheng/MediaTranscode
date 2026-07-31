@@ -55,6 +55,7 @@ struct MediaTsMuxPlanParameters final {
     MediaTsAacAdtsPlan aac;
     MediaTsOutputClockPolicy clock;
     MediaRunningTime transportDecodeLead;
+    MediaRunningTime startupEmissionPreroll;
     std::uint16_t packetSize;
     MediaTsContinuitySeeds continuity;
     std::uint8_t maximumPacketsPerDatagram;
@@ -74,6 +75,7 @@ public:
     const MediaTsMuxPlanParameters& parameters() const noexcept;
     const MediaTsOutputClockPolicy& clockPolicy() const noexcept;
     MediaRunningTime transportDecodeLead() const noexcept;
+    MediaRunningTime startupEmissionPreroll() const noexcept;
 
 private:
     explicit MediaTsMuxPlan(MediaTsMuxPlanParameters parameters) noexcept;

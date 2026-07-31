@@ -374,10 +374,14 @@ MediaRealtimeAvSyncNodeConfigurator::configureActivationSequencer(
     if (auto status = setOption(
         graph, node, "activated_startup_release_sequencer.sync_group",
         plan.groupKey.value()); !status) return status;
+    if (plan.activationOutputLead.nanoseconds() <= 0) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Activated startup release sequencer requires planner-owned output lead"));
+    }
     return setOption(
         graph, node, "activated_startup_release_sequencer.output_lead_ns",
-        std::to_string(
-            plan.synchronization.startup.outputLeadNs->nanoseconds()));
+        std::to_string(plan.activationOutputLead.nanoseconds()));
 }
 
 ::media::Result<void>

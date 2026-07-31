@@ -25,7 +25,7 @@ constexpr const char* VariantKey =
     "project_mpeg_ts_plan.transport.variant";
 constexpr const char* MuxSessionKindKey =
     "project_mpeg_ts_plan.mux_session_kind";
-constexpr std::size_t MuxFieldCount = 32;
+constexpr std::size_t MuxFieldCount = 33;
 
 constexpr std::array<const char*, 8> UdpKeys{
     GroupKey,
@@ -171,7 +171,8 @@ std::string encodeMux(const MediaTsMuxPlan& muxPlan)
             << static_cast<unsigned>(p.continuity.audio) << ','
             << static_cast<unsigned>(p.maximumPacketsPerDatagram) << ','
             << static_cast<unsigned>(p.transportKind) << ','
-            << p.maximumAudioAccessUnitSamples;
+            << p.maximumAudioAccessUnitSamples << ','
+            << p.startupEmissionPreroll.nanoseconds();
     return encoded.str();
 }
 
@@ -217,6 +218,7 @@ std::string encodeMux(const MediaTsMuxPlan& muxPlan)
         f[19] > std::uint64_t{INT64_MAX} ||
         f[20] > std::uint64_t{INT64_MAX} ||
         f[23] > std::uint64_t{INT64_MAX} ||
+        f[32] > std::uint64_t{INT64_MAX} ||
         f[11] > 1 || f[13] > 1 ||
         f[30] > static_cast<unsigned>(
                     MediaOutputTransportKind::RtpAvp)) {
@@ -242,6 +244,7 @@ std::string encodeMux(const MediaTsMuxPlan& muxPlan)
                 static_cast<std::int64_t>(f[20])),
             timeNumerator.value(), timeDenominator.value()},
         MediaRunningTime::fromNanoseconds(static_cast<std::int64_t>(f[23])),
+        MediaRunningTime::fromNanoseconds(static_cast<std::int64_t>(f[32])),
         packetSize.value(),
         MediaTsContinuitySeeds{continuityPat.value(), continuityPmt.value(),
                                continuityVideo.value(),

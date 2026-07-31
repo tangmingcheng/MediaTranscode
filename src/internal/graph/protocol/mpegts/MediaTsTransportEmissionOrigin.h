@@ -9,8 +9,14 @@ inline ::media::Result<MediaRunningTime> mediaTsTransportEmissionOrigin(
     const MediaTsMuxPlan& plan,
     const MediaPlaybackEpoch& epoch)
 {
-    auto origin = epoch.masterRelease.checkedSubtract(
+    auto decodeOrigin = epoch.masterRelease.checkedSubtract(
         plan.transportDecodeLead());
+    if (!decodeOrigin) {
+        return ::media::Result<MediaRunningTime>::failure(
+            decodeOrigin.error());
+    }
+    auto origin = decodeOrigin.value().checkedSubtract(
+        plan.startupEmissionPreroll());
     if (!origin) {
         return ::media::Result<MediaRunningTime>::failure(origin.error());
     }

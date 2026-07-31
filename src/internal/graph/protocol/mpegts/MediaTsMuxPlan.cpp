@@ -134,6 +134,9 @@ MediaTsMuxPlan::maximumPacketsPerRtpDatagram(
         return invalid("contains an invalid output clock policy");
     }
     if (parameters.transportDecodeLead.nanoseconds() <= 0 ||
+        parameters.startupEmissionPreroll.nanoseconds() <= 0 ||
+        parameters.startupEmissionPreroll >
+            parameters.transportDecodeLead ||
         parameters.packetSize != 188 ||
         !validContinuitySeeds(parameters.continuity) ||
         parameters.maximumPacketsPerDatagram < 1 ||
@@ -164,6 +167,11 @@ const MediaTsOutputClockPolicy& MediaTsMuxPlan::clockPolicy() const noexcept
 MediaRunningTime MediaTsMuxPlan::transportDecodeLead() const noexcept
 {
     return m_parameters.transportDecodeLead;
+}
+
+MediaRunningTime MediaTsMuxPlan::startupEmissionPreroll() const noexcept
+{
+    return m_parameters.startupEmissionPreroll;
 }
 
 } // namespace media::ffmpeg::graph

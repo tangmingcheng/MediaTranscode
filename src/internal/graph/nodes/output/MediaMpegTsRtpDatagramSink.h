@@ -50,6 +50,10 @@ private:
     ::media::Status fail(::media::ErrorInfo error) noexcept;
     ::media::Status terminalStatus() const;
     ::media::Status closeTransport() noexcept;
+    void logContinuity(
+        const char* stage,
+        const MediaMpegTsRtpCounterSnapshot& counters,
+        std::uint16_t sequenceNumber) const;
 
     std::unique_ptr<MediaRtpUdpSenderTransport> m_transport;
     MediaMpegTsRtpPacketizer m_packetizer;
@@ -60,6 +64,8 @@ private:
     std::uint32_t m_ssrc;
     std::uint64_t m_generation;
     std::optional<MediaRunningTime> m_lastEmitOnMaster;
+    std::optional<std::uint16_t> m_firstSequenceNumber;
+    std::optional<std::uint16_t> m_lastSequenceNumber;
     std::optional<::media::ErrorInfo> m_failure;
     bool m_closed = false;
 };

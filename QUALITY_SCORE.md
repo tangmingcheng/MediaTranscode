@@ -1,6 +1,6 @@
 # MediaTranscode Quality Score
 
-> Scope: `codex/realtime-cross-layout` against `origin/master` at `3852ca99fb8d2efc5fd164f9464e442165b9f6d5`, including the current tracked and named untracked feature files. Updated 2026-07-30.
+> Scope: `codex/realtime-cross-layout` against `origin/master` at `3852ca99fb8d2efc5fd164f9464e442165b9f6d5`, including the current tracked feature files. Updated 2026-07-31.
 
 | Dimension | Weight | Score | Evidence summary |
 |---|---:|---:|---|
@@ -11,13 +11,17 @@
 | RAII and resource safety | 10 | 10 | FFmpeg objects, sockets, sessions, packet cursors, commit reservations, and shared continuity state use scoped ownership. |
 | Performance and resource efficiency | 10 | 9 | Accepted paths stayed near 3-6% process CPU with stable late working sets; one URL/RTSP-to-TS/UDP gate recorded 42 bounded drops. |
 | Error model and failure boundaries | 8 | 8 | Invalid and incomplete plans fail closed; runtime generation, transport, and commit identities are checked explicitly. |
-| Tests and verification | 10 | 9 | All nine paths have real CLI/FFmpeg/VLC evidence beyond two minutes. The two post-fix gates ran 136.2 and 155.5 seconds with zero worker/runtime errors or drops. |
-| Maintainability and documentation | 10 | 7 | Architecture, README, plan, completion report, and exact commands are current and consistently encoded; positional option serialization and large files remain costly. |
-| **Total** | **100** | **89** | **B+: implementation, repository standards, and real-media acceptance pass; remaining gaps are non-blocking maintainability and long-soak risks.** |
+| Tests and verification | 10 | 9 | All nine paths have real CLI/FFmpeg/VLC evidence. Post-review reruns cover the exact remote-IP MP2T failure, FFmpeg decode from first output, a 60-second visible gate, and cross-generation continuity telemetry. |
+| Maintainability and documentation | 10 | 7 | Architecture, README, plan, completion report, and exact commands for all nine routes are current; positional option serialization and large files remain costly. |
+| **Total** | **100** | **89** | **Provisional B+: blocking review findings are fixed and awaiting independent re-review.** |
 
 ## Review Verdict
 
-**FINAL PASS.** Planner-only ownership, RAII, responsibilities, duplicate semantics, temporary-test cleanup, UTF-8/CRLF hygiene, build, and all nine real-media gates satisfy the delivery contract.
+**RE-REVIEW PENDING.** The previous independent review found three blockers:
+32-bit RTCP rollover, incomplete exact command evidence, and missing observable
+cross-generation outer-RTP continuity. The implementation and evidence now
+address all three; the score and verdict remain provisional until the same
+reviewer confirms the fixes.
 
 ## Acceptance Evidence
 
@@ -27,6 +31,9 @@
 - The other seven gates are configured for 145/170 seconds and each log exceeds 120 seconds.
 - No temporary test source, target, executable, object, symbol, or build directory remains.
 - URL/RTSP to MPEG-TS/UDP completed with zero worker/runtime errors and 42 bounded drops.
+- The exact `192.168.96.185:52500` MP2T command completed 30 seconds after sender-buffer planning changed, with zero worker/runtime errors or drops.
+- A final local visible MP2T gate completed 60 seconds with zero worker/runtime errors or drops, 4.60% average process CPU, stable late memory, no corruption, and no perceptible A/V drift.
+- Generation-first telemetry proved that sequence deltas and cumulative packet-count deltas matched exactly across three forced transitions.
 
 ## Primary Risks
 

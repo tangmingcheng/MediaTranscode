@@ -16,6 +16,7 @@ constexpr int RtpSessionStartupDelayMs = 1000;
 constexpr int64_t PacingHeadroomNumerator = 5;
 constexpr int64_t PacingHeadroomDenominator = 4;
 constexpr int64_t PacingBurstPackets = 2;
+constexpr int64_t RtpSenderPressureWindowMs = 100;
 
 
 bool validRtpPort(std::size_t port) noexcept
@@ -32,6 +33,50 @@ int64_t pacingBytesPerSecond(int64_t bitsPerSecond) noexcept
 {
     const int64_t bytes = (bitsPerSecond + 7) / 8;
     return std::max<int64_t>(1, bytes * PacingHeadroomNumerator / PacingHeadroomDenominator);
+}
+
+::media::Result<int> plannedRtpSendBufferBytes(
+    int64_t bitsPerSecond,
+    int maximumDatagramBytes,
+    std::uint64_t maximumAccessUnitBytes)
+{
+    if (bitsPerSecond <= 0 || maximumDatagramBytes <= 0 ||
+        maximumAccessUnitBytes == 0) {
+        return ::media::Result<int>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "RTP sender buffer requires positive bitrate, datagram, and access-unit facts"));
+    }
+    const int64_t bytesPerSecond = pacingBytesPerSecond(bitsPerSecond);
+    if (bytesPerSecond >
+        std::numeric_limits<int64_t>::max() / RtpSenderPressureWindowMs) {
+        return ::media::Result<int>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "RTP sender buffer bitrate exceeds the planned pressure window"));
+    }
+    const int64_t pressureBytes =
+        bytesPerSecond * RtpSenderPressureWindowMs / 1000;
+    const int64_t minimumBurstBytes =
+        static_cast<int64_t>(maximumDatagramBytes) * PacingBurstPackets;
+    if (maximumAccessUnitBytes >
+        static_cast<std::uint64_t>(
+            std::numeric_limits<int64_t>::max() /
+            PacingHeadroomNumerator)) {
+        return ::media::Result<int>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "RTP sender access-unit bound exceeds encapsulation headroom"));
+    }
+    const int64_t accessUnitBurstBytes =
+        static_cast<int64_t>(maximumAccessUnitBytes) *
+        PacingHeadroomNumerator / PacingHeadroomDenominator;
+    const int64_t selected = std::max(
+        std::max(pressureBytes, minimumBurstBytes),
+        accessUnitBurstBytes);
+    if (selected > std::numeric_limits<int>::max()) {
+        return ::media::Result<int>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "RTP sender buffer exceeds the socket option range"));
+    }
+    return ::media::Result<int>::success(static_cast<int>(selected));
 }
 
 void applyPacing(MediaRealtimeRtpOutputNodePlan& output, int64_t bitsPerSecond) noexcept
@@ -165,16 +210,41 @@ MediaLatencyPolicy muxPacing() noexcept
                     ::media::ErrorInfo::notInitialized(
                         "MPEG-TS RTP output requires explicit endpoint and datagram facts"));
             }
-            if (*request.output.packetSize >
-                std::numeric_limits<int>::max() / 2) {
+            if (!plan.videoParameters.bitrateKbps ||
+                *plan.videoParameters.bitrateKbps <= 0 ||
+                !request.avSyncStartup.maximumVideoUnitBytes ||
+                *request.avSyncStartup.maximumVideoUnitBytes == 0 ||
+                (output.singleStreamMux.expectAudio &&
+                 (!request.parameters.audio.bitrateKbps ||
+                  *request.parameters.audio.bitrateKbps <= 0 ||
+                  !request.avSyncStartup.maximumAudioUnitBytes ||
+                  *request.avSyncStartup.maximumAudioUnitBytes == 0))) {
                 return ::media::Status::failure(
-                    ::media::ErrorInfo::invalidArgument(
-                        "MPEG-TS RTP datagram size exceeds sender buffer range"));
+                    ::media::ErrorInfo::notInitialized(
+                        "MPEG-TS RTP sender requires resolved output bitrates"));
+            }
+            const int64_t totalBitrate =
+                static_cast<int64_t>(*plan.videoParameters.bitrateKbps) * 1000 +
+                (output.singleStreamMux.expectAudio
+                     ? static_cast<int64_t>(
+                           *request.parameters.audio.bitrateKbps) * 1000
+                     : 0);
+            auto sendBuffer = plannedRtpSendBufferBytes(
+                totalBitrate, *request.output.packetSize,
+                std::max(
+                    static_cast<std::uint64_t>(
+                        *request.avSyncStartup.maximumVideoUnitBytes),
+                    output.singleStreamMux.expectAudio
+                        ? static_cast<std::uint64_t>(
+                              *request.avSyncStartup.maximumAudioUnitBytes)
+                        : std::uint64_t{0}));
+            if (!sendBuffer) {
+                return ::media::Status::failure(sendBuffer.error());
             }
             auto transport = rtpTransport(
                 request.output.host, *request.output.basePort,
                 *request.output.packetSize,
-                *request.output.packetSize * 2);
+                sendBuffer.value());
             if (!transport) {
                 return ::media::Status::failure(transport.error());
             }

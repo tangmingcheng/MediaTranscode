@@ -268,6 +268,7 @@ void planTsInput(MediaAvSyncPlan& plan,
         resolvedFacts.videoCodecName, resolvedFacts.videoPacketLayout,
         resolvedFacts.audioOutput,
         *plan.startup.outputLeadNs,
+        *plan.startup.maximumInitialSkewNs,
         *request.output.transport,
         maximumPacketsPerDatagram);
     if (!resolvedOutput) {

@@ -7,8 +7,8 @@
 namespace media::ffmpeg::graph {
 namespace {
 
-constexpr std::uint64_t MaximumRtcpCounter =
-    (std::numeric_limits<std::uint32_t>::max)();
+constexpr std::uint64_t MaximumCumulativeCounter =
+    (std::numeric_limits<std::uint64_t>::max)();
 
 } // namespace
 
@@ -80,12 +80,12 @@ MediaMpegTsRtpContinuityState::reservePacket(
 {
     std::unique_lock lock(m_counterMutex);
     if (payloadOctets == 0 ||
-        m_packetCount == MaximumRtcpCounter ||
-        payloadOctets > MaximumRtcpCounter - m_octetCount) {
+        m_packetCount == MaximumCumulativeCounter ||
+        payloadOctets > MaximumCumulativeCounter - m_octetCount) {
         return ::media::Result<
             MediaMpegTsRtpPacketCommitReservation>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "MP2T RTP sender counter increment would overflow"));
+                "MP2T RTP cumulative sender counter would overflow"));
     }
     return ::media::Result<
         MediaMpegTsRtpPacketCommitReservation>::success(

@@ -82,6 +82,7 @@ struct MediaRealtimeAvSyncRuntimePlan final {
     MediaGraphQueueParameters queues;
     MediaRealtimeEdgePolicySet edgePolicies;
     MediaThreadingPolicy threadingPolicy;
+    MediaRunningTime activationOutputLead;
     MediaAvGenerationTransitionPlan transition;
     MediaRealtimeAvSyncPlanningFacts planningFacts;
     MediaAudioCorrectionReachabilityPlan audioCorrection;

@@ -256,7 +256,7 @@ bool validRtpStream(
         rtp->maximumDatagramBytes() >
             static_cast<std::size_t>(
                 (std::numeric_limits<int>::max)() / 2) ||
-        sender.sendBufferBytes() !=
+        sender.sendBufferBytes() <
             static_cast<int>(rtp->maximumDatagramBytes() * 2) ||
         rtp->tsPacketsPerPayload() != maximumPackets.value() ||
         mux.maximumPacketsPerDatagram != rtp->tsPacketsPerPayload() ||

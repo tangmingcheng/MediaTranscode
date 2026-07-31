@@ -1,8 +1,10 @@
 #include "internal/graph/nodes/output/MediaMpegTsRtpDatagramSink.h"
 
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/protocol/rtp/MediaRtcpSenderReportGenerator.h"
 
 #include <new>
+#include <sstream>
 #include <utility>
 
 namespace media::ffmpeg::graph {
@@ -108,6 +110,27 @@ MediaMpegTsRtpDatagramSink::create(
     return terminalStatus();
 }
 
+void MediaMpegTsRtpDatagramSink::logContinuity(
+    const char* stage,
+    const MediaMpegTsRtpCounterSnapshot& counters,
+    std::uint16_t sequenceNumber) const
+{
+    std::ostringstream out;
+    out << "mp2t_rtp_continuity stage=" << stage
+        << " generation=" << m_generation
+        << " sequence=" << sequenceNumber
+        << " cumulative_packet_count=" << counters.packetCount
+        << " cumulative_octet_count=" << counters.octetCount
+        << " rtcp_packet_count_wire="
+        << static_cast<std::uint32_t>(counters.packetCount)
+        << " rtcp_octet_count_wire="
+        << static_cast<std::uint32_t>(counters.octetCount);
+    mediaGraphDiagnosticLog(
+        MediaGraphDiagnosticLevel::State,
+        MediaGraphDiagnosticPhase::RuntimeNode,
+        out.str());
+}
+
 ::media::Status MediaMpegTsRtpDatagramSink::dispatchSenderReport(
     MediaRunningTime now,
     const MediaMpegTsRtpCounterSnapshot& counters)
@@ -172,35 +195,50 @@ MediaMpegTsRtpDatagramSink::create(
         auto status = fail(packet.error());
         return ::media::Result<std::size_t>::failure(status.error());
     }
-    auto counterReservation = m_continuity->reservePacket(
-        packet.value().payloadOctets());
-    if (!counterReservation) {
-        auto status = fail(counterReservation.error());
-        return ::media::Result<std::size_t>::failure(status.error());
-    }
-    const MediaMpegTsRtpCounterSnapshot counters{
-        counterReservation.value().packetCount(),
-        counterReservation.value().octetCount()};
-    auto report = dispatchSenderReport(emitOnMaster, counters);
-    if (!report) {
-        auto status = fail(report.error());
-        return ::media::Result<std::size_t>::failure(status.error());
-    }
-    try {
-        auto sent = m_transport->sendRtp(packet.value().datagram());
-        if (!sent) {
-            auto status = fail(sent.error());
+    MediaMpegTsRtpCounterSnapshot committedCounters{};
+    {
+        auto counterReservation = m_continuity->reservePacket(
+            packet.value().payloadOctets());
+        if (!counterReservation) {
+            auto status = fail(counterReservation.error());
             return ::media::Result<std::size_t>::failure(status.error());
         }
-    } catch (const MediaUdpAmbiguousDeliveryError& error) {
-        auto status = fail(error.cause());
-        return ::media::Result<std::size_t>::failure(status.error());
-    } catch (...) {
-        auto status = fail(::media::ErrorInfo::internalError(
-            "MP2T RTP transport threw during datagram delivery"));
-        return ::media::Result<std::size_t>::failure(status.error());
+        const MediaMpegTsRtpCounterSnapshot counters{
+            counterReservation.value().packetCount(),
+            counterReservation.value().octetCount()};
+        auto report = dispatchSenderReport(emitOnMaster, counters);
+        if (!report) {
+            auto status = fail(report.error());
+            return ::media::Result<std::size_t>::failure(status.error());
+        }
+        try {
+            auto sent = m_transport->sendRtp(packet.value().datagram());
+            if (!sent) {
+                auto status = fail(sent.error());
+                return ::media::Result<std::size_t>::failure(status.error());
+            }
+        } catch (const MediaUdpAmbiguousDeliveryError& error) {
+            auto status = fail(error.cause());
+            return ::media::Result<std::size_t>::failure(status.error());
+        } catch (...) {
+            auto status = fail(::media::ErrorInfo::internalError(
+                "MP2T RTP transport threw during datagram delivery"));
+            return ::media::Result<std::size_t>::failure(status.error());
+        }
+        counterReservation.value().commit();
+        committedCounters = MediaMpegTsRtpCounterSnapshot{
+            counterReservation.value().packetCount(),
+            counterReservation.value().octetCount()};
     }
-    counterReservation.value().commit();
+    const auto emittedSequence = packet.value().sequenceNumber();
+    m_lastSequenceNumber = emittedSequence;
+    if (!m_firstSequenceNumber) {
+        m_firstSequenceNumber = emittedSequence;
+        logContinuity(
+            "generation_first_packet",
+            committedCounters,
+            emittedSequence);
+    }
     m_lastEmitOnMaster = emitOnMaster;
     return ::media::Result<std::size_t>::success(
         completeTsPackets.size());
@@ -255,6 +293,12 @@ MediaMpegTsRtpDatagramSink::create(
     if (!m_failure) {
         auto terminal = sendTerminalReport();
         if (!terminal && !m_failure) m_failure = terminal.error();
+    }
+    if (m_lastSequenceNumber) {
+        logContinuity(
+            "generation_terminal",
+            m_continuity->counterSnapshot(),
+            *m_lastSequenceNumber);
     }
     auto transportClosed = closeTransport();
     if (!transportClosed && !m_failure) {

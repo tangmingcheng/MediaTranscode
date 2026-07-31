@@ -16,6 +16,7 @@ public:
         const MediaEncodedPacketLayout& videoPacketLayout,
         const MediaResolvedAudioOutputPlan& audioOutput,
         MediaRunningTime transportDecodeLead,
+        MediaRunningTime startupEmissionPreroll,
         MediaOutputTransportKind transportKind,
         std::uint8_t maximumPacketsPerDatagram);
     static ::media::Result<MediaProjectMpegTsOutputPlan> fromEncodedFacts(

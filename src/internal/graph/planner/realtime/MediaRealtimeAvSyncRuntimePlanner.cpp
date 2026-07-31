@@ -276,6 +276,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
     }
 
     MediaAvSyncOutputAdapterKind adapter;
+    std::optional<MediaRunningTime> activationOutputLead;
     std::optional<std::variant<MediaSeparateRtpOutputRuntimePlan,
                                MediaProjectMpegTsRuntimeOutputPlan>> protocolOutput;
     if (synchronization.rtpOutput) {
@@ -312,6 +313,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
                 sdp.error());
         }
         adapter = MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp;
+        activationOutputLead = *synchronization.startup.outputLeadNs;
         protocolOutput.emplace(std::in_place_type<MediaSeparateRtpOutputRuntimePlan>,
             MediaSeparateRtpOutputRuntimePlan{
                 std::move(video).value(),
@@ -334,6 +336,14 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
                 accepted.error());
         }
+        auto projectActivationLead =
+            accepted.value().muxPlan().transportDecodeLead().checkedAdd(
+                accepted.value().muxPlan().startupEmissionPreroll());
+        if (!projectActivationLead) {
+            return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
+                projectActivationLead.error());
+        }
+        activationOutputLead = projectActivationLead.value();
         std::optional<std::variant<
             MediaMpegTsUdpOutputPlan,
             MediaMpegTsRtpOutputPlan>> transport;
@@ -399,6 +409,11 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
                 "A/V runtime output authority is unsupported"));
     }
 
+    if (!activationOutputLead) {
+        return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "A/V runtime output requires planner-owned activation lead"));
+    }
     auto transition = MediaAvGenerationTransitionPlanner::plan(
         adapter,
         *synchronization.sourceClockMode,
@@ -414,6 +429,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             outer.queues,
             outer.edgePolicies,
             outer.threadingPolicy,
+            *activationOutputLead,
             std::move(transition),
             facts.value(),
             correction.value().correction});
