@@ -1,9 +1,11 @@
 #pragma once
 
+#include "internal/graph/model/MediaAvSyncSourceClockMode.h"
+#include "internal/graph/model/MediaControlGenerationPolicy.h"
+#include "internal/graph/model/MediaGraphTypes.h"
 #include "internal/graph/protocol/mpegts/MediaTsMuxPlan.h"
 #include "internal/graph/protocol/rtp/MediaRtcpCompositionPolicy.h"
 #include "internal/graph/protocol/rtp/MediaRtpClockGroupPolicy.h"
-#include "internal/graph/sync/MediaAvSyncTopology.h"
 #include "internal/graph/time/MediaRunningTime.h"
 
 #include <cstdint>
@@ -12,11 +14,6 @@
 #include <string>
 
 namespace media::ffmpeg::graph {
-
-enum class MediaAvSyncSourceClockMode : std::uint8_t {
-    RtpSenderReports = 0,
-    MpegTsPcr = 1
-};
 
 enum class MediaAvSyncMasterClockMode : std::uint8_t {
     SteadyMonotonic = 0
@@ -128,22 +125,45 @@ struct MediaAvSyncRtpOutputPolicy {
     std::optional<MediaRunningTime> senderReportIntervalNs;
 };
 
-struct MediaAvSyncRtpPlan {
+struct MediaAvSyncRtpInputPlan {
     MediaAvSyncRtpInputStreamPlan videoInput;
     MediaAvSyncRtpInputStreamPlan audioInput;
     MediaAvSyncRtpInputPolicy input;
+};
+
+struct MediaAvSyncRtpOutputPlan {
     MediaAvSyncRtpOutputStreamPlan videoOutput;
     MediaAvSyncRtpOutputStreamPlan audioOutput;
     MediaAvSyncRtpOutputPolicy output;
 };
 
-struct MediaAvSyncTsPlan {
+struct MediaAvSyncMpegTsInputPlan {
     std::optional<int> programNumber;
     std::optional<int> programMapPid;
     std::optional<int> videoPid;
     std::optional<int> audioPid;
     std::optional<int> pcrPid;
+};
+
+struct MediaAvSyncDemuxTimestampInputPlan {
+    MediaRational videoTimeBase;
+    MediaRational audioTimeBase;
+    std::optional<MediaRunningTime> firstWindowMaximumSkewNs;
+    std::optional<MediaRunningTime> discontinuityThresholdNs;
+    std::optional<std::uint64_t> initialGeneration;
+    std::optional<MediaRunningTime> canonicalTargetEpochNs;
+};
+
+struct MediaAvSyncPreparedDemuxTimestampFacts {
+    int videoStreamIndex;
+    MediaRational videoTimeBase;
+    int audioStreamIndex;
+    MediaRational audioTimeBase;
+};
+
+struct MediaAvSyncProjectMpegTsOutputPlan {
     std::optional<MediaTsMuxPlan> outputMux;
+    std::optional<bool> useSharedNtpEpoch;
 };
 
 struct MediaAvSyncMetricsPolicy {
@@ -162,8 +182,9 @@ struct MediaAvSyncMetricsPolicy {
 };
 
 struct MediaAvSyncPlan {
-    std::optional<MediaAvSyncTopology> topology;
     std::optional<MediaAvSyncSourceClockMode> sourceClockMode;
+    std::optional<MediaControlGenerationPolicy>
+        controlGenerationPolicy;
     std::optional<MediaAvSyncMasterClockMode> masterClockMode;
     std::optional<int> canonicalTimeBaseNumerator;
     std::optional<int> canonicalTimeBaseDenominator;
@@ -171,8 +192,11 @@ struct MediaAvSyncPlan {
     MediaAvSyncAudioServoPolicy audioServo;
     MediaAvSyncVideoPolicy video;
     MediaAvSyncRecoveryPolicy recovery;
-    std::optional<MediaAvSyncRtpPlan> rtp;
-    std::optional<MediaAvSyncTsPlan> ts;
+    std::optional<MediaAvSyncRtpInputPlan> rtpInput;
+    std::optional<MediaAvSyncMpegTsInputPlan> mpegTsInput;
+    std::optional<MediaAvSyncDemuxTimestampInputPlan> demuxTimestampInput;
+    std::optional<MediaAvSyncRtpOutputPlan> rtpOutput;
+    std::optional<MediaAvSyncProjectMpegTsOutputPlan> projectMpegTsOutput;
     MediaAvSyncMetricsPolicy metrics;
 };
 

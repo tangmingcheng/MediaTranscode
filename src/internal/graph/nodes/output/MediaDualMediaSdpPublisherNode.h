@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
+#include "internal/graph/protocol/sdp/MediaRtpSdpDescription.h"
 #include "internal/graph/runtime/filesystem/MediaAtomicUtf8FilePublisher.h"
 #include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
 
@@ -49,6 +50,9 @@ private:
     std::unique_ptr<MediaAtomicFileReplacePort> m_replacePort;
     MediaBufferRef m_video;
     MediaBufferRef m_audio;
+    std::optional<MediaSdpSessionIdentity> m_publishedSession;
+    std::optional<MediaRtpSdpMediaDescription> m_publishedVideo;
+    std::optional<MediaRtpSdpMediaDescription> m_publishedAudio;
     std::optional<::media::ErrorInfo> m_terminalFailure;
     bool m_published = false;
 };

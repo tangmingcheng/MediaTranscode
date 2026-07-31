@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/graph/model/MediaGraphTypes.h"
 #include "internal/graph/protocol/rtp/MediaRtpClockGroupPolicy.h"
 #include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
 #include "internal/graph/time/MediaRunningTime.h"
@@ -36,9 +37,36 @@ struct MediaMpegTsInputClockAssemblyPlan final {
                            const MediaMpegTsInputClockAssemblyPlan&) = default;
 };
 
+struct MediaDemuxTimestampInputClockAssemblyPlan final {
+    MediaRational videoTimeBase;
+    MediaRational audioTimeBase;
+    MediaRunningTime firstWindowMaximumSkew;
+    MediaRunningTime discontinuityThreshold;
+    std::uint64_t initialGeneration;
+    std::string videoSourceIdentity;
+    std::string audioSourceIdentity;
+    MediaRunningTime canonicalTargetEpoch;
+    friend bool operator==(
+        const MediaDemuxTimestampInputClockAssemblyPlan& left,
+        const MediaDemuxTimestampInputClockAssemblyPlan& right)
+    {
+        return left.videoTimeBase.num == right.videoTimeBase.num &&
+            left.videoTimeBase.den == right.videoTimeBase.den &&
+            left.audioTimeBase.num == right.audioTimeBase.num &&
+            left.audioTimeBase.den == right.audioTimeBase.den &&
+            left.firstWindowMaximumSkew == right.firstWindowMaximumSkew &&
+            left.discontinuityThreshold == right.discontinuityThreshold &&
+            left.initialGeneration == right.initialGeneration &&
+            left.videoSourceIdentity == right.videoSourceIdentity &&
+            left.audioSourceIdentity == right.audioSourceIdentity &&
+            left.canonicalTargetEpoch == right.canonicalTargetEpoch;
+    }
+};
+
 using MediaAvSyncInputClockPlan =
     std::variant<MediaRtpInputClockAssemblyPlan,
-                 MediaMpegTsInputClockAssemblyPlan>;
+                 MediaMpegTsInputClockAssemblyPlan,
+                 MediaDemuxTimestampInputClockAssemblyPlan>;
 
 struct MediaRtpTimestampDeltaDurationPlan final {
     int clockRate;

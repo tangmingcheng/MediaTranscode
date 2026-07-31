@@ -22,7 +22,7 @@ enum class MediaPayloadKind {
     GraphEvent,
     DiagnosticRecord,
     OutputByteSink,
-    TsMuxRuntimePlan,
+    ProjectMpegTsRuntimePlan,
     TsAccessUnit
 };
 

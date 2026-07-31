@@ -127,6 +127,7 @@ const char* mediaGraphDiagnosticNodeKindName(MediaNodeKind kind) noexcept
     case MediaNodeKind::PacketStartGate: return "PacketStartGate";
     case MediaNodeKind::RtpClockGroup: return "RtpClockGroup";
     case MediaNodeKind::RtpPacketClockBinder: return "RtpPacketClockBinder";
+    case MediaNodeKind::DemuxPacketClockBinder: return "DemuxPacketClockBinder";
     case MediaNodeKind::RtpClockSnapshotFanout: return "RtpClockSnapshotFanout";
     case MediaNodeKind::AvStartupCoordinator: return "AvStartupCoordinator";
     case MediaNodeKind::AvOutputScheduler: return "AvOutputScheduler";
@@ -142,6 +143,7 @@ const char* mediaGraphDiagnosticNodeKindName(MediaNodeKind kind) noexcept
     case MediaNodeKind::ScheduledOutputRouter: return "ScheduledOutputRouter";
     case MediaNodeKind::ScheduledRtpSender: return "ScheduledRtpSender";
     case MediaNodeKind::DualMediaSdpPublisher: return "DualMediaSdpPublisher";
+    case MediaNodeKind::MpegTsRtpSdpPublisher: return "MpegTsRtpSdpPublisher";
     case MediaNodeKind::AvBoundReleaseExtractor: return "AvBoundReleaseExtractor";
     case MediaNodeKind::PacketMerge: return "PacketMerge";
     case MediaNodeKind::FileMux: return "FileMux";

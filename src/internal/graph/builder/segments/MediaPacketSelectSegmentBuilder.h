@@ -2,7 +2,6 @@
 
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/builder/MediaEndpoint.h"
-#include "internal/graph/model/MediaRealtimeEdgePolicySet.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "media_transcode/Result.h"
 
@@ -20,8 +19,8 @@ struct PacketSelectSegmentOptions {
     std::string prefix = "packet.select";
     MediaNodeId formatSourceNode = MediaNodeId::invalid();
     std::string formatSourcePort = "format";
-    MediaGraphQueueParameters queues;
-    MediaRealtimeEdgePolicySet edgePolicies;
+    MediaEdgePolicy metadataPolicy;
+    MediaEdgePolicy packetPolicy;
     std::optional<PacketSelectOutputPlan> videoOutput;
     std::optional<PacketSelectOutputPlan> audioOutput;
 };

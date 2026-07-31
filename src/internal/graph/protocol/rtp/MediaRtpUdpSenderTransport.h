@@ -34,7 +34,7 @@ private:
 
 class MediaRtpUdpSenderTransport final {
 public:
-    ~MediaRtpUdpSenderTransport();
+    ~MediaRtpUdpSenderTransport() noexcept;
 
     MediaRtpUdpSenderTransport(const MediaRtpUdpSenderTransport&) = delete;
     MediaRtpUdpSenderTransport& operator=(const MediaRtpUdpSenderTransport&) = delete;

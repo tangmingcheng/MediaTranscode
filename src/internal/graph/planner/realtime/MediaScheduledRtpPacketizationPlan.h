@@ -26,6 +26,8 @@ public:
     int payloadType() const noexcept { return m_payloadType; }
     std::size_t maximumDatagramBytes() const noexcept { return m_maximumDatagramBytes; }
     std::optional<int> maximumAccessUnitSamples() const noexcept { return m_maximumAccessUnitSamples; }
+    friend bool operator==(const MediaScheduledRtpPacketizationPlan&,
+                           const MediaScheduledRtpPacketizationPlan&) = default;
 
 private:
     MediaScheduledRtpPacketizationPlan(

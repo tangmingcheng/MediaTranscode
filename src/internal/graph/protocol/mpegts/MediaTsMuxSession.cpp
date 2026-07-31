@@ -55,7 +55,8 @@ bool materializedConfigMatches(const MediaTsMuxSession::Binding& binding) noexce
         binding.plan.clockPolicy(), binding.epoch);
     if (!clock) return ::media::Result<std::unique_ptr<MediaTsMuxSession>>::failure(
         clock.error());
-    auto packetizer = MediaTsTransportPacketizer::create(binding.plan);
+    auto packetizer = MediaTsTransportPacketizer::create(
+        binding.plan, binding.startsWithDiscontinuity);
     if (!packetizer) return ::media::Result<std::unique_ptr<MediaTsMuxSession>>::failure(
         packetizer.error());
     auto tables = MediaTsPsiSerializer::serialize(binding.plan);
@@ -120,18 +121,19 @@ MediaTsMuxSession::advanceFailure(::media::ErrorInfo error)
     return ::media::Result<AdvanceResult>::failure(*m_failure);
 }
 
-::media::Result<std::size_t> MediaTsMuxSession::writeTables()
+::media::Result<std::size_t> MediaTsMuxSession::writeTables(
+    MediaRunningTime emitOnMaster)
 {
     auto pat = m_packetizer.beginPat(m_tables.pat());
     if (!pat) return ::media::Result<std::size_t>::failure(poison(pat.error()).error());
     auto patCursor = std::move(pat).value();
-    auto patWritten = m_writer.writeCursor(patCursor);
+    auto patWritten = m_writer.writeCursor(patCursor, emitOnMaster);
     if (!patWritten) return ::media::Result<std::size_t>::failure(
         poison(patWritten.error()).error());
     auto pmt = m_packetizer.beginPmt(m_tables.pmt());
     if (!pmt) return ::media::Result<std::size_t>::failure(poison(pmt.error()).error());
     auto pmtCursor = std::move(pmt).value();
-    auto pmtWritten = m_writer.writeCursor(pmtCursor);
+    auto pmtWritten = m_writer.writeCursor(pmtCursor, emitOnMaster);
     if (!pmtWritten) return ::media::Result<std::size_t>::failure(
         poison(pmtWritten.error()).error());
     auto total = checkedPacketCount(patWritten.value(), pmtWritten.value());
@@ -153,7 +155,7 @@ MediaTsMuxSession::advanceFailure(::media::ErrorInfo error)
     if (!nextPsi) return poison(nextPsi.error());
     m_nextPsi = nextPsi.value();
     m_lastAdvance = emitOnMaster;
-    auto tables = writeTables();
+    auto tables = writeTables(emitOnMaster);
     if (!tables) return ::media::Status::failure(tables.error());
     m_state = State::Open;
     return ::media::Status::success();
@@ -218,7 +220,7 @@ MediaTsMuxSession::advanceFailure(::media::ErrorInfo error)
         const bool psiDue = m_nextPsi == deadline;
         const bool pcrDue = m_nextPcr == deadline;
         if (psiDue) {
-            auto tables = writeTables();
+            auto tables = writeTables(deadline);
             if (!tables) return ::media::Result<AdvanceResult>::failure(tables.error());
             auto count = checkedPacketCount(packetCount, tables.value());
             if (!count) return advanceFailure(count.error());
@@ -234,7 +236,7 @@ MediaTsMuxSession::advanceFailure(::media::ErrorInfo error)
             auto cursor = m_packetizer.beginPcrOnly(sample);
             if (!cursor) return advanceFailure(cursor.error());
             auto packetCursor = std::move(cursor).value();
-            auto result = m_writer.writeCursor(packetCursor);
+            auto result = m_writer.writeCursor(packetCursor, deadline);
             if (!result) return advanceFailure(result.error());
             auto clockCommit = m_clock.commitPcr(std::move(prepared).value());
             if (!clockCommit) return advanceFailure(clockCommit.error());
@@ -307,7 +309,7 @@ MediaTsMuxSession::writeAccessUnit(
         unit.stream, header.value(), framedBytes, unit.randomAccess);
     if (!cursor) return advanceFailure(cursor.error());
     auto packetCursor = std::move(cursor).value();
-    auto result = m_writer.writeCursor(packetCursor);
+    auto result = m_writer.writeCursor(packetCursor, unit.emitOnMaster);
     if (!result) return advanceFailure(result.error());
     auto clockCommit = m_clock.commitPacket(std::move(clock).value());
     if (!clockCommit) return advanceFailure(clockCommit.error());

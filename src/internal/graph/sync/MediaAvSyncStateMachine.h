@@ -33,7 +33,8 @@ enum class MediaAvSyncEvent {
 
 class MediaAvSyncStateMachine final {
 public:
-    explicit MediaAvSyncStateMachine(MediaAvSyncTopology topology) noexcept;
+    explicit MediaAvSyncStateMachine(
+        MediaAvSyncSourceClockMode sourceClockMode) noexcept;
 
     MediaAvSyncStatus transition(MediaAvSyncEvent event, std::uint64_t generation);
     void reset() noexcept;
@@ -45,7 +46,7 @@ private:
     MediaAvSyncError invalidTransition(MediaAvSyncEvent event,
                                        std::uint64_t generation) const;
 
-    MediaAvSyncTopology m_topology;
+    MediaAvSyncSourceClockMode m_sourceClockMode;
     MediaAvSyncState m_state = MediaAvSyncState::Idle;
     std::optional<std::uint64_t> m_generation;
 };

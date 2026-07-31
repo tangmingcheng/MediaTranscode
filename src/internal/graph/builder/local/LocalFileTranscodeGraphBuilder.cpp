@@ -106,8 +106,8 @@ bool branchEnabled(const MediaAudioPipelinePlan& plan) noexcept
     packetSelectOptions.prefix = "local";
     packetSelectOptions.formatSourceNode = input.value().input;
     packetSelectOptions.formatSourcePort = input.value().formatPort;
-    packetSelectOptions.queues = queues;
-    packetSelectOptions.edgePolicies = edgePolicies;
+    packetSelectOptions.metadataPolicy = edgePolicies.metadata;
+    packetSelectOptions.packetPolicy = edgePolicies.packet;
     packetSelectOptions.videoOutput = PacketSelectOutputPlan{
         videoPlan.sourceStreamIndex, MediaEdgeKind::InputPacket};
     if (branchEnabled(audioPlan)) {

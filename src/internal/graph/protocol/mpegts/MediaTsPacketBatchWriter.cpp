@@ -6,7 +6,7 @@ namespace media::ffmpeg::graph {
 
 ::media::Result<MediaTsPacketBatchWriter> MediaTsPacketBatchWriter::create(
     std::uint8_t maximumPacketsPerDatagram,
-    std::unique_ptr<MediaOutputByteSink> sink,
+    std::unique_ptr<MediaTsDatagramSink> sink,
     std::unique_ptr<MediaTsPacketCommitter> committer)
 {
     if (!sink || !committer || maximumPacketsPerDatagram < 1 ||
@@ -21,7 +21,7 @@ namespace media::ffmpeg::graph {
 
 MediaTsPacketBatchWriter::MediaTsPacketBatchWriter(
     std::uint8_t maximumPacketsPerDatagram,
-    std::unique_ptr<MediaOutputByteSink> sink,
+    std::unique_ptr<MediaTsDatagramSink> sink,
     std::unique_ptr<MediaTsPacketCommitter> committer)
     : m_maximumPacketsPerDatagram(maximumPacketsPerDatagram),
       m_sink(std::move(sink)),
@@ -31,7 +31,7 @@ MediaTsPacketBatchWriter::MediaTsPacketBatchWriter(
 
 MediaTsPacketBatchWriter::~MediaTsPacketBatchWriter()
 {
-    closeNoexcept();
+    abort();
 }
 
 ::media::Status MediaTsPacketBatchWriter::firstFailure() const
@@ -46,7 +46,8 @@ MediaTsPacketBatchWriter::~MediaTsPacketBatchWriter()
 }
 
 ::media::Result<std::size_t> MediaTsPacketBatchWriter::writeCursor(
-    MediaTsPacketCursor& cursor)
+    MediaTsPacketCursor& cursor,
+    MediaRunningTime emitOnMaster)
 {
     if (m_failure) {
         return ::media::Result<std::size_t>::failure(m_failure.value());
@@ -76,7 +77,8 @@ MediaTsPacketBatchWriter::~MediaTsPacketBatchWriter()
             output = std::copy(packet.begin(), packet.end(), output);
         }
         auto written = m_sink->write(
-            std::span<const std::uint8_t>(m_datagram.data(), expected));
+            std::span<const std::uint8_t>(m_datagram.data(), expected),
+            emitOnMaster);
         if (!written) {
             auto status = fail(written.error());
             return ::media::Result<std::size_t>::failure(status.error());
@@ -110,17 +112,11 @@ MediaTsPacketBatchWriter::~MediaTsPacketBatchWriter()
     return m_failure ? firstFailure() : ::media::Status::success();
 }
 
-void MediaTsPacketBatchWriter::closeNoexcept() noexcept
-{
-    if (m_closed || !m_sink) return;
-    auto status = m_sink->close();
-    m_closed = true;
-    if (!status && !m_failure) m_failure = status.error();
-}
-
 void MediaTsPacketBatchWriter::abort() noexcept
 {
-    closeNoexcept();
+    if (m_closed || !m_sink) return;
+    m_sink->abort();
+    m_closed = true;
 }
 
 } // namespace media::ffmpeg::graph

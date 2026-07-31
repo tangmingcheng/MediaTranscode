@@ -6,7 +6,8 @@ namespace media::ffmpeg::graph {
 
 std::string MediaGraphRuntimeReport::summary() const
 {
-    return "runtime report: queued=" + std::to_string(metrics.queuedBuffers) +
+    std::string result =
+           "runtime report: queued=" + std::to_string(metrics.queuedBuffers) +
            ", peakQueued=" + std::to_string(metrics.peakQueuedBuffers) +
            ", threads=" + std::to_string(metrics.threadCount) +
            ", processThreads=" + std::to_string(metrics.processThreadCount) +
@@ -28,6 +29,15 @@ std::string MediaGraphRuntimeReport::summary() const
            ", encodedPacketsPushed=" + std::to_string(metrics.encodedPacketsPushed) +
            ", encodedPacketsPopped=" + std::to_string(metrics.encodedPacketsPopped) +
            ", backpressureItems=" + std::to_string(backpressure.decisions.size());
+    if (!droppedEdges.empty()) {
+        result += ", droppedEdges=";
+        for (std::size_t index = 0; index < droppedEdges.size(); ++index) {
+            if (index != 0) result += "|";
+            result += std::to_string(droppedEdges[index].edgeId.value) + ":" +
+                std::to_string(droppedEdges[index].droppedBuffers);
+        }
+    }
+    return result;
 }
 
 MediaGraphRuntimeReport MediaGraphRuntimeReporter::capture(MediaGraphRuntime& runtime)
@@ -57,6 +67,12 @@ MediaGraphRuntimeReport MediaGraphRuntimeReporter::capture(const MediaGraphRunti
             report.metrics.totalPushed += channel->metrics().pushed;
             report.metrics.totalPopped += channel->metrics().popped;
             report.metrics.droppedBuffers += channel->metrics().queue.dropped;
+            if (channel->metrics().queue.dropped != 0) {
+                report.droppedEdges.push_back(
+                    MediaDroppedEdgeReport{
+                        channel->edgeId(),
+                        channel->metrics().queue.dropped});
+            }
             if (channel->binding().edgeKind == MediaEdgeKind::EncodedPacket) {
                 report.metrics.encodedPacketsPushed += channel->metrics().pushed;
                 report.metrics.encodedPacketsPopped += channel->metrics().popped;

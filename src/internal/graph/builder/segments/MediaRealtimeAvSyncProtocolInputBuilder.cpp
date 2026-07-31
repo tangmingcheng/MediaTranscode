@@ -1,5 +1,6 @@
 #include "internal/graph/builder/segments/MediaRealtimeAvSyncProtocolInputBuilder.h"
 
+#include "internal/graph/builder/segments/MediaDemuxClockInputSegmentBuilder.h"
 #include "internal/graph/builder/segments/MediaRealtimeAvSyncInputGraphSupport.h"
 #include "internal/graph/builder/segments/MediaRealtimeAvSyncNodeConfigurator.h"
 
@@ -14,7 +15,8 @@ using Support = MediaRealtimeAvSyncInputGraphSupport;
 
 ::media::Result<void> validateSources(
     const MediaGraph& graph,
-    const MediaRealtimeAvSyncInputSources& sources)
+    const MediaRealtimeAvSyncInputSources& sources,
+    bool requireProtocolClock)
 {
     if (auto status = Support::validateOutput(
             graph, sources.videoPacket, MediaStreamKind::Video,
@@ -26,9 +28,11 @@ using Support = MediaRealtimeAvSyncInputGraphSupport;
             MediaEdgeKind::InputPacket, MediaPayloadKind::Packet); !status) {
         return status;
     }
-    return Support::validateOutput(
-        graph, sources.protocolClock, MediaStreamKind::Metadata,
-        MediaEdgeKind::Event, MediaPayloadKind::GraphEvent);
+    return requireProtocolClock
+        ? Support::validateOutput(
+              graph, sources.protocolClock, MediaStreamKind::Metadata,
+              MediaEdgeKind::Event, MediaPayloadKind::GraphEvent)
+        : ::media::Result<void>::success();
 }
 
 ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints> buildRtp(
@@ -170,6 +174,34 @@ using Support = MediaRealtimeAvSyncInputGraphSupport;
             options.sources.protocolClock});
 }
 
+::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints> buildDemux(
+    MediaGraph& graph,
+    const MediaRealtimeAvSyncInputSegmentOptions& options,
+    const MediaRealtimeAvSyncRuntimePlan& plan,
+    const MediaDemuxTimestampInputClockAssemblyPlan& demuxPlan)
+{
+    auto built = MediaDemuxClockInputSegmentBuilder::build(
+        graph,
+        MediaDemuxClockInputSegmentOptions{
+            options.prefix + ".demux",
+            options.sources.videoPacket,
+            options.sources.audioPacket,
+            plan.groupKey,
+            plan.edgePolicies.synchronizedPacket},
+        demuxPlan);
+    if (!built) {
+        return ::media::Result<
+            MediaRealtimeAvSyncProtocolInputEndpoints>::failure(
+            built.error());
+    }
+    return ::media::Result<
+        MediaRealtimeAvSyncProtocolInputEndpoints>::success(
+        MediaRealtimeAvSyncProtocolInputEndpoints{
+            built.value().video,
+            built.value().audio,
+            built.value().sourceClock});
+}
+
 } // namespace
 
 ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>
@@ -178,17 +210,51 @@ MediaRealtimeAvSyncProtocolInputBuilder::build(
     const MediaRealtimeAvSyncInputSegmentOptions& options,
     const MediaRealtimeAvSyncRuntimePlan& plan)
 {
-    if (auto status = validateSources(graph, options.sources); !status) {
+    if (!plan.synchronization.sourceClockMode) {
+        return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::
+            failure(::media::ErrorInfo::notInitialized(
+                "Synchronized input requires its planner-selected source clock mode"));
+    }
+    const MediaAvSyncSourceClockMode sourceClock =
+        *plan.synchronization.sourceClockMode;
+    const bool demux =
+        sourceClock == MediaAvSyncSourceClockMode::DemuxTimestamps;
+    if (auto status = validateSources(
+            graph, options.sources, !demux); !status) {
         return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::
             failure(status.error());
     }
-    if (std::holds_alternative<MediaRtpInputClockAssemblyPlan>(
-            plan.assembly.inputClock)) {
+    switch (sourceClock) {
+    case MediaAvSyncSourceClockMode::RtpSenderReports:
+        if (!std::holds_alternative<MediaRtpInputClockAssemblyPlan>(
+                plan.assembly.inputClock)) {
+            return ::media::Result<
+                MediaRealtimeAvSyncProtocolInputEndpoints>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "RTP source clock mode conflicts with its planner input product"));
+        }
         return buildRtp(graph, options, plan);
-    }
-    if (std::holds_alternative<MediaMpegTsInputClockAssemblyPlan>(
-            plan.assembly.inputClock)) {
+    case MediaAvSyncSourceClockMode::MpegTsPcr:
+        if (!std::holds_alternative<MediaMpegTsInputClockAssemblyPlan>(
+                plan.assembly.inputClock)) {
+            return ::media::Result<
+                MediaRealtimeAvSyncProtocolInputEndpoints>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "MPEG-TS source clock mode conflicts with its planner input product"));
+        }
         return buildMpegTs(options);
+    case MediaAvSyncSourceClockMode::DemuxTimestamps: {
+        const auto* demuxPlan =
+            std::get_if<MediaDemuxTimestampInputClockAssemblyPlan>(
+                &plan.assembly.inputClock);
+        if (!demuxPlan) {
+            return ::media::Result<
+                MediaRealtimeAvSyncProtocolInputEndpoints>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Demux source clock mode conflicts with its planner input product"));
+        }
+        return buildDemux(graph, options, plan, *demuxPlan);
+    }
     }
     return ::media::Result<MediaRealtimeAvSyncProtocolInputEndpoints>::failure(
         ::media::ErrorInfo::invalidArgument(

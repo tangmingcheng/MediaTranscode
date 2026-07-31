@@ -11,10 +11,14 @@ namespace media::ffmpeg::graph {
 
 class MediaAvSyncPlanner final {
 public:
+    static ::media::Result<MediaAvSyncRtpInputPlan> planRtpInputClock(
+        const MediaRealtimeRtpTranscodeRequest& request);
     static ::media::Result<MediaAvSyncPlan> plan(
         const MediaRealtimeRtpTranscodeRequest& request,
-        const MediaTsSelectedProgramPlan* selectedTsProgram = nullptr,
-        const MediaProjectMpegTsResolvedPipelineFacts* resolvedTsFacts = nullptr);
+        const MediaTsSelectedProgramPlan* selectedTsProgram,
+        const MediaProjectMpegTsResolvedPipelineFacts* resolvedTsFacts,
+        const MediaAvSyncPreparedDemuxTimestampFacts* preparedDemuxFacts,
+        int resolvedOutputAudioSampleRate);
 
 private:
     MediaAvSyncPlanner() = delete;

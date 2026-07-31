@@ -47,7 +47,8 @@ namespace {
         return ::media::Result<PacketSelectSegment>::failure(
             ::media::ErrorInfo::invalidArgument("MediaPacketSelectSegmentBuilder requires format source endpoint"));
     }
-    if (options.queues.metadata == 0 || options.queues.packet == 0) {
+    if (options.metadataPolicy.queuePolicy.capacity == 0 ||
+        options.packetPolicy.queuePolicy.capacity == 0) {
         return ::media::Result<PacketSelectSegment>::failure(
             ::media::ErrorInfo::invalidArgument("MediaPacketSelectSegmentBuilder queue capacities must be greater than 0"));
     }
@@ -122,7 +123,7 @@ namespace {
                                                              segment.demux,
                                                              "format",
                                                              options.prefix + ".format -> demux.format",
-                                                             options.edgePolicies.metadata); !status) {
+                                                             options.metadataPolicy); !status) {
         return ::media::Result<PacketSelectSegment>::failure(status.error());
     }
     if (auto status = MediaGraphBuildSupport::connectChecked(graph,
@@ -132,7 +133,7 @@ namespace {
                                                              segment.split,
                                                              "packet",
                                                              options.prefix + ".demux.packet -> stream.split.packet",
-                                                             options.edgePolicies.packet); !status) {
+                                                             options.packetPolicy); !status) {
         return ::media::Result<PacketSelectSegment>::failure(status.error());
     }
 

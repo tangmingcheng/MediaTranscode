@@ -19,44 +19,6 @@ extern "C" {
 namespace media::ffmpeg::graph {
 namespace {
 
-::media::Result<MediaRtpUdpLocalPortPolicy> cloneLocalPortPolicy(
-    const MediaRtpUdpLocalPortPolicy& source)
-{
-    switch (source.kind()) {
-    case MediaRtpUdpLocalPortPolicyKind::FixedAdjacent:
-        if (!source.rtpPort() || !source.rtcpPort()) {
-            return ::media::Result<MediaRtpUdpLocalPortPolicy>::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "Fixed RTP sender port policy is incomplete"));
-        }
-        return MediaRtpUdpLocalPortPolicy::fixedAdjacent(
-            *source.rtpPort(), *source.rtcpPort());
-    case MediaRtpUdpLocalPortPolicyKind::OsAssignedIndependent:
-        return ::media::Result<MediaRtpUdpLocalPortPolicy>::success(
-            MediaRtpUdpLocalPortPolicy::osAssignedIndependent());
-    }
-    return ::media::Result<MediaRtpUdpLocalPortPolicy>::failure(
-        ::media::ErrorInfo::invalidArgument(
-            "Unknown RTP sender local port policy"));
-}
-
-::media::Result<MediaRtpUdpSenderConfig> cloneTransportConfig(
-    const MediaRtpUdpSenderConfig& source)
-{
-    auto localPolicy = cloneLocalPortPolicy(source.localPortPolicy());
-    if (!localPolicy) {
-        return ::media::Result<MediaRtpUdpSenderConfig>::failure(
-            localPolicy.error());
-    }
-    return MediaRtpUdpSenderConfig::create(
-        source.addressFamily(), source.localNumericAddress(),
-        source.remoteRtpEndpoint().numericAddress(),
-        source.remoteRtpEndpoint().port(),
-        source.remoteRtcpEndpoint().port(),
-        std::move(localPolicy).value(), source.sendBufferBytes(),
-        source.maximumDatagramBytes(), source.ioBehavior());
-}
-
 ::media::Result<MediaRtpSdpMediaDescription> materializeMediaDescription(
     const MediaScheduledRtpOutputPlan& plan,
     const AVCodecParameters& parameters)
@@ -233,7 +195,7 @@ MediaScheduledRtpSenderMaterializer::materialize(
             MediaScheduledRtpSenderMaterialization>::failure(
             senderConfig.error());
     }
-    auto transportConfig = cloneTransportConfig(outputPlan.transport);
+    auto transportConfig = outputPlan.transport.clone();
     if (!transportConfig) {
         return ::media::Result<
             MediaScheduledRtpSenderMaterialization>::failure(

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "internal/graph/sync/MediaAvSyncTopology.h"
+#include "internal/graph/model/MediaAvSyncSourceClockMode.h"
 #include "internal/graph/time/MediaRunningTime.h"
 #include "media_transcode/Result.h"
 
@@ -47,7 +47,7 @@ enum class MediaAvSyncErrorState {
 class MediaAvSyncError final {
 public:
     MediaAvSyncError(MediaAvSyncErrorCode code,
-                     MediaAvSyncTopology topology,
+                     std::optional<MediaAvSyncSourceClockMode> sourceClockMode,
                      MediaAvSyncErrorState state,
                      std::string operation,
                      std::string expectedStreamIdentity,
@@ -61,7 +61,7 @@ public:
                      std::int64_t maximumRunningTimeNs,
                      std::string detail)
         : m_code(code)
-        , m_topology(topology)
+        , m_sourceClockMode(sourceClockMode)
         , m_state(state)
         , m_operation(std::move(operation))
         , m_expectedStreamIdentity(std::move(expectedStreamIdentity))
@@ -78,7 +78,10 @@ public:
     }
 
     MediaAvSyncErrorCode code() const noexcept { return m_code; }
-    MediaAvSyncTopology topology() const noexcept { return m_topology; }
+    const std::optional<MediaAvSyncSourceClockMode>& sourceClockMode() const noexcept
+    {
+        return m_sourceClockMode;
+    }
     MediaAvSyncErrorState state() const noexcept { return m_state; }
     const std::string& operation() const noexcept { return m_operation; }
     const std::string& expectedStreamIdentity() const noexcept
@@ -112,7 +115,10 @@ public:
         std::string message = "A/V sync code=" +
                               std::to_string(static_cast<int>(m_code));
         message += " operation=" + m_operation;
-        message += " topology=" + std::to_string(static_cast<int>(m_topology));
+        message += " source_clock_mode=";
+        message += m_sourceClockMode
+            ? std::to_string(static_cast<int>(*m_sourceClockMode))
+            : "missing";
         message += " state=" + std::to_string(static_cast<int>(m_state));
         message += " expected_stream=" + m_expectedStreamIdentity;
         message += " observed_stream=" + m_observedStreamIdentity;
@@ -141,7 +147,7 @@ public:
 
 private:
     MediaAvSyncErrorCode m_code;
-    MediaAvSyncTopology m_topology;
+    std::optional<MediaAvSyncSourceClockMode> m_sourceClockMode;
     MediaAvSyncErrorState m_state;
     std::string m_operation;
     std::string m_expectedStreamIdentity;

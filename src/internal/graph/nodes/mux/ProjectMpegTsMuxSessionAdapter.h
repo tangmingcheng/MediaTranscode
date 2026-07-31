@@ -3,6 +3,7 @@
 #include "internal/graph/nodes/mux/MediaMuxSession.h"
 #include "internal/graph/protocol/mpegts/MediaTsMaterializedStreamConfig.h"
 #include "internal/graph/protocol/mpegts/MediaTsMuxPlan.h"
+#include "internal/graph/protocol/rtp/MediaMpegTsRtpContinuityState.h"
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
 #include "internal/graph/sync/MediaPlaybackEpoch.h"
 #include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
@@ -17,6 +18,8 @@ class MediaOutputByteSink;
 class MediaAvGenerationPurgeTarget;
 class MediaProtocolOutputGenerationState;
 class MediaTsMuxSession;
+class MediaUdpDatagramSenderPortFactory;
+struct MediaProjectMpegTsRuntimeOutputPlan;
 
 class ProjectMpegTsGenerationSessionState final
     : public MediaProtocolOutputGenerationSessionState {
@@ -35,11 +38,12 @@ private:
         Poisoned
     };
     State state = State::Acquiring;
-    std::optional<MediaTsMuxPlan> plan;
+    std::shared_ptr<const MediaProjectMpegTsRuntimeOutputPlan> outputPlan;
     std::optional<MediaPlaybackEpoch> epoch;
     std::optional<MediaAvSyncGroupKey> group;
     std::optional<MediaAvSyncGroupKey> plannedGroup;
     std::unique_ptr<MediaTsMuxSession> session;
+    std::shared_ptr<MediaMpegTsRtpContinuityState> rtpContinuity;
     std::optional<MediaRunningTime> nextTransportDeadline;
     std::optional<MediaRunningTime> latestAcceptedEmission;
     bool mediaTimelineStarted = false;
@@ -106,10 +110,12 @@ private:
     std::shared_ptr<ProjectMpegTsGenerationSessionState> m_generationSession;
     std::optional<MediaAvSyncGroupKey>& m_plannedGroup;
     State& m_state;
-    std::optional<MediaTsMuxPlan>& m_plan;
+    std::shared_ptr<const MediaProjectMpegTsRuntimeOutputPlan>&
+        m_outputPlan;
     std::optional<MediaPlaybackEpoch>& m_epoch;
     std::optional<MediaAvSyncGroupKey>& m_group;
     std::unique_ptr<MediaTsMuxSession>& m_session;
+    std::shared_ptr<MediaMpegTsRtpContinuityState>& m_rtpContinuity;
     std::optional<MediaRunningTime>& m_nextTransportDeadline;
     std::optional<MediaRunningTime>& m_latestAcceptedEmission;
     bool& m_mediaTimelineStarted;

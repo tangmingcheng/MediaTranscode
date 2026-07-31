@@ -254,9 +254,24 @@ struct SharedNodes final {
     const auto& metadata = plan.edgePolicies.metadata;
     const auto& packet = plan.edgePolicies.synchronizedPacket;
     const auto& atomicMetadata = plan.edgePolicies.atomicMetadata;
+    if (!plan.synchronization.sourceClockMode) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "Shared synchronized input requires its planned source clock mode"));
+    }
+    const bool demuxClock =
+        *plan.synchronization.sourceClockMode ==
+        MediaAvSyncSourceClockMode::DemuxTimestamps;
+    const auto& protocolClockPolicy =
+        demuxClock ? atomicMetadata : metadata;
+    const auto& protocolVideoPolicy =
+        demuxClock ? plan.edgePolicies.atomicVideoPacket : packet;
+    const auto& protocolAudioPolicy =
+        demuxClock ? plan.edgePolicies.atomicAudioPacket : packet;
     if (auto status = Support::connect(
             graph, protocol.sourceClock, nodes.sourceClock, "clock",
-            "protocol clock -> source clock fanout", metadata); !status) {
+            "protocol clock -> source clock fanout",
+            protocolClockPolicy); !status) {
         return status;
     }
     if (auto status = Support::connect(
@@ -269,12 +284,14 @@ struct SharedNodes final {
         !status) return status;
     if (auto status = Support::connect(
             graph, protocol.video, nodes.videoGenerationGate, "packet",
-            "protocol video -> generation gate", packet); !status) {
+            "protocol video -> generation gate",
+            protocolVideoPolicy); !status) {
         return status;
     }
     if (auto status = Support::connect(
             graph, protocol.audio, nodes.audioGenerationGate, "packet",
-            "protocol audio -> generation gate", packet); !status) {
+            "protocol audio -> generation gate",
+            protocolAudioPolicy); !status) {
         return status;
     }
     if (auto status = Support::connect(
@@ -337,7 +354,6 @@ MediaRealtimeAvSyncInputSegmentBuilder::build(
 {
     if (options.prefix.empty() || !options.sources.videoPacket.valid() ||
         !options.sources.audioPacket.valid() ||
-        !options.sources.protocolClock.valid() ||
         options.releasedVideoStreamIndex < 0 ||
         options.releasedAudioStreamIndex < 0 ||
         (options.releasedVideoEdgeKind != MediaEdgeKind::InputPacket &&
@@ -357,7 +373,20 @@ MediaRealtimeAvSyncInputSegmentBuilder::build(
             plan.edgePolicies.atomicAudioPacket)) {
         return ::media::Result<MediaRealtimeAvSyncInputEndpoints>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "Synchronized input release requires a complete planned atomic output policy"));
+            "Synchronized input release requires a complete planned atomic output policy"));
+    }
+    if (!plan.synchronization.sourceClockMode) {
+        return ::media::Result<MediaRealtimeAvSyncInputEndpoints>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "Synchronized input requires its planner-selected source clock mode"));
+    }
+    const bool demuxClock =
+        *plan.synchronization.sourceClockMode ==
+        MediaAvSyncSourceClockMode::DemuxTimestamps;
+    if (!demuxClock && !options.sources.protocolClock.valid()) {
+        return ::media::Result<MediaRealtimeAvSyncInputEndpoints>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Synchronized protocol input requires its planned clock endpoint"));
     }
     auto protocol = MediaRealtimeAvSyncProtocolInputBuilder::build(
         graph, options, plan);

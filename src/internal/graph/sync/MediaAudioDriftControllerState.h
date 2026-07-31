@@ -2,6 +2,7 @@
 
 #include "internal/graph/sync/MediaAudioDriftServo.h"
 #include "internal/graph/sync/MediaAudioPlaybackOrigin.h"
+#include "internal/graph/sync/MediaAvEpochTransitionService.h"
 #include "internal/graph/sync/lineage/MediaAudioLineageState.h"
 #include "internal/graph/sync/lineage/MediaAudioSampleProjection.h"
 
@@ -18,6 +19,7 @@ public:
         MediaAudioSampleProjection projection;
         MediaAudioPlaybackOrigin origin;
         std::uint64_t nextSequence;
+        MediaAvOutputPermitCommitReservation outputPermit;
     };
 
     MediaAudioDriftControllerState() noexcept;

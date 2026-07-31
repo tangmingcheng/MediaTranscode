@@ -61,6 +61,9 @@ MediaRealtimeEdgePolicySet MediaRealtimeEdgePolicyPlanner::plan(
     policies.audioDriftTransaction = planAtomicOutputPolicy(queues.frame);
     policies.videoFrame = planQueuePolicy(
         queues.frame, MediaQueueOverflowPolicy::DropOldest);
+    policies.synchronizedVideoFrame = planQueuePolicy(
+        queues.frame, MediaQueueOverflowPolicy::BlockProducer,
+        MediaQueueOrderingPolicy::Fifo);
     policies.preparedVideoFrame = planAtomicOutputPolicy(queues.frame);
     policies.audioFrame = planQueuePolicy(
         queues.frame, MediaQueueOverflowPolicy::BlockProducer,

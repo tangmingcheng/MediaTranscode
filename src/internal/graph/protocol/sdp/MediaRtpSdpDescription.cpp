@@ -210,6 +210,8 @@ MediaRtpSdpDescription::MediaRtpSdpDescription(
             item.identity().remoteRtcpAddress(), item.identity().remoteRtcpPort()};
         consistent = consistent &&
                      item.identity().addressFamily() == session.addressFamily() &&
+                     item.identity().remoteRtpNumericAddress() ==
+                         session.numericAddress() &&
                      std::find(endpoints.begin(), endpoints.end(), rtp) == endpoints.end() &&
                      std::find(endpoints.begin(), endpoints.end(), rtcp) == endpoints.end();
         endpoints.push_back(rtp);
@@ -223,7 +225,8 @@ MediaRtpSdpDescription::MediaRtpSdpDescription(
     if (!consistent) {
         return ::media::Result<MediaRtpSdpDescription>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "RTP SDP requires ordered distinct video and audio media"));
+                "RTP SDP requires a shared session connection address and "
+                "ordered distinct video and audio media"));
     }
     return ::media::Result<MediaRtpSdpDescription>::success(
         MediaRtpSdpDescription(std::move(session), std::move(media)));

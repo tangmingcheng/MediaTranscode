@@ -123,6 +123,25 @@ src/internal/graph/
 - 写入 realtime 输入、输出和 SDP 相关节点 option
 ```
 
+### 实时输入时钟与输出协议正交
+
+实时 planner 分别解析输入时钟和输出协议，不使用输入/输出组合枚举。RTP 输入使用 Sender Report 时钟，MPEG-TS/UDP 输入使用 PCR 时钟，URL/RTSP 输入使用 demux 时间戳；三种输入均进入同一套启动协调、规范时间轴、漂移控制、恢复和调度组件。
+
+输出只由 planner 已完成校验的 layout 与 transport 决定：
+
+```text
+SeparateStreams + RtpAvp
+    -> 两个调度后的 elementary RTP sender + 双媒体 SDP
+MuxedTransportStream + UdpDatagrams
+    -> Project MPEG-TS mux + UDP datagram sink
+MuxedTransportStream + RtpAvp
+    -> Project MPEG-TS mux + MP2T RTP/RTCP sink + MP2T SDP
+```
+
+Project MPEG-TS 的 H.264/AAC、PCR、PID、连续计数和调度事实由 UDP 与 RTP transport 共享。MP2T transport 仅将完整的 188 字节 TS 包批次封装为 RTP/AVP：固定 payload type 33、90 kHz 时钟、相邻 RTP/RTCP 端口，并从 canonical `emitOnMaster` 映射 RTP timestamp。它不解析或重封装 TS，也不引入第二个 pacing authority。
+
+builder 只消费 planner 产生的完整 plan；runtime node 不推断协议、不补默认值、不根据包到达时间回退。
+
 ### `builder/segments/`
 
 `builder/segments/` 是可复用 graph 片段目录。

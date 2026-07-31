@@ -2,9 +2,12 @@
 
 #include "internal/graph/planner/avsync/MediaAvSyncPlan.h"
 #include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlan.h"
+#include "internal/graph/planner/avsync/MediaAvSyncOutputAdapterKind.h"
+#include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
 
 #include <memory>
+#include <optional>
 
 namespace media::ffmpeg::graph {
 
@@ -20,6 +23,9 @@ struct MediaAvSyncRuntimeBinding final {
     MediaAvSyncPlan plan;
     MediaAvGenerationTransitionPlan transition;
     MediaAvSyncBindingAssemblyMode assemblyMode;
+    std::optional<MediaAvSyncOutputAdapterKind> outputAdapter;
+    std::optional<MediaProjectMpegTsRuntimeOutputPlan>
+        projectMpegTsOutputProduct;
     std::shared_ptr<MediaAvStartupVideoPreparationState>
         videoPreparationState;
 };

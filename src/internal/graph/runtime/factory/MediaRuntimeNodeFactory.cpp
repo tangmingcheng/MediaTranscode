@@ -29,6 +29,7 @@
 #include "internal/graph/nodes/output/RtpOutputNode.h"
 #include "internal/graph/nodes/output/SdpWriterNode.h"
 #include "internal/graph/nodes/output/MediaDualMediaSdpPublisherNode.h"
+#include "internal/graph/nodes/output/MediaMpegTsRtpSdpPublisherNode.h"
 #include "internal/graph/nodes/output/MediaScheduledRtpSenderNode.h"
 #include "internal/graph/nodes/output/MediaScheduledRtpSenderNodePlanCodec.h"
 #include "internal/graph/nodes/output/MediaProjectMpegTsPlanSourceNode.h"
@@ -41,6 +42,8 @@
 #include "internal/graph/nodes/split/PacketFanoutNode.h"
 #include "internal/graph/nodes/sync/MediaRtpClockGroupNode.h"
 #include "internal/graph/nodes/sync/MediaRtpPacketClockBinderNode.h"
+#include "internal/graph/nodes/sync/MediaDemuxPacketClockBinderNode.h"
+#include "internal/graph/nodes/sync/MediaDemuxPacketClockBinderNodePlanCodec.h"
 #include "internal/graph/nodes/sync/MediaRtpClockSnapshotFanoutNode.h"
 #include "internal/graph/nodes/sync/MediaAvStartupCoordinatorNode.h"
 #include "internal/graph/nodes/sync/MediaAvStartupCoordinatorNodePreparation.h"
@@ -313,6 +316,10 @@ template <typename Node>
     case MediaNodeKind::RtpPacketClockBinder:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::make_unique<MediaRtpPacketClockBinderNode>(node.id));
+    case MediaNodeKind::DemuxPacketClockBinder:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "Demux packet clock binder requires compiler injection"));
     case MediaNodeKind::RtpClockSnapshotFanout:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::make_unique<MediaRtpClockSnapshotFanoutNode>(node.id));
@@ -417,7 +424,7 @@ template <typename Node>
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::make_unique<MediaProjectMpegTsPlanSourceNode>(
                 node.id, std::move(decoded.value().groupKey),
-                std::move(decoded.value().muxPlan)));
+                std::move(decoded.value().outputPlan)));
     }
     case MediaNodeKind::ScheduledTsAccessUnitAdapter:
     {
@@ -497,6 +504,10 @@ template <typename Node>
                     "Dual-media SDP publisher dependencies"));
         }
     }
+    case MediaNodeKind::MpegTsRtpSdpPublisher:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "MP2T SDP publisher requires compiler-injected sync-group runtime"));
     case MediaNodeKind::EofBarrier:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<EofBarrierNode>(node.id));
     case MediaNodeKind::Flush:
@@ -613,10 +624,91 @@ MediaRuntimeNodeFactory::createScheduledRtpSender(
     }
 }
 
+::media::Result<std::unique_ptr<MediaRuntimeNode>>
+MediaRuntimeNodeFactory::createMpegTsRtpSdpPublisher(
+    const MediaNode& node,
+    std::shared_ptr<MediaAvSyncGroupRuntime> syncGroup)
+{
+    if (node.kind != MediaNodeKind::MpegTsRtpSdpPublisher) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MP2T SDP publisher factory requires its exact node kind"));
+    }
+    auto group = requiredSyncGroup(
+        node, "MediaMpegTsRtpSdpPublisherNode",
+        "mpegts_rtp_sdp.sync_group");
+    if (!group) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            group.error());
+    }
+    if (!syncGroup || syncGroup->key() != group.value()) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "MP2T SDP publisher requires the exact registered sync-group runtime"));
+    }
+    try {
+        auto created = MediaMpegTsRtpSdpPublisherNode::create(
+            node.id, std::move(group).value(), std::move(syncGroup),
+            std::make_unique<MediaWin32AtomicFileReplacePort>());
+        if (!created) {
+            return ::media::Result<
+                std::unique_ptr<MediaRuntimeNode>>::failure(
+                created.error());
+        }
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+            std::move(created).value());
+    } catch (const std::bad_alloc&) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            ::media::ErrorInfo::allocationFailed(
+                "MP2T SDP publisher production dependencies"));
+    }
+}
+
+::media::Result<std::unique_ptr<MediaRuntimeNode>>
+MediaRuntimeNodeFactory::createDemuxPacketClockBinder(
+    const MediaNode& node,
+    const MediaDecodedDemuxPacketClockBinderNodePlan& decoded,
+    std::shared_ptr<MediaDemuxTimestampClockMapper> mapper,
+    std::shared_ptr<MediaAvSyncGroupRuntime> syncGroup)
+{
+    if (node.kind != MediaNodeKind::DemuxPacketClockBinder ||
+        !mapper || !syncGroup || !syncGroup->clock()) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Demux packet clock binder injection requires its exact node, mapper, and sync group"));
+    }
+    const MediaRational expected =
+        decoded.stream == MediaScheduledStream::Video
+        ? mapper->config().videoTimeBase
+        : mapper->config().audioTimeBase;
+    if (decoded.groupKey != syncGroup->key() ||
+        decoded.mapper != mapper->config() ||
+        decoded.streamTimeBase.num != expected.num ||
+        decoded.streamTimeBase.den != expected.den) {
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Demux packet clock binder injection disagrees with the planner product"));
+    }
+    return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+        std::make_unique<MediaDemuxPacketClockBinderNode>(
+            node.id,
+            decoded.stream,
+            expected,
+            std::move(mapper),
+            std::move(syncGroup)));
+}
+
 std::optional<MediaRuntimeGenerationPurgeRegistration>
 MediaRuntimeNodeFactory::generationPurgeRegistration(
     MediaRuntimeNode& runtime)
 {
+    if (auto* binder =
+            dynamic_cast<MediaDemuxPacketClockBinderNode*>(&runtime)) {
+        return MediaRuntimeGenerationPurgeRegistration{
+            MediaAvGenerationParticipant::CanonicalLineage,
+            {std::string(binder->generationPurgeIdentity()),
+             binder->generationPurgeTarget()}};
+    }
     if (auto registration =
             fixedGenerationPurgeRegistration<MediaAvStartupCoordinatorNode>(
                 runtime,
@@ -757,6 +849,7 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::PacketStartGate:
     case MediaNodeKind::RtpClockGroup:
     case MediaNodeKind::RtpPacketClockBinder:
+    case MediaNodeKind::DemuxPacketClockBinder:
     case MediaNodeKind::RtpClockSnapshotFanout:
     case MediaNodeKind::AvStartupCoordinator:
     case MediaNodeKind::AvOutputScheduler:
@@ -781,6 +874,7 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::SdpWriter:
     case MediaNodeKind::ScheduledRtpSender:
     case MediaNodeKind::DualMediaSdpPublisher:
+    case MediaNodeKind::MpegTsRtpSdpPublisher:
     case MediaNodeKind::EofBarrier:
     case MediaNodeKind::Flush:
     case MediaNodeKind::Finalize:

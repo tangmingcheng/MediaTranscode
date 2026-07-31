@@ -97,7 +97,7 @@ MediaAvSyncError syncError(const MediaCanonicalTimeMapperConfig& context,
 {
     return MediaAvSyncError(
         code,
-        context.topology,
+        context.sourceClockMode,
         state,
         std::move(operation),
         context.sourceIdentity,

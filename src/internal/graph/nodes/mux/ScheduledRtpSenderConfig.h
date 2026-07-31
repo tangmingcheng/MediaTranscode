@@ -13,6 +13,8 @@
 
 namespace media::ffmpeg::graph {
 
+class MediaMpegTsRtpDatagramSink;
+
 class ScheduledRtpSenderCounters final {
 public:
     static ::media::Result<ScheduledRtpSenderCounters> create(
@@ -24,6 +26,7 @@ public:
 
 private:
     friend class ScheduledRtpSenderSession;
+    friend class MediaMpegTsRtpDatagramSink;
 
     ScheduledRtpSenderCounters(std::uint64_t packetCount,
                                std::uint64_t octetCount) noexcept;

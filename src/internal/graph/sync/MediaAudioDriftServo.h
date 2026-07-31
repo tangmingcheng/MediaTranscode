@@ -21,7 +21,7 @@ struct MediaAudioDriftMeasurement final {
 class MediaAudioDriftServo final {
 public:
     static MediaAvSyncResult<MediaAudioDriftServo> create(
-        MediaAvSyncTopology topology,
+        MediaAvSyncSourceClockMode sourceClockMode,
         const MediaAvSyncAudioServoPolicy& policy,
         MediaRunningTime hardDiscontinuityThreshold,
         std::uint64_t generation);
@@ -59,7 +59,7 @@ private:
         std::int64_t hardDiscontinuityThresholdNs = 0;
     };
 
-    MediaAudioDriftServo(MediaAvSyncTopology topology,
+    MediaAudioDriftServo(MediaAvSyncSourceClockMode sourceClockMode,
                          Policy policy,
                          MediaAudioCorrectionQuantizer quantizer,
                          std::uint64_t generation) noexcept;
@@ -77,7 +77,7 @@ private:
     void clearControlState() noexcept;
     MediaAvSyncStatus clearCorrectionEpoch(std::int64_t epochOutputSampleIndex);
 
-    MediaAvSyncTopology m_topology;
+    MediaAvSyncSourceClockMode m_sourceClockMode;
     Policy m_policy;
     MediaAudioCorrectionQuantizer m_quantizer;
     int m_outputSampleRate = 0;

@@ -47,6 +47,7 @@ public:
         int sendBufferBytes,
         std::size_t maximumDatagramBytes,
         MediaUdpSenderIoBehavior ioBehavior);
+    ::media::Result<MediaRtpUdpSenderConfig> clone() const;
 
     MediaRtpUdpSenderConfig(MediaRtpUdpSenderConfig&&) noexcept = default;
     MediaRtpUdpSenderConfig& operator=(MediaRtpUdpSenderConfig&&) noexcept = default;

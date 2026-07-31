@@ -7,10 +7,10 @@
 namespace media::ffmpeg::graph {
 
 MediaVideoSyncController::MediaVideoSyncController(
-    MediaAvSyncTopology topology,
+    MediaAvSyncSourceClockMode sourceClockMode,
     Policy policy,
     std::uint64_t generation) noexcept
-    : m_topology(topology)
+    : m_sourceClockMode(sourceClockMode)
     , m_policy(policy)
     , m_generation(generation)
 {
@@ -25,7 +25,7 @@ MediaAvSyncResult<MediaVideoSyncController> MediaVideoSyncController::create(
         return MediaAvSyncResult<MediaVideoSyncController>::failure(
             MediaAvSyncError(
                 MediaAvSyncErrorCode::InvalidVideoSyncPolicy,
-                plan.topology.value_or(MediaAvSyncTopology::Unknown),
+                plan.sourceClockMode,
                 MediaAvSyncErrorState::VideoSync,
                 "create",
                 "video",
@@ -42,7 +42,7 @@ MediaAvSyncResult<MediaVideoSyncController> MediaVideoSyncController::create(
 
     return MediaAvSyncResult<MediaVideoSyncController>::success(
         MediaVideoSyncController(
-            *plan.topology,
+            *plan.sourceClockMode,
             Policy{
                 plan.video.earlyHoldThresholdNs->nanoseconds(),
                 plan.video.lateDisplayThresholdNs->nanoseconds(),
@@ -406,7 +406,7 @@ MediaAvSyncError MediaVideoSyncController::error(
 {
     return MediaAvSyncError(
         code,
-        m_topology,
+        m_sourceClockMode,
         MediaAvSyncErrorState::VideoSync,
         operation,
         "video",

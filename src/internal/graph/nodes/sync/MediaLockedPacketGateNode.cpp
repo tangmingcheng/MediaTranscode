@@ -2,6 +2,7 @@
 
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/runtime/buffer/FFmpegPacketBuffer.h"
+#include "internal/graph/runtime/buffer/MediaControlBuffer.h"
 #include "internal/graph/runtime/buffer/MediaSourceClockStateBuffer.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 #include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
@@ -38,6 +39,32 @@ MediaNodeKind MediaLockedPacketGateNode::staticKind() noexcept
     return MediaNodeKind::LockedPacketGate;
 }
 
+::media::Result<MediaOutputCommitReservation>
+MediaLockedPacketGateNode::reserveOutputCommit(
+    const MediaBufferRef& buffer) const
+{
+    if (!dynamic_cast<const MediaControlBuffer*>(buffer.get())) {
+        return FFmpegNodeRuntime::reserveOutputCommit(buffer);
+    }
+    if (!m_controlGenerationPolicy || !m_syncGroup) {
+        return ::media::Result<
+            MediaOutputCommitReservation>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "Locked packet gate control policy is not configured"));
+    }
+    auto classified = classifyMediaAvSyncControl(
+        buffer, *m_controlGenerationPolicy, *m_syncGroup,
+        m_initialGeneration);
+    if (!classified) {
+        return ::media::Result<
+            MediaOutputCommitReservation>::failure(
+                classified.error());
+    }
+    return reserveMediaAvSyncControlPublication(
+        std::move(classified).value(), m_lockedGeneration,
+        MediaControlConsumerGenerationRequirement::ExactWhenPresent);
+}
+
 ::media::Result<MediaNodeProcessResult>
 MediaLockedPacketGateNode::onProcess(MediaGraphExecutionContext& context)
 {
@@ -63,7 +90,7 @@ MediaLockedPacketGateNode::onProcess(MediaGraphExecutionContext& context)
             : processProgress(
                   ::media::Status::failure(disposition.error()));
     }
-    if (m_pendingPacket) {
+    if (m_pendingInput) {
         if (!m_lockedGeneration &&
             m_syncGroup->reacquisitionSnapshot().phase ==
                 MediaAvReacquisitionPhase::Inactive) {
@@ -74,9 +101,8 @@ MediaLockedPacketGateNode::onProcess(MediaGraphExecutionContext& context)
             }
             return processWaiting();
         }
-        MediaBufferRef pending = std::move(m_pendingPacket);
-        return processProgress(
-            processPacket(context, std::move(pending)));
+        MediaBufferRef pending = std::move(m_pendingInput);
+        return processInput(context, std::move(pending));
     }
     auto packet = tryPopInputOptional(context, "packet");
     if (!packet) {
@@ -91,18 +117,8 @@ MediaLockedPacketGateNode::onProcess(MediaGraphExecutionContext& context)
         return processWaiting();
     }
     MediaBufferRef input = std::move(*packet.value());
-    if (input->isFlush()) {
-        return processProgress(::media::Status::failure(
-            invalidGateEvidence(
-                "Locked packet gate rejects discontinuity flush")));
-    }
-    if (input->isEof()) {
-        if (!m_lockedGeneration) {
-            return processProgress(::media::Status::failure(
-                invalidGateEvidence(
-                    "Locked packet gate cannot finish before initial lock")));
-        }
-        return processFinished(emitOutput(context, "packet", input));
+    if (dynamic_cast<const MediaControlBuffer*>(input.get())) {
+        return processInput(context, std::move(input));
     }
     if (!m_lockedGeneration) {
         const auto snapshot = m_syncGroup->reacquisitionSnapshot();
@@ -115,7 +131,7 @@ MediaLockedPacketGateNode::onProcess(MediaGraphExecutionContext& context)
             return processProgress(
                 ::media::Status::failure(generation.error()));
         }
-        if (auto status = retainPendingPacket(std::move(input)); !status) {
+        if (auto status = retainPendingInput(std::move(input)); !status) {
             return processProgress(status);
         }
         if (m_acquisitionDeadline->deadline()) {
@@ -125,7 +141,7 @@ MediaLockedPacketGateNode::onProcess(MediaGraphExecutionContext& context)
         }
         return processWaiting();
     }
-    return processProgress(processPacket(context, std::move(input)));
+    return processInput(context, std::move(input));
 }
 
 ::media::Status MediaLockedPacketGateNode::configure(
@@ -148,6 +164,9 @@ MediaLockedPacketGateNode::onProcess(MediaGraphExecutionContext& context)
     auto initialPolicy = requiredNodeOption(
         options, "MediaLockedPacketGateNode",
         "locked_packet_gate.initial_generation_policy");
+    auto controlGenerationPolicy = requiredNodeOption(
+        options, "MediaLockedPacketGateNode",
+        "locked_packet_gate.control_generation_policy");
     if (!stream) return ::media::Status::failure(stream.error());
     if (!timeout) return ::media::Status::failure(timeout.error());
     if (!group) return ::media::Status::failure(group.error());
@@ -155,6 +174,10 @@ MediaLockedPacketGateNode::onProcess(MediaGraphExecutionContext& context)
         return ::media::Status::failure(initialGeneration.error());
     }
     if (!initialPolicy) return ::media::Status::failure(initialPolicy.error());
+    if (!controlGenerationPolicy) {
+        return ::media::Status::failure(
+            controlGenerationPolicy.error());
+    }
     if (initialPolicy.value() != "first_locked_only_fail_on_change") {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "Locked packet gate rejects an unsupported initial generation policy"));
@@ -162,6 +185,15 @@ MediaLockedPacketGateNode::onProcess(MediaGraphExecutionContext& context)
     m_streamKind = stream.value();
     m_initialGeneration =
         static_cast<std::uint64_t>(initialGeneration.value());
+    auto decodedControlGenerationPolicy =
+        decodeMediaControlGenerationPolicy(
+            controlGenerationPolicy.value());
+    if (!decodedControlGenerationPolicy) {
+        return ::media::Status::failure(
+            decodedControlGenerationPolicy.error());
+    }
+    m_controlGenerationPolicy =
+        decodedControlGenerationPolicy.value();
     auto deadline = MediaInitialClockAcquisitionDeadline::create(
         MediaRunningTime::fromNanoseconds(timeout.value()));
     if (!deadline) return ::media::Status::failure(deadline.error());
@@ -179,13 +211,43 @@ MediaLockedPacketGateNode::onProcess(MediaGraphExecutionContext& context)
 ::media::Result<MediaLockedPacketGateDisposition>
 MediaLockedPacketGateNode::acceptClock(const MediaBufferRef& buffer)
 {
-    if (buffer->isEof()) {
-        return m_lockedGeneration
-            ? GateDispositionResult::success(
-                  MediaLockedPacketGateDisposition::Pass)
-            : GateDispositionResult::failure(
-                  invalidGateEvidence(
-                      "Locked packet gate clock ended before lock"));
+    if (dynamic_cast<const MediaControlBuffer*>(buffer.get())) {
+        auto control = classifyMediaAvSyncControl(
+            buffer, *m_controlGenerationPolicy, *m_syncGroup,
+            m_initialGeneration);
+        if (!control) {
+            return GateDispositionResult::failure(control.error());
+        }
+        switch (control.value().generation) {
+        case MediaControlGenerationDisposition::DropOld:
+            return GateDispositionResult::success(
+                MediaLockedPacketGateDisposition::DropOldGeneration);
+        case MediaControlGenerationDisposition::Withhold:
+            return GateDispositionResult::success(
+                MediaLockedPacketGateDisposition::
+                    WithholdForReacquisition);
+        case MediaControlGenerationDisposition::Forward:
+            if (control.value().control.kind ==
+                MediaControlBufferKind::Flush) {
+                return GateDispositionResult::failure(
+                    invalidGateEvidence(
+                        "Locked packet gate rejects clock flush"));
+            }
+            if (control.value().control.control->generation() &&
+                (!m_lockedGeneration ||
+                 *control.value().control.control->generation() !=
+                     *m_lockedGeneration)) {
+                return GateDispositionResult::failure(
+                    invalidGateEvidence(
+                        "Locked packet gate clock control differs from its locked generation"));
+            }
+            return m_lockedGeneration
+                ? GateDispositionResult::success(
+                      MediaLockedPacketGateDisposition::Pass)
+                : GateDispositionResult::failure(
+                      invalidGateEvidence(
+                          "Locked packet gate clock ended before lock"));
+        }
     }
     const auto* state =
         dynamic_cast<const MediaSourceClockStateBuffer*>(buffer.get());
@@ -398,7 +460,7 @@ MediaLockedPacketGateNode::packetGeneration(const MediaBufferRef& buffer) const
     case MediaLockedPacketGateDisposition::PassToReacquisition:
         return emitOutput(context, "packet", buffer);
     case MediaLockedPacketGateDisposition::WithholdForReacquisition:
-        return retainPendingPacket(std::move(buffer));
+        return retainPendingInput(std::move(buffer));
     case MediaLockedPacketGateDisposition::DropOldGeneration:
         return ::media::Status::success();
     }
@@ -407,15 +469,74 @@ MediaLockedPacketGateNode::packetGeneration(const MediaBufferRef& buffer) const
             "Locked packet gate rejects unknown disposition"));
 }
 
-::media::Status MediaLockedPacketGateNode::retainPendingPacket(
+::media::Result<MediaNodeProcessResult>
+MediaLockedPacketGateNode::processInput(
+    MediaGraphExecutionContext& context,
     MediaBufferRef buffer)
 {
-    if (m_pendingPacket || !buffer) {
+    if (dynamic_cast<const MediaControlBuffer*>(buffer.get())) {
+        auto control = classifyMediaAvSyncControl(
+            buffer, *m_controlGenerationPolicy, *m_syncGroup,
+            m_initialGeneration);
+        if (!control) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                control.error());
+        }
+        switch (control.value().generation) {
+        case MediaControlGenerationDisposition::DropOld:
+            return processProgress();
+        case MediaControlGenerationDisposition::Withhold:
+            if (auto retained = retainPendingInput(std::move(buffer));
+                !retained) {
+                return processProgress(retained);
+            }
+            return processWaiting();
+        case MediaControlGenerationDisposition::Forward:
+            if (control.value().control.kind ==
+                MediaControlBufferKind::Flush) {
+                return ::media::Result<MediaNodeProcessResult>::failure(
+                    invalidGateEvidence(
+                        "Locked packet gate rejects discontinuity flush"));
+            }
+            if (!m_lockedGeneration) {
+                return ::media::Result<MediaNodeProcessResult>::failure(
+                    invalidGateEvidence(
+                        "Locked packet gate cannot terminate before initial lock"));
+            }
+            if (control.value().control.control->generation() &&
+                *control.value().control.control->generation() !=
+                    *m_lockedGeneration) {
+                if (auto retained =
+                        retainPendingInput(std::move(buffer));
+                    !retained) {
+                    return processProgress(retained);
+                }
+                return processWaiting();
+            }
+            {
+                control.value().publicationAuthority.reset();
+                auto emitted = emitOutput(
+                    context, "packet", buffer);
+                return control.value().control.flow ==
+                        MediaControlBufferFlow::Terminal
+                    ? processFinished(std::move(emitted))
+                    : processProgress(std::move(emitted));
+            }
+        }
+    }
+    return processProgress(
+        processPacket(context, std::move(buffer)));
+}
+
+::media::Status MediaLockedPacketGateNode::retainPendingInput(
+    MediaBufferRef buffer)
+{
+    if (m_pendingInput || !buffer) {
         return ::media::Status::failure(
             invalidGateEvidence(
-                "Locked packet gate retains at most one pending packet"));
+                "Locked packet gate retains at most one pending input"));
     }
-    m_pendingPacket = std::move(buffer);
+    m_pendingInput = std::move(buffer);
     return ::media::Status::success();
 }
 
@@ -439,8 +560,9 @@ void MediaLockedPacketGateNode::resetState() noexcept
     m_syncGroupKey.reset();
     m_syncGroup.reset();
     m_acquisitionDeadline.reset();
-    m_pendingPacket.reset();
+    m_pendingInput.reset();
     m_streamKind = MediaStreamKind::Unknown;
+    m_controlGenerationPolicy.reset();
     m_configured = false;
 }
 

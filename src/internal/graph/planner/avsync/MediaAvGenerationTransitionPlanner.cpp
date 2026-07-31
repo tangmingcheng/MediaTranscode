@@ -1,12 +1,14 @@
 #include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlanner.h"
+#include "internal/graph/sync/MediaDemuxClockBinderGenerationIdentities.h"
 #include "internal/graph/sync/lineage/MediaAudioLineageIdentities.h"
 
 namespace media::ffmpeg::graph {
 namespace {
 
-std::vector<std::string> canonicalLineageChildren()
+std::vector<std::string> canonicalLineageChildren(
+    MediaAvSyncSourceClockMode sourceClockMode)
 {
-    return {
+    std::vector<std::string> children{
         "startup_generation_state",
         "video_decode",
         "video_frame_rate",
@@ -18,12 +20,22 @@ std::vector<std::string> canonicalLineageChildren()
         std::string(MediaAudioEncodeLineageIdentity),
         std::string(MediaEncodedAudioCanonicalizerLineageIdentity)
     };
+    if (sourceClockMode == MediaAvSyncSourceClockMode::DemuxTimestamps) {
+        children.insert(
+            children.begin(),
+            std::string(MediaDemuxAudioClockBinderGenerationIdentity));
+        children.insert(
+            children.begin(),
+            std::string(MediaDemuxVideoClockBinderGenerationIdentity));
+    }
+    return children;
 }
 
 } // namespace
 
 MediaAvGenerationTransitionPlan MediaAvGenerationTransitionPlanner::plan(
     MediaAvSyncOutputAdapterKind adapter,
+    MediaAvSyncSourceClockMode sourceClockMode,
     MediaRunningTime acknowledgementTimeout,
     MediaRunningTime terminalDrainWindow)
 {
@@ -31,7 +43,7 @@ MediaAvGenerationTransitionPlan MediaAvGenerationTransitionPlanner::plan(
         {}, acknowledgementTimeout, terminalDrainWindow};
     transition.participants.push_back({
         MediaAvGenerationParticipant::CanonicalLineage,
-        canonicalLineageChildren()});
+        canonicalLineageChildren(sourceClockMode)});
     transition.participants.push_back({
         MediaAvGenerationParticipant::AudioCorrection,
         {std::string(MediaAudioCorrectionGenerationIdentity)}});

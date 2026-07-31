@@ -59,7 +59,7 @@ ExplicitMediaMuxSessionFactory::ExplicitMediaMuxSessionFactory(
         if (!m_generationState) {
             return ::media::Result<std::unique_ptr<MediaMuxSession>>::failure(
                 ::media::ErrorInfo::notInitialized(
-                    "project MPEG-TS mux session requires an injected generation state"));
+                    "project MPEG-TS mux session requires its injected generation authority"));
         }
         auto video = requiredBoolNodeOption(
             &options, "MediaMuxSessionFactory", MediaTranscodeOptionKey::MuxExpectVideo);

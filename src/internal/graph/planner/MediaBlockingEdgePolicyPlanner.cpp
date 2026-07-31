@@ -37,6 +37,7 @@ MediaRealtimeEdgePolicySet MediaBlockingEdgePolicyPlanner::plan(
     policies.audioPacket = planQueue(queues.packet);
     policies.synchronizedPacket = planQueue(queues.packet);
     policies.videoFrame = planQueue(queues.frame);
+    policies.synchronizedVideoFrame = planQueue(queues.frame);
     policies.audioFrame = planQueue(queues.frame);
     policies.mux = planQueue(queues.mux);
     policies.videoMux = planQueue(queues.mux);

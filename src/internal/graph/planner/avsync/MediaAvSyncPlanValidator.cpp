@@ -47,8 +47,10 @@ bool validByteCapacity(const std::optional<std::size_t>& units,
 
 ::media::Status validateShared(const MediaAvSyncPlan& plan, bool finalized)
 {
-    if (!plan.topology) return invalid("topology");
     if (!plan.sourceClockMode) return invalid("sourceClockMode");
+    if (!plan.controlGenerationPolicy) {
+        return invalid("controlGenerationPolicy");
+    }
     if (!plan.masterClockMode ||
         *plan.masterClockMode != MediaAvSyncMasterClockMode::SteadyMonotonic) {
         return invalid("masterClockMode");
@@ -232,13 +234,15 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
            stream.baseTimestamp && presentText(stream.cname);
 }
 
-::media::Status validateRtp(const MediaAvSyncPlan& plan)
+::media::Status validateRtpInput(const MediaAvSyncPlan& plan)
 {
-    if (plan.ts || !plan.rtp ||
-        *plan.sourceClockMode != MediaAvSyncSourceClockMode::RtpSenderReports) {
-        return invalid("RTP topology clock contract");
+    if (!plan.rtpInput || plan.mpegTsInput || plan.demuxTimestampInput ||
+        *plan.sourceClockMode != MediaAvSyncSourceClockMode::RtpSenderReports ||
+        *plan.controlGenerationPolicy !=
+            MediaControlGenerationPolicy::OptionalExactWhenPresent) {
+        return invalid("RTP input clock contract");
     }
-    const auto& rtp = *plan.rtp;
+    const auto& rtp = *plan.rtpInput;
     if (!validRtpInputStream(rtp.videoInput) || !validRtpInputStream(rtp.audioInput) ||
         rtp.input.commonEpochPolicy !=
             MediaRtpCommonEpochPolicy::EarliestLockedSenderReportSourceTime ||
@@ -264,25 +268,18 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
             *plan.recovery.hardDiscontinuityThresholdNs) {
         return invalid("RTP input association, RTCP, or sender report policy");
     }
-    if (!validRtpOutputStream(rtp.videoOutput) ||
-        !validRtpOutputStream(rtp.audioOutput) ||
-        *rtp.videoOutput.ssrc == *rtp.audioOutput.ssrc ||
-        *rtp.videoOutput.cname != *rtp.audioOutput.cname ||
-        !rtp.output.useSharedNtpEpoch || !*rtp.output.useSharedNtpEpoch ||
-        !positive(rtp.output.senderReportIntervalNs) ||
-        *rtp.output.senderReportIntervalNs >= *rtp.input.senderReportTimeoutNs) {
-        return invalid("RTP output identities, CNAME, or sender report policy");
-    }
     return ::media::Status::success();
 }
 
-::media::Status validateTs(const MediaAvSyncPlan& plan)
+::media::Status validateTsInput(const MediaAvSyncPlan& plan)
 {
-    if (plan.rtp || !plan.ts ||
-        *plan.sourceClockMode != MediaAvSyncSourceClockMode::MpegTsPcr) {
-        return invalid("MPEG-TS topology clock contract");
+    if (plan.rtpInput || !plan.mpegTsInput || plan.demuxTimestampInput ||
+        *plan.sourceClockMode != MediaAvSyncSourceClockMode::MpegTsPcr ||
+        *plan.controlGenerationPolicy !=
+            MediaControlGenerationPolicy::OptionalExactWhenPresent) {
+        return invalid("MPEG-TS input clock contract");
     }
-    const auto& ts = *plan.ts;
+    const auto& ts = *plan.mpegTsInput;
     constexpr int MinimumAssignablePid = 0x0020;
     constexpr int NullPid = 0x1FFF;
     if (!positive(ts.programNumber) || *ts.programNumber > 0xFFFF ||
@@ -292,11 +289,97 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
         !ts.pcrPid || *ts.pcrPid < MinimumAssignablePid || *ts.pcrPid >= NullPid ||
         *ts.programMapPid == *ts.videoPid || *ts.programMapPid == *ts.audioPid ||
         *ts.programMapPid == *ts.pcrPid ||
-        *ts.videoPid == *ts.audioPid ||
-        !ts.outputMux) {
-        return invalid("MPEG-TS input selection or output mux plan");
+        *ts.videoPid == *ts.audioPid) {
+        return invalid("MPEG-TS input selection");
     }
     return ::media::Status::success();
+}
+
+::media::Status validateDemuxInput(const MediaAvSyncPlan& plan)
+{
+    if (plan.rtpInput || plan.mpegTsInput || !plan.demuxTimestampInput ||
+        *plan.sourceClockMode != MediaAvSyncSourceClockMode::DemuxTimestamps ||
+        *plan.controlGenerationPolicy !=
+            MediaControlGenerationPolicy::RequiredExact) {
+        return invalid("demux timestamp input clock contract");
+    }
+    const auto& demux = *plan.demuxTimestampInput;
+    if (!demux.videoTimeBase.isKnown() || demux.videoTimeBase.num <= 0 ||
+        demux.videoTimeBase.den <= 0 || !demux.audioTimeBase.isKnown() ||
+        demux.audioTimeBase.num <= 0 || demux.audioTimeBase.den <= 0 ||
+        !positive(demux.firstWindowMaximumSkewNs) ||
+        !positive(demux.discontinuityThresholdNs) ||
+        !positive(demux.initialGeneration) ||
+        !demux.canonicalTargetEpochNs ||
+        demux.firstWindowMaximumSkewNs !=
+            plan.startup.maximumInitialSkewNs ||
+        demux.discontinuityThresholdNs !=
+            plan.recovery.hardDiscontinuityThresholdNs) {
+        return invalid("demux timestamp policy");
+    }
+    return ::media::Status::success();
+}
+
+::media::Status validateRtpOutput(const MediaAvSyncPlan& plan)
+{
+    if (!plan.rtpOutput || plan.projectMpegTsOutput) {
+        return invalid("separate RTP output authority");
+    }
+    const auto& rtp = *plan.rtpOutput;
+    if (!validRtpOutputStream(rtp.videoOutput) ||
+        !validRtpOutputStream(rtp.audioOutput) ||
+        *rtp.videoOutput.ssrc == *rtp.audioOutput.ssrc ||
+        *rtp.videoOutput.cname != *rtp.audioOutput.cname ||
+        !rtp.output.useSharedNtpEpoch || !*rtp.output.useSharedNtpEpoch ||
+        !positive(rtp.output.senderReportIntervalNs) ||
+        *rtp.output.senderReportIntervalNs >=
+            *plan.recovery.reacquisitionTimeoutNs) {
+        return invalid("RTP output identities, CNAME, or sender report policy");
+    }
+    return ::media::Status::success();
+}
+
+::media::Status validateProjectMpegTsOutput(const MediaAvSyncPlan& plan)
+{
+    if (plan.rtpOutput || !plan.projectMpegTsOutput ||
+        !plan.projectMpegTsOutput->outputMux ||
+        !plan.projectMpegTsOutput->useSharedNtpEpoch) {
+        return invalid("Project MPEG-TS output authority");
+    }
+    const auto transport =
+        plan.projectMpegTsOutput->outputMux->parameters().transportKind;
+    const bool requiresSharedNtpEpoch =
+        transport == MediaOutputTransportKind::RtpAvp;
+    if ((transport != MediaOutputTransportKind::UdpDatagrams &&
+         transport != MediaOutputTransportKind::RtpAvp) ||
+        *plan.projectMpegTsOutput->useSharedNtpEpoch !=
+            requiresSharedNtpEpoch) {
+        return invalid("Project MPEG-TS shared NTP epoch policy");
+    }
+    return ::media::Status::success();
+}
+
+::media::Status validateInputClock(const MediaAvSyncPlan& plan)
+{
+    switch (*plan.sourceClockMode) {
+    case MediaAvSyncSourceClockMode::RtpSenderReports:
+        return validateRtpInput(plan);
+    case MediaAvSyncSourceClockMode::MpegTsPcr:
+        return validateTsInput(plan);
+    case MediaAvSyncSourceClockMode::DemuxTimestamps:
+        return validateDemuxInput(plan);
+    }
+    return invalid("sourceClockMode");
+}
+
+::media::Status validateOutput(const MediaAvSyncPlan& plan)
+{
+    if (plan.rtpOutput.has_value() == plan.projectMpegTsOutput.has_value()) {
+        return invalid("exactly one output authority");
+    }
+    return plan.rtpOutput
+        ? validateRtpOutput(plan)
+        : validateProjectMpegTsOutput(plan);
 }
 
 } // namespace
@@ -304,26 +387,16 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
 ::media::Status MediaAvSyncPlanValidator::validate(const MediaAvSyncPlan& plan)
 {
     if (auto status = validateShared(plan, true); !status) return status;
-    switch (*plan.topology) {
-    case MediaAvSyncTopology::SeparateRtpToSeparateRtp:
-        return validateRtp(plan);
-    case MediaAvSyncTopology::MpegTsToMpegTs:
-        return validateTs(plan);
-    }
-    return invalid("topology");
+    if (auto status = validateInputClock(plan); !status) return status;
+    return validateOutput(plan);
 }
 
 ::media::Status MediaAvSyncPlanValidator::validatePolicy(
     const MediaAvSyncPlan& plan)
 {
     if (auto status = validateShared(plan, false); !status) return status;
-    switch (*plan.topology) {
-    case MediaAvSyncTopology::SeparateRtpToSeparateRtp:
-        return validateRtp(plan);
-    case MediaAvSyncTopology::MpegTsToMpegTs:
-        return validateTs(plan);
-    }
-    return invalid("topology");
+    if (auto status = validateInputClock(plan); !status) return status;
+    return validateOutput(plan);
 }
 
 } // namespace media::ffmpeg::graph

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/graph/model/MediaOutputTransportKind.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/model/RealtimeStreamLayout.h"
 #include "internal/graph/time/MediaRunningTime.h"
@@ -42,6 +43,7 @@ struct MediaRealtimeInputConfig {
 
 struct MediaRealtimeOutputConfig {
     std::optional<RealtimeOutputStreamLayout> streamLayout;
+    std::optional<MediaOutputTransportKind> transport;
     std::string host;
     std::optional<std::size_t> basePort;
     std::string sdpPath;

@@ -2,6 +2,7 @@
 
 #include "internal/graph/model/MediaPacketSourceTiming.h"
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
+#include "internal/graph/nodes/sync/MediaAvSyncControlGenerationContract.h"
 #include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
 #include "internal/graph/sync/lineage/MediaCanonicalAudioSourceTimeline.h"
 
@@ -9,6 +10,8 @@
 #include <string>
 
 namespace media::ffmpeg::graph {
+
+class MediaAvSyncGroupRuntime;
 
 class MediaCanonicalInputNode final : public FFmpegNodeRuntime {
 public:
@@ -28,12 +31,21 @@ public:
                  std::optional<MediaCanonicalAudioSampleInterval> audioInterval);
 
 protected:
+    ::media::Result<MediaOutputCommitReservation>
+    reserveOutputCommit(const MediaBufferRef& buffer) const override;
     ::media::Result<MediaNodeProcessResult> onProcess(
         MediaGraphExecutionContext& context) override;
 
 private:
+    enum class DurationMode {
+        MappedSourceTiming,
+        RawPacketTimeBase,
+        PlannedAudioSamples
+    };
     ::media::Status configure(MediaGraphExecutionContext& context);
     ::media::Result<MediaRunningTime> durationFor(
+        const MediaBufferRef& packet) const;
+    ::media::Result<std::uint32_t> audioSampleCountFor(
         const MediaBufferRef& packet) const;
     void resetState() noexcept;
     std::optional<MediaScheduledStream> m_stream;
@@ -44,7 +56,12 @@ private:
     std::uint64_t m_nextSequence = 1;
     int m_audioSampleRate = 0;
     std::uint32_t m_audioSampleCount = 0;
+    std::optional<DurationMode> m_durationMode;
     std::optional<MediaCanonicalAudioSourceTimeline> m_audioTimeline;
+    std::shared_ptr<MediaAvSyncGroupRuntime> m_syncGroup;
+    std::uint64_t m_initialGeneration = 0;
+    std::optional<MediaControlGenerationPolicy>
+        m_controlGenerationPolicy;
 };
 
 } // namespace media::ffmpeg::graph

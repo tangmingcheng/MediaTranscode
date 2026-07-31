@@ -118,6 +118,8 @@ struct MediaRealtimeMuxedOutputPlan {
     std::string mediaId;
     std::optional<MediaOutputResourceKind> outputResourceKind;
     std::optional<MediaMuxSessionKind> muxSessionKind;
+    std::optional<MediaRtpUdpSenderConfig> rtpTransport;
+    std::string sdpPath;
 };
 
 struct MediaRealtimeSdpWriterPlan {
@@ -155,6 +157,7 @@ struct MediaRealtimeRtpTranscodePlan {
     RealtimeInputType inputType;
     RealtimeInputStreamLayout inputLayout;
     RealtimeOutputStreamLayout outputLayout;
+    MediaOutputTransportKind outputTransport;
     MediaPipelinePlan videoPlan;
     MediaAudioPipelinePlan audioPlan;
     MediaVideoTranscodeParameters videoParameters;
@@ -197,7 +200,8 @@ private:
     static ::media::Result<MediaRealtimeRtpTranscodePlan> planWithInput(
         const MediaRealtimeRtpTranscodeRequest& request,
         const MediaRealtimeInputStreamInfo* inputInfo,
-        const MediaTsSelectedProgramPlan* selectedTsProgram = nullptr);
+        const MediaTsSelectedProgramPlan* selectedTsProgram,
+        const MediaPreparedRealtimeInput* preparedInput);
     static ::media::Result<MediaRealtimeTranscodePreflight> preflightImpl(
         const MediaRealtimeRtpTranscodeRequest& request,
         const MediaRealtimePreflightIo* io);

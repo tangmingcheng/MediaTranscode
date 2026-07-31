@@ -883,8 +883,7 @@ MediaAvOutputSchedulerNode::emitWithCommit(
     return ::media::Result<MediaNodeProcessResult>::failure(status.error());
 }
 
-::media::Result<
-    std::optional<MediaProtocolOutputGenerationCommitReservation>>
+::media::Result<MediaOutputCommitReservation>
 MediaAvOutputSchedulerNode::reserveOutputCommit(
     const MediaBufferRef& buffer) const
 {
@@ -896,23 +895,18 @@ MediaAvOutputSchedulerNode::reserveOutputCommit(
         generation = m_generationData->pendingCommit->generation;
     }
     if (!m_group || !generation) {
-        return ::media::Result<
-            std::optional<
-                MediaProtocolOutputGenerationCommitReservation>>::failure(
+        return ::media::Result<MediaOutputCommitReservation>::failure(
                     ::media::ErrorInfo::notInitialized(
                         "A/V scheduler commit requires a planned generation"));
     }
     auto reservation = m_generationState->reserveCommit(
         *m_group, *generation);
     if (!reservation) {
-        return ::media::Result<
-            std::optional<
-                MediaProtocolOutputGenerationCommitReservation>>::failure(
+        return ::media::Result<MediaOutputCommitReservation>::failure(
                     reservation.error());
     }
-    return ::media::Result<
-        std::optional<MediaProtocolOutputGenerationCommitReservation>>::
-        success(std::optional<MediaProtocolOutputGenerationCommitReservation>(
+    return ::media::Result<MediaOutputCommitReservation>::success(
+        MediaOutputCommitReservation::hold(
             std::move(reservation).value()));
 }
 

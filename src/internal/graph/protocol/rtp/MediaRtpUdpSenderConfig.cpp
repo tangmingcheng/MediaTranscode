@@ -108,4 +108,42 @@ MediaRtpUdpSenderConfig::MediaRtpUdpSenderConfig(
             maximumDatagramBytes, ioBehavior));
 }
 
+::media::Result<MediaRtpUdpSenderConfig>
+MediaRtpUdpSenderConfig::clone() const
+{
+    auto localPolicy = [&]()
+        -> ::media::Result<MediaRtpUdpLocalPortPolicy> {
+        switch (m_localPortPolicy.kind()) {
+        case MediaRtpUdpLocalPortPolicyKind::FixedAdjacent:
+            if (!m_localPortPolicy.rtpPort() ||
+                !m_localPortPolicy.rtcpPort()) {
+                return ::media::Result<
+                    MediaRtpUdpLocalPortPolicy>::failure(
+                    ::media::ErrorInfo::invalidArgument(
+                        "fixed RTP sender local port policy is incomplete"));
+            }
+            return MediaRtpUdpLocalPortPolicy::fixedAdjacent(
+                *m_localPortPolicy.rtpPort(),
+                *m_localPortPolicy.rtcpPort());
+        case MediaRtpUdpLocalPortPolicyKind::OsAssignedIndependent:
+            return ::media::Result<
+                MediaRtpUdpLocalPortPolicy>::success(
+                MediaRtpUdpLocalPortPolicy::osAssignedIndependent());
+        }
+        return ::media::Result<MediaRtpUdpLocalPortPolicy>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "RTP sender local port policy is unknown"));
+    }();
+    if (!localPolicy) {
+        return ::media::Result<MediaRtpUdpSenderConfig>::failure(
+            localPolicy.error());
+    }
+    return create(
+        m_addressFamily, m_localNumericAddress,
+        m_remoteRtpEndpoint.numericAddress(),
+        m_remoteRtpEndpoint.port(), m_remoteRtcpEndpoint.port(),
+        std::move(localPolicy).value(), m_sendBufferBytes,
+        m_maximumDatagramBytes, m_ioBehavior);
+}
+
 } // namespace media::ffmpeg::graph

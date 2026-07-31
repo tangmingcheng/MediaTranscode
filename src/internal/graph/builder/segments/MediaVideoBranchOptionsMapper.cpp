@@ -27,6 +27,8 @@ MediaVideoTranscodeBranchOptions makeVideoTranscodeBranchOptions(const MediaVide
     transcodeOptions.edgePolicies = options.edgePolicies;
     transcodeOptions.inputStartRequiresKeyFrame = options.inputStartRequiresKeyFrame;
     transcodeOptions.canonicalLineageCapacity = options.canonicalLineageCapacity;
+    transcodeOptions.generationStartRequiresKeyFrame =
+        options.generationStartRequiresKeyFrame;
     transcodeOptions.formatSourceNode = options.formatSourceNode;
     transcodeOptions.formatSourcePort = options.formatSourcePort;
     transcodeOptions.packetSourceNode = options.packetSourceNode;

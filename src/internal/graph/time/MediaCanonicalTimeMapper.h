@@ -12,7 +12,7 @@ namespace media::ffmpeg::graph {
 struct MediaCanonicalTimeMapperConfig final {
     MediaRunningTime sourceEpoch;
     MediaRunningTime runningTimeEpoch;
-    MediaAvSyncTopology topology;
+    MediaAvSyncSourceClockMode sourceClockMode;
     std::string sourceIdentity;
     std::uint64_t generation;
 };

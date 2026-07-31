@@ -184,38 +184,38 @@ openMpegTsRuntimeSession(
             MediaRtpClockLivenessPolicy::CnameTimeoutMs,
             MediaRtcpCompositionMode::ReducedSizeRfc5506});
     }
-    if (!avSync->rtp || !avSync->rtp->input.requireSenderReports ||
-        !avSync->rtp->input.rtcpCompositionMode) {
+    if (!avSync->rtpInput || !avSync->rtpInput->input.requireSenderReports ||
+        !avSync->rtpInput->input.rtcpCompositionMode) {
         return ::media::Result<MediaRtpInputClockTransportPolicy>::failure(
             ::media::ErrorInfo::notInitialized(
                 "Raw RTP A/V sync requires a complete planner-owned RTCP policy"));
     }
     const auto senderReportTimeout = wholeMilliseconds(
-        avSync->rtp->input.senderReportTimeoutNs,
+        avSync->rtpInput->input.senderReportTimeoutNs,
         "sender report timeout");
     if (!senderReportTimeout) {
         return ::media::Result<MediaRtpInputClockTransportPolicy>::failure(
             senderReportTimeout.error());
     }
     const auto identityEvidenceTimeout = wholeMilliseconds(
-        avSync->rtp->input.identityEvidenceTimeoutNs,
+        avSync->rtpInput->input.identityEvidenceTimeoutNs,
         "identity evidence timeout");
     if (!identityEvidenceTimeout) {
         return ::media::Result<MediaRtpInputClockTransportPolicy>::failure(
             identityEvidenceTimeout.error());
     }
-    if (avSync->rtp->input.streamAssociationMode !=
+    if (avSync->rtpInput->input.streamAssociationMode !=
         MediaAvSyncRtpStreamAssociationMode::PlannedStreamPair) {
         return ::media::Result<MediaRtpInputClockTransportPolicy>::failure(
             ::media::ErrorInfo::notInitialized(
                 "Raw RTP A/V sync stream association mode is missing"));
     }
     return ::media::Result<MediaRtpInputClockTransportPolicy>::success({
-        *avSync->rtp->input.requireSenderReports,
+        *avSync->rtpInput->input.requireSenderReports,
         false,
         senderReportTimeout.value(),
         identityEvidenceTimeout.value(),
-        *avSync->rtp->input.rtcpCompositionMode});
+        *avSync->rtpInput->input.rtcpCompositionMode});
 }
 
 ::media::Result<MediaPreparedRealtimeInputScan> prepareMpegTs(

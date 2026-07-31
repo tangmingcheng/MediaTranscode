@@ -653,7 +653,7 @@ git push origin codex/quality-priority-improvements
 ```cpp
 struct MediaAvReacquisitionRecord final {
     MediaAvSyncGroupKey groupKey;
-    MediaAvSyncTopology topology;
+    MediaAvSyncSourceClockMode sourceClockMode;
     MediaAvReacquisitionReason reason;
     std::uint64_t oldGeneration;
     std::uint64_t nextGeneration;

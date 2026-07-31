@@ -21,7 +21,7 @@ public:
 class ExplicitMediaMuxSessionFactory final : public MediaMuxSessionFactory {
 public:
     ExplicitMediaMuxSessionFactory() = default;
-    explicit ExplicitMediaMuxSessionFactory(
+    ExplicitMediaMuxSessionFactory(
         std::shared_ptr<MediaProtocolOutputGenerationState> generationState);
 
     ::media::Result<std::unique_ptr<MediaMuxSession>> create(

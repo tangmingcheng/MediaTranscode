@@ -223,7 +223,8 @@ MediaAvEpochTransitionService::reserveActivatedOutput() const
 {
     std::unique_lock lock(m_mutex);
     if (m_firstError || m_readiness != MediaAvGenerationReadiness::Locked ||
-        !m_epoch || !m_coordinator.outputPermitted(m_epoch->generation)) {
+        !m_epoch || !m_audioOrigin ||
+        !m_coordinator.outputPermitted(m_epoch->generation)) {
         return ::media::Result<
             MediaAvActivatedOutputPermitReservation>::failure(
                 ::media::ErrorInfo::cancelled(
@@ -232,7 +233,7 @@ MediaAvEpochTransitionService::reserveActivatedOutput() const
     return ::media::Result<
         MediaAvActivatedOutputPermitReservation>::success(
             MediaAvActivatedOutputPermitReservation{
-                *m_epoch, m_completedTransitionSequence,
+                *m_epoch, *m_audioOrigin, m_completedTransitionSequence,
                 MediaAvOutputPermitCommitReservation(std::move(lock))});
 }
 

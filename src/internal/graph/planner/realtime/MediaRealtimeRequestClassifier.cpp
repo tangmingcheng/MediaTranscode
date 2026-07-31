@@ -30,7 +30,7 @@ bool MediaRealtimeRequestClassifier::unreliablePacketBoundary(const MediaRealtim
     return rawRtpInput(request) || mpegTsUdpInput(request);
 }
 
-bool MediaRealtimeRequestClassifier::separateRtpOutput(const MediaRealtimeRtpTranscodeRequest& request) noexcept
+bool MediaRealtimeRequestClassifier::separateStreamsOutput(const MediaRealtimeRtpTranscodeRequest& request) noexcept
 {
     return request.output.streamLayout == RealtimeOutputStreamLayout::SeparateStreams;
 }
@@ -38,6 +38,16 @@ bool MediaRealtimeRequestClassifier::separateRtpOutput(const MediaRealtimeRtpTra
 bool MediaRealtimeRequestClassifier::muxedTransportOutput(const MediaRealtimeRtpTranscodeRequest& request) noexcept
 {
     return request.output.streamLayout == RealtimeOutputStreamLayout::MuxedTransportStream;
+}
+
+bool MediaRealtimeRequestClassifier::udpOutput(const MediaRealtimeRtpTranscodeRequest& request) noexcept
+{
+    return request.output.transport == MediaOutputTransportKind::UdpDatagrams;
+}
+
+bool MediaRealtimeRequestClassifier::rtpAvpOutput(const MediaRealtimeRtpTranscodeRequest& request) noexcept
+{
+    return request.output.transport == MediaOutputTransportKind::RtpAvp;
 }
 
 } // namespace media::ffmpeg::graph

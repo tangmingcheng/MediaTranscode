@@ -14,13 +14,16 @@ struct MediaScheduledMpegTsOutputSegmentOptions final {
     MediaEndpoint videoCodec;
     MediaEndpoint audioCodec;
     MediaEndpoint scheduled;
+    bool expectVideo;
+    bool expectAudio;
 };
 
 struct MediaScheduledMpegTsOutputSegmentResult final {
     MediaNodeId planSource;
     MediaNodeId adapter;
-    MediaNodeId fileOutput;
+    MediaNodeId udpOutput;
     MediaNodeId mux;
+    MediaNodeId rtpSdpPublisher;
 };
 
 class MediaScheduledMpegTsOutputSegmentBuilder final {

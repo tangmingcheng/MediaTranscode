@@ -14,6 +14,9 @@
 
 namespace media::ffmpeg::graph {
 
+class MediaDemuxTimestampClockMapper;
+struct MediaDecodedDemuxPacketClockBinderNodePlan;
+
 struct MediaRuntimeGenerationPurgeRegistration final {
     MediaAvGenerationParticipant participant;
     MediaAvGenerationPurgeRegistration registration;
@@ -39,6 +42,16 @@ public:
     static ::media::Result<std::unique_ptr<MediaRuntimeNode>>
     createScheduledRtpSender(
         const MediaNode& node,
+        std::shared_ptr<MediaAvSyncGroupRuntime> syncGroup);
+    static ::media::Result<std::unique_ptr<MediaRuntimeNode>>
+    createMpegTsRtpSdpPublisher(
+        const MediaNode& node,
+        std::shared_ptr<MediaAvSyncGroupRuntime> syncGroup);
+    static ::media::Result<std::unique_ptr<MediaRuntimeNode>>
+    createDemuxPacketClockBinder(
+        const MediaNode& node,
+        const MediaDecodedDemuxPacketClockBinderNodePlan& decoded,
+        std::shared_ptr<MediaDemuxTimestampClockMapper> mapper,
         std::shared_ptr<MediaAvSyncGroupRuntime> syncGroup);
     static std::optional<MediaRuntimeGenerationPurgeRegistration>
     generationPurgeRegistration(MediaRuntimeNode& node);

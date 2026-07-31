@@ -84,7 +84,8 @@ private:
 class MediaTsTransportPacketizer final {
 public:
     static ::media::Result<MediaTsTransportPacketizer> create(
-        const MediaTsMuxPlan& plan);
+        const MediaTsMuxPlan& plan,
+        bool startsWithDiscontinuity);
 
     MediaTsTransportPacketizer(const MediaTsTransportPacketizer&) = delete;
     MediaTsTransportPacketizer& operator=(const MediaTsTransportPacketizer&) = delete;

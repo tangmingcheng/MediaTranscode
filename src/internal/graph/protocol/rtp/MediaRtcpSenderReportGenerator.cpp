@@ -2,7 +2,6 @@
 #include "internal/graph/protocol/rtp/MediaRtcpSdesTextValidator.h"
 
 #include <cstddef>
-#include <limits>
 #include <utility>
 
 namespace media::ffmpeg::graph {
@@ -38,14 +37,6 @@ void appendU32(std::vector<std::uint8_t>& bytes, std::uint32_t value)
     }
     if (auto cname = MediaRtcpSdesTextValidator::validateCname(parameters.cname);
         !cname) return cname;
-    if (parameters.senderPacketCount >
-            std::numeric_limits<std::uint32_t>::max() ||
-        parameters.senderOctetCount >
-            std::numeric_limits<std::uint32_t>::max()) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "RTCP sender report counters exceed their wire fields"));
-    }
     return ::media::Status::success();
 }
 

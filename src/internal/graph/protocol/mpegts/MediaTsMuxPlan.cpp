@@ -1,5 +1,6 @@
 #include "internal/graph/protocol/mpegts/MediaTsMuxPlan.h"
 
+#include <algorithm>
 #include <string>
 #include <utility>
 
@@ -8,6 +9,8 @@ namespace {
 
 constexpr std::uint16_t MinimumAssignablePid = 0x0020;
 constexpr std::uint16_t NullPid = 0x1FFF;
+constexpr std::size_t RtpFixedHeaderBytes = 12;
+constexpr std::size_t MaximumTsPacketsPerDatagram = 7;
 
 ::media::Result<MediaTsMuxPlan> invalid(const char* reason)
 {
@@ -41,10 +44,11 @@ bool validParameterSetPolicy(MediaTsParameterSetPolicy policy) noexcept
     return false;
 }
 
-bool validTransportKind(MediaTsOutputTransportKind kind) noexcept
+bool validTransportKind(MediaOutputTransportKind kind) noexcept
 {
     switch (kind) {
-    case MediaTsOutputTransportKind::Udp:
+    case MediaOutputTransportKind::UdpDatagrams:
+    case MediaOutputTransportKind::RtpAvp:
         return true;
     }
     return false;
@@ -57,6 +61,28 @@ bool validContinuitySeeds(const MediaTsContinuitySeeds& seeds) noexcept
 }
 
 } // namespace
+
+::media::Result<std::uint8_t>
+MediaTsMuxPlan::maximumPacketsPerRtpDatagram(
+    std::size_t maximumDatagramBytes)
+{
+    if (maximumDatagramBytes <= RtpFixedHeaderBytes) {
+        return ::media::Result<std::uint8_t>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MPEG-TS RTP datagram cannot carry one complete TS packet"));
+    }
+    const auto payloadCapacity =
+        maximumDatagramBytes - RtpFixedHeaderBytes;
+    const auto packetCount = payloadCapacity / std::size_t{188};
+    if (packetCount == 0) {
+        return ::media::Result<std::uint8_t>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MPEG-TS RTP payload would fragment a TS packet"));
+    }
+    return ::media::Result<std::uint8_t>::success(
+        static_cast<std::uint8_t>(
+            (std::min)(packetCount, MaximumTsPacketsPerDatagram)));
+}
 
 ::media::Result<MediaTsMuxPlan> MediaTsMuxPlan::create(
     MediaTsMuxPlanParameters parameters)
@@ -108,6 +134,9 @@ bool validContinuitySeeds(const MediaTsContinuitySeeds& seeds) noexcept
         return invalid("contains an invalid output clock policy");
     }
     if (parameters.transportDecodeLead.nanoseconds() <= 0 ||
+        parameters.startupEmissionPreroll.nanoseconds() <= 0 ||
+        parameters.startupEmissionPreroll >
+            parameters.transportDecodeLead ||
         parameters.packetSize != 188 ||
         !validContinuitySeeds(parameters.continuity) ||
         parameters.maximumPacketsPerDatagram < 1 ||
@@ -138,6 +167,11 @@ const MediaTsOutputClockPolicy& MediaTsMuxPlan::clockPolicy() const noexcept
 MediaRunningTime MediaTsMuxPlan::transportDecodeLead() const noexcept
 {
     return m_parameters.transportDecodeLead;
+}
+
+MediaRunningTime MediaTsMuxPlan::startupEmissionPreroll() const noexcept
+{
+    return m_parameters.startupEmissionPreroll;
 }
 
 } // namespace media::ffmpeg::graph

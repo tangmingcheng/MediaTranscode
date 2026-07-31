@@ -1,6 +1,9 @@
 #include "internal/graph/builder/segments/MediaRealtimeAvSyncNodeConfigurator.h"
 
 #include "internal/graph/builder/segments/MediaRealtimeAvSyncInputGraphSupport.h"
+#include "internal/graph/nodes/sync/MediaAvSyncControlGenerationContract.h"
+#include "internal/graph/nodes/sync/MediaDemuxPacketClockBinderNodePlanCodec.h"
+#include "internal/graph/nodes/sync/MediaAvSyncSourceClockModeNodeOptionCodec.h"
 
 #include <cstddef>
 #include <string>
@@ -69,6 +72,31 @@ MediaRealtimeAvSyncNodeConfigurator::configureRtpPacketClockBinder(
 }
 
 ::media::Result<void>
+MediaRealtimeAvSyncNodeConfigurator::configureDemuxPacketClockBinder(
+    MediaGraph& graph,
+    MediaNodeId node,
+    MediaStreamKind stream,
+    const MediaAvSyncGroupKey& syncGroup,
+    const MediaDemuxTimestampInputClockAssemblyPlan& plan)
+{
+    if (stream != MediaStreamKind::Video &&
+        stream != MediaStreamKind::Audio) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Demux clock binder requires video or audio stream"));
+    }
+    const MediaScheduledStream scheduled =
+        stream == MediaStreamKind::Video
+        ? MediaScheduledStream::Video
+        : MediaScheduledStream::Audio;
+    auto applied = MediaDemuxPacketClockBinderNodePlanCodec::apply(
+        graph, node, scheduled, syncGroup, plan);
+    return applied
+        ? ::media::Result<void>::success()
+        : ::media::Result<void>::failure(applied.error());
+}
+
+::media::Result<void>
 MediaRealtimeAvSyncNodeConfigurator::configureLockedPacketGate(
     MediaGraph& graph,
     MediaNodeId node,
@@ -104,6 +132,19 @@ MediaRealtimeAvSyncNodeConfigurator::configureLockedPacketGate(
             "first_locked_only_fail_on_change"); !status) {
         return status;
     }
+    if (!plan.synchronization.controlGenerationPolicy) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "Locked packet gate requires planner-selected control generation policy"));
+    }
+    if (auto status = setOption(
+            graph, node,
+            "locked_packet_gate.control_generation_policy",
+            std::string(mediaControlGenerationPolicyOption(
+                *plan.synchronization.controlGenerationPolicy)));
+        !status) {
+        return status;
+    }
     return setOption(
         graph, node, "locked_packet_gate.sync_group",
         plan.groupKey.value());
@@ -118,6 +159,41 @@ MediaRealtimeAvSyncNodeConfigurator::configureCanonicalInput(
 {
     const auto& assembly = plan.assembly;
     const bool video = stream == MediaScheduledStream::Video;
+    if (!plan.synchronization.sourceClockMode) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "Canonical input requires planner-selected source clock mode"));
+    }
+    const bool mappedDemuxTiming =
+        *plan.synchronization.sourceClockMode ==
+        MediaAvSyncSourceClockMode::DemuxTimestamps;
+    if (!plan.synchronization.controlGenerationPolicy) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "Canonical input requires planner-selected control generation policy"));
+    }
+    if (assembly.initialGeneration == 0) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Canonical input requires planned initial generation"));
+    }
+    if (auto status = setOption(
+            graph, node, "canonical_input.initial_generation",
+            std::to_string(assembly.initialGeneration)); !status) {
+        return status;
+    }
+    if (auto status = setOption(
+            graph, node, "canonical_input.control_generation_policy",
+            std::string(mediaControlGenerationPolicyOption(
+                *plan.synchronization.controlGenerationPolicy)));
+        !status) {
+        return status;
+    }
+    if (auto status = setOption(
+            graph, node, "canonical_input.sync_group",
+            plan.groupKey.value()); !status) {
+        return status;
+    }
     if (auto status = setOption(
             graph, node, "canonical_input.stream",
             video ? "video" : "audio"); !status) return status;
@@ -133,14 +209,17 @@ MediaRealtimeAvSyncNodeConfigurator::configureCanonicalInput(
                 ? "reordered" : "presentation"); !status) return status;
     if (video) {
         return setOption(
-            graph, node, "canonical_input.duration_source", "packet");
+            graph, node, "canonical_input.duration_source",
+            mappedDemuxTiming
+                ? "mapped_source_timing"
+                : "raw_packet_time_base");
     }
     if (const auto* samples =
             std::get_if<MediaPlannedAudioSamplesDurationPlan>(
                 &assembly.audio.duration)) {
         if (auto status = setOption(
                 graph, node, "canonical_input.duration_source",
-                "audio_samples"); !status) return status;
+                "planned_audio_samples"); !status) return status;
         if (auto status = setOption(
                 graph, node, "canonical_input.audio_sample_count",
                 std::to_string(samples->samplesPerAccessUnit));
@@ -148,6 +227,28 @@ MediaRealtimeAvSyncNodeConfigurator::configureCanonicalInput(
         return setOption(
             graph, node, "canonical_input.audio_sample_rate",
             std::to_string(samples->sampleRate));
+    }
+    if (const auto* packet =
+            std::get_if<MediaPacketDurationPlan>(
+                &assembly.audio.duration)) {
+        if (!packet->requirePositiveDuration ||
+            !plan.planningFacts.inputAudioSampleRate ||
+            *plan.planningFacts.inputAudioSampleRate <= 0) {
+            return ::media::Result<void>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Canonical packet-duration audio requires its planned sample rate"));
+        }
+        if (auto status = setOption(
+                graph, node, "canonical_input.duration_source",
+                mappedDemuxTiming
+                    ? "mapped_source_timing"
+                    : "raw_packet_time_base"); !status) {
+            return status;
+        }
+        return setOption(
+            graph, node, "canonical_input.audio_sample_rate",
+            std::to_string(
+                *plan.planningFacts.inputAudioSampleRate));
     }
     return ::media::Result<void>::failure(
         ::media::ErrorInfo::invalidArgument(
@@ -170,7 +271,7 @@ MediaRealtimeAvSyncNodeConfigurator::configureStartupCoordinator(
         startup.videoByteCapacity && startup.audioByteCapacity &&
         startup.maximumVideoUnitBytes && startup.maximumAudioUnitBytes &&
         startup.videoIdentity && startup.audioIdentity &&
-        startup.allowDegradedClock && plan.synchronization.topology &&
+        startup.allowDegradedClock && plan.synchronization.sourceClockMode &&
         plan.synchronization.audioServo.outputSampleRate &&
         *plan.synchronization.audioServo.outputSampleRate > 0;
     if (!complete) {
@@ -228,11 +329,15 @@ MediaRealtimeAvSyncNodeConfigurator::configureStartupCoordinator(
     if (auto status = setOption(
             graph, node, "av_startup.sync_group",
             plan.groupKey.value()); !status) return status;
+    auto sourceClockMode =
+        MediaAvSyncSourceClockModeNodeOptionCodec::encode(
+            *plan.synchronization.sourceClockMode);
+    if (!sourceClockMode) {
+        return ::media::Result<void>::failure(sourceClockMode.error());
+    }
     return setOption(
-        graph, node, "av_startup.topology",
-        *plan.synchronization.topology ==
-                MediaAvSyncTopology::SeparateRtpToSeparateRtp
-            ? "separate_rtp" : "mpegts");
+        graph, node, "av_startup.source_clock_mode",
+        std::move(sourceClockMode).value());
 }
 
 ::media::Result<void>
@@ -269,10 +374,14 @@ MediaRealtimeAvSyncNodeConfigurator::configureActivationSequencer(
     if (auto status = setOption(
         graph, node, "activated_startup_release_sequencer.sync_group",
         plan.groupKey.value()); !status) return status;
+    if (plan.activationOutputLead.nanoseconds() <= 0) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Activated startup release sequencer requires planner-owned output lead"));
+    }
     return setOption(
         graph, node, "activated_startup_release_sequencer.output_lead_ns",
-        std::to_string(
-            plan.synchronization.startup.outputLeadNs->nanoseconds()));
+        std::to_string(plan.activationOutputLead.nanoseconds()));
 }
 
 ::media::Result<void>

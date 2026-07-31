@@ -98,8 +98,9 @@ classifyLockedPacketGateGeneration(
             "Locked packet gate requires an active permitted playback epoch");
     }
     if (generation < epoch.playbackEpoch->generation) {
-        return invalidClassification(
-            "Locked packet gate rejects generation regression");
+        return ::media::Result<
+            MediaLockedPacketGateDisposition>::success(
+            MediaLockedPacketGateDisposition::DropOldGeneration);
     }
     if (generation > epoch.playbackEpoch->generation) {
         return invalidClassification(

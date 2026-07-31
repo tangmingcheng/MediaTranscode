@@ -14,6 +14,13 @@ public:
         MediaStreamKind stream,
         const MediaRealtimeAvSyncRuntimePlan& plan);
 
+    static ::media::Result<void> configureDemuxPacketClockBinder(
+        MediaGraph& graph,
+        MediaNodeId node,
+        MediaStreamKind stream,
+        const MediaAvSyncGroupKey& syncGroup,
+        const MediaDemuxTimestampInputClockAssemblyPlan& plan);
+
     static ::media::Result<void> configureLockedPacketGate(
         MediaGraph& graph,
         MediaNodeId node,

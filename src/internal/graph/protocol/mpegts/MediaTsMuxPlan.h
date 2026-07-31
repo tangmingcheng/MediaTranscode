@@ -1,8 +1,10 @@
 #pragma once
 
+#include "internal/graph/model/MediaOutputTransportKind.h"
 #include "internal/graph/protocol/mpegts/MediaTsOutputClockGenerator.h"
 #include "media_transcode/Result.h"
 
+#include <cstddef>
 #include <cstdint>
 
 namespace media::ffmpeg::graph {
@@ -15,10 +17,6 @@ enum class MediaTsH264InputLayout : std::uint8_t {
 enum class MediaTsParameterSetPolicy : std::uint8_t {
     Never = 0,
     BeforeRandomAccess = 1
-};
-
-enum class MediaTsOutputTransportKind : std::uint8_t {
-    Udp = 0
 };
 
 struct MediaTsContinuitySeeds final {
@@ -57,10 +55,11 @@ struct MediaTsMuxPlanParameters final {
     MediaTsAacAdtsPlan aac;
     MediaTsOutputClockPolicy clock;
     MediaRunningTime transportDecodeLead;
+    MediaRunningTime startupEmissionPreroll;
     std::uint16_t packetSize;
     MediaTsContinuitySeeds continuity;
     std::uint8_t maximumPacketsPerDatagram;
-    MediaTsOutputTransportKind transportKind;
+    MediaOutputTransportKind transportKind;
     int maximumAudioAccessUnitSamples;
     friend bool operator==(const MediaTsMuxPlanParameters&,
                            const MediaTsMuxPlanParameters&) = default;
@@ -70,10 +69,13 @@ class MediaTsMuxPlan final {
 public:
     static ::media::Result<MediaTsMuxPlan> create(
         MediaTsMuxPlanParameters parameters);
+    static ::media::Result<std::uint8_t> maximumPacketsPerRtpDatagram(
+        std::size_t maximumDatagramBytes);
 
     const MediaTsMuxPlanParameters& parameters() const noexcept;
     const MediaTsOutputClockPolicy& clockPolicy() const noexcept;
     MediaRunningTime transportDecodeLead() const noexcept;
+    MediaRunningTime startupEmissionPreroll() const noexcept;
 
 private:
     explicit MediaTsMuxPlan(MediaTsMuxPlanParameters parameters) noexcept;

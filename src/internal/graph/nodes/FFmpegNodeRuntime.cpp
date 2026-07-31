@@ -17,6 +17,7 @@ namespace media::ffmpeg::graph {
 {
     m_nextInputIndex = 0;
     m_pendingTransfer.reset();
+    m_outputPublicationDropped = false;
     m_finishPending = false;
     m_finished = false;
     return MediaNodeRuntime::start(context);
@@ -26,6 +27,7 @@ namespace media::ffmpeg::graph {
 {
     m_nextInputIndex = 0;
     m_pendingTransfer.reset();
+    m_outputPublicationDropped = false;
     m_finishPending = false;
     m_finished = false;
     return MediaNodeRuntime::stop(context);
@@ -35,6 +37,7 @@ void FFmpegNodeRuntime::abort(MediaGraphExecutionContext& context) noexcept
 {
     m_nextInputIndex = 0;
     m_pendingTransfer.reset();
+    m_outputPublicationDropped = false;
     m_finishPending = false;
     m_finished = false;
     MediaNodeRuntime::abort(context);
@@ -52,7 +55,14 @@ void FFmpegNodeRuntime::abort(MediaGraphExecutionContext& context) noexcept
         return ::media::Result<MediaNodeProcessResult>::success(
             MediaNodeProcessResult::finished());
     }
-    if (m_pendingTransfer && !pendingOutputIsCurrent(m_pendingTransfer->buffer)) {
+    if (m_pendingTransfer &&
+        !pendingOutputIsCurrent(m_pendingTransfer->buffer)) {
+        auto cancelled =
+            cancelReservedOutput(m_pendingTransfer->buffer);
+        if (!cancelled) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                cancelled.error());
+        }
         cancelPendingOutputTransfer();
     }
     const bool hadPendingTransfer = m_pendingTransfer.has_value();
@@ -100,6 +110,11 @@ bool FFmpegNodeRuntime::canFinishProcess() const noexcept
 
 ::media::Result<MediaNodeProcessResult> FFmpegNodeRuntime::processProgress(::media::Status status)
 {
+    if (status && std::exchange(
+            m_outputPublicationDropped, false)) {
+        return ::media::Result<MediaNodeProcessResult>::success(
+            MediaNodeProcessResult::progress());
+    }
     if (!status && status.error().code == ::media::ErrorCode::WouldBlock) {
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::waiting());
     }
@@ -108,6 +123,11 @@ bool FFmpegNodeRuntime::canFinishProcess() const noexcept
 
 ::media::Result<MediaNodeProcessResult> FFmpegNodeRuntime::processFinished(::media::Status status)
 {
+    if (status && std::exchange(
+            m_outputPublicationDropped, false)) {
+        return ::media::Result<MediaNodeProcessResult>::success(
+            MediaNodeProcessResult::progress());
+    }
     if (!status && status.error().code == ::media::ErrorCode::WouldBlock) {
         m_finishPending = true;
         return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
@@ -130,13 +150,11 @@ bool FFmpegNodeRuntime::pendingOutputIsCurrent(const MediaBufferRef&) const noex
     return true;
 }
 
-::media::Result<
-    std::optional<MediaProtocolOutputGenerationCommitReservation>>
+::media::Result<MediaOutputCommitReservation>
 FFmpegNodeRuntime::reserveOutputCommit(const MediaBufferRef&) const
 {
-    return ::media::Result<
-        std::optional<MediaProtocolOutputGenerationCommitReservation>>::
-        success(std::nullopt);
+    return ::media::Result<MediaOutputCommitReservation>::success(
+        MediaOutputCommitReservation{});
 }
 
 ::media::Status FFmpegNodeRuntime::commitReservedOutput(
@@ -154,6 +172,7 @@ FFmpegNodeRuntime::reserveOutputCommit(const MediaBufferRef&) const
 void FFmpegNodeRuntime::cancelPendingOutputTransfer() noexcept
 {
     m_pendingTransfer.reset();
+    m_outputPublicationDropped = false;
     m_finishPending = false;
     m_finished = false;
 }
@@ -592,18 +611,27 @@ FFmpegNodeRuntime::tryPopFirstInputWithChannelOptional(
         }
     }
 
-    std::optional<MediaProtocolOutputGenerationCommitReservation> reservation;
     auto reserved = reserveOutputCommit(buffer);
     if (!reserved) {
         if (reserved.error().code == ::media::ErrorCode::Cancelled) {
-            return cancelReservedOutput(buffer);
+            auto cancelled = cancelReservedOutput(buffer);
+            if (cancelled) {
+                m_outputPublicationDropped = true;
+            }
+            return cancelled;
         }
         return ::media::Status::failure(reserved.error());
     }
-    reservation = std::move(reserved).value();
+    MediaOutputCommitReservation reservation =
+        std::move(reserved).value();
     auto atomic = publishAtomicOutput(
         context, channels, buffer, action);
-    if (!atomic) return ::media::Status::failure(atomic.error());
+    if (!atomic) {
+        auto cancelled = cancelReservedOutput(buffer);
+        return cancelled
+            ? ::media::Status::failure(atomic.error())
+            : cancelled;
+    }
     if (atomic.value() == AtomicTransferResult::Waiting) {
         m_pendingTransfer = PendingTransfer{buffer, channels, 0, true};
         return ::media::Status::failure(
@@ -622,12 +650,20 @@ FFmpegNodeRuntime::tryPopFirstInputWithChannelOptional(
                 ::media::ErrorInfo::wouldBlock("FFmpegNodeRuntime output channel would block"));
         }
         if (outcome == MediaQueuePushOutcome::Aborted) {
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::internalError("FFmpegNodeRuntime output channel aborted"));
+            auto cancelled = cancelReservedOutput(buffer);
+            return cancelled
+                ? ::media::Status::failure(
+                      ::media::ErrorInfo::internalError(
+                          "FFmpegNodeRuntime output channel aborted"))
+                : cancelled;
         }
         if (outcome == MediaQueuePushOutcome::Closed) {
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::cancelled("FFmpegNodeRuntime output channel closed"));
+            auto cancelled = cancelReservedOutput(buffer);
+            return cancelled
+                ? ::media::Status::failure(
+                      ::media::ErrorInfo::cancelled(
+                          "FFmpegNodeRuntime output channel closed"))
+                : cancelled;
         }
         if (outcome == MediaQueuePushOutcome::Dropped) {
             continue;
@@ -694,33 +730,41 @@ FFmpegNodeRuntime::publishAtomicOutput(
     waiting = false;
     while (m_pendingTransfer) {
         PendingTransfer& transfer = *m_pendingTransfer;
-        std::optional<MediaProtocolOutputGenerationCommitReservation>
-            reservation;
         auto reserved = reserveOutputCommit(transfer.buffer);
         if (!reserved) {
             if (reserved.error().code == ::media::ErrorCode::Cancelled) {
                 auto cancelled = cancelReservedOutput(transfer.buffer);
-                m_pendingTransfer.reset();
+                if (!cancelled) return cancelled;
+                cancelPendingOutputTransfer();
                 return cancelled;
             }
             return ::media::Status::failure(reserved.error());
         }
-        reservation = std::move(reserved).value();
+        MediaOutputCommitReservation reservation =
+            std::move(reserved).value();
         if (transfer.atomic) {
             auto atomic = publishAtomicOutput(
                 context, transfer.channels, transfer.buffer,
                 "pending_emit");
             if (!atomic) {
-                return ::media::Status::failure(atomic.error());
+                auto cancelled =
+                    cancelReservedOutput(transfer.buffer);
+                return cancelled
+                    ? ::media::Status::failure(atomic.error())
+                    : cancelled;
             }
             if (atomic.value() == AtomicTransferResult::Waiting) {
                 waiting = true;
                 return ::media::Status::success();
             }
             if (atomic.value() != AtomicTransferResult::Published) {
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::internalError(
-                        "FFmpegNodeRuntime lost its atomic pending contract"));
+                auto cancelled =
+                    cancelReservedOutput(transfer.buffer);
+                return cancelled
+                    ? ::media::Status::failure(
+                          ::media::ErrorInfo::internalError(
+                              "FFmpegNodeRuntime lost its atomic pending contract"))
+                    : cancelled;
             }
             auto committed = commitReservedOutput(transfer.buffer);
             if (!committed) return committed;
@@ -734,12 +778,20 @@ FFmpegNodeRuntime::publishAtomicOutput(
             return ::media::Status::success();
         }
         if (outcome == MediaQueuePushOutcome::Aborted) {
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::internalError("FFmpegNodeRuntime pending output channel aborted"));
+            auto cancelled = cancelReservedOutput(transfer.buffer);
+            return cancelled
+                ? ::media::Status::failure(
+                      ::media::ErrorInfo::internalError(
+                          "FFmpegNodeRuntime pending output channel aborted"))
+                : cancelled;
         }
         if (outcome == MediaQueuePushOutcome::Closed) {
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::cancelled("FFmpegNodeRuntime pending output channel closed"));
+            auto cancelled = cancelReservedOutput(transfer.buffer);
+            return cancelled
+                ? ::media::Status::failure(
+                      ::media::ErrorInfo::cancelled(
+                          "FFmpegNodeRuntime pending output channel closed"))
+                : cancelled;
         }
         if (outcome == MediaQueuePushOutcome::Accepted) {
             logEdgeTransfer(context, MediaGraphDiagnosticPhase::RuntimeEdge, "pending_emit",
