@@ -15,6 +15,11 @@
 
 namespace media::ffmpeg::graph {
 
+struct AudioDecoderDiscardPaddingProof final {
+    std::uint32_t samples = 0;
+    std::uint64_t generation = 0;
+};
+
 class AudioDecodeLineageState final : public MediaAudioLineageState {
 public:
     AudioDecodeLineageState(MediaAudioLineageExecutionMode mode,
@@ -23,6 +28,7 @@ public:
     bool receivePending = false;
     ::media::ffmpeg::PacketPtr pendingPacket;
     MediaAudioIntervalAccumulator intervals;
+    std::optional<AudioDecoderDiscardPaddingProof> discardPaddingProof;
     std::optional<MediaAudioPlaybackOrigin> activeOrigin;
     std::uint32_t startupTrimDirective = 0;
     bool startupTrimDirectiveEmitted = false;

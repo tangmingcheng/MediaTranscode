@@ -495,7 +495,7 @@ void AudioResampleNode::resetRuntimeState() noexcept
 {
     if (!m_swr) {
         m_drainingEof = false;
-        return settleLineageResidue();
+        return finishBypassLineage();
     }
     if (m_correctionExecutor->requiresNextWindow()) {
         if (!m_sampleProjection) {
@@ -513,7 +513,7 @@ void AudioResampleNode::resetRuntimeState() noexcept
     return drainSwrQuantum(context, true);
 }
 
-::media::Status AudioResampleNode::settleLineageResidue()
+::media::Status AudioResampleNode::finishBypassLineage()
 {
     if (m_lineageMode !=
         MediaAudioLineageExecutionMode::SynchronizedReleasedAudio) {
@@ -522,7 +522,21 @@ void AudioResampleNode::resetRuntimeState() noexcept
     const auto authorized = m_correctionExecutor
         ? m_correctionExecutor->outstandingAuthorizedDroppedSamples()
         : 0;
-    return m_lineageMapper.settleDroppedSamples(authorized);
+    if (authorized != 0) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "AudioResampleNode bypass cannot finish with correction residue"));
+    }
+    return m_lineageMapper.settleDroppedSamples(0);
+}
+
+::media::Status AudioResampleNode::settleLineageResidue(
+    AudioSwrResamplerExhausted exhaustionProof)
+{
+    if (m_lineageMode !=
+        MediaAudioLineageExecutionMode::SynchronizedReleasedAudio) {
+        return ::media::Status::success();
+    }
+    return m_lineageMapper.settleExhaustedResidue(exhaustionProof);
 }
 
 ::media::Status AudioResampleNode::stampAndQueue(
@@ -657,7 +671,7 @@ void AudioResampleNode::resetRuntimeState() noexcept
                 *converted.exhausted); !status) {
             return status;
         }
-        return settleLineageResidue();
+        return settleLineageResidue(*converted.exhausted);
     }
     if (!correctionWindowRequired) {
         return ::media::Status::failure(::media::ErrorInfo::internalError(

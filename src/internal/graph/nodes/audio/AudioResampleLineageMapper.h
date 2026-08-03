@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
+#include "internal/graph/nodes/audio/AudioSwrDrainState.h"
 #include "media_transcode/Result.h"
 
 #include <cstdint>
@@ -27,6 +28,8 @@ public:
         std::int64_t outputSamples);
     ::media::Status settleDroppedSamples(
         std::int64_t authorizedDroppedSamples);
+    ::media::Status settleExhaustedResidue(
+        AudioSwrResamplerExhausted exhaustionProof);
 
 private:
     std::shared_ptr<AudioResampleLineageState> m_state;

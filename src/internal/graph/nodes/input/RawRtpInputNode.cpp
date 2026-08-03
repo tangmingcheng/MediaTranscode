@@ -346,9 +346,6 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     MediaGraphExecutionContext& context,
     std::int64_t observedAtNs)
 {
-    if (!context.findOutputChannel(nodeId(), "clock")) {
-        return ::media::Status::success();
-    }
     auto update = m_clockTracker->takeEvidenceUpdate(observedAtNs);
     if (!update) return ::media::Status::failure(update.error());
     if (!update.value()) return ::media::Status::success();
@@ -360,28 +357,40 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
             return status;
         }
     }
-    m_events.emplace_back(
-        "clock",
-        makeMediaBufferRef<MediaRtpIngressEventBuffer>(
-            std::move(*update.value()), nextIngressSequence()));
+    if (context.findOutputChannel(nodeId(), "clock")) {
+        m_events.emplace_back(
+            "clock",
+            makeMediaBufferRef<MediaRtpIngressEventBuffer>(
+                std::move(*update.value()), nextIngressSequence()));
+    }
     return ::media::Status::success();
 }
 
 ::media::Status RawRtpInputNode::queueClockTransition(
-    MediaGraphExecutionContext& context,
+    MediaGraphExecutionContext&,
     std::int64_t observedAtNs)
 {
-    if (!m_clockSchedule || !context.findOutputChannel(nodeId(), "event")) {
+    if (!m_clockSchedule) {
         return ::media::Status::success();
     }
     auto transition = m_clockSchedule->transition(observedAtNs);
     if (!transition) return ::media::Status::failure(transition.error());
     if (!transition.value()) return ::media::Status::success();
-    m_events.emplace_back(
-        "event",
-        makeMediaBufferRef<MediaRtpIngressEventBuffer>(
-            MediaRtpClockObservation{observedAtNs}, nextIngressSequence()));
-    return ::media::Status::success();
+    const char* stream = m_config.streamKind == MediaStreamKind::Video
+        ? "video"
+        : "audio";
+    const char* age = *transition.value() == MediaRtpClockAgeTransition::Degraded
+        ? "degraded"
+        : "expired";
+    return ::media::Status::failure(::media::ErrorInfo::ioFailure(
+        std::string("RTP ") + stream +
+        " source clock evidence " + age +
+        "; sender_report_timeout_ns=" +
+        std::to_string(m_clockSchedule->senderReportTimeoutNs()) +
+        " maximum_extrapolation_ns=" +
+        std::to_string(m_clockSchedule->maximumExtrapolationNs()) +
+        " cname_timeout_ns=" +
+        std::to_string(m_clockSchedule->cnameTimeoutNs())));
 }
 
 ::media::Status RawRtpInputNode::stop(MediaGraphExecutionContext& context)

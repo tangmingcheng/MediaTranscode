@@ -2,6 +2,7 @@
 
 #include "internal/graph/protocol/mpegts/MediaTsPacketParser.h"
 #include "internal/graph/protocol/mpegts/MediaTsPsiSectionAssembler.h"
+#include "internal/graph/protocol/FFmpegInputReadTermination.h"
 #include "internal/graph/runtime/buffer/FFmpegInputStreamSnapshotFactory.h"
 
 #include <limits>
@@ -472,7 +473,9 @@ MediaTsInputSession::readFrameFromSource()
         return ::media::Result<MediaTsReadFrameEnvelope>::success(
             MediaTsReadFrameEnvelope{MediaTsReadFrameState::Waiting});
     }
-    if (result == AVERROR_EOF) {
+    const auto termination = classifyFFmpegInputReadTermination(
+        result, m_interruptState.cancelled(), "MPEG-TS av_read_frame");
+    if (termination.kind() == FFmpegInputReadTerminationKind::EndOfStream) {
         auto finished = m_evidenceObserver->finish();
         if (!finished) {
             return ::media::Result<MediaTsReadFrameEnvelope>::failure(
@@ -481,12 +484,8 @@ MediaTsInputSession::readFrameFromSource()
         return ::media::Result<MediaTsReadFrameEnvelope>::success(
             MediaTsReadFrameEnvelope{MediaTsReadFrameState::EndOfStream});
     }
-    if (result == AVERROR_EXIT) {
-        return ::media::Result<MediaTsReadFrameEnvelope>::failure(
-            ::media::ErrorInfo::cancelled("MPEG-TS input read was cancelled"));
-    }
     return ::media::Result<MediaTsReadFrameEnvelope>::failure(
-        ::media::ErrorInfo::ffmpegFailure("failed to read MPEG-TS frame", result));
+        *termination.error());
 }
 
 ::media::Status MediaTsInputSession::configureRuntimeBinding(

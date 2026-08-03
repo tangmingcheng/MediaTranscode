@@ -4,6 +4,7 @@
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 #include "internal/graph/runtime/MediaRuntimeNode.h"
 #include "internal/graph/runtime/threading/MediaGraphWorkerFailure.h"
+#include "internal/graph/runtime/threading/MediaGraphWorkerFailureSupervisor.h"
 #include "media_transcode/Result.h"
 
 #include <atomic>
@@ -33,6 +34,7 @@ public:
     MediaGraphWorker(MediaRuntimeNode& node,
                      MediaGraphExecutionContext& context,
                      MediaGraphWorkerFailureRecorder& failureRecorder,
+                     MediaGraphWorkerFailureSupervisor& failureSupervisor,
                      MediaGraphWorkerConfig config = {});
     ~MediaGraphWorker();
 
@@ -46,6 +48,7 @@ public:
     void join();
 
     bool running() const noexcept;
+    bool finished() const noexcept;
     bool stopRequested() const noexcept;
     bool aborted() const noexcept;
 
@@ -53,7 +56,13 @@ public:
     const MediaGraphWorkerMetrics& metrics() const noexcept;
 
 private:
-    void recordFailure(::media::ErrorInfo error);
+    enum class FailureDisposition {
+        Primary,
+        CoordinatedCancellation,
+        Secondary
+    };
+
+    FailureDisposition recordFailure(::media::ErrorInfo error);
     void run();
 
 private:
@@ -62,9 +71,11 @@ private:
     MediaNodeWakeup& m_wakeup;
     MediaGraphWorkerFailureRecorder m_localFailureRecorder;
     MediaGraphWorkerFailureRecorder* m_failureRecorder = nullptr;
+    MediaGraphWorkerFailureSupervisor* m_failureSupervisor = nullptr;
     MediaGraphWorkerConfig m_config;
     std::thread m_thread;
     std::atomic_bool m_running{ false };
+    std::atomic_bool m_finished{ false };
     std::atomic_bool m_stopRequested{ false };
     std::atomic_bool m_aborted{ false };
     MediaGraphWorkerMetrics m_metrics;

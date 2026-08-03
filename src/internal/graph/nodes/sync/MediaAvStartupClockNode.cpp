@@ -98,22 +98,22 @@ MediaNodeKind MediaAvStartupClockNode::staticKind() noexcept
     if (state.value()) {
         if (const auto* control = dynamic_cast<const MediaControlBuffer*>(
                 state.value()->get())) {
-            if (control->controlKind() == MediaControlBufferKind::Unknown) {
-                return ::media::Result<MediaNodeProcessResult>::failure(
-                    ::media::ErrorInfo::invalidArgument(
-                        "A/V startup clock rejects unknown control"));
-            }
-            if (!m_generation) {
+            switch (control->controlKind()) {
+            case MediaControlBufferKind::Eof:
+                return processFinished();
+            case MediaControlBufferKind::Flush:
+                m_generation.reset();
+                m_nextTick.reset();
+                return processProgress();
+            case MediaControlBufferKind::Abort:
                 return ::media::Result<MediaNodeProcessResult>::failure(
                     ::media::ErrorInfo::cancelled(
-                        "A/V startup clock rejects control before source-clock lock"));
+                        "A/V startup clock received source-clock abort"));
+            case MediaControlBufferKind::Unknown:
+                return ::media::Result<MediaNodeProcessResult>::failure(
+                    ::media::ErrorInfo::invalidArgument(
+                        "A/V startup clock rejects unknown source-clock control"));
             }
-            const bool finished =
-                control->controlKind() == MediaControlBufferKind::Eof ||
-                control->controlKind() == MediaControlBufferKind::Abort;
-            auto emitted = emitOutput(context, "tick", *state.value());
-            return finished ? processFinished(std::move(emitted))
-                            : processProgress(std::move(emitted));
         }
         const auto* clockState = dynamic_cast<const MediaSourceClockStateBuffer*>(
             state.value()->get());

@@ -111,3 +111,9 @@ Project acceptance is based on the real local and realtime CLIs, real media stre
 FFmpeg/VLC observation, runtime memory metrics, and continuous A/V drift telemetry.
 The current absolute-path PowerShell commands and evidence are recorded under
 `docs/completed/`.
+
+Input termination is strict: only a true FFmpeg EOF completes successfully.
+HTTP, UDP, and RTP source disappearance returns one preserved source-loss
+failure; coordinated cancellation of the remaining workers does not replace
+that primary error. EOF drains codec state and all sinks before the realtime
+CLI performs its normal stop path.

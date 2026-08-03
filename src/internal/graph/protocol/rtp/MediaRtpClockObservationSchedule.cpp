@@ -118,6 +118,21 @@ MediaRtpClockObservationSchedule::transition(
         MediaRtpClockAgeTransition::Expired);
 }
 
+std::int64_t MediaRtpClockObservationSchedule::senderReportTimeoutNs() const noexcept
+{
+    return m_senderReportTimeoutNs;
+}
+
+std::int64_t MediaRtpClockObservationSchedule::maximumExtrapolationNs() const noexcept
+{
+    return m_maximumExtrapolationNs;
+}
+
+std::int64_t MediaRtpClockObservationSchedule::cnameTimeoutNs() const noexcept
+{
+    return m_cnameTimeoutNs;
+}
+
 void MediaRtpClockObservationSchedule::reset() noexcept
 {
     m_senderReportObservedAtNs.reset();

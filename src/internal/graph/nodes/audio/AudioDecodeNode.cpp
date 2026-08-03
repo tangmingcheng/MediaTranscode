@@ -13,6 +13,7 @@
 
 extern "C" {
 #include <libavutil/error.h>
+#include <libavutil/intreadwrite.h>
 }
 
 #include <algorithm>
@@ -20,6 +21,31 @@ extern "C" {
 #include <utility>
 
 namespace media::ffmpeg::graph {
+namespace {
+
+::media::Result<std::optional<std::uint32_t>> packetDiscardPadding(
+    const AVPacket& packet)
+{
+    std::size_t sideDataSize = 0;
+    const std::uint8_t* sideData = av_packet_get_side_data(
+        &packet, AV_PKT_DATA_SKIP_SAMPLES, &sideDataSize);
+    if (!sideData) {
+        return ::media::Result<std::optional<std::uint32_t>>::success(
+            std::nullopt);
+    }
+    if (sideDataSize < 8) {
+        return ::media::Result<std::optional<std::uint32_t>>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Audio decoder skip-samples evidence is truncated"));
+    }
+    const std::uint32_t discardPadding = AV_RL32(sideData + 4);
+    return ::media::Result<std::optional<std::uint32_t>>::success(
+        discardPadding == 0
+            ? std::nullopt
+            : std::optional<std::uint32_t>(discardPadding));
+}
+
+} // namespace
 
 AudioDecodeLineageState::AudioDecodeLineageState(
     MediaAudioLineageExecutionMode mode,
@@ -44,6 +70,7 @@ void AudioDecodeLineageState::clearLineageStorage() noexcept
     receivePending = false;
     pendingPacket.reset();
     intervals.reset();
+    discardPaddingProof.reset();
     activeOrigin.reset();
     startupTrimDirective = 0;
     startupTrimDirectiveEmitted = false;
@@ -180,6 +207,11 @@ void AudioDecodeNode::resetRuntimeState() noexcept
         return ::media::Result<MediaNodeProcessResult>::failure(resolved.error());
     }
     const AVPacket* packet = FFmpegPacketView::packet(resolved.value().packet);
+    if (!packet) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "AudioDecodeNode requires an FFmpeg packet"));
+    }
     ::media::ffmpeg::PacketPtr pendingPacket(av_packet_clone(packet));
     if (!pendingPacket) {
         return ::media::Result<MediaNodeProcessResult>::failure(
@@ -188,6 +220,7 @@ void AudioDecodeNode::resetRuntimeState() noexcept
     }
     std::optional<MediaAudioIntervalAccumulator> candidateIntervals;
     std::optional<MediaAudioPlaybackOrigin> incomingOrigin;
+    std::optional<AudioDecoderDiscardPaddingProof> incomingDiscardPadding;
     std::uint32_t incomingTrim = 0;
     if (resolved.value().synchronized) {
         const auto& synchronized = *resolved.value().synchronized;
@@ -199,6 +232,11 @@ void AudioDecodeNode::resetRuntimeState() noexcept
         if (auto status = m_lineageState->validateObservation(
                 synchronized.origin.generation); !status) {
             return ::media::Result<MediaNodeProcessResult>::failure(status.error());
+        }
+        if (m_lineageState->discardPaddingProof) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "AudioDecodeNode received media after terminal discard-padding evidence"));
         }
         if (m_lineageState->activeOrigin &&
             (synchronized.origin != *m_lineageState->activeOrigin ||
@@ -236,6 +274,16 @@ void AudioDecodeNode::resetRuntimeState() noexcept
         if (auto status = candidateIntervals->push(incomingFragment); !status) {
             return ::media::Result<MediaNodeProcessResult>::failure(status.error());
         }
+        auto discardPadding = packetDiscardPadding(*packet);
+        if (!discardPadding) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                discardPadding.error());
+        }
+        if (discardPadding.value()) {
+            incomingDiscardPadding =
+                AudioDecoderDiscardPaddingProof{
+                    *discardPadding.value(), synchronized.origin.generation};
+        }
     }
     if (incomingOrigin) {
         if (auto status = m_lineageState->observe(incomingOrigin->generation); !status) {
@@ -247,6 +295,7 @@ void AudioDecodeNode::resetRuntimeState() noexcept
             m_lineageState->startupTrimDirectiveEmitted = false;
         }
         m_lineageState->intervals = std::move(*candidateIntervals);
+        m_lineageState->discardPaddingProof = incomingDiscardPadding;
     }
     m_lineageState->pendingPacket = std::move(pendingPacket);
     return submitPendingPacket(context);
@@ -375,12 +424,32 @@ bool AudioDecodeNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) const
     auto drain = receiveFrames(context);
     if (!drain) return processProgress(::media::Status::failure(drain.error()));
     if (!drain.value()) return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
-    if (m_lineageMode == MediaAudioLineageExecutionMode::SynchronizedReleasedAudio &&
-        (!m_lineageState->intervals.finish() ||
-         m_lineageState->pendingPacket)) {
-        return ::media::Result<MediaNodeProcessResult>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "AudioDecodeNode finished with unresolved canonical audio lineage"));
+    if (m_lineageMode == MediaAudioLineageExecutionMode::SynchronizedReleasedAudio) {
+        if (m_lineageState->pendingPacket) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "AudioDecodeNode codec EOF retains an unsubmitted packet"));
+        }
+        auto candidateIntervals = m_lineageState->intervals;
+        const auto queuedSamples = candidateIntervals.queuedSamples();
+        const auto& proof = m_lineageState->discardPaddingProof;
+        if (queuedSamples < 0 ||
+            (queuedSamples != 0 &&
+             (!proof || !m_lineageState->activeOrigin ||
+              proof->generation != m_lineageState->activeOrigin->generation ||
+              proof->samples != static_cast<std::uint64_t>(queuedSamples))) ||
+            (queuedSamples == 0 && proof)) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "AudioDecodeNode codec EOF residue lacks exact discard-padding evidence"));
+        }
+        if (auto settled = candidateIntervals.settleDroppedSamples(
+                proof ? proof->samples : 0); !settled) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                settled.error());
+        }
+        m_lineageState->intervals = std::move(candidateIntervals);
+        m_lineageState->discardPaddingProof.reset();
     }
     const bool eof = m_flushIsEof; MediaBufferRef terminal = std::move(m_flushBuffer);
     m_flushPending = false; m_flushIsEof = false; m_flushSent = false;

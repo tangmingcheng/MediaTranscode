@@ -1,5 +1,19 @@
 # Realtime Cross-Layout and MPEG-TS/RTP Implementation Plan
 
+## P0 Input Termination and Finalization Follow-Up
+
+- [x] Establish the finite-source and EOF failure baseline.
+- [x] Unify FFmpeg input termination and RTP source-loss classification.
+- [x] Coordinate the first worker failure and represent clean threaded completion.
+- [x] Correct SWR residue settlement and video decoder EOF lease release.
+- [x] Complete real-media P0 and nine-route validation.
+- [ ] Update delivery evidence and quality score; complete PR and independent review.
+
+Detailed design and execution checklist:
+
+- `docs/superpowers/specs/2026-08-03-realtime-termination-correctness-design.md`
+- `docs/superpowers/plans/2026-08-03-realtime-termination-correctness.md`
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Support every realtime input with separate RTP, MPEG-TS/UDP, or standards-compliant MPEG-TS/RTP output while preserving the current A/V synchronization quality.

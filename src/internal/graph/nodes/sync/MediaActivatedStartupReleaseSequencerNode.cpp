@@ -134,6 +134,11 @@ MediaActivatedStartupReleaseSequencerNode::process(
         const bool finished =
             control->controlKind() == MediaControlBufferKind::Eof ||
             control->controlKind() == MediaControlBufferKind::Abort;
+        if (finished) {
+            for (MediaChannel* output : context.outputChannels(nodeId())) {
+                if (output) output->close();
+            }
+        }
         m_pendingTransaction.reset();
         return ::media::Result<MediaNodeProcessResult>::success(
             finished ? MediaNodeProcessResult::finished()

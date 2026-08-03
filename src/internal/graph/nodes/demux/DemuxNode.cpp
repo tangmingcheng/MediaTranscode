@@ -1,5 +1,5 @@
 #include "internal/graph/nodes/demux/DemuxNode.h"
-#include "internal/graph/nodes/demux/DemuxReadFailureClassifier.h"
+#include "internal/graph/protocol/FFmpegInputReadTermination.h"
 
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
@@ -67,12 +67,14 @@ MediaNodeKind DemuxNode::staticKind() noexcept
     }
 
     const int ret = av_read_frame(m_formatContext, packet.get());
-    if (ret == AVERROR_EOF) {
-        return processFinished(emitEof(context));
-    }
-
     if (ret < 0) {
-        return processProgress(classifyDemuxReadFailure(ret, m_abortRequested));
+        const auto termination = classifyFFmpegInputReadTermination(
+            ret, m_abortRequested.load(), "DemuxNode av_read_frame");
+        if (termination.kind() == FFmpegInputReadTerminationKind::EndOfStream) {
+            return processFinished(emitEof(context));
+        }
+        return processProgress(
+            ::media::Status::failure(*termination.error()));
     }
 
     MediaStreamKind streamKind = MediaStreamKind::Unknown;

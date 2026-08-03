@@ -26,6 +26,9 @@ public:
                                           int plannedMaximumMs) const noexcept;
     ::media::Result<std::optional<MediaRtpClockAgeTransition>> transition(
         std::int64_t observedAtNs) noexcept;
+    std::int64_t senderReportTimeoutNs() const noexcept;
+    std::int64_t maximumExtrapolationNs() const noexcept;
+    std::int64_t cnameTimeoutNs() const noexcept;
     void reset() noexcept;
 
 private:

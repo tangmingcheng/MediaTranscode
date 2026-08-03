@@ -51,7 +51,7 @@ void AudioEncodeLineageState::clearLineageStorage(
     }
     pendingFrame.reset();
     pendingFragments.clear();
-    submittedFragments.clear();
+    submittedLineage.reset();
     activeOrigin.reset();
     flushPending = false;
     flushIsEof = false;
@@ -80,10 +80,8 @@ void AudioEncodeLineageState::resetForLifecycle() noexcept
             return status;
         }
     }
-    for (const auto& submitted : submittedFragments) {
-        if (auto status = leases.observe(submitted); !status) {
-            return status;
-        }
+    if (auto status = submittedLineage.observeLineageCapacity(leases); !status) {
+        return status;
     }
     return leases.observe(incoming);
 }
@@ -132,7 +130,7 @@ AudioEncodeNode::AudioEncodeNode(
     , m_frameQueue(m_lineageState->frameQueue)
     , m_pendingFrame(m_lineageState->pendingFrame)
     , m_pendingFragments(m_lineageState->pendingFragments)
-    , m_submittedFragments(m_lineageState->submittedFragments)
+    , m_submittedLineage(m_lineageState->submittedLineage)
     , m_lineageMode(lineageMode)
     , m_activeOrigin(m_lineageState->activeOrigin)
 {
@@ -394,7 +392,13 @@ void AudioEncodeNode::resetRuntimeState() noexcept
             FFmpegGraphError::fromCode(sendRet, "avcodec_send_frame(audio queued)"));
     }
     if (m_lineageMode == MediaAudioLineageExecutionMode::SynchronizedReleasedAudio) {
-        m_submittedFragments.push_back(std::move(m_pendingFragments));
+        auto submitted = m_submittedLineage.submit(
+            m_pendingFrame->pts, m_pendingFrame->nb_samples,
+            std::move(m_pendingFragments));
+        if (!submitted) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                submitted.error());
+        }
     }
     m_pendingFrame.reset();
 
@@ -454,14 +458,17 @@ void AudioEncodeNode::resetRuntimeState() noexcept
 
         MediaBufferRef output = buffer.value();
         if (m_lineageMode == MediaAudioLineageExecutionMode::SynchronizedReleasedAudio) {
-            if (!m_activeOrigin || m_submittedFragments.empty()) {
+            if (!m_activeOrigin) {
                 return ::media::Result<bool>::failure(
                     ::media::ErrorInfo::invalidArgument(
-                        "AudioEncodeNode packet has no exact submitted lineage"));
+                        "AudioEncodeNode packet has no active playback origin"));
             }
+            auto mapped = m_submittedLineage.map(
+                output->pts(), output->duration());
+            if (!mapped) return ::media::Result<bool>::failure(mapped.error());
+            if (!mapped.value()) continue;
             auto encoded = MediaEncodedAudioLineageBuffer::create(
-                output, std::move(m_submittedFragments.front()), *m_activeOrigin);
-            m_submittedFragments.pop_front();
+                output, std::move(*mapped.value()), *m_activeOrigin);
             if (!encoded) return ::media::Result<bool>::failure(encoded.error());
             output = std::move(encoded).value();
         }
@@ -497,10 +504,8 @@ void AudioEncodeNode::resetRuntimeState() noexcept
     if (!drain) return processProgress(::media::Status::failure(drain.error()));
     if (!drain.value()) return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
     if (m_lineageMode == MediaAudioLineageExecutionMode::SynchronizedReleasedAudio) {
-        if (!m_submittedFragments.empty()) {
-            return ::media::Result<MediaNodeProcessResult>::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "AudioEncodeNode finished with delayed lineage residue"));
+        if (auto status = m_submittedLineage.finish(); !status) {
+            return ::media::Result<MediaNodeProcessResult>::failure(status.error());
         }
         if (auto status = m_frameQueue.finishLineage(); !status) {
             return ::media::Result<MediaNodeProcessResult>::failure(status.error());

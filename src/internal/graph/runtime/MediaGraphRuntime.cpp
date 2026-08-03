@@ -152,6 +152,11 @@ bool MediaGraphRuntime::threadedRunning() const noexcept
     return state() == MediaGraphRuntimeState::ThreadedRunning;
 }
 
+bool MediaGraphRuntime::threadedCompleted() const noexcept
+{
+    return threadedRunning() && m_threadedExecutor.completed();
+}
+
 MediaGraphExecutionContext& MediaGraphRuntime::context() noexcept
 {
     return m_context;

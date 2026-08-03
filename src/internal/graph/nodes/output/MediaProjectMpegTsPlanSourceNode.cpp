@@ -84,7 +84,13 @@ MediaProjectMpegTsPlanSourceNode::onProcess(
             return ::media::Result<MediaNodeProcessResult>::failure(
                 duplicate.error());
         }
-        if (!duplicate.value()) return processWaiting();
+        if (!duplicate.value()) {
+            const MediaChannel* epoch =
+                context.findInputChannel(nodeId(), "epoch");
+            return epoch && epoch->closed()
+                ? processFinished()
+                : processWaiting();
+        }
         activationInput = std::move(*duplicate.value());
         const auto* activated =
             dynamic_cast<const MediaPlaybackEpochActivatedBuffer*>(

@@ -188,12 +188,6 @@ bool AudioSwrCompensationExecutor::requiresNextWindow() const noexcept
 ::media::Status AudioSwrCompensationExecutor::settleTerminal(
     AudioSwrResamplerExhausted)
 {
-    if (m_active && m_activeRemaining > 0 &&
-        m_activeRemaining != m_active->compensationDistance() &&
-        m_active->sampleDelta() != 0) {
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "audio correction exhaustion cannot prove partial non-zero compensation"));
-    }
     m_active.reset();
     m_pending.clear();
     m_activeRemaining = 0;

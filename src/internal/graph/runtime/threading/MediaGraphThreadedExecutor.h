@@ -42,6 +42,7 @@ public:
 
     MediaGraphThreadedExecutorState state() const noexcept;
     bool running() const noexcept;
+    bool completed() const noexcept;
     bool failed() const noexcept;
     std::optional<MediaGraphWorkerFailure> primaryFailure() const;
     MediaGraphRuntimeMetrics metrics() const noexcept;
@@ -54,6 +55,7 @@ private:
     MediaGraphThreadedExecutorState m_state = MediaGraphThreadedExecutorState::Idle;
     std::vector<std::unique_ptr<MediaGraphWorker>> m_workers;
     MediaGraphWorkerFailureRecorder m_failureRecorder;
+    MediaGraphWorkerFailureSupervisor m_failureSupervisor;
     mutable MediaGraphRuntimeMetrics m_metrics;
     mutable std::mutex m_metricsMutex;
 };
