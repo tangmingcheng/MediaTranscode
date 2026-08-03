@@ -1,5 +1,7 @@
 #pragma once
 
+#include "internal/graph/protocol/rtp/MediaRtpClockObservationSchedule.h"
+
 #include "internal/graph/model/MediaAvSyncSourceClockMode.h"
 #include "internal/graph/model/MediaControlGenerationPolicy.h"
 #include "internal/graph/model/MediaGraphTypes.h"
@@ -106,6 +108,7 @@ struct MediaAvSyncRtpInputPolicy {
     std::optional<bool> requireSenderReports;
     std::optional<MediaRunningTime> senderReportTimeoutNs;
     std::optional<MediaRunningTime> maximumExtrapolationNs;
+    std::optional<MediaRtpClockLossPolicy> clockLossPolicy;
     std::optional<MediaRunningTime> maximumInterStreamClockOffsetSkewNs;
     std::optional<int> maximumSenderClockRateErrorPpm;
     std::optional<MediaRunningTime> maximumSenderClockResidualNs;

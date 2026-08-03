@@ -165,6 +165,7 @@ constexpr MediaRunningTime runningTime(std::int64_t nanoseconds) noexcept
         static_cast<std::int64_t>(
             MediaRtpClockLivenessPolicy::MaximumExtrapolationMs) *
         Millisecond);
+    input.input.clockLossPolicy = MediaRtpClockLossPolicy::FailOnDegraded;
     input.input.maximumInterStreamClockOffsetSkewNs =
         runningTime(50 * Millisecond);
     input.input.maximumSenderClockRateErrorPpm = 1'000;

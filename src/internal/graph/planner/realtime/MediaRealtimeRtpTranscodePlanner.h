@@ -14,6 +14,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodeRequest.h"
 #include "internal/graph/planner/realtime/MediaPreparedRealtimeInput.h"
 #include "internal/graph/protocol/rtp/MediaRtcpCompositionPolicy.h"
+#include "internal/graph/protocol/rtp/MediaRtpClockObservationSchedule.h"
 #include "internal/graph/protocol/rtp/MediaRtpDepacketizer.h"
 #include "internal/graph/protocol/mpegts/MediaTsPacketOriginPolicy.h"
 #include "media_transcode/Result.h"
@@ -42,6 +43,7 @@ struct MediaRealtimeRtpTransportPlan final {
     bool requireCname;
     int senderReportTimeoutMs;
     int cnameTimeoutMs;
+    MediaRtpClockLossPolicy clockLossPolicy;
     std::optional<MediaRtcpCompositionMode> rtcpCompositionMode;
 };
 

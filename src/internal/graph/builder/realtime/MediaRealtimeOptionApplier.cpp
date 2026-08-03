@@ -78,6 +78,11 @@ const char* boolOption(bool value) noexcept
         if (auto status = set("rtcp.require_cname", boolOption(transport.requireCname)); !status) return status;
         if (auto status = set("rtcp.sender_report_timeout_ms", std::to_string(transport.senderReportTimeoutMs)); !status) return status;
         if (auto status = set("rtcp.cname_timeout_ms", std::to_string(transport.cnameTimeoutMs)); !status) return status;
+        const char* lossPolicy = transport.clockLossPolicy ==
+                MediaRtpClockLossPolicy::FailOnDegraded
+            ? "fail_on_degraded"
+            : "fail_on_expired";
+        if (auto status = set("rtcp.clock_loss_policy", lossPolicy); !status) return status;
         if (!transport.rtcpCompositionMode) {
             return ::media::Result<void>::failure(
                 ::media::ErrorInfo::invalidArgument(

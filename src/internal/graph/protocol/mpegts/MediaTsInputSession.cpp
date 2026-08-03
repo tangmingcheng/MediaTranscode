@@ -454,13 +454,6 @@ MediaTsInputSession::readFrameFromSource()
     if (!observerStatus) {
         return ::media::Result<MediaTsReadFrameEnvelope>::failure(observerStatus.error());
     }
-    {
-        std::lock_guard lock(m_sessionMutex);
-        if (m_closing || m_closed || m_interruptState.cancelled()) {
-            return ::media::Result<MediaTsReadFrameEnvelope>::failure(
-                ::media::ErrorInfo::cancelled("MPEG-TS input read was cancelled"));
-        }
-    }
     if (result >= 0) {
         auto provenance = provenanceFor(*packet);
         if (!provenance) {
@@ -469,7 +462,7 @@ MediaTsInputSession::readFrameFromSource()
         return ::media::Result<MediaTsReadFrameEnvelope>::success(MediaTsReadFrameEnvelope{
             MediaTsReadFrameState::Frame, std::move(packet), provenance.value()});
     }
-    if (result == AVERROR(EAGAIN)) {
+    if (result == AVERROR(EAGAIN) && !m_interruptState.cancelled()) {
         return ::media::Result<MediaTsReadFrameEnvelope>::success(
             MediaTsReadFrameEnvelope{MediaTsReadFrameState::Waiting});
     }

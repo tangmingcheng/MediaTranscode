@@ -44,6 +44,7 @@ struct MediaRtpInputClockTransportPolicy final {
     bool requireCname;
     int senderReportTimeoutMs;
     int identityEvidenceTimeoutMs;
+    MediaRtpClockLossPolicy lossPolicy;
     MediaRtcpCompositionMode rtcpCompositionMode;
 };
 
@@ -182,10 +183,12 @@ openMpegTsRuntimeSession(
             false,
             MediaRtpClockLivenessPolicy::SenderReportTimeoutMs,
             MediaRtpClockLivenessPolicy::CnameTimeoutMs,
+            MediaRtpClockLossPolicy::FailOnExpired,
             MediaRtcpCompositionMode::ReducedSizeRfc5506});
     }
     if (!avSync->rtpInput || !avSync->rtpInput->input.requireSenderReports ||
-        !avSync->rtpInput->input.rtcpCompositionMode) {
+        !avSync->rtpInput->input.rtcpCompositionMode ||
+        !avSync->rtpInput->input.clockLossPolicy) {
         return ::media::Result<MediaRtpInputClockTransportPolicy>::failure(
             ::media::ErrorInfo::notInitialized(
                 "Raw RTP A/V sync requires a complete planner-owned RTCP policy"));
@@ -215,6 +218,7 @@ openMpegTsRuntimeSession(
         false,
         senderReportTimeout.value(),
         identityEvidenceTimeout.value(),
+        *avSync->rtpInput->input.clockLossPolicy,
         *avSync->rtpInput->input.rtcpCompositionMode});
 }
 
@@ -416,6 +420,7 @@ MediaRealtimeRtpTransportPlan transportPlan(
         clockPolicy.requireCname,
         clockPolicy.senderReportTimeoutMs,
         clockPolicy.identityEvidenceTimeoutMs,
+        clockPolicy.lossPolicy,
         clockPolicy.rtcpCompositionMode
     };
 }

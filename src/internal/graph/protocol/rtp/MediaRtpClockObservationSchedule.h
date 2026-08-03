@@ -12,12 +12,18 @@ enum class MediaRtpClockAgeTransition {
     Expired
 };
 
+enum class MediaRtpClockLossPolicy {
+    FailOnDegraded,
+    FailOnExpired
+};
+
 class MediaRtpClockObservationSchedule final {
 public:
     static ::media::Result<MediaRtpClockObservationSchedule> create(
         std::int64_t senderReportTimeoutNs,
         std::int64_t maximumExtrapolationNs,
-        std::int64_t cnameTimeoutNs);
+        std::int64_t cnameTimeoutNs,
+        MediaRtpClockLossPolicy lossPolicy);
 
     ::media::Status observeEvidence(std::int64_t senderReportObservedAtNs,
                                     std::int64_t cnameObservedAtNs) noexcept;
@@ -34,11 +40,13 @@ public:
 private:
     MediaRtpClockObservationSchedule(std::int64_t senderReportTimeoutNs,
                                      std::int64_t maximumExtrapolationNs,
-                                     std::int64_t cnameTimeoutNs) noexcept;
+                                     std::int64_t cnameTimeoutNs,
+                                     MediaRtpClockLossPolicy lossPolicy) noexcept;
 
     std::int64_t m_senderReportTimeoutNs;
     std::int64_t m_maximumExtrapolationNs;
     std::int64_t m_cnameTimeoutNs;
+    MediaRtpClockLossPolicy m_lossPolicy;
     std::optional<std::int64_t> m_senderReportObservedAtNs;
     std::optional<std::int64_t> m_cnameObservedAtNs;
     bool m_degradedPublished = false;

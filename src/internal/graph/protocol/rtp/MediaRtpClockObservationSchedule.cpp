@@ -19,26 +19,32 @@ std::int64_t calculateDeadline(std::int64_t observedAtNs, std::int64_t intervalN
 ::media::Result<MediaRtpClockObservationSchedule> MediaRtpClockObservationSchedule::create(
     std::int64_t senderReportTimeoutNs,
     std::int64_t maximumExtrapolationNs,
-    std::int64_t cnameTimeoutNs)
+    std::int64_t cnameTimeoutNs,
+    MediaRtpClockLossPolicy lossPolicy)
 {
     if (senderReportTimeoutNs <= 0 || maximumExtrapolationNs <= senderReportTimeoutNs ||
-        cnameTimeoutNs <= 0) {
+        cnameTimeoutNs <= 0 ||
+        (lossPolicy != MediaRtpClockLossPolicy::FailOnDegraded &&
+         lossPolicy != MediaRtpClockLossPolicy::FailOnExpired)) {
         return ::media::Result<MediaRtpClockObservationSchedule>::failure(
             ::media::ErrorInfo::invalidArgument("RTP clock observation deadlines must be positive and ordered"));
     }
     return ::media::Result<MediaRtpClockObservationSchedule>::success(
         MediaRtpClockObservationSchedule(senderReportTimeoutNs,
                                          maximumExtrapolationNs,
-                                         cnameTimeoutNs));
+                                         cnameTimeoutNs,
+                                         lossPolicy));
 }
 
 MediaRtpClockObservationSchedule::MediaRtpClockObservationSchedule(
     std::int64_t senderReportTimeoutNs,
     std::int64_t maximumExtrapolationNs,
-    std::int64_t cnameTimeoutNs) noexcept
+    std::int64_t cnameTimeoutNs,
+    MediaRtpClockLossPolicy lossPolicy) noexcept
     : m_senderReportTimeoutNs(senderReportTimeoutNs)
     , m_maximumExtrapolationNs(maximumExtrapolationNs)
     , m_cnameTimeoutNs(cnameTimeoutNs)
+    , m_lossPolicy(lossPolicy)
 {
 }
 
@@ -110,6 +116,10 @@ MediaRtpClockObservationSchedule::transition(
     }
     if (!m_degradedPublished) {
         m_degradedPublished = true;
+        if (m_lossPolicy == MediaRtpClockLossPolicy::FailOnExpired) {
+            return ::media::Result<std::optional<MediaRtpClockAgeTransition>>::success(
+                std::nullopt);
+        }
         return ::media::Result<std::optional<MediaRtpClockAgeTransition>>::success(
             MediaRtpClockAgeTransition::Degraded);
     }
