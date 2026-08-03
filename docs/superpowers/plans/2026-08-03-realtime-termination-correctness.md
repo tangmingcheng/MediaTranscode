@@ -15,7 +15,7 @@
 - [x] Rebuild all x64 Debug targets clean-first.
 - [x] Pass exact P0 live-media gates and the nine-route matrix.
 - [x] Update completion, README, root plan, progress, and quality score documents.
-- [ ] Complete global self-review, commit, push, PR, and fresh-agent PASS review.
+- [x] Complete global self-review, commit, push, PR, and fresh-agent PASS review.
 
 ## Baseline Evidence
 

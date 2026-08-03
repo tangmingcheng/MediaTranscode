@@ -10,6 +10,7 @@ Completed on `codex/realtime-termination-correctness` on 2026-08-03.
 - RTP clock degradation fails at the raw-input boundary with stream kind and the planner-provided 7/9-second observation facts.
 - Audio terminal residue is settled only from exact SWR-exhaustion proof. Decoder discard padding and encoder priming packets retain exact lineage.
 - Video decoder drain releases FFmpeg opaque leases before generation completion.
+- Independent full-PR review passed at `c1433dd4` after verifying truthful secondary-failure accounting, invalid-policy rejection, and exact-PID source-stop evidence.
 
 ## P0 Gates
 

@@ -7,7 +7,7 @@
 - [x] Coordinate the first worker failure and represent clean threaded completion.
 - [x] Correct SWR residue settlement and video decoder EOF lease release.
 - [x] Complete real-media P0 and nine-route validation.
-- [ ] Update delivery evidence and quality score; complete PR and independent review.
+- [x] Update delivery evidence and quality score; complete PR and independent review.
 
 Detailed design and execution checklist:
 
