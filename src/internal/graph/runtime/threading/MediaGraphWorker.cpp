@@ -126,7 +126,8 @@ MediaGraphWorker::FailureDisposition MediaGraphWorker::recordFailure(
     const bool primary = m_failureRecorder->recordFirst(
         MediaGraphWorkerFailure{ m_node.nodeId(), nodeKind, nodeName, std::move(error) });
     if (!primary) {
-        if (m_failureSupervisor) {
+        if (diagnosticError.code == ::media::ErrorCode::Cancelled &&
+            m_failureSupervisor) {
             m_failureSupervisor->notifyPrimaryFailure();
             return FailureDisposition::CoordinatedCancellation;
         }

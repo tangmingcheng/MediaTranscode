@@ -43,6 +43,7 @@ namespace {
         policy.senderReportTimeoutNs &&
         policy.identityEvidenceTimeoutNs &&
         policy.clockLossPolicy &&
+        policy.secondaryClockLossPolicy &&
         input.videoInput.payloadType &&
         input.videoInput.clockRate &&
         input.audioInput.payloadType &&
@@ -74,11 +75,13 @@ namespace {
         outer.input.rtpTransport->clockLossPolicy ==
             *policy.clockLossPolicy &&
         outer.audioInput.rtpTransport->clockLossPolicy ==
-            outer.input.rtpTransport->clockLossPolicy &&
+            *policy.secondaryClockLossPolicy &&
         *policy.clockLossPolicy ==
             (*runtime.synchronization.startup.allowDegradedClock
                  ? MediaRtpClockLossPolicy::FailOnExpired
                  : MediaRtpClockLossPolicy::FailOnDegraded) &&
+        *policy.secondaryClockLossPolicy ==
+            MediaRtpClockLossPolicy::FailOnExpired &&
         outer.input.rtpTransport->rtcpCompositionMode ==
             policy.rtcpCompositionMode &&
         outer.audioInput.rtpTransport->rtcpCompositionMode ==

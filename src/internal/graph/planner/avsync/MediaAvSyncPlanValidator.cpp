@@ -256,6 +256,7 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
         !positive(rtp.input.senderReportTimeoutNs) ||
         !positive(rtp.input.maximumExtrapolationNs) ||
         !rtp.input.clockLossPolicy ||
+        !rtp.input.secondaryClockLossPolicy ||
         *rtp.input.identityEvidenceTimeoutNs !=
             *rtp.input.maximumExtrapolationNs ||
         !positive(rtp.input.maximumInterStreamClockOffsetSkewNs) ||

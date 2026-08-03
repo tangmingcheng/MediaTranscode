@@ -109,6 +109,7 @@ struct MediaAvSyncRtpInputPolicy {
     std::optional<MediaRunningTime> senderReportTimeoutNs;
     std::optional<MediaRunningTime> maximumExtrapolationNs;
     std::optional<MediaRtpClockLossPolicy> clockLossPolicy;
+    std::optional<MediaRtpClockLossPolicy> secondaryClockLossPolicy;
     std::optional<MediaRunningTime> maximumInterStreamClockOffsetSkewNs;
     std::optional<int> maximumSenderClockRateErrorPpm;
     std::optional<MediaRunningTime> maximumSenderClockResidualNs;
