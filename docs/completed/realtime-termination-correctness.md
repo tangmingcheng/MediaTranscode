@@ -40,9 +40,11 @@ The MPEG-TS/UDP loss gate used the MPEG-TS/UDP source command in the next sectio
 & 'C:\Windows\System32\taskkill.exe' /PID 42540 /T /F
 ```
 
-The separate-RTP loss gate used the separate-RTP source command in the next section, the following CLI, and the exact sender PID stop command:
+The separate-RTP loss gate used these direct commands and then stopped the exact sender PID:
 
 ```powershell
+& 'D:\mabs\local64\bin-video\ffmpeg.exe' -hide_banner -loglevel warning -stream_loop -1 -re -i 'D:\Code\MyCode\MediaTranscode\out\build\x64-debug\test.mp4' -map 0:v:0 -c:v copy -an -payload_type 96 -ssrc 64301 -f rtp 'rtp://127.0.0.1:64300?rtcpport=64301' -map 0:a:0 -c:a copy -vn -payload_type 97 -ssrc 64303 -f rtp 'rtp://127.0.0.1:64302?rtcpport=64303'
+
 & 'D:\Code\MyCode\MediaTranscode\out\build\x64-debug\media_transcode_realtime_video_cli.exe' --media-id p0-rtp-secondary-policy-reviewed --input-type rtp --input-layout separate --video-rtp-url 'rtp://127.0.0.1:64300' --video-rtp-codec h264 --video-rtp-payload-type 96 --video-rtp-clock-rate 90000 --video-rtp-fmtp 'packetization-mode=1;sprop-parameter-sets=Z01AMpWQAoALWwEQAAA+gAAOpghA,aOuPIA==;profile-level-id=4D4032' --audio-rtp-url 'rtp://127.0.0.1:64302' --audio-rtp-codec aac --audio-rtp-payload-type 97 --audio-rtp-clock-rate 44100 --audio-rtp-channels 2 --audio-rtp-fmtp 'profile-level-id=1;mode=AAC-hbr;sizelength=13;indexlength=3;indexdeltalength=3;config=1210' --open-timeout-ms 5000 --read-timeout-ms 2000 --analyze-duration-us 5000000 --probe-size 5000000 --output-layout mpegts --output-transport udp --output 'udp://127.0.0.1:65036' --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --startup-max-video-unit-bytes 4194304 --startup-max-audio-unit-bytes 1048576 --startup-max-gap-ms 40 --video-codec h264 --width 1280 --height 720 --fps 30 --bitrate 4000 --gop 30 --audio-codec aac --audio-bitrate 128 --sample-rate 48000 --channels 2 --progress-timeout-ms 10000 --first-output-timeout-ms 30000 --poll-interval-ms 1000 --quiet-graph
 
 & 'C:\Windows\System32\taskkill.exe' /PID 54432 /T /F
