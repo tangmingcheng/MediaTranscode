@@ -27,11 +27,6 @@ void MediaGraphWorkerFailureSupervisor::notifyPrimaryFailure()
     }
 }
 
-bool MediaGraphWorkerFailureSupervisor::coordinating() const noexcept
-{
-    return m_notified.load(std::memory_order_acquire);
-}
-
 void MediaGraphWorkerFailureSupervisor::disarm() noexcept
 {
     std::lock_guard lock(m_mutex);

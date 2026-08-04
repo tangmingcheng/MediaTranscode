@@ -12,7 +12,6 @@ public:
 
     void arm(CoordinatedStop coordinatedStop);
     void notifyPrimaryFailure();
-    bool coordinating() const noexcept;
     void disarm() noexcept;
 
 private:

@@ -6,7 +6,7 @@
 |---|---:|---:|---|
 | Architecture and DAG model | 15 | 15 | Nine input/output layouts converge on the canonical scheduler and one planned output adapter. |
 | Planner decision ownership | 12 | 12 | RTP degraded-clock termination is a typed planner product; nodes receive explicit policy and timing facts. |
-| Scheduling and concurrency | 13 | 12 | First failure is permanent, coordinated peers stop once, and all-worker `Finished` proves clean completion. |
+| Scheduling and concurrency | 13 | 12 | First failure is permanent; worker-local stop facts distinguish coordinated cancellation from independent failure, and all-worker `Finished` proves clean completion. |
 | Node responsibility and decoupling | 12 | 9 | Input termination, failure supervision, and packet lineage are focused modules; several existing planner/runtime files remain oversized. |
 | RAII and resource safety | 10 | 10 | Worker owners outlive worker destruction; FFmpeg objects, sockets, sessions, leases, and reservations remain scoped. |
 | Performance and resource efficiency | 10 | 10 | Direct-VLC reruns stayed below 6% realtime CLI process CPU, had zero playback drops, and showed no sustained working-set growth. |
