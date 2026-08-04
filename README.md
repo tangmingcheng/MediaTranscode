@@ -57,6 +57,11 @@ ffplay -protocol_whitelist file,udp,rtp -i out/build/x64-debug/realtime-output.s
 ffprobe -protocol_whitelist file,udp,rtp -i out/build/x64-debug/realtime-output.sdp
 ```
 
+For visible local acceptance, open separate RTP through its generated SDP because
+the H.264 and AAC dynamic payload mappings require signaling. Open MPEG-TS/RTP
+directly as `rtp://@host:port` and MPEG-TS/UDP directly as `udp://@host:port`.
+Do not insert an observer remux between the production output and VLC.
+
 `--max-duration SECONDS` is optional realtime CLI monitoring policy. When it is
 present, it must be positive and stops a still-running CLI after that duration.
 When it is absent, startup output, progress, and lifecycle failures retain their
@@ -111,3 +116,9 @@ Project acceptance is based on the real local and realtime CLIs, real media stre
 FFmpeg/VLC observation, runtime memory metrics, and continuous A/V drift telemetry.
 The current absolute-path PowerShell commands and evidence are recorded under
 `docs/completed/`.
+
+Input termination is strict: only a true FFmpeg EOF completes successfully.
+HTTP, UDP, and RTP source disappearance returns one preserved source-loss
+failure; coordinated cancellation of the remaining workers does not replace
+that primary error. EOF drains codec state and all sinks before the realtime
+CLI performs its normal stop path.

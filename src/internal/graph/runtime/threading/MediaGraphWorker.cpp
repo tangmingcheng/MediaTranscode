@@ -24,11 +24,13 @@ MediaGraphWorker::MediaGraphWorker(MediaRuntimeNode& node,
 MediaGraphWorker::MediaGraphWorker(MediaRuntimeNode& node,
                                    MediaGraphExecutionContext& context,
                                    MediaGraphWorkerFailureRecorder& failureRecorder,
+                                   MediaGraphWorkerFailureSupervisor& failureSupervisor,
                                    MediaGraphWorkerConfig config)
     : m_node(node)
     , m_context(context)
     , m_wakeup(context.nodeWakeup(node.nodeId()))
     , m_failureRecorder(&failureRecorder)
+    , m_failureSupervisor(&failureSupervisor)
     , m_config(config)
 {
 }
@@ -45,9 +47,12 @@ MediaGraphWorker::~MediaGraphWorker()
     if (m_running) {
         return ::media::Status::success();
     }
+    if (m_stopRequested || m_aborted) {
+        return ::media::Status::failure(::media::ErrorInfo::cancelled(
+            "MediaGraphWorker start was cancelled by coordinated failure"));
+    }
 
-    m_stopRequested = false;
-    m_aborted = false;
+    m_finished = false;
     m_thread = std::thread(&MediaGraphWorker::run, this);
     return ::media::Status::success();
 }
@@ -83,6 +88,11 @@ bool MediaGraphWorker::running() const noexcept
     return m_running;
 }
 
+bool MediaGraphWorker::finished() const noexcept
+{
+    return m_finished.load(std::memory_order_acquire);
+}
+
 bool MediaGraphWorker::stopRequested() const noexcept
 {
     return m_stopRequested;
@@ -103,7 +113,8 @@ const MediaGraphWorkerMetrics& MediaGraphWorker::metrics() const noexcept
     return m_metrics;
 }
 
-void MediaGraphWorker::recordFailure(::media::ErrorInfo error)
+MediaGraphWorker::FailureDisposition MediaGraphWorker::recordFailure(
+    ::media::ErrorInfo error)
 {
     const MediaGraph* graph = m_context.graph();
     const MediaNode* node = graph ? graph->findNode(m_node.nodeId()) : nullptr;
@@ -112,8 +123,23 @@ void MediaGraphWorker::recordFailure(::media::ErrorInfo error)
         ? (!node->diagnosticName.empty() ? node->diagnosticName : node->name)
         : std::string{};
     const ::media::ErrorInfo diagnosticError = error;
-    (void)m_failureRecorder->recordFirst(
+    const bool primary = m_failureRecorder->recordFirst(
         MediaGraphWorkerFailure{ m_node.nodeId(), nodeKind, nodeName, std::move(error) });
+    if (!primary) {
+        if (diagnosticError.code == ::media::ErrorCode::Cancelled &&
+            (stopRequested() || aborted())) {
+            return FailureDisposition::CoordinatedCancellation;
+        }
+        mediaGraphDiagnosticLog(
+            MediaGraphDiagnosticLevel::State,
+            MediaGraphDiagnosticPhase::RuntimeNode,
+            "worker.secondary_failure node=" +
+                std::to_string(m_node.nodeId().value) +
+                " kind=" + mediaGraphDiagnosticNodeKindName(nodeKind) +
+                " name=" + nodeName +
+                " error=" + diagnosticError.describe());
+        return FailureDisposition::Secondary;
+    }
     mediaGraphDiagnosticLog(
         MediaGraphDiagnosticLevel::State,
         MediaGraphDiagnosticPhase::RuntimeNode,
@@ -121,6 +147,10 @@ void MediaGraphWorker::recordFailure(::media::ErrorInfo error)
             " kind=" + mediaGraphDiagnosticNodeKindName(nodeKind) +
             " name=" + nodeName +
             " error=" + diagnosticError.describe());
+    if (m_failureSupervisor) {
+        m_failureSupervisor->notifyPrimaryFailure();
+    }
+    return FailureDisposition::Primary;
 }
 
 void MediaGraphWorker::run()
@@ -142,9 +172,11 @@ void MediaGraphWorker::run()
         }
 
         if (!result) {
-            recordFailure(result.error());
-            ++m_metrics.errors;
-            ++consecutiveErrors;
+            const auto disposition = recordFailure(result.error());
+            if (disposition != FailureDisposition::CoordinatedCancellation) {
+                ++m_metrics.errors;
+                ++consecutiveErrors;
+            }
             if (consecutiveErrors >= m_config.maxConsecutiveErrors) {
                 m_aborted = true;
                 break;
@@ -167,23 +199,25 @@ void MediaGraphWorker::run()
                 const auto& deadlineWait = *result.value().deadlineWait;
                 auto group = m_context.findAvSyncGroup(deadlineWait.syncGroup);
                 if (!group) {
-                    recordFailure(::media::ErrorInfo::notInitialized(
-                        "MediaGraphWorker deadline wait requires a registered A/V sync group"));
-                    ++m_metrics.errors;
+                    if (recordFailure(::media::ErrorInfo::notInitialized(
+                            "MediaGraphWorker deadline wait requires a registered A/V sync group")) !=
+                        FailureDisposition::CoordinatedCancellation) {
+                        ++m_metrics.errors;
+                    }
                     m_aborted = true;
                     break;
                 }
                 auto now = group->clock()->now();
                 if (!now) {
-                    recordFailure(now.error());
-                    ++m_metrics.errors;
+                    if (recordFailure(now.error()) !=
+                        FailureDisposition::CoordinatedCancellation) ++m_metrics.errors;
                     m_aborted = true;
                     break;
                 }
                 auto remaining = deadlineWait.masterDeadline.checkedSubtract(now.value());
                 if (!remaining) {
-                    recordFailure(remaining.error());
-                    ++m_metrics.errors;
+                    if (recordFailure(remaining.error()) !=
+                        FailureDisposition::CoordinatedCancellation) ++m_metrics.errors;
                     m_aborted = true;
                     break;
                 }
@@ -201,6 +235,12 @@ void MediaGraphWorker::run()
             }
             break;
         case MediaNodeProcessState::Finished:
+            mediaGraphDiagnosticLog(
+                MediaGraphDiagnosticLevel::State,
+                MediaGraphDiagnosticPhase::RuntimeLifecycle,
+                "worker.finished node=" +
+                    std::to_string(m_node.nodeId().value));
+            m_finished.store(true, std::memory_order_release);
             m_running = false;
             return;
         }

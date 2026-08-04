@@ -2,13 +2,13 @@
 
 #include "internal/graph/nodes/audio/AudioEncoderCodecApi.h"
 #include "internal/graph/nodes/audio/AudioEncoderFrameQueue.h"
+#include "internal/graph/nodes/audio/AudioEncoderPacketLineageMapper.h"
 #include "internal/graph/nodes/FFmpegCodecNodeRuntime.h"
 #include "internal/graph/runtime/lifecycle/MediaInputTerminalTracker.h"
 #include "internal/graph/sync/MediaAudioPlaybackOrigin.h"
 #include "internal/graph/sync/lineage/MediaAudioLineageExecutionMode.h"
 #include "internal/graph/sync/lineage/MediaAudioLineageState.h"
 
-#include <deque>
 #include <optional>
 
 namespace media::ffmpeg::graph {
@@ -22,7 +22,7 @@ public:
     AudioEncoderFrameQueue frameQueue;
     ::media::ffmpeg::FramePtr pendingFrame;
     std::vector<MediaAudioIntervalFragment> pendingFragments;
-    std::deque<std::vector<MediaAudioIntervalFragment>> submittedFragments;
+    AudioEncoderPacketLineageMapper submittedLineage;
     std::optional<MediaAudioPlaybackOrigin> activeOrigin;
     bool flushPending = false;
     bool flushIsEof = false;
@@ -92,7 +92,7 @@ private:
     AudioEncoderFrameQueue& m_frameQueue;
     ::media::ffmpeg::FramePtr& m_pendingFrame;
     std::vector<MediaAudioIntervalFragment>& m_pendingFragments;
-    std::deque<std::vector<MediaAudioIntervalFragment>>& m_submittedFragments;
+    AudioEncoderPacketLineageMapper& m_submittedLineage;
     MediaAudioLineageExecutionMode m_lineageMode;
     std::optional<MediaAudioPlaybackOrigin>& m_activeOrigin;
 };

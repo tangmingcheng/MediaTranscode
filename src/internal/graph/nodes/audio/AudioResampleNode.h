@@ -63,7 +63,9 @@ private:
     ::media::Status stampAndQueue(MediaBufferRef outputBuffer,
                                   std::int64_t inputPts,
                                   AVRational sourceTimeBase);
-    ::media::Status settleLineageResidue();
+    ::media::Status finishBypassLineage();
+    ::media::Status settleLineageResidue(
+        AudioSwrResamplerExhausted exhaustionProof);
     void resetRuntimeState() noexcept;
 
 private:

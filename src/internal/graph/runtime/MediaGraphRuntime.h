@@ -78,6 +78,7 @@ public:
     bool compiled() const noexcept;
     bool running() const noexcept;
     bool threadedRunning() const noexcept;
+    bool threadedCompleted() const noexcept;
 
     MediaGraphExecutionContext& context() noexcept;
     const MediaGraphExecutionContext& context() const noexcept;

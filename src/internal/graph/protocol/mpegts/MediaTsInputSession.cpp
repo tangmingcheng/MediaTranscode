@@ -2,6 +2,7 @@
 
 #include "internal/graph/protocol/mpegts/MediaTsPacketParser.h"
 #include "internal/graph/protocol/mpegts/MediaTsPsiSectionAssembler.h"
+#include "internal/graph/protocol/FFmpegInputReadTermination.h"
 #include "internal/graph/runtime/buffer/FFmpegInputStreamSnapshotFactory.h"
 
 #include <limits>
@@ -453,13 +454,6 @@ MediaTsInputSession::readFrameFromSource()
     if (!observerStatus) {
         return ::media::Result<MediaTsReadFrameEnvelope>::failure(observerStatus.error());
     }
-    {
-        std::lock_guard lock(m_sessionMutex);
-        if (m_closing || m_closed || m_interruptState.cancelled()) {
-            return ::media::Result<MediaTsReadFrameEnvelope>::failure(
-                ::media::ErrorInfo::cancelled("MPEG-TS input read was cancelled"));
-        }
-    }
     if (result >= 0) {
         auto provenance = provenanceFor(*packet);
         if (!provenance) {
@@ -468,11 +462,13 @@ MediaTsInputSession::readFrameFromSource()
         return ::media::Result<MediaTsReadFrameEnvelope>::success(MediaTsReadFrameEnvelope{
             MediaTsReadFrameState::Frame, std::move(packet), provenance.value()});
     }
-    if (result == AVERROR(EAGAIN)) {
+    if (result == AVERROR(EAGAIN) && !m_interruptState.cancelled()) {
         return ::media::Result<MediaTsReadFrameEnvelope>::success(
             MediaTsReadFrameEnvelope{MediaTsReadFrameState::Waiting});
     }
-    if (result == AVERROR_EOF) {
+    const auto termination = classifyFFmpegInputReadTermination(
+        result, m_interruptState.cancelled(), "MPEG-TS av_read_frame");
+    if (termination.kind() == FFmpegInputReadTerminationKind::EndOfStream) {
         auto finished = m_evidenceObserver->finish();
         if (!finished) {
             return ::media::Result<MediaTsReadFrameEnvelope>::failure(
@@ -481,12 +477,8 @@ MediaTsInputSession::readFrameFromSource()
         return ::media::Result<MediaTsReadFrameEnvelope>::success(
             MediaTsReadFrameEnvelope{MediaTsReadFrameState::EndOfStream});
     }
-    if (result == AVERROR_EXIT) {
-        return ::media::Result<MediaTsReadFrameEnvelope>::failure(
-            ::media::ErrorInfo::cancelled("MPEG-TS input read was cancelled"));
-    }
     return ::media::Result<MediaTsReadFrameEnvelope>::failure(
-        ::media::ErrorInfo::ffmpegFailure("failed to read MPEG-TS frame", result));
+        *termination.error());
 }
 
 ::media::Status MediaTsInputSession::configureRuntimeBinding(

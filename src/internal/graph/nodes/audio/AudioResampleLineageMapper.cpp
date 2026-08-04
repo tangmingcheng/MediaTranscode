@@ -169,4 +169,20 @@ AudioResampleLineageMapper::AudioResampleLineageMapper(
     return ::media::Status::success();
 }
 
+::media::Status AudioResampleLineageMapper::settleExhaustedResidue(
+    AudioSwrResamplerExhausted)
+{
+    if (!m_state) {
+        return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+            "AudioResampleLineageMapper requires planned state"));
+    }
+    auto candidateIntervals = m_state->outputIntervals;
+    if (auto status = candidateIntervals.settleDroppedSamples(
+            candidateIntervals.queuedSamples()); !status) {
+        return status;
+    }
+    m_state->outputIntervals = std::move(candidateIntervals);
+    return ::media::Status::success();
+}
+
 } // namespace media::ffmpeg::graph

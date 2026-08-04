@@ -23,6 +23,7 @@ namespace {
     if (outer.inputType != RealtimeInputType::RtpPort ||
         outer.inputLayout != RealtimeInputStreamLayout::SeparateStreams ||
         !runtime.synchronization.rtpInput ||
+        !runtime.synchronization.startup.allowDegradedClock ||
         !outer.input.rtpTransport || !outer.audioInput.rtpTransport ||
         !std::holds_alternative<MediaRtpInputClockAssemblyPlan>(
             runtime.assembly.inputClock) ||
@@ -41,6 +42,8 @@ namespace {
         policy.rtcpCompositionMode &&
         policy.senderReportTimeoutNs &&
         policy.identityEvidenceTimeoutNs &&
+        policy.clockLossPolicy &&
+        policy.secondaryClockLossPolicy &&
         input.videoInput.payloadType &&
         input.videoInput.clockRate &&
         input.audioInput.payloadType &&
@@ -69,6 +72,16 @@ namespace {
             policy.identityEvidenceTimeoutNs->nanoseconds() / Millisecond &&
         outer.audioInput.rtpTransport->cnameTimeoutMs ==
             policy.identityEvidenceTimeoutNs->nanoseconds() / Millisecond &&
+        outer.input.rtpTransport->clockLossPolicy ==
+            *policy.clockLossPolicy &&
+        outer.audioInput.rtpTransport->clockLossPolicy ==
+            *policy.secondaryClockLossPolicy &&
+        *policy.clockLossPolicy ==
+            (*runtime.synchronization.startup.allowDegradedClock
+                 ? MediaRtpClockLossPolicy::FailOnExpired
+                 : MediaRtpClockLossPolicy::FailOnDegraded) &&
+        *policy.secondaryClockLossPolicy ==
+            MediaRtpClockLossPolicy::FailOnExpired &&
         outer.input.rtpTransport->rtcpCompositionMode ==
             policy.rtcpCompositionMode &&
         outer.audioInput.rtpTransport->rtcpCompositionMode ==

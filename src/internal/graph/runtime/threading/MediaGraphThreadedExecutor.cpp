@@ -3,6 +3,8 @@
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/runtime/lifecycle/MediaGraphLifecycle.h"
 
+#include <algorithm>
+
 namespace media::ffmpeg::graph {
 void MediaGraphThreadedExecutor::setPolicy(MediaThreadingPolicy policy) noexcept
 {
@@ -49,15 +51,33 @@ const MediaThreadingPolicy& MediaGraphThreadedExecutor::policy() const noexcept
         }
 
         m_workers.push_back(std::make_unique<MediaGraphWorker>(
-            *node, context, m_failureRecorder, workerConfig));
+            *node, context, m_failureRecorder, m_failureSupervisor, workerConfig));
     }
+
+    m_failureSupervisor.arm([this, &context] {
+        for (auto& worker : m_workers) {
+            if (worker) worker->requestStop();
+        }
+        for (auto& worker : m_workers) {
+            if (worker) worker->interrupt();
+        }
+        context.interruptNodeWakeups();
+    });
 
     for (auto& worker : m_workers) {
         auto status = worker->start();
         if (!status) {
             abort(context, scheduler);
+            if (auto failure = primaryFailure()) {
+                return ::media::Status::failure(failure->error);
+            }
             return status;
         }
+    }
+
+    if (auto failure = primaryFailure()) {
+        abort(context, scheduler);
+        return ::media::Status::failure(failure->error);
     }
 
     m_state = MediaGraphThreadedExecutorState::Running;
@@ -97,6 +117,7 @@ const MediaThreadingPolicy& MediaGraphThreadedExecutor::policy() const noexcept
             worker->join();
         }
     }
+    m_failureSupervisor.disarm();
 
     if (metrics().workerErrors != 0) {
         scheduler.abort(context);
@@ -135,6 +156,7 @@ void MediaGraphThreadedExecutor::abort(MediaGraphExecutionContext& context,
             worker->join();
         }
     }
+    m_failureSupervisor.disarm();
 
     scheduler.abort(context);
     m_state = MediaGraphThreadedExecutorState::Aborted;
@@ -143,6 +165,7 @@ void MediaGraphThreadedExecutor::abort(MediaGraphExecutionContext& context,
 
 void MediaGraphThreadedExecutor::clear()
 {
+    m_failureSupervisor.disarm();
     m_workers.clear();
     m_failureRecorder.clear();
     {
@@ -160,6 +183,17 @@ MediaGraphThreadedExecutorState MediaGraphThreadedExecutor::state() const noexce
 bool MediaGraphThreadedExecutor::running() const noexcept
 {
     return m_state == MediaGraphThreadedExecutorState::Running;
+}
+
+bool MediaGraphThreadedExecutor::completed() const noexcept
+{
+    return m_state == MediaGraphThreadedExecutorState::Running &&
+           !m_failureRecorder.hasFailure() &&
+           !m_workers.empty() &&
+           std::all_of(m_workers.begin(), m_workers.end(),
+               [](const std::unique_ptr<MediaGraphWorker>& worker) {
+                   return worker && worker->finished();
+               });
 }
 
 bool MediaGraphThreadedExecutor::failed() const noexcept

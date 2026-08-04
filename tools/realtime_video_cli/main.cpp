@@ -272,6 +272,9 @@ RealtimeVideoRuntimeOptions parseRuntimeOptions(int argc, char** argv)
         if (!runtime.threadedRunning()) {
             break;
         }
+        if (runtime.threadedCompleted()) {
+            return ::media::Status::success();
+        }
         const MediaGraphRuntimeReport progressReport = MediaGraphRuntimeReporter::capture(runtime);
         auto sampleStatus = runtime.acceptanceCollector().sample(
             progressReport.metrics.encodedPacketsPushed);
@@ -292,6 +295,13 @@ RealtimeVideoRuntimeOptions parseRuntimeOptions(int argc, char** argv)
         const auto now = Clock::now();
         if (report.metrics.activeWorkers == 0 &&
             now - startedAt >= workerStartupGrace) {
+            auto terminalStatus = runtime.synchronizeThreadedState();
+            if (!terminalStatus) {
+                return terminalStatus;
+            }
+            if (runtime.threadedCompleted()) {
+                return ::media::Status::success();
+            }
             return ::media::Status::failure(
                 ::media::ErrorInfo::notInitialized("realtime runtime has no active workers"));
         }

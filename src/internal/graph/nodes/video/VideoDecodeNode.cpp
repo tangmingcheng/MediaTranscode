@@ -385,7 +385,7 @@ void VideoDecodeNode::resetRuntimeState() noexcept
     auto drain = receiveFrames(context);
     if (!drain) return processProgress(::media::Status::failure(drain.error()));
     if (!drain.value()) return ::media::Result<MediaNodeProcessResult>::success(MediaNodeProcessResult::progress());
-    if (!m_lineageState->flushIsEof) m_codecApi->flushBuffers(codecContext());
+    m_codecApi->flushBuffers(codecContext());
     if (m_lineageRegistry) {
         for (const auto generation : m_lineageState->lineageGenerations) {
             auto finished = m_lineageRegistry->finishGeneration(generation);
