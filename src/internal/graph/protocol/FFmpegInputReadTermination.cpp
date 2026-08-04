@@ -52,14 +52,14 @@ FFmpegInputReadTermination classifyFFmpegInputReadTermination(
     bool interruptRequested,
     std::string_view operation)
 {
-    if (ffmpegCode == AVERROR_EOF) {
-        return FFmpegInputReadTermination::endOfStream();
-    }
-
     if (interruptRequested) {
         return FFmpegInputReadTermination::cancelled(
             ::media::ErrorInfo::cancelled(
                 std::string(operation) + " was cancelled"));
+    }
+
+    if (ffmpegCode == AVERROR_EOF) {
+        return FFmpegInputReadTermination::endOfStream();
     }
 
     std::array<char, AV_ERROR_MAX_STRING_SIZE> nativeMessage{};

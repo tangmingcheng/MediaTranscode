@@ -127,8 +127,7 @@ MediaGraphWorker::FailureDisposition MediaGraphWorker::recordFailure(
         MediaGraphWorkerFailure{ m_node.nodeId(), nodeKind, nodeName, std::move(error) });
     if (!primary) {
         if (diagnosticError.code == ::media::ErrorCode::Cancelled &&
-            m_failureSupervisor) {
-            m_failureSupervisor->notifyPrimaryFailure();
+            m_failureSupervisor && m_failureSupervisor->coordinating()) {
             return FailureDisposition::CoordinatedCancellation;
         }
         mediaGraphDiagnosticLog(

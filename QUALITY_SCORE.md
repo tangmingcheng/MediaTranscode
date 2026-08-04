@@ -17,7 +17,7 @@
 
 ## Review Verdict
 
-**INDEPENDENT SCORE: 92/100, A-. PR REVIEW: PASS.** The independent final review verified the executor lifetime, MPEG-TS classification precedence, planner-owned video/audio loss boundaries, exact-PID evidence, truthful secondary-failure accounting, and invalid-policy rejection at `c1433dd4`.
+**INDEPENDENT SCORE: 92/100, A-. FINAL PR RE-REVIEW: PENDING.** The earlier review passed at `c1433dd4`; the 2026-08-04 follow-up review identified interrupt/EOF precedence and secondary-cancellation accounting gaps. Both corrections and the matching direct-VLC command evidence are included in the current review candidate.
 
 ## Acceptance Evidence
 
