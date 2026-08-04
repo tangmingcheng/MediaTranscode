@@ -10,7 +10,7 @@ Completed on `codex/realtime-termination-correctness` on 2026-08-03.
 - RTP clock degradation fails at the raw-input boundary with stream kind and the planner-provided 7/9-second observation facts.
 - Audio terminal residue is settled only from exact SWR-exhaustion proof. Decoder discard padding and encoder priming packets retain exact lineage.
 - Video decoder drain releases FFmpeg opaque leases before generation completion.
-- An earlier full-PR review passed at `c1433dd4`. The 2026-08-04 direct-VLC follow-up review then found interrupt/EOF precedence and secondary-cancellation accounting gaps; both are corrected in the current review candidate.
+- Independent standards and specification reviews passed the complete PR at `d66948f9` with no Critical, Important, or Minor finding after verifying interrupt/EOF precedence, worker-local cancellation causality, final-head P0 gates, and direct-VLC command evidence.
 
 ## P0 Gates
 

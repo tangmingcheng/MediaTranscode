@@ -10,7 +10,7 @@
 - [x] Update delivery evidence and quality score; complete PR and independent review.
 - [x] Repeat the reviewed branch with direct VLC URL/SDP observation, remove the invalid observer-remux evidence, and preserve the exact source-loss primary failure for each input class.
 - [x] Correct the follow-up review findings for interrupt/EOF precedence and independent secondary `Cancelled` accounting.
-- [ ] Obtain final PASS on the corrected PR head and close the review evidence.
+- [x] Obtain final PASS on the corrected PR head and close the review evidence.
 
 Detailed design and execution checklist:
 
