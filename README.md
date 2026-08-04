@@ -57,6 +57,11 @@ ffplay -protocol_whitelist file,udp,rtp -i out/build/x64-debug/realtime-output.s
 ffprobe -protocol_whitelist file,udp,rtp -i out/build/x64-debug/realtime-output.sdp
 ```
 
+For visible local acceptance, open separate RTP through its generated SDP because
+the H.264 and AAC dynamic payload mappings require signaling. Open MPEG-TS/RTP
+directly as `rtp://@host:port` and MPEG-TS/UDP directly as `udp://@host:port`.
+Do not insert an observer remux between the production output and VLC.
+
 `--max-duration SECONDS` is optional realtime CLI monitoring policy. When it is
 present, it must be positive and stops a still-running CLI after that duration.
 When it is absent, startup output, progress, and lifecycle failures retain their

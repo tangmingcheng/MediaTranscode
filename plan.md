@@ -8,6 +8,7 @@
 - [x] Correct SWR residue settlement and video decoder EOF lease release.
 - [x] Complete real-media P0 and nine-route validation.
 - [x] Update delivery evidence and quality score; complete PR and independent review.
+- [x] Repeat the reviewed branch with direct VLC URL/SDP observation, remove the invalid observer-remux evidence, and preserve the exact source-loss primary failure for each input class.
 
 Detailed design and execution checklist:
 
