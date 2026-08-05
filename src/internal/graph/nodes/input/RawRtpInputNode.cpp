@@ -298,6 +298,8 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
             MediaGraphDiagnosticPhase::RuntimeNode,
             "rtp_fmtp_probe mode=auto codec=" + m_config.codecName +
                 " payload_type=" + std::to_string(m_config.payloadType) +
+                " parameter_sets=" +
+                (m_config.codecName == "h264" ? "sps,pps" : "vps,sps,pps") +
                 " packets=" + std::to_string(
                     prepared.value().signaling.packetCount) +
                 " bytes=" + std::to_string(

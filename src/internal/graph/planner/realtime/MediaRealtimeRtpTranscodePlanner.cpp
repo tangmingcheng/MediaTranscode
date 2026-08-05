@@ -698,6 +698,17 @@ MediaRealtimeRtpTranscodePlanner::planPreparedInput(
             return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
                 probed.error());
         }
+        const auto& detected = probed.value().signaling;
+        if (!request.input.videoRtp.payloadType ||
+            !request.input.videoRtp.clockRate ||
+            detected.codecName != canonicalCodecName(
+                request.input.videoRtp.codecName) ||
+            detected.payloadType != *request.input.videoRtp.payloadType ||
+            detected.clockRate != *request.input.videoRtp.clockRate) {
+            return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "raw RTP detected signaling identity conflicts with request"));
+        }
         auto fmtp = serializeRtpVideoFmtp(probed.value().signaling.facts);
         if (!fmtp) {
             return ::media::Result<MediaRealtimeTranscodePreflight>::failure(

@@ -51,9 +51,9 @@ namespace {
     }
     MediaRtpUdpTransport transport = std::move(opened).value();
     std::deque<MediaRtpUdpDatagram> buffered;
+    std::size_t totalReceivedBytes = 0;
     std::size_t bufferedBytes = 0;
     std::size_t packetCount = 0;
-    bool mediaEpochEstablished = false;
     std::optional<std::uint8_t> observedMismatchedPayloadType;
 
     using Clock = std::chrono::steady_clock;
@@ -101,13 +101,14 @@ namespace {
                 received.error());
         }
         MediaRtpUdpDatagram datagram = std::move(received).value();
+        if (datagram.bytes.size() >
+            plan.maximumBufferedBytes - totalReceivedBytes) {
+            return ::media::Result<MediaPreparedRawRtpProbe>::failure(
+                ::media::ErrorInfo::allocationFailed(
+                    "raw RTP signaling probe exceeded total byte limit"));
+        }
+        totalReceivedBytes += datagram.bytes.size();
         if (datagram.channel == MediaRtpUdpChannel::Rtcp) {
-            if (bufferedBytes + datagram.bytes.size() >
-                plan.maximumBufferedBytes) {
-                return ::media::Result<MediaPreparedRawRtpProbe>::failure(
-                    ::media::ErrorInfo::allocationFailed(
-                        "raw RTP signaling probe exceeded buffered byte limit"));
-            }
             bufferedBytes += datagram.bytes.size();
             buffered.push_back(std::move(datagram));
             continue;
@@ -130,18 +131,11 @@ namespace {
             return ::media::Result<MediaPreparedRawRtpProbe>::failure(
                 observation.error());
         }
-        if (!mediaEpochEstablished || observation.value().epochChanged) {
+        if (observation.value().epochChanged) {
             buffered.clear();
             bufferedBytes = 0;
             packetCount = 0;
-            mediaEpochEstablished = true;
             firstMatchingPacketAt = Clock::now();
-        }
-        if (bufferedBytes + datagram.bytes.size() >
-            plan.maximumBufferedBytes) {
-            return ::media::Result<MediaPreparedRawRtpProbe>::failure(
-                ::media::ErrorInfo::allocationFailed(
-                    "raw RTP signaling probe exceeded buffered byte limit"));
         }
         bufferedBytes += datagram.bytes.size();
         ++packetCount;
