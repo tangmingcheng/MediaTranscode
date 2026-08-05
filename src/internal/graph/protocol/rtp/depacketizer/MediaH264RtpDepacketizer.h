@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/protocol/rtp/MediaRtpDepacketizer.h"
+#include "internal/graph/protocol/rtp/MediaRtpNalUnitParser.h"
 
 #include <optional>
 
@@ -16,10 +17,9 @@ private:
     ::media::Result<MediaRtpDepacketizerResult> pushValidated(const MediaRtpPacket& packet);
     ::media::Result<MediaRtpDepacketizerResult> finish(const MediaRtpPacket& packet);
     MediaRtpDepacketizerConfig m_config;
+    MediaH264RtpNalUnitParser m_nalParser;
     std::vector<uint8_t> m_accessUnit;
     std::optional<uint32_t> m_timestamp;
-    std::optional<uint8_t> m_fragmentNalHeader;
-    bool m_fragmentOpen = false;
     bool m_keyFrame = false;
 };
 

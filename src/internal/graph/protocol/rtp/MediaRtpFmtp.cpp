@@ -107,4 +107,32 @@ int base64Value(unsigned char c) noexcept
     return ::media::Result<std::vector<uint8_t>>::success(std::move(bytes));
 }
 
+::media::Result<std::string> encodeRtpFmtpBase64(
+    std::span<const std::uint8_t> bytes)
+{
+    if (bytes.empty()) {
+        return ::media::Result<std::string>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "RTP fmtp parameter set cannot be empty"));
+    }
+    constexpr char Alphabet[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string result;
+    result.reserve(((bytes.size() + 2) / 3) * 4);
+    for (std::size_t offset = 0; offset < bytes.size(); offset += 3) {
+        const std::size_t remaining = bytes.size() - offset;
+        const std::uint32_t value =
+            (static_cast<std::uint32_t>(bytes[offset]) << 16) |
+            (remaining > 1
+                 ? static_cast<std::uint32_t>(bytes[offset + 1]) << 8
+                 : 0) |
+            (remaining > 2 ? static_cast<std::uint32_t>(bytes[offset + 2]) : 0);
+        result.push_back(Alphabet[(value >> 18) & 0x3f]);
+        result.push_back(Alphabet[(value >> 12) & 0x3f]);
+        result.push_back(remaining > 1 ? Alphabet[(value >> 6) & 0x3f] : '=');
+        result.push_back(remaining > 2 ? Alphabet[value & 0x3f] : '=');
+    }
+    return ::media::Result<std::string>::success(std::move(result));
+}
+
 } // namespace media::ffmpeg::graph
