@@ -6,9 +6,26 @@
 #include <chrono>
 #include <deque>
 #include <limits>
+#include <string>
 #include <utility>
 
 namespace media::ffmpeg::graph {
+namespace {
+
+::media::ErrorInfo incompleteSignalingError(
+    std::string reason,
+    std::uint8_t expectedPayloadType,
+    const std::optional<std::uint8_t>& observedMismatchedPayloadType)
+{
+    if (observedMismatchedPayloadType) {
+        reason += "; expected payload type " +
+            std::to_string(expectedPayloadType) + " but observed " +
+            std::to_string(*observedMismatchedPayloadType);
+    }
+    return ::media::ErrorInfo::notInitialized(std::move(reason));
+}
+
+} // namespace
 
 ::media::Result<MediaPreparedRawRtpProbe> MediaRawRtpInputPreparer::prepare(
     const MediaRawRtpProbePlan& plan)
@@ -37,6 +54,7 @@ namespace media::ffmpeg::graph {
     std::size_t bufferedBytes = 0;
     std::size_t packetCount = 0;
     bool mediaEpochEstablished = false;
+    std::optional<std::uint8_t> observedMismatchedPayloadType;
 
     using Clock = std::chrono::steady_clock;
     const auto startedAt = Clock::now();
@@ -47,15 +65,17 @@ namespace media::ffmpeg::graph {
             std::chrono::milliseconds>(now - startedAt);
         if (openElapsed.count() >= plan.openTimeoutMs) {
             return ::media::Result<MediaPreparedRawRtpProbe>::failure(
-                ::media::ErrorInfo::notInitialized(
-                    "raw RTP video signaling probe reached open timeout before complete parameter sets"));
+                incompleteSignalingError(
+                    "raw RTP video signaling probe reached open timeout before complete parameter sets",
+                    plan.payloadType, observedMismatchedPayloadType));
         }
         if (firstMatchingPacketAt &&
             std::chrono::duration_cast<std::chrono::microseconds>(
                 now - *firstMatchingPacketAt).count() >= plan.analyzeDurationUs) {
             return ::media::Result<MediaPreparedRawRtpProbe>::failure(
-                ::media::ErrorInfo::notInitialized(
-                    "raw RTP video signaling probe reached analysis limit before complete parameter sets"));
+                incompleteSignalingError(
+                    "raw RTP video signaling probe reached analysis limit before complete parameter sets",
+                    plan.payloadType, observedMismatchedPayloadType));
         }
 
         int timeoutMs = std::min(
@@ -99,6 +119,9 @@ namespace media::ffmpeg::graph {
                 packet.error());
         }
         if (packet.value().payloadType != plan.payloadType) {
+            if (!observedMismatchedPayloadType) {
+                observedMismatchedPayloadType = packet.value().payloadType;
+            }
             continue;
         }
         if (!firstMatchingPacketAt) firstMatchingPacketAt = Clock::now();
