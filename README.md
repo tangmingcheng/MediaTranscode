@@ -69,7 +69,9 @@ existing checks, but the CLI has no duration deadline and reports
 `max_duration=source_driven`. This value is not planned or passed into the
 media graph runtime.
 
-Raw RTP input requires explicit video and audio endpoint metadata. The following reusable input/options demonstrate the same A/V input sent first as MPEG-TS/UDP and then as MPEG-TS/RTP:
+Raw RTP input requires explicit video and audio endpoint metadata. For H.264 or HEVC video only, omitting `--video-rtp-fmtp` enables preflight in-band parameter-set detection. Codec, payload type, 90 kHz clock rate, URL, and all timeout/capacity limits remain mandatory. The planner derives canonical fmtp only after complete, unambiguous evidence; the runtime receives the same bound UDP transport and the original pre-read RTP/RTCP queue. Supplying video fmtp keeps strict manual mode and performs no probe I/O. AAC always requires explicit fmtp; Opus keeps its existing no-fmtp contract.
+
+The following reusable input/options demonstrate automatic H.264 video fmtp with explicit AAC signaling. Add `--video-rtp-fmtp` back when authoritative signaling is available and manual mode is required:
 
 ```powershell
 $inputRtp = @(
@@ -77,7 +79,6 @@ $inputRtp = @(
     '--video-rtp-url','rtp://127.0.0.1:5004',
     '--video-rtp-codec','h264','--video-rtp-payload-type','96',
     '--video-rtp-clock-rate','90000',
-    '--video-rtp-fmtp','packetization-mode=1;sprop-parameter-sets=Z01AMpWQAoALWwEQAAA+gAAOpghA,aOuPIA==;profile-level-id=4D4032',
     '--audio-rtp-url','rtp://127.0.0.1:5006',
     '--audio-rtp-codec','aac','--audio-rtp-payload-type','97',
     '--audio-rtp-clock-rate','44100','--audio-rtp-channels','2',
@@ -104,6 +105,8 @@ $cli = 'out/build/x64-debug/media_transcode_realtime_video_cli.exe'
     --rtp-host 127.0.0.1 --rtp-port 5020 --packet-size 1328 `
     --sdp out/build/x64-debug/rtp-to-tsrtp.sdp
 ```
+
+Probe limits have exact meanings: `--open-timeout-ms` is the total startup deadline, `--analyze-duration-us` begins at the first matching RTP packet, `--probe-size` caps all bytes received during preflight, and `--read-timeout-ms` bounds each socket wait. Timeout, wrong PT, incomplete/conflicting parameter sets, unsupported packetization, or capacity exhaustion fails preflight before the DAG starts.
 
 Add `--max-duration SECONDS` only when the caller wants the explicit CLI stop
 gate; do not use `0`, a sentinel, or a large replacement duration.

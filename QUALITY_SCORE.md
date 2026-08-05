@@ -1,37 +1,28 @@
 # MediaTranscode Quality Score
 
-> Scope: `codex/realtime-termination-correctness` against `origin/master`. Updated 2026-08-04.
+> Scope: `codex/rtp-fmtp-autodetect` against `origin/master`. Updated 2026-08-05.
 
 | Dimension | Weight | Score | Evidence |
 |---|---:|---:|---|
-| Architecture and DAG model | 15 | 15 | Nine input/output layouts converge on the canonical scheduler and one planned output adapter. |
-| Planner decision ownership | 12 | 12 | RTP degraded-clock termination is a typed planner product; nodes receive explicit policy and timing facts. |
-| Scheduling and concurrency | 13 | 12 | First failure is permanent; worker-local stop facts distinguish coordinated cancellation from independent failure, and all-worker `Finished` proves clean completion. |
-| Node responsibility and decoupling | 12 | 9 | Input termination, failure supervision, and packet lineage are focused modules; several existing planner/runtime files remain oversized. |
-| RAII and resource safety | 10 | 10 | Worker owners outlive worker destruction; FFmpeg objects, sockets, sessions, leases, and reservations remain scoped. |
-| Performance and resource efficiency | 10 | 10 | Direct-VLC reruns stayed below 6% realtime CLI process CPU, had zero playback drops, and showed no sustained working-set growth. |
-| Error model and failure boundaries | 8 | 8 | EOF succeeds; HTTP `-10054`, MPEG-TS/UDP `-5`, and RTP 7/9/9-second loss facts each produce one primary failure. |
-| Tests and verification | 10 | 9 | Real CLI/FFmpeg/VLC gates cover nine routes; final reviewed-head P0 logs and a visible VLC gate are retained locally. No automated safety net exists by policy. |
-| Maintainability and documentation | 10 | 7 | README, plans, completion report, and full direct commands are current; positional plan codecs and large files remain debt. |
-| **Total** | **100** | **92** | **A-** |
+| Architecture and DAG model | 15 | 15 | Probe execution, typed facts, planner resolution, prepared binding, and runtime consumption remain separate modules. |
+| Planner decision ownership | 12 | 12 | Codec/PT/clock and parameter-set identity are validated before planning; runtime has no automatic fallback. |
+| Scheduling and concurrency | 13 | 12 | Both 1280x720 A/V routes retain the canonical scheduler with zero errors, drops, and stalls. |
+| Node responsibility and decoupling | 12 | 10 | Shared NAL parsing removes probe/depacketizer duplication; existing large realtime planner files remain debt. |
+| RAII and resource safety | 10 | 10 | One move-only prepared owner carries the bound transport through compile/start/failure paths. |
+| Performance and resource efficiency | 10 | 9 | Two 120-second software paths show stable late memory and no monotonic growth; longer soak remains manual. |
+| Error model and failure boundaries | 8 | 8 | Timeout, PT mismatch, incomplete/conflicting sets, capacity exhaustion, and missing AAC fmtp fail preflight. |
+| Tests and verification | 10 | 8 | Clean rebuild and real CLI/FFmpeg gates pass; approved VLC visual observation is still pending. |
+| Maintainability and documentation | 10 | 9 | CLI help, README, architecture, plan, completion evidence, and residual risks are current. |
+| **Total** | **100** | **93** | **A** |
 
 ## Review Verdict
 
-**INDEPENDENT SCORE: 92/100, A-. FINAL PR RE-REVIEW: PASS.** Independent standards and specification reviews found no Critical, Important, or Minor issue at `d66948f9`. They verified interrupt/EOF precedence, worker-local cancellation causality, four final-head P0 gates, and the matching direct-VLC command evidence.
-
-## Acceptance Evidence
-
-- Clean local EOF: exit 0, `workerErrors=0`, `errors=0`, `droppedBuffers=0`, and 2938/2938 encoded packets drained.
-- HTTP, MPEG-TS/UDP, and separate RTP source stops: exit 1 with exactly one worker/runtime error and preserved native/timeout facts.
-- Nine direct-VLC input/output routes: below 6% realtime CLI process CPU, zero worker/runtime errors and drops during playback, stable late memory, visible picture and audible output; eight latest reruns were source-driven and one retained the initially approved 120-second CLI limit.
-- Final reviewed-head visible VLC gate: exit 0, 5.243545% realtime CLI process CPU, 246,734,848-byte late working set, and zero worker/runtime errors or drops.
+**PROVISIONAL 93/100, A.** Machine gates and local two-axis review are complete. Final score requires the approved VLC visual gate and fresh PR-head independent review.
 
 ## Primary Risks
 
-1. Connectionless UDP cannot distinguish normal sender end from disappearance.
-2. Manual gates provide no deterministic concurrency or regression safety net.
-3. Long-duration fault injection and repeated generation transitions remain manual.
-4. Some RTP/MPEG-TS routes recorded one nonfatal stalled interval.
-5. Late RTP join can wait for the next parameter-set/key-frame boundary.
-6. Windows dynamically excluded UDP ports can invalidate local bind acceptance.
-7. The latest direct-VLC pass for separate-RTP to MPEG-TS/RTP retained an explicit 120-second CLI limit; the earlier exact RTP source-stop gate remains its termination evidence.
+1. AAC still requires authoritative fmtp; bare RTP does not identify codec, PT, or clock rate.
+2. HEVC DONL/interleaving cannot be inferred authoritatively from bare RTP and is supported only under the planned SRST/no-DONL contract.
+3. Runtime parameter-set switching after startup is outside this delivery.
+4. Manual real-stream gates remain the regression system by repository policy.
+5. Long-duration repeated SSRC transitions and hostile datagram floods need additional soak evidence.

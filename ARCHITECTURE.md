@@ -142,6 +142,12 @@ Project MPEG-TS 的 H.264/AAC、PCR、PID、连续计数和调度事实由 UDP �
 
 builder 只消费 planner 产生的完整 plan；runtime node 不推断协议、不补默认值、不根据包到达时间回退。
 
+### 分离 RTP 视频信令 preflight
+
+分离 RTP 的 H.264/HEVC 视频 fmtp 可以由 preflight 带内探测产生。planner 从调用方显式提供的 URL、codec、PT、clock rate 和容量/期限生成探测计划；探测器只执行计划并返回 typed SPS/PPS 或 VPS/SPS/PPS facts。相同参数集去重，同一 SSRC 出现冲突参数集失败；SSRC 切换清空旧 epoch 证据与队列。H.264 只接受 non-interleaved single NAL、STAP-A、FU-A，HEVC 只接受 non-interleaved SRST 且 `sprop-max-don-diff=0` 的 single NAL、AP、FU 语义。
+
+探测成功后，prepared-input RAII owner 持有同一 `MediaRtpUdpTransport` 和按到达顺序保存的 RTP/RTCP datagram。builder 将它精确绑定到视频 `RawRtpInputNode`；runtime 先通过既有 parser、reorder、RTCP clock tracker 和 depacketizer 消费预读队列，再继续从同一 socket 接收。自动模式缺少 prepared binding 必须失败；显式 fmtp 的手动模式才走节点自行打开 transport 的独立路径，不存在 runtime fallback。
+
 ### `builder/segments/`
 
 `builder/segments/` 是可复用 graph 片段目录。

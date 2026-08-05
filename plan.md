@@ -2,11 +2,11 @@
 
 ## RTP Video FMTP Auto-Detection
 
-- [ ] Add typed H.264/HEVC in-band signaling facts and canonical FMTP generation.
-- [ ] Probe separate video RTP before planning while retaining the same RTP/RTCP transport and buffered datagrams.
-- [ ] Bind the prepared raw RTP input to runtime without port rebinding or fallback.
-- [ ] Preserve manual video FMTP, required AAC FMTP, canonical A/V scheduling, and strict failure behavior.
-- [ ] Complete H.264/HEVC real-media acceptance, documentation, quality scoring, PR, and independent review.
+- [x] Add typed H.264/HEVC in-band signaling facts and canonical FMTP generation.
+- [x] Probe separate video RTP before planning while retaining the same RTP/RTCP transport and buffered datagrams.
+- [x] Bind the prepared raw RTP input to runtime without port rebinding or fallback.
+- [x] Preserve manual video FMTP, required AAC FMTP, canonical A/V scheduling, and strict failure behavior.
+- [ ] Complete approved VLC visual acceptance, final documentation/quality review, PR, and independent PASS review.
 
 Detailed design and execution checklist:
 
