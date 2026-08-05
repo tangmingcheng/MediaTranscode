@@ -18,36 +18,84 @@
 
 ### Task 1: Signaling facts and shared NAL assembly
 
-- [ ] Add typed H.264/HEVC signaling facts and canonical FMTP serialization.
-- [ ] Extract shared H.264/HEVC RTP NAL assembly used by both detection and depacketization.
-- [ ] Verify strict duplicate, conflict, malformed, and unsupported packetization behavior with an untracked local harness.
-- [ ] Commit the focused signaling change.
+- [x] Add typed H.264/HEVC signaling facts and canonical FMTP serialization.
+- [x] Extract shared H.264/HEVC RTP NAL assembly used by both detection and depacketization.
+- [x] Verify strict duplicate, conflict, malformed, and unsupported packetization behavior with direct malformed real RTP sources.
+- [x] Commit the focused signaling change.
 
 ### Task 2: Raw RTP preflight and prepared input
 
-- [ ] Add the explicit raw RTP probe plan and bounded preparer.
-- [ ] Add the `RawRtp` prepared-input buffer holding the RAII transport and current-SSRC datagram queue.
-- [ ] Integrate auto mode into preflight and planner FMTP resolution; keep manual mode I/O-free.
-- [ ] Commit the focused preflight change.
+- [x] Add the explicit raw RTP probe plan and bounded preparer.
+- [x] Add the `RawRtp` prepared-input buffer holding the RAII transport and current-SSRC datagram queue.
+- [x] Integrate auto mode into preflight and planner FMTP resolution; keep manual mode I/O-free.
+- [x] Commit the focused preflight change.
 
 ### Task 3: Runtime handoff and CLI contract
 
-- [ ] Bind raw prepared input to the exact video `RawRtpInputNode`.
-- [ ] Consume buffered datagrams before receiving from the same transport.
-- [ ] Make video FMTP optional at the CLI while retaining strict AAC validation.
-- [ ] Add safe detection diagnostics and commit the focused runtime change.
+- [x] Bind raw prepared input to the exact video `RawRtpInputNode`.
+- [x] Consume buffered datagrams before receiving from the same transport.
+- [x] Make video FMTP optional at the CLI while retaining strict AAC validation.
+- [x] Add safe detection diagnostics and commit the focused runtime change.
 
 ### Task 4: Build and real-media acceptance
 
-- [ ] Run the mandated clean-first x64 Debug rebuild.
-- [ ] Run two-minute H.264 A/V automatic detection and FFmpeg/VLC output validation.
-- [ ] Run two-minute HEVC automatic detection and H.264 output validation.
-- [ ] Run manual H.264 regression and strict preflight failure gates.
-- [ ] Remove all temporary validation tools and confirm no tracked test residue.
+- [x] Run the mandated clean-first x64 Debug rebuild.
+- [x] Run two-minute H.264 A/V automatic detection and FFmpeg/VLC output validation.
+- [x] Run two-minute HEVC automatic detection and H.264 output validation.
+- [x] Run manual H.264 regression and strict preflight failure gates.
+- [x] Remove all temporary validation tools and confirm no tracked test residue.
 
 ### Task 5: Documentation, quality, and delivery
 
-- [ ] Update README, ARCHITECTURE, completion evidence, root plan, and QUALITY_SCORE.
+- [x] Update README, ARCHITECTURE, completion evidence, root plan, and QUALITY_SCORE.
 - [ ] Review the full diff for planner authority, RAII, duplication, lifecycle, UTF-8/CRLF, and `git diff --check`.
 - [ ] Commit and push all changes, create a ready PR, and record residual risks.
 - [ ] Have a fresh agent review the PR; fix and revalidate until it returns PASS.
+
+### Task 6: Synchronize prepared A/V transport ownership
+
+**Files:**
+
+- Modify: `src/internal/graph/planner/realtime/MediaRawRtpInputPreparer.h`
+- Modify: `src/internal/graph/planner/realtime/MediaRawRtpInputPreparer.cpp`
+- Modify: `src/internal/graph/planner/realtime/MediaRealtimeInputPlanner.h`
+- Modify: `src/internal/graph/planner/realtime/MediaRealtimeInputPlanner.cpp`
+- Modify: `src/internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h`
+- Modify: `src/internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.cpp`
+- Modify: `src/internal/graph/builder/realtime/MediaRealtimeRtpTranscodeGraphBuilder.cpp`
+- Modify only if required by the resulting interface: `src/internal/graph/planner/realtime/MediaPreparedRealtimeInput.h`
+
+**Interfaces:**
+
+- Consumes: explicit video/audio RTP endpoints, codec identity, PT, clock rate, probe limits, and video packetization policy from `MediaRealtimeRtpTranscodeRequest`.
+- Produces: two independently owned `MediaPreparedRealtimeInput` values identified as video and audio, plus the existing `MediaDetectedRtpVideoSignaling` facts.
+- Planner product: both raw RTP node plans set `requiresPreparedInput=true` only in automatic video fmtp mode; manual mode sets neither prepared requirement and performs no network I/O.
+- Executable product: each prepared owner is bound exactly once to the `RawRtpInputNode` whose planned `rtp.stream_kind` matches its stream identity.
+
+- [ ] **Step 1: Preserve the failing production evidence**
+
+  Record the observed automatic-mode failure: video prepared transport starts before audio, `locked_generation=1`, `state_generation=2`, peak queue 829, then `A/V startup clock rejects malformed reacquisition evidence`. Do not add a tracked test or test script.
+
+- [ ] **Step 2: Deepen the preparer interface around an A/V session**
+
+  Make the raw RTP preparer open both explicitly planned transports before receiving probe evidence. Probe only video; capture audio as opaque RTP/RTCP datagrams with original monotonic arrival times. Each stream keeps its own `probe-size` capacity and returns its own RAII owner.
+
+- [ ] **Step 3: Carry typed per-stream prepared resources through preflight**
+
+  Replace the single raw-RTP prepared resource assumption with a per-stream prepared collection. Reject duplicate stream identities, missing video/audio resources, kind mismatches, or an audio prepared resource when no isolated audio input exists.
+
+- [ ] **Step 4: Bind both resources without runtime decisions**
+
+  Have the planner mark both raw input node plans as prepared-required in automatic mode. Have the executable builder match planned stream identity to the exact node and create two bindings. Keep compiler and runtime factory symmetric: required means one exact binding; node-owned means no binding.
+
+- [ ] **Step 5: Verify the root-cause fix with the production chain**
+
+  Rebuild only through `.agents/skills/building-with-vs2026/scripts/rebuild_debug.ps1`. Then start VLC, CLI, and the absolute FFmpeg command using `out/acceptance/test-continuous-120s.mp4`. Confirm both prepared queues cover the same source interval, queue and working-set trends stabilize, A/V drift is not perceptible, and no false generation transition occurs.
+
+- [ ] **Step 6: Verify strict failure and manual behavior**
+
+  Confirm any prepared-stream capacity overflow fails before DAG startup, a missing binding fails compilation, and manual H.264 fmtp logs no probe/prepared path. Do not widen queues or clock liveness thresholds and do not add fallback.
+
+- [ ] **Step 7: Commit and cross-review**
+
+  Commit the focused ownership fix, push the current branch, and assign two fresh subagents to review planner authority, RAII, A/V start alignment, error visibility, and absence of hidden-error strategies. Resolve every blocking finding before final acceptance.
