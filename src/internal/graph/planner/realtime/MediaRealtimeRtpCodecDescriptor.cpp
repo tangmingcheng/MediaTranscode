@@ -28,7 +28,12 @@ std::string lowercaseAscii(std::string value)
 ::media::Result<int> plannedAacAccessUnitDuration(
     const MediaRealtimeRtpInputMetadata& metadata)
 {
-    auto fmtp = parseRtpFmtp(metadata.fmtp);
+    if (!metadata.fmtp) {
+        return ::media::Result<int>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Raw RTP AAC requires fmtp"));
+    }
+    auto fmtp = parseRtpFmtp(*metadata.fmtp);
     if (!fmtp) return ::media::Result<int>::failure(fmtp.error());
     const auto configEntry = fmtp.value().find("config");
     if (configEntry == fmtp.value().end() || configEntry->second.empty()) {
@@ -52,11 +57,11 @@ std::string lowercaseAscii(std::string value)
                                       const std::string& owner,
                                       const std::initializer_list<const char*> keys)
 {
-    if (metadata.fmtp.empty()) {
+    if (!metadata.fmtp || metadata.fmtp->empty()) {
         return ::media::Result<void>::failure(
             ::media::ErrorInfo::invalidArgument(owner + " requires fmtp"));
     }
-    auto parameters = parseRtpFmtp(metadata.fmtp);
+    auto parameters = parseRtpFmtp(*metadata.fmtp);
     if (!parameters) return ::media::Result<void>::failure(parameters.error());
     for (const char* key : keys) {
         const auto found = parameters.value().find(lowercaseAscii(key));
@@ -150,7 +155,7 @@ std::string lowercaseAscii(std::string value)
     descriptor.channels = *metadata.channels;
 
     if (codec == "aac") {
-        if (metadata.fmtp.empty()) {
+        if (!metadata.fmtp || metadata.fmtp->empty()) {
             return ::media::Result<MediaRealtimeRtpCodecDescriptor>::failure(
                 ::media::ErrorInfo::invalidArgument("Raw RTP AAC requires fmtp"));
         }

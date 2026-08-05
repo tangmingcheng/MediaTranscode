@@ -66,11 +66,14 @@ public:
         }
         const MediaNode* node =
             executable.graph.findNode(binding.nodeId);
-        if (!node ||
-            node->kind != MediaNodeKind::RealtimeInput) {
+        const bool targetMatchesKind = node &&
+            (binding.expectedKind == MediaPreparedRealtimeInputKind::RawRtp
+                ? node->kind == MediaNodeKind::RawRtpInput
+                : node->kind == MediaNodeKind::RealtimeInput);
+        if (!targetMatchesKind) {
             return ::media::Status::failure(
                 ::media::ErrorInfo::invalidArgument(
-                    "MediaGraphRuntime prepared binding target is not RealtimeInput"));
+                    "MediaGraphRuntime prepared binding target conflicts with expected input kind"));
         }
     }
     for (const MediaNode& node : executable.graph.nodes()) {

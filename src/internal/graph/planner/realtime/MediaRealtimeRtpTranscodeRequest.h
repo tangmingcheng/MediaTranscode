@@ -18,7 +18,7 @@ struct MediaRealtimeRtpInputMetadata {
     std::optional<int> clockRate;
     std::optional<int> channels;
     std::optional<int> bitrateKbps;
-    std::string fmtp;
+    std::optional<std::string> fmtp;
 };
 
 struct MediaRealtimeMpegTsInputClockPolicy {

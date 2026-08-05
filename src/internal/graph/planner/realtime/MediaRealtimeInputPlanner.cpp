@@ -438,7 +438,7 @@ MediaRtpDepacketizerConfig depacketizerPlan(
     return MediaRtpDepacketizerConfig{
         streamKind,
         descriptor.codecName,
-        metadata.fmtp,
+        descriptor.requiresFmtp ? *metadata.fmtp : std::string{},
         static_cast<uint8_t>(*metadata.payloadType),
         descriptor.clockRate,
         descriptor.channels,
@@ -530,7 +530,7 @@ void fillNodePlan(
                 ::media::ErrorInfo::unsupported(
                     "Raw RTP audio decoder capability is not supported"));
         if (audioDescriptor.value().codecName == "aac") {
-            auto fmtp = parseRtpFmtp(request.input.audioRtp.fmtp);
+            auto fmtp = parseRtpFmtp(*request.input.audioRtp.fmtp);
             if (!fmtp) {
                 return ::media::Result<MediaRealtimeRawInputPlan>::failure(
                     fmtp.error());
@@ -615,6 +615,50 @@ void MediaRealtimeInputPlanner::applyNodePlans(
               request.input.url, options, MediaRealtimeRequestClassifier::audioRequested(request), io->openGeneric)
         : MediaPipelineCapabilityScanner::prepareRealtimeInput(
               request.input.url, options, MediaRealtimeRequestClassifier::audioRequested(request));
+}
+
+::media::Result<MediaPreparedRawRtpProbe>
+MediaRealtimeInputPlanner::prepareRawRtpVideo(
+    const MediaRealtimeRtpTranscodeRequest& request)
+{
+    const auto& metadata = request.input.videoRtp;
+    if (metadata.fmtp) {
+        return ::media::Result<MediaPreparedRawRtpProbe>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "raw RTP video auto-detection requires omitted manual fmtp"));
+    }
+    if (!metadata.payloadType || !metadata.clockRate ||
+        !request.input.openTimeoutMs || !request.input.readTimeoutMs ||
+        !request.input.analyzeDurationUs || !request.input.probeSizeBytes) {
+        return ::media::Result<MediaPreparedRawRtpProbe>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "raw RTP video auto-detection requires explicit RTP identity and probe limits"));
+    }
+    auto parsedEndpoint = endpoint(metadata, "Raw RTP video probe");
+    if (!parsedEndpoint) {
+        return ::media::Result<MediaPreparedRawRtpProbe>::failure(
+            parsedEndpoint.error());
+    }
+    const bool ipv6 = parsedEndpoint.value().host.find(':') !=
+        std::string::npos;
+    MediaRawRtpProbePlan plan;
+    plan.transport = MediaRtpUdpTransportConfig{
+        ipv6 ? MediaIpAddressFamily::Ipv6 : MediaIpAddressFamily::Ipv4,
+        parsedEndpoint.value().host,
+        parsedEndpoint.value().port,
+        static_cast<std::uint16_t>(parsedEndpoint.value().port + 1),
+        RtpReceiveBufferBytes,
+        RtpMaximumDatagramBytes,
+        *request.input.readTimeoutMs,
+        nullptr};
+    plan.codecName = metadata.codecName;
+    plan.payloadType = static_cast<std::uint8_t>(*metadata.payloadType);
+    plan.clockRate = *metadata.clockRate;
+    plan.openTimeoutMs = *request.input.openTimeoutMs;
+    plan.analyzeDurationUs = *request.input.analyzeDurationUs;
+    plan.maximumBufferedBytes = static_cast<std::size_t>(
+        *request.input.probeSizeBytes);
+    return MediaRawRtpInputPreparer::prepare(plan);
 }
 
 } // namespace media::ffmpeg::graph

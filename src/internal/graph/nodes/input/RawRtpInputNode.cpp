@@ -8,6 +8,7 @@
 #include "internal/graph/protocol/rtp/MediaRtpPacketParser.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/buffer/MediaRtpIngressEventBuffer.h"
+#include "internal/graph/runtime/buffer/MediaRawRtpPreparedInputBuffer.h"
 
 #include <chrono>
 #include <algorithm>
@@ -30,6 +31,15 @@ RawRtpInputNode::RawRtpInputNode(MediaNodeId nodeId)
 {
 }
 
+RawRtpInputNode::RawRtpInputNode(
+    MediaNodeId nodeId,
+    MediaPreparedRealtimeInput prepared)
+    : FFmpegNodeRuntime(nodeId, staticKind(), "RawRtpInputNode"),
+      m_prepared(std::move(prepared)),
+      m_requiresPreparedInput(true)
+{
+}
+
 MediaNodeKind RawRtpInputNode::staticKind() noexcept
 {
     return MediaNodeKind::RawRtpInput;
@@ -47,6 +57,7 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     }
     auto status = prepareReceiver(context);
     if (!status) {
+        m_transport.close();
         resetState();
         FFmpegNodeRuntime::abort(context);
     }
@@ -73,6 +84,33 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
         MediaBufferRef packet = std::move(m_packets.front());
         m_packets.pop_front();
         return processProgress(emitOutput(context, "packet", packet));
+    }
+    if (!m_preparedDatagrams.empty()) {
+        MediaRtpUdpDatagram datagram = std::move(m_preparedDatagrams.front());
+        m_preparedDatagrams.pop_front();
+        auto status = datagram.channel == MediaRtpUdpChannel::Rtp
+            ? processRtp(context, std::move(datagram))
+            : processRtcp(context, std::move(datagram));
+        if (!status) return processProgress(status);
+        if (m_preparedDatagrams.empty() && !m_preparedQueueTraceEmitted) {
+            m_preparedQueueTraceEmitted = true;
+            mediaGraphDiagnosticLog(
+                MediaGraphDiagnosticLevel::State,
+                MediaGraphDiagnosticPhase::RuntimeNode,
+                "rtp_fmtp_probe prepared_queue_consumed=1");
+        }
+        if (!m_events.empty()) {
+            auto event = std::move(m_events.front());
+            m_events.pop_front();
+            return processProgress(
+                emitOutput(context, event.first, event.second));
+        }
+        if (!m_packets.empty()) {
+            MediaBufferRef packet = std::move(m_packets.front());
+            m_packets.pop_front();
+            return processProgress(emitOutput(context, "packet", packet));
+        }
+        return processProgress();
     }
 
     const auto now = std::chrono::steady_clock::now();
@@ -227,13 +265,62 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     if (!depacketizer) return ::media::Status::failure(depacketizer.error());
     auto snapshot = MediaRawRtpStreamDescriptorFactory::create(m_config);
     if (!snapshot) return ::media::Status::failure(snapshot.error());
-    auto transport = MediaRtpUdpTransport::open(MediaRtpUdpTransportConfig{
-        family.value() == "ipv6" ? MediaIpAddressFamily::Ipv6 : MediaIpAddressFamily::Ipv4,
-        address.value(), static_cast<uint16_t>(rtpPort.value()), static_cast<uint16_t>(rtcpPort.value()),
-        receiveBuffer.value(), static_cast<std::size_t>(datagramBytes.value()), readTimeout.value(),
-        nullptr});
-    if (!transport) return ::media::Status::failure(transport.error());
-    m_transport = std::move(transport).value();
+    if (m_requiresPreparedInput) {
+        if (!m_prepared.valid() || !m_prepared.kind() ||
+            *m_prepared.kind() != MediaPreparedRealtimeInputKind::RawRtp) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "RawRtpInputNode requires its exact prepared raw RTP binding"));
+        }
+        auto released = m_prepared.releaseBuffer();
+        if (!released) return ::media::Status::failure(released.error());
+        auto buffer = std::dynamic_pointer_cast<
+            MediaRawRtpPreparedInputBuffer>(released.value());
+        if (!buffer || buffer->type() !=
+                MediaBufferType::RawRtpPreparedInput) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "RawRtpInputNode prepared binding has wrong buffer type"));
+        }
+        auto prepared = buffer->takePreparedInput();
+        if (!prepared) return ::media::Status::failure(prepared.error());
+        if (prepared.value().transport.rtpPort() != rtpPort.value() ||
+            prepared.value().transport.rtcpPort() != rtcpPort.value() ||
+            prepared.value().signaling.payloadType != m_config.payloadType ||
+            prepared.value().signaling.clockRate != m_config.clockRate ||
+            prepared.value().signaling.codecName != m_config.codecName) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "RawRtpInputNode prepared transport or signaling identity conflicts with plan"));
+        }
+        mediaGraphDiagnosticLog(
+            MediaGraphDiagnosticLevel::State,
+            MediaGraphDiagnosticPhase::RuntimeNode,
+            "rtp_fmtp_probe mode=auto codec=" + m_config.codecName +
+                " payload_type=" + std::to_string(m_config.payloadType) +
+                " packets=" + std::to_string(
+                    prepared.value().signaling.packetCount) +
+                " bytes=" + std::to_string(
+                    prepared.value().signaling.datagramBytes) +
+                " elapsed_ms=" + std::to_string(
+                    prepared.value().signaling.elapsedMilliseconds));
+        MediaPreparedRawRtpInput payload = std::move(prepared).value();
+        m_transport = std::move(payload.transport);
+        m_preparedDatagrams = std::move(payload.datagrams);
+    } else {
+        auto transport = MediaRtpUdpTransport::open(MediaRtpUdpTransportConfig{
+            family.value() == "ipv6" ? MediaIpAddressFamily::Ipv6 : MediaIpAddressFamily::Ipv4,
+            address.value(), static_cast<uint16_t>(rtpPort.value()), static_cast<uint16_t>(rtcpPort.value()),
+            receiveBuffer.value(), static_cast<std::size_t>(datagramBytes.value()), readTimeout.value(),
+            nullptr});
+        if (!transport) return ::media::Status::failure(transport.error());
+        m_transport = std::move(transport).value();
+        mediaGraphDiagnosticLog(
+            MediaGraphDiagnosticLevel::State,
+            MediaGraphDiagnosticPhase::RuntimeNode,
+            "rtp_fmtp_probe mode=manual codec=" + m_config.codecName +
+                " payload_type=" + std::to_string(m_config.payloadType));
+    }
     m_reorder = std::make_unique<MediaRtpReorderBuffer>(MediaRtpReorderConfig{
         static_cast<std::size_t>(reorderWindow.value()), std::chrono::milliseconds(reorderDelay.value()),
         static_cast<uint8_t>(payloadType.value())});
@@ -433,7 +520,9 @@ void RawRtpInputNode::resetState() noexcept
     m_streamSnapshot.reset();
     m_packets.clear();
     m_events.clear();
+    m_preparedDatagrams.clear();
     m_initialized = false;
+    m_preparedQueueTraceEmitted = false;
     m_formatEmitted = false;
     m_keyTraceEmitted = false;
     m_requireCname = false;

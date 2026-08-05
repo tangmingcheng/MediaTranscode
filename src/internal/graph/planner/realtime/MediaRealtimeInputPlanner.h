@@ -2,6 +2,7 @@
 
 #include "internal/graph/planner/MediaPipelineCapabilityScanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
+#include "internal/graph/planner/realtime/MediaRawRtpInputPreparer.h"
 
 #include <media_transcode/Result.h>
 
@@ -38,6 +39,8 @@ public:
         const MediaRealtimeRtpTranscodeRequest& request,
         const MediaPipelinePlannerOptions& options,
         const MediaRealtimePreflightIo* io);
+    static ::media::Result<MediaPreparedRawRtpProbe> prepareRawRtpVideo(
+        const MediaRealtimeRtpTranscodeRequest& request);
 
 private:
     MediaRealtimeInputPlanner() = delete;

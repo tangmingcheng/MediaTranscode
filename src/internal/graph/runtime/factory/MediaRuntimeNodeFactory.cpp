@@ -249,6 +249,18 @@ template <typename Node>
             std::make_unique<RealtimeInputNode>(node.id, binding->expectedKind,
                                                 std::move(binding->prepared)));
     case MediaNodeKind::RawRtpInput:
+        if (binding) {
+            if (binding->nodeId != node.id ||
+                binding->expectedKind != MediaPreparedRealtimeInputKind::RawRtp ||
+                !binding->prepared.valid()) {
+                return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                    ::media::ErrorInfo::notInitialized(
+                        "RawRtpInput runtime requires exact prepared raw RTP binding"));
+            }
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+                std::make_unique<RawRtpInputNode>(
+                    node.id, std::move(binding->prepared)));
+        }
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<RawRtpInputNode>(node.id));
     case MediaNodeKind::Demux:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<DemuxNode>(node.id));

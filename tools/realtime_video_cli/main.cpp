@@ -156,7 +156,9 @@ void parseRealtimeInputOptions(int argc, char** argv, MediaRealtimeInputConfig& 
         input.videoRtp.codecName = requiredArg(argc, argv, "--video-rtp-codec");
         input.videoRtp.payloadType = requiredIntArg(argc, argv, "--video-rtp-payload-type");
         input.videoRtp.clockRate = requiredIntArg(argc, argv, "--video-rtp-clock-rate");
-        input.videoRtp.fmtp = argValue(argc, argv, "--video-rtp-fmtp");
+        if (hasArg(argc, argv, "--video-rtp-fmtp")) {
+            input.videoRtp.fmtp = requiredArg(argc, argv, "--video-rtp-fmtp");
+        }
         return;
     }
 
@@ -201,7 +203,9 @@ void parseAudioRtpOptionsIfNeeded(int argc, char** argv, MediaRealtimeRtpTransco
     options.input.audioRtp.payloadType = requiredIntArg(argc, argv, "--audio-rtp-payload-type");
     options.input.audioRtp.clockRate = requiredIntArg(argc, argv, "--audio-rtp-clock-rate");
     options.input.audioRtp.channels = requiredIntArg(argc, argv, "--audio-rtp-channels");
-    options.input.audioRtp.fmtp = argValue(argc, argv, "--audio-rtp-fmtp");
+    if (hasArg(argc, argv, "--audio-rtp-fmtp")) {
+        options.input.audioRtp.fmtp = requiredArg(argc, argv, "--audio-rtp-fmtp");
+    }
 }
 
 MediaRealtimeRtpTranscodeRequest parseRealtimeOptions(int argc, char** argv)

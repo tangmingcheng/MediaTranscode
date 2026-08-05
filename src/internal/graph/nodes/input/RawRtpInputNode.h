@@ -6,6 +6,7 @@
 #include "internal/graph/protocol/rtp/MediaRtpClockObservationSchedule.h"
 #include "internal/graph/protocol/rtp/MediaRtpReorderBuffer.h"
 #include "internal/graph/protocol/rtp/MediaRtpUdpTransport.h"
+#include "internal/graph/planner/realtime/MediaPreparedRealtimeInput.h"
 
 #include <deque>
 #include <memory>
@@ -15,6 +16,8 @@ namespace media::ffmpeg::graph {
 class RawRtpInputNode final : public FFmpegNodeRuntime {
 public:
     explicit RawRtpInputNode(MediaNodeId nodeId);
+    RawRtpInputNode(MediaNodeId nodeId,
+                    MediaPreparedRealtimeInput prepared);
     static MediaNodeKind staticKind() noexcept;
 
 protected:
@@ -38,6 +41,8 @@ private:
     std::uint64_t nextIngressSequence() noexcept;
 
     MediaRtpUdpTransport m_transport;
+    MediaPreparedRealtimeInput m_prepared;
+    std::deque<MediaRtpUdpDatagram> m_preparedDatagrams;
     std::unique_ptr<MediaRtpReorderBuffer> m_reorder;
     std::unique_ptr<MediaRtpDepacketizer> m_depacketizer;
     std::unique_ptr<MediaRtcpSenderReportTracker> m_clockTracker;
@@ -47,6 +52,8 @@ private:
     std::deque<MediaBufferRef> m_packets;
     std::deque<std::pair<std::string, MediaBufferRef>> m_events;
     bool m_initialized = false;
+    bool m_requiresPreparedInput = false;
+    bool m_preparedQueueTraceEmitted = false;
     bool m_formatEmitted = false;
     bool m_keyTraceEmitted = false;
     bool m_requireCname = false;

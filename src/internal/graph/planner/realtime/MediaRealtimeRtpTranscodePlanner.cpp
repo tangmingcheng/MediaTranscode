@@ -686,10 +686,30 @@ MediaRealtimeRtpTranscodePlanner::planPreparedInput(
         return ::media::Result<MediaRealtimeTranscodePreflight>::failure(status.error());
     }
     if (request.input.type && *request.input.type == RealtimeInputType::RtpPort) {
-        auto planned = plan(request);
+        if (request.input.videoRtp.fmtp) {
+            auto planned = plan(request);
+            if (!planned) return ::media::Result<MediaRealtimeTranscodePreflight>::failure(planned.error());
+            MediaRealtimeTranscodePreflight result;
+            result.plan = std::move(planned).value();
+            return ::media::Result<MediaRealtimeTranscodePreflight>::success(std::move(result));
+        }
+        auto probed = MediaRealtimeInputPlanner::prepareRawRtpVideo(request);
+        if (!probed) {
+            return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
+                probed.error());
+        }
+        auto fmtp = serializeRtpVideoFmtp(probed.value().signaling.facts);
+        if (!fmtp) {
+            return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
+                fmtp.error());
+        }
+        MediaRealtimeRtpTranscodeRequest resolved = request;
+        resolved.input.videoRtp.fmtp = std::move(fmtp).value();
+        auto planned = plan(resolved);
         if (!planned) return ::media::Result<MediaRealtimeTranscodePreflight>::failure(planned.error());
         MediaRealtimeTranscodePreflight result;
         result.plan = std::move(planned).value();
+        result.prepared.emplace(std::move(probed).value().prepared);
         return ::media::Result<MediaRealtimeTranscodePreflight>::success(std::move(result));
     }
 
