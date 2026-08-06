@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/protocol/mpegts/MediaTsPacketParser.h"
+#include "internal/graph/protocol/mpegts/MediaTsUnexpectedElementaryPidPolicy.h"
 #include "media_transcode/Result.h"
 
 #include <cstddef>
@@ -33,7 +34,9 @@ public:
         std::uint64_t maximumPositionRegressionBytes);
 
     ::media::Status trackPid(std::uint16_t pid);
-    ::media::Status configureSelectedPids(std::span<const std::uint16_t> pids);
+    ::media::Status configureSelectedPids(
+        std::span<const std::uint16_t> pids,
+        MediaTsUnexpectedElementaryPidPolicy unexpectedPidPolicy);
     ::media::Status onPacketPrefix(const MediaTsPacketPrefixView& packet);
     ::media::Status onContinuityEvent(const MediaTsContinuityEvent& event,
                                       bool beginsPayloadUnit);
@@ -61,6 +64,12 @@ private:
         MediaTsPesProvenanceValidity validity = MediaTsPesProvenanceValidity::Invalid;
     };
 
+    struct SelectionConfiguration final {
+        std::unordered_set<std::uint16_t> selectedPids;
+        std::unordered_set<std::uint16_t> knownPids;
+        MediaTsUnexpectedElementaryPidPolicy unexpectedPidPolicy;
+    };
+
     MediaTsPesProvenanceTimeline(std::size_t capacity,
                                  std::uint64_t maximumPositionRegressionBytes) noexcept;
     ::media::Status validateObservedOffset(std::uint64_t byteOffset);
@@ -81,7 +90,7 @@ private:
     std::optional<std::uint64_t> m_lastSourceClockBoundaryOffset;
     mutable std::optional<std::uint64_t> m_queryHighWatermark;
     std::unordered_set<std::uint16_t> m_trackedPids;
-    std::optional<std::unordered_set<std::uint16_t>> m_selectedPids;
+    std::optional<SelectionConfiguration> m_selection;
     mutable std::deque<Range> m_ranges;
 };
 

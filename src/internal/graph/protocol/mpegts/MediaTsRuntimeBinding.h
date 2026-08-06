@@ -5,6 +5,7 @@
 #include "internal/graph/protocol/mpegts/MediaTsProgramSelection.h"
 #include "internal/graph/protocol/mpegts/MediaTsProgramInventory.h"
 #include "internal/graph/protocol/mpegts/MediaTsPublicProgramSnapshot.h"
+#include "internal/graph/protocol/mpegts/MediaTsUnexpectedElementaryPidPolicy.h"
 #include "media_transcode/Result.h"
 
 #include <cstddef>
@@ -52,12 +53,14 @@ struct MediaTsVideoOnlyRuntimeBinding final {
         int selectedProgramNumber,
         int selectedProgramMapPid,
         MediaTsPacketOriginPolicy selectedOriginPolicy,
+        MediaTsUnexpectedElementaryPidPolicy selectedUnexpectedPidPolicy,
         MediaTsRuntimeStreamBinding selectedVideo,
         std::uint16_t selectedPcrPid,
         std::size_t selectedVideoPesProvenanceCapacity) noexcept
         : programNumber(selectedProgramNumber),
           programMapPid(selectedProgramMapPid),
           originPolicy(selectedOriginPolicy),
+          unexpectedPidPolicy(selectedUnexpectedPidPolicy),
           video(selectedVideo),
           pcrPid(selectedPcrPid),
           videoPesProvenanceCapacity(selectedVideoPesProvenanceCapacity)
@@ -67,6 +70,7 @@ struct MediaTsVideoOnlyRuntimeBinding final {
     int programNumber;
     int programMapPid;
     MediaTsPacketOriginPolicy originPolicy;
+    MediaTsUnexpectedElementaryPidPolicy unexpectedPidPolicy;
     MediaTsRuntimeStreamBinding video;
     std::uint16_t pcrPid;
     std::size_t videoPesProvenanceCapacity;
@@ -79,6 +83,7 @@ struct MediaTsAudioVideoRuntimeBinding final {
         int selectedProgramNumber,
         int selectedProgramMapPid,
         MediaTsPacketOriginPolicy selectedOriginPolicy,
+        MediaTsUnexpectedElementaryPidPolicy selectedUnexpectedPidPolicy,
         MediaTsRuntimeStreamBinding selectedVideo,
         MediaTsRuntimeStreamBinding selectedAudio,
         std::uint16_t selectedPcrPid,
@@ -86,6 +91,7 @@ struct MediaTsAudioVideoRuntimeBinding final {
         : programNumber(selectedProgramNumber),
           programMapPid(selectedProgramMapPid),
           originPolicy(selectedOriginPolicy),
+          unexpectedPidPolicy(selectedUnexpectedPidPolicy),
           video(selectedVideo),
           audio(selectedAudio),
           pcrPid(selectedPcrPid),
@@ -96,6 +102,7 @@ struct MediaTsAudioVideoRuntimeBinding final {
     int programNumber;
     int programMapPid;
     MediaTsPacketOriginPolicy originPolicy;
+    MediaTsUnexpectedElementaryPidPolicy unexpectedPidPolicy;
     MediaTsRuntimeStreamBinding video;
     MediaTsRuntimeStreamBinding audio;
     std::uint16_t pcrPid;
@@ -112,6 +119,7 @@ public:
     static ::media::Result<MediaTsRuntimeBinding> create(
         const MediaTsProgramSelection& selection,
         MediaTsPacketOriginPolicy originPolicy,
+        MediaTsUnexpectedElementaryPidPolicy unexpectedPidPolicy,
         std::size_t pesProvenanceCapacity);
     static ::media::Status validate(
         const MediaTsRuntimeBinding& binding,
@@ -137,6 +145,8 @@ public:
         const MediaTsRuntimeBinding& binding);
     static std::vector<std::uint16_t> sourceClockPids(
         const MediaTsRuntimeBinding& binding);
+    static MediaTsUnexpectedElementaryPidPolicy unexpectedElementaryPidPolicy(
+        const MediaTsRuntimeBinding& binding) noexcept;
 
 private:
     MediaTsRuntimeBindingCodec() = delete;

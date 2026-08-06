@@ -228,7 +228,9 @@ public:
         auto candidate = *m_pesProvenance;
         const auto selectedPids =
             MediaTsRuntimeBindingCodec::selectedElementaryPids(binding);
-        auto selected = candidate.configureSelectedPids(selectedPids);
+        auto selected = candidate.configureSelectedPids(
+            selectedPids,
+            MediaTsRuntimeBindingCodec::unexpectedElementaryPidPolicy(binding));
         if (!selected) return selected;
         auto replayed = candidate.replaySourceClockBoundaries(
             historicalBoundaries.value());
@@ -365,7 +367,8 @@ MediaTsInputSession::~MediaTsInputSession()
 }
 
 ::media::Result<MediaTsSelectedPacketDurationEvidence>
-MediaTsInputSession::probeSelectedPacketDurations(std::size_t frameLimit)
+MediaTsInputSession::probeSelectedPacketDurations(
+    MediaTsDurationProbeBudget budget)
 {
     {
         std::lock_guard lock(m_sessionMutex);
@@ -377,11 +380,6 @@ MediaTsInputSession::probeSelectedPacketDurations(std::size_t frameLimit)
             return ::media::Result<MediaTsSelectedPacketDurationEvidence>::failure(
                 ::media::ErrorInfo::cancelled("MPEG-TS input session is closed"));
         }
-        if (frameLimit == 0) {
-            return ::media::Result<MediaTsSelectedPacketDurationEvidence>::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "MPEG-TS duration preflight frame limit must be positive"));
-        }
         if (m_activeReads != 0 || m_durationProbe ||
             !m_runtimeContract.originBinding) {
             return ::media::Result<MediaTsSelectedPacketDurationEvidence>::failure(
@@ -390,7 +388,7 @@ MediaTsInputSession::probeSelectedPacketDurations(std::size_t frameLimit)
         }
         auto created = MediaTsPreflightDurationProbe::create(
             *m_runtimeContract.originBinding,
-            frameLimit);
+            budget);
         if (!created) {
             return ::media::Result<MediaTsSelectedPacketDurationEvidence>::failure(
                 created.error());

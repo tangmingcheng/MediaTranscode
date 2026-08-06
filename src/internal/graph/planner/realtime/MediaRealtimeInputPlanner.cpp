@@ -286,6 +286,10 @@ openMpegTsRuntimeSession(
     }
     auto runtimeBinding = MediaTsRuntimeBindingCodec::create(
         selected.value(), policy.value().packetOriginPolicy,
+        request.parameters.execution.streamSet ==
+                MediaTranscodeStreamSet::VideoOnly
+            ? MediaTsUnexpectedElementaryPidPolicy::Ignore
+            : MediaTsUnexpectedElementaryPidPolicy::Reject,
         policy.value().pesProvenanceCapacity);
     if (!runtimeBinding) {
         return ::media::Result<MediaPreparedRealtimeInputScan>::failure(
@@ -296,10 +300,20 @@ openMpegTsRuntimeSession(
         !configured) {
         return ::media::Result<MediaPreparedRealtimeInputScan>::failure(configured.error());
     }
-    const std::size_t durationProbeFrameLimit = static_cast<std::size_t>(
+    const std::size_t durationProbeSelectedPacketLimit =
+        static_cast<std::size_t>(
         probeBytes / TsPacketSize);
+    const std::size_t durationProbeSourcePacketLimit =
+        policy.value().pesProvenanceCapacity;
+    auto durationProbeBudget = MediaTsDurationProbeBudget::create(
+        durationProbeSelectedPacketLimit,
+        durationProbeSourcePacketLimit);
+    if (!durationProbeBudget) {
+        return ::media::Result<MediaPreparedRealtimeInputScan>::failure(
+            durationProbeBudget.error());
+    }
     auto durationEvidence = session->probeSelectedPacketDurations(
-        durationProbeFrameLimit);
+        durationProbeBudget.value());
     if (!durationEvidence) {
         return ::media::Result<MediaPreparedRealtimeInputScan>::failure(
             durationEvidence.error());

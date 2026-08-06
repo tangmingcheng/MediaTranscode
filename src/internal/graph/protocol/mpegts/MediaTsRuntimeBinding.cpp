@@ -64,6 +64,7 @@ bool commonProgramMatches(
 ::media::Result<MediaTsRuntimeBinding> MediaTsRuntimeBindingCodec::create(
     const MediaTsProgramSelection& selection,
     MediaTsPacketOriginPolicy originPolicy,
+    MediaTsUnexpectedElementaryPidPolicy unexpectedPidPolicy,
     std::size_t pesProvenanceCapacity)
 {
     if (auto selected = MediaTsProgramContractValidator::validateSelection(
@@ -73,7 +74,7 @@ bool commonProgramMatches(
             selected.error());
     }
     MediaTsRuntimeBinding binding = std::visit(
-        [originPolicy, pesProvenanceCapacity](const auto& selected)
+        [originPolicy, unexpectedPidPolicy, pesProvenanceCapacity](const auto& selected)
             -> MediaTsRuntimeBinding {
             using Selection = std::decay_t<decltype(selected)>;
             if constexpr (std::is_same_v<
@@ -83,6 +84,7 @@ bool commonProgramMatches(
                     selected.programNumber,
                     selected.programMapPid,
                     originPolicy,
+                    unexpectedPidPolicy,
                     MediaTsRuntimeStreamBinding{
                         selected.video.streamIndex,
                         static_cast<std::uint16_t>(
@@ -95,6 +97,7 @@ bool commonProgramMatches(
                     selected.programNumber,
                     selected.programMapPid,
                     originPolicy,
+                    unexpectedPidPolicy,
                     MediaTsRuntimeStreamBinding{
                         selected.video.streamIndex,
                         static_cast<std::uint16_t>(
@@ -135,7 +138,10 @@ bool commonProgramMatches(
             if constexpr (std::is_same_v<
                               Binding,
                               MediaTsVideoOnlyRuntimeBinding>) {
-                if (!commonValid || selected.videoPesProvenanceCapacity == 0 ||
+                if (!commonValid ||
+                    selected.unexpectedPidPolicy !=
+                        MediaTsUnexpectedElementaryPidPolicy::Ignore ||
+                    selected.videoPesProvenanceCapacity == 0 ||
                     selected.videoPesProvenanceCapacity !=
                         expectedPesProvenanceCapacity) {
                     return ::media::Status::failure(
@@ -143,7 +149,10 @@ bool commonProgramMatches(
                             "invalid VideoOnly MPEG-TS runtime binding"));
                 }
             } else {
-                if (!commonValid || !validStream(selected.audio) ||
+                if (!commonValid ||
+                    selected.unexpectedPidPolicy !=
+                        MediaTsUnexpectedElementaryPidPolicy::Reject ||
+                    !validStream(selected.audio) ||
                     selected.video.streamIndex == selected.audio.streamIndex ||
                     selected.video.pid == selected.audio.pid ||
                     selected.pesProvenanceCapacity == 0 ||
@@ -364,6 +373,17 @@ std::vector<std::uint16_t> MediaTsRuntimeBindingCodec::sourceClockPids(
         result.push_back(pcrPid);
     }
     return result;
+}
+
+MediaTsUnexpectedElementaryPidPolicy
+MediaTsRuntimeBindingCodec::unexpectedElementaryPidPolicy(
+    const MediaTsRuntimeBinding& binding) noexcept
+{
+    return std::visit(
+        [](const auto& selected) {
+            return selected.unexpectedPidPolicy;
+        },
+        binding);
 }
 
 } // namespace media::ffmpeg::graph
