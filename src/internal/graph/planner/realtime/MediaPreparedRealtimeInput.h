@@ -2,6 +2,7 @@
 
 #include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
 #include "internal/graph/runtime/buffer/MediaTsPreparedInputBuffer.h"
+#include "internal/graph/runtime/buffer/MediaRawRtpPreparedInputBuffer.h"
 #include "internal/graph/protocol/mpegts/MediaTsInputSession.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 #include "media_transcode/Result.h"
@@ -23,7 +24,7 @@ struct MediaRealtimePreflightIo final {
     MediaTsInputSessionOpener openMpegTs;
 };
 
-enum class MediaPreparedRealtimeInputKind { Generic, MpegTs };
+enum class MediaPreparedRealtimeInputKind { Generic, MpegTs, RawRtp };
 
 class MediaPreparedRealtimeInput final {
 public:
@@ -40,18 +41,26 @@ public:
     static ::media::Result<MediaPreparedRealtimeInput> createMpegTs(
         std::unique_ptr<MediaTsInputSession> preflightSession,
         MediaTsRuntimeSessionFactory runtimeSessionFactory);
+    static ::media::Result<MediaPreparedRealtimeInput> createRawRtp(
+        MediaPreparedRawRtpInput prepared);
 
     bool valid() const noexcept;
     std::optional<MediaPreparedRealtimeInputKind> kind() const noexcept;
     const FFmpegInputStreamSnapshot* inputStreamSnapshot(int streamIndex) const noexcept;
+    ::media::Status startRawRtpPreflightCapture();
+    ::media::Status rawRtpCaptureStatus();
+    ::media::Status sealRawRtpPreflight();
     ::media::Result<MediaBufferRef> releaseBuffer();
 
 private:
     explicit MediaPreparedRealtimeInput(std::unique_ptr<FFmpegFormatContextBuffer> buffer);
     explicit MediaPreparedRealtimeInput(std::unique_ptr<MediaTsPreparedInputBuffer> buffer);
+    explicit MediaPreparedRealtimeInput(
+        std::unique_ptr<MediaRawRtpPreparedInputBuffer> buffer);
 
     std::unique_ptr<FFmpegFormatContextBuffer> m_genericBuffer;
     std::unique_ptr<MediaTsPreparedInputBuffer> m_tsBuffer;
+    std::unique_ptr<MediaRawRtpPreparedInputBuffer> m_rawRtpBuffer;
 };
 
 } // namespace media::ffmpeg::graph

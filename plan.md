@@ -1,5 +1,18 @@
 # Realtime Cross-Layout and MPEG-TS/RTP Implementation Plan
 
+## RTP Video FMTP Auto-Detection
+
+- [x] Add typed H.264/HEVC in-band signaling facts and canonical FMTP generation.
+- [x] Probe separate video RTP before planning while retaining the same RTP/RTCP transport and buffered datagrams.
+- [x] Bind the prepared raw RTP input to runtime without port rebinding or fallback.
+- [x] Preserve manual video FMTP, required AAC FMTP, canonical A/V scheduling, and strict failure behavior.
+- [x] Rebuild and repeat the hardware matrix after the finite prepared-queue handoff fix, then complete final documentation/quality review, PR, and independent PASS review.
+
+Detailed design and execution checklist:
+
+- `docs/superpowers/specs/2026-08-04-rtp-fmtp-autodetect-design.md`
+- `docs/superpowers/plans/2026-08-04-rtp-fmtp-autodetect.md`
+
 ## P0 Input Termination and Finalization Follow-Up
 
 - [x] Establish the finite-source and EOF failure baseline.

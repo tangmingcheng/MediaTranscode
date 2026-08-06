@@ -98,6 +98,7 @@ struct MediaRealtimeRtpInputNodePlan {
     int probeSizeBytes;
     bool lowLatency;
     std::string mediaId;
+    std::optional<bool> requiresPreparedInput;
     std::optional<MediaRealtimeRtpTransportPlan> rtpTransport;
     std::optional<MediaRtpDepacketizerConfig> rtpDepacketizer;
     std::optional<MediaRealtimeTsInputPlan> mpegTs;
@@ -166,6 +167,7 @@ struct MediaRealtimeRtpTranscodePlan {
     MediaGraphQueueParameters queues;
     MediaRealtimeEdgePolicySet edgePolicies;
     MediaThreadingPolicy threadingPolicy;
+    std::optional<MediaPreparedRealtimeInputKind> requiredPreparedInputKind;
     bool videoInputStartRequiresKeyFrame = false;
     MediaRealtimeRtpInputNodePlan input;
     MediaRealtimeRtpInputNodePlan audioInput;
@@ -178,6 +180,7 @@ struct MediaRealtimeRtpTranscodePlan {
 struct MediaRealtimeTranscodePreflight final {
     MediaRealtimeRtpTranscodePlan plan;
     std::optional<MediaPreparedRealtimeInput> prepared;
+    std::optional<MediaPreparedRealtimeInput> preparedAudio;
 };
 
 class MediaRealtimeRtpTranscodePlanner final {
@@ -203,7 +206,9 @@ private:
         const MediaRealtimeRtpTranscodeRequest& request,
         const MediaRealtimeInputStreamInfo* inputInfo,
         const MediaTsSelectedProgramPlan* selectedTsProgram,
-        const MediaPreparedRealtimeInput* preparedInput);
+        const MediaPreparedRealtimeInput* preparedInput,
+        const MediaPreparedRealtimeInput* preparedAudioInput,
+        std::optional<MediaPipelinePlan> preplannedVideo = std::nullopt);
     static ::media::Result<MediaRealtimeTranscodePreflight> preflightImpl(
         const MediaRealtimeRtpTranscodeRequest& request,
         const MediaRealtimePreflightIo* io);

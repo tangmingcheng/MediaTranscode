@@ -188,7 +188,10 @@ MediaNodeKind MediaRtpPacketClockBinderNode::staticKind() noexcept
         }
     }
     if (m_acquiringPackets.size() >= m_acquiringCapacity) {
-        return invalid("RTP packet binder acquiring capacity exhausted");
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "RTP packet binder acquiring capacity exhausted: buffered=" +
+            std::to_string(m_acquiringPackets.size()) +
+            " capacity=" + std::to_string(m_acquiringCapacity)));
     }
     m_acquiringPackets.push_back(std::move(buffer));
     return ::media::Status::success();

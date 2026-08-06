@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <map>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -16,5 +17,7 @@ using MediaRtpFmtpParameters = std::map<std::string, std::string>;
                                         const std::string& key);
 ::media::Result<std::vector<uint8_t>> decodeRtpFmtpHex(const std::string& text);
 ::media::Result<std::vector<uint8_t>> decodeRtpFmtpBase64(const std::string& text);
+::media::Result<std::string> encodeRtpFmtpBase64(
+    std::span<const std::uint8_t> bytes);
 
 } // namespace media::ffmpeg::graph

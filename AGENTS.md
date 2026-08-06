@@ -45,7 +45,8 @@ Visual Studio2026 位于D:\VisualStudio2026
 
 ffmpeg相关工具位于D:\mabs\local64\bin-video
 VLC播放器位于D:\VideoLAN\VLC\vlc.exe
-本地视频资源：D:\Code\MyCode\MediaTranscode\out\build\x64-debug\test.mp4
+本地连续120秒验收视频源：D:\Code\MyCode\MediaTranscode\out\acceptance\test-continuous-120s.mp4
+后续真实流测试必须统一使用该120秒连续源，禁止使用短视频配合`-stream_loop`进行实时循环，避免循环读取停顿被误判为生产链路时钟错误。
 验收完成报告需要包含真实 CLI/FFmpeg/VLC 执行命令和结果，无需包含构建编译命令
 
 优先使用已有 CMake 构建目录：
@@ -57,6 +58,8 @@ out/build/x64-release
 
 如果这些构建目录不存在，应使用仓库现有 CMake 流程进行配置，编译构建时必须选择全部重新生成。
 不要为了验证临时发明新的构建系统。
+
+测试时不要写任何测试脚本，要使用单一的绝对路径命令，ffmpeg产生源流，CLI转码，vlc播放，不要添加任何ffmpeg监控破坏该链路，无特殊要求不要使用disable hw,不要使用max duration，要源流驱动，停止时，停止源流，不要停止cli，每次开启测试时需要贴出测试命令，并且需要在后台监控cli的cpu占用率，内存增长，A/V漂移，以及退出原因
 
 ## 质量评分
 以工业级DAG架构媒体转码引擎为标准，设定完整评分体系，由子Agent对当前代码review后，按照标准，准条发起评分，并保留评分体系与对应分数，生成/更新 QUALITY_SCORE.md，位置与ARCHITECTURE.md同级，这将是以后演进的重要依据，需要更新  注意：评分文档需要简洁，清晰，不要冗长

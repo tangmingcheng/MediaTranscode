@@ -24,7 +24,8 @@ enum class MediaBufferType {
     Event,
     OutputByteSink,
     ProjectMpegTsRuntimePlan,
-    TsAccessUnit
+    TsAccessUnit,
+    RawRtpPreparedInput
 };
 
 enum class MediaBufferFlag : uint32_t {

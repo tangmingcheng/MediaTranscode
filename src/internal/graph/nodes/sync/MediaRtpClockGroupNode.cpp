@@ -1,24 +1,18 @@
 #include "internal/graph/nodes/sync/MediaRtpClockGroupNode.h"
 
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/runtime/buffer/MediaRtpClockGroupBuffer.h"
 #include "internal/graph/runtime/buffer/MediaRtpIngressEventBuffer.h"
+#include "internal/graph/time/MediaSteadyClock.h"
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 
 #include <algorithm>
 #include <chrono>
+#include <string>
 #include <utility>
 
 namespace media::ffmpeg::graph {
-namespace {
-
-std::int64_t steadyNowNs() noexcept
-{
-    return std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
-}
-
-} // namespace
 
 MediaRtpClockGroupNode::MediaRtpClockGroupNode(MediaNodeId nodeId)
     : FFmpegNodeRuntime(nodeId, staticKind(), "MediaRtpClockGroupNode")
@@ -36,7 +30,7 @@ MediaNodeKind MediaRtpClockGroupNode::staticKind() noexcept
     if (auto status = configure(context); !status) return processProgress(status);
     if (!m_initialPublished) {
         m_initialPublished = true;
-        auto initial = publish(context, steadyNowNs());
+        auto initial = publish(context, mediaSteadyClockNowNs());
         if (initial) return processProgress();
         if (initial.error().code != ::media::ErrorCode::NotInitialized) {
             return ::media::Result<MediaNodeProcessResult>::failure(initial.error());
@@ -214,7 +208,7 @@ MediaRtpClockGroupNode::processStream(
     }
     pending.lastProcessedSequence = event->sequence();
     ::media::Status status = ::media::Status::success();
-    std::int64_t observationTimeNs = steadyNowNs();
+    std::int64_t observationTimeNs = mediaSteadyClockNowNs();
     if (selectedClock) {
         status = processClock(*event, streamKind);
     } else if (event->kind() == MediaRtpIngressEventKind::ClockObservation &&
@@ -351,7 +345,19 @@ MediaRtpClockGroupNode::pendingInvalidation(MediaGraphExecutionContext& context)
     if (!observed) return observed;
     auto calibration = mapper->calibration(evidence.senderReportObservedAtNs);
     if (!calibration) return ::media::Status::failure(calibration.error());
-    return m_validator->observe(streamKind, evidence, std::move(calibration).value());
+    auto status = m_validator->observe(
+        streamKind, evidence, std::move(calibration).value());
+    if (status) {
+        mediaGraphDiagnosticLog(
+            MediaGraphDiagnosticLevel::State,
+            MediaGraphDiagnosticPhase::RuntimeNode,
+            "rtp_clock_group_evidence stream=" +
+                std::string(streamKind == MediaStreamKind::Video
+                    ? "video" : "audio") +
+                " generation=" + std::to_string(evidence.generation) +
+                " ssrc=" + std::to_string(evidence.observedMediaSsrc));
+    }
+    return status;
 }
 
 ::media::Status MediaRtpClockGroupNode::publish(
@@ -362,9 +368,18 @@ MediaRtpClockGroupNode::pendingInvalidation(MediaGraphExecutionContext& context)
         return ::media::Status::failure(
             ::media::ErrorInfo::notInitialized("RTP clock group output has no downstream consumer yet"));
     }
-    return emitOutput(context,
-                      "clock_group",
-                      makeMediaBufferRef<MediaRtpClockGroupBuffer>(m_validator->snapshot(observedAtNs)));
+    MediaRtpClockGroupSnapshot snapshot = m_validator->snapshot(observedAtNs);
+    mediaGraphDiagnosticLog(
+        MediaGraphDiagnosticLevel::State,
+        MediaGraphDiagnosticPhase::RuntimeNode,
+        "rtp_clock_group_snapshot state=" +
+            std::to_string(static_cast<int>(snapshot.state)) +
+            " generation=" + std::to_string(snapshot.groupGeneration) +
+            " locked=" + (snapshot.locked ? std::string("1")
+                                           : std::string("0")));
+    return emitOutput(
+        context, "clock_group",
+        makeMediaBufferRef<MediaRtpClockGroupBuffer>(std::move(snapshot)));
 }
 
 ::media::Status MediaRtpClockGroupNode::stop(MediaGraphExecutionContext& context)

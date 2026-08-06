@@ -2,6 +2,7 @@
 
 #include "internal/graph/planner/MediaPipelineCapabilityScanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
+#include "internal/graph/planner/realtime/MediaRawRtpInputPreparer.h"
 
 #include <media_transcode/Result.h>
 
@@ -13,6 +14,9 @@ namespace media::ffmpeg::graph {
 struct MediaAvSyncPlan;
 
 struct MediaRealtimeRawInputPlan final {
+    static constexpr int VideoStreamIndex = 0;
+    static constexpr int AudioStreamIndex = 0;
+
     std::string videoUrl;
     std::string videoSdp;
     MediaInputVideoStreamInfo video;
@@ -38,6 +42,8 @@ public:
         const MediaRealtimeRtpTranscodeRequest& request,
         const MediaPipelinePlannerOptions& options,
         const MediaRealtimePreflightIo* io);
+    static ::media::Result<MediaPreparedRawRtpProbe> prepareRawRtpVideo(
+        const MediaRealtimeRtpTranscodeRequest& request);
 
 private:
     MediaRealtimeInputPlanner() = delete;

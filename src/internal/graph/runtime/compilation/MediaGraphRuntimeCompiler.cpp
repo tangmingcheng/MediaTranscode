@@ -66,11 +66,14 @@ public:
         }
         const MediaNode* node =
             executable.graph.findNode(binding.nodeId);
-        if (!node ||
-            node->kind != MediaNodeKind::RealtimeInput) {
+        const bool targetMatchesKind = node &&
+            (binding.expectedKind == MediaPreparedRealtimeInputKind::RawRtp
+                ? node->kind == MediaNodeKind::RawRtpInput
+                : node->kind == MediaNodeKind::RealtimeInput);
+        if (!targetMatchesKind) {
             return ::media::Status::failure(
                 ::media::ErrorInfo::invalidArgument(
-                    "MediaGraphRuntime prepared binding target is not RealtimeInput"));
+                    "MediaGraphRuntime prepared binding target conflicts with expected input kind"));
         }
     }
     for (const MediaNode& node : executable.graph.nodes()) {
@@ -79,6 +82,22 @@ public:
             return ::media::Status::failure(
                 ::media::ErrorInfo::notInitialized(
                     "MediaGraphRuntime missing prepared RealtimeInput binding"));
+        }
+        if (node.kind == MediaNodeKind::RawRtpInput) {
+            auto required = requiredBoolNodeOption(
+                &node.options, "RawRtpInputNode",
+                "rtp.prepared_input_required");
+            if (!required) {
+                return ::media::Status::failure(required.error());
+            }
+            const bool hasBinding = bindingIds.contains(node.id.value);
+            if (required.value() != hasBinding) {
+                return ::media::Status::failure(
+                    ::media::ErrorInfo::notInitialized(
+                        required.value()
+                            ? "MediaGraphRuntime missing required prepared RawRtpInput binding"
+                            : "MediaGraphRuntime node-owned RawRtpInput rejects prepared binding"));
+            }
         }
     }
     if (executable.avSyncBinding) {

@@ -58,11 +58,18 @@ const char* boolOption(bool value) noexcept
             ::media::ErrorInfo::invalidArgument("raw RTP input requires transport and depacketizer plans together"));
     }
     if (plan.rtpTransport && plan.rtpDepacketizer) {
+        if (!plan.requiresPreparedInput) {
+            return ::media::Result<void>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "raw RTP input requires planner-owned prepared-input ownership"));
+        }
         const auto& transport = *plan.rtpTransport;
         const auto& depacketizer = *plan.rtpDepacketizer;
         const auto set = [&](const char* key, std::string value) {
             return MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, key, std::move(value));
         };
+        if (auto status = set("rtp.prepared_input_required",
+                              boolOption(*plan.requiresPreparedInput)); !status) return status;
         if (auto status = set("rtp.address_family", transport.addressFamily == MediaIpAddressFamily::Ipv6 ? "ipv6" : "ipv4"); !status) return status;
         if (auto status = set("rtp.bind_address", transport.bindAddress); !status) return status;
         if (auto status = set("rtp.port", std::to_string(transport.rtpPort)); !status) return status;
@@ -106,6 +113,10 @@ const char* boolOption(bool value) noexcept
         if (auto status = set("rtp.fmtp", depacketizer.fmtp); !status) return status;
         if (auto status = set("rtp.channels", std::to_string(depacketizer.channels)); !status) return status;
         if (auto status = set("rtp.access_unit_duration_ticks", std::to_string(depacketizer.accessUnitDurationRtpTicks)); !status) return status;
+    } else if (plan.requiresPreparedInput) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "prepared-input ownership is valid only for raw RTP input"));
     }
     return ::media::Result<void>::success();
 }

@@ -3,6 +3,7 @@
 #include "internal/graph/model/MediaStreamKind.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodeRequest.h"
 #include "internal/graph/planner/audio/MediaAudioProfile.h"
+#include "internal/graph/protocol/rtp/MediaRtpDepacketizer.h"
 #include "media_transcode/Result.h"
 
 #include <string>
@@ -26,6 +27,10 @@ public:
     static ::media::Result<MediaRealtimeRtpCodecDescriptor> describe(
         MediaStreamKind streamKind,
         const MediaRealtimeRtpInputMetadata& metadata);
+    static ::media::Result<MediaRtpDepacketizerConfig> planDepacketizerConfig(
+        MediaStreamKind streamKind,
+        const MediaRealtimeRtpInputMetadata& metadata,
+        const MediaRealtimeRtpCodecDescriptor& descriptor);
 
 private:
     MediaRealtimeRtpCodecRegistry() = default;
