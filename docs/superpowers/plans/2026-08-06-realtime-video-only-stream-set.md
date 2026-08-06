@@ -42,11 +42,11 @@
 - MPEG-TS selected-program and runtime-binding products use explicit VideoOnly/A-V variants; absence of audio is not represented by `-1` or an invalid PID.
 - Raw RTP VideoOnly owns only a video transport and prepared resource.
 
-- [ ] Make generic input scanning independent of audio for VideoOnly, including sources that still contain audio.
-- [ ] Add typed MPEG-TS VideoOnly selection/binding carrying video PID, PCR PID, time base, and video provenance capacity only.
-- [ ] Remove the VideoOnly rejection in MPEG-TS preparation and stop creating audio PES provenance/bindings.
-- [ ] Ensure raw RTP VideoOnly never validates, opens, waits for, or seals companion audio.
-- [ ] Inspect all ownership/close paths, commit `feat(realtime): prepare explicit video-only inputs`, and push.
+- [x] Make generic input scanning independent of audio for VideoOnly, including sources that still contain audio.
+- [x] Add typed MPEG-TS VideoOnly selection/binding carrying video PID, PCR PID, time base, and video provenance capacity only.
+- [x] Remove the VideoOnly rejection in MPEG-TS preparation and stop creating audio PES provenance/bindings.
+- [x] Ensure raw RTP VideoOnly never validates, opens, waits for, or seals companion audio.
+- [x] Inspect all ownership/close paths, commit `feat(realtime): prepare explicit video-only inputs`, and push.
 
 ### Task 3: Manual and automatic FMTP convergence
 

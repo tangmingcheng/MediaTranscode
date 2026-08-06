@@ -79,6 +79,10 @@ MediaRealtimeAvSyncPlanningFactsResolver::resolve(
             plan.audioInput.rtpDepacketizer->accessUnitDurationRtpTicks);
     } else if (*synchronization.sourceClockMode ==
                MediaAvSyncSourceClockMode::MpegTsPcr) {
+        const auto* selectedProgram = plan.input.mpegTs
+            ? std::get_if<MediaTsAudioVideoSelectedProgramPlan>(
+                  &plan.input.mpegTs->selectedProgram)
+            : nullptr;
         if (!plan.audioPlan.selectedDecoder ||
             plan.audioPlan.selectedDecoder->inputSampleRate <= 0 ||
             plan.audioPlan.selectedDecoder->maximumOutputBlockInputSamples <= 0 ||
@@ -87,15 +91,13 @@ MediaRealtimeAvSyncPlanningFactsResolver::resolve(
             !synchronization.mpegTsInput ||
             !synchronization.mpegTsInput->videoPid ||
             !synchronization.mpegTsInput->audioPid ||
-            !plan.input.mpegTs ||
-            !plan.input.mpegTs->videoPacketDuration ||
-            !plan.input.mpegTs->audioPacketDuration ||
+            !selectedProgram ||
             !validPacketDurationEvidence(
-                *plan.input.mpegTs->videoPacketDuration,
+                selectedProgram->videoPacketDuration,
                 plan.videoPlan.sourceStreamIndex,
                 *synchronization.mpegTsInput->videoPid) ||
             !validPacketDurationEvidence(
-                *plan.input.mpegTs->audioPacketDuration,
+                selectedProgram->audioPacketDuration,
                 plan.audioPlan.sourceStreamIndex,
                 *synchronization.mpegTsInput->audioPid)) {
             return ::media::Result<MediaRealtimeAvSyncPlanningFacts>::failure(
@@ -107,9 +109,9 @@ MediaRealtimeAvSyncPlanningFactsResolver::resolve(
         facts.inputAudioSamplesPerAccessUnit = static_cast<std::uint32_t>(
             plan.audioPlan.selectedDecoder->maximumOutputBlockInputSamples);
         facts.inputVideoPacketDuration =
-            plan.input.mpegTs->videoPacketDuration;
+            selectedProgram->videoPacketDuration;
         facts.inputAudioPacketDuration =
-            plan.input.mpegTs->audioPacketDuration;
+            selectedProgram->audioPacketDuration;
     } else if (*synchronization.sourceClockMode ==
                MediaAvSyncSourceClockMode::DemuxTimestamps) {
         if (!synchronization.demuxTimestampInput ||

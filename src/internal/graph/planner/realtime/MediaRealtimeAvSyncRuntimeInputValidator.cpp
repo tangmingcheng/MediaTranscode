@@ -157,6 +157,10 @@ namespace {
     const auto& audioDuration =
         std::get<MediaPlannedAudioSamplesDurationPlan>(
             runtime.assembly.audio.duration);
+    const auto* selectedProgram = outer.input.mpegTs
+        ? std::get_if<MediaTsAudioVideoSelectedProgramPlan>(
+              &outer.input.mpegTs->selectedProgram)
+        : nullptr;
     if (audioDuration.sampleRate !=
             *runtime.planningFacts.inputAudioSampleRate ||
         audioDuration.samplesPerAccessUnit !=
@@ -164,14 +168,13 @@ namespace {
         !outer.input.mpegTs ||
         outer.input.mpegTs->initialSourceGeneration !=
             MediaFirstLockedSourceGeneration ||
-        !outer.input.mpegTs->videoPacketDuration ||
-        !outer.input.mpegTs->audioPacketDuration ||
+        !selectedProgram ||
         !runtime.planningFacts.inputVideoPacketDuration ||
         !runtime.planningFacts.inputAudioPacketDuration ||
         runtime.planningFacts.inputVideoPacketDuration !=
-            outer.input.mpegTs->videoPacketDuration ||
+            selectedProgram->videoPacketDuration ||
         runtime.planningFacts.inputAudioPacketDuration !=
-            outer.input.mpegTs->audioPacketDuration ||
+            selectedProgram->audioPacketDuration ||
         runtime.planningFacts.inputVideoPacketDuration->packetDuration <= 0 ||
         runtime.planningFacts.inputAudioPacketDuration->packetDuration <= 0 ||
         runtime.planningFacts.inputVideoPacketDuration->timeBase.num <= 0 ||

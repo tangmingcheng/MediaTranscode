@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <type_traits>
 
 namespace media::ffmpeg::graph {
 
@@ -9,13 +10,41 @@ namespace {
 
 bool validPid(std::uint16_t pid) noexcept
 {
-    return pid <= 0x1fff;
+    return pid > 0 && pid < 0x1fff;
 }
 
 bool requiresReacquisition(std::int64_t delta,
                            const MediaTsProgramClockPolicy& policy) noexcept
 {
-    return delta <= 0 || delta > policy.maximumGap27Mhz;
+    const auto maximumGap = std::visit(
+        [](const auto& selected) { return selected.maximumGap27Mhz; }, policy);
+    return delta <= 0 || delta > maximumGap;
+}
+
+std::uint16_t pcrPid(const MediaTsProgramClockPolicy& policy) noexcept
+{
+    return std::visit(
+        [](const auto& selected) { return selected.pcrPid; }, policy);
+}
+
+bool validPolicy(const MediaTsProgramClockPolicy& policy) noexcept
+{
+    return std::visit(
+        [](const auto& selected) {
+            using Policy = std::decay_t<decltype(selected)>;
+            const bool common = selected.programNumber > 0 &&
+                validPid(selected.pmtPid) && validPid(selected.pcrPid) &&
+                validPid(selected.videoPid) &&
+                selected.maximumGap27Mhz > 0;
+            if constexpr (std::is_same_v<
+                              Policy,
+                              MediaTsAudioVideoProgramClockPolicy>) {
+                return common && validPid(selected.audioPid) &&
+                    selected.audioPid != selected.videoPid;
+            }
+            return common;
+        },
+        policy);
 }
 
 } // namespace
@@ -34,9 +63,7 @@ MediaTsProgramClockTracker::MediaTsProgramClockTracker(
     MediaTsProgramClockPolicy policy,
     std::uint64_t generation)
 {
-    if (policy.programNumber == 0 || !validPid(policy.pmtPid) ||
-        !validPid(policy.pcrPid) || !validPid(policy.videoPid) ||
-        !validPid(policy.audioPid) || policy.maximumGap27Mhz <= 0) {
+    if (!validPolicy(policy)) {
         return ::media::Result<MediaTsProgramClockTracker>::failure(
             ::media::ErrorInfo::invalidArgument("Invalid immutable MPEG-TS PCR policy"));
     }
@@ -62,10 +89,10 @@ MediaTsProgramClockTracker::MediaTsProgramClockTracker(
 ::media::Status MediaTsProgramClockTracker::observeCandidate(
     const MediaTsPcrObservation& observation)
 {
-    auto identity = observeProgramIdentity(
-        observation.programNumber, observation.pmtPid, observation.videoPid,
-        observation.audioPid, observation.pcrPid);
-    if (!identity) return identity;
+    if (observation.pcrPid != pcrPid(m_policy)) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "MPEG-TS PCR observation conflicts with immutable plan"));
+    }
     if (m_previousByteOffset && observation.byteOffset <= *m_previousByteOffset) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("MPEG-TS PCR byte offsets must increase strictly"));
@@ -132,27 +159,11 @@ MediaTsProgramClockTracker::MediaTsProgramClockTracker(
 
 ::media::Status MediaTsProgramClockTracker::observePcrContinuityLoss(std::uint16_t pid)
 {
-    if (pid != m_policy.pcrPid) return ::media::Status::success();
+    if (pid != pcrPid(m_policy)) return ::media::Status::success();
     MediaTsProgramClockTracker candidate = *this;
     auto status = candidate.reacquire();
     if (!status) return status;
     *this = std::move(candidate);
-    return ::media::Status::success();
-}
-
-::media::Status MediaTsProgramClockTracker::observeProgramIdentity(
-    std::uint16_t programNumber,
-    std::uint16_t pmtPid,
-    std::uint16_t videoPid,
-    std::uint16_t audioPid,
-    std::uint16_t pcrPid) const
-{
-    if (programNumber != m_policy.programNumber || pmtPid != m_policy.pmtPid ||
-        videoPid != m_policy.videoPid || audioPid != m_policy.audioPid ||
-        pcrPid != m_policy.pcrPid) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("MPEG-TS selected identity changed from immutable plan"));
-    }
     return ::media::Status::success();
 }
 

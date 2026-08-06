@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <variant>
 
 namespace media::ffmpeg::graph {
 
@@ -18,8 +19,16 @@ struct MediaRawRtpPreparedStreamPlan final {
 };
 
 struct MediaRawRtpProbePlan final {
-    MediaRawRtpPreparedStreamPlan video;
-    std::optional<MediaRawRtpPreparedStreamPlan> audio;
+    struct VideoOnly final {
+        MediaRawRtpPreparedStreamPlan video;
+    };
+    struct AudioVideo final {
+        MediaRawRtpPreparedStreamPlan video;
+        MediaRawRtpPreparedStreamPlan audio;
+    };
+    using Streams = std::variant<VideoOnly, AudioVideo>;
+
+    Streams streams;
     int openTimeoutMs = 0;
     int analyzeDurationUs = 0;
     std::size_t maximumBufferedBytes = 0;
@@ -29,11 +38,20 @@ struct MediaRawRtpProbePlan final {
     std::optional<MediaRtcpCompoundPolicy> rtcpPolicy;
 };
 
-struct MediaPreparedRawRtpProbe final {
+struct MediaPreparedRawRtpVideoOnlyProbe final {
     MediaDetectedRtpVideoSignaling signaling;
     MediaPreparedRealtimeInput video;
-    std::optional<MediaPreparedRealtimeInput> audio;
 };
+
+struct MediaPreparedRawRtpAudioVideoProbe final {
+    MediaDetectedRtpVideoSignaling signaling;
+    MediaPreparedRealtimeInput video;
+    MediaPreparedRealtimeInput audio;
+};
+
+using MediaPreparedRawRtpProbe = std::variant<
+    MediaPreparedRawRtpVideoOnlyProbe,
+    MediaPreparedRawRtpAudioVideoProbe>;
 
 class MediaRawRtpInputPreparer final {
 public:

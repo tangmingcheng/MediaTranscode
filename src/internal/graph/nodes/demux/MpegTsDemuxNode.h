@@ -51,9 +51,8 @@ private:
     std::unique_ptr<MediaTsDemuxSession> m_session;
     std::optional<MediaTsClockProjection> m_projection;
     std::optional<MediaTsProgramClockPolicy> m_policy;
+    std::optional<MediaTsRuntimeBinding> m_binding;
     MediaRational m_packetTimeBase;
-    int m_videoStreamIndex = -1;
-    int m_audioStreamIndex = -1;
     std::uint64_t m_initialSourceGeneration = 0;
     StreamClock m_videoClock;
     StreamClock m_audioClock;

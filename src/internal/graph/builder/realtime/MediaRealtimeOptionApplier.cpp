@@ -1,6 +1,9 @@
 #include "internal/graph/builder/realtime/MediaRealtimeOptionApplier.h"
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/model/MediaTranscodeStreamSet.h"
+
+#include <type_traits>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -128,27 +131,58 @@ const char* boolOption(bool value) noexcept
         return MediaGraphBuildSupport::setNodeOptionChecked(
             graph, owner, nodeId, key, std::to_string(value));
     };
-    if (auto s = set("mpegts.program_number", plan.programNumber); !s) return s;
-    if (auto s = set("mpegts.pmt_pid", plan.programMapPid); !s) return s;
-    if (auto s = set("mpegts.video_pid", plan.videoPid); !s) return s;
-    if (auto s = set("mpegts.audio_pid", plan.audioPid); !s) return s;
-    if (auto s = set("mpegts.pcr_pid", plan.pcrPid); !s) return s;
+    auto streamOptions = std::visit(
+        [&](const auto& selected) -> ::media::Result<void> {
+            using Program = std::decay_t<decltype(selected)>;
+            const auto& selection = selected.selection;
+            constexpr bool AudioVideo = std::is_same_v<
+                Program, MediaTsAudioVideoSelectedProgramPlan>;
+            if (auto s = set(
+                    "mpegts.stream_set",
+                    static_cast<int>(AudioVideo
+                        ? MediaTranscodeStreamSet::AudioVideo
+                        : MediaTranscodeStreamSet::VideoOnly));
+                !s) {
+                return s;
+            }
+            if (auto s = set("mpegts.program_number", selection.programNumber); !s) return s;
+            if (auto s = set("mpegts.pmt_pid", selection.programMapPid); !s) return s;
+            if (auto s = set("mpegts.video_pid", selection.video.elementaryPid); !s) return s;
+            if constexpr (AudioVideo) {
+                if (auto s = set("mpegts.audio_pid", selection.audio.elementaryPid); !s) return s;
+            }
+            if (auto s = set("mpegts.pcr_pid", selection.pcrPid); !s) return s;
+            return ::media::Result<void>::success();
+        },
+        plan.selectedProgram);
+    if (!streamOptions) return streamOptions;
     if (auto s = set("mpegts.maximum_pcr_gap_27mhz", plan.maximumPcrGap27Mhz); !s) return s;
     if (auto s = set("mpegts.packet_stride", plan.packetSize); !s) return s;
     if (auto s = set("mpegts.evidence_timeline_capacity", plan.evidenceTimelineCapacity); !s) return s;
     if (auto s = set("mpegts.projection_capacity", plan.projectionCapacity); !s) return s;
-    if (auto s = set("mpegts.initial_acquiring_video_packet_capacity",
-                     plan.initialAcquiringVideoPacketCapacity); !s) return s;
-    if (auto s = set("mpegts.initial_acquiring_audio_packet_capacity",
-                     plan.initialAcquiringAudioPacketCapacity); !s) return s;
-    if (auto s = set("mpegts.initial_acquiring_video_byte_capacity",
-                     plan.initialAcquiringVideoByteCapacity); !s) return s;
-    if (auto s = set("mpegts.initial_acquiring_audio_byte_capacity",
-                     plan.initialAcquiringAudioByteCapacity); !s) return s;
-    if (auto s = set("mpegts.maximum_acquiring_video_packet_bytes",
-                     plan.maximumAcquiringVideoPacketBytes); !s) return s;
-    if (auto s = set("mpegts.maximum_acquiring_audio_packet_bytes",
-                     plan.maximumAcquiringAudioPacketBytes); !s) return s;
+    auto retentionOptions = std::visit(
+        [&](const auto& retention) -> ::media::Result<void> {
+            using Retention = std::decay_t<decltype(retention)>;
+            constexpr bool AudioVideo = std::is_same_v<
+                Retention, MediaRealtimeTsInputPlan::AudioVideoRetention>;
+            if (auto s = set("mpegts.initial_acquiring_video_packet_capacity",
+                             retention.videoPacketCapacity); !s) return s;
+            if (auto s = set("mpegts.initial_acquiring_video_byte_capacity",
+                             retention.videoByteCapacity); !s) return s;
+            if (auto s = set("mpegts.maximum_acquiring_video_packet_bytes",
+                             retention.maximumVideoPacketBytes); !s) return s;
+            if constexpr (AudioVideo) {
+                if (auto s = set("mpegts.initial_acquiring_audio_packet_capacity",
+                                 retention.audioPacketCapacity); !s) return s;
+                if (auto s = set("mpegts.initial_acquiring_audio_byte_capacity",
+                                 retention.audioByteCapacity); !s) return s;
+                if (auto s = set("mpegts.maximum_acquiring_audio_packet_bytes",
+                                 retention.maximumAudioPacketBytes); !s) return s;
+            }
+            return ::media::Result<void>::success();
+        },
+        plan.retention);
+    if (!retentionOptions) return retentionOptions;
     if (auto s = set("mpegts.maximum_position_regression_bytes", plan.maximumPacketPositionRegressionBytes); !s) return s;
     if (auto s = set("mpegts.pes_provenance_capacity", plan.pesProvenanceCapacity); !s) return s;
     if (auto s = set("mpegts.packet_origin_policy",

@@ -6,33 +6,44 @@ extern "C" {
 }
 
 #include <utility>
+#include <type_traits>
 
 namespace media::ffmpeg::graph {
 
 MediaTsInitialAcquiringPacketBuffer::MediaTsInitialAcquiringPacketBuffer(
-    MediaTsInitialPacketRetentionLimit video,
-    MediaTsInitialPacketRetentionLimit audio) noexcept
-    : m_videoLimit(video), m_audioLimit(audio)
+    MediaTsInitialPacketRetentionPlan plan) noexcept
+    : m_plan(std::move(plan))
 {
 }
 
 ::media::Result<MediaTsInitialAcquiringPacketBuffer>
 MediaTsInitialAcquiringPacketBuffer::create(
-    MediaTsInitialPacketRetentionLimit video,
-    MediaTsInitialPacketRetentionLimit audio)
+    MediaTsInitialPacketRetentionPlan plan)
 {
     const auto valid = [](const MediaTsInitialPacketRetentionLimit& limit) {
         return limit.packetCapacity > 0 && limit.byteCapacity > 0 &&
                limit.maximumPacketBytes > 0 &&
                limit.maximumPacketBytes <= limit.byteCapacity;
     };
-    if (!valid(video) || !valid(audio)) {
+    const bool planValid = std::visit(
+        [&valid](const auto& retention) {
+            using Retention = std::decay_t<decltype(retention)>;
+            if constexpr (std::is_same_v<
+                              Retention,
+                              MediaTsVideoOnlyPacketRetentionPlan>) {
+                return valid(retention.video);
+            } else {
+                return valid(retention.video) && valid(retention.audio);
+            }
+        },
+        plan);
+    if (!planValid) {
         return ::media::Result<MediaTsInitialAcquiringPacketBuffer>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "Invalid MPEG-TS initial acquiring packet retention limits"));
     }
     return ::media::Result<MediaTsInitialAcquiringPacketBuffer>::success(
-        MediaTsInitialAcquiringPacketBuffer(video, audio));
+        MediaTsInitialAcquiringPacketBuffer(std::move(plan)));
 }
 
 ::media::Status MediaTsInitialAcquiringPacketBuffer::retain(
@@ -54,10 +65,27 @@ MediaTsInitialAcquiringPacketBuffer::create(
             "MPEG-TS acquiring packet has invalid payload footprint"));
     }
     const auto bytes = *footprint;
+    if (streamKind == MediaStreamKind::Audio &&
+        std::holds_alternative<MediaTsVideoOnlyPacketRetentionPlan>(m_plan)) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "VideoOnly MPEG-TS retention rejects audio packets"));
+    }
     auto& usage = streamKind == MediaStreamKind::Video
         ? m_videoUsage : m_audioUsage;
-    const auto& limit = streamKind == MediaStreamKind::Video
-        ? m_videoLimit : m_audioLimit;
+    const auto limit = std::visit(
+        [streamKind](const auto& retention) {
+            using Retention = std::decay_t<decltype(retention)>;
+            if constexpr (std::is_same_v<
+                              Retention,
+                              MediaTsVideoOnlyPacketRetentionPlan>) {
+                return retention.video;
+            } else {
+                return streamKind == MediaStreamKind::Video
+                    ? retention.video
+                    : retention.audio;
+            }
+        },
+        m_plan);
     if (usage.packets >= limit.packetCapacity ||
         bytes > limit.maximumPacketBytes ||
         bytes > limit.byteCapacity - usage.bytes) {
@@ -76,7 +104,9 @@ MediaTsInitialAcquiringPacketBuffer::create(
     MediaStreamKind streamKind,
     const Materializer& materializer)
 {
-    if (!materializer || hasReplay()) {
+    if (!materializer || hasReplay() ||
+        (streamKind == MediaStreamKind::Audio &&
+         std::holds_alternative<MediaTsVideoOnlyPacketRetentionPlan>(m_plan))) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "MPEG-TS initial packet replay staging state is invalid"));
     }
@@ -108,7 +138,9 @@ MediaTsInitialAcquiringPacketBuffer::create(
 {
     if (!buffer || !m_packets.empty() || hasReplay() ||
         (streamKind != MediaStreamKind::Video &&
-         streamKind != MediaStreamKind::Audio)) {
+         streamKind != MediaStreamKind::Audio) ||
+        (streamKind == MediaStreamKind::Audio &&
+         std::holds_alternative<MediaTsVideoOnlyPacketRetentionPlan>(m_plan))) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "MPEG-TS single packet replay staging state is invalid"));
     }

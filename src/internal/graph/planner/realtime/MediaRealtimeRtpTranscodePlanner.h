@@ -13,6 +13,7 @@
 #include "internal/graph/planner/realtime/MediaScheduledRtpPacketizationPlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodeRequest.h"
 #include "internal/graph/planner/realtime/MediaPreparedRealtimeInput.h"
+#include "internal/graph/protocol/mpegts/MediaTsProgramSelection.h"
 #include "internal/graph/protocol/rtp/MediaRtcpCompositionPolicy.h"
 #include "internal/graph/protocol/rtp/MediaRtpClockObservationSchedule.h"
 #include "internal/graph/protocol/rtp/MediaRtpDepacketizer.h"
@@ -21,12 +22,11 @@
 
 #include <string>
 #include <optional>
+#include <variant>
 
 namespace media::ffmpeg::graph {
 
 struct MediaRealtimeInputStreamInfo;
-struct MediaTsSelectedProgramPlan;
-
 struct MediaRealtimeRtpTransportPlan final {
     MediaIpAddressFamily addressFamily;
     std::string bindAddress;
@@ -48,6 +48,23 @@ struct MediaRealtimeRtpTransportPlan final {
 };
 
 struct MediaRealtimeTsInputPlan final {
+    struct VideoOnlyRetention final {
+        std::size_t videoPacketCapacity = 0;
+        std::uint64_t videoByteCapacity = 0;
+        std::uint64_t maximumVideoPacketBytes = 0;
+        bool operator==(const VideoOnlyRetention&) const = default;
+    };
+    struct AudioVideoRetention final {
+        std::size_t videoPacketCapacity = 0;
+        std::size_t audioPacketCapacity = 0;
+        std::uint64_t videoByteCapacity = 0;
+        std::uint64_t audioByteCapacity = 0;
+        std::uint64_t maximumVideoPacketBytes = 0;
+        std::uint64_t maximumAudioPacketBytes = 0;
+        bool operator==(const AudioVideoRetention&) const = default;
+    };
+    using Retention = std::variant<VideoOnlyRetention, AudioVideoRetention>;
+
     std::string demuxFormat;
     std::size_t packetSize = 0;
     std::size_t avioBufferBytes = 0;
@@ -56,25 +73,14 @@ struct MediaRealtimeTsInputPlan final {
     std::uint64_t maximumPacketPositionRegressionBytes = 0;
     std::size_t pesProvenanceCapacity = 0;
     MediaTsPacketOriginPolicy packetOriginPolicy;
-    int programNumber = 0;
-    int programMapPid = 0;
-    int videoPid = 0;
-    int audioPid = 0;
-    int pcrPid = 0;
+    MediaTsSelectedProgramPlan selectedProgram;
     std::int64_t maximumPcrGap27Mhz = 0;
     std::size_t projectionCapacity = 0;
-    std::size_t initialAcquiringVideoPacketCapacity = 0;
-    std::size_t initialAcquiringAudioPacketCapacity = 0;
-    std::uint64_t initialAcquiringVideoByteCapacity = 0;
-    std::uint64_t initialAcquiringAudioByteCapacity = 0;
-    std::uint64_t maximumAcquiringVideoPacketBytes = 0;
-    std::uint64_t maximumAcquiringAudioPacketBytes = 0;
+    Retention retention;
     int timestampTimeBaseNumerator = 0;
     int timestampTimeBaseDenominator = 0;
     std::uint64_t initialSourceGeneration = 0;
     std::uint64_t initialRawTransportGeneration = 0;
-    std::optional<MediaTsPacketDurationEvidence> videoPacketDuration;
-    std::optional<MediaTsPacketDurationEvidence> audioPacketDuration;
 
     static ::media::Result<MediaRealtimeTsInputPlan> create(
         std::size_t packetSize,

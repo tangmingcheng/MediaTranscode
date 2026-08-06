@@ -71,6 +71,22 @@ MediaRational frameRate(const AVStream& stream) noexcept
     return ::media::Result<::media::ffmpeg::InputFormatContextPtr>::success(std::move(context));
 }
 
+::media::Status attachRequiredRealtimeAudio(
+    AVFormatContext& context,
+    MediaRealtimeInputStreamInfo& streams)
+{
+    auto audio = MediaAudioCapabilityProbe::inspect(context);
+    if (!audio) return ::media::Status::failure(audio.error());
+    if (!audio.value().present) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::notInitialized(
+                "Realtime AudioVideo input requires an audio stream"));
+    }
+    streams.hasAudio = true;
+    streams.audio = std::move(audio).value().stream;
+    return ::media::Status::success();
+}
+
 } // namespace
 
 ::media::Result<MediaInputVideoStreamInfo> MediaStreamCapabilityProbe::inspectVideo(
@@ -93,10 +109,11 @@ MediaRational frameRate(const AVStream& stream) noexcept
     MediaRealtimeInputStreamInfo info;
     info.video = std::move(video).value();
     if (streamSet == MediaTranscodeStreamSet::AudioVideo) {
-        auto audio = MediaAudioCapabilityProbe::inspect(*context.value());
-        if (!audio) return ::media::Result<MediaRealtimeInputStreamInfo>::failure(audio.error());
-        info.hasAudio = audio.value().present;
-        if (info.hasAudio) info.audio = std::move(audio).value().stream;
+        if (auto audio = attachRequiredRealtimeAudio(*context.value(), info);
+            !audio) {
+            return ::media::Result<MediaRealtimeInputStreamInfo>::failure(
+                audio.error());
+        }
     }
     return ::media::Result<MediaRealtimeInputStreamInfo>::success(std::move(info));
 }
@@ -124,10 +141,11 @@ MediaRational frameRate(const AVStream& stream) noexcept
     MediaRealtimeInputStreamInfo streams;
     streams.video = std::move(video).value();
     if (streamSet == MediaTranscodeStreamSet::AudioVideo) {
-        auto audio = MediaAudioCapabilityProbe::inspect(*input);
-        if (!audio) return ::media::Result<MediaPreparedRealtimeInputScan>::failure(audio.error());
-        streams.hasAudio = audio.value().present;
-        if (streams.hasAudio) streams.audio = std::move(audio).value().stream;
+        if (auto audio = attachRequiredRealtimeAudio(*input, streams);
+            !audio) {
+            return ::media::Result<MediaPreparedRealtimeInputScan>::failure(
+                audio.error());
+        }
     }
     auto prepared = MediaPreparedRealtimeInput::create(std::move(input));
     if (!prepared) return ::media::Result<MediaPreparedRealtimeInputScan>::failure(prepared.error());

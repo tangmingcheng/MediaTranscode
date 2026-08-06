@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <sstream>
 #include <limits>
+#include <type_traits>
 #include <utility>
 
 extern "C" {
@@ -106,8 +107,6 @@ struct MediaTsSessionOpenSettings final {
 openMpegTsRuntimeSession(
     const MediaTsSessionOpenSettings& settings,
     const MediaTsRuntimeBinding& plannedBinding,
-    int programNumber,
-    int pmtPid,
     const MediaTsInputSessionOpener& opener)
 {
     auto opened = openMpegTsPreflightSession(settings, opener);
@@ -119,35 +118,29 @@ openMpegTsRuntimeSession(
     const auto& programs = session->programSnapshots();
     const auto selected = std::find_if(
         programs.begin(), programs.end(),
-        [programNumber, pmtPid, &plannedBinding](
-            const FFmpegInputProgramSnapshot& program) {
-            return program.programNumber == programNumber &&
-                   program.pmtPid == pmtPid &&
-                   program.pcrPid == plannedBinding.pcrPid;
+        [&plannedBinding](const FFmpegInputProgramSnapshot& program) {
+            return MediaTsRuntimeBindingCodec::matchesProgram(
+                plannedBinding, program);
         });
     if (selected == programs.end()) {
         return ::media::Result<std::unique_ptr<MediaTsDemuxSession>>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "MPEG-TS runtime program identity differs from planner preflight"));
     }
-    MediaTsRuntimeBinding runtimeBinding = plannedBinding;
-    runtimeBinding.video.streamIndex = -1;
-    runtimeBinding.audio.streamIndex = -1;
-    for (const auto& stream : selected->streamBindings) {
-        if (stream.elementaryPid == plannedBinding.video.pid) {
-            runtimeBinding.video.streamIndex = stream.streamIndex;
-        }
-        if (stream.elementaryPid == plannedBinding.audio.pid) {
-            runtimeBinding.audio.streamIndex = stream.streamIndex;
-        }
+    std::vector<MediaTsRuntimeStreamFacts> runtimeStreamFacts;
+    runtimeStreamFacts.reserve(session->streamSnapshots().size());
+    for (const auto& stream : session->streamSnapshots()) {
+        runtimeStreamFacts.push_back(MediaTsRuntimeStreamFacts{
+            stream.index, stream.streamKind, stream.time.timeBase});
     }
-    if (runtimeBinding.video.streamIndex < 0 ||
-        runtimeBinding.audio.streamIndex < 0) {
+    auto runtimeBinding = MediaTsRuntimeBindingCodec::rebindStreamIndexes(
+        plannedBinding, *selected, runtimeStreamFacts);
+    if (!runtimeBinding) {
         return ::media::Result<std::unique_ptr<MediaTsDemuxSession>>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "MPEG-TS runtime stream identity differs from planner preflight"));
+            runtimeBinding.error());
     }
-    if (auto configured = session->configureRuntimeBinding(runtimeBinding);
+    if (auto configured = session->configureRuntimeBinding(
+            runtimeBinding.value());
         !configured) {
         return ::media::Result<std::unique_ptr<MediaTsDemuxSession>>::failure(
             configured.error());
@@ -260,7 +253,11 @@ openMpegTsRuntimeSession(
     const FFmpegInputStreamSnapshot* audio = nullptr;
     for (const auto& stream : session->streamSnapshots()) {
         if (!video && stream.streamKind == MediaStreamKind::Video) video = &stream;
-        if (!audio && stream.streamKind == MediaStreamKind::Audio) audio = &stream;
+        if (request.parameters.execution.streamSet ==
+                MediaTranscodeStreamSet::AudioVideo &&
+            !audio && stream.streamKind == MediaStreamKind::Audio) {
+            audio = &stream;
+        }
     }
     if (!video ||
         (request.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo &&
@@ -268,24 +265,46 @@ openMpegTsRuntimeSession(
         return ::media::Result<MediaPreparedRealtimeInputScan>::failure(
             ::media::ErrorInfo::notInitialized("MPEG-TS selected A/V streams are incomplete"));
     }
-    auto selected = MediaTsProgramSelector::select(
-        session->programSnapshots(), session->programInventory(),
-        video->index, audio ? audio->index : -1);
-    if (!selected) return ::media::Result<MediaPreparedRealtimeInputScan>::failure(selected.error());
-    if (!audio) {
+    ::media::Result<MediaTsProgramSelection> selected =
+        request.parameters.execution.streamSet ==
+            MediaTranscodeStreamSet::AudioVideo
+        ? [&]() -> ::media::Result<MediaTsProgramSelection> {
+              auto av = MediaTsProgramSelector::selectAudioVideo(
+                  session->programSnapshots(), session->programInventory(),
+                  video->index, video->time.timeBase,
+                  audio->index, audio->time.timeBase);
+              if (!av) {
+                  return ::media::Result<MediaTsProgramSelection>::failure(
+                      av.error());
+              }
+              return ::media::Result<MediaTsProgramSelection>::success(
+                  MediaTsProgramSelection{std::move(av).value()});
+          }()
+        : [&]() -> ::media::Result<MediaTsProgramSelection> {
+              auto videoOnly = MediaTsProgramSelector::selectVideoOnly(
+                  session->programSnapshots(), session->programInventory(),
+                  video->index, video->time.timeBase);
+              if (!videoOnly) {
+                  return ::media::Result<MediaTsProgramSelection>::failure(
+                      videoOnly.error());
+              }
+              return ::media::Result<MediaTsProgramSelection>::success(
+                  MediaTsProgramSelection{std::move(videoOnly).value()});
+          }();
+    if (!selected) {
         return ::media::Result<MediaPreparedRealtimeInputScan>::failure(
-            ::media::ErrorInfo::unsupported(
-                "MPEG-TS PES provenance currently requires planned audio and video"));
+            selected.error());
     }
-    MediaTsRuntimeBinding runtimeBinding;
-    runtimeBinding.originPolicy = policy.value().packetOriginPolicy;
-    runtimeBinding.video = MediaTsRuntimeStreamBinding{
-        video->index, static_cast<std::uint16_t>(selected.value().videoPid)};
-    runtimeBinding.audio = MediaTsRuntimeStreamBinding{
-        audio->index, static_cast<std::uint16_t>(selected.value().audioPid)};
-    runtimeBinding.pcrPid = static_cast<std::uint16_t>(selected.value().pcrPid);
-    runtimeBinding.pesProvenanceCapacity = policy.value().pesProvenanceCapacity;
-    if (auto configured = session->configureRuntimeBinding(runtimeBinding); !configured) {
+    auto runtimeBinding = MediaTsRuntimeBindingCodec::create(
+        selected.value(), policy.value().packetOriginPolicy,
+        policy.value().pesProvenanceCapacity);
+    if (!runtimeBinding) {
+        return ::media::Result<MediaPreparedRealtimeInputScan>::failure(
+            runtimeBinding.error());
+    }
+    if (auto configured = session->configureRuntimeBinding(
+            runtimeBinding.value());
+        !configured) {
         return ::media::Result<MediaPreparedRealtimeInputScan>::failure(configured.error());
     }
     const std::size_t durationProbeFrameLimit = static_cast<std::size_t>(
@@ -296,8 +315,34 @@ openMpegTsRuntimeSession(
         return ::media::Result<MediaPreparedRealtimeInputScan>::failure(
             durationEvidence.error());
     }
-    selected.value().videoPacketDuration = durationEvidence.value().video;
-    selected.value().audioPacketDuration = durationEvidence.value().audio;
+    auto selectedProgram = std::visit(
+        [](const auto& selection, const auto& evidence)
+            -> ::media::Result<MediaTsSelectedProgramPlan> {
+            using Selection = std::decay_t<decltype(selection)>;
+            using Evidence = std::decay_t<decltype(evidence)>;
+            if constexpr (
+                std::is_same_v<Selection, MediaTsVideoOnlyProgramSelection> &&
+                std::is_same_v<Evidence, MediaTsVideoOnlyPacketDurationEvidence>) {
+                return ::media::Result<MediaTsSelectedProgramPlan>::success(
+                    MediaTsVideoOnlySelectedProgramPlan{
+                        selection, evidence.video});
+            } else if constexpr (
+                std::is_same_v<Selection, MediaTsAudioVideoProgramSelection> &&
+                std::is_same_v<Evidence, MediaTsAudioVideoPacketDurationEvidence>) {
+                return ::media::Result<MediaTsSelectedProgramPlan>::success(
+                    MediaTsAudioVideoSelectedProgramPlan{
+                        selection, evidence.video, evidence.audio});
+            } else {
+                return ::media::Result<MediaTsSelectedProgramPlan>::failure(
+                    ::media::ErrorInfo::invalidArgument(
+                        "MPEG-TS duration evidence stream set conflicts with selection"));
+            }
+        },
+        selected.value(), durationEvidence.value());
+    if (!selectedProgram) {
+        return ::media::Result<MediaPreparedRealtimeInputScan>::failure(
+            selectedProgram.error());
+    }
     MediaPreparedRealtimeInputScan result;
     result.streams.video.streamIndex = video->index;
     result.streams.video.codecName = video->format.codec.codecName;
@@ -333,20 +378,16 @@ openMpegTsRuntimeSession(
             decoder.value().maximumOutputBlockInputSamples);
         result.streams.audio.selectedDecoder = std::move(decoder).value();
     }
-    const auto plannedBinding = runtimeBinding;
-    const int plannedProgramNumber = selected.value().programNumber;
-    const int plannedPmtPid = selected.value().programMapPid;
+    const auto plannedBinding = runtimeBinding.value();
     auto prepared = MediaPreparedRealtimeInput::createMpegTs(
         std::move(session),
-        [openSettings, plannedBinding, plannedProgramNumber, plannedPmtPid,
-         sessionOpener]() mutable {
+        [openSettings, plannedBinding, sessionOpener]() mutable {
             return openMpegTsRuntimeSession(
-                openSettings, plannedBinding, plannedProgramNumber,
-                plannedPmtPid, sessionOpener);
+                openSettings, plannedBinding, sessionOpener);
         });
     if (!prepared) return ::media::Result<MediaPreparedRealtimeInputScan>::failure(prepared.error());
     result.prepared = std::move(prepared).value();
-    result.selectedTsProgram = selected.value();
+    result.selectedTsProgram = std::move(selectedProgram).value();
     return ::media::Result<MediaPreparedRealtimeInputScan>::success(std::move(result));
 }
 
@@ -635,7 +676,7 @@ MediaRealtimeInputPlanner::prepareRawRtpVideo(
     const bool ipv6 = parsedEndpoint.value().host.find(':') !=
         std::string::npos;
     MediaRawRtpProbePlan plan;
-    plan.video = MediaRawRtpPreparedStreamPlan{
+    MediaRawRtpPreparedStreamPlan videoProbeStream{
         MediaRtpUdpTransportConfig{
             ipv6 ? MediaIpAddressFamily::Ipv6 : MediaIpAddressFamily::Ipv4,
             parsedEndpoint.value().host,
@@ -664,7 +705,7 @@ MediaRealtimeInputPlanner::prepareRawRtpVideo(
         }
         const bool audioIpv6 = audioEndpoint.value().host.find(':') !=
             std::string::npos;
-        plan.audio = MediaRawRtpPreparedStreamPlan{
+        MediaRawRtpPreparedStreamPlan audioProbeStream{
             MediaRtpUdpTransportConfig{
                 audioIpv6 ? MediaIpAddressFamily::Ipv6
                           : MediaIpAddressFamily::Ipv4,
@@ -680,6 +721,11 @@ MediaRealtimeInputPlanner::prepareRawRtpVideo(
                 canonicalCodecName(audio.codecName),
                 static_cast<std::uint8_t>(*audio.payloadType),
                 *audio.clockRate}};
+        plan.streams = MediaRawRtpProbePlan::AudioVideo{
+            std::move(videoProbeStream), std::move(audioProbeStream)};
+    } else {
+        plan.streams = MediaRawRtpProbePlan::VideoOnly{
+            std::move(videoProbeStream)};
     }
     plan.openTimeoutMs = *request.input.openTimeoutMs;
     plan.analyzeDurationUs = *request.input.analyzeDurationUs;

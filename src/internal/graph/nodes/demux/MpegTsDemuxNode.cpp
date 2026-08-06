@@ -1,6 +1,7 @@
 #include "internal/graph/nodes/demux/MpegTsDemuxNode.h"
 
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
+#include "internal/graph/model/MediaTranscodeStreamSet.h"
 #include "internal/graph/runtime/buffer/FFmpegPacketBuffer.h"
 #include "internal/graph/runtime/buffer/MediaTsPreparedInputBuffer.h"
 #include "internal/graph/runtime/buffer/MediaSourceClockStateBuffer.h"
@@ -12,6 +13,7 @@ extern "C" {
 
 #include <algorithm>
 #include <limits>
+#include <type_traits>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -83,10 +85,11 @@ MediaNodeKind MpegTsDemuxNode::staticKind() noexcept
             ::media::ErrorInfo::invalidArgument("MpegTsDemuxNode requires MediaTsPreparedInputBuffer"));
     }
     const auto* options = nodeOptions(context);
+    auto streamSetValue = requiredNonNegativeIntNodeOption(
+        options, "MpegTsDemuxNode", "mpegts.stream_set");
     auto program = requiredPositiveIntNodeOption(options, "MpegTsDemuxNode", "mpegts.program_number");
     auto pmt = requiredPositiveIntNodeOption(options, "MpegTsDemuxNode", "mpegts.pmt_pid");
     auto video = requiredPositiveIntNodeOption(options, "MpegTsDemuxNode", "mpegts.video_pid");
-    auto audio = requiredPositiveIntNodeOption(options, "MpegTsDemuxNode", "mpegts.audio_pid");
     auto pcr = requiredPositiveIntNodeOption(options, "MpegTsDemuxNode", "mpegts.pcr_pid");
     auto gap = requiredPositiveInt64NodeOption(options, "MpegTsDemuxNode", "mpegts.maximum_pcr_gap_27mhz");
     auto packetStride = requiredPositiveIntNodeOption(options, "MpegTsDemuxNode", "mpegts.packet_stride");
@@ -103,26 +106,20 @@ MediaNodeKind MpegTsDemuxNode::staticKind() noexcept
     auto rawGeneration = requiredGeneration(options, "mpegts.initial_raw_generation");
     auto videoPacketCapacity = requiredPositiveIntNodeOption(
         options, "MpegTsDemuxNode", "mpegts.initial_acquiring_video_packet_capacity");
-    auto audioPacketCapacity = requiredPositiveIntNodeOption(
-        options, "MpegTsDemuxNode", "mpegts.initial_acquiring_audio_packet_capacity");
     auto videoByteCapacity = requiredPositiveInt64NodeOption(
         options, "MpegTsDemuxNode", "mpegts.initial_acquiring_video_byte_capacity");
-    auto audioByteCapacity = requiredPositiveInt64NodeOption(
-        options, "MpegTsDemuxNode", "mpegts.initial_acquiring_audio_byte_capacity");
     auto maximumVideoPacketBytes = requiredPositiveInt64NodeOption(
         options, "MpegTsDemuxNode", "mpegts.maximum_acquiring_video_packet_bytes");
-    auto maximumAudioPacketBytes = requiredPositiveInt64NodeOption(
-        options, "MpegTsDemuxNode", "mpegts.maximum_acquiring_audio_packet_bytes");
-    if (!program || !pmt || !video || !audio || !pcr || !gap ||
+    if (!streamSetValue || !program || !pmt || !video || !pcr || !gap ||
         !packetStride || !evidenceCapacity || !capacity || !regression || !provenanceCapacity ||
         !originPolicyValue ||
         !numerator || !denominator || !sourceGeneration ||
-        !rawGeneration || !videoPacketCapacity || !audioPacketCapacity ||
-        !videoByteCapacity || !audioByteCapacity ||
-        !maximumVideoPacketBytes || !maximumAudioPacketBytes) {
+        !rawGeneration || !videoPacketCapacity ||
+        !videoByteCapacity || !maximumVideoPacketBytes) {
         const ::media::ErrorInfo* error = nullptr;
-        if (!program) error = &program.error(); else if (!pmt) error = &pmt.error();
-        else if (!video) error = &video.error(); else if (!audio) error = &audio.error();
+        if (!streamSetValue) error = &streamSetValue.error();
+        else if (!program) error = &program.error(); else if (!pmt) error = &pmt.error();
+        else if (!video) error = &video.error();
         else if (!pcr) error = &pcr.error(); else if (!gap) error = &gap.error();
         else if (!packetStride) error = &packetStride.error(); else if (!evidenceCapacity) error = &evidenceCapacity.error();
         else if (!capacity) error = &capacity.error(); else if (!regression) error = &regression.error();
@@ -132,12 +129,50 @@ MediaNodeKind MpegTsDemuxNode::staticKind() noexcept
         else if (!sourceGeneration) error = &sourceGeneration.error();
         else if (!rawGeneration) error = &rawGeneration.error();
         else if (!videoPacketCapacity) error = &videoPacketCapacity.error();
-        else if (!audioPacketCapacity) error = &audioPacketCapacity.error();
         else if (!videoByteCapacity) error = &videoByteCapacity.error();
-        else if (!audioByteCapacity) error = &audioByteCapacity.error();
-        else if (!maximumVideoPacketBytes) error = &maximumVideoPacketBytes.error();
-        else error = &maximumAudioPacketBytes.error();
+        else error = &maximumVideoPacketBytes.error();
         return ::media::Status::failure(*error);
+    }
+    const int audioVideoValue = static_cast<int>(
+        MediaTranscodeStreamSet::AudioVideo);
+    const int videoOnlyValue = static_cast<int>(
+        MediaTranscodeStreamSet::VideoOnly);
+    if (streamSetValue.value() != audioVideoValue &&
+        streamSetValue.value() != videoOnlyValue) {
+        return ::media::Status::failure(::media::ErrorInfo::unsupported(
+            "MpegTsDemuxNode stream set is unsupported"));
+    }
+    const bool audioVideo = streamSetValue.value() == audioVideoValue;
+    std::optional<int> audioPid;
+    std::optional<int> audioPacketCapacity;
+    std::optional<std::int64_t> audioByteCapacity;
+    std::optional<std::int64_t> maximumAudioPacketBytes;
+    if (audioVideo) {
+        auto audio = requiredPositiveIntNodeOption(
+            options, "MpegTsDemuxNode", "mpegts.audio_pid");
+        auto packetCapacity = requiredPositiveIntNodeOption(
+            options, "MpegTsDemuxNode",
+            "mpegts.initial_acquiring_audio_packet_capacity");
+        auto byteCapacity = requiredPositiveInt64NodeOption(
+            options, "MpegTsDemuxNode",
+            "mpegts.initial_acquiring_audio_byte_capacity");
+        auto maximumPacketBytes = requiredPositiveInt64NodeOption(
+            options, "MpegTsDemuxNode",
+            "mpegts.maximum_acquiring_audio_packet_bytes");
+        if (!audio) return ::media::Status::failure(audio.error());
+        if (!packetCapacity) {
+            return ::media::Status::failure(packetCapacity.error());
+        }
+        if (!byteCapacity) {
+            return ::media::Status::failure(byteCapacity.error());
+        }
+        if (!maximumPacketBytes) {
+            return ::media::Status::failure(maximumPacketBytes.error());
+        }
+        audioPid = audio.value();
+        audioPacketCapacity = packetCapacity.value();
+        audioByteCapacity = byteCapacity.value();
+        maximumAudioPacketBytes = maximumPacketBytes.value();
     }
     if (numerator.value() != 1 || denominator.value() != 90'000) {
         return ::media::Status::failure(
@@ -152,10 +187,18 @@ MediaNodeKind MpegTsDemuxNode::staticKind() noexcept
     }
     const auto originPolicy =
         static_cast<MediaTsPacketOriginPolicy>(originPolicyValue.value());
-    MediaTsProgramClockPolicy policy{
-        static_cast<std::uint16_t>(program.value()), static_cast<std::uint16_t>(pmt.value()),
-        static_cast<std::uint16_t>(pcr.value()), static_cast<std::uint16_t>(video.value()),
-        static_cast<std::uint16_t>(audio.value()), gap.value()};
+    MediaTsProgramClockPolicy policy = audioVideo
+        ? MediaTsProgramClockPolicy{MediaTsAudioVideoProgramClockPolicy{
+              static_cast<std::uint16_t>(program.value()),
+              static_cast<std::uint16_t>(pmt.value()),
+              static_cast<std::uint16_t>(pcr.value()),
+              static_cast<std::uint16_t>(video.value()),
+              static_cast<std::uint16_t>(*audioPid), gap.value()}}
+        : MediaTsProgramClockPolicy{MediaTsVideoOnlyProgramClockPolicy{
+              static_cast<std::uint16_t>(program.value()),
+              static_cast<std::uint16_t>(pmt.value()),
+              static_cast<std::uint16_t>(pcr.value()),
+              static_cast<std::uint16_t>(video.value()), gap.value()}};
     auto projection = MediaTsClockProjection::create(
         policy, static_cast<std::size_t>(capacity.value()),
         static_cast<std::uint64_t>(regression.value()), sourceGeneration.value(), rawGeneration.value());
@@ -169,21 +212,19 @@ MediaNodeKind MpegTsDemuxNode::staticKind() noexcept
     if (selected == programs.end()) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument("MpegTsDemuxNode program identity mismatch"));
     }
-    for (const auto& binding : selected->streamBindings) {
-        if (binding.elementaryPid == video.value()) m_videoStreamIndex = binding.streamIndex;
-        if (binding.elementaryPid == audio.value()) m_audioStreamIndex = binding.streamIndex;
+    std::optional<int> videoStreamIndex;
+    std::optional<int> audioStreamIndex;
+    for (const auto& stream : selected->streamBindings) {
+        if (stream.elementaryPid == video.value()) {
+            videoStreamIndex = stream.streamIndex;
+        }
+        if (audioPid && stream.elementaryPid == *audioPid) {
+            audioStreamIndex = stream.streamIndex;
+        }
     }
-    if (m_videoStreamIndex < 0 || m_audioStreamIndex < 0) {
+    if (!videoStreamIndex || (audioVideo && !audioStreamIndex)) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument("MpegTsDemuxNode selected PID mismatch"));
     }
-    const MediaTsRuntimeBinding expectedBinding{
-        originPolicy,
-        MediaTsRuntimeStreamBinding{
-            m_videoStreamIndex, static_cast<std::uint16_t>(video.value())},
-        MediaTsRuntimeStreamBinding{
-            m_audioStreamIndex, static_cast<std::uint16_t>(audio.value())},
-        static_cast<std::uint16_t>(pcr.value()),
-        static_cast<std::size_t>(provenanceCapacity.value())};
     const auto& runtimeContract = session.value()->runtimeContract();
     if (runtimeContract.packetStride != static_cast<std::size_t>(packetStride.value()) ||
         runtimeContract.evidenceCapacity != static_cast<std::size_t>(evidenceCapacity.value()) ||
@@ -191,24 +232,66 @@ MediaNodeKind MpegTsDemuxNode::staticKind() noexcept
             static_cast<std::uint64_t>(regression.value()) ||
         runtimeContract.pesProvenanceCapacity !=
             static_cast<std::size_t>(provenanceCapacity.value()) ||
-        runtimeContract.originBinding != expectedBinding) {
+        !runtimeContract.originBinding) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "MpegTsDemuxNode materialized runtime session violates the planned contract"));
     }
+    const bool bindingMatches = std::visit(
+        [&](const auto& binding) {
+            using Binding = std::decay_t<decltype(binding)>;
+            constexpr bool BindingAudioVideo = std::is_same_v<
+                Binding, MediaTsAudioVideoRuntimeBinding>;
+            if (BindingAudioVideo != audioVideo ||
+                binding.programNumber != program.value() ||
+                binding.programMapPid != pmt.value() ||
+                binding.originPolicy != originPolicy ||
+                binding.video.streamIndex != *videoStreamIndex ||
+                binding.video.pid != video.value() ||
+                binding.video.timeBase.num != numerator.value() ||
+                binding.video.timeBase.den != denominator.value() ||
+                binding.pcrPid != pcr.value()) {
+                return false;
+            }
+            if constexpr (BindingAudioVideo) {
+                return binding.audio.streamIndex == *audioStreamIndex &&
+                    binding.audio.pid == *audioPid &&
+                    binding.audio.timeBase.num == numerator.value() &&
+                    binding.audio.timeBase.den == denominator.value() &&
+                    binding.pesProvenanceCapacity ==
+                        static_cast<std::size_t>(provenanceCapacity.value());
+            } else {
+                return binding.videoPesProvenanceCapacity ==
+                    static_cast<std::size_t>(provenanceCapacity.value());
+            }
+        },
+        *runtimeContract.originBinding);
+    if (!bindingMatches) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "MpegTsDemuxNode typed runtime binding conflicts with planned options"));
+    }
+    m_binding = *runtimeContract.originBinding;
     auto preflight = session.value()->evidenceSnapshotAfter(std::nullopt);
     if (!preflight) return ::media::Status::failure(preflight.error());
     if (auto status = projection.value().replay(preflight.value()); !status) return status;
     m_policy = policy;
     m_initialSourceGeneration = sourceGeneration.value();
+    const MediaTsInitialPacketRetentionLimit videoRetention{
+        static_cast<std::size_t>(videoPacketCapacity.value()),
+        static_cast<std::uint64_t>(videoByteCapacity.value()),
+        static_cast<std::uint64_t>(maximumVideoPacketBytes.value())};
+    MediaTsInitialPacketRetentionPlan retentionPlan = audioVideo
+        ? MediaTsInitialPacketRetentionPlan{
+              MediaTsAudioVideoPacketRetentionPlan{
+                  videoRetention,
+                  MediaTsInitialPacketRetentionLimit{
+                      static_cast<std::size_t>(*audioPacketCapacity),
+                      static_cast<std::uint64_t>(*audioByteCapacity),
+                      static_cast<std::uint64_t>(
+                          *maximumAudioPacketBytes)}}}
+        : MediaTsInitialPacketRetentionPlan{
+              MediaTsVideoOnlyPacketRetentionPlan{videoRetention}};
     auto retention = MediaTsInitialAcquiringPacketBuffer::create(
-        MediaTsInitialPacketRetentionLimit{
-            static_cast<std::size_t>(videoPacketCapacity.value()),
-            static_cast<std::uint64_t>(videoByteCapacity.value()),
-            static_cast<std::uint64_t>(maximumVideoPacketBytes.value())},
-        MediaTsInitialPacketRetentionLimit{
-            static_cast<std::size_t>(audioPacketCapacity.value()),
-            static_cast<std::uint64_t>(audioByteCapacity.value()),
-            static_cast<std::uint64_t>(maximumAudioPacketBytes.value())});
+        std::move(retentionPlan));
     if (!retention) return ::media::Status::failure(retention.error());
     m_acquiringPackets.emplace(std::move(retention).value());
     m_projection = std::move(projection).value();
@@ -354,11 +437,17 @@ MpegTsDemuxNode::sourceClockCheckpoint(std::uint64_t packetPosition)
     if (!envelope.packet) return ::media::Result<MediaNodeProcessResult>::failure(
         ::media::ErrorInfo::invalidArgument("MpegTsDemuxNode frame envelope requires a packet"));
     auto packet = std::move(envelope.packet);
-    const bool video = packet->stream_index == m_videoStreamIndex;
-    const bool audio = packet->stream_index == m_audioStreamIndex;
-    if (!video && !audio) return ::media::Result<MediaNodeProcessResult>::failure(
+    if (!m_binding) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "MpegTsDemuxNode typed stream binding is unavailable"));
+    }
+    const auto plannedStreamKind =
+        MediaTsRuntimeBindingCodec::streamKindForIndex(
+            *m_binding, packet->stream_index);
+    if (!plannedStreamKind) return ::media::Result<MediaNodeProcessResult>::failure(
         ::media::ErrorInfo::invalidArgument("MpegTsDemuxNode packet stream/PID mismatch"));
-    const auto streamKind = video ? MediaStreamKind::Video : MediaStreamKind::Audio;
+    const MediaStreamKind streamKind = *plannedStreamKind;
     if (packet->time_base.num <= 0 || packet->time_base.den <= 0) {
         packet->time_base = AVRational{
             m_packetTimeBase.num, m_packetTimeBase.den};
@@ -499,9 +588,8 @@ MpegTsDemuxNode::sourceClockCheckpoint(std::uint64_t packetPosition)
 void MpegTsDemuxNode::reset() noexcept
 {
     if (m_session) (void)m_session->close();
-    m_session.reset(); m_projection.reset(); m_policy.reset();
+    m_session.reset(); m_projection.reset(); m_policy.reset(); m_binding.reset();
     m_packetTimeBase = {};
-    m_videoStreamIndex = -1; m_audioStreamIndex = -1;
     m_initialSourceGeneration = 0;
     m_videoClock = {}; m_audioClock = {};
     m_acquiringPackets.reset();

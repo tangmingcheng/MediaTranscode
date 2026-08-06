@@ -210,24 +210,25 @@ void planRtpOutput(MediaAvSyncPlan& plan,
 
 void planTsInput(MediaAvSyncPlan& plan,
                  const MediaRealtimeRtpTranscodeRequest& request,
-                 const MediaTsSelectedProgramPlan& selected)
+                 const MediaTsAudioVideoSelectedProgramPlan& selected)
 {
+    const auto& program = selected.selection;
     plan.sourceClockMode = MediaAvSyncSourceClockMode::MpegTsPcr;
     plan.controlGenerationPolicy =
         MediaControlGenerationPolicy::OptionalExactWhenPresent;
     plan.mpegTsInput.emplace();
-    plan.mpegTsInput->programNumber = selected.programNumber;
-    plan.mpegTsInput->programMapPid = selected.programMapPid;
-    plan.mpegTsInput->videoPid = selected.videoPid;
-    plan.mpegTsInput->audioPid = selected.audioPid;
+    plan.mpegTsInput->programNumber = program.programNumber;
+    plan.mpegTsInput->programMapPid = program.programMapPid;
+    plan.mpegTsInput->videoPid = program.video.elementaryPid;
+    plan.mpegTsInput->audioPid = program.audio.elementaryPid;
     const std::string groupIdentity = request.mediaId.empty()
         ? std::string("realtime-av-sync-ts")
         : request.mediaId;
     plan.startup.videoIdentity = groupIdentity + ".pid." +
-                                 std::to_string(selected.videoPid);
+                                 std::to_string(program.video.elementaryPid);
     plan.startup.audioIdentity = groupIdentity + ".pid." +
-                                 std::to_string(selected.audioPid);
-    plan.mpegTsInput->pcrPid = selected.pcrPid;
+                                 std::to_string(program.audio.elementaryPid);
+    plan.mpegTsInput->pcrPid = program.pcrPid;
 }
 
 ::media::Result<MediaTsMuxPlan> planTsOutput(
@@ -290,7 +291,7 @@ void planTsInput(MediaAvSyncPlan& plan,
 
 ::media::Result<MediaAvSyncPlan> MediaAvSyncPlanner::plan(
     const MediaRealtimeRtpTranscodeRequest& request,
-    const MediaTsSelectedProgramPlan* selectedTsProgram,
+    const MediaTsAudioVideoSelectedProgramPlan* selectedTsProgram,
     const MediaProjectMpegTsResolvedPipelineFacts* resolvedTsFacts,
     const MediaAvSyncPreparedDemuxTimestampFacts* preparedDemuxFacts,
     int resolvedOutputAudioSampleRate)

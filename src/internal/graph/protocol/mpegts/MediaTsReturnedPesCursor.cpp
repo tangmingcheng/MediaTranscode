@@ -1,26 +1,45 @@
 #include "internal/graph/protocol/mpegts/MediaTsReturnedPesCursor.h"
 
+#include <type_traits>
+
 namespace media::ffmpeg::graph {
 
 ::media::Result<MediaTsReturnedPesCursor> MediaTsReturnedPesCursor::create(
     const MediaTsRuntimeBinding& binding)
 {
-    if (binding.originPolicy != MediaTsPacketOriginPolicy::PerStreamPesCarry ||
-        binding.video.streamIndex < 0 || binding.audio.streamIndex < 0 ||
-        binding.video.streamIndex == binding.audio.streamIndex ||
-        binding.video.pid == 0 || binding.audio.pid == 0 ||
-        binding.video.pid == binding.audio.pid ||
-        binding.pcrPid == 0 || binding.pcrPid >= 0x1FFF ||
-        binding.pesProvenanceCapacity == 0) {
+    const std::size_t capacity = std::visit(
+        [](const auto& selected) {
+            using Binding = std::decay_t<decltype(selected)>;
+            if constexpr (std::is_same_v<
+                              Binding,
+                              MediaTsVideoOnlyRuntimeBinding>) {
+                return selected.videoPesProvenanceCapacity;
+            } else {
+                return selected.pesProvenanceCapacity;
+            }
+        },
+        binding);
+    if (!MediaTsRuntimeBindingCodec::validate(binding, capacity)) {
         return ::media::Result<MediaTsReturnedPesCursor>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "invalid MPEG-TS returned PES cursor binding"));
     }
     MediaTsReturnedPesCursor result;
-    result.m_streams.emplace(
-        binding.video.streamIndex, StreamCursor{binding.video.pid, std::nullopt});
-    result.m_streams.emplace(
-        binding.audio.streamIndex, StreamCursor{binding.audio.pid, std::nullopt});
+    std::visit(
+        [&result](const auto& selected) {
+            result.m_streams.emplace(
+                selected.video.streamIndex,
+                StreamCursor{selected.video.pid, std::nullopt});
+            using Binding = std::decay_t<decltype(selected)>;
+            if constexpr (std::is_same_v<
+                              Binding,
+                              MediaTsAudioVideoRuntimeBinding>) {
+                result.m_streams.emplace(
+                    selected.audio.streamIndex,
+                    StreamCursor{selected.audio.pid, std::nullopt});
+            }
+        },
+        binding);
     return ::media::Result<MediaTsReturnedPesCursor>::success(std::move(result));
 }
 

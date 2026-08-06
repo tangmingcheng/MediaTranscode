@@ -3,8 +3,18 @@
 #include <algorithm>
 #include <limits>
 #include <string>
+#include <type_traits>
 
 namespace media::ffmpeg::graph {
+namespace {
+
+std::uint16_t plannedPcrPid(const MediaTsProgramClockPolicy& policy) noexcept
+{
+    return std::visit(
+        [](const auto& selected) { return selected.pcrPid; }, policy);
+}
+
+} // namespace
 
 MediaTsClockProjection::MediaTsClockProjection(
     MediaTsProgramClockPolicy policy,
@@ -130,21 +140,17 @@ MediaTsClockProjection::MediaTsClockProjection(
         if (auto status = validateInventory(evidence.inventory); !status) return status;
     }
     if (inventoryAvailable && evidence.continuityEvent &&
-        evidence.continuityEvent->pid == m_policy.pcrPid) {
+        evidence.continuityEvent->pid == plannedPcrPid(m_policy)) {
         auto continuity =
-            m_tracker.observePcrContinuityLoss(m_policy.pcrPid);
+            m_tracker.observePcrContinuityLoss(plannedPcrPid(m_policy));
         if (!continuity) return continuity;
     }
     if (inventoryAvailable && evidence.pcrObservation &&
-        evidence.pcrObservation->pid == m_policy.pcrPid) {
+        evidence.pcrObservation->pid == plannedPcrPid(m_policy)) {
         const auto& raw = *evidence.pcrObservation;
         auto status = m_tracker.observe(MediaTsPcrObservation{
             .byteOffset = raw.byteOffset,
-            .programNumber = m_policy.programNumber,
-            .pmtPid = m_policy.pmtPid,
             .pcrPid = raw.pid,
-            .videoPid = m_policy.videoPid,
-            .audioPid = m_policy.audioPid,
             .pcr27Mhz = raw.pcr27Mhz,
             .discontinuity = false});
         if (!status) return status;
@@ -187,13 +193,14 @@ MediaTsClockProjection::MediaTsClockProjection(
 ::media::Status MediaTsClockProjection::validateInventory(
     const MediaTsProgramInventorySnapshot& inventory) const
 {
+    return std::visit([&inventory](const auto& policy) -> ::media::Status {
     const auto program = std::find_if(
         inventory.programs.begin(), inventory.programs.end(),
-        [this](const MediaTsProgramInfo& item) {
-            return item.programNumber == m_policy.programNumber;
+        [&policy](const MediaTsProgramInfo& item) {
+            return item.programNumber == policy.programNumber;
         });
-    if (program == inventory.programs.end() || program->pmtPid != m_policy.pmtPid ||
-        program->pcrPid != m_policy.pcrPid) {
+    if (program == inventory.programs.end() || program->pmtPid != policy.pmtPid ||
+        program->pcrPid != policy.pcrPid) {
         std::string actualPrograms;
         for (const auto& item : inventory.programs) {
             if (!actualPrograms.empty()) actualPrograms += ';';
@@ -204,9 +211,9 @@ MediaTsClockProjection::MediaTsClockProjection(
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument(
                 "MPEG-TS projection selected program identity mismatch: expected program=" +
-                std::to_string(m_policy.programNumber) +
-                ",pmt=" + std::to_string(m_policy.pmtPid) +
-                ",pcr=" + std::to_string(m_policy.pcrPid) +
+                std::to_string(policy.programNumber) +
+                ",pmt=" + std::to_string(policy.pmtPid) +
+                ",pcr=" + std::to_string(policy.pcrPid) +
                 "; actual " + actualPrograms));
     }
     const auto hasPid = [program](std::uint16_t pid) {
@@ -214,11 +221,22 @@ MediaTsClockProjection::MediaTsClockProjection(
             program->elementaryStreams.begin(), program->elementaryStreams.end(),
             [pid](const MediaTsElementaryStreamInfo& stream) { return stream.pid == pid; });
     };
-    if (!hasPid(m_policy.videoPid) || !hasPid(m_policy.audioPid)) {
+    using Policy = std::decay_t<decltype(policy)>;
+    const bool selectedPidsPresent = [&]() {
+        if constexpr (std::is_same_v<
+                          Policy,
+                          MediaTsVideoOnlyProgramClockPolicy>) {
+            return hasPid(policy.videoPid);
+        } else {
+            return hasPid(policy.videoPid) && hasPid(policy.audioPid);
+        }
+    }();
+    if (!selectedPidsPresent) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("MPEG-TS projection selected stream PID mismatch"));
     }
     return ::media::Status::success();
+    }, m_policy);
 }
 
 ::media::Result<MediaTsClockProjectionCheckpoint> MediaTsClockProjection::atOrBefore(

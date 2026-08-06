@@ -13,10 +13,7 @@ namespace media::ffmpeg::graph {
 class MediaTsPreflightDurationProbe final {
 public:
     static ::media::Result<MediaTsPreflightDurationProbe> create(
-        MediaTsRuntimeStreamBinding video,
-        MediaRational videoTimeBase,
-        MediaTsRuntimeStreamBinding audio,
-        MediaRational audioTimeBase,
+        MediaTsRuntimeBinding binding,
         std::size_t frameLimit);
 
     MediaTsPreflightDurationProbe(const MediaTsPreflightDurationProbe&) = delete;
@@ -33,16 +30,10 @@ public:
 
 private:
     MediaTsPreflightDurationProbe(
-        MediaTsRuntimeStreamBinding video,
-        MediaRational videoTimeBase,
-        MediaTsRuntimeStreamBinding audio,
-        MediaRational audioTimeBase,
+        MediaTsRuntimeBinding binding,
         std::size_t frameLimit) noexcept;
 
-    MediaTsRuntimeStreamBinding m_video;
-    MediaRational m_videoTimeBase;
-    MediaTsRuntimeStreamBinding m_audio;
-    MediaRational m_audioTimeBase;
+    MediaTsRuntimeBinding m_binding;
     std::size_t m_frameLimit;
     std::deque<MediaTsReadFrameEnvelope> m_replay;
     std::optional<MediaTsPacketDurationEvidence> m_videoEvidence;

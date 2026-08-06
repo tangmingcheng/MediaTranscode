@@ -154,7 +154,8 @@ public:
         auto assembled = m_assembler->onContinuityEvent(event);
         if (!assembled) return assembled;
         if (m_runtimeBinding &&
-            m_runtimeBinding->requiresSelectedPesBoundary(event.pid)) {
+            MediaTsRuntimeBindingCodec::requiresSelectedPesBoundary(
+                *m_runtimeBinding, event.pid)) {
             auto boundary = m_pesProvenance->onSourceClockBoundary(event.byteOffset);
             if (!boundary) return boundary;
         }
@@ -217,16 +218,16 @@ public:
                 ::media::ErrorInfo::invalidArgument(
                     "MPEG-TS evidence observer binding is already configured"));
         }
-        const std::array<std::uint16_t, 3> sourcePids{
-            binding.video.pid, binding.audio.pid, binding.pcrPid};
+        const auto sourcePids =
+            MediaTsRuntimeBindingCodec::sourceClockPids(binding);
         auto historicalBoundaries =
             m_timeline.completeContinuityOffsetsFor(sourcePids);
         if (!historicalBoundaries) {
             return ::media::Status::failure(historicalBoundaries.error());
         }
         auto candidate = *m_pesProvenance;
-        const std::array<std::uint16_t, 2> selectedPids{
-            binding.video.pid, binding.audio.pid};
+        const auto selectedPids =
+            MediaTsRuntimeBindingCodec::selectedElementaryPids(binding);
         auto selected = candidate.configureSelectedPids(selectedPids);
         if (!selected) return selected;
         auto replayed = candidate.replaySourceClockBoundaries(
@@ -387,21 +388,8 @@ MediaTsInputSession::probeSelectedPacketDurations(std::size_t frameLimit)
                 ::media::ErrorInfo::invalidArgument(
                     "MPEG-TS duration preflight requires one configured unread session"));
         }
-        const auto& binding = *m_runtimeContract.originBinding;
-        const FFmpegInputStreamSnapshot* video = nullptr;
-        const FFmpegInputStreamSnapshot* audio = nullptr;
-        for (const auto& stream : m_streamSnapshots) {
-            if (stream.index == binding.video.streamIndex) video = &stream;
-            if (stream.index == binding.audio.streamIndex) audio = &stream;
-        }
-        if (!video || !audio) {
-            return ::media::Result<MediaTsSelectedPacketDurationEvidence>::failure(
-                ::media::ErrorInfo::notInitialized(
-                    "MPEG-TS duration preflight selected stream snapshots are absent"));
-        }
         auto created = MediaTsPreflightDurationProbe::create(
-            binding.video, video->time.timeBase,
-            binding.audio, audio->time.timeBase,
+            *m_runtimeContract.originBinding,
             frameLimit);
         if (!created) {
             return ::media::Result<MediaTsSelectedPacketDurationEvidence>::failure(
@@ -443,55 +431,64 @@ MediaTsInputSession::probeSelectedPacketDurations(std::size_t frameLimit)
 ::media::Result<MediaTsReadFrameEnvelope>
 MediaTsInputSession::readFrameFromSource()
 {
-
-    auto packet = ::media::ffmpeg::makePacket();
-    if (!packet) {
-        return ::media::Result<MediaTsReadFrameEnvelope>::failure(
-            ::media::ErrorInfo::allocationFailed("failed to allocate MPEG-TS packet"));
-    }
-    const int result = av_read_frame(m_formatContext, packet.get());
-    const auto observerStatus = m_observedAvio->status();
-    if (!observerStatus) {
-        return ::media::Result<MediaTsReadFrameEnvelope>::failure(observerStatus.error());
-    }
-    if (result >= 0) {
-        auto provenance = provenanceFor(*packet);
-        if (!provenance) {
-            return ::media::Result<MediaTsReadFrameEnvelope>::failure(provenance.error());
-        }
-        return ::media::Result<MediaTsReadFrameEnvelope>::success(MediaTsReadFrameEnvelope{
-            MediaTsReadFrameState::Frame, std::move(packet), provenance.value()});
-    }
-    if (result == AVERROR(EAGAIN) && !m_interruptState.cancelled()) {
-        return ::media::Result<MediaTsReadFrameEnvelope>::success(
-            MediaTsReadFrameEnvelope{MediaTsReadFrameState::Waiting});
-    }
-    const auto termination = classifyFFmpegInputReadTermination(
-        result, m_interruptState.cancelled(), "MPEG-TS av_read_frame");
-    if (termination.kind() == FFmpegInputReadTerminationKind::EndOfStream) {
-        auto finished = m_evidenceObserver->finish();
-        if (!finished) {
+    for (;;) {
+        auto packet = ::media::ffmpeg::makePacket();
+        if (!packet) {
             return ::media::Result<MediaTsReadFrameEnvelope>::failure(
-                finished.error());
+                ::media::ErrorInfo::allocationFailed(
+                    "failed to allocate MPEG-TS packet"));
         }
-        return ::media::Result<MediaTsReadFrameEnvelope>::success(
-            MediaTsReadFrameEnvelope{MediaTsReadFrameState::EndOfStream});
+        const int result = av_read_frame(m_formatContext, packet.get());
+        const auto observerStatus = m_observedAvio->status();
+        if (!observerStatus) {
+            return ::media::Result<MediaTsReadFrameEnvelope>::failure(
+                observerStatus.error());
+        }
+        if (result >= 0) {
+            if (m_runtimeContract.originBinding &&
+                std::holds_alternative<MediaTsVideoOnlyRuntimeBinding>(
+                    *m_runtimeContract.originBinding) &&
+                !MediaTsRuntimeBindingCodec::containsStreamIndex(
+                    *m_runtimeContract.originBinding,
+                    packet->stream_index)) {
+                continue;
+            }
+            auto provenance = provenanceFor(*packet);
+            if (!provenance) {
+                return ::media::Result<MediaTsReadFrameEnvelope>::failure(
+                    provenance.error());
+            }
+            return ::media::Result<MediaTsReadFrameEnvelope>::success(
+                MediaTsReadFrameEnvelope{MediaTsReadFrameState::Frame,
+                                         std::move(packet),
+                                         provenance.value()});
+        }
+        if (result == AVERROR(EAGAIN) && !m_interruptState.cancelled()) {
+            return ::media::Result<MediaTsReadFrameEnvelope>::success(
+                MediaTsReadFrameEnvelope{MediaTsReadFrameState::Waiting});
+        }
+        const auto termination = classifyFFmpegInputReadTermination(
+            result, m_interruptState.cancelled(), "MPEG-TS av_read_frame");
+        if (termination.kind() == FFmpegInputReadTerminationKind::EndOfStream) {
+            auto finished = m_evidenceObserver->finish();
+            if (!finished) {
+                return ::media::Result<MediaTsReadFrameEnvelope>::failure(
+                    finished.error());
+            }
+            return ::media::Result<MediaTsReadFrameEnvelope>::success(
+                MediaTsReadFrameEnvelope{MediaTsReadFrameState::EndOfStream});
+        }
+        return ::media::Result<MediaTsReadFrameEnvelope>::failure(
+            *termination.error());
     }
-    return ::media::Result<MediaTsReadFrameEnvelope>::failure(
-        *termination.error());
 }
 
 ::media::Status MediaTsInputSession::configureRuntimeBinding(
     const MediaTsRuntimeBinding& binding)
 {
     if (m_runtimeBindingConfigured ||
-        binding.originPolicy != MediaTsPacketOriginPolicy::PerStreamPesCarry ||
-        binding.video.streamIndex < 0 || binding.audio.streamIndex < 0 ||
-        binding.video.streamIndex == binding.audio.streamIndex ||
-        binding.video.pid == 0 || binding.audio.pid == 0 ||
-        binding.video.pid == binding.audio.pid ||
-        binding.pcrPid == 0 || binding.pcrPid >= 0x1FFF ||
-        binding.pesProvenanceCapacity != m_runtimeContract.pesProvenanceCapacity) {
+        !MediaTsRuntimeBindingCodec::validate(
+            binding, m_runtimeContract.pesProvenanceCapacity)) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "invalid MPEG-TS runtime PES provenance binding"));
     }
