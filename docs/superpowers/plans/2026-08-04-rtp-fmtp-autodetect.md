@@ -53,8 +53,8 @@
 
 - [x] Update README, ARCHITECTURE, completion evidence, root plan, and QUALITY_SCORE.
 - [x] Review the full diff for planner authority, RAII, duplication, lifecycle, UTF-8/CRLF, and `git diff --check`.
-- [ ] Commit and push all changes, create a ready PR, and record residual risks.
-- [ ] Have a fresh agent review the PR; fix and revalidate until it returns PASS.
+- [x] Commit and push all changes, create a ready PR, and record residual risks.
+- [x] Have a fresh agent review the PR; fix and revalidate until it returns PASS.
 
 ### Task 6: Synchronize prepared A/V transport ownership
 
@@ -106,6 +106,6 @@
   activation, drain the finite prepared queue, then receive directly from the
   same transport using the planner-provided read timeout.
 
-- [ ] **Step 7: Commit and cross-review**
+- [x] **Step 7: Commit and cross-review**
 
   Commit the focused ownership fix, push the current branch, and assign two fresh subagents to review planner authority, RAII, A/V start alignment, error visibility, and absence of hidden-error strategies. Resolve every blocking finding before final acceptance.
