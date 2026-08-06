@@ -83,7 +83,7 @@ $inputRtp = @(
     '--audio-rtp-codec','aac','--audio-rtp-payload-type','97',
     '--audio-rtp-clock-rate','44100','--audio-rtp-channels','2',
     '--audio-rtp-fmtp','profile-level-id=1;mode=AAC-hbr;sizelength=13;indexlength=3;indexdeltalength=3;config=1210',
-    '--open-timeout-ms','5000','--read-timeout-ms','2000',
+    '--open-timeout-ms','30000','--read-timeout-ms','2000',
     '--analyze-duration-us','5000000','--probe-size','5000000'
 )
 $common = @(
@@ -106,7 +106,7 @@ $cli = 'out/build/x64-debug/media_transcode_realtime_video_cli.exe'
     --sdp out/build/x64-debug/rtp-to-tsrtp.sdp
 ```
 
-Probe limits have exact meanings: `--open-timeout-ms` is the total startup deadline, `--analyze-duration-us` begins at the first matching RTP packet, `--probe-size` caps all bytes received during preflight, and `--read-timeout-ms` bounds each socket wait. Timeout, wrong PT, incomplete/conflicting parameter sets, unsupported packetization, or capacity exhaustion fails preflight before the DAG starts.
+Probe limits have exact meanings: `--open-timeout-ms` is the target deadline for controllable startup work, `--analyze-duration-us` is the maximum interval for obtaining complete unambiguous facts after the first matching RTP packet, `--probe-size` caps all bytes received during preflight, and `--read-timeout-ms` bounds each socket wait. Detection ends when the required parameter sets are complete; conflicts observed before completion fail. FFmpeg/driver capability calls are checked for deadline overrun immediately after return because those APIs are not cancellable. Timeout, wrong PT, incomplete/conflicting parameter sets, unsupported packetization, or capacity exhaustion fails preflight before the DAG starts.
 
 Add `--max-duration SECONDS` only when the caller wants the explicit CLI stop
 gate; do not use `0`, a sentinel, or a large replacement duration.

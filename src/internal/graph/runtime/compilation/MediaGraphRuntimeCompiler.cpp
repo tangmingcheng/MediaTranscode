@@ -83,6 +83,22 @@ public:
                 ::media::ErrorInfo::notInitialized(
                     "MediaGraphRuntime missing prepared RealtimeInput binding"));
         }
+        if (node.kind == MediaNodeKind::RawRtpInput) {
+            auto required = requiredBoolNodeOption(
+                &node.options, "RawRtpInputNode",
+                "rtp.prepared_input_required");
+            if (!required) {
+                return ::media::Status::failure(required.error());
+            }
+            const bool hasBinding = bindingIds.contains(node.id.value);
+            if (required.value() != hasBinding) {
+                return ::media::Status::failure(
+                    ::media::ErrorInfo::notInitialized(
+                        required.value()
+                            ? "MediaGraphRuntime missing required prepared RawRtpInput binding"
+                            : "MediaGraphRuntime node-owned RawRtpInput rejects prepared binding"));
+            }
+        }
     }
     if (executable.avSyncBinding) {
         return MediaAvSyncGraphShapeValidator::validate(

@@ -47,6 +47,9 @@ public:
     bool valid() const noexcept;
     std::optional<MediaPreparedRealtimeInputKind> kind() const noexcept;
     const FFmpegInputStreamSnapshot* inputStreamSnapshot(int streamIndex) const noexcept;
+    ::media::Status startRawRtpPreflightCapture();
+    ::media::Status rawRtpCaptureStatus();
+    ::media::Status sealRawRtpPreflight();
     ::media::Result<MediaBufferRef> releaseBuffer();
 
 private:

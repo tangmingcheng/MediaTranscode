@@ -16,9 +16,11 @@
 
 ## 容量与错误
 
-`probe-size` 是每个 prepared 流允许保留的显式字节容量。视频探测证据不完整、任一路保留容量超限、transport 接收失败、绑定缺失或绑定身份冲突都必须在 preflight 或编译阶段明确失败，DAG 不得以缺失数据启动。
+`probe-size` 是视频和音频 prepared 数据共享的单一 aggregate 字节容量，不是逐流容量。视频探测证据不完整、两路合计保留容量超限、transport 接收失败、绑定缺失或绑定身份冲突都必须在 preflight 或编译阶段明确失败，DAG 不得以缺失数据启动。
 
 不得通过扩大队列、延长时钟阈值、丢弃早期视频、等待音频追赶、吞掉 discontinuity 或 runtime fallback 来维持运行。真实 discontinuity 和真实时钟失效仍按既有错误策略处理。
+
+两个 transport 必须先全部绑定，再开始 preflight 捕获。runtime 激活时停止捕获线程，有限预读队列排空后直接从各自原 transport 接收；不得把 prepared buffer 变成永久中间队列。
 
 ## 模块边界
 

@@ -129,6 +129,7 @@ MediaAvStartupVideoPreparationState::reserveNextVideoUnit(
     MediaOutputCapacityReservationHandle reservation)
 {
     std::shared_ptr<MediaNodeWakeup> wakeup;
+    std::shared_ptr<MediaNodeWakeup> extractor;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (auto identity = validateIdentityLocked(generation, releaseIdentity);
@@ -140,8 +141,10 @@ MediaAvStartupVideoPreparationState::reserveNextVideoUnit(
         m_filterOutputReservation = std::move(reservation);
         m_phase = MediaAvStartupVideoPreparationPhase::FilterReady;
         wakeup = m_sequencerWakeup.lock();
+        extractor = m_extractorWakeup.lock();
     }
     if (wakeup) wakeup->notify();
+    if (extractor) extractor->notify();
     return ::media::Status::success();
 }
 

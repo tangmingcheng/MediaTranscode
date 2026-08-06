@@ -88,6 +88,33 @@ const FFmpegInputStreamSnapshot* MediaPreparedRealtimeInput::inputStreamSnapshot
     return found == snapshots.end() ? nullptr : &*found;
 }
 
+::media::Status MediaPreparedRealtimeInput::startRawRtpPreflightCapture()
+{
+    if (!m_rawRtpBuffer) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "raw RTP preflight capture requires a prepared raw RTP input"));
+    }
+    return m_rawRtpBuffer->startPreflightCapture();
+}
+
+::media::Status MediaPreparedRealtimeInput::rawRtpCaptureStatus()
+{
+    if (!m_rawRtpBuffer) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "raw RTP capture status requires a prepared raw RTP input"));
+    }
+    return m_rawRtpBuffer->captureStatus();
+}
+
+::media::Status MediaPreparedRealtimeInput::sealRawRtpPreflight()
+{
+    if (!m_rawRtpBuffer) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "raw RTP preflight seal requires a prepared raw RTP input"));
+    }
+    return m_rawRtpBuffer->sealPreflight();
+}
+
 ::media::Result<MediaBufferRef> MediaPreparedRealtimeInput::releaseBuffer()
 {
     if (m_genericBuffer) return ::media::Result<MediaBufferRef>::success(MediaBufferRef(m_genericBuffer.release()));

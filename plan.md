@@ -6,7 +6,7 @@
 - [x] Probe separate video RTP before planning while retaining the same RTP/RTCP transport and buffered datagrams.
 - [x] Bind the prepared raw RTP input to runtime without port rebinding or fallback.
 - [x] Preserve manual video FMTP, required AAC FMTP, canonical A/V scheduling, and strict failure behavior.
-- [ ] Complete approved VLC visual acceptance, final documentation/quality review, PR, and independent PASS review.
+- [ ] Rebuild and repeat the hardware matrix after the finite prepared-queue handoff fix, then complete final documentation/quality review, PR, and independent PASS review.
 
 Detailed design and execution checklist:
 

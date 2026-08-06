@@ -15,6 +15,7 @@
 
 #include <string>
 #include <optional>
+#include <string_view>
 #include <tuple>
 #include <utility>
 
@@ -27,6 +28,40 @@ struct RealtimePacketInputChain {
     MediaNodeId input;
     PacketSelectSegment packetSelect;
 };
+
+::media::Result<MediaNodeId> findPreparedInputTarget(
+    const MediaGraph& graph,
+    MediaPreparedRealtimeInputKind expectedKind,
+    std::optional<std::string_view> rawRtpStream)
+{
+    if ((expectedKind == MediaPreparedRealtimeInputKind::RawRtp) !=
+        rawRtpStream.has_value()) {
+        return ::media::Result<MediaNodeId>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "prepared input target requires an exact kind and stream identity"));
+    }
+    MediaNodeId target = MediaNodeId::invalid();
+    for (const MediaNode& node : graph.nodes()) {
+        const bool matches = rawRtpStream
+            ? node.kind == MediaNodeKind::RawRtpInput &&
+                node.options.has("rtp.stream_kind") &&
+                node.options.value("rtp.stream_kind") == *rawRtpStream
+            : node.kind == MediaNodeKind::RealtimeInput;
+        if (!matches) continue;
+        if (target.isValid()) {
+            return ::media::Result<MediaNodeId>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "realtime executable graph has duplicate prepared input targets"));
+        }
+        target = node.id;
+    }
+    if (!target.isValid()) {
+        return ::media::Result<MediaNodeId>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "realtime executable graph has no prepared input target"));
+    }
+    return ::media::Result<MediaNodeId>::success(target);
+}
 
 ::media::Result<void> addRealtimeInputPorts(MediaGraph& graph, MediaNodeId input)
 {
@@ -705,15 +740,51 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
         return ::media::Result<MediaRealtimeExecutableGraph>::failure(status.error());
     }
     const RealtimeInputType inputType = preflight.plan.inputType;
-    const bool requiresPrepared = preflight.prepared.has_value();
-    if (inputType != RealtimeInputType::RtpPort && !requiresPrepared) {
+    const auto requiredPreparedKind =
+        preflight.plan.requiredPreparedInputKind;
+    const bool requiresPrepared = requiredPreparedKind.has_value();
+    if (!requiresPrepared && inputType != RealtimeInputType::RtpPort) {
         return ::media::Result<MediaRealtimeExecutableGraph>::failure(
             ::media::ErrorInfo::notInitialized(
                 "non-RTP realtime executable graph requires prepared input"));
     }
-    if (requiresPrepared && (!preflight.prepared || !preflight.prepared->valid())) {
+    if (!requiresPrepared && preflight.prepared) {
         return ::media::Result<MediaRealtimeExecutableGraph>::failure(
-            ::media::ErrorInfo::notInitialized("realtime executable graph requires prepared input"));
+            ::media::ErrorInfo::invalidArgument(
+                "node-owned raw RTP plan rejects an unplanned prepared input"));
+    }
+    if (requiresPrepared && (!preflight.prepared || !preflight.prepared->valid() ||
+        preflight.prepared->kind() != requiredPreparedKind)) {
+        return ::media::Result<MediaRealtimeExecutableGraph>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "realtime executable graph requires the exact planner-selected prepared input"));
+    }
+    bool requiresPreparedAudio = false;
+    if (preflight.plan.useIsolatedAudioInput) {
+        if (!preflight.plan.audioInput.requiresPreparedInput) {
+            return ::media::Result<MediaRealtimeExecutableGraph>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "isolated realtime audio input requires an explicit prepared-input ownership decision"));
+        }
+        requiresPreparedAudio =
+            *preflight.plan.audioInput.requiresPreparedInput;
+    } else if (preflight.plan.audioInput.requiresPreparedInput) {
+        return ::media::Result<MediaRealtimeExecutableGraph>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "non-isolated realtime audio rejects a prepared-input ownership decision"));
+    }
+    if (requiresPreparedAudio &&
+        (!preflight.preparedAudio || !preflight.preparedAudio->valid() ||
+         preflight.preparedAudio->kind() !=
+             MediaPreparedRealtimeInputKind::RawRtp)) {
+        return ::media::Result<MediaRealtimeExecutableGraph>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "realtime executable graph requires synchronized prepared RTP audio input"));
+    }
+    if (!requiresPreparedAudio && preflight.preparedAudio) {
+        return ::media::Result<MediaRealtimeExecutableGraph>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "realtime executable graph rejects unplanned prepared audio input"));
     }
     std::optional<MediaAvSyncRuntimeBinding> avSyncBinding;
     if (preflight.plan.avSyncRuntime) {
@@ -757,38 +828,34 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
     executable.graph = std::move(graphResult).value();
     executable.avSyncBinding = std::move(avSyncBinding);
     if (requiresPrepared) {
-        const auto preparedKind = preflight.prepared->kind();
-        if (!preparedKind) {
+        auto inputId = findPreparedInputTarget(
+            executable.graph, *requiredPreparedKind,
+            *requiredPreparedKind == MediaPreparedRealtimeInputKind::RawRtp
+                ? std::optional<std::string_view>("video")
+                : std::nullopt);
+        if (!inputId) {
             return ::media::Result<MediaRealtimeExecutableGraph>::failure(
-                ::media::ErrorInfo::notInitialized(
-                    "realtime executable graph prepared input kind is missing"));
-        }
-        MediaNodeId inputId = MediaNodeId::invalid();
-        for (const MediaNode& node : executable.graph.nodes()) {
-            const bool matches = *preparedKind ==
-                    MediaPreparedRealtimeInputKind::RawRtp
-                ? node.kind == MediaNodeKind::RawRtpInput &&
-                    node.options.has("rtp.stream_kind") &&
-                    node.options.value("rtp.stream_kind") == "video"
-                : node.kind == MediaNodeKind::RealtimeInput;
-            if (!matches) continue;
-            if (inputId.isValid()) {
-                return ::media::Result<MediaRealtimeExecutableGraph>::failure(
-                    ::media::ErrorInfo::invalidArgument(
-                        "realtime executable graph has duplicate prepared input targets"));
-            }
-            inputId = node.id;
-        }
-        if (!inputId.isValid()) {
-            return ::media::Result<MediaRealtimeExecutableGraph>::failure(
-                ::media::ErrorInfo::notInitialized(
-                    "realtime executable graph has no prepared input target"));
+                inputId.error());
         }
         executable.inputBindings.push_back(
             MediaPreparedRealtimeInputBinding{
-                inputId,
-                *preparedKind,
+                inputId.value(),
+                *requiredPreparedKind,
                 std::move(*preflight.prepared)});
+    }
+    if (requiresPreparedAudio) {
+        auto audioInputId = findPreparedInputTarget(
+            executable.graph, MediaPreparedRealtimeInputKind::RawRtp,
+            std::optional<std::string_view>("audio"));
+        if (!audioInputId) {
+            return ::media::Result<MediaRealtimeExecutableGraph>::failure(
+                audioInputId.error());
+        }
+        executable.inputBindings.push_back(
+            MediaPreparedRealtimeInputBinding{
+                audioInputId.value(),
+                MediaPreparedRealtimeInputKind::RawRtp,
+                std::move(*preflight.preparedAudio)});
     }
     return ::media::Result<MediaRealtimeExecutableGraph>::success(std::move(executable));
 }

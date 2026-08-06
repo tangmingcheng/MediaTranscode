@@ -11,6 +11,10 @@
 ## Global Constraints
 
 - Planner is the only decision owner; runtime receives complete parameters and never guesses or falls back.
+- `analyze-duration-us` is the maximum interval to obtain complete unambiguous
+  facts, not a mandatory dwell after the facts are complete.
+- `open-timeout-ms` bounds controllable startup work; non-cancellable
+  FFmpeg/driver capability calls are checked for overrun immediately on return.
 - H.264/HEVC video only; AAC FMTP remains manual and Opus keeps its existing no-FMTP contract.
 - Do not add or restore tracked tests. Use real CLI media chains and removable local tools under `out/`.
 - Preserve canonical A/V synchronization and all existing manual raw RTP behavior.
@@ -48,7 +52,7 @@
 ### Task 5: Documentation, quality, and delivery
 
 - [x] Update README, ARCHITECTURE, completion evidence, root plan, and QUALITY_SCORE.
-- [ ] Review the full diff for planner authority, RAII, duplication, lifecycle, UTF-8/CRLF, and `git diff --check`.
+- [x] Review the full diff for planner authority, RAII, duplication, lifecycle, UTF-8/CRLF, and `git diff --check`.
 - [ ] Commit and push all changes, create a ready PR, and record residual risks.
 - [ ] Have a fresh agent review the PR; fix and revalidate until it returns PASS.
 
@@ -72,29 +76,35 @@
 - Planner product: both raw RTP node plans set `requiresPreparedInput=true` only in automatic video fmtp mode; manual mode sets neither prepared requirement and performs no network I/O.
 - Executable product: each prepared owner is bound exactly once to the `RawRtpInputNode` whose planned `rtp.stream_kind` matches its stream identity.
 
-- [ ] **Step 1: Preserve the failing production evidence**
+- [x] **Step 1: Preserve the failing production evidence**
 
   Record the observed automatic-mode failure: video prepared transport starts before audio, `locked_generation=1`, `state_generation=2`, peak queue 829, then `A/V startup clock rejects malformed reacquisition evidence`. Do not add a tracked test or test script.
 
-- [ ] **Step 2: Deepen the preparer interface around an A/V session**
+- [x] **Step 2: Deepen the preparer interface around an A/V session**
 
-  Make the raw RTP preparer open both explicitly planned transports before receiving probe evidence. Probe only video; capture audio as opaque RTP/RTCP datagrams with original monotonic arrival times. Each stream keeps its own `probe-size` capacity and returns its own RAII owner.
+  Make the raw RTP preparer open both explicitly planned transports before receiving probe evidence. Probe only video; capture audio as opaque RTP/RTCP datagrams with original monotonic arrival times. Both streams share the request's single aggregate `probe-size` capacity while returning distinct RAII transport owners.
 
-- [ ] **Step 3: Carry typed per-stream prepared resources through preflight**
+- [x] **Step 3: Carry typed per-stream prepared resources through preflight**
 
   Replace the single raw-RTP prepared resource assumption with a per-stream prepared collection. Reject duplicate stream identities, missing video/audio resources, kind mismatches, or an audio prepared resource when no isolated audio input exists.
 
-- [ ] **Step 4: Bind both resources without runtime decisions**
+- [x] **Step 4: Bind both resources without runtime decisions**
 
   Have the planner mark both raw input node plans as prepared-required in automatic mode. Have the executable builder match planned stream identity to the exact node and create two bindings. Keep compiler and runtime factory symmetric: required means one exact binding; node-owned means no binding.
 
-- [ ] **Step 5: Verify the root-cause fix with the production chain**
+- [x] **Step 5: Verify the root-cause fix with the production chain**
 
   Rebuild only through `.agents/skills/building-with-vs2026/scripts/rebuild_debug.ps1`. Then start VLC, CLI, and the absolute FFmpeg command using `out/acceptance/test-continuous-120s.mp4`. Confirm both prepared queues cover the same source interval, queue and working-set trends stabilize, A/V drift is not perceptible, and no false generation transition occurs.
 
-- [ ] **Step 6: Verify strict failure and manual behavior**
+- [x] **Step 6: Verify strict failure and manual behavior**
 
   Confirm any prepared-stream capacity overflow fails before DAG startup, a missing binding fails compilation, and manual H.264 fmtp logs no probe/prepared path. Do not widen queues or clock liveness thresholds and do not add fallback.
+
+- [x] **Step 6a: Remove permanent prepared capture**
+
+  Bind both sockets before capture, stop preflight capture at runtime
+  activation, drain the finite prepared queue, then receive directly from the
+  same transport using the planner-provided read timeout.
 
 - [ ] **Step 7: Commit and cross-review**
 

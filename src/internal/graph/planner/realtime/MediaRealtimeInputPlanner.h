@@ -14,6 +14,9 @@ namespace media::ffmpeg::graph {
 struct MediaAvSyncPlan;
 
 struct MediaRealtimeRawInputPlan final {
+    static constexpr int VideoStreamIndex = 0;
+    static constexpr int AudioStreamIndex = 0;
+
     std::string videoUrl;
     std::string videoSdp;
     MediaInputVideoStreamInfo video;

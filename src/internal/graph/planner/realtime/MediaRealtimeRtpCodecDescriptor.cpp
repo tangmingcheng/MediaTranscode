@@ -4,11 +4,13 @@
 #include "internal/graph/protocol/rtp/MediaAacAudioSpecificConfig.h"
 #include "internal/graph/protocol/rtp/MediaOpusRtpCapability.h"
 #include "internal/graph/protocol/rtp/MediaRtpFmtp.h"
+#include "internal/graph/protocol/rtp/MediaRtpDepacketizerFactory.h"
 
 #include <algorithm>
 #include <cctype>
 #include <initializer_list>
 #include <string>
+#include <utility>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -206,6 +208,34 @@ std::string lowercaseAscii(std::string value)
     }
     return ::media::Result<MediaRealtimeRtpCodecDescriptor>::failure(
         ::media::ErrorInfo::invalidArgument("RTP codec descriptor requires audio or video stream kind"));
+}
+
+::media::Result<MediaRtpDepacketizerConfig>
+MediaRealtimeRtpCodecRegistry::planDepacketizerConfig(
+    MediaStreamKind streamKind,
+    const MediaRealtimeRtpInputMetadata& metadata,
+    const MediaRealtimeRtpCodecDescriptor& descriptor)
+{
+    if (!metadata.payloadType ||
+        (descriptor.requiresFmtp && !metadata.fmtp)) {
+        return ::media::Result<MediaRtpDepacketizerConfig>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "RTP depacketizer config requires validated signaling metadata"));
+    }
+    MediaRtpDepacketizerConfig config{
+        streamKind,
+        descriptor.codecName,
+        descriptor.requiresFmtp ? *metadata.fmtp : std::string{},
+        static_cast<std::uint8_t>(*metadata.payloadType),
+        descriptor.clockRate,
+        descriptor.channels,
+        descriptor.accessUnitDurationRtpTicks};
+    if (auto status = MediaRtpDepacketizerFactory::validate(config); !status) {
+        return ::media::Result<MediaRtpDepacketizerConfig>::failure(
+            status.error());
+    }
+    return ::media::Result<MediaRtpDepacketizerConfig>::success(
+        std::move(config));
 }
 
 } // namespace media::ffmpeg::graph

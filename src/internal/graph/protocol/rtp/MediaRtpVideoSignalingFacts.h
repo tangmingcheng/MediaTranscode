@@ -12,6 +12,11 @@
 
 namespace media::ffmpeg::graph {
 
+enum class MediaRtpVideoPacketizationPolicy : std::uint8_t {
+    H264NonInterleaved = 0,
+    HevcNonInterleavedNoDonl = 1
+};
+
 struct MediaH264SignalingFacts final {
     std::vector<std::uint8_t> sps;
     std::vector<std::uint8_t> pps;
@@ -43,19 +48,29 @@ struct MediaRtpVideoSignalingObservation final {
     bool complete = false;
 };
 
+struct MediaRtpVideoSignalingEvidence final {
+    std::optional<std::uint32_t> ssrc;
+    bool hasVps = false;
+    bool hasSps = false;
+    bool hasPps = false;
+};
+
 class MediaRtpVideoSignalingObserver final {
 public:
     static ::media::Result<MediaRtpVideoSignalingObserver> create(
         std::string codecName,
         std::uint8_t payloadType,
-        int clockRate);
+        int clockRate,
+        MediaRtpVideoPacketizationPolicy packetizationPolicy);
 
     ::media::Result<MediaRtpVideoSignalingObservation> observe(
         const MediaRtpPacket& packet);
+    void discontinuity() noexcept;
     ::media::Result<MediaDetectedRtpVideoSignaling> detected(
         std::size_t packetCount,
         std::size_t datagramBytes,
         std::int64_t elapsedMilliseconds) const;
+    MediaRtpVideoSignalingEvidence evidence() const noexcept;
 
 private:
     using NalParser = std::variant<MediaH264RtpNalUnitParser,

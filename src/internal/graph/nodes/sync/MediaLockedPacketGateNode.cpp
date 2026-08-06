@@ -1,5 +1,6 @@
 #include "internal/graph/nodes/sync/MediaLockedPacketGateNode.h"
 
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/runtime/buffer/FFmpegPacketBuffer.h"
 #include "internal/graph/runtime/buffer/MediaControlBuffer.h"
@@ -7,6 +8,7 @@
 #include "internal/graph/runtime/context/MediaGraphExecutionContext.h"
 #include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
 
+#include <string>
 #include <utility>
 
 namespace media::ffmpeg::graph {
@@ -265,6 +267,20 @@ MediaLockedPacketGateNode::acceptClock(const MediaBufferRef& buffer)
                 MediaSourceClockReadiness::ReacquireRequired ||
             state->generation() == 0 ||
             state->generation() != *m_lockedGeneration) {
+            mediaGraphDiagnosticLog(
+                MediaGraphDiagnosticLevel::State,
+                MediaGraphDiagnosticPhase::RuntimeNode,
+                "locked_gate_discontinuity_evidence stream=" +
+                    std::string(m_streamKind == MediaStreamKind::Video
+                        ? "video" : "audio") +
+                    " locked_generation=" +
+                    (m_lockedGeneration
+                        ? std::to_string(*m_lockedGeneration)
+                        : std::string("none")) +
+                    " state_generation=" +
+                    std::to_string(state->generation()) +
+                    " readiness=" +
+                    std::to_string(static_cast<int>(state->readiness())));
             return GateDispositionResult::failure(
                 invalidGateEvidence(
                     "Locked packet gate rejects malformed discontinuity evidence"));

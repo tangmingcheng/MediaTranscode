@@ -7,7 +7,7 @@
 #include "internal/graph/planner/realtime/MediaTsProgramSelector.h"
 #include "internal/graph/planner/audio/capability/MediaAudioDecoderCapabilityProvider.h"
 #include "internal/graph/protocol/rtp/MediaRtpFmtp.h"
-#include "internal/graph/protocol/rtp/MediaRtpDepacketizerFactory.h"
+#include "internal/graph/utils/MediaCodecNameUtils.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
 
 #include <algorithm>
@@ -29,8 +29,6 @@ extern "C" {
 namespace media::ffmpeg::graph {
 namespace {
 
-constexpr int RawVideoStreamIndex = 0;
-constexpr int RawAudioStreamIndex = 0;
 constexpr int RtpReceiveBufferBytes = 4 * 1024 * 1024;
 constexpr int RtpMaximumDatagramBytes = 65'535;
 constexpr std::size_t RtpReorderWindowPackets = 64;
@@ -430,22 +428,6 @@ MediaRealtimeRtpTransportPlan transportPlan(
     };
 }
 
-MediaRtpDepacketizerConfig depacketizerPlan(
-    MediaStreamKind streamKind,
-    const MediaRealtimeRtpInputMetadata& metadata,
-    const MediaRealtimeRtpCodecDescriptor& descriptor)
-{
-    return MediaRtpDepacketizerConfig{
-        streamKind,
-        descriptor.codecName,
-        descriptor.requiresFmtp ? *metadata.fmtp : std::string{},
-        static_cast<uint8_t>(*metadata.payloadType),
-        descriptor.clockRate,
-        descriptor.channels,
-        descriptor.accessUnitDurationRtpTicks
-    };
-}
-
 void fillNodePlan(
     const MediaRealtimeRtpTranscodeRequest& request,
     std::string url,
@@ -496,16 +478,19 @@ void fillNodePlan(
     MediaRealtimeRawInputPlan result;
     result.videoUrl = request.input.videoRtp.url;
     result.videoSdp.clear();
-    result.video.streamIndex = RawVideoStreamIndex;
+    result.video.streamIndex = MediaRealtimeRawInputPlan::VideoStreamIndex;
     result.video.codecName = videoDescriptor.value().codecName;
     result.videoTransport = transportPlan(
         videoEndpoint.value(), request.input.videoRtp, videoDescriptor.value(),
         *request.input.readTimeoutMs, selectedClockPolicy.value(),
         selectedClockPolicy.value().lossPolicy);
-    result.videoDepacketizer = depacketizerPlan(MediaStreamKind::Video, request.input.videoRtp, videoDescriptor.value());
-    if (auto status = MediaRtpDepacketizerFactory::validate(result.videoDepacketizer); !status) {
-        return ::media::Result<MediaRealtimeRawInputPlan>::failure(status.error());
+    auto videoDepacketizer = MediaRealtimeRtpCodecRegistry::planDepacketizerConfig(
+        MediaStreamKind::Video, request.input.videoRtp, videoDescriptor.value());
+    if (!videoDepacketizer) {
+        return ::media::Result<MediaRealtimeRawInputPlan>::failure(
+            videoDepacketizer.error());
     }
+    result.videoDepacketizer = std::move(videoDepacketizer).value();
 
     if (MediaRealtimeRequestClassifier::audioRequested(request)) {
         auto audioDescriptor = MediaRealtimeRtpCodecRegistry::describe(MediaStreamKind::Audio, request.input.audioRtp);
@@ -515,7 +500,7 @@ void fillNodePlan(
         result.audioUrl = request.input.audioRtp.url;
         result.audioSdp.clear();
         MediaInputAudioStreamInfo audio;
-        audio.streamIndex = RawAudioStreamIndex;
+        audio.streamIndex = MediaRealtimeRawInputPlan::AudioStreamIndex;
         audio.codecName = audioDescriptor.value().codecName;
         audio.sampleRate = audioDescriptor.value().clockRate;
         audio.channels = audioDescriptor.value().channels;
@@ -572,10 +557,13 @@ void fillNodePlan(
             audioEndpoint.value(), request.input.audioRtp, audioDescriptor.value(),
             *request.input.readTimeoutMs, selectedClockPolicy.value(),
             selectedClockPolicy.value().secondaryLossPolicy);
-        result.audioDepacketizer = depacketizerPlan(MediaStreamKind::Audio, request.input.audioRtp, audioDescriptor.value());
-        if (auto status = MediaRtpDepacketizerFactory::validate(*result.audioDepacketizer); !status) {
-            return ::media::Result<MediaRealtimeRawInputPlan>::failure(status.error());
+        auto audioDepacketizer = MediaRealtimeRtpCodecRegistry::planDepacketizerConfig(
+            MediaStreamKind::Audio, request.input.audioRtp, audioDescriptor.value());
+        if (!audioDepacketizer) {
+            return ::media::Result<MediaRealtimeRawInputPlan>::failure(
+                audioDepacketizer.error());
         }
+        result.audioDepacketizer = std::move(audioDepacketizer).value();
     }
     return ::media::Result<MediaRealtimeRawInputPlan>::success(std::move(result));
 }
@@ -642,22 +630,72 @@ MediaRealtimeInputPlanner::prepareRawRtpVideo(
     const bool ipv6 = parsedEndpoint.value().host.find(':') !=
         std::string::npos;
     MediaRawRtpProbePlan plan;
-    plan.transport = MediaRtpUdpTransportConfig{
-        ipv6 ? MediaIpAddressFamily::Ipv6 : MediaIpAddressFamily::Ipv4,
-        parsedEndpoint.value().host,
-        parsedEndpoint.value().port,
-        static_cast<std::uint16_t>(parsedEndpoint.value().port + 1),
-        RtpReceiveBufferBytes,
-        RtpMaximumDatagramBytes,
-        *request.input.readTimeoutMs,
-        nullptr};
-    plan.codecName = metadata.codecName;
-    plan.payloadType = static_cast<std::uint8_t>(*metadata.payloadType);
-    plan.clockRate = *metadata.clockRate;
+    plan.video = MediaRawRtpPreparedStreamPlan{
+        MediaRtpUdpTransportConfig{
+            ipv6 ? MediaIpAddressFamily::Ipv6 : MediaIpAddressFamily::Ipv4,
+            parsedEndpoint.value().host,
+            parsedEndpoint.value().port,
+            static_cast<std::uint16_t>(parsedEndpoint.value().port + 1),
+            RtpReceiveBufferBytes,
+            RtpMaximumDatagramBytes,
+            *request.input.readTimeoutMs,
+            nullptr},
+        MediaPreparedRawRtpIdentity{
+            MediaStreamKind::Video,
+            canonicalCodecName(metadata.codecName),
+            static_cast<std::uint8_t>(*metadata.payloadType),
+            *metadata.clockRate}};
+    if (MediaRealtimeRequestClassifier::audioRequested(request)) {
+        const auto& audio = request.input.audioRtp;
+        if (!audio.payloadType || !audio.clockRate) {
+            return ::media::Result<MediaPreparedRawRtpProbe>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "raw RTP automatic signaling requires explicit companion audio identity"));
+        }
+        auto audioEndpoint = endpoint(audio, "Raw RTP companion audio");
+        if (!audioEndpoint) {
+            return ::media::Result<MediaPreparedRawRtpProbe>::failure(
+                audioEndpoint.error());
+        }
+        const bool audioIpv6 = audioEndpoint.value().host.find(':') !=
+            std::string::npos;
+        plan.audio = MediaRawRtpPreparedStreamPlan{
+            MediaRtpUdpTransportConfig{
+                audioIpv6 ? MediaIpAddressFamily::Ipv6
+                          : MediaIpAddressFamily::Ipv4,
+                audioEndpoint.value().host,
+                audioEndpoint.value().port,
+                static_cast<std::uint16_t>(audioEndpoint.value().port + 1),
+                RtpReceiveBufferBytes,
+                RtpMaximumDatagramBytes,
+                *request.input.readTimeoutMs,
+                nullptr},
+            MediaPreparedRawRtpIdentity{
+                MediaStreamKind::Audio,
+                canonicalCodecName(audio.codecName),
+                static_cast<std::uint8_t>(*audio.payloadType),
+                *audio.clockRate}};
+    }
     plan.openTimeoutMs = *request.input.openTimeoutMs;
     plan.analyzeDurationUs = *request.input.analyzeDurationUs;
-    plan.maximumBufferedBytes = static_cast<std::size_t>(
-        *request.input.probeSizeBytes);
+    plan.maximumBufferedBytes =
+        static_cast<std::size_t>(*request.input.probeSizeBytes);
+    plan.reorderWindowPackets = RtpReorderWindowPackets;
+    plan.maximumReorderDelayMs = RtpMaximumReorderDelayMs;
+    const std::string codec = canonicalCodecName(metadata.codecName);
+    if (codec == "h264") {
+        plan.packetizationPolicy =
+            MediaRtpVideoPacketizationPolicy::H264NonInterleaved;
+    } else if (codec == "hevc") {
+        plan.packetizationPolicy =
+            MediaRtpVideoPacketizationPolicy::HevcNonInterleavedNoDonl;
+    } else {
+        return ::media::Result<MediaPreparedRawRtpProbe>::failure(
+            ::media::ErrorInfo::unsupported(
+                "raw RTP video auto-detection supports only H264 and HEVC"));
+    }
+    plan.rtcpPolicy = MediaRtcpCompoundPolicy{
+        MediaRtcpCompositionMode::ReducedSizeRfc5506, false};
     return MediaRawRtpInputPreparer::prepare(plan);
 }
 

@@ -2,6 +2,7 @@
 
 #include "internal/graph/planner/realtime/MediaRealtimeOutputPolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
+#include "internal/graph/planner/realtime/MediaRealtimeRtpCodecDescriptor.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
 
 namespace media::ffmpeg::graph {
@@ -92,6 +93,19 @@ namespace {
     } else if (request.input.mpegTsClock.maximumPcrGap) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "maximum PCR gap is valid only for MPEG-TS input"));
+    }
+    if (MediaRealtimeRequestClassifier::rawRtpInput(request) &&
+        MediaRealtimeRequestClassifier::audioRequested(request)) {
+        auto audio = MediaRealtimeRtpCodecRegistry::describe(
+            MediaStreamKind::Audio, request.input.audioRtp);
+        if (!audio) {
+            return ::media::Status::failure(audio.error());
+        }
+        auto depacketizer = MediaRealtimeRtpCodecRegistry::planDepacketizerConfig(
+            MediaStreamKind::Audio, request.input.audioRtp, audio.value());
+        if (!depacketizer) {
+            return ::media::Status::failure(depacketizer.error());
+        }
     }
     if (!request.input.openTimeoutMs || !request.input.readTimeoutMs ||
         !request.input.analyzeDurationUs || !request.input.probeSizeBytes || !request.input.lowLatency) {

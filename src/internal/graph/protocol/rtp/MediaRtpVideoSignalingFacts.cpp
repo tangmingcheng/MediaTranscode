@@ -61,7 +61,8 @@ MediaRtpVideoSignalingObserver::MediaRtpVideoSignalingObserver(
 ::media::Result<MediaRtpVideoSignalingObserver>
 MediaRtpVideoSignalingObserver::create(std::string codecName,
                                        std::uint8_t payloadType,
-                                       int clockRate)
+                                       int clockRate,
+                                       MediaRtpVideoPacketizationPolicy packetizationPolicy)
 {
     codecName = canonicalCodecName(codecName);
     if (payloadType < 96 || payloadType > 127 || clockRate != 90'000) {
@@ -69,13 +70,15 @@ MediaRtpVideoSignalingObserver::create(std::string codecName,
             ::media::ErrorInfo::invalidArgument(
                 "RTP video signaling probe requires dynamic PT and 90000 Hz clock"));
     }
-    if (codecName == "h264") {
+    if (codecName == "h264" && packetizationPolicy ==
+            MediaRtpVideoPacketizationPolicy::H264NonInterleaved) {
         return ::media::Result<MediaRtpVideoSignalingObserver>::success(
             MediaRtpVideoSignalingObserver(
                 std::move(codecName), payloadType, clockRate,
                 NalParser(MediaH264RtpNalUnitParser(payloadType))));
     }
-    if (codecName == "hevc") {
+    if (codecName == "hevc" && packetizationPolicy ==
+            MediaRtpVideoPacketizationPolicy::HevcNonInterleavedNoDonl) {
         return ::media::Result<MediaRtpVideoSignalingObserver>::success(
             MediaRtpVideoSignalingObserver(
                 std::move(codecName), payloadType, clockRate,
@@ -83,7 +86,7 @@ MediaRtpVideoSignalingObserver::create(std::string codecName,
     }
     return ::media::Result<MediaRtpVideoSignalingObserver>::failure(
         ::media::ErrorInfo::unsupported(
-            "RTP video signaling probe supports only H264 and HEVC"));
+            "RTP video signaling codec conflicts with planned packetization policy"));
 }
 
 void MediaRtpVideoSignalingObserver::resetEpoch(std::uint32_t ssrc) noexcept
@@ -178,7 +181,12 @@ MediaRtpVideoSignalingObserver::observe(const MediaRtpPacket& packet)
         }
     }
     return ::media::Result<MediaRtpVideoSignalingObservation>::success(
-        {epochChanged, complete() && packet.marker});
+        {epochChanged, complete()});
+}
+
+void MediaRtpVideoSignalingObserver::discontinuity() noexcept
+{
+    std::visit([](auto& parser) { parser.discontinuity(); }, m_parser);
 }
 
 ::media::Result<MediaDetectedRtpVideoSignaling>
@@ -208,6 +216,13 @@ MediaRtpVideoSignalingObserver::detected(
         packetCount,
         datagramBytes,
         elapsedMilliseconds});
+}
+
+MediaRtpVideoSignalingEvidence
+MediaRtpVideoSignalingObserver::evidence() const noexcept
+{
+    return MediaRtpVideoSignalingEvidence{
+        m_ssrc, m_vps.has_value(), m_sps.has_value(), m_pps.has_value()};
 }
 
 ::media::Result<std::string> serializeRtpVideoFmtp(

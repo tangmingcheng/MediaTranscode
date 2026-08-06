@@ -241,12 +241,14 @@ bool MediaRtpClockGroupValidator::initialCandidateIsFresh(
 
 void MediaRtpClockGroupValidator::invalidate() noexcept
 {
-    clear(true);
+    clear(m_phase == Phase::ActiveGeneration);
 }
 
 void MediaRtpClockGroupValidator::clear(bool requireReacquisition) noexcept
 {
-    ++m_groupGeneration;
+    if (m_phase == Phase::ActiveGeneration) {
+        ++m_groupGeneration;
+    }
     m_video.reset();
     m_audio.reset();
     m_commonSourceEpoch.reset();

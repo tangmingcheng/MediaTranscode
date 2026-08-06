@@ -30,9 +30,12 @@ before receiving more data from the same sockets.
 
 ## Detection Contract
 
-- `open-timeout-ms` bounds the complete preflight wait.
-- `analyze-duration-us` bounds evidence collection after the first matching
-  RTP packet.
+- `open-timeout-ms` is the total target deadline for controllable preflight
+  work. FFmpeg/driver capability calls have no cancellation API; each is
+  checked immediately after return and an overrun fails preflight.
+- `analyze-duration-us` is the maximum evidence interval after the first
+  matching RTP packet. Detection completes as soon as one complete,
+  unambiguous parameter-set family has been observed.
 - `probe-size` bounds total buffered datagram bytes.
 - `read-timeout-ms` bounds each cancellable receive wait.
 - Only RTP v2 packets with the planned payload type contribute codec evidence.
@@ -41,7 +44,8 @@ before receiving more data from the same sockets.
 - H.264 requires one unique SPS and PPS. The planner derives
   `profile-level-id` from the SPS and emits `packetization-mode=1`.
 - HEVC requires one unique VPS, SPS, and PPS.
-- Repeated identical parameter sets are accepted. A second different set,
+- Repeated identical parameter sets observed before detection completes are
+  accepted. A second different set in that evidence interval,
   malformed payload, unsupported packetization, missing evidence, limit
   exhaustion, or identity conflict fails preflight.
 
@@ -73,4 +77,5 @@ All changed text is UTF-8 with CRLF. Work is committed and pushed on
 `codex/rtp-fmtp-autodetect`, followed by a ready PR and independent agent
 review. Remaining risks are AAC's authoritative signaling requirement, the
 inability of bare RTP to discover codec/PT/clock rate, and runtime parameter-set
-changes.
+  changes, and the inability to interrupt a blocked FFmpeg/driver capability
+  call at the exact startup deadline.
