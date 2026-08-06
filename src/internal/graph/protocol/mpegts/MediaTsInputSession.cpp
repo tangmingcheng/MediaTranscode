@@ -431,56 +431,55 @@ MediaTsInputSession::probeSelectedPacketDurations(std::size_t frameLimit)
 ::media::Result<MediaTsReadFrameEnvelope>
 MediaTsInputSession::readFrameFromSource()
 {
-    for (;;) {
-        auto packet = ::media::ffmpeg::makePacket();
-        if (!packet) {
-            return ::media::Result<MediaTsReadFrameEnvelope>::failure(
-                ::media::ErrorInfo::allocationFailed(
-                    "failed to allocate MPEG-TS packet"));
-        }
-        const int result = av_read_frame(m_formatContext, packet.get());
-        const auto observerStatus = m_observedAvio->status();
-        if (!observerStatus) {
-            return ::media::Result<MediaTsReadFrameEnvelope>::failure(
-                observerStatus.error());
-        }
-        if (result >= 0) {
-            if (m_runtimeContract.originBinding &&
-                std::holds_alternative<MediaTsVideoOnlyRuntimeBinding>(
-                    *m_runtimeContract.originBinding) &&
-                !MediaTsRuntimeBindingCodec::containsStreamIndex(
-                    *m_runtimeContract.originBinding,
-                    packet->stream_index)) {
-                continue;
-            }
-            auto provenance = provenanceFor(*packet);
-            if (!provenance) {
-                return ::media::Result<MediaTsReadFrameEnvelope>::failure(
-                    provenance.error());
-            }
-            return ::media::Result<MediaTsReadFrameEnvelope>::success(
-                MediaTsReadFrameEnvelope{MediaTsReadFrameState::Frame,
-                                         std::move(packet),
-                                         provenance.value()});
-        }
-        if (result == AVERROR(EAGAIN) && !m_interruptState.cancelled()) {
-            return ::media::Result<MediaTsReadFrameEnvelope>::success(
-                MediaTsReadFrameEnvelope{MediaTsReadFrameState::Waiting});
-        }
-        const auto termination = classifyFFmpegInputReadTermination(
-            result, m_interruptState.cancelled(), "MPEG-TS av_read_frame");
-        if (termination.kind() == FFmpegInputReadTerminationKind::EndOfStream) {
-            auto finished = m_evidenceObserver->finish();
-            if (!finished) {
-                return ::media::Result<MediaTsReadFrameEnvelope>::failure(
-                    finished.error());
-            }
-            return ::media::Result<MediaTsReadFrameEnvelope>::success(
-                MediaTsReadFrameEnvelope{MediaTsReadFrameState::EndOfStream});
-        }
+    auto packet = ::media::ffmpeg::makePacket();
+    if (!packet) {
         return ::media::Result<MediaTsReadFrameEnvelope>::failure(
-            *termination.error());
+            ::media::ErrorInfo::allocationFailed(
+                "failed to allocate MPEG-TS packet"));
     }
+    const int result = av_read_frame(m_formatContext, packet.get());
+    const auto observerStatus = m_observedAvio->status();
+    if (!observerStatus) {
+        return ::media::Result<MediaTsReadFrameEnvelope>::failure(
+            observerStatus.error());
+    }
+    if (result >= 0) {
+        if (m_runtimeContract.originBinding &&
+            std::holds_alternative<MediaTsVideoOnlyRuntimeBinding>(
+                *m_runtimeContract.originBinding) &&
+            !MediaTsRuntimeBindingCodec::containsStreamIndex(
+                *m_runtimeContract.originBinding,
+                packet->stream_index)) {
+            return ::media::Result<MediaTsReadFrameEnvelope>::success(
+                MediaTsReadFrameEnvelope{MediaTsReadFrameState::Discarded});
+        }
+        auto provenance = provenanceFor(*packet);
+        if (!provenance) {
+            return ::media::Result<MediaTsReadFrameEnvelope>::failure(
+                provenance.error());
+        }
+        return ::media::Result<MediaTsReadFrameEnvelope>::success(
+            MediaTsReadFrameEnvelope{MediaTsReadFrameState::Frame,
+                                     std::move(packet),
+                                     provenance.value()});
+    }
+    if (result == AVERROR(EAGAIN) && !m_interruptState.cancelled()) {
+        return ::media::Result<MediaTsReadFrameEnvelope>::success(
+            MediaTsReadFrameEnvelope{MediaTsReadFrameState::Waiting});
+    }
+    const auto termination = classifyFFmpegInputReadTermination(
+        result, m_interruptState.cancelled(), "MPEG-TS av_read_frame");
+    if (termination.kind() == FFmpegInputReadTerminationKind::EndOfStream) {
+        auto finished = m_evidenceObserver->finish();
+        if (!finished) {
+            return ::media::Result<MediaTsReadFrameEnvelope>::failure(
+                finished.error());
+        }
+        return ::media::Result<MediaTsReadFrameEnvelope>::success(
+            MediaTsReadFrameEnvelope{MediaTsReadFrameState::EndOfStream});
+    }
+    return ::media::Result<MediaTsReadFrameEnvelope>::failure(
+        *termination.error());
 }
 
 ::media::Status MediaTsInputSession::configureRuntimeBinding(

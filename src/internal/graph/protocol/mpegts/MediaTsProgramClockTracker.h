@@ -11,21 +11,53 @@
 namespace media::ffmpeg::graph {
 
 struct MediaTsVideoOnlyProgramClockPolicy final {
-    std::uint16_t programNumber = 0;
-    std::uint16_t pmtPid = 0;
-    std::uint16_t pcrPid = 0;
-    std::uint16_t videoPid = 0;
-    std::int64_t maximumGap27Mhz = 0;
+    MediaTsVideoOnlyProgramClockPolicy() = delete;
+    MediaTsVideoOnlyProgramClockPolicy(
+        std::uint16_t selectedProgramNumber,
+        std::uint16_t selectedPmtPid,
+        std::uint16_t selectedPcrPid,
+        std::uint16_t selectedVideoPid,
+        std::int64_t selectedMaximumGap27Mhz) noexcept
+        : programNumber(selectedProgramNumber),
+          pmtPid(selectedPmtPid),
+          pcrPid(selectedPcrPid),
+          videoPid(selectedVideoPid),
+          maximumGap27Mhz(selectedMaximumGap27Mhz)
+    {
+    }
+
+    std::uint16_t programNumber;
+    std::uint16_t pmtPid;
+    std::uint16_t pcrPid;
+    std::uint16_t videoPid;
+    std::int64_t maximumGap27Mhz;
     bool operator==(const MediaTsVideoOnlyProgramClockPolicy&) const = default;
 };
 
 struct MediaTsAudioVideoProgramClockPolicy final {
-    std::uint16_t programNumber = 0;
-    std::uint16_t pmtPid = 0;
-    std::uint16_t pcrPid = 0;
-    std::uint16_t videoPid = 0;
-    std::uint16_t audioPid = 0;
-    std::int64_t maximumGap27Mhz = 0;
+    MediaTsAudioVideoProgramClockPolicy() = delete;
+    MediaTsAudioVideoProgramClockPolicy(
+        std::uint16_t selectedProgramNumber,
+        std::uint16_t selectedPmtPid,
+        std::uint16_t selectedPcrPid,
+        std::uint16_t selectedVideoPid,
+        std::uint16_t selectedAudioPid,
+        std::int64_t selectedMaximumGap27Mhz) noexcept
+        : programNumber(selectedProgramNumber),
+          pmtPid(selectedPmtPid),
+          pcrPid(selectedPcrPid),
+          videoPid(selectedVideoPid),
+          audioPid(selectedAudioPid),
+          maximumGap27Mhz(selectedMaximumGap27Mhz)
+    {
+    }
+
+    std::uint16_t programNumber;
+    std::uint16_t pmtPid;
+    std::uint16_t pcrPid;
+    std::uint16_t videoPid;
+    std::uint16_t audioPid;
+    std::int64_t maximumGap27Mhz;
     bool operator==(const MediaTsAudioVideoProgramClockPolicy&) const = default;
 };
 

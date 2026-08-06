@@ -115,18 +115,6 @@ openMpegTsRuntimeSession(
             opened.error());
     }
     auto session = std::move(opened).value();
-    const auto& programs = session->programSnapshots();
-    const auto selected = std::find_if(
-        programs.begin(), programs.end(),
-        [&plannedBinding](const FFmpegInputProgramSnapshot& program) {
-            return MediaTsRuntimeBindingCodec::matchesProgram(
-                plannedBinding, program);
-        });
-    if (selected == programs.end()) {
-        return ::media::Result<std::unique_ptr<MediaTsDemuxSession>>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "MPEG-TS runtime program identity differs from planner preflight"));
-    }
     std::vector<MediaTsRuntimeStreamFacts> runtimeStreamFacts;
     runtimeStreamFacts.reserve(session->streamSnapshots().size());
     for (const auto& stream : session->streamSnapshots()) {
@@ -134,7 +122,8 @@ openMpegTsRuntimeSession(
             stream.index, stream.streamKind, stream.time.timeBase});
     }
     auto runtimeBinding = MediaTsRuntimeBindingCodec::rebindStreamIndexes(
-        plannedBinding, *selected, runtimeStreamFacts);
+        plannedBinding, session->programSnapshots(),
+        session->programInventory(), runtimeStreamFacts);
     if (!runtimeBinding) {
         return ::media::Result<std::unique_ptr<MediaTsDemuxSession>>::failure(
             runtimeBinding.error());
@@ -222,10 +211,10 @@ openMpegTsRuntimeSession(
     const MediaTsInputSessionOpener* opener)
 {
     const auto probeBytes = static_cast<std::uint64_t>(*request.input.probeSizeBytes);
-    auto capacity = MediaRealtimeTsInputPlan::minimumEvidenceCapacity(
+    auto capacity = MediaRealtimeTsInputPolicy::minimumEvidenceCapacity(
         TsPacketSize, probeBytes, TsMaximumPacketPositionRegressionBytes);
     if (!capacity) return ::media::Result<MediaPreparedRealtimeInputScan>::failure(capacity.error());
-    const auto policy = MediaRealtimeTsInputPlan::create(
+    const auto policy = MediaRealtimeTsInputPolicy::create(
         TsPacketSize, probeBytes, TsMaximumPacketPositionRegressionBytes,
         capacity.value(),
         request.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo ? 2 : 1);

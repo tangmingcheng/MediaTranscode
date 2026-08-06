@@ -3,6 +3,7 @@
 #include "internal/graph/model/MediaStreamKind.h"
 #include "internal/graph/protocol/mpegts/MediaTsPacketOriginPolicy.h"
 #include "internal/graph/protocol/mpegts/MediaTsProgramSelection.h"
+#include "internal/graph/protocol/mpegts/MediaTsProgramInventory.h"
 #include "internal/graph/protocol/mpegts/MediaTsPublicProgramSnapshot.h"
 #include "media_transcode/Result.h"
 
@@ -117,14 +118,15 @@ public:
         std::size_t expectedPesProvenanceCapacity);
     static ::media::Result<MediaTsRuntimeBinding> rebindStreamIndexes(
         const MediaTsRuntimeBinding& binding,
-        const FFmpegInputProgramSnapshot& program,
+        const std::vector<FFmpegInputProgramSnapshot>& programs,
+        const MediaTsProgramInventorySnapshot& parserInventory,
         const std::vector<MediaTsRuntimeStreamFacts>& streams);
     static std::optional<MediaStreamKind> streamKindForIndex(
         const MediaTsRuntimeBinding& binding,
         int streamIndex) noexcept;
-    static bool matchesProgram(
+    static std::optional<MediaRational> timeBaseForIndex(
         const MediaTsRuntimeBinding& binding,
-        const FFmpegInputProgramSnapshot& program) noexcept;
+        int streamIndex) noexcept;
     static bool requiresSelectedPesBoundary(
         const MediaTsRuntimeBinding& binding,
         std::uint16_t pid) noexcept;

@@ -18,7 +18,7 @@ extern "C" {
 
 namespace media::ffmpeg::graph {
 
-enum class MediaTsReadFrameState { Frame, Waiting, EndOfStream };
+enum class MediaTsReadFrameState { Frame, Discarded, Waiting, EndOfStream };
 
 struct MediaTsInputRuntimeContract final {
     std::size_t packetStride;

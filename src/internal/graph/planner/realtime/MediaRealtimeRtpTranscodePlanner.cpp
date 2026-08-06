@@ -14,6 +14,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestValidator.h"
 #include "internal/graph/planner/realtime/MediaRealtimeTsInputPlanValidator.h"
+#include "internal/graph/protocol/mpegts/MediaTsProgramContractValidator.h"
 #include "internal/graph/protocol/rtp/MediaRtpVideoParameterSetValidator.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 
@@ -350,7 +351,90 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
 
 } // namespace
 
-::media::Result<MediaRealtimeTsInputPlan> MediaRealtimeTsInputPlan::create(
+MediaRealtimeTsInputPolicy::MediaRealtimeTsInputPolicy(
+    std::string selectedDemuxFormat,
+    std::size_t selectedPacketSize,
+    std::size_t selectedAvioBufferBytes,
+    std::size_t selectedMaximumDatagramBytes,
+    std::size_t selectedEvidenceTimelineCapacity,
+    std::uint64_t selectedMaximumPacketPositionRegressionBytes,
+    std::size_t selectedPesProvenanceCapacity,
+    MediaTsPacketOriginPolicy selectedPacketOriginPolicy) noexcept
+    : demuxFormat(std::move(selectedDemuxFormat)),
+      packetSize(selectedPacketSize),
+      avioBufferBytes(selectedAvioBufferBytes),
+      maximumDatagramBytes(selectedMaximumDatagramBytes),
+      evidenceTimelineCapacity(selectedEvidenceTimelineCapacity),
+      maximumPacketPositionRegressionBytes(
+          selectedMaximumPacketPositionRegressionBytes),
+      pesProvenanceCapacity(selectedPesProvenanceCapacity),
+      packetOriginPolicy(selectedPacketOriginPolicy)
+{
+}
+
+::media::Result<MediaRealtimeTsInputPlan::Retention> planMpegTsRetention(
+    const MediaRealtimeRtpTranscodeRequest& request)
+{
+    const auto packetCapacity = request.parameters.queues.packet;
+    if (packetCapacity == 0 ||
+        !request.avSyncStartup.maximumVideoUnitBytes ||
+        *request.avSyncStartup.maximumVideoUnitBytes == 0) {
+        return ::media::Result<MediaRealtimeTsInputPlan::Retention>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "MPEG-TS retention requires explicit video bounds"));
+    }
+    const auto videoUnitBytes = static_cast<std::uint64_t>(
+        *request.avSyncStartup.maximumVideoUnitBytes);
+    if (packetCapacity > std::numeric_limits<std::uint64_t>::max() /
+            videoUnitBytes) {
+        return ::media::Result<MediaRealtimeTsInputPlan::Retention>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MPEG-TS video retention capacity is not representable"));
+    }
+    const auto videoByteCapacity =
+        static_cast<std::uint64_t>(packetCapacity) * videoUnitBytes;
+    const auto maximumSerialized = static_cast<std::uint64_t>(
+        std::numeric_limits<std::int64_t>::max());
+    if (videoByteCapacity > maximumSerialized) {
+        return ::media::Result<MediaRealtimeTsInputPlan::Retention>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MPEG-TS video retention exceeds runtime option range"));
+    }
+    if (request.parameters.execution.streamSet ==
+        MediaTranscodeStreamSet::VideoOnly) {
+        return ::media::Result<MediaRealtimeTsInputPlan::Retention>::success(
+            MediaRealtimeTsInputPlan::VideoOnlyRetention(
+                packetCapacity, videoByteCapacity, videoUnitBytes));
+    }
+    if (!request.avSyncStartup.maximumAudioUnitBytes ||
+        *request.avSyncStartup.maximumAudioUnitBytes == 0) {
+        return ::media::Result<MediaRealtimeTsInputPlan::Retention>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "AudioVideo MPEG-TS retention requires explicit audio bounds"));
+    }
+    const auto audioUnitBytes = static_cast<std::uint64_t>(
+        *request.avSyncStartup.maximumAudioUnitBytes);
+    if (packetCapacity > std::numeric_limits<std::uint64_t>::max() /
+            audioUnitBytes) {
+        return ::media::Result<MediaRealtimeTsInputPlan::Retention>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MPEG-TS audio retention capacity is not representable"));
+    }
+    const auto audioByteCapacity =
+        static_cast<std::uint64_t>(packetCapacity) * audioUnitBytes;
+    if (audioByteCapacity > maximumSerialized) {
+        return ::media::Result<MediaRealtimeTsInputPlan::Retention>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MPEG-TS retention exceeds runtime option range"));
+    }
+    return ::media::Result<MediaRealtimeTsInputPlan::Retention>::success(
+        MediaRealtimeTsInputPlan::AudioVideoRetention(
+            packetCapacity, packetCapacity,
+            videoByteCapacity, audioByteCapacity,
+            videoUnitBytes, audioUnitBytes));
+}
+
+::media::Result<MediaRealtimeTsInputPolicy> MediaRealtimeTsInputPolicy::create(
     std::size_t packetSize,
     std::uint64_t probeWindowBytes,
     std::uint64_t maximumPacketPositionRegressionBytes,
@@ -360,36 +444,28 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
     auto minimum = minimumEvidenceCapacity(
         packetSize, probeWindowBytes, maximumPacketPositionRegressionBytes);
     if (!minimum) {
-        return ::media::Result<MediaRealtimeTsInputPlan>::failure(minimum.error());
+        return ::media::Result<MediaRealtimeTsInputPolicy>::failure(minimum.error());
     }
     if (evidenceTimelineCapacity < minimum.value()) {
-        return ::media::Result<MediaRealtimeTsInputPlan>::failure(
+        return ::media::Result<MediaRealtimeTsInputPolicy>::failure(
             ::media::ErrorInfo::invalidArgument("MPEG-TS evidence capacity is below worst-case requirement"));
     }
     if (selectedStreamCount == 0 || selectedStreamCount > 2) {
-        return ::media::Result<MediaRealtimeTsInputPlan>::failure(
+        return ::media::Result<MediaRealtimeTsInputPolicy>::failure(
             ::media::ErrorInfo::invalidArgument("invalid MPEG-TS selected stream count"));
     }
-    MediaRealtimeTsInputPlan result;
-    result.demuxFormat = "mpegts";
-    result.packetSize = packetSize;
-    result.avioBufferBytes = 65'535;
-    result.maximumDatagramBytes = 65'535;
-    result.evidenceTimelineCapacity = evidenceTimelineCapacity;
-    result.maximumPacketPositionRegressionBytes = maximumPacketPositionRegressionBytes;
-    result.pesProvenanceCapacity =
-        static_cast<std::size_t>((probeWindowBytes + packetSize - 1) / packetSize) +
-        selectedStreamCount;
-    result.packetOriginPolicy = MediaTsPacketOriginPolicy::PerStreamPesCarry;
-    result.retention = selectedStreamCount == 1
-        ? MediaRealtimeTsInputPlan::Retention{
-              MediaRealtimeTsInputPlan::VideoOnlyRetention{}}
-        : MediaRealtimeTsInputPlan::Retention{
-              MediaRealtimeTsInputPlan::AudioVideoRetention{}};
-    return ::media::Result<MediaRealtimeTsInputPlan>::success(std::move(result));
+    return ::media::Result<MediaRealtimeTsInputPolicy>::success(
+        MediaRealtimeTsInputPolicy(
+            "mpegts", packetSize, 65'535, 65'535,
+            evidenceTimelineCapacity,
+            maximumPacketPositionRegressionBytes,
+            static_cast<std::size_t>(
+                (probeWindowBytes + packetSize - 1) / packetSize) +
+                selectedStreamCount,
+            MediaTsPacketOriginPolicy::PerStreamPesCarry));
 }
 
-::media::Result<std::size_t> MediaRealtimeTsInputPlan::minimumEvidenceCapacity(
+::media::Result<std::size_t> MediaRealtimeTsInputPolicy::minimumEvidenceCapacity(
     std::size_t packetSize,
     std::uint64_t probeWindowBytes,
     std::uint64_t maximumPacketPositionRegressionBytes)
@@ -431,6 +507,95 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
             ::media::ErrorInfo::invalidArgument("MPEG-TS evidence capacity exceeds platform size"));
     }
     return ::media::Result<std::size_t>::success(static_cast<std::size_t>(required));
+}
+
+MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
+    MediaRealtimeTsInputPolicy policy,
+    MediaTsSelectedProgramPlan selected,
+    std::int64_t selectedMaximumPcrGap27Mhz,
+    Retention selectedRetention,
+    std::uint64_t selectedInitialSourceGeneration,
+    std::uint64_t selectedInitialRawTransportGeneration) noexcept
+    : demuxFormat(std::move(policy.demuxFormat)),
+      packetSize(policy.packetSize),
+      avioBufferBytes(policy.avioBufferBytes),
+      maximumDatagramBytes(policy.maximumDatagramBytes),
+      evidenceTimelineCapacity(policy.evidenceTimelineCapacity),
+      maximumPacketPositionRegressionBytes(
+          policy.maximumPacketPositionRegressionBytes),
+      pesProvenanceCapacity(policy.pesProvenanceCapacity),
+      packetOriginPolicy(policy.packetOriginPolicy),
+      selectedProgram(std::move(selected)),
+      maximumPcrGap27Mhz(selectedMaximumPcrGap27Mhz),
+      projectionCapacity(evidenceTimelineCapacity),
+      retention(std::move(selectedRetention)),
+      initialSourceGeneration(selectedInitialSourceGeneration),
+      initialRawTransportGeneration(selectedInitialRawTransportGeneration)
+{
+}
+
+::media::Result<MediaRealtimeTsInputPlan> MediaRealtimeTsInputPlan::create(
+    MediaRealtimeTsInputPolicy policy,
+    MediaTsSelectedProgramPlan selectedProgram,
+    std::int64_t maximumPcrGap27Mhz,
+    Retention retention,
+    std::uint64_t initialSourceGeneration,
+    std::uint64_t initialRawTransportGeneration)
+{
+    MediaRealtimeTsInputPlan plan(
+        std::move(policy), std::move(selectedProgram), maximumPcrGap27Mhz,
+        std::move(retention), initialSourceGeneration,
+        initialRawTransportGeneration);
+    if (auto status = plan.validateProduct(); !status) {
+        return ::media::Result<MediaRealtimeTsInputPlan>::failure(
+            status.error());
+    }
+    return ::media::Result<MediaRealtimeTsInputPlan>::success(std::move(plan));
+}
+
+::media::Status MediaRealtimeTsInputPlan::validateProduct() const
+{
+    const bool audioVideoProgram = std::holds_alternative<
+        MediaTsAudioVideoSelectedProgramPlan>(selectedProgram);
+    const bool audioVideoRetention = std::holds_alternative<
+        AudioVideoRetention>(retention);
+    const bool retentionValid = audioVideoProgram == audioVideoRetention &&
+        std::visit(
+            [](const auto& selected) {
+                using SelectedRetention = std::decay_t<decltype(selected)>;
+                const bool videoValid = selected.videoPacketCapacity > 0 &&
+                    selected.videoByteCapacity > 0 &&
+                    selected.maximumVideoPacketBytes > 0 &&
+                    selected.maximumVideoPacketBytes <=
+                        selected.videoByteCapacity;
+                if constexpr (std::is_same_v<
+                                  SelectedRetention,
+                                  AudioVideoRetention>) {
+                    return videoValid &&
+                        selected.audioPacketCapacity > 0 &&
+                        selected.audioByteCapacity > 0 &&
+                        selected.maximumAudioPacketBytes > 0 &&
+                        selected.maximumAudioPacketBytes <=
+                            selected.audioByteCapacity;
+                }
+                return videoValid;
+            },
+            retention);
+    if (demuxFormat != "mpegts" || packetSize != 188 ||
+        avioBufferBytes == 0 || maximumDatagramBytes == 0 ||
+        maximumDatagramBytes > avioBufferBytes ||
+        evidenceTimelineCapacity == 0 ||
+        maximumPacketPositionRegressionBytes == 0 ||
+        pesProvenanceCapacity == 0 ||
+        packetOriginPolicy != MediaTsPacketOriginPolicy::PerStreamPesCarry ||
+        !MediaTsProgramContractValidator::validateSelectedProgram(
+            selectedProgram) ||
+        maximumPcrGap27Mhz <= 0 || projectionCapacity == 0 ||
+        !retentionValid) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "invalid complete MPEG-TS input plan"));
+    }
+    return ::media::Status::success();
 }
 
 ::media::Result<MediaRealtimeRtpTranscodePlan> MediaRealtimeRtpTranscodePlanner::plan(
@@ -637,6 +802,11 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
         }
     }
     if (MediaRealtimeRequestClassifier::mpegTsUdpInput(options)) {
+        if (!selectedTsProgram) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "MPEG-TS planning requires a selected program"));
+        }
         auto maximumPcrGap27Mhz = planMpegTsMaximumPcrGap27Mhz(options);
         if (!maximumPcrGap27Mhz) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
@@ -645,64 +815,44 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
         constexpr std::uint64_t MaximumRegressionBytes = 1024 * 1024;
         constexpr std::uint64_t PacketSize = 188;
         const auto probeBytes = static_cast<std::uint64_t>(*options.input.probeSizeBytes);
-        auto capacity = MediaRealtimeTsInputPlan::minimumEvidenceCapacity(
+        auto capacity = MediaRealtimeTsInputPolicy::minimumEvidenceCapacity(
             PacketSize, probeBytes, MaximumRegressionBytes);
         if (!capacity) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(capacity.error());
         }
-        auto ts = MediaRealtimeTsInputPlan::create(
+        auto policy = MediaRealtimeTsInputPolicy::create(
             PacketSize, probeBytes, MaximumRegressionBytes,
             capacity.value(),
             options.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo
                 ? 2
                 : 1);
-        if (!ts) return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(ts.error());
-        plan.input.mpegTs = std::move(ts).value();
-        if (selectedTsProgram) {
-            auto& selected = *plan.input.mpegTs;
-            const bool expectsAudioVideo =
-                options.parameters.execution.streamSet ==
-                MediaTranscodeStreamSet::AudioVideo;
-            if (expectsAudioVideo != std::holds_alternative<
-                    MediaTsAudioVideoSelectedProgramPlan>(
-                        *selectedTsProgram)) {
-                return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
-                    ::media::ErrorInfo::invalidArgument(
-                        "MPEG-TS selected program stream set conflicts with request"));
-            }
-            selected.selectedProgram = *selectedTsProgram;
-            selected.maximumPcrGap27Mhz = maximumPcrGap27Mhz.value();
-            selected.projectionCapacity = selected.evidenceTimelineCapacity;
-            selected.timestampTimeBaseNumerator = 1;
-            selected.timestampTimeBaseDenominator = 90'000;
-            selected.initialSourceGeneration = MediaFirstLockedSourceGeneration;
-            selected.initialRawTransportGeneration = 0;
-            if (!expectsAudioVideo) {
-                const auto packetCapacity = options.parameters.queues.packet;
-                const auto maximumPacketBytes = static_cast<std::uint64_t>(
-                    *options.avSyncStartup.maximumVideoUnitBytes);
-                if (packetCapacity == 0 || maximumPacketBytes == 0 ||
-                    packetCapacity >
-                        std::numeric_limits<std::uint64_t>::max() /
-                            maximumPacketBytes) {
-                    return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
-                        ::media::ErrorInfo::invalidArgument(
-                            "VideoOnly MPEG-TS retention capacity is not representable"));
-                }
-                const auto byteCapacity =
-                    static_cast<std::uint64_t>(packetCapacity) *
-                    maximumPacketBytes;
-                if (byteCapacity > static_cast<std::uint64_t>(
-                        std::numeric_limits<std::int64_t>::max())) {
-                    return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
-                        ::media::ErrorInfo::invalidArgument(
-                            "VideoOnly MPEG-TS retention exceeds runtime option range"));
-                }
-                selected.retention =
-                    MediaRealtimeTsInputPlan::VideoOnlyRetention{
-                        packetCapacity, byteCapacity, maximumPacketBytes};
-            }
+        if (!policy) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                policy.error());
         }
+        const bool expectsAudioVideo =
+            options.parameters.execution.streamSet ==
+            MediaTranscodeStreamSet::AudioVideo;
+        if (expectsAudioVideo != std::holds_alternative<
+                MediaTsAudioVideoSelectedProgramPlan>(*selectedTsProgram)) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "MPEG-TS selected program stream set conflicts with request"));
+        }
+        auto retention = planMpegTsRetention(options);
+        if (!retention) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                retention.error());
+        }
+        auto ts = MediaRealtimeTsInputPlan::create(
+            std::move(policy).value(), *selectedTsProgram,
+            maximumPcrGap27Mhz.value(), std::move(retention).value(),
+            MediaFirstLockedSourceGeneration, 0);
+        if (!ts) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                ts.error());
+        }
+        plan.input.mpegTs = std::move(ts).value();
     }
     MediaRealtimeOutputPlanningDraft output;
     output.packetCopyNormalizationRequired =
@@ -757,25 +907,6 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
             plan.audioPlan.resolvedOutput->sampleRate());
         if (!avSync) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(avSync.error());
-        }
-        if (plan.input.mpegTs) {
-            const auto& startup = avSync.value().startup;
-            if (!startup.videoCapacity || !startup.audioCapacity ||
-                !startup.videoByteCapacity || !startup.audioByteCapacity ||
-                !startup.maximumVideoUnitBytes ||
-                !startup.maximumAudioUnitBytes) {
-                return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
-                    ::media::ErrorInfo::notInitialized(
-                        "MPEG-TS acquiring retention requires complete planner startup bounds"));
-            }
-            auto& ts = *plan.input.mpegTs;
-            ts.retention = MediaRealtimeTsInputPlan::AudioVideoRetention{
-                *startup.videoCapacity,
-                *startup.audioCapacity,
-                *startup.videoByteCapacity,
-                *startup.audioByteCapacity,
-                *startup.maximumVideoUnitBytes,
-                *startup.maximumAudioUnitBytes};
         }
         auto componentBounds =
             MediaRealtimeAvSyncComponentBoundsPlanner::plan(plan);

@@ -51,6 +51,18 @@ MediaTsPreflightDurationProbe::buffer(MediaTsReadFrameEnvelope envelope)
                 ::media::ErrorInfo::invalidArgument(
                     "MPEG-TS duration probe is already complete"));
     }
+    if (envelope.state == MediaTsReadFrameState::Discarded) {
+        ++m_observedFrameCount;
+        if (m_observedFrameCount >= m_frameLimit) {
+            return ::media::Result<
+                std::optional<MediaTsSelectedPacketDurationEvidence>>::failure(
+                    ::media::ErrorInfo::notInitialized(
+                        "MPEG-TS duration probe frame limit reached without selected packet duration evidence"));
+        }
+        return ::media::Result<
+            std::optional<MediaTsSelectedPacketDurationEvidence>>::success(
+                std::nullopt);
+    }
     if (envelope.state != MediaTsReadFrameState::Frame || !envelope.packet) {
         return ::media::Result<
             std::optional<MediaTsSelectedPacketDurationEvidence>>::failure(
@@ -63,6 +75,7 @@ MediaTsPreflightDurationProbe::buffer(MediaTsReadFrameEnvelope envelope)
     const auto audio = std::get_if<MediaTsAudioVideoRuntimeBinding>(&m_binding);
     const int streamIndex = envelope.packet->stream_index;
     const std::int64_t duration = envelope.packet->duration;
+    ++m_observedFrameCount;
     m_replay.push_back(std::move(envelope));
     if (streamIndex == video.streamIndex && !m_videoEvidence) {
         if (duration <= 0) {
@@ -97,7 +110,7 @@ MediaTsPreflightDurationProbe::buffer(MediaTsReadFrameEnvelope envelope)
                 MediaTsAudioVideoPacketDurationEvidence{
                     *m_videoEvidence, *m_audioEvidence});
     }
-    if (m_replay.size() >= m_frameLimit) {
+    if (m_observedFrameCount >= m_frameLimit) {
         const std::string missing = m_videoEvidence && audioVideo
             ? "audio"
             : "video";

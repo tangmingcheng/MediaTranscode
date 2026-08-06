@@ -131,31 +131,6 @@ const char* boolOption(bool value) noexcept
         return MediaGraphBuildSupport::setNodeOptionChecked(
             graph, owner, nodeId, key, std::to_string(value));
     };
-    auto streamOptions = std::visit(
-        [&](const auto& selected) -> ::media::Result<void> {
-            using Program = std::decay_t<decltype(selected)>;
-            const auto& selection = selected.selection;
-            constexpr bool AudioVideo = std::is_same_v<
-                Program, MediaTsAudioVideoSelectedProgramPlan>;
-            if (auto s = set(
-                    "mpegts.stream_set",
-                    static_cast<int>(AudioVideo
-                        ? MediaTranscodeStreamSet::AudioVideo
-                        : MediaTranscodeStreamSet::VideoOnly));
-                !s) {
-                return s;
-            }
-            if (auto s = set("mpegts.program_number", selection.programNumber); !s) return s;
-            if (auto s = set("mpegts.pmt_pid", selection.programMapPid); !s) return s;
-            if (auto s = set("mpegts.video_pid", selection.video.elementaryPid); !s) return s;
-            if constexpr (AudioVideo) {
-                if (auto s = set("mpegts.audio_pid", selection.audio.elementaryPid); !s) return s;
-            }
-            if (auto s = set("mpegts.pcr_pid", selection.pcrPid); !s) return s;
-            return ::media::Result<void>::success();
-        },
-        plan.selectedProgram);
-    if (!streamOptions) return streamOptions;
     if (auto s = set("mpegts.maximum_pcr_gap_27mhz", plan.maximumPcrGap27Mhz); !s) return s;
     if (auto s = set("mpegts.packet_stride", plan.packetSize); !s) return s;
     if (auto s = set("mpegts.evidence_timeline_capacity", plan.evidenceTimelineCapacity); !s) return s;
@@ -185,10 +160,6 @@ const char* boolOption(bool value) noexcept
     if (!retentionOptions) return retentionOptions;
     if (auto s = set("mpegts.maximum_position_regression_bytes", plan.maximumPacketPositionRegressionBytes); !s) return s;
     if (auto s = set("mpegts.pes_provenance_capacity", plan.pesProvenanceCapacity); !s) return s;
-    if (auto s = set("mpegts.packet_origin_policy",
-                     static_cast<int>(plan.packetOriginPolicy)); !s) return s;
-    if (auto s = set("mpegts.timestamp_time_base_num", plan.timestampTimeBaseNumerator); !s) return s;
-    if (auto s = set("mpegts.timestamp_time_base_den", plan.timestampTimeBaseDenominator); !s) return s;
     if (auto s = set("mpegts.initial_source_generation", plan.initialSourceGeneration); !s) return s;
     return set("mpegts.initial_raw_generation", plan.initialRawTransportGeneration);
 }

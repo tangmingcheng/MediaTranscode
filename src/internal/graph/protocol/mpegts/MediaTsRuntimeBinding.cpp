@@ -1,28 +1,22 @@
 #include "internal/graph/protocol/mpegts/MediaTsRuntimeBinding.h"
+#include "internal/graph/protocol/mpegts/MediaTsProgramContractValidator.h"
 
 #include <algorithm>
+#include <limits>
 #include <optional>
 #include <type_traits>
+#include <unordered_set>
 #include <utility>
 
 namespace media::ffmpeg::graph {
 namespace {
 
-bool validTimeBase(MediaRational timeBase) noexcept
-{
-    return timeBase.num > 0 && timeBase.den > 0;
-}
-
 bool validStream(const MediaTsRuntimeStreamBinding& stream) noexcept
 {
     return stream.streamIndex >= 0 && stream.pid > 0 &&
-        stream.pid < 0x1FFF && validTimeBase(stream.timeBase);
-}
-
-bool validSelectedStream(const MediaTsSelectedStreamPlan& stream) noexcept
-{
-    return stream.streamIndex >= 0 && stream.elementaryPid > 0 &&
-        stream.elementaryPid < 0x1FFF && validTimeBase(stream.timeBase);
+        stream.pid < 0x1FFF &&
+        MediaTsProgramContractValidator::isSelectedStreamTimeBase(
+            stream.timeBase);
 }
 
 bool sameTimeBase(MediaRational left, MediaRational right) noexcept
@@ -72,29 +66,11 @@ bool commonProgramMatches(
     MediaTsPacketOriginPolicy originPolicy,
     std::size_t pesProvenanceCapacity)
 {
-    const bool selectionValid = std::visit(
-        [](const auto& selected) {
-            using Selection = std::decay_t<decltype(selected)>;
-            const bool commonValid = selected.programNumber > 0 &&
-                selected.programMapPid > 0 &&
-                selected.programMapPid < 0x1FFF && selected.pcrPid > 0 &&
-                selected.pcrPid < 0x1FFF &&
-                validSelectedStream(selected.video);
-            if constexpr (std::is_same_v<
-                              Selection,
-                              MediaTsAudioVideoProgramSelection>) {
-                return commonValid && validSelectedStream(selected.audio) &&
-                    selected.video.streamIndex != selected.audio.streamIndex &&
-                    selected.video.elementaryPid !=
-                        selected.audio.elementaryPid;
-            }
-            return commonValid;
-        },
-        selection);
-    if (!selectionValid) {
+    if (auto selected = MediaTsProgramContractValidator::validateSelection(
+            selection);
+        !selected) {
         return ::media::Result<MediaTsRuntimeBinding>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "invalid MPEG-TS program selection for runtime binding"));
+            selected.error());
     }
     MediaTsRuntimeBinding binding = std::visit(
         [originPolicy, pesProvenanceCapacity](const auto& selected)
@@ -149,6 +125,8 @@ bool commonProgramMatches(
             -> ::media::Status {
             using Binding = std::decay_t<decltype(selected)>;
             const bool commonValid = selected.programNumber > 0 &&
+                selected.programNumber <=
+                    (std::numeric_limits<std::uint16_t>::max)() &&
                 selected.programMapPid > 0 && selected.programMapPid < 0x1FFF &&
                 selected.originPolicy ==
                     MediaTsPacketOriginPolicy::PerStreamPesCarry &&
@@ -184,19 +162,53 @@ bool commonProgramMatches(
 ::media::Result<MediaTsRuntimeBinding>
 MediaTsRuntimeBindingCodec::rebindStreamIndexes(
     const MediaTsRuntimeBinding& binding,
-    const FFmpegInputProgramSnapshot& program,
+    const std::vector<FFmpegInputProgramSnapshot>& programs,
+    const MediaTsProgramInventorySnapshot& parserInventory,
     const std::vector<MediaTsRuntimeStreamFacts>& streams)
 {
-    if (!matchesProgram(binding, program)) {
+    if (auto snapshots = MediaTsProgramContractValidator::validateSnapshots(
+            programs, parserInventory);
+        !snapshots) {
+        return ::media::Result<MediaTsRuntimeBinding>::failure(
+            snapshots.error());
+    }
+    std::unordered_set<int> runtimeIndexes;
+    for (const auto& stream : streams) {
+        if (stream.streamIndex < 0 ||
+            !runtimeIndexes.insert(stream.streamIndex).second ||
+            !MediaTsProgramContractValidator::isSelectedStreamTimeBase(
+                stream.timeBase)) {
+            return ::media::Result<MediaTsRuntimeBinding>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "MPEG-TS runtime stream facts are invalid or duplicated"));
+        }
+    }
+    const auto matches = std::count_if(
+        programs.begin(), programs.end(), [&binding](const auto& program) {
+            return std::visit(
+                [&program](const auto& selected) {
+                    return commonProgramMatches(selected, program);
+                },
+                binding);
+        });
+    if (matches != 1) {
         return ::media::Result<MediaTsRuntimeBinding>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "MPEG-TS runtime program identity differs from planner preflight"));
+                "MPEG-TS runtime program identity is missing or ambiguous"));
     }
+    const auto program = std::find_if(
+        programs.begin(), programs.end(), [&binding](const auto& candidate) {
+            return std::visit(
+                [&candidate](const auto& selected) {
+                    return commonProgramMatches(selected, candidate);
+                },
+                binding);
+        });
     return std::visit(
-        [&program, &streams](const auto& selected)
+        [program, &streams](const auto& selected)
             -> ::media::Result<MediaTsRuntimeBinding> {
             auto rebound = selected;
-            const auto video = streamIndexForPid(program, selected.video.pid);
+            const auto video = streamIndexForPid(*program, selected.video.pid);
             if (!video) {
                 return ::media::Result<MediaTsRuntimeBinding>::failure(
                     ::media::ErrorInfo::invalidArgument(
@@ -216,7 +228,7 @@ MediaTsRuntimeBindingCodec::rebindStreamIndexes(
             if constexpr (std::is_same_v<
                               Binding,
                               MediaTsAudioVideoRuntimeBinding>) {
-                const auto audio = streamIndexForPid(program, selected.audio.pid);
+                const auto audio = streamIndexForPid(*program, selected.audio.pid);
                 if (!audio || *audio == *video) {
                     return ::media::Result<MediaTsRuntimeBinding>::failure(
                         ::media::ErrorInfo::invalidArgument(
@@ -263,13 +275,24 @@ MediaTsRuntimeBindingCodec::streamKindForIndex(
         binding);
 }
 
-bool MediaTsRuntimeBindingCodec::matchesProgram(
+std::optional<MediaRational> MediaTsRuntimeBindingCodec::timeBaseForIndex(
     const MediaTsRuntimeBinding& binding,
-    const FFmpegInputProgramSnapshot& program) noexcept
+    int streamIndex) noexcept
 {
     return std::visit(
-        [&program](const auto& selected) {
-            return commonProgramMatches(selected, program);
+        [streamIndex](const auto& selected) -> std::optional<MediaRational> {
+            if (streamIndex == selected.video.streamIndex) {
+                return selected.video.timeBase;
+            }
+            using Binding = std::decay_t<decltype(selected)>;
+            if constexpr (std::is_same_v<
+                              Binding,
+                              MediaTsAudioVideoRuntimeBinding>) {
+                if (streamIndex == selected.audio.streamIndex) {
+                    return selected.audio.timeBase;
+                }
+            }
+            return std::nullopt;
         },
         binding);
 }

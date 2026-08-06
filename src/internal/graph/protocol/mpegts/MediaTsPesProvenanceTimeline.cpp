@@ -42,9 +42,7 @@ MediaTsPesProvenanceTimeline::MediaTsPesProvenanceTimeline(
 {
     if (pid == 0 || pid >= 0x1FFF) return invalid("PES provenance PID is not an elementary PID");
     if (m_selectedPids) {
-        return m_trackedPids.contains(pid)
-            ? ::media::Status::success()
-            : invalid("PES provenance rejects a new PID after selection");
+        return ::media::Status::success();
     }
     m_trackedPids.insert(pid);
     return ::media::Status::success();
@@ -64,6 +62,10 @@ MediaTsPesProvenanceTimeline::MediaTsPesProvenanceTimeline(
             return invalid("PES provenance selected PIDs must be unique");
         }
     }
+    std::erase_if(m_ranges, [&selected](const Range& range) {
+        return !selected.contains(range.pid);
+    });
+    m_trackedPids = selected;
     m_selectedPids = std::move(selected);
     return ::media::Status::success();
 }

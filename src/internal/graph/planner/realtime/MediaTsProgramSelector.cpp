@@ -1,23 +1,10 @@
 #include "internal/graph/planner/realtime/MediaTsProgramSelector.h"
+#include "internal/graph/protocol/mpegts/MediaTsProgramContractValidator.h"
 
 #include <algorithm>
-#include <limits>
 
 namespace media::ffmpeg::graph {
 namespace {
-
-const MediaTsProgramInfo* inventoryProgram(
-    const MediaTsProgramInventorySnapshot& inventory,
-    int programNumber) noexcept
-{
-    const MediaTsProgramInfo* match = nullptr;
-    for (const auto& program : inventory.programs) {
-        if (program.programNumber != programNumber) continue;
-        if (match) return nullptr;
-        match = &program;
-    }
-    return match;
-}
 
 std::optional<int> streamPid(
     const FFmpegInputProgramSnapshot& program,
@@ -27,59 +14,6 @@ std::optional<int> streamPid(
         [streamIndex](const auto& binding) { return binding.streamIndex == streamIndex; });
     if (found == program.streamBindings.end()) return std::nullopt;
     return found->elementaryPid;
-}
-
-bool validTimeBase(MediaRational timeBase) noexcept
-{
-    return timeBase.num > 0 && timeBase.den > 0;
-}
-
-::media::Status validatePublicProgram(
-    const FFmpegInputProgramSnapshot& publicProgram,
-    const MediaTsProgramInfo& parserProgram)
-{
-    if (publicProgram.programNumber <= 0 || publicProgram.pmtPid <= 0 ||
-        publicProgram.pmtPid >= 0x1FFF || publicProgram.pcrPid <= 0 ||
-        publicProgram.pcrPid >= 0x1FFF ||
-        parserProgram.pmtPid != publicProgram.pmtPid ||
-        parserProgram.pcrPid != publicProgram.pcrPid ||
-        parserProgram.elementaryStreams.size() !=
-            publicProgram.streamBindings.size()) {
-        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "MPEG-TS public program and parser inventory mismatch"));
-    }
-
-    for (std::size_t index = 0;
-         index < publicProgram.streamBindings.size(); ++index) {
-        const auto& binding = publicProgram.streamBindings[index];
-        if (binding.streamIndex < 0 || binding.elementaryPid <= 0 ||
-            binding.elementaryPid >= 0x1FFF) {
-            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-                "MPEG-TS public stream binding is invalid"));
-        }
-        for (std::size_t other = index + 1;
-             other < publicProgram.streamBindings.size(); ++other) {
-            if (binding.streamIndex ==
-                    publicProgram.streamBindings[other].streamIndex ||
-                binding.elementaryPid ==
-                    publicProgram.streamBindings[other].elementaryPid) {
-                return ::media::Status::failure(
-                    ::media::ErrorInfo::invalidArgument(
-                        "MPEG-TS public stream binding is duplicated"));
-            }
-        }
-        const auto matches = std::count_if(
-            parserProgram.elementaryStreams.begin(),
-            parserProgram.elementaryStreams.end(),
-            [&binding](const auto& stream) {
-                return stream.pid == binding.elementaryPid;
-            });
-        if (matches != 1) {
-            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-                "MPEG-TS public PID membership mismatch"));
-        }
-    }
-    return ::media::Status::success();
 }
 
 struct SelectedProgramCandidate final {
@@ -96,6 +30,12 @@ struct SelectedProgramCandidate final {
     int selectedVideoStream,
     std::optional<int> selectedAudioStream)
 {
+    if (auto snapshots = MediaTsProgramContractValidator::validateSnapshots(
+            publicPrograms, parserInventory);
+        !snapshots) {
+        return ::media::Result<SelectedProgramCandidate>::failure(
+            snapshots.error());
+    }
     std::optional<SelectedProgramCandidate> selected;
     for (const auto& publicProgram : publicPrograms) {
         const auto videoPid = streamPid(publicProgram, selectedVideoStream);
@@ -104,31 +44,7 @@ struct SelectedProgramCandidate final {
             : std::optional<int>{};
         if (!videoPid || (selectedAudioStream && !audioPid)) continue;
 
-        const MediaTsProgramInfo* parserProgram = inventoryProgram(
-            parserInventory, publicProgram.programNumber);
-        if (!parserProgram) {
-            return ::media::Result<SelectedProgramCandidate>::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "MPEG-TS public program and parser inventory mismatch"));
-        }
-        if (auto status = validatePublicProgram(publicProgram, *parserProgram);
-            !status) {
-            return ::media::Result<SelectedProgramCandidate>::failure(
-                status.error());
-        }
-        const auto parserHas = [parserProgram](int pid) {
-            return std::count_if(
-                parserProgram->elementaryStreams.begin(),
-                parserProgram->elementaryStreams.end(),
-                [pid](const auto& stream) { return stream.pid == pid; }) == 1;
-        };
-        if (!parserHas(*videoPid) || (audioPid && !parserHas(*audioPid))) {
-            return ::media::Result<SelectedProgramCandidate>::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "MPEG-TS public PID is absent from parser program"));
-        }
-        if (*videoPid <= 0 || (audioPid && *audioPid <= 0) ||
-            (audioPid && *videoPid == *audioPid) || selected) {
+        if ((audioPid && *videoPid == *audioPid) || selected) {
             return ::media::Result<SelectedProgramCandidate>::failure(
                 ::media::ErrorInfo::invalidArgument(
                     "MPEG-TS selected streams do not identify exactly one complete program"));
@@ -157,7 +73,9 @@ MediaTsProgramSelector::selectVideoOnly(
     int selectedVideoStream,
     MediaRational videoTimeBase)
 {
-    if (selectedVideoStream < 0 || !validTimeBase(videoTimeBase)) {
+    if (selectedVideoStream < 0 ||
+        !MediaTsProgramContractValidator::isSelectedStreamTimeBase(
+            videoTimeBase)) {
         return ::media::Result<MediaTsVideoOnlyProgramSelection>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "MPEG-TS selected video stream facts are invalid"));
@@ -170,14 +88,14 @@ MediaTsProgramSelector::selectVideoOnly(
             selected.error());
     }
     return ::media::Result<MediaTsVideoOnlyProgramSelection>::success(
-        MediaTsVideoOnlyProgramSelection{
+        MediaTsVideoOnlyProgramSelection(
             selected.value().programNumber,
             selected.value().programMapPid,
             selected.value().pcrPid,
-            MediaTsSelectedStreamPlan{
+            MediaTsSelectedStreamPlan(
                 selectedVideoStream,
                 selected.value().videoPid,
-                videoTimeBase}});
+                videoTimeBase)));
 }
 
 ::media::Result<MediaTsAudioVideoProgramSelection>
@@ -191,7 +109,10 @@ MediaTsProgramSelector::selectAudioVideo(
 {
     if (selectedVideoStream < 0 || selectedAudioStream < 0 ||
         selectedVideoStream == selectedAudioStream ||
-        !validTimeBase(videoTimeBase) || !validTimeBase(audioTimeBase)) {
+        !MediaTsProgramContractValidator::isSelectedStreamTimeBase(
+            videoTimeBase) ||
+        !MediaTsProgramContractValidator::isSelectedStreamTimeBase(
+            audioTimeBase)) {
         return ::media::Result<MediaTsAudioVideoProgramSelection>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "MPEG-TS selected A/V stream facts are invalid"));
@@ -205,18 +126,18 @@ MediaTsProgramSelector::selectAudioVideo(
             selected.error());
     }
     return ::media::Result<MediaTsAudioVideoProgramSelection>::success(
-        MediaTsAudioVideoProgramSelection{
+        MediaTsAudioVideoProgramSelection(
             selected.value().programNumber,
             selected.value().programMapPid,
             selected.value().pcrPid,
-            MediaTsSelectedStreamPlan{
+            MediaTsSelectedStreamPlan(
                 selectedVideoStream,
                 selected.value().videoPid,
-                videoTimeBase},
-            MediaTsSelectedStreamPlan{
+                videoTimeBase),
+            MediaTsSelectedStreamPlan(
                 selectedAudioStream,
                 *selected.value().audioPid,
-                audioTimeBase}});
+                audioTimeBase)));
 }
 
 } // namespace media::ffmpeg::graph

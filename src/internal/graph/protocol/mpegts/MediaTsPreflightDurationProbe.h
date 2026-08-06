@@ -35,6 +35,7 @@ private:
 
     MediaTsRuntimeBinding m_binding;
     std::size_t m_frameLimit;
+    std::size_t m_observedFrameCount = 0;
     std::deque<MediaTsReadFrameEnvelope> m_replay;
     std::optional<MediaTsPacketDurationEvidence> m_videoEvidence;
     std::optional<MediaTsPacketDurationEvidence> m_audioEvidence;

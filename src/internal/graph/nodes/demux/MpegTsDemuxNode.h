@@ -52,7 +52,6 @@ private:
     std::optional<MediaTsClockProjection> m_projection;
     std::optional<MediaTsProgramClockPolicy> m_policy;
     std::optional<MediaTsRuntimeBinding> m_binding;
-    MediaRational m_packetTimeBase;
     std::uint64_t m_initialSourceGeneration = 0;
     StreamClock m_videoClock;
     StreamClock m_audioClock;
