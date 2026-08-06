@@ -21,7 +21,7 @@ namespace media::ffmpeg::graph {
     LocalFileTranscodeOptions builderOptions;
     builderOptions.inputUrl = options.inputUrl;
     builderOptions.outputUrl = options.outputUrl;
-    builderOptions.parameters.execution.includeAudio = options.includeAudio;
+    builderOptions.parameters.execution.streamSet = options.streamSet;
     builderOptions.parameters.queues = options.queues;
 
     return LocalFileTranscodeGraphBuilder::build(builderOptions);

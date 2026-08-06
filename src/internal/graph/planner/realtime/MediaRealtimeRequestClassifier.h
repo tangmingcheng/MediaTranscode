@@ -6,7 +6,6 @@ namespace media::ffmpeg::graph {
 
 class MediaRealtimeRequestClassifier final {
 public:
-    static bool audioRequested(const MediaRealtimeRtpTranscodeRequest& request) noexcept;
     static bool realtimeUrlInput(const MediaRealtimeRtpTranscodeRequest& request) noexcept;
     static bool rawRtpInput(const MediaRealtimeRtpTranscodeRequest& request) noexcept;
     static bool mpegTsUdpInput(const MediaRealtimeRtpTranscodeRequest& request) noexcept;

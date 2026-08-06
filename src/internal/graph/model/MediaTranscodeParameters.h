@@ -1,5 +1,7 @@
 #pragma once
 
+#include "internal/graph/model/MediaTranscodeStreamSet.h"
+
 #include <cstddef>
 #include <optional>
 #include <string>
@@ -123,7 +125,7 @@ struct MediaAudioTranscodeParameters {
 };
 
 struct MediaTranscodeExecutionParameters {
-    bool includeAudio = true;
+    std::optional<MediaTranscodeStreamSet> streamSet;
     bool disableHardware = false;
     bool diagnosticLogEnabled = true;
 };

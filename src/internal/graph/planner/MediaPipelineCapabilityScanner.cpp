@@ -56,7 +56,7 @@ FFmpegRealtimeInputOptions toFFmpegRealtimeInputOptions(const MediaPipelinePlann
 ::media::Result<MediaRealtimeInputStreamInfo> MediaPipelineCapabilityScanner::detectRealtimeInputStreamInfo(
     const std::string& inputUrl,
     const MediaPipelinePlannerOptions& options,
-    bool includeAudio)
+    MediaTranscodeStreamSet streamSet)
 {
     AVDictionary* rawOptions = nullptr;
     applyFFmpegRealtimeInputOptions(&rawOptions, toFFmpegRealtimeInputOptions(options));
@@ -66,7 +66,7 @@ FFmpegRealtimeInputOptions toFFmpegRealtimeInputOptions(const MediaPipelinePlann
         }
     };
 
-    auto result = MediaStreamCapabilityProbe::inspectRealtime(inputUrl, &rawOptions, includeAudio);
+    auto result = MediaStreamCapabilityProbe::inspectRealtime(inputUrl, &rawOptions, streamSet);
     cleanup();
     return result;
 }
@@ -74,10 +74,10 @@ FFmpegRealtimeInputOptions toFFmpegRealtimeInputOptions(const MediaPipelinePlann
 ::media::Result<MediaPreparedRealtimeInputScan> MediaPipelineCapabilityScanner::prepareRealtimeInput(
     const std::string& inputUrl,
     const MediaPipelinePlannerOptions& options,
-    bool includeAudio)
+    MediaTranscodeStreamSet streamSet)
 {
     return prepareRealtimeInput(
-        inputUrl, options, includeAudio,
+        inputUrl, options, streamSet,
         [](const std::string& url, AVDictionary** inputOptions)
             -> ::media::Result<::media::ffmpeg::InputFormatContextPtr> {
             return MediaInputCapabilityProbe::open(url, inputOptions);
@@ -87,7 +87,7 @@ FFmpegRealtimeInputOptions toFFmpegRealtimeInputOptions(const MediaPipelinePlann
 ::media::Result<MediaPreparedRealtimeInputScan> MediaPipelineCapabilityScanner::prepareRealtimeInput(
     const std::string& inputUrl,
     const MediaPipelinePlannerOptions& options,
-    bool includeAudio,
+    MediaTranscodeStreamSet streamSet,
     const MediaRealtimeInputOpener& opener)
 {
     if (!opener) {
@@ -97,7 +97,7 @@ FFmpegRealtimeInputOptions toFFmpegRealtimeInputOptions(const MediaPipelinePlann
     AVDictionary* rawOptions = nullptr;
     applyFFmpegRealtimeInputOptions(&rawOptions, toFFmpegRealtimeInputOptions(options));
     auto result = MediaStreamCapabilityProbe::prepareRealtime(
-        inputUrl, &rawOptions, includeAudio, opener);
+        inputUrl, &rawOptions, streamSet, opener);
     if (rawOptions) av_dict_free(&rawOptions);
     return result;
 }

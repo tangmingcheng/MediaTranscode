@@ -234,7 +234,8 @@ openMpegTsRuntimeSession(
     if (!capacity) return ::media::Result<MediaPreparedRealtimeInputScan>::failure(capacity.error());
     const auto policy = MediaRealtimeTsInputPlan::create(
         TsPacketSize, probeBytes, TsMaximumPacketPositionRegressionBytes,
-        capacity.value(), MediaRealtimeRequestClassifier::audioRequested(request) ? 2 : 1);
+        capacity.value(),
+        request.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo ? 2 : 1);
     if (!policy) return ::media::Result<MediaPreparedRealtimeInputScan>::failure(policy.error());
 
     const MediaTsSessionOpenSettings openSettings{
@@ -261,7 +262,9 @@ openMpegTsRuntimeSession(
         if (!video && stream.streamKind == MediaStreamKind::Video) video = &stream;
         if (!audio && stream.streamKind == MediaStreamKind::Audio) audio = &stream;
     }
-    if (!video || (MediaRealtimeRequestClassifier::audioRequested(request) && !audio)) {
+    if (!video ||
+        (request.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo &&
+         !audio)) {
         return ::media::Result<MediaPreparedRealtimeInputScan>::failure(
             ::media::ErrorInfo::notInitialized("MPEG-TS selected A/V streams are incomplete"));
     }
@@ -460,7 +463,8 @@ void fillNodePlan(
             ::media::ErrorInfo::invalidArgument(
                 "Raw RTP input requires an explicit positive read timeout"));
     }
-    if (MediaRealtimeRequestClassifier::audioRequested(request) && !avSync) {
+    if (request.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo &&
+        !avSync) {
         return ::media::Result<MediaRealtimeRawInputPlan>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "Raw RTP A/V input requires an explicit synchronization plan"));
@@ -492,7 +496,7 @@ void fillNodePlan(
     }
     result.videoDepacketizer = std::move(videoDepacketizer).value();
 
-    if (MediaRealtimeRequestClassifier::audioRequested(request)) {
+    if (request.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo) {
         auto audioDescriptor = MediaRealtimeRtpCodecRegistry::describe(MediaStreamKind::Audio, request.input.audioRtp);
         if (!audioDescriptor) return ::media::Result<MediaRealtimeRawInputPlan>::failure(audioDescriptor.error());
         auto audioEndpoint = endpoint(request.input.audioRtp, "Raw RTP audio");
@@ -600,9 +604,10 @@ void MediaRealtimeInputPlanner::applyNodePlans(
     }
     return io
         ? MediaPipelineCapabilityScanner::prepareRealtimeInput(
-              request.input.url, options, MediaRealtimeRequestClassifier::audioRequested(request), io->openGeneric)
+              request.input.url, options, *request.parameters.execution.streamSet,
+              io->openGeneric)
         : MediaPipelineCapabilityScanner::prepareRealtimeInput(
-              request.input.url, options, MediaRealtimeRequestClassifier::audioRequested(request));
+              request.input.url, options, *request.parameters.execution.streamSet);
 }
 
 ::media::Result<MediaPreparedRawRtpProbe>
@@ -645,7 +650,7 @@ MediaRealtimeInputPlanner::prepareRawRtpVideo(
             canonicalCodecName(metadata.codecName),
             static_cast<std::uint8_t>(*metadata.payloadType),
             *metadata.clockRate}};
-    if (MediaRealtimeRequestClassifier::audioRequested(request)) {
+    if (request.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo) {
         const auto& audio = request.input.audioRtp;
         if (!audio.payloadType || !audio.clockRate) {
             return ::media::Result<MediaPreparedRawRtpProbe>::failure(

@@ -509,7 +509,7 @@ Detailed design and execution checklist:
 
 详细实施计划：`docs/superpowers/plans/2026-08-06-realtime-video-only-stream-set.md`
 
-- [ ] Task 1：以显式 `MediaTranscodeStreamSet` 替换 `includeAudio`。
+- [x] Task 1：以显式 `MediaTranscodeStreamSet` 替换 `includeAudio`。
 - [ ] Task 2：完成 VideoOnly generic、RTSP、MPEG-TS 与 raw RTP 输入准备。
 - [ ] Task 3：统一 H.264/HEVC 手动与自动视频 FMTP 规划。
 - [ ] Task 4：实现互斥的 VideoOnly runtime 与单视频调度产品。

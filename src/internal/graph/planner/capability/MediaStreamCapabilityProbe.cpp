@@ -82,7 +82,8 @@ MediaRational frameRate(const AVStream& stream) noexcept
 }
 
 ::media::Result<MediaRealtimeInputStreamInfo> MediaStreamCapabilityProbe::inspectRealtime(
-    const std::string& inputUrl, AVDictionary** inputOptions, bool includeAudio)
+    const std::string& inputUrl, AVDictionary** inputOptions,
+    MediaTranscodeStreamSet streamSet)
 {
     auto context = openAndInspect(inputUrl, inputOptions);
     if (!context) return ::media::Result<MediaRealtimeInputStreamInfo>::failure(context.error());
@@ -91,7 +92,7 @@ MediaRational frameRate(const AVStream& stream) noexcept
 
     MediaRealtimeInputStreamInfo info;
     info.video = std::move(video).value();
-    if (includeAudio) {
+    if (streamSet == MediaTranscodeStreamSet::AudioVideo) {
         auto audio = MediaAudioCapabilityProbe::inspect(*context.value());
         if (!audio) return ::media::Result<MediaRealtimeInputStreamInfo>::failure(audio.error());
         info.hasAudio = audio.value().present;
@@ -101,7 +102,8 @@ MediaRational frameRate(const AVStream& stream) noexcept
 }
 
 ::media::Result<MediaPreparedRealtimeInputScan> MediaStreamCapabilityProbe::prepareRealtime(
-    const std::string& inputUrl, AVDictionary** inputOptions, bool includeAudio,
+    const std::string& inputUrl, AVDictionary** inputOptions,
+    MediaTranscodeStreamSet streamSet,
     const MediaRealtimeInputOpener& opener)
 {
     if (!opener) {
@@ -121,7 +123,7 @@ MediaRational frameRate(const AVStream& stream) noexcept
     if (!video) return ::media::Result<MediaPreparedRealtimeInputScan>::failure(video.error());
     MediaRealtimeInputStreamInfo streams;
     streams.video = std::move(video).value();
-    if (includeAudio) {
+    if (streamSet == MediaTranscodeStreamSet::AudioVideo) {
         auto audio = MediaAudioCapabilityProbe::inspect(*input);
         if (!audio) return ::media::Result<MediaPreparedRealtimeInputScan>::failure(audio.error());
         streams.hasAudio = audio.value().present;

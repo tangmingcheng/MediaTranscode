@@ -64,7 +64,10 @@ int runLocalVideoCli(int argc, char** argv)
     const MediaTranscodeParameterSet& parameters = options.parameters;
     std::cout << "[CLI] input=" << redactUrlUserInfo(options.inputUrl)
               << " output=" << options.outputUrl
-              << " audio=" << (parameters.execution.includeAudio ? "on" : "off")
+              << " audio="
+              << (parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo
+                      ? "on"
+                      : "off")
               << " width=" << optionalIntText(parameters.video.width)
               << " height=" << optionalIntText(parameters.video.height)
               << " fps=" << frameRateText(parameters.video.frameRate)

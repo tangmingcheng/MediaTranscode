@@ -32,15 +32,15 @@ public:
     static ::media::Result<MediaRealtimeInputStreamInfo> detectRealtimeInputStreamInfo(
         const std::string& inputUrl,
         const MediaPipelinePlannerOptions& options,
-        bool includeAudio);
+        MediaTranscodeStreamSet streamSet);
     static ::media::Result<MediaPreparedRealtimeInputScan> prepareRealtimeInput(
         const std::string& inputUrl,
         const MediaPipelinePlannerOptions& options,
-        bool includeAudio);
+        MediaTranscodeStreamSet streamSet);
     static ::media::Result<MediaPreparedRealtimeInputScan> prepareRealtimeInput(
         const std::string& inputUrl,
         const MediaPipelinePlannerOptions& options,
-        bool includeAudio,
+        MediaTranscodeStreamSet streamSet,
         const MediaRealtimeInputOpener& opener);
 
     static std::vector<MediaPipelineChainPlan> enumerateVideoTranscodeCandidates(

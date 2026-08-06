@@ -254,7 +254,8 @@ MediaVideoTranscodeParameters planRealtimeVideoParameters(const MediaVideoTransc
         return ::media::Result<MediaAudioPipelinePlannerOptions>::failure(status.error());
     }
 
-    MediaAudioPipelinePlannerOptions plannerOptions(options.parameters.execution.includeAudio);
+    MediaAudioPipelinePlannerOptions plannerOptions(
+        *options.parameters.execution.streamSet);
     plannerOptions.requestedCodecName = audio.codecName;
     plannerOptions.rateControl = audio.rateControl;
     plannerOptions.requestedBitrateKbps = audio.bitrateKbps;
@@ -267,7 +268,7 @@ MediaVideoTranscodeParameters planRealtimeVideoParameters(const MediaVideoTransc
     plannerOptions.requestedPreset = audio.preset;
     plannerOptions.requestedProfile = audio.profile;
     plannerOptions.outputRequirement.requireFrameTranscode =
-        MediaRealtimeRequestClassifier::audioRequested(options);
+        options.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo;
     if (MediaRealtimeRequestClassifier::muxedTransportOutput(options)) {
         plannerOptions.outputRequirement.codecName = "aac";
         plannerOptions.outputRequirement.profile = MediaAudioProfile::knownAacLow();
@@ -471,7 +472,7 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
 
     std::optional<MediaAvSyncPlan> plannedRawRtpAvSync;
     if (MediaRealtimeRequestClassifier::rawRtpInput(options) &&
-        MediaRealtimeRequestClassifier::audioRequested(options)) {
+        options.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo) {
         auto rtpInput = MediaAvSyncPlanner::planRtpInputClock(options);
         if (!rtpInput) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
@@ -494,7 +495,7 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
         if (!raw) return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(raw.error());
         rawInput.emplace(std::move(raw).value());
 
-        if (MediaRealtimeRequestClassifier::audioRequested(options)) {
+        if (options.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo) {
             auto plannedAudio = MediaAudioPipelinePlanner::planKnownAudio(*rawInput->audio, audioOptions);
             if (!plannedAudio) {
                 return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(plannedAudio.error());
@@ -558,7 +559,7 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
         }
         videoParameters = std::move(plannedVideoParameters).value();
 
-        if (MediaRealtimeRequestClassifier::audioRequested(options)) {
+        if (options.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo) {
             if (!realtimeInput.hasAudio) {
                 return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
                     ::media::ErrorInfo::invalidArgument("Realtime RTP audio was requested but input has no audio stream"));
@@ -645,7 +646,10 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
         }
         auto ts = MediaRealtimeTsInputPlan::create(
             PacketSize, probeBytes, MaximumRegressionBytes,
-            capacity.value(), MediaRealtimeRequestClassifier::audioRequested(options) ? 2 : 1);
+            capacity.value(),
+            options.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo
+                ? 2
+                : 1);
         if (!ts) return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(ts.error());
         plan.input.mpegTs = std::move(ts).value();
         if (selectedTsProgram) {
@@ -693,7 +697,7 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
             std::move(videoPacketLayout).value(),
             *plan.audioPlan.resolvedOutput});
     }
-    if (MediaRealtimeRequestClassifier::audioRequested(options)) {
+    if (options.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo) {
         std::optional<MediaAvSyncPreparedDemuxTimestampFacts> demuxFacts;
         if (MediaRealtimeRequestClassifier::realtimeUrlInput(options)) {
             auto preparedFacts =

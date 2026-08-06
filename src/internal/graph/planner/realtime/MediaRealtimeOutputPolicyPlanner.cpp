@@ -168,19 +168,24 @@ MediaLatencyPolicy muxPacing() noexcept
         return ::media::Result<MediaRealtimeOutputUrls>::failure(
             ::media::ErrorInfo::invalidArgument("Realtime RTP output ports must be valid even RTP ports"));
     }
-    const bool audioRequested = MediaRealtimeRequestClassifier::audioRequested(request);
-    if (audioRequested && videoPort > 65532) {
+    const MediaTranscodeStreamSet streamSet = *request.parameters.execution.streamSet;
+    if (streamSet == MediaTranscodeStreamSet::AudioVideo && videoPort > 65532) {
         return ::media::Result<MediaRealtimeOutputUrls>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "Realtime RTP audio output port collides with the video RTP/RTCP pair"));
     }
-    const std::size_t audioPort = audioRequested ? videoPort + 2 : 0;
-    if (audioRequested && !validRtpPort(audioPort)) {
+    const std::size_t audioPort = streamSet == MediaTranscodeStreamSet::AudioVideo
+        ? videoPort + 2
+        : 0;
+    if (streamSet == MediaTranscodeStreamSet::AudioVideo &&
+        !validRtpPort(audioPort)) {
         return ::media::Result<MediaRealtimeOutputUrls>::failure(
             ::media::ErrorInfo::invalidArgument("Realtime RTP output ports must be valid even RTP ports"));
     }
     urls.video = rtpUrl(request.output.host, videoPort);
-    if (audioRequested) urls.audio = rtpUrl(request.output.host, audioPort);
+    if (streamSet == MediaTranscodeStreamSet::AudioVideo) {
+        urls.audio = rtpUrl(request.output.host, audioPort);
+    }
     if (MediaRealtimeRequestClassifier::muxedTransportOutput(request)) {
         urls.muxed = urls.video;
         urls.muxedFormat = "mpegts";
@@ -203,7 +208,7 @@ MediaLatencyPolicy muxPacing() noexcept
         output.muxedOutput.muxSessionKind = MediaMuxSessionKind::FFmpegFile;
         output.singleStreamMux.expectVideo = true;
         output.singleStreamMux.expectAudio =
-            MediaRealtimeRequestClassifier::audioRequested(request);
+            request.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo;
         if (MediaRealtimeRequestClassifier::rtpAvpOutput(request)) {
             if (!request.output.basePort || !request.output.packetSize) {
                 return ::media::Status::failure(
@@ -266,7 +271,7 @@ MediaLatencyPolicy muxPacing() noexcept
     output.videoOutput.packetSize = *request.output.packetSize;
     output.videoOutput.mediaId = request.mediaId;
     applyPacing(output.videoOutput, static_cast<int64_t>(*plan.videoParameters.bitrateKbps) * 1000);
-    if (MediaRealtimeRequestClassifier::audioRequested(request)) {
+    if (request.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo) {
         if (!request.parameters.audio.bitrateKbps || *request.parameters.audio.bitrateKbps <= 0) {
             return ::media::Status::failure(
                 ::media::ErrorInfo::invalidArgument("Realtime RTP audio output requires explicit positive audio bitrate"));
@@ -300,7 +305,10 @@ MediaLatencyPolicy muxPacing() noexcept
     }
     output.sdp.path = request.output.sdpPath;
     output.sdp.mediaId = request.mediaId;
-    output.sdp.expectedContexts = MediaRealtimeRequestClassifier::audioRequested(request) ? 2 : 1;
+    output.sdp.expectedContexts =
+        request.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo
+        ? 2
+        : 1;
     output.singleStreamMux.expectVideo = true;
     output.singleStreamMux.expectAudio = false;
     output.singleStreamMux.pacingPolicy = muxPacing();

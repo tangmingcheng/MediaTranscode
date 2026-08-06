@@ -4,6 +4,7 @@
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "media_transcode/Result.h"
 
+#include <optional>
 #include <string>
 
 namespace media::ffmpeg::graph {
@@ -15,7 +16,7 @@ enum class MediaPipelinePresetKind {
 struct MediaPipelinePresetOptions {
     std::string inputUrl;
     std::string outputUrl;
-    bool includeAudio = true;
+    std::optional<MediaTranscodeStreamSet> streamSet;
     MediaGraphQueueParameters queues;
 };
 

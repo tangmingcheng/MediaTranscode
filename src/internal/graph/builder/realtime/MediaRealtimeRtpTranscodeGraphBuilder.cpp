@@ -402,11 +402,11 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
     const MediaNodeKind inputKind = plan.inputType == RealtimeInputType::RtpPort
         ? MediaNodeKind::RawRtpInput
         : MediaNodeKind::RealtimeInput;
-    const bool includeAudio = branchEnabled(plan.audioPlan);
+    const bool audioBranchEnabled = branchEnabled(plan.audioPlan);
     const bool synchronized = plan.avSyncRuntime.has_value();
     const MediaRealtimeSingleStreamOutputPlan* singleStreamOutput =
         plan.singleStreamOutput ? &*plan.singleStreamOutput : nullptr;
-    if (includeAudio && !synchronized) {
+    if (audioBranchEnabled && !synchronized) {
         return ::media::Result<MediaGraph>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "Realtime A/V graph construction requires the planned synchronization runtime"));
@@ -418,7 +418,7 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
                              ? singleStreamOutput->packetCopyNormalizationRequired
                              : false,
                          synchronized)};
-    const std::optional<PacketSelectOutputPlan> audioPacketOutput = includeAudio
+    const std::optional<PacketSelectOutputPlan> audioPacketOutput = audioBranchEnabled
         ? std::optional<PacketSelectOutputPlan>{packetOutputPlan(
               plan.audioPlan.sourceStreamIndex, plan.audioPlan.branchMode,
               false, synchronized)}
@@ -628,7 +628,7 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
     }
 
     std::optional<MediaEncodedBranchEndpoints> audio;
-    if (includeAudio) {
+    if (audioBranchEnabled) {
         const auto& avSyncRuntime = *plan.avSyncRuntime;
         MediaAudioBranchSegmentOptions audioOptions;
         audioOptions.prefix = "realtime.audio";

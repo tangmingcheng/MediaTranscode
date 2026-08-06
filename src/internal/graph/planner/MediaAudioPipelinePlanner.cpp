@@ -81,7 +81,7 @@ MediaResolvedAudioSource resolvedSource(const MediaInputAudioStreamInfo& input)
     const std::string& inputPath,
     const MediaAudioPipelinePlannerOptions& options)
 {
-    if (!options.includeAudio) {
+    if (options.streamSet == MediaTranscodeStreamSet::VideoOnly) {
         MediaAudioPipelinePlan plan;
         plan.branchMode = MediaBranchMode::Drop;
         plan.reason = "disabled";
@@ -117,7 +117,7 @@ MediaResolvedAudioSource resolvedSource(const MediaInputAudioStreamInfo& input)
     const MediaAudioPipelinePlannerOptions& options)
 {
     MediaAudioPipelinePlan plan;
-    if (!options.includeAudio) {
+    if (options.streamSet == MediaTranscodeStreamSet::VideoOnly) {
         plan.branchMode = MediaBranchMode::Drop;
         plan.reason = "disabled";
         return ::media::Result<MediaAudioPipelinePlan>::success(std::move(plan));

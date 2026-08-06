@@ -295,7 +295,7 @@ void planTsInput(MediaAvSyncPlan& plan,
     const MediaAvSyncPreparedDemuxTimestampFacts* preparedDemuxFacts,
     int resolvedOutputAudioSampleRate)
 {
-    if (!request.parameters.execution.includeAudio) {
+    if (request.parameters.execution.streamSet != MediaTranscodeStreamSet::AudioVideo) {
         return ::media::Result<MediaAvSyncPlan>::failure(
             ::media::ErrorInfo::unsupported("A/V synchronization requires both audio and video"));
     }

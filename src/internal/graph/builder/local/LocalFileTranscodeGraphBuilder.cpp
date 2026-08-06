@@ -11,6 +11,7 @@
 #include "internal/graph/builder/segments/MediaVideoBranchSegmentBuilder.h"
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/planner/MediaPipelinePlanner.h"
+#include "internal/graph/planner/MediaTranscodeStreamSetRequestValidator.h"
 #include "internal/graph/planner/local/MediaLocalFileOutputPlanner.h"
 
 #include <utility>
@@ -51,6 +52,10 @@ bool branchEnabled(const MediaAudioPipelinePlan& plan) noexcept
 ::media::Status LocalFileTranscodeGraphBuilder::validate(const LocalFileTranscodeOptions& options)
 {
     const MediaTranscodeParameterSet& parameters = options.parameters;
+    if (auto status = MediaTranscodeStreamSetRequestValidator::validate(parameters);
+        !status) {
+        return status;
+    }
     if (options.inputUrl.empty()) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument("LocalFileTranscodeGraphBuilder requires inputUrl"));
     }
