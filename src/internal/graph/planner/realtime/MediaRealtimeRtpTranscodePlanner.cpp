@@ -349,6 +349,38 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
         static_cast<int>(remaining.count()));
 }
 
+::media::Result<MediaRealtimeRtpTranscodeRequest>
+resolveManualRawRtpVideoSignaling(
+    const MediaRealtimeRtpTranscodeRequest& request)
+{
+    if (!MediaRealtimeRequestClassifier::rawRtpInput(request) ||
+        !request.input.videoRtp.fmtp) {
+        return ::media::Result<MediaRealtimeRtpTranscodeRequest>::success(
+            request);
+    }
+    auto facts = parseRtpVideoSignalingFacts(
+        request.input.videoRtp.codecName, *request.input.videoRtp.fmtp);
+    if (!facts) {
+        return ::media::Result<MediaRealtimeRtpTranscodeRequest>::failure(
+            facts.error());
+    }
+    if (auto status = MediaRtpVideoParameterSetValidator::validate(
+            request.input.videoRtp.codecName, facts.value());
+        !status) {
+        return ::media::Result<MediaRealtimeRtpTranscodeRequest>::failure(
+            status.error());
+    }
+    auto fmtp = serializeRtpVideoFmtp(facts.value());
+    if (!fmtp) {
+        return ::media::Result<MediaRealtimeRtpTranscodeRequest>::failure(
+            fmtp.error());
+    }
+    MediaRealtimeRtpTranscodeRequest resolved = request;
+    resolved.input.videoRtp.fmtp = std::move(fmtp).value();
+    return ::media::Result<MediaRealtimeRtpTranscodeRequest>::success(
+        std::move(resolved));
+}
+
 } // namespace
 
 MediaRealtimeTsInputPolicy::MediaRealtimeTsInputPolicy(
@@ -620,7 +652,12 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
     if (auto status = validateRealtimeRequestNoIo(requestedOptions); !status) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(status.error());
     }
-    MediaRealtimeRtpTranscodeRequest options = requestedOptions;
+    auto resolvedOptions = resolveManualRawRtpVideoSignaling(requestedOptions);
+    if (!resolvedOptions) {
+        return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+            resolvedOptions.error());
+    }
+    MediaRealtimeRtpTranscodeRequest options = std::move(resolvedOptions).value();
     options.parameters.queues = MediaRealtimeQueueCapacityPlanner::plan(
         requestedOptions.parameters.queues);
 

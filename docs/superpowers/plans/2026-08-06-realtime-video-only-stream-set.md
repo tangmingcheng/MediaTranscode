@@ -54,11 +54,11 @@
 - Manual and automatic H.264/HEVC paths both yield the existing validated typed video signaling facts and one sealed prepared video transport when probing is used.
 - Request codec/PT/clock identity must equal detected identity.
 
-- [ ] Keep manual FMTP validation before product planning for H.264 and HEVC.
-- [ ] Make automatic VideoOnly probing independent of audio and preserve the single startup deadline.
-- [ ] Converge manual/automatic paths before depacketizer and product construction; reject incomplete or conflicting facts.
-- [ ] Verify prepared transport handoff remains exactly once and no runtime inference/fallback is added.
-- [ ] Commit `feat(rtp): support video-only manual and detected signaling`, and push.
+- [x] Keep manual FMTP validation before product planning for H.264 and HEVC.
+- [x] Make automatic VideoOnly probing independent of audio and preserve the single startup deadline.
+- [x] Converge manual/automatic paths before depacketizer and product construction; reject incomplete or conflicting facts.
+- [x] Verify prepared transport handoff remains exactly once and no runtime inference/fallback is added.
+- [x] Commit `feat(rtp): support video-only manual and detected signaling`, and push.
 
 ### Task 4: Typed VideoOnly runtime and scheduling
 

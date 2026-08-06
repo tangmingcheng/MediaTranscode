@@ -96,4 +96,8 @@ private:
 ::media::Result<std::string> serializeRtpVideoFmtp(
     const MediaRtpVideoSignalingFacts& facts);
 
+::media::Result<MediaRtpVideoSignalingFacts> parseRtpVideoSignalingFacts(
+    const std::string& codecName,
+    const std::string& fmtp);
+
 } // namespace media::ffmpeg::graph

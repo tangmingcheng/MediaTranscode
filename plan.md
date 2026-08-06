@@ -13,6 +13,10 @@ Detailed design and execution checklist:
 - `docs/superpowers/specs/2026-08-04-rtp-fmtp-autodetect-design.md`
 - `docs/superpowers/plans/2026-08-04-rtp-fmtp-autodetect.md`
 
+## Realtime VideoOnly Stream Set
+
+- [x] Task 3: converge manual and detected H.264/HEVC raw-RTP FMTP through validated typed signaling facts before depacketizer and product planning; preserve the VideoOnly prepared-transport contract and the AudioVideo shared preflight deadline.
+
 ## P0 Input Termination and Finalization Follow-Up
 
 - [x] Establish the finite-source and EOF failure baseline.

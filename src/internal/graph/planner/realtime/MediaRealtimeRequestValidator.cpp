@@ -4,6 +4,8 @@
 #include "internal/graph/planner/realtime/MediaRealtimeOutputPolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpCodecDescriptor.h"
+#include "internal/graph/protocol/rtp/MediaRtpVideoParameterSetValidator.h"
+#include "internal/graph/protocol/rtp/MediaRtpVideoSignalingFacts.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
 
 namespace media::ffmpeg::graph {
@@ -94,6 +96,22 @@ bool rawRtpAudioControlSpecified(
         "Transcode stream set is not supported"));
 }
 
+::media::Status validateManualRawRtpVideoSignaling(
+    const MediaRealtimeRtpTranscodeRequest& request)
+{
+    if (!MediaRealtimeRequestClassifier::rawRtpInput(request) ||
+        !request.input.videoRtp.fmtp) {
+        return ::media::Status::success();
+    }
+    auto facts = parseRtpVideoSignalingFacts(
+        request.input.videoRtp.codecName, *request.input.videoRtp.fmtp);
+    if (!facts) {
+        return ::media::Status::failure(facts.error());
+    }
+    return MediaRtpVideoParameterSetValidator::validate(
+        request.input.videoRtp.codecName, facts.value());
+}
+
 } // namespace
 
 ::media::Status MediaRealtimeRequestValidator::validate(const MediaRealtimeRtpTranscodeRequest& request)
@@ -105,6 +123,9 @@ bool rawRtpAudioControlSpecified(
     }
     if (auto status = validateStreamSetControls(request); !status) return status;
     if (auto status = validateClassification(request); !status) return status;
+    if (auto status = validateManualRawRtpVideoSignaling(request); !status) {
+        return status;
+    }
     if ((MediaRealtimeRequestClassifier::realtimeUrlInput(request) ||
          MediaRealtimeRequestClassifier::mpegTsUdpInput(request)) && request.input.url.empty()) {
         return ::media::Status::failure(
