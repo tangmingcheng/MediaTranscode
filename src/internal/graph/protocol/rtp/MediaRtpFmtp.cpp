@@ -1,6 +1,6 @@
 #include "internal/graph/protocol/rtp/MediaRtpFmtp.h"
 
-#include "internal/graph/utils/MediaCodecNameUtils.h"
+#include "internal/graph/utils/MediaAsciiStringUtils.h"
 
 #include <algorithm>
 #include <charconv>

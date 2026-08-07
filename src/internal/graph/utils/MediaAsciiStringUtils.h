@@ -4,6 +4,6 @@
 
 namespace media::ffmpeg::graph {
 
-std::string canonicalCodecName(std::string codec);
+std::string lowercaseAscii(std::string value);
 
 } // namespace media::ffmpeg::graph

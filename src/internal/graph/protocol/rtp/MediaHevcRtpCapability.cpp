@@ -1,6 +1,6 @@
 #include "internal/graph/protocol/rtp/MediaHevcRtpCapability.h"
 
-#include "internal/graph/utils/MediaCodecNameUtils.h"
+#include "internal/graph/utils/MediaAsciiStringUtils.h"
 
 namespace media::ffmpeg::graph {
 

@@ -8,7 +8,7 @@
 #include "internal/graph/protocol/rtp/depacketizer/MediaH264RtpDepacketizer.h"
 #include "internal/graph/protocol/rtp/depacketizer/MediaHevcRtpDepacketizer.h"
 #include "internal/graph/protocol/rtp/depacketizer/MediaOpusRtpDepacketizer.h"
-#include "internal/graph/utils/MediaCodecNameUtils.h"
+#include "internal/graph/utils/MediaAsciiStringUtils.h"
 
 namespace media::ffmpeg::graph {
 namespace {

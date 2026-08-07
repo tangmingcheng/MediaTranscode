@@ -5,6 +5,7 @@
 #include "internal/graph/protocol/rtp/MediaOpusRtpCapability.h"
 #include "internal/graph/protocol/rtp/MediaRtpFmtp.h"
 #include "internal/graph/protocol/rtp/MediaRtpDepacketizerFactory.h"
+#include "internal/graph/utils/MediaAsciiStringUtils.h"
 
 #include <initializer_list>
 #include <string>
