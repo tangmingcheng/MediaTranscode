@@ -1,5 +1,7 @@
 #include "internal/graph/protocol/rtp/MediaRtpFmtp.h"
 
+#include "internal/graph/utils/MediaCodecNameUtils.h"
+
 #include <algorithm>
 #include <charconv>
 #include <cctype>
@@ -12,12 +14,6 @@ std::string trim(std::string value)
     const auto first = std::find_if_not(value.begin(), value.end(), [](unsigned char c) { return std::isspace(c) != 0; });
     const auto last = std::find_if_not(value.rbegin(), value.rend(), [](unsigned char c) { return std::isspace(c) != 0; }).base();
     return first < last ? std::string(first, last) : std::string{};
-}
-
-std::string lower(std::string value)
-{
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return value;
 }
 
 int base64Value(unsigned char c) noexcept
@@ -43,7 +39,8 @@ int base64Value(unsigned char c) noexcept
             const std::size_t equals = token.find('=');
             if (equals == std::string::npos) return ::media::Result<MediaRtpFmtpParameters>::failure(
                 ::media::ErrorInfo::invalidArgument("RTP fmtp token requires key=value"));
-            const std::string key = lower(trim(token.substr(0, equals)));
+            const std::string key = lowercaseAscii(
+                trim(token.substr(0, equals)));
             const std::string value = trim(token.substr(equals + 1));
             if (key.empty() || value.empty() || result.contains(key)) return ::media::Result<MediaRtpFmtpParameters>::failure(
                 ::media::ErrorInfo::invalidArgument("RTP fmtp contains empty or duplicate parameter"));
@@ -57,7 +54,7 @@ int base64Value(unsigned char c) noexcept
 
 ::media::Result<int> requiredRtpFmtpInt(const MediaRtpFmtpParameters& parameters, const std::string& key)
 {
-    const auto found = parameters.find(lower(key));
+    const auto found = parameters.find(lowercaseAscii(key));
     if (found == parameters.end()) return ::media::Result<int>::failure(
         ::media::ErrorInfo::invalidArgument("RTP fmtp missing " + key));
     int value = 0;

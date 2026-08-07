@@ -8,18 +8,10 @@
 #include "internal/graph/protocol/rtp/depacketizer/MediaH264RtpDepacketizer.h"
 #include "internal/graph/protocol/rtp/depacketizer/MediaHevcRtpDepacketizer.h"
 #include "internal/graph/protocol/rtp/depacketizer/MediaOpusRtpDepacketizer.h"
-
-#include <algorithm>
-#include <cctype>
+#include "internal/graph/utils/MediaCodecNameUtils.h"
 
 namespace media::ffmpeg::graph {
 namespace {
-
-std::string lower(std::string value)
-{
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return value;
-}
 
 ::media::Status requireKey(const MediaRtpFmtpParameters& parameters, const std::string& key)
 {
@@ -74,7 +66,7 @@ std::string lower(std::string value)
     const MediaRtpDepacketizerConfig& config)
 {
     if (auto status = validate(config); !status) return ::media::Result<std::unique_ptr<MediaRtpDepacketizer>>::failure(status.error());
-    const std::string codec = lower(config.codecName);
+    const std::string codec = lowercaseAscii(config.codecName);
     if (codec == "opus") return ::media::Result<std::unique_ptr<MediaRtpDepacketizer>>::success(std::make_unique<MediaOpusRtpDepacketizer>(config));
     if (codec == "h264") return ::media::Result<std::unique_ptr<MediaRtpDepacketizer>>::success(std::make_unique<MediaH264RtpDepacketizer>(config));
     if (codec == "hevc") return ::media::Result<std::unique_ptr<MediaRtpDepacketizer>>::success(std::make_unique<MediaHevcRtpDepacketizer>(config));
@@ -86,7 +78,7 @@ std::string lower(std::string value)
 ::media::Status MediaRtpDepacketizerFactory::validate(const MediaRtpDepacketizerConfig& config)
 {
     if (auto status = validateConfig(config); !status) return status;
-    const std::string codec = lower(config.codecName);
+    const std::string codec = lowercaseAscii(config.codecName);
     if (codec == "opus") {
         if (config.streamKind != MediaStreamKind::Audio || config.clockRate != 48000) {
             return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
@@ -122,7 +114,8 @@ std::string lower(std::string value)
             ::media::ErrorInfo::invalidArgument(
                 "AAC RTP requires planned audio channels and access-unit duration"));
         const auto mode = fmtp.value().find("mode");
-        if (mode == fmtp.value().end() || lower(mode->second) != "aac-hbr") return ::media::Status::failure(
+        if (mode == fmtp.value().end() ||
+            lowercaseAscii(mode->second) != "aac-hbr") return ::media::Status::failure(
             ::media::ErrorInfo::unsupported("AAC RTP requires mode=AAC-hbr"));
         for (const auto& [key, expected] : {std::pair{"sizelength", 13}, {"indexlength", 3}, {"indexdeltalength", 3}}) {
             auto value = requiredRtpFmtpInt(fmtp.value(), key);

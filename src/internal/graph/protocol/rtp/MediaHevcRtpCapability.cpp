@@ -1,22 +1,8 @@
 #include "internal/graph/protocol/rtp/MediaHevcRtpCapability.h"
 
-#include <algorithm>
-#include <cctype>
-#include <string>
+#include "internal/graph/utils/MediaCodecNameUtils.h"
 
 namespace media::ffmpeg::graph {
-namespace {
-
-std::string lowercaseAscii(std::string value)
-{
-    std::transform(value.begin(), value.end(), value.begin(),
-                   [](unsigned char character) {
-                       return static_cast<char>(std::tolower(character));
-                   });
-    return value;
-}
-
-} // namespace
 
 ::media::Status validateHevcRtpNonInterleavedFmtp(
     const MediaRtpFmtpParameters& parameters)

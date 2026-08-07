@@ -2,14 +2,21 @@
 
 #include <algorithm>
 #include <cctype>
+#include <utility>
 
 namespace media::ffmpeg::graph {
 
-std::string canonicalCodecName(std::string codec)
+std::string lowercaseAscii(std::string value)
 {
-    std::transform(codec.begin(), codec.end(), codec.begin(), [](unsigned char c) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
         return static_cast<char>(std::tolower(c));
     });
+    return value;
+}
+
+std::string canonicalCodecName(std::string codec)
+{
+    codec = lowercaseAscii(std::move(codec));
     if (codec == "avc" || codec == "h.264") {
         return "h264";
     }
