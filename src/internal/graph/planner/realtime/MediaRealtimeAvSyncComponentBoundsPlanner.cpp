@@ -41,7 +41,7 @@ namespace {
 
 ::media::Result<MediaRealtimeAvSyncComponentBounds>
 MediaRealtimeAvSyncComponentBoundsPlanner::plan(
-    const MediaRealtimeRtpTranscodePlan& plan)
+    const MediaRealtimeRtpTranscodePlanCore& plan)
 {
     if (!plan.audioPlan.selectedDecoder || !plan.audioPlan.selectedResampler ||
         !plan.audioPlan.resolvedOutput ||

@@ -48,6 +48,7 @@
 #include "internal/graph/nodes/sync/MediaAvStartupCoordinatorNode.h"
 #include "internal/graph/nodes/sync/MediaAvStartupCoordinatorNodePreparation.h"
 #include "internal/graph/nodes/sync/MediaAvOutputSchedulerNode.h"
+#include "internal/graph/nodes/sync/MediaVideoOutputSchedulerNode.h"
 #include "internal/graph/nodes/sync/MediaPlaybackEpochBinderNode.h"
 #include "internal/graph/nodes/sync/MediaCanonicalInputNode.h"
 #include "internal/graph/nodes/sync/MediaLockedPacketGateNode.h"
@@ -362,6 +363,9 @@ template <typename Node>
     case MediaNodeKind::AvOutputScheduler:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::make_unique<MediaAvOutputSchedulerNode>(node.id));
+    case MediaNodeKind::VideoOutputScheduler:
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+            std::make_unique<MediaVideoOutputSchedulerNode>(node.id));
     case MediaNodeKind::PlaybackEpochBinder:
     {
         auto group = requiredSyncGroup(
@@ -879,6 +883,7 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::RtpClockSnapshotFanout:
     case MediaNodeKind::AvStartupCoordinator:
     case MediaNodeKind::AvOutputScheduler:
+    case MediaNodeKind::VideoOutputScheduler:
     case MediaNodeKind::PlaybackEpochBinder:
     case MediaNodeKind::CanonicalInput:
     case MediaNodeKind::LockedPacketGate:

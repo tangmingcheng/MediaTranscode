@@ -6,13 +6,13 @@
 
 namespace media::ffmpeg::graph {
 
-struct MediaRealtimeRtpTranscodePlan;
+struct MediaRealtimeRtpTranscodePlanCore;
 struct MediaRealtimeOutputPlanningDraft;
 
 class MediaRealtimeAvSyncRuntimePlanner final {
 public:
     static ::media::Result<MediaRealtimeAvSyncRuntimePlan> plan(
-        MediaRealtimeRtpTranscodePlan& outer,
+        MediaRealtimeRtpTranscodePlanCore& outer,
         MediaRealtimeOutputPlanningDraft& output,
         MediaAvSyncPlan synchronization);
 

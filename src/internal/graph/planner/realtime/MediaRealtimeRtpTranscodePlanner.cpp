@@ -8,13 +8,14 @@
 #include "internal/graph/planner/realtime/MediaRealtimeOutputPolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeQueueCapacityPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlanner.h"
-#include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlanValidator.h"
+#include "internal/graph/planner/realtime/MediaRealtimeRuntimePlanValidator.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncComponentBoundsPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeEdgePolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestValidator.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpVideoSignalingResolver.h"
 #include "internal/graph/planner/realtime/MediaRealtimeTsInputPlanValidator.h"
+#include "internal/graph/planner/realtime/MediaRealtimeVideoRuntimePlanner.h"
 #include "internal/graph/protocol/mpegts/MediaTsProgramContractValidator.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 
@@ -29,7 +30,7 @@ namespace media::ffmpeg::graph {
 namespace {
 
 ::media::Status planScheduledRtpPacketization(
-    const MediaRealtimeRtpTranscodePlan& plan,
+    const MediaRealtimeRtpTranscodePlanCore& plan,
     MediaRealtimeOutputPlanningDraft& output,
     const MediaAvSyncPlan& synchronization)
 {
@@ -72,7 +73,7 @@ namespace {
 
 ::media::Result<MediaAvSyncPreparedDemuxTimestampFacts>
 preparedDemuxTimestampFacts(
-    const MediaRealtimeRtpTranscodePlan& plan,
+    const MediaRealtimeRtpTranscodePlanCore& plan,
     const MediaPreparedRealtimeInput* prepared)
 {
     if (!prepared) {
@@ -97,17 +98,6 @@ preparedDemuxTimestampFacts(
         MediaAvSyncPreparedDemuxTimestampFacts{
             video->index, video->time.timeBase,
             audio->index, audio->time.timeBase});
-}
-
-MediaRealtimeSingleStreamOutputPlan singleStreamOutput(
-    MediaRealtimeOutputPlanningDraft output)
-{
-    return MediaRealtimeSingleStreamOutputPlan{
-        output.packetCopyNormalizationRequired,
-        std::move(output.videoOutput),
-        std::move(output.muxedOutput),
-        std::move(output.sdp),
-        std::move(output.singleStreamMux)};
 }
 
 constexpr int RealtimeNoBidirectionalFrames = 0;
@@ -765,7 +755,7 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
         }
     }
 
-    MediaRealtimeRtpTranscodePlan plan;
+    MediaRealtimeRtpTranscodePlanCore plan;
     plan.inputType = *options.input.type;
     plan.inputLayout = *options.input.streamLayout;
     plan.outputLayout = *options.output.streamLayout;
@@ -944,19 +934,79 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
                 runtime.error());
         }
-        plan.avSyncRuntime = std::move(runtime).value();
+        MediaRealtimeRuntimePlan selectedRuntime(
+            std::in_place_type<MediaRealtimeAvSyncRuntimePlan>,
+            std::move(runtime).value());
+        MediaRealtimeRtpTranscodePlan completed(
+            std::move(plan), std::move(selectedRuntime));
+        if (auto status = MediaRealtimeTsInputPlanValidator::validate(
+                completed.inputType, completed.input); !status) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                status.error());
+        }
+        if (auto status = validatePlannedProduct(completed); !status) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                status.error());
+        }
+        return ::media::Result<MediaRealtimeRtpTranscodePlan>::success(
+            std::move(completed));
     } else {
-        plan.singleStreamOutput.emplace(singleStreamOutput(std::move(output)));
+        MediaRational sourceTimeBase;
+        MediaRational outputFrameRate;
+        if (rawInput) {
+            sourceTimeBase = MediaRational{
+                1, rawInput->videoTransport.clockRate};
+            outputFrameRate = rawInput->video.frameRate;
+        } else {
+            if (!preparedResource) {
+                return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                    ::media::ErrorInfo::notInitialized(
+                        "VideoOnly runtime requires its prepared video timing facts"));
+            }
+            const auto* videoSnapshot = preparedResource->inputStreamSnapshot(
+                plan.videoPlan.sourceStreamIndex);
+            if (videoSnapshot) {
+                sourceTimeBase = videoSnapshot->time.timeBase;
+            } else if (selectedTsProgram) {
+                sourceTimeBase = std::visit(
+                    [](const auto& selected) {
+                        return selected.selection.video.timeBase;
+                    },
+                    *selectedTsProgram);
+            }
+            outputFrameRate = preparedInput->video.frameRate;
+        }
+        if (plan.videoParameters.frameRate.complete() &&
+            plan.videoParameters.frameRate.numerator &&
+            plan.videoParameters.frameRate.denominator) {
+            outputFrameRate = MediaRational{
+                *plan.videoParameters.frameRate.numerator,
+                *plan.videoParameters.frameRate.denominator};
+        }
+        auto runtime = MediaRealtimeVideoRuntimePlanner::plan(
+            plan, std::move(output), options, sourceTimeBase,
+            outputFrameRate);
+        if (!runtime) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                runtime.error());
+        }
+        MediaRealtimeRuntimePlan selectedRuntime(
+            std::in_place_type<MediaRealtimeVideoRuntimePlan>,
+            std::move(runtime).value());
+        MediaRealtimeRtpTranscodePlan completed(
+            std::move(plan), std::move(selectedRuntime));
+        if (auto status = MediaRealtimeTsInputPlanValidator::validate(
+                completed.inputType, completed.input); !status) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                status.error());
+        }
+        if (auto status = validatePlannedProduct(completed); !status) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                status.error());
+        }
+        return ::media::Result<MediaRealtimeRtpTranscodePlan>::success(
+            std::move(completed));
     }
-    if (auto status = MediaRealtimeTsInputPlanValidator::validate(plan.inputType, plan.input);
-        !status) {
-        return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(status.error());
-    }
-    if (auto status = validatePlannedProduct(plan); !status) {
-        return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
-            status.error());
-    }
-    return ::media::Result<MediaRealtimeRtpTranscodePlan>::success(std::move(plan));
 }
 
 ::media::Result<MediaRealtimeRtpTranscodePlan>
@@ -994,8 +1044,8 @@ MediaRealtimeRtpTranscodePlanner::planPreparedInput(
         if (request.input.videoRtp.fmtp) {
             auto planned = plan(request);
             if (!planned) return ::media::Result<MediaRealtimeTranscodePreflight>::failure(planned.error());
-            MediaRealtimeTranscodePreflight result;
-            result.plan = std::move(planned).value();
+            MediaRealtimeTranscodePreflight result(
+                std::move(planned).value());
             return ::media::Result<MediaRealtimeTranscodePreflight>::success(std::move(result));
         }
         const auto preflightDeadline = std::chrono::steady_clock::now() +
@@ -1064,8 +1114,8 @@ MediaRealtimeRtpTranscodePlanner::planPreparedInput(
             return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
                 status.error());
         }
-        MediaRealtimeTranscodePreflight result;
-        result.plan = std::move(planned).value();
+        MediaRealtimeTranscodePreflight result(
+            std::move(planned).value());
         MediaPreparedRawRtpProbe ownedProbe = std::move(probed).value();
         std::visit(
             [&result](auto&& prepared) {
@@ -1101,8 +1151,8 @@ MediaRealtimeRtpTranscodePlanner::planPreparedInput(
     if (!planned) {
         return ::media::Result<MediaRealtimeTranscodePreflight>::failure(planned.error());
     }
-    MediaRealtimeTranscodePreflight result;
-    result.plan = std::move(planned).value();
+    MediaRealtimeTranscodePreflight result(
+        std::move(planned).value());
     result.prepared.emplace(std::move(scan.prepared));
     return ::media::Result<MediaRealtimeTranscodePreflight>::success(std::move(result));
 }
@@ -1143,6 +1193,6 @@ MediaRealtimeRtpTranscodePlanner::planPreparedInput(
         return ::media::Status::failure(::media::ErrorInfo::unsupported(
             "realtime plan input type is not supported"));
     }
-    return MediaRealtimeAvSyncRuntimePlanValidator::validate(plan);
+    return MediaRealtimeRuntimePlanValidator::validate(plan);
 }
 } // namespace media::ffmpeg::graph

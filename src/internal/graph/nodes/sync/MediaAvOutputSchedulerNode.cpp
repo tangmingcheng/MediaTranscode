@@ -7,6 +7,7 @@
 #include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
 #include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
 #include "internal/graph/sync/MediaScheduledAccessUnit.h"
+#include "internal/graph/sync/MediaOutputSchedule.h"
 #include "internal/graph/sync/MediaVideoRepeatRequestBuffer.h"
 
 #include <limits>
@@ -582,9 +583,11 @@ MediaAvOutputSchedulerNode::processSelected(
     if (!dispatch) {
         return ::media::Result<MediaNodeProcessResult>::failure(dispatch.error());
     }
-    auto emit = dispatch.value().checkedSubtract(m_transportLead);
-    if (!emit) {
-        return ::media::Result<MediaNodeProcessResult>::failure(emit.error());
+    auto schedule = MediaOutputSchedule::create(
+        target.value(), dispatch.value(), m_transportLead);
+    if (!schedule) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            schedule.error());
     }
     if (!m_generationData->activeGeneration) {
         return ::media::Result<MediaNodeProcessResult>::failure(
@@ -725,10 +728,12 @@ MediaAvOutputSchedulerNode::processSelected(
     auto prepared = repeat
         ? MediaAvScheduledOutputBuilder::repeatedVideo(
               *repeat, m_generationData->lastDisplayedVideoClone,
-              *m_generationData->lastDisplayedVideoSequence, target.value(), dispatch.value(),
-              emit.value(), kind)
+              *m_generationData->lastDisplayedVideoSequence,
+              schedule.value().presentation, schedule.value().dispatch,
+              schedule.value().emit, kind)
         : MediaAvScheduledOutputBuilder::canonicalVideo(
-              *m_generationData->videoHead, target.value(), dispatch.value(), emit.value(), kind);
+              *m_generationData->videoHead, schedule.value().presentation,
+              schedule.value().dispatch, schedule.value().emit, kind);
     if (!prepared) {
         return ::media::Result<MediaNodeProcessResult>::failure(prepared.error());
     }
@@ -774,18 +779,22 @@ MediaAvOutputSchedulerNode::processSelected(
     if (!dispatch) {
         return ::media::Result<MediaNodeProcessResult>::failure(dispatch.error());
     }
-    auto emit = dispatch.value().checkedSubtract(m_transportLead);
-    if (!emit) {
-        return ::media::Result<MediaNodeProcessResult>::failure(emit.error());
+    auto schedule = MediaOutputSchedule::create(
+        target.value(), dispatch.value(), m_transportLead);
+    if (!schedule) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            schedule.error());
     }
     auto now = m_group->clock()->now();
     if (!now) return ::media::Result<MediaNodeProcessResult>::failure(now.error());
-    if (emit.value() > now.value()) {
+    if (schedule.value().emit > now.value()) {
         return ::media::Result<MediaNodeProcessResult>::success(
-            MediaNodeProcessResult::waitingUntil(*m_groupKey, emit.value()));
+            MediaNodeProcessResult::waitingUntil(
+                *m_groupKey, schedule.value().emit));
     }
     auto output = MediaAvScheduledOutputBuilder::audio(
-        *unit, target.value(), dispatch.value(), emit.value());
+        *unit, schedule.value().presentation, schedule.value().dispatch,
+        schedule.value().emit);
     if (!output) {
         return ::media::Result<MediaNodeProcessResult>::failure(output.error());
     }

@@ -17,7 +17,7 @@ namespace {
 constexpr std::int64_t NanosecondsPerSecond = 1'000'000'000;
 
 ::media::Result<MediaRealtimeAvSyncAssemblyPlan> planAssembly(
-    const MediaRealtimeRtpTranscodePlan& outer,
+    const MediaRealtimeRtpTranscodePlanCore& outer,
     const MediaAvSyncPlan& synchronization,
     const MediaRealtimeAvSyncPlanningFacts& facts)
 {
@@ -229,7 +229,7 @@ constexpr std::int64_t NanosecondsPerSecond = 1'000'000'000;
 
 ::media::Result<MediaRealtimeAvSyncRuntimePlan>
 MediaRealtimeAvSyncRuntimePlanner::plan(
-    MediaRealtimeRtpTranscodePlan& outer,
+    MediaRealtimeRtpTranscodePlanCore& outer,
     MediaRealtimeOutputPlanningDraft& output,
     MediaAvSyncPlan synchronization)
 {

@@ -5,13 +5,14 @@
 namespace media::ffmpeg::graph {
 
 struct MediaRealtimeRtpTranscodePlan;
-struct MediaRealtimeAvSyncRuntimePlan;
 
-class MediaRealtimeAvSyncRuntimePlanValidator final {
+class MediaRealtimeRuntimePlanValidator final {
 public:
     static ::media::Status validate(
-        const MediaRealtimeRtpTranscodePlan& outer,
-        const MediaRealtimeAvSyncRuntimePlan& runtime);
+        const MediaRealtimeRtpTranscodePlan& plan);
+
+private:
+    MediaRealtimeRuntimePlanValidator() = delete;
 };
 
 } // namespace media::ffmpeg::graph

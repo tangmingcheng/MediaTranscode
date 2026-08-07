@@ -22,7 +22,7 @@ public:
     static ::media::Status apply(
         const MediaRealtimeRtpTranscodeRequest& request,
         const MediaRealtimeOutputUrls& urls,
-        MediaRealtimeRtpTranscodePlan& plan,
+        MediaRealtimeRtpTranscodePlanCore& plan,
         MediaRealtimeOutputPlanningDraft& output);
 
 private:

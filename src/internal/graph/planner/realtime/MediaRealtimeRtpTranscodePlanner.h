@@ -8,7 +8,8 @@
 #include "internal/graph/model/MediaOutputResourceKind.h"
 #include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/planner/MediaPipelinePlanner.h"
-#include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
+#include "internal/graph/planner/realtime/MediaRealtimeVideoRuntimePlan.h"
+#include "internal/graph/planner/realtime/MediaRealtimeOutputPlanningDraft.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncPlanningFacts.h"
 #include "internal/graph/planner/realtime/MediaScheduledRtpPacketizationPlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodeRequest.h"
@@ -22,6 +23,7 @@
 
 #include <string>
 #include <optional>
+#include <utility>
 #include <variant>
 
 namespace media::ffmpeg::graph {
@@ -177,59 +179,7 @@ struct MediaRealtimeRtpInputNodePlan {
     std::optional<MediaRealtimeTsInputPlan> mpegTs;
 };
 
-struct MediaRealtimeRtpOutputNodePlan {
-    std::string url;
-    int packetSize;
-    std::string mediaId;
-    bool writePacingEnabled = false;
-    int64_t writePacingBytesPerSecond = 0;
-    int64_t writePacingBurstBytes = 0;
-    std::optional<MediaRtpUdpSenderConfig> scheduledTransport;
-    std::optional<MediaScheduledRtpPacketizationPlan> scheduledPacketization;
-};
-
-struct MediaRealtimeMuxedOutputPlan {
-    std::string url;
-    std::string format;
-    std::string mediaId;
-    std::optional<MediaOutputResourceKind> outputResourceKind;
-    std::optional<MediaMuxSessionKind> muxSessionKind;
-    std::optional<MediaRtpUdpSenderConfig> rtpTransport;
-    std::string sdpPath;
-};
-
-struct MediaRealtimeSdpWriterPlan {
-    std::string path;
-    std::string mediaId;
-    int expectedContexts = 1;
-};
-
-struct MediaRealtimeMuxNodePlan {
-    bool expectVideo;
-    bool expectAudio;
-    MediaLatencyPolicy pacingPolicy;
-    bool monotonicPacketTimestamps = false;
-    int startupDelayMs = 0;
-};
-
-struct MediaRealtimeOutputPlanningDraft final {
-    bool packetCopyNormalizationRequired = false;
-    MediaRealtimeRtpOutputNodePlan videoOutput;
-    MediaRealtimeRtpOutputNodePlan audioOutput;
-    MediaRealtimeMuxedOutputPlan muxedOutput;
-    MediaRealtimeSdpWriterPlan sdp;
-    MediaRealtimeMuxNodePlan singleStreamMux;
-};
-
-struct MediaRealtimeSingleStreamOutputPlan final {
-    bool packetCopyNormalizationRequired = false;
-    MediaRealtimeRtpOutputNodePlan rtpOutput;
-    MediaRealtimeMuxedOutputPlan muxedOutput;
-    MediaRealtimeSdpWriterPlan sdp;
-    MediaRealtimeMuxNodePlan mux;
-};
-
-struct MediaRealtimeRtpTranscodePlan {
+struct MediaRealtimeRtpTranscodePlanCore {
     RealtimeInputType inputType;
     RealtimeInputStreamLayout inputLayout;
     RealtimeOutputStreamLayout outputLayout;
@@ -245,12 +195,30 @@ struct MediaRealtimeRtpTranscodePlan {
     MediaRealtimeRtpInputNodePlan input;
     MediaRealtimeRtpInputNodePlan audioInput;
     bool useIsolatedAudioInput = false;
-    std::optional<MediaRealtimeSingleStreamOutputPlan> singleStreamOutput;
     std::optional<MediaRealtimeAvSyncComponentBounds> avSyncComponentBounds;
-    std::optional<MediaRealtimeAvSyncRuntimePlan> avSyncRuntime;
+};
+
+struct MediaRealtimeRtpTranscodePlan final : MediaRealtimeRtpTranscodePlanCore {
+    MediaRealtimeRtpTranscodePlan() = delete;
+    MediaRealtimeRtpTranscodePlan(
+        MediaRealtimeRtpTranscodePlanCore core,
+        MediaRealtimeRuntimePlan selectedRuntime) noexcept
+        : MediaRealtimeRtpTranscodePlanCore(std::move(core)),
+          runtime(std::move(selectedRuntime))
+    {
+    }
+
+    MediaRealtimeRuntimePlan runtime;
 };
 
 struct MediaRealtimeTranscodePreflight final {
+    MediaRealtimeTranscodePreflight() = delete;
+    explicit MediaRealtimeTranscodePreflight(
+        MediaRealtimeRtpTranscodePlan selectedPlan) noexcept
+        : plan(std::move(selectedPlan))
+    {
+    }
+
     MediaRealtimeRtpTranscodePlan plan;
     std::optional<MediaPreparedRealtimeInput> prepared;
     std::optional<MediaPreparedRealtimeInput> preparedAudio;

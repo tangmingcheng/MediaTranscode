@@ -5,14 +5,14 @@
 
 namespace media::ffmpeg::graph {
 
-struct MediaRealtimeRtpTranscodePlan;
+struct MediaRealtimeRtpTranscodePlanCore;
 struct MediaRealtimeOutputPlanningDraft;
 struct MediaAvSyncPlan;
 
 class MediaRealtimeAvSyncPlanningFactsResolver final {
 public:
     static ::media::Result<MediaRealtimeAvSyncPlanningFacts> resolve(
-        const MediaRealtimeRtpTranscodePlan& plan,
+        const MediaRealtimeRtpTranscodePlanCore& plan,
         const MediaRealtimeOutputPlanningDraft& output,
         const MediaAvSyncPlan& synchronization);
 

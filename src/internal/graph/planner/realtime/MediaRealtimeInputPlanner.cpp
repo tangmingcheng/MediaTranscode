@@ -619,7 +619,7 @@ void fillNodePlan(
 void MediaRealtimeInputPlanner::applyNodePlans(
     const MediaRealtimeRtpTranscodeRequest& request,
     const MediaRealtimeRawInputPlan* raw,
-    MediaRealtimeRtpTranscodePlan& plan)
+    MediaRealtimeRtpTranscodePlanCore& plan)
 {
     fillNodePlan(request,
                  raw ? raw->videoUrl : request.input.url,

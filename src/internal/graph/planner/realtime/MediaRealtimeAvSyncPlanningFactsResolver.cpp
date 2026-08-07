@@ -22,7 +22,7 @@ bool validPacketDurationEvidence(
 
 ::media::Result<MediaRealtimeAvSyncPlanningFacts>
 MediaRealtimeAvSyncPlanningFactsResolver::resolve(
-    const MediaRealtimeRtpTranscodePlan& plan,
+    const MediaRealtimeRtpTranscodePlanCore& plan,
     const MediaRealtimeOutputPlanningDraft& plannedOutput,
     const MediaAvSyncPlan& synchronization)
 {

@@ -66,10 +66,10 @@
 - Replace optional competing output products with one explicit runtime variant containing `MediaRealtimeVideoRuntimePlan` or `MediaRealtimeAvSyncRuntimePlan`.
 - VideoOnly runtime owns video startup, source timing, scheduling, and one output-adapter plan.
 
-- [ ] Add the focused VideoOnly runtime product and exact validator.
-- [ ] Extract media-independent output-clock/commit behavior needed by both VideoOnly and A/V rather than copying a pacing loop.
-- [ ] Build VideoOnly startup and scheduled-video flow without audio or A/V correction components.
-- [ ] Keep the AudioVideo runtime topology and timing behavior unchanged.
+- [x] Add the focused VideoOnly runtime product and exact validator.
+- [x] Extract media-independent output-clock/commit behavior needed by both VideoOnly and A/V rather than copying a pacing loop.
+- [x] Build VideoOnly startup and scheduled-video flow without audio or A/V correction components.
+- [x] Keep the AudioVideo runtime topology and timing behavior unchanged.
 - [ ] Commit `feat(realtime): plan video-only runtime scheduling`, and push.
 
 ### Task 5: Unified production outputs and shape validation

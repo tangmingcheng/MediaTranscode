@@ -8,6 +8,7 @@
 #include "internal/graph/builder/segments/MediaPacketSelectSegmentBuilder.h"
 #include "internal/graph/builder/segments/MediaRealtimeAvSyncInputSegmentBuilder.h"
 #include "internal/graph/builder/segments/MediaRealtimeAvSchedulerSegmentBuilder.h"
+#include "internal/graph/builder/segments/MediaRealtimeVideoSchedulerSegmentBuilder.h"
 #include "internal/graph/builder/segments/MediaScheduledMpegTsOutputSegmentBuilder.h"
 #include "internal/graph/builder/segments/MediaScheduledRtpOutputSegmentBuilder.h"
 #include "internal/graph/builder/segments/MediaVideoBranchSegmentBuilder.h"
@@ -393,6 +394,12 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
 ::media::Result<MediaGraph> MediaRealtimeRtpTranscodeGraphBuilder::build(
     MediaRealtimeRtpTranscodePlan plan)
 {
+    return buildPlanned(plan);
+}
+
+::media::Result<MediaGraph> MediaRealtimeRtpTranscodeGraphBuilder::buildPlanned(
+    MediaRealtimeRtpTranscodePlan& plan)
+{
     if (auto status = MediaRealtimeRtpTranscodePlanner::validatePlannedProduct(
             plan); !status) {
         return ::media::Result<MediaGraph>::failure(status.error());
@@ -403,20 +410,38 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
         ? MediaNodeKind::RawRtpInput
         : MediaNodeKind::RealtimeInput;
     const bool audioBranchEnabled = branchEnabled(plan.audioPlan);
-    const bool synchronized = plan.avSyncRuntime.has_value();
-    const MediaRealtimeSingleStreamOutputPlan* singleStreamOutput =
-        plan.singleStreamOutput ? &*plan.singleStreamOutput : nullptr;
-    if (audioBranchEnabled && !synchronized) {
+    const auto* videoRuntime =
+        std::get_if<MediaRealtimeVideoRuntimePlan>(&plan.runtime);
+    const auto* avRuntime =
+        std::get_if<MediaRealtimeAvSyncRuntimePlan>(&plan.runtime);
+    if ((videoRuntime == nullptr) == (avRuntime == nullptr)) {
         return ::media::Result<MediaGraph>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "Realtime A/V graph construction requires the planned synchronization runtime"));
+                "Realtime graph requires exactly one typed runtime product"));
     }
+    const bool synchronized = avRuntime != nullptr;
+    if (audioBranchEnabled != synchronized) {
+        return ::media::Result<MediaGraph>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Realtime stream branches conflict with the typed runtime product"));
+    }
+    const auto* separateVideoOutput = videoRuntime
+        ? std::get_if<MediaRealtimeVideoSeparateRtpAdapterPlan>(
+              &videoRuntime->outputAdapter)
+        : nullptr;
+    const auto* muxedVideoOutput = videoRuntime
+        ? std::get_if<MediaRealtimeVideoMuxedAdapterPlan>(
+              &videoRuntime->outputAdapter)
+        : nullptr;
+    const bool videoPacketNormalization = separateVideoOutput
+        ? separateVideoOutput->packetCopyNormalizationRequired
+        : muxedVideoOutput
+            ? muxedVideoOutput->packetCopyNormalizationRequired
+            : false;
     const std::optional<PacketSelectOutputPlan> videoPacketOutput{
         packetOutputPlan(plan.videoPlan.sourceStreamIndex,
                          plan.videoPlan.branchMode,
-                         singleStreamOutput
-                             ? singleStreamOutput->packetCopyNormalizationRequired
-                             : false,
+                         videoPacketNormalization,
                          synchronized)};
     const std::optional<PacketSelectOutputPlan> audioPacketOutput = audioBranchEnabled
         ? std::optional<PacketSelectOutputPlan>{packetOutputPlan(
@@ -425,7 +450,7 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
         : std::nullopt;
     MediaNodeId videoMux = MediaNodeId::invalid();
 
-    if (singleStreamOutput && separateStreamsOutput(plan)) {
+    if (separateVideoOutput) {
         const MediaNodeId videoOutput = graph.addNode(MediaNodeKind::RtpOutput,
                                                       "realtime.video.rtp.output",
                                                       "Realtime video RTP output context");
@@ -436,29 +461,29 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
                                               "realtime.sdp.writer",
                                               "Realtime SDP writer");
 
-        if (auto status = MediaRealtimeOptionApplier::applyOutputOptions(graph, videoOutput, singleStreamOutput->rtpOutput); !status) return ::media::Result<MediaGraph>::failure(status.error());
-        if (auto status = MediaRealtimeOptionApplier::applyOutputOptions(graph, videoMux, singleStreamOutput->rtpOutput); !status) return ::media::Result<MediaGraph>::failure(status.error());
-        if (auto status = MediaRealtimeOptionApplier::applySdpWriterOptions(graph, sdp, singleStreamOutput->sdp); !status) return ::media::Result<MediaGraph>::failure(status.error());
-        if (auto status = MediaRealtimeOptionApplier::applyMuxOptions(graph, videoMux, singleStreamOutput->mux); !status) return ::media::Result<MediaGraph>::failure(status.error());
+        if (auto status = MediaRealtimeOptionApplier::applyOutputOptions(graph, videoOutput, separateVideoOutput->output); !status) return ::media::Result<MediaGraph>::failure(status.error());
+        if (auto status = MediaRealtimeOptionApplier::applyOutputOptions(graph, videoMux, separateVideoOutput->output); !status) return ::media::Result<MediaGraph>::failure(status.error());
+        if (auto status = MediaRealtimeOptionApplier::applySdpWriterOptions(graph, sdp, separateVideoOutput->sdp); !status) return ::media::Result<MediaGraph>::failure(status.error());
+        if (auto status = MediaRealtimeOptionApplier::applyMuxOptions(graph, videoMux, separateVideoOutput->mux); !status) return ::media::Result<MediaGraph>::failure(status.error());
 
         if (auto status = MediaGraphBuildSupport::addInputPortChecked(graph, owner, sdp, "format", MediaStreamKind::Metadata, MediaEdgeKind::Metadata, MediaPayloadKind::FormatContext, true, true); !status) return ::media::Result<MediaGraph>::failure(status.error());
         if (auto status = addRtpOutputChain(graph, videoOutput, videoMux, sdp, MediaStreamKind::Video, plan.edgePolicies); !status) return ::media::Result<MediaGraph>::failure(status.error());
-    } else if (singleStreamOutput) {
+    } else if (muxedVideoOutput) {
         FileOutputSegmentOptions outputOptions;
         outputOptions.prefix = "realtime.mpegts";
-        outputOptions.outputUrl = singleStreamOutput->muxedOutput.url;
-        outputOptions.outputFormat = singleStreamOutput->muxedOutput.format;
+        outputOptions.outputUrl = muxedVideoOutput->output.url;
+        outputOptions.outputFormat = muxedVideoOutput->output.format;
         outputOptions.outputResourceKind =
-            singleStreamOutput->muxedOutput.outputResourceKind;
-        outputOptions.expectVideo = singleStreamOutput->mux.expectVideo;
-        outputOptions.expectAudio = singleStreamOutput->mux.expectAudio;
-        if (!singleStreamOutput->muxedOutput.muxSessionKind) {
+            muxedVideoOutput->output.outputResourceKind;
+        outputOptions.expectVideo = muxedVideoOutput->mux.expectVideo;
+        outputOptions.expectAudio = muxedVideoOutput->mux.expectAudio;
+        if (!muxedVideoOutput->output.muxSessionKind) {
             return ::media::Result<MediaGraph>::failure(
                 ::media::ErrorInfo::notInitialized(
                     "realtime muxed output requires planner-selected mux session kind"));
         }
         outputOptions.muxSessionKind =
-            singleStreamOutput->muxedOutput.muxSessionKind;
+            muxedVideoOutput->output.muxSessionKind;
         outputOptions.queues = plan.queues;
         auto output = MediaOutputSegmentBuilder::buildFileMuxOutput(graph, outputOptions);
         if (!output) {
@@ -500,7 +525,7 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
         }
         audioInputChain = audioInput.value();
 
-        if (!plan.avSyncRuntime || !plan.input.rtpTransport || !plan.audioInput.rtpTransport) {
+        if (!avRuntime || !plan.input.rtpTransport || !plan.audioInput.rtpTransport) {
             return ::media::Result<MediaGraph>::failure(
                 ::media::ErrorInfo::notInitialized(
                     "isolated RTP A/V inputs require A/V sync and transport plans"));
@@ -508,7 +533,7 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
         auto clockGroup = addRtpClockGroup(graph,
                                            videoInputChain.value().input,
                                            audioInputChain.input,
-                                           plan.avSyncRuntime->synchronization,
+                                           avRuntime->synchronization,
                                            plan.edgePolicies);
         if (!clockGroup) return ::media::Result<MediaGraph>::failure(clockGroup.error());
         protocolClockNode = clockGroup.value();
@@ -521,13 +546,13 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
         : videoInputChain.value().packetSelect.split;
     std::string audioPacketSourcePort = isolateRawRtpAudio ? "packet" : "audio";
     std::optional<MediaRealtimeAvSyncInputEndpoints> synchronizedInput;
-    if (plan.avSyncRuntime) {
-        if (!plan.avSyncRuntime->synchronization.sourceClockMode) {
+    if (avRuntime) {
+        if (!avRuntime->synchronization.sourceClockMode) {
             return ::media::Result<MediaGraph>::failure(
                 ::media::ErrorInfo::notInitialized(
                     "Synchronized realtime input requires its planned source clock mode"));
         }
-        switch (*plan.avSyncRuntime->synchronization.sourceClockMode) {
+        switch (*avRuntime->synchronization.sourceClockMode) {
         case MediaAvSyncSourceClockMode::RtpSenderReports:
             if (!protocolClockNode.isValid()) {
                 return ::media::Result<MediaGraph>::failure(
@@ -574,7 +599,7 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
                 : MediaEdgeKind::InputPacket;
         syncOptions.releasedAudioEdgeKind = MediaEdgeKind::InputPacket;
         auto assembled = MediaRealtimeAvSyncInputSegmentBuilder::build(
-            graph, syncOptions, *plan.avSyncRuntime);
+            graph, syncOptions, *avRuntime);
         if (!assembled) {
             return ::media::Result<MediaGraph>::failure(assembled.error());
         }
@@ -591,37 +616,35 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
     videoOptions.parameters = plan.videoParameters;
     videoOptions.queues = plan.queues;
     videoOptions.edgePolicies = plan.edgePolicies;
-    if (plan.avSyncRuntime) {
+    if (avRuntime) {
         videoOptions.edgePolicies.videoPacket =
             plan.edgePolicies.synchronizedPacket;
     }
     videoOptions.inputStartRequiresKeyFrame = synchronizedInput
         ? false : plan.videoInputStartRequiresKeyFrame;
-    if (plan.avSyncRuntime) {
-        if (!plan.avSyncRuntime->synchronization.startup
+    if (avRuntime) {
+        if (!avRuntime->synchronization.startup
                  .requireVideoKeyFrame) {
             return ::media::Result<MediaGraph>::failure(
                 ::media::ErrorInfo::invalidArgument(
                     "Synchronized realtime video requires planner generation-start key-frame policy"));
         }
-        if (plan.avSyncRuntime->queues.frame == 0) {
+        if (avRuntime->queues.frame == 0) {
             return ::media::Result<MediaGraph>::failure(
                 ::media::ErrorInfo::invalidArgument(
                     "Synchronized realtime video requires positive planned lineage capacity"));
         }
         videoOptions.canonicalLineageCapacity =
-            plan.avSyncRuntime->queues.frame;
+            avRuntime->queues.frame;
         videoOptions.generationStartRequiresKeyFrame =
-            *plan.avSyncRuntime->synchronization.startup
+            *avRuntime->synchronization.startup
                  .requireVideoKeyFrame;
     }
     videoOptions.formatSourceNode = videoInputChain.value().input;
     videoOptions.formatSourcePort = "format";
     videoOptions.packetSourceNode = videoPacketSourceNode;
     videoOptions.packetSourcePort = videoPacketSourcePort;
-    videoOptions.normalizePacketCopy = singleStreamOutput
-        ? singleStreamOutput->packetCopyNormalizationRequired
-        : false;
+    videoOptions.normalizePacketCopy = videoPacketNormalization;
     auto video = MediaVideoBranchSegmentBuilder::build(graph, videoOptions);
     if (!video) {
         return ::media::Result<MediaGraph>::failure(video.error());
@@ -629,7 +652,7 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
 
     std::optional<MediaEncodedBranchEndpoints> audio;
     if (audioBranchEnabled) {
-        const auto& avSyncRuntime = *plan.avSyncRuntime;
+        const auto& avSyncRuntime = *avRuntime;
         MediaAudioBranchSegmentOptions audioOptions;
         audioOptions.prefix = "realtime.audio";
         audioOptions.plan = std::move(plan.audioPlan);
@@ -661,7 +684,7 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
         audio = std::move(builtAudio).value();
     }
 
-    if (plan.avSyncRuntime) {
+    if (avRuntime) {
         if (!synchronizedInput || !audio) {
             return ::media::Result<MediaGraph>::failure(
                 ::media::ErrorInfo::notInitialized(
@@ -672,11 +695,11 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
         schedulerOptions.canonicalVideo = video.value().packet;
         schedulerOptions.canonicalAudio = audio->packet;
         auto scheduled = MediaRealtimeAvSchedulerSegmentBuilder::build(
-            graph, schedulerOptions, *plan.avSyncRuntime);
+            graph, schedulerOptions, *avRuntime);
         if (!scheduled) {
             return ::media::Result<MediaGraph>::failure(scheduled.error());
         }
-        if (plan.avSyncRuntime->outputAdapter ==
+        if (avRuntime->outputAdapter ==
             MediaAvSyncOutputAdapterKind::ScheduledSeparateRtp) {
             MediaScheduledRtpOutputSegmentOptions outputOptions;
             outputOptions.prefix = "realtime.av_sync.rtp_output";
@@ -686,11 +709,11 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
             outputOptions.scheduledVideo = scheduled.value().video;
             outputOptions.scheduledAudio = scheduled.value().audio;
             auto output = MediaScheduledRtpOutputSegmentBuilder::build(
-                graph, outputOptions, *plan.avSyncRuntime);
+                graph, outputOptions, *avRuntime);
             if (!output) {
                 return ::media::Result<MediaGraph>::failure(output.error());
             }
-        } else if (plan.avSyncRuntime->outputAdapter ==
+        } else if (avRuntime->outputAdapter ==
                    MediaAvSyncOutputAdapterKind::ProjectMpegTs) {
             MediaScheduledMpegTsOutputSegmentOptions outputOptions;
             outputOptions.prefix = "realtime.av_sync.mpegts_output";
@@ -703,7 +726,7 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
             outputOptions.expectAudio =
                 branchEnabled(plan.audioPlan);
             auto output = MediaScheduledMpegTsOutputSegmentBuilder::build(
-                graph, outputOptions, *plan.avSyncRuntime);
+                graph, outputOptions, *avRuntime);
             if (!output) {
                 return ::media::Result<MediaGraph>::failure(output.error());
             }
@@ -712,7 +735,20 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
                 ::media::ErrorInfo::unsupported(
                     "Synchronized realtime output requires a production adapter"));
         }
-    } else {
+    } else if (videoRuntime) {
+        MediaRealtimeVideoSchedulerSegmentOptions schedulerOptions;
+        schedulerOptions.prefix = "realtime.video_only.output";
+        schedulerOptions.encodedVideo = video.value().packet;
+        auto scheduled = MediaRealtimeVideoSchedulerSegmentBuilder::build(
+            graph, schedulerOptions, *videoRuntime);
+        if (!scheduled) {
+            return ::media::Result<MediaGraph>::failure(scheduled.error());
+        }
+        if (!videoMux.isValid()) {
+            return ::media::Result<MediaGraph>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "VideoOnly runtime requires its planned output adapter"));
+        }
         if (auto status = MediaGraphBuildSupport::connectChecked(
                 graph, owner, video.value().codec.node,
                 video.value().codec.port, videoMux, "codec",
@@ -721,12 +757,16 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
             return ::media::Result<MediaGraph>::failure(status.error());
         }
         if (auto status = MediaGraphBuildSupport::connectChecked(
-                graph, owner, video.value().packet.node,
-                video.value().packet.port, videoMux, "packet",
-                "realtime.video.packet -> output.packet",
+                graph, owner, scheduled.value().node,
+                scheduled.value().port, videoMux, "packet",
+                "scheduled VideoOnly packet -> output.packet",
                 plan.edgePolicies.videoMux); !status) {
             return ::media::Result<MediaGraph>::failure(status.error());
         }
+    } else {
+        return ::media::Result<MediaGraph>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Realtime graph lost its typed runtime variant"));
     }
 
     return ::media::Result<MediaGraph>::success(std::move(graph));
@@ -786,47 +826,51 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
             ::media::ErrorInfo::invalidArgument(
                 "realtime executable graph rejects unplanned prepared audio input"));
     }
-    std::optional<MediaAvSyncRuntimeBinding> avSyncBinding;
-    if (preflight.plan.avSyncRuntime) {
-        const auto& runtimePlan = *preflight.plan.avSyncRuntime;
+    auto graphResult = buildPlanned(preflight.plan);
+    if (!graphResult) {
+        return ::media::Result<MediaRealtimeExecutableGraph>::failure(
+            graphResult.error());
+    }
+
+    MediaRealtimeRuntimeBinding runtimeBinding;
+    if (auto* videoRuntime = std::get_if<MediaRealtimeVideoRuntimePlan>(
+            &preflight.plan.runtime)) {
+        runtimeBinding.emplace<MediaRealtimeVideoRuntimeBinding>(
+            MediaRealtimeVideoRuntimeBinding{std::move(*videoRuntime)});
+    } else if (auto* runtimePlan =
+                   std::get_if<MediaRealtimeAvSyncRuntimePlan>(
+                       &preflight.plan.runtime)) {
         std::optional<MediaProjectMpegTsRuntimeOutputPlan>
             projectMpegTsOutputProduct;
-        if (runtimePlan.outputAdapter ==
+        if (runtimePlan->outputAdapter ==
                 MediaAvSyncOutputAdapterKind::ProjectMpegTs) {
-            const auto* projectOutput =
+            auto* projectOutput =
                 std::get_if<MediaProjectMpegTsRuntimeOutputPlan>(
-                    &runtimePlan.protocolOutput);
+                    &runtimePlan->protocolOutput);
             if (!projectOutput) {
                 return ::media::Result<
                     MediaRealtimeExecutableGraph>::failure(
                     ::media::ErrorInfo::invalidArgument(
                         "Project MPEG-TS adapter requires its complete runtime output product"));
             }
-            auto cloned =
-                cloneMediaProjectMpegTsRuntimeOutputPlan(*projectOutput);
-            if (!cloned) {
-                return ::media::Result<
-                    MediaRealtimeExecutableGraph>::failure(
-                    cloned.error());
-            }
-            projectMpegTsOutputProduct =
-                std::move(cloned).value();
+            projectMpegTsOutputProduct.emplace(std::move(*projectOutput));
         }
-        avSyncBinding = MediaAvSyncRuntimeBinding{
-            runtimePlan.groupKey,
-            runtimePlan.synchronization,
-            runtimePlan.transition,
+        runtimeBinding.emplace<MediaAvSyncRuntimeBinding>(
+            MediaAvSyncRuntimeBinding{
+            std::move(runtimePlan->groupKey),
+            std::move(runtimePlan->synchronization),
+            std::move(runtimePlan->transition),
             MediaAvSyncBindingAssemblyMode::ProductionProtocolOutput,
-            runtimePlan.outputAdapter,
-            std::move(projectMpegTsOutputProduct)};
-    }
-    auto graphResult = build(std::move(preflight.plan));
-    if (!graphResult) {
-        return ::media::Result<MediaRealtimeExecutableGraph>::failure(graphResult.error());
+            runtimePlan->outputAdapter,
+            std::move(projectMpegTsOutputProduct)});
+    } else {
+        return ::media::Result<MediaRealtimeExecutableGraph>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Realtime executable graph requires a typed runtime binding"));
     }
     MediaRealtimeExecutableGraph executable;
     executable.graph = std::move(graphResult).value();
-    executable.avSyncBinding = std::move(avSyncBinding);
+    executable.runtimeBinding = std::move(runtimeBinding);
     if (requiresPrepared) {
         auto inputId = findPreparedInputTarget(
             executable.graph, *requiredPreparedKind,

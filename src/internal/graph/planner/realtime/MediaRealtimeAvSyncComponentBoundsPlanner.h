@@ -5,12 +5,12 @@
 
 namespace media::ffmpeg::graph {
 
-struct MediaRealtimeRtpTranscodePlan;
+struct MediaRealtimeRtpTranscodePlanCore;
 
 class MediaRealtimeAvSyncComponentBoundsPlanner final {
 public:
     static ::media::Result<MediaRealtimeAvSyncComponentBounds> plan(
-        const MediaRealtimeRtpTranscodePlan& plan);
+        const MediaRealtimeRtpTranscodePlanCore& plan);
 
 private:
     MediaRealtimeAvSyncComponentBoundsPlanner() = delete;

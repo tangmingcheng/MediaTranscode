@@ -6,6 +6,7 @@
 #include "internal/graph/runtime/compilation/MediaAvGenerationParticipantAssembler.h"
 #include "internal/graph/runtime/factory/MediaRuntimeNodeFactory.h"
 #include "internal/graph/runtime/validation/MediaAvSyncGraphShapeValidator.h"
+#include "internal/graph/runtime/validation/MediaRealtimeVideoGraphShapeValidator.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/nodes/sync/MediaDemuxPacketClockBinderNodePlanCodec.h"
@@ -100,12 +101,37 @@ public:
             }
         }
     }
-    if (executable.avSyncBinding) {
+    if (const auto* avSyncBinding =
+            std::get_if<MediaAvSyncRuntimeBinding>(
+                &executable.runtimeBinding)) {
+        if (auto absent =
+                MediaRealtimeVideoGraphShapeValidator::validateAbsent(
+                    executable.graph); !absent) {
+            return absent;
+        }
         return MediaAvSyncGraphShapeValidator::validate(
-            executable.graph, *executable.avSyncBinding);
+            executable.graph, *avSyncBinding);
     }
-    return MediaAvSyncGraphShapeValidator::validateAbsent(
-        executable.graph);
+    if (const auto* videoBinding =
+            std::get_if<MediaRealtimeVideoRuntimeBinding>(
+                &executable.runtimeBinding)) {
+        if (auto absent = MediaAvSyncGraphShapeValidator::validateAbsent(
+                executable.graph); !absent) {
+            return absent;
+        }
+        return MediaRealtimeVideoGraphShapeValidator::validate(
+            executable.graph, *videoBinding);
+    }
+    if (!std::holds_alternative<MediaUnboundGraphRuntime>(
+            executable.runtimeBinding)) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "MediaGraphRuntime encountered an unknown runtime binding variant"));
+    }
+    if (auto absent = MediaRealtimeVideoGraphShapeValidator::validateAbsent(
+            executable.graph); !absent) {
+        return absent;
+    }
+    return MediaAvSyncGraphShapeValidator::validateAbsent(executable.graph);
 }
 
 ::media::Status MediaGraphRuntimeCompiler::compile(
@@ -126,7 +152,8 @@ public:
 {
     mediaGraphDiagnosticLog(context.diagnosticsEnabled(), MediaGraphDiagnosticPhase::RuntimeLifecycle, "compile.begin");
     const bool requiresDefaultRegistration =
-        executable.avSyncBinding.has_value();
+        !std::holds_alternative<MediaUnboundGraphRuntime>(
+            executable.runtimeBinding);
     if (auto valid = validateBindings(executable); !valid) {
         mediaGraphDiagnosticLog(
             context.diagnosticsEnabled(),
@@ -144,19 +171,21 @@ public:
     }
     std::optional<MediaPlaybackEpochActivationCapability> preparedCapability;
     std::shared_ptr<MediaAvStartupVideoPreparationState> preparedVideoPreparation;
-    if (executable.avSyncBinding) {
+    if (const auto* avSyncBinding =
+            std::get_if<MediaAvSyncRuntimeBinding>(
+                &executable.runtimeBinding)) {
         ProductionAvSyncClockSource productionClockSource;
         MediaAvSyncClockSource& clockSource = avSyncClockSource
             ? *avSyncClockSource
             : static_cast<MediaAvSyncClockSource&>(productionClockSource);
         auto clocks = MediaAvSyncRuntimeBootstrap::createClocks(
-            *executable.avSyncBinding, clockSource);
+            *avSyncBinding, clockSource);
         if (!clocks) {
             return ::media::Status::failure(clocks.error());
         }
         auto registered = MediaAvSyncRuntimeBootstrap::
             registerGroupAndIssueActivationCapability(
-            *executable.avSyncBinding, std::move(clocks).value(),
+            *avSyncBinding, std::move(clocks).value(),
             preparedContext);
         if (!registered) {
             return ::media::Status::failure(registered.error());
@@ -169,12 +198,12 @@ public:
                         return node.id;
                 return MediaNodeId::invalid();
             }(), "preparation") != nullptr;
-        if (executable.avSyncBinding->videoPreparationState) {
+        if (avSyncBinding->videoPreparationState) {
             preparedVideoPreparation =
-                executable.avSyncBinding->videoPreparationState;
+                avSyncBinding->videoPreparationState;
         } else if (preparationPlanned) {
             auto created = MediaAvStartupVideoPreparationState::create(
-                executable.avSyncBinding->groupKey);
+                avSyncBinding->groupKey);
             if (!created) return ::media::Status::failure(created.error());
             preparedVideoPreparation = std::move(created).value();
         }

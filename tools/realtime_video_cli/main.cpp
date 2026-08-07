@@ -17,6 +17,7 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #if defined(_MSC_VER) && defined(_DEBUG)
@@ -400,7 +401,11 @@ int runRealtimeVideoCli(int argc, char** argv)
         return failResult("realtime video graph preflight", preflightResult);
     }
     MediaRealtimeTranscodePreflight preflight = std::move(preflightResult).value();
-    const MediaThreadingPolicy threadingPolicy = preflight.plan.threadingPolicy;
+    const MediaThreadingPolicy threadingPolicy = std::visit(
+        [](const auto& runtimePlan) {
+            return runtimePlan.threadingPolicy;
+        },
+        preflight.plan.runtime);
 
     auto executableResult = MediaRealtimeRtpTranscodeGraphBuilder::buildExecutable(std::move(preflight));
     if (!executableResult) {

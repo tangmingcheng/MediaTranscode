@@ -196,7 +196,7 @@ MediaLatencyPolicy muxPacing() noexcept
 ::media::Status MediaRealtimeOutputPolicyPlanner::apply(
     const MediaRealtimeRtpTranscodeRequest& request,
     const MediaRealtimeOutputUrls& urls,
-    MediaRealtimeRtpTranscodePlan& plan,
+    MediaRealtimeRtpTranscodePlanCore& plan,
     MediaRealtimeOutputPlanningDraft& output)
 {
     if (request.output.streamLayout == RealtimeOutputStreamLayout::MuxedTransportStream) {
