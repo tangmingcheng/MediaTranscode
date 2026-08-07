@@ -107,14 +107,12 @@ std::string lower(std::string value)
         return ::media::Status::success();
     }
     if (codec == "hevc") {
-        if (auto mode = fmtp.value().find("tx-mode"); mode != fmtp.value().end() && lower(mode->second) != "srst") return ::media::Status::failure(
-            ::media::ErrorInfo::unsupported("HEVC RTP only supports non-interleaved SRST transmission"));
+        if (auto status = validateHevcNonInterleavedRtpFmtp(fmtp.value());
+            !status) return status;
         for (const char* key : {"sprop-vps", "sprop-sps", "sprop-pps"}) if (auto status = requireKey(fmtp.value(), key); !status) return status;
         for (const char* key : {"sprop-vps", "sprop-sps", "sprop-pps"}) {
             if (auto status = validateBase64List(fmtp.value().at(key), std::string("HEVC RTP ") + key); !status) return status;
         }
-        if (auto status = requireZeroWhenPresent(
-                fmtp.value(), "sprop-max-don-diff", "HEVC RTP DONL"); !status) return status;
         return ::media::Status::success();
     }
     if (codec == "aac") {

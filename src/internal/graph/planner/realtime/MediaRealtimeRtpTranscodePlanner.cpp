@@ -13,9 +13,9 @@
 #include "internal/graph/planner/realtime/MediaRealtimeEdgePolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestValidator.h"
+#include "internal/graph/planner/realtime/MediaRealtimeRtpVideoSignalingResolver.h"
 #include "internal/graph/planner/realtime/MediaRealtimeTsInputPlanValidator.h"
 #include "internal/graph/protocol/mpegts/MediaTsProgramContractValidator.h"
-#include "internal/graph/protocol/rtp/MediaRtpVideoParameterSetValidator.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 
 #include <chrono>
@@ -349,38 +349,6 @@ MediaThreadingPolicy planThreadingPolicy() noexcept
         static_cast<int>(remaining.count()));
 }
 
-::media::Result<MediaRealtimeRtpTranscodeRequest>
-resolveManualRawRtpVideoSignaling(
-    const MediaRealtimeRtpTranscodeRequest& request)
-{
-    if (!MediaRealtimeRequestClassifier::rawRtpInput(request) ||
-        !request.input.videoRtp.fmtp) {
-        return ::media::Result<MediaRealtimeRtpTranscodeRequest>::success(
-            request);
-    }
-    auto facts = parseRtpVideoSignalingFacts(
-        request.input.videoRtp.codecName, *request.input.videoRtp.fmtp);
-    if (!facts) {
-        return ::media::Result<MediaRealtimeRtpTranscodeRequest>::failure(
-            facts.error());
-    }
-    if (auto status = MediaRtpVideoParameterSetValidator::validate(
-            request.input.videoRtp.codecName, facts.value());
-        !status) {
-        return ::media::Result<MediaRealtimeRtpTranscodeRequest>::failure(
-            status.error());
-    }
-    auto fmtp = serializeRtpVideoFmtp(facts.value());
-    if (!fmtp) {
-        return ::media::Result<MediaRealtimeRtpTranscodeRequest>::failure(
-            fmtp.error());
-    }
-    MediaRealtimeRtpTranscodeRequest resolved = request;
-    resolved.input.videoRtp.fmtp = std::move(fmtp).value();
-    return ::media::Result<MediaRealtimeRtpTranscodeRequest>::success(
-        std::move(resolved));
-}
-
 } // namespace
 
 MediaRealtimeTsInputPolicy::MediaRealtimeTsInputPolicy(
@@ -647,17 +615,27 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
     const MediaTsSelectedProgramPlan* selectedTsProgram,
     const MediaPreparedRealtimeInput* preparedResource,
     const MediaPreparedRealtimeInput* preparedAudioResource,
-    std::optional<MediaPipelinePlan> preplannedVideo)
+    std::optional<MediaPipelinePlan> preplannedVideo,
+    const MediaDetectedRtpVideoSignaling* detectedVideoSignaling)
 {
     if (auto status = validateRealtimeRequestNoIo(requestedOptions); !status) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(status.error());
     }
-    auto resolvedOptions = resolveManualRawRtpVideoSignaling(requestedOptions);
-    if (!resolvedOptions) {
+    MediaRealtimeRtpTranscodeRequest options = requestedOptions;
+    if (MediaRealtimeRequestClassifier::rawRtpInput(options)) {
+        auto resolvedFmtp =
+            MediaRealtimeRtpVideoSignalingResolver::resolveFmtp(
+                options.input.videoRtp, detectedVideoSignaling);
+        if (!resolvedFmtp) {
+            return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                resolvedFmtp.error());
+        }
+        options.input.videoRtp.fmtp = std::move(resolvedFmtp).value();
+    } else if (detectedVideoSignaling) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
-            resolvedOptions.error());
+            ::media::ErrorInfo::invalidArgument(
+                "detected RTP video signaling is valid only for raw RTP input"));
     }
-    MediaRealtimeRtpTranscodeRequest options = std::move(resolvedOptions).value();
     options.parameters.queues = MediaRealtimeQueueCapacityPlanner::plan(
         requestedOptions.parameters.queues);
 
@@ -1051,28 +1029,6 @@ MediaRealtimeRtpTranscodePlanner::planPreparedInput(
                 return prepared.signaling;
             },
             probed.value());
-        if (!request.input.videoRtp.payloadType ||
-            !request.input.videoRtp.clockRate ||
-            detected.codecName != canonicalCodecName(
-                request.input.videoRtp.codecName) ||
-            detected.payloadType != *request.input.videoRtp.payloadType ||
-            detected.clockRate != *request.input.videoRtp.clockRate) {
-            return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "raw RTP detected signaling identity conflicts with request"));
-        }
-        if (auto status = MediaRtpVideoParameterSetValidator::validate(
-                detected.codecName, detected.facts); !status) {
-            return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
-                status.error());
-        }
-        auto fmtp = serializeRtpVideoFmtp(detected.facts);
-        if (!fmtp) {
-            return ::media::Result<MediaRealtimeTranscodePreflight>::failure(
-                fmtp.error());
-        }
-        MediaRealtimeRtpTranscodeRequest resolved = request;
-        resolved.input.videoRtp.fmtp = std::move(fmtp).value();
         auto* videoOnlyProbe = std::get_if<
             MediaPreparedRawRtpVideoOnlyProbe>(&probed.value());
         auto* audioVideoProbe = std::get_if<
@@ -1092,8 +1048,8 @@ MediaRealtimeRtpTranscodePlanner::planPreparedInput(
             ? &audioVideoProbe->audio
             : nullptr;
         auto planned = planWithInput(
-            resolved, nullptr, nullptr, &preparedVideo, preparedAudio,
-            std::move(preplannedVideo).value());
+            request, nullptr, nullptr, &preparedVideo, preparedAudio,
+            std::move(preplannedVideo).value(), &detected);
         if (!planned) return ::media::Result<MediaRealtimeTranscodePreflight>::failure(planned.error());
         auto remainingAfterPlanning = remainingRawRtpStartupMilliseconds(
             preflightDeadline, "resolved product planning");

@@ -4,7 +4,6 @@
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 
 #include <algorithm>
-#include <charconv>
 #include <cctype>
 #include <iomanip>
 #include <sstream>
@@ -84,27 +83,6 @@ std::string h264ProfileLevelId(std::span<const std::uint8_t> sps)
                 std::string("RTP video fmtp has malformed ") + owner));
     }
     return ::media::Result<void>::success();
-}
-
-::media::Result<int> requiredPacketizationMode(
-    const MediaRtpFmtpParameters& parameters)
-{
-    const auto found = parameters.find("packetization-mode");
-    if (found == parameters.end()) {
-        return ::media::Result<int>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "RTP video fmtp requires packetization-mode"));
-    }
-    int mode = 0;
-    const auto parsed = std::from_chars(
-        found->second.data(), found->second.data() + found->second.size(), mode);
-    if (parsed.ec != std::errc{} ||
-        parsed.ptr != found->second.data() + found->second.size() || mode != 1) {
-        return ::media::Result<int>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "RTP H264 fmtp requires packetization-mode=1"));
-    }
-    return ::media::Result<int>::success(mode);
 }
 
 bool isHexProfileLevelId(const std::string& value)
@@ -341,10 +319,14 @@ MediaRtpVideoSignalingObserver::evidence() const noexcept
     }
 
     if (codecName == "h264") {
-        auto packetizationMode = requiredPacketizationMode(parameters.value());
-        if (!packetizationMode) {
+        auto packetizationMode = requiredRtpFmtpInt(
+            parameters.value(), "packetization-mode");
+        if (!packetizationMode || packetizationMode.value() != 1) {
             return ::media::Result<MediaRtpVideoSignalingFacts>::failure(
-                packetizationMode.error());
+                packetizationMode
+                    ? ::media::ErrorInfo::unsupported(
+                          "RTP H264 fmtp requires packetization-mode=1")
+                    : packetizationMode.error());
         }
         const auto parameterSets =
             parameters.value().find("sprop-parameter-sets");
@@ -397,6 +379,12 @@ MediaRtpVideoSignalingObserver::evidence() const noexcept
     }
 
     if (codecName == "hevc") {
+        if (auto status = validateHevcNonInterleavedRtpFmtp(
+                parameters.value());
+            !status) {
+            return ::media::Result<MediaRtpVideoSignalingFacts>::failure(
+                status.error());
+        }
         auto vps = requiredParameterSet(parameters.value(), "sprop-vps");
         auto sps = requiredParameterSet(parameters.value(), "sprop-sps");
         auto pps = requiredParameterSet(parameters.value(), "sprop-pps");

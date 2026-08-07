@@ -27,6 +27,7 @@
 namespace media::ffmpeg::graph {
 
 struct MediaRealtimeInputStreamInfo;
+struct MediaDetectedRtpVideoSignaling;
 struct MediaRealtimeRtpTransportPlan final {
     MediaIpAddressFamily addressFamily;
     std::string bindAddress;
@@ -280,7 +281,8 @@ private:
         const MediaTsSelectedProgramPlan* selectedTsProgram,
         const MediaPreparedRealtimeInput* preparedInput,
         const MediaPreparedRealtimeInput* preparedAudioInput,
-        std::optional<MediaPipelinePlan> preplannedVideo = std::nullopt);
+        std::optional<MediaPipelinePlan> preplannedVideo = std::nullopt,
+        const MediaDetectedRtpVideoSignaling* detectedVideoSignaling = nullptr);
     static ::media::Result<MediaRealtimeTranscodePreflight> preflightImpl(
         const MediaRealtimeRtpTranscodeRequest& request,
         const MediaRealtimePreflightIo* io);

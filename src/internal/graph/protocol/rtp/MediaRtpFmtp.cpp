@@ -67,6 +67,29 @@ int base64Value(unsigned char c) noexcept
     return ::media::Result<int>::success(value);
 }
 
+::media::Status validateHevcNonInterleavedRtpFmtp(
+    const MediaRtpFmtpParameters& parameters)
+{
+    const auto txMode = parameters.find("tx-mode");
+    if (txMode != parameters.end() && lower(txMode->second) != "srst") {
+        return ::media::Status::failure(::media::ErrorInfo::unsupported(
+            "HEVC RTP only supports non-interleaved SRST transmission"));
+    }
+    if (!parameters.contains("sprop-max-don-diff")) {
+        return ::media::Status::success();
+    }
+    auto maximumDonDifference = requiredRtpFmtpInt(
+        parameters, "sprop-max-don-diff");
+    if (!maximumDonDifference) {
+        return ::media::Status::failure(maximumDonDifference.error());
+    }
+    if (maximumDonDifference.value() != 0) {
+        return ::media::Status::failure(::media::ErrorInfo::unsupported(
+            "HEVC RTP DONL optional payload header is unsupported: sprop-max-don-diff"));
+    }
+    return ::media::Status::success();
+}
+
 ::media::Result<std::vector<uint8_t>> decodeRtpFmtpHex(const std::string& text)
 {
     if (text.empty() || (text.size() % 2) != 0) return ::media::Result<std::vector<uint8_t>>::failure(
@@ -96,7 +119,11 @@ int base64Value(unsigned char c) noexcept
             else if ((values[i] = base64Value(static_cast<unsigned char>(text[offset + i]))) < 0 || padding != 0) return ::media::Result<std::vector<uint8_t>>::failure(
                 ::media::ErrorInfo::invalidArgument("RTP fmtp base64 value is malformed"));
         }
-        if (padding > 2 || (padding != 0 && offset + 4 != text.size())) return ::media::Result<std::vector<uint8_t>>::failure(
+        const bool noncanonicalPadBits =
+            (padding == 2 && (values[1] & 0x0f) != 0) ||
+            (padding == 1 && (values[2] & 0x03) != 0);
+        if (padding > 2 || (padding != 0 && offset + 4 != text.size()) ||
+            noncanonicalPadBits) return ::media::Result<std::vector<uint8_t>>::failure(
             ::media::ErrorInfo::invalidArgument("RTP fmtp base64 padding is invalid"));
         const uint32_t value = (static_cast<uint32_t>(values[0]) << 18) | (static_cast<uint32_t>(values[1]) << 12) |
             (static_cast<uint32_t>(values[2]) << 6) | static_cast<uint32_t>(values[3]);
