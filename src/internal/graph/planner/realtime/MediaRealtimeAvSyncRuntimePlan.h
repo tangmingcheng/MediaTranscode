@@ -5,6 +5,7 @@
 #include "internal/graph/model/MediaRealtimeEdgePolicySet.h"
 #include "internal/graph/model/MediaThreadingPolicy.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
+#include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlan.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlan.h"
 #include "internal/graph/planner/avsync/MediaAvSyncOutputAdapterKind.h"
@@ -12,10 +13,12 @@
 #include "internal/graph/planner/realtime/MediaProjectMpegTsOutputPlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncAssemblyPlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncPlanningFacts.h"
+#include "internal/graph/planner/realtime/MediaRealtimeInputPlanningProducts.h"
 #include "internal/graph/planner/realtime/MediaScheduledRtpOutputPlan.h"
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <variant>
 
@@ -73,6 +76,9 @@ struct MediaProjectMpegTsRuntimeOutputPlan final {
 };
 
 struct MediaRealtimeAvSyncRuntimePlan final {
+    MediaAudioPipelinePlan audioPipeline;
+    std::optional<MediaRealtimeRtpInputNodePlan> isolatedAudioInput;
+    MediaRealtimeAvSyncComponentBounds componentBounds;
     MediaAvSyncGroupKey groupKey;
     MediaAvSyncPlan synchronization;
     MediaRealtimeAvSyncAssemblyPlan assembly;

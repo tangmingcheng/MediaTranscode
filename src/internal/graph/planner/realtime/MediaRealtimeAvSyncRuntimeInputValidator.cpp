@@ -24,7 +24,8 @@ namespace {
         outer.inputLayout != RealtimeInputStreamLayout::SeparateStreams ||
         !runtime.synchronization.rtpInput ||
         !runtime.synchronization.startup.allowDegradedClock ||
-        !outer.input.rtpTransport || !outer.audioInput.rtpTransport ||
+        !outer.input.rtpTransport || !runtime.isolatedAudioInput ||
+        !runtime.isolatedAudioInput->rtpTransport ||
         !std::holds_alternative<MediaRtpInputClockAssemblyPlan>(
             runtime.assembly.inputClock) ||
         !std::holds_alternative<MediaRtpTimestampDeltaDurationPlan>(
@@ -54,27 +55,27 @@ namespace {
             *input.videoInput.payloadType &&
         outer.input.rtpTransport->clockRate ==
             *input.videoInput.clockRate &&
-        outer.audioInput.rtpTransport->payloadType ==
+        runtime.isolatedAudioInput->rtpTransport->payloadType ==
             *input.audioInput.payloadType &&
-        outer.audioInput.rtpTransport->clockRate ==
+        runtime.isolatedAudioInput->rtpTransport->clockRate ==
             *input.audioInput.clockRate &&
         outer.input.rtpTransport->requireSenderReports ==
             *policy.requireSenderReports &&
-        outer.audioInput.rtpTransport->requireSenderReports ==
+        runtime.isolatedAudioInput->rtpTransport->requireSenderReports ==
             *policy.requireSenderReports &&
         !outer.input.rtpTransport->requireCname &&
-        !outer.audioInput.rtpTransport->requireCname &&
+        !runtime.isolatedAudioInput->rtpTransport->requireCname &&
         outer.input.rtpTransport->senderReportTimeoutMs ==
             policy.senderReportTimeoutNs->nanoseconds() / Millisecond &&
-        outer.audioInput.rtpTransport->senderReportTimeoutMs ==
+        runtime.isolatedAudioInput->rtpTransport->senderReportTimeoutMs ==
             policy.senderReportTimeoutNs->nanoseconds() / Millisecond &&
         outer.input.rtpTransport->cnameTimeoutMs ==
             policy.identityEvidenceTimeoutNs->nanoseconds() / Millisecond &&
-        outer.audioInput.rtpTransport->cnameTimeoutMs ==
+        runtime.isolatedAudioInput->rtpTransport->cnameTimeoutMs ==
             policy.identityEvidenceTimeoutNs->nanoseconds() / Millisecond &&
         outer.input.rtpTransport->clockLossPolicy ==
             *policy.clockLossPolicy &&
-        outer.audioInput.rtpTransport->clockLossPolicy ==
+        runtime.isolatedAudioInput->rtpTransport->clockLossPolicy ==
             *policy.secondaryClockLossPolicy &&
         *policy.clockLossPolicy ==
             (*runtime.synchronization.startup.allowDegradedClock
@@ -84,7 +85,7 @@ namespace {
             MediaRtpClockLossPolicy::FailOnExpired &&
         outer.input.rtpTransport->rtcpCompositionMode ==
             policy.rtcpCompositionMode &&
-        outer.audioInput.rtpTransport->rtcpCompositionMode ==
+        runtime.isolatedAudioInput->rtpTransport->rtcpCompositionMode ==
             policy.rtcpCompositionMode;
     if (!transportPolicyMatches) {
         return invalidInput("RTP transport and synchronization facts");
@@ -146,10 +147,10 @@ namespace {
         *runtime.planningFacts.inputAudioSampleRate <= 0 ||
         !runtime.planningFacts.inputAudioSamplesPerAccessUnit ||
         *runtime.planningFacts.inputAudioSamplesPerAccessUnit == 0 ||
-        !outer.audioPlan.selectedDecoder ||
-        outer.audioPlan.selectedDecoder->inputSampleRate !=
+        !runtime.audioPipeline.selectedDecoder ||
+        runtime.audioPipeline.selectedDecoder->inputSampleRate !=
             *runtime.planningFacts.inputAudioSampleRate ||
-        outer.audioPlan.selectedDecoder->maximumOutputBlockInputSamples !=
+        runtime.audioPipeline.selectedDecoder->maximumOutputBlockInputSamples !=
             *runtime.planningFacts.inputAudioSamplesPerAccessUnit) {
         return invalidInput("MPEG-TS clock assembly and selected decoder");
     }
@@ -205,10 +206,10 @@ namespace {
         *runtime.planningFacts.inputAudioSampleRate <= 0 ||
         !runtime.planningFacts.inputAudioSamplesPerAccessUnit ||
         *runtime.planningFacts.inputAudioSamplesPerAccessUnit == 0 ||
-        !outer.audioPlan.selectedDecoder ||
-        outer.audioPlan.selectedDecoder->inputSampleRate !=
+        !runtime.audioPipeline.selectedDecoder ||
+        runtime.audioPipeline.selectedDecoder->inputSampleRate !=
             *runtime.planningFacts.inputAudioSampleRate ||
-        outer.audioPlan.selectedDecoder->maximumOutputBlockInputSamples !=
+        runtime.audioPipeline.selectedDecoder->maximumOutputBlockInputSamples !=
             *runtime.planningFacts.inputAudioSamplesPerAccessUnit) {
         return invalidInput("demux timestamp clock assembly");
     }
@@ -260,8 +261,14 @@ namespace {
     case MediaAvSyncSourceClockMode::RtpSenderReports:
         return validateRtpInput(outer, runtime);
     case MediaAvSyncSourceClockMode::MpegTsPcr:
+        if (runtime.isolatedAudioInput) {
+            return invalidInput("MPEG-TS rejects isolated audio input");
+        }
         return validateMpegTsInput(outer, runtime);
     case MediaAvSyncSourceClockMode::DemuxTimestamps:
+        if (runtime.isolatedAudioInput) {
+            return invalidInput("demux input rejects isolated audio input");
+        }
         return validateDemuxInput(outer, runtime);
     }
     return invalidInput("unsupported source clock mode");

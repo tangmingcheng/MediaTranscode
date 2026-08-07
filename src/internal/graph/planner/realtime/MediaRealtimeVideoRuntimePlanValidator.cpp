@@ -16,17 +16,12 @@ namespace media::ffmpeg::graph {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             std::string("Invalid VideoOnly runtime product: ") + field));
     };
-    if (outer.audioPlan.enabled ||
-        outer.audioPlan.branchMode != MediaBranchMode::Drop ||
-        outer.useIsolatedAudioInput || outer.avSyncComponentBounds) {
-        return invalid("audio or A/V product is present");
-    }
     if (!runtime.startup.requireKeyFrame ||
         runtime.startup.maximumWait <=
             MediaRunningTime::fromNanoseconds(0) ||
         runtime.startup.packetCapacity == 0 ||
         runtime.startup.maximumUnitBytes == 0 ||
-        runtime.startup.packetCapacity != outer.queues.packet ||
+        runtime.startup.packetCapacity != runtime.queues.packet ||
         runtime.startup.packetCapacity >
             std::numeric_limits<std::uint64_t>::max() /
                 runtime.startup.maximumUnitBytes ||
@@ -41,21 +36,49 @@ namespace media::ffmpeg::graph {
         !runtime.timing.outputFrameRate.isKnown() ||
         runtime.timing.outputFrameRate.num <= 0 ||
         runtime.timing.outputFrameRate.den <= 0 ||
+        !runtime.timing.scheduledPacketTimeBase.isKnown() ||
+        runtime.timing.scheduledPacketTimeBase.num <= 0 ||
+        runtime.timing.scheduledPacketTimeBase.den <= 0 ||
         runtime.timing.timestampAuthority !=
             MediaRealtimeVideoTimestampAuthority::DecodeTimestamp) {
         return invalid("timing authority");
+    }
+    const bool sourceTiming = outer.videoPlan.branchMode ==
+            MediaBranchMode::CopyPacket &&
+        runtime.timing.packetTimingMode ==
+            MediaRealtimeVideoPacketTimingMode::SourceTimeBase &&
+        runtime.timing.scheduledPacketTimeBase.num ==
+            runtime.timing.sourceTimeBase.num &&
+        runtime.timing.scheduledPacketTimeBase.den ==
+            runtime.timing.sourceTimeBase.den;
+    const bool cadenceTiming = outer.videoPlan.branchMode ==
+            MediaBranchMode::TranscodeFrame &&
+        runtime.timing.packetTimingMode ==
+            MediaRealtimeVideoPacketTimingMode::OutputCadenceTimeBase &&
+        runtime.timing.scheduledPacketTimeBase.num ==
+            runtime.timing.outputFrameRate.den &&
+        runtime.timing.scheduledPacketTimeBase.den ==
+            runtime.timing.outputFrameRate.num;
+    if (!sourceTiming && !cadenceTiming) {
+        return invalid("scheduled packet timing derivation");
     }
     if (!runtime.scheduling.pacingEnabled ||
         runtime.scheduling.transportLead !=
             MediaRunningTime::fromNanoseconds(0)) {
         return invalid("scheduling policy");
     }
-    if (runtime.queues.metadata != outer.queues.metadata ||
-        runtime.queues.packet != outer.queues.packet ||
-        runtime.queues.frame != outer.queues.frame ||
-        runtime.queues.mux != outer.queues.mux ||
-        runtime.edgePolicies !=
-            MediaRealtimeEdgePolicyPlanner::plan(runtime.queues) ||
+    MediaRealtimeEdgePolicySet expectedEdges =
+        MediaRealtimeEdgePolicyPlanner::plan(runtime.queues);
+    auto& memory =
+        expectedEdges.synchronizedPacket.bufferPolicy.memoryBudget;
+    memory.maxBytes = runtime.startup.byteCapacity;
+    memory.softLimitBytes = runtime.startup.byteCapacity;
+    memory.reservedBytes = 0;
+    memory.maxBuffers = runtime.startup.packetCapacity;
+    memory.preallocatedBuffers = 0;
+    memory.enforceHardLimit = true;
+    memory.allowDynamicGrowth = false;
+    if (runtime.edgePolicies != expectedEdges ||
         runtime.threadingPolicy.mode != MediaThreadingMode::PerNodeWorker ||
         runtime.threadingPolicy.priority != MediaThreadPriority::High ||
         runtime.threadingPolicy.maxWorkerThreads != 0 ||

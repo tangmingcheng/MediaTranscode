@@ -5,6 +5,8 @@
 #include "internal/graph/time/MediaRunningTime.h"
 
 #include <chrono>
+#include <cstdint>
+#include <optional>
 
 namespace media::ffmpeg::graph {
 
@@ -21,8 +23,15 @@ protected:
         MediaGraphExecutionContext& context) override;
 
 private:
+    enum class PacketTimingMode {
+        SourceTimeBase,
+        OutputCadenceTimeBase
+    };
+
     ::media::Status configure(MediaGraphExecutionContext& context);
     ::media::Status validateStartupDeadline() const;
+    ::media::Result<MediaNodeProcessResult> emitPending(
+        MediaGraphExecutionContext& context);
     void resetState() noexcept;
 
     bool m_configured = false;
@@ -32,9 +41,16 @@ private:
         MediaRunningTime::fromNanoseconds(0);
     MediaRunningTime m_transportLead =
         MediaRunningTime::fromNanoseconds(0);
+    std::size_t m_packetCapacity = 0;
+    std::uint64_t m_maximumUnitBytes = 0;
+    std::uint64_t m_byteCapacity = 0;
     MediaRational m_sourceTimeBase;
     MediaRational m_outputFrameRate;
+    MediaRational m_packetTimeBase;
+    PacketTimingMode m_packetTimingMode = PacketTimingMode::SourceTimeBase;
     std::chrono::steady_clock::time_point m_startedAt{};
+    std::optional<std::chrono::steady_clock::time_point> m_pendingDeadline;
+    MediaBufferRef m_pendingBuffer;
     MediaGraphPacingClock m_pacingClock;
 };
 

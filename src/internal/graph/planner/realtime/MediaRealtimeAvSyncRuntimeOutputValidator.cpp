@@ -141,7 +141,7 @@ bool validRtpStream(
         output.sdp.sessionVersionPolicy !=
             MediaRtpSdpSessionVersionPolicy::ActivePlaybackGeneration ||
         outer.videoPlan.outputCodecName.empty() ||
-        !outer.audioPlan.resolvedOutput ||
+        !runtime.audioPipeline.resolvedOutput ||
         !validRtpStream(
             output.video, synchronization.videoOutput,
             *runtime.planningFacts.outputVideoRtpPacketization,
@@ -152,7 +152,7 @@ bool validRtpStream(
         !validRtpStream(
             output.audio, synchronization.audioOutput,
             *runtime.planningFacts.outputAudioRtpPacketization,
-            outer.audioPlan.resolvedOutput->codecName(),
+            runtime.audioPipeline.resolvedOutput->codecName(),
             MediaScheduledStream::Audio,
             MediaScheduledRtpPacketizationMode::AacLatm,
             runtime) ||

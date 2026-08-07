@@ -244,7 +244,7 @@ bool matchesMux(
         scheduler->outputPorts.size() != 1 ||
         scheduler->inputPorts.front().name != "video" ||
         scheduler->outputPorts.front().name != "scheduled_video" ||
-        scheduler->options.values().size() != 8) {
+        scheduler->options.values().size() != 14) {
         return invalid("scheduler cardinality");
     }
     auto requireKeyFrame = requiredBoolNodeOption(
@@ -253,6 +253,15 @@ bool matchesMux(
     auto maximumWait = requiredPositiveInt64NodeOption(
         &scheduler->options, "MediaVideoOutputSchedulerNode",
         "video_scheduler.startup.maximum_wait_ns");
+    auto packetCapacity = requiredPositiveInt64NodeOption(
+        &scheduler->options, "MediaVideoOutputSchedulerNode",
+        "video_scheduler.startup.packet_capacity");
+    auto maximumUnitBytes = requiredPositiveInt64NodeOption(
+        &scheduler->options, "MediaVideoOutputSchedulerNode",
+        "video_scheduler.startup.maximum_unit_bytes");
+    auto byteCapacity = requiredPositiveInt64NodeOption(
+        &scheduler->options, "MediaVideoOutputSchedulerNode",
+        "video_scheduler.startup.byte_capacity");
     auto sourceNumerator = requiredPositiveIntNodeOption(
         &scheduler->options, "MediaVideoOutputSchedulerNode",
         "video_scheduler.source_time_base.num");
@@ -265,21 +274,51 @@ bool matchesMux(
     auto frameRateDenominator = requiredPositiveIntNodeOption(
         &scheduler->options, "MediaVideoOutputSchedulerNode",
         "video_scheduler.output_frame_rate.den");
+    auto packetTimeBaseNumerator = requiredPositiveIntNodeOption(
+        &scheduler->options, "MediaVideoOutputSchedulerNode",
+        "video_scheduler.packet_time_base.num");
+    auto packetTimeBaseDenominator = requiredPositiveIntNodeOption(
+        &scheduler->options, "MediaVideoOutputSchedulerNode",
+        "video_scheduler.packet_time_base.den");
+    auto packetTimingMode = requiredNodeOption(
+        &scheduler->options, "MediaVideoOutputSchedulerNode",
+        "video_scheduler.packet_timing_mode");
     auto transportLead = requiredNonNegativeIntNodeOption(
         &scheduler->options, "MediaVideoOutputSchedulerNode",
         "video_scheduler.transport_lead_ns");
     auto pacingEnabled = requiredBoolNodeOption(
         &scheduler->options, "MediaVideoOutputSchedulerNode",
         "video_scheduler.pacing_enabled");
-    if (!requireKeyFrame || !maximumWait || !sourceNumerator ||
+    const char* expectedTimingMode = runtime.timing.packetTimingMode ==
+            MediaRealtimeVideoPacketTimingMode::SourceTimeBase
+        ? "source_time_base"
+        : runtime.timing.packetTimingMode ==
+                MediaRealtimeVideoPacketTimingMode::OutputCadenceTimeBase
+            ? "output_cadence_time_base"
+            : nullptr;
+    if (!requireKeyFrame || !maximumWait || !packetCapacity ||
+        !maximumUnitBytes || !byteCapacity || !sourceNumerator ||
         !sourceDenominator || !frameRateNumerator ||
-        !frameRateDenominator || !transportLead || !pacingEnabled ||
+        !frameRateDenominator || !packetTimeBaseNumerator ||
+        !packetTimeBaseDenominator || !packetTimingMode ||
+        !transportLead || !pacingEnabled || !expectedTimingMode ||
         requireKeyFrame.value() != runtime.startup.requireKeyFrame ||
         maximumWait.value() != runtime.startup.maximumWait.nanoseconds() ||
+        static_cast<std::uint64_t>(packetCapacity.value()) !=
+            runtime.startup.packetCapacity ||
+        static_cast<std::uint64_t>(maximumUnitBytes.value()) !=
+            runtime.startup.maximumUnitBytes ||
+        static_cast<std::uint64_t>(byteCapacity.value()) !=
+            runtime.startup.byteCapacity ||
         sourceNumerator.value() != runtime.timing.sourceTimeBase.num ||
         sourceDenominator.value() != runtime.timing.sourceTimeBase.den ||
         frameRateNumerator.value() != runtime.timing.outputFrameRate.num ||
         frameRateDenominator.value() != runtime.timing.outputFrameRate.den ||
+        packetTimeBaseNumerator.value() !=
+            runtime.timing.scheduledPacketTimeBase.num ||
+        packetTimeBaseDenominator.value() !=
+            runtime.timing.scheduledPacketTimeBase.den ||
+        packetTimingMode.value() != expectedTimingMode ||
         transportLead.value() !=
             runtime.scheduling.transportLead.nanoseconds() ||
         pacingEnabled.value() != runtime.scheduling.pacingEnabled) {

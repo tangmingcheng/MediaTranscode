@@ -5,14 +5,14 @@
 
 namespace media::ffmpeg::graph {
 
-struct MediaRealtimeRtpTranscodePlanCore;
+struct MediaRealtimeRtpTranscodePlanningDraft;
 struct MediaRealtimeRtpTranscodeRequest;
 struct MediaRealtimeOutputPlanningDraft;
 
 class MediaRealtimeVideoRuntimePlanner final {
 public:
     static ::media::Result<MediaRealtimeVideoRuntimePlan> plan(
-        const MediaRealtimeRtpTranscodePlanCore& outer,
+        const MediaRealtimeRtpTranscodePlanningDraft& outer,
         MediaRealtimeOutputPlanningDraft output,
         const MediaRealtimeRtpTranscodeRequest& request,
         MediaRational sourceTimeBase,

@@ -17,6 +17,9 @@ public:
     void setPolicy(MediaLatencyPolicy policy) noexcept;
     const MediaLatencyPolicy& policy() const noexcept;
 
+    ::media::Result<Clock::time_point> targetTime(
+        MediaTimeValue pts,
+        MediaRational timeBase);
     ::media::Status waitUntil(MediaTimeValue pts, MediaRational timeBase);
 
 private:

@@ -1,5 +1,6 @@
 #include "internal/graph/runtime/channel/MediaChannel.h"
 
+#include "internal/graph/runtime/buffer/MediaBuffer.h"
 #include "internal/graph/runtime/queue/MediaQueueFactory.h"
 #include "internal/graph/runtime/threading/MediaNodeWakeup.h"
 
@@ -21,6 +22,12 @@ MediaChannel::MediaChannel(MediaChannelId id, const MediaEdge& edge)
     m_binding.streamKind = edge.streamKind;
     m_binding.edgeKind = edge.edgeKind;
     m_binding.payloadKind = edge.payloadKind;
+    if (hardByteLimitEnabled()) {
+        m_byteBudgetConfigurationValid =
+            !m_policy.bufferPolicy.memoryBudget.allowDynamicGrowth &&
+            m_policy.queuePolicy.overflowPolicy ==
+                MediaQueueOverflowPolicy::BlockProducer;
+    }
 }
 
 MediaChannelId MediaChannel::id() const noexcept
@@ -99,6 +106,22 @@ MediaQueuePushOutcome MediaChannel::pushOutcomeLocked(
     if (m_queue->aborted()) return MediaQueuePushOutcome::Aborted;
     if (m_closeRequested) return MediaQueuePushOutcome::Closed;
 
+    std::uint64_t payloadBytes = 0;
+    if (hardByteLimitEnabled()) {
+        if (!m_byteBudgetConfigurationValid) {
+            return MediaQueuePushOutcome::Aborted;
+        }
+        const auto footprint = payloadBytesForBudget(buffer);
+        if (!footprint) return MediaQueuePushOutcome::Aborted;
+        payloadBytes = *footprint;
+        if (payloadBytes > m_policy.bufferPolicy.memoryBudget.maxBytes) {
+            return MediaQueuePushOutcome::Aborted;
+        }
+        if (wouldExceedByteBudget(payloadBytes)) {
+            return MediaQueuePushOutcome::WouldBlock;
+        }
+    }
+
     const std::size_t capacity = m_queue->capacity();
     if (m_reservedCapacity != 0 &&
         (m_reservedCapacity > capacity ||
@@ -108,6 +131,7 @@ MediaQueuePushOutcome MediaChannel::pushOutcomeLocked(
 
     const MediaQueuePushOutcome outcome = m_queue->pushOutcome(std::move(buffer));
     if (outcome == MediaQueuePushOutcome::Accepted) {
+        accountAcceptedPayload(payloadBytes);
         m_metrics.pushed++;
         if (publishAccepted) publishAcceptedMutation();
     }
@@ -119,8 +143,24 @@ MediaQueuePushOutcome MediaChannel::pushReservedOutcomeLocked(
     MediaBufferRef buffer)
 {
     if (!m_queue || m_queue->aborted()) return MediaQueuePushOutcome::Aborted;
+    std::uint64_t payloadBytes = 0;
+    if (hardByteLimitEnabled()) {
+        if (!m_byteBudgetConfigurationValid) {
+            return MediaQueuePushOutcome::Aborted;
+        }
+        const auto footprint = payloadBytesForBudget(buffer);
+        if (!footprint) return MediaQueuePushOutcome::Aborted;
+        payloadBytes = *footprint;
+        if (payloadBytes > m_policy.bufferPolicy.memoryBudget.maxBytes) {
+            return MediaQueuePushOutcome::Aborted;
+        }
+        if (wouldExceedByteBudget(payloadBytes)) {
+            return MediaQueuePushOutcome::WouldBlock;
+        }
+    }
     const MediaQueuePushOutcome outcome = m_queue->pushOutcome(std::move(buffer));
     if (outcome == MediaQueuePushOutcome::Accepted) {
+        accountAcceptedPayload(payloadBytes);
         m_metrics.pushed++;
     }
     refreshQueueMetrics();
@@ -175,6 +215,7 @@ void MediaChannel::finalizeDeferredCloseLocked() noexcept
         m_externalBlockedConsumers.notify_all();
     }
     if (status) {
+        accountPoppedPayload(out);
         m_metrics.popped++;
         if (m_producerWakeup) m_producerWakeup->notify();
         signalMutationWaiters();
@@ -192,6 +233,7 @@ bool MediaChannel::tryPop(MediaBufferRef& out)
 
     const bool ok = m_queue->tryPop(out);
     if (ok) {
+        accountPoppedPayload(out);
         m_metrics.popped++;
         if (m_producerWakeup) {
             m_producerWakeup->notify();
@@ -252,6 +294,7 @@ void MediaChannel::clear()
     if (m_queue) {
         m_queue->clear();
     }
+    m_queuedPayloadBytes = 0;
     m_metrics.cleared++;
     if (m_consumerWakeup) {
         m_consumerWakeup->notify();
@@ -337,6 +380,48 @@ void MediaChannel::refreshQueueMetrics() noexcept
         m_metrics.queue.blockedConsumers.fetch_add(
             m_externalBlockedConsumers.load(std::memory_order_acquire));
     }
+}
+
+bool MediaChannel::hardByteLimitEnabled() const noexcept
+{
+    const auto& budget = m_policy.bufferPolicy.memoryBudget;
+    return budget.enforceHardLimit && budget.hasByteLimit();
+}
+
+std::optional<std::uint64_t> MediaChannel::payloadBytesForBudget(
+    const MediaBufferRef& buffer) const noexcept
+{
+    if (!buffer) return std::nullopt;
+    if (buffer->isEof() || buffer->isFlush()) return std::uint64_t{0};
+    return buffer->payloadFootprintBytes();
+}
+
+bool MediaChannel::wouldExceedByteBudget(
+    std::uint64_t payloadBytes) const noexcept
+{
+    const std::uint64_t maximum =
+        m_policy.bufferPolicy.memoryBudget.maxBytes;
+    return payloadBytes > maximum || m_queuedPayloadBytes >
+        maximum - payloadBytes;
+}
+
+void MediaChannel::accountAcceptedPayload(
+    std::uint64_t payloadBytes) noexcept
+{
+    if (hardByteLimitEnabled()) m_queuedPayloadBytes += payloadBytes;
+}
+
+void MediaChannel::accountPoppedPayload(
+    const MediaBufferRef& buffer) noexcept
+{
+    if (!hardByteLimitEnabled()) return;
+    const auto footprint = payloadBytesForBudget(buffer);
+    if (!footprint || *footprint > m_queuedPayloadBytes) {
+        m_byteBudgetConfigurationValid = false;
+        m_queuedPayloadBytes = 0;
+        return;
+    }
+    m_queuedPayloadBytes -= *footprint;
 }
 
 } // namespace media::ffmpeg::graph

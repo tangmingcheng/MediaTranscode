@@ -619,7 +619,7 @@ void fillNodePlan(
 void MediaRealtimeInputPlanner::applyNodePlans(
     const MediaRealtimeRtpTranscodeRequest& request,
     const MediaRealtimeRawInputPlan* raw,
-    MediaRealtimeRtpTranscodePlanCore& plan)
+    MediaRealtimeRtpTranscodePlanningDraft& plan)
 {
     fillNodePlan(request,
                  raw ? raw->videoUrl : request.input.url,
@@ -628,8 +628,11 @@ void MediaRealtimeInputPlanner::applyNodePlans(
                  raw ? std::optional<MediaRtpDepacketizerConfig>(raw->videoDepacketizer) : std::nullopt,
                  plan.input);
     if (raw && raw->audio) {
-        plan.useIsolatedAudioInput = true;
-        fillNodePlan(request, raw->audioUrl, raw->audioSdp, raw->audioTransport, raw->audioDepacketizer, plan.audioInput);
+        MediaRealtimeRtpInputNodePlan audioInput;
+        fillNodePlan(request, raw->audioUrl, raw->audioSdp,
+                     raw->audioTransport, raw->audioDepacketizer,
+                     audioInput);
+        plan.isolatedAudioInput = std::move(audioInput);
     }
 }
 

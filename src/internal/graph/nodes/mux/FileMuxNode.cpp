@@ -343,10 +343,10 @@ void FileMuxNode::observeClosedInputs(MediaGraphExecutionContext& context)
             MediaNodeProcessResult::progress());
     }
     if (polled.value().nextWait) {
-        const auto& wait = *polled.value().nextWait;
         return ::media::Result<MediaNodeProcessResult>::success(
-            MediaNodeProcessResult::waitingUntil(
-                wait.syncGroup, wait.masterDeadline));
+            MediaNodeProcessResult{
+                MediaNodeProcessState::Waiting,
+                polled.value().nextWait});
     }
     return processWaiting();
 }

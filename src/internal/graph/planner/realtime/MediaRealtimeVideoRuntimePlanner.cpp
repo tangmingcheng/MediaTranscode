@@ -11,7 +11,7 @@ namespace {
 constexpr std::int64_t VideoStartupMaximumWaitNs = 10'000'000'000;
 
 ::media::Result<MediaRealtimeVideoStartupPlan> planStartup(
-    const MediaRealtimeRtpTranscodePlanCore& outer,
+    const MediaRealtimeRtpTranscodePlanningDraft& outer,
     const MediaRealtimeRtpTranscodeRequest& request)
 {
     if (outer.queues.packet == 0 ||
@@ -24,7 +24,11 @@ constexpr std::int64_t VideoStartupMaximumWaitNs = 10'000'000'000;
     const auto capacity = static_cast<std::uint64_t>(outer.queues.packet);
     const auto unitBytes = static_cast<std::uint64_t>(
         *request.avSyncStartup.maximumVideoUnitBytes);
-    if (capacity > std::numeric_limits<std::uint64_t>::max() / unitBytes) {
+    if (capacity > std::numeric_limits<std::uint64_t>::max() / unitBytes ||
+        unitBytes > static_cast<std::uint64_t>(
+            std::numeric_limits<std::int64_t>::max()) ||
+        capacity * unitBytes > static_cast<std::uint64_t>(
+            std::numeric_limits<std::int64_t>::max())) {
         return ::media::Result<MediaRealtimeVideoStartupPlan>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "VideoOnly startup byte capacity is not representable"));
@@ -42,7 +46,7 @@ constexpr std::int64_t VideoStartupMaximumWaitNs = 10'000'000'000;
 
 ::media::Result<MediaRealtimeVideoRuntimePlan>
 MediaRealtimeVideoRuntimePlanner::plan(
-    const MediaRealtimeRtpTranscodePlanCore& outer,
+    const MediaRealtimeRtpTranscodePlanningDraft& outer,
     MediaRealtimeOutputPlanningDraft output,
     const MediaRealtimeRtpTranscodeRequest& request,
     MediaRational sourceTimeBase,
@@ -60,6 +64,34 @@ MediaRealtimeVideoRuntimePlanner::plan(
         return ::media::Result<MediaRealtimeVideoRuntimePlan>::failure(
             startup.error());
     }
+    MediaRealtimeVideoPacketTimingMode packetTimingMode;
+    MediaRational scheduledPacketTimeBase;
+    if (outer.videoPlan.branchMode == MediaBranchMode::CopyPacket) {
+        packetTimingMode =
+            MediaRealtimeVideoPacketTimingMode::SourceTimeBase;
+        scheduledPacketTimeBase = sourceTimeBase;
+    } else if (outer.videoPlan.branchMode ==
+               MediaBranchMode::TranscodeFrame) {
+        packetTimingMode =
+            MediaRealtimeVideoPacketTimingMode::OutputCadenceTimeBase;
+        scheduledPacketTimeBase = MediaRational{
+            outputFrameRate.den, outputFrameRate.num};
+    } else {
+        return ::media::Result<MediaRealtimeVideoRuntimePlan>::failure(
+            ::media::ErrorInfo::unsupported(
+                "VideoOnly runtime requires an enabled video pipeline"));
+    }
+
+    MediaRealtimeEdgePolicySet edgePolicies = outer.edgePolicies;
+    auto& memory =
+        edgePolicies.synchronizedPacket.bufferPolicy.memoryBudget;
+    memory.maxBytes = startup.value().byteCapacity;
+    memory.softLimitBytes = startup.value().byteCapacity;
+    memory.reservedBytes = 0;
+    memory.maxBuffers = startup.value().packetCapacity;
+    memory.preallocatedBuffers = 0;
+    memory.enforceHardLimit = true;
+    memory.allowDynamicGrowth = false;
 
     output.singleStreamMux.pacingPolicy.enablePacing = false;
     output.singleStreamMux.startupDelayMs = 0;
@@ -92,12 +124,14 @@ MediaRealtimeVideoRuntimePlanner::plan(
             MediaRealtimeVideoTimingPlan{
                 sourceTimeBase,
                 outputFrameRate,
+                scheduledPacketTimeBase,
+                packetTimingMode,
                 MediaRealtimeVideoTimestampAuthority::DecodeTimestamp},
             MediaRealtimeVideoSchedulingPlan{
                 true, MediaRunningTime::fromNanoseconds(0)},
             std::move(*adapter),
             outer.queues,
-            outer.edgePolicies,
+            std::move(edgePolicies),
             outer.threadingPolicy});
 }
 

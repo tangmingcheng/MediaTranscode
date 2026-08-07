@@ -79,6 +79,21 @@ MediaRealtimeVideoSchedulerSegmentBuilder::build(
         return ::media::Result<MediaEndpoint>::failure(status.error());
     }
     if (auto status = set(
+            "video_scheduler.startup.packet_capacity",
+            std::to_string(plan.startup.packetCapacity)); !status) {
+        return ::media::Result<MediaEndpoint>::failure(status.error());
+    }
+    if (auto status = set(
+            "video_scheduler.startup.maximum_unit_bytes",
+            std::to_string(plan.startup.maximumUnitBytes)); !status) {
+        return ::media::Result<MediaEndpoint>::failure(status.error());
+    }
+    if (auto status = set(
+            "video_scheduler.startup.byte_capacity",
+            std::to_string(plan.startup.byteCapacity)); !status) {
+        return ::media::Result<MediaEndpoint>::failure(status.error());
+    }
+    if (auto status = set(
             "video_scheduler.source_time_base.num",
             std::to_string(plan.timing.sourceTimeBase.num)); !status) {
         return ::media::Result<MediaEndpoint>::failure(status.error());
@@ -96,6 +111,32 @@ MediaRealtimeVideoSchedulerSegmentBuilder::build(
     if (auto status = set(
             "video_scheduler.output_frame_rate.den",
             std::to_string(plan.timing.outputFrameRate.den)); !status) {
+        return ::media::Result<MediaEndpoint>::failure(status.error());
+    }
+    if (auto status = set(
+            "video_scheduler.packet_time_base.num",
+            std::to_string(plan.timing.scheduledPacketTimeBase.num)); !status) {
+        return ::media::Result<MediaEndpoint>::failure(status.error());
+    }
+    if (auto status = set(
+            "video_scheduler.packet_time_base.den",
+            std::to_string(plan.timing.scheduledPacketTimeBase.den)); !status) {
+        return ::media::Result<MediaEndpoint>::failure(status.error());
+    }
+    const char* timingMode = plan.timing.packetTimingMode ==
+            MediaRealtimeVideoPacketTimingMode::SourceTimeBase
+        ? "source_time_base"
+        : plan.timing.packetTimingMode ==
+                MediaRealtimeVideoPacketTimingMode::OutputCadenceTimeBase
+            ? "output_cadence_time_base"
+            : nullptr;
+    if (!timingMode) {
+        return ::media::Result<MediaEndpoint>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "VideoOnly scheduler has an unknown packet timing mode"));
+    }
+    if (auto status = set(
+            "video_scheduler.packet_timing_mode", timingMode); !status) {
         return ::media::Result<MediaEndpoint>::failure(status.error());
     }
     if (auto status = set(

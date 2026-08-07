@@ -25,9 +25,16 @@ enum class MediaRealtimeVideoTimestampAuthority {
     DecodeTimestamp
 };
 
+enum class MediaRealtimeVideoPacketTimingMode {
+    SourceTimeBase,
+    OutputCadenceTimeBase
+};
+
 struct MediaRealtimeVideoTimingPlan final {
     MediaRational sourceTimeBase;
     MediaRational outputFrameRate;
+    MediaRational scheduledPacketTimeBase;
+    MediaRealtimeVideoPacketTimingMode packetTimingMode;
     MediaRealtimeVideoTimestampAuthority timestampAuthority;
 };
 
