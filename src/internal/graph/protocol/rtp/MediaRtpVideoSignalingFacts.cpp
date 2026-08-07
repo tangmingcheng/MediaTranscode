@@ -1,5 +1,6 @@
 #include "internal/graph/protocol/rtp/MediaRtpVideoSignalingFacts.h"
 
+#include "internal/graph/protocol/rtp/MediaHevcRtpCapability.h"
 #include "internal/graph/protocol/rtp/MediaRtpFmtp.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 
@@ -379,7 +380,7 @@ MediaRtpVideoSignalingObserver::evidence() const noexcept
     }
 
     if (codecName == "hevc") {
-        if (auto status = validateHevcNonInterleavedRtpFmtp(
+        if (auto status = validateHevcRtpNonInterleavedFmtp(
                 parameters.value());
             !status) {
             return ::media::Result<MediaRtpVideoSignalingFacts>::failure(

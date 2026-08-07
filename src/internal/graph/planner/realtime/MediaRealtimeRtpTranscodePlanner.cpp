@@ -606,7 +606,8 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
             ::media::ErrorInfo::unsupported(
                 "URL and MPEG-TS realtime input require preflight() to preserve the prepared input contract"));
     }
-    return planWithInput(options, nullptr, nullptr, nullptr, nullptr);
+    return planWithInput(
+        options, nullptr, nullptr, nullptr, nullptr, std::nullopt, nullptr);
 }
 
 ::media::Result<MediaRealtimeRtpTranscodePlan> MediaRealtimeRtpTranscodePlanner::planWithInput(
@@ -965,7 +966,8 @@ MediaRealtimeRtpTranscodePlanner::planPreparedInput(
     const MediaTsSelectedProgramPlan& selectedTsProgram)
 {
     return planWithInput(
-        request, &input, &selectedTsProgram, nullptr, nullptr);
+        request, &input, &selectedTsProgram, nullptr, nullptr,
+        std::nullopt, nullptr);
 }
 
 ::media::Result<MediaRealtimeTranscodePreflight> MediaRealtimeRtpTranscodePlanner::preflight(
@@ -1095,7 +1097,7 @@ MediaRealtimeRtpTranscodePlanner::planPreparedInput(
     auto planned = planWithInput(
         request, &scan.streams,
         scan.selectedTsProgram ? &*scan.selectedTsProgram : nullptr,
-        &scan.prepared, nullptr);
+        &scan.prepared, nullptr, std::nullopt, nullptr);
     if (!planned) {
         return ::media::Result<MediaRealtimeTranscodePreflight>::failure(planned.error());
     }

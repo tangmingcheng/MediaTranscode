@@ -13,21 +13,13 @@ MediaRealtimeRtpVideoSignalingResolver::resolveFmtp(
     const MediaDetectedRtpVideoSignaling* detected)
 {
     const std::string codecName = canonicalCodecName(requested.codecName);
-    if ((codecName != "h264" && codecName != "hevc") ||
-        !requested.payloadType || *requested.payloadType < 96 ||
-        *requested.payloadType > 127 || !requested.clockRate ||
-        *requested.clockRate != 90'000) {
-        return ::media::Result<std::string>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "raw RTP video signaling requires H264 or HEVC with dynamic PT and 90000 Hz clock"));
-    }
-
     MediaRtpVideoSignalingFacts facts;
     if (detected) {
-        if (requested.fmtp) {
+        if (requested.fmtp || !requested.payloadType ||
+            !requested.clockRate) {
             return ::media::Result<std::string>::failure(
                 ::media::ErrorInfo::invalidArgument(
-                    "detected raw RTP video signaling conflicts with manual fmtp"));
+                    "detected raw RTP video signaling requires explicit request identity without manual fmtp"));
         }
         if (detected->codecName != codecName ||
             detected->payloadType != *requested.payloadType ||

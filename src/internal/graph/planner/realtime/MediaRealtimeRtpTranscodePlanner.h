@@ -281,8 +281,8 @@ private:
         const MediaTsSelectedProgramPlan* selectedTsProgram,
         const MediaPreparedRealtimeInput* preparedInput,
         const MediaPreparedRealtimeInput* preparedAudioInput,
-        std::optional<MediaPipelinePlan> preplannedVideo = std::nullopt,
-        const MediaDetectedRtpVideoSignaling* detectedVideoSignaling = nullptr);
+        std::optional<MediaPipelinePlan> preplannedVideo,
+        const MediaDetectedRtpVideoSignaling* detectedVideoSignaling);
     static ::media::Result<MediaRealtimeTranscodePreflight> preflightImpl(
         const MediaRealtimeRtpTranscodeRequest& request,
         const MediaRealtimePreflightIo* io);

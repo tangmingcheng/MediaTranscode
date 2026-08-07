@@ -67,29 +67,6 @@ int base64Value(unsigned char c) noexcept
     return ::media::Result<int>::success(value);
 }
 
-::media::Status validateHevcNonInterleavedRtpFmtp(
-    const MediaRtpFmtpParameters& parameters)
-{
-    const auto txMode = parameters.find("tx-mode");
-    if (txMode != parameters.end() && lower(txMode->second) != "srst") {
-        return ::media::Status::failure(::media::ErrorInfo::unsupported(
-            "HEVC RTP only supports non-interleaved SRST transmission"));
-    }
-    if (!parameters.contains("sprop-max-don-diff")) {
-        return ::media::Status::success();
-    }
-    auto maximumDonDifference = requiredRtpFmtpInt(
-        parameters, "sprop-max-don-diff");
-    if (!maximumDonDifference) {
-        return ::media::Status::failure(maximumDonDifference.error());
-    }
-    if (maximumDonDifference.value() != 0) {
-        return ::media::Status::failure(::media::ErrorInfo::unsupported(
-            "HEVC RTP DONL optional payload header is unsupported: sprop-max-don-diff"));
-    }
-    return ::media::Status::success();
-}
-
 ::media::Result<std::vector<uint8_t>> decodeRtpFmtpHex(const std::string& text)
 {
     if (text.empty() || (text.size() % 2) != 0) return ::media::Result<std::vector<uint8_t>>::failure(

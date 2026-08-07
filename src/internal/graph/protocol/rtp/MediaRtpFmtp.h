@@ -15,8 +15,6 @@ using MediaRtpFmtpParameters = std::map<std::string, std::string>;
 ::media::Result<MediaRtpFmtpParameters> parseRtpFmtp(const std::string& text);
 ::media::Result<int> requiredRtpFmtpInt(const MediaRtpFmtpParameters& parameters,
                                         const std::string& key);
-::media::Status validateHevcNonInterleavedRtpFmtp(
-    const MediaRtpFmtpParameters& parameters);
 ::media::Result<std::vector<uint8_t>> decodeRtpFmtpHex(const std::string& text);
 ::media::Result<std::vector<uint8_t>> decodeRtpFmtpBase64(const std::string& text);
 ::media::Result<std::string> encodeRtpFmtpBase64(

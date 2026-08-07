@@ -2,6 +2,7 @@
 
 #include "internal/graph/protocol/rtp/MediaRtpFmtp.h"
 #include "internal/graph/protocol/rtp/MediaAacAudioSpecificConfig.h"
+#include "internal/graph/protocol/rtp/MediaHevcRtpCapability.h"
 #include "internal/graph/protocol/rtp/MediaOpusRtpCapability.h"
 #include "internal/graph/protocol/rtp/depacketizer/MediaAacRtpDepacketizer.h"
 #include "internal/graph/protocol/rtp/depacketizer/MediaH264RtpDepacketizer.h"
@@ -107,7 +108,7 @@ std::string lower(std::string value)
         return ::media::Status::success();
     }
     if (codec == "hevc") {
-        if (auto status = validateHevcNonInterleavedRtpFmtp(fmtp.value());
+        if (auto status = validateHevcRtpNonInterleavedFmtp(fmtp.value());
             !status) return status;
         for (const char* key : {"sprop-vps", "sprop-sps", "sprop-pps"}) if (auto status = requireKey(fmtp.value(), key); !status) return status;
         for (const char* key : {"sprop-vps", "sprop-sps", "sprop-pps"}) {
