@@ -383,8 +383,10 @@ const MediaEdge* exactCodecEdge(
         !validPort(source.findOutputPort("plan"),
                    MediaPortDirection::Output, MediaStreamKind::Metadata,
                    MediaEdgeKind::Metadata,
-                   MediaPayloadKind::ProjectMpegTsRuntimePlan) ||
-        adapter.inputPorts.size() != 2 || adapter.outputPorts.size() != 1 ||
+                   MediaPayloadKind::ProjectMpegTsRuntimePlan)) {
+        return invalid("MPEG-TS plan source differs from runtime product");
+    }
+    if (adapter.inputPorts.size() != 2 || adapter.outputPorts.size() != 1 ||
         !exactKeys(adapter.options,
                    {"scheduled_ts_adapter.session",
                     "scheduled_ts_adapter.stream_set"}) ||
@@ -403,18 +405,26 @@ const MediaEdge* exactCodecEdge(
         !validPort(adapter.findOutputPort("packet"),
                    MediaPortDirection::Output, MediaStreamKind::Any,
                    MediaEdgeKind::EncodedPacket,
-                   MediaPayloadKind::TsAccessUnit) ||
-        !exactKeys(mux.options,
+                   MediaPayloadKind::TsAccessUnit)) {
+        return invalid("MPEG-TS adapter differs from runtime product");
+    }
+    auto muxSessionKind = parseMediaMuxSessionKindOption(
+        mux.options.value(MediaTranscodeOptionKey::MuxSessionKind));
+    if (!exactKeys(mux.options,
                    {MediaTranscodeOptionKey::MuxExpectVideo,
                     MediaTranscodeOptionKey::MuxExpectAudio,
                     MediaTranscodeOptionKey::MuxSessionKind}) ||
         mux.options.value(MediaTranscodeOptionKey::MuxExpectVideo) != "1" ||
         mux.options.value(MediaTranscodeOptionKey::MuxExpectAudio) != "0" ||
-        mux.options.value(MediaTranscodeOptionKey::MuxSessionKind) !=
-            "project_mpeg_ts" ||
-        mux.outputPorts.size() != 0 ||
-        mux.inputPorts.size() != (udp ? 4u : 3u) ||
-        !validPort(mux.findInputPort("codec"), MediaPortDirection::Input,
+        !muxSessionKind ||
+        muxSessionKind.value() != MediaMuxSessionKind::ProjectMpegTs) {
+        return invalid("MPEG-TS mux options differ from runtime product");
+    }
+    if (!mux.outputPorts.empty() ||
+        mux.inputPorts.size() != (udp ? 4u : 3u)) {
+        return invalid("MPEG-TS mux port count differs from runtime product");
+    }
+    if (!validPort(mux.findInputPort("codec"), MediaPortDirection::Input,
                    MediaStreamKind::Any, MediaEdgeKind::Metadata,
                    MediaPayloadKind::CodecContext) ||
         !validPort(mux.findInputPort("packet"), MediaPortDirection::Input,
@@ -423,7 +433,7 @@ const MediaEdge* exactCodecEdge(
         !validPort(mux.findInputPort("plan"), MediaPortDirection::Input,
                    MediaStreamKind::Metadata, MediaEdgeKind::Metadata,
                    MediaPayloadKind::ProjectMpegTsRuntimePlan)) {
-        return invalid("MPEG-TS nodes differ from runtime product");
+        return invalid("MPEG-TS mux port types differ from runtime product");
     }
     const MediaEdge* activation = singleEdge(
         graph, scheduler.findOutputPort("activation")->id,
