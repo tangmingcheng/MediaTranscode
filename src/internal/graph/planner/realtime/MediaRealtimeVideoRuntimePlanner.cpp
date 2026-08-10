@@ -52,6 +52,15 @@ planSeparateRtp(
             MediaVideoOnlySeparateRtpOutputRuntimePlan>::failure(
             sdpIdentity.error());
     }
+    MediaSeparateRtpSdpRuntimePlan sdp{
+        output.sdp.path,
+        identity,
+        identity,
+        endpoint.addressFamily(),
+        endpoint.numericAddress(),
+        cname,
+        MediaRtpSdpSessionIdPolicy::SharedNtpEpoch,
+        MediaRtpSdpSessionVersionPolicy::ActivePlaybackGeneration};
     MediaScheduledRtpOutputPlan video{
         MediaScheduledStream::Video,
         std::move(*output.videoOutput.scheduledTransport),
@@ -68,15 +77,7 @@ planSeparateRtp(
         MediaVideoOnlySeparateRtpOutputRuntimePlan>::success(
         MediaVideoOnlySeparateRtpOutputRuntimePlan{
             std::move(video),
-            MediaSeparateRtpSdpRuntimePlan{
-                output.sdp.path,
-                identity,
-                identity,
-                endpoint.addressFamily(),
-                endpoint.numericAddress(),
-                cname,
-                MediaRtpSdpSessionIdPolicy::SharedNtpEpoch,
-                MediaRtpSdpSessionVersionPolicy::ActivePlaybackGeneration}});
+            std::move(sdp)});
 }
 
 ::media::Result<MediaProjectMpegTsRuntimeOutputPlan> planProjectMpegTs(
