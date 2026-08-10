@@ -13,13 +13,15 @@ namespace media::ffmpeg::graph {
 
 MediaMpegTsRtpSdpPublisherNode::MediaMpegTsRtpSdpPublisherNode(
     MediaNodeId nodeId,
-    MediaAvSyncGroupKey plannedGroup,
-    std::shared_ptr<MediaAvSyncGroupRuntime> syncGroup,
+    MediaProtocolOutputSessionKey plannedSession,
+    MediaTranscodeStreamSet streamSet,
+    std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority,
     std::unique_ptr<MediaAtomicFileReplacePort> replacePort)
     : FFmpegNodeRuntime(
           nodeId, staticKind(), "MediaMpegTsRtpSdpPublisherNode"),
-      m_plannedGroup(std::move(plannedGroup)),
-      m_syncGroup(std::move(syncGroup)),
+      m_plannedSession(std::move(plannedSession)),
+      m_streamSet(streamSet),
+      m_authority(std::move(authority)),
       m_replacePort(std::move(replacePort))
 {
 }
@@ -27,21 +29,24 @@ MediaMpegTsRtpSdpPublisherNode::MediaMpegTsRtpSdpPublisherNode(
 ::media::Result<std::unique_ptr<MediaMpegTsRtpSdpPublisherNode>>
 MediaMpegTsRtpSdpPublisherNode::create(
     MediaNodeId nodeId,
-    MediaAvSyncGroupKey plannedGroup,
-    std::shared_ptr<MediaAvSyncGroupRuntime> syncGroup,
+    MediaProtocolOutputSessionKey plannedSession,
+    MediaTranscodeStreamSet streamSet,
+    std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority,
     std::unique_ptr<MediaAtomicFileReplacePort> replacePort)
 {
     using NodeResult = ::media::Result<
         std::unique_ptr<MediaMpegTsRtpSdpPublisherNode>>;
-    if (!nodeId.isValid() || !plannedGroup.valid() || !syncGroup ||
-        syncGroup->key() != plannedGroup || !replacePort) {
+    if (!nodeId.isValid() || !plannedSession.valid() || !authority ||
+        authority->sessionKey() != plannedSession ||
+        authority->streamSet() != streamSet || !replacePort) {
         return NodeResult::failure(
             ::media::ErrorInfo::invalidArgument(
-                "MP2T SDP publisher requires an exact sync group and atomic replace port"));
+                "MP2T SDP publisher requires an exact output authority and atomic replace port"));
     }
     auto node = std::unique_ptr<MediaMpegTsRtpSdpPublisherNode>(
         new (std::nothrow) MediaMpegTsRtpSdpPublisherNode(
-            nodeId, std::move(plannedGroup), std::move(syncGroup),
+            nodeId, std::move(plannedSession), streamSet,
+            std::move(authority),
             std::move(replacePort)));
     if (!node) {
         return NodeResult::failure(
@@ -133,9 +138,11 @@ MediaMpegTsRtpSdpPublisherNode::onProcess(
     const auto* runtime =
         dynamic_cast<const MediaProjectMpegTsRuntimePlanBuffer*>(
             input.value()->get());
-    if (!runtime || runtime->group() != m_plannedGroup ||
-        m_syncGroup->key() != m_plannedGroup ||
-        !m_syncGroup->sharedNtpEpoch()) {
+    if (!runtime || runtime->sessionKey() != m_plannedSession ||
+        runtime->streamSet() != m_streamSet || !m_authority ||
+        m_authority->sessionKey() != m_plannedSession ||
+        m_authority->streamSet() != m_streamSet ||
+        !m_authority->sharedNtpEpoch()) {
         return failTerminal(::media::ErrorInfo::invalidArgument(
             "MP2T SDP publisher runtime authority is incomplete"));
     }
@@ -145,32 +152,26 @@ MediaMpegTsRtpSdpPublisherNode::onProcess(
         return failTerminal(::media::ErrorInfo::invalidArgument(
             "MP2T SDP publisher requires an RTP transport plan"));
     }
-    const auto transition = m_syncGroup->epochTransitionSnapshot();
-    if (transition.poisoned) {
-        return failTerminal(::media::ErrorInfo::cancelled(
-            "MP2T SDP publisher sync group was aborted"));
-    }
-    if (transition.playbackEpoch &&
-        transition.playbackEpoch->generation ==
-            runtime->epoch().generation &&
-        *transition.playbackEpoch != runtime->epoch()) {
+    auto currentActivation = m_authority->currentActivation();
+    if (!currentActivation ||
+        currentActivation.value() != runtime->activation()) {
         return failTerminal(::media::ErrorInfo::invalidArgument(
-            "MP2T SDP publisher epoch differs from its sync group"));
+            "MP2T SDP publisher activation differs from its authority"));
     }
     if (m_lastPublishedGeneration &&
-        runtime->epoch().generation <= *m_lastPublishedGeneration) {
+        runtime->activation().generation <= *m_lastPublishedGeneration) {
         return failTerminal(::media::ErrorInfo::invalidArgument(
             "MP2T SDP publisher requires strictly increasing generations"));
     }
-    const auto sharedNtpEpoch = m_syncGroup->sharedNtpEpoch();
+    const auto sharedNtpEpoch = m_authority->sharedNtpEpoch();
     auto description = MediaMpegTsRtpSdpDescription::create(
         *rtpPlan, *sharedNtpEpoch,
-        runtime->epoch());
+        runtime->activation());
     if (!description) return failTerminal(description.error());
     auto serialized = description.value().serialize();
     if (!serialized) return failTerminal(serialized.error());
-    auto outputCommit = m_syncGroup->reserveOutputCommit(
-        runtime->epoch().generation);
+    auto outputCommit = m_authority->reserveCommit(
+        runtime->activation().generation);
     if (!outputCommit) {
         return outputCommit.error().code == ::media::ErrorCode::Cancelled
             ? processProgress()
@@ -180,7 +181,7 @@ MediaMpegTsRtpSdpPublisherNode::onProcess(
     auto published = publisher.publish(
         description.value().path(), serialized.value());
     if (!published) return failTerminal(published.error());
-    m_lastPublishedGeneration = runtime->epoch().generation;
+    m_lastPublishedGeneration = runtime->activation().generation;
     return processProgress();
 }
 

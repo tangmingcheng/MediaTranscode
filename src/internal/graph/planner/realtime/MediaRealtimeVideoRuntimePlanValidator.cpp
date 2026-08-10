@@ -63,8 +63,9 @@ namespace media::ffmpeg::graph {
         return invalid("scheduled packet timing derivation");
     }
     if (!runtime.scheduling.pacingEnabled ||
-        runtime.scheduling.transportLead !=
-            MediaRunningTime::fromNanoseconds(0)) {
+        runtime.scheduling.transportLead <=
+            MediaRunningTime::fromNanoseconds(0) ||
+        !runtime.sessionKey.valid()) {
         return invalid("scheduling policy");
     }
     MediaRealtimeEdgePolicySet expectedEdges =
@@ -88,24 +89,33 @@ namespace media::ffmpeg::graph {
     }
     if (outer.outputLayout == RealtimeOutputStreamLayout::SeparateStreams) {
         const auto* output =
-            std::get_if<MediaRealtimeVideoSeparateRtpAdapterPlan>(
+            std::get_if<MediaVideoOnlySeparateRtpOutputRuntimePlan>(
                 &runtime.outputAdapter);
-        if (!output || output->output.url.empty() ||
-            output->output.packetSize <= 0 || output->sdp.path.empty() ||
-            !output->mux.expectVideo || output->mux.expectAudio ||
-            output->mux.pacingPolicy.enablePacing ||
-            output->mux.startupDelayMs != 0) {
+        if (!output || output->sdp.path.empty() ||
+            output->video.stream != MediaScheduledStream::Video ||
+            output->video.senderLead != runtime.scheduling.transportLead ||
+            output->video.senderLead <= MediaRunningTime::fromNanoseconds(0) ||
+            output->video.senderReportInterval <=
+                MediaRunningTime::fromNanoseconds(0) ||
+            output->video.clockRate != 90'000 ||
+            output->video.ssrc == 0 || output->video.cname.empty() ||
+            output->video.cname != output->sdp.cname ||
+            output->video.packetization.streamKind() !=
+                MediaStreamKind::Video) {
             return invalid("separate RTP adapter");
         }
     } else if (outer.outputLayout ==
                RealtimeOutputStreamLayout::MuxedTransportStream) {
-        const auto* output = std::get_if<MediaRealtimeVideoMuxedAdapterPlan>(
+        const auto* output = std::get_if<MediaProjectMpegTsRuntimeOutputPlan>(
             &runtime.outputAdapter);
-        if (!output || output->output.url.empty() ||
-            output->output.format.empty() ||
-            !output->output.muxSessionKind || !output->mux.expectVideo ||
-            output->mux.expectAudio || output->mux.pacingPolicy.enablePacing ||
-            output->mux.startupDelayMs != 0) {
+        if (!output ||
+            output->muxSessionKind != MediaMuxSessionKind::ProjectMpegTs ||
+            !output->protocol.muxPlan().videoOnlyProgram() ||
+            output->protocol.muxPlan().audioVideoProgram() ||
+            output->protocol.muxPlan().transportDecodeLead() !=
+                runtime.scheduling.transportLead ||
+            output->protocol.muxPlan().parameters().transportKind !=
+                outer.outputTransport) {
             return invalid("muxed adapter");
         }
     } else {

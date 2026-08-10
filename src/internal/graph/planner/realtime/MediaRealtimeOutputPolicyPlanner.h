@@ -12,7 +12,6 @@ struct MediaRealtimeOutputUrls final {
     std::string video;
     std::string audio;
     std::string muxed;
-    std::string muxedFormat;
 };
 
 class MediaRealtimeOutputPolicyPlanner final {

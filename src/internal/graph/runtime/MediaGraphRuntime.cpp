@@ -54,6 +54,7 @@ bool MediaGraphRuntime::diagnosticsEnabled() const noexcept
         std::move(executable), m_graph, m_inputBindings,
         m_playbackEpochActivationCapability,
         m_videoPreparationState,
+        m_protocolOutputAuthority,
         m_avSyncClockSource,
         m_context, m_scheduler, m_threadedExecutor, m_acceptanceCollector,
         m_queueHighWatermark, m_state);
@@ -68,7 +69,8 @@ bool MediaGraphRuntime::diagnosticsEnabled() const noexcept
 {
     auto registered = MediaGraphRuntimeCompiler::registerDefaults(
         m_context, m_scheduler, m_inputBindings,
-        m_playbackEpochActivationCapability, m_videoPreparationState);
+        m_playbackEpochActivationCapability, m_videoPreparationState,
+        m_protocolOutputAuthority);
     if (!registered) {
         if (m_state ==
             MediaGraphRuntimeState::DefaultRegistrationPending) {

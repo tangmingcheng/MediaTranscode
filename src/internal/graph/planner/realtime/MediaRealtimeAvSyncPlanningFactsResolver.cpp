@@ -160,16 +160,17 @@ MediaRealtimeAvSyncPlanningFactsResolver::resolve(
             *plannedOutput.audioOutput.scheduledPacketization
                  ->maximumAccessUnitSamples();
     } else {
-        if (!synchronization.projectMpegTsOutput->outputMux ||
-            synchronization.projectMpegTsOutput->outputMux->parameters()
-                    .maximumAudioAccessUnitSamples <= 0) {
+        const auto* program = synchronization.projectMpegTsOutput->outputMux
+            ? synchronization.projectMpegTsOutput->outputMux
+                  ->audioVideoProgram()
+            : nullptr;
+        if (!program || program->maximumAudioAccessUnitSamples <= 0) {
             return ::media::Result<MediaRealtimeAvSyncPlanningFacts>::failure(
                 ::media::ErrorInfo::notInitialized(
                     "Project MPEG-TS output does not publish audio batch timing"));
         }
         facts.protocolBatchSamples =
-            synchronization.projectMpegTsOutput->outputMux->parameters()
-                .maximumAudioAccessUnitSamples;
+            program->maximumAudioAccessUnitSamples;
     }
     facts.mailboxDeliveryMarginSamples = bounds.mailboxDeliveryMarginSamples;
     facts.maximumResamplerOutputBlockSamples = bounds.maximumResamplerOutputBlockSamples;

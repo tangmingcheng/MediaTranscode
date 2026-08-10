@@ -6,17 +6,28 @@
 
 #include <memory>
 #include <optional>
+#include <variant>
 #include <vector>
 
 namespace media::ffmpeg::graph {
 
 class MediaTsMuxSession final {
 public:
-    struct Binding final {
-        MediaTsMuxPlan plan;
-        MediaPlaybackEpoch epoch;
+    struct VideoOnlyStreams final {
+        MediaTsMaterializedVideoConfig video;
+    };
+    struct AudioVideoStreams final {
         MediaTsMaterializedVideoConfig video;
         MediaTsMaterializedAudioConfig audio;
+    };
+    using MaterializedStreams = std::variant<
+        VideoOnlyStreams,
+        AudioVideoStreams>;
+
+    struct Binding final {
+        MediaTsMuxPlan plan;
+        MediaProtocolOutputActivation activation;
+        MaterializedStreams streams;
         std::unique_ptr<MediaTsDatagramSink> sink;
         bool startsWithDiscontinuity;
     };
@@ -50,9 +61,8 @@ private:
     ::media::Result<AdvanceResult> advanceFailure(::media::ErrorInfo error);
 
     MediaTsMuxPlan m_plan;
-    MediaPlaybackEpoch m_epoch;
-    MediaTsMaterializedVideoConfig m_video;
-    MediaTsMaterializedAudioConfig m_audio;
+    MediaProtocolOutputActivation m_activation;
+    MaterializedStreams m_streams;
     MediaTsOutputClockGenerator m_clock;
     MediaTsTransportPacketizer m_packetizer;
     MediaTsProgramTables m_tables;

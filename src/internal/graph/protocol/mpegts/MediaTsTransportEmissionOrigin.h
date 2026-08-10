@@ -1,15 +1,15 @@
 #pragma once
 
 #include "internal/graph/protocol/mpegts/MediaTsMuxPlan.h"
-#include "internal/graph/sync/MediaPlaybackEpoch.h"
+#include "internal/graph/protocol/MediaProtocolOutputRuntimeAuthority.h"
 
 namespace media::ffmpeg::graph {
 
 inline ::media::Result<MediaRunningTime> mediaTsTransportEmissionOrigin(
     const MediaTsMuxPlan& plan,
-    const MediaPlaybackEpoch& epoch)
+    const MediaProtocolOutputActivation& activation)
 {
-    auto decodeOrigin = epoch.masterRelease.checkedSubtract(
+    auto decodeOrigin = activation.masterRelease.checkedSubtract(
         plan.transportDecodeLead());
     if (!decodeOrigin) {
         return ::media::Result<MediaRunningTime>::failure(

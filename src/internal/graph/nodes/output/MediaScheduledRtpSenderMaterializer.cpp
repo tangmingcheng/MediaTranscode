@@ -61,10 +61,10 @@ namespace {
     const MediaSeparateRtpSdpRuntimePlan& sdpPlan,
     const AVCodecParameters& parameters,
     const MediaSharedNtpEpoch& sharedNtpEpoch,
-    const MediaPlaybackEpoch& playbackEpoch)
+    const MediaProtocolOutputActivation& activation)
 {
     auto session = MediaRtpSdpSessionIdentityMaterializer::materialize(
-        sdpPlan, sharedNtpEpoch, playbackEpoch.generation);
+        sdpPlan, sharedNtpEpoch, activation.generation);
     if (!session) {
         return ::media::Result<MediaBufferRef>::failure(session.error());
     }
@@ -73,7 +73,7 @@ namespace {
         return ::media::Result<MediaBufferRef>::failure(media.error());
     }
     return MediaRtpSenderDescriptionBuffer::create(
-        outputPlan.stream, playbackEpoch.generation,
+        outputPlan.stream, activation.generation,
         std::move(session).value(), std::move(media).value());
 }
 
@@ -81,7 +81,7 @@ namespace {
     const MediaScheduledRtpOutputPlan& outputPlan,
     const AVCodecParameters& parameters,
     const MediaSharedNtpEpoch& sharedNtpEpoch,
-    const MediaPlaybackEpoch& playbackEpoch)
+    const MediaProtocolOutputActivation& activation)
 {
     const std::size_t maximumDatagramBytes =
         outputPlan.packetization.maximumDatagramBytes();
@@ -105,12 +105,12 @@ namespace {
     }
     auto mapper = MediaRtpOutputClockMapper::create(
         outputPlan.clockRate, outputPlan.baseTimestamp,
-        playbackEpoch.masterRelease);
+        activation.masterRelease);
     if (!mapper) {
         return ::media::Result<ScheduledRtpSenderConfig>::failure(
             mapper.error());
     }
-    auto firstReport = playbackEpoch.masterRelease.checkedAdd(
+    auto firstReport = activation.masterRelease.checkedAdd(
         outputPlan.senderReportInterval);
     if (!firstReport) {
         return ::media::Result<ScheduledRtpSenderConfig>::failure(
@@ -118,7 +118,7 @@ namespace {
     }
     auto reportSchedule = MediaRtcpSenderReportSchedule::create(
         firstReport.value(), outputPlan.senderReportInterval,
-        outputPlan.senderReportInterval, playbackEpoch.generation);
+        outputPlan.senderReportInterval, activation.generation);
     if (!reportSchedule) {
         return ::media::Result<ScheduledRtpSenderConfig>::failure(
             reportSchedule.error());
@@ -130,7 +130,7 @@ namespace {
     }
     return ScheduledRtpSenderConfig::create(
         std::move(streamConfig).value(), sharedNtpEpoch, mapper.value(),
-        reportSchedule.value(), outputPlan.cname, playbackEpoch.generation,
+        reportSchedule.value(), outputPlan.cname, activation.generation,
         counters.value());
 }
 
@@ -171,7 +171,7 @@ MediaScheduledRtpSenderMaterializer::materialize(
     const MediaSeparateRtpSdpRuntimePlan& sdpPlan,
     const AVCodecContext& codecContext,
     const MediaSharedNtpEpoch& sharedNtpEpoch,
-    const MediaPlaybackEpoch& playbackEpoch)
+    const MediaProtocolOutputActivation& activation)
 {
     auto parameters = MediaScheduledRtpCodecParametersMaterializer::materialize(
         codecContext, outputPlan.packetization);
@@ -182,14 +182,14 @@ MediaScheduledRtpSenderMaterializer::materialize(
     }
     auto description = materializeDescription(
         outputPlan, sdpPlan, *parameters.value(), sharedNtpEpoch,
-        playbackEpoch);
+        activation);
     if (!description) {
         return ::media::Result<
             MediaScheduledRtpSenderMaterialization>::failure(
             description.error());
     }
     auto senderConfig = materializeSenderConfig(
-        outputPlan, *parameters.value(), sharedNtpEpoch, playbackEpoch);
+        outputPlan, *parameters.value(), sharedNtpEpoch, activation);
     if (!senderConfig) {
         return ::media::Result<
             MediaScheduledRtpSenderMaterialization>::failure(

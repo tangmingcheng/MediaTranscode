@@ -267,7 +267,7 @@ void planTsInput(MediaAvSyncPlan& plan,
             ::media::ErrorInfo::unsupported(
                 "MPEG-TS output transport is unsupported"));
     }
-    auto resolvedOutput = MediaProjectMpegTsOutputPlan::create(
+    auto resolvedOutput = MediaProjectMpegTsOutputPlan::createAudioVideo(
         resolvedFacts.videoCodecName, resolvedFacts.videoPacketLayout,
         resolvedFacts.audioOutput,
         *plan.startup.outputLeadNs,

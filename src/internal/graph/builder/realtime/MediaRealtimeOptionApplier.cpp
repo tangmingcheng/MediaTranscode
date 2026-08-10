@@ -164,45 +164,4 @@ const char* boolOption(bool value) noexcept
     return set("mpegts.initial_raw_generation", plan.initialRawTransportGeneration);
 }
 
-::media::Result<void> MediaRealtimeOptionApplier::applyOutputOptions(
-    MediaGraph& graph,
-    MediaNodeId nodeId,
-    const MediaRealtimeRtpOutputNodePlan& plan)
-{
-    if (auto status = setOption(graph, nodeId, "url", plan.url); !status) return status;
-    if (auto status = setOption(graph, nodeId, "rtp.packet_size", std::to_string(plan.packetSize)); !status) return status;
-    if (auto status = setOption(graph, nodeId, "rtp.write_pacing.enabled", boolOption(plan.writePacingEnabled)); !status) return status;
-    if (auto status = setOption(graph, nodeId, "rtp.write_pacing.bytes_per_second", std::to_string(plan.writePacingBytesPerSecond)); !status) return status;
-    if (auto status = setOption(graph, nodeId, "rtp.write_pacing.burst_bytes", std::to_string(plan.writePacingBurstBytes)); !status) return status;
-    if (!plan.mediaId.empty()) {
-        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, "media_id", plan.mediaId); !status) return status;
-    }
-    return ::media::Result<void>::success();
-}
-
-::media::Result<void> MediaRealtimeOptionApplier::applySdpWriterOptions(
-    MediaGraph& graph,
-    MediaNodeId nodeId,
-    const MediaRealtimeSdpWriterPlan& plan)
-{
-    if (auto status = setOption(graph, nodeId, "path", plan.path); !status) return status;
-    if (auto status = setOption(graph, nodeId, "sdp.expected_contexts", std::to_string(plan.expectedContexts)); !status) return status;
-    if (!plan.mediaId.empty()) {
-        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, "media_id", plan.mediaId); !status) return status;
-    }
-    return ::media::Result<void>::success();
-}
-
-::media::Result<void> MediaRealtimeOptionApplier::applyMuxOptions(
-    MediaGraph& graph,
-    MediaNodeId nodeId,
-    const MediaRealtimeMuxNodePlan& plan)
-{
-    if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, MediaTranscodeOptionKey::MuxExpectVideo, boolOption(plan.expectVideo)); !status) return status;
-    if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, MediaTranscodeOptionKey::MuxExpectAudio, boolOption(plan.expectAudio)); !status) return status;
-    if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, "rtp.pacing.enabled", boolOption(plan.pacingPolicy.enablePacing)); !status) return status;
-    if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, "rtp.packet_timestamps.monotonic", boolOption(plan.monotonicPacketTimestamps)); !status) return status;
-    return MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, "rtp.startup_delay_ms", std::to_string(plan.startupDelayMs));
-}
-
 } // namespace media::ffmpeg::graph

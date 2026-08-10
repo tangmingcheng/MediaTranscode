@@ -10,6 +10,8 @@
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/nodes/sync/MediaDemuxPacketClockBinderNodePlanCodec.h"
+#include "internal/graph/nodes/output/MediaScheduledRtpSenderNodePlanCodec.h"
+#include "internal/graph/protocol/MediaProtocolOutputRuntimeAuthority.h"
 #include "internal/graph/time/MediaDemuxTimestampClockMapper.h"
 
 #include <chrono>
@@ -142,6 +144,8 @@ public:
         playbackEpochActivationCapability,
     std::shared_ptr<MediaAvStartupVideoPreparationState>&
         videoPreparationState,
+    std::shared_ptr<MediaProtocolOutputRuntimeAuthority>&
+        protocolOutputAuthority,
     const std::shared_ptr<MediaAvSyncClockSource>& avSyncClockSource,
     MediaGraphExecutionContext& context,
     MediaGraphScheduler& scheduler,
@@ -171,6 +175,7 @@ public:
     }
     std::optional<MediaPlaybackEpochActivationCapability> preparedCapability;
     std::shared_ptr<MediaAvStartupVideoPreparationState> preparedVideoPreparation;
+    std::shared_ptr<MediaProtocolOutputRuntimeAuthority> preparedOutputAuthority;
     if (const auto* avSyncBinding =
             std::get_if<MediaAvSyncRuntimeBinding>(
                 &executable.runtimeBinding)) {
@@ -191,6 +196,14 @@ public:
             return ::media::Status::failure(registered.error());
         }
         preparedCapability.emplace(std::move(registered).value());
+        auto exactGroup = preparedContext.findAvSyncGroup(
+            avSyncBinding->groupKey);
+        auto authority = MediaAvProtocolOutputRuntimeAuthority::create(
+            std::move(exactGroup));
+        if (!authority) {
+            return ::media::Status::failure(authority.error());
+        }
+        preparedOutputAuthority = std::move(authority).value();
         const bool preparationPlanned = executable.graph.findOutputPort(
             [&]() {
                 for (const auto& node : executable.graph.nodes())
@@ -207,6 +220,15 @@ public:
             if (!created) return ::media::Status::failure(created.error());
             preparedVideoPreparation = std::move(created).value();
         }
+    } else if (const auto* videoBinding =
+                   std::get_if<MediaRealtimeVideoRuntimeBinding>(
+                       &executable.runtimeBinding)) {
+        auto authority = MediaVideoProtocolOutputRuntimeAuthority::create(
+            videoBinding->runtime.sessionKey);
+        if (!authority) {
+            return ::media::Status::failure(authority.error());
+        }
+        preparedOutputAuthority = std::move(authority).value();
     }
     const std::vector<MediaNodeId> oldExecutionOrder = context.executionOrder();
     context.shutdownAvSyncGroups();
@@ -218,6 +240,7 @@ public:
     activeBindings = std::move(executable.inputBindings);
     playbackEpochActivationCapability = std::move(preparedCapability);
     videoPreparationState = std::move(preparedVideoPreparation);
+    protocolOutputAuthority = std::move(preparedOutputAuthority);
     acceptanceCollector.reset();
     queueHighWatermark = 0;
     state = requiresDefaultRegistration
@@ -246,7 +269,9 @@ public:
     std::optional<MediaPlaybackEpochActivationCapability>&
         playbackEpochActivationCapability,
     const std::shared_ptr<MediaAvStartupVideoPreparationState>&
-        videoPreparationState)
+        videoPreparationState,
+    const std::shared_ptr<MediaProtocolOutputRuntimeAuthority>&
+        protocolOutputAuthority)
 {
     if (!context.compiled() || !context.graph()) {
         return ::media::Status::failure(
@@ -256,6 +281,7 @@ public:
     preparedNodes.reserve(context.graph()->nodes().size());
     const MediaNode* sequencer = nullptr;
     const MediaNode* avOutputScheduler = nullptr;
+    const MediaNode* videoOutputScheduler = nullptr;
     const MediaNode* videoFilter = nullptr;
     const MediaNode* releaseExtractor = nullptr;
     const MediaNode* mpegTsRtpSdpPublisher = nullptr;
@@ -267,6 +293,14 @@ public:
         }
         if (node.kind == MediaNodeKind::AvOutputScheduler) {
             avOutputScheduler = &node;
+        }
+        if (node.kind == MediaNodeKind::VideoOutputScheduler) {
+            if (videoOutputScheduler) {
+                return ::media::Status::failure(
+                    ::media::ErrorInfo::invalidArgument(
+                        "VideoOnly runtime rejects duplicate output schedulers"));
+            }
+            videoOutputScheduler = &node;
         }
         if (node.kind == MediaNodeKind::VideoFilter) videoFilter = &node;
         if (node.kind == MediaNodeKind::AvBoundReleaseExtractor)
@@ -315,7 +349,6 @@ public:
         return ::media::Status::failure(::media::ErrorInfo::notInitialized(
             "Compiler-issued activation authority has no activation release sequencer"));
     }
-    std::shared_ptr<MediaAvSyncGroupRuntime> scheduledRtpGroup;
     for (const MediaNode* sender : scheduledRtpSenders) {
         if (!sender) {
             return ::media::Status::failure(::media::ErrorInfo::internalError(
@@ -325,21 +358,14 @@ public:
             return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
                 "Scheduled RTP sender runtime node is already registered without compiler injection"));
         }
-        auto groupText = requiredNodeOption(
-            &sender->options, "MediaScheduledRtpSenderNode",
-            "scheduled_rtp.sync_group");
-        if (!groupText) return ::media::Status::failure(groupText.error());
-        MediaAvSyncGroupKey groupKey(std::move(groupText).value());
-        auto exactGroup = context.findAvSyncGroup(groupKey);
-        if (!exactGroup || exactGroup->key() != groupKey) {
+        auto decoded = MediaScheduledRtpSenderNodePlanCodec::decode(*sender);
+        if (!decoded) return ::media::Status::failure(decoded.error());
+        if (!protocolOutputAuthority ||
+            protocolOutputAuthority->sessionKey() != decoded.value().sessionKey ||
+            protocolOutputAuthority->streamSet() != decoded.value().streamSet) {
             return ::media::Status::failure(::media::ErrorInfo::notInitialized(
-                "Scheduled RTP sender compiler injection cannot find its exact registered sync group"));
+                "Scheduled RTP sender compiler injection cannot find its exact output authority"));
         }
-        if (scheduledRtpGroup && scheduledRtpGroup != exactGroup) {
-            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-                "Scheduled RTP senders do not share the exact registered sync-group runtime"));
-        }
-        scheduledRtpGroup = std::move(exactGroup);
     }
     std::shared_ptr<MediaDemuxTimestampClockMapper> demuxMapper;
     std::shared_ptr<MediaAvSyncGroupRuntime> demuxGroup;
@@ -431,27 +457,27 @@ public:
             });
         if (!bound) return bound;
     }
-    std::shared_ptr<MediaAvSyncGroupRuntime> mpegTsRtpSdpGroup;
     if (mpegTsRtpSdpPublisher) {
-        auto groupText = requiredNodeOption(
+        auto sessionText = requiredNodeOption(
             &mpegTsRtpSdpPublisher->options,
             "MediaMpegTsRtpSdpPublisherNode",
-            "mpegts_rtp_sdp.sync_group");
-        if (!groupText) {
-            return ::media::Status::failure(groupText.error());
+            "mpegts_rtp_sdp.session");
+        if (!sessionText) {
+            return ::media::Status::failure(sessionText.error());
         }
-        MediaAvSyncGroupKey groupKey(std::move(groupText).value());
-        mpegTsRtpSdpGroup = context.findAvSyncGroup(groupKey);
-        if (!mpegTsRtpSdpGroup ||
-            mpegTsRtpSdpGroup->key() != groupKey ||
-            !mpegTsRtpSdpGroup->sharedNtpEpoch()) {
+        MediaProtocolOutputSessionKey sessionKey(
+            std::move(sessionText).value());
+        if (!protocolOutputAuthority || !sessionKey.valid() ||
+            protocolOutputAuthority->sessionKey() != sessionKey ||
+            !protocolOutputAuthority->sharedNtpEpoch()) {
             return ::media::Status::failure(
                 ::media::ErrorInfo::notInitialized(
-                    "MP2T SDP publisher requires its exact registered RTP output sync group"));
+                    "MP2T SDP publisher requires its exact RTP output authority"));
         }
     }
     for (const MediaNode& node : context.graph()->nodes()) {
         if (node.kind == MediaNodeKind::ActivatedStartupReleaseSequencer ||
+            node.kind == MediaNodeKind::VideoOutputScheduler ||
             node.kind == MediaNodeKind::ScheduledRtpSender ||
             node.kind == MediaNodeKind::DemuxPacketClockBinder ||
             node.kind == MediaNodeKind::MpegTsRtpSdpPublisher)
@@ -466,12 +492,26 @@ public:
             if (candidate.nodeId == node.id) { binding = &candidate; break; }
         }
         auto runtimeNode = MediaRuntimeNodeFactory::create(
-            node, binding, videoPreparationState);
+            node, binding, videoPreparationState,
+            protocolOutputAuthority);
         if (!runtimeNode) return ::media::Status::failure(runtimeNode.error());
         mediaGraphDiagnosticLog(context.diagnosticsEnabled(), MediaGraphDiagnosticPhase::RuntimeNode,
                                 "register node=" + std::to_string(node.id.value) +
                                     " name=" + node.name +
                                     " kind=" + mediaGraphDiagnosticNodeKindName(node.kind));
+        preparedNodes.push_back(std::move(runtimeNode).value());
+    }
+    if (videoOutputScheduler) {
+        if (scheduler.findNode(videoOutputScheduler->id)) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "VideoOnly scheduler is already registered without compiler injection"));
+        }
+        auto runtimeNode = MediaRuntimeNodeFactory::createVideoOutputScheduler(
+            *videoOutputScheduler, protocolOutputAuthority);
+        if (!runtimeNode) {
+            return ::media::Status::failure(runtimeNode.error());
+        }
         preparedNodes.push_back(std::move(runtimeNode).value());
     }
     for (const MediaNode* binder : demuxClockBinders) {
@@ -490,7 +530,7 @@ public:
     if (mpegTsRtpSdpPublisher) {
         auto runtimeNode =
             MediaRuntimeNodeFactory::createMpegTsRtpSdpPublisher(
-                *mpegTsRtpSdpPublisher, mpegTsRtpSdpGroup);
+                *mpegTsRtpSdpPublisher, protocolOutputAuthority);
         if (!runtimeNode) {
             return ::media::Status::failure(runtimeNode.error());
         }
@@ -498,7 +538,7 @@ public:
     }
     for (const MediaNode* sender : scheduledRtpSenders) {
         auto runtimeNode = MediaRuntimeNodeFactory::createScheduledRtpSender(
-            *sender, scheduledRtpGroup);
+            *sender, protocolOutputAuthority);
         if (!runtimeNode) {
             return ::media::Status::failure(runtimeNode.error());
         }

@@ -3,18 +3,16 @@
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegPacketView.h"
 #include "internal/graph/sync/MediaOutputSchedule.h"
+#include "internal/graph/sync/MediaScheduledAccessUnit.h"
 
 namespace media::ffmpeg::graph {
-namespace {
-
-constexpr MediaRational NanosecondTimeBase{1, 1'000'000'000};
-
-} // namespace
 
 MediaVideoOutputSchedulerNode::MediaVideoOutputSchedulerNode(
-    MediaNodeId nodeId)
+    MediaNodeId nodeId,
+    std::shared_ptr<MediaVideoProtocolOutputRuntimeAuthority> authority)
     : FFmpegNodeRuntime(
-          nodeId, staticKind(), "MediaVideoOutputSchedulerNode")
+          nodeId, staticKind(), "MediaVideoOutputSchedulerNode"),
+      m_authority(std::move(authority))
 {
 }
 
@@ -73,18 +71,21 @@ MediaNodeKind MediaVideoOutputSchedulerNode::staticKind() noexcept
     auto packetTimingMode = requiredNodeOption(
         options, "MediaVideoOutputSchedulerNode",
         "video_scheduler.packet_timing_mode");
-    auto transportLead = requiredNonNegativeIntNodeOption(
+    auto transportLead = requiredPositiveInt64NodeOption(
         options, "MediaVideoOutputSchedulerNode",
         "video_scheduler.transport_lead_ns");
     auto pacingEnabled = requiredBoolNodeOption(
         options, "MediaVideoOutputSchedulerNode",
         "video_scheduler.pacing_enabled");
+    auto session = requiredNodeOption(
+        options, "MediaVideoOutputSchedulerNode",
+        "protocol_output.session");
     if (!requireKeyFrame || !maximumWait || !packetCapacity ||
         !maximumUnitBytes || !byteCapacity || !sourceNumerator ||
         !sourceDenominator || !frameRateNumerator ||
         !frameRateDenominator || !packetTimeBaseNumerator ||
         !packetTimeBaseDenominator || !packetTimingMode ||
-        !transportLead || !pacingEnabled) {
+        !transportLead || !pacingEnabled || !session) {
         const auto& error = !requireKeyFrame ? requireKeyFrame.error()
             : !maximumWait ? maximumWait.error()
             : !packetCapacity ? packetCapacity.error()
@@ -98,20 +99,24 @@ MediaNodeKind MediaVideoOutputSchedulerNode::staticKind() noexcept
             : !packetTimeBaseDenominator ? packetTimeBaseDenominator.error()
             : !packetTimingMode ? packetTimingMode.error()
             : !transportLead ? transportLead.error()
-            : pacingEnabled.error();
+            : !pacingEnabled ? pacingEnabled.error()
+            : session.error();
         return ::media::Status::failure(error);
     }
-    if (!pacingEnabled.value()) {
+    if (!pacingEnabled.value() || !m_authority ||
+        m_authority->streamSet() != MediaTranscodeStreamSet::VideoOnly ||
+        m_authority->sessionKey().value() != session.value()) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "VideoOnly scheduler requires planner-enabled pacing"));
+            "VideoOnly scheduler requires its exact protocol output authority"));
     }
     const auto inputs = context.inputChannels(nodeId());
     const auto outputs = context.outputChannels(nodeId());
-    if (inputs.size() != 1 || outputs.size() != 1 ||
+    if (inputs.size() != 1 || outputs.size() != 2 ||
         !context.findInputChannel(nodeId(), "video") ||
+        !context.findOutputChannel(nodeId(), "activation") ||
         !context.findOutputChannel(nodeId(), "scheduled_video")) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
-            "VideoOnly scheduler requires exactly one video input and output"));
+            "VideoOnly scheduler requires one video input and exact activation/scheduled outputs"));
     }
     m_requireKeyFrame = requireKeyFrame.value();
     m_maximumStartupWait =
@@ -137,26 +142,20 @@ MediaNodeKind MediaVideoOutputSchedulerNode::staticKind() noexcept
         m_packetTimingMode = PacketTimingMode::SourceTimeBase;
         if (m_packetTimeBase.num != m_sourceTimeBase.num ||
             m_packetTimeBase.den != m_sourceTimeBase.den) {
-            return ::media::Status::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "VideoOnly source timing mode requires the source time base"));
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "VideoOnly source timing mode requires the source time base"));
         }
     } else if (packetTimingMode.value() == "output_cadence_time_base") {
         m_packetTimingMode = PacketTimingMode::OutputCadenceTimeBase;
         if (m_packetTimeBase.num != m_outputFrameRate.den ||
             m_packetTimeBase.den != m_outputFrameRate.num) {
-            return ::media::Status::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "VideoOnly cadence timing mode requires the inverse output frame rate"));
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "VideoOnly cadence timing mode requires the inverse output frame rate"));
         }
     } else {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "VideoOnly scheduler received an unknown packet timing mode"));
     }
-    MediaLatencyPolicy pacing;
-    pacing.mode = MediaLatencyMode::Realtime;
-    pacing.enablePacing = pacingEnabled.value();
-    m_pacingClock.setPolicy(pacing);
     m_configured = true;
     return ::media::Status::success();
 }
@@ -172,6 +171,104 @@ MediaNodeKind MediaVideoOutputSchedulerNode::staticKind() noexcept
         "VideoOnly scheduler exceeded the planner startup deadline"));
 }
 
+::media::Result<MediaBufferRef> MediaVideoOutputSchedulerNode::schedule(
+    MediaBufferRef media)
+{
+    const auto& timeBase = media->timeDescriptor().timeBase;
+    auto presentation = MediaRunningTime::checkedFromTicks(
+        media->pts(), timeBase.num, timeBase.den);
+    auto dispatch = MediaRunningTime::checkedFromTicks(
+        media->dts(), timeBase.num, timeBase.den);
+    if (!presentation || !dispatch || !m_sourceStart || !m_masterRelease) {
+        return ::media::Result<MediaBufferRef>::failure(
+            !presentation ? presentation.error()
+            : !dispatch ? dispatch.error()
+            : ::media::ErrorInfo::notInitialized(
+                  "VideoOnly scheduler has no active source/master origin"));
+    }
+    if (m_lastDispatch && dispatch.value() <= *m_lastDispatch) {
+        return ::media::Result<MediaBufferRef>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "VideoOnly scheduler rejects non-monotonic decode timestamps"));
+    }
+    auto presentationOffset =
+        presentation.value().checkedSubtract(*m_sourceStart);
+    auto dispatchOffset = dispatch.value().checkedSubtract(*m_sourceStart);
+    if (!presentationOffset || !dispatchOffset) {
+        return ::media::Result<MediaBufferRef>::failure(
+            presentationOffset ? dispatchOffset.error()
+                               : presentationOffset.error());
+    }
+    auto presentationOnMaster =
+        m_masterRelease->checkedAdd(presentationOffset.value());
+    auto dispatchOnMaster =
+        m_masterRelease->checkedAdd(dispatchOffset.value());
+    if (!presentationOnMaster || !dispatchOnMaster) {
+        return ::media::Result<MediaBufferRef>::failure(
+            presentationOnMaster ? dispatchOnMaster.error()
+                                 : presentationOnMaster.error());
+    }
+    auto outputSchedule = MediaOutputSchedule::create(
+        presentationOnMaster.value(), dispatchOnMaster.value(),
+        m_transportLead);
+    if (!outputSchedule) {
+        return ::media::Result<MediaBufferRef>::failure(
+            outputSchedule.error());
+    }
+    ::media::Result<MediaRunningTime> duration = media->duration() > 0
+        ? MediaRunningTime::checkedFromTicks(
+              media->duration(), timeBase.num, timeBase.den)
+        : MediaRunningTime::checkedFromTicks(
+              1, m_outputFrameRate.den, m_outputFrameRate.num);
+    if (!duration) {
+        return ::media::Result<MediaBufferRef>::failure(duration.error());
+    }
+    auto scheduled = MediaScheduledAccessUnit::create(
+        MediaScheduledAccessUnitParameters{
+            std::move(media), MediaScheduledStream::Video,
+            presentation.value(), dispatch.value(),
+            outputSchedule.value().presentation,
+            outputSchedule.value().dispatch,
+            outputSchedule.value().emit,
+            duration.value(), 1,
+            MediaSourceAccessUnitSequence(m_nextSequence++),
+            std::nullopt, std::nullopt,
+            MediaVideoSyncDecisionKind::Display});
+    if (scheduled) m_lastDispatch = dispatch.value();
+    return scheduled;
+}
+
+::media::Result<MediaNodeProcessResult>
+MediaVideoOutputSchedulerNode::emitPending(
+    MediaGraphExecutionContext& context)
+{
+    if (m_pendingActivation) {
+        MediaBufferRef activation = std::move(m_pendingActivation);
+        auto emitted = emitOutput(context, "activation", activation);
+        return emitted ? processProgress()
+                       : processProgress(std::move(emitted));
+    }
+    if (!m_pendingScheduled || !m_pendingDeadline) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::internalError(
+                "VideoOnly scheduler pending state is incomplete"));
+    }
+    auto now = m_authority->now();
+    if (!now) {
+        return ::media::Result<MediaNodeProcessResult>::failure(now.error());
+    }
+    if (now.value() < *m_pendingDeadline) {
+        return ::media::Result<MediaNodeProcessResult>::success(
+            {MediaNodeProcessState::Waiting,
+             m_authority->deadlineWait(*m_pendingDeadline)});
+    }
+    MediaBufferRef scheduled = std::move(m_pendingScheduled);
+    m_pendingDeadline.reset();
+    auto emitted = emitOutput(context, "scheduled_video", scheduled);
+    return emitted ? processProgress()
+                   : processProgress(std::move(emitted));
+}
+
 ::media::Result<MediaNodeProcessResult>
 MediaVideoOutputSchedulerNode::onProcess(
     MediaGraphExecutionContext& context)
@@ -181,7 +278,7 @@ MediaVideoOutputSchedulerNode::onProcess(
             ::media::ErrorInfo::notInitialized(
                 "VideoOnly scheduler has no configured runtime product"));
     }
-    if (m_pendingBuffer) return emitPending(context);
+    if (m_pendingActivation || m_pendingScheduled) return emitPending(context);
     auto input = tryPopInputOptional(context, "video");
     if (!input) {
         return ::media::Result<MediaNodeProcessResult>::failure(input.error());
@@ -193,8 +290,6 @@ MediaVideoOutputSchedulerNode::onProcess(
                 return ::media::Result<MediaNodeProcessResult>::failure(
                     deadline.error());
             }
-        }
-        if (!m_startedMedia) {
             return ::media::Result<MediaNodeProcessResult>::success(
                 MediaNodeProcessResult::waitingUntil(
                     m_startedAt + std::chrono::nanoseconds(
@@ -207,7 +302,7 @@ MediaVideoOutputSchedulerNode::onProcess(
         if (!m_startedMedia) {
             return ::media::Result<MediaNodeProcessResult>::failure(
                 ::media::ErrorInfo::ioFailure(
-                    "VideoOnly scheduler reached end of input before its startup contract was satisfied"));
+                    "VideoOnly scheduler reached end before activation"));
         }
         auto emitted = emitOutput(context, "scheduled_video", buffer);
         return buffer->isEof() ? processFinished(emitted)
@@ -215,10 +310,27 @@ MediaVideoOutputSchedulerNode::onProcess(
     }
     if (!FFmpegPacketView::isPacket(buffer) ||
         buffer->streamKind() != MediaStreamKind::Video ||
-        buffer->payloadKind() != MediaPayloadKind::Packet) {
+        buffer->payloadKind() != MediaPayloadKind::Packet ||
+        buffer->pts() == invalidMediaTimeValue ||
+        buffer->dts() == invalidMediaTimeValue ||
+        !buffer->timeDescriptor().timeBase.isKnown()) {
         return ::media::Result<MediaNodeProcessResult>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "VideoOnly scheduler requires encoded video packets"));
+                "VideoOnly scheduler requires video packets with explicit PTS/DTS/time base"));
+    }
+    const auto& timeBase = buffer->timeDescriptor().timeBase;
+    if (timeBase.num != m_packetTimeBase.num ||
+        timeBase.den != m_packetTimeBase.den) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "VideoOnly scheduler packet time base disagrees with its plan"));
+    }
+    const auto footprint = buffer->payloadFootprintBytes();
+    if (!footprint || *footprint > m_maximumUnitBytes ||
+        *footprint > m_byteCapacity) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "VideoOnly scheduler packet exceeds planner byte bounds"));
     }
     if (!m_startedMedia) {
         auto deadline = validateStartupDeadline();
@@ -229,74 +341,43 @@ MediaVideoOutputSchedulerNode::onProcess(
         if (m_requireKeyFrame && !buffer->isKeyFrame()) {
             return processProgress();
         }
+        auto sourceStart = MediaRunningTime::checkedFromTicks(
+            buffer->dts(), timeBase.num, timeBase.den);
+        if (!sourceStart) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                sourceStart.error());
+        }
+        auto activation = m_authority->activate(
+            sourceStart.value(), m_transportLead);
+        if (!activation) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                activation.error());
+        }
+        auto facts = m_authority->validateActivation(activation.value());
+        if (!facts) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                facts.error());
+        }
+        m_sourceStart = facts.value().sourceStart;
+        m_masterRelease = facts.value().masterRelease;
         m_startedMedia = true;
-        m_pacingClock.reset();
+        m_pendingActivation = std::move(activation).value();
     }
-    if (buffer->dts() == invalidMediaTimeValue ||
-        !buffer->timeDescriptor().timeBase.isKnown()) {
+    auto scheduled = schedule(std::move(buffer));
+    if (!scheduled) {
         return ::media::Result<MediaNodeProcessResult>::failure(
-            ::media::ErrorInfo::notInitialized(
-                "VideoOnly scheduler requires decode timestamps with an explicit time base"));
+            scheduled.error());
     }
-    const auto& timeBase = buffer->timeDescriptor().timeBase;
-    if (timeBase.num != m_packetTimeBase.num ||
-        timeBase.den != m_packetTimeBase.den) {
-        return ::media::Result<MediaNodeProcessResult>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "VideoOnly scheduler packet time base disagrees with the planner timing product"));
-    }
-    const auto footprint = buffer->payloadFootprintBytes();
-    if (!footprint || *footprint > m_maximumUnitBytes ||
-        *footprint > m_byteCapacity) {
-        return ::media::Result<MediaNodeProcessResult>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "VideoOnly scheduler packet exceeds the planner startup byte bounds"));
-    }
-    auto dispatch = MediaRunningTime::checkedFromTicks(
-        buffer->dts(), timeBase.num, timeBase.den);
-    if (!dispatch) {
-        return ::media::Result<MediaNodeProcessResult>::failure(
-            dispatch.error());
-    }
-    auto schedule = MediaOutputSchedule::create(
-        dispatch.value(), dispatch.value(), m_transportLead);
-    if (!schedule) {
-        return ::media::Result<MediaNodeProcessResult>::failure(
-            schedule.error());
-    }
-    auto target = m_pacingClock.targetTime(
-        schedule.value().emit.nanoseconds(), NanosecondTimeBase);
-    if (!target) {
-        return ::media::Result<MediaNodeProcessResult>::failure(
-            target.error());
-    }
-    if (target.value() > std::chrono::steady_clock::now()) {
-        m_pendingDeadline = target.value();
-        m_pendingBuffer = std::move(buffer);
-        return ::media::Result<MediaNodeProcessResult>::success(
-            MediaNodeProcessResult::waitingUntil(*m_pendingDeadline));
-    }
-    return processProgress(
-        emitOutput(context, "scheduled_video", buffer));
-}
-
-::media::Result<MediaNodeProcessResult>
-MediaVideoOutputSchedulerNode::emitPending(
-    MediaGraphExecutionContext& context)
-{
-    if (!m_pendingDeadline) {
+    const auto* unit = dynamic_cast<const MediaScheduledAccessUnit*>(
+        scheduled.value().get());
+    if (!unit) {
         return ::media::Result<MediaNodeProcessResult>::failure(
             ::media::ErrorInfo::internalError(
-                "VideoOnly scheduler retained a packet without a deadline"));
+                "VideoOnly scheduler failed to materialize scheduled AU"));
     }
-    if (std::chrono::steady_clock::now() < *m_pendingDeadline) {
-        return ::media::Result<MediaNodeProcessResult>::success(
-            MediaNodeProcessResult::waitingUntil(*m_pendingDeadline));
-    }
-    MediaBufferRef buffer = std::move(m_pendingBuffer);
-    m_pendingDeadline.reset();
-    return processProgress(
-        emitOutput(context, "scheduled_video", buffer));
+    m_pendingDeadline = unit->emitOnMaster();
+    m_pendingScheduled = std::move(scheduled).value();
+    return emitPending(context);
 }
 
 ::media::Status MediaVideoOutputSchedulerNode::stop(
@@ -309,6 +390,7 @@ MediaVideoOutputSchedulerNode::emitPending(
 void MediaVideoOutputSchedulerNode::abort(
     MediaGraphExecutionContext& context) noexcept
 {
+    if (m_authority) m_authority->markAborted();
     resetState();
     FFmpegNodeRuntime::abort(context);
 }
@@ -329,8 +411,12 @@ void MediaVideoOutputSchedulerNode::resetState() noexcept
     m_packetTimingMode = PacketTimingMode::SourceTimeBase;
     m_startedAt = {};
     m_pendingDeadline.reset();
-    m_pendingBuffer.reset();
-    m_pacingClock.reset();
+    m_pendingActivation.reset();
+    m_pendingScheduled.reset();
+    m_sourceStart.reset();
+    m_masterRelease.reset();
+    m_lastDispatch.reset();
+    m_nextSequence = 1;
 }
 
 } // namespace media::ffmpeg::graph

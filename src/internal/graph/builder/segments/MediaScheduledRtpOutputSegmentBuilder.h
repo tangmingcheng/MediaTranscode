@@ -3,6 +3,7 @@
 #include "internal/graph/builder/MediaEndpoint.h"
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
+#include "internal/graph/planner/realtime/MediaRealtimeVideoRuntimePlan.h"
 
 #include <string>
 
@@ -23,12 +24,29 @@ struct MediaScheduledRtpOutputSegmentResult final {
     MediaNodeId sdpPublisher;
 };
 
+struct MediaVideoOnlyScheduledRtpOutputSegmentOptions final {
+    std::string prefix;
+    MediaEndpoint activation;
+    MediaEndpoint videoCodec;
+    MediaEndpoint scheduledVideo;
+};
+
+struct MediaVideoOnlyScheduledRtpOutputSegmentResult final {
+    MediaNodeId videoSender;
+    MediaNodeId sdpPublisher;
+};
+
 class MediaScheduledRtpOutputSegmentBuilder final {
 public:
     static ::media::Result<MediaScheduledRtpOutputSegmentResult> build(
         MediaGraph& graph,
         const MediaScheduledRtpOutputSegmentOptions& options,
         const MediaRealtimeAvSyncRuntimePlan& plan);
+    static ::media::Result<MediaVideoOnlyScheduledRtpOutputSegmentResult>
+    buildVideoOnly(
+        MediaGraph& graph,
+        const MediaVideoOnlyScheduledRtpOutputSegmentOptions& options,
+        const MediaRealtimeVideoRuntimePlan& plan);
 
 private:
     MediaScheduledRtpOutputSegmentBuilder() = delete;

@@ -21,13 +21,23 @@ namespace {
 bool materializedConfigMatches(const MediaTsMuxSession::Binding& binding) noexcept
 {
     const auto& parameters = binding.plan.parameters();
-    return binding.video.layout() == parameters.h264InputLayout &&
-           binding.video.nalLengthBytes() == parameters.h264NalLengthBytes &&
-           binding.audio.audioObjectType() == parameters.aac.audioObjectType &&
-           binding.audio.samplingFrequencyIndex() ==
-               parameters.aac.samplingFrequencyIndex &&
-           binding.audio.channelConfiguration() ==
-               parameters.aac.channelConfiguration;
+    if (const auto* video = std::get_if<
+            MediaTsMuxSession::VideoOnlyStreams>(&binding.streams)) {
+        return binding.plan.videoOnlyProgram() &&
+            video->video.layout() == parameters.h264InputLayout &&
+            video->video.nalLengthBytes() == parameters.h264NalLengthBytes;
+    }
+    const auto* streams = std::get_if<
+        MediaTsMuxSession::AudioVideoStreams>(&binding.streams);
+    const auto* program = binding.plan.audioVideoProgram();
+    return streams && program &&
+        streams->video.layout() == parameters.h264InputLayout &&
+        streams->video.nalLengthBytes() == parameters.h264NalLengthBytes &&
+        streams->audio.audioObjectType() == program->aac.audioObjectType &&
+        streams->audio.samplingFrequencyIndex() ==
+            program->aac.samplingFrequencyIndex &&
+        streams->audio.channelConfiguration() ==
+            program->aac.channelConfiguration;
 }
 
 ::media::Result<std::size_t> checkedPacketCount(
@@ -46,13 +56,13 @@ bool materializedConfigMatches(const MediaTsMuxSession::Binding& binding) noexce
 ::media::Result<std::unique_ptr<MediaTsMuxSession>> MediaTsMuxSession::create(
     Binding binding)
 {
-    if (!binding.sink || binding.epoch.generation == 0 ||
+    if (!binding.sink || binding.activation.generation == 0 ||
         !materializedConfigMatches(binding)) {
         return ::media::Result<std::unique_ptr<MediaTsMuxSession>>::failure(
             invalid("MPEG-TS mux session binding is incomplete or inconsistent"));
     }
     auto clock = MediaTsOutputClockGenerator::create(
-        binding.plan.clockPolicy(), binding.epoch);
+        binding.plan.clockPolicy(), binding.activation);
     if (!clock) return ::media::Result<std::unique_ptr<MediaTsMuxSession>>::failure(
         clock.error());
     auto packetizer = MediaTsTransportPacketizer::create(
@@ -82,15 +92,14 @@ MediaTsMuxSession::MediaTsMuxSession(
     MediaTsProgramTables tables,
     MediaTsPacketBatchWriter writer) noexcept
     : m_plan(std::move(binding.plan)),
-      m_epoch(binding.epoch),
-      m_video(std::move(binding.video)),
-      m_audio(std::move(binding.audio)),
+      m_activation(binding.activation),
+      m_streams(std::move(binding.streams)),
       m_clock(std::move(clock)),
       m_packetizer(std::move(packetizer)),
       m_tables(std::move(tables)),
       m_writer(std::move(writer)),
-      m_nextPsi(binding.epoch.masterRelease),
-      m_nextPcr(binding.epoch.masterRelease)
+      m_nextPsi(binding.activation.masterRelease),
+      m_nextPcr(binding.activation.masterRelease)
 {
 }
 
@@ -145,7 +154,7 @@ MediaTsMuxSession::advanceFailure(::media::ErrorInfo error)
 ::media::Status MediaTsMuxSession::start(MediaRunningTime emitOnMaster)
 {
     if (m_state != State::Created) return stateFailure("start");
-    auto origin = mediaTsTransportEmissionOrigin(m_plan, m_epoch);
+    auto origin = mediaTsTransportEmissionOrigin(m_plan, m_activation);
     if (!origin) return poison(origin.error());
     if (emitOnMaster != origin.value()) {
         return poison(invalid(
@@ -227,7 +236,8 @@ MediaTsMuxSession::advanceFailure(::media::ErrorInfo error)
             packetCount = count.value();
         }
         if (pcrDue) {
-            auto prepared = m_clock.preparePcr(m_epoch.generation, m_nextPcr);
+            auto prepared = m_clock.preparePcr(
+                m_activation.generation, m_nextPcr);
             if (!prepared) return advanceFailure(prepared.error());
             const auto& sample = prepared.value().clock();
             auto validation = m_clock.validateSerializedPcr(
@@ -269,7 +279,7 @@ MediaTsMuxSession::writeAccessUnit(
     if (!advanced) {
         return ::media::Result<AdvanceResult>::failure(advanced.error());
     }
-    if (unit.generation != m_epoch.generation || unit.payload.empty() ||
+    if (unit.generation != m_activation.generation || unit.payload.empty() ||
         (m_lastAccessUnitEmission &&
          unit.emitOnMaster < *m_lastAccessUnitEmission)) {
         return advanceFailure(
@@ -288,13 +298,35 @@ MediaTsMuxSession::writeAccessUnit(
     auto framed = [&]() -> ::media::Result<std::span<const std::uint8_t>> {
         switch (unit.stream) {
         case MediaScheduledStream::Video:
+            {
+            const MediaTsMaterializedVideoConfig* video = nullptr;
+            if (const auto* streams = std::get_if<VideoOnlyStreams>(
+                    &m_streams)) {
+                video = &streams->video;
+            } else if (const auto* streams = std::get_if<AudioVideoStreams>(
+                           &m_streams)) {
+                video = &streams->video;
+            }
+            if (!video) {
+                return ::media::Result<std::span<const std::uint8_t>>::failure(
+                    invalid("MPEG-TS video materialization is absent"));
+            }
             return MediaTsH264AccessUnitFramer::frame(
-                m_plan, m_video, unit.payload, unit.randomAccess,
+                m_plan, *video, unit.payload, unit.randomAccess,
                 m_videoFramingWorkspace);
+            }
         case MediaScheduledStream::Audio:
+            {
+            const auto* streams = std::get_if<AudioVideoStreams>(&m_streams);
+            const auto* program = m_plan.audioVideoProgram();
+            if (!streams || !program) {
+                return ::media::Result<std::span<const std::uint8_t>>::failure(
+                    invalid("MPEG-TS audio access unit is absent from the typed program"));
+            }
             return MediaTsAacAdtsFramer::frame(
-                m_plan.parameters().aac, unit.payload,
+                program->aac, unit.payload,
                 m_audioFramingWorkspace);
+            }
         default:
             return ::media::Result<std::span<const std::uint8_t>>::failure(
                 invalid("MPEG-TS access unit stream is unsupported"));

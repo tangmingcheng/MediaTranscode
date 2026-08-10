@@ -1,6 +1,6 @@
 #pragma once
 
-#include "internal/graph/sync/MediaPlaybackEpoch.h"
+#include "internal/graph/protocol/MediaProtocolOutputRuntimeAuthority.h"
 #include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
 #include "media_transcode/Result.h"
 
@@ -90,7 +90,7 @@ class MediaTsOutputClockGenerator final {
 public:
     static ::media::Result<MediaTsOutputClockGenerator> create(
         MediaTsOutputClockPolicy policy,
-        MediaPlaybackEpoch epoch);
+        MediaProtocolOutputActivation activation);
 
     MediaTsOutputClockGenerator(const MediaTsOutputClockGenerator&) = delete;
     MediaTsOutputClockGenerator& operator=(const MediaTsOutputClockGenerator&) = delete;
@@ -114,12 +114,15 @@ public:
         std::int64_t serializedExtended27Mhz) const;
 
     const MediaTsOutputClockPolicy& policy() const noexcept { return m_policy; }
-    const MediaPlaybackEpoch& epoch() const noexcept { return m_epoch; }
+    const MediaProtocolOutputActivation& activation() const noexcept
+    {
+        return m_activation;
+    }
 
 private:
     MediaTsOutputClockGenerator(
         MediaTsOutputClockPolicy policy,
-        MediaPlaybackEpoch epoch);
+        MediaProtocolOutputActivation activation);
 
     ::media::Result<std::int64_t> outputNanoseconds(
         MediaRunningTime masterTime) const;
@@ -130,7 +133,7 @@ private:
     ::media::Status validateGeneration(std::uint64_t generation) const;
 
     MediaTsOutputClockPolicy m_policy;
-    MediaPlaybackEpoch m_epoch;
+    MediaProtocolOutputActivation m_activation;
     std::shared_ptr<MediaTsOutputClockControlState> m_control;
 };
 

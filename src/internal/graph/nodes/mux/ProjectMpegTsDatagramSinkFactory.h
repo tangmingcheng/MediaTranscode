@@ -4,7 +4,7 @@
 #include "internal/graph/protocol/mpegts/MediaTsDatagramSink.h"
 #include "internal/graph/protocol/mpegts/MediaTsMuxPlan.h"
 #include "internal/graph/protocol/rtp/MediaMpegTsRtpContinuityState.h"
-#include "internal/graph/sync/MediaPlaybackEpoch.h"
+#include "internal/graph/protocol/MediaProtocolOutputRuntimeAuthority.h"
 #include "internal/graph/time/MediaSharedNtpEpoch.h"
 
 #include <memory>
@@ -21,7 +21,7 @@ public:
     static ::media::Result<std::unique_ptr<MediaTsDatagramSink>> create(
         const MediaProjectMpegTsRuntimeOutputPlan& outputPlan,
         const MediaTsMuxPlan& muxPlan,
-        const MediaPlaybackEpoch& epoch,
+        const MediaProtocolOutputActivation& activation,
         const std::shared_ptr<const MediaSharedNtpEpoch>& sharedNtpEpoch,
         const std::shared_ptr<MediaMpegTsRtpContinuityState>&
             rtpContinuity,

@@ -2,7 +2,7 @@
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/runtime/filesystem/MediaAtomicUtf8FilePublisher.h"
-#include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
+#include "internal/graph/protocol/MediaProtocolOutputRuntimeAuthority.h"
 
 #include <memory>
 #include <optional>
@@ -14,8 +14,9 @@ public:
     static ::media::Result<
         std::unique_ptr<MediaMpegTsRtpSdpPublisherNode>> create(
         MediaNodeId nodeId,
-        MediaAvSyncGroupKey plannedGroup,
-        std::shared_ptr<MediaAvSyncGroupRuntime> syncGroup,
+        MediaProtocolOutputSessionKey plannedSession,
+        MediaTranscodeStreamSet streamSet,
+        std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority,
         std::unique_ptr<MediaAtomicFileReplacePort> replacePort);
 
     static MediaNodeKind staticKind() noexcept;
@@ -31,8 +32,9 @@ protected:
 private:
     MediaMpegTsRtpSdpPublisherNode(
         MediaNodeId nodeId,
-        MediaAvSyncGroupKey plannedGroup,
-        std::shared_ptr<MediaAvSyncGroupRuntime> syncGroup,
+        MediaProtocolOutputSessionKey plannedSession,
+        MediaTranscodeStreamSet streamSet,
+        std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority,
         std::unique_ptr<MediaAtomicFileReplacePort> replacePort);
 
     ::media::Status validatePorts(
@@ -41,8 +43,9 @@ private:
         ::media::ErrorInfo error);
     void resetState() noexcept;
 
-    MediaAvSyncGroupKey m_plannedGroup;
-    std::shared_ptr<MediaAvSyncGroupRuntime> m_syncGroup;
+    MediaProtocolOutputSessionKey m_plannedSession;
+    MediaTranscodeStreamSet m_streamSet;
+    std::shared_ptr<MediaProtocolOutputRuntimeAuthority> m_authority;
     std::unique_ptr<MediaAtomicFileReplacePort> m_replacePort;
     std::optional<::media::ErrorInfo> m_terminalFailure;
     std::optional<std::uint64_t> m_lastPublishedGeneration;

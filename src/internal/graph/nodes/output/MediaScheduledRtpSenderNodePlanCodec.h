@@ -2,12 +2,14 @@
 
 #include "internal/graph/core/MediaGraph.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
-#include "internal/graph/sync/MediaAvSyncGroupKey.h"
+#include "internal/graph/model/MediaTranscodeStreamSet.h"
+#include "internal/graph/protocol/MediaProtocolOutputSessionKey.h"
 
 namespace media::ffmpeg::graph {
 
 struct MediaDecodedScheduledRtpSenderNodePlan final {
-    MediaAvSyncGroupKey groupKey;
+    MediaProtocolOutputSessionKey sessionKey;
+    MediaTranscodeStreamSet streamSet;
     MediaScheduledRtpOutputPlan output;
     MediaSeparateRtpSdpRuntimePlan sdp;
 };
@@ -17,7 +19,8 @@ public:
     static ::media::Status apply(
         MediaGraph& graph,
         MediaNodeId nodeId,
-        const MediaAvSyncGroupKey& groupKey,
+        const MediaProtocolOutputSessionKey& sessionKey,
+        MediaTranscodeStreamSet streamSet,
         const MediaScheduledRtpOutputPlan& output,
         const MediaSeparateRtpSdpRuntimePlan& sdp);
 

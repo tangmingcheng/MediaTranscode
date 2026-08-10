@@ -17,6 +17,7 @@
 namespace media::ffmpeg::graph {
 
 class MediaAvSyncGroupRuntime;
+class MediaProtocolOutputRuntimeAuthority;
 class MediaAvGenerationPurgeTarget;
 struct MediaAvOutputSchedulerNodeTestAccess;
 enum class MediaAvSchedulerInput { Video, Audio };
@@ -89,9 +90,13 @@ public:
         MediaAvSyncResult<MediaVideoSyncController>(
             const MediaAvSyncPlan&, std::uint64_t)>;
 
-    explicit MediaAvOutputSchedulerNode(MediaNodeId nodeId);
-    MediaAvOutputSchedulerNode(MediaNodeId nodeId,
-                               VideoControllerFactory controllerFactory);
+    MediaAvOutputSchedulerNode(
+        MediaNodeId nodeId,
+        std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority);
+    MediaAvOutputSchedulerNode(
+        MediaNodeId nodeId,
+        VideoControllerFactory controllerFactory,
+        std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority);
     static MediaNodeKind staticKind() noexcept;
     static constexpr std::string_view generationPurgeIdentity() noexcept
     {
@@ -155,6 +160,7 @@ private:
     std::shared_ptr<MediaAvSchedulerGenerationState> m_generationSession;
     std::shared_ptr<MediaAvSchedulerGenerationState::Data> m_generationData;
     std::shared_ptr<MediaProtocolOutputGenerationState> m_generationState;
+    std::shared_ptr<MediaProtocolOutputRuntimeAuthority> m_outputAuthority;
     VideoControllerFactory m_videoControllerFactory;
 };
 

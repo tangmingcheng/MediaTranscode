@@ -7,6 +7,7 @@
 #include "internal/graph/sync/MediaPlaybackEpochActivationCapability.h"
 #include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
 #include "internal/graph/sync/startup/MediaAvStartupVideoPreparationCapability.h"
+#include "internal/graph/protocol/MediaProtocolOutputRuntimeAuthority.h"
 #include "media_transcode/Result.h"
 
 #include <memory>
@@ -33,6 +34,13 @@ public:
         MediaPreparedRealtimeInputBinding* binding,
         const std::shared_ptr<MediaAvStartupVideoPreparationState>&
             videoPreparationState);
+    static ::media::Result<std::unique_ptr<MediaRuntimeNode>> create(
+        const MediaNode& node,
+        MediaPreparedRealtimeInputBinding* binding,
+        const std::shared_ptr<MediaAvStartupVideoPreparationState>&
+            videoPreparationState,
+        const std::shared_ptr<MediaProtocolOutputRuntimeAuthority>&
+            protocolOutputAuthority);
     static ::media::Result<std::unique_ptr<MediaRuntimeNode>>
     createActivatedStartupReleaseSequencer(
         const MediaNode& node,
@@ -42,11 +50,15 @@ public:
     static ::media::Result<std::unique_ptr<MediaRuntimeNode>>
     createScheduledRtpSender(
         const MediaNode& node,
-        std::shared_ptr<MediaAvSyncGroupRuntime> syncGroup);
+        std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority);
+    static ::media::Result<std::unique_ptr<MediaRuntimeNode>>
+    createVideoOutputScheduler(
+        const MediaNode& node,
+        std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority);
     static ::media::Result<std::unique_ptr<MediaRuntimeNode>>
     createMpegTsRtpSdpPublisher(
         const MediaNode& node,
-        std::shared_ptr<MediaAvSyncGroupRuntime> syncGroup);
+        std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority);
     static ::media::Result<std::unique_ptr<MediaRuntimeNode>>
     createDemuxPacketClockBinder(
         const MediaNode& node,

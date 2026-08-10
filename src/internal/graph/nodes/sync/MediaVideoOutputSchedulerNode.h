@@ -1,18 +1,21 @@
 #pragma once
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
-#include "internal/graph/runtime/MediaGraphPacingClock.h"
+#include "internal/graph/protocol/MediaProtocolOutputRuntimeAuthority.h"
 #include "internal/graph/time/MediaRunningTime.h"
 
-#include <chrono>
 #include <cstdint>
+#include <chrono>
+#include <memory>
 #include <optional>
 
 namespace media::ffmpeg::graph {
 
 class MediaVideoOutputSchedulerNode final : public FFmpegNodeRuntime {
 public:
-    explicit MediaVideoOutputSchedulerNode(MediaNodeId nodeId);
+    MediaVideoOutputSchedulerNode(
+        MediaNodeId nodeId,
+        std::shared_ptr<MediaVideoProtocolOutputRuntimeAuthority> authority);
     static MediaNodeKind staticKind() noexcept;
     ::media::Status start(MediaGraphExecutionContext& context) override;
     ::media::Status stop(MediaGraphExecutionContext& context) override;
@@ -30,10 +33,12 @@ private:
 
     ::media::Status configure(MediaGraphExecutionContext& context);
     ::media::Status validateStartupDeadline() const;
+    ::media::Result<MediaBufferRef> schedule(MediaBufferRef media);
     ::media::Result<MediaNodeProcessResult> emitPending(
         MediaGraphExecutionContext& context);
     void resetState() noexcept;
 
+    std::shared_ptr<MediaVideoProtocolOutputRuntimeAuthority> m_authority;
     bool m_configured = false;
     bool m_requireKeyFrame = false;
     bool m_startedMedia = false;
@@ -49,9 +54,13 @@ private:
     MediaRational m_packetTimeBase;
     PacketTimingMode m_packetTimingMode = PacketTimingMode::SourceTimeBase;
     std::chrono::steady_clock::time_point m_startedAt{};
-    std::optional<std::chrono::steady_clock::time_point> m_pendingDeadline;
-    MediaBufferRef m_pendingBuffer;
-    MediaGraphPacingClock m_pacingClock;
+    std::optional<MediaRunningTime> m_pendingDeadline;
+    MediaBufferRef m_pendingActivation;
+    MediaBufferRef m_pendingScheduled;
+    std::optional<MediaRunningTime> m_sourceStart;
+    std::optional<MediaRunningTime> m_masterRelease;
+    std::optional<MediaRunningTime> m_lastDispatch;
+    std::uint64_t m_nextSequence = 1;
 };
 
 } // namespace media::ffmpeg::graph

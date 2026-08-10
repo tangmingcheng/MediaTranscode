@@ -41,18 +41,22 @@ bool reacquisitionInProgress(MediaAvReacquisitionPhase phase) noexcept
 
 } // namespace
 
-MediaAvOutputSchedulerNode::MediaAvOutputSchedulerNode(MediaNodeId nodeId)
+MediaAvOutputSchedulerNode::MediaAvOutputSchedulerNode(
+    MediaNodeId nodeId,
+    std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority)
     : MediaAvOutputSchedulerNode(
           nodeId,
           [](const MediaAvSyncPlan& plan, std::uint64_t generation) {
               return MediaVideoSyncController::create(plan, generation);
-          })
+          },
+          std::move(authority))
 {
 }
 
 MediaAvOutputSchedulerNode::MediaAvOutputSchedulerNode(
     MediaNodeId nodeId,
-    VideoControllerFactory controllerFactory)
+    VideoControllerFactory controllerFactory,
+    std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority)
     : FFmpegNodeRuntime(nodeId, staticKind(), "MediaAvOutputSchedulerNode")
     , m_generationSession(
           std::shared_ptr<MediaAvSchedulerGenerationState>(
@@ -62,6 +66,7 @@ MediaAvOutputSchedulerNode::MediaAvOutputSchedulerNode(
           std::make_shared<MediaProtocolOutputGenerationState>(
               std::string(generationPurgeIdentity()),
               m_generationSession))
+    , m_outputAuthority(std::move(authority))
     , m_videoControllerFactory(std::move(controllerFactory))
 {
 }
@@ -103,6 +108,13 @@ MediaAvOutputSchedulerNode::generationPurgeTarget() const noexcept
     if (!m_group) return ::media::Status::failure(
         ::media::ErrorInfo::notInitialized(
             "MediaAvOutputSchedulerNode requires a registered sync group"));
+    if (!m_outputAuthority ||
+        m_outputAuthority->streamSet() !=
+            MediaTranscodeStreamSet::AudioVideo) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::notInitialized(
+                "A/V scheduler requires compiler-injected output authority"));
+    }
     if (context.inputChannels(nodeId()).size() != 2 ||
         !context.findInputChannel(nodeId(), "video") ||
         !context.findInputChannel(nodeId(), "audio")) {
@@ -133,18 +145,19 @@ MediaAvOutputSchedulerNode::generationPurgeTarget() const noexcept
             "MediaAvOutputSchedulerNode requires an active sync group"));
     }
     auto activation =
-        m_generationState->permitAuthorityActivation(*m_group);
+        m_generationState->permitAuthorityActivation(*m_outputAuthority);
     if (!activation) {
         return ::media::Status::failure(activation.error());
     }
     auto controller = m_videoControllerFactory(
-        m_group->plan(), activation.value().epoch.generation);
+        m_group->plan(), activation.value().activation.generation);
     if (!controller) {
         return ::media::Status::failure(controller.error().toErrorInfo());
     }
     m_generationData->videoController = std::make_unique<MediaVideoSyncController>(
         std::move(controller).value());
-    m_generationData->activeGeneration = activation.value().epoch.generation;
+    m_generationData->activeGeneration =
+        activation.value().activation.generation;
     return ::media::Status::success();
 }
 
@@ -903,13 +916,13 @@ MediaAvOutputSchedulerNode::reserveOutputCommit(
     } else if (m_generationData->pendingCommit && m_generationData->pendingCommit->generation) {
         generation = m_generationData->pendingCommit->generation;
     }
-    if (!m_group || !generation) {
+    if (!m_outputAuthority || !generation) {
         return ::media::Result<MediaOutputCommitReservation>::failure(
                     ::media::ErrorInfo::notInitialized(
                         "A/V scheduler commit requires a planned generation"));
     }
     auto reservation = m_generationState->reserveCommit(
-        *m_group, *generation);
+        *m_outputAuthority, *generation);
     if (!reservation) {
         return ::media::Result<MediaOutputCommitReservation>::failure(
                     reservation.error());

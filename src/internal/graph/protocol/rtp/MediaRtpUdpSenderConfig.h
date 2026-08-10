@@ -23,6 +23,8 @@ public:
     MediaRtpUdpLocalPortPolicyKind kind() const noexcept { return m_kind; }
     std::optional<std::uint16_t> rtpPort() const noexcept { return m_rtpPort; }
     std::optional<std::uint16_t> rtcpPort() const noexcept { return m_rtcpPort; }
+    friend bool operator==(const MediaRtpUdpLocalPortPolicy&,
+                           const MediaRtpUdpLocalPortPolicy&) = default;
 
 private:
     MediaRtpUdpLocalPortPolicy(
@@ -74,6 +76,8 @@ public:
     }
     int sendBufferBytes() const noexcept { return m_sendBufferBytes; }
     MediaUdpSenderIoBehavior ioBehavior() const noexcept { return m_ioBehavior; }
+    friend bool operator==(const MediaRtpUdpSenderConfig&,
+                           const MediaRtpUdpSenderConfig&) = default;
 
 private:
     friend class MediaRtpUdpSenderTransport;

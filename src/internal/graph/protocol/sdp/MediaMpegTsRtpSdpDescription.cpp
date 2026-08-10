@@ -49,7 +49,7 @@ MediaMpegTsRtpSdpDescription::MediaMpegTsRtpSdpDescription(
 MediaMpegTsRtpSdpDescription::create(
     const MediaMpegTsRtpOutputPlan& plan,
     const MediaSharedNtpEpoch& sharedNtpEpoch,
-    const MediaPlaybackEpoch& playbackEpoch)
+    const MediaProtocolOutputActivation& activation)
 {
     const auto& sdp = plan.sdp();
     const auto& rtp = plan.transport().remoteRtpEndpoint();
@@ -57,11 +57,11 @@ MediaMpegTsRtpSdpDescription::create(
     auto capturedNtp = sharedNtpEpoch.map(
         sharedNtpEpoch.masterAtCapture());
     auto sessionIdentity = MediaSdpSessionIdentity::create(
-        sdp.originUsername, 0, playbackEpoch.generation,
+        sdp.originUsername, 0, activation.generation,
         sdp.sessionName, sdp.originAddressFamily,
         sdp.originNumericAddress, sdp.cname);
     if (!capturedNtp || !sessionIdentity ||
-        playbackEpoch.generation == 0 || sdp.path.empty() ||
+        activation.generation == 0 || sdp.path.empty() ||
         plan.payloadType() != Mp2tPayloadType ||
         plan.clockRate() != Mp2tClockRate || plan.ssrc() == 0 ||
         plan.cname() != sdp.cname ||
@@ -90,7 +90,7 @@ MediaMpegTsRtpSdpDescription::create(
     return ::media::Result<MediaMpegTsRtpSdpDescription>::success(
         MediaMpegTsRtpSdpDescription(
             sdp.path, sdp.originUsername, sessionId,
-            playbackEpoch.generation, sdp.sessionName,
+            activation.generation, sdp.sessionName,
             sdp.originAddressFamily, sdp.originNumericAddress,
             rtp.port(), rtcp.port(), plan.payloadType(),
             plan.clockRate(), plan.ssrc(), sdp.cname));

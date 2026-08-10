@@ -5,7 +5,7 @@
 #include "internal/graph/nodes/mux/ScheduledRtpSenderSession.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
 #include "internal/graph/protocol/rtp/MediaRtpUdpSenderTransport.h"
-#include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
+#include "internal/graph/protocol/MediaProtocolOutputRuntimeAuthority.h"
 #include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
 
 #include <memory>
@@ -20,7 +20,7 @@ class MediaProtocolOutputGenerationState;
 struct MediaScheduledRtpSenderNodeTestAccess;
 
 struct MediaScheduledRtpSenderNodeDependencies final {
-    std::shared_ptr<MediaAvSyncGroupRuntime> syncGroup;
+    std::shared_ptr<MediaProtocolOutputRuntimeAuthority> authority;
     std::unique_ptr<MediaUdpDatagramSenderPortFactory> transportFactory;
     std::unique_ptr<ScheduledRtpPacketizerFactory> packetizerFactory;
 };
@@ -36,7 +36,7 @@ private:
         sender.reset();
         activation.reset();
         description.reset();
-        epoch.reset();
+        activationFacts.reset();
         descriptionEmitted = false;
         generation.store(0, std::memory_order_release);
     }
@@ -44,7 +44,7 @@ private:
     MediaBufferRef activation;
     MediaBufferRef description;
     std::unique_ptr<ScheduledRtpSenderSession> sender;
-    std::optional<MediaPlaybackEpoch> epoch;
+    std::optional<MediaProtocolOutputActivation> activationFacts;
     bool descriptionEmitted = false;
     std::atomic<std::uint64_t> generation{0};
 };
@@ -53,7 +53,8 @@ class MediaScheduledRtpSenderNode final : public FFmpegNodeRuntime {
 public:
     static ::media::Result<std::unique_ptr<MediaScheduledRtpSenderNode>> create(
         MediaNodeId nodeId,
-        MediaAvSyncGroupKey plannedGroupKey,
+        MediaProtocolOutputSessionKey plannedSessionKey,
+        MediaTranscodeStreamSet streamSet,
         MediaScheduledRtpOutputPlan outputPlan,
         MediaSeparateRtpSdpRuntimePlan sdpPlan,
         MediaScheduledRtpSenderNodeDependencies dependencies);
@@ -80,7 +81,7 @@ private:
 
     MediaScheduledRtpSenderNode(
         MediaNodeId nodeId,
-        MediaAvSyncGroupKey plannedGroupKey,
+        MediaProtocolOutputSessionKey plannedSessionKey,
         MediaScheduledRtpOutputPlan outputPlan,
         MediaSeparateRtpSdpRuntimePlan sdpPlan,
         MediaScheduledRtpSenderNodeDependencies dependencies);
@@ -98,7 +99,7 @@ private:
     void resetGenerationSession() noexcept;
     void resetGenerationState() noexcept;
 
-    MediaAvSyncGroupKey m_plannedGroupKey;
+    MediaProtocolOutputSessionKey m_plannedSessionKey;
     MediaScheduledRtpOutputPlan m_outputPlan;
     MediaSeparateRtpSdpRuntimePlan m_sdpPlan;
     MediaScheduledRtpSenderNodeDependencies m_dependencies;

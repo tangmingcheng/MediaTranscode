@@ -165,7 +165,7 @@ constexpr std::int64_t NanosecondsPerSecond = 1'000'000'000;
 
 ::media::Result<MediaScheduledRtpOutputPlan> scheduledRtpOutput(
     MediaScheduledStream stream,
-    MediaRealtimeRtpOutputNodePlan& plannedOutput,
+    MediaRealtimeScheduledRtpOutputPlanningDraft& plannedOutput,
     const MediaAvSyncRtpOutputStreamPlan& synchronization,
     MediaRunningTime senderLead,
     MediaRunningTime senderReportInterval)
@@ -343,8 +343,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
                 ::media::ErrorInfo::notInitialized(
                     "project MPEG-TS synchronization output facts are incomplete"));
         }
-        auto accepted = MediaProjectMpegTsOutputPlan::fromEncodedFacts(
-            *facts.value().outputSampleRate,
+        auto accepted = MediaProjectMpegTsOutputPlan::fromAudioVideoEncodedFacts(
             *synchronization.projectMpegTsOutput->outputMux);
         if (!accepted) {
             return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(

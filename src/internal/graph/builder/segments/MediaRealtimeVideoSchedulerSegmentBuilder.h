@@ -14,9 +14,14 @@ struct MediaRealtimeVideoSchedulerSegmentOptions final {
     MediaEndpoint encodedVideo;
 };
 
+struct MediaRealtimeVideoSchedulerSegmentResult final {
+    MediaEndpoint activation;
+    MediaEndpoint scheduledVideo;
+};
+
 class MediaRealtimeVideoSchedulerSegmentBuilder final {
 public:
-    static ::media::Result<MediaEndpoint> build(
+    static ::media::Result<MediaRealtimeVideoSchedulerSegmentResult> build(
         MediaGraph& graph,
         const MediaRealtimeVideoSchedulerSegmentOptions& options,
         const MediaRealtimeVideoRuntimePlan& plan);

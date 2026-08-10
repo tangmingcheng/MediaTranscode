@@ -22,12 +22,8 @@ private:
     std::uint16_t m_transportStreamId;
     std::uint16_t m_programNumber;
     std::uint16_t m_programMapPid;
-    std::uint16_t m_pcrPid;
-    std::uint16_t m_videoPid;
-    std::uint16_t m_audioPid;
     std::uint8_t m_tableVersion;
-    std::uint8_t m_videoStreamType;
-    std::uint8_t m_audioStreamType;
+    MediaTsProgramPlan m_program;
 };
 
 class MediaTsPatSection final {

@@ -79,11 +79,12 @@
 - VideoOnly separate RTP creates one video sender and one video SDP media description.
 - VideoOnly MPEG-TS creates H.264-only PMT/PES and uses video-derived planned PCR authority; MPEG-TS/RTP remains PT 33 at 90 kHz.
 
-- [ ] Generalize production scheduled-output segments to the exact planned stream set without optional-port guessing.
-- [ ] Support VideoOnly Project MPEG-TS over UDP and RTP; do not broaden the mux codec contract.
-- [ ] Enforce exact node/port/PID/PES/SDP cardinality in builder, compiler, and runtime validators.
-- [ ] Remove the obsolete realtime `singleStreamOutput`/FFmpeg MPEG-TS branch and other now-dead compatibility code while preserving local-file mux users.
-- [ ] Search for fake audio/default/fallback and semantic duplication, commit `feat(realtime): deliver video-only production outputs`, and push.
+- [x] Generalize production scheduled-output segments to the exact planned stream set without optional-port guessing.
+- [x] Support VideoOnly Project MPEG-TS over UDP and RTP; do not broaden the mux codec contract.
+- [x] Enforce exact node/port/PID/PES/SDP cardinality in builder, compiler, and runtime validators.
+- [x] Remove the obsolete realtime `singleStreamOutput`/FFmpeg MPEG-TS branch and other now-dead compatibility code while preserving local-file mux users.
+- [x] Search for fake audio/default/fallback and semantic duplication; independent Spec and Standards reviewers passed the resulting fixes.
+- [x] Commit `feat(realtime): deliver video-only production outputs` and push.
 
 ### Task 6: Build, real-media acceptance, review, and delivery
 

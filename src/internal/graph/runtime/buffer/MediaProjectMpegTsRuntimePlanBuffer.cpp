@@ -8,18 +8,18 @@ namespace media::ffmpeg::graph {
 ::media::Result<MediaBufferRef>
 MediaProjectMpegTsRuntimePlanBuffer::create(
     std::shared_ptr<const MediaProjectMpegTsRuntimeOutputPlan> outputPlan,
-    MediaPlaybackEpoch epoch,
-    MediaAvSyncGroupKey group,
-    std::optional<std::uint64_t> completedTransitionSequence)
+    MediaProtocolOutputSessionKey sessionKey,
+    MediaTranscodeStreamSet streamSet,
+    MediaProtocolOutputActivation activation)
 {
-    if (!outputPlan || !group.valid()) {
+    if (!outputPlan || !sessionKey.valid()) {
         return ::media::Result<MediaBufferRef>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "MPEG-TS runtime plan requires a valid A/V sync group"));
+                "MPEG-TS runtime plan requires a valid output session"));
     }
-    if (epoch.generation == 0 ||
-        (completedTransitionSequence &&
-         *completedTransitionSequence == 0)) {
+    if (activation.generation == 0 ||
+        (activation.completedTransitionSequence &&
+         *activation.completedTransitionSequence == 0)) {
         return ::media::Result<MediaBufferRef>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "MPEG-TS runtime plan requires a positive epoch generation"));
@@ -27,19 +27,19 @@ MediaProjectMpegTsRuntimePlanBuffer::create(
     return ::media::Result<MediaBufferRef>::success(
         std::shared_ptr<MediaProjectMpegTsRuntimePlanBuffer>(
             new MediaProjectMpegTsRuntimePlanBuffer(
-                std::move(outputPlan), epoch, std::move(group),
-                completedTransitionSequence)));
+                std::move(outputPlan), std::move(sessionKey), streamSet,
+                activation)));
 }
 
 MediaProjectMpegTsRuntimePlanBuffer::MediaProjectMpegTsRuntimePlanBuffer(
     std::shared_ptr<const MediaProjectMpegTsRuntimeOutputPlan> outputPlan,
-    MediaPlaybackEpoch epoch,
-    MediaAvSyncGroupKey group,
-    std::optional<std::uint64_t> completedTransitionSequence)
+    MediaProtocolOutputSessionKey sessionKey,
+    MediaTranscodeStreamSet streamSet,
+    MediaProtocolOutputActivation activation)
     : m_outputPlan(std::move(outputPlan))
-    , m_epoch(epoch)
-    , m_group(std::move(group))
-    , m_completedTransitionSequence(completedTransitionSequence)
+    , m_sessionKey(std::move(sessionKey))
+    , m_streamSet(streamSet)
+    , m_activation(activation)
 {
     setStreamKind(MediaStreamKind::Metadata);
     setPayloadKind(MediaPayloadKind::ProjectMpegTsRuntimePlan);
@@ -68,22 +68,22 @@ MediaProjectMpegTsRuntimePlanBuffer::sharedOutputPlan() const noexcept
     return m_outputPlan;
 }
 
-const MediaPlaybackEpoch&
-MediaProjectMpegTsRuntimePlanBuffer::epoch() const noexcept
+const MediaProtocolOutputSessionKey&
+MediaProjectMpegTsRuntimePlanBuffer::sessionKey() const noexcept
 {
-    return m_epoch;
+    return m_sessionKey;
 }
 
-const MediaAvSyncGroupKey&
-MediaProjectMpegTsRuntimePlanBuffer::group() const noexcept
+MediaTranscodeStreamSet
+MediaProjectMpegTsRuntimePlanBuffer::streamSet() const noexcept
 {
-    return m_group;
+    return m_streamSet;
 }
 
-std::optional<std::uint64_t>
-MediaProjectMpegTsRuntimePlanBuffer::completedTransitionSequence() const noexcept
+const MediaProtocolOutputActivation&
+MediaProjectMpegTsRuntimePlanBuffer::activation() const noexcept
 {
-    return m_completedTransitionSequence;
+    return m_activation;
 }
 
 } // namespace media::ffmpeg::graph

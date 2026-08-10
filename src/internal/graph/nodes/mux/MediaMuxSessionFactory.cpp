@@ -23,8 +23,10 @@ namespace {
 } // namespace
 
 ExplicitMediaMuxSessionFactory::ExplicitMediaMuxSessionFactory(
-    std::shared_ptr<MediaProtocolOutputGenerationState> generationState)
+    std::shared_ptr<MediaProtocolOutputGenerationState> generationState,
+    std::shared_ptr<MediaProtocolOutputRuntimeAuthority> outputAuthority)
     : m_generationState(std::move(generationState))
+    , m_outputAuthority(std::move(outputAuthority))
 {
 }
 
@@ -56,7 +58,7 @@ ExplicitMediaMuxSessionFactory::ExplicitMediaMuxSessionFactory(
             std::make_unique<FFmpegFileMuxSession>(video.value(), audio.value()));
     }
     case MediaMuxSessionKind::ProjectMpegTs: {
-        if (!m_generationState) {
+        if (!m_generationState || !m_outputAuthority) {
             return ::media::Result<std::unique_ptr<MediaMuxSession>>::failure(
                 ::media::ErrorInfo::notInitialized(
                     "project MPEG-TS mux session requires its injected generation authority"));
@@ -71,10 +73,13 @@ ExplicitMediaMuxSessionFactory::ExplicitMediaMuxSessionFactory(
         if (!audio) {
             return ::media::Result<std::unique_ptr<MediaMuxSession>>::failure(audio.error());
         }
-        if (!video.value() || !audio.value()) {
+        const bool expectsVideoOnly =
+            m_outputAuthority->streamSet() ==
+            MediaTranscodeStreamSet::VideoOnly;
+        if (!video.value() || audio.value() == expectsVideoOnly) {
             return ::media::Result<std::unique_ptr<MediaMuxSession>>::failure(
                 ::media::ErrorInfo::invalidArgument(
-                    "project MPEG-TS mux session requires planned video and audio"));
+                    "project MPEG-TS mux session stream shape conflicts with its authority"));
         }
         auto generationSession = std::dynamic_pointer_cast<
             ProjectMpegTsGenerationSessionState>(
@@ -85,7 +90,8 @@ ExplicitMediaMuxSessionFactory::ExplicitMediaMuxSessionFactory(
                     "project MPEG-TS mux session requires its typed generation session"));
         }
         auto authority = ProjectMpegTsGenerationAuthority::create(
-            m_generationState, std::move(generationSession));
+            m_generationState, std::move(generationSession),
+            m_outputAuthority);
         if (!authority) {
             return ::media::Result<std::unique_ptr<MediaMuxSession>>::failure(
                 authority.error());

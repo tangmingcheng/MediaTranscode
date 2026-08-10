@@ -1,4 +1,4 @@
-#include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
+#include "internal/graph/planner/realtime/MediaRealtimeProtocolOutputPlan.h"
 
 #include <utility>
 

@@ -1,6 +1,7 @@
 #include "internal/graph/nodes/output/MediaScheduledRtpSenderNodePlanCodec.h"
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/model/MediaTranscodeStreamSetCodec.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 
 #include <array>
@@ -14,6 +15,51 @@ namespace {
 
 constexpr std::string_view Owner = "MediaScheduledRtpSenderNodePlanCodec";
 constexpr const char* NodeName = "MediaScheduledRtpSenderNode";
+constexpr std::array<const char*, 35> OptionKeys{
+    "scheduled_rtp.session",
+    "scheduled_rtp.stream_set",
+    "scheduled_rtp.stream",
+    "scheduled_rtp.transport.address_family",
+    "scheduled_rtp.transport.local_address",
+    "scheduled_rtp.transport.remote_address",
+    "scheduled_rtp.transport.remote_rtp_port",
+    "scheduled_rtp.transport.remote_rtcp_port",
+    "scheduled_rtp.transport.local_port_policy",
+    "scheduled_rtp.transport.local_rtp_port",
+    "scheduled_rtp.transport.local_rtcp_port",
+    "scheduled_rtp.transport.send_buffer_bytes",
+    "scheduled_rtp.transport.maximum_datagram_bytes",
+    "scheduled_rtp.transport.io_behavior",
+    "scheduled_rtp.packetization.codec",
+    "scheduled_rtp.packetization.time_base_num",
+    "scheduled_rtp.packetization.time_base_den",
+    "scheduled_rtp.packetization.mode",
+    "scheduled_rtp.packetization.payload_type",
+    "scheduled_rtp.packetization.maximum_datagram_bytes",
+    "scheduled_rtp.packetization.maximum_access_unit_samples",
+    "scheduled_rtp.ssrc",
+    "scheduled_rtp.base_timestamp",
+    "scheduled_rtp.clock_rate",
+    "scheduled_rtp.cname",
+    "scheduled_rtp.sender_lead_ns",
+    "scheduled_rtp.sender_report_interval_ns",
+    "scheduled_rtp.sdp.path",
+    "scheduled_rtp.sdp.origin_username",
+    "scheduled_rtp.sdp.session_name",
+    "scheduled_rtp.sdp.origin_address_family",
+    "scheduled_rtp.sdp.origin_numeric_address",
+    "scheduled_rtp.sdp.cname",
+    "scheduled_rtp.sdp.session_id_policy",
+    "scheduled_rtp.sdp.session_version_policy"};
+
+bool hasExactOptionKeys(const MediaNodeOptions& options)
+{
+    if (options.values().size() != OptionKeys.size()) return false;
+    for (const char* key : OptionKeys) {
+        if (!options.has(key)) return false;
+    }
+    return true;
+}
 
 const char* familyName(MediaIpAddressFamily family) noexcept
 {
@@ -83,11 +129,16 @@ template <typename Unsigned>
 ::media::Status MediaScheduledRtpSenderNodePlanCodec::apply(
     MediaGraph& graph,
     MediaNodeId nodeId,
-    const MediaAvSyncGroupKey& groupKey,
+    const MediaProtocolOutputSessionKey& sessionKey,
+    MediaTranscodeStreamSet streamSet,
     const MediaScheduledRtpOutputPlan& output,
     const MediaSeparateRtpSdpRuntimePlan& sdp)
 {
-    if (!groupKey.valid() || !graph.findNode(nodeId) ||
+    auto encodedStreamSet = MediaTranscodeStreamSetCodec::encode(streamSet);
+    if (!sessionKey.valid() || !graph.findNode(nodeId) ||
+        !encodedStreamSet ||
+        (streamSet == MediaTranscodeStreamSet::VideoOnly &&
+         output.stream != MediaScheduledStream::Video) ||
         output.transport.remoteRtpEndpoint().numericAddress() !=
             output.transport.remoteRtcpEndpoint().numericAddress() ||
         sdp.sessionIdPolicy != MediaRtpSdpSessionIdPolicy::SharedNtpEpoch ||
@@ -101,7 +152,8 @@ template <typename Unsigned>
     const bool fixed = localPolicy.kind() ==
         MediaRtpUdpLocalPortPolicyKind::FixedAdjacent;
     return setOptions(graph, nodeId, {
-        {"scheduled_rtp.sync_group", groupKey.value()},
+        {"scheduled_rtp.session", sessionKey.value()},
+        {"scheduled_rtp.stream_set", std::string(encodedStreamSet.value())},
         {"scheduled_rtp.stream", output.stream == MediaScheduledStream::Video
              ? "video" : "audio"},
         {"scheduled_rtp.transport.address_family",
@@ -171,12 +223,15 @@ MediaScheduledRtpSenderNodePlanCodec::decode(const MediaNode& node)
 {
     using DecodedResult =
         ::media::Result<MediaDecodedScheduledRtpSenderNodePlan>;
-    if (node.kind != MediaNodeKind::ScheduledRtpSender) {
+    if (node.kind != MediaNodeKind::ScheduledRtpSender ||
+        !hasExactOptionKeys(node.options)) {
         return DecodedResult::failure(::media::ErrorInfo::invalidArgument(
-            "Scheduled RTP node plan decoder requires the sender node kind"));
+            "Scheduled RTP node plan decoder requires the sender kind and exact option set"));
     }
-    auto groupText = requiredNodeOption(
-        &node.options, NodeName, "scheduled_rtp.sync_group");
+    auto sessionText = requiredNodeOption(
+        &node.options, NodeName, "scheduled_rtp.session");
+    auto streamSetText = requiredNodeOption(
+        &node.options, NodeName, "scheduled_rtp.stream_set");
     auto streamText = requiredNodeOption(
         &node.options, NodeName, "scheduled_rtp.stream");
     auto transportFamily = parseFamily(
@@ -202,11 +257,12 @@ MediaScheduledRtpSenderNodePlanCodec::decode(const MediaNode& node)
         node.options, "scheduled_rtp.transport.maximum_datagram_bytes");
     auto ioBehavior = requiredNodeOption(
         &node.options, NodeName, "scheduled_rtp.transport.io_behavior");
-    if (!groupText || !streamText || !transportFamily || !localAddress ||
+    if (!sessionText || !streamSetText || !streamText || !transportFamily || !localAddress ||
         !remoteAddress || !remoteRtpPort || !remoteRtcpPort ||
         !localPolicyText || !localRtpPort || !localRtcpPort || !sendBuffer ||
         !transportMaximum || !ioBehavior) {
-        const ::media::ErrorInfo error = !groupText ? groupText.error()
+        const ::media::ErrorInfo error = !sessionText ? sessionText.error()
+            : !streamSetText ? streamSetText.error()
             : !streamText ? streamText.error()
             : !transportFamily ? transportFamily.error()
             : !localAddress ? localAddress.error()
@@ -355,10 +411,15 @@ MediaScheduledRtpSenderNodePlanCodec::decode(const MediaNode& node)
         return DecodedResult::failure(::media::ErrorInfo::invalidArgument(
             "Scheduled RTP SDP options contradict their planned policies"));
     }
-    MediaAvSyncGroupKey groupKey(groupText.value());
-    if (!groupKey.valid()) {
+    MediaProtocolOutputSessionKey sessionKey(sessionText.value());
+    auto streamSet = MediaTranscodeStreamSetCodec::decode(
+        streamSetText.value());
+    if (!streamSet) return DecodedResult::failure(streamSet.error());
+    if (!sessionKey.valid() ||
+        (streamSet.value() == MediaTranscodeStreamSet::VideoOnly &&
+         stream != MediaScheduledStream::Video)) {
         return DecodedResult::failure(::media::ErrorInfo::invalidArgument(
-            "Scheduled RTP sender requires a valid sync group"));
+            "Scheduled RTP sender requires a valid session and matching stream set"));
     }
     MediaScheduledRtpOutputPlan output{
         stream,
@@ -380,7 +441,8 @@ MediaScheduledRtpSenderNodePlanCodec::decode(const MediaNode& node)
         MediaRtpSdpSessionIdPolicy::SharedNtpEpoch,
         MediaRtpSdpSessionVersionPolicy::ActivePlaybackGeneration};
     return DecodedResult::success(MediaDecodedScheduledRtpSenderNodePlan{
-        std::move(groupKey), std::move(output), std::move(sdp)});
+        std::move(sessionKey), std::move(streamSet).value(),
+        std::move(output), std::move(sdp)});
 }
 
 } // namespace media::ffmpeg::graph

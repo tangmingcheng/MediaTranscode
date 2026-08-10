@@ -14,16 +14,6 @@ public:
     static ::media::Result<void> applyMpegTsDemuxOptions(MediaGraph& graph,
                                                          MediaNodeId nodeId,
                                                          const MediaRealtimeTsInputPlan& plan);
-    static ::media::Result<void> applyOutputOptions(MediaGraph& graph,
-                                                    MediaNodeId nodeId,
-                                                    const MediaRealtimeRtpOutputNodePlan& plan);
-    static ::media::Result<void> applySdpWriterOptions(MediaGraph& graph,
-                                                       MediaNodeId nodeId,
-                                                       const MediaRealtimeSdpWriterPlan& plan);
-    static ::media::Result<void> applyMuxOptions(MediaGraph& graph,
-                                                 MediaNodeId nodeId,
-                                                 const MediaRealtimeMuxNodePlan& plan);
-
 private:
     MediaRealtimeOptionApplier() = default;
 };

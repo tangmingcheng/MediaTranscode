@@ -29,6 +29,34 @@
 namespace media::ffmpeg::graph {
 namespace {
 
+::media::Result<MediaScheduledRtpPacketizationPlan>
+planVideoScheduledRtpPacketization(
+    const MediaRealtimeRtpTranscodePlanCore& plan,
+    const MediaRealtimeScheduledRtpOutputPlanningDraft& output,
+    int clockRate,
+    int payloadType)
+{
+    if (output.packetSize <= 0 || clockRate <= 0 || payloadType < 0 ||
+        payloadType > 127) {
+        return ::media::Result<MediaScheduledRtpPacketizationPlan>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "scheduled video RTP packetization requires complete protocol facts"));
+    }
+    auto videoPacketLayout =
+        MediaSelectedEncoderPacketLayoutResolver::require(
+            plan.videoPlan,
+            MediaEncodedPacketLayoutKind::StartCodeDelimited,
+            "scheduled RTP H264 packetization");
+    if (!videoPacketLayout) {
+        return ::media::Result<MediaScheduledRtpPacketizationPlan>::failure(
+            videoPacketLayout.error());
+    }
+    return MediaScheduledRtpPacketizationPlan::create(
+        MediaStreamKind::Video, plan.videoPlan.outputCodecName, 1,
+        clockRate, payloadType,
+        static_cast<std::size_t>(output.packetSize));
+}
+
 ::media::Status planScheduledRtpPacketization(
     const MediaRealtimeRtpTranscodePlanCore& plan,
     const MediaAudioPipelinePlan& audio,
@@ -40,24 +68,14 @@ namespace {
         !synchronization.rtpOutput->videoOutput.payloadType ||
         !synchronization.rtpOutput->audioOutput.clockRate ||
         !synchronization.rtpOutput->audioOutput.payloadType ||
-        !audio.resolvedOutput || output.videoOutput.packetSize <= 0 ||
-        output.audioOutput.packetSize <= 0) {
+        !audio.resolvedOutput || output.audioOutput.packetSize <= 0) {
         return ::media::Status::failure(::media::ErrorInfo::notInitialized(
             "scheduled RTP packetization requires complete selected protocol facts"));
     }
-    auto videoPacketLayout =
-        MediaSelectedEncoderPacketLayoutResolver::require(
-            plan.videoPlan,
-            MediaEncodedPacketLayoutKind::StartCodeDelimited,
-            "scheduled RTP H264 packetization");
-    if (!videoPacketLayout) {
-        return ::media::Status::failure(videoPacketLayout.error());
-    }
-    auto video = MediaScheduledRtpPacketizationPlan::create(
-        MediaStreamKind::Video, plan.videoPlan.outputCodecName, 1,
+    auto video = planVideoScheduledRtpPacketization(
+        plan, output.videoOutput,
         *synchronization.rtpOutput->videoOutput.clockRate,
-        *synchronization.rtpOutput->videoOutput.payloadType,
-        static_cast<std::size_t>(output.videoOutput.packetSize));
+        *synchronization.rtpOutput->videoOutput.payloadType);
     auto audioPacketization = MediaScheduledRtpPacketizationPlan::create(
         MediaStreamKind::Audio, audio.resolvedOutput->codecName(), 1,
         *synchronization.rtpOutput->audioOutput.clockRate,
@@ -955,6 +973,16 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::success(
             std::move(completed));
     } else {
+        if (MediaRealtimeRequestClassifier::separateStreamsOutput(options)) {
+            auto packetization = planVideoScheduledRtpPacketization(
+                plan, output.videoOutput, 90'000, 96);
+            if (!packetization) {
+                return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+                    packetization.error());
+            }
+            output.videoOutput.scheduledPacketization =
+                std::move(packetization).value();
+        }
         MediaRational sourceTimeBase;
         MediaRational outputFrameRate;
         if (rawInput) {

@@ -12,7 +12,7 @@ struct MediaRealtimeOutputPlanningDraft;
 class MediaRealtimeVideoRuntimePlanner final {
 public:
     static ::media::Result<MediaRealtimeVideoRuntimePlan> plan(
-        const MediaRealtimeRtpTranscodePlanningDraft& outer,
+        MediaRealtimeRtpTranscodePlanningDraft& outer,
         MediaRealtimeOutputPlanningDraft output,
         const MediaRealtimeRtpTranscodeRequest& request,
         MediaRational sourceTimeBase,

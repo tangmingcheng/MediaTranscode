@@ -1,7 +1,7 @@
 #pragma once
 
 #include "internal/graph/planner/realtime/MediaMpegTsRtpOutputPlan.h"
-#include "internal/graph/sync/MediaPlaybackEpoch.h"
+#include "internal/graph/protocol/MediaProtocolOutputRuntimeAuthority.h"
 #include "internal/graph/time/MediaSharedNtpEpoch.h"
 
 #include <cstdint>
@@ -14,7 +14,7 @@ public:
     static ::media::Result<MediaMpegTsRtpSdpDescription> create(
         const MediaMpegTsRtpOutputPlan& plan,
         const MediaSharedNtpEpoch& sharedNtpEpoch,
-        const MediaPlaybackEpoch& playbackEpoch);
+        const MediaProtocolOutputActivation& activation);
 
     ::media::Result<std::string> serialize() const;
     const std::string& path() const noexcept { return m_path; }

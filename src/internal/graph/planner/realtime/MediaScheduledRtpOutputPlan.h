@@ -21,6 +21,8 @@ struct MediaScheduledRtpOutputPlan final {
     std::string cname;
     MediaRunningTime senderLead;
     MediaRunningTime senderReportInterval;
+    friend bool operator==(const MediaScheduledRtpOutputPlan&,
+                           const MediaScheduledRtpOutputPlan&) = default;
 };
 
 } // namespace media::ffmpeg::graph

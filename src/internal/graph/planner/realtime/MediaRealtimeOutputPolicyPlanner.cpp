@@ -12,7 +12,6 @@
 namespace media::ffmpeg::graph {
 namespace {
 
-constexpr int RtpSessionStartupDelayMs = 1000;
 constexpr int64_t PacingHeadroomNumerator = 5;
 constexpr int64_t PacingHeadroomDenominator = 4;
 constexpr int64_t PacingBurstPackets = 2;
@@ -79,19 +78,13 @@ int64_t pacingBytesPerSecond(int64_t bitsPerSecond) noexcept
     return ::media::Result<int>::success(static_cast<int>(selected));
 }
 
-void applyPacing(MediaRealtimeRtpOutputNodePlan& output, int64_t bitsPerSecond) noexcept
+void applyPacing(
+    MediaRealtimeScheduledRtpOutputPlanningDraft& output,
+    int64_t bitsPerSecond) noexcept
 {
     output.writePacingEnabled = true;
     output.writePacingBytesPerSecond = pacingBytesPerSecond(bitsPerSecond);
     output.writePacingBurstBytes = std::max<int64_t>(1, static_cast<int64_t>(output.packetSize) * PacingBurstPackets);
-}
-
-MediaLatencyPolicy muxPacing() noexcept
-{
-    MediaLatencyPolicy policy;
-    policy.mode = MediaLatencyMode::Realtime;
-    policy.enablePacing = true;
-    return policy;
 }
 
 ::media::Result<MediaRtpUdpSenderConfig> rtpTransport(
@@ -147,7 +140,6 @@ MediaLatencyPolicy muxPacing() noexcept
         }
         urls.video = request.output.url;
         urls.muxed = request.output.url;
-        urls.muxedFormat = "mpegts";
         return ::media::Result<MediaRealtimeOutputUrls>::success(std::move(urls));
     }
 
@@ -188,7 +180,6 @@ MediaLatencyPolicy muxPacing() noexcept
     }
     if (MediaRealtimeRequestClassifier::muxedTransportOutput(request)) {
         urls.muxed = urls.video;
-        urls.muxedFormat = "mpegts";
     }
     return ::media::Result<MediaRealtimeOutputUrls>::success(std::move(urls));
 }
@@ -201,13 +192,8 @@ MediaLatencyPolicy muxPacing() noexcept
 {
     if (request.output.streamLayout == RealtimeOutputStreamLayout::MuxedTransportStream) {
         output.muxedOutput.url = urls.muxed;
-        output.muxedOutput.format = urls.muxedFormat;
         output.muxedOutput.mediaId = request.mediaId;
-        output.muxedOutput.outputResourceKind =
-            MediaOutputResourceKind::FFmpegFormatContext;
-        output.muxedOutput.muxSessionKind = MediaMuxSessionKind::FFmpegFile;
-        output.singleStreamMux.expectVideo = true;
-        output.singleStreamMux.expectAudio =
+        const bool expectAudio =
             request.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo;
         if (MediaRealtimeRequestClassifier::rtpAvpOutput(request)) {
             if (!request.output.basePort || !request.output.packetSize) {
@@ -219,7 +205,7 @@ MediaLatencyPolicy muxPacing() noexcept
                 *plan.videoParameters.bitrateKbps <= 0 ||
                 !request.avSyncStartup.maximumVideoUnitBytes ||
                 *request.avSyncStartup.maximumVideoUnitBytes == 0 ||
-                (output.singleStreamMux.expectAudio &&
+                (expectAudio &&
                  (!request.parameters.audio.bitrateKbps ||
                   *request.parameters.audio.bitrateKbps <= 0 ||
                   !request.avSyncStartup.maximumAudioUnitBytes ||
@@ -230,7 +216,7 @@ MediaLatencyPolicy muxPacing() noexcept
             }
             const int64_t totalBitrate =
                 static_cast<int64_t>(*plan.videoParameters.bitrateKbps) * 1000 +
-                (output.singleStreamMux.expectAudio
+                (expectAudio
                      ? static_cast<int64_t>(
                            *request.parameters.audio.bitrateKbps) * 1000
                      : 0);
@@ -239,7 +225,7 @@ MediaLatencyPolicy muxPacing() noexcept
                 std::max(
                     static_cast<std::uint64_t>(
                         *request.avSyncStartup.maximumVideoUnitBytes),
-                    output.singleStreamMux.expectAudio
+                    expectAudio
                         ? static_cast<std::uint64_t>(
                               *request.avSyncStartup.maximumAudioUnitBytes)
                         : std::uint64_t{0}));
@@ -271,6 +257,21 @@ MediaLatencyPolicy muxPacing() noexcept
     output.videoOutput.packetSize = *request.output.packetSize;
     output.videoOutput.mediaId = request.mediaId;
     applyPacing(output.videoOutput, static_cast<int64_t>(*plan.videoParameters.bitrateKbps) * 1000);
+    if (output.videoOutput.writePacingBurstBytes >
+            std::numeric_limits<int>::max()) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "scheduled RTP video transport send buffer exceeds integer range"));
+    }
+    auto videoTransport = rtpTransport(
+        request.output.host, *request.output.basePort,
+        output.videoOutput.packetSize,
+        static_cast<int>(output.videoOutput.writePacingBurstBytes));
+    if (!videoTransport) {
+        return ::media::Status::failure(videoTransport.error());
+    }
+    output.videoOutput.scheduledTransport =
+        std::move(videoTransport).value();
     if (request.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo) {
         if (!request.parameters.audio.bitrateKbps || *request.parameters.audio.bitrateKbps <= 0) {
             return ::media::Status::failure(
@@ -280,40 +281,23 @@ MediaLatencyPolicy muxPacing() noexcept
         output.audioOutput.packetSize = *request.output.packetSize;
         output.audioOutput.mediaId = request.mediaId;
         applyPacing(output.audioOutput, static_cast<int64_t>(*request.parameters.audio.bitrateKbps) * 1000);
-        if (output.videoOutput.writePacingBurstBytes >
-                std::numeric_limits<int>::max() ||
-            output.audioOutput.writePacingBurstBytes >
+        if (output.audioOutput.writePacingBurstBytes >
                 std::numeric_limits<int>::max()) {
             return ::media::Status::failure(
                 ::media::ErrorInfo::invalidArgument(
                     "scheduled RTP transport send buffer exceeds integer range"));
         }
-        auto videoTransport = rtpTransport(
-            request.output.host, *request.output.basePort,
-            output.videoOutput.packetSize,
-            static_cast<int>(output.videoOutput.writePacingBurstBytes));
         auto audioTransport = rtpTransport(
             request.output.host, *request.output.basePort + 2,
             output.audioOutput.packetSize,
             static_cast<int>(output.audioOutput.writePacingBurstBytes));
-        if (!videoTransport || !audioTransport) {
-            return ::media::Status::failure(
-                videoTransport ? audioTransport.error() : videoTransport.error());
+        if (!audioTransport) {
+            return ::media::Status::failure(audioTransport.error());
         }
-        output.videoOutput.scheduledTransport = std::move(videoTransport).value();
         output.audioOutput.scheduledTransport = std::move(audioTransport).value();
     }
     output.sdp.path = request.output.sdpPath;
     output.sdp.mediaId = request.mediaId;
-    output.sdp.expectedContexts =
-        request.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo
-        ? 2
-        : 1;
-    output.singleStreamMux.expectVideo = true;
-    output.singleStreamMux.expectAudio = false;
-    output.singleStreamMux.pacingPolicy = muxPacing();
-    output.singleStreamMux.monotonicPacketTimestamps = true;
-    output.singleStreamMux.startupDelayMs = RtpSessionStartupDelayMs;
     return ::media::Status::success();
 }
 

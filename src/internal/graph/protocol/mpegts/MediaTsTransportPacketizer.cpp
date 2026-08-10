@@ -5,6 +5,7 @@
 #include <limits>
 #include <optional>
 #include <utility>
+#include <variant>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -17,6 +18,20 @@ struct ContinuityState final {
 
 enum class CursorPidKind : std::uint8_t { Pat, Pmt, Video, Audio };
 
+struct VideoContinuityState final {
+    std::array<ContinuityState, 3> next;
+    std::array<bool, 3> discontinuityPending;
+};
+
+struct AudioVideoContinuityState final {
+    std::array<ContinuityState, 4> next;
+    std::array<bool, 4> discontinuityPending;
+};
+
+using ProgramContinuityState = std::variant<
+    VideoContinuityState,
+    AudioVideoContinuityState>;
+
 ::media::ErrorInfo invalid(const char* message)
 {
     return ::media::ErrorInfo::invalidArgument(message);
@@ -26,8 +41,7 @@ enum class CursorPidKind : std::uint8_t { Pat, Pmt, Video, Audio };
 
 struct MediaTsPacketizerControlState final {
     MediaTsMuxPlan plan;
-    std::array<ContinuityState, 4> continuity;
-    std::array<bool, 4> discontinuityPending;
+    ProgramContinuityState continuity;
     std::optional<std::uint64_t> activeCursor;
     std::uint64_t nextCursorIdentity = 1;
     std::vector<std::array<std::uint8_t, PacketSize>> packetWorkspace;
@@ -62,17 +76,29 @@ struct MediaTsPacketCursorFactory final {
 
 namespace {
 
-ContinuityState& continuity(MediaTsPacketizerControlState& state,
+ContinuityState* continuity(MediaTsPacketizerControlState& state,
                             CursorPidKind kind) noexcept
 {
-    return state.continuity[static_cast<std::size_t>(kind)];
+    const std::size_t index = static_cast<std::size_t>(kind);
+    if (auto* video = std::get_if<VideoContinuityState>(&state.continuity)) {
+        return index < video->next.size() ? &video->next[index] : nullptr;
+    }
+    auto* av = std::get_if<AudioVideoContinuityState>(&state.continuity);
+    return av && index < av->next.size() ? &av->next[index] : nullptr;
 }
 
-bool& discontinuityPending(
+bool* discontinuityPending(
     MediaTsPacketizerControlState& state,
     CursorPidKind kind) noexcept
 {
-    return state.discontinuityPending[static_cast<std::size_t>(kind)];
+    const std::size_t index = static_cast<std::size_t>(kind);
+    if (auto* video = std::get_if<VideoContinuityState>(&state.continuity)) {
+        return index < video->discontinuityPending.size()
+            ? &video->discontinuityPending[index] : nullptr;
+    }
+    auto* av = std::get_if<AudioVideoContinuityState>(&state.continuity);
+    return av && index < av->discontinuityPending.size()
+        ? &av->discontinuityPending[index] : nullptr;
 }
 
 ::media::Result<MediaTsPacketCursor> beginPayload(
@@ -95,9 +121,15 @@ bool& discontinuityPending(
         return ::media::Result<MediaTsPacketCursor>::failure(
             invalid("MPEG-TS cursor identity space is exhausted"));
     }
-    const bool discontinuity = discontinuityPending(*state, kind);
+    ContinuityState* nextContinuity = continuity(*state, kind);
+    bool* pendingDiscontinuity = discontinuityPending(*state, kind);
+    if (!nextContinuity || !pendingDiscontinuity) {
+        return ::media::Result<MediaTsPacketCursor>::failure(
+            invalid("MPEG-TS stream is absent from the typed program plan"));
+    }
+    const bool discontinuity = *pendingDiscontinuity;
     auto packets = MediaTsTransportPacketBuilder::payload(
-        pid, continuity(*state, kind).nextPayload, segments, randomAccess,
+        pid, nextContinuity->nextPayload, segments, randomAccess,
         discontinuity, std::move(state->packetWorkspace));
     if (!packets) {
         return ::media::Result<MediaTsPacketCursor>::failure(packets.error());
@@ -107,7 +139,7 @@ bool& discontinuityPending(
     cursor->owner = state;
     cursor->identity = identity;
     cursor->pidKind = kind;
-    cursor->initialPayloadContinuity = continuity(*state, kind).nextPayload;
+    cursor->initialPayloadContinuity = nextContinuity->nextPayload;
     cursor->advancesPayloadContinuity = true;
     cursor->carriesDiscontinuity = discontinuity;
     cursor->packets = std::make_shared<std::vector<std::array<std::uint8_t, PacketSize>>>(
@@ -274,11 +306,17 @@ void MediaTsPacketCursor::cancel() noexcept
         return ::media::Status::failure(
             invalid("MPEG-TS packet commit token identity or revision does not match"));
     }
-    continuity(*m_state->owner, m_state->pidKind).nextPayload =
-        m_state->pending->nextPayload;
+    ContinuityState* nextContinuity = continuity(
+        *m_state->owner, m_state->pidKind);
+    bool* pendingDiscontinuity = discontinuityPending(
+        *m_state->owner, m_state->pidKind);
+    if (!nextContinuity || !pendingDiscontinuity) {
+        return ::media::Status::failure(
+            invalid("MPEG-TS packet commit stream is absent from its plan"));
+    }
+    nextContinuity->nextPayload = m_state->pending->nextPayload;
     if (m_state->pending->clearsDiscontinuity) {
-        discontinuityPending(
-            *m_state->owner, m_state->pidKind) = false;
+        *pendingDiscontinuity = false;
     }
     m_state->committedOffset = m_state->pending->endOffset;
     m_state->pending.reset();
@@ -296,13 +334,28 @@ bool MediaTsPacketCursor::finished() const noexcept
     const MediaTsMuxPlan& plan,
     bool startsWithDiscontinuity)
 {
-    const auto& seeds = plan.parameters().continuity;
+    ProgramContinuityState continuityState;
+    if (const auto* video = plan.videoOnlyProgram()) {
+        continuityState.emplace<VideoContinuityState>(
+            VideoContinuityState{
+                {{{video->continuity.pat}, {video->continuity.pmt},
+                  {video->continuity.video}}},
+                {startsWithDiscontinuity, startsWithDiscontinuity,
+                 startsWithDiscontinuity}});
+    } else if (const auto* av = plan.audioVideoProgram()) {
+        continuityState.emplace<AudioVideoContinuityState>(
+            AudioVideoContinuityState{
+                {{{av->continuity.pat}, {av->continuity.pmt},
+                  {av->continuity.video}, {av->continuity.audio}}},
+                {startsWithDiscontinuity, startsWithDiscontinuity,
+                 startsWithDiscontinuity, startsWithDiscontinuity}});
+    } else {
+        return ::media::Result<MediaTsTransportPacketizer>::failure(
+            invalid("MPEG-TS packetizer requires a typed program plan"));
+    }
     auto state = std::make_shared<MediaTsPacketizerControlState>(
         MediaTsPacketizerControlState{
-            plan,
-            {{{seeds.pat}, {seeds.pmt}, {seeds.video}, {seeds.audio}}},
-            {startsWithDiscontinuity, startsWithDiscontinuity,
-             startsWithDiscontinuity, startsWithDiscontinuity}});
+            plan, std::move(continuityState)});
     return ::media::Result<MediaTsTransportPacketizer>::success(
         MediaTsTransportPacketizer(std::move(state)));
 }
@@ -359,20 +412,23 @@ MediaTsTransportPacketizer::MediaTsTransportPacketizer(
         return ::media::Result<MediaTsPacketCursor>::failure(
             invalid("MPEG-TS cursor identity space is exhausted"));
     }
-    const auto kind = m_state->plan.parameters().pcrPid ==
-                              m_state->plan.parameters().videoPid
-        ? CursorPidKind::Video
-        : CursorPidKind::Audio;
+    const auto kind = CursorPidKind::Video;
     const std::uint64_t identity = m_state->nextCursorIdentity;
     auto cursor = std::make_unique<MediaTsPacketCursorState>();
     cursor->owner = m_state;
     cursor->identity = identity;
     cursor->pidKind = kind;
-    const auto next = continuity(*m_state, kind).nextPayload;
+    ContinuityState* nextState = continuity(*m_state, kind);
+    bool* pendingDiscontinuity = discontinuityPending(*m_state, kind);
+    if (!nextState || !pendingDiscontinuity) {
+        return ::media::Result<MediaTsPacketCursor>::failure(
+            invalid("MPEG-TS PCR authority is absent from the program"));
+    }
+    const auto next = nextState->nextPayload;
     cursor->carriesDiscontinuity =
-        discontinuityPending(*m_state, kind);
+        *pendingDiscontinuity;
     auto packet = MediaTsTransportPacketBuilder::pcrOnly(
-        m_state->plan.parameters().pcrPid, next, pcr.wire27Mhz,
+        m_state->plan.pcrPid(), next, pcr.wire27Mhz,
         cursor->carriesDiscontinuity);
     if (!packet) {
         return ::media::Result<MediaTsPacketCursor>::failure(packet.error());
@@ -401,7 +457,7 @@ MediaTsTransportPacketizer::MediaTsTransportPacketizer(
     switch (stream) {
     case MediaScheduledStream::Video:
         kind = CursorPidKind::Video;
-        if (m_state) pid = m_state->plan.parameters().videoPid;
+        if (m_state) pid = m_state->plan.videoPid();
         break;
     case MediaScheduledStream::Audio:
         if (randomAccess) {
@@ -409,7 +465,11 @@ MediaTsTransportPacketizer::MediaTsTransportPacketizer(
                 invalid("MPEG-TS audio PES cannot be random access"));
         }
         kind = CursorPidKind::Audio;
-        if (m_state) pid = m_state->plan.parameters().audioPid;
+        if (!m_state || !m_state->plan.audioVideoProgram()) {
+            return ::media::Result<MediaTsPacketCursor>::failure(
+                invalid("MPEG-TS audio PES is absent from the typed program"));
+        }
+        pid = m_state->plan.audioVideoProgram()->audioPid;
         break;
     default:
         return ::media::Result<MediaTsPacketCursor>::failure(

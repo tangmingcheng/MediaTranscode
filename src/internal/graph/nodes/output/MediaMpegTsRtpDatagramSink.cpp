@@ -37,14 +37,14 @@ MediaMpegTsRtpDatagramSink::~MediaMpegTsRtpDatagramSink() noexcept
 ::media::Result<std::unique_ptr<MediaMpegTsRtpDatagramSink>>
 MediaMpegTsRtpDatagramSink::create(
     const MediaMpegTsRtpOutputPlan& plan,
-    const MediaPlaybackEpoch& epoch,
+    const MediaProtocolOutputActivation& activation,
     const MediaSharedNtpEpoch& sharedNtpEpoch,
     std::shared_ptr<MediaMpegTsRtpContinuityState> continuity,
     MediaUdpDatagramSenderPortFactory& portFactory)
 {
     using SinkResult =
         ::media::Result<std::unique_ptr<MediaMpegTsRtpDatagramSink>>;
-    if (epoch.generation == 0 || plan.cname().empty() || !continuity) {
+    if (activation.generation == 0 || plan.cname().empty() || !continuity) {
         return SinkResult::failure(
             ::media::ErrorInfo::invalidArgument(
                 "MP2T RTP sink requires a complete generation and CNAME"));
@@ -70,7 +70,7 @@ MediaMpegTsRtpDatagramSink::create(
         (void)transport.value()->close();
         return SinkResult::failure(packetizer.error());
     }
-    auto firstReport = epoch.masterRelease.checkedAdd(
+    auto firstReport = activation.masterRelease.checkedAdd(
         plan.senderReportInterval());
     if (!firstReport) {
         (void)transport.value()->close();
@@ -78,7 +78,7 @@ MediaMpegTsRtpDatagramSink::create(
     }
     auto reportSchedule = MediaRtcpSenderReportSchedule::create(
         firstReport.value(), plan.senderReportInterval(),
-        plan.senderReportInterval(), epoch.generation);
+        plan.senderReportInterval(), activation.generation);
     if (!reportSchedule) {
         (void)transport.value()->close();
         return SinkResult::failure(reportSchedule.error());
@@ -88,7 +88,7 @@ MediaMpegTsRtpDatagramSink::create(
             std::move(transport).value(),
             std::move(packetizer).value(), sharedNtpEpoch,
             std::move(reportSchedule).value(), std::move(continuity),
-            plan.cname(), plan.ssrc(), epoch.generation));
+            plan.cname(), plan.ssrc(), activation.generation));
     if (!sink) {
         return SinkResult::failure(
             ::media::ErrorInfo::allocationFailed(

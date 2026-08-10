@@ -66,7 +66,7 @@ ProjectMpegTsDatagramSinkFactory::bindingsReady(
 ProjectMpegTsDatagramSinkFactory::create(
     const MediaProjectMpegTsRuntimeOutputPlan& outputPlan,
     const MediaTsMuxPlan& muxPlan,
-    const MediaPlaybackEpoch& epoch,
+    const MediaProtocolOutputActivation& activation,
     const std::shared_ptr<const MediaSharedNtpEpoch>& sharedNtpEpoch,
     const std::shared_ptr<MediaMpegTsRtpContinuityState>& rtpContinuity,
     MediaOutputByteSink* udpByteSink)
@@ -114,7 +114,7 @@ ProjectMpegTsDatagramSinkFactory::create(
     MediaUdpDatagramSenderSocketFactory datagramPortFactory(
         std::move(socketRuntime).value());
     auto created = MediaMpegTsRtpDatagramSink::create(
-        *rtp, epoch, *sharedNtpEpoch, rtpContinuity,
+        *rtp, activation, *sharedNtpEpoch, rtpContinuity,
         datagramPortFactory);
     if (!created) {
         return ::media::Result<

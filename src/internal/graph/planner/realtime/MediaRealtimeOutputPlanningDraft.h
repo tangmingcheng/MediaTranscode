@@ -1,8 +1,5 @@
 #pragma once
 
-#include "internal/graph/model/MediaLatencyPolicy.h"
-#include "internal/graph/model/MediaMuxSessionKind.h"
-#include "internal/graph/model/MediaOutputResourceKind.h"
 #include "internal/graph/planner/realtime/MediaScheduledRtpPacketizationPlan.h"
 #include "internal/graph/protocol/rtp/MediaRtpUdpSenderConfig.h"
 
@@ -12,7 +9,7 @@
 
 namespace media::ffmpeg::graph {
 
-struct MediaRealtimeRtpOutputNodePlan final {
+struct MediaRealtimeScheduledRtpOutputPlanningDraft final {
     std::string url;
     int packetSize;
     std::string mediaId;
@@ -23,37 +20,24 @@ struct MediaRealtimeRtpOutputNodePlan final {
     std::optional<MediaScheduledRtpPacketizationPlan> scheduledPacketization;
 };
 
-struct MediaRealtimeMuxedOutputPlan final {
+struct MediaRealtimeMpegTsOutputPlanningDraft final {
     std::string url;
-    std::string format;
     std::string mediaId;
-    std::optional<MediaOutputResourceKind> outputResourceKind;
-    std::optional<MediaMuxSessionKind> muxSessionKind;
     std::optional<MediaRtpUdpSenderConfig> rtpTransport;
     std::string sdpPath;
 };
 
-struct MediaRealtimeSdpWriterPlan final {
+struct MediaRealtimeSeparateRtpSdpPlanningDraft final {
     std::string path;
     std::string mediaId;
-    int expectedContexts = 1;
-};
-
-struct MediaRealtimeMuxNodePlan final {
-    bool expectVideo;
-    bool expectAudio;
-    MediaLatencyPolicy pacingPolicy;
-    bool monotonicPacketTimestamps = false;
-    int startupDelayMs = 0;
 };
 
 struct MediaRealtimeOutputPlanningDraft final {
     bool packetCopyNormalizationRequired = false;
-    MediaRealtimeRtpOutputNodePlan videoOutput;
-    MediaRealtimeRtpOutputNodePlan audioOutput;
-    MediaRealtimeMuxedOutputPlan muxedOutput;
-    MediaRealtimeSdpWriterPlan sdp;
-    MediaRealtimeMuxNodePlan singleStreamMux;
+    MediaRealtimeScheduledRtpOutputPlanningDraft videoOutput;
+    MediaRealtimeScheduledRtpOutputPlanningDraft audioOutput;
+    MediaRealtimeMpegTsOutputPlanningDraft muxedOutput;
+    MediaRealtimeSeparateRtpSdpPlanningDraft sdp;
 };
 
 } // namespace media::ffmpeg::graph

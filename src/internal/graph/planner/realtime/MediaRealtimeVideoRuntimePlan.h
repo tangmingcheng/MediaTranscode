@@ -4,7 +4,8 @@
 #include "internal/graph/model/MediaRealtimeEdgePolicySet.h"
 #include "internal/graph/model/MediaThreadingPolicy.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
-#include "internal/graph/planner/realtime/MediaRealtimeOutputPlanningDraft.h"
+#include "internal/graph/planner/realtime/MediaRealtimeProtocolOutputPlan.h"
+#include "internal/graph/protocol/MediaProtocolOutputSessionKey.h"
 #include "internal/graph/time/MediaRunningTime.h"
 
 #include <cstddef>
@@ -43,27 +44,16 @@ struct MediaRealtimeVideoSchedulingPlan final {
     MediaRunningTime transportLead;
 };
 
-struct MediaRealtimeVideoSeparateRtpAdapterPlan final {
-    bool packetCopyNormalizationRequired;
-    MediaRealtimeRtpOutputNodePlan output;
-    MediaRealtimeSdpWriterPlan sdp;
-    MediaRealtimeMuxNodePlan mux;
-};
-
-struct MediaRealtimeVideoMuxedAdapterPlan final {
-    bool packetCopyNormalizationRequired;
-    MediaRealtimeMuxedOutputPlan output;
-    MediaRealtimeMuxNodePlan mux;
-};
-
 using MediaRealtimeVideoOutputAdapterPlan = std::variant<
-    MediaRealtimeVideoSeparateRtpAdapterPlan,
-    MediaRealtimeVideoMuxedAdapterPlan>;
+    MediaVideoOnlySeparateRtpOutputRuntimePlan,
+    MediaProjectMpegTsRuntimeOutputPlan>;
 
 struct MediaRealtimeVideoRuntimePlan final {
     MediaRealtimeVideoStartupPlan startup;
     MediaRealtimeVideoTimingPlan timing;
     MediaRealtimeVideoSchedulingPlan scheduling;
+    MediaProtocolOutputSessionKey sessionKey;
+    bool packetCopyNormalizationRequired;
     MediaRealtimeVideoOutputAdapterPlan outputAdapter;
     MediaGraphQueueParameters queues;
     MediaRealtimeEdgePolicySet edgePolicies;

@@ -23,6 +23,7 @@ namespace media::ffmpeg::graph {
 class MediaGraphRuntimeLifecycleExecutor;
 class MediaAvSyncClockSource;
 class MediaAvStartupVideoPreparationState;
+class MediaProtocolOutputRuntimeAuthority;
 
 enum class MediaGraphRuntimeState {
     Empty,
@@ -111,6 +112,8 @@ private:
         m_playbackEpochActivationCapability;
     std::shared_ptr<MediaAvStartupVideoPreparationState>
         m_videoPreparationState;
+    std::shared_ptr<MediaProtocolOutputRuntimeAuthority>
+        m_protocolOutputAuthority;
     std::shared_ptr<MediaAvSyncClockSource> m_avSyncClockSource;
 };
 
