@@ -98,8 +98,7 @@ MediaProjectMpegTsPlanSourceNode::onProcess(
         auto activated = m_authority->validateActivation(activationInput);
         if (!activated) {
             return ::media::Result<MediaNodeProcessResult>::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "Project MPEG-TS plan source rejects duplicate activation"));
+                activated.error());
         }
         bool duplicateGeneration = false;
         {
@@ -133,8 +132,7 @@ MediaProjectMpegTsPlanSourceNode::onProcess(
         auto activated = m_authority->validateActivation(activationInput);
         if (!activated) {
             return ::media::Result<MediaNodeProcessResult>::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "Project MPEG-TS plan source rejects mismatched activation"));
+                activated.error());
         }
         auto created = MediaProjectMpegTsRuntimePlanBuffer::create(
             m_outputPlan, m_sessionKey, m_streamSet,

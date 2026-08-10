@@ -67,20 +67,31 @@ MediaAvProtocolOutputRuntimeAuthority::validateActivation(
 {
     const auto* activated =
         dynamic_cast<const MediaPlaybackEpochActivatedBuffer*>(buffer.get());
-    if (!activated || activated->groupKey() != m_group->key() ||
-        m_group->lifecycleState() !=
-            MediaAvSyncGroupRuntime::LifecycleState::Active) {
+    if (!activated) {
         return ::media::Result<MediaProtocolOutputActivation>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "A/V protocol output authority rejects mismatched activation"));
+                "A/V protocol output authority requires an activated playback epoch"));
+    }
+    if (activated->groupKey() != m_group->key()) {
+        return ::media::Result<MediaProtocolOutputActivation>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "A/V protocol output authority rejects an activation from another group"));
+    }
+    if (m_group->lifecycleState() !=
+        MediaAvSyncGroupRuntime::LifecycleState::Active) {
+        return ::media::Result<MediaProtocolOutputActivation>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "A/V protocol output authority requires an active sync group"));
     }
     auto current = m_group->playbackEpoch();
-    if (!current || current.value() != activated->epoch() ||
-        !m_group->sharedNtpEpoch()) {
+    if (!current) {
         return ::media::Result<MediaProtocolOutputActivation>::failure(
-            current ? ::media::ErrorInfo::invalidArgument(
-                          "A/V protocol output activation differs from its group")
-                    : current.error());
+            current.error());
+    }
+    if (current.value() != activated->epoch()) {
+        return ::media::Result<MediaProtocolOutputActivation>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "A/V protocol output activation differs from its group epoch"));
     }
     return ::media::Result<MediaProtocolOutputActivation>::success(
         MediaProtocolOutputActivation{
@@ -94,11 +105,9 @@ MediaAvProtocolOutputRuntimeAuthority::validateActivation(
 MediaAvProtocolOutputRuntimeAuthority::currentActivation() const
 {
     auto epoch = m_group->playbackEpoch();
-    if (!epoch || !m_group->sharedNtpEpoch()) {
+    if (!epoch) {
         return ::media::Result<MediaProtocolOutputActivation>::failure(
-            epoch ? ::media::ErrorInfo::notInitialized(
-                        "A/V protocol output authority has no shared NTP epoch")
-                  : epoch.error());
+            epoch.error());
     }
     return ::media::Result<MediaProtocolOutputActivation>::success(
         MediaProtocolOutputActivation{
