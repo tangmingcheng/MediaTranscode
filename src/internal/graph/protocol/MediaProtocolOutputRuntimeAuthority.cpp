@@ -41,12 +41,12 @@ MediaAvProtocolOutputRuntimeAuthority::create(
             ::media::ErrorInfo::invalidArgument(
                 "A/V protocol output authority requires one registered sync group"));
     }
+    MediaProtocolOutputSessionKey sessionKey(group->key().value());
     return ::media::Result<
         std::shared_ptr<MediaAvProtocolOutputRuntimeAuthority>>::success(
         std::shared_ptr<MediaAvProtocolOutputRuntimeAuthority>(
             new MediaAvProtocolOutputRuntimeAuthority(
-                MediaProtocolOutputSessionKey(group->key().value()),
-                std::move(group))));
+                std::move(sessionKey), std::move(group))));
 }
 
 const MediaProtocolOutputSessionKey&
