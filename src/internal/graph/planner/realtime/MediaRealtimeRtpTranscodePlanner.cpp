@@ -652,8 +652,13 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
             ::media::ErrorInfo::invalidArgument(
                 "detected RTP video signaling is valid only for raw RTP input"));
     }
-    options.parameters.queues = MediaRealtimeQueueCapacityPlanner::plan(
+    auto selectedQueues = MediaRealtimeQueueCapacityPlanner::plan(
         requestedOptions.parameters.queues);
+    if (!selectedQueues) {
+        return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
+            selectedQueues.error());
+    }
+    options.parameters.queues = std::move(selectedQueues).value();
 
     auto outputUrls = MediaRealtimeOutputPolicyPlanner::planUrls(options);
     if (!outputUrls) {
