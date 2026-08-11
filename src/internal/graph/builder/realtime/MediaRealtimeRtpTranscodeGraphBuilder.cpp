@@ -315,14 +315,6 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
                 avSync.rtpInput->input.commonEpochPolicy)); !status) {
         return ::media::Result<MediaNodeId>::failure(status.error());
     }
-    for (MediaNodeId input : {videoInput, audioInput}) {
-        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
-                graph, owner, input, "rtcp.maximum_extrapolation_ns",
-                std::to_string(avSync.rtpInput->input.maximumExtrapolationNs->nanoseconds())); !status) {
-            return ::media::Result<MediaNodeId>::failure(status.error());
-        }
-    }
-
     const struct PortSpec {
         const char* name;
     } inputs[] = {{"video_clock"}, {"video_event"}, {"audio_clock"}, {"audio_event"}};
@@ -790,7 +782,9 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
     if (auto* videoRuntime = std::get_if<MediaRealtimeVideoRuntimePlan>(
             &preflight.plan.runtime)) {
         runtimeBinding.emplace<MediaRealtimeVideoRuntimeBinding>(
-            MediaRealtimeVideoRuntimeBinding{std::move(*videoRuntime)});
+            MediaRealtimeVideoRuntimeBinding{
+                std::move(*videoRuntime),
+                std::move(preflight.plan.input.rtpTransport)});
     } else if (auto* runtimePlan =
                    std::get_if<MediaRealtimeAvSyncRuntimePlan>(
                        &preflight.plan.runtime)) {

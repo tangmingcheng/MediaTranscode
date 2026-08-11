@@ -212,14 +212,8 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     auto cnameTimeout = requiredPositiveIntNodeOption(options, "RawRtpInputNode", "rtcp.cname_timeout_ms");
     auto clockLossPolicy = requiredNodeOption(
         options, "RawRtpInputNode", "rtcp.clock_loss_policy");
-    const bool sourceClockMappingEnabled = options && options->has("rtcp.maximum_extrapolation_ns");
-    ::media::Result<std::int64_t> maximumExtrapolation =
-        ::media::Result<std::int64_t>::failure(
-            ::media::ErrorInfo::notInitialized("RTP source clock mapping is not enabled"));
-    if (sourceClockMappingEnabled) {
-        maximumExtrapolation = requiredPositiveInt64NodeOption(
-            options, "RawRtpInputNode", "rtcp.maximum_extrapolation_ns");
-    }
+    auto maximumExtrapolation = requiredPositiveInt64NodeOption(
+        options, "RawRtpInputNode", "rtcp.maximum_extrapolation_ns");
     auto compositionMode = requiredNodeOption(options, "RawRtpInputNode", "rtcp.composition_mode");
     auto streamKind = requiredStreamKindNodeOption(options, "RawRtpInputNode", "rtp.stream_kind");
     auto codec = requiredNodeOption(options, "RawRtpInputNode", "rtp.codec");
@@ -229,7 +223,7 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
         options, "RawRtpInputNode", "rtp.access_unit_duration_ticks");
     if (!family || !address || !rtpPort || !rtcpPort || !payloadType || !clockRate || !receiveBuffer ||
         !datagramBytes || !reorderWindow || !reorderDelay || !readTimeout || !requireSr || !requireCname ||
-        !srTimeout || !cnameTimeout || !clockLossPolicy || !compositionMode || !streamKind || !codec || !fmtp || !channels || !accessUnitDuration) {
+        !srTimeout || !cnameTimeout || !clockLossPolicy || !maximumExtrapolation || !compositionMode || !streamKind || !codec || !fmtp || !channels || !accessUnitDuration) {
         const ::media::ErrorInfo* error = nullptr;
         if (!family) error = &family.error(); else if (!address) error = &address.error(); else if (!rtpPort) error = &rtpPort.error();
         else if (!rtcpPort) error = &rtcpPort.error(); else if (!payloadType) error = &payloadType.error(); else if (!clockRate) error = &clockRate.error();
@@ -237,6 +231,7 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
         else if (!reorderDelay) error = &reorderDelay.error(); else if (!readTimeout) error = &readTimeout.error(); else if (!requireSr) error = &requireSr.error();
         else if (!requireCname) error = &requireCname.error(); else if (!srTimeout) error = &srTimeout.error(); else if (!cnameTimeout) error = &cnameTimeout.error();
         else if (!clockLossPolicy) error = &clockLossPolicy.error();
+        else if (!maximumExtrapolation) error = &maximumExtrapolation.error();
         else if (!compositionMode) error = &compositionMode.error(); else if (!streamKind) error = &streamKind.error(); else if (!codec) error = &codec.error();
         else if (!fmtp) error = &fmtp.error();
         else if (!channels) error = &channels.error(); else error = &accessUnitDuration.error();
@@ -351,17 +346,14 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     m_clockTracker = std::make_unique<MediaRtcpSenderReportTracker>(MediaRtcpSenderReportTrackerConfig{
         requireSr.value(), requireCname.value(), static_cast<int64_t>(srTimeout.value()) * 1'000'000,
         static_cast<int64_t>(cnameTimeout.value()) * 1'000'000});
-    if (sourceClockMappingEnabled) {
-        if (!maximumExtrapolation) return ::media::Status::failure(maximumExtrapolation.error());
-        auto schedule = MediaRtpClockObservationSchedule::create(
-            static_cast<std::int64_t>(srTimeout.value()) * 1'000'000,
-            maximumExtrapolation.value(),
-            static_cast<std::int64_t>(cnameTimeout.value()) * 1'000'000,
-            lossPolicy);
-        if (!schedule) return ::media::Status::failure(schedule.error());
-        m_clockSchedule = std::make_unique<MediaRtpClockObservationSchedule>(
-            std::move(schedule).value());
-    }
+    auto schedule = MediaRtpClockObservationSchedule::create(
+        static_cast<std::int64_t>(srTimeout.value()) * 1'000'000,
+        maximumExtrapolation.value(),
+        static_cast<std::int64_t>(cnameTimeout.value()) * 1'000'000,
+        lossPolicy);
+    if (!schedule) return ::media::Status::failure(schedule.error());
+    m_clockSchedule = std::make_unique<MediaRtpClockObservationSchedule>(
+        std::move(schedule).value());
     m_streamSnapshot = MediaBufferRef(std::move(snapshot).value());
     m_requireCname = requireCname.value();
     m_rtcpCompositionMode = std::move(rtcpComposition).value();

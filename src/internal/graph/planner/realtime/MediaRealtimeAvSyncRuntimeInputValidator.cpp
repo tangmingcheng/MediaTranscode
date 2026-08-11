@@ -42,6 +42,7 @@ namespace {
         policy.requireSenderReports &&
         policy.rtcpCompositionMode &&
         policy.senderReportTimeoutNs &&
+        policy.maximumExtrapolationNs &&
         policy.identityEvidenceTimeoutNs &&
         policy.clockLossPolicy &&
         policy.secondaryClockLossPolicy &&
@@ -50,6 +51,7 @@ namespace {
         input.audioInput.payloadType &&
         input.audioInput.clockRate &&
         policy.senderReportTimeoutNs->nanoseconds() % Millisecond == 0 &&
+        policy.maximumExtrapolationNs->nanoseconds() % Millisecond == 0 &&
         policy.identityEvidenceTimeoutNs->nanoseconds() % Millisecond == 0 &&
         outer.input.rtpTransport->payloadType ==
             *input.videoInput.payloadType &&
@@ -69,6 +71,10 @@ namespace {
             policy.senderReportTimeoutNs->nanoseconds() / Millisecond &&
         runtime.isolatedAudioInput->rtpTransport->senderReportTimeoutMs ==
             policy.senderReportTimeoutNs->nanoseconds() / Millisecond &&
+        outer.input.rtpTransport->maximumExtrapolationMs ==
+            policy.maximumExtrapolationNs->nanoseconds() / Millisecond &&
+        runtime.isolatedAudioInput->rtpTransport->maximumExtrapolationMs ==
+            policy.maximumExtrapolationNs->nanoseconds() / Millisecond &&
         outer.input.rtpTransport->cnameTimeoutMs ==
             policy.identityEvidenceTimeoutNs->nanoseconds() / Millisecond &&
         runtime.isolatedAudioInput->rtpTransport->cnameTimeoutMs ==

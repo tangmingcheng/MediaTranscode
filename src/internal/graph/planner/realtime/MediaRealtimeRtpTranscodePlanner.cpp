@@ -13,6 +13,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeEdgePolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestValidator.h"
+#include "internal/graph/planner/realtime/MediaRealtimeRtpInputPlanValidator.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpVideoSignalingResolver.h"
 #include "internal/graph/planner/realtime/MediaRealtimeTsInputPlanValidator.h"
 #include "internal/graph/planner/realtime/MediaRealtimeVideoRuntimePlanner.h"
@@ -1199,12 +1200,33 @@ MediaRealtimeRtpTranscodePlanner::planPreparedInput(
 ::media::Status MediaRealtimeRtpTranscodePlanner::validatePlannedProduct(
     const MediaRealtimeRtpTranscodePlan& plan)
 {
+    if (auto status = MediaRealtimeRtpInputPlanValidator::validate(
+            plan.inputType, plan.input);
+        !status) {
+        return status;
+    }
+    const auto* avRuntime =
+        std::get_if<MediaRealtimeAvSyncRuntimePlan>(&plan.runtime);
+    if (avRuntime && avRuntime->isolatedAudioInput) {
+        if (auto status = MediaRealtimeRtpInputPlanValidator::validate(
+                RealtimeInputType::RtpPort,
+                *avRuntime->isolatedAudioInput);
+            !status) {
+            return status;
+        }
+    }
     switch (plan.inputType) {
     case RealtimeInputType::RtpPort:
         if (plan.requiredPreparedInputKind &&
             *plan.requiredPreparedInputKind != MediaPreparedRealtimeInputKind::RawRtp) {
             return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
                 "raw RTP plan requires node-owned transport or prepared raw RTP input"));
+        }
+        if (!plan.input.requiresPreparedInput ||
+            *plan.input.requiresPreparedInput !=
+                plan.requiredPreparedInputKind.has_value()) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "raw RTP prepared ownership differs from planner product"));
         }
         break;
     case RealtimeInputType::Url:

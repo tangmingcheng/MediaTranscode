@@ -42,6 +42,7 @@ struct MediaRtpInputClockTransportPolicy final {
     bool requireSenderReports;
     bool requireCname;
     int senderReportTimeoutMs;
+    int maximumExtrapolationMs;
     int identityEvidenceTimeoutMs;
     MediaRtpClockLossPolicy lossPolicy;
     MediaRtpClockLossPolicy secondaryLossPolicy;
@@ -163,6 +164,7 @@ openMpegTsRuntimeSession(
             true,
             false,
             MediaRtpClockLivenessPolicy::SenderReportTimeoutMs,
+            MediaRtpClockLivenessPolicy::MaximumExtrapolationMs,
             MediaRtpClockLivenessPolicy::CnameTimeoutMs,
             MediaRtpClockLossPolicy::FailOnExpired,
             MediaRtpClockLossPolicy::FailOnExpired,
@@ -170,6 +172,7 @@ openMpegTsRuntimeSession(
     }
     if (!avSync->rtpInput || !avSync->rtpInput->input.requireSenderReports ||
         !avSync->rtpInput->input.rtcpCompositionMode ||
+        !avSync->rtpInput->input.maximumExtrapolationNs ||
         !avSync->rtpInput->input.clockLossPolicy ||
         !avSync->rtpInput->input.secondaryClockLossPolicy) {
         return ::media::Result<MediaRtpInputClockTransportPolicy>::failure(
@@ -182,6 +185,13 @@ openMpegTsRuntimeSession(
     if (!senderReportTimeout) {
         return ::media::Result<MediaRtpInputClockTransportPolicy>::failure(
             senderReportTimeout.error());
+    }
+    const auto maximumExtrapolation = wholeMilliseconds(
+        avSync->rtpInput->input.maximumExtrapolationNs,
+        "maximum extrapolation");
+    if (!maximumExtrapolation) {
+        return ::media::Result<MediaRtpInputClockTransportPolicy>::failure(
+            maximumExtrapolation.error());
     }
     const auto identityEvidenceTimeout = wholeMilliseconds(
         avSync->rtpInput->input.identityEvidenceTimeoutNs,
@@ -200,6 +210,7 @@ openMpegTsRuntimeSession(
         *avSync->rtpInput->input.requireSenderReports,
         false,
         senderReportTimeout.value(),
+        maximumExtrapolation.value(),
         identityEvidenceTimeout.value(),
         *avSync->rtpInput->input.clockLossPolicy,
         *avSync->rtpInput->input.secondaryClockLossPolicy,
@@ -469,6 +480,7 @@ MediaRealtimeRtpTransportPlan transportPlan(
         clockPolicy.requireSenderReports,
         clockPolicy.requireCname,
         clockPolicy.senderReportTimeoutMs,
+        clockPolicy.maximumExtrapolationMs,
         clockPolicy.identityEvidenceTimeoutMs,
         lossPolicy,
         clockPolicy.rtcpCompositionMode

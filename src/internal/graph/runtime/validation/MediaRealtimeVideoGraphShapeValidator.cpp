@@ -151,6 +151,45 @@ const MediaEdge* exactCodecEdge(
         std::string("Invalid VideoOnly runtime graph shape: ") + field));
 }
 
+::media::Status validateRawRtpInput(
+    const MediaGraph& graph,
+    const std::optional<MediaRealtimeRtpTransportPlan>& transport)
+{
+    const MediaAvSyncGraphShape shape(graph);
+    const auto inputs = shape.nodes(MediaNodeKind::RawRtpInput);
+    if (!transport) {
+        return inputs.empty()
+            ? ::media::Status::success()
+            : invalid("raw RTP input without transport product");
+    }
+    if (inputs.size() != 1) {
+        return invalid("raw RTP input cardinality");
+    }
+    const MediaNodeOptions& options = inputs.front()->options;
+    auto senderReportTimeout = requiredPositiveIntNodeOption(
+        &options, "RawRtpInputNode", "rtcp.sender_report_timeout_ms");
+    auto maximumExtrapolation = requiredPositiveInt64NodeOption(
+        &options, "RawRtpInputNode", "rtcp.maximum_extrapolation_ns");
+    auto cnameTimeout = requiredPositiveIntNodeOption(
+        &options, "RawRtpInputNode", "rtcp.cname_timeout_ms");
+    auto requireSenderReports = requiredBoolNodeOption(
+        &options, "RawRtpInputNode", "rtcp.require_sender_reports");
+    auto requireCname = requiredBoolNodeOption(
+        &options, "RawRtpInputNode", "rtcp.require_cname");
+    if (!senderReportTimeout || !maximumExtrapolation || !cnameTimeout ||
+        !requireSenderReports || !requireCname ||
+        senderReportTimeout.value() != transport->senderReportTimeoutMs ||
+        maximumExtrapolation.value() !=
+            static_cast<std::int64_t>(transport->maximumExtrapolationMs) *
+                1'000'000 ||
+        cnameTimeout.value() != transport->cnameTimeoutMs ||
+        requireSenderReports.value() != transport->requireSenderReports ||
+        requireCname.value() != transport->requireCname) {
+        return invalid("raw RTP clock liveness options differ from transport product");
+    }
+    return ::media::Status::success();
+}
+
 ::media::Status validateScheduler(
     const MediaGraph& graph,
     const MediaNode& scheduler,
@@ -531,6 +570,10 @@ const MediaEdge* exactCodecEdge(
 {
     const auto& runtime = binding.runtime;
     if (!runtime.sessionKey.valid()) return invalid("protocol session");
+    if (auto valid = validateRawRtpInput(graph, binding.inputTransport);
+        !valid) {
+        return valid;
+    }
     const MediaNode* scheduler = nullptr;
     for (const MediaNode& node : graph.nodes()) {
         if (audioOrAvNode(node.kind)) return invalid("audio or A/V node");

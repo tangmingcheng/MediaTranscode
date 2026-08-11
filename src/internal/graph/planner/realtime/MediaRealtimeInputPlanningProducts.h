@@ -30,6 +30,7 @@ struct MediaRealtimeRtpTransportPlan final {
     bool requireSenderReports;
     bool requireCname;
     int senderReportTimeoutMs;
+    int maximumExtrapolationMs;
     int cnameTimeoutMs;
     MediaRtpClockLossPolicy clockLossPolicy;
     std::optional<MediaRtcpCompositionMode> rtcpCompositionMode;
