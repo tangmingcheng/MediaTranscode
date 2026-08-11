@@ -96,9 +96,12 @@ const std::string& MediaNodeRuntime::name() const noexcept
 
     if (!outcome) {
         auto status = ::media::Status::failure(outcome.error());
+        const char* action = outcome.error().code == ::media::ErrorCode::WouldBlock
+            ? "process.blocked"
+            : "process.failed";
         mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
                                 MediaGraphDiagnosticPhase::RuntimeNode,
-                                processDiagnosticMessage("process.failed",
+                                processDiagnosticMessage(action,
                                                          m_nodeId,
                                                          m_name,
                                                          m_kind,
