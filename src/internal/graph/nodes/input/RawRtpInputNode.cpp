@@ -567,9 +567,9 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
 void RawRtpInputNode::interrupt(MediaGraphExecutionContext&) noexcept
 {
     if (m_preparedReceiver) {
-        (void)m_preparedReceiver->stop();
+        (void)m_preparedReceiver->interruptReceive();
     } else {
-        (void)m_transport.stop();
+        (void)m_transport.interruptReceive();
     }
 }
 
