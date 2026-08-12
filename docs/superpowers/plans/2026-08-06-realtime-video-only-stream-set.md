@@ -29,11 +29,11 @@
 - Replace `MediaTranscodeExecutionParameters::includeAudio` with `std::optional<MediaTranscodeStreamSet> streamSet`.
 - Local and realtime CLI always assign the field; `--no-audio` selects `VideoOnly`, otherwise `AudioVideo`.
 
-- [ ] Add the focused enum model and integrate it into CMake.
-- [ ] Migrate presets, local planning, realtime classification, CLI parsing, and summaries away from `includeAudio`.
-- [ ] Reject missing stream set and reject VideoOnly combined with any explicit audio codec/rate/channel/bitrate/profile/preset/startup/A-V-gap or raw-RTP audio metadata.
-- [ ] Require the video startup bound for both stream sets; permit audio startup and A/V gap only for AudioVideo.
-- [ ] Search for residual `includeAudio`, inspect the diff, commit `refactor(graph): make transcode stream set explicit`, and push.
+- [x] Add the focused enum model and integrate it into CMake.
+- [x] Migrate presets, local planning, realtime classification, CLI parsing, and summaries away from `includeAudio`.
+- [x] Reject missing stream set and reject VideoOnly combined with any explicit audio codec/rate/channel/bitrate/profile/preset/startup/A-V-gap or raw-RTP audio metadata.
+- [x] Require the video startup bound for both stream sets; permit audio startup and A/V gap only for AudioVideo.
+- [x] Search for residual `includeAudio`, inspect the diff, commit `refactor(graph): make transcode stream set explicit`, and push.
 
 ### Task 2: Stream-set-aware input preparation
 
@@ -70,7 +70,7 @@
 - [x] Extract media-independent output-clock/commit behavior needed by both VideoOnly and A/V rather than copying a pacing loop.
 - [x] Build VideoOnly startup and scheduled-video flow without audio or A/V correction components.
 - [x] Keep the AudioVideo runtime topology and timing behavior unchanged.
-- [ ] Commit `feat(realtime): plan video-only runtime scheduling`, and push.
+- [x] Commit the focused VideoOnly runtime scheduling work and push.
 
 ### Task 5: Unified production outputs and shape validation
 
@@ -88,9 +88,9 @@
 
 ### Task 6: Build, real-media acceptance, review, and delivery
 
-- [ ] Run the repository VS2026 clean-first x64 Debug build within 120 seconds; do not run CTest.
-- [ ] Execute 38 VideoOnly chains: local 2; RTSP 6; MPEG-TS input 6; raw RTP 24 across H.264/HEVC, manual/automatic FMTP, two source semantics, and three outputs.
-- [ ] Execute 18 A/V regressions: RTSP 3; MPEG-TS input 3; raw RTP 12 across H.264/HEVC, manual/automatic FMTP, and three outputs.
-- [ ] For every realtime chain use `out/acceptance/test-continuous-120s.mp4`, start CLI then FFmpeg then VLC, stop only the source, and capture exact commands/PIDs, source-driven exit, CPU, memory, errors, SDP/PID evidence, and residue checks.
-- [ ] Write a concise completion report under `docs/completed/` without build commands; update `QUALITY_SCORE.md` through an independent quality-review agent.
+- [x] Run the repository VS2026 clean-first x64 Debug build within 120 seconds; do not run CTest.
+- [x] Execute 38 VideoOnly chains: local 2; RTSP 6; MPEG-TS input 6; raw RTP 24 across H.264/HEVC, manual/automatic FMTP, two source semantics, and three outputs.
+- [x] Execute 18 A/V regressions: RTSP 3; MPEG-TS input 3; raw RTP 12 across H.264/HEVC, manual/automatic FMTP, and three outputs.
+- [x] For every realtime chain use `out/acceptance/test-continuous-120s.mp4`, start CLI then FFmpeg then VLC; use the explicitly approved server/publisher-first exception for true RTSP; capture commands/PIDs, source-driven exit, CPU, memory, errors, SDP/PID evidence, and residue checks.
+- [x] Write a concise completion report under `docs/completed/` without build commands; update `QUALITY_SCORE.md` through an independent quality-review agent.
 - [ ] Perform whole-branch self-review, commit/push all fixes, create a ready PR, and obtain a fresh independent PR-agent PASS. Do not merge.

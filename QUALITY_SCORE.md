@@ -1,28 +1,41 @@
 # MediaTranscode Quality Score
 
-> Scope: `codex/rtp-fmtp-autodetect` against `origin/master`. Updated 2026-08-06.
+> Scope: `codex/realtime-video-only-stream-set`, `master...050b4f0c`, plus the final tracked completion evidence. Updated 2026-08-12.
 
-| Dimension | Weight | Score | Evidence |
+## Scoring Rubric
+
+| Dimension | Max | Score | Current evidence |
 |---|---:|---:|---|
-| Architecture and DAG model | 15 | 15 | Probe execution, typed facts, planner resolution, prepared binding, and runtime consumption remain separate modules. |
-| Planner decision ownership | 12 | 12 | Codec/PT/clock and parameter-set identity are validated before planning; the product declares exact prepared-input ownership and runtime has no automatic fallback. |
-| Scheduling and concurrency | 13 | 12 | Five 1280x720 hardware A/V routes retained the canonical scheduler with zero drops and no source-present runtime failure; final affected-scope reruns also passed. |
-| Node responsibility and decoupling | 12 | 10 | Shared NAL parsing removes probe/depacketizer duplication; existing large realtime planner files remain debt. |
-| RAII and resource safety | 10 | 10 | One move-only prepared owner carries the bound transport through compile/start/failure paths. |
-| Performance and resource efficiency | 10 | 9 | Five continuous-source hardware paths stayed bounded; final affected-scope reruns measured 185.6-200.3 MiB working sets and 3.18-3.83% process CPU. |
-| Error model and failure boundaries | 8 | 8 | Timeout, PT mismatch, incomplete/conflicting sets, capacity exhaustion, and missing AAC fmtp fail preflight; AAC rejection precedes probe I/O. |
-| Tests and verification | 10 | 9 | Clean rebuild, five real CLI/FFmpeg/VLC routes, final affected-scope reruns, human A/V checks, and six strict preflight gates passed. |
-| Maintainability and documentation | 10 | 9 | CLI help, README, architecture, plan, completion evidence, and residual risks are current. |
-| **Total** | **100** | **94** | **A** |
+| Architecture responsibilities | 9 | 8 | Model, planner, builder, protocol, node and runtime-validation layers remain distinct; the branch is nevertheless broad at 243 changed files. |
+| Typed plans and contracts | 8 | 8 | Explicit stream-set and runtime variants model VideoOnly/A-V input, startup, scheduling, MPEG-TS program and output paths; prepared RTSP evidence and provenance are typed. |
+| Planner authority | 8 | 8 | Stream selection, timing, capacities, protocol identity, prepared ownership and handoff limits are planned and fail closed; runtime consumers require exact materialized facts. |
+| DAG shape and compilation | 8 | 8 | VideoOnly validation enforces exact nodes, ports, edges, PID/PES/SDP cardinality and legacy-node absence; A/V and video runtime variants compile separately. |
+| Runtime scheduling | 8 | 8 | VideoOnly has one paced scheduler and shared protocol-output authority; A/V keeps the canonical scheduler, with exact queue budgets and source-clock liveness. |
+| A/V synchronization | 8 | 8 | Prepared RTSP selects a bounded common timestamp window and preserves packet provenance; all counted A/V routes completed without recovery, discontinuity, duplicate or production drop. |
+| Protocol outputs | 8 | 7 | Separate RTP, MPEG-TS/UDP and PT 33 MP2T RTP produce exact VideoOnly/A-V stream sets. Nine real RTSP/TCP routes prove publisher and reader signaling; VLC still reports route-dependent receiver warnings. |
+| Concurrency, lifecycle and RAII | 8 | 7 | Prepared transports and generic RTSP capture use move-only ownership, bounded replay, interrupt restoration and joined workers; final PID and port residue is zero. Reconnect/replacement concurrency is not exercised. |
+| Error semantics | 7 | 6 | Planning rejects missing, conflicting and undersized facts; runtime distinguishes clean drain, clock loss, cancellation and transient pressure. Fatal cancellation may intentionally purge bounded in-flight items. |
+| Performance and memory | 7 | 6 | Explicit packet/byte bounds prevent silent growth; typical CLI working set is about 185-221 MiB with bounded CUDA startup transients, but no multi-hour soak or throughput envelope is established. |
+| Observability | 5 | 4 | Runtime reports expose queues, workers, errors, drops, CPU, memory and drift. Evidence is detailed but remains distributed across local route directories rather than one machine-readable aggregate. |
+| Real-media verification | 7 | 7 | The canonical 120-second source passed all 56 formal chains: local 2, MPEG-TS/UDP input 9, raw RTP 36 and real RTSP/TCP wire 9, with VLC frames, exact drains and zero residue. |
+| Maintainability and documentation | 9 | 7 | Architecture, execution plan and concise completion evidence now describe the final topology and 56/56 matrix. Large units remain, notably the 1263-line realtime planner and 774-line VideoOnly shape validator. |
+| **Total** | **100** | **92** | **A: production-ready for the validated finite-stream matrix, with bounded maintainability and operational-coverage debt.** |
 
-## Review Verdict
+## Verdict
 
-**FINAL 94/100, A.** The clean build, five-route real-media/human matrix, and final affected-scope reruns passed after the finite transport handoff fix. Two independent final-head reviews reported no unresolved P0-P3 findings and explicitly found no hidden-error, fallback, unbounded-capture, or threshold-widening strategy.
+The branch establishes an explicit `MediaTranscodeStreamSet` contract across local, MPEG-TS/UDP, raw RTP and RTSP inputs without introducing fake audio or a second scheduling authority. The latest prepared RTSP handoff closes the planning-to-runtime read gap with one owned FFmpeg context, bounded same-socket capture, original-order replay, exact timestamp provenance and fail-closed transfer. True RTSP publisher and reader signaling is now verified for all nine output/stream-set routes; the earlier HTTP-listen runs are correctly supplemental and excluded from the 56-chain count.
 
-## Primary Risks
+## Main Deductions
 
-1. AAC still requires authoritative fmtp; bare RTP does not identify codec, PT, or clock rate.
-2. HEVC DONL/interleaving cannot be inferred authoritatively from bare RTP and is supported only under the planned SRST/no-DONL contract.
-3. Runtime parameter-set switching after startup is outside this delivery.
-4. Manual real-stream gates remain the regression system by repository policy.
-5. Long-duration repeated SSRC transitions and hostile datagram floods need additional soak evidence.
+1. Several orchestration and exact-shape translation units remain large; the 243-file change carries substantial review and future-change surface despite focused helper extraction.
+2. VLC retains route-dependent UDP TS continuity, RTP-loss, late-picture and teardown warnings. Production telemetry and continuous decoded frames are clean, but receiver interoperability is not warning-free.
+3. Verification covers finite 120-second streams, not multi-hour soak, RTSP reconnect, publisher replacement, hostile traffic or repeated generation/SSRC transitions.
+4. Prepared RTSP replay is explicitly bounded and fails closed, but operators must size packet and byte budgets for source rate plus planning latency.
+5. Acceptance evidence is concise in the tracked report but detailed raw telemetry remains fragmented under untracked local route directories.
+
+## Next Priorities
+
+1. Run multi-hour memory/queue soak and repeated RTSP disconnect, reconnect and publisher-replacement validation with the same production DAG telemetry.
+2. Split the realtime planner, builder and exact shape validation by input planning, runtime scheduling and output authority without duplicating policy.
+3. Investigate receiver continuity, RTP-loss and late-picture warnings with packet-level evidence while preserving the canonical scheduler.
+4. Consolidate per-route telemetry into a reviewable local summary artifact without introducing a committed automated-test system.
