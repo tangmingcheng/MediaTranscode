@@ -5,40 +5,22 @@
 #include "internal/graph/model/MediaRealtimeEdgePolicySet.h"
 #include "internal/graph/model/MediaThreadingPolicy.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
+#include "internal/graph/planner/MediaAudioPipelinePlanner.h"
 #include "internal/graph/planner/avsync/MediaAvGenerationTransitionPlan.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlan.h"
 #include "internal/graph/planner/avsync/MediaAvSyncOutputAdapterKind.h"
-#include "internal/graph/planner/realtime/MediaMpegTsRtpOutputPlan.h"
-#include "internal/graph/planner/realtime/MediaProjectMpegTsOutputPlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncAssemblyPlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncPlanningFacts.h"
-#include "internal/graph/planner/realtime/MediaScheduledRtpOutputPlan.h"
+#include "internal/graph/planner/realtime/MediaRealtimeInputPlanningProducts.h"
+#include "internal/graph/planner/realtime/MediaRealtimeProtocolOutputPlan.h"
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <variant>
 
 namespace media::ffmpeg::graph {
-
-enum class MediaRtpSdpSessionIdPolicy {
-    SharedNtpEpoch
-};
-
-enum class MediaRtpSdpSessionVersionPolicy {
-    ActivePlaybackGeneration
-};
-
-struct MediaSeparateRtpSdpRuntimePlan final {
-    std::string path;
-    std::string originUsername;
-    std::string sessionName;
-    MediaIpAddressFamily originAddressFamily;
-    std::string originNumericAddress;
-    std::string cname;
-    MediaRtpSdpSessionIdPolicy sessionIdPolicy;
-    MediaRtpSdpSessionVersionPolicy sessionVersionPolicy;
-};
 
 struct MediaAudioCorrectionReachabilityPlan final {
     int outputSampleRate;
@@ -53,26 +35,10 @@ struct MediaAudioCorrectionReachabilityPlan final {
                            const MediaAudioCorrectionReachabilityPlan&) = default;
 };
 
-struct MediaSeparateRtpOutputRuntimePlan final {
-    MediaScheduledRtpOutputPlan video;
-    MediaScheduledRtpOutputPlan audio;
-    MediaSeparateRtpSdpRuntimePlan sdp;
-};
-
-struct MediaMpegTsUdpOutputPlan final {
-    std::string url;
-    MediaOutputResourceKind resourceKind;
-    MediaMuxSessionKind muxSessionKind;
-};
-
-struct MediaProjectMpegTsRuntimeOutputPlan final {
-    MediaProjectMpegTsOutputPlan protocol;
-    MediaMuxSessionKind muxSessionKind;
-    std::variant<MediaMpegTsUdpOutputPlan,
-                 MediaMpegTsRtpOutputPlan> transport;
-};
-
 struct MediaRealtimeAvSyncRuntimePlan final {
+    MediaAudioPipelinePlan audioPipeline;
+    std::optional<MediaRealtimeRtpInputNodePlan> isolatedAudioInput;
+    MediaRealtimeAvSyncComponentBounds componentBounds;
     MediaAvSyncGroupKey groupKey;
     MediaAvSyncPlan synchronization;
     MediaRealtimeAvSyncAssemblyPlan assembly;
@@ -87,9 +53,5 @@ struct MediaRealtimeAvSyncRuntimePlan final {
     MediaRealtimeAvSyncPlanningFacts planningFacts;
     MediaAudioCorrectionReachabilityPlan audioCorrection;
 };
-
-::media::Result<MediaProjectMpegTsRuntimeOutputPlan>
-cloneMediaProjectMpegTsRuntimeOutputPlan(
-    const MediaProjectMpegTsRuntimeOutputPlan& source);
 
 } // namespace media::ffmpeg::graph

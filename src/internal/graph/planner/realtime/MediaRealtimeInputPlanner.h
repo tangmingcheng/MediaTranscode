@@ -37,7 +37,7 @@ public:
     static void applyNodePlans(
         const MediaRealtimeRtpTranscodeRequest& request,
         const MediaRealtimeRawInputPlan* raw,
-        MediaRealtimeRtpTranscodePlan& plan);
+        MediaRealtimeRtpTranscodePlanningDraft& plan);
     static ::media::Result<MediaPreparedRealtimeInputScan> prepare(
         const MediaRealtimeRtpTranscodeRequest& request,
         const MediaPipelinePlannerOptions& options,

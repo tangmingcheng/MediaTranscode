@@ -65,9 +65,9 @@ void ProjectMpegTsGenerationSessionState::
     if (session) session->abort();
     session.reset();
     outputPlan.reset();
-    epoch.reset();
-    group.reset();
-    plannedGroup.reset();
+    activation.reset();
+    plannedSession.reset();
+    streamSet.reset();
     nextTransportDeadline.reset();
     latestAcceptedEmission.reset();
     mediaTimelineStarted = false;
@@ -77,18 +77,21 @@ void ProjectMpegTsGenerationSessionState::
 
 ProjectMpegTsGenerationAuthority::ProjectMpegTsGenerationAuthority(
     std::shared_ptr<MediaProtocolOutputGenerationState> generationState,
-    std::shared_ptr<ProjectMpegTsGenerationSessionState> generationSession)
+    std::shared_ptr<ProjectMpegTsGenerationSessionState> generationSession,
+    std::shared_ptr<MediaProtocolOutputRuntimeAuthority> outputAuthority)
     : m_generationState(std::move(generationState))
     , m_generationSession(std::move(generationSession))
+    , m_outputAuthority(std::move(outputAuthority))
 {
 }
 
 ::media::Result<ProjectMpegTsGenerationAuthority>
 ProjectMpegTsGenerationAuthority::create(
     std::shared_ptr<MediaProtocolOutputGenerationState> generationState,
-    std::shared_ptr<ProjectMpegTsGenerationSessionState> generationSession)
+    std::shared_ptr<ProjectMpegTsGenerationSessionState> generationSession,
+    std::shared_ptr<MediaProtocolOutputRuntimeAuthority> outputAuthority)
 {
-    if (!generationState || !generationSession ||
+    if (!generationState || !generationSession || !outputAuthority ||
         generationState->sessionState().get() != generationSession.get()) {
         return ::media::Result<ProjectMpegTsGenerationAuthority>::failure(
             ::media::ErrorInfo::invalidArgument(
@@ -96,7 +99,8 @@ ProjectMpegTsGenerationAuthority::create(
     }
     return ::media::Result<ProjectMpegTsGenerationAuthority>::success(
         ProjectMpegTsGenerationAuthority(
-            std::move(generationState), std::move(generationSession)));
+            std::move(generationState), std::move(generationSession),
+            std::move(outputAuthority)));
 }
 
 const std::shared_ptr<MediaProtocolOutputGenerationState>&
@@ -111,15 +115,22 @@ ProjectMpegTsGenerationAuthority::generationSession() const noexcept
     return m_generationSession;
 }
 
+const std::shared_ptr<MediaProtocolOutputRuntimeAuthority>&
+ProjectMpegTsGenerationAuthority::outputAuthority() const noexcept
+{
+    return m_outputAuthority;
+}
+
 ProjectMpegTsMuxSessionAdapter::ProjectMpegTsMuxSessionAdapter(
     ProjectMpegTsGenerationAuthority authority)
     : m_generationState(authority.generationState())
     , m_generationSession(authority.generationSession())
-    , m_plannedGroup(m_generationSession->plannedGroup)
+    , m_outputAuthority(authority.outputAuthority())
+    , m_plannedSession(m_generationSession->plannedSession)
+    , m_streamSet(m_generationSession->streamSet)
     , m_state(m_generationSession->state)
     , m_outputPlan(m_generationSession->outputPlan)
-    , m_epoch(m_generationSession->epoch)
-    , m_group(m_generationSession->group)
+    , m_activation(m_generationSession->activation)
     , m_session(m_generationSession->session)
     , m_rtpContinuity(m_generationSession->rtpContinuity)
     , m_nextTransportDeadline(
@@ -182,27 +193,30 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
         return fail(invalid(
             "project MPEG-TS mux session requires a typed runtime plan"));
     }
-    auto group = context.findAvSyncGroup(runtimePlan->group());
-    if (!group) {
+    if (!m_outputAuthority ||
+        runtimePlan->sessionKey() != m_outputAuthority->sessionKey() ||
+        runtimePlan->streamSet() != m_outputAuthority->streamSet()) {
         return fail(invalid(
-            "project MPEG-TS mux runtime plan sync group is not registered"));
+            "project MPEG-TS mux runtime plan authority is not registered"));
     }
     std::optional<::media::ErrorInfo> activationFailure;
     {
         auto permitted = m_generationState->permitActivatedGeneration(
-            *group, runtimePlan->epoch().generation,
-            runtimePlan->completedTransitionSequence());
+            *m_outputAuthority, runtimePlan->activation().generation,
+            runtimePlan->activation().completedTransitionSequence);
         if (!permitted) return fail(permitted.error());
-        if (m_epoch || m_group || m_outputPlan || m_session) {
+        if (m_activation || m_plannedSession || m_streamSet ||
+            m_outputPlan || m_session) {
             activationFailure = invalid(
                 "project MPEG-TS mux session rejects an uncleared runtime generation");
         } else {
-            m_plannedGroup = runtimePlan->group();
+            m_plannedSession = runtimePlan->sessionKey();
+            m_streamSet = runtimePlan->streamSet();
             m_outputPlan = runtimePlan->sharedOutputPlan();
-            m_epoch = runtimePlan->epoch();
-            m_group = runtimePlan->group();
+            m_activation = runtimePlan->activation();
             m_generation.store(
-                runtimePlan->epoch().generation, std::memory_order_release);
+                runtimePlan->activation().generation,
+                std::memory_order_release);
         }
     }
     if (activationFailure) return fail(std::move(*activationFailure));
@@ -304,17 +318,35 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
 }
 
 ::media::Status ProjectMpegTsMuxSessionAdapter::tryActivate(
-    MediaGraphExecutionContext& context)
+    MediaGraphExecutionContext&)
 {
-    std::optional<MediaAvSyncGroupKey> plannedGroup;
+    std::optional<MediaProtocolOutputSessionKey> plannedSession;
+    std::optional<MediaTranscodeStreamSet> streamSet;
     std::shared_ptr<const MediaProjectMpegTsRuntimeOutputPlan> outputPlan;
     bool ready = false;
+    bool shapeMismatch = false;
     {
         auto mutation = m_generationState->reserveSessionMutation();
-        plannedGroup = m_plannedGroup;
+        plannedSession = m_plannedSession;
+        streamSet = m_streamSet;
         outputPlan = m_outputPlan;
-        ready = m_plannedGroup && m_outputPlan &&
-                m_videoConfig && m_audioConfig;
+        if (plannedSession && streamSet && outputPlan) {
+            const bool videoOnlyProgram =
+                outputPlan->protocol.muxPlan().videoOnlyProgram() != nullptr;
+            shapeMismatch =
+                (*streamSet == MediaTranscodeStreamSet::VideoOnly) !=
+                    videoOnlyProgram ||
+                (*streamSet == MediaTranscodeStreamSet::VideoOnly &&
+                 static_cast<bool>(m_audioConfig));
+            ready = m_videoConfig &&
+                (*streamSet == MediaTranscodeStreamSet::VideoOnly
+                     ? !m_audioConfig
+                     : static_cast<bool>(m_audioConfig));
+        }
+    }
+    if (shapeMismatch) {
+        return fail(invalid(
+            "project MPEG-TS mux stream set conflicts with its typed program/configuration"));
     }
     if (!ready) {
         return ::media::Status::success();
@@ -338,15 +370,21 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
             }
         }
     }
-    auto group = context.findAvSyncGroup(*plannedGroup);
-    if (!group) {
+    if (!m_outputAuthority || !plannedSession ||
+        m_outputAuthority->sessionKey() != *plannedSession ||
+        !streamSet || m_outputAuthority->streamSet() != *streamSet) {
         return fail(::media::ErrorInfo::notInitialized(
-            "project MPEG-TS mux session A/V sync group is not registered"));
+            "project MPEG-TS mux session output authority is not registered"));
     }
+    const auto& sharedNtp =
+        std::holds_alternative<MediaMpegTsRtpOutputPlan>(
+            outputPlan->transport)
+        ? m_outputAuthority->sharedNtpEpoch()
+        : std::shared_ptr<const MediaSharedNtpEpoch>{};
     auto transportReady =
         ProjectMpegTsDatagramSinkFactory::bindingsReady(
             outputPlan->protocol.muxPlan(),
-            group->sharedNtpEpoch(), m_sink.get());
+            sharedNtp, m_sink.get());
     if (!transportReady) return fail(transportReady.error());
     if (!transportReady.value()) {
         return ::media::Status::success();
@@ -366,69 +404,91 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
     }
     std::optional<::media::ErrorInfo> failure;
     {
-        auto current = m_generationState->reserveCommit(*group, generation);
+        auto current = m_generationState->reserveCommit(
+            *m_outputAuthority, generation);
         if (!current) {
             return current.error().code == ::media::ErrorCode::Cancelled
                 ? ::media::Status::success()
                 : fail(current.error());
         }
-        if (m_state != State::Acquiring || !m_outputPlan || !m_epoch ||
-            !m_group || !m_plannedGroup || !m_videoConfig ||
-            !m_audioConfig) {
+        if (m_state != State::Acquiring || !m_outputPlan || !m_activation ||
+            !m_streamSet || !m_plannedSession || !m_videoConfig ||
+            (*m_streamSet == MediaTranscodeStreamSet::AudioVideo &&
+             !m_audioConfig)) {
             return ::media::Status::success();
         }
-        if (m_epoch->generation != generation ||
-            *m_group != *m_plannedGroup) {
+        if (m_activation->generation != generation ||
+            *m_plannedSession != m_outputAuthority->sessionKey() ||
+            *m_streamSet != m_outputAuthority->streamSet()) {
             failure = invalid(
                 "project MPEG-TS mux session differs from its current authority");
         } else {
             const auto& muxPlan = m_outputPlan->protocol.muxPlan();
             auto emissionOrigin =
-                mediaTsTransportEmissionOrigin(muxPlan, *m_epoch);
+                mediaTsTransportEmissionOrigin(muxPlan, *m_activation);
             const auto* videoBuffer =
                 dynamic_cast<const FFmpegCodecParametersBuffer*>(
                     m_videoConfig.get());
-            const auto* audioBuffer =
-                dynamic_cast<const FFmpegCodecParametersBuffer*>(
-                    m_audioConfig.get());
+            const auto* audioBuffer = m_audioConfig
+                ? dynamic_cast<const FFmpegCodecParametersBuffer*>(
+                      m_audioConfig.get())
+                : nullptr;
             if (!emissionOrigin) {
                 failure = emissionOrigin.error();
             } else {
                 auto video = MediaTsFfmpegStreamConfigMaterializer::video(
                     muxPlan, *videoBuffer->parameters());
-                auto audio = MediaTsFfmpegStreamConfigMaterializer::audio(
-                    muxPlan, *audioBuffer->parameters());
                 if (!video) {
                     failure = video.error();
-                } else if (!audio) {
-                    failure = audio.error();
                 } else {
-                    auto datagramSink =
-                        ProjectMpegTsDatagramSinkFactory::create(
-                            *m_outputPlan, muxPlan, *m_epoch,
-                            group->sharedNtpEpoch(), m_rtpContinuity,
-                            m_sink.get());
-                    if (!datagramSink) {
-                        failure = datagramSink.error();
-                    } else {
-                        auto session = MediaTsMuxSession::create(
-                            MediaTsMuxSession::Binding{
-                                muxPlan, *m_epoch,
-                                std::move(video).value(),
-                                std::move(audio).value(),
-                                std::move(datagramSink).value(),
-                                current.value().
-                                    startsAfterGenerationTransition()});
-                        if (!session) {
-                            failure = session.error();
-                        } else if (auto started =
-                                       session.value()->start(
-                                           emissionOrigin.value());
-                                   !started) {
-                            failure = started.error();
+                    std::optional<MediaTsMaterializedAudioConfig> audio;
+                    if (*m_streamSet ==
+                        MediaTranscodeStreamSet::AudioVideo) {
+                        auto materialized =
+                            MediaTsFfmpegStreamConfigMaterializer::audio(
+                                muxPlan, *audioBuffer->parameters());
+                        if (!materialized) {
+                            failure = materialized.error();
                         } else {
-                            m_session = std::move(session).value();
-                            m_state = State::Active;
+                            audio.emplace(std::move(materialized).value());
+                        }
+                    }
+                    if (!failure) {
+                        auto datagramSink =
+                            ProjectMpegTsDatagramSinkFactory::create(
+                                *m_outputPlan, muxPlan, *m_activation,
+                                sharedNtp, m_rtpContinuity,
+                                m_sink.get());
+                        if (!datagramSink) {
+                            failure = datagramSink.error();
+                        } else {
+                            MediaTsMuxSession::MaterializedStreams streams =
+                                MediaTsMuxSession::VideoOnlyStreams{
+                                    std::move(video).value()};
+                            if (audio) {
+                                streams = MediaTsMuxSession::AudioVideoStreams{
+                                    std::get<MediaTsMuxSession::VideoOnlyStreams>(
+                                        std::move(streams)).video,
+                                    std::move(*audio)};
+                            }
+                            auto session = MediaTsMuxSession::create(
+                                MediaTsMuxSession::Binding{
+                                    muxPlan, *m_activation,
+                                    std::move(streams),
+                                    std::move(datagramSink).value(),
+                                    current.value().
+                                        startsAfterGenerationTransition()});
+                            if (!session) {
+                                failure = session.error();
+                            } else if (auto started =
+                                           session.value()->start(
+                                               emissionOrigin.value());
+                                       !started) {
+                                failure = started.error();
+                            } else {
+                                m_session = std::move(session).value();
+                                m_state = State::Active;
+                            }
                         }
                     }
                 }
@@ -450,9 +510,10 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
     }
     const auto view = accessUnit->view();
     if (!view) return ::media::Status::failure(view.error());
-    if (!m_epoch || view.value().generation != m_epoch->generation) {
+    if (!m_activation ||
+        view.value().generation != m_activation->generation) {
         return ::media::Status::failure(invalid(
-            "project MPEG-TS access unit generation does not match its playback epoch"));
+            "project MPEG-TS access unit generation does not match its activation"));
     }
     auto lead = view.value().dispatchOnMaster.checkedSubtract(
         view.value().emitOnMaster);
@@ -489,23 +550,21 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
         return fail(invalid(
             "Project MPEG-TS mux session rejects a future access-unit generation"));
     }
-    std::optional<MediaAvSyncGroupKey> plannedGroup;
+    std::optional<MediaProtocolOutputSessionKey> plannedSession;
     {
         auto mutation = m_generationState->reserveSessionMutation();
-        plannedGroup = m_plannedGroup;
+        plannedSession = m_plannedSession;
     }
-    if (!plannedGroup) {
+    if (!plannedSession || !m_outputAuthority ||
+        *plannedSession != m_outputAuthority->sessionKey()) {
         return fail(::media::ErrorInfo::notInitialized(
             "Project MPEG-TS write requires active planned generation authority"));
     }
-    auto group = context.findAvSyncGroup(*plannedGroup);
-    if (!group) return fail(::media::ErrorInfo::notInitialized(
-        "project MPEG-TS mux session A/V sync group is not registered"));
     std::optional<::media::ErrorInfo> failure;
     {
         auto reservation =
             m_generationState->reserveCommit(
-                *group, view.value().generation);
+                *m_outputAuthority, view.value().generation);
         if (!reservation) {
             return reservation.error().code ==
                     ::media::ErrorCode::Cancelled
@@ -537,20 +596,20 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
 ::media::Result<MediaMuxSessionPollResult>
 ProjectMpegTsMuxSessionAdapter::poll(MediaGraphExecutionContext& context)
 {
-    std::optional<MediaAvSyncGroupKey> plannedGroup;
+    std::optional<MediaProtocolOutputSessionKey> plannedSession;
     {
         auto mutation = m_generationState->reserveSessionMutation();
-        plannedGroup = m_plannedGroup;
+        plannedSession = m_plannedSession;
     }
-    if (!plannedGroup) {
+    if (!plannedSession) {
         return ::media::Result<MediaMuxSessionPollResult>::success(
             {false, std::nullopt});
     }
-    auto runtime = context.findAvSyncGroup(*plannedGroup);
-    if (!runtime) {
+    if (!m_outputAuthority ||
+        *plannedSession != m_outputAuthority->sessionKey()) {
         return ::media::Result<MediaMuxSessionPollResult>::failure(
             ::media::ErrorInfo::notInitialized(
-                "project MPEG-TS mux session A/V sync group is not registered"));
+                "project MPEG-TS mux session output authority is not registered"));
     }
     const auto generation = m_generation.load(std::memory_order_acquire);
     if (generation == 0) {
@@ -578,7 +637,8 @@ ProjectMpegTsMuxSessionAdapter::poll(MediaGraphExecutionContext& context)
     auto pollReserved = [&]()
         -> ::media::Result<MediaMuxSessionPollResult> {
         auto current =
-            m_generationState->reserveCommit(*runtime, generation);
+            m_generationState->reserveCommit(
+                *m_outputAuthority, generation);
         if (!current) {
             return current.error().code == ::media::ErrorCode::Cancelled
                 ? ::media::Result<MediaMuxSessionPollResult>::success(
@@ -594,7 +654,7 @@ ProjectMpegTsMuxSessionAdapter::poll(MediaGraphExecutionContext& context)
             return ::media::Result<MediaMuxSessionPollResult>::success(
                 {false, std::nullopt});
         }
-        if (m_state != State::Active || !m_session || !m_group) {
+        if (m_state != State::Active || !m_session || !m_activation) {
             return ::media::Result<MediaMuxSessionPollResult>::failure(
                 ::media::ErrorInfo::notInitialized(
                     "project MPEG-TS mux session cannot poll outside its active state"));
@@ -613,7 +673,7 @@ ProjectMpegTsMuxSessionAdapter::poll(MediaGraphExecutionContext& context)
             return ::media::Result<MediaMuxSessionPollResult>::success(
                 {false, std::nullopt});
         }
-        auto now = runtime->clock()->now();
+        auto now = m_outputAuthority->now();
         if (!now) {
             return ::media::Result<MediaMuxSessionPollResult>::failure(
                 now.error());
@@ -627,8 +687,7 @@ ProjectMpegTsMuxSessionAdapter::poll(MediaGraphExecutionContext& context)
         if (now.value() < safeDeadline.value()) {
             return ::media::Result<MediaMuxSessionPollResult>::success({
                 false,
-                MediaNodeProcessResult::DeadlineWait{
-                    *m_group, safeDeadline.value()}});
+                m_outputAuthority->deadlineWait(safeDeadline.value())});
         }
         auto polled = m_session->poll(*m_latestAcceptedEmission);
         if (!polled) {
@@ -644,8 +703,7 @@ ProjectMpegTsMuxSessionAdapter::poll(MediaGraphExecutionContext& context)
         }
         return ::media::Result<MediaMuxSessionPollResult>::success({
             polled.value().packetsWritten != 0,
-            MediaNodeProcessResult::DeadlineWait{
-                *m_group, nextSafeDeadline.value()}});
+            m_outputAuthority->deadlineWait(nextSafeDeadline.value())});
     };
     auto result = pollReserved();
     if (result) return result;
@@ -683,18 +741,20 @@ bool ProjectMpegTsMuxSessionAdapter::bindingsReady() const noexcept
 ::media::Status ProjectMpegTsMuxSessionAdapter::finish(
     MediaGraphExecutionContext& context)
 {
-    std::optional<MediaAvSyncGroupKey> plannedGroup;
+    std::optional<MediaProtocolOutputSessionKey> plannedSession;
     {
         auto mutation = m_generationState->reserveSessionMutation();
-        plannedGroup = m_plannedGroup;
+        plannedSession = m_plannedSession;
     }
-    if (!plannedGroup) {
+    if (!plannedSession) {
         return fail(::media::ErrorInfo::notInitialized(
             "project MPEG-TS mux session cannot finish before complete binding"));
     }
-    auto group = context.findAvSyncGroup(*plannedGroup);
-    if (!group) return fail(::media::ErrorInfo::notInitialized(
-        "project MPEG-TS mux session A/V sync group is not registered"));
+    if (!m_outputAuthority ||
+        *plannedSession != m_outputAuthority->sessionKey()) {
+        return fail(::media::ErrorInfo::notInitialized(
+            "project MPEG-TS mux session output authority is not registered"));
+    }
     const auto generation = m_generation.load(std::memory_order_acquire);
     if (generation == 0) {
         return fail(::media::ErrorInfo::notInitialized(
@@ -713,7 +773,8 @@ bool ProjectMpegTsMuxSessionAdapter::bindingsReady() const noexcept
     }
     std::optional<::media::ErrorInfo> failure;
     {
-        auto current = m_generationState->reserveCommit(*group, generation);
+        auto current = m_generationState->reserveCommit(
+            *m_outputAuthority, generation);
         if (!current) {
             if (current.error().code == ::media::ErrorCode::Cancelled) {
                 return ::media::Status::failure(current.error());
@@ -721,8 +782,9 @@ bool ProjectMpegTsMuxSessionAdapter::bindingsReady() const noexcept
             failure = current.error();
         } else if (m_failure) {
             failure = *m_failure;
-        } else if (m_state == State::Acquiring || !m_session || !m_epoch ||
-                   m_epoch->generation != generation) {
+        } else if (m_state == State::Acquiring || !m_session ||
+                   !m_activation ||
+                   m_activation->generation != generation) {
             failure = ::media::ErrorInfo::notInitialized(
                 "project MPEG-TS mux session cannot finish before complete binding");
         } else if (auto status = m_session->finish(); !status) {

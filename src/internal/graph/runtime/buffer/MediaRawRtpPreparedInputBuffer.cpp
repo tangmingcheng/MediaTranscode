@@ -24,7 +24,7 @@ MediaRawRtpPreparedInputBuffer::MediaRawRtpPreparedInputBuffer(
 
 MediaRawRtpPreparedInputBuffer::~MediaRawRtpPreparedInputBuffer()
 {
-    stopCapture();
+    abort();
     if (m_budgetReserved && m_prepared && m_prepared->byteBudget) {
         (void)m_prepared->byteBudget->release(m_bufferedBytes);
         m_budgetReserved = false;
@@ -263,31 +263,46 @@ MediaRawRtpPreparedInputBuffer::receive(int timeoutMs)
 ::media::Status MediaRawRtpPreparedInputBuffer::stop() noexcept
 {
     m_captureThread.request_stop();
-    ::media::Status transportStatus = ::media::Status::success();
-    {
-        std::scoped_lock lock(m_mutex);
-        m_stopped = true;
-        if (m_prepared && m_prepared->transport.isOpen()) {
-            transportStatus = m_prepared->transport.stop();
-        }
-    }
-    m_ready.notify_all();
+    MediaRtpUdpTransport* transport = markStopped();
+    auto transportStatus = transport
+        ? transport->stop()
+        : ::media::Status::failure(
+            ::media::ErrorInfo::notInitialized(
+                "raw RTP prepared input has no owned transport"));
     if (m_captureThread.joinable()) m_captureThread.join();
     return transportStatus;
+}
+
+::media::Status MediaRawRtpPreparedInputBuffer::interruptReceive() noexcept
+{
+    MediaRtpUdpTransport* transport = markStopped();
+    if (!transport) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::notInitialized(
+                "raw RTP prepared input has no owned transport"));
+    }
+    return transport->interruptReceive();
 }
 
 void MediaRawRtpPreparedInputBuffer::abort() noexcept
 {
     m_captureThread.request_stop();
+    MediaRtpUdpTransport* transport = markStopped();
+    if (transport) (void)transport->abort();
+    if (m_captureThread.joinable()) m_captureThread.join();
+}
+
+MediaRtpUdpTransport*
+MediaRawRtpPreparedInputBuffer::markStopped() noexcept
+{
+    MediaRtpUdpTransport* transport = nullptr;
     {
         std::scoped_lock lock(m_mutex);
         m_stopped = true;
-        if (m_prepared && m_prepared->transport.isOpen()) {
-            (void)m_prepared->transport.abort();
-        }
+        if (m_prepared) transport = &m_prepared->transport;
     }
     m_ready.notify_all();
-    if (m_captureThread.joinable()) m_captureThread.join();
+    return transport;
 }
 
 void MediaRawRtpPreparedInputBuffer::capture(
@@ -347,21 +362,6 @@ void MediaRawRtpPreparedInputBuffer::stopCaptureForReplay() noexcept
 {
     if (!m_captureThread.joinable()) return;
     m_captureThread.request_stop();
-    m_captureThread.join();
-}
-
-void MediaRawRtpPreparedInputBuffer::stopCapture() noexcept
-{
-    if (!m_captureThread.joinable()) return;
-    m_captureThread.request_stop();
-    {
-        std::scoped_lock lock(m_mutex);
-        m_stopped = true;
-        if (m_prepared && m_prepared->transport.isOpen()) {
-            (void)m_prepared->transport.abort();
-        }
-    }
-    m_ready.notify_all();
     m_captureThread.join();
 }
 

@@ -12,7 +12,6 @@ struct MediaRealtimeOutputUrls final {
     std::string video;
     std::string audio;
     std::string muxed;
-    std::string muxedFormat;
 };
 
 class MediaRealtimeOutputPolicyPlanner final {
@@ -22,7 +21,7 @@ public:
     static ::media::Status apply(
         const MediaRealtimeRtpTranscodeRequest& request,
         const MediaRealtimeOutputUrls& urls,
-        MediaRealtimeRtpTranscodePlan& plan,
+        MediaRealtimeRtpTranscodePlanCore& plan,
         MediaRealtimeOutputPlanningDraft& output);
 
 private:

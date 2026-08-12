@@ -15,13 +15,15 @@ namespace media::ffmpeg::graph {
 
 class MediaAvGenerationPurgeTarget;
 class MediaProtocolOutputGenerationState;
+class MediaProtocolOutputRuntimeAuthority;
 
 class FileMuxNode final : public FFmpegNodeRuntime {
 public:
     explicit FileMuxNode(MediaNodeId nodeId);
     FileMuxNode(
         MediaNodeId nodeId,
-        std::shared_ptr<MediaProtocolOutputGenerationState> generationState);
+        std::shared_ptr<MediaProtocolOutputGenerationState> generationState,
+        std::shared_ptr<MediaProtocolOutputRuntimeAuthority> outputAuthority);
     FileMuxNode(MediaNodeId nodeId,
                 std::unique_ptr<MediaMuxSessionFactory> sessionFactory);
     static MediaNodeKind staticKind() noexcept;

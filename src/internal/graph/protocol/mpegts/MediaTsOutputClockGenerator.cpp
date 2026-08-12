@@ -190,26 +190,27 @@ void MediaTsPreparedPcrClock::cancel() noexcept
 
 ::media::Result<MediaTsOutputClockGenerator> MediaTsOutputClockGenerator::create(
     MediaTsOutputClockPolicy policy,
-    MediaPlaybackEpoch epoch)
+    MediaProtocolOutputActivation activation)
 {
     if (policy.pcrInterval.nanoseconds() <= 0 ||
         policy.maximumPcrGap.nanoseconds() <= policy.pcrInterval.nanoseconds() ||
         policy.maximumPcrJitter.nanoseconds() <= 0 ||
         policy.maximumPcrJitter.nanoseconds() >= policy.pcrInterval.nanoseconds() ||
         policy.timestampTimeBaseNumerator != 1 ||
-        policy.timestampTimeBaseDenominator != 90'000 || epoch.generation == 0) {
+        policy.timestampTimeBaseDenominator != 90'000 ||
+        activation.generation == 0) {
         return ::media::Result<MediaTsOutputClockGenerator>::failure(
             invalid("policy is incomplete or unsupported").error());
     }
     return ::media::Result<MediaTsOutputClockGenerator>::success(
-        MediaTsOutputClockGenerator(std::move(policy), epoch));
+        MediaTsOutputClockGenerator(std::move(policy), activation));
 }
 
 MediaTsOutputClockGenerator::MediaTsOutputClockGenerator(
     MediaTsOutputClockPolicy policy,
-    MediaPlaybackEpoch epoch)
+    MediaProtocolOutputActivation activation)
     : m_policy(std::move(policy))
-    , m_epoch(epoch)
+    , m_activation(activation)
     , m_control(std::make_shared<MediaTsOutputClockControlState>())
 {
 }
@@ -217,7 +218,7 @@ MediaTsOutputClockGenerator::MediaTsOutputClockGenerator(
 ::media::Status MediaTsOutputClockGenerator::validateGeneration(
     std::uint64_t generation) const
 {
-    return generation == m_epoch.generation
+    return generation == m_activation.generation
         ? ::media::Status::success()
         : invalid("generation does not match playback epoch");
 }
@@ -225,9 +226,9 @@ MediaTsOutputClockGenerator::MediaTsOutputClockGenerator(
 ::media::Result<std::int64_t> MediaTsOutputClockGenerator::outputNanoseconds(
     MediaRunningTime masterTime) const
 {
-    auto delta = masterTime.checkedSubtract(m_epoch.masterRelease);
+    auto delta = masterTime.checkedSubtract(m_activation.masterRelease);
     if (!delta) return ::media::Result<std::int64_t>::failure(delta.error());
-    auto output = m_epoch.sourceStart.checkedAdd(delta.value());
+    auto output = m_activation.sourceStart.checkedAdd(delta.value());
     if (!output) return ::media::Result<std::int64_t>::failure(output.error());
     return ::media::Result<std::int64_t>::success(output.value().nanoseconds());
 }
@@ -345,7 +346,7 @@ MediaTsOutputClockGenerator::preparePcr(
         return ::media::Result<MediaTsPreparedPcrClock>::failure(
             invalid("already has a pending transaction or exhausted revisions").error());
     }
-    MediaRunningTime expected = m_epoch.masterRelease;
+    MediaRunningTime expected = m_activation.masterRelease;
     if (m_control->lastPcrMasterTime) {
         auto next = m_control->lastPcrMasterTime->checkedAdd(m_policy.pcrInterval);
         if (!next) {
@@ -395,7 +396,8 @@ MediaTsOutputClockGenerator::preparePcr(
     if (auto status = validateGeneration(planned.generation); !status) {
         return status;
     }
-    auto elapsed = planned.masterTime.checkedSubtract(m_epoch.masterRelease);
+    auto elapsed = planned.masterTime.checkedSubtract(
+        m_activation.masterRelease);
     if (!elapsed || elapsed.value().nanoseconds() < 0 ||
         elapsed.value().nanoseconds() % m_policy.pcrInterval.nanoseconds() != 0) {
         return invalid("serialized PCR sample is outside the planned cadence");

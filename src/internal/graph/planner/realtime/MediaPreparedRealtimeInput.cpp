@@ -12,6 +12,12 @@ MediaPreparedRealtimeInput::MediaPreparedRealtimeInput(
 }
 
 MediaPreparedRealtimeInput::MediaPreparedRealtimeInput(
+    std::unique_ptr<MediaPreparedGenericInputBuffer> buffer)
+    : m_preparedGenericBuffer(std::move(buffer))
+{
+}
+
+MediaPreparedRealtimeInput::MediaPreparedRealtimeInput(
     std::unique_ptr<MediaTsPreparedInputBuffer> buffer)
     : m_tsBuffer(std::move(buffer))
 {
@@ -32,6 +38,15 @@ MediaPreparedRealtimeInput::MediaPreparedRealtimeInput(
     }
     return ::media::Result<MediaPreparedRealtimeInput>::success(
         MediaPreparedRealtimeInput(std::move(buffer).value()));
+}
+
+::media::Result<MediaPreparedRealtimeInput> MediaPreparedRealtimeInput::create(
+    MediaPreparedGenericInput input)
+{
+    auto buffer = std::make_unique<MediaPreparedGenericInputBuffer>(
+        std::move(input));
+    return ::media::Result<MediaPreparedRealtimeInput>::success(
+        MediaPreparedRealtimeInput(std::move(buffer)));
 }
 
 ::media::Result<MediaPreparedRealtimeInput>
@@ -63,13 +78,33 @@ MediaPreparedRealtimeInput::createRawRtp(MediaPreparedRawRtpInput prepared)
 bool MediaPreparedRealtimeInput::valid() const noexcept
 {
     return (m_genericBuffer && m_genericBuffer->context() &&
-            m_genericBuffer->inputSnapshotComplete()) || m_tsBuffer ||
+            m_genericBuffer->inputSnapshotComplete()) ||
+           (m_preparedGenericBuffer &&
+            m_preparedGenericBuffer->inputSnapshotComplete()) || m_tsBuffer ||
            m_rawRtpBuffer;
+}
+
+const MediaPreparedGenericInputPlan*
+MediaPreparedRealtimeInput::genericPlan() const noexcept
+{
+    return m_preparedGenericBuffer ? &m_preparedGenericBuffer->plan() : nullptr;
+}
+
+const MediaPreparedGenericInputEvidence*
+MediaPreparedRealtimeInput::genericEvidence() const noexcept
+{
+    return m_preparedGenericBuffer ? &m_preparedGenericBuffer->evidence() : nullptr;
+}
+
+const MediaAvSyncStartupPolicy*
+MediaPreparedRealtimeInput::genericStartup() const noexcept
+{
+    return m_preparedGenericBuffer ? &m_preparedGenericBuffer->startup() : nullptr;
 }
 
 std::optional<MediaPreparedRealtimeInputKind> MediaPreparedRealtimeInput::kind() const noexcept
 {
-    if (m_genericBuffer) return MediaPreparedRealtimeInputKind::Generic;
+    if (m_genericBuffer || m_preparedGenericBuffer) return MediaPreparedRealtimeInputKind::Generic;
     if (m_tsBuffer) return MediaPreparedRealtimeInputKind::MpegTs;
     if (m_rawRtpBuffer) return MediaPreparedRealtimeInputKind::RawRtp;
     return std::nullopt;
@@ -78,6 +113,7 @@ std::optional<MediaPreparedRealtimeInputKind> MediaPreparedRealtimeInput::kind()
 const FFmpegInputStreamSnapshot* MediaPreparedRealtimeInput::inputStreamSnapshot(int streamIndex) const noexcept
 {
     if (m_genericBuffer) return m_genericBuffer->inputStreamSnapshot(streamIndex);
+    if (m_preparedGenericBuffer) return m_preparedGenericBuffer->inputStreamSnapshot(streamIndex);
     if (m_rawRtpBuffer) return nullptr;
     if (!m_tsBuffer) return nullptr;
     const auto& snapshots = m_tsBuffer->streamSnapshots();
@@ -118,6 +154,10 @@ const FFmpegInputStreamSnapshot* MediaPreparedRealtimeInput::inputStreamSnapshot
 ::media::Result<MediaBufferRef> MediaPreparedRealtimeInput::releaseBuffer()
 {
     if (m_genericBuffer) return ::media::Result<MediaBufferRef>::success(MediaBufferRef(m_genericBuffer.release()));
+    if (m_preparedGenericBuffer) {
+        return ::media::Result<MediaBufferRef>::success(
+            MediaBufferRef(m_preparedGenericBuffer.release()));
+    }
     if (m_tsBuffer) {
         if (auto materialized = m_tsBuffer->materializeSession(); !materialized) {
             return ::media::Result<MediaBufferRef>::failure(materialized.error());

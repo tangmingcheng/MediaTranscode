@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/graph/model/MediaTranscodeStreamSet.h"
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/protocol/sdp/MediaRtpSdpDescription.h"
 #include "internal/graph/runtime/filesystem/MediaAtomicUtf8FilePublisher.h"
@@ -11,12 +12,11 @@
 
 namespace media::ffmpeg::graph {
 
-class MediaRtpSenderDescriptionBuffer;
-
-class MediaDualMediaSdpPublisherNode final : public FFmpegNodeRuntime {
+class MediaRtpSdpPublisherNode final : public FFmpegNodeRuntime {
 public:
-    static ::media::Result<std::unique_ptr<MediaDualMediaSdpPublisherNode>> create(
+    static ::media::Result<std::unique_ptr<MediaRtpSdpPublisherNode>> create(
         MediaNodeId nodeId,
+        MediaTranscodeStreamSet streamSet,
         std::string path,
         std::unique_ptr<MediaAtomicFileReplacePort> replacePort);
 
@@ -31,8 +31,9 @@ protected:
         MediaGraphExecutionContext& context) override;
 
 private:
-    MediaDualMediaSdpPublisherNode(
+    MediaRtpSdpPublisherNode(
         MediaNodeId nodeId,
+        bool videoOnly,
         std::string path,
         std::unique_ptr<MediaAtomicFileReplacePort> replacePort);
 
@@ -43,9 +44,11 @@ private:
         MediaScheduledStream expectedStream,
         MediaBufferRef& destination);
     ::media::Result<MediaNodeProcessResult> publish();
-    ::media::Result<MediaNodeProcessResult> failTerminal(::media::ErrorInfo error);
+    ::media::Result<MediaNodeProcessResult> failTerminal(
+        ::media::ErrorInfo error);
     void resetState() noexcept;
 
+    bool m_videoOnly;
     std::string m_path;
     std::unique_ptr<MediaAtomicFileReplacePort> m_replacePort;
     MediaBufferRef m_video;

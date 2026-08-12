@@ -2,7 +2,7 @@
 
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
-#include "internal/graph/sync/MediaAvSyncGroupKey.h"
+#include "internal/graph/protocol/MediaProtocolOutputRuntimeAuthority.h"
 #include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
 
 #include <memory>
@@ -13,7 +13,6 @@
 namespace media::ffmpeg::graph {
 
 class MediaAvGenerationPurgeTarget;
-class MediaAvSyncGroupRuntime;
 class MediaProjectMpegTsPlanSourceGenerationState final
     : public MediaProtocolOutputGenerationSessionState {
 private:
@@ -33,9 +32,13 @@ private:
 class MediaProjectMpegTsPlanSourceNode final : public FFmpegNodeRuntime {
 public:
     MediaProjectMpegTsPlanSourceNode(MediaNodeId nodeId,
-                                     MediaAvSyncGroupKey group,
+                                     MediaProtocolOutputSessionKey sessionKey,
+                                     MediaTranscodeStreamSet streamSet,
                                      MediaProjectMpegTsRuntimeOutputPlan
-                                         outputPlan);
+                                         outputPlan,
+                                     std::shared_ptr<
+                                         MediaProtocolOutputRuntimeAuthority>
+                                         authority);
     static MediaNodeKind staticKind() noexcept;
     static constexpr std::string_view generationPurgeIdentity() noexcept
     {
@@ -58,9 +61,10 @@ protected:
 private:
     void resetState() noexcept;
 
-    MediaAvSyncGroupKey m_group;
+    MediaProtocolOutputSessionKey m_sessionKey;
+    MediaTranscodeStreamSet m_streamSet;
     std::shared_ptr<const MediaProjectMpegTsRuntimeOutputPlan> m_outputPlan;
-    std::shared_ptr<MediaAvSyncGroupRuntime> m_syncGroup;
+    std::shared_ptr<MediaProtocolOutputRuntimeAuthority> m_authority;
     std::shared_ptr<MediaProjectMpegTsPlanSourceGenerationState>
         m_generationSession;
     std::shared_ptr<MediaProtocolOutputGenerationState> m_generationState;

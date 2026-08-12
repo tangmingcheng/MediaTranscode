@@ -4,6 +4,7 @@
 #include "internal/graph/protocol/rtp/MediaRtpClockGroupPolicy.h"
 #include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
 #include "internal/graph/time/MediaRunningTime.h"
+#include "internal/graph/planner/realtime/MediaPreparedGenericInputPlan.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -46,6 +47,8 @@ struct MediaDemuxTimestampInputClockAssemblyPlan final {
     std::string videoSourceIdentity;
     std::string audioSourceIdentity;
     MediaRunningTime canonicalTargetEpoch;
+    MediaPreparedGenericInputPlan preparedInput;
+    MediaPreparedGenericInputEvidence preparedEvidence;
     friend bool operator==(
         const MediaDemuxTimestampInputClockAssemblyPlan& left,
         const MediaDemuxTimestampInputClockAssemblyPlan& right)
@@ -59,7 +62,9 @@ struct MediaDemuxTimestampInputClockAssemblyPlan final {
             left.initialGeneration == right.initialGeneration &&
             left.videoSourceIdentity == right.videoSourceIdentity &&
             left.audioSourceIdentity == right.audioSourceIdentity &&
-            left.canonicalTargetEpoch == right.canonicalTargetEpoch;
+            left.canonicalTargetEpoch == right.canonicalTargetEpoch &&
+            left.preparedInput == right.preparedInput &&
+            left.preparedEvidence == right.preparedEvidence;
     }
 };
 

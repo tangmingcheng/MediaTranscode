@@ -142,8 +142,8 @@ const char* mediaGraphDiagnosticNodeKindName(MediaNodeKind kind) noexcept
     case MediaNodeKind::EncodedAudioCanonicalizer: return "EncodedAudioCanonicalizer";
     case MediaNodeKind::ScheduledOutputRouter: return "ScheduledOutputRouter";
     case MediaNodeKind::ScheduledRtpSender: return "ScheduledRtpSender";
-    case MediaNodeKind::DualMediaSdpPublisher: return "DualMediaSdpPublisher";
     case MediaNodeKind::MpegTsRtpSdpPublisher: return "MpegTsRtpSdpPublisher";
+    case MediaNodeKind::RtpSdpPublisher: return "RtpSdpPublisher";
     case MediaNodeKind::AvBoundReleaseExtractor: return "AvBoundReleaseExtractor";
     case MediaNodeKind::PacketMerge: return "PacketMerge";
     case MediaNodeKind::FileMux: return "FileMux";

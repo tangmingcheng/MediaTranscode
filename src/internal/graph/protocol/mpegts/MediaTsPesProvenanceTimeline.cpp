@@ -41,19 +41,27 @@ MediaTsPesProvenanceTimeline::MediaTsPesProvenanceTimeline(
 ::media::Status MediaTsPesProvenanceTimeline::trackPid(std::uint16_t pid)
 {
     if (pid == 0 || pid >= 0x1FFF) return invalid("PES provenance PID is not an elementary PID");
-    if (m_selectedPids) {
-        return m_trackedPids.contains(pid)
+    if (m_selection) {
+        if (m_selection->selectedPids.contains(pid)) {
+            return ::media::Status::success();
+        }
+        if (m_selection->knownPids.contains(pid)) {
+            return ::media::Status::success();
+        }
+        return m_selection->unexpectedPidPolicy ==
+                MediaTsUnexpectedElementaryPidPolicy::Ignore
             ? ::media::Status::success()
-            : invalid("PES provenance rejects a new PID after selection");
+            : invalid("PES provenance rejects an unexpected PID after selection");
     }
     m_trackedPids.insert(pid);
     return ::media::Status::success();
 }
 
 ::media::Status MediaTsPesProvenanceTimeline::configureSelectedPids(
-    std::span<const std::uint16_t> pids)
+    std::span<const std::uint16_t> pids,
+    MediaTsUnexpectedElementaryPidPolicy unexpectedPidPolicy)
 {
-    if (m_selectedPids) return invalid("PES provenance selected PIDs are already configured");
+    if (m_selection) return invalid("PES provenance selected PIDs are already configured");
     if (pids.empty()) return invalid("PES provenance selected PIDs must not be empty");
     std::unordered_set<std::uint16_t> selected;
     for (const auto pid : pids) {
@@ -64,7 +72,13 @@ MediaTsPesProvenanceTimeline::MediaTsPesProvenanceTimeline(
             return invalid("PES provenance selected PIDs must be unique");
         }
     }
-    m_selectedPids = std::move(selected);
+    std::erase_if(m_ranges, [&selected](const Range& range) {
+        return !selected.contains(range.pid);
+    });
+    auto knownPids = std::move(m_trackedPids);
+    m_trackedPids = selected;
+    m_selection = SelectionConfiguration{
+        std::move(selected), std::move(knownPids), unexpectedPidPolicy};
     return ::media::Status::success();
 }
 
@@ -189,7 +203,7 @@ MediaTsPesProvenanceTimeline::Range* MediaTsPesProvenanceTimeline::openRange(
 ::media::Status MediaTsPesProvenanceTimeline::replaySourceClockBoundaries(
     std::span<const std::uint64_t> byteOffsets)
 {
-    if (!m_selectedPids) {
+    if (!m_selection) {
         return invalid("PES provenance boundary replay requires selected PIDs");
     }
     MediaTsPesProvenanceTimeline candidate = *this;
@@ -216,7 +230,7 @@ MediaTsPesProvenanceTimeline::Range* MediaTsPesProvenanceTimeline::openRange(
 ::media::Status MediaTsPesProvenanceTimeline::applySourceClockBoundary(
     std::uint64_t byteOffset)
 {
-    if (!m_selectedPids) {
+    if (!m_selection) {
         return invalid("PES provenance source boundary requires selected PIDs");
     }
     auto aligned = validateObservedOffset(byteOffset);
@@ -237,7 +251,8 @@ MediaTsPesProvenanceTimeline::Range* MediaTsPesProvenanceTimeline::openRange(
     std::uint64_t byteOffset,
     BoundaryApplication application)
 {
-    std::vector<std::uint16_t> selected(m_selectedPids->begin(), m_selectedPids->end());
+    std::vector<std::uint16_t> selected(
+        m_selection->selectedPids.begin(), m_selection->selectedPids.end());
     std::sort(selected.begin(), selected.end());
     for (const auto pid : selected) {
         auto range = std::find_if(m_ranges.begin(), m_ranges.end(),
@@ -268,7 +283,7 @@ MediaTsPesProvenanceTimeline::Range* MediaTsPesProvenanceTimeline::openRange(
     std::uint64_t packetPosition,
     std::uint16_t pid) const
 {
-    if (!m_selectedPids || !m_selectedPids->contains(pid)) {
+    if (!m_selection || !m_selection->selectedPids.contains(pid)) {
         return ::media::Result<MediaTsPesProvenanceAnchor>::failure(
             ::media::ErrorInfo::invalidArgument("PES provenance PID is not selected"));
     }
@@ -310,7 +325,7 @@ MediaTsPesProvenanceTimeline::Range* MediaTsPesProvenanceTimeline::openRange(
 MediaTsPesProvenanceTimeline::stateForAnchor(
     const MediaTsPesProvenanceAnchor& anchor) const
 {
-    if (!m_selectedPids || !m_selectedPids->contains(anchor.pid)) {
+    if (!m_selection || !m_selection->selectedPids.contains(anchor.pid)) {
         return ::media::Result<MediaTsPesProvenanceAnchor>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "PES provenance anchor PID is not selected"));

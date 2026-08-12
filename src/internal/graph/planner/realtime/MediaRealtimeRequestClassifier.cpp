@@ -2,11 +2,6 @@
 
 namespace media::ffmpeg::graph {
 
-bool MediaRealtimeRequestClassifier::audioRequested(const MediaRealtimeRtpTranscodeRequest& request) noexcept
-{
-    return request.parameters.execution.includeAudio;
-}
-
 bool MediaRealtimeRequestClassifier::realtimeUrlInput(const MediaRealtimeRtpTranscodeRequest& request) noexcept
 {
     return request.input.type == RealtimeInputType::Url &&

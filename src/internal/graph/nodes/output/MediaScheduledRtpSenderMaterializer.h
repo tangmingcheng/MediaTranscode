@@ -4,7 +4,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
 #include "internal/graph/protocol/rtp/MediaRtpUdpSenderConfig.h"
 #include "internal/graph/runtime/buffer/MediaBuffer.h"
-#include "internal/graph/sync/MediaPlaybackEpoch.h"
+#include "internal/graph/protocol/MediaProtocolOutputRuntimeAuthority.h"
 #include "internal/graph/time/MediaSharedNtpEpoch.h"
 
 struct AVCodecContext;
@@ -46,7 +46,7 @@ public:
         const MediaSeparateRtpSdpRuntimePlan& sdpPlan,
         const AVCodecContext& codecContext,
         const MediaSharedNtpEpoch& sharedNtpEpoch,
-        const MediaPlaybackEpoch& playbackEpoch);
+        const MediaProtocolOutputActivation& activation);
 };
 
 } // namespace media::ffmpeg::graph

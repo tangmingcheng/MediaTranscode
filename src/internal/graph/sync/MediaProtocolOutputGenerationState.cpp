@@ -1,5 +1,4 @@
 #include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
-#include "internal/graph/sync/MediaAvSyncGroupRuntime.h"
 
 #include <stdexcept>
 #include <utility>
@@ -8,7 +7,7 @@ namespace media::ffmpeg::graph {
 
 MediaProtocolOutputGenerationCommitReservation::
     MediaProtocolOutputGenerationCommitReservation(
-        MediaAvOutputPermitCommitReservation outputPermit,
+        MediaProtocolOutputCommitReservation outputPermit,
         std::unique_lock<std::mutex> stateLock,
         std::unique_lock<std::mutex> sessionLock,
         std::optional<std::uint64_t> completedTransitionSequence) noexcept
@@ -51,11 +50,11 @@ MediaProtocolOutputGenerationState::sessionState() const noexcept
 
 ::media::Result<MediaProtocolOutputGenerationCommitReservation>
 MediaProtocolOutputGenerationState::permitActivatedGeneration(
-    const MediaAvSyncGroupRuntime& group,
+    const MediaProtocolOutputRuntimeAuthority& authority,
     std::uint64_t generation,
     std::optional<std::uint64_t> transitionSequence)
 {
-    auto outputPermit = group.reserveOutputCommit(generation);
+    auto outputPermit = authority.reserveCommit(generation);
     if (!outputPermit) {
         return ::media::Result<
             MediaProtocolOutputGenerationCommitReservation>::failure(
@@ -91,10 +90,10 @@ MediaProtocolOutputGenerationState::permitActivatedGeneration(
 
 ::media::Result<MediaProtocolOutputGenerationCommitReservation>
 MediaProtocolOutputGenerationState::reserveCommit(
-    const MediaAvSyncGroupRuntime& group,
+    const MediaProtocolOutputRuntimeAuthority& authority,
     std::uint64_t generation) const
 {
-    auto outputPermit = group.reserveOutputCommit(generation);
+    auto outputPermit = authority.reserveCommit(generation);
     if (!outputPermit) {
         return ::media::Result<
             MediaProtocolOutputGenerationCommitReservation>::failure(
@@ -151,17 +150,17 @@ MediaProtocolOutputGenerationState::classifyGeneration(
 
 ::media::Result<MediaProtocolOutputAuthorityActivation>
 MediaProtocolOutputGenerationState::permitAuthorityActivation(
-    const MediaAvSyncGroupRuntime& group)
+    const MediaProtocolOutputRuntimeAuthority& authority)
 {
-    auto activated = group.reserveActivatedOutput();
+    auto activated = authority.currentActivation();
     if (!activated) {
         return ::media::Result<
             MediaProtocolOutputAuthorityActivation>::failure(
                 activated.error());
     }
-    const auto epoch = activated.value().epoch;
+    const auto activation = activated.value();
     const auto transitionSequence =
-        activated.value().completedTransitionSequence;
+        activation.completedTransitionSequence;
     std::unique_lock stateLock(m_mutex);
     const bool initialActivation =
         !m_permittedGeneration && !m_pendingGeneration &&
@@ -170,26 +169,31 @@ MediaProtocolOutputGenerationState::permitAuthorityActivation(
     const bool plannedRollover =
         m_pendingGeneration && m_pendingTransitionSequence &&
         transitionSequence &&
-        *m_pendingGeneration == epoch.generation &&
+        *m_pendingGeneration == activation.generation &&
         *m_pendingTransitionSequence == *transitionSequence;
-    if (m_plannedIdentity.empty() || epoch.generation == 0 ||
+    if (m_plannedIdentity.empty() || activation.generation == 0 ||
         (!initialActivation && !plannedRollover)) {
         return ::media::Result<
             MediaProtocolOutputAuthorityActivation>::failure(
                 ::media::ErrorInfo::invalidArgument(
                     "Protocol output authority activation requires the exact planned transition"));
     }
-    m_permittedGeneration = epoch.generation;
+    auto permit = authority.reserveCommit(activation.generation);
+    if (!permit) {
+        return ::media::Result<
+            MediaProtocolOutputAuthorityActivation>::failure(
+                permit.error());
+    }
+    m_permittedGeneration = activation.generation;
     m_pendingGeneration.reset();
     m_pendingTransitionSequence.reset();
     std::unique_lock sessionLock(m_sessionState->m_mutex);
-    auto permit = std::move(activated).value().reservation;
     return ::media::Result<
         MediaProtocolOutputAuthorityActivation>::success(
             MediaProtocolOutputAuthorityActivation{
-                epoch,
+                activation,
                 MediaProtocolOutputGenerationCommitReservation(
-                    std::move(permit), std::move(stateLock),
+                    std::move(permit).value(), std::move(stateLock),
                     std::move(sessionLock), transitionSequence)});
 }
 

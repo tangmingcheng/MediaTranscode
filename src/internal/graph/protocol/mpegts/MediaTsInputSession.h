@@ -50,7 +50,8 @@ public:
 
     ::media::Result<MediaTsReadFrameEnvelope> readFrame() override;
     ::media::Result<MediaTsSelectedPacketDurationEvidence>
-    probeSelectedPacketDurations(std::size_t frameLimit);
+    probeSelectedPacketDurations(
+        MediaTsDurationProbeBudget budget);
     ::media::Status configureRuntimeBinding(const MediaTsRuntimeBinding& binding);
     ::media::Status close() noexcept override;
     void cancel() noexcept override { m_interruptState.cancel(); }

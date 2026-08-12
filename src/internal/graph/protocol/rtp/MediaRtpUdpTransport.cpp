@@ -1,6 +1,7 @@
 #include "internal/graph/protocol/rtp/MediaRtpUdpTransport.h"
 
 #include <algorithm>
+#include <atomic>
 #include <mutex>
 #include <utility>
 
@@ -39,13 +40,22 @@ struct MediaRtpUdpTransport::Impl final {
     {
     }
 
+    ~Impl()
+    {
+#ifdef _WIN32
+        if (cancellationEvent != WSA_INVALID_EVENT) {
+            WSACloseEvent(cancellationEvent);
+        }
+#endif
+    }
+
     std::shared_ptr<MediaSocketRuntime> runtime;
     MediaUdpSocket rtp;
     MediaUdpSocket rtcp;
     const uint16_t rtpPortValue;
     const uint16_t rtcpPortValue;
 #ifdef _WIN32
-    WSAEVENT cancellationEvent;
+    const WSAEVENT cancellationEvent;
 #endif
     std::size_t maximumDatagramBytes;
     int cancellableReadTimeoutMs;
@@ -53,8 +63,8 @@ struct MediaRtpUdpTransport::Impl final {
     bool preferRtcp;
     std::mutex lifecycleMutex;
     std::mutex receiveMutex;
-    State state;
-    uint64_t cancellationSequence;
+    std::atomic<State> state;
+    std::atomic_uint64_t cancellationSequence;
     bool receiveActive;
 };
 
@@ -154,12 +164,14 @@ MediaRtpUdpTransport& MediaRtpUdpTransport::operator=(MediaRtpUdpTransport&& oth
     uint64_t sequence = 0;
     {
         std::lock_guard lifecycleLock(impl->lifecycleMutex);
-        if (impl->state != Impl::State::Running) {
+        if (impl->state.load(std::memory_order_acquire) !=
+            Impl::State::Running) {
             return ::media::Result<MediaRtpUdpDatagram>::failure(
                 ::media::ErrorInfo::cancelled("RTP UDP transport is stopped"));
         }
         impl->receiveActive = true;
-        sequence = impl->cancellationSequence;
+        sequence = impl->cancellationSequence.load(
+            std::memory_order_acquire);
     }
     if (impl->phaseController) {
         impl->phaseController->synchronize(
@@ -167,8 +179,10 @@ MediaRtpUdpTransport& MediaRtpUdpTransport::operator=(MediaRtpUdpTransport&& oth
     }
     auto finishError = [impl, sequence](::media::ErrorInfo error) {
         std::lock_guard lifecycleLock(impl->lifecycleMutex);
-        if (impl->state != Impl::State::Running ||
-            impl->cancellationSequence != sequence) {
+        if (impl->state.load(std::memory_order_acquire) !=
+                Impl::State::Running ||
+            impl->cancellationSequence.load(std::memory_order_acquire) !=
+                sequence) {
             error = ::media::ErrorInfo::cancelled("RTP UDP receive was cancelled");
         }
         impl->receiveActive = false;
@@ -197,7 +211,10 @@ MediaRtpUdpTransport& MediaRtpUdpTransport::operator=(MediaRtpUdpTransport&& oth
     MediaUdpSocket* selected = index == 1 ? preferred : secondary;
     const MediaRtpUdpChannel channel = index == 1 ? preferredChannel : secondaryChannel;
     std::lock_guard lifecycleLock(impl->lifecycleMutex);
-    if (impl->state != Impl::State::Running || impl->cancellationSequence != sequence) {
+    if (impl->state.load(std::memory_order_acquire) !=
+            Impl::State::Running ||
+        impl->cancellationSequence.load(std::memory_order_acquire) !=
+            sequence) {
         impl->receiveActive = false;
         return ::media::Result<MediaRtpUdpDatagram>::failure(
             ::media::ErrorInfo::cancelled("RTP UDP receive was cancelled"));
@@ -222,31 +239,44 @@ MediaRtpUdpTransport& MediaRtpUdpTransport::operator=(MediaRtpUdpTransport&& oth
 #endif
 }
 
-::media::Status MediaRtpUdpTransport::stop() noexcept
+::media::Status MediaRtpUdpTransport::interruptReceive() noexcept
 {
 #ifdef _WIN32
     const auto impl = snapshot();
     if (!impl) return ::media::Status::failure(::media::ErrorInfo::notInitialized("RTP UDP transport is closed"));
+    Impl::State expected = Impl::State::Running;
+    if (impl->state.compare_exchange_strong(
+            expected, Impl::State::StopRequested,
+            std::memory_order_acq_rel,
+            std::memory_order_acquire)) {
+        impl->cancellationSequence.fetch_add(
+            1, std::memory_order_acq_rel);
+    } else if (expected == Impl::State::Aborted) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::cancelled(
+                "RTP UDP transport was aborted during receive interruption"));
+    }
+    if (!WSASetEvent(impl->cancellationEvent)) {
+        return ::media::Status::failure(::media::ErrorInfo::ioFailure(
+            "RTP UDP receive interruption signal failed", WSAGetLastError()));
+    }
+#endif
+    return ::media::Status::success();
+}
+
+::media::Status MediaRtpUdpTransport::stop() noexcept
+{
+    const auto impl = snapshot();
+    if (!impl) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::notInitialized(
+                "RTP UDP transport is closed"));
+    }
     if (impl->phaseController) {
         impl->phaseController->synchronize(
             MediaRtpUdpTransportPhase::StopLifetimeAcquired);
     }
-    std::lock_guard lifecycleLock(impl->lifecycleMutex);
-    if (impl->state == Impl::State::Aborted ||
-        impl->cancellationEvent == WSA_INVALID_EVENT) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::cancelled("RTP UDP transport was closed during stop"));
-    }
-    if (impl->state == Impl::State::Running) {
-        impl->state = Impl::State::StopRequested;
-        ++impl->cancellationSequence;
-    }
-    if (!WSASetEvent(impl->cancellationEvent)) {
-        return ::media::Status::failure(::media::ErrorInfo::ioFailure(
-            "RTP UDP cancellation signal failed", WSAGetLastError()));
-    }
-#endif
-    return ::media::Status::success();
+    return interruptReceive();
 }
 
 ::media::Status MediaRtpUdpTransport::reset() noexcept
@@ -256,11 +286,13 @@ MediaRtpUdpTransport& MediaRtpUdpTransport::operator=(MediaRtpUdpTransport&& oth
     std::lock_guard receiveLock(impl->receiveMutex);
     if (!impl->rtp.isOpen() || !impl->rtcp.isOpen()) return ::media::Status::failure(::media::ErrorInfo::notInitialized("RTP UDP transport is closed"));
     std::lock_guard lifecycleLock(impl->lifecycleMutex);
-    if (impl->state == Impl::State::Aborted) {
+    if (impl->state.load(std::memory_order_acquire) == Impl::State::Aborted) {
         return ::media::Status::failure(::media::ErrorInfo::cancelled("Aborted RTP UDP transport cannot be reset"));
     }
 #ifdef _WIN32
-    if (impl->state != Impl::State::StopRequested || impl->receiveActive) {
+    if (impl->state.load(std::memory_order_acquire) !=
+            Impl::State::StopRequested ||
+        impl->receiveActive) {
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "RTP UDP reset requires stopped transport with no active receive"));
     }
@@ -268,7 +300,7 @@ MediaRtpUdpTransport& MediaRtpUdpTransport::operator=(MediaRtpUdpTransport&& oth
         return ::media::Status::failure(::media::ErrorInfo::ioFailure(
             "RTP UDP cancellation reset failed", WSAGetLastError()));
     }
-    impl->state = Impl::State::Running;
+    impl->state.store(Impl::State::Running, std::memory_order_release);
 #endif
     return ::media::Status::success();
 }
@@ -282,14 +314,13 @@ MediaRtpUdpTransport& MediaRtpUdpTransport::operator=(MediaRtpUdpTransport&& oth
         impl->phaseController->synchronize(
             MediaRtpUdpTransportPhase::AbortLifetimeAcquired);
     }
-    std::lock_guard lifecycleLock(impl->lifecycleMutex);
-    if (impl->state == Impl::State::Aborted ||
-        impl->cancellationEvent == WSA_INVALID_EVENT) {
+    if (impl->state.exchange(
+            Impl::State::Aborted, std::memory_order_acq_rel) ==
+        Impl::State::Aborted) {
         return ::media::Status::failure(
             ::media::ErrorInfo::cancelled("RTP UDP transport was closed during abort"));
     }
-    impl->state = Impl::State::Aborted;
-    ++impl->cancellationSequence;
+    impl->cancellationSequence.fetch_add(1, std::memory_order_acq_rel);
     if (!WSASetEvent(impl->cancellationEvent)) {
         return ::media::Status::failure(::media::ErrorInfo::ioFailure(
             "RTP UDP abort signal failed", WSAGetLastError()));
@@ -307,14 +338,9 @@ void MediaRtpUdpTransport::close() noexcept
     }
     if (!impl) return;
 #ifdef _WIN32
-    {
-        std::lock_guard lifecycleLock(impl->lifecycleMutex);
-        impl->state = Impl::State::Aborted;
-        ++impl->cancellationSequence;
-        if (impl->cancellationEvent != WSA_INVALID_EVENT) {
-            (void)WSASetEvent(impl->cancellationEvent);
-        }
-    }
+    impl->state.store(Impl::State::Aborted, std::memory_order_release);
+    impl->cancellationSequence.fetch_add(1, std::memory_order_acq_rel);
+    (void)WSASetEvent(impl->cancellationEvent);
 #endif
     if (impl->phaseController) {
         impl->phaseController->synchronize(
@@ -327,15 +353,6 @@ void MediaRtpUdpTransport::close() noexcept
     }
     impl->rtp.close();
     impl->rtcp.close();
-#ifdef _WIN32
-    {
-        std::lock_guard lifecycleLock(impl->lifecycleMutex);
-        if (impl->cancellationEvent != WSA_INVALID_EVENT) {
-            WSACloseEvent(impl->cancellationEvent);
-            impl->cancellationEvent = WSA_INVALID_EVENT;
-        }
-    }
-#endif
 }
 
 bool MediaRtpUdpTransport::isOpen() const noexcept

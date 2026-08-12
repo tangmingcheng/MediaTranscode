@@ -10,14 +10,39 @@
 
 namespace media::ffmpeg::graph {
 
+class MediaTsDurationProbeBudget final {
+public:
+    static ::media::Result<MediaTsDurationProbeBudget> create(
+        std::size_t selectedPacketLimit,
+        std::size_t sourcePacketLimit);
+
+    std::size_t selectedPacketLimit() const noexcept
+    {
+        return m_selectedPacketLimit;
+    }
+    std::size_t sourcePacketLimit() const noexcept
+    {
+        return m_sourcePacketLimit;
+    }
+
+private:
+    MediaTsDurationProbeBudget(
+        std::size_t selectedPacketLimit,
+        std::size_t sourcePacketLimit) noexcept
+        : m_selectedPacketLimit(selectedPacketLimit),
+          m_sourcePacketLimit(sourcePacketLimit)
+    {
+    }
+
+    std::size_t m_selectedPacketLimit;
+    std::size_t m_sourcePacketLimit;
+};
+
 class MediaTsPreflightDurationProbe final {
 public:
     static ::media::Result<MediaTsPreflightDurationProbe> create(
-        MediaTsRuntimeStreamBinding video,
-        MediaRational videoTimeBase,
-        MediaTsRuntimeStreamBinding audio,
-        MediaRational audioTimeBase,
-        std::size_t frameLimit);
+        MediaTsRuntimeBinding binding,
+        MediaTsDurationProbeBudget budget);
 
     MediaTsPreflightDurationProbe(const MediaTsPreflightDurationProbe&) = delete;
     MediaTsPreflightDurationProbe& operator=(
@@ -33,17 +58,14 @@ public:
 
 private:
     MediaTsPreflightDurationProbe(
-        MediaTsRuntimeStreamBinding video,
-        MediaRational videoTimeBase,
-        MediaTsRuntimeStreamBinding audio,
-        MediaRational audioTimeBase,
-        std::size_t frameLimit) noexcept;
+        MediaTsRuntimeBinding binding,
+        MediaTsDurationProbeBudget budget) noexcept;
 
-    MediaTsRuntimeStreamBinding m_video;
-    MediaRational m_videoTimeBase;
-    MediaTsRuntimeStreamBinding m_audio;
-    MediaRational m_audioTimeBase;
-    std::size_t m_frameLimit;
+    MediaTsRuntimeBinding m_binding;
+    std::size_t m_selectedPacketLimit;
+    std::size_t m_sourcePacketLimit;
+    std::size_t m_selectedPacketCount = 0;
+    std::size_t m_sourcePacketCount = 0;
     std::deque<MediaTsReadFrameEnvelope> m_replay;
     std::optional<MediaTsPacketDurationEvidence> m_videoEvidence;
     std::optional<MediaTsPacketDurationEvidence> m_audioEvidence;

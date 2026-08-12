@@ -11,7 +11,14 @@ namespace media::ffmpeg::graph {
 
 class MediaProjectMpegTsOutputPlan final {
 public:
-    static ::media::Result<MediaProjectMpegTsOutputPlan> create(
+    static ::media::Result<MediaProjectMpegTsOutputPlan> createVideoOnly(
+        const std::string& videoCodecName,
+        const MediaEncodedPacketLayout& videoPacketLayout,
+        MediaRunningTime transportDecodeLead,
+        MediaRunningTime startupEmissionPreroll,
+        MediaOutputTransportKind transportKind,
+        std::uint8_t maximumPacketsPerDatagram);
+    static ::media::Result<MediaProjectMpegTsOutputPlan> createAudioVideo(
         const std::string& videoCodecName,
         const MediaEncodedPacketLayout& videoPacketLayout,
         const MediaResolvedAudioOutputPlan& audioOutput,
@@ -19,17 +26,16 @@ public:
         MediaRunningTime startupEmissionPreroll,
         MediaOutputTransportKind transportKind,
         std::uint8_t maximumPacketsPerDatagram);
-    static ::media::Result<MediaProjectMpegTsOutputPlan> fromEncodedFacts(
-        int audioSampleRate,
-        MediaTsMuxPlan muxPlan);
+    static ::media::Result<MediaProjectMpegTsOutputPlan>
+    fromVideoOnlyEncodedFacts(MediaTsMuxPlan muxPlan);
+    static ::media::Result<MediaProjectMpegTsOutputPlan>
+    fromAudioVideoEncodedFacts(MediaTsMuxPlan muxPlan);
 
-    int audioSampleRate() const noexcept;
     const MediaTsMuxPlan& muxPlan() const noexcept;
 
 private:
-    MediaProjectMpegTsOutputPlan(int audioSampleRate, MediaTsMuxPlan muxPlan);
+    explicit MediaProjectMpegTsOutputPlan(MediaTsMuxPlan muxPlan);
 
-    int m_audioSampleRate;
     MediaTsMuxPlan m_muxPlan;
 };
 

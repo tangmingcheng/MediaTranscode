@@ -1,7 +1,7 @@
 #pragma once
 
 #include "internal/graph/protocol/mpegts/MediaTsEvidenceTimeline.h"
-#include "internal/graph/protocol/mpegts/MediaTsPacketOriginPolicy.h"
+#include "internal/graph/protocol/mpegts/MediaTsRuntimeBinding.h"
 #include "internal/graph/protocol/mpegts/MediaTsPublicProgramSnapshot.h"
 #include "internal/graph/runtime/buffer/FFmpegInputStreamSnapshot.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
@@ -18,26 +18,7 @@ extern "C" {
 
 namespace media::ffmpeg::graph {
 
-enum class MediaTsReadFrameState { Frame, Waiting, EndOfStream };
-
-struct MediaTsRuntimeStreamBinding final {
-    int streamIndex = -1;
-    std::uint16_t pid = 0;
-    bool operator==(const MediaTsRuntimeStreamBinding&) const = default;
-};
-
-struct MediaTsRuntimeBinding final {
-    MediaTsPacketOriginPolicy originPolicy = MediaTsPacketOriginPolicy::PerStreamPesCarry;
-    MediaTsRuntimeStreamBinding video;
-    MediaTsRuntimeStreamBinding audio;
-    std::uint16_t pcrPid = 0;
-    std::size_t pesProvenanceCapacity = 0;
-    bool requiresSelectedPesBoundary(std::uint16_t pid) const noexcept
-    {
-        return pid == video.pid || pid == audio.pid || pid == pcrPid;
-    }
-    bool operator==(const MediaTsRuntimeBinding&) const = default;
-};
+enum class MediaTsReadFrameState { Frame, Discarded, Waiting, EndOfStream };
 
 struct MediaTsInputRuntimeContract final {
     std::size_t packetStride;

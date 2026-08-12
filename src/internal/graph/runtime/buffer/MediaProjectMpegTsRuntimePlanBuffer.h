@@ -3,8 +3,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
 #include "internal/graph/runtime/buffer/MediaBuffer.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
-#include "internal/graph/sync/MediaAvSyncGroupKey.h"
-#include "internal/graph/sync/MediaPlaybackEpoch.h"
+#include "internal/graph/protocol/MediaProtocolOutputRuntimeAuthority.h"
 #include "media_transcode/Result.h"
 
 #include <memory>
@@ -17,32 +16,32 @@ public:
     static ::media::Result<MediaBufferRef> create(
         std::shared_ptr<const MediaProjectMpegTsRuntimeOutputPlan>
             outputPlan,
-        MediaPlaybackEpoch epoch,
-        MediaAvSyncGroupKey group,
-        std::optional<std::uint64_t> completedTransitionSequence);
+        MediaProtocolOutputSessionKey sessionKey,
+        MediaTranscodeStreamSet streamSet,
+        MediaProtocolOutputActivation activation);
 
     MediaBufferType type() const noexcept override;
     const MediaTsMuxPlan& muxPlan() const noexcept;
     const MediaProjectMpegTsRuntimeOutputPlan& outputPlan() const noexcept;
     const std::shared_ptr<const MediaProjectMpegTsRuntimeOutputPlan>&
     sharedOutputPlan() const noexcept;
-    const MediaPlaybackEpoch& epoch() const noexcept;
-    const MediaAvSyncGroupKey& group() const noexcept;
-    std::optional<std::uint64_t> completedTransitionSequence() const noexcept;
+    const MediaProtocolOutputSessionKey& sessionKey() const noexcept;
+    MediaTranscodeStreamSet streamSet() const noexcept;
+    const MediaProtocolOutputActivation& activation() const noexcept;
 
 private:
     MediaProjectMpegTsRuntimePlanBuffer(
         std::shared_ptr<const MediaProjectMpegTsRuntimeOutputPlan>
             outputPlan,
-        MediaPlaybackEpoch epoch,
-        MediaAvSyncGroupKey group,
-        std::optional<std::uint64_t> completedTransitionSequence);
+        MediaProtocolOutputSessionKey sessionKey,
+        MediaTranscodeStreamSet streamSet,
+        MediaProtocolOutputActivation activation);
 
     const std::shared_ptr<const MediaProjectMpegTsRuntimeOutputPlan>
         m_outputPlan;
-    const MediaPlaybackEpoch m_epoch;
-    const MediaAvSyncGroupKey m_group;
-    const std::optional<std::uint64_t> m_completedTransitionSequence;
+    const MediaProtocolOutputSessionKey m_sessionKey;
+    const MediaTranscodeStreamSet m_streamSet;
+    const MediaProtocolOutputActivation m_activation;
 };
 
 } // namespace media::ffmpeg::graph

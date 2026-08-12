@@ -62,6 +62,7 @@ public:
     ::media::Result<MediaPreparedRawRtpDatagram> receive(int timeoutMs);
     ::media::Status captureStatus();
     ::media::Status sealPreflight();
+    ::media::Status interruptReceive() noexcept;
     ::media::Status stop() noexcept;
     void abort() noexcept;
 
@@ -69,7 +70,7 @@ private:
     explicit MediaRawRtpPreparedInputBuffer(MediaPreparedRawRtpInput prepared);
     void capture(std::stop_token stopToken) noexcept;
     void stopCaptureForReplay() noexcept;
-    void stopCapture() noexcept;
+    MediaRtpUdpTransport* markStopped() noexcept;
 
     std::optional<MediaPreparedRawRtpInput> m_prepared;
     std::size_t m_bufferedBytes = 0;

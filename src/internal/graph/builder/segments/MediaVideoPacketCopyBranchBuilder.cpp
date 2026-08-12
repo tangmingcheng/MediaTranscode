@@ -32,6 +32,10 @@ namespace media::ffmpeg::graph {
     branchOptions.normalizePackets = options.normalizePackets;
     branchOptions.queues = options.queues;
     branchOptions.edgePolicies = options.edgePolicies;
+    if (options.lineageEdgePolicies) {
+        branchOptions.edgePolicies.videoPacket =
+            options.lineageEdgePolicies->startupPacket;
+    }
     auto branch = MediaPacketCopyBranchBuilder::build(graph, branchOptions);
     if (!branch) {
         return ::media::Result<MediaEncodedBranchEndpoints>::failure(

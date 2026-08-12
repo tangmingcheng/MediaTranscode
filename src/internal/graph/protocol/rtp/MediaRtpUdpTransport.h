@@ -47,6 +47,7 @@ public:
 
     ::media::Result<MediaRtpUdpDatagram> receive();
     ::media::Result<MediaRtpUdpDatagram> receive(int timeoutOverrideMs);
+    ::media::Status interruptReceive() noexcept;
     ::media::Status stop() noexcept;
     ::media::Status reset() noexcept;
     ::media::Status abort() noexcept;

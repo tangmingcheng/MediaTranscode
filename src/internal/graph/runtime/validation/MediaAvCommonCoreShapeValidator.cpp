@@ -48,19 +48,7 @@ constexpr std::array GroupContracts{
         "av_startup.sync_group"},
     GroupOptionContract{
         MediaNodeKind::AudioDriftController,
-        "audio_drift_controller.sync_group"},
-    GroupOptionContract{
-        MediaNodeKind::ScheduledRtpSender,
-        "scheduled_rtp.sync_group"},
-    GroupOptionContract{
-        MediaNodeKind::ScheduledTsAccessUnitAdapter,
-        "scheduled_ts_adapter.sync_group"},
-    GroupOptionContract{
-        MediaNodeKind::ProjectMpegTsPlanSource,
-        "project_mpeg_ts_plan.sync_group"},
-    GroupOptionContract{
-        MediaNodeKind::MpegTsRtpSdpPublisher,
-        "mpegts_rtp_sdp.sync_group"}};
+        "audio_drift_controller.sync_group"}};
 
 const GroupOptionContract* findContract(
     MediaNodeKind kind,

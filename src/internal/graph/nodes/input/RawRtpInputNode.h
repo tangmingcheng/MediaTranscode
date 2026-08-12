@@ -25,6 +25,7 @@ protected:
     ::media::Status start(MediaGraphExecutionContext& context) override;
     ::media::Result<MediaNodeProcessResult> onProcess(MediaGraphExecutionContext& context) override;
     ::media::Status stop(MediaGraphExecutionContext& context) override;
+    void interrupt(MediaGraphExecutionContext& context) noexcept override;
     void abort(MediaGraphExecutionContext& context) noexcept override;
 
 private:

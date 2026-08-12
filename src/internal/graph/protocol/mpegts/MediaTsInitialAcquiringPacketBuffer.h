@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <variant>
 
 namespace media::ffmpeg::graph {
 
@@ -17,6 +18,19 @@ struct MediaTsInitialPacketRetentionLimit final {
     std::uint64_t byteCapacity = 0;
     std::uint64_t maximumPacketBytes = 0;
 };
+
+struct MediaTsVideoOnlyPacketRetentionPlan final {
+    MediaTsInitialPacketRetentionLimit video;
+};
+
+struct MediaTsAudioVideoPacketRetentionPlan final {
+    MediaTsInitialPacketRetentionLimit video;
+    MediaTsInitialPacketRetentionLimit audio;
+};
+
+using MediaTsInitialPacketRetentionPlan = std::variant<
+    MediaTsVideoOnlyPacketRetentionPlan,
+    MediaTsAudioVideoPacketRetentionPlan>;
 
 struct MediaTsInitialAcquiringPacket final {
     ::media::ffmpeg::PacketPtr packet;
@@ -31,8 +45,7 @@ struct MediaTsInitialReplayPacket final {
 class MediaTsInitialAcquiringPacketBuffer final {
 public:
     static ::media::Result<MediaTsInitialAcquiringPacketBuffer> create(
-        MediaTsInitialPacketRetentionLimit video,
-        MediaTsInitialPacketRetentionLimit audio);
+        MediaTsInitialPacketRetentionPlan plan);
 
     ::media::Status retain(::media::ffmpeg::PacketPtr packet,
                            MediaStreamKind streamKind);
@@ -56,11 +69,9 @@ private:
     };
 
     MediaTsInitialAcquiringPacketBuffer(
-        MediaTsInitialPacketRetentionLimit video,
-        MediaTsInitialPacketRetentionLimit audio) noexcept;
+        MediaTsInitialPacketRetentionPlan plan) noexcept;
 
-    MediaTsInitialPacketRetentionLimit m_videoLimit;
-    MediaTsInitialPacketRetentionLimit m_audioLimit;
+    MediaTsInitialPacketRetentionPlan m_plan;
     Usage m_videoUsage;
     Usage m_audioUsage;
     std::deque<MediaTsInitialAcquiringPacket> m_packets;

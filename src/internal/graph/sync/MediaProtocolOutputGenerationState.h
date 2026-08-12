@@ -2,6 +2,7 @@
 
 #include "internal/graph/sync/MediaAvGenerationPurgeTarget.h"
 #include "internal/graph/sync/MediaAvEpochTransitionService.h"
+#include "internal/graph/protocol/MediaProtocolOutputRuntimeAuthority.h"
 #include "media_transcode/Result.h"
 
 #include <cstdint>
@@ -45,12 +46,12 @@ private:
     friend class MediaProtocolOutputGenerationState;
 
     explicit MediaProtocolOutputGenerationCommitReservation(
-        MediaAvOutputPermitCommitReservation outputPermit,
+        MediaProtocolOutputCommitReservation outputPermit,
         std::unique_lock<std::mutex> stateLock,
         std::unique_lock<std::mutex> sessionLock,
         std::optional<std::uint64_t> completedTransitionSequence) noexcept;
 
-    MediaAvOutputPermitCommitReservation m_outputPermit;
+    MediaProtocolOutputCommitReservation m_outputPermit;
     std::unique_lock<std::mutex> m_stateLock;
     std::unique_lock<std::mutex> m_sessionLock;
     std::optional<std::uint64_t> m_completedTransitionSequence;
@@ -86,7 +87,7 @@ private:
 };
 
 struct MediaProtocolOutputAuthorityActivation final {
-    MediaPlaybackEpoch epoch;
+    MediaProtocolOutputActivation activation;
     MediaProtocolOutputGenerationCommitReservation reservation;
 };
 
@@ -109,13 +110,14 @@ public:
     sessionState() const noexcept;
     ::media::Result<MediaProtocolOutputGenerationCommitReservation>
     permitActivatedGeneration(
-        const MediaAvSyncGroupRuntime& group,
+        const MediaProtocolOutputRuntimeAuthority& authority,
         std::uint64_t generation,
         std::optional<std::uint64_t> transitionSequence);
     ::media::Result<MediaProtocolOutputAuthorityActivation>
-    permitAuthorityActivation(const MediaAvSyncGroupRuntime& group);
+    permitAuthorityActivation(
+        const MediaProtocolOutputRuntimeAuthority& authority);
     ::media::Result<MediaProtocolOutputGenerationCommitReservation>
-    reserveCommit(const MediaAvSyncGroupRuntime& group,
+    reserveCommit(const MediaProtocolOutputRuntimeAuthority& authority,
                   std::uint64_t generation) const;
     ::media::Result<GenerationDisposition>
     classifyGeneration(std::uint64_t generation) const;

@@ -3,9 +3,11 @@
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
 #include "internal/graph/builder/segments/MediaOutputSegmentBuilder.h"
 #include "internal/graph/builder/segments/MediaProjectMpegTsMuxSegmentBuilder.h"
+#include "internal/graph/model/MediaTranscodeStreamSetCodec.h"
 #include "internal/graph/nodes/output/MediaProjectMpegTsPlanSourceNodePlanCodec.h"
 
 #include <algorithm>
+#include <optional>
 #include <tuple>
 #include <variant>
 
@@ -14,11 +16,28 @@ namespace {
 
 constexpr const char* Owner = "MediaScheduledMpegTsOutputSegmentBuilder";
 
-::media::Status requireSource(const MediaGraph& graph,
-                              const MediaEndpoint& endpoint,
-                              MediaStreamKind stream,
-                              MediaEdgeKind edge,
-                              MediaPayloadKind payload)
+struct CommonOptions final {
+    std::string prefix;
+    MediaEndpoint activation;
+    MediaEndpoint videoCodec;
+    std::optional<MediaEndpoint> audioCodec;
+    MediaEndpoint scheduled;
+};
+
+struct CommonPlan final {
+    MediaProtocolOutputSessionKey sessionKey;
+    MediaTranscodeStreamSet streamSet;
+    const MediaProjectMpegTsRuntimeOutputPlan& output;
+    const MediaGraphQueueParameters& queues;
+    const MediaRealtimeEdgePolicySet& edgePolicies;
+};
+
+::media::Status requireSource(
+    const MediaGraph& graph,
+    const MediaEndpoint& endpoint,
+    MediaStreamKind stream,
+    MediaEdgeKind edge,
+    MediaPayloadKind payload)
 {
     const MediaPort* port = endpoint.valid()
         ? graph.findOutputPort(endpoint.node, endpoint.port)
@@ -31,33 +50,59 @@ constexpr const char* Owner = "MediaScheduledMpegTsOutputSegmentBuilder";
     return ::media::Status::success();
 }
 
-} // namespace
-
-::media::Result<MediaScheduledMpegTsOutputSegmentResult>
-MediaScheduledMpegTsOutputSegmentBuilder::build(
+::media::Status setStreamSetOption(
     MediaGraph& graph,
-    const MediaScheduledMpegTsOutputSegmentOptions& options,
-    const MediaRealtimeAvSyncRuntimePlan& plan)
+    MediaNodeId node,
+    const char* sessionOption,
+    const char* streamSetOption,
+    const CommonPlan& plan)
+{
+    auto session = MediaGraphBuildSupport::setNodeOptionChecked(
+        graph, Owner, node, sessionOption, plan.sessionKey.value());
+    if (!session) return ::media::Status::failure(session.error());
+    auto streamSet = MediaTranscodeStreamSetCodec::encode(plan.streamSet);
+    if (!streamSet) return ::media::Status::failure(streamSet.error());
+    return MediaGraphBuildSupport::setNodeOptionChecked(
+        graph, Owner, node, streamSetOption, std::string(streamSet.value()));
+}
+
+::media::Result<MediaScheduledMpegTsOutputSegmentResult> buildCommon(
+    MediaGraph& graph,
+    const CommonOptions& options,
+    const CommonPlan& plan)
 {
     using Result = ::media::Result<MediaScheduledMpegTsOutputSegmentResult>;
-    if (options.prefix.empty() || !options.expectVideo ||
-        !options.expectAudio || !plan.groupKey.valid() ||
-        plan.outputAdapter != MediaAvSyncOutputAdapterKind::ProjectMpegTs ||
-        !std::holds_alternative<MediaProjectMpegTsRuntimeOutputPlan>(
-            plan.protocolOutput)) {
+    auto streamSet = MediaTranscodeStreamSetCodec::encode(plan.streamSet);
+    if (!streamSet) return Result::failure(streamSet.error());
+    const bool expectAudio =
+        plan.streamSet == MediaTranscodeStreamSet::AudioVideo;
+    const bool typedVideoOnly =
+        plan.output.protocol.muxPlan().videoOnlyProgram() != nullptr;
+    if (options.prefix.empty() || !plan.sessionKey.valid() ||
+        expectAudio != options.audioCodec.has_value() ||
+        typedVideoOnly == expectAudio) {
         return Result::failure(::media::ErrorInfo::invalidArgument(
-            "Scheduled MPEG-TS output requires its complete planned adapter"));
+            "Scheduled MPEG-TS output requires one exact stream-set product"));
     }
-    for (const auto& [endpoint, stream, edge, payload] : {
-             std::tuple{options.epochActivated, MediaStreamKind::Metadata,
+    for (const auto& fact : {
+             std::tuple{options.activation, MediaStreamKind::Metadata,
                         MediaEdgeKind::Event, MediaPayloadKind::GraphEvent},
              std::tuple{options.videoCodec, MediaStreamKind::Video,
                         MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext},
-             std::tuple{options.audioCodec, MediaStreamKind::Audio,
-                        MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext},
-             std::tuple{options.scheduled, MediaStreamKind::Any,
-                        MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet}}) {
-        auto valid = requireSource(graph, endpoint, stream, edge, payload);
+             std::tuple{options.scheduled,
+                        expectAudio ? MediaStreamKind::Any
+                                    : MediaStreamKind::Video,
+                        MediaEdgeKind::EncodedPacket,
+                        MediaPayloadKind::Packet}}) {
+        auto valid = requireSource(
+            graph, std::get<0>(fact), std::get<1>(fact),
+            std::get<2>(fact), std::get<3>(fact));
+        if (!valid) return Result::failure(valid.error());
+    }
+    if (options.audioCodec) {
+        auto valid = requireSource(
+            graph, *options.audioCodec, MediaStreamKind::Audio,
+            MediaEdgeKind::Metadata, MediaPayloadKind::CodecContext);
         if (!valid) return Result::failure(valid.error());
     }
     const bool duplicate = std::any_of(
@@ -70,43 +115,37 @@ MediaScheduledMpegTsOutputSegmentBuilder::build(
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "Scheduled MPEG-TS output rejects duplicate output authority"));
     }
-    const auto& output =
-        std::get<MediaProjectMpegTsRuntimeOutputPlan>(plan.protocolOutput);
+
     MediaNodeId udpOutput = MediaNodeId::invalid();
     MediaNodeId mux = MediaNodeId::invalid();
     MediaNodeId rtpSdpPublisher = MediaNodeId::invalid();
-    if (const auto* udp =
-            std::get_if<MediaMpegTsUdpOutputPlan>(&output.transport)) {
-        if (output.protocol.muxPlan().parameters().transportKind !=
+    if (const auto* udp = std::get_if<MediaMpegTsUdpOutputPlan>(
+            &plan.output.transport)) {
+        if (plan.output.protocol.muxPlan().parameters().transportKind !=
                 MediaOutputTransportKind::UdpDatagrams ||
             udp->resourceKind != MediaOutputResourceKind::ByteSink ||
             udp->muxSessionKind != MediaMuxSessionKind::ProjectMpegTs) {
             return Result::failure(::media::ErrorInfo::invalidArgument(
-                "Scheduled MPEG-TS UDP output requires its exact planned transport variant"));
+                "Scheduled MPEG-TS UDP output requires its exact transport"));
         }
         auto base = MediaOutputSegmentBuilder::buildFileMuxOutput(
             graph, FileOutputSegmentOptions{
                 options.prefix, udp->url, {}, udp->resourceKind,
-                options.expectVideo, options.expectAudio,
-                udp->muxSessionKind, plan.queues});
+                true, expectAudio, udp->muxSessionKind, plan.queues});
         if (!base) return Result::failure(base.error());
         udpOutput = base.value().fileOutput;
         mux = base.value().mux;
     } else if (std::holds_alternative<MediaMpegTsRtpOutputPlan>(
-                   output.transport)) {
-        if (output.protocol.muxPlan().parameters().transportKind !=
+                   plan.output.transport)) {
+        if (plan.output.protocol.muxPlan().parameters().transportKind !=
                 MediaOutputTransportKind::RtpAvp) {
             return Result::failure(::media::ErrorInfo::invalidArgument(
-                "Scheduled MPEG-TS RTP output requires its exact planned transport variant"));
+                "Scheduled MPEG-TS RTP output requires its exact transport"));
         }
         auto addedMux = MediaProjectMpegTsMuxSegmentBuilder::build(
-            graph,
-            MediaProjectMpegTsMuxSegmentOptions{
-                options.prefix,
-                options.expectVideo,
-                options.expectAudio,
-                output.muxSessionKind,
-                false});
+            graph, MediaProjectMpegTsMuxSegmentOptions{
+                options.prefix, true, expectAudio,
+                plan.output.muxSessionKind, false});
         if (!addedMux) return Result::failure(addedMux.error());
         mux = addedMux.value();
         rtpSdpPublisher = graph.addNode(
@@ -117,20 +156,20 @@ MediaScheduledMpegTsOutputSegmentBuilder::build(
             return Result::failure(::media::ErrorInfo::internalError(
                 "Scheduled MPEG-TS RTP output failed to add its SDP publisher"));
         }
-        auto groupSet = MediaGraphBuildSupport::setNodeOptionChecked(
-            graph, Owner, rtpSdpPublisher,
-            "mpegts_rtp_sdp.sync_group", plan.groupKey.value());
-        if (!groupSet) return Result::failure(groupSet.error());
+        auto identity = setStreamSetOption(
+            graph, rtpSdpPublisher, "mpegts_rtp_sdp.session",
+            "mpegts_rtp_sdp.stream_set", plan);
+        if (!identity) return Result::failure(identity.error());
         auto planPort = MediaGraphBuildSupport::addInputPortChecked(
             graph, Owner, rtpSdpPublisher, "plan",
             MediaStreamKind::Metadata, MediaEdgeKind::Metadata,
-            MediaPayloadKind::ProjectMpegTsRuntimePlan,
-            true, false);
+            MediaPayloadKind::ProjectMpegTsRuntimePlan, true, false);
         if (!planPort) return Result::failure(planPort.error());
     } else {
         return Result::failure(::media::ErrorInfo::invalidArgument(
-            "Scheduled MPEG-TS output requires one planned transport variant"));
+            "Scheduled MPEG-TS output requires one transport variant"));
     }
+
     const MediaNodeId planSource = graph.addNode(
         MediaNodeKind::ProjectMpegTsPlanSource,
         options.prefix + ".plan.source", "Activated project MPEG-TS plan");
@@ -142,69 +181,80 @@ MediaScheduledMpegTsOutputSegmentBuilder::build(
             "Scheduled MPEG-TS output failed to add its nodes"));
     }
     auto encoded = MediaProjectMpegTsPlanSourceNodePlanCodec::apply(
-        graph, planSource, plan.groupKey, output);
+        graph, planSource, plan.sessionKey, plan.streamSet, plan.output);
     if (!encoded) return Result::failure(encoded.error());
-    auto groupSet = MediaGraphBuildSupport::setNodeOptionChecked(
-        graph, Owner, adapter, "scheduled_ts_adapter.sync_group",
-        plan.groupKey.value());
-    if (!groupSet) return Result::failure(groupSet.error());
+    auto adapterIdentity = setStreamSetOption(
+        graph, adapter, "scheduled_ts_adapter.session",
+        "scheduled_ts_adapter.stream_set", plan);
+    if (!adapterIdentity) return Result::failure(adapterIdentity.error());
+
     using MediaGraphBuildSupport::addInputPortChecked;
     using MediaGraphBuildSupport::addOutputPortChecked;
     if (auto status = addInputPortChecked(
-            graph, Owner, planSource, "epoch", MediaStreamKind::Metadata,
+            graph, Owner, planSource, "activation", MediaStreamKind::Metadata,
             MediaEdgeKind::Event, MediaPayloadKind::GraphEvent, true, false);
         !status) return Result::failure(status.error());
     if (auto status = addOutputPortChecked(
             graph, Owner, planSource, "plan", MediaStreamKind::Metadata,
             MediaEdgeKind::Metadata,
-            MediaPayloadKind::ProjectMpegTsRuntimePlan,
-            true, true); !status) return Result::failure(status.error());
+            MediaPayloadKind::ProjectMpegTsRuntimePlan, true, true);
+        !status) return Result::failure(status.error());
     if (auto status = addInputPortChecked(
             graph, Owner, adapter, "plan", MediaStreamKind::Metadata,
             MediaEdgeKind::Metadata,
-            MediaPayloadKind::ProjectMpegTsRuntimePlan,
-            true, false); !status) return Result::failure(status.error());
+            MediaPayloadKind::ProjectMpegTsRuntimePlan, true, false);
+        !status) return Result::failure(status.error());
     if (auto status = addInputPortChecked(
-            graph, Owner, adapter, "scheduled", MediaStreamKind::Any,
+            graph, Owner, adapter, "scheduled",
+            expectAudio ? MediaStreamKind::Any : MediaStreamKind::Video,
             MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet,
             true, false); !status) return Result::failure(status.error());
     if (auto status = addOutputPortChecked(
             graph, Owner, adapter, "packet", MediaStreamKind::Any,
             MediaEdgeKind::EncodedPacket, MediaPayloadKind::TsAccessUnit,
             true, false); !status) return Result::failure(status.error());
+
     const auto connect = [&](const MediaEndpoint& from, MediaNodeId to,
                              const char* port, const char* label,
                              const MediaEdgePolicy& policy) {
         return MediaGraphBuildSupport::connectChecked(
             graph, Owner, from.node, from.port, to, port, label, policy);
     };
-    for (const auto& [from, to, port, label, policy] : {
-             std::tuple{options.epochActivated, planSource, "epoch",
-                        "playback epoch -> MPEG-TS plan",
+    for (const auto& connection : {
+             std::tuple{options.activation, planSource, "activation",
+                        "output activation -> MPEG-TS plan",
                         plan.edgePolicies.atomicMetadata},
              std::tuple{options.videoCodec, mux, "codec",
-                        "video codec -> MPEG-TS mux", plan.edgePolicies.metadata},
-             std::tuple{options.audioCodec, mux, "codec",
-                        "audio codec -> MPEG-TS mux", plan.edgePolicies.metadata},
+                        "video codec -> MPEG-TS mux",
+                        plan.edgePolicies.metadata},
              std::tuple{options.scheduled, adapter, "scheduled",
-                        "scheduled A/V -> MPEG-TS adapter",
+                        "scheduled media -> MPEG-TS adapter",
                         plan.edgePolicies.synchronizedPacket}}) {
-        auto connected = connect(from, to, port, label, policy);
+        auto connected = connect(
+            std::get<0>(connection), std::get<1>(connection),
+            std::get<2>(connection), std::get<3>(connection),
+            std::get<4>(connection));
         if (!connected) return Result::failure(connected.error());
     }
-    for (const auto& [to, port, label, policy] : {
-             std::tuple{mux, "plan", "MPEG-TS plan -> mux",
-                         plan.edgePolicies.atomicMetadata},
-             std::tuple{adapter, "plan", "MPEG-TS plan -> adapter",
-                         plan.edgePolicies.atomicMetadata}}) {
+    if (options.audioCodec) {
+        auto connected = connect(
+            *options.audioCodec, mux, "codec",
+            "audio codec -> MPEG-TS mux", plan.edgePolicies.metadata);
+        if (!connected) return Result::failure(connected.error());
+    }
+    for (const auto& target : {
+             std::pair{mux, "MPEG-TS plan -> mux"},
+             std::pair{adapter, "MPEG-TS plan -> adapter"}}) {
         auto connected = MediaGraphBuildSupport::connectChecked(
-            graph, Owner, planSource, "plan", to, port, label, policy);
+            graph, Owner, planSource, "plan", target.first, "plan",
+            target.second, plan.edgePolicies.atomicMetadata);
         if (!connected) return Result::failure(connected.error());
     }
-    auto packetConnected = MediaGraphBuildSupport::connectChecked(
+    auto packet = MediaGraphBuildSupport::connectChecked(
         graph, Owner, adapter, "packet", mux, "packet",
-        "scheduled TS AU -> project mux", plan.edgePolicies.synchronizedPacket);
-    if (!packetConnected) return Result::failure(packetConnected.error());
+        "scheduled TS AU -> project mux",
+        plan.edgePolicies.synchronizedPacket);
+    if (!packet) return Result::failure(packet.error());
     if (rtpSdpPublisher.isValid()) {
         auto connected = MediaGraphBuildSupport::connectChecked(
             graph, Owner, planSource, "plan", rtpSdpPublisher, "plan",
@@ -214,6 +264,57 @@ MediaScheduledMpegTsOutputSegmentBuilder::build(
     }
     return Result::success(
         {planSource, adapter, udpOutput, mux, rtpSdpPublisher});
+}
+
+} // namespace
+
+::media::Result<MediaScheduledMpegTsOutputSegmentResult>
+MediaScheduledMpegTsOutputSegmentBuilder::build(
+    MediaGraph& graph,
+    const MediaScheduledMpegTsOutputSegmentOptions& options,
+    const MediaRealtimeAvSyncRuntimePlan& plan)
+{
+    if (!options.expectVideo || !options.expectAudio ||
+        !plan.groupKey.valid() ||
+        plan.outputAdapter != MediaAvSyncOutputAdapterKind::ProjectMpegTs ||
+        !std::holds_alternative<MediaProjectMpegTsRuntimeOutputPlan>(
+            plan.protocolOutput)) {
+        return ::media::Result<MediaScheduledMpegTsOutputSegmentResult>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "A/V MPEG-TS output requires its complete runtime product"));
+    }
+    return buildCommon(
+        graph,
+        CommonOptions{options.prefix, options.epochActivated,
+                      options.videoCodec, options.audioCodec,
+                      options.scheduled},
+        CommonPlan{MediaProtocolOutputSessionKey(plan.groupKey.value()),
+                   MediaTranscodeStreamSet::AudioVideo,
+                   std::get<MediaProjectMpegTsRuntimeOutputPlan>(
+                       plan.protocolOutput),
+                   plan.queues, plan.edgePolicies});
+}
+
+::media::Result<MediaScheduledMpegTsOutputSegmentResult>
+MediaScheduledMpegTsOutputSegmentBuilder::buildVideoOnly(
+    MediaGraph& graph,
+    const MediaVideoOnlyScheduledMpegTsOutputSegmentOptions& options,
+    const MediaRealtimeVideoRuntimePlan& plan)
+{
+    const auto* output = std::get_if<MediaProjectMpegTsRuntimeOutputPlan>(
+        &plan.outputAdapter);
+    if (!output || !plan.sessionKey.valid()) {
+        return ::media::Result<MediaScheduledMpegTsOutputSegmentResult>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "VideoOnly MPEG-TS output requires its complete runtime product"));
+    }
+    return buildCommon(
+        graph,
+        CommonOptions{options.prefix, options.activation,
+                      options.videoCodec, std::nullopt,
+                      options.scheduledVideo},
+        CommonPlan{plan.sessionKey, MediaTranscodeStreamSet::VideoOnly,
+                   *output, plan.queues, plan.edgePolicies});
 }
 
 } // namespace media::ffmpeg::graph

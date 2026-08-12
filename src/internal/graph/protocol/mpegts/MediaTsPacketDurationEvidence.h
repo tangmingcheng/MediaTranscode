@@ -3,6 +3,7 @@
 #include "internal/graph/model/MediaGraphTypes.h"
 
 #include <cstdint>
+#include <variant>
 
 namespace media::ffmpeg::graph {
 
@@ -22,11 +23,19 @@ struct MediaTsPacketDurationEvidence final {
     }
 };
 
-struct MediaTsSelectedPacketDurationEvidence final {
+struct MediaTsVideoOnlyPacketDurationEvidence final {
+    MediaTsPacketDurationEvidence video;
+    bool operator==(const MediaTsVideoOnlyPacketDurationEvidence&) const = default;
+};
+
+struct MediaTsAudioVideoPacketDurationEvidence final {
     MediaTsPacketDurationEvidence video;
     MediaTsPacketDurationEvidence audio;
-    friend bool operator==(const MediaTsSelectedPacketDurationEvidence&,
-                           const MediaTsSelectedPacketDurationEvidence&) = default;
+    bool operator==(const MediaTsAudioVideoPacketDurationEvidence&) const = default;
 };
+
+using MediaTsSelectedPacketDurationEvidence = std::variant<
+    MediaTsVideoOnlyPacketDurationEvidence,
+    MediaTsAudioVideoPacketDurationEvidence>;
 
 } // namespace media::ffmpeg::graph

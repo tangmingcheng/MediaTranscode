@@ -36,6 +36,7 @@ const char* toString(MediaNodeKind kind)
     case MediaNodeKind::RtpClockSnapshotFanout: return "RtpClockSnapshotFanout";
     case MediaNodeKind::AvStartupCoordinator: return "AvStartupCoordinator";
     case MediaNodeKind::AvOutputScheduler: return "AvOutputScheduler";
+    case MediaNodeKind::VideoOutputScheduler: return "VideoOutputScheduler";
     case MediaNodeKind::PlaybackEpochBinder: return "PlaybackEpochBinder";
     case MediaNodeKind::CanonicalInput: return "CanonicalInput";
     case MediaNodeKind::LockedPacketGate: return "LockedPacketGate";
@@ -47,7 +48,7 @@ const char* toString(MediaNodeKind kind)
     case MediaNodeKind::EncodedAudioCanonicalizer: return "EncodedAudioCanonicalizer";
     case MediaNodeKind::ScheduledOutputRouter: return "ScheduledOutputRouter";
     case MediaNodeKind::ScheduledRtpSender: return "ScheduledRtpSender";
-    case MediaNodeKind::DualMediaSdpPublisher: return "DualMediaSdpPublisher";
+    case MediaNodeKind::RtpSdpPublisher: return "RtpSdpPublisher";
     case MediaNodeKind::MpegTsRtpSdpPublisher: return "MpegTsRtpSdpPublisher";
     case MediaNodeKind::AvBoundReleaseExtractor: return "AvBoundReleaseExtractor";
     case MediaNodeKind::PacketMerge: return "PacketMerge";

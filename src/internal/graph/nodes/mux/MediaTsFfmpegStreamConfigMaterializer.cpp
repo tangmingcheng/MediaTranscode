@@ -274,7 +274,13 @@ MediaTsFfmpegStreamConfigMaterializer::audio(
         return ::media::Result<MediaTsMaterializedAudioConfig>::failure(
             asc.error());
     }
-    const auto& planned = plan.parameters().aac;
+    const auto* program = plan.audioVideoProgram();
+    if (!program) {
+        return ::media::Result<MediaTsMaterializedAudioConfig>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MPEG-TS audio materializer rejects a VideoOnly mux plan"));
+    }
+    const auto& planned = program->aac;
     if (planned.audioObjectType != asc.value().audioObjectType ||
         planned.samplingFrequencyIndex != asc.value().samplingFrequencyIndex ||
         planned.channelConfiguration != asc.value().channelConfiguration ||

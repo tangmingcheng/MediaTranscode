@@ -494,3 +494,11 @@ builder 只消费 planner 产生的完整 plan；runtime node 不推断协议、
 - 提供常用 pipeline 的入口封装
 - 简化外部调用方创建标准 graph 的过程
 ```
+
+## Realtime stream-set and prepared-input contracts
+
+Realtime requests select exactly one `MediaTranscodeStreamSet`: `VideoOnly` or `AudioVideo`. The planner produces one matching runtime variant and owns input selection, startup timing, queue and byte limits, protocol identity, scheduling and output shape. Builders only materialize that product; runtime validators reject missing or inconsistent facts instead of selecting defaults.
+
+`VideoOnly` has a video-only lineage from input through scheduling and output. Its lossless startup policies are bounded by the planned packet, byte and frame capacities. Separate RTP publishes one video media description. Project MPEG-TS publishes H.264 video with a video-derived PCR and no audio PID or PES; MPEG-TS/RTP uses PT 33 at 90 kHz.
+
+Synchronized `AudioVideo` retains the canonical startup coordinator, generation authority, A/V drift correction and scheduled output path. Generic RTSP preparation owns the FFmpeg input context through capability planning, captures selected packets into a bounded move-only replay queue, selects a planner-authorized common initial timestamp window, and hands the same context and packet lineage to the demux runtime. Scan bounds and the longer prepared-handoff packet/byte bounds are distinct explicit products. No arrival-time timestamp synthesis or downstream timing fallback is permitted.

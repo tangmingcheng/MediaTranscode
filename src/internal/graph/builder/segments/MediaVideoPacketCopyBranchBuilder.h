@@ -17,6 +17,7 @@ struct MediaVideoPacketCopyBranchOptions {
     MediaPipelinePlan plan;
     MediaGraphQueueParameters queues;
     MediaRealtimeEdgePolicySet edgePolicies;
+    std::optional<MediaVideoLineageEdgePolicySet> lineageEdgePolicies;
 
     MediaNodeId formatSourceNode = MediaNodeId::invalid();
     std::string formatSourcePort = "format";

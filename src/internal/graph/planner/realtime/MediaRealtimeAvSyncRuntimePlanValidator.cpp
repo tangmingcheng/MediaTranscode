@@ -13,48 +13,19 @@
 #include <cstdint>
 #include <limits>
 #include <string>
-#include <variant>
 
 namespace media::ffmpeg::graph {
 
 ::media::Status MediaRealtimeAvSyncRuntimePlanValidator::validate(
-    const MediaRealtimeRtpTranscodePlan& outer)
+    const MediaRealtimeRtpTranscodePlan& outer,
+    const MediaRealtimeAvSyncRuntimePlan& runtime)
 {
     const auto invalid = [](const char* field) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument(
                 std::string("Invalid synchronized runtime product: ") + field));
     };
-    if (outer.avSyncRuntime.has_value() ==
-        outer.singleStreamOutput.has_value()) {
-        return invalid("exactly one output product is required");
-    }
-    if (!outer.avSyncRuntime) {
-        if (outer.audioPlan.enabled) {
-            return invalid("required runtime product is absent");
-        }
-        const auto& output = *outer.singleStreamOutput;
-        if (outer.outputLayout == RealtimeOutputStreamLayout::SeparateStreams) {
-            if (output.rtpOutput.url.empty() ||
-                output.rtpOutput.packetSize <= 0 ||
-                output.sdp.path.empty() || !output.mux.expectVideo ||
-                output.mux.expectAudio) {
-                return invalid("single-stream RTP output");
-            }
-        } else if (outer.outputLayout ==
-                   RealtimeOutputStreamLayout::MuxedTransportStream) {
-            if (output.muxedOutput.url.empty() ||
-                output.muxedOutput.format.empty() ||
-                !output.muxedOutput.muxSessionKind ||
-                !output.mux.expectVideo || output.mux.expectAudio) {
-                return invalid("single-stream muxed output");
-            }
-        } else {
-            return invalid("single-stream output layout");
-        }
-        return ::media::Status::success();
-    }
-    if (outer.audioPlan.branchMode != MediaBranchMode::TranscodeFrame) {
+    if (runtime.audioPipeline.branchMode != MediaBranchMode::TranscodeFrame) {
         return ::media::Status::failure(
             ::media::ErrorInfo::unsupported(
                 "Synchronized runtime product rejects audio packet copy"));
@@ -64,14 +35,14 @@ namespace media::ffmpeg::graph {
             ::media::ErrorInfo::unsupported(
                 "Synchronized runtime product rejects video packet copy"));
     }
-    const auto& runtime = *outer.avSyncRuntime;
     if (runtime.groupKey.value() != "realtime.av" ||
         !MediaAvSyncPlanValidator::validate(runtime.synchronization)) {
         return invalid("group or synchronization plan");
     }
-    auto selectedBounds = MediaRealtimeAvSyncComponentBoundsPlanner::plan(outer);
-    if (!selectedBounds || !outer.avSyncComponentBounds ||
-        selectedBounds.value() != *outer.avSyncComponentBounds) {
+    auto selectedBounds = MediaRealtimeAvSyncComponentBoundsPlanner::plan(
+        runtime.queues, runtime.audioPipeline);
+    if (!selectedBounds ||
+        selectedBounds.value() != runtime.componentBounds) {
         return invalid("selected component bounds");
     }
     MediaRealtimeOutputPlanningDraft selectedOutput;
@@ -83,7 +54,10 @@ namespace media::ffmpeg::graph {
             runtime.planningFacts.outputAudioRtpPacketization;
     }
     auto selectedFacts = MediaRealtimeAvSyncPlanningFactsResolver::resolve(
-        outer, selectedOutput, runtime.synchronization);
+        outer, runtime.audioPipeline, runtime.componentBounds,
+        runtime.isolatedAudioInput ? &*runtime.isolatedAudioInput : nullptr,
+        selectedOutput,
+        runtime.synchronization);
     if (!selectedFacts || selectedFacts.value() != runtime.planningFacts) {
         return invalid("selected planning facts");
     }
@@ -147,12 +121,6 @@ namespace media::ffmpeg::graph {
         *runtime.synchronization.audioServo.frequencyFilterTimeConstantNs !=
             expectedCorrection.value().frequencyFilterTimeConstant) {
         return invalid("audio correction derivation");
-    }
-    if (runtime.queues.metadata != outer.queues.metadata ||
-        runtime.queues.packet != outer.queues.packet ||
-        runtime.queues.frame != outer.queues.frame ||
-        runtime.queues.mux != outer.queues.mux) {
-        return invalid("queue product");
     }
     if (runtime.edgePolicies !=
         MediaRealtimeEdgePolicyPlanner::plan(runtime.queues)) {

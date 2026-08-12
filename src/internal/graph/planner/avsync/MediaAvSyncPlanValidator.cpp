@@ -297,6 +297,70 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
     return ::media::Status::success();
 }
 
+::media::Status validatePreparedDemuxEvidence(
+    const MediaPreparedGenericInputPlan& prepared,
+    const MediaPreparedGenericInputEvidence& evidence)
+{
+    const auto& video = evidence.firstVideo;
+    const auto& audio = evidence.firstAudio;
+    const auto noTimestamp = std::numeric_limits<std::int64_t>::min();
+    const bool leadingCountMatchesBytes =
+        (evidence.discardedLeadingVideoPackets == 0) ==
+        (evidence.discardedLeadingVideoBytes == 0);
+    const bool timedVideoCountMatchesBytes =
+        (evidence.discardedTimedVideoPrefixPackets == 0) ==
+        (evidence.discardedTimedVideoPrefixBytes == 0);
+    const bool timedAudioCountMatchesBytes =
+        (evidence.discardedTimedAudioPrefixPackets == 0) ==
+        (evidence.discardedTimedAudioPrefixBytes == 0);
+    if (video.streamIndex != prepared.videoStreamIndex ||
+        audio.streamIndex != prepared.audioStreamIndex ||
+        video.timeBase.num != prepared.videoTimeBase.num ||
+        video.timeBase.den != prepared.videoTimeBase.den ||
+        audio.timeBase.num != prepared.audioTimeBase.num ||
+        audio.timeBase.den != prepared.audioTimeBase.den ||
+        video.pts == noTimestamp || video.dts == noTimestamp ||
+        audio.pts == noTimestamp || audio.dts == noTimestamp ||
+        video.duration <= 0 || audio.duration <= 0 ||
+        !leadingCountMatchesBytes || !timedVideoCountMatchesBytes ||
+        !timedAudioCountMatchesBytes ||
+        evidence.discardedLeadingVideoPackets >
+            prepared.videoPacketCapacity ||
+        evidence.discardedTimedVideoPrefixPackets >
+            prepared.videoPacketCapacity -
+                evidence.discardedLeadingVideoPackets ||
+        evidence.discardedTimedAudioPrefixPackets >
+            prepared.audioPacketCapacity ||
+        evidence.discardedLeadingVideoBytes > prepared.videoByteCapacity ||
+        evidence.discardedTimedVideoPrefixBytes >
+            prepared.videoByteCapacity -
+                evidence.discardedLeadingVideoBytes ||
+        evidence.discardedTimedAudioPrefixBytes >
+            prepared.audioByteCapacity ||
+        evidence.discardedLeadingVideoPackets +
+                evidence.discardedTimedVideoPrefixPackets >
+            video.preparedReadOrdinal ||
+        evidence.discardedTimedAudioPrefixPackets >
+            audio.preparedReadOrdinal) {
+        return invalid("prepared demux timestamp evidence");
+    }
+
+    auto videoPresentation = MediaRunningTime::checkedFromTicks(
+        video.pts, video.timeBase.num, video.timeBase.den);
+    auto audioPresentation = MediaRunningTime::checkedFromTicks(
+        audio.pts, audio.timeBase.num, audio.timeBase.den);
+    if (!videoPresentation || !audioPresentation) {
+        return invalid("prepared demux timestamp evidence");
+    }
+    auto skew = videoPresentation.value() >= audioPresentation.value()
+        ? videoPresentation.value().checkedSubtract(audioPresentation.value())
+        : audioPresentation.value().checkedSubtract(videoPresentation.value());
+    if (!skew || skew.value() > prepared.firstWindowMaximumSkew) {
+        return invalid("prepared demux timestamp common window");
+    }
+    return ::media::Status::success();
+}
+
 ::media::Status validateDemuxInput(const MediaAvSyncPlan& plan)
 {
     if (plan.rtpInput || plan.mpegTsInput || !plan.demuxTimestampInput ||
@@ -313,13 +377,27 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
         !positive(demux.discontinuityThresholdNs) ||
         !positive(demux.initialGeneration) ||
         !demux.canonicalTargetEpochNs ||
+        !demux.preparedInput || !demux.preparedEvidence ||
+        !demux.preparedInput->validate() ||
+        plan.startup.requireVideoKeyFrame != true ||
+        demux.preparedInput->leadingVideoDisposition !=
+            MediaPreparedLeadingVideoDisposition::
+                DiscardUntimedNonKeyBeforeFirstTimedVideo ||
+        demux.preparedInput->timedStartupPrefixDisposition !=
+            MediaPreparedTimedStartupPrefixDisposition::
+                DiscardEarlierCompleteTimedUntilCommonWindow ||
+        demux.preparedInput->videoTimeBase.num != demux.videoTimeBase.num ||
+        demux.preparedInput->videoTimeBase.den != demux.videoTimeBase.den ||
+        demux.preparedInput->audioTimeBase.num != demux.audioTimeBase.num ||
+        demux.preparedInput->audioTimeBase.den != demux.audioTimeBase.den ||
         demux.firstWindowMaximumSkewNs !=
             plan.startup.maximumInitialSkewNs ||
         demux.discontinuityThresholdNs !=
             plan.recovery.hardDiscontinuityThresholdNs) {
         return invalid("demux timestamp policy");
     }
-    return ::media::Status::success();
+    return validatePreparedDemuxEvidence(
+        *demux.preparedInput, *demux.preparedEvidence);
 }
 
 ::media::Status validateRtpOutput(const MediaAvSyncPlan& plan)

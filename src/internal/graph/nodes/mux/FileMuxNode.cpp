@@ -29,11 +29,12 @@ FileMuxNode::FileMuxNode(MediaNodeId nodeId)
 
 FileMuxNode::FileMuxNode(
     MediaNodeId nodeId,
-    std::shared_ptr<MediaProtocolOutputGenerationState> generationState)
+    std::shared_ptr<MediaProtocolOutputGenerationState> generationState,
+    std::shared_ptr<MediaProtocolOutputRuntimeAuthority> outputAuthority)
     : FFmpegNodeRuntime(nodeId, staticKind(), "FileMuxNode")
     , m_generationState(std::move(generationState))
     , m_sessionFactory(std::make_unique<ExplicitMediaMuxSessionFactory>(
-          m_generationState))
+          m_generationState, std::move(outputAuthority)))
 {
 }
 
@@ -343,10 +344,10 @@ void FileMuxNode::observeClosedInputs(MediaGraphExecutionContext& context)
             MediaNodeProcessResult::progress());
     }
     if (polled.value().nextWait) {
-        const auto& wait = *polled.value().nextWait;
         return ::media::Result<MediaNodeProcessResult>::success(
-            MediaNodeProcessResult::waitingUntil(
-                wait.syncGroup, wait.masterDeadline));
+            MediaNodeProcessResult{
+                MediaNodeProcessState::Waiting,
+                polled.value().nextWait});
     }
     return processWaiting();
 }

@@ -1,5 +1,6 @@
 #include "internal/graph/planner/realtime/MediaRealtimeRequestValidator.h"
 
+#include "internal/graph/planner/MediaTranscodeStreamSetRequestValidator.h"
 #include "internal/graph/planner/realtime/MediaRealtimeOutputPolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpCodecDescriptor.h"
@@ -45,11 +46,97 @@ namespace {
     return ::media::Status::success();
 }
 
+bool rawRtpAudioControlSpecified(
+    const MediaRealtimeRtpInputMetadata& audio) noexcept
+{
+    return !audio.url.empty() ||
+        !audio.codecName.empty() ||
+        audio.payloadType.has_value() ||
+        audio.clockRate.has_value() ||
+        audio.channels.has_value() ||
+        audio.bitrateKbps.has_value() ||
+        audio.fmtp.has_value();
+}
+
+bool preparedHandoffControlSpecified(
+    const MediaRealtimePreparedHandoffConfig& handoff) noexcept
+{
+    return handoff.videoPacketCapacity.has_value() ||
+        handoff.audioPacketCapacity.has_value() ||
+        handoff.videoByteCapacity.has_value() ||
+        handoff.audioByteCapacity.has_value();
+}
+
+::media::Status validatePreparedHandoffControls(
+    const MediaRealtimeRtpTranscodeRequest& request)
+{
+    const bool required =
+        MediaRealtimeRequestClassifier::realtimeUrlInput(request) &&
+        request.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo;
+    const bool specified = preparedHandoffControlSpecified(request.preparedHandoff);
+    if (!required && specified) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Prepared generic-input handoff bounds are valid only for AudioVideo session input"));
+    }
+    if (required && !specified) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "AudioVideo session input requires explicit prepared handoff bounds"));
+    }
+    return ::media::Status::success();
+}
+
+::media::Status validateStreamSetControls(
+    const MediaRealtimeRtpTranscodeRequest& request)
+{
+    if (!request.avSyncStartup.maximumVideoUnitBytes ||
+        *request.avSyncStartup.maximumVideoUnitBytes == 0) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Realtime input requires an explicit positive video startup bound"));
+    }
+
+    switch (*request.parameters.execution.streamSet) {
+    case MediaTranscodeStreamSet::AudioVideo:
+        if (!request.avSyncStartup.maximumAudioUnitBytes ||
+            *request.avSyncStartup.maximumAudioUnitBytes == 0 ||
+            !request.avSyncStartup.maximumGap ||
+            request.avSyncStartup.maximumGap->nanoseconds() <= 0) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "AudioVideo requires explicit positive audio startup and A/V gap bounds"));
+        }
+        return ::media::Status::success();
+    case MediaTranscodeStreamSet::VideoOnly:
+        if (request.avSyncStartup.maximumAudioUnitBytes ||
+            request.avSyncStartup.maximumGap) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "VideoOnly rejects audio startup and A/V gap bounds"));
+        }
+        if (rawRtpAudioControlSpecified(request.input.audioRtp)) {
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "VideoOnly rejects raw RTP audio controls"));
+        }
+        return ::media::Status::success();
+    }
+
+    return ::media::Status::failure(::media::ErrorInfo::unsupported(
+        "Transcode stream set is not supported"));
+}
+
 } // namespace
 
 ::media::Status MediaRealtimeRequestValidator::validate(const MediaRealtimeRtpTranscodeRequest& request)
 {
+    if (request.mediaId.empty()) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Realtime media identity must be explicit"));
+    }
+    if (auto status = MediaTranscodeStreamSetRequestValidator::validate(
+            request.parameters);
+        !status) {
+        return status;
+    }
+    if (auto status = validateStreamSetControls(request); !status) return status;
     if (auto status = validateClassification(request); !status) return status;
+    if (auto status = validatePreparedHandoffControls(request); !status) return status;
     if ((MediaRealtimeRequestClassifier::realtimeUrlInput(request) ||
          MediaRealtimeRequestClassifier::mpegTsUdpInput(request)) && request.input.url.empty()) {
         return ::media::Status::failure(
@@ -95,7 +182,7 @@ namespace {
             "maximum PCR gap is valid only for MPEG-TS input"));
     }
     if (MediaRealtimeRequestClassifier::rawRtpInput(request) &&
-        MediaRealtimeRequestClassifier::audioRequested(request)) {
+        request.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo) {
         auto audio = MediaRealtimeRtpCodecRegistry::describe(
             MediaStreamKind::Audio, request.input.audioRtp);
         if (!audio) {

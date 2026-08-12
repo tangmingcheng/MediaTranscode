@@ -22,18 +22,21 @@ bool validPacketDurationEvidence(
 
 ::media::Result<MediaRealtimeAvSyncPlanningFacts>
 MediaRealtimeAvSyncPlanningFactsResolver::resolve(
-    const MediaRealtimeRtpTranscodePlan& plan,
+    const MediaRealtimeRtpTranscodePlanCore& plan,
+    const MediaAudioPipelinePlan& audio,
+    const MediaRealtimeAvSyncComponentBounds& componentBounds,
+    const MediaRealtimeRtpInputNodePlan* isolatedAudioInput,
     const MediaRealtimeOutputPlanningDraft& plannedOutput,
     const MediaAvSyncPlan& synchronization)
 {
-    if (!plan.audioPlan.resolvedOutput || !plan.avSyncComponentBounds ||
+    if (!audio.resolvedOutput ||
         !synchronization.audioServo.outputSampleRate) {
         return ::media::Result<MediaRealtimeAvSyncPlanningFacts>::failure(
             ::media::ErrorInfo::notInitialized(
                 "synchronized planning requires codec, resampler, and servo timing facts"));
     }
-    const auto& output = *plan.audioPlan.resolvedOutput;
-    const auto& bounds = *plan.avSyncComponentBounds;
+    const auto& output = *audio.resolvedOutput;
+    const auto& bounds = componentBounds;
     if (bounds.decoderDelaySamples < 0 || bounds.decodeQueueSamples <= 0 ||
         bounds.resampleQueueSamples <= 0 || bounds.encodeQueueSamples <= 0 ||
         bounds.schedulerQueueSamples <= 0 ||
@@ -65,8 +68,8 @@ MediaRealtimeAvSyncPlanningFactsResolver::resolve(
         if (!synchronization.rtpInput ||
             !synchronization.rtpInput->videoInput.clockRate ||
             !synchronization.rtpInput->audioInput.clockRate ||
-            !plan.audioInput.rtpDepacketizer ||
-            plan.audioInput.rtpDepacketizer->accessUnitDurationRtpTicks <= 0) {
+            !isolatedAudioInput || !isolatedAudioInput->rtpDepacketizer ||
+            isolatedAudioInput->rtpDepacketizer->accessUnitDurationRtpTicks <= 0) {
             return ::media::Result<MediaRealtimeAvSyncPlanningFacts>::failure(
                 ::media::ErrorInfo::notInitialized(
                     "RTP input clock does not publish complete duration facts"));
@@ -76,56 +79,58 @@ MediaRealtimeAvSyncPlanningFactsResolver::resolve(
         facts.inputAudioSampleRate =
             *synchronization.rtpInput->audioInput.clockRate;
         facts.inputAudioSamplesPerAccessUnit = static_cast<std::uint32_t>(
-            plan.audioInput.rtpDepacketizer->accessUnitDurationRtpTicks);
+            isolatedAudioInput->rtpDepacketizer->accessUnitDurationRtpTicks);
     } else if (*synchronization.sourceClockMode ==
                MediaAvSyncSourceClockMode::MpegTsPcr) {
-        if (!plan.audioPlan.selectedDecoder ||
-            plan.audioPlan.selectedDecoder->inputSampleRate <= 0 ||
-            plan.audioPlan.selectedDecoder->maximumOutputBlockInputSamples <= 0 ||
-            plan.audioPlan.selectedDecoder->maximumOutputBlockInputSamples >
+        const auto* selectedProgram = plan.input.mpegTs
+            ? std::get_if<MediaTsAudioVideoSelectedProgramPlan>(
+                  &plan.input.mpegTs->selectedProgram)
+            : nullptr;
+        if (!audio.selectedDecoder ||
+            audio.selectedDecoder->inputSampleRate <= 0 ||
+            audio.selectedDecoder->maximumOutputBlockInputSamples <= 0 ||
+            audio.selectedDecoder->maximumOutputBlockInputSamples >
                 std::numeric_limits<std::uint32_t>::max() ||
             !synchronization.mpegTsInput ||
             !synchronization.mpegTsInput->videoPid ||
             !synchronization.mpegTsInput->audioPid ||
-            !plan.input.mpegTs ||
-            !plan.input.mpegTs->videoPacketDuration ||
-            !plan.input.mpegTs->audioPacketDuration ||
+            !selectedProgram ||
             !validPacketDurationEvidence(
-                *plan.input.mpegTs->videoPacketDuration,
+                selectedProgram->videoPacketDuration,
                 plan.videoPlan.sourceStreamIndex,
                 *synchronization.mpegTsInput->videoPid) ||
             !validPacketDurationEvidence(
-                *plan.input.mpegTs->audioPacketDuration,
-                plan.audioPlan.sourceStreamIndex,
+                selectedProgram->audioPacketDuration,
+                audio.sourceStreamIndex,
                 *synchronization.mpegTsInput->audioPid)) {
             return ::media::Result<MediaRealtimeAvSyncPlanningFacts>::failure(
                 ::media::ErrorInfo::notInitialized(
                     "MPEG-TS input clock does not publish complete duration facts"));
         }
         facts.inputAudioSampleRate =
-            plan.audioPlan.selectedDecoder->inputSampleRate;
+            audio.selectedDecoder->inputSampleRate;
         facts.inputAudioSamplesPerAccessUnit = static_cast<std::uint32_t>(
-            plan.audioPlan.selectedDecoder->maximumOutputBlockInputSamples);
+            audio.selectedDecoder->maximumOutputBlockInputSamples);
         facts.inputVideoPacketDuration =
-            plan.input.mpegTs->videoPacketDuration;
+            selectedProgram->videoPacketDuration;
         facts.inputAudioPacketDuration =
-            plan.input.mpegTs->audioPacketDuration;
+            selectedProgram->audioPacketDuration;
     } else if (*synchronization.sourceClockMode ==
                MediaAvSyncSourceClockMode::DemuxTimestamps) {
         if (!synchronization.demuxTimestampInput ||
-            !plan.audioPlan.selectedDecoder ||
-            plan.audioPlan.selectedDecoder->inputSampleRate <= 0 ||
-            plan.audioPlan.selectedDecoder->maximumOutputBlockInputSamples <= 0 ||
-            plan.audioPlan.selectedDecoder->maximumOutputBlockInputSamples >
+            !audio.selectedDecoder ||
+            audio.selectedDecoder->inputSampleRate <= 0 ||
+            audio.selectedDecoder->maximumOutputBlockInputSamples <= 0 ||
+            audio.selectedDecoder->maximumOutputBlockInputSamples >
                 std::numeric_limits<std::uint32_t>::max()) {
             return ::media::Result<MediaRealtimeAvSyncPlanningFacts>::failure(
                 ::media::ErrorInfo::notInitialized(
                     "demux timestamp input does not publish complete duration facts"));
         }
         facts.inputAudioSampleRate =
-            plan.audioPlan.selectedDecoder->inputSampleRate;
+            audio.selectedDecoder->inputSampleRate;
         facts.inputAudioSamplesPerAccessUnit = static_cast<std::uint32_t>(
-            plan.audioPlan.selectedDecoder->maximumOutputBlockInputSamples);
+            audio.selectedDecoder->maximumOutputBlockInputSamples);
     } else {
         return ::media::Result<MediaRealtimeAvSyncPlanningFacts>::failure(
             ::media::ErrorInfo::unsupported(
@@ -155,16 +160,17 @@ MediaRealtimeAvSyncPlanningFactsResolver::resolve(
             *plannedOutput.audioOutput.scheduledPacketization
                  ->maximumAccessUnitSamples();
     } else {
-        if (!synchronization.projectMpegTsOutput->outputMux ||
-            synchronization.projectMpegTsOutput->outputMux->parameters()
-                    .maximumAudioAccessUnitSamples <= 0) {
+        const auto* program = synchronization.projectMpegTsOutput->outputMux
+            ? synchronization.projectMpegTsOutput->outputMux
+                  ->audioVideoProgram()
+            : nullptr;
+        if (!program || program->maximumAudioAccessUnitSamples <= 0) {
             return ::media::Result<MediaRealtimeAvSyncPlanningFacts>::failure(
                 ::media::ErrorInfo::notInitialized(
                     "Project MPEG-TS output does not publish audio batch timing"));
         }
         facts.protocolBatchSamples =
-            synchronization.projectMpegTsOutput->outputMux->parameters()
-                .maximumAudioAccessUnitSamples;
+            program->maximumAudioAccessUnitSamples;
     }
     facts.mailboxDeliveryMarginSamples = bounds.mailboxDeliveryMarginSamples;
     facts.maximumResamplerOutputBlockSamples = bounds.maximumResamplerOutputBlockSamples;

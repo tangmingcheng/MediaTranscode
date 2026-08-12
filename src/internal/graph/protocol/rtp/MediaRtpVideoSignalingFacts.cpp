@@ -1,9 +1,11 @@
 #include "internal/graph/protocol/rtp/MediaRtpVideoSignalingFacts.h"
 
+#include "internal/graph/protocol/rtp/MediaHevcRtpCapability.h"
 #include "internal/graph/protocol/rtp/MediaRtpFmtp.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 
 #include <algorithm>
+#include <cctype>
 #include <iomanip>
 #include <sstream>
 #include <utility>
@@ -42,6 +44,54 @@ std::string h264ProfileLevelId(std::span<const std::uint8_t> sps)
         output << std::setw(2) << static_cast<unsigned int>(sps[index]);
     }
     return output.str();
+}
+
+::media::Result<std::vector<std::uint8_t>> requiredParameterSet(
+    const MediaRtpFmtpParameters& parameters,
+    const char* key)
+{
+    const auto found = parameters.find(key);
+    if (found == parameters.end()) {
+        return ::media::Result<std::vector<std::uint8_t>>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                std::string("RTP video fmtp requires ") + key));
+    }
+    return decodeRtpFmtpBase64(found->second);
+}
+
+::media::Result<void> validateH264ParameterSet(
+    std::span<const std::uint8_t> bytes,
+    std::uint8_t expectedType,
+    const char* owner)
+{
+    if (bytes.empty() || (expectedType == 7 && bytes.size() < 4) ||
+        (bytes[0] & 0x1f) != expectedType) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                std::string("RTP video fmtp has malformed ") + owner));
+    }
+    return ::media::Result<void>::success();
+}
+
+::media::Result<void> validateHevcParameterSet(
+    std::span<const std::uint8_t> bytes,
+    std::uint8_t expectedType,
+    const char* owner)
+{
+    if (bytes.size() < 2 || ((bytes[0] >> 1) & 0x3f) != expectedType) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                std::string("RTP video fmtp has malformed ") + owner));
+    }
+    return ::media::Result<void>::success();
+}
+
+bool isHexProfileLevelId(const std::string& value)
+{
+    return value.size() == 6 && std::all_of(
+        value.begin(), value.end(), [](unsigned char character) {
+            return std::isxdigit(character) != 0;
+        });
 }
 
 } // namespace
@@ -256,6 +306,117 @@ MediaRtpVideoSignalingObserver::evidence() const noexcept
     return ::media::Result<std::string>::success(
         "sprop-vps=" + vps.value() + ";sprop-sps=" + sps.value() +
         ";sprop-pps=" + pps.value());
+}
+
+::media::Result<MediaRtpVideoSignalingFacts> parseRtpVideoSignalingFacts(
+    const std::string& requestedCodecName,
+    const std::string& fmtp)
+{
+    const std::string codecName = canonicalCodecName(requestedCodecName);
+    auto parameters = parseRtpFmtp(fmtp);
+    if (!parameters) {
+        return ::media::Result<MediaRtpVideoSignalingFacts>::failure(
+            parameters.error());
+    }
+
+    if (codecName == "h264") {
+        auto packetizationMode = requiredRtpFmtpInt(
+            parameters.value(), "packetization-mode");
+        if (!packetizationMode || packetizationMode.value() != 1) {
+            return ::media::Result<MediaRtpVideoSignalingFacts>::failure(
+                packetizationMode
+                    ? ::media::ErrorInfo::unsupported(
+                          "RTP H264 fmtp requires packetization-mode=1")
+                    : packetizationMode.error());
+        }
+        const auto parameterSets =
+            parameters.value().find("sprop-parameter-sets");
+        const auto profileLevelId = parameters.value().find("profile-level-id");
+        if (parameterSets == parameters.value().end() ||
+            profileLevelId == parameters.value().end() ||
+            !isHexProfileLevelId(profileLevelId->second)) {
+            return ::media::Result<MediaRtpVideoSignalingFacts>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "RTP H264 fmtp requires a six-digit hexadecimal profile-level-id and sprop-parameter-sets"));
+        }
+        const auto separator = parameterSets->second.find(',');
+        if (separator == std::string::npos ||
+            parameterSets->second.find(',', separator + 1) != std::string::npos) {
+            return ::media::Result<MediaRtpVideoSignalingFacts>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "RTP H264 fmtp requires exactly one SPS and one PPS"));
+        }
+        auto sps = decodeRtpFmtpBase64(parameterSets->second.substr(0, separator));
+        auto pps = decodeRtpFmtpBase64(parameterSets->second.substr(separator + 1));
+        if (!sps || !pps) {
+            return ::media::Result<MediaRtpVideoSignalingFacts>::failure(
+                !sps ? sps.error() : pps.error());
+        }
+        if (auto status = validateH264ParameterSet(sps.value(), 7, "SPS");
+            !status) {
+            return ::media::Result<MediaRtpVideoSignalingFacts>::failure(
+                status.error());
+        }
+        if (auto status = validateH264ParameterSet(pps.value(), 8, "PPS");
+            !status) {
+            return ::media::Result<MediaRtpVideoSignalingFacts>::failure(
+                status.error());
+        }
+        const std::string derivedProfileLevelId = h264ProfileLevelId(sps.value());
+        std::string normalizedProfileLevelId = profileLevelId->second;
+        std::transform(normalizedProfileLevelId.begin(), normalizedProfileLevelId.end(),
+                       normalizedProfileLevelId.begin(), [](unsigned char character) {
+                           return static_cast<char>(std::toupper(character));
+                       });
+        if (normalizedProfileLevelId != derivedProfileLevelId) {
+            return ::media::Result<MediaRtpVideoSignalingFacts>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "RTP H264 fmtp profile-level-id conflicts with SPS"));
+        }
+        return ::media::Result<MediaRtpVideoSignalingFacts>::success(
+            MediaH264SignalingFacts{
+                std::move(sps).value(), std::move(pps).value(),
+                std::move(derivedProfileLevelId)});
+    }
+
+    if (codecName == "hevc") {
+        if (auto status = validateHevcRtpNonInterleavedFmtp(
+                parameters.value());
+            !status) {
+            return ::media::Result<MediaRtpVideoSignalingFacts>::failure(
+                status.error());
+        }
+        auto vps = requiredParameterSet(parameters.value(), "sprop-vps");
+        auto sps = requiredParameterSet(parameters.value(), "sprop-sps");
+        auto pps = requiredParameterSet(parameters.value(), "sprop-pps");
+        if (!vps || !sps || !pps) {
+            return ::media::Result<MediaRtpVideoSignalingFacts>::failure(
+                !vps ? vps.error() : (!sps ? sps.error() : pps.error()));
+        }
+        if (auto status = validateHevcParameterSet(vps.value(), 32, "VPS");
+            !status) {
+            return ::media::Result<MediaRtpVideoSignalingFacts>::failure(
+                status.error());
+        }
+        if (auto status = validateHevcParameterSet(sps.value(), 33, "SPS");
+            !status) {
+            return ::media::Result<MediaRtpVideoSignalingFacts>::failure(
+                status.error());
+        }
+        if (auto status = validateHevcParameterSet(pps.value(), 34, "PPS");
+            !status) {
+            return ::media::Result<MediaRtpVideoSignalingFacts>::failure(
+                status.error());
+        }
+        return ::media::Result<MediaRtpVideoSignalingFacts>::success(
+            MediaHevcSignalingFacts{
+                std::move(vps).value(), std::move(sps).value(),
+                std::move(pps).value()});
+    }
+
+    return ::media::Result<MediaRtpVideoSignalingFacts>::failure(
+        ::media::ErrorInfo::unsupported(
+            "RTP video fmtp parsing supports only H264 and HEVC"));
 }
 
 } // namespace media::ffmpeg::graph

@@ -197,7 +197,28 @@ void MediaGraphWorker::run()
             ++m_metrics.waits;
             if (result.value().deadlineWait) {
                 const auto& deadlineWait = *result.value().deadlineWait;
-                auto group = m_context.findAvSyncGroup(deadlineWait.syncGroup);
+                if (const auto* steady = std::get_if<
+                        MediaNodeProcessResult::DeadlineWait::Steady>(
+                            &deadlineWait.deadline)) {
+                    const auto now = std::chrono::steady_clock::now();
+                    const auto timeout = steady->deadline > now
+                        ? std::chrono::duration_cast<std::chrono::nanoseconds>(
+                              steady->deadline - now)
+                        : std::chrono::nanoseconds{0};
+                    const auto outcome = m_wakeup.wait(
+                        observedSequence, timeout);
+                    if (outcome == MediaNodeWakeup::WaitOutcome::Notified) {
+                        ++m_metrics.wakeups;
+                    } else if (outcome ==
+                               MediaNodeWakeup::WaitOutcome::Deadline) {
+                        ++m_metrics.deadlines;
+                    }
+                    break;
+                }
+                const auto& avSync = std::get<
+                    MediaNodeProcessResult::DeadlineWait::AvSyncMaster>(
+                        deadlineWait.deadline);
+                auto group = m_context.findAvSyncGroup(avSync.syncGroup);
                 if (!group) {
                     if (recordFailure(::media::ErrorInfo::notInitialized(
                             "MediaGraphWorker deadline wait requires a registered A/V sync group")) !=
@@ -214,7 +235,7 @@ void MediaGraphWorker::run()
                     m_aborted = true;
                     break;
                 }
-                auto remaining = deadlineWait.masterDeadline.checkedSubtract(now.value());
+                auto remaining = avSync.deadline.checkedSubtract(now.value());
                 if (!remaining) {
                     if (recordFailure(remaining.error()) !=
                         FailureDisposition::CoordinatedCancellation) ++m_metrics.errors;

@@ -11,10 +11,14 @@ public:
     static ::media::Result<MediaInputVideoStreamInfo> inspectVideo(
         const std::string& inputUrl, AVDictionary** inputOptions);
     static ::media::Result<MediaRealtimeInputStreamInfo> inspectRealtime(
-        const std::string& inputUrl, AVDictionary** inputOptions, bool includeAudio);
+        const std::string& inputUrl, AVDictionary** inputOptions,
+        MediaTranscodeStreamSet streamSet);
     static ::media::Result<MediaPreparedRealtimeInputScan> prepareRealtime(
-        const std::string& inputUrl, AVDictionary** inputOptions, bool includeAudio,
-        const MediaRealtimeInputOpener& opener);
+        const std::string& inputUrl, AVDictionary** inputOptions,
+        MediaTranscodeStreamSet streamSet,
+        const MediaRealtimeInputOpener& opener,
+        const MediaRealtimeRtpTranscodeRequest& request,
+        const MediaAvSyncStartupPolicy& startup);
 
 private:
     MediaStreamCapabilityProbe() = delete;

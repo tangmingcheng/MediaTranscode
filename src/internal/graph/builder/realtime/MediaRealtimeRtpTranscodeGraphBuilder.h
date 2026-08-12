@@ -17,6 +17,9 @@ public:
     static ::media::Status validate(const MediaRealtimeRtpTranscodeRequest& request);
 
 private:
+    static ::media::Result<MediaGraph> buildPlanned(
+        MediaRealtimeRtpTranscodePlan& plan);
+
     MediaRealtimeRtpTranscodeGraphBuilder() = default;
 };
 

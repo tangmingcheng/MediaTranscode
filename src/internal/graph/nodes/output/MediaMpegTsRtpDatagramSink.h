@@ -5,7 +5,7 @@
 #include "internal/graph/protocol/rtp/MediaMpegTsRtpPacketizer.h"
 #include "internal/graph/protocol/rtp/MediaRtcpSenderReportSchedule.h"
 #include "internal/graph/protocol/rtp/MediaRtpUdpSenderTransport.h"
-#include "internal/graph/sync/MediaPlaybackEpoch.h"
+#include "internal/graph/protocol/MediaProtocolOutputRuntimeAuthority.h"
 #include "internal/graph/time/MediaSharedNtpEpoch.h"
 
 #include <memory>
@@ -17,7 +17,7 @@ class MediaMpegTsRtpDatagramSink final : public MediaTsDatagramSink {
 public:
     static ::media::Result<std::unique_ptr<MediaMpegTsRtpDatagramSink>> create(
         const MediaMpegTsRtpOutputPlan& plan,
-        const MediaPlaybackEpoch& epoch,
+        const MediaProtocolOutputActivation& activation,
         const MediaSharedNtpEpoch& sharedNtpEpoch,
         std::shared_ptr<MediaMpegTsRtpContinuityState> continuity,
         MediaUdpDatagramSenderPortFactory& portFactory);

@@ -11,7 +11,9 @@
 #include <memory>
 #include <atomic>
 #include <condition_variable>
+#include <cstdint>
 #include <mutex>
+#include <optional>
 
 namespace media::ffmpeg::graph {
 
@@ -67,6 +69,12 @@ private:
     void finalizeDeferredCloseLocked() noexcept;
     void signalMutationWaiters() noexcept;
     void refreshQueueMetrics() noexcept;
+    bool hardByteLimitEnabled() const noexcept;
+    std::optional<std::uint64_t> payloadBytesForBudget(
+        const MediaBufferRef& buffer) const noexcept;
+    bool wouldExceedByteBudget(std::uint64_t payloadBytes) const noexcept;
+    void accountAcceptedPayload(std::uint64_t payloadBytes) noexcept;
+    void accountPoppedPayload(const MediaBufferRef& buffer) noexcept;
 
 private:
     MediaChannelId m_id;
@@ -89,6 +97,8 @@ private:
     std::atomic_size_t m_externalLifecycleMutations{0};
     std::size_t m_reservedCapacity = 0;
     std::size_t m_authorizedCapacity = 0;
+    std::uint64_t m_queuedPayloadBytes = 0;
+    bool m_byteBudgetConfigurationValid = true;
     bool m_closeRequested = false;
 };
 

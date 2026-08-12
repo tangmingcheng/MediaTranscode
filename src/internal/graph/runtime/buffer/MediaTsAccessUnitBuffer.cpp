@@ -95,6 +95,12 @@ MediaBufferType MediaTsAccessUnitBuffer::type() const noexcept
     return MediaBufferType::TsAccessUnit;
 }
 
+std::optional<std::uint64_t>
+MediaTsAccessUnitBuffer::payloadFootprintBytes() const noexcept
+{
+    return m_outer->payloadFootprintBytes();
+}
+
 ::media::Result<MediaTsAccessUnitView>
 MediaTsAccessUnitBuffer::view() const noexcept
 {

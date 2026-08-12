@@ -23,6 +23,7 @@ enum class MediaGraphRuntimeState;
 class MediaGraphRuntime;
 class MediaAvSyncClockSource;
 class MediaAvStartupVideoPreparationState;
+class MediaProtocolOutputRuntimeAuthority;
 
 class MediaGraphRuntimeCompiler final {
 public:
@@ -39,6 +40,8 @@ private:
             playbackEpochActivationCapability,
         std::shared_ptr<MediaAvStartupVideoPreparationState>&
             videoPreparationState,
+        std::shared_ptr<MediaProtocolOutputRuntimeAuthority>&
+            protocolOutputAuthority,
         const std::shared_ptr<MediaAvSyncClockSource>& avSyncClockSource,
         MediaGraphExecutionContext& context,
         MediaGraphScheduler& scheduler,
@@ -55,7 +58,9 @@ private:
         std::optional<MediaPlaybackEpochActivationCapability>&
             playbackEpochActivationCapability,
         const std::shared_ptr<MediaAvStartupVideoPreparationState>&
-            videoPreparationState);
+            videoPreparationState,
+        const std::shared_ptr<MediaProtocolOutputRuntimeAuthority>&
+            protocolOutputAuthority);
 
     MediaGraphRuntimeCompiler() = delete;
 };

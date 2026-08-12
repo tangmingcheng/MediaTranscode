@@ -2,13 +2,12 @@
 
 #include "internal/graph/planner/MediaRtpClockLivenessPolicy.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlanValidator.h"
+#include "internal/graph/planner/avsync/MediaAvSyncStartupPolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
 #include "internal/graph/planner/realtime/MediaRtpOutputIdentityPlanner.h"
-#include "internal/graph/sync/startup/MediaAvStartupLimits.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 
 #include <cstdint>
-#include <limits>
 #include <string>
 
 namespace media::ffmpeg::graph {
@@ -22,62 +21,11 @@ constexpr MediaRunningTime runningTime(std::int64_t nanoseconds) noexcept
     return MediaRunningTime::fromNanoseconds(nanoseconds);
 }
 
-::media::Status planSharedPolicy(MediaAvSyncPlan& plan,
-                                 const MediaRealtimeRtpTranscodeRequest& request)
+void planSharedNonStartupPolicy(MediaAvSyncPlan& plan)
 {
-    if (request.parameters.queues.packet == 0 ||
-        request.parameters.queues.packet > MediaAvStartupMaximumUnitCapacity ||
-        !request.avSyncStartup.maximumVideoUnitBytes ||
-        !request.avSyncStartup.maximumAudioUnitBytes ||
-        !request.avSyncStartup.maximumGap ||
-        *request.avSyncStartup.maximumVideoUnitBytes == 0 ||
-        *request.avSyncStartup.maximumAudioUnitBytes == 0 ||
-        *request.avSyncStartup.maximumGap <= runningTime(0)) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "A/V startup requires explicit unit and byte capacity inputs"));
-    }
     plan.masterClockMode = MediaAvSyncMasterClockMode::SteadyMonotonic;
     plan.canonicalTimeBaseNumerator = 1;
     plan.canonicalTimeBaseDenominator = 1'000'000'000;
-
-    plan.startup.requireVideoKeyFrame = true;
-    plan.startup.trimAudioToCommonStart = true;
-    plan.startup.maximumWaitNs = runningTime(10 * Second);
-    plan.startup.prerollNs = runningTime(500 * Millisecond);
-    plan.startup.keyFrameWaitNs = runningTime(5 * Second);
-    plan.startup.maximumAudioTrimNs = runningTime(250 * Millisecond);
-    plan.startup.maximumInitialSkewNs = runningTime(40 * Millisecond);
-    plan.startup.maximumGapNs = *request.avSyncStartup.maximumGap;
-    plan.startup.outputLeadNs = runningTime(100 * Millisecond);
-    plan.startup.videoCapacity = request.parameters.queues.packet;
-    plan.startup.audioCapacity = request.parameters.queues.packet;
-    const auto units = static_cast<std::uint64_t>(request.parameters.queues.packet);
-    const auto videoUnitBytes = static_cast<std::uint64_t>(
-        *request.avSyncStartup.maximumVideoUnitBytes);
-    const auto audioUnitBytes = static_cast<std::uint64_t>(
-        *request.avSyncStartup.maximumAudioUnitBytes);
-    if (units > std::numeric_limits<std::uint64_t>::max() / videoUnitBytes ||
-        units > std::numeric_limits<std::uint64_t>::max() / audioUnitBytes) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "A/V startup byte capacity is not representable"));
-    }
-    const auto videoByteCapacity = units * videoUnitBytes;
-    const auto audioByteCapacity = units * audioUnitBytes;
-    const auto maximumSerialized = static_cast<std::uint64_t>(
-        std::numeric_limits<std::int64_t>::max());
-    if (videoUnitBytes > maximumSerialized || audioUnitBytes > maximumSerialized ||
-        videoByteCapacity > maximumSerialized || audioByteCapacity > maximumSerialized) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "A/V startup capacity exceeds the runtime option range"));
-    }
-    plan.startup.videoByteCapacity = videoByteCapacity;
-    plan.startup.audioByteCapacity = audioByteCapacity;
-    plan.startup.maximumVideoUnitBytes = videoUnitBytes;
-    plan.startup.maximumAudioUnitBytes = audioUnitBytes;
-    plan.startup.allowDegradedClock = false;
 
     plan.audioServo.deadbandNs = runningTime(Millisecond);
     plan.audioServo.phaseFilterTimeConstantNs = runningTime(250 * Millisecond);
@@ -123,7 +71,6 @@ constexpr MediaRunningTime runningTime(std::int64_t nanoseconds) noexcept
     plan.metrics.maximumSteadyP95SkewNs = runningTime(20 * Millisecond);
     plan.metrics.maximumSteadyP99SkewNs = runningTime(40 * Millisecond);
     plan.metrics.maximumDriftNsPerHour = runningTime(Millisecond);
-    return ::media::Status::success();
 }
 
 ::media::Result<MediaAvSyncRtpInputPlan> planRtpInput(
@@ -137,9 +84,7 @@ constexpr MediaRunningTime runningTime(std::int64_t nanoseconds) noexcept
     }
 
     MediaAvSyncRtpInputPlan input;
-    const std::string groupIdentity = request.mediaId.empty()
-        ? std::string("realtime-av-sync")
-        : request.mediaId;
+    const std::string& groupIdentity = request.mediaId;
 
     input.videoInput.identity = groupIdentity + ".input.video";
     input.videoInput.payloadType = *request.input.videoRtp.payloadType;
@@ -178,9 +123,7 @@ void planRtpOutput(MediaAvSyncPlan& plan,
                    const MediaRealtimeRtpTranscodeRequest& request,
                    int audioOutputRate)
 {
-    const std::string groupIdentity = request.mediaId.empty()
-        ? std::string("realtime-av-sync")
-        : request.mediaId;
+    const std::string& groupIdentity = request.mediaId;
     const std::string cname =
         MediaRtpOutputIdentityPlanner::cname(groupIdentity);
     plan.rtpOutput.emplace();
@@ -210,24 +153,23 @@ void planRtpOutput(MediaAvSyncPlan& plan,
 
 void planTsInput(MediaAvSyncPlan& plan,
                  const MediaRealtimeRtpTranscodeRequest& request,
-                 const MediaTsSelectedProgramPlan& selected)
+                 const MediaTsAudioVideoSelectedProgramPlan& selected)
 {
+    const auto& program = selected.selection;
     plan.sourceClockMode = MediaAvSyncSourceClockMode::MpegTsPcr;
     plan.controlGenerationPolicy =
         MediaControlGenerationPolicy::OptionalExactWhenPresent;
     plan.mpegTsInput.emplace();
-    plan.mpegTsInput->programNumber = selected.programNumber;
-    plan.mpegTsInput->programMapPid = selected.programMapPid;
-    plan.mpegTsInput->videoPid = selected.videoPid;
-    plan.mpegTsInput->audioPid = selected.audioPid;
-    const std::string groupIdentity = request.mediaId.empty()
-        ? std::string("realtime-av-sync-ts")
-        : request.mediaId;
+    plan.mpegTsInput->programNumber = program.programNumber;
+    plan.mpegTsInput->programMapPid = program.programMapPid;
+    plan.mpegTsInput->videoPid = program.video.elementaryPid;
+    plan.mpegTsInput->audioPid = program.audio.elementaryPid;
+    const std::string& groupIdentity = request.mediaId;
     plan.startup.videoIdentity = groupIdentity + ".pid." +
-                                 std::to_string(selected.videoPid);
+                                 std::to_string(program.video.elementaryPid);
     plan.startup.audioIdentity = groupIdentity + ".pid." +
-                                 std::to_string(selected.audioPid);
-    plan.mpegTsInput->pcrPid = selected.pcrPid;
+                                 std::to_string(program.audio.elementaryPid);
+    plan.mpegTsInput->pcrPid = program.pcrPid;
 }
 
 ::media::Result<MediaTsMuxPlan> planTsOutput(
@@ -266,7 +208,7 @@ void planTsInput(MediaAvSyncPlan& plan,
             ::media::ErrorInfo::unsupported(
                 "MPEG-TS output transport is unsupported"));
     }
-    auto resolvedOutput = MediaProjectMpegTsOutputPlan::create(
+    auto resolvedOutput = MediaProjectMpegTsOutputPlan::createAudioVideo(
         resolvedFacts.videoCodecName, resolvedFacts.videoPacketLayout,
         resolvedFacts.audioOutput,
         *plan.startup.outputLeadNs,
@@ -285,17 +227,27 @@ void planTsInput(MediaAvSyncPlan& plan,
 ::media::Result<MediaAvSyncRtpInputPlan> MediaAvSyncPlanner::planRtpInputClock(
     const MediaRealtimeRtpTranscodeRequest& request)
 {
+    if (request.mediaId.empty()) {
+        return ::media::Result<MediaAvSyncRtpInputPlan>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "A/V RTP input clock requires an explicit media identity"));
+    }
     return planRtpInput(request);
 }
 
 ::media::Result<MediaAvSyncPlan> MediaAvSyncPlanner::plan(
     const MediaRealtimeRtpTranscodeRequest& request,
-    const MediaTsSelectedProgramPlan* selectedTsProgram,
+    const MediaTsAudioVideoSelectedProgramPlan* selectedTsProgram,
     const MediaProjectMpegTsResolvedPipelineFacts* resolvedTsFacts,
     const MediaAvSyncPreparedDemuxTimestampFacts* preparedDemuxFacts,
     int resolvedOutputAudioSampleRate)
 {
-    if (!request.parameters.execution.includeAudio) {
+    if (request.mediaId.empty()) {
+        return ::media::Result<MediaAvSyncPlan>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "A/V synchronization requires an explicit media identity"));
+    }
+    if (request.parameters.execution.streamSet != MediaTranscodeStreamSet::AudioVideo) {
         return ::media::Result<MediaAvSyncPlan>::failure(
             ::media::ErrorInfo::unsupported("A/V synchronization requires both audio and video"));
     }
@@ -305,9 +257,16 @@ void planTsInput(MediaAvSyncPlan& plan,
                 "A/V synchronization requires a resolved output audio sample rate"));
     }
     MediaAvSyncPlan plan;
-    if (auto status = planSharedPolicy(plan, request); !status) {
-        return ::media::Result<MediaAvSyncPlan>::failure(status.error());
+    if (preparedDemuxFacts) {
+        plan.startup = preparedDemuxFacts->startup;
+    } else {
+        auto startup = MediaAvSyncStartupPolicyPlanner::plan(request);
+        if (!startup) {
+            return ::media::Result<MediaAvSyncPlan>::failure(startup.error());
+        }
+        plan.startup = std::move(startup).value();
     }
+    planSharedNonStartupPolicy(plan);
     plan.audioServo.outputSampleRate = resolvedOutputAudioSampleRate;
 
     if (MediaRealtimeRequestClassifier::rawRtpInput(request)) {
@@ -357,9 +316,7 @@ void planTsInput(MediaAvSyncPlan& plan,
         plan.sourceClockMode = MediaAvSyncSourceClockMode::DemuxTimestamps;
         plan.controlGenerationPolicy =
             MediaControlGenerationPolicy::RequiredExact;
-        const std::string groupIdentity = request.mediaId.empty()
-            ? std::string("realtime-av-sync-demux")
-            : request.mediaId;
+        const std::string& groupIdentity = request.mediaId;
         plan.startup.videoIdentity = groupIdentity + ".stream." +
             std::to_string(preparedDemuxFacts->videoStreamIndex);
         plan.startup.audioIdentity = groupIdentity + ".stream." +
@@ -371,7 +328,9 @@ void planTsInput(MediaAvSyncPlan& plan,
                 plan.startup.maximumInitialSkewNs,
                 plan.recovery.hardDiscontinuityThresholdNs,
                 1,
-                MediaRunningTime::fromNanoseconds(0)});
+                MediaRunningTime::fromNanoseconds(0),
+                preparedDemuxFacts->preparedInput,
+                preparedDemuxFacts->preparedEvidence});
     } else {
         return ::media::Result<MediaAvSyncPlan>::failure(
             ::media::ErrorInfo::unsupported(

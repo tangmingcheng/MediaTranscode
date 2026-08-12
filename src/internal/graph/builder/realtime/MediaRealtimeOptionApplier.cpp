@@ -1,6 +1,9 @@
 #include "internal/graph/builder/realtime/MediaRealtimeOptionApplier.h"
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
+#include "internal/graph/model/MediaTranscodeStreamSet.h"
+
+#include <type_traits>
 
 namespace media::ffmpeg::graph {
 namespace {
@@ -84,6 +87,13 @@ const char* boolOption(bool value) noexcept
         if (auto status = set("rtcp.require_sender_reports", boolOption(transport.requireSenderReports)); !status) return status;
         if (auto status = set("rtcp.require_cname", boolOption(transport.requireCname)); !status) return status;
         if (auto status = set("rtcp.sender_report_timeout_ms", std::to_string(transport.senderReportTimeoutMs)); !status) return status;
+        if (auto status = set(
+                "rtcp.maximum_extrapolation_ns",
+                std::to_string(
+                    static_cast<std::int64_t>(
+                        transport.maximumExtrapolationMs) *
+                    1'000'000));
+            !status) return status;
         if (auto status = set("rtcp.cname_timeout_ms", std::to_string(transport.cnameTimeoutMs)); !status) return status;
         const char* lossPolicy = nullptr;
         switch (transport.clockLossPolicy) {
@@ -128,76 +138,37 @@ const char* boolOption(bool value) noexcept
         return MediaGraphBuildSupport::setNodeOptionChecked(
             graph, owner, nodeId, key, std::to_string(value));
     };
-    if (auto s = set("mpegts.program_number", plan.programNumber); !s) return s;
-    if (auto s = set("mpegts.pmt_pid", plan.programMapPid); !s) return s;
-    if (auto s = set("mpegts.video_pid", plan.videoPid); !s) return s;
-    if (auto s = set("mpegts.audio_pid", plan.audioPid); !s) return s;
-    if (auto s = set("mpegts.pcr_pid", plan.pcrPid); !s) return s;
     if (auto s = set("mpegts.maximum_pcr_gap_27mhz", plan.maximumPcrGap27Mhz); !s) return s;
     if (auto s = set("mpegts.packet_stride", plan.packetSize); !s) return s;
     if (auto s = set("mpegts.evidence_timeline_capacity", plan.evidenceTimelineCapacity); !s) return s;
     if (auto s = set("mpegts.projection_capacity", plan.projectionCapacity); !s) return s;
-    if (auto s = set("mpegts.initial_acquiring_video_packet_capacity",
-                     plan.initialAcquiringVideoPacketCapacity); !s) return s;
-    if (auto s = set("mpegts.initial_acquiring_audio_packet_capacity",
-                     plan.initialAcquiringAudioPacketCapacity); !s) return s;
-    if (auto s = set("mpegts.initial_acquiring_video_byte_capacity",
-                     plan.initialAcquiringVideoByteCapacity); !s) return s;
-    if (auto s = set("mpegts.initial_acquiring_audio_byte_capacity",
-                     plan.initialAcquiringAudioByteCapacity); !s) return s;
-    if (auto s = set("mpegts.maximum_acquiring_video_packet_bytes",
-                     plan.maximumAcquiringVideoPacketBytes); !s) return s;
-    if (auto s = set("mpegts.maximum_acquiring_audio_packet_bytes",
-                     plan.maximumAcquiringAudioPacketBytes); !s) return s;
+    auto retentionOptions = std::visit(
+        [&](const auto& retention) -> ::media::Result<void> {
+            using Retention = std::decay_t<decltype(retention)>;
+            constexpr bool AudioVideo = std::is_same_v<
+                Retention, MediaRealtimeTsInputPlan::AudioVideoRetention>;
+            if (auto s = set("mpegts.initial_acquiring_video_packet_capacity",
+                             retention.videoPacketCapacity); !s) return s;
+            if (auto s = set("mpegts.initial_acquiring_video_byte_capacity",
+                             retention.videoByteCapacity); !s) return s;
+            if (auto s = set("mpegts.maximum_acquiring_video_packet_bytes",
+                             retention.maximumVideoPacketBytes); !s) return s;
+            if constexpr (AudioVideo) {
+                if (auto s = set("mpegts.initial_acquiring_audio_packet_capacity",
+                                 retention.audioPacketCapacity); !s) return s;
+                if (auto s = set("mpegts.initial_acquiring_audio_byte_capacity",
+                                 retention.audioByteCapacity); !s) return s;
+                if (auto s = set("mpegts.maximum_acquiring_audio_packet_bytes",
+                                 retention.maximumAudioPacketBytes); !s) return s;
+            }
+            return ::media::Result<void>::success();
+        },
+        plan.retention);
+    if (!retentionOptions) return retentionOptions;
     if (auto s = set("mpegts.maximum_position_regression_bytes", plan.maximumPacketPositionRegressionBytes); !s) return s;
     if (auto s = set("mpegts.pes_provenance_capacity", plan.pesProvenanceCapacity); !s) return s;
-    if (auto s = set("mpegts.packet_origin_policy",
-                     static_cast<int>(plan.packetOriginPolicy)); !s) return s;
-    if (auto s = set("mpegts.timestamp_time_base_num", plan.timestampTimeBaseNumerator); !s) return s;
-    if (auto s = set("mpegts.timestamp_time_base_den", plan.timestampTimeBaseDenominator); !s) return s;
     if (auto s = set("mpegts.initial_source_generation", plan.initialSourceGeneration); !s) return s;
     return set("mpegts.initial_raw_generation", plan.initialRawTransportGeneration);
-}
-
-::media::Result<void> MediaRealtimeOptionApplier::applyOutputOptions(
-    MediaGraph& graph,
-    MediaNodeId nodeId,
-    const MediaRealtimeRtpOutputNodePlan& plan)
-{
-    if (auto status = setOption(graph, nodeId, "url", plan.url); !status) return status;
-    if (auto status = setOption(graph, nodeId, "rtp.packet_size", std::to_string(plan.packetSize)); !status) return status;
-    if (auto status = setOption(graph, nodeId, "rtp.write_pacing.enabled", boolOption(plan.writePacingEnabled)); !status) return status;
-    if (auto status = setOption(graph, nodeId, "rtp.write_pacing.bytes_per_second", std::to_string(plan.writePacingBytesPerSecond)); !status) return status;
-    if (auto status = setOption(graph, nodeId, "rtp.write_pacing.burst_bytes", std::to_string(plan.writePacingBurstBytes)); !status) return status;
-    if (!plan.mediaId.empty()) {
-        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, "media_id", plan.mediaId); !status) return status;
-    }
-    return ::media::Result<void>::success();
-}
-
-::media::Result<void> MediaRealtimeOptionApplier::applySdpWriterOptions(
-    MediaGraph& graph,
-    MediaNodeId nodeId,
-    const MediaRealtimeSdpWriterPlan& plan)
-{
-    if (auto status = setOption(graph, nodeId, "path", plan.path); !status) return status;
-    if (auto status = setOption(graph, nodeId, "sdp.expected_contexts", std::to_string(plan.expectedContexts)); !status) return status;
-    if (!plan.mediaId.empty()) {
-        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, "media_id", plan.mediaId); !status) return status;
-    }
-    return ::media::Result<void>::success();
-}
-
-::media::Result<void> MediaRealtimeOptionApplier::applyMuxOptions(
-    MediaGraph& graph,
-    MediaNodeId nodeId,
-    const MediaRealtimeMuxNodePlan& plan)
-{
-    if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, MediaTranscodeOptionKey::MuxExpectVideo, boolOption(plan.expectVideo)); !status) return status;
-    if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, MediaTranscodeOptionKey::MuxExpectAudio, boolOption(plan.expectAudio)); !status) return status;
-    if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, "rtp.pacing.enabled", boolOption(plan.pacingPolicy.enablePacing)); !status) return status;
-    if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, "rtp.packet_timestamps.monotonic", boolOption(plan.monotonicPacketTimestamps)); !status) return status;
-    return MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodeId, "rtp.startup_delay_ms", std::to_string(plan.startupDelayMs));
 }
 
 } // namespace media::ffmpeg::graph

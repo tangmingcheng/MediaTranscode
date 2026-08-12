@@ -13,6 +13,10 @@ Detailed design and execution checklist:
 - `docs/superpowers/specs/2026-08-04-rtp-fmtp-autodetect-design.md`
 - `docs/superpowers/plans/2026-08-04-rtp-fmtp-autodetect.md`
 
+## Realtime VideoOnly Stream Set
+
+- [x] Task 3: converge manual and detected H.264/HEVC raw-RTP FMTP through validated typed signaling facts before depacketizer and product planning; preserve the VideoOnly prepared-transport contract and the AudioVideo shared preflight deadline.
+
 ## P0 Input Termination and Finalization Follow-Up
 
 - [x] Establish the finite-source and EOF failure baseline.
@@ -502,3 +506,16 @@ Detailed design and execution checklist:
 - [x] **Step 6: Close the review loop**
 
   If review fails, implement findings, repeat required real-media validation in proportion to the affected behavior, push updates, and ask the same reviewer to re-review. Finish only after an explicit pass with no blocking findings.
+
+---
+
+## 2026-08-06 全通路 VideoOnly Stream Set
+
+详细实施计划：`docs/superpowers/plans/2026-08-06-realtime-video-only-stream-set.md`
+
+- [x] Task 1：以显式 `MediaTranscodeStreamSet` 替换 `includeAudio`。
+- [x] Task 2：完成 VideoOnly generic、RTSP、MPEG-TS 与 raw RTP 输入准备。
+- [x] Task 3：统一 H.264/HEVC 手动与自动视频 FMTP 规划。
+- [x] Task 4：实现互斥的 VideoOnly runtime 与单视频调度产品。
+- [ ] Task 5：统一 RTP、SDP、Project MPEG-TS 输出及严格 shape 校验。
+- [ ] Task 6：完成 clean-first 构建、56 条真实链路、质量评分、PR 与独立审核。

@@ -102,4 +102,10 @@ MediaBufferType MediaScheduledAccessUnit::type() const noexcept
     return MediaBufferType::Event;
 }
 
+std::optional<std::uint64_t>
+MediaScheduledAccessUnit::payloadFootprintBytes() const noexcept
+{
+    return m_media->payloadFootprintBytes();
+}
+
 } // namespace media::ffmpeg::graph

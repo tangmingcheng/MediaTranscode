@@ -41,18 +41,19 @@ namespace {
 
 ::media::Result<MediaRealtimeAvSyncComponentBounds>
 MediaRealtimeAvSyncComponentBoundsPlanner::plan(
-    const MediaRealtimeRtpTranscodePlan& plan)
+    const MediaGraphQueueParameters& queues,
+    const MediaAudioPipelinePlan& audio)
 {
-    if (!plan.audioPlan.selectedDecoder || !plan.audioPlan.selectedResampler ||
-        !plan.audioPlan.resolvedOutput ||
-        plan.audioPlan.resolvedOutput->codecFrameSamples() <= 0) {
+    if (!audio.selectedDecoder || !audio.selectedResampler ||
+        !audio.resolvedOutput ||
+        audio.resolvedOutput->codecFrameSamples() <= 0) {
         return ::media::Result<MediaRealtimeAvSyncComponentBounds>::failure(
             ::media::ErrorInfo::notInitialized(
                 "synchronized audio components did not publish timing bounds"));
     }
-    const auto& decoder = *plan.audioPlan.selectedDecoder;
-    const auto& resampler = *plan.audioPlan.selectedResampler;
-    const int outputRate = plan.audioPlan.resolvedOutput->sampleRate();
+    const auto& decoder = *audio.selectedDecoder;
+    const auto& resampler = *audio.selectedResampler;
+    const int outputRate = audio.resolvedOutput->sampleRate();
     if (decoder.outputSampleRate != resampler.inputSampleRate ||
         decoder.maximumOutputBlockInputSamples !=
             resampler.maximumInputBlockSamples ||
@@ -73,17 +74,17 @@ MediaRealtimeAvSyncComponentBoundsPlanner::plan(
     }
     const auto resamplerBlock = resampler.maximumOutputBlockSamples;
     const auto encoderBlock =
-        plan.audioPlan.resolvedOutput->codecFrameSamples();
+        audio.resolvedOutput->codecFrameSamples();
     auto decode = checkedCapacitySamples(
-        plan.queues.packet, decoderBlock.value(), "decode queue");
+        queues.packet, decoderBlock.value(), "decode queue");
     auto resample = checkedCapacitySamples(
-        plan.queues.frame, decoderBlock.value(), "resample queue");
+        queues.frame, decoderBlock.value(), "resample queue");
     auto encode = checkedCapacitySamples(
-        plan.queues.frame, resamplerBlock, "encode queue");
+        queues.frame, resamplerBlock, "encode queue");
     auto scheduler = checkedCapacitySamples(
-        plan.queues.mux, encoderBlock, "scheduler queue");
+        queues.mux, encoderBlock, "scheduler queue");
     auto mailbox = checkedCapacitySamples(
-        plan.queues.metadata, resamplerBlock, "correction mailbox");
+        queues.metadata, resamplerBlock, "correction mailbox");
     if (!decode || !resample || !encode || !scheduler || !mailbox) {
         return ::media::Result<MediaRealtimeAvSyncComponentBounds>::failure(
             !decode ? decode.error() : !resample ? resample.error() :
@@ -94,7 +95,7 @@ MediaRealtimeAvSyncComponentBoundsPlanner::plan(
         MediaRealtimeAvSyncComponentBounds{
             decoderDelay.value(), decode.value(), resample.value(),
             encode.value(), scheduler.value(), mailbox.value(),
-            resamplerBlock, plan.queues.metadata});
+            resamplerBlock, queues.metadata});
 }
 
 } // namespace media::ffmpeg::graph

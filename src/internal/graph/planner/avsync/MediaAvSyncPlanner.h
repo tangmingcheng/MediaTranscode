@@ -15,7 +15,7 @@ public:
         const MediaRealtimeRtpTranscodeRequest& request);
     static ::media::Result<MediaAvSyncPlan> plan(
         const MediaRealtimeRtpTranscodeRequest& request,
-        const MediaTsSelectedProgramPlan* selectedTsProgram,
+        const MediaTsAudioVideoSelectedProgramPlan* selectedTsProgram,
         const MediaProjectMpegTsResolvedPipelineFacts* resolvedTsFacts,
         const MediaAvSyncPreparedDemuxTimestampFacts* preparedDemuxFacts,
         int resolvedOutputAudioSampleRate);

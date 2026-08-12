@@ -1,4 +1,5 @@
 #include "internal/graph/builder/local/LocalFilePlannerRequestBuilder.h"
+#include "internal/graph/planner/MediaTranscodeStreamSetRequestValidator.h"
 
 #include <string>
 #include <utility>
@@ -21,6 +22,11 @@ namespace {
 {
     const MediaTranscodeParameterSet& parameters = options.parameters;
     const MediaAudioTranscodeParameters& audio = parameters.audio;
+    if (auto status = MediaTranscodeStreamSetRequestValidator::validate(parameters);
+        !status) {
+        return ::media::Result<MediaAudioPipelinePlannerOptions>::failure(
+            status.error());
+    }
 
     auto bitrate = positiveValue(audio.bitrateKbps, "audio bitrate");
     if (!bitrate) {
@@ -55,7 +61,7 @@ namespace {
         return ::media::Result<MediaAudioPipelinePlannerOptions>::failure(quality.error());
     }
 
-    MediaAudioPipelinePlannerOptions plannerOptions(parameters.execution.includeAudio);
+    MediaAudioPipelinePlannerOptions plannerOptions(*parameters.execution.streamSet);
     plannerOptions.requestedCodecName = audio.codecName;
     plannerOptions.rateControl = audio.rateControl;
     plannerOptions.requestedBitrateKbps = audio.bitrateKbps;

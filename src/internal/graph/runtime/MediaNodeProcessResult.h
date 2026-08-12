@@ -3,7 +3,9 @@
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
 #include "internal/graph/time/MediaRunningTime.h"
 
+#include <chrono>
 #include <optional>
+#include <variant>
 
 namespace media::ffmpeg::graph {
 
@@ -15,8 +17,27 @@ enum class MediaNodeProcessState {
 
 struct MediaNodeProcessResult {
     struct DeadlineWait final {
-        MediaAvSyncGroupKey syncGroup;
-        MediaRunningTime masterDeadline;
+        struct AvSyncMaster final {
+            MediaAvSyncGroupKey syncGroup;
+            MediaRunningTime deadline;
+        };
+        struct Steady final {
+            std::chrono::steady_clock::time_point deadline;
+        };
+
+        std::variant<AvSyncMaster, Steady> deadline;
+
+        DeadlineWait(MediaAvSyncGroupKey group,
+            MediaRunningTime deadline)
+            : deadline(AvSyncMaster{std::move(group), deadline})
+        {
+        }
+
+        explicit DeadlineWait(
+            std::chrono::steady_clock::time_point deadline)
+            : deadline(Steady{deadline})
+        {
+        }
     };
 
     MediaNodeProcessState state = MediaNodeProcessState::Waiting;
@@ -37,6 +58,12 @@ struct MediaNodeProcessResult {
     {
         return {MediaNodeProcessState::Waiting,
                 DeadlineWait{std::move(group), deadline}};
+    }
+
+    static MediaNodeProcessResult waitingUntil(
+        std::chrono::steady_clock::time_point deadline)
+    {
+        return {MediaNodeProcessState::Waiting, DeadlineWait{deadline}};
     }
 
     static constexpr MediaNodeProcessResult finished() noexcept

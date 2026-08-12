@@ -47,6 +47,7 @@ public:
     static ::media::Result<MediaBufferRef> create(
         MediaScheduledAccessUnitParameters parameters);
     MediaBufferType type() const noexcept override;
+    std::optional<std::uint64_t> payloadFootprintBytes() const noexcept override;
     const MediaBufferRef& media() const noexcept { return m_media; }
     MediaScheduledStream stream() const noexcept { return m_stream; }
     MediaRunningTime canonicalPresentation() const noexcept { return m_canonicalPresentation; }

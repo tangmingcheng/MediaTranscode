@@ -22,6 +22,7 @@ public:
         MediaRunningTime transportDecodeLead);
 
     MediaBufferType type() const noexcept override;
+    std::optional<std::uint64_t> payloadFootprintBytes() const noexcept override;
     ::media::Result<MediaTsAccessUnitView> view() const noexcept;
 
 private:

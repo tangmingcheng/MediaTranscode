@@ -23,12 +23,12 @@ using ProcessResult = ::media::Result<MediaNodeProcessResult>;
 
 MediaScheduledRtpSenderNode::MediaScheduledRtpSenderNode(
     MediaNodeId nodeId,
-    MediaAvSyncGroupKey plannedGroupKey,
+    MediaProtocolOutputSessionKey plannedSessionKey,
     MediaScheduledRtpOutputPlan outputPlan,
     MediaSeparateRtpSdpRuntimePlan sdpPlan,
     MediaScheduledRtpSenderNodeDependencies dependencies)
     : FFmpegNodeRuntime(nodeId, staticKind(), "MediaScheduledRtpSenderNode"),
-      m_plannedGroupKey(std::move(plannedGroupKey)),
+      m_plannedSessionKey(std::move(plannedSessionKey)),
       m_outputPlan(std::move(outputPlan)),
       m_sdpPlan(std::move(sdpPlan)),
       m_dependencies(std::move(dependencies)),
@@ -57,7 +57,8 @@ MediaScheduledRtpSenderNode::generationPurgeTarget() const noexcept
 ::media::Result<std::unique_ptr<MediaScheduledRtpSenderNode>>
 MediaScheduledRtpSenderNode::create(
     MediaNodeId nodeId,
-    MediaAvSyncGroupKey plannedGroupKey,
+    MediaProtocolOutputSessionKey plannedSessionKey,
+    MediaTranscodeStreamSet streamSet,
     MediaScheduledRtpOutputPlan outputPlan,
     MediaSeparateRtpSdpRuntimePlan sdpPlan,
     MediaScheduledRtpSenderNodeDependencies dependencies)
@@ -67,9 +68,12 @@ MediaScheduledRtpSenderNode::create(
     const auto expectedStream = outputPlan.stream == MediaScheduledStream::Video
         ? MediaStreamKind::Video
         : MediaStreamKind::Audio;
-    if (!nodeId.isValid() || !plannedGroupKey.valid() ||
-        !dependencies.syncGroup ||
-        dependencies.syncGroup->key() != plannedGroupKey ||
+    if (!nodeId.isValid() || !plannedSessionKey.valid() ||
+        !dependencies.authority ||
+        dependencies.authority->sessionKey() != plannedSessionKey ||
+        dependencies.authority->streamSet() != streamSet ||
+        (streamSet == MediaTranscodeStreamSet::VideoOnly &&
+         outputPlan.stream != MediaScheduledStream::Video) ||
         !dependencies.transportFactory || !dependencies.packetizerFactory ||
         outputPlan.packetization.streamKind() != expectedStream ||
         outputPlan.ssrc == 0 || outputPlan.clockRate <= 0 ||
@@ -78,13 +82,13 @@ MediaScheduledRtpSenderNode::create(
         outputPlan.senderReportInterval.nanoseconds() <= 0) {
         return NodeResult::failure(
             ::media::ErrorInfo::invalidArgument(
-                "Scheduled RTP sender requires one complete planner-owned stream and exact sync group"));
+                "Scheduled RTP sender requires one complete planner-owned stream and exact protocol authority"));
     }
     try {
         return NodeResult::success(
             std::unique_ptr<MediaScheduledRtpSenderNode>(
                 new MediaScheduledRtpSenderNode(
-                    nodeId, std::move(plannedGroupKey), std::move(outputPlan),
+                    nodeId, std::move(plannedSessionKey), std::move(outputPlan),
                     std::move(sdpPlan), std::move(dependencies))));
     } catch (const std::bad_alloc&) {
         return NodeResult::failure(
@@ -114,14 +118,15 @@ MediaNodeKind MediaScheduledRtpSenderNode::staticKind() noexcept
     const auto expectedStream = m_outputPlan.stream == MediaScheduledStream::Video
         ? MediaStreamKind::Video
         : MediaStreamKind::Audio;
-    const MediaChannel* epoch = context.findInputChannel(nodeId(), "epoch");
+    const MediaChannel* activation = context.findInputChannel(
+        nodeId(), "activation");
     const MediaChannel* codec = context.findInputChannel(nodeId(), "codec");
     const MediaChannel* scheduled = context.findInputChannel(nodeId(), "scheduled");
     const MediaChannel* description =
         context.findOutputChannel(nodeId(), "description");
     if (context.inputChannels(nodeId()).size() != 3 ||
         context.outputChannels(nodeId()).size() != 1 ||
-        !epoch || !codec || !scheduled || !description ||
+        !activation || !codec || !scheduled || !description ||
         codec->binding().streamKind != expectedStream ||
         scheduled->binding().streamKind != expectedStream ||
         description->binding().streamKind != MediaStreamKind::Metadata ||
@@ -137,36 +142,22 @@ MediaNodeKind MediaScheduledRtpSenderNode::staticKind() noexcept
 ::media::Result<bool> MediaScheduledRtpSenderNode::acquireActivation(
     MediaGraphExecutionContext& context)
 {
-    auto input = tryPopInputOptional(context, "epoch");
+    auto input = tryPopInputOptional(context, "activation");
     if (!input) return ::media::Result<bool>::failure(input.error());
     if (!input.value()) return ::media::Result<bool>::success(false);
-    const auto* activated = dynamic_cast<const MediaPlaybackEpochActivatedBuffer*>(
-        input.value()->get());
-    if (!activated || activated->groupKey() != m_plannedGroupKey ||
-        m_dependencies.syncGroup->lifecycleState() !=
-            MediaAvSyncGroupRuntime::LifecycleState::Active) {
-        return ::media::Result<bool>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "Scheduled RTP sender rejects an invalid playback activation"));
-    }
-    auto groupEpoch = m_dependencies.syncGroup->playbackEpoch();
-    if (!groupEpoch || groupEpoch.value() != activated->epoch() ||
-        !m_dependencies.syncGroup->sharedNtpEpoch()) {
-        return ::media::Result<bool>::failure(
-            groupEpoch ? ::media::ErrorInfo::invalidArgument(
-                             "Scheduled RTP activation differs from the registered group")
-                       : groupEpoch.error());
-    }
+    auto activation = m_dependencies.authority->validateActivation(
+        *input.value());
+    if (!activation) return ::media::Result<bool>::failure(activation.error());
     auto permitted = m_generationState->permitActivatedGeneration(
-            *m_dependencies.syncGroup, groupEpoch.value().generation,
-            activated->completedTransitionSequence());
+            *m_dependencies.authority, activation.value().generation,
+            activation.value().completedTransitionSequence);
     if (!permitted) {
         return ::media::Result<bool>::failure(permitted.error());
     }
-    m_sessionState->epoch = groupEpoch.value();
+    m_sessionState->activationFacts = activation.value();
     m_sessionState->activation = std::move(*input.value());
     m_sessionState->generation.store(
-        groupEpoch.value().generation, std::memory_order_release);
+        activation.value().generation, std::memory_order_release);
     return ::media::Result<bool>::success(true);
 }
 
@@ -190,14 +181,14 @@ MediaNodeKind MediaScheduledRtpSenderNode::staticKind() noexcept
 
 ::media::Status MediaScheduledRtpSenderNode::openSender()
 {
-    if (m_sessionState->sender || !m_sessionState->epoch ||
+    if (m_sessionState->sender || !m_sessionState->activationFacts ||
         !m_sessionState->activation || !m_codec) {
         return ::media::Status::failure(
             ::media::ErrorInfo::notInitialized(
                 "Scheduled RTP sender cannot open before activation and codec metadata"));
     }
     const auto* codec = dynamic_cast<const FFmpegCodecContextBuffer*>(m_codec.get());
-    auto sharedNtpEpoch = m_dependencies.syncGroup->sharedNtpEpoch();
+    auto sharedNtpEpoch = m_dependencies.authority->sharedNtpEpoch();
     if (!codec || !codec->context() || !sharedNtpEpoch) {
         return ::media::Status::failure(
             ::media::ErrorInfo::notInitialized(
@@ -205,7 +196,7 @@ MediaNodeKind MediaScheduledRtpSenderNode::staticKind() noexcept
     }
     auto materialized = MediaScheduledRtpSenderMaterializer::materialize(
         m_outputPlan, m_sdpPlan, *codec->context(), *sharedNtpEpoch,
-        *m_sessionState->epoch);
+        *m_sessionState->activationFacts);
     if (!materialized) {
         return ::media::Status::failure(materialized.error());
     }
@@ -269,7 +260,7 @@ MediaScheduledRtpSenderNode::processScheduledInput(
         return failTerminal(::media::ErrorInfo::notInitialized(
             "Scheduled RTP sender has no scheduled input"));
     }
-    auto now = m_dependencies.syncGroup->clock()->now();
+    auto now = m_dependencies.authority->now();
     if (!now) return failTerminal(now.error());
     const auto activeGeneration =
         m_sessionState->generation.load(std::memory_order_acquire);
@@ -291,15 +282,15 @@ MediaScheduledRtpSenderNode::processScheduledInput(
     std::optional<::media::ErrorInfo> reportFailure;
     {
         auto reportReservation = m_generationState->reserveCommit(
-            *m_dependencies.syncGroup, activeGeneration);
+            *m_dependencies.authority, activeGeneration);
         if (!reportReservation) {
             return reportReservation.error().code ==
                     ::media::ErrorCode::Cancelled
                 ? processWaiting()
                 : failTerminal(reportReservation.error());
         }
-        if (!m_sessionState->epoch ||
-            m_sessionState->epoch->generation != activeGeneration ||
+        if (!m_sessionState->activationFacts ||
+            m_sessionState->activationFacts->generation != activeGeneration ||
             !m_sessionState->sender) {
             reportFailure = ::media::ErrorInfo::notInitialized(
                 "Scheduled RTP sender has no exact activated session");
@@ -317,9 +308,9 @@ MediaScheduledRtpSenderNode::processScheduledInput(
                         reportFailure = retryDeadline.error();
                     } else {
                         return ProcessResult::success(
-                            MediaNodeProcessResult::waitingUntil(
-                                m_plannedGroupKey,
-                                retryDeadline.value()));
+                            {MediaNodeProcessState::Waiting,
+                             m_dependencies.authority->deadlineWait(
+                                 retryDeadline.value())});
                     }
                 } else {
                     reportFailure = report.error();
@@ -344,8 +335,9 @@ MediaScheduledRtpSenderNode::processScheduledInput(
             closeSession();
             return processFinished();
         }
-        return ProcessResult::success(MediaNodeProcessResult::waitingUntil(
-            m_plannedGroupKey, *nextReportDeadline));
+        return ProcessResult::success(
+            {MediaNodeProcessState::Waiting,
+             m_dependencies.authority->deadlineWait(*nextReportDeadline)});
     }
     const auto* control = dynamic_cast<const MediaControlBuffer*>(
         input.value()->get());
@@ -361,7 +353,7 @@ MediaScheduledRtpSenderNode::processScheduledInput(
             }
             return processProgress();
         case MediaControlBufferKind::Abort:
-            m_dependencies.syncGroup->markAborted();
+            m_dependencies.authority->markAborted();
             return failTerminal(::media::ErrorInfo::cancelled(
                 "Scheduled RTP sender received abort"));
         case MediaControlBufferKind::Unknown:
@@ -403,15 +395,16 @@ MediaScheduledRtpSenderNode::processScheduledInput(
     std::optional<::media::ErrorInfo> sendFailure;
     {
         auto sendReservation = m_generationState->reserveCommit(
-            *m_dependencies.syncGroup, scheduled->generation());
+            *m_dependencies.authority, scheduled->generation());
         if (!sendReservation) {
             return sendReservation.error().code ==
                     ::media::ErrorCode::Cancelled
                 ? processProgress()
                 : failTerminal(sendReservation.error());
         }
-        if (!m_sessionState->epoch || !m_sessionState->sender ||
-            scheduled->generation() != m_sessionState->epoch->generation) {
+        if (!m_sessionState->activationFacts || !m_sessionState->sender ||
+            scheduled->generation() !=
+                m_sessionState->activationFacts->generation) {
             if (scheduled->generation() < activeGeneration) {
                 return processProgress();
             }
@@ -457,22 +450,25 @@ MediaScheduledRtpSenderNode::processScheduledInput(
     std::optional<::media::ErrorInfo> sessionFailure;
     {
         auto sessionReservation = m_generationState->reserveCommit(
-            *m_dependencies.syncGroup, activeGeneration);
+            *m_dependencies.authority, activeGeneration);
         if (!sessionReservation) {
             return sessionReservation.error().code ==
                     ::media::ErrorCode::Cancelled
                 ? processWaiting()
                 : failTerminal(sessionReservation.error());
         }
-        if (!m_sessionState->epoch ||
-            m_sessionState->epoch->generation != activeGeneration) {
+        if (!m_sessionState->activationFacts ||
+            m_sessionState->activationFacts->generation != activeGeneration) {
             sessionFailure = ::media::ErrorInfo::internalError(
                 "Scheduled RTP session generation differs from its current authority");
         } else if (!m_sessionState->sender) {
             if (!m_sessionState->activation || !m_codec) {
-                MediaChannel* epoch = context.findInputChannel(nodeId(), "epoch");
+                MediaChannel* activationChannel =
+                    context.findInputChannel(nodeId(), "activation");
                 MediaChannel* metadata = context.findInputChannel(nodeId(), "codec");
-                if ((epoch && (epoch->closed() || epoch->aborted())) ||
+                if ((activationChannel &&
+                     (activationChannel->closed() ||
+                      activationChannel->aborted())) ||
                     (metadata && (metadata->closed() || metadata->aborted()))) {
                     sessionFailure = ::media::ErrorInfo::notInitialized(
                         "Scheduled RTP sender lost required activation or codec input");
@@ -524,7 +520,7 @@ MediaScheduledRtpSenderNode::reserveOutputCommit(
                               "Scheduled RTP rejects a future sender description"));
     }
     auto reservation = m_generationState->reserveCommit(
-        *m_dependencies.syncGroup, description->generation());
+        *m_dependencies.authority, description->generation());
     if (!reservation) {
         return ::media::Result<MediaOutputCommitReservation>::failure(
                     reservation.error());
@@ -539,8 +535,9 @@ MediaScheduledRtpSenderNode::reserveOutputCommit(
 {
     const auto* description =
         dynamic_cast<const MediaRtpSenderDescriptionBuffer*>(buffer.get());
-    if (!description || !m_sessionState->epoch ||
-        description->generation() != m_sessionState->epoch->generation) {
+    if (!description || !m_sessionState->activationFacts ||
+        description->generation() !=
+            m_sessionState->activationFacts->generation) {
         return ::media::Status::failure(
             ::media::ErrorInfo::cancelled(
                 "Scheduled RTP description commit differs from its exact session generation"));
@@ -613,7 +610,7 @@ void MediaScheduledRtpSenderNode::resetGenerationState() noexcept
 void MediaScheduledRtpSenderNode::abort(
     MediaGraphExecutionContext& context) noexcept
 {
-    if (m_dependencies.syncGroup) m_dependencies.syncGroup->markAborted();
+    if (m_dependencies.authority) m_dependencies.authority->markAborted();
     closeSession();
     if (!m_terminalFailure) {
         m_terminalFailure = ::media::ErrorInfo::cancelled(

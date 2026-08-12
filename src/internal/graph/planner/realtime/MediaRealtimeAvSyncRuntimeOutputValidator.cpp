@@ -3,6 +3,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 #include "internal/graph/planner/realtime/MediaRtpOutputIdentityPlanner.h"
+#include "internal/graph/protocol/codec/MediaAacAudioSpecificConfigParser.h"
 #include "internal/graph/protocol/sdp/MediaRtpSdpDescription.h"
 
 #include <limits>
@@ -141,7 +142,7 @@ bool validRtpStream(
         output.sdp.sessionVersionPolicy !=
             MediaRtpSdpSessionVersionPolicy::ActivePlaybackGeneration ||
         outer.videoPlan.outputCodecName.empty() ||
-        !outer.audioPlan.resolvedOutput ||
+        !runtime.audioPipeline.resolvedOutput ||
         !validRtpStream(
             output.video, synchronization.videoOutput,
             *runtime.planningFacts.outputVideoRtpPacketization,
@@ -152,7 +153,7 @@ bool validRtpStream(
         !validRtpStream(
             output.audio, synchronization.audioOutput,
             *runtime.planningFacts.outputAudioRtpPacketization,
-            outer.audioPlan.resolvedOutput->codecName(),
+            runtime.audioPipeline.resolvedOutput->codecName(),
             MediaScheduledStream::Audio,
             MediaScheduledRtpPacketizationMode::AacLatm,
             runtime) ||
@@ -199,10 +200,14 @@ bool validRtpStream(
         std::get<MediaProjectMpegTsRuntimeOutputPlan>(
             runtime.protocolOutput);
     const auto& mux = output.protocol.muxPlan().parameters();
+    const auto* program = output.protocol.muxPlan().audioVideoProgram();
+    const bool sampleRateMatches = program &&
+        program->aac.samplingFrequencyIndex < MediaAacSampleRates.size() &&
+        MediaAacSampleRates[program->aac.samplingFrequencyIndex] ==
+            runtime.audioCorrection.outputSampleRate;
     if (output.muxSessionKind !=
             MediaMuxSessionKind::ProjectMpegTs ||
-        output.protocol.audioSampleRate() !=
-            runtime.audioCorrection.outputSampleRate ||
+        !sampleRateMatches ||
         mux !=
             runtime.synchronization.projectMpegTsOutput->outputMux
                 ->parameters()) {

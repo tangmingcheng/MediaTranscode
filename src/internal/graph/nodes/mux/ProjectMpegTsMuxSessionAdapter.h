@@ -4,8 +4,7 @@
 #include "internal/graph/protocol/mpegts/MediaTsMaterializedStreamConfig.h"
 #include "internal/graph/protocol/mpegts/MediaTsMuxPlan.h"
 #include "internal/graph/protocol/rtp/MediaMpegTsRtpContinuityState.h"
-#include "internal/graph/sync/MediaAvSyncGroupKey.h"
-#include "internal/graph/sync/MediaPlaybackEpoch.h"
+#include "internal/graph/protocol/MediaProtocolOutputRuntimeAuthority.h"
 #include "internal/graph/sync/MediaProtocolOutputGenerationState.h"
 
 #include <memory>
@@ -39,9 +38,9 @@ private:
     };
     State state = State::Acquiring;
     std::shared_ptr<const MediaProjectMpegTsRuntimeOutputPlan> outputPlan;
-    std::optional<MediaPlaybackEpoch> epoch;
-    std::optional<MediaAvSyncGroupKey> group;
-    std::optional<MediaAvSyncGroupKey> plannedGroup;
+    std::optional<MediaProtocolOutputActivation> activation;
+    std::optional<MediaProtocolOutputSessionKey> plannedSession;
+    std::optional<MediaTranscodeStreamSet> streamSet;
     std::unique_ptr<MediaTsMuxSession> session;
     std::shared_ptr<MediaMpegTsRtpContinuityState> rtpContinuity;
     std::optional<MediaRunningTime> nextTransportDeadline;
@@ -54,22 +53,27 @@ struct ProjectMpegTsGenerationAuthority final {
     static ::media::Result<ProjectMpegTsGenerationAuthority> create(
         std::shared_ptr<MediaProtocolOutputGenerationState> generationState,
         std::shared_ptr<ProjectMpegTsGenerationSessionState>
-            generationSession);
+            generationSession,
+        std::shared_ptr<MediaProtocolOutputRuntimeAuthority> outputAuthority);
 
     const std::shared_ptr<MediaProtocolOutputGenerationState>&
     generationState() const noexcept;
     const std::shared_ptr<ProjectMpegTsGenerationSessionState>&
     generationSession() const noexcept;
+    const std::shared_ptr<MediaProtocolOutputRuntimeAuthority>&
+    outputAuthority() const noexcept;
 
 private:
     ProjectMpegTsGenerationAuthority(
         std::shared_ptr<MediaProtocolOutputGenerationState> generationState,
         std::shared_ptr<ProjectMpegTsGenerationSessionState>
-            generationSession);
+            generationSession,
+        std::shared_ptr<MediaProtocolOutputRuntimeAuthority> outputAuthority);
 
     std::shared_ptr<MediaProtocolOutputGenerationState> m_generationState;
     std::shared_ptr<ProjectMpegTsGenerationSessionState>
         m_generationSession;
+    std::shared_ptr<MediaProtocolOutputRuntimeAuthority> m_outputAuthority;
 };
 
 class ProjectMpegTsMuxSessionAdapter final : public MediaMuxSession {
@@ -108,12 +112,13 @@ private:
 
     std::shared_ptr<MediaProtocolOutputGenerationState> m_generationState;
     std::shared_ptr<ProjectMpegTsGenerationSessionState> m_generationSession;
-    std::optional<MediaAvSyncGroupKey>& m_plannedGroup;
+    std::shared_ptr<MediaProtocolOutputRuntimeAuthority> m_outputAuthority;
+    std::optional<MediaProtocolOutputSessionKey>& m_plannedSession;
+    std::optional<MediaTranscodeStreamSet>& m_streamSet;
     State& m_state;
     std::shared_ptr<const MediaProjectMpegTsRuntimeOutputPlan>&
         m_outputPlan;
-    std::optional<MediaPlaybackEpoch>& m_epoch;
-    std::optional<MediaAvSyncGroupKey>& m_group;
+    std::optional<MediaProtocolOutputActivation>& m_activation;
     std::unique_ptr<MediaTsMuxSession>& m_session;
     std::shared_ptr<MediaMpegTsRtpContinuityState>& m_rtpContinuity;
     std::optional<MediaRunningTime>& m_nextTransportDeadline;

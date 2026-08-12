@@ -1,9 +1,45 @@
 #include "internal/graph/runtime/validation/MediaSourceClockShapeValidator.h"
 
+#include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/nodes/sync/MediaDemuxPacketClockBinderNodePlanCodec.h"
 #include "internal/graph/runtime/validation/MediaAvSyncGraphShape.h"
 
 namespace media::ffmpeg::graph {
+namespace {
+
+::media::Status validateRtpInputLiveness(
+    const MediaAvSyncGraphShape& shape,
+    const MediaAvSyncRuntimeBinding& binding)
+{
+    if (!binding.plan.rtpInput ||
+        !binding.plan.rtpInput->input.maximumExtrapolationNs) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::notInitialized(
+                "RTP source-clock shape requires maximum extrapolation"));
+    }
+    const auto inputs = shape.nodes(MediaNodeKind::RawRtpInput);
+    if (inputs.size() != 2) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "RTP source-clock shape requires two raw RTP inputs"));
+    }
+    for (const MediaNode* input : inputs) {
+        auto maximumExtrapolation = requiredPositiveInt64NodeOption(
+            &input->options, "RawRtpInputNode",
+            "rtcp.maximum_extrapolation_ns");
+        if (!maximumExtrapolation ||
+            maximumExtrapolation.value() !=
+                binding.plan.rtpInput->input.maximumExtrapolationNs
+                    ->nanoseconds()) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Raw RTP input maximum extrapolation differs from planner product"));
+        }
+    }
+    return ::media::Status::success();
+}
+
+} // namespace
 
 ::media::Status MediaSourceClockShapeValidator::validate(
     const MediaGraph& graph,
@@ -16,8 +52,8 @@ namespace media::ffmpeg::graph {
     }
     const MediaAvSyncGraphShape shape(graph);
     switch (*binding.plan.sourceClockMode) {
-    case MediaAvSyncSourceClockMode::RtpSenderReports:
-        return shape.requireExact({
+    case MediaAvSyncSourceClockMode::RtpSenderReports: {
+        auto cardinality = shape.requireExact({
             {MediaNodeKind::RtpClockGroup, 1, "RTP clock group"},
             {MediaNodeKind::RtpClockSnapshotFanout, 1,
              "RTP clock snapshot fanout"},
@@ -29,6 +65,9 @@ namespace media::ffmpeg::graph {
             {MediaNodeKind::DemuxPacketClockBinder, 0,
              "demux packet clock binder"}},
             "RTP source-clock shape");
+        if (!cardinality) return cardinality;
+        return validateRtpInputLiveness(shape, binding);
+    }
     case MediaAvSyncSourceClockMode::MpegTsPcr:
         return shape.requireExact({
             {MediaNodeKind::RtpClockGroup, 0, "RTP clock group"},

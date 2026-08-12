@@ -142,6 +142,7 @@ std::string activity(const ChannelActivitySnapshot& snapshot)
     MediaGraphLifecycle::abortChannels(runtime.m_context);
     runtime.m_context.shutdownAvSyncGroups();
     runtime.m_playbackEpochActivationCapability.reset();
+    runtime.m_protocolOutputAuthority.reset();
     runtime.m_state = MediaGraphRuntimeState::Aborted;
     if (primaryFailure) {
         return ::media::Status::failure(primaryFailure->error);
@@ -162,6 +163,7 @@ std::string activity(const ChannelActivitySnapshot& snapshot)
     auto closeStatus = MediaGraphLifecycle::closeChannels(runtime.m_context);
     runtime.m_context.shutdownAvSyncGroups();
     runtime.m_playbackEpochActivationCapability.reset();
+    runtime.m_protocolOutputAuthority.reset();
     if (!schedulerStatus) {
         if (runtime.m_threadedExecutor.state() == MediaGraphThreadedExecutorState::Aborted) {
             MediaGraphLifecycle::abortChannels(runtime.m_context);
@@ -185,6 +187,7 @@ void MediaGraphRuntimeLifecycleExecutor::abort(MediaGraphRuntime& runtime) noexc
     MediaGraphLifecycle::abortChannels(runtime.m_context);
     runtime.m_context.shutdownAvSyncGroups();
     runtime.m_playbackEpochActivationCapability.reset();
+    runtime.m_protocolOutputAuthority.reset();
     runtime.m_state = MediaGraphRuntimeState::Aborted;
     mediaGraphDiagnosticLog(runtime.diagnosticsEnabled(), MediaGraphDiagnosticPhase::RuntimeLifecycle, "abort.done state=Aborted");
 }
@@ -201,6 +204,8 @@ void MediaGraphRuntimeLifecycleExecutor::reset(MediaGraphRuntime& runtime)
     runtime.m_graph.clear();
     runtime.m_inputBindings.clear();
     runtime.m_playbackEpochActivationCapability.reset();
+    runtime.m_videoPreparationState.reset();
+    runtime.m_protocolOutputAuthority.reset();
     runtime.m_acceptanceCollector.reset();
     runtime.m_queueHighWatermark = 0;
     runtime.m_state = MediaGraphRuntimeState::Empty;

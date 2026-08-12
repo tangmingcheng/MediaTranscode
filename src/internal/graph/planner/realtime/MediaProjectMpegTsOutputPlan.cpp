@@ -34,16 +34,13 @@ constexpr std::int64_t ProjectMaximumPcrJitterNs = 5'000'000;
 constexpr int ProjectClockTimeBaseNumerator = 1;
 constexpr int ProjectClockTimeBaseDenominator = 90'000;
 constexpr std::uint16_t ProjectPacketSize = 188;
-constexpr MediaTsContinuitySeeds ProjectContinuitySeeds{0, 0, 0, 0};
+constexpr MediaTsVideoContinuitySeeds ProjectVideoContinuitySeeds{0, 0, 0};
+constexpr MediaTsAudioVideoContinuitySeeds ProjectAvContinuitySeeds{
+    0, 0, 0, 0};
 
-::media::Status validateProjectProtocolContract(
-    int audioSampleRate,
+::media::Status validateCommonProjectProtocolContract(
     const MediaTsMuxPlanParameters& parameters)
 {
-    const bool aacFrequencyMatchesSampleRate =
-        parameters.aac.samplingFrequencyIndex < MediaAacSampleRates.size() &&
-        MediaAacSampleRates[parameters.aac.samplingFrequencyIndex] ==
-            audioSampleRate;
     const bool h264InputContractMatches =
         (parameters.h264InputLayout == MediaTsH264InputLayout::AnnexB &&
          parameters.h264NalLengthBytes == 4) ||
@@ -51,29 +48,16 @@ constexpr MediaTsContinuitySeeds ProjectContinuitySeeds{0, 0, 0, 0};
              MediaTsH264InputLayout::LengthPrefixed &&
          parameters.h264NalLengthBytes >= 1 &&
          parameters.h264NalLengthBytes <= 4);
-    if (audioSampleRate != ProjectAudioSampleRate ||
-        parameters.transportStreamId != ProjectTransportStreamId ||
+    if (parameters.transportStreamId != ProjectTransportStreamId ||
         parameters.programNumber != ProjectProgramNumber ||
         parameters.patPid != ProjectPatPid ||
         parameters.programMapPid != ProjectProgramMapPid ||
-        parameters.videoPid != ProjectVideoPid ||
-        parameters.audioPid != ProjectAudioPid ||
-        parameters.pcrPid != parameters.videoPid ||
         parameters.tableVersion != ProjectTableVersion ||
         parameters.psiRepeatInterval.nanoseconds() !=
             ProjectPsiRepeatIntervalNs ||
-        parameters.videoStreamType != ProjectH264StreamType ||
-        parameters.audioStreamType != ProjectAacStreamType ||
         !h264InputContractMatches ||
         parameters.parameterSetPolicy !=
             MediaTsParameterSetPolicy::BeforeRandomAccess ||
-        parameters.aac.mpegId != ProjectAacAdts.mpegId ||
-        parameters.aac.audioObjectType != ProjectAacAdts.audioObjectType ||
-        !aacFrequencyMatchesSampleRate ||
-        parameters.aac.samplingFrequencyIndex !=
-            ProjectAacAdts.samplingFrequencyIndex ||
-        parameters.aac.channelConfiguration !=
-            ProjectAacAdts.channelConfiguration ||
         parameters.clock.pcrInterval.nanoseconds() != ProjectPcrIntervalNs ||
         parameters.clock.maximumPcrGap.nanoseconds() !=
             ProjectMaximumPcrGapNs ||
@@ -86,13 +70,58 @@ constexpr MediaTsContinuitySeeds ProjectContinuitySeeds{0, 0, 0, 0};
         parameters.startupEmissionPreroll.nanoseconds() <= 0 ||
         parameters.startupEmissionPreroll >
             parameters.transportDecodeLead ||
-        parameters.packetSize != ProjectPacketSize ||
-        parameters.continuity != ProjectContinuitySeeds ||
-        parameters.maximumAudioAccessUnitSamples !=
+        parameters.packetSize != ProjectPacketSize) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Project MPEG-TS encoded facts violate the common H.264/PID/PCR/clock protocol contract"));
+    }
+    return ::media::Status::success();
+}
+
+::media::Status validateVideoOnlyProjectProtocolContract(
+    const MediaTsMuxPlan& muxPlan)
+{
+    if (auto common = validateCommonProjectProtocolContract(
+            muxPlan.parameters()); !common) {
+        return common;
+    }
+    const auto* program = muxPlan.videoOnlyProgram();
+    if (!program || program->videoPid != ProjectVideoPid ||
+        program->pcrPid != ProjectVideoPid ||
+        program->videoStreamType != ProjectH264StreamType ||
+        program->continuity != ProjectVideoContinuitySeeds) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Project MPEG-TS VideoOnly facts violate the H.264-only PMT/PES/PCR contract"));
+    }
+    return ::media::Status::success();
+}
+
+::media::Status validateAudioVideoProjectProtocolContract(
+    const MediaTsMuxPlan& muxPlan)
+{
+    if (auto common = validateCommonProjectProtocolContract(
+            muxPlan.parameters()); !common) {
+        return common;
+    }
+    const auto* program = muxPlan.audioVideoProgram();
+    const bool frequencyMatches = program &&
+        program->aac.samplingFrequencyIndex < MediaAacSampleRates.size() &&
+        MediaAacSampleRates[program->aac.samplingFrequencyIndex] ==
+            ProjectAudioSampleRate;
+    if (!program ||
+        program->videoPid != ProjectVideoPid ||
+        program->audioPid != ProjectAudioPid ||
+        program->pcrPid != ProjectVideoPid ||
+        program->videoStreamType != ProjectH264StreamType ||
+        program->audioStreamType != ProjectAacStreamType ||
+        program->aac != ProjectAacAdts || !frequencyMatches ||
+        program->continuity != ProjectAvContinuitySeeds ||
+        program->maximumAudioAccessUnitSamples !=
             ProjectAudioAccessUnitSamples) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument(
-                "Project MPEG-TS encoded facts violate the H.264/AAC/PID/PCR/clock protocol contract"));
+                "Project MPEG-TS AudioVideo facts violate the H.264/AAC PMT/PES/PCR contract"));
     }
     return ::media::Status::success();
 }
@@ -124,7 +153,51 @@ constexpr MediaTsContinuitySeeds ProjectContinuitySeeds{0, 0, 0, 0};
 
 } // namespace
 
-::media::Result<MediaProjectMpegTsOutputPlan> MediaProjectMpegTsOutputPlan::create(
+::media::Result<MediaProjectMpegTsOutputPlan>
+MediaProjectMpegTsOutputPlan::createVideoOnly(
+    const std::string& videoCodecName,
+    const MediaEncodedPacketLayout& videoPacketLayout,
+    MediaRunningTime transportDecodeLead,
+    MediaRunningTime startupEmissionPreroll,
+    MediaOutputTransportKind transportKind,
+    std::uint8_t maximumPacketsPerDatagram)
+{
+    if (canonicalCodecName(videoCodecName) != "h264") {
+        return ::media::Result<MediaProjectMpegTsOutputPlan>::failure(
+            ::media::ErrorInfo::unsupported(
+                "Project MPEG-TS VideoOnly output requires resolved H.264 output"));
+    }
+    auto videoInput = h264MuxInputContract(videoPacketLayout);
+    if (!videoInput) {
+        return ::media::Result<MediaProjectMpegTsOutputPlan>::failure(
+            videoInput.error());
+    }
+    auto mux = MediaTsMuxPlan::create(MediaTsMuxPlanParameters{
+        ProjectTransportStreamId, ProjectProgramNumber, ProjectPatPid,
+        ProjectProgramMapPid, ProjectTableVersion,
+        MediaRunningTime::fromNanoseconds(ProjectPsiRepeatIntervalNs),
+        MediaTsVideoOnlyProgramPlan{
+            ProjectVideoPid, ProjectVideoPid, ProjectH264StreamType,
+            ProjectVideoContinuitySeeds},
+        videoInput.value().layout, videoInput.value().lengthFieldBytes,
+        MediaTsParameterSetPolicy::BeforeRandomAccess,
+        MediaTsOutputClockPolicy{
+            MediaRunningTime::fromNanoseconds(ProjectPcrIntervalNs),
+            MediaRunningTime::fromNanoseconds(ProjectMaximumPcrGapNs),
+            MediaRunningTime::fromNanoseconds(ProjectMaximumPcrJitterNs),
+            ProjectClockTimeBaseNumerator,
+            ProjectClockTimeBaseDenominator},
+        transportDecodeLead, startupEmissionPreroll, ProjectPacketSize,
+        maximumPacketsPerDatagram, transportKind});
+    if (!mux) {
+        return ::media::Result<MediaProjectMpegTsOutputPlan>::failure(
+            mux.error());
+    }
+    return fromVideoOnlyEncodedFacts(std::move(mux).value());
+}
+
+::media::Result<MediaProjectMpegTsOutputPlan>
+MediaProjectMpegTsOutputPlan::createAudioVideo(
     const std::string& videoCodecName,
     const MediaEncodedPacketLayout& videoPacketLayout,
     const MediaResolvedAudioOutputPlan& audioOutput,
@@ -151,50 +224,59 @@ constexpr MediaTsContinuitySeeds ProjectContinuitySeeds{0, 0, 0, 0};
     }
     auto mux = MediaTsMuxPlan::create(MediaTsMuxPlanParameters{
         ProjectTransportStreamId, ProjectProgramNumber, ProjectPatPid,
-        ProjectProgramMapPid, ProjectVideoPid, ProjectAudioPid,
-        ProjectVideoPid, ProjectTableVersion,
+        ProjectProgramMapPid, ProjectTableVersion,
         MediaRunningTime::fromNanoseconds(ProjectPsiRepeatIntervalNs),
-        ProjectH264StreamType, ProjectAacStreamType,
+        MediaTsAudioVideoProgramPlan{
+            ProjectVideoPid, ProjectAudioPid, ProjectVideoPid,
+            ProjectH264StreamType, ProjectAacStreamType, ProjectAacAdts,
+            ProjectAvContinuitySeeds, audioOutput.codecFrameSamples()},
         videoInput.value().layout, videoInput.value().lengthFieldBytes,
         MediaTsParameterSetPolicy::BeforeRandomAccess,
-        ProjectAacAdts,
         MediaTsOutputClockPolicy{
             MediaRunningTime::fromNanoseconds(ProjectPcrIntervalNs),
             MediaRunningTime::fromNanoseconds(ProjectMaximumPcrGapNs),
             MediaRunningTime::fromNanoseconds(ProjectMaximumPcrJitterNs),
             ProjectClockTimeBaseNumerator,
             ProjectClockTimeBaseDenominator},
-        transportDecodeLead, startupEmissionPreroll,
-        ProjectPacketSize, ProjectContinuitySeeds,
-        maximumPacketsPerDatagram, transportKind,
-        audioOutput.codecFrameSamples()});
+        transportDecodeLead, startupEmissionPreroll, ProjectPacketSize,
+        maximumPacketsPerDatagram, transportKind});
     if (!mux) return ::media::Result<MediaProjectMpegTsOutputPlan>::failure(mux.error());
-    return fromEncodedFacts(
-        audioOutput.sampleRate(), std::move(mux).value());
+    return fromAudioVideoEncodedFacts(std::move(mux).value());
 }
 
 ::media::Result<MediaProjectMpegTsOutputPlan>
-MediaProjectMpegTsOutputPlan::fromEncodedFacts(
-    int audioSampleRate,
+MediaProjectMpegTsOutputPlan::fromVideoOnlyEncodedFacts(
     MediaTsMuxPlan muxPlan)
 {
-    auto contract = validateProjectProtocolContract(
-        audioSampleRate, muxPlan.parameters());
+    auto contract = validateVideoOnlyProjectProtocolContract(muxPlan);
     if (!contract) {
         return ::media::Result<MediaProjectMpegTsOutputPlan>::failure(
             contract.error());
     }
     return ::media::Result<MediaProjectMpegTsOutputPlan>::success(
-        MediaProjectMpegTsOutputPlan(audioSampleRate, std::move(muxPlan)));
+        MediaProjectMpegTsOutputPlan(std::move(muxPlan)));
+}
+
+::media::Result<MediaProjectMpegTsOutputPlan>
+MediaProjectMpegTsOutputPlan::fromAudioVideoEncodedFacts(
+    MediaTsMuxPlan muxPlan)
+{
+    auto contract = validateAudioVideoProjectProtocolContract(
+        muxPlan);
+    if (!contract) {
+        return ::media::Result<MediaProjectMpegTsOutputPlan>::failure(
+            contract.error());
+    }
+    return ::media::Result<MediaProjectMpegTsOutputPlan>::success(
+        MediaProjectMpegTsOutputPlan(std::move(muxPlan)));
 }
 
 MediaProjectMpegTsOutputPlan::MediaProjectMpegTsOutputPlan(
-    int audioSampleRate, MediaTsMuxPlan muxPlan)
-    : m_audioSampleRate(audioSampleRate), m_muxPlan(std::move(muxPlan))
+    MediaTsMuxPlan muxPlan)
+    : m_muxPlan(std::move(muxPlan))
 {
 }
 
-int MediaProjectMpegTsOutputPlan::audioSampleRate() const noexcept { return m_audioSampleRate; }
 const MediaTsMuxPlan& MediaProjectMpegTsOutputPlan::muxPlan() const noexcept { return m_muxPlan; }
 
 } // namespace media::ffmpeg::graph

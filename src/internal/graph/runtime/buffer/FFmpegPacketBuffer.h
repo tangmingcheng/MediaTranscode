@@ -3,6 +3,7 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/runtime/buffer/MediaBuffer.h"
 #include "internal/graph/model/MediaPacketSourceTiming.h"
+#include "internal/graph/model/MediaDemuxPacketProvenance.h"
 
 extern "C" {
 #include <libavcodec/packet.h>
@@ -13,7 +14,9 @@ namespace media::ffmpeg::graph {
 class FFmpegPacketBuffer final : public MediaBuffer {
 public:
     FFmpegPacketBuffer(::media::ffmpeg::PacketPtr packet,
-                       std::optional<MediaPacketSourceTiming> sourceTiming);
+                       std::optional<MediaPacketSourceTiming> sourceTiming,
+                       std::optional<MediaDemuxPacketProvenance> provenance =
+                           std::nullopt);
 
     MediaBufferType type() const noexcept override;
     // Counts packet payload plus every FFmpeg side-data payload. Object allocator
@@ -24,10 +27,12 @@ public:
     const AVPacket* packet() const noexcept;
     ::media::ffmpeg::PacketPtr takePacket() noexcept;
     const std::optional<MediaPacketSourceTiming>& sourceTiming() const noexcept;
+    const std::optional<MediaDemuxPacketProvenance>& demuxProvenance() const noexcept;
 
 private:
     ::media::ffmpeg::PacketPtr m_packet;
     std::optional<MediaPacketSourceTiming> m_sourceTiming;
+    std::optional<MediaDemuxPacketProvenance> m_demuxProvenance;
 };
 
 } // namespace media::ffmpeg::graph

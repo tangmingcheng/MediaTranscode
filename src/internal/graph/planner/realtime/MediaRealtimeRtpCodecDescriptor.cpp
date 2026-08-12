@@ -5,9 +5,8 @@
 #include "internal/graph/protocol/rtp/MediaOpusRtpCapability.h"
 #include "internal/graph/protocol/rtp/MediaRtpFmtp.h"
 #include "internal/graph/protocol/rtp/MediaRtpDepacketizerFactory.h"
+#include "internal/graph/utils/MediaAsciiStringUtils.h"
 
-#include <algorithm>
-#include <cctype>
 #include <initializer_list>
 #include <string>
 #include <utility>
@@ -19,13 +18,6 @@ constexpr int DynamicPayloadTypeMin = 96;
 constexpr int DynamicPayloadTypeMax = 127;
 constexpr int VideoClockRate = 90000;
 constexpr int OpusClockRate = 48000;
-std::string lowercaseAscii(std::string value)
-{
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
-        return static_cast<char>(std::tolower(ch));
-    });
-    return value;
-}
 
 ::media::Result<int> plannedAacAccessUnitDuration(
     const MediaRealtimeRtpInputMetadata& metadata)

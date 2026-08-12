@@ -3,6 +3,7 @@
 
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
 #include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
+#include "internal/graph/runtime/buffer/MediaDemuxInputBuffer.h"
 #include "internal/graph/runtime/buffer/FFmpegPacketBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegDescriptorMapper.h"
@@ -60,21 +61,32 @@ MediaNodeKind DemuxNode::staticKind() noexcept
         return processFinished();
     }
 
-    auto packet = ::media::ffmpeg::makePacket();
-    if (!packet) {
-        return ::media::Result<MediaNodeProcessResult>::failure(
-            ::media::ErrorInfo::allocationFailed("DemuxNode failed: av_packet_alloc returned null"));
-    }
-
-    const int ret = av_read_frame(m_formatContext, packet.get());
-    if (ret < 0) {
+    ::media::ffmpeg::PacketPtr packet;
+    MediaDemuxPacketProvenance provenance{
+        MediaDemuxPacketOrigin::LiveDemuxRead,
+        m_session->nextLiveOrdinal};
+    if (!m_session->replay.empty()) {
+        MediaDemuxPreparedPacket replay = std::move(m_session->replay.front());
+        m_session->replay.pop_front();
+        packet = std::move(replay.packet);
+        provenance = replay.provenance;
+    } else {
+        packet = ::media::ffmpeg::makePacket();
+        if (!packet) {
+            return ::media::Result<MediaNodeProcessResult>::failure(
+                ::media::ErrorInfo::allocationFailed("DemuxNode failed: av_packet_alloc returned null"));
+        }
+        const int ret = av_read_frame(m_formatContext, packet.get());
+        if (ret < 0) {
         const auto termination = classifyFFmpegInputReadTermination(
             ret, m_abortRequested.load(), "DemuxNode av_read_frame");
         if (termination.kind() == FFmpegInputReadTerminationKind::EndOfStream) {
             return processFinished(emitEof(context));
         }
-        return processProgress(
-            ::media::Status::failure(*termination.error()));
+            return processProgress(
+                ::media::Status::failure(*termination.error()));
+        }
+        provenance.ordinal = m_session->nextLiveOrdinal++;
     }
 
     MediaStreamKind streamKind = MediaStreamKind::Unknown;
@@ -83,7 +95,8 @@ MediaNodeKind DemuxNode::staticKind() noexcept
             m_formatContext->streams[packet->stream_index]->codecpar->codec_type);
     }
 
-    auto buffer = FFmpegBufferFactory::wrapPacket(std::move(packet), streamKind, std::nullopt);
+    auto buffer = FFmpegBufferFactory::wrapPacket(
+        std::move(packet), streamKind, std::nullopt, provenance);
     if (!buffer) {
         return ::media::Result<MediaNodeProcessResult>::failure(buffer.error());
     }
@@ -120,7 +133,7 @@ bool DemuxNode::abortRequested() const noexcept
 
 bool DemuxNode::hasBoundFormatContext() const noexcept
 {
-    return m_formatContext != nullptr && m_formatContextOwner != nullptr;
+    return m_formatContext != nullptr && m_session && m_session->context;
 }
 
 void DemuxNode::resetRuntimeState() noexcept
@@ -130,7 +143,7 @@ void DemuxNode::resetRuntimeState() noexcept
         m_formatContext->interrupt_callback.opaque = nullptr;
     }
     m_formatContext = nullptr;
-    m_formatContextOwner.reset();
+    m_session.reset();
     m_eofSent = false;
     m_abortRequested = false;
 }
@@ -145,14 +158,15 @@ void DemuxNode::resetRuntimeState() noexcept
         return ::media::Status::success();
     }
 
-    auto* formatBuffer = dynamic_cast<FFmpegFormatContextBuffer*>(input.value()->get());
-    if (!formatBuffer || !formatBuffer->context()) {
+    auto* demuxInput = dynamic_cast<MediaDemuxInputBuffer*>(input.value()->get());
+    if (!demuxInput) {
         return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("DemuxNode expected FFmpegFormatContextBuffer"));
+            ::media::ErrorInfo::invalidArgument("DemuxNode expected MediaDemuxInputBuffer"));
     }
-
-    m_formatContextOwner = formatBuffer->takeInputContext();
-    m_formatContext = m_formatContextOwner.get();
+    auto session = demuxInput->takeDemuxSession();
+    if (!session) return ::media::Status::failure(session.error());
+    m_session.emplace(std::move(session).value());
+    m_formatContext = m_session->context.get();
     if (!m_formatContext) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("DemuxNode requires exclusive input format context ownership"));

@@ -27,11 +27,6 @@ bool isSynchronizedNode(MediaNodeKind kind) noexcept
     case MediaNodeKind::RtpSourceClockStateAdapter:
     case MediaNodeKind::RtpPacketClockBinder:
     case MediaNodeKind::DemuxPacketClockBinder:
-    case MediaNodeKind::ScheduledRtpSender:
-    case MediaNodeKind::DualMediaSdpPublisher:
-    case MediaNodeKind::ScheduledTsAccessUnitAdapter:
-    case MediaNodeKind::ProjectMpegTsPlanSource:
-    case MediaNodeKind::MpegTsRtpSdpPublisher:
         return true;
     default:
         return false;

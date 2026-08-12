@@ -46,20 +46,35 @@ std::vector<std::uint8_t> serializePat(const MediaTsMuxPlanParameters& parameter
 
 std::vector<std::uint8_t> serializePmt(const MediaTsMuxPlanParameters& parameters)
 {
+    const auto* videoOnly = std::get_if<MediaTsVideoOnlyProgramPlan>(
+        &parameters.program);
+    const auto* audioVideo = std::get_if<MediaTsAudioVideoProgramPlan>(
+        &parameters.program);
     std::vector<std::uint8_t> section;
-    section.reserve(26);
-    section.insert(section.end(), {0x02, 0xB0, 0x17});
+    section.reserve(videoOnly ? 21 : 26);
+    section.insert(
+        section.end(),
+        videoOnly ? std::initializer_list<std::uint8_t>{0x02, 0xB0, 0x12}
+                  : std::initializer_list<std::uint8_t>{0x02, 0xB0, 0x17});
     appendU16(section, parameters.programNumber);
     section.push_back(static_cast<std::uint8_t>(0xC1 | (parameters.tableVersion << 1)));
     section.insert(section.end(), {0x00, 0x00});
-    appendPid(section, parameters.pcrPid, 0xE0);
+    const std::uint16_t pcrPid = videoOnly
+        ? videoOnly->pcrPid : audioVideo->pcrPid;
+    const std::uint16_t videoPid = videoOnly
+        ? videoOnly->videoPid : audioVideo->videoPid;
+    const std::uint8_t videoStreamType = videoOnly
+        ? videoOnly->videoStreamType : audioVideo->videoStreamType;
+    appendPid(section, pcrPid, 0xE0);
     section.insert(section.end(), {0xF0, 0x00});
-    section.push_back(parameters.videoStreamType);
-    appendPid(section, parameters.videoPid, 0xE0);
+    section.push_back(videoStreamType);
+    appendPid(section, videoPid, 0xE0);
     section.insert(section.end(), {0xF0, 0x00});
-    section.push_back(parameters.audioStreamType);
-    appendPid(section, parameters.audioPid, 0xE0);
-    section.insert(section.end(), {0xF0, 0x00});
+    if (audioVideo) {
+        section.push_back(audioVideo->audioStreamType);
+        appendPid(section, audioVideo->audioPid, 0xE0);
+        section.insert(section.end(), {0xF0, 0x00});
+    }
     appendCrc(section);
     return section;
 }
@@ -72,12 +87,8 @@ MediaTsPsiPlanIdentity::MediaTsPsiPlanIdentity(
       m_transportStreamId(parameters.transportStreamId),
       m_programNumber(parameters.programNumber),
       m_programMapPid(parameters.programMapPid),
-      m_pcrPid(parameters.pcrPid),
-      m_videoPid(parameters.videoPid),
-      m_audioPid(parameters.audioPid),
       m_tableVersion(parameters.tableVersion),
-      m_videoStreamType(parameters.videoStreamType),
-      m_audioStreamType(parameters.audioStreamType)
+      m_program(parameters.program)
 {
 }
 
@@ -88,12 +99,8 @@ bool MediaTsPsiPlanIdentity::matches(const MediaTsMuxPlan& plan) const noexcept
            m_transportStreamId == parameters.transportStreamId &&
            m_programNumber == parameters.programNumber &&
            m_programMapPid == parameters.programMapPid &&
-           m_pcrPid == parameters.pcrPid &&
-           m_videoPid == parameters.videoPid &&
-           m_audioPid == parameters.audioPid &&
            m_tableVersion == parameters.tableVersion &&
-           m_videoStreamType == parameters.videoStreamType &&
-           m_audioStreamType == parameters.audioStreamType;
+           m_program == parameters.program;
 }
 
 ::media::Result<MediaTsProgramTables> MediaTsPsiSerializer::serialize(

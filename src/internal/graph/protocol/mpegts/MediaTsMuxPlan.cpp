@@ -54,7 +54,13 @@ bool validTransportKind(MediaOutputTransportKind kind) noexcept
     return false;
 }
 
-bool validContinuitySeeds(const MediaTsContinuitySeeds& seeds) noexcept
+bool validContinuitySeeds(const MediaTsVideoContinuitySeeds& seeds) noexcept
+{
+    return seeds.pat <= 15 && seeds.pmt <= 15 && seeds.video <= 15;
+}
+
+bool validContinuitySeeds(
+    const MediaTsAudioVideoContinuitySeeds& seeds) noexcept
 {
     return seeds.pat <= 15 && seeds.pmt <= 15 && seeds.video <= 15 &&
            seeds.audio <= 15;
@@ -90,17 +96,27 @@ MediaTsMuxPlan::maximumPacketsPerRtpDatagram(
     if (parameters.transportStreamId == 0 || parameters.programNumber == 0) {
         return invalid("requires nonzero transport-stream and program identity");
     }
+    const auto* videoOnly = std::get_if<MediaTsVideoOnlyProgramPlan>(
+        &parameters.program);
+    const auto* audioVideo = std::get_if<MediaTsAudioVideoProgramPlan>(
+        &parameters.program);
+    if ((videoOnly == nullptr) == (audioVideo == nullptr)) {
+        return invalid("requires exactly one typed program stream set");
+    }
+    const std::uint16_t videoPid = videoOnly
+        ? videoOnly->videoPid : audioVideo->videoPid;
+    const std::uint16_t pcrPid = videoOnly
+        ? videoOnly->pcrPid : audioVideo->pcrPid;
     if (parameters.patPid != 0 || !assignablePid(parameters.programMapPid) ||
-        !assignablePid(parameters.videoPid) ||
-        !assignablePid(parameters.audioPid) ||
-        !assignablePid(parameters.pcrPid)) {
+        !assignablePid(videoPid) || !assignablePid(pcrPid) ||
+        (audioVideo && !assignablePid(audioVideo->audioPid))) {
         return invalid("contains a reserved or unsupported PID");
     }
-    if (parameters.programMapPid == parameters.videoPid ||
-        parameters.programMapPid == parameters.audioPid ||
-        parameters.videoPid == parameters.audioPid ||
-        (parameters.pcrPid != parameters.videoPid &&
-         parameters.pcrPid != parameters.audioPid)) {
+    if (parameters.programMapPid == videoPid ||
+        (audioVideo &&
+         (parameters.programMapPid == audioVideo->audioPid ||
+          videoPid == audioVideo->audioPid)) ||
+        pcrPid != videoPid) {
         return invalid("requires distinct PMT/ES PIDs and an ES PCR PID");
     }
     if (parameters.tableVersion > 31 ||
@@ -108,9 +124,11 @@ MediaTsMuxPlan::maximumPacketsPerRtpDatagram(
         parameters.psiRepeatInterval <= parameters.clock.pcrInterval) {
         return invalid("contains an invalid PSI cadence or version");
     }
-    if (parameters.videoStreamType != 0x1B ||
-        parameters.audioStreamType != 0x0F) {
-        return invalid("supports only H.264 and AAC stream types");
+    if ((videoOnly && videoOnly->videoStreamType != 0x1B) ||
+        (audioVideo &&
+         (audioVideo->videoStreamType != 0x1B ||
+          audioVideo->audioStreamType != 0x0F))) {
+        return invalid("supports only H.264 video and optional AAC audio stream types");
     }
     if (!validH264Layout(parameters.h264InputLayout) ||
         parameters.h264NalLengthBytes < 1 ||
@@ -118,11 +136,14 @@ MediaTsMuxPlan::maximumPacketsPerRtpDatagram(
         !validParameterSetPolicy(parameters.parameterSetPolicy)) {
         return invalid("contains an invalid H.264 input contract");
     }
-    if (parameters.aac.mpegId > 1 || parameters.aac.audioObjectType < 1 ||
-        parameters.aac.audioObjectType > 4 ||
-        parameters.aac.samplingFrequencyIndex > 12 ||
-        parameters.aac.channelConfiguration < 1 ||
-        parameters.aac.channelConfiguration > 7) {
+    if (audioVideo &&
+        (audioVideo->aac.mpegId > 1 ||
+         audioVideo->aac.audioObjectType < 1 ||
+         audioVideo->aac.audioObjectType > 4 ||
+         audioVideo->aac.samplingFrequencyIndex > 12 ||
+         audioVideo->aac.channelConfiguration < 1 ||
+         audioVideo->aac.channelConfiguration > 7 ||
+         audioVideo->maximumAudioAccessUnitSamples <= 0)) {
         return invalid("contains an invalid AAC ADTS contract");
     }
     if (parameters.clock.pcrInterval.nanoseconds() <= 0 ||
@@ -138,11 +159,11 @@ MediaTsMuxPlan::maximumPacketsPerRtpDatagram(
         parameters.startupEmissionPreroll >
             parameters.transportDecodeLead ||
         parameters.packetSize != 188 ||
-        !validContinuitySeeds(parameters.continuity) ||
+        (videoOnly && !validContinuitySeeds(videoOnly->continuity)) ||
+        (audioVideo && !validContinuitySeeds(audioVideo->continuity)) ||
         parameters.maximumPacketsPerDatagram < 1 ||
         parameters.maximumPacketsPerDatagram > 7 ||
-        !validTransportKind(parameters.transportKind) ||
-        parameters.maximumAudioAccessUnitSamples <= 0) {
+        !validTransportKind(parameters.transportKind)) {
         return invalid("contains an invalid transport contract");
     }
     return ::media::Result<MediaTsMuxPlan>::success(
@@ -157,6 +178,39 @@ MediaTsMuxPlan::MediaTsMuxPlan(MediaTsMuxPlanParameters parameters) noexcept
 const MediaTsMuxPlanParameters& MediaTsMuxPlan::parameters() const noexcept
 {
     return m_parameters;
+}
+
+const MediaTsVideoOnlyProgramPlan*
+MediaTsMuxPlan::videoOnlyProgram() const noexcept
+{
+    return std::get_if<MediaTsVideoOnlyProgramPlan>(&m_parameters.program);
+}
+
+const MediaTsAudioVideoProgramPlan*
+MediaTsMuxPlan::audioVideoProgram() const noexcept
+{
+    return std::get_if<MediaTsAudioVideoProgramPlan>(&m_parameters.program);
+}
+
+std::uint16_t MediaTsMuxPlan::videoPid() const noexcept
+{
+    return std::visit(
+        [](const auto& program) { return program.videoPid; },
+        m_parameters.program);
+}
+
+std::uint16_t MediaTsMuxPlan::pcrPid() const noexcept
+{
+    return std::visit(
+        [](const auto& program) { return program.pcrPid; },
+        m_parameters.program);
+}
+
+std::uint8_t MediaTsMuxPlan::videoStreamType() const noexcept
+{
+    return std::visit(
+        [](const auto& program) { return program.videoStreamType; },
+        m_parameters.program);
 }
 
 const MediaTsOutputClockPolicy& MediaTsMuxPlan::clockPolicy() const noexcept
