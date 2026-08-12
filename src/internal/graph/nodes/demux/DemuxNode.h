@@ -3,6 +3,7 @@
 #include "internal/graph/nodes/FFmpegNodeRuntime.h"
 #include "internal/graph/runtime/buffer/MediaBufferRef.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegRAII.h"
+#include "internal/graph/runtime/buffer/MediaDemuxInputBuffer.h"
 
 #include <atomic>
 
@@ -30,7 +31,7 @@ private:
     ::media::Status emitEof(MediaGraphExecutionContext& context);
 
 private:
-    ::media::ffmpeg::InputFormatContextPtr m_formatContextOwner;
+    std::optional<MediaDemuxInputSession> m_session;
     AVFormatContext* m_formatContext = nullptr;
     std::atomic_bool m_abortRequested { false };
     bool m_eofSent = false;

@@ -800,6 +800,7 @@ MediaRuntimeNodeFactory::createDemuxPacketClockBinder(
             node.id,
             decoded.stream,
             expected,
+            decoded.firstPacket,
             std::move(mapper),
             std::move(syncGroup)));
 }

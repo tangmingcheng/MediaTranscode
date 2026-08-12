@@ -57,11 +57,19 @@ struct MediaRealtimeAvSyncStartupConfig {
     std::optional<MediaRunningTime> maximumGap;
 };
 
+struct MediaRealtimePreparedHandoffConfig {
+    std::optional<std::size_t> videoPacketCapacity;
+    std::optional<std::size_t> audioPacketCapacity;
+    std::optional<std::size_t> videoByteCapacity;
+    std::optional<std::size_t> audioByteCapacity;
+};
+
 struct MediaRealtimeRtpTranscodeRequest {
     MediaRealtimeInputConfig input;
     MediaRealtimeOutputConfig output;
     MediaTranscodeParameterSet parameters;
     MediaRealtimeAvSyncStartupConfig avSyncStartup;
+    MediaRealtimePreparedHandoffConfig preparedHandoff;
     std::string mediaId;
 };
 

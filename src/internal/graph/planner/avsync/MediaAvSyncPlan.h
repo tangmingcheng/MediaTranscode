@@ -9,6 +9,7 @@
 #include "internal/graph/protocol/rtp/MediaRtcpCompositionPolicy.h"
 #include "internal/graph/protocol/rtp/MediaRtpClockGroupPolicy.h"
 #include "internal/graph/time/MediaRunningTime.h"
+#include "internal/graph/planner/realtime/MediaPreparedGenericInputPlan.h"
 
 #include <cstdint>
 #include <cstddef>
@@ -156,6 +157,8 @@ struct MediaAvSyncDemuxTimestampInputPlan {
     std::optional<MediaRunningTime> discontinuityThresholdNs;
     std::optional<std::uint64_t> initialGeneration;
     std::optional<MediaRunningTime> canonicalTargetEpochNs;
+    std::optional<MediaPreparedGenericInputPlan> preparedInput;
+    std::optional<MediaPreparedGenericInputEvidence> preparedEvidence;
 };
 
 struct MediaAvSyncPreparedDemuxTimestampFacts {
@@ -163,6 +166,9 @@ struct MediaAvSyncPreparedDemuxTimestampFacts {
     MediaRational videoTimeBase;
     int audioStreamIndex;
     MediaRational audioTimeBase;
+    MediaPreparedGenericInputPlan preparedInput;
+    MediaPreparedGenericInputEvidence preparedEvidence;
+    MediaAvSyncStartupPolicy startup;
 };
 
 struct MediaAvSyncProjectMpegTsOutputPlan {

@@ -35,7 +35,8 @@ public:
 
     static ::media::Result<MediaBufferRef> wrapPacket(::media::ffmpeg::PacketPtr packet,
                                                        MediaStreamKind streamKind,
-                                                       std::optional<MediaPacketSourceTiming> sourceTiming);
+                                                       std::optional<MediaPacketSourceTiming> sourceTiming,
+                                                       std::optional<MediaDemuxPacketProvenance> provenance = std::nullopt);
     static ::media::Result<MediaBufferRef> clonePacket(const AVPacket* packet,
                                                        MediaStreamKind streamKind = MediaStreamKind::Unknown);
 

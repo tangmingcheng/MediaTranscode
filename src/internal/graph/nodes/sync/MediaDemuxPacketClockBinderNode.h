@@ -19,6 +19,7 @@ public:
         MediaNodeId nodeId,
         MediaScheduledStream stream,
         MediaRational plannedTimeBase,
+        MediaPreparedDemuxFirstPacketEvidence firstPacket,
         std::shared_ptr<MediaDemuxTimestampClockMapper> mapper,
         std::shared_ptr<MediaAvSyncGroupRuntime> syncGroup);
 
@@ -58,6 +59,8 @@ private:
     const MediaScheduledStream m_stream;
     const MediaStreamKind m_streamKind;
     const MediaRational m_plannedTimeBase;
+    const MediaPreparedDemuxFirstPacketEvidence m_firstPacket;
+    bool m_firstPacketValidated = false;
     std::shared_ptr<MediaDemuxTimestampClockMapper> m_mapper;
     std::shared_ptr<MediaAvSyncGroupRuntime> m_syncGroup;
     std::shared_ptr<MediaDemuxPacketClockBinderState> m_state;

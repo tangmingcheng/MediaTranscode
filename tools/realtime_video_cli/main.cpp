@@ -129,6 +129,10 @@ void rejectUnknownRealtimeArgs(int argc, char** argv)
         "--startup-max-video-unit-bytes",
         "--startup-max-audio-unit-bytes",
         "--startup-max-gap-ms",
+        "--prepared-handoff-video-packets",
+        "--prepared-handoff-audio-packets",
+        "--prepared-handoff-video-bytes",
+        "--prepared-handoff-audio-bytes",
     };
     valueArgs.insert(valueArgs.end(), realtimeValueArgs.begin(), realtimeValueArgs.end());
 
@@ -239,6 +243,22 @@ MediaRealtimeRtpTranscodeRequest parseRealtimeOptions(int argc, char** argv)
         }
         options.avSyncStartup.maximumGap = MediaRunningTime::fromNanoseconds(
             static_cast<std::int64_t>(maximumGapMs) * 1'000'000);
+    }
+    if (hasArg(argc, argv, "--prepared-handoff-video-packets")) {
+        options.preparedHandoff.videoPacketCapacity = requiredSizeArg(
+            argc, argv, "--prepared-handoff-video-packets");
+    }
+    if (hasArg(argc, argv, "--prepared-handoff-audio-packets")) {
+        options.preparedHandoff.audioPacketCapacity = requiredSizeArg(
+            argc, argv, "--prepared-handoff-audio-packets");
+    }
+    if (hasArg(argc, argv, "--prepared-handoff-video-bytes")) {
+        options.preparedHandoff.videoByteCapacity = requiredSizeArg(
+            argc, argv, "--prepared-handoff-video-bytes");
+    }
+    if (hasArg(argc, argv, "--prepared-handoff-audio-bytes")) {
+        options.preparedHandoff.audioByteCapacity = requiredSizeArg(
+            argc, argv, "--prepared-handoff-audio-bytes");
     }
     return options;
 }
@@ -372,7 +392,7 @@ int runRealtimeVideoCli(int argc, char** argv)
 
     const bool helpRequested = hasArg(argc, argv, "--help") || hasArg(argc, argv, "-h");
     if (argc < 5 || helpRequested) {
-        std::cout << "Usage: media_transcode_realtime_video_cli --media-id ID --input-type rtsp|rtp|mpegts-udp --input-layout session|separate|mpegts --output-layout separate|mpegts --output-transport udp|rtp --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --startup-max-video-unit-bytes 4194304 --startup-max-audio-unit-bytes 1048576 --startup-max-gap-ms 40 --mpegts-max-pcr-gap-ms 1000 [--max-duration SECONDS] [options]\n";
+        std::cout << "Usage: media_transcode_realtime_video_cli --media-id ID --input-type rtsp|rtp|mpegts-udp --input-layout session|separate|mpegts --output-layout separate|mpegts --output-transport udp|rtp --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --startup-max-video-unit-bytes 4194304 --startup-max-audio-unit-bytes 1048576 --startup-max-gap-ms 40 --prepared-handoff-video-packets 256 --prepared-handoff-audio-packets 512 --prepared-handoff-video-bytes 268435456 --prepared-handoff-audio-bytes 67108864 --mpegts-max-pcr-gap-ms 1000 [--max-duration SECONDS] [options]\n";
         std::cout << "Raw RTP video: omit --video-rtp-fmtp only for H264/HEVC in-band parameter-set probing; codec, payload type, clock rate, URL, and all probe limits remain required.\n";
         std::cout << "Raw RTP audio: AAC requires explicit --audio-rtp-fmtp; Opus keeps its no-fmtp contract.\n";
         return helpRequested ? 0 : 2;

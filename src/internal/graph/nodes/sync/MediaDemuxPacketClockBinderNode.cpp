@@ -101,6 +101,7 @@ MediaDemuxPacketClockBinderNode::MediaDemuxPacketClockBinderNode(
     MediaNodeId nodeId,
     MediaScheduledStream stream,
     MediaRational plannedTimeBase,
+    MediaPreparedDemuxFirstPacketEvidence firstPacket,
     std::shared_ptr<MediaDemuxTimestampClockMapper> mapper,
     std::shared_ptr<MediaAvSyncGroupRuntime> syncGroup)
     : FFmpegNodeRuntime(
@@ -111,6 +112,7 @@ MediaDemuxPacketClockBinderNode::MediaDemuxPacketClockBinderNode(
               ? MediaStreamKind::Video
               : MediaStreamKind::Audio)
     , m_plannedTimeBase(plannedTimeBase)
+    , m_firstPacket(std::move(firstPacket))
     , m_mapper(std::move(mapper))
     , m_syncGroup(std::move(syncGroup))
     , m_state(std::make_shared<MediaDemuxPacketClockBinderState>(
@@ -250,6 +252,21 @@ MediaDemuxPacketClockBinderNode::timedPacket(
             invalid("Demux clock binder requires one untimed matching packet"));
     }
     AVPacket* packet = source->packet();
+    if (!m_firstPacketValidated) {
+        const auto& provenance = source->demuxProvenance();
+        if (!provenance ||
+            provenance->origin !=
+                MediaDemuxPacketOrigin::PostFindStreamInfoPreparedRead ||
+            provenance->ordinal != m_firstPacket.preparedReadOrdinal ||
+            packet->stream_index != m_firstPacket.streamIndex ||
+            packet->pts != m_firstPacket.pts ||
+            packet->dts != m_firstPacket.dts ||
+            packet->duration != m_firstPacket.duration) {
+            return ::media::Result<MediaBufferRef>::failure(
+                invalid("Demux clock binder first packet disagrees with prepared evidence"));
+        }
+        m_firstPacketValidated = true;
+    }
     MediaTimeDescriptor time = source->timeDescriptor();
     const auto timeBaseStatus = [&](int numerator, int denominator,
                                     const char* sourceName) {
@@ -437,6 +454,7 @@ MediaDemuxPacketClockBinderNode::onProcess(
 
 ::media::Status MediaDemuxPacketClockBinderNode::resetLifecycle()
 {
+    m_firstPacketValidated = false;
     return m_state->resetLifecycle();
 }
 

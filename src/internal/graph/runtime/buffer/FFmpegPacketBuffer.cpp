@@ -7,14 +7,22 @@ namespace media::ffmpeg::graph {
 
 FFmpegPacketBuffer::FFmpegPacketBuffer(
     ::media::ffmpeg::PacketPtr packet,
-    std::optional<MediaPacketSourceTiming> sourceTiming)
+    std::optional<MediaPacketSourceTiming> sourceTiming,
+    std::optional<MediaDemuxPacketProvenance> provenance)
     : m_packet(std::move(packet))
     , m_sourceTiming(std::move(sourceTiming))
+    , m_demuxProvenance(std::move(provenance))
 {
     setPayloadKind(MediaPayloadKind::Packet);
     if (m_packet && (m_packet->flags & AV_PKT_FLAG_KEY)) {
         addFlags(MediaBufferFlag::KeyFrame);
     }
+}
+
+const std::optional<MediaDemuxPacketProvenance>&
+FFmpegPacketBuffer::demuxProvenance() const noexcept
+{
+    return m_demuxProvenance;
 }
 
 const std::optional<MediaPacketSourceTiming>& FFmpegPacketBuffer::sourceTiming() const noexcept

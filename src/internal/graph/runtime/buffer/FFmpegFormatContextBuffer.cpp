@@ -138,6 +138,19 @@ bool FFmpegFormatContextBuffer::inputSnapshotComplete() const noexcept
     return std::move(m_inputContext);
 }
 
+::media::Result<MediaDemuxInputSession>
+FFmpegFormatContextBuffer::takeDemuxSession()
+{
+    auto context = takeInputContext();
+    if (!context) {
+        return ::media::Result<MediaDemuxInputSession>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "FFmpeg format buffer has no input demux session"));
+    }
+    return ::media::Result<MediaDemuxInputSession>::success(
+        MediaDemuxInputSession{std::move(context), {}, 0});
+}
+
 ::media::ffmpeg::OutputFormatContextPtr FFmpegFormatContextBuffer::takeOutputContext() noexcept
 {
     m_ownership = m_outputContext ? FFmpegFormatContextOwnership::Transferred : FFmpegFormatContextOwnership::Empty;

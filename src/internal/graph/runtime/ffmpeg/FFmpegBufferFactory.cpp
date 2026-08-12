@@ -134,14 +134,16 @@ namespace media::ffmpeg::graph {
 
 ::media::Result<MediaBufferRef> FFmpegBufferFactory::wrapPacket(::media::ffmpeg::PacketPtr packet,
                                                                  MediaStreamKind streamKind,
-                                                                 std::optional<MediaPacketSourceTiming> sourceTiming)
+                                                                 std::optional<MediaPacketSourceTiming> sourceTiming,
+                                                                 std::optional<MediaDemuxPacketProvenance> provenance)
 {
     if (!packet) {
         return ::media::Result<MediaBufferRef>::failure(
             ::media::ErrorInfo::invalidArgument("wrapPacket failed: packet is null"));
     }
 
-    auto buffer = makeMediaBufferRef<FFmpegPacketBuffer>(std::move(packet), std::move(sourceTiming));
+    auto buffer = makeMediaBufferRef<FFmpegPacketBuffer>(
+        std::move(packet), std::move(sourceTiming), std::move(provenance));
     buffer->setStreamKind(streamKind);
     buffer->setPayloadKind(MediaPayloadKind::Packet);
     if (const auto* packetBuffer = dynamic_cast<const FFmpegPacketBuffer*>(buffer.get())) {

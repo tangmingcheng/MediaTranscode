@@ -4,6 +4,7 @@
 #include "internal/graph/runtime/buffer/FFmpegInputStreamSnapshot.h"
 #include "internal/graph/runtime/buffer/FFmpegInputSnapshotBuffer.h"
 #include "internal/graph/runtime/buffer/MediaBuffer.h"
+#include "internal/graph/runtime/buffer/MediaDemuxInputBuffer.h"
 #include "internal/graph/model/MediaFormatDescriptor.h"
 #include "internal/graph/model/MediaTimeDescriptor.h"
 #include "media_transcode/Result.h"
@@ -22,7 +23,8 @@ enum class FFmpegFormatContextOwnership {
 };
 
 class FFmpegFormatContextBuffer final : public MediaBuffer,
-                                        public FFmpegInputSnapshotBuffer {
+                                        public FFmpegInputSnapshotBuffer,
+                                        public MediaDemuxInputBuffer {
 public:
     explicit FFmpegFormatContextBuffer(::media::ffmpeg::OutputFormatContextPtr context);
     explicit FFmpegFormatContextBuffer(AVFormatContext* borrowedContext);
@@ -42,6 +44,7 @@ public:
     bool inputSnapshotComplete() const noexcept override;
 
     ::media::ffmpeg::InputFormatContextPtr takeInputContext() noexcept;
+    ::media::Result<MediaDemuxInputSession> takeDemuxSession() override;
     ::media::ffmpeg::OutputFormatContextPtr takeOutputContext() noexcept;
 
 private:
