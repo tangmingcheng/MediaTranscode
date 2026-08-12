@@ -37,6 +37,17 @@ function(_media_transcode_pkg_config_module_version
     endif()
 endfunction()
 
+function(_media_transcode_prefix_search_roots output_variable prefix)
+    set(prefix_roots "${prefix}")
+    file(GLOB prefix_children LIST_DIRECTORIES true "${prefix}/*")
+    foreach(child IN LISTS prefix_children)
+        if(IS_DIRECTORY "${child}")
+            list(APPEND prefix_roots "${child}")
+        endif()
+    endforeach()
+    set(${output_variable} "${prefix_roots}" PARENT_SCOPE)
+endfunction()
+
 function(media_transcode_select_runtime_ffmpeg_pkg_config output_variable)
     find_program(runtime_ffmpeg NAMES ffmpeg NO_CACHE REQUIRED)
     execute_process(
@@ -74,16 +85,14 @@ function(media_transcode_select_runtime_ffmpeg_pkg_config output_variable)
     get_filename_component(runtime_bin_directory "${runtime_ffmpeg_real}" DIRECTORY)
     get_filename_component(runtime_prefix "${runtime_bin_directory}" DIRECTORY)
 
-    set(search_roots "${runtime_prefix}")
+    _media_transcode_prefix_search_roots(
+        runtime_prefix_search_roots "${runtime_prefix}"
+    )
+    set(search_roots ${runtime_prefix_search_roots})
     if(NOT "$ENV{FF_HOME}" STREQUAL "")
         file(TO_CMAKE_PATH "$ENV{FF_HOME}" ff_home)
-        list(APPEND search_roots "${ff_home}")
-        file(GLOB ff_home_children LIST_DIRECTORIES true "${ff_home}/*")
-        foreach(child IN LISTS ff_home_children)
-            if(IS_DIRECTORY "${child}")
-                list(APPEND search_roots "${child}")
-            endif()
-        endforeach()
+        _media_transcode_prefix_search_roots(ff_home_search_roots "${ff_home}")
+        list(APPEND search_roots ${ff_home_search_roots})
     endif()
     list(REMOVE_DUPLICATES search_roots)
 
@@ -139,7 +148,7 @@ function(media_transcode_select_runtime_ffmpeg_pkg_config output_variable)
         endif()
     endforeach()
 
-    if(selected_directory STREQUAL "")
+    if("${selected_directory}" STREQUAL "")
         string(JOIN ", " inspected_text ${inspected_directories})
         message(FATAL_ERROR
             "No FFmpeg development package matches PATH runtime ${runtime_ffmpeg_real}; "

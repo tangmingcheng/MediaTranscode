@@ -57,14 +57,17 @@ private:
 
     std::shared_ptr<Data> current() const noexcept
     {
-        return m_current.load(std::memory_order_acquire);
+        return std::atomic_load_explicit(
+            &m_current, std::memory_order_acquire);
     }
 
     ::media::Status prepareForGenerationPurge() override
     {
         try {
-            m_prepared.store(
-                std::make_shared<Data>(), std::memory_order_release);
+            std::atomic_store_explicit(
+                &m_prepared,
+                std::make_shared<Data>(),
+                std::memory_order_release);
         } catch (const std::bad_alloc&) {
             return ::media::Status::failure(
                 ::media::ErrorInfo::internalError(
@@ -75,13 +78,16 @@ private:
 
     void resetForGenerationPurge() noexcept override
     {
-        auto replacement =
-            m_prepared.exchange(nullptr, std::memory_order_acq_rel);
-        m_current.store(std::move(replacement), std::memory_order_release);
+        auto replacement = std::atomic_exchange_explicit(
+            &m_prepared,
+            std::shared_ptr<Data>{},
+            std::memory_order_acq_rel);
+        std::atomic_store_explicit(
+            &m_current, std::move(replacement), std::memory_order_release);
     }
 
-    std::atomic<std::shared_ptr<Data>> m_current;
-    std::atomic<std::shared_ptr<Data>> m_prepared;
+    std::shared_ptr<Data> m_current;
+    std::shared_ptr<Data> m_prepared;
 };
 
 class MediaAvOutputSchedulerNode final : public FFmpegNodeRuntime {

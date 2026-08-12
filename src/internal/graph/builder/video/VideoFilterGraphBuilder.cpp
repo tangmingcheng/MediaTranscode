@@ -113,8 +113,6 @@ std::string buildFilterDescription(const MediaNodeOptions* options)
     parameters->time_base = timeBase;
     parameters->sample_aspect_ratio = pixelAspect;
     parameters->frame_rate = frameRate;
-    parameters->color_space = firstFrame->colorspace;
-    parameters->color_range = firstFrame->color_range;
 
     if (hardwareSource) {
         parameters->hw_frames_ctx = av_buffer_ref(firstFrame->hw_frames_ctx);

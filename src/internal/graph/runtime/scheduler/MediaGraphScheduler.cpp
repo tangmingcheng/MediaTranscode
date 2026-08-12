@@ -4,8 +4,9 @@
 
 namespace media::ffmpeg::graph {
 
-static_assert(noexcept(std::hash<uint32_t>{}(uint32_t{})));
-static_assert(noexcept(std::equal_to<uint32_t>{}(uint32_t{}, uint32_t{})));
+static_assert(noexcept(MediaGraphSchedulerNodeIdHash{}(std::uint32_t{})));
+static_assert(noexcept(MediaGraphSchedulerNodeIdEqual{}(
+    std::uint32_t{}, std::uint32_t{})));
 
 ::media::Status MediaGraphScheduler::registerNode(std::unique_ptr<MediaRuntimeNode> node)
 {
@@ -17,7 +18,9 @@ static_assert(noexcept(std::equal_to<uint32_t>{}(uint32_t{}, uint32_t{})));
 ::media::Status MediaGraphScheduler::registerNodes(
     std::vector<std::unique_ptr<MediaRuntimeNode>> nodes)
 {
-    std::unordered_set<uint32_t> preparedIds;
+    std::unordered_set<std::uint32_t,
+                       MediaGraphSchedulerNodeIdHash,
+                       MediaGraphSchedulerNodeIdEqual> preparedIds;
     preparedIds.reserve(nodes.size());
     for (const auto& node : nodes) {
         if (!node || !node->nodeId()) {
