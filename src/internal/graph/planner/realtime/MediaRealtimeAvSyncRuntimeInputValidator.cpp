@@ -235,7 +235,8 @@ namespace {
             runtime.assembly.inputClock);
     if (!input.firstWindowMaximumSkewNs ||
         !input.discontinuityThresholdNs || !input.initialGeneration ||
-        !input.canonicalTargetEpochNs ||
+        !input.canonicalTargetEpochNs || !input.preparedInput ||
+        !input.preparedEvidence ||
         selected.videoTimeBase.num != input.videoTimeBase.num ||
         selected.videoTimeBase.den != input.videoTimeBase.den ||
         selected.audioTimeBase.num != input.audioTimeBase.num ||
@@ -248,7 +249,16 @@ namespace {
         selected.videoSourceIdentity != runtime.assembly.video.sourceIdentity ||
         selected.audioSourceIdentity != runtime.assembly.audio.sourceIdentity ||
         selected.canonicalTargetEpoch !=
-            *input.canonicalTargetEpochNs) {
+            *input.canonicalTargetEpochNs ||
+        selected.preparedInput != *input.preparedInput ||
+        selected.preparedEvidence != *input.preparedEvidence ||
+        runtime.synchronization.startup.requireVideoKeyFrame != true ||
+        input.preparedInput->leadingVideoDisposition !=
+            MediaPreparedLeadingVideoDisposition::
+                DiscardUntimedNonKeyBeforeFirstTimedVideo ||
+        input.preparedInput->timedStartupPrefixDisposition !=
+            MediaPreparedTimedStartupPrefixDisposition::
+                DiscardEarlierCompleteTimedUntilCommonWindow) {
         return invalidInput("demux timestamp policy");
     }
     return ::media::Status::success();

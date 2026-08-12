@@ -95,6 +95,9 @@ template <typename Integer>
         plan.videoSourceIdentity,
         plan.audioSourceIdentity,
         plan.canonicalTargetEpoch};
+    const auto& firstPacket = stream == MediaScheduledStream::Video
+        ? plan.preparedEvidence.firstVideo
+        : plan.preparedEvidence.firstAudio;
     if (!graph.findNode(nodeId) || !groupKey.valid() ||
         streamTimeBase.num <= 0 || streamTimeBase.den <= 0 ||
         !MediaDemuxTimestampClockMapper::create(config)) {
@@ -129,7 +132,13 @@ template <typename Integer>
         {"demux_clock_binder.audio_source_identity",
              plan.audioSourceIdentity},
         {"demux_clock_binder.canonical_target_epoch_ns",
-             std::to_string(plan.canonicalTargetEpoch.nanoseconds())}
+             std::to_string(plan.canonicalTargetEpoch.nanoseconds())},
+        {"demux_clock_binder.first_pts", std::to_string(firstPacket.pts)},
+        {"demux_clock_binder.first_stream_index", std::to_string(firstPacket.streamIndex)},
+        {"demux_clock_binder.first_dts", std::to_string(firstPacket.dts)},
+        {"demux_clock_binder.first_duration", std::to_string(firstPacket.duration)},
+        {"demux_clock_binder.first_prepared_read_ordinal",
+             std::to_string(firstPacket.preparedReadOrdinal)}
     });
 }
 
@@ -173,10 +182,21 @@ MediaDemuxPacketClockBinderNodePlanCodec::decode(const MediaNode& node)
         "demux_clock_binder.audio_source_identity");
     auto targetEpoch = parseInteger<std::int64_t>(
         node.options, "demux_clock_binder.canonical_target_epoch_ns", false);
+    auto firstPts = parseInteger<std::int64_t>(
+        node.options, "demux_clock_binder.first_pts", false);
+    auto firstStreamIndex = parseInteger<int>(
+        node.options, "demux_clock_binder.first_stream_index", false);
+    auto firstDts = parseInteger<std::int64_t>(
+        node.options, "demux_clock_binder.first_dts", false);
+    auto firstDuration = parseInteger<std::int64_t>(
+        node.options, "demux_clock_binder.first_duration", true);
+    auto firstOrdinal = parseInteger<std::uint64_t>(
+        node.options, "demux_clock_binder.first_prepared_read_ordinal", false);
     if (!stream || !groupText || !streamNum || !streamDen ||
         !videoNum || !videoDen || !audioNum || !audioDen || !skew ||
         !discontinuity || !generation || !videoIdentity ||
-        !audioIdentity || !targetEpoch) {
+        !audioIdentity || !targetEpoch || !firstPts || !firstStreamIndex || !firstDts ||
+        !firstDuration || !firstOrdinal) {
         const ::media::ErrorInfo error = !stream ? stream.error()
             : !groupText ? groupText.error()
             : !streamNum ? streamNum.error()
@@ -190,7 +210,12 @@ MediaDemuxPacketClockBinderNodePlanCodec::decode(const MediaNode& node)
             : !generation ? generation.error()
             : !videoIdentity ? videoIdentity.error()
             : !audioIdentity ? audioIdentity.error()
-            : targetEpoch.error();
+            : !targetEpoch ? targetEpoch.error()
+            : !firstPts ? firstPts.error()
+            : !firstStreamIndex ? firstStreamIndex.error()
+            : !firstDts ? firstDts.error()
+            : !firstDuration ? firstDuration.error()
+            : firstOrdinal.error();
         return Result::failure(error);
     }
     MediaDemuxTimestampClockMapperConfig mapper{
@@ -216,12 +241,16 @@ MediaDemuxPacketClockBinderNodePlanCodec::decode(const MediaNode& node)
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "Demux binder stream time base disagrees with its mapper product"));
     }
+    MediaPreparedDemuxFirstPacketEvidence firstPacket{
+        firstStreamIndex.value(), selected,
+        firstPts.value(), firstDts.value(), firstDuration.value(),
+        firstOrdinal.value()};
     return Result::success(
         MediaDecodedDemuxPacketClockBinderNodePlan{
             stream.value(),
             MediaAvSyncGroupKey(std::move(groupText).value()),
             selected,
-            std::move(mapper)});
+            std::move(mapper), std::move(firstPacket)});
 }
 
 ::media::Result<MediaDemuxTimestampClockMapperConfig>
@@ -237,6 +266,7 @@ MediaDemuxPacketClockBinderNodePlanCodec::mapperConfigFromPlan(
         !plan.demuxTimestampInput->discontinuityThresholdNs ||
         !plan.demuxTimestampInput->initialGeneration ||
         !plan.demuxTimestampInput->canonicalTargetEpochNs ||
+        !plan.demuxTimestampInput->preparedEvidence ||
         !plan.startup.videoIdentity || !plan.startup.audioIdentity) {
         return Result::failure(::media::ErrorInfo::notInitialized(
             "Demux binder requires the complete A/V planner authority"));
@@ -268,10 +298,14 @@ MediaDemuxPacketClockBinderNodePlanCodec::validateAgainstPlanner(
         decoded.stream == MediaScheduledStream::Video
         ? expected.value().videoTimeBase
         : expected.value().audioTimeBase;
+    const auto& first = decoded.stream == MediaScheduledStream::Video
+        ? plan.demuxTimestampInput->preparedEvidence->firstVideo
+        : plan.demuxTimestampInput->preparedEvidence->firstAudio;
     if (!groupKey.valid() || decoded.groupKey != groupKey ||
         decoded.mapper != expected.value() ||
         decoded.streamTimeBase.num != selected.num ||
-        decoded.streamTimeBase.den != selected.den) {
+        decoded.streamTimeBase.den != selected.den ||
+        decoded.firstPacket != first) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument(
                 "Demux binder options disagree with the exact A/V planner product"));

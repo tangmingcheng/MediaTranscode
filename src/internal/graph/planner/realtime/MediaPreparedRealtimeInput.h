@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/runtime/buffer/FFmpegFormatContextBuffer.h"
+#include "internal/graph/runtime/buffer/MediaPreparedGenericInputBuffer.h"
 #include "internal/graph/runtime/buffer/MediaTsPreparedInputBuffer.h"
 #include "internal/graph/runtime/buffer/MediaRawRtpPreparedInputBuffer.h"
 #include "internal/graph/protocol/mpegts/MediaTsInputSession.h"
@@ -38,6 +39,8 @@ public:
 
     static ::media::Result<MediaPreparedRealtimeInput> create(
         ::media::ffmpeg::InputFormatContextPtr context);
+    static ::media::Result<MediaPreparedRealtimeInput> create(
+        MediaPreparedGenericInput input);
     static ::media::Result<MediaPreparedRealtimeInput> createMpegTs(
         std::unique_ptr<MediaTsInputSession> preflightSession,
         MediaTsRuntimeSessionFactory runtimeSessionFactory);
@@ -47,6 +50,9 @@ public:
     bool valid() const noexcept;
     std::optional<MediaPreparedRealtimeInputKind> kind() const noexcept;
     const FFmpegInputStreamSnapshot* inputStreamSnapshot(int streamIndex) const noexcept;
+    const MediaPreparedGenericInputPlan* genericPlan() const noexcept;
+    const MediaPreparedGenericInputEvidence* genericEvidence() const noexcept;
+    const MediaAvSyncStartupPolicy* genericStartup() const noexcept;
     ::media::Status startRawRtpPreflightCapture();
     ::media::Status rawRtpCaptureStatus();
     ::media::Status sealRawRtpPreflight();
@@ -54,11 +60,13 @@ public:
 
 private:
     explicit MediaPreparedRealtimeInput(std::unique_ptr<FFmpegFormatContextBuffer> buffer);
+    explicit MediaPreparedRealtimeInput(std::unique_ptr<MediaPreparedGenericInputBuffer> buffer);
     explicit MediaPreparedRealtimeInput(std::unique_ptr<MediaTsPreparedInputBuffer> buffer);
     explicit MediaPreparedRealtimeInput(
         std::unique_ptr<MediaRawRtpPreparedInputBuffer> buffer);
 
     std::unique_ptr<FFmpegFormatContextBuffer> m_genericBuffer;
+    std::unique_ptr<MediaPreparedGenericInputBuffer> m_preparedGenericBuffer;
     std::unique_ptr<MediaTsPreparedInputBuffer> m_tsBuffer;
     std::unique_ptr<MediaRawRtpPreparedInputBuffer> m_rawRtpBuffer;
 };

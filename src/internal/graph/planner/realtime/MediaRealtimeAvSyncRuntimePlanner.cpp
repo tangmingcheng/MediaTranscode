@@ -106,6 +106,8 @@ constexpr std::int64_t NanosecondsPerSecond = 1'000'000'000;
             !synchronization.demuxTimestampInput->discontinuityThresholdNs ||
             !synchronization.demuxTimestampInput->initialGeneration ||
             !synchronization.demuxTimestampInput->canonicalTargetEpochNs ||
+            !synchronization.demuxTimestampInput->preparedInput ||
+            !synchronization.demuxTimestampInput->preparedEvidence ||
             !synchronization.demuxTimestampInput->videoTimeBase.isKnown() ||
             synchronization.demuxTimestampInput->videoTimeBase.num <= 0 ||
             synchronization.demuxTimestampInput->videoTimeBase.den <= 0 ||
@@ -131,7 +133,9 @@ constexpr std::int64_t NanosecondsPerSecond = 1'000'000'000;
                 initialGeneration,
                 *synchronization.startup.videoIdentity,
                 *synchronization.startup.audioIdentity,
-                *demux.canonicalTargetEpochNs});
+                *demux.canonicalTargetEpochNs,
+                *demux.preparedInput,
+                *demux.preparedEvidence});
         videoDuration.emplace<MediaPacketDurationPlan>(true);
         audioDuration.emplace<MediaPlannedAudioSamplesDurationPlan>(
             *facts.inputAudioSampleRate,

@@ -13,6 +13,7 @@ struct MediaDecodedDemuxPacketClockBinderNodePlan final {
     MediaAvSyncGroupKey groupKey;
     MediaRational streamTimeBase;
     MediaDemuxTimestampClockMapperConfig mapper;
+    MediaPreparedDemuxFirstPacketEvidence firstPacket;
 };
 
 class MediaDemuxPacketClockBinderNodePlanCodec final {

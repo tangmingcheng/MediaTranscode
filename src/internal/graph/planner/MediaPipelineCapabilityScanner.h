@@ -5,6 +5,8 @@
 #include "internal/graph/planner/MediaPipelinePlanner.h"
 #include "internal/graph/planner/realtime/MediaPreparedRealtimeInput.h"
 #include "internal/graph/planner/realtime/MediaTsProgramSelector.h"
+#include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodeRequest.h"
+#include "internal/graph/planner/avsync/MediaAvSyncPlan.h"
 
 #include <string>
 #include <vector>
@@ -36,12 +38,16 @@ public:
     static ::media::Result<MediaPreparedRealtimeInputScan> prepareRealtimeInput(
         const std::string& inputUrl,
         const MediaPipelinePlannerOptions& options,
-        MediaTranscodeStreamSet streamSet);
+        MediaTranscodeStreamSet streamSet,
+        const MediaRealtimeRtpTranscodeRequest& request,
+        const MediaAvSyncStartupPolicy& startup);
     static ::media::Result<MediaPreparedRealtimeInputScan> prepareRealtimeInput(
         const std::string& inputUrl,
         const MediaPipelinePlannerOptions& options,
         MediaTranscodeStreamSet streamSet,
-        const MediaRealtimeInputOpener& opener);
+        const MediaRealtimeInputOpener& opener,
+        const MediaRealtimeRtpTranscodeRequest& request,
+        const MediaAvSyncStartupPolicy& startup);
 
     static std::vector<MediaPipelineChainPlan> enumerateVideoTranscodeCandidates(
         const std::string& inputCodecName,

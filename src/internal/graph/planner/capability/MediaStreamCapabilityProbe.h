@@ -16,7 +16,9 @@ public:
     static ::media::Result<MediaPreparedRealtimeInputScan> prepareRealtime(
         const std::string& inputUrl, AVDictionary** inputOptions,
         MediaTranscodeStreamSet streamSet,
-        const MediaRealtimeInputOpener& opener);
+        const MediaRealtimeInputOpener& opener,
+        const MediaRealtimeRtpTranscodeRequest& request,
+        const MediaAvSyncStartupPolicy& startup);
 
 private:
     MediaStreamCapabilityProbe() = delete;

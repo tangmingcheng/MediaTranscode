@@ -1,4 +1,5 @@
 #include "internal/graph/planner/realtime/MediaRealtimeInputPlanner.h"
+#include "internal/graph/planner/avsync/MediaAvSyncStartupPolicyPlanner.h"
 
 #include "internal/graph/planner/MediaRtpClockLivenessPolicy.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlan.h"
@@ -661,12 +662,18 @@ void MediaRealtimeInputPlanner::applyNodePlans(
         return prepareMpegTs(
             request, io ? &io->openMpegTs : nullptr);
     }
+    auto startup = MediaAvSyncStartupPolicyPlanner::plan(request);
+    if (!startup) {
+        return ::media::Result<MediaPreparedRealtimeInputScan>::failure(
+            startup.error());
+    }
     return io
         ? MediaPipelineCapabilityScanner::prepareRealtimeInput(
               request.input.url, options, *request.parameters.execution.streamSet,
-              io->openGeneric)
+              io->openGeneric, request, startup.value())
         : MediaPipelineCapabilityScanner::prepareRealtimeInput(
-              request.input.url, options, *request.parameters.execution.streamSet);
+              request.input.url, options, *request.parameters.execution.streamSet,
+              request, startup.value());
 }
 
 ::media::Result<MediaPreparedRawRtpProbe>

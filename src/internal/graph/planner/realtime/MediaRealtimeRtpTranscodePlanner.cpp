@@ -108,7 +108,12 @@ preparedDemuxTimestampFacts(
         prepared->inputStreamSnapshot(plan.videoPlan.sourceStreamIndex);
     const auto* audioStream =
         prepared->inputStreamSnapshot(audio.sourceStreamIndex);
-    if (!video || !audioStream || video->index < 0 ||
+    const auto* genericPlan = prepared->genericPlan();
+    const auto* genericEvidence = prepared->genericEvidence();
+    const auto* genericStartup = prepared->genericStartup();
+    if (!video || !audioStream || !genericPlan || !genericEvidence ||
+        !genericStartup ||
+        video->index < 0 ||
         audioStream->index < 0 || video->index == audioStream->index ||
         !video->time.timeBase.isKnown() ||
         video->time.timeBase.num <= 0 || video->time.timeBase.den <= 0 ||
@@ -122,7 +127,8 @@ preparedDemuxTimestampFacts(
     return ::media::Result<MediaAvSyncPreparedDemuxTimestampFacts>::success(
         MediaAvSyncPreparedDemuxTimestampFacts{
             video->index, video->time.timeBase,
-            audioStream->index, audioStream->time.timeBase});
+            audioStream->index, audioStream->time.timeBase,
+            *genericPlan, *genericEvidence, *genericStartup});
 }
 
 constexpr int RealtimeNoBidirectionalFrames = 0;
