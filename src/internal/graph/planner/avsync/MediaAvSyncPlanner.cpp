@@ -137,9 +137,7 @@ constexpr MediaRunningTime runningTime(std::int64_t nanoseconds) noexcept
     }
 
     MediaAvSyncRtpInputPlan input;
-    const std::string groupIdentity = request.mediaId.empty()
-        ? std::string("realtime-av-sync")
-        : request.mediaId;
+    const std::string& groupIdentity = request.mediaId;
 
     input.videoInput.identity = groupIdentity + ".input.video";
     input.videoInput.payloadType = *request.input.videoRtp.payloadType;
@@ -178,9 +176,7 @@ void planRtpOutput(MediaAvSyncPlan& plan,
                    const MediaRealtimeRtpTranscodeRequest& request,
                    int audioOutputRate)
 {
-    const std::string groupIdentity = request.mediaId.empty()
-        ? std::string("realtime-av-sync")
-        : request.mediaId;
+    const std::string& groupIdentity = request.mediaId;
     const std::string cname =
         MediaRtpOutputIdentityPlanner::cname(groupIdentity);
     plan.rtpOutput.emplace();
@@ -221,9 +217,7 @@ void planTsInput(MediaAvSyncPlan& plan,
     plan.mpegTsInput->programMapPid = program.programMapPid;
     plan.mpegTsInput->videoPid = program.video.elementaryPid;
     plan.mpegTsInput->audioPid = program.audio.elementaryPid;
-    const std::string groupIdentity = request.mediaId.empty()
-        ? std::string("realtime-av-sync-ts")
-        : request.mediaId;
+    const std::string& groupIdentity = request.mediaId;
     plan.startup.videoIdentity = groupIdentity + ".pid." +
                                  std::to_string(program.video.elementaryPid);
     plan.startup.audioIdentity = groupIdentity + ".pid." +
@@ -286,6 +280,11 @@ void planTsInput(MediaAvSyncPlan& plan,
 ::media::Result<MediaAvSyncRtpInputPlan> MediaAvSyncPlanner::planRtpInputClock(
     const MediaRealtimeRtpTranscodeRequest& request)
 {
+    if (request.mediaId.empty()) {
+        return ::media::Result<MediaAvSyncRtpInputPlan>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "A/V RTP input clock requires an explicit media identity"));
+    }
     return planRtpInput(request);
 }
 
@@ -296,6 +295,11 @@ void planTsInput(MediaAvSyncPlan& plan,
     const MediaAvSyncPreparedDemuxTimestampFacts* preparedDemuxFacts,
     int resolvedOutputAudioSampleRate)
 {
+    if (request.mediaId.empty()) {
+        return ::media::Result<MediaAvSyncPlan>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "A/V synchronization requires an explicit media identity"));
+    }
     if (request.parameters.execution.streamSet != MediaTranscodeStreamSet::AudioVideo) {
         return ::media::Result<MediaAvSyncPlan>::failure(
             ::media::ErrorInfo::unsupported("A/V synchronization requires both audio and video"));
@@ -358,9 +362,7 @@ void planTsInput(MediaAvSyncPlan& plan,
         plan.sourceClockMode = MediaAvSyncSourceClockMode::DemuxTimestamps;
         plan.controlGenerationPolicy =
             MediaControlGenerationPolicy::RequiredExact;
-        const std::string groupIdentity = request.mediaId.empty()
-            ? std::string("realtime-av-sync-demux")
-            : request.mediaId;
+        const std::string& groupIdentity = request.mediaId;
         plan.startup.videoIdentity = groupIdentity + ".stream." +
             std::to_string(preparedDemuxFacts->videoStreamIndex);
         plan.startup.audioIdentity = groupIdentity + ".stream." +
