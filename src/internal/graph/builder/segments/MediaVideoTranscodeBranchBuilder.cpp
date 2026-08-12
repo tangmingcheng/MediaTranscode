@@ -81,12 +81,16 @@ MediaVideoTranscodeBranchNodes addVideoTranscodeNodes(MediaGraph& graph,
                                             const MediaVideoTranscodeBranchNodes& nodes)
 {
     const MediaRealtimeEdgePolicySet& policies = options.edgePolicies;
-    const auto& sourcePacketPolicy = options.canonicalLineageCapacity
-        ? policies.atomicVideoPacket
-        : policies.videoPacket;
-    const auto& videoFramePolicy = options.canonicalLineageCapacity
-        ? policies.synchronizedVideoFrame
-        : policies.videoFrame;
+    const auto& sourcePacketPolicy = options.lineageEdgePolicies
+        ? options.lineageEdgePolicies->startupPacket
+        : options.canonicalLineageCapacity
+            ? policies.atomicVideoPacket
+            : policies.videoPacket;
+    const auto& videoFramePolicy = options.lineageEdgePolicies
+        ? options.lineageEdgePolicies->frame
+        : options.canonicalLineageCapacity
+            ? policies.synchronizedVideoFrame
+            : policies.videoFrame;
     if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.formatSourceNode, options.formatSourcePort, nodes.codecResolver, "format", options.prefix + ".format -> codec_resolver.format", policies.metadata); !status) return status;
     if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.codecResolver, "decoder", nodes.videoDecode, "codec", options.prefix + ".codec_resolver.decoder -> decode.codec", policies.metadata); !status) return status;
     if (nodes.videoTimestamp.isValid()) {
@@ -97,7 +101,7 @@ MediaVideoTranscodeBranchNodes addVideoTranscodeNodes(MediaGraph& graph,
     if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.videoFilter, "codec", nodes.videoEncode, "codec", options.prefix + ".filter.codec -> encode.codec", policies.metadata); !status) return status;
     if (options.inputStartRequiresKeyFrame) {
         if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.packetSourceNode, options.packetSourcePort, nodes.packetStartGate, "packet", options.prefix + ".packet -> packet_start_gate.packet", sourcePacketPolicy); !status) return status;
-        if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.packetStartGate, "packet", nodes.videoDecode, "packet", options.prefix + ".packet_start_gate.packet -> decode.packet", policies.videoPacket); !status) return status;
+        if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.packetStartGate, "packet", nodes.videoDecode, "packet", options.prefix + ".packet_start_gate.packet -> decode.packet", sourcePacketPolicy); !status) return status;
     } else if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, options.packetSourceNode, options.packetSourcePort, nodes.videoDecode, "packet", options.prefix + ".packet -> decode.packet", sourcePacketPolicy); !status) {
         return status;
     }
@@ -107,9 +111,11 @@ MediaVideoTranscodeBranchNodes addVideoTranscodeNodes(MediaGraph& graph,
         if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.videoTimestamp, "frame", nodes.videoFrameRate, "frame", options.prefix + ".timestamp.frame -> framerate.frame", videoFramePolicy); !status) return status;
     } else if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.hardwareTransfer, "frame", nodes.videoFrameRate, "frame", options.prefix + ".hwtransfer.frame -> framerate.frame", videoFramePolicy); !status) return status;
     if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.videoFrameRate, "frame", nodes.videoFilter, "frame", options.prefix + ".framerate.frame -> filter.frame", videoFramePolicy); !status) return status;
-    const MediaEdgePolicy& filterOutputPolicy = options.canonicalLineageCapacity
-        ? policies.preparedVideoFrame
-        : policies.videoFrame;
+    const MediaEdgePolicy& filterOutputPolicy = options.lineageEdgePolicies
+        ? options.lineageEdgePolicies->preparedFrame
+        : options.canonicalLineageCapacity
+            ? policies.preparedVideoFrame
+            : policies.videoFrame;
     if (auto status = MediaGraphBuildSupport::connectChecked(graph, owner, nodes.videoFilter, "frame", nodes.videoEncode, "frame", options.prefix + ".filter.frame -> encode.frame", filterOutputPolicy); !status) return status;
     return ::media::Result<void>::success();
 }
@@ -162,6 +168,26 @@ MediaVideoTranscodeBranchNodes addVideoTranscodeNodes(MediaGraph& graph,
         }
         if (auto status = requireMediaFfmpegCopyOpaqueCapability(); !status) {
             return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
+        }
+    }
+    if (options.lineageEdgePolicies) {
+        const auto& lineage = *options.lineageEdgePolicies;
+        const auto validBlockingPolicy = [](const MediaEdgePolicy& policy) {
+            const auto& queue = policy.queuePolicy;
+            return queue.bounded && queue.capacity > 0 &&
+                queue.overflowPolicy ==
+                    MediaQueueOverflowPolicy::BlockProducer &&
+                queue.orderingPolicy == MediaQueueOrderingPolicy::Fifo &&
+                queue.preserveOrdering;
+        };
+        if (!MediaAtomicOutputPolicyContract::accepts(
+                lineage.startupPacket) ||
+            !validBlockingPolicy(lineage.frame) ||
+            !MediaAtomicOutputPolicyContract::accepts(
+                lineage.preparedFrame)) {
+            return ::media::Result<MediaEncodedBranchEndpoints>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Video lineage requires complete planned lossless edge policies"));
         }
     }
 

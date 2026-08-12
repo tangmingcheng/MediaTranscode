@@ -18,6 +18,7 @@ struct MediaVideoBranchSegmentOptions {
     MediaVideoTranscodeParameters parameters;
     MediaGraphQueueParameters queues;
     MediaRealtimeEdgePolicySet edgePolicies;
+    std::optional<MediaVideoLineageEdgePolicySet> lineageEdgePolicies;
     bool inputStartRequiresKeyFrame = false;
     std::optional<std::size_t> canonicalLineageCapacity;
     std::optional<bool> generationStartRequiresKeyFrame;

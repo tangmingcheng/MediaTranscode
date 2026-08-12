@@ -5,6 +5,16 @@
 
 namespace media::ffmpeg::graph {
 
+struct MediaVideoLineageEdgePolicySet final {
+    MediaEdgePolicy ingressPacket;
+    MediaEdgePolicy startupPacket;
+    MediaEdgePolicy frame;
+    MediaEdgePolicy preparedFrame;
+
+    constexpr bool operator==(
+        const MediaVideoLineageEdgePolicySet&) const noexcept = default;
+};
+
 struct MediaRealtimeEdgePolicySet {
     MediaEdgePolicy metadata;
     MediaEdgePolicy packet;

@@ -2,6 +2,7 @@
 
 #include "internal/graph/planner/realtime/MediaRealtimeEdgePolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
+#include "internal/graph/model/MediaAtomicOutputPolicyContract.h"
 
 #include <limits>
 #include <string>
@@ -74,16 +75,33 @@ namespace media::ffmpeg::graph {
     }
     MediaRealtimeEdgePolicySet expectedEdges =
         MediaRealtimeEdgePolicyPlanner::plan(runtime.queues);
-    auto& memory =
-        expectedEdges.synchronizedPacket.bufferPolicy.memoryBudget;
-    memory.maxBytes = runtime.startup.byteCapacity;
-    memory.softLimitBytes = runtime.startup.byteCapacity;
-    memory.reservedBytes = 0;
-    memory.maxBuffers = runtime.startup.packetCapacity;
-    memory.preallocatedBuffers = 0;
-    memory.enforceHardLimit = true;
-    memory.allowDynamicGrowth = false;
+    const auto applyStartupMemoryBounds = [&](MediaEdgePolicy& policy) {
+        auto& memory = policy.bufferPolicy.memoryBudget;
+        memory.maxBytes = runtime.startup.byteCapacity;
+        memory.softLimitBytes = runtime.startup.byteCapacity;
+        memory.reservedBytes = 0;
+        memory.maxBuffers = runtime.startup.packetCapacity;
+        memory.preallocatedBuffers = 0;
+        memory.enforceHardLimit = true;
+        memory.allowDynamicGrowth = false;
+    };
+    applyStartupMemoryBounds(expectedEdges.synchronizedPacket);
+    MediaVideoLineageEdgePolicySet expectedLineage{
+        expectedEdges.synchronizedPacket,
+        expectedEdges.atomicVideoPacket,
+        expectedEdges.synchronizedVideoFrame,
+        expectedEdges.preparedVideoFrame};
+    applyStartupMemoryBounds(expectedLineage.startupPacket);
     if (runtime.edgePolicies != expectedEdges ||
+        runtime.lineageEdgePolicies != expectedLineage ||
+        runtime.lineageEdgePolicies.ingressPacket.queuePolicy.overflowPolicy !=
+            MediaQueueOverflowPolicy::BlockProducer ||
+        !MediaAtomicOutputPolicyContract::accepts(
+            runtime.lineageEdgePolicies.startupPacket) ||
+        runtime.lineageEdgePolicies.frame.queuePolicy.overflowPolicy !=
+            MediaQueueOverflowPolicy::BlockProducer ||
+        !MediaAtomicOutputPolicyContract::accepts(
+            runtime.lineageEdgePolicies.preparedFrame) ||
         runtime.threadingPolicy.mode != MediaThreadingMode::PerNodeWorker ||
         runtime.threadingPolicy.priority != MediaThreadPriority::High ||
         runtime.threadingPolicy.maxWorkerThreads != 0 ||

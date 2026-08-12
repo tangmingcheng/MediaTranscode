@@ -58,6 +58,7 @@ struct MediaRealtimeVideoRuntimePlan final {
     MediaRealtimeVideoOutputAdapterPlan outputAdapter;
     MediaGraphQueueParameters queues;
     MediaRealtimeEdgePolicySet edgePolicies;
+    MediaVideoLineageEdgePolicySet lineageEdgePolicies;
     MediaThreadingPolicy threadingPolicy;
 };
 

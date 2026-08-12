@@ -12,10 +12,16 @@ namespace {
     const MediaVideoBranchSegmentOptions& options)
 {
     switch (options.plan.branchMode) {
-    case MediaBranchMode::CopyPacket:
-        return MediaVideoPacketCopyBranchBuilder::build(graph, makeVideoPacketCopyBranchOptions(options));
-    case MediaBranchMode::TranscodeFrame:
-        return MediaVideoTranscodeBranchBuilder::build(graph, makeVideoTranscodeBranchOptions(options));
+    case MediaBranchMode::CopyPacket: {
+        auto branch = makeVideoPacketCopyBranchOptions(options);
+        branch.lineageEdgePolicies = options.lineageEdgePolicies;
+        return MediaVideoPacketCopyBranchBuilder::build(graph, branch);
+    }
+    case MediaBranchMode::TranscodeFrame: {
+        auto branch = makeVideoTranscodeBranchOptions(options);
+        branch.lineageEdgePolicies = options.lineageEdgePolicies;
+        return MediaVideoTranscodeBranchBuilder::build(graph, branch);
+    }
     case MediaBranchMode::Drop:
         break;
     }

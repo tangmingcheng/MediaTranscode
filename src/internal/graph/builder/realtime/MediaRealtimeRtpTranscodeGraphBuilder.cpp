@@ -86,7 +86,8 @@ struct RealtimePacketInputChain {
     const std::optional<PacketSelectOutputPlan>& videoOutput,
     const std::optional<PacketSelectOutputPlan>& audioOutput,
     const MediaRealtimeRtpInputNodePlan& inputPlan,
-    const MediaRealtimeEdgePolicySet& edgePolicies)
+    const MediaRealtimeEdgePolicySet& edgePolicies,
+    const MediaEdgePolicy& genericPacketPolicy)
 {
     if (!videoOutput && !audioOutput) {
         return ::media::Result<RealtimePacketInputChain>::failure(
@@ -211,9 +212,7 @@ struct RealtimePacketInputChain {
     packetSelectOptions.formatSourceNode = input;
     packetSelectOptions.formatSourcePort = "format";
     packetSelectOptions.metadataPolicy = edgePolicies.metadata;
-    packetSelectOptions.packetPolicy = requiresProtocolClock
-        ? edgePolicies.synchronizedPacket
-        : edgePolicies.packet;
+    packetSelectOptions.packetPolicy = genericPacketPolicy;
     packetSelectOptions.videoOutput = videoOutput;
     packetSelectOptions.audioOutput = audioOutput;
     auto packetSelect = MediaPacketSelectSegmentBuilder::buildDemuxStreamSplit(graph, packetSelectOptions);
@@ -421,6 +420,9 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
               false, synchronized)}
         : std::nullopt;
     const bool isolateRawRtpAudio = isolatedAudioInput != nullptr;
+    const MediaEdgePolicy& videoIngressPacketPolicy = videoRuntime
+        ? videoRuntime->lineageEdgePolicies.ingressPacket
+        : edgePolicies.synchronizedPacket;
     auto videoInputChain = addRealtimePacketInputChain(graph,
                                                        inputKind,
                                                        isolateRawRtpAudio ? "realtime.video.input" : "realtime.input",
@@ -431,7 +433,8 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
                                                            ? std::optional<PacketSelectOutputPlan>{}
                                                            : audioPacketOutput,
                                                        plan.input,
-                                                       edgePolicies);
+                                                       edgePolicies,
+                                                       videoIngressPacketPolicy);
     if (!videoInputChain) {
         return ::media::Result<MediaGraph>::failure(videoInputChain.error());
     }
@@ -447,7 +450,8 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
                                                       std::nullopt,
                                                       audioPacketOutput,
                                                       *isolatedAudioInput,
-                                                      edgePolicies);
+                                                      edgePolicies,
+                                                      edgePolicies.synchronizedPacket);
         if (!audioInput) {
             return ::media::Result<MediaGraph>::failure(audioInput.error());
         }
@@ -546,6 +550,10 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
     videoOptions.parameters = plan.videoParameters;
     videoOptions.queues = queues;
     videoOptions.edgePolicies = edgePolicies;
+    if (videoRuntime) {
+        videoOptions.lineageEdgePolicies =
+            videoRuntime->lineageEdgePolicies;
+    }
     if (avRuntime) {
         videoOptions.edgePolicies.videoPacket =
             edgePolicies.synchronizedPacket;

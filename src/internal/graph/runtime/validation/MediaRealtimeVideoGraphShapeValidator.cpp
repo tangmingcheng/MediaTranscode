@@ -190,6 +190,136 @@ const MediaEdge* exactCodecEdge(
     return ::media::Status::success();
 }
 
+const MediaEdge* exactEdge(
+    const MediaGraph& graph,
+    const MediaNode& source,
+    const char* sourcePort,
+    const MediaNode& target,
+    const char* targetPort,
+    const MediaEdgePolicy& policy) noexcept
+{
+    const MediaPort* from = source.findOutputPort(sourcePort);
+    const MediaPort* to = target.findInputPort(targetPort);
+    if (!from || !to) return nullptr;
+    const MediaEdge* edge = singleEdge(graph, from->id, to->id);
+    return edge && edge->policy == policy ? edge : nullptr;
+}
+
+::media::Status validateLineageEdges(
+    const MediaGraph& graph,
+    const MediaRealtimeVideoRuntimePlan& runtime)
+{
+    const MediaAvSyncGraphShape shape(graph);
+    const auto demux = shape.nodes(MediaNodeKind::Demux);
+    const auto split = shape.nodes(MediaNodeKind::StreamSplit);
+    if (demux.size() != split.size() || demux.size() > 1) {
+        return invalid("generic ingress cardinality");
+    }
+    if (!demux.empty() &&
+        !exactEdge(graph, *demux.front(), "packet", *split.front(),
+                   "packet", runtime.lineageEdgePolicies.ingressPacket)) {
+        return invalid("generic ingress packet policy");
+    }
+
+    const auto decode = shape.nodes(MediaNodeKind::VideoDecode);
+    if (decode.empty()) {
+        const auto normalize = shape.nodes(MediaNodeKind::PacketNormalize);
+        if (normalize.size() > 1) {
+            return invalid("packet-copy normalization cardinality");
+        }
+        if (!normalize.empty()) {
+            const MediaPort* packetInput =
+                normalize.front()->findInputPort("packet");
+            if (!packetInput ||
+                incomingEdgeCount(graph, packetInput->id) != 1) {
+                return invalid("packet-copy startup source cardinality");
+            }
+            const MediaEdge* packetEdge = nullptr;
+            for (const MediaEdge& edge : graph.edges()) {
+                if (edge.to.portId == packetInput->id) packetEdge = &edge;
+            }
+            const MediaNode* source = packetEdge
+                ? graph.findNode(packetEdge->from.nodeId)
+                : nullptr;
+            const MediaPort* sourcePort = packetEdge
+                ? graph.findPort(packetEdge->from.portId)
+                : nullptr;
+            if (!source || !sourcePort ||
+                ((source->kind != MediaNodeKind::StreamSplit ||
+                  sourcePort->name != "video") &&
+                 (source->kind != MediaNodeKind::MpegTsDemux ||
+                  sourcePort->name != "video") &&
+                 (source->kind != MediaNodeKind::RawRtpInput ||
+                  sourcePort->name != "packet")) ||
+                packetEdge->policy !=
+                    runtime.lineageEdgePolicies.startupPacket) {
+                return invalid(
+                    "packet-copy startup edge source or policy");
+            }
+        }
+        return ::media::Status::success();
+    }
+    const auto transfer = shape.nodes(MediaNodeKind::HardwareTransfer);
+    const auto timestamp = shape.nodes(MediaNodeKind::VideoTimestamp);
+    const auto frameRate = shape.nodes(MediaNodeKind::VideoFrameRate);
+    const auto filter = shape.nodes(MediaNodeKind::VideoFilter);
+    const auto encode = shape.nodes(MediaNodeKind::VideoEncode);
+    const auto gate = shape.nodes(MediaNodeKind::PacketStartGate);
+    if (decode.size() != 1 || transfer.size() != 1 ||
+        timestamp.size() != 1 || frameRate.size() != 1 ||
+        filter.size() != 1 || encode.size() != 1 || gate.size() > 1) {
+        return invalid("video lineage node cardinality");
+    }
+
+    const MediaNode& packetTarget = gate.empty()
+        ? *decode.front()
+        : *gate.front();
+    const MediaPort* packetInput = packetTarget.findInputPort("packet");
+    if (!packetInput || incomingEdgeCount(graph, packetInput->id) != 1) {
+        return invalid("startup packet source cardinality");
+    }
+    const MediaEdge* startup = nullptr;
+    for (const MediaEdge& edge : graph.edges()) {
+        if (edge.to.portId == packetInput->id) startup = &edge;
+    }
+    const MediaNode* startupSource = startup
+        ? graph.findNode(startup->from.nodeId)
+        : nullptr;
+    const MediaPort* startupPort = startup
+        ? graph.findPort(startup->from.portId)
+        : nullptr;
+    const bool validSource = startupSource && startupPort &&
+        ((startupSource->kind == MediaNodeKind::StreamSplit &&
+          startupPort->name == "video") ||
+         (startupSource->kind == MediaNodeKind::MpegTsDemux &&
+          startupPort->name == "video") ||
+         (startupSource->kind == MediaNodeKind::RawRtpInput &&
+          startupPort->name == "packet"));
+    if (!validSource ||
+        startup->policy != runtime.lineageEdgePolicies.startupPacket) {
+        return invalid("startup packet edge source or policy");
+    }
+    if (!gate.empty() &&
+        !exactEdge(graph, *gate.front(), "packet", *decode.front(),
+                   "packet", runtime.lineageEdgePolicies.startupPacket)) {
+        return invalid("post-gate startup packet policy");
+    }
+
+    if (!exactEdge(graph, *decode.front(), "frame", *transfer.front(),
+                   "frame", runtime.lineageEdgePolicies.frame) ||
+        !exactEdge(graph, *transfer.front(), "frame", *timestamp.front(),
+                   "frame", runtime.lineageEdgePolicies.frame) ||
+        !exactEdge(graph, *timestamp.front(), "frame", *frameRate.front(),
+                   "frame", runtime.lineageEdgePolicies.frame) ||
+        !exactEdge(graph, *frameRate.front(), "frame", *filter.front(),
+                   "frame", runtime.lineageEdgePolicies.frame) ||
+        !exactEdge(graph, *filter.front(), "frame", *encode.front(),
+                   "frame", runtime.lineageEdgePolicies.preparedFrame)) {
+        return invalid("lossless video frame lineage policy");
+    }
+    return ::media::Status::success();
+}
+
 ::media::Status validateScheduler(
     const MediaGraph& graph,
     const MediaNode& scheduler,
@@ -213,6 +343,16 @@ const MediaEdge* exactCodecEdge(
         incomingEdgeCount(
             graph, scheduler.findInputPort("video")->id) != 1) {
         return invalid("scheduler ports or cardinality");
+    }
+    const MediaEdge* schedulerInput = nullptr;
+    for (const MediaEdge& edge : graph.edges()) {
+        if (edge.to.portId == scheduler.findInputPort("video")->id) {
+            schedulerInput = &edge;
+        }
+    }
+    if (!schedulerInput ||
+        schedulerInput->policy != runtime.edgePolicies.synchronizedPacket) {
+        return invalid("scheduler input edge policy");
     }
     auto requireKeyFrame = requiredBoolNodeOption(
         &scheduler.options, "MediaVideoOutputSchedulerNode",
@@ -577,6 +717,9 @@ const MediaEdge* exactCodecEdge(
     if (!runtime.sessionKey.valid()) return invalid("protocol session");
     if (auto valid = validateRawRtpInput(graph, binding.inputTransport);
         !valid) {
+        return valid;
+    }
+    if (auto valid = validateLineageEdges(graph, runtime); !valid) {
         return valid;
     }
     const MediaNode* scheduler = nullptr;

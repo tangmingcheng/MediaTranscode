@@ -202,6 +202,34 @@ planSeparateRtp(
             capacity * unitBytes});
 }
 
+void applyStartupMemoryBounds(
+    MediaEdgePolicy& policy,
+    const MediaRealtimeVideoStartupPlan& startup) noexcept
+{
+    auto& memory = policy.bufferPolicy.memoryBudget;
+    memory.maxBytes = startup.byteCapacity;
+    memory.softLimitBytes = startup.byteCapacity;
+    memory.reservedBytes = 0;
+    memory.maxBuffers = startup.packetCapacity;
+    memory.preallocatedBuffers = 0;
+    memory.enforceHardLimit = true;
+    memory.allowDynamicGrowth = false;
+}
+
+MediaVideoLineageEdgePolicySet planLineageEdges(
+    const MediaRealtimeEdgePolicySet& policies,
+    const MediaRealtimeVideoStartupPlan& startup)
+{
+    MediaVideoLineageEdgePolicySet lineage{
+        policies.synchronizedPacket,
+        policies.atomicVideoPacket,
+        policies.synchronizedVideoFrame,
+        policies.preparedVideoFrame};
+    applyStartupMemoryBounds(lineage.ingressPacket, startup);
+    applyStartupMemoryBounds(lineage.startupPacket, startup);
+    return lineage;
+}
+
 } // namespace
 
 ::media::Result<MediaRealtimeVideoRuntimePlan>
@@ -248,15 +276,10 @@ MediaRealtimeVideoRuntimePlanner::plan(
     }
 
     MediaRealtimeEdgePolicySet edgePolicies = outer.edgePolicies;
-    auto& memory =
-        edgePolicies.synchronizedPacket.bufferPolicy.memoryBudget;
-    memory.maxBytes = startup.value().byteCapacity;
-    memory.softLimitBytes = startup.value().byteCapacity;
-    memory.reservedBytes = 0;
-    memory.maxBuffers = startup.value().packetCapacity;
-    memory.preallocatedBuffers = 0;
-    memory.enforceHardLimit = true;
-    memory.allowDynamicGrowth = false;
+    applyStartupMemoryBounds(
+        edgePolicies.synchronizedPacket, startup.value());
+    MediaVideoLineageEdgePolicySet lineageEdgePolicies =
+        planLineageEdges(edgePolicies, startup.value());
 
     std::optional<MediaRealtimeVideoOutputAdapterPlan> adapter;
     std::optional<MediaRunningTime> transportLead;
@@ -304,6 +327,7 @@ MediaRealtimeVideoRuntimePlanner::plan(
             std::move(*adapter),
             outer.queues,
             std::move(edgePolicies),
+            std::move(lineageEdgePolicies),
             outer.threadingPolicy});
 }
 
