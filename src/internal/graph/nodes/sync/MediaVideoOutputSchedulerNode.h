@@ -27,8 +27,8 @@ protected:
 
 private:
     enum class PacketTimingMode {
-        SourceTimeBase,
-        OutputCadenceTimeBase
+        PacketDuration,
+        PlannedCadence
     };
 
     ::media::Status configure(MediaGraphExecutionContext& context);
@@ -52,7 +52,8 @@ private:
     MediaRational m_sourceTimeBase;
     MediaRational m_outputFrameRate;
     MediaRational m_packetTimeBase;
-    PacketTimingMode m_packetTimingMode = PacketTimingMode::SourceTimeBase;
+    std::optional<PacketTimingMode> m_packetTimingMode;
+    std::uint64_t m_initialGeneration = 0;
     std::chrono::steady_clock::time_point m_startedAt{};
     std::optional<MediaRunningTime> m_pendingDeadline;
     MediaBufferRef m_pendingActivation;

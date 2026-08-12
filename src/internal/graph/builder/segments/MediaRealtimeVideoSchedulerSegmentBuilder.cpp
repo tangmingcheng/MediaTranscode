@@ -124,11 +124,11 @@ MediaRealtimeVideoSchedulerSegmentBuilder::build(
         return ::media::Result<MediaRealtimeVideoSchedulerSegmentResult>::failure(status.error());
     }
     const char* timingMode = plan.timing.packetTimingMode ==
-            MediaRealtimeVideoPacketTimingMode::SourceTimeBase
-        ? "source_time_base"
+            MediaRealtimeVideoPacketTimingMode::PacketDuration
+        ? "packet_duration"
         : plan.timing.packetTimingMode ==
-                MediaRealtimeVideoPacketTimingMode::OutputCadenceTimeBase
-            ? "output_cadence_time_base"
+                MediaRealtimeVideoPacketTimingMode::PlannedCadence
+            ? "planned_cadence"
             : nullptr;
     if (!timingMode) {
         return ::media::Result<MediaRealtimeVideoSchedulerSegmentResult>::failure(
@@ -148,6 +148,11 @@ MediaRealtimeVideoSchedulerSegmentBuilder::build(
     if (auto status = set(
             "video_scheduler.pacing_enabled",
             plan.scheduling.pacingEnabled ? "1" : "0"); !status) {
+        return ::media::Result<MediaRealtimeVideoSchedulerSegmentResult>::failure(status.error());
+    }
+    if (auto status = set(
+            "video_scheduler.initial_generation",
+            std::to_string(plan.scheduling.initialGeneration)); !status) {
         return ::media::Result<MediaRealtimeVideoSchedulerSegmentResult>::failure(status.error());
     }
     if (auto status = set(

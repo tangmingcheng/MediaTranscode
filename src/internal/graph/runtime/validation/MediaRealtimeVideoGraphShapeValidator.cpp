@@ -209,7 +209,7 @@ const MediaEdge* exactCodecEdge(
             scheduler.findOutputPort("scheduled_video"),
             MediaPortDirection::Output, MediaStreamKind::Video,
             MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet) ||
-        scheduler.options.values().size() != 15 ||
+        scheduler.options.values().size() != 16 ||
         incomingEdgeCount(
             graph, scheduler.findInputPort("video")->id) != 1) {
         return invalid("scheduler ports or cardinality");
@@ -256,22 +256,25 @@ const MediaEdge* exactCodecEdge(
     auto pacingEnabled = requiredBoolNodeOption(
         &scheduler.options, "MediaVideoOutputSchedulerNode",
         "video_scheduler.pacing_enabled");
+    auto initialGeneration = requiredPositiveInt64NodeOption(
+        &scheduler.options, "MediaVideoOutputSchedulerNode",
+        "video_scheduler.initial_generation");
     auto session = requiredNodeOption(
         &scheduler.options, "MediaVideoOutputSchedulerNode",
         "protocol_output.session");
     const char* expectedTimingMode = runtime.timing.packetTimingMode ==
-            MediaRealtimeVideoPacketTimingMode::SourceTimeBase
-        ? "source_time_base"
+            MediaRealtimeVideoPacketTimingMode::PacketDuration
+        ? "packet_duration"
         : runtime.timing.packetTimingMode ==
-                MediaRealtimeVideoPacketTimingMode::OutputCadenceTimeBase
-            ? "output_cadence_time_base"
+                MediaRealtimeVideoPacketTimingMode::PlannedCadence
+            ? "planned_cadence"
             : nullptr;
     if (!requireKeyFrame || !maximumWait || !packetCapacity ||
         !maximumUnitBytes || !byteCapacity || !sourceNumerator ||
         !sourceDenominator || !frameRateNumerator ||
         !frameRateDenominator || !packetTimeBaseNumerator ||
         !packetTimeBaseDenominator || !packetTimingMode ||
-        !transportLead || !pacingEnabled || !session ||
+        !transportLead || !pacingEnabled || !initialGeneration || !session ||
         !expectedTimingMode ||
         requireKeyFrame.value() != runtime.startup.requireKeyFrame ||
         maximumWait.value() != runtime.startup.maximumWait.nanoseconds() ||
@@ -293,6 +296,8 @@ const MediaEdge* exactCodecEdge(
         transportLead.value() !=
             runtime.scheduling.transportLead.nanoseconds() ||
         pacingEnabled.value() != runtime.scheduling.pacingEnabled ||
+        static_cast<std::uint64_t>(initialGeneration.value()) !=
+            runtime.scheduling.initialGeneration ||
         session.value() != runtime.sessionKey.value()) {
         return invalid("scheduler options differ from runtime product");
     }

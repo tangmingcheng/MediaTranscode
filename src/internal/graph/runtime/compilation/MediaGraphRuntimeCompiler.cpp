@@ -224,7 +224,8 @@ public:
                    std::get_if<MediaRealtimeVideoRuntimeBinding>(
                        &executable.runtimeBinding)) {
         auto authority = MediaVideoProtocolOutputRuntimeAuthority::create(
-            videoBinding->runtime.sessionKey);
+            videoBinding->runtime.sessionKey,
+            videoBinding->runtime.scheduling.initialGeneration);
         if (!authority) {
             return ::media::Status::failure(authority.error());
         }

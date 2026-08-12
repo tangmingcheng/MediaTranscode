@@ -77,6 +77,9 @@ MediaNodeKind MediaVideoOutputSchedulerNode::staticKind() noexcept
     auto pacingEnabled = requiredBoolNodeOption(
         options, "MediaVideoOutputSchedulerNode",
         "video_scheduler.pacing_enabled");
+    auto initialGeneration = requiredPositiveInt64NodeOption(
+        options, "MediaVideoOutputSchedulerNode",
+        "video_scheduler.initial_generation");
     auto session = requiredNodeOption(
         options, "MediaVideoOutputSchedulerNode",
         "protocol_output.session");
@@ -85,7 +88,7 @@ MediaNodeKind MediaVideoOutputSchedulerNode::staticKind() noexcept
         !sourceDenominator || !frameRateNumerator ||
         !frameRateDenominator || !packetTimeBaseNumerator ||
         !packetTimeBaseDenominator || !packetTimingMode ||
-        !transportLead || !pacingEnabled || !session) {
+        !transportLead || !pacingEnabled || !initialGeneration || !session) {
         const auto& error = !requireKeyFrame ? requireKeyFrame.error()
             : !maximumWait ? maximumWait.error()
             : !packetCapacity ? packetCapacity.error()
@@ -100,6 +103,7 @@ MediaNodeKind MediaVideoOutputSchedulerNode::staticKind() noexcept
             : !packetTimingMode ? packetTimingMode.error()
             : !transportLead ? transportLead.error()
             : !pacingEnabled ? pacingEnabled.error()
+            : !initialGeneration ? initialGeneration.error()
             : session.error();
         return ::media::Status::failure(error);
     }
@@ -138,15 +142,15 @@ MediaNodeKind MediaVideoOutputSchedulerNode::staticKind() noexcept
         frameRateNumerator.value(), frameRateDenominator.value()};
     m_packetTimeBase = MediaRational{
         packetTimeBaseNumerator.value(), packetTimeBaseDenominator.value()};
-    if (packetTimingMode.value() == "source_time_base") {
-        m_packetTimingMode = PacketTimingMode::SourceTimeBase;
+    if (packetTimingMode.value() == "packet_duration") {
+        m_packetTimingMode = PacketTimingMode::PacketDuration;
         if (m_packetTimeBase.num != m_sourceTimeBase.num ||
             m_packetTimeBase.den != m_sourceTimeBase.den) {
             return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
                 "VideoOnly source timing mode requires the source time base"));
         }
-    } else if (packetTimingMode.value() == "output_cadence_time_base") {
-        m_packetTimingMode = PacketTimingMode::OutputCadenceTimeBase;
+    } else if (packetTimingMode.value() == "planned_cadence") {
+        m_packetTimingMode = PacketTimingMode::PlannedCadence;
         if (m_packetTimeBase.num != m_outputFrameRate.den ||
             m_packetTimeBase.den != m_outputFrameRate.num) {
             return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
@@ -156,6 +160,8 @@ MediaNodeKind MediaVideoOutputSchedulerNode::staticKind() noexcept
         return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
             "VideoOnly scheduler received an unknown packet timing mode"));
     }
+    m_initialGeneration = static_cast<std::uint64_t>(
+        initialGeneration.value());
     m_configured = true;
     return ::media::Status::success();
 }
@@ -215,11 +221,21 @@ MediaNodeKind MediaVideoOutputSchedulerNode::staticKind() noexcept
         return ::media::Result<MediaBufferRef>::failure(
             outputSchedule.error());
     }
-    ::media::Result<MediaRunningTime> duration = media->duration() > 0
-        ? MediaRunningTime::checkedFromTicks(
-              media->duration(), timeBase.num, timeBase.den)
+    if (!m_packetTimingMode) {
+        return ::media::Result<MediaBufferRef>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "VideoOnly scheduler has no packet timing mode"));
+    }
+    ::media::Result<MediaRunningTime> duration =
+        *m_packetTimingMode == PacketTimingMode::PacketDuration
+        ? (media->duration() > 0
+            ? MediaRunningTime::checkedFromTicks(
+                  media->duration(), timeBase.num, timeBase.den)
+            : ::media::Result<MediaRunningTime>::failure(
+                  ::media::ErrorInfo::invalidArgument(
+                      "VideoOnly packet-duration mode requires a positive packet duration")))
         : MediaRunningTime::checkedFromTicks(
-              1, m_outputFrameRate.den, m_outputFrameRate.num);
+              1, m_packetTimeBase.num, m_packetTimeBase.den);
     if (!duration) {
         return ::media::Result<MediaBufferRef>::failure(duration.error());
     }
@@ -230,7 +246,7 @@ MediaNodeKind MediaVideoOutputSchedulerNode::staticKind() noexcept
             outputSchedule.value().presentation,
             outputSchedule.value().dispatch,
             outputSchedule.value().emit,
-            duration.value(), 1,
+            duration.value(), m_initialGeneration,
             MediaSourceAccessUnitSequence(m_nextSequence++),
             std::nullopt, std::nullopt,
             MediaVideoSyncDecisionKind::Display});
@@ -408,7 +424,8 @@ void MediaVideoOutputSchedulerNode::resetState() noexcept
     m_sourceTimeBase = {};
     m_outputFrameRate = {};
     m_packetTimeBase = {};
-    m_packetTimingMode = PacketTimingMode::SourceTimeBase;
+    m_packetTimingMode.reset();
+    m_initialGeneration = 0;
     m_startedAt = {};
     m_pendingDeadline.reset();
     m_pendingActivation.reset();

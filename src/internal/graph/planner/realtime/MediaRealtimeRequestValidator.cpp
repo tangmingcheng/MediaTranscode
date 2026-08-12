@@ -98,6 +98,10 @@ bool rawRtpAudioControlSpecified(
 
 ::media::Status MediaRealtimeRequestValidator::validate(const MediaRealtimeRtpTranscodeRequest& request)
 {
+    if (request.mediaId.empty()) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "Realtime media identity must be explicit"));
+    }
     if (auto status = MediaTranscodeStreamSetRequestValidator::validate(
             request.parameters);
         !status) {

@@ -10,6 +10,7 @@
 #include "media_transcode/Result.h"
 
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -105,7 +106,8 @@ class MediaVideoProtocolOutputRuntimeAuthority final
 public:
     static ::media::Result<
         std::shared_ptr<MediaVideoProtocolOutputRuntimeAuthority>> create(
-        MediaProtocolOutputSessionKey sessionKey);
+        MediaProtocolOutputSessionKey sessionKey,
+        std::uint64_t initialGeneration);
 
     ::media::Result<MediaBufferRef> activate(
         MediaRunningTime sourceStart,
@@ -128,10 +130,12 @@ public:
 private:
     MediaVideoProtocolOutputRuntimeAuthority(
         MediaProtocolOutputSessionKey sessionKey,
+        std::uint64_t initialGeneration,
         std::chrono::steady_clock::time_point steadyAnchor,
         std::shared_ptr<const MediaSharedNtpEpoch> sharedNtpEpoch) noexcept;
 
     MediaProtocolOutputSessionKey m_sessionKey;
+    std::uint64_t m_initialGeneration;
     std::chrono::steady_clock::time_point m_steadyAnchor;
     std::shared_ptr<const MediaSharedNtpEpoch> m_sharedNtpEpoch;
     mutable std::mutex m_mutex;

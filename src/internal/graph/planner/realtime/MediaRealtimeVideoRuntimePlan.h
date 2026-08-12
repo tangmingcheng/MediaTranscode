@@ -27,8 +27,8 @@ enum class MediaRealtimeVideoTimestampAuthority {
 };
 
 enum class MediaRealtimeVideoPacketTimingMode {
-    SourceTimeBase,
-    OutputCadenceTimeBase
+    PacketDuration,
+    PlannedCadence
 };
 
 struct MediaRealtimeVideoTimingPlan final {
@@ -42,6 +42,7 @@ struct MediaRealtimeVideoTimingPlan final {
 struct MediaRealtimeVideoSchedulingPlan final {
     bool pacingEnabled;
     MediaRunningTime transportLead;
+    std::uint64_t initialGeneration;
 };
 
 using MediaRealtimeVideoOutputAdapterPlan = std::variant<

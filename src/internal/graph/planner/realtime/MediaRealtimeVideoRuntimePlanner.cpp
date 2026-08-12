@@ -19,13 +19,7 @@ constexpr std::int64_t ProjectTsStartupPrerollNs = 40'000'000;
 constexpr std::int64_t SenderReportIntervalNs = 1'000'000'000;
 constexpr int VideoRtpPayloadType = 96;
 constexpr int VideoRtpClockRate = 90'000;
-
-std::string sessionIdentity(const MediaRealtimeRtpTranscodeRequest& request)
-{
-    return request.mediaId.empty()
-        ? std::string("realtime-video-only")
-        : request.mediaId;
-}
+constexpr std::uint64_t InitialVideoGeneration = 1;
 
 ::media::Result<MediaVideoOnlySeparateRtpOutputRuntimePlan>
 planSeparateRtp(
@@ -40,7 +34,7 @@ planSeparateRtp(
             ::media::ErrorInfo::notInitialized(
                 "VideoOnly scheduled RTP requires complete transport, packetization, and SDP facts"));
     }
-    const std::string identity = sessionIdentity(request);
+    const std::string& identity = request.mediaId;
     const std::string cname = MediaRtpOutputIdentityPlanner::cname(identity);
     const auto& endpoint =
         output.videoOutput.scheduledTransport->remoteRtpEndpoint();
@@ -154,7 +148,7 @@ planSeparateRtp(
         auto rtp = MediaMpegTsRtpOutputPlan::create(
             std::move(*output.muxedOutput.rtpTransport),
             output.muxedOutput.sdpPath,
-            sessionIdentity(request),
+            request.mediaId,
             MediaRunningTime::fromNanoseconds(SenderReportIntervalNs));
         if (!rtp || rtp.value().tsPacketsPerPayload() !=
                         maximumPacketsPerDatagram) {
@@ -225,6 +219,11 @@ MediaRealtimeVideoRuntimePlanner::plan(
             ::media::ErrorInfo::notInitialized(
                 "VideoOnly runtime requires planner-selected source timing and output cadence"));
     }
+    if (request.mediaId.empty()) {
+        return ::media::Result<MediaRealtimeVideoRuntimePlan>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "VideoOnly runtime requires an explicit media identity"));
+    }
     auto startup = planStartup(outer, request);
     if (!startup) {
         return ::media::Result<MediaRealtimeVideoRuntimePlan>::failure(
@@ -234,12 +233,12 @@ MediaRealtimeVideoRuntimePlanner::plan(
     MediaRational scheduledPacketTimeBase;
     if (outer.videoPlan.branchMode == MediaBranchMode::CopyPacket) {
         packetTimingMode =
-            MediaRealtimeVideoPacketTimingMode::SourceTimeBase;
+            MediaRealtimeVideoPacketTimingMode::PacketDuration;
         scheduledPacketTimeBase = sourceTimeBase;
     } else if (outer.videoPlan.branchMode ==
                MediaBranchMode::TranscodeFrame) {
         packetTimingMode =
-            MediaRealtimeVideoPacketTimingMode::OutputCadenceTimeBase;
+            MediaRealtimeVideoPacketTimingMode::PlannedCadence;
         scheduledPacketTimeBase = MediaRational{
             outputFrameRate.den, outputFrameRate.num};
     } else {
@@ -299,8 +298,8 @@ MediaRealtimeVideoRuntimePlanner::plan(
                 packetTimingMode,
                 MediaRealtimeVideoTimestampAuthority::DecodeTimestamp},
             MediaRealtimeVideoSchedulingPlan{
-                true, *transportLead},
-            MediaProtocolOutputSessionKey(sessionIdentity(request)),
+                true, *transportLead, InitialVideoGeneration},
+            MediaProtocolOutputSessionKey(request.mediaId),
             output.packetCopyNormalizationRequired,
             std::move(*adapter),
             outer.queues,

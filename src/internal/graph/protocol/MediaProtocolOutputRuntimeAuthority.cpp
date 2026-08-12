@@ -158,9 +158,11 @@ void MediaAvProtocolOutputRuntimeAuthority::markAborted() noexcept
 MediaVideoProtocolOutputRuntimeAuthority::
 MediaVideoProtocolOutputRuntimeAuthority(
     MediaProtocolOutputSessionKey sessionKey,
+    std::uint64_t initialGeneration,
     std::chrono::steady_clock::time_point steadyAnchor,
     std::shared_ptr<const MediaSharedNtpEpoch> sharedNtpEpoch) noexcept
     : m_sessionKey(std::move(sessionKey)),
+      m_initialGeneration(initialGeneration),
       m_steadyAnchor(steadyAnchor),
       m_sharedNtpEpoch(std::move(sharedNtpEpoch))
 {
@@ -168,13 +170,14 @@ MediaVideoProtocolOutputRuntimeAuthority(
 
 ::media::Result<std::shared_ptr<MediaVideoProtocolOutputRuntimeAuthority>>
 MediaVideoProtocolOutputRuntimeAuthority::create(
-    MediaProtocolOutputSessionKey sessionKey)
+    MediaProtocolOutputSessionKey sessionKey,
+    std::uint64_t initialGeneration)
 {
-    if (!sessionKey.valid()) {
+    if (!sessionKey.valid() || initialGeneration == 0) {
         return ::media::Result<std::shared_ptr<
             MediaVideoProtocolOutputRuntimeAuthority>>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "VideoOnly protocol output authority requires a session key"));
+                "VideoOnly protocol output authority requires a session key and initial generation"));
     }
     const auto steadyAnchor = std::chrono::steady_clock::now();
     const auto wallAnchor =
@@ -190,7 +193,7 @@ MediaVideoProtocolOutputRuntimeAuthority::create(
         MediaVideoProtocolOutputRuntimeAuthority>>::success(
         std::shared_ptr<MediaVideoProtocolOutputRuntimeAuthority>(
             new MediaVideoProtocolOutputRuntimeAuthority(
-                std::move(sessionKey), steadyAnchor,
+                std::move(sessionKey), initialGeneration, steadyAnchor,
                 std::make_shared<const MediaSharedNtpEpoch>(
                     std::move(ntp).value()))));
 }
@@ -207,7 +210,7 @@ MediaVideoProtocolOutputRuntimeAuthority::activate(
         return ::media::Result<MediaBufferRef>::failure(release.error());
     }
     MediaProtocolOutputActivation activation{
-        sourceStart, release.value(), 1, std::nullopt};
+        sourceStart, release.value(), m_initialGeneration, std::nullopt};
     auto buffer = MediaVideoOutputActivatedBuffer::create(
         m_sessionKey, activation);
     if (!buffer) return buffer;

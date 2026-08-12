@@ -46,7 +46,7 @@ namespace media::ffmpeg::graph {
     const bool sourceTiming = outer.videoPlan.branchMode ==
             MediaBranchMode::CopyPacket &&
         runtime.timing.packetTimingMode ==
-            MediaRealtimeVideoPacketTimingMode::SourceTimeBase &&
+            MediaRealtimeVideoPacketTimingMode::PacketDuration &&
         runtime.timing.scheduledPacketTimeBase.num ==
             runtime.timing.sourceTimeBase.num &&
         runtime.timing.scheduledPacketTimeBase.den ==
@@ -54,7 +54,7 @@ namespace media::ffmpeg::graph {
     const bool cadenceTiming = outer.videoPlan.branchMode ==
             MediaBranchMode::TranscodeFrame &&
         runtime.timing.packetTimingMode ==
-            MediaRealtimeVideoPacketTimingMode::OutputCadenceTimeBase &&
+            MediaRealtimeVideoPacketTimingMode::PlannedCadence &&
         runtime.timing.scheduledPacketTimeBase.num ==
             runtime.timing.outputFrameRate.den &&
         runtime.timing.scheduledPacketTimeBase.den ==
@@ -65,6 +65,10 @@ namespace media::ffmpeg::graph {
     if (!runtime.scheduling.pacingEnabled ||
         runtime.scheduling.transportLead <=
             MediaRunningTime::fromNanoseconds(0) ||
+        runtime.scheduling.initialGeneration == 0 ||
+        runtime.scheduling.initialGeneration >
+            static_cast<std::uint64_t>(
+                std::numeric_limits<std::int64_t>::max()) ||
         !runtime.sessionKey.valid()) {
         return invalid("scheduling policy");
     }
