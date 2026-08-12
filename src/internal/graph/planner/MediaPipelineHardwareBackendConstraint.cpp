@@ -24,10 +24,10 @@ bool MediaPipelineHardwareBackendConstraint::accepts(
     }
 
     return candidate.available && candidate.allHardware && candidate.sameHardwareDevice &&
-           candidate.decoder.deviceKind == MediaHardwareDeviceKind::RKMPP &&
-           candidate.encoder.deviceKind == MediaHardwareDeviceKind::RKMPP &&
+        candidate.decoder.deviceKind() == MediaHardwareDeviceKind::RKMPP &&
+        candidate.encoder.deviceKind() == MediaHardwareDeviceKind::RKMPP &&
            (!filterRequired ||
-            candidate.filter.deviceKind == MediaHardwareDeviceKind::RKMPP);
+         candidate.filter.deviceKind() == MediaHardwareDeviceKind::RKMPP);
 }
 
 } // namespace media::ffmpeg::graph

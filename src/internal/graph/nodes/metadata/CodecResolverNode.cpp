@@ -6,6 +6,7 @@
 #include "internal/graph/runtime/buffer/FFmpegInputSnapshotBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
+#include "internal/graph/runtime/ffmpeg/FFmpegCodecPixelFormatCapability.h"
 #include "internal/graph/runtime/ffmpeg/MediaFfmpegCopyOpaqueCapability.h"
 #include "internal/graph/sync/lineage/MediaVideoLineageCopyOpaqueOption.h"
 
@@ -23,21 +24,24 @@ extern "C" {
 namespace media::ffmpeg::graph {
 namespace {
 
-struct HardwareDecoderSelection {
-    AVPixelFormat pixelFormat = AV_PIX_FMT_NONE;
-    AVHWDeviceType deviceType = AV_HWDEVICE_TYPE_NONE;
-    bool requiresDeviceContext = false;
-};
-
 std::string optionValue(const MediaNodeOptions* options, const std::string& key, std::string missingValue = {})
 {
     return options ? options->value(key, std::move(missingValue)) : std::move(missingValue);
 }
 
-bool truthyOption(const MediaNodeOptions* options, const std::string& key)
+::media::Result<bool> requiredBoolOption(const MediaNodeOptions* options,
+                                         const std::string& key)
 {
     const std::string value = optionValue(options, key);
-    return value == "1" || value == "true" || value == "yes" || value == "on";
+    if (value == "1" || value == "true") {
+        return ::media::Result<bool>::success(true);
+    }
+    if (value == "0" || value == "false") {
+        return ::media::Result<bool>::success(false);
+    }
+    return ::media::Result<bool>::failure(
+        ::media::ErrorInfo::invalidArgument(
+            "CodecResolverNode requires explicit boolean option: " + key));
 }
 
 std::string pixelFormatName(AVPixelFormat format)
@@ -55,37 +59,6 @@ AVHWDeviceType deviceTypeFromHwaccelName(const std::string& hwaccel)
         return AV_HWDEVICE_TYPE_DRM;
     }
     return av_hwdevice_find_type_by_name(hwaccel.c_str());
-}
-
-HardwareDecoderSelection selectHardwareDecoder(const AVCodec* decoder, AVHWDeviceType deviceType)
-{
-    HardwareDecoderSelection internalSelection;
-    if (!decoder) {
-        return {};
-    }
-
-    for (int index = 0;; ++index) {
-        const AVCodecHWConfig* config = avcodec_get_hw_config(decoder, index);
-        if (!config) {
-            break;
-        }
-
-        if (config->pix_fmt == AV_PIX_FMT_NONE) {
-            continue;
-        }
-
-        const bool canUseDevice = (config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) != 0;
-        const bool internalOnly = (config->methods & AV_CODEC_HW_CONFIG_METHOD_INTERNAL) != 0;
-        if (canUseDevice && config->device_type == deviceType) {
-            return HardwareDecoderSelection{ config->pix_fmt, deviceType, true };
-        }
-
-        if (internalOnly && internalSelection.pixelFormat == AV_PIX_FMT_NONE) {
-            internalSelection = HardwareDecoderSelection{ config->pix_fmt, config->device_type, false };
-        }
-    }
-
-    return internalSelection;
 }
 
 AVPixelFormat plannedHardwareGetFormat(AVCodecContext* context, const AVPixelFormat* formats)
@@ -172,7 +145,11 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
     if (!codecParameters) return ::media::Status::failure(codecParameters.error());
     const MediaNodeOptions* options = nodeOptions(context);
     const std::string plannedDecoder = optionValue(options, "decoder");
-    const bool hardwarePlanned = truthyOption(options, "pipeline.hardware");
+    auto hardwarePlannedResult = requiredBoolOption(options, "pipeline.hardware");
+    if (!hardwarePlannedResult) {
+        return ::media::Status::failure(hardwarePlannedResult.error());
+    }
+    const bool hardwarePlanned = hardwarePlannedResult.value();
     const std::string hwaccelName = optionValue(options, "pipeline.hwaccel");
 
     const AVCodec* decoder = nullptr;
@@ -218,18 +195,42 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
     m_decoderHardwareDevice.reset();
     m_decoderHardwarePixelFormat = AV_PIX_FMT_NONE;
     bool decoderUsesHardwareDevice = false;
+    bool decoderUsesHardwareFrames = false;
     if (hardwarePlanned) {
-        const AVHWDeviceType plannedDeviceType = deviceTypeFromHwaccelName(hwaccelName);
-        HardwareDecoderSelection hardwareSelection = selectHardwareDecoder(decoder, plannedDeviceType);
-        if (hardwareSelection.pixelFormat == AV_PIX_FMT_NONE) {
+        const std::string plannedPixelFormat =
+            optionValue(options, "decoder.output.pixel_format");
+        m_decoderHardwarePixelFormat = av_get_pix_fmt(plannedPixelFormat.c_str());
+        if (m_decoderHardwarePixelFormat == AV_PIX_FMT_NONE) {
             return ::media::Status::failure(
-                ::media::ErrorInfo::unsupported("CodecResolverNode planned hardware decoder format is not supported by selected decoder"));
+                ::media::ErrorInfo::invalidArgument(
+                    "CodecResolverNode requires planner-selected decoder output pixel format"));
+        }
+        auto requiresDeviceResult = requiredBoolOption(
+            options, "decoder.output.requires_hw_device_ctx");
+        if (!requiresDeviceResult) {
+            return ::media::Status::failure(requiresDeviceResult.error());
+        }
+        auto requiresFramesResult = requiredBoolOption(
+            options, "decoder.output.requires_hw_frames_ctx");
+        if (!requiresFramesResult) {
+            return ::media::Status::failure(requiresFramesResult.error());
+        }
+        const bool requiresDeviceContext = requiresDeviceResult.value();
+        decoderUsesHardwareFrames = requiresFramesResult.value();
+        const AVHWDeviceType plannedDeviceType = deviceTypeFromHwaccelName(hwaccelName);
+        if (!ffmpegCodecSupportsPixelFormat(
+                decoder,
+                m_decoderHardwarePixelFormat,
+                FFmpegCodecPixelFormatRequirement{
+                    plannedDeviceType, true, requiresDeviceContext})) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::unsupported(
+                    "CodecResolverNode selected decoder does not advertise the planned hardware frame contract"));
         }
 
-        m_decoderHardwarePixelFormat = hardwareSelection.pixelFormat;
-        decoderUsesHardwareDevice = hardwareSelection.requiresDeviceContext;
+        decoderUsesHardwareDevice = requiresDeviceContext;
 
-        if (hardwareSelection.requiresDeviceContext) {
+        if (requiresDeviceContext) {
             if (plannedDeviceType == AV_HWDEVICE_TYPE_NONE) {
                 return ::media::Status::failure(
                     ::media::ErrorInfo::invalidArgument("CodecResolverNode planned hardware decoder requires valid pipeline.hwaccel"));
@@ -259,6 +260,7 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
         << " hwaccel=" << (hwaccelName.empty() ? "none" : hwaccelName)
         << " hw_pix_fmt=" << pixelFormatName(m_decoderHardwarePixelFormat)
         << " hw_device_ctx=" << (decoderUsesHardwareDevice ? "set" : "none")
+        << " hw_frames_contract=" << (decoderUsesHardwareFrames ? "required" : "internal")
         << " pkt_tb=" << stream.time.timeBase.num << "/" << stream.time.timeBase.den;
     codecResolverLog(MediaGraphDiagnosticLevel::State, out.str());
 

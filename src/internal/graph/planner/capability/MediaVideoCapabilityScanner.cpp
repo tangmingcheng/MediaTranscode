@@ -95,7 +95,10 @@ std::string d3d11FilterName(const MediaPipelinePlannerOptions& options)
 
 std::string rkmppFilterName(const MediaPipelinePlannerOptions& options)
 {
-    return targetResizeRequested(options) ? "scale_rkrga=" + targetSizeText(options) : "passthrough_rkmpp";
+    return targetResizeRequested(options)
+               ? "scale_rkrga=w=" + std::to_string(options.targetWidth) +
+                     ":h=" + std::to_string(options.targetHeight) + ":format=nv12"
+               : std::string();
 }
 
 std::string vaapiFilterName(const MediaPipelinePlannerOptions& options)
@@ -117,7 +120,7 @@ std::string softwareFilterName(const MediaPipelinePlannerOptions& options)
                : "format=pix_fmts=yuv420p";
 }
 
-std::string hardwareEncoderPixelFormatName(MediaHardwareDeviceKind deviceKind)
+std::string hardwareFramePixelFormatName(MediaHardwareDeviceKind deviceKind)
 {
     switch (deviceKind) {
     case MediaHardwareDeviceKind::CUDA:
@@ -141,17 +144,14 @@ std::string hardwareEncoderPixelFormatName(MediaHardwareDeviceKind deviceKind)
     return {};
 }
 
-std::string hardwareFramesPixelFormatName(MediaHardwareDeviceKind deviceKind)
+bool requiresGenericFramesContext(MediaHardwareDeviceKind deviceKind) noexcept
 {
     switch (deviceKind) {
     case MediaHardwareDeviceKind::CUDA:
-        return "cuda";
     case MediaHardwareDeviceKind::QSV:
-        return "qsv";
     case MediaHardwareDeviceKind::VAAPI:
-        return "vaapi";
     case MediaHardwareDeviceKind::D3D11VA:
-        return "d3d11";
+        return true;
     case MediaHardwareDeviceKind::Unknown:
     case MediaHardwareDeviceKind::None:
     case MediaHardwareDeviceKind::DRMPrime:
@@ -160,35 +160,31 @@ std::string hardwareFramesPixelFormatName(MediaHardwareDeviceKind deviceKind)
     case MediaHardwareDeviceKind::MediaCodec:
         break;
     }
-    return {};
+    return false;
 }
 
-std::string hardwareSurfacePixelFormatName(MediaHardwareDeviceKind deviceKind)
+MediaHardwareDescriptor makeFrameContract(MediaHardwareDeviceKind deviceKind,
+                                          const std::string& deviceName,
+                                          bool hardware,
+                                          bool zeroCopy)
 {
-    return hardwareFramesPixelFormatName(deviceKind).empty() ? std::string() : std::string("nv12");
-}
-
-void assignEncoderPixelFormats(MediaPipelineStagePlan& stage)
-{
-    if (stage.role != MediaPipelineStageRole::Encoder) {
-        return;
+    MediaHardwareDescriptor contract;
+    contract.deviceKind = deviceKind;
+    contract.frameKind = hardware ? MediaHardwareFrameKind::Hardware
+                                  : MediaHardwareFrameKind::Software;
+    contract.transferDirection = MediaHardwareTransferDirection::None;
+    contract.deviceName = deviceName;
+    contract.pixelFormat = hardware ? hardwareFramePixelFormatName(deviceKind) : "yuv420p";
+    if (deviceKind == MediaHardwareDeviceKind::RKMPP ||
+        requiresGenericFramesContext(deviceKind)) {
+        contract.surfacePixelFormat = "nv12";
     }
-
-    if (!stage.hardware) {
-        stage.pixelFormat = "yuv420p";
-        stage.hardwareFramesFormat.clear();
-        stage.surfacePixelFormat.clear();
-    } else {
-        stage.pixelFormat = hardwareEncoderPixelFormatName(stage.deviceKind);
-        stage.hardwareFramesFormat = hardwareFramesPixelFormatName(stage.deviceKind);
-        stage.surfacePixelFormat = hardwareSurfacePixelFormatName(stage.deviceKind);
-    }
-
-    if (stage.pixelFormat.empty()) {
-        stage.available = false;
-        stage.availabilityReason = "encoder pixel format is not planned for backend: " +
-                                   std::string(mediaHardwareDeviceKindName(stage.deviceKind));
-    }
+    contract.zeroCopyPreferred = zeroCopy;
+    contract.requiresHardwareDeviceContext =
+        hardware && deviceKind != MediaHardwareDeviceKind::RKMPP;
+    contract.requiresHardwareFramesContext =
+        hardware && requiresGenericFramesContext(deviceKind);
+    return contract;
 }
 
 MediaPipelineStagePlan makeCodecStage(MediaPipelineStageRole role,
@@ -207,10 +203,6 @@ MediaPipelineStagePlan makeCodecStage(MediaPipelineStageRole role,
     stage.codecName = std::move(codecName);
     stage.ffmpegName = std::move(ffmpegName);
     stage.hwaccelName = std::move(hwaccelName);
-    stage.deviceKind = deviceKind;
-    stage.frameKind = hardware ? MediaHardwareFrameKind::Hardware : MediaHardwareFrameKind::Software;
-    stage.hardware = hardware;
-    stage.zeroCopy = zeroCopy;
     stage.priority = priority;
     if (stage.role == MediaPipelineStageRole::Encoder) {
         stage.encodedPacketLayout =
@@ -224,7 +216,14 @@ MediaPipelineStagePlan makeCodecStage(MediaPipelineStageRole role,
     stage.availabilityReason = codecOk
                                    ? "codec found"
                                    : std::string(role == MediaPipelineStageRole::Decoder ? "decoder not found: " : "encoder not found: ") + stage.ffmpegName;
-    assignEncoderPixelFormats(stage);
+    MediaHardwareDescriptor contract = makeFrameContract(
+        deviceKind, stage.hwaccelName, hardware, zeroCopy);
+    if (role == MediaPipelineStageRole::Decoder) {
+        stage.outputFrame = std::move(contract);
+    } else {
+        contract.requiresHardwareDeviceContext = contract.requiresHardwareFramesContext;
+        stage.inputFrame = std::move(contract);
+    }
     return stage;
 }
 
@@ -241,15 +240,17 @@ MediaPipelineStagePlan makeFilterStage(std::string componentName,
     stage.componentName = std::move(componentName);
     stage.filterName = std::move(filterName);
     stage.hwaccelName = std::move(hwaccelName);
-    stage.deviceKind = deviceKind;
-    stage.frameKind = hardware ? MediaHardwareFrameKind::Hardware : MediaHardwareFrameKind::Software;
-    stage.hardware = hardware;
-    stage.zeroCopy = zeroCopy;
     stage.priority = priority;
 
-    const bool filterOk = filterExists(stage.filterName);
+    const bool filterOk = stage.filterName.empty() || filterExists(stage.filterName);
     stage.available = filterOk;
     stage.availabilityReason = filterOk ? "filter found" : "filter not found: " + stage.filterName;
+    if (!stage.filterName.empty()) {
+        MediaHardwareDescriptor contract = makeFrameContract(
+            deviceKind, stage.hwaccelName, hardware, zeroCopy);
+        stage.inputFrame = contract;
+        stage.outputFrame = std::move(contract);
+    }
     return stage;
 }
 
@@ -263,6 +264,7 @@ MediaPipelineChainPlan makeRawChain(std::string label,
     chain.decoder = std::move(decoder);
     chain.filter = std::move(filter);
     chain.encoder = std::move(encoder);
+    chain.transferDirection = MediaHardwareTransferDirection::None;
 
     return chain;
 }

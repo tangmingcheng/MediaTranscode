@@ -19,23 +19,55 @@ constexpr int kFullHardwareTransferStageScore = 800;
 constexpr int kMixedHardwareStageScore = 650;
 constexpr int kSoftwareStageScore = 300;
 
+bool sameFrameDomain(const MediaHardwareDescriptor& left,
+                     const MediaHardwareDescriptor& right) noexcept
+{
+    return left.deviceKind == right.deviceKind &&
+           left.frameKind == right.frameKind &&
+           left.deviceName == right.deviceName &&
+           left.pixelFormat == right.pixelFormat &&
+           left.surfacePixelFormat == right.surfacePixelFormat &&
+           left.zeroCopyPreferred == right.zeroCopyPreferred;
+}
+
+bool completeFrameContracts(const MediaPipelineChainPlan& chain,
+                            const MediaPipelinePlannerOptions& options) noexcept
+{
+    if (!chain.decoder.outputFrame || !chain.encoder.inputFrame ||
+        chain.transferDirection == MediaHardwareTransferDirection::Unknown) {
+        return false;
+    }
+    if (options.filterRequired) {
+        if (!chain.filter.inputFrame || !chain.filter.outputFrame) {
+            return false;
+        }
+        return chain.transferDirection == MediaHardwareTransferDirection::None
+                   ? sameFrameDomain(*chain.decoder.outputFrame, *chain.filter.inputFrame) &&
+                         sameFrameDomain(*chain.filter.outputFrame, *chain.encoder.inputFrame)
+                   : true;
+    }
+    return chain.transferDirection == MediaHardwareTransferDirection::None
+               ? sameFrameDomain(*chain.decoder.outputFrame, *chain.encoder.inputFrame)
+               : true;
+}
+
 bool sameHardwareDevice(const MediaPipelineChainPlan& chain, const MediaPipelinePlannerOptions& options) noexcept
 {
     if (options.filterRequired) {
-        return chain.decoder.deviceKind == chain.filter.deviceKind &&
-               chain.filter.deviceKind == chain.encoder.deviceKind &&
-               chain.decoder.deviceKind != MediaHardwareDeviceKind::None &&
-               chain.decoder.deviceKind != MediaHardwareDeviceKind::Unknown;
+        return chain.decoder.deviceKind() == chain.filter.deviceKind() &&
+               chain.filter.deviceKind() == chain.encoder.deviceKind() &&
+               chain.decoder.deviceKind() != MediaHardwareDeviceKind::None &&
+               chain.decoder.deviceKind() != MediaHardwareDeviceKind::Unknown;
     }
 
-    return chain.decoder.deviceKind == chain.encoder.deviceKind &&
-           chain.decoder.deviceKind != MediaHardwareDeviceKind::None &&
-           chain.decoder.deviceKind != MediaHardwareDeviceKind::Unknown;
+    return chain.decoder.deviceKind() == chain.encoder.deviceKind() &&
+           chain.decoder.deviceKind() != MediaHardwareDeviceKind::None &&
+           chain.decoder.deviceKind() != MediaHardwareDeviceKind::Unknown;
 }
 
 bool hardwareUnavailable(const MediaPipelineStagePlan& stage)
 {
-    return stage.hardware && !stage.available &&
+    return stage.hardware() && !stage.available &&
            stage.availabilityReason.find("hardware backend not found") != std::string::npos;
 }
 
@@ -53,7 +85,7 @@ std::string stageDisplayName(const MediaPipelineStagePlan& stage)
 int availableStageSemanticScore(const MediaPipelineStagePlan& stage,
                                 const MediaPipelineChainPlan& chain) noexcept
 {
-    if (!stage.hardware) {
+    if (!stage.hardware()) {
         return kSoftwareStageScore;
     }
 
@@ -94,7 +126,7 @@ std::string unavailableReason(const MediaPipelineChainPlan& chain,
         }
 
         if (hardwareUnavailable(stage)) {
-            out << "; hardware=" << mediaHardwareDeviceKindName(stage.deviceKind) << " unavailable";
+            out << "; hardware=" << mediaHardwareDeviceKindName(stage.deviceKind()) << " unavailable";
             return;
         }
 
@@ -125,7 +157,7 @@ std::string availableReason(const MediaPipelineChainPlan& chain,
     if (chain.allHardware) {
         return "full hardware chain with transfer risk; score=" + scoreText;
     }
-    if (chain.decoder.hardware || chain.encoder.hardware || (options.filterRequired && chain.filter.hardware)) {
+    if (chain.decoder.hardware() || chain.encoder.hardware() || (options.filterRequired && chain.filter.hardware())) {
         return options.filterRequired ? "mixed hardware/software chain" : "mixed hardware/software chain; filter stage not required";
     }
     return "explicit software chain; score=" + scoreText;
@@ -173,6 +205,11 @@ MediaPipelineChainPlan unavailableChain(MediaPipelineChainPlan chain, std::strin
 MediaPipelineChainPlan MediaPipelineScorer::scoreChain(MediaPipelineChainPlan chain,
                                                        const MediaPipelinePlannerOptions& options)
 {
+    if (!completeFrameContracts(chain, options)) {
+        return unavailableChain(
+            std::move(chain),
+            "unavailable chain; incomplete or inconsistent planner frame/transfer contracts");
+    }
     chain.available = chain.decoder.available && chain.encoder.available &&
                       (!options.filterRequired || chain.filter.available);
 
@@ -185,12 +222,12 @@ MediaPipelineChainPlan MediaPipelineScorer::scoreChain(MediaPipelineChainPlan ch
         return chain;
     }
 
-    chain.allHardware = chain.decoder.hardware && chain.encoder.hardware &&
-                        (!options.filterRequired || chain.filter.hardware);
+    chain.allHardware = chain.decoder.hardware() && chain.encoder.hardware() &&
+                        (!options.filterRequired || chain.filter.hardware());
     chain.sameHardwareDevice = chain.allHardware && sameHardwareDevice(chain, options);
     chain.zeroCopy = chain.sameHardwareDevice &&
-                     chain.decoder.zeroCopy && chain.encoder.zeroCopy &&
-                     (!options.filterRequired || chain.filter.zeroCopy);
+                     chain.decoder.zeroCopy() && chain.encoder.zeroCopy() &&
+                     (!options.filterRequired || chain.filter.zeroCopy());
 
     chain.score = availableStageSemanticScore(chain.decoder, chain) +
                   availableStageSemanticScore(chain.encoder, chain) +

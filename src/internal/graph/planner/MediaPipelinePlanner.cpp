@@ -34,14 +34,108 @@ std::string emptyAsNone(const std::string& value)
 bool isSoftwareChain(const MediaPipelineChainPlan& chain,
                      const MediaPipelinePlannerOptions& options) noexcept
 {
-    return !chain.decoder.hardware && !chain.encoder.hardware &&
-           (!options.filterRequired || !chain.filter.hardware);
+    return !chain.decoder.hardware() && !chain.encoder.hardware() &&
+           (!options.filterRequired || !chain.filter.hardware());
+}
+
+bool isRkmppChain(const MediaPipelineChainPlan& chain) noexcept
+{
+    return chain.decoder.deviceKind() == MediaHardwareDeviceKind::RKMPP ||
+           chain.encoder.deviceKind() == MediaHardwareDeviceKind::RKMPP;
+}
+
+bool sameFrameDomain(const MediaHardwareDescriptor& left,
+                     const MediaHardwareDescriptor& right) noexcept
+{
+    return left.deviceKind == right.deviceKind &&
+           left.frameKind == right.frameKind &&
+           left.deviceName == right.deviceName &&
+           left.pixelFormat == right.pixelFormat &&
+           left.surfacePixelFormat == right.surfacePixelFormat &&
+           left.zeroCopyPreferred == right.zeroCopyPreferred &&
+           left.requiresHardwareDeviceContext == right.requiresHardwareDeviceContext &&
+           left.requiresHardwareFramesContext == right.requiresHardwareFramesContext;
+}
+
+bool completeRkmppFrameContract(const MediaHardwareDescriptor& contract) noexcept
+{
+    return contract.deviceKind == MediaHardwareDeviceKind::RKMPP &&
+           contract.frameKind == MediaHardwareFrameKind::Hardware &&
+           contract.deviceName == "rkmpp" &&
+           contract.pixelFormat == "drm_prime" &&
+           contract.surfacePixelFormat == "nv12" &&
+           contract.zeroCopyPreferred &&
+           !contract.requiresHardwareDeviceContext &&
+           !contract.requiresHardwareFramesContext;
+}
+
+::media::Status validateRkmppFrameContracts(
+    const MediaPipelineChainPlan& chain,
+    const MediaPipelinePlannerOptions& options)
+{
+    if (!chain.decoder.outputFrame || !chain.encoder.inputFrame) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::hardwareUnavailable(
+                "RKMPP frame contract requires decoder output and encoder input"));
+    }
+    if (chain.transferDirection != MediaHardwareTransferDirection::None) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::hardwareUnavailable(
+                "RKMPP frame contract requires no boundary transfer"));
+    }
+
+    const MediaHardwareDescriptor& decoderOutput = *chain.decoder.outputFrame;
+    const MediaHardwareDescriptor& encoderInput = *chain.encoder.inputFrame;
+    if (!completeRkmppFrameContract(decoderOutput) ||
+        !completeRkmppFrameContract(encoderInput)) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::hardwareUnavailable(
+                "RKMPP frame contract is incomplete or not DRM PRIME/NV12 zero-copy"));
+    }
+
+    if (!chain.allHardware || !chain.sameHardwareDevice || !chain.zeroCopy ||
+        !chain.decoder.hardware() || !chain.decoder.zeroCopy() ||
+        !chain.encoder.hardware() || !chain.encoder.zeroCopy() ||
+        !sameFrameDomain(decoderOutput, encoderInput)) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::hardwareUnavailable(
+                "RKMPP frame contract is inconsistent or crosses frame domains"));
+    }
+
+    if (!options.filterRequired) {
+        if (!chain.filter.filterName.empty()) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::hardwareUnavailable(
+                    "RKMPP frame contract forbids a source-size filter"));
+        }
+        return ::media::Status::success();
+    }
+
+    const std::string expectedFilter =
+        "scale_rkrga=w=" + std::to_string(options.targetWidth) +
+        ":h=" + std::to_string(options.targetHeight) + ":format=nv12";
+    if (chain.filter.filterName != expectedFilter ||
+        !chain.filter.inputFrame || !chain.filter.outputFrame ||
+        !completeRkmppFrameContract(*chain.filter.inputFrame) ||
+        !completeRkmppFrameContract(*chain.filter.outputFrame) ||
+        !sameFrameDomain(decoderOutput, *chain.filter.inputFrame) ||
+        !sameFrameDomain(*chain.filter.inputFrame, *chain.filter.outputFrame) ||
+        !sameFrameDomain(*chain.filter.outputFrame, encoderInput) ||
+        !chain.filter.hardware() || !chain.filter.zeroCopy()) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::hardwareUnavailable(
+                "RKMPP frame contract requires one complete zero-copy filter domain"));
+    }
+
+    return ::media::Status::success();
 }
 
 void logSelectedPlan(const MediaPipelinePlannerOptions& options,
                      const MediaPipelinePlan& plan)
 {
     const MediaPipelineChainPlan& selected = plan.selected;
+    const MediaHardwareDescriptor* encoderInput =
+        selected.encoder.inputFrame ? &*selected.encoder.inputFrame : nullptr;
 
     std::ostringstream out;
     out << "branch_mode=" << mediaBranchModeName(plan.branchMode)
@@ -51,10 +145,9 @@ void logSelectedPlan(const MediaPipelinePlannerOptions& options,
         << " decoder=" << stageDisplayName(selected.decoder)
         << " filter=" << stageDisplayName(selected.filter)
         << " encoder=" << stageDisplayName(selected.encoder)
-        << " encoder_pix_fmt=" << emptyAsNone(selected.encoder.pixelFormat)
-        << " encoder_hw_frames_fmt=" << emptyAsNone(selected.encoder.hardwareFramesFormat)
-        << " encoder_surface_fmt=" << emptyAsNone(selected.encoder.surfacePixelFormat)
-        << " backend=" << mediaHardwareDeviceKindName(selected.decoder.deviceKind)
+        << " encoder_pix_fmt=" << emptyAsNone(encoderInput ? encoderInput->pixelFormat : std::string())
+        << " encoder_surface_fmt=" << emptyAsNone(encoderInput ? encoderInput->surfacePixelFormat : std::string())
+        << " backend=" << mediaHardwareDeviceKindName(selected.decoder.deviceKind())
         << " zero_copy=" << (selected.zeroCopy ? "true" : "false");
 
     mediaGraphDiagnosticLog(options.diagnosticLogEnabled,
@@ -237,6 +330,12 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
 {
     if (options.disableHardware) {
         return ::media::Status::success();
+    }
+    if (isRkmppChain(selected)) {
+        auto contractStatus = validateRkmppFrameContracts(selected, options);
+        if (!contractStatus) {
+            return contractStatus;
+        }
     }
     return hardwareProbe.validate(selected, options);
 }

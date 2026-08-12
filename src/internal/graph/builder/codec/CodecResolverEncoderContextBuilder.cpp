@@ -389,7 +389,13 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
         encoderContext->max_b_frames = *bframes.value();
     }
 
-    if (result.hardwareFramesFormat != AV_PIX_FMT_NONE) {
+    if (formatPlan.requiresHardwareDeviceContext && !request.hardwareDevice) {
+        return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "CodecResolverEncoderContextBuilder requires the planner-selected hardware device context"));
+    }
+
+    if (formatPlan.requiresHardwareFramesContext) {
         auto framesStatus = configureEncoderHardwareFrames(encoderContext.get(),
                                                            request.hardwareDevice,
                                                            result.hardwareFramesFormat,
@@ -399,6 +405,13 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
                                                            32);
         if (!framesStatus) {
             return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(framesStatus.error());
+        }
+    } else if (formatPlan.requiresHardwareDeviceContext) {
+        encoderContext->hw_device_ctx = av_buffer_ref(request.hardwareDevice);
+        if (!encoderContext->hw_device_ctx) {
+            return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
+                ::media::ErrorInfo::allocationFailed(
+                    "CodecResolverEncoderContextBuilder failed to reference hardware device"));
         }
     }
 

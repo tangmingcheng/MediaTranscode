@@ -29,17 +29,32 @@ struct MediaPipelineStagePlan {
     std::string ffmpegName;
     std::string filterName;
     std::string hwaccelName;
-    std::string pixelFormat;
-    std::string hardwareFramesFormat;
-    std::string surfacePixelFormat;
-    MediaHardwareDeviceKind deviceKind = MediaHardwareDeviceKind::None;
-    MediaHardwareFrameKind frameKind = MediaHardwareFrameKind::Software;
-    bool hardware = false;
-    bool zeroCopy = false;
+    std::optional<MediaHardwareDescriptor> inputFrame;
+    std::optional<MediaHardwareDescriptor> outputFrame;
     bool available = false;
     int priority = 0;
     std::string availabilityReason;
     std::optional<MediaEncodedPacketLayout> encodedPacketLayout;
+
+    const MediaHardwareDescriptor* frameContract() const noexcept
+    {
+        return inputFrame ? &*inputFrame : outputFrame ? &*outputFrame : nullptr;
+    }
+    MediaHardwareDeviceKind deviceKind() const noexcept
+    {
+        const auto* contract = frameContract();
+        return contract ? contract->deviceKind : MediaHardwareDeviceKind::Unknown;
+    }
+    bool hardware() const noexcept
+    {
+        const auto* contract = frameContract();
+        return contract && contract->isHardwareBacked();
+    }
+    bool zeroCopy() const noexcept
+    {
+        const auto* contract = frameContract();
+        return contract && contract->zeroCopyPreferred;
+    }
 };
 
 struct MediaPipelineChainPlan {
@@ -52,6 +67,7 @@ struct MediaPipelineChainPlan {
     bool allHardware = false;
     bool sameHardwareDevice = false;
     bool zeroCopy = false;
+    MediaHardwareTransferDirection transferDirection = MediaHardwareTransferDirection::Unknown;
     std::string reason;
 };
 

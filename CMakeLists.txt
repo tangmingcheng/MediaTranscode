@@ -108,6 +108,10 @@ if(WIN32)
     )
 elseif(USE_LOCAL_FFMPEG AND CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
     find_package(PkgConfig REQUIRED)
+    set(ffmpeg_original_pkg_config_path "$ENV{PKG_CONFIG_PATH}")
+    set(ffmpeg_original_pkg_config_libdir "$ENV{PKG_CONFIG_LIBDIR}")
+    include(cmake/MediaTranscodeFFmpegDiscovery.cmake)
+    media_transcode_select_runtime_ffmpeg_pkg_config(FFMPEG_PKG_CONFIG_DIR)
 
     pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
         libavfilter
@@ -117,6 +121,10 @@ elseif(USE_LOCAL_FFMPEG AND CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
         libswscale
         libswresample
     )
+    set(ENV{PKG_CONFIG_PATH} "${ffmpeg_original_pkg_config_path}")
+    set(ENV{PKG_CONFIG_LIBDIR} "${ffmpeg_original_pkg_config_libdir}")
+    unset(ffmpeg_original_pkg_config_path)
+    unset(ffmpeg_original_pkg_config_libdir)
 
     target_link_libraries(thirdparty_ffmpeg INTERFACE
         PkgConfig::FFMPEG

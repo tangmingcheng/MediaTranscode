@@ -40,6 +40,7 @@ struct MediaHardwareDescriptor {
 
     std::string deviceName;
     std::string pixelFormat;
+    std::string surfacePixelFormat;
     std::string framesContextName;
 
     bool zeroCopyPreferred = true;
