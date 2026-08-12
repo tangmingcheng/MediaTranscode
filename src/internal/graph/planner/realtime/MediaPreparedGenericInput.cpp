@@ -1,4 +1,5 @@
 #include "internal/graph/planner/realtime/MediaPreparedGenericInput.h"
+#include "internal/graph/planner/realtime/MediaPreparedReadInterruptGuard.h"
 
 #include "internal/graph/runtime/buffer/FFmpegInputStreamSnapshotFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegPacketPayloadFootprint.h"
@@ -18,16 +19,6 @@ extern "C" {
 
 namespace media::ffmpeg::graph {
 namespace {
-
-struct PreparedReadDeadline final {
-    std::chrono::steady_clock::time_point value;
-};
-
-int interruptPreparedRead(void* opaque)
-{
-    const auto* deadline = static_cast<const PreparedReadDeadline*>(opaque);
-    return deadline && std::chrono::steady_clock::now() >= deadline->value;
-}
 
 std::string ffmpegError(int code)
 {
@@ -89,12 +80,6 @@ bool whollyUntimed(const AVPacket& packet) noexcept
 } // namespace
 
 struct MediaPreparedGenericInput::CaptureState final {
-    struct InterruptState final {
-        std::atomic_bool stopRequested{false};
-        std::chrono::steady_clock::time_point deadline;
-        AVIOInterruptCB previous{};
-    };
-
     CaptureState(
         ::media::ffmpeg::InputFormatContextPtr ownedContext,
         std::deque<MediaDemuxPreparedPacket> preparedReplay,
@@ -103,25 +88,12 @@ struct MediaPreparedGenericInput::CaptureState final {
         : context(std::move(ownedContext)),
           replay(std::move(preparedReplay)),
           plan(preparedPlan),
-          nextOrdinal(nextPreparedOrdinal)
-    {
-        interrupt.previous = context->interrupt_callback;
-        interrupt.deadline = std::chrono::steady_clock::now() +
+          nextOrdinal(nextPreparedOrdinal),
+          deadline(std::chrono::steady_clock::now() +
             std::chrono::nanoseconds(
-                plan.maximumPreparedHandoffDuration.nanoseconds());
-        context->interrupt_callback = AVIOInterruptCB{
-            [](void* opaque) {
-                const auto* state = static_cast<const InterruptState*>(opaque);
-                if (!state) return 1;
-                if (state->stopRequested.load(std::memory_order_acquire) ||
-                    std::chrono::steady_clock::now() >= state->deadline) {
-                    return 1;
-                }
-                return state->previous.callback
-                    ? state->previous.callback(state->previous.opaque)
-                    : 0;
-            },
-            &interrupt};
+                plan.maximumPreparedHandoffDuration.nanoseconds())),
+          interruptGuard(*context, deadline, &stopRequested)
+    {
     }
 
     ~CaptureState()
@@ -136,17 +108,24 @@ struct MediaPreparedGenericInput::CaptureState final {
 
     void stopAndJoin() noexcept
     {
-        interrupt.stopRequested.store(true, std::memory_order_release);
+        stopRequested.store(true, std::memory_order_release);
         if (worker.joinable()) worker.join();
-        if (context) context->interrupt_callback = interrupt.previous;
+        interruptGuard.restore();
     }
 
     ::media::Result<MediaDemuxInputSession> takeSession()
     {
+        const bool deadlineExpired =
+            std::chrono::steady_clock::now() >= deadline;
         stopAndJoin();
         std::scoped_lock lock(mutex);
         if (error) {
             return ::media::Result<MediaDemuxInputSession>::failure(*error);
+        }
+        if (deadlineExpired) {
+            return ::media::Result<MediaDemuxInputSession>::failure(
+                ::media::ErrorInfo::wouldBlock(
+                    "prepared generic handoff deadline expired before session transfer"));
         }
         return ::media::Result<MediaDemuxInputSession>::success(
             MediaDemuxInputSession{
@@ -161,8 +140,8 @@ struct MediaPreparedGenericInput::CaptureState final {
 
     void capture() noexcept
     {
-        while (!interrupt.stopRequested.load(std::memory_order_acquire)) {
-            if (std::chrono::steady_clock::now() >= interrupt.deadline) {
+        while (!stopRequested.load(std::memory_order_acquire)) {
+            if (std::chrono::steady_clock::now() >= deadline) {
                 fail(::media::ErrorInfo::wouldBlock(
                     "prepared generic handoff deadline expired"));
                 return;
@@ -175,11 +154,11 @@ struct MediaPreparedGenericInput::CaptureState final {
             }
             const int read = av_read_frame(context.get(), packet.get());
             if (read < 0) {
-                if (interrupt.stopRequested.load(std::memory_order_acquire)) {
+                if (stopRequested.load(std::memory_order_acquire)) {
                     return;
                 }
                 const bool expired =
-                    std::chrono::steady_clock::now() >= interrupt.deadline;
+                    std::chrono::steady_clock::now() >= deadline;
                 fail(::media::ErrorInfo::ffmpegFailure(
                     expired
                         ? "prepared generic handoff deadline expired"
@@ -240,7 +219,9 @@ struct MediaPreparedGenericInput::CaptureState final {
     std::size_t audioPackets = 0;
     std::uint64_t videoBytes = 0;
     std::uint64_t audioBytes = 0;
-    InterruptState interrupt;
+    std::atomic_bool stopRequested{false};
+    std::chrono::steady_clock::time_point deadline;
+    MediaPreparedReadInterruptGuard interruptGuard;
     std::mutex mutex;
     std::optional<::media::ErrorInfo> error;
     std::jthread worker;
@@ -290,9 +271,8 @@ MediaPreparedGenericInput::prepare(
 
     const auto duration = std::chrono::nanoseconds(
         plan.maximumPreparedReadDuration.nanoseconds());
-    PreparedReadDeadline deadline{std::chrono::steady_clock::now() + duration};
-    const AVIOInterruptCB previous = context->interrupt_callback;
-    context->interrupt_callback = AVIOInterruptCB{interruptPreparedRead, &deadline};
+    const auto deadline = std::chrono::steady_clock::now() + duration;
+    MediaPreparedReadInterruptGuard interruptGuard(*context, deadline);
 
     std::deque<MediaDemuxPreparedPacket> replay;
     std::optional<MediaPreparedDemuxFirstPacketEvidence> firstVideo;
@@ -313,23 +293,20 @@ MediaPreparedGenericInput::prepare(
     std::uint64_t ordinal = 0;
 
     while (!firstVideo || !firstAudio) {
-        if (std::chrono::steady_clock::now() >= deadline.value) {
-            context->interrupt_callback = previous;
+        if (std::chrono::steady_clock::now() >= deadline) {
             return ::media::Result<MediaPreparedGenericInput>::failure(
                 ::media::ErrorInfo::wouldBlock(
                     "prepared generic input read deadline expired before a common A/V window"));
         }
         auto packet = ::media::ffmpeg::makePacket();
         if (!packet) {
-            context->interrupt_callback = previous;
             return ::media::Result<MediaPreparedGenericInput>::failure(
                 ::media::ErrorInfo::allocationFailed(
                     "prepared generic input packet allocation failed"));
         }
         const int read = av_read_frame(context.get(), packet.get());
         if (read < 0) {
-            context->interrupt_callback = previous;
-            const bool expired = std::chrono::steady_clock::now() >= deadline.value;
+            const bool expired = std::chrono::steady_clock::now() >= deadline;
             return ::media::Result<MediaPreparedGenericInput>::failure(
                 expired
                     ? ::media::ErrorInfo::ffmpegFailure(
@@ -347,7 +324,6 @@ MediaPreparedGenericInput::prepare(
 
         const auto footprint = ffmpegPacketPayloadFootprintBytes(*packet);
         if (!footprint) {
-            context->interrupt_callback = previous;
             return ::media::Result<MediaPreparedGenericInput>::failure(
                 ::media::ErrorInfo::invalidArgument(
                     "prepared generic input packet footprint is malformed"));
@@ -362,7 +338,6 @@ MediaPreparedGenericInput::prepare(
             video ? plan.maximumVideoPacketBytes : plan.maximumAudioPacketBytes,
             video ? "video" : "audio");
         if (!bounded) {
-            context->interrupt_callback = previous;
             return ::media::Result<MediaPreparedGenericInput>::failure(
                 bounded.error());
         }
@@ -379,7 +354,6 @@ MediaPreparedGenericInput::prepare(
                 discardedVideoBytes += *footprint;
                 continue;
             }
-            context->interrupt_callback = previous;
             return ::media::Result<MediaPreparedGenericInput>::failure(
                 ::media::ErrorInfo::invalidArgument(
                     audio
@@ -414,7 +388,6 @@ MediaPreparedGenericInput::prepare(
             auto audioPresentation = presentation(
                 audioCandidates.front().packet);
             if (!videoPresentation || !audioPresentation) {
-                context->interrupt_callback = previous;
                 return ::media::Result<MediaPreparedGenericInput>::failure(
                     videoPresentation
                         ? audioPresentation.error()
@@ -426,7 +399,6 @@ MediaPreparedGenericInput::prepare(
                 : audioPresentation.value().checkedSubtract(
                       videoPresentation.value());
             if (!skew) {
-                context->interrupt_callback = previous;
                 return ::media::Result<MediaPreparedGenericInput>::failure(
                     skew.error());
             }
@@ -438,7 +410,6 @@ MediaPreparedGenericInput::prepare(
             if (plan.timedStartupPrefixDisposition !=
                 MediaPreparedTimedStartupPrefixDisposition::
                     DiscardEarlierCompleteTimedUntilCommonWindow) {
-                context->interrupt_callback = previous;
                 return ::media::Result<MediaPreparedGenericInput>::failure(
                     ::media::ErrorInfo::invalidArgument(
                         "prepared generic input rejects an unpaired first timed A/V window"));
@@ -456,7 +427,7 @@ MediaPreparedGenericInput::prepare(
             }
         }
     }
-    context->interrupt_callback = previous;
+    interruptGuard.restore();
 
     auto videoPresentation = presentation(*firstVideo);
     auto audioPresentation = presentation(*firstAudio);

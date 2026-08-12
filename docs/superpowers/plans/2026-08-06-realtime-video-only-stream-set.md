@@ -91,6 +91,6 @@
 - [x] Run the repository VS2026 clean-first x64 Debug build within 120 seconds; do not run CTest.
 - [x] Execute 38 VideoOnly chains: local 2; RTSP 6; MPEG-TS input 6; raw RTP 24 across H.264/HEVC, manual/automatic FMTP, two source semantics, and three outputs.
 - [x] Execute 18 A/V regressions: RTSP 3; MPEG-TS input 3; raw RTP 12 across H.264/HEVC, manual/automatic FMTP, and three outputs.
-- [x] For every realtime chain use `out/acceptance/test-continuous-120s.mp4`, start CLI then FFmpeg then VLC; use the explicitly approved server/publisher-first exception for true RTSP; capture commands/PIDs, source-driven exit, CPU, memory, errors, SDP/PID evidence, and residue checks.
+- [ ] For every realtime chain use `out/acceptance/test-continuous-120s.mp4`, start CLI then FFmpeg then VLC; use the explicitly approved server/publisher-first exception for true RTSP; capture commands/PIDs, source-driven exit, CPU, memory, errors, SDP/PID evidence, and residue checks. All commands, exits, telemetry and residue were captured; final RW07-RW09 source/CLI/VLC PID numbers were not persisted, so this evidence-retention sub-item remains incomplete.
 - [x] Write a concise completion report under `docs/completed/` without build commands; update `QUALITY_SCORE.md` through an independent quality-review agent.
 - [ ] Perform whole-branch self-review, commit/push all fixes, create a ready PR, and obtain a fresh independent PR-agent PASS. Do not merge.
