@@ -165,21 +165,12 @@ const MediaRational& MediaDemuxTimestampClockMapper::plannedTimeBase(
 ::media::Status MediaDemuxTimestampClockMapper::validateCommonWindow(
     const StreamState (&streams)[2]) const
 {
-    if (!streams[0].firstPresentation || !streams[0].firstEnd ||
-        !streams[1].firstPresentation || !streams[1].firstEnd) {
+    if (!streams[0].firstPresentation || !streams[0].firstDecode ||
+        !streams[0].firstDuration || !streams[1].firstPresentation ||
+        !streams[1].firstDecode || !streams[1].firstDuration) {
         return ::media::Status::failure(
             ::media::ErrorInfo::notInitialized(
                 "Demux timestamp mapper is acquiring the first common A/V window"));
-    }
-    const MediaRunningTime overlapBegin = std::max(
-        *streams[0].firstPresentation,
-        *streams[1].firstPresentation);
-    const MediaRunningTime overlapEnd = std::min(
-        *streams[0].firstEnd,
-        *streams[1].firstEnd);
-    if (overlapBegin >= overlapEnd) {
-        return ::media::Status::failure(
-            invalid("Demux timestamp mapper requires overlapping first packet intervals"));
     }
     auto skew = positiveDistance(
         *streams[0].firstPresentation,
@@ -281,13 +272,6 @@ MediaDemuxTimestampClockMapper::mapPacket(
                 : !mappedDuration ? mappedDuration.error()
                 : invalid("Demux timestamp mapper requires positive mapped duration"));
         }
-        auto intervalEnd =
-            presentation.value().checkedAdd(mappedDuration.value());
-        if (!intervalEnd) {
-            return ::media::Result<MediaMappedTimestamp>::failure(
-                intervalEnd.error());
-        }
-
         const std::size_t index = streamIndex(stream);
         StreamState candidate = m_streams[index];
         if (m_readiness == MediaSourceClockReadiness::Acquiring) {
@@ -295,7 +279,6 @@ MediaDemuxTimestampClockMapper::mapPacket(
                 candidate.firstPresentation = presentation.value();
                 candidate.firstDecode = decode.value();
                 candidate.firstDuration = mappedDuration.value();
-                candidate.firstEnd = intervalEnd.value();
             } else if (*candidate.firstPresentation != presentation.value() ||
                        *candidate.firstDecode != decode.value() ||
                        *candidate.firstDuration != mappedDuration.value()) {

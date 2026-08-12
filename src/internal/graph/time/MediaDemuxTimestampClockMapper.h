@@ -119,7 +119,6 @@ private:
         std::optional<MediaRunningTime> firstPresentation;
         std::optional<MediaRunningTime> firstDecode;
         std::optional<MediaRunningTime> firstDuration;
-        std::optional<MediaRunningTime> firstEnd;
         std::optional<MediaRunningTime> latestPresentation;
         std::optional<MediaRunningTime> latestDecode;
         std::optional<MediaRunningTime> latestDuration;
