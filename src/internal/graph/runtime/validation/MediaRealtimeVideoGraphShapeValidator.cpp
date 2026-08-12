@@ -10,6 +10,7 @@
 #include "internal/graph/nodes/output/MediaScheduledRtpSenderNodePlanCodec.h"
 #include "internal/graph/runtime/factory/MediaRealtimeRuntimeBinding.h"
 #include "internal/graph/runtime/validation/MediaAvSyncGraphShape.h"
+#include "internal/graph/runtime/validation/MediaGraphShapeQuery.h"
 
 #include <initializer_list>
 #include <string>
@@ -62,64 +63,6 @@ bool legacyOutputNode(MediaNodeKind kind) noexcept
     }
 }
 
-bool exactKeys(
-    const MediaNodeOptions& options,
-    std::initializer_list<std::string_view> expected)
-{
-    if (options.values().size() != expected.size()) return false;
-    for (std::string_view key : expected) {
-        if (!options.has(std::string(key))) return false;
-    }
-    return true;
-}
-
-bool matchesStreamSetOption(
-    const MediaNodeOptions& options,
-    std::string_view key,
-    MediaTranscodeStreamSet expected)
-{
-    auto encoded = MediaTranscodeStreamSetCodec::encode(expected);
-    return encoded && options.has(std::string(key)) &&
-        options.value(std::string(key)) == encoded.value();
-}
-
-bool validPort(
-    const MediaPort* port,
-    MediaPortDirection direction,
-    MediaStreamKind stream,
-    MediaEdgeKind edge,
-    MediaPayloadKind payload) noexcept
-{
-    return port && port->direction == direction &&
-        port->streamKind == stream && port->edgeKind == edge &&
-        port->payloadKind == payload;
-}
-
-const MediaEdge* singleEdge(
-    const MediaGraph& graph,
-    MediaPortId from,
-    MediaPortId to) noexcept
-{
-    const MediaEdge* match = nullptr;
-    for (const MediaEdge& edge : graph.edges()) {
-        if (edge.from.portId != from || edge.to.portId != to) continue;
-        if (match) return nullptr;
-        match = &edge;
-    }
-    return match;
-}
-
-std::size_t incomingEdgeCount(
-    const MediaGraph& graph,
-    MediaPortId port) noexcept
-{
-    std::size_t count = 0;
-    for (const MediaEdge& edge : graph.edges()) {
-        if (edge.to.portId == port) ++count;
-    }
-    return count;
-}
-
 const MediaEdge* exactCodecEdge(
     const MediaGraph& graph,
     const MediaPort& input,
@@ -138,7 +81,7 @@ const MediaEdge* exactCodecEdge(
     const MediaPort* port = graph.findPort(match->from.portId);
     return source && source->kind == sourceKind && port &&
             port->nodeId == source->id && port->name == "codec" &&
-            validPort(port, MediaPortDirection::Output, stream,
+            MediaGraphShapeQuery::validPort(port, MediaPortDirection::Output, stream,
                       MediaEdgeKind::Metadata,
                       MediaPayloadKind::CodecContext)
         ? match
@@ -201,7 +144,7 @@ const MediaEdge* exactEdge(
     const MediaPort* from = source.findOutputPort(sourcePort);
     const MediaPort* to = target.findInputPort(targetPort);
     if (!from || !to) return nullptr;
-    const MediaEdge* edge = singleEdge(graph, from->id, to->id);
+    const MediaEdge* edge = MediaGraphShapeQuery::singleEdge(graph, from->id, to->id);
     return edge && edge->policy == policy ? edge : nullptr;
 }
 
@@ -231,7 +174,7 @@ const MediaEdge* exactEdge(
             const MediaPort* packetInput =
                 normalize.front()->findInputPort("packet");
             if (!packetInput ||
-                incomingEdgeCount(graph, packetInput->id) != 1) {
+                MediaGraphShapeQuery::incomingEdgeCount(graph, packetInput->id) != 1) {
                 return invalid("packet-copy startup source cardinality");
             }
             const MediaEdge* packetEdge = nullptr;
@@ -275,7 +218,7 @@ const MediaEdge* exactEdge(
         ? *decode.front()
         : *gate.front();
     const MediaPort* packetInput = packetTarget.findInputPort("packet");
-    if (!packetInput || incomingEdgeCount(graph, packetInput->id) != 1) {
+    if (!packetInput || MediaGraphShapeQuery::incomingEdgeCount(graph, packetInput->id) != 1) {
         return invalid("startup packet source cardinality");
     }
     const MediaEdge* startup = nullptr;
@@ -327,20 +270,20 @@ const MediaEdge* exactEdge(
 {
     if (scheduler.inputPorts.size() != 1 ||
         scheduler.outputPorts.size() != 2 ||
-        !validPort(
+        !MediaGraphShapeQuery::validPort(
             scheduler.findInputPort("video"), MediaPortDirection::Input,
             MediaStreamKind::Video, MediaEdgeKind::EncodedPacket,
             MediaPayloadKind::Packet) ||
-        !validPort(
+        !MediaGraphShapeQuery::validPort(
             scheduler.findOutputPort("activation"),
             MediaPortDirection::Output, MediaStreamKind::Metadata,
             MediaEdgeKind::Event, MediaPayloadKind::GraphEvent) ||
-        !validPort(
+        !MediaGraphShapeQuery::validPort(
             scheduler.findOutputPort("scheduled_video"),
             MediaPortDirection::Output, MediaStreamKind::Video,
             MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet) ||
         scheduler.options.values().size() != 16 ||
-        incomingEdgeCount(
+        MediaGraphShapeQuery::incomingEdgeCount(
             graph, scheduler.findInputPort("video")->id) != 1) {
         return invalid("scheduler ports or cardinality");
     }
@@ -475,36 +418,36 @@ const MediaEdge* exactEdge(
         decoded.value().output != product.video ||
         decoded.value().sdp != product.sdp ||
         sender.inputPorts.size() != 3 || sender.outputPorts.size() != 1 ||
-        !validPort(sender.findInputPort("activation"),
+        !MediaGraphShapeQuery::validPort(sender.findInputPort("activation"),
                    MediaPortDirection::Input, MediaStreamKind::Metadata,
                    MediaEdgeKind::Event, MediaPayloadKind::GraphEvent) ||
-        !validPort(sender.findInputPort("codec"), MediaPortDirection::Input,
+        !MediaGraphShapeQuery::validPort(sender.findInputPort("codec"), MediaPortDirection::Input,
                    MediaStreamKind::Video, MediaEdgeKind::Metadata,
                    MediaPayloadKind::CodecContext) ||
-        !validPort(sender.findInputPort("scheduled"),
+        !MediaGraphShapeQuery::validPort(sender.findInputPort("scheduled"),
                    MediaPortDirection::Input, MediaStreamKind::Video,
                    MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet) ||
-        !validPort(sender.findOutputPort("description"),
+        !MediaGraphShapeQuery::validPort(sender.findOutputPort("description"),
                    MediaPortDirection::Output, MediaStreamKind::Metadata,
                    MediaEdgeKind::Event, MediaPayloadKind::GraphEvent) ||
         sdp.inputPorts.size() != 1 || !sdp.outputPorts.empty() ||
-        !validPort(sdp.findInputPort("video"), MediaPortDirection::Input,
+        !MediaGraphShapeQuery::validPort(sdp.findInputPort("video"), MediaPortDirection::Input,
                    MediaStreamKind::Metadata, MediaEdgeKind::Event,
                    MediaPayloadKind::GraphEvent) ||
-        !exactKeys(sdp.options, {"sdp.path", "sdp.stream_set"}) ||
+        !MediaGraphShapeQuery::hasExactOptionKeys(sdp.options, {"sdp.path", "sdp.stream_set"}) ||
         sdp.options.value("sdp.path") != product.sdp.path ||
-        !matchesStreamSetOption(
+        !MediaGraphShapeQuery::matchesStreamSetOption(
             sdp.options, "sdp.stream_set",
             MediaTranscodeStreamSet::VideoOnly)) {
         return invalid("scheduled RTP nodes differ from runtime product");
     }
-    const MediaEdge* activation = singleEdge(
+    const MediaEdge* activation = MediaGraphShapeQuery::singleEdge(
         graph, scheduler.findOutputPort("activation")->id,
         sender.findInputPort("activation")->id);
-    const MediaEdge* scheduled = singleEdge(
+    const MediaEdge* scheduled = MediaGraphShapeQuery::singleEdge(
         graph, scheduler.findOutputPort("scheduled_video")->id,
         sender.findInputPort("scheduled")->id);
-    const MediaEdge* description = singleEdge(
+    const MediaEdge* description = MediaGraphShapeQuery::singleEdge(
         graph, sender.findOutputPort("description")->id,
         sdp.findInputPort("video")->id);
     const MediaEdge* codec = exactCodecEdge(
@@ -561,32 +504,32 @@ const MediaEdge* exactEdge(
                 MediaTranscodeStreamSet::VideoOnly, product);
         !exact) return exact;
     if (source.inputPorts.size() != 1 || source.outputPorts.size() != 1 ||
-        !validPort(source.findInputPort("activation"),
+        !MediaGraphShapeQuery::validPort(source.findInputPort("activation"),
                    MediaPortDirection::Input, MediaStreamKind::Metadata,
                    MediaEdgeKind::Event, MediaPayloadKind::GraphEvent) ||
-        !validPort(source.findOutputPort("plan"),
+        !MediaGraphShapeQuery::validPort(source.findOutputPort("plan"),
                    MediaPortDirection::Output, MediaStreamKind::Metadata,
                    MediaEdgeKind::Metadata,
                    MediaPayloadKind::ProjectMpegTsRuntimePlan)) {
         return invalid("MPEG-TS plan source differs from runtime product");
     }
     if (adapter.inputPorts.size() != 2 || adapter.outputPorts.size() != 1 ||
-        !exactKeys(adapter.options,
+        !MediaGraphShapeQuery::hasExactOptionKeys(adapter.options,
                    {"scheduled_ts_adapter.session",
                     "scheduled_ts_adapter.stream_set"}) ||
         adapter.options.value("scheduled_ts_adapter.session") !=
             runtime.sessionKey.value() ||
-        !matchesStreamSetOption(
+        !MediaGraphShapeQuery::matchesStreamSetOption(
             adapter.options, "scheduled_ts_adapter.stream_set",
             MediaTranscodeStreamSet::VideoOnly) ||
-        !validPort(adapter.findInputPort("plan"),
+        !MediaGraphShapeQuery::validPort(adapter.findInputPort("plan"),
                    MediaPortDirection::Input, MediaStreamKind::Metadata,
                    MediaEdgeKind::Metadata,
                    MediaPayloadKind::ProjectMpegTsRuntimePlan) ||
-        !validPort(adapter.findInputPort("scheduled"),
+        !MediaGraphShapeQuery::validPort(adapter.findInputPort("scheduled"),
                    MediaPortDirection::Input, MediaStreamKind::Video,
                    MediaEdgeKind::EncodedPacket, MediaPayloadKind::Packet) ||
-        !validPort(adapter.findOutputPort("packet"),
+        !MediaGraphShapeQuery::validPort(adapter.findOutputPort("packet"),
                    MediaPortDirection::Output, MediaStreamKind::Any,
                    MediaEdgeKind::EncodedPacket,
                    MediaPayloadKind::TsAccessUnit)) {
@@ -594,7 +537,7 @@ const MediaEdge* exactEdge(
     }
     auto muxSessionKind = parseMediaMuxSessionKindOption(
         mux.options.value(MediaTranscodeOptionKey::MuxSessionKind));
-    if (!exactKeys(mux.options,
+    if (!MediaGraphShapeQuery::hasExactOptionKeys(mux.options,
                    {MediaTranscodeOptionKey::MuxExpectVideo,
                     MediaTranscodeOptionKey::MuxExpectAudio,
                     MediaTranscodeOptionKey::MuxSessionKind}) ||
@@ -608,30 +551,30 @@ const MediaEdge* exactEdge(
         mux.inputPorts.size() != (udp ? 4u : 3u)) {
         return invalid("MPEG-TS mux port count differs from runtime product");
     }
-    if (!validPort(mux.findInputPort("codec"), MediaPortDirection::Input,
+    if (!MediaGraphShapeQuery::validPort(mux.findInputPort("codec"), MediaPortDirection::Input,
                    MediaStreamKind::Any, MediaEdgeKind::Metadata,
                    MediaPayloadKind::CodecContext) ||
-        !validPort(mux.findInputPort("packet"), MediaPortDirection::Input,
+        !MediaGraphShapeQuery::validPort(mux.findInputPort("packet"), MediaPortDirection::Input,
                    MediaStreamKind::Any, MediaEdgeKind::EncodedPacket,
                    MediaPayloadKind::TsAccessUnit) ||
-        !validPort(mux.findInputPort("plan"), MediaPortDirection::Input,
+        !MediaGraphShapeQuery::validPort(mux.findInputPort("plan"), MediaPortDirection::Input,
                    MediaStreamKind::Metadata, MediaEdgeKind::Metadata,
                    MediaPayloadKind::ProjectMpegTsRuntimePlan)) {
         return invalid("MPEG-TS mux port types differ from runtime product");
     }
-    const MediaEdge* activation = singleEdge(
+    const MediaEdge* activation = MediaGraphShapeQuery::singleEdge(
         graph, scheduler.findOutputPort("activation")->id,
         source.findInputPort("activation")->id);
-    const MediaEdge* scheduled = singleEdge(
+    const MediaEdge* scheduled = MediaGraphShapeQuery::singleEdge(
         graph, scheduler.findOutputPort("scheduled_video")->id,
         adapter.findInputPort("scheduled")->id);
-    const MediaEdge* sourceToAdapter = singleEdge(
+    const MediaEdge* sourceToAdapter = MediaGraphShapeQuery::singleEdge(
         graph, source.findOutputPort("plan")->id,
         adapter.findInputPort("plan")->id);
-    const MediaEdge* sourceToMux = singleEdge(
+    const MediaEdge* sourceToMux = MediaGraphShapeQuery::singleEdge(
         graph, source.findOutputPort("plan")->id,
         mux.findInputPort("plan")->id);
-    const MediaEdge* packet = singleEdge(
+    const MediaEdge* packet = MediaGraphShapeQuery::singleEdge(
         graph, adapter.findOutputPort("packet")->id,
         mux.findInputPort("packet")->id);
     const MediaEdge* codec = exactCodecEdge(
@@ -655,21 +598,21 @@ const MediaEdge* exactEdge(
                 MediaOutputTransportKind::UdpDatagrams ||
             udpPlan.resourceKind != MediaOutputResourceKind::ByteSink ||
             udpPlan.muxSessionKind != MediaMuxSessionKind::ProjectMpegTs ||
-            !exactKeys(output.options,
+            !MediaGraphShapeQuery::hasExactOptionKeys(output.options,
                        {"url", MediaTranscodeOptionKey::OutputResourceKind}) ||
             output.options.value("url") != udpPlan.url ||
             output.options.value(MediaTranscodeOptionKey::OutputResourceKind) !=
                 "byte_sink" ||
             !output.inputPorts.empty() || output.outputPorts.size() != 1 ||
-            !validPort(output.findOutputPort("resource"),
+            !MediaGraphShapeQuery::validPort(output.findOutputPort("resource"),
                        MediaPortDirection::Output, MediaStreamKind::Metadata,
                        MediaEdgeKind::Metadata,
                        MediaPayloadKind::OutputByteSink) ||
-            !validPort(mux.findInputPort("resource"),
+            !MediaGraphShapeQuery::validPort(mux.findInputPort("resource"),
                        MediaPortDirection::Input, MediaStreamKind::Metadata,
                        MediaEdgeKind::Metadata,
                        MediaPayloadKind::OutputByteSink) ||
-            !singleEdge(graph, output.findOutputPort("resource")->id,
+            !MediaGraphShapeQuery::singleEdge(graph, output.findOutputPort("resource")->id,
                         mux.findInputPort("resource")->id)) {
             return invalid("MPEG-TS UDP transport differs from runtime product");
         }
@@ -682,23 +625,23 @@ const MediaEdge* exactEdge(
     if (!rtp ||
         product.protocol.muxPlan().parameters().transportKind !=
             MediaOutputTransportKind::RtpAvp ||
-        !exactKeys(publisher.options,
+        !MediaGraphShapeQuery::hasExactOptionKeys(publisher.options,
                    {"mpegts_rtp_sdp.session",
                     "mpegts_rtp_sdp.stream_set"}) ||
         publisher.options.value("mpegts_rtp_sdp.session") !=
             runtime.sessionKey.value() ||
-        !matchesStreamSetOption(
+        !MediaGraphShapeQuery::matchesStreamSetOption(
             publisher.options, "mpegts_rtp_sdp.stream_set",
             MediaTranscodeStreamSet::VideoOnly) ||
         publisher.inputPorts.size() != 1 ||
         !publisher.outputPorts.empty() ||
-        !validPort(publisher.findInputPort("plan"),
+        !MediaGraphShapeQuery::validPort(publisher.findInputPort("plan"),
                    MediaPortDirection::Input, MediaStreamKind::Metadata,
                    MediaEdgeKind::Metadata,
                    MediaPayloadKind::ProjectMpegTsRuntimePlan)) {
         return invalid("MPEG-TS RTP transport differs from runtime product");
     }
-    const MediaEdge* planToPublisher = singleEdge(
+    const MediaEdge* planToPublisher = MediaGraphShapeQuery::singleEdge(
         graph, source.findOutputPort("plan")->id,
         publisher.findInputPort("plan")->id);
     return planToPublisher &&

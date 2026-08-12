@@ -1,12 +1,12 @@
 # MediaTranscode Quality Score
 
-> Scope: `codex/realtime-video-only-stream-set`, `master...050b4f0c`, plus the final tracked completion evidence. Updated 2026-08-12.
+> Scope: `codex/realtime-video-only-stream-set`, `master...b2ad08e0`, plus the final deadline-transfer fix and tracked completion evidence. Updated 2026-08-12.
 
 ## Scoring Rubric
 
 | Dimension | Max | Score | Current evidence |
 |---|---:|---:|---|
-| Architecture responsibilities | 9 | 8 | Model, planner, builder, protocol, node and runtime-validation layers remain distinct; the branch is nevertheless broad at 243 changed files. |
+| Architecture responsibilities | 9 | 8 | Model, planner, builder, protocol, node and runtime-validation layers remain distinct; the branch is nevertheless broad at 248 changed files before the final quality refresh. |
 | Typed plans and contracts | 8 | 8 | Explicit stream-set and runtime variants model VideoOnly/A-V input, startup, scheduling, MPEG-TS program and output paths; prepared RTSP evidence and provenance are typed. |
 | Planner authority | 8 | 8 | Stream selection, timing, capacities, protocol identity, prepared ownership and handoff limits are planned and fail closed; runtime consumers require exact materialized facts. |
 | DAG shape and compilation | 8 | 8 | VideoOnly validation enforces exact nodes, ports, edges, PID/PES/SDP cardinality and legacy-node absence; A/V and video runtime variants compile separately. |
@@ -27,7 +27,7 @@ The branch establishes an explicit `MediaTranscodeStreamSet` contract across loc
 
 ## Main Deductions
 
-1. Several orchestration and exact-shape translation units remain large; the 243-file change carries substantial review and future-change surface despite focused helper extraction.
+1. Several orchestration and exact-shape translation units remain large; the 248-file change carries substantial review and future-change surface despite focused helper extraction.
 2. VLC retains route-dependent UDP TS continuity, RTP-loss, late-picture and teardown warnings. Production telemetry and continuous decoded frames are clean, but receiver interoperability is not warning-free.
 3. Verification covers finite 120-second streams, not multi-hour soak, RTSP reconnect, publisher replacement, hostile traffic or repeated generation/SSRC transitions.
 4. Prepared RTSP replay is explicitly bounded and fails closed, but operators must size packet and byte budgets for source rate plus planning latency.

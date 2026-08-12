@@ -92,7 +92,7 @@ struct MediaPreparedGenericInput::CaptureState final {
           deadline(std::chrono::steady_clock::now() +
             std::chrono::nanoseconds(
                 plan.maximumPreparedHandoffDuration.nanoseconds())),
-          interruptGuard(*context, deadline, &stopRequested)
+          interruptGuard(*context, deadline, stopRequested)
     {
     }
 
@@ -115,14 +115,16 @@ struct MediaPreparedGenericInput::CaptureState final {
 
     ::media::Result<MediaDemuxInputSession> takeSession()
     {
-        const bool deadlineExpired =
+        const bool deadlineExpiredBeforeStop =
             std::chrono::steady_clock::now() >= deadline;
         stopAndJoin();
+        const bool deadlineExpiredBeforeTransfer =
+            std::chrono::steady_clock::now() >= deadline;
         std::scoped_lock lock(mutex);
         if (error) {
             return ::media::Result<MediaDemuxInputSession>::failure(*error);
         }
-        if (deadlineExpired) {
+        if (deadlineExpiredBeforeStop || deadlineExpiredBeforeTransfer) {
             return ::media::Result<MediaDemuxInputSession>::failure(
                 ::media::ErrorInfo::wouldBlock(
                     "prepared generic handoff deadline expired before session transfer"));

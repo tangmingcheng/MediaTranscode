@@ -13,8 +13,11 @@ class MediaPreparedReadInterruptGuard final {
 public:
     MediaPreparedReadInterruptGuard(
         AVFormatContext& context,
+        std::chrono::steady_clock::time_point deadline) noexcept;
+    MediaPreparedReadInterruptGuard(
+        AVFormatContext& context,
         std::chrono::steady_clock::time_point deadline,
-        const std::atomic_bool* stopRequested = nullptr) noexcept;
+        const std::atomic_bool& stopRequested) noexcept;
     MediaPreparedReadInterruptGuard(
         const MediaPreparedReadInterruptGuard&) = delete;
     MediaPreparedReadInterruptGuard& operator=(
@@ -31,6 +34,10 @@ private:
     };
 
     static int interrupt(void* opaque) noexcept;
+    MediaPreparedReadInterruptGuard(
+        AVFormatContext& context,
+        std::chrono::steady_clock::time_point deadline,
+        const std::atomic_bool* stopRequested) noexcept;
 
     AVFormatContext* m_context;
     State m_state;

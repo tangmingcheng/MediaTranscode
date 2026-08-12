@@ -4,6 +4,21 @@ namespace media::ffmpeg::graph {
 
 MediaPreparedReadInterruptGuard::MediaPreparedReadInterruptGuard(
     AVFormatContext& context,
+    std::chrono::steady_clock::time_point deadline) noexcept
+    : MediaPreparedReadInterruptGuard(context, deadline, nullptr)
+{
+}
+
+MediaPreparedReadInterruptGuard::MediaPreparedReadInterruptGuard(
+    AVFormatContext& context,
+    std::chrono::steady_clock::time_point deadline,
+    const std::atomic_bool& stopRequested) noexcept
+    : MediaPreparedReadInterruptGuard(context, deadline, &stopRequested)
+{
+}
+
+MediaPreparedReadInterruptGuard::MediaPreparedReadInterruptGuard(
+    AVFormatContext& context,
     std::chrono::steady_clock::time_point deadline,
     const std::atomic_bool* stopRequested) noexcept
     : m_context(&context),
