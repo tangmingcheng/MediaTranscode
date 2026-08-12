@@ -119,7 +119,7 @@ MediaHardwareCapability validateInternallyManagedRkmppChain(
         return unavailable("planned RKMPP encoder does not advertise DRM PRIME frames");
     }
 
-    if (options.filterRequired) {
+    if (chain.filterActive) {
         constexpr const char* rgaFilterName = "scale_rkrga";
         if (!MediaHardwareCapabilityProbe::filterExists(rgaFilterName)) {
             return unavailable("planned RKMPP resize filter is unavailable: scale_rkrga");
@@ -163,7 +163,7 @@ MediaHardwareCapability validateInternallyManagedRkmppChain(
             encoderOpened);
     }
 
-    return {true, options.filterRequired
+    return {true, chain.filterActive
                       ? "internally managed RKMPP codecs opened and RGA filter found"
                       : "internally managed RKMPP codecs opened without a filter"};
 }
@@ -299,7 +299,7 @@ MediaHardwareCapability validateCompleteChain(
         encoderContext->hw_frames_ctx = encoderFrames.release();
     }
 
-    if (options.filterRequired) {
+    if (chain.filterActive) {
         auto firstFrame = ::media::ffmpeg::makeFrame();
         if (!firstFrame) {
             return unavailable("av_frame_alloc(filter capability) returned null");
@@ -402,7 +402,7 @@ MediaHardwareCapabilityProbe::MediaHardwareCapabilityProbe(
 
     chain.decoder.available = capability.available;
     chain.decoder.availabilityReason = capability.reason;
-    if (options.filterRequired) {
+    if (chain.filterActive) {
         chain.filter.available = capability.available;
         chain.filter.availabilityReason = capability.reason;
     }

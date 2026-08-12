@@ -20,7 +20,7 @@ MediaVideoTranscodeBranchNodes addVideoTranscodeNodes(MediaGraph& graph,
                                                       const std::string& prefix,
                                                       bool inputStartRequiresKeyFrame,
                                                       bool synchronized,
-                                                      bool filterRequired)
+                                                      bool filterActive)
 {
     MediaVideoTranscodeBranchNodes nodes;
     nodes.codecResolver = graph.addNode(MediaNodeKind::CodecResolver, prefix + ".codec_resolver", "Video codec resolver");
@@ -33,7 +33,7 @@ MediaVideoTranscodeBranchNodes addVideoTranscodeNodes(MediaGraph& graph,
         nodes.videoTimestamp = graph.addNode(MediaNodeKind::VideoTimestamp, prefix + ".timestamp", "Video timestamp normalize");
     }
     nodes.videoFrameRate = graph.addNode(MediaNodeKind::VideoFrameRate, prefix + ".framerate", "Video frame rate control");
-    if (filterRequired) {
+    if (filterActive) {
         nodes.videoFilter = graph.addNode(MediaNodeKind::VideoFilter, prefix + ".filter", "Video filter");
     }
     nodes.videoEncode = graph.addNode(MediaNodeKind::VideoEncode, prefix + ".encode", "Video encode");
@@ -209,7 +209,7 @@ MediaVideoTranscodeBranchNodes addVideoTranscodeNodes(MediaGraph& graph,
                                                                   options.prefix,
                                                                   options.inputStartRequiresKeyFrame,
                                                                   options.canonicalLineageCapacity.has_value(),
-                                                                  options.plan.filterRequired);
+                                                                  options.plan.filterActive);
     if (options.inputStartRequiresKeyFrame) {
         if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodes.packetStartGate, "packet_start_gate.require_key_frame", "1"); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     }

@@ -35,7 +35,7 @@ bool isSoftwareChain(const MediaPipelineChainPlan& chain,
                      const MediaPipelinePlannerOptions& options) noexcept
 {
     return !chain.decoder.hardware() && !chain.encoder.hardware() &&
-           (!options.filterRequired || !chain.filter.hardware());
+           (!chain.filterActive || !chain.filter.hardware());
 }
 
 bool isRkmppChain(const MediaPipelineChainPlan& chain) noexcept
@@ -102,7 +102,7 @@ bool completeRkmppFrameContract(const MediaHardwareDescriptor& contract) noexcep
                 "RKMPP frame contract is inconsistent or crosses frame domains"));
     }
 
-    if (!options.filterRequired) {
+    if (!chain.filterActive) {
         if (!chain.filter.filterName.empty()) {
             return ::media::Status::failure(
                 ::media::ErrorInfo::hardwareUnavailable(
@@ -214,7 +214,6 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
     plan.inputPath = std::move(inputPath);
     plan.outputPath = std::move(options.outputPath);
     plan.diagnosticLogEnabled = options.diagnosticLogEnabled;
-    plan.filterRequired = options.filterRequired;
 
     plan.enabled = true;
     plan.sourceStreamIndex = inputInfo.streamIndex;
@@ -274,6 +273,7 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
     }
 
     plan.selected = plan.candidates.at(selected.value());
+    plan.filterActive = plan.selected.filterActive;
     auto preflight = MediaPipelinePlanner::preflightSelectedCandidate(
         plan.selected, options, hardwareProbe);
     if (!preflight) {
@@ -296,7 +296,7 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
         }
 
         if (!MediaPipelineHardwareBackendConstraint::accepts(
-                candidate, options.filterRequired, options.hardwareBackend)) {
+                candidate, candidate.filterActive, options.hardwareBackend)) {
             continue;
         }
 

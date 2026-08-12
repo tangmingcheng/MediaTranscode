@@ -264,6 +264,7 @@ MediaPipelineChainPlan makeRawChain(std::string label,
     chain.decoder = std::move(decoder);
     chain.filter = std::move(filter);
     chain.encoder = std::move(encoder);
+    chain.filterActive = !chain.filter.filterName.empty();
     chain.transferDirection = MediaHardwareTransferDirection::None;
 
     return chain;

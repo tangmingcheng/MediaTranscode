@@ -103,7 +103,7 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
 {
     const MediaPipelineChainPlan& chain = plan.selected;
     if (auto status = setChainOptions(graph, nodeId, chain); !status) return status;
-    if (auto status = setOption(graph, nodeId, "pipeline.filter_required", boolOption(plan.filterRequired)); !status) return status;
+    if (auto status = setOption(graph, nodeId, "pipeline.filter_active", boolOption(plan.filterActive)); !status) return status;
     if (auto status = setStageOptions(graph, nodeId, "decoder.pipeline", chain.decoder); !status) return status;
     if (auto status = setStageOptions(graph, nodeId, "filter.pipeline", chain.filter); !status) return status;
     return setStageOptions(graph, nodeId, "encoder.pipeline", chain.encoder);

@@ -67,6 +67,7 @@ struct MediaPipelineChainPlan {
     bool allHardware = false;
     bool sameHardwareDevice = false;
     bool zeroCopy = false;
+    bool filterActive = false;
     MediaHardwareTransferDirection transferDirection = MediaHardwareTransferDirection::Unknown;
     std::string reason;
 };
@@ -125,7 +126,7 @@ struct MediaPipelinePlan {
     std::string outputCodecName;
     bool diagnosticLogEnabled = false;
     bool synthesizeMissingTimestamps = false;
-    bool filterRequired = false;
+    bool filterActive = false;
     MediaPipelineChainPlan selected;
     std::vector<MediaPipelineChainPlan> candidates;
 };
