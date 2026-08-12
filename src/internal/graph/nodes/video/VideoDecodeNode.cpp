@@ -8,6 +8,7 @@
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/sync/MediaCanonicalVideoFrameBuffer.h"
 #include "internal/graph/sync/lineage/MediaFfmpegLineageToken.h"
+#include "internal/graph/nodes/video/MediaVideoFrameContractValidator.h"
 
 extern "C" {
 #include <libavutil/error.h>
@@ -125,14 +126,36 @@ bool VideoDecodeNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) const
                         : std::nullopt);
 }
 
-::media::Status VideoDecodeNode::start(MediaGraphExecutionContext& context) { resetRuntimeState(); return FFmpegCodecNodeRuntime::start(context); }
-::media::Status VideoDecodeNode::stop(MediaGraphExecutionContext& context) { auto status = FFmpegCodecNodeRuntime::stop(context); resetRuntimeState(); return status; }
+::media::Status VideoDecodeNode::start(MediaGraphExecutionContext& context)
+{
+    resetRuntimeState();
+    auto contract = MediaVideoFrameContractValidator::contractFromOptions(
+        nodeOptions(context), "decoder.pipeline.output", "VideoDecodeNode");
+    if (!contract) return ::media::Status::failure(contract.error());
+    m_outputContract = std::move(contract).value();
+    return FFmpegCodecNodeRuntime::start(context);
+}
+::media::Status VideoDecodeNode::stop(MediaGraphExecutionContext& context)
+{
+    std::ostringstream summary;
+    summary << "video_decode.zero_copy_summary drm_prime=" << m_drmPrimeFrames
+            << " software_frame=" << m_softwareFrames;
+    mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+                            MediaGraphDiagnosticPhase::RuntimeLifecycle,
+                            summary.str());
+    auto status = FFmpegCodecNodeRuntime::stop(context);
+    resetRuntimeState();
+    return status;
+}
 void VideoDecodeNode::abort(MediaGraphExecutionContext& context) noexcept { FFmpegCodecNodeRuntime::abort(context); resetRuntimeState(); }
 void VideoDecodeNode::resetRuntimeState() noexcept
 {
     m_firstPacketDiagnosticEmitted = false;
     m_firstSubmitDiagnosticEmitted = false;
     m_firstFrameDiagnosticEmitted = false;
+    m_outputContract.reset();
+    m_drmPrimeFrames = 0;
+    m_softwareFrames = 0;
     m_lineageState->resetForLifecycle();
 }
 
@@ -319,11 +342,19 @@ void VideoDecodeNode::resetRuntimeState() noexcept
         if (ret < 0) {
             return ::media::Result<bool>::failure(FFmpegGraphError::fromCode(ret, "avcodec_receive_frame(video)"));
         }
+        if (!m_outputContract) {
+            return ::media::Result<bool>::failure(
+                ::media::ErrorInfo::notInitialized("VideoDecodeNode output frame contract is not bound"));
+        }
+        auto facts = MediaVideoFrameContractValidator::validate(
+            *frame, *m_outputContract, "VideoDecodeNode decode output");
+        if (!facts) return ::media::Result<bool>::failure(facts.error());
+        m_drmPrimeFrames += facts.value().drmPrime ? 1U : 0U;
+        m_softwareFrames += facts.value().software ? 1U : 0U;
         if (!m_firstFrameDiagnosticEmitted) {
             std::ostringstream out;
-            out << "video_decode_trace stage=first_frame pts=" << frame->pts
-                << " format=" << frame->format
-                << " size=" << frame->width << 'x' << frame->height;
+            out << "video_decode_trace stage=first_frame pts=" << frame->pts << ' '
+                << MediaVideoFrameContractValidator::describe(*frame, facts.value());
             mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
                                     MediaGraphDiagnosticPhase::RuntimeNode,
                                     out.str());

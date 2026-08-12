@@ -59,6 +59,13 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
     if (auto status = setOption(graph, nodeId, prefix + ".pixel_format", contract->pixelFormat); !status) return status;
     if (auto status = setOption(graph, nodeId, prefix + ".surface_pixel_format", contract->surfacePixelFormat); !status) return status;
     if (auto status = setOption(graph, nodeId, prefix + ".frames_context_name", contract->framesContextName); !status) return status;
+    if (!contract->size.isValid()) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MediaVideoPlanOptionApplier requires valid frame-contract dimensions"));
+    }
+    if (auto status = setOption(graph, nodeId, prefix + ".width", std::to_string(contract->size.width)); !status) return status;
+    if (auto status = setOption(graph, nodeId, prefix + ".height", std::to_string(contract->size.height)); !status) return status;
     if (auto status = setOption(graph, nodeId, prefix + ".transfer_direction", transferDirectionName(contract->transferDirection)); !status) return status;
     if (auto status = setOption(graph, nodeId, prefix + ".zero_copy", boolOption(contract->zeroCopyPreferred)); !status) return status;
     if (auto status = setOption(graph, nodeId, prefix + ".requires_hw_device_ctx", boolOption(contract->requiresHardwareDeviceContext)); !status) return status;

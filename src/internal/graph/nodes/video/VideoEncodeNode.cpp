@@ -7,6 +7,7 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegGraphError.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegPacketView.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
+#include "internal/graph/nodes/video/MediaVideoFrameContractValidator.h"
 #include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
 #include "internal/graph/sync/lineage/MediaFfmpegLineageToken.h"
 
@@ -21,6 +22,31 @@ extern "C" {
 #include <utility>
 
 namespace media::ffmpeg::graph {
+namespace {
+
+::media::Status rescaleFrameForEncoder(AVFrame& frame,
+                                       const MediaRational& source,
+                                       AVRational target)
+{
+    if (!source.isKnown() || target.num <= 0 || target.den <= 0) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "VideoEncodeNode requires explicit source and encoder time bases"));
+    }
+    const AVRational sourceTimeBase{source.num, source.den};
+    if (frame.pts != AV_NOPTS_VALUE) {
+        frame.pts = av_rescale_q(frame.pts, sourceTimeBase, target);
+    }
+    if (frame.pkt_dts != AV_NOPTS_VALUE) {
+        frame.pkt_dts = av_rescale_q(frame.pkt_dts, sourceTimeBase, target);
+    }
+    if (frame.duration > 0) {
+        frame.duration = av_rescale_q(frame.duration, sourceTimeBase, target);
+    }
+    return ::media::Status::success();
+}
+
+} // namespace
 
 VideoEncodeLineageState::VideoEncodeLineageState(
     std::shared_ptr<MediaCodecLineageRegistry> registry,
@@ -81,11 +107,6 @@ std::string optionValue(const MediaNodeOptions* options, const std::string& key,
     return options ? options->value(key, std::move(missingValue)) : std::move(missingValue);
 }
 
-bool plannedHardwareEncoder(const MediaNodeOptions* options)
-{
-    return optionValue(options, "encoder.pipeline.frame_kind") == "hardware";
-}
-
 std::string pixelFormatName(int format)
 {
     const char* name = av_get_pix_fmt_name(static_cast<AVPixelFormat>(format));
@@ -111,7 +132,7 @@ void encodeLog(MediaGraphDiagnosticLevel level, const std::string& message)
                             std::string("video_encode.") + message);
 }
 
-::media::Status validateFrameAgainstPlan(const MediaNodeOptions* options,
+::media::Status validateEncoderContextAgainstPlan(const MediaHardwareDescriptor& contract,
                                          const AVCodecContext* encoderContext,
                                          const AVFrame* frame)
 {
@@ -120,18 +141,9 @@ void encodeLog(MediaGraphDiagnosticLevel level, const std::string& message)
             ::media::ErrorInfo::invalidArgument("VideoEncodeNode requires valid encoder context and frame"));
     }
 
-    if (!plannedHardwareEncoder(options)) {
-        return ::media::Status::success();
-    }
-
-    if (!encoderContext->hw_frames_ctx) {
+    if (contract.requiresHardwareFramesContext && !encoderContext->hw_frames_ctx) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("VideoEncodeNode planner requires hardware encoder but encoder hw_frames_ctx is not set"));
-    }
-
-    if (!frame->hw_frames_ctx) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("VideoEncodeNode planner requires hardware encoder but input frame is not hardware-backed"));
     }
 
     if (encoderContext->pix_fmt != AV_PIX_FMT_NONE && frame->format != encoderContext->pix_fmt) {
@@ -204,6 +216,10 @@ bool VideoEncodeNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) const
 ::media::Status VideoEncodeNode::start(MediaGraphExecutionContext& context)
 {
     resetRuntimeState();
+    auto contract = MediaVideoFrameContractValidator::contractFromOptions(
+        nodeOptions(context), "encoder.pipeline.input", "VideoEncodeNode");
+    if (!contract) return ::media::Status::failure(contract.error());
+    m_inputContract = std::move(contract).value();
     if (m_lineageRegistry) {
         auto forceKeyFrame = requiredBoolNodeOption(
             nodeOptions(context), "VideoEncodeNode",
@@ -224,6 +240,9 @@ void VideoEncodeNode::resetRuntimeState() noexcept
     m_firstPacketDiagnosticEmitted = false;
     m_sendWouldBlock.reset();
     m_forceGenerationStartKeyFrame.reset();
+    m_inputContract.reset();
+    m_drmPrimeFrames = 0;
+    m_softwareFrames = 0;
     m_lineageState->resetForLifecycle();
 }
 
@@ -315,14 +334,33 @@ void VideoEncodeNode::resetRuntimeState() noexcept
             ::media::ErrorInfo::invalidArgument("VideoEncodeNode expected frame buffer"));
     }
 
-    auto validateStatus = validateFrameAgainstPlan(nodeOptions(context), codecContext(), frame);
+    if (!m_inputContract) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            ::media::ErrorInfo::notInitialized("VideoEncodeNode input frame contract is not bound"));
+    }
+    auto validateStatus = validateEncoderContextAgainstPlan(*m_inputContract, codecContext(), frame);
     if (!validateStatus) {
         return ::media::Result<MediaNodeProcessResult>::failure(validateStatus.error());
+    }
+    auto facts = MediaVideoFrameContractValidator::validate(
+        *frame, *m_inputContract, "VideoEncodeNode encode input");
+    if (!facts) return ::media::Result<MediaNodeProcessResult>::failure(facts.error());
+    m_drmPrimeFrames += facts.value().drmPrime ? 1U : 0U;
+    m_softwareFrames += facts.value().software ? 1U : 0U;
+    if (!m_firstFrameDiagnosticEmitted) {
+        encodeLog(MediaGraphDiagnosticLevel::State,
+                  "input_contract " + MediaVideoFrameContractValidator::describe(*frame, facts.value()));
     }
     ::media::ffmpeg::FramePtr pendingFrame(av_frame_clone(frame));
     if (!pendingFrame) {
         return ::media::Result<MediaNodeProcessResult>::failure(
             ::media::ErrorInfo::allocationFailed("VideoEncodeNode failed to clone input frame"));
+    }
+    auto rescaleStatus = rescaleFrameForEncoder(
+        *pendingFrame, buffer->timeDescriptor().timeBase, codecContext()->time_base);
+    if (!rescaleStatus) {
+        return ::media::Result<MediaNodeProcessResult>::failure(
+            rescaleStatus.error());
     }
     std::shared_ptr<const MediaCanonicalLineage> pendingLineage;
     if (m_lineageRegistry) {
@@ -451,6 +489,12 @@ void VideoEncodeNode::resetRuntimeState() noexcept
             return status;
         }
     }
+    std::ostringstream summary;
+    summary << "video_encode.zero_copy_summary drm_prime=" << m_drmPrimeFrames
+            << " software_frame=" << m_softwareFrames;
+    mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+                            MediaGraphDiagnosticPhase::RuntimeLifecycle,
+                            summary.str());
     auto status = FFmpegCodecNodeRuntime::stop(context);
     resetRuntimeState();
     return status;

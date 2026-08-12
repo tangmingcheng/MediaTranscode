@@ -3,6 +3,7 @@
 #include "internal/graph/builder/video/VideoFilterGraphBuilder.h"
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/nodes/video/VideoMonotonicTimestamp.h"
+#include "internal/graph/nodes/video/MediaVideoFrameContractValidator.h"
 #include "internal/graph/runtime/buffer/FFmpegCodecContextBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegFrameView.h"
@@ -193,8 +194,36 @@ bool VideoFilterNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) const
                         : std::nullopt);
 }
 
-::media::Status VideoFilterNode::start(MediaGraphExecutionContext& context) { resetRuntimeState(); return FFmpegNodeRuntime::start(context); }
-::media::Status VideoFilterNode::stop(MediaGraphExecutionContext& context) { if (m_preparationCapability) m_preparationCapability->cancel(); auto status = FFmpegNodeRuntime::stop(context); resetRuntimeState(); return status; }
+::media::Status VideoFilterNode::start(MediaGraphExecutionContext& context)
+{
+    resetRuntimeState();
+    auto input = MediaVideoFrameContractValidator::contractFromOptions(
+        nodeOptions(context), "filter.pipeline.input", "VideoFilterNode");
+    auto output = MediaVideoFrameContractValidator::contractFromOptions(
+        nodeOptions(context), "filter.pipeline.output", "VideoFilterNode");
+    if (!input) return ::media::Status::failure(input.error());
+    if (!output) return ::media::Status::failure(output.error());
+    m_inputContract = std::move(input).value();
+    m_outputContract = std::move(output).value();
+    m_rgaFilter = nodeOptions(context)->value(
+        "filter.pipeline.filter").starts_with("scale_rkrga=");
+    return FFmpegNodeRuntime::start(context);
+}
+::media::Status VideoFilterNode::stop(MediaGraphExecutionContext& context)
+{
+    if (m_preparationCapability) m_preparationCapability->cancel();
+    std::ostringstream summary;
+    summary << "video_filter.zero_copy_summary drm_prime_input=" << m_drmPrimeInputFrames
+            << " drm_prime_output=" << m_drmPrimeOutputFrames
+            << " rga=" << m_rgaFrames
+            << " software_frame=" << m_softwareFrames;
+    mediaGraphDiagnosticLog(MediaGraphDiagnosticLevel::State,
+                            MediaGraphDiagnosticPhase::RuntimeLifecycle,
+                            summary.str());
+    auto status = FFmpegNodeRuntime::stop(context);
+    resetRuntimeState();
+    return status;
+}
 void VideoFilterNode::abort(MediaGraphExecutionContext& context) noexcept { if (m_preparationCapability) m_preparationCapability->cancel(); FFmpegNodeRuntime::abort(context); resetRuntimeState(); }
 void VideoFilterNode::resetRuntimeState() noexcept
 {
@@ -207,6 +236,13 @@ void VideoFilterNode::resetRuntimeState() noexcept
     m_preparationFeedArmed = false;
     m_firstInputDiagnosticEmitted = false;
     m_firstOutputDiagnosticEmitted = false;
+    m_inputContract.reset();
+    m_outputContract.reset();
+    m_drmPrimeInputFrames = 0;
+    m_drmPrimeOutputFrames = 0;
+    m_rgaFrames = 0;
+    m_softwareFrames = 0;
+    m_rgaFilter = false;
 }
 
 ::media::Result<MediaNodeProcessResult> VideoFilterNode::onProcess(MediaGraphExecutionContext& context)
@@ -521,6 +557,19 @@ void VideoFilterNode::resetRuntimeState() noexcept
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument("VideoFilterNode expected frame buffer"));
     }
+    if (!m_inputContract) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::notInitialized("VideoFilterNode input frame contract is not bound"));
+    }
+    auto inputFacts = MediaVideoFrameContractValidator::validate(
+        *frame, *m_inputContract, "VideoFilterNode filter input");
+    if (!inputFacts) return ::media::Status::failure(inputFacts.error());
+    m_drmPrimeInputFrames += inputFacts.value().drmPrime ? 1U : 0U;
+    m_softwareFrames += inputFacts.value().software ? 1U : 0U;
+    if (!m_firstInputDiagnosticEmitted) {
+        filterLog(MediaGraphDiagnosticLevel::State,
+                  "input_contract " + MediaVideoFrameContractValidator::describe(*frame, inputFacts.value()));
+    }
 
     ::media::ffmpeg::FramePtr pendingFrame(av_frame_clone(frame));
     if (!pendingFrame) {
@@ -637,6 +686,16 @@ void VideoFilterNode::resetRuntimeState() noexcept
 
 ::media::Status VideoFilterNode::emitFrame(MediaGraphExecutionContext& context, ::media::ffmpeg::FramePtr frame)
 {
+    if (!m_outputContract) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::notInitialized("VideoFilterNode output frame contract is not bound"));
+    }
+    auto outputFacts = MediaVideoFrameContractValidator::validate(
+        *frame, *m_outputContract, "VideoFilterNode filter output");
+    if (!outputFacts) return ::media::Status::failure(outputFacts.error());
+    m_drmPrimeOutputFrames += outputFacts.value().drmPrime ? 1U : 0U;
+    m_rgaFrames += m_rgaFilter ? 1U : 0U;
+    m_softwareFrames += outputFacts.value().software ? 1U : 0U;
     std::shared_ptr<const MediaCanonicalLineage> lineage;
     if (m_lineageRegistry) {
         auto resolved = m_lineageRegistry->resolveOutput(frame->opaque_ref);
@@ -683,7 +742,7 @@ void VideoFilterNode::resetRuntimeState() noexcept
     if (status && !m_firstOutputDiagnosticEmitted) {
         filterLog(MediaGraphDiagnosticLevel::State,
                   "trace stage=first_output " +
-                      mediaGraphDiagnosticDescribeBuffer(output));
+                      MediaVideoFrameContractValidator::describe(*outputFrame, outputFacts.value()));
         m_firstOutputDiagnosticEmitted = true;
     }
     return status;

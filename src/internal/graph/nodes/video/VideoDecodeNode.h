@@ -5,6 +5,7 @@
 #include "internal/graph/runtime/ffmpeg/MediaVideoDecoderCodecApi.h"
 #include "internal/graph/runtime/lifecycle/MediaInputTerminalTracker.h"
 #include "internal/graph/sync/lineage/MediaVideoLineageState.h"
+#include "internal/graph/model/MediaHardwareDescriptor.h"
 
 #include <set>
 #include <string_view>
@@ -80,6 +81,9 @@ private:
     bool m_firstPacketDiagnosticEmitted = false;
     bool m_firstSubmitDiagnosticEmitted = false;
     bool m_firstFrameDiagnosticEmitted = false;
+    std::optional<MediaHardwareDescriptor> m_outputContract;
+    std::uint64_t m_drmPrimeFrames = 0;
+    std::uint64_t m_softwareFrames = 0;
 };
 
 } // namespace media::ffmpeg::graph

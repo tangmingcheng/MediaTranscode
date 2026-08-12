@@ -258,6 +258,7 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
     encoderContext->width = targetWidth;
     encoderContext->height = targetHeight;
     encoderContext->pix_fmt = formatPlan.encoderPixelFormat;
+    encoderContext->sw_pix_fmt = formatPlan.surfaceSoftwareFormat;
     encoderContext->time_base = AVRational{ frameRate.den, frameRate.num };
     encoderContext->framerate = frameRate;
     encoderContext->sample_aspect_ratio = AVRational{ request.sourceFormat.video.sampleAspectRatio.num,

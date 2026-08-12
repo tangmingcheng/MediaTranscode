@@ -257,7 +257,8 @@ MediaPipelineStagePlan makeFilterStage(std::string componentName,
 MediaPipelineChainPlan makeRawChain(std::string label,
                                     MediaPipelineStagePlan decoder,
                                     MediaPipelineStagePlan filter,
-                                    MediaPipelineStagePlan encoder)
+                                    MediaPipelineStagePlan encoder,
+                                    const MediaPipelinePlannerOptions& options)
 {
     MediaPipelineChainPlan chain;
     chain.label = std::move(label);
@@ -266,6 +267,15 @@ MediaPipelineChainPlan makeRawChain(std::string label,
     chain.encoder = std::move(encoder);
     chain.filterActive = !chain.filter.filterName.empty();
     chain.transferDirection = MediaHardwareTransferDirection::None;
+
+    const MediaSize sourceSize{options.probeWidth, options.probeHeight};
+    const MediaSize outputSize = targetResizeRequested(options)
+        ? MediaSize{options.targetWidth, options.targetHeight}
+        : sourceSize;
+    if (chain.decoder.outputFrame) chain.decoder.outputFrame->size = sourceSize;
+    if (chain.filter.inputFrame) chain.filter.inputFrame->size = sourceSize;
+    if (chain.filter.outputFrame) chain.filter.outputFrame->size = outputSize;
+    if (chain.encoder.inputFrame) chain.encoder.inputFrame->size = outputSize;
 
     return chain;
 }
@@ -284,7 +294,7 @@ std::vector<MediaPipelineChainPlan> MediaVideoCapabilityScanner::enumerateTransc
                    MediaPipelineStagePlan encoder)
     {
         chains.push_back(makeRawChain(std::move(label), std::move(decoder), std::move(filter),
-                                      std::move(encoder)));
+                                      std::move(encoder), options));
     };
 
     if (!options.disableHardware)

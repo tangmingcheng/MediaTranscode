@@ -5,6 +5,7 @@
 #include "internal/graph/runtime/ffmpeg/MediaVideoEncoderCodecApi.h"
 #include "internal/graph/runtime/lifecycle/MediaInputTerminalTracker.h"
 #include "internal/graph/sync/lineage/MediaVideoLineageState.h"
+#include "internal/graph/model/MediaHardwareDescriptor.h"
 
 #include <set>
 #include <string_view>
@@ -86,6 +87,9 @@ private:
     std::shared_ptr<MediaCodecLineageRegistry> m_lineageRegistry;
     std::shared_ptr<MediaVideoEncoderCodecApi> m_codecApi;
     std::shared_ptr<VideoEncodeLineageState> m_lineageState;
+    std::optional<MediaHardwareDescriptor> m_inputContract;
+    std::uint64_t m_drmPrimeFrames = 0;
+    std::uint64_t m_softwareFrames = 0;
 };
 
 } // namespace media::ffmpeg::graph

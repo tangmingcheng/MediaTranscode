@@ -96,9 +96,13 @@ MediaHardwareCapability validateInternallyManagedRkmppChain(
         pixelFormat(chain.decoder.outputFrame->pixelFormat);
     const AVPixelFormat encoderFormat =
         pixelFormat(chain.encoder.inputFrame->pixelFormat);
+    const AVPixelFormat encoderSurfaceFormat =
+        pixelFormat(chain.encoder.inputFrame->surfacePixelFormat);
     if (decoderFormat != AV_PIX_FMT_DRM_PRIME ||
-        encoderFormat != AV_PIX_FMT_DRM_PRIME) {
-        return unavailable("RKMPP codecs require advertised DRM PRIME frame formats");
+        encoderFormat != AV_PIX_FMT_DRM_PRIME ||
+        encoderSurfaceFormat == AV_PIX_FMT_NONE) {
+        return unavailable(
+            "RKMPP codecs require advertised DRM PRIME frames and an explicit surface format");
     }
 
     const AVCodec* decoder =
@@ -148,6 +152,7 @@ MediaHardwareCapability validateInternallyManagedRkmppChain(
     encoderContext->height =
         options.targetHeight > 0 ? options.targetHeight : options.probeHeight;
     encoderContext->pix_fmt = encoderFormat;
+    encoderContext->sw_pix_fmt = encoderSurfaceFormat;
     encoderContext->time_base =
         AVRational{options.probeFrameRate.den, options.probeFrameRate.num};
     encoderContext->framerate =
@@ -275,6 +280,7 @@ MediaHardwareCapability validateCompleteChain(
     encoderContext->width = outputWidth;
     encoderContext->height = outputHeight;
     encoderContext->pix_fmt = encoderFormat;
+    encoderContext->sw_pix_fmt = surfaceFormat;
     encoderContext->time_base =
         AVRational{options.probeFrameRate.den, options.probeFrameRate.num};
     encoderContext->framerate =

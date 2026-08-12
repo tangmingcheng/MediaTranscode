@@ -7,6 +7,7 @@
 #include "internal/graph/sync/lineage/MediaVideoLineageState.h"
 #include "internal/graph/sync/startup/MediaAvStartupVideoPreparationCapability.h"
 #include "internal/graph/runtime/channel/MediaReservedOutputTransaction.h"
+#include "internal/graph/model/MediaHardwareDescriptor.h"
 
 #include <cstdint>
 #include <optional>
@@ -114,6 +115,13 @@ private:
     bool m_preparationFeedArmed = false;
     bool m_firstInputDiagnosticEmitted = false;
     bool m_firstOutputDiagnosticEmitted = false;
+    std::optional<MediaHardwareDescriptor> m_inputContract;
+    std::optional<MediaHardwareDescriptor> m_outputContract;
+    std::uint64_t m_drmPrimeInputFrames = 0;
+    std::uint64_t m_drmPrimeOutputFrames = 0;
+    std::uint64_t m_rgaFrames = 0;
+    std::uint64_t m_softwareFrames = 0;
+    bool m_rgaFilter = false;
 };
 
 } // namespace media::ffmpeg::graph
