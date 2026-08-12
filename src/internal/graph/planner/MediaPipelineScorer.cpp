@@ -3,7 +3,6 @@
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 
 #include <algorithm>
-#include <cctype>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -19,14 +18,6 @@ constexpr int kFullHardwareSameDeviceStageScore = 900;
 constexpr int kFullHardwareTransferStageScore = 800;
 constexpr int kMixedHardwareStageScore = 650;
 constexpr int kSoftwareStageScore = 300;
-
-std::string lowerCopy(std::string value)
-{
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-    });
-    return value;
-}
 
 bool sameHardwareDevice(const MediaPipelineChainPlan& chain, const MediaPipelinePlannerOptions& options) noexcept
 {
@@ -57,17 +48,6 @@ std::string stageDisplayName(const MediaPipelineStagePlan& stage)
         return stage.filterName;
     }
     return stage.componentName;
-}
-
-bool preferredHardwareMatch(const MediaPipelineChainPlan& chain,
-                            const MediaPipelinePlannerOptions& options)
-{
-    const std::string preferred = lowerCopy(options.preferredHardware);
-    if (preferred.empty() || preferred == "auto" || !chain.sameHardwareDevice) {
-        return false;
-    }
-
-    return lowerCopy(mediaHardwareDeviceKindName(chain.decoder.deviceKind)) == preferred;
 }
 
 int availableStageSemanticScore(const MediaPipelineStagePlan& stage,
@@ -217,10 +197,6 @@ MediaPipelineChainPlan MediaPipelineScorer::scoreChain(MediaPipelineChainPlan ch
                   declaredStagePriority(chain, options);
     if (options.filterRequired) {
         chain.score += availableStageSemanticScore(chain.filter, chain);
-    }
-
-    if (preferredHardwareMatch(chain, options)) {
-        chain.score += 100;
     }
 
     chain.reason = availableReason(chain, options);

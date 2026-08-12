@@ -72,13 +72,13 @@ struct MediaPipelinePlannerOptions {
     bool allowPacketCopy;
     std::string outputPath;
     std::string outputCodecName;
-    std::string preferredHardware;
     int probeWidth = 0;
     int probeHeight = 0;
     MediaRational probeFrameRate;
     int targetWidth = 0;
     int targetHeight = 0;
     bool filterRequired;
+    MediaHardwareBackendRequest hardwareBackend = MediaHardwareBackendRequest::Auto;
     bool disableHardware;
     bool diagnosticLogEnabled = false;
     std::string rtspTransport;

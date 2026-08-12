@@ -2,6 +2,7 @@
 
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/planner/MediaPipelineCapabilityScanner.h"
+#include "internal/graph/planner/MediaPipelineHardwareBackendConstraint.h"
 #include "internal/graph/planner/MediaPipelineScorer.h"
 #include "internal/graph/planner/capability/MediaHardwareCapabilityProbe.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
@@ -78,6 +79,11 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
 ::media::Status validateCommonPlannerOptions(const MediaPipelinePlannerOptions& options,
                                              const std::string& context)
 {
+    auto backendValidation = MediaPipelineHardwareBackendConstraint::validate(
+        options.hardwareBackend, options.disableHardware, context);
+    if (!backendValidation) {
+        return backendValidation;
+    }
     if (options.targetWidth < 0 || options.targetHeight < 0) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument(context + " requires non-negative target dimensions"));
@@ -85,15 +91,6 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
     if ((options.targetWidth > 0) != (options.targetHeight > 0)) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument(context + " requires target width and height together"));
-    }
-    if (options.preferredHardware.empty()) {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument(context + " requires explicit hardware preference"));
-    }
-    if (options.disableHardware &&
-        options.preferredHardware != "software") {
-        return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument(context + " requires software hardware preference when GPU is disabled"));
     }
     return ::media::Status::success();
 }
@@ -139,7 +136,9 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
     }
 
     const bool resizeRequested = options.targetWidth > 0 || options.targetHeight > 0;
-    const bool canCopyPackets = options.allowPacketCopy &&
+    const bool canCopyPackets =
+        options.hardwareBackend == MediaHardwareBackendRequest::Auto &&
+        options.allowPacketCopy &&
         !resizeRequested &&
         !options.filterRequired &&
         plan.inputCodecName == plan.outputCodecName;
@@ -203,6 +202,11 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
             continue;
         }
 
+        if (!MediaPipelineHardwareBackendConstraint::accepts(
+                candidate, options.filterRequired, options.hardwareBackend)) {
+            continue;
+        }
+
         if (options.disableHardware) {
             if (isSoftwareChain(candidate, options)) {
                 return ::media::Result<std::size_t>::success(index);
@@ -219,7 +223,9 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
 
     return ::media::Result<std::size_t>::failure(
         ::media::ErrorInfo::hardwareUnavailable(
-            options.disableHardware
+            options.hardwareBackend == MediaHardwareBackendRequest::RKMPP
+                ? "no complete RKMPP decoder/filter/encoder chain found"
+                : options.disableHardware
                 ? "no available explicit software decoder/filter/encoder chain found"
                 : "no structurally available hardware decoder/filter/encoder chain found"));
 }

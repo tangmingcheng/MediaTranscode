@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/graph/model/MediaHardwareBackendRequest.h"
 #include "internal/graph/model/MediaTranscodeStreamSet.h"
 
 #include <cstddef>
@@ -126,6 +127,7 @@ struct MediaAudioTranscodeParameters {
 
 struct MediaTranscodeExecutionParameters {
     std::optional<MediaTranscodeStreamSet> streamSet;
+    MediaHardwareBackendRequest hardwareBackend = MediaHardwareBackendRequest::Auto;
     bool disableHardware = false;
     bool diagnosticLogEnabled = true;
 };

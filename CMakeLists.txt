@@ -29,6 +29,8 @@ set(MEDIA_TRANSCODE_GRAPH_PLANNER_SOURCES
     src/internal/graph/planner/MediaPipelineAudioSourceProbe.h
     src/internal/graph/planner/MediaPipelineCapabilityScanner.cpp
     src/internal/graph/planner/MediaPipelineCapabilityScanner.h
+    src/internal/graph/planner/MediaPipelineHardwareBackendConstraint.cpp
+    src/internal/graph/planner/MediaPipelineHardwareBackendConstraint.h
     src/internal/graph/planner/capability/MediaHardwareCapabilityProbe.cpp
     src/internal/graph/planner/capability/MediaHardwareCapabilityProbe.h
     src/internal/graph/planner/capability/MediaInputCapabilityProbe.cpp

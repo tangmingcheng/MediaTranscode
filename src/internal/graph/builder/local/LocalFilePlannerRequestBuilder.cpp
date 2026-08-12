@@ -1,5 +1,7 @@
 #include "internal/graph/builder/local/LocalFilePlannerRequestBuilder.h"
 
+#include "internal/graph/planner/MediaPipelineHardwareBackendConstraint.h"
+
 #include <utility>
 
 namespace media::ffmpeg::graph {
@@ -60,6 +62,15 @@ bool encodeOptionsRequested(const MediaVideoTranscodeParameters& video) noexcept
         return ::media::Result<MediaPipelinePlannerOptions>::failure(resizeValidation.error());
     }
 
+    auto backendValidation = MediaPipelineHardwareBackendConstraint::validate(
+        parameters.execution.hardwareBackend,
+        parameters.execution.disableHardware,
+        "LocalFilePlannerRequestBuilder");
+    if (!backendValidation) {
+        return ::media::Result<MediaPipelinePlannerOptions>::failure(
+            backendValidation.error());
+    }
+
     MediaPipelinePlannerOptions plannerOptions(!video.resizeRequested() && !encodeOptionsRequested(video),
                                                video.resizeRequested(),
                                                parameters.execution.disableHardware,
@@ -75,8 +86,7 @@ bool encodeOptionsRequested(const MediaVideoTranscodeParameters& video) noexcept
         plannerOptions.probeFrameRate = MediaRational{
             *video.frameRate.numerator, *video.frameRate.denominator};
     }
-    plannerOptions.preferredHardware =
-        plannerOptions.disableHardware ? "software" : "auto";
+    plannerOptions.hardwareBackend = parameters.execution.hardwareBackend;
     plannerOptions.diagnosticLogEnabled = parameters.execution.diagnosticLogEnabled;
     return ::media::Result<MediaPipelinePlannerOptions>::success(std::move(plannerOptions));
 }

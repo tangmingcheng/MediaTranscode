@@ -37,7 +37,7 @@ src/internal/graph
 
 完成修改前，应运行当前环境下最强可用验证。
 
-生产核心修改必须由真实 CLI、真实媒体流和生产 DAG 的失败证据驱动。仓库不保留 CI、CTest、unit、integration、acceptance、hardware 或 performance 测试体系，不得新增、恢复或为了自动化测试适配生产核心。必要时允许新增仅供本地验证的临时测试，但不得纳入版本库；核心代码修改完成后必须删除，并确认工作树中没有临时测试残留。
+生产核心修改必须由真实 CLI、真实媒体流和生产 DAG 的失败证据驱动。仓库不保留 CI、CTest、unit、integration、acceptance、hardware 或 performance 测试体系，不得新增、恢复或为了自动化测试适配生产核心。允许使用临时 TDD 测试进行红绿验证，但临时测试不得纳入版本库；对应功能完成后必须删除，并在交付前确认工作树中没有测试代码、测试基础设施或其他临时测试残留。
 
 唯一验收标准是 local CLI、realtime CLI 的真实媒体链路、FFmpeg/VLC 进程与画面观察、运行时内部数据、内存趋势和持续 A/V 漂移 telemetry。自动化测试不能替代真实 CLI 验收。
 

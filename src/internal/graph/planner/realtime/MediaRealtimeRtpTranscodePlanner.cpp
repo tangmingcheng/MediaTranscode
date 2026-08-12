@@ -134,11 +134,6 @@ preparedDemuxTimestampFacts(
 constexpr int RealtimeNoBidirectionalFrames = 0;
 constexpr int RealtimeDefaultGopFrames = 30;
 
-std::string planPreferredHardware(const MediaTranscodeExecutionParameters& execution)
-{
-    return execution.disableHardware ? "software" : "auto";
-}
-
 MediaVideoTranscodeParameters planRealtimeVideoParameters(const MediaVideoTranscodeParameters& requested)
 {
     MediaVideoTranscodeParameters planned = requested;
@@ -201,7 +196,7 @@ MediaVideoTranscodeParameters planRealtimeVideoParameters(const MediaVideoTransc
         plannerOptions.probeFrameRate = MediaRational{
             *video.frameRate.numerator, *video.frameRate.denominator};
     }
-    plannerOptions.preferredHardware = planPreferredHardware(options.parameters.execution);
+    plannerOptions.hardwareBackend = options.parameters.execution.hardwareBackend;
     plannerOptions.diagnosticLogEnabled = options.parameters.execution.diagnosticLogEnabled;
     plannerOptions.rtspTransport = options.input.rtspTransport;
     plannerOptions.openTimeoutMs = *options.input.openTimeoutMs;
