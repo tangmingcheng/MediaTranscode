@@ -425,6 +425,21 @@ int runRealtimeVideoCli(int argc, char** argv)
         return failResult("realtime video graph preflight", preflightResult);
     }
     MediaRealtimeTranscodePreflight preflight = std::move(preflightResult).value();
+    if (const auto* avRuntime = std::get_if<MediaRealtimeAvSyncRuntimePlan>(
+            &preflight.plan.runtime)) {
+        const auto& audio = avRuntime->audioPipeline;
+        std::cout << "[CLI] audio_plan branch="
+                  << mediaBranchModeName(audio.branchMode)
+                  << " reason=" << audio.reason;
+        if (audio.resolvedOutput) {
+            std::cout << " codec=" << audio.resolvedOutput->codecName();
+            if (audio.resolvedOutput->bitrateKbps()) {
+                std::cout << " bitrate_kbps="
+                          << *audio.resolvedOutput->bitrateKbps();
+            }
+        }
+        std::cout << '\n';
+    }
     const MediaThreadingPolicy threadingPolicy = std::visit(
         [](const auto& runtimePlan) {
             return runtimePlan.threadingPolicy;

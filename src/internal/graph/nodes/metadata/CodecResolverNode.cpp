@@ -177,7 +177,8 @@ MediaNodeKind CodecResolverNode::staticKind() noexcept
     }
 
     decoderContext->pkt_timebase = AVRational{ stream.time.timeBase.num, stream.time.timeBase.den };
-    auto copyOpaque = parseMediaVideoLineageCopyOpaqueOption(options);
+    auto copyOpaque = parseMediaVideoLineageCopyOpaqueOption(
+        options, "video.lineage.decoder_copy_opaque");
     if (!copyOpaque) {
         return ::media::Status::failure(copyOpaque.error());
     }

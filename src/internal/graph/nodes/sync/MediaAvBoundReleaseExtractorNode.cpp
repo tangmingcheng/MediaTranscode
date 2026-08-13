@@ -235,7 +235,7 @@ MediaAvBoundReleaseExtractorNode::onProcess(MediaGraphExecutionContext& context)
         if (phase == MediaAvStartupVideoPreparationPhase::Awaiting ||
             phase == MediaAvStartupVideoPreparationPhase::Feeding ||
             m_prefixReservationPending ||
-            (phase == MediaAvStartupVideoPreparationPhase::FilterReady &&
+        (phase == MediaAvStartupVideoPreparationPhase::OutputReady &&
              !preparation.extractorOutputsReserved)) {
             return processPreparation(context);
         }
@@ -293,7 +293,7 @@ MediaAvBoundReleaseExtractorNode::onProcess(MediaGraphExecutionContext& context)
             m_releaseStaged = false;
             return processProgress();
         }
-        if (phase == MediaAvStartupVideoPreparationPhase::FilterReady &&
+    if (phase == MediaAvStartupVideoPreparationPhase::OutputReady &&
             preparation.anchoredEpoch && preparation.anchoredAudioOrigin &&
             !preparation.extractorOutputsReanchored &&
             m_initialOutputReservation && m_preparationTransaction) {
@@ -483,7 +483,7 @@ MediaAvBoundReleaseExtractorNode::processPreparation(
     if (reservation.value().kind ==
             MediaAvStartupVideoReservationKind::NoReservation) {
         const auto snapshot = m_preparationCapability->snapshot();
-        if (snapshot.phase != MediaAvStartupVideoPreparationPhase::FilterReady)
+        if (snapshot.phase != MediaAvStartupVideoPreparationPhase::OutputReady)
             return processWaiting();
         if (!m_releaseStaged) {
             if (auto staged = stageRelease(

@@ -5,8 +5,13 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <string>
 #include <utility>
+
+#if defined(__linux__)
+#include <pthread.h>
+#endif
 
 namespace media::ffmpeg::graph {
 
@@ -155,6 +160,15 @@ MediaGraphWorker::FailureDisposition MediaGraphWorker::recordFailure(
 
 void MediaGraphWorker::run()
 {
+#if defined(__linux__)
+    char threadName[16]{};
+    std::snprintf(
+        threadName,
+        sizeof(threadName),
+        "mt-n%u",
+        static_cast<unsigned int>(m_node.nodeId().value));
+    pthread_setname_np(pthread_self(), threadName);
+#endif
     m_running = true;
     uint32_t consecutiveErrors = 0;
     m_wakeup.reset();

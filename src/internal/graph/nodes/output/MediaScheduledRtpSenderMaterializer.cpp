@@ -5,6 +5,7 @@
 #include "internal/graph/nodes/output/MediaScheduledRtpCodecParametersMaterializer.h"
 #include "internal/graph/protocol/sdp/MediaAacLatmSdpCodecDescriptionFactory.h"
 #include "internal/graph/protocol/sdp/MediaH264SdpCodecDescriptionFactory.h"
+#include "internal/graph/protocol/sdp/MediaHevcSdpCodecDescriptionFactory.h"
 #include "internal/graph/protocol/sdp/MediaRtpSdpSessionIdentityMaterializer.h"
 
 extern "C" {
@@ -21,7 +22,8 @@ namespace {
 
 ::media::Result<MediaRtpSdpMediaDescription> materializeMediaDescription(
     const MediaScheduledRtpOutputPlan& plan,
-    const AVCodecParameters& parameters)
+    const AVCodecParameters& parameters,
+    std::span<const std::uint8_t> codecConfigurationAccessUnit)
 {
     const bool video = plan.stream == MediaScheduledStream::Video;
     const int channels = video ? 0 : parameters.ch_layout.nb_channels;
@@ -39,7 +41,25 @@ namespace {
             identity.error());
     }
     if (video) {
-        auto codec = MediaH264SdpCodecDescriptionFactory::create(parameters);
+        if (plan.packetization.packetizationMode() ==
+            MediaScheduledRtpPacketizationMode::H264AnnexB) {
+            auto codec = MediaH264SdpCodecDescriptionFactory::create(
+                parameters, codecConfigurationAccessUnit);
+            if (!codec) {
+                return ::media::Result<MediaRtpSdpMediaDescription>::failure(
+                    codec.error());
+            }
+            return MediaRtpSdpMediaDescription::create(
+                std::move(identity).value(), std::move(codec).value());
+        }
+        if (plan.packetization.packetizationMode() !=
+            MediaScheduledRtpPacketizationMode::HevcAnnexB) {
+            return ::media::Result<MediaRtpSdpMediaDescription>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Scheduled video RTP has an unsupported packetization mode"));
+        }
+        auto codec = MediaHevcSdpCodecDescriptionFactory::create(
+            parameters, codecConfigurationAccessUnit);
         if (!codec) {
             return ::media::Result<MediaRtpSdpMediaDescription>::failure(
                 codec.error());
@@ -60,6 +80,7 @@ namespace {
     const MediaScheduledRtpOutputPlan& outputPlan,
     const MediaSeparateRtpSdpRuntimePlan& sdpPlan,
     const AVCodecParameters& parameters,
+    std::span<const std::uint8_t> codecConfigurationAccessUnit,
     const MediaSharedNtpEpoch& sharedNtpEpoch,
     const MediaProtocolOutputActivation& activation)
 {
@@ -68,7 +89,8 @@ namespace {
     if (!session) {
         return ::media::Result<MediaBufferRef>::failure(session.error());
     }
-    auto media = materializeMediaDescription(outputPlan, parameters);
+    auto media = materializeMediaDescription(
+        outputPlan, parameters, codecConfigurationAccessUnit);
     if (!media) {
         return ::media::Result<MediaBufferRef>::failure(media.error());
     }
@@ -170,6 +192,7 @@ MediaScheduledRtpSenderMaterializer::materialize(
     const MediaScheduledRtpOutputPlan& outputPlan,
     const MediaSeparateRtpSdpRuntimePlan& sdpPlan,
     const AVCodecContext& codecContext,
+    const AVPacket* codecConfigurationAccessUnit,
     const MediaSharedNtpEpoch& sharedNtpEpoch,
     const MediaProtocolOutputActivation& activation)
 {
@@ -180,8 +203,15 @@ MediaScheduledRtpSenderMaterializer::materialize(
             MediaScheduledRtpSenderMaterialization>::failure(
             parameters.error());
     }
+    const std::span<const std::uint8_t> configurationBytes =
+        codecConfigurationAccessUnit && codecConfigurationAccessUnit->data &&
+            codecConfigurationAccessUnit->size > 0
+        ? std::span<const std::uint8_t>(
+              codecConfigurationAccessUnit->data,
+              static_cast<std::size_t>(codecConfigurationAccessUnit->size))
+        : std::span<const std::uint8_t>();
     auto description = materializeDescription(
-        outputPlan, sdpPlan, *parameters.value(), sharedNtpEpoch,
+        outputPlan, sdpPlan, *parameters.value(), configurationBytes, sharedNtpEpoch,
         activation);
     if (!description) {
         return ::media::Result<

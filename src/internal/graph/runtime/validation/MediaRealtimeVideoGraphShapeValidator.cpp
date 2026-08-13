@@ -210,8 +210,14 @@ const MediaEdge* exactEdge(
     const auto gate = shape.nodes(MediaNodeKind::PacketStartGate);
     if (decode.size() != 1 || transfer.size() != 1 ||
         timestamp.size() != 1 || frameRate.size() != 1 ||
-        filter.size() != 1 || encode.size() != 1 || gate.size() > 1) {
+        encode.size() != 1 || gate.size() > 1) {
         return invalid("video lineage node cardinality");
+    }
+    auto filterActive = requiredBoolNodeOption(
+        &encode.front()->options, "VideoEncodeNode", "pipeline.filter_active");
+    if (!filterActive ||
+        filter.size() != (filterActive.value() ? 1U : 0U)) {
+        return invalid("video filter cardinality differs from planner product");
     }
 
     const MediaNode& packetTarget = gate.empty()
@@ -248,16 +254,20 @@ const MediaEdge* exactEdge(
         return invalid("post-gate startup packet policy");
     }
 
+    const bool validPreparedFrameEdge = filterActive.value()
+        ? exactEdge(graph, *frameRate.front(), "frame", *filter.front(),
+                    "frame", runtime.lineageEdgePolicies.frame) != nullptr &&
+              exactEdge(graph, *filter.front(), "frame", *encode.front(),
+                        "frame", runtime.lineageEdgePolicies.preparedFrame) != nullptr
+        : exactEdge(graph, *frameRate.front(), "frame", *encode.front(),
+                    "frame", runtime.lineageEdgePolicies.preparedFrame) != nullptr;
     if (!exactEdge(graph, *decode.front(), "frame", *transfer.front(),
                    "frame", runtime.lineageEdgePolicies.frame) ||
         !exactEdge(graph, *transfer.front(), "frame", *timestamp.front(),
                    "frame", runtime.lineageEdgePolicies.frame) ||
         !exactEdge(graph, *timestamp.front(), "frame", *frameRate.front(),
                    "frame", runtime.lineageEdgePolicies.frame) ||
-        !exactEdge(graph, *frameRate.front(), "frame", *filter.front(),
-                   "frame", runtime.lineageEdgePolicies.frame) ||
-        !exactEdge(graph, *filter.front(), "frame", *encode.front(),
-                   "frame", runtime.lineageEdgePolicies.preparedFrame)) {
+        !validPreparedFrameEdge) {
         return invalid("lossless video frame lineage policy");
     }
     return ::media::Status::success();

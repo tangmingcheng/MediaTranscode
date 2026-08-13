@@ -3,18 +3,21 @@
 #include <charconv>
 #include <cstddef>
 #include <string>
+#include <string_view>
 
 namespace media::ffmpeg::graph {
 
 ::media::Result<bool> parseMediaVideoLineageCopyOpaqueOption(
-    const MediaNodeOptions* options)
+    const MediaNodeOptions* options,
+    const std::string_view optionName)
 {
     if (!options) {
         return ::media::Result<bool>::success(false);
     }
     const bool hasCapacity = options->has("video.lineage.capacity");
     const bool hasIdentity = options->has("video.lineage.identity");
-    const bool hasCopyOpaque = options->has("video.lineage.copy_opaque");
+    const std::string copyOpaqueOption(optionName);
+    const bool hasCopyOpaque = options->has(copyOpaqueOption);
     if (!hasCapacity && !hasIdentity && !hasCopyOpaque) {
         return ::media::Result<bool>::success(false);
     }
@@ -30,12 +33,15 @@ namespace media::ffmpeg::graph {
         capacityText.data(), capacityText.data() + capacityText.size(), capacity);
     if (parsed.ec != std::errc{} ||
         parsed.ptr != capacityText.data() + capacityText.size() ||
-        capacity == 0 || options->value("video.lineage.copy_opaque") != "1") {
+        capacity == 0 ||
+        (options->value(copyOpaqueOption) != "1" &&
+         options->value(copyOpaqueOption) != "0")) {
         return ::media::Result<bool>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "Codec lineage COPY_OPAQUE requires positive capacity and explicit value 1"));
+                "Codec lineage transport requires positive capacity and explicit COPY_OPAQUE value"));
     }
-    return ::media::Result<bool>::success(true);
+    return ::media::Result<bool>::success(
+        options->value(copyOpaqueOption) == "1");
 }
 
 } // namespace media::ffmpeg::graph

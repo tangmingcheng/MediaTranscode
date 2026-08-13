@@ -1,6 +1,6 @@
 #include "internal/graph/protocol/mpegts/MediaTsH264AccessUnitFramer.h"
 
-#include "internal/graph/protocol/codec/MediaH264AnnexBAccessUnitValidator.h"
+#include "internal/graph/protocol/codec/MediaAnnexBAccessUnitValidator.h"
 
 #include <algorithm>
 #include <limits>
@@ -115,7 +115,8 @@ MediaTsH264AccessUnitFramer::frame(
     }
 
     if (parameters.h264InputLayout == MediaTsH264InputLayout::AnnexB) {
-        auto valid = MediaH264AnnexBAccessUnitValidator::validate(payload);
+        auto valid = MediaAnnexBAccessUnitValidator::validate(
+            payload, MediaAnnexBCodec::H264);
         if (!valid) return invalid("MPEG-TS H.264 Annex-B access unit is malformed");
         if (!inject) {
             workspace.clear();

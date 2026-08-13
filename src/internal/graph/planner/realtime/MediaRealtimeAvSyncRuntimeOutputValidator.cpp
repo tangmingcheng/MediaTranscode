@@ -148,7 +148,8 @@ bool validRtpStream(
             *runtime.planningFacts.outputVideoRtpPacketization,
             outer.videoPlan.outputCodecName,
             MediaScheduledStream::Video,
-            MediaScheduledRtpPacketizationMode::H264AnnexB,
+            runtime.planningFacts.outputVideoRtpPacketization
+                ->packetizationMode(),
             runtime) ||
         !validRtpStream(
             output.audio, synchronization.audioOutput,

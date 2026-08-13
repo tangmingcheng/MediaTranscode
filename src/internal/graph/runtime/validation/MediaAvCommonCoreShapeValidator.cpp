@@ -141,6 +141,18 @@ const GroupOptionContract* findContract(
     const MediaAvSyncRuntimeBinding& binding)
 {
     const MediaAvSyncGraphShape shape(graph);
+    const auto encoders = shape.nodes(MediaNodeKind::VideoEncode);
+    if (encoders.size() != 1) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "A/V common core requires exactly one video encoder"));
+    }
+    auto filterActive = requiredBoolNodeOption(
+        &encoders.front()->options,
+        "VideoEncodeNode",
+        "pipeline.filter_active");
+    if (!filterActive) {
+        return ::media::Status::failure(filterActive.error());
+    }
     auto cardinality = shape.requireExact({
         {MediaNodeKind::SourceClockStateFanout, 1,
          "source-clock state fanout"},
@@ -162,7 +174,8 @@ const GroupOptionContract* findContract(
         {MediaNodeKind::VideoDecode, 1, "video decoder"},
         {MediaNodeKind::HardwareTransfer, 1, "hardware transfer"},
         {MediaNodeKind::VideoFrameRate, 1, "video frame-rate controller"},
-        {MediaNodeKind::VideoFilter, 1, "video filter"},
+        {MediaNodeKind::VideoFilter, filterActive.value() ? 1u : 0u,
+         "planner-selected video filter"},
         {MediaNodeKind::VideoEncode, 1, "video encoder"},
         {MediaNodeKind::AudioCodecResolver, 1, "audio codec resolver"},
         {MediaNodeKind::AudioDecode, 1, "audio decoder"},

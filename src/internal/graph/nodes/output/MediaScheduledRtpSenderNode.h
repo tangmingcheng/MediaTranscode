@@ -13,6 +13,8 @@
 #include <string_view>
 #include <atomic>
 
+struct AVPacket;
+
 namespace media::ffmpeg::graph {
 
 class MediaAvGenerationPurgeTarget;
@@ -89,7 +91,9 @@ private:
     ::media::Status validatePorts(MediaGraphExecutionContext& context) const;
     ::media::Result<bool> acquireActivation(MediaGraphExecutionContext& context);
     ::media::Result<bool> acquireCodec(MediaGraphExecutionContext& context);
-    ::media::Status openSender();
+    ::media::Status openSender(const AVPacket* codecConfigurationAccessUnit);
+    ::media::Result<bool> acquireCodecConfigurationAccessUnit(
+        MediaGraphExecutionContext& context, std::uint64_t activeGeneration);
     ::media::Result<MediaNodeProcessResult> emitDescription(
         MediaGraphExecutionContext& context);
     ::media::Result<MediaNodeProcessResult> processScheduledInput(
@@ -106,6 +110,7 @@ private:
     std::shared_ptr<MediaScheduledRtpGenerationSessionState> m_sessionState;
     std::shared_ptr<MediaProtocolOutputGenerationState> m_generationState;
     MediaBufferRef m_codec;
+    MediaBufferRef m_codecConfigurationAccessUnit;
     std::unique_ptr<MediaRtpUdpSenderTransport> m_transport;
     std::optional<::media::ErrorInfo> m_terminalFailure;
 };

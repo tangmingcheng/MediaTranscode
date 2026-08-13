@@ -434,6 +434,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
     auto transition = MediaAvGenerationTransitionPlanner::plan(
         adapter,
         *synchronization.sourceClockMode,
+        outer.videoPlan.filterActive,
         *facts.value().acknowledgementTimeout,
         *facts.value().terminalDrainWindow);
     return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::success(
@@ -450,6 +451,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             outer.edgePolicies,
             outer.threadingPolicy,
             *activationOutputLead,
+            outer.videoPlan.filterActive,
             std::move(transition),
             facts.value(),
             correction.value().correction});

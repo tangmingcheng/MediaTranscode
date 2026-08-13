@@ -68,7 +68,7 @@ MediaMpegTsRtpOutputPlan::create(
     return ::media::Result<MediaMpegTsRtpOutputPlan>::success(
         MediaMpegTsRtpOutputPlan(
             std::move(transport), Mp2tPayloadType, Mp2tClockRate,
-            MediaRtpOutputIdentityPlanner::stableNumeric(outputIdentity),
+        MediaRtpOutputIdentityPlanner::stableFfmpegMuxSsrc(outputIdentity),
             MediaRtpOutputIdentityPlanner::stableNumeric(
                 outputIdentity + ".timestamp"),
             MediaRtpOutputIdentityPlanner::stableSequenceNumber(

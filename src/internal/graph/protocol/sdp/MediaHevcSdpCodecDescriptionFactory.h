@@ -9,11 +9,11 @@ struct AVCodecParameters;
 
 namespace media::ffmpeg::graph {
 
-class MediaH264SdpCodecDescriptionFactory final {
+class MediaHevcSdpCodecDescriptionFactory final {
 public:
-    static ::media::Result<MediaH264SdpCodecDescription> create(
+    static ::media::Result<MediaHevcSdpCodecDescription> create(
         const AVCodecParameters& parameters,
-        std::span<const std::uint8_t> codecConfigurationAccessUnit = {});
+        std::span<const std::uint8_t> accessUnitConfiguration);
 };
 
 } // namespace media::ffmpeg::graph

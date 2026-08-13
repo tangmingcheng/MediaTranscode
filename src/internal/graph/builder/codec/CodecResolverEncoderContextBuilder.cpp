@@ -267,7 +267,8 @@ void setPrivateOption(AVCodecContext* context, const std::string& key, const std
     encoderContext->color_primaries = params->color_primaries;
     encoderContext->color_trc = params->color_trc;
     encoderContext->colorspace = params->color_space;
-    auto copyOpaque = parseMediaVideoLineageCopyOpaqueOption(options);
+    auto copyOpaque = parseMediaVideoLineageCopyOpaqueOption(
+        options, "video.lineage.encoder_copy_opaque");
     if (!copyOpaque) {
         return ::media::Result<CodecResolverEncoderContextBuildResult>::failure(
             copyOpaque.error());

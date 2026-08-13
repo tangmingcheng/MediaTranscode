@@ -59,7 +59,7 @@ planSeparateRtp(
         MediaScheduledStream::Video,
         std::move(*output.videoOutput.scheduledTransport),
         *output.videoOutput.scheduledPacketization,
-        MediaRtpOutputIdentityPlanner::stableNumeric(
+        MediaRtpOutputIdentityPlanner::stableFfmpegMuxSsrc(
             identity + ".output.video"),
         MediaRtpOutputIdentityPlanner::stableNumeric(
             identity + ".video.timestamp"),

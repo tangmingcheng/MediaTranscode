@@ -77,13 +77,13 @@ MediaAvStartupVideoPreparationState::reserveNextVideoUnit(
         return VideoReservation::failure(identity.error());
     }
     if (m_phase != MediaAvStartupVideoPreparationPhase::Feeding) {
-        if (m_phase == MediaAvStartupVideoPreparationPhase::FilterReady &&
+    if (m_phase == MediaAvStartupVideoPreparationPhase::OutputReady &&
             !m_reservedVideoUnit) {
             return VideoReservation::success({
                 MediaAvStartupVideoReservationKind::NoReservation,
                 std::nullopt});
         }
-        if (m_phase != MediaAvStartupVideoPreparationPhase::FilterReady) {
+    if (m_phase != MediaAvStartupVideoPreparationPhase::OutputReady) {
             return VideoReservation::failure(
                 failureLocked("video reservation").error());
         }
@@ -113,7 +113,7 @@ MediaAvStartupVideoPreparationState::reserveNextVideoUnit(
     if (auto identity = validateIdentityLocked(generation, releaseIdentity);
         !identity) return identity;
     if ((m_phase != MediaAvStartupVideoPreparationPhase::Feeding &&
-         m_phase != MediaAvStartupVideoPreparationPhase::FilterReady) ||
+         m_phase != MediaAvStartupVideoPreparationPhase::OutputReady) ||
         !m_reservedVideoUnit || *m_reservedVideoUnit != index ||
         index != m_committedVideoUnits) {
         return failureLocked("video reservation commit");
@@ -123,7 +123,7 @@ MediaAvStartupVideoPreparationState::reserveNextVideoUnit(
     return ::media::Status::success();
 }
 
-::media::Status MediaAvStartupVideoPreparationState::markFilterReady(
+::media::Status MediaAvStartupVideoPreparationState::markOutputReady(
     std::uint64_t generation,
     std::uint64_t releaseIdentity,
     MediaOutputCapacityReservationHandle reservation)
@@ -135,11 +135,11 @@ MediaAvStartupVideoPreparationState::reserveNextVideoUnit(
         if (auto identity = validateIdentityLocked(generation, releaseIdentity);
             !identity) return identity;
         if (m_phase != MediaAvStartupVideoPreparationPhase::Feeding ||
-            !reservation.valid() || m_filterOutputReservation.valid()) {
-            return failureLocked("filter readiness");
+            !reservation.valid() || m_outputReservation.valid()) {
+            return failureLocked("output readiness");
         }
-        m_filterOutputReservation = std::move(reservation);
-        m_phase = MediaAvStartupVideoPreparationPhase::FilterReady;
+        m_outputReservation = std::move(reservation);
+        m_phase = MediaAvStartupVideoPreparationPhase::OutputReady;
         wakeup = m_sequencerWakeup.lock();
         extractor = m_extractorWakeup.lock();
     }
@@ -158,7 +158,7 @@ MediaAvStartupVideoPreparationState::reserveNextVideoUnit(
         std::lock_guard<std::mutex> lock(m_mutex);
         if (auto identity = validateIdentityLocked(generation, releaseIdentity);
             !identity) return identity;
-        if (m_phase != MediaAvStartupVideoPreparationPhase::FilterReady ||
+    if (m_phase != MediaAvStartupVideoPreparationPhase::OutputReady ||
             !reservation.valid() || m_extractorOutputsReservation.valid()) {
             return failureLocked("extractor output reservation");
         }
@@ -180,7 +180,7 @@ MediaAvStartupVideoPreparationState::reserveNextVideoUnit(
         std::lock_guard<std::mutex> lock(m_mutex);
         if (auto identity = validateIdentityLocked(generation, releaseIdentity);
             !identity) return identity;
-        if (m_phase != MediaAvStartupVideoPreparationPhase::FilterReady ||
+    if (m_phase != MediaAvStartupVideoPreparationPhase::OutputReady ||
             !m_extractorOutputsReservation.valid() || m_anchoredEpoch ||
             epoch.generation != generation ||
             audioOrigin.generation != generation ||
@@ -206,7 +206,7 @@ MediaAvStartupVideoPreparationState::acknowledgeExtractorReanchor(
         std::lock_guard<std::mutex> lock(m_mutex);
         if (auto identity = validateIdentityLocked(generation, releaseIdentity);
             !identity) return identity;
-        if (m_phase != MediaAvStartupVideoPreparationPhase::FilterReady ||
+    if (m_phase != MediaAvStartupVideoPreparationPhase::OutputReady ||
             !m_anchoredEpoch || !m_anchoredAudioOrigin ||
             m_extractorOutputsReanchored) {
             return failureLocked("extractor reanchor acknowledgement");
@@ -229,20 +229,20 @@ MediaAvStartupVideoPreparationState::acknowledgeExtractorReanchor(
         std::lock_guard<std::mutex> lock(m_mutex);
         if (auto identity = validateIdentityLocked(generation, releaseIdentity);
             !identity) return identity;
-        if (m_phase != MediaAvStartupVideoPreparationPhase::FilterReady ||
-            !m_filterOutputReservation.valid() ||
+    if (m_phase != MediaAvStartupVideoPreparationPhase::OutputReady ||
+        !m_outputReservation.valid() ||
             !m_extractorOutputsReservation.valid() || !m_anchoredEpoch ||
             !m_anchoredAudioOrigin || !m_extractorOutputsReanchored) {
             return failureLocked("release authorization");
         }
         const std::array<MediaOutputCapacityReservationHandle, 2> handles{
-            m_filterOutputReservation, m_extractorOutputsReservation};
+        m_outputReservation, m_extractorOutputsReservation};
         if (auto authorized = MediaReservedOutputTransaction::authorize(
                 handles, activation); !authorized) {
             return authorized;
         }
         m_phase = MediaAvStartupVideoPreparationPhase::ReleaseCommitted;
-        filter = m_filterWakeup.lock();
+        filter = m_outputWakeup.lock();
         extractor = m_extractorWakeup.lock();
     }
     if (filter) filter->notify();
@@ -268,13 +268,13 @@ MediaAvStartupVideoPreparationState::acknowledgeExtractorReanchor(
         m_releaseIdentity = 0;
         m_videoUnitCount = 0;
         m_reservedVideoUnit.reset();
-        m_filterOutputReservation = {};
+        m_outputReservation = {};
         m_extractorOutputsReservation = {};
         m_anchoredEpoch.reset();
         m_anchoredAudioOrigin.reset();
         m_extractorOutputsReanchored = false;
         sequencer = m_sequencerWakeup.lock();
-        filter = m_filterWakeup.lock();
+        filter = m_outputWakeup.lock();
     }
     if (sequencer) sequencer->notify();
     if (filter) filter->notify();
@@ -292,14 +292,14 @@ MediaAvStartupVideoPreparationState::acknowledgeExtractorReanchor(
     return ::media::Status::success();
 }
 
-::media::Status MediaAvStartupVideoPreparationState::bindFilterWakeup(
+::media::Status MediaAvStartupVideoPreparationState::bindOutputWakeup(
     const std::shared_ptr<MediaNodeWakeup>& wakeup)
 {
     if (!wakeup) return ::media::Status::failure(
         ::media::ErrorInfo::invalidArgument(
             "Video preparation state requires a filter wakeup"));
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_filterWakeup = wakeup;
+    m_outputWakeup = wakeup;
     return ::media::Status::success();
 }
 
@@ -320,7 +320,7 @@ MediaAvStartupVideoPreparationState::snapshot() const
     std::lock_guard<std::mutex> lock(m_mutex);
     return {m_groupKey, m_phase, m_generation, m_releaseIdentity,
             m_committedVideoUnits, m_videoUnitCount,
-            m_filterOutputReservation.valid(),
+        m_outputReservation.valid(),
             m_extractorOutputsReservation.valid(), m_anchoredEpoch,
             m_anchoredAudioOrigin, m_extractorOutputsReanchored};
 }

@@ -131,7 +131,7 @@ void planRtpOutput(MediaAvSyncPlan& plan,
     plan.rtpOutput->videoOutput.payloadType = 96;
     plan.rtpOutput->videoOutput.clockRate = 90'000;
     plan.rtpOutput->videoOutput.ssrc =
-        MediaRtpOutputIdentityPlanner::stableNumeric(
+        MediaRtpOutputIdentityPlanner::stableFfmpegMuxSsrc(
             *plan.rtpOutput->videoOutput.identity);
     plan.rtpOutput->videoOutput.baseTimestamp =
         MediaRtpOutputIdentityPlanner::stableNumeric(
@@ -141,7 +141,7 @@ void planRtpOutput(MediaAvSyncPlan& plan,
     plan.rtpOutput->audioOutput.payloadType = 97;
     plan.rtpOutput->audioOutput.clockRate = audioOutputRate;
     plan.rtpOutput->audioOutput.ssrc =
-        MediaRtpOutputIdentityPlanner::stableNumeric(
+        MediaRtpOutputIdentityPlanner::stableFfmpegMuxSsrc(
             *plan.rtpOutput->audioOutput.identity);
     plan.rtpOutput->audioOutput.baseTimestamp =
         MediaRtpOutputIdentityPlanner::stableNumeric(

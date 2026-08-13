@@ -187,7 +187,7 @@ void applyPacing(
 ::media::Status MediaRealtimeOutputPolicyPlanner::apply(
     const MediaRealtimeRtpTranscodeRequest& request,
     const MediaRealtimeOutputUrls& urls,
-    MediaRealtimeRtpTranscodePlanCore& plan,
+    MediaRealtimeRtpTranscodePlanningDraft& plan,
     MediaRealtimeOutputPlanningDraft& output)
 {
     if (request.output.streamLayout == RealtimeOutputStreamLayout::MuxedTransportStream) {
@@ -273,14 +273,20 @@ void applyPacing(
     output.videoOutput.scheduledTransport =
         std::move(videoTransport).value();
     if (request.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo) {
-        if (!request.parameters.audio.bitrateKbps || *request.parameters.audio.bitrateKbps <= 0) {
+        if (!plan.audioPlan || !plan.audioPlan->resolvedOutput ||
+            !plan.audioPlan->resolvedOutput->bitrateKbps() ||
+            *plan.audioPlan->resolvedOutput->bitrateKbps() <= 0) {
             return ::media::Status::failure(
-                ::media::ErrorInfo::invalidArgument("Realtime RTP audio output requires explicit positive audio bitrate"));
+                ::media::ErrorInfo::invalidArgument(
+                    "Realtime RTP audio output requires planner-resolved positive audio bitrate"));
         }
+        const int audioBitrateKbps =
+            *plan.audioPlan->resolvedOutput->bitrateKbps();
         output.audioOutput.url = urls.audio;
         output.audioOutput.packetSize = *request.output.packetSize;
         output.audioOutput.mediaId = request.mediaId;
-        applyPacing(output.audioOutput, static_cast<int64_t>(*request.parameters.audio.bitrateKbps) * 1000);
+        applyPacing(output.audioOutput,
+                    static_cast<int64_t>(audioBitrateKbps) * 1000);
         if (output.audioOutput.writePacingBurstBytes >
                 std::numeric_limits<int>::max()) {
             return ::media::Status::failure(

@@ -16,6 +16,9 @@ MediaScheduledRtpPacketizationPlan::create(
     if (streamKind == MediaStreamKind::Video && codecName == "h264" &&
         !maximumAccessUnitSamples) {
         mode = MediaScheduledRtpPacketizationMode::H264AnnexB;
+    } else if (streamKind == MediaStreamKind::Video && codecName == "hevc" &&
+               !maximumAccessUnitSamples) {
+        mode = MediaScheduledRtpPacketizationMode::HevcAnnexB;
     } else if (streamKind == MediaStreamKind::Audio && codecName == "aac" &&
                maximumAccessUnitSamples && *maximumAccessUnitSamples > 0) {
         mode = MediaScheduledRtpPacketizationMode::AacLatm;

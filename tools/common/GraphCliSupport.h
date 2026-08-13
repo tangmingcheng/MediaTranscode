@@ -204,14 +204,14 @@ inline ::media::Status printRealtimePlanSummary(const MediaGraph& graph)
     if (!decoder) {
         return ::media::Status::failure(decoder.error());
     }
-    auto filterRequired = requiredNodeOption(&encoder->options,
-                                             "graph CLI realtime plan summary",
-                                             "pipeline.filter_required");
-    if (!filterRequired) {
-        return ::media::Status::failure(filterRequired.error());
+    auto filterActive = requiredNodeOption(&encoder->options,
+                                           "graph CLI realtime plan summary",
+                                           "pipeline.filter_active");
+    if (!filterActive) {
+        return ::media::Status::failure(filterActive.error());
     }
     std::string filterText = "not_required";
-    if (filterRequired.value() != "0") {
+    if (filterActive.value() != "0") {
         auto filter = requiredNodeOption(&encoder->options, "graph CLI realtime plan summary", "filter.pipeline.filter");
         if (!filter) {
             return ::media::Status::failure(filter.error());

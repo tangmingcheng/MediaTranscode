@@ -12,8 +12,9 @@
 #include "internal/graph/utils/MediaUrlUtils.h"
 
 #include <algorithm>
-#include <sstream>
 #include <limits>
+#include <numeric>
+#include <sstream>
 #include <type_traits>
 #include <utility>
 
@@ -38,6 +39,47 @@ constexpr int RtpMaximumReorderDelayMs = 100;
 constexpr std::size_t TsPacketSize = 188;
 constexpr std::uint64_t TsMaximumPacketPositionRegressionBytes = 1024 * 1024;
 constexpr std::int64_t Millisecond = 1'000'000;
+
+::media::Result<MediaRational> resolveMpegTsVideoFrameRate(
+    MediaRational snapshotFrameRate,
+    int videoStreamIndex,
+    const MediaTsSelectedProgramPlan& selectedProgram)
+{
+    if (snapshotFrameRate.isKnown()) {
+        return ::media::Result<MediaRational>::success(snapshotFrameRate);
+    }
+    const auto& evidence = std::visit(
+        [](const auto& program) -> const MediaTsPacketDurationEvidence& {
+            return program.videoPacketDuration;
+        },
+        selectedProgram);
+    if (evidence.streamIndex != videoStreamIndex ||
+        evidence.packetDuration <= 0 ||
+        evidence.timeBase.num <= 0 || evidence.timeBase.den <= 0 ||
+        evidence.packetDuration >
+            (std::numeric_limits<std::int64_t>::max)() /
+                evidence.timeBase.num) {
+        return ::media::Result<MediaRational>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "MPEG-TS video frame rate requires matching positive packet-duration evidence"));
+    }
+    const std::int64_t numerator = evidence.timeBase.den;
+    const std::int64_t denominator =
+        evidence.packetDuration * evidence.timeBase.num;
+    const std::int64_t divisor = std::gcd(numerator, denominator);
+    const std::int64_t reducedNumerator = numerator / divisor;
+    const std::int64_t reducedDenominator = denominator / divisor;
+    if (reducedNumerator <= 0 || reducedDenominator <= 0 ||
+        reducedNumerator > (std::numeric_limits<int>::max)() ||
+        reducedDenominator > (std::numeric_limits<int>::max)()) {
+        return ::media::Result<MediaRational>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MPEG-TS packet-duration frame rate exceeds planner range"));
+    }
+    return ::media::Result<MediaRational>::success(MediaRational{
+        static_cast<int>(reducedNumerator),
+        static_cast<int>(reducedDenominator)});
+}
 
 struct MediaRtpInputClockTransportPolicy final {
     bool requireSenderReports;
@@ -364,7 +406,14 @@ openMpegTsRuntimeSession(
     result.streams.video.width = video->format.video.size.width;
     result.streams.video.height = video->format.video.size.height;
     result.streams.video.bitrateBitsPerSecond = video->format.codec.bitrate;
-    result.streams.video.frameRate = video->format.video.frameRate;
+    auto resolvedVideoFrameRate = resolveMpegTsVideoFrameRate(
+        video->format.video.frameRate, video->index,
+        selectedProgram.value());
+    if (!resolvedVideoFrameRate) {
+        return ::media::Result<MediaPreparedRealtimeInputScan>::failure(
+            resolvedVideoFrameRate.error());
+    }
+    result.streams.video.frameRate = resolvedVideoFrameRate.value();
     if (audio) {
         result.streams.hasAudio = true;
         result.streams.audio.streamIndex = audio->index;

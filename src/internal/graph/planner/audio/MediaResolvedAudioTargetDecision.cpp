@@ -117,6 +117,10 @@ template <typename T>
     decision.m_branchMode = copy ? MediaBranchMode::CopyPacket : MediaBranchMode::TranscodeFrame;
     decision.m_rateControl = request.rateControl;
     decision.m_bitrateKbps = request.bitrateKbps;
+    if (!decision.m_bitrateKbps && source.bitrateBitsPerSecond > 0) {
+        decision.m_bitrateKbps =
+            (source.bitrateBitsPerSecond + 999) / 1000;
+    }
     decision.m_minBitrateKbps = request.minBitrateKbps;
     decision.m_maxBitrateKbps = request.maxBitrateKbps;
     decision.m_bufferSizeKbits = request.bufferSizeKbits;

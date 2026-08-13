@@ -180,8 +180,12 @@ MediaVideoTranscodeBranchNodes addVideoTranscodeNodes(MediaGraph& graph,
                 ::media::ErrorInfo::invalidArgument(
                     "Synchronized video preparation requires a complete planned atomic output policy"));
         }
-        if (auto status = requireMediaFfmpegCopyOpaqueCapability(); !status) {
-            return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
+        if (options.plan.selected.encoder.deviceKind() !=
+            MediaHardwareDeviceKind::RKMPP) {
+            if (auto status = requireMediaFfmpegCopyOpaqueCapability(); !status) {
+                return ::media::Result<MediaEncodedBranchEndpoints>::failure(
+                    status.error());
+            }
         }
     }
     if (options.lineageEdgePolicies) {
@@ -228,6 +232,14 @@ MediaVideoTranscodeBranchNodes addVideoTranscodeNodes(MediaGraph& graph,
             if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, id, "video.lineage.capacity", capacity); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
             if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, id, "video.lineage.identity", identity); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
         }
+        if (!nodes.videoFilter.isValid()) {
+            if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
+                    graph, owner, nodes.videoFrameRate,
+                    "video.startup_preparation.owner", "1"); !status) {
+                return ::media::Result<MediaEncodedBranchEndpoints>::failure(
+                    status.error());
+            }
+        }
         if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
                 graph, owner, nodes.videoEncode,
                 "video_encode.force_generation_start_key_frame",
@@ -239,7 +251,16 @@ MediaVideoTranscodeBranchNodes addVideoTranscodeNodes(MediaGraph& graph,
         if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(
                 graph, owner, nodes.codecResolver,
                 "video.lineage.capacity", capacity); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
-        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodes.codecResolver, "video.lineage.copy_opaque", "1"); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
+        const char* encoderCopyOpaque = options.plan.selected.encoder.deviceKind() ==
+                MediaHardwareDeviceKind::RKMPP
+            ? "0" : "1";
+        const char* decoderCopyOpaque = options.plan.selected.decoder.deviceKind() ==
+                MediaHardwareDeviceKind::RKMPP
+            ? "0" : "1";
+        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodes.codecResolver, "video.lineage.decoder_copy_opaque", decoderCopyOpaque); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
+        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodes.videoDecode, "video.lineage.decoder_copy_opaque", decoderCopyOpaque); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
+        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodes.codecResolver, "video.lineage.encoder_copy_opaque", encoderCopyOpaque); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
+        if (auto status = MediaGraphBuildSupport::setNodeOptionChecked(graph, owner, nodes.videoEncode, "video.lineage.encoder_copy_opaque", encoderCopyOpaque); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     }
     if (auto status = MediaVideoTranscodeOptionApplier::applyUserOptions(graph, nodes, options.parameters); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());
     if (auto status = MediaVideoPlanOptionApplier::applySelectedPlan(graph, nodes, options.plan); !status) return ::media::Result<MediaEncodedBranchEndpoints>::failure(status.error());

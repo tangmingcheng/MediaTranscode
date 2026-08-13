@@ -284,6 +284,7 @@ public:
     const MediaNode* avOutputScheduler = nullptr;
     const MediaNode* videoOutputScheduler = nullptr;
     const MediaNode* videoFilter = nullptr;
+    const MediaNode* videoPreparationOwner = nullptr;
     const MediaNode* releaseExtractor = nullptr;
     const MediaNode* mpegTsRtpSdpPublisher = nullptr;
     std::vector<const MediaNode*> scheduledRtpSenders;
@@ -304,6 +305,14 @@ public:
             videoOutputScheduler = &node;
         }
         if (node.kind == MediaNodeKind::VideoFilter) videoFilter = &node;
+        if (node.options.value("video.startup_preparation.owner") == "1") {
+            if (videoPreparationOwner) {
+                return ::media::Status::failure(
+                    ::media::ErrorInfo::invalidArgument(
+                        "Video preparation state rejects duplicate readiness owners"));
+            }
+            videoPreparationOwner = &node;
+        }
         if (node.kind == MediaNodeKind::AvBoundReleaseExtractor)
             releaseExtractor = &node;
         if (node.kind == MediaNodeKind::ScheduledRtpSender)
@@ -326,10 +335,15 @@ public:
         }
         if (auto bound = videoPreparationState->bindSequencerWakeup(
                 context.sharedNodeWakeup(sequencer->id)); !bound) return bound;
-        if (videoFilter) {
-            if (auto bound = videoPreparationState->bindFilterWakeup(
-                    context.sharedNodeWakeup(videoFilter->id)); !bound)
-                return bound;
+        const MediaNode* readinessOwner = videoPreparationOwner
+            ? videoPreparationOwner : videoFilter;
+        if (!readinessOwner) {
+            return ::media::Status::failure(::media::ErrorInfo::notInitialized(
+                "Video preparation state requires exactly one planned output readiness owner"));
+        }
+        if (auto bound = videoPreparationState->bindOutputWakeup(
+                context.sharedNodeWakeup(readinessOwner->id)); !bound) {
+            return bound;
         }
         if (releaseExtractor) {
             if (auto bound = videoPreparationState->bindExtractorWakeup(

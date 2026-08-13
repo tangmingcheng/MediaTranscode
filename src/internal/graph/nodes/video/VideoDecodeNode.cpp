@@ -9,6 +9,7 @@
 #include "internal/graph/sync/MediaCanonicalVideoFrameBuffer.h"
 #include "internal/graph/sync/lineage/MediaFfmpegLineageToken.h"
 #include "internal/graph/nodes/video/MediaVideoFrameContractValidator.h"
+#include "internal/graph/sync/lineage/MediaVideoLineageCopyOpaqueOption.h"
 
 extern "C" {
 #include <libavutil/error.h>
@@ -51,6 +52,11 @@ void VideoDecodeLineageState::clearOwnedLineage(
 
 void VideoDecodeLineageState::clearLineageStorage() noexcept
 {
+    av_buffer_unref(&pendingSubmissionLineage);
+    for (AVBufferRef* opaque : submissionOrderLineage) {
+        av_buffer_unref(&opaque);
+    }
+    submissionOrderLineage.clear();
     terminals.reset();
     eofEmitted = false;
     receivePending = false;
@@ -133,6 +139,12 @@ bool VideoDecodeNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) const
         nodeOptions(context), "decoder.pipeline.output", "VideoDecodeNode");
     if (!contract) return ::media::Status::failure(contract.error());
     m_outputContract = std::move(contract).value();
+    if (m_lineageRegistry) {
+        auto copyOpaque = parseMediaVideoLineageCopyOpaqueOption(
+            nodeOptions(context), "video.lineage.decoder_copy_opaque");
+        if (!copyOpaque) return ::media::Status::failure(copyOpaque.error());
+        m_copyOpaqueLineage = copyOpaque.value();
+    }
     return FFmpegCodecNodeRuntime::start(context);
 }
 ::media::Status VideoDecodeNode::stop(MediaGraphExecutionContext& context)
@@ -154,6 +166,7 @@ void VideoDecodeNode::resetRuntimeState() noexcept
     m_firstSubmitDiagnosticEmitted = false;
     m_firstFrameDiagnosticEmitted = false;
     m_outputContract.reset();
+    m_copyOpaqueLineage.reset();
     m_drmPrimeFrames = 0;
     m_softwareFrames = 0;
     m_lineageState->resetForLifecycle();
@@ -169,7 +182,16 @@ void VideoDecodeNode::resetRuntimeState() noexcept
     if (!token) return ::media::Status::failure(token.error());
     auto opaque = makeMediaFfmpegLineageOpaque(std::move(token).value());
     if (!opaque) return ::media::Status::failure(opaque.error());
-    m_lineageState->pendingPacket->opaque_ref = opaque.value();
+    if (!m_copyOpaqueLineage || *m_copyOpaqueLineage) {
+        m_lineageState->pendingPacket->opaque_ref = opaque.value();
+    } else {
+        if (m_lineageState->pendingSubmissionLineage) {
+            av_buffer_unref(&opaque.value());
+            return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+                "VideoDecodeNode already owns pending submission lineage"));
+        }
+        m_lineageState->pendingSubmissionLineage = opaque.value();
+    }
     m_lineageState->lineageGenerations.insert(
         m_lineageState->pendingLineage->generation);
     m_lineageState->pendingLineage.reset();
@@ -294,7 +316,8 @@ void VideoDecodeNode::resetRuntimeState() noexcept
 ::media::Result<MediaNodeProcessResult> VideoDecodeNode::submitPendingPacket(
     MediaGraphExecutionContext& context)
 {
-    if (m_lineageRegistry && !m_lineageState->pendingPacket->opaque_ref) {
+    if (m_lineageRegistry && !m_lineageState->pendingPacket->opaque_ref &&
+        !m_lineageState->pendingSubmissionLineage) {
         auto attached = attachPendingLineage();
         if (!attached) return processProgress(std::move(attached));
     }
@@ -317,7 +340,14 @@ void VideoDecodeNode::resetRuntimeState() noexcept
         return ::media::Result<MediaNodeProcessResult>::failure(
             FFmpegGraphError::fromCode(sendRet, "avcodec_send_packet(video)"));
     }
-    if (sendRet == 0) m_lineageState->pendingPacket.reset();
+    if (sendRet == 0) {
+        if (m_lineageState->pendingSubmissionLineage) {
+            m_lineageState->submissionOrderLineage.push_back(
+                m_lineageState->pendingSubmissionLineage);
+            m_lineageState->pendingSubmissionLineage = nullptr;
+        }
+        m_lineageState->pendingPacket.reset();
+    }
 
     auto receiveStatus = receiveFrames(context);
     if (!receiveStatus) {
@@ -363,10 +393,24 @@ void VideoDecodeNode::resetRuntimeState() noexcept
 
         std::shared_ptr<const MediaCanonicalLineage> lineage;
         if (m_lineageRegistry) {
-            auto resolved = m_lineageRegistry->resolveOutput(frame->opaque_ref);
+            AVBufferRef* outputLineage = frame->opaque_ref;
+            if (m_copyOpaqueLineage && !*m_copyOpaqueLineage) {
+                if (m_lineageState->submissionOrderLineage.empty()) {
+                    return ::media::Result<bool>::failure(
+                        ::media::ErrorInfo::invalidArgument(
+                            "VideoDecodeNode received a frame without planned submission-order lineage"));
+                }
+                outputLineage = m_lineageState->submissionOrderLineage.front();
+                m_lineageState->submissionOrderLineage.pop_front();
+            }
+            auto resolved = m_lineageRegistry->resolveOutput(outputLineage);
             if (!resolved) return ::media::Result<bool>::failure(resolved.error());
             if (resolved.value()) lineage = std::move(*resolved.value());
-            av_buffer_unref(&frame->opaque_ref);
+            if (outputLineage == frame->opaque_ref) {
+                av_buffer_unref(&frame->opaque_ref);
+            } else {
+                av_buffer_unref(&outputLineage);
+            }
             if (!lineage) continue;
         }
         auto buffer = FFmpegBufferFactory::wrapFrame(std::move(frame), MediaStreamKind::Video);

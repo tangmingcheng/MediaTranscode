@@ -785,7 +785,7 @@ void VideoFilterNode::resetRuntimeState() noexcept
     }
     m_preparedReservation.emplace(std::move(*reservation.value()));
     m_preparedOutput.reset();
-    auto ready = m_preparationCapability->markFilterReady(
+        auto ready = m_preparationCapability->markOutputReady(
         m_preparedGeneration, m_preparedReleaseIdentity,
         m_preparedReservation->handle());
     if (ready) {

@@ -11,6 +11,7 @@ public:
     static MediaAvGenerationTransitionPlan plan(
         MediaAvSyncOutputAdapterKind adapter,
         MediaAvSyncSourceClockMode sourceClockMode,
+        bool videoFilterActive,
         MediaRunningTime acknowledgementTimeout,
         MediaRunningTime terminalDrainWindow);
 };

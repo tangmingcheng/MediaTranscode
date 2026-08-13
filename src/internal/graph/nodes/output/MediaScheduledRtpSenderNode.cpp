@@ -179,7 +179,8 @@ MediaNodeKind MediaScheduledRtpSenderNode::staticKind() noexcept
     return ::media::Result<bool>::success(true);
 }
 
-::media::Status MediaScheduledRtpSenderNode::openSender()
+::media::Status MediaScheduledRtpSenderNode::openSender(
+    const AVPacket* codecConfigurationAccessUnit)
 {
     if (m_sessionState->sender || !m_sessionState->activationFacts ||
         !m_sessionState->activation || !m_codec) {
@@ -195,7 +196,8 @@ MediaNodeKind MediaScheduledRtpSenderNode::staticKind() noexcept
                 "Scheduled RTP sender lost encoder metadata or shared NTP epoch"));
     }
     auto materialized = MediaScheduledRtpSenderMaterializer::materialize(
-        m_outputPlan, m_sdpPlan, *codec->context(), *sharedNtpEpoch,
+        m_outputPlan, m_sdpPlan, *codec->context(),
+        codecConfigurationAccessUnit, *sharedNtpEpoch,
         *m_sessionState->activationFacts);
     if (!materialized) {
         return ::media::Status::failure(materialized.error());
@@ -228,6 +230,47 @@ MediaNodeKind MediaScheduledRtpSenderNode::staticKind() noexcept
     }
     m_sessionState->description = std::move(description);
     return ::media::Status::success();
+}
+
+::media::Result<bool>
+MediaScheduledRtpSenderNode::acquireCodecConfigurationAccessUnit(
+    MediaGraphExecutionContext& context,
+    std::uint64_t activeGeneration)
+{
+    const auto mode = m_outputPlan.packetization.packetizationMode();
+    if ((mode != MediaScheduledRtpPacketizationMode::H264AnnexB &&
+         mode != MediaScheduledRtpPacketizationMode::HevcAnnexB) ||
+        m_codecConfigurationAccessUnit) {
+        return ::media::Result<bool>::success(false);
+    }
+    const auto* codec = dynamic_cast<const FFmpegCodecContextBuffer*>(
+        m_codec.get());
+    if (!m_codec) return ::media::Result<bool>::success(false);
+    if (!codec || !codec->context()) {
+        return ::media::Result<bool>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "Video RTP bootstrap requires encoder metadata"));
+    }
+    if (codec->context()->extradata && codec->context()->extradata_size > 0) {
+        return ::media::Result<bool>::success(false);
+    }
+    auto input = tryPopInputOptional(context, "scheduled");
+    if (!input) return ::media::Result<bool>::failure(input.error());
+    if (!input.value()) return ::media::Result<bool>::success(false);
+    const auto* scheduled = dynamic_cast<const MediaScheduledAccessUnit*>(
+        input.value()->get());
+    const AVPacket* packet = scheduled
+        ? FFmpegPacketView::packet(scheduled->media())
+        : nullptr;
+    if (!scheduled || scheduled->stream() != MediaScheduledStream::Video ||
+        scheduled->generation() != activeGeneration || !packet ||
+        !packet->data || packet->size <= 0) {
+        return ::media::Result<bool>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "Video RTP bootstrap requires the first current-generation access unit"));
+    }
+    m_codecConfigurationAccessUnit = std::move(*input.value());
+    return ::media::Result<bool>::success(true);
 }
 
 ::media::Result<MediaNodeProcessResult>
@@ -324,9 +367,15 @@ MediaScheduledRtpSenderNode::processScheduledInput(
         }
     }
     if (reportFailure) return failTerminal(std::move(*reportFailure));
-    auto input = tryPopInputOptional(context, "scheduled");
-    if (!input) return failTerminal(input.error());
-    if (!input.value()) {
+    std::optional<MediaBufferRef> input;
+    if (m_codecConfigurationAccessUnit) {
+        input = std::move(m_codecConfigurationAccessUnit);
+    } else {
+        auto popped = tryPopInputOptional(context, "scheduled");
+        if (!popped) return failTerminal(popped.error());
+        input = std::move(popped).value();
+    }
+    if (!input) {
         if (channel->aborted()) {
             return failTerminal(::media::ErrorInfo::cancelled(
                 "Scheduled RTP sender input was aborted"));
@@ -340,7 +389,7 @@ MediaScheduledRtpSenderNode::processScheduledInput(
              m_dependencies.authority->deadlineWait(*nextReportDeadline)});
     }
     const auto* control = dynamic_cast<const MediaControlBuffer*>(
-        input.value()->get());
+        input->get());
     if (control) {
         switch (control->controlKind()) {
         case MediaControlBufferKind::Eof:
@@ -362,7 +411,7 @@ MediaScheduledRtpSenderNode::processScheduledInput(
         }
     }
     const auto* scheduled = dynamic_cast<const MediaScheduledAccessUnit*>(
-        input.value()->get());
+        input->get());
     if (!scheduled || scheduled->stream() != m_outputPlan.stream) {
         return failTerminal(::media::ErrorInfo::invalidArgument(
             "Scheduled RTP sender rejects a mismatched scheduled access unit"));
@@ -447,6 +496,28 @@ MediaScheduledRtpSenderNode::processScheduledInput(
                   "Scheduled RTP session rejects a future active generation"));
     }
     bool emitOpenedDescription = false;
+    auto configuration = acquireCodecConfigurationAccessUnit(
+        context, activeGeneration);
+    if (!configuration) return failTerminal(configuration.error());
+    const auto* configurationAccessUnit =
+        dynamic_cast<const MediaScheduledAccessUnit*>(
+            m_codecConfigurationAccessUnit.get());
+    const AVPacket* configurationPacket = configurationAccessUnit
+        ? FFmpegPacketView::packet(configurationAccessUnit->media())
+        : nullptr;
+    const auto* codecBuffer = dynamic_cast<const FFmpegCodecContextBuffer*>(
+        m_codec.get());
+    const auto packetizationMode =
+        m_outputPlan.packetization.packetizationMode();
+    const bool configurationRequired =
+        (packetizationMode == MediaScheduledRtpPacketizationMode::H264AnnexB ||
+         packetizationMode == MediaScheduledRtpPacketizationMode::HevcAnnexB) &&
+        codecBuffer && codecBuffer->context() &&
+        (!codecBuffer->context()->extradata ||
+         codecBuffer->context()->extradata_size <= 0);
+    if (configurationRequired && !configurationPacket) {
+        return configuration.value() ? processProgress() : processWaiting();
+    }
     std::optional<::media::ErrorInfo> sessionFailure;
     {
         auto sessionReservation = m_generationState->reserveCommit(
@@ -477,7 +548,7 @@ MediaScheduledRtpSenderNode::processScheduledInput(
                         ? processProgress()
                         : processWaiting();
                 }
-            } else if (auto opened = openSender(); !opened) {
+            } else if (auto opened = openSender(configurationPacket); !opened) {
                 sessionFailure = opened.error();
             } else {
                 emitOpenedDescription = true;
@@ -588,6 +659,7 @@ void MediaScheduledRtpSenderNode::resetGenerationState() noexcept
     }
     if (transport) (void)transport->close();
     m_codec.reset();
+    m_codecConfigurationAccessUnit.reset();
     m_generationState->resetLifecycle();
 }
 

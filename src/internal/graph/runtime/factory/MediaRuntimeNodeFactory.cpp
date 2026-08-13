@@ -72,7 +72,7 @@
 #include "internal/graph/sync/lineage/MediaVideoLineageStagePreparation.h"
 #include "internal/graph/sync/lineage/MediaVideoFrameRateState.h"
 #include "internal/graph/nodes/mux/ScheduledRtpMuxFfmpegSessionFactory.h"
-#include "internal/graph/runtime/filesystem/MediaWin32AtomicFileReplacePort.h"
+#include "internal/graph/runtime/filesystem/MediaPlatformAtomicFileReplacePort.h"
 #include "internal/graph/runtime/network/MediaSocketRuntime.h"
 #include "internal/graph/runtime/network/MediaUdpDatagramSenderSocket.h"
 
@@ -132,7 +132,8 @@ template <typename Node>
 }
 
 ::media::Result<std::unique_ptr<MediaRuntimeNode>> createVideoFrameRateStage(
-    const MediaNode& node)
+    const MediaNode& node,
+    const std::shared_ptr<MediaAvStartupVideoPreparationState>& preparationState)
 {
     auto capacity = prepareMediaVideoLineageStageCapacity(
         node, VideoFrameRateNode::generationPurgeIdentity());
@@ -140,10 +141,32 @@ template <typename Node>
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
             capacity.error());
     }
+    std::optional<MediaAvStartupVideoPreparationCapability> preparation;
+    if (node.options.value("video.startup_preparation.owner") == "1") {
+        if (!capacity.value()) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "Video startup preparation owner requires canonical lineage capacity"));
+        }
+        if (!preparationState) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "Planned video startup preparation owner requires shared state"));
+        }
+        auto issued = MediaAvStartupVideoPreparationCapability::issue(
+            preparationState,
+            MediaAvStartupVideoPreparationRole::OutputReadiness);
+        if (!issued) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                issued.error());
+        }
+        preparation.emplace(std::move(issued).value());
+    }
     if (capacity.value()) {
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::make_unique<VideoFrameRateNode>(
-                node.id, std::make_shared<MediaVideoFrameRateState>(true)));
+                node.id, std::make_shared<MediaVideoFrameRateState>(true),
+                std::move(preparation)));
     }
     return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
         std::make_unique<VideoFrameRateNode>(node.id));
@@ -306,7 +329,7 @@ template <typename Node>
     case MediaNodeKind::HardwareTransfer:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(std::make_unique<HardwareTransferNode>(node.id));
     case MediaNodeKind::VideoFrameRate:
-        return createVideoFrameRateStage(node);
+        return createVideoFrameRateStage(node, videoPreparationState);
     case MediaNodeKind::VideoFilter:
     {
         auto prepared = prepareMediaVideoLineageStage(
@@ -322,7 +345,7 @@ template <typename Node>
         }
         auto capability = MediaAvStartupVideoPreparationCapability::issue(
             videoPreparationState,
-            MediaAvStartupVideoPreparationRole::FilterReadiness);
+            MediaAvStartupVideoPreparationRole::OutputReadiness);
         if (!capability) {
             return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
                 capability.error());
@@ -562,7 +585,7 @@ template <typename Node>
         }
         auto publisher = MediaRtpSdpPublisherNode::create(
             node.id, decoded.value(), std::move(path).value(),
-            std::make_unique<MediaWin32AtomicFileReplacePort>());
+            std::make_unique<MediaPlatformAtomicFileReplacePort>());
         return publisher
             ? ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
                   std::move(publisher).value())
@@ -755,7 +778,7 @@ MediaRuntimeNodeFactory::createMpegTsRtpSdpPublisher(
         auto created = MediaMpegTsRtpSdpPublisherNode::create(
             node.id, std::move(sessionKey), decodedStreamSet.value(),
             std::move(authority),
-            std::make_unique<MediaWin32AtomicFileReplacePort>());
+            std::make_unique<MediaPlatformAtomicFileReplacePort>());
         if (!created) {
             return ::media::Result<
                 std::unique_ptr<MediaRuntimeNode>>::failure(

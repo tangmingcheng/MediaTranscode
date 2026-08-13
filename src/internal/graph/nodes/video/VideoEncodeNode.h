@@ -10,6 +10,7 @@
 #include <set>
 #include <string_view>
 #include <optional>
+#include <deque>
 
 namespace media::ffmpeg::graph {
 
@@ -29,6 +30,8 @@ public:
     ::media::ffmpeg::FramePtr pendingFrame;
     std::shared_ptr<const MediaCanonicalLineage> pendingLineage;
     std::set<std::uint64_t> lineageGenerations;
+    AVBufferRef* pendingSubmissionLineage = nullptr;
+    std::deque<AVBufferRef*> submissionOrderLineage;
     bool generationStartPending = true;
 
     void bindCodec(MediaBufferRef owner, AVCodecContext* context) noexcept;
@@ -84,6 +87,7 @@ private:
     bool m_firstPacketDiagnosticEmitted = false;
     std::optional<bool> m_sendWouldBlock;
     std::optional<bool> m_forceGenerationStartKeyFrame;
+    std::optional<bool> m_copyOpaqueLineage;
     std::shared_ptr<MediaCodecLineageRegistry> m_lineageRegistry;
     std::shared_ptr<MediaVideoEncoderCodecApi> m_codecApi;
     std::shared_ptr<VideoEncodeLineageState> m_lineageState;
