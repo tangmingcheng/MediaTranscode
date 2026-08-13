@@ -153,6 +153,8 @@ const GroupOptionContract* findContract(
     if (!filterActive) {
         return ::media::Status::failure(filterActive.error());
     }
+    const bool audioTranscode = binding.audioExecutionProduct ==
+        MediaSynchronizedAudioExecutionProduct::FrameTranscode;
     auto cardinality = shape.requireExact({
         {MediaNodeKind::SourceClockStateFanout, 1,
          "source-clock state fanout"},
@@ -165,7 +167,7 @@ const GroupOptionContract* findContract(
          "activated startup release sequencer"},
         {MediaNodeKind::AvBoundReleaseExtractor, 1,
          "bound release extractor"},
-        {MediaNodeKind::AudioDriftController, 1,
+        {MediaNodeKind::AudioDriftController, audioTranscode ? 1u : 0u,
          "audio drift controller"},
         {MediaNodeKind::AvOutputScheduler, 1, "A/V output scheduler"},
         {MediaNodeKind::ScheduledOutputRouter, 1,
@@ -177,12 +179,15 @@ const GroupOptionContract* findContract(
         {MediaNodeKind::VideoFilter, filterActive.value() ? 1u : 0u,
          "planner-selected video filter"},
         {MediaNodeKind::VideoEncode, 1, "video encoder"},
-        {MediaNodeKind::AudioCodecResolver, 1, "audio codec resolver"},
-        {MediaNodeKind::AudioDecode, 1, "audio decoder"},
-        {MediaNodeKind::AudioStartupTrim, 1, "audio startup trim"},
-        {MediaNodeKind::AudioResample, 1, "audio resampler"},
-        {MediaNodeKind::AudioEncode, 1, "audio encoder"},
-        {MediaNodeKind::EncodedAudioCanonicalizer, 1,
+        {MediaNodeKind::PacketSourceConfig, audioTranscode ? 0u : 1u,
+         "audio packet-copy source config"},
+        {MediaNodeKind::AudioCodecResolver, audioTranscode ? 1u : 0u,
+         "audio codec resolver"},
+        {MediaNodeKind::AudioDecode, audioTranscode ? 1u : 0u, "audio decoder"},
+        {MediaNodeKind::AudioStartupTrim, audioTranscode ? 1u : 0u, "audio startup trim"},
+        {MediaNodeKind::AudioResample, audioTranscode ? 1u : 0u, "audio resampler"},
+        {MediaNodeKind::AudioEncode, audioTranscode ? 1u : 0u, "audio encoder"},
+        {MediaNodeKind::EncodedAudioCanonicalizer, audioTranscode ? 1u : 0u,
          "encoded audio canonicalizer"}},
         "A/V common core shape");
     if (!cardinality) return cardinality;

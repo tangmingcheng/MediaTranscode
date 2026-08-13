@@ -7,19 +7,23 @@ namespace {
 
 std::vector<std::string> canonicalLineageChildren(
     MediaAvSyncSourceClockMode sourceClockMode,
+    MediaBranchMode audioBranchMode,
     bool videoFilterActive)
 {
     std::vector<std::string> children{
         "startup_generation_state",
         "video_decode",
         "video_frame_rate",
-        "video_encode",
-        std::string(MediaAudioDecodeLineageIdentity),
-        std::string(MediaAudioStartupTrimLineageIdentity),
-        std::string(MediaAudioResampleLineageIdentity),
-        std::string(MediaAudioEncodeLineageIdentity),
-        std::string(MediaEncodedAudioCanonicalizerLineageIdentity)
+        "video_encode"
     };
+    if (audioBranchMode == MediaBranchMode::TranscodeFrame) {
+        children.insert(children.end(), {
+            std::string(MediaAudioDecodeLineageIdentity),
+            std::string(MediaAudioStartupTrimLineageIdentity),
+            std::string(MediaAudioResampleLineageIdentity),
+            std::string(MediaAudioEncodeLineageIdentity),
+            std::string(MediaEncodedAudioCanonicalizerLineageIdentity)});
+    }
     if (videoFilterActive) {
         children.insert(children.begin() + 3, "video_filter");
     }
@@ -39,6 +43,7 @@ std::vector<std::string> canonicalLineageChildren(
 MediaAvGenerationTransitionPlan MediaAvGenerationTransitionPlanner::plan(
     MediaAvSyncOutputAdapterKind adapter,
     MediaAvSyncSourceClockMode sourceClockMode,
+    MediaBranchMode audioBranchMode,
     bool videoFilterActive,
     MediaRunningTime acknowledgementTimeout,
     MediaRunningTime terminalDrainWindow)
@@ -47,10 +52,13 @@ MediaAvGenerationTransitionPlan MediaAvGenerationTransitionPlanner::plan(
         {}, acknowledgementTimeout, terminalDrainWindow};
     transition.participants.push_back({
         MediaAvGenerationParticipant::CanonicalLineage,
-        canonicalLineageChildren(sourceClockMode, videoFilterActive)});
-    transition.participants.push_back({
-        MediaAvGenerationParticipant::AudioCorrection,
-        {std::string(MediaAudioCorrectionGenerationIdentity)}});
+        canonicalLineageChildren(
+            sourceClockMode, audioBranchMode, videoFilterActive)});
+    if (audioBranchMode == MediaBranchMode::TranscodeFrame) {
+        transition.participants.push_back({
+            MediaAvGenerationParticipant::AudioCorrection,
+            {std::string(MediaAudioCorrectionGenerationIdentity)}});
+    }
     transition.participants.push_back({
         MediaAvGenerationParticipant::Scheduler,
         {"scheduler_generation_state"}});

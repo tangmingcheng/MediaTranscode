@@ -3,6 +3,7 @@
 
 #include "internal/graph/builder/MediaGraphBuildSupport.h"
 #include "internal/graph/builder/realtime/MediaRealtimeOptionApplier.h"
+#include "internal/graph/builder/segments/MediaAudioBranchOptionsMapper.h"
 #include "internal/graph/builder/segments/MediaAudioBranchSegmentBuilder.h"
 #include "internal/graph/builder/segments/MediaOutputSegmentBuilder.h"
 #include "internal/graph/builder/segments/MediaPacketSelectSegmentBuilder.h"
@@ -605,15 +606,10 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
         audioOptions.packetSourceNode = audioPacketSourceNode;
         audioOptions.packetSourcePort = audioPacketSourcePort;
         audioOptions.normalizeInputPackets = false;
-        audioOptions.correctionMode =
-            MediaAudioCorrectionExecutionMode::ExternalCorrectionRequired;
-        audioOptions.lineageMode =
-            MediaAudioLineageExecutionMode::SynchronizedReleasedAudio;
-        audioOptions.lineageCapacity = avSyncRuntime.queues.frame;
-        audioOptions.correctionGeneration = MediaFirstLockedSourceGeneration;
-        audioOptions.correctionLookaheadWindows =
-            avSyncRuntime.synchronization.audioServo.correctionLookaheadWindows;
-        audioOptions.syncGroup = avSyncRuntime.groupKey;
+        if (auto status = mapSynchronizedAudioBranchOptions(
+                avSyncRuntime, audioOptions); !status) {
+            return ::media::Result<MediaGraph>::failure(status.error());
+        }
         auto builtAudio = MediaAudioBranchSegmentBuilder::build(
             graph, audioOptions);
         if (!builtAudio) {
@@ -796,6 +792,11 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
     } else if (auto* runtimePlan =
                    std::get_if<MediaRealtimeAvSyncRuntimePlan>(
                        &preflight.plan.runtime)) {
+        const auto audioExecutionProduct =
+            std::holds_alternative<MediaSynchronizedAudioPacketCopyBounds>(
+                runtimePlan->componentBounds)
+                ? MediaSynchronizedAudioExecutionProduct::PacketCopy
+                : MediaSynchronizedAudioExecutionProduct::FrameTranscode;
         auto outputProduct = std::visit(
             []<typename Product>(Product&& product)
                 -> MediaAvSyncRuntimeOutputProduct {
@@ -809,6 +810,7 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
             std::move(runtimePlan->synchronization),
             std::move(runtimePlan->transition),
             runtimePlan->edgePolicies,
+            audioExecutionProduct,
             std::move(outputProduct)});
     } else {
         return ::media::Result<MediaRealtimeExecutableGraph>::failure(

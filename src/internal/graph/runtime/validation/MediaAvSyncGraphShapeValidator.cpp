@@ -45,7 +45,7 @@ bool isSynchronizedNode(MediaNodeKind kind) noexcept
                 "Synchronized graph shape requires a valid runtime group"));
     }
     if (auto plan =
-            MediaAvSyncPlanValidator::validate(binding.plan);
+            MediaAvSyncPlanValidator::validateRuntime(binding.plan);
         !plan) {
         return plan;
     }

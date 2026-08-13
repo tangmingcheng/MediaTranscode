@@ -5,7 +5,7 @@
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/runtime/buffer/FFmpegInputSnapshotBuffer.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegBufferFactory.h"
-#include "internal/graph/runtime/buffer/FFmpegCodecParametersBuffer.h"
+#include "internal/graph/runtime/buffer/FFmpegCodecContextBuffer.h"
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -150,26 +150,56 @@ void PacketSourceConfigNode::releaseInputSnapshots() noexcept
             ::media::ErrorInfo::notInitialized("PacketSourceConfigNode requires source stream before emitting config"));
     }
 
-    auto buffer = FFmpegBufferFactory::cloneCodecParameters(*m_sourceStream);
+    auto parameters = m_sourceStream->cloneCodecParameters();
+    if (!parameters) {
+        return ::media::Status::failure(parameters.error());
+    }
+    auto codecContext = ::media::ffmpeg::makeCodecContext(nullptr);
+    if (!codecContext) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::allocationFailed(
+                "PacketSourceConfigNode codec context allocation"));
+    }
+    const int converted = avcodec_parameters_to_context(
+        codecContext.get(), parameters.value().get());
+    if (converted < 0) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::ffmpegFailure(
+                "PacketSourceConfigNode codec parameter conversion failed",
+                converted));
+    }
+    if (m_sourceStream->time.timeBase.num <= 0 ||
+        m_sourceStream->time.timeBase.den <= 0) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::notInitialized(
+                "PacketSourceConfigNode source time base is unavailable"));
+    }
+    codecContext->time_base = AVRational{
+        m_sourceStream->time.timeBase.num,
+        m_sourceStream->time.timeBase.den};
+    codecContext->pkt_timebase = codecContext->time_base;
+    auto buffer = FFmpegBufferFactory::wrapCodecContext(
+        std::move(codecContext));
     if (!buffer) {
         return ::media::Status::failure(buffer.error());
     }
     if (buffer.value()->streamKind() != m_streamKind) {
         return ::media::Status::failure(
-            ::media::ErrorInfo::invalidArgument("PacketSourceConfigNode cloned codec parameters stream kind mismatch"));
+            ::media::ErrorInfo::invalidArgument("PacketSourceConfigNode codec context stream kind mismatch"));
     }
 
     std::ostringstream out;
-    const auto* parametersBuffer = dynamic_cast<const FFmpegCodecParametersBuffer*>(buffer.value().get());
-    const AVCodecParameters* parameters = parametersBuffer ? parametersBuffer->parameters() : nullptr;
-    if (!parameters) {
+    const auto* contextBuffer =
+        dynamic_cast<const FFmpegCodecContextBuffer*>(buffer.value().get());
+    const AVCodecContext* codec = contextBuffer ? contextBuffer->context() : nullptr;
+    if (!codec) {
         return ::media::Status::failure(
-            ::media::ErrorInfo::notInitialized("PacketSourceConfigNode cloned codec parameters are unavailable"));
+            ::media::ErrorInfo::notInitialized("PacketSourceConfigNode codec context is unavailable"));
     }
     out << "emit_source_config stream=" << mediaGraphDiagnosticStreamKindName(m_streamKind)
         << " index=" << m_sourceStreamIndex
         << " time_base=" << m_sourceStream->time.timeBase.num << "/" << m_sourceStream->time.timeBase.den
-        << " codec_id=" << parameters->codec_id;
+        << " codec_id=" << codec->codec_id;
     packetSourceConfigLog(MediaGraphDiagnosticLevel::State, out.str());
 
     auto emitStatus = emitOutput(context, "codec", buffer.value());

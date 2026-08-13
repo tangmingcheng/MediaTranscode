@@ -64,13 +64,15 @@ MediaAudioBranchSegmentBuilder::build(
     if (options.plan.branchMode == MediaBranchMode::CopyPacket &&
         (*options.correctionMode !=
              MediaAudioCorrectionExecutionMode::Disabled ||
-         *options.lineageMode !=
-             MediaAudioLineageExecutionMode::LegacyPlainPacket ||
+         (*options.lineageMode !=
+              MediaAudioLineageExecutionMode::LegacyPlainPacket &&
+          *options.lineageMode !=
+              MediaAudioLineageExecutionMode::SynchronizedReleasedAudio) ||
          options.lineageCapacity || options.correctionGeneration ||
          options.correctionLookaheadWindows || options.syncGroup)) {
         return ::media::Result<MediaEncodedBranchEndpoints>::failure(
-            ::media::ErrorInfo::unsupported(
-                "synchronized audio packet copy is unsupported"));
+            ::media::ErrorInfo::invalidArgument(
+                "audio packet copy requires disabled correction and a planned lineage mode"));
     }
 
     if (!options.formatSourceNode.isValid() || options.formatSourcePort.empty() ||

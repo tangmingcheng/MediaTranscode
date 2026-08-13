@@ -479,4 +479,18 @@ bool validRtpOutputStream(const MediaAvSyncRtpOutputStreamPlan& stream)
     return validateOutput(plan);
 }
 
+::media::Status MediaAvSyncPlanValidator::validateRuntime(
+    const MediaAvSyncPlan& plan)
+{
+    const bool commandLead = plan.audioServo.commandLeadNs.has_value();
+    const bool compensation =
+        plan.audioServo.compensationWindowNs.has_value();
+    const bool frequency =
+        plan.audioServo.frequencyFilterTimeConstantNs.has_value();
+    if (commandLead != compensation || commandLead != frequency) {
+        return invalid("runtime audio correction timing product");
+    }
+    return commandLead ? validate(plan) : validatePolicy(plan);
+}
+
 } // namespace media::ffmpeg::graph

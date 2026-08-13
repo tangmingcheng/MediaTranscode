@@ -449,6 +449,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
     auto transition = MediaAvGenerationTransitionPlanner::plan(
         adapter,
         *synchronization.sourceClockMode,
+        audio.branchMode,
         outer.videoPlan.filterActive,
         *facts.value().acknowledgementTimeout,
         *facts.value().terminalDrainWindow);

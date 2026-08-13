@@ -72,7 +72,8 @@ bool validCodecEdgeSource(
 bool exactAudioVideoCodecEdges(
     const MediaGraph& graph,
     MediaPortId target,
-    const MediaEdgePolicy& policy) noexcept
+    const MediaEdgePolicy& policy,
+    MediaSynchronizedAudioExecutionProduct audioProduct) noexcept
 {
     bool video = false;
     bool audio = false;
@@ -85,7 +86,11 @@ bool exactAudioVideoCodecEdges(
                 MediaStreamKind::Video, policy)) {
             video = true;
         } else if (!audio && validCodecEdgeSource(
-                       graph, edge, MediaNodeKind::AudioEncode,
+                       graph, edge,
+                       audioProduct ==
+                               MediaSynchronizedAudioExecutionProduct::PacketCopy
+                           ? MediaNodeKind::PacketSourceConfig
+                           : MediaNodeKind::AudioEncode,
                        MediaStreamKind::Audio, policy)) {
             audio = true;
         } else {
@@ -150,7 +155,10 @@ bool exactAudioVideoCodecEdges(
             graph, *codecEdge,
             stream == MediaStreamKind::Video
                 ? MediaNodeKind::VideoEncode
-                : MediaNodeKind::AudioEncode,
+                : binding.audioExecutionProduct ==
+                        MediaSynchronizedAudioExecutionProduct::PacketCopy
+                    ? MediaNodeKind::PacketSourceConfig
+                    : MediaNodeKind::AudioEncode,
             stream, binding.edgePolicies.metadata) ||
         scheduledEdge->policy !=
             (stream == MediaStreamKind::Video
@@ -384,7 +392,8 @@ bool exactAudioVideoCodecEdges(
                    MediaPayloadKind::TsAccessUnit) ||
         !muxCodec || !muxPacket || !muxPlan ||
         !exactAudioVideoCodecEdges(
-            graph, muxCodec->id, binding.edgePolicies.metadata)) {
+            graph, muxCodec->id, binding.edgePolicies.metadata,
+            binding.audioExecutionProduct)) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument(
                 "AudioVideo Project MPEG-TS nodes differ from their runtime product"));

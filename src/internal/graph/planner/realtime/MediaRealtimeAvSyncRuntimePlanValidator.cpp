@@ -167,6 +167,7 @@ namespace media::ffmpeg::graph {
     const auto expected = MediaAvGenerationTransitionPlanner::plan(
         runtime.outputAdapter,
         *runtime.synchronization.sourceClockMode,
+        runtime.audioPipeline.branchMode,
         runtime.videoFilterActive,
         runtime.transition.acknowledgementTimeout,
         runtime.transition.terminalDrainWindow);

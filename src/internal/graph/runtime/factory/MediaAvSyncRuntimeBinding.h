@@ -5,6 +5,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
 #include "internal/graph/sync/MediaAvSyncGroupKey.h"
 
+#include <cstdint>
 #include <memory>
 #include <variant>
 
@@ -13,6 +14,11 @@ namespace media::ffmpeg::graph {
 class MediaAvStartupVideoPreparationState;
 
 struct MediaAvSyncComponentCoreRuntimeProduct final {};
+
+enum class MediaSynchronizedAudioExecutionProduct : std::uint8_t {
+    PacketCopy = 0,
+    FrameTranscode = 1
+};
 
 using MediaAvSyncRuntimeOutputProduct = std::variant<
     MediaAvSyncComponentCoreRuntimeProduct,
@@ -24,6 +30,7 @@ struct MediaAvSyncRuntimeBinding final {
     MediaAvSyncPlan plan;
     MediaAvGenerationTransitionPlan transition;
     MediaRealtimeEdgePolicySet edgePolicies;
+    MediaSynchronizedAudioExecutionProduct audioExecutionProduct;
     MediaAvSyncRuntimeOutputProduct outputProduct;
     std::shared_ptr<MediaAvStartupVideoPreparationState>
         videoPreparationState;
