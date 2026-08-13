@@ -205,8 +205,14 @@ bool VideoFilterNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) const
     if (!output) return ::media::Status::failure(output.error());
     m_inputContract = std::move(input).value();
     m_outputContract = std::move(output).value();
-    m_rgaFilter = nodeOptions(context)->value(
-        "filter.pipeline.filter").starts_with("scale_rkrga=");
+    if (!parseMediaVideoFilterImplementation(
+            nodeOptions(context)->value("filter.pipeline.implementation"),
+            m_filterImplementation) ||
+        m_filterImplementation == MediaVideoFilterImplementation::None) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "VideoFilterNode requires planner filter implementation"));
+    }
     return FFmpegNodeRuntime::start(context);
 }
 ::media::Status VideoFilterNode::stop(MediaGraphExecutionContext& context)
@@ -242,7 +248,7 @@ void VideoFilterNode::resetRuntimeState() noexcept
     m_drmPrimeOutputFrames = 0;
     m_rgaFrames = 0;
     m_softwareFrames = 0;
-    m_rgaFilter = false;
+    m_filterImplementation = MediaVideoFilterImplementation::Unknown;
 }
 
 ::media::Result<MediaNodeProcessResult> VideoFilterNode::onProcess(MediaGraphExecutionContext& context)
@@ -694,7 +700,8 @@ void VideoFilterNode::resetRuntimeState() noexcept
         *frame, *m_outputContract, "VideoFilterNode filter output");
     if (!outputFacts) return ::media::Status::failure(outputFacts.error());
     m_drmPrimeOutputFrames += outputFacts.value().drmPrime ? 1U : 0U;
-    m_rgaFrames += m_rgaFilter ? 1U : 0U;
+    m_rgaFrames += m_filterImplementation == MediaVideoFilterImplementation::Rga
+        ? 1U : 0U;
     m_softwareFrames += outputFacts.value().software ? 1U : 0U;
     std::shared_ptr<const MediaCanonicalLineage> lineage;
     if (m_lineageRegistry) {

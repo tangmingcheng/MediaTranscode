@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <limits>
+#include <string>
 #include <utility>
 
 namespace media::ffmpeg::graph {
@@ -85,6 +86,22 @@ void applyPacing(
     output.writePacingEnabled = true;
     output.writePacingBytesPerSecond = pacingBytesPerSecond(bitsPerSecond);
     output.writePacingBurstBytes = std::max<int64_t>(1, static_cast<int64_t>(output.packetSize) * PacingBurstPackets);
+}
+
+::media::Result<int> resolvedAudioBitrateKbps(
+    const MediaRealtimeRtpTranscodePlanningDraft& plan,
+    const char* consumer)
+{
+    if (!plan.audioPlan || !plan.audioPlan->resolvedOutput ||
+        !plan.audioPlan->resolvedOutput->bitrateKbps() ||
+        *plan.audioPlan->resolvedOutput->bitrateKbps() <= 0) {
+        return ::media::Result<int>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                std::string(consumer) +
+                " requires planner-resolved positive audio bitrate"));
+    }
+    return ::media::Result<int>::success(
+        *plan.audioPlan->resolvedOutput->bitrateKbps());
 }
 
 ::media::Result<MediaRtpUdpSenderConfig> rtpTransport(
@@ -196,6 +213,9 @@ void applyPacing(
         const bool expectAudio =
             request.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo;
         if (MediaRealtimeRequestClassifier::rtpAvpOutput(request)) {
+            ::media::Result<int> audioBitrate = expectAudio
+                ? resolvedAudioBitrateKbps(plan, "MPEG-TS RTP sender")
+                : ::media::Result<int>::success(0);
             if (!request.output.basePort || !request.output.packetSize) {
                 return ::media::Status::failure(
                     ::media::ErrorInfo::notInitialized(
@@ -206,8 +226,7 @@ void applyPacing(
                 !request.avSyncStartup.maximumVideoUnitBytes ||
                 *request.avSyncStartup.maximumVideoUnitBytes == 0 ||
                 (expectAudio &&
-                 (!request.parameters.audio.bitrateKbps ||
-                  *request.parameters.audio.bitrateKbps <= 0 ||
+                 (!audioBitrate ||
                   !request.avSyncStartup.maximumAudioUnitBytes ||
                   *request.avSyncStartup.maximumAudioUnitBytes == 0))) {
                 return ::media::Status::failure(
@@ -217,8 +236,7 @@ void applyPacing(
             const int64_t totalBitrate =
                 static_cast<int64_t>(*plan.videoParameters.bitrateKbps) * 1000 +
                 (expectAudio
-                     ? static_cast<int64_t>(
-                           *request.parameters.audio.bitrateKbps) * 1000
+                     ? static_cast<int64_t>(audioBitrate.value()) * 1000
                      : 0);
             auto sendBuffer = plannedRtpSendBufferBytes(
                 totalBitrate, *request.output.packetSize,
@@ -273,15 +291,10 @@ void applyPacing(
     output.videoOutput.scheduledTransport =
         std::move(videoTransport).value();
     if (request.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo) {
-        if (!plan.audioPlan || !plan.audioPlan->resolvedOutput ||
-            !plan.audioPlan->resolvedOutput->bitrateKbps() ||
-            *plan.audioPlan->resolvedOutput->bitrateKbps() <= 0) {
-            return ::media::Status::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "Realtime RTP audio output requires planner-resolved positive audio bitrate"));
-        }
-        const int audioBitrateKbps =
-            *plan.audioPlan->resolvedOutput->bitrateKbps();
+        auto audioBitrate = resolvedAudioBitrateKbps(
+            plan, "Realtime RTP audio output");
+        if (!audioBitrate) return ::media::Status::failure(audioBitrate.error());
+        const int audioBitrateKbps = audioBitrate.value();
         output.audioOutput.url = urls.audio;
         output.audioOutput.packetSize = *request.output.packetSize;
         output.audioOutput.mediaId = request.mediaId;

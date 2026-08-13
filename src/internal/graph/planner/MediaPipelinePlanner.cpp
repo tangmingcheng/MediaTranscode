@@ -205,6 +205,27 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
     return ::media::Status::success();
 }
 
+void materializeVideoExecutionContract(MediaPipelineChainPlan& chain)
+{
+    chain.decoderLineagePropagation =
+        chain.decoder.deviceKind() == MediaHardwareDeviceKind::RKMPP
+        ? MediaVideoLineagePropagation::SubmissionOrder
+        : MediaVideoLineagePropagation::CodecCopyOpaque;
+    chain.encoderLineagePropagation =
+        chain.encoder.deviceKind() == MediaHardwareDeviceKind::RKMPP
+        ? MediaVideoLineagePropagation::SubmissionOrder
+        : MediaVideoLineagePropagation::CodecCopyOpaque;
+    chain.filterImplementation = !chain.filterActive
+        ? MediaVideoFilterImplementation::None
+        : chain.filter.deviceKind() == MediaHardwareDeviceKind::RKMPP
+        ? MediaVideoFilterImplementation::Rga
+        : MediaVideoFilterImplementation::Generic;
+    chain.encoderAbortPolicy =
+        chain.encoder.deviceKind() == MediaHardwareDeviceKind::RKMPP
+        ? MediaVideoEncoderAbortPolicy::DrainThenAbort
+        : MediaVideoEncoderAbortPolicy::Immediate;
+}
+
 ::media::Result<MediaPipelinePlan> buildVideoTranscodePlan(
     const MediaInputVideoStreamInfo& inputInfo,
     std::string inputPath,
@@ -328,6 +349,7 @@ void logCopyPlan(const MediaPipelinePlannerOptions& options,
     const MediaPipelinePlannerOptions& options,
     MediaHardwareCapabilityProbe& hardwareProbe)
 {
+    materializeVideoExecutionContract(selected);
     if (options.disableHardware) {
         return ::media::Status::success();
     }

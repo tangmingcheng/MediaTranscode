@@ -190,13 +190,32 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
     }
     if (auto status = setOption(graph, nodes.hardwareTransfer, "transfer.direction", transferDirectionName(chain.transferDirection)); !status) return status;
     if (nodes.videoFilter.isValid()) {
+        if (chain.filterImplementation == MediaVideoFilterImplementation::Unknown ||
+            chain.filterImplementation == MediaVideoFilterImplementation::None) {
+            return ::media::Result<void>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "MediaVideoPlanOptionApplier requires an active planner filter implementation"));
+        }
         if (auto status = setOption(graph, nodes.videoFilter, MediaTranscodeOptionKey::PlannedFilter, chain.filter.filterName); !status) return status;
         if (auto status = setOption(graph, nodes.videoFilter, "filter.name", chain.filter.filterName); !status) return status;
         if (auto status = setOption(graph, nodes.videoFilter, "filter.hwaccel", chain.filter.hwaccelName); !status) return status;
+        if (auto status = setOption(
+                graph, nodes.videoFilter, "filter.pipeline.implementation",
+                mediaVideoFilterImplementationName(chain.filterImplementation));
+            !status) return status;
     }
     if (nodes.videoTimestamp.isValid()) {
         if (auto status = setOption(graph, nodes.videoTimestamp, MediaTranscodeOptionKey::VideoSynthesizeMissingTimestamps, boolOption(plan.synthesizeMissingTimestamps)); !status) return status;
     }
+    if (chain.encoderAbortPolicy == MediaVideoEncoderAbortPolicy::Unknown) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MediaVideoPlanOptionApplier requires planner encoder abort policy"));
+    }
+    if (auto status = setOption(
+            graph, nodes.videoEncode, "video_encode.abort_policy",
+            mediaVideoEncoderAbortPolicyName(chain.encoderAbortPolicy));
+        !status) return status;
     return setOption(graph, nodes.videoEncode, MediaTranscodeOptionKey::PlannedEncoder, chain.encoder.ffmpegName);
 }
 

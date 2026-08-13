@@ -8,6 +8,7 @@
 #include "internal/graph/sync/startup/MediaAvStartupVideoPreparationCapability.h"
 #include "internal/graph/runtime/channel/MediaReservedOutputTransaction.h"
 #include "internal/graph/model/MediaHardwareDescriptor.h"
+#include "internal/graph/model/MediaVideoExecutionContract.h"
 
 #include <cstdint>
 #include <optional>
@@ -121,7 +122,8 @@ private:
     std::uint64_t m_drmPrimeOutputFrames = 0;
     std::uint64_t m_rgaFrames = 0;
     std::uint64_t m_softwareFrames = 0;
-    bool m_rgaFilter = false;
+    MediaVideoFilterImplementation m_filterImplementation =
+        MediaVideoFilterImplementation::Unknown;
 };
 
 } // namespace media::ffmpeg::graph

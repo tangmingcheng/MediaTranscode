@@ -4,6 +4,7 @@
 #include "internal/graph/model/MediaEncodedPacketLayout.h"
 #include "internal/graph/model/MediaHardwareDescriptor.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
+#include "internal/graph/model/MediaVideoExecutionContract.h"
 #include "media_transcode/Result.h"
 
 #include <cstddef>
@@ -69,6 +70,14 @@ struct MediaPipelineChainPlan {
     bool zeroCopy = false;
     bool filterActive = false;
     MediaHardwareTransferDirection transferDirection = MediaHardwareTransferDirection::Unknown;
+    MediaVideoLineagePropagation decoderLineagePropagation =
+        MediaVideoLineagePropagation::Unknown;
+    MediaVideoLineagePropagation encoderLineagePropagation =
+        MediaVideoLineagePropagation::Unknown;
+    MediaVideoFilterImplementation filterImplementation =
+        MediaVideoFilterImplementation::Unknown;
+    MediaVideoEncoderAbortPolicy encoderAbortPolicy =
+        MediaVideoEncoderAbortPolicy::Unknown;
     std::string reason;
 };
 

@@ -226,6 +226,13 @@ bool VideoEncodeNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) const
         nodeOptions(context), "encoder.pipeline.input", "VideoEncodeNode");
     if (!contract) return ::media::Status::failure(contract.error());
     m_inputContract = std::move(contract).value();
+    if (!parseMediaVideoEncoderAbortPolicy(
+            nodeOptions(context)->value("video_encode.abort_policy"),
+            m_abortPolicy)) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "VideoEncodeNode requires planner encoder abort policy"));
+    }
     if (m_lineageRegistry) {
         auto forceKeyFrame = requiredBoolNodeOption(
             nodeOptions(context), "VideoEncodeNode",
@@ -245,11 +252,18 @@ bool VideoEncodeNode::pendingOutputIsCurrent(const MediaBufferRef& buffer) const
 }
 void VideoEncodeNode::abort(MediaGraphExecutionContext& context) noexcept
 {
-    if (hasCodecContext() && m_codecApi) {
-        (void)drainEncoderForStop();
+    if (m_abortPolicy == MediaVideoEncoderAbortPolicy::DrainThenAbort &&
+        hasCodecContext() && m_codecApi) {
+        if (auto status = drainEncoderForStop(); !status) {
+            mediaGraphDiagnosticLog(
+                MediaGraphDiagnosticLevel::State,
+                MediaGraphDiagnosticPhase::RuntimeLifecycle,
+                "video_encode.abort_drain_failed error=" +
+                    status.error().message);
+        }
     }
-    resetRuntimeState();
     FFmpegCodecNodeRuntime::abort(context);
+    resetRuntimeState();
 }
 void VideoEncodeNode::resetRuntimeState() noexcept
 {
@@ -260,6 +274,7 @@ void VideoEncodeNode::resetRuntimeState() noexcept
     m_sendWouldBlock.reset();
     m_forceGenerationStartKeyFrame.reset();
     m_copyOpaqueLineage.reset();
+    m_abortPolicy = MediaVideoEncoderAbortPolicy::Unknown;
     m_inputContract.reset();
     m_drmPrimeFrames = 0;
     m_softwareFrames = 0;

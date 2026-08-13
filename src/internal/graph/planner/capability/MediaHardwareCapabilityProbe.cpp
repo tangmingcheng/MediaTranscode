@@ -124,9 +124,47 @@ MediaHardwareCapability validateInternallyManagedRkmppChain(
     }
 
     if (chain.filterActive) {
-        constexpr const char* rgaFilterName = "scale_rkrga";
-        if (!MediaHardwareCapabilityProbe::filterExists(rgaFilterName)) {
-            return unavailable("planned RKMPP resize filter is unavailable: scale_rkrga");
+        if (chain.filterImplementation != MediaVideoFilterImplementation::Rga ||
+            chain.filter.filterName.empty() ||
+            !chain.filter.inputFrame || !chain.filter.outputFrame) {
+            return unavailable("planned RKMPP resize filter contract is incomplete");
+        }
+        auto probeFrame = ::media::ffmpeg::makeFrame();
+        if (!probeFrame) {
+            return unavailable("av_frame_alloc(RKMPP filter probe) returned null");
+        }
+        probeFrame->format = decoderFormat;
+        probeFrame->width = chain.filter.inputFrame->size.width;
+        probeFrame->height = chain.filter.inputFrame->size.height;
+        probeFrame->sample_aspect_ratio = AVRational{1, 1};
+
+        MediaNodeOptions filterOptions;
+        filterOptions.set("filter.pipeline.filter", chain.filter.filterName);
+        VideoFilterGraphBuildRequest request;
+        request.options = &filterOptions;
+        request.firstFrame = probeFrame.get();
+        request.inputTimeBase =
+            AVRational{options.probeFrameRate.den, options.probeFrameRate.num};
+        request.inputFrameRate =
+            AVRational{options.probeFrameRate.num, options.probeFrameRate.den};
+        request.sampleAspectRatio = AVRational{1, 1};
+        auto filterGraph = VideoFilterGraphBuilder::build(request);
+        if (!filterGraph) {
+            return unavailable(
+                "planned RKMPP RGA graph negotiation failed: " +
+                filterGraph.error().message);
+        }
+        const int sinkFormat = av_buffersink_get_format(
+            filterGraph.value().bufferSink);
+        const int sinkWidth = av_buffersink_get_w(
+            filterGraph.value().bufferSink);
+        const int sinkHeight = av_buffersink_get_h(
+            filterGraph.value().bufferSink);
+        if (sinkFormat != encoderFormat ||
+            sinkWidth != chain.filter.outputFrame->size.width ||
+            sinkHeight != chain.filter.outputFrame->size.height) {
+            return unavailable(
+                "planned RKMPP RGA graph negotiated a different output frame contract");
         }
     }
 
@@ -169,7 +207,7 @@ MediaHardwareCapability validateInternallyManagedRkmppChain(
     }
 
     return {true, chain.filterActive
-                      ? "internally managed RKMPP codecs opened and RGA filter found"
+                      ? "internally managed RKMPP codecs and planned RGA graph negotiated"
                       : "internally managed RKMPP codecs opened without a filter"};
 }
 

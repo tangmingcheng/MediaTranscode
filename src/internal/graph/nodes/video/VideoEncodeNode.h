@@ -6,6 +6,7 @@
 #include "internal/graph/runtime/lifecycle/MediaInputTerminalTracker.h"
 #include "internal/graph/sync/lineage/MediaVideoLineageState.h"
 #include "internal/graph/model/MediaHardwareDescriptor.h"
+#include "internal/graph/model/MediaVideoExecutionContract.h"
 
 #include <set>
 #include <string_view>
@@ -88,6 +89,8 @@ private:
     std::optional<bool> m_sendWouldBlock;
     std::optional<bool> m_forceGenerationStartKeyFrame;
     std::optional<bool> m_copyOpaqueLineage;
+    MediaVideoEncoderAbortPolicy m_abortPolicy =
+        MediaVideoEncoderAbortPolicy::Unknown;
     std::shared_ptr<MediaCodecLineageRegistry> m_lineageRegistry;
     std::shared_ptr<MediaVideoEncoderCodecApi> m_codecApi;
     std::shared_ptr<VideoEncodeLineageState> m_lineageState;
