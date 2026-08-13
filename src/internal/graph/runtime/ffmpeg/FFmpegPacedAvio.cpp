@@ -1,5 +1,6 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegPacedAvio.h"
 #include "internal/graph/runtime/ffmpeg/FFmpegAvioWritePacket.h"
+#include "internal/graph/runtime/io/MediaWritePacingClock.h"
 
 extern "C" {
 #include <libavformat/avio.h>
@@ -7,11 +8,9 @@ extern "C" {
 #include <libavutil/mem.h>
 }
 
-#include <algorithm>
-#include <chrono>
 #include <cstdint>
+#include <memory>
 #include <new>
-#include <thread>
 
 namespace media::ffmpeg {
 namespace {
@@ -25,8 +24,7 @@ struct PacedAvioState {
     AVIOContext* inner = nullptr;
     int64_t bytesPerSecond = 0;
     int64_t burstBytes = DefaultBurstBytes;
-    int64_t bytesWritten = 0;
-    std::chrono::steady_clock::time_point startedAt = std::chrono::steady_clock::now();
+    std::unique_ptr<graph::MediaWritePacingClock> pacingClock;
 };
 
 PacedAvioState* pacedState(const AVIOContext* context) noexcept
@@ -38,22 +36,6 @@ PacedAvioState* pacedState(const AVIOContext* context) noexcept
     return state->magic == PacedAvioMagic ? state : nullptr;
 }
 
-void paceWrite(PacedAvioState& state, int size) noexcept
-{
-    if (state.bytesPerSecond <= 0 || size <= 0) {
-        return;
-    }
-
-    const int64_t nextBytes = state.bytesWritten + size;
-    const int64_t pacedBytes = std::max<int64_t>(0, nextBytes - state.burstBytes);
-    const int64_t targetUs = pacedBytes * 1000000 / state.bytesPerSecond;
-    const auto target = state.startedAt + std::chrono::microseconds(targetUs);
-    const auto now = std::chrono::steady_clock::now();
-    if (target > now) {
-        std::this_thread::sleep_until(target);
-    }
-}
-
 int pacedWritePacket(void* opaque,
                      FFmpegAvioWritePacketByte* buffer,
                      int size) noexcept
@@ -63,10 +45,9 @@ int pacedWritePacket(void* opaque,
         return AVERROR(EINVAL);
     }
 
-    paceWrite(*state, size);
+    state->pacingClock->waitFor(static_cast<std::size_t>(size));
     avio_write(state->inner, buffer, size);
     avio_flush(state->inner);
-    state->bytesWritten += size;
     return size;
 }
 
@@ -95,7 +76,13 @@ int openPacedWriteAvio(AVIOContext** context,
     state->inner = inner;
     state->bytesPerSecond = options.bytesPerSecond;
     state->burstBytes = options.burstBytes > 0 ? options.burstBytes : DefaultBurstBytes;
-    state->startedAt = std::chrono::steady_clock::now();
+    state->pacingClock.reset(new (std::nothrow) graph::MediaWritePacingClock(
+        state->bytesPerSecond, state->burstBytes));
+    if (!state->pacingClock) {
+        avio_closep(&inner);
+        delete state;
+        return AVERROR(ENOMEM);
+    }
 
     auto* avioBuffer = static_cast<unsigned char*>(av_malloc(AvioBufferSize));
     if (!avioBuffer) {
@@ -136,8 +123,7 @@ void resetPacedWriteAvio(AVIOContext* context) noexcept
         return;
     }
 
-    state->bytesWritten = 0;
-    state->startedAt = std::chrono::steady_clock::now();
+    state->pacingClock->reset();
 }
 
 void closePacedWriteAvio(AVIOContext** context) noexcept

@@ -25,6 +25,8 @@ struct MediaRealtimeMpegTsOutputPlanningDraft final {
     std::string mediaId;
     std::optional<MediaRtpUdpSenderConfig> rtpTransport;
     std::string sdpPath;
+    std::int64_t writePacingBytesPerSecond = 0;
+    std::int64_t writePacingBurstBytes = 0;
 };
 
 struct MediaRealtimeSeparateRtpSdpPlanningDraft final {

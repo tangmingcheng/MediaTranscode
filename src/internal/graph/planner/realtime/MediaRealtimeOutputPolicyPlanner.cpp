@@ -255,6 +255,11 @@ std::optional<int> resolvedAudioBitrateKbps(
             output.muxedOutput.rtpTransport =
                 std::move(transport).value();
             output.muxedOutput.sdpPath = request.output.sdpPath;
+            output.muxedOutput.writePacingBytesPerSecond =
+                pacingBytesPerSecond(totalBitrate);
+            output.muxedOutput.writePacingBurstBytes =
+                static_cast<std::int64_t>(*request.output.packetSize) *
+                PacingBurstPackets;
         }
         return ::media::Status::success();
     }

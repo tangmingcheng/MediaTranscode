@@ -410,7 +410,9 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
                 std::move(*output.muxedOutput.rtpTransport),
                 output.muxedOutput.sdpPath,
                 output.muxedOutput.mediaId,
-                MediaRunningTime::fromNanoseconds(NanosecondsPerSecond));
+                MediaRunningTime::fromNanoseconds(NanosecondsPerSecond),
+                output.muxedOutput.writePacingBytesPerSecond,
+                output.muxedOutput.writePacingBurstBytes);
             if (!rtp ||
                 rtp.value().tsPacketsPerPayload() !=
                     accepted.value().muxPlan().parameters()
