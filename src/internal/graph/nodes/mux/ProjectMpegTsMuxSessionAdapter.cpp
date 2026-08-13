@@ -473,7 +473,8 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
                             }
                             auto session = MediaTsMuxSession::create(
                                 MediaTsMuxSession::Binding{
-                                    muxPlan, *m_activation,
+                                    muxPlan, m_outputPlan->emission,
+                                    *m_activation,
                                     std::move(streams),
                                     std::move(datagramSink).value(),
                                     current.value().
@@ -659,6 +660,23 @@ ProjectMpegTsMuxSessionAdapter::poll(MediaGraphExecutionContext& context)
                 ::media::ErrorInfo::notInitialized(
                     "project MPEG-TS mux session cannot poll outside its active state"));
         }
+        if (m_session->hasPendingEmission()) {
+            auto now = m_outputAuthority->now();
+            if (!now) {
+                return ::media::Result<MediaMuxSessionPollResult>::failure(
+                    now.error());
+            }
+            auto polled = m_session->poll(now.value());
+            if (!polled) {
+                return ::media::Result<MediaMuxSessionPollResult>::failure(
+                    polled.error());
+            }
+            m_nextTransportDeadline = polled.value().nextDeadline;
+            return ::media::Result<MediaMuxSessionPollResult>::success({
+                polled.value().packetsWritten != 0,
+                m_outputAuthority->deadlineWait(
+                    polled.value().nextDeadline)});
+        }
         if (!m_mediaTimelineStarted) {
             return ::media::Result<MediaMuxSessionPollResult>::success(
                 {false, std::nullopt});
@@ -689,7 +707,7 @@ ProjectMpegTsMuxSessionAdapter::poll(MediaGraphExecutionContext& context)
                 false,
                 m_outputAuthority->deadlineWait(safeDeadline.value())});
         }
-        auto polled = m_session->poll(*m_latestAcceptedEmission);
+        auto polled = m_session->poll(now.value());
         if (!polled) {
             return ::media::Result<MediaMuxSessionPollResult>::failure(
                 polled.error());
@@ -710,6 +728,13 @@ ProjectMpegTsMuxSessionAdapter::poll(MediaGraphExecutionContext& context)
     auto status = fail(result.error());
     return ::media::Result<MediaMuxSessionPollResult>::failure(
         status.error());
+}
+
+bool ProjectMpegTsMuxSessionAdapter::hasPendingOutput() const noexcept
+{
+    auto mutation = m_generationState->reserveSessionMutation();
+    return m_state == State::Active && m_session &&
+        m_session->hasPendingEmission();
 }
 
 bool ProjectMpegTsMuxSessionAdapter::bindingsReady() const noexcept

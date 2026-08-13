@@ -71,6 +71,10 @@ MediaNodeKind FileMuxNode::staticKind() noexcept
     }
     observeClosedInputs(context);
 
+    if (m_phase == Phase::Streaming && m_session->hasPendingOutput()) {
+        return pollOrWait(context);
+    }
+
     auto ready = finishIfReady(context);
     if (!ready || ready.value().state == MediaNodeProcessState::Finished) return ready;
 

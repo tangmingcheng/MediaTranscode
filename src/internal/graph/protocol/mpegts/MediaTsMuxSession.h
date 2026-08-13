@@ -2,6 +2,7 @@
 
 #include "internal/graph/protocol/mpegts/MediaTsAccessUnitView.h"
 #include "internal/graph/protocol/mpegts/MediaTsMaterializedStreamConfig.h"
+#include "internal/graph/protocol/mpegts/MediaTsPendingEmission.h"
 #include "internal/graph/protocol/mpegts/MediaTsPacketBatchWriter.h"
 
 #include <memory>
@@ -26,6 +27,7 @@ public:
 
     struct Binding final {
         MediaTsMuxPlan plan;
+        MediaTsDatagramEmissionPlan emission;
         MediaProtocolOutputActivation activation;
         MaterializedStreams streams;
         std::unique_ptr<MediaTsDatagramSink> sink;
@@ -45,6 +47,7 @@ public:
         const MediaTsAccessUnitView& unit);
     ::media::Status finish();
     void abort() noexcept;
+    bool hasPendingEmission() const noexcept;
 
 private:
     enum class State : std::uint8_t { Created, Open, Finished, Poisoned };
@@ -55,18 +58,33 @@ private:
                       MediaTsProgramTables tables,
                       MediaTsPacketBatchWriter writer) noexcept;
     ::media::Result<std::size_t> writeTables(
-        MediaRunningTime emitOnMaster);
+        MediaRunningTime emitOnMaster,
+        MediaRunningTime availableThrough);
+    ::media::Result<std::size_t> writeCursorThrough(
+        MediaTsPacketCursor& cursor,
+        MediaRunningTime notBefore,
+        MediaRunningTime availableThrough);
+    ::media::Result<AdvanceResult> emitPending(
+        MediaRunningTime masterNow,
+        bool oneDatagramOnly);
+    ::media::Result<AdvanceResult> advanceThroughAvailable(
+        MediaRunningTime emitOnMaster,
+        MediaRunningTime availableThrough);
+    ::media::Status completePending();
     ::media::Status poison(::media::ErrorInfo error);
     ::media::Status stateFailure(const char* action);
     ::media::Result<AdvanceResult> advanceFailure(::media::ErrorInfo error);
 
     MediaTsMuxPlan m_plan;
+    MediaTsDatagramEmissionPlan m_emissionPlan;
     MediaProtocolOutputActivation m_activation;
     MaterializedStreams m_streams;
     MediaTsOutputClockGenerator m_clock;
     MediaTsTransportPacketizer m_packetizer;
     MediaTsProgramTables m_tables;
     MediaTsPacketBatchWriter m_writer;
+    std::optional<MediaTsDatagramEmissionSchedule> m_emissionSchedule;
+    std::optional<MediaTsPendingEmission> m_pendingEmission;
     State m_state = State::Created;
     std::optional<::media::ErrorInfo> m_failure;
     std::optional<MediaRunningTime> m_lastAdvance;
