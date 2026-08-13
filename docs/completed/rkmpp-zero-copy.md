@@ -18,7 +18,7 @@ All target commands entered `/home/firefly/Downloads/MediaTranscode` and enabled
 - Realtime A/V: H.264 plus real source AAC produced H.264 2560x1440 and AAC 44100 Hz stereo output; full dual-stream decode returned success. Startup release was 16 video and 22 audio units, drift remained 0 ns/0 ppm, drops remained zero, and RSS stabilized near 60 MiB.
 - Release video-only CLI CPU was approximately 20-24% in Linux single-core-percent convention. Full A/V was approximately 50-61%; thread sampling attributed about 38% to the software AAC encoder while RKMPP video decode/encode workers were about 2%/1%.
 
-The target clean Release build used eight parallel jobs and completed all 491 targets. Both CLI executables linked against the FFmpeg libraries selected by `ffenv on`.
+The final target clean Release build used eight parallel jobs and completed all 492 targets. Both CLI executables linked against the FFmpeg libraries selected by `ffenv on`.
 
 ## Representative acceptance commands
 
