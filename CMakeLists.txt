@@ -106,7 +106,7 @@ if(WIN32)
         swscale
         swresample
     )
-elseif(USE_LOCAL_FFMPEG AND CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
+elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
     find_package(PkgConfig REQUIRED)
     if(DEFINED ENV{PKG_CONFIG_PATH})
         set(ffmpeg_pkg_config_path_was_defined TRUE)
