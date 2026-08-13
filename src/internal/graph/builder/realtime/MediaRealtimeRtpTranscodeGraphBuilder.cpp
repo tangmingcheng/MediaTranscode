@@ -532,7 +532,10 @@ PacketSelectOutputPlan packetOutputPlan(int sourceStreamIndex,
             plan.videoPlan.branchMode == MediaBranchMode::CopyPacket
                 ? MediaEdgeKind::EncodedPacket
                 : MediaEdgeKind::InputPacket;
-        syncOptions.releasedAudioEdgeKind = MediaEdgeKind::InputPacket;
+        syncOptions.releasedAudioEdgeKind =
+            avRuntime->audioPipeline.branchMode == MediaBranchMode::CopyPacket
+                ? MediaEdgeKind::EncodedPacket
+                : MediaEdgeKind::InputPacket;
         auto assembled = MediaRealtimeAvSyncInputSegmentBuilder::build(
             graph, syncOptions, *avRuntime);
         if (!assembled) {
