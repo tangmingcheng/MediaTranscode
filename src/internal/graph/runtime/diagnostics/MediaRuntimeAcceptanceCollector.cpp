@@ -1,5 +1,7 @@
 #include "internal/graph/runtime/diagnostics/MediaRuntimeAcceptanceCollector.h"
 
+#include <algorithm>
+
 #if defined(_WIN32)
 #include <Windows.h>
 #include <Psapi.h>
@@ -333,9 +335,16 @@ MediaRuntimeAcceptanceCollector::MediaRuntimeAcceptanceCollector(
         ++m_metrics.cpuSampleCount;
         m_metrics.averageCpuPercent = (m_metrics.averageCpuPercent * count + platform.systemCpuPercent) / (count + 1.0);
         m_metrics.averageProcessCpuPercent = (m_metrics.averageProcessCpuPercent * count + platform.processCpuPercent) / (count + 1.0);
+        m_metrics.peakProcessCpuPercent = (std::max)(
+            m_metrics.peakProcessCpuPercent, platform.processCpuPercent);
     }
     m_metrics.processThreadCount = platform.threadCount;
+    if (m_metrics.initialWorkingSetBytes == 0) {
+        m_metrics.initialWorkingSetBytes = platform.workingSetBytes;
+    }
     m_metrics.workingSetBytes = platform.workingSetBytes;
+    m_metrics.peakWorkingSetBytes = (std::max)(
+        m_metrics.peakWorkingSetBytes, platform.workingSetBytes);
     if (!m_hasProgress || progress != m_lastProgress) {
         m_lastProgress = progress;
         m_lastProgressAt = now;

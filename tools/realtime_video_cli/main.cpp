@@ -433,6 +433,14 @@ int runRealtimeVideoCli(int argc, char** argv)
                   << " reason=" << audio.reason;
         if (audio.resolvedOutput) {
             std::cout << " codec=" << audio.resolvedOutput->codecName();
+            std::cout << " sample_rate=" << audio.resolvedOutput->sampleRate()
+                      << " channels=" << audio.resolvedOutput->channels()
+                      << " access_unit_samples="
+                      << audio.resolvedOutput->codecFrameSamples();
+            if (!audio.resolvedOutput->encoderName().empty()) {
+                std::cout << " encoder="
+                          << audio.resolvedOutput->encoderName();
+            }
             if (audio.resolvedOutput->bitrateKbps()) {
                 std::cout << " bitrate_kbps="
                           << *audio.resolvedOutput->bitrateKbps();

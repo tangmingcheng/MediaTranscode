@@ -22,7 +22,10 @@ std::string MediaGraphRuntimeReport::summary() const
            ", cpuSamples=" + std::to_string(metrics.cpuSampleCount) +
            ", averageCpuPercent=" + std::to_string(metrics.averageCpuPercent) +
            ", averageProcessCpuPercent=" + std::to_string(metrics.averageProcessCpuPercent) +
+           ", peakProcessCpuPercent=" + std::to_string(metrics.peakProcessCpuPercent) +
+           ", initialWorkingSetBytes=" + std::to_string(metrics.initialWorkingSetBytes) +
            ", workingSetBytes=" + std::to_string(metrics.workingSetBytes) +
+           ", peakWorkingSetBytes=" + std::to_string(metrics.peakWorkingSetBytes) +
            ", totalPushed=" + std::to_string(metrics.totalPushed) +
            ", totalPopped=" + std::to_string(metrics.totalPopped) +
            ", droppedBuffers=" + std::to_string(metrics.droppedBuffers) +
@@ -55,7 +58,10 @@ MediaGraphRuntimeReport MediaGraphRuntimeReporter::capture(const MediaGraphRunti
     report.metrics.stalledIntervals = acceptance.stalledIntervals;
     report.metrics.errorCount = acceptance.errorCount;
     report.metrics.averageProcessCpuPercent = acceptance.averageProcessCpuPercent;
+    report.metrics.peakProcessCpuPercent = acceptance.peakProcessCpuPercent;
+    report.metrics.initialWorkingSetBytes = acceptance.initialWorkingSetBytes;
     report.metrics.workingSetBytes = acceptance.workingSetBytes;
+    report.metrics.peakWorkingSetBytes = acceptance.peakWorkingSetBytes;
     report.metrics.processThreadCount = acceptance.processThreadCount;
 
     std::size_t queued = 0;
@@ -101,7 +107,10 @@ MediaGraphRuntimeReport MediaGraphRuntimeReporter::capture(const MediaGraphRunti
         report.metrics.encodedPacketsPushed = encodedPacketsPushed;
         report.metrics.encodedPacketsPopped = encodedPacketsPopped;
         report.metrics.averageProcessCpuPercent = acceptance.averageProcessCpuPercent;
+        report.metrics.peakProcessCpuPercent = acceptance.peakProcessCpuPercent;
+        report.metrics.initialWorkingSetBytes = acceptance.initialWorkingSetBytes;
         report.metrics.workingSetBytes = acceptance.workingSetBytes;
+        report.metrics.peakWorkingSetBytes = acceptance.peakWorkingSetBytes;
         report.metrics.processThreadCount = acceptance.processThreadCount;
         report.metrics.updateQueuedBuffers(queued, graphQueuePeak);
     }
