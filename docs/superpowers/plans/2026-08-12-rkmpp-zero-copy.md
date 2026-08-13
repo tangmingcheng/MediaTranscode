@@ -51,4 +51,3 @@
 - Record concise completed-work evidence, commands/results, remaining risks, and update `QUALITY_SCORE.md`.
 - Confirm no temporary tests, credentials, process residue, LF-only changed text, or unrelated files remain.
 - Run whole-branch review, fix all load-bearing findings, push, create the PR, and obtain a fresh-agent PASS verdict.
-

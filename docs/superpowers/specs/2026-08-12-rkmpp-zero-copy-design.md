@@ -26,4 +26,3 @@ The existing automatic backend selection, CUDA/QSV/D3D11VA/software paths, Windo
 - RK local: four H.264/HEVC decode/encode combinations at source size, plus H.264 and HEVC RGA-resize cases.
 - RK realtime: MPEG-TS/UDP input to separate RTP output for all four codec combinations, plus one complete H.264 A/V route.
 - The target source is `/home/firefly/Downloads/test16s.mp4`; all target commands run after `ffenv on`.
-
