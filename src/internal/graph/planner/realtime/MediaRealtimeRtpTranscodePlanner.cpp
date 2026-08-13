@@ -882,6 +882,7 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
             options, selectedAudioVideoProgram,
             resolvedTsFacts ? &*resolvedTsFacts : nullptr,
             demuxFacts ? &*demuxFacts : nullptr,
+            plannedAudio.branchMode,
             plannedAudio.resolvedOutput->sampleRate());
         if (!avSync) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(avSync.error());

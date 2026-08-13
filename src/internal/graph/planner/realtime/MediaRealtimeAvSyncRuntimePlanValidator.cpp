@@ -43,7 +43,10 @@ namespace media::ffmpeg::graph {
         ? MediaAvSyncPlanValidator::validate(runtime.synchronization)
         : MediaAvSyncPlanValidator::validatePolicy(runtime.synchronization);
     if (runtime.groupKey.value() != "realtime.av" ||
-        !synchronizationStatus) {
+        !synchronizationStatus ||
+        !runtime.synchronization.startup.trimAudioToCommonStart ||
+        *runtime.synchronization.startup.trimAudioToCommonStart !=
+            audioTranscode) {
         return invalid("group or synchronization plan");
     }
     auto selectedBounds = MediaRealtimeAvSyncComponentBoundsPlanner::plan(

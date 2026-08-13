@@ -39,23 +39,37 @@ MediaAvStartupWindowSelector::select(
                *audio[audioCursor].unit->presentationTime <= maximumAudio.value()) {
             ++work.candidateOperations;
             const auto& audioCandidate = audio[audioCursor];
-            const auto sourceStart = std::max(
-                *videoCandidate.unit->presentationTime,
-                *audioCandidate.unit->presentationTime);
+            const auto videoStart = *videoCandidate.unit->presentationTime;
+            const auto audioStart = *audioCandidate.unit->presentationTime;
+            if (!config.trimAudioToCommonStart && audioStart < videoStart) {
+                ++audioCursor;
+                continue;
+            }
+            const auto sourceStart = config.trimAudioToCommonStart
+                ? std::max(videoStart, audioStart)
+                : videoStart;
             auto audioEnd = audioCandidate.unit->presentationTime->checkedAdd(
                 audioCandidate.unit->duration);
-            auto audioTrim = sourceStart.checkedSubtract(
-                *audioCandidate.unit->presentationTime);
             auto requiredEnd = sourceStart.checkedAdd(config.preroll);
-            if (!audioEnd || !audioTrim || !requiredEnd) {
+            if (!audioEnd || !requiredEnd) {
                 return ::media::Result<std::optional<MediaAvStartupWindow>>::failure(
                     ::media::ErrorInfo::invalidArgument(
                         "startup candidate arithmetic overflow"));
             }
-            if (audioEnd.value() <= sourceStart ||
-                audioTrim.value() > config.maximumAudioTrim) {
+            if (audioEnd.value() <= sourceStart) {
                 ++audioCursor;
                 continue;
+            }
+            if (config.trimAudioToCommonStart) {
+                auto audioTrim = sourceStart.checkedSubtract(audioStart);
+                if (!audioTrim) {
+                    return ::media::Result<std::optional<MediaAvStartupWindow>>::failure(
+                        audioTrim.error());
+                }
+                if (audioTrim.value() > config.maximumAudioTrim) {
+                    ++audioCursor;
+                    continue;
+                }
             }
             if (videoCandidate.coverageEnd < requiredEnd.value()) break;
             if (audioCandidate.coverageEnd >= requiredEnd.value()) {

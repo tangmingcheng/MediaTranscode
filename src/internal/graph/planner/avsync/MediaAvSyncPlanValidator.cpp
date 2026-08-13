@@ -62,7 +62,7 @@ bool validByteCapacity(const std::optional<std::size_t>& units,
 
     const auto& startup = plan.startup;
     if (!startup.requireVideoKeyFrame || !*startup.requireVideoKeyFrame ||
-        !startup.trimAudioToCommonStart || !*startup.trimAudioToCommonStart ||
+        !startup.trimAudioToCommonStart ||
         !positive(startup.maximumWaitNs) || !positive(startup.prerollNs) ||
         !positive(startup.keyFrameWaitNs) || !positive(startup.maximumAudioTrimNs) ||
         !positive(startup.maximumInitialSkewNs) || !positive(startup.outputLeadNs) ||

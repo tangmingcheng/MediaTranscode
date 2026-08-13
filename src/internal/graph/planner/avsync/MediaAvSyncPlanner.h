@@ -18,6 +18,7 @@ public:
         const MediaTsAudioVideoSelectedProgramPlan* selectedTsProgram,
         const MediaProjectMpegTsResolvedPipelineFacts* resolvedTsFacts,
         const MediaAvSyncPreparedDemuxTimestampFacts* preparedDemuxFacts,
+        MediaBranchMode audioBranchMode,
         int resolvedOutputAudioSampleRate);
 
 private:

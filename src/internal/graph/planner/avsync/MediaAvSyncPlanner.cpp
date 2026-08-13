@@ -240,6 +240,7 @@ void planTsInput(MediaAvSyncPlan& plan,
     const MediaTsAudioVideoSelectedProgramPlan* selectedTsProgram,
     const MediaProjectMpegTsResolvedPipelineFacts* resolvedTsFacts,
     const MediaAvSyncPreparedDemuxTimestampFacts* preparedDemuxFacts,
+    MediaBranchMode audioBranchMode,
     int resolvedOutputAudioSampleRate)
 {
     if (request.mediaId.empty()) {
@@ -256,6 +257,12 @@ void planTsInput(MediaAvSyncPlan& plan,
             ::media::ErrorInfo::notInitialized(
                 "A/V synchronization requires a resolved output audio sample rate"));
     }
+    if (audioBranchMode != MediaBranchMode::CopyPacket &&
+        audioBranchMode != MediaBranchMode::TranscodeFrame) {
+        return ::media::Result<MediaAvSyncPlan>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "A/V synchronization requires a planned audio execution branch"));
+    }
     MediaAvSyncPlan plan;
     if (preparedDemuxFacts) {
         plan.startup = preparedDemuxFacts->startup;
@@ -266,6 +273,8 @@ void planTsInput(MediaAvSyncPlan& plan,
         }
         plan.startup = std::move(startup).value();
     }
+    plan.startup.trimAudioToCommonStart =
+        audioBranchMode == MediaBranchMode::TranscodeFrame;
     planSharedNonStartupPolicy(plan);
     plan.audioServo.outputSampleRate = resolvedOutputAudioSampleRate;
 
