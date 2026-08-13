@@ -71,6 +71,7 @@ public:
     ::media::Result<MediaTsPreparedPacketBatch> prepare(std::size_t maximumPackets);
     ::media::Status commit(MediaTsPacketCommitToken commitToken);
     bool finished() const noexcept;
+    std::size_t remainingPacketCount() const noexcept;
 
 private:
     friend class MediaTsTransportPacketizer;

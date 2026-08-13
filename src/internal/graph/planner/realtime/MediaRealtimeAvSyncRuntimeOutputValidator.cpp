@@ -257,10 +257,6 @@ bool validRtpStream(
         output.emission.perDatagramOverheadBytes() != 12 ||
         output.emission.maximumWireDatagramBytes() >
             rtp->maximumDatagramBytes() ||
-        output.emission.wireBytesPerSecond() !=
-            rtp->writePacingBytesPerSecond() ||
-        output.emission.burstWireBytes() !=
-            static_cast<std::size_t>(rtp->writePacingBurstBytes()) ||
         rtp->payloadType() != 33 || rtp->clockRate() != 90'000 ||
         rtp->ssrc() == 0 || rtp->cname().empty() ||
         rtp->initialSequenceNumber() !=

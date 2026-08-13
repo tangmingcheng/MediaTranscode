@@ -149,10 +149,7 @@ planSeparateRtp(
             std::move(*output.muxedOutput.rtpTransport),
             output.muxedOutput.sdpPath,
             request.mediaId,
-            MediaRunningTime::fromNanoseconds(SenderReportIntervalNs),
-            output.muxedOutput.emission->wireBytesPerSecond(),
-            static_cast<std::int64_t>(
-                output.muxedOutput.emission->burstWireBytes()));
+            MediaRunningTime::fromNanoseconds(SenderReportIntervalNs));
         if (!rtp || rtp.value().tsPacketsPerPayload() !=
                         maximumPacketsPerDatagram) {
             return ::media::Result<

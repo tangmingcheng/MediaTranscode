@@ -6,7 +6,6 @@
 #include "internal/graph/protocol/rtp/MediaRtcpSenderReportSchedule.h"
 #include "internal/graph/protocol/rtp/MediaRtpUdpSenderTransport.h"
 #include "internal/graph/protocol/MediaProtocolOutputRuntimeAuthority.h"
-#include "internal/graph/runtime/io/MediaWritePacingClock.h"
 #include "internal/graph/time/MediaSharedNtpEpoch.h"
 
 #include <memory>
@@ -40,8 +39,7 @@ private:
         std::shared_ptr<MediaMpegTsRtpContinuityState> continuity,
         std::string cname,
         std::uint32_t ssrc,
-        std::uint64_t generation,
-        MediaWritePacingClock writePacingClock) noexcept;
+        std::uint64_t generation) noexcept;
 
     ::media::Status dispatchSenderReport(
         MediaRunningTime now,
@@ -65,7 +63,6 @@ private:
     std::string m_cname;
     std::uint32_t m_ssrc;
     std::uint64_t m_generation;
-    MediaWritePacingClock m_writePacingClock;
     std::optional<MediaRunningTime> m_lastEmitOnMaster;
     std::optional<std::uint16_t> m_firstSequenceNumber;
     std::optional<std::uint16_t> m_lastSequenceNumber;

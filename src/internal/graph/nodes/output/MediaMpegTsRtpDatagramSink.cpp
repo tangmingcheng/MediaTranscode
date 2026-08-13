@@ -17,8 +17,7 @@ MediaMpegTsRtpDatagramSink::MediaMpegTsRtpDatagramSink(
     std::shared_ptr<MediaMpegTsRtpContinuityState> continuity,
     std::string cname,
     std::uint32_t ssrc,
-    std::uint64_t generation,
-    MediaWritePacingClock writePacingClock) noexcept
+    std::uint64_t generation) noexcept
     : m_transport(std::move(transport)),
       m_packetizer(std::move(packetizer)),
       m_ntpEpoch(ntpEpoch),
@@ -26,8 +25,7 @@ MediaMpegTsRtpDatagramSink::MediaMpegTsRtpDatagramSink(
       m_continuity(std::move(continuity)),
       m_cname(std::move(cname)),
       m_ssrc(ssrc),
-      m_generation(generation),
-      m_writePacingClock(std::move(writePacingClock))
+      m_generation(generation)
 {
 }
 
@@ -90,10 +88,7 @@ MediaMpegTsRtpDatagramSink::create(
             std::move(transport).value(),
             std::move(packetizer).value(), sharedNtpEpoch,
             std::move(reportSchedule).value(), std::move(continuity),
-            plan.cname(), plan.ssrc(), activation.generation,
-            MediaWritePacingClock(
-                plan.writePacingBytesPerSecond(),
-                plan.writePacingBurstBytes())));
+            plan.cname(), plan.ssrc(), activation.generation));
     if (!sink) {
         return SinkResult::failure(
             ::media::ErrorInfo::allocationFailed(
@@ -217,7 +212,6 @@ void MediaMpegTsRtpDatagramSink::logContinuity(
             return ::media::Result<std::size_t>::failure(status.error());
         }
         try {
-            m_writePacingClock.waitFor(packet.value().datagram().size());
             auto sent = m_transport->sendRtp(packet.value().datagram());
             if (!sent) {
                 auto status = fail(sent.error());

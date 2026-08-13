@@ -53,7 +53,7 @@ constexpr std::array<const char*, 13> UdpKeys{
     EmissionPayloadKey,
     EmissionOverheadKey};
 
-constexpr std::array<const char*, 38> RtpKeys{
+constexpr std::array<const char*, 36> RtpKeys{
     SessionKey,
     PlanKey,
     VariantKey,
@@ -83,8 +83,6 @@ constexpr std::array<const char*, 38> RtpKeys{
     "project_mpeg_ts_plan.transport.rtp.sdp.origin_numeric_address",
     "project_mpeg_ts_plan.transport.rtp.sdp.cname",
     "project_mpeg_ts_plan.transport.rtp.initial_sequence_number",
-    "project_mpeg_ts_plan.transport.rtp.write_pacing_bytes_per_second",
-    "project_mpeg_ts_plan.transport.rtp.write_pacing_burst_bytes",
     MuxSessionKindKey,
     StreamSetKey,
     EmissionRateKey,
@@ -446,9 +444,6 @@ bool sameRtpOutput(
         left.senderReportInterval() == right.senderReportInterval() &&
         left.maximumDatagramBytes() == right.maximumDatagramBytes() &&
         left.tsPacketsPerPayload() == right.tsPacketsPerPayload() &&
-        left.writePacingBytesPerSecond() ==
-            right.writePacingBytesPerSecond() &&
-        left.writePacingBurstBytes() == right.writePacingBurstBytes() &&
         leftSdp.path == rightSdp.path &&
         leftSdp.originUsername == rightSdp.originUsername &&
         leftSdp.sessionName == rightSdp.sessionName &&
@@ -537,10 +532,6 @@ bool sameProtocol(
         output.emission.maximumLateness() != mux.transportDecodeLead ||
         output.emission.maximumWireDatagramBytes() >
             sender.maximumDatagramBytes() ||
-        output.emission.wireBytesPerSecond() !=
-            rtp.writePacingBytesPerSecond() ||
-        output.emission.burstWireBytes() !=
-            static_cast<std::size_t>(rtp.writePacingBurstBytes()) ||
         localPolicy.kind() !=
             MediaRtpUdpLocalPortPolicyKind::OsAssignedIndependent ||
         localPolicy.rtpPort() || localPolicy.rtcpPort() ||
@@ -581,9 +572,7 @@ bool sameProtocol(
         {RtpKeys[26], rtp.sdp().originNumericAddress},
         {RtpKeys[27], rtp.sdp().cname},
         {RtpKeys[28], std::to_string(rtp.initialSequenceNumber())},
-        {RtpKeys[29], std::to_string(rtp.writePacingBytesPerSecond())},
-        {RtpKeys[30], std::to_string(rtp.writePacingBurstBytes())},
-        {RtpKeys[31], "project_mpegts"},
+        {RtpKeys[29], "project_mpegts"},
         {StreamSetKey, std::string(encodedStreamSet.value())},
         {EmissionRateKey,
             std::to_string(output.emission.wireBytesPerSecond())},
@@ -724,10 +713,6 @@ bool sameProtocol(
         node.options, RtpKeys[18], true);
     auto initialSequenceNumber = parseUnsignedOption<std::uint16_t>(
         node.options, RtpKeys[28], true);
-    auto writePacingBytesPerSecond = parseUnsignedOption<std::int64_t>(
-        node.options, RtpKeys[29], false);
-    auto writePacingBurstBytes = parseUnsignedOption<std::int64_t>(
-        node.options, RtpKeys[30], false);
     auto cname = requiredNodeOption(
         &node.options, Owner, RtpKeys[19]);
     auto reportInterval = requiredPositiveInt64NodeOption(
@@ -746,8 +731,7 @@ bool sameProtocol(
     auto sdpCname = requiredNodeOption(
         &node.options, Owner, RtpKeys[27]);
     if (!payloadType || !clockRate || !ssrc || !baseTimestamp ||
-        !initialSequenceNumber || !writePacingBytesPerSecond ||
-        !writePacingBurstBytes ||
+        !initialSequenceNumber ||
         !cname || !reportInterval || !packetCount || !sdpPath ||
         !originUsername || !sessionName || !originFamily ||
         !originAddress || !sdpCname) {
@@ -757,8 +741,6 @@ bool sameProtocol(
             !ssrc ? ssrc.error() :
             !baseTimestamp ? baseTimestamp.error() :
             !initialSequenceNumber ? initialSequenceNumber.error() :
-            !writePacingBytesPerSecond ? writePacingBytesPerSecond.error() :
-            !writePacingBurstBytes ? writePacingBurstBytes.error() :
             !cname ? cname.error() :
             !reportInterval ? reportInterval.error() :
             !packetCount ? packetCount.error() :
@@ -773,9 +755,7 @@ bool sameProtocol(
     auto rtp = MediaMpegTsRtpOutputPlan::create(
         std::move(transport).value(), sdpPath.value(),
         originUsername.value(),
-        MediaRunningTime::fromNanoseconds(reportInterval.value()),
-        writePacingBytesPerSecond.value(),
-        writePacingBurstBytes.value());
+        MediaRunningTime::fromNanoseconds(reportInterval.value()));
     auto expectedPackets = MediaTsMuxPlan::maximumPacketsPerRtpDatagram(
         maximumDatagram.value());
     auto emission = decodeEmission(node.options);
@@ -786,10 +766,6 @@ bool sameProtocol(
             maximumDatagram.value() ||
         emission.value().maximumLateness() !=
             protocol.muxPlan().transportDecodeLead() ||
-        emission.value().wireBytesPerSecond() !=
-            writePacingBytesPerSecond.value() ||
-        emission.value().burstWireBytes() !=
-            static_cast<std::size_t>(writePacingBurstBytes.value()) ||
         payloadType.value() != rtp.value().payloadType() ||
         clockRate.value() != rtp.value().clockRate() ||
         ssrc.value() != rtp.value().ssrc() ||

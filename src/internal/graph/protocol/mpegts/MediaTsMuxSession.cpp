@@ -5,6 +5,7 @@
 #include "internal/graph/protocol/mpegts/MediaTsPesSerializer.h"
 #include "internal/graph/protocol/mpegts/MediaTsPsiSerializer.h"
 #include "internal/graph/protocol/mpegts/MediaTsTransportEmissionOrigin.h"
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 
 #include <limits>
 #include <string>
@@ -131,6 +132,7 @@ MediaTsMuxSession::~MediaTsMuxSession()
 {
     if (!m_failure) m_failure = std::move(error);
     m_state = State::Poisoned;
+    logEmissionFinal(m_failure->describe().c_str());
     return ::media::Status::failure(*m_failure);
 }
 
@@ -169,10 +171,27 @@ MediaTsMuxSession::advanceFailure(::media::ErrorInfo error)
                 poison(invalid(
                     "MPEG-TS maintenance emission exceeds available canonical time")).error());
         }
+        auto actualLateness = availableThrough.checkedSubtract(
+            emission.value().deadline());
+        if (!actualLateness) {
+            return ::media::Result<std::size_t>::failure(
+                poison(actualLateness.error()).error());
+        }
+        if (actualLateness.value() > m_emissionPlan.maximumLateness()) {
+            return ::media::Result<std::size_t>::failure(
+                poison(::media::ErrorInfo::invalidArgument(
+                    "MPEG-TS maintenance datagram exceeded maximum emission lateness")).error());
+        }
+        const MediaRunningTime plannedWait = emission.value().plannedWait();
+        const std::size_t wireBytes = emission.value().wireBytes();
+        const MediaRunningTime selectedDeadline = emission.value().deadline();
         auto written = m_writer.writeNext(
             cursor, std::move(batch).value(),
             emission.value().deadline());
         if (!written) {
+            if (written.error().code == ::media::ErrorCode::WouldBlock) {
+                m_emissionDiagnostics.recordPressureFailure();
+            }
             return ::media::Result<std::size_t>::failure(
                 poison(written.error()).error());
         }
@@ -182,6 +201,9 @@ MediaTsMuxSession::advanceFailure(::media::ErrorInfo error)
             return ::media::Result<std::size_t>::failure(
                 poison(committed.error()).error());
         }
+        m_emissionDiagnostics.recordCommittedDatagram(
+            wireBytes, plannedWait, selectedDeadline, availableThrough);
+        logEmissionProgress();
         auto total = checkedPacketCount(
             packetsWritten, written.value().packetsWritten);
         if (!total) {
@@ -234,6 +256,7 @@ MediaTsMuxSession::advanceFailure(::media::ErrorInfo error)
         m_emissionPlan, emitOnMaster);
     if (!schedule) return poison(schedule.error());
     m_emissionSchedule = std::move(schedule).value();
+    m_emissionDiagnostics.logPlan(m_emissionPlan, m_activation.generation);
     auto tables = writeTables(emitOnMaster, emitOnMaster);
     if (!tables) return ::media::Status::failure(tables.error());
     m_state = State::Open;
@@ -281,17 +304,14 @@ MediaTsMuxSession::advanceFailure(::media::ErrorInfo error)
         return poison(invalid(
             "MPEG-TS pending emission cannot complete before its cursor"));
     }
-    if (m_pendingEmission->kind() ==
-        MediaTsPendingEmissionKind::AccessUnit) {
-        auto clock = m_pendingEmission->takePacketClock();
-        if (!clock) {
-            return poison(invalid(
-                "MPEG-TS access-unit emission lost its clock transaction"));
-        }
-        auto committed = m_clock.commitPacket(std::move(*clock));
-        if (!committed) return poison(committed.error());
-        m_lastAccessUnitEmission = m_pendingEmission->notBefore();
+    auto clock = m_pendingEmission->takePacketClock();
+    if (!clock) {
+        return poison(invalid(
+            "MPEG-TS access-unit emission lost its clock transaction"));
     }
+    auto committed = m_clock.commitPacket(std::move(*clock));
+    if (!committed) return poison(committed.error());
+    m_lastAccessUnitEmission = m_pendingEmission->notBefore();
     m_pendingEmission.reset();
     return ::media::Status::success();
 }
@@ -311,8 +331,14 @@ MediaTsMuxSession::emitPending(
            m_pendingEmission->deadline() <= masterNow &&
            (!oneDatagramOnly || !emitted)) {
         auto written = m_pendingEmission->emitPrepared(
-            m_writer, *m_emissionSchedule);
-        if (!written) return advanceFailure(written.error());
+            m_writer, *m_emissionSchedule, m_emissionDiagnostics, masterNow);
+        if (!written) {
+            if (written.error().code == ::media::ErrorCode::WouldBlock) {
+                m_emissionDiagnostics.recordPressureFailure();
+            }
+            return advanceFailure(written.error());
+        }
+        logEmissionProgress();
         auto total = checkedPacketCount(
             packetsWritten, written.value().packetsWritten);
         if (!total) return advanceFailure(total.error());
@@ -492,9 +518,9 @@ MediaTsMuxSession::writeAccessUnit(
     auto packetCursor = std::move(cursor).value();
     m_pendingEmission.emplace(
         std::move(packetCursor), unit.emitOnMaster,
-        MediaTsPendingEmissionKind::AccessUnit,
-        std::optional<MediaTsPreparedPacketClock>(
-            std::move(clock).value()));
+        std::move(clock).value());
+    m_emissionDiagnostics.recordPendingBytes(
+        m_pendingEmission->pendingBytes());
     auto prepared = m_pendingEmission->prepareNext(
         m_writer, *m_emissionSchedule, unit.emitOnMaster);
     if (!prepared) return advanceFailure(prepared.error());
@@ -525,11 +551,15 @@ MediaTsMuxSession::writeAccessUnit(
     auto status = m_writer.finish();
     m_state = status && m_state == State::Open ? State::Finished : State::Poisoned;
     if (!status && !m_failure) m_failure = status.error();
+    logEmissionFinal(
+        m_failure ? m_failure->describe().c_str() : "completed");
     return m_failure ? ::media::Status::failure(*m_failure) : status;
 }
 
 void MediaTsMuxSession::abort() noexcept
 {
+    m_emissionDiagnostics.recordPendingBytes(0);
+    logEmissionFinal("aborted");
     m_pendingEmission.reset();
     m_emissionSchedule.reset();
     m_writer.abort();
@@ -537,6 +567,27 @@ void MediaTsMuxSession::abort() noexcept
         m_failure = ::media::ErrorInfo::cancelled("MPEG-TS mux session aborted");
         m_state = State::Poisoned;
     }
+}
+
+void MediaTsMuxSession::logEmissionProgress(bool force)
+{
+    const auto decision = mediaGraphDiagnosticSample(
+        MediaGraphDiagnosticLevel::Flow,
+        "mpegts_emission_" + std::to_string(m_activation.generation),
+        force);
+    if (decision.shouldLog) {
+        m_emissionDiagnostics.logSnapshot(
+            "periodic", "running", m_activation.generation);
+    }
+}
+
+void MediaTsMuxSession::logEmissionFinal(const char* exitReason)
+{
+    if (m_emissionFinalLogged) return;
+    m_emissionFinalLogged = true;
+    m_emissionDiagnostics.logSnapshot(
+        "final", exitReason ? exitReason : "unknown",
+        m_activation.generation);
 }
 
 bool MediaTsMuxSession::hasPendingEmission() const noexcept

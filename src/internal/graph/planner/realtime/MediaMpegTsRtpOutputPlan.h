@@ -25,9 +25,7 @@ public:
         MediaRtpUdpSenderConfig transport,
         std::string sdpPath,
         std::string sessionIdentity,
-        MediaRunningTime senderReportInterval,
-        std::int64_t writePacingBytesPerSecond,
-        std::int64_t writePacingBurstBytes);
+        MediaRunningTime senderReportInterval);
 
     MediaMpegTsRtpOutputPlan(MediaMpegTsRtpOutputPlan&&) noexcept = default;
     MediaMpegTsRtpOutputPlan& operator=(
@@ -47,8 +45,6 @@ public:
     MediaRunningTime senderReportInterval() const noexcept;
     std::size_t maximumDatagramBytes() const noexcept;
     std::uint8_t tsPacketsPerPayload() const noexcept;
-    std::int64_t writePacingBytesPerSecond() const noexcept;
-    std::int64_t writePacingBurstBytes() const noexcept;
     const MediaMpegTsRtpSdpPlan& sdp() const noexcept;
 
 private:
@@ -63,8 +59,6 @@ private:
         MediaRunningTime senderReportInterval,
         std::size_t maximumDatagramBytes,
         std::uint8_t tsPacketsPerPayload,
-        std::int64_t writePacingBytesPerSecond,
-        std::int64_t writePacingBurstBytes,
         MediaMpegTsRtpSdpPlan sdp) noexcept;
 
     MediaRtpUdpSenderConfig m_transport;
@@ -77,8 +71,6 @@ private:
     MediaRunningTime m_senderReportInterval;
     std::size_t m_maximumDatagramBytes;
     std::uint8_t m_tsPacketsPerPayload;
-    std::int64_t m_writePacingBytesPerSecond;
-    std::int64_t m_writePacingBurstBytes;
     MediaMpegTsRtpSdpPlan m_sdp;
 };
 

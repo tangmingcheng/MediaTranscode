@@ -330,6 +330,15 @@ bool MediaTsPacketCursor::finished() const noexcept
            m_state->committedOffset == m_state->packets->size();
 }
 
+std::size_t MediaTsPacketCursor::remainingPacketCount() const noexcept
+{
+    if (!m_state || !m_state->packets ||
+        m_state->committedOffset >= m_state->packets->size()) {
+        return 0;
+    }
+    return m_state->packets->size() - m_state->committedOffset;
+}
+
 ::media::Result<MediaTsTransportPacketizer> MediaTsTransportPacketizer::create(
     const MediaTsMuxPlan& plan,
     bool startsWithDiscontinuity)

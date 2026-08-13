@@ -330,13 +330,33 @@ MediaUdpDatagramSendOutcome MediaUdpDatagramSenderSocket::send(
         sent < 0
 #endif
     ) {
+#ifdef _WIN32
+        const int nativeError = WSAGetLastError();
+        if (nativeError == WSAEWOULDBLOCK || nativeError == WSAENOBUFS) {
+            return MediaUdpDatagramSendOutcome::notAccepted(
+                ::media::ErrorInfo::make(
+                    ::media::ErrorCode::WouldBlock,
+                    "UDP send buffer rejected datagram under pressure",
+                    nativeError));
+        }
+#else
+        const int nativeError = errno;
+        if (nativeError == EAGAIN || nativeError == EWOULDBLOCK ||
+            nativeError == ENOBUFS) {
+            return MediaUdpDatagramSendOutcome::notAccepted(
+                ::media::ErrorInfo::make(
+                    ::media::ErrorCode::WouldBlock,
+                    "UDP send buffer rejected datagram under pressure",
+                    nativeError));
+        }
+#endif
         return MediaUdpDatagramSendOutcome::notAccepted(
             ::media::ErrorInfo::ioFailure(
                 "UDP sendto accepted no bytes",
 #ifdef _WIN32
-                WSAGetLastError()));
+                nativeError));
 #else
-                errno));
+                nativeError));
 #endif
     }
     if (sent == static_cast<int>(datagram.size())) {

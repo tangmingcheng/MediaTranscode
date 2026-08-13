@@ -4,6 +4,7 @@
 #include "internal/graph/protocol/mpegts/MediaTsMaterializedStreamConfig.h"
 #include "internal/graph/protocol/mpegts/MediaTsPendingEmission.h"
 #include "internal/graph/protocol/mpegts/MediaTsPacketBatchWriter.h"
+#include "internal/graph/diagnostics/MediaTsEmissionDiagnostics.h"
 
 #include <memory>
 #include <optional>
@@ -74,6 +75,8 @@ private:
     ::media::Status poison(::media::ErrorInfo error);
     ::media::Status stateFailure(const char* action);
     ::media::Result<AdvanceResult> advanceFailure(::media::ErrorInfo error);
+    void logEmissionProgress(bool force = false);
+    void logEmissionFinal(const char* exitReason);
 
     MediaTsMuxPlan m_plan;
     MediaTsDatagramEmissionPlan m_emissionPlan;
@@ -85,6 +88,8 @@ private:
     MediaTsPacketBatchWriter m_writer;
     std::optional<MediaTsDatagramEmissionSchedule> m_emissionSchedule;
     std::optional<MediaTsPendingEmission> m_pendingEmission;
+    MediaTsEmissionDiagnostics m_emissionDiagnostics;
+    bool m_emissionFinalLogged = false;
     State m_state = State::Created;
     std::optional<::media::ErrorInfo> m_failure;
     std::optional<MediaRunningTime> m_lastAdvance;

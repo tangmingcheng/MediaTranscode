@@ -9,14 +9,10 @@ namespace media::ffmpeg::graph {
 MediaTsPendingEmission::MediaTsPendingEmission(
     MediaTsPacketCursor cursor,
     MediaRunningTime notBefore,
-    MediaTsPendingEmissionKind kind,
-    std::optional<MediaTsPreparedPacketClock> packetClock,
-    std::optional<MediaTsPreparedPcrClock> pcrClock) noexcept
+    MediaTsPreparedPacketClock packetClock) noexcept
     : m_cursor(std::move(cursor))
     , m_notBefore(notBefore)
-    , m_kind(kind)
     , m_packetClock(std::move(packetClock))
-    , m_pcrClock(std::move(pcrClock))
 {
 }
 
@@ -56,7 +52,9 @@ MediaTsPendingEmission::MediaTsPendingEmission(
 ::media::Result<MediaTsBatchWriteResult>
 MediaTsPendingEmission::emitPrepared(
     MediaTsPacketBatchWriter& writer,
-    MediaTsDatagramEmissionSchedule& schedule)
+    MediaTsDatagramEmissionSchedule& schedule,
+    MediaTsEmissionDiagnostics& diagnostics,
+    MediaRunningTime actualEmission)
 {
     if (!m_batch || !m_emission) {
         return ::media::Result<MediaTsBatchWriteResult>::failure(
@@ -64,6 +62,18 @@ MediaTsPendingEmission::emitPrepared(
                 "MPEG-TS pending emission has no prepared datagram"));
     }
     const MediaRunningTime selectedDeadline = m_emission->deadline();
+    auto actualLateness = actualEmission.checkedSubtract(selectedDeadline);
+    if (!actualLateness) {
+        return ::media::Result<MediaTsBatchWriteResult>::failure(
+            actualLateness.error());
+    }
+    if (actualLateness.value() > schedule.plan().maximumLateness()) {
+        return ::media::Result<MediaTsBatchWriteResult>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MPEG-TS pending datagram exceeded maximum emission lateness"));
+    }
+    const MediaRunningTime plannedWait = m_emission->plannedWait();
+    const std::size_t wireBytes = m_emission->wireBytes();
     auto written = writer.writeNext(
         m_cursor, std::move(*m_batch), selectedDeadline);
     if (!written) {
@@ -77,14 +87,9 @@ MediaTsPendingEmission::emitPrepared(
     }
     m_batch.reset();
     m_emission.reset();
-    if (m_packetsWritten >
-        (std::numeric_limits<std::size_t>::max)() -
-            written.value().packetsWritten) {
-        return ::media::Result<MediaTsBatchWriteResult>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "MPEG-TS pending packet count overflow"));
-    }
-    m_packetsWritten += written.value().packetsWritten;
+    diagnostics.recordCommittedDatagram(
+        wireBytes, plannedWait, selectedDeadline, actualEmission);
+    diagnostics.recordPendingBytes(pendingBytes());
     return written;
 }
 
@@ -95,19 +100,17 @@ MediaRunningTime MediaTsPendingEmission::deadline() const noexcept
         : m_notBefore;
 }
 
-MediaTsPendingEmissionKind MediaTsPendingEmission::kind() const noexcept
-{
-    return m_kind;
-}
-
 bool MediaTsPendingEmission::finished() const noexcept
 {
     return m_cursor.finished() && !m_batch && !m_emission;
 }
 
-std::size_t MediaTsPendingEmission::packetsWritten() const noexcept
+std::size_t MediaTsPendingEmission::pendingBytes() const noexcept
 {
-    return m_packetsWritten;
+    const std::size_t packets = m_cursor.remainingPacketCount();
+    return packets > (std::numeric_limits<std::size_t>::max)() / 188
+        ? (std::numeric_limits<std::size_t>::max)()
+        : packets * 188;
 }
 
 MediaRunningTime MediaTsPendingEmission::notBefore() const noexcept
@@ -119,12 +122,6 @@ std::optional<MediaTsPreparedPacketClock>
 MediaTsPendingEmission::takePacketClock() noexcept
 {
     return std::move(m_packetClock);
-}
-
-std::optional<MediaTsPreparedPcrClock>
-MediaTsPendingEmission::takePcrClock() noexcept
-{
-    return std::move(m_pcrClock);
 }
 
 } // namespace media::ffmpeg::graph
