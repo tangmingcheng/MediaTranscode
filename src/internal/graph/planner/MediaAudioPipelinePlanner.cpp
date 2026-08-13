@@ -150,13 +150,17 @@ MediaResolvedAudioSource resolvedSource(const MediaInputAudioStreamInfo& input)
     plan.sourceCodecName = source.codecName;
     plan.branchMode = output.value().branchMode();
     plan.monotonicPacketTimestamps = plan.branchMode == MediaBranchMode::CopyPacket;
+    if (plan.branchMode == MediaBranchMode::CopyPacket) {
+        plan.maximumAccessUnitSamples = inputInfo.maximumAccessUnitSamples;
+    }
     plan.reason = plan.branchMode == MediaBranchMode::CopyPacket
         ? "copy_source_matches_resolved_output"
         : (options.outputRequirement.requireFrameTranscode
                ? "transcode_required_by_output_frame_contract"
                : "transcode_source_differs_from_resolved_output");
     plan.resolvedOutput = std::move(output).value();
-    if (inputInfo.selectedDecoder) {
+    if (plan.branchMode == MediaBranchMode::TranscodeFrame &&
+        inputInfo.selectedDecoder) {
         plan.selectedDecoder = std::move(inputInfo.selectedDecoder);
         auto resampler = MediaAudioResamplerCapabilityProvider::verify(
             *plan.selectedDecoder, *plan.resolvedOutput);

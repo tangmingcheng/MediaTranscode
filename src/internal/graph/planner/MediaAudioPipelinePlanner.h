@@ -43,6 +43,7 @@ struct MediaAudioPipelinePlan {
     std::string sourceCodecName;
     std::optional<MediaResolvedAudioOutputPlan> resolvedOutput;
     bool monotonicPacketTimestamps = false;
+    std::optional<int> maximumAccessUnitSamples;
     std::string reason;
     std::optional<MediaSelectedAudioDecoder> selectedDecoder;
     std::optional<MediaSelectedAudioResampler> selectedResampler;

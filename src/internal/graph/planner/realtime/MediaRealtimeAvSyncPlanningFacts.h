@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <variant>
 
 namespace media::ffmpeg::graph {
 
@@ -40,7 +41,14 @@ struct MediaRealtimeAvSyncPlanningFacts final {
                            const MediaRealtimeAvSyncPlanningFacts&) = default;
 };
 
-struct MediaRealtimeAvSyncComponentBounds final {
+struct MediaSynchronizedAudioPacketCopyBounds final {
+    std::int64_t accessUnitSamples;
+    std::int64_t schedulerQueueSamples;
+    friend bool operator==(const MediaSynchronizedAudioPacketCopyBounds&,
+                           const MediaSynchronizedAudioPacketCopyBounds&) = default;
+};
+
+struct MediaSynchronizedAudioFrameTranscodeBounds final {
     std::int64_t decoderDelaySamples;
     std::int64_t decodeQueueSamples;
     std::int64_t resampleQueueSamples;
@@ -49,8 +57,12 @@ struct MediaRealtimeAvSyncComponentBounds final {
     std::int64_t mailboxDeliveryMarginSamples;
     std::int64_t maximumResamplerOutputBlockSamples;
     std::size_t mailboxCapacity;
-    friend bool operator==(const MediaRealtimeAvSyncComponentBounds&,
-                           const MediaRealtimeAvSyncComponentBounds&) = default;
+    friend bool operator==(const MediaSynchronizedAudioFrameTranscodeBounds&,
+                           const MediaSynchronizedAudioFrameTranscodeBounds&) = default;
 };
+
+using MediaRealtimeAvSyncComponentBounds = std::variant<
+    MediaSynchronizedAudioPacketCopyBounds,
+    MediaSynchronizedAudioFrameTranscodeBounds>;
 
 } // namespace media::ffmpeg::graph

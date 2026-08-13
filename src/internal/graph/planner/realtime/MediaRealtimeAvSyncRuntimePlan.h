@@ -52,7 +52,7 @@ struct MediaRealtimeAvSyncRuntimePlan final {
     bool videoFilterActive;
     MediaAvGenerationTransitionPlan transition;
     MediaRealtimeAvSyncPlanningFacts planningFacts;
-    MediaAudioCorrectionReachabilityPlan audioCorrection;
+    std::optional<MediaAudioCorrectionReachabilityPlan> audioCorrection;
 };
 
 } // namespace media::ffmpeg::graph

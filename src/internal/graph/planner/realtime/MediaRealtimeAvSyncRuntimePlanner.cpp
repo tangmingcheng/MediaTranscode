@@ -244,10 +244,11 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
                 "Synchronized runtime planning requires an audio pipeline product"));
     }
     MediaAudioPipelinePlan& audio = *outer.audioPlan;
-    if (audio.branchMode != MediaBranchMode::TranscodeFrame) {
+    if (audio.branchMode != MediaBranchMode::TranscodeFrame &&
+        audio.branchMode != MediaBranchMode::CopyPacket) {
         return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
             ::media::ErrorInfo::unsupported(
-                "Synchronized runtime planning rejects audio packet copy"));
+                "Synchronized runtime planning requires copy or frame transcode audio"));
     }
     if (outer.videoPlan.branchMode != MediaBranchMode::TranscodeFrame) {
         return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
@@ -267,25 +268,39 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
         return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
             facts.error());
     }
-    auto correction = MediaAudioCorrectionReachabilityPlanner::plan(
-        synchronization, facts.value());
-    if (!correction || !facts.value().acknowledgementTimeout ||
+    if (!facts.value().acknowledgementTimeout ||
         !facts.value().terminalDrainWindow ||
         !synchronization.sourceClockMode) {
         return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
-            correction ? ::media::ErrorInfo::notInitialized(
-                             "A/V generation transition timing facts are incomplete")
-                       : correction.error());
+            ::media::ErrorInfo::notInitialized(
+                "A/V generation transition timing facts are incomplete"));
     }
-    synchronization.audioServo.commandLeadNs = correction.value().commandLead;
-    synchronization.audioServo.compensationWindowNs =
-        correction.value().compensationWindow;
-    synchronization.audioServo.frequencyFilterTimeConstantNs =
-        correction.value().frequencyFilterTimeConstant;
-    if (auto status = MediaAvSyncPlanValidator::validate(synchronization);
-        !status) {
-        return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
-            status.error());
+    std::optional<MediaAudioCorrectionReachabilityResult> correction;
+    if (audio.branchMode == MediaBranchMode::TranscodeFrame) {
+        auto selected = MediaAudioCorrectionReachabilityPlanner::plan(
+            synchronization, facts.value());
+        if (!selected) {
+            return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
+                selected.error());
+        }
+        correction = std::move(selected).value();
+        synchronization.audioServo.commandLeadNs = correction->commandLead;
+        synchronization.audioServo.compensationWindowNs =
+            correction->compensationWindow;
+        synchronization.audioServo.frequencyFilterTimeConstantNs =
+            correction->frequencyFilterTimeConstant;
+        if (auto status = MediaAvSyncPlanValidator::validate(synchronization);
+            !status) {
+            return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
+                status.error());
+        }
+    } else {
+        if (auto status =
+                MediaAvSyncPlanValidator::validatePolicy(synchronization);
+            !status) {
+            return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
+                status.error());
+        }
     }
     auto assembly = planAssembly(outer, audio, synchronization, facts.value());
     if (!assembly) {
@@ -454,7 +469,10 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             outer.videoPlan.filterActive,
             std::move(transition),
             facts.value(),
-            correction.value().correction});
+            correction
+                ? std::optional<MediaAudioCorrectionReachabilityPlan>(
+                      correction->correction)
+                : std::nullopt});
 }
 
 } // namespace media::ffmpeg::graph

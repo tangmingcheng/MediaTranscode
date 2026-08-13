@@ -67,8 +67,9 @@ bool validRtpStream(
         candidate.packetization.maximumDatagramBytes() > 0 &&
         (video
              ? !candidate.packetization.maximumAccessUnitSamples()
-             : candidate.packetization.maximumAccessUnitSamples() ==
-                   runtime.audioCorrection.protocolBatchSamples) &&
+             : runtime.planningFacts.protocolBatchSamples &&
+                   candidate.packetization.maximumAccessUnitSamples() ==
+                       runtime.planningFacts.protocolBatchSamples) &&
         candidate.transport.maximumDatagramBytes() ==
             candidate.packetization.maximumDatagramBytes() &&
         candidate.transport.remoteRtpEndpoint().addressFamily() == family &&
@@ -204,8 +205,9 @@ bool validRtpStream(
     const auto* program = output.protocol.muxPlan().audioVideoProgram();
     const bool sampleRateMatches = program &&
         program->aac.samplingFrequencyIndex < MediaAacSampleRates.size() &&
+        runtime.planningFacts.outputSampleRate &&
         MediaAacSampleRates[program->aac.samplingFrequencyIndex] ==
-            runtime.audioCorrection.outputSampleRate;
+            *runtime.planningFacts.outputSampleRate;
     if (output.muxSessionKind !=
             MediaMuxSessionKind::ProjectMpegTs ||
         !sampleRateMatches ||
