@@ -59,6 +59,8 @@ public:
 private:
     struct Impl;
     explicit MediaRtpUdpTransport(std::shared_ptr<Impl> impl) noexcept;
+    static ::media::Status signalCancellation(const std::shared_ptr<Impl>& impl) noexcept;
+    static ::media::Status resetCancellation(const std::shared_ptr<Impl>& impl) noexcept;
     std::shared_ptr<Impl> snapshot() const noexcept;
 
     mutable std::mutex m_handleMutex;
