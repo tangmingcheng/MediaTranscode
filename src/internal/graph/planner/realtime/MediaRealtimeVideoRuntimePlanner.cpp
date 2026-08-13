@@ -82,7 +82,7 @@ planSeparateRtp(
     auto layout = MediaSelectedEncoderPacketLayoutResolver::resolve(
         outer.videoPlan);
     if (!layout || outer.videoPlan.outputCodecName != "h264" ||
-        output.muxedOutput.url.empty()) {
+        output.muxedOutput.url.empty() || !output.muxedOutput.emission) {
         return ::media::Result<
             MediaProjectMpegTsRuntimeOutputPlan>::failure(
             layout ? ::media::ErrorInfo::unsupported(
@@ -150,8 +150,9 @@ planSeparateRtp(
             output.muxedOutput.sdpPath,
             request.mediaId,
             MediaRunningTime::fromNanoseconds(SenderReportIntervalNs),
-            output.muxedOutput.writePacingBytesPerSecond,
-            output.muxedOutput.writePacingBurstBytes);
+            output.muxedOutput.emission->wireBytesPerSecond(),
+            static_cast<std::int64_t>(
+                output.muxedOutput.emission->burstWireBytes()));
         if (!rtp || rtp.value().tsPacketsPerPayload() !=
                         maximumPacketsPerDatagram) {
             return ::media::Result<
@@ -165,10 +166,23 @@ planSeparateRtp(
             std::move(rtp).value());
     }
     outer.videoParameters.globalHeader = true;
+    const auto& emission = *output.muxedOutput.emission;
+    const auto& mux = protocol.value().muxPlan().parameters();
+    const std::size_t expectedOverhead =
+        outer.outputTransport == MediaOutputTransportKind::RtpAvp ? 12 : 0;
+    if (emission.maximumPayloadBytes() !=
+            static_cast<std::size_t>(mux.maximumPacketsPerDatagram) * 188 ||
+        emission.perDatagramOverheadBytes() != expectedOverhead ||
+        emission.maximumLateness() != mux.transportDecodeLead) {
+        return ::media::Result<MediaProjectMpegTsRuntimeOutputPlan>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "VideoOnly MPEG-TS emission differs from its mux contract"));
+    }
     return ::media::Result<MediaProjectMpegTsRuntimeOutputPlan>::success(
         MediaProjectMpegTsRuntimeOutputPlan{
             std::move(protocol).value(),
             MediaMuxSessionKind::ProjectMpegTs,
+            emission,
             std::move(*transport)});
 }
 

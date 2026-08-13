@@ -211,6 +211,9 @@ bool validRtpStream(
     if (output.muxSessionKind !=
             MediaMuxSessionKind::ProjectMpegTs ||
         !sampleRateMatches ||
+        output.emission.maximumPayloadBytes() !=
+            static_cast<std::size_t>(mux.maximumPacketsPerDatagram) * 188 ||
+        output.emission.maximumLateness() != mux.transportDecodeLead ||
         mux !=
             runtime.synchronization.projectMpegTsOutput->outputMux
                 ->parameters()) {
@@ -221,6 +224,7 @@ bool validRtpStream(
             std::get_if<MediaMpegTsUdpOutputPlan>(&output.transport);
         if (!udp || mux.transportKind !=
                          MediaOutputTransportKind::UdpDatagrams ||
+            output.emission.perDatagramOverheadBytes() != 0 ||
             *runtime.synchronization.projectMpegTsOutput
                  ->useSharedNtpEpoch ||
             udp->url.empty() ||
@@ -250,6 +254,13 @@ bool validRtpStream(
         rtp->sdp().originAddressFamily,
         rtp->sdp().originNumericAddress, rtp->sdp().cname);
     if (!maximumPackets || !sdpIdentity ||
+        output.emission.perDatagramOverheadBytes() != 12 ||
+        output.emission.maximumWireDatagramBytes() >
+            rtp->maximumDatagramBytes() ||
+        output.emission.wireBytesPerSecond() !=
+            rtp->writePacingBytesPerSecond() ||
+        output.emission.burstWireBytes() !=
+            static_cast<std::size_t>(rtp->writePacingBurstBytes()) ||
         rtp->payloadType() != 33 || rtp->clockRate() != 90'000 ||
         rtp->ssrc() == 0 || rtp->cname().empty() ||
         rtp->initialSequenceNumber() !=

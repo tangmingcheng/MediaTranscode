@@ -136,6 +136,16 @@ namespace media::ffmpeg::graph {
             output->protocol.muxPlan().audioVideoProgram() ||
             output->protocol.muxPlan().transportDecodeLead() !=
                 runtime.scheduling.transportLead ||
+            output->emission.maximumLateness() !=
+                output->protocol.muxPlan().transportDecodeLead() ||
+            output->emission.maximumPayloadBytes() !=
+                static_cast<std::size_t>(
+                    output->protocol.muxPlan().parameters()
+                        .maximumPacketsPerDatagram) * 188 ||
+            output->emission.perDatagramOverheadBytes() !=
+                (outer.outputTransport == MediaOutputTransportKind::RtpAvp
+                     ? 12u
+                     : 0u) ||
             output->protocol.muxPlan().parameters().transportKind !=
                 outer.outputTransport) {
             return invalid("muxed adapter");

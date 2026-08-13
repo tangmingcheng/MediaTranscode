@@ -15,6 +15,7 @@ cloneMediaProjectMpegTsRuntimeOutputPlan(
             MediaProjectMpegTsRuntimeOutputPlan{
                 source.protocol,
                 source.muxSessionKind,
+                source.emission,
                 std::variant<MediaMpegTsUdpOutputPlan,
                              MediaMpegTsRtpOutputPlan>(
                     std::in_place_type<MediaMpegTsUdpOutputPlan>,
@@ -39,6 +40,7 @@ cloneMediaProjectMpegTsRuntimeOutputPlan(
         MediaProjectMpegTsRuntimeOutputPlan{
             source.protocol,
             source.muxSessionKind,
+            source.emission,
             std::variant<MediaMpegTsUdpOutputPlan,
                          MediaMpegTsRtpOutputPlan>(
                 std::in_place_type<MediaMpegTsRtpOutputPlan>,

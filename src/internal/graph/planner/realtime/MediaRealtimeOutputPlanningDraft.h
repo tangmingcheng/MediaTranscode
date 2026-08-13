@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/planner/realtime/MediaScheduledRtpPacketizationPlan.h"
+#include "internal/graph/planner/realtime/MediaTsDatagramEmissionPlan.h"
 #include "internal/graph/protocol/rtp/MediaRtpUdpSenderConfig.h"
 
 #include <cstdint>
@@ -25,8 +26,7 @@ struct MediaRealtimeMpegTsOutputPlanningDraft final {
     std::string mediaId;
     std::optional<MediaRtpUdpSenderConfig> rtpTransport;
     std::string sdpPath;
-    std::int64_t writePacingBytesPerSecond = 0;
-    std::int64_t writePacingBurstBytes = 0;
+    std::optional<MediaTsDatagramEmissionPlan> emission;
 };
 
 struct MediaRealtimeSeparateRtpSdpPlanningDraft final {

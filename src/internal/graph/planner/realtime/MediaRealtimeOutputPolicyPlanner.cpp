@@ -1,6 +1,8 @@
 #include "internal/graph/planner/realtime/MediaRealtimeOutputPolicyPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRequestClassifier.h"
+#include "internal/graph/planner/realtime/MediaTsDatagramEmissionPlan.h"
 
+#include "internal/graph/protocol/mpegts/MediaTsMuxPlan.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
 
@@ -18,6 +20,10 @@ constexpr int64_t PacingHeadroomNumerator = 5;
 constexpr int64_t PacingHeadroomDenominator = 4;
 constexpr int64_t PacingBurstPackets = 2;
 constexpr int64_t RtpSenderPressureWindowMs = 100;
+constexpr std::int64_t ProjectMpegTsMaximumLatenessNs = 100'000'000;
+constexpr std::size_t TsPacketBytes = 188;
+constexpr std::size_t UdpTsPacketsPerDatagram = 7;
+constexpr std::size_t RtpHeaderBytes = 12;
 
 
 bool validRtpPort(std::size_t port) noexcept
@@ -34,6 +40,72 @@ int64_t pacingBytesPerSecond(int64_t bitsPerSecond) noexcept
 {
     const int64_t bytes = (bitsPerSecond + 7) / 8;
     return std::max<int64_t>(1, bytes * PacingHeadroomNumerator / PacingHeadroomDenominator);
+}
+
+::media::Result<MediaTsDatagramEmissionPlan> planMpegTsEmission(
+    std::int64_t bitsPerSecond,
+    MediaOutputTransportKind transportKind,
+    const std::optional<int>& maximumDatagramBytes)
+{
+    if (bitsPerSecond <= 0 ||
+        bitsPerSecond >
+            (std::numeric_limits<std::int64_t>::max)() - 7) {
+        return ::media::Result<MediaTsDatagramEmissionPlan>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MPEG-TS emission bitrate is not representable"));
+    }
+    const std::int64_t mediaBytesPerSecond =
+        (bitsPerSecond + 7) / 8;
+    if (mediaBytesPerSecond >
+        (std::numeric_limits<std::int64_t>::max)() /
+            PacingHeadroomNumerator) {
+        return ::media::Result<MediaTsDatagramEmissionPlan>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MPEG-TS emission headroom is not representable"));
+    }
+    const std::int64_t wireBytesPerSecond =
+        mediaBytesPerSecond * PacingHeadroomNumerator /
+        PacingHeadroomDenominator;
+
+    std::size_t packetsPerDatagram = UdpTsPacketsPerDatagram;
+    std::size_t overheadBytes = 0;
+    if (transportKind == MediaOutputTransportKind::RtpAvp) {
+        if (!maximumDatagramBytes || *maximumDatagramBytes <= 0) {
+            return ::media::Result<MediaTsDatagramEmissionPlan>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "MPEG-TS RTP emission requires a maximum datagram size"));
+        }
+        auto packets = MediaTsMuxPlan::maximumPacketsPerRtpDatagram(
+            static_cast<std::size_t>(*maximumDatagramBytes));
+        if (!packets) {
+            return ::media::Result<MediaTsDatagramEmissionPlan>::failure(
+                packets.error());
+        }
+        packetsPerDatagram = packets.value();
+        overheadBytes = RtpHeaderBytes;
+    } else if (transportKind != MediaOutputTransportKind::UdpDatagrams) {
+        return ::media::Result<MediaTsDatagramEmissionPlan>::failure(
+            ::media::ErrorInfo::unsupported(
+                "MPEG-TS emission transport is unsupported"));
+    }
+
+    const std::size_t maximumPayloadBytes =
+        packetsPerDatagram * TsPacketBytes;
+    const std::size_t maximumWireDatagramBytes =
+        maximumPayloadBytes + overheadBytes;
+    if (maximumWireDatagramBytes >
+        (std::numeric_limits<std::size_t>::max)() / 2) {
+        return ::media::Result<MediaTsDatagramEmissionPlan>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MPEG-TS emission burst is not representable"));
+    }
+    return MediaTsDatagramEmissionPlan::create(
+        wireBytesPerSecond,
+        maximumWireDatagramBytes * 2,
+        MediaRunningTime::fromNanoseconds(
+            ProjectMpegTsMaximumLatenessNs),
+        maximumPayloadBytes,
+        overheadBytes);
 }
 
 ::media::Result<int> plannedRtpSendBufferBytes(
@@ -208,10 +280,32 @@ std::optional<int> resolvedAudioBitrateKbps(
         output.muxedOutput.mediaId = request.mediaId;
         const bool expectAudio =
             request.parameters.execution.streamSet == MediaTranscodeStreamSet::AudioVideo;
+        const std::optional<int> audioBitrate = expectAudio
+            ? resolvedAudioBitrateKbps(plan)
+            : std::nullopt;
+        if (!plan.videoParameters.bitrateKbps ||
+            *plan.videoParameters.bitrateKbps <= 0 ||
+            (expectAudio && !audioBitrate) ||
+            !request.output.transport) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "MPEG-TS emission requires resolved output bitrates"));
+        }
+        const std::int64_t totalBitrate =
+            static_cast<std::int64_t>(*plan.videoParameters.bitrateKbps) *
+                1000 +
+            (audioBitrate
+                 ? static_cast<std::int64_t>(*audioBitrate) * 1000
+                 : 0);
+        auto emission = planMpegTsEmission(
+            totalBitrate,
+            *request.output.transport,
+            request.output.packetSize);
+        if (!emission) {
+            return ::media::Status::failure(emission.error());
+        }
+        output.muxedOutput.emission = std::move(emission).value();
         if (MediaRealtimeRequestClassifier::rtpAvpOutput(request)) {
-            const std::optional<int> audioBitrate = expectAudio
-                ? resolvedAudioBitrateKbps(plan)
-                : std::nullopt;
             if (!request.output.basePort || !request.output.packetSize) {
                 return ::media::Status::failure(
                     ::media::ErrorInfo::notInitialized(
@@ -228,11 +322,6 @@ std::optional<int> resolvedAudioBitrateKbps(
                     ::media::ErrorInfo::notInitialized(
                         "MPEG-TS RTP sender requires resolved output bitrates"));
             }
-            const int64_t totalBitrate =
-                static_cast<int64_t>(*plan.videoParameters.bitrateKbps) * 1000 +
-                (audioBitrate
-                     ? static_cast<int64_t>(*audioBitrate) * 1000
-                     : 0);
             auto sendBuffer = plannedRtpSendBufferBytes(
                 totalBitrate, *request.output.packetSize,
                 std::max(
@@ -255,11 +344,6 @@ std::optional<int> resolvedAudioBitrateKbps(
             output.muxedOutput.rtpTransport =
                 std::move(transport).value();
             output.muxedOutput.sdpPath = request.output.sdpPath;
-            output.muxedOutput.writePacingBytesPerSecond =
-                pacingBytesPerSecond(totalBitrate);
-            output.muxedOutput.writePacingBurstBytes =
-                static_cast<std::int64_t>(*request.output.packetSize) *
-                PacingBurstPackets;
         }
         return ::media::Status::success();
     }
