@@ -77,8 +77,6 @@ MediaRealtimeAudioPlannerOptionsResolver::resolve(
     if (MediaRealtimeRequestClassifier::muxedTransportOutput(request)) {
         options.outputRequirement.codecName = "aac";
         options.outputRequirement.profile = MediaAudioProfile::knownAacLow();
-        options.outputRequirement.sampleRate = 48'000;
-        options.outputRequirement.channels = 2;
     }
     options.diagnosticLogEnabled =
         request.parameters.execution.diagnosticLogEnabled;

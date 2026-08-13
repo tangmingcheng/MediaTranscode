@@ -13,8 +13,6 @@ struct H264MuxInputContract final {
     std::uint8_t lengthFieldBytes;
 };
 
-constexpr int ProjectAudioSampleRate = 48'000;
-constexpr std::uint8_t ProjectAudioChannels = 2;
 constexpr int ProjectAudioAccessUnitSamples = MediaAacLongFrameSamples;
 constexpr std::uint16_t ProjectTransportStreamId = 1;
 constexpr std::uint16_t ProjectProgramNumber = 1;
@@ -26,8 +24,6 @@ constexpr std::uint8_t ProjectTableVersion = 0;
 constexpr std::int64_t ProjectPsiRepeatIntervalNs = 100'000'000;
 constexpr std::uint8_t ProjectH264StreamType = 0x1B;
 constexpr std::uint8_t ProjectAacStreamType = 0x0F;
-constexpr MediaTsAacAdtsPlan ProjectAacAdts{
-    0, MediaAacLcAudioObjectType, 3, ProjectAudioChannels};
 constexpr std::int64_t ProjectPcrIntervalNs = 20'000'000;
 constexpr std::int64_t ProjectMaximumPcrGapNs = 100'000'000;
 constexpr std::int64_t ProjectMaximumPcrJitterNs = 5'000'000;
@@ -105,17 +101,19 @@ constexpr MediaTsAudioVideoContinuitySeeds ProjectAvContinuitySeeds{
         return common;
     }
     const auto* program = muxPlan.audioVideoProgram();
-    const bool frequencyMatches = program &&
+    const bool supportedAac = program &&
+        program->aac.mpegId == 0 &&
+        program->aac.audioObjectType == MediaAacLcAudioObjectType &&
         program->aac.samplingFrequencyIndex < MediaAacSampleRates.size() &&
-        MediaAacSampleRates[program->aac.samplingFrequencyIndex] ==
-            ProjectAudioSampleRate;
+        program->aac.channelConfiguration >= 1 &&
+        program->aac.channelConfiguration <= 7;
     if (!program ||
         program->videoPid != ProjectVideoPid ||
         program->audioPid != ProjectAudioPid ||
         program->pcrPid != ProjectVideoPid ||
         program->videoStreamType != ProjectH264StreamType ||
         program->audioStreamType != ProjectAacStreamType ||
-        program->aac != ProjectAacAdts || !frequencyMatches ||
+        !supportedAac ||
         program->continuity != ProjectAvContinuitySeeds ||
         program->maximumAudioAccessUnitSamples !=
             ProjectAudioAccessUnitSamples) {
@@ -124,6 +122,28 @@ constexpr MediaTsAudioVideoContinuitySeeds ProjectAvContinuitySeeds{
                 "Project MPEG-TS AudioVideo facts violate the H.264/AAC PMT/PES/PCR contract"));
     }
     return ::media::Status::success();
+}
+
+::media::Result<MediaTsAacAdtsPlan> aacAdtsPlan(
+    const MediaResolvedAudioOutputPlan& audioOutput)
+{
+    auto configuration = makeMediaAacLcLongFrameAudioSpecificConfig(
+        audioOutput.sampleRate(), audioOutput.channels());
+    if (!configuration) {
+        return ::media::Result<MediaTsAacAdtsPlan>::failure(
+            configuration.error());
+    }
+    auto parsed = parseMediaAacAudioSpecificConfig(configuration.value());
+    if (!parsed || parsed.value().frameSamples != ProjectAudioAccessUnitSamples) {
+        return ::media::Result<MediaTsAacAdtsPlan>::failure(
+            parsed ? ::media::ErrorInfo::unsupported(
+                         "Project MPEG-TS requires AAC-LC long-frame output")
+                   : parsed.error());
+    }
+    return ::media::Result<MediaTsAacAdtsPlan>::success(MediaTsAacAdtsPlan{
+        0, parsed.value().audioObjectType,
+        parsed.value().samplingFrequencyIndex,
+        parsed.value().channelConfiguration});
 }
 
 ::media::Result<H264MuxInputContract> h264MuxInputContract(
@@ -210,12 +230,15 @@ MediaProjectMpegTsOutputPlan::createAudioVideo(
         audioOutput.codecName() != "aac" ||
         audioOutput.profile().knowledge() != MediaAudioProfileKnowledge::Known ||
         audioOutput.profile().canonicalName() != "aac_low" ||
-        audioOutput.sampleRate() != ProjectAudioSampleRate ||
-        audioOutput.channels() != ProjectAudioChannels ||
         audioOutput.codecFrameSamples() != ProjectAudioAccessUnitSamples) {
         return ::media::Result<MediaProjectMpegTsOutputPlan>::failure(
             ::media::ErrorInfo::unsupported(
-                "Project MPEG-TS output requires resolved H.264 and known AAC-LC 48 kHz stereo long-frame output"));
+                "Project MPEG-TS output requires resolved H.264 and representable AAC-LC long-frame output"));
+    }
+    auto aac = aacAdtsPlan(audioOutput);
+    if (!aac) {
+        return ::media::Result<MediaProjectMpegTsOutputPlan>::failure(
+            aac.error());
     }
     auto videoInput = h264MuxInputContract(videoPacketLayout);
     if (!videoInput) {
@@ -228,7 +251,7 @@ MediaProjectMpegTsOutputPlan::createAudioVideo(
         MediaRunningTime::fromNanoseconds(ProjectPsiRepeatIntervalNs),
         MediaTsAudioVideoProgramPlan{
             ProjectVideoPid, ProjectAudioPid, ProjectVideoPid,
-            ProjectH264StreamType, ProjectAacStreamType, ProjectAacAdts,
+            ProjectH264StreamType, ProjectAacStreamType, aac.value(),
             ProjectAvContinuitySeeds, audioOutput.codecFrameSamples()},
         videoInput.value().layout, videoInput.value().lengthFieldBytes,
         MediaTsParameterSetPolicy::BeforeRandomAccess,
