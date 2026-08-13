@@ -111,4 +111,3 @@ Final acceptance requires:
   acceptance;
 - pacing, CPU, RSS, queue, drop, A/V drift, and exit-reason telemetry;
 - no temporary test, script, process, or port residue.
-
