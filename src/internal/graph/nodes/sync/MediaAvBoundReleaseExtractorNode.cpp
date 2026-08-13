@@ -18,18 +18,22 @@ namespace media::ffmpeg::graph {
 
 MediaAvBoundReleaseExtractorNode::MediaAvBoundReleaseExtractorNode(
     MediaNodeId nodeId,
-    MediaAvSyncGroupKey groupKey)
+    MediaAvSyncGroupKey groupKey,
+    MediaBranchMode audioBranchMode)
     : FFmpegNodeRuntime(nodeId, staticKind(), "MediaAvBoundReleaseExtractorNode")
     , m_groupKey(std::move(groupKey))
+    , m_audioBranchMode(audioBranchMode)
 {
 }
 
 MediaAvBoundReleaseExtractorNode::MediaAvBoundReleaseExtractorNode(
     MediaNodeId nodeId,
     MediaAvSyncGroupKey groupKey,
+    MediaBranchMode audioBranchMode,
     MediaAvStartupVideoPreparationCapability capability)
     : FFmpegNodeRuntime(nodeId, staticKind(), "MediaAvBoundReleaseExtractorNode")
     , m_groupKey(std::move(groupKey))
+    , m_audioBranchMode(audioBranchMode)
     , m_preparationCapability(std::move(capability))
 {
 }
@@ -131,15 +135,37 @@ void MediaAvBoundReleaseExtractorNode::resetState() noexcept
     m_stagedAudio.clear();
     m_stagedAudio.reserve(release.audio().size());
     for (const auto& unit : release.audio()) {
-        auto staged = MediaAvReleasedAudioBuffer::create(
-            unit.media, unit.trimLeadingSamples,
-            audioOrigin.value_or(release.audioOrigin()));
-        if (!staged) {
+        if (m_audioBranchMode == MediaBranchMode::CopyPacket) {
+            const auto* canonical =
+                dynamic_cast<const MediaCanonicalAccessUnitBuffer*>(
+                    unit.media.get());
+            if (!canonical ||
+                canonical->stream() != MediaScheduledStream::Audio ||
+                unit.trimLeadingSamples != 0) {
+                m_stagedVideo.clear();
+                m_stagedAudio.clear();
+                return ::media::Status::failure(
+                    ::media::ErrorInfo::invalidArgument(
+                        "A/V packet-copy release requires an untrimmed canonical audio access unit"));
+            }
+            m_stagedAudio.push_back(unit.media);
+        } else if (m_audioBranchMode == MediaBranchMode::TranscodeFrame) {
+            auto staged = MediaAvReleasedAudioBuffer::create(
+                unit.media, unit.trimLeadingSamples,
+                audioOrigin.value_or(release.audioOrigin()));
+            if (!staged) {
+                m_stagedVideo.clear();
+                m_stagedAudio.clear();
+                return ::media::Status::failure(staged.error());
+            }
+            m_stagedAudio.push_back(std::move(staged.value()));
+        } else {
             m_stagedVideo.clear();
             m_stagedAudio.clear();
-            return ::media::Status::failure(staged.error());
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "A/V release extractor rejects an unsupported audio branch"));
         }
-        m_stagedAudio.push_back(std::move(staged.value()));
     }
     m_releaseStaged = true;
     return ::media::Status::success();

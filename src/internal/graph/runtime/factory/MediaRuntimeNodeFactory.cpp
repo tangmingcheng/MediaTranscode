@@ -438,6 +438,22 @@ template <typename Node>
             return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
                 group.error());
         }
+        auto encodedAudioBranch = requiredNodeOption(
+            &node.options,
+            "MediaAvBoundReleaseExtractorNode",
+            "av_bound_release_extractor.audio_branch_mode");
+        if (!encodedAudioBranch) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                encodedAudioBranch.error());
+        }
+        MediaBranchMode audioBranchMode = MediaBranchMode::Drop;
+        if (!parseMediaBranchMode(encodedAudioBranch.value(), audioBranchMode) ||
+            (audioBranchMode != MediaBranchMode::CopyPacket &&
+             audioBranchMode != MediaBranchMode::TranscodeFrame)) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "MediaAvBoundReleaseExtractorNode requires a planned audio branch mode"));
+        }
         if (videoPreparationState) {
             auto capability = MediaAvStartupVideoPreparationCapability::issue(
                 videoPreparationState,
@@ -450,11 +466,12 @@ template <typename Node>
                 std::make_unique<MediaAvBoundReleaseExtractorNode>(
                     node.id,
                     std::move(group).value(),
+                    audioBranchMode,
                     std::move(capability).value()));
         }
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
             std::make_unique<MediaAvBoundReleaseExtractorNode>(
-                node.id, std::move(group).value()));
+                node.id, std::move(group).value(), audioBranchMode));
     }
     case MediaNodeKind::ActivatedStartupReleaseSequencer:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(

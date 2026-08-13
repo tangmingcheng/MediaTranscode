@@ -134,6 +134,40 @@ const GroupOptionContract* findContract(
     return ::media::Status::success();
 }
 
+::media::Status validateReleasedAudioBranch(
+    const MediaAvSyncGraphShape& shape,
+    const MediaAvSyncRuntimeBinding& binding)
+{
+    const auto nodes = shape.nodes(MediaNodeKind::AvBoundReleaseExtractor);
+    if (nodes.size() != 1) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "A/V common core requires one bound release extractor"));
+    }
+    auto encoded = requiredNodeOption(
+        &nodes.front()->options,
+        "MediaAvBoundReleaseExtractorNode",
+        "av_bound_release_extractor.audio_branch_mode");
+    if (!encoded) return ::media::Status::failure(encoded.error());
+    MediaBranchMode mode = MediaBranchMode::Drop;
+    if (!parseMediaBranchMode(encoded.value(), mode)) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "A/V release extractor audio branch mode is invalid"));
+    }
+    const auto expected =
+        binding.audioExecutionProduct ==
+                MediaSynchronizedAudioExecutionProduct::PacketCopy
+            ? MediaBranchMode::CopyPacket
+            : MediaBranchMode::TranscodeFrame;
+    if (mode != expected) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "A/V release extractor audio branch conflicts with its runtime binding"));
+    }
+    return ::media::Status::success();
+}
+
 } // namespace
 
 ::media::Status MediaAvCommonCoreShapeValidator::validate(
@@ -195,7 +229,11 @@ const GroupOptionContract* findContract(
         !group) {
         return group;
     }
-    return validateStartupSourceMode(shape, binding);
+    if (auto sourceMode = validateStartupSourceMode(shape, binding);
+        !sourceMode) {
+        return sourceMode;
+    }
+    return validateReleasedAudioBranch(shape, binding);
 }
 
 } // namespace media::ffmpeg::graph

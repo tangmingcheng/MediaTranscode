@@ -26,6 +26,25 @@ inline const char* mediaBranchModeName(MediaBranchMode mode) noexcept
     return "drop";
 }
 
+inline bool parseMediaBranchMode(
+    std::string_view text,
+    MediaBranchMode& mode) noexcept
+{
+    if (text == "copy_packet") {
+        mode = MediaBranchMode::CopyPacket;
+        return true;
+    }
+    if (text == "transcode_frame") {
+        mode = MediaBranchMode::TranscodeFrame;
+        return true;
+    }
+    if (text == "drop") {
+        mode = MediaBranchMode::Drop;
+        return true;
+    }
+    return false;
+}
+
 enum class MediaRateControlMode {
     Auto,
     Cbr,
