@@ -20,6 +20,28 @@ All target commands entered `/home/firefly/Downloads/MediaTranscode` and enabled
 
 The target clean Release build used eight parallel jobs and completed all 491 targets. Both CLI executables linked against the FFmpeg libraries selected by `ffenv on`.
 
+## Representative acceptance commands
+
+The final target A/V run used the real source audio and did not pass `--audio-bitrate`:
+
+```bash
+ffmpeg -hide_banner -loglevel warning -re -i /home/firefly/Downloads/test16s.mp4 -map 0:v:0 -map 0:a:0 -c copy -f mpegts 'udp://127.0.0.1:24760?pkt_size=1316'
+
+build-release/media_transcode_realtime_video_cli --media-id final-rkmpp-av --input-type mpegts-udp --input-layout mpegts --input 'udp://127.0.0.1:24760?fifo_size=65536&overrun_nonfatal=1' --open-timeout-ms 5000 --read-timeout-ms 3000 --analyze-duration-us 2000000 --probe-size 5000000 --mpegts-max-pcr-gap-ms 1000 --output-layout separate --output-transport rtp --rtp-host 127.0.0.1 --rtp-port 25760 --sdp /tmp/final-78685129.sdp --packet-size 1200 --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --startup-max-video-unit-bytes 4194304 --startup-max-audio-unit-bytes 1048576 --startup-max-gap-ms 40 --video-codec h264 --bitrate 2000 --gop 30 --audio-codec aac --hardware-backend rkmpp
+
+ffmpeg -hide_banner -loglevel warning -analyzeduration 5000000 -probesize 5000000 -protocol_whitelist file,udp,rtp -i /tmp/final-78685129.sdp -map 0:v:0 -map 0:a:0 -c copy -y /tmp/final-78685129.mkv
+ffprobe -v error -show_entries stream=index,codec_name,width,height,sample_rate,channels -show_entries format=duration -of default=noprint_wrappers=1 /tmp/final-78685129.mkv
+ffmpeg -v error -i /tmp/final-78685129.mkv -map 0:v:0 -map 0:a:0 -f null -
+```
+
+The Windows default-planner local regression used the fixed 120-second source:
+
+```powershell
+D:\Code\MyCode\MediaTranscode\out\build\x64-debug\media_transcode_local_video_cli.exe --input D:\Code\MyCode\MediaTranscode\out\acceptance\test-continuous-120s.mp4 --output D:\Code\MyCode\MediaTranscode\out\acceptance\rkmpp-windows-local-regression.mp4 --metadata-queue 1 --packet-queue 256 --frame-queue 128 --mux-queue 256 --video-codec h264 --bitrate 4000 --gop 30 --audio-codec aac
+```
+
+It selected the existing CUDA/NVENC auto chain, kept the compatible audio branch as packet copy, processed 3,600 video frames, reported zero drops/downloads/uploads, and exited normally. The Windows 120-second realtime A/V chain used FFmpeg `-re`, the realtime CLI without `--audio-bitrate`, and VLC against the published separate-RTP SDP; it held approximately 20.4 microseconds phase error with zero drops and stable RSS.
+
 ## Remaining risks
 
 1. The installed FFmpeg RKMPP encoder closes its MPP context before clearing its four retained async imported frames. Source-loss shutdown therefore still prints four `invalid mem pool ptr` messages from the target FFmpeg fork even after application-side EOS drain. The application does not hide the messages or weaken RAII; resolving them requires an upstream FFmpeg RKMPP close-order fix, which is outside this application-only scope.
