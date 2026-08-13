@@ -84,6 +84,25 @@ bool decoderSupportsDevice(const AVCodec& decoder,
     return frames;
 }
 
+::media::ffmpeg::BufferRefPtr createRkmppProbeDevice(
+    std::string& failure)
+{
+#if defined(__linux__)
+    AVBufferRef* rawDevice = nullptr;
+    const int result = av_hwdevice_ctx_create(
+        &rawDevice, AV_HWDEVICE_TYPE_RKMPP, nullptr, nullptr, 0);
+    ::media::ffmpeg::BufferRefPtr device(rawDevice);
+    if (result < 0 || !device) {
+        failure = FFmpegGraphError::describe(result);
+        return {};
+    }
+    return device;
+#else
+    failure = "RKMPP device probing is unavailable on this platform";
+    return {};
+#endif
+}
+
 MediaHardwareCapability validateInternallyManagedRkmppChain(
     const MediaPipelineChainPlan& chain,
     const MediaPipelinePlannerOptions& options)
@@ -133,10 +152,32 @@ MediaHardwareCapability validateInternallyManagedRkmppChain(
         if (!probeFrame) {
             return unavailable("av_frame_alloc(RKMPP filter probe) returned null");
         }
+        std::string rkmppDeviceFailure;
+        auto rkmppDevice = createRkmppProbeDevice(rkmppDeviceFailure);
+        if (!rkmppDevice) {
+            return unavailable(
+                "planned RKMPP RGA device probe failed: " +
+                rkmppDeviceFailure);
+        }
+        std::string framesFailure;
+        auto probeFrames = createFramesContext(
+            rkmppDevice.get(), decoderFormat, encoderSurfaceFormat,
+            chain.filter.inputFrame->size.width,
+            chain.filter.inputFrame->size.height,
+            4, framesFailure);
+        if (!probeFrames) {
+            return unavailable(
+                "planned RKMPP RGA frames probe failed: " + framesFailure);
+        }
         probeFrame->format = decoderFormat;
         probeFrame->width = chain.filter.inputFrame->size.width;
         probeFrame->height = chain.filter.inputFrame->size.height;
         probeFrame->sample_aspect_ratio = AVRational{1, 1};
+        probeFrame->hw_frames_ctx = av_buffer_ref(probeFrames.get());
+        if (!probeFrame->hw_frames_ctx) {
+            return unavailable(
+                "av_buffer_ref(RKMPP RGA probe frames context) returned null");
+        }
 
         MediaNodeOptions filterOptions;
         filterOptions.set("filter.pipeline.filter", chain.filter.filterName);
