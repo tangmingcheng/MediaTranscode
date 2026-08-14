@@ -77,12 +77,13 @@ planSeparateRtp(
 ::media::Result<MediaProjectMpegTsRuntimeOutputPlan> planProjectMpegTs(
     MediaRealtimeRtpTranscodePlanningDraft& outer,
     MediaRealtimeOutputPlanningDraft& output,
-    const MediaRealtimeRtpTranscodeRequest& request)
+    const MediaRealtimeRtpTranscodeRequest& request,
+    MediaRational outputFrameRate)
 {
     auto layout = MediaSelectedEncoderPacketLayoutResolver::resolve(
         outer.videoPlan);
     if (!layout || outer.videoPlan.outputCodecName != "h264" ||
-        output.muxedOutput.url.empty() || !output.muxedOutput.emission) {
+        output.muxedOutput.url.empty()) {
         return ::media::Result<
             MediaProjectMpegTsRuntimeOutputPlan>::failure(
             layout ? ::media::ErrorInfo::unsupported(
@@ -163,23 +164,23 @@ planSeparateRtp(
             std::move(rtp).value());
     }
     outer.videoParameters.globalHeader = true;
-    const auto& emission = *output.muxedOutput.emission;
-    const auto& mux = protocol.value().muxPlan().parameters();
-    const std::size_t expectedOverhead =
-        outer.outputTransport == MediaOutputTransportKind::RtpAvp ? 12 : 0;
-    if (emission.maximumPayloadBytes() !=
-            static_cast<std::size_t>(mux.maximumPacketsPerDatagram) * 188 ||
-        emission.perDatagramOverheadBytes() != expectedOverhead ||
-        emission.maximumLateness() != mux.transportDecodeLead) {
+    auto videoCadence = MediaRunningTime::checkedFromTicks(
+        1, outputFrameRate.den, outputFrameRate.num);
+    if (!videoCadence) {
         return ::media::Result<MediaProjectMpegTsRuntimeOutputPlan>::failure(
-            ::media::ErrorInfo::invalidArgument(
-                "VideoOnly MPEG-TS emission differs from its mux contract"));
+            videoCadence.error());
+    }
+    auto emission = MediaTsDatagramEmissionPlan::create(
+        protocol.value().muxPlan(), videoCadence.value(), std::nullopt);
+    if (!emission) {
+        return ::media::Result<MediaProjectMpegTsRuntimeOutputPlan>::failure(
+            emission.error());
     }
     return ::media::Result<MediaProjectMpegTsRuntimeOutputPlan>::success(
         MediaProjectMpegTsRuntimeOutputPlan{
             std::move(protocol).value(),
             MediaMuxSessionKind::ProjectMpegTs,
-            emission,
+            std::move(emission).value(),
             std::move(*transport)});
 }
 
@@ -308,7 +309,8 @@ MediaRealtimeVideoRuntimePlanner::plan(
             std::move(planned).value());
     } else if (outer.outputLayout ==
                RealtimeOutputStreamLayout::MuxedTransportStream) {
-        auto planned = planProjectMpegTs(outer, output, request);
+        auto planned = planProjectMpegTs(
+            outer, output, request, outputFrameRate);
         if (!planned) {
             return ::media::Result<MediaRealtimeVideoRuntimePlan>::failure(
                 planned.error());

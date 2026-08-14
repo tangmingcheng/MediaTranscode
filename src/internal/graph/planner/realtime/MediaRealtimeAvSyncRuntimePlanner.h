@@ -2,6 +2,7 @@
 
 #include "media_transcode/Result.h"
 #include "internal/graph/planner/avsync/MediaAvSyncPlan.h"
+#include "internal/graph/model/MediaGraphTypes.h"
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
 
 namespace media::ffmpeg::graph {
@@ -14,7 +15,8 @@ public:
     static ::media::Result<MediaRealtimeAvSyncRuntimePlan> plan(
         MediaRealtimeRtpTranscodePlanningDraft& outer,
         MediaRealtimeOutputPlanningDraft& output,
-        MediaAvSyncPlan synchronization);
+        MediaAvSyncPlan synchronization,
+        MediaRational outputFrameRate);
 
 };
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "internal/graph/planner/realtime/MediaTsDatagramEmissionPlan.h"
+#include "internal/graph/protocol/mpegts/MediaTsDatagramEmissionSchedule.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -19,6 +20,11 @@ struct MediaTsEmissionSnapshot final {
     std::size_t pendingBytes = 0;
     std::size_t peakPendingBytes = 0;
     std::uint64_t pressureFailures = 0;
+    std::uint64_t accessUnits = 0;
+    std::int64_t currentSchedulingDebtNanoseconds = 0;
+    std::int64_t maximumSchedulingDebtNanoseconds = 0;
+    std::int64_t selectedWireBytesPerSecond = 0;
+    std::int64_t maximumSelectedWireBytesPerSecond = 0;
 };
 
 class MediaTsEmissionDiagnostics final {
@@ -30,6 +36,9 @@ public:
         MediaRunningTime actualEmission) noexcept;
     void recordPendingBytes(std::size_t bytes) noexcept;
     void recordPressureFailure() noexcept;
+    void recordAccessUnitDecision(
+        const MediaTsAccessUnitEmissionDecision& decision) noexcept;
+    void recordAccessUnitCompleted() noexcept;
 
     const MediaTsEmissionSnapshot& snapshot() const noexcept;
     void logPlan(

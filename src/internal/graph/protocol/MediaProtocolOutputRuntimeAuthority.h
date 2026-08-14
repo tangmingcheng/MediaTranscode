@@ -49,7 +49,7 @@ private:
                  std::unique_lock<std::mutex>> m_reservation;
 };
 
-class MediaProtocolOutputRuntimeAuthority {
+class MediaProtocolOutputRuntimeAuthority : public MediaMasterClock {
 public:
     virtual ~MediaProtocolOutputRuntimeAuthority() = default;
     virtual const MediaProtocolOutputSessionKey& sessionKey() const noexcept = 0;

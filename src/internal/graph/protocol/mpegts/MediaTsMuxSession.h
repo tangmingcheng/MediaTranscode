@@ -5,6 +5,7 @@
 #include "internal/graph/protocol/mpegts/MediaTsPendingEmission.h"
 #include "internal/graph/protocol/mpegts/MediaTsPacketBatchWriter.h"
 #include "internal/graph/diagnostics/MediaTsEmissionDiagnostics.h"
+#include "internal/graph/time/MediaMasterClock.h"
 
 #include <memory>
 #include <optional>
@@ -30,6 +31,7 @@ public:
         MediaTsMuxPlan plan;
         MediaTsDatagramEmissionPlan emission;
         MediaProtocolOutputActivation activation;
+        std::shared_ptr<const MediaMasterClock> masterClock;
         MaterializedStreams streams;
         std::unique_ptr<MediaTsDatagramSink> sink;
         bool startsWithDiscontinuity;
@@ -45,7 +47,8 @@ public:
     ::media::Result<AdvanceResult> poll(MediaRunningTime masterNow);
     ::media::Result<AdvanceResult> advanceThrough(MediaRunningTime emitOnMaster);
     ::media::Result<AdvanceResult> writeAccessUnit(
-        const MediaTsAccessUnitView& unit);
+        const MediaTsAccessUnitView& unit,
+        MediaRunningTime actualMasterNow);
     ::media::Status finish();
     void abort() noexcept;
     bool hasPendingEmission() const noexcept;
@@ -81,6 +84,7 @@ private:
     MediaTsMuxPlan m_plan;
     MediaTsDatagramEmissionPlan m_emissionPlan;
     MediaProtocolOutputActivation m_activation;
+    std::shared_ptr<const MediaMasterClock> m_masterClock;
     MaterializedStreams m_streams;
     MediaTsOutputClockGenerator m_clock;
     MediaTsTransportPacketizer m_packetizer;

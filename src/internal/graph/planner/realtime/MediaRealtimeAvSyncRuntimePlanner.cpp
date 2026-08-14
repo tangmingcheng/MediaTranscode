@@ -236,7 +236,8 @@ constexpr std::int64_t NanosecondsPerSecond = 1'000'000'000;
 MediaRealtimeAvSyncRuntimePlanner::plan(
     MediaRealtimeRtpTranscodePlanningDraft& outer,
     MediaRealtimeOutputPlanningDraft& output,
-    MediaAvSyncPlan synchronization)
+    MediaAvSyncPlan synchronization,
+    MediaRational outputFrameRate)
 {
     if (!outer.audioPlan) {
         return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
@@ -357,8 +358,7 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
             outer.outputLayout !=
                 RealtimeOutputStreamLayout::MuxedTransportStream ||
             !synchronization.projectMpegTsOutput->outputMux ||
-            !facts.value().outputSampleRate || output.muxedOutput.url.empty() ||
-            !output.muxedOutput.emission) {
+            !facts.value().outputSampleRate || output.muxedOutput.url.empty()) {
             return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
                 ::media::ErrorInfo::notInitialized(
                     "project MPEG-TS synchronization output facts are incomplete"));
@@ -431,23 +431,36 @@ MediaRealtimeAvSyncRuntimePlanner::plan(
         }
         adapter = MediaAvSyncOutputAdapterKind::ProjectMpegTs;
         outer.videoParameters.globalHeader = true;
-        const auto& emission = *output.muxedOutput.emission;
-        const auto& mux = accepted.value().muxPlan().parameters();
-        const std::size_t expectedOverhead =
-            outer.outputTransport == MediaOutputTransportKind::RtpAvp ? 12 : 0;
-        if (emission.maximumPayloadBytes() !=
-                static_cast<std::size_t>(mux.maximumPacketsPerDatagram) * 188 ||
-            emission.perDatagramOverheadBytes() != expectedOverhead ||
-            emission.maximumLateness() != mux.transportDecodeLead) {
+        if (!outputFrameRate.isKnown() || outputFrameRate.num <= 0 ||
+            outputFrameRate.den <= 0 ||
+            !facts.value().outputSampleRate ||
+            !facts.value().protocolBatchSamples ||
+            *facts.value().protocolBatchSamples <= 0) {
             return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "MPEG-TS emission differs from its mux contract"));
+                ::media::ErrorInfo::notInitialized(
+                    "MPEG-TS emission requires planner-owned output cadences"));
+        }
+        auto videoCadence = MediaRunningTime::checkedFromTicks(
+            1, outputFrameRate.den, outputFrameRate.num);
+        auto audioCadence = MediaRunningTime::checkedFromTicks(
+            *facts.value().protocolBatchSamples,
+            1, *facts.value().outputSampleRate);
+        if (!videoCadence || !audioCadence) {
+            return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
+                videoCadence ? audioCadence.error() : videoCadence.error());
+        }
+        auto emission = MediaTsDatagramEmissionPlan::create(
+            accepted.value().muxPlan(), videoCadence.value(),
+            audioCadence.value());
+        if (!emission) {
+            return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(
+                emission.error());
         }
         protocolOutput.emplace(std::in_place_type<MediaProjectMpegTsRuntimeOutputPlan>,
             MediaProjectMpegTsRuntimeOutputPlan{
                 std::move(accepted).value(),
                 MediaMuxSessionKind::ProjectMpegTs,
-                emission,
+                std::move(emission).value(),
                 std::move(*transport)});
     } else {
         return ::media::Result<MediaRealtimeAvSyncRuntimePlan>::failure(

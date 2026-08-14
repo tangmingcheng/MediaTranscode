@@ -8,6 +8,7 @@
 #include <array>
 #include <charconv>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <string_view>
 #include <utility>
@@ -25,20 +26,14 @@ constexpr const char* VariantKey =
     "project_mpeg_ts_plan.transport.variant";
 constexpr const char* MuxSessionKindKey =
     "project_mpeg_ts_plan.mux_session_kind";
-constexpr const char* EmissionRateKey =
-    "project_mpeg_ts_plan.emission.wire_bytes_per_second";
-constexpr const char* EmissionBurstKey =
-    "project_mpeg_ts_plan.emission.burst_wire_bytes";
-constexpr const char* EmissionLatenessKey =
-    "project_mpeg_ts_plan.emission.maximum_lateness_ns";
-constexpr const char* EmissionPayloadKey =
-    "project_mpeg_ts_plan.emission.maximum_payload_bytes";
-constexpr const char* EmissionOverheadKey =
-    "project_mpeg_ts_plan.emission.per_datagram_overhead_bytes";
+constexpr const char* EmissionVideoWindowKey =
+    "project_mpeg_ts_plan.emission.video_initial_service_window_ns";
+constexpr const char* EmissionAudioWindowKey =
+    "project_mpeg_ts_plan.emission.audio_initial_service_window_ns";
 constexpr std::size_t VideoOnlyMuxFieldCount = 26;
 constexpr std::size_t AudioVideoMuxFieldCount = 34;
 
-constexpr std::array<const char*, 13> UdpKeys{
+constexpr std::array<const char*, 10> UdpKeys{
     SessionKey,
     PlanKey,
     VariantKey,
@@ -47,13 +42,10 @@ constexpr std::array<const char*, 13> UdpKeys{
     "project_mpeg_ts_plan.transport.udp.mux_session_kind",
     MuxSessionKindKey,
     StreamSetKey,
-    EmissionRateKey,
-    EmissionBurstKey,
-    EmissionLatenessKey,
-    EmissionPayloadKey,
-    EmissionOverheadKey};
+    EmissionVideoWindowKey,
+    EmissionAudioWindowKey};
 
-constexpr std::array<const char*, 36> RtpKeys{
+constexpr std::array<const char*, 33> RtpKeys{
     SessionKey,
     PlanKey,
     VariantKey,
@@ -85,11 +77,8 @@ constexpr std::array<const char*, 36> RtpKeys{
     "project_mpeg_ts_plan.transport.rtp.initial_sequence_number",
     MuxSessionKindKey,
     StreamSetKey,
-    EmissionRateKey,
-    EmissionBurstKey,
-    EmissionLatenessKey,
-    EmissionPayloadKey,
-    EmissionOverheadKey};
+    EmissionVideoWindowKey,
+    EmissionAudioWindowKey};
 
 template <typename Value>
 ::media::Result<Value> narrow(std::uint64_t value)
@@ -126,29 +115,38 @@ template <typename Value>
 }
 
 ::media::Result<MediaTsDatagramEmissionPlan> decodeEmission(
-    const MediaNodeOptions& options)
+    const MediaNodeOptions& options,
+    const MediaTsMuxPlan& muxPlan)
 {
-    auto rate = parseUnsignedOption<std::int64_t>(
-        options, EmissionRateKey, false);
-    auto burst = parseUnsignedOption<std::size_t>(
-        options, EmissionBurstKey, false);
-    auto lateness = requiredPositiveInt64NodeOption(
-        &options, Owner, EmissionLatenessKey);
-    auto payload = parseUnsignedOption<std::size_t>(
-        options, EmissionPayloadKey, false);
-    auto overhead = parseUnsignedOption<std::size_t>(
-        options, EmissionOverheadKey, true);
-    if (!rate || !burst || !lateness || !payload || !overhead) {
+    auto videoWindow = requiredPositiveInt64NodeOption(
+        &options, Owner, EmissionVideoWindowKey);
+    auto audioWindow = parseUnsignedOption<std::int64_t>(
+        options, EmissionAudioWindowKey, true);
+    if (!videoWindow || !audioWindow) {
         return ::media::Result<MediaTsDatagramEmissionPlan>::failure(
-            !rate ? rate.error() :
-            !burst ? burst.error() :
-            !lateness ? lateness.error() :
-            !payload ? payload.error() : overhead.error());
+            videoWindow ? audioWindow.error() : videoWindow.error());
     }
-    return MediaTsDatagramEmissionPlan::create(
-        rate.value(), burst.value(),
-        MediaRunningTime::fromNanoseconds(lateness.value()),
-        payload.value(), overhead.value());
+    auto emission = MediaTsDatagramEmissionPlan::create(
+        muxPlan,
+        MediaRunningTime::fromNanoseconds(videoWindow.value()),
+        audioWindow.value() == 0
+            ? std::nullopt
+            : std::optional<MediaRunningTime>(
+                  MediaRunningTime::fromNanoseconds(audioWindow.value())));
+    if (!emission ||
+        emission.value().videoInitialServiceWindow().nanoseconds() !=
+            videoWindow.value() ||
+        (audioWindow.value() == 0) !=
+            !emission.value().audioInitialServiceWindow() ||
+        (audioWindow.value() != 0 &&
+         emission.value().audioInitialServiceWindow()->nanoseconds() !=
+             audioWindow.value())) {
+        return ::media::Result<MediaTsDatagramEmissionPlan>::failure(
+            emission ? ::media::ErrorInfo::invalidArgument(
+                           "Project MPEG-TS emission windows are not canonical")
+                     : emission.error());
+    }
+    return emission;
 }
 
 ::media::Result<std::vector<std::uint64_t>>
@@ -469,15 +467,13 @@ bool sameProtocol(
 {
     auto endpoint = parseRtpUdpUrlEndpoint(udp.url);
     auto encodedStreamSet = MediaTranscodeStreamSetCodec::encode(streamSet);
+    auto expectedEmission = MediaTsDatagramEmissionPlan::create(
+        output.protocol.muxPlan(),
+        output.emission.videoInitialServiceWindow(),
+        output.emission.audioInitialServiceWindow());
     if (output.protocol.muxPlan().parameters().transportKind !=
             MediaOutputTransportKind::UdpDatagrams ||
-        output.emission.perDatagramOverheadBytes() != 0 ||
-        output.emission.maximumPayloadBytes() !=
-            static_cast<std::size_t>(
-                output.protocol.muxPlan().parameters()
-                    .maximumPacketsPerDatagram) * 188 ||
-        output.emission.maximumLateness() !=
-            output.protocol.muxPlan().transportDecodeLead() ||
+        !expectedEmission || output.emission != expectedEmission.value() ||
         !encodedStreamSet || !endpoint || endpoint.value().scheme != "udp" ||
         udp.resourceKind != MediaOutputResourceKind::ByteSink ||
         udp.muxSessionKind != MediaMuxSessionKind::ProjectMpegTs) {
@@ -494,16 +490,12 @@ bool sameProtocol(
         {UdpKeys[5], "project_mpegts"},
         {UdpKeys[6], "project_mpegts"},
         {StreamSetKey, std::string(encodedStreamSet.value())},
-        {EmissionRateKey,
-            std::to_string(output.emission.wireBytesPerSecond())},
-        {EmissionBurstKey,
-            std::to_string(output.emission.burstWireBytes())},
-        {EmissionLatenessKey,
-            std::to_string(output.emission.maximumLateness().nanoseconds())},
-        {EmissionPayloadKey,
-            std::to_string(output.emission.maximumPayloadBytes())},
-        {EmissionOverheadKey,
-            std::to_string(output.emission.perDatagramOverheadBytes())}});
+        {EmissionVideoWindowKey, std::to_string(
+             output.emission.videoInitialServiceWindow().nanoseconds())},
+        {EmissionAudioWindowKey, std::to_string(
+             output.emission.audioInitialServiceWindow()
+                 ? output.emission.audioInitialServiceWindow()->nanoseconds()
+                 : 0)}});
 }
 
 ::media::Status applyRtp(
@@ -521,15 +513,16 @@ bool sameProtocol(
     const auto& remoteRtcp = sender.remoteRtcpEndpoint();
     auto expectedPackets = MediaTsMuxPlan::maximumPacketsPerRtpDatagram(
         sender.maximumDatagramBytes());
+    auto expectedEmission = MediaTsDatagramEmissionPlan::create(
+        output.protocol.muxPlan(),
+        output.emission.videoInitialServiceWindow(),
+        output.emission.audioInitialServiceWindow());
     auto encodedStreamSet = MediaTranscodeStreamSetCodec::encode(streamSet);
     if (mux.transportKind != MediaOutputTransportKind::RtpAvp ||
         !encodedStreamSet || !expectedPackets ||
         mux.maximumPacketsPerDatagram != expectedPackets.value() ||
         rtp.tsPacketsPerPayload() != expectedPackets.value() ||
-        output.emission.perDatagramOverheadBytes() != 12 ||
-        output.emission.maximumPayloadBytes() !=
-            static_cast<std::size_t>(mux.maximumPacketsPerDatagram) * 188 ||
-        output.emission.maximumLateness() != mux.transportDecodeLead ||
+        !expectedEmission || output.emission != expectedEmission.value() ||
         output.emission.maximumWireDatagramBytes() >
             sender.maximumDatagramBytes() ||
         localPolicy.kind() !=
@@ -574,16 +567,12 @@ bool sameProtocol(
         {RtpKeys[28], std::to_string(rtp.initialSequenceNumber())},
         {RtpKeys[29], "project_mpegts"},
         {StreamSetKey, std::string(encodedStreamSet.value())},
-        {EmissionRateKey,
-            std::to_string(output.emission.wireBytesPerSecond())},
-        {EmissionBurstKey,
-            std::to_string(output.emission.burstWireBytes())},
-        {EmissionLatenessKey,
-            std::to_string(output.emission.maximumLateness().nanoseconds())},
-        {EmissionPayloadKey,
-            std::to_string(output.emission.maximumPayloadBytes())},
-        {EmissionOverheadKey,
-            std::to_string(output.emission.perDatagramOverheadBytes())}});
+        {EmissionVideoWindowKey, std::to_string(
+             output.emission.videoInitialServiceWindow().nanoseconds())},
+        {EmissionAudioWindowKey, std::to_string(
+             output.emission.audioInitialServiceWindow()
+                 ? output.emission.audioInitialServiceWindow()->nanoseconds()
+                 : 0)}});
 }
 
 ::media::Result<MediaProjectMpegTsRuntimeOutputPlan> decodeUdp(
@@ -610,14 +599,9 @@ bool sameProtocol(
             !resource ? resource.error() : muxSession.error());
     }
     auto endpoint = parseRtpUdpUrlEndpoint(url.value());
-    auto emission = decodeEmission(node.options);
+    auto emission = decodeEmission(node.options, protocol.muxPlan());
     if (!endpoint || endpoint.value().scheme != "udp" ||
-        !emission || emission.value().perDatagramOverheadBytes() != 0 ||
-        emission.value().maximumPayloadBytes() !=
-            static_cast<std::size_t>(protocol.muxPlan().parameters()
-                                         .maximumPacketsPerDatagram) * 188 ||
-        emission.value().maximumLateness() !=
-            protocol.muxPlan().transportDecodeLead() ||
+        !emission ||
         resource.value() != "byte_sink" ||
         muxSession.value() != "project_mpegts") {
         return Result::failure(::media::ErrorInfo::invalidArgument(
@@ -758,14 +742,11 @@ bool sameProtocol(
         MediaRunningTime::fromNanoseconds(reportInterval.value()));
     auto expectedPackets = MediaTsMuxPlan::maximumPacketsPerRtpDatagram(
         maximumDatagram.value());
-    auto emission = decodeEmission(node.options);
+    auto emission = decodeEmission(node.options, protocol.muxPlan());
     if (!rtp || !expectedPackets ||
         !emission ||
-        emission.value().perDatagramOverheadBytes() != 12 ||
         emission.value().maximumWireDatagramBytes() >
             maximumDatagram.value() ||
-        emission.value().maximumLateness() !=
-            protocol.muxPlan().transportDecodeLead() ||
         payloadType.value() != rtp.value().payloadType() ||
         clockRate.value() != rtp.value().clockRate() ||
         ssrc.value() != rtp.value().ssrc() ||

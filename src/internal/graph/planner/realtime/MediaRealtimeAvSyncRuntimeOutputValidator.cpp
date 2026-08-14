@@ -202,6 +202,10 @@ bool validRtpStream(
         std::get<MediaProjectMpegTsRuntimeOutputPlan>(
             runtime.protocolOutput);
     const auto& mux = output.protocol.muxPlan().parameters();
+    auto expectedEmission = MediaTsDatagramEmissionPlan::create(
+        output.protocol.muxPlan(),
+        output.emission.videoInitialServiceWindow(),
+        output.emission.audioInitialServiceWindow());
     const auto* program = output.protocol.muxPlan().audioVideoProgram();
     const bool sampleRateMatches = program &&
         program->aac.samplingFrequencyIndex < MediaAacSampleRates.size() &&
@@ -210,10 +214,8 @@ bool validRtpStream(
             *runtime.planningFacts.outputSampleRate;
     if (output.muxSessionKind !=
             MediaMuxSessionKind::ProjectMpegTs ||
-        !sampleRateMatches ||
-        output.emission.maximumPayloadBytes() !=
-            static_cast<std::size_t>(mux.maximumPacketsPerDatagram) * 188 ||
-        output.emission.maximumLateness() != mux.transportDecodeLead ||
+        !sampleRateMatches || !expectedEmission ||
+        output.emission != expectedEmission.value() ||
         mux !=
             runtime.synchronization.projectMpegTsOutput->outputMux
                 ->parameters()) {
@@ -270,9 +272,7 @@ bool validRtpStream(
         rtp->maximumDatagramBytes() != sender.maximumDatagramBytes() ||
         rtp->maximumDatagramBytes() >
             static_cast<std::size_t>(
-                (std::numeric_limits<int>::max)() / 2) ||
-        sender.sendBufferBytes() <
-            static_cast<int>(rtp->maximumDatagramBytes() * 2) ||
+                (std::numeric_limits<int>::max)()) ||
         rtp->tsPacketsPerPayload() != maximumPackets.value() ||
         mux.maximumPacketsPerDatagram != rtp->tsPacketsPerPayload() ||
         sender.ioBehavior() !=

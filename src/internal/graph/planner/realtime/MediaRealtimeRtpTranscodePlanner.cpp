@@ -831,6 +831,19 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
         !outputStatus) {
         return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(outputStatus.error());
     }
+    MediaRational outputFrameRate;
+    if (rawInput) {
+        outputFrameRate = rawInput->video.frameRate;
+    } else if (preparedInput) {
+        outputFrameRate = preparedInput->video.frameRate;
+    }
+    if (plan.videoParameters.frameRate.complete() &&
+        plan.videoParameters.frameRate.numerator &&
+        plan.videoParameters.frameRate.denominator) {
+        outputFrameRate = MediaRational{
+            *plan.videoParameters.frameRate.numerator,
+            *plan.videoParameters.frameRate.denominator};
+    }
     std::optional<MediaProjectMpegTsResolvedPipelineFacts> resolvedTsFacts;
     if (MediaRealtimeRequestClassifier::muxedTransportOutput(options) &&
         options.parameters.execution.streamSet ==
@@ -903,7 +916,7 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
             }
         }
         auto runtime = MediaRealtimeAvSyncRuntimePlanner::plan(
-            plan, output, std::move(avSync).value());
+            plan, output, std::move(avSync).value(), outputFrameRate);
         if (!runtime) {
             return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
                 runtime.error());
@@ -936,11 +949,9 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
                 std::move(packetization).value();
         }
         MediaRational sourceTimeBase;
-        MediaRational outputFrameRate;
         if (rawInput) {
             sourceTimeBase = MediaRational{
                 1, rawInput->videoTransport.clockRate};
-            outputFrameRate = rawInput->video.frameRate;
         } else {
             if (!preparedResource) {
                 return ::media::Result<MediaRealtimeRtpTranscodePlan>::failure(
@@ -958,14 +969,6 @@ MediaRealtimeTsInputPlan::MediaRealtimeTsInputPlan(
                     },
                     *selectedTsProgram);
             }
-            outputFrameRate = preparedInput->video.frameRate;
-        }
-        if (plan.videoParameters.frameRate.complete() &&
-            plan.videoParameters.frameRate.numerator &&
-            plan.videoParameters.frameRate.denominator) {
-            outputFrameRate = MediaRational{
-                *plan.videoParameters.frameRate.numerator,
-                *plan.videoParameters.frameRate.denominator};
         }
         auto runtime = MediaRealtimeVideoRuntimePlanner::plan(
             plan, std::move(output), options, sourceTimeBase,

@@ -5,39 +5,44 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 
 namespace media::ffmpeg::graph {
+
+class MediaTsMuxPlan;
 
 class MediaTsDatagramEmissionPlan final {
 public:
     static ::media::Result<MediaTsDatagramEmissionPlan> create(
-        std::int64_t wireBytesPerSecond,
-        std::size_t burstWireBytes,
-        MediaRunningTime maximumLateness,
-        std::size_t maximumPayloadBytes,
-        std::size_t perDatagramOverheadBytes);
+        const MediaTsMuxPlan& muxPlan,
+        MediaRunningTime videoAccessUnitCadence,
+        std::optional<MediaRunningTime> audioAccessUnitCadence);
 
-    std::int64_t wireBytesPerSecond() const noexcept;
-    std::size_t burstWireBytes() const noexcept;
-    MediaRunningTime maximumLateness() const noexcept;
+    MediaRunningTime accessUnitWindow() const noexcept;
+    std::size_t packetSizeBytes() const noexcept;
     std::size_t maximumPayloadBytes() const noexcept;
     std::size_t perDatagramOverheadBytes() const noexcept;
     std::size_t maximumWireDatagramBytes() const noexcept;
+    MediaRunningTime videoInitialServiceWindow() const noexcept;
+    const std::optional<MediaRunningTime>&
+    audioInitialServiceWindow() const noexcept;
 
     friend bool operator==(const MediaTsDatagramEmissionPlan&,
                            const MediaTsDatagramEmissionPlan&) = default;
 
 private:
     MediaTsDatagramEmissionPlan(
-        std::int64_t wireBytesPerSecond,
-        std::size_t burstWireBytes,
-        MediaRunningTime maximumLateness,
+        MediaRunningTime accessUnitWindow,
+        MediaRunningTime videoInitialServiceWindow,
+        std::optional<MediaRunningTime> audioInitialServiceWindow,
+        std::size_t packetSizeBytes,
         std::size_t maximumPayloadBytes,
         std::size_t perDatagramOverheadBytes) noexcept;
 
-    std::int64_t m_wireBytesPerSecond;
-    std::size_t m_burstWireBytes;
-    MediaRunningTime m_maximumLateness;
+    MediaRunningTime m_accessUnitWindow;
+    MediaRunningTime m_videoInitialServiceWindow;
+    std::optional<MediaRunningTime> m_audioInitialServiceWindow;
+    std::size_t m_packetSizeBytes;
     std::size_t m_maximumPayloadBytes;
     std::size_t m_perDatagramOverheadBytes;
 };

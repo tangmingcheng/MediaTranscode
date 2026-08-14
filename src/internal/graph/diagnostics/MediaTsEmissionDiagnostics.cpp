@@ -59,6 +59,27 @@ void MediaTsEmissionDiagnostics::recordPressureFailure() noexcept
     saturatingAdd(m_snapshot.pressureFailures, std::uint64_t{1});
 }
 
+void MediaTsEmissionDiagnostics::recordAccessUnitDecision(
+    const MediaTsAccessUnitEmissionDecision& decision) noexcept
+{
+    saturatingAdd(m_snapshot.accessUnits, std::uint64_t{1});
+    m_snapshot.currentSchedulingDebtNanoseconds =
+        (std::max)(decision.schedulingDebt.nanoseconds(), std::int64_t{0});
+    m_snapshot.maximumSchedulingDebtNanoseconds = (std::max)(
+        m_snapshot.maximumSchedulingDebtNanoseconds,
+        m_snapshot.currentSchedulingDebtNanoseconds);
+    m_snapshot.selectedWireBytesPerSecond =
+        decision.selectedWireBytesPerSecond;
+    m_snapshot.maximumSelectedWireBytesPerSecond = (std::max)(
+        m_snapshot.maximumSelectedWireBytesPerSecond,
+        decision.selectedWireBytesPerSecond);
+}
+
+void MediaTsEmissionDiagnostics::recordAccessUnitCompleted() noexcept
+{
+    m_snapshot.currentSchedulingDebtNanoseconds = 0;
+}
+
 const MediaTsEmissionSnapshot&
 MediaTsEmissionDiagnostics::snapshot() const noexcept
 {
@@ -71,9 +92,16 @@ void MediaTsEmissionDiagnostics::logPlan(
 {
     std::ostringstream out;
     out << "mpegts_emission_plan generation=" << generation
-        << " wire_bytes_per_second=" << plan.wireBytesPerSecond()
-        << " burst_wire_bytes=" << plan.burstWireBytes()
-        << " maximum_lateness_ns=" << plan.maximumLateness().nanoseconds()
+        << " mode=canonical_access_unit_window"
+        << " access_unit_window_ns="
+        << plan.accessUnitWindow().nanoseconds()
+        << " video_initial_service_window_ns="
+        << plan.videoInitialServiceWindow().nanoseconds()
+        << " audio_initial_service_window_ns="
+        << (plan.audioInitialServiceWindow()
+                ? plan.audioInitialServiceWindow()->nanoseconds()
+                : 0)
+        << " packet_size_bytes=" << plan.packetSizeBytes()
         << " maximum_payload_bytes=" << plan.maximumPayloadBytes()
         << " per_datagram_overhead_bytes="
         << plan.perDatagramOverheadBytes();
@@ -102,6 +130,15 @@ void MediaTsEmissionDiagnostics::logSnapshot(
         << " pending_bytes=" << m_snapshot.pendingBytes
         << " peak_pending_bytes=" << m_snapshot.peakPendingBytes
         << " pressure_failures=" << m_snapshot.pressureFailures
+        << " access_units=" << m_snapshot.accessUnits
+        << " current_scheduling_debt_ns="
+        << m_snapshot.currentSchedulingDebtNanoseconds
+        << " maximum_scheduling_debt_ns="
+        << m_snapshot.maximumSchedulingDebtNanoseconds
+        << " selected_wire_bytes_per_second="
+        << m_snapshot.selectedWireBytesPerSecond
+        << " maximum_selected_wire_bytes_per_second="
+        << m_snapshot.maximumSelectedWireBytesPerSecond
         << " exit_reason=" << exitReason;
     mediaGraphDiagnosticLog(
         stage == "final"

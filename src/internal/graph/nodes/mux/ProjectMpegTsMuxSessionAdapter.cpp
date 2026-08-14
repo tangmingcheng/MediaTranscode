@@ -475,6 +475,7 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
                                 MediaTsMuxSession::Binding{
                                     muxPlan, m_outputPlan->emission,
                                     *m_activation,
+                                    m_outputAuthority,
                                     std::move(streams),
                                     std::move(datagramSink).value(),
                                     current.value().
@@ -580,13 +581,19 @@ ProjectMpegTsMuxSessionAdapter::generationPurgeTarget() const noexcept
         } else if (auto unit = validateAccessUnitLocked(buffer); !unit) {
             failure = unit.error();
         } else {
-            auto written = m_session->writeAccessUnit(view.value());
-            if (!written) {
-                failure = written.error();
+            auto now = m_outputAuthority->now();
+            if (!now) {
+                failure = now.error();
             } else {
-                m_nextTransportDeadline = written.value().nextDeadline;
-                m_latestAcceptedEmission = view.value().emitOnMaster;
-                m_mediaTimelineStarted = true;
+                auto written = m_session->writeAccessUnit(
+                    view.value(), now.value());
+                if (!written) {
+                    failure = written.error();
+                } else {
+                    m_nextTransportDeadline = written.value().nextDeadline;
+                    m_latestAcceptedEmission = view.value().emitOnMaster;
+                    m_mediaTimelineStarted = true;
+                }
             }
         }
     }

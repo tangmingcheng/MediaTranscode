@@ -130,22 +130,22 @@ namespace media::ffmpeg::graph {
                RealtimeOutputStreamLayout::MuxedTransportStream) {
         const auto* output = std::get_if<MediaProjectMpegTsRuntimeOutputPlan>(
             &runtime.outputAdapter);
+        const auto expectedEmission = output
+            ? MediaTsDatagramEmissionPlan::create(
+                  output->protocol.muxPlan(),
+                  output->emission.videoInitialServiceWindow(),
+                  output->emission.audioInitialServiceWindow())
+            : ::media::Result<MediaTsDatagramEmissionPlan>::failure(
+                  ::media::ErrorInfo::invalidArgument(
+                      "Project MPEG-TS output is absent"));
         if (!output ||
             output->muxSessionKind != MediaMuxSessionKind::ProjectMpegTs ||
             !output->protocol.muxPlan().videoOnlyProgram() ||
             output->protocol.muxPlan().audioVideoProgram() ||
             output->protocol.muxPlan().transportDecodeLead() !=
                 runtime.scheduling.transportLead ||
-            output->emission.maximumLateness() !=
-                output->protocol.muxPlan().transportDecodeLead() ||
-            output->emission.maximumPayloadBytes() !=
-                static_cast<std::size_t>(
-                    output->protocol.muxPlan().parameters()
-                        .maximumPacketsPerDatagram) * 188 ||
-            output->emission.perDatagramOverheadBytes() !=
-                (outer.outputTransport == MediaOutputTransportKind::RtpAvp
-                     ? 12u
-                     : 0u) ||
+            !expectedEmission ||
+            output->emission != expectedEmission.value() ||
             output->protocol.muxPlan().parameters().transportKind !=
                 outer.outputTransport) {
             return invalid("muxed adapter");

@@ -4,6 +4,7 @@
 #include "internal/graph/protocol/mpegts/MediaTsOutputClockGenerator.h"
 #include "internal/graph/protocol/mpegts/MediaTsPacketBatchWriter.h"
 #include "internal/graph/diagnostics/MediaTsEmissionDiagnostics.h"
+#include "internal/graph/time/MediaMasterClock.h"
 
 #include <optional>
 
@@ -14,7 +15,8 @@ public:
     MediaTsPendingEmission(
         MediaTsPacketCursor cursor,
         MediaRunningTime notBefore,
-        MediaTsPreparedPacketClock packetClock) noexcept;
+        MediaTsPreparedPacketClock packetClock,
+        std::size_t packetSizeBytes) noexcept;
 
     MediaTsPendingEmission(MediaTsPendingEmission&&) noexcept = default;
     MediaTsPendingEmission& operator=(MediaTsPendingEmission&&) noexcept = default;
@@ -23,13 +25,13 @@ public:
 
     ::media::Result<MediaRunningTime> prepareNext(
         MediaTsPacketBatchWriter& writer,
-        MediaTsDatagramEmissionSchedule& schedule,
-        MediaRunningTime schedulingFloor);
+        MediaTsDatagramEmissionSchedule& schedule);
     ::media::Result<MediaTsBatchWriteResult> emitPrepared(
         MediaTsPacketBatchWriter& writer,
         MediaTsDatagramEmissionSchedule& schedule,
         MediaTsEmissionDiagnostics& diagnostics,
-        MediaRunningTime actualEmission);
+        const MediaMasterClock& masterClock,
+        MediaRunningTime availableThrough);
 
     MediaRunningTime deadline() const noexcept;
     bool finished() const noexcept;
@@ -43,6 +45,7 @@ private:
     std::optional<MediaTsPreparedPacketBatch> m_batch;
     std::optional<MediaTsPreparedDatagramEmission> m_emission;
     std::optional<MediaTsPreparedPacketClock> m_packetClock;
+    std::size_t m_packetSizeBytes;
 };
 
 } // namespace media::ffmpeg::graph
