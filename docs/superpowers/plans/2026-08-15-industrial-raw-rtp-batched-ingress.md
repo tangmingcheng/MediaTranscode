@@ -24,15 +24,14 @@
 **Read-only targets:**
 
 - Windows Winsock extension availability and current socket implementation.
-- Linux/RK target matrix (`192.168.96.211`, `192.168.96.200`, and `192.168.130.229`): kernel, libc, socket APIs, `io_uring` zero-copy RX prerequisites, NIC/driver, and FFmpeg environment.
+- Linux/RK target matrix (`192.168.96.211` and `192.168.130.229`): kernel, libc, socket APIs, `io_uring` zero-copy RX prerequisites, NIC/driver, and FFmpeg environment.
 
 - [x] On Windows, inspect `WSAIoctl(SIO_GET_MULTIPLE_EXTENSION_FUNCTION_POINTER)` support for RIO, IOCP/overlapped UDP requirements, registered-buffer alignment, cancellation, and receive-buffer reporting.
 - [x] On `192.168.96.211` and `192.168.130.229`, run read-only commands, using `ffenv on` for FFmpeg evidence, to record kernel version/config, libc, `recvmmsg`, `io_uring` features, network driver, receive-queue limits, and available build headers/libraries.
-- [ ] Probe `192.168.96.200` through an accessible SSH endpoint. Port 22 currently refuses connections although the host responds to ICMP; do not infer its capability from another machine.
 - [ ] Install a missing remote user-space build dependency only when its necessity is proven and record the exact before/after evidence. Never use a library installation to claim unsupported kernel or driver capability. Obtain explicit user approval before any local-machine environment installation, upgrade, or system-setting change.
 - [x] Record evidence and unavailable reasons in `docs/superpowers/specs/2026-08-15-industrial-raw-rtp-batched-ingress-design.md`; do not infer support from operating-system name.
 - [x] Select implementation scope from evidence: Windows RIO is proven locally; Linux `recvmmsg` is proven on both accessible targets; unsupported zero-copy RX remains an explicit unavailable scanner result and never a runtime fallback.
-- [ ] Commit and push the evidence update.
+- [x] Commit and push the evidence update.
 
 ## Task 2: Add typed capability, observed-source facts, and ingress plan
 

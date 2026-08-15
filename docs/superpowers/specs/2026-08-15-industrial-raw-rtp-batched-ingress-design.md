@@ -164,11 +164,6 @@ Linux compatibility is a capability matrix rather than a host-name switch:
   are advertised, while MPP also reports that driver client 12 is not ready;
   hardware media availability must therefore remain a separate probe result.
   Its supported ingress product is also `LinuxReceiveMultipleMessages`.
-- `192.168.96.200` replies to ICMP with zero packet loss, but TCP port 22
-  refuses connections. Kernel, libc, socket, and driver capability remain
-  unverified until an accessible SSH endpoint is supplied. The planner must
-  not infer this host's adapter from the other two machines.
-
 User-space build dependencies may be added to a remote target only after their
 absence is proven and the exact installation is recorded. Installing a newer
 library cannot turn a kernel or driver without the required zero-copy receive
