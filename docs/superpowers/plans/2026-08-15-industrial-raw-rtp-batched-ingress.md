@@ -32,6 +32,9 @@
 - [x] Record evidence and unavailable reasons in `docs/superpowers/specs/2026-08-15-industrial-raw-rtp-batched-ingress-design.md`; do not infer support from operating-system name.
 - [x] Select implementation scope from evidence: Windows RIO is proven locally; Linux `recvmmsg` is proven on both accessible targets; unsupported zero-copy RX remains an explicit unavailable scanner result and never a runtime fallback.
 - [x] Commit and push the evidence update.
+- [x] Compile and execute the committed Linux capability probe on both targets
+  under `ffenv on`; verify identical adapter selection and remove every exact
+  temporary probe artifact without changing either target environment.
 
 ## Task 2: Add typed capability, observed-source facts, and ingress plan
 

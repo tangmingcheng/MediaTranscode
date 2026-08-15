@@ -169,3 +169,13 @@ absence is proven and the exact installation is recorded. Installing a newer
 library cannot turn a kernel or driver without the required zero-copy receive
 contract into a supported adapter. Any local-machine environment installation,
 upgrade, or system-setting change requires explicit user approval first.
+
+The committed production platform probe was also compiled and executed on both
+Linux targets under `ffenv on`. On `192.168.96.211`, GCC 11 built it in C++20
+mode; on `192.168.130.229`, GCC 9 built the same sources in its equivalent
+`-std=c++2a` mode. Both executions returned the same complete candidate report:
+`LinuxIoUringZeroCopy` unavailable with the explicit missing authoritative
+adapter reason, and `LinuxReceiveMultipleMessages` available. No package,
+kernel, driver, or system setting was changed. All remote and local temporary
+probe sources, archives, directories, and binaries were deleted and their
+absence was verified.
