@@ -77,11 +77,6 @@ std::size_t MediaRtpIngressCapability::effectiveSocketReceiveBytes() const noexc
     return m_facts.effectiveSocketReceiveBytes;
 }
 
-std::size_t MediaRtpIngressCapability::maximumReceiveDescriptors() const noexcept
-{
-    return m_facts.maximumReceiveDescriptors;
-}
-
 std::size_t MediaRtpIngressCapability::requiredBufferAlignmentBytes() const noexcept
 {
     return m_facts.requiredBufferAlignmentBytes;
@@ -108,7 +103,6 @@ MediaRtpIngressCapability::completionEvidence() const noexcept
 ::media::Status MediaRtpIngressCapability::validateProduct() const
 {
     if (m_facts.effectiveSocketReceiveBytes == 0 ||
-        m_facts.maximumReceiveDescriptors == 0 ||
         !isPowerOfTwo(m_facts.requiredBufferAlignmentBytes) ||
         !hasMatchingContracts(m_facts)) {
         return ::media::Status::failure(

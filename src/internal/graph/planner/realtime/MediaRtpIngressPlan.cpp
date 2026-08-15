@@ -43,8 +43,6 @@ MediaRtpIngressPlan::MediaRtpIngressPlan(
         observation.maximumDatagramBytes() >
             capability.effectiveSocketReceiveBytes() ||
         observation.maximumDatagramsPerReadiness() >
-            capability.maximumReceiveDescriptors() ||
-        observation.maximumDatagramsPerReadiness() >
             (std::numeric_limits<std::size_t>::max)() /
                 observation.maximumDatagramBytes()) {
         return ::media::Result<MediaRtpIngressPlan>::failure(
