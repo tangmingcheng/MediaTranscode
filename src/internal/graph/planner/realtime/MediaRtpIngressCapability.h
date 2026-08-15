@@ -32,7 +32,7 @@ enum class MediaRtpIngressCompletionEvidence {
 
 struct MediaRtpIngressCapabilityFacts final {
     MediaRtpIngressAdapterKind adapterKind;
-    std::size_t effectiveSocketReceiveBytes;
+    std::size_t effectiveSocketReceivePayloadBytes;
     std::size_t requiredBufferAlignmentBytes;
     MediaRtpIngressStorageOwnership storageOwnership;
     MediaRtpIngressCancellationContract cancellationContract;
@@ -47,7 +47,7 @@ public:
         MediaRtpIngressCapabilityFacts facts);
 
     MediaRtpIngressAdapterKind adapterKind() const noexcept;
-    std::size_t effectiveSocketReceiveBytes() const noexcept;
+    std::size_t effectiveSocketReceivePayloadBytes() const noexcept;
     std::size_t requiredBufferAlignmentBytes() const noexcept;
     MediaRtpIngressStorageOwnership storageOwnership() const noexcept;
     MediaRtpIngressCancellationContract cancellationContract() const noexcept;

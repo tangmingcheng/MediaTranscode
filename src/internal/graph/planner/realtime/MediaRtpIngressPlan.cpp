@@ -1,5 +1,6 @@
 #include "internal/graph/planner/realtime/MediaRtpIngressPlan.h"
 
+#include <algorithm>
 #include <limits>
 #include <utility>
 
@@ -14,7 +15,7 @@ MediaRtpIngressPlan::MediaRtpIngressPlan(
     std::int64_t maximumReorderDelayNanoseconds) noexcept
     : m_adapterKind(capability.adapterKind()),
       m_socketReceiveCapacityBytes(
-          capability.effectiveSocketReceiveBytes()),
+          capability.effectiveSocketReceivePayloadBytes()),
       m_maximumDatagramBytes(maximumDatagramBytes),
       m_batchByteCapacity(batchByteCapacity),
       m_descriptorCapacity(descriptorCapacity),
@@ -39,31 +40,29 @@ MediaRtpIngressPlan::MediaRtpIngressPlan(
     if (auto status = observation.validateProduct(); !status) {
         return ::media::Result<MediaRtpIngressPlan>::failure(status.error());
     }
-    if (preparedInputByteBudget == 0 ||
-        observation.maximumDatagramBytes() >
-            capability.effectiveSocketReceiveBytes() ||
-        observation.maximumDatagramsPerReadiness() >
-            (std::numeric_limits<std::size_t>::max)() /
-                observation.maximumDatagramBytes()) {
+    const std::size_t boundedReceiveBytes = (std::min)(
+        preparedInputByteBudget,
+        capability.effectiveSocketReceivePayloadBytes());
+    if (boundedReceiveBytes < observation.maximumDatagramBytes()) {
         return ::media::Result<MediaRtpIngressPlan>::failure(
             ::media::ErrorInfo::invalidArgument(
                 "RTP ingress facts cannot form a bounded receive product"));
     }
+    const std::size_t descriptorCapacity =
+        boundedReceiveBytes / observation.maximumDatagramBytes();
     const std::size_t batchByteCapacity =
-        observation.maximumDatagramsPerReadiness() *
-        observation.maximumDatagramBytes();
-    if (batchByteCapacity > preparedInputByteBudget ||
-        observation.maximumSequenceDisplacementPackets() ==
+        descriptorCapacity * observation.maximumDatagramBytes();
+    if (observation.maximumSequenceDisplacementPackets() ==
             (std::numeric_limits<std::size_t>::max)()) {
         return ::media::Result<MediaRtpIngressPlan>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "RTP ingress prepared budget cannot contain observed batch and reorder facts"));
+                "RTP ingress reorder observation exceeds planner range"));
     }
     MediaRtpIngressPlan product(
         capability,
         observation.maximumDatagramBytes(),
         batchByteCapacity,
-        observation.maximumDatagramsPerReadiness(),
+        descriptorCapacity,
         observation.maximumSequenceDisplacementPackets() + 1,
         observation.maximumArrivalVariationNanoseconds());
     if (auto status = product.validateProduct(); !status) {

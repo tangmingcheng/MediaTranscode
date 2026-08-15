@@ -28,12 +28,6 @@ std::size_t MediaRtpIngressObservation::maximumDatagramBytes() const noexcept
 }
 
 std::size_t
-MediaRtpIngressObservation::maximumDatagramsPerReadiness() const noexcept
-{
-    return m_facts.maximumDatagramsPerReadiness;
-}
-
-std::size_t
 MediaRtpIngressObservation::maximumSequenceDisplacementPackets() const noexcept
 {
     return m_facts.maximumSequenceDisplacementPackets;
@@ -59,8 +53,6 @@ MediaRtpIngressObservation::observationSpanNanoseconds() const noexcept
 ::media::Status MediaRtpIngressObservation::validateProduct() const
 {
     if (m_facts.maximumDatagramBytes == 0 ||
-        m_facts.maximumDatagramsPerReadiness == 0 ||
-        m_facts.maximumDatagramsPerReadiness > m_facts.observedDatagrams ||
         m_facts.maximumSequenceDisplacementPackets >=
             m_facts.observedDatagrams ||
         m_facts.maximumArrivalVariationNanoseconds <= 0 ||

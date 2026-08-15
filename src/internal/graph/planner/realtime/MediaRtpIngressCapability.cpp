@@ -72,9 +72,10 @@ MediaRtpIngressCapability::adapterKind() const noexcept
     return m_facts.adapterKind;
 }
 
-std::size_t MediaRtpIngressCapability::effectiveSocketReceiveBytes() const noexcept
+std::size_t
+MediaRtpIngressCapability::effectiveSocketReceivePayloadBytes() const noexcept
 {
-    return m_facts.effectiveSocketReceiveBytes;
+    return m_facts.effectiveSocketReceivePayloadBytes;
 }
 
 std::size_t MediaRtpIngressCapability::requiredBufferAlignmentBytes() const noexcept
@@ -102,7 +103,7 @@ MediaRtpIngressCapability::completionEvidence() const noexcept
 
 ::media::Status MediaRtpIngressCapability::validateProduct() const
 {
-    if (m_facts.effectiveSocketReceiveBytes == 0 ||
+    if (m_facts.effectiveSocketReceivePayloadBytes == 0 ||
         !isPowerOfTwo(m_facts.requiredBufferAlignmentBytes) ||
         !hasMatchingContracts(m_facts)) {
         return ::media::Status::failure(
