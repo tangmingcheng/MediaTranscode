@@ -64,7 +64,7 @@ MediaRtpIngressPlan::MediaRtpIngressPlan(
         batchByteCapacity,
         descriptorCapacity,
         observation.maximumSequenceDisplacementPackets() + 1,
-        observation.maximumArrivalVariationNanoseconds());
+        observation.maximumInterarrivalNanoseconds());
     if (auto status = product.validateProduct(); !status) {
         return ::media::Result<MediaRtpIngressPlan>::failure(status.error());
     }

@@ -10,7 +10,7 @@ namespace media::ffmpeg::graph {
 struct MediaRtpIngressObservationFacts final {
     std::size_t maximumDatagramBytes;
     std::size_t maximumSequenceDisplacementPackets;
-    std::int64_t maximumArrivalVariationNanoseconds;
+    std::int64_t maximumInterarrivalNanoseconds;
     std::size_t observedDatagrams;
     std::int64_t observationSpanNanoseconds;
 };
@@ -24,7 +24,7 @@ public:
 
     std::size_t maximumDatagramBytes() const noexcept;
     std::size_t maximumSequenceDisplacementPackets() const noexcept;
-    std::int64_t maximumArrivalVariationNanoseconds() const noexcept;
+    std::int64_t maximumInterarrivalNanoseconds() const noexcept;
     std::size_t observedDatagrams() const noexcept;
     std::int64_t observationSpanNanoseconds() const noexcept;
     ::media::Status validateProduct() const;

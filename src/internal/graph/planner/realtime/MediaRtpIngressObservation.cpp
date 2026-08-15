@@ -34,9 +34,9 @@ MediaRtpIngressObservation::maximumSequenceDisplacementPackets() const noexcept
 }
 
 std::int64_t
-MediaRtpIngressObservation::maximumArrivalVariationNanoseconds() const noexcept
+MediaRtpIngressObservation::maximumInterarrivalNanoseconds() const noexcept
 {
-    return m_facts.maximumArrivalVariationNanoseconds;
+    return m_facts.maximumInterarrivalNanoseconds;
 }
 
 std::size_t MediaRtpIngressObservation::observedDatagrams() const noexcept
@@ -55,10 +55,10 @@ MediaRtpIngressObservation::observationSpanNanoseconds() const noexcept
     if (m_facts.maximumDatagramBytes == 0 ||
         m_facts.maximumSequenceDisplacementPackets >=
             m_facts.observedDatagrams ||
-        m_facts.maximumArrivalVariationNanoseconds <= 0 ||
+        m_facts.maximumInterarrivalNanoseconds <= 0 ||
         m_facts.observedDatagrams == 0 ||
         m_facts.observationSpanNanoseconds <
-            m_facts.maximumArrivalVariationNanoseconds) {
+            m_facts.maximumInterarrivalNanoseconds) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument(
                 "RTP ingress observation requires complete positive source evidence"));
