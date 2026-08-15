@@ -133,3 +133,44 @@ two independent review agents approving the frozen implementation.
 
 These references define adapter capability, not policy defaults. Actual target
 probing and planner products remain authoritative.
+
+## 2026-08-15 Capability Evidence
+
+The Windows development host runs kernel build 26200. A temporary real-socket
+probe created a UDP socket with `WSA_FLAG_REGISTERED_IO`, obtained the 112-byte
+RIO extension table through
+`SIO_GET_MULTIPLE_EXTENSION_FUNCTION_POINTER`, registered a 64 KiB buffer, and
+created both a completion queue and request queue. All operations succeeded.
+The probe source, executable, and object were deleted immediately afterward.
+This proves the registered-I/O primitive is available; the production scanner
+must still report the effective socket receive capacity and fail if final
+planned storage or completion initialization differs.
+
+Linux compatibility is a capability matrix rather than a host-name switch:
+
+- `192.168.96.211` runs Linux 6.1.118, glibc 2.35, and exposes `recvmmsg`.
+  `CONFIG_IO_URING` and busy-poll support are enabled, but the installed kernel
+  headers do not define `IORING_OP_RECV_ZC` and no liburing runtime was found.
+  Its active `st_gmac` interface has receive checksum and generic receive
+  offload enabled, fixed-disabled receive hashing and large receive offload,
+  and an 8 MiB `net.core.rmem_max`. Under `ffenv on`, H.264/HEVC RKMPP and
+  `scale_rkrga` are present. The supported ingress product is therefore
+  `LinuxReceiveMultipleMessages`; zero-copy RX is unavailable.
+- `192.168.130.229` runs Kylin Linux 5.10.110, glibc 2.31, and exposes
+  `recvmmsg`. Its headers and runtime do not expose io_uring zero-copy RX. The
+  active `st_gmac` interface has receive checksum and generic receive offload
+  enabled, fixed-disabled receive hashing and large receive offload, and a
+  2 MiB `net.core.rmem_max`. Under `ffenv on`, RKMPP/RKRGA codecs and filters
+  are advertised, while MPP also reports that driver client 12 is not ready;
+  hardware media availability must therefore remain a separate probe result.
+  Its supported ingress product is also `LinuxReceiveMultipleMessages`.
+- `192.168.96.200` replies to ICMP with zero packet loss, but TCP port 22
+  refuses connections. Kernel, libc, socket, and driver capability remain
+  unverified until an accessible SSH endpoint is supplied. The planner must
+  not infer this host's adapter from the other two machines.
+
+User-space build dependencies may be added to a remote target only after their
+absence is proven and the exact installation is recorded. Installing a newer
+library cannot turn a kernel or driver without the required zero-copy receive
+contract into a supported adapter. Any local-machine environment installation,
+upgrade, or system-setting change requires explicit user approval first.

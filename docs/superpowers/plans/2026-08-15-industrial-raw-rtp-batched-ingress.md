@@ -24,12 +24,14 @@
 **Read-only targets:**
 
 - Windows Winsock extension availability and current socket implementation.
-- RK target kernel, libc, socket APIs, `io_uring` zero-copy RX prerequisites, NIC/driver, and FFmpeg environment.
+- Linux/RK target matrix (`192.168.96.211`, `192.168.96.200`, and `192.168.130.229`): kernel, libc, socket APIs, `io_uring` zero-copy RX prerequisites, NIC/driver, and FFmpeg environment.
 
-- [ ] On Windows, inspect `WSAIoctl(SIO_GET_MULTIPLE_EXTENSION_FUNCTION_POINTER)` support for RIO, IOCP/overlapped UDP requirements, registered-buffer alignment, cancellation, and receive-buffer reporting.
-- [ ] On `192.168.96.211`, run read-only commands only after `ffenv on` to record kernel version/config, libc, `recvmmsg`, `io_uring` features, network driver, receive-queue limits, and available build headers/libraries.
-- [ ] Record evidence and unavailable reasons in `docs/superpowers/specs/2026-08-15-industrial-raw-rtp-batched-ingress-design.md`; do not infer support from operating-system name.
-- [ ] Select implementation scope from evidence: implement every proven production-capable adapter; represent unsupported advanced adapters as explicit unavailable scanner results, never runtime fallback.
+- [x] On Windows, inspect `WSAIoctl(SIO_GET_MULTIPLE_EXTENSION_FUNCTION_POINTER)` support for RIO, IOCP/overlapped UDP requirements, registered-buffer alignment, cancellation, and receive-buffer reporting.
+- [x] On `192.168.96.211` and `192.168.130.229`, run read-only commands, using `ffenv on` for FFmpeg evidence, to record kernel version/config, libc, `recvmmsg`, `io_uring` features, network driver, receive-queue limits, and available build headers/libraries.
+- [ ] Probe `192.168.96.200` through an accessible SSH endpoint. Port 22 currently refuses connections although the host responds to ICMP; do not infer its capability from another machine.
+- [ ] Install a missing remote user-space build dependency only when its necessity is proven and record the exact before/after evidence. Never use a library installation to claim unsupported kernel or driver capability. Obtain explicit user approval before any local-machine environment installation, upgrade, or system-setting change.
+- [x] Record evidence and unavailable reasons in `docs/superpowers/specs/2026-08-15-industrial-raw-rtp-batched-ingress-design.md`; do not infer support from operating-system name.
+- [x] Select implementation scope from evidence: Windows RIO is proven locally; Linux `recvmmsg` is proven on both accessible targets; unsupported zero-copy RX remains an explicit unavailable scanner result and never a runtime fallback.
 - [ ] Commit and push the evidence update.
 
 ## Task 2: Add typed capability, observed-source facts, and ingress plan
@@ -132,11 +134,11 @@
 - Modify: `src/internal/graph/runtime/network/MediaUdpSocket.cpp`
 - Modify: `CMakeLists.txt`
 
-- [ ] Create a temporary Linux RED probe on the RK target using retained real UDP sockets and a multi-datagram burst.
+- [ ] Create a temporary Linux RED probe on each accessible Linux target using retained real UDP sockets and a multi-datagram burst.
 - [ ] Implement `recvmmsg` over reusable planned `mmsghdr`/`iovec` storage as the baseline proven Linux batch adapter.
 - [ ] If Task 1 proves every zero-copy prerequisite, implement the multishot registered-memory `io_uring` adapter and its ownership/completion path; otherwise preserve the exact scanner rejection reason and do not compile or select a fictitious path.
 - [ ] Integrate cancellation without periodic polling defaults; stop/abort must wake a blocked receive and release all platform resources.
-- [ ] Run GREEN on the target under `ffenv on`, delete temporary target/source/artifacts, and confirm no test process remains.
+- [ ] Run GREEN on every accessible target under `ffenv on`, delete temporary target/source/artifacts, and confirm no test process remains. The same `LinuxReceiveMultipleMessages` production adapter must cover all proven hosts without host-specific media code.
 - [ ] Commit and push the Linux/RK adapter.
 
 ## Task 7: Bind the plan through the production DAG and consume batches
