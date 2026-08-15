@@ -55,6 +55,7 @@ public:
     const MediaAvSyncStartupPolicy* genericStartup() const noexcept;
     ::media::Status startRawRtpPreflightCapture();
     ::media::Status rawRtpCaptureStatus();
+    ::media::Result<MediaRtpIngressObservation> rawRtpIngressObservation();
     ::media::Status sealRawRtpPreflight();
     ::media::Result<MediaBufferRef> releaseBuffer();
 

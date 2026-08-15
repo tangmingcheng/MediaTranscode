@@ -1,6 +1,7 @@
 #include "internal/graph/runtime/buffer/MediaRawRtpPreparedInputBuffer.h"
 
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
+#include "internal/graph/protocol/rtp/MediaRtpPacketParser.h"
 #include "internal/graph/time/MediaSteadyClock.h"
 
 #include <algorithm>
@@ -50,6 +51,7 @@ MediaRawRtpPreparedInputBuffer::create(MediaPreparedRawRtpInput prepared)
         prepared.identity.codecName.empty() ||
         prepared.identity.clockRate <= 0 || !validVideoSignaling ||
         !prepared.replayClock || !prepared.byteBudget ||
+        !prepared.ingressObservation ||
         prepared.captureReadTimeoutMs <= 0 ||
         bufferedBytes > prepared.byteBudget->snapshot().capacity) {
         return ::media::Result<std::unique_ptr<MediaRawRtpPreparedInputBuffer>>::failure(
@@ -100,7 +102,6 @@ MediaBufferType MediaRawRtpPreparedInputBuffer::type() const noexcept
 ::media::Result<MediaPreparedRawRtpReplayInfo>
 MediaRawRtpPreparedInputBuffer::beginReplay()
 {
-    stopCaptureForReplay();
     std::scoped_lock lock(m_mutex);
     if (m_captureError) {
         return ::media::Result<MediaPreparedRawRtpReplayInfo>::failure(
@@ -183,15 +184,19 @@ MediaRawRtpPreparedInputBuffer::receive(int timeoutMs)
                         std::string(m_prepared->identity.streamKind ==
                                 MediaStreamKind::Video ? "video" : "audio"));
             }
-            MediaRtpUdpTransport* transport = &m_prepared->transport;
-            lock.unlock();
-            auto received = transport->receive(timeoutMs);
-            if (!received) {
+            if (!m_captureThread.joinable()) {
                 return ::media::Result<MediaPreparedRawRtpDatagram>::failure(
-                    received.error());
+                    ::media::ErrorInfo::notInitialized(
+                        "raw RTP prepared replay has no active socket capture"));
             }
-            return ::media::Result<MediaPreparedRawRtpDatagram>::success({
-                std::move(received).value(), mediaSteadyClockNowNs()});
+            if (m_ready.wait_until(lock, waitDeadline) ==
+                    std::cv_status::timeout &&
+                m_prepared->datagrams.empty()) {
+                return ::media::Result<MediaPreparedRawRtpDatagram>::failure(
+                    ::media::ErrorInfo::wouldBlock(
+                        "raw RTP prepared replay timed out"));
+            }
+            continue;
         }
         if (!m_replayEpoch) {
             return ::media::Result<MediaPreparedRawRtpDatagram>::failure(
@@ -247,6 +252,22 @@ MediaRawRtpPreparedInputBuffer::receive(int timeoutMs)
             "raw RTP prepared capture has no owned transport"));
     }
     return m_prepared->byteBudget->validate();
+}
+
+::media::Result<MediaRtpIngressObservation>
+MediaRawRtpPreparedInputBuffer::ingressObservation()
+{
+    std::scoped_lock lock(m_mutex);
+    if (m_captureError) {
+        return ::media::Result<MediaRtpIngressObservation>::failure(
+            *m_captureError);
+    }
+    if (!m_prepared || !m_prepared->ingressObservation) {
+        return ::media::Result<MediaRtpIngressObservation>::failure(
+            ::media::ErrorInfo::notInitialized(
+                "raw RTP prepared input has no ingress observation collector"));
+    }
+    return m_prepared->ingressObservation->seal();
 }
 
 ::media::Status MediaRawRtpPreparedInputBuffer::sealPreflight()
@@ -334,6 +355,20 @@ void MediaRawRtpPreparedInputBuffer::capture(
             std::chrono::duration_cast<std::chrono::nanoseconds>(
                 observedAt.time_since_epoch()).count();
         MediaRtpUdpDatagram datagram = std::move(received).value();
+        std::optional<MediaRtpPacket> rtpPacket;
+        if (datagram.channel == MediaRtpUdpChannel::Rtp) {
+            auto parsed = MediaRtpPacketParser::parse(datagram.bytes);
+            if (!parsed) {
+                std::scoped_lock lock(m_mutex);
+                m_captureError = parsed.error();
+                if (m_prepared) {
+                    (void)m_prepared->byteBudget->fail(*m_captureError);
+                }
+                m_ready.notify_all();
+                return;
+            }
+            rtpPacket.emplace(std::move(parsed).value());
+        }
         std::scoped_lock lock(m_mutex);
         if (!m_prepared) return;
         if (auto status = m_prepared->replayClock->observe(
@@ -342,6 +377,23 @@ void MediaRawRtpPreparedInputBuffer::capture(
             (void)m_prepared->byteBudget->fail(*m_captureError);
             m_ready.notify_all();
             return;
+        }
+        if (rtpPacket) {
+            if (rtpPacket->payloadType != m_prepared->identity.payloadType) {
+                m_captureError = ::media::ErrorInfo::invalidArgument(
+                    "raw RTP prepared capture payload type differs from planned identity");
+                (void)m_prepared->byteBudget->fail(*m_captureError);
+                m_ready.notify_all();
+                return;
+            }
+            if (auto status = m_prepared->ingressObservation->observe(
+                    datagram.bytes.size(), rtpPacket->sequenceNumber,
+                    observedAtNs); !status) {
+                m_captureError = status.error();
+                (void)m_prepared->byteBudget->fail(*m_captureError);
+                m_ready.notify_all();
+                return;
+            }
         }
         const char* stream = m_prepared->identity.streamKind ==
                 MediaStreamKind::Video ? "video" : "audio";
@@ -356,13 +408,6 @@ void MediaRawRtpPreparedInputBuffer::capture(
             std::move(datagram), observedAtNs});
         m_ready.notify_all();
     }
-}
-
-void MediaRawRtpPreparedInputBuffer::stopCaptureForReplay() noexcept
-{
-    if (!m_captureThread.joinable()) return;
-    m_captureThread.request_stop();
-    m_captureThread.join();
 }
 
 } // namespace media::ffmpeg::graph

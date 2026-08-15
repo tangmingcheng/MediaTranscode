@@ -5,6 +5,7 @@
 #include "internal/graph/runtime/buffer/MediaBuffer.h"
 #include "internal/graph/runtime/buffer/MediaRawRtpPreparedByteBudget.h"
 #include "internal/graph/runtime/buffer/MediaRawRtpPreparedReplayClock.h"
+#include "internal/graph/planner/realtime/MediaRtpIngressObservationCollector.h"
 #include "media_transcode/Result.h"
 
 #include <deque>
@@ -37,6 +38,7 @@ struct MediaPreparedRawRtpInput final {
     std::optional<MediaDetectedRtpVideoSignaling> videoSignaling;
     std::shared_ptr<MediaRawRtpPreparedReplayClock> replayClock;
     std::shared_ptr<MediaRawRtpPreparedByteBudget> byteBudget;
+    std::shared_ptr<MediaRtpIngressObservationCollector> ingressObservation;
     int captureReadTimeoutMs = 0;
 };
 
@@ -61,6 +63,7 @@ public:
     ::media::Result<MediaPreparedRawRtpReplayInfo> beginReplay();
     ::media::Result<MediaPreparedRawRtpDatagram> receive(int timeoutMs);
     ::media::Status captureStatus();
+    ::media::Result<MediaRtpIngressObservation> ingressObservation();
     ::media::Status sealPreflight();
     ::media::Status interruptReceive() noexcept;
     ::media::Status stop() noexcept;
@@ -69,7 +72,6 @@ public:
 private:
     explicit MediaRawRtpPreparedInputBuffer(MediaPreparedRawRtpInput prepared);
     void capture(std::stop_token stopToken) noexcept;
-    void stopCaptureForReplay() noexcept;
     MediaRtpUdpTransport* markStopped() noexcept;
 
     std::optional<MediaPreparedRawRtpInput> m_prepared;

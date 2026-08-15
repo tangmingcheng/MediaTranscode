@@ -142,6 +142,17 @@ const FFmpegInputStreamSnapshot* MediaPreparedRealtimeInput::inputStreamSnapshot
     return m_rawRtpBuffer->captureStatus();
 }
 
+::media::Result<MediaRtpIngressObservation>
+MediaPreparedRealtimeInput::rawRtpIngressObservation()
+{
+    if (!m_rawRtpBuffer) {
+        return ::media::Result<MediaRtpIngressObservation>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "raw RTP ingress observation requires a prepared raw RTP input"));
+    }
+    return m_rawRtpBuffer->ingressObservation();
+}
+
 ::media::Status MediaPreparedRealtimeInput::sealRawRtpPreflight()
 {
     if (!m_rawRtpBuffer) {
