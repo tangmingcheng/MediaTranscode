@@ -264,12 +264,36 @@ PCR anchors, service-scope shaper state, and controller history are
 `SessionPersistentState`; they do not inherit encoder-input generation
 identity. Each has exactly one planner-authored transition action:
 `PreserveInPlace`, `SnapshotAndTransfer`, or
-`CloseAndRecreateWithExplicitDiscontinuity`. Preservation or transfer maintains
-RTP sequence and timestamp extension, RTCP sender-report counters and mapping,
-TS continuity, PCR monotonicity, shaper debt, and controller history as
-applicable. Close-and-recreate is legal only when the transition explicitly
-authorizes the corresponding discontinuity. Every packet emitted during the
-transition remains subject to the new service ceiling and reaction deadline.
+`CloseAndRecreateWithExplicitDiscontinuity`. A closed compatibility matrix
+defines the legal actions for every persistent-state kind. Service-scope shaper
+debt and congestion-controller history permit only `PreserveInPlace` or exact
+`SnapshotAndTransfer` while the service scope remains active. They may close
+only when that scope terminates; any replacement flow requires fresh admission
+and retains the restart-rate-limit and circuit-breaker consequences. Timestamp
+extenders may be recreated only for a new authoritatively signaled session
+epoch. RTP/RTCP recreation requires BYE, a new SSRC, and session signaling. TS
+continuity and PCR recreation requires planner-authored discontinuity
+indicators and a new timing epoch. A rate-generation transition alone is not a
+source discontinuity and cannot authorize persistent-state reset.
+
+Every persistent-state owner has one planner-created
+`SessionPersistentTransitionContract`. It contains the versioned state schema,
+source and destination owner identities, selected legal action, exact state
+transformation and continuity postconditions, maximum temporary resource-cost
+vector, maximum execution duration, commit deadline, capability evidence, and
+RAII prepare/validate/commit/abort semantics. `SnapshotAndTransfer` defines the
+source freeze point, destination validation, simultaneous old/new costs, and
+atomic publication. `CloseAndRecreateWithExplicitDiscontinuity` reserves and
+validates replacement resources before closing the old state and defines all
+signaling and terminal failure behavior. For shaper rate or burst changes, the
+planner supplies a checked mathematical token/debt transformation: positive
+credit cannot exceed the new burst envelope and debt cannot be discarded.
+Controller, RTP/RTCP, timestamp, TS continuity, and PCR transformations are
+equally explicit; runtime cannot clamp or invent a mapping. Unknown schemas,
+unrepresentable transformations, unreserved costs, or unsupported actions fail
+admission before DAG creation. Runtime prepare, validation, or commit failure
+is terminal without fallback. Every packet emitted during the transition
+remains subject to the new service ceiling and reaction deadline.
 
 `PreparedSessionSwitch` flushes all delayed old-session output into the old
 generation before atomically switching to the admitted session; every resulting
@@ -358,7 +382,8 @@ transport and packetization variants, optional mux and RTP session products,
 the derived `WireTrafficEnvelope`, service scope, stage service envelopes,
 prepared source and encoder binding identities, the selected
 `TransportServiceEnvelope`, legal generations, selected generation mechanism,
-and transition table. For adaptive service it contains the complete
+transition table, and every `SessionPersistentTransitionContract`. For
+adaptive service it contains the complete
 `AdaptiveTransportServiceEnvelope`: feedback binding, controller and control
 interval, reaction and feedback-loss deadlines, circuit breaker, prepared
 runtime binding identities, aggregate shaper/deadline policy, and all
@@ -460,6 +485,11 @@ Adaptive step-down and recovery gates for either generation mechanism verify
 SSRC, RTP sequence and timestamp extension, RTCP sender counters and mapping,
 TS continuity, PCR monotonicity, aggregate shaper state, and controller-history
 continuity. Any reset must correspond to an explicitly planned discontinuity.
+For every supported persistent-state action, production-DAG gates record the
+selected action and verify its exact counter, debt, history, and timing
+transformation, resource-domain peak, single ownership after commit, and
+terminal behavior on forced prepare, transfer, recreation, validation, or
+commit failure. Unsupported actions pass explicit pre-DAG rejection gates.
 
 Each gate records exact source, CLI, receiver and cleanup commands, precise
 PIDs, packet timing and loss, queue bytes and residence, CPU/RSS, A/V drift,
