@@ -218,6 +218,8 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
     if (auto status = setCodecResolverEncoderFormatOptions(graph, nodes.codecResolver, chain.encoder); !status) return status;
     if (auto status = setEncoderRateControlOptions(
             graph, nodes.codecResolver, chain.encoder); !status) return status;
+    if (auto status = setEncoderRateControlOptions(
+            graph, nodes.videoEncode, chain.encoder); !status) return status;
     if (!chain.decoder.outputFrame) {
         return ::media::Result<void>::failure(
             ::media::ErrorInfo::invalidArgument(
