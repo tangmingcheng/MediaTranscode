@@ -13,7 +13,6 @@ set(TARGET_REALTIME_VIDEO_CLI "media_transcode_realtime_video_cli")
 set(THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/3rds")
 
 option(MEDIA_TRANSCODE_BUILD_GRAPH_TOOLS "Build graph command line tools" ON)
-
 if(POLICY CMP0141)
     cmake_policy(SET CMP0141 NEW)
     set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<IF:$<AND:$<C_COMPILER_ID:MSVC>,$<CXX_COMPILER_ID:MSVC>>,$<$<CONFIG:Debug,RelWithDebInfo>:EditAndContinue>,$<$<CONFIG:Debug,RelWithDebInfo>:ProgramDatabase>>")
@@ -25,6 +24,8 @@ set(MEDIA_TRANSCODE_GRAPH_DIAGNOSTICS_SOURCES
 )
 
 set(MEDIA_TRANSCODE_GRAPH_PLANNER_SOURCES
+    src/internal/graph/planner/MediaEncoderRateControlPlanner.cpp
+    src/internal/graph/planner/MediaEncoderRateControlPlanner.h
     src/internal/graph/planner/MediaPipelineAudioSourceProbe.cpp
     src/internal/graph/planner/MediaPipelineAudioSourceProbe.h
     src/internal/graph/planner/MediaPipelineCapabilityScanner.cpp

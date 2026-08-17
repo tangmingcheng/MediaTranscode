@@ -3,11 +3,13 @@
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/planner/MediaPipelineCapabilityScanner.h"
 #include "internal/graph/planner/MediaPipelineHardwareBackendConstraint.h"
+#include "internal/graph/planner/MediaEncoderRateControlPlanner.h"
 #include "internal/graph/planner/MediaPipelineScorer.h"
 #include "internal/graph/planner/capability/MediaHardwareCapabilityProbe.h"
 #include "internal/graph/utils/MediaCodecNameUtils.h"
 #include "internal/graph/utils/MediaUrlUtils.h"
 
+#include <limits>
 #include <sstream>
 #include <utility>
 
@@ -245,7 +247,7 @@ void materializeVideoExecutionContract(MediaPipelineChainPlan& chain)
         options.probeHeight = inputInfo.height;
     }
     if (inputInfo.frameRate.isKnown()) {
-        options.probeFrameRate = inputInfo.frameRate;
+        options.sourceFrameRate = inputInfo.frameRate;
     }
 
     const bool resizeRequested = options.targetWidth > 0 || options.targetHeight > 0;
@@ -295,6 +297,28 @@ void materializeVideoExecutionContract(MediaPipelineChainPlan& chain)
 
     plan.selected = plan.candidates.at(selected.value());
     plan.filterActive = plan.selected.filterActive;
+    MediaEncoderRateControlRequest rateControlRequest =
+        options.encoderRateControl;
+    if (!rateControlRequest.targetBitrateKbps &&
+        inputInfo.bitrateBitsPerSecond > 0) {
+        const std::int64_t kbps =
+            (inputInfo.bitrateBitsPerSecond + 999) / 1000;
+        if (kbps > std::numeric_limits<int>::max()) {
+            return ::media::Result<MediaPipelinePlan>::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "input bitrate exceeds planner rate-control range"));
+        }
+        rateControlRequest.targetBitrateKbps = static_cast<int>(kbps);
+    }
+    auto rateControl = MediaEncoderRateControlPlanner::plan(
+        plan.selected.encoder.ffmpegName,
+        plan.selected.encoder.deviceKind(),
+        rateControlRequest);
+    if (!rateControl) {
+        return ::media::Result<MediaPipelinePlan>::failure(rateControl.error());
+    }
+    plan.selected.encoder.encoderRateControl =
+        std::move(rateControl).value();
     auto preflight = MediaPipelinePlanner::preflightSelectedCandidate(
         plan.selected, options, hardwareProbe);
     if (!preflight) {

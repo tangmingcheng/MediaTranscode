@@ -198,6 +198,14 @@ inline constexpr char VideoLevel[] = "video.level";
 inline constexpr char VideoGop[] = "video.gop";
 inline constexpr char VideoBFrames[] = "video.bframes";
 inline constexpr char VideoGlobalHeader[] = "video.global_header";
+inline constexpr char PlannedVideoRateControl[] = "encoder.rate_control.mode";
+inline constexpr char PlannedVideoTargetBitrateKbps[] = "encoder.rate_control.target_kbps";
+inline constexpr char PlannedVideoMinBitrateKbps[] = "encoder.rate_control.min_kbps";
+inline constexpr char PlannedVideoMaxBitrateKbps[] = "encoder.rate_control.max_kbps";
+inline constexpr char PlannedVideoBufferSizeKbits[] = "encoder.rate_control.buffer_kbits";
+inline constexpr char PlannedVideoPrivateRateControlName[] = "encoder.rate_control.private.name";
+inline constexpr char PlannedVideoPrivateRateControlValue[] = "encoder.rate_control.private.value";
+inline constexpr char PlannedVideoPrivateRateControlExpected[] = "encoder.rate_control.private.expected";
 
 inline constexpr char AudioSourceStreamIndex[] = "audio.source_stream_index";
 inline constexpr char AudioCodec[] = "audio.codec";

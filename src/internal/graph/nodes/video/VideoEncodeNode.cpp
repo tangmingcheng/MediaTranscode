@@ -8,6 +8,7 @@
 #include "internal/graph/runtime/ffmpeg/FFmpegPacketView.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/nodes/video/MediaVideoFrameContractValidator.h"
+#include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/sync/MediaCanonicalAccessUnitBuffer.h"
 #include "internal/graph/sync/lineage/MediaFfmpegLineageToken.h"
 #include "internal/graph/sync/lineage/MediaVideoLineageCopyOpaqueOption.h"
@@ -344,6 +345,24 @@ void VideoEncodeNode::resetRuntimeState() noexcept
         encodeLog(MediaGraphDiagnosticLevel::State,
                   std::string("bind_encoder codec=") + codecName(encoder) +
                       " pix_fmt=" + pixelFormatName(encoder ? encoder->pix_fmt : AV_PIX_FMT_NONE) +
+                      " rate_control=" + optionValue(
+                          nodeOptions(context),
+                          MediaTranscodeOptionKey::PlannedVideoRateControl,
+                          "missing") +
+                      " bitrate=" + std::to_string(
+                          encoder ? encoder->bit_rate : 0) +
+                      " min_bitrate=" + std::to_string(
+                          encoder ? encoder->rc_min_rate : 0) +
+                      " max_bitrate=" + std::to_string(
+                          encoder ? encoder->rc_max_rate : 0) +
+                      " buffer_size=" + std::to_string(
+                          encoder ? encoder->rc_buffer_size : 0) +
+                      " fps=" + std::to_string(
+                          encoder ? encoder->framerate.num : 0) + "/" +
+                          std::to_string(
+                          encoder ? encoder->framerate.den : 0) +
+                      " gop=" + std::to_string(
+                          encoder ? encoder->gop_size : 0) +
                       " frame_kind=" + optionValue(nodeOptions(context), "encoder.pipeline.frame_kind", "software") +
                       " hwaccel=" + optionValue(nodeOptions(context), "encoder.pipeline.hwaccel", "none") +
                       " hw_device_ctx=" + (encoder && encoder->hw_device_ctx ? "set" : "none") +

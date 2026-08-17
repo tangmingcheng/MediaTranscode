@@ -133,6 +133,53 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
     return setOption(graph, codecResolver, "encoder.requires_hw_frames_ctx", boolOption(input.requiresHardwareFramesContext));
 }
 
+::media::Result<void> setEncoderRateControlOptions(
+    MediaGraph& graph,
+    MediaNodeId codecResolver,
+    const MediaPipelineStagePlan& encoder)
+{
+    if (!encoder.encoderRateControl) {
+        return ::media::Result<void>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "MediaVideoPlanOptionApplier requires planner rate-control product"));
+    }
+    const auto& plan = *encoder.encoderRateControl;
+    if (auto status = setOption(
+            graph, codecResolver,
+            MediaTranscodeOptionKey::PlannedVideoRateControl,
+            mediaRateControlModeName(plan.mode)); !status) return status;
+    const auto setOptional = [&](const char* key, const std::optional<int>& value) {
+        return value
+            ? setOption(graph, codecResolver, key, std::to_string(*value))
+            : ::media::Result<void>::success();
+    };
+    if (auto status = setOptional(
+            MediaTranscodeOptionKey::PlannedVideoTargetBitrateKbps,
+            plan.targetBitrateKbps); !status) return status;
+    if (auto status = setOptional(
+            MediaTranscodeOptionKey::PlannedVideoMinBitrateKbps,
+            plan.minimumBitrateKbps); !status) return status;
+    if (auto status = setOptional(
+            MediaTranscodeOptionKey::PlannedVideoMaxBitrateKbps,
+            plan.maximumBitrateKbps); !status) return status;
+    if (auto status = setOptional(
+            MediaTranscodeOptionKey::PlannedVideoBufferSizeKbits,
+            plan.bufferSizeKbits); !status) return status;
+    if (!plan.privateOption) return ::media::Result<void>::success();
+    if (auto status = setOption(
+            graph, codecResolver,
+            MediaTranscodeOptionKey::PlannedVideoPrivateRateControlName,
+            plan.privateOption->name); !status) return status;
+    if (auto status = setOption(
+            graph, codecResolver,
+            MediaTranscodeOptionKey::PlannedVideoPrivateRateControlValue,
+            plan.privateOption->value); !status) return status;
+    return setOption(
+        graph, codecResolver,
+        MediaTranscodeOptionKey::PlannedVideoPrivateRateControlExpected,
+        std::to_string(plan.privateOption->expectedNumericValue));
+}
+
 } // namespace
 
 ::media::Result<void> MediaVideoPlanOptionApplier::applySelectedPlan(
@@ -169,6 +216,8 @@ const char* transferDirectionName(MediaHardwareTransferDirection direction) noex
     if (auto status = setOption(graph, nodes.codecResolver, MediaTranscodeOptionKey::PlannedEncoder, chain.encoder.ffmpegName); !status) return status;
     if (auto status = setOption(graph, nodes.codecResolver, MediaTranscodeOptionKey::VideoCodec, plan.outputCodecName); !status) return status;
     if (auto status = setCodecResolverEncoderFormatOptions(graph, nodes.codecResolver, chain.encoder); !status) return status;
+    if (auto status = setEncoderRateControlOptions(
+            graph, nodes.codecResolver, chain.encoder); !status) return status;
     if (!chain.decoder.outputFrame) {
         return ::media::Result<void>::failure(
             ::media::ErrorInfo::invalidArgument(

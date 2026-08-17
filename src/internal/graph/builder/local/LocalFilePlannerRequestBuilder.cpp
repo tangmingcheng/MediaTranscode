@@ -79,11 +79,14 @@ bool encodeOptionsRequested(const MediaVideoTranscodeParameters& video) noexcept
     plannerOptions.outputCodecName = video.codecName;
     plannerOptions.targetWidth = video.width.value_or(0);
     plannerOptions.targetHeight = video.height.value_or(0);
+    plannerOptions.encoderRateControl = MediaEncoderRateControlRequest{
+        video.rateControl, video.bitrateKbps, video.minBitrateKbps,
+        video.maxBitrateKbps, video.bufferSizeKbits};
     plannerOptions.probeWidth = plannerOptions.targetWidth;
     plannerOptions.probeHeight = plannerOptions.targetHeight;
     if (video.frameRate.complete() && video.frameRate.numerator &&
         video.frameRate.denominator) {
-        plannerOptions.probeFrameRate = MediaRational{
+        plannerOptions.targetFrameRate = MediaRational{
             *video.frameRate.numerator, *video.frameRate.denominator};
     }
     plannerOptions.hardwareBackend = parameters.execution.hardwareBackend;

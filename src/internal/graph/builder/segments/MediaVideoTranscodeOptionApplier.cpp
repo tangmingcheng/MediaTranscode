@@ -112,7 +112,6 @@ constexpr const char* owner = "MediaVideoTranscodeOptionApplier";
                                                   const MediaVideoTranscodeParameters& video)
 {
     if (auto status = setIfNotEmpty(graph, nodeId, MediaTranscodeOptionKey::VideoCodec, video.codecName); !status) return status;
-    if (auto status = setOption(graph, nodeId, MediaTranscodeOptionKey::VideoRateControl, mediaRateControlModeName(video.rateControl)); !status) return status;
     if (auto status = setIfNotEmpty(graph, nodeId, MediaTranscodeOptionKey::VideoPreset, video.preset); !status) return status;
     if (auto status = setIfNotEmpty(graph, nodeId, MediaTranscodeOptionKey::VideoProfile, video.profile); !status) return status;
     if (auto status = setIfNotEmpty(graph, nodeId, MediaTranscodeOptionKey::VideoTune, video.tune); !status) return status;
@@ -121,10 +120,6 @@ constexpr const char* owner = "MediaVideoTranscodeOptionApplier";
     if (auto status = setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoHeight, video.height); !status) return status;
     if (auto status = setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoFpsNum, video.frameRate.numerator); !status) return status;
     if (auto status = setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoFpsDen, video.frameRate.denominator); !status) return status;
-    if (auto status = setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoBitrateKbps, video.bitrateKbps); !status) return status;
-    if (auto status = setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoMinBitrateKbps, video.minBitrateKbps); !status) return status;
-    if (auto status = setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoMaxBitrateKbps, video.maxBitrateKbps); !status) return status;
-    if (auto status = setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoBufferSizeKbits, video.bufferSizeKbits); !status) return status;
     if (auto status = setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoQuality, video.quality); !status) return status;
     if (auto status = setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoGop, video.gop); !status) return status;
     if (auto status = setIfPresent(graph, nodeId, MediaTranscodeOptionKey::VideoBFrames, video.bFrames); !status) return status;

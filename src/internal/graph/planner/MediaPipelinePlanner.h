@@ -2,6 +2,7 @@
 
 #include "internal/graph/model/MediaGraphTypes.h"
 #include "internal/graph/model/MediaEncodedPacketLayout.h"
+#include "internal/graph/model/MediaEncoderRateControlPlan.h"
 #include "internal/graph/model/MediaHardwareDescriptor.h"
 #include "internal/graph/model/MediaTranscodeParameters.h"
 #include "internal/graph/model/MediaVideoExecutionContract.h"
@@ -36,6 +37,7 @@ struct MediaPipelineStagePlan {
     int priority = 0;
     std::string availabilityReason;
     std::optional<MediaEncodedPacketLayout> encodedPacketLayout;
+    std::optional<MediaEncoderRateControlPlan> encoderRateControl;
 
     const MediaHardwareDescriptor* frameContract() const noexcept
     {
@@ -100,7 +102,9 @@ struct MediaPipelinePlannerOptions {
     std::string outputCodecName;
     int probeWidth = 0;
     int probeHeight = 0;
-    MediaRational probeFrameRate;
+    MediaRational sourceFrameRate;
+    MediaRational targetFrameRate;
+    MediaEncoderRateControlRequest encoderRateControl;
     int targetWidth = 0;
     int targetHeight = 0;
     bool filterRequired;
