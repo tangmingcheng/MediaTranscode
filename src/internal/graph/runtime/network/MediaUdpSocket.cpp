@@ -28,6 +28,7 @@ struct MediaUdpSocket::Impl final {
 #endif
     MediaIpAddressFamily family;
     uint16_t port;
+    int effectiveReceiveBufferBytes;
 };
 
 namespace {
@@ -169,6 +170,18 @@ MediaUdpSocket& MediaUdpSocket::operator=(MediaUdpSocket&& other) noexcept
         return ::media::Result<MediaUdpSocket>::failure(
             ::media::ErrorInfo::ioFailure("UDP socket bind failed", error));
     }
+    int effectiveReceiveBufferBytes = 0;
+    int effectiveReceiveBufferSize = sizeof(effectiveReceiveBufferBytes);
+    if (getsockopt(socketHandle, SOL_SOCKET, SO_RCVBUF,
+                   reinterpret_cast<char*>(&effectiveReceiveBufferBytes),
+                   &effectiveReceiveBufferSize) == SOCKET_ERROR ||
+        effectiveReceiveBufferBytes <= 0) {
+        const int error = WSAGetLastError();
+        closeOnFailure();
+        return ::media::Result<MediaUdpSocket>::failure(
+            ::media::ErrorInfo::ioFailure(
+                "UDP socket receive buffer query failed", error));
+    }
     sockaddr_storage local{};
     int localSize = sizeof(local);
     if (getsockname(socketHandle, reinterpret_cast<sockaddr*>(&local), &localSize) == SOCKET_ERROR) {
@@ -189,7 +202,8 @@ MediaUdpSocket& MediaUdpSocket::operator=(MediaUdpSocket&& other) noexcept
             ::media::ErrorInfo::ioFailure("UDP socket event registration failed", error));
     }
     return ::media::Result<MediaUdpSocket>::success(MediaUdpSocket(std::make_unique<Impl>(
-        Impl{std::move(runtime), socketHandle, event, config.addressFamily, localPort})));
+        Impl{std::move(runtime), socketHandle, event, config.addressFamily,
+             localPort, effectiveReceiveBufferBytes})));
 #else
     const int socketHandle = ::socket(nativeFamily(config.addressFamily), SOCK_DGRAM, IPPROTO_UDP);
     if (socketHandle < 0) {
@@ -214,11 +228,11 @@ MediaUdpSocket& MediaUdpSocket::operator=(MediaUdpSocket&& other) noexcept
             ::media::ErrorInfo::ioFailure(
                 "UDP socket receive buffer query failed", error));
     }
-    if (effectiveReceiveBufferBytes < config.receiveBufferBytes) {
+    if (effectiveReceiveBufferBytes <= 0) {
         closeOnFailure();
         return ::media::Result<MediaUdpSocket>::failure(
             ::media::ErrorInfo::ioFailure(
-                "UDP socket effective receive buffer is below the planned capacity", ENOBUFS));
+                "UDP socket reported an invalid receive buffer capacity", ENOBUFS));
     }
     const int flags = fcntl(socketHandle, F_GETFL, 0);
     if (flags < 0 || fcntl(socketHandle, F_SETFL, flags | O_NONBLOCK) != 0) {
@@ -252,7 +266,8 @@ MediaUdpSocket& MediaUdpSocket::operator=(MediaUdpSocket&& other) noexcept
         ? ntohs(reinterpret_cast<const sockaddr_in*>(&local)->sin_port)
         : ntohs(reinterpret_cast<const sockaddr_in6*>(&local)->sin6_port);
     return ::media::Result<MediaUdpSocket>::success(MediaUdpSocket(std::make_unique<Impl>(
-        Impl{std::move(runtime), socketHandle, config.addressFamily, localPort})));
+        Impl{std::move(runtime), socketHandle, config.addressFamily, localPort,
+             effectiveReceiveBufferBytes})));
 #endif
 }
 
@@ -268,6 +283,11 @@ bool MediaUdpSocket::isOpen() const noexcept
 uint16_t MediaUdpSocket::localPort() const noexcept
 {
     return m_impl ? m_impl->port : 0;
+}
+
+int MediaUdpSocket::effectiveReceiveBufferBytes() const noexcept
+{
+    return m_impl ? m_impl->effectiveReceiveBufferBytes : 0;
 }
 
 ::media::Status MediaUdpSocket::sendTo(const std::string& address, uint16_t port,

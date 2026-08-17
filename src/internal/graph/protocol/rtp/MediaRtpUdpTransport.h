@@ -55,6 +55,7 @@ public:
     bool isOpen() const noexcept;
     uint16_t rtpPort() const noexcept;
     uint16_t rtcpPort() const noexcept;
+    int effectiveReceiveBufferBytes() const noexcept;
 
 private:
     struct Impl;

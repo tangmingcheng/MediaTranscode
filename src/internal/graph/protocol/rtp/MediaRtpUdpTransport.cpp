@@ -42,6 +42,9 @@ struct MediaRtpUdpTransport::Impl final {
         , cancellationWrite(cancelWriteFd)
 #endif
         , maximumDatagramBytes(datagramBytes)
+        , effectiveReceiveBufferBytes((std::min)(
+              rtp.effectiveReceiveBufferBytes(),
+              rtcp.effectiveReceiveBufferBytes()))
         , cancellableReadTimeoutMs(readTimeoutMs)
         , phaseController(std::move(controller))
         , preferRtcp(false)
@@ -75,6 +78,7 @@ struct MediaRtpUdpTransport::Impl final {
     const int cancellationWrite;
 #endif
     std::size_t maximumDatagramBytes;
+    int effectiveReceiveBufferBytes;
     int cancellableReadTimeoutMs;
     std::shared_ptr<MediaRtpUdpTransportPhaseController> phaseController;
     bool preferRtcp;
@@ -440,6 +444,12 @@ uint16_t MediaRtpUdpTransport::rtcpPort() const noexcept
 {
     const auto impl = snapshot();
     return impl ? impl->rtcpPortValue : 0;
+}
+
+int MediaRtpUdpTransport::effectiveReceiveBufferBytes() const noexcept
+{
+    const auto impl = snapshot();
+    return impl ? impl->effectiveReceiveBufferBytes : 0;
 }
 
 std::shared_ptr<MediaRtpUdpTransport::Impl> MediaRtpUdpTransport::snapshot() const noexcept
