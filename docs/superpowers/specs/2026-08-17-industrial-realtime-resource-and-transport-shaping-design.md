@@ -34,8 +34,14 @@ payload limit together with its evidence kind.
 
 Resource, latency, and network-service facts come from a deployment envelope
 supplied by the embedding application rather than per-stream CLI arithmetic.
-It contains independent resource-domain budgets, maximum pipeline residence,
-and one transport service contract. Finite network jitter and receiver or
+It contains independent resource-domain budgets, one required
+`PipelineResidenceRequirement`, and one transport service contract.
+`PipelineResidenceRequirement` is a closed variant:
+`TerminalDeadlineOnly(maximumResidence)` permits `BoundedResourceOnly` stages
+and promises bounded retention plus terminal expiry only;
+`ProvenSuccessfulResidence(maximumResidence)` requires `ProvenService` for
+every reachable stage and fails before graph creation otherwise. No layer
+infers a requirement variant from a numeric duration. Finite network jitter and receiver or
 decoder residence are required only for service variants that prove a finite
 path-service bound. Admission excess fails
 before graph creation; runtime contract excess terminates. Drop, clamp,
@@ -190,10 +196,14 @@ IP fragmentation is rejected. Byte-rate, packet-rate,
 and burst envelopes are calculated after all header, ceiling, and alignment
 effects. Inclusion or exclusion of link-layer overhead is explicit.
 
-The deployment contract defines a stable `TransportServiceScopeId` for the
-provisioned path or interface rather than an individual UDP destination. Every
-socket in that scope shares one capacity and resource ledger; separate video,
-audio, and RTCP ports cannot each claim the complete service capacity.
+Every `TransportServiceEnvelope` variant supplies an authoritative stable
+`TransportServiceScopeId` rather than deriving one from a destination or socket
+at runtime. Provisioned service obtains it from the reserved path or interface;
+adaptive service obtains it from the congestion-controller/path scope; managed
+best effort obtains it from the explicitly managed egress scope. Every socket
+in that scope shares one capacity ledger, resource ledger, shaper, packet-rate
+envelope, and controller where applicable; separate video, audio, and RTCP
+ports cannot each claim the complete service capacity.
 
 RTP media and RTCP control retain their protocol-specific scheduling
 authorities. The mux exclusively orders TS packets. The RTP session scheduler
@@ -237,14 +247,28 @@ The planner owns the finite set and transition table of legal rate generations.
 Feedback events map only to planner-authored transition keys; a controller
 cannot calculate, clamp, or invent bitrate values. At a rate decrease, the new
 rate ceiling is effective no later than the planner-authored reaction deadline.
-Every retained old-generation reservation is revalidated against that lower
-ceiling and its original send deadline before the transition commits. An
-infeasible carry-over is terminal; the runtime cannot drain at the old rate,
-drop, burst, or rebase a deadline. A prepared-session transition atomically
-switches to the admitted session after the authorized quiescence boundary. An
-in-place transition applies and reads back the already admitted encoder
-rate/CPB and mux policy atomically. Runtime replanning or product reconstruction
-is forbidden. Unsupported transitions, actuator failure, readback
+Every retained object and node-private state carries one immutable generation
+identity from encoder-input admission through final datagram enqueue. Before
+either mechanism commits, a transition barrier stops new old-generation
+admission and enumerates input frames, encoder lookahead and async output,
+hardware surfaces, encoded AUs, mux cursors and maintenance state, packetizer
+state, RTP/RTCP control state, scheduled batches, and packet reservations.
+The planner-authored transition assigns every enumerated object exactly one
+disposition: complete under the new service ceiling before its original
+deadline, or terminate the graph. Drop, old-rate drain beyond the reaction
+deadline, deadline rebasing, burst catch-up, and cross-generation relabeling
+are forbidden.
+
+`PreparedSessionSwitch` flushes all delayed old-session output into the old
+generation before atomically switching to the admitted session; every resulting
+packet is revalidated against the lower ceiling and original deadline.
+`InPlaceActuatorTransition` is legal only when the backend additionally proves
+a deterministic frame-level mutation boundary covering already queued work.
+Otherwise the old encoder state must be proven empty before mutation begins or
+the variant is rejected. The reaction deadline covers quiescence, complete
+old-state disposition, session switch or actuator mutation, readback, and
+atomic publication. Runtime replanning or product reconstruction is forbidden.
+Unsupported transitions, actuator failure, readback
 mismatch, missing feedback, or reaction expiry are terminal. The transport
 shaper and sender remain execution-only and cannot choose an encoder rate.
 
@@ -320,9 +344,15 @@ One immutable `MediaRealtimeExecutablePlan` is serialized as the complete
 runtime authority. It contains the resource ledger, selected datagram
 transport and packetization variants, optional mux and RTP session products,
 the derived `WireTrafficEnvelope`, service scope, stage service envelopes,
-prepared source and encoder binding identities, legal generations, selected
-generation mechanism, and transition table. Decoding is atomic, reproduces
-every field exactly, validates every cross-reference, and rejects unknown,
+prepared source and encoder binding identities, the selected
+`TransportServiceEnvelope`, legal generations, selected generation mechanism,
+and transition table. For adaptive service it contains the complete
+`AdaptiveTransportServiceEnvelope`: feedback binding, controller and control
+interval, reaction and feedback-loss deadlines, circuit breaker, prepared
+runtime binding identities, aggregate shaper/deadline policy, and all
+generation references. No runtime transport or controller policy exists
+outside this plan. Decoding is atomic, reproduces every field exactly,
+validates every cross-reference, and rejects unknown,
 missing, duplicate, extra, stale-topology, or overflowing entries. Builders
 bind this decoded product only; parallel policy strings, enum ordinals,
 edge-class lookup, and local reconstruction are forbidden.
