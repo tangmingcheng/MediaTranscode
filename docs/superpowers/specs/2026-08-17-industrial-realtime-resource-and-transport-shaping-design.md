@@ -247,17 +247,29 @@ The planner owns the finite set and transition table of legal rate generations.
 Feedback events map only to planner-authored transition keys; a controller
 cannot calculate, clamp, or invent bitrate values. At a rate decrease, the new
 rate ceiling is effective no later than the planner-authored reaction deadline.
-Every retained object and node-private state carries one immutable generation
-identity from encoder-input admission through final datagram enqueue. Before
-either mechanism commits, a transition barrier stops new old-generation
-admission and enumerates input frames, encoder lookahead and async output,
-hardware surfaces, encoded AUs, mux cursors and maintenance state, packetizer
-state, RTP/RTCP control state, scheduled batches, and packet reservations.
-The planner-authored transition assigns every enumerated object exactly one
+The transition inventory distinguishes `GenerationBoundWork` from
+`SessionPersistentState`. Frames, encoder lookahead and async output, hardware
+surfaces, encoded AUs, generation-bound mux and packetizer work, scheduled
+batches, and datagram reservations carry one immutable generation identity
+from encoder-input admission through final enqueue. Before either mechanism
+commits, a transition barrier stops new old-generation admission and enumerates
+all such work. The planner-authored transition assigns it exactly one
 disposition: complete under the new service ceiling before its original
 deadline, or terminate the graph. Drop, old-rate drain beyond the reaction
 deadline, deadline rebasing, burst catch-up, and cross-generation relabeling
 are forbidden.
+
+RTP/RTCP session identity and counters, timestamp extenders, TS continuity and
+PCR anchors, service-scope shaper state, and controller history are
+`SessionPersistentState`; they do not inherit encoder-input generation
+identity. Each has exactly one planner-authored transition action:
+`PreserveInPlace`, `SnapshotAndTransfer`, or
+`CloseAndRecreateWithExplicitDiscontinuity`. Preservation or transfer maintains
+RTP sequence and timestamp extension, RTCP sender-report counters and mapping,
+TS continuity, PCR monotonicity, shaper debt, and controller history as
+applicable. Close-and-recreate is legal only when the transition explicitly
+authorizes the corresponding discontinuity. Every packet emitted during the
+transition remains subject to the new service ceiling and reaction deadline.
 
 `PreparedSessionSwitch` flushes all delayed old-session output into the old
 generation before atomically switching to the admitted session; every resulting
@@ -443,6 +455,11 @@ extended monotonic timeline and current generation. A separately signaled or
 authoritatively detected discontinuity must follow its planner-authored decoder,
 mux, RTP, and RTCP transition; it cannot be inferred from wrap or silently reset
 the schedule.
+
+Adaptive step-down and recovery gates for either generation mechanism verify
+SSRC, RTP sequence and timestamp extension, RTCP sender counters and mapping,
+TS continuity, PCR monotonicity, aggregate shaper state, and controller-history
+continuity. Any reset must correspond to an explicitly planned discontinuity.
 
 Each gate records exact source, CLI, receiver and cleanup commands, precise
 PIDs, packet timing and loss, queue bytes and residence, CPU/RSS, A/V drift,
