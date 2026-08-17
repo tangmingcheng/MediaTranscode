@@ -1,5 +1,6 @@
 #pragma once
 
+#include "internal/graph/protocol/rtp/MediaRtpUdpChannel.h"
 #include "internal/graph/protocol/rtp/MediaRtpUdpTransportPhaseController.h"
 #include "internal/graph/runtime/network/MediaUdpSocket.h"
 #include "media_transcode/Result.h"
@@ -21,11 +22,6 @@ struct MediaRtpUdpTransportConfig final {
     std::size_t maximumDatagramBytes;
     int cancellableReadTimeoutMs;
     std::shared_ptr<MediaRtpUdpTransportPhaseController> phaseController;
-};
-
-enum class MediaRtpUdpChannel {
-    Rtp,
-    Rtcp
 };
 
 struct MediaRtpUdpDatagram final {
