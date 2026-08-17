@@ -15,7 +15,8 @@ public:
 
     virtual MediaRtpIngressAdapterKind kind() const noexcept = 0;
     virtual ::media::Result<std::size_t> receive(
-        MediaRtpIngressStorage& storage) = 0;
+        MediaRtpIngressStorage& storage,
+        int timeoutMilliseconds) = 0;
     virtual ::media::Status interruptReceive() noexcept = 0;
     virtual ::media::Status stop() noexcept = 0;
     virtual ::media::Status abort() noexcept = 0;

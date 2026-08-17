@@ -280,6 +280,15 @@ bool MediaUdpSocket::isOpen() const noexcept
 #endif
 }
 
+intptr_t MediaUdpSocket::nativeHandle() const noexcept
+{
+#ifdef _WIN32
+    return isOpen() ? static_cast<intptr_t>(m_impl->socket) : -1;
+#else
+    return isOpen() ? static_cast<intptr_t>(m_impl->socket) : -1;
+#endif
+}
+
 uint16_t MediaUdpSocket::localPort() const noexcept
 {
     return m_impl ? m_impl->port : 0;

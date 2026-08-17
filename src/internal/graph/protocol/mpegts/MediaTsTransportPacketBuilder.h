@@ -11,6 +11,11 @@ namespace media::ffmpeg::graph {
 
 class MediaTsTransportPacketBuilder final {
 public:
+    static ::media::Result<std::size_t> payloadPacketCount(
+        std::span<const std::span<const std::uint8_t>> segments,
+        bool randomAccess,
+        bool discontinuity);
+
     static ::media::Result<std::vector<std::array<std::uint8_t, 188>>> payload(
         std::uint16_t pid,
         std::uint8_t initialPayloadContinuity,

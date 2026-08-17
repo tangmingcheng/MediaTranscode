@@ -14,6 +14,7 @@ struct MediaProjectMpegTsMuxSegmentOptions final {
     bool expectAudio;
     MediaMuxSessionKind sessionKind;
     bool requireByteSinkResource;
+    bool emitScheduledDatagrams;
 };
 
 class MediaProjectMpegTsMuxSegmentBuilder final {

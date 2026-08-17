@@ -63,7 +63,7 @@ MediaTsPacketBatchWriter::prepareNext(MediaTsPacketCursor& cursor)
 ::media::Result<MediaTsBatchWriteResult>
 MediaTsPacketBatchWriter::writeNext(
     MediaTsPacketCursor& cursor,
-    MediaRunningTime emitOnMaster)
+    const MediaTsDatagramEnqueueWindow& enqueueWindow)
 {
     auto prepared = prepareNext(cursor);
     if (!prepared) {
@@ -71,14 +71,14 @@ MediaTsPacketBatchWriter::writeNext(
             prepared.error());
     }
     return writeNext(
-        cursor, std::move(prepared).value(), emitOnMaster);
+        cursor, std::move(prepared).value(), enqueueWindow);
 }
 
 ::media::Result<MediaTsBatchWriteResult>
 MediaTsPacketBatchWriter::writeNext(
     MediaTsPacketCursor& cursor,
     MediaTsPreparedPacketBatch&& batch,
-    MediaRunningTime emitOnMaster)
+    const MediaTsDatagramEnqueueWindow& enqueueWindow)
 {
     if (m_failure) {
         return ::media::Result<MediaTsBatchWriteResult>::failure(
@@ -104,7 +104,7 @@ MediaTsPacketBatchWriter::writeNext(
     }
     auto written = m_sink->write(
         std::span<const std::uint8_t>(m_datagram.data(), expected),
-        emitOnMaster);
+        enqueueWindow);
     if (!written) {
         auto status = fail(written.error());
         return ::media::Result<MediaTsBatchWriteResult>::failure(

@@ -32,11 +32,11 @@ public:
         MediaTsPacketCursor& cursor);
     ::media::Result<MediaTsBatchWriteResult> writeNext(
         MediaTsPacketCursor& cursor,
-        MediaRunningTime emitOnMaster);
+        const MediaTsDatagramEnqueueWindow& enqueueWindow);
     ::media::Result<MediaTsBatchWriteResult> writeNext(
         MediaTsPacketCursor& cursor,
         MediaTsPreparedPacketBatch&& batch,
-        MediaRunningTime emitOnMaster);
+        const MediaTsDatagramEnqueueWindow& enqueueWindow);
     ::media::Status finish();
     void abort() noexcept;
 

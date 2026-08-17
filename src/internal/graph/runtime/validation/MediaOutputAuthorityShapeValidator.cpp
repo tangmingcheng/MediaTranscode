@@ -236,6 +236,9 @@ bool exactAudioVideoCodecEdges(
 {
     if (product.muxSessionKind !=
             MediaMuxSessionKind::ProjectMpegTs ||
+        (requireByteSink
+             ? product.scheduledBatchMaximumBytes != 0
+             : product.scheduledBatchMaximumBytes == 0) ||
         !MediaGraphShapeQuery::hasExactOptionKeys(
             mux.options,
             {MediaTranscodeOptionKey::MuxExpectVideo,
@@ -272,8 +275,9 @@ bool exactAudioVideoCodecEdges(
                 : session.error());
     }
     const std::size_t expectedInputs = requireByteSink ? 4 : 3;
+    const std::size_t expectedOutputs = requireByteSink ? 0 : 1;
     if (mux.inputPorts.size() != expectedInputs ||
-        !mux.outputPorts.empty() ||
+        mux.outputPorts.size() != expectedOutputs ||
         !MediaGraphShapeQuery::validPort(
             mux.findInputPort("codec"), MediaPortDirection::Input,
             MediaStreamKind::Any, MediaEdgeKind::Metadata,
@@ -292,7 +296,13 @@ bool exactAudioVideoCodecEdges(
              MediaPortDirection::Input,
              MediaStreamKind::Metadata, MediaEdgeKind::Metadata,
              MediaPayloadKind::OutputByteSink)) ||
-        (!requireByteSink && mux.findInputPort("resource"))) {
+        (!requireByteSink && mux.findInputPort("resource")) ||
+        (!requireByteSink &&
+         !MediaGraphShapeQuery::validPort(
+             mux.findOutputPort("batch"), MediaPortDirection::Output,
+             MediaStreamKind::Metadata,
+             MediaEdgeKind::ScheduledDatagramBatch,
+             MediaPayloadKind::ScheduledDatagramBatch))) {
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument(
                 "Project MPEG-TS mux ports conflict with its transport product"));
@@ -472,6 +482,8 @@ bool exactAudioVideoCodecEdges(
              "Project MPEG-TS plan source"},
             {MediaNodeKind::MpegTsRtpSdpPublisher, 0,
              "MP2T SDP publisher"},
+            {MediaNodeKind::ScheduledDatagramSender, 0,
+             "scheduled datagram sender"},
             {MediaNodeKind::FileMux, 0, "output mux"},
             {MediaNodeKind::FileOutput, 0, "output resource"}},
             "component A/V core output shape");
@@ -499,6 +511,8 @@ bool exactAudioVideoCodecEdges(
              "Project MPEG-TS plan source"},
             {MediaNodeKind::MpegTsRtpSdpPublisher, 0,
              "MP2T SDP publisher"},
+            {MediaNodeKind::ScheduledDatagramSender, 0,
+             "scheduled datagram sender"},
             {MediaNodeKind::FileMux, 0, "Project MPEG-TS mux"},
             {MediaNodeKind::FileOutput, 0, "UDP output resource"}},
             "separate RTP output shape");
@@ -560,6 +574,8 @@ bool exactAudioVideoCodecEdges(
                 &product.transport)) {
         auto cardinality = shape.requireExact({
             {MediaNodeKind::FileOutput, 1, "UDP output resource"},
+            {MediaNodeKind::ScheduledDatagramSender, 0,
+             "scheduled datagram sender"},
             {MediaNodeKind::MpegTsRtpSdpPublisher, 0,
              "MP2T SDP publisher"}},
             "Project MPEG-TS UDP output shape");
@@ -597,6 +613,8 @@ bool exactAudioVideoCodecEdges(
     }
     auto cardinality = shape.requireExact({
         {MediaNodeKind::FileOutput, 0, "UDP output resource"},
+        {MediaNodeKind::ScheduledDatagramSender, 1,
+         "scheduled datagram sender"},
         {MediaNodeKind::MpegTsRtpSdpPublisher, 1,
          "MP2T SDP publisher"}},
         "Project MPEG-TS RTP output shape");
@@ -611,12 +629,23 @@ bool exactAudioVideoCodecEdges(
     }
     const MediaNode& publisher =
         *shape.nodes(MediaNodeKind::MpegTsRtpSdpPublisher).front();
+    const MediaNode& sender =
+        *shape.nodes(MediaNodeKind::ScheduledDatagramSender).front();
     const MediaNode& source =
         *shape.nodes(MediaNodeKind::ProjectMpegTsPlanSource).front();
     const MediaPort* publisherPlan = publisher.findInputPort("plan");
     const MediaPort* sourcePlan = source.findOutputPort("plan");
+    const MediaPort* senderPlan = sender.findInputPort("plan");
+    const MediaPort* senderBatch = sender.findInputPort("batch");
+    const MediaPort* muxBatch = mux.findOutputPort("batch");
     const MediaEdge* planEdge = publisherPlan
         ? MediaGraphShapeQuery::singleIncomingEdge(graph, publisherPlan->id)
+        : nullptr;
+    const MediaEdge* senderPlanEdge = senderPlan
+        ? MediaGraphShapeQuery::singleIncomingEdge(graph, senderPlan->id)
+        : nullptr;
+    const MediaEdge* senderBatchEdge = senderBatch
+        ? MediaGraphShapeQuery::singleIncomingEdge(graph, senderBatch->id)
         : nullptr;
     if (!MediaGraphShapeQuery::hasExactOptionKeys(publisher.options,
                    {"mpegts_rtp_sdp.session",
@@ -637,6 +666,37 @@ bool exactAudioVideoCodecEdges(
         return ::media::Status::failure(
             ::media::ErrorInfo::invalidArgument(
                 "AudioVideo MP2T SDP publisher differs from its runtime product"));
+    }
+    if (!MediaGraphShapeQuery::hasExactOptionKeys(
+            sender.options,
+            {"scheduled_datagram_sender.session",
+             "scheduled_datagram_sender.stream_set"}) ||
+        sender.options.value("scheduled_datagram_sender.session") !=
+            binding.groupKey.value() ||
+        !MediaGraphShapeQuery::matchesStreamSetOption(
+            sender.options, "scheduled_datagram_sender.stream_set",
+            MediaTranscodeStreamSet::AudioVideo) ||
+        sender.inputPorts.size() != 2 || !sender.outputPorts.empty() ||
+        !MediaGraphShapeQuery::validPort(
+            senderPlan, MediaPortDirection::Input,
+            MediaStreamKind::Metadata, MediaEdgeKind::Metadata,
+            MediaPayloadKind::ProjectMpegTsRuntimePlan) ||
+        !MediaGraphShapeQuery::validPort(
+            senderBatch, MediaPortDirection::Input,
+            MediaStreamKind::Metadata,
+            MediaEdgeKind::ScheduledDatagramBatch,
+            MediaPayloadKind::ScheduledDatagramBatch) ||
+        !muxBatch || !senderPlanEdge || !senderBatchEdge ||
+        senderPlanEdge->from.portId != sourcePlan->id ||
+        senderPlanEdge->policy != binding.edgePolicies.atomicMetadata ||
+        senderBatchEdge->from.portId != muxBatch->id ||
+        senderBatchEdge->policy != binding.edgePolicies.synchronizedPacket ||
+        product.scheduledBatchMaximumBytes !=
+            binding.edgePolicies.synchronizedPacket.bufferPolicy
+                .memoryBudget.maxBytes) {
+        return ::media::Status::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "AudioVideo scheduled datagram sender differs from its runtime product"));
     }
     return ::media::Status::success();
 }

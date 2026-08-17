@@ -1,6 +1,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeVideoRuntimePlanValidator.h"
 
 #include "internal/graph/planner/realtime/MediaRealtimeEdgePolicyPlanner.h"
+#include "internal/graph/planner/realtime/MediaScheduledDatagramPacingPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 #include "internal/graph/model/MediaAtomicOutputPolicyContract.h"
 
@@ -64,6 +65,8 @@ namespace media::ffmpeg::graph {
         return invalid("scheduled packet timing derivation");
     }
     if (!runtime.scheduling.pacingEnabled ||
+        runtime.scheduling.activationLead <=
+            MediaRunningTime::fromNanoseconds(0) ||
         runtime.scheduling.transportLead <=
             MediaRunningTime::fromNanoseconds(0) ||
         runtime.scheduling.initialGeneration == 0 ||
@@ -73,8 +76,13 @@ namespace media::ffmpeg::graph {
         !runtime.sessionKey.valid()) {
         return invalid("scheduling policy");
     }
+    auto expectedEdgesResult = MediaRealtimeEdgePolicyPlanner::
+        planWithSynchronizedPacketMemoryBudget(
+            runtime.queues, runtime.startup.byteCapacity,
+            runtime.startup.packetCapacity);
+    if (!expectedEdgesResult) return invalid("edge memory product");
     MediaRealtimeEdgePolicySet expectedEdges =
-        MediaRealtimeEdgePolicyPlanner::plan(runtime.queues);
+        expectedEdgesResult.value();
     const auto applyStartupMemoryBounds = [&](MediaEdgePolicy& policy) {
         auto& memory = policy.bufferPolicy.memoryBudget;
         memory.maxBytes = runtime.startup.byteCapacity;
@@ -85,7 +93,6 @@ namespace media::ffmpeg::graph {
         memory.enforceHardLimit = true;
         memory.allowDynamicGrowth = false;
     };
-    applyStartupMemoryBounds(expectedEdges.synchronizedPacket);
     MediaVideoLineageEdgePolicySet expectedLineage{
         expectedEdges.synchronizedPacket,
         expectedEdges.atomicVideoPacket,
@@ -115,6 +122,7 @@ namespace media::ffmpeg::graph {
                 &runtime.outputAdapter);
         if (!output || output->sdp.path.empty() ||
             output->video.stream != MediaScheduledStream::Video ||
+            output->video.senderLead != runtime.scheduling.activationLead ||
             output->video.senderLead != runtime.scheduling.transportLead ||
             output->video.senderLead <= MediaRunningTime::fromNanoseconds(0) ||
             output->video.senderReportInterval <=
@@ -136,18 +144,45 @@ namespace media::ffmpeg::graph {
                   output->emission.videoInitialServiceWindow(),
                   output->emission.audioInitialServiceWindow())
             : ::media::Result<MediaTsDatagramEmissionPlan>::failure(
+                   ::media::ErrorInfo::invalidArgument(
+                       "Project MPEG-TS output is absent"));
+        const auto* rtp = output
+            ? std::get_if<MediaMpegTsRtpOutputPlan>(&output->transport)
+            : nullptr;
+        const auto expectedActivationLead = output
+            ? output->protocol.muxPlan().transportDecodeLead().checkedAdd(
+                  output->protocol.muxPlan().startupEmissionPreroll())
+            : ::media::Result<MediaRunningTime>::failure(
                   ::media::ErrorInfo::invalidArgument(
                       "Project MPEG-TS output is absent"));
+        auto expectedPacing = rtp
+            ? MediaScheduledDatagramPacingPlanner::plan(
+                  rtp->transport())
+            : ::media::Result<MediaScheduledDatagramPacingPlan>::failure(
+                  ::media::ErrorInfo::invalidArgument(
+                      "Project MPEG-TS RTP output is absent"));
         if (!output ||
             output->muxSessionKind != MediaMuxSessionKind::ProjectMpegTs ||
             !output->protocol.muxPlan().videoOnlyProgram() ||
             output->protocol.muxPlan().audioVideoProgram() ||
+            !expectedActivationLead ||
+            expectedActivationLead.value() !=
+                runtime.scheduling.activationLead ||
             output->protocol.muxPlan().transportDecodeLead() !=
                 runtime.scheduling.transportLead ||
             !expectedEmission ||
             output->emission != expectedEmission.value() ||
+            (outer.outputTransport == MediaOutputTransportKind::RtpAvp
+                 ? output->scheduledBatchMaximumBytes == 0 ||
+                       output->scheduledBatchMaximumBytes !=
+                           runtime.edgePolicies.synchronizedPacket.bufferPolicy
+                               .memoryBudget.maxBytes
+                 : output->scheduledBatchMaximumBytes != 0) ||
             output->protocol.muxPlan().parameters().transportKind !=
-                outer.outputTransport) {
+                outer.outputTransport ||
+            (outer.outputTransport == MediaOutputTransportKind::RtpAvp &&
+             (!expectedPacing || output->scheduledBatchMaximumBytes == 0 ||
+              rtp->pacing() != expectedPacing.value()))) {
             return invalid("muxed adapter");
         }
     } else {

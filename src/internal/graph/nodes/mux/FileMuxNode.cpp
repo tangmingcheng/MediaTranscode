@@ -119,6 +119,9 @@ MediaNodeKind FileMuxNode::staticKind() noexcept
         allBindingChannelsSatisfied() && m_session->bindingsReady()) {
         m_phase = Phase::Streaming;
     }
+    if (m_phase == Phase::Streaming && m_session->hasPendingOutput()) {
+        return pollOrWait(context);
+    }
     auto forwarded = remember(forwardIfOutputsExist(context, buffer));
     return forwarded ? processProgress() : terminalResult();
 }
@@ -343,6 +346,11 @@ void FileMuxNode::observeClosedInputs(MediaGraphExecutionContext& context)
         remember(::media::Status::failure(polled.error()));
         return terminalResult();
     }
+    if (polled.value().output) {
+        auto emitted = remember(pushToAllOutputs(
+            context, polled.value().output));
+        return emitted ? processProgress() : terminalResult();
+    }
     if (polled.value().progressed) {
         return ::media::Result<MediaNodeProcessResult>::success(
             MediaNodeProcessResult::progress());
@@ -377,7 +385,10 @@ void FileMuxNode::observeClosedInputs(MediaGraphExecutionContext& context)
     if (buffer->isEof() || buffer->isFlush()) {
         return broadcastControlToAllOutputs(context, buffer);
     }
-    return pushToAllOutputs(context, buffer);
+    if (buffer->payloadKind() == MediaPayloadKind::ScheduledDatagramBatch) {
+        return pushToAllOutputs(context, buffer);
+    }
+    return ::media::Status::success();
 }
 
 void FileMuxNode::releaseSession() noexcept

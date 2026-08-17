@@ -16,22 +16,26 @@ public:
         MediaTsPacketCursor cursor,
         MediaRunningTime notBefore,
         MediaTsPreparedPacketClock packetClock,
-        std::size_t packetSizeBytes) noexcept;
+        std::size_t packetSizeBytes,
+        std::size_t maximumPacketsPerDatagram) noexcept;
 
     MediaTsPendingEmission(MediaTsPendingEmission&&) noexcept = default;
     MediaTsPendingEmission& operator=(MediaTsPendingEmission&&) noexcept = default;
     MediaTsPendingEmission(const MediaTsPendingEmission&) = delete;
     MediaTsPendingEmission& operator=(const MediaTsPendingEmission&) = delete;
 
-    ::media::Result<MediaRunningTime> prepareNext(
-        MediaTsPacketBatchWriter& writer,
+    ::media::Result<std::size_t> nextPayloadBytes() const;
+    ::media::Status preparePayload(MediaTsPacketBatchWriter& writer);
+    ::media::Result<std::size_t> preparedPayloadBytes() const;
+    ::media::Result<MediaRunningTime> reservePrepared(
         MediaTsDatagramEmissionSchedule& schedule);
     ::media::Result<MediaTsBatchWriteResult> emitPrepared(
         MediaTsPacketBatchWriter& writer,
         MediaTsDatagramEmissionSchedule& schedule,
         MediaTsEmissionDiagnostics& diagnostics,
         const MediaMasterClock& masterClock,
-        MediaRunningTime availableThrough);
+        MediaRunningTime availableThrough,
+        bool materializeScheduledBatch);
 
     MediaRunningTime deadline() const noexcept;
     bool finished() const noexcept;
@@ -46,6 +50,7 @@ private:
     std::optional<MediaTsPreparedDatagramEmission> m_emission;
     std::optional<MediaTsPreparedPacketClock> m_packetClock;
     std::size_t m_packetSizeBytes;
+    std::size_t m_maximumPacketsPerDatagram;
 };
 
 } // namespace media::ffmpeg::graph

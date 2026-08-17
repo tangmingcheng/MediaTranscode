@@ -96,6 +96,12 @@ public:
     ::media::Result<MediaTsPacketCursor> beginPat(const MediaTsPatSection& section);
     ::media::Result<MediaTsPacketCursor> beginPmt(const MediaTsPmtSection& section);
     ::media::Result<MediaTsPacketCursor> beginPcrOnly(const MediaTsPcrClock& pcr);
+    ::media::Result<std::size_t> patPacketCount(
+        const MediaTsPatSection& section) const;
+    ::media::Result<std::size_t> pmtPacketCount(
+        const MediaTsPmtSection& section) const;
+    ::media::Result<std::size_t> pcrOnlyPacketCount(
+        const MediaTsPcrClock& pcr) const;
     ::media::Result<MediaTsPacketCursor> beginPes(
         MediaScheduledStream stream,
         const MediaTsPesHeader& header,

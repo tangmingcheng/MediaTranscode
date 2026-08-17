@@ -10,11 +10,11 @@ namespace media::ffmpeg::graph {
 
 class MediaRtpIngressObservationCollector final {
 public:
-    ::media::Status observe(
+    ::media::Status observeDatagram(
         std::size_t datagramBytes,
-        std::uint16_t sequenceNumber,
+        std::optional<std::uint16_t> rtpSequenceNumber,
         std::int64_t observedAtNanoseconds);
-    ::media::Result<MediaRtpIngressObservation> seal() const;
+    ::media::Result<MediaRtpIngressObservation> seal();
     void reset() noexcept;
 
 private:
@@ -25,6 +25,7 @@ private:
     std::optional<std::uint16_t> m_highestSequence;
     std::optional<std::int64_t> m_firstObservedAtNanoseconds;
     std::optional<std::int64_t> m_lastObservedAtNanoseconds;
+    bool m_sealed = false;
 };
 
 } // namespace media::ffmpeg::graph

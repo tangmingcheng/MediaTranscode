@@ -4,8 +4,10 @@
 #include "internal/graph/protocol/mpegts/MediaTsMaterializedStreamConfig.h"
 #include "internal/graph/protocol/mpegts/MediaTsPendingEmission.h"
 #include "internal/graph/protocol/mpegts/MediaTsPacketBatchWriter.h"
+#include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/diagnostics/MediaTsEmissionDiagnostics.h"
 #include "internal/graph/time/MediaMasterClock.h"
+#include "internal/graph/runtime/buffer/MediaScheduledDatagramBatchBuilder.h"
 
 #include <memory>
 #include <optional>
@@ -34,6 +36,7 @@ public:
         std::shared_ptr<const MediaMasterClock> masterClock;
         MaterializedStreams streams;
         std::unique_ptr<MediaTsDatagramSink> sink;
+        std::shared_ptr<MediaScheduledDatagramBatchBuilder> scheduledBatch;
         bool startsWithDiscontinuity;
     };
     struct AdvanceResult final {
@@ -52,6 +55,8 @@ public:
     ::media::Status finish();
     void abort() noexcept;
     bool hasPendingEmission() const noexcept;
+    bool hasScheduledBatch() const noexcept;
+    ::media::Result<MediaBufferRef> takeScheduledBatch();
 
 private:
     enum class State : std::uint8_t { Created, Open, Finished, Poisoned };
@@ -61,16 +66,17 @@ private:
                       MediaTsTransportPacketizer packetizer,
                       MediaTsProgramTables tables,
                       MediaTsPacketBatchWriter writer) noexcept;
-    ::media::Result<std::size_t> writeTables(
-        MediaRunningTime emitOnMaster,
+    ::media::Result<std::size_t> writeDueMaintenance(
+        bool psiDue,
+        bool pcrDue,
+        MediaRunningTime deadline,
         MediaRunningTime availableThrough);
     ::media::Result<std::size_t> writeCursorThrough(
         MediaTsPacketCursor& cursor,
-        MediaRunningTime notBefore,
         MediaRunningTime availableThrough);
-    ::media::Result<AdvanceResult> emitPending(
-        MediaRunningTime masterNow,
-        bool oneDatagramOnly);
+    ::media::Result<AdvanceResult> emitPendingThrough(
+        MediaRunningTime masterNow);
+    ::media::Result<std::size_t> preparePendingDatagram();
     ::media::Result<AdvanceResult> advanceThroughAvailable(
         MediaRunningTime emitOnMaster,
         MediaRunningTime availableThrough);
@@ -90,10 +96,13 @@ private:
     MediaTsTransportPacketizer m_packetizer;
     MediaTsProgramTables m_tables;
     MediaTsPacketBatchWriter m_writer;
+    std::shared_ptr<MediaScheduledDatagramBatchBuilder> m_scheduledBatch;
     std::optional<MediaTsDatagramEmissionSchedule> m_emissionSchedule;
     std::optional<MediaTsPendingEmission> m_pendingEmission;
     MediaTsEmissionDiagnostics m_emissionDiagnostics;
     bool m_emissionFinalLogged = false;
+    MediaGraphDiagnosticSampler m_emissionDiagnosticSampler{
+        MediaGraphDiagnosticLevel::Flow};
     State m_state = State::Created;
     std::optional<::media::ErrorInfo> m_failure;
     std::optional<MediaRunningTime> m_lastAdvance;

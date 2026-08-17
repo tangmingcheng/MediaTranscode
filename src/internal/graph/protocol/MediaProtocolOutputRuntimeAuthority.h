@@ -64,7 +64,8 @@ public:
     virtual const std::shared_ptr<const MediaSharedNtpEpoch>&
     sharedNtpEpoch() const noexcept = 0;
     virtual MediaNodeProcessResult::DeadlineWait deadlineWait(
-        MediaRunningTime deadline) const = 0;
+        MediaRunningTime deadline,
+        MediaNodeDeadlineWakePolicy wakePolicy) const = 0;
     virtual void markAborted() noexcept = 0;
 };
 
@@ -89,7 +90,8 @@ public:
     const std::shared_ptr<const MediaSharedNtpEpoch>&
     sharedNtpEpoch() const noexcept override;
     MediaNodeProcessResult::DeadlineWait deadlineWait(
-        MediaRunningTime deadline) const override;
+        MediaRunningTime deadline,
+        MediaNodeDeadlineWakePolicy wakePolicy) const override;
     void markAborted() noexcept override;
 
 private:
@@ -124,7 +126,8 @@ public:
     const std::shared_ptr<const MediaSharedNtpEpoch>&
     sharedNtpEpoch() const noexcept override;
     MediaNodeProcessResult::DeadlineWait deadlineWait(
-        MediaRunningTime deadline) const override;
+        MediaRunningTime deadline,
+        MediaNodeDeadlineWakePolicy wakePolicy) const override;
     void markAborted() noexcept override;
 
 private:

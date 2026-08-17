@@ -16,7 +16,7 @@ struct ContinuityState final {
     std::uint8_t nextPayload;
 };
 
-enum class CursorPidKind : std::uint8_t { Pat, Pmt, Video, Audio };
+enum class CursorPidKind : std::uint8_t { Pat, Pmt, Video, Audio, Pcr };
 
 struct VideoContinuityState final {
     std::array<ContinuityState, 3> next;
@@ -42,7 +42,7 @@ using ProgramContinuityState = std::variant<
 struct MediaTsPacketizerControlState final {
     MediaTsMuxPlan plan;
     ProgramContinuityState continuity;
-    std::optional<std::uint64_t> activeCursor;
+    std::array<std::optional<std::uint64_t>, 5> activeCursors;
     std::uint64_t nextCursorIdentity = 1;
     std::vector<std::array<std::uint8_t, PacketSize>> packetWorkspace;
 };
@@ -76,10 +76,16 @@ struct MediaTsPacketCursorFactory final {
 
 namespace {
 
+std::size_t continuityIndex(CursorPidKind kind) noexcept
+{
+    return static_cast<std::size_t>(
+        kind == CursorPidKind::Pcr ? CursorPidKind::Video : kind);
+}
+
 ContinuityState* continuity(MediaTsPacketizerControlState& state,
                             CursorPidKind kind) noexcept
 {
-    const std::size_t index = static_cast<std::size_t>(kind);
+    const std::size_t index = continuityIndex(kind);
     if (auto* video = std::get_if<VideoContinuityState>(&state.continuity)) {
         return index < video->next.size() ? &video->next[index] : nullptr;
     }
@@ -91,7 +97,7 @@ bool* discontinuityPending(
     MediaTsPacketizerControlState& state,
     CursorPidKind kind) noexcept
 {
-    const std::size_t index = static_cast<std::size_t>(kind);
+    const std::size_t index = continuityIndex(kind);
     if (auto* video = std::get_if<VideoContinuityState>(&state.continuity)) {
         return index < video->discontinuityPending.size()
             ? &video->discontinuityPending[index] : nullptr;
@@ -99,6 +105,26 @@ bool* discontinuityPending(
     auto* av = std::get_if<AudioVideoContinuityState>(&state.continuity);
     return av && index < av->discontinuityPending.size()
         ? &av->discontinuityPending[index] : nullptr;
+}
+
+std::optional<std::uint64_t>* activeCursor(
+    MediaTsPacketizerControlState& state,
+    CursorPidKind kind) noexcept
+{
+    const std::size_t index = static_cast<std::size_t>(kind);
+    return index < state.activeCursors.size()
+        ? &state.activeCursors[index]
+        : nullptr;
+}
+
+const std::optional<std::uint64_t>* activeCursor(
+    const MediaTsPacketizerControlState& state,
+    CursorPidKind kind) noexcept
+{
+    const std::size_t index = static_cast<std::size_t>(kind);
+    return index < state.activeCursors.size()
+        ? &state.activeCursors[index]
+        : nullptr;
 }
 
 ::media::Result<MediaTsPacketCursor> beginPayload(
@@ -112,9 +138,10 @@ bool* discontinuityPending(
         return ::media::Result<MediaTsPacketCursor>::failure(
             invalid("MPEG-TS packetizer was moved from"));
     }
-    if (state->activeCursor) {
+    auto* active = activeCursor(*state, kind);
+    if (!active || *active) {
         return ::media::Result<MediaTsPacketCursor>::failure(
-            invalid("MPEG-TS packetizer already has an active cursor"));
+            invalid("MPEG-TS packetizer PID already has an active cursor"));
     }
     if (state->nextCursorIdentity == 0 ||
         state->nextCursorIdentity == std::numeric_limits<std::uint64_t>::max()) {
@@ -145,7 +172,7 @@ bool* discontinuityPending(
     cursor->packets = std::make_shared<std::vector<std::array<std::uint8_t, PacketSize>>>(
         std::move(packets).value());
     ++state->nextCursorIdentity;
-    state->activeCursor = identity;
+    *active = identity;
     return ::media::Result<MediaTsPacketCursor>::success(
         MediaTsPacketCursorFactory::create(std::move(cursor)));
 }
@@ -242,8 +269,9 @@ void MediaTsPacketCursor::cancel() noexcept
             m_state->owner->packetWorkspace =
                 std::move(*m_state->packets);
         }
-        if (m_state->owner->activeCursor == m_state->identity) {
-            m_state->owner->activeCursor.reset();
+        auto* active = activeCursor(*m_state->owner, m_state->pidKind);
+        if (active && *active == m_state->identity) {
+            active->reset();
         }
     }
     m_state.reset();
@@ -299,10 +327,11 @@ void MediaTsPacketCursor::cancel() noexcept
             invalid("MPEG-TS packet commit token is not valid for a prepared batch"));
     }
     auto tokenOwner = token.m_owner.lock();
+    const auto* active = activeCursor(*m_state->owner, m_state->pidKind);
     if (!tokenOwner || tokenOwner.get() != m_state->owner.get() ||
         token.m_cursorIdentity != m_state->identity ||
         token.m_revision != m_state->pending->revision ||
-        m_state->owner->activeCursor != m_state->identity) {
+        !active || *active != m_state->identity) {
         return ::media::Status::failure(
             invalid("MPEG-TS packet commit token identity or revision does not match"));
     }
@@ -320,7 +349,9 @@ void MediaTsPacketCursor::cancel() noexcept
     }
     m_state->committedOffset = m_state->pending->endOffset;
     m_state->pending.reset();
-    if (finished()) m_state->owner->activeCursor.reset();
+    if (finished()) {
+        activeCursor(*m_state->owner, m_state->pidKind)->reset();
+    }
     return ::media::Status::success();
 }
 
@@ -375,6 +406,78 @@ MediaTsTransportPacketizer::MediaTsTransportPacketizer(
 {
 }
 
+::media::Result<std::size_t> MediaTsTransportPacketizer::patPacketCount(
+    const MediaTsPatSection& section) const
+{
+    const auto* active = m_state
+        ? activeCursor(*m_state, CursorPidKind::Pat)
+        : nullptr;
+    if (!m_state || !active || *active || !section.matches(m_state->plan)) {
+        return ::media::Result<std::size_t>::failure(
+            invalid("MPEG-TS PAT packet count cannot be inspected"));
+    }
+    const bool* pendingDiscontinuity = discontinuityPending(
+        *m_state, CursorPidKind::Pat);
+    if (!pendingDiscontinuity) {
+        return ::media::Result<std::size_t>::failure(
+            invalid("MPEG-TS PAT continuity state is absent"));
+    }
+    const std::array<std::uint8_t, 1> pointerField{0};
+    const std::array<std::span<const std::uint8_t>, 2> segments{
+        pointerField, section.bytes()};
+    return MediaTsTransportPacketBuilder::payloadPacketCount(
+        segments, false, *pendingDiscontinuity);
+}
+
+::media::Result<std::size_t> MediaTsTransportPacketizer::pmtPacketCount(
+    const MediaTsPmtSection& section) const
+{
+    const auto* active = m_state
+        ? activeCursor(*m_state, CursorPidKind::Pmt)
+        : nullptr;
+    if (!m_state || !active || *active || !section.matches(m_state->plan)) {
+        return ::media::Result<std::size_t>::failure(
+            invalid("MPEG-TS PMT packet count cannot be inspected"));
+    }
+    const bool* pendingDiscontinuity = discontinuityPending(
+        *m_state, CursorPidKind::Pmt);
+    if (!pendingDiscontinuity) {
+        return ::media::Result<std::size_t>::failure(
+            invalid("MPEG-TS PMT continuity state is absent"));
+    }
+    const std::array<std::uint8_t, 1> pointerField{0};
+    const std::array<std::span<const std::uint8_t>, 2> segments{
+        pointerField, section.bytes()};
+    return MediaTsTransportPacketBuilder::payloadPacketCount(
+        segments, false, *pendingDiscontinuity);
+}
+
+::media::Result<std::size_t> MediaTsTransportPacketizer::pcrOnlyPacketCount(
+    const MediaTsPcrClock& pcr) const
+{
+    const auto* active = m_state
+        ? activeCursor(*m_state, CursorPidKind::Pcr)
+        : nullptr;
+    if (!m_state || !active || *active) {
+        return ::media::Result<std::size_t>::failure(
+            invalid("MPEG-TS PCR packet count cannot be inspected"));
+    }
+    ContinuityState* nextState = continuity(*m_state, CursorPidKind::Pcr);
+    bool* pendingDiscontinuity = discontinuityPending(
+        *m_state, CursorPidKind::Pcr);
+    if (!nextState || !pendingDiscontinuity) {
+        return ::media::Result<std::size_t>::failure(
+            invalid("MPEG-TS PCR continuity state is absent"));
+    }
+    auto packet = MediaTsTransportPacketBuilder::pcrOnly(
+        m_state->plan.pcrPid(), nextState->nextPayload,
+        pcr.wire27Mhz, *pendingDiscontinuity);
+    if (!packet) {
+        return ::media::Result<std::size_t>::failure(packet.error());
+    }
+    return ::media::Result<std::size_t>::success(1);
+}
+
 ::media::Result<MediaTsPacketCursor> MediaTsTransportPacketizer::beginPat(
     const MediaTsPatSection& section)
 {
@@ -412,7 +515,8 @@ MediaTsTransportPacketizer::MediaTsTransportPacketizer(
         return ::media::Result<MediaTsPacketCursor>::failure(
             invalid("MPEG-TS packetizer was moved from"));
     }
-    if (m_state->activeCursor) {
+    auto* active = activeCursor(*m_state, CursorPidKind::Pcr);
+    if (!active || *active) {
         return ::media::Result<MediaTsPacketCursor>::failure(
             invalid("MPEG-TS PCR cursor cannot begin"));
     }
@@ -421,7 +525,7 @@ MediaTsTransportPacketizer::MediaTsTransportPacketizer(
         return ::media::Result<MediaTsPacketCursor>::failure(
             invalid("MPEG-TS cursor identity space is exhausted"));
     }
-    const auto kind = CursorPidKind::Video;
+    const auto kind = CursorPidKind::Pcr;
     const std::uint64_t identity = m_state->nextCursorIdentity;
     auto cursor = std::make_unique<MediaTsPacketCursorState>();
     cursor->owner = m_state;
@@ -450,7 +554,7 @@ MediaTsTransportPacketizer::MediaTsTransportPacketizer(
         std::vector<std::array<std::uint8_t, PacketSize>>>(
             std::move(m_state->packetWorkspace));
     ++m_state->nextCursorIdentity;
-    m_state->activeCursor = identity;
+    *active = identity;
     return ::media::Result<MediaTsPacketCursor>::success(
         MediaTsPacketCursor(std::move(cursor)));
 }

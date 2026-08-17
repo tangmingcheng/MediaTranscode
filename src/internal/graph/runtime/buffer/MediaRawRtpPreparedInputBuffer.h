@@ -6,6 +6,8 @@
 #include "internal/graph/runtime/buffer/MediaRawRtpPreparedByteBudget.h"
 #include "internal/graph/runtime/buffer/MediaRawRtpPreparedReplayClock.h"
 #include "internal/graph/planner/realtime/MediaRtpIngressObservationCollector.h"
+#include "internal/graph/planner/realtime/MediaRtpIngressPlan.h"
+#include "internal/graph/protocol/rtp/ingress/MediaRtpIngressReceiver.h"
 #include "media_transcode/Result.h"
 
 #include <deque>
@@ -16,6 +18,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace media::ffmpeg::graph {
 
@@ -64,6 +67,15 @@ public:
     ::media::Result<MediaPreparedRawRtpDatagram> receive(int timeoutMs);
     ::media::Status captureStatus();
     ::media::Result<MediaRtpIngressObservation> ingressObservation();
+    ::media::Result<std::size_t> preparedByteCapacity() const;
+    ::media::Result<std::size_t> effectiveSocketReceivePayloadBytes() const;
+    ::media::Status configureRuntimeIngress(
+        const MediaRtpIngressPlan& plan);
+    ::media::Status validateRuntimeIngressPlan(
+        const MediaRtpIngressPlan& plan) const;
+    bool preparedReplayDrained() const noexcept;
+    ::media::Result<MediaRtpIngressBatch> receiveRuntimeBatch(
+        int timeoutMilliseconds);
     ::media::Status sealPreflight();
     ::media::Status interruptReceive() noexcept;
     ::media::Status stop() noexcept;
@@ -77,10 +89,12 @@ private:
     std::optional<MediaPreparedRawRtpInput> m_prepared;
     std::size_t m_bufferedBytes = 0;
     std::optional<::media::ErrorInfo> m_captureError;
-    std::mutex m_mutex;
+    mutable std::mutex m_mutex;
     std::condition_variable m_ready;
     std::jthread m_captureThread;
     std::optional<MediaRawRtpPreparedReplayEpoch> m_replayEpoch;
+    std::optional<MediaRtpIngressReceiver> m_runtimeIngress;
+    std::optional<MediaRtpIngressPlan> m_runtimeIngressPlan;
     bool m_replayActive = false;
     bool m_preparedQueueConsumed = false;
     bool m_budgetReserved = false;

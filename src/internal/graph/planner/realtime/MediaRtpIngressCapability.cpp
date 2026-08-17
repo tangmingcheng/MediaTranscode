@@ -78,6 +78,11 @@ MediaRtpIngressCapability::effectiveSocketReceivePayloadBytes() const noexcept
     return m_facts.effectiveSocketReceivePayloadBytes;
 }
 
+std::size_t MediaRtpIngressCapability::maximumReceiveCompletions() const noexcept
+{
+    return m_facts.maximumReceiveCompletions;
+}
+
 std::size_t MediaRtpIngressCapability::requiredBufferAlignmentBytes() const noexcept
 {
     return m_facts.requiredBufferAlignmentBytes;
@@ -104,6 +109,7 @@ MediaRtpIngressCapability::completionEvidence() const noexcept
 ::media::Status MediaRtpIngressCapability::validateProduct() const
 {
     if (m_facts.effectiveSocketReceivePayloadBytes == 0 ||
+        m_facts.maximumReceiveCompletions == 0 ||
         !isPowerOfTwo(m_facts.requiredBufferAlignmentBytes) ||
         !hasMatchingContracts(m_facts)) {
         return ::media::Status::failure(

@@ -37,8 +37,8 @@ inline void parseCommonVideoTranscodeOptions(int argc, char** argv, MediaTransco
     parameters.video.level = argValue(argc, argv, "--level");
     parameters.video.width = optionalIntArg(argc, argv, "--width");
     parameters.video.height = optionalIntArg(argc, argv, "--height");
-    if (auto fps = optionalIntArg(argc, argv, "--fps")) {
-        parameters.video.frameRate.numerator = fps;
+    if (auto targetFps = optionalIntArg(argc, argv, "--fps")) {
+        parameters.video.frameRate.numerator = targetFps;
         parameters.video.frameRate.denominator = 1;
     }
     parameters.video.bitrateKbps = optionalIntArg(argc, argv, "--bitrate");

@@ -1,5 +1,7 @@
 #include "internal/graph/planner/realtime/MediaRealtimeEdgePolicyPlanner.h"
 
+#include <utility>
+
 namespace media::ffmpeg::graph {
 namespace {
 
@@ -78,6 +80,31 @@ MediaRealtimeEdgePolicySet MediaRealtimeEdgePolicyPlanner::plan(
     policies.atomicVideoPacket = planAtomicOutputPolicy(queues.packet);
     policies.atomicAudioPacket = planAtomicOutputPolicy(queues.packet);
     return policies;
+}
+
+::media::Result<MediaRealtimeEdgePolicySet>
+MediaRealtimeEdgePolicyPlanner::planWithSynchronizedPacketMemoryBudget(
+    const MediaGraphQueueParameters& queues,
+    std::uint64_t maximumBytes,
+    std::size_t maximumBuffers)
+{
+    if (maximumBytes == 0 || maximumBuffers == 0 ||
+        maximumBuffers != queues.packet) {
+        return ::media::Result<MediaRealtimeEdgePolicySet>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "synchronized packet memory policy requires exact queue and byte bounds"));
+    }
+    MediaRealtimeEdgePolicySet policies = plan(queues);
+    auto& memory = policies.synchronizedPacket.bufferPolicy.memoryBudget;
+    memory.maxBytes = maximumBytes;
+    memory.softLimitBytes = maximumBytes;
+    memory.reservedBytes = 0;
+    memory.maxBuffers = maximumBuffers;
+    memory.preallocatedBuffers = 0;
+    memory.enforceHardLimit = true;
+    memory.allowDynamicGrowth = false;
+    return ::media::Result<MediaRealtimeEdgePolicySet>::success(
+        std::move(policies));
 }
 
 } // namespace media::ffmpeg::graph

@@ -34,6 +34,7 @@ public:
     MediaRunningTime deadline() const noexcept;
     MediaRunningTime plannedWait() const noexcept;
     MediaRunningTime latestEmissionTime() const noexcept;
+    MediaRunningTime serviceDuration() const noexcept;
     std::size_t wireBytes() const noexcept;
 
 private:
@@ -45,8 +46,12 @@ private:
         MediaRunningTime deadline,
         MediaRunningTime latestEmissionTime,
         MediaRunningTime plannedWait,
+        MediaRunningTime serviceDuration,
         std::size_t wireBytes,
-        std::uint64_t nextCommittedWireBytes) noexcept;
+        std::uint64_t nextCommittedWireBytes,
+        MediaRunningTime reservationCompletion,
+        std::int64_t selectedWireBytesPerSecond,
+        bool maintenanceReservation) noexcept;
 
     void cancel() noexcept;
 
@@ -55,9 +60,19 @@ private:
     MediaRunningTime m_deadline = MediaRunningTime::fromNanoseconds(0);
     MediaRunningTime m_latestEmissionTime = MediaRunningTime::fromNanoseconds(0);
     MediaRunningTime m_plannedWait = MediaRunningTime::fromNanoseconds(0);
+    MediaRunningTime m_serviceDuration = MediaRunningTime::fromNanoseconds(0);
     std::size_t m_wireBytes = 0;
     std::uint64_t m_nextCommittedWireBytes = 0;
+    MediaRunningTime m_reservationCompletion =
+        MediaRunningTime::fromNanoseconds(0);
+    std::int64_t m_selectedWireBytesPerSecond = 0;
+    bool m_maintenanceReservation = false;
     bool m_active = false;
+};
+
+struct MediaTsDatagramReservationPreview final {
+    MediaRunningTime notBefore;
+    MediaRunningTime completion;
 };
 
 class MediaTsDatagramEmissionSchedule final {
@@ -83,9 +98,16 @@ public:
         MediaRunningTime actualMasterNow);
     ::media::Result<MediaTsPreparedDatagramEmission> prepareAccessUnit(
         std::size_t payloadBytes);
+    ::media::Result<MediaTsDatagramReservationPreview> previewAccessUnit(
+        std::size_t payloadBytes) const;
+    ::media::Status beginMaintenanceGroup(
+        std::size_t totalPayloadBytes,
+        std::size_t datagramCount,
+        MediaRunningTime notBefore,
+        MediaRunningTime completionDeadline);
     ::media::Result<MediaTsPreparedDatagramEmission> prepareMaintenance(
-        std::size_t payloadBytes,
-        MediaRunningTime deadline);
+        std::size_t payloadBytes);
+    ::media::Status completeMaintenanceGroup();
     ::media::Status commit(
         MediaTsPreparedDatagramEmission&& prepared,
         MediaRunningTime actualEmissionTime);

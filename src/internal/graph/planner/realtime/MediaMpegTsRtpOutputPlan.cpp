@@ -20,7 +20,8 @@ MediaMpegTsRtpOutputPlan::create(
     MediaRtpUdpSenderConfig transport,
     std::string sdpPath,
     std::string sessionIdentity,
-    MediaRunningTime senderReportInterval)
+    MediaRunningTime senderReportInterval,
+    MediaScheduledDatagramPacingPlan pacing)
 {
     const auto& rtp = transport.remoteRtpEndpoint();
     const auto& rtcp = transport.remoteRtcpEndpoint();
@@ -38,10 +39,16 @@ MediaMpegTsRtpOutputPlan::create(
         rtp.addressFamily(), rtp.numericAddress(), cname);
     if (!packetCount || sdpPath.empty() || sessionIdentity.empty() ||
         senderReportInterval <= MediaRunningTime::fromNanoseconds(0) ||
+        pacing.execution !=
+            MediaDatagramDispatchExecution::UserspaceWaitAndSend ||
+        pacing.evidence !=
+            MediaDatagramTimingEvidence::UserspaceSendReturn ||
+        pacing.deadlinePolicy !=
+            MediaDatagramDeadlinePolicy::CanonicalOrdered ||
         maximumDatagramBytes >
-            static_cast<std::size_t>((std::numeric_limits<int>::max)() / 2) ||
+            static_cast<std::size_t>((std::numeric_limits<int>::max)()) ||
         transport.sendBufferBytes() <
-            static_cast<int>(maximumDatagramBytes * 2) ||
+            static_cast<int>(maximumDatagramBytes) ||
         rtp.port() == 0 || (rtp.port() % 2) != 0 ||
         rtcp.port() != rtp.port() + 1 ||
         rtcp.addressFamily() != rtp.addressFamily() ||
@@ -77,7 +84,8 @@ MediaMpegTsRtpOutputPlan::create(
             packetCount.value(),
             MediaMpegTsRtpSdpPlan{
                 std::move(sdpPath), sessionIdentity, sessionIdentity,
-                addressFamily, numericAddress, cname}));
+                addressFamily, numericAddress, cname},
+            pacing));
 }
 
 MediaMpegTsRtpOutputPlan::MediaMpegTsRtpOutputPlan(
@@ -91,7 +99,8 @@ MediaMpegTsRtpOutputPlan::MediaMpegTsRtpOutputPlan(
     MediaRunningTime senderReportInterval,
     std::size_t maximumDatagramBytes,
     std::uint8_t tsPacketsPerPayload,
-    MediaMpegTsRtpSdpPlan sdp) noexcept
+    MediaMpegTsRtpSdpPlan sdp,
+    MediaScheduledDatagramPacingPlan pacing) noexcept
     : m_transport(std::move(transport)),
       m_payloadType(payloadType),
       m_clockRate(clockRate),
@@ -102,7 +111,8 @@ MediaMpegTsRtpOutputPlan::MediaMpegTsRtpOutputPlan(
       m_senderReportInterval(senderReportInterval),
       m_maximumDatagramBytes(maximumDatagramBytes),
       m_tsPacketsPerPayload(tsPacketsPerPayload),
-      m_sdp(std::move(sdp))
+      m_sdp(std::move(sdp)),
+      m_pacing(pacing)
 {
 }
 
@@ -126,7 +136,8 @@ MediaMpegTsRtpOutputPlan::clone() const
             m_senderReportInterval,
             m_maximumDatagramBytes,
             m_tsPacketsPerPayload,
-            m_sdp));
+            m_sdp,
+            m_pacing));
 }
 
 const MediaRtpUdpSenderConfig&
@@ -188,6 +199,12 @@ const MediaMpegTsRtpSdpPlan&
 MediaMpegTsRtpOutputPlan::sdp() const noexcept
 {
     return m_sdp;
+}
+
+const MediaScheduledDatagramPacingPlan&
+MediaMpegTsRtpOutputPlan::pacing() const noexcept
+{
+    return m_pacing;
 }
 
 } // namespace media::ffmpeg::graph

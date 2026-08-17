@@ -1,6 +1,8 @@
 #include "internal/graph/planner/realtime/MediaRealtimeVideoRuntimePlanner.h"
 
 #include "internal/graph/planner/capability/MediaSelectedEncoderPacketLayoutResolver.h"
+#include "internal/graph/planner/realtime/MediaRealtimeEdgePolicyPlanner.h"
+#include "internal/graph/planner/realtime/MediaScheduledDatagramPacingPlanner.h"
 #include "internal/graph/planner/realtime/MediaRtpOutputIdentityPlanner.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
 #include "internal/graph/protocol/sdp/MediaRtpSdpDescription.h"
@@ -78,7 +80,8 @@ planSeparateRtp(
     MediaRealtimeRtpTranscodePlanningDraft& outer,
     MediaRealtimeOutputPlanningDraft& output,
     const MediaRealtimeRtpTranscodeRequest& request,
-    MediaRational outputFrameRate)
+    MediaRational outputFrameRate,
+    const MediaRealtimeVideoStartupPlan& startup)
 {
     auto layout = MediaSelectedEncoderPacketLayoutResolver::resolve(
         outer.videoPlan);
@@ -122,6 +125,12 @@ planSeparateRtp(
         return ::media::Result<
             MediaProjectMpegTsRuntimeOutputPlan>::failure(protocol.error());
     }
+    auto videoCadence = MediaRunningTime::checkedFromTicks(
+        1, outputFrameRate.den, outputFrameRate.num);
+    if (!videoCadence) {
+        return ::media::Result<MediaProjectMpegTsRuntimeOutputPlan>::failure(
+            videoCadence.error());
+    }
     std::optional<std::variant<MediaMpegTsUdpOutputPlan,
                                MediaMpegTsRtpOutputPlan>> transport;
     if (outer.outputTransport == MediaOutputTransportKind::UdpDatagrams) {
@@ -146,11 +155,19 @@ planSeparateRtp(
                 ::media::ErrorInfo::notInitialized(
                     "VideoOnly MPEG-TS/RTP requires complete RTP and SDP facts"));
         }
+        auto pacing = MediaScheduledDatagramPacingPlanner::plan(
+            *output.muxedOutput.rtpTransport);
+        if (!pacing) {
+            return ::media::Result<
+                MediaProjectMpegTsRuntimeOutputPlan>::failure(
+                pacing.error());
+        }
         auto rtp = MediaMpegTsRtpOutputPlan::create(
             std::move(*output.muxedOutput.rtpTransport),
             output.muxedOutput.sdpPath,
             request.mediaId,
-            MediaRunningTime::fromNanoseconds(SenderReportIntervalNs));
+            MediaRunningTime::fromNanoseconds(SenderReportIntervalNs),
+            pacing.value());
         if (!rtp || rtp.value().tsPacketsPerPayload() !=
                         maximumPacketsPerDatagram) {
             return ::media::Result<
@@ -164,12 +181,6 @@ planSeparateRtp(
             std::move(rtp).value());
     }
     outer.videoParameters.globalHeader = true;
-    auto videoCadence = MediaRunningTime::checkedFromTicks(
-        1, outputFrameRate.den, outputFrameRate.num);
-    if (!videoCadence) {
-        return ::media::Result<MediaProjectMpegTsRuntimeOutputPlan>::failure(
-            videoCadence.error());
-    }
     auto emission = MediaTsDatagramEmissionPlan::create(
         protocol.value().muxPlan(), videoCadence.value(), std::nullopt);
     if (!emission) {
@@ -181,6 +192,9 @@ planSeparateRtp(
             std::move(protocol).value(),
             MediaMuxSessionKind::ProjectMpegTs,
             std::move(emission).value(),
+            outer.outputTransport == MediaOutputTransportKind::RtpAvp
+                ? startup.byteCapacity
+                : 0,
             std::move(*transport)});
 }
 
@@ -289,13 +303,21 @@ MediaRealtimeVideoRuntimePlanner::plan(
                 "VideoOnly runtime requires an enabled video pipeline"));
     }
 
-    MediaRealtimeEdgePolicySet edgePolicies = outer.edgePolicies;
-    applyStartupMemoryBounds(
-        edgePolicies.synchronizedPacket, startup.value());
+    auto plannedEdges = MediaRealtimeEdgePolicyPlanner::
+        planWithSynchronizedPacketMemoryBudget(
+            outer.queues, startup.value().byteCapacity,
+            startup.value().packetCapacity);
+    if (!plannedEdges) {
+        return ::media::Result<MediaRealtimeVideoRuntimePlan>::failure(
+            plannedEdges.error());
+    }
+    MediaRealtimeEdgePolicySet edgePolicies =
+        std::move(plannedEdges).value();
     MediaVideoLineageEdgePolicySet lineageEdgePolicies =
         planLineageEdges(edgePolicies, startup.value());
 
     std::optional<MediaRealtimeVideoOutputAdapterPlan> adapter;
+    std::optional<MediaRunningTime> activationOutputLead;
     std::optional<MediaRunningTime> transportLead;
     if (outer.outputLayout == RealtimeOutputStreamLayout::SeparateStreams) {
         auto planned = planSeparateRtp(output, request);
@@ -303,6 +325,7 @@ MediaRealtimeVideoRuntimePlanner::plan(
             return ::media::Result<MediaRealtimeVideoRuntimePlan>::failure(
                 planned.error());
         }
+        activationOutputLead = planned.value().video.senderLead;
         transportLead = planned.value().video.senderLead;
         adapter.emplace(
             std::in_place_type<MediaVideoOnlySeparateRtpOutputRuntimePlan>,
@@ -310,11 +333,19 @@ MediaRealtimeVideoRuntimePlanner::plan(
     } else if (outer.outputLayout ==
                RealtimeOutputStreamLayout::MuxedTransportStream) {
         auto planned = planProjectMpegTs(
-            outer, output, request, outputFrameRate);
+            outer, output, request, outputFrameRate, startup.value());
         if (!planned) {
             return ::media::Result<MediaRealtimeVideoRuntimePlan>::failure(
                 planned.error());
         }
+        auto projectActivationLead =
+            planned.value().protocol.muxPlan().transportDecodeLead().checkedAdd(
+                planned.value().protocol.muxPlan().startupEmissionPreroll());
+        if (!projectActivationLead) {
+            return ::media::Result<MediaRealtimeVideoRuntimePlan>::failure(
+                projectActivationLead.error());
+        }
+        activationOutputLead = projectActivationLead.value();
         transportLead =
             planned.value().protocol.muxPlan().transportDecodeLead();
         adapter.emplace(
@@ -336,7 +367,8 @@ MediaRealtimeVideoRuntimePlanner::plan(
                 packetTimingMode,
                 MediaRealtimeVideoTimestampAuthority::DecodeTimestamp},
             MediaRealtimeVideoSchedulingPlan{
-                true, *transportLead, InitialVideoGeneration},
+                true, *activationOutputLead, *transportLead,
+                InitialVideoGeneration},
             MediaProtocolOutputSessionKey(request.mediaId),
             output.packetCopyNormalizationRequired,
             std::move(*adapter),

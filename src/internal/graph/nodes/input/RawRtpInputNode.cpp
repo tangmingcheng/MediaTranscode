@@ -1,5 +1,7 @@
 #include "internal/graph/nodes/input/RawRtpInputNode.h"
 
+#include "internal/graph/nodes/input/MediaRtpIngressNodePlanDecoder.h"
+
 #include "internal/graph/diagnostics/MediaGraphDiagnostics.h"
 #include "internal/graph/nodes/MediaRequiredNodeOptions.h"
 #include "internal/graph/nodes/input/MediaRawRtpStreamDescriptorFactory.h"
@@ -137,7 +139,66 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
             ::media::ErrorInfo::notInitialized(
                 "raw RTP receiver is unavailable"));
     std::int64_t observedAtNs = 0;
-    if (m_preparedReceiver) {
+    if (m_preparedReceiver &&
+        m_preparedReceiver->preparedReplayDrained()) {
+        if (!m_runtimeIngressBatch) {
+            auto receivedBatch = m_preparedReceiver->receiveRuntimeBatch(
+                receiveTimeoutMs);
+            if (!receivedBatch) {
+                datagram = ::media::Result<MediaRtpUdpDatagram>::failure(
+                    receivedBatch.error());
+            } else {
+                m_runtimeIngressBatch.emplace(
+                    std::move(receivedBatch).value());
+                m_runtimeIngressBatchIndex = 0;
+                const auto entries = m_runtimeIngressBatch->entries();
+                std::size_t batchBytes = 0;
+                for (const auto& entry : entries) {
+                    batchBytes += entry.bytes.size();
+                }
+                ++m_runtimeIngressBatches;
+                m_runtimeIngressDatagrams += entries.size();
+                m_runtimeIngressBytes += batchBytes;
+                m_runtimeIngressMaximumBatchDatagrams = (std::max)(
+                    m_runtimeIngressMaximumBatchDatagrams, entries.size());
+                m_runtimeIngressMaximumBatchBytes = (std::max)(
+                    m_runtimeIngressMaximumBatchBytes, batchBytes);
+            }
+        }
+        if (m_runtimeIngressBatch) {
+            const auto entries = m_runtimeIngressBatch->entries();
+            while (m_runtimeIngressBatchIndex < entries.size() &&
+                   m_events.empty() && m_packets.empty()) {
+                const auto& entry = entries[m_runtimeIngressBatchIndex++];
+                const auto bytes = std::span<const std::uint8_t>(
+                    reinterpret_cast<const std::uint8_t*>(entry.bytes.data()),
+                    entry.bytes.size());
+                auto status = entry.channel == MediaRtpUdpChannel::Rtp
+                    ? processRtp(context, bytes,
+                                 entry.observedAtNanoseconds)
+                    : processRtcp(context, bytes,
+                                  entry.observedAtNanoseconds);
+                if (!status) return processProgress(status);
+            }
+            if (m_runtimeIngressBatchIndex == entries.size()) {
+                m_runtimeIngressBatch.reset();
+                m_runtimeIngressBatchIndex = 0;
+            }
+            if (!m_events.empty()) {
+                auto event = std::move(m_events.front());
+                m_events.pop_front();
+                return processProgress(emitOutput(
+                    context, event.first, event.second));
+            }
+            if (!m_packets.empty()) {
+                MediaBufferRef packet = std::move(m_packets.front());
+                m_packets.pop_front();
+                return processProgress(emitOutput(
+                    context, "packet", packet));
+            }
+            return processProgress();
+        }
+    } else if (m_preparedReceiver) {
         auto prepared = m_preparedReceiver->receive(receiveTimeoutMs);
         if (prepared) {
             observedAtNs = prepared.value().observedAtNs;
@@ -177,9 +238,12 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
         }
         return processProgress(::media::Status::failure(datagram.error()));
     }
-    auto status = datagram.value().channel == MediaRtpUdpChannel::Rtp
-        ? processRtp(context, std::move(datagram).value(), observedAtNs)
-        : processRtcp(context, std::move(datagram).value(), observedAtNs);
+    const MediaRtpUdpChannel channel = datagram.value().channel;
+    const auto bytes = std::span<const std::uint8_t>(
+        datagram.value().bytes.data(), datagram.value().bytes.size());
+    auto status = channel == MediaRtpUdpChannel::Rtp
+        ? processRtp(context, bytes, observedAtNs)
+        : processRtcp(context, bytes, observedAtNs);
     if (!status) return processProgress(status);
     if (!m_events.empty()) {
         auto event = std::move(m_events.front());
@@ -259,7 +323,22 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
     if (!depacketizer) return ::media::Status::failure(depacketizer.error());
     auto snapshot = MediaRawRtpStreamDescriptorFactory::create(m_config);
     if (!snapshot) return ::media::Status::failure(snapshot.error());
+    std::optional<MediaRtpIngressPlan> preparedIngressPlan;
     if (m_requiresPreparedInput) {
+        auto ingressPlan = MediaRtpIngressNodePlanDecoder::decode(options);
+        if (!ingressPlan) {
+            return ::media::Status::failure(ingressPlan.error());
+        }
+        if (ingressPlan.value().maximumDatagramBytes() !=
+                static_cast<std::size_t>(datagramBytes.value()) ||
+            ingressPlan.value().socketReceiveCapacityBytes() !=
+                static_cast<std::size_t>(receiveBuffer.value()) ||
+            ingressPlan.value().reorderWindowPackets() !=
+                static_cast<std::size_t>(reorderWindow.value())) {
+            return ::media::Status::failure(
+                ::media::ErrorInfo::invalidArgument(
+                    "RawRtpInputNode transport options differ from its ingress product"));
+        }
         if (!m_prepared.valid() || !m_prepared.kind() ||
             *m_prepared.kind() != MediaPreparedRealtimeInputKind::RawRtp) {
             return ::media::Status::failure(
@@ -276,6 +355,11 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
                 ::media::ErrorInfo::invalidArgument(
                     "RawRtpInputNode prepared binding has wrong buffer type"));
         }
+        if (auto status = buffer->validateRuntimeIngressPlan(
+                ingressPlan.value()); !status) {
+            return status;
+        }
+        preparedIngressPlan.emplace(std::move(ingressPlan).value());
         auto replay = buffer->beginReplay();
         if (!replay) return ::media::Status::failure(replay.error());
         if (buffer->streamKind() != m_config.streamKind ||
@@ -340,7 +424,12 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
                 " payload_type=" + std::to_string(m_config.payloadType));
     }
     m_reorder = std::make_unique<MediaRtpReorderBuffer>(MediaRtpReorderConfig{
-        static_cast<std::size_t>(reorderWindow.value()), std::chrono::milliseconds(reorderDelay.value()),
+        static_cast<std::size_t>(reorderWindow.value()),
+        preparedIngressPlan
+            ? std::chrono::nanoseconds(
+                  preparedIngressPlan->maximumReorderDelayNanoseconds())
+            : std::chrono::duration_cast<std::chrono::nanoseconds>(
+                  std::chrono::milliseconds(reorderDelay.value())),
         static_cast<uint8_t>(payloadType.value())});
     m_depacketizer = std::move(depacketizer).value();
     m_clockTracker = std::make_unique<MediaRtcpSenderReportTracker>(MediaRtcpSenderReportTrackerConfig{
@@ -364,7 +453,7 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
 
 ::media::Status RawRtpInputNode::processRtp(
     MediaGraphExecutionContext& context,
-    MediaRtpUdpDatagram datagram,
+    std::span<const std::uint8_t> datagram,
     std::int64_t observedAtNs)
 {
     if (observedAtNs <= 0) {
@@ -372,7 +461,7 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
             ::media::ErrorInfo::invalidArgument(
                 "RawRtpInputNode requires a monotonic RTP arrival time"));
     }
-    auto parsed = MediaRtpPacketParser::parse(datagram.bytes);
+    auto parsed = MediaRtpPacketParser::parse(datagram);
     if (!parsed) return ::media::Status::failure(parsed.error());
     const std::uint64_t generationBeforeObservation = m_clockTracker->generation();
     m_clockTracker->observeMedia(parsed.value().ssrc, observedAtNs);
@@ -458,7 +547,7 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
 
 ::media::Status RawRtpInputNode::processRtcp(
     MediaGraphExecutionContext& context,
-    MediaRtpUdpDatagram datagram,
+    std::span<const std::uint8_t> datagram,
     std::int64_t observedAtNs)
 {
     if (observedAtNs <= 0) {
@@ -471,7 +560,7 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
             ::media::ErrorInfo::notInitialized(
                 "RawRtpInputNode requires planned RTCP composition mode"));
     }
-    auto packets = MediaRtcpCompoundParser::parse(datagram.bytes, MediaRtcpCompoundPolicy{
+    auto packets = MediaRtcpCompoundParser::parse(datagram, MediaRtcpCompoundPolicy{
         *m_rtcpCompositionMode, m_requireCname});
     if (!packets) return ::media::Status::failure(packets.error());
     auto status = m_clockTracker->observe(packets.value(), observedAtNs);
@@ -559,6 +648,7 @@ MediaNodeKind RawRtpInputNode::staticKind() noexcept
         ? m_preparedReceiver->stop()
         : m_transport.stop();
     m_transport.close();
+    logIngressBatchTelemetry();
     resetState();
     auto baseStatus = FFmpegNodeRuntime::stop(context);
     return !transportStatus ? transportStatus : baseStatus;
@@ -581,6 +671,7 @@ void RawRtpInputNode::abort(MediaGraphExecutionContext& context) noexcept
         (void)m_transport.abort();
     }
     m_transport.close();
+    logIngressBatchTelemetry();
     resetState();
     FFmpegNodeRuntime::abort(context);
 }
@@ -596,6 +687,13 @@ void RawRtpInputNode::resetState() noexcept
     m_packets.clear();
     m_events.clear();
     m_preparedReceiver.reset();
+    m_runtimeIngressBatch.reset();
+    m_runtimeIngressBatchIndex = 0;
+    m_runtimeIngressBatches = 0;
+    m_runtimeIngressDatagrams = 0;
+    m_runtimeIngressBytes = 0;
+    m_runtimeIngressMaximumBatchDatagrams = 0;
+    m_runtimeIngressMaximumBatchBytes = 0;
     m_initialized = false;
     m_formatEmitted = false;
     m_keyTraceEmitted = false;
@@ -603,6 +701,24 @@ void RawRtpInputNode::resetState() noexcept
     m_rtcpCompositionMode.reset();
     m_cancellableReadTimeoutMs = 0;
     m_nextIngressSequence = 1;
+}
+
+void RawRtpInputNode::logIngressBatchTelemetry() const
+{
+    if (m_runtimeIngressBatches == 0) return;
+    mediaGraphDiagnosticLog(
+        MediaGraphDiagnosticLevel::State,
+        MediaGraphDiagnosticPhase::RuntimeNode,
+        "rtp_ingress_batch stream=" +
+            std::string(m_config.streamKind == MediaStreamKind::Video
+                ? "video" : "audio") +
+            " batches=" + std::to_string(m_runtimeIngressBatches) +
+            " datagrams=" + std::to_string(m_runtimeIngressDatagrams) +
+            " bytes=" + std::to_string(m_runtimeIngressBytes) +
+            " maximum_batch_datagrams=" +
+                std::to_string(m_runtimeIngressMaximumBatchDatagrams) +
+            " maximum_batch_bytes=" +
+                std::to_string(m_runtimeIngressMaximumBatchBytes));
 }
 
 std::uint64_t RawRtpInputNode::nextIngressSequence() noexcept

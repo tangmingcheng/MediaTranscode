@@ -185,9 +185,9 @@ MediaHardwareCapability validateInternallyManagedRkmppChain(
         request.options = &filterOptions;
         request.firstFrame = probeFrame.get();
         request.inputTimeBase =
-            AVRational{options.probeFrameRate.den, options.probeFrameRate.num};
+            AVRational{options.sourceFrameRate.den, options.sourceFrameRate.num};
         request.inputFrameRate =
-            AVRational{options.probeFrameRate.num, options.probeFrameRate.den};
+            AVRational{options.sourceFrameRate.num, options.sourceFrameRate.den};
         request.sampleAspectRatio = AVRational{1, 1};
         auto filterGraph = VideoFilterGraphBuilder::build(request);
         if (!filterGraph) {
@@ -232,10 +232,12 @@ MediaHardwareCapability validateInternallyManagedRkmppChain(
         options.targetHeight > 0 ? options.targetHeight : options.probeHeight;
     encoderContext->pix_fmt = encoderFormat;
     encoderContext->sw_pix_fmt = encoderSurfaceFormat;
+    const MediaRational encoderFrameRate = options.targetFrameRate.isKnown()
+        ? options.targetFrameRate : options.sourceFrameRate;
     encoderContext->time_base =
-        AVRational{options.probeFrameRate.den, options.probeFrameRate.num};
+        AVRational{encoderFrameRate.den, encoderFrameRate.num};
     encoderContext->framerate =
-        AVRational{options.probeFrameRate.num, options.probeFrameRate.den};
+        AVRational{encoderFrameRate.num, encoderFrameRate.den};
     encoderContext->sample_aspect_ratio = AVRational{1, 1};
     if (options.lowLatency) {
         encoderContext->max_b_frames = 0;
@@ -263,8 +265,8 @@ MediaHardwareCapability validateCompleteChain(
     if (options.probeWidth <= 0 || options.probeHeight <= 0) {
         return unavailable("hardware chain validation requires planner-resolved probe dimensions");
     }
-    if (!options.probeFrameRate.isKnown()) {
-        return unavailable("hardware chain validation requires planner-resolved probe frame rate");
+    if (!options.sourceFrameRate.isKnown()) {
+        return unavailable("hardware chain validation requires planner-resolved source frame rate");
     }
 
     if (chain.decoder.deviceKind() == MediaHardwareDeviceKind::RKMPP) {
@@ -360,10 +362,12 @@ MediaHardwareCapability validateCompleteChain(
     encoderContext->height = outputHeight;
     encoderContext->pix_fmt = encoderFormat;
     encoderContext->sw_pix_fmt = surfaceFormat;
+    const MediaRational encoderFrameRate = options.targetFrameRate.isKnown()
+        ? options.targetFrameRate : options.sourceFrameRate;
     encoderContext->time_base =
-        AVRational{options.probeFrameRate.den, options.probeFrameRate.num};
+        AVRational{encoderFrameRate.den, encoderFrameRate.num};
     encoderContext->framerate =
-        AVRational{options.probeFrameRate.num, options.probeFrameRate.den};
+        AVRational{encoderFrameRate.num, encoderFrameRate.den};
     encoderContext->sample_aspect_ratio = AVRational{1, 1};
     if (options.lowLatency) {
         encoderContext->max_b_frames = 0;
@@ -405,9 +409,9 @@ MediaHardwareCapability validateCompleteChain(
         request.options = &filterOptions;
         request.firstFrame = firstFrame.get();
         request.inputTimeBase =
-            AVRational{options.probeFrameRate.den, options.probeFrameRate.num};
+            AVRational{options.sourceFrameRate.den, options.sourceFrameRate.num};
         request.inputFrameRate =
-            AVRational{options.probeFrameRate.num, options.probeFrameRate.den};
+            AVRational{options.sourceFrameRate.num, options.sourceFrameRate.den};
         request.sampleAspectRatio = AVRational{1, 1};
         auto filterGraph = VideoFilterGraphBuilder::build(request);
         if (!filterGraph) {

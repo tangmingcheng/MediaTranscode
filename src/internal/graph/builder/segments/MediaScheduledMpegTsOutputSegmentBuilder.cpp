@@ -109,6 +109,7 @@ struct CommonPlan final {
         graph.nodes().begin(), graph.nodes().end(), [](const MediaNode& node) {
             return node.kind == MediaNodeKind::ProjectMpegTsPlanSource ||
                    node.kind == MediaNodeKind::ScheduledTsAccessUnitAdapter ||
+                   node.kind == MediaNodeKind::ScheduledDatagramSender ||
                    node.kind == MediaNodeKind::MpegTsRtpSdpPublisher;
         });
     if (duplicate) {
@@ -118,6 +119,7 @@ struct CommonPlan final {
 
     MediaNodeId udpOutput = MediaNodeId::invalid();
     MediaNodeId mux = MediaNodeId::invalid();
+    MediaNodeId scheduledDatagramSender = MediaNodeId::invalid();
     MediaNodeId rtpSdpPublisher = MediaNodeId::invalid();
     if (const auto* udp = std::get_if<MediaMpegTsUdpOutputPlan>(
             &plan.output.transport)) {
@@ -145,14 +147,19 @@ struct CommonPlan final {
         auto addedMux = MediaProjectMpegTsMuxSegmentBuilder::build(
             graph, MediaProjectMpegTsMuxSegmentOptions{
                 options.prefix, true, expectAudio,
-                plan.output.muxSessionKind, false});
+                plan.output.muxSessionKind, false, true});
         if (!addedMux) return Result::failure(addedMux.error());
         mux = addedMux.value();
+        scheduledDatagramSender = graph.addNode(
+            MediaNodeKind::ScheduledDatagramSender,
+            options.prefix + ".rtp.datagram.sender",
+            "Scheduled MP2T RTP datagram sender");
         rtpSdpPublisher = graph.addNode(
             MediaNodeKind::MpegTsRtpSdpPublisher,
             options.prefix + ".rtp.sdp.publisher",
             "Atomic MP2T RTP SDP publisher");
-        if (!rtpSdpPublisher.isValid()) {
+        if (!scheduledDatagramSender.isValid() ||
+            !rtpSdpPublisher.isValid()) {
             return Result::failure(::media::ErrorInfo::internalError(
                 "Scheduled MPEG-TS RTP output failed to add its SDP publisher"));
         }
@@ -160,11 +167,27 @@ struct CommonPlan final {
             graph, rtpSdpPublisher, "mpegts_rtp_sdp.session",
             "mpegts_rtp_sdp.stream_set", plan);
         if (!identity) return Result::failure(identity.error());
+        identity = setStreamSetOption(
+            graph, scheduledDatagramSender,
+            "scheduled_datagram_sender.session",
+            "scheduled_datagram_sender.stream_set", plan);
+        if (!identity) return Result::failure(identity.error());
         auto planPort = MediaGraphBuildSupport::addInputPortChecked(
             graph, Owner, rtpSdpPublisher, "plan",
             MediaStreamKind::Metadata, MediaEdgeKind::Metadata,
             MediaPayloadKind::ProjectMpegTsRuntimePlan, true, false);
         if (!planPort) return Result::failure(planPort.error());
+        planPort = MediaGraphBuildSupport::addInputPortChecked(
+            graph, Owner, scheduledDatagramSender, "plan",
+            MediaStreamKind::Metadata, MediaEdgeKind::Metadata,
+            MediaPayloadKind::ProjectMpegTsRuntimePlan, true, false);
+        if (!planPort) return Result::failure(planPort.error());
+        auto batchPort = MediaGraphBuildSupport::addInputPortChecked(
+            graph, Owner, scheduledDatagramSender, "batch",
+            MediaStreamKind::Metadata,
+            MediaEdgeKind::ScheduledDatagramBatch,
+            MediaPayloadKind::ScheduledDatagramBatch, true, false);
+        if (!batchPort) return Result::failure(batchPort.error());
     } else {
         return Result::failure(::media::ErrorInfo::invalidArgument(
             "Scheduled MPEG-TS output requires one transport variant"));
@@ -261,9 +284,22 @@ struct CommonPlan final {
             "MPEG-TS RTP plan -> SDP publisher",
             plan.edgePolicies.atomicMetadata);
         if (!connected) return Result::failure(connected.error());
+        connected = MediaGraphBuildSupport::connectChecked(
+            graph, Owner, planSource, "plan",
+            scheduledDatagramSender, "plan",
+            "MPEG-TS RTP plan -> datagram sender",
+            plan.edgePolicies.atomicMetadata);
+        if (!connected) return Result::failure(connected.error());
+        connected = MediaGraphBuildSupport::connectChecked(
+            graph, Owner, mux, "batch",
+            scheduledDatagramSender, "batch",
+            "scheduled MPEG-TS datagrams -> RTP sender",
+            plan.edgePolicies.synchronizedPacket);
+        if (!connected) return Result::failure(connected.error());
     }
     return Result::success(
-        {planSource, adapter, udpOutput, mux, rtpSdpPublisher});
+        {planSource, adapter, udpOutput, mux,
+         scheduledDatagramSender, rtpSdpPublisher});
 }
 
 } // namespace

@@ -11,6 +11,7 @@
 #include <memory>
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace media::ffmpeg::graph {
 
@@ -56,6 +57,11 @@ public:
     ::media::Status startRawRtpPreflightCapture();
     ::media::Status rawRtpCaptureStatus();
     ::media::Result<MediaRtpIngressObservation> rawRtpIngressObservation();
+    ::media::Result<std::size_t> rawRtpPreparedByteCapacity() const;
+    ::media::Result<std::size_t>
+    rawRtpEffectiveSocketReceivePayloadBytes() const;
+    ::media::Status configureRawRtpRuntimeIngress(
+        const MediaRtpIngressPlan& plan);
     ::media::Status sealRawRtpPreflight();
     ::media::Result<MediaBufferRef> releaseBuffer();
 

@@ -13,6 +13,7 @@ class MediaGraphExecutionContext;
 struct MediaMuxSessionPollResult final {
     bool progressed;
     std::optional<MediaNodeProcessResult::DeadlineWait> nextWait;
+    MediaBufferRef output;
 };
 
 class MediaMuxSession {

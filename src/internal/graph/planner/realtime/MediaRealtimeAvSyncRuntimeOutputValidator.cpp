@@ -1,4 +1,5 @@
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimeOutputValidator.h"
+#include "internal/graph/planner/realtime/MediaScheduledDatagramPacingPlanner.h"
 
 #include "internal/graph/planner/realtime/MediaRealtimeAvSyncRuntimePlan.h"
 #include "internal/graph/planner/realtime/MediaRealtimeRtpTranscodePlanner.h"
@@ -226,6 +227,7 @@ bool validRtpStream(
             std::get_if<MediaMpegTsUdpOutputPlan>(&output.transport);
         if (!udp || mux.transportKind !=
                          MediaOutputTransportKind::UdpDatagrams ||
+            output.scheduledBatchMaximumBytes != 0 ||
             output.emission.perDatagramOverheadBytes() != 0 ||
             *runtime.synchronization.projectMpegTsOutput
                  ->useSharedNtpEpoch ||
@@ -251,11 +253,18 @@ bool validRtpStream(
     const auto& remoteRtcp = sender.remoteRtcpEndpoint();
     auto maximumPackets = MediaTsMuxPlan::maximumPacketsPerRtpDatagram(
         rtp->maximumDatagramBytes());
+    auto expectedPacing = MediaScheduledDatagramPacingPlanner::plan(
+        sender);
     auto sdpIdentity = MediaSdpSessionIdentity::create(
         rtp->sdp().originUsername, 0, 0, rtp->sdp().sessionName,
         rtp->sdp().originAddressFamily,
         rtp->sdp().originNumericAddress, rtp->sdp().cname);
-    if (!maximumPackets || !sdpIdentity ||
+    if (!maximumPackets || !sdpIdentity || !expectedPacing ||
+        rtp->pacing() != expectedPacing.value() ||
+        output.scheduledBatchMaximumBytes == 0 ||
+        output.scheduledBatchMaximumBytes !=
+            runtime.edgePolicies.synchronizedPacket.bufferPolicy
+                .memoryBudget.maxBytes ||
         output.emission.perDatagramOverheadBytes() != 12 ||
         output.emission.maximumWireDatagramBytes() >
             rtp->maximumDatagramBytes() ||

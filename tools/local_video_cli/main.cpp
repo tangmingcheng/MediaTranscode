@@ -70,7 +70,7 @@ int runLocalVideoCli(int argc, char** argv)
                       : "off")
               << " width=" << optionalIntText(parameters.video.width)
               << " height=" << optionalIntText(parameters.video.height)
-              << " fps=" << frameRateText(parameters.video.frameRate)
+              << " output_fps=" << frameRateText(parameters.video.frameRate)
               << " bitrate_kbps=" << optionalIntText(parameters.video.bitrateKbps)
               << " rc=" << mediaRateControlModeName(parameters.video.rateControl)
               << " hw="

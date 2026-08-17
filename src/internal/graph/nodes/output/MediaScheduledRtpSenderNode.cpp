@@ -353,7 +353,8 @@ MediaScheduledRtpSenderNode::processScheduledInput(
                         return ProcessResult::success(
                             {MediaNodeProcessState::Waiting,
                              m_dependencies.authority->deadlineWait(
-                                 retryDeadline.value())});
+                                 retryDeadline.value(),
+                                 MediaNodeDeadlineWakePolicy::InputOrDeadline)});
                     }
                 } else {
                     reportFailure = report.error();
@@ -386,7 +387,9 @@ MediaScheduledRtpSenderNode::processScheduledInput(
         }
         return ProcessResult::success(
             {MediaNodeProcessState::Waiting,
-             m_dependencies.authority->deadlineWait(*nextReportDeadline)});
+             m_dependencies.authority->deadlineWait(
+                 *nextReportDeadline,
+                 MediaNodeDeadlineWakePolicy::InputOrDeadline)});
     }
     const auto* control = dynamic_cast<const MediaControlBuffer*>(
         input->get());

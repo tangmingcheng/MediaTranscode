@@ -91,7 +91,8 @@ enum class MediaNodeKind {
     ScheduledTsAccessUnitAdapter = 65,
     DemuxPacketClockBinder = 66,
     MpegTsRtpSdpPublisher = 67,
-    VideoOutputScheduler = 68
+    VideoOutputScheduler = 68,
+    ScheduledDatagramSender = 69
 };
 
 } // namespace media::ffmpeg::graph

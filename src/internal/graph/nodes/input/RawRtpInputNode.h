@@ -8,9 +8,12 @@
 #include "internal/graph/protocol/rtp/MediaRtpUdpTransport.h"
 #include "internal/graph/planner/realtime/MediaPreparedRealtimeInput.h"
 #include "internal/graph/runtime/buffer/MediaRawRtpPreparedInputBuffer.h"
+#include "internal/graph/protocol/rtp/ingress/MediaRtpIngressBatch.h"
 
 #include <deque>
+#include <cstdint>
 #include <memory>
+#include <span>
 
 namespace media::ffmpeg::graph {
 
@@ -31,10 +34,10 @@ protected:
 private:
     ::media::Status prepareReceiver(MediaGraphExecutionContext& context);
     ::media::Status processRtp(MediaGraphExecutionContext& context,
-                               MediaRtpUdpDatagram datagram,
+                               std::span<const std::uint8_t> datagram,
                                std::int64_t observedAtNs);
     ::media::Status processRtcp(MediaGraphExecutionContext& context,
-                                MediaRtpUdpDatagram datagram,
+                                std::span<const std::uint8_t> datagram,
                                 std::int64_t observedAtNs);
     ::media::Status processReordered(MediaGraphExecutionContext& context,
                                      MediaRtpReorderResult reordered,
@@ -44,11 +47,19 @@ private:
     ::media::Status queueClockTransition(MediaGraphExecutionContext& context,
                                          std::int64_t observedAtNs);
     void resetState() noexcept;
+    void logIngressBatchTelemetry() const;
     std::uint64_t nextIngressSequence() noexcept;
 
     MediaRtpUdpTransport m_transport;
     MediaPreparedRealtimeInput m_prepared;
     std::shared_ptr<MediaRawRtpPreparedInputBuffer> m_preparedReceiver;
+    std::optional<MediaRtpIngressBatch> m_runtimeIngressBatch;
+    std::size_t m_runtimeIngressBatchIndex = 0;
+    std::uint64_t m_runtimeIngressBatches = 0;
+    std::uint64_t m_runtimeIngressDatagrams = 0;
+    std::uint64_t m_runtimeIngressBytes = 0;
+    std::size_t m_runtimeIngressMaximumBatchDatagrams = 0;
+    std::size_t m_runtimeIngressMaximumBatchBytes = 0;
     std::unique_ptr<MediaRtpReorderBuffer> m_reorder;
     std::unique_ptr<MediaRtpDepacketizer> m_depacketizer;
     std::unique_ptr<MediaRtcpSenderReportTracker> m_clockTracker;

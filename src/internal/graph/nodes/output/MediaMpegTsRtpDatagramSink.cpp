@@ -171,9 +171,9 @@ void MediaMpegTsRtpDatagramSink::logContinuity(
     }
 }
 
-::media::Result<std::size_t> MediaMpegTsRtpDatagramSink::write(
+::media::Result<std::size_t> MediaMpegTsRtpDatagramSink::enqueue(
     std::span<const std::uint8_t> completeTsPackets,
-    MediaRunningTime emitOnMaster)
+    MediaRunningTime enqueueInstant)
 {
     if (m_failure) {
         return ::media::Result<std::size_t>::failure(*m_failure);
@@ -183,14 +183,14 @@ void MediaMpegTsRtpDatagramSink::logContinuity(
             "MP2T RTP sink is closed"));
         return ::media::Result<std::size_t>::failure(status.error());
     }
-    if (m_lastEmitOnMaster &&
-        emitOnMaster < *m_lastEmitOnMaster) {
+    if (m_lastEnqueueInstant &&
+        enqueueInstant < *m_lastEnqueueInstant) {
         auto status = fail(::media::ErrorInfo::invalidArgument(
-            "MP2T RTP sink emission time regressed"));
+            "MP2T RTP sink enqueue instant regressed"));
         return ::media::Result<std::size_t>::failure(status.error());
     }
     auto packet = m_packetizer.packetize(
-        completeTsPackets, emitOnMaster);
+        completeTsPackets, enqueueInstant);
     if (!packet) {
         auto status = fail(packet.error());
         return ::media::Result<std::size_t>::failure(status.error());
@@ -206,7 +206,7 @@ void MediaMpegTsRtpDatagramSink::logContinuity(
         const MediaMpegTsRtpCounterSnapshot counters{
             counterReservation.value().packetCount(),
             counterReservation.value().octetCount()};
-        auto report = dispatchSenderReport(emitOnMaster, counters);
+        auto report = dispatchSenderReport(enqueueInstant, counters);
         if (!report) {
             auto status = fail(report.error());
             return ::media::Result<std::size_t>::failure(status.error());
@@ -239,7 +239,7 @@ void MediaMpegTsRtpDatagramSink::logContinuity(
             committedCounters,
             emittedSequence);
     }
-    m_lastEmitOnMaster = emitOnMaster;
+    m_lastEnqueueInstant = enqueueInstant;
     return ::media::Result<std::size_t>::success(
         completeTsPackets.size());
 }
@@ -256,10 +256,10 @@ void MediaMpegTsRtpDatagramSink::logContinuity(
 
 ::media::Status MediaMpegTsRtpDatagramSink::sendTerminalReport()
 {
-    if (!m_lastEmitOnMaster) return ::media::Status::success();
+    if (!m_lastEnqueueInstant) return ::media::Status::success();
     const auto counters = m_continuity->counterSnapshot();
     auto timestamp = MediaRtcpSenderReportGenerator::mapTimestamp(
-        *m_lastEmitOnMaster, m_ntpEpoch,
+        *m_lastEnqueueInstant, m_ntpEpoch,
         m_packetizer.clockMapper());
     if (!timestamp) {
         return ::media::Status::failure(timestamp.error());

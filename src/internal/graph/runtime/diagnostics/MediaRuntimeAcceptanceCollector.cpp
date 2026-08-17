@@ -18,16 +18,16 @@
 namespace media::ffmpeg::graph {
 namespace {
 
-double onlineProcessorCount() noexcept
+std::size_t onlineProcessorCount() noexcept
 {
 #if defined(_WIN32)
     const DWORD count = ::GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
-    return count > 0 ? static_cast<double>(count) : 1.0;
+    return count > 0 ? static_cast<std::size_t>(count) : 1U;
 #elif defined(__linux__)
     const long count = ::sysconf(_SC_NPROCESSORS_ONLN);
-    return count > 0 ? static_cast<double>(count) : 1.0;
+    return count > 0 ? static_cast<std::size_t>(count) : 1U;
 #else
-    return 1.0;
+    return 1U;
 #endif
 }
 
@@ -51,6 +51,7 @@ public:
     {
         FILETIME idle{}, kernel{}, user{}, created{}, exited{}, processKernel{}, processUser{};
         MediaRuntimePlatformSample result;
+        result.logicalProcessorCount = onlineProcessorCount();
         if (!::GetSystemTimes(&idle, &kernel, &user)) {
             return ::media::Result<MediaRuntimePlatformSample>::failure(
                 ::media::ErrorInfo::ioFailure("GetSystemTimes failed", static_cast<int>(::GetLastError())));
@@ -69,9 +70,14 @@ public:
             }
             if (systemTotal > m_systemTotal) {
                 const double elapsed = static_cast<double>(systemTotal - m_systemTotal);
-                result.systemCpuPercent = 100.0 * (elapsed - static_cast<double>(systemIdle - m_systemIdle)) / elapsed;
-                result.processCpuPercent = 100.0 * onlineProcessorCount() *
+                result.systemMachineCpuPercent = 100.0 *
+                    (elapsed - static_cast<double>(systemIdle - m_systemIdle)) /
+                    elapsed;
+                result.processMachineCpuPercent = 100.0 *
                     static_cast<double>(processTotal - m_processTotal) / elapsed;
+                result.processSingleCoreCpuPercent =
+                    result.processMachineCpuPercent *
+                    static_cast<double>(result.logicalProcessorCount);
                 result.cpuValid = true;
             }
         }
@@ -209,6 +215,7 @@ struct LinuxCpuCounters final {
             ::media::ErrorInfo::ioFailure("open /proc/self/status failed", errno));
     }
     MediaRuntimePlatformSample result;
+    result.logicalProcessorCount = onlineProcessorCount();
     bool foundMemory = false;
     bool foundThreads = false;
     char line[512]{};
@@ -264,12 +271,15 @@ public:
             const std::uint64_t totalDelta = counters.value().total - m_previous.total;
             if (totalDelta > 0) {
                 const std::uint64_t idleDelta = counters.value().idle - m_previous.idle;
-                result.systemCpuPercent = 100.0 *
+                result.systemMachineCpuPercent = 100.0 *
                     static_cast<double>(totalDelta - idleDelta) /
                     static_cast<double>(totalDelta);
-                result.processCpuPercent = 100.0 * onlineProcessorCount() *
+                result.processMachineCpuPercent = 100.0 *
                     static_cast<double>(counters.value().process - m_previous.process) /
                     static_cast<double>(totalDelta);
+                result.processSingleCoreCpuPercent =
+                    result.processMachineCpuPercent *
+                    static_cast<double>(result.logicalProcessorCount);
                 result.cpuValid = true;
             }
         }
@@ -333,11 +343,26 @@ MediaRuntimeAcceptanceCollector::MediaRuntimeAcceptanceCollector(
     if (platform.cpuValid) {
         const double count = static_cast<double>(m_metrics.cpuSampleCount);
         ++m_metrics.cpuSampleCount;
-        m_metrics.averageCpuPercent = (m_metrics.averageCpuPercent * count + platform.systemCpuPercent) / (count + 1.0);
-        m_metrics.averageProcessCpuPercent = (m_metrics.averageProcessCpuPercent * count + platform.processCpuPercent) / (count + 1.0);
-        m_metrics.peakProcessCpuPercent = (std::max)(
-            m_metrics.peakProcessCpuPercent, platform.processCpuPercent);
+        m_metrics.averageSystemMachineCpuPercent =
+            (m_metrics.averageSystemMachineCpuPercent * count +
+             platform.systemMachineCpuPercent) /
+            (count + 1.0);
+        m_metrics.averageProcessMachineCpuPercent =
+            (m_metrics.averageProcessMachineCpuPercent * count +
+             platform.processMachineCpuPercent) /
+            (count + 1.0);
+        m_metrics.peakProcessMachineCpuPercent = (std::max)(
+            m_metrics.peakProcessMachineCpuPercent,
+            platform.processMachineCpuPercent);
+        m_metrics.averageProcessSingleCoreCpuPercent =
+            (m_metrics.averageProcessSingleCoreCpuPercent * count +
+             platform.processSingleCoreCpuPercent) /
+            (count + 1.0);
+        m_metrics.peakProcessSingleCoreCpuPercent = (std::max)(
+            m_metrics.peakProcessSingleCoreCpuPercent,
+            platform.processSingleCoreCpuPercent);
     }
+    m_metrics.logicalProcessorCount = platform.logicalProcessorCount;
     m_metrics.processThreadCount = platform.threadCount;
     if (m_metrics.initialWorkingSetBytes == 0) {
         m_metrics.initialWorkingSetBytes = platform.workingSetBytes;

@@ -54,7 +54,8 @@ MediaTsDatagramEmissionPlan::create(
                       *audioAccessUnitCadence, fairServiceWindow))
                 : std::nullopt,
             mux.packetSize,
-            maximumPayloadBytes, perDatagramOverheadBytes));
+            maximumPayloadBytes, perDatagramOverheadBytes,
+            mux.transportKind == MediaOutputTransportKind::RtpAvp));
 }
 
 MediaTsDatagramEmissionPlan::MediaTsDatagramEmissionPlan(
@@ -63,13 +64,15 @@ MediaTsDatagramEmissionPlan::MediaTsDatagramEmissionPlan(
     std::optional<MediaRunningTime> audioInitialServiceWindow,
     std::size_t packetSizeBytes,
     std::size_t maximumPayloadBytes,
-    std::size_t perDatagramOverheadBytes) noexcept
+    std::size_t perDatagramOverheadBytes,
+    bool scheduledDatagramOutput) noexcept
     : m_accessUnitWindow(accessUnitWindow)
     , m_videoInitialServiceWindow(videoInitialServiceWindow)
     , m_audioInitialServiceWindow(std::move(audioInitialServiceWindow))
     , m_packetSizeBytes(packetSizeBytes)
     , m_maximumPayloadBytes(maximumPayloadBytes)
     , m_perDatagramOverheadBytes(perDatagramOverheadBytes)
+    , m_scheduledDatagramOutput(scheduledDatagramOutput)
 {
 }
 
@@ -98,6 +101,11 @@ std::size_t
 MediaTsDatagramEmissionPlan::maximumWireDatagramBytes() const noexcept
 {
     return m_maximumPayloadBytes + m_perDatagramOverheadBytes;
+}
+
+bool MediaTsDatagramEmissionPlan::usesScheduledDatagramOutput() const noexcept
+{
+    return m_scheduledDatagramOutput;
 }
 
 MediaRunningTime

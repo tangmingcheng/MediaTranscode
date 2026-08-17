@@ -31,7 +31,8 @@ The runtime cannot choose a policy or fall back to another pacing mode.
 ## Access-unit Scheduling
 
 `MediaTsMuxSession` materializes one access unit as a TS packet cursor before
-scheduling it. `MediaTsDatagramEmissionSchedule` then receives:
+scheduling it. It produces one bounded `ScheduledDatagramBatch` DAG payload;
+it never owns a socket. `MediaTsDatagramEmissionSchedule` receives:
 
 - the exact materialized TS payload byte count;
 - the stream identity and its observed canonical emit cadence;
@@ -42,33 +43,43 @@ The schedule computes the observed wire rate for the current stream, combines
 it with the last committed observation of the other stream, and selects at
 least the rate required to finish the current cursor inside its remaining
 canonical access-unit window. There is no fixed headroom or burst constant.
-Every datagram receives a fixed master-time deadline; the final datagram must
-remain within `dispatchOnMaster` or the session fails closed.
+Every media datagram receives an enqueue-not-before time and enqueue deadline;
+the final datagram must remain within `dispatchOnMaster` or planning fails
+closed before the batch is published. PAT, PMT, and
+PCR retain their planner-derived maintenance window when a bounded media cursor
+is active. A delayed maintenance write uses its sampled master-time emission,
+never a past planned deadline, so the transport timestamp cannot regress.
 
-Only a fully emitted access unit commits its stream observation and next
-available service time. Prepared datagrams are RAII transactions, so a failed
-or cancelled write cannot advance schedule state. PAT, PMT, and PCR use their
+Only a fully materialized access unit commits its stream observation and next
+planned service time. Prepared datagrams are RAII transactions, so a failed
+batch publication cannot advance schedule state. PAT, PMT, and PCR use their
 existing canonical deadlines plus the planner-owned access-unit window and
-never create a second media-time authority. The runtime master clock is sampled
-again after every successful transport write; this post-write fact, rather
-than the planned release time, commits debt/lateness and the next service time.
+never create a second media-time authority.
 
 ## Ownership and Backpressure
 
 The mux retains at most one packet cursor, prepared clock transaction, and
-datagram transaction. It does not copy the encoded payload into another queue.
-While a cursor is pending, the adapter polls its next deadline before accepting
-another access unit, preserving bounded graph backpressure.
+unpublished batch. The planner builds a blocking, bounded batch edge; the mux
+does not accept another access unit while publication is blocked.
 
-UDP and MP2T/RTP use the same schedule. Sinks only serialize/send the supplied
-datagram and report success, short write, or socket pressure. They never sleep,
-estimate media rate, or alter deadlines. Stop and abort destroy retained RAII
-state without waiting on an uninterruptible pacing sleep.
+UDP and MP2T/RTP use the same schedule. For MP2T/RTP, a dedicated scheduled
+datagram sender node consumes the typed batch and reuses the existing RTP
+transport, MP2T packetizer, RTCP schedule, and continuity state. Its private
+interruptible deadline executor sends each datagram separately; the DAG never
+wakes the mux worker once per datagram and never combines datagrams into a
+burst. Platform code is limited to the deadline-wait adapter.
+
+The sender samples time after `send()` returns and records this only as
+`actual_enqueue`. A successful UDP send is not wire-completion evidence. A
+transport may report actual wire completion only when a platform adapter
+provides an authoritative transmit timestamp; otherwise no diagnostic or
+validator claims wire completion. Stop and abort interrupt the sender's wait
+and destroy retained RAII state.
 
 ## Diagnostics and Failure Semantics
 
 Diagnostics are based on runtime facts and report datagrams, wire bytes,
-immediate/deferred deadlines, cumulative planned wait, actual lateness,
+immediate/deferred deadlines, cumulative planned wait, enqueue lateness,
 pending/peak bytes, pressure failures, access-unit count, current/maximum
 scheduling debt, selected/maximum wire rate, and the final exit reason.
 

@@ -185,7 +185,8 @@ namespace {
     }
     MediaRtpReorderBuffer reorder(MediaRtpReorderConfig{
         plan.reorderWindowPackets,
-        std::chrono::milliseconds(plan.maximumReorderDelayMs),
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::milliseconds(plan.maximumReorderDelayMs)),
         video.identity.payloadType});
     std::deque<MediaPreparedRawRtpDatagram> buffered;
     std::size_t bufferedBytes = 0;
@@ -304,6 +305,7 @@ namespace {
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
                     observedAt.time_since_epoch()).count();
             bool retainDatagram = true;
+            std::optional<std::uint16_t> observedSequenceNumber;
             if (datagram.channel == MediaRtpUdpChannel::Rtp) {
                 auto packet = MediaRtpPacketParser::parse(datagram.bytes);
                 if (!packet) {
@@ -317,13 +319,7 @@ namespace {
                             video.identity.payloadType,
                             packet.value().payloadType));
                 }
-                if (auto status = videoIngressObservation->observe(
-                        datagram.bytes.size(),
-                        packet.value().sequenceNumber,
-                        observedAtNs); !status) {
-                    return ::media::Result<MediaPreparedRawRtpProbe>::failure(
-                        status.error());
-                }
+                observedSequenceNumber = packet.value().sequenceNumber;
                 if (!firstMatchingPacketAt) firstMatchingPacketAt = observedAt;
                 auto reordered = reorder.push(
                     std::move(packet).value(), observedAt);
@@ -372,6 +368,12 @@ namespace {
                     }
                     retainDatagram = belongs.value();
                 }
+            }
+            if (auto status = videoIngressObservation->observeDatagram(
+                    datagram.bytes.size(), observedSequenceNumber,
+                    observedAtNs); !status) {
+                return ::media::Result<MediaPreparedRawRtpProbe>::failure(
+                    status.error());
             }
             if (retainDatagram) {
                 bufferedBytes += datagram.bytes.size();

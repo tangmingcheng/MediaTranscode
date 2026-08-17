@@ -23,6 +23,7 @@ public:
     std::size_t maximumPayloadBytes() const noexcept;
     std::size_t perDatagramOverheadBytes() const noexcept;
     std::size_t maximumWireDatagramBytes() const noexcept;
+    bool usesScheduledDatagramOutput() const noexcept;
     MediaRunningTime videoInitialServiceWindow() const noexcept;
     const std::optional<MediaRunningTime>&
     audioInitialServiceWindow() const noexcept;
@@ -37,7 +38,8 @@ private:
         std::optional<MediaRunningTime> audioInitialServiceWindow,
         std::size_t packetSizeBytes,
         std::size_t maximumPayloadBytes,
-        std::size_t perDatagramOverheadBytes) noexcept;
+        std::size_t perDatagramOverheadBytes,
+        bool scheduledDatagramOutput) noexcept;
 
     MediaRunningTime m_accessUnitWindow;
     MediaRunningTime m_videoInitialServiceWindow;
@@ -45,6 +47,7 @@ private:
     std::size_t m_packetSizeBytes;
     std::size_t m_maximumPayloadBytes;
     std::size_t m_perDatagramOverheadBytes;
+    bool m_scheduledDatagramOutput;
 };
 
 } // namespace media::ffmpeg::graph

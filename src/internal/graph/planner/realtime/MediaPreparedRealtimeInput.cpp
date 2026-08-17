@@ -153,6 +153,38 @@ MediaPreparedRealtimeInput::rawRtpIngressObservation()
     return m_rawRtpBuffer->ingressObservation();
 }
 
+::media::Result<std::size_t>
+MediaPreparedRealtimeInput::rawRtpPreparedByteCapacity() const
+{
+    if (!m_rawRtpBuffer) {
+        return ::media::Result<std::size_t>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "raw RTP prepared byte capacity requires a prepared raw RTP input"));
+    }
+    return m_rawRtpBuffer->preparedByteCapacity();
+}
+
+::media::Result<std::size_t>
+MediaPreparedRealtimeInput::rawRtpEffectiveSocketReceivePayloadBytes() const
+{
+    if (!m_rawRtpBuffer) {
+        return ::media::Result<std::size_t>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "raw RTP socket capacity requires a prepared raw RTP input"));
+    }
+    return m_rawRtpBuffer->effectiveSocketReceivePayloadBytes();
+}
+
+::media::Status MediaPreparedRealtimeInput::configureRawRtpRuntimeIngress(
+    const MediaRtpIngressPlan& plan)
+{
+    if (!m_rawRtpBuffer) {
+        return ::media::Status::failure(::media::ErrorInfo::invalidArgument(
+            "raw RTP runtime ingress requires a prepared raw RTP input"));
+    }
+    return m_rawRtpBuffer->configureRuntimeIngress(plan);
+}
+
 ::media::Status MediaPreparedRealtimeInput::sealRawRtpPreflight()
 {
     if (!m_rawRtpBuffer) {

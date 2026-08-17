@@ -40,11 +40,13 @@ struct MediaRawRtpProbePlan final {
 
 struct MediaPreparedRawRtpVideoOnlyProbe final {
     MediaDetectedRtpVideoSignaling signaling;
+    MediaRational sourceFrameRate;
     MediaPreparedRealtimeInput video;
 };
 
 struct MediaPreparedRawRtpAudioVideoProbe final {
     MediaDetectedRtpVideoSignaling signaling;
+    MediaRational sourceFrameRate;
     MediaPreparedRealtimeInput video;
     MediaPreparedRealtimeInput audio;
 };

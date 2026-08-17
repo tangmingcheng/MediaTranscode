@@ -23,7 +23,8 @@ public:
         const MediaRtpIngressPlan& plan,
         std::unique_ptr<MediaRtpIngressAdapter> adapter);
 
-    ::media::Result<MediaRtpIngressBatch> receiveNext();
+    ::media::Result<MediaRtpIngressBatch> receiveNext(
+        int timeoutMilliseconds);
     ::media::Status interruptReceive() noexcept;
     ::media::Status stop() noexcept;
     ::media::Status abort() noexcept;

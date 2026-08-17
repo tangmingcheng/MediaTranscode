@@ -139,8 +139,20 @@ namespace media::ffmpeg::graph {
                runtime.synchronization.audioServo.frequencyFilterTimeConstantNs) {
         return invalid("packet copy contains audio correction facts");
     }
-    if (runtime.edgePolicies !=
-        MediaRealtimeEdgePolicyPlanner::plan(runtime.queues)) {
+    const auto videoBytes =
+        runtime.synchronization.startup.videoByteCapacity;
+    const auto audioBytes =
+        runtime.synchronization.startup.audioByteCapacity;
+    if (!videoBytes || !audioBytes || *videoBytes == 0 || *audioBytes == 0 ||
+        *videoBytes > (std::numeric_limits<std::uint64_t>::max)() -
+                          *audioBytes) {
+        return invalid("edge-policy byte facts");
+    }
+    auto expectedEdges = MediaRealtimeEdgePolicyPlanner::
+        planWithSynchronizedPacketMemoryBudget(
+            runtime.queues, *videoBytes + *audioBytes,
+            runtime.queues.packet);
+    if (!expectedEdges || runtime.edgePolicies != expectedEdges.value()) {
         return invalid("edge-policy product");
     }
     if (runtime.threadingPolicy.mode != MediaThreadingMode::PerNodeWorker ||

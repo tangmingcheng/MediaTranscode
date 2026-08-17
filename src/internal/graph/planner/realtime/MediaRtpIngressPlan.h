@@ -8,6 +8,22 @@
 
 namespace media::ffmpeg::graph {
 
+struct MediaRtpIngressPlanFacts final {
+    MediaRtpIngressAdapterKind adapterKind;
+    std::size_t socketReceiveCapacityBytes;
+    std::size_t maximumDatagramBytes;
+    std::size_t batchByteCapacity;
+    std::size_t descriptorCapacity;
+    std::size_t requiredBufferAlignmentBytes;
+    std::size_t reorderWindowPackets;
+    std::int64_t maximumReorderDelayNanoseconds;
+    MediaRtpIngressStorageOwnership storageOwnership;
+    MediaRtpIngressCancellationContract cancellationContract;
+    MediaRtpIngressCompletionEvidence completionEvidence;
+
+    bool operator==(const MediaRtpIngressPlanFacts&) const noexcept = default;
+};
+
 class MediaRtpIngressPlan final {
 public:
     MediaRtpIngressPlan() = delete;
@@ -16,6 +32,8 @@ public:
         const MediaRtpIngressCapability& capability,
         const MediaRtpIngressObservation& observation,
         std::size_t preparedInputByteBudget);
+    static ::media::Result<MediaRtpIngressPlan> fromFacts(
+        MediaRtpIngressPlanFacts facts);
 
     MediaRtpIngressAdapterKind adapterKind() const noexcept;
     std::size_t socketReceiveCapacityBytes() const noexcept;
@@ -28,6 +46,8 @@ public:
     MediaRtpIngressStorageOwnership storageOwnership() const noexcept;
     MediaRtpIngressCancellationContract cancellationContract() const noexcept;
     MediaRtpIngressCompletionEvidence completionEvidence() const noexcept;
+    MediaRtpIngressPlanFacts facts() const noexcept;
+    bool sameProduct(const MediaRtpIngressPlan& other) const noexcept;
     ::media::Status validateProduct() const;
 
 private:
@@ -38,6 +58,7 @@ private:
         std::size_t descriptorCapacity,
         std::size_t reorderWindowPackets,
         std::int64_t maximumReorderDelayNanoseconds) noexcept;
+    explicit MediaRtpIngressPlan(MediaRtpIngressPlanFacts facts) noexcept;
 
     MediaRtpIngressAdapterKind m_adapterKind;
     std::size_t m_socketReceiveCapacityBytes;

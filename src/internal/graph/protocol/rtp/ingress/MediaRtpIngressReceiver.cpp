@@ -53,8 +53,13 @@ MediaRtpIngressReceiver::MediaRtpIngressReceiver(
 }
 
 ::media::Result<MediaRtpIngressBatch>
-MediaRtpIngressReceiver::receiveNext()
+MediaRtpIngressReceiver::receiveNext(int timeoutMilliseconds)
 {
+    if (timeoutMilliseconds <= 0) {
+        return ::media::Result<MediaRtpIngressBatch>::failure(
+            invalidReceiver(
+                "RTP ingress receiver requires a positive planner-bounded timeout"));
+    }
     if (!m_adapter) {
         return ::media::Result<MediaRtpIngressBatch>::failure(
             unavailableAdapter());
@@ -63,7 +68,7 @@ MediaRtpIngressReceiver::receiveNext()
         return ::media::Result<MediaRtpIngressBatch>::failure(
             status.error());
     }
-    auto received = m_adapter->receive(m_storage);
+    auto received = m_adapter->receive(m_storage, timeoutMilliseconds);
     if (!received) {
         if (m_storage.committedEntries() != 0) {
             return ::media::Result<MediaRtpIngressBatch>::failure(

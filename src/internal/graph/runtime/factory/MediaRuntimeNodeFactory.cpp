@@ -32,6 +32,7 @@
 #include "internal/graph/nodes/output/MediaRtpSdpPublisherNode.h"
 #include "internal/graph/nodes/output/MediaMpegTsRtpSdpPublisherNode.h"
 #include "internal/graph/nodes/output/MediaScheduledRtpSenderNode.h"
+#include "internal/graph/nodes/output/MediaScheduledDatagramSenderNode.h"
 #include "internal/graph/nodes/output/MediaScheduledRtpSenderNodePlanCodec.h"
 #include "internal/graph/nodes/output/MediaProjectMpegTsPlanSourceNode.h"
 #include "internal/graph/nodes/output/MediaProjectMpegTsPlanSourceNodePlanCodec.h"
@@ -297,9 +298,20 @@ template <typename Node>
             if (!binding || binding->nodeId != node.id ||
                 binding->expectedKind != MediaPreparedRealtimeInputKind::RawRtp ||
                 !binding->prepared.valid()) {
+                const bool nodeMatches = binding && binding->nodeId == node.id;
+                const bool kindMatches = binding &&
+                    binding->expectedKind ==
+                        MediaPreparedRealtimeInputKind::RawRtp;
+                const bool preparedValid = binding &&
+                    binding->prepared.valid();
                 return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
                     ::media::ErrorInfo::notInitialized(
-                        "RawRtpInput runtime requires exact prepared raw RTP binding"));
+                        "RawRtpInput runtime requires exact prepared raw RTP binding; node=" +
+                        std::to_string(node.id.value) +
+                        " binding_present=" + (binding ? "1" : "0") +
+                        " node_matches=" + (nodeMatches ? "1" : "0") +
+                        " kind_matches=" + (kindMatches ? "1" : "0") +
+                        " prepared_valid=" + (preparedValid ? "1" : "0")));
             }
             return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
                 std::make_unique<RawRtpInputNode>(
@@ -613,6 +625,35 @@ template <typename Node>
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
             ::media::ErrorInfo::notInitialized(
                 "Scheduled RTP sender requires compiler-injected output authority"));
+    case MediaNodeKind::ScheduledDatagramSender:
+    {
+        auto session = requiredNodeOption(
+            &node.options, "MediaScheduledDatagramSenderNode",
+            "scheduled_datagram_sender.session");
+        auto streamSet = requiredNodeOption(
+            &node.options, "MediaScheduledDatagramSenderNode",
+            "scheduled_datagram_sender.stream_set");
+        if (!session || !streamSet) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                session ? streamSet.error() : session.error());
+        }
+        auto decoded = MediaTranscodeStreamSetCodec::decode(streamSet.value());
+        MediaProtocolOutputSessionKey sessionKey(std::move(session).value());
+        if (!decoded || !protocolOutputAuthority || !sessionKey.valid()) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                ::media::ErrorInfo::notInitialized(
+                    "scheduled datagram sender requires decoded output authority"));
+        }
+        auto created = MediaScheduledDatagramSenderNode::create(
+            node.id, std::move(sessionKey), decoded.value(),
+            protocolOutputAuthority);
+        if (!created) {
+            return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
+                created.error());
+        }
+        return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::success(
+            std::move(created).value());
+    }
     case MediaNodeKind::MpegTsRtpSdpPublisher:
         return ::media::Result<std::unique_ptr<MediaRuntimeNode>>::failure(
             ::media::ErrorInfo::notInitialized(
@@ -1021,6 +1062,7 @@ bool MediaRuntimeNodeFactory::supported(MediaNodeKind kind) noexcept
     case MediaNodeKind::RtpOutput:
     case MediaNodeKind::SdpWriter:
     case MediaNodeKind::ScheduledRtpSender:
+    case MediaNodeKind::ScheduledDatagramSender:
     case MediaNodeKind::RtpSdpPublisher:
     case MediaNodeKind::MpegTsRtpSdpPublisher:
     case MediaNodeKind::EofBarrier:
