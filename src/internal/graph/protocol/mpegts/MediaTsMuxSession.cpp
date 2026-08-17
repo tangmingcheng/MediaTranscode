@@ -1,7 +1,7 @@
 #include "internal/graph/protocol/mpegts/MediaTsMuxSession.h"
 
 #include "internal/graph/protocol/mpegts/MediaTsAacAdtsFramer.h"
-#include "internal/graph/protocol/mpegts/MediaTsH264AccessUnitFramer.h"
+#include "internal/graph/protocol/mpegts/MediaTsVideoAccessUnitFramer.h"
 #include "internal/graph/protocol/mpegts/MediaTsPesSerializer.h"
 #include "internal/graph/protocol/mpegts/MediaTsPsiSerializer.h"
 #include "internal/graph/protocol/mpegts/MediaTsTransportEmissionOrigin.h"
@@ -728,7 +728,7 @@ MediaTsMuxSession::writeAccessUnit(
                 return ::media::Result<std::span<const std::uint8_t>>::failure(
                     invalid("MPEG-TS video materialization is absent"));
             }
-            return MediaTsH264AccessUnitFramer::frame(
+            return MediaTsVideoAccessUnitFramer::frame(
                 m_plan, *video, unit.payload, unit.randomAccess,
                 m_videoFramingWorkspace);
             }

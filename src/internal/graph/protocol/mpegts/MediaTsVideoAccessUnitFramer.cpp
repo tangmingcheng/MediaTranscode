@@ -1,4 +1,4 @@
-#include "internal/graph/protocol/mpegts/MediaTsH264AccessUnitFramer.h"
+#include "internal/graph/protocol/mpegts/MediaTsVideoAccessUnitFramer.h"
 
 #include "internal/graph/protocol/codec/MediaAnnexBAccessUnitValidator.h"
 
@@ -8,21 +8,41 @@
 namespace media::ffmpeg::graph {
 namespace {
 
-::media::Result<std::span<const std::uint8_t>> invalid(const char* message)
+using FramedResult = ::media::Result<std::span<const std::uint8_t>>;
+
+FramedResult invalid(const char* message)
 {
-    return ::media::Result<std::span<const std::uint8_t>>::failure(
+    return FramedResult::failure(
         ::media::ErrorInfo::invalidArgument(message));
 }
 
-bool checkedAdd(std::size_t left, std::size_t right, std::size_t& output) noexcept
+bool checkedAdd(std::size_t left,
+                std::size_t right,
+                std::size_t& output) noexcept
 {
     if (right > std::numeric_limits<std::size_t>::max() - left) return false;
     output = left + right;
     return true;
 }
 
-::media::Result<std::size_t> convertedSize(std::span<const std::uint8_t> payload,
-                                           std::uint8_t lengthBytes)
+bool validNalHeader(std::span<const std::uint8_t> nal,
+                    MediaTsVideoCodec codec) noexcept
+{
+    if (codec == MediaTsVideoCodec::H264) {
+        if (nal.empty()) return false;
+        const std::uint8_t type = nal[0] & 0x1F;
+        return (nal[0] & 0x80) == 0 && type != 0 && type <= 23;
+    }
+    if (nal.size() < 2) return false;
+    const std::uint8_t type = (nal[0] >> 1) & 0x3F;
+    return (nal[0] & 0x80) == 0 && type <= 47 &&
+        (nal[1] & 0x07) != 0;
+}
+
+::media::Result<std::size_t> convertedSize(
+    std::span<const std::uint8_t> payload,
+    std::uint8_t lengthBytes,
+    MediaTsVideoCodec codec)
 {
     std::size_t offset = 0;
     std::size_t outputSize = 0;
@@ -30,35 +50,31 @@ bool checkedAdd(std::size_t left, std::size_t right, std::size_t& output) noexce
         if (payload.size() - offset < lengthBytes) {
             return ::media::Result<std::size_t>::failure(
                 ::media::ErrorInfo::invalidArgument(
-                    "MPEG-TS H.264 NAL length field is truncated"));
+                    "MPEG-TS video NAL length field is truncated"));
         }
         std::size_t nalSize = 0;
         for (std::size_t index = 0; index < lengthBytes; ++index) {
             nalSize = (nalSize << 8) | payload[offset + index];
         }
         offset += lengthBytes;
-        if (nalSize == 0 || nalSize > payload.size() - offset) {
+        if (nalSize == 0 || nalSize > payload.size() - offset ||
+            !validNalHeader(payload.subspan(offset, nalSize), codec)) {
             return ::media::Result<std::size_t>::failure(
                 ::media::ErrorInfo::invalidArgument(
-                    "MPEG-TS H.264 NAL length is invalid"));
-        }
-        if ((payload[offset] & 0x80) != 0) {
-            return ::media::Result<std::size_t>::failure(
-                ::media::ErrorInfo::invalidArgument(
-                    "MPEG-TS H.264 NAL forbidden_zero_bit is set"));
+                    "MPEG-TS video NAL length or header is invalid"));
         }
         if (!checkedAdd(outputSize, 4, outputSize) ||
             !checkedAdd(outputSize, nalSize, outputSize)) {
             return ::media::Result<std::size_t>::failure(
                 ::media::ErrorInfo::invalidArgument(
-                    "MPEG-TS H.264 converted size overflows"));
+                    "MPEG-TS video converted size overflows"));
         }
         offset += nalSize;
     }
     if (outputSize == 0) {
         return ::media::Result<std::size_t>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "MPEG-TS H.264 access unit is empty"));
+                "MPEG-TS video access unit is empty"));
     }
     return ::media::Result<std::size_t>::success(outputSize);
 }
@@ -86,10 +102,22 @@ void writeConverted(std::span<const std::uint8_t> payload,
     }
 }
 
+std::size_t writeParameterSets(
+    const MediaTsMaterializedVideoConfig& config,
+    std::span<std::uint8_t> output)
+{
+    std::size_t offset = 0;
+    for (const auto& parameterSet : config.parameterSetsAnnexB()) {
+        std::copy(parameterSet.begin(), parameterSet.end(),
+                  output.begin() + offset);
+        offset += parameterSet.size();
+    }
+    return offset;
+}
+
 } // namespace
 
-::media::Result<std::span<const std::uint8_t>>
-MediaTsH264AccessUnitFramer::frame(
+FramedResult MediaTsVideoAccessUnitFramer::frame(
     const MediaTsMuxPlan& plan,
     const MediaTsMaterializedVideoConfig& config,
     std::span<const std::uint8_t> payload,
@@ -97,11 +125,10 @@ MediaTsH264AccessUnitFramer::frame(
     std::vector<std::uint8_t>& workspace)
 {
     const auto& parameters = plan.parameters();
-    if (config.contract() != parameters.video ||
-        config.contract().codec() != MediaTsVideoCodec::H264) {
-        return invalid("MPEG-TS H.264 materialized config mismatches the plan");
+    if (config.contract() != parameters.video) {
+        return invalid("MPEG-TS materialized video config mismatches the plan");
     }
-    if (payload.empty()) return invalid("MPEG-TS H.264 access unit is empty");
+    if (payload.empty()) return invalid("MPEG-TS video access unit is empty");
 
     const bool inject = randomAccess &&
         parameters.parameterSetPolicy ==
@@ -111,54 +138,54 @@ MediaTsH264AccessUnitFramer::frame(
         for (const auto& parameterSet : config.parameterSetsAnnexB()) {
             if (!checkedAdd(
                     injectionSize, parameterSet.size(), injectionSize)) {
-                return invalid("MPEG-TS H.264 parameter-set size overflows");
+                return invalid("MPEG-TS video parameter-set size overflows");
             }
         }
     }
 
     if (parameters.video.layout() == MediaTsNalLayout::AnnexB) {
-        auto valid = MediaAnnexBAccessUnitValidator::validate(
-            payload, MediaAnnexBCodec::H264);
-        if (!valid) return invalid("MPEG-TS H.264 Annex-B access unit is malformed");
+        const auto validatorCodec =
+            parameters.video.codec() == MediaTsVideoCodec::H264
+                ? MediaAnnexBCodec::H264 : MediaAnnexBCodec::Hevc;
+        if (!MediaAnnexBAccessUnitValidator::validate(
+                payload, validatorCodec)) {
+            return invalid("MPEG-TS Annex-B video access unit is malformed");
+        }
         if (!inject) {
             workspace.clear();
-            return ::media::Result<std::span<const std::uint8_t>>::success(payload);
+            return FramedResult::success(payload);
         }
         std::size_t totalSize = 0;
         if (!checkedAdd(injectionSize, payload.size(), totalSize)) {
-            return invalid("MPEG-TS H.264 framed size overflows");
+            return invalid("MPEG-TS framed video size overflows");
         }
         workspace.resize(totalSize);
-        auto iterator = workspace.begin();
-        for (const auto& parameterSet : config.parameterSetsAnnexB()) {
-            iterator = std::copy(
-                parameterSet.begin(), parameterSet.end(), iterator);
-        }
-        std::copy(payload.begin(), payload.end(), iterator);
-        return ::media::Result<std::span<const std::uint8_t>>::success(workspace);
+        const std::size_t offset = writeParameterSets(config, workspace);
+        std::copy(payload.begin(), payload.end(), workspace.begin() + offset);
+        return FramedResult::success(workspace);
     }
     if (parameters.video.layout() != MediaTsNalLayout::LengthPrefixed) {
-        return invalid("MPEG-TS H.264 input layout is invalid");
+        return invalid("MPEG-TS video input layout is invalid");
     }
 
     auto converted = convertedSize(
-        payload, parameters.video.nalLengthBytes());
-    if (!converted) return invalid("MPEG-TS H.264 length-prefixed access unit is malformed");
+        payload, parameters.video.nalLengthBytes(),
+        parameters.video.codec());
+    if (!converted) {
+        return invalid("MPEG-TS length-prefixed video access unit is malformed");
+    }
     std::size_t totalSize = 0;
     if (!checkedAdd(injectionSize, converted.value(), totalSize)) {
-        return invalid("MPEG-TS H.264 framed size overflows");
+        return invalid("MPEG-TS framed video size overflows");
     }
     workspace.resize(totalSize);
-    auto iterator = workspace.begin();
     if (inject) {
-        for (const auto& parameterSet : config.parameterSetsAnnexB()) {
-            iterator = std::copy(
-                parameterSet.begin(), parameterSet.end(), iterator);
-        }
+        writeParameterSets(config, workspace);
     }
-    writeConverted(payload, parameters.video.nalLengthBytes(),
-                   std::span<std::uint8_t>(workspace).subspan(injectionSize));
-    return ::media::Result<std::span<const std::uint8_t>>::success(workspace);
+    writeConverted(
+        payload, parameters.video.nalLengthBytes(),
+        std::span<std::uint8_t>(workspace).subspan(injectionSize));
+    return FramedResult::success(workspace);
 }
 
 } // namespace media::ffmpeg::graph
