@@ -194,7 +194,7 @@ Expected: current generic builder does not map RKMPP `rc_mode`, and private opti
 
 - [ ] **Step 3: Implement named-option capability and strict mode contracts**
 
-Enumerate the encoder private AVOptions and resolve `CBR`/`VBR` by name; never embed their numeric values. Apply with `av_opt_set`, check every return code, and read back the selected value. CBR requires target=min=max bitrate and explicit buffer size; VBR requires target and max bitrate with planner-validated relationships. CRF on RKMPP fails during capability planning.
+Enumerate the encoder private AVOptions and resolve `CBR`/`VBR` by name; never embed their numeric values. Apply with `av_opt_set`, check every return code, and read back the selected value. CBR caller input requires target bitrate and explicit buffer size; the planner derives target=min=max and rejects conflicting optional bounds. VBR requires explicit minimum, target, and maximum bitrate facts with planner-validated relationships. CRF on RKMPP fails during capability planning.
 
 - [ ] **Step 4: Add runtime evidence without hot-path work**
 

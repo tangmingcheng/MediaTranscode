@@ -35,6 +35,13 @@ mode. RKMPP capability materialization maps CBR and VBR to the encoder's
 advertised `rc_mode` values. Missing or conflicting facts fail during planning
 or codec-context construction without fallback.
 
+The caller supplies only directly known policy facts. CBR requires target
+bitrate and buffer size; the planner derives the encoder contract
+`minimum=maximum=target`. Any optional caller-supplied CBR bound is accepted
+only when it agrees with the target and therefore cannot alter the CBR contract.
+VBR requires explicit minimum, target, and maximum bitrate facts, with the
+planner validating `minimum <= target <= maximum`.
+
 ## Runtime
 
 The FFmpeg codec-parameter materializer validates that the configured codec

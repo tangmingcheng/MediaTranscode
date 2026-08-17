@@ -99,28 +99,43 @@ MediaEncoderRateControlPlanner::plan(
                 "MediaEncoderRateControlPlanner requires minimum bitrate <= maximum bitrate"));
     }
     if (request.mode == MediaRateControlMode::Cbr &&
-        (!request.targetBitrateKbps || !request.minimumBitrateKbps ||
-         !request.maximumBitrateKbps || !request.bufferSizeKbits)) {
+        (!request.targetBitrateKbps || !request.bufferSizeKbits)) {
         return ::media::Result<MediaEncoderRateControlPlan>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "CBR requires target, minimum, maximum, and buffer-size facts"));
+                "CBR requires target bitrate and buffer-size facts"));
     }
     if (request.mode == MediaRateControlMode::Cbr &&
-        (*request.targetBitrateKbps != *request.minimumBitrateKbps ||
-         *request.targetBitrateKbps != *request.maximumBitrateKbps)) {
+        ((request.minimumBitrateKbps &&
+             *request.targetBitrateKbps != *request.minimumBitrateKbps) ||
+         (request.maximumBitrateKbps &&
+             *request.targetBitrateKbps != *request.maximumBitrateKbps))) {
         return ::media::Result<MediaEncoderRateControlPlan>::failure(
             ::media::ErrorInfo::invalidArgument(
-                "CBR requires target, minimum, and maximum bitrate to be equal"));
+                "CBR minimum or maximum bitrate conflicts with target bitrate"));
     }
-    if (request.mode == MediaRateControlMode::Vbr && !request.targetBitrateKbps) {
+    if (request.mode == MediaRateControlMode::Vbr &&
+        (!request.targetBitrateKbps || !request.minimumBitrateKbps ||
+         !request.maximumBitrateKbps)) {
         return ::media::Result<MediaEncoderRateControlPlan>::failure(
-            ::media::ErrorInfo::invalidArgument("VBR requires a target bitrate fact"));
+            ::media::ErrorInfo::invalidArgument(
+                "VBR requires target, minimum, and maximum bitrate facts"));
+    }
+    if (request.mode == MediaRateControlMode::Vbr &&
+        (*request.targetBitrateKbps < *request.minimumBitrateKbps ||
+         *request.targetBitrateKbps > *request.maximumBitrateKbps)) {
+        return ::media::Result<MediaEncoderRateControlPlan>::failure(
+            ::media::ErrorInfo::invalidArgument(
+                "VBR requires minimum bitrate <= target bitrate <= maximum bitrate"));
     }
 
     MediaEncoderRateControlPlan result{
         request.mode, request.targetBitrateKbps,
         request.minimumBitrateKbps, request.maximumBitrateKbps,
         request.bufferSizeKbits, std::nullopt};
+    if (request.mode == MediaRateControlMode::Cbr) {
+        result.minimumBitrateKbps = request.targetBitrateKbps;
+        result.maximumBitrateKbps = request.targetBitrateKbps;
+    }
     if (deviceKind == MediaHardwareDeviceKind::RKMPP) {
         if (request.mode == MediaRateControlMode::Crf ||
             request.mode == MediaRateControlMode::Cvbr) {
