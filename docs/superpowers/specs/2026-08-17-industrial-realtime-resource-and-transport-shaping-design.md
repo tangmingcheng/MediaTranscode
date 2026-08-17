@@ -35,7 +35,9 @@ payload limit together with its evidence kind.
 Resource, latency, and network-service facts come from a deployment envelope
 supplied by the embedding application rather than per-stream CLI arithmetic.
 It contains independent resource-domain budgets, maximum pipeline residence,
-maximum network jitter, and one transport service contract. Admission excess fails
+and one transport service contract. Finite network jitter and receiver or
+decoder residence are required only for service variants that prove a finite
+path-service bound. Admission excess fails
 before graph creation; runtime contract excess terminates. Drop, clamp,
 degrade, resize, or retry policy is not caller-selectable.
 
@@ -145,8 +147,9 @@ by the selected mux or transport service.
 
 ## Route-Neutral Datagram, Mux, and RTP Products
 
-`DatagramTransportEnvelope` contains endpoint facts, IP and UDP overhead,
-authoritative MTU, legal UDP payload, socket contract, service scope, and one
+`DatagramTransportEnvelope` exclusively owns endpoint facts, IP and UDP
+overhead, authoritative MTU, legal UDP payload, socket contract, and service
+scope. It references one
 closed packetization variant:
 
 - `MpegTsUdpPacketization`;
@@ -175,13 +178,14 @@ runtime cannot reconstruct route-local policy.
 - RTP and RTCP endpoint relationships;
 - sender-report, receiver-report, CNAME, feedback, BYE, and generation rules;
 - RTCP bandwidth, randomization, interval, and control-packet envelope;
-- packetization and transport overhead contract.
+- a reference to the selected RTP packetization product.
 
-Each packetization contract includes IP version and maximum IP-header length,
-UDP overhead, RTP base, CSRC, extension, padding and security overhead, path
-MTU or authoritative maximum IP packet size, and integral TS packets per RTP
-payload where applicable. The planner derives the legal UDP or RTP payload
-after all overhead and validates any negotiated sender limit. Output requiring
+The datagram envelope owns IP version, maximum IP-header length, UDP overhead,
+MTU, and maximum IP packet size. The selected packetization variant exclusively
+owns payload framing plus RTP base, CSRC, extension, padding, security, and TS
+alignment overhead where applicable. The planner derives one immutable
+`WireTrafficEnvelope` from these non-duplicated facts and validates any
+negotiated sender limit. Output requiring
 IP fragmentation is rejected. Byte-rate, packet-rate,
 and burst envelopes are calculated after all header, ceiling, and alignment
 effects. Inclusion or exclusion of link-layer overhead is explicit.
@@ -202,24 +206,45 @@ traffic without reordering TS payload.
 
 An `AdaptiveTransportServiceEnvelope` identifies the negotiated feedback
 format, controller, control interval, admitted minimum and maximum rates,
-reaction deadline, feedback-loss timeout, circuit breaker, and a post-open
-proven encoder and mux actuator.
+reaction deadline, feedback-loss timeout, circuit breaker, and one selected
+`MediaEncoderGenerationMechanism`. The mechanism is a closed variant:
+
+- `PreparedSessionSwitch` owns one immutable, pre-opened encoder session per
+  retained generation. Admission charges every simultaneously retained
+  session and its old-generation drain/new-generation startup state. A
+  transition switches sessions; it never mutates a session after open.
+- `InPlaceActuatorTransition` owns exactly one encoder session. Generation
+  products contain immutable target capability, rate-control, mux, transport,
+  resource, and scheduling facts but no second prepared session. This variant
+  is legal only when a target-specific capability probe proves atomic
+  post-open bitrate and CPB mutation plus authoritative readback for the
+  selected encoder/backend.
+
+The variants cannot be mixed or reconstructed at runtime. If neither variant
+is proven for a selected Windows or RKMPP backend, adaptive service is rejected
+before DAG creation; static provisioned or managed-best-effort service remains
+available when its own facts are complete.
 
 This design also amends the MPEG-TS H.264/HEVC rate-control design. Every legal
-generation contains a complete prepared encoder capability and session,
+generation contains a complete prepared encoder capability,
 `MediaEncoderRateControlPlan`, mux plan where present, datagram and RTP session
 envelopes, edge and runtime-owner resource contracts, and scheduling
-parameters. Admission validates every transition and reserves the maximum
-simultaneous old-generation drain plus new-generation startup footprint.
+parameters. It contains a prepared session only for `PreparedSessionSwitch`.
+Admission validates every transition and reserves the mechanism-specific
+simultaneous footprint.
 
 The planner owns the finite set and transition table of legal rate generations.
 Feedback events map only to planner-authored transition keys; a controller
-cannot calculate, clamp, or invent bitrate values. A transition quiesces the
-old generation and drains its encoder lookahead, async outputs, mux state, and
-transport reservations, then applies and reads back the already admitted
-encoder rate/CPB and mux policy and atomically publishes the new generation.
-Runtime replanning or product reconstruction is forbidden. Unsupported
-transitions, actuator failure, readback
+cannot calculate, clamp, or invent bitrate values. At a rate decrease, the new
+rate ceiling is effective no later than the planner-authored reaction deadline.
+Every retained old-generation reservation is revalidated against that lower
+ceiling and its original send deadline before the transition commits. An
+infeasible carry-over is terminal; the runtime cannot drain at the old rate,
+drop, burst, or rebase a deadline. A prepared-session transition atomically
+switches to the admitted session after the authorized quiescence boundary. An
+in-place transition applies and reads back the already admitted encoder
+rate/CPB and mux policy atomically. Runtime replanning or product reconstruction
+is forbidden. Unsupported transitions, actuator failure, readback
 mismatch, missing feedback, or reaction expiry are terminal. The transport
 shaper and sender remain execution-only and cannot choose an encoder rate.
 
@@ -256,24 +281,32 @@ member initializer.
 
 The deployment envelope contains independent hard budgets for pageable process
 memory, pinned or registered host memory, device and DRM surfaces, kernel
-socket memory, and backend-opaque memory. Every ledger entry names exactly one
-resource domain and an authoritative accounting adapter. Bytes from different
-domains are never substituted or pooled. An additional total-host-physical
-limit may constrain applicable host domains.
+socket memory, and backend-opaque memory. Every physical allocation has one
+stable allocation identity and one checked cost vector with at most one charge
+in each applicable resource domain. Shared references reuse that identity and
+do not charge the same domain twice. Imports, mappings, metadata, and backing
+storage have separate typed costs when they consume distinct resources. Every
+nonzero vector component names an authoritative accounting adapter and is
+validated against its domain budget; bytes from different domains are never
+substituted or pooled. An additional total-host-physical limit may constrain
+applicable host domains.
 
 Every executable node provides a `MediaStageServiceEnvelope` containing its
 execution authority and thread, concurrency, batch limit, bounded internal
-depth, service curve or authoritative worst-case processing latency,
-scheduling jitter, backpressure seam, and cancellation behavior. Edge backlog
-and delay are derived from upstream arrival and downstream service envelopes.
-If a stage cannot prove service, admission may guarantee bounded memory and
-terminal deadline enforcement only; it cannot claim feasible bounded
-residence.
+depth, backpressure seam, cancellation behavior, and one closed
+`MediaStageServiceEvidence` variant. `ProvenService` contains an authoritative
+service curve or worst-case processing latency and scheduling jitter;
+`BoundedResourceOnly` contains no service claim and proves only bounded memory
+plus terminal deadline enforcement. Edge backlog and delay are derived only
+from `ProvenService` evidence. A deployment that requires proven maximum
+pipeline residence rejects any `BoundedResourceOnly` stage before graph
+creation. Otherwise the executable plan states that successful residence is
+unproven and never reports it as guaranteed.
 
 The resource planner consumes the executable topology, prepared source
-contracts, prepared encoder session, optional mux and RTP session envelopes,
-datagram transport envelope, stage service envelopes, platform capabilities,
-and deployment envelope.
+contracts, the mechanism-selected prepared encoder binding, optional mux and
+RTP session envelopes, datagram transport envelope, stage service envelopes,
+platform capabilities, and deployment envelope.
 For an arrival envelope `A(t) <= r*t + b`, it accounts for maximum item size,
 item and byte rates, atomic burst, codec reorder, encoder async depth, mux
 interleave, ownership fan-out, hardware alignment, and the selected residence.
@@ -283,12 +316,16 @@ fail before graph creation.
 
 ## Exact Plan Projection
 
-`MediaRealtimeResourcePlan` is serialized once as a complete typed runtime-plan
-member keyed by stable edge and runtime-owner identities. Decoding reproduces
-every field exactly and rejects unknown, missing, duplicate, extra,
-stale-topology, or overflowing entries. Builders bind decoded contracts only;
-string defaults, enum ordinals, edge-class lookup, and local reconstruction are
-forbidden.
+One immutable `MediaRealtimeExecutablePlan` is serialized as the complete
+runtime authority. It contains the resource ledger, selected datagram
+transport and packetization variants, optional mux and RTP session products,
+the derived `WireTrafficEnvelope`, service scope, stage service envelopes,
+prepared source and encoder binding identities, legal generations, selected
+generation mechanism, and transition table. Decoding is atomic, reproduces
+every field exactly, validates every cross-reference, and rejects unknown,
+missing, duplicate, extra, stale-topology, or overflowing entries. Builders
+bind this decoded product only; parallel policy strings, enum ordinals,
+edge-class lookup, and local reconstruction are forbidden.
 
 Realtime plan and product types are not default constructible. A completeness
 validator rejects legacy generic queue and memory defaults. Raw RTP retains the
@@ -305,10 +342,13 @@ token-bucket or constant-rate state across media AUs and all selected UDP,
 RTP, and RTCP data.
 
 Every packet reservation carries `enqueueNotBefore` and `enqueueNotAfter`,
-derived from one monotonic startup anchor, media and PCR timing, CPB/decoder
-deadline, maximum residence, batching allowance, and verified timer error.
-A large AU may be smoothed only when every fragment remains inside its
-latest-send, PCR, coded-buffer, decoder, and end-to-end latency constraints.
+derived from one monotonic startup anchor and only the facts proven by the
+selected service variant. For `ManagedBestEffortService`, the latest time is
+bounded only by local retention, media ordering, PCR, batching, timer, and
+socket-pressure contracts; it makes no receiver, decoder, path-residence, or
+end-to-end claim. A finite-path service variant may additionally use its proven
+path, receiver, decoder, and end-to-end bounds. A large AU may be smoothed only
+when every fragment remains inside all constraints proven for that variant.
 Demand exceeding peak, burst, backlog, residence, or deadline terminates; it
 never raises the service envelope or catches up by bursting. RTP timestamp and
 MPEG PTS, DTS, and PCR wrap are extended into monotonic internal domains and
@@ -359,11 +399,20 @@ selected, VideoOnly and AudioVideo, Windows and RKMPP, and the production DAG.
 The route matrix explicitly covers MPEG-TS/UDP, MPEG-TS/RTP, and separate codec
 RTP on every supported platform and stream set. Production-DAG failure gates
 cover provisioned under-capacity rejection, managed-best-effort pressure,
-feedback step-down and recovery, feedback loss,
-circuit-breaking, failed generation readback, oversized fragmented RTP AU,
-late reservations, and resource/residence excess. Protocol gates verify
-PAT/PMT/PCR periods, continuity, no IP fragmentation, RTP/RTCP aggregate
+oversized fragmented RTP AU, late reservations, and resource/residence excess.
+Feedback step-down and recovery, feedback loss, circuit-breaking, and failed
+generation readback are mandatory only on a platform/backend whose probe proves
+the selected `MediaEncoderGenerationMechanism`; unsupported Windows and RKMPP
+actuators must instead pass an explicit pre-DAG rejection gate. Protocol gates
+verify PAT/PMT/PCR periods, continuity, no IP fragmentation, RTP/RTCP aggregate
 pacing, cross-AU burst bounds, and receiver sequence/loss evidence.
+
+Timestamp gates use authoritative near-wrap RTP, PTS, DTS, and PCR inputs in the
+unchanged 120-second production DAG. A normal modular wrap must preserve the
+extended monotonic timeline and current generation. A separately signaled or
+authoritatively detected discontinuity must follow its planner-authored decoder,
+mux, RTP, and RTCP transition; it cannot be inferred from wrap or silently reset
+the schedule.
 
 Each gate records exact source, CLI, receiver and cleanup commands, precise
 PIDs, packet timing and loss, queue bytes and residence, CPU/RSS, A/V drift,
